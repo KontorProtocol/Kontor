@@ -1,5 +1,13 @@
 [workspace]
-members = ["indexer", "indexer-types", "macros", "stdlib", "testlib", "wit-validator"]
+members = [
+    "indexer",
+    "indexer-types",
+    "macros",
+    "stdlib",
+    "testlib",
+    "wit-validator",
+    "../sdk/crate",
+]
 resolver = "2"
 
 [workspace.lints.clippy]

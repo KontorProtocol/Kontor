@@ -1,3 +1,5 @@
+const emptyFunc = () => {};
+
 let dv = new DataView(new ArrayBuffer());
 const dataView = mem => dv.buffer === mem.buffer ? dv : dv = new DataView(mem.buffer);
 
@@ -16,6 +18,32 @@ function utf8Encode(s, realloc, memory) {
   new Uint8Array(memory.buffer).set(buf, ptr);
   utf8EncodedLen = buf.length;
   return ptr;
+}
+
+const T_FLAG = 1 << 30;
+
+function rscTableCreateOwn (table, rep) {
+  const free = table[0] & ~T_FLAG;
+  if (free === 0) {
+    table.push(0);
+    table.push(rep | T_FLAG);
+    return (table.length >> 1) - 1;
+  }
+  table[0] = table[free << 1];
+  table[free << 1] = 0;
+  table[(free << 1) + 1] = rep | T_FLAG;
+  return free;
+}
+
+function rscTableRemove (table, handle) {
+  const scope = table[handle << 1];
+  const val = table[(handle << 1) + 1];
+  const own = (val & T_FLAG) !== 0;
+  const rep = val & ~T_FLAG;
+  if (val === 0 || (scope & T_FLAG) !== 0) throw new TypeError('Invalid handle');
+  table[handle << 1] = table[0] | T_FLAG;
+  table[0] = handle | T_FLAG;
+  return { rep, scope, own };
 }
 
 let NEXT_TASK_ID = 0n;
@@ -661,6 +689,8 @@ const I32_MAX = 2_147_483_647;
 const I32_MIN = -2_147_483_648;
 const _typeCheckValidI32 = (n) => typeof n === 'number' && n >= I32_MIN && n <= I32_MAX;
 
+const base64Compile = str => WebAssembly.compile(typeof Buffer !== 'undefined' ? Buffer.from(str, 'base64') : Uint8Array.from(atob(str), b => b.charCodeAt(0)));
+
 const isNode = typeof process !== 'undefined' && process.versions && process.versions.node;
 let _fs;
 async function fetchCompile (url) {
@@ -669,6 +699,27 @@ async function fetchCompile (url) {
     return WebAssembly.compile(await _fs.readFile(url));
   }
   return fetch(url).then(WebAssembly.compileStreaming);
+}
+
+const symbolRscHandle = Symbol('handle');
+
+const symbolDispose = Symbol.dispose || Symbol.for('dispose');
+
+const handleTables = [];
+
+function finalizationRegistryCreate (unregister) {
+  if (typeof FinalizationRegistry === 'undefined') {
+    return { unregister () {} };
+  }
+  return new FinalizationRegistry(unregister);
+}
+
+class ComponentError extends Error {
+  constructor (value) {
+    const enumerable = typeof value !== 'string';
+    super(enumerable ? `${String(value)} (see error.payload)` : value);
+    Object.defineProperty(this, 'payload', { value, enumerable });
+  }
 }
 
 class RepTable {
@@ -726,11 +777,29 @@ const instantiateCore = WebAssembly.instantiate;
 
 
 let exports0;
+let exports1;
+let exports2;
 let memory0;
 let realloc0;
 let postReturn0;
 let postReturn1;
-let exports0SerializeInst;
+let postReturn2;
+const handleTable0 = [T_FLAG, 0];
+const finalizationRegistry0 = finalizationRegistryCreate((handle) => {
+  const { rep } = rscTableRemove(handleTable0, handle);
+  exports0['0'](rep);
+});
+
+handleTables[0] = handleTable0;
+const trampoline0 = rscTableCreateOwn.bind(null, handleTable0);
+function trampoline1(handle) {
+  const handleEntry = rscTableRemove(handleTable0, handle);
+  if (handleEntry.own) {
+    
+    exports0['0'](handleEntry.rep);
+  }
+}
+let exports1SerializeInst;
 
 function serializeInst(arg0) {
   var ptr0 = utf8Encode(arg0, realloc0, memory0);
@@ -741,8 +810,8 @@ function serializeInst(arg0) {
     async: false,
     postReturn: true,
   });
-  const _wasm_call_currentTaskID = startCurrentTask(0, false, 'exports0SerializeInst');
-  const ret = exports0SerializeInst(ptr0, len0);
+  const _wasm_call_currentTaskID = startCurrentTask(0, false, 'exports1SerializeInst');
+  const ret = exports1SerializeInst(ptr0, len0);
   endCurrentTask(0);
   var ptr1 = dataView(memory0).getUint32(ret + 0, true);
   var len1 = dataView(memory0).getUint32(ret + 4, true);
@@ -762,7 +831,7 @@ function serializeInst(arg0) {
   return retCopy;
   
 }
-let exports0DeserializeInst;
+let exports1DeserializeInst;
 
 function deserializeInst(arg0) {
   var val0 = arg0;
@@ -776,8 +845,8 @@ function deserializeInst(arg0) {
     async: false,
     postReturn: true,
   });
-  const _wasm_call_currentTaskID = startCurrentTask(0, false, 'exports0DeserializeInst');
-  const ret = exports0DeserializeInst(ptr0, len0);
+  const _wasm_call_currentTaskID = startCurrentTask(0, false, 'exports1DeserializeInst');
+  const ret = exports1DeserializeInst(ptr0, len0);
   endCurrentTask(0);
   var ptr1 = dataView(memory0).getUint32(ret + 0, true);
   var len1 = dataView(memory0).getUint32(ret + 4, true);
@@ -797,7 +866,7 @@ function deserializeInst(arg0) {
   return retCopy;
   
 }
-let exports0SerializeOpReturnData;
+let exports1SerializeOpReturnData;
 
 function serializeOpReturnData(arg0) {
   var ptr0 = utf8Encode(arg0, realloc0, memory0);
@@ -808,8 +877,8 @@ function serializeOpReturnData(arg0) {
     async: false,
     postReturn: true,
   });
-  const _wasm_call_currentTaskID = startCurrentTask(0, false, 'exports0SerializeOpReturnData');
-  const ret = exports0SerializeOpReturnData(ptr0, len0);
+  const _wasm_call_currentTaskID = startCurrentTask(0, false, 'exports1SerializeOpReturnData');
+  const ret = exports1SerializeOpReturnData(ptr0, len0);
   endCurrentTask(0);
   var ptr1 = dataView(memory0).getUint32(ret + 0, true);
   var len1 = dataView(memory0).getUint32(ret + 4, true);
@@ -829,7 +898,7 @@ function serializeOpReturnData(arg0) {
   return retCopy;
   
 }
-let exports0DeserializeOpReturnData;
+let exports1DeserializeOpReturnData;
 
 function deserializeOpReturnData(arg0) {
   var val0 = arg0;
@@ -843,8 +912,8 @@ function deserializeOpReturnData(arg0) {
     async: false,
     postReturn: true,
   });
-  const _wasm_call_currentTaskID = startCurrentTask(0, false, 'exports0DeserializeOpReturnData');
-  const ret = exports0DeserializeOpReturnData(ptr0, len0);
+  const _wasm_call_currentTaskID = startCurrentTask(0, false, 'exports1DeserializeOpReturnData');
+  const ret = exports1DeserializeOpReturnData(ptr0, len0);
   endCurrentTask(0);
   var ptr1 = dataView(memory0).getUint32(ret + 0, true);
   var len1 = dataView(memory0).getUint32(ret + 4, true);
@@ -864,7 +933,7 @@ function deserializeOpReturnData(arg0) {
   return retCopy;
   
 }
-let exports0ValidateWit;
+let exports1ValidateWit;
 
 function validateWit(arg0) {
   var ptr0 = utf8Encode(arg0, realloc0, memory0);
@@ -875,8 +944,8 @@ function validateWit(arg0) {
     async: false,
     postReturn: true,
   });
-  const _wasm_call_currentTaskID = startCurrentTask(0, false, 'exports0ValidateWit');
-  const ret = exports0ValidateWit(ptr0, len0);
+  const _wasm_call_currentTaskID = startCurrentTask(0, false, 'exports1ValidateWit');
+  const ret = exports1ValidateWit(ptr0, len0);
   endCurrentTask(0);
   let variant5;
   switch (dataView(memory0).getUint8(ret + 0, true)) {
@@ -938,20 +1007,274 @@ function validateWit(arg0) {
   return retCopy;
   
 }
+let witApiConstructorWit;
+
+class Wit{
+  constructor(arg0) {
+    var ptr0 = utf8Encode(arg0, realloc0, memory0);
+    var len0 = utf8EncodedLen;
+    _debugLog('[iface="root:component/wit-api", function="[constructor]wit"][Instruction::CallWasm] enter', {
+      funcName: '[constructor]wit',
+      paramCount: 2,
+      async: false,
+      postReturn: false,
+    });
+    const _wasm_call_currentTaskID = startCurrentTask(0, false, 'witApiConstructorWit');
+    const ret = witApiConstructorWit(ptr0, len0);
+    endCurrentTask(0);
+    var handle2 = ret;
+    var rsc1 = new.target === Wit ? this : Object.create(Wit.prototype);
+    Object.defineProperty(rsc1, symbolRscHandle, { writable: true, value: handle2});
+    finalizationRegistry0.register(rsc1, handle2, rsc1);
+    Object.defineProperty(rsc1, symbolDispose, { writable: true, value: function () {
+      finalizationRegistry0.unregister(rsc1);
+      rscTableRemove(handleTable0, handle2);
+      rsc1[symbolDispose] = emptyFunc;
+      rsc1[symbolRscHandle] = undefined;
+      exports0['0'](handleTable0[(handle2 << 1) + 1] & ~T_FLAG);
+    }});
+    _debugLog('[iface="root:component/wit-api", function="[constructor]wit"][Instruction::Return]', {
+      funcName: '[constructor]wit',
+      paramCount: 1,
+      async: false,
+      postReturn: false
+    });
+    return rsc1;
+  }
+}
+let witApiMethodWitEncodeCall;
+
+Wit.prototype.encodeCall = function encodeCall(arg1, arg2) {
+  var handle1 = this[symbolRscHandle];
+  if (!handle1 || (handleTable0[(handle1 << 1) + 1] & T_FLAG) === 0) {
+    throw new TypeError('Resource error: Not a valid "Wit" resource.');
+  }
+  var handle0 = handleTable0[(handle1 << 1) + 1] & ~T_FLAG;
+  var ptr2 = utf8Encode(arg1, realloc0, memory0);
+  var len2 = utf8EncodedLen;
+  var ptr3 = utf8Encode(arg2, realloc0, memory0);
+  var len3 = utf8EncodedLen;
+  _debugLog('[iface="root:component/wit-api", function="[method]wit.encode-call"][Instruction::CallWasm] enter', {
+    funcName: '[method]wit.encode-call',
+    paramCount: 5,
+    async: false,
+    postReturn: true,
+  });
+  const _wasm_call_currentTaskID = startCurrentTask(0, false, 'witApiMethodWitEncodeCall');
+  const ret = witApiMethodWitEncodeCall(handle0, ptr2, len2, ptr3, len3);
+  endCurrentTask(0);
+  let variant6;
+  switch (dataView(memory0).getUint8(ret + 0, true)) {
+    case 0: {
+      var ptr4 = dataView(memory0).getUint32(ret + 4, true);
+      var len4 = dataView(memory0).getUint32(ret + 8, true);
+      var result4 = utf8Decoder.decode(new Uint8Array(memory0.buffer, ptr4, len4));
+      variant6= {
+        tag: 'ok',
+        val: result4
+      };
+      break;
+    }
+    case 1: {
+      var ptr5 = dataView(memory0).getUint32(ret + 4, true);
+      var len5 = dataView(memory0).getUint32(ret + 8, true);
+      var result5 = utf8Decoder.decode(new Uint8Array(memory0.buffer, ptr5, len5));
+      variant6= {
+        tag: 'err',
+        val: result5
+      };
+      break;
+    }
+    default: {
+      throw new TypeError('invalid variant discriminant for expected');
+    }
+  }
+  _debugLog('[iface="root:component/wit-api", function="[method]wit.encode-call"][Instruction::Return]', {
+    funcName: '[method]wit.encode-call',
+    paramCount: 1,
+    async: false,
+    postReturn: true
+  });
+  const retCopy = variant6;
+  
+  let cstate = getOrCreateAsyncState(0);
+  cstate.mayLeave = false;
+  postReturn2(ret);
+  cstate.mayLeave = true;
+  
+  
+  
+  if (typeof retCopy === 'object' && retCopy.tag === 'err') {
+    throw new ComponentError(retCopy.val);
+  }
+  return retCopy.val;
+  
+};
+let witApiMethodWitDecodeResult;
+
+Wit.prototype.decodeResult = function decodeResult(arg1, arg2) {
+  var handle1 = this[symbolRscHandle];
+  if (!handle1 || (handleTable0[(handle1 << 1) + 1] & T_FLAG) === 0) {
+    throw new TypeError('Resource error: Not a valid "Wit" resource.');
+  }
+  var handle0 = handleTable0[(handle1 << 1) + 1] & ~T_FLAG;
+  var ptr2 = utf8Encode(arg1, realloc0, memory0);
+  var len2 = utf8EncodedLen;
+  var ptr3 = utf8Encode(arg2, realloc0, memory0);
+  var len3 = utf8EncodedLen;
+  _debugLog('[iface="root:component/wit-api", function="[method]wit.decode-result"][Instruction::CallWasm] enter', {
+    funcName: '[method]wit.decode-result',
+    paramCount: 5,
+    async: false,
+    postReturn: true,
+  });
+  const _wasm_call_currentTaskID = startCurrentTask(0, false, 'witApiMethodWitDecodeResult');
+  const ret = witApiMethodWitDecodeResult(handle0, ptr2, len2, ptr3, len3);
+  endCurrentTask(0);
+  let variant6;
+  switch (dataView(memory0).getUint8(ret + 0, true)) {
+    case 0: {
+      var ptr4 = dataView(memory0).getUint32(ret + 4, true);
+      var len4 = dataView(memory0).getUint32(ret + 8, true);
+      var result4 = utf8Decoder.decode(new Uint8Array(memory0.buffer, ptr4, len4));
+      variant6= {
+        tag: 'ok',
+        val: result4
+      };
+      break;
+    }
+    case 1: {
+      var ptr5 = dataView(memory0).getUint32(ret + 4, true);
+      var len5 = dataView(memory0).getUint32(ret + 8, true);
+      var result5 = utf8Decoder.decode(new Uint8Array(memory0.buffer, ptr5, len5));
+      variant6= {
+        tag: 'err',
+        val: result5
+      };
+      break;
+    }
+    default: {
+      throw new TypeError('invalid variant discriminant for expected');
+    }
+  }
+  _debugLog('[iface="root:component/wit-api", function="[method]wit.decode-result"][Instruction::Return]', {
+    funcName: '[method]wit.decode-result',
+    paramCount: 1,
+    async: false,
+    postReturn: true
+  });
+  const retCopy = variant6;
+  
+  let cstate = getOrCreateAsyncState(0);
+  cstate.mayLeave = false;
+  postReturn2(ret);
+  cstate.mayLeave = true;
+  
+  
+  
+  if (typeof retCopy === 'object' && retCopy.tag === 'err') {
+    throw new ComponentError(retCopy.val);
+  }
+  return retCopy.val;
+  
+};
+let witApiMethodWitParse;
+
+Wit.prototype.parse = function parse() {
+  var handle1 = this[symbolRscHandle];
+  if (!handle1 || (handleTable0[(handle1 << 1) + 1] & T_FLAG) === 0) {
+    throw new TypeError('Resource error: Not a valid "Wit" resource.');
+  }
+  var handle0 = handleTable0[(handle1 << 1) + 1] & ~T_FLAG;
+  _debugLog('[iface="root:component/wit-api", function="[method]wit.parse"][Instruction::CallWasm] enter', {
+    funcName: '[method]wit.parse',
+    paramCount: 1,
+    async: false,
+    postReturn: true,
+  });
+  const _wasm_call_currentTaskID = startCurrentTask(0, false, 'witApiMethodWitParse');
+  const ret = witApiMethodWitParse(handle0);
+  endCurrentTask(0);
+  let variant4;
+  switch (dataView(memory0).getUint8(ret + 0, true)) {
+    case 0: {
+      var ptr2 = dataView(memory0).getUint32(ret + 4, true);
+      var len2 = dataView(memory0).getUint32(ret + 8, true);
+      var result2 = utf8Decoder.decode(new Uint8Array(memory0.buffer, ptr2, len2));
+      variant4= {
+        tag: 'ok',
+        val: result2
+      };
+      break;
+    }
+    case 1: {
+      var ptr3 = dataView(memory0).getUint32(ret + 4, true);
+      var len3 = dataView(memory0).getUint32(ret + 8, true);
+      var result3 = utf8Decoder.decode(new Uint8Array(memory0.buffer, ptr3, len3));
+      variant4= {
+        tag: 'err',
+        val: result3
+      };
+      break;
+    }
+    default: {
+      throw new TypeError('invalid variant discriminant for expected');
+    }
+  }
+  _debugLog('[iface="root:component/wit-api", function="[method]wit.parse"][Instruction::Return]', {
+    funcName: '[method]wit.parse',
+    paramCount: 1,
+    async: false,
+    postReturn: true
+  });
+  const retCopy = variant4;
+  
+  let cstate = getOrCreateAsyncState(0);
+  cstate.mayLeave = false;
+  postReturn2(ret);
+  cstate.mayLeave = true;
+  
+  
+  
+  if (typeof retCopy === 'object' && retCopy.tag === 'err') {
+    throw new ComponentError(retCopy.val);
+  }
+  return retCopy.val;
+  
+};
 
 const $init = (() => {
   let gen = (function* _initGenerator () {
     const module0 = fetchCompile(new URL('./kontor-ts.core.wasm', import.meta.url));
-    ({ exports: exports0 } = yield instantiateCore(yield module0));
-    memory0 = exports0.memory;
-    realloc0 = exports0.cabi_realloc;
-    postReturn0 = exports0['cabi_post_deserialize-inst'];
-    postReturn1 = exports0['cabi_post_validate-wit'];
-    exports0SerializeInst = exports0['serialize-inst'];
-    exports0DeserializeInst = exports0['deserialize-inst'];
-    exports0SerializeOpReturnData = exports0['serialize-op-return-data'];
-    exports0DeserializeOpReturnData = exports0['deserialize-op-return-data'];
-    exports0ValidateWit = exports0['validate-wit'];
+    const module1 = base64Compile('AGFzbQEAAAABBQFgAX8AAwIBAAQFAXABAQEHEAIBMAAACCRpbXBvcnRzAQAKCwEJACAAQQARAAALAC8JcHJvZHVjZXJzAQxwcm9jZXNzZWQtYnkBDXdpdC1jb21wb25lbnQHMC4yNDQuMA');
+    const module2 = base64Compile('AGFzbQEAAAABBQFgAX8AAhUCAAEwAAAACCRpbXBvcnRzAXABAQEJBwEAQQALAQAALwlwcm9kdWNlcnMBDHByb2Nlc3NlZC1ieQENd2l0LWNvbXBvbmVudAcwLjI0NC4w');
+    ({ exports: exports0 } = yield instantiateCore(yield module1));
+    ({ exports: exports1 } = yield instantiateCore(yield module0, {
+      '[export]root:component/wit-api': {
+        '[resource-drop]wit': trampoline1,
+        '[resource-new]wit': trampoline0,
+      },
+    }));
+    ({ exports: exports2 } = yield instantiateCore(yield module2, {
+      '': {
+        $imports: exports0.$imports,
+        '0': exports1['root:component/wit-api#[dtor]wit'],
+      },
+    }));
+    memory0 = exports1.memory;
+    realloc0 = exports1.cabi_realloc;
+    postReturn0 = exports1['cabi_post_deserialize-inst'];
+    postReturn1 = exports1['cabi_post_validate-wit'];
+    postReturn2 = exports1['cabi_post_root:component/wit-api#[method]wit.decode-result'];
+    exports1SerializeInst = exports1['serialize-inst'];
+    exports1DeserializeInst = exports1['deserialize-inst'];
+    exports1SerializeOpReturnData = exports1['serialize-op-return-data'];
+    exports1DeserializeOpReturnData = exports1['deserialize-op-return-data'];
+    exports1ValidateWit = exports1['validate-wit'];
+    witApiConstructorWit = exports1['root:component/wit-api#[constructor]wit'];
+    witApiMethodWitEncodeCall = exports1['root:component/wit-api#[method]wit.encode-call'];
+    witApiMethodWitDecodeResult = exports1['root:component/wit-api#[method]wit.decode-result'];
+    witApiMethodWitParse = exports1['root:component/wit-api#[method]wit.parse'];
   })();
   let promise, resolve, reject;
   function runNext (value) {
@@ -977,5 +1300,9 @@ const $init = (() => {
 })();
 
 await $init;
+const witApi = {
+  Wit: Wit,
+  
+};
 
-export { deserializeInst, deserializeOpReturnData, serializeInst, serializeOpReturnData, validateWit,  }
+export { witApi, deserializeInst, deserializeOpReturnData, witApi as 'root:component/wit-api', serializeInst, serializeOpReturnData, validateWit,  }

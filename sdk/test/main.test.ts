@@ -5,6 +5,7 @@ import {
   serializeOpReturnData,
   deserializeOpReturnData,
   validateWit,
+  witApi,
 } from "@kontor/sdk";
 
 test("publish", () => {
@@ -196,4 +197,42 @@ test("validateWit parse error", () => {
   const wit = `this is not valid wit`;
   const result = validateWit(wit);
   expect(result.tag).toBe("parse-error");
+});
+
+test("Wit.encodeCall renders a single bool arg", () => {
+  const wit = `package test:demo;
+
+world demo {
+  export do-thing: func(flag: bool) -> string;
+}`;
+  const w = new witApi.Wit(wit);
+
+  expect(w.encodeCall("do-thing", '{"flag": true}')).toBe("do-thing(true)");
+  expect(w.encodeCall("do-thing", '{"flag": false}')).toBe("do-thing(false)");
+});
+
+test("Wit.encodeCall errors when function missing", () => {
+  const wit = `package test:demo;
+
+world demo {
+  export do-thing: func(flag: bool) -> string;
+}`;
+  const w = new witApi.Wit(wit);
+
+  expect(() => w.encodeCall("no-such-fn", '{}')).toThrow(
+    /function not found/,
+  );
+});
+
+test("Wit.encodeCall errors when bool arg has wrong JSON type", () => {
+  const wit = `package test:demo;
+
+world demo {
+  export do-thing: func(flag: bool) -> string;
+}`;
+  const w = new witApi.Wit(wit);
+
+  expect(() => w.encodeCall("do-thing", '{"flag": "yes"}')).toThrow(
+    /expected JSON bool/,
+  );
 });

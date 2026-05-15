@@ -1,5 +1,20 @@
 package root:component;
 
+/// Wit document resource. Held by the consumer for the lifetime of one
+/// WIT (typically: one Kontor contract). Resources can only be exported
+/// via an interface, not directly from a world.
+interface wit-api {
+  /// One instance per WIT document. Holds the parsed Resolve graph
+  /// internally; methods take a function name + JSON-encoded args (or
+  /// WAVE string) and return WAVE / JSON respectively.
+  resource wit {
+    constructor(text: string);
+    encode-call: func(fn-name: string, args-json: string) -> result<string, string>;
+    decode-result: func(fn-name: string, wave: string) -> result<string, string>;
+    parse: func() -> result<string, string>;
+  }
+}
+
 world root {
   export serialize-inst: func(json-str: string) -> list<u8>;
   export deserialize-inst: func(bytes: list<u8>) -> string;
@@ -19,4 +34,6 @@ world root {
   }
 
   export validate-wit: func(wit-content: string) -> validation-result;
+
+  export wit-api;
 }

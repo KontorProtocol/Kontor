@@ -15,6 +15,7 @@ export interface ValidationResultValidationErrors {
   tag: 'validation-errors',
   val: Array<ValidationError>,
 }
+export * as witApi from './interfaces/root-component-wit-api.js'; // export root:component/wit-api
 export function serializeInst(jsonStr: string): Uint8Array;
 export function deserializeInst(bytes: Uint8Array): string;
 export function serializeOpReturnData(jsonStr: string): Uint8Array;

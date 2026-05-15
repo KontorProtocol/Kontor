@@ -4103,6 +4103,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "kontor-ts"
+version = "0.1.0"
+dependencies = [
+ "indexer-types",
+ "serde_json",
+ "wasm-wave 0.248.0",
+ "wit-parser 0.248.0",
+ "wit-validator",
+]
+
+[[package]]
 name = "lazy_static"
 version = "1.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -8688,6 +8699,7 @@ checksum = "db8c928a58132ecc6a4daee3795bb3560702436f6516b5f8c5b3086113031e76"
 dependencies = [
  "logos 0.14.4",
  "thiserror 2.0.18",
+ "wit-parser 0.248.0",
 ]
 
 [[package]]
