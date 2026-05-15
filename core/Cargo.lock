@@ -4107,6 +4107,7 @@ name = "kontor-ts"
 version = "0.1.0"
 dependencies = [
  "indexer-types",
+ "serde",
  "serde_json",
  "wasm-wave 0.248.0",
  "wit-parser 0.248.0",

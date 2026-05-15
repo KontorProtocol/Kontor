@@ -15,6 +15,7 @@ wit-validator = { path = "../../core/wit-validator" }
 # requires std; the workspace pin disables defaults so we re-enable here.
 wasm-wave = { workspace = true, features = ["std", "wit"] }
 wit-parser = { workspace = true }
+serde = { workspace = true }
 serde_json = { workspace = true }
 
 [lib]

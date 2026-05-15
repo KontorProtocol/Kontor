@@ -236,3 +236,80 @@ world demo {
     /expected JSON bool/,
   );
 });
+
+test("Wit.encodeCall renders u64 from a quoted-decimal JSON string", () => {
+  // u64 values > 2^53 can't be safely held in JS Number, so the FFI uses
+  // JSON strings holding decimal digits. The WAVE output is just the
+  // unquoted decimal — the WIT type system carries the precision lift.
+  const wit = `package test:demo;
+
+world demo {
+  export add: func(x: u64) -> u64;
+}`;
+  const w = new witApi.Wit(wit);
+
+  expect(w.encodeCall("add", '{"x": "12345"}')).toBe("add(12345)");
+  expect(w.encodeCall("add", '{"x": "18446744073709551615"}')).toBe(
+    "add(18446744073709551615)",
+  );
+});
+
+test("Wit.encodeCall errors when u64 arg isn't a string", () => {
+  const wit = `package test:demo;
+
+world demo {
+  export add: func(x: u64) -> u64;
+}`;
+  const w = new witApi.Wit(wit);
+
+  expect(() => w.encodeCall("add", '{"x": 12345}')).toThrow(
+    /expected JSON string holding a u64 decimal/,
+  );
+});
+
+test("Wit.decodeResult parses a u64 WAVE return into a quoted-decimal JSON string", () => {
+  const wit = `package test:demo;
+
+world demo {
+  export add: func(x: u64) -> u64;
+}`;
+  const w = new witApi.Wit(wit);
+
+  // serde_json::to_string of a JSON string includes the quotes.
+  expect(w.decodeResult("add", "12345")).toBe('"12345"');
+  expect(w.decodeResult("add", "18446744073709551615")).toBe(
+    '"18446744073709551615"',
+  );
+});
+
+test("Wit.decodeResult parses a bool WAVE return into a JSON bool", () => {
+  const wit = `package test:demo;
+
+world demo {
+  export is-ready: func() -> bool;
+}`;
+  const w = new witApi.Wit(wit);
+
+  expect(w.decodeResult("is-ready", "true")).toBe("true");
+  expect(w.decodeResult("is-ready", "false")).toBe("false");
+});
+
+test("Wit u64 round-trips through encodeCall + decodeResult", () => {
+  // Strong invariant: a value sent through encode and back through decode
+  // must equal the original. This is the test that proves the FFI
+  // bigint-quoting story actually preserves precision.
+  const wit = `package test:demo;
+
+world demo {
+  export echo: func(x: u64) -> u64;
+}`;
+  const w = new witApi.Wit(wit);
+
+  const original = "18446744073709551615"; // u64 max
+  const encoded = w.encodeCall("echo", JSON.stringify({ x: original }));
+  // Mimic node response: extract the literal arg from "echo(NNN)" — in a
+  // real chain this'd be the WAVE return value from the contract.
+  const waveResult = encoded.slice("echo(".length, -1);
+  const decoded = w.decodeResult("echo", waveResult);
+  expect(JSON.parse(decoded)).toBe(original);
+});

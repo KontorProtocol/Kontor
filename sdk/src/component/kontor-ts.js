@@ -792,13 +792,6 @@ const finalizationRegistry0 = finalizationRegistryCreate((handle) => {
 
 handleTables[0] = handleTable0;
 const trampoline0 = rscTableCreateOwn.bind(null, handleTable0);
-function trampoline1(handle) {
-  const handleEntry = rscTableRemove(handleTable0, handle);
-  if (handleEntry.own) {
-    
-    exports0['0'](handleEntry.rep);
-  }
-}
 let exports1SerializeInst;
 
 function serializeInst(arg0) {
@@ -1251,7 +1244,6 @@ const $init = (() => {
     ({ exports: exports0 } = yield instantiateCore(yield module1));
     ({ exports: exports1 } = yield instantiateCore(yield module0, {
       '[export]root:component/wit-api': {
-        '[resource-drop]wit': trampoline1,
         '[resource-new]wit': trampoline0,
       },
     }));
