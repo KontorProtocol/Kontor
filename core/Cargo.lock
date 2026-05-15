@@ -4103,7 +4103,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "kontor-ts"
+name = "kontor-sdk"
 version = "0.1.0"
 dependencies = [
  "indexer-types",

@@ -347,6 +347,153 @@ test("Wit s64 round-trips with quoted decimal strings (max and min)", () => {
   }
 });
 
+// ─── option<T> ────────────────────────────────────────────────────────
+// Validates locked encoding shape #7: option<T> ↔ T | null (unwrapped).
+
+test("Wit option<string> round-trips with null for none, value for some", () => {
+  const wit = `${KONTOR_HEADER}
+    export echo: async func(ctx: borrow<view-context>, x: option<string>) -> option<string>;
+}`;
+  const w = new witApi.Wit(wit);
+
+  // none ↔ null
+  expect(w.encodeCall("echo", '{"x": null}')).toBe('echo(none)');
+  expect(w.decodeResult("echo", "none")).toBe("null");
+
+  // some ↔ inner value directly (no wrapping)
+  expect(w.encodeCall("echo", '{"x": "hello"}')).toBe('echo(some("hello"))');
+  expect(w.decodeResult("echo", 'some("hello")')).toBe('"hello"');
+});
+
+test("Wit option<u64> round-trips preserving bigint-quoting", () => {
+  const wit = `${KONTOR_HEADER}
+    export echo: async func(ctx: borrow<view-context>, x: option<u64>) -> option<u64>;
+}`;
+  const w = new witApi.Wit(wit);
+
+  const max = "18446744073709551615";
+  const encoded = w.encodeCall("echo", JSON.stringify({ x: max }));
+  expect(encoded).toBe(`echo(some(${max}))`);
+  const wave = encoded.slice("echo(".length, -1);
+  const decoded = w.decodeResult("echo", wave);
+  expect(JSON.parse(decoded)).toBe(max);
+
+  // none still null even for bigint inner
+  expect(w.encodeCall("echo", '{"x": null}')).toBe('echo(none)');
+  expect(w.decodeResult("echo", "none")).toBe("null");
+});
+
+// ─── variant ──────────────────────────────────────────────────────────
+// Validates locked encoding shape #5: `{ kind: "case", value: payload }`
+// for payload cases, `{ kind: "case" }` for unit cases. Adjacent tagging
+// (the discriminant `kind` and the payload `value` are separate fields).
+
+test("Wit variant round-trips: unit cases as {kind}, payload cases as {kind,value}", () => {
+  const wit = `${KONTOR_HEADER}
+    variant outcome {
+        success(string),
+        retry,
+        failed(u64),
+    }
+    export run: async func(ctx: borrow<proc-context>, o: outcome) -> outcome;
+}`;
+  const w = new witApi.Wit(wit);
+
+  // unit case (no payload)
+  expect(w.encodeCall("run", '{"o": {"kind": "retry"}}')).toBe("run(retry)");
+  expect(w.decodeResult("run", "retry")).toBe('{"kind":"retry"}');
+
+  // payload case with string
+  expect(w.encodeCall("run", '{"o": {"kind": "success", "value": "done"}}')).toBe(
+    'run(success("done"))',
+  );
+  expect(w.decodeResult("run", 'success("done")')).toBe(
+    '{"kind":"success","value":"done"}',
+  );
+
+  // payload case with u64 — exercises the bigint-quoting inside the variant value
+  const max = "18446744073709551615";
+  const encoded = w.encodeCall(
+    "run",
+    JSON.stringify({ o: { kind: "failed", value: max } }),
+  );
+  expect(encoded).toBe(`run(failed(${max}))`);
+  const wave = encoded.slice("run(".length, -1);
+  const decoded = JSON.parse(w.decodeResult("run", wave));
+  expect(decoded).toEqual({ kind: "failed", value: max });
+});
+
+test("Wit variant rejects unknown case names", () => {
+  const wit = `${KONTOR_HEADER}
+    variant outcome { ok, oops }
+    export run: async func(ctx: borrow<proc-context>, o: outcome) -> outcome;
+}`;
+  const w = new witApi.Wit(wit);
+  expect(() => w.encodeCall("run", '{"o": {"kind": "nope"}}')).toThrow(
+    /unknown variant case/,
+  );
+});
+
+test("Wit variant rejects shape mismatches (value on unit case, missing value on payload case)", () => {
+  const wit = `${KONTOR_HEADER}
+    variant outcome {
+        unit,
+        with-payload(string),
+    }
+    export run: async func(ctx: borrow<proc-context>, o: outcome) -> outcome;
+}`;
+  const w = new witApi.Wit(wit);
+  expect(() =>
+    w.encodeCall("run", '{"o": {"kind": "unit", "value": "bad"}}'),
+  ).toThrow(/is unit but JSON has 'value'/);
+  expect(() =>
+    w.encodeCall("run", '{"o": {"kind": "with-payload"}}'),
+  ).toThrow(/requires 'value' field/);
+});
+
+// ─── result<T, E> ─────────────────────────────────────────────────────
+// Validates locked encoding shape #6: result reuses the variant shape
+// with kind "ok" / "err". Same {kind, value} structure, same codec path.
+
+test("Wit result<string, error> decodes both arms with built-in error variant payload", () => {
+  // Kontor's validator requires the err type to be the built-in `error`
+  // variant ({message(string), overflow(string), ...}). This test
+  // exercises result + nested variant decoding in one go.
+  const wit = `${KONTOR_HEADER}
+    export run: async func(ctx: borrow<proc-context>, msg: string) -> result<string, error>;
+}`;
+  const w = new witApi.Wit(wit);
+
+  // ok with payload
+  expect(JSON.parse(w.decodeResult("run", 'ok("done")'))).toEqual({
+    kind: "ok",
+    value: "done",
+  });
+
+  // err with nested variant payload
+  const errDecoded = JSON.parse(w.decodeResult("run", 'err(message("boom"))'));
+  expect(errDecoded).toEqual({
+    kind: "err",
+    value: { kind: "message", value: "boom" },
+  });
+});
+
+test("Wit result<_, error> decodes ok unit case (no value field) + err variant", () => {
+  const wit = `${KONTOR_HEADER}
+    export run: async func(ctx: borrow<proc-context>) -> result<_, error>;
+}`;
+  const w = new witApi.Wit(wit);
+
+  // ok unit case: just {kind:"ok"} — no value field per locked shape #6.
+  expect(w.decodeResult("run", "ok")).toBe('{"kind":"ok"}');
+
+  const errDecoded = JSON.parse(w.decodeResult("run", 'err(overflow("u64"))'));
+  expect(errDecoded).toEqual({
+    kind: "err",
+    value: { kind: "overflow", value: "u64" },
+  });
+});
+
 // ─── string ───────────────────────────────────────────────────────────
 
 test("Wit string round-trips, including escape characters", () => {

@@ -1,5 +1,5 @@
 [package]
-name = "kontor-ts"
+name = "kontor-sdk"
 version = "0.1.0"
 edition = "2024"
 # sdk/crate is a workspace member of core/Cargo.toml but lives outside the

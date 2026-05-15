@@ -12,10 +12,10 @@
 use wasm_wave::value::Value as WaveValue;
 use wasm_wave::value::resolve_wit_type;
 use wasm_wave::wasm::{WasmTypeKind, WasmValue};
-use wit_parser::{Resolve, Type, WorldItem};
+use wit_parser::{Resolve, Type, TypeDefKind, WorldItem};
 use wit_validator::Validator;
 
-use serde::ser::{Serialize, Serializer};
+use serde::ser::{Serialize, SerializeMap, Serializer};
 
 /// Cached result of `Validator::validate_str` performed at construction.
 /// Component Model resource constructors can't be fallible (WIT 0.2), so
@@ -78,7 +78,7 @@ impl WitResource {
             let v = args_obj
                 .get(&param.name)
                 .ok_or_else(|| format!("missing arg: {}", param.name))?;
-            let wave_val = json_to_wave(&param.ty, v)?;
+            let wave_val = json_to_wave(&param.ty, v, resolve)?;
             let rendered = wasm_wave::to_string(&wave_val)
                 .map_err(|e| format!("WAVE render error: {e}"))?;
             rendered_args.push(rendered);
@@ -159,7 +159,15 @@ fn wit_type_to_wave_type(
 /// Bigint convention: u64 and s64 accept JSON strings of decimal digits —
 /// JS `Number` can't safely hold integers above 2^53. Smaller integers
 /// fit in `Number` and pass through as JSON numbers.
-fn json_to_wave(ty: &Type, v: &serde_json::Value) -> Result<WaveValue, String> {
+///
+/// User-defined types reach `Type::Id` and dispatch on `TypeDefKind`
+/// (option, variant, result, etc.). `&Resolve` is required to look those
+/// up and to construct wasm-wave's type representation via the bridge.
+fn json_to_wave(
+    ty: &Type,
+    v: &serde_json::Value,
+    resolve: &Resolve,
+) -> Result<WaveValue, String> {
     fn as_int<T>(v: &serde_json::Value, ty_name: &str) -> Result<T, String>
     where
         T: TryFrom<i64>,
@@ -230,6 +238,130 @@ fn json_to_wave(ty: &Type, v: &serde_json::Value) -> Result<WaveValue, String> {
             let s = v.as_str().ok_or_else(|| "expected JSON string".to_string())?;
             Ok(WaveValue::make_string(s.into()))
         }
+        Type::Id(type_id) => {
+            let type_def = &resolve.types[*type_id];
+            match &type_def.kind {
+                TypeDefKind::Option(inner_ty) => {
+                    let wave_ty = wit_type_to_wave_type(ty, resolve)?;
+                    // Locked encoding shape #7: option<T> serializes as
+                    // `T | null` (unwrapped). `null` → none, anything else
+                    // is the inner T.
+                    if v.is_null() {
+                        WaveValue::make_option(&wave_ty, None)
+                            .map_err(|e| format!("make_option (none): {e}"))
+                    } else {
+                        let inner = json_to_wave(inner_ty, v, resolve)?;
+                        WaveValue::make_option(&wave_ty, Some(inner))
+                            .map_err(|e| format!("make_option (some): {e}"))
+                    }
+                }
+                TypeDefKind::Result(result_kind) => {
+                    // Locked encoding shape #6: result<T, E> reuses the
+                    // variant shape with cases "ok" and "err". The codec
+                    // matches the JSON {kind: "ok"|"err", value?} against
+                    // the result type's ok/err inner Type.
+                    let obj = v.as_object().ok_or_else(|| {
+                        "expected JSON object {kind, value?} for result".to_string()
+                    })?;
+                    let case_name = obj
+                        .get("kind")
+                        .and_then(|k| k.as_str())
+                        .ok_or_else(|| {
+                            "result JSON requires 'kind' field with value 'ok' or 'err'"
+                                .to_string()
+                        })?;
+                    let inner_ty = match case_name {
+                        "ok" => result_kind.ok.as_ref(),
+                        "err" => result_kind.err.as_ref(),
+                        other => {
+                            return Err(format!(
+                                "result 'kind' must be 'ok' or 'err', got '{other}'"
+                            ));
+                        }
+                    };
+                    let wave_ty = wit_type_to_wave_type(ty, resolve)?;
+                    let payload = match (inner_ty, obj.get("value")) {
+                        (None, None) => None,
+                        (None, Some(_)) => {
+                            return Err(format!(
+                                "result '{case_name}' has no payload type but JSON has 'value' field"
+                            ));
+                        }
+                        (Some(_), None) => {
+                            return Err(format!(
+                                "result '{case_name}' requires 'value' field"
+                            ));
+                        }
+                        (Some(t), Some(val)) => Some(json_to_wave(t, val, resolve)?),
+                    };
+                    let result_val = if case_name == "ok" {
+                        Ok(payload)
+                    } else {
+                        Err(payload)
+                    };
+                    WaveValue::make_result(&wave_ty, result_val)
+                        .map_err(|e| format!("make_result: {e}"))
+                }
+                TypeDefKind::Record(record) => {
+                    // JSON object → wasm-wave record. Each field is looked
+                    // up by name (matching WIT field name).
+                    let obj = v
+                        .as_object()
+                        .ok_or_else(|| "expected JSON object for record".to_string())?;
+                    let wave_ty = wit_type_to_wave_type(ty, resolve)?;
+                    let mut fields: Vec<(&str, WaveValue)> =
+                        Vec::with_capacity(record.fields.len());
+                    for field in &record.fields {
+                        let val = obj.get(&field.name).ok_or_else(|| {
+                            format!("record missing field: {}", field.name)
+                        })?;
+                        let inner = json_to_wave(&field.ty, val, resolve)?;
+                        fields.push((field.name.as_str(), inner));
+                    }
+                    WaveValue::make_record(&wave_ty, fields)
+                        .map_err(|e| format!("make_record: {e}"))
+                }
+                TypeDefKind::Variant(variant) => {
+                    // Locked encoding shape #5: `{ kind: "case-name", value: payload }`
+                    // for payload cases; `{ kind: "case-name" }` for unit cases.
+                    let obj = v.as_object().ok_or_else(|| {
+                        "expected JSON object {kind, value?} for variant".to_string()
+                    })?;
+                    let case_name = obj
+                        .get("kind")
+                        .and_then(|k| k.as_str())
+                        .ok_or_else(|| {
+                            "variant JSON requires a 'kind' field (string case name)".to_string()
+                        })?;
+                    let case = variant
+                        .cases
+                        .iter()
+                        .find(|c| c.name == case_name)
+                        .ok_or_else(|| format!("unknown variant case: {case_name}"))?;
+                    let wave_ty = wit_type_to_wave_type(ty, resolve)?;
+                    let payload = match (&case.ty, obj.get("value")) {
+                        (None, None) => None,
+                        (None, Some(_)) => {
+                            return Err(format!(
+                                "variant case '{case_name}' is unit but JSON has 'value' field"
+                            ));
+                        }
+                        (Some(_), None) => {
+                            return Err(format!(
+                                "variant case '{case_name}' requires 'value' field"
+                            ));
+                        }
+                        (Some(inner_ty), Some(val)) => {
+                            Some(json_to_wave(inner_ty, val, resolve)?)
+                        }
+                    };
+                    WaveValue::make_variant(&wave_ty, case_name, payload)
+                        .map_err(|e| format!("make_variant: {e}"))
+                }
+                TypeDefKind::Type(aliased) => json_to_wave(aliased, v, resolve),
+                other => Err(format!("type def kind not implemented yet: {other:?}")),
+            }
+        }
         _ => Err(format!("type not implemented yet: {ty:?}")),
     }
 }
@@ -260,6 +392,48 @@ impl<'a> Serialize for WaveValueRepr<'a> {
             WasmTypeKind::F64 => ser.serialize_f64(self.0.unwrap_f64()),
             WasmTypeKind::Char => ser.serialize_char(self.0.unwrap_char()),
             WasmTypeKind::String => ser.serialize_str(&self.0.unwrap_string()),
+            WasmTypeKind::Option => match self.0.unwrap_option() {
+                // Locked encoding shape #7: option<T> as `T | null`
+                // (unwrapped). None becomes JSON null; Some becomes the
+                // inner T directly.
+                None => ser.serialize_none(),
+                Some(inner) => WaveValueRepr(&inner).serialize(ser),
+            },
+            WasmTypeKind::Record => {
+                // Records serialize as a plain JSON object keyed by field
+                // name. wasm-wave's `unwrap_record` yields (name, value)
+                // pairs in declaration order.
+                let mut map = ser.serialize_map(None)?;
+                for (name, value) in self.0.unwrap_record() {
+                    map.serialize_entry(name.as_ref(), &WaveValueRepr(&value))?;
+                }
+                map.end()
+            }
+            WasmTypeKind::Variant => {
+                // Locked encoding shape #5: `{ kind: "case-name", value: payload }`,
+                // or `{ kind: "case-name" }` for unit cases.
+                let (case_name, payload) = self.0.unwrap_variant();
+                let mut map = ser.serialize_map(None)?;
+                map.serialize_entry("kind", case_name.as_ref())?;
+                if let Some(inner) = payload {
+                    map.serialize_entry("value", &WaveValueRepr(&inner))?;
+                }
+                map.end()
+            }
+            WasmTypeKind::Result => {
+                // Locked encoding shape #6: result reuses the variant
+                // shape with kind set to "ok" or "err".
+                let (case_name, payload) = match self.0.unwrap_result() {
+                    Ok(p) => ("ok", p),
+                    Err(p) => ("err", p),
+                };
+                let mut map = ser.serialize_map(None)?;
+                map.serialize_entry("kind", case_name)?;
+                if let Some(inner) = payload {
+                    map.serialize_entry("value", &WaveValueRepr(&inner))?;
+                }
+                map.end()
+            }
             kind => Err(serde::ser::Error::custom(format!(
                 "WaveValueRepr: kind not implemented yet: {kind:?}"
             ))),

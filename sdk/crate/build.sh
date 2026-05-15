@@ -19,14 +19,14 @@ wasm-opt -Oz \
   --enable-sign-ext \
   --enable-reference-types \
   --enable-multivalue \
-  "${TARGET_DIR}/wasm32-unknown-unknown/release/kontor_ts.wasm" \
-  -o "${TARGET_DIR}/wasm32-unknown-unknown/release/kontor_ts.wasm"
+  "${TARGET_DIR}/wasm32-unknown-unknown/release/kontor_sdk.wasm" \
+  -o "${TARGET_DIR}/wasm32-unknown-unknown/release/kontor_sdk.wasm"
 
 wasm-tools component new \
-  "${TARGET_DIR}/wasm32-unknown-unknown/release/kontor_ts.wasm" \
-  -o "${TARGET_DIR}/wasm32-unknown-unknown/release/kontor_ts_component.wasm"
+  "${TARGET_DIR}/wasm32-unknown-unknown/release/kontor_sdk.wasm" \
+  -o "${TARGET_DIR}/wasm32-unknown-unknown/release/kontor_sdk_component.wasm"
 
 npx jco transpile \
-  "${TARGET_DIR}/wasm32-unknown-unknown/release/kontor_ts_component.wasm" \
-  --name kontor-ts \
+  "${TARGET_DIR}/wasm32-unknown-unknown/release/kontor_sdk_component.wasm" \
+  --name kontor-sdk \
   -o ../src/component

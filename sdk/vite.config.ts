@@ -6,7 +6,7 @@ import { copyFileSync, mkdirSync } from "fs";
 // Library build for @kontor/sdk.
 //
 // We deliberately do NOT bundle the jco-generated component (its WASM
-// loader uses `new URL('./kontor-ts.core.wasm', import.meta.url)`, which
+// loader uses `new URL('./kontor-sdk.core.wasm', import.meta.url)`, which
 // Vite/Rolldown lib mode rewrites to a base64 `data:` URL — fine for
 // browsers but breaks Node's `fs.readFile(url)` which only accepts file://).
 // Instead we mark the component as external and copy the whole component
@@ -23,7 +23,7 @@ export default defineConfig({
     emptyOutDir: true,
     rollupOptions: {
       external: (id) =>
-        id.startsWith("node:") || id.includes("/component/kontor-ts"),
+        id.startsWith("node:") || id.includes("/component/kontor-sdk"),
     },
   },
   plugins: [
@@ -36,12 +36,12 @@ export default defineConfig({
       closeBundle() {
         mkdirSync("dist/component", { recursive: true });
         copyFileSync(
-          "src/component/kontor-ts.js",
-          "dist/component/kontor-ts.js",
+          "src/component/kontor-sdk.js",
+          "dist/component/kontor-sdk.js",
         );
         copyFileSync(
-          "src/component/kontor-ts.core.wasm",
-          "dist/component/kontor-ts.core.wasm",
+          "src/component/kontor-sdk.core.wasm",
+          "dist/component/kontor-sdk.core.wasm",
         );
       },
     },

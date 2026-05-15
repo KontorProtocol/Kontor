@@ -1238,7 +1238,7 @@ Wit.prototype.parse = function parse() {
 
 const $init = (() => {
   let gen = (function* _initGenerator () {
-    const module0 = fetchCompile(new URL('./kontor-ts.core.wasm', import.meta.url));
+    const module0 = fetchCompile(new URL('./kontor-sdk.core.wasm', import.meta.url));
     const module1 = base64Compile('AGFzbQEAAAABBQFgAX8AAwIBAAQFAXABAQEHEAIBMAAACCRpbXBvcnRzAQAKCwEJACAAQQARAAALAC8JcHJvZHVjZXJzAQxwcm9jZXNzZWQtYnkBDXdpdC1jb21wb25lbnQHMC4yNDQuMA');
     const module2 = base64Compile('AGFzbQEAAAABBQFgAX8AAhUCAAEwAAAACCRpbXBvcnRzAXABAQEJBwEAQQALAQAALwlwcm9kdWNlcnMBDHByb2Nlc3NlZC1ieQENd2l0LWNvbXBvbmVudAcwLjI0NC4w');
     ({ exports: exports0 } = yield instantiateCore(yield module1));

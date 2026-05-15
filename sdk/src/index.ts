@@ -1,2 +1,2 @@
-export * from "./component/kontor-ts";
+export * from "./component/kontor-sdk";
 export type * from "./bindings";
