@@ -109,8 +109,17 @@ impl WitResource {
             .map_err(|e| format!("JSON serialize error: {e}"))
     }
 
+    /// Serialize the parsed Resolve graph as JSON. wit_parser's own
+    /// Serialize impl walks the arenas with stable keys (interface and
+    /// type names rather than arena indices). Consumed by:
+    /// - the TS walker that recognizes canonical Kontor types (Decimal,
+    ///   HolderRef, ContractAddress) by fully-qualified name
+    /// - future `kontor-codegen` that emits .d.ts files from the same
+    ///   source of truth
     pub fn parse(&self) -> Result<String, String> {
-        Err("not implemented".to_string())
+        let resolve = self.resolve()?;
+        serde_json::to_string(resolve)
+            .map_err(|e| format!("serialize Resolve: {e}"))
     }
 }
 

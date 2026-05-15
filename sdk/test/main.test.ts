@@ -639,3 +639,46 @@ test("smoke: encodeCall against real token.wit handles holder-ref unit cases", (
   const wave = w.encodeCall("transfer", JSON.stringify(args));
   expect(wave).toBe("transfer(core, {r0: 1, r1: 0, r2: 0, r3: 0, sign: plus})");
 });
+
+// ─── parse() — Resolve graph as JSON ──────────────────────────────────
+
+test("Wit.parse returns valid JSON describing the Resolve graph", () => {
+  const wit = `${KONTOR_HEADER}
+    export init: ;
+}`.replace("export init: ;", ""); // strip duplicate init from header
+  const cleanWit = `package root:component;
+
+world root {
+    include kontor:built-in/built-in;
+    use kontor:built-in/context.{proc-context, view-context};
+    use kontor:built-in/error.{error};
+
+    export init: async func(ctx: borrow<proc-context>);
+    export set-flag: async func(ctx: borrow<proc-context>, flag: bool) -> result<_, error>;
+}`;
+  const w = new witApi.Wit(cleanWit);
+
+  const parsed = JSON.parse(w.parse());
+  // wit_parser's Resolve serializes with arenas keyed by stable names
+  // (interfaces, types) and worlds keyed by id. Smoke-check the shape.
+  expect(parsed).toHaveProperty("worlds");
+  expect(parsed).toHaveProperty("interfaces");
+  expect(parsed).toHaveProperty("types");
+});
+
+test("Wit.parse on real token.wit captures the contract's exports", () => {
+  const w = new witApi.Wit(tokenWit);
+  const parsed = JSON.parse(w.parse());
+
+  // Look for the transfer export. The exact shape depends on wit-parser's
+  // serialization; we just confirm transfer is somewhere in the dump.
+  const blob = JSON.stringify(parsed);
+  expect(blob).toContain("transfer");
+  expect(blob).toContain("holder-ref");
+  expect(blob).toContain("decimal");
+});
+
+test("Wit.parse propagates validation errors", () => {
+  const w = new witApi.Wit("garbage");
+  expect(() => w.parse()).toThrow(/WIT parse error/);
+});
