@@ -732,107 +732,43 @@ test("codegen Tier 1: rejects invalid WIT", () => {
 
 // ─── codegen Tier 2: Contract class end-to-end ────────────────────────
 
-test("codegen Tier 2: emits Contract class with transport + per-method TypeNodes", () => {
+test("codegen Tier 2: emits Contract class with transport + per-type helpers", () => {
   const out = generate(tokenWit);
 
-  // Imports the runtime helpers
-  expect(out).toContain('import { witApi, encodeJson, decodeJson');
+  // Imports the runtime helpers (just witApi and KontorTransport now —
+  // no generic walker dependency; conversions are inlined in generated
+  // helpers).
+  expect(out).toContain(
+    'import { witApi, type KontorTransport } from "@kontor/sdk";',
+  );
 
-  // Embeds the WIT and instantiates a Wit resource at module load
+  // Embeds the WIT and instantiates a Wit resource at module load.
   expect(out).toContain("const WIT = String.raw`");
   expect(out).toContain("const _wit = new witApi.Wit(WIT);");
 
-  // Per-method TypeNode constants exist
-  expect(out).toMatch(/const _transfer_args: TypeNode =/);
-  expect(out).toMatch(/const _balance_result: TypeNode \| null =/);
+  // Per-type encode/decode helpers exist for named compound types.
+  expect(out).toMatch(/function _encodeDecimal\(v: Decimal\)/);
+  expect(out).toMatch(/function _decodeDecimal\(v: unknown\): Decimal/);
+  expect(out).toMatch(/function _encodeHolderRef\(v: HolderRef\)/);
 
-  // Contract class with constructor
+  // Decimal's encode helper converts each bigint field via .toString().
+  expect(out).toMatch(/"r0": v\.r0\.toString\(\)/);
+
+  // Contract class with constructor.
   expect(out).toContain("export class Contract {");
   expect(out).toContain("constructor(private transport: KontorTransport)");
 
-  // view-context methods should dispatch via simulate, proc-context via submit
-  expect(out).toMatch(/async balance\([^)]*\)[^{]*\{[\s\S]*?transport\.simulate/);
-  expect(out).toMatch(/async transfer\([^)]*\)[^{]*\{[\s\S]*?transport\.submit/);
+  // view-context methods dispatch via simulate, proc-context via submit.
+  expect(out).toMatch(
+    /async balance\([^)]*\)[^{]*\{[\s\S]*?transport\.simulate/,
+  );
+  expect(out).toMatch(
+    /async transfer\([^)]*\)[^{]*\{[\s\S]*?transport\.submit/,
+  );
 
-  // kebab function name in WIT → camelCase TS method
+  // kebab function name in WIT → camelCase TS method.
   expect(out).toMatch(/async totalSupply\(/);
-  // kebab param → camelCase in TS, kebab on the wire
+  // kebab param → camelCase in TS, kebab on the wire.
   expect(out).toMatch(/burnAmt:/);
-  expect(out).toMatch(/js: "burnAmt", wire: "burn-amt"/);
-});
-
-// ─── json-codec walker (used by Tier 2 generated code at runtime) ─────
-
-import { encodeJson, decodeJson, type TypeNode } from "@kontor/sdk";
-
-test("json-codec: bigint round-trips through encodeJson + decodeJson", () => {
-  const t: TypeNode = { k: "bigint" };
-  expect(encodeJson(123n, t)).toBe("123");
-  expect(decodeJson("123", t)).toBe(123n);
-});
-
-test("json-codec: record field name mapping (camelCase JS ↔ kebab-case wire)", () => {
-  // Mimics what codegen emits for a record with a kebab field.
-  const t: TypeNode = {
-    k: "record",
-    fields: [
-      { js: "txId", wire: "tx-id", t: { k: "passthrough" } },
-      { js: "amount", wire: "amount", t: { k: "bigint" } },
-    ],
-  };
-  const encoded = encodeJson({ txId: "abc", amount: 100n }, t);
-  expect(encoded).toEqual({ "tx-id": "abc", amount: "100" });
-
-  const decoded = decodeJson({ "tx-id": "abc", amount: "100" }, t);
-  expect(decoded).toEqual({ txId: "abc", amount: 100n });
-});
-
-test("json-codec: option<T> passes null through unchanged", () => {
-  const t: TypeNode = { k: "option", el: { k: "bigint" } };
-  expect(encodeJson(null, t)).toBeNull();
-  expect(decodeJson(null, t)).toBeNull();
-  expect(encodeJson(99n, t)).toBe("99");
-  expect(decodeJson("99", t)).toBe(99n);
-});
-
-test("json-codec: variant unit case stays unit, payload case converts inner", () => {
-  const t: TypeNode = {
-    k: "variant",
-    cases: {
-      "x-only-pubkey": { k: "passthrough" },
-      "signer-id": { k: "bigint" },
-      core: null,
-    },
-  };
-  expect(encodeJson({ kind: "core" }, t)).toEqual({ kind: "core" });
-  expect(encodeJson({ kind: "signer-id", value: 42n }, t)).toEqual({
-    kind: "signer-id",
-    value: "42",
-  });
-  expect(decodeJson({ kind: "signer-id", value: "42" }, t)).toEqual({
-    kind: "signer-id",
-    value: 42n,
-  });
-});
-
-test("json-codec: result reuses variant shape with ok/err keys", () => {
-  const t: TypeNode = {
-    k: "result",
-    ok: { k: "bigint" },
-    err: { k: "passthrough" },
-  };
-  expect(encodeJson({ kind: "ok", value: 7n }, t)).toEqual({
-    kind: "ok",
-    value: "7",
-  });
-  expect(decodeJson({ kind: "err", value: "boom" }, t)).toEqual({
-    kind: "err",
-    value: "boom",
-  });
-});
-
-test("json-codec: list<u64> walks each element", () => {
-  const t: TypeNode = { k: "list", el: { k: "bigint" } };
-  expect(encodeJson([1n, 2n, 3n], t)).toEqual(["1", "2", "3"]);
-  expect(decodeJson(["1", "2", "3"], t)).toEqual([1n, 2n, 3n]);
+  expect(out).toMatch(/"burn-amt": _encodeDecimal\(burnAmt\)/);
 });

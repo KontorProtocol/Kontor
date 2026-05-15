@@ -1,16 +1,20 @@
 /**
- * kontor-codegen Tier 1: emit TypeScript types from a Kontor contract WIT.
+ * kontor-codegen — emit TypeScript bindings (types + Contract class) from
+ * a Kontor contract WIT.
  *
- * Walks the Resolve graph produced by `Wit.parse()` and emits:
- *   - A TS declaration for each named user-defined type reachable from
- *     the root world's exports
- *   - A `Contract` interface listing the world's exported functions
- *     with typed params (ctx param skipped per Kontor convention) and
- *     return types
+ * Generated output:
+ *   - `export type ...` for every reachable user-defined type
+ *   - `function _encode<Name>(...)` / `function _decode<Name>(...)`
+ *     helpers for every reachable compound type — these handle the
+ *     bigint round-trip (u64/s64 as decimal strings) and the
+ *     camelCase ↔ kebab-case record field name mapping
+ *   - `export class Contract` with constructor `(transport)` and one
+ *     method per export, dispatching through transport.simulate/submit
+ *     based on the ctx borrow target
  *
- * Tier 1 emits raw types only — no canonical-type ergonomics (Decimal
- * stays `{r0: bigint, ...}`), no contract wrapper class, no encode/decode
- * plumbing. Those are Tier 2 and Tier 3 respectively.
+ * Generated files are self-contained: no runtime walker dependency,
+ * just `@kontor/sdk` for the WAVE codec (witApi.Wit) and the
+ * KontorTransport interface.
  */
 import { witApi } from "./component/kontor-sdk";
 
@@ -18,20 +22,7 @@ type TypeRef = string | number;
 
 interface TypeDef {
   name: string | null;
-  kind:
-    | "resource"
-    | { record: { fields: Array<{ name: string; type: TypeRef }> } }
-    | { variant: { cases: Array<{ name: string; type: TypeRef | null }> } }
-    | { enum: { cases: Array<{ name: string }> } }
-    | { result: { ok: TypeRef | null; err: TypeRef | null } }
-    | { option: TypeRef }
-    | { list: TypeRef }
-    | { tuple: { types: TypeRef[] } }
-    | { flags: { flags: Array<{ name: string }> } }
-    | { type: TypeRef } // type alias
-    | { handle: { borrow?: number; own?: number } }
-    | { future?: TypeRef | null }
-    | { stream?: TypeRef | null };
+  kind: unknown;
   owner: { interface: number } | { world: number } | null;
 }
 
@@ -58,7 +49,6 @@ interface Resolve {
   types: TypeDef[];
 }
 
-/** Map a primitive WIT type name to its TS equivalent. */
 function primitiveToTs(name: string): string {
   switch (name) {
     case "bool":
@@ -74,31 +64,29 @@ function primitiveToTs(name: string): string {
       return "number";
     case "u64":
     case "s64":
-      return "bigint"; // FFI uses quoted decimal at the wire, exposed as bigint
+      return "bigint";
     case "char":
     case "string":
       return "string";
     default:
-      return "unknown /* primitive: " + name + " */";
+      return "unknown";
   }
 }
 
-/** Kebab-case to camelCase for TS identifiers. */
+function isBigintPrim(name: string): boolean {
+  return name === "u64" || name === "s64";
+}
+
 function toCamel(s: string): string {
   return s.replace(/-([a-z0-9])/g, (_, c) => c.toUpperCase());
 }
 
-/** Kebab-case to PascalCase for TS type names. */
 function toPascal(s: string): string {
   const c = toCamel(s);
   return c.charAt(0).toUpperCase() + c.slice(1);
 }
 
-/**
- * `use` re-exports create alias TypeDefs whose kind is `{type: target_id}`.
- * Follow the chain to the underlying definition so we don't emit
- * tautological `export type X = X;` declarations.
- */
+/** Follow `use` aliases to the underlying TypeDef. */
 function resolveAlias(id: number, resolve: Resolve): number {
   const def = resolve.types[id];
   const k = def.kind as any;
@@ -108,45 +96,42 @@ function resolveAlias(id: number, resolve: Resolve): number {
   return id;
 }
 
-/** Look up the TS name for a TypeDef. Anonymous types get inlined. */
+/** Stable helper-function suffix for a given type id. */
+function helperSuffix(id: number, resolve: Resolve): string {
+  const def = resolve.types[id];
+  if (def.name != null) return toPascal(def.name);
+  return `T${id}`;
+}
+
 function tsNameForType(id: number, resolve: Resolve): string | null {
   const def = resolve.types[id];
   if (def.name == null) return null;
   return toPascal(def.name);
 }
 
-/** Convert a TypeRef (primitive string or type id) to TS source. */
 function typeRefToTs(ref: TypeRef, resolve: Resolve): string {
   if (typeof ref === "string") return primitiveToTs(ref);
   const id = resolveAlias(ref, resolve);
   const def = resolve.types[id];
   const name = tsNameForType(id, resolve);
   if (name != null) return name;
-  // Anonymous compound — inline it
-  return typeDefToTs(def, resolve);
+  return typeDefBodyToTs(def, resolve);
 }
 
-/** Convert a TypeDef body (the kind union) to TS source. */
-function typeDefToTs(def: TypeDef, resolve: Resolve): string {
-  if (def.kind === "resource") {
-    return "unknown /* resource (runtime-only) */";
-  }
+function typeDefBodyToTs(def: TypeDef, resolve: Resolve): string {
+  if (def.kind === "resource") return "unknown";
   const k = def.kind as any;
   if ("type" in k) return typeRefToTs(k.type, resolve);
   if ("list" in k) return `Array<${typeRefToTs(k.list, resolve)}>`;
   if ("option" in k) return `${typeRefToTs(k.option, resolve)} | null`;
   if ("result" in k) {
-    const ok =
-      k.result.ok != null ? typeRefToTs(k.result.ok, resolve) : "void";
-    const err =
-      k.result.err != null ? typeRefToTs(k.result.err, resolve) : "void";
     const okArm =
       k.result.ok != null
-        ? `{ kind: "ok"; value: ${ok} }`
+        ? `{ kind: "ok"; value: ${typeRefToTs(k.result.ok, resolve)} }`
         : `{ kind: "ok" }`;
     const errArm =
       k.result.err != null
-        ? `{ kind: "err"; value: ${err} }`
+        ? `{ kind: "err"; value: ${typeRefToTs(k.result.err, resolve)} }`
         : `{ kind: "err" }`;
     return `${okArm} | ${errArm}`;
   }
@@ -160,20 +145,20 @@ function typeDefToTs(def: TypeDef, resolve: Resolve): string {
     return `{\n${fields}\n}`;
   }
   if ("variant" in k) {
-    const arms = k.variant.cases.map((c: any) => {
-      if (c.type == null) return `{ kind: "${c.name}" }`;
-      return `{ kind: "${c.name}"; value: ${typeRefToTs(c.type, resolve)} }`;
-    });
+    const arms = k.variant.cases.map((c: any) =>
+      c.type == null
+        ? `{ kind: "${c.name}" }`
+        : `{ kind: "${c.name}"; value: ${typeRefToTs(c.type, resolve)} }`,
+    );
     return arms.join(" | ");
   }
   if ("enum" in k) {
     return k.enum.cases.map((c: any) => `"${c.name}"`).join(" | ");
   }
   if ("tuple" in k) {
-    const items = k.tuple.types
+    return `[${k.tuple.types
       .map((t: TypeRef) => typeRefToTs(t, resolve))
-      .join(", ");
-    return `[${items}]`;
+      .join(", ")}]`;
   }
   if ("flags" in k) {
     const names = k.flags.flags
@@ -181,13 +166,10 @@ function typeDefToTs(def: TypeDef, resolve: Resolve): string {
       .join(" | ");
     return `Array<${names}>`;
   }
-  if ("handle" in k) {
-    return "unknown /* resource handle (runtime-only) */";
-  }
-  return `unknown /* unhandled kind: ${JSON.stringify(k)} */`;
+  return "unknown";
 }
 
-/** Collect transitive type ids referenced from a TypeRef. */
+/** Recursively collect all compound type ids reachable from `ref`. */
 function collectIds(
   ref: TypeRef,
   resolve: Resolve,
@@ -217,63 +199,153 @@ function collectIds(
   }
 }
 
-/** Emit a TypeNode literal expression for a given TypeRef. */
-function typeRefToTypeNode(ref: TypeRef, resolve: Resolve): string {
+/**
+ * Emit a TS expression that encodes `expr` (a value of the WIT type `ref`)
+ * to its wire JSON shape. Primitives are inline; compound types call their
+ * named helper.
+ */
+function encodeExpr(ref: TypeRef, expr: string, resolve: Resolve): string {
   if (typeof ref === "string") {
-    if (ref === "u64" || ref === "s64") return `{ k: "bigint" }`;
-    return `{ k: "passthrough" }`;
+    return isBigintPrim(ref) ? `${expr}.toString()` : expr;
   }
   const id = resolveAlias(ref, resolve);
+  return `_encode${helperSuffix(id, resolve)}(${expr})`;
+}
+
+function decodeExpr(ref: TypeRef, expr: string, resolve: Resolve): string {
+  if (typeof ref === "string") {
+    return isBigintPrim(ref) ? `BigInt(${expr} as string)` : expr;
+  }
+  const id = resolveAlias(ref, resolve);
+  return `_decode${helperSuffix(id, resolve)}(${expr})`;
+}
+
+/** Emit the body of `function _encode<Name>(v: T): unknown` for a typedef. */
+function emitEncodeHelper(id: number, resolve: Resolve): string {
   const def = resolve.types[id];
-  if (def.kind === "resource") return `{ k: "passthrough" }`;
+  const tsName = typeRefToTs(id, resolve);
+  const fnName = `_encode${helperSuffix(id, resolve)}`;
+  if (def.kind === "resource") {
+    return `function ${fnName}(v: ${tsName}): unknown { return v; }`;
+  }
   const k = def.kind as any;
-  if ("type" in k) return typeRefToTypeNode(k.type, resolve);
+  if ("type" in k) {
+    // Alias — just forward
+    return `function ${fnName}(v: ${tsName}): unknown { return ${encodeExpr(k.type, "v", resolve)}; }`;
+  }
   if ("list" in k) {
-    return `{ k: "list", el: ${typeRefToTypeNode(k.list, resolve)} }`;
+    return `function ${fnName}(v: ${tsName}): unknown { return v.map(x => ${encodeExpr(k.list, "x", resolve)}); }`;
   }
   if ("option" in k) {
-    return `{ k: "option", el: ${typeRefToTypeNode(k.option, resolve)} }`;
+    return `function ${fnName}(v: ${tsName}): unknown { return v == null ? null : ${encodeExpr(k.option, "v", resolve)}; }`;
   }
   if ("result" in k) {
-    const ok =
-      k.result.ok != null ? typeRefToTypeNode(k.result.ok, resolve) : "null";
-    const err =
-      k.result.err != null ? typeRefToTypeNode(k.result.err, resolve) : "null";
-    return `{ k: "result", ok: ${ok}, err: ${err} }`;
+    const okExpr =
+      k.result.ok != null
+        ? `{ kind: "ok", value: ${encodeExpr(k.result.ok, "v.value", resolve)} }`
+        : `{ kind: "ok" }`;
+    const errExpr =
+      k.result.err != null
+        ? `{ kind: "err", value: ${encodeExpr(k.result.err, "v.value", resolve)} }`
+        : `{ kind: "err" }`;
+    return `function ${fnName}(v: ${tsName}): unknown { return v.kind === "ok" ? ${okExpr} : ${errExpr}; }`;
   }
   if ("record" in k) {
     const fields = k.record.fields
       .map(
         (f: any) =>
-          `{ js: ${JSON.stringify(toCamel(f.name))}, wire: ${JSON.stringify(f.name)}, t: ${typeRefToTypeNode(f.type, resolve)} }`,
+          `${JSON.stringify(f.name)}: ${encodeExpr(f.type, `v.${toCamel(f.name)}`, resolve)}`,
       )
       .join(", ");
-    return `{ k: "record", fields: [${fields}] }`;
+    return `function ${fnName}(v: ${tsName}): unknown { return { ${fields} }; }`;
   }
   if ("variant" in k) {
-    const cases = k.variant.cases
+    const arms = k.variant.cases
       .map((c: any) => {
-        const inner =
-          c.type != null ? typeRefToTypeNode(c.type, resolve) : "null";
-        return `${JSON.stringify(c.name)}: ${inner}`;
+        const payload =
+          c.type != null
+            ? `, value: ${encodeExpr(c.type, "(v as any).value", resolve)}`
+            : "";
+        return `case ${JSON.stringify(c.name)}: return { kind: ${JSON.stringify(c.name)}${payload} };`;
       })
-      .join(", ");
-    return `{ k: "variant", cases: { ${cases} } }`;
+      .join(" ");
+    return `function ${fnName}(v: ${tsName}): unknown { switch (v.kind) { ${arms} } }`;
   }
-  if ("enum" in k) return `{ k: "passthrough" }`;
+  if ("enum" in k || "flags" in k) {
+    return `function ${fnName}(v: ${tsName}): unknown { return v; }`;
+  }
   if ("tuple" in k) {
-    const els = k.tuple.types
-      .map((t: TypeRef) => typeRefToTypeNode(t, resolve))
+    const parts = k.tuple.types
+      .map((t: TypeRef, i: number) => encodeExpr(t, `v[${i}]`, resolve))
       .join(", ");
-    return `{ k: "tuple", els: [${els}] }`;
+    return `function ${fnName}(v: ${tsName}): unknown { return [${parts}]; }`;
   }
-  return `{ k: "passthrough" }`;
+  return `function ${fnName}(v: ${tsName}): unknown { return v; }`;
 }
 
-/**
- * Determine whether a method is view-context (simulate) or proc-context
- * (submit) based on its ctx (first) param's borrow target.
- */
+function emitDecodeHelper(id: number, resolve: Resolve): string {
+  const def = resolve.types[id];
+  const tsName = typeRefToTs(id, resolve);
+  const fnName = `_decode${helperSuffix(id, resolve)}`;
+  if (def.kind === "resource") {
+    return `function ${fnName}(v: unknown): ${tsName} { return v as ${tsName}; }`;
+  }
+  const k = def.kind as any;
+  if ("type" in k) {
+    return `function ${fnName}(v: unknown): ${tsName} { return ${decodeExpr(k.type, "v", resolve)}; }`;
+  }
+  if ("list" in k) {
+    return `function ${fnName}(v: unknown): ${tsName} { return (v as unknown[]).map(x => ${decodeExpr(k.list, "x", resolve)}); }`;
+  }
+  if ("option" in k) {
+    return `function ${fnName}(v: unknown): ${tsName} { return v == null ? null : ${decodeExpr(k.option, "v", resolve)}; }`;
+  }
+  if ("result" in k) {
+    const okExpr =
+      k.result.ok != null
+        ? `{ kind: "ok" as const, value: ${decodeExpr(k.result.ok, "(v as any).value", resolve)} }`
+        : `{ kind: "ok" as const }`;
+    const errExpr =
+      k.result.err != null
+        ? `{ kind: "err" as const, value: ${decodeExpr(k.result.err, "(v as any).value", resolve)} }`
+        : `{ kind: "err" as const }`;
+    return `function ${fnName}(v: unknown): ${tsName} { return (v as any).kind === "ok" ? ${okExpr} : ${errExpr}; }`;
+  }
+  if ("record" in k) {
+    const fields = k.record.fields
+      .map(
+        (f: any) =>
+          `${toCamel(f.name)}: ${decodeExpr(f.type, `(v as any)[${JSON.stringify(f.name)}]`, resolve)}`,
+      )
+      .join(", ");
+    return `function ${fnName}(v: unknown): ${tsName} { return { ${fields} }; }`;
+  }
+  if ("variant" in k) {
+    const arms = k.variant.cases
+      .map((c: any) => {
+        const payload =
+          c.type != null
+            ? `, value: ${decodeExpr(c.type, "(v as any).value", resolve)}`
+            : "";
+        return `case ${JSON.stringify(c.name)}: return { kind: ${JSON.stringify(c.name)}${payload} } as ${tsName};`;
+      })
+      .join(" ");
+    return `function ${fnName}(v: unknown): ${tsName} { switch ((v as any).kind) { ${arms} default: throw new Error("unknown variant case: " + (v as any).kind); } }`;
+  }
+  if ("enum" in k || "flags" in k) {
+    return `function ${fnName}(v: unknown): ${tsName} { return v as ${tsName}; }`;
+  }
+  if ("tuple" in k) {
+    const parts = k.tuple.types
+      .map((t: TypeRef, i: number) =>
+        decodeExpr(t, `(v as unknown[])[${i}]`, resolve),
+      )
+      .join(", ");
+    return `function ${fnName}(v: unknown): ${tsName} { return [${parts}] as ${tsName}; }`;
+  }
+  return `function ${fnName}(v: unknown): ${tsName} { return v as ${tsName}; }`;
+}
+
 function ctxKind(
   func: WitFunction,
   resolve: Resolve,
@@ -285,25 +357,22 @@ function ctxKind(
   if (typeof k !== "object" || !("handle" in k)) return "submit";
   const target = k.handle.borrow ?? k.handle.own;
   if (typeof target !== "number") return "submit";
-  // Follow alias chain to the underlying named type.
   const resolved = resolveAlias(target, resolve);
-  const name = resolve.types[resolved].name;
-  return name === "view-context" ? "simulate" : "submit";
+  return resolve.types[resolved].name === "view-context"
+    ? "simulate"
+    : "submit";
 }
 
-/** Generate TypeScript types + Contract class from a WIT source string. */
 export function generate(witText: string): string {
   const w = new witApi.Wit(witText);
   const resolve = JSON.parse(w.parse()) as Resolve;
   const root = resolve.worlds.find((wo) => wo.name === "root");
-  if (!root) {
-    throw new Error("no `root` world in parsed WIT");
-  }
+  if (!root) throw new Error("no `root` world in parsed WIT");
 
   const out: string[] = [];
   out.push("// Generated by kontor-codegen. Do not edit by hand.");
   out.push(
-    'import { witApi, encodeJson, decodeJson, type TypeNode, type KontorTransport } from "@kontor/sdk";',
+    'import { witApi, type KontorTransport } from "@kontor/sdk";',
   );
   out.push("");
 
@@ -318,47 +387,35 @@ export function generate(witText: string): string {
       collectIds(item.function.result, resolve, seen);
     }
   }
-
   const ids = [...seen].sort((a, b) => a - b);
+
+  // Emit a TS type declaration for every named user-defined type.
   for (const id of ids) {
     const def = resolve.types[id];
     const name = tsNameForType(id, resolve);
     if (name == null) continue;
     if (def.kind === "resource") continue;
-    out.push(`export type ${name} = ${typeDefToTs(def, resolve)};`);
+    out.push(`export type ${name} = ${typeDefBodyToTs(def, resolve)};`);
     out.push("");
   }
 
-  // Embed the WIT source so the generated Contract is self-sufficient.
+  // Embed the WIT and instantiate the Wit resource at module load.
   out.push("const WIT = String.raw`" + witText.replace(/`/g, "\\`") + "`;");
   out.push("const _wit = new witApi.Wit(WIT);");
   out.push("");
 
-  // Emit per-method TypeNode constants for the args + return type. Use
-  // bracketed access syntax to allow kebab-case function names.
-  const methods = Object.entries(root.exports).filter(
-    (e): e is [string, { function: WitFunction }] => "function" in e[1],
-  );
-  for (const [name, { function: fn }] of methods) {
-    const safeName = toCamel(name);
-    const userParams = fn.params.slice(1);
-    const argsNode =
-      userParams.length === 0
-        ? `{ k: "record", fields: [] }`
-        : `{ k: "record", fields: [${userParams
-            .map(
-              (p) =>
-                `{ js: ${JSON.stringify(toCamel(p.name))}, wire: ${JSON.stringify(p.name)}, t: ${typeRefToTypeNode(p.type, resolve)} }`,
-            )
-            .join(", ")}] }`;
-    const resultNode =
-      fn.result != null ? typeRefToTypeNode(fn.result, resolve) : "null";
-    out.push(`const _${safeName}_args: TypeNode = ${argsNode};`);
-    out.push(`const _${safeName}_result: TypeNode | null = ${resultNode};`);
+  // Emit one _encode + _decode helper per reachable compound type.
+  for (const id of ids) {
+    out.push(emitEncodeHelper(id, resolve));
+    out.push(emitDecodeHelper(id, resolve));
   }
   out.push("");
 
   // Emit the Contract class.
+  const methods = Object.entries(root.exports).filter(
+    (e): e is [string, { function: WitFunction }] => "function" in e[1],
+  );
+
   out.push("export class Contract {");
   out.push("  constructor(private transport: KontorTransport) {}");
   out.push("");
@@ -368,33 +425,33 @@ export function generate(witText: string): string {
     const sig = userParams
       .map((p) => `${toCamel(p.name)}: ${typeRefToTs(p.type, resolve)}`)
       .join(", ");
-    const argObj = userParams
-      .map((p) => `${toCamel(p.name)}`)
+    const wireArgFields = userParams
+      .map(
+        (p) =>
+          `${JSON.stringify(p.name)}: ${encodeExpr(p.type, toCamel(p.name), resolve)}`,
+      )
       .join(", ");
     const ret =
       fn.result != null
         ? `Promise<${typeRefToTs(fn.result, resolve)}>`
         : "Promise<void>";
     const dispatch = ctxKind(fn, resolve);
+
     out.push(`  async ${safeName}(${sig}): ${ret} {`);
-    out.push(
-      `    const wireArgs = encodeJson({ ${argObj} }, _${safeName}_args);`,
-    );
+    out.push(`    const wireArgs = { ${wireArgFields} };`);
     out.push(
       `    const wave = _wit.encodeCall(${JSON.stringify(name)}, JSON.stringify(wireArgs));`,
     );
     out.push(`    const resp = await this.transport.${dispatch}(wave);`);
     if (fn.result == null) {
-      out.push(`    return;`);
+      out.push("    return;");
     } else {
       out.push(
         `    const raw = JSON.parse(_wit.decodeResult(${JSON.stringify(name)}, resp));`,
       );
-      out.push(
-        `    return decodeJson(raw, _${safeName}_result!) as ${typeRefToTs(fn.result, resolve)};`,
-      );
+      out.push(`    return ${decodeExpr(fn.result, "raw", resolve)};`);
     }
-    out.push(`  }`);
+    out.push("  }");
     out.push("");
   }
   out.push("}");
