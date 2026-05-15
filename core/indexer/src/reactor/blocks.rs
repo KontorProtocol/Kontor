@@ -170,14 +170,21 @@ impl<E: Executor> Reactor<E> {
 
         // Simulate's block has exactly one tx; failures[0] is the per-input
         // per-op failure vec for it. Flatten in declaration order (inputs
-        // then ops) to align with inspect's flat OpWithResult vec.
+        // then ops) to align with inspect's flat OpWithResult vec — both
+        // produce one entry per inst in input.insts.ops.
         if let Some(tx_failures) = failures.into_iter().next() {
             let mut flat = tx_failures
                 .into_iter()
                 .flat_map(|input_errs| input_errs.into_iter());
             for ow in results.iter_mut() {
                 if let Some(Some(e)) = flat.next() {
-                    ow.error_message = Some(format!("{e:#}"));
+                    let msg = format!("{e:#}");
+                    match ow {
+                        OpWithResult::Materialized { error_message, .. }
+                        | OpWithResult::Rejected { error_message, .. } => {
+                            *error_message = Some(msg);
+                        }
+                    }
                 }
             }
         }

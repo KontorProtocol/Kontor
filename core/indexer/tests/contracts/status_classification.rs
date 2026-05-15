@@ -62,12 +62,11 @@ async fn status_classification_ok() -> Result<()> {
     .await?;
     assert_eq!(results.len(), 1);
     let row = results[0]
-        .result
-        .as_ref()
+        .result()
         .expect("set-hash should produce a result row");
     assert_eq!(row.status, OpStatus::Ok, "set-hash must yield Ok status");
     assert!(
-        results[0].error_message.is_none(),
+        results[0].error_message().is_none(),
         "successful call has no error_message"
     );
     Ok(())
@@ -84,8 +83,7 @@ async fn status_classification_trap() -> Result<()> {
     let results = simulate_call(&mut rt, &mut ident, contract.into(), "trap-div-zero()").await?;
     assert_eq!(results.len(), 1);
     let row = results[0]
-        .result
-        .as_ref()
+        .result()
         .expect("trap-div-zero should still produce a result row");
     assert_eq!(
         row.status,
@@ -94,7 +92,7 @@ async fn status_classification_trap() -> Result<()> {
         row.status
     );
     assert!(
-        results[0].error_message.is_some(),
+        results[0].error_message().is_some(),
         "trap should also surface an error_message via simulate"
     );
     Ok(())
@@ -111,8 +109,7 @@ async fn status_classification_out_of_fuel() -> Result<()> {
     let results = simulate_call(&mut rt, &mut ident, contract.into(), "trap-out-of-fuel()").await?;
     assert_eq!(results.len(), 1);
     let row = results[0]
-        .result
-        .as_ref()
+        .result()
         .expect("trap-out-of-fuel should still produce a result row");
     assert_eq!(
         row.status,

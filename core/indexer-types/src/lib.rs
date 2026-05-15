@@ -269,6 +269,8 @@ pub struct OpMetadata {
     #[ts(type = "number")]
     pub input_index: i64,
     #[ts(type = "number")]
+    pub op_index: i64,
+    #[ts(type = "number")]
     pub signer_id: u64,
     pub payment: Payment,
 }
@@ -534,17 +536,66 @@ impl Fees {
     }
 }
 
+/// One entry per `Inst` in the input. `Materialized` means the op was
+/// successfully materialized (had a runnable `Op`) and reached the runtime;
+/// `Rejected` means materialization itself failed (currently only orphan
+/// `Sponsored` ops with no publisher offer). Both variants carry an optional
+/// `error_message` populated only on the `/transactions/simulate` endpoint;
+/// `/inspect` always leaves it `None` since error strings aren't persisted.
 #[derive(Eq, PartialEq, Debug, Clone, Serialize, Deserialize, TS)]
 #[ts(export, export_to = "../../../kontor-ts/src/bindings.d.ts")]
-pub struct OpWithResult {
-    pub op: Op,
-    pub result: Option<ResultRow>,
-    /// Live error detail captured during execution. Populated only by the
-    /// `/transactions/simulate` endpoint when an op produced no row (rejected
-    /// pre-execution) or produced a row with a failure status. The
-    /// `/inspect` endpoints always return `None` — historical errors aren't
-    /// persisted to chain state.
-    pub error_message: Option<String>,
+#[serde(tag = "kind")]
+#[allow(clippy::large_enum_variant)]
+pub enum OpWithResult {
+    Materialized {
+        op: Op,
+        result: Option<ResultRow>,
+        error_message: Option<String>,
+    },
+    Rejected {
+        #[ts(type = "number")]
+        input_index: i64,
+        #[ts(type = "number")]
+        op_index: i64,
+        error_message: Option<String>,
+    },
+}
+
+impl OpWithResult {
+    pub fn op(&self) -> Option<&Op> {
+        match self {
+            OpWithResult::Materialized { op, .. } => Some(op),
+            OpWithResult::Rejected { .. } => None,
+        }
+    }
+
+    pub fn result(&self) -> Option<&ResultRow> {
+        match self {
+            OpWithResult::Materialized { result, .. } => result.as_ref(),
+            OpWithResult::Rejected { .. } => None,
+        }
+    }
+
+    pub fn error_message(&self) -> Option<&str> {
+        match self {
+            OpWithResult::Materialized { error_message, .. }
+            | OpWithResult::Rejected { error_message, .. } => error_message.as_deref(),
+        }
+    }
+
+    pub fn input_index(&self) -> i64 {
+        match self {
+            OpWithResult::Materialized { op, .. } => op.metadata.input_index,
+            OpWithResult::Rejected { input_index, .. } => *input_index,
+        }
+    }
+
+    pub fn op_index(&self) -> i64 {
+        match self {
+            OpWithResult::Materialized { op, .. } => op.metadata.op_index,
+            OpWithResult::Rejected { op_index, .. } => *op_index,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
@@ -596,20 +647,6 @@ impl OpStatus {
             OpStatus::OutOfFuel => "OutOfFuel",
             OpStatus::Trap => "Trap",
             OpStatus::Other => "Other",
-        }
-    }
-}
-
-impl std::str::FromStr for OpStatus {
-    type Err = String;
-    fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
-        match s {
-            "Ok" => Ok(OpStatus::Ok),
-            "ContractErr" => Ok(OpStatus::ContractErr),
-            "OutOfFuel" => Ok(OpStatus::OutOfFuel),
-            "Trap" => Ok(OpStatus::Trap),
-            "Other" => Ok(OpStatus::Other),
-            other => Err(format!("unknown OpStatus: {other}")),
         }
     }
 }

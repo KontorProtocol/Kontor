@@ -3,7 +3,7 @@
 //! response, with positional alignment across multi-op and multi-input
 //! transactions.
 
-use indexer_types::{Inst, InstKind, Insts, PaymentIntent, TransactionHex};
+use indexer_types::{Inst, InstKind, Insts, OpWithResult, PaymentIntent, TransactionHex};
 use testlib::*;
 
 interface!(name = "crypto", path = "../../test-contracts/crypto/wit");
@@ -36,13 +36,13 @@ async fn simulate_success_has_no_error_message() -> Result<()> {
         .await?;
     assert_eq!(result.len(), 1);
     assert!(
-        result[0].result.is_some(),
+        result[0].result().is_some(),
         "successful op should have a result row"
     );
     assert!(
-        result[0].error_message.is_none(),
+        result[0].error_message().is_none(),
         "successful op must not carry an error_message: {:?}",
-        result[0].error_message
+        result[0].error_message()
     );
 
     Ok(())
@@ -78,12 +78,11 @@ async fn simulate_parse_error_surfaces_message() -> Result<()> {
         .await?;
     assert_eq!(result.len(), 1);
     assert!(
-        result[0].result.is_none(),
+        result[0].result().is_none(),
         "parse error should produce no result row"
     );
     let msg = result[0]
-        .error_message
-        .as_ref()
+        .error_message()
         .expect("parse error must surface a non-empty error_message");
     assert!(
         !msg.is_empty(),
@@ -123,10 +122,9 @@ async fn simulate_contract_not_found_surfaces_message() -> Result<()> {
         .transaction_simulate(TransactionHex { hex: reveal_tx_hex })
         .await?;
     assert_eq!(result.len(), 1);
-    assert!(result[0].result.is_none());
+    assert!(result[0].result().is_none());
     let msg = result[0]
-        .error_message
-        .as_ref()
+        .error_message()
         .expect("contract-not-found must surface an error_message");
     assert!(
         msg.contains("Contract not found") || msg.contains("not found"),
@@ -184,34 +182,35 @@ async fn simulate_mixed_outcomes_align_positionally() -> Result<()> {
 
     // Positions 0 and 2 succeeded
     assert!(
-        result[0].result.is_some() && result[0].error_message.is_none(),
+        result[0].result().is_some() && result[0].error_message().is_none(),
         "op 0 should be successful with no error_message"
     );
     assert!(
-        result[2].result.is_some() && result[2].error_message.is_none(),
+        result[2].result().is_some() && result[2].error_message().is_none(),
         "op 2 should be successful with no error_message"
     );
 
     // Position 1 failed pre-execution
-    assert!(result[1].result.is_none(), "op 1 should have no result row");
     assert!(
-        result[1].error_message.is_some(),
+        result[1].result().is_none(),
+        "op 1 should have no result row"
+    );
+    assert!(
+        result[1].error_message().is_some(),
         "op 1 should have an error_message"
     );
 
     Ok(())
 }
 
-/// Regression: a materialize-failed op (orphan `Sponsored` on a direct input
-/// with no publisher offer) must not shift error attribution onto a later op.
-/// inspect drops the failed op from its output entirely, so the simulate
-/// response should be length 2 for a 3-op input where the middle op is
-/// materialize-rejected — and the surviving ops must show success with no
-/// error_message. Before the executor's failures vec was filtered to match
-/// inspect's skip-on-materialize-fail behavior, op 2's slot would have
-/// received op 1's materialization error.
+/// A materialize-failed op (orphan `Sponsored` on a direct input — no
+/// publisher offer to pay for it) shows up as an `OpWithResult::Rejected`
+/// entry in simulate's response. Positional alignment must hold: position 1
+/// in a `[SelfPay, Sponsored, SelfPay]` input is `Rejected`, and positions
+/// 0 and 2 are successful `Materialized` entries with no misattributed
+/// error message.
 #[testlib::test(contracts_dir = "../../test-contracts", regtest_only)]
-async fn simulate_materialize_fail_does_not_shift_attribution() -> Result<()> {
+async fn simulate_materialize_fail_surfaces_as_rejected_variant() -> Result<()> {
     let alice = runtime.identity().await?;
     let crypto = runtime.publish(&alice, "crypto").await?;
 
@@ -228,8 +227,8 @@ async fn simulate_materialize_fail_does_not_shift_attribution() -> Result<()> {
                         expr: "set-hash(\"a\")".to_string(),
                     },
                 },
-                // Orphan Sponsored on a direct input — materialization fails
-                // because there's no publisher offer.
+                // Orphan Sponsored on a direct input — no publisher offer
+                // exists, so materialize_op rejects it before execution.
                 Inst {
                     payment: PaymentIntent::Sponsored,
                     kind: InstKind::Call {
@@ -253,23 +252,55 @@ async fn simulate_materialize_fail_does_not_shift_attribution() -> Result<()> {
         .await
         .transaction_simulate(TransactionHex { hex: reveal_tx_hex })
         .await?;
-    assert_eq!(
-        result.len(),
-        2,
-        "materialize-failed op must be dropped from simulate response, got {} entries",
-        result.len()
+    assert_eq!(result.len(), 3, "one entry per inst in input.insts.ops");
+
+    // Position 0: materialized + executed cleanly.
+    assert!(
+        matches!(
+            &result[0],
+            OpWithResult::Materialized {
+                result: Some(_),
+                error_message: None,
+                ..
+            }
+        ),
+        "op 0 should be a successful Materialized entry, got {:?}",
+        result[0]
     );
-    for (i, ow) in result.iter().enumerate() {
-        assert!(
-            ow.result.is_some(),
-            "surviving op at position {i} should have a result row"
-        );
-        assert!(
-            ow.error_message.is_none(),
-            "surviving op at position {i} must not carry a misattributed error_message: {:?}",
-            ow.error_message
-        );
+
+    // Position 1: rejected at materialization with surfaced error.
+    match &result[1] {
+        OpWithResult::Rejected {
+            input_index,
+            op_index,
+            error_message,
+        } => {
+            assert_eq!(*op_index, 1, "rejected op_index should be 1");
+            assert_eq!(*input_index, 0, "rejected input_index should be 0");
+            let msg = error_message
+                .as_ref()
+                .expect("Rejected via simulate must carry an error_message");
+            assert!(
+                msg.contains("Sponsored"),
+                "rejection reason should mention Sponsored, got: {msg}"
+            );
+        }
+        other => panic!("op 1 should be Rejected, got {other:?}"),
     }
+
+    // Position 2: materialized + executed cleanly, NOT carrying op 1's error.
+    assert!(
+        matches!(
+            &result[2],
+            OpWithResult::Materialized {
+                result: Some(_),
+                error_message: None,
+                ..
+            }
+        ),
+        "op 2 must be a successful Materialized entry (not carrying op 1's error), got {:?}",
+        result[2]
+    );
 
     Ok(())
 }
@@ -324,7 +355,7 @@ async fn inspect_never_populates_error_message() -> Result<()> {
     let inspected = rt.kontor_client().await.transaction_inspect(&txid).await?;
     for ow in &inspected {
         assert!(
-            ow.error_message.is_none(),
+            ow.error_message().is_none(),
             "inspect must never populate error_message"
         );
     }

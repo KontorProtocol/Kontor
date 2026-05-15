@@ -54,6 +54,7 @@ pub fn op_from_aggregate_inst(
 pub struct OpMetadataBase {
     pub previous_output: bitcoin::OutPoint,
     pub input_index: i64,
+    pub op_index: i64,
     pub signer_id: u64,
 }
 
@@ -88,6 +89,7 @@ fn materialize_op(
     let metadata = OpMetadata {
         previous_output: base.previous_output,
         input_index: base.input_index,
+        op_index: base.op_index,
         signer_id: base.signer_id,
         payment,
     };
@@ -267,14 +269,12 @@ pub async fn inspect(
             let base = OpMetadataBase {
                 previous_output: input.previous_output,
                 input_index: input.input_index,
+                op_index: op_index as i64,
                 signer_id: signer_ids.get(op_index).copied().unwrap_or(0),
             };
-            // Match executor behavior: an op that fails materialization (orphan
-            // Sponsored without a publisher offer) is skipped in inspect too —
-            // those didn't execute and have no result row. Dispatch on
-            // input shape so the entry point matches the executor's
-            // (op_from_direct_inst for direct inputs, op_from_aggregate_inst
-            // for aggregate inputs).
+            // Dispatch on input shape so the entry point matches the
+            // executor's (op_from_direct_inst for direct inputs,
+            // op_from_aggregate_inst for aggregate inputs).
             let materialized = if input.insts.aggregate.is_some() {
                 op_from_aggregate_inst(inst.clone(), base, publisher_offer)
             } else {
@@ -283,7 +283,12 @@ pub async fn inspect(
             let op = match materialized {
                 Ok(op) => op,
                 Err(e) => {
-                    tracing::warn!("inspect: skipping op at index {op_index}: {e:#}");
+                    tracing::warn!("inspect: op {op_index} rejected at materialize: {e:#}");
+                    ops.push(OpWithResult::Rejected {
+                        input_index: input.input_index,
+                        op_index: op_index as i64,
+                        error_message: None,
+                    });
                     continue;
                 }
             };
@@ -303,7 +308,7 @@ pub async fn inspect(
             // `error_message: None` because inspect reads from chain state and
             // error strings aren't persisted. The simulate handler overwrites
             // this with live error detail captured during execution.
-            ops.push(OpWithResult {
+            ops.push(OpWithResult::Materialized {
                 op,
                 result,
                 error_message: None,
@@ -570,6 +575,7 @@ mod tests {
         OpMetadataBase {
             previous_output: bitcoin::OutPoint::null(),
             input_index: 0,
+            op_index: 0,
             signer_id,
         }
     }
