@@ -704,16 +704,16 @@ test("codegen Tier 1: emits TS types + Contract interface from token.wit", () =>
     /async balance\(acc: HolderRef\): Promise<Decimal \| null>/,
   );
 
-  // Type declarations for named user types
-  expect(out).toMatch(/export type HolderRef =/);
-  // Decimal is canonical — imported as a class, NOT emitted as a typedef.
+  // All four canonical types are imported as classes from @kontor/sdk;
+  // none of them gets a typedef in the generated module.
   expect(out).not.toMatch(/export type Decimal =/);
-  // Sign is internal to Decimal; with Decimal hidden behind its class, Sign
-  // shouldn't leak into the generated module either.
+  expect(out).not.toMatch(/export type HolderRef =/);
+  expect(out).not.toMatch(/export type Integer =/);
+  expect(out).not.toMatch(/export type ContractAddress =/);
+  // OutPoint is internal to HolderRef and shouldn't leak.
+  expect(out).not.toMatch(/export type OutPoint =/);
+  // Sign is internal to Decimal and shouldn't leak.
   expect(out).not.toMatch(/export type Sign =/);
-
-  // Variants use {kind, value}
-  expect(out).toMatch(/\{ kind: "x-only-pubkey"; value: string \}/);
 });
 
 test("codegen Tier 1: result<T,E> renders as discriminated union", () => {
@@ -733,21 +733,22 @@ test("codegen Tier 1: rejects invalid WIT", () => {
 test("codegen Tier 2: emits Contract class with transport + per-type helpers", () => {
   const out = generate(tokenWit);
 
-  // Imports the runtime helpers + the canonical Decimal class.
+  // Imports the runtime helpers + every canonical class actually used.
+  // token.wit references Decimal + HolderRef but not Integer or ContractAddress.
   expect(out).toContain(
-    'import { Wit, type KontorTransport, Decimal } from "@kontor/sdk";',
+    'import { Wit, type KontorTransport, Decimal, HolderRef } from "@kontor/sdk";',
   );
 
   // Embeds the WIT and instantiates a Wit resource at module load.
   expect(out).toContain("const WIT = String.raw`");
   expect(out).toContain("const _wit = new Wit(WIT);");
 
-  // Decimal is canonical — no _encode/_decode helpers emitted for it.
+  // Canonical types get no _encode/_decode helpers — encoders call
+  // (v).toRaw(), decoders call <Class>.fromRaw(raw).
   expect(out).not.toMatch(/function _encodeDecimal\(/);
   expect(out).not.toMatch(/function _decodeDecimal\(/);
-
-  // Other named types still get helpers.
-  expect(out).toMatch(/function _encodeHolderRef\(v: HolderRef\)/);
+  expect(out).not.toMatch(/function _encodeHolderRef\(/);
+  expect(out).not.toMatch(/function _decodeHolderRef\(/);
 
   // Contract class with constructor.
   expect(out).toContain("export class Contract {");
@@ -765,10 +766,12 @@ test("codegen Tier 2: emits Contract class with transport + per-type helpers", (
   expect(out).toMatch(/async totalSupply\(/);
   // kebab param → camelCase in TS, kebab on the wire.
   expect(out).toMatch(/burnAmt:/);
-  // Canonical Decimal: arg passed via `.toRaw()` rather than a helper.
+  // Canonical types: args passed via `.toRaw()` rather than a helper.
   expect(out).toMatch(/"burn-amt": \(burnAmt\)\.toRaw\(\)/);
-  // Canonical Decimal: results decoded via `Decimal.fromRaw(...)`.
+  expect(out).toMatch(/"dst": \(dst\)\.toRaw\(\)/);
+  // Canonical types: results decoded via `<Class>.fromRaw(...)`.
   expect(out).toMatch(/Decimal\.fromRaw\(/);
+  expect(out).toMatch(/HolderRef\.fromRaw\(/);
 });
 
 // ─── numerics-api ─────────────────────────────────────────────────────
@@ -870,5 +873,141 @@ test("Decimal: fromRaw / toRaw round-trip for codec interop", () => {
   const raw = d.toRaw();
   const back = Decimal.fromRaw(raw);
   expect(back.toString()).toBe("42.5");
+});
+
+// ─── canonical Integer class ─────────────────────────────────────────
+// Hand-written wrapper over the raw {r0..r3, sign} record.
+
+import { Integer } from "@kontor/sdk";
+
+test("Integer: string round-trip preserves arbitrary-precision values", () => {
+  const huge = "57843975908437589027340573245";
+  expect(Integer.from(huge).toString()).toBe(huge);
+  expect(Integer.from("-12345").toString()).toBe("-12345");
+});
+
+test("Integer: bigint constructor handles values beyond u64", () => {
+  const big = 18446744073709551616n; // 2^64
+  expect(Integer.from(big).toString()).toBe("18446744073709551616");
+  expect(Integer.from(-1n).toString()).toBe("-1");
+});
+
+test("Integer: number constructor truncates fractional part", () => {
+  expect(Integer.from(42).toString()).toBe("42");
+  expect(Integer.from(3.7).toString()).toBe("3");
+  expect(Integer.from(-2.9).toString()).toBe("-2");
+});
+
+test("Integer: arithmetic delegates to numerics (exact)", () => {
+  const a = Integer.from("100");
+  const b = Integer.from("7");
+  expect(a.add(b).toString()).toBe("107");
+  expect(a.sub(b).toString()).toBe("93");
+  expect(a.mul(b).toString()).toBe("700");
+  expect(a.div(b).toString()).toBe("14");
+  expect(Integer.from("144").sqrt().toString()).toBe("12");
+});
+
+test("Integer: eq and cmp", () => {
+  const a = Integer.from("42");
+  const b = Integer.from("42");
+  const c = Integer.from("17");
+  expect(a.eq(b)).toBe(true);
+  expect(a.eq(c)).toBe(false);
+  expect(a.cmp(b)).toBe("equal");
+  expect(c.cmp(a)).toBe("less");
+  expect(a.cmp(c)).toBe("greater");
+});
+
+test("Integer: fromRaw / toRaw round-trip for codec interop", () => {
+  const i = Integer.from("99999999999999999999");
+  const raw = i.toRaw();
+  const back = Integer.fromRaw(raw);
+  expect(back.toString()).toBe("99999999999999999999");
+});
+
+// ─── canonical HolderRef class ───────────────────────────────────────
+
+import { HolderRef } from "@kontor/sdk";
+
+test("HolderRef: factories produce the expected variants", () => {
+  expect(HolderRef.xOnlyPubkey("abc").kind).toBe("x-only-pubkey");
+  expect(HolderRef.signerId(42n).kind).toBe("signer-id");
+  expect(HolderRef.core().kind).toBe("core");
+  expect(HolderRef.burner().kind).toBe("burner");
+  expect(HolderRef.utxo({ txid: "deadbeef", vout: 0n }).kind).toBe("utxo");
+});
+
+test("HolderRef: toRaw quotes u64 fields and unwraps payloads", () => {
+  expect(HolderRef.xOnlyPubkey("abc").toRaw()).toEqual({
+    kind: "x-only-pubkey",
+    value: "abc",
+  });
+  expect(HolderRef.signerId(42n).toRaw()).toEqual({
+    kind: "signer-id",
+    value: "42",
+  });
+  expect(HolderRef.core().toRaw()).toEqual({ kind: "core" });
+  expect(HolderRef.utxo({ txid: "deadbeef", vout: 7n }).toRaw()).toEqual({
+    kind: "utxo",
+    value: { txid: "deadbeef", vout: "7" },
+  });
+});
+
+test("HolderRef: fromRaw round-trips every variant", () => {
+  const cases: ReturnType<HolderRef["toRaw"]>[] = [
+    { kind: "x-only-pubkey", value: "abc" },
+    { kind: "signer-id", value: "42" },
+    { kind: "core" },
+    { kind: "burner" },
+    { kind: "utxo", value: { txid: "deadbeef", vout: "7" } },
+  ];
+  for (const raw of cases) {
+    expect(HolderRef.fromRaw(raw).toRaw()).toEqual(raw);
+  }
+});
+
+test("HolderRef: unwrap narrows on .kind", () => {
+  const h = HolderRef.signerId(42n);
+  const v = h.unwrap();
+  if (v.kind === "signer-id") {
+    expect(v.value).toBe(42n);
+  } else {
+    throw new Error("expected signer-id variant");
+  }
+});
+
+// ─── canonical ContractAddress class ─────────────────────────────────
+
+import { ContractAddress } from "@kontor/sdk";
+
+test("ContractAddress: constructor + readonly fields", () => {
+  const addr = new ContractAddress("foo", 100n, 3n);
+  expect(addr.name).toBe("foo");
+  expect(addr.height).toBe(100n);
+  expect(addr.txIndex).toBe(3n);
+});
+
+test("ContractAddress: toRaw quotes u64 fields with kebab keys", () => {
+  expect(new ContractAddress("foo", 100n, 3n).toRaw()).toEqual({
+    name: "foo",
+    height: "100",
+    "tx-index": "3",
+  });
+});
+
+test("ContractAddress: fromRaw decodes string-quoted bigints", () => {
+  const addr = ContractAddress.fromRaw({
+    name: "foo",
+    height: "100",
+    "tx-index": "3",
+  });
+  expect(addr.name).toBe("foo");
+  expect(addr.height).toBe(100n);
+  expect(addr.txIndex).toBe(3n);
+});
+
+test("ContractAddress: toString gives a human-readable form", () => {
+  expect(new ContractAddress("foo", 100n, 3n).toString()).toBe("foo@100.3");
 });
 

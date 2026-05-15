@@ -24,3 +24,7 @@ export type * from "./bindings";
 export { generate } from "./codegen";
 export type { KontorTransport } from "./json-codec";
 export { Decimal } from "./canonical/Decimal";
+export { Integer } from "./canonical/Integer";
+export { HolderRef } from "./canonical/HolderRef";
+export type { OutPoint } from "./canonical/HolderRef";
+export { ContractAddress } from "./canonical/ContractAddress";

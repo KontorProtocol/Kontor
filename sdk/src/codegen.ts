@@ -140,6 +140,9 @@ function normalizeKind(raw: unknown): Kind {
  */
 const CANONICAL_TYPES: Record<string, string> = {
   "kontor:built-in/numbers.decimal": "Decimal",
+  "kontor:built-in/numbers.integer": "Integer",
+  "kontor:built-in/context.holder-ref": "HolderRef",
+  "kontor:built-in/foreign.contract-address": "ContractAddress",
 };
 
 // ─── Shared utilities ──────────────────────────────────────────
