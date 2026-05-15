@@ -20,6 +20,21 @@
     ".": {
       "import": "./dist/index.js",
       "types": "./dist/index.d.ts"
+    },
+    "./vite": {
+      "import": "./dist/vite.js",
+      "types": "./dist/vite.d.ts"
+    }
+  },
+  "bin": {
+    "kontor-codegen": "./dist/cli.js"
+  },
+  "peerDependencies": {
+    "vite": "^8.0.0"
+  },
+  "peerDependenciesMeta": {
+    "vite": {
+      "optional": true
     }
   },
   "scripts": {
@@ -31,11 +46,12 @@
     "test:browser": "vitest --browser"
   },
   "devDependencies": {
-    "@bytecodealliance/jco": "^1.15.3",
-    "@vitest/browser-playwright": "^4.0.15",
-    "typescript": "^5.9.3",
+    "@bytecodealliance/jco": "^1.19.0",
+    "@types/node": "^25.8.0",
+    "@vitest/browser-playwright": "^4.1.6",
+    "typescript": "^6.0.3",
     "vite": "^8.0.13",
     "vite-plugin-dts": "^5.0.0",
-    "vitest": "^4.0.12"
+    "vitest": "^4.1.6"
   }
 }

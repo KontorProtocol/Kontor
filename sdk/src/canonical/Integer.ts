@@ -9,7 +9,7 @@
  * The `number` path truncates the fractional part and is lossy past
  * 2^53.
  */
-import { numerics } from "../component/kontor-sdk";
+import { numerics } from "../component/kontor-sdk.js";
 
 type Sign = "plus" | "minus";
 

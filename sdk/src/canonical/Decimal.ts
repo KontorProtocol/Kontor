@@ -8,7 +8,7 @@
  * constructor stringifies first; the `number` (f64) path is convenient
  * but lossy for values that don't round-trip through f64.
  */
-import { numerics } from "../component/kontor-sdk";
+import { numerics } from "../component/kontor-sdk.js";
 
 type Sign = "plus" | "minus";
 

@@ -23,7 +23,7 @@
  * through. The untyped `def.kind: unknown` from wit_parser's JSON shape
  * never escapes the normalizer.
  */
-import { witCodec } from "./component/kontor-sdk";
+import { witCodec } from "./component/kontor-sdk.js";
 
 // ─── Parsed WIT graph ──────────────────────────────────────────
 // Mirrors the JSON shape produced by `Wit.parse()` — wit_parser's
