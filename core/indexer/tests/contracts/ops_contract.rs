@@ -29,11 +29,12 @@ async fn test_get_ops_from_api() -> Result<()> {
     let ops = rt.transaction_hex_inspect(&reveal_tx_hex).await?;
     assert_eq!(ops.len(), 1);
     assert_eq!(
-        ops[0].op,
-        Op {
+        ops[0].op().expect("op must be materialized"),
+        &Op {
             metadata: OpMetadata {
                 previous_output: reveal_tx.input[0].previous_output,
                 input_index: 0,
+                op_index: 0,
                 signer_id: rt
                     .get_signer_id(&ident.x_only_public_key().to_string())
                     .await?
@@ -52,7 +53,7 @@ async fn test_get_ops_from_api() -> Result<()> {
             },
         }
     );
-    let result = ops[0].result.as_ref();
+    let result = ops[0].result();
     assert!(result.is_some());
     if let Some(result) = result {
         assert!(

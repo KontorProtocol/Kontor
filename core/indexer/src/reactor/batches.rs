@@ -163,7 +163,11 @@ impl<E: Executor> Reactor<E> {
             .await
             .context("Failed to insert transaction")?;
 
-            self.executor
+            // Canonical batch processing discards the per-op failure vec —
+            // deterministic op failures are already telemetered via warn! in
+            // execute_op. Only non-deterministic errors (Result::Err) abort.
+            let _failures = self
+                .executor
                 .execute_transaction(&mut self.runtime, anchor_height as i64, tx_id, t)
                 .await
                 .context("execute_transaction failed")?;

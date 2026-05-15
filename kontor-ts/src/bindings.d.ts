@@ -165,11 +165,45 @@ export type OpKind =
 export type OpMetadata = {
   previous_output: string;
   input_index: number;
+  op_index: number;
   signer_id: number;
   payment: Payment;
 };
 
-export type OpWithResult = { op: Op; result: ResultRow | null };
+/**
+ * What happened when this op ran. Persisted per row in `contract_results`.
+ *
+ * - `Ok`: the contract function returned successfully.
+ * - `ContractErr`: the function returned `result<_, error>::Err` — its state
+ *   mutations were rolled back, but the call itself completed cleanly.
+ * - `OutOfFuel`: the call ran out of fuel mid-execution (either a host
+ *   import couldn't be charged, or wasmtime trapped on a fuel decrement).
+ * - `Trap`: any non-fuel wasmtime trap — panic, unreachable, memory error.
+ * - `Other`: a deterministic failure that doesn't fit the above (currently
+ *   uncommon for rows that get inserted — pre-execution rejections like
+ *   parse errors / contract-not-found don't reach `handle_procedure`).
+ */
+export type OpStatus = "Ok" | "ContractErr" | "OutOfFuel" | "Trap" | "Other";
+
+/**
+ * One entry per `Inst` in the input. `Materialized` means the op was
+ * successfully materialized (had a runnable `Op`) and reached the runtime;
+ * `Rejected` means materialization itself failed (currently only orphan
+ * `Sponsored` ops with no publisher offer). Both variants carry an optional
+ * `error_message` populated only on the `/transactions/simulate` endpoint;
+ * `/inspect` always leaves it `None` since error strings aren't persisted.
+ */
+export type OpWithResult = {
+  "kind": "Materialized";
+  op: Op;
+  result: ResultRow | null;
+  error_message: string | null;
+} | {
+  "kind": "Rejected";
+  input_index: number;
+  op_index: number;
+  error_message: string | null;
+};
 
 export type OutPoint = { txid: string; vout: bigint };
 
@@ -229,6 +263,12 @@ export type ResultRow = {
   result_index: number;
   func: string;
   gas: number;
+  /**
+   * Outcome category for this op. `Ok` for successful calls (regardless
+   * of whether the contract returned `ok(...)` or just a value); the
+   * failure variants distinguish what went wrong.
+   */
+  status: OpStatus;
   value: string | null;
   contract: string;
   txid: string | null;

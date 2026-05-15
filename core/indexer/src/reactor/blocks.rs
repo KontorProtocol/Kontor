@@ -57,10 +57,23 @@ impl<E: Executor> Reactor<E> {
     }
 
     /// Execute a block: insert block row, process transactions.
-    /// Returns the number of unbatched (non-deduped) transactions, plus
-    /// the count of ops actually executed (only ops in non-deduped txs —
-    /// deduped txs were already executed via batch).
-    pub(super) async fn execute_block(&mut self, block: &Block) -> Result<(usize, u64)> {
+    /// Returns the number of unbatched (non-deduped) transactions, the count
+    /// of ops actually executed (only ops in non-deduped txs — deduped txs
+    /// were already executed via batch), and a per-tx vector of per-input
+    /// per-op deterministic-failure entries.
+    ///
+    /// The failures vec has one outer entry per `block.transactions[i]`:
+    /// - For ops that were deduped (already-confirmed txs), the entry is
+    ///   an empty `Vec<Vec<_>>` (nothing was newly executed).
+    /// - For ops freshly executed, the entry is a per-input per-op
+    ///   positional vector aligned with `t.inputs[*].insts.ops[*]`.
+    ///
+    /// The reactor's canonical block-processing path discards this; the
+    /// simulate handler consumes it.
+    pub(super) async fn execute_block(
+        &mut self,
+        block: &Block,
+    ) -> Result<(usize, u64, Vec<Vec<Vec<Option<anyhow::Error>>>>)> {
         insert_block(
             &self.db_conn(),
             BlockRow::builder()
@@ -74,6 +87,8 @@ impl<E: Executor> Reactor<E> {
 
         let mut unbatched_count = 0;
         let mut executed_ops: u64 = 0;
+        let mut failures: Vec<Vec<Vec<Option<anyhow::Error>>>> =
+            Vec::with_capacity(block.transactions.len());
         for (i, t) in block.transactions.iter().enumerate() {
             if get_transaction_by_txid(&self.db_conn(), &t.txid.to_string())
                 .await
@@ -88,6 +103,7 @@ impl<E: Executor> Reactor<E> {
                 )
                 .await
                 .context("confirm_transaction failed")?;
+                failures.push(Vec::new());
                 continue;
             }
 
@@ -109,16 +125,22 @@ impl<E: Executor> Reactor<E> {
             .await
             .context("insert_transaction failed")?;
 
-            self.executor
+            let tx_failures = self
+                .executor
                 .execute_transaction(&mut self.runtime, block.height as i64, tx_id, t)
                 .await
                 .context("execute_transaction failed")?;
+            failures.push(tx_failures);
         }
 
-        Ok((unbatched_count, executed_ops))
+        Ok((unbatched_count, executed_ops, failures))
     }
 
-    /// Simulate a transaction: execute in a temporary block, inspect results, then rollback.
+    /// Simulate a transaction: execute in a temporary block, inspect results,
+    /// merge in any deterministic-failure messages captured during execution,
+    /// then rollback. Unlike `/inspect`, this carries live error strings —
+    /// they're not persisted to chain state, only available here while the
+    /// virtual block is still in scope.
     pub(super) async fn simulate(
         &mut self,
         tx: indexer_types::Transaction,
@@ -140,16 +162,39 @@ impl<E: Executor> Reactor<E> {
                 .map_or(new_mock_block_hash(0), |row| row.hash),
             transactions: vec![tx],
         };
-        self.execute_block(&block)
+        let (_unbatched, _executed, failures) = self
+            .execute_block(&block)
             .await
             .context("execute_block failed during simulation")?;
-        let result = block::inspect(&self.db_conn(), &block.transactions[0]).await;
+        let mut results = block::inspect(&self.db_conn(), &block.transactions[0]).await?;
+
+        // Simulate's block has exactly one tx; failures[0] is the per-input
+        // per-op failure vec for it. Flatten in declaration order (inputs
+        // then ops) to align with inspect's flat OpWithResult vec — both
+        // produce one entry per inst in input.insts.ops.
+        if let Some(tx_failures) = failures.into_iter().next() {
+            let mut flat = tx_failures
+                .into_iter()
+                .flat_map(|input_errs| input_errs.into_iter());
+            for ow in results.iter_mut() {
+                if let Some(Some(e)) = flat.next() {
+                    let msg = format!("{e:#}");
+                    match ow {
+                        OpWithResult::Materialized { error_message, .. }
+                        | OpWithResult::Rejected { error_message, .. } => {
+                            *error_message = Some(msg);
+                        }
+                    }
+                }
+            }
+        }
+
         self.runtime
             .storage
             .rollback()
             .await
             .context("Failed to rollback simulation")?;
-        result
+        Ok(results)
     }
 
     /// Run block lifecycle operations: challenge expiry/generation and epoch transitions.
@@ -251,7 +296,7 @@ impl<E: Executor> Reactor<E> {
             .await
             .context("Failed to begin block transaction")?;
 
-        let (unbatched_count, executed_ops) = self
+        let (unbatched_count, executed_ops, _failures) = self
             .execute_block(&block)
             .await
             .context("execute_block failed")?;

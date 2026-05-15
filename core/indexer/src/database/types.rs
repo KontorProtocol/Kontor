@@ -2,7 +2,7 @@ use std::fmt::Display;
 
 use bon::Builder;
 use ff::PrimeField;
-use indexer_types::{BlockRow, ContractListRow, ResultRow, TransactionRow};
+use indexer_types::{BlockRow, ContractListRow, OpStatus, ResultRow, TransactionRow};
 use kontor_crypto::{FieldElement, FileDescriptor};
 use serde::{Deserialize, Serialize};
 use serde_with::{DefaultOnNull, DisplayFromStr, serde_as};
@@ -280,6 +280,10 @@ pub struct ContractResultRow {
     /// ops that don't go through user-side gas accounting (Issuance,
     /// RegisterBlsKey via the Core-paid path).
     pub payer_signer_id: Option<i64>,
+    /// Outcome of the call. Populated by `handle_procedure` from the wasm
+    /// result before writing the row.
+    #[builder(default = OpStatus::Ok)]
+    pub status: OpStatus,
 }
 
 impl ContractResultRow {
@@ -309,6 +313,8 @@ pub struct ContractResultPublicRow {
     pub txid: Option<String>,
     pub signer_id: i64,
     pub payer_signer_id: Option<i64>,
+    #[builder(default = OpStatus::Ok)]
+    pub status: OpStatus,
 }
 
 impl HasRowId for ContractResultPublicRow {
@@ -332,6 +338,7 @@ impl From<ContractResultPublicRow> for ResultRow {
             result_index: row.result_index,
             func: row.func,
             gas: row.gas,
+            status: row.status,
             value: row.value,
             contract: ContractAddress {
                 name: row.contract_name,

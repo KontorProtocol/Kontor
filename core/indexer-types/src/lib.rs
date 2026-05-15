@@ -269,6 +269,8 @@ pub struct OpMetadata {
     #[ts(type = "number")]
     pub input_index: i64,
     #[ts(type = "number")]
+    pub op_index: i64,
+    #[ts(type = "number")]
     pub signer_id: u64,
     pub payment: Payment,
 }
@@ -534,11 +536,66 @@ impl Fees {
     }
 }
 
+/// One entry per `Inst` in the input. `Materialized` means the op was
+/// successfully materialized (had a runnable `Op`) and reached the runtime;
+/// `Rejected` means materialization itself failed (currently only orphan
+/// `Sponsored` ops with no publisher offer). Both variants carry an optional
+/// `error_message` populated only on the `/transactions/simulate` endpoint;
+/// `/inspect` always leaves it `None` since error strings aren't persisted.
 #[derive(Eq, PartialEq, Debug, Clone, Serialize, Deserialize, TS)]
 #[ts(export, export_to = "../../../kontor-ts/src/bindings.d.ts")]
-pub struct OpWithResult {
-    pub op: Op,
-    pub result: Option<ResultRow>,
+#[serde(tag = "kind")]
+#[allow(clippy::large_enum_variant)]
+pub enum OpWithResult {
+    Materialized {
+        op: Op,
+        result: Option<ResultRow>,
+        error_message: Option<String>,
+    },
+    Rejected {
+        #[ts(type = "number")]
+        input_index: i64,
+        #[ts(type = "number")]
+        op_index: i64,
+        error_message: Option<String>,
+    },
+}
+
+impl OpWithResult {
+    pub fn op(&self) -> Option<&Op> {
+        match self {
+            OpWithResult::Materialized { op, .. } => Some(op),
+            OpWithResult::Rejected { .. } => None,
+        }
+    }
+
+    pub fn result(&self) -> Option<&ResultRow> {
+        match self {
+            OpWithResult::Materialized { result, .. } => result.as_ref(),
+            OpWithResult::Rejected { .. } => None,
+        }
+    }
+
+    pub fn error_message(&self) -> Option<&str> {
+        match self {
+            OpWithResult::Materialized { error_message, .. }
+            | OpWithResult::Rejected { error_message, .. } => error_message.as_deref(),
+        }
+    }
+
+    pub fn input_index(&self) -> i64 {
+        match self {
+            OpWithResult::Materialized { op, .. } => op.metadata.input_index,
+            OpWithResult::Rejected { input_index, .. } => *input_index,
+        }
+    }
+
+    pub fn op_index(&self) -> i64 {
+        match self {
+            OpWithResult::Materialized { op, .. } => op.metadata.op_index,
+            OpWithResult::Rejected { op_index, .. } => *op_index,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
@@ -561,6 +618,39 @@ pub struct ContractResponse {
     pub wit: String,
 }
 
+/// What happened when this op ran. Persisted per row in `contract_results`.
+///
+/// - `Ok`: the contract function returned successfully.
+/// - `ContractErr`: the function returned `result<_, error>::Err` — its state
+///   mutations were rolled back, but the call itself completed cleanly.
+/// - `OutOfFuel`: the call ran out of fuel mid-execution (either a host
+///   import couldn't be charged, or wasmtime trapped on a fuel decrement).
+/// - `Trap`: any non-fuel wasmtime trap — panic, unreachable, memory error.
+/// - `Other`: a deterministic failure that doesn't fit the above (currently
+///   uncommon for rows that get inserted — pre-execution rejections like
+///   parse errors / contract-not-found don't reach `handle_procedure`).
+#[derive(Debug, Clone, Copy, Eq, PartialEq, Serialize, Deserialize, TS)]
+#[ts(export, export_to = "../../../kontor-ts/src/bindings.d.ts")]
+pub enum OpStatus {
+    Ok,
+    ContractErr,
+    OutOfFuel,
+    Trap,
+    Other,
+}
+
+impl OpStatus {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            OpStatus::Ok => "Ok",
+            OpStatus::ContractErr => "ContractErr",
+            OpStatus::OutOfFuel => "OutOfFuel",
+            OpStatus::Trap => "Trap",
+            OpStatus::Other => "Other",
+        }
+    }
+}
+
 #[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize, TS)]
 #[ts(export, export_to = "../../../kontor-ts/src/bindings.d.ts")]
 pub struct ResultRow {
@@ -579,6 +669,10 @@ pub struct ResultRow {
     pub func: String,
     #[ts(type = "number")]
     pub gas: i64,
+    /// Outcome category for this op. `Ok` for successful calls (regardless
+    /// of whether the contract returned `ok(...)` or just a value); the
+    /// failure variants distinguish what went wrong.
+    pub status: OpStatus,
     pub value: Option<String>,
     pub contract: String,
     pub txid: Option<String>,

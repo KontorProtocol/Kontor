@@ -67,13 +67,20 @@ pub trait Executor {
     /// Execute a single transaction's operations at the given height.
     /// Called by the reactor after DB row insertion. Sets context and runs ops.
     /// Returns Err only for non-deterministic infrastructure failures.
+    ///
+    /// The success case returns a nested positional failure vector: outer
+    /// index = `tx.inputs[i]`, inner index = `inputs[i].insts.ops[j]`. A
+    /// slot is `None` when that op executed without deterministic failure;
+    /// `Some(e)` when it failed (pre-execution rejection or in-execution
+    /// trap/OOG/Err). The reactor's canonical path discards this vec; the
+    /// simulate handler zips it into the response.
     async fn execute_transaction(
         &self,
         runtime: &mut Runtime,
         height: i64,
         tx_id: i64,
         tx: &indexer_types::Transaction,
-    ) -> Result<()>;
+    ) -> Result<Vec<Vec<Option<anyhow::Error>>>>;
 
     /// Signal the block source to re-deliver blocks starting from `height`.
     async fn replay_blocks_from(&mut self, height: u64) -> Result<()>;
@@ -103,8 +110,8 @@ impl Executor for NoopExecutor {
         _height: i64,
         _tx_id: i64,
         _tx: &indexer_types::Transaction,
-    ) -> Result<()> {
-        Ok(())
+    ) -> Result<Vec<Vec<Option<anyhow::Error>>>> {
+        Ok(Vec::new())
     }
     async fn replay_blocks_from(&mut self, _height: u64) -> Result<()> {
         Ok(())
@@ -242,10 +249,11 @@ impl Executor for RuntimeExecutor {
         height: i64,
         tx_id: i64,
         tx: &indexer_types::Transaction,
-    ) -> Result<()> {
+    ) -> Result<Vec<Vec<Option<anyhow::Error>>>> {
+        let mut all = Vec::with_capacity(tx.inputs.len());
         for input in &tx.inputs {
             let op_return_data = tx.op_return_data.get(&(input.input_index as u64)).cloned();
-            process_input(
+            let per_input = process_input(
                 runtime,
                 input,
                 height,
@@ -255,8 +263,9 @@ impl Executor for RuntimeExecutor {
                 op_return_data,
             )
             .await?;
+            all.push(per_input);
         }
-        Ok(())
+        Ok(all)
     }
     async fn replay_blocks_from(&mut self, height: u64) -> Result<()> {
         if let Some(tx) = &self.replay_tx {
@@ -272,6 +281,13 @@ impl Executor for RuntimeExecutor {
     }
 }
 
+/// Process every op in one Bitcoin-input's `Insts`. Returns a positional
+/// vector aligned with `input.insts.ops`: `None` at position i means the
+/// i-th op executed without a deterministic failure; `Some(err)` means
+/// either pre-execution rejection (parse/aggregate/nonce/materialization)
+/// or in-execution deterministic failure (trap/OOG/contract-err/etc.). The
+/// caller decides what to do with the vec — the canonical reactor path
+/// discards it; the simulate handler zips it into the response.
 pub async fn process_input(
     runtime: &mut Runtime,
     input: &indexer_types::Input,
@@ -280,7 +296,7 @@ pub async fn process_input(
     tx_index: i64,
     txid: bitcoin::Txid,
     op_return_data: Option<indexer_types::OpReturnData>,
-) -> Result<()> {
+) -> Result<Vec<Option<anyhow::Error>>> {
     if input.insts.is_aggregate() {
         process_aggregate_input(
             runtime,
@@ -291,7 +307,7 @@ pub async fn process_input(
             txid,
             op_return_data,
         )
-        .await?;
+        .await
     } else {
         process_direct_input(
             runtime,
@@ -302,9 +318,8 @@ pub async fn process_input(
             txid,
             op_return_data,
         )
-        .await?;
+        .await
     }
-    Ok(())
 }
 
 async fn process_direct_input(
@@ -315,22 +330,24 @@ async fn process_direct_input(
     tx_index: i64,
     txid: bitcoin::Txid,
     op_return_data: Option<indexer_types::OpReturnData>,
-) -> Result<()> {
+) -> Result<Vec<Option<anyhow::Error>>> {
     let identity = runtime
         .get_or_create_identity(&input.x_only_pubkey.to_string())
         .await?;
 
-    let base = OpMetadataBase {
-        previous_output: input.previous_output,
-        input_index: input.input_index,
-        signer_id: identity.signer_id() as u64,
-    };
-
+    let mut errors: Vec<Option<anyhow::Error>> = Vec::with_capacity(input.insts.ops.len());
     for (op_index, inst) in input.insts.ops.iter().enumerate() {
+        let base = OpMetadataBase {
+            previous_output: input.previous_output,
+            input_index: input.input_index,
+            op_index: op_index as i64,
+            signer_id: identity.signer_id() as u64,
+        };
         let op = match op_from_direct_inst(inst.clone(), base) {
             Ok(op) => op,
             Err(e) => {
                 warn!("Rejected direct op: {e:#}");
+                errors.push(Some(e));
                 continue;
             }
         };
@@ -350,9 +367,9 @@ async fn process_direct_input(
             )
             .await;
 
-        execute_op(runtime, &op).await?;
+        errors.push(execute_op(runtime, &op).await?);
     }
-    Ok(())
+    Ok(errors)
 }
 
 async fn process_aggregate_input(
@@ -363,12 +380,16 @@ async fn process_aggregate_input(
     tx_index: i64,
     txid: bitcoin::Txid,
     op_return_data: Option<indexer_types::OpReturnData>,
-) -> Result<()> {
+) -> Result<Vec<Option<anyhow::Error>>> {
+    let n_ops = input.insts.ops.len();
     let resolved = match crate::bls::verify_aggregate(runtime, &input.insts).await {
         Ok(r) => r,
         Err(e) => {
             warn!("Aggregate verification failed: {e}");
-            return Ok(());
+            // Fan the input-wide rejection across every op slot so the
+            // positional vector remains length-aligned with input.insts.ops.
+            let msg = format!("aggregate verification failed: {e:#}");
+            return Ok((0..n_ops).map(|_| Some(anyhow::anyhow!("{msg}"))).collect());
         }
     };
 
@@ -393,6 +414,7 @@ async fn process_aggregate_input(
         None
     };
 
+    let mut errors: Vec<Option<anyhow::Error>> = Vec::with_capacity(n_ops);
     for (op_index, ((inst, agg_signer), &signer_id)) in input
         .insts
         .ops
@@ -403,6 +425,9 @@ async fn process_aggregate_input(
     {
         if !resolved.signer_map.contains_key(&signer_id) {
             warn!("signer_id {signer_id} not in signer_map after verification");
+            errors.push(Some(anyhow::anyhow!(
+                "signer_id {signer_id} not in signer_map after verification"
+            )));
             continue;
         };
 
@@ -433,6 +458,9 @@ async fn process_aggregate_input(
             Ok(_) => {}
             Err(database::queries::Error::InvalidData(msg)) => {
                 warn!("aggregate nonce check failed for signer {signer_id}: {msg}");
+                errors.push(Some(anyhow::anyhow!(
+                    "nonce check failed for signer {signer_id}: {msg}"
+                )));
                 continue;
             }
             Err(e) => {
@@ -443,21 +471,33 @@ async fn process_aggregate_input(
         let base = OpMetadataBase {
             previous_output: input.previous_output,
             input_index: input.input_index,
+            op_index: op_index as i64,
             signer_id,
         };
         let op = match op_from_aggregate_inst(inst.clone(), base, publisher_offer) {
             Ok(op) => op,
             Err(e) => {
                 warn!("Rejected aggregate op for signer {signer_id}: {e:#}");
+                errors.push(Some(e));
                 continue;
             }
         };
-        execute_op(runtime, &op).await?;
+        errors.push(execute_op(runtime, &op).await?);
     }
-    Ok(())
+    Ok(errors)
 }
 
-async fn execute_op(runtime: &mut Runtime, op: &indexer_types::Op) -> Result<()> {
+/// Execute one op against the runtime.
+///
+/// Returns `Ok(None)` for success; `Ok(Some(e))` for a deterministic
+/// failure (the op didn't take effect, but the failure is determinable
+/// from chain state — every node will reach the same conclusion);
+/// `Err(_)` for a non-deterministic infrastructure failure that
+/// crashes the reactor (returning Err propagates upward and aborts).
+async fn execute_op(
+    runtime: &mut Runtime,
+    op: &indexer_types::Op,
+) -> Result<Option<anyhow::Error>> {
     let identity = database::types::Identity::new(op.metadata.signer_id as i64);
     let signer = Signer::Id(identity);
     let payment = op.metadata.payment.clone();
@@ -465,12 +505,13 @@ async fn execute_op(runtime: &mut Runtime, op: &indexer_types::Op) -> Result<()>
     match &op.kind {
         OpKind::Publish { name, bytes } => {
             match runtime.publish(&signer, payment, name, bytes).await {
-                Ok(_) => {}
+                Ok(_) => Ok(None),
                 Err(ExecutionError::Deterministic(e)) => {
                     warn!("Publish operation failed: {e:#}");
+                    Ok(Some(e))
                 }
                 Err(ExecutionError::NonDeterministic(e)) => {
-                    return Err(e.context("Publish operation infrastructure failure"));
+                    Err(e.context("Publish operation infrastructure failure"))
                 }
             }
         }
@@ -479,22 +520,24 @@ async fn execute_op(runtime: &mut Runtime, op: &indexer_types::Op) -> Result<()>
                 .execute(Some(&signer), Some(payment), &(contract.into()), expr)
                 .await
             {
-                Ok(_) => {}
+                Ok(_) => Ok(None),
                 Err(ExecutionError::Deterministic(e)) => {
                     warn!("Call operation failed: {e:#}");
+                    Ok(Some(e))
                 }
                 Err(ExecutionError::NonDeterministic(e)) => {
-                    return Err(e.context("Call operation infrastructure failure"));
+                    Err(e.context("Call operation infrastructure failure"))
                 }
             }
         }
         OpKind::Issuance => match runtime.issuance(&signer).await {
-            Ok(_) => {}
+            Ok(_) => Ok(None),
             Err(ExecutionError::Deterministic(e)) => {
                 warn!("Issuance operation failed: {e:#}");
+                Ok(Some(e))
             }
             Err(ExecutionError::NonDeterministic(e)) => {
-                return Err(e.context("Issuance infrastructure failure"));
+                Err(e.context("Issuance infrastructure failure"))
             }
         },
         OpKind::RegisterBlsKey {
@@ -517,7 +560,7 @@ async fn execute_op(runtime: &mut Runtime, op: &indexer_types::Op) -> Result<()>
                 Ok(_) => {}
                 Err(ExecutionError::Deterministic(e)) => {
                     warn!("registry.registered failed: {e:#}");
-                    return Ok(());
+                    return Ok(Some(e));
                 }
                 Err(ExecutionError::NonDeterministic(e)) => {
                     return Err(e.context("registry.registered infrastructure failure"));
@@ -532,15 +575,15 @@ async fn execute_op(runtime: &mut Runtime, op: &indexer_types::Op) -> Result<()>
                 )
                 .await
             {
-                Ok(_) => {}
+                Ok(_) => Ok(None),
                 Err(ExecutionError::Deterministic(e)) => {
                     warn!("RegisterBlsKey failed: {e:#}");
+                    Ok(Some(e))
                 }
                 Err(ExecutionError::NonDeterministic(e)) => {
-                    return Err(e.context("RegisterBlsKey infrastructure failure"));
+                    Err(e.context("RegisterBlsKey infrastructure failure"))
                 }
             }
         }
     }
-    Ok(())
 }
