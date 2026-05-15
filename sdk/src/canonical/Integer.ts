@@ -11,8 +11,18 @@
  */
 import { numerics } from "../component/kontor-sdk";
 
+type Sign = "plus" | "minus";
+
+/**
+ * On-wire shape used at codec boundaries. u64 limb fields are quoted
+ * decimal strings so the value survives `JSON.stringify` — TS bigint
+ * has no JSON representation. The internal `numerics.Integer` keeps
+ * bigints because jco's WASM bindings need them for i64 marshaling.
+ */
+type Raw = { r0: string; r1: string; r2: string; r3: string; sign: Sign };
+
 export class Integer {
-  private constructor(private readonly raw: numerics.Integer) {}
+  private constructor(private readonly inner: numerics.Integer) {}
 
   static from(value: string | bigint | number): Integer {
     if (typeof value === "string") {
@@ -25,50 +35,64 @@ export class Integer {
   }
 
   /**
-   * Build an Integer from the raw record that codec/decode produces.
-   * Used by codegen-emitted helpers.
+   * Build an Integer from the wire-shape record (u64 fields as quoted
+   * decimals) that codec/decode produces. Used by codegen-emitted
+   * decoders.
    */
-  static fromRaw(raw: numerics.Integer): Integer {
-    return new Integer(raw);
+  static fromRaw(raw: Raw): Integer {
+    return new Integer({
+      r0: BigInt(raw.r0),
+      r1: BigInt(raw.r1),
+      r2: BigInt(raw.r2),
+      r3: BigInt(raw.r3),
+      sign: raw.sign,
+    });
   }
 
   /**
-   * Expose the raw on-wire shape. Used by codegen-emitted encoders to
-   * package an `Integer` back into the JSON the WAVE codec accepts.
+   * Expose the wire shape: u64 fields as quoted decimal strings so the
+   * value can flow through `JSON.stringify` into the WAVE codec. Used
+   * by codegen-emitted encoders.
    */
-  toRaw(): numerics.Integer {
-    return this.raw;
+  toRaw(): Raw {
+    return {
+      r0: this.inner.r0.toString(),
+      r1: this.inner.r1.toString(),
+      r2: this.inner.r2.toString(),
+      r3: this.inner.r3.toString(),
+      sign: this.inner.sign,
+    };
   }
 
   toString(): string {
-    return numerics.integerToString(this.raw);
+    return numerics.integerToString(this.inner);
   }
 
   add(other: Integer): Integer {
-    return new Integer(numerics.addInteger(this.raw, other.raw));
+    return new Integer(numerics.addInteger(this.inner, other.inner));
   }
 
   sub(other: Integer): Integer {
-    return new Integer(numerics.subInteger(this.raw, other.raw));
+    return new Integer(numerics.subInteger(this.inner, other.inner));
   }
 
   mul(other: Integer): Integer {
-    return new Integer(numerics.mulInteger(this.raw, other.raw));
+    return new Integer(numerics.mulInteger(this.inner, other.inner));
   }
 
   div(other: Integer): Integer {
-    return new Integer(numerics.divInteger(this.raw, other.raw));
+    return new Integer(numerics.divInteger(this.inner, other.inner));
   }
 
   sqrt(): Integer {
-    return new Integer(numerics.sqrtInteger(this.raw));
+    return new Integer(numerics.sqrtInteger(this.inner));
   }
 
   eq(other: Integer): boolean {
-    return numerics.eqInteger(this.raw, other.raw);
+    return numerics.eqInteger(this.inner, other.inner);
   }
 
   cmp(other: Integer): "less" | "equal" | "greater" {
-    return numerics.cmpInteger(this.raw, other.raw);
+    return numerics.cmpInteger(this.inner, other.inner);
   }
 }
