@@ -1,4 +1,4 @@
-/** @module Interface root:component/wit-api **/
+/** @module Interface root:component/wit-codec **/
 
 export class Wit {
   constructor(text: string)

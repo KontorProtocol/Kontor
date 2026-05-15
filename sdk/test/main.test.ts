@@ -5,7 +5,7 @@ import {
   serializeOpReturnData,
   deserializeOpReturnData,
   validateWit,
-  witApi,
+  Wit,
 } from "@kontor/sdk";
 
 test("publish", () => {
@@ -218,7 +218,7 @@ test("Wit.encodeCall renders a single bool arg (skipping ctx)", () => {
   const wit = `${KONTOR_HEADER}
     export set-flag: async func(ctx: borrow<proc-context>, flag: bool) -> result<_, error>;
 }`;
-  const w = new witApi.Wit(wit);
+  const w = new Wit(wit);
 
   expect(w.encodeCall("set-flag", '{"flag": true}')).toBe("set-flag(true)");
   expect(w.encodeCall("set-flag", '{"flag": false}')).toBe("set-flag(false)");
@@ -229,12 +229,12 @@ test("Wit construction rejects WIT that fails validation", () => {
   const badWit = `${KONTOR_HEADER}
     export bad-func: async func(val: string) -> string;
 }`;
-  const w = new witApi.Wit(badWit);
+  const w = new Wit(badWit);
   expect(() => w.encodeCall("bad-func", '{}')).toThrow(/WIT validation/);
 });
 
 test("Wit construction rejects malformed WIT", () => {
-  const w = new witApi.Wit("this is not valid wit at all");
+  const w = new Wit("this is not valid wit at all");
   expect(() => w.encodeCall("anything", '{}')).toThrow(/WIT parse error/);
 });
 
@@ -242,7 +242,7 @@ test("Wit.encodeCall errors when function missing", () => {
   const wit = `${KONTOR_HEADER}
     export set-flag: async func(ctx: borrow<proc-context>, flag: bool) -> result<_, error>;
 }`;
-  const w = new witApi.Wit(wit);
+  const w = new Wit(wit);
 
   expect(() => w.encodeCall("no-such-fn", "{}")).toThrow(/function not found/);
 });
@@ -251,7 +251,7 @@ test("Wit.encodeCall errors when bool arg has wrong JSON type", () => {
   const wit = `${KONTOR_HEADER}
     export set-flag: async func(ctx: borrow<proc-context>, flag: bool) -> result<_, error>;
 }`;
-  const w = new witApi.Wit(wit);
+  const w = new Wit(wit);
 
   expect(() => w.encodeCall("set-flag", '{"flag": "yes"}')).toThrow(
     /expected JSON bool/,
@@ -265,7 +265,7 @@ test("Wit.encodeCall renders u64 from a quoted-decimal JSON string", () => {
   const wit = `${KONTOR_HEADER}
     export add: async func(ctx: borrow<view-context>, x: u64) -> u64;
 }`;
-  const w = new witApi.Wit(wit);
+  const w = new Wit(wit);
 
   expect(w.encodeCall("add", '{"x": "12345"}')).toBe("add(12345)");
   expect(w.encodeCall("add", '{"x": "18446744073709551615"}')).toBe(
@@ -277,7 +277,7 @@ test("Wit.encodeCall errors when u64 arg isn't a string", () => {
   const wit = `${KONTOR_HEADER}
     export add: async func(ctx: borrow<view-context>, x: u64) -> u64;
 }`;
-  const w = new witApi.Wit(wit);
+  const w = new Wit(wit);
 
   expect(() => w.encodeCall("add", '{"x": 12345}')).toThrow(
     /expected JSON string holding a u64 decimal/,
@@ -288,7 +288,7 @@ test("Wit.decodeResult parses a u64 WAVE return into a quoted-decimal JSON strin
   const wit = `${KONTOR_HEADER}
     export add: async func(ctx: borrow<view-context>, x: u64) -> u64;
 }`;
-  const w = new witApi.Wit(wit);
+  const w = new Wit(wit);
 
   // serde_json::to_string of a JSON string includes the quotes.
   expect(w.decodeResult("add", "12345")).toBe('"12345"');
@@ -301,7 +301,7 @@ test("Wit.decodeResult parses a bool WAVE return into a JSON bool", () => {
   const wit = `${KONTOR_HEADER}
     export is-ready: async func(ctx: borrow<view-context>) -> bool;
 }`;
-  const w = new witApi.Wit(wit);
+  const w = new Wit(wit);
 
   expect(w.decodeResult("is-ready", "true")).toBe("true");
   expect(w.decodeResult("is-ready", "false")).toBe("false");
@@ -314,7 +314,7 @@ test("Wit u64 round-trips through encodeCall + decodeResult", () => {
   const wit = `${KONTOR_HEADER}
     export echo: async func(ctx: borrow<view-context>, x: u64) -> u64;
 }`;
-  const w = new witApi.Wit(wit);
+  const w = new Wit(wit);
 
   const original = "18446744073709551615"; // u64 max
   const encoded = w.encodeCall("echo", JSON.stringify({ x: original }));
@@ -337,7 +337,7 @@ test("Wit s64 round-trips with quoted decimal strings (max and min)", () => {
   const wit = `${KONTOR_HEADER}
     export echo: async func(ctx: borrow<view-context>, x: s64) -> s64;
 }`;
-  const w = new witApi.Wit(wit);
+  const w = new Wit(wit);
   const cases = ["9223372036854775807", "-9223372036854775808", "0"];
   for (const original of cases) {
     const encoded = w.encodeCall("echo", JSON.stringify({ x: original }));
@@ -354,7 +354,7 @@ test("Wit option<string> round-trips with null for none, value for some", () => 
   const wit = `${KONTOR_HEADER}
     export echo: async func(ctx: borrow<view-context>, x: option<string>) -> option<string>;
 }`;
-  const w = new witApi.Wit(wit);
+  const w = new Wit(wit);
 
   // none ↔ null
   expect(w.encodeCall("echo", '{"x": null}')).toBe('echo(none)');
@@ -369,7 +369,7 @@ test("Wit option<u64> round-trips preserving bigint-quoting", () => {
   const wit = `${KONTOR_HEADER}
     export echo: async func(ctx: borrow<view-context>, x: option<u64>) -> option<u64>;
 }`;
-  const w = new witApi.Wit(wit);
+  const w = new Wit(wit);
 
   const max = "18446744073709551615";
   const encoded = w.encodeCall("echo", JSON.stringify({ x: max }));
@@ -397,7 +397,7 @@ test("Wit variant round-trips: unit cases as {kind}, payload cases as {kind,valu
     }
     export run: async func(ctx: borrow<proc-context>, o: outcome) -> outcome;
 }`;
-  const w = new witApi.Wit(wit);
+  const w = new Wit(wit);
 
   // unit case (no payload)
   expect(w.encodeCall("run", '{"o": {"kind": "retry"}}')).toBe("run(retry)");
@@ -428,7 +428,7 @@ test("Wit variant rejects unknown case names", () => {
     variant outcome { ok, oops }
     export run: async func(ctx: borrow<proc-context>, o: outcome) -> outcome;
 }`;
-  const w = new witApi.Wit(wit);
+  const w = new Wit(wit);
   expect(() => w.encodeCall("run", '{"o": {"kind": "nope"}}')).toThrow(
     /unknown variant case/,
   );
@@ -442,7 +442,7 @@ test("Wit variant rejects shape mismatches (value on unit case, missing value on
     }
     export run: async func(ctx: borrow<proc-context>, o: outcome) -> outcome;
 }`;
-  const w = new witApi.Wit(wit);
+  const w = new Wit(wit);
   expect(() =>
     w.encodeCall("run", '{"o": {"kind": "unit", "value": "bad"}}'),
   ).toThrow(/is unit but JSON has 'value'/);
@@ -462,7 +462,7 @@ test("Wit result<string, error> decodes both arms with built-in error variant pa
   const wit = `${KONTOR_HEADER}
     export run: async func(ctx: borrow<proc-context>, msg: string) -> result<string, error>;
 }`;
-  const w = new witApi.Wit(wit);
+  const w = new Wit(wit);
 
   // ok with payload
   expect(JSON.parse(w.decodeResult("run", 'ok("done")'))).toEqual({
@@ -482,7 +482,7 @@ test("Wit result<_, error> decodes ok unit case (no value field) + err variant",
   const wit = `${KONTOR_HEADER}
     export run: async func(ctx: borrow<proc-context>) -> result<_, error>;
 }`;
-  const w = new witApi.Wit(wit);
+  const w = new Wit(wit);
 
   // ok unit case: just {kind:"ok"} — no value field per locked shape #6.
   expect(w.decodeResult("run", "ok")).toBe('{"kind":"ok"}');
@@ -502,7 +502,7 @@ test("Wit list<u8> round-trips as JSON array of numbers", () => {
   const wit = `${KONTOR_HEADER}
     export echo: async func(ctx: borrow<view-context>, bytes: list<u8>) -> list<u8>;
 }`;
-  const w = new witApi.Wit(wit);
+  const w = new Wit(wit);
   const bytes = [0, 1, 127, 255];
   const encoded = w.encodeCall("echo", JSON.stringify({ bytes }));
   expect(encoded).toBe("echo([0, 1, 127, 255])");
@@ -514,7 +514,7 @@ test("Wit list<string> round-trips with proper escaping", () => {
   const wit = `${KONTOR_HEADER}
     export echo: async func(ctx: borrow<view-context>, xs: list<string>) -> list<string>;
 }`;
-  const w = new witApi.Wit(wit);
+  const w = new Wit(wit);
   const xs = ["hello", 'with "quotes"', "👋"];
   const encoded = w.encodeCall("echo", JSON.stringify({ xs }));
   const wave = encoded.slice("echo(".length, -1);
@@ -525,7 +525,7 @@ test("Wit list<u64> round-trips quoted-decimal items", () => {
   const wit = `${KONTOR_HEADER}
     export echo: async func(ctx: borrow<view-context>, xs: list<u64>) -> list<u64>;
 }`;
-  const w = new witApi.Wit(wit);
+  const w = new Wit(wit);
   const xs = ["0", "12345", "18446744073709551615"];
   const encoded = w.encodeCall("echo", JSON.stringify({ xs }));
   expect(encoded).toBe(`echo([${xs.join(", ")}])`);
@@ -537,7 +537,7 @@ test("Wit empty list round-trips", () => {
   const wit = `${KONTOR_HEADER}
     export echo: async func(ctx: borrow<view-context>, xs: list<string>) -> list<string>;
 }`;
-  const w = new witApi.Wit(wit);
+  const w = new Wit(wit);
   expect(w.encodeCall("echo", '{"xs": []}')).toBe("echo([])");
   expect(JSON.parse(w.decodeResult("echo", "[]"))).toEqual([]);
 });
@@ -551,7 +551,7 @@ test("Wit enum round-trips as a plain JSON string", () => {
     enum traffic-light { red, yellow, green }
     export step: async func(ctx: borrow<proc-context>, current: traffic-light) -> traffic-light;
 }`;
-  const w = new witApi.Wit(wit);
+  const w = new Wit(wit);
   for (const case_ of ["red", "yellow", "green"]) {
     const encoded = w.encodeCall("step", JSON.stringify({ current: case_ }));
     expect(encoded).toBe(`step(${case_})`);
@@ -564,7 +564,7 @@ test("Wit enum rejects unknown case names", () => {
     enum traffic-light { red, yellow, green }
     export step: async func(ctx: borrow<proc-context>, current: traffic-light) -> traffic-light;
 }`;
-  const w = new witApi.Wit(wit);
+  const w = new Wit(wit);
   expect(() => w.encodeCall("step", '{"current": "purple"}')).toThrow(
     /unknown enum case/,
   );
@@ -581,7 +581,7 @@ test("Wit string round-trips, including escape characters", () => {
   const wit = `${KONTOR_HEADER}
     export echo: async func(ctx: borrow<view-context>, s: string) -> string;
 }`;
-  const w = new witApi.Wit(wit);
+  const w = new Wit(wit);
   const cases = ["hello", 'with "quotes"', "back\\slash", "unicode: 👋"];
   for (const original of cases) {
     const encoded = w.encodeCall("echo", JSON.stringify({ s: original }));
@@ -598,7 +598,7 @@ test("Wit string round-trips, including escape characters", () => {
 import tokenWit from "../../native-contracts/token/wit/contract.wit?raw";
 
 test("smoke: encodeCall against real token.wit transfer (holder-ref + decimal)", () => {
-  const w = new witApi.Wit(tokenWit);
+  const w = new Wit(tokenWit);
 
   // transfer(ctx: borrow<proc-context>, dst: holder-ref, amt: decimal)
   //   holder-ref = variant { x-only-pubkey(string), signer-id(u64), core, burner, utxo(out-point) }
@@ -614,7 +614,7 @@ test("smoke: encodeCall against real token.wit transfer (holder-ref + decimal)",
 });
 
 test("smoke: decodeResult against real token.wit balance (option<decimal>)", () => {
-  const w = new witApi.Wit(tokenWit);
+  const w = new Wit(tokenWit);
 
   // balance returns option<decimal>. WAVE for some-decimal:
   //   some({r0: 42, r1: 0, r2: 0, r3: 0, sign: plus})
@@ -629,7 +629,7 @@ test("smoke: decodeResult against real token.wit balance (option<decimal>)", () 
 });
 
 test("smoke: encodeCall against real token.wit handles holder-ref unit cases", () => {
-  const w = new witApi.Wit(tokenWit);
+  const w = new Wit(tokenWit);
 
   // transfer with dst = `core` (a unit variant case — no value field)
   const args = {
@@ -656,7 +656,7 @@ world root {
     export init: async func(ctx: borrow<proc-context>);
     export set-flag: async func(ctx: borrow<proc-context>, flag: bool) -> result<_, error>;
 }`;
-  const w = new witApi.Wit(cleanWit);
+  const w = new Wit(cleanWit);
 
   const parsed = JSON.parse(w.parse());
   // wit_parser's Resolve serializes with arenas keyed by stable names
@@ -667,7 +667,7 @@ world root {
 });
 
 test("Wit.parse on real token.wit captures the contract's exports", () => {
-  const w = new witApi.Wit(tokenWit);
+  const w = new Wit(tokenWit);
   const parsed = JSON.parse(w.parse());
 
   // Look for the transfer export. The exact shape depends on wit-parser's
@@ -679,7 +679,7 @@ test("Wit.parse on real token.wit captures the contract's exports", () => {
 });
 
 test("Wit.parse propagates validation errors", () => {
-  const w = new witApi.Wit("garbage");
+  const w = new Wit("garbage");
   expect(() => w.parse()).toThrow(/WIT parse error/);
 });
 
@@ -739,12 +739,12 @@ test("codegen Tier 2: emits Contract class with transport + per-type helpers", (
   // no generic walker dependency; conversions are inlined in generated
   // helpers).
   expect(out).toContain(
-    'import { witApi, type KontorTransport } from "@kontor/sdk";',
+    'import { Wit, type KontorTransport } from "@kontor/sdk";',
   );
 
   // Embeds the WIT and instantiates a Wit resource at module load.
   expect(out).toContain("const WIT = String.raw`");
-  expect(out).toContain("const _wit = new witApi.Wit(WIT);");
+  expect(out).toContain("const _wit = new Wit(WIT);");
 
   // Per-type encode/decode helpers exist for named compound types.
   expect(out).toMatch(/function _encodeDecimal\(v: Decimal\)/);
@@ -771,4 +771,58 @@ test("codegen Tier 2: emits Contract class with transport + per-type helpers", (
   // kebab param → camelCase in TS, kebab on the wire.
   expect(out).toMatch(/burnAmt:/);
   expect(out).toMatch(/"burn-amt": _encodeDecimal\(burnAmt\)/);
+});
+
+// ─── numerics-api ─────────────────────────────────────────────────────
+// Same arithmetic the chain uses (delegates to core/numerics from the
+// shared crate). Smoke-test a few representative operations.
+
+import { numerics } from "@kontor/sdk";
+
+test("numerics: u64-to-decimal + decimal-to-string round-trip", () => {
+  const d = numerics.u64ToDecimal(42n);
+  expect(numerics.decimalToString(d)).toBe("42");
+});
+
+test("numerics: string round-trips decimal precisely", () => {
+  const d = numerics.stringToDecimal("100.5");
+  expect(numerics.decimalToString(d)).toBe("100.5");
+});
+
+test("numerics: add-decimal exact arithmetic", () => {
+  const a = numerics.stringToDecimal("1.1");
+  const b = numerics.stringToDecimal("2.2");
+  const sum = numerics.addDecimal(a, b);
+  expect(numerics.decimalToString(sum)).toBe("3.3");
+});
+
+test("numerics: div-decimal exposes div-by-zero error", () => {
+  const a = numerics.stringToDecimal("1");
+  const b = numerics.stringToDecimal("0");
+  // jco wraps result<_, error> failures as a ComponentError whose
+  // .payload is the variant value: { tag: "div-by-zero", val: "..." }
+  try {
+    numerics.divDecimal(a, b);
+    throw new Error("expected divDecimal to throw");
+  } catch (e: any) {
+    expect(e.payload.tag).toBe("div-by-zero");
+    expect(e.payload.val).toMatch(/divide by zero/);
+  }
+});
+
+test("numerics: integer string round-trip with big values", () => {
+  const huge = "57843975908437589027340573245";
+  const i = numerics.stringToInteger(huge);
+  expect(numerics.integerToString(i)).toBe(huge);
+});
+
+test("numerics: integer overflow surfaces as error", () => {
+  const oversized =
+    "115792089237316195423570985008687907853269984665640564039458";
+  try {
+    numerics.stringToInteger(oversized);
+    throw new Error("expected stringToInteger to throw");
+  } catch (e: any) {
+    expect(e.payload.tag).toBe("overflow");
+  }
 });

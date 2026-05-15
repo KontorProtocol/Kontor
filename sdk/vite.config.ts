@@ -1,7 +1,7 @@
 import { defineConfig } from "vite";
 import dts from "vite-plugin-dts";
 import { resolve } from "path";
-import { copyFileSync, mkdirSync } from "fs";
+import { copyFileSync, mkdirSync, readdirSync } from "fs";
 
 // Library build for @kontor/sdk.
 //
@@ -34,15 +34,28 @@ export default defineConfig({
     {
       name: "copy-component",
       closeBundle() {
-        mkdirSync("dist/component", { recursive: true });
-        copyFileSync(
-          "src/component/kontor-sdk.js",
-          "dist/component/kontor-sdk.js",
-        );
-        copyFileSync(
-          "src/component/kontor-sdk.core.wasm",
-          "dist/component/kontor-sdk.core.wasm",
-        );
+        // Copy the entire jco-emitted component bundle:
+        // - .core.wasm: the Rust→WASM binary, loaded at runtime via
+        //   `new URL('./kontor-sdk.core.wasm', import.meta.url)`
+        // - .js: JS bindings that wrap the WASM
+        // - .d.ts: top-level TS types for the world exports
+        // - interfaces/*.d.ts: per-interface TS types (witApi, numericsApi)
+        // All four are needed by consumers — the .d.ts files give IDE
+        // type info, the others are the runtime.
+        mkdirSync("dist/component/interfaces", { recursive: true });
+        for (const f of [
+          "kontor-sdk.js",
+          "kontor-sdk.d.ts",
+          "kontor-sdk.core.wasm",
+        ]) {
+          copyFileSync(`src/component/${f}`, `dist/component/${f}`);
+        }
+        for (const f of readdirSync("src/component/interfaces")) {
+          copyFileSync(
+            `src/component/interfaces/${f}`,
+            `dist/component/interfaces/${f}`,
+          );
+        }
       },
     },
   ],

@@ -3,6 +3,10 @@ const emptyFunc = () => {};
 let dv = new DataView(new ArrayBuffer());
 const dataView = mem => dv.buffer === mem.buffer ? dv : dv = new DataView(mem.buffer);
 
+const toInt64 = val => BigInt.asIntN(64, BigInt(val));
+
+const toUint64 = val => BigInt.asUintN(64, BigInt(val));
+
 const utf8Decoder = new TextDecoder();
 
 const utf8Encoder = new TextEncoder();
@@ -773,6 +777,10 @@ class RepTable {
   }
 }
 
+function throwInvalidBool() {
+  throw new TypeError('invalid variant discriminant for bool');
+}
+
 const instantiateCore = WebAssembly.instantiate;
 
 
@@ -784,6 +792,8 @@ let realloc0;
 let postReturn0;
 let postReturn1;
 let postReturn2;
+let postReturn3;
+let postReturn4;
 const handleTable0 = [T_FLAG, 0];
 const finalizationRegistry0 = finalizationRegistryCreate((handle) => {
   const { rep } = rscTableRemove(handleTable0, handle);
@@ -1000,20 +1010,20 @@ function validateWit(arg0) {
   return retCopy;
   
 }
-let witApiConstructorWit;
+let witCodecConstructorWit;
 
 class Wit{
   constructor(arg0) {
     var ptr0 = utf8Encode(arg0, realloc0, memory0);
     var len0 = utf8EncodedLen;
-    _debugLog('[iface="root:component/wit-api", function="[constructor]wit"][Instruction::CallWasm] enter', {
+    _debugLog('[iface="root:component/wit-codec", function="[constructor]wit"][Instruction::CallWasm] enter', {
       funcName: '[constructor]wit',
       paramCount: 2,
       async: false,
       postReturn: false,
     });
-    const _wasm_call_currentTaskID = startCurrentTask(0, false, 'witApiConstructorWit');
-    const ret = witApiConstructorWit(ptr0, len0);
+    const _wasm_call_currentTaskID = startCurrentTask(0, false, 'witCodecConstructorWit');
+    const ret = witCodecConstructorWit(ptr0, len0);
     endCurrentTask(0);
     var handle2 = ret;
     var rsc1 = new.target === Wit ? this : Object.create(Wit.prototype);
@@ -1026,7 +1036,7 @@ class Wit{
       rsc1[symbolRscHandle] = undefined;
       exports0['0'](handleTable0[(handle2 << 1) + 1] & ~T_FLAG);
     }});
-    _debugLog('[iface="root:component/wit-api", function="[constructor]wit"][Instruction::Return]', {
+    _debugLog('[iface="root:component/wit-codec", function="[constructor]wit"][Instruction::Return]', {
       funcName: '[constructor]wit',
       paramCount: 1,
       async: false,
@@ -1035,7 +1045,7 @@ class Wit{
     return rsc1;
   }
 }
-let witApiMethodWitEncodeCall;
+let witCodecMethodWitEncodeCall;
 
 Wit.prototype.encodeCall = function encodeCall(arg1, arg2) {
   var handle1 = this[symbolRscHandle];
@@ -1047,14 +1057,14 @@ Wit.prototype.encodeCall = function encodeCall(arg1, arg2) {
   var len2 = utf8EncodedLen;
   var ptr3 = utf8Encode(arg2, realloc0, memory0);
   var len3 = utf8EncodedLen;
-  _debugLog('[iface="root:component/wit-api", function="[method]wit.encode-call"][Instruction::CallWasm] enter', {
+  _debugLog('[iface="root:component/wit-codec", function="[method]wit.encode-call"][Instruction::CallWasm] enter', {
     funcName: '[method]wit.encode-call',
     paramCount: 5,
     async: false,
     postReturn: true,
   });
-  const _wasm_call_currentTaskID = startCurrentTask(0, false, 'witApiMethodWitEncodeCall');
-  const ret = witApiMethodWitEncodeCall(handle0, ptr2, len2, ptr3, len3);
+  const _wasm_call_currentTaskID = startCurrentTask(0, false, 'witCodecMethodWitEncodeCall');
+  const ret = witCodecMethodWitEncodeCall(handle0, ptr2, len2, ptr3, len3);
   endCurrentTask(0);
   let variant6;
   switch (dataView(memory0).getUint8(ret + 0, true)) {
@@ -1082,7 +1092,7 @@ Wit.prototype.encodeCall = function encodeCall(arg1, arg2) {
       throw new TypeError('invalid variant discriminant for expected');
     }
   }
-  _debugLog('[iface="root:component/wit-api", function="[method]wit.encode-call"][Instruction::Return]', {
+  _debugLog('[iface="root:component/wit-codec", function="[method]wit.encode-call"][Instruction::Return]', {
     funcName: '[method]wit.encode-call',
     paramCount: 1,
     async: false,
@@ -1103,7 +1113,7 @@ Wit.prototype.encodeCall = function encodeCall(arg1, arg2) {
   return retCopy.val;
   
 };
-let witApiMethodWitDecodeResult;
+let witCodecMethodWitDecodeResult;
 
 Wit.prototype.decodeResult = function decodeResult(arg1, arg2) {
   var handle1 = this[symbolRscHandle];
@@ -1115,14 +1125,14 @@ Wit.prototype.decodeResult = function decodeResult(arg1, arg2) {
   var len2 = utf8EncodedLen;
   var ptr3 = utf8Encode(arg2, realloc0, memory0);
   var len3 = utf8EncodedLen;
-  _debugLog('[iface="root:component/wit-api", function="[method]wit.decode-result"][Instruction::CallWasm] enter', {
+  _debugLog('[iface="root:component/wit-codec", function="[method]wit.decode-result"][Instruction::CallWasm] enter', {
     funcName: '[method]wit.decode-result',
     paramCount: 5,
     async: false,
     postReturn: true,
   });
-  const _wasm_call_currentTaskID = startCurrentTask(0, false, 'witApiMethodWitDecodeResult');
-  const ret = witApiMethodWitDecodeResult(handle0, ptr2, len2, ptr3, len3);
+  const _wasm_call_currentTaskID = startCurrentTask(0, false, 'witCodecMethodWitDecodeResult');
+  const ret = witCodecMethodWitDecodeResult(handle0, ptr2, len2, ptr3, len3);
   endCurrentTask(0);
   let variant6;
   switch (dataView(memory0).getUint8(ret + 0, true)) {
@@ -1150,7 +1160,7 @@ Wit.prototype.decodeResult = function decodeResult(arg1, arg2) {
       throw new TypeError('invalid variant discriminant for expected');
     }
   }
-  _debugLog('[iface="root:component/wit-api", function="[method]wit.decode-result"][Instruction::Return]', {
+  _debugLog('[iface="root:component/wit-codec", function="[method]wit.decode-result"][Instruction::Return]', {
     funcName: '[method]wit.decode-result',
     paramCount: 1,
     async: false,
@@ -1171,7 +1181,7 @@ Wit.prototype.decodeResult = function decodeResult(arg1, arg2) {
   return retCopy.val;
   
 };
-let witApiMethodWitParse;
+let witCodecMethodWitParse;
 
 Wit.prototype.parse = function parse() {
   var handle1 = this[symbolRscHandle];
@@ -1179,14 +1189,14 @@ Wit.prototype.parse = function parse() {
     throw new TypeError('Resource error: Not a valid "Wit" resource.');
   }
   var handle0 = handleTable0[(handle1 << 1) + 1] & ~T_FLAG;
-  _debugLog('[iface="root:component/wit-api", function="[method]wit.parse"][Instruction::CallWasm] enter', {
+  _debugLog('[iface="root:component/wit-codec", function="[method]wit.parse"][Instruction::CallWasm] enter', {
     funcName: '[method]wit.parse',
     paramCount: 1,
     async: false,
     postReturn: true,
   });
-  const _wasm_call_currentTaskID = startCurrentTask(0, false, 'witApiMethodWitParse');
-  const ret = witApiMethodWitParse(handle0);
+  const _wasm_call_currentTaskID = startCurrentTask(0, false, 'witCodecMethodWitParse');
+  const ret = witCodecMethodWitParse(handle0);
   endCurrentTask(0);
   let variant4;
   switch (dataView(memory0).getUint8(ret + 0, true)) {
@@ -1214,7 +1224,7 @@ Wit.prototype.parse = function parse() {
       throw new TypeError('invalid variant discriminant for expected');
     }
   }
-  _debugLog('[iface="root:component/wit-api", function="[method]wit.parse"][Instruction::Return]', {
+  _debugLog('[iface="root:component/wit-codec", function="[method]wit.parse"][Instruction::Return]', {
     funcName: '[method]wit.parse',
     paramCount: 1,
     async: false,
@@ -1235,6 +1245,3150 @@ Wit.prototype.parse = function parse() {
   return retCopy.val;
   
 };
+let numericsU64ToInteger;
+
+function u64ToInteger(arg0) {
+  _debugLog('[iface="root:component/numerics", function="u64-to-integer"][Instruction::CallWasm] enter', {
+    funcName: 'u64-to-integer',
+    paramCount: 1,
+    async: false,
+    postReturn: false,
+  });
+  const _wasm_call_currentTaskID = startCurrentTask(0, false, 'numericsU64ToInteger');
+  const ret = numericsU64ToInteger(toUint64(arg0));
+  endCurrentTask(0);
+  let enum0;
+  switch (dataView(memory0).getUint8(ret + 32, true)) {
+    case 0: {
+      enum0 = 'plus';
+      break;
+    }
+    case 1: {
+      enum0 = 'minus';
+      break;
+    }
+    default: {
+      throw new TypeError('invalid discriminant specified for Sign');
+    }
+  }
+  _debugLog('[iface="root:component/numerics", function="u64-to-integer"][Instruction::Return]', {
+    funcName: 'u64-to-integer',
+    paramCount: 1,
+    async: false,
+    postReturn: false
+  });
+  return {
+    r0: BigInt.asUintN(64, dataView(memory0).getBigInt64(ret + 0, true)),
+    r1: BigInt.asUintN(64, dataView(memory0).getBigInt64(ret + 8, true)),
+    r2: BigInt.asUintN(64, dataView(memory0).getBigInt64(ret + 16, true)),
+    r3: BigInt.asUintN(64, dataView(memory0).getBigInt64(ret + 24, true)),
+    sign: enum0,
+  };
+}
+let numericsS64ToInteger;
+
+function s64ToInteger(arg0) {
+  _debugLog('[iface="root:component/numerics", function="s64-to-integer"][Instruction::CallWasm] enter', {
+    funcName: 's64-to-integer',
+    paramCount: 1,
+    async: false,
+    postReturn: false,
+  });
+  const _wasm_call_currentTaskID = startCurrentTask(0, false, 'numericsS64ToInteger');
+  const ret = numericsS64ToInteger(toInt64(arg0));
+  endCurrentTask(0);
+  let enum0;
+  switch (dataView(memory0).getUint8(ret + 32, true)) {
+    case 0: {
+      enum0 = 'plus';
+      break;
+    }
+    case 1: {
+      enum0 = 'minus';
+      break;
+    }
+    default: {
+      throw new TypeError('invalid discriminant specified for Sign');
+    }
+  }
+  _debugLog('[iface="root:component/numerics", function="s64-to-integer"][Instruction::Return]', {
+    funcName: 's64-to-integer',
+    paramCount: 1,
+    async: false,
+    postReturn: false
+  });
+  return {
+    r0: BigInt.asUintN(64, dataView(memory0).getBigInt64(ret + 0, true)),
+    r1: BigInt.asUintN(64, dataView(memory0).getBigInt64(ret + 8, true)),
+    r2: BigInt.asUintN(64, dataView(memory0).getBigInt64(ret + 16, true)),
+    r3: BigInt.asUintN(64, dataView(memory0).getBigInt64(ret + 24, true)),
+    sign: enum0,
+  };
+}
+let numericsStringToInteger;
+
+function stringToInteger(arg0) {
+  var ptr0 = utf8Encode(arg0, realloc0, memory0);
+  var len0 = utf8EncodedLen;
+  _debugLog('[iface="root:component/numerics", function="string-to-integer"][Instruction::CallWasm] enter', {
+    funcName: 'string-to-integer',
+    paramCount: 2,
+    async: false,
+    postReturn: true,
+  });
+  const _wasm_call_currentTaskID = startCurrentTask(0, false, 'numericsStringToInteger');
+  const ret = numericsStringToInteger(ptr0, len0);
+  endCurrentTask(0);
+  let variant8;
+  switch (dataView(memory0).getUint8(ret + 0, true)) {
+    case 0: {
+      let enum1;
+      switch (dataView(memory0).getUint8(ret + 40, true)) {
+        case 0: {
+          enum1 = 'plus';
+          break;
+        }
+        case 1: {
+          enum1 = 'minus';
+          break;
+        }
+        default: {
+          throw new TypeError('invalid discriminant specified for Sign');
+        }
+      }
+      variant8= {
+        tag: 'ok',
+        val: {
+          r0: BigInt.asUintN(64, dataView(memory0).getBigInt64(ret + 8, true)),
+          r1: BigInt.asUintN(64, dataView(memory0).getBigInt64(ret + 16, true)),
+          r2: BigInt.asUintN(64, dataView(memory0).getBigInt64(ret + 24, true)),
+          r3: BigInt.asUintN(64, dataView(memory0).getBigInt64(ret + 32, true)),
+          sign: enum1,
+        }
+      };
+      break;
+    }
+    case 1: {
+      let variant7;
+      switch (dataView(memory0).getUint8(ret + 8, true)) {
+        case 0: {
+          var ptr2 = dataView(memory0).getUint32(ret + 12, true);
+          var len2 = dataView(memory0).getUint32(ret + 16, true);
+          var result2 = utf8Decoder.decode(new Uint8Array(memory0.buffer, ptr2, len2));
+          variant7= {
+            tag: 'message',
+            val: result2
+          };
+          break;
+        }
+        case 1: {
+          var ptr3 = dataView(memory0).getUint32(ret + 12, true);
+          var len3 = dataView(memory0).getUint32(ret + 16, true);
+          var result3 = utf8Decoder.decode(new Uint8Array(memory0.buffer, ptr3, len3));
+          variant7= {
+            tag: 'overflow',
+            val: result3
+          };
+          break;
+        }
+        case 2: {
+          var ptr4 = dataView(memory0).getUint32(ret + 12, true);
+          var len4 = dataView(memory0).getUint32(ret + 16, true);
+          var result4 = utf8Decoder.decode(new Uint8Array(memory0.buffer, ptr4, len4));
+          variant7= {
+            tag: 'div-by-zero',
+            val: result4
+          };
+          break;
+        }
+        case 3: {
+          var ptr5 = dataView(memory0).getUint32(ret + 12, true);
+          var len5 = dataView(memory0).getUint32(ret + 16, true);
+          var result5 = utf8Decoder.decode(new Uint8Array(memory0.buffer, ptr5, len5));
+          variant7= {
+            tag: 'syntax',
+            val: result5
+          };
+          break;
+        }
+        case 4: {
+          var ptr6 = dataView(memory0).getUint32(ret + 12, true);
+          var len6 = dataView(memory0).getUint32(ret + 16, true);
+          var result6 = utf8Decoder.decode(new Uint8Array(memory0.buffer, ptr6, len6));
+          variant7= {
+            tag: 'validation',
+            val: result6
+          };
+          break;
+        }
+        default: {
+          throw new TypeError('invalid variant discriminant for NumericsError');
+        }
+      }
+      variant8= {
+        tag: 'err',
+        val: variant7
+      };
+      break;
+    }
+    default: {
+      throw new TypeError('invalid variant discriminant for expected');
+    }
+  }
+  _debugLog('[iface="root:component/numerics", function="string-to-integer"][Instruction::Return]', {
+    funcName: 'string-to-integer',
+    paramCount: 1,
+    async: false,
+    postReturn: true
+  });
+  const retCopy = variant8;
+  
+  let cstate = getOrCreateAsyncState(0);
+  cstate.mayLeave = false;
+  postReturn3(ret);
+  cstate.mayLeave = true;
+  
+  
+  
+  if (typeof retCopy === 'object' && retCopy.tag === 'err') {
+    throw new ComponentError(retCopy.val);
+  }
+  return retCopy.val;
+  
+}
+let numericsIntegerToString;
+
+function integerToString(arg0) {
+  var {r0: v0_0, r1: v0_1, r2: v0_2, r3: v0_3, sign: v0_4 } = arg0;
+  var val1 = v0_4;
+  let enum1;
+  switch (val1) {
+    case 'plus': {
+      enum1 = 0;
+      break;
+    }
+    case 'minus': {
+      enum1 = 1;
+      break;
+    }
+    default: {
+      if ((v0_4) instanceof Error) {
+        console.error(v0_4);
+      }
+      
+      throw new TypeError(`"${val1}" is not one of the cases of sign`);
+    }
+  }
+  _debugLog('[iface="root:component/numerics", function="integer-to-string"][Instruction::CallWasm] enter', {
+    funcName: 'integer-to-string',
+    paramCount: 5,
+    async: false,
+    postReturn: true,
+  });
+  const _wasm_call_currentTaskID = startCurrentTask(0, false, 'numericsIntegerToString');
+  const ret = numericsIntegerToString(toUint64(v0_0), toUint64(v0_1), toUint64(v0_2), toUint64(v0_3), enum1);
+  endCurrentTask(0);
+  var ptr2 = dataView(memory0).getUint32(ret + 0, true);
+  var len2 = dataView(memory0).getUint32(ret + 4, true);
+  var result2 = utf8Decoder.decode(new Uint8Array(memory0.buffer, ptr2, len2));
+  _debugLog('[iface="root:component/numerics", function="integer-to-string"][Instruction::Return]', {
+    funcName: 'integer-to-string',
+    paramCount: 1,
+    async: false,
+    postReturn: true
+  });
+  const retCopy = result2;
+  
+  let cstate = getOrCreateAsyncState(0);
+  cstate.mayLeave = false;
+  postReturn0(ret);
+  cstate.mayLeave = true;
+  return retCopy;
+  
+}
+let numericsEqInteger;
+
+function eqInteger(arg0, arg1) {
+  var {r0: v0_0, r1: v0_1, r2: v0_2, r3: v0_3, sign: v0_4 } = arg0;
+  var val1 = v0_4;
+  let enum1;
+  switch (val1) {
+    case 'plus': {
+      enum1 = 0;
+      break;
+    }
+    case 'minus': {
+      enum1 = 1;
+      break;
+    }
+    default: {
+      if ((v0_4) instanceof Error) {
+        console.error(v0_4);
+      }
+      
+      throw new TypeError(`"${val1}" is not one of the cases of sign`);
+    }
+  }
+  var {r0: v2_0, r1: v2_1, r2: v2_2, r3: v2_3, sign: v2_4 } = arg1;
+  var val3 = v2_4;
+  let enum3;
+  switch (val3) {
+    case 'plus': {
+      enum3 = 0;
+      break;
+    }
+    case 'minus': {
+      enum3 = 1;
+      break;
+    }
+    default: {
+      if ((v2_4) instanceof Error) {
+        console.error(v2_4);
+      }
+      
+      throw new TypeError(`"${val3}" is not one of the cases of sign`);
+    }
+  }
+  _debugLog('[iface="root:component/numerics", function="eq-integer"][Instruction::CallWasm] enter', {
+    funcName: 'eq-integer',
+    paramCount: 10,
+    async: false,
+    postReturn: false,
+  });
+  const _wasm_call_currentTaskID = startCurrentTask(0, false, 'numericsEqInteger');
+  const ret = numericsEqInteger(toUint64(v0_0), toUint64(v0_1), toUint64(v0_2), toUint64(v0_3), enum1, toUint64(v2_0), toUint64(v2_1), toUint64(v2_2), toUint64(v2_3), enum3);
+  endCurrentTask(0);
+  var bool4 = ret;
+  _debugLog('[iface="root:component/numerics", function="eq-integer"][Instruction::Return]', {
+    funcName: 'eq-integer',
+    paramCount: 1,
+    async: false,
+    postReturn: false
+  });
+  return bool4 == 0 ? false : (bool4 == 1 ? true : throwInvalidBool());
+}
+let numericsCmpInteger;
+
+function cmpInteger(arg0, arg1) {
+  var {r0: v0_0, r1: v0_1, r2: v0_2, r3: v0_3, sign: v0_4 } = arg0;
+  var val1 = v0_4;
+  let enum1;
+  switch (val1) {
+    case 'plus': {
+      enum1 = 0;
+      break;
+    }
+    case 'minus': {
+      enum1 = 1;
+      break;
+    }
+    default: {
+      if ((v0_4) instanceof Error) {
+        console.error(v0_4);
+      }
+      
+      throw new TypeError(`"${val1}" is not one of the cases of sign`);
+    }
+  }
+  var {r0: v2_0, r1: v2_1, r2: v2_2, r3: v2_3, sign: v2_4 } = arg1;
+  var val3 = v2_4;
+  let enum3;
+  switch (val3) {
+    case 'plus': {
+      enum3 = 0;
+      break;
+    }
+    case 'minus': {
+      enum3 = 1;
+      break;
+    }
+    default: {
+      if ((v2_4) instanceof Error) {
+        console.error(v2_4);
+      }
+      
+      throw new TypeError(`"${val3}" is not one of the cases of sign`);
+    }
+  }
+  _debugLog('[iface="root:component/numerics", function="cmp-integer"][Instruction::CallWasm] enter', {
+    funcName: 'cmp-integer',
+    paramCount: 10,
+    async: false,
+    postReturn: false,
+  });
+  const _wasm_call_currentTaskID = startCurrentTask(0, false, 'numericsCmpInteger');
+  const ret = numericsCmpInteger(toUint64(v0_0), toUint64(v0_1), toUint64(v0_2), toUint64(v0_3), enum1, toUint64(v2_0), toUint64(v2_1), toUint64(v2_2), toUint64(v2_3), enum3);
+  endCurrentTask(0);
+  let enum4;
+  switch (ret) {
+    case 0: {
+      enum4 = 'less';
+      break;
+    }
+    case 1: {
+      enum4 = 'equal';
+      break;
+    }
+    case 2: {
+      enum4 = 'greater';
+      break;
+    }
+    default: {
+      throw new TypeError('invalid discriminant specified for Ordering');
+    }
+  }
+  _debugLog('[iface="root:component/numerics", function="cmp-integer"][Instruction::Return]', {
+    funcName: 'cmp-integer',
+    paramCount: 1,
+    async: false,
+    postReturn: false
+  });
+  return enum4;
+}
+let numericsAddInteger;
+
+function addInteger(arg0, arg1) {
+  var {r0: v0_0, r1: v0_1, r2: v0_2, r3: v0_3, sign: v0_4 } = arg0;
+  var val1 = v0_4;
+  let enum1;
+  switch (val1) {
+    case 'plus': {
+      enum1 = 0;
+      break;
+    }
+    case 'minus': {
+      enum1 = 1;
+      break;
+    }
+    default: {
+      if ((v0_4) instanceof Error) {
+        console.error(v0_4);
+      }
+      
+      throw new TypeError(`"${val1}" is not one of the cases of sign`);
+    }
+  }
+  var {r0: v2_0, r1: v2_1, r2: v2_2, r3: v2_3, sign: v2_4 } = arg1;
+  var val3 = v2_4;
+  let enum3;
+  switch (val3) {
+    case 'plus': {
+      enum3 = 0;
+      break;
+    }
+    case 'minus': {
+      enum3 = 1;
+      break;
+    }
+    default: {
+      if ((v2_4) instanceof Error) {
+        console.error(v2_4);
+      }
+      
+      throw new TypeError(`"${val3}" is not one of the cases of sign`);
+    }
+  }
+  _debugLog('[iface="root:component/numerics", function="add-integer"][Instruction::CallWasm] enter', {
+    funcName: 'add-integer',
+    paramCount: 10,
+    async: false,
+    postReturn: true,
+  });
+  const _wasm_call_currentTaskID = startCurrentTask(0, false, 'numericsAddInteger');
+  const ret = numericsAddInteger(toUint64(v0_0), toUint64(v0_1), toUint64(v0_2), toUint64(v0_3), enum1, toUint64(v2_0), toUint64(v2_1), toUint64(v2_2), toUint64(v2_3), enum3);
+  endCurrentTask(0);
+  let variant11;
+  switch (dataView(memory0).getUint8(ret + 0, true)) {
+    case 0: {
+      let enum4;
+      switch (dataView(memory0).getUint8(ret + 40, true)) {
+        case 0: {
+          enum4 = 'plus';
+          break;
+        }
+        case 1: {
+          enum4 = 'minus';
+          break;
+        }
+        default: {
+          throw new TypeError('invalid discriminant specified for Sign');
+        }
+      }
+      variant11= {
+        tag: 'ok',
+        val: {
+          r0: BigInt.asUintN(64, dataView(memory0).getBigInt64(ret + 8, true)),
+          r1: BigInt.asUintN(64, dataView(memory0).getBigInt64(ret + 16, true)),
+          r2: BigInt.asUintN(64, dataView(memory0).getBigInt64(ret + 24, true)),
+          r3: BigInt.asUintN(64, dataView(memory0).getBigInt64(ret + 32, true)),
+          sign: enum4,
+        }
+      };
+      break;
+    }
+    case 1: {
+      let variant10;
+      switch (dataView(memory0).getUint8(ret + 8, true)) {
+        case 0: {
+          var ptr5 = dataView(memory0).getUint32(ret + 12, true);
+          var len5 = dataView(memory0).getUint32(ret + 16, true);
+          var result5 = utf8Decoder.decode(new Uint8Array(memory0.buffer, ptr5, len5));
+          variant10= {
+            tag: 'message',
+            val: result5
+          };
+          break;
+        }
+        case 1: {
+          var ptr6 = dataView(memory0).getUint32(ret + 12, true);
+          var len6 = dataView(memory0).getUint32(ret + 16, true);
+          var result6 = utf8Decoder.decode(new Uint8Array(memory0.buffer, ptr6, len6));
+          variant10= {
+            tag: 'overflow',
+            val: result6
+          };
+          break;
+        }
+        case 2: {
+          var ptr7 = dataView(memory0).getUint32(ret + 12, true);
+          var len7 = dataView(memory0).getUint32(ret + 16, true);
+          var result7 = utf8Decoder.decode(new Uint8Array(memory0.buffer, ptr7, len7));
+          variant10= {
+            tag: 'div-by-zero',
+            val: result7
+          };
+          break;
+        }
+        case 3: {
+          var ptr8 = dataView(memory0).getUint32(ret + 12, true);
+          var len8 = dataView(memory0).getUint32(ret + 16, true);
+          var result8 = utf8Decoder.decode(new Uint8Array(memory0.buffer, ptr8, len8));
+          variant10= {
+            tag: 'syntax',
+            val: result8
+          };
+          break;
+        }
+        case 4: {
+          var ptr9 = dataView(memory0).getUint32(ret + 12, true);
+          var len9 = dataView(memory0).getUint32(ret + 16, true);
+          var result9 = utf8Decoder.decode(new Uint8Array(memory0.buffer, ptr9, len9));
+          variant10= {
+            tag: 'validation',
+            val: result9
+          };
+          break;
+        }
+        default: {
+          throw new TypeError('invalid variant discriminant for NumericsError');
+        }
+      }
+      variant11= {
+        tag: 'err',
+        val: variant10
+      };
+      break;
+    }
+    default: {
+      throw new TypeError('invalid variant discriminant for expected');
+    }
+  }
+  _debugLog('[iface="root:component/numerics", function="add-integer"][Instruction::Return]', {
+    funcName: 'add-integer',
+    paramCount: 1,
+    async: false,
+    postReturn: true
+  });
+  const retCopy = variant11;
+  
+  let cstate = getOrCreateAsyncState(0);
+  cstate.mayLeave = false;
+  postReturn3(ret);
+  cstate.mayLeave = true;
+  
+  
+  
+  if (typeof retCopy === 'object' && retCopy.tag === 'err') {
+    throw new ComponentError(retCopy.val);
+  }
+  return retCopy.val;
+  
+}
+let numericsSubInteger;
+
+function subInteger(arg0, arg1) {
+  var {r0: v0_0, r1: v0_1, r2: v0_2, r3: v0_3, sign: v0_4 } = arg0;
+  var val1 = v0_4;
+  let enum1;
+  switch (val1) {
+    case 'plus': {
+      enum1 = 0;
+      break;
+    }
+    case 'minus': {
+      enum1 = 1;
+      break;
+    }
+    default: {
+      if ((v0_4) instanceof Error) {
+        console.error(v0_4);
+      }
+      
+      throw new TypeError(`"${val1}" is not one of the cases of sign`);
+    }
+  }
+  var {r0: v2_0, r1: v2_1, r2: v2_2, r3: v2_3, sign: v2_4 } = arg1;
+  var val3 = v2_4;
+  let enum3;
+  switch (val3) {
+    case 'plus': {
+      enum3 = 0;
+      break;
+    }
+    case 'minus': {
+      enum3 = 1;
+      break;
+    }
+    default: {
+      if ((v2_4) instanceof Error) {
+        console.error(v2_4);
+      }
+      
+      throw new TypeError(`"${val3}" is not one of the cases of sign`);
+    }
+  }
+  _debugLog('[iface="root:component/numerics", function="sub-integer"][Instruction::CallWasm] enter', {
+    funcName: 'sub-integer',
+    paramCount: 10,
+    async: false,
+    postReturn: true,
+  });
+  const _wasm_call_currentTaskID = startCurrentTask(0, false, 'numericsSubInteger');
+  const ret = numericsSubInteger(toUint64(v0_0), toUint64(v0_1), toUint64(v0_2), toUint64(v0_3), enum1, toUint64(v2_0), toUint64(v2_1), toUint64(v2_2), toUint64(v2_3), enum3);
+  endCurrentTask(0);
+  let variant11;
+  switch (dataView(memory0).getUint8(ret + 0, true)) {
+    case 0: {
+      let enum4;
+      switch (dataView(memory0).getUint8(ret + 40, true)) {
+        case 0: {
+          enum4 = 'plus';
+          break;
+        }
+        case 1: {
+          enum4 = 'minus';
+          break;
+        }
+        default: {
+          throw new TypeError('invalid discriminant specified for Sign');
+        }
+      }
+      variant11= {
+        tag: 'ok',
+        val: {
+          r0: BigInt.asUintN(64, dataView(memory0).getBigInt64(ret + 8, true)),
+          r1: BigInt.asUintN(64, dataView(memory0).getBigInt64(ret + 16, true)),
+          r2: BigInt.asUintN(64, dataView(memory0).getBigInt64(ret + 24, true)),
+          r3: BigInt.asUintN(64, dataView(memory0).getBigInt64(ret + 32, true)),
+          sign: enum4,
+        }
+      };
+      break;
+    }
+    case 1: {
+      let variant10;
+      switch (dataView(memory0).getUint8(ret + 8, true)) {
+        case 0: {
+          var ptr5 = dataView(memory0).getUint32(ret + 12, true);
+          var len5 = dataView(memory0).getUint32(ret + 16, true);
+          var result5 = utf8Decoder.decode(new Uint8Array(memory0.buffer, ptr5, len5));
+          variant10= {
+            tag: 'message',
+            val: result5
+          };
+          break;
+        }
+        case 1: {
+          var ptr6 = dataView(memory0).getUint32(ret + 12, true);
+          var len6 = dataView(memory0).getUint32(ret + 16, true);
+          var result6 = utf8Decoder.decode(new Uint8Array(memory0.buffer, ptr6, len6));
+          variant10= {
+            tag: 'overflow',
+            val: result6
+          };
+          break;
+        }
+        case 2: {
+          var ptr7 = dataView(memory0).getUint32(ret + 12, true);
+          var len7 = dataView(memory0).getUint32(ret + 16, true);
+          var result7 = utf8Decoder.decode(new Uint8Array(memory0.buffer, ptr7, len7));
+          variant10= {
+            tag: 'div-by-zero',
+            val: result7
+          };
+          break;
+        }
+        case 3: {
+          var ptr8 = dataView(memory0).getUint32(ret + 12, true);
+          var len8 = dataView(memory0).getUint32(ret + 16, true);
+          var result8 = utf8Decoder.decode(new Uint8Array(memory0.buffer, ptr8, len8));
+          variant10= {
+            tag: 'syntax',
+            val: result8
+          };
+          break;
+        }
+        case 4: {
+          var ptr9 = dataView(memory0).getUint32(ret + 12, true);
+          var len9 = dataView(memory0).getUint32(ret + 16, true);
+          var result9 = utf8Decoder.decode(new Uint8Array(memory0.buffer, ptr9, len9));
+          variant10= {
+            tag: 'validation',
+            val: result9
+          };
+          break;
+        }
+        default: {
+          throw new TypeError('invalid variant discriminant for NumericsError');
+        }
+      }
+      variant11= {
+        tag: 'err',
+        val: variant10
+      };
+      break;
+    }
+    default: {
+      throw new TypeError('invalid variant discriminant for expected');
+    }
+  }
+  _debugLog('[iface="root:component/numerics", function="sub-integer"][Instruction::Return]', {
+    funcName: 'sub-integer',
+    paramCount: 1,
+    async: false,
+    postReturn: true
+  });
+  const retCopy = variant11;
+  
+  let cstate = getOrCreateAsyncState(0);
+  cstate.mayLeave = false;
+  postReturn3(ret);
+  cstate.mayLeave = true;
+  
+  
+  
+  if (typeof retCopy === 'object' && retCopy.tag === 'err') {
+    throw new ComponentError(retCopy.val);
+  }
+  return retCopy.val;
+  
+}
+let numericsMulInteger;
+
+function mulInteger(arg0, arg1) {
+  var {r0: v0_0, r1: v0_1, r2: v0_2, r3: v0_3, sign: v0_4 } = arg0;
+  var val1 = v0_4;
+  let enum1;
+  switch (val1) {
+    case 'plus': {
+      enum1 = 0;
+      break;
+    }
+    case 'minus': {
+      enum1 = 1;
+      break;
+    }
+    default: {
+      if ((v0_4) instanceof Error) {
+        console.error(v0_4);
+      }
+      
+      throw new TypeError(`"${val1}" is not one of the cases of sign`);
+    }
+  }
+  var {r0: v2_0, r1: v2_1, r2: v2_2, r3: v2_3, sign: v2_4 } = arg1;
+  var val3 = v2_4;
+  let enum3;
+  switch (val3) {
+    case 'plus': {
+      enum3 = 0;
+      break;
+    }
+    case 'minus': {
+      enum3 = 1;
+      break;
+    }
+    default: {
+      if ((v2_4) instanceof Error) {
+        console.error(v2_4);
+      }
+      
+      throw new TypeError(`"${val3}" is not one of the cases of sign`);
+    }
+  }
+  _debugLog('[iface="root:component/numerics", function="mul-integer"][Instruction::CallWasm] enter', {
+    funcName: 'mul-integer',
+    paramCount: 10,
+    async: false,
+    postReturn: true,
+  });
+  const _wasm_call_currentTaskID = startCurrentTask(0, false, 'numericsMulInteger');
+  const ret = numericsMulInteger(toUint64(v0_0), toUint64(v0_1), toUint64(v0_2), toUint64(v0_3), enum1, toUint64(v2_0), toUint64(v2_1), toUint64(v2_2), toUint64(v2_3), enum3);
+  endCurrentTask(0);
+  let variant11;
+  switch (dataView(memory0).getUint8(ret + 0, true)) {
+    case 0: {
+      let enum4;
+      switch (dataView(memory0).getUint8(ret + 40, true)) {
+        case 0: {
+          enum4 = 'plus';
+          break;
+        }
+        case 1: {
+          enum4 = 'minus';
+          break;
+        }
+        default: {
+          throw new TypeError('invalid discriminant specified for Sign');
+        }
+      }
+      variant11= {
+        tag: 'ok',
+        val: {
+          r0: BigInt.asUintN(64, dataView(memory0).getBigInt64(ret + 8, true)),
+          r1: BigInt.asUintN(64, dataView(memory0).getBigInt64(ret + 16, true)),
+          r2: BigInt.asUintN(64, dataView(memory0).getBigInt64(ret + 24, true)),
+          r3: BigInt.asUintN(64, dataView(memory0).getBigInt64(ret + 32, true)),
+          sign: enum4,
+        }
+      };
+      break;
+    }
+    case 1: {
+      let variant10;
+      switch (dataView(memory0).getUint8(ret + 8, true)) {
+        case 0: {
+          var ptr5 = dataView(memory0).getUint32(ret + 12, true);
+          var len5 = dataView(memory0).getUint32(ret + 16, true);
+          var result5 = utf8Decoder.decode(new Uint8Array(memory0.buffer, ptr5, len5));
+          variant10= {
+            tag: 'message',
+            val: result5
+          };
+          break;
+        }
+        case 1: {
+          var ptr6 = dataView(memory0).getUint32(ret + 12, true);
+          var len6 = dataView(memory0).getUint32(ret + 16, true);
+          var result6 = utf8Decoder.decode(new Uint8Array(memory0.buffer, ptr6, len6));
+          variant10= {
+            tag: 'overflow',
+            val: result6
+          };
+          break;
+        }
+        case 2: {
+          var ptr7 = dataView(memory0).getUint32(ret + 12, true);
+          var len7 = dataView(memory0).getUint32(ret + 16, true);
+          var result7 = utf8Decoder.decode(new Uint8Array(memory0.buffer, ptr7, len7));
+          variant10= {
+            tag: 'div-by-zero',
+            val: result7
+          };
+          break;
+        }
+        case 3: {
+          var ptr8 = dataView(memory0).getUint32(ret + 12, true);
+          var len8 = dataView(memory0).getUint32(ret + 16, true);
+          var result8 = utf8Decoder.decode(new Uint8Array(memory0.buffer, ptr8, len8));
+          variant10= {
+            tag: 'syntax',
+            val: result8
+          };
+          break;
+        }
+        case 4: {
+          var ptr9 = dataView(memory0).getUint32(ret + 12, true);
+          var len9 = dataView(memory0).getUint32(ret + 16, true);
+          var result9 = utf8Decoder.decode(new Uint8Array(memory0.buffer, ptr9, len9));
+          variant10= {
+            tag: 'validation',
+            val: result9
+          };
+          break;
+        }
+        default: {
+          throw new TypeError('invalid variant discriminant for NumericsError');
+        }
+      }
+      variant11= {
+        tag: 'err',
+        val: variant10
+      };
+      break;
+    }
+    default: {
+      throw new TypeError('invalid variant discriminant for expected');
+    }
+  }
+  _debugLog('[iface="root:component/numerics", function="mul-integer"][Instruction::Return]', {
+    funcName: 'mul-integer',
+    paramCount: 1,
+    async: false,
+    postReturn: true
+  });
+  const retCopy = variant11;
+  
+  let cstate = getOrCreateAsyncState(0);
+  cstate.mayLeave = false;
+  postReturn3(ret);
+  cstate.mayLeave = true;
+  
+  
+  
+  if (typeof retCopy === 'object' && retCopy.tag === 'err') {
+    throw new ComponentError(retCopy.val);
+  }
+  return retCopy.val;
+  
+}
+let numericsDivInteger;
+
+function divInteger(arg0, arg1) {
+  var {r0: v0_0, r1: v0_1, r2: v0_2, r3: v0_3, sign: v0_4 } = arg0;
+  var val1 = v0_4;
+  let enum1;
+  switch (val1) {
+    case 'plus': {
+      enum1 = 0;
+      break;
+    }
+    case 'minus': {
+      enum1 = 1;
+      break;
+    }
+    default: {
+      if ((v0_4) instanceof Error) {
+        console.error(v0_4);
+      }
+      
+      throw new TypeError(`"${val1}" is not one of the cases of sign`);
+    }
+  }
+  var {r0: v2_0, r1: v2_1, r2: v2_2, r3: v2_3, sign: v2_4 } = arg1;
+  var val3 = v2_4;
+  let enum3;
+  switch (val3) {
+    case 'plus': {
+      enum3 = 0;
+      break;
+    }
+    case 'minus': {
+      enum3 = 1;
+      break;
+    }
+    default: {
+      if ((v2_4) instanceof Error) {
+        console.error(v2_4);
+      }
+      
+      throw new TypeError(`"${val3}" is not one of the cases of sign`);
+    }
+  }
+  _debugLog('[iface="root:component/numerics", function="div-integer"][Instruction::CallWasm] enter', {
+    funcName: 'div-integer',
+    paramCount: 10,
+    async: false,
+    postReturn: true,
+  });
+  const _wasm_call_currentTaskID = startCurrentTask(0, false, 'numericsDivInteger');
+  const ret = numericsDivInteger(toUint64(v0_0), toUint64(v0_1), toUint64(v0_2), toUint64(v0_3), enum1, toUint64(v2_0), toUint64(v2_1), toUint64(v2_2), toUint64(v2_3), enum3);
+  endCurrentTask(0);
+  let variant11;
+  switch (dataView(memory0).getUint8(ret + 0, true)) {
+    case 0: {
+      let enum4;
+      switch (dataView(memory0).getUint8(ret + 40, true)) {
+        case 0: {
+          enum4 = 'plus';
+          break;
+        }
+        case 1: {
+          enum4 = 'minus';
+          break;
+        }
+        default: {
+          throw new TypeError('invalid discriminant specified for Sign');
+        }
+      }
+      variant11= {
+        tag: 'ok',
+        val: {
+          r0: BigInt.asUintN(64, dataView(memory0).getBigInt64(ret + 8, true)),
+          r1: BigInt.asUintN(64, dataView(memory0).getBigInt64(ret + 16, true)),
+          r2: BigInt.asUintN(64, dataView(memory0).getBigInt64(ret + 24, true)),
+          r3: BigInt.asUintN(64, dataView(memory0).getBigInt64(ret + 32, true)),
+          sign: enum4,
+        }
+      };
+      break;
+    }
+    case 1: {
+      let variant10;
+      switch (dataView(memory0).getUint8(ret + 8, true)) {
+        case 0: {
+          var ptr5 = dataView(memory0).getUint32(ret + 12, true);
+          var len5 = dataView(memory0).getUint32(ret + 16, true);
+          var result5 = utf8Decoder.decode(new Uint8Array(memory0.buffer, ptr5, len5));
+          variant10= {
+            tag: 'message',
+            val: result5
+          };
+          break;
+        }
+        case 1: {
+          var ptr6 = dataView(memory0).getUint32(ret + 12, true);
+          var len6 = dataView(memory0).getUint32(ret + 16, true);
+          var result6 = utf8Decoder.decode(new Uint8Array(memory0.buffer, ptr6, len6));
+          variant10= {
+            tag: 'overflow',
+            val: result6
+          };
+          break;
+        }
+        case 2: {
+          var ptr7 = dataView(memory0).getUint32(ret + 12, true);
+          var len7 = dataView(memory0).getUint32(ret + 16, true);
+          var result7 = utf8Decoder.decode(new Uint8Array(memory0.buffer, ptr7, len7));
+          variant10= {
+            tag: 'div-by-zero',
+            val: result7
+          };
+          break;
+        }
+        case 3: {
+          var ptr8 = dataView(memory0).getUint32(ret + 12, true);
+          var len8 = dataView(memory0).getUint32(ret + 16, true);
+          var result8 = utf8Decoder.decode(new Uint8Array(memory0.buffer, ptr8, len8));
+          variant10= {
+            tag: 'syntax',
+            val: result8
+          };
+          break;
+        }
+        case 4: {
+          var ptr9 = dataView(memory0).getUint32(ret + 12, true);
+          var len9 = dataView(memory0).getUint32(ret + 16, true);
+          var result9 = utf8Decoder.decode(new Uint8Array(memory0.buffer, ptr9, len9));
+          variant10= {
+            tag: 'validation',
+            val: result9
+          };
+          break;
+        }
+        default: {
+          throw new TypeError('invalid variant discriminant for NumericsError');
+        }
+      }
+      variant11= {
+        tag: 'err',
+        val: variant10
+      };
+      break;
+    }
+    default: {
+      throw new TypeError('invalid variant discriminant for expected');
+    }
+  }
+  _debugLog('[iface="root:component/numerics", function="div-integer"][Instruction::Return]', {
+    funcName: 'div-integer',
+    paramCount: 1,
+    async: false,
+    postReturn: true
+  });
+  const retCopy = variant11;
+  
+  let cstate = getOrCreateAsyncState(0);
+  cstate.mayLeave = false;
+  postReturn3(ret);
+  cstate.mayLeave = true;
+  
+  
+  
+  if (typeof retCopy === 'object' && retCopy.tag === 'err') {
+    throw new ComponentError(retCopy.val);
+  }
+  return retCopy.val;
+  
+}
+let numericsSqrtInteger;
+
+function sqrtInteger(arg0) {
+  var {r0: v0_0, r1: v0_1, r2: v0_2, r3: v0_3, sign: v0_4 } = arg0;
+  var val1 = v0_4;
+  let enum1;
+  switch (val1) {
+    case 'plus': {
+      enum1 = 0;
+      break;
+    }
+    case 'minus': {
+      enum1 = 1;
+      break;
+    }
+    default: {
+      if ((v0_4) instanceof Error) {
+        console.error(v0_4);
+      }
+      
+      throw new TypeError(`"${val1}" is not one of the cases of sign`);
+    }
+  }
+  _debugLog('[iface="root:component/numerics", function="sqrt-integer"][Instruction::CallWasm] enter', {
+    funcName: 'sqrt-integer',
+    paramCount: 5,
+    async: false,
+    postReturn: true,
+  });
+  const _wasm_call_currentTaskID = startCurrentTask(0, false, 'numericsSqrtInteger');
+  const ret = numericsSqrtInteger(toUint64(v0_0), toUint64(v0_1), toUint64(v0_2), toUint64(v0_3), enum1);
+  endCurrentTask(0);
+  let variant9;
+  switch (dataView(memory0).getUint8(ret + 0, true)) {
+    case 0: {
+      let enum2;
+      switch (dataView(memory0).getUint8(ret + 40, true)) {
+        case 0: {
+          enum2 = 'plus';
+          break;
+        }
+        case 1: {
+          enum2 = 'minus';
+          break;
+        }
+        default: {
+          throw new TypeError('invalid discriminant specified for Sign');
+        }
+      }
+      variant9= {
+        tag: 'ok',
+        val: {
+          r0: BigInt.asUintN(64, dataView(memory0).getBigInt64(ret + 8, true)),
+          r1: BigInt.asUintN(64, dataView(memory0).getBigInt64(ret + 16, true)),
+          r2: BigInt.asUintN(64, dataView(memory0).getBigInt64(ret + 24, true)),
+          r3: BigInt.asUintN(64, dataView(memory0).getBigInt64(ret + 32, true)),
+          sign: enum2,
+        }
+      };
+      break;
+    }
+    case 1: {
+      let variant8;
+      switch (dataView(memory0).getUint8(ret + 8, true)) {
+        case 0: {
+          var ptr3 = dataView(memory0).getUint32(ret + 12, true);
+          var len3 = dataView(memory0).getUint32(ret + 16, true);
+          var result3 = utf8Decoder.decode(new Uint8Array(memory0.buffer, ptr3, len3));
+          variant8= {
+            tag: 'message',
+            val: result3
+          };
+          break;
+        }
+        case 1: {
+          var ptr4 = dataView(memory0).getUint32(ret + 12, true);
+          var len4 = dataView(memory0).getUint32(ret + 16, true);
+          var result4 = utf8Decoder.decode(new Uint8Array(memory0.buffer, ptr4, len4));
+          variant8= {
+            tag: 'overflow',
+            val: result4
+          };
+          break;
+        }
+        case 2: {
+          var ptr5 = dataView(memory0).getUint32(ret + 12, true);
+          var len5 = dataView(memory0).getUint32(ret + 16, true);
+          var result5 = utf8Decoder.decode(new Uint8Array(memory0.buffer, ptr5, len5));
+          variant8= {
+            tag: 'div-by-zero',
+            val: result5
+          };
+          break;
+        }
+        case 3: {
+          var ptr6 = dataView(memory0).getUint32(ret + 12, true);
+          var len6 = dataView(memory0).getUint32(ret + 16, true);
+          var result6 = utf8Decoder.decode(new Uint8Array(memory0.buffer, ptr6, len6));
+          variant8= {
+            tag: 'syntax',
+            val: result6
+          };
+          break;
+        }
+        case 4: {
+          var ptr7 = dataView(memory0).getUint32(ret + 12, true);
+          var len7 = dataView(memory0).getUint32(ret + 16, true);
+          var result7 = utf8Decoder.decode(new Uint8Array(memory0.buffer, ptr7, len7));
+          variant8= {
+            tag: 'validation',
+            val: result7
+          };
+          break;
+        }
+        default: {
+          throw new TypeError('invalid variant discriminant for NumericsError');
+        }
+      }
+      variant9= {
+        tag: 'err',
+        val: variant8
+      };
+      break;
+    }
+    default: {
+      throw new TypeError('invalid variant discriminant for expected');
+    }
+  }
+  _debugLog('[iface="root:component/numerics", function="sqrt-integer"][Instruction::Return]', {
+    funcName: 'sqrt-integer',
+    paramCount: 1,
+    async: false,
+    postReturn: true
+  });
+  const retCopy = variant9;
+  
+  let cstate = getOrCreateAsyncState(0);
+  cstate.mayLeave = false;
+  postReturn3(ret);
+  cstate.mayLeave = true;
+  
+  
+  
+  if (typeof retCopy === 'object' && retCopy.tag === 'err') {
+    throw new ComponentError(retCopy.val);
+  }
+  return retCopy.val;
+  
+}
+let numericsIntegerToDecimal;
+
+function integerToDecimal(arg0) {
+  var {r0: v0_0, r1: v0_1, r2: v0_2, r3: v0_3, sign: v0_4 } = arg0;
+  var val1 = v0_4;
+  let enum1;
+  switch (val1) {
+    case 'plus': {
+      enum1 = 0;
+      break;
+    }
+    case 'minus': {
+      enum1 = 1;
+      break;
+    }
+    default: {
+      if ((v0_4) instanceof Error) {
+        console.error(v0_4);
+      }
+      
+      throw new TypeError(`"${val1}" is not one of the cases of sign`);
+    }
+  }
+  _debugLog('[iface="root:component/numerics", function="integer-to-decimal"][Instruction::CallWasm] enter', {
+    funcName: 'integer-to-decimal',
+    paramCount: 5,
+    async: false,
+    postReturn: true,
+  });
+  const _wasm_call_currentTaskID = startCurrentTask(0, false, 'numericsIntegerToDecimal');
+  const ret = numericsIntegerToDecimal(toUint64(v0_0), toUint64(v0_1), toUint64(v0_2), toUint64(v0_3), enum1);
+  endCurrentTask(0);
+  let variant9;
+  switch (dataView(memory0).getUint8(ret + 0, true)) {
+    case 0: {
+      let enum2;
+      switch (dataView(memory0).getUint8(ret + 40, true)) {
+        case 0: {
+          enum2 = 'plus';
+          break;
+        }
+        case 1: {
+          enum2 = 'minus';
+          break;
+        }
+        default: {
+          throw new TypeError('invalid discriminant specified for Sign');
+        }
+      }
+      variant9= {
+        tag: 'ok',
+        val: {
+          r0: BigInt.asUintN(64, dataView(memory0).getBigInt64(ret + 8, true)),
+          r1: BigInt.asUintN(64, dataView(memory0).getBigInt64(ret + 16, true)),
+          r2: BigInt.asUintN(64, dataView(memory0).getBigInt64(ret + 24, true)),
+          r3: BigInt.asUintN(64, dataView(memory0).getBigInt64(ret + 32, true)),
+          sign: enum2,
+        }
+      };
+      break;
+    }
+    case 1: {
+      let variant8;
+      switch (dataView(memory0).getUint8(ret + 8, true)) {
+        case 0: {
+          var ptr3 = dataView(memory0).getUint32(ret + 12, true);
+          var len3 = dataView(memory0).getUint32(ret + 16, true);
+          var result3 = utf8Decoder.decode(new Uint8Array(memory0.buffer, ptr3, len3));
+          variant8= {
+            tag: 'message',
+            val: result3
+          };
+          break;
+        }
+        case 1: {
+          var ptr4 = dataView(memory0).getUint32(ret + 12, true);
+          var len4 = dataView(memory0).getUint32(ret + 16, true);
+          var result4 = utf8Decoder.decode(new Uint8Array(memory0.buffer, ptr4, len4));
+          variant8= {
+            tag: 'overflow',
+            val: result4
+          };
+          break;
+        }
+        case 2: {
+          var ptr5 = dataView(memory0).getUint32(ret + 12, true);
+          var len5 = dataView(memory0).getUint32(ret + 16, true);
+          var result5 = utf8Decoder.decode(new Uint8Array(memory0.buffer, ptr5, len5));
+          variant8= {
+            tag: 'div-by-zero',
+            val: result5
+          };
+          break;
+        }
+        case 3: {
+          var ptr6 = dataView(memory0).getUint32(ret + 12, true);
+          var len6 = dataView(memory0).getUint32(ret + 16, true);
+          var result6 = utf8Decoder.decode(new Uint8Array(memory0.buffer, ptr6, len6));
+          variant8= {
+            tag: 'syntax',
+            val: result6
+          };
+          break;
+        }
+        case 4: {
+          var ptr7 = dataView(memory0).getUint32(ret + 12, true);
+          var len7 = dataView(memory0).getUint32(ret + 16, true);
+          var result7 = utf8Decoder.decode(new Uint8Array(memory0.buffer, ptr7, len7));
+          variant8= {
+            tag: 'validation',
+            val: result7
+          };
+          break;
+        }
+        default: {
+          throw new TypeError('invalid variant discriminant for NumericsError');
+        }
+      }
+      variant9= {
+        tag: 'err',
+        val: variant8
+      };
+      break;
+    }
+    default: {
+      throw new TypeError('invalid variant discriminant for expected');
+    }
+  }
+  _debugLog('[iface="root:component/numerics", function="integer-to-decimal"][Instruction::Return]', {
+    funcName: 'integer-to-decimal',
+    paramCount: 1,
+    async: false,
+    postReturn: true
+  });
+  const retCopy = variant9;
+  
+  let cstate = getOrCreateAsyncState(0);
+  cstate.mayLeave = false;
+  postReturn3(ret);
+  cstate.mayLeave = true;
+  
+  
+  
+  if (typeof retCopy === 'object' && retCopy.tag === 'err') {
+    throw new ComponentError(retCopy.val);
+  }
+  return retCopy.val;
+  
+}
+let numericsDecimalToInteger;
+
+function decimalToInteger(arg0) {
+  var {r0: v0_0, r1: v0_1, r2: v0_2, r3: v0_3, sign: v0_4 } = arg0;
+  var val1 = v0_4;
+  let enum1;
+  switch (val1) {
+    case 'plus': {
+      enum1 = 0;
+      break;
+    }
+    case 'minus': {
+      enum1 = 1;
+      break;
+    }
+    default: {
+      if ((v0_4) instanceof Error) {
+        console.error(v0_4);
+      }
+      
+      throw new TypeError(`"${val1}" is not one of the cases of sign`);
+    }
+  }
+  _debugLog('[iface="root:component/numerics", function="decimal-to-integer"][Instruction::CallWasm] enter', {
+    funcName: 'decimal-to-integer',
+    paramCount: 5,
+    async: false,
+    postReturn: true,
+  });
+  const _wasm_call_currentTaskID = startCurrentTask(0, false, 'numericsDecimalToInteger');
+  const ret = numericsDecimalToInteger(toUint64(v0_0), toUint64(v0_1), toUint64(v0_2), toUint64(v0_3), enum1);
+  endCurrentTask(0);
+  let variant9;
+  switch (dataView(memory0).getUint8(ret + 0, true)) {
+    case 0: {
+      let enum2;
+      switch (dataView(memory0).getUint8(ret + 40, true)) {
+        case 0: {
+          enum2 = 'plus';
+          break;
+        }
+        case 1: {
+          enum2 = 'minus';
+          break;
+        }
+        default: {
+          throw new TypeError('invalid discriminant specified for Sign');
+        }
+      }
+      variant9= {
+        tag: 'ok',
+        val: {
+          r0: BigInt.asUintN(64, dataView(memory0).getBigInt64(ret + 8, true)),
+          r1: BigInt.asUintN(64, dataView(memory0).getBigInt64(ret + 16, true)),
+          r2: BigInt.asUintN(64, dataView(memory0).getBigInt64(ret + 24, true)),
+          r3: BigInt.asUintN(64, dataView(memory0).getBigInt64(ret + 32, true)),
+          sign: enum2,
+        }
+      };
+      break;
+    }
+    case 1: {
+      let variant8;
+      switch (dataView(memory0).getUint8(ret + 8, true)) {
+        case 0: {
+          var ptr3 = dataView(memory0).getUint32(ret + 12, true);
+          var len3 = dataView(memory0).getUint32(ret + 16, true);
+          var result3 = utf8Decoder.decode(new Uint8Array(memory0.buffer, ptr3, len3));
+          variant8= {
+            tag: 'message',
+            val: result3
+          };
+          break;
+        }
+        case 1: {
+          var ptr4 = dataView(memory0).getUint32(ret + 12, true);
+          var len4 = dataView(memory0).getUint32(ret + 16, true);
+          var result4 = utf8Decoder.decode(new Uint8Array(memory0.buffer, ptr4, len4));
+          variant8= {
+            tag: 'overflow',
+            val: result4
+          };
+          break;
+        }
+        case 2: {
+          var ptr5 = dataView(memory0).getUint32(ret + 12, true);
+          var len5 = dataView(memory0).getUint32(ret + 16, true);
+          var result5 = utf8Decoder.decode(new Uint8Array(memory0.buffer, ptr5, len5));
+          variant8= {
+            tag: 'div-by-zero',
+            val: result5
+          };
+          break;
+        }
+        case 3: {
+          var ptr6 = dataView(memory0).getUint32(ret + 12, true);
+          var len6 = dataView(memory0).getUint32(ret + 16, true);
+          var result6 = utf8Decoder.decode(new Uint8Array(memory0.buffer, ptr6, len6));
+          variant8= {
+            tag: 'syntax',
+            val: result6
+          };
+          break;
+        }
+        case 4: {
+          var ptr7 = dataView(memory0).getUint32(ret + 12, true);
+          var len7 = dataView(memory0).getUint32(ret + 16, true);
+          var result7 = utf8Decoder.decode(new Uint8Array(memory0.buffer, ptr7, len7));
+          variant8= {
+            tag: 'validation',
+            val: result7
+          };
+          break;
+        }
+        default: {
+          throw new TypeError('invalid variant discriminant for NumericsError');
+        }
+      }
+      variant9= {
+        tag: 'err',
+        val: variant8
+      };
+      break;
+    }
+    default: {
+      throw new TypeError('invalid variant discriminant for expected');
+    }
+  }
+  _debugLog('[iface="root:component/numerics", function="decimal-to-integer"][Instruction::Return]', {
+    funcName: 'decimal-to-integer',
+    paramCount: 1,
+    async: false,
+    postReturn: true
+  });
+  const retCopy = variant9;
+  
+  let cstate = getOrCreateAsyncState(0);
+  cstate.mayLeave = false;
+  postReturn3(ret);
+  cstate.mayLeave = true;
+  
+  
+  
+  if (typeof retCopy === 'object' && retCopy.tag === 'err') {
+    throw new ComponentError(retCopy.val);
+  }
+  return retCopy.val;
+  
+}
+let numericsU64ToDecimal;
+
+function u64ToDecimal(arg0) {
+  _debugLog('[iface="root:component/numerics", function="u64-to-decimal"][Instruction::CallWasm] enter', {
+    funcName: 'u64-to-decimal',
+    paramCount: 1,
+    async: false,
+    postReturn: true,
+  });
+  const _wasm_call_currentTaskID = startCurrentTask(0, false, 'numericsU64ToDecimal');
+  const ret = numericsU64ToDecimal(toUint64(arg0));
+  endCurrentTask(0);
+  let variant7;
+  switch (dataView(memory0).getUint8(ret + 0, true)) {
+    case 0: {
+      let enum0;
+      switch (dataView(memory0).getUint8(ret + 40, true)) {
+        case 0: {
+          enum0 = 'plus';
+          break;
+        }
+        case 1: {
+          enum0 = 'minus';
+          break;
+        }
+        default: {
+          throw new TypeError('invalid discriminant specified for Sign');
+        }
+      }
+      variant7= {
+        tag: 'ok',
+        val: {
+          r0: BigInt.asUintN(64, dataView(memory0).getBigInt64(ret + 8, true)),
+          r1: BigInt.asUintN(64, dataView(memory0).getBigInt64(ret + 16, true)),
+          r2: BigInt.asUintN(64, dataView(memory0).getBigInt64(ret + 24, true)),
+          r3: BigInt.asUintN(64, dataView(memory0).getBigInt64(ret + 32, true)),
+          sign: enum0,
+        }
+      };
+      break;
+    }
+    case 1: {
+      let variant6;
+      switch (dataView(memory0).getUint8(ret + 8, true)) {
+        case 0: {
+          var ptr1 = dataView(memory0).getUint32(ret + 12, true);
+          var len1 = dataView(memory0).getUint32(ret + 16, true);
+          var result1 = utf8Decoder.decode(new Uint8Array(memory0.buffer, ptr1, len1));
+          variant6= {
+            tag: 'message',
+            val: result1
+          };
+          break;
+        }
+        case 1: {
+          var ptr2 = dataView(memory0).getUint32(ret + 12, true);
+          var len2 = dataView(memory0).getUint32(ret + 16, true);
+          var result2 = utf8Decoder.decode(new Uint8Array(memory0.buffer, ptr2, len2));
+          variant6= {
+            tag: 'overflow',
+            val: result2
+          };
+          break;
+        }
+        case 2: {
+          var ptr3 = dataView(memory0).getUint32(ret + 12, true);
+          var len3 = dataView(memory0).getUint32(ret + 16, true);
+          var result3 = utf8Decoder.decode(new Uint8Array(memory0.buffer, ptr3, len3));
+          variant6= {
+            tag: 'div-by-zero',
+            val: result3
+          };
+          break;
+        }
+        case 3: {
+          var ptr4 = dataView(memory0).getUint32(ret + 12, true);
+          var len4 = dataView(memory0).getUint32(ret + 16, true);
+          var result4 = utf8Decoder.decode(new Uint8Array(memory0.buffer, ptr4, len4));
+          variant6= {
+            tag: 'syntax',
+            val: result4
+          };
+          break;
+        }
+        case 4: {
+          var ptr5 = dataView(memory0).getUint32(ret + 12, true);
+          var len5 = dataView(memory0).getUint32(ret + 16, true);
+          var result5 = utf8Decoder.decode(new Uint8Array(memory0.buffer, ptr5, len5));
+          variant6= {
+            tag: 'validation',
+            val: result5
+          };
+          break;
+        }
+        default: {
+          throw new TypeError('invalid variant discriminant for NumericsError');
+        }
+      }
+      variant7= {
+        tag: 'err',
+        val: variant6
+      };
+      break;
+    }
+    default: {
+      throw new TypeError('invalid variant discriminant for expected');
+    }
+  }
+  _debugLog('[iface="root:component/numerics", function="u64-to-decimal"][Instruction::Return]', {
+    funcName: 'u64-to-decimal',
+    paramCount: 1,
+    async: false,
+    postReturn: true
+  });
+  const retCopy = variant7;
+  
+  let cstate = getOrCreateAsyncState(0);
+  cstate.mayLeave = false;
+  postReturn3(ret);
+  cstate.mayLeave = true;
+  
+  
+  
+  if (typeof retCopy === 'object' && retCopy.tag === 'err') {
+    throw new ComponentError(retCopy.val);
+  }
+  return retCopy.val;
+  
+}
+let numericsS64ToDecimal;
+
+function s64ToDecimal(arg0) {
+  _debugLog('[iface="root:component/numerics", function="s64-to-decimal"][Instruction::CallWasm] enter', {
+    funcName: 's64-to-decimal',
+    paramCount: 1,
+    async: false,
+    postReturn: true,
+  });
+  const _wasm_call_currentTaskID = startCurrentTask(0, false, 'numericsS64ToDecimal');
+  const ret = numericsS64ToDecimal(toInt64(arg0));
+  endCurrentTask(0);
+  let variant7;
+  switch (dataView(memory0).getUint8(ret + 0, true)) {
+    case 0: {
+      let enum0;
+      switch (dataView(memory0).getUint8(ret + 40, true)) {
+        case 0: {
+          enum0 = 'plus';
+          break;
+        }
+        case 1: {
+          enum0 = 'minus';
+          break;
+        }
+        default: {
+          throw new TypeError('invalid discriminant specified for Sign');
+        }
+      }
+      variant7= {
+        tag: 'ok',
+        val: {
+          r0: BigInt.asUintN(64, dataView(memory0).getBigInt64(ret + 8, true)),
+          r1: BigInt.asUintN(64, dataView(memory0).getBigInt64(ret + 16, true)),
+          r2: BigInt.asUintN(64, dataView(memory0).getBigInt64(ret + 24, true)),
+          r3: BigInt.asUintN(64, dataView(memory0).getBigInt64(ret + 32, true)),
+          sign: enum0,
+        }
+      };
+      break;
+    }
+    case 1: {
+      let variant6;
+      switch (dataView(memory0).getUint8(ret + 8, true)) {
+        case 0: {
+          var ptr1 = dataView(memory0).getUint32(ret + 12, true);
+          var len1 = dataView(memory0).getUint32(ret + 16, true);
+          var result1 = utf8Decoder.decode(new Uint8Array(memory0.buffer, ptr1, len1));
+          variant6= {
+            tag: 'message',
+            val: result1
+          };
+          break;
+        }
+        case 1: {
+          var ptr2 = dataView(memory0).getUint32(ret + 12, true);
+          var len2 = dataView(memory0).getUint32(ret + 16, true);
+          var result2 = utf8Decoder.decode(new Uint8Array(memory0.buffer, ptr2, len2));
+          variant6= {
+            tag: 'overflow',
+            val: result2
+          };
+          break;
+        }
+        case 2: {
+          var ptr3 = dataView(memory0).getUint32(ret + 12, true);
+          var len3 = dataView(memory0).getUint32(ret + 16, true);
+          var result3 = utf8Decoder.decode(new Uint8Array(memory0.buffer, ptr3, len3));
+          variant6= {
+            tag: 'div-by-zero',
+            val: result3
+          };
+          break;
+        }
+        case 3: {
+          var ptr4 = dataView(memory0).getUint32(ret + 12, true);
+          var len4 = dataView(memory0).getUint32(ret + 16, true);
+          var result4 = utf8Decoder.decode(new Uint8Array(memory0.buffer, ptr4, len4));
+          variant6= {
+            tag: 'syntax',
+            val: result4
+          };
+          break;
+        }
+        case 4: {
+          var ptr5 = dataView(memory0).getUint32(ret + 12, true);
+          var len5 = dataView(memory0).getUint32(ret + 16, true);
+          var result5 = utf8Decoder.decode(new Uint8Array(memory0.buffer, ptr5, len5));
+          variant6= {
+            tag: 'validation',
+            val: result5
+          };
+          break;
+        }
+        default: {
+          throw new TypeError('invalid variant discriminant for NumericsError');
+        }
+      }
+      variant7= {
+        tag: 'err',
+        val: variant6
+      };
+      break;
+    }
+    default: {
+      throw new TypeError('invalid variant discriminant for expected');
+    }
+  }
+  _debugLog('[iface="root:component/numerics", function="s64-to-decimal"][Instruction::Return]', {
+    funcName: 's64-to-decimal',
+    paramCount: 1,
+    async: false,
+    postReturn: true
+  });
+  const retCopy = variant7;
+  
+  let cstate = getOrCreateAsyncState(0);
+  cstate.mayLeave = false;
+  postReturn3(ret);
+  cstate.mayLeave = true;
+  
+  
+  
+  if (typeof retCopy === 'object' && retCopy.tag === 'err') {
+    throw new ComponentError(retCopy.val);
+  }
+  return retCopy.val;
+  
+}
+let numericsF64ToDecimal;
+
+function f64ToDecimal(arg0) {
+  _debugLog('[iface="root:component/numerics", function="f64-to-decimal"][Instruction::CallWasm] enter', {
+    funcName: 'f64-to-decimal',
+    paramCount: 1,
+    async: false,
+    postReturn: true,
+  });
+  const _wasm_call_currentTaskID = startCurrentTask(0, false, 'numericsF64ToDecimal');
+  const ret = numericsF64ToDecimal(+arg0);
+  endCurrentTask(0);
+  let variant7;
+  switch (dataView(memory0).getUint8(ret + 0, true)) {
+    case 0: {
+      let enum0;
+      switch (dataView(memory0).getUint8(ret + 40, true)) {
+        case 0: {
+          enum0 = 'plus';
+          break;
+        }
+        case 1: {
+          enum0 = 'minus';
+          break;
+        }
+        default: {
+          throw new TypeError('invalid discriminant specified for Sign');
+        }
+      }
+      variant7= {
+        tag: 'ok',
+        val: {
+          r0: BigInt.asUintN(64, dataView(memory0).getBigInt64(ret + 8, true)),
+          r1: BigInt.asUintN(64, dataView(memory0).getBigInt64(ret + 16, true)),
+          r2: BigInt.asUintN(64, dataView(memory0).getBigInt64(ret + 24, true)),
+          r3: BigInt.asUintN(64, dataView(memory0).getBigInt64(ret + 32, true)),
+          sign: enum0,
+        }
+      };
+      break;
+    }
+    case 1: {
+      let variant6;
+      switch (dataView(memory0).getUint8(ret + 8, true)) {
+        case 0: {
+          var ptr1 = dataView(memory0).getUint32(ret + 12, true);
+          var len1 = dataView(memory0).getUint32(ret + 16, true);
+          var result1 = utf8Decoder.decode(new Uint8Array(memory0.buffer, ptr1, len1));
+          variant6= {
+            tag: 'message',
+            val: result1
+          };
+          break;
+        }
+        case 1: {
+          var ptr2 = dataView(memory0).getUint32(ret + 12, true);
+          var len2 = dataView(memory0).getUint32(ret + 16, true);
+          var result2 = utf8Decoder.decode(new Uint8Array(memory0.buffer, ptr2, len2));
+          variant6= {
+            tag: 'overflow',
+            val: result2
+          };
+          break;
+        }
+        case 2: {
+          var ptr3 = dataView(memory0).getUint32(ret + 12, true);
+          var len3 = dataView(memory0).getUint32(ret + 16, true);
+          var result3 = utf8Decoder.decode(new Uint8Array(memory0.buffer, ptr3, len3));
+          variant6= {
+            tag: 'div-by-zero',
+            val: result3
+          };
+          break;
+        }
+        case 3: {
+          var ptr4 = dataView(memory0).getUint32(ret + 12, true);
+          var len4 = dataView(memory0).getUint32(ret + 16, true);
+          var result4 = utf8Decoder.decode(new Uint8Array(memory0.buffer, ptr4, len4));
+          variant6= {
+            tag: 'syntax',
+            val: result4
+          };
+          break;
+        }
+        case 4: {
+          var ptr5 = dataView(memory0).getUint32(ret + 12, true);
+          var len5 = dataView(memory0).getUint32(ret + 16, true);
+          var result5 = utf8Decoder.decode(new Uint8Array(memory0.buffer, ptr5, len5));
+          variant6= {
+            tag: 'validation',
+            val: result5
+          };
+          break;
+        }
+        default: {
+          throw new TypeError('invalid variant discriminant for NumericsError');
+        }
+      }
+      variant7= {
+        tag: 'err',
+        val: variant6
+      };
+      break;
+    }
+    default: {
+      throw new TypeError('invalid variant discriminant for expected');
+    }
+  }
+  _debugLog('[iface="root:component/numerics", function="f64-to-decimal"][Instruction::Return]', {
+    funcName: 'f64-to-decimal',
+    paramCount: 1,
+    async: false,
+    postReturn: true
+  });
+  const retCopy = variant7;
+  
+  let cstate = getOrCreateAsyncState(0);
+  cstate.mayLeave = false;
+  postReturn3(ret);
+  cstate.mayLeave = true;
+  
+  
+  
+  if (typeof retCopy === 'object' && retCopy.tag === 'err') {
+    throw new ComponentError(retCopy.val);
+  }
+  return retCopy.val;
+  
+}
+let numericsStringToDecimal;
+
+function stringToDecimal(arg0) {
+  var ptr0 = utf8Encode(arg0, realloc0, memory0);
+  var len0 = utf8EncodedLen;
+  _debugLog('[iface="root:component/numerics", function="string-to-decimal"][Instruction::CallWasm] enter', {
+    funcName: 'string-to-decimal',
+    paramCount: 2,
+    async: false,
+    postReturn: true,
+  });
+  const _wasm_call_currentTaskID = startCurrentTask(0, false, 'numericsStringToDecimal');
+  const ret = numericsStringToDecimal(ptr0, len0);
+  endCurrentTask(0);
+  let variant8;
+  switch (dataView(memory0).getUint8(ret + 0, true)) {
+    case 0: {
+      let enum1;
+      switch (dataView(memory0).getUint8(ret + 40, true)) {
+        case 0: {
+          enum1 = 'plus';
+          break;
+        }
+        case 1: {
+          enum1 = 'minus';
+          break;
+        }
+        default: {
+          throw new TypeError('invalid discriminant specified for Sign');
+        }
+      }
+      variant8= {
+        tag: 'ok',
+        val: {
+          r0: BigInt.asUintN(64, dataView(memory0).getBigInt64(ret + 8, true)),
+          r1: BigInt.asUintN(64, dataView(memory0).getBigInt64(ret + 16, true)),
+          r2: BigInt.asUintN(64, dataView(memory0).getBigInt64(ret + 24, true)),
+          r3: BigInt.asUintN(64, dataView(memory0).getBigInt64(ret + 32, true)),
+          sign: enum1,
+        }
+      };
+      break;
+    }
+    case 1: {
+      let variant7;
+      switch (dataView(memory0).getUint8(ret + 8, true)) {
+        case 0: {
+          var ptr2 = dataView(memory0).getUint32(ret + 12, true);
+          var len2 = dataView(memory0).getUint32(ret + 16, true);
+          var result2 = utf8Decoder.decode(new Uint8Array(memory0.buffer, ptr2, len2));
+          variant7= {
+            tag: 'message',
+            val: result2
+          };
+          break;
+        }
+        case 1: {
+          var ptr3 = dataView(memory0).getUint32(ret + 12, true);
+          var len3 = dataView(memory0).getUint32(ret + 16, true);
+          var result3 = utf8Decoder.decode(new Uint8Array(memory0.buffer, ptr3, len3));
+          variant7= {
+            tag: 'overflow',
+            val: result3
+          };
+          break;
+        }
+        case 2: {
+          var ptr4 = dataView(memory0).getUint32(ret + 12, true);
+          var len4 = dataView(memory0).getUint32(ret + 16, true);
+          var result4 = utf8Decoder.decode(new Uint8Array(memory0.buffer, ptr4, len4));
+          variant7= {
+            tag: 'div-by-zero',
+            val: result4
+          };
+          break;
+        }
+        case 3: {
+          var ptr5 = dataView(memory0).getUint32(ret + 12, true);
+          var len5 = dataView(memory0).getUint32(ret + 16, true);
+          var result5 = utf8Decoder.decode(new Uint8Array(memory0.buffer, ptr5, len5));
+          variant7= {
+            tag: 'syntax',
+            val: result5
+          };
+          break;
+        }
+        case 4: {
+          var ptr6 = dataView(memory0).getUint32(ret + 12, true);
+          var len6 = dataView(memory0).getUint32(ret + 16, true);
+          var result6 = utf8Decoder.decode(new Uint8Array(memory0.buffer, ptr6, len6));
+          variant7= {
+            tag: 'validation',
+            val: result6
+          };
+          break;
+        }
+        default: {
+          throw new TypeError('invalid variant discriminant for NumericsError');
+        }
+      }
+      variant8= {
+        tag: 'err',
+        val: variant7
+      };
+      break;
+    }
+    default: {
+      throw new TypeError('invalid variant discriminant for expected');
+    }
+  }
+  _debugLog('[iface="root:component/numerics", function="string-to-decimal"][Instruction::Return]', {
+    funcName: 'string-to-decimal',
+    paramCount: 1,
+    async: false,
+    postReturn: true
+  });
+  const retCopy = variant8;
+  
+  let cstate = getOrCreateAsyncState(0);
+  cstate.mayLeave = false;
+  postReturn3(ret);
+  cstate.mayLeave = true;
+  
+  
+  
+  if (typeof retCopy === 'object' && retCopy.tag === 'err') {
+    throw new ComponentError(retCopy.val);
+  }
+  return retCopy.val;
+  
+}
+let numericsDecimalToString;
+
+function decimalToString(arg0) {
+  var {r0: v0_0, r1: v0_1, r2: v0_2, r3: v0_3, sign: v0_4 } = arg0;
+  var val1 = v0_4;
+  let enum1;
+  switch (val1) {
+    case 'plus': {
+      enum1 = 0;
+      break;
+    }
+    case 'minus': {
+      enum1 = 1;
+      break;
+    }
+    default: {
+      if ((v0_4) instanceof Error) {
+        console.error(v0_4);
+      }
+      
+      throw new TypeError(`"${val1}" is not one of the cases of sign`);
+    }
+  }
+  _debugLog('[iface="root:component/numerics", function="decimal-to-string"][Instruction::CallWasm] enter', {
+    funcName: 'decimal-to-string',
+    paramCount: 5,
+    async: false,
+    postReturn: true,
+  });
+  const _wasm_call_currentTaskID = startCurrentTask(0, false, 'numericsDecimalToString');
+  const ret = numericsDecimalToString(toUint64(v0_0), toUint64(v0_1), toUint64(v0_2), toUint64(v0_3), enum1);
+  endCurrentTask(0);
+  var ptr2 = dataView(memory0).getUint32(ret + 0, true);
+  var len2 = dataView(memory0).getUint32(ret + 4, true);
+  var result2 = utf8Decoder.decode(new Uint8Array(memory0.buffer, ptr2, len2));
+  _debugLog('[iface="root:component/numerics", function="decimal-to-string"][Instruction::Return]', {
+    funcName: 'decimal-to-string',
+    paramCount: 1,
+    async: false,
+    postReturn: true
+  });
+  const retCopy = result2;
+  
+  let cstate = getOrCreateAsyncState(0);
+  cstate.mayLeave = false;
+  postReturn0(ret);
+  cstate.mayLeave = true;
+  return retCopy;
+  
+}
+let numericsEqDecimal;
+
+function eqDecimal(arg0, arg1) {
+  var {r0: v0_0, r1: v0_1, r2: v0_2, r3: v0_3, sign: v0_4 } = arg0;
+  var val1 = v0_4;
+  let enum1;
+  switch (val1) {
+    case 'plus': {
+      enum1 = 0;
+      break;
+    }
+    case 'minus': {
+      enum1 = 1;
+      break;
+    }
+    default: {
+      if ((v0_4) instanceof Error) {
+        console.error(v0_4);
+      }
+      
+      throw new TypeError(`"${val1}" is not one of the cases of sign`);
+    }
+  }
+  var {r0: v2_0, r1: v2_1, r2: v2_2, r3: v2_3, sign: v2_4 } = arg1;
+  var val3 = v2_4;
+  let enum3;
+  switch (val3) {
+    case 'plus': {
+      enum3 = 0;
+      break;
+    }
+    case 'minus': {
+      enum3 = 1;
+      break;
+    }
+    default: {
+      if ((v2_4) instanceof Error) {
+        console.error(v2_4);
+      }
+      
+      throw new TypeError(`"${val3}" is not one of the cases of sign`);
+    }
+  }
+  _debugLog('[iface="root:component/numerics", function="eq-decimal"][Instruction::CallWasm] enter', {
+    funcName: 'eq-decimal',
+    paramCount: 10,
+    async: false,
+    postReturn: true,
+  });
+  const _wasm_call_currentTaskID = startCurrentTask(0, false, 'numericsEqDecimal');
+  const ret = numericsEqDecimal(toUint64(v0_0), toUint64(v0_1), toUint64(v0_2), toUint64(v0_3), enum1, toUint64(v2_0), toUint64(v2_1), toUint64(v2_2), toUint64(v2_3), enum3);
+  endCurrentTask(0);
+  let variant11;
+  switch (dataView(memory0).getUint8(ret + 0, true)) {
+    case 0: {
+      var bool4 = dataView(memory0).getUint8(ret + 4, true);
+      variant11= {
+        tag: 'ok',
+        val: bool4 == 0 ? false : (bool4 == 1 ? true : throwInvalidBool())
+      };
+      break;
+    }
+    case 1: {
+      let variant10;
+      switch (dataView(memory0).getUint8(ret + 4, true)) {
+        case 0: {
+          var ptr5 = dataView(memory0).getUint32(ret + 8, true);
+          var len5 = dataView(memory0).getUint32(ret + 12, true);
+          var result5 = utf8Decoder.decode(new Uint8Array(memory0.buffer, ptr5, len5));
+          variant10= {
+            tag: 'message',
+            val: result5
+          };
+          break;
+        }
+        case 1: {
+          var ptr6 = dataView(memory0).getUint32(ret + 8, true);
+          var len6 = dataView(memory0).getUint32(ret + 12, true);
+          var result6 = utf8Decoder.decode(new Uint8Array(memory0.buffer, ptr6, len6));
+          variant10= {
+            tag: 'overflow',
+            val: result6
+          };
+          break;
+        }
+        case 2: {
+          var ptr7 = dataView(memory0).getUint32(ret + 8, true);
+          var len7 = dataView(memory0).getUint32(ret + 12, true);
+          var result7 = utf8Decoder.decode(new Uint8Array(memory0.buffer, ptr7, len7));
+          variant10= {
+            tag: 'div-by-zero',
+            val: result7
+          };
+          break;
+        }
+        case 3: {
+          var ptr8 = dataView(memory0).getUint32(ret + 8, true);
+          var len8 = dataView(memory0).getUint32(ret + 12, true);
+          var result8 = utf8Decoder.decode(new Uint8Array(memory0.buffer, ptr8, len8));
+          variant10= {
+            tag: 'syntax',
+            val: result8
+          };
+          break;
+        }
+        case 4: {
+          var ptr9 = dataView(memory0).getUint32(ret + 8, true);
+          var len9 = dataView(memory0).getUint32(ret + 12, true);
+          var result9 = utf8Decoder.decode(new Uint8Array(memory0.buffer, ptr9, len9));
+          variant10= {
+            tag: 'validation',
+            val: result9
+          };
+          break;
+        }
+        default: {
+          throw new TypeError('invalid variant discriminant for NumericsError');
+        }
+      }
+      variant11= {
+        tag: 'err',
+        val: variant10
+      };
+      break;
+    }
+    default: {
+      throw new TypeError('invalid variant discriminant for expected');
+    }
+  }
+  _debugLog('[iface="root:component/numerics", function="eq-decimal"][Instruction::Return]', {
+    funcName: 'eq-decimal',
+    paramCount: 1,
+    async: false,
+    postReturn: true
+  });
+  const retCopy = variant11;
+  
+  let cstate = getOrCreateAsyncState(0);
+  cstate.mayLeave = false;
+  postReturn4(ret);
+  cstate.mayLeave = true;
+  
+  
+  
+  if (typeof retCopy === 'object' && retCopy.tag === 'err') {
+    throw new ComponentError(retCopy.val);
+  }
+  return retCopy.val;
+  
+}
+let numericsCmpDecimal;
+
+function cmpDecimal(arg0, arg1) {
+  var {r0: v0_0, r1: v0_1, r2: v0_2, r3: v0_3, sign: v0_4 } = arg0;
+  var val1 = v0_4;
+  let enum1;
+  switch (val1) {
+    case 'plus': {
+      enum1 = 0;
+      break;
+    }
+    case 'minus': {
+      enum1 = 1;
+      break;
+    }
+    default: {
+      if ((v0_4) instanceof Error) {
+        console.error(v0_4);
+      }
+      
+      throw new TypeError(`"${val1}" is not one of the cases of sign`);
+    }
+  }
+  var {r0: v2_0, r1: v2_1, r2: v2_2, r3: v2_3, sign: v2_4 } = arg1;
+  var val3 = v2_4;
+  let enum3;
+  switch (val3) {
+    case 'plus': {
+      enum3 = 0;
+      break;
+    }
+    case 'minus': {
+      enum3 = 1;
+      break;
+    }
+    default: {
+      if ((v2_4) instanceof Error) {
+        console.error(v2_4);
+      }
+      
+      throw new TypeError(`"${val3}" is not one of the cases of sign`);
+    }
+  }
+  _debugLog('[iface="root:component/numerics", function="cmp-decimal"][Instruction::CallWasm] enter', {
+    funcName: 'cmp-decimal',
+    paramCount: 10,
+    async: false,
+    postReturn: false,
+  });
+  const _wasm_call_currentTaskID = startCurrentTask(0, false, 'numericsCmpDecimal');
+  const ret = numericsCmpDecimal(toUint64(v0_0), toUint64(v0_1), toUint64(v0_2), toUint64(v0_3), enum1, toUint64(v2_0), toUint64(v2_1), toUint64(v2_2), toUint64(v2_3), enum3);
+  endCurrentTask(0);
+  let enum4;
+  switch (ret) {
+    case 0: {
+      enum4 = 'less';
+      break;
+    }
+    case 1: {
+      enum4 = 'equal';
+      break;
+    }
+    case 2: {
+      enum4 = 'greater';
+      break;
+    }
+    default: {
+      throw new TypeError('invalid discriminant specified for Ordering');
+    }
+  }
+  _debugLog('[iface="root:component/numerics", function="cmp-decimal"][Instruction::Return]', {
+    funcName: 'cmp-decimal',
+    paramCount: 1,
+    async: false,
+    postReturn: false
+  });
+  return enum4;
+}
+let numericsAddDecimal;
+
+function addDecimal(arg0, arg1) {
+  var {r0: v0_0, r1: v0_1, r2: v0_2, r3: v0_3, sign: v0_4 } = arg0;
+  var val1 = v0_4;
+  let enum1;
+  switch (val1) {
+    case 'plus': {
+      enum1 = 0;
+      break;
+    }
+    case 'minus': {
+      enum1 = 1;
+      break;
+    }
+    default: {
+      if ((v0_4) instanceof Error) {
+        console.error(v0_4);
+      }
+      
+      throw new TypeError(`"${val1}" is not one of the cases of sign`);
+    }
+  }
+  var {r0: v2_0, r1: v2_1, r2: v2_2, r3: v2_3, sign: v2_4 } = arg1;
+  var val3 = v2_4;
+  let enum3;
+  switch (val3) {
+    case 'plus': {
+      enum3 = 0;
+      break;
+    }
+    case 'minus': {
+      enum3 = 1;
+      break;
+    }
+    default: {
+      if ((v2_4) instanceof Error) {
+        console.error(v2_4);
+      }
+      
+      throw new TypeError(`"${val3}" is not one of the cases of sign`);
+    }
+  }
+  _debugLog('[iface="root:component/numerics", function="add-decimal"][Instruction::CallWasm] enter', {
+    funcName: 'add-decimal',
+    paramCount: 10,
+    async: false,
+    postReturn: true,
+  });
+  const _wasm_call_currentTaskID = startCurrentTask(0, false, 'numericsAddDecimal');
+  const ret = numericsAddDecimal(toUint64(v0_0), toUint64(v0_1), toUint64(v0_2), toUint64(v0_3), enum1, toUint64(v2_0), toUint64(v2_1), toUint64(v2_2), toUint64(v2_3), enum3);
+  endCurrentTask(0);
+  let variant11;
+  switch (dataView(memory0).getUint8(ret + 0, true)) {
+    case 0: {
+      let enum4;
+      switch (dataView(memory0).getUint8(ret + 40, true)) {
+        case 0: {
+          enum4 = 'plus';
+          break;
+        }
+        case 1: {
+          enum4 = 'minus';
+          break;
+        }
+        default: {
+          throw new TypeError('invalid discriminant specified for Sign');
+        }
+      }
+      variant11= {
+        tag: 'ok',
+        val: {
+          r0: BigInt.asUintN(64, dataView(memory0).getBigInt64(ret + 8, true)),
+          r1: BigInt.asUintN(64, dataView(memory0).getBigInt64(ret + 16, true)),
+          r2: BigInt.asUintN(64, dataView(memory0).getBigInt64(ret + 24, true)),
+          r3: BigInt.asUintN(64, dataView(memory0).getBigInt64(ret + 32, true)),
+          sign: enum4,
+        }
+      };
+      break;
+    }
+    case 1: {
+      let variant10;
+      switch (dataView(memory0).getUint8(ret + 8, true)) {
+        case 0: {
+          var ptr5 = dataView(memory0).getUint32(ret + 12, true);
+          var len5 = dataView(memory0).getUint32(ret + 16, true);
+          var result5 = utf8Decoder.decode(new Uint8Array(memory0.buffer, ptr5, len5));
+          variant10= {
+            tag: 'message',
+            val: result5
+          };
+          break;
+        }
+        case 1: {
+          var ptr6 = dataView(memory0).getUint32(ret + 12, true);
+          var len6 = dataView(memory0).getUint32(ret + 16, true);
+          var result6 = utf8Decoder.decode(new Uint8Array(memory0.buffer, ptr6, len6));
+          variant10= {
+            tag: 'overflow',
+            val: result6
+          };
+          break;
+        }
+        case 2: {
+          var ptr7 = dataView(memory0).getUint32(ret + 12, true);
+          var len7 = dataView(memory0).getUint32(ret + 16, true);
+          var result7 = utf8Decoder.decode(new Uint8Array(memory0.buffer, ptr7, len7));
+          variant10= {
+            tag: 'div-by-zero',
+            val: result7
+          };
+          break;
+        }
+        case 3: {
+          var ptr8 = dataView(memory0).getUint32(ret + 12, true);
+          var len8 = dataView(memory0).getUint32(ret + 16, true);
+          var result8 = utf8Decoder.decode(new Uint8Array(memory0.buffer, ptr8, len8));
+          variant10= {
+            tag: 'syntax',
+            val: result8
+          };
+          break;
+        }
+        case 4: {
+          var ptr9 = dataView(memory0).getUint32(ret + 12, true);
+          var len9 = dataView(memory0).getUint32(ret + 16, true);
+          var result9 = utf8Decoder.decode(new Uint8Array(memory0.buffer, ptr9, len9));
+          variant10= {
+            tag: 'validation',
+            val: result9
+          };
+          break;
+        }
+        default: {
+          throw new TypeError('invalid variant discriminant for NumericsError');
+        }
+      }
+      variant11= {
+        tag: 'err',
+        val: variant10
+      };
+      break;
+    }
+    default: {
+      throw new TypeError('invalid variant discriminant for expected');
+    }
+  }
+  _debugLog('[iface="root:component/numerics", function="add-decimal"][Instruction::Return]', {
+    funcName: 'add-decimal',
+    paramCount: 1,
+    async: false,
+    postReturn: true
+  });
+  const retCopy = variant11;
+  
+  let cstate = getOrCreateAsyncState(0);
+  cstate.mayLeave = false;
+  postReturn3(ret);
+  cstate.mayLeave = true;
+  
+  
+  
+  if (typeof retCopy === 'object' && retCopy.tag === 'err') {
+    throw new ComponentError(retCopy.val);
+  }
+  return retCopy.val;
+  
+}
+let numericsSubDecimal;
+
+function subDecimal(arg0, arg1) {
+  var {r0: v0_0, r1: v0_1, r2: v0_2, r3: v0_3, sign: v0_4 } = arg0;
+  var val1 = v0_4;
+  let enum1;
+  switch (val1) {
+    case 'plus': {
+      enum1 = 0;
+      break;
+    }
+    case 'minus': {
+      enum1 = 1;
+      break;
+    }
+    default: {
+      if ((v0_4) instanceof Error) {
+        console.error(v0_4);
+      }
+      
+      throw new TypeError(`"${val1}" is not one of the cases of sign`);
+    }
+  }
+  var {r0: v2_0, r1: v2_1, r2: v2_2, r3: v2_3, sign: v2_4 } = arg1;
+  var val3 = v2_4;
+  let enum3;
+  switch (val3) {
+    case 'plus': {
+      enum3 = 0;
+      break;
+    }
+    case 'minus': {
+      enum3 = 1;
+      break;
+    }
+    default: {
+      if ((v2_4) instanceof Error) {
+        console.error(v2_4);
+      }
+      
+      throw new TypeError(`"${val3}" is not one of the cases of sign`);
+    }
+  }
+  _debugLog('[iface="root:component/numerics", function="sub-decimal"][Instruction::CallWasm] enter', {
+    funcName: 'sub-decimal',
+    paramCount: 10,
+    async: false,
+    postReturn: true,
+  });
+  const _wasm_call_currentTaskID = startCurrentTask(0, false, 'numericsSubDecimal');
+  const ret = numericsSubDecimal(toUint64(v0_0), toUint64(v0_1), toUint64(v0_2), toUint64(v0_3), enum1, toUint64(v2_0), toUint64(v2_1), toUint64(v2_2), toUint64(v2_3), enum3);
+  endCurrentTask(0);
+  let variant11;
+  switch (dataView(memory0).getUint8(ret + 0, true)) {
+    case 0: {
+      let enum4;
+      switch (dataView(memory0).getUint8(ret + 40, true)) {
+        case 0: {
+          enum4 = 'plus';
+          break;
+        }
+        case 1: {
+          enum4 = 'minus';
+          break;
+        }
+        default: {
+          throw new TypeError('invalid discriminant specified for Sign');
+        }
+      }
+      variant11= {
+        tag: 'ok',
+        val: {
+          r0: BigInt.asUintN(64, dataView(memory0).getBigInt64(ret + 8, true)),
+          r1: BigInt.asUintN(64, dataView(memory0).getBigInt64(ret + 16, true)),
+          r2: BigInt.asUintN(64, dataView(memory0).getBigInt64(ret + 24, true)),
+          r3: BigInt.asUintN(64, dataView(memory0).getBigInt64(ret + 32, true)),
+          sign: enum4,
+        }
+      };
+      break;
+    }
+    case 1: {
+      let variant10;
+      switch (dataView(memory0).getUint8(ret + 8, true)) {
+        case 0: {
+          var ptr5 = dataView(memory0).getUint32(ret + 12, true);
+          var len5 = dataView(memory0).getUint32(ret + 16, true);
+          var result5 = utf8Decoder.decode(new Uint8Array(memory0.buffer, ptr5, len5));
+          variant10= {
+            tag: 'message',
+            val: result5
+          };
+          break;
+        }
+        case 1: {
+          var ptr6 = dataView(memory0).getUint32(ret + 12, true);
+          var len6 = dataView(memory0).getUint32(ret + 16, true);
+          var result6 = utf8Decoder.decode(new Uint8Array(memory0.buffer, ptr6, len6));
+          variant10= {
+            tag: 'overflow',
+            val: result6
+          };
+          break;
+        }
+        case 2: {
+          var ptr7 = dataView(memory0).getUint32(ret + 12, true);
+          var len7 = dataView(memory0).getUint32(ret + 16, true);
+          var result7 = utf8Decoder.decode(new Uint8Array(memory0.buffer, ptr7, len7));
+          variant10= {
+            tag: 'div-by-zero',
+            val: result7
+          };
+          break;
+        }
+        case 3: {
+          var ptr8 = dataView(memory0).getUint32(ret + 12, true);
+          var len8 = dataView(memory0).getUint32(ret + 16, true);
+          var result8 = utf8Decoder.decode(new Uint8Array(memory0.buffer, ptr8, len8));
+          variant10= {
+            tag: 'syntax',
+            val: result8
+          };
+          break;
+        }
+        case 4: {
+          var ptr9 = dataView(memory0).getUint32(ret + 12, true);
+          var len9 = dataView(memory0).getUint32(ret + 16, true);
+          var result9 = utf8Decoder.decode(new Uint8Array(memory0.buffer, ptr9, len9));
+          variant10= {
+            tag: 'validation',
+            val: result9
+          };
+          break;
+        }
+        default: {
+          throw new TypeError('invalid variant discriminant for NumericsError');
+        }
+      }
+      variant11= {
+        tag: 'err',
+        val: variant10
+      };
+      break;
+    }
+    default: {
+      throw new TypeError('invalid variant discriminant for expected');
+    }
+  }
+  _debugLog('[iface="root:component/numerics", function="sub-decimal"][Instruction::Return]', {
+    funcName: 'sub-decimal',
+    paramCount: 1,
+    async: false,
+    postReturn: true
+  });
+  const retCopy = variant11;
+  
+  let cstate = getOrCreateAsyncState(0);
+  cstate.mayLeave = false;
+  postReturn3(ret);
+  cstate.mayLeave = true;
+  
+  
+  
+  if (typeof retCopy === 'object' && retCopy.tag === 'err') {
+    throw new ComponentError(retCopy.val);
+  }
+  return retCopy.val;
+  
+}
+let numericsMulDecimal;
+
+function mulDecimal(arg0, arg1) {
+  var {r0: v0_0, r1: v0_1, r2: v0_2, r3: v0_3, sign: v0_4 } = arg0;
+  var val1 = v0_4;
+  let enum1;
+  switch (val1) {
+    case 'plus': {
+      enum1 = 0;
+      break;
+    }
+    case 'minus': {
+      enum1 = 1;
+      break;
+    }
+    default: {
+      if ((v0_4) instanceof Error) {
+        console.error(v0_4);
+      }
+      
+      throw new TypeError(`"${val1}" is not one of the cases of sign`);
+    }
+  }
+  var {r0: v2_0, r1: v2_1, r2: v2_2, r3: v2_3, sign: v2_4 } = arg1;
+  var val3 = v2_4;
+  let enum3;
+  switch (val3) {
+    case 'plus': {
+      enum3 = 0;
+      break;
+    }
+    case 'minus': {
+      enum3 = 1;
+      break;
+    }
+    default: {
+      if ((v2_4) instanceof Error) {
+        console.error(v2_4);
+      }
+      
+      throw new TypeError(`"${val3}" is not one of the cases of sign`);
+    }
+  }
+  _debugLog('[iface="root:component/numerics", function="mul-decimal"][Instruction::CallWasm] enter', {
+    funcName: 'mul-decimal',
+    paramCount: 10,
+    async: false,
+    postReturn: true,
+  });
+  const _wasm_call_currentTaskID = startCurrentTask(0, false, 'numericsMulDecimal');
+  const ret = numericsMulDecimal(toUint64(v0_0), toUint64(v0_1), toUint64(v0_2), toUint64(v0_3), enum1, toUint64(v2_0), toUint64(v2_1), toUint64(v2_2), toUint64(v2_3), enum3);
+  endCurrentTask(0);
+  let variant11;
+  switch (dataView(memory0).getUint8(ret + 0, true)) {
+    case 0: {
+      let enum4;
+      switch (dataView(memory0).getUint8(ret + 40, true)) {
+        case 0: {
+          enum4 = 'plus';
+          break;
+        }
+        case 1: {
+          enum4 = 'minus';
+          break;
+        }
+        default: {
+          throw new TypeError('invalid discriminant specified for Sign');
+        }
+      }
+      variant11= {
+        tag: 'ok',
+        val: {
+          r0: BigInt.asUintN(64, dataView(memory0).getBigInt64(ret + 8, true)),
+          r1: BigInt.asUintN(64, dataView(memory0).getBigInt64(ret + 16, true)),
+          r2: BigInt.asUintN(64, dataView(memory0).getBigInt64(ret + 24, true)),
+          r3: BigInt.asUintN(64, dataView(memory0).getBigInt64(ret + 32, true)),
+          sign: enum4,
+        }
+      };
+      break;
+    }
+    case 1: {
+      let variant10;
+      switch (dataView(memory0).getUint8(ret + 8, true)) {
+        case 0: {
+          var ptr5 = dataView(memory0).getUint32(ret + 12, true);
+          var len5 = dataView(memory0).getUint32(ret + 16, true);
+          var result5 = utf8Decoder.decode(new Uint8Array(memory0.buffer, ptr5, len5));
+          variant10= {
+            tag: 'message',
+            val: result5
+          };
+          break;
+        }
+        case 1: {
+          var ptr6 = dataView(memory0).getUint32(ret + 12, true);
+          var len6 = dataView(memory0).getUint32(ret + 16, true);
+          var result6 = utf8Decoder.decode(new Uint8Array(memory0.buffer, ptr6, len6));
+          variant10= {
+            tag: 'overflow',
+            val: result6
+          };
+          break;
+        }
+        case 2: {
+          var ptr7 = dataView(memory0).getUint32(ret + 12, true);
+          var len7 = dataView(memory0).getUint32(ret + 16, true);
+          var result7 = utf8Decoder.decode(new Uint8Array(memory0.buffer, ptr7, len7));
+          variant10= {
+            tag: 'div-by-zero',
+            val: result7
+          };
+          break;
+        }
+        case 3: {
+          var ptr8 = dataView(memory0).getUint32(ret + 12, true);
+          var len8 = dataView(memory0).getUint32(ret + 16, true);
+          var result8 = utf8Decoder.decode(new Uint8Array(memory0.buffer, ptr8, len8));
+          variant10= {
+            tag: 'syntax',
+            val: result8
+          };
+          break;
+        }
+        case 4: {
+          var ptr9 = dataView(memory0).getUint32(ret + 12, true);
+          var len9 = dataView(memory0).getUint32(ret + 16, true);
+          var result9 = utf8Decoder.decode(new Uint8Array(memory0.buffer, ptr9, len9));
+          variant10= {
+            tag: 'validation',
+            val: result9
+          };
+          break;
+        }
+        default: {
+          throw new TypeError('invalid variant discriminant for NumericsError');
+        }
+      }
+      variant11= {
+        tag: 'err',
+        val: variant10
+      };
+      break;
+    }
+    default: {
+      throw new TypeError('invalid variant discriminant for expected');
+    }
+  }
+  _debugLog('[iface="root:component/numerics", function="mul-decimal"][Instruction::Return]', {
+    funcName: 'mul-decimal',
+    paramCount: 1,
+    async: false,
+    postReturn: true
+  });
+  const retCopy = variant11;
+  
+  let cstate = getOrCreateAsyncState(0);
+  cstate.mayLeave = false;
+  postReturn3(ret);
+  cstate.mayLeave = true;
+  
+  
+  
+  if (typeof retCopy === 'object' && retCopy.tag === 'err') {
+    throw new ComponentError(retCopy.val);
+  }
+  return retCopy.val;
+  
+}
+let numericsDivDecimal;
+
+function divDecimal(arg0, arg1) {
+  var {r0: v0_0, r1: v0_1, r2: v0_2, r3: v0_3, sign: v0_4 } = arg0;
+  var val1 = v0_4;
+  let enum1;
+  switch (val1) {
+    case 'plus': {
+      enum1 = 0;
+      break;
+    }
+    case 'minus': {
+      enum1 = 1;
+      break;
+    }
+    default: {
+      if ((v0_4) instanceof Error) {
+        console.error(v0_4);
+      }
+      
+      throw new TypeError(`"${val1}" is not one of the cases of sign`);
+    }
+  }
+  var {r0: v2_0, r1: v2_1, r2: v2_2, r3: v2_3, sign: v2_4 } = arg1;
+  var val3 = v2_4;
+  let enum3;
+  switch (val3) {
+    case 'plus': {
+      enum3 = 0;
+      break;
+    }
+    case 'minus': {
+      enum3 = 1;
+      break;
+    }
+    default: {
+      if ((v2_4) instanceof Error) {
+        console.error(v2_4);
+      }
+      
+      throw new TypeError(`"${val3}" is not one of the cases of sign`);
+    }
+  }
+  _debugLog('[iface="root:component/numerics", function="div-decimal"][Instruction::CallWasm] enter', {
+    funcName: 'div-decimal',
+    paramCount: 10,
+    async: false,
+    postReturn: true,
+  });
+  const _wasm_call_currentTaskID = startCurrentTask(0, false, 'numericsDivDecimal');
+  const ret = numericsDivDecimal(toUint64(v0_0), toUint64(v0_1), toUint64(v0_2), toUint64(v0_3), enum1, toUint64(v2_0), toUint64(v2_1), toUint64(v2_2), toUint64(v2_3), enum3);
+  endCurrentTask(0);
+  let variant11;
+  switch (dataView(memory0).getUint8(ret + 0, true)) {
+    case 0: {
+      let enum4;
+      switch (dataView(memory0).getUint8(ret + 40, true)) {
+        case 0: {
+          enum4 = 'plus';
+          break;
+        }
+        case 1: {
+          enum4 = 'minus';
+          break;
+        }
+        default: {
+          throw new TypeError('invalid discriminant specified for Sign');
+        }
+      }
+      variant11= {
+        tag: 'ok',
+        val: {
+          r0: BigInt.asUintN(64, dataView(memory0).getBigInt64(ret + 8, true)),
+          r1: BigInt.asUintN(64, dataView(memory0).getBigInt64(ret + 16, true)),
+          r2: BigInt.asUintN(64, dataView(memory0).getBigInt64(ret + 24, true)),
+          r3: BigInt.asUintN(64, dataView(memory0).getBigInt64(ret + 32, true)),
+          sign: enum4,
+        }
+      };
+      break;
+    }
+    case 1: {
+      let variant10;
+      switch (dataView(memory0).getUint8(ret + 8, true)) {
+        case 0: {
+          var ptr5 = dataView(memory0).getUint32(ret + 12, true);
+          var len5 = dataView(memory0).getUint32(ret + 16, true);
+          var result5 = utf8Decoder.decode(new Uint8Array(memory0.buffer, ptr5, len5));
+          variant10= {
+            tag: 'message',
+            val: result5
+          };
+          break;
+        }
+        case 1: {
+          var ptr6 = dataView(memory0).getUint32(ret + 12, true);
+          var len6 = dataView(memory0).getUint32(ret + 16, true);
+          var result6 = utf8Decoder.decode(new Uint8Array(memory0.buffer, ptr6, len6));
+          variant10= {
+            tag: 'overflow',
+            val: result6
+          };
+          break;
+        }
+        case 2: {
+          var ptr7 = dataView(memory0).getUint32(ret + 12, true);
+          var len7 = dataView(memory0).getUint32(ret + 16, true);
+          var result7 = utf8Decoder.decode(new Uint8Array(memory0.buffer, ptr7, len7));
+          variant10= {
+            tag: 'div-by-zero',
+            val: result7
+          };
+          break;
+        }
+        case 3: {
+          var ptr8 = dataView(memory0).getUint32(ret + 12, true);
+          var len8 = dataView(memory0).getUint32(ret + 16, true);
+          var result8 = utf8Decoder.decode(new Uint8Array(memory0.buffer, ptr8, len8));
+          variant10= {
+            tag: 'syntax',
+            val: result8
+          };
+          break;
+        }
+        case 4: {
+          var ptr9 = dataView(memory0).getUint32(ret + 12, true);
+          var len9 = dataView(memory0).getUint32(ret + 16, true);
+          var result9 = utf8Decoder.decode(new Uint8Array(memory0.buffer, ptr9, len9));
+          variant10= {
+            tag: 'validation',
+            val: result9
+          };
+          break;
+        }
+        default: {
+          throw new TypeError('invalid variant discriminant for NumericsError');
+        }
+      }
+      variant11= {
+        tag: 'err',
+        val: variant10
+      };
+      break;
+    }
+    default: {
+      throw new TypeError('invalid variant discriminant for expected');
+    }
+  }
+  _debugLog('[iface="root:component/numerics", function="div-decimal"][Instruction::Return]', {
+    funcName: 'div-decimal',
+    paramCount: 1,
+    async: false,
+    postReturn: true
+  });
+  const retCopy = variant11;
+  
+  let cstate = getOrCreateAsyncState(0);
+  cstate.mayLeave = false;
+  postReturn3(ret);
+  cstate.mayLeave = true;
+  
+  
+  
+  if (typeof retCopy === 'object' && retCopy.tag === 'err') {
+    throw new ComponentError(retCopy.val);
+  }
+  return retCopy.val;
+  
+}
+let numericsLog10Decimal;
+
+function log10Decimal(arg0) {
+  var {r0: v0_0, r1: v0_1, r2: v0_2, r3: v0_3, sign: v0_4 } = arg0;
+  var val1 = v0_4;
+  let enum1;
+  switch (val1) {
+    case 'plus': {
+      enum1 = 0;
+      break;
+    }
+    case 'minus': {
+      enum1 = 1;
+      break;
+    }
+    default: {
+      if ((v0_4) instanceof Error) {
+        console.error(v0_4);
+      }
+      
+      throw new TypeError(`"${val1}" is not one of the cases of sign`);
+    }
+  }
+  _debugLog('[iface="root:component/numerics", function="log10-decimal"][Instruction::CallWasm] enter', {
+    funcName: 'log10-decimal',
+    paramCount: 5,
+    async: false,
+    postReturn: true,
+  });
+  const _wasm_call_currentTaskID = startCurrentTask(0, false, 'numericsLog10Decimal');
+  const ret = numericsLog10Decimal(toUint64(v0_0), toUint64(v0_1), toUint64(v0_2), toUint64(v0_3), enum1);
+  endCurrentTask(0);
+  let variant9;
+  switch (dataView(memory0).getUint8(ret + 0, true)) {
+    case 0: {
+      let enum2;
+      switch (dataView(memory0).getUint8(ret + 40, true)) {
+        case 0: {
+          enum2 = 'plus';
+          break;
+        }
+        case 1: {
+          enum2 = 'minus';
+          break;
+        }
+        default: {
+          throw new TypeError('invalid discriminant specified for Sign');
+        }
+      }
+      variant9= {
+        tag: 'ok',
+        val: {
+          r0: BigInt.asUintN(64, dataView(memory0).getBigInt64(ret + 8, true)),
+          r1: BigInt.asUintN(64, dataView(memory0).getBigInt64(ret + 16, true)),
+          r2: BigInt.asUintN(64, dataView(memory0).getBigInt64(ret + 24, true)),
+          r3: BigInt.asUintN(64, dataView(memory0).getBigInt64(ret + 32, true)),
+          sign: enum2,
+        }
+      };
+      break;
+    }
+    case 1: {
+      let variant8;
+      switch (dataView(memory0).getUint8(ret + 8, true)) {
+        case 0: {
+          var ptr3 = dataView(memory0).getUint32(ret + 12, true);
+          var len3 = dataView(memory0).getUint32(ret + 16, true);
+          var result3 = utf8Decoder.decode(new Uint8Array(memory0.buffer, ptr3, len3));
+          variant8= {
+            tag: 'message',
+            val: result3
+          };
+          break;
+        }
+        case 1: {
+          var ptr4 = dataView(memory0).getUint32(ret + 12, true);
+          var len4 = dataView(memory0).getUint32(ret + 16, true);
+          var result4 = utf8Decoder.decode(new Uint8Array(memory0.buffer, ptr4, len4));
+          variant8= {
+            tag: 'overflow',
+            val: result4
+          };
+          break;
+        }
+        case 2: {
+          var ptr5 = dataView(memory0).getUint32(ret + 12, true);
+          var len5 = dataView(memory0).getUint32(ret + 16, true);
+          var result5 = utf8Decoder.decode(new Uint8Array(memory0.buffer, ptr5, len5));
+          variant8= {
+            tag: 'div-by-zero',
+            val: result5
+          };
+          break;
+        }
+        case 3: {
+          var ptr6 = dataView(memory0).getUint32(ret + 12, true);
+          var len6 = dataView(memory0).getUint32(ret + 16, true);
+          var result6 = utf8Decoder.decode(new Uint8Array(memory0.buffer, ptr6, len6));
+          variant8= {
+            tag: 'syntax',
+            val: result6
+          };
+          break;
+        }
+        case 4: {
+          var ptr7 = dataView(memory0).getUint32(ret + 12, true);
+          var len7 = dataView(memory0).getUint32(ret + 16, true);
+          var result7 = utf8Decoder.decode(new Uint8Array(memory0.buffer, ptr7, len7));
+          variant8= {
+            tag: 'validation',
+            val: result7
+          };
+          break;
+        }
+        default: {
+          throw new TypeError('invalid variant discriminant for NumericsError');
+        }
+      }
+      variant9= {
+        tag: 'err',
+        val: variant8
+      };
+      break;
+    }
+    default: {
+      throw new TypeError('invalid variant discriminant for expected');
+    }
+  }
+  _debugLog('[iface="root:component/numerics", function="log10-decimal"][Instruction::Return]', {
+    funcName: 'log10-decimal',
+    paramCount: 1,
+    async: false,
+    postReturn: true
+  });
+  const retCopy = variant9;
+  
+  let cstate = getOrCreateAsyncState(0);
+  cstate.mayLeave = false;
+  postReturn3(ret);
+  cstate.mayLeave = true;
+  
+  
+  
+  if (typeof retCopy === 'object' && retCopy.tag === 'err') {
+    throw new ComponentError(retCopy.val);
+  }
+  return retCopy.val;
+  
+}
 
 const $init = (() => {
   let gen = (function* _initGenerator () {
@@ -1243,30 +4397,57 @@ const $init = (() => {
     const module2 = base64Compile('AGFzbQEAAAABBQFgAX8AAhUCAAEwAAAACCRpbXBvcnRzAXABAQEJBwEAQQALAQAALwlwcm9kdWNlcnMBDHByb2Nlc3NlZC1ieQENd2l0LWNvbXBvbmVudAcwLjI0NC4w');
     ({ exports: exports0 } = yield instantiateCore(yield module1));
     ({ exports: exports1 } = yield instantiateCore(yield module0, {
-      '[export]root:component/wit-api': {
+      '[export]root:component/wit-codec': {
         '[resource-new]wit': trampoline0,
       },
     }));
     ({ exports: exports2 } = yield instantiateCore(yield module2, {
       '': {
         $imports: exports0.$imports,
-        '0': exports1['root:component/wit-api#[dtor]wit'],
+        '0': exports1['root:component/wit-codec#[dtor]wit'],
       },
     }));
     memory0 = exports1.memory;
     realloc0 = exports1.cabi_realloc;
     postReturn0 = exports1['cabi_post_deserialize-inst'];
     postReturn1 = exports1['cabi_post_validate-wit'];
-    postReturn2 = exports1['cabi_post_root:component/wit-api#[method]wit.decode-result'];
+    postReturn2 = exports1['cabi_post_root:component/wit-codec#[method]wit.decode-result'];
+    postReturn3 = exports1['cabi_post_root:component/numerics#add-decimal'];
+    postReturn4 = exports1['cabi_post_root:component/numerics#eq-decimal'];
     exports1SerializeInst = exports1['serialize-inst'];
     exports1DeserializeInst = exports1['deserialize-inst'];
     exports1SerializeOpReturnData = exports1['serialize-op-return-data'];
     exports1DeserializeOpReturnData = exports1['deserialize-op-return-data'];
     exports1ValidateWit = exports1['validate-wit'];
-    witApiConstructorWit = exports1['root:component/wit-api#[constructor]wit'];
-    witApiMethodWitEncodeCall = exports1['root:component/wit-api#[method]wit.encode-call'];
-    witApiMethodWitDecodeResult = exports1['root:component/wit-api#[method]wit.decode-result'];
-    witApiMethodWitParse = exports1['root:component/wit-api#[method]wit.parse'];
+    witCodecConstructorWit = exports1['root:component/wit-codec#[constructor]wit'];
+    witCodecMethodWitEncodeCall = exports1['root:component/wit-codec#[method]wit.encode-call'];
+    witCodecMethodWitDecodeResult = exports1['root:component/wit-codec#[method]wit.decode-result'];
+    witCodecMethodWitParse = exports1['root:component/wit-codec#[method]wit.parse'];
+    numericsU64ToInteger = exports1['root:component/numerics#u64-to-integer'];
+    numericsS64ToInteger = exports1['root:component/numerics#s64-to-integer'];
+    numericsStringToInteger = exports1['root:component/numerics#string-to-integer'];
+    numericsIntegerToString = exports1['root:component/numerics#integer-to-string'];
+    numericsEqInteger = exports1['root:component/numerics#eq-integer'];
+    numericsCmpInteger = exports1['root:component/numerics#cmp-integer'];
+    numericsAddInteger = exports1['root:component/numerics#add-integer'];
+    numericsSubInteger = exports1['root:component/numerics#sub-integer'];
+    numericsMulInteger = exports1['root:component/numerics#mul-integer'];
+    numericsDivInteger = exports1['root:component/numerics#div-integer'];
+    numericsSqrtInteger = exports1['root:component/numerics#sqrt-integer'];
+    numericsIntegerToDecimal = exports1['root:component/numerics#integer-to-decimal'];
+    numericsDecimalToInteger = exports1['root:component/numerics#decimal-to-integer'];
+    numericsU64ToDecimal = exports1['root:component/numerics#u64-to-decimal'];
+    numericsS64ToDecimal = exports1['root:component/numerics#s64-to-decimal'];
+    numericsF64ToDecimal = exports1['root:component/numerics#f64-to-decimal'];
+    numericsStringToDecimal = exports1['root:component/numerics#string-to-decimal'];
+    numericsDecimalToString = exports1['root:component/numerics#decimal-to-string'];
+    numericsEqDecimal = exports1['root:component/numerics#eq-decimal'];
+    numericsCmpDecimal = exports1['root:component/numerics#cmp-decimal'];
+    numericsAddDecimal = exports1['root:component/numerics#add-decimal'];
+    numericsSubDecimal = exports1['root:component/numerics#sub-decimal'];
+    numericsMulDecimal = exports1['root:component/numerics#mul-decimal'];
+    numericsDivDecimal = exports1['root:component/numerics#div-decimal'];
+    numericsLog10Decimal = exports1['root:component/numerics#log10-decimal'];
   })();
   let promise, resolve, reject;
   function runNext (value) {
@@ -1292,9 +4473,37 @@ const $init = (() => {
 })();
 
 await $init;
-const witApi = {
+const numerics = {
+  addDecimal: addDecimal,
+  addInteger: addInteger,
+  cmpDecimal: cmpDecimal,
+  cmpInteger: cmpInteger,
+  decimalToInteger: decimalToInteger,
+  decimalToString: decimalToString,
+  divDecimal: divDecimal,
+  divInteger: divInteger,
+  eqDecimal: eqDecimal,
+  eqInteger: eqInteger,
+  f64ToDecimal: f64ToDecimal,
+  integerToDecimal: integerToDecimal,
+  integerToString: integerToString,
+  log10Decimal: log10Decimal,
+  mulDecimal: mulDecimal,
+  mulInteger: mulInteger,
+  s64ToDecimal: s64ToDecimal,
+  s64ToInteger: s64ToInteger,
+  sqrtInteger: sqrtInteger,
+  stringToDecimal: stringToDecimal,
+  stringToInteger: stringToInteger,
+  subDecimal: subDecimal,
+  subInteger: subInteger,
+  u64ToDecimal: u64ToDecimal,
+  u64ToInteger: u64ToInteger,
+  
+};
+const witCodec = {
   Wit: Wit,
   
 };
 
-export { witApi, deserializeInst, deserializeOpReturnData, witApi as 'root:component/wit-api', serializeInst, serializeOpReturnData, validateWit,  }
+export { numerics, witCodec, deserializeInst, deserializeOpReturnData, numerics as 'root:component/numerics', witCodec as 'root:component/wit-codec', serializeInst, serializeOpReturnData, validateWit,  }

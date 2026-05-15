@@ -3,7 +3,7 @@ package root:component;
 /// Wit document resource. Held by the consumer for the lifetime of one
 /// WIT (typically: one Kontor contract). Resources can only be exported
 /// via an interface, not directly from a world.
-interface wit-api {
+interface wit-codec {
   /// One instance per WIT document. Holds the parsed Resolve graph
   /// internally; methods take a function name + JSON-encoded args (or
   /// WAVE string) and return WAVE / JSON respectively.
@@ -13,6 +13,51 @@ interface wit-api {
     decode-result: func(fn-name: string, wave: string) -> result<string, string>;
     parse: func() -> result<string, string>;
   }
+}
+
+/// Mirror of Kontor's built-in `numbers` interface — exposes the same
+/// arithmetic operations on Integer/Decimal that contracts get from the
+/// chain. Backed by the shared `core/numerics` crate so SDK arithmetic
+/// is byte-for-byte identical to chain arithmetic.
+interface numerics {
+  enum sign { plus, minus }
+  enum ordering { less, equal, greater }
+  record integer { r0: u64, r1: u64, r2: u64, r3: u64, sign: sign }
+  record decimal { r0: u64, r1: u64, r2: u64, r3: u64, sign: sign }
+  variant numerics-error {
+    message(string),
+    overflow(string),
+    div-by-zero(string),
+    syntax(string),
+    validation(string),
+  }
+
+  u64-to-integer: func(i: u64) -> integer;
+  s64-to-integer: func(i: s64) -> integer;
+  string-to-integer: func(s: string) -> result<integer, numerics-error>;
+  integer-to-string: func(i: integer) -> string;
+  eq-integer: func(a: integer, b: integer) -> bool;
+  cmp-integer: func(a: integer, b: integer) -> ordering;
+  add-integer: func(a: integer, b: integer) -> result<integer, numerics-error>;
+  sub-integer: func(a: integer, b: integer) -> result<integer, numerics-error>;
+  mul-integer: func(a: integer, b: integer) -> result<integer, numerics-error>;
+  div-integer: func(a: integer, b: integer) -> result<integer, numerics-error>;
+  sqrt-integer: func(i: integer) -> result<integer, numerics-error>;
+
+  integer-to-decimal: func(i: integer) -> result<decimal, numerics-error>;
+  decimal-to-integer: func(d: decimal) -> result<integer, numerics-error>;
+  u64-to-decimal: func(i: u64) -> result<decimal, numerics-error>;
+  s64-to-decimal: func(i: s64) -> result<decimal, numerics-error>;
+  f64-to-decimal: func(f: f64) -> result<decimal, numerics-error>;
+  string-to-decimal: func(s: string) -> result<decimal, numerics-error>;
+  decimal-to-string: func(d: decimal) -> string;
+  eq-decimal: func(a: decimal, b: decimal) -> result<bool, numerics-error>;
+  cmp-decimal: func(a: decimal, b: decimal) -> ordering;
+  add-decimal: func(a: decimal, b: decimal) -> result<decimal, numerics-error>;
+  sub-decimal: func(a: decimal, b: decimal) -> result<decimal, numerics-error>;
+  mul-decimal: func(a: decimal, b: decimal) -> result<decimal, numerics-error>;
+  div-decimal: func(a: decimal, b: decimal) -> result<decimal, numerics-error>;
+  log10-decimal: func(a: decimal) -> result<decimal, numerics-error>;
 }
 
 world root {
@@ -35,5 +80,6 @@ world root {
 
   export validate-wit: func(wit-content: string) -> validation-result;
 
-  export wit-api;
+  export wit-codec;
+  export numerics;
 }

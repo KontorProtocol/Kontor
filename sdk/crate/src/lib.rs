@@ -1,3 +1,4 @@
+mod numerics_api;
 mod wit_resource;
 
 use indexer_types::*;
@@ -6,9 +7,9 @@ use wit_validator::Validator;
 
 wit_bindgen::generate!({ world: "root", runtime_path: "indexer_types::wit_bindgen::rt"});
 
-use exports::root::component::wit_api::{Guest as WitApiGuest, GuestWit};
+use exports::root::component::wit_codec::{Guest as WitCodecGuest, GuestWit};
 
-impl WitApiGuest for Lib {
+impl WitCodecGuest for Lib {
     type Wit = WitResource;
 }
 
