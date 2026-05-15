@@ -15,7 +15,7 @@ use wasm_wave::wasm::{WasmTypeKind, WasmValue};
 use wit_parser::{Resolve, Type, TypeDefKind, WorldItem};
 use wit_validator::Validator;
 
-use serde::ser::{Serialize, SerializeMap, Serializer};
+use serde::ser::{Serialize, SerializeMap, SerializeSeq, Serializer};
 
 /// Cached result of `Validator::validate_str` performed at construction.
 /// Component Model resource constructors can't be fallible (WIT 0.2), so
@@ -302,6 +302,71 @@ fn json_to_wave(
                     WaveValue::make_result(&wave_ty, result_val)
                         .map_err(|e| format!("make_result: {e}"))
                 }
+                TypeDefKind::Enum(enum_def) => {
+                    // Enum cases are all unit; the JSON shape is just the
+                    // case name as a string (simpler than the {kind} we use
+                    // for variants since there's never a payload).
+                    let case_name = v.as_str().ok_or_else(|| {
+                        "expected JSON string (case name) for enum".to_string()
+                    })?;
+                    if !enum_def.cases.iter().any(|c| c.name == case_name) {
+                        return Err(format!("unknown enum case: {case_name}"));
+                    }
+                    let wave_ty = wit_type_to_wave_type(ty, resolve)?;
+                    WaveValue::make_enum(&wave_ty, case_name)
+                        .map_err(|e| format!("make_enum: {e}"))
+                }
+                TypeDefKind::Flags(_flags_def) => {
+                    // Locked encoding shape #9: flags as Array<string>
+                    // with set semantics. Unknown flag names are caught
+                    // by wasm-wave's make_flags validation.
+                    let arr = v.as_array().ok_or_else(|| {
+                        "expected JSON array of strings for flags".to_string()
+                    })?;
+                    let names: Result<Vec<&str>, String> = arr
+                        .iter()
+                        .map(|x| {
+                            x.as_str().ok_or_else(|| {
+                                "flags entries must be JSON strings".to_string()
+                            })
+                        })
+                        .collect();
+                    let wave_ty = wit_type_to_wave_type(ty, resolve)?;
+                    WaveValue::make_flags(&wave_ty, names?)
+                        .map_err(|e| format!("make_flags: {e}"))
+                }
+                TypeDefKind::Tuple(tuple_def) => {
+                    let arr = v.as_array().ok_or_else(|| {
+                        "expected JSON array for tuple".to_string()
+                    })?;
+                    if arr.len() != tuple_def.types.len() {
+                        return Err(format!(
+                            "tuple length mismatch: expected {}, got {}",
+                            tuple_def.types.len(),
+                            arr.len()
+                        ));
+                    }
+                    let items: Result<Vec<_>, _> = arr
+                        .iter()
+                        .zip(tuple_def.types.iter())
+                        .map(|(val, t)| json_to_wave(t, val, resolve))
+                        .collect();
+                    let wave_ty = wit_type_to_wave_type(ty, resolve)?;
+                    WaveValue::make_tuple(&wave_ty, items?)
+                        .map_err(|e| format!("make_tuple: {e}"))
+                }
+                TypeDefKind::List(inner_ty) => {
+                    let arr = v.as_array().ok_or_else(|| {
+                        "expected JSON array for list".to_string()
+                    })?;
+                    let wave_ty = wit_type_to_wave_type(ty, resolve)?;
+                    let items: Result<Vec<_>, _> = arr
+                        .iter()
+                        .map(|x| json_to_wave(inner_ty, x, resolve))
+                        .collect();
+                    WaveValue::make_list(&wave_ty, items?)
+                        .map_err(|e| format!("make_list: {e}"))
+                }
                 TypeDefKind::Record(record) => {
                     // JSON object → wasm-wave record. Each field is looked
                     // up by name (matching WIT field name).
@@ -359,6 +424,11 @@ fn json_to_wave(
                         .map_err(|e| format!("make_variant: {e}"))
                 }
                 TypeDefKind::Type(aliased) => json_to_wave(aliased, v, resolve),
+                TypeDefKind::Handle(_) | TypeDefKind::Resource => Err(
+                    "resource handles (own/borrow) are runtime-only state \
+                     and can't cross the @kontor/sdk codec boundary"
+                        .to_string(),
+                ),
                 other => Err(format!("type def kind not implemented yet: {other:?}")),
             }
         }
@@ -399,6 +469,29 @@ impl<'a> Serialize for WaveValueRepr<'a> {
                 None => ser.serialize_none(),
                 Some(inner) => WaveValueRepr(&inner).serialize(ser),
             },
+            WasmTypeKind::List => {
+                let mut seq = ser.serialize_seq(None)?;
+                for item in self.0.unwrap_list() {
+                    seq.serialize_element(&WaveValueRepr(&item))?;
+                }
+                seq.end()
+            }
+            WasmTypeKind::Enum => ser.serialize_str(&self.0.unwrap_enum()),
+            WasmTypeKind::Flags => {
+                // Locked encoding shape #9: array of flag names.
+                let mut seq = ser.serialize_seq(None)?;
+                for name in self.0.unwrap_flags() {
+                    seq.serialize_element(name.as_ref())?;
+                }
+                seq.end()
+            }
+            WasmTypeKind::Tuple => {
+                let mut seq = ser.serialize_seq(None)?;
+                for item in self.0.unwrap_tuple() {
+                    seq.serialize_element(&WaveValueRepr(&item))?;
+                }
+                seq.end()
+            }
             WasmTypeKind::Record => {
                 // Records serialize as a plain JSON object keyed by field
                 // name. wasm-wave's `unwrap_record` yields (name, value)
@@ -434,6 +527,10 @@ impl<'a> Serialize for WaveValueRepr<'a> {
                 }
                 map.end()
             }
+            WasmTypeKind::Unsupported => Err(serde::ser::Error::custom(
+                "resource handles (own/borrow) are runtime-only state \
+                 and don't serialize across the @kontor/sdk codec boundary",
+            )),
             kind => Err(serde::ser::Error::custom(format!(
                 "WaveValueRepr: kind not implemented yet: {kind:?}"
             ))),

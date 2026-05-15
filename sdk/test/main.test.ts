@@ -494,6 +494,87 @@ test("Wit result<_, error> decodes ok unit case (no value field) + err variant",
   });
 });
 
+// ─── list<T> ──────────────────────────────────────────────────────────
+
+test("Wit list<u8> round-trips as JSON array of numbers", () => {
+  // list<u8> is the only u8 form allowed by Kontor's validator —
+  // common for byte arrays (addresses, BLS keys, etc.).
+  const wit = `${KONTOR_HEADER}
+    export echo: async func(ctx: borrow<view-context>, bytes: list<u8>) -> list<u8>;
+}`;
+  const w = new witApi.Wit(wit);
+  const bytes = [0, 1, 127, 255];
+  const encoded = w.encodeCall("echo", JSON.stringify({ bytes }));
+  expect(encoded).toBe("echo([0, 1, 127, 255])");
+  const wave = encoded.slice("echo(".length, -1);
+  expect(JSON.parse(w.decodeResult("echo", wave))).toEqual(bytes);
+});
+
+test("Wit list<string> round-trips with proper escaping", () => {
+  const wit = `${KONTOR_HEADER}
+    export echo: async func(ctx: borrow<view-context>, xs: list<string>) -> list<string>;
+}`;
+  const w = new witApi.Wit(wit);
+  const xs = ["hello", 'with "quotes"', "👋"];
+  const encoded = w.encodeCall("echo", JSON.stringify({ xs }));
+  const wave = encoded.slice("echo(".length, -1);
+  expect(JSON.parse(w.decodeResult("echo", wave))).toEqual(xs);
+});
+
+test("Wit list<u64> round-trips quoted-decimal items", () => {
+  const wit = `${KONTOR_HEADER}
+    export echo: async func(ctx: borrow<view-context>, xs: list<u64>) -> list<u64>;
+}`;
+  const w = new witApi.Wit(wit);
+  const xs = ["0", "12345", "18446744073709551615"];
+  const encoded = w.encodeCall("echo", JSON.stringify({ xs }));
+  expect(encoded).toBe(`echo([${xs.join(", ")}])`);
+  const wave = encoded.slice("echo(".length, -1);
+  expect(JSON.parse(w.decodeResult("echo", wave))).toEqual(xs);
+});
+
+test("Wit empty list round-trips", () => {
+  const wit = `${KONTOR_HEADER}
+    export echo: async func(ctx: borrow<view-context>, xs: list<string>) -> list<string>;
+}`;
+  const w = new witApi.Wit(wit);
+  expect(w.encodeCall("echo", '{"xs": []}')).toBe("echo([])");
+  expect(JSON.parse(w.decodeResult("echo", "[]"))).toEqual([]);
+});
+
+// ─── enum ─────────────────────────────────────────────────────────────
+// Enum = variant where every case is unit. JSON shape is just the case
+// name as a plain string (no {kind} wrapping needed; there's no payload).
+
+test("Wit enum round-trips as a plain JSON string", () => {
+  const wit = `${KONTOR_HEADER}
+    enum traffic-light { red, yellow, green }
+    export step: async func(ctx: borrow<proc-context>, current: traffic-light) -> traffic-light;
+}`;
+  const w = new witApi.Wit(wit);
+  for (const case_ of ["red", "yellow", "green"]) {
+    const encoded = w.encodeCall("step", JSON.stringify({ current: case_ }));
+    expect(encoded).toBe(`step(${case_})`);
+    expect(w.decodeResult("step", case_)).toBe(`"${case_}"`);
+  }
+});
+
+test("Wit enum rejects unknown case names", () => {
+  const wit = `${KONTOR_HEADER}
+    enum traffic-light { red, yellow, green }
+    export step: async func(ctx: borrow<proc-context>, current: traffic-light) -> traffic-light;
+}`;
+  const w = new witApi.Wit(wit);
+  expect(() => w.encodeCall("step", '{"current": "purple"}')).toThrow(
+    /unknown enum case/,
+  );
+});
+
+// Note: Kontor's wit_validator currently rejects `flags` ("not supported")
+// and `tuple` ("use a named record instead") at the contract level. The
+// codec handles them for compound nesting completeness but they can't be
+// exercised through a top-level param in a valid Kontor contract.
+
 // ─── string ───────────────────────────────────────────────────────────
 
 test("Wit string round-trips, including escape characters", () => {
@@ -507,4 +588,54 @@ test("Wit string round-trips, including escape characters", () => {
     const wave = encoded.slice("echo(".length, -1);
     expect(JSON.parse(w.decodeResult("echo", wave))).toBe(original);
   }
+});
+
+// ─── smoke: real Kontor contract WIT ────────────────────────────────
+// Loads the actual native token contract WIT and exercises a couple of
+// realistic calls end-to-end. Anything that breaks here would show up
+// in production use of @kontor/sdk against a deployed token contract.
+
+import tokenWit from "../../native-contracts/token/wit/contract.wit?raw";
+
+test("smoke: encodeCall against real token.wit transfer (holder-ref + decimal)", () => {
+  const w = new witApi.Wit(tokenWit);
+
+  // transfer(ctx: borrow<proc-context>, dst: holder-ref, amt: decimal)
+  //   holder-ref = variant { x-only-pubkey(string), signer-id(u64), core, burner, utxo(out-point) }
+  //   decimal    = record { r0..r3: u64, sign: enum {plus, minus} }
+  const args = {
+    dst: { kind: "x-only-pubkey", value: "abc123" },
+    amt: { r0: "100", r1: "0", r2: "0", r3: "0", sign: "plus" },
+  };
+  const wave = w.encodeCall("transfer", JSON.stringify(args));
+  expect(wave).toBe(
+    'transfer(x-only-pubkey("abc123"), {r0: 100, r1: 0, r2: 0, r3: 0, sign: plus})',
+  );
+});
+
+test("smoke: decodeResult against real token.wit balance (option<decimal>)", () => {
+  const w = new witApi.Wit(tokenWit);
+
+  // balance returns option<decimal>. WAVE for some-decimal:
+  //   some({r0: 42, r1: 0, r2: 0, r3: 0, sign: plus})
+  expect(
+    JSON.parse(
+      w.decodeResult("balance", "some({r0: 42, r1: 0, r2: 0, r3: 0, sign: plus})"),
+    ),
+  ).toEqual({ r0: "42", r1: "0", r2: "0", r3: "0", sign: "plus" });
+
+  // none case (account doesn't exist) → null
+  expect(w.decodeResult("balance", "none")).toBe("null");
+});
+
+test("smoke: encodeCall against real token.wit handles holder-ref unit cases", () => {
+  const w = new witApi.Wit(tokenWit);
+
+  // transfer with dst = `core` (a unit variant case — no value field)
+  const args = {
+    dst: { kind: "core" },
+    amt: { r0: "1", r1: "0", r2: "0", r3: "0", sign: "plus" },
+  };
+  const wave = w.encodeCall("transfer", JSON.stringify(args));
+  expect(wave).toBe("transfer(core, {r0: 1, r1: 0, r2: 0, r3: 0, sign: plus})");
 });
