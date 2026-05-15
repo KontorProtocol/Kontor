@@ -1,6 +1,6 @@
-# Kontor TypeScript
+# @kontor/sdk
 
-Types and utilities useful for working the Kontor indexer.
+Types and utilities useful for working with the Kontor indexer.
 
 
 ```bash
@@ -16,6 +16,6 @@ npm run test:browser
 # regenerate wasm component
 npm run build:rs
 
-# build kontor-ts
+# build
 npm run build
 ```

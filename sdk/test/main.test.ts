@@ -5,7 +5,7 @@ import {
   serializeOpReturnData,
   deserializeOpReturnData,
   validateWit,
-} from "@kontor/kontor-ts";
+} from "@kontor/sdk";
 
 test("publish", () => {
   let inst = {

@@ -68,15 +68,15 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: "22"
-      - name: Install kontor-ts dependencies
+      - name: Install sdk dependencies
         run: npm ci
-        working-directory: ./kontor-ts
-      - name: Build kontor-ts (Rust + TS)
+        working-directory: ./sdk
+      - name: Build sdk (Rust + TS)
         run: npm run build:rs && npm run build
-        working-directory: ./kontor-ts
-      - name: Test kontor-ts
+        working-directory: ./sdk
+      - name: Test sdk
         run: npm test
-        working-directory: ./kontor-ts
+        working-directory: ./sdk
       - name: Install cargo-audit
         run: cargo binstall cargo-audit --no-confirm
       - name: Audit (test-contracts)

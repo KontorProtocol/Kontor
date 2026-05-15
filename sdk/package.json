@@ -1,11 +1,11 @@
 {
-  "name": "@kontor/kontor-ts",
+  "name": "@kontor/sdk",
   "version": "0.2.2",
   "author": "Unspendable Labs <dev@unspendablelabs.com>",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/KontorProtocol/Kontor.git",
-    "directory": "kontor-ts"
+    "directory": "sdk"
   },
   "publishConfig": {
     "access": "public"
@@ -24,7 +24,7 @@
   },
   "scripts": {
     "build:rs": "cd crate && ./build.sh",
-    "build:ts": "tsup",
+    "build:ts": "vite build",
     "build": "npm run build:ts",
     "prepare": "npm run build",
     "test": "vitest",
@@ -33,8 +33,9 @@
   "devDependencies": {
     "@bytecodealliance/jco": "^1.15.3",
     "@vitest/browser-playwright": "^4.0.15",
-    "tsup": "^8.5.1",
     "typescript": "^5.9.3",
+    "vite": "^8.0.13",
+    "vite-plugin-dts": "^5.0.0",
     "vitest": "^4.0.12"
   }
 }
