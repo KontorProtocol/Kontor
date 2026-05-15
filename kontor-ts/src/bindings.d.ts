@@ -165,6 +165,7 @@ export type OpKind =
 export type OpMetadata = {
   previous_output: string;
   input_index: number;
+  op_index: number;
   signer_id: number;
   payment: Payment;
 };
@@ -184,16 +185,23 @@ export type OpMetadata = {
  */
 export type OpStatus = "Ok" | "ContractErr" | "OutOfFuel" | "Trap" | "Other";
 
+/**
+ * One entry per `Inst` in the input. `Materialized` means the op was
+ * successfully materialized (had a runnable `Op`) and reached the runtime;
+ * `Rejected` means materialization itself failed (currently only orphan
+ * `Sponsored` ops with no publisher offer). Both variants carry an optional
+ * `error_message` populated only on the `/transactions/simulate` endpoint;
+ * `/inspect` always leaves it `None` since error strings aren't persisted.
+ */
 export type OpWithResult = {
+  "kind": "Materialized";
   op: Op;
   result: ResultRow | null;
-  /**
-   * Live error detail captured during execution. Populated only by the
-   * `/transactions/simulate` endpoint when an op produced no row (rejected
-   * pre-execution) or produced a row with a failure status. The
-   * `/inspect` endpoints always return `None` — historical errors aren't
-   * persisted to chain state.
-   */
+  error_message: string | null;
+} | {
+  "kind": "Rejected";
+  input_index: number;
+  op_index: number;
   error_message: string | null;
 };
 
