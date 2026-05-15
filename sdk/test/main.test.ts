@@ -199,40 +199,61 @@ test("validateWit parse error", () => {
   expect(result.tag).toBe("parse-error");
 });
 
-test("Wit.encodeCall renders a single bool arg", () => {
-  const wit = `package test:demo;
+// Real Kontor contracts include the built-in world (which brings in
+// proc-context, view-context, error), export an `init` function, and
+// declare each export as `async func(ctx: borrow<...>, ...args)`.
+// wit_validator enforces this shape at Wit construction; encode_call
+// skips the ctx param.
+const KONTOR_HEADER = `package root:component;
 
-world demo {
-  export do-thing: func(flag: bool) -> string;
+world root {
+    include kontor:built-in/built-in;
+    use kontor:built-in/context.{proc-context, view-context};
+    use kontor:built-in/error.{error};
+
+    export init: async func(ctx: borrow<proc-context>);
+`;
+
+test("Wit.encodeCall renders a single bool arg (skipping ctx)", () => {
+  const wit = `${KONTOR_HEADER}
+    export set-flag: async func(ctx: borrow<proc-context>, flag: bool) -> result<_, error>;
 }`;
   const w = new witApi.Wit(wit);
 
-  expect(w.encodeCall("do-thing", '{"flag": true}')).toBe("do-thing(true)");
-  expect(w.encodeCall("do-thing", '{"flag": false}')).toBe("do-thing(false)");
+  expect(w.encodeCall("set-flag", '{"flag": true}')).toBe("set-flag(true)");
+  expect(w.encodeCall("set-flag", '{"flag": false}')).toBe("set-flag(false)");
+});
+
+test("Wit construction rejects WIT that fails validation", () => {
+  // Missing the `borrow<context>` first param — validator rejects.
+  const badWit = `${KONTOR_HEADER}
+    export bad-func: async func(val: string) -> string;
+}`;
+  const w = new witApi.Wit(badWit);
+  expect(() => w.encodeCall("bad-func", '{}')).toThrow(/WIT validation/);
+});
+
+test("Wit construction rejects malformed WIT", () => {
+  const w = new witApi.Wit("this is not valid wit at all");
+  expect(() => w.encodeCall("anything", '{}')).toThrow(/WIT parse error/);
 });
 
 test("Wit.encodeCall errors when function missing", () => {
-  const wit = `package test:demo;
-
-world demo {
-  export do-thing: func(flag: bool) -> string;
+  const wit = `${KONTOR_HEADER}
+    export set-flag: async func(ctx: borrow<proc-context>, flag: bool) -> result<_, error>;
 }`;
   const w = new witApi.Wit(wit);
 
-  expect(() => w.encodeCall("no-such-fn", '{}')).toThrow(
-    /function not found/,
-  );
+  expect(() => w.encodeCall("no-such-fn", "{}")).toThrow(/function not found/);
 });
 
 test("Wit.encodeCall errors when bool arg has wrong JSON type", () => {
-  const wit = `package test:demo;
-
-world demo {
-  export do-thing: func(flag: bool) -> string;
+  const wit = `${KONTOR_HEADER}
+    export set-flag: async func(ctx: borrow<proc-context>, flag: bool) -> result<_, error>;
 }`;
   const w = new witApi.Wit(wit);
 
-  expect(() => w.encodeCall("do-thing", '{"flag": "yes"}')).toThrow(
+  expect(() => w.encodeCall("set-flag", '{"flag": "yes"}')).toThrow(
     /expected JSON bool/,
   );
 });
@@ -241,10 +262,8 @@ test("Wit.encodeCall renders u64 from a quoted-decimal JSON string", () => {
   // u64 values > 2^53 can't be safely held in JS Number, so the FFI uses
   // JSON strings holding decimal digits. The WAVE output is just the
   // unquoted decimal — the WIT type system carries the precision lift.
-  const wit = `package test:demo;
-
-world demo {
-  export add: func(x: u64) -> u64;
+  const wit = `${KONTOR_HEADER}
+    export add: async func(ctx: borrow<view-context>, x: u64) -> u64;
 }`;
   const w = new witApi.Wit(wit);
 
@@ -255,10 +274,8 @@ world demo {
 });
 
 test("Wit.encodeCall errors when u64 arg isn't a string", () => {
-  const wit = `package test:demo;
-
-world demo {
-  export add: func(x: u64) -> u64;
+  const wit = `${KONTOR_HEADER}
+    export add: async func(ctx: borrow<view-context>, x: u64) -> u64;
 }`;
   const w = new witApi.Wit(wit);
 
@@ -268,10 +285,8 @@ world demo {
 });
 
 test("Wit.decodeResult parses a u64 WAVE return into a quoted-decimal JSON string", () => {
-  const wit = `package test:demo;
-
-world demo {
-  export add: func(x: u64) -> u64;
+  const wit = `${KONTOR_HEADER}
+    export add: async func(ctx: borrow<view-context>, x: u64) -> u64;
 }`;
   const w = new witApi.Wit(wit);
 
@@ -283,10 +298,8 @@ world demo {
 });
 
 test("Wit.decodeResult parses a bool WAVE return into a JSON bool", () => {
-  const wit = `package test:demo;
-
-world demo {
-  export is-ready: func() -> bool;
+  const wit = `${KONTOR_HEADER}
+    export is-ready: async func(ctx: borrow<view-context>) -> bool;
 }`;
   const w = new witApi.Wit(wit);
 
@@ -298,10 +311,8 @@ test("Wit u64 round-trips through encodeCall + decodeResult", () => {
   // Strong invariant: a value sent through encode and back through decode
   // must equal the original. This is the test that proves the FFI
   // bigint-quoting story actually preserves precision.
-  const wit = `package test:demo;
-
-world demo {
-  export echo: func(x: u64) -> u64;
+  const wit = `${KONTOR_HEADER}
+    export echo: async func(ctx: borrow<view-context>, x: u64) -> u64;
 }`;
   const w = new witApi.Wit(wit);
 
@@ -312,4 +323,41 @@ world demo {
   const waveResult = encoded.slice("echo(".length, -1);
   const decoded = w.decodeResult("echo", waveResult);
   expect(JSON.parse(decoded)).toBe(original);
+});
+
+// Note: Kontor's wit_validator rejects 8/16/32-bit ints (except list<u8>),
+// floats, and char as contract-level types. The codec in WitResource still
+// handles them so it can serve those types as members of larger compound
+// types (records, lists, etc.) in case Kontor ever lifts the restriction,
+// but they're unreachable via top-level params in a valid Kontor contract.
+
+// ─── s64 (signed bigint — quoted decimal, like u64) ──────────────────
+
+test("Wit s64 round-trips with quoted decimal strings (max and min)", () => {
+  const wit = `${KONTOR_HEADER}
+    export echo: async func(ctx: borrow<view-context>, x: s64) -> s64;
+}`;
+  const w = new witApi.Wit(wit);
+  const cases = ["9223372036854775807", "-9223372036854775808", "0"];
+  for (const original of cases) {
+    const encoded = w.encodeCall("echo", JSON.stringify({ x: original }));
+    const wave = encoded.slice("echo(".length, -1);
+    const decoded = w.decodeResult("echo", wave);
+    expect(JSON.parse(decoded)).toBe(original);
+  }
+});
+
+// ─── string ───────────────────────────────────────────────────────────
+
+test("Wit string round-trips, including escape characters", () => {
+  const wit = `${KONTOR_HEADER}
+    export echo: async func(ctx: borrow<view-context>, s: string) -> string;
+}`;
+  const w = new witApi.Wit(wit);
+  const cases = ["hello", 'with "quotes"', "back\\slash", "unicode: 👋"];
+  for (const original of cases) {
+    const encoded = w.encodeCall("echo", JSON.stringify({ s: original }));
+    const wave = encoded.slice("echo(".length, -1);
+    expect(JSON.parse(w.decodeResult("echo", wave))).toBe(original);
+  }
 });
