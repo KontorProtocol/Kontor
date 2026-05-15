@@ -1,8 +1,8 @@
 mod wit_resource;
 
 use indexer_types::*;
-use wit_validator::Validator;
 use wit_resource::WitResource;
+use wit_validator::Validator;
 
 wit_bindgen::generate!({ world: "root", runtime_path: "indexer_types::wit_bindgen::rt"});
 

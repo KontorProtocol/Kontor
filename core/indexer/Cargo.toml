@@ -17,6 +17,7 @@ workspace = true
 [dependencies]
 stdlib = { path = "../stdlib" }
 macros = { path = "../macros" }
+numerics = { path = "../numerics" }
 indexer-types = { path = "../indexer-types" }
 anyhow = { workspace = true }
 axum = { workspace = true }
@@ -57,8 +58,8 @@ rand = "=0.10.1"
 rand_chacha = "=0.10.0"
 brotli = "=8.0.2"
 sha2 = "=0.10.9"
-num = "=0.4.3"
-fastnum = "=0.7.4"
+num = { workspace = true }
+fastnum = { workspace = true }
 strum = { version = "=0.28.0", features = ["derive"] }
 tokio-tungstenite = { version = "=0.29.0", features = ["rustls-tls-webpki-roots"] }
 tracing-stackdriver = "=0.10.0"

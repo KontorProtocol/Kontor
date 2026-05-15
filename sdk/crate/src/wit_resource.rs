@@ -61,8 +61,8 @@ impl WitResource {
         let func = find_function(resolve, &fn_name)
             .ok_or_else(|| format!("function not found in WIT: {fn_name}"))?;
 
-        let args: serde_json::Value = serde_json::from_str(&args_json)
-            .map_err(|e| format!("invalid args JSON: {e}"))?;
+        let args: serde_json::Value =
+            serde_json::from_str(&args_json).map_err(|e| format!("invalid args JSON: {e}"))?;
         let args_obj = args
             .as_object()
             .ok_or_else(|| "args must be a JSON object keyed by param name".to_string())?;
@@ -79,8 +79,8 @@ impl WitResource {
                 .get(&param.name)
                 .ok_or_else(|| format!("missing arg: {}", param.name))?;
             let wave_val = json_to_wave(&param.ty, v, resolve)?;
-            let rendered = wasm_wave::to_string(&wave_val)
-                .map_err(|e| format!("WAVE render error: {e}"))?;
+            let rendered =
+                wasm_wave::to_string(&wave_val).map_err(|e| format!("WAVE render error: {e}"))?;
             rendered_args.push(rendered);
         }
 
@@ -102,8 +102,8 @@ impl WitResource {
             .ok_or_else(|| "function has no return type".to_string())?;
         let wave_ty = wit_type_to_wave_type(result_ty, resolve)?;
 
-        let value: WaveValue = wasm_wave::from_str(&wave_ty, &wave)
-            .map_err(|e| format!("WAVE parse error: {e}"))?;
+        let value: WaveValue =
+            wasm_wave::from_str(&wave_ty, &wave).map_err(|e| format!("WAVE parse error: {e}"))?;
 
         serde_json::to_string(&WaveValueRepr(&value))
             .map_err(|e| format!("JSON serialize error: {e}"))
@@ -118,8 +118,7 @@ impl WitResource {
     ///   source of truth
     pub fn parse(&self) -> Result<String, String> {
         let resolve = self.resolve()?;
-        serde_json::to_string(resolve)
-            .map_err(|e| format!("serialize Resolve: {e}"))
+        serde_json::to_string(resolve).map_err(|e| format!("serialize Resolve: {e}"))
     }
 }
 
@@ -137,10 +136,7 @@ fn find_function<'a>(resolve: &'a Resolve, fn_name: &str) -> Option<&'a wit_pars
 /// Map a `wit_parser::Type` to a `wasm_wave::value::Type`. Primitives
 /// have direct constants; user-defined types resolve via wasm-wave's
 /// `resolve_wit_type` bridge using their TypeId.
-fn wit_type_to_wave_type(
-    ty: &Type,
-    resolve: &Resolve,
-) -> Result<wasm_wave::value::Type, String> {
+fn wit_type_to_wave_type(ty: &Type, resolve: &Resolve) -> Result<wasm_wave::value::Type, String> {
     use wasm_wave::value::Type as WaveType;
     match ty {
         Type::Bool => Ok(WaveType::BOOL),
@@ -172,11 +168,7 @@ fn wit_type_to_wave_type(
 /// User-defined types reach `Type::Id` and dispatch on `TypeDefKind`
 /// (option, variant, result, etc.). `&Resolve` is required to look those
 /// up and to construct wasm-wave's type representation via the bridge.
-fn json_to_wave(
-    ty: &Type,
-    v: &serde_json::Value,
-    resolve: &Resolve,
-) -> Result<WaveValue, String> {
+fn json_to_wave(ty: &Type, v: &serde_json::Value, resolve: &Resolve) -> Result<WaveValue, String> {
     fn as_int<T>(v: &serde_json::Value, ty_name: &str) -> Result<T, String>
     where
         T: TryFrom<i64>,
@@ -202,16 +194,18 @@ fn json_to_wave(
         T: std::str::FromStr,
         <T as std::str::FromStr>::Err: std::fmt::Display,
     {
-        let s = v.as_str().ok_or_else(|| {
-            format!("expected JSON string holding a {ty_name} decimal")
-        })?;
+        let s = v
+            .as_str()
+            .ok_or_else(|| format!("expected JSON string holding a {ty_name} decimal"))?;
         s.parse()
             .map_err(|e| format!("invalid {ty_name} string '{s}': {e}"))
     }
 
     match ty {
         Type::Bool => {
-            let b = v.as_bool().ok_or_else(|| "expected JSON bool".to_string())?;
+            let b = v
+                .as_bool()
+                .ok_or_else(|| "expected JSON bool".to_string())?;
             Ok(WaveValue::make_bool(b))
         }
         Type::S8 => Ok(WaveValue::make_s8(as_int(v, "s8")?)),
@@ -223,11 +217,15 @@ fn json_to_wave(
         Type::U32 => Ok(WaveValue::make_u32(as_uint(v, "u32")?)),
         Type::U64 => Ok(WaveValue::make_u64(quoted_decimal(v, "u64")?)),
         Type::F32 => {
-            let n = v.as_f64().ok_or_else(|| "expected JSON number for f32".to_string())?;
+            let n = v
+                .as_f64()
+                .ok_or_else(|| "expected JSON number for f32".to_string())?;
             Ok(WaveValue::make_f32(n as f32))
         }
         Type::F64 => {
-            let n = v.as_f64().ok_or_else(|| "expected JSON number for f64".to_string())?;
+            let n = v
+                .as_f64()
+                .ok_or_else(|| "expected JSON number for f64".to_string())?;
             Ok(WaveValue::make_f64(n))
         }
         Type::Char => {
@@ -244,7 +242,9 @@ fn json_to_wave(
             Ok(WaveValue::make_char(c))
         }
         Type::String => {
-            let s = v.as_str().ok_or_else(|| "expected JSON string".to_string())?;
+            let s = v
+                .as_str()
+                .ok_or_else(|| "expected JSON string".to_string())?;
             Ok(WaveValue::make_string(s.into()))
         }
         Type::Id(type_id) => {
@@ -272,13 +272,9 @@ fn json_to_wave(
                     let obj = v.as_object().ok_or_else(|| {
                         "expected JSON object {kind, value?} for result".to_string()
                     })?;
-                    let case_name = obj
-                        .get("kind")
-                        .and_then(|k| k.as_str())
-                        .ok_or_else(|| {
-                            "result JSON requires 'kind' field with value 'ok' or 'err'"
-                                .to_string()
-                        })?;
+                    let case_name = obj.get("kind").and_then(|k| k.as_str()).ok_or_else(|| {
+                        "result JSON requires 'kind' field with value 'ok' or 'err'".to_string()
+                    })?;
                     let inner_ty = match case_name {
                         "ok" => result_kind.ok.as_ref(),
                         "err" => result_kind.err.as_ref(),
@@ -297,9 +293,7 @@ fn json_to_wave(
                             ));
                         }
                         (Some(_), None) => {
-                            return Err(format!(
-                                "result '{case_name}' requires 'value' field"
-                            ));
+                            return Err(format!("result '{case_name}' requires 'value' field"));
                         }
                         (Some(t), Some(val)) => Some(json_to_wave(t, val, resolve)?),
                     };
@@ -315,39 +309,36 @@ fn json_to_wave(
                     // Enum cases are all unit; the JSON shape is just the
                     // case name as a string (simpler than the {kind} we use
                     // for variants since there's never a payload).
-                    let case_name = v.as_str().ok_or_else(|| {
-                        "expected JSON string (case name) for enum".to_string()
-                    })?;
+                    let case_name = v
+                        .as_str()
+                        .ok_or_else(|| "expected JSON string (case name) for enum".to_string())?;
                     if !enum_def.cases.iter().any(|c| c.name == case_name) {
                         return Err(format!("unknown enum case: {case_name}"));
                     }
                     let wave_ty = wit_type_to_wave_type(ty, resolve)?;
-                    WaveValue::make_enum(&wave_ty, case_name)
-                        .map_err(|e| format!("make_enum: {e}"))
+                    WaveValue::make_enum(&wave_ty, case_name).map_err(|e| format!("make_enum: {e}"))
                 }
                 TypeDefKind::Flags(_flags_def) => {
                     // Locked encoding shape #9: flags as Array<string>
                     // with set semantics. Unknown flag names are caught
                     // by wasm-wave's make_flags validation.
-                    let arr = v.as_array().ok_or_else(|| {
-                        "expected JSON array of strings for flags".to_string()
-                    })?;
+                    let arr = v
+                        .as_array()
+                        .ok_or_else(|| "expected JSON array of strings for flags".to_string())?;
                     let names: Result<Vec<&str>, String> = arr
                         .iter()
                         .map(|x| {
-                            x.as_str().ok_or_else(|| {
-                                "flags entries must be JSON strings".to_string()
-                            })
+                            x.as_str()
+                                .ok_or_else(|| "flags entries must be JSON strings".to_string())
                         })
                         .collect();
                     let wave_ty = wit_type_to_wave_type(ty, resolve)?;
-                    WaveValue::make_flags(&wave_ty, names?)
-                        .map_err(|e| format!("make_flags: {e}"))
+                    WaveValue::make_flags(&wave_ty, names?).map_err(|e| format!("make_flags: {e}"))
                 }
                 TypeDefKind::Tuple(tuple_def) => {
-                    let arr = v.as_array().ok_or_else(|| {
-                        "expected JSON array for tuple".to_string()
-                    })?;
+                    let arr = v
+                        .as_array()
+                        .ok_or_else(|| "expected JSON array for tuple".to_string())?;
                     if arr.len() != tuple_def.types.len() {
                         return Err(format!(
                             "tuple length mismatch: expected {}, got {}",
@@ -361,20 +352,18 @@ fn json_to_wave(
                         .map(|(val, t)| json_to_wave(t, val, resolve))
                         .collect();
                     let wave_ty = wit_type_to_wave_type(ty, resolve)?;
-                    WaveValue::make_tuple(&wave_ty, items?)
-                        .map_err(|e| format!("make_tuple: {e}"))
+                    WaveValue::make_tuple(&wave_ty, items?).map_err(|e| format!("make_tuple: {e}"))
                 }
                 TypeDefKind::List(inner_ty) => {
-                    let arr = v.as_array().ok_or_else(|| {
-                        "expected JSON array for list".to_string()
-                    })?;
+                    let arr = v
+                        .as_array()
+                        .ok_or_else(|| "expected JSON array for list".to_string())?;
                     let wave_ty = wit_type_to_wave_type(ty, resolve)?;
                     let items: Result<Vec<_>, _> = arr
                         .iter()
                         .map(|x| json_to_wave(inner_ty, x, resolve))
                         .collect();
-                    WaveValue::make_list(&wave_ty, items?)
-                        .map_err(|e| format!("make_list: {e}"))
+                    WaveValue::make_list(&wave_ty, items?).map_err(|e| format!("make_list: {e}"))
                 }
                 TypeDefKind::Record(record) => {
                     // JSON object → wasm-wave record. Each field is looked
@@ -386,9 +375,9 @@ fn json_to_wave(
                     let mut fields: Vec<(&str, WaveValue)> =
                         Vec::with_capacity(record.fields.len());
                     for field in &record.fields {
-                        let val = obj.get(&field.name).ok_or_else(|| {
-                            format!("record missing field: {}", field.name)
-                        })?;
+                        let val = obj
+                            .get(&field.name)
+                            .ok_or_else(|| format!("record missing field: {}", field.name))?;
                         let inner = json_to_wave(&field.ty, val, resolve)?;
                         fields.push((field.name.as_str(), inner));
                     }
@@ -401,12 +390,9 @@ fn json_to_wave(
                     let obj = v.as_object().ok_or_else(|| {
                         "expected JSON object {kind, value?} for variant".to_string()
                     })?;
-                    let case_name = obj
-                        .get("kind")
-                        .and_then(|k| k.as_str())
-                        .ok_or_else(|| {
-                            "variant JSON requires a 'kind' field (string case name)".to_string()
-                        })?;
+                    let case_name = obj.get("kind").and_then(|k| k.as_str()).ok_or_else(|| {
+                        "variant JSON requires a 'kind' field (string case name)".to_string()
+                    })?;
                     let case = variant
                         .cases
                         .iter()
@@ -425,19 +411,17 @@ fn json_to_wave(
                                 "variant case '{case_name}' requires 'value' field"
                             ));
                         }
-                        (Some(inner_ty), Some(val)) => {
-                            Some(json_to_wave(inner_ty, val, resolve)?)
-                        }
+                        (Some(inner_ty), Some(val)) => Some(json_to_wave(inner_ty, val, resolve)?),
                     };
                     WaveValue::make_variant(&wave_ty, case_name, payload)
                         .map_err(|e| format!("make_variant: {e}"))
                 }
                 TypeDefKind::Type(aliased) => json_to_wave(aliased, v, resolve),
-                TypeDefKind::Handle(_) | TypeDefKind::Resource => Err(
-                    "resource handles (own/borrow) are runtime-only state \
+                TypeDefKind::Handle(_) | TypeDefKind::Resource => {
+                    Err("resource handles (own/borrow) are runtime-only state \
                      and can't cross the @kontor/sdk codec boundary"
-                        .to_string(),
-                ),
+                        .to_string())
+                }
                 other => Err(format!("type def kind not implemented yet: {other:?}")),
             }
         }
