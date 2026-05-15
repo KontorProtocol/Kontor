@@ -282,12 +282,15 @@ impl Executor for RuntimeExecutor {
 }
 
 /// Process every op in one Bitcoin-input's `Insts`. Returns a positional
-/// vector aligned with `input.insts.ops`: `None` at position i means the
-/// i-th op executed without a deterministic failure; `Some(err)` means
-/// either pre-execution rejection (parse/aggregate/nonce/materialization)
-/// or in-execution deterministic failure (trap/OOG/contract-err/etc.). The
+/// vector aligned with the ops that actually executed — i.e. ops in
+/// `input.insts.ops` minus those rejected at materialization (no `Op`
+/// could be built, so they never reach the wasm runtime and don't appear
+/// in inspect's response either). `None` at position i means the i-th
+/// executed op had no deterministic failure; `Some(err)` means a
+/// deterministic in-execution failure (trap/OOG/contract-err/etc.). The
 /// caller decides what to do with the vec — the canonical reactor path
-/// discards it; the simulate handler zips it into the response.
+/// discards it; the simulate handler zips it into the response, aligned
+/// 1:1 with inspect's `Vec<OpWithResult>`.
 pub async fn process_input(
     runtime: &mut Runtime,
     input: &indexer_types::Input,
@@ -347,7 +350,6 @@ async fn process_direct_input(
             Ok(op) => op,
             Err(e) => {
                 warn!("Rejected direct op: {e:#}");
-                errors.push(Some(e));
                 continue;
             }
         };
@@ -477,7 +479,6 @@ async fn process_aggregate_input(
             Ok(op) => op,
             Err(e) => {
                 warn!("Rejected aggregate op for signer {signer_id}: {e:#}");
-                errors.push(Some(e));
                 continue;
             }
         };

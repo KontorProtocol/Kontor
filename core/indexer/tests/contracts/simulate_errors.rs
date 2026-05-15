@@ -202,6 +202,78 @@ async fn simulate_mixed_outcomes_align_positionally() -> Result<()> {
     Ok(())
 }
 
+/// Regression: a materialize-failed op (orphan `Sponsored` on a direct input
+/// with no publisher offer) must not shift error attribution onto a later op.
+/// inspect drops the failed op from its output entirely, so the simulate
+/// response should be length 2 for a 3-op input where the middle op is
+/// materialize-rejected — and the surviving ops must show success with no
+/// error_message. Before the executor's failures vec was filtered to match
+/// inspect's skip-on-materialize-fail behavior, op 2's slot would have
+/// received op 1's materialization error.
+#[testlib::test(contracts_dir = "../../test-contracts", regtest_only)]
+async fn simulate_materialize_fail_does_not_shift_attribution() -> Result<()> {
+    let alice = runtime.identity().await?;
+    let crypto = runtime.publish(&alice, "crypto").await?;
+
+    let mut rt = runtime.reg_tester().unwrap();
+    let mut ident = rt.identity().await?;
+    let (_, _, reveal_tx_hex) = rt
+        .compose_insts(
+            &mut ident,
+            Insts::direct(vec![
+                Inst {
+                    payment: PaymentIntent::self_pay(10_000),
+                    kind: InstKind::Call {
+                        contract: crypto.clone().into(),
+                        expr: "set-hash(\"a\")".to_string(),
+                    },
+                },
+                // Orphan Sponsored on a direct input — materialization fails
+                // because there's no publisher offer.
+                Inst {
+                    payment: PaymentIntent::Sponsored,
+                    kind: InstKind::Call {
+                        contract: crypto.clone().into(),
+                        expr: "set-hash(\"b\")".to_string(),
+                    },
+                },
+                Inst {
+                    payment: PaymentIntent::self_pay(10_000),
+                    kind: InstKind::Call {
+                        contract: crypto.clone().into(),
+                        expr: "set-hash(\"c\")".to_string(),
+                    },
+                },
+            ]),
+        )
+        .await?;
+
+    let result = rt
+        .kontor_client()
+        .await
+        .transaction_simulate(TransactionHex { hex: reveal_tx_hex })
+        .await?;
+    assert_eq!(
+        result.len(),
+        2,
+        "materialize-failed op must be dropped from simulate response, got {} entries",
+        result.len()
+    );
+    for (i, ow) in result.iter().enumerate() {
+        assert!(
+            ow.result.is_some(),
+            "surviving op at position {i} should have a result row"
+        );
+        assert!(
+            ow.error_message.is_none(),
+            "surviving op at position {i} must not carry a misattributed error_message: {:?}",
+            ow.error_message
+        );
+    }
+
+    Ok(())
+}
+
 /// Inspect (not simulate) never sets error_message, even after a tx with
 /// failures has actually been processed on chain.
 #[testlib::test(contracts_dir = "../../test-contracts", regtest_only)]
