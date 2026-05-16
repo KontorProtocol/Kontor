@@ -2,12 +2,12 @@
 members = [
     "indexer",
     "indexer-types",
+    "kontor-sdk",
     "macros",
     "numerics",
     "stdlib",
     "testlib",
     "wit-validator",
-    "../sdk/crate",
 ]
 resolver = "2"
 

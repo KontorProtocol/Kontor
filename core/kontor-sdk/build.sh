@@ -26,7 +26,11 @@ wasm-tools component new \
   "${TARGET_DIR}/wasm32-unknown-unknown/release/kontor_sdk.wasm" \
   -o "${TARGET_DIR}/wasm32-unknown-unknown/release/kontor_sdk_component.wasm"
 
-npx jco transpile \
+# jco lives in sdk/node_modules; invoke it from there so `npx` resolves
+# the local install instead of fetching a placeholder from the registry.
+# TARGET_DIR is absolute (resolved via cargo metadata above) so the
+# component path survives the cd.
+(cd ../../sdk && npx jco transpile \
   "${TARGET_DIR}/wasm32-unknown-unknown/release/kontor_sdk_component.wasm" \
   --name kontor-sdk \
-  -o ../src/component
+  -o src/component)
