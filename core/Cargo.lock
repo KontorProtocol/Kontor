@@ -3789,6 +3789,7 @@ dependencies = [
  "metrics-exporter-prometheus",
  "moka",
  "num",
+ "numerics",
  "once_cell",
  "priority-queue",
  "proptest",
@@ -4100,6 +4101,19 @@ dependencies = [
  "serde",
  "sha2 0.10.9",
  "thiserror 1.0.69",
+]
+
+[[package]]
+name = "kontor-sdk"
+version = "0.1.0"
+dependencies = [
+ "indexer-types",
+ "numerics",
+ "serde",
+ "serde_json",
+ "wasm-wave 0.248.0",
+ "wit-parser 0.248.0",
+ "wit-validator",
 ]
 
 [[package]]
@@ -5408,6 +5422,15 @@ checksum = "91df4bbde75afed763b708b7eee1e8e7651e02d97f6d5dd763e89367e957b23b"
 dependencies = [
  "hermit-abi",
  "libc",
+]
+
+[[package]]
+name = "numerics"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "fastnum",
+ "num",
 ]
 
 [[package]]
@@ -8688,6 +8711,7 @@ checksum = "db8c928a58132ecc6a4daee3795bb3560702436f6516b5f8c5b3086113031e76"
 dependencies = [
  "logos 0.14.4",
  "thiserror 2.0.18",
+ "wit-parser 0.248.0",
 ]
 
 [[package]]

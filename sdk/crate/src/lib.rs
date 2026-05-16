@@ -1,12 +1,35 @@
-#![no_std]
-extern crate alloc;
-
-use alloc::{string::String, vec::Vec};
+mod numerics_api;
+mod wit_resource;
 
 use indexer_types::*;
+use wit_resource::WitResource;
 use wit_validator::Validator;
 
 wit_bindgen::generate!({ world: "root", runtime_path: "indexer_types::wit_bindgen::rt"});
+
+use exports::root::component::wit_codec::{Guest as WitCodecGuest, GuestWit};
+
+impl WitCodecGuest for Lib {
+    type Wit = WitResource;
+}
+
+impl GuestWit for WitResource {
+    fn new(text: String) -> Self {
+        WitResource::new(text)
+    }
+
+    fn encode_call(&self, fn_name: String, args_json: String) -> Result<String, String> {
+        WitResource::encode_call(self, fn_name, args_json)
+    }
+
+    fn decode_result(&self, fn_name: String, wave: String) -> Result<String, String> {
+        WitResource::decode_result(self, fn_name, wave)
+    }
+
+    fn parse(&self) -> Result<String, String> {
+        WitResource::parse(self)
+    }
+}
 
 pub struct Lib {}
 
@@ -41,7 +64,7 @@ impl Guest for Lib {
                             location: if e.span.is_known() {
                                 resolve.render_location(e.span)
                             } else {
-                                alloc::string::String::from("<unknown>")
+                                String::from("<unknown>")
                             },
                         })
                         .collect();

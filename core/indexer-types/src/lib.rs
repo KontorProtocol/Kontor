@@ -11,7 +11,7 @@ use ts_rs::TS;
 pub use wit_bindgen;
 
 #[derive(Serialize, Deserialize, Clone, Builder, TS)]
-#[ts(export, export_to = "../../../kontor-ts/src/bindings.d.ts")]
+#[ts(export, export_to = "../../../sdk/src/bindings.d.ts")]
 pub struct InstructionQuery {
     pub address: String,
     pub x_only_public_key: String,
@@ -21,7 +21,7 @@ pub struct InstructionQuery {
 }
 
 #[derive(Serialize, Deserialize, Builder, TS)]
-#[ts(export, export_to = "../../../kontor-ts/src/bindings.d.ts")]
+#[ts(export, export_to = "../../../sdk/src/bindings.d.ts")]
 pub struct ComposeQuery {
     pub instructions: Vec<InstructionQuery>,
     /// Optional: when omitted, the server falls back to its currently
@@ -33,7 +33,7 @@ pub struct ComposeQuery {
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, TS)]
-#[ts(export, export_to = "../../../kontor-ts/src/bindings.d.ts")]
+#[ts(export, export_to = "../../../sdk/src/bindings.d.ts")]
 pub struct TapLeafScript {
     #[ts(type = "number")]
     #[serde(rename = "leafVersion")]
@@ -46,7 +46,7 @@ pub struct TapLeafScript {
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, TS)]
-#[ts(export, export_to = "../../../kontor-ts/src/bindings.d.ts")]
+#[ts(export, export_to = "../../../sdk/src/bindings.d.ts")]
 pub struct ParticipantScripts {
     pub address: String,
     pub x_only_public_key: String,
@@ -55,7 +55,7 @@ pub struct ParticipantScripts {
 }
 
 #[derive(Debug, Serialize, Deserialize, Builder, TS)]
-#[ts(export, export_to = "../../../kontor-ts/src/bindings.d.ts")]
+#[ts(export, export_to = "../../../sdk/src/bindings.d.ts")]
 pub struct ComposeOutputs {
     #[ts(as = "String")]
     pub commit_transaction: bitcoin::Transaction,
@@ -69,7 +69,7 @@ pub struct ComposeOutputs {
 }
 
 #[derive(Builder, Serialize, Clone, TS)]
-#[ts(export, export_to = "../../../kontor-ts/src/bindings.d.ts")]
+#[ts(export, export_to = "../../../sdk/src/bindings.d.ts")]
 pub struct CommitOutputs {
     #[ts(as = "String")]
     pub commit_transaction: bitcoin::Transaction,
@@ -79,7 +79,7 @@ pub struct CommitOutputs {
 }
 
 #[derive(Serialize, Deserialize, Clone, Builder, TS)]
-#[ts(export, export_to = "../../../kontor-ts/src/bindings.d.ts")]
+#[ts(export, export_to = "../../../sdk/src/bindings.d.ts")]
 pub struct RevealParticipantQuery {
     pub address: String,
     pub x_only_public_key: String,
@@ -89,7 +89,7 @@ pub struct RevealParticipantQuery {
 }
 
 #[derive(Serialize, Deserialize, TS, Clone, Builder)]
-#[ts(export, export_to = "../../../kontor-ts/src/bindings.d.ts")]
+#[ts(export, export_to = "../../../sdk/src/bindings.d.ts")]
 pub struct RevealQuery {
     pub commit_tx_hex: String,
     /// Optional: when omitted, the server falls back to its currently
@@ -103,7 +103,7 @@ pub struct RevealQuery {
 }
 
 #[derive(Serialize, Deserialize, TS)]
-#[ts(export, export_to = "../../../kontor-ts/src/bindings.d.ts")]
+#[ts(export, export_to = "../../../sdk/src/bindings.d.ts")]
 pub struct TxOutSchema {
     #[ts(type = "number")]
     pub value: u64,
@@ -111,7 +111,7 @@ pub struct TxOutSchema {
 }
 
 #[derive(Clone, Serialize, Builder, TS)]
-#[ts(export, export_to = "../../../kontor-ts/src/bindings.d.ts")]
+#[ts(export, export_to = "../../../sdk/src/bindings.d.ts")]
 pub struct RevealParticipantInputs {
     #[ts(as = "String")]
     pub address: bitcoin::Address,
@@ -126,7 +126,7 @@ pub struct RevealParticipantInputs {
 }
 
 #[derive(Builder, Serialize, Clone, TS)]
-#[ts(export, export_to = "../../../kontor-ts/src/bindings.d.ts")]
+#[ts(export, export_to = "../../../sdk/src/bindings.d.ts")]
 pub struct RevealInputs {
     #[ts(as = "String")]
     pub commit_tx: bitcoin::Transaction,
@@ -139,7 +139,7 @@ pub struct RevealInputs {
 }
 
 #[derive(Builder, Serialize, Deserialize, TS)]
-#[ts(export, export_to = "../../../kontor-ts/src/bindings.d.ts")]
+#[ts(export, export_to = "../../../sdk/src/bindings.d.ts")]
 pub struct RevealOutputs {
     #[ts(as = "String")]
     pub transaction: bitcoin::Transaction,
@@ -149,24 +149,24 @@ pub struct RevealOutputs {
 }
 
 #[derive(Debug, Serialize, Deserialize, TS)]
-#[ts(export, export_to = "../../../kontor-ts/src/bindings.d.ts")]
+#[ts(export, export_to = "../../../sdk/src/bindings.d.ts")]
 pub struct ErrorResponse {
     pub error: String,
 }
 
 #[derive(Debug, Serialize, Deserialize, TS)]
-#[ts(export, export_to = "../../../kontor-ts/src/bindings.d.ts")]
+#[ts(export, export_to = "../../../sdk/src/bindings.d.ts")]
 pub struct ResultResponse<T: TS> {
     pub result: T,
 }
 
 #[derive(Debug, Serialize, Deserialize, PartialEq, TS)]
-#[ts(export, export_to = "../../../kontor-ts/src/bindings.d.ts")]
+#[ts(export, export_to = "../../../sdk/src/bindings.d.ts")]
 #[serde(tag = "type")]
 pub enum WsRequest {}
 
 #[derive(Debug, Serialize, Deserialize, PartialEq, TS)]
-#[ts(export, export_to = "../../../kontor-ts/src/bindings.d.ts")]
+#[ts(export, export_to = "../../../sdk/src/bindings.d.ts")]
 #[serde(tag = "type")]
 pub enum WsResponse {
     Event { event: Event },
@@ -174,7 +174,7 @@ pub enum WsResponse {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
-#[ts(export, export_to = "../../../kontor-ts/src/bindings.d.ts")]
+#[ts(export, export_to = "../../../sdk/src/bindings.d.ts")]
 #[serde(tag = "type")]
 pub enum Event {
     Processed {
@@ -191,7 +191,7 @@ pub enum Event {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
-#[ts(export, export_to = "../../../kontor-ts/src/bindings.d.ts")]
+#[ts(export, export_to = "../../../sdk/src/bindings.d.ts")]
 pub struct Input {
     #[ts(as = "String")]
     pub previous_output: bitcoin::OutPoint,
@@ -203,7 +203,7 @@ pub struct Input {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
-#[ts(export, export_to = "../../../kontor-ts/src/bindings.d.ts")]
+#[ts(export, export_to = "../../../sdk/src/bindings.d.ts")]
 pub struct Transaction {
     #[ts(type = "string")]
     pub txid: Txid,
@@ -216,7 +216,7 @@ pub struct Transaction {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, TS)]
-#[ts(export, export_to = "../../../kontor-ts/src/bindings.d.ts")]
+#[ts(export, export_to = "../../../sdk/src/bindings.d.ts")]
 pub struct Block {
     #[ts(type = "number")]
     pub height: u64,
@@ -228,14 +228,14 @@ pub struct Block {
 }
 
 #[derive(Debug, Clone, Hash, PartialEq, Eq, Serialize, Deserialize, TS)]
-#[ts(export, export_to = "../../../kontor-ts/src/bindings.d.ts")]
+#[ts(export, export_to = "../../../sdk/src/bindings.d.ts")]
 pub struct OutPoint {
     pub txid: String,
     pub vout: u64,
 }
 
 #[derive(Debug, Clone, Hash, Serialize, Deserialize, TS)]
-#[ts(export, export_to = "../../../kontor-ts/src/bindings.d.ts")]
+#[ts(export, export_to = "../../../sdk/src/bindings.d.ts")]
 pub enum HolderRef {
     XOnlyPubkey(String),
     SignerId(u64),
@@ -262,7 +262,7 @@ pub struct ContractAddress {
 contract_address!(ContractAddress);
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
-#[ts(export, export_to = "../../../kontor-ts/src/bindings.d.ts")]
+#[ts(export, export_to = "../../../sdk/src/bindings.d.ts")]
 pub struct OpMetadata {
     #[ts(as = "String")]
     pub previous_output: bitcoin::OutPoint,
@@ -287,7 +287,7 @@ pub struct OpMetadata {
 /// — the field exists for shape uniformity, not because Issuance funds
 /// itself.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
-#[ts(export, export_to = "../../../kontor-ts/src/bindings.d.ts")]
+#[ts(export, export_to = "../../../sdk/src/bindings.d.ts")]
 pub struct Payment {
     #[ts(type = "number")]
     pub signer_id: u64,
@@ -296,7 +296,7 @@ pub struct Payment {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
-#[ts(export, export_to = "../../../kontor-ts/src/bindings.d.ts")]
+#[ts(export, export_to = "../../../sdk/src/bindings.d.ts")]
 pub struct AggregateInfo {
     /// One entry per op in `Insts.ops`, in parallel order. Each entry binds
     /// a co-signer claim (existing `signer_id` or fresh x-only `PubKey`) to
@@ -314,7 +314,7 @@ pub struct AggregateInfo {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
-#[ts(export, export_to = "../../../kontor-ts/src/bindings.d.ts")]
+#[ts(export, export_to = "../../../sdk/src/bindings.d.ts")]
 pub struct AggregateSigner {
     pub identity: SignerClaim,
     #[ts(type = "number")]
@@ -333,14 +333,14 @@ pub struct AggregateSigner {
 /// which variant is chosen — the variant only controls how to *index*
 /// the verification key, not which key.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
-#[ts(export, export_to = "../../../kontor-ts/src/bindings.d.ts")]
+#[ts(export, export_to = "../../../sdk/src/bindings.d.ts")]
 pub enum SignerClaim {
     Id(#[ts(type = "number")] u64),
     PubKey(#[ts(as = "String")] XOnlyPublicKey),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
-#[ts(export, export_to = "../../../kontor-ts/src/bindings.d.ts")]
+#[ts(export, export_to = "../../../sdk/src/bindings.d.ts")]
 pub struct Insts {
     pub ops: Vec<Inst>,
     pub aggregate: Option<AggregateInfo>,
@@ -364,7 +364,7 @@ impl Insts {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
-#[ts(export, export_to = "../../../kontor-ts/src/bindings.d.ts")]
+#[ts(export, export_to = "../../../sdk/src/bindings.d.ts")]
 pub struct Op {
     pub metadata: OpMetadata,
     pub kind: OpKind,
@@ -372,7 +372,7 @@ pub struct Op {
 
 #[serde_as]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
-#[ts(export, export_to = "../../../kontor-ts/src/bindings.d.ts")]
+#[ts(export, export_to = "../../../sdk/src/bindings.d.ts")]
 pub enum OpKind {
     Publish {
         name: String,
@@ -393,7 +393,7 @@ pub enum OpKind {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Builder, TS)]
-#[ts(export, export_to = "../../../kontor-ts/src/bindings.d.ts")]
+#[ts(export, export_to = "../../../sdk/src/bindings.d.ts")]
 pub struct BlockRow {
     #[ts(type = "number")]
     pub height: i64,
@@ -414,7 +414,7 @@ impl From<&Block> for BlockRow {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Builder, TS)]
-#[ts(export, export_to = "../../../kontor-ts/src/bindings.d.ts")]
+#[ts(export, export_to = "../../../sdk/src/bindings.d.ts")]
 pub struct TransactionRow {
     #[ts(type = "number")]
     #[builder(default = 0)]
@@ -431,7 +431,7 @@ pub struct TransactionRow {
 }
 
 #[derive(Eq, PartialEq, Debug, Clone, Serialize, Deserialize, TS)]
-#[ts(export, export_to = "../../../kontor-ts/src/bindings.d.ts")]
+#[ts(export, export_to = "../../../sdk/src/bindings.d.ts")]
 pub struct ContractListRow {
     #[ts(type = "number")]
     pub id: i64,
@@ -448,7 +448,7 @@ pub struct ContractListRow {
 
 #[serde_as]
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
-#[ts(export, export_to = "../../../kontor-ts/src/bindings.d.ts")]
+#[ts(export, export_to = "../../../sdk/src/bindings.d.ts")]
 pub struct PaginationMeta {
     #[ts(as = "String")]
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -463,7 +463,7 @@ pub struct PaginationMeta {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
-#[ts(export, export_to = "../../../kontor-ts/src/bindings.d.ts")]
+#[ts(export, export_to = "../../../sdk/src/bindings.d.ts")]
 pub struct PaginatedResponse<T> {
     pub results: Vec<T>,
     pub pagination: PaginationMeta,
@@ -477,7 +477,7 @@ pub struct PaginatedResponse<T> {
 #[derive(
     Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, TS, clap::ValueEnum,
 )]
-#[ts(export, export_to = "../../../kontor-ts/src/bindings.d.ts")]
+#[ts(export, export_to = "../../../sdk/src/bindings.d.ts")]
 #[serde(rename_all = "lowercase")]
 pub enum ConsensusMode {
     /// Signs votes and proposals.
@@ -488,7 +488,7 @@ pub enum ConsensusMode {
 }
 
 #[derive(Debug, Eq, PartialEq, Deserialize, Serialize, TS)]
-#[ts(export, export_to = "../../../kontor-ts/src/bindings.d.ts")]
+#[ts(export, export_to = "../../../sdk/src/bindings.d.ts")]
 pub struct Info {
     pub version: String,
     pub target: String,
@@ -503,13 +503,13 @@ pub struct Info {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
-#[ts(export, export_to = "../../../kontor-ts/src/bindings.d.ts")]
+#[ts(export, export_to = "../../../sdk/src/bindings.d.ts")]
 pub struct TransactionHex {
     pub hex: String,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Deserialize, Serialize, TS)]
-#[ts(export, export_to = "../../../kontor-ts/src/bindings.d.ts")]
+#[ts(export, export_to = "../../../sdk/src/bindings.d.ts")]
 pub struct Fees {
     /// Recommended fee rate (sat/vB) to land in the next ~1 block.
     #[ts(type = "number")]
@@ -543,7 +543,7 @@ impl Fees {
 /// `error_message` populated only on the `/transactions/simulate` endpoint;
 /// `/inspect` always leaves it `None` since error strings aren't persisted.
 #[derive(Eq, PartialEq, Debug, Clone, Serialize, Deserialize, TS)]
-#[ts(export, export_to = "../../../kontor-ts/src/bindings.d.ts")]
+#[ts(export, export_to = "../../../sdk/src/bindings.d.ts")]
 #[serde(tag = "kind")]
 #[allow(clippy::large_enum_variant)]
 pub enum OpWithResult {
@@ -599,13 +599,13 @@ impl OpWithResult {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
-#[ts(export, export_to = "../../../kontor-ts/src/bindings.d.ts")]
+#[ts(export, export_to = "../../../sdk/src/bindings.d.ts")]
 pub struct ViewExpr {
     pub expr: String,
 }
 
 #[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize, TS)]
-#[ts(export, export_to = "../../../kontor-ts/src/bindings.d.ts")]
+#[ts(export, export_to = "../../../sdk/src/bindings.d.ts")]
 #[serde(tag = "type")]
 pub enum ViewResult {
     Ok { value: String },
@@ -613,7 +613,7 @@ pub enum ViewResult {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
-#[ts(export, export_to = "../../../kontor-ts/src/bindings.d.ts")]
+#[ts(export, export_to = "../../../sdk/src/bindings.d.ts")]
 pub struct ContractResponse {
     pub wit: String,
 }
@@ -630,7 +630,7 @@ pub struct ContractResponse {
 ///   uncommon for rows that get inserted — pre-execution rejections like
 ///   parse errors / contract-not-found don't reach `handle_procedure`).
 #[derive(Debug, Clone, Copy, Eq, PartialEq, Serialize, Deserialize, TS)]
-#[ts(export, export_to = "../../../kontor-ts/src/bindings.d.ts")]
+#[ts(export, export_to = "../../../sdk/src/bindings.d.ts")]
 pub enum OpStatus {
     Ok,
     ContractErr,
@@ -652,7 +652,7 @@ impl OpStatus {
 }
 
 #[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize, TS)]
-#[ts(export, export_to = "../../../kontor-ts/src/bindings.d.ts")]
+#[ts(export, export_to = "../../../sdk/src/bindings.d.ts")]
 pub struct ResultRow {
     #[ts(type = "number")]
     pub id: i64,
@@ -698,7 +698,7 @@ pub enum OpReturnData {
 ///   in BLS aggregate inputs that also carry `AggregateInfo.publisher_sponsorship`;
 ///   rejected at validation in any other context.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
-#[ts(export, export_to = "../../../kontor-ts/src/bindings.d.ts")]
+#[ts(export, export_to = "../../../sdk/src/bindings.d.ts")]
 pub enum PaymentIntent {
     SelfPay {
         #[ts(type = "number")]
@@ -715,7 +715,7 @@ impl PaymentIntent {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
-#[ts(export, export_to = "../../../kontor-ts/src/bindings.d.ts")]
+#[ts(export, export_to = "../../../sdk/src/bindings.d.ts")]
 pub struct Inst {
     pub payment: PaymentIntent,
     pub kind: InstKind,
@@ -723,7 +723,7 @@ pub struct Inst {
 
 #[serde_as]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
-#[ts(export, export_to = "../../../kontor-ts/src/bindings.d.ts")]
+#[ts(export, export_to = "../../../sdk/src/bindings.d.ts")]
 pub enum InstKind {
     Publish {
         name: String,
@@ -797,7 +797,7 @@ pub fn op_return_data_bytes_to_json(bytes: Vec<u8>) -> String {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
-#[ts(export, export_to = "../../../kontor-ts/src/bindings.d.ts")]
+#[ts(export, export_to = "../../../sdk/src/bindings.d.ts")]
 pub struct SignerResponse {
     #[ts(type = "number")]
     pub signer_id: u64,
