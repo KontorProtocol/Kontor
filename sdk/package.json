@@ -38,7 +38,7 @@
     }
   },
   "scripts": {
-    "build:rs": "cd crate && ./build.sh",
+    "build:rs": "cd ../core/kontor-sdk && ./build.sh",
     "build:ts": "vite build",
     "build": "npm run build:ts",
     "prepare": "npm run build",

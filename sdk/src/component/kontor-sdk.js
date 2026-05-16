@@ -1,507 +1,306 @@
-const emptyFunc = () => {};
+"use components";
 
-let dv = new DataView(new ArrayBuffer());
-const dataView = mem => dv.buffer === mem.buffer ? dv : dv = new DataView(mem.buffer);
-
-const toInt64 = val => BigInt.asIntN(64, BigInt(val));
-
-const toUint64 = val => BigInt.asUintN(64, BigInt(val));
-
-const utf8Decoder = new TextDecoder();
-
-const utf8Encoder = new TextEncoder();
-let utf8EncodedLen = 0;
-function utf8Encode(s, realloc, memory) {
-  if (typeof s !== 'string') throw new TypeError('expected a string');
-  if (s.length === 0) {
-    utf8EncodedLen = 0;
-    return 1;
-  }
-  let buf = utf8Encoder.encode(s);
-  let ptr = realloc(0, 0, 1, buf.length);
-  new Uint8Array(memory.buffer).set(buf, ptr);
-  utf8EncodedLen = buf.length;
-  return ptr;
-}
-
-const T_FLAG = 1 << 30;
-
-function rscTableCreateOwn (table, rep) {
-  const free = table[0] & ~T_FLAG;
-  if (free === 0) {
-    table.push(0);
-    table.push(rep | T_FLAG);
-    return (table.length >> 1) - 1;
-  }
-  table[0] = table[free << 1];
-  table[free << 1] = 0;
-  table[(free << 1) + 1] = rep | T_FLAG;
-  return free;
-}
-
-function rscTableRemove (table, handle) {
-  const scope = table[handle << 1];
-  const val = table[(handle << 1) + 1];
-  const own = (val & T_FLAG) !== 0;
-  const rep = val & ~T_FLAG;
-  if (val === 0 || (scope & T_FLAG) !== 0) throw new TypeError('Invalid handle');
-  table[handle << 1] = table[0] | T_FLAG;
-  table[0] = handle | T_FLAG;
-  return { rep, scope, own };
-}
-
-let NEXT_TASK_ID = 0n;
-function startCurrentTask(componentIdx, isAsync, entryFnName) {
-  _debugLog('[startCurrentTask()] args', { componentIdx, isAsync });
-  if (componentIdx === undefined || componentIdx === null) {
-    throw new Error('missing/invalid component instance index while starting task');
-  }
-  const tasks = ASYNC_TASKS_BY_COMPONENT_IDX.get(componentIdx);
-  
-  const nextId = ++NEXT_TASK_ID;
-  const newTask = new AsyncTask({ id: nextId, componentIdx, isAsync, entryFnName });
-  const newTaskMeta = { id: nextId, componentIdx, task: newTask };
-  
-  ASYNC_CURRENT_TASK_IDS.push(nextId);
-  ASYNC_CURRENT_COMPONENT_IDXS.push(componentIdx);
-  
-  if (!tasks) {
-    ASYNC_TASKS_BY_COMPONENT_IDX.set(componentIdx, [newTaskMeta]);
-    return nextId;
+function promiseWithResolvers() {
+  if (Promise.withResolvers) {
+    return Promise.withResolvers();
   } else {
-    tasks.push(newTaskMeta);
+    let resolve;
+    let reject;
+    const promise = new Promise((res, rej) => {
+      resolve = res;
+      reject = rej;
+    });
+    return { promise, resolve, reject };
   }
-  
-  return nextId;
+}
+const symbolDispose = Symbol.dispose || Symbol.for('dispose');
+const symbolAsyncIterator = Symbol.asyncIterator;
+const symbolIterator = Symbol.iterator;
+
+const _debugLog = (...args) => {
+  if (!globalThis?.process?.env?.JCO_DEBUG) { return; }
+  console.debug(...args);
+};
+const ASYNC_DETERMINISM = 'random';
+const GLOBAL_COMPONENT_MEMORY_MAP = new Map();
+const CURRENT_TASK_META = {};
+
+function _getGlobalCurrentTaskMeta(componentIdx) {
+  const v = CURRENT_TASK_META[componentIdx];
+  if (v === undefined) { return v; }
+  return { ...v };
 }
 
-function endCurrentTask(componentIdx, taskId) {
-  _debugLog('[endCurrentTask()] args', { componentIdx });
-  componentIdx ??= ASYNC_CURRENT_COMPONENT_IDXS.at(-1);
-  taskId ??= ASYNC_CURRENT_TASK_IDS.at(-1);
+function _setGlobalCurrentTaskMeta(args) {
+  if (!args) { throw new TypeError('args missing'); }
+  if (args.taskID === undefined) { throw new TypeError('missing task ID'); }
+  if (args.componentIdx === undefined) { throw new TypeError('missing component idx'); }
+  const { taskID, componentIdx } = args;
+  return CURRENT_TASK_META[componentIdx] = { taskID, componentIdx };
+}
+
+function _withGlobalCurrentTaskMeta(args) {
+  _debugLog('[_withGlobalCurrentTaskMeta()] args', args);
+  if (!args) { throw new TypeError('args missing'); }
+  if (args.taskID === undefined) { throw new TypeError('missing task ID'); }
+  if (args.componentIdx === undefined) { throw new TypeError('missing component idx'); }
+  if (!args.fn) { throw new TypeError('missing fn'); }
+  const { taskID, componentIdx, fn } = args;
+  
+  try {
+    CURRENT_TASK_META[componentIdx] = { taskID, componentIdx };
+    return fn();
+  } catch (err) {
+    _debugLog("error while executing sync callee/callback", {
+      ...args,
+      err,
+    });
+    throw err;
+  } finally {
+    CURRENT_TASK_META[componentIdx] = null;
+  }
+}
+
+async function _withGlobalCurrentTaskMetaAsync(args) {
+  _debugLog('[_withGlobalCurrentTaskMetaAsync()] args', args);
+  if (!args) { throw new TypeError('args missing'); }
+  if (args.taskID === undefined) { throw new TypeError('missing task ID'); }
+  if (args.componentIdx === undefined) { throw new TypeError('missing component idx'); }
+  if (!args.fn) { throw new TypeError('missing fn'); }
+  const { taskID, componentIdx, fn } = args;
+  
+  // If there is already an async task executing, we must wait for it
+  // to complete before we can can run the closure we were given
+  //
+  let current = CURRENT_TASK_META[componentIdx];
+  let cstate;
+  if (current && current.taskID !== taskID) {
+    cstate = getOrCreateAsyncState(componentIdx);
+    while (current && current.taskID !== taskID) {
+      const { promise, resolve } = Promise.withResolvers();
+      cstate.onNextExclusiveRelease(resolve);
+      await promise;
+      current = CURRENT_TASK_META[componentIdx];
+    }
+    
+    // Since we've just waited for the component to not be locked, re-lock
+    // exclusivity so we can run the fn below (likely a callee/callback)
+    cstate.exclusiveLock();
+  }
+  
+  try {
+    CURRENT_TASK_META[componentIdx] = { taskID, componentIdx };
+    return await fn();
+  } catch (err) {
+    _debugLog("error while executing async callee/callback", {
+      ...args,
+      err,
+    });
+    throw err;
+  } finally {
+    CURRENT_TASK_META[componentIdx] = null;
+  }
+}
+
+async function _clearCurrentTask(args) {
+  _debugLog('[_clearCurrentTask()] args', args);
+  if (!args) { throw new TypeError('args missing'); }
+  if (args.taskID === undefined) { throw new TypeError('missing task ID'); }
+  if (args.componentIdx === undefined) { throw new TypeError('missing component idx'); }
+  const { taskID, componentIdx } = args;
+  
+  const meta = CURRENT_TASK_META[componentIdx];
+  if (!meta) { throw new Error(`missing current task meta for component idx [${componentIdx}]n`); }
+  
+  if (meta.taskID !== taskID) {
+    throw new Error(`task ID [${meta.taskID}] != requested ID [${taskID}]`);
+  }
+  if (meta.componentIdx !== componentIdx) {
+    throw new Error(`component idx [${meta.componentIdx}] != requested idx [${componentIdx}]`);
+  }
+  
+  CURRENT_TASK_META[componentIdx] = null;
+}
+
+function lookupMemoriesForComponent(args) {
+  const { componentIdx } = args ?? {};
+  if (args.componentIdx === undefined) { throw new TypeError("missing component idx"); }
+  
+  const metas = GLOBAL_COMPONENT_MEMORY_MAP.get(componentIdx);
+  if (!metas) { return []; }
+  
+  if (args.memoryIdx === undefined) {
+    return Object.values(metas);
+  }
+  
+  const meta = metas[args.memoryIdx];
+  return meta?.memory;
+}
+
+function registerGlobalMemoryForComponent(args) {
+  const { componentIdx, memory, memoryIdx } = args ?? {};
+  if (componentIdx === undefined) { throw new TypeError('missing component idx'); }
+  if (memory === undefined && memoryIdx === undefined) { throw new TypeError('missing both memory & memory idx'); }
+  let inner = GLOBAL_COMPONENT_MEMORY_MAP.get(componentIdx);
+  if (!inner) {
+    inner = {};
+    GLOBAL_COMPONENT_MEMORY_MAP.set(componentIdx, inner);
+  }
+  
+  inner[memoryIdx] = { memory, memoryIdx, componentIdx };
+}
+
+class RepTable {
+  #data = [0, null];
+  #target;
+  
+  constructor(args) {
+    this.target = args?.target;
+  }
+  
+  data() { return this.#data; }
+  
+  insert(val) {
+    _debugLog('[RepTable#insert()] args', { val, target: this.target });
+    const freeIdx = this.#data[0];
+    if (freeIdx === 0) {
+      this.#data.push(val);
+      this.#data.push(null);
+      const rep = (this.#data.length >> 1) - 1;
+      _debugLog('[RepTable#insert()] inserted', { val, target: this.target, rep });
+      return rep;
+    }
+    this.#data[0] = this.#data[freeIdx << 1];
+    const placementIdx = freeIdx << 1;
+    this.#data[placementIdx] = val;
+    this.#data[placementIdx + 1] = null;
+    _debugLog('[RepTable#insert()] inserted', { val, target: this.target, rep: freeIdx });
+    return freeIdx;
+  }
+  
+  get(rep) {
+    _debugLog('[RepTable#get()] args', { rep, target: this.target });
+    if (rep === 0) { throw new Error('invalid resource rep during get, (cannot be 0)'); }
+    
+    const baseIdx = rep << 1;
+    const val = this.#data[baseIdx];
+    return val;
+  }
+  
+  contains(rep) {
+    _debugLog('[RepTable#contains()] args', { rep, target: this.target });
+    if (rep === 0) { throw new Error('invalid resource rep during contains, (cannot be 0)'); }
+    
+    const baseIdx = rep << 1;
+    return !!this.#data[baseIdx];
+  }
+  
+  remove(rep) {
+    _debugLog('[RepTable#remove()] args', { rep, target: this.target });
+    if (rep === 0) { throw new Error('invalid resource rep during remove, (cannot be 0)'); }
+    if (this.#data.length === 2) { throw new Error('invalid'); }
+    
+    const baseIdx = rep << 1;
+    const val = this.#data[baseIdx];
+    
+    this.#data[baseIdx] = this.#data[0];
+    this.#data[0] = rep;
+    
+    return val;
+  }
+  
+  clear() {
+    _debugLog('[RepTable#clear()] args', { rep, target: this.target });
+    this.#data = [0, null];
+  }
+}
+const _coinFlip = () => { return Math.random() > 0.5; };
+let SCOPE_ID = 0;
+const I32_MIN = -2_147_483_648;
+const I32_MAX = 2_147_483_647;
+
+function _isValidNumericPrimitive(ty, v) {
+  if (v === undefined || v === null) { return false; }
+  switch (ty) {
+    case 'bool':
+    return v === 0 || v === 1;
+    break;
+    case 'u8':
+    return v >= 0 && v <= 255;
+    break;
+    case 's8':
+    return v >= -128 && v <= 127;
+    break;
+    case 'u16':
+    return v >= 0 && v <= 65535;
+    break;
+    case 's16':
+    return v >= -32768 && v <= 32767;
+    case 'u32':
+    return v >= 0 && v <= 4_294_967_295;
+    case 's32':
+    return v >= -2_147_483_648 && v <= 2_147_483_647;
+    case 'u64':
+    return typeof v === 'bigint' && v >= 0 && v <= 18_446_744_073_709_551_615n;
+    case 's64':
+    return typeof v === 'bigint' && v >= -9223372036854775808n && v <= 9223372036854775807n;
+    break;
+    case 'f32':
+    case 'f64': return typeof v === 'number';
+    default:
+    return false;
+  }
+  return true;
+}
+
+function _requireValidNumericPrimitive(ty, v) {
+  if (v === undefined  || v === null || !_isValidNumericPrimitive(ty, v)) {
+    throw new TypeError(`invalid ${ty} value [${v}]`);
+  }
+  return true;
+}
+const _typeCheckValidI32 = (n) => typeof n === 'number' && n >= I32_MIN && n <= I32_MAX;
+
+const _typeCheckAsyncFn= (f) => {
+  return f instanceof ASYNC_FN_CTOR;
+};
+
+let RESOURCE_CALL_BORROWS = [];const ASYNC_FN_CTOR = (async () => {}).constructor;
+
+function clearCurrentTask(componentIdx, taskID) {
+  _debugLog('[clearCurrentTask()] args', { componentIdx, taskID });
+  
   if (componentIdx === undefined || componentIdx === null) {
     throw new Error('missing/invalid component instance index while ending current task');
   }
+  
   const tasks = ASYNC_TASKS_BY_COMPONENT_IDX.get(componentIdx);
   if (!tasks || !Array.isArray(tasks)) {
     throw new Error('missing/invalid tasks for component instance while ending task');
   }
   if (tasks.length == 0) {
-    throw new Error('no current task(s) for component instance while ending task');
+    throw new Error(`no current tasks for component instance [${componentIdx}] while ending task`);
   }
   
-  if (taskId) {
+  if (taskID !== undefined) {
     const last = tasks[tasks.length - 1];
-    if (last.id !== taskId) {
-      throw new Error('current task does not match expected task ID');
+    if (last.id !== taskID) {
+      // throw new Error('current task does not match expected task ID');
+      return;
     }
   }
   
   ASYNC_CURRENT_TASK_IDS.pop();
   ASYNC_CURRENT_COMPONENT_IDXS.pop();
   
-  return tasks.pop();
+  const taskMeta = tasks.pop();
+  return taskMeta.task;
 }
-const ASYNC_TASKS_BY_COMPONENT_IDX = new Map();
+const CURRENT_TASK_MAY_BLOCK = new WebAssembly.Global({ value: 'i32', mutable: true }, 0);
 const ASYNC_CURRENT_TASK_IDS = [];
 const ASYNC_CURRENT_COMPONENT_IDXS = [];
 
-class AsyncTask {
-  static State = {
-    INITIAL: 'initial',
-    CANCELLED: 'cancelled',
-    CANCEL_PENDING: 'cancel-pending',
-    CANCEL_DELIVERED: 'cancel-delivered',
-    RESOLVED: 'resolved',
-  }
-  
-  static BlockResult = {
-    CANCELLED: 'block.cancelled',
-    NOT_CANCELLED: 'block.not-cancelled',
-  }
-  
-  #id;
-  #componentIdx;
-  #state;
-  #isAsync;
-  #onResolve = null;
-  #entryFnName = null;
-  #subtasks = [];
-  #completionPromise = null;
-  
-  cancelled = false;
-  requested = false;
-  alwaysTaskReturn = false;
-  
-  returnCalls =  0;
-  storage = [0, 0];
-  borrowedHandles = {};
-  
-  awaitableResume = null;
-  awaitableCancel = null;
-  
-  
-  constructor(opts) {
-    if (opts?.id === undefined) { throw new TypeError('missing task ID during task creation'); }
-    this.#id = opts.id;
-    if (opts?.componentIdx === undefined) {
-      throw new TypeError('missing component id during task creation');
-    }
-    this.#componentIdx = opts.componentIdx;
-    this.#state = AsyncTask.State.INITIAL;
-    this.#isAsync = opts?.isAsync ?? false;
-    this.#entryFnName = opts.entryFnName;
-    
-    const {
-      promise: completionPromise,
-      resolve: resolveCompletionPromise,
-      reject: rejectCompletionPromise,
-    } = Promise.withResolvers();
-    this.#completionPromise = completionPromise;
-    
-    this.#onResolve = (results) => {
-      // TODO: handle external facing cancellation (should likely be a rejection)
-      resolveCompletionPromise(results);
-    }
-  }
-  
-  taskState() { return this.#state.slice(); }
-  id() { return this.#id; }
-  componentIdx() { return this.#componentIdx; }
-  isAsync() { return this.#isAsync; }
-  entryFnName() { return this.#entryFnName; }
-  completionPromise() { return this.#completionPromise; }
-  
-  mayEnter(task) {
-    const cstate = getOrCreateAsyncState(this.#componentIdx);
-    if (!cstate.backpressure) {
-      _debugLog('[AsyncTask#mayEnter()] disallowed due to backpressure', { taskID: this.#id });
-      return false;
-    }
-    if (!cstate.callingSyncImport()) {
-      _debugLog('[AsyncTask#mayEnter()] disallowed due to sync import call', { taskID: this.#id });
-      return false;
-    }
-    const callingSyncExportWithSyncPending = cstate.callingSyncExport && !task.isAsync;
-    if (!callingSyncExportWithSyncPending) {
-      _debugLog('[AsyncTask#mayEnter()] disallowed due to sync export w/ sync pending', { taskID: this.#id });
-      return false;
-    }
-    return true;
-  }
-  
-  async enter() {
-    _debugLog('[AsyncTask#enter()] args', { taskID: this.#id });
-    
-    // TODO: assert scheduler locked
-    // TODO: trap if on the stack
-    
-    const cstate = getOrCreateAsyncState(this.#componentIdx);
-    
-    let mayNotEnter = !this.mayEnter(this);
-    const componentHasPendingTasks = cstate.pendingTasks > 0;
-    if (mayNotEnter || componentHasPendingTasks) {
-      throw new Error('in enter()'); // TODO: remove
-      cstate.pendingTasks.set(this.#id, new Awaitable(new Promise()));
-      
-      const blockResult = await this.onBlock(awaitable);
-      if (blockResult) {
-        // TODO: find this pending task in the component
-        const pendingTask = cstate.pendingTasks.get(this.#id);
-        if (!pendingTask) {
-          throw new Error('pending task [' + this.#id + '] not found for component instance');
-        }
-        cstate.pendingTasks.remove(this.#id);
-        this.#onResolve(new Error('failed enter'));
-        return false;
-      }
-      
-      mayNotEnter = !this.mayEnter(this);
-      if (!mayNotEnter || !cstate.startPendingTask) {
-        throw new Error('invalid component entrance/pending task resolution');
-      }
-      cstate.startPendingTask = false;
-    }
-    
-    if (!this.isAsync) { cstate.callingSyncExport = true; }
-    
-    return true;
-  }
-  
-  async waitForEvent(opts) {
-    const { waitableSetRep, isAsync } = opts;
-    _debugLog('[AsyncTask#waitForEvent()] args', { taskID: this.#id, waitableSetRep, isAsync });
-    
-    if (this.#isAsync !== isAsync) {
-      throw new Error('async waitForEvent called on non-async task');
-    }
-    
-    if (this.status === AsyncTask.State.CANCEL_PENDING) {
-      this.#state = AsyncTask.State.CANCEL_DELIVERED;
-      return {
-        code: ASYNC_EVENT_CODE.TASK_CANCELLED,
-      };
-    }
-    
-    const state = getOrCreateAsyncState(this.#componentIdx);
-    const waitableSet = state.waitableSets.get(waitableSetRep);
-    if (!waitableSet) { throw new Error('missing/invalid waitable set'); }
-    
-    waitableSet.numWaiting += 1;
-    let event = null;
-    
-    while (event == null) {
-      const awaitable = new Awaitable(waitableSet.getPendingEvent());
-      const waited = await this.blockOn({ awaitable, isAsync, isCancellable: true });
-      if (waited) {
-        if (this.#state !== AsyncTask.State.INITIAL) {
-          throw new Error('task should be in initial state found [' + this.#state + ']');
-        }
-        this.#state = AsyncTask.State.CANCELLED;
-        return {
-          code: ASYNC_EVENT_CODE.TASK_CANCELLED,
-        };
-      }
-      
-      event = waitableSet.poll();
-    }
-    
-    waitableSet.numWaiting -= 1;
-    return event;
-  }
-  
-  waitForEventSync(opts) {
-    throw new Error('AsyncTask#yieldSync() not implemented')
-  }
-  
-  async pollForEvent(opts) {
-    const { waitableSetRep, isAsync } = opts;
-    _debugLog('[AsyncTask#pollForEvent()] args', { taskID: this.#id, waitableSetRep, isAsync });
-    
-    if (this.#isAsync !== isAsync) {
-      throw new Error('async pollForEvent called on non-async task');
-    }
-    
-    throw new Error('AsyncTask#pollForEvent() not implemented');
-  }
-  
-  pollForEventSync(opts) {
-    throw new Error('AsyncTask#yieldSync() not implemented')
-  }
-  
-  async blockOn(opts) {
-    const { awaitable, isCancellable, forCallback } = opts;
-    _debugLog('[AsyncTask#blockOn()] args', { taskID: this.#id, awaitable, isCancellable, forCallback });
-    
-    if (awaitable.resolved() && !ASYNC_DETERMINISM && _coinFlip()) {
-      return AsyncTask.BlockResult.NOT_CANCELLED;
-    }
-    
-    const cstate = getOrCreateAsyncState(this.#componentIdx);
-    if (forCallback) { cstate.exclusiveRelease(); }
-    
-    let cancelled = await this.onBlock(awaitable);
-    if (cancelled === AsyncTask.BlockResult.CANCELLED && !isCancellable) {
-      const secondCancel = await this.onBlock(awaitable);
-      if (secondCancel !== AsyncTask.BlockResult.NOT_CANCELLED) {
-        throw new Error('uncancellable task was canceled despite second onBlock()');
-      }
-    }
-    
-    if (forCallback) {
-      const acquired = new Awaitable(cstate.exclusiveLock());
-      cancelled = await this.onBlock(acquired);
-      if (cancelled === AsyncTask.BlockResult.CANCELLED) {
-        const secondCancel = await this.onBlock(acquired);
-        if (secondCancel !== AsyncTask.BlockResult.NOT_CANCELLED) {
-          throw new Error('uncancellable callback task was canceled despite second onBlock()');
-        }
-      }
-    }
-    
-    if (cancelled === AsyncTask.BlockResult.CANCELLED) {
-      if (this.#state !== AsyncTask.State.INITIAL) {
-        throw new Error('cancelled task is not at initial state');
-      }
-      if (isCancellable) {
-        this.#state = AsyncTask.State.CANCELLED;
-        return AsyncTask.BlockResult.CANCELLED;
-      } else {
-        this.#state = AsyncTask.State.CANCEL_PENDING;
-        return AsyncTask.BlockResult.NOT_CANCELLED;
-      }
-    }
-    
-    return AsyncTask.BlockResult.NOT_CANCELLED;
-  }
-  
-  async onBlock(awaitable) {
-    _debugLog('[AsyncTask#onBlock()] args', { taskID: this.#id, awaitable });
-    if (!(awaitable instanceof Awaitable)) {
-      throw new Error('invalid awaitable during onBlock');
-    }
-    
-    // Build a promise that this task can await on which resolves when it is awoken
-    const { promise, resolve, reject } = Promise.withResolvers();
-    this.awaitableResume = () => {
-      _debugLog('[AsyncTask] resuming after onBlock', { taskID: this.#id });
-      resolve();
-    };
-    this.awaitableCancel = (err) => {
-      _debugLog('[AsyncTask] rejecting after onBlock', { taskID: this.#id, err });
-      reject(err);
-    };
-    
-    // Park this task/execution to be handled later
-    const state = getOrCreateAsyncState(this.#componentIdx);
-    state.parkTaskOnAwaitable({ awaitable, task: this });
-    
-    try {
-      await promise;
-      return AsyncTask.BlockResult.NOT_CANCELLED;
-    } catch (err) {
-      // rejection means task cancellation
-      return AsyncTask.BlockResult.CANCELLED;
-    }
-  }
-  
-  async asyncOnBlock(awaitable) {
-    _debugLog('[AsyncTask#asyncOnBlock()] args', { taskID: this.#id, awaitable });
-    if (!(awaitable instanceof Awaitable)) {
-      throw new Error('invalid awaitable during onBlock');
-    }
-    // TODO: watch for waitable AND cancellation
-    // TODO: if it WAS cancelled:
-    // - return true
-    // - only once per subtask
-    // - do not wait on the scheduler
-    // - control flow should go to the subtask (only once)
-    // - Once subtask blocks/resolves, reqlinquishControl() will tehn resolve request_cancel_end (without scheduler lock release)
-    // - control flow goes back to request_cancel
-    //
-    // Subtask cancellation should work similarly to an async import call -- runs sync up until
-    // the subtask blocks or resolves
-    //
-    throw new Error('AsyncTask#asyncOnBlock() not yet implemented');
-  }
-  
-  async yield(opts) {
-    const { isCancellable, forCallback } = opts;
-    _debugLog('[AsyncTask#yield()] args', { taskID: this.#id, isCancellable, forCallback });
-    
-    if (isCancellable && this.status === AsyncTask.State.CANCEL_PENDING) {
-      this.#state = AsyncTask.State.CANCELLED;
-      return {
-        code: ASYNC_EVENT_CODE.TASK_CANCELLED,
-        payload: [0, 0],
-      };
-    }
-    
-    // TODO: Awaitables need to *always* trigger the parking mechanism when they're done...?
-    // TODO: Component async state should remember which awaitables are done and work to clear tasks waiting
-    
-    const blockResult = await this.blockOn({
-      awaitable: new Awaitable(new Promise(resolve => setTimeout(resolve, 0))),
-      isCancellable,
-      forCallback,
-    });
-    
-    if (blockResult === AsyncTask.BlockResult.CANCELLED) {
-      if (this.#state !== AsyncTask.State.INITIAL) {
-        throw new Error('task should be in initial state found [' + this.#state + ']');
-      }
-      this.#state = AsyncTask.State.CANCELLED;
-      return {
-        code: ASYNC_EVENT_CODE.TASK_CANCELLED,
-        payload: [0, 0],
-      };
-    }
-    
-    return {
-      code: ASYNC_EVENT_CODE.NONE,
-      payload: [0, 0],
-    };
-  }
-  
-  yieldSync(opts) {
-    throw new Error('AsyncTask#yieldSync() not implemented')
-  }
-  
-  cancel() {
-    _debugLog('[AsyncTask#cancel()] args', { });
-    if (!this.taskState() !== AsyncTask.State.CANCEL_DELIVERED) {
-      throw new Error('invalid task state for cancellation');
-    }
-    if (this.borrowedHandles.length > 0) { throw new Error('task still has borrow handles'); }
-    
-    this.#onResolve(new Error('cancelled'));
-    this.#state = AsyncTask.State.RESOLVED;
-  }
-  
-  resolve(results) {
-    _debugLog('[AsyncTask#resolve()] args', { results });
-    if (this.#state === AsyncTask.State.RESOLVED) {
-      throw new Error('task is already resolved');
-    }
-    if (this.borrowedHandles.length > 0) { throw new Error('task still has borrow handles'); }
-    this.#onResolve(results.length === 1 ? results[0] : results);
-    this.#state = AsyncTask.State.RESOLVED;
-  }
-  
-  exit() {
-    _debugLog('[AsyncTask#exit()] args', { });
-    
-    // TODO: ensure there is only one task at a time (scheduler.lock() functionality)
-    if (this.#state !== AsyncTask.State.RESOLVED) {
-      throw new Error('task exited without resolution');
-    }
-    if (this.borrowedHandles > 0) {
-      throw new Error('task exited without clearing borrowed handles');
-    }
-    
-    const state = getOrCreateAsyncState(this.#componentIdx);
-    if (!state) { throw new Error('missing async state for component [' + this.#componentIdx + ']'); }
-    if (!this.#isAsync && !state.inSyncExportCall) {
-      throw new Error('sync task must be run from components known to be in a sync export call');
-    }
-    state.inSyncExportCall = false;
-    
-    this.startPendingTask();
-  }
-  
-  startPendingTask(args) {
-    _debugLog('[AsyncTask#startPendingTask()] args', args);
-    throw new Error('AsyncTask#startPendingTask() not implemented');
-  }
-  
-  createSubtask(args) {
-    _debugLog('[AsyncTask#createSubtask()] args', args);
-    const newSubtask = new AsyncSubtask({
-      componentIdx: this.componentIdx(),
-      taskID: this.id(),
-      memoryIdx: args?.memoryIdx,
-    });
-    this.#subtasks.push(newSubtask);
-    return newSubtask;
-  }
-  
-  currentSubtask() {
-    _debugLog('[AsyncTask#currentSubtask()]');
-    if (this.#subtasks.length === 0) { throw new Error('no current subtask'); }
-    return this.#subtasks.at(-1);
-  }
-  
-  endCurrentSubtask() {
-    _debugLog('[AsyncTask#endCurrentSubtask()]');
-    if (this.#subtasks.length === 0) { throw new Error('cannot end current subtask: no current subtask'); }
-    const subtask = this.#subtasks.pop();
-    subtask.drop();
-    return subtask;
-  }
-}
-
 function unpackCallbackResult(result) {
-  _debugLog('[unpackCallbackResult()] args', { result });
   if (!(_typeCheckValidI32(result))) { throw new Error('invalid callback return value [' + result + '], not a valid i32'); }
   const eventCode = result & 0xF;
   if (eventCode < 0 || eventCode > 3) {
@@ -509,28 +308,1658 @@ function unpackCallbackResult(result) {
   }
   if (result < 0 || result >= 2**32) { throw new Error('invalid callback result'); }
   // TODO: table max length check?
-  const waitableSetIdx = result >> 4;
-  return [eventCode, waitableSetIdx];
+  const waitableSetRep = result >> 4;
+  return [eventCode, waitableSetRep];
 }
+
+class AsyncSubtask {
+  static _ID = 0n;
+  
+  static State = {
+    STARTING: 0,
+    STARTED: 1,
+    RETURNED: 2,
+    CANCELLED_BEFORE_STARTED: 3,
+    CANCELLED_BEFORE_RETURNED: 4,
+  };
+  
+  #id;
+  #state = AsyncSubtask.State.STARTING;
+  #componentIdx;
+  
+  #parentTask;
+  #childTask = null;
+  
+  #dropped = false;
+  #cancelRequested = false;
+  
+  #memoryIdx = null;
+  #lenders = null;
+  
+  #waitable = null;
+  
+  #callbackFn = null;
+  #callbackFnName = null;
+  
+  #postReturnFn = null;
+  #onProgressFn = null;
+  #pendingEventFn = null;
+  
+  #callMetadata = {};
+  
+  #resolved = false;
+  
+  #onResolveHandlers = [];
+  #onStartHandlers = [];
+  
+  #result = null;
+  #resultSet = false;
+  
+  fnName;
+  target;
+  isAsync;
+  isManualAsync;
+  
+  constructor(args) {
+    if (typeof args.componentIdx !== 'number') {
+      throw new Error('invalid componentIdx for subtask creation');
+    }
+    this.#componentIdx = args.componentIdx;
+    
+    this.#id = ++AsyncSubtask._ID;
+    this.fnName = args.fnName;
+    
+    if (!args.parentTask) { throw new Error('missing parent task during subtask creation'); }
+    this.#parentTask = args.parentTask;
+    
+    if (args.childTask) { this.#childTask = args.childTask; }
+    
+    if (args.memoryIdx) { this.#memoryIdx = args.memoryIdx; }
+    
+    if (!args.waitable) { throw new Error("missing/invalid waitable"); }
+    this.#waitable = args.waitable;
+    
+    if (args.callMetadata) { this.#callMetadata = args.callMetadata; }
+    
+    this.#lenders = [];
+    this.target = args.target;
+    this.isAsync = args.isAsync;
+    this.isManualAsync = args.isManualAsync;
+  }
+  
+  id() { return this.#id; }
+  parentTaskID() { return this.#parentTask?.id(); }
+  childTaskID() { return this.#childTask?.id(); }
+  state() { return this.#state; }
+  
+  waitable() { return this.#waitable; }
+  waitableRep() { return this.#waitable.idx(); }
+  
+  join() { return this.#waitable.join(...arguments); }
+  getPendingEvent() { return this.#waitable.getPendingEvent(...arguments); }
+  hasPendingEvent() { return this.#waitable.hasPendingEvent(...arguments); }
+  setPendingEvent() { return this.#waitable.setPendingEvent(...arguments); }
+  
+  setTarget(tgt) { this.target = tgt; }
+  
+  getResult() {
+    if (!this.#resultSet) { throw new Error("subtask result has not been set") }
+    return this.#result;
+  }
+  setResult(v) {
+    if (this.#resultSet) { throw new Error("subtask result has already been set"); }
+    this.#result = v;
+    this.#resultSet = true;
+  }
+  
+  componentIdx() { return this.#componentIdx; }
+  
+  setChildTask(t) {
+    if (!t) { throw new Error('cannot set missing/invalid child task on subtask'); }
+    if (this.#childTask) { throw new Error('child task is already set on subtask'); }
+    if (this.#parentTask === t) { throw new Error("parent cannot be child"); }
+    this.#childTask = t;
+  }
+  getChildTask(t) { return this.#childTask; }
+  
+  getParentTask() { return this.#parentTask; }
+  
+  setCallbackFn(f, name) {
+    if (!f) { return; }
+    if (this.#callbackFn) { throw new Error('callback fn can only be set once'); }
+    this.#callbackFn = f;
+    this.#callbackFnName = name;
+  }
+  
+  getCallbackFnName() {
+    if (!this.#callbackFn) { return undefined; }
+    return this.#callbackFn.name;
+  }
+  
+  setPostReturnFn(f) {
+    if (!f) { return; }
+    if (this.#postReturnFn) { throw new Error('postReturn fn can only be set once'); }
+    this.#postReturnFn = f;
+  }
+  
+  setOnProgressFn(f) {
+    if (this.#onProgressFn) { throw new Error('on progress fn can only be set once'); }
+    this.#onProgressFn = f;
+  }
+  
+  isNotStarted() {
+    return this.#state == AsyncSubtask.State.STARTING;
+  }
+  
+  registerOnStartHandler(f) {
+    this.#onStartHandlers.push(f);
+  }
+  
+  onStart(args) {
+    _debugLog('[AsyncSubtask#onStart()] args', {
+      componentIdx: this.#componentIdx,
+      subtaskID: this.#id,
+      parentTaskID: this.parentTaskID(),
+      fnName: this.fnName,
+    });
+    
+    if (this.#onProgressFn) { this.#onProgressFn(); }
+    
+    this.#state = AsyncSubtask.State.STARTED;
+    
+    let result;
+    
+    // If we have been provided a helper start function as a result of
+    // component fusion performed by wasmtime tooling, then we can call that helper and lifts/lowers will
+    // be performed for us.
+    //
+    // See also documentation on `HostIntrinsic::PrepareCall`
+    //
+    if (this.#callMetadata.startFn) {
+      result = this.#callMetadata.startFn.apply(null, args?.startFnParams ?? []);
+    }
+    
+    return result;
+  }
+  
+  
+  registerOnResolveHandler(f) {
+    this.#onResolveHandlers.push(f);
+  }
+  
+  reject(subtaskErr) {
+    this.#childTask?.reject(subtaskErr);
+  }
+  
+  onResolve(subtaskValue) {
+    _debugLog('[AsyncSubtask#onResolve()] args', {
+      componentIdx: this.#componentIdx,
+      subtaskID: this.#id,
+      isAsync: this.isAsync,
+      childTaskID: this.childTaskID(),
+      parentTaskID: this.parentTaskID(),
+      parentTaskFnName: this.#parentTask?.entryFnName(),
+      fnName: this.fnName,
+    });
+    
+    if (this.#resolved) {
+      throw new Error('subtask has already been resolved');
+    }
+    
+    if (this.#onProgressFn) { this.#onProgressFn(); }
+    
+    if (subtaskValue === null) {
+      if (this.#cancelRequested) {
+        throw new Error('cancel was not requested, but no value present at return');
+      }
+      
+      if (this.#state === AsyncSubtask.State.STARTING) {
+        this.#state = AsyncSubtask.State.CANCELLED_BEFORE_STARTED;
+      } else {
+        if (this.#state !== AsyncSubtask.State.STARTED) {
+          throw new Error('resolved subtask must have been started before cancellation');
+        }
+        this.#state = AsyncSubtask.State.CANCELLED_BEFORE_RETURNED;
+      }
+    } else {
+      if (this.#state !== AsyncSubtask.State.STARTED) {
+        throw new Error('resolved subtask must have been started before completion');
+      }
+      this.#state = AsyncSubtask.State.RETURNED;
+    }
+    
+    this.setResult(subtaskValue);
+    
+    for (const f of this.#onResolveHandlers) {
+      try {
+        f(subtaskValue);
+      } catch (err) {
+        console.error("error during subtask resolve handler", err);
+        throw err;
+      }
+    }
+    
+    const callMetadata = this.getCallMetadata();
+    
+    // TODO(fix): we should be able to easily have the caller's meomry
+    // to lower into here, but it's not present in PrepareCall
+    const memory = callMetadata.memory ?? this.#parentTask?.getReturnMemory() ?? lookupMemoriesForComponent({ componentIdx: this.#parentTask?.componentIdx() })[0];
+    if (callMetadata && !callMetadata.returnFn && this.isAsync && callMetadata.resultPtr && memory) {
+      const { resultPtr, realloc } = callMetadata;
+      const lowers = callMetadata.lowers; // may have been updated in task.return of the child
+      if (lowers && lowers.length > 0) {
+        lowers[0]({
+          componentIdx: this.#componentIdx,
+          memory,
+          realloc,
+          vals: [subtaskValue],
+          storagePtr: resultPtr,
+          stringEncoding: callMetadata.stringEncoding,
+        });
+      }
+    }
+    
+    this.#resolved = true;
+    this.#parentTask.removeSubtask(this);
+  }
+  
+  getStateNumber() { return this.#state; }
+  isReturned() { return this.#state === AsyncSubtask.State.RETURNED; }
+  
+  getCallMetadata() { return this.#callMetadata; }
+  
+  isResolved() {
+    if (this.#state === AsyncSubtask.State.STARTING
+    || this.#state === AsyncSubtask.State.STARTED) {
+      return false;
+    }
+    if (this.#state === AsyncSubtask.State.RETURNED
+    || this.#state === AsyncSubtask.State.CANCELLED_BEFORE_STARTED
+    || this.#state === AsyncSubtask.State.CANCELLED_BEFORE_RETURNED) {
+      return true;
+    }
+    throw new Error('unrecognized internal Subtask state [' + this.#state + ']');
+  }
+  
+  addLender(handle) {
+    _debugLog('[AsyncSubtask#addLender()] args', { handle });
+    if (!Number.isNumber(handle)) { throw new Error('missing/invalid lender handle [' + handle + ']'); }
+    
+    if (this.#lenders.length === 0 || this.isResolved()) {
+      throw new Error('subtask has no lendors or has already been resolved');
+    }
+    
+    handle.lends++;
+    this.#lenders.push(handle);
+  }
+  
+  deliverResolve() {
+    _debugLog('[AsyncSubtask#deliverResolve()] args', {
+      lenders: this.#lenders,
+      parentTaskID: this.parentTaskID(),
+      subtaskID: this.#id,
+      childTaskID: this.childTaskID(),
+      resolved: this.isResolved(),
+      resolveDelivered: this.resolveDelivered(),
+    });
+    
+    const cannotDeliverResolve = this.resolveDelivered() || !this.isResolved();
+    if (cannotDeliverResolve) {
+      throw new Error('subtask cannot deliver resolution twice, and the subtask must be resolved');
+    }
+    
+    for (const lender of this.#lenders) {
+      lender.lends--;
+    }
+    
+    this.#lenders = null;
+  }
+  
+  resolveDelivered() {
+    _debugLog('[AsyncSubtask#resolveDelivered()] args', { });
+    if (this.#lenders === null && !this.isResolved()) {
+      throw new Error('invalid subtask state, lenders missing and subtask has not been resolved');
+    }
+    return this.#lenders === null;
+  }
+  
+  drop() {
+    _debugLog('[AsyncSubtask#drop()] args', {
+      componentIdx: this.#componentIdx,
+      parentTaskID: this.#parentTask?.id(),
+      parentTaskFnName: this.#parentTask?.entryFnName(),
+      childTaskID: this.#childTask?.id(),
+      childTaskFnName: this.#childTask?.entryFnName(),
+      subtaskFnName: this.fnName,
+    });
+    if (!this.#waitable) { throw new Error('missing/invalid inner waitable'); }
+    if (!this.resolveDelivered()) {
+      throw new Error('cannot drop subtask before resolve is delivered');
+    }
+    if (this.#waitable) { this.#waitable.drop() }
+    this.#dropped = true;
+  }
+  
+  #getComponentState() {
+    const state = getOrCreateAsyncState(this.#componentIdx);
+    if (!state) {
+      throw new Error('invalid/missing async state for component [' + componentIdx + ']');
+    }
+    return state;
+  }
+  
+  getWaitableHandleIdx() {
+    _debugLog('[AsyncSubtask#getWaitableHandleIdx()] args', { });
+    if (!this.#waitable) { throw new Error('missing/invalid waitable'); }
+    return this.waitableRep();
+  }
+}
+
+function _prepareCall(
+memoryIdx,
+getMemoryFn,
+startFn,
+returnFn,
+callerComponentIdx,
+calleeComponentIdx,
+taskReturnTypeIdx,
+calleeIsAsyncInt,
+stringEncoding,
+resultCountOrAsync,
+) {
+  _debugLog('[_prepareCall()]', {
+    memoryIdx,
+    callerComponentIdx,
+    calleeComponentIdx,
+    taskReturnTypeIdx,
+    calleeIsAsyncInt,
+    stringEncoding,
+    resultCountOrAsync,
+  });
+  const argArray = [...arguments];
+  
+  // value passed in *may* be as large as u32::MAX which may be mangled into -2
+  resultCountOrAsync >>>= 0;
+  
+  let isAsync = false;
+  let hasResultPointer = false;
+  if (resultCountOrAsync === 2**32 - 1) {
+    // prepare async with no result (u32::MAX)
+    isAsync = true;
+    hasResultPointer = false;
+  } else if (resultCountOrAsync === 2**32 - 2) {
+    // prepare async with result (u32::MAX - 1)
+    isAsync = true;
+    hasResultPointer = true;
+  }
+  
+  const currentCallerTaskMeta = getCurrentTask(callerComponentIdx);
+  if (!currentCallerTaskMeta) {
+    throw new Error('invalid/missing current task for caller during prepare call');
+  }
+  
+  const currentCallerTask = currentCallerTaskMeta.task;
+  if (!currentCallerTask) {
+    throw new Error('unexpectedly missing task in meta for caller during prepare call');
+  }
+  
+  if (currentCallerTask.componentIdx() !== callerComponentIdx) {
+    throw new Error(`task component idx [${ currentCallerTask.componentIdx() }] !== [${ callerComponentIdx }] (callee ${ calleeComponentIdx })`);
+  }
+  
+  let getCalleeParamsFn;
+  let resultPtr = null;
+  let directParamsArr;
+  if (hasResultPointer) {
+    directParamsArr = argArray.slice(10, argArray.length - 1);
+    getCalleeParamsFn = () => directParamsArr;
+    resultPtr = argArray[argArray.length - 1];
+  } else {
+    directParamsArr = argArray.slice(10);
+    getCalleeParamsFn = () => directParamsArr;
+  }
+  
+  let encoding;
+  switch (stringEncoding) {
+    case 0:
+    encoding = 'utf8';
+    break;
+    case 1:
+    encoding = 'utf16';
+    break;
+    case 2:
+    encoding = 'compact-utf16';
+    break;
+    default:
+    throw new Error(`unrecognized string encoding enum [${stringEncoding}]`);
+  }
+  
+  const subtask = currentCallerTask.createSubtask({
+    componentIdx: callerComponentIdx,
+    parentTask: currentCallerTask,
+    isAsync,
+    callMetadata: {
+      getMemoryFn,
+      memoryIdx,
+      resultPtr,
+      returnFn,
+      startFn,
+      stringEncoding,
+    }
+  });
+  
+  const [newTask, newTaskID] = createNewCurrentTask({
+    componentIdx: calleeComponentIdx,
+    isAsync,
+    getCalleeParamsFn,
+    entryFnName: [
+    'task',
+    subtask.getParentTask().id(),
+    'subtask',
+    subtask.id(),
+    'new-prepared-async-task'
+    ].join('/'),
+    stringEncoding,
+  });
+  newTask.setParentSubtask(subtask);
+  newTask.setReturnMemoryIdx(memoryIdx);
+  newTask.setReturnMemory(getMemoryFn);
+  subtask.setChildTask(newTask);
+  
+  newTask.subtaskMeta = {
+    subtask,
+    calleeComponentIdx,
+    callerComponentIdx,
+    getCalleeParamsFn,
+    stringEncoding,
+    isAsync,
+  };
+  
+  _setGlobalCurrentTaskMeta({
+    taskID: newTask.id(),
+    componentIdx: newTask.componentIdx(),
+  });
+}
+
+function _asyncStartCall(args, callee, paramCount, resultCount, flags) {
+  const componentIdx = ASYNC_CURRENT_COMPONENT_IDXS.at(-1);
+  
+  const globalTaskMeta = _getGlobalCurrentTaskMeta(componentIdx);
+  if (!globalTaskMeta) { throw new Error('missing global current task globalTaskMeta'); }
+  const taskID = globalTaskMeta.taskID;
+  
+  _debugLog('[_asyncStartCall()] args', { args, componentIdx });
+  const { getCallbackFn, callbackIdx, getPostReturnFn, postReturnIdx } = args;
+  
+  const preparedTaskMeta = getCurrentTask(componentIdx, taskID);
+  if (!preparedTaskMeta) { throw new Error('unexpectedly missing current task'); }
+  
+  const preparedTask = preparedTaskMeta.task;
+  if (!preparedTask) { throw new Error('unexpectedly missing current task'); }
+  if (!preparedTask.subtaskMeta) { throw new Error('missing subtask meta from prepare'); }
+  
+  const {
+    subtask,
+    returnMemoryIdx,
+    getReturnMemoryFn,
+    callerComponentIdx,
+    calleeComponentIdx,
+    getCalleeParamsFn,
+    isAsync,
+    stringEncoding,
+  } = preparedTask.subtaskMeta;
+  if (!subtask) { throw new Error("missing subtask from cstate during async start call"); }
+  if (calleeComponentIdx !== preparedTask.componentIdx()) {
+    throw new Error(`meta callee idx [${calleeComponentIdx}] != current task idx [${preparedTask.componentIdx()}] during async start call`);
+  }
+  if (calleeComponentIdx !== componentIdx) {
+    throw new Error("mismatched componentIdx for async start call (does not match prepare)");
+  }
+  
+  const argArray = [...arguments];
+  
+  if (resultCount < 0 || resultCount > 1) { throw new Error('invalid/unsupported result count'); }
+  
+  const callbackFnName = 'callback_' + callbackIdx;
+  const callbackFn = getCallbackFn();
+  preparedTask.setCallbackFn(callbackFn, callbackFnName);
+  preparedTask.setPostReturnFn(getPostReturnFn());
+  
+  if (resultCount < 0 || resultCount > 1) {
+    throw new Error(`unsupported result count [${ resultCount }]`);
+  }
+  
+  const params = preparedTask.getCalleeParams();
+  if (paramCount !== params.length) {
+    throw new Error(`unexpected callee param count [${ params.length }], _asyncStartCall invocation expected [${ paramCount }]`);
+  }
+  
+  const callerComponentState = getOrCreateAsyncState(subtask.componentIdx());
+  
+  const calleeComponentState = getOrCreateAsyncState(preparedTask.componentIdx());
+  const calleeBackpressure = calleeComponentState.hasBackpressure();
+  
+  // Set up a handler on subtask completion to lower results from the call into the caller's memory region.
+  //
+  // NOTE: during fused guest->guest calls this handler is triggered, but does not actually perform
+  // lowering manually, as fused modules provider helper functions that can
+  subtask.registerOnResolveHandler((res) => {
+    _debugLog('[_asyncStartCall()] handling subtask result', { res, subtaskID: subtask.id() });
+    
+    let subtaskCallMeta = subtask.getCallMetadata();
+    
+    // NOTE: in the case of guest -> guest async calls, there may be no memory/realloc present,
+    // as the host will intermediate the value storage/movement between calls.
+    //
+    // We can simply take the value and lower it as a parameter
+    if (subtaskCallMeta.memory || subtaskCallMeta.realloc) {
+      throw new Error("call metadata unexpectedly contains memory/realloc for guest->guest call");
+    }
+    
+    const callerTask = subtask.getParentTask();
+    const calleeTask = preparedTask;
+    const callerMemoryIdx = callerTask.getReturnMemoryIdx();
+    const callerComponentIdx = callerTask.componentIdx();
+    
+    // If a helper function was provided we are likely in a fused guest->guest call,
+    // and the result will be delivered (lift/lowered) via helper function
+    if (subtaskCallMeta && subtaskCallMeta.returnFn) {
+      _debugLog('[_asyncStartCall()] return function present while handling subtask result, returning early (skipping lower)');
+      
+      // TODO: centralize calling of returnFn to *one place* (if possible)
+      if (subtaskCallMeta.returnFnCalled) { return; }
+      
+      subtaskCallMeta.returnFn.apply(null, [subtaskCallMeta.resultPtr]);
+      return;
+    }
+    
+    // If there is no where to lower the results, exit early
+    if (!subtaskCallMeta.resultPtr) {
+      _debugLog('[_asyncStartCall()] no result ptr during subtask result handling, returning early (skipping lower)');
+      return;
+    }
+    
+    let callerMemory;
+    if (callerMemoryIdx !== null && callerMemoryIdx !== undefined) {
+      callerMemory = lookupMemoriesForComponent({ componentIdx: callerComponentIdx, memoryIdx: callerMemoryIdx });
+    } else {
+      const callerMemories = lookupMemoriesForComponent({ componentIdx: callerComponentIdx });
+      if (callerMemories.length !== 1) { throw new Error(`unsupported amount of caller memories`); }
+      callerMemory = callerMemories[0];
+    }
+    
+    if (!callerMemory) {
+      _debugLog('[_asyncStartCall()] missing memory', { subtaskID: subtask.id(), res });
+      throw new Error(`missing memory for to guest->guest call result (subtask [${subtask.id()}])`);
+    }
+    
+    const lowerFns = calleeTask.getReturnLowerFns();
+    if (!lowerFns || lowerFns.length === 0) {
+      _debugLog('[_asyncStartCall()] missing result lower metadata for guest->guest call', { subtaskID: subtask.id() });
+      throw new Error(`missing result lower metadata for guest->guest call (subtask [${subtask.id()}])`);
+    }
+    
+    if (lowerFns.length !== 1) {
+      _debugLog('[_asyncStartCall()] only single result reportetd for guest->guest call', { subtaskID: subtask.id() });
+      throw new Error(`only single result supported for guest->guest calls (subtask [${subtask.id()}])`);
+    }
+    
+    _debugLog('[_asyncStartCall()] lowering results', { subtaskID: subtask.id() });
+    lowerFns[0]({
+      realloc: undefined,
+      memory: callerMemory,
+      vals: [res],
+      storagePtr: subtaskCallMeta.resultPtr,
+      componentIdx: callerComponentIdx,
+      stringEncoding: subtaskCallMeta.stringEncoding,
+    });
+    
+  });
+  
+  subtask.setOnProgressFn(() => {
+    subtask.setPendingEvent(() => {
+      if (subtask.isResolved()) { subtask.deliverResolve(); }
+      const event = {
+        code: ASYNC_EVENT_CODE.SUBTASK,
+        payload0: subtask.waitableRep(),
+        payload1: subtask.getStateNumber(),
+      };
+      return event;
+    });
+  });
+  
+  // Start the (event) driver loop that will resolve the task
+  queueMicrotask(async () => {
+    let startRes = subtask.onStart({ startFnParams: params });
+    startRes = Array.isArray(startRes) ? startRes : [startRes];
+    
+    await calleeComponentState.suspendTask({
+      task: preparedTask,
+      readyFn: () => !calleeComponentState.isExclusivelyLocked(),
+    });
+    
+    const started = await preparedTask.enter();
+    if (!started) {
+      _debugLog('[_asyncStartCall()] task failed early', {
+        taskID: preparedTask.id(),
+        subtaskID: subtask.id(),
+      });
+      throw new Error("task failed to start");
+      return;
+    }
+    
+    let callbackResult;
+    try {
+      let jspiCallee = WebAssembly.promising(callee);
+      callbackResult = await _withGlobalCurrentTaskMetaAsync({
+        taskID: preparedTask.id(),
+        componentIdx: preparedTask.componentIdx(),
+        fn: () => {
+          return jspiCallee.apply(null, startRes);
+        }
+      });
+    } catch(err) {
+      _debugLog("[_asyncStartCall()] initial subtask callee run failed", err);
+      // NOTE: a good place to rejectt the parent task, if rejection API is enabled
+      // subtask.reject(err);
+      // subtask.getParentTask().reject(err);
+      
+      subtask.getParentTask().setErrored(err);
+      
+      return;
+    }
+    
+    // If there was no callback function, we're dealing with a sync function
+    // that was lifted as async without one, there is only the callee.
+    if (!callbackFn) {
+      _debugLog("[_asyncStartCall()] no callback, resolving w/ callee result", {
+        taskID: preparedTask.id(),
+        componentIdx: preparedTask.componentIdx(),
+        preparedTask,
+        stateNumber: preparedTask.taskState(),
+        isResolved: preparedTask.isResolved(),
+        callbackFn,
+      });
+      preparedTask.resolve([callbackResult]);
+      return;
+    }
+    
+    let fnName = callbackFn.fnName;
+    if (!fnName) {
+      fnName = [
+      '<task ',
+      subtask.parentTaskID(),
+      '/subtask ',
+      subtask.id(),
+      '/task ',
+      preparedTask.id(),
+      '>',
+      ].join("");
+    }
+    
+    try {
+      _debugLog("[_asyncStartCall()] starting driver loop", {
+        fnName,
+        componentIdx: preparedTask.componentIdx(),
+        subtaskID: subtask.id(),
+        childTaskID: subtask.childTaskID(),
+        parentTaskID: subtask.parentTaskID(),
+      });
+      
+      await _driverLoop({
+        componentState: calleeComponentState,
+        task: preparedTask,
+        fnName,
+        isAsync: true,
+        callbackResult,
+        resolve,
+        reject
+      });
+    } catch (err) {
+      _debugLog("[AsyncStartCall] drive loop call failure", { err });
+    }
+    
+  });
+  
+  const subtaskState = subtask.getStateNumber();
+  if (subtaskState < 0 || subtaskState > 2**5) {
+    throw new Error('invalid subtask state, out of valid range');
+  }
+  
+  _debugLog('[_asyncStartCall()] returning subtask rep & state', {
+    subtask: {
+      rep: subtask.waitableRep(),
+      state: subtaskState,
+    }
+  });
+  
+  return Number(subtask.waitableRep()) << 4 | subtaskState;
+}
+
+function _syncStartCall(callbackIdx) {
+  _debugLog('[_syncStartCall()] args', { callbackIdx });
+  throw new Error('synchronous start call not implemented!');
+}
+
+class Waitable {
+  #componentIdx;
+  
+  #pendingEventFn = null;
+  
+  #promise;
+  #resolve;
+  #reject;
+  
+  #waitableSet = null;
+  
+  #idx = null; // to component-global waitables
+  
+  target;
+  
+  constructor(args) {
+    const { componentIdx, target } = args;
+    this.#componentIdx = componentIdx;
+    this.target = args.target;
+    this.#resetPromise();
+  }
+  
+  componentIdx() { return this.#componentIdx; }
+  isInSet() { return this.#waitableSet !== null; }
+  
+  idx() { return this.#idx; }
+  setIdx(idx) {
+    if (idx === 0) { throw new Error("waitable idx cannot be zero"); }
+    this.#idx = idx;
+  }
+  
+  setTarget(tgt) { this.target = tgt; }
+  
+  #resetPromise() {
+    const { promise, resolve, reject } = promiseWithResolvers()
+    this.#promise = promise;
+    this.#resolve = resolve;
+    this.#reject = reject;
+  }
+  
+  resolve() { this.#resolve(); }
+  reject(err) { this.#reject(err); }
+  promise() { return this.#promise; }
+  
+  hasPendingEvent() {
+    // _debugLog('[Waitable#hasPendingEvent()]', {
+      //     componentIdx: this.#componentIdx,
+      //     waitable: this,
+      //     waitableSet: this.#waitableSet,
+      //     hasPendingEvent: this.#pendingEventFn !== null,
+      // });
+      return this.#pendingEventFn !== null;
+    }
+    
+    setPendingEvent(fn) {
+      _debugLog('[Waitable#setPendingEvent()] args', {
+        waitable: this,
+        inSet: this.#waitableSet,
+      });
+      this.#pendingEventFn = fn;
+    }
+    
+    getPendingEvent() {
+      _debugLog('[Waitable#getPendingEvent()] args', {
+        waitable: this,
+        inSet: this.#waitableSet,
+        hasPendingEvent: this.#pendingEventFn !== null,
+      });
+      if (this.#pendingEventFn === null) { return null; }
+      const eventFn = this.#pendingEventFn;
+      this.#pendingEventFn = null;
+      const e = eventFn();
+      this.#resetPromise();
+      return e;
+    }
+    
+    join(waitableSet) {
+      _debugLog('[Waitable#join()] args', {
+        waitable: this,
+        waitableSet: waitableSet,
+      });
+      if (this.#waitableSet) { this.#waitableSet.removeWaitable(this); }
+      if (!waitableSet) {
+        this.#waitableSet = null;
+        return;
+      }
+      waitableSet.addWaitable(this);
+      this.#waitableSet = waitableSet;
+    }
+    
+    drop() {
+      _debugLog('[Waitable#drop()] args', {
+        componentIdx: this.#componentIdx,
+        waitable: this,
+      });
+      if (this.hasPendingEvent()) {
+        throw new Error('waitables with pending events cannot be dropped');
+      }
+      this.join(null);
+    }
+    
+  }
+  
+  const ERR_CTX_TABLES = {};
+  
+  const emptyFunc = () => {};
+  
+  let dv = new DataView(new ArrayBuffer());
+  const dataView = mem => dv.buffer === mem.buffer ? dv : dv = new DataView(mem.buffer);
+  
+  function toInt64(val) {
+    const converted = BigInt(val)
+    
+    return BigInt.asIntN(64, converted);
+  }
+  
+  
+  function toUint64(val) {
+    const converted = BigInt(val)
+    
+    return BigInt.asUintN(64, converted);
+  }
+  
+  const TEXT_DECODER_UTF8 = new TextDecoder();
+  const TEXT_ENCODER_UTF8 = new TextEncoder();
+  
+  function _utf8AllocateAndEncode(s, realloc, memory) {
+    if (typeof s !== 'string') {
+      throw new TypeError('expected a string, received [' + typeof s + ']');
+    }
+    if (s.length === 0) { return { ptr: 1, len: 0 }; }
+    let buf = TEXT_ENCODER_UTF8.encode(s);
+    let ptr = realloc(0, 0, 1, buf.length);
+    new Uint8Array(memory.buffer).set(buf, ptr);
+    const res = { ptr, len: buf.length, codepoints: [...s].length };
+    return res;
+  }
+  
+  
+  const T_FLAG = 1 << 30;
+  
+  function rscTableCreateOwn(table, rep) {
+    const free = table[0] & ~T_FLAG;
+    if (free === 0) {
+      table.push(0);
+      table.push(rep | T_FLAG);
+      return (table.length >> 1) - 1;
+    }
+    table[0] = table[free << 1];
+    table[free << 1] = 0;
+    table[(free << 1) + 1] = rep | T_FLAG;
+    return free;
+  }
+  
+  function rscTableRemove(table, handle) {
+    const scope = table[handle << 1];
+    const val = table[(handle << 1) + 1];
+    const own = (val & T_FLAG) !== 0;
+    const rep = val & ~T_FLAG;
+    if (val === 0 || (scope & T_FLAG) !== 0) {
+      throw new TypeError("Invalid handle");
+    }
+    table[handle << 1] = table[0] | T_FLAG;
+    table[0] = handle | T_FLAG;
+    return { rep, scope, own };
+  }
+  
+  function createNewCurrentTask(args) {
+    _debugLog('[createNewCurrentTask()] args', args);
+    const {
+      componentIdx,
+      isAsync,
+      isManualAsync,
+      entryFnName,
+      parentSubtaskID,
+      callbackFnName,
+      getCallbackFn,
+      getParamsFn,
+      stringEncoding,
+      errHandling,
+      getCalleeParamsFn,
+      resultPtr,
+      callingWasmExport,
+    } = args;
+    if (componentIdx === undefined || componentIdx === null) {
+      throw new Error('missing/invalid component instance index while starting task');
+    }
+    let taskMetas = ASYNC_TASKS_BY_COMPONENT_IDX.get(componentIdx);
+    const callbackFn = getCallbackFn ? getCallbackFn() : null;
+    
+    const newTask = new AsyncTask({
+      componentIdx,
+      isAsync,
+      isManualAsync,
+      entryFnName,
+      callbackFn,
+      callbackFnName,
+      stringEncoding,
+      getCalleeParamsFn,
+      resultPtr,
+      errHandling,
+    });
+    
+    const newTaskID = newTask.id();
+    const newTaskMeta = { id: newTaskID, componentIdx, task: newTask };
+    
+    // NOTE: do not track host tasks
+    ASYNC_CURRENT_TASK_IDS.push(newTaskID);
+    ASYNC_CURRENT_COMPONENT_IDXS.push(componentIdx);
+    
+    if (!taskMetas) {
+      taskMetas = [newTaskMeta];
+      ASYNC_TASKS_BY_COMPONENT_IDX.set(componentIdx, [newTaskMeta]);
+    } else {
+      taskMetas.push(newTaskMeta);
+    }
+    
+    return [newTask, newTaskID];
+  }
+  const ASYNC_TASKS_BY_COMPONENT_IDX = new Map();
+  
+  class AsyncTask {
+    static _ID = 0n;
+    
+    static State = {
+      INITIAL: 'initial',
+      CANCELLED: 'cancelled',
+      CANCEL_PENDING: 'cancel-pending',
+      CANCEL_DELIVERED: 'cancel-delivered',
+      RESOLVED: 'resolved',
+    }
+    
+    static BlockResult = {
+      CANCELLED: 'block.cancelled',
+      NOT_CANCELLED: 'block.not-cancelled',
+    }
+    
+    #id;
+    #componentIdx;
+    #state;
+    #isAsync;
+    #isManualAsync;
+    #entryFnName = null;
+    
+    #onResolveHandlers = [];
+    #completionPromise = null;
+    #rejected = false;
+    
+    #exitPromise = null;
+    #onExitHandlers = [];
+    
+    #memoryIdx = null;
+    #memory = null;
+    
+    #callbackFn = null;
+    #callbackFnName = null;
+    
+    #postReturnFn = null;
+    
+    #getCalleeParamsFn = null;
+    
+    #stringEncoding = null;
+    
+    #parentSubtask = null;
+    
+    #needsExclusiveLock = false;
+    
+    #errHandling;
+    
+    #backpressurePromise;
+    #backpressureWaiters = 0n;
+    
+    #returnLowerFns = null;
+    
+    #subtasks = [];
+    
+    #entered = false;
+    #exited = false;
+    #errored = null;
+    
+    cancelled = false;
+    cancelRequested = false;
+    alwaysTaskReturn = false;
+    
+    returnCalls =  0;
+    storage = [0, 0];
+    borrowedHandles = {};
+    
+    tmpRetI64HighBits = 0|0;
+    
+    constructor(opts) {
+      this.#id = ++AsyncTask._ID;
+      
+      if (opts?.componentIdx === undefined) {
+        throw new TypeError('missing component id during task creation');
+      }
+      this.#componentIdx = opts.componentIdx;
+      
+      this.#state = AsyncTask.State.INITIAL;
+      this.#isAsync = opts?.isAsync ?? false;
+      this.#isManualAsync = opts?.isManualAsync ?? false;
+      this.#entryFnName = opts.entryFnName;
+      
+      const {
+        promise: completionPromise,
+        resolve: resolveCompletionPromise,
+        reject: rejectCompletionPromise,
+      } = promiseWithResolvers();
+      this.#completionPromise = completionPromise;
+      
+      this.#onResolveHandlers.push((results) => {
+        if (this.#errored !== null) {
+          rejectCompletionPromise(this.#errored);
+          return;
+        } else if (this.#rejected) {
+          rejectCompletionPromise(results);
+          return;
+        }
+        resolveCompletionPromise(results);
+      });
+      
+      const {
+        promise: exitPromise,
+        resolve: resolveExitPromise,
+        reject: rejectExitPromise,
+      } = promiseWithResolvers();
+      this.#exitPromise = exitPromise;
+      
+      this.#onExitHandlers.push(() => {
+        resolveExitPromise();
+      });
+      
+      if (opts.callbackFn) { this.#callbackFn = opts.callbackFn; }
+      if (opts.callbackFnName) { this.#callbackFnName = opts.callbackFnName; }
+      
+      if (opts.getCalleeParamsFn) { this.#getCalleeParamsFn = opts.getCalleeParamsFn; }
+      
+      if (opts.stringEncoding) { this.#stringEncoding = opts.stringEncoding; }
+      
+      if (opts.parentSubtask) { this.#parentSubtask = opts.parentSubtask; }
+      
+      this.#needsExclusiveLock = this.isSync() || !this.hasCallback();
+      
+      if (opts.errHandling) { this.#errHandling = opts.errHandling; }
+    }
+    
+    taskState() { return this.#state; }
+    id() { return this.#id; }
+    componentIdx() { return this.#componentIdx; }
+    entryFnName() { return this.#entryFnName; }
+    
+    completionPromise() { return this.#completionPromise; }
+    exitPromise() { return this.#exitPromise; }
+    
+    isAsync() { return this.#isAsync; }
+    isSync() { return !this.isAsync(); }
+    
+    getErrHandling() { return this.#errHandling; }
+    
+    hasCallback() { return this.#callbackFn !== null; }
+    
+    getReturnMemoryIdx() { return this.#memoryIdx; }
+    setReturnMemoryIdx(idx) {
+      if (idx === null) { return; }
+      this.#memoryIdx = idx;
+    }
+    
+    getReturnMemory() { return this.#memory; }
+    setReturnMemory(m) {
+      if (m === null) { return; }
+      this.#memory = m;
+    }
+    
+    setReturnLowerFns(fns) { this.#returnLowerFns = fns; }
+    getReturnLowerFns() { return this.#returnLowerFns; }
+    
+    setParentSubtask(subtask) {
+      if (!subtask || !(subtask instanceof AsyncSubtask)) { return }
+      if (this.#parentSubtask) { throw new Error('parent subtask can only be set once'); }
+      this.#parentSubtask = subtask;
+    }
+    
+    getParentSubtask() { return this.#parentSubtask; }
+    
+    // TODO(threads): this is very inefficient, we can pass along a root task,
+    // and ideally do not need this once thread support is in place
+    getRootTask() {
+      let currentSubtask = this.getParentSubtask();
+      let task = this;
+      while (currentSubtask) {
+        task = currentSubtask.getParentTask();
+        currentSubtask = task.getParentSubtask();
+      }
+      return task;
+    }
+    
+    setPostReturnFn(f) {
+      if (!f) { return; }
+      if (this.#postReturnFn) { throw new Error('postReturn fn can only be set once'); }
+      this.#postReturnFn = f;
+    }
+    
+    setCallbackFn(f, name) {
+      if (!f) { return; }
+      if (this.#callbackFn) { throw new Error('callback fn can only be set once'); }
+      this.#callbackFn = f;
+      this.#callbackFnName = name;
+    }
+    
+    getCallbackFnName() {
+      if (!this.#callbackFnName) { return undefined; }
+      return this.#callbackFnName;
+    }
+    
+    async runCallbackFn(...args) {
+      if (!this.#callbackFn) { throw new Error('on callback function has been set for task'); }
+      return await this.#callbackFn.apply(null, args);
+    }
+    
+    getCalleeParams() {
+      if (!this.#getCalleeParamsFn) { throw new Error('missing/invalid getCalleeParamsFn'); }
+      return this.#getCalleeParamsFn();
+    }
+    
+    mayBlock() { return this.isAsync() || this.isResolvedState() }
+    
+    mayEnter(task) {
+      const cstate = getOrCreateAsyncState(this.#componentIdx);
+      if (cstate.hasBackpressure()) {
+        _debugLog('[AsyncTask#mayEnter()] disallowed due to backpressure', { taskID: this.#id });
+        return false;
+      }
+      if (!cstate.callingSyncImport()) {
+        _debugLog('[AsyncTask#mayEnter()] disallowed due to sync import call', { taskID: this.#id });
+        return false;
+      }
+      const callingSyncExportWithSyncPending = cstate.callingSyncExport && !task.isAsync;
+      if (!callingSyncExportWithSyncPending) {
+        _debugLog('[AsyncTask#mayEnter()] disallowed due to sync export w/ sync pending', { taskID: this.#id });
+        return false;
+      }
+      return true;
+    }
+    
+    enterSync() {
+      if (this.needsExclusiveLock()) {
+        const cstate = getOrCreateAsyncState(this.#componentIdx);
+        cstate.exclusiveLock();
+      }
+      return true;
+    }
+    
+    async enter(opts) {
+      _debugLog('[AsyncTask#enter()] args', {
+        taskID: this.#id,
+        componentIdx: this.#componentIdx,
+        subtaskID: this.getParentSubtask()?.id(),
+      });
+      
+      if (this.#entered) {
+        throw new Error(`task with ID [${this.#id}] should not be entered twice`);
+      }
+      
+      const cstate = getOrCreateAsyncState(this.#componentIdx);
+      
+      // If a task is either synchronous or host-provided (e.g. a host import, whether sync or async)
+      // then we can avoid component-relevant tracking and immediately enter
+      if (this.isSync() || opts?.isHost) {
+        this.#entered = true;
+        
+        // TODO(breaking): remove once manually-spccifying async fns is removed
+        // It is currently possible for an actually sync export to be specified
+        // as async via JSPI
+        if (this.#isManualAsync) {
+          if (this.needsExclusiveLock()) { cstate.exclusiveLock(); }
+        }
+        
+        return this.#entered;
+      }
+      
+      if (cstate.hasBackpressure()) {
+        cstate.addBackpressureWaiter();
+        
+        const result = await this.waitUntil({
+          readyFn: () => !cstate.hasBackpressure(),
+          cancellable: true,
+        });
+        
+        cstate.removeBackpressureWaiter();
+        
+        if (result === AsyncTask.BlockResult.CANCELLED) {
+          this.cancel();
+          return false;
+        }
+      }
+      
+      if (this.needsExclusiveLock()) { cstate.exclusiveLock(); }
+      
+      this.#entered = true;
+      return this.#entered;
+    }
+    
+    isRunningState() { return this.#state !== AsyncTask.State.RESOLVED; }
+    isResolvedState() { return this.#state === AsyncTask.State.RESOLVED; }
+    isResolved() { return this.#state === AsyncTask.State.RESOLVED; }
+    
+    async waitUntil(opts) {
+      const { readyFn, waitableSetRep, cancellable } = opts;
+      _debugLog('[AsyncTask#waitUntil()] args', { taskID: this.#id, waitableSetRep, cancellable });
+      
+      const state = getOrCreateAsyncState(this.#componentIdx);
+      const wset = state.handles.get(waitableSetRep);
+      
+      let event;
+      
+      wset.incrementNumWaiting();
+      
+      const keepGoing = await this.suspendUntil({
+        readyFn: () => {
+          const hasPendingEvent = wset.hasPendingEvent();
+          const ready = readyFn();
+          return ready && hasPendingEvent;
+        },
+        cancellable,
+      });
+      
+      if (keepGoing) {
+        event = wset.getPendingEvent();
+      } else {
+        event = {
+          code: ASYNC_EVENT_CODE.TASK_CANCELLED,
+          payload0: 0,
+          payload1: 0,
+        };
+      }
+      
+      wset.decrementNumWaiting();
+      
+      return event;
+    }
+    
+    async yieldUntil(opts) {
+      const { readyFn, cancellable } = opts;
+      _debugLog('[AsyncTask#yieldUntil()] args', { taskID: this.#id, cancellable });
+      
+      const keepGoing = await this.suspendUntil({ readyFn, cancellable });
+      if (keepGoing) {
+        return {
+          code: ASYNC_EVENT_CODE.NONE,
+          payload0: 0,
+          payload1: 0,
+        };
+      }
+      
+      return {
+        code: ASYNC_EVENT_CODE.TASK_CANCELLED,
+        payload0: 0,
+        payload1: 0,
+      };
+    }
+    
+    async suspendUntil(opts) {
+      const { cancellable, readyFn } = opts;
+      _debugLog('[AsyncTask#suspendUntil()] args', { cancellable });
+      
+      const pendingCancelled = this.deliverPendingCancel({ cancellable });
+      if (pendingCancelled) { return false; }
+      
+      const completed = await this.immediateSuspendUntil({ readyFn, cancellable });
+      return completed;
+    }
+    
+    // TODO(threads): equivalent to thread.suspend_until()
+    async immediateSuspendUntil(opts) {
+      const { cancellable, readyFn } = opts;
+      _debugLog('[AsyncTask#immediateSuspendUntil()] args', { cancellable, readyFn });
+      
+      const ready = readyFn();
+      if (ready && ASYNC_DETERMINISM === 'random') {
+        // const coinFlip = _coinFlip();
+        // if (coinFlip) { return true }
+        return true;
+      }
+      
+      const keepGoing = await this.immediateSuspend({ cancellable, readyFn });
+      return keepGoing;
+    }
+    
+    async immediateSuspend(opts) { // NOTE: equivalent to thread.suspend()
+    // TODO(threads): store readyFn on the thread
+    const { cancellable, readyFn } = opts;
+    _debugLog('[AsyncTask#immediateSuspend()] args', { cancellable, readyFn });
+    
+    const pendingCancelled = this.deliverPendingCancel({ cancellable });
+    if (pendingCancelled) { return false; }
+    
+    const cstate = getOrCreateAsyncState(this.#componentIdx);
+    const keepGoing = await cstate.suspendTask({ task: this, readyFn });
+    return keepGoing;
+  }
+  
+  deliverPendingCancel(opts) {
+    const { cancellable } = opts;
+    _debugLog('[AsyncTask#deliverPendingCancel()] args', { cancellable });
+    
+    if (cancellable && this.#state === AsyncTask.State.PENDING_CANCEL) {
+      this.#state = AsyncTask.State.CANCEL_DELIVERED;
+      return true;
+    }
+    
+    return false;
+  }
+  
+  isCancelled() { return this.cancelled }
+  
+  cancel(args) {
+    _debugLog('[AsyncTask#cancel()] args', { });
+    if (this.taskState() !== AsyncTask.State.CANCEL_DELIVERED) {
+      throw new Error(`(component [${this.#componentIdx}]) task [${this.#id}] invalid task state [${this.taskState()}] for cancellation`);
+    }
+    if (this.borrowedHandles.length > 0) { throw new Error('task still has borrow handles'); }
+    this.cancelled = true;
+    this.onResolve(args?.error ?? new Error('task cancelled'));
+    this.#state = AsyncTask.State.RESOLVED;
+  }
+  
+  onResolve(taskValue) {
+    const handlers = this.#onResolveHandlers;
+    this.#onResolveHandlers = [];
+    for (const f of handlers) {
+      try {
+        // TODO(fix): resolve handlers getting called a ton?
+        f(taskValue);
+      } catch (err) {
+        _debugLog("[AsyncTask#onResolve] error during task resolve handler", err);
+        throw err;
+      }
+    }
+    
+    if (this.#parentSubtask) {
+      const meta = this.#parentSubtask.getCallMetadata();
+      // Run the rturn fn if it has not already been called -- this *should* have happened in
+      // `task.return`, but some paths do not go through task.return (e.g. async lower of sync fn
+      // which goes through prepare + async-start-call)
+      if (meta.returnFn && !meta.returnFnCalled) {
+        _debugLog('[AsyncTask#onResolve()] running returnFn', {
+          componentIdx: this.#componentIdx,
+          taskID: this.#id,
+          subtaskID: this.#parentSubtask.id(),
+        });
+        const memory = meta.getMemoryFn();
+        meta.returnFn.apply(null, [taskValue, meta.resultPtr]);
+        meta.returnFnCalled = true;
+      }
+    }
+    
+    if (this.#postReturnFn) {
+      _debugLog('[AsyncTask#onResolve()] running post return ', {
+        componentIdx: this.#componentIdx,
+        taskID: this.#id,
+      });
+      try {
+        this.#postReturnFn(taskValue);
+      } catch (err) {
+        _debugLog("[AsyncTask#onResolve] error during task resolve handler", err);
+        throw err;
+      }
+    }
+    
+    if (this.#parentSubtask) {
+      this.#parentSubtask.onResolve(taskValue);
+    }
+  }
+  
+  registerOnResolveHandler(f) {
+    this.#onResolveHandlers.push(f);
+  }
+  
+  isRejected() { return this.#rejected; }
+  
+  setErrored(err) {
+    this.#errored = err;
+  }
+  
+  reject(taskErr) {
+    _debugLog('[AsyncTask#reject()] args', {
+      componentIdx: this.#componentIdx,
+      taskID: this.#id,
+      parentSubtask: this.#parentSubtask,
+      parentSubtaskID: this.#parentSubtask?.id(),
+      entryFnName: this.entryFnName(),
+      callbackFnName: this.#callbackFnName,
+      errMsg: taskErr.message,
+    });
+    
+    if (this.isResolvedState() || this.#rejected) { return; }
+    
+    for (const subtask of this.#subtasks) {
+      subtask.reject(taskErr);
+    }
+    
+    this.#rejected = true;
+    this.cancelRequested = true;
+    this.#state = AsyncTask.State.PENDING_CANCEL;
+    const cancelled = this.deliverPendingCancel({ cancellable: true });
+    
+    // TODO: do cleanup here to reset the machinery so we can run again?
+    
+    
+    this.cancel({ error: taskErr });
+  }
+  
+  resolve(results) {
+    _debugLog('[AsyncTask#resolve()] args', {
+      componentIdx: this.#componentIdx,
+      taskID: this.#id,
+      entryFnName: this.entryFnName(),
+      callbackFnName: this.#callbackFnName,
+    });
+    
+    if (this.#state === AsyncTask.State.RESOLVED) {
+      throw new Error(`(component [${this.#componentIdx}]) task [${this.#id}]  is already resolved (did you forget to wait for an import?)`);
+    }
+    
+    if (this.borrowedHandles.length > 0) {
+      throw new Error('task still has borrow handles');
+    }
+    
+    this.#state = AsyncTask.State.RESOLVED;
+    
+    switch (results.length) {
+      case 0:
+      this.onResolve(undefined);
+      break;
+      case 1:
+      this.onResolve(results[0]);
+      break;
+      default:
+      _debugLog('[AsyncTask#resolve()] unexpected number of results', {
+        componentIdx: this.#componentIdx,
+        results,
+        taskID: this.#id,
+        subtaskID: this.#parentSubtask?.id(),
+        entryFnName: this.#entryFnName,
+        callbackFnName: this.#callbackFnName,
+      });
+      throw new Error('unexpected number of results');
+    }
+  }
+  
+  exit() {
+    _debugLog('[AsyncTask#exit()]', {
+      componentIdx: this.#componentIdx,
+      taskID: this.#id,
+    });
+    
+    if (this.#exited)  { throw new Error("task has already exited"); }
+    
+    if (this.#state !== AsyncTask.State.RESOLVED) {
+      // TODO(fix): only fused, manually specified post returns seem to break this invariant,
+      // as the TaskReturn trampoline is not activated it seems.
+      //
+      // see: test/p3/ported/wasmtime/component-async/post-return.js
+      //
+      // We *should* be able to upgrade this to be more strict and throw at some point,
+      // which may involve rewriting the upstream test to surface task return manually somehow.
+      //
+      //throw new Error(`(component [${this.#componentIdx}]) task [${this.#id}] exited without resolution`);
+      _debugLog('[AsyncTask#exit()] task exited without resolution', {
+        componentIdx: this.#componentIdx,
+        taskID: this.#id,
+        subtask: this.getParentSubtask(),
+        subtaskID: this.getParentSubtask()?.id(),
+      });
+      this.#state = AsyncTask.State.RESOLVED;
+    }
+    
+    if (this.borrowedHandles > 0) {
+      throw new Error('task [${this.#id}] exited without clearing borrowed handles');
+    }
+    
+    const state = getOrCreateAsyncState(this.#componentIdx);
+    if (!state) { throw new Error('missing async state for component [' + this.#componentIdx + ']'); }
+    
+    // Exempt the host from exclusive lock check
+    if (this.#componentIdx !== -1 && this.needsExclusiveLock() && !state.isExclusivelyLocked()) {
+      throw new Error(`task [${this.#id}] exit: component [${this.#componentIdx}] should have been exclusively locked`);
+    }
+    
+    state.exclusiveRelease();
+    
+    for (const f of this.#onExitHandlers) {
+      try {
+        f();
+      } catch (err) {
+        console.error("error during task exit handler", err);
+        throw err;
+      }
+    }
+    
+    this.#exited = true;
+    clearCurrentTask(this.#componentIdx, this.id());
+  }
+  
+  needsExclusiveLock() {
+    return !this.#isAsync || this.hasCallback();
+  }
+  
+  createSubtask(args) {
+    _debugLog('[AsyncTask#createSubtask()] args', args);
+    const { componentIdx, childTask, callMetadata, fnName, isAsync, isManualAsync } = args;
+    
+    const cstate = getOrCreateAsyncState(this.#componentIdx);
+    if (!cstate) {
+      throw new Error(`invalid/missing async state for component idx [${componentIdx}]`);
+    }
+    
+    const waitable = new Waitable({
+      componentIdx: this.#componentIdx,
+      target: `subtask (internal ID [${this.#id}])`,
+    });
+    
+    const newSubtask = new AsyncSubtask({
+      componentIdx,
+      childTask,
+      parentTask: this,
+      callMetadata,
+      isAsync,
+      isManualAsync,
+      fnName,
+      waitable,
+    });
+    this.#subtasks.push(newSubtask);
+    newSubtask.setTarget(`subtask (internal ID [${newSubtask.id()}], waitable [${waitable.idx()}], component [${componentIdx}])`);
+    waitable.setIdx(cstate.handles.insert(newSubtask));
+    waitable.setTarget(`waitable for subtask (waitable id [${waitable.idx()}], subtask internal ID [${newSubtask.id()}])`);
+    
+    return newSubtask;
+  }
+  
+  getLatestSubtask() {
+    return this.#subtasks.at(-1);
+  }
+  
+  getSubtaskByWaitableRep(rep) {
+    if (rep === undefined) { throw new TypeError('missing rep'); }
+    return this.#subtasks.find(s => s.waitableRep() === rep);
+  }
+  
+  currentSubtask() {
+    _debugLog('[AsyncTask#currentSubtask()]');
+    if (this.#subtasks.length === 0) { return undefined; }
+    return this.#subtasks.at(-1);
+  }
+  
+  removeSubtask(subtask) {
+    if (this.#subtasks.length === 0) { throw new Error('cannot end current subtask: no current subtask'); }
+    this.#subtasks = this.#subtasks.filter(t => t !== subtask);
+    return subtask;
+  }
+}
+
+const STREAMS = new RepTable({ target: 'global stream map' });
 const ASYNC_STATE = new Map();
 
 function getOrCreateAsyncState(componentIdx, init) {
   if (!ASYNC_STATE.has(componentIdx)) {
-    ASYNC_STATE.set(componentIdx, new ComponentAsyncState());
+    const newState = new ComponentAsyncState({ componentIdx });
+    ASYNC_STATE.set(componentIdx, newState);
   }
   return ASYNC_STATE.get(componentIdx);
 }
 
 class ComponentAsyncState {
+  static EVENT_HANDLER_EVENTS = [ 'backpressure-change' ];
+  
+  #componentIdx;
   #callingAsyncImport = false;
-  #syncImportWait = Promise.withResolvers();
-  #lock = null;
+  #syncImportWait = promiseWithResolvers();
+  #locked = false;
+  #parkedTasks = new Map();
+  #suspendedTasksByTaskID = new Map();
+  #suspendedTaskIDs = [];
+  #errored = null;
+  
+  #backpressure = 0;
+  #backpressureWaiters = 0n;
+  
+  #handlerMap = new Map();
+  #nextHandlerID = 0n;
+  
+  #tickLoop = null;
+  #tickLoopInterval = null;
+  
+  #onExclusiveReleaseHandlers = [];
   
   mayLeave = true;
-  waitableSets = new RepTable();
-  waitables = new RepTable();
   
-  #parkedTasks = new Map();
+  handles;
+  subtasks;
+  
+  constructor(args) {
+    this.#componentIdx = args.componentIdx;
+    this.handles = new RepTable({ target: `component [${this.#componentIdx}] handles (waitable objects)` });
+    this.subtasks = new RepTable({ target: `component [${this.#componentIdx}] subtasks` });
+  };
+  
+  componentIdx() { return this.#componentIdx; }
+  
+  errored() { return this.#errored !== null; }
+  setErrored(err) {
+    _debugLog('[ComponentAsyncState#setErrored()] component errored', { err, componentIdx: this.#componentIdx });
+    if (this.#errored) { return; }
+    if (!err) {
+      err = new Error('error elswehere (see other component instance error)')
+      err.componentIdx = this.#componentIdx;
+    }
+    this.#errored = err;
+  }
   
   callingSyncImport(val) {
     if (val === undefined) { return this.#callingAsyncImport; }
@@ -544,7 +1973,7 @@ class ComponentAsyncState {
   
   #notifySyncImportEnd() {
     const existing = this.#syncImportWait;
-    this.#syncImportWait = Promise.withResolvers();
+    this.#syncImportWait = promiseWithResolvers();
     existing.resolve();
   }
   
@@ -552,146 +1981,581 @@ class ComponentAsyncState {
     await this.#syncImportWait.promise;
   }
   
-  parkTaskOnAwaitable(args) {
-    if (!args.awaitable) { throw new TypeError('missing awaitable when trying to park'); }
-    if (!args.task) { throw new TypeError('missing task when trying to park'); }
-    const { awaitable, task } = args;
-    
-    let taskList = this.#parkedTasks.get(awaitable.id());
-    if (!taskList) {
-      taskList = [];
-      this.#parkedTasks.set(awaitable.id(), taskList);
+  setBackpressure(v) {
+    this.#backpressure = v;
+    return this.#backpressure
+  }
+  getBackpressure() { return this.#backpressure; }
+  
+  incrementBackpressure() {
+    const current = this.#backpressure;
+    if (current < 0 || current > 2**16) {
+      throw new Error(`invalid current backpressure value [${current}]`);
     }
-    taskList.push(task);
-    
-    this.wakeNextTaskForAwaitable(awaitable);
-  }
-  
-  wakeNextTaskForAwaitable(awaitable) {
-    if (!awaitable) { throw new TypeError('missing awaitable when waking next task'); }
-    const awaitableID = awaitable.id();
-    
-    const taskList = this.#parkedTasks.get(awaitableID);
-    if (!taskList || taskList.length === 0) {
-      _debugLog('[ComponentAsyncState] no tasks waiting for awaitable', { awaitableID: awaitable.id() });
-      return;
+    const newValue = this.getBackpressure() + 1;
+    if (newValue >= 2**16) {
+      throw new Error(`invalid new backpressure value [${newValue}], overflow`);
     }
-    
-    let task = taskList.shift(); // todo(perf)
-    if (!task) { throw new Error('no task in parked list despite previous check'); }
-    
-    if (!task.awaitableResume) {
-      throw new Error('task ready due to awaitable is missing resume', { taskID: task.id(), awaitableID });
+    return this.setBackpressure(newValue);
+  }
+  
+  decrementBackpressure() {
+    const current = this.#backpressure;
+    if (current < 0 || current > 2**16) {
+      throw new Error(`invalid current backpressure value [${current}]`);
     }
-    task.awaitableResume();
+    const newValue = Math.max(0, current - 1);
+    if (newValue < 0) {
+      throw new Error(`invalid new backpressure value [${newValue}], underflow`);
+    }
+    return this.setBackpressure(newValue);
   }
+  hasBackpressure() { return this.#backpressure > 0; }
   
-  async exclusiveLock() {  // TODO: use atomics
-  if (this.#lock === null) {
-    this.#lock = { ticket: 0n };
-  }
-  
-  // Take a ticket for the next valid usage
-  const ticket = ++this.#lock.ticket;
-  
-  _debugLog('[ComponentAsyncState#exclusiveLock()] locking', {
-    currentTicket: ticket - 1n,
-    ticket
-  });
-  
-  // If there is an active promise, then wait for it
-  let finishedTicket;
-  while (this.#lock.promise) {
-    finishedTicket = await this.#lock.promise;
-    if (finishedTicket === ticket - 1n) { break; }
-  }
-  
-  const { promise, resolve } = Promise.withResolvers();
-  this.#lock = {
-    ticket,
-    promise,
-    resolve,
-  };
-  
-  return this.#lock.promise;
-}
-
-exclusiveRelease() {
-  _debugLog('[ComponentAsyncState#exclusiveRelease()] releasing', {
-    currentTicket: this.#lock === null ? 'none' : this.#lock.ticket,
-  });
-  
-  if (this.#lock === null) { return; }
-  
-  const existingLock = this.#lock;
-  this.#lock = null;
-  existingLock.resolve(existingLock.ticket);
-}
-
-isExclusivelyLocked() { return this.#lock !== null; }
-
-}
-
-function prepareCall(memoryIdx) {
-  _debugLog('[prepareCall()] args', { memoryIdx });
-  
-  const taskMeta = getCurrentTask(ASYNC_CURRENT_COMPONENT_IDXS.at(-1), ASYNC_CURRENT_TASK_IDS.at(-1));
-  if (!taskMeta) { throw new Error('invalid/missing current async task meta during prepare call'); }
-  
-  const task = taskMeta.task;
-  if (!task) { throw new Error('unexpectedly missing task in task meta during prepare call'); }
-  
-  const state = getOrCreateAsyncState(task.componentIdx());
-  if (!state) {
-    throw new Error('invalid/missing async state for component instance [' + componentInstanceID + ']');
-  }
-  
-  const subtask = task.createSubtask({
-    memoryIdx,
-  });
-  
-}
-
-function asyncStartCall(callbackIdx, postReturnIdx) {
-  _debugLog('[asyncStartCall()] args', { callbackIdx, postReturnIdx });
-  
-  const taskMeta = getCurrentTask(ASYNC_CURRENT_COMPONENT_IDXS.at(-1), ASYNC_CURRENT_TASK_IDS.at(-1));
-  if (!taskMeta) { throw new Error('invalid/missing current async task meta during prepare call'); }
-  
-  const task = taskMeta.task;
-  if (!task) { throw new Error('unexpectedly missing task in task meta during prepare call'); }
-  
-  const subtask = task.currentSubtask();
-  if (!subtask) { throw new Error('invalid/missing subtask during async start call'); }
-  
-  return Number(subtask.waitableRep()) << 4 | subtask.getStateNumber();
-}
-
-function syncStartCall(callbackIdx) {
-  _debugLog('[syncStartCall()] args', { callbackIdx });
-}
-
-if (!Promise.withResolvers) {
-  Promise.withResolvers = () => {
-    let resolve;
-    let reject;
-    const promise = new Promise((res, rej) => {
-      resolve = res;
-      reject = rej;
+  waitForBackpressure() {
+    let backpressureCleared = false;
+    const cstate = this;
+    cstate.addBackpressureWaiter();
+    const handlerID = this.registerHandler({
+      event: 'backpressure-change',
+      fn: (bp) => {
+        if (bp === 0) {
+          cstate.removeHandler(handlerID);
+          backpressureCleared = true;
+        }
+      }
     });
-    return { promise, resolve, reject };
-  };
+    return new Promise((resolve) => {
+      const interval = setInterval(() => {
+        if (backpressureCleared) { return; }
+        clearInterval(interval);
+        cstate.removeBackpressureWaiter();
+        resolve(null);
+      }, 0);
+    });
+  }
+  
+  registerHandler(args) {
+    const { event, fn } = args;
+    if (!event) { throw new Error("missing handler event"); }
+    if (!fn) { throw new Error("missing handler fn"); }
+    
+    if (!ComponentAsyncState.EVENT_HANDLER_EVENTS.includes(event)) {
+      throw new Error(`unrecognized event handler [${event}]`);
+    }
+    
+    const handlerID = this.#nextHandlerID++;
+    let handlers = this.#handlerMap.get(event);
+    if (!handlers) {
+      handlers = [];
+      this.#handlerMap.set(event, handlers)
+    }
+    
+    handlers.push({ id: handlerID, fn, event });
+    return handlerID;
+  }
+  
+  removeHandler(args) {
+    const { event, handlerID } = args;
+    const registeredHandlers = this.#handlerMap.get(event);
+    if (!registeredHandlers) { return; }
+    const found = registeredHandlers.find(h => h.id === handlerID);
+    if (!found) { return; }
+    this.#handlerMap.set(event, this.#handlerMap.get(event).filter(h => h.id !== handlerID));
+  }
+  
+  getBackpressureWaiters() { return this.#backpressureWaiters; }
+  addBackpressureWaiter() { this.#backpressureWaiters++; }
+  removeBackpressureWaiter() {
+    this.#backpressureWaiters--;
+    if (this.#backpressureWaiters < 0) {
+      throw new Error("unexepctedly negative number of backpressure waiters");
+    }
+  }
+  
+  isExclusivelyLocked() { return this.#locked === true; }
+  setLocked(locked) {
+    this.#locked = locked;
+  }
+  
+  // TODO(fix): we might want to check for pre-locked status here, we should be deterministically
+  // going from locked -> unlocked and vice versa
+  exclusiveLock() {
+    _debugLog('[ComponentAsyncState#exclusiveLock()]', {
+      locked: this.#locked,
+      componentIdx: this.#componentIdx,
+    });
+    this.setLocked(true);
+  }
+  
+  exclusiveRelease() {
+    _debugLog('[ComponentAsyncState#exclusiveRelease()] args', {
+      locked: this.#locked,
+      componentIdx: this.#componentIdx,
+    });
+    this.setLocked(false);
+    
+    this.#onExclusiveReleaseHandlers = this.#onExclusiveReleaseHandlers.filter(v => !!v);
+    for (const [idx, f] of this.#onExclusiveReleaseHandlers.entries()) {
+      try {
+        this.#onExclusiveReleaseHandlers[idx] = null;
+        f();
+      } catch (err) {
+        _debugLog("error while executing handler for next exclusive release", err);
+        throw err;
+      }
+    }
+  }
+  
+  onNextExclusiveRelease(fn) {
+    _debugLog('[ComponentAsyncState#()onNextExclusiveRelease] registering');
+    this.#onExclusiveReleaseHandlers.push(fn);
+  }
+  
+  #getSuspendedTaskMeta(taskID) {
+    return this.#suspendedTasksByTaskID.get(taskID);
+  }
+  
+  #removeSuspendedTaskMeta(taskID) {
+    _debugLog('[ComponentAsyncState#removeSuspendedTaskMeta()] removing suspended task', { taskID });
+    const idx = this.#suspendedTaskIDs.findIndex(t => t === taskID);
+    const meta = this.#suspendedTasksByTaskID.get(taskID);
+    this.#suspendedTaskIDs[idx] = null;
+    this.#suspendedTasksByTaskID.delete(taskID);
+    return meta;
+  }
+  
+  #addSuspendedTaskMeta(meta) {
+    if (!meta) { throw new Error('missing task meta'); }
+    const taskID = meta.taskID;
+    this.#suspendedTasksByTaskID.set(taskID, meta);
+    this.#suspendedTaskIDs.push(taskID);
+    if (this.#suspendedTasksByTaskID.size < this.#suspendedTaskIDs.length - 10) {
+      this.#suspendedTaskIDs = this.#suspendedTaskIDs.filter(t => t !== null);
+    }
+  }
+  
+  // TODO(threads): readyFn is normally on the thread
+  suspendTask(args) {
+    const { task, readyFn } = args;
+    const taskID = task.id();
+    _debugLog('[ComponentAsyncState#suspendTask()]', {
+      taskID,
+      componentIdx: this.#componentIdx,
+      taskEntryFnName: task.entryFnName(),
+      subtask: task.getParentSubtask(),
+    });
+    
+    if (this.#getSuspendedTaskMeta(taskID)) {
+      throw new Error(`task [${taskID}] already suspended`);
+    }
+    
+    const { promise, resolve, reject } = promiseWithResolvers();
+    this.#addSuspendedTaskMeta({
+      task,
+      taskID,
+      readyFn,
+      resume: () => {
+        _debugLog('[ComponentAsyncState#suspendTask()] resuming suspended task', { taskID });
+        // TODO(threads): it's thread cancellation we should be checking for below, not task
+        resolve(!task.isCancelled());
+      },
+    });
+    
+    this.runTickLoop();
+    
+    return promise;
+  }
+  
+  resumeTaskByID(taskID) {
+    const meta = this.#removeSuspendedTaskMeta(taskID);
+    if (!meta) { return; }
+    if (meta.taskID !== taskID) { throw new Error('task ID does not match'); }
+    meta.resume();
+  }
+  
+  async runTickLoop() {
+    if (this.#tickLoop !== null) { return; }
+    this.#tickLoop = 1;
+    setTimeout(async () => {
+      let done = this.tick();
+      while (!done) {
+        await new Promise((resolve) => setTimeout(resolve, 30));
+        done = this.tick();
+      }
+      this.#tickLoop = null;
+    }, 10);
+  }
+  
+  tick() {
+    // _debugLog('[ComponentAsyncState#tick()]', { suspendedTaskIDs: this.#suspendedTaskIDs });
+    
+    const resumableTasks = this.#suspendedTaskIDs.filter(t => t !== null);
+    for (const taskID of resumableTasks) {
+      const meta = this.#suspendedTasksByTaskID.get(taskID);
+      if (!meta || !meta.readyFn) {
+        throw new Error(`missing/invalid task despite ID [${taskID}] being present`);
+      }
+      
+      // If the task failed via any means, allow the task to resume because
+      // it's been cancelled -- the callback should immediately exit as well
+      if (meta.task.isRejected()) {
+        _debugLog('[ComponentAsyncState#suspendTask()] detected task rejection, leaving early', { meta });
+        this.resumeTaskByID(taskID);
+        return;
+      }
+      
+      const isReady = meta.readyFn();
+      if (!isReady) { continue; }
+      
+      this.resumeTaskByID(taskID);
+    }
+    
+    return this.#suspendedTaskIDs.filter(t => t !== null).length === 0;
+  }
+  
+  addStreamEndToTable(args) {
+    _debugLog('[ComponentAsyncState#addStreamEnd()] args', args);
+    const { tableIdx, streamEnd } = args;
+    if (typeof streamEnd === 'number') { throw new Error("INSERTING BAD STREAMEND"); }
+    
+    let { table, componentIdx } = STREAM_TABLES[tableIdx];
+    if (componentIdx === undefined || !table) {
+      throw new Error(`invalid global stream table state for table [${tableIdx}]`);
+    }
+    
+    const handle = table.insert(streamEnd);
+    streamEnd.setHandle(handle);
+    streamEnd.setStreamTableIdx(tableIdx);
+    
+    const cstate = getOrCreateAsyncState(componentIdx);
+    const waitableIdx = cstate.handles.insert(streamEnd);
+    streamEnd.setWaitableIdx(waitableIdx);
+    
+    _debugLog('[ComponentAsyncState#addStreamEnd()] added stream end', {
+      tableIdx,
+      table,
+      handle,
+      streamEnd,
+      destComponentIdx: componentIdx,
+    });
+    
+    return { handle, waitableIdx };
+  }
+  
+  createWaitable(args) {
+    return new Waitable({ target: args?.target, });
+  }
+  
+  createReadableStreamEnd(args) {
+    _debugLog('[ComponentAsyncState#createStreamEnd()] args', args);
+    const { tableIdx, elemMeta, hostInjectFn } = args;
+    
+    const { table: localStreamTable, componentIdx } = STREAM_TABLES[tableIdx];
+    if (!localStreamTable) {
+      throw new Error(`missing global stream table lookup for table [${tableIdx}] while creating stream`);
+    }
+    if (componentIdx !== this.#componentIdx) {
+      throw new Error('component idx mismatch while creating stream');
+    }
+    
+    const waitable = this.createWaitable();
+    const streamEnd = new StreamReadableEnd({
+      tableIdx,
+      elemMeta,
+      hostInjectFn,
+      pendingBufferMeta: {},
+      target: `stream read end (lowered, @init)`,
+      waitable,
+    });
+    
+    streamEnd.setWaitableIdx(this.handles.insert(streamEnd));
+    streamEnd.setHandle(localStreamTable.insert(streamEnd));
+    if (streamEnd.streamTableIdx() !== tableIdx) {
+      throw new Error("unexpectedly mismatched stream table");
+    }
+    const streamEndWaitableIdx = streamEnd.waitableIdx();
+    const streamEndHandle = streamEnd.handle();
+    waitable.setTarget(`waitable for stream read end (lowered, waitable [${streamEndWaitableIdx}])`);
+    streamEnd.setTarget(`stream read end (lowered, waitable [${streamEndWaitableIdx}])`);
+    
+    return {
+      waitableIdx: streamEndWaitableIdx,
+      handle: streamEndHandle,
+      streamEnd,
+    };
+  }
+  
+  createStream(args) {
+    _debugLog('[ComponentAsyncState#createStream()] args', args);
+    const { tableIdx, elemMeta, hostInjectFn } = args;
+    if (tableIdx === undefined) { throw new Error("missing table idx while adding stream"); }
+    if (elemMeta === undefined) { throw new Error("missing element metadata while adding stream"); }
+    
+    const { table: localStreamTable, componentIdx } = STREAM_TABLES[tableIdx];
+    if (!localStreamTable) {
+      throw new Error(`missing global stream table lookup for table [${tableIdx}] while creating stream`);
+    }
+    if (componentIdx !== this.#componentIdx) {
+      throw new Error('component idx mismatch while creating stream');
+    }
+    
+    const readWaitable = this.createWaitable();
+    const writeWaitable = this.createWaitable();
+    
+    const stream = new InternalStream({
+      tableIdx,
+      elemMeta,
+      readWaitable,
+      writeWaitable,
+      hostInjectFn,
+    });
+    stream.setGlobalStreamMapRep(STREAMS.insert(stream));
+    
+    const writeEnd = stream.writeEnd();
+    writeEnd.setWaitableIdx(this.handles.insert(writeEnd));
+    writeEnd.setHandle(localStreamTable.insert(writeEnd));
+    if (writeEnd.streamTableIdx() !== tableIdx) { throw new Error("unexpectedly mismatched stream table"); }
+    
+    const writeEndWaitableIdx = writeEnd.waitableIdx();
+    const writeEndHandle = writeEnd.handle();
+    writeWaitable.setTarget(`waitable for stream write end (waitable [${writeEndWaitableIdx}])`);
+    writeEnd.setTarget(`stream write end (waitable [${writeEndWaitableIdx}])`);
+    
+    const readEnd = stream.readEnd();
+    readEnd.setWaitableIdx(this.handles.insert(readEnd));
+    readEnd.setHandle(localStreamTable.insert(readEnd));
+    if (readEnd.streamTableIdx() !== tableIdx) { throw new Error("unexpectedly mismatched stream table"); }
+    
+    const readEndWaitableIdx = readEnd.waitableIdx();
+    const readEndHandle = readEnd.handle();
+    readWaitable.setTarget(`waitable for read end (waitable [${readEndWaitableIdx}])`);
+    readEnd.setTarget(`stream read end (waitable [${readEndWaitableIdx}])`);
+    
+    return {
+      writeEnd,
+      writeEndWaitableIdx,
+      writeEndHandle,
+      readEndWaitableIdx,
+      readEndHandle,
+      readEnd,
+    };
+  }
+  
+  getStreamEnd(args) {
+    _debugLog('[ComponentAsyncState#getStreamEnd()] args', args);
+    const { tableIdx, streamEndHandle, streamEndWaitableIdx } = args;
+    if (tableIdx === undefined) {
+      throw new Error('missing table idx while getting stream end');
+    }
+    
+    const { table, componentIdx } = STREAM_TABLES[tableIdx];
+    const cstate = getOrCreateAsyncState(componentIdx);
+    
+    let streamEnd;
+    if (streamEndWaitableIdx !== undefined) {
+      streamEnd = cstate.handles.get(streamEndWaitableIdx);
+    } else if (streamEndHandle !== undefined) {
+      if (!table) { throw new Error(`missing/invalid table [${tableIdx}] while getting stream end`); }
+      streamEnd = table.get(streamEndHandle);
+    } else {
+      throw new TypeError("must specify either waitable idx or handle to retrieve stream");
+    }
+    
+    if (!streamEnd) {
+      throw new Error(`missing stream end (tableIdx [${tableIdx}], handle [${streamEndHandle}], waitableIdx [${streamEndWaitableIdx}])`);
+    }
+    if (tableIdx && streamEnd.streamTableIdx() !== tableIdx) {
+      throw new Error(`stream end table idx [${streamEnd.streamTableIdx()}] does not match [${tableIdx}]`);
+    }
+    
+    return streamEnd;
+  }
+  
+  deleteStreamEnd(args) {
+    _debugLog('[ComponentAsyncState#deleteStreamEnd()] args', args);
+    const { tableIdx, streamEndWaitableIdx } = args;
+    if (tableIdx === undefined) { throw new Error("missing table idx while removing stream end"); }
+    if (streamEndWaitableIdx === undefined) { throw new Error("missing stream idx while removing stream end"); }
+    
+    const { table, componentIdx } = STREAM_TABLES[tableIdx];
+    const cstate = getOrCreateAsyncState(componentIdx);
+    
+    const streamEnd = cstate.handles.get(streamEndWaitableIdx);
+    if (!streamEnd) {
+      throw new Error(`missing stream end [${streamEndWaitableIdx}] in component handles while deleting stream`);
+    }
+    if (streamEnd.streamTableIdx() !== tableIdx) {
+      throw new Error(`stream end table idx [${streamEnd.streamTableIdx()}] does not match [${tableIdx}]`);
+    }
+    
+    let removed = cstate.handles.remove(streamEnd.waitableIdx());
+    if (!removed) {
+      throw new Error(`failed to remove stream end [${streamEndWaitableIdx}] waitable obj in component [${componentIdx}]`);
+    }
+    
+    removed = table.remove(streamEnd.handle());
+    if (!removed) {
+      throw new Error(`failed to remove stream end with handle [${streamEnd.handle()}] from stream table [${tableIdx}] in component [${componentIdx}]`);
+    }
+    
+    return streamEnd;
+  }
+  
+  removeStreamEndFromTable(args) {
+    _debugLog('[ComponentAsyncState#removeStreamEndFromTable()] args', args);
+    
+    const { tableIdx, streamWaitableIdx } = args;
+    if (tableIdx === undefined) { throw new Error("missing table idx while removing stream end"); }
+    if (streamWaitableIdx === undefined) {
+      throw new Error("missing stream end waitable idx while removing stream end");
+    }
+    
+    const { table, componentIdx } = STREAM_TABLES[tableIdx];
+    if (!table) { throw new Error(`missing/invalid table [${tableIdx}] while removing stream end`); }
+    
+    const cstate = getOrCreateAsyncState(componentIdx);
+    
+    const streamEnd = cstate.handles.get(streamWaitableIdx);
+    if (!streamEnd) {
+      throw new Error(`missing stream end (handle [${streamWaitableIdx}], table [${tableIdx}])`);
+    }
+    const handle = streamEnd.handle();
+    
+    let removed = cstate.handles.remove(streamWaitableIdx);
+    if (!removed) {
+      throw new Error(`failed to remove streamEnd from handles (waitable idx [${streamWaitableIdx}]), component [${componentIdx}])`);
+    }
+    
+    removed = table.remove(handle);
+    if (!removed) {
+      throw new Error(`failed to remove streamEnd from table (handle [${handle}]), table [${tableIdx}], component [${componentIdx}])`);
+    }
+    
+    return streamEnd;
+  }
+  
+  createFuture(args) {
+    _debugLog('[ComponentAsyncState#createFuture()] args', args);
+    const { tableIdx, elemMeta, hostInjectFn } = args;
+    if (tableIdx === undefined) { throw new Error("missing table idx while adding future"); }
+    if (elemMeta === undefined) { throw new Error("missing element metadata while adding future"); }
+    
+    const { table: futureTable, componentIdx } = FUTURE_TABLES[tableIdx];
+    if (!futureTable) {
+      throw new Error(`missing global future table lookup for table [${tableIdx}] while creating future`);
+    }
+    if (componentIdx !== this.#componentIdx) {
+      throw new Error('component idx mismatch while creating future');
+    }
+    
+    const readWaitable = this.createWaitable();
+    const writeWaitable = this.createWaitable();
+    
+    const future = new InternalFuture({
+      tableIdx,
+      componentIdx: this.#componentIdx,
+      elemMeta,
+      readWaitable,
+      writeWaitable,
+      hostInjectFn,
+    });
+    future.setGlobalFutureMapRep(FUTURES.insert(future));
+    
+    const writeEnd = future.writeEnd();
+    writeEnd.setWaitableIdx(this.handles.insert(writeEnd));
+    writeEnd.setHandle(futureTable.insert(writeEnd));
+    if (writeEnd.futureTableIdx() !== tableIdx) { throw new Error("unexpectedly mismatched future table"); }
+    
+    const writeEndWaitableIdx = writeEnd.waitableIdx();
+    const writeEndHandle = writeEnd.handle();
+    writeWaitable.setTarget(`waitable for future write end (waitable [${writeEndWaitableIdx}])`);
+    writeEnd.setTarget(`future write end (waitable [${writeEndWaitableIdx}])`);
+    
+    const readEnd = future.readEnd();
+    readEnd.setWaitableIdx(this.handles.insert(readEnd));
+    readEnd.setHandle(futureTable.insert(readEnd));
+    if (readEnd.futureTableIdx() !== tableIdx) { throw new Error("unexpectedly mismatched future table"); }
+    
+    const readEndWaitableIdx = readEnd.waitableIdx();
+    const readEndHandle = readEnd.handle();
+    readWaitable.setTarget(`waitable for read end (waitable [${readEndWaitableIdx}])`);
+    readEnd.setTarget(`future read end (waitable [${readEndWaitableIdx}])`);
+    
+    return {
+      writeEnd,
+      writeEndWaitableIdx,
+      writeEndHandle,
+      readEndWaitableIdx,
+      readEndHandle,
+      readEnd,
+    };
+  }
+  
+  getFutureEnd(args) {
+    _debugLog('[ComponentAsyncState#getFutureEnd()] args', args);
+    const { tableIdx, futureEndHandle, futureEndWaitableIdx } = args;
+    if (tableIdx === undefined) {
+      throw new Error('missing table idx while getting future end');
+    }
+    
+    const { table, componentIdx } = FUTURE_TABLES[tableIdx];
+    const cstate = getOrCreateAsyncState(componentIdx);
+    
+    let futureEnd;
+    if (futureEndWaitableIdx !== undefined) {
+      futureEnd = cstate.handles.get(futureEndWaitableIdx);
+    } else if (futureEndHandle !== undefined) {
+      if (!table) { throw new Error(`missing/invalid table [${tableIdx}] while getting future end`); }
+      futureEnd = table.get(futureEndHandle);
+    } else {
+      throw new TypeError("must specify either waitable idx or handle to retrieve future");
+    }
+    
+    if (!futureEnd) {
+      throw new Error(`missing future end (tableIdx [${tableIdx}], handle [${futureEndHandle}], waitableIdx [${futureEndWaitableIdx}])`);
+    }
+    if (tableIdx && futureEnd.futureTableIdx() !== tableIdx) {
+      throw new Error(`future end table idx [${futureEnd.futureTableIdx()}] does not match [${tableIdx}]`);
+    }
+    
+    return futureEnd;
+  }
+  
+  removeFutureEndFromTable(args) {
+    _debugLog('[ComponentAsyncState#removeFutureEndFromTable()] args', args);
+    
+    const { tableIdx, futureWaitableIdx } = args;
+    if (tableIdx === undefined) { throw new Error("missing table idx while removing future end"); }
+    if (futureWaitableIdx === undefined) {
+      throw new Error("missing future end waitable idx while removing future end");
+    }
+    
+    const { table, componentIdx } = FUTURE_TABLES[tableIdx];
+    if (!table) { throw new Error(`missing/invalid table [${tableIdx}] while removing future end`); }
+    
+    const cstate = getOrCreateAsyncState(componentIdx);
+    
+    const futureEnd = cstate.handles.get(futureWaitableIdx);
+    if (!futureEnd) {
+      throw new Error(`missing future end (handle [${futureWaitableIdx}], table [${tableIdx}])`);
+    }
+    const handle = futureEnd.handle();
+    
+    let removed = cstate.handles.remove(futureWaitableIdx);
+    if (!removed) {
+      throw new Error(`failed to remove futureEnd from handles (waitable idx [${futureWaitableIdx}]), component [${componentIdx}])`);
+    }
+    
+    removed = table.remove(handle);
+    if (!removed) {
+      throw new Error(`failed to remove futureEnd from table (handle [${handle}]), table [${tableIdx}], component [${componentIdx}])`);
+    }
+    
+    return futureEnd;
+  }
+  
 }
-
-const _debugLog = (...args) => {
-  if (!globalThis?.process?.env?.JCO_DEBUG) { return; }
-  console.debug(...args);
-}
-const ASYNC_DETERMINISM = 'random';
-const _coinFlip = () => { return Math.random() > 0.5; };
-const I32_MAX = 2_147_483_647;
-const I32_MIN = -2_147_483_648;
-const _typeCheckValidI32 = (n) => typeof n === 'number' && n >= I32_MIN && n <= I32_MAX;
 
 const base64Compile = str => WebAssembly.compile(typeof Buffer !== 'undefined' ? Buffer.from(str, 'base64') : Uint8Array.from(atob(str), b => b.charCodeAt(0)));
 
@@ -706,8 +2570,6 @@ async function fetchCompile (url) {
 }
 
 const symbolRscHandle = Symbol('handle');
-
-const symbolDispose = Symbol.dispose || Symbol.for('dispose');
 
 const handleTables = [];
 
@@ -726,56 +2588,7 @@ class ComponentError extends Error {
   }
 }
 
-class RepTable {
-  #data = [0, null];
-  
-  insert(val) {
-    _debugLog('[RepTable#insert()] args', { val });
-    const freeIdx = this.#data[0];
-    if (freeIdx === 0) {
-      this.#data.push(val);
-      this.#data.push(null);
-      return (this.#data.length >> 1) - 1;
-    }
-    this.#data[0] = this.#data[freeIdx << 1];
-    const placementIdx = freeIdx << 1;
-    this.#data[placementIdx] = val;
-    this.#data[placementIdx + 1] = null;
-    return freeIdx;
-  }
-  
-  get(rep) {
-    _debugLog('[RepTable#get()] args', { rep });
-    const baseIdx = rep << 1;
-    const val = this.#data[baseIdx];
-    return val;
-  }
-  
-  contains(rep) {
-    _debugLog('[RepTable#contains()] args', { rep });
-    const baseIdx = rep << 1;
-    return !!this.#data[baseIdx];
-  }
-  
-  remove(rep) {
-    _debugLog('[RepTable#remove()] args', { rep });
-    if (this.#data.length === 2) { throw new Error('invalid'); }
-    
-    const baseIdx = rep << 1;
-    const val = this.#data[baseIdx];
-    if (val === 0) { throw new Error('invalid resource rep (cannot be 0)'); }
-    
-    this.#data[baseIdx] = this.#data[0];
-    this.#data[0] = rep;
-    
-    return val;
-  }
-  
-  clear() {
-    _debugLog('[RepTable#clear()] args', { rep });
-    this.#data = [0, null];
-  }
-}
+const isLE = new Uint8Array(new Uint16Array([1]).buffer)[0] === 1;
 
 function throwInvalidBool() {
   throw new TypeError('invalid variant discriminant for bool');
@@ -789,33 +2602,53 @@ let exports1;
 let exports2;
 let memory0;
 let realloc0;
+let realloc0Async;
 let postReturn0;
+let postReturn0Async;
 let postReturn1;
+let postReturn1Async;
 let postReturn2;
+let postReturn2Async;
 let postReturn3;
+let postReturn3Async;
 let postReturn4;
-const handleTable0 = [T_FLAG, 0];
-const finalizationRegistry0 = finalizationRegistryCreate((handle) => {
-  const { rep } = rscTableRemove(handleTable0, handle);
-  exports0['0'](rep);
-});
-
-handleTables[0] = handleTable0;
-const trampoline0 = rscTableCreateOwn.bind(null, handleTable0);
+let postReturn4Async;
 let exports1SerializeInst;
 
 function serializeInst(arg0) {
-  var ptr0 = utf8Encode(arg0, realloc0, memory0);
-  var len0 = utf8EncodedLen;
+  
+  var encodeRes = _utf8AllocateAndEncode(arg0, realloc0, memory0);
+  var ptr0= encodeRes.ptr;
+  var len0 = encodeRes.len;
+  
   _debugLog('[iface="serialize-inst", function="serialize-inst"][Instruction::CallWasm] enter', {
     funcName: 'serialize-inst',
     paramCount: 2,
     async: false,
     postReturn: true,
   });
-  const _wasm_call_currentTaskID = startCurrentTask(0, false, 'exports1SerializeInst');
-  const ret = exports1SerializeInst(ptr0, len0);
-  endCurrentTask(0);
+  const hostProvided = false;
+  
+  const [task, _wasm_call_currentTaskID] = createNewCurrentTask({
+    componentIdx: 0,
+    isAsync: false,
+    isManualAsync: false,
+    entryFnName: 'exports1SerializeInst',
+    getCallbackFn: () => null,
+    callbackFnName: 'null',
+    errHandling: 'none',
+    callingWasmExport: true,
+  });
+  
+  const started = task.enterSync();
+  task.setReturnMemoryIdx(0);
+  task.setReturnMemory(memory0);
+  let ret =   _withGlobalCurrentTaskMeta({
+    taskID: task.id(),
+    componentIdx: task.componentIdx(),
+    fn: () => exports1SerializeInst(ptr0, len0),
+  });
+  
   var ptr1 = dataView(memory0).getUint32(ret + 0, true);
   var len1 = dataView(memory0).getUint32(ret + 4, true);
   var result1 = new Uint8Array(memory0.buffer.slice(ptr1, ptr1 + len1 * 1));
@@ -825,12 +2658,14 @@ function serializeInst(arg0) {
     async: false,
     postReturn: true
   });
+  task.resolve([result1]);
   const retCopy = result1;
   
   let cstate = getOrCreateAsyncState(0);
   cstate.mayLeave = false;
   postReturn0(ret);
   cstate.mayLeave = true;
+  task.exit();
   return retCopy;
   
 }
@@ -838,51 +2673,111 @@ let exports1DeserializeInst;
 
 function deserializeInst(arg0) {
   var val0 = arg0;
-  var len0 = val0.byteLength;
+  var len0 = Array.isArray(val0) ? val0.length : val0.byteLength;
   var ptr0 = realloc0(0, 0, 1, len0 * 1);
-  var src0 = new Uint8Array(val0.buffer || val0, val0.byteOffset, len0 * 1);
-  (new Uint8Array(memory0.buffer, ptr0, len0 * 1)).set(src0);
+  
+  let valData0;
+  const valLenBytes0 = len0 * 1;
+  if (Array.isArray(val0)) {
+    // Regular array likely containing numbers, write values to memory
+    let offset = 0;
+    const dv0 = new DataView(memory0.buffer);
+    for (const v of val0) {
+      _requireValidNumericPrimitive.bind(null, 'u8')(v);
+      dv0.setUint8(ptr0+ offset, v, true);
+      offset += 1;
+    }
+  } else {
+    // TypedArray / ArrayBuffer-like, direct copy
+    valData0 = new Uint8Array(val0.buffer || val0, val0.byteOffset, valLenBytes0);
+    const out0 = new Uint8Array(memory0.buffer, ptr0, valLenBytes0);
+    out0.set(valData0);
+  }
+  
   _debugLog('[iface="deserialize-inst", function="deserialize-inst"][Instruction::CallWasm] enter', {
     funcName: 'deserialize-inst',
     paramCount: 2,
     async: false,
     postReturn: true,
   });
-  const _wasm_call_currentTaskID = startCurrentTask(0, false, 'exports1DeserializeInst');
-  const ret = exports1DeserializeInst(ptr0, len0);
-  endCurrentTask(0);
+  const hostProvided = false;
+  
+  const [task, _wasm_call_currentTaskID] = createNewCurrentTask({
+    componentIdx: 0,
+    isAsync: false,
+    isManualAsync: false,
+    entryFnName: 'exports1DeserializeInst',
+    getCallbackFn: () => null,
+    callbackFnName: 'null',
+    errHandling: 'none',
+    callingWasmExport: true,
+  });
+  
+  const started = task.enterSync();
+  task.setReturnMemoryIdx(0);
+  task.setReturnMemory(memory0);
+  let ret =   _withGlobalCurrentTaskMeta({
+    taskID: task.id(),
+    componentIdx: task.componentIdx(),
+    fn: () => exports1DeserializeInst(ptr0, len0),
+  });
+  
   var ptr1 = dataView(memory0).getUint32(ret + 0, true);
   var len1 = dataView(memory0).getUint32(ret + 4, true);
-  var result1 = utf8Decoder.decode(new Uint8Array(memory0.buffer, ptr1, len1));
+  var result1 = TEXT_DECODER_UTF8.decode(new Uint8Array(memory0.buffer, ptr1, len1));
   _debugLog('[iface="deserialize-inst", function="deserialize-inst"][Instruction::Return]', {
     funcName: 'deserialize-inst',
     paramCount: 1,
     async: false,
     postReturn: true
   });
+  task.resolve([result1]);
   const retCopy = result1;
   
   let cstate = getOrCreateAsyncState(0);
   cstate.mayLeave = false;
   postReturn0(ret);
   cstate.mayLeave = true;
+  task.exit();
   return retCopy;
   
 }
 let exports1SerializeOpReturnData;
 
 function serializeOpReturnData(arg0) {
-  var ptr0 = utf8Encode(arg0, realloc0, memory0);
-  var len0 = utf8EncodedLen;
+  
+  var encodeRes = _utf8AllocateAndEncode(arg0, realloc0, memory0);
+  var ptr0= encodeRes.ptr;
+  var len0 = encodeRes.len;
+  
   _debugLog('[iface="serialize-op-return-data", function="serialize-op-return-data"][Instruction::CallWasm] enter', {
     funcName: 'serialize-op-return-data',
     paramCount: 2,
     async: false,
     postReturn: true,
   });
-  const _wasm_call_currentTaskID = startCurrentTask(0, false, 'exports1SerializeOpReturnData');
-  const ret = exports1SerializeOpReturnData(ptr0, len0);
-  endCurrentTask(0);
+  const hostProvided = false;
+  
+  const [task, _wasm_call_currentTaskID] = createNewCurrentTask({
+    componentIdx: 0,
+    isAsync: false,
+    isManualAsync: false,
+    entryFnName: 'exports1SerializeOpReturnData',
+    getCallbackFn: () => null,
+    callbackFnName: 'null',
+    errHandling: 'none',
+    callingWasmExport: true,
+  });
+  
+  const started = task.enterSync();
+  task.setReturnMemoryIdx(0);
+  task.setReturnMemory(memory0);
+  let ret =   _withGlobalCurrentTaskMeta({
+    taskID: task.id(),
+    componentIdx: task.componentIdx(),
+    fn: () => exports1SerializeOpReturnData(ptr0, len0),
+  });
+  
   var ptr1 = dataView(memory0).getUint32(ret + 0, true);
   var len1 = dataView(memory0).getUint32(ret + 4, true);
   var result1 = new Uint8Array(memory0.buffer.slice(ptr1, ptr1 + len1 * 1));
@@ -892,12 +2787,14 @@ function serializeOpReturnData(arg0) {
     async: false,
     postReturn: true
   });
+  task.resolve([result1]);
   const retCopy = result1;
   
   let cstate = getOrCreateAsyncState(0);
   cstate.mayLeave = false;
   postReturn0(ret);
   cstate.mayLeave = true;
+  task.exit();
   return retCopy;
   
 }
@@ -905,51 +2802,111 @@ let exports1DeserializeOpReturnData;
 
 function deserializeOpReturnData(arg0) {
   var val0 = arg0;
-  var len0 = val0.byteLength;
+  var len0 = Array.isArray(val0) ? val0.length : val0.byteLength;
   var ptr0 = realloc0(0, 0, 1, len0 * 1);
-  var src0 = new Uint8Array(val0.buffer || val0, val0.byteOffset, len0 * 1);
-  (new Uint8Array(memory0.buffer, ptr0, len0 * 1)).set(src0);
+  
+  let valData0;
+  const valLenBytes0 = len0 * 1;
+  if (Array.isArray(val0)) {
+    // Regular array likely containing numbers, write values to memory
+    let offset = 0;
+    const dv0 = new DataView(memory0.buffer);
+    for (const v of val0) {
+      _requireValidNumericPrimitive.bind(null, 'u8')(v);
+      dv0.setUint8(ptr0+ offset, v, true);
+      offset += 1;
+    }
+  } else {
+    // TypedArray / ArrayBuffer-like, direct copy
+    valData0 = new Uint8Array(val0.buffer || val0, val0.byteOffset, valLenBytes0);
+    const out0 = new Uint8Array(memory0.buffer, ptr0, valLenBytes0);
+    out0.set(valData0);
+  }
+  
   _debugLog('[iface="deserialize-op-return-data", function="deserialize-op-return-data"][Instruction::CallWasm] enter', {
     funcName: 'deserialize-op-return-data',
     paramCount: 2,
     async: false,
     postReturn: true,
   });
-  const _wasm_call_currentTaskID = startCurrentTask(0, false, 'exports1DeserializeOpReturnData');
-  const ret = exports1DeserializeOpReturnData(ptr0, len0);
-  endCurrentTask(0);
+  const hostProvided = false;
+  
+  const [task, _wasm_call_currentTaskID] = createNewCurrentTask({
+    componentIdx: 0,
+    isAsync: false,
+    isManualAsync: false,
+    entryFnName: 'exports1DeserializeOpReturnData',
+    getCallbackFn: () => null,
+    callbackFnName: 'null',
+    errHandling: 'none',
+    callingWasmExport: true,
+  });
+  
+  const started = task.enterSync();
+  task.setReturnMemoryIdx(0);
+  task.setReturnMemory(memory0);
+  let ret =   _withGlobalCurrentTaskMeta({
+    taskID: task.id(),
+    componentIdx: task.componentIdx(),
+    fn: () => exports1DeserializeOpReturnData(ptr0, len0),
+  });
+  
   var ptr1 = dataView(memory0).getUint32(ret + 0, true);
   var len1 = dataView(memory0).getUint32(ret + 4, true);
-  var result1 = utf8Decoder.decode(new Uint8Array(memory0.buffer, ptr1, len1));
+  var result1 = TEXT_DECODER_UTF8.decode(new Uint8Array(memory0.buffer, ptr1, len1));
   _debugLog('[iface="deserialize-op-return-data", function="deserialize-op-return-data"][Instruction::Return]', {
     funcName: 'deserialize-op-return-data',
     paramCount: 1,
     async: false,
     postReturn: true
   });
+  task.resolve([result1]);
   const retCopy = result1;
   
   let cstate = getOrCreateAsyncState(0);
   cstate.mayLeave = false;
   postReturn0(ret);
   cstate.mayLeave = true;
+  task.exit();
   return retCopy;
   
 }
 let exports1ValidateWit;
 
 function validateWit(arg0) {
-  var ptr0 = utf8Encode(arg0, realloc0, memory0);
-  var len0 = utf8EncodedLen;
+  
+  var encodeRes = _utf8AllocateAndEncode(arg0, realloc0, memory0);
+  var ptr0= encodeRes.ptr;
+  var len0 = encodeRes.len;
+  
   _debugLog('[iface="validate-wit", function="validate-wit"][Instruction::CallWasm] enter', {
     funcName: 'validate-wit',
     paramCount: 2,
     async: false,
     postReturn: true,
   });
-  const _wasm_call_currentTaskID = startCurrentTask(0, false, 'exports1ValidateWit');
-  const ret = exports1ValidateWit(ptr0, len0);
-  endCurrentTask(0);
+  const hostProvided = false;
+  
+  const [task, _wasm_call_currentTaskID] = createNewCurrentTask({
+    componentIdx: 0,
+    isAsync: false,
+    isManualAsync: false,
+    entryFnName: 'exports1ValidateWit',
+    getCallbackFn: () => null,
+    callbackFnName: 'null',
+    errHandling: 'none',
+    callingWasmExport: true,
+  });
+  
+  const started = task.enterSync();
+  task.setReturnMemoryIdx(0);
+  task.setReturnMemory(memory0);
+  let ret =   _withGlobalCurrentTaskMeta({
+    taskID: task.id(),
+    componentIdx: task.componentIdx(),
+    fn: () => exports1ValidateWit(ptr0, len0),
+  });
+  
   let variant5;
   switch (dataView(memory0).getUint8(ret + 0, true)) {
     case 0: {
@@ -961,7 +2918,7 @@ function validateWit(arg0) {
     case 1: {
       var ptr1 = dataView(memory0).getUint32(ret + 4, true);
       var len1 = dataView(memory0).getUint32(ret + 8, true);
-      var result1 = utf8Decoder.decode(new Uint8Array(memory0.buffer, ptr1, len1));
+      var result1 = TEXT_DECODER_UTF8.decode(new Uint8Array(memory0.buffer, ptr1, len1));
       variant5= {
         tag: 'parse-error',
         val: result1
@@ -976,10 +2933,10 @@ function validateWit(arg0) {
         const base = base4 + i * 16;
         var ptr2 = dataView(memory0).getUint32(base + 0, true);
         var len2 = dataView(memory0).getUint32(base + 4, true);
-        var result2 = utf8Decoder.decode(new Uint8Array(memory0.buffer, ptr2, len2));
+        var result2 = TEXT_DECODER_UTF8.decode(new Uint8Array(memory0.buffer, ptr2, len2));
         var ptr3 = dataView(memory0).getUint32(base + 8, true);
         var len3 = dataView(memory0).getUint32(base + 12, true);
-        var result3 = utf8Decoder.decode(new Uint8Array(memory0.buffer, ptr3, len3));
+        var result3 = TEXT_DECODER_UTF8.decode(new Uint8Array(memory0.buffer, ptr3, len3));
         result4.push({
           message: result2,
           location: result3,
@@ -1001,30 +2958,61 @@ function validateWit(arg0) {
     async: false,
     postReturn: true
   });
+  task.resolve([variant5]);
   const retCopy = variant5;
   
   let cstate = getOrCreateAsyncState(0);
   cstate.mayLeave = false;
   postReturn1(ret);
   cstate.mayLeave = true;
+  task.exit();
   return retCopy;
   
 }
+const handleTable0 = [T_FLAG, 0];
+const finalizationRegistry0 = finalizationRegistryCreate((handle) => {
+  const { rep } = rscTableRemove(handleTable0, handle);
+  exports0['0'](rep);
+});
+
+handleTables[0] = handleTable0;
 let witCodecConstructorWit;
 
 class Wit{
   constructor(arg0) {
-    var ptr0 = utf8Encode(arg0, realloc0, memory0);
-    var len0 = utf8EncodedLen;
+    
+    var encodeRes = _utf8AllocateAndEncode(arg0, realloc0, memory0);
+    var ptr0= encodeRes.ptr;
+    var len0 = encodeRes.len;
+    
     _debugLog('[iface="root:component/wit-codec", function="[constructor]wit"][Instruction::CallWasm] enter', {
       funcName: '[constructor]wit',
       paramCount: 2,
       async: false,
       postReturn: false,
     });
-    const _wasm_call_currentTaskID = startCurrentTask(0, false, 'witCodecConstructorWit');
-    const ret = witCodecConstructorWit(ptr0, len0);
-    endCurrentTask(0);
+    const hostProvided = false;
+    
+    const [task, _wasm_call_currentTaskID] = createNewCurrentTask({
+      componentIdx: 0,
+      isAsync: false,
+      isManualAsync: false,
+      entryFnName: 'witCodecConstructorWit',
+      getCallbackFn: () => null,
+      callbackFnName: 'null',
+      errHandling: 'none',
+      callingWasmExport: true,
+    });
+    
+    const started = task.enterSync();
+    task.setReturnMemoryIdx(0);
+    task.setReturnMemory(memory0);
+    let ret =   _withGlobalCurrentTaskMeta({
+      taskID: task.id(),
+      componentIdx: task.componentIdx(),
+      fn: () => witCodecConstructorWit(ptr0, len0),
+    });
+    
     var handle2 = ret;
     var rsc1 = new.target === Wit ? this : Object.create(Wit.prototype);
     Object.defineProperty(rsc1, symbolRscHandle, { writable: true, value: handle2});
@@ -1042,36 +3030,65 @@ class Wit{
       async: false,
       postReturn: false
     });
+    task.resolve([rsc1]);
+    task.exit();
     return rsc1;
   }
 }
 let witCodecMethodWitEncodeCall;
 
 Wit.prototype.encodeCall = function encodeCall(arg1, arg2) {
+  
   var handle1 = this[symbolRscHandle];
   if (!handle1 || (handleTable0[(handle1 << 1) + 1] & T_FLAG) === 0) {
-    throw new TypeError('Resource error: Not a valid "Wit" resource.');
+    throw new TypeError('Resource error: Not a valid \"Wit\" resource.');
   }
   var handle0 = handleTable0[(handle1 << 1) + 1] & ~T_FLAG;
-  var ptr2 = utf8Encode(arg1, realloc0, memory0);
-  var len2 = utf8EncodedLen;
-  var ptr3 = utf8Encode(arg2, realloc0, memory0);
-  var len3 = utf8EncodedLen;
+  
+  
+  var encodeRes = _utf8AllocateAndEncode(arg1, realloc0, memory0);
+  var ptr2= encodeRes.ptr;
+  var len2 = encodeRes.len;
+  
+  
+  var encodeRes = _utf8AllocateAndEncode(arg2, realloc0, memory0);
+  var ptr3= encodeRes.ptr;
+  var len3 = encodeRes.len;
+  
   _debugLog('[iface="root:component/wit-codec", function="[method]wit.encode-call"][Instruction::CallWasm] enter', {
     funcName: '[method]wit.encode-call',
     paramCount: 5,
     async: false,
     postReturn: true,
   });
-  const _wasm_call_currentTaskID = startCurrentTask(0, false, 'witCodecMethodWitEncodeCall');
-  const ret = witCodecMethodWitEncodeCall(handle0, ptr2, len2, ptr3, len3);
-  endCurrentTask(0);
+  const hostProvided = false;
+  
+  const [task, _wasm_call_currentTaskID] = createNewCurrentTask({
+    componentIdx: 0,
+    isAsync: false,
+    isManualAsync: false,
+    entryFnName: 'witCodecMethodWitEncodeCall',
+    getCallbackFn: () => null,
+    callbackFnName: 'null',
+    errHandling: 'throw-result-err',
+    callingWasmExport: true,
+  });
+  
+  const started = task.enterSync();
+  task.setReturnMemoryIdx(0);
+  task.setReturnMemory(memory0);
+  let ret =   _withGlobalCurrentTaskMeta({
+    taskID: task.id(),
+    componentIdx: task.componentIdx(),
+    fn: () => witCodecMethodWitEncodeCall(handle0, ptr2, len2, ptr3, len3),
+  });
+  
   let variant6;
   switch (dataView(memory0).getUint8(ret + 0, true)) {
     case 0: {
       var ptr4 = dataView(memory0).getUint32(ret + 4, true);
       var len4 = dataView(memory0).getUint32(ret + 8, true);
-      var result4 = utf8Decoder.decode(new Uint8Array(memory0.buffer, ptr4, len4));
+      var result4 = TEXT_DECODER_UTF8.decode(new Uint8Array(memory0.buffer, ptr4, len4));
       variant6= {
         tag: 'ok',
         val: result4
@@ -1081,7 +3098,7 @@ Wit.prototype.encodeCall = function encodeCall(arg1, arg2) {
     case 1: {
       var ptr5 = dataView(memory0).getUint32(ret + 4, true);
       var len5 = dataView(memory0).getUint32(ret + 8, true);
-      var result5 = utf8Decoder.decode(new Uint8Array(memory0.buffer, ptr5, len5));
+      var result5 = TEXT_DECODER_UTF8.decode(new Uint8Array(memory0.buffer, ptr5, len5));
       variant6= {
         tag: 'err',
         val: result5
@@ -1099,11 +3116,13 @@ Wit.prototype.encodeCall = function encodeCall(arg1, arg2) {
     postReturn: true
   });
   const retCopy = variant6;
+  task.resolve([retCopy.val]);
   
   let cstate = getOrCreateAsyncState(0);
   cstate.mayLeave = false;
   postReturn2(ret);
   cstate.mayLeave = true;
+  task.exit();
   
   
   
@@ -1116,30 +3135,57 @@ Wit.prototype.encodeCall = function encodeCall(arg1, arg2) {
 let witCodecMethodWitDecodeResult;
 
 Wit.prototype.decodeResult = function decodeResult(arg1, arg2) {
+  
   var handle1 = this[symbolRscHandle];
   if (!handle1 || (handleTable0[(handle1 << 1) + 1] & T_FLAG) === 0) {
-    throw new TypeError('Resource error: Not a valid "Wit" resource.');
+    throw new TypeError('Resource error: Not a valid \"Wit\" resource.');
   }
   var handle0 = handleTable0[(handle1 << 1) + 1] & ~T_FLAG;
-  var ptr2 = utf8Encode(arg1, realloc0, memory0);
-  var len2 = utf8EncodedLen;
-  var ptr3 = utf8Encode(arg2, realloc0, memory0);
-  var len3 = utf8EncodedLen;
+  
+  
+  var encodeRes = _utf8AllocateAndEncode(arg1, realloc0, memory0);
+  var ptr2= encodeRes.ptr;
+  var len2 = encodeRes.len;
+  
+  
+  var encodeRes = _utf8AllocateAndEncode(arg2, realloc0, memory0);
+  var ptr3= encodeRes.ptr;
+  var len3 = encodeRes.len;
+  
   _debugLog('[iface="root:component/wit-codec", function="[method]wit.decode-result"][Instruction::CallWasm] enter', {
     funcName: '[method]wit.decode-result',
     paramCount: 5,
     async: false,
     postReturn: true,
   });
-  const _wasm_call_currentTaskID = startCurrentTask(0, false, 'witCodecMethodWitDecodeResult');
-  const ret = witCodecMethodWitDecodeResult(handle0, ptr2, len2, ptr3, len3);
-  endCurrentTask(0);
+  const hostProvided = false;
+  
+  const [task, _wasm_call_currentTaskID] = createNewCurrentTask({
+    componentIdx: 0,
+    isAsync: false,
+    isManualAsync: false,
+    entryFnName: 'witCodecMethodWitDecodeResult',
+    getCallbackFn: () => null,
+    callbackFnName: 'null',
+    errHandling: 'throw-result-err',
+    callingWasmExport: true,
+  });
+  
+  const started = task.enterSync();
+  task.setReturnMemoryIdx(0);
+  task.setReturnMemory(memory0);
+  let ret =   _withGlobalCurrentTaskMeta({
+    taskID: task.id(),
+    componentIdx: task.componentIdx(),
+    fn: () => witCodecMethodWitDecodeResult(handle0, ptr2, len2, ptr3, len3),
+  });
+  
   let variant6;
   switch (dataView(memory0).getUint8(ret + 0, true)) {
     case 0: {
       var ptr4 = dataView(memory0).getUint32(ret + 4, true);
       var len4 = dataView(memory0).getUint32(ret + 8, true);
-      var result4 = utf8Decoder.decode(new Uint8Array(memory0.buffer, ptr4, len4));
+      var result4 = TEXT_DECODER_UTF8.decode(new Uint8Array(memory0.buffer, ptr4, len4));
       variant6= {
         tag: 'ok',
         val: result4
@@ -1149,7 +3195,7 @@ Wit.prototype.decodeResult = function decodeResult(arg1, arg2) {
     case 1: {
       var ptr5 = dataView(memory0).getUint32(ret + 4, true);
       var len5 = dataView(memory0).getUint32(ret + 8, true);
-      var result5 = utf8Decoder.decode(new Uint8Array(memory0.buffer, ptr5, len5));
+      var result5 = TEXT_DECODER_UTF8.decode(new Uint8Array(memory0.buffer, ptr5, len5));
       variant6= {
         tag: 'err',
         val: result5
@@ -1167,11 +3213,13 @@ Wit.prototype.decodeResult = function decodeResult(arg1, arg2) {
     postReturn: true
   });
   const retCopy = variant6;
+  task.resolve([retCopy.val]);
   
   let cstate = getOrCreateAsyncState(0);
   cstate.mayLeave = false;
   postReturn2(ret);
   cstate.mayLeave = true;
+  task.exit();
   
   
   
@@ -1184,26 +3232,47 @@ Wit.prototype.decodeResult = function decodeResult(arg1, arg2) {
 let witCodecMethodWitParse;
 
 Wit.prototype.parse = function parse() {
+  
   var handle1 = this[symbolRscHandle];
   if (!handle1 || (handleTable0[(handle1 << 1) + 1] & T_FLAG) === 0) {
-    throw new TypeError('Resource error: Not a valid "Wit" resource.');
+    throw new TypeError('Resource error: Not a valid \"Wit\" resource.');
   }
   var handle0 = handleTable0[(handle1 << 1) + 1] & ~T_FLAG;
+  
   _debugLog('[iface="root:component/wit-codec", function="[method]wit.parse"][Instruction::CallWasm] enter', {
     funcName: '[method]wit.parse',
     paramCount: 1,
     async: false,
     postReturn: true,
   });
-  const _wasm_call_currentTaskID = startCurrentTask(0, false, 'witCodecMethodWitParse');
-  const ret = witCodecMethodWitParse(handle0);
-  endCurrentTask(0);
+  const hostProvided = false;
+  
+  const [task, _wasm_call_currentTaskID] = createNewCurrentTask({
+    componentIdx: 0,
+    isAsync: false,
+    isManualAsync: false,
+    entryFnName: 'witCodecMethodWitParse',
+    getCallbackFn: () => null,
+    callbackFnName: 'null',
+    errHandling: 'throw-result-err',
+    callingWasmExport: true,
+  });
+  
+  const started = task.enterSync();
+  task.setReturnMemoryIdx(0);
+  task.setReturnMemory(memory0);
+  let ret =   _withGlobalCurrentTaskMeta({
+    taskID: task.id(),
+    componentIdx: task.componentIdx(),
+    fn: () => witCodecMethodWitParse(handle0),
+  });
+  
   let variant4;
   switch (dataView(memory0).getUint8(ret + 0, true)) {
     case 0: {
       var ptr2 = dataView(memory0).getUint32(ret + 4, true);
       var len2 = dataView(memory0).getUint32(ret + 8, true);
-      var result2 = utf8Decoder.decode(new Uint8Array(memory0.buffer, ptr2, len2));
+      var result2 = TEXT_DECODER_UTF8.decode(new Uint8Array(memory0.buffer, ptr2, len2));
       variant4= {
         tag: 'ok',
         val: result2
@@ -1213,7 +3282,7 @@ Wit.prototype.parse = function parse() {
     case 1: {
       var ptr3 = dataView(memory0).getUint32(ret + 4, true);
       var len3 = dataView(memory0).getUint32(ret + 8, true);
-      var result3 = utf8Decoder.decode(new Uint8Array(memory0.buffer, ptr3, len3));
+      var result3 = TEXT_DECODER_UTF8.decode(new Uint8Array(memory0.buffer, ptr3, len3));
       variant4= {
         tag: 'err',
         val: result3
@@ -1231,11 +3300,13 @@ Wit.prototype.parse = function parse() {
     postReturn: true
   });
   const retCopy = variant4;
+  task.resolve([retCopy.val]);
   
   let cstate = getOrCreateAsyncState(0);
   cstate.mayLeave = false;
   postReturn2(ret);
   cstate.mayLeave = true;
+  task.exit();
   
   
   
@@ -1254,9 +3325,28 @@ function u64ToInteger(arg0) {
     async: false,
     postReturn: false,
   });
-  const _wasm_call_currentTaskID = startCurrentTask(0, false, 'numericsU64ToInteger');
-  const ret = numericsU64ToInteger(toUint64(arg0));
-  endCurrentTask(0);
+  const hostProvided = false;
+  
+  const [task, _wasm_call_currentTaskID] = createNewCurrentTask({
+    componentIdx: 0,
+    isAsync: false,
+    isManualAsync: false,
+    entryFnName: 'numericsU64ToInteger',
+    getCallbackFn: () => null,
+    callbackFnName: 'null',
+    errHandling: 'none',
+    callingWasmExport: true,
+  });
+  
+  const started = task.enterSync();
+  task.setReturnMemoryIdx(0);
+  task.setReturnMemory(memory0);
+  let ret =   _withGlobalCurrentTaskMeta({
+    taskID: task.id(),
+    componentIdx: task.componentIdx(),
+    fn: () => numericsU64ToInteger(toUint64(arg0)),
+  });
+  
   let enum0;
   switch (dataView(memory0).getUint8(ret + 32, true)) {
     case 0: {
@@ -1277,11 +3367,19 @@ function u64ToInteger(arg0) {
     async: false,
     postReturn: false
   });
+  task.resolve([{
+    r0: BigInt.asUintN(64, BigInt(dataView(memory0).getBigInt64(ret + 0, true))),
+    r1: BigInt.asUintN(64, BigInt(dataView(memory0).getBigInt64(ret + 8, true))),
+    r2: BigInt.asUintN(64, BigInt(dataView(memory0).getBigInt64(ret + 16, true))),
+    r3: BigInt.asUintN(64, BigInt(dataView(memory0).getBigInt64(ret + 24, true))),
+    sign: enum0,
+  }]);
+  task.exit();
   return {
-    r0: BigInt.asUintN(64, dataView(memory0).getBigInt64(ret + 0, true)),
-    r1: BigInt.asUintN(64, dataView(memory0).getBigInt64(ret + 8, true)),
-    r2: BigInt.asUintN(64, dataView(memory0).getBigInt64(ret + 16, true)),
-    r3: BigInt.asUintN(64, dataView(memory0).getBigInt64(ret + 24, true)),
+    r0: BigInt.asUintN(64, BigInt(dataView(memory0).getBigInt64(ret + 0, true))),
+    r1: BigInt.asUintN(64, BigInt(dataView(memory0).getBigInt64(ret + 8, true))),
+    r2: BigInt.asUintN(64, BigInt(dataView(memory0).getBigInt64(ret + 16, true))),
+    r3: BigInt.asUintN(64, BigInt(dataView(memory0).getBigInt64(ret + 24, true))),
     sign: enum0,
   };
 }
@@ -1294,9 +3392,28 @@ function s64ToInteger(arg0) {
     async: false,
     postReturn: false,
   });
-  const _wasm_call_currentTaskID = startCurrentTask(0, false, 'numericsS64ToInteger');
-  const ret = numericsS64ToInteger(toInt64(arg0));
-  endCurrentTask(0);
+  const hostProvided = false;
+  
+  const [task, _wasm_call_currentTaskID] = createNewCurrentTask({
+    componentIdx: 0,
+    isAsync: false,
+    isManualAsync: false,
+    entryFnName: 'numericsS64ToInteger',
+    getCallbackFn: () => null,
+    callbackFnName: 'null',
+    errHandling: 'none',
+    callingWasmExport: true,
+  });
+  
+  const started = task.enterSync();
+  task.setReturnMemoryIdx(0);
+  task.setReturnMemory(memory0);
+  let ret =   _withGlobalCurrentTaskMeta({
+    taskID: task.id(),
+    componentIdx: task.componentIdx(),
+    fn: () => numericsS64ToInteger(toInt64(arg0)),
+  });
+  
   let enum0;
   switch (dataView(memory0).getUint8(ret + 32, true)) {
     case 0: {
@@ -1317,28 +3434,58 @@ function s64ToInteger(arg0) {
     async: false,
     postReturn: false
   });
+  task.resolve([{
+    r0: BigInt.asUintN(64, BigInt(dataView(memory0).getBigInt64(ret + 0, true))),
+    r1: BigInt.asUintN(64, BigInt(dataView(memory0).getBigInt64(ret + 8, true))),
+    r2: BigInt.asUintN(64, BigInt(dataView(memory0).getBigInt64(ret + 16, true))),
+    r3: BigInt.asUintN(64, BigInt(dataView(memory0).getBigInt64(ret + 24, true))),
+    sign: enum0,
+  }]);
+  task.exit();
   return {
-    r0: BigInt.asUintN(64, dataView(memory0).getBigInt64(ret + 0, true)),
-    r1: BigInt.asUintN(64, dataView(memory0).getBigInt64(ret + 8, true)),
-    r2: BigInt.asUintN(64, dataView(memory0).getBigInt64(ret + 16, true)),
-    r3: BigInt.asUintN(64, dataView(memory0).getBigInt64(ret + 24, true)),
+    r0: BigInt.asUintN(64, BigInt(dataView(memory0).getBigInt64(ret + 0, true))),
+    r1: BigInt.asUintN(64, BigInt(dataView(memory0).getBigInt64(ret + 8, true))),
+    r2: BigInt.asUintN(64, BigInt(dataView(memory0).getBigInt64(ret + 16, true))),
+    r3: BigInt.asUintN(64, BigInt(dataView(memory0).getBigInt64(ret + 24, true))),
     sign: enum0,
   };
 }
 let numericsStringToInteger;
 
 function stringToInteger(arg0) {
-  var ptr0 = utf8Encode(arg0, realloc0, memory0);
-  var len0 = utf8EncodedLen;
+  
+  var encodeRes = _utf8AllocateAndEncode(arg0, realloc0, memory0);
+  var ptr0= encodeRes.ptr;
+  var len0 = encodeRes.len;
+  
   _debugLog('[iface="root:component/numerics", function="string-to-integer"][Instruction::CallWasm] enter', {
     funcName: 'string-to-integer',
     paramCount: 2,
     async: false,
     postReturn: true,
   });
-  const _wasm_call_currentTaskID = startCurrentTask(0, false, 'numericsStringToInteger');
-  const ret = numericsStringToInteger(ptr0, len0);
-  endCurrentTask(0);
+  const hostProvided = false;
+  
+  const [task, _wasm_call_currentTaskID] = createNewCurrentTask({
+    componentIdx: 0,
+    isAsync: false,
+    isManualAsync: false,
+    entryFnName: 'numericsStringToInteger',
+    getCallbackFn: () => null,
+    callbackFnName: 'null',
+    errHandling: 'throw-result-err',
+    callingWasmExport: true,
+  });
+  
+  const started = task.enterSync();
+  task.setReturnMemoryIdx(0);
+  task.setReturnMemory(memory0);
+  let ret =   _withGlobalCurrentTaskMeta({
+    taskID: task.id(),
+    componentIdx: task.componentIdx(),
+    fn: () => numericsStringToInteger(ptr0, len0),
+  });
+  
   let variant8;
   switch (dataView(memory0).getUint8(ret + 0, true)) {
     case 0: {
@@ -1359,10 +3506,10 @@ function stringToInteger(arg0) {
       variant8= {
         tag: 'ok',
         val: {
-          r0: BigInt.asUintN(64, dataView(memory0).getBigInt64(ret + 8, true)),
-          r1: BigInt.asUintN(64, dataView(memory0).getBigInt64(ret + 16, true)),
-          r2: BigInt.asUintN(64, dataView(memory0).getBigInt64(ret + 24, true)),
-          r3: BigInt.asUintN(64, dataView(memory0).getBigInt64(ret + 32, true)),
+          r0: BigInt.asUintN(64, BigInt(dataView(memory0).getBigInt64(ret + 8, true))),
+          r1: BigInt.asUintN(64, BigInt(dataView(memory0).getBigInt64(ret + 16, true))),
+          r2: BigInt.asUintN(64, BigInt(dataView(memory0).getBigInt64(ret + 24, true))),
+          r3: BigInt.asUintN(64, BigInt(dataView(memory0).getBigInt64(ret + 32, true))),
           sign: enum1,
         }
       };
@@ -1374,7 +3521,7 @@ function stringToInteger(arg0) {
         case 0: {
           var ptr2 = dataView(memory0).getUint32(ret + 12, true);
           var len2 = dataView(memory0).getUint32(ret + 16, true);
-          var result2 = utf8Decoder.decode(new Uint8Array(memory0.buffer, ptr2, len2));
+          var result2 = TEXT_DECODER_UTF8.decode(new Uint8Array(memory0.buffer, ptr2, len2));
           variant7= {
             tag: 'message',
             val: result2
@@ -1384,7 +3531,7 @@ function stringToInteger(arg0) {
         case 1: {
           var ptr3 = dataView(memory0).getUint32(ret + 12, true);
           var len3 = dataView(memory0).getUint32(ret + 16, true);
-          var result3 = utf8Decoder.decode(new Uint8Array(memory0.buffer, ptr3, len3));
+          var result3 = TEXT_DECODER_UTF8.decode(new Uint8Array(memory0.buffer, ptr3, len3));
           variant7= {
             tag: 'overflow',
             val: result3
@@ -1394,7 +3541,7 @@ function stringToInteger(arg0) {
         case 2: {
           var ptr4 = dataView(memory0).getUint32(ret + 12, true);
           var len4 = dataView(memory0).getUint32(ret + 16, true);
-          var result4 = utf8Decoder.decode(new Uint8Array(memory0.buffer, ptr4, len4));
+          var result4 = TEXT_DECODER_UTF8.decode(new Uint8Array(memory0.buffer, ptr4, len4));
           variant7= {
             tag: 'div-by-zero',
             val: result4
@@ -1404,7 +3551,7 @@ function stringToInteger(arg0) {
         case 3: {
           var ptr5 = dataView(memory0).getUint32(ret + 12, true);
           var len5 = dataView(memory0).getUint32(ret + 16, true);
-          var result5 = utf8Decoder.decode(new Uint8Array(memory0.buffer, ptr5, len5));
+          var result5 = TEXT_DECODER_UTF8.decode(new Uint8Array(memory0.buffer, ptr5, len5));
           variant7= {
             tag: 'syntax',
             val: result5
@@ -1414,7 +3561,7 @@ function stringToInteger(arg0) {
         case 4: {
           var ptr6 = dataView(memory0).getUint32(ret + 12, true);
           var len6 = dataView(memory0).getUint32(ret + 16, true);
-          var result6 = utf8Decoder.decode(new Uint8Array(memory0.buffer, ptr6, len6));
+          var result6 = TEXT_DECODER_UTF8.decode(new Uint8Array(memory0.buffer, ptr6, len6));
           variant7= {
             tag: 'validation',
             val: result6
@@ -1442,11 +3589,13 @@ function stringToInteger(arg0) {
     postReturn: true
   });
   const retCopy = variant8;
+  task.resolve([retCopy.val]);
   
   let cstate = getOrCreateAsyncState(0);
   cstate.mayLeave = false;
   postReturn3(ret);
   cstate.mayLeave = true;
+  task.exit();
   
   
   
@@ -1485,24 +3634,45 @@ function integerToString(arg0) {
     async: false,
     postReturn: true,
   });
-  const _wasm_call_currentTaskID = startCurrentTask(0, false, 'numericsIntegerToString');
-  const ret = numericsIntegerToString(toUint64(v0_0), toUint64(v0_1), toUint64(v0_2), toUint64(v0_3), enum1);
-  endCurrentTask(0);
+  const hostProvided = false;
+  
+  const [task, _wasm_call_currentTaskID] = createNewCurrentTask({
+    componentIdx: 0,
+    isAsync: false,
+    isManualAsync: false,
+    entryFnName: 'numericsIntegerToString',
+    getCallbackFn: () => null,
+    callbackFnName: 'null',
+    errHandling: 'none',
+    callingWasmExport: true,
+  });
+  
+  const started = task.enterSync();
+  task.setReturnMemoryIdx(0);
+  task.setReturnMemory(memory0);
+  let ret =   _withGlobalCurrentTaskMeta({
+    taskID: task.id(),
+    componentIdx: task.componentIdx(),
+    fn: () => numericsIntegerToString(toUint64(v0_0), toUint64(v0_1), toUint64(v0_2), toUint64(v0_3), enum1),
+  });
+  
   var ptr2 = dataView(memory0).getUint32(ret + 0, true);
   var len2 = dataView(memory0).getUint32(ret + 4, true);
-  var result2 = utf8Decoder.decode(new Uint8Array(memory0.buffer, ptr2, len2));
+  var result2 = TEXT_DECODER_UTF8.decode(new Uint8Array(memory0.buffer, ptr2, len2));
   _debugLog('[iface="root:component/numerics", function="integer-to-string"][Instruction::Return]', {
     funcName: 'integer-to-string',
     paramCount: 1,
     async: false,
     postReturn: true
   });
+  task.resolve([result2]);
   const retCopy = result2;
   
   let cstate = getOrCreateAsyncState(0);
   cstate.mayLeave = false;
   postReturn0(ret);
   cstate.mayLeave = true;
+  task.exit();
   return retCopy;
   
 }
@@ -1555,9 +3725,26 @@ function eqInteger(arg0, arg1) {
     async: false,
     postReturn: false,
   });
-  const _wasm_call_currentTaskID = startCurrentTask(0, false, 'numericsEqInteger');
-  const ret = numericsEqInteger(toUint64(v0_0), toUint64(v0_1), toUint64(v0_2), toUint64(v0_3), enum1, toUint64(v2_0), toUint64(v2_1), toUint64(v2_2), toUint64(v2_3), enum3);
-  endCurrentTask(0);
+  const hostProvided = false;
+  
+  const [task, _wasm_call_currentTaskID] = createNewCurrentTask({
+    componentIdx: 0,
+    isAsync: false,
+    isManualAsync: false,
+    entryFnName: 'numericsEqInteger',
+    getCallbackFn: () => null,
+    callbackFnName: 'null',
+    errHandling: 'none',
+    callingWasmExport: true,
+  });
+  
+  const started = task.enterSync();
+  let ret =   _withGlobalCurrentTaskMeta({
+    taskID: task.id(),
+    componentIdx: task.componentIdx(),
+    fn: () => numericsEqInteger(toUint64(v0_0), toUint64(v0_1), toUint64(v0_2), toUint64(v0_3), enum1, toUint64(v2_0), toUint64(v2_1), toUint64(v2_2), toUint64(v2_3), enum3),
+  });
+  
   var bool4 = ret;
   _debugLog('[iface="root:component/numerics", function="eq-integer"][Instruction::Return]', {
     funcName: 'eq-integer',
@@ -1565,6 +3752,8 @@ function eqInteger(arg0, arg1) {
     async: false,
     postReturn: false
   });
+  task.resolve([bool4 == 0 ? false : (bool4 == 1 ? true : throwInvalidBool())]);
+  task.exit();
   return bool4 == 0 ? false : (bool4 == 1 ? true : throwInvalidBool());
 }
 let numericsCmpInteger;
@@ -1616,9 +3805,26 @@ function cmpInteger(arg0, arg1) {
     async: false,
     postReturn: false,
   });
-  const _wasm_call_currentTaskID = startCurrentTask(0, false, 'numericsCmpInteger');
-  const ret = numericsCmpInteger(toUint64(v0_0), toUint64(v0_1), toUint64(v0_2), toUint64(v0_3), enum1, toUint64(v2_0), toUint64(v2_1), toUint64(v2_2), toUint64(v2_3), enum3);
-  endCurrentTask(0);
+  const hostProvided = false;
+  
+  const [task, _wasm_call_currentTaskID] = createNewCurrentTask({
+    componentIdx: 0,
+    isAsync: false,
+    isManualAsync: false,
+    entryFnName: 'numericsCmpInteger',
+    getCallbackFn: () => null,
+    callbackFnName: 'null',
+    errHandling: 'none',
+    callingWasmExport: true,
+  });
+  
+  const started = task.enterSync();
+  let ret =   _withGlobalCurrentTaskMeta({
+    taskID: task.id(),
+    componentIdx: task.componentIdx(),
+    fn: () => numericsCmpInteger(toUint64(v0_0), toUint64(v0_1), toUint64(v0_2), toUint64(v0_3), enum1, toUint64(v2_0), toUint64(v2_1), toUint64(v2_2), toUint64(v2_3), enum3),
+  });
+  
   let enum4;
   switch (ret) {
     case 0: {
@@ -1643,6 +3849,8 @@ function cmpInteger(arg0, arg1) {
     async: false,
     postReturn: false
   });
+  task.resolve([enum4]);
+  task.exit();
   return enum4;
 }
 let numericsAddInteger;
@@ -1694,9 +3902,28 @@ function addInteger(arg0, arg1) {
     async: false,
     postReturn: true,
   });
-  const _wasm_call_currentTaskID = startCurrentTask(0, false, 'numericsAddInteger');
-  const ret = numericsAddInteger(toUint64(v0_0), toUint64(v0_1), toUint64(v0_2), toUint64(v0_3), enum1, toUint64(v2_0), toUint64(v2_1), toUint64(v2_2), toUint64(v2_3), enum3);
-  endCurrentTask(0);
+  const hostProvided = false;
+  
+  const [task, _wasm_call_currentTaskID] = createNewCurrentTask({
+    componentIdx: 0,
+    isAsync: false,
+    isManualAsync: false,
+    entryFnName: 'numericsAddInteger',
+    getCallbackFn: () => null,
+    callbackFnName: 'null',
+    errHandling: 'throw-result-err',
+    callingWasmExport: true,
+  });
+  
+  const started = task.enterSync();
+  task.setReturnMemoryIdx(0);
+  task.setReturnMemory(memory0);
+  let ret =   _withGlobalCurrentTaskMeta({
+    taskID: task.id(),
+    componentIdx: task.componentIdx(),
+    fn: () => numericsAddInteger(toUint64(v0_0), toUint64(v0_1), toUint64(v0_2), toUint64(v0_3), enum1, toUint64(v2_0), toUint64(v2_1), toUint64(v2_2), toUint64(v2_3), enum3),
+  });
+  
   let variant11;
   switch (dataView(memory0).getUint8(ret + 0, true)) {
     case 0: {
@@ -1717,10 +3944,10 @@ function addInteger(arg0, arg1) {
       variant11= {
         tag: 'ok',
         val: {
-          r0: BigInt.asUintN(64, dataView(memory0).getBigInt64(ret + 8, true)),
-          r1: BigInt.asUintN(64, dataView(memory0).getBigInt64(ret + 16, true)),
-          r2: BigInt.asUintN(64, dataView(memory0).getBigInt64(ret + 24, true)),
-          r3: BigInt.asUintN(64, dataView(memory0).getBigInt64(ret + 32, true)),
+          r0: BigInt.asUintN(64, BigInt(dataView(memory0).getBigInt64(ret + 8, true))),
+          r1: BigInt.asUintN(64, BigInt(dataView(memory0).getBigInt64(ret + 16, true))),
+          r2: BigInt.asUintN(64, BigInt(dataView(memory0).getBigInt64(ret + 24, true))),
+          r3: BigInt.asUintN(64, BigInt(dataView(memory0).getBigInt64(ret + 32, true))),
           sign: enum4,
         }
       };
@@ -1732,7 +3959,7 @@ function addInteger(arg0, arg1) {
         case 0: {
           var ptr5 = dataView(memory0).getUint32(ret + 12, true);
           var len5 = dataView(memory0).getUint32(ret + 16, true);
-          var result5 = utf8Decoder.decode(new Uint8Array(memory0.buffer, ptr5, len5));
+          var result5 = TEXT_DECODER_UTF8.decode(new Uint8Array(memory0.buffer, ptr5, len5));
           variant10= {
             tag: 'message',
             val: result5
@@ -1742,7 +3969,7 @@ function addInteger(arg0, arg1) {
         case 1: {
           var ptr6 = dataView(memory0).getUint32(ret + 12, true);
           var len6 = dataView(memory0).getUint32(ret + 16, true);
-          var result6 = utf8Decoder.decode(new Uint8Array(memory0.buffer, ptr6, len6));
+          var result6 = TEXT_DECODER_UTF8.decode(new Uint8Array(memory0.buffer, ptr6, len6));
           variant10= {
             tag: 'overflow',
             val: result6
@@ -1752,7 +3979,7 @@ function addInteger(arg0, arg1) {
         case 2: {
           var ptr7 = dataView(memory0).getUint32(ret + 12, true);
           var len7 = dataView(memory0).getUint32(ret + 16, true);
-          var result7 = utf8Decoder.decode(new Uint8Array(memory0.buffer, ptr7, len7));
+          var result7 = TEXT_DECODER_UTF8.decode(new Uint8Array(memory0.buffer, ptr7, len7));
           variant10= {
             tag: 'div-by-zero',
             val: result7
@@ -1762,7 +3989,7 @@ function addInteger(arg0, arg1) {
         case 3: {
           var ptr8 = dataView(memory0).getUint32(ret + 12, true);
           var len8 = dataView(memory0).getUint32(ret + 16, true);
-          var result8 = utf8Decoder.decode(new Uint8Array(memory0.buffer, ptr8, len8));
+          var result8 = TEXT_DECODER_UTF8.decode(new Uint8Array(memory0.buffer, ptr8, len8));
           variant10= {
             tag: 'syntax',
             val: result8
@@ -1772,7 +3999,7 @@ function addInteger(arg0, arg1) {
         case 4: {
           var ptr9 = dataView(memory0).getUint32(ret + 12, true);
           var len9 = dataView(memory0).getUint32(ret + 16, true);
-          var result9 = utf8Decoder.decode(new Uint8Array(memory0.buffer, ptr9, len9));
+          var result9 = TEXT_DECODER_UTF8.decode(new Uint8Array(memory0.buffer, ptr9, len9));
           variant10= {
             tag: 'validation',
             val: result9
@@ -1800,11 +4027,13 @@ function addInteger(arg0, arg1) {
     postReturn: true
   });
   const retCopy = variant11;
+  task.resolve([retCopy.val]);
   
   let cstate = getOrCreateAsyncState(0);
   cstate.mayLeave = false;
   postReturn3(ret);
   cstate.mayLeave = true;
+  task.exit();
   
   
   
@@ -1863,9 +4092,28 @@ function subInteger(arg0, arg1) {
     async: false,
     postReturn: true,
   });
-  const _wasm_call_currentTaskID = startCurrentTask(0, false, 'numericsSubInteger');
-  const ret = numericsSubInteger(toUint64(v0_0), toUint64(v0_1), toUint64(v0_2), toUint64(v0_3), enum1, toUint64(v2_0), toUint64(v2_1), toUint64(v2_2), toUint64(v2_3), enum3);
-  endCurrentTask(0);
+  const hostProvided = false;
+  
+  const [task, _wasm_call_currentTaskID] = createNewCurrentTask({
+    componentIdx: 0,
+    isAsync: false,
+    isManualAsync: false,
+    entryFnName: 'numericsSubInteger',
+    getCallbackFn: () => null,
+    callbackFnName: 'null',
+    errHandling: 'throw-result-err',
+    callingWasmExport: true,
+  });
+  
+  const started = task.enterSync();
+  task.setReturnMemoryIdx(0);
+  task.setReturnMemory(memory0);
+  let ret =   _withGlobalCurrentTaskMeta({
+    taskID: task.id(),
+    componentIdx: task.componentIdx(),
+    fn: () => numericsSubInteger(toUint64(v0_0), toUint64(v0_1), toUint64(v0_2), toUint64(v0_3), enum1, toUint64(v2_0), toUint64(v2_1), toUint64(v2_2), toUint64(v2_3), enum3),
+  });
+  
   let variant11;
   switch (dataView(memory0).getUint8(ret + 0, true)) {
     case 0: {
@@ -1886,10 +4134,10 @@ function subInteger(arg0, arg1) {
       variant11= {
         tag: 'ok',
         val: {
-          r0: BigInt.asUintN(64, dataView(memory0).getBigInt64(ret + 8, true)),
-          r1: BigInt.asUintN(64, dataView(memory0).getBigInt64(ret + 16, true)),
-          r2: BigInt.asUintN(64, dataView(memory0).getBigInt64(ret + 24, true)),
-          r3: BigInt.asUintN(64, dataView(memory0).getBigInt64(ret + 32, true)),
+          r0: BigInt.asUintN(64, BigInt(dataView(memory0).getBigInt64(ret + 8, true))),
+          r1: BigInt.asUintN(64, BigInt(dataView(memory0).getBigInt64(ret + 16, true))),
+          r2: BigInt.asUintN(64, BigInt(dataView(memory0).getBigInt64(ret + 24, true))),
+          r3: BigInt.asUintN(64, BigInt(dataView(memory0).getBigInt64(ret + 32, true))),
           sign: enum4,
         }
       };
@@ -1901,7 +4149,7 @@ function subInteger(arg0, arg1) {
         case 0: {
           var ptr5 = dataView(memory0).getUint32(ret + 12, true);
           var len5 = dataView(memory0).getUint32(ret + 16, true);
-          var result5 = utf8Decoder.decode(new Uint8Array(memory0.buffer, ptr5, len5));
+          var result5 = TEXT_DECODER_UTF8.decode(new Uint8Array(memory0.buffer, ptr5, len5));
           variant10= {
             tag: 'message',
             val: result5
@@ -1911,7 +4159,7 @@ function subInteger(arg0, arg1) {
         case 1: {
           var ptr6 = dataView(memory0).getUint32(ret + 12, true);
           var len6 = dataView(memory0).getUint32(ret + 16, true);
-          var result6 = utf8Decoder.decode(new Uint8Array(memory0.buffer, ptr6, len6));
+          var result6 = TEXT_DECODER_UTF8.decode(new Uint8Array(memory0.buffer, ptr6, len6));
           variant10= {
             tag: 'overflow',
             val: result6
@@ -1921,7 +4169,7 @@ function subInteger(arg0, arg1) {
         case 2: {
           var ptr7 = dataView(memory0).getUint32(ret + 12, true);
           var len7 = dataView(memory0).getUint32(ret + 16, true);
-          var result7 = utf8Decoder.decode(new Uint8Array(memory0.buffer, ptr7, len7));
+          var result7 = TEXT_DECODER_UTF8.decode(new Uint8Array(memory0.buffer, ptr7, len7));
           variant10= {
             tag: 'div-by-zero',
             val: result7
@@ -1931,7 +4179,7 @@ function subInteger(arg0, arg1) {
         case 3: {
           var ptr8 = dataView(memory0).getUint32(ret + 12, true);
           var len8 = dataView(memory0).getUint32(ret + 16, true);
-          var result8 = utf8Decoder.decode(new Uint8Array(memory0.buffer, ptr8, len8));
+          var result8 = TEXT_DECODER_UTF8.decode(new Uint8Array(memory0.buffer, ptr8, len8));
           variant10= {
             tag: 'syntax',
             val: result8
@@ -1941,7 +4189,7 @@ function subInteger(arg0, arg1) {
         case 4: {
           var ptr9 = dataView(memory0).getUint32(ret + 12, true);
           var len9 = dataView(memory0).getUint32(ret + 16, true);
-          var result9 = utf8Decoder.decode(new Uint8Array(memory0.buffer, ptr9, len9));
+          var result9 = TEXT_DECODER_UTF8.decode(new Uint8Array(memory0.buffer, ptr9, len9));
           variant10= {
             tag: 'validation',
             val: result9
@@ -1969,11 +4217,13 @@ function subInteger(arg0, arg1) {
     postReturn: true
   });
   const retCopy = variant11;
+  task.resolve([retCopy.val]);
   
   let cstate = getOrCreateAsyncState(0);
   cstate.mayLeave = false;
   postReturn3(ret);
   cstate.mayLeave = true;
+  task.exit();
   
   
   
@@ -2032,9 +4282,28 @@ function mulInteger(arg0, arg1) {
     async: false,
     postReturn: true,
   });
-  const _wasm_call_currentTaskID = startCurrentTask(0, false, 'numericsMulInteger');
-  const ret = numericsMulInteger(toUint64(v0_0), toUint64(v0_1), toUint64(v0_2), toUint64(v0_3), enum1, toUint64(v2_0), toUint64(v2_1), toUint64(v2_2), toUint64(v2_3), enum3);
-  endCurrentTask(0);
+  const hostProvided = false;
+  
+  const [task, _wasm_call_currentTaskID] = createNewCurrentTask({
+    componentIdx: 0,
+    isAsync: false,
+    isManualAsync: false,
+    entryFnName: 'numericsMulInteger',
+    getCallbackFn: () => null,
+    callbackFnName: 'null',
+    errHandling: 'throw-result-err',
+    callingWasmExport: true,
+  });
+  
+  const started = task.enterSync();
+  task.setReturnMemoryIdx(0);
+  task.setReturnMemory(memory0);
+  let ret =   _withGlobalCurrentTaskMeta({
+    taskID: task.id(),
+    componentIdx: task.componentIdx(),
+    fn: () => numericsMulInteger(toUint64(v0_0), toUint64(v0_1), toUint64(v0_2), toUint64(v0_3), enum1, toUint64(v2_0), toUint64(v2_1), toUint64(v2_2), toUint64(v2_3), enum3),
+  });
+  
   let variant11;
   switch (dataView(memory0).getUint8(ret + 0, true)) {
     case 0: {
@@ -2055,10 +4324,10 @@ function mulInteger(arg0, arg1) {
       variant11= {
         tag: 'ok',
         val: {
-          r0: BigInt.asUintN(64, dataView(memory0).getBigInt64(ret + 8, true)),
-          r1: BigInt.asUintN(64, dataView(memory0).getBigInt64(ret + 16, true)),
-          r2: BigInt.asUintN(64, dataView(memory0).getBigInt64(ret + 24, true)),
-          r3: BigInt.asUintN(64, dataView(memory0).getBigInt64(ret + 32, true)),
+          r0: BigInt.asUintN(64, BigInt(dataView(memory0).getBigInt64(ret + 8, true))),
+          r1: BigInt.asUintN(64, BigInt(dataView(memory0).getBigInt64(ret + 16, true))),
+          r2: BigInt.asUintN(64, BigInt(dataView(memory0).getBigInt64(ret + 24, true))),
+          r3: BigInt.asUintN(64, BigInt(dataView(memory0).getBigInt64(ret + 32, true))),
           sign: enum4,
         }
       };
@@ -2070,7 +4339,7 @@ function mulInteger(arg0, arg1) {
         case 0: {
           var ptr5 = dataView(memory0).getUint32(ret + 12, true);
           var len5 = dataView(memory0).getUint32(ret + 16, true);
-          var result5 = utf8Decoder.decode(new Uint8Array(memory0.buffer, ptr5, len5));
+          var result5 = TEXT_DECODER_UTF8.decode(new Uint8Array(memory0.buffer, ptr5, len5));
           variant10= {
             tag: 'message',
             val: result5
@@ -2080,7 +4349,7 @@ function mulInteger(arg0, arg1) {
         case 1: {
           var ptr6 = dataView(memory0).getUint32(ret + 12, true);
           var len6 = dataView(memory0).getUint32(ret + 16, true);
-          var result6 = utf8Decoder.decode(new Uint8Array(memory0.buffer, ptr6, len6));
+          var result6 = TEXT_DECODER_UTF8.decode(new Uint8Array(memory0.buffer, ptr6, len6));
           variant10= {
             tag: 'overflow',
             val: result6
@@ -2090,7 +4359,7 @@ function mulInteger(arg0, arg1) {
         case 2: {
           var ptr7 = dataView(memory0).getUint32(ret + 12, true);
           var len7 = dataView(memory0).getUint32(ret + 16, true);
-          var result7 = utf8Decoder.decode(new Uint8Array(memory0.buffer, ptr7, len7));
+          var result7 = TEXT_DECODER_UTF8.decode(new Uint8Array(memory0.buffer, ptr7, len7));
           variant10= {
             tag: 'div-by-zero',
             val: result7
@@ -2100,7 +4369,7 @@ function mulInteger(arg0, arg1) {
         case 3: {
           var ptr8 = dataView(memory0).getUint32(ret + 12, true);
           var len8 = dataView(memory0).getUint32(ret + 16, true);
-          var result8 = utf8Decoder.decode(new Uint8Array(memory0.buffer, ptr8, len8));
+          var result8 = TEXT_DECODER_UTF8.decode(new Uint8Array(memory0.buffer, ptr8, len8));
           variant10= {
             tag: 'syntax',
             val: result8
@@ -2110,7 +4379,7 @@ function mulInteger(arg0, arg1) {
         case 4: {
           var ptr9 = dataView(memory0).getUint32(ret + 12, true);
           var len9 = dataView(memory0).getUint32(ret + 16, true);
-          var result9 = utf8Decoder.decode(new Uint8Array(memory0.buffer, ptr9, len9));
+          var result9 = TEXT_DECODER_UTF8.decode(new Uint8Array(memory0.buffer, ptr9, len9));
           variant10= {
             tag: 'validation',
             val: result9
@@ -2138,11 +4407,13 @@ function mulInteger(arg0, arg1) {
     postReturn: true
   });
   const retCopy = variant11;
+  task.resolve([retCopy.val]);
   
   let cstate = getOrCreateAsyncState(0);
   cstate.mayLeave = false;
   postReturn3(ret);
   cstate.mayLeave = true;
+  task.exit();
   
   
   
@@ -2201,9 +4472,28 @@ function divInteger(arg0, arg1) {
     async: false,
     postReturn: true,
   });
-  const _wasm_call_currentTaskID = startCurrentTask(0, false, 'numericsDivInteger');
-  const ret = numericsDivInteger(toUint64(v0_0), toUint64(v0_1), toUint64(v0_2), toUint64(v0_3), enum1, toUint64(v2_0), toUint64(v2_1), toUint64(v2_2), toUint64(v2_3), enum3);
-  endCurrentTask(0);
+  const hostProvided = false;
+  
+  const [task, _wasm_call_currentTaskID] = createNewCurrentTask({
+    componentIdx: 0,
+    isAsync: false,
+    isManualAsync: false,
+    entryFnName: 'numericsDivInteger',
+    getCallbackFn: () => null,
+    callbackFnName: 'null',
+    errHandling: 'throw-result-err',
+    callingWasmExport: true,
+  });
+  
+  const started = task.enterSync();
+  task.setReturnMemoryIdx(0);
+  task.setReturnMemory(memory0);
+  let ret =   _withGlobalCurrentTaskMeta({
+    taskID: task.id(),
+    componentIdx: task.componentIdx(),
+    fn: () => numericsDivInteger(toUint64(v0_0), toUint64(v0_1), toUint64(v0_2), toUint64(v0_3), enum1, toUint64(v2_0), toUint64(v2_1), toUint64(v2_2), toUint64(v2_3), enum3),
+  });
+  
   let variant11;
   switch (dataView(memory0).getUint8(ret + 0, true)) {
     case 0: {
@@ -2224,10 +4514,10 @@ function divInteger(arg0, arg1) {
       variant11= {
         tag: 'ok',
         val: {
-          r0: BigInt.asUintN(64, dataView(memory0).getBigInt64(ret + 8, true)),
-          r1: BigInt.asUintN(64, dataView(memory0).getBigInt64(ret + 16, true)),
-          r2: BigInt.asUintN(64, dataView(memory0).getBigInt64(ret + 24, true)),
-          r3: BigInt.asUintN(64, dataView(memory0).getBigInt64(ret + 32, true)),
+          r0: BigInt.asUintN(64, BigInt(dataView(memory0).getBigInt64(ret + 8, true))),
+          r1: BigInt.asUintN(64, BigInt(dataView(memory0).getBigInt64(ret + 16, true))),
+          r2: BigInt.asUintN(64, BigInt(dataView(memory0).getBigInt64(ret + 24, true))),
+          r3: BigInt.asUintN(64, BigInt(dataView(memory0).getBigInt64(ret + 32, true))),
           sign: enum4,
         }
       };
@@ -2239,7 +4529,7 @@ function divInteger(arg0, arg1) {
         case 0: {
           var ptr5 = dataView(memory0).getUint32(ret + 12, true);
           var len5 = dataView(memory0).getUint32(ret + 16, true);
-          var result5 = utf8Decoder.decode(new Uint8Array(memory0.buffer, ptr5, len5));
+          var result5 = TEXT_DECODER_UTF8.decode(new Uint8Array(memory0.buffer, ptr5, len5));
           variant10= {
             tag: 'message',
             val: result5
@@ -2249,7 +4539,7 @@ function divInteger(arg0, arg1) {
         case 1: {
           var ptr6 = dataView(memory0).getUint32(ret + 12, true);
           var len6 = dataView(memory0).getUint32(ret + 16, true);
-          var result6 = utf8Decoder.decode(new Uint8Array(memory0.buffer, ptr6, len6));
+          var result6 = TEXT_DECODER_UTF8.decode(new Uint8Array(memory0.buffer, ptr6, len6));
           variant10= {
             tag: 'overflow',
             val: result6
@@ -2259,7 +4549,7 @@ function divInteger(arg0, arg1) {
         case 2: {
           var ptr7 = dataView(memory0).getUint32(ret + 12, true);
           var len7 = dataView(memory0).getUint32(ret + 16, true);
-          var result7 = utf8Decoder.decode(new Uint8Array(memory0.buffer, ptr7, len7));
+          var result7 = TEXT_DECODER_UTF8.decode(new Uint8Array(memory0.buffer, ptr7, len7));
           variant10= {
             tag: 'div-by-zero',
             val: result7
@@ -2269,7 +4559,7 @@ function divInteger(arg0, arg1) {
         case 3: {
           var ptr8 = dataView(memory0).getUint32(ret + 12, true);
           var len8 = dataView(memory0).getUint32(ret + 16, true);
-          var result8 = utf8Decoder.decode(new Uint8Array(memory0.buffer, ptr8, len8));
+          var result8 = TEXT_DECODER_UTF8.decode(new Uint8Array(memory0.buffer, ptr8, len8));
           variant10= {
             tag: 'syntax',
             val: result8
@@ -2279,7 +4569,7 @@ function divInteger(arg0, arg1) {
         case 4: {
           var ptr9 = dataView(memory0).getUint32(ret + 12, true);
           var len9 = dataView(memory0).getUint32(ret + 16, true);
-          var result9 = utf8Decoder.decode(new Uint8Array(memory0.buffer, ptr9, len9));
+          var result9 = TEXT_DECODER_UTF8.decode(new Uint8Array(memory0.buffer, ptr9, len9));
           variant10= {
             tag: 'validation',
             val: result9
@@ -2307,11 +4597,13 @@ function divInteger(arg0, arg1) {
     postReturn: true
   });
   const retCopy = variant11;
+  task.resolve([retCopy.val]);
   
   let cstate = getOrCreateAsyncState(0);
   cstate.mayLeave = false;
   postReturn3(ret);
   cstate.mayLeave = true;
+  task.exit();
   
   
   
@@ -2350,9 +4642,28 @@ function sqrtInteger(arg0) {
     async: false,
     postReturn: true,
   });
-  const _wasm_call_currentTaskID = startCurrentTask(0, false, 'numericsSqrtInteger');
-  const ret = numericsSqrtInteger(toUint64(v0_0), toUint64(v0_1), toUint64(v0_2), toUint64(v0_3), enum1);
-  endCurrentTask(0);
+  const hostProvided = false;
+  
+  const [task, _wasm_call_currentTaskID] = createNewCurrentTask({
+    componentIdx: 0,
+    isAsync: false,
+    isManualAsync: false,
+    entryFnName: 'numericsSqrtInteger',
+    getCallbackFn: () => null,
+    callbackFnName: 'null',
+    errHandling: 'throw-result-err',
+    callingWasmExport: true,
+  });
+  
+  const started = task.enterSync();
+  task.setReturnMemoryIdx(0);
+  task.setReturnMemory(memory0);
+  let ret =   _withGlobalCurrentTaskMeta({
+    taskID: task.id(),
+    componentIdx: task.componentIdx(),
+    fn: () => numericsSqrtInteger(toUint64(v0_0), toUint64(v0_1), toUint64(v0_2), toUint64(v0_3), enum1),
+  });
+  
   let variant9;
   switch (dataView(memory0).getUint8(ret + 0, true)) {
     case 0: {
@@ -2373,10 +4684,10 @@ function sqrtInteger(arg0) {
       variant9= {
         tag: 'ok',
         val: {
-          r0: BigInt.asUintN(64, dataView(memory0).getBigInt64(ret + 8, true)),
-          r1: BigInt.asUintN(64, dataView(memory0).getBigInt64(ret + 16, true)),
-          r2: BigInt.asUintN(64, dataView(memory0).getBigInt64(ret + 24, true)),
-          r3: BigInt.asUintN(64, dataView(memory0).getBigInt64(ret + 32, true)),
+          r0: BigInt.asUintN(64, BigInt(dataView(memory0).getBigInt64(ret + 8, true))),
+          r1: BigInt.asUintN(64, BigInt(dataView(memory0).getBigInt64(ret + 16, true))),
+          r2: BigInt.asUintN(64, BigInt(dataView(memory0).getBigInt64(ret + 24, true))),
+          r3: BigInt.asUintN(64, BigInt(dataView(memory0).getBigInt64(ret + 32, true))),
           sign: enum2,
         }
       };
@@ -2388,7 +4699,7 @@ function sqrtInteger(arg0) {
         case 0: {
           var ptr3 = dataView(memory0).getUint32(ret + 12, true);
           var len3 = dataView(memory0).getUint32(ret + 16, true);
-          var result3 = utf8Decoder.decode(new Uint8Array(memory0.buffer, ptr3, len3));
+          var result3 = TEXT_DECODER_UTF8.decode(new Uint8Array(memory0.buffer, ptr3, len3));
           variant8= {
             tag: 'message',
             val: result3
@@ -2398,7 +4709,7 @@ function sqrtInteger(arg0) {
         case 1: {
           var ptr4 = dataView(memory0).getUint32(ret + 12, true);
           var len4 = dataView(memory0).getUint32(ret + 16, true);
-          var result4 = utf8Decoder.decode(new Uint8Array(memory0.buffer, ptr4, len4));
+          var result4 = TEXT_DECODER_UTF8.decode(new Uint8Array(memory0.buffer, ptr4, len4));
           variant8= {
             tag: 'overflow',
             val: result4
@@ -2408,7 +4719,7 @@ function sqrtInteger(arg0) {
         case 2: {
           var ptr5 = dataView(memory0).getUint32(ret + 12, true);
           var len5 = dataView(memory0).getUint32(ret + 16, true);
-          var result5 = utf8Decoder.decode(new Uint8Array(memory0.buffer, ptr5, len5));
+          var result5 = TEXT_DECODER_UTF8.decode(new Uint8Array(memory0.buffer, ptr5, len5));
           variant8= {
             tag: 'div-by-zero',
             val: result5
@@ -2418,7 +4729,7 @@ function sqrtInteger(arg0) {
         case 3: {
           var ptr6 = dataView(memory0).getUint32(ret + 12, true);
           var len6 = dataView(memory0).getUint32(ret + 16, true);
-          var result6 = utf8Decoder.decode(new Uint8Array(memory0.buffer, ptr6, len6));
+          var result6 = TEXT_DECODER_UTF8.decode(new Uint8Array(memory0.buffer, ptr6, len6));
           variant8= {
             tag: 'syntax',
             val: result6
@@ -2428,7 +4739,7 @@ function sqrtInteger(arg0) {
         case 4: {
           var ptr7 = dataView(memory0).getUint32(ret + 12, true);
           var len7 = dataView(memory0).getUint32(ret + 16, true);
-          var result7 = utf8Decoder.decode(new Uint8Array(memory0.buffer, ptr7, len7));
+          var result7 = TEXT_DECODER_UTF8.decode(new Uint8Array(memory0.buffer, ptr7, len7));
           variant8= {
             tag: 'validation',
             val: result7
@@ -2456,11 +4767,13 @@ function sqrtInteger(arg0) {
     postReturn: true
   });
   const retCopy = variant9;
+  task.resolve([retCopy.val]);
   
   let cstate = getOrCreateAsyncState(0);
   cstate.mayLeave = false;
   postReturn3(ret);
   cstate.mayLeave = true;
+  task.exit();
   
   
   
@@ -2499,9 +4812,28 @@ function integerToDecimal(arg0) {
     async: false,
     postReturn: true,
   });
-  const _wasm_call_currentTaskID = startCurrentTask(0, false, 'numericsIntegerToDecimal');
-  const ret = numericsIntegerToDecimal(toUint64(v0_0), toUint64(v0_1), toUint64(v0_2), toUint64(v0_3), enum1);
-  endCurrentTask(0);
+  const hostProvided = false;
+  
+  const [task, _wasm_call_currentTaskID] = createNewCurrentTask({
+    componentIdx: 0,
+    isAsync: false,
+    isManualAsync: false,
+    entryFnName: 'numericsIntegerToDecimal',
+    getCallbackFn: () => null,
+    callbackFnName: 'null',
+    errHandling: 'throw-result-err',
+    callingWasmExport: true,
+  });
+  
+  const started = task.enterSync();
+  task.setReturnMemoryIdx(0);
+  task.setReturnMemory(memory0);
+  let ret =   _withGlobalCurrentTaskMeta({
+    taskID: task.id(),
+    componentIdx: task.componentIdx(),
+    fn: () => numericsIntegerToDecimal(toUint64(v0_0), toUint64(v0_1), toUint64(v0_2), toUint64(v0_3), enum1),
+  });
+  
   let variant9;
   switch (dataView(memory0).getUint8(ret + 0, true)) {
     case 0: {
@@ -2522,10 +4854,10 @@ function integerToDecimal(arg0) {
       variant9= {
         tag: 'ok',
         val: {
-          r0: BigInt.asUintN(64, dataView(memory0).getBigInt64(ret + 8, true)),
-          r1: BigInt.asUintN(64, dataView(memory0).getBigInt64(ret + 16, true)),
-          r2: BigInt.asUintN(64, dataView(memory0).getBigInt64(ret + 24, true)),
-          r3: BigInt.asUintN(64, dataView(memory0).getBigInt64(ret + 32, true)),
+          r0: BigInt.asUintN(64, BigInt(dataView(memory0).getBigInt64(ret + 8, true))),
+          r1: BigInt.asUintN(64, BigInt(dataView(memory0).getBigInt64(ret + 16, true))),
+          r2: BigInt.asUintN(64, BigInt(dataView(memory0).getBigInt64(ret + 24, true))),
+          r3: BigInt.asUintN(64, BigInt(dataView(memory0).getBigInt64(ret + 32, true))),
           sign: enum2,
         }
       };
@@ -2537,7 +4869,7 @@ function integerToDecimal(arg0) {
         case 0: {
           var ptr3 = dataView(memory0).getUint32(ret + 12, true);
           var len3 = dataView(memory0).getUint32(ret + 16, true);
-          var result3 = utf8Decoder.decode(new Uint8Array(memory0.buffer, ptr3, len3));
+          var result3 = TEXT_DECODER_UTF8.decode(new Uint8Array(memory0.buffer, ptr3, len3));
           variant8= {
             tag: 'message',
             val: result3
@@ -2547,7 +4879,7 @@ function integerToDecimal(arg0) {
         case 1: {
           var ptr4 = dataView(memory0).getUint32(ret + 12, true);
           var len4 = dataView(memory0).getUint32(ret + 16, true);
-          var result4 = utf8Decoder.decode(new Uint8Array(memory0.buffer, ptr4, len4));
+          var result4 = TEXT_DECODER_UTF8.decode(new Uint8Array(memory0.buffer, ptr4, len4));
           variant8= {
             tag: 'overflow',
             val: result4
@@ -2557,7 +4889,7 @@ function integerToDecimal(arg0) {
         case 2: {
           var ptr5 = dataView(memory0).getUint32(ret + 12, true);
           var len5 = dataView(memory0).getUint32(ret + 16, true);
-          var result5 = utf8Decoder.decode(new Uint8Array(memory0.buffer, ptr5, len5));
+          var result5 = TEXT_DECODER_UTF8.decode(new Uint8Array(memory0.buffer, ptr5, len5));
           variant8= {
             tag: 'div-by-zero',
             val: result5
@@ -2567,7 +4899,7 @@ function integerToDecimal(arg0) {
         case 3: {
           var ptr6 = dataView(memory0).getUint32(ret + 12, true);
           var len6 = dataView(memory0).getUint32(ret + 16, true);
-          var result6 = utf8Decoder.decode(new Uint8Array(memory0.buffer, ptr6, len6));
+          var result6 = TEXT_DECODER_UTF8.decode(new Uint8Array(memory0.buffer, ptr6, len6));
           variant8= {
             tag: 'syntax',
             val: result6
@@ -2577,7 +4909,7 @@ function integerToDecimal(arg0) {
         case 4: {
           var ptr7 = dataView(memory0).getUint32(ret + 12, true);
           var len7 = dataView(memory0).getUint32(ret + 16, true);
-          var result7 = utf8Decoder.decode(new Uint8Array(memory0.buffer, ptr7, len7));
+          var result7 = TEXT_DECODER_UTF8.decode(new Uint8Array(memory0.buffer, ptr7, len7));
           variant8= {
             tag: 'validation',
             val: result7
@@ -2605,11 +4937,13 @@ function integerToDecimal(arg0) {
     postReturn: true
   });
   const retCopy = variant9;
+  task.resolve([retCopy.val]);
   
   let cstate = getOrCreateAsyncState(0);
   cstate.mayLeave = false;
   postReturn3(ret);
   cstate.mayLeave = true;
+  task.exit();
   
   
   
@@ -2648,9 +4982,28 @@ function decimalToInteger(arg0) {
     async: false,
     postReturn: true,
   });
-  const _wasm_call_currentTaskID = startCurrentTask(0, false, 'numericsDecimalToInteger');
-  const ret = numericsDecimalToInteger(toUint64(v0_0), toUint64(v0_1), toUint64(v0_2), toUint64(v0_3), enum1);
-  endCurrentTask(0);
+  const hostProvided = false;
+  
+  const [task, _wasm_call_currentTaskID] = createNewCurrentTask({
+    componentIdx: 0,
+    isAsync: false,
+    isManualAsync: false,
+    entryFnName: 'numericsDecimalToInteger',
+    getCallbackFn: () => null,
+    callbackFnName: 'null',
+    errHandling: 'throw-result-err',
+    callingWasmExport: true,
+  });
+  
+  const started = task.enterSync();
+  task.setReturnMemoryIdx(0);
+  task.setReturnMemory(memory0);
+  let ret =   _withGlobalCurrentTaskMeta({
+    taskID: task.id(),
+    componentIdx: task.componentIdx(),
+    fn: () => numericsDecimalToInteger(toUint64(v0_0), toUint64(v0_1), toUint64(v0_2), toUint64(v0_3), enum1),
+  });
+  
   let variant9;
   switch (dataView(memory0).getUint8(ret + 0, true)) {
     case 0: {
@@ -2671,10 +5024,10 @@ function decimalToInteger(arg0) {
       variant9= {
         tag: 'ok',
         val: {
-          r0: BigInt.asUintN(64, dataView(memory0).getBigInt64(ret + 8, true)),
-          r1: BigInt.asUintN(64, dataView(memory0).getBigInt64(ret + 16, true)),
-          r2: BigInt.asUintN(64, dataView(memory0).getBigInt64(ret + 24, true)),
-          r3: BigInt.asUintN(64, dataView(memory0).getBigInt64(ret + 32, true)),
+          r0: BigInt.asUintN(64, BigInt(dataView(memory0).getBigInt64(ret + 8, true))),
+          r1: BigInt.asUintN(64, BigInt(dataView(memory0).getBigInt64(ret + 16, true))),
+          r2: BigInt.asUintN(64, BigInt(dataView(memory0).getBigInt64(ret + 24, true))),
+          r3: BigInt.asUintN(64, BigInt(dataView(memory0).getBigInt64(ret + 32, true))),
           sign: enum2,
         }
       };
@@ -2686,7 +5039,7 @@ function decimalToInteger(arg0) {
         case 0: {
           var ptr3 = dataView(memory0).getUint32(ret + 12, true);
           var len3 = dataView(memory0).getUint32(ret + 16, true);
-          var result3 = utf8Decoder.decode(new Uint8Array(memory0.buffer, ptr3, len3));
+          var result3 = TEXT_DECODER_UTF8.decode(new Uint8Array(memory0.buffer, ptr3, len3));
           variant8= {
             tag: 'message',
             val: result3
@@ -2696,7 +5049,7 @@ function decimalToInteger(arg0) {
         case 1: {
           var ptr4 = dataView(memory0).getUint32(ret + 12, true);
           var len4 = dataView(memory0).getUint32(ret + 16, true);
-          var result4 = utf8Decoder.decode(new Uint8Array(memory0.buffer, ptr4, len4));
+          var result4 = TEXT_DECODER_UTF8.decode(new Uint8Array(memory0.buffer, ptr4, len4));
           variant8= {
             tag: 'overflow',
             val: result4
@@ -2706,7 +5059,7 @@ function decimalToInteger(arg0) {
         case 2: {
           var ptr5 = dataView(memory0).getUint32(ret + 12, true);
           var len5 = dataView(memory0).getUint32(ret + 16, true);
-          var result5 = utf8Decoder.decode(new Uint8Array(memory0.buffer, ptr5, len5));
+          var result5 = TEXT_DECODER_UTF8.decode(new Uint8Array(memory0.buffer, ptr5, len5));
           variant8= {
             tag: 'div-by-zero',
             val: result5
@@ -2716,7 +5069,7 @@ function decimalToInteger(arg0) {
         case 3: {
           var ptr6 = dataView(memory0).getUint32(ret + 12, true);
           var len6 = dataView(memory0).getUint32(ret + 16, true);
-          var result6 = utf8Decoder.decode(new Uint8Array(memory0.buffer, ptr6, len6));
+          var result6 = TEXT_DECODER_UTF8.decode(new Uint8Array(memory0.buffer, ptr6, len6));
           variant8= {
             tag: 'syntax',
             val: result6
@@ -2726,7 +5079,7 @@ function decimalToInteger(arg0) {
         case 4: {
           var ptr7 = dataView(memory0).getUint32(ret + 12, true);
           var len7 = dataView(memory0).getUint32(ret + 16, true);
-          var result7 = utf8Decoder.decode(new Uint8Array(memory0.buffer, ptr7, len7));
+          var result7 = TEXT_DECODER_UTF8.decode(new Uint8Array(memory0.buffer, ptr7, len7));
           variant8= {
             tag: 'validation',
             val: result7
@@ -2754,11 +5107,13 @@ function decimalToInteger(arg0) {
     postReturn: true
   });
   const retCopy = variant9;
+  task.resolve([retCopy.val]);
   
   let cstate = getOrCreateAsyncState(0);
   cstate.mayLeave = false;
   postReturn3(ret);
   cstate.mayLeave = true;
+  task.exit();
   
   
   
@@ -2777,9 +5132,28 @@ function u64ToDecimal(arg0) {
     async: false,
     postReturn: true,
   });
-  const _wasm_call_currentTaskID = startCurrentTask(0, false, 'numericsU64ToDecimal');
-  const ret = numericsU64ToDecimal(toUint64(arg0));
-  endCurrentTask(0);
+  const hostProvided = false;
+  
+  const [task, _wasm_call_currentTaskID] = createNewCurrentTask({
+    componentIdx: 0,
+    isAsync: false,
+    isManualAsync: false,
+    entryFnName: 'numericsU64ToDecimal',
+    getCallbackFn: () => null,
+    callbackFnName: 'null',
+    errHandling: 'throw-result-err',
+    callingWasmExport: true,
+  });
+  
+  const started = task.enterSync();
+  task.setReturnMemoryIdx(0);
+  task.setReturnMemory(memory0);
+  let ret =   _withGlobalCurrentTaskMeta({
+    taskID: task.id(),
+    componentIdx: task.componentIdx(),
+    fn: () => numericsU64ToDecimal(toUint64(arg0)),
+  });
+  
   let variant7;
   switch (dataView(memory0).getUint8(ret + 0, true)) {
     case 0: {
@@ -2800,10 +5174,10 @@ function u64ToDecimal(arg0) {
       variant7= {
         tag: 'ok',
         val: {
-          r0: BigInt.asUintN(64, dataView(memory0).getBigInt64(ret + 8, true)),
-          r1: BigInt.asUintN(64, dataView(memory0).getBigInt64(ret + 16, true)),
-          r2: BigInt.asUintN(64, dataView(memory0).getBigInt64(ret + 24, true)),
-          r3: BigInt.asUintN(64, dataView(memory0).getBigInt64(ret + 32, true)),
+          r0: BigInt.asUintN(64, BigInt(dataView(memory0).getBigInt64(ret + 8, true))),
+          r1: BigInt.asUintN(64, BigInt(dataView(memory0).getBigInt64(ret + 16, true))),
+          r2: BigInt.asUintN(64, BigInt(dataView(memory0).getBigInt64(ret + 24, true))),
+          r3: BigInt.asUintN(64, BigInt(dataView(memory0).getBigInt64(ret + 32, true))),
           sign: enum0,
         }
       };
@@ -2815,7 +5189,7 @@ function u64ToDecimal(arg0) {
         case 0: {
           var ptr1 = dataView(memory0).getUint32(ret + 12, true);
           var len1 = dataView(memory0).getUint32(ret + 16, true);
-          var result1 = utf8Decoder.decode(new Uint8Array(memory0.buffer, ptr1, len1));
+          var result1 = TEXT_DECODER_UTF8.decode(new Uint8Array(memory0.buffer, ptr1, len1));
           variant6= {
             tag: 'message',
             val: result1
@@ -2825,7 +5199,7 @@ function u64ToDecimal(arg0) {
         case 1: {
           var ptr2 = dataView(memory0).getUint32(ret + 12, true);
           var len2 = dataView(memory0).getUint32(ret + 16, true);
-          var result2 = utf8Decoder.decode(new Uint8Array(memory0.buffer, ptr2, len2));
+          var result2 = TEXT_DECODER_UTF8.decode(new Uint8Array(memory0.buffer, ptr2, len2));
           variant6= {
             tag: 'overflow',
             val: result2
@@ -2835,7 +5209,7 @@ function u64ToDecimal(arg0) {
         case 2: {
           var ptr3 = dataView(memory0).getUint32(ret + 12, true);
           var len3 = dataView(memory0).getUint32(ret + 16, true);
-          var result3 = utf8Decoder.decode(new Uint8Array(memory0.buffer, ptr3, len3));
+          var result3 = TEXT_DECODER_UTF8.decode(new Uint8Array(memory0.buffer, ptr3, len3));
           variant6= {
             tag: 'div-by-zero',
             val: result3
@@ -2845,7 +5219,7 @@ function u64ToDecimal(arg0) {
         case 3: {
           var ptr4 = dataView(memory0).getUint32(ret + 12, true);
           var len4 = dataView(memory0).getUint32(ret + 16, true);
-          var result4 = utf8Decoder.decode(new Uint8Array(memory0.buffer, ptr4, len4));
+          var result4 = TEXT_DECODER_UTF8.decode(new Uint8Array(memory0.buffer, ptr4, len4));
           variant6= {
             tag: 'syntax',
             val: result4
@@ -2855,7 +5229,7 @@ function u64ToDecimal(arg0) {
         case 4: {
           var ptr5 = dataView(memory0).getUint32(ret + 12, true);
           var len5 = dataView(memory0).getUint32(ret + 16, true);
-          var result5 = utf8Decoder.decode(new Uint8Array(memory0.buffer, ptr5, len5));
+          var result5 = TEXT_DECODER_UTF8.decode(new Uint8Array(memory0.buffer, ptr5, len5));
           variant6= {
             tag: 'validation',
             val: result5
@@ -2883,11 +5257,13 @@ function u64ToDecimal(arg0) {
     postReturn: true
   });
   const retCopy = variant7;
+  task.resolve([retCopy.val]);
   
   let cstate = getOrCreateAsyncState(0);
   cstate.mayLeave = false;
   postReturn3(ret);
   cstate.mayLeave = true;
+  task.exit();
   
   
   
@@ -2906,9 +5282,28 @@ function s64ToDecimal(arg0) {
     async: false,
     postReturn: true,
   });
-  const _wasm_call_currentTaskID = startCurrentTask(0, false, 'numericsS64ToDecimal');
-  const ret = numericsS64ToDecimal(toInt64(arg0));
-  endCurrentTask(0);
+  const hostProvided = false;
+  
+  const [task, _wasm_call_currentTaskID] = createNewCurrentTask({
+    componentIdx: 0,
+    isAsync: false,
+    isManualAsync: false,
+    entryFnName: 'numericsS64ToDecimal',
+    getCallbackFn: () => null,
+    callbackFnName: 'null',
+    errHandling: 'throw-result-err',
+    callingWasmExport: true,
+  });
+  
+  const started = task.enterSync();
+  task.setReturnMemoryIdx(0);
+  task.setReturnMemory(memory0);
+  let ret =   _withGlobalCurrentTaskMeta({
+    taskID: task.id(),
+    componentIdx: task.componentIdx(),
+    fn: () => numericsS64ToDecimal(toInt64(arg0)),
+  });
+  
   let variant7;
   switch (dataView(memory0).getUint8(ret + 0, true)) {
     case 0: {
@@ -2929,10 +5324,10 @@ function s64ToDecimal(arg0) {
       variant7= {
         tag: 'ok',
         val: {
-          r0: BigInt.asUintN(64, dataView(memory0).getBigInt64(ret + 8, true)),
-          r1: BigInt.asUintN(64, dataView(memory0).getBigInt64(ret + 16, true)),
-          r2: BigInt.asUintN(64, dataView(memory0).getBigInt64(ret + 24, true)),
-          r3: BigInt.asUintN(64, dataView(memory0).getBigInt64(ret + 32, true)),
+          r0: BigInt.asUintN(64, BigInt(dataView(memory0).getBigInt64(ret + 8, true))),
+          r1: BigInt.asUintN(64, BigInt(dataView(memory0).getBigInt64(ret + 16, true))),
+          r2: BigInt.asUintN(64, BigInt(dataView(memory0).getBigInt64(ret + 24, true))),
+          r3: BigInt.asUintN(64, BigInt(dataView(memory0).getBigInt64(ret + 32, true))),
           sign: enum0,
         }
       };
@@ -2944,7 +5339,7 @@ function s64ToDecimal(arg0) {
         case 0: {
           var ptr1 = dataView(memory0).getUint32(ret + 12, true);
           var len1 = dataView(memory0).getUint32(ret + 16, true);
-          var result1 = utf8Decoder.decode(new Uint8Array(memory0.buffer, ptr1, len1));
+          var result1 = TEXT_DECODER_UTF8.decode(new Uint8Array(memory0.buffer, ptr1, len1));
           variant6= {
             tag: 'message',
             val: result1
@@ -2954,7 +5349,7 @@ function s64ToDecimal(arg0) {
         case 1: {
           var ptr2 = dataView(memory0).getUint32(ret + 12, true);
           var len2 = dataView(memory0).getUint32(ret + 16, true);
-          var result2 = utf8Decoder.decode(new Uint8Array(memory0.buffer, ptr2, len2));
+          var result2 = TEXT_DECODER_UTF8.decode(new Uint8Array(memory0.buffer, ptr2, len2));
           variant6= {
             tag: 'overflow',
             val: result2
@@ -2964,7 +5359,7 @@ function s64ToDecimal(arg0) {
         case 2: {
           var ptr3 = dataView(memory0).getUint32(ret + 12, true);
           var len3 = dataView(memory0).getUint32(ret + 16, true);
-          var result3 = utf8Decoder.decode(new Uint8Array(memory0.buffer, ptr3, len3));
+          var result3 = TEXT_DECODER_UTF8.decode(new Uint8Array(memory0.buffer, ptr3, len3));
           variant6= {
             tag: 'div-by-zero',
             val: result3
@@ -2974,7 +5369,7 @@ function s64ToDecimal(arg0) {
         case 3: {
           var ptr4 = dataView(memory0).getUint32(ret + 12, true);
           var len4 = dataView(memory0).getUint32(ret + 16, true);
-          var result4 = utf8Decoder.decode(new Uint8Array(memory0.buffer, ptr4, len4));
+          var result4 = TEXT_DECODER_UTF8.decode(new Uint8Array(memory0.buffer, ptr4, len4));
           variant6= {
             tag: 'syntax',
             val: result4
@@ -2984,7 +5379,7 @@ function s64ToDecimal(arg0) {
         case 4: {
           var ptr5 = dataView(memory0).getUint32(ret + 12, true);
           var len5 = dataView(memory0).getUint32(ret + 16, true);
-          var result5 = utf8Decoder.decode(new Uint8Array(memory0.buffer, ptr5, len5));
+          var result5 = TEXT_DECODER_UTF8.decode(new Uint8Array(memory0.buffer, ptr5, len5));
           variant6= {
             tag: 'validation',
             val: result5
@@ -3012,11 +5407,13 @@ function s64ToDecimal(arg0) {
     postReturn: true
   });
   const retCopy = variant7;
+  task.resolve([retCopy.val]);
   
   let cstate = getOrCreateAsyncState(0);
   cstate.mayLeave = false;
   postReturn3(ret);
   cstate.mayLeave = true;
+  task.exit();
   
   
   
@@ -3035,9 +5432,28 @@ function f64ToDecimal(arg0) {
     async: false,
     postReturn: true,
   });
-  const _wasm_call_currentTaskID = startCurrentTask(0, false, 'numericsF64ToDecimal');
-  const ret = numericsF64ToDecimal(+arg0);
-  endCurrentTask(0);
+  const hostProvided = false;
+  
+  const [task, _wasm_call_currentTaskID] = createNewCurrentTask({
+    componentIdx: 0,
+    isAsync: false,
+    isManualAsync: false,
+    entryFnName: 'numericsF64ToDecimal',
+    getCallbackFn: () => null,
+    callbackFnName: 'null',
+    errHandling: 'throw-result-err',
+    callingWasmExport: true,
+  });
+  
+  const started = task.enterSync();
+  task.setReturnMemoryIdx(0);
+  task.setReturnMemory(memory0);
+  let ret =   _withGlobalCurrentTaskMeta({
+    taskID: task.id(),
+    componentIdx: task.componentIdx(),
+    fn: () => numericsF64ToDecimal(+arg0),
+  });
+  
   let variant7;
   switch (dataView(memory0).getUint8(ret + 0, true)) {
     case 0: {
@@ -3058,10 +5474,10 @@ function f64ToDecimal(arg0) {
       variant7= {
         tag: 'ok',
         val: {
-          r0: BigInt.asUintN(64, dataView(memory0).getBigInt64(ret + 8, true)),
-          r1: BigInt.asUintN(64, dataView(memory0).getBigInt64(ret + 16, true)),
-          r2: BigInt.asUintN(64, dataView(memory0).getBigInt64(ret + 24, true)),
-          r3: BigInt.asUintN(64, dataView(memory0).getBigInt64(ret + 32, true)),
+          r0: BigInt.asUintN(64, BigInt(dataView(memory0).getBigInt64(ret + 8, true))),
+          r1: BigInt.asUintN(64, BigInt(dataView(memory0).getBigInt64(ret + 16, true))),
+          r2: BigInt.asUintN(64, BigInt(dataView(memory0).getBigInt64(ret + 24, true))),
+          r3: BigInt.asUintN(64, BigInt(dataView(memory0).getBigInt64(ret + 32, true))),
           sign: enum0,
         }
       };
@@ -3073,7 +5489,7 @@ function f64ToDecimal(arg0) {
         case 0: {
           var ptr1 = dataView(memory0).getUint32(ret + 12, true);
           var len1 = dataView(memory0).getUint32(ret + 16, true);
-          var result1 = utf8Decoder.decode(new Uint8Array(memory0.buffer, ptr1, len1));
+          var result1 = TEXT_DECODER_UTF8.decode(new Uint8Array(memory0.buffer, ptr1, len1));
           variant6= {
             tag: 'message',
             val: result1
@@ -3083,7 +5499,7 @@ function f64ToDecimal(arg0) {
         case 1: {
           var ptr2 = dataView(memory0).getUint32(ret + 12, true);
           var len2 = dataView(memory0).getUint32(ret + 16, true);
-          var result2 = utf8Decoder.decode(new Uint8Array(memory0.buffer, ptr2, len2));
+          var result2 = TEXT_DECODER_UTF8.decode(new Uint8Array(memory0.buffer, ptr2, len2));
           variant6= {
             tag: 'overflow',
             val: result2
@@ -3093,7 +5509,7 @@ function f64ToDecimal(arg0) {
         case 2: {
           var ptr3 = dataView(memory0).getUint32(ret + 12, true);
           var len3 = dataView(memory0).getUint32(ret + 16, true);
-          var result3 = utf8Decoder.decode(new Uint8Array(memory0.buffer, ptr3, len3));
+          var result3 = TEXT_DECODER_UTF8.decode(new Uint8Array(memory0.buffer, ptr3, len3));
           variant6= {
             tag: 'div-by-zero',
             val: result3
@@ -3103,7 +5519,7 @@ function f64ToDecimal(arg0) {
         case 3: {
           var ptr4 = dataView(memory0).getUint32(ret + 12, true);
           var len4 = dataView(memory0).getUint32(ret + 16, true);
-          var result4 = utf8Decoder.decode(new Uint8Array(memory0.buffer, ptr4, len4));
+          var result4 = TEXT_DECODER_UTF8.decode(new Uint8Array(memory0.buffer, ptr4, len4));
           variant6= {
             tag: 'syntax',
             val: result4
@@ -3113,7 +5529,7 @@ function f64ToDecimal(arg0) {
         case 4: {
           var ptr5 = dataView(memory0).getUint32(ret + 12, true);
           var len5 = dataView(memory0).getUint32(ret + 16, true);
-          var result5 = utf8Decoder.decode(new Uint8Array(memory0.buffer, ptr5, len5));
+          var result5 = TEXT_DECODER_UTF8.decode(new Uint8Array(memory0.buffer, ptr5, len5));
           variant6= {
             tag: 'validation',
             val: result5
@@ -3141,11 +5557,13 @@ function f64ToDecimal(arg0) {
     postReturn: true
   });
   const retCopy = variant7;
+  task.resolve([retCopy.val]);
   
   let cstate = getOrCreateAsyncState(0);
   cstate.mayLeave = false;
   postReturn3(ret);
   cstate.mayLeave = true;
+  task.exit();
   
   
   
@@ -3158,17 +5576,39 @@ function f64ToDecimal(arg0) {
 let numericsStringToDecimal;
 
 function stringToDecimal(arg0) {
-  var ptr0 = utf8Encode(arg0, realloc0, memory0);
-  var len0 = utf8EncodedLen;
+  
+  var encodeRes = _utf8AllocateAndEncode(arg0, realloc0, memory0);
+  var ptr0= encodeRes.ptr;
+  var len0 = encodeRes.len;
+  
   _debugLog('[iface="root:component/numerics", function="string-to-decimal"][Instruction::CallWasm] enter', {
     funcName: 'string-to-decimal',
     paramCount: 2,
     async: false,
     postReturn: true,
   });
-  const _wasm_call_currentTaskID = startCurrentTask(0, false, 'numericsStringToDecimal');
-  const ret = numericsStringToDecimal(ptr0, len0);
-  endCurrentTask(0);
+  const hostProvided = false;
+  
+  const [task, _wasm_call_currentTaskID] = createNewCurrentTask({
+    componentIdx: 0,
+    isAsync: false,
+    isManualAsync: false,
+    entryFnName: 'numericsStringToDecimal',
+    getCallbackFn: () => null,
+    callbackFnName: 'null',
+    errHandling: 'throw-result-err',
+    callingWasmExport: true,
+  });
+  
+  const started = task.enterSync();
+  task.setReturnMemoryIdx(0);
+  task.setReturnMemory(memory0);
+  let ret =   _withGlobalCurrentTaskMeta({
+    taskID: task.id(),
+    componentIdx: task.componentIdx(),
+    fn: () => numericsStringToDecimal(ptr0, len0),
+  });
+  
   let variant8;
   switch (dataView(memory0).getUint8(ret + 0, true)) {
     case 0: {
@@ -3189,10 +5629,10 @@ function stringToDecimal(arg0) {
       variant8= {
         tag: 'ok',
         val: {
-          r0: BigInt.asUintN(64, dataView(memory0).getBigInt64(ret + 8, true)),
-          r1: BigInt.asUintN(64, dataView(memory0).getBigInt64(ret + 16, true)),
-          r2: BigInt.asUintN(64, dataView(memory0).getBigInt64(ret + 24, true)),
-          r3: BigInt.asUintN(64, dataView(memory0).getBigInt64(ret + 32, true)),
+          r0: BigInt.asUintN(64, BigInt(dataView(memory0).getBigInt64(ret + 8, true))),
+          r1: BigInt.asUintN(64, BigInt(dataView(memory0).getBigInt64(ret + 16, true))),
+          r2: BigInt.asUintN(64, BigInt(dataView(memory0).getBigInt64(ret + 24, true))),
+          r3: BigInt.asUintN(64, BigInt(dataView(memory0).getBigInt64(ret + 32, true))),
           sign: enum1,
         }
       };
@@ -3204,7 +5644,7 @@ function stringToDecimal(arg0) {
         case 0: {
           var ptr2 = dataView(memory0).getUint32(ret + 12, true);
           var len2 = dataView(memory0).getUint32(ret + 16, true);
-          var result2 = utf8Decoder.decode(new Uint8Array(memory0.buffer, ptr2, len2));
+          var result2 = TEXT_DECODER_UTF8.decode(new Uint8Array(memory0.buffer, ptr2, len2));
           variant7= {
             tag: 'message',
             val: result2
@@ -3214,7 +5654,7 @@ function stringToDecimal(arg0) {
         case 1: {
           var ptr3 = dataView(memory0).getUint32(ret + 12, true);
           var len3 = dataView(memory0).getUint32(ret + 16, true);
-          var result3 = utf8Decoder.decode(new Uint8Array(memory0.buffer, ptr3, len3));
+          var result3 = TEXT_DECODER_UTF8.decode(new Uint8Array(memory0.buffer, ptr3, len3));
           variant7= {
             tag: 'overflow',
             val: result3
@@ -3224,7 +5664,7 @@ function stringToDecimal(arg0) {
         case 2: {
           var ptr4 = dataView(memory0).getUint32(ret + 12, true);
           var len4 = dataView(memory0).getUint32(ret + 16, true);
-          var result4 = utf8Decoder.decode(new Uint8Array(memory0.buffer, ptr4, len4));
+          var result4 = TEXT_DECODER_UTF8.decode(new Uint8Array(memory0.buffer, ptr4, len4));
           variant7= {
             tag: 'div-by-zero',
             val: result4
@@ -3234,7 +5674,7 @@ function stringToDecimal(arg0) {
         case 3: {
           var ptr5 = dataView(memory0).getUint32(ret + 12, true);
           var len5 = dataView(memory0).getUint32(ret + 16, true);
-          var result5 = utf8Decoder.decode(new Uint8Array(memory0.buffer, ptr5, len5));
+          var result5 = TEXT_DECODER_UTF8.decode(new Uint8Array(memory0.buffer, ptr5, len5));
           variant7= {
             tag: 'syntax',
             val: result5
@@ -3244,7 +5684,7 @@ function stringToDecimal(arg0) {
         case 4: {
           var ptr6 = dataView(memory0).getUint32(ret + 12, true);
           var len6 = dataView(memory0).getUint32(ret + 16, true);
-          var result6 = utf8Decoder.decode(new Uint8Array(memory0.buffer, ptr6, len6));
+          var result6 = TEXT_DECODER_UTF8.decode(new Uint8Array(memory0.buffer, ptr6, len6));
           variant7= {
             tag: 'validation',
             val: result6
@@ -3272,11 +5712,13 @@ function stringToDecimal(arg0) {
     postReturn: true
   });
   const retCopy = variant8;
+  task.resolve([retCopy.val]);
   
   let cstate = getOrCreateAsyncState(0);
   cstate.mayLeave = false;
   postReturn3(ret);
   cstate.mayLeave = true;
+  task.exit();
   
   
   
@@ -3315,24 +5757,45 @@ function decimalToString(arg0) {
     async: false,
     postReturn: true,
   });
-  const _wasm_call_currentTaskID = startCurrentTask(0, false, 'numericsDecimalToString');
-  const ret = numericsDecimalToString(toUint64(v0_0), toUint64(v0_1), toUint64(v0_2), toUint64(v0_3), enum1);
-  endCurrentTask(0);
+  const hostProvided = false;
+  
+  const [task, _wasm_call_currentTaskID] = createNewCurrentTask({
+    componentIdx: 0,
+    isAsync: false,
+    isManualAsync: false,
+    entryFnName: 'numericsDecimalToString',
+    getCallbackFn: () => null,
+    callbackFnName: 'null',
+    errHandling: 'none',
+    callingWasmExport: true,
+  });
+  
+  const started = task.enterSync();
+  task.setReturnMemoryIdx(0);
+  task.setReturnMemory(memory0);
+  let ret =   _withGlobalCurrentTaskMeta({
+    taskID: task.id(),
+    componentIdx: task.componentIdx(),
+    fn: () => numericsDecimalToString(toUint64(v0_0), toUint64(v0_1), toUint64(v0_2), toUint64(v0_3), enum1),
+  });
+  
   var ptr2 = dataView(memory0).getUint32(ret + 0, true);
   var len2 = dataView(memory0).getUint32(ret + 4, true);
-  var result2 = utf8Decoder.decode(new Uint8Array(memory0.buffer, ptr2, len2));
+  var result2 = TEXT_DECODER_UTF8.decode(new Uint8Array(memory0.buffer, ptr2, len2));
   _debugLog('[iface="root:component/numerics", function="decimal-to-string"][Instruction::Return]', {
     funcName: 'decimal-to-string',
     paramCount: 1,
     async: false,
     postReturn: true
   });
+  task.resolve([result2]);
   const retCopy = result2;
   
   let cstate = getOrCreateAsyncState(0);
   cstate.mayLeave = false;
   postReturn0(ret);
   cstate.mayLeave = true;
+  task.exit();
   return retCopy;
   
 }
@@ -3385,9 +5848,28 @@ function eqDecimal(arg0, arg1) {
     async: false,
     postReturn: true,
   });
-  const _wasm_call_currentTaskID = startCurrentTask(0, false, 'numericsEqDecimal');
-  const ret = numericsEqDecimal(toUint64(v0_0), toUint64(v0_1), toUint64(v0_2), toUint64(v0_3), enum1, toUint64(v2_0), toUint64(v2_1), toUint64(v2_2), toUint64(v2_3), enum3);
-  endCurrentTask(0);
+  const hostProvided = false;
+  
+  const [task, _wasm_call_currentTaskID] = createNewCurrentTask({
+    componentIdx: 0,
+    isAsync: false,
+    isManualAsync: false,
+    entryFnName: 'numericsEqDecimal',
+    getCallbackFn: () => null,
+    callbackFnName: 'null',
+    errHandling: 'throw-result-err',
+    callingWasmExport: true,
+  });
+  
+  const started = task.enterSync();
+  task.setReturnMemoryIdx(0);
+  task.setReturnMemory(memory0);
+  let ret =   _withGlobalCurrentTaskMeta({
+    taskID: task.id(),
+    componentIdx: task.componentIdx(),
+    fn: () => numericsEqDecimal(toUint64(v0_0), toUint64(v0_1), toUint64(v0_2), toUint64(v0_3), enum1, toUint64(v2_0), toUint64(v2_1), toUint64(v2_2), toUint64(v2_3), enum3),
+  });
+  
   let variant11;
   switch (dataView(memory0).getUint8(ret + 0, true)) {
     case 0: {
@@ -3404,7 +5886,7 @@ function eqDecimal(arg0, arg1) {
         case 0: {
           var ptr5 = dataView(memory0).getUint32(ret + 8, true);
           var len5 = dataView(memory0).getUint32(ret + 12, true);
-          var result5 = utf8Decoder.decode(new Uint8Array(memory0.buffer, ptr5, len5));
+          var result5 = TEXT_DECODER_UTF8.decode(new Uint8Array(memory0.buffer, ptr5, len5));
           variant10= {
             tag: 'message',
             val: result5
@@ -3414,7 +5896,7 @@ function eqDecimal(arg0, arg1) {
         case 1: {
           var ptr6 = dataView(memory0).getUint32(ret + 8, true);
           var len6 = dataView(memory0).getUint32(ret + 12, true);
-          var result6 = utf8Decoder.decode(new Uint8Array(memory0.buffer, ptr6, len6));
+          var result6 = TEXT_DECODER_UTF8.decode(new Uint8Array(memory0.buffer, ptr6, len6));
           variant10= {
             tag: 'overflow',
             val: result6
@@ -3424,7 +5906,7 @@ function eqDecimal(arg0, arg1) {
         case 2: {
           var ptr7 = dataView(memory0).getUint32(ret + 8, true);
           var len7 = dataView(memory0).getUint32(ret + 12, true);
-          var result7 = utf8Decoder.decode(new Uint8Array(memory0.buffer, ptr7, len7));
+          var result7 = TEXT_DECODER_UTF8.decode(new Uint8Array(memory0.buffer, ptr7, len7));
           variant10= {
             tag: 'div-by-zero',
             val: result7
@@ -3434,7 +5916,7 @@ function eqDecimal(arg0, arg1) {
         case 3: {
           var ptr8 = dataView(memory0).getUint32(ret + 8, true);
           var len8 = dataView(memory0).getUint32(ret + 12, true);
-          var result8 = utf8Decoder.decode(new Uint8Array(memory0.buffer, ptr8, len8));
+          var result8 = TEXT_DECODER_UTF8.decode(new Uint8Array(memory0.buffer, ptr8, len8));
           variant10= {
             tag: 'syntax',
             val: result8
@@ -3444,7 +5926,7 @@ function eqDecimal(arg0, arg1) {
         case 4: {
           var ptr9 = dataView(memory0).getUint32(ret + 8, true);
           var len9 = dataView(memory0).getUint32(ret + 12, true);
-          var result9 = utf8Decoder.decode(new Uint8Array(memory0.buffer, ptr9, len9));
+          var result9 = TEXT_DECODER_UTF8.decode(new Uint8Array(memory0.buffer, ptr9, len9));
           variant10= {
             tag: 'validation',
             val: result9
@@ -3472,11 +5954,13 @@ function eqDecimal(arg0, arg1) {
     postReturn: true
   });
   const retCopy = variant11;
+  task.resolve([retCopy.val]);
   
   let cstate = getOrCreateAsyncState(0);
   cstate.mayLeave = false;
   postReturn4(ret);
   cstate.mayLeave = true;
+  task.exit();
   
   
   
@@ -3535,9 +6019,26 @@ function cmpDecimal(arg0, arg1) {
     async: false,
     postReturn: false,
   });
-  const _wasm_call_currentTaskID = startCurrentTask(0, false, 'numericsCmpDecimal');
-  const ret = numericsCmpDecimal(toUint64(v0_0), toUint64(v0_1), toUint64(v0_2), toUint64(v0_3), enum1, toUint64(v2_0), toUint64(v2_1), toUint64(v2_2), toUint64(v2_3), enum3);
-  endCurrentTask(0);
+  const hostProvided = false;
+  
+  const [task, _wasm_call_currentTaskID] = createNewCurrentTask({
+    componentIdx: 0,
+    isAsync: false,
+    isManualAsync: false,
+    entryFnName: 'numericsCmpDecimal',
+    getCallbackFn: () => null,
+    callbackFnName: 'null',
+    errHandling: 'none',
+    callingWasmExport: true,
+  });
+  
+  const started = task.enterSync();
+  let ret =   _withGlobalCurrentTaskMeta({
+    taskID: task.id(),
+    componentIdx: task.componentIdx(),
+    fn: () => numericsCmpDecimal(toUint64(v0_0), toUint64(v0_1), toUint64(v0_2), toUint64(v0_3), enum1, toUint64(v2_0), toUint64(v2_1), toUint64(v2_2), toUint64(v2_3), enum3),
+  });
+  
   let enum4;
   switch (ret) {
     case 0: {
@@ -3562,6 +6063,8 @@ function cmpDecimal(arg0, arg1) {
     async: false,
     postReturn: false
   });
+  task.resolve([enum4]);
+  task.exit();
   return enum4;
 }
 let numericsAddDecimal;
@@ -3613,9 +6116,28 @@ function addDecimal(arg0, arg1) {
     async: false,
     postReturn: true,
   });
-  const _wasm_call_currentTaskID = startCurrentTask(0, false, 'numericsAddDecimal');
-  const ret = numericsAddDecimal(toUint64(v0_0), toUint64(v0_1), toUint64(v0_2), toUint64(v0_3), enum1, toUint64(v2_0), toUint64(v2_1), toUint64(v2_2), toUint64(v2_3), enum3);
-  endCurrentTask(0);
+  const hostProvided = false;
+  
+  const [task, _wasm_call_currentTaskID] = createNewCurrentTask({
+    componentIdx: 0,
+    isAsync: false,
+    isManualAsync: false,
+    entryFnName: 'numericsAddDecimal',
+    getCallbackFn: () => null,
+    callbackFnName: 'null',
+    errHandling: 'throw-result-err',
+    callingWasmExport: true,
+  });
+  
+  const started = task.enterSync();
+  task.setReturnMemoryIdx(0);
+  task.setReturnMemory(memory0);
+  let ret =   _withGlobalCurrentTaskMeta({
+    taskID: task.id(),
+    componentIdx: task.componentIdx(),
+    fn: () => numericsAddDecimal(toUint64(v0_0), toUint64(v0_1), toUint64(v0_2), toUint64(v0_3), enum1, toUint64(v2_0), toUint64(v2_1), toUint64(v2_2), toUint64(v2_3), enum3),
+  });
+  
   let variant11;
   switch (dataView(memory0).getUint8(ret + 0, true)) {
     case 0: {
@@ -3636,10 +6158,10 @@ function addDecimal(arg0, arg1) {
       variant11= {
         tag: 'ok',
         val: {
-          r0: BigInt.asUintN(64, dataView(memory0).getBigInt64(ret + 8, true)),
-          r1: BigInt.asUintN(64, dataView(memory0).getBigInt64(ret + 16, true)),
-          r2: BigInt.asUintN(64, dataView(memory0).getBigInt64(ret + 24, true)),
-          r3: BigInt.asUintN(64, dataView(memory0).getBigInt64(ret + 32, true)),
+          r0: BigInt.asUintN(64, BigInt(dataView(memory0).getBigInt64(ret + 8, true))),
+          r1: BigInt.asUintN(64, BigInt(dataView(memory0).getBigInt64(ret + 16, true))),
+          r2: BigInt.asUintN(64, BigInt(dataView(memory0).getBigInt64(ret + 24, true))),
+          r3: BigInt.asUintN(64, BigInt(dataView(memory0).getBigInt64(ret + 32, true))),
           sign: enum4,
         }
       };
@@ -3651,7 +6173,7 @@ function addDecimal(arg0, arg1) {
         case 0: {
           var ptr5 = dataView(memory0).getUint32(ret + 12, true);
           var len5 = dataView(memory0).getUint32(ret + 16, true);
-          var result5 = utf8Decoder.decode(new Uint8Array(memory0.buffer, ptr5, len5));
+          var result5 = TEXT_DECODER_UTF8.decode(new Uint8Array(memory0.buffer, ptr5, len5));
           variant10= {
             tag: 'message',
             val: result5
@@ -3661,7 +6183,7 @@ function addDecimal(arg0, arg1) {
         case 1: {
           var ptr6 = dataView(memory0).getUint32(ret + 12, true);
           var len6 = dataView(memory0).getUint32(ret + 16, true);
-          var result6 = utf8Decoder.decode(new Uint8Array(memory0.buffer, ptr6, len6));
+          var result6 = TEXT_DECODER_UTF8.decode(new Uint8Array(memory0.buffer, ptr6, len6));
           variant10= {
             tag: 'overflow',
             val: result6
@@ -3671,7 +6193,7 @@ function addDecimal(arg0, arg1) {
         case 2: {
           var ptr7 = dataView(memory0).getUint32(ret + 12, true);
           var len7 = dataView(memory0).getUint32(ret + 16, true);
-          var result7 = utf8Decoder.decode(new Uint8Array(memory0.buffer, ptr7, len7));
+          var result7 = TEXT_DECODER_UTF8.decode(new Uint8Array(memory0.buffer, ptr7, len7));
           variant10= {
             tag: 'div-by-zero',
             val: result7
@@ -3681,7 +6203,7 @@ function addDecimal(arg0, arg1) {
         case 3: {
           var ptr8 = dataView(memory0).getUint32(ret + 12, true);
           var len8 = dataView(memory0).getUint32(ret + 16, true);
-          var result8 = utf8Decoder.decode(new Uint8Array(memory0.buffer, ptr8, len8));
+          var result8 = TEXT_DECODER_UTF8.decode(new Uint8Array(memory0.buffer, ptr8, len8));
           variant10= {
             tag: 'syntax',
             val: result8
@@ -3691,7 +6213,7 @@ function addDecimal(arg0, arg1) {
         case 4: {
           var ptr9 = dataView(memory0).getUint32(ret + 12, true);
           var len9 = dataView(memory0).getUint32(ret + 16, true);
-          var result9 = utf8Decoder.decode(new Uint8Array(memory0.buffer, ptr9, len9));
+          var result9 = TEXT_DECODER_UTF8.decode(new Uint8Array(memory0.buffer, ptr9, len9));
           variant10= {
             tag: 'validation',
             val: result9
@@ -3719,11 +6241,13 @@ function addDecimal(arg0, arg1) {
     postReturn: true
   });
   const retCopy = variant11;
+  task.resolve([retCopy.val]);
   
   let cstate = getOrCreateAsyncState(0);
   cstate.mayLeave = false;
   postReturn3(ret);
   cstate.mayLeave = true;
+  task.exit();
   
   
   
@@ -3782,9 +6306,28 @@ function subDecimal(arg0, arg1) {
     async: false,
     postReturn: true,
   });
-  const _wasm_call_currentTaskID = startCurrentTask(0, false, 'numericsSubDecimal');
-  const ret = numericsSubDecimal(toUint64(v0_0), toUint64(v0_1), toUint64(v0_2), toUint64(v0_3), enum1, toUint64(v2_0), toUint64(v2_1), toUint64(v2_2), toUint64(v2_3), enum3);
-  endCurrentTask(0);
+  const hostProvided = false;
+  
+  const [task, _wasm_call_currentTaskID] = createNewCurrentTask({
+    componentIdx: 0,
+    isAsync: false,
+    isManualAsync: false,
+    entryFnName: 'numericsSubDecimal',
+    getCallbackFn: () => null,
+    callbackFnName: 'null',
+    errHandling: 'throw-result-err',
+    callingWasmExport: true,
+  });
+  
+  const started = task.enterSync();
+  task.setReturnMemoryIdx(0);
+  task.setReturnMemory(memory0);
+  let ret =   _withGlobalCurrentTaskMeta({
+    taskID: task.id(),
+    componentIdx: task.componentIdx(),
+    fn: () => numericsSubDecimal(toUint64(v0_0), toUint64(v0_1), toUint64(v0_2), toUint64(v0_3), enum1, toUint64(v2_0), toUint64(v2_1), toUint64(v2_2), toUint64(v2_3), enum3),
+  });
+  
   let variant11;
   switch (dataView(memory0).getUint8(ret + 0, true)) {
     case 0: {
@@ -3805,10 +6348,10 @@ function subDecimal(arg0, arg1) {
       variant11= {
         tag: 'ok',
         val: {
-          r0: BigInt.asUintN(64, dataView(memory0).getBigInt64(ret + 8, true)),
-          r1: BigInt.asUintN(64, dataView(memory0).getBigInt64(ret + 16, true)),
-          r2: BigInt.asUintN(64, dataView(memory0).getBigInt64(ret + 24, true)),
-          r3: BigInt.asUintN(64, dataView(memory0).getBigInt64(ret + 32, true)),
+          r0: BigInt.asUintN(64, BigInt(dataView(memory0).getBigInt64(ret + 8, true))),
+          r1: BigInt.asUintN(64, BigInt(dataView(memory0).getBigInt64(ret + 16, true))),
+          r2: BigInt.asUintN(64, BigInt(dataView(memory0).getBigInt64(ret + 24, true))),
+          r3: BigInt.asUintN(64, BigInt(dataView(memory0).getBigInt64(ret + 32, true))),
           sign: enum4,
         }
       };
@@ -3820,7 +6363,7 @@ function subDecimal(arg0, arg1) {
         case 0: {
           var ptr5 = dataView(memory0).getUint32(ret + 12, true);
           var len5 = dataView(memory0).getUint32(ret + 16, true);
-          var result5 = utf8Decoder.decode(new Uint8Array(memory0.buffer, ptr5, len5));
+          var result5 = TEXT_DECODER_UTF8.decode(new Uint8Array(memory0.buffer, ptr5, len5));
           variant10= {
             tag: 'message',
             val: result5
@@ -3830,7 +6373,7 @@ function subDecimal(arg0, arg1) {
         case 1: {
           var ptr6 = dataView(memory0).getUint32(ret + 12, true);
           var len6 = dataView(memory0).getUint32(ret + 16, true);
-          var result6 = utf8Decoder.decode(new Uint8Array(memory0.buffer, ptr6, len6));
+          var result6 = TEXT_DECODER_UTF8.decode(new Uint8Array(memory0.buffer, ptr6, len6));
           variant10= {
             tag: 'overflow',
             val: result6
@@ -3840,7 +6383,7 @@ function subDecimal(arg0, arg1) {
         case 2: {
           var ptr7 = dataView(memory0).getUint32(ret + 12, true);
           var len7 = dataView(memory0).getUint32(ret + 16, true);
-          var result7 = utf8Decoder.decode(new Uint8Array(memory0.buffer, ptr7, len7));
+          var result7 = TEXT_DECODER_UTF8.decode(new Uint8Array(memory0.buffer, ptr7, len7));
           variant10= {
             tag: 'div-by-zero',
             val: result7
@@ -3850,7 +6393,7 @@ function subDecimal(arg0, arg1) {
         case 3: {
           var ptr8 = dataView(memory0).getUint32(ret + 12, true);
           var len8 = dataView(memory0).getUint32(ret + 16, true);
-          var result8 = utf8Decoder.decode(new Uint8Array(memory0.buffer, ptr8, len8));
+          var result8 = TEXT_DECODER_UTF8.decode(new Uint8Array(memory0.buffer, ptr8, len8));
           variant10= {
             tag: 'syntax',
             val: result8
@@ -3860,7 +6403,7 @@ function subDecimal(arg0, arg1) {
         case 4: {
           var ptr9 = dataView(memory0).getUint32(ret + 12, true);
           var len9 = dataView(memory0).getUint32(ret + 16, true);
-          var result9 = utf8Decoder.decode(new Uint8Array(memory0.buffer, ptr9, len9));
+          var result9 = TEXT_DECODER_UTF8.decode(new Uint8Array(memory0.buffer, ptr9, len9));
           variant10= {
             tag: 'validation',
             val: result9
@@ -3888,11 +6431,13 @@ function subDecimal(arg0, arg1) {
     postReturn: true
   });
   const retCopy = variant11;
+  task.resolve([retCopy.val]);
   
   let cstate = getOrCreateAsyncState(0);
   cstate.mayLeave = false;
   postReturn3(ret);
   cstate.mayLeave = true;
+  task.exit();
   
   
   
@@ -3951,9 +6496,28 @@ function mulDecimal(arg0, arg1) {
     async: false,
     postReturn: true,
   });
-  const _wasm_call_currentTaskID = startCurrentTask(0, false, 'numericsMulDecimal');
-  const ret = numericsMulDecimal(toUint64(v0_0), toUint64(v0_1), toUint64(v0_2), toUint64(v0_3), enum1, toUint64(v2_0), toUint64(v2_1), toUint64(v2_2), toUint64(v2_3), enum3);
-  endCurrentTask(0);
+  const hostProvided = false;
+  
+  const [task, _wasm_call_currentTaskID] = createNewCurrentTask({
+    componentIdx: 0,
+    isAsync: false,
+    isManualAsync: false,
+    entryFnName: 'numericsMulDecimal',
+    getCallbackFn: () => null,
+    callbackFnName: 'null',
+    errHandling: 'throw-result-err',
+    callingWasmExport: true,
+  });
+  
+  const started = task.enterSync();
+  task.setReturnMemoryIdx(0);
+  task.setReturnMemory(memory0);
+  let ret =   _withGlobalCurrentTaskMeta({
+    taskID: task.id(),
+    componentIdx: task.componentIdx(),
+    fn: () => numericsMulDecimal(toUint64(v0_0), toUint64(v0_1), toUint64(v0_2), toUint64(v0_3), enum1, toUint64(v2_0), toUint64(v2_1), toUint64(v2_2), toUint64(v2_3), enum3),
+  });
+  
   let variant11;
   switch (dataView(memory0).getUint8(ret + 0, true)) {
     case 0: {
@@ -3974,10 +6538,10 @@ function mulDecimal(arg0, arg1) {
       variant11= {
         tag: 'ok',
         val: {
-          r0: BigInt.asUintN(64, dataView(memory0).getBigInt64(ret + 8, true)),
-          r1: BigInt.asUintN(64, dataView(memory0).getBigInt64(ret + 16, true)),
-          r2: BigInt.asUintN(64, dataView(memory0).getBigInt64(ret + 24, true)),
-          r3: BigInt.asUintN(64, dataView(memory0).getBigInt64(ret + 32, true)),
+          r0: BigInt.asUintN(64, BigInt(dataView(memory0).getBigInt64(ret + 8, true))),
+          r1: BigInt.asUintN(64, BigInt(dataView(memory0).getBigInt64(ret + 16, true))),
+          r2: BigInt.asUintN(64, BigInt(dataView(memory0).getBigInt64(ret + 24, true))),
+          r3: BigInt.asUintN(64, BigInt(dataView(memory0).getBigInt64(ret + 32, true))),
           sign: enum4,
         }
       };
@@ -3989,7 +6553,7 @@ function mulDecimal(arg0, arg1) {
         case 0: {
           var ptr5 = dataView(memory0).getUint32(ret + 12, true);
           var len5 = dataView(memory0).getUint32(ret + 16, true);
-          var result5 = utf8Decoder.decode(new Uint8Array(memory0.buffer, ptr5, len5));
+          var result5 = TEXT_DECODER_UTF8.decode(new Uint8Array(memory0.buffer, ptr5, len5));
           variant10= {
             tag: 'message',
             val: result5
@@ -3999,7 +6563,7 @@ function mulDecimal(arg0, arg1) {
         case 1: {
           var ptr6 = dataView(memory0).getUint32(ret + 12, true);
           var len6 = dataView(memory0).getUint32(ret + 16, true);
-          var result6 = utf8Decoder.decode(new Uint8Array(memory0.buffer, ptr6, len6));
+          var result6 = TEXT_DECODER_UTF8.decode(new Uint8Array(memory0.buffer, ptr6, len6));
           variant10= {
             tag: 'overflow',
             val: result6
@@ -4009,7 +6573,7 @@ function mulDecimal(arg0, arg1) {
         case 2: {
           var ptr7 = dataView(memory0).getUint32(ret + 12, true);
           var len7 = dataView(memory0).getUint32(ret + 16, true);
-          var result7 = utf8Decoder.decode(new Uint8Array(memory0.buffer, ptr7, len7));
+          var result7 = TEXT_DECODER_UTF8.decode(new Uint8Array(memory0.buffer, ptr7, len7));
           variant10= {
             tag: 'div-by-zero',
             val: result7
@@ -4019,7 +6583,7 @@ function mulDecimal(arg0, arg1) {
         case 3: {
           var ptr8 = dataView(memory0).getUint32(ret + 12, true);
           var len8 = dataView(memory0).getUint32(ret + 16, true);
-          var result8 = utf8Decoder.decode(new Uint8Array(memory0.buffer, ptr8, len8));
+          var result8 = TEXT_DECODER_UTF8.decode(new Uint8Array(memory0.buffer, ptr8, len8));
           variant10= {
             tag: 'syntax',
             val: result8
@@ -4029,7 +6593,7 @@ function mulDecimal(arg0, arg1) {
         case 4: {
           var ptr9 = dataView(memory0).getUint32(ret + 12, true);
           var len9 = dataView(memory0).getUint32(ret + 16, true);
-          var result9 = utf8Decoder.decode(new Uint8Array(memory0.buffer, ptr9, len9));
+          var result9 = TEXT_DECODER_UTF8.decode(new Uint8Array(memory0.buffer, ptr9, len9));
           variant10= {
             tag: 'validation',
             val: result9
@@ -4057,11 +6621,13 @@ function mulDecimal(arg0, arg1) {
     postReturn: true
   });
   const retCopy = variant11;
+  task.resolve([retCopy.val]);
   
   let cstate = getOrCreateAsyncState(0);
   cstate.mayLeave = false;
   postReturn3(ret);
   cstate.mayLeave = true;
+  task.exit();
   
   
   
@@ -4120,9 +6686,28 @@ function divDecimal(arg0, arg1) {
     async: false,
     postReturn: true,
   });
-  const _wasm_call_currentTaskID = startCurrentTask(0, false, 'numericsDivDecimal');
-  const ret = numericsDivDecimal(toUint64(v0_0), toUint64(v0_1), toUint64(v0_2), toUint64(v0_3), enum1, toUint64(v2_0), toUint64(v2_1), toUint64(v2_2), toUint64(v2_3), enum3);
-  endCurrentTask(0);
+  const hostProvided = false;
+  
+  const [task, _wasm_call_currentTaskID] = createNewCurrentTask({
+    componentIdx: 0,
+    isAsync: false,
+    isManualAsync: false,
+    entryFnName: 'numericsDivDecimal',
+    getCallbackFn: () => null,
+    callbackFnName: 'null',
+    errHandling: 'throw-result-err',
+    callingWasmExport: true,
+  });
+  
+  const started = task.enterSync();
+  task.setReturnMemoryIdx(0);
+  task.setReturnMemory(memory0);
+  let ret =   _withGlobalCurrentTaskMeta({
+    taskID: task.id(),
+    componentIdx: task.componentIdx(),
+    fn: () => numericsDivDecimal(toUint64(v0_0), toUint64(v0_1), toUint64(v0_2), toUint64(v0_3), enum1, toUint64(v2_0), toUint64(v2_1), toUint64(v2_2), toUint64(v2_3), enum3),
+  });
+  
   let variant11;
   switch (dataView(memory0).getUint8(ret + 0, true)) {
     case 0: {
@@ -4143,10 +6728,10 @@ function divDecimal(arg0, arg1) {
       variant11= {
         tag: 'ok',
         val: {
-          r0: BigInt.asUintN(64, dataView(memory0).getBigInt64(ret + 8, true)),
-          r1: BigInt.asUintN(64, dataView(memory0).getBigInt64(ret + 16, true)),
-          r2: BigInt.asUintN(64, dataView(memory0).getBigInt64(ret + 24, true)),
-          r3: BigInt.asUintN(64, dataView(memory0).getBigInt64(ret + 32, true)),
+          r0: BigInt.asUintN(64, BigInt(dataView(memory0).getBigInt64(ret + 8, true))),
+          r1: BigInt.asUintN(64, BigInt(dataView(memory0).getBigInt64(ret + 16, true))),
+          r2: BigInt.asUintN(64, BigInt(dataView(memory0).getBigInt64(ret + 24, true))),
+          r3: BigInt.asUintN(64, BigInt(dataView(memory0).getBigInt64(ret + 32, true))),
           sign: enum4,
         }
       };
@@ -4158,7 +6743,7 @@ function divDecimal(arg0, arg1) {
         case 0: {
           var ptr5 = dataView(memory0).getUint32(ret + 12, true);
           var len5 = dataView(memory0).getUint32(ret + 16, true);
-          var result5 = utf8Decoder.decode(new Uint8Array(memory0.buffer, ptr5, len5));
+          var result5 = TEXT_DECODER_UTF8.decode(new Uint8Array(memory0.buffer, ptr5, len5));
           variant10= {
             tag: 'message',
             val: result5
@@ -4168,7 +6753,7 @@ function divDecimal(arg0, arg1) {
         case 1: {
           var ptr6 = dataView(memory0).getUint32(ret + 12, true);
           var len6 = dataView(memory0).getUint32(ret + 16, true);
-          var result6 = utf8Decoder.decode(new Uint8Array(memory0.buffer, ptr6, len6));
+          var result6 = TEXT_DECODER_UTF8.decode(new Uint8Array(memory0.buffer, ptr6, len6));
           variant10= {
             tag: 'overflow',
             val: result6
@@ -4178,7 +6763,7 @@ function divDecimal(arg0, arg1) {
         case 2: {
           var ptr7 = dataView(memory0).getUint32(ret + 12, true);
           var len7 = dataView(memory0).getUint32(ret + 16, true);
-          var result7 = utf8Decoder.decode(new Uint8Array(memory0.buffer, ptr7, len7));
+          var result7 = TEXT_DECODER_UTF8.decode(new Uint8Array(memory0.buffer, ptr7, len7));
           variant10= {
             tag: 'div-by-zero',
             val: result7
@@ -4188,7 +6773,7 @@ function divDecimal(arg0, arg1) {
         case 3: {
           var ptr8 = dataView(memory0).getUint32(ret + 12, true);
           var len8 = dataView(memory0).getUint32(ret + 16, true);
-          var result8 = utf8Decoder.decode(new Uint8Array(memory0.buffer, ptr8, len8));
+          var result8 = TEXT_DECODER_UTF8.decode(new Uint8Array(memory0.buffer, ptr8, len8));
           variant10= {
             tag: 'syntax',
             val: result8
@@ -4198,7 +6783,7 @@ function divDecimal(arg0, arg1) {
         case 4: {
           var ptr9 = dataView(memory0).getUint32(ret + 12, true);
           var len9 = dataView(memory0).getUint32(ret + 16, true);
-          var result9 = utf8Decoder.decode(new Uint8Array(memory0.buffer, ptr9, len9));
+          var result9 = TEXT_DECODER_UTF8.decode(new Uint8Array(memory0.buffer, ptr9, len9));
           variant10= {
             tag: 'validation',
             val: result9
@@ -4226,11 +6811,13 @@ function divDecimal(arg0, arg1) {
     postReturn: true
   });
   const retCopy = variant11;
+  task.resolve([retCopy.val]);
   
   let cstate = getOrCreateAsyncState(0);
   cstate.mayLeave = false;
   postReturn3(ret);
   cstate.mayLeave = true;
+  task.exit();
   
   
   
@@ -4269,9 +6856,28 @@ function log10Decimal(arg0) {
     async: false,
     postReturn: true,
   });
-  const _wasm_call_currentTaskID = startCurrentTask(0, false, 'numericsLog10Decimal');
-  const ret = numericsLog10Decimal(toUint64(v0_0), toUint64(v0_1), toUint64(v0_2), toUint64(v0_3), enum1);
-  endCurrentTask(0);
+  const hostProvided = false;
+  
+  const [task, _wasm_call_currentTaskID] = createNewCurrentTask({
+    componentIdx: 0,
+    isAsync: false,
+    isManualAsync: false,
+    entryFnName: 'numericsLog10Decimal',
+    getCallbackFn: () => null,
+    callbackFnName: 'null',
+    errHandling: 'throw-result-err',
+    callingWasmExport: true,
+  });
+  
+  const started = task.enterSync();
+  task.setReturnMemoryIdx(0);
+  task.setReturnMemory(memory0);
+  let ret =   _withGlobalCurrentTaskMeta({
+    taskID: task.id(),
+    componentIdx: task.componentIdx(),
+    fn: () => numericsLog10Decimal(toUint64(v0_0), toUint64(v0_1), toUint64(v0_2), toUint64(v0_3), enum1),
+  });
+  
   let variant9;
   switch (dataView(memory0).getUint8(ret + 0, true)) {
     case 0: {
@@ -4292,10 +6898,10 @@ function log10Decimal(arg0) {
       variant9= {
         tag: 'ok',
         val: {
-          r0: BigInt.asUintN(64, dataView(memory0).getBigInt64(ret + 8, true)),
-          r1: BigInt.asUintN(64, dataView(memory0).getBigInt64(ret + 16, true)),
-          r2: BigInt.asUintN(64, dataView(memory0).getBigInt64(ret + 24, true)),
-          r3: BigInt.asUintN(64, dataView(memory0).getBigInt64(ret + 32, true)),
+          r0: BigInt.asUintN(64, BigInt(dataView(memory0).getBigInt64(ret + 8, true))),
+          r1: BigInt.asUintN(64, BigInt(dataView(memory0).getBigInt64(ret + 16, true))),
+          r2: BigInt.asUintN(64, BigInt(dataView(memory0).getBigInt64(ret + 24, true))),
+          r3: BigInt.asUintN(64, BigInt(dataView(memory0).getBigInt64(ret + 32, true))),
           sign: enum2,
         }
       };
@@ -4307,7 +6913,7 @@ function log10Decimal(arg0) {
         case 0: {
           var ptr3 = dataView(memory0).getUint32(ret + 12, true);
           var len3 = dataView(memory0).getUint32(ret + 16, true);
-          var result3 = utf8Decoder.decode(new Uint8Array(memory0.buffer, ptr3, len3));
+          var result3 = TEXT_DECODER_UTF8.decode(new Uint8Array(memory0.buffer, ptr3, len3));
           variant8= {
             tag: 'message',
             val: result3
@@ -4317,7 +6923,7 @@ function log10Decimal(arg0) {
         case 1: {
           var ptr4 = dataView(memory0).getUint32(ret + 12, true);
           var len4 = dataView(memory0).getUint32(ret + 16, true);
-          var result4 = utf8Decoder.decode(new Uint8Array(memory0.buffer, ptr4, len4));
+          var result4 = TEXT_DECODER_UTF8.decode(new Uint8Array(memory0.buffer, ptr4, len4));
           variant8= {
             tag: 'overflow',
             val: result4
@@ -4327,7 +6933,7 @@ function log10Decimal(arg0) {
         case 2: {
           var ptr5 = dataView(memory0).getUint32(ret + 12, true);
           var len5 = dataView(memory0).getUint32(ret + 16, true);
-          var result5 = utf8Decoder.decode(new Uint8Array(memory0.buffer, ptr5, len5));
+          var result5 = TEXT_DECODER_UTF8.decode(new Uint8Array(memory0.buffer, ptr5, len5));
           variant8= {
             tag: 'div-by-zero',
             val: result5
@@ -4337,7 +6943,7 @@ function log10Decimal(arg0) {
         case 3: {
           var ptr6 = dataView(memory0).getUint32(ret + 12, true);
           var len6 = dataView(memory0).getUint32(ret + 16, true);
-          var result6 = utf8Decoder.decode(new Uint8Array(memory0.buffer, ptr6, len6));
+          var result6 = TEXT_DECODER_UTF8.decode(new Uint8Array(memory0.buffer, ptr6, len6));
           variant8= {
             tag: 'syntax',
             val: result6
@@ -4347,7 +6953,7 @@ function log10Decimal(arg0) {
         case 4: {
           var ptr7 = dataView(memory0).getUint32(ret + 12, true);
           var len7 = dataView(memory0).getUint32(ret + 16, true);
-          var result7 = utf8Decoder.decode(new Uint8Array(memory0.buffer, ptr7, len7));
+          var result7 = TEXT_DECODER_UTF8.decode(new Uint8Array(memory0.buffer, ptr7, len7));
           variant8= {
             tag: 'validation',
             val: result7
@@ -4375,11 +6981,13 @@ function log10Decimal(arg0) {
     postReturn: true
   });
   const retCopy = variant9;
+  task.resolve([retCopy.val]);
   
   let cstate = getOrCreateAsyncState(0);
   cstate.mayLeave = false;
   postReturn3(ret);
   cstate.mayLeave = true;
+  task.exit();
   
   
   
@@ -4389,6 +6997,7 @@ function log10Decimal(arg0) {
   return retCopy.val;
   
 }
+const trampoline0 = rscTableCreateOwn.bind(null, handleTable0);
 
 const $init = (() => {
   let gen = (function* _initGenerator () {
@@ -4409,11 +7018,53 @@ const $init = (() => {
     }));
     memory0 = exports1.memory;
     realloc0 = exports1.cabi_realloc;
+    
+    try {
+      realloc0Async = WebAssembly.promising(exports1.cabi_realloc);
+    } catch(err) {
+      realloc0Async = exports1.cabi_realloc;
+    }
+    
     postReturn0 = exports1['cabi_post_deserialize-inst'];
+    
+    try {
+      postReturn0Async = WebAssembly.promising(exports1['cabi_post_deserialize-inst']);
+    } catch(err) {
+      postReturn0Async = exports1['cabi_post_deserialize-inst'];
+    }
+    
     postReturn1 = exports1['cabi_post_validate-wit'];
+    
+    try {
+      postReturn1Async = WebAssembly.promising(exports1['cabi_post_validate-wit']);
+    } catch(err) {
+      postReturn1Async = exports1['cabi_post_validate-wit'];
+    }
+    
     postReturn2 = exports1['cabi_post_root:component/wit-codec#[method]wit.decode-result'];
+    
+    try {
+      postReturn2Async = WebAssembly.promising(exports1['cabi_post_root:component/wit-codec#[method]wit.decode-result']);
+    } catch(err) {
+      postReturn2Async = exports1['cabi_post_root:component/wit-codec#[method]wit.decode-result'];
+    }
+    
     postReturn3 = exports1['cabi_post_root:component/numerics#add-decimal'];
+    
+    try {
+      postReturn3Async = WebAssembly.promising(exports1['cabi_post_root:component/numerics#add-decimal']);
+    } catch(err) {
+      postReturn3Async = exports1['cabi_post_root:component/numerics#add-decimal'];
+    }
+    
     postReturn4 = exports1['cabi_post_root:component/numerics#eq-decimal'];
+    
+    try {
+      postReturn4Async = WebAssembly.promising(exports1['cabi_post_root:component/numerics#eq-decimal']);
+    } catch(err) {
+      postReturn4Async = exports1['cabi_post_root:component/numerics#eq-decimal'];
+    }
+    
     exports1SerializeInst = exports1['serialize-inst'];
     exports1DeserializeInst = exports1['deserialize-inst'];
     exports1SerializeOpReturnData = exports1['serialize-op-return-data'];
