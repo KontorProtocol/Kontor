@@ -364,7 +364,7 @@ function emitEncodeHelper(id: number, ctx: Ctx): string {
           return `case ${JSON.stringify(c.name)}: return { kind: ${JSON.stringify(c.name)}${payload} };`;
         })
         .join(" ");
-      return `function ${fnName}(v: ${tsName}): unknown { switch (v.kind) { ${arms} } }`;
+      return `function ${fnName}(v: ${tsName}): unknown { switch (v.kind) { ${arms} default: throw new Error("unknown variant case: " + (v as any).kind); } }`;
     }
     case "tuple": {
       const parts = k.elems

@@ -772,6 +772,18 @@ test("codegen Tier 2: emits Contract class with transport + per-type helpers", (
   // Canonical types: results decoded via `<Class>.fromRaw(...)`.
   expect(out).toMatch(/Decimal\.fromRaw\(/);
   expect(out).toMatch(/HolderRef\.fromRaw\(/);
+
+  // Variant encoders throw on unknown cases instead of silently
+  // returning undefined (mirrors the decoder's default arm). Every
+  // `switch (v.kind)` block — the variant-encoder shape — must be
+  // closed by `default: throw new Error("unknown variant case: ...`.
+  const variantSwitches = out.match(/switch \(v\.kind\)/g)?.length ?? 0;
+  const variantDefaults =
+    out.match(
+      /switch \(v\.kind\) \{[\s\S]*?default: throw new Error\("unknown variant case:/g,
+    )?.length ?? 0;
+  expect(variantSwitches).toBeGreaterThan(0);
+  expect(variantDefaults).toBe(variantSwitches);
 });
 
 // ─── numerics-api ─────────────────────────────────────────────────────
