@@ -65,6 +65,10 @@ listen=0
 rpcuser=rpc
 rpcpassword=rpc
 rpcport={rpc_port}
+# Default ancestor/descendant limit is 25; contract regtests chain many
+# commit/reveal pairs on one identity before the auto-miner confirms a block.
+limitancestorcount=500
+limitdescendantcount=500
 zmqpubsequence=tcp://127.0.0.1:{zmq_port}
 zmqpubsequencehwm=0
 zmqpubrawtx=tcp://127.0.0.1:{zmq_port}
