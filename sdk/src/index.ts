@@ -23,11 +23,15 @@ export type {
 export type * from "./bindings";
 export { generate } from "./codegen";
 export type { KontorTransport } from "./json-codec";
-// Client-layer types referenced by codegen output. Full client-layer
-// exports (values: KontorSession, Account, ...) land with the runtime
-// implementation; codegen only needs the types.
-export type { KontorSession } from "./session";
+// Client layer. Codegen output references KontorSession / Inst; callers
+// (and the e2e test) also need the chain config + the Account type.
+// The full client-layer export pass — Account impls, transport, errors,
+// aggregate — lands with the runtime implementation (work item #13).
+export { KontorSession } from "./session";
 export type { Inst } from "./inst";
+export { signet } from "./chains";
+export type { Chain } from "./chains";
+export type { Account } from "./account/index";
 export { Decimal } from "./canonical/Decimal";
 export { Integer } from "./canonical/Integer";
 export { HolderRef } from "./canonical/HolderRef";

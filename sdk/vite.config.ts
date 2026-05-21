@@ -50,6 +50,10 @@ export default defineConfig({
       // The CLI is a bin, never imported — no .d.ts needed.
       exclude: ["src/cli.ts"],
       rollupTypes: false,
+      // Emit declarations at the dist/ root (dist/index.d.ts) mirroring
+      // the bundled JS entries. Without this they land under dist/src/
+      // and package.json's `types` path can't resolve them.
+      entryRoot: "src",
     }),
     {
       name: "copy-component",
