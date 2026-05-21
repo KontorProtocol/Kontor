@@ -886,7 +886,16 @@ impl RegTesterCluster {
     /// Start a cluster of `n` validators, all in genesis, all started.
     /// Pre-creates `registered` identities (with BLS + issuance) and `unregistered` (funded only).
     pub async fn setup(n: usize, registered: usize, unregistered: usize) -> Result<Self> {
-        Self::setup_with(n, n, n, registered, unregistered, None, &default_kontor_bin()).await
+        Self::setup_with(
+            n,
+            n,
+            n,
+            registered,
+            unregistered,
+            None,
+            &default_kontor_bin(),
+        )
+        .await
     }
 
     /// Create a cluster with `total` keys, `genesis_count` in genesis, `active` started.

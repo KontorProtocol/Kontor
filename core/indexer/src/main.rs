@@ -64,9 +64,16 @@ async fn run_regtest() -> Result<()> {
     logging::setup_with_format(logging::Format::Plain);
 
     let kontor_bin = std::env::current_exe()?;
-    let mut cluster =
-        reg_tester::RegTesterCluster::setup_with(1, 1, 1, 0, 0, Some(REGTEST_DEV_SEED), &kontor_bin)
-            .await?;
+    let mut cluster = reg_tester::RegTesterCluster::setup_with(
+        1,
+        1,
+        1,
+        0,
+        0,
+        Some(REGTEST_DEV_SEED),
+        &kontor_bin,
+    )
+    .await?;
 
     // Issue native tokens to the dev account so the devnet is usable for
     // contract publishes and gas-paying calls straight out of the box.
