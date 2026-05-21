@@ -188,7 +188,13 @@ impl Guest for Nft {
         new_owner: HolderRef,
     ) -> Result<NftTransfer, Error> {
         let signer: Holder = (&ctx.signer()).into();
-        change_owner(ctx, nft_id, signer, new_owner.try_into()?, "only owner can transfer")
+        change_owner(
+            ctx,
+            nft_id,
+            signer,
+            new_owner.try_into()?,
+            "only owner can transfer",
+        )
     }
 
     // Attaches the NFT to UTXO `(current_txid, vout)`. The new owner becomes
@@ -197,17 +203,19 @@ impl Guest for Nft {
     // instruction, the NFT remains permanently orphaned under the old UTXO.
     // The caller is responsible for always spending this UTXO via a Kontor
     // transaction that includes `detach`.
-    fn attach(
-        ctx: &ProcContext,
-        nft_id: String,
-        vout: u64,
-    ) -> Result<NftTransfer, Error> {
+    fn attach(ctx: &ProcContext, nft_id: String, vout: u64) -> Result<NftTransfer, Error> {
         let out_point = context::OutPoint {
             txid: ctx.transaction().id(),
             vout,
         };
         let signer: Holder = (&ctx.signer()).into();
-        change_owner(ctx, nft_id, signer, utxo_holder(out_point), "only owner can attach")
+        change_owner(
+            ctx,
+            nft_id,
+            signer,
+            utxo_holder(out_point),
+            "only owner can attach",
+        )
     }
 
     fn detach(ctx: &ProcContext, nft_id: String) -> Result<NftTransfer, Error> {
