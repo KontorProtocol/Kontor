@@ -1,5 +1,5 @@
 use anyhow::Result;
-use indexer::reg_tester::RegTesterCluster;
+use indexer::reg_tester::{RegTesterCluster, default_kontor_bin};
 use indexer::runtime::ContractAddress;
 use indexer_types::{Inst, InstKind, PaymentIntent};
 use testlib::*;
@@ -379,7 +379,8 @@ async fn cluster_late_joiner_sync() -> Result<()> {
     let _ = tracing_subscriber::fmt().with_env_filter("info").try_init();
 
     // 4 validators in genesis, only 3 started
-    let mut cluster = RegTesterCluster::setup_with(4, 4, 3, 1, 0).await?;
+    let mut cluster =
+        RegTesterCluster::setup_with(4, 4, 3, 1, 0, None, &default_kontor_bin()).await?;
 
     let contracts = ContractReader::new("../../test-contracts").await?;
     let contract_bytes = contracts
@@ -488,7 +489,8 @@ async fn cluster_validator_lifecycle() -> Result<()> {
     let _ = tracing_subscriber::fmt().with_env_filter("info").try_init();
 
     // 5 keys, 4 in genesis, 4 started
-    let mut cluster = RegTesterCluster::setup_with(5, 4, 4, 1, 0).await?;
+    let mut cluster =
+        RegTesterCluster::setup_with(5, 4, 4, 1, 0, None, &default_kontor_bin()).await?;
 
     let contracts = ContractReader::new("../../test-contracts").await?;
     let contract_bytes = contracts
