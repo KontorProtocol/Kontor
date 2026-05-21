@@ -5,8 +5,6 @@ pub mod error;
 pub mod handlers;
 pub mod result;
 pub mod router;
-pub mod ws;
-pub mod ws_client;
 
 use std::{net::SocketAddr, time::Duration};
 
@@ -16,6 +14,13 @@ pub use env::Env;
 use metrics_exporter_prometheus::PrometheusHandle;
 use tokio::task::JoinHandle;
 use tracing::{error, info};
+
+/// Wall-clock budget the router's `TimeoutLayer` allows any `/api`
+/// request. The long-poll `GET /api/` handler derives its `?wait=` cap
+/// from this, so a held request always returns before the middleware
+/// would kill it with a non-JSON 408. Single source of truth — the
+/// router and the handler both read this constant.
+pub const API_REQUEST_TIMEOUT_MS: u64 = 30_000;
 
 pub async fn run(env: Env, prom_handle: PrometheusHandle) -> Result<JoinHandle<()>> {
     let addr = SocketAddr::from(([0, 0, 0, 0], env.config.api_port));

@@ -4,7 +4,7 @@ use axum::{
     Json, Router,
     http::{HeaderName, Request, Response},
     response::IntoResponse,
-    routing::{any, get, post},
+    routing::{get, post},
 };
 use indexer_types::ErrorResponse;
 use metrics_exporter_prometheus::PrometheusHandle;
@@ -27,9 +27,8 @@ use crate::api::handlers::{
 };
 
 use super::{
-    Env,
+    API_REQUEST_TIMEOUT_MS, Env,
     handlers::{get_block, get_block_latest, post_compose_commit, post_compose_reveal},
-    ws,
 };
 
 #[derive(Clone)]
@@ -100,7 +99,6 @@ pub fn new(context: Env, prom_handle: PrometheusHandle) -> Router {
         .with_state(prom_handle);
 
     Router::new()
-        .route("/ws", any(ws::handler))
         .nest(
             "/api",
             Router::new()
@@ -167,7 +165,7 @@ pub fn new(context: Env, prom_handle: PrometheusHandle) -> Router {
                 .layer(CatchPanicLayer::custom(handle_panic))
                 .layer(TimeoutLayer::with_status_code(
                     StatusCode::REQUEST_TIMEOUT,
-                    Duration::from_secs(30),
+                    Duration::from_millis(API_REQUEST_TIMEOUT_MS),
                 )),
         )
         .with_state(context)

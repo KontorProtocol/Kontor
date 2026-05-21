@@ -28,7 +28,7 @@ anyhow = { version = "=1.0.102", default-features = false }
 fastnum = "=0.7.4"
 num = "=0.4.3"
 async-trait = "=0.1.89"
-axum = { version = "=0.8.9", features = ["http2", "ws"] }
+axum = { version = "=0.8.9", features = ["http2"] }
 bitcoin = { version = "=0.32.8", features = ["serde", "rand", "rand-std"] }
 bon = { version = "=3.9.1", default-features = false, features = ["alloc"] }
 bytes = "=1.11.1"

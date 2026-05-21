@@ -1,37 +1,75 @@
-use axum::extract::State;
+use std::time::Duration;
+
+use axum::extract::{Query, State};
 use indexer_types::Info;
+use serde::Deserialize;
+use tokio::time::timeout;
 
-use crate::api::{Env, result::Result};
+use crate::api::{API_REQUEST_TIMEOUT_MS, Env, result::Result};
 use crate::built_info;
-use crate::database::queries::{
-    get_checkpoint_latest, select_block_latest, select_latest_consensus_height,
-};
 
-async fn get_info(env: &Env) -> anyhow::Result<Info> {
-    let conn = env.reader.connection().await?;
-    let height = select_block_latest(&conn)
-        .await?
-        .map(|b| b.height)
-        .unwrap_or((env.config.starting_block_height - 1) as i64);
-    let checkpoint = get_checkpoint_latest(&conn).await?.map(|c| c.hash);
-    let consensus_height = select_latest_consensus_height(&conn).await?;
-    Ok(Info {
+/// Upper bound on a long-poll `?wait=`, derived from the router's
+/// request-timeout budget. A request held past `API_REQUEST_TIMEOUT_MS`
+/// is killed by the `TimeoutLayer` middleware (non-JSON 408), so the cap
+/// sits 5s below it — headroom to build and write the response. The
+/// subtraction is const-evaluated, so too small a timeout fails to
+/// compile rather than silently breaking long-polls.
+const MAX_WAIT_MS: u64 = API_REQUEST_TIMEOUT_MS - 5_000;
+
+/// Query params for the long-poll form of `GET /api/`. Both must be
+/// present to engage long-polling; otherwise `Info` is returned at once.
+#[derive(Deserialize)]
+pub struct InfoQuery {
+    /// Max milliseconds to block, capped at `MAX_WAIT_MS`.
+    wait: Option<u64>,
+    /// The `Info::signature` the caller last saw. The request blocks
+    /// while the live signature still equals this.
+    since: Option<String>,
+}
+
+/// Build the full `Info` from the reactor-published `InfoCore` snapshot,
+/// overlaying the static fields and the `available` readiness flag. No
+/// database access — the snapshot is maintained by the reactor.
+async fn current_info(env: &Env) -> Info {
+    let core = env.info_rx.borrow().clone();
+    Info {
         version: built_info::PKG_VERSION.to_string(),
         target: built_info::TARGET.to_string(),
         network: env.config.network.to_string(),
         available: *env.available.read().await,
         consensus_mode: env.config.consensus_mode,
-        height,
-        checkpoint,
-        consensus_height,
-    })
+        height: core.height,
+        checkpoint: core.checkpoint,
+        consensus_height: core.consensus_height,
+        last_result_id: core.last_result_id,
+        recent_blocks: core.recent_blocks,
+        signature: core.signature,
+    }
 }
 
-pub async fn get_index(State(env): State<Env>) -> Result<Info> {
-    Ok(get_info(&env).await?.into())
+/// `GET /api/` — current indexer `Info`.
+///
+/// Long-poll form: `?wait=<ms>&since=<sig>` blocks until `Info::signature`
+/// differs from `since`, or `wait` ms elapse (capped at `MAX_WAIT_MS`).
+/// Both params must be present to engage long-polling; a plain `GET /api/`
+/// returns immediately.
+pub async fn get_index(Query(query): Query<InfoQuery>, State(env): State<Env>) -> Result<Info> {
+    if let (Some(wait_ms), Some(since)) = (query.wait, query.since) {
+        let wait_ms = wait_ms.min(MAX_WAIT_MS);
+        let mut rx = env.info_rx.clone();
+        // `borrow_and_update` marks the current snapshot version as seen,
+        // so the subsequent `changed()` resolves only on a *later* publish
+        // — no missed wake, no permit/enable dance.
+        let already_moved = rx.borrow_and_update().signature != since;
+        if !already_moved {
+            let _ = timeout(Duration::from_millis(wait_ms), rx.changed()).await;
+        }
+        return Ok(current_info(&env).await.into());
+    }
+    Ok(current_info(&env).await.into())
 }
 
 pub async fn stop(State(env): State<Env>) -> Result<Info> {
     env.cancel_token.cancel();
-    Ok(get_info(&env).await?.into())
+    Ok(current_info(&env).await.into())
 }

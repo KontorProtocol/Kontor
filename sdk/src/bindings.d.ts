@@ -79,11 +79,6 @@ export type ContractResponse = { wit: string };
 
 export type ErrorResponse = { error: string };
 
-export type Event =
-  | { "type": "Processed"; block: BlockRow; txids: Array<string> }
-  | { "type": "BatchProcessed"; txids: Array<string> }
-  | { "type": "Rolledback"; height: number };
-
 export type Fees = {
   /**
    * Recommended fee rate (sat/vB) to land in the next ~1 block.
@@ -115,6 +110,22 @@ export type Info = {
   height: number;
   checkpoint: string | null;
   consensus_height: number | null;
+  /**
+   * Highest `contract_results.id` — the SDK's forward cursor for
+   * draining `/api/results`. 0 when no results exist yet.
+   */
+  last_result_id: number;
+  /**
+   * The last 10 indexed blocks, height-descending. The SDK compares
+   * these against its local block-hash cache for reorg detection.
+   */
+  recent_blocks: Array<RecentBlock>;
+  /**
+   * Hash of `last_result_id` + `recent_blocks`. Pass back as
+   * `?since=` to the long-poll endpoint; the request blocks until
+   * this value changes.
+   */
+  signature: string;
 };
 
 export type Input = {
@@ -252,6 +263,12 @@ export type Payment = { signer_id: number; gas_limit: number };
  */
 export type PaymentIntent = { "SelfPay": { limit: number } } | "Sponsored";
 
+/**
+ * One entry in `Info::recent_blocks` — a `BlockRow` trimmed to the
+ * fields the SDK needs for reorg detection (no `relevant` flag).
+ */
+export type RecentBlock = { height: number; hash: string };
+
 export type ResultResponse<T> = { result: T };
 
 export type ResultRow = {
@@ -378,11 +395,4 @@ export type ViewExpr = { expr: string };
 export type ViewResult = { "type": "Ok"; value: string } | {
   "type": "Err";
   message: string;
-};
-
-export type WsRequest = never;
-
-export type WsResponse = { "type": "Event"; event: Event } | {
-  "type": "Error";
-  error: string;
 };
