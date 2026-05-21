@@ -489,7 +489,7 @@ pub enum ConsensusMode {
 
 /// One entry in `Info::recent_blocks` — a `BlockRow` trimmed to the
 /// fields the SDK needs for reorg detection (no `relevant` flag).
-#[derive(Debug, Eq, PartialEq, Deserialize, Serialize, TS)]
+#[derive(Debug, Clone, Eq, PartialEq, Deserialize, Serialize, TS)]
 #[ts(export, export_to = "../../../sdk/src/bindings.d.ts")]
 pub struct RecentBlock {
     #[ts(type = "number")]

@@ -12,7 +12,6 @@ pub mod mock_bitcoin;
 mod reactor_cluster_tests;
 pub mod types;
 
-use std::sync::Arc;
 use std::time::Instant;
 
 use anyhow::{Context, Result, bail};
@@ -21,7 +20,6 @@ use indexer_types::{BlockRow, Event, Fees, OpWithResult};
 use tokio::{
     select,
     sync::{
-        Notify,
         mpsc::{self, Receiver},
         oneshot,
     },
@@ -69,9 +67,6 @@ pub struct Reactor<E: Executor> {
     mempool_rx: Receiver<MempoolEvent>,
     ready_tx: Option<oneshot::Sender<bool>>,
     event_tx: Option<mpsc::Sender<Event>>,
-    /// Woken at every block/batch/rollback so long-poll `/api/` requests
-    /// see state changes without a persistent connection. Shared with `Env`.
-    sync_notify: Arc<Notify>,
     simulate_rx: Option<Receiver<Simulation>>,
     consensus: consensus_state::ConsensusState,
 
@@ -89,7 +84,6 @@ impl<E: Executor> Reactor<E> {
         cancel_token: CancellationToken,
         ready_tx: Option<oneshot::Sender<bool>>,
         event_tx: Option<mpsc::Sender<Event>>,
-        sync_notify: Arc<Notify>,
         simulate_rx: Option<Receiver<Simulation>>,
         consensus: consensus_state::ConsensusState,
         last_height: u64,
@@ -111,17 +105,8 @@ impl<E: Executor> Reactor<E> {
             last_hash,
             ready_tx,
             event_tx,
-            sync_notify,
             consensus,
         }
-    }
-
-    /// Wake any long-poll `/api/` requests blocked on `?since=`. Fired at
-    /// the same points as `Event` emission — block processed, batch
-    /// processed, rollback — so the SDK polling layer observes state
-    /// changes promptly without a persistent connection.
-    fn notify_sync(&self) {
-        self.sync_notify.notify_waiters();
     }
 
     /// Clone of the shared write connection from Runtime.storage.
@@ -369,18 +354,16 @@ impl<E: Executor> Reactor<E> {
                     let consensus_result = self.handle_consensus_msg(msg)
                         .await
                         .context("handle_consensus_msg failed")?;
-                    if let consensus_state::ConsensusResult::BatchProcessed { txids } = &consensus_result {
-                        self.notify_sync();
-                        if let Some(tx) = &self.event_tx
-                            && tx
-                                .send(Event::BatchProcessed {
-                                    txids: txids.clone(),
-                                })
-                                .await
-                                .is_err()
-                        {
-                            warn!("Event receiver dropped, cannot send BatchProcessed event");
-                        }
+                    if let consensus_state::ConsensusResult::BatchProcessed { txids } = &consensus_result
+                        && let Some(tx) = &self.event_tx
+                        && tx
+                            .send(Event::BatchProcessed {
+                                txids: txids.clone(),
+                            })
+                            .await
+                            .is_err()
+                    {
+                        warn!("Event receiver dropped, cannot send BatchProcessed event");
                     }
                     if let consensus_state::ConsensusResult::Block(block, decision) = consensus_result {
                         self.handle_block_with_decision(block, &decision)
@@ -650,7 +633,6 @@ pub fn run(
     mempool_rx: Receiver<MempoolEvent>,
     ready_tx: Option<oneshot::Sender<bool>>,
     event_tx: Option<mpsc::Sender<Event>>,
-    sync_notify: Arc<Notify>,
     simulate_rx: Option<Receiver<Simulation>>,
     engine_config: engine::EngineConfig,
     bitcoin_client: crate::bitcoin_client::Client,
@@ -769,7 +751,6 @@ pub fn run(
                     cancel_token.clone(),
                     ready_tx,
                     event_tx,
-                    sync_notify,
                     simulate_rx,
                     consensus,
                     last_height,

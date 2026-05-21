@@ -7,10 +7,11 @@ use anyhow::Result;
 use clap::{Parser, Subcommand};
 use indexer::database::queries::select_recent_blocks;
 use indexer::event::EventSubscriber;
+use indexer::info::{compute_info_core, run_info_publisher};
 use indexer::keygen::{self, KeygenArgs};
 use indexer::{api, block, built_info, reactor, runtime};
 use indexer::{bitcoin_client, bitcoin_follower, config::Config, database, logging, stopper};
-use tokio::sync::{Notify, RwLock, mpsc, oneshot};
+use tokio::sync::{RwLock, mpsc, oneshot};
 use tokio_util::sync::CancellationToken;
 use tracing::{error, info};
 
@@ -94,8 +95,22 @@ async fn run_daemon(config: Config) -> Result<()> {
     let available = Arc::new(RwLock::new(false));
     let (event_tx, event_rx) = mpsc::channel(10);
     let event_subscriber = EventSubscriber::new();
-    // Shared between the reactor (notifier) and Env (long-poll waiters).
-    let sync_notify = Arc::new(Notify::new());
+    // Seed the info snapshot from current DB state; the reactor republishes
+    // it on every block/batch/rollback. Shared with Env for long-polling.
+    let initial_info = {
+        let conn = reader.connection().await?;
+        compute_info_core(&conn, (config.starting_block_height - 1) as i64).await?
+    };
+    let (info_tx, info_rx) = tokio::sync::watch::channel(initial_info);
+    // Recomputes `InfoCore` off the `Event` broadcast and republishes it
+    // for long-poll `GET /api/` readers — no reactor involvement.
+    handles.push(run_info_publisher(
+        cancel_token.clone(),
+        event_subscriber.subscribe(),
+        reader.clone(),
+        config.starting_block_height,
+        info_tx,
+    ));
     let (simulate_tx, simulate_rx) = mpsc::channel(available_parallelism()?.into());
     let (fees_tx, fees_rx) = tokio::sync::watch::channel(indexer_types::Fees::floor(1));
     handles.push(event_subscriber.run(cancel_token.clone(), event_rx));
@@ -112,7 +127,7 @@ async fn run_daemon(config: Config) -> Result<()> {
                     .await?,
                 simulate_tx,
                 fees_rx,
-                sync_notify: sync_notify.clone(),
+                info_rx,
             },
             prom_handle.clone(),
         )
@@ -166,7 +181,6 @@ async fn run_daemon(config: Config) -> Result<()> {
         mempool_rx,
         Some(ready_tx),
         Some(event_tx),
-        sync_notify,
         Some(simulate_rx),
         engine_config,
         bitcoin.clone(),

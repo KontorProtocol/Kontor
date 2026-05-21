@@ -3,12 +3,12 @@ use std::{path::Path, sync::Arc};
 use anyhow::Result;
 use deadpool::managed::Pool;
 use indexer_types::Fees;
-use tokio::sync::{Notify, RwLock, mpsc::Sender, watch};
+use tokio::sync::{RwLock, mpsc::Sender, watch};
 use tokio_util::sync::CancellationToken;
 
 use crate::{
-    bitcoin_client::Client, config::Config, database, event::EventSubscriber, reactor::Simulation,
-    runtime,
+    bitcoin_client::Client, config::Config, database, event::EventSubscriber, info::InfoCore,
+    reactor::Simulation, runtime,
 };
 
 #[derive(Clone)]
@@ -24,10 +24,10 @@ pub struct Env {
     /// Latest fee tier snapshot published by the reactor. `borrow()` is
     /// non-blocking and returns the most recent value.
     pub fees_rx: watch::Receiver<Fees>,
-    /// Woken by the reactor on every block/batch/rollback. The long-poll
-    /// `GET /api/` handler awaits this to block until indexer state moves.
-    /// Shared (same `Arc`) with the reactor.
-    pub sync_notify: Arc<Notify>,
+    /// Latest chain/result snapshot published by the reactor on every
+    /// block/batch/rollback. The `GET /api/` handler reads it (and
+    /// long-polls on `changed()`) without touching the database.
+    pub info_rx: watch::Receiver<InfoCore>,
 }
 
 impl Env {
@@ -48,7 +48,9 @@ impl Env {
             reader,
             simulate_tx,
             fees_rx,
-            sync_notify: Arc::new(Notify::new()),
+            // No reactor in unit tests — the sender is dropped, so the
+            // snapshot stays at its default and long-polls return at once.
+            info_rx: watch::channel(InfoCore::default()).1,
         })
     }
 }
