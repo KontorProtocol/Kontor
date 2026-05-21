@@ -38,6 +38,7 @@ import { Inst, type InstDecoder, type PaymentIntent } from "./inst.js";
 import { Insts } from "./insts.js";
 import type { AggregateFragment } from "./aggregate.js";
 import type { ChainEvent, EventsOptions } from "./events.js";
+import { ResultsPoller } from "./poller.js";
 import { HttpTransport } from "./transport/http.js";
 import type { KontorTransport } from "./json-codec.js";
 
@@ -51,12 +52,24 @@ export interface KontorSessionOptions {
    */
   transport?: (opts: { chain: Chain; account: Account }) => KontorTransport;
   /**
+   * `fetch` implementation for the results poller. Inject a mock in
+   * tests; defaults to `globalThis.fetch`.
+   */
+  fetch?: typeof fetch;
+  /**
    * Default payment commitment for proc `Inst`s built via `call(...)`.
    * Overridable per-Inst with `inst.pay(...)`. When omitted, defaults
    * to `SelfPay` with a provisional limit — the transport refines the
    * actual gas at submit time; this is the signer's ceiling.
    */
   defaultPayment?: PaymentIntent;
+  /**
+   * Results-poller configuration. The poller starts in the constructor
+   * — it follows the chain for `events()` / `wait()` and doubles as a
+   * connectivity check (see `ready()`). `from` resumes a persisted
+   * cursor; `filter` narrows the stream. Omit for "follow from the tip".
+   */
+  events?: EventsOptions;
 }
 
 /**
@@ -82,6 +95,11 @@ export class KontorSession {
   readonly transport: KontorTransport;
   /** Default payment for proc `Inst`s; see `KontorSessionOptions`. */
   readonly defaultPayment: PaymentIntent;
+  /**
+   * The session's results poller — one shared loop, started here in the
+   * constructor. Backs `events()` and (later) `inst.submit().wait()`.
+   */
+  private readonly poller: ResultsPoller;
 
   constructor(opts: KontorSessionOptions) {
     this.chain = opts.chain;
@@ -91,6 +109,13 @@ export class KontorSession {
       opts.transport ??
       (({ chain, account }) => new HttpTransport({ chain, account }));
     this.transport = make({ chain: opts.chain, account: opts.account });
+    this.poller = new ResultsPoller({
+      baseUrl: opts.chain.urls.http,
+      fetch: opts.fetch ?? globalThis.fetch.bind(globalThis),
+      from: opts.events?.from,
+      filter: opts.events?.filter,
+    });
+    this.poller.start();
   }
 
   /**
@@ -164,16 +189,12 @@ export class KontorSession {
   }
 
   /**
-   * Follow chain events — the indexer-following API. Returns an async
-   * iterator over `ChainEvent`s (tx outcomes + reorg signals),
-   * reconstructed by the session's results poller from the indexer's
-   * REST surface (`/api/` long-poll + `/api/results` cursor drain +
-   * `/api/blocks/{h}` for reorg walk-down).
+   * Follow chain events — the indexer-following API. Returns a fresh
+   * async iterator over `ChainEvent`s (tx outcomes + reorg signals),
+   * attached to the session's already-running poller. Multiple
+   * iterators share that one loop.
    *
-   * Pass `from` to resume from a persisted cursor; `filter` to narrow
-   * server-side to specific contracts / funcs / signers.
-   *
-   *     for await (const event of session.events({ from: cursor })) {
+   *     for await (const event of session.events()) {
    *       if (event.kind === "reorg") {
    *         await store.revertAbove(event.forkHeight);
    *       } else {
@@ -182,11 +203,29 @@ export class KontorSession {
    *       }
    *     }
    *
-   * The poller is a per-session singleton — multiple `events()`
-   * iterators (and `wait()` calls) share one polling loop.
+   * The poller's resume cursor + filter are set once, at construction,
+   * via `KontorSessionOptions.events` — not per call.
    */
-  events(_opts?: EventsOptions): AsyncIterableIterator<ChainEvent> {
-    throw new Error("KontorSession.events: not implemented");
+  events(): AsyncIterableIterator<ChainEvent> {
+    return this.poller.events();
+  }
+
+  /**
+   * Resolves once the session's poller has reached the indexer — a
+   * connectivity / config check. Rejects if the node is unreachable
+   * after the poller's bootstrap retries.
+   */
+  ready(): Promise<void> {
+    return this.poller.ready();
+  }
+
+  /**
+   * Stop the background poller. A `KontorSession` owns a polling loop
+   * from construction, so call this once done with the session — e.g.
+   * to let a Node process exit cleanly.
+   */
+  close(): void {
+    this.poller.stop();
   }
 }
 

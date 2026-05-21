@@ -13,7 +13,7 @@
  *     broadcast (`submit()`/`wait()`) is exercised by the live regtest
  *     suite, not here.
  */
-import { test, expect } from "vitest";
+import { test, expect, afterEach } from "vitest";
 import {
   type Account,
   type KontorTransport,
@@ -43,6 +43,29 @@ const stubAccount: Account = {
   signMessage: () => Promise.reject(new Error("stub account: signMessage")),
   signPsbt: () => Promise.reject(new Error("stub account: signPsbt")),
 };
+
+/** Sessions created by `mockSession`, closed after each test so the
+ *  background poller loops don't outlive the test. */
+const openSessions: KontorSession[] = [];
+afterEach(() => {
+  for (const s of openSessions) s.close();
+  openSessions.length = 0;
+});
+
+/**
+ * Feed the always-on results poller an idle indexer: it bootstraps,
+ * then quietly long-polls with nothing to report.
+ */
+const pollerFetch = (async (url: string) => {
+  const body = url.includes("/results")
+    ? { results: [], pagination: { has_more: false, next_offset: null, total_count: 0 } }
+    : { last_result_id: 0, recent_blocks: [], signature: "idle" };
+  if (url.includes("?wait=")) await new Promise((r) => setTimeout(r, 5));
+  return new Response(JSON.stringify({ result: body }), {
+    status: 200,
+    headers: { "content-type": "application/json" },
+  });
+}) as typeof fetch;
 
 /**
  * A `KontorSession` whose `view` calls return canned WAVE responses
@@ -78,7 +101,9 @@ function mockSession(viewResponses: Record<string, string>): {
     chain: signet,
     account: stubAccount,
     transport: () => transport,
+    fetch: pollerFetch,
   });
+  openSessions.push(session);
   return { session, calls };
 }
 
