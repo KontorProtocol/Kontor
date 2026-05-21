@@ -166,16 +166,9 @@ pub struct ResultResponse<T: TS> {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "type")]
 pub enum Event {
-    Processed {
-        block: BlockRow,
-        txids: Vec<String>,
-    },
-    BatchProcessed {
-        txids: Vec<String>,
-    },
-    Rolledback {
-        height: u64,
-    },
+    Processed { block: BlockRow, txids: Vec<String> },
+    BatchProcessed { txids: Vec<String> },
+    Rolledback { height: u64 },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]

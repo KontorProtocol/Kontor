@@ -53,7 +53,10 @@ async fn info_signature_tracks_chain_state() -> Result<()> {
 
     insert_block_at(&conn, 1, ONE_HASH).await?;
     let two_blocks = compute_info_core(&conn, -1).await?.signature;
-    assert_ne!(one_block, two_blocks, "signature must change on a new block");
+    assert_ne!(
+        one_block, two_blocks,
+        "signature must change on a new block"
+    );
 
     let recomputed = compute_info_core(&conn, -1).await?.signature;
     assert_eq!(two_blocks, recomputed, "signature must be deterministic");
@@ -171,7 +174,10 @@ async fn info_publisher_republishes_on_event() -> Result<()> {
     info_rx.changed().await?;
 
     let core = info_rx.borrow_and_update().clone();
-    assert_eq!(core.height, 7, "publisher must recompute from current DB state");
+    assert_eq!(
+        core.height, 7,
+        "publisher must recompute from current DB state"
+    );
     assert_eq!(core.recent_blocks.len(), 2);
 
     cancel.cancel();
