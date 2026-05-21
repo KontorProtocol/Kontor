@@ -11,6 +11,7 @@ mod crypto_contract;
 mod error_classification;
 mod fib_contract;
 mod file_storage;
+mod native_nft_attach_contract;
 mod native_nft_contract;
 mod native_token_attach_contract;
 mod native_token_contract;
@@ -57,7 +58,6 @@ testlib::regtest_tests! {
     counter_contract,
     crypto_contract,
     fib_contract,
-    native_nft_contract,
     native_token_attach_contract,
     native_token_contract,
     ops_contract,
@@ -68,4 +68,20 @@ testlib::regtest_tests! {
     status_classification,
     token_contract,
     wit_contract,
+}
+
+#[tokio::test]
+async fn regtest_native_nft() -> anyhow::Result<()> {
+    if std::env::var("REGTEST").is_err() {
+        return Ok(());
+    }
+    // Dedicated cluster: `native_nft_contract` asserts on absolute counts
+    // (total_minted, list_nfts ordering) that would be wrong if the attach
+    // test's mint ran first on the shared cluster. Running both tests
+    // sequentially on their own chain gives each test a clean slate.
+    let cluster = RegTesterCluster::setup(3, 300, 50).await?;
+    let mut runtime = shared_cluster::build_runtime(&cluster).await?;
+    native_nft_contract::test_native_nft_contract(&mut runtime).await?;
+    native_nft_attach_contract::test_native_nft_attach_contract(&mut runtime).await?;
+    cluster.teardown().await
 }

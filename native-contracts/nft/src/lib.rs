@@ -19,6 +19,10 @@ const MAX_ATTR_VALUE_LEN_BYTES: usize = 2048;
 // predictable. Callers paginate by issuing successive calls with `offset`.
 const MAX_LIST_LIMIT: u64 = 100;
 
+fn utxo_holder(out_point: context::OutPoint) -> Holder {
+    Holder::from_ref(&HolderRef::Utxo(out_point)).unwrap()
+}
+
 // `Holder` is stored directly as a field; the macro-generated Storage
 // round-trips it via its canonical key string (same pattern as Map
 // keys). Default is dropped from the derive because Holder has no
@@ -106,6 +110,29 @@ fn validate(
     Ok(())
 }
 
+fn change_owner(
+    ctx: &ProcContext,
+    nft_id: String,
+    expected_owner: Holder,
+    new_owner: Holder,
+    not_owner_msg: &'static str,
+) -> Result<NftTransfer, Error> {
+    let nft = ctx
+        .model()
+        .nfts()
+        .get(&nft_id)
+        .ok_or(Error::Message("nft not found".to_string()))?;
+    if nft.owner() != expected_owner {
+        return Err(Error::Message(not_owner_msg.to_string()));
+    }
+    nft.set_owner(new_owner.clone());
+    Ok(NftTransfer {
+        nft_id,
+        src: expected_owner.as_ref(),
+        dst: new_owner.as_ref(),
+    })
+}
+
 impl Guest for Nft {
     fn init(ctx: &ProcContext) {
         NftStorage::default().init(ctx);
@@ -160,24 +187,47 @@ impl Guest for Nft {
         nft_id: String,
         new_owner: HolderRef,
     ) -> Result<NftTransfer, Error> {
-        let model = ctx.model();
-        let nft = model
-            .nfts()
-            .get(&nft_id)
-            .ok_or(Error::Message("nft not found".to_string()))?;
-
         let signer: Holder = (&ctx.signer()).into();
-        if nft.owner() != signer {
-            return Err(Error::Message("only owner can transfer".to_string()));
-        }
-
-        let new_owner: Holder = new_owner.try_into()?;
-        nft.set_owner(new_owner.clone());
-        Ok(NftTransfer {
+        change_owner(
+            ctx,
             nft_id,
-            src: signer.as_ref(),
-            dst: new_owner.as_ref(),
-        })
+            signer,
+            new_owner.try_into()?,
+            "only owner can transfer",
+        )
+    }
+
+    // Attaches the NFT to UTXO `(current_txid, vout)`. The new owner becomes
+    // `Holder::Utxo(...)`. WARNING: Kontor does not watch UTXO spends. If this
+    // UTXO is spent by a Bitcoin transaction without a Kontor `detach`
+    // instruction, the NFT remains permanently orphaned under the old UTXO.
+    // The caller is responsible for always spending this UTXO via a Kontor
+    // transaction that includes `detach`.
+    fn attach(ctx: &ProcContext, nft_id: String, vout: u64) -> Result<NftTransfer, Error> {
+        let out_point = context::OutPoint {
+            txid: ctx.transaction().id(),
+            vout,
+        };
+        let signer: Holder = (&ctx.signer()).into();
+        change_owner(
+            ctx,
+            nft_id,
+            signer,
+            utxo_holder(out_point),
+            "only owner can attach",
+        )
+    }
+
+    fn detach(ctx: &ProcContext, nft_id: String) -> Result<NftTransfer, Error> {
+        let src = utxo_holder(ctx.transaction().out_point());
+        let dst: Holder = if let Some(context::OpReturnData::PubKey(pubkey)) =
+            ctx.transaction().op_return_data()
+        {
+            HolderRef::XOnlyPubkey(pubkey).try_into()?
+        } else {
+            (&ctx.signer()).into()
+        };
+        change_owner(ctx, nft_id, src, dst, "nft is not attached to this utxo")
     }
 
     fn get_info(ctx: &ViewContext, nft_id: String) -> Option<NftInfo> {
