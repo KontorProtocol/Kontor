@@ -535,7 +535,10 @@ impl RegTesterInner {
     /// `/api/transactions/{txid}` — the REST replacement for the old
     /// websocket `Processed`/`BatchProcessed` event stream.
     async fn wait_for_txids(&self, target_txids: &[String]) -> Result<()> {
-        const LONG_POLL_MS: u64 = 30_000;
+        // The handler caps `?wait=` at its own `MAX_WAIT_MS` regardless;
+        // this only needs to be sane. 25s keeps each poll clear of the
+        // router's request-timeout middleware.
+        const LONG_POLL_MS: u64 = 25_000;
         let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(180);
         let mut remaining: Vec<String> = target_txids.to_vec();
         let mut since = self.kontor_client.index().await?.signature;

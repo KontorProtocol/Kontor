@@ -5,12 +5,16 @@ use indexer_types::Info;
 use serde::Deserialize;
 use tokio::time::timeout;
 
-use crate::api::{Env, result::Result};
+use crate::api::{API_REQUEST_TIMEOUT_MS, Env, result::Result};
 use crate::built_info;
 
-/// Upper bound on a long-poll `?wait=` so a client cannot pin a
-/// connection open indefinitely. Clients are expected to poll at ~30s.
-const MAX_WAIT_MS: u64 = 60_000;
+/// Upper bound on a long-poll `?wait=`, derived from the router's
+/// request-timeout budget. A request held past `API_REQUEST_TIMEOUT_MS`
+/// is killed by the `TimeoutLayer` middleware (non-JSON 408), so the cap
+/// sits 5s below it — headroom to build and write the response. The
+/// subtraction is const-evaluated, so too small a timeout fails to
+/// compile rather than silently breaking long-polls.
+const MAX_WAIT_MS: u64 = API_REQUEST_TIMEOUT_MS - 5_000;
 
 /// Query params for the long-poll form of `GET /api/`. Both must be
 /// present to engage long-polling; otherwise `Info` is returned at once.

@@ -27,7 +27,7 @@ use crate::api::handlers::{
 };
 
 use super::{
-    Env,
+    API_REQUEST_TIMEOUT_MS, Env,
     handlers::{get_block, get_block_latest, post_compose_commit, post_compose_reveal},
 };
 
@@ -165,7 +165,7 @@ pub fn new(context: Env, prom_handle: PrometheusHandle) -> Router {
                 .layer(CatchPanicLayer::custom(handle_panic))
                 .layer(TimeoutLayer::with_status_code(
                     StatusCode::REQUEST_TIMEOUT,
-                    Duration::from_secs(30),
+                    Duration::from_millis(API_REQUEST_TIMEOUT_MS),
                 )),
         )
         .with_state(context)
