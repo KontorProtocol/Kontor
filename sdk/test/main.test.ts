@@ -696,10 +696,10 @@ test("codegen Tier 1: emits TS types + Contract interface from token.wit", () =>
   // Should emit a Contract class (Tier 2)
   expect(out).toContain("export class Contract {");
 
-  // Should include the transfer method, dropping ctx
-  expect(out).toMatch(/async transfer\(dst: HolderRef, amt: Decimal\)/);
+  // proc method: drops ctx, not `async`, returns an Inst
+  expect(out).toMatch(/  transfer\(dst: HolderRef, amt: Decimal\): Inst</);
 
-  // Should include the balance return type (option<decimal>) flattened to T | null
+  // view method: drops ctx, async, return type (option<decimal>) flattened to T | null
   expect(out).toMatch(
     /async balance\(acc: HolderRef\): Promise<Decimal \| null>/,
   );
@@ -730,13 +730,13 @@ test("codegen Tier 1: rejects invalid WIT", () => {
 
 // ─── codegen Tier 2: Contract class end-to-end ────────────────────────
 
-test("codegen Tier 2: emits Contract class with transport + per-type helpers", () => {
+test("codegen Tier 2: emits Contract class bound to a session + per-type helpers", () => {
   const out = generate(tokenWit);
 
   // Imports the runtime helpers + every canonical class actually used.
-  // token.wit references Decimal + HolderRef but not Integer or ContractAddress.
+  // token.wit references Decimal + HolderRef but not Integer.
   expect(out).toContain(
-    'import { Wit, type KontorTransport, Decimal, HolderRef } from "@kontor/sdk";',
+    'import { Wit, type ContractAddress, type Inst, type KontorSession, Decimal, HolderRef } from "@kontor/sdk";',
   );
 
   // Embeds the WIT and instantiates a Wit resource at module load.
@@ -750,16 +750,18 @@ test("codegen Tier 2: emits Contract class with transport + per-type helpers", (
   expect(out).not.toMatch(/function _encodeHolderRef\(/);
   expect(out).not.toMatch(/function _decodeHolderRef\(/);
 
-  // Contract class with constructor.
+  // Contract class is bound to a session + a deployment address.
   expect(out).toContain("export class Contract {");
-  expect(out).toContain("constructor(private transport: KontorTransport)");
+  expect(out).toContain("private session: KontorSession,");
+  expect(out).toContain("private address: ContractAddress,");
 
-  // view-context methods dispatch via simulate, proc-context via submit.
+  // view-context methods are async + route through session.view;
+  // proc-context methods are sync and return an Inst built via session.call.
   expect(out).toMatch(
-    /async balance\([^)]*\)[^{]*\{[\s\S]*?transport\.simulate/,
+    /async balance\([^)]*\): Promise<[\s\S]*?await this\.session\.view\(this\.address, expr\)/,
   );
   expect(out).toMatch(
-    /async transfer\([^)]*\)[^{]*\{[\s\S]*?transport\.submit/,
+    /\n  transfer\([^)]*\): Inst<[\s\S]*?this\.session\.call\(this\.address, "transfer", expr/,
   );
 
   // kebab function name in WIT → camelCase TS method.

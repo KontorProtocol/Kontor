@@ -23,6 +23,11 @@ export type {
 export type * from "./bindings";
 export { generate } from "./codegen";
 export type { KontorTransport } from "./json-codec";
+// Client-layer types referenced by codegen output. Full client-layer
+// exports (values: KontorSession, Account, ...) land with the runtime
+// implementation; codegen only needs the types.
+export type { KontorSession } from "./session";
+export type { Inst } from "./inst";
 export { Decimal } from "./canonical/Decimal";
 export { Integer } from "./canonical/Integer";
 export { HolderRef } from "./canonical/HolderRef";

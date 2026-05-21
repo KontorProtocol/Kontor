@@ -34,7 +34,7 @@
 import { ContractAddress } from "./canonical/ContractAddress.js";
 import type { Account } from "./account/index.js";
 import type { Chain } from "./chains.js";
-import type { Inst } from "./inst.js";
+import { Inst, type InstDecoder, type PaymentIntent } from "./inst.js";
 import { Insts } from "./insts.js";
 import type { AggregateFragment } from "./aggregate.js";
 import type { ChainEvent, EventsOptions } from "./events.js";
@@ -50,7 +50,21 @@ export interface KontorSessionOptions {
    * protocol.
    */
   transport?: (opts: { chain: Chain; account: Account }) => KontorTransport;
+  /**
+   * Default payment commitment for proc `Inst`s built via `call(...)`.
+   * Overridable per-Inst with `inst.pay(...)`. When omitted, defaults
+   * to `SelfPay` with a provisional limit — the transport refines the
+   * actual gas at submit time; this is the signer's ceiling.
+   */
+  defaultPayment?: PaymentIntent;
 }
+
+/**
+ * Provisional default `SelfPay` ceiling when `KontorSessionOptions`
+ * doesn't specify one. Tunable; the transport estimates real gas at
+ * submit time, so this is just the cap the signer authorizes.
+ */
+const DEFAULT_PAYMENT: PaymentIntent = { kind: "SelfPay", limit: 100_000n };
 
 /**
  * Unwrap the `T` from each `Inst<T>` in a tuple, producing a tuple of
@@ -66,14 +80,38 @@ export class KontorSession {
   readonly account: Account;
   /** Public so `Inst<T>` / `Insts<T>` can route through it directly. */
   readonly transport: KontorTransport;
+  /** Default payment for proc `Inst`s; see `KontorSessionOptions`. */
+  readonly defaultPayment: PaymentIntent;
 
   constructor(opts: KontorSessionOptions) {
     this.chain = opts.chain;
     this.account = opts.account;
+    this.defaultPayment = opts.defaultPayment ?? DEFAULT_PAYMENT;
     const make =
       opts.transport ??
       (({ chain, account }) => new HttpTransport({ chain, account }));
     this.transport = make({ chain: opts.chain, account: opts.account });
+  }
+
+  /**
+   * Build a proc-context `Call` `Inst`. Codegen-emitted proc methods
+   * are one-liners delegating here — this is the narrow facade that
+   * keeps generated code free of `Inst` / `InstKind` internals and of
+   * payment policy. The Inst carries the session's `defaultPayment`;
+   * override per-call with `inst.pay(...)`.
+   */
+  call<T>(
+    contract: ContractAddress,
+    fnName: string,
+    expr: string,
+    decode: InstDecoder<T>,
+  ): Inst<T> {
+    return new Inst<T>(
+      this,
+      this.defaultPayment,
+      { kind: "Call", contract, fnName, expr },
+      decode,
+    );
   }
 
   /**
