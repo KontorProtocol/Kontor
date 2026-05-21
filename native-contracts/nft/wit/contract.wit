@@ -57,6 +57,17 @@ world root {
     new-owner: holder-ref
   ) -> result<nft-transfer, error>;
 
+  export attach: async func(
+    ctx: borrow<proc-context>,
+    nft-id: string,
+    vout: u64
+  ) -> result<nft-transfer, error>;
+
+  export detach: async func(
+    ctx: borrow<proc-context>,
+    nft-id: string
+  ) -> result<nft-transfer, error>;
+
   export get-info: async func(ctx: borrow<view-context>, nft-id: string) -> option<nft-info>;
   export total-minted: async func(ctx: borrow<view-context>) -> u64;
 
