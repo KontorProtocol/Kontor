@@ -6,9 +6,10 @@ import { chmodSync, copyFileSync, mkdirSync, readdirSync } from "fs";
 // Library build for @kontor/sdk.
 //
 // Multi-entry build:
-//   - `index`: the main runtime — canonical wrappers, codec, codegen()
-//   - `vite`:  Vite 8 plugin (`@kontor/sdk/vite`)
-//   - `cli`:   `kontor-codegen` bin (shebang re-added via rollup banner)
+//   - `index`:   the main runtime — canonical wrappers, codec, codegen()
+//   - `vite`:    Vite 8 plugin (`@kontor/sdk/vite`)
+//   - `regtest`: Node-only local devnet helper (`@kontor/sdk/regtest`)
+//   - `cli`:     `kontor-codegen` bin (shebang re-added via rollup banner)
 //
 // We deliberately do NOT bundle the jco-generated component (its WASM
 // loader uses `new URL('./kontor-sdk.core.wasm', import.meta.url)`, which
@@ -23,6 +24,7 @@ export default defineConfig({
       entry: {
         index: resolve(__dirname, "src/index.ts"),
         vite: resolve(__dirname, "src/vite.ts"),
+        regtest: resolve(__dirname, "src/regtest.ts"),
         cli: resolve(__dirname, "src/cli.ts"),
       },
       formats: ["es"],

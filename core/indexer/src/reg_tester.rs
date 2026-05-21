@@ -1133,6 +1133,13 @@ impl RegTesterCluster {
         .await
     }
 
+    /// Bitcoin Core regtest RPC endpoint with the fixed `rpc:rpc`
+    /// credentials embedded (see `regtest_conf`) — a directly-usable URL.
+    pub fn bitcoin_rpc_endpoint(&self) -> String {
+        self.bitcoin_rpc_url
+            .replacen("http://", "http://rpc:rpc@", 1)
+    }
+
     /// Get the client for a running node.
     pub fn client(&self, index: usize) -> &KontorClient {
         &self.node_configs[index]

@@ -83,13 +83,17 @@ async fn run_regtest() -> Result<()> {
 
     let api_port = cluster.node_configs[0].api_port;
     let dev = &cluster.identity;
-    println!("KONTOR_REGTEST_READY api=http://localhost:{api_port}/api");
-    println!(
-        "KONTOR_REGTEST_DEV_KEY {}",
-        hex::encode(dev.keypair.secret_bytes())
-    );
-    println!("KONTOR_REGTEST_DEV_PUBKEY {}", dev.x_only_public_key());
-    println!("KONTOR_REGTEST_DEV_ADDRESS {}", dev.address);
+    // One JSON line, consumed by `@kontor/sdk/regtest`'s `startRegtest()`.
+    // A single line is parsed atomically — it can't be matched while still
+    // half-streamed the way five independent marker lines could.
+    let info = serde_json::json!({
+        "apiUrl": format!("http://localhost:{api_port}/api"),
+        "bitcoinRpc": cluster.bitcoin_rpc_endpoint(),
+        "devPrivateKey": hex::encode(dev.keypair.secret_bytes()),
+        "devPublicKey": dev.x_only_public_key().to_string(),
+        "devAddress": dev.address.to_string(),
+    });
+    println!("KONTOR_REGTEST_INFO {info}");
     println!("kontor regtest devnet running — Ctrl-C to stop");
 
     // Catch SIGTERM as well as SIGINT: the SDK's `startRegtest()` wrapper
