@@ -2,9 +2,9 @@ use anyhow::{Result, anyhow};
 use indexer_types::{
     ComposeOutputs, ComposeQuery, ContractResponse, ErrorResponse, Info, OpWithResult,
     ResultResponse, ResultRow, RevealOutputs, RevealQuery, SignerResponse, TransactionHex,
-    ViewExpr, ViewResult,
+    TransactionRow, ViewExpr, ViewResult,
 };
-use reqwest::{Client as HttpClient, ClientBuilder, Response};
+use reqwest::{Client as HttpClient, ClientBuilder, Response, StatusCode};
 use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 
@@ -45,6 +45,15 @@ impl Client {
 
     pub async fn index(&self) -> Result<Info> {
         Self::handle_response(self.client.get(&self.url).send().await?).await
+    }
+
+    /// Long-poll variant of `index`: the server holds the request until
+    /// the indexer's `Info::signature` differs from `since`, or `wait_ms`
+    /// elapse. Backs the regtest harness's `wait_for_txids`.
+    pub async fn index_wait(&self, since: &str, wait_ms: u64) -> Result<Info> {
+        // `since` is a sha256 hex digest — URL-safe, no escaping needed.
+        let url = format!("{}?wait={}&since={}", &self.url, wait_ms, since);
+        Self::handle_response(self.client.get(url).send().await?).await
     }
 
     pub async fn stop(&self) -> Result<Info> {
@@ -146,6 +155,20 @@ impl Client {
                 .await?,
         )
         .await
+    }
+
+    /// Fetch an indexed transaction by txid. `None` when the indexer has
+    /// not processed it yet (the endpoint 404s).
+    pub async fn transaction(&self, txid: &str) -> Result<Option<TransactionRow>> {
+        let res = self
+            .client
+            .get(format!("{}/transactions/{}", &self.url, txid))
+            .send()
+            .await?;
+        if res.status() == StatusCode::NOT_FOUND {
+            return Ok(None);
+        }
+        Self::handle_response(res).await.map(Some)
     }
 
     pub async fn signer(&self, identifier: &str) -> Result<SignerResponse> {

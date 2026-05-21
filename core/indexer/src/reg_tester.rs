@@ -11,7 +11,7 @@ use std::{
 use backon::BackoffBuilder;
 
 use crate::{
-    api::{client::Client as KontorClient, ws_client::WebSocketClient},
+    api::client::Client as KontorClient,
     bitcoin_client::{
         self, Client as BitcoinClient, client::RegtestRpc, types::TestMempoolAcceptResult,
     },
@@ -27,7 +27,7 @@ use crate::{
     runtime::ContractAddress,
     test_utils,
 };
-use anyhow::{Context, Result, anyhow, bail};
+use anyhow::{Result, anyhow, bail};
 use bitcoin::{
     Address, Amount, BlockHash, CompressedPublicKey, Network, OutPoint, Transaction, TxIn, TxOut,
     Txid, XOnlyPublicKey,
@@ -40,9 +40,8 @@ use bitcoin::{
     transaction::Version,
 };
 use indexer_types::{
-    ComposeOutputs, ComposeQuery, Event, Info, Inst, InstKind, InstructionQuery, Insts,
-    OpWithResult, PaymentIntent, ResultRow, RevealOutputs, RevealQuery, TransactionHex, ViewResult,
-    WsResponse,
+    ComposeOutputs, ComposeQuery, Info, Inst, InstKind, InstructionQuery, Insts, OpWithResult,
+    PaymentIntent, ResultRow, RevealOutputs, RevealQuery, TransactionHex, ViewResult,
 };
 use tempfile::TempDir;
 use tokio::{
@@ -301,7 +300,6 @@ impl IdentityPool {
 pub struct RegTesterInner {
     pub bitcoin_client: BitcoinClient,
     kontor_client: KontorClient,
-    ws_client: WebSocketClient,
     /// Address to mine blocks to (cluster admin identity's address).
     mine_address: String,
     /// Shared identity pool for popping pre-created identities.
@@ -324,13 +322,10 @@ impl RegTesterInner {
     pub async fn with_port(
         bitcoin_client: BitcoinClient,
         kontor_client: KontorClient,
-        api_port: u16,
         mine_address: String,
         pool: IdentityPool,
     ) -> Result<Self> {
-        let ws_client = WebSocketClient::new(api_port).await?;
         Ok(Self {
-            ws_client,
             bitcoin_client,
             kontor_client,
             mine_address,
@@ -534,30 +529,37 @@ impl RegTesterInner {
         self.pool.pop_unregistered().await
     }
 
-    /// Wait for multiple txids to appear in websocket events (batch or block).
-    async fn wait_for_txids(&mut self, target_txids: &[String]) -> Result<()> {
-        let mut remaining: std::collections::HashSet<&str> =
-            target_txids.iter().map(|s| s.as_str()).collect();
-        while !remaining.is_empty() {
-            let response = self
-                .ws_client
-                .next()
-                .await
-                .context("Failed to receive response from websocket")?;
-            let txids = match &response {
-                WsResponse::Event {
-                    event: Event::Processed { txids, .. },
-                } => txids,
-                WsResponse::Event {
-                    event: Event::BatchProcessed { txids },
-                } => txids,
-                _ => continue,
-            };
-            for txid in txids {
-                remaining.remove(txid.as_str());
+    /// Wait until every txid in `target_txids` has been processed by the
+    /// indexer. Long-polls `GET /api/` for state changes (the signature
+    /// moves on every block/batch), then re-checks each txid via
+    /// `/api/transactions/{txid}` — the REST replacement for the old
+    /// websocket `Processed`/`BatchProcessed` event stream.
+    async fn wait_for_txids(&self, target_txids: &[String]) -> Result<()> {
+        const LONG_POLL_MS: u64 = 30_000;
+        let deadline =
+            tokio::time::Instant::now() + std::time::Duration::from_secs(180);
+        let mut remaining: Vec<String> = target_txids.to_vec();
+        let mut since = self.kontor_client.index().await?.signature;
+        loop {
+            let mut still_pending = Vec::new();
+            for txid in remaining {
+                if self.kontor_client.transaction(&txid).await?.is_none() {
+                    still_pending.push(txid);
+                }
             }
+            remaining = still_pending;
+            if remaining.is_empty() {
+                return Ok(());
+            }
+            if tokio::time::Instant::now() >= deadline {
+                bail!("wait_for_txids timed out waiting for: {remaining:?}");
+            }
+            since = self
+                .kontor_client
+                .index_wait(&since, LONG_POLL_MS)
+                .await?
+                .signature;
         }
-        Ok(())
     }
 
     /// Pop a pre-created identity with BLS registration and issuance from the pool.
@@ -1032,7 +1034,6 @@ impl RegTesterCluster {
         let inner = RegTesterInner::with_port(
             bitcoin_client.clone(),
             client.clone(),
-            node_configs[0].api_port,
             mine_address,
             pool.clone(),
         )
@@ -1196,7 +1197,6 @@ impl RegTesterCluster {
         let inner = RegTesterInner::with_port(
             bitcoin_client,
             kontor_client,
-            nc.api_port,
             self.identity.address.to_string(),
             self.pool.clone(),
         )

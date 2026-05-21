@@ -160,21 +160,10 @@ pub struct ResultResponse<T: TS> {
     pub result: T,
 }
 
-#[derive(Debug, Serialize, Deserialize, PartialEq, TS)]
-#[ts(export, export_to = "../../../sdk/src/bindings.d.ts")]
-#[serde(tag = "type")]
-pub enum WsRequest {}
-
-#[derive(Debug, Serialize, Deserialize, PartialEq, TS)]
-#[ts(export, export_to = "../../../sdk/src/bindings.d.ts")]
-#[serde(tag = "type")]
-pub enum WsResponse {
-    Event { event: Event },
-    Error { error: String },
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
-#[ts(export, export_to = "../../../sdk/src/bindings.d.ts")]
+/// Reactor → consumers notification of indexer state changes. Consumed
+/// in-process by the info-publisher and the reactor cluster tests; not
+/// part of the public API surface, so it carries no `TS` export.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "type")]
 pub enum Event {
     Processed {
@@ -185,7 +174,6 @@ pub enum Event {
         txids: Vec<String>,
     },
     Rolledback {
-        #[ts(type = "number")]
         height: u64,
     },
 }

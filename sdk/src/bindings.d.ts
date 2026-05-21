@@ -79,11 +79,6 @@ export type ContractResponse = { wit: string };
 
 export type ErrorResponse = { error: string };
 
-export type Event =
-  | { "type": "Processed"; block: BlockRow; txids: Array<string> }
-  | { "type": "BatchProcessed"; txids: Array<string> }
-  | { "type": "Rolledback"; height: number };
-
 export type Fees = {
   /**
    * Recommended fee rate (sat/vB) to land in the next ~1 block.
@@ -400,11 +395,4 @@ export type ViewExpr = { expr: string };
 export type ViewResult = { "type": "Ok"; value: string } | {
   "type": "Err";
   message: string;
-};
-
-export type WsRequest = never;
-
-export type WsResponse = { "type": "Event"; event: Event } | {
-  "type": "Error";
-  error: string;
 };
