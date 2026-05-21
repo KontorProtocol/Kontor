@@ -487,6 +487,17 @@ pub enum ConsensusMode {
     Follower,
 }
 
+/// One entry in `Info::recent_blocks` — a `BlockRow` trimmed to the
+/// fields the SDK needs for reorg detection (no `relevant` flag).
+#[derive(Debug, Eq, PartialEq, Deserialize, Serialize, TS)]
+#[ts(export, export_to = "../../../sdk/src/bindings.d.ts")]
+pub struct RecentBlock {
+    #[ts(type = "number")]
+    pub height: i64,
+    #[ts(as = "String")]
+    pub hash: BlockHash,
+}
+
 #[derive(Debug, Eq, PartialEq, Deserialize, Serialize, TS)]
 #[ts(export, export_to = "../../../sdk/src/bindings.d.ts")]
 pub struct Info {
@@ -500,6 +511,17 @@ pub struct Info {
     pub checkpoint: Option<String>,
     #[ts(type = "number | null")]
     pub consensus_height: Option<i64>,
+    /// Highest `contract_results.id` — the SDK's forward cursor for
+    /// draining `/api/results`. 0 when no results exist yet.
+    #[ts(type = "number")]
+    pub last_result_id: i64,
+    /// The last 10 indexed blocks, height-descending. The SDK compares
+    /// these against its local block-hash cache for reorg detection.
+    pub recent_blocks: Vec<RecentBlock>,
+    /// Hash of `last_result_id` + `recent_blocks`. Pass back as
+    /// `?since=` to the long-poll endpoint; the request blocks until
+    /// this value changes.
+    pub signature: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]

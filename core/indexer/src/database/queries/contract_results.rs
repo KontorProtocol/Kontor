@@ -173,6 +173,17 @@ pub async fn get_contract_result(
     Ok(rows.next().await?.map(|r| from_row(&r)).transpose()?)
 }
 
+/// Highest `contract_results.id`, or `None` when the table is empty.
+/// Serves as the SDK's forward cursor for draining `/api/results`.
+pub async fn select_latest_result_id(conn: &Connection) -> Result<Option<i64>, Error> {
+    Ok(conn
+        .query("SELECT MAX(id) FROM contract_results", ())
+        .await?
+        .next()
+        .await?
+        .and_then(|row| row.get(0).ok()))
+}
+
 pub async fn insert_contract_result(
     conn: &Connection,
     row: ContractResultRow,
