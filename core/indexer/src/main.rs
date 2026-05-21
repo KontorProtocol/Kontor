@@ -10,7 +10,7 @@ use indexer::event::EventSubscriber;
 use indexer::keygen::{self, KeygenArgs};
 use indexer::{api, block, built_info, reactor, runtime};
 use indexer::{bitcoin_client, bitcoin_follower, config::Config, database, logging, stopper};
-use tokio::sync::{RwLock, mpsc, oneshot};
+use tokio::sync::{Notify, RwLock, mpsc, oneshot};
 use tokio_util::sync::CancellationToken;
 use tracing::{error, info};
 
@@ -94,6 +94,8 @@ async fn run_daemon(config: Config) -> Result<()> {
     let available = Arc::new(RwLock::new(false));
     let (event_tx, event_rx) = mpsc::channel(10);
     let event_subscriber = EventSubscriber::new();
+    // Shared between the reactor (notifier) and Env (long-poll waiters).
+    let sync_notify = Arc::new(Notify::new());
     let (simulate_tx, simulate_rx) = mpsc::channel(available_parallelism()?.into());
     let (fees_tx, fees_rx) = tokio::sync::watch::channel(indexer_types::Fees::floor(1));
     handles.push(event_subscriber.run(cancel_token.clone(), event_rx));
@@ -110,6 +112,7 @@ async fn run_daemon(config: Config) -> Result<()> {
                     .await?,
                 simulate_tx,
                 fees_rx,
+                sync_notify: sync_notify.clone(),
             },
             prom_handle.clone(),
         )
@@ -163,6 +166,7 @@ async fn run_daemon(config: Config) -> Result<()> {
         mempool_rx,
         Some(ready_tx),
         Some(event_tx),
+        sync_notify,
         Some(simulate_rx),
         engine_config,
         bitcoin.clone(),

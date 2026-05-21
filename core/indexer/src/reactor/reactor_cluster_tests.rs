@@ -2,7 +2,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use anyhow::Result;
-use tokio::sync::{broadcast, mpsc};
+use tokio::sync::{Notify, broadcast, mpsc};
 use tokio::task::JoinSet;
 use tokio_util::sync::CancellationToken;
 use tracing::info;
@@ -337,6 +337,7 @@ impl ReactorCluster {
                 cancel.clone(),
                 None,
                 Some(etx),
+                Arc::new(Notify::new()),
                 sim_rx,
                 state,
                 0,

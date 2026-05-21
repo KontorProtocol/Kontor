@@ -532,6 +532,7 @@ impl<E: Executor> Reactor<E> {
                         )
                         .await
                         .context("process_decided_batch failed in deferred drain")?;
+                        self.notify_sync();
                         if let Some(tx) = &self.event_tx {
                             let txids: Vec<String> = resolved_txs
                                 .iter()
