@@ -66,6 +66,15 @@ async fn test_native_nft_attach_contract() -> Result<()> {
         },
     };
     rt.instruction(&mut identity, mint_inst).await?;
+    // The mint is a `Call` op, so `rt.instruction` batches it via consensus
+    // without mining a Bitcoin block — leaving the mint's commit/reveal txs
+    // unconfirmed in the mempool. `identity.next_funding_utxo` now points at
+    // the mint-commit's change output, which is also unconfirmed. The
+    // attach/detach flow below builds a Bitcoin tx chain rooted on that
+    // funding UTXO; if it stays unconfirmed, acceptance depends on
+    // cross-node mempool propagation timing (flaky on slower CI runners).
+    // Mine a block so the mint is confirmed and the funding UTXO is solid.
+    rt.mine(1).await?;
 
     let seller_signer_id = rt
         .get_signer_id(&internal_key.to_string())
