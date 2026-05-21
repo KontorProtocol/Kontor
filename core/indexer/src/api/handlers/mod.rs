@@ -34,3 +34,6 @@ pub fn validate_query(
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod info_tests;
