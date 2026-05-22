@@ -19,6 +19,7 @@
  * For browser / wallet-mediated signing, use `WalletAccount` instead.
  */
 
+import { hex } from "@scure/base";
 import { HDKey } from "@scure/bip32";
 import { mnemonicToSeedSync, validateMnemonic } from "@scure/bip39";
 import { wordlist } from "@scure/bip39/wordlists/english.js";
@@ -80,7 +81,7 @@ export class LocalAccount implements Account {
     if (payment.address == null) {
       throw new SignerError("LocalAccount: could not derive a P2TR address");
     }
-    this.xOnlyPubKey = bytesToHex(xOnly);
+    this.xOnlyPubKey = hex.encode(xOnly);
     this.address = payment.address;
     this.holderRef = HolderRef.xOnlyPubkey(this.xOnlyPubKey);
   }
@@ -195,24 +196,13 @@ function bip86Path(chain: Chain, idx: Bip86Indices): string {
   return `m/${BIP86_PURPOSE}'/${coinType(chain)}'/${account}'/${change}/${address}`;
 }
 
+/** Decode a hex private key (optionally `0x`-prefixed) to bytes. */
 function hexToBytes(s: string): Uint8Array {
-  const clean = s.startsWith("0x") ? s.slice(2) : s;
-  if (clean.length % 2 !== 0) {
-    throw new SignerError("private key hex has an odd length");
+  try {
+    return hex.decode(s.startsWith("0x") ? s.slice(2) : s);
+  } catch (cause) {
+    throw new SignerError("private key is not valid hex", {
+      cause: cause instanceof Error ? cause : undefined,
+    });
   }
-  const out = new Uint8Array(clean.length / 2);
-  for (let i = 0; i < out.length; i++) {
-    const byte = Number.parseInt(clean.slice(2 * i, 2 * i + 2), 16);
-    if (Number.isNaN(byte)) {
-      throw new SignerError("private key hex contains invalid characters");
-    }
-    out[i] = byte;
-  }
-  return out;
-}
-
-function bytesToHex(b: Uint8Array): string {
-  let s = "";
-  for (const byte of b) s += byte.toString(16).padStart(2, "0");
-  return s;
 }
