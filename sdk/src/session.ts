@@ -171,9 +171,12 @@ export class KontorSession {
    * tuple of typed results in the same order as the inputs.
    */
   bulk<Ts extends readonly Inst<unknown>[]>(
-    ..._insts: Ts
+    ...insts: Ts
   ): Insts<InstResults<Ts>> {
-    throw new Error("KontorSession.bulk: not implemented");
+    if (insts.length === 0) {
+      throw new Error("KontorSession.bulk: at least one Inst is required");
+    }
+    return new Insts<InstResults<Ts>>(this, insts, null);
   }
 
   /**

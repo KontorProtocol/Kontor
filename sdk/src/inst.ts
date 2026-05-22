@@ -190,10 +190,19 @@ export class Inst<T> implements PromiseLike<T> {
       txid,
       async wait(opts?: WaitOptions): Promise<OpResult<T>> {
         try {
+          const outcomes = await waitForTxOutcomes(events, txid, opts);
           // A single Inst is always op (0, 0) of its own tx. Multi-Inst
           // (`bulk`) and aggregate bundles go through `Insts`, which
           // maps every op of the tx itself.
-          return await waitForTx(events, txid, decode, 0, 0, opts);
+          const raw = outcomes.find(
+            (o) => o.inputIndex === 0 && o.opIndex === 0,
+          );
+          if (raw === undefined) {
+            throw new TransportError(
+              `wait: tx ${txid} carried no result for op (0, 0)`,
+            );
+          }
+          return rawToOpResult(raw, decode);
         } finally {
           await events.return?.();
         }
@@ -262,8 +271,12 @@ export class Inst<T> implements PromiseLike<T> {
   }
 }
 
-/** Decode a transport `OpResultRaw` into the Inst's typed `OpResult<T>`. */
-function rawToOpResult<T>(
+/**
+ * Decode a transport `OpResultRaw` into a typed `OpResult<T>`.
+ *
+ * @internal
+ */
+export function rawToOpResult<T>(
   raw: OpResultRaw,
   decode: InstDecoder<T>,
 ): OpResult<T> {
@@ -286,30 +299,19 @@ function unwrapOrThrow<T>(r: OpResult<T>): T {
 
 /**
  * Drain the poller's event stream until the `tx` event for `txid`
- * arrives, then decode the op at `(inputIndex, opIndex)` into an
- * `OpResult<T>`. Honors `timeoutMs` / `signal` from `WaitOptions`.
+ * arrives, returning its per-op outcomes. Honors `timeoutMs` / `signal`
+ * from `WaitOptions`. Shared by `Inst` and `Insts` `wait()`.
+ *
+ * @internal
  */
-async function waitForTx<T>(
+export async function waitForTxOutcomes(
   events: AsyncIterableIterator<ChainEvent>,
   txid: string,
-  decode: InstDecoder<T>,
-  inputIndex: number,
-  opIndex: number,
   opts?: WaitOptions,
-): Promise<OpResult<T>> {
-  const scan = async (): Promise<OpResult<T>> => {
+): Promise<OpResultRaw[]> {
+  const scan = async (): Promise<OpResultRaw[]> => {
     for await (const ev of events) {
-      if (ev.kind !== "tx" || ev.txid !== txid) continue;
-      // The poller has collapsed each op to its canonical result.
-      const raw = ev.outcomes.find(
-        (o) => o.inputIndex === inputIndex && o.opIndex === opIndex,
-      );
-      if (raw === undefined) {
-        throw new TransportError(
-          `wait: tx ${txid} carried no result for op (${inputIndex}, ${opIndex})`,
-        );
-      }
-      return rawToOpResult(raw, decode);
+      if (ev.kind === "tx" && ev.txid === txid) return ev.outcomes;
     }
     throw new TransportError(
       `wait: event stream ended before tx ${txid} landed`,
@@ -320,7 +322,7 @@ async function waitForTx<T>(
 
   // Race the scan against the timeout / abort signal. The losing `scan`
   // unblocks when the caller's `finally` closes the event iterator.
-  return new Promise<OpResult<T>>((resolve, reject) => {
+  return new Promise<OpResultRaw[]>((resolve, reject) => {
     let settled = false;
     let timer: ReturnType<typeof setTimeout> | undefined;
     const onAbort = (): void =>
