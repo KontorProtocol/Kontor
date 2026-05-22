@@ -108,7 +108,7 @@ export class HttpTransport implements KontorTransport {
   async view(contract: ContractAddress, wave: string): Promise<string> {
     const body: ViewExpr = { expr: wave };
     const result = await this.postJson<ViewResult>(
-      `/contracts/${contractPath(contract)}`,
+      `/contracts/${contract.toWire()}`,
       body,
     );
     if (result.type === "Ok") return result.value;
@@ -301,15 +301,6 @@ export class HttpTransport implements KontorTransport {
     });
     return hex.encode(tx.extract());
   }
-}
-
-/**
- * The indexer's URL form for a contract address: `name_height_txIndex`
- * — Kontor's `ContractAddress` `Display`. Distinct from the SDK's
- * `toString()` (`name@height.txIndex`), which is the human/parse form.
- */
-function contractPath(c: ContractAddress): string {
-  return `${c.name}_${c.height}_${c.txIndex}`;
 }
 
 /**

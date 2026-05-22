@@ -36,4 +36,14 @@ export class ContractAddress {
   toString(): string {
     return `${this.name}@${this.height}.${this.txIndex}`;
   }
+
+  /**
+   * The indexer's wire form — `name_height_txIndex` (Kontor's
+   * `ContractAddress` `Display`/`FromStr`). Used in API URL paths and as
+   * the `contract` field of a wire `Call`. Distinct from `toString()`,
+   * which is the human-facing `name@height.txIndex`.
+   */
+  toWire(): string {
+    return `${this.name}_${this.height}_${this.txIndex}`;
+  }
 }

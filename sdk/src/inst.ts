@@ -32,9 +32,16 @@
 
 import type { AggregateFragment } from "./aggregate.js";
 import type { Account } from "./account/index.js";
+import type {
+  Inst as WireInst,
+  InstKind as WireInstKind,
+  Insts as WireInsts,
+  PaymentIntent as WirePaymentIntent,
+} from "./bindings.js";
 import type { ContractAddress } from "./canonical/ContractAddress.js";
-import { ContractError, SignerError } from "./errors.js";
-import type { OpResult } from "./json-codec.js";
+import { ContractError, SignerError, TransportError } from "./errors.js";
+import type { ChainEvent } from "./events.js";
+import type { BroadcastResult, OpResult } from "./json-codec.js";
 import type { KontorSession } from "./session.js";
 
 /**
@@ -166,7 +173,29 @@ export class Inst<T> implements PromiseLike<T> {
    * once the indexer surfaces the outcome.
    */
   async submit(): Promise<SubmittedTx<OpResult<T>>> {
-    throw new Error("Inst.submit: not implemented");
+    const wire: WireInsts = { ops: [instToWire(this)], aggregate: null };
+    // Attach to the poller's event stream *before* broadcasting, so the
+    // tx's result event can't slip past between broadcast and wait().
+    const events = this.session.events();
+    let broadcast: BroadcastResult;
+    try {
+      broadcast = await this.session.transport.submit(wire);
+    } catch (e) {
+      await events.return?.();
+      throw e;
+    }
+    const { txid } = broadcast;
+    const decode = this.decode;
+    return {
+      txid,
+      async wait(opts?: WaitOptions): Promise<OpResult<T>> {
+        try {
+          return await waitForTx(events, txid, decode, opts);
+        } finally {
+          await events.return?.();
+        }
+      },
+    };
   }
 
   /**
@@ -217,4 +246,112 @@ function unwrapOrThrow<T>(r: OpResult<T>): T {
   throw new ContractError(`contract call failed with status: ${r.status}`, {
     details: r.error,
   });
+}
+
+/**
+ * Drain the poller's event stream until the `tx` event for `txid`
+ * arrives, then decode its (single) op outcome into an `OpResult<T>`.
+ * Honors `timeoutMs` / `signal` from `WaitOptions`.
+ */
+async function waitForTx<T>(
+  events: AsyncIterableIterator<ChainEvent>,
+  txid: string,
+  decode: InstDecoder<T>,
+  opts?: WaitOptions,
+): Promise<OpResult<T>> {
+  const scan = async (): Promise<OpResult<T>> => {
+    for await (const ev of events) {
+      if (ev.kind !== "tx" || ev.txid !== txid) continue;
+      const raw = ev.outcomes[0];
+      if (raw === undefined) {
+        throw new TransportError(`wait: tx ${txid} landed with no op results`);
+      }
+      return {
+        status: raw.status,
+        gas: raw.gas,
+        error: raw.error,
+        value: raw.value !== undefined ? decode(raw.value) : undefined,
+      };
+    }
+    throw new TransportError(
+      `wait: event stream ended before tx ${txid} landed`,
+    );
+  };
+
+  if (opts?.timeoutMs == null && opts?.signal == null) return scan();
+
+  // Race the scan against the timeout / abort signal. The losing `scan`
+  // unblocks when the caller's `finally` closes the event iterator.
+  return new Promise<OpResult<T>>((resolve, reject) => {
+    let settled = false;
+    const settle = (fn: () => void): void => {
+      if (settled) return;
+      settled = true;
+      fn();
+    };
+    scan().then(
+      (r) => settle(() => resolve(r)),
+      (e) => settle(() => reject(e)),
+    );
+    if (opts.timeoutMs != null) {
+      setTimeout(
+        () =>
+          settle(() =>
+            reject(
+              new TransportError(
+                `wait: tx ${txid} not seen within ${opts.timeoutMs}ms`,
+              ),
+            ),
+          ),
+        opts.timeoutMs,
+      );
+    }
+    if (opts.signal != null) {
+      const onAbort = (): void =>
+        settle(() =>
+          reject(new TransportError(`wait: aborted for tx ${txid}`)),
+        );
+      if (opts.signal.aborted) onAbort();
+      else opts.signal.addEventListener("abort", onAbort, { once: true });
+    }
+  });
+}
+
+/**
+ * Convert an SDK `Inst` to its wire shape — the JSON `Inst` the
+ * indexer's compose endpoint consumes. Exported for `session.bulk`,
+ * which assembles several into one `Insts` bundle.
+ *
+ * @internal
+ */
+export function instToWire(inst: Inst<unknown>): WireInst {
+  return {
+    payment: paymentToWire(inst.payment),
+    kind: instKindToWire(inst.kind),
+  };
+}
+
+function paymentToWire(p: PaymentIntent): WirePaymentIntent {
+  return p.kind === "SelfPay"
+    ? { SelfPay: { limit: Number(p.limit) } }
+    : "Sponsored";
+}
+
+function instKindToWire(k: InstKind): WireInstKind {
+  switch (k.kind) {
+    case "Call":
+      return { Call: { contract: k.contract.toWire(), expr: k.expr } };
+    case "Issuance":
+      return "Issuance";
+    case "Publish":
+      return { Publish: { name: k.name, bytes: [...k.bytes] } };
+    case "RegisterBlsKey":
+      return {
+        RegisterBlsKey: {
+          bls_pubkey: [...k.blsPubkey],
+          schnorr_sig: [...k.schnorrSig],
+          bls_sig: [...k.blsSig],
+        },
+      };
+  }
 }
