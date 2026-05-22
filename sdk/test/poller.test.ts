@@ -69,9 +69,9 @@ function mockFetch(opts: {
   return (async (url: string) => {
     const path = url.replace(/^.*\/api/, "");
     let result: unknown;
-    if (path === "/") {
+    if (path === "") {
       result = opts.infos[0]; // bootstrap
-    } else if (path.startsWith("/?wait=")) {
+    } else if (path.startsWith("?wait=")) {
       await sleep(5); // mimic a long-poll, avoid a busy loop
       pollCount += 1;
       result = opts.infos[Math.min(pollCount, opts.infos.length - 1)];
@@ -87,17 +87,23 @@ function mockFetch(opts: {
   }) as typeof fetch;
 }
 
-function row(id: number, txid: string, height: number, status = "Ok") {
+function row(
+  id: number,
+  txid: string,
+  height: number,
+  opIndex = 0,
+  resultIndex = 0,
+) {
   return {
     id,
     height,
     tx_index: 0,
     input_index: 0,
-    op_index: 0,
-    result_index: 0,
+    op_index: opIndex,
+    result_index: resultIndex,
     func: "transfer",
     gas: 10,
-    status,
+    status: "Ok",
     value: null,
     contract: "token_0_0",
     txid,
@@ -111,8 +117,9 @@ test("ResultsPoller: drains results into a per-tx event", async () => {
       { height: 1, last_result_id: 0, recent_blocks: [{ height: 1, hash: "a" }], signature: "s0" },
       { height: 1, last_result_id: 2, recent_blocks: [{ height: 1, hash: "a" }], signature: "s1" },
     ],
-    // two op-results sharing one txid → one `tx` event, two outcomes
-    results: [row(1, "txAA", 1), row(2, "txAA", 1)],
+    // two distinct ops (op_index 0 and 1) of one txid → one `tx` event,
+    // two outcomes.
+    results: [row(1, "txAA", 1, 0), row(2, "txAA", 1, 1)],
   });
   const poller = new ResultsPoller({ baseUrl: "http://test/api", fetch });
   const iter = poller.events();
@@ -129,6 +136,33 @@ test("ResultsPoller: drains results into a per-tx event", async () => {
   expect(ev.id).toBe(2); // cursor = last row id in the group
   expect(ev.height).toBe(1n);
   expect(ev.outcomes).toHaveLength(2);
+  expect(ev.outcomes[0]!.gas).toBe(10n);
+});
+
+test("ResultsPoller: collapses one op's rows to its max-result_index result", async () => {
+  // The user op and the implicit gas op share (input 0, op 0); the gas
+  // op sits at a lower result_index. The poller keeps only the highest
+  // — one canonical outcome, mirroring the indexer's `get_op_result`.
+  const fetch = mockFetch({
+    infos: [
+      { height: 1, last_result_id: 0, recent_blocks: [{ height: 1, hash: "a" }], signature: "s0" },
+      { height: 1, last_result_id: 2, recent_blocks: [{ height: 1, hash: "a" }], signature: "s1" },
+    ],
+    results: [
+      { ...row(1, "txGG", 1, 0, 0), func: "release", gas: 5 },
+      { ...row(2, "txGG", 1, 0, 1), func: "transfer", gas: 10 },
+    ],
+  });
+  const poller = new ResultsPoller({ baseUrl: "http://test/api", fetch });
+  const iter = poller.events();
+  poller.start();
+
+  const ev = (await iter.next()).value!;
+  poller.stop();
+
+  if (ev.kind !== "tx") throw new Error("expected tx");
+  expect(ev.outcomes).toHaveLength(1);
+  expect(ev.outcomes[0]!.func).toBe("transfer");
   expect(ev.outcomes[0]!.gas).toBe(10n);
 });
 

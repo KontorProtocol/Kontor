@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::fmt;
 
 use bitcoin::{Amount, Network, Txid};
@@ -120,6 +121,24 @@ pub struct TestMempoolAcceptResult {
     pub reject_reason: Option<String>,
     pub vsize: Option<u64>,
     pub fees: Option<TestMempoolAcceptResultFees>,
+}
+
+/// Result of bitcoind's `submitpackage`. `package_msg` is `"success"`
+/// when the whole package was accepted into the mempool; otherwise it
+/// describes the failure. `tx_results` is keyed by wtxid; extra fields
+/// bitcoind returns (vsize, fees, replaced-transactions) are ignored.
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct SubmitPackageResult {
+    pub package_msg: String,
+    #[serde(rename = "tx-results")]
+    pub tx_results: HashMap<String, SubmitPackageTxResult>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct SubmitPackageTxResult {
+    pub txid: Txid,
+    /// Per-transaction rejection reason, when this tx specifically failed.
+    pub error: Option<String>,
 }
 
 #[derive(Clone, PartialEq, Debug, Deserialize, Serialize)]

@@ -29,9 +29,18 @@ export type { KontorTransport } from "./json-codec";
 // aggregate — lands with the runtime implementation (work item #13).
 export { KontorSession } from "./session";
 export type { Inst } from "./inst";
+export { HttpTransport, http } from "./transport/http";
+export type { HttpTransportOptions, Utxo } from "./transport/http";
 export { signet } from "./chains";
 export type { Chain } from "./chains";
 export type { Account } from "./account/index";
+export { LocalAccount } from "./account/local";
+export type {
+  Bip86Indices,
+  FromHdKeyOptions,
+  FromMnemonicOptions,
+  FromPrivateKeyOptions,
+} from "./account/local";
 export { Decimal } from "./canonical/Decimal";
 export { Integer } from "./canonical/Integer";
 export { HolderRef } from "./canonical/HolderRef";

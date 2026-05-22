@@ -5,7 +5,10 @@ use axum::{
     extract::{Path, Query, State},
 };
 use bitcoin::consensus::encode;
-use indexer_types::{OpWithResult, PaginatedResponse, TransactionHex, TransactionRow};
+use indexer_types::{
+    BroadcastQuery, BroadcastResult, OpWithResult, PaginatedResponse, TransactionHex,
+    TransactionRow,
+};
 
 use super::validate_query;
 use crate::api::{Env, error::HttpError, result::Result};
@@ -60,6 +63,45 @@ pub async fn get_transaction_inspect(
         .ok_or_else(|| HttpError::BadRequest("Not a valid Kontor transaction".to_string()))?;
     let conn = env.reader.connection().await?;
     Ok(inspect(&conn, &tx).await?.into())
+}
+
+/// Relay a package of raw Bitcoin transactions (dependency order — e.g.
+/// `[commit, reveal]`) to bitcoind via `submitpackage`. Lets SDK clients
+/// — browser ones especially — broadcast without their own bitcoind RPC
+/// access. Returns the last tx's txid; a rejected package is a 400 with
+/// the reason.
+pub async fn post_transaction_broadcast(
+    State(env): State<Env>,
+    Json(BroadcastQuery { transactions }): Json<BroadcastQuery>,
+) -> Result<BroadcastResult> {
+    let last = transactions
+        .last()
+        .ok_or_else(|| HttpError::BadRequest("no transactions provided".to_string()))?;
+    // Deserialize the last tx up front: validates the hex and gives the
+    // txid to return (submitpackage keys its results by wtxid).
+    let last_txid = encode::deserialize_hex::<bitcoin::Transaction>(last)
+        .map_err(|e| HttpError::BadRequest(format!("invalid transaction hex: {e}")))?
+        .compute_txid();
+
+    let result = env
+        .bitcoin
+        .submit_package(&transactions)
+        .await
+        .map_err(|e| HttpError::BadRequest(format!("broadcast failed: {e}")))?;
+
+    if result.package_msg != "success" {
+        let detail = result
+            .tx_results
+            .values()
+            .find_map(|r| r.error.clone())
+            .unwrap_or(result.package_msg);
+        return Err(HttpError::BadRequest(format!("package rejected: {detail}")).into());
+    }
+
+    Ok(BroadcastResult {
+        txid: last_txid.to_string(),
+    }
+    .into())
 }
 
 pub async fn post_simulate(

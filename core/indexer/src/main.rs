@@ -90,6 +90,10 @@ async fn run_regtest() -> Result<()> {
 
     let api_port = cluster.node_configs[0].api_port;
     let dev = &cluster.identity;
+    // The dev account's current spendable Bitcoin UTXO (the change output
+    // of the Issuance above) — the SDK passes it to `submit` as funding,
+    // since the SDK never sources UTXOs itself.
+    let funding = &dev.next_funding_utxo;
     // One JSON line, consumed by `@kontor/sdk/regtest`'s `startRegtest()`.
     // A single line is parsed atomically — it can't be matched while still
     // half-streamed the way five independent marker lines could.
@@ -99,6 +103,12 @@ async fn run_regtest() -> Result<()> {
         "devPrivateKey": hex::encode(dev.keypair.secret_bytes()),
         "devPublicKey": dev.x_only_public_key().to_string(),
         "devAddress": dev.address.to_string(),
+        "devFundingUtxo": {
+            "txid": funding.0.txid.to_string(),
+            "vout": funding.0.vout,
+            "value": funding.1.value.to_sat(),
+            "scriptPubKey": hex::encode(funding.1.script_pubkey.as_bytes()),
+        },
     });
     println!("KONTOR_REGTEST_INFO {info}");
     println!("kontor regtest devnet running — Ctrl-C to stop");
