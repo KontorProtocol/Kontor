@@ -48,6 +48,8 @@ function mockSession(simulate: KontorTransport["simulate"]): KontorSession {
     inspect: fail,
     simulate,
     submit: fail,
+    compose: fail,
+    composeReveal: fail,
   };
   const session = new KontorSession({
     chain: signet,

@@ -37,9 +37,12 @@
  */
 import type { ContractAddress } from "./canonical/ContractAddress.js";
 import type {
+  ComposeOutputs,
   Inst as WireInst,
   Insts as WireInsts,
   OpStatus,
+  RevealOutputs,
+  RevealQuery,
 } from "./bindings.js";
 
 export type { WireInst, WireInsts, OpStatus };
@@ -122,4 +125,21 @@ export interface KontorTransport {
    * `submit` fast and lets callers see the txid before the tx lands.
    */
   submit(insts: WireInsts): Promise<BroadcastResult>;
+
+  /**
+   * Compose a Kontor transaction — the commit + the (attach) reveal —
+   * unsigned. `chainedInsts`, when given, carries a detach to chain
+   * after: it sizes the commit to fund the detach and returns the
+   * detach's tap-leaf script. Used by the attach/detach runtime; the
+   * detach reveal itself is built later via `composeReveal`.
+   */
+  compose(insts: WireInsts, chainedInsts?: WireInsts): Promise<ComposeOutputs>;
+
+  /**
+   * Build a reveal transaction from an already-composed parent — e.g.
+   * the detach reveal, which spends the attach reveal's escrow output.
+   * The `RevealQuery` is assembled by the caller (the attach/detach
+   * runtime), since its content depends on who is detaching and where.
+   */
+  composeReveal(query: RevealQuery): Promise<RevealOutputs>;
 }

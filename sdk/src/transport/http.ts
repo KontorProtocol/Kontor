@@ -44,6 +44,8 @@ import type {
   OpWithResult,
   ParticipantScripts,
   ResultResponse,
+  RevealOutputs,
+  RevealQuery,
   ViewExpr,
   ViewResult,
 } from "../bindings.js";
@@ -169,14 +171,14 @@ export class HttpTransport implements KontorTransport {
   }
 
   /**
-   * Compose a Kontor transaction for `insts` and sign the commit +
-   * reveal — the shared front half of `submit` / `inspect` / `simulate`.
-   * Funding UTXOs and fee rate are caller-supplied (`utxos` / `feeRate`);
-   * the SDK does not source UTXOs itself.
+   * Compose a Kontor transaction for `insts` — commit + (attach) reveal,
+   * unsigned. `chainedInsts` carries a detach to chain after. Funding
+   * UTXOs and fee rate are caller-supplied (`utxos` / `feeRate`).
    */
-  private async composeAndSign(
+  async compose(
     insts: WireInsts,
-  ): Promise<{ commitHex: string; revealHex: string }> {
+    chainedInsts?: WireInsts,
+  ): Promise<ComposeOutputs> {
     const { account } = this.opts;
     const utxos = await this.resolveUtxos();
     const query: ComposeQuery = {
@@ -186,16 +188,31 @@ export class HttpTransport implements KontorTransport {
           x_only_public_key: account.xOnlyPubKey,
           funding_utxo_ids: utxos.map((u) => `${u.txid}:${u.vout}`).join(","),
           insts,
-          chained_insts: null,
+          chained_insts: chainedInsts ?? null,
         },
       ],
       sat_per_vbyte: await this.resolveFeeRate(),
       envelope: null,
     };
-    const composed = await this.postJson<ComposeOutputs>(
-      "/transactions/compose",
+    return this.postJson<ComposeOutputs>("/transactions/compose", query);
+  }
+
+  /** Build a reveal tx (e.g. the detach reveal) from a composed parent. */
+  composeReveal(query: RevealQuery): Promise<RevealOutputs> {
+    return this.postJson<RevealOutputs>(
+      "/transactions/compose/reveal",
       query,
     );
+  }
+
+  /**
+   * Compose a Kontor transaction for `insts` and sign the commit +
+   * reveal — the shared front half of `submit` / `inspect` / `simulate`.
+   */
+  private async composeAndSign(
+    insts: WireInsts,
+  ): Promise<{ commitHex: string; revealHex: string }> {
+    const composed = await this.compose(insts);
     return {
       commitHex: await this.signCommit(composed.commit_psbt_hex),
       revealHex: await this.signReveal(

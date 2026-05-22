@@ -96,6 +96,8 @@ function mockSession(viewResponses: Record<string, string>): {
     inspect: notUsed,
     simulate: notUsed,
     submit: notUsed,
+    compose: notUsed,
+    composeReveal: notUsed,
   };
   const session = new KontorSession({
     chain: signet,
