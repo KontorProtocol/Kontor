@@ -20,8 +20,13 @@
  * logic lives in the Rust binary — this is pure process management.
  */
 
-import { spawn, type ChildProcess } from "node:child_process";
-import type { Chain } from "./chains.js";
+import type { ChildProcess } from "node:child_process";
+import { regtestChain, type Chain } from "./chains.js";
+
+// `regtestChain` is a pure, browser-safe chain builder — it lives in
+// `chains.ts` next to `signet`. Re-exported here so `@kontor/sdk/regtest`
+// consumers still find it alongside `startRegtest`.
+export { regtestChain };
 
 export interface StartRegtestOptions {
   /**
@@ -134,23 +139,6 @@ function parseInfoPayload(json: string): RegtestInfo {
   };
 }
 
-/**
- * Build a `Chain` for a `kontor regtest` devnet. Exposed for callers who
- * run `kontor regtest` themselves (e.g. a shared devnet) rather than via
- * `startRegtest`.
- */
-export function regtestChain(info: Pick<RegtestInfo, "apiUrl" | "bitcoinRpc">): Chain {
-  return {
-    name: "regtest",
-    nativeCurrency: { name: "Kontor", symbol: "KOR", decimals: 18 },
-    // `kontor regtest` auto-mines roughly every 10s.
-    blockTime: 10_000,
-    urls: { http: info.apiUrl, bitcoinRpc: info.bitcoinRpc },
-    contracts: { nativeToken: { name: "token", height: 0n, txIndex: 0n } },
-    network: { bech32: "bcrt", pubKeyHash: 0x6f, scriptHash: 0xc4, wif: 0xef },
-  };
-}
-
 /** Resolve the `kontor` binary path: explicit option → `$KONTOR_BIN` → PATH. */
 function resolveKontorBin(opt?: string): string {
   return opt ?? process.env.KONTOR_BIN ?? "kontor";
@@ -176,8 +164,16 @@ function stopChild(child: ChildProcess): Promise<void> {
  * Spawn `kontor regtest` and resolve once the devnet is up. Rejects if the
  * process exits before reporting ready, or if `timeoutMs` elapses first —
  * in both cases the child is killed so nothing is left running.
+ *
+ * `node:child_process` is imported dynamically, not at the top of the
+ * module: that keeps `regtest.ts` loadable in a browser (its pure helpers
+ * — `parseRegtestInfo`, `regtestChain` — stay importable anywhere).
+ * Calling `startRegtest` itself is Node-only, by nature.
  */
-export function startRegtest(opts: StartRegtestOptions = {}): Promise<Regtest> {
+export async function startRegtest(
+  opts: StartRegtestOptions = {},
+): Promise<Regtest> {
+  const { spawn } = await import("node:child_process");
   const bin = resolveKontorBin(opts.kontorBin);
   const timeoutMs = opts.timeoutMs ?? 240_000;
 

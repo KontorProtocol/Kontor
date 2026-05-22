@@ -83,3 +83,25 @@ export function nativeTokenAddress(chain: Chain): ContractAddress {
   }
   return new ContractAddress(nt.name, nt.height, nt.txIndex);
 }
+
+/**
+ * Build a `Chain` for a `kontor regtest` devnet at the given endpoints.
+ * Unlike `signet`, a regtest config is per-process — the ports are
+ * allocated at runtime — so it's a builder rather than a static const.
+ * `@kontor/sdk/regtest`'s `startRegtest()` calls this with the endpoints
+ * it parses from the binary; callers running their own devnet can too.
+ */
+export function regtestChain(endpoints: {
+  apiUrl: string;
+  bitcoinRpc: string;
+}): Chain {
+  return {
+    name: "regtest",
+    nativeCurrency: { name: "Kontor", symbol: "KOR", decimals: 18 },
+    // `kontor regtest` auto-mines roughly every 10s.
+    blockTime: 10_000,
+    urls: { http: endpoints.apiUrl, bitcoinRpc: endpoints.bitcoinRpc },
+    contracts: { nativeToken: { name: "token", height: 0n, txIndex: 0n } },
+    network: { bech32: "bcrt", pubKeyHash: 0x6f, scriptHash: 0xc4, wif: 0xef },
+  };
+}

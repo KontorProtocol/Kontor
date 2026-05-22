@@ -8,8 +8,7 @@ import { test, expect } from "vitest";
 import { Transaction, p2tr } from "@scure/btc-signer";
 import { LocalAccount } from "../src/account/local.js";
 import { SignerError } from "../src/errors.js";
-import { signet } from "../src/chains.js";
-import { regtestChain } from "../src/regtest.js";
+import { regtestChain, signet } from "../src/chains.js";
 
 // BIP-39 test vector mnemonic (the "test … junk" phrase). Deriving it at
 // BIP-86 `m/86'/1'/0'/0/0` on a testnet chain is a fixed, known answer.
