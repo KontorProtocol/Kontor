@@ -62,11 +62,12 @@ export interface RegtestInfo {
   /** The dev account's bech32m (p2tr) address. */
   devAddress: string;
   /**
-   * A spendable Bitcoin UTXO owned by the dev account — pass it to
-   * `submit` as funding (the SDK never sources UTXOs itself). One UTXO;
-   * a multi-tx test must chain its own change.
+   * Spendable Bitcoin UTXOs owned by the dev account — pass one to
+   * `submit` as funding (the SDK never sources UTXOs itself). The
+   * devnet splits the dev funding into several independent outputs so
+   * distinct test files can each spend one without colliding.
    */
-  devFundingUtxo: Utxo;
+  devFundingUtxos: Utxo[];
 }
 
 /** A running `kontor regtest` devnet. */
@@ -143,11 +144,21 @@ function parseInfoPayload(json: string): RegtestInfo {
     devPrivateKey: obj.devPrivateKey as string,
     devPublicKey: obj.devPublicKey as string,
     devAddress: obj.devAddress as string,
-    devFundingUtxo: parseFundingUtxo(obj.devFundingUtxo),
+    devFundingUtxos: parseFundingUtxos(obj.devFundingUtxos),
   };
 }
 
-/** Parse + validate the `devFundingUtxo` object into a `Utxo`. */
+/** Parse + validate the `devFundingUtxos` array into `Utxo`s. */
+function parseFundingUtxos(raw: unknown): Utxo[] {
+  if (!Array.isArray(raw) || raw.length === 0) {
+    throw new Error(
+      "KONTOR_REGTEST_INFO: devFundingUtxos missing, not an array, or empty",
+    );
+  }
+  return raw.map(parseFundingUtxo);
+}
+
+/** Parse + validate one funding-UTXO object into a `Utxo`. */
 function parseFundingUtxo(raw: unknown): Utxo {
   if (typeof raw !== "object" || raw === null) {
     throw new Error("KONTOR_REGTEST_INFO: devFundingUtxo missing or not an object");

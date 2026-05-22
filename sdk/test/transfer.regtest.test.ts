@@ -12,24 +12,7 @@ import { test, expect, inject } from "vitest";
 import { Decimal, KontorSession, LocalAccount, http } from "@kontor/sdk";
 import { regtestChain } from "@kontor/sdk/regtest";
 import { Contract } from "./__generated__/token.js";
-
-interface RegtestInfo {
-  apiUrl: string;
-  bitcoinRpc: string;
-  devPrivateKey: string;
-  devFundingUtxo: {
-    txid: string;
-    vout: number;
-    value: string;
-    scriptPubKey: string;
-  };
-}
-
-declare module "vitest" {
-  interface ProvidedContext {
-    regtest: RegtestInfo;
-  }
-}
+import "./regtest-context.js";
 
 test("transfer(): submit/wait moves tokens; balance() view reflects it", async () => {
   const rt = inject("regtest");
@@ -44,9 +27,11 @@ test("transfer(): submit/wait moves tokens; balance() view reflects it", async (
     privateKey: "22".repeat(32),
     chain,
   });
+  // Funding UTXO 0 — the attach suite takes index 1, so the two test
+  // files never collide on a shared output.
   const funding = {
-    ...rt.devFundingUtxo,
-    value: BigInt(rt.devFundingUtxo.value),
+    ...rt.devFundingUtxos[0]!,
+    value: BigInt(rt.devFundingUtxos[0]!.value),
   };
 
   const session = new KontorSession({

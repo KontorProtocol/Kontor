@@ -83,19 +83,36 @@ pub async fn post_transaction_broadcast(
         .map_err(|e| HttpError::BadRequest(format!("invalid transaction hex: {e}")))?
         .compute_txid();
 
-    let result = env
-        .bitcoin
-        .submit_package(&transactions)
-        .await
-        .map_err(|e| HttpError::BadRequest(format!("broadcast failed: {e}")))?;
-
-    if result.package_msg != "success" {
-        let detail = result
-            .tx_results
-            .values()
-            .find_map(|r| r.error.clone())
-            .unwrap_or(result.package_msg);
-        return Err(HttpError::BadRequest(format!("package rejected: {detail}")).into());
+    // `submitpackage` only accepts a child-with-parents topology (≤2
+    // generations): a `[commit, reveal]` pair qualifies and gets atomic
+    // package validation. A longer dependency chain — `[commit, attach
+    // reveal, detach reveal]` — does not, so it is relayed tx-by-tx.
+    // Every Kontor tx funds its own fee (compose sizes each), so no
+    // package CPFP is needed; sent in dependency order, each parent is
+    // already in the mempool when its child arrives.
+    if transactions.len() <= 2 {
+        let result = env
+            .bitcoin
+            .submit_package(&transactions)
+            .await
+            .map_err(|e| HttpError::BadRequest(format!("broadcast failed: {e}")))?;
+        if result.package_msg != "success" {
+            let detail = result
+                .tx_results
+                .values()
+                .find_map(|r| r.error.clone())
+                .unwrap_or(result.package_msg);
+            return Err(
+                HttpError::BadRequest(format!("package rejected: {detail}")).into(),
+            );
+        }
+    } else {
+        for raw in &transactions {
+            env.bitcoin
+                .send_raw_transaction(raw)
+                .await
+                .map_err(|e| HttpError::BadRequest(format!("broadcast failed: {e}")))?;
+        }
     }
 
     Ok(BroadcastResult {

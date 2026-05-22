@@ -1217,6 +1217,57 @@ impl RegTesterCluster {
         self.reg_tester.clone()
     }
 
+    /// Split the dev identity's funding UTXO into `parts` roughly-equal
+    /// outputs back to the dev address, broadcast + mine, and return
+    /// them. Lets independent regtest tests each spend a distinct UTXO
+    /// without colliding on one shared funding output. The dev
+    /// identity's `next_funding_utxo` is left pointing at the first.
+    pub async fn split_dev_funding(
+        &mut self,
+        parts: usize,
+    ) -> Result<Vec<(OutPoint, TxOut)>> {
+        assert!(parts >= 1, "split_dev_funding: need at least one part");
+        let secp = Secp256k1::new();
+        let (in_point, in_txout) = self.identity.next_funding_utxo.clone();
+        let fee = Amount::from_sat(1000 + parts as u64 * 50);
+        let each = (in_txout.value.to_sat() - fee.to_sat()) / parts as u64;
+        let mut tx = Transaction {
+            version: Version(2),
+            lock_time: LockTime::ZERO,
+            input: vec![TxIn {
+                previous_output: in_point,
+                ..Default::default()
+            }],
+            output: (0..parts)
+                .map(|_| TxOut {
+                    value: Amount::from_sat(each),
+                    script_pubkey: self.identity.address.script_pubkey(),
+                })
+                .collect(),
+        };
+        test_utils::sign_key_spend(
+            &secp,
+            &mut tx,
+            std::slice::from_ref(&in_txout),
+            &self.identity.keypair,
+            0,
+            None,
+        )?;
+        let txid = tx.compute_txid();
+        self.reg_tester
+            .send_to_mempool(&[hex::encode(serialize_tx(&tx))])
+            .await?;
+        self.mine(1).await?;
+        let utxos: Vec<(OutPoint, TxOut)> = tx
+            .output
+            .iter()
+            .enumerate()
+            .map(|(i, o)| (OutPoint { txid, vout: i as u32 }, o.clone()))
+            .collect();
+        self.identity.next_funding_utxo = utxos[0].clone();
+        Ok(utxos)
+    }
+
     /// Create an independent `RegTester` for a test module. Round-robins across
     /// running nodes. Pops a funding identity from the shared pool. Each returned
     /// `RegTester` has its own websocket, UTXO chain, and publish cache.

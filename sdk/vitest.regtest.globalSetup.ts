@@ -17,18 +17,18 @@ export default async function setup({ provide }: GlobalSetupContext) {
     kontorBin: process.env.KONTOR_BIN ?? "../core/target/release/kontor",
   });
 
-  // `provide` values cross into (possibly browser) test workers, so the
+  // `provide` values cross into (possibly browser) test workers, so each
   // funding UTXO's bigint `value` goes over as a string.
   provide("regtest", {
     apiUrl: devnet.apiUrl,
     bitcoinRpc: devnet.bitcoinRpc,
     devPrivateKey: devnet.devPrivateKey,
-    devFundingUtxo: {
-      txid: devnet.devFundingUtxo.txid,
-      vout: devnet.devFundingUtxo.vout,
-      value: devnet.devFundingUtxo.value.toString(),
-      scriptPubKey: devnet.devFundingUtxo.scriptPubKey,
-    },
+    devFundingUtxos: devnet.devFundingUtxos.map((u) => ({
+      txid: u.txid,
+      vout: u.vout,
+      value: u.value.toString(),
+      scriptPubKey: u.scriptPubKey,
+    })),
   });
 
   return async () => {
