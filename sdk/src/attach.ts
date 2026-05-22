@@ -23,7 +23,7 @@
  *   4. sign the detach reveal (script-path).
  *   5. broadcast `[commit, attachReveal, detachReveal]` as one package.
  *
- * `.sell({ price })` — the marketplace terminal — is Phase D.
+ * `.offer({ price })` — the open-offer terminal — is Phase D.
  */
 
 import { serializeInst } from "./component/kontor-sdk.js";
@@ -70,7 +70,7 @@ export interface SubmittedAttachment<T> {
 /**
  * An attach paired with the detach that re-homes the asset — never one
  * without the other. Built from the two Insts (codegen emits this as
- * `contract.attachment(...)`); resolved through `to()` / `sell()`.
+ * `contract.attachment(...)`); resolved through `to()` / `offer()`.
  */
 export class Attachment<T> {
   /**
@@ -88,7 +88,7 @@ export class Attachment<T> {
   /**
    * Gift / round-trip: attach the asset to a fresh UTXO and detach it
    * to `recipient`, broadcast as one commit→reveal→reveal package.
-   * One party, no payment — see `sell()` for the marketplace path.
+   * One party, no payment — see `offer()` for the open-offer path.
    */
   async to(recipient: Recipient): Promise<SubmittedAttachment<T>> {
     const { transport, account } = this.session;
@@ -195,12 +195,13 @@ export class Attachment<T> {
   }
 
   /**
-   * Marketplace terminal — broadcast the attach upfront and pre-sign a
-   * detach PSBT into a persistable `Offer`. Phase D.
+   * Open-offer terminal — broadcast the attach upfront and pre-sign a
+   * detach PSBT into a persistable `Offer`, claimable by anyone who
+   * meets `price`. Phase D.
    */
-  sell(_opts: { price: bigint }): never {
+  offer(_opts: { price: bigint }): never {
     throw new ContractError(
-      "Attachment.sell: the marketplace path is not implemented yet",
+      "Attachment.offer: the offer path is not implemented yet",
       { docsPath: "/sdk/attach" },
     );
   }

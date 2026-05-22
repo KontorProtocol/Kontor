@@ -23,12 +23,19 @@ import { hex } from "@scure/base";
 import { HDKey } from "@scure/bip32";
 import { mnemonicToSeedSync, validateMnemonic } from "@scure/bip39";
 import { wordlist } from "@scure/bip39/wordlists/english.js";
-import { Transaction, p2tr, utils as btcUtils } from "@scure/btc-signer";
+import { SigHash, Transaction, p2tr, utils as btcUtils } from "@scure/btc-signer";
 
 import { HolderRef } from "../canonical/HolderRef.js";
 import { SignerError } from "../errors.js";
-import type { Account } from "./index.js";
+import type { Account, SighashKind, SignPsbtOptions } from "./index.js";
 import type { BitcoinNetwork, Chain } from "../chains.js";
+
+/** `SighashKind` → the `@scure/btc-signer` sighash flag. `default` is
+ *  absent: a default-sighash input gets no explicit `sighashType`. */
+const SCURE_SIGHASH: Record<Exclude<SighashKind, "default">, SigHash> = {
+  all: SigHash.ALL,
+  "single-anyonecanpay": SigHash.SINGLE_ANYONECANPAY,
+};
 
 /** BIP-86 path components beyond purpose and coin type. */
 export interface Bip86Indices {
@@ -153,7 +160,7 @@ export class LocalAccount implements Account {
     );
   }
 
-  signPsbt(psbt: Uint8Array, signInputs?: number[]): Promise<Uint8Array> {
+  signPsbt(psbt: Uint8Array, opts?: SignPsbtOptions): Promise<Uint8Array> {
     let tx: Transaction;
     try {
       tx = Transaction.fromPSBT(psbt);
@@ -165,10 +172,21 @@ export class LocalAccount implements Account {
       );
     }
     try {
-      if (signInputs == null) {
+      if (opts?.inputs == null) {
+        // Whole-PSBT, default sighash — every input this key can sign.
         tx.sign(this.privateKey);
       } else {
-        for (const index of signInputs) tx.signIdx(this.privateKey, index);
+        for (const { index, sighash } of opts.inputs) {
+          if (sighash == null || sighash === "default") {
+            tx.signIdx(this.privateKey, index);
+          } else {
+            // A non-default sighash must be pinned on the input before
+            // signing, and passed as the allowed set so scure accepts it.
+            const flag = SCURE_SIGHASH[sighash];
+            tx.updateInput(index, { sighashType: flag });
+            tx.signIdx(this.privateKey, index, [flag]);
+          }
+        }
       }
     } catch (cause) {
       return Promise.reject(

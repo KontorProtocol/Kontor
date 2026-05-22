@@ -3,7 +3,7 @@
  * `to(recipient)` round-trip — chained compose, taproot signing, a
  * three-tx package broadcast — is exercised by the live regtest suite;
  * here we cover the cheap, signing-free guards: recipient validation
- * and the not-yet-implemented `sell()` terminal.
+ * and the not-yet-implemented `offer()` terminal.
  */
 import { test, expect, afterEach } from "vitest";
 import {
@@ -95,7 +95,7 @@ test("Attachment.to: a valid recipient passes validation, then hits the transpor
   await expect(att.to(VALID_PUBKEY)).rejects.toThrow(/transport unused/);
 });
 
-test("Attachment.sell: marketplace path is not implemented yet", () => {
+test("Attachment.offer: open-offer path is not implemented yet", () => {
   const att = attachment(stubSession());
-  expect(() => att.sell({ price: 1000n })).toThrow(/not implemented/);
+  expect(() => att.offer({ price: 1000n })).toThrow(/not implemented/);
 });

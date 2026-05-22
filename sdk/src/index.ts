@@ -44,7 +44,12 @@ export { HttpTransport, http } from "./transport/http";
 export type { HttpTransportOptions, Utxo } from "./transport/http";
 export { signet } from "./chains";
 export type { Chain } from "./chains";
-export type { Account } from "./account/index";
+export type {
+  Account,
+  SighashKind,
+  SignInput,
+  SignPsbtOptions,
+} from "./account/index";
 export { LocalAccount } from "./account/local";
 export type {
   Bip86Indices,
