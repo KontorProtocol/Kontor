@@ -8,7 +8,9 @@ use bitcoin::Psbt;
 use indexer::api::compose::{ComposeInputs, InstructionInputs};
 use indexer::test_utils;
 use indexer::witness_data::TokenBalance;
-use indexer_types::{OpReturnData, RevealInputs, RevealParticipantInputs, serialize};
+use indexer_types::{
+    OpReturnEntry, RevealInputs, RevealParticipantInputs, SignerRef, serialize,
+};
 
 use testlib::*;
 use tracing::info;
@@ -199,7 +201,10 @@ async fn test_commit_reveal_chained_reveal(reg_tester: &mut RegTester) -> Result
         .script
         .clone();
 
-    let transfer_data = OpReturnData::PubKey(internal_key);
+    let transfer_data = vec![OpReturnEntry {
+        input_index: 0,
+        recipient: SignerRef::XOnlyPubkey(internal_key),
+    }];
     let transfer_bytes = serialize(&transfer_data)?;
 
     let chained_reveal_tx = compose_reveal(

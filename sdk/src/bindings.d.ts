@@ -19,7 +19,7 @@ export type AggregateInfo = {
   publisher_sponsorship: number | null;
 };
 
-export type AggregateSigner = { identity: SignerClaim; nonce: number };
+export type AggregateSigner = { identity: SignerRef; nonce: number };
 
 export type Block = {
   height: number;
@@ -29,6 +29,20 @@ export type Block = {
 };
 
 export type BlockRow = { height: number; hash: string; relevant: boolean };
+
+/**
+ * Request body for `POST /api/transactions/broadcast`: raw Bitcoin tx
+ * hex in dependency order (e.g. `[commit, reveal]`), relayed to bitcoind
+ * as a single `submitpackage`.
+ */
+export type BroadcastQuery = { transactions: Array<string> };
+
+/**
+ * Response from `POST /api/transactions/broadcast`: the txid of the last
+ * transaction in the package — the reveal, which carries the Kontor op
+ * and is what callers wait on for results.
+ */
+export type BroadcastResult = { txid: string };
 
 export type CommitOutputs = {
   commit_transaction: string;
@@ -180,6 +194,15 @@ export type OpMetadata = {
   signer_id: number;
   payment: Payment;
 };
+
+/**
+ * One OP_RETURN directive bound to the reveal input it applies to:
+ * where the asset detached by that input's op should land. A
+ * transaction's OP_RETURN payload is a `Vec<OpReturnEntry>` — the
+ * per-input binding kept as a plain list (not a map) so it is fully
+ * expressible in WIT — `list<op-return-entry>`.
+ */
+export type OpReturnEntry = { input_index: number; recipient: SignerRef };
 
 /**
  * What happened when this op ran. Persisted per row in `contract_results`.
@@ -355,7 +378,7 @@ export type RevealQuery = {
  * which variant is chosen — the variant only controls how to *index*
  * the verification key, not which key.
  */
-export type SignerClaim = { "Id": number } | { "PubKey": string };
+export type SignerRef = { "SignerId": number } | { "XOnlyPubkey": string };
 
 export type SignerResponse = {
   signer_id: number;
@@ -374,7 +397,10 @@ export type Transaction = {
   txid: string;
   index: number;
   inputs: Array<Input>;
-  op_return_data: Record<number, OpReturnData>;
+  /**
+   * OP_RETURN directives, one entry per reveal input that carries one.
+   */
+  op_return_data: Array<OpReturnEntry>;
 };
 
 export type TransactionHex = { hex: string };

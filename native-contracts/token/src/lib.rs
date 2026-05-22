@@ -136,12 +136,9 @@ impl Guest for Token {
             .ledger()
             .get(&src)
             .ok_or(Error::Message("Source has no balance".to_string()))?;
-        let dst = if let Some(context::OpReturnData::PubKey(pubkey)) =
-            ctx.transaction().op_return_data()
-        {
-            HolderRef::XOnlyPubkey(pubkey).try_into()?
-        } else {
-            ctx.signer().into()
+        let dst = match ctx.transaction().op_return_data() {
+            Some(recipient) => HolderRef::from(recipient).try_into()?,
+            None => ctx.signer().into(),
         };
         transfer(ctx, src, dst, amt)
     }

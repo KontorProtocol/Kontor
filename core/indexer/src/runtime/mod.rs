@@ -108,7 +108,7 @@ use crate::bls::RegistrationProof;
 use crate::database;
 use crate::database::native_contracts::NATIVE_CONTRACTS;
 use crate::database::types::CORE_SIGNER_ID;
-use crate::runtime::kontor::built_in::context::OpReturnData;
+use crate::runtime::kontor::built_in::context::SignerRef;
 use crate::runtime::{counter::Counter, fuel::FuelGauge, stack::Stack, wit::Signer};
 
 #[derive(Clone, Debug)]
@@ -167,7 +167,7 @@ pub struct Runtime {
     pub gas_to_fuel_multiplier: u64,
     pub gas_to_token_multiplier: Decimal,
     pub previous_output: Option<bitcoin::OutPoint>,
-    pub op_return_data: Option<OpReturnData>,
+    pub op_return_data: Option<SignerRef>,
     pub node_label: String,
 }
 
@@ -242,7 +242,7 @@ impl Runtime {
         height: i64,
         tx_context: Option<TransactionContext>,
         previous_output: Option<bitcoin::OutPoint>,
-        op_return_data: Option<OpReturnData>,
+        op_return_data: Option<SignerRef>,
     ) {
         self.storage.height = height;
         self.storage.tx_context = tx_context;

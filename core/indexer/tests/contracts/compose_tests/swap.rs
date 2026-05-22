@@ -23,7 +23,7 @@ use indexer::api::compose::compose;
 use indexer::api::compose::compose_reveal;
 use indexer::api::compose::{ComposeInputs, InstructionInputs};
 use indexer::test_utils;
-use indexer_types::OpReturnData;
+use indexer_types::{OpReturnEntry, SignerRef};
 use indexer_types::RevealInputs;
 use indexer_types::RevealParticipantInputs;
 use indexer_types::{ContractAddress, Inst, InstKind, Insts, PaymentIntent, serialize};
@@ -204,7 +204,10 @@ async fn setup_swap_test(params: SwapTestParams) -> Result<SwapTestContext> {
     );
 
     // Create transfer data pointing to output 2 (buyer's address)
-    let transfer_data = OpReturnData::PubKey(buyer_internal_key);
+    let transfer_data = vec![OpReturnEntry {
+        input_index: 0,
+        recipient: SignerRef::XOnlyPubkey(buyer_internal_key),
+    }];
     let transfer_bytes = serialize(&transfer_data)?;
 
     // Use the chained TapScriptPair from compose_outputs as the commit script for the detach reveal
@@ -386,7 +389,10 @@ pub async fn test_swap_integrity(reg_tester: &mut RegTester) -> Result<()> {
     let mut malicious_tx = context.final_tx.clone();
 
     // Maliciously change the OP_RETURN destination to seller's key
-    let malicious_transfer_data = OpReturnData::PubKey(seller_internal_key);
+    let malicious_transfer_data = vec![OpReturnEntry {
+        input_index: 0,
+        recipient: SignerRef::XOnlyPubkey(seller_internal_key),
+    }];
     let malicious_transfer_bytes = serialize(&malicious_transfer_data)?;
 
     // make a new psbt with everything the same except

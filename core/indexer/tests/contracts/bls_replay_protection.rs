@@ -10,7 +10,7 @@ use indexer::bls::KONTOR_BLS_DST;
 use indexer::database::types::OpResultId;
 use indexer_types::{
     AggregateInfo, AggregateSigner, ContractAddress as IndexerContractAddress, Inst, InstKind,
-    Insts, PaymentIntent, SignerClaim,
+    Insts, PaymentIntent, SignerRef,
 };
 use testlib::*;
 
@@ -25,7 +25,7 @@ fn aggregate_call(gas_limit: u64, contract: IndexerContractAddress, expr: String
 
 fn signer_by_id(id: u64, nonce: u64) -> AggregateSigner {
     AggregateSigner {
-        identity: SignerClaim::Id(id),
+        identity: SignerRef::SignerId(id),
         nonce,
     }
 }
@@ -88,7 +88,7 @@ async fn bls_bulk_duplicate_nonce_within_bundle_skips_op_regtest() -> Result<()>
         arith_contract.clone(),
         arith::wave::eval_call_expr(2, arith::Op::Id),
     );
-    let signer_claim = SignerClaim::Id(signer_id);
+    let signer_claim = SignerRef::SignerId(signer_id);
     let msg0 = op0.aggregate_signing_message(&signer_claim, nonce)?;
     let msg1 = op1.aggregate_signing_message(&signer_claim, nonce)?;
     let sk = blst::min_sig::SecretKey::from_bytes(&signer.bls_secret_key)
@@ -199,7 +199,7 @@ async fn bls_bulk_replay_nonce_across_blocks_rejects_regtest() -> Result<()> {
         arith_contract.clone(),
         arith::wave::eval_call_expr(5, arith::Op::Id),
     );
-    let signer_claim = SignerClaim::Id(signer_id);
+    let signer_claim = SignerRef::SignerId(signer_id);
     let msg0 = op0.aggregate_signing_message(&signer_claim, nonce)?;
     let sk = blst::min_sig::SecretKey::from_bytes(&signer.bls_secret_key)
         .map_err(|e| anyhow!("invalid signer BLS secret key: {e:?}"))?;
@@ -278,7 +278,7 @@ async fn bls_bulk_failed_execution_still_consumes_nonce_regtest() -> Result<()> 
         missing_contract,
         arith::wave::eval_call_expr(9, arith::Op::Id),
     );
-    let signer_claim = SignerClaim::Id(signer_id);
+    let signer_claim = SignerRef::SignerId(signer_id);
     let failing_msg = failing_op.aggregate_signing_message(&signer_claim, 0)?;
     let sk = blst::min_sig::SecretKey::from_bytes(&signer.bls_secret_key)
         .map_err(|e| anyhow!("invalid signer BLS secret key: {e:?}"))?;
@@ -424,8 +424,8 @@ async fn bls_bulk_interleaved_multi_signer_nonces_advance_independently_regtest(
         .map_err(|e| anyhow!("invalid signer1 BLS secret key: {e:?}"))?;
     let sk2 = blst::min_sig::SecretKey::from_bytes(&signer2.bls_secret_key)
         .map_err(|e| anyhow!("invalid signer2 BLS secret key: {e:?}"))?;
-    let signer1_claim = SignerClaim::Id(signer1_id);
-    let signer2_claim = SignerClaim::Id(signer2_id);
+    let signer1_claim = SignerRef::SignerId(signer1_id);
+    let signer2_claim = SignerRef::SignerId(signer2_id);
     let msg0 = op0.aggregate_signing_message(&signer1_claim, 0)?;
     let msg1 = op1.aggregate_signing_message(&signer2_claim, 0)?;
     let msg2 = op2.aggregate_signing_message(&signer1_claim, 1)?;
@@ -533,7 +533,7 @@ async fn bls_bulk_out_of_order_nonce_skips_op_regtest() -> Result<()> {
         arith_contract.clone(),
         arith::wave::eval_call_expr(42, arith::Op::Id),
     );
-    let signer_claim = SignerClaim::Id(signer_id);
+    let signer_claim = SignerRef::SignerId(signer_id);
     let valid_msg = valid_op.aggregate_signing_message(&signer_claim, 0)?;
     let valid_sig = sk.sign(&valid_msg, KONTOR_BLS_DST, &[]);
     let res = rt
@@ -635,7 +635,7 @@ async fn bls_bulk_exact_bytes_replay_across_blocks_regtest() -> Result<()> {
         arith_contract.clone(),
         arith::wave::eval_call_expr(7, arith::Op::Id),
     );
-    let signer_claim = SignerClaim::Id(signer_id);
+    let signer_claim = SignerRef::SignerId(signer_id);
     let msg = op.aggregate_signing_message(&signer_claim, 0)?;
     let sk = blst::min_sig::SecretKey::from_bytes(&signer.bls_secret_key)
         .map_err(|e| anyhow!("invalid signer BLS secret key: {e:?}"))?;

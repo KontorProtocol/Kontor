@@ -24,13 +24,11 @@
  * `WireInsts` payload.
  */
 
-import { hex } from "@scure/base";
-import { TaprootControlBlock, Transaction, utils as btcUtils } from "@scure/btc-signer";
-
 import type { Account } from "../account/index.js";
 import type { Chain } from "../chains.js";
 import type { ContractAddress } from "../canonical/ContractAddress.js";
-import { ChainError, ContractError, SignerError, TransportError } from "../errors.js";
+import { ChainError, ContractError, TransportError } from "../errors.js";
+import { signCommit, signReveal } from "./signing.js";
 import type {
   BroadcastResult,
   KontorTransport,
@@ -42,7 +40,6 @@ import type {
   ComposeQuery,
   ErrorResponse,
   OpWithResult,
-  ParticipantScripts,
   ResultResponse,
   RevealOutputs,
   RevealQuery,
@@ -213,9 +210,11 @@ export class HttpTransport implements KontorTransport {
     insts: WireInsts,
   ): Promise<{ commitHex: string; revealHex: string }> {
     const composed = await this.compose(insts);
+    const { account } = this.opts;
     return {
-      commitHex: await this.signCommit(composed.commit_psbt_hex),
-      revealHex: await this.signReveal(
+      commitHex: await signCommit(account, composed.commit_psbt_hex),
+      revealHex: await signReveal(
+        account,
         composed.reveal_psbt_hex,
         composed.per_participant,
       ),
@@ -229,8 +228,17 @@ export class HttpTransport implements KontorTransport {
    */
   async submit(insts: WireInsts): Promise<BroadcastResult> {
     const { commitHex, revealHex } = await this.composeAndSign(insts);
+    return this.broadcast([commitHex, revealHex]);
+  }
+
+  /**
+   * Relay already-signed raw transactions to the network, in dependency
+   * order, as one package. The attach/detach runtime composes and signs
+   * its commit/reveal txs by hand, then hands the finished package here.
+   */
+  broadcast(transactions: string[]): Promise<BroadcastResult> {
     return this.postJson<BroadcastResult>("/transactions/broadcast", {
-      transactions: [commitHex, revealHex],
+      transactions,
     });
   }
 
@@ -284,66 +292,6 @@ export class HttpTransport implements KontorTransport {
     const f = this.opts.feeRate;
     if (f == null) return null;
     return typeof f === "number" ? f : await f();
-  }
-
-  /**
-   * Sign the commit PSBT — a taproot key-path spend — and return the
-   * finalized raw transaction hex.
-   */
-  private async signCommit(psbtHex: string): Promise<string> {
-    const signed = await this.opts.account.signPsbt(hex.decode(psbtHex));
-    const tx = Transaction.fromPSBT(signed);
-    tx.finalize();
-    return hex.encode(tx.extract());
-  }
-
-  /**
-   * Sign the reveal PSBT — a taproot script-path spend. The compose
-   * response carries each input's tap-leaf script separately; it must be
-   * injected into the PSBT before signing, and the witness assembled by
-   * hand afterwards (the Kontor reveal leaf is non-standard, so
-   * `@scure/btc-signer`'s `finalize()` can't build it).
-   */
-  private async signReveal(
-    psbtHex: string,
-    participants: ParticipantScripts[],
-  ): Promise<string> {
-    // Prepare: inject each input's leaf script + control block.
-    const prep = Transaction.fromPSBT(hex.decode(psbtHex));
-    participants.forEach((p, i) => {
-      const leaf = p.commit_tap_leaf_script;
-      const scriptWithVersion = btcUtils.concatBytes(
-        hex.decode(leaf.script),
-        new Uint8Array([leaf.leafVersion]),
-      );
-      const controlBlock = TaprootControlBlock.decode(
-        hex.decode(leaf.controlBlock),
-      );
-      prep.updateInput(i, { tapLeafScript: [[controlBlock, scriptWithVersion]] }, true);
-    });
-
-    const signed = await this.opts.account.signPsbt(prep.toPSBT());
-
-    // Finalize by hand: witness = [schnorr sig, leaf script, control block].
-    const tx = Transaction.fromPSBT(signed);
-    participants.forEach((p, i) => {
-      const sig = tx.getInput(i).tapScriptSig?.[0]?.[1];
-      if (sig == null) {
-        throw new SignerError(
-          `submit: reveal input ${i} was not signed by the account`,
-          { docsPath: "/sdk/transport" },
-        );
-      }
-      const leaf = p.commit_tap_leaf_script;
-      tx.updateInput(i, {
-        finalScriptWitness: [
-          sig,
-          hex.decode(leaf.script),
-          hex.decode(leaf.controlBlock),
-        ],
-      });
-    });
-    return hex.encode(tx.extract());
   }
 }
 

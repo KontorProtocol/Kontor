@@ -1164,6 +1164,12 @@ class Waitable {
     return BigInt.asUintN(64, converted);
   }
   
+  
+  function toUint32(val) {
+    
+    return val >>> 0;
+  }
+  
   const TEXT_DECODER_UTF8 = new TextDecoder();
   const TEXT_ENCODER_UTF8 = new TextEncoder();
   
@@ -2613,6 +2619,8 @@ let postReturn3;
 let postReturn3Async;
 let postReturn4;
 let postReturn4Async;
+let postReturn5;
+let postReturn5Async;
 let exports1SerializeInst;
 
 function serializeInst(arg0) {
@@ -2636,7 +2644,7 @@ function serializeInst(arg0) {
     entryFnName: 'exports1SerializeInst',
     getCallbackFn: () => null,
     callbackFnName: 'null',
-    errHandling: 'none',
+    errHandling: 'throw-result-err',
     callingWasmExport: true,
   });
   
@@ -2649,24 +2657,53 @@ function serializeInst(arg0) {
     fn: () => exports1SerializeInst(ptr0, len0),
   });
   
-  var ptr1 = dataView(memory0).getUint32(ret + 0, true);
-  var len1 = dataView(memory0).getUint32(ret + 4, true);
-  var result1 = new Uint8Array(memory0.buffer.slice(ptr1, ptr1 + len1 * 1));
+  let variant3;
+  switch (dataView(memory0).getUint8(ret + 0, true)) {
+    case 0: {
+      var ptr1 = dataView(memory0).getUint32(ret + 4, true);
+      var len1 = dataView(memory0).getUint32(ret + 8, true);
+      var result1 = new Uint8Array(memory0.buffer.slice(ptr1, ptr1 + len1 * 1));
+      variant3= {
+        tag: 'ok',
+        val: result1
+      };
+      break;
+    }
+    case 1: {
+      var ptr2 = dataView(memory0).getUint32(ret + 4, true);
+      var len2 = dataView(memory0).getUint32(ret + 8, true);
+      var result2 = TEXT_DECODER_UTF8.decode(new Uint8Array(memory0.buffer, ptr2, len2));
+      variant3= {
+        tag: 'err',
+        val: result2
+      };
+      break;
+    }
+    default: {
+      throw new TypeError('invalid variant discriminant for expected');
+    }
+  }
   _debugLog('[iface="serialize-inst", function="serialize-inst"][Instruction::Return]', {
     funcName: 'serialize-inst',
     paramCount: 1,
     async: false,
     postReturn: true
   });
-  task.resolve([result1]);
-  const retCopy = result1;
+  const retCopy = variant3;
+  task.resolve([retCopy.val]);
   
   let cstate = getOrCreateAsyncState(0);
   cstate.mayLeave = false;
   postReturn0(ret);
   cstate.mayLeave = true;
   task.exit();
-  return retCopy;
+  
+  
+  
+  if (typeof retCopy === 'object' && retCopy.tag === 'err') {
+    throw new ComponentError(retCopy.val);
+  }
+  return retCopy.val;
   
 }
 let exports1DeserializeInst;
@@ -2709,7 +2746,7 @@ function deserializeInst(arg0) {
     entryFnName: 'exports1DeserializeInst',
     getCallbackFn: () => null,
     callbackFnName: 'null',
-    errHandling: 'none',
+    errHandling: 'throw-result-err',
     callingWasmExport: true,
   });
   
@@ -2722,36 +2759,92 @@ function deserializeInst(arg0) {
     fn: () => exports1DeserializeInst(ptr0, len0),
   });
   
-  var ptr1 = dataView(memory0).getUint32(ret + 0, true);
-  var len1 = dataView(memory0).getUint32(ret + 4, true);
-  var result1 = TEXT_DECODER_UTF8.decode(new Uint8Array(memory0.buffer, ptr1, len1));
+  let variant3;
+  switch (dataView(memory0).getUint8(ret + 0, true)) {
+    case 0: {
+      var ptr1 = dataView(memory0).getUint32(ret + 4, true);
+      var len1 = dataView(memory0).getUint32(ret + 8, true);
+      var result1 = TEXT_DECODER_UTF8.decode(new Uint8Array(memory0.buffer, ptr1, len1));
+      variant3= {
+        tag: 'ok',
+        val: result1
+      };
+      break;
+    }
+    case 1: {
+      var ptr2 = dataView(memory0).getUint32(ret + 4, true);
+      var len2 = dataView(memory0).getUint32(ret + 8, true);
+      var result2 = TEXT_DECODER_UTF8.decode(new Uint8Array(memory0.buffer, ptr2, len2));
+      variant3= {
+        tag: 'err',
+        val: result2
+      };
+      break;
+    }
+    default: {
+      throw new TypeError('invalid variant discriminant for expected');
+    }
+  }
   _debugLog('[iface="deserialize-inst", function="deserialize-inst"][Instruction::Return]', {
     funcName: 'deserialize-inst',
     paramCount: 1,
     async: false,
     postReturn: true
   });
-  task.resolve([result1]);
-  const retCopy = result1;
+  const retCopy = variant3;
+  task.resolve([retCopy.val]);
   
   let cstate = getOrCreateAsyncState(0);
   cstate.mayLeave = false;
   postReturn0(ret);
   cstate.mayLeave = true;
   task.exit();
-  return retCopy;
+  
+  
+  
+  if (typeof retCopy === 'object' && retCopy.tag === 'err') {
+    throw new ComponentError(retCopy.val);
+  }
+  return retCopy.val;
   
 }
-let exports1SerializeOpReturnData;
+let exports1EncodeOpReturn;
 
-function serializeOpReturnData(arg0) {
-  
-  var encodeRes = _utf8AllocateAndEncode(arg0, realloc0, memory0);
-  var ptr0= encodeRes.ptr;
-  var len0 = encodeRes.len;
-  
-  _debugLog('[iface="serialize-op-return-data", function="serialize-op-return-data"][Instruction::CallWasm] enter', {
-    funcName: 'serialize-op-return-data',
+function encodeOpReturn(arg0) {
+  var vec3 = arg0;
+  var len3 = vec3.length;
+  var result3 = realloc0(0, 0, 8, len3 * 24);
+  for (let i = 0; i < vec3.length; i++) {
+    const e = vec3[i];
+    const base = result3 + i * 24;var {inputIndex: v0_0, recipient: v0_1 } = e;
+    dataView(memory0).setInt32(base + 0, toUint32(v0_0), true);
+    var variant2 = v0_1;
+    switch (variant2.tag) {
+      case 'signer-id': {
+        const e = variant2.val;
+        dataView(memory0).setInt8(base + 8, 0, true);
+        dataView(memory0).setBigInt64(base + 16, toUint64(e), true);
+        break;
+      }
+      case 'x-only-pubkey': {
+        const e = variant2.val;
+        dataView(memory0).setInt8(base + 8, 1, true);
+        
+        var encodeRes = _utf8AllocateAndEncode(e, realloc0, memory0);
+        var ptr1= encodeRes.ptr;
+        var len1 = encodeRes.len;
+        
+        dataView(memory0).setUint32(base + 20, len1, true);
+        dataView(memory0).setUint32(base + 16, ptr1, true);
+        break;
+      }
+      default: {
+        throw new TypeError(`invalid variant tag value \`${JSON.stringify(variant2.tag)}\` (received \`${variant2}\`) specified for \`SignerRef\``);
+      }
+    }
+  }
+  _debugLog('[iface="encode-op-return", function="encode-op-return"][Instruction::CallWasm] enter', {
+    funcName: 'encode-op-return',
     paramCount: 2,
     async: false,
     postReturn: true,
@@ -2762,10 +2855,10 @@ function serializeOpReturnData(arg0) {
     componentIdx: 0,
     isAsync: false,
     isManualAsync: false,
-    entryFnName: 'exports1SerializeOpReturnData',
+    entryFnName: 'exports1EncodeOpReturn',
     getCallbackFn: () => null,
     callbackFnName: 'null',
-    errHandling: 'none',
+    errHandling: 'throw-result-err',
     callingWasmExport: true,
   });
   
@@ -2775,32 +2868,61 @@ function serializeOpReturnData(arg0) {
   let ret =   _withGlobalCurrentTaskMeta({
     taskID: task.id(),
     componentIdx: task.componentIdx(),
-    fn: () => exports1SerializeOpReturnData(ptr0, len0),
+    fn: () => exports1EncodeOpReturn(result3, len3),
   });
   
-  var ptr1 = dataView(memory0).getUint32(ret + 0, true);
-  var len1 = dataView(memory0).getUint32(ret + 4, true);
-  var result1 = new Uint8Array(memory0.buffer.slice(ptr1, ptr1 + len1 * 1));
-  _debugLog('[iface="serialize-op-return-data", function="serialize-op-return-data"][Instruction::Return]', {
-    funcName: 'serialize-op-return-data',
+  let variant6;
+  switch (dataView(memory0).getUint8(ret + 0, true)) {
+    case 0: {
+      var ptr4 = dataView(memory0).getUint32(ret + 4, true);
+      var len4 = dataView(memory0).getUint32(ret + 8, true);
+      var result4 = new Uint8Array(memory0.buffer.slice(ptr4, ptr4 + len4 * 1));
+      variant6= {
+        tag: 'ok',
+        val: result4
+      };
+      break;
+    }
+    case 1: {
+      var ptr5 = dataView(memory0).getUint32(ret + 4, true);
+      var len5 = dataView(memory0).getUint32(ret + 8, true);
+      var result5 = TEXT_DECODER_UTF8.decode(new Uint8Array(memory0.buffer, ptr5, len5));
+      variant6= {
+        tag: 'err',
+        val: result5
+      };
+      break;
+    }
+    default: {
+      throw new TypeError('invalid variant discriminant for expected');
+    }
+  }
+  _debugLog('[iface="encode-op-return", function="encode-op-return"][Instruction::Return]', {
+    funcName: 'encode-op-return',
     paramCount: 1,
     async: false,
     postReturn: true
   });
-  task.resolve([result1]);
-  const retCopy = result1;
+  const retCopy = variant6;
+  task.resolve([retCopy.val]);
   
   let cstate = getOrCreateAsyncState(0);
   cstate.mayLeave = false;
   postReturn0(ret);
   cstate.mayLeave = true;
   task.exit();
-  return retCopy;
+  
+  
+  
+  if (typeof retCopy === 'object' && retCopy.tag === 'err') {
+    throw new ComponentError(retCopy.val);
+  }
+  return retCopy.val;
   
 }
-let exports1DeserializeOpReturnData;
+let exports1DecodeOpReturn;
 
-function deserializeOpReturnData(arg0) {
+function decodeOpReturn(arg0) {
   var val0 = arg0;
   var len0 = Array.isArray(val0) ? val0.length : val0.byteLength;
   var ptr0 = realloc0(0, 0, 1, len0 * 1);
@@ -2823,8 +2945,8 @@ function deserializeOpReturnData(arg0) {
     out0.set(valData0);
   }
   
-  _debugLog('[iface="deserialize-op-return-data", function="deserialize-op-return-data"][Instruction::CallWasm] enter', {
-    funcName: 'deserialize-op-return-data',
+  _debugLog('[iface="decode-op-return", function="decode-op-return"][Instruction::CallWasm] enter', {
+    funcName: 'decode-op-return',
     paramCount: 2,
     async: false,
     postReturn: true,
@@ -2835,10 +2957,10 @@ function deserializeOpReturnData(arg0) {
     componentIdx: 0,
     isAsync: false,
     isManualAsync: false,
-    entryFnName: 'exports1DeserializeOpReturnData',
+    entryFnName: 'exports1DecodeOpReturn',
     getCallbackFn: () => null,
     callbackFnName: 'null',
-    errHandling: 'none',
+    errHandling: 'throw-result-err',
     callingWasmExport: true,
   });
   
@@ -2848,27 +2970,86 @@ function deserializeOpReturnData(arg0) {
   let ret =   _withGlobalCurrentTaskMeta({
     taskID: task.id(),
     componentIdx: task.componentIdx(),
-    fn: () => exports1DeserializeOpReturnData(ptr0, len0),
+    fn: () => exports1DecodeOpReturn(ptr0, len0),
   });
   
-  var ptr1 = dataView(memory0).getUint32(ret + 0, true);
-  var len1 = dataView(memory0).getUint32(ret + 4, true);
-  var result1 = TEXT_DECODER_UTF8.decode(new Uint8Array(memory0.buffer, ptr1, len1));
-  _debugLog('[iface="deserialize-op-return-data", function="deserialize-op-return-data"][Instruction::Return]', {
-    funcName: 'deserialize-op-return-data',
+  let variant5;
+  switch (dataView(memory0).getUint8(ret + 0, true)) {
+    case 0: {
+      var len3 = dataView(memory0).getUint32(ret + 8, true);
+      var base3 = dataView(memory0).getUint32(ret + 4, true);
+      var result3 = [];
+      for (let i = 0; i < len3; i++) {
+        const base = base3 + i * 24;
+        let variant2;
+        switch (dataView(memory0).getUint8(base + 8, true)) {
+          case 0: {
+            variant2= {
+              tag: 'signer-id',
+              val: BigInt.asUintN(64, BigInt(dataView(memory0).getBigInt64(base + 16, true)))
+            };
+            break;
+          }
+          case 1: {
+            var ptr1 = dataView(memory0).getUint32(base + 16, true);
+            var len1 = dataView(memory0).getUint32(base + 20, true);
+            var result1 = TEXT_DECODER_UTF8.decode(new Uint8Array(memory0.buffer, ptr1, len1));
+            variant2= {
+              tag: 'x-only-pubkey',
+              val: result1
+            };
+            break;
+          }
+          default: {
+            throw new TypeError('invalid variant discriminant for SignerRef');
+          }
+        }
+        result3.push({
+          inputIndex: dataView(memory0).getInt32(base + 0, true) >>> 0,
+          recipient: variant2,
+        });
+      }
+      variant5= {
+        tag: 'ok',
+        val: result3
+      };
+      break;
+    }
+    case 1: {
+      var ptr4 = dataView(memory0).getUint32(ret + 4, true);
+      var len4 = dataView(memory0).getUint32(ret + 8, true);
+      var result4 = TEXT_DECODER_UTF8.decode(new Uint8Array(memory0.buffer, ptr4, len4));
+      variant5= {
+        tag: 'err',
+        val: result4
+      };
+      break;
+    }
+    default: {
+      throw new TypeError('invalid variant discriminant for expected');
+    }
+  }
+  _debugLog('[iface="decode-op-return", function="decode-op-return"][Instruction::Return]', {
+    funcName: 'decode-op-return',
     paramCount: 1,
     async: false,
     postReturn: true
   });
-  task.resolve([result1]);
-  const retCopy = result1;
+  const retCopy = variant5;
+  task.resolve([retCopy.val]);
   
   let cstate = getOrCreateAsyncState(0);
   cstate.mayLeave = false;
-  postReturn0(ret);
+  postReturn1(ret);
   cstate.mayLeave = true;
   task.exit();
-  return retCopy;
+  
+  
+  
+  if (typeof retCopy === 'object' && retCopy.tag === 'err') {
+    throw new ComponentError(retCopy.val);
+  }
+  return retCopy.val;
   
 }
 let exports1ValidateWit;
@@ -2963,7 +3144,7 @@ function validateWit(arg0) {
   
   let cstate = getOrCreateAsyncState(0);
   cstate.mayLeave = false;
-  postReturn1(ret);
+  postReturn2(ret);
   cstate.mayLeave = true;
   task.exit();
   return retCopy;
@@ -3120,7 +3301,7 @@ Wit.prototype.encodeCall = function encodeCall(arg1, arg2) {
   
   let cstate = getOrCreateAsyncState(0);
   cstate.mayLeave = false;
-  postReturn2(ret);
+  postReturn0(ret);
   cstate.mayLeave = true;
   task.exit();
   
@@ -3217,7 +3398,7 @@ Wit.prototype.decodeResult = function decodeResult(arg1, arg2) {
   
   let cstate = getOrCreateAsyncState(0);
   cstate.mayLeave = false;
-  postReturn2(ret);
+  postReturn0(ret);
   cstate.mayLeave = true;
   task.exit();
   
@@ -3304,7 +3485,7 @@ Wit.prototype.parse = function parse() {
   
   let cstate = getOrCreateAsyncState(0);
   cstate.mayLeave = false;
-  postReturn2(ret);
+  postReturn0(ret);
   cstate.mayLeave = true;
   task.exit();
   
@@ -3670,7 +3851,7 @@ function integerToString(arg0) {
   
   let cstate = getOrCreateAsyncState(0);
   cstate.mayLeave = false;
-  postReturn0(ret);
+  postReturn4(ret);
   cstate.mayLeave = true;
   task.exit();
   return retCopy;
@@ -5793,7 +5974,7 @@ function decimalToString(arg0) {
   
   let cstate = getOrCreateAsyncState(0);
   cstate.mayLeave = false;
-  postReturn0(ret);
+  postReturn4(ret);
   cstate.mayLeave = true;
   task.exit();
   return retCopy;
@@ -5958,7 +6139,7 @@ function eqDecimal(arg0, arg1) {
   
   let cstate = getOrCreateAsyncState(0);
   cstate.mayLeave = false;
-  postReturn4(ret);
+  postReturn5(ret);
   cstate.mayLeave = true;
   task.exit();
   
@@ -7033,20 +7214,20 @@ const $init = (() => {
       postReturn0Async = exports1['cabi_post_deserialize-inst'];
     }
     
-    postReturn1 = exports1['cabi_post_validate-wit'];
+    postReturn1 = exports1['cabi_post_decode-op-return'];
     
     try {
-      postReturn1Async = WebAssembly.promising(exports1['cabi_post_validate-wit']);
+      postReturn1Async = WebAssembly.promising(exports1['cabi_post_decode-op-return']);
     } catch(err) {
-      postReturn1Async = exports1['cabi_post_validate-wit'];
+      postReturn1Async = exports1['cabi_post_decode-op-return'];
     }
     
-    postReturn2 = exports1['cabi_post_root:component/wit-codec#[method]wit.decode-result'];
+    postReturn2 = exports1['cabi_post_validate-wit'];
     
     try {
-      postReturn2Async = WebAssembly.promising(exports1['cabi_post_root:component/wit-codec#[method]wit.decode-result']);
+      postReturn2Async = WebAssembly.promising(exports1['cabi_post_validate-wit']);
     } catch(err) {
-      postReturn2Async = exports1['cabi_post_root:component/wit-codec#[method]wit.decode-result'];
+      postReturn2Async = exports1['cabi_post_validate-wit'];
     }
     
     postReturn3 = exports1['cabi_post_root:component/numerics#add-decimal'];
@@ -7057,18 +7238,26 @@ const $init = (() => {
       postReturn3Async = exports1['cabi_post_root:component/numerics#add-decimal'];
     }
     
-    postReturn4 = exports1['cabi_post_root:component/numerics#eq-decimal'];
+    postReturn4 = exports1['cabi_post_root:component/numerics#decimal-to-string'];
     
     try {
-      postReturn4Async = WebAssembly.promising(exports1['cabi_post_root:component/numerics#eq-decimal']);
+      postReturn4Async = WebAssembly.promising(exports1['cabi_post_root:component/numerics#decimal-to-string']);
     } catch(err) {
-      postReturn4Async = exports1['cabi_post_root:component/numerics#eq-decimal'];
+      postReturn4Async = exports1['cabi_post_root:component/numerics#decimal-to-string'];
+    }
+    
+    postReturn5 = exports1['cabi_post_root:component/numerics#eq-decimal'];
+    
+    try {
+      postReturn5Async = WebAssembly.promising(exports1['cabi_post_root:component/numerics#eq-decimal']);
+    } catch(err) {
+      postReturn5Async = exports1['cabi_post_root:component/numerics#eq-decimal'];
     }
     
     exports1SerializeInst = exports1['serialize-inst'];
     exports1DeserializeInst = exports1['deserialize-inst'];
-    exports1SerializeOpReturnData = exports1['serialize-op-return-data'];
-    exports1DeserializeOpReturnData = exports1['deserialize-op-return-data'];
+    exports1EncodeOpReturn = exports1['encode-op-return'];
+    exports1DecodeOpReturn = exports1['decode-op-return'];
     exports1ValidateWit = exports1['validate-wit'];
     witCodecConstructorWit = exports1['root:component/wit-codec#[constructor]wit'];
     witCodecMethodWitEncodeCall = exports1['root:component/wit-codec#[method]wit.encode-call'];
@@ -7157,4 +7346,4 @@ const witCodec = {
   
 };
 
-export { numerics, witCodec, deserializeInst, deserializeOpReturnData, numerics as 'root:component/numerics', witCodec as 'root:component/wit-codec', serializeInst, serializeOpReturnData, validateWit,  }
+export { numerics, witCodec, decodeOpReturn, deserializeInst, encodeOpReturn, numerics as 'root:component/numerics', witCodec as 'root:component/wit-codec', serializeInst, validateWit,  }

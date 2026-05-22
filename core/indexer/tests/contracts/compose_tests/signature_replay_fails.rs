@@ -15,7 +15,10 @@ use bitcoin::{
 use indexer::api::compose::{ComposeInputs, InstructionInputs, compose, compose_reveal};
 use indexer::test_utils;
 use indexer::witness_data::{TokenBalance, WitnessData};
-use indexer_types::{OpReturnData, RevealInputs, RevealParticipantInputs, deserialize, serialize};
+use indexer_types::{
+    OpReturnEntry, RevealInputs, RevealParticipantInputs, SignerRef, deserialize,
+    serialize,
+};
 
 use testlib::RegTester;
 use tracing::info;
@@ -367,7 +370,10 @@ pub async fn test_psbt_signature_replay_fails(reg_tester: &mut RegTester) -> Res
     seller_detach_psbt.inputs[0].final_script_witness = Some(witness);
 
     // Create transfer data pointing to output 2 (buyer's address)
-    let transfer_data = OpReturnData::PubKey(buyer_internal_key);
+    let transfer_data = vec![OpReturnEntry {
+        input_index: 0,
+        recipient: SignerRef::XOnlyPubkey(buyer_internal_key),
+    }];
     let transfer_bytes = serialize(&transfer_data)?;
 
     let reveal_inputs = RevealInputs::builder()

@@ -7,7 +7,6 @@ use indexer_types::{
     Input, Inst, InstKind, Insts, Op, OpKind, OpMetadata, OpWithResult, Payment, PaymentIntent,
     Transaction, deserialize,
 };
-use indexmap::IndexMap;
 use libsql::Connection;
 
 use crate::database::{
@@ -180,16 +179,16 @@ pub fn filter_map((tx_index, tx): (usize, bitcoin::Transaction)) -> Option<Trans
     }
 
     let op_return = tx.output.iter().find(|o| o.script_pubkey.is_op_return());
-    let mut op_return_data = IndexMap::new();
+    let mut op_return_data: Vec<indexer_types::OpReturnEntry> = Vec::new();
 
     if let Some(op_return) = op_return {
         let mut op_return_instructions = op_return.script_pubkey.instructions();
         if let Some(Ok(Instruction::Op(OP_RETURN))) = op_return_instructions.next()
             && let Some(Ok(Instruction::PushBytes(data))) = op_return_instructions.next()
             && let Ok(entries) =
-                deserialize::<Vec<(u64, indexer_types::OpReturnData)>>(data.as_bytes())
+                deserialize::<Vec<indexer_types::OpReturnEntry>>(data.as_bytes())
         {
-            op_return_data = IndexMap::from_iter(entries);
+            op_return_data = entries;
         }
     }
 
@@ -207,7 +206,7 @@ pub async fn inspect(
 ) -> anyhow::Result<Vec<OpWithResult>> {
     let mut ops = Vec::new();
     for input in &tx.inputs {
-        // Per-op signer_ids: aggregates resolve each `SignerClaim` (Id is
+        // Per-op signer_ids: aggregates resolve each `SignerRef` (Id is
         // already-resolved; PubKey is looked up against the registry — by
         // the time inspect runs, any PubKey claim on a successfully
         // executed aggregate must have a corresponding signers row).
@@ -217,8 +216,8 @@ pub async fn inspect(
                 let mut ids = Vec::with_capacity(agg.signers.len());
                 for s in &agg.signers {
                     let id = match &s.identity {
-                        indexer_types::SignerClaim::Id(id) => *id,
-                        indexer_types::SignerClaim::PubKey(pk) => {
+                        indexer_types::SignerRef::SignerId(id) => *id,
+                        indexer_types::SignerRef::XOnlyPubkey(pk) => {
                             crate::database::queries::get_signer_entry_by_x_only_pubkey(
                                 conn,
                                 &pk.to_string(),
@@ -330,7 +329,7 @@ mod tests {
     use bitcoin::{Amount, OutPoint, ScriptBuf, Sequence, Transaction, TxIn, TxOut, Witness};
     use indexer_types::{
         AggregateInfo, AggregateSigner, ContractAddress, Inst, InstKind, Insts, PaymentIntent,
-        SignerClaim, serialize,
+        SignerRef, serialize,
     };
 
     use super::filter_map;
@@ -395,7 +394,7 @@ mod tests {
             ops: vec![op.clone()],
             aggregate: Some(AggregateInfo {
                 signers: vec![AggregateSigner {
-                    identity: SignerClaim::Id(7),
+                    identity: SignerRef::SignerId(7),
                     nonce: 0,
                 }],
                 signature: vec![9u8; 48],

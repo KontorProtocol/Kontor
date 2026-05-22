@@ -2,7 +2,7 @@ use std::collections::HashMap;
 
 use anyhow::{Result, anyhow};
 use blst::min_sig::{PublicKey as BlsPublicKey, Signature as BlsSignature};
-use indexer_types::{InstKind, Insts, SignerClaim};
+use indexer_types::{InstKind, Insts, SignerRef};
 
 use super::{
     BLS_SIGNATURE_BYTES, KONTOR_BLS_DST, MAX_BLS_BULK_OPS, MAX_BLS_BULK_TOTAL_MESSAGE_BYTES,
@@ -60,7 +60,7 @@ impl SignerResolver {
     /// still expects the signer_id → x_only_pubkey mapping to be available.
     ///
     /// If `claim_pubkey` is provided (the call site already had the x_only
-    /// from a `SignerClaim::PubKey`), it's used directly; otherwise we read
+    /// from a `SignerRef::XOnlyPubkey`), it's used directly; otherwise we read
     /// it from the signers table.
     pub(super) async fn ensure_x_only(
         &mut self,
@@ -140,7 +140,7 @@ pub fn validate_aggregate_shape(insts: &Insts) -> Result<&indexer_types::Aggrega
     Ok(agg)
 }
 
-/// Resolved aggregate output: per-op `signer_id` (after `SignerClaim`
+/// Resolved aggregate output: per-op `signer_id` (after `SignerRef`
 /// resolution) paired with the `signer_id → x_only_pubkey` map so the caller
 /// can avoid redundant registry lookups during op execution.
 #[derive(Debug)]
@@ -151,8 +151,8 @@ pub struct AggregateResolved {
 
 /// Verify the BLS aggregate signature on an `Insts` envelope.
 ///
-/// Resolves each `SignerClaim` to an internal `signer_id`
-/// (`SignerClaim::Id` direct, `SignerClaim::PubKey` via
+/// Resolves each `SignerRef` to an internal `signer_id`
+/// (`SignerRef::SignerId` direct, `SignerRef::XOnlyPubkey` via
 /// `get_or_create_identity`), sources the verification BLS pubkey
 /// per-op-kind (DB lookup for `Call`; payload bytes for `RegisterBlsKey`,
 /// since the registrant has no prior bls_keys row), and verifies the
@@ -196,12 +196,12 @@ pub async fn verify_aggregate(runtime: &mut Runtime, insts: &Insts) -> Result<Ag
         }
 
         let (signer_id, claim_pubkey) = match &agg_signer.identity {
-            SignerClaim::Id(id) => (*id, None),
-            SignerClaim::PubKey(pk) => {
+            SignerRef::SignerId(id) => (*id, None),
+            SignerRef::XOnlyPubkey(pk) => {
                 let identity = runtime
                     .get_or_create_identity(&pk.to_string())
                     .await
-                    .map_err(|e| anyhow!("resolving SignerClaim::PubKey: {e}"))?;
+                    .map_err(|e| anyhow!("resolving SignerRef::XOnlyPubkey: {e}"))?;
                 (identity.signer_id() as u64, Some(pk.to_string()))
             }
         };

@@ -9,9 +9,8 @@ use indexer::api::compose::{ComposeInputs, InstructionInputs, compose, compose_r
 use indexer::test_utils;
 use indexer::witness_data::{TokenBalance, WitnessData};
 use indexer_types::{
-    ComposeQuery, ContractAddress, Inst, InstKind, InstructionQuery, Insts, OpReturnData,
-    PaymentIntent, RevealInputs, RevealParticipantInputs, RevealParticipantQuery, RevealQuery,
-    serialize,
+    ComposeQuery, ContractAddress, Inst, InstKind, InstructionQuery, Insts, OpReturnEntry, PaymentIntent, RevealInputs, RevealParticipantInputs, RevealParticipantQuery,
+    RevealQuery, SignerRef, serialize,
 };
 use testlib::RegTester;
 
@@ -957,7 +956,10 @@ pub async fn test_compose_attach_and_detach(reg_tester: &mut RegTester) -> Resul
             commit_script_data: chained_script_data_bytes,
             chained_instruction: None,
         }],
-        op_return_data: Some(serialize(&OpReturnData::PubKey(internal_key))?),
+        op_return_data: Some(serialize(&vec![OpReturnEntry {
+            input_index: 0,
+            recipient: SignerRef::XOnlyPubkey(internal_key),
+        }])?),
         envelope: None,
     };
 

@@ -6,7 +6,7 @@ use indexer::bls::KONTOR_BLS_DST;
 use indexer::database::types::OpResultId;
 use indexer_types::{
     AggregateInfo, AggregateSigner, ContractAddress as IndexerContractAddress, Inst, InstKind,
-    Insts, PaymentIntent, SignerClaim,
+    Insts, PaymentIntent, SignerRef,
 };
 use testlib::*;
 
@@ -21,7 +21,7 @@ fn aggregate_call(gas_limit: u64, contract: IndexerContractAddress, expr: String
 
 fn signer_by_id(id: u64, nonce: u64) -> AggregateSigner {
     AggregateSigner {
-        identity: SignerClaim::Id(id),
+        identity: SignerRef::SignerId(id),
         nonce,
     }
 }
@@ -95,8 +95,8 @@ async fn bls_bulk_compose_and_execute_regtest() -> Result<()> {
     );
 
     // Each signer signs their op message; publisher aggregates.
-    let signer1_claim = SignerClaim::Id(signer1_id);
-    let signer2_claim = SignerClaim::Id(signer2_id);
+    let signer1_claim = SignerRef::SignerId(signer1_id);
+    let signer2_claim = SignerRef::SignerId(signer2_id);
     let msg0 = op0.aggregate_signing_message(&signer1_claim, 0)?;
     let msg1 = op1.aggregate_signing_message(&signer2_claim, 0)?;
 
@@ -238,8 +238,8 @@ async fn bls_bulk_unknown_signer_id_rejects_bundle_regtest() -> Result<()> {
         arith::wave::eval_call_expr(11, arith::Op::Id),
     );
 
-    let signer_claim = SignerClaim::Id(signer_id);
-    let signer_claim_alt = SignerClaim::Id(signer_id + 10_000);
+    let signer_claim = SignerRef::SignerId(signer_id);
+    let signer_claim_alt = SignerRef::SignerId(signer_id + 10_000);
     let msg0 = op0.aggregate_signing_message(&signer_claim, 0)?;
     let msg1 = op1.aggregate_signing_message(&signer_claim_alt, 0)?;
     let msg2 = op2.aggregate_signing_message(&signer_claim, 1)?;
@@ -322,7 +322,7 @@ async fn bls_bulk_requires_registered_signer_id_regtest() -> Result<()> {
         arith_contract,
         arith::wave::eval_call_expr(10, arith::Op::Id),
     );
-    let bogus_claim = SignerClaim::Id(999_999_999);
+    let bogus_claim = SignerRef::SignerId(999_999_999);
     let msg = op.aggregate_signing_message(&bogus_claim, 0)?;
     let sk = blst::min_sig::SecretKey::from_bytes(&signer.bls_secret_key)
         .map_err(|e| anyhow!("invalid signer BLS secret key: {e:?}"))?;
@@ -405,8 +405,8 @@ async fn bls_bulk_invalid_aggregate_signature_rejects_bundle_regtest() -> Result
         arith::wave::eval_call_expr(4, arith::Op::Id),
     );
 
-    let signer1_claim = SignerClaim::Id(signer1_id);
-    let signer2_claim = SignerClaim::Id(signer2_id);
+    let signer1_claim = SignerRef::SignerId(signer1_id);
+    let signer2_claim = SignerRef::SignerId(signer2_id);
     let msg0 = op0.aggregate_signing_message(&signer1_claim, 0)?;
     let msg1 = op1.aggregate_signing_message(&signer2_claim, 0)?;
     let sk1 = blst::min_sig::SecretKey::from_bytes(&signer1.bls_secret_key)

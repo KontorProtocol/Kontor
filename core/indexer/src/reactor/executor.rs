@@ -252,7 +252,11 @@ impl Executor for RuntimeExecutor {
     ) -> Result<Vec<Vec<Option<anyhow::Error>>>> {
         let mut all = Vec::with_capacity(tx.inputs.len());
         for input in &tx.inputs {
-            let op_return_data = tx.op_return_data.get(&(input.input_index as u64)).cloned();
+            let op_return_data = tx
+                .op_return_data
+                .iter()
+                .find(|e| e.input_index as i64 == input.input_index)
+                .map(|e| e.recipient.clone());
             let per_input = process_input(
                 runtime,
                 input,
@@ -295,7 +299,7 @@ pub async fn process_input(
     tx_id: Option<i64>,
     tx_index: i64,
     txid: bitcoin::Txid,
-    op_return_data: Option<indexer_types::OpReturnData>,
+    op_return_data: Option<indexer_types::SignerRef>,
 ) -> Result<Vec<Option<anyhow::Error>>> {
     if input.insts.is_aggregate() {
         process_aggregate_input(
@@ -329,7 +333,7 @@ async fn process_direct_input(
     tx_id: Option<i64>,
     tx_index: i64,
     txid: bitcoin::Txid,
-    op_return_data: Option<indexer_types::OpReturnData>,
+    op_return_data: Option<indexer_types::SignerRef>,
 ) -> Result<Vec<Option<anyhow::Error>>> {
     let identity = runtime
         .get_or_create_identity(&input.x_only_pubkey.to_string())
@@ -379,7 +383,7 @@ async fn process_aggregate_input(
     tx_id: Option<i64>,
     tx_index: i64,
     txid: bitcoin::Txid,
-    op_return_data: Option<indexer_types::OpReturnData>,
+    op_return_data: Option<indexer_types::SignerRef>,
 ) -> Result<Vec<Option<anyhow::Error>>> {
     let n_ops = input.insts.ops.len();
     let resolved = match crate::bls::verify_aggregate(runtime, &input.insts).await {

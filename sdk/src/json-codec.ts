@@ -142,4 +142,12 @@ export interface KontorTransport {
    * runtime), since its content depends on who is detaching and where.
    */
   composeReveal(query: RevealQuery): Promise<RevealOutputs>;
+
+  /**
+   * Broadcast already-signed raw transactions — in dependency order
+   * (commit, reveal, …) — as one package. Used by the attach/detach
+   * runtime, which builds and signs its txs by hand rather than going
+   * through `submit`.
+   */
+  broadcast(transactions: string[]): Promise<BroadcastResult>;
 }

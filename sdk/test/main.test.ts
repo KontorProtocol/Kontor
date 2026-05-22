@@ -2,11 +2,12 @@ import { expect, test } from "vitest";
 import {
   serializeInst,
   deserializeInst,
-  serializeOpReturnData,
-  deserializeOpReturnData,
+  encodeOpReturn,
+  decodeOpReturn,
   validateWit,
   Wit,
 } from "@kontor/sdk";
+import type { OpReturnEntry } from "../src/component/kontor-sdk.js";
 
 test("publish", () => {
   let inst = {
@@ -66,7 +67,7 @@ test("call with sponsored payment in aggregate", () => {
     aggregate: {
       signers: [
         {
-          identity: { Id: 1 },
+          identity: { SignerId: 1 },
           nonce: 0,
         },
       ],
@@ -80,7 +81,7 @@ test("call with sponsored payment in aggregate", () => {
   expect(inst).toStrictEqual(JSON.parse(result));
 });
 
-test("aggregate with PubKey signer claim", () => {
+test("aggregate with XOnlyPubkey signer ref", () => {
   let inst = {
     ops: [
       {
@@ -97,7 +98,7 @@ test("aggregate with PubKey signer claim", () => {
       signers: [
         {
           identity: {
-            PubKey:
+            XOnlyPubkey:
               "eb1e64766d59b13670f8766f306e87b15874789948dd28a4376749e0270fbe19",
           },
           nonce: 0,
@@ -130,13 +131,17 @@ test("issuance", () => {
 });
 
 test("op_return_data", () => {
-  let inst = {
-    PubKey: "eb1e64766d59b13670f8766f306e87b15874789948dd28a4376749e0270fbe19",
-  };
-  const str = JSON.stringify(inst);
-  const bs = serializeOpReturnData(str);
-  let result = deserializeOpReturnData(bs);
-  expect(inst).toStrictEqual(JSON.parse(result));
+  // The OP_RETURN payload is a list of per-input directive entries.
+  const entries: OpReturnEntry[] = [
+    {
+      inputIndex: 0,
+      recipient: {
+        tag: "x-only-pubkey",
+        val: "eb1e64766d59b13670f8766f306e87b15874789948dd28a4376749e0270fbe19",
+      },
+    },
+  ];
+  expect(decodeOpReturn(encodeOpReturn(entries))).toStrictEqual(entries);
 });
 
 test("validateWit valid contract", () => {

@@ -3,7 +3,6 @@ extern crate alloc;
 use anyhow::Result;
 use bitcoin::{BlockHash, FeeRate, ScriptBuf, TxOut, Txid, XOnlyPublicKey, taproot::LeafVersion};
 use bon::Builder;
-use indexmap::IndexMap;
 use macros::{contract_address, holder_ref};
 use serde::{Deserialize, Serialize};
 use serde_with::{DisplayFromStr, serde_as};
@@ -209,9 +208,8 @@ pub struct Transaction {
     #[ts(type = "number")]
     pub index: i64,
     pub inputs: Vec<Input>,
-    #[ts(type = "Record<number, OpReturnData>")]
-    #[serde(with = "indexmap::map::serde_seq")]
-    pub op_return_data: IndexMap<u64, OpReturnData>,
+    /// OP_RETURN directives, one entry per reveal input that carries one.
+    pub op_return_data: Vec<OpReturnEntry>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, TS)]
@@ -315,7 +313,7 @@ pub struct AggregateInfo {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[ts(export, export_to = "../../../sdk/src/bindings.d.ts")]
 pub struct AggregateSigner {
-    pub identity: SignerClaim,
+    pub identity: SignerRef,
     #[ts(type = "number")]
     pub nonce: u64,
 }
@@ -333,9 +331,31 @@ pub struct AggregateSigner {
 /// the verification key, not which key.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[ts(export, export_to = "../../../sdk/src/bindings.d.ts")]
-pub enum SignerClaim {
-    Id(#[ts(type = "number")] u64),
-    PubKey(#[ts(as = "String")] XOnlyPublicKey),
+pub enum SignerRef {
+    SignerId(#[ts(type = "number")] u64),
+    XOnlyPubkey(#[ts(as = "String")] XOnlyPublicKey),
+}
+
+impl SignerRef {
+    /// Build an `XOnlyPubkey` ref from an x-only pubkey hex string,
+    /// validating that it is a real curve point. Used at the codec
+    /// boundary, where the input is an untrusted string.
+    pub fn pubkey_from_hex(hex: &str) -> Result<Self, String> {
+        hex.parse::<XOnlyPublicKey>()
+            .map(Self::XOnlyPubkey)
+            .map_err(|e| format!("invalid x-only pubkey '{hex}': {e}"))
+    }
+}
+
+/// `SignerRef` is exactly the two real-account arms of `HolderRef`;
+/// this widening is total.
+impl From<SignerRef> for HolderRef {
+    fn from(value: SignerRef) -> Self {
+        match value {
+            SignerRef::SignerId(id) => HolderRef::SignerId(id),
+            SignerRef::XOnlyPubkey(pk) => HolderRef::XOnlyPubkey(pk.to_string()),
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
@@ -706,9 +726,17 @@ pub struct ResultRow {
     pub payer_signer_id: Option<i64>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub enum OpReturnData {
-    PubKey(XOnlyPublicKey),
+/// One OP_RETURN directive bound to the reveal input it applies to:
+/// where the asset detached by that input's op should land. A
+/// transaction's OP_RETURN payload is a `Vec<OpReturnEntry>` — the
+/// per-input binding kept as a plain list (not a map) so it is fully
+/// expressible in WIT — `list<op-return-entry>`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export, export_to = "../../../sdk/src/bindings.d.ts")]
+pub struct OpReturnEntry {
+    #[ts(type = "number")]
+    pub input_index: u32,
+    pub recipient: SignerRef,
 }
 
 /// Co-signer's payment commitment, signed as part of the Inst.
@@ -769,11 +797,11 @@ impl Inst {
     ///
     /// Returns `KONTOR-OP-V1 || postcard((claim, nonce, self))` where `claim`
     /// and `nonce` come from the matching `AggregateSigner` entry in
-    /// `AggregateInfo.signers`. Signing over the `SignerClaim` rather than a
+    /// `AggregateInfo.signers`. Signing over the `SignerRef` rather than a
     /// resolved `signer_id` is what lets a brand-new co-signer (no
     /// `signer_id` yet) participate in aggregates: they sign over their
-    /// `SignerClaim::PubKey(self_x_only)`, which they know locally.
-    pub fn aggregate_signing_message(&self, claim: &SignerClaim, nonce: u64) -> Result<Vec<u8>> {
+    /// `SignerRef::XOnlyPubkey(self_x_only)`, which they know locally.
+    pub fn aggregate_signing_message(&self, claim: &SignerRef, nonce: u64) -> Result<Vec<u8>> {
         const KONTOR_OP_PREFIX: &[u8] = b"KONTOR-OP-V1";
         let op_bytes = serialize(&(claim, nonce, self))?;
         let mut msg = Vec::with_capacity(KONTOR_OP_PREFIX.len() + op_bytes.len());
@@ -791,31 +819,37 @@ pub fn deserialize<T: for<'a> Deserialize<'a>>(buffer: &[u8]) -> Result<T> {
     Ok(postcard::from_bytes(buffer)?)
 }
 
-pub fn json_to_bytes<T: for<'a> Deserialize<'a> + Serialize>(json: String) -> Vec<u8> {
-    let inst = serde_json::from_str::<T>(&json).expect("Invalid JSON string");
-    serialize(&inst).expect("Failed to serialize to postcard")
+/// Parse `json` as a `T` and postcard-encode it. Both halves can fail
+/// — malformed JSON, or a value that fails `T`'s own validation (an
+/// x-only pubkey not on the curve, say) — so the error is returned, not
+/// panicked: callers across the WASM boundary get a catchable string.
+pub fn json_to_bytes<T: for<'a> Deserialize<'a> + Serialize>(
+    json: String,
+) -> Result<Vec<u8>, String> {
+    let value = serde_json::from_str::<T>(&json).map_err(|e| e.to_string())?;
+    serialize(&value).map_err(|e| e.to_string())
 }
 
-pub fn bytes_to_json<T: for<'a> Deserialize<'a> + Serialize>(bytes: Vec<u8>) -> String {
-    let inst = deserialize::<T>(&bytes).expect("Failed to deserialize from postcard");
-    serde_json::to_string(&inst).expect("Failed to serialize to JSON")
+/// Postcard-decode `bytes` as a `T` and re-encode it as JSON.
+pub fn bytes_to_json<T: for<'a> Deserialize<'a> + Serialize>(
+    bytes: Vec<u8>,
+) -> Result<String, String> {
+    let value = deserialize::<T>(&bytes).map_err(|e| e.to_string())?;
+    serde_json::to_string(&value).map_err(|e| e.to_string())
 }
 
-pub fn insts_json_to_bytes(json: String) -> Vec<u8> {
+pub fn insts_json_to_bytes(json: String) -> Result<Vec<u8>, String> {
     json_to_bytes::<Insts>(json)
 }
 
-pub fn insts_bytes_to_json(bytes: Vec<u8>) -> String {
+pub fn insts_bytes_to_json(bytes: Vec<u8>) -> Result<String, String> {
     bytes_to_json::<Insts>(bytes)
 }
 
-pub fn op_return_data_json_to_bytes(json: String) -> Vec<u8> {
-    json_to_bytes::<OpReturnData>(json)
-}
-
-pub fn op_return_data_bytes_to_json(bytes: Vec<u8>) -> String {
-    bytes_to_json::<OpReturnData>(bytes)
-}
+/// The full OP_RETURN payload of a Kontor transaction — one entry per
+/// reveal input that carries a directive. This is what a reveal embeds
+/// and what `block.rs` postcard-decodes when indexing.
+pub type OpReturnPayload = Vec<OpReturnEntry>;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[ts(export, export_to = "../../../sdk/src/bindings.d.ts")]

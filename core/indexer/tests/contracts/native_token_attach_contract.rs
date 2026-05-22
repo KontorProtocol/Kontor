@@ -125,10 +125,10 @@ async fn test_native_token_attach_contract() -> Result<()> {
                 .commit_script_data(chained_script_data_bytes)
                 .build(),
         ],
-        op_return_data: Some(serialize(&vec![(
-            0,
-            indexer_types::OpReturnData::PubKey(buyer_x_only),
-        )])?),
+        op_return_data: Some(serialize(&vec![indexer_types::OpReturnEntry {
+            input_index: 0,
+            recipient: indexer_types::SignerRef::XOnlyPubkey(buyer_x_only),
+        }])?),
         envelope: None,
     };
 

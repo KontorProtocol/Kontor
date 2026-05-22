@@ -34,20 +34,20 @@ impl GuestWit for WitResource {
 pub struct Lib {}
 
 impl Guest for Lib {
-    fn serialize_inst(json_str: String) -> Vec<u8> {
+    fn serialize_inst(json_str: String) -> Result<Vec<u8>, String> {
         insts_json_to_bytes(json_str)
     }
 
-    fn deserialize_inst(bytes: Vec<u8>) -> String {
+    fn deserialize_inst(bytes: Vec<u8>) -> Result<String, String> {
         insts_bytes_to_json(bytes)
     }
 
-    fn serialize_op_return_data(json_str: String) -> Vec<u8> {
-        op_return_data_json_to_bytes(json_str)
+    fn encode_op_return(entries: Vec<OpReturnEntry>) -> Result<Vec<u8>, String> {
+        op_return_encode(entries)
     }
 
-    fn deserialize_op_return_data(bytes: Vec<u8>) -> String {
-        op_return_data_bytes_to_json(bytes)
+    fn decode_op_return(bytes: Vec<u8>) -> Result<Vec<OpReturnEntry>, String> {
+        op_return_decode(bytes)
     }
 
     fn validate_wit(wit_content: String) -> ValidationResult {
@@ -77,3 +77,48 @@ impl Guest for Lib {
 }
 
 export!(Lib);
+
+// OP_RETURN codec — bridges the WIT-generated `OpReturnEntry` /
+// `SignerRef` (bare names below) to their `indexer_types` twins, which
+// own the postcard wire format.
+
+fn op_return_encode(entries: Vec<OpReturnEntry>) -> Result<Vec<u8>, String> {
+    let payload = entries
+        .into_iter()
+        .map(op_return_entry_to_indexer)
+        .collect::<Result<Vec<indexer_types::OpReturnEntry>, String>>()?;
+    indexer_types::serialize(&payload).map_err(|e| e.to_string())
+}
+
+fn op_return_decode(bytes: Vec<u8>) -> Result<Vec<OpReturnEntry>, String> {
+    let payload: Vec<indexer_types::OpReturnEntry> =
+        indexer_types::deserialize(&bytes).map_err(|e| e.to_string())?;
+    Ok(payload.into_iter().map(op_return_entry_from_indexer).collect())
+}
+
+fn op_return_entry_to_indexer(
+    entry: OpReturnEntry,
+) -> Result<indexer_types::OpReturnEntry, String> {
+    Ok(indexer_types::OpReturnEntry {
+        input_index: entry.input_index,
+        recipient: signer_ref_to_indexer(entry.recipient)?,
+    })
+}
+
+fn signer_ref_to_indexer(claim: SignerRef) -> Result<indexer_types::SignerRef, String> {
+    match claim {
+        SignerRef::SignerId(id) => Ok(indexer_types::SignerRef::SignerId(id)),
+        SignerRef::XOnlyPubkey(hex) => indexer_types::SignerRef::pubkey_from_hex(&hex),
+    }
+}
+
+fn op_return_entry_from_indexer(entry: indexer_types::OpReturnEntry) -> OpReturnEntry {
+    let recipient = match entry.recipient {
+        indexer_types::SignerRef::SignerId(id) => SignerRef::SignerId(id),
+        indexer_types::SignerRef::XOnlyPubkey(pk) => SignerRef::XOnlyPubkey(pk.to_string()),
+    };
+    OpReturnEntry {
+        input_index: entry.input_index,
+        recipient,
+    }
+}

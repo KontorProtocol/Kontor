@@ -220,12 +220,9 @@ impl Guest for Nft {
 
     fn detach(ctx: &ProcContext, nft_id: String) -> Result<NftTransfer, Error> {
         let src = utxo_holder(ctx.transaction().out_point());
-        let dst: Holder = if let Some(context::OpReturnData::PubKey(pubkey)) =
-            ctx.transaction().op_return_data()
-        {
-            HolderRef::XOnlyPubkey(pubkey).try_into()?
-        } else {
-            (&ctx.signer()).into()
+        let dst: Holder = match ctx.transaction().op_return_data() {
+            Some(recipient) => HolderRef::from(recipient).try_into()?,
+            None => (&ctx.signer()).into(),
         };
         change_owner(ctx, nft_id, src, dst, "nft is not attached to this utxo")
     }

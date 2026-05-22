@@ -304,29 +304,76 @@ function unwrapOrThrow<T>(r: OpResult<T>): T {
  *
  * @internal
  */
-export async function waitForTxOutcomes(
+export function waitForTxOutcomes(
   events: AsyncIterableIterator<ChainEvent>,
   txid: string,
   opts?: WaitOptions,
 ): Promise<OpResultRaw[]> {
-  const scan = async (): Promise<OpResultRaw[]> => {
-    for await (const ev of events) {
-      if (ev.kind === "tx" && ev.txid === txid) return ev.outcomes;
-    }
-    throw new TransportError(
-      `wait: event stream ended before tx ${txid} landed`,
-    );
-  };
+  return withWaitDeadline(
+    async () => {
+      for await (const ev of events) {
+        if (ev.kind === "tx" && ev.txid === txid) return ev.outcomes;
+      }
+      throw new TransportError(
+        `wait: event stream ended before tx ${txid} landed`,
+      );
+    },
+    `tx ${txid}`,
+    opts,
+  );
+}
 
+/**
+ * Like `waitForTxOutcomes`, but waits for several txids at once on one
+ * event iterator — the attach/detach package broadcasts a commit and
+ * two reveals, and the caller wants every reveal's outcomes. Returns a
+ * map keyed by txid; resolves only once every requested txid is seen.
+ *
+ * @internal
+ */
+export function waitForTxsOutcomes(
+  events: AsyncIterableIterator<ChainEvent>,
+  txids: readonly string[],
+  opts?: WaitOptions,
+): Promise<Map<string, OpResultRaw[]>> {
+  return withWaitDeadline(
+    async () => {
+      const pending = new Set(txids);
+      const seen = new Map<string, OpResultRaw[]>();
+      for await (const ev of events) {
+        if (ev.kind === "tx" && pending.delete(ev.txid)) {
+          seen.set(ev.txid, ev.outcomes);
+          if (pending.size === 0) return seen;
+        }
+      }
+      throw new TransportError(
+        `wait: event stream ended before txs [${[...pending]}] landed`,
+      );
+    },
+    `txs [${txids.join(", ")}]`,
+    opts,
+  );
+}
+
+/**
+ * Race `scan` against the `WaitOptions` timeout / abort signal. With
+ * neither set, `scan` runs unguarded. The losing `scan` unblocks when
+ * the caller's `finally` closes the underlying event iterator.
+ *
+ * @internal
+ */
+export function withWaitDeadline<R>(
+  scan: () => Promise<R>,
+  label: string,
+  opts?: WaitOptions,
+): Promise<R> {
   if (opts?.timeoutMs == null && opts?.signal == null) return scan();
 
-  // Race the scan against the timeout / abort signal. The losing `scan`
-  // unblocks when the caller's `finally` closes the event iterator.
-  return new Promise<OpResultRaw[]>((resolve, reject) => {
+  return new Promise<R>((resolve, reject) => {
     let settled = false;
     let timer: ReturnType<typeof setTimeout> | undefined;
     const onAbort = (): void =>
-      settle(() => reject(new TransportError(`wait: aborted for tx ${txid}`)));
+      settle(() => reject(new TransportError(`wait: aborted (${label})`)));
 
     // First settler wins; on the way out, release the timer and abort
     // listener so neither keeps the event loop (or the signal) alive.
@@ -348,7 +395,7 @@ export async function waitForTxOutcomes(
           settle(() =>
             reject(
               new TransportError(
-                `wait: tx ${txid} not seen within ${opts.timeoutMs}ms`,
+                `wait: ${label} not seen within ${opts.timeoutMs}ms`,
               ),
             ),
           ),

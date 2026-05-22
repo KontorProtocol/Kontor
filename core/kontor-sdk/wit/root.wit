@@ -61,11 +61,30 @@ interface numerics {
 }
 
 world root {
-  export serialize-inst: func(json-str: string) -> list<u8>;
-  export deserialize-inst: func(bytes: list<u8>) -> string;
+  // The codec functions validate their input — bad JSON, a malformed
+  // x-only pubkey, a corrupt byte buffer — and surface it as the `err`
+  // arm rather than trapping. `result` so the host gets a catchable
+  // error string, not an `unreachable`.
+  export serialize-inst: func(json-str: string) -> result<list<u8>, string>;
+  export deserialize-inst: func(bytes: list<u8>) -> result<string, string>;
 
-  export serialize-op-return-data: func(json-str: string) -> list<u8>;
-  export deserialize-op-return-data: func(bytes: list<u8>) -> string;
+  // A transaction's OP_RETURN payload: one `op-return-entry` per reveal
+  // input that detaches an asset, binding that input to the recipient
+  // the asset lands with. `signer-ref` names a party by existing signer
+  // id or by x-only pubkey. `encode`/`decode` own the wire (postcard)
+  // shape — these types mirror the Rust 1:1.
+  variant signer-ref {
+    signer-id(u64),
+    x-only-pubkey(string),
+  }
+
+  record op-return-entry {
+    input-index: u32,
+    recipient: signer-ref,
+  }
+
+  export encode-op-return: func(entries: list<op-return-entry>) -> result<list<u8>, string>;
+  export decode-op-return: func(bytes: list<u8>) -> result<list<op-return-entry>, string>;
 
   record validation-error {
     message: string,

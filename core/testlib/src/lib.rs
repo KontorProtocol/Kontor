@@ -499,7 +499,7 @@ impl RuntimeRegtest {
                 },
             });
             agg_signers.push(indexer_types::AggregateSigner {
-                identity: indexer_types::SignerClaim::Id(signer_id),
+                identity: indexer_types::SignerRef::SignerId(signer_id),
                 nonce: current_nonce,
             });
         }

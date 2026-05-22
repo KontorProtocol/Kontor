@@ -6,7 +6,7 @@ use indexer::bls::KONTOR_BLS_DST;
 use indexer::database::types::OpResultId;
 use indexer_types::{
     AggregateInfo, AggregateSigner, ContractAddress as IndexerContractAddress, Inst, InstKind,
-    Insts, PaymentIntent, SignerClaim,
+    Insts, PaymentIntent, SignerRef,
 };
 use testlib::*;
 
@@ -42,7 +42,7 @@ fn call_with_intent(
 
 fn signer_by_id(id: u64, nonce: u64) -> AggregateSigner {
     AggregateSigner {
-        identity: SignerClaim::Id(id),
+        identity: SignerRef::SignerId(id),
         nonce,
     }
 }
@@ -111,8 +111,8 @@ async fn bls_publisher_pays_all_sponsored_regtest() -> Result<()> {
     );
 
     // BLS aggregate signing: each co-signer signs their inner op.
-    let signer1_claim = SignerClaim::Id(signer1_id);
-    let signer2_claim = SignerClaim::Id(signer2_id);
+    let signer1_claim = SignerRef::SignerId(signer1_id);
+    let signer2_claim = SignerRef::SignerId(signer2_id);
     let msg0 = op0.aggregate_signing_message(&signer1_claim, 0)?;
     let msg1 = op1.aggregate_signing_message(&signer2_claim, 0)?;
     let sk1 = blst::min_sig::SecretKey::from_bytes(&signer1.bls_secret_key)
@@ -234,8 +234,8 @@ async fn bls_publisher_pays_mixed_regtest() -> Result<()> {
         arith::wave::eval_call_expr(10, arith::Op::Sum(arith::Operand { y: 8 })),
     );
 
-    let signer1_claim = SignerClaim::Id(signer1_id);
-    let signer2_claim = SignerClaim::Id(signer2_id);
+    let signer1_claim = SignerRef::SignerId(signer1_id);
+    let signer2_claim = SignerRef::SignerId(signer2_id);
     let msg0 = op0.aggregate_signing_message(&signer1_claim, 0)?;
     let msg1 = op1.aggregate_signing_message(&signer2_claim, 0)?;
     let sk1 = blst::min_sig::SecretKey::from_bytes(&signer1.bls_secret_key)
