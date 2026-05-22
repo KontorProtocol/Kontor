@@ -47,7 +47,9 @@
     "build": "npm run build:ts",
     "prepare": "npm run build",
     "test": "vitest",
-    "test:browser": "vitest --browser"
+    "test:browser": "vitest --browser",
+    "test:regtest": "npm run build && vitest --config vitest.regtest.config.ts",
+    "test:regtest:browser": "npm run build && vitest --config vitest.regtest.config.ts --browser"
   },
   "devDependencies": {
     "@bytecodealliance/jco": "^1.19.0",
