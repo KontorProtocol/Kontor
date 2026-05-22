@@ -148,6 +148,24 @@ pub struct RevealOutputs {
     pub participants: Vec<ParticipantScripts>,
 }
 
+/// Request body for `POST /api/transactions/broadcast`: raw Bitcoin tx
+/// hex in dependency order (e.g. `[commit, reveal]`), relayed to bitcoind
+/// as a single `submitpackage`.
+#[derive(Debug, Serialize, Deserialize, TS)]
+#[ts(export, export_to = "../../../sdk/src/bindings.d.ts")]
+pub struct BroadcastQuery {
+    pub transactions: Vec<String>,
+}
+
+/// Response from `POST /api/transactions/broadcast`: the txid of the last
+/// transaction in the package — the reveal, which carries the Kontor op
+/// and is what callers wait on for results.
+#[derive(Debug, Serialize, Deserialize, TS)]
+#[ts(export, export_to = "../../../sdk/src/bindings.d.ts")]
+pub struct BroadcastResult {
+    pub txid: String,
+}
+
 #[derive(Debug, Serialize, Deserialize, TS)]
 #[ts(export, export_to = "../../../sdk/src/bindings.d.ts")]
 pub struct ErrorResponse {

@@ -9,7 +9,8 @@ use serde_json::Value;
 
 use crate::bitcoin_client::types::{
     Acceptance, CreateWalletResult, GetMempoolInfoResult, GetNetworkInfoResult,
-    GetRawMempoolResult, MempoolEntry, TestMempoolAcceptResult, fee_rate_sat_per_vb,
+    GetRawMempoolResult, MempoolEntry, SubmitPackageResult, TestMempoolAcceptResult,
+    fee_rate_sat_per_vb,
 };
 use crate::config::{Config, RegtestConfig};
 
@@ -301,6 +302,17 @@ impl Client {
         raw_txs: &[String],
     ) -> Result<Vec<TestMempoolAcceptResult>, Error> {
         self.call("testmempoolaccept", vec![raw_txs.into()]).await
+    }
+
+    /// Submit a package of raw transactions (in dependency order) to the
+    /// mempool atomically — validation + broadcast in one RPC. Used to
+    /// relay a Kontor commit+reveal pair so the reveal can't land without
+    /// its parent.
+    pub async fn submit_package(
+        &self,
+        raw_txs: &[String],
+    ) -> Result<SubmitPackageResult, Error> {
+        self.call("submitpackage", vec![raw_txs.into()]).await
     }
 
     pub async fn stop(&self) -> Result<String, Error> {
