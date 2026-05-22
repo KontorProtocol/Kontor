@@ -32,11 +32,15 @@ export default defineConfig({
     target: "es2022",
     emptyOutDir: true,
     rollupOptions: {
-      // `vite` is a peer dep (only required if the plugin entry is
-      // imported), so don't bundle it.
+      // Keep npm dependencies out of the bundle: `vite` is a peer dep,
+      // and the `@scure/*` / `@noble/*` crypto libs are regular runtime
+      // deps — consumers resolve them from `package.json`, so bundling
+      // them in would just bloat the output and risk duplicate copies.
       external: (id) =>
         id.startsWith("node:") ||
         id === "vite" ||
+        id.startsWith("@scure/") ||
+        id.startsWith("@noble/") ||
         id.includes("/component/kontor-sdk"),
       output: {
         // Restore the shebang Rollup strips from CLI sources, so the
