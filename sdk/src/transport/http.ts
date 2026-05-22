@@ -41,6 +41,7 @@ import type {
   ComposeOutputs,
   ComposeQuery,
   ErrorResponse,
+  OpWithResult,
   ParticipantScripts,
   ResultResponse,
   ViewExpr,
@@ -167,27 +168,15 @@ export class HttpTransport implements KontorTransport {
     }
   }
 
-  inspect(_insts: WireInsts): Promise<OpResultRaw[]> {
-    throw new TransportError("HttpTransport.inspect: not implemented", {
-      docsPath: "/sdk/transport",
-    });
-  }
-
-  simulate(_insts: WireInsts): Promise<OpResultRaw[]> {
-    throw new TransportError("HttpTransport.simulate: not implemented", {
-      docsPath: "/sdk/transport",
-    });
-  }
-
   /**
-   * Compose a Kontor transaction for `insts`, sign the commit + reveal,
-   * and broadcast them through the indexer. Returns the reveal txid; the
-   * per-Inst results are resolved later by the session's poller.
-   *
-   * Funding UTXOs and fee rate are caller-supplied (the `utxos` /
-   * `feeRate` options) — the SDK does not source UTXOs itself.
+   * Compose a Kontor transaction for `insts` and sign the commit +
+   * reveal — the shared front half of `submit` / `inspect` / `simulate`.
+   * Funding UTXOs and fee rate are caller-supplied (`utxos` / `feeRate`);
+   * the SDK does not source UTXOs itself.
    */
-  async submit(insts: WireInsts): Promise<BroadcastResult> {
+  private async composeAndSign(
+    insts: WireInsts,
+  ): Promise<{ commitHex: string; revealHex: string }> {
     const { account } = this.opts;
     const utxos = await this.resolveUtxos();
     const query: ComposeQuery = {
@@ -203,19 +192,57 @@ export class HttpTransport implements KontorTransport {
       sat_per_vbyte: await this.resolveFeeRate(),
       envelope: null,
     };
-
     const composed = await this.postJson<ComposeOutputs>(
       "/transactions/compose",
       query,
     );
-    const commitHex = await this.signCommit(composed.commit_psbt_hex);
-    const revealHex = await this.signReveal(
-      composed.reveal_psbt_hex,
-      composed.per_participant,
-    );
+    return {
+      commitHex: await this.signCommit(composed.commit_psbt_hex),
+      revealHex: await this.signReveal(
+        composed.reveal_psbt_hex,
+        composed.per_participant,
+      ),
+    };
+  }
+
+  /**
+   * Compose, sign, and broadcast `insts` through the indexer. Returns
+   * the reveal txid; per-Inst results are resolved later by the
+   * session's poller.
+   */
+  async submit(insts: WireInsts): Promise<BroadcastResult> {
+    const { commitHex, revealHex } = await this.composeAndSign(insts);
     return this.postJson<BroadcastResult>("/transactions/broadcast", {
       transactions: [commitHex, revealHex],
     });
+  }
+
+  /**
+   * Static analysis — the indexer parses the composed reveal without
+   * executing it. One outcome per Inst; a rejected op surfaces as a
+   * non-Ok `OpResultRaw` carrying its error.
+   */
+  async inspect(insts: WireInsts): Promise<OpResultRaw[]> {
+    const { revealHex } = await this.composeAndSign(insts);
+    const ops = await this.postJson<OpWithResult[]>(
+      "/transactions/inspect",
+      { hex: revealHex },
+    );
+    return ops.map(opWithResultToRaw);
+  }
+
+  /**
+   * Sandboxed live execution — runs the composed reveal's ops against
+   * current chain state in a throwaway tx, returning predicted per-Inst
+   * outcomes (real gas, real results) without broadcasting.
+   */
+  async simulate(insts: WireInsts): Promise<OpResultRaw[]> {
+    const { revealHex } = await this.composeAndSign(insts);
+    const ops = await this.postJson<OpWithResult[]>(
+      "/transactions/simulate",
+      { hex: revealHex },
+    );
+    return ops.map(opWithResultToRaw);
   }
 
   /** Caller-supplied funding UTXOs; the SDK never sources them itself. */
@@ -301,6 +328,49 @@ export class HttpTransport implements KontorTransport {
     });
     return hex.encode(tx.extract());
   }
+}
+
+/**
+ * Map an indexer `OpWithResult` (from inspect / simulate) to the
+ * transport's `OpResultRaw`. Three cases: a rejected op (didn't
+ * materialize), a materialized + executed op (simulate — carries a
+ * result row), and a materialized-only op (inspect — parsed, not run).
+ */
+function opWithResultToRaw(o: OpWithResult): OpResultRaw {
+  if (o.kind === "Rejected") {
+    return {
+      status: "Other",
+      gas: 0n,
+      error: o.error_message ?? undefined,
+      func: "",
+      contract: "",
+      inputIndex: o.input_index,
+      opIndex: o.op_index,
+    };
+  }
+  const r = o.result;
+  if (r != null) {
+    return {
+      status: r.status,
+      gas: BigInt(r.gas),
+      value: r.value ?? undefined,
+      error: o.error_message ?? undefined,
+      func: r.func,
+      contract: r.contract,
+      inputIndex: r.input_index,
+      opIndex: r.op_index,
+    };
+  }
+  // Materialized but not executed (inspect): the op parsed cleanly.
+  return {
+    status: "Ok",
+    gas: 0n,
+    error: o.error_message ?? undefined,
+    func: "",
+    contract: "",
+    inputIndex: o.op.metadata.input_index,
+    opIndex: o.op.metadata.op_index,
+  };
 }
 
 /**

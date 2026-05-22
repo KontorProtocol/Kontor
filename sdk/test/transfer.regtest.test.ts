@@ -63,6 +63,13 @@ test("transfer(): submit/wait moves tokens; balance() view reflects it", async (
     const before = await token.balance(recipient.holderRef);
     expect(before == null || before.toString() === "0").toBe(true);
 
+    // Dry-run: `simulate` predicts the outcome, broadcasts nothing.
+    const sim = await token
+      .transfer(recipient.holderRef, Decimal.from("1"))
+      .simulate();
+    expect(sim.status).toBe("Ok");
+    expect(sim.value?.kind).toBe("ok");
+
     // `await` on the proc Inst fires submit → wait; throws on a non-Ok
     // op status, so reaching here means the transfer landed.
     const result = await token.transfer(recipient.holderRef, Decimal.from("1"));

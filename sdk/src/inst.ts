@@ -41,7 +41,7 @@ import type {
 import type { ContractAddress } from "./canonical/ContractAddress.js";
 import { ContractError, SignerError, TransportError } from "./errors.js";
 import type { ChainEvent } from "./events.js";
-import type { BroadcastResult, OpResult } from "./json-codec.js";
+import type { BroadcastResult, OpResult, OpResultRaw } from "./json-codec.js";
 import type { KontorSession } from "./session.js";
 
 /**
@@ -208,7 +208,11 @@ export class Inst<T> implements PromiseLike<T> {
    * estimation and result preview.
    */
   async simulate(): Promise<OpResult<T>> {
-    throw new Error("Inst.simulate: not implemented");
+    const wire: WireInsts = { ops: [instToWire(this)], aggregate: null };
+    return this.decodeOwnOp(
+      await this.session.transport.simulate(wire),
+      "simulate",
+    );
   }
 
   /**
@@ -218,7 +222,23 @@ export class Inst<T> implements PromiseLike<T> {
    * etc.) without touching contract state.
    */
   async inspect(): Promise<OpResult<T>> {
-    throw new Error("Inst.inspect: not implemented");
+    const wire: WireInsts = { ops: [instToWire(this)], aggregate: null };
+    return this.decodeOwnOp(
+      await this.session.transport.inspect(wire),
+      "inspect",
+    );
+  }
+
+  /**
+   * Pick this single Inst's op — input 0, op 0 — out of a transport's
+   * per-op outcomes and decode it into a typed `OpResult<T>`.
+   */
+  private decodeOwnOp(outcomes: OpResultRaw[], label: string): OpResult<T> {
+    const raw = outcomes.find((o) => o.inputIndex === 0 && o.opIndex === 0);
+    if (raw === undefined) {
+      throw new TransportError(`${label}: no result for the submitted op`);
+    }
+    return rawToOpResult(raw, this.decode);
   }
 
   /**
@@ -240,6 +260,19 @@ export class Inst<T> implements PromiseLike<T> {
   _decode(waveResult: string): T {
     return this.decode(waveResult);
   }
+}
+
+/** Decode a transport `OpResultRaw` into the Inst's typed `OpResult<T>`. */
+function rawToOpResult<T>(
+  raw: OpResultRaw,
+  decode: InstDecoder<T>,
+): OpResult<T> {
+  return {
+    status: raw.status,
+    gas: raw.gas,
+    error: raw.error,
+    value: raw.value !== undefined ? decode(raw.value) : undefined,
+  };
 }
 
 function unwrapOrThrow<T>(r: OpResult<T>): T {
@@ -276,12 +309,7 @@ async function waitForTx<T>(
           `wait: tx ${txid} carried no result for op (${inputIndex}, ${opIndex})`,
         );
       }
-      return {
-        status: raw.status,
-        gas: raw.gas,
-        error: raw.error,
-        value: raw.value !== undefined ? decode(raw.value) : undefined,
-      };
+      return rawToOpResult(raw, decode);
     }
     throw new TransportError(
       `wait: event stream ended before tx ${txid} landed`,
