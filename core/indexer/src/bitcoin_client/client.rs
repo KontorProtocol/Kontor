@@ -308,10 +308,7 @@ impl Client {
     /// mempool atomically — validation + broadcast in one RPC. Used to
     /// relay a Kontor commit+reveal pair so the reveal can't land without
     /// its parent.
-    pub async fn submit_package(
-        &self,
-        raw_txs: &[String],
-    ) -> Result<SubmitPackageResult, Error> {
+    pub async fn submit_package(&self, raw_txs: &[String]) -> Result<SubmitPackageResult, Error> {
         self.call("submitpackage", vec![raw_txs.into()]).await
     }
 

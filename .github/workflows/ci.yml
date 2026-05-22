@@ -54,29 +54,12 @@ jobs:
         working-directory: ./native-contracts
       - name: Install cargo-binstall
         uses: cargo-bins/cargo-binstall@v1.17.8
-      - name: Install wasm-opt
-        run: cargo binstall wasm-opt --no-confirm
       - name: Run clippy (core)
         run: cargo clippy --workspace --tests -- -D warnings
         working-directory: ./core
       - name: Check wit-validator compiles to wasm32-unknown-unknown
         run: cargo check -p wit-validator --target wasm32-unknown-unknown
         working-directory: ./core
-      - name: Install wasm-tools
-        run: cargo binstall wasm-tools --no-confirm
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: "22"
-      - name: Install sdk dependencies
-        run: npm ci
-        working-directory: ./sdk
-      - name: Build sdk (Rust + TS)
-        run: npm run build:rs && npm run build
-        working-directory: ./sdk
-      - name: Test sdk
-        run: npm test
-        working-directory: ./sdk
       - name: Install cargo-audit
         run: cargo binstall cargo-audit --no-confirm
       - name: Audit (test-contracts)
@@ -139,6 +122,59 @@ jobs:
       - name: Run tests
         working-directory: ./core
         run: REGTEST=1 cargo test --release --workspace
+
+  sdk:
+    name: SDK
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Cache Cargo registry
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/bin
+            ~/.cargo/.crates.toml
+            ~/.cargo/.crates2.json
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+          key: cargo-registry-${{ github.job }}-${{ runner.os }}-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            cargo-registry-${{ github.job }}-${{ runner.os }}-
+      - uses: mozilla-actions/sccache-action@v0.0.9
+      - name: Install dependencies (Linux)
+        run: sudo apt-get update && sudo apt-get install -y libzmq3-dev libboost-all-dev
+      - name: Download Bitcoin Core v30.2
+        run: |
+          curl -L -o bitcoin.zip "https://github.com/KontorProtocol/Kontor/releases/download/bitcoin-v30.2/bitcoin-${{ runner.os }}-${{ runner.arch }}.zip"
+          unzip bitcoin.zip -d bitcoin-bin
+          chmod +x bitcoin-bin/*
+          echo "${{ github.workspace }}/bitcoin-bin" >> $GITHUB_PATH
+      - name: Test bitcoind
+        run: bitcoind --version
+      # `kontor regtest` (spawned by the SDK's `startRegtest`) is the
+      # release binary; native contracts are committed `.wasm.br`, so this
+      # needs no wasm toolchain.
+      - name: Build kontor binary
+        run: cargo build --release --bin kontor
+        working-directory: ./core
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Install SDK dependencies
+        run: npm ci
+        working-directory: ./sdk
+      - name: Build SDK
+        run: npm run build
+        working-directory: ./sdk
+      - name: Unit tests
+        run: npm test
+        working-directory: ./sdk
+      - name: Live regtest test
+        run: npm run test:regtest
+        working-directory: ./sdk
 
   docker-cache-deps:
     name: Docker - Cache Dependencies (${{ matrix.arch }})
