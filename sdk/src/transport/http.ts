@@ -27,13 +27,19 @@
 import type { Account } from "../account/index.js";
 import type { Chain } from "../chains.js";
 import type { ContractAddress } from "../canonical/ContractAddress.js";
-import { TransportError } from "../errors.js";
+import { ContractError, TransportError } from "../errors.js";
 import type {
   BroadcastResult,
   KontorTransport,
   OpResultRaw,
   WireInsts,
 } from "../json-codec.js";
+import type {
+  ErrorResponse,
+  ResultResponse,
+  ViewExpr,
+  ViewResult,
+} from "../bindings.js";
 
 export interface Utxo {
   txid: string;
@@ -84,12 +90,75 @@ export interface HttpTransportOptions {
 }
 
 export class HttpTransport implements KontorTransport {
-  constructor(private readonly opts: HttpTransportOptions) {}
+  /** Indexer API base, trailing slash trimmed (so `${base}/contracts/…`). */
+  private readonly baseUrl: string;
+  private readonly fetchImpl: typeof fetch;
 
-  view(_contract: ContractAddress, _wave: string): Promise<string> {
-    throw new TransportError("HttpTransport.view: not implemented", {
+  constructor(private readonly opts: HttpTransportOptions) {
+    this.baseUrl = (opts.url ?? opts.chain.urls.http).replace(/\/+$/, "");
+    this.fetchImpl = opts.fetch ?? globalThis.fetch.bind(globalThis);
+  }
+
+  async view(contract: ContractAddress, wave: string): Promise<string> {
+    const body: ViewExpr = { expr: wave };
+    const result = await this.postJson<ViewResult>(
+      `/contracts/${contractPath(contract)}`,
+      body,
+    );
+    if (result.type === "Ok") return result.value;
+    // The view function itself returned an error (revert, bad expr,
+    // unknown contract) — a contract-level failure, not a transport one.
+    throw new ContractError(`view call on '${contract}' failed`, {
+      details: result.message,
       docsPath: "/sdk/transport",
     });
+  }
+
+  /**
+   * POST `body` as JSON to `path` under the indexer API base, unwrap the
+   * `{ result }` envelope, and return the inner value. HTTP-level
+   * failures — unreachable node, non-2xx status, malformed body — all
+   * surface as `TransportError`.
+   */
+  private async postJson<T>(path: string, body: unknown): Promise<T> {
+    const url = `${this.baseUrl}${path}`;
+    let res: Response;
+    try {
+      res = await this.fetchImpl(url, {
+        method: "POST",
+        headers: { "content-type": "application/json", ...this.opts.headers },
+        body: JSON.stringify(body),
+      });
+    } catch (cause) {
+      throw new TransportError(`POST ${url} failed`, {
+        cause: cause instanceof Error ? cause : undefined,
+        docsPath: "/sdk/transport",
+      });
+    }
+    const text = await res.text();
+    if (!res.ok) {
+      // The indexer returns `{ error }` on 4xx/5xx; fall back to the raw
+      // body if it isn't that shape.
+      let detail = text;
+      try {
+        detail = (JSON.parse(text) as ErrorResponse).error ?? text;
+      } catch {
+        /* not JSON — keep the raw text */
+      }
+      throw new TransportError(`POST ${url} returned HTTP ${res.status}`, {
+        details: detail,
+        docsPath: "/sdk/transport",
+      });
+    }
+    try {
+      return (JSON.parse(text) as ResultResponse<T>).result;
+    } catch (cause) {
+      throw new TransportError(`POST ${url} returned a non-JSON body`, {
+        cause: cause instanceof Error ? cause : undefined,
+        details: text.slice(0, 200),
+        docsPath: "/sdk/transport",
+      });
+    }
   }
 
   inspect(_insts: WireInsts): Promise<OpResultRaw[]> {
@@ -109,6 +178,15 @@ export class HttpTransport implements KontorTransport {
       docsPath: "/sdk/transport",
     });
   }
+}
+
+/**
+ * The indexer's URL form for a contract address: `name_height_txIndex`
+ * — Kontor's `ContractAddress` `Display`. Distinct from the SDK's
+ * `toString()` (`name@height.txIndex`), which is the human/parse form.
+ */
+function contractPath(c: ContractAddress): string {
+  return `${c.name}_${c.height}_${c.txIndex}`;
 }
 
 /**

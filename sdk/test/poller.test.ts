@@ -69,9 +69,9 @@ function mockFetch(opts: {
   return (async (url: string) => {
     const path = url.replace(/^.*\/api/, "");
     let result: unknown;
-    if (path === "/") {
+    if (path === "") {
       result = opts.infos[0]; // bootstrap
-    } else if (path.startsWith("/?wait=")) {
+    } else if (path.startsWith("?wait=")) {
       await sleep(5); // mimic a long-poll, avoid a busy loop
       pollCount += 1;
       result = opts.infos[Math.min(pollCount, opts.infos.length - 1)];

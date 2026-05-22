@@ -5,7 +5,7 @@
  * The indexer is followed entirely over its REST surface — no
  * websocket, no server-side event log:
  *
- *   - `GET /api/?wait=&since=` — long-poll heartbeat. The request hangs
+ *   - `GET /api?wait=&since=` — long-poll heartbeat. The request hangs
  *     until `Info.signature` moves (a block / batch / rollback) or the
  *     timeout elapses.
  *   - `GET /api/results?cursor=` — forward, id-cursored drain of
@@ -424,12 +424,14 @@ export class ResultsPoller {
   }
 
   private getInfo(): Promise<Info> {
-    return this.fetchResult<Info>("/");
+    // The indexer serves the info endpoint at the API base exactly
+    // (`/api`); `/api/` 404s. So this path is empty, not "/".
+    return this.fetchResult<Info>("");
   }
 
   private longPoll(): Promise<Info> {
     const sig = encodeURIComponent(this.signature);
-    return this.fetchResult<Info>(`/?wait=${LONG_POLL_MS}&since=${sig}`);
+    return this.fetchResult<Info>(`?wait=${LONG_POLL_MS}&since=${sig}`);
   }
 
   private getBlock(height: number): Promise<BlockRow> {
