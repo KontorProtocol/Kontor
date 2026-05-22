@@ -1,3 +1,4 @@
+use std::io::IsTerminal;
 use std::sync::Once;
 
 use clap::ValueEnum;
@@ -39,8 +40,12 @@ pub fn setup_with_format(log_format: Format) {
                     .with_default_directive(LevelFilter::INFO.into())
                     .from_env_lossy()
                     .add_directive("arc_malachitebft=warn".parse().unwrap());
+                // Emit ANSI colour codes only when stdout is a real
+                // terminal; otherwise (redirected to a file or piped)
+                // they land in the output as escape-sequence garbage.
                 let _ = tracing_subscriber::fmt()
                     .with_env_filter(env_filter)
+                    .with_ansi(std::io::stdout().is_terminal())
                     .try_init();
             }
         }

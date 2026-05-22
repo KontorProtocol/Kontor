@@ -128,6 +128,16 @@ export class Inst<T> implements PromiseLike<T> {
   ) {}
 
   /**
+   * Return a copy of this Inst with a different payment commitment.
+   * Immutable — the original is left untouched, so an Inst can be
+   * shared (passed into `session.bulk(...)`, an aggregate, ...) without
+   * a later `.pay()` changing it underneath the holder.
+   */
+  pay(payment: PaymentIntent): Inst<T> {
+    return new Inst<T>(this.session, payment, this.kind, this.decode);
+  }
+
+  /**
    * `await inst` broadcasts the Inst, waits for it to land, and
    * returns the unwrapped typed value. Throws `ContractError` if the
    * chain reports a non-Ok status. For the txid up front, or for

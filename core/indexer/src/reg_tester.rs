@@ -1,6 +1,6 @@
 use std::{
     collections::HashMap,
-    path::Path,
+    path::{Path, PathBuf},
     str::FromStr,
     sync::{
         Arc,
@@ -132,16 +132,26 @@ struct ConsensusNodeConfig {
     genesis_file: String,
 }
 
+/// Default node binary the cluster spawns — the release build, which is
+/// what the regtest test suite expects. `kontor regtest` overrides this
+/// with the running binary (`current_exe()`).
+pub fn default_kontor_bin() -> PathBuf {
+    PathBuf::from(format!(
+        "{}/../target/release/kontor",
+        env!("CARGO_MANIFEST_DIR")
+    ))
+}
+
 async fn run_kontor(
     data_dir: &Path,
     api_port: u16,
     bitcoin_rpc_url: &str,
     zmq_port: u16,
     consensus: Option<&ConsensusNodeConfig>,
+    kontor_bin: &Path,
 ) -> Result<(Child, KontorClient)> {
     let config = RegtestConfig::default();
-    let program = format!("{}/../target/release/kontor", env!("CARGO_MANIFEST_DIR"));
-    let mut cmd = Command::new(program);
+    let mut cmd = Command::new(kontor_bin);
     cmd.arg("run")
         .arg("--api-port")
         .arg(api_port.to_string())
@@ -862,6 +872,9 @@ pub struct RegTesterCluster {
     zmq_port: u16,
     node_counter: AtomicUsize,
     genesis_path: std::path::PathBuf,
+    /// Node binary spawned for each validator; retained so `start_node`
+    /// restarts with the same binary `setup_with` was given.
+    kontor_bin: PathBuf,
     miner_cmd_tx: tokio::sync::mpsc::Sender<MinerCmd>,
     _miner_handle: tokio::task::JoinHandle<()>,
     _bitcoin_child: Child,
@@ -873,16 +886,31 @@ impl RegTesterCluster {
     /// Start a cluster of `n` validators, all in genesis, all started.
     /// Pre-creates `registered` identities (with BLS + issuance) and `unregistered` (funded only).
     pub async fn setup(n: usize, registered: usize, unregistered: usize) -> Result<Self> {
-        Self::setup_with(n, n, n, registered, unregistered).await
+        Self::setup_with(
+            n,
+            n,
+            n,
+            registered,
+            unregistered,
+            None,
+            &default_kontor_bin(),
+        )
+        .await
     }
 
     /// Create a cluster with `total` keys, `genesis_count` in genesis, `active` started.
+    ///
+    /// `funding_seed`: `Some` pins the tx-building identity's key (so a
+    /// devnet has a deterministic dev account); `None` randomizes it.
+    /// `kontor_bin`: the node binary to spawn for each validator.
     pub async fn setup_with(
         total: usize,
         genesis_count: usize,
         active: usize,
         registered: usize,
         unregistered: usize,
+        funding_seed: Option<[u8; 64]>,
+        kontor_bin: &Path,
     ) -> Result<Self> {
         assert!(genesis_count <= total, "genesis_count must be <= total");
         assert!(active <= total, "active must be <= total");
@@ -893,7 +921,10 @@ impl RegTesterCluster {
 
         // Create a funded identity for transaction building
         let mut seed = [0u8; 64];
-        rand::thread_rng().fill_bytes(&mut seed);
+        match funding_seed {
+            Some(s) => seed = s,
+            None => rand::thread_rng().fill_bytes(&mut seed),
+        }
         let taproot_path = taproot_derivation_path(Network::Regtest);
         let bls_path = bls_derivation_path(Network::Regtest);
         let keypair = derive_taproot_keypair_from_seed(&seed, &taproot_path)?;
@@ -980,6 +1011,7 @@ impl RegTesterCluster {
                     &genesis_path,
                     &bitcoin_rpc_url,
                     zmq_port,
+                    kontor_bin,
                 )
             })
             .collect();
@@ -1055,6 +1087,7 @@ impl RegTesterCluster {
             zmq_port,
             node_counter: AtomicUsize::new(0),
             genesis_path,
+            kontor_bin: kontor_bin.to_path_buf(),
             miner_cmd_tx,
             _miner_handle: miner_handle,
             _bitcoin_child: bitcoin_child,
@@ -1085,6 +1118,7 @@ impl RegTesterCluster {
         genesis_path: &std::path::Path,
         bitcoin_rpc_url: &str,
         zmq_port: u16,
+        kontor_bin: &Path,
     ) -> Result<(Child, KontorClient)> {
         let consensus_config = ConsensusNodeConfig {
             private_key_hex: hex::encode(nc.ed25519_key.inner().to_bytes()),
@@ -1103,8 +1137,16 @@ impl RegTesterCluster {
             bitcoin_rpc_url,
             zmq_port,
             Some(&consensus_config),
+            kontor_bin,
         )
         .await
+    }
+
+    /// Bitcoin Core regtest RPC endpoint with the fixed `rpc:rpc`
+    /// credentials embedded (see `regtest_conf`) — a directly-usable URL.
+    pub fn bitcoin_rpc_endpoint(&self) -> String {
+        self.bitcoin_rpc_url
+            .replacen("http://", "http://rpc:rpc@", 1)
     }
 
     /// Get the client for a running node.
@@ -1144,6 +1186,7 @@ impl RegTesterCluster {
             &self.genesis_path,
             &self.bitcoin_rpc_url,
             self.zmq_port,
+            &self.kontor_bin,
         )
         .await?;
         self.node_configs[index].running = Some(ClusterNode { client, child });

@@ -9,8 +9,10 @@ use indexer::database::queries::select_recent_blocks;
 use indexer::event::EventSubscriber;
 use indexer::info::{compute_info_core, run_info_publisher};
 use indexer::keygen::{self, KeygenArgs};
-use indexer::{api, block, built_info, reactor, runtime};
+use indexer::{api, block, built_info, reactor, reg_tester, runtime};
 use indexer::{bitcoin_client, bitcoin_follower, config::Config, database, logging, stopper};
+use indexer_types::{Inst, InstKind, PaymentIntent};
+use tokio::signal::unix::{SignalKind, signal};
 use tokio::sync::{RwLock, mpsc, oneshot};
 use tokio_util::sync::CancellationToken;
 use tracing::{error, info};
@@ -33,6 +35,10 @@ enum Command {
     Run(Box<Config>),
     /// Generate validator keys deterministically from a master seed.
     Keygen(KeygenArgs),
+    /// Stand up a single-node regtest devnet (bitcoind + one validator,
+    /// auto-miner, pre-funded dev account). Intended for local SDK
+    /// development and CI; prints `KONTOR_REGTEST_*` markers on stdout.
+    Regtest,
 }
 
 #[tokio::main]
@@ -41,7 +47,73 @@ async fn main() -> Result<()> {
     match cli.command {
         Command::Run(config) => run_daemon(*config).await,
         Command::Keygen(args) => keygen::run(args),
+        Command::Regtest => run_regtest().await,
     }
+}
+
+/// Deterministic dev-account seed for `kontor regtest`. Pinning it gives
+/// the devnet a stable, pre-funded key that SDKs and CI can rely on
+/// without parsing it out of the markers — though it's printed anyway.
+const REGTEST_DEV_SEED: [u8; 64] = [0x42u8; 64];
+
+/// Stand up a single-node regtest devnet and run it until Ctrl-C. Reuses
+/// the test harness's `RegTesterCluster` bringup so the binary and the
+/// Rust test suite share one code path. Spawns the running binary
+/// (`current_exe`) as the validator node.
+async fn run_regtest() -> Result<()> {
+    logging::setup_with_format(logging::Format::Plain);
+
+    let kontor_bin = std::env::current_exe()?;
+    let mut cluster = reg_tester::RegTesterCluster::setup_with(
+        1,
+        1,
+        1,
+        0,
+        0,
+        Some(REGTEST_DEV_SEED),
+        &kontor_bin,
+    )
+    .await?;
+
+    // Issue native tokens to the dev account so the devnet is usable for
+    // contract publishes and gas-paying calls straight out of the box.
+    let mut reg_tester = cluster.reg_tester();
+    reg_tester
+        .instruction(
+            &mut cluster.identity,
+            Inst {
+                payment: PaymentIntent::self_pay(10_000),
+                kind: InstKind::Issuance,
+            },
+        )
+        .await?;
+
+    let api_port = cluster.node_configs[0].api_port;
+    let dev = &cluster.identity;
+    // One JSON line, consumed by `@kontor/sdk/regtest`'s `startRegtest()`.
+    // A single line is parsed atomically — it can't be matched while still
+    // half-streamed the way five independent marker lines could.
+    let info = serde_json::json!({
+        "apiUrl": format!("http://localhost:{api_port}/api"),
+        "bitcoinRpc": cluster.bitcoin_rpc_endpoint(),
+        "devPrivateKey": hex::encode(dev.keypair.secret_bytes()),
+        "devPublicKey": dev.x_only_public_key().to_string(),
+        "devAddress": dev.address.to_string(),
+    });
+    println!("KONTOR_REGTEST_INFO {info}");
+    println!("kontor regtest devnet running — Ctrl-C to stop");
+
+    // Catch SIGTERM as well as SIGINT: the SDK's `startRegtest()` wrapper
+    // stops the devnet with a plain `kill` (SIGTERM). Either signal must
+    // reach `teardown` so bitcoind and the node child aren't orphaned.
+    let mut sigterm = signal(SignalKind::terminate())?;
+    tokio::select! {
+        r = tokio::signal::ctrl_c() => r?,
+        _ = sigterm.recv() => {}
+    }
+    info!("Shutting down regtest devnet");
+    cluster.teardown().await?;
+    Ok(())
 }
 
 async fn run_daemon(config: Config) -> Result<()> {
