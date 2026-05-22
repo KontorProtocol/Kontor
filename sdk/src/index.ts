@@ -33,6 +33,7 @@ export type { KontorTransport } from "./json-codec";
 // aggregate — lands with the runtime implementation (work item #13).
 export { KontorSession } from "./session";
 export type { Inst } from "./inst";
+export { ContractBase } from "./contract-base";
 export { Attachment } from "./attach";
 export type {
   AttachmentOutcome,
