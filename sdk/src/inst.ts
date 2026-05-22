@@ -294,17 +294,26 @@ async function waitForTx<T>(
   // unblocks when the caller's `finally` closes the event iterator.
   return new Promise<OpResult<T>>((resolve, reject) => {
     let settled = false;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const onAbort = (): void =>
+      settle(() => reject(new TransportError(`wait: aborted for tx ${txid}`)));
+
+    // First settler wins; on the way out, release the timer and abort
+    // listener so neither keeps the event loop (or the signal) alive.
     const settle = (fn: () => void): void => {
       if (settled) return;
       settled = true;
+      if (timer !== undefined) clearTimeout(timer);
+      opts.signal?.removeEventListener("abort", onAbort);
       fn();
     };
+
     scan().then(
       (r) => settle(() => resolve(r)),
       (e) => settle(() => reject(e)),
     );
     if (opts.timeoutMs != null) {
-      setTimeout(
+      timer = setTimeout(
         () =>
           settle(() =>
             reject(
@@ -317,12 +326,8 @@ async function waitForTx<T>(
       );
     }
     if (opts.signal != null) {
-      const onAbort = (): void =>
-        settle(() =>
-          reject(new TransportError(`wait: aborted for tx ${txid}`)),
-        );
       if (opts.signal.aborted) onAbort();
-      else opts.signal.addEventListener("abort", onAbort, { once: true });
+      else opts.signal.addEventListener("abort", onAbort);
     }
   });
 }
