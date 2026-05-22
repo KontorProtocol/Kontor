@@ -59,6 +59,7 @@
     "vitest": "^4.1.6"
   },
   "dependencies": {
+    "@scure/base": "^2.2.0",
     "@scure/bip32": "^2.2.0",
     "@scure/bip39": "^2.2.0",
     "@scure/btc-signer": "^2.2.0"

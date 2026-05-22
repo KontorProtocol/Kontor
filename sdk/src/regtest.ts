@@ -22,6 +22,7 @@
 
 import type { ChildProcess } from "node:child_process";
 import { regtestChain, type Chain } from "./chains.js";
+import type { Utxo } from "./transport/http.js";
 
 // `regtestChain` is a pure, browser-safe chain builder — it lives in
 // `chains.ts` next to `signet`. Re-exported here so `@kontor/sdk/regtest`
@@ -60,6 +61,12 @@ export interface RegtestInfo {
   devPublicKey: string;
   /** The dev account's bech32m (p2tr) address. */
   devAddress: string;
+  /**
+   * A spendable Bitcoin UTXO owned by the dev account — pass it to
+   * `submit` as funding (the SDK never sources UTXOs itself). One UTXO;
+   * a multi-tx test must chain its own change.
+   */
+  devFundingUtxo: Utxo;
 }
 
 /** A running `kontor regtest` devnet. */
@@ -73,14 +80,14 @@ export interface Regtest extends RegtestInfo {
 /** The single stdout line `kontor regtest` prints once the devnet is up. */
 const INFO_MARKER = "KONTOR_REGTEST_INFO ";
 
-/** Required string fields of the `KONTOR_REGTEST_INFO` JSON payload. */
-const INFO_FIELDS: readonly (keyof RegtestInfo)[] = [
+/** The string-valued fields of the `KONTOR_REGTEST_INFO` JSON payload. */
+const INFO_STRING_FIELDS = [
   "apiUrl",
   "bitcoinRpc",
   "devPrivateKey",
   "devPublicKey",
   "devAddress",
-];
+] as const;
 
 /**
  * Scan accumulated `kontor regtest` stdout for the readiness line.
@@ -123,7 +130,7 @@ function parseInfoPayload(json: string): RegtestInfo {
     throw new Error("KONTOR_REGTEST_INFO payload is not a JSON object");
   }
   const obj = parsed as Record<string, unknown>;
-  for (const field of INFO_FIELDS) {
+  for (const field of INFO_STRING_FIELDS) {
     if (typeof obj[field] !== "string") {
       throw new Error(
         `KONTOR_REGTEST_INFO payload is missing string field '${field}'`,
@@ -136,7 +143,26 @@ function parseInfoPayload(json: string): RegtestInfo {
     devPrivateKey: obj.devPrivateKey as string,
     devPublicKey: obj.devPublicKey as string,
     devAddress: obj.devAddress as string,
+    devFundingUtxo: parseFundingUtxo(obj.devFundingUtxo),
   };
+}
+
+/** Parse + validate the `devFundingUtxo` object into a `Utxo`. */
+function parseFundingUtxo(raw: unknown): Utxo {
+  if (typeof raw !== "object" || raw === null) {
+    throw new Error("KONTOR_REGTEST_INFO: devFundingUtxo missing or not an object");
+  }
+  const u = raw as Record<string, unknown>;
+  if (
+    typeof u.txid !== "string" ||
+    typeof u.vout !== "number" ||
+    typeof u.value !== "number" ||
+    typeof u.scriptPubKey !== "string"
+  ) {
+    throw new Error("KONTOR_REGTEST_INFO: devFundingUtxo has missing or mistyped fields");
+  }
+  // `value` arrives as a JSON number of satoshis; `Utxo.value` is bigint.
+  return { txid: u.txid, vout: u.vout, value: BigInt(u.value), scriptPubKey: u.scriptPubKey };
 }
 
 /** Resolve the `kontor` binary path: explicit option → `$KONTOR_BIN` → PATH. */
