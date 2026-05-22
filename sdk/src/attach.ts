@@ -23,11 +23,12 @@
  *   4. sign the detach reveal (script-path).
  *   5. broadcast `[commit, attachReveal, detachReveal]` as one package.
  *
- * `.offer({ price })` — the open-offer terminal — is Phase D.
+ * `.offer({ price })` is the open-offer (marketplace) terminal — it
+ * builds a persistable `Offer`; see `offer.ts`.
  */
 
 import { serializeInst } from "./component/kontor-sdk.js";
-import { ContractError, TransportError } from "./errors.js";
+import { TransportError } from "./errors.js";
 import {
   instToWire,
   rawToOpResult,
@@ -36,6 +37,7 @@ import {
   type WaitOptions,
 } from "./inst.js";
 import type { OpResult, OpResultRaw, WireInsts } from "./json-codec.js";
+import { Offer, buildSellerDetachPsbt, type OfferData } from "./offer.js";
 import { encodeRecipientOpReturn } from "./op-return.js";
 import type { KontorSession } from "./session.js";
 import { signCommit, signReveal, txidOf } from "./transport/signing.js";
@@ -195,15 +197,58 @@ export class Attachment<T> {
   }
 
   /**
-   * Open-offer terminal — broadcast the attach upfront and pre-sign a
-   * detach PSBT into a persistable `Offer`, claimable by anyone who
-   * meets `price`. Phase D.
+   * Open-offer terminal — compose the attach, pre-sign a detach PSBT
+   * (`single-anyonecanpay`, paying the seller `price`), and bundle it
+   * into a persistable `Offer` claimable by anyone who meets `price`.
+   *
+   * Broadcasts nothing: the seller hands out `offer.serialize()` as a
+   * deferred offer, or calls `offer.publishAttach()` to put the escrow
+   * on chain upfront. See `offer.ts`.
    */
-  offer(_opts: { price: bigint }): never {
-    throw new ContractError(
-      "Attachment.offer: the offer path is not implemented yet",
-      { docsPath: "/sdk/attach" },
+  async offer(opts: { price: bigint }): Promise<Offer<T>> {
+    const { transport, account } = this.session;
+    const attachWire: WireInsts = {
+      ops: [instToWire(this.attach)],
+      aggregate: null,
+    };
+    const detachWire: WireInsts = {
+      ops: [instToWire(this.detach)],
+      aggregate: null,
+    };
+
+    const composed = await transport.compose(attachWire, detachWire);
+    const participant = composed.per_participant[0];
+    if (participant?.chained_tap_leaf_script == null) {
+      throw new TransportError(
+        "offer: compose returned no detach (chained) leaf script",
+        { docsPath: "/sdk/attach" },
+      );
+    }
+
+    const commitHex = await signCommit(account, composed.commit_psbt_hex);
+    const attachRevealHex = await signReveal(
+      account,
+      composed.reveal_psbt_hex,
+      composed.per_participant,
     );
+    const detachPsbt = await buildSellerDetachPsbt(account, {
+      attachRevealHex,
+      detachLeaf: participant.chained_tap_leaf_script,
+      price: opts.price,
+      network: this.session.chain.network,
+    });
+
+    const data: OfferData = {
+      v: 1,
+      attachCommit: commitHex,
+      attachReveal: attachRevealHex,
+      detachInsts: detachWire,
+      detachLeaf: participant.chained_tap_leaf_script,
+      detachPsbt,
+      price: opts.price.toString(),
+      seller: account.xOnlyPubKey,
+    };
+    return new Offer(this.session, data, (raw) => this.detach._decode(raw));
   }
 }
 

@@ -92,7 +92,7 @@ async fn run_regtest() -> Result<()> {
     // distinct regtest test files (transfer, attach, …) can each spend
     // one without colliding on a single shared output. The SDK passes
     // these to `submit` as funding — it never sources UTXOs itself.
-    let funding = cluster.split_dev_funding(2).await?;
+    let funding = cluster.split_dev_funding(4).await?;
 
     let api_port = cluster.node_configs[0].api_port;
     let dev = &cluster.identity;

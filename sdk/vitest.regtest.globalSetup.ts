@@ -15,6 +15,7 @@ export default async function setup({ provide }: GlobalSetupContext) {
 
   const devnet: Regtest = await startRegtest({
     kontorBin: process.env.KONTOR_BIN ?? "../core/target/release/kontor",
+    inheritStdio: true,
   });
 
   // `provide` values cross into (possibly browser) test workers, so each

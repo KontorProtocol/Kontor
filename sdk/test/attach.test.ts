@@ -1,9 +1,9 @@
 /**
  * Unit tests for the `Attachment` runtime surface. The full
- * `to(recipient)` round-trip — chained compose, taproot signing, a
- * three-tx package broadcast — is exercised by the live regtest suite;
- * here we cover the cheap, signing-free guards: recipient validation
- * and the not-yet-implemented `offer()` terminal.
+ * `to(recipient)` / `offer(...)` flows — chained compose, taproot
+ * signing, broadcast — are exercised by the live regtest suite; here we
+ * cover the cheap guards: recipient validation, and that each terminal
+ * is wired through to the transport.
  */
 import { test, expect, afterEach } from "vitest";
 import {
@@ -95,7 +95,10 @@ test("Attachment.to: a valid recipient passes validation, then hits the transpor
   await expect(att.to(VALID_PUBKEY)).rejects.toThrow(/transport unused/);
 });
 
-test("Attachment.offer: open-offer path is not implemented yet", () => {
+test("Attachment.offer: composes the attach through the transport", async () => {
+  // offer() builds the attach via transport.compose; the stub rejects
+  // there, proving the terminal is wired up. The full offer round-trip
+  // is the live regtest test.
   const att = attachment(stubSession());
-  expect(() => att.offer({ price: 1000n })).toThrow(/not implemented/);
+  await expect(att.offer({ price: 1000n })).rejects.toThrow(/transport unused/);
 });

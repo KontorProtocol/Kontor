@@ -236,9 +236,11 @@ export async function startRegtest(
       if (settled) return;
       settled = true;
       clearTimeout(timer);
-      child.stdout?.removeListener("data", onData);
       child.removeListener("error", onError);
       child.removeListener("exit", onExit);
+      // `onData` stays attached — it keeps draining stdout (so the child
+      // never blocks on a full pipe) and, with `inheritStdio`, keeps
+      // forwarding the devnet's logs past the readiness line.
       if (err != null) {
         child.kill("SIGTERM");
         reject(err);
@@ -248,8 +250,10 @@ export async function startRegtest(
     }
 
     function onData(chunk: Buffer): void {
-      stdout += chunk.toString("utf8");
       if (opts.inheritStdio) process.stderr.write(chunk);
+      // Post-ready: just drain (forwarded above); nothing left to parse.
+      if (settled) return;
+      stdout += chunk.toString("utf8");
       let info: RegtestInfo | null;
       try {
         info = parseRegtestInfo(stdout);
@@ -258,10 +262,6 @@ export async function startRegtest(
         return;
       }
       if (info == null) return;
-      // Keep draining stdout post-ready so the child never blocks on a
-      // full pipe; the data is just discarded.
-      child.stdout?.removeListener("data", onData);
-      child.stdout?.resume();
       finish(null, {
         ...info,
         chain: regtestChain(info),

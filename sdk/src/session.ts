@@ -34,8 +34,10 @@
 import { ContractAddress } from "./canonical/ContractAddress.js";
 import type { Account } from "./account/index.js";
 import type { Chain } from "./chains.js";
+import { ContractError } from "./errors.js";
 import { Inst, type InstDecoder, type PaymentIntent } from "./inst.js";
 import { Insts } from "./insts.js";
+import { IncomingOffer, type OfferData } from "./offer.js";
 import type { AggregateFragment } from "./aggregate.js";
 import type { ChainEvent, EventsOptions } from "./events.js";
 import { ResultsPoller } from "./poller.js";
@@ -163,6 +165,29 @@ export class KontorSession {
    */
   view(contract: ContractAddress, wave: string): Promise<string> {
     return this.transport.view(contract, wave);
+  }
+
+  /**
+   * Rehydrate a marketplace offer blob (`Offer.serialize()`) into an
+   * `IncomingOffer` — the buyer's handle, with `inspect()` / `accept()`.
+   * Needs no contact with the seller.
+   */
+  openOffer(blob: string): IncomingOffer {
+    let data: OfferData;
+    try {
+      data = JSON.parse(blob) as OfferData;
+    } catch (cause) {
+      throw new ContractError("openOffer: blob is not valid JSON", {
+        cause: cause instanceof Error ? cause : undefined,
+        docsPath: "/sdk/offer",
+      });
+    }
+    if (data == null || data.v !== 1) {
+      throw new ContractError("openOffer: not a recognized offer blob", {
+        docsPath: "/sdk/offer",
+      });
+    }
+    return new IncomingOffer(this, data);
   }
 
   /**

@@ -9,6 +9,7 @@ use bitcoin::hashes::Hash;
 use tokio::sync::mpsc;
 use tracing::{info, warn};
 
+use super::batches::batch_is_ordered;
 use super::mempool_fee_index::MempoolFeeIndex;
 
 use malachitebft_app_channel::Channels;
@@ -543,13 +544,16 @@ impl ConsensusState {
         result
     }
 
-    /// Validate batch-level rules. Returns a rejection reason if any rule fails.
+    /// Validate batch-level rules. Returns a rejection reason if any rule
+    /// fails — the single gate every batch passes, at both propose time
+    /// (`make_value`) and proposal-acceptance time
+    /// (`validate_and_accept_proposal`).
     pub(super) async fn validate_batch(
         &self,
         conn: &libsql::Connection,
         anchor_height: u64,
         anchor_hash: bitcoin::BlockHash,
-        txids: &[String],
+        transactions: &[bitcoin::Transaction],
         last_height: u64,
         last_hash: bitcoin::BlockHash,
     ) -> Result<Option<&'static str>> {
@@ -565,7 +569,19 @@ impl ConsensusState {
         if anchor_hash != last_hash {
             return Ok(Some("anchor hash mismatch"));
         }
-        let existing = select_existing_txids(conn, txids)
+        // Dependency order is a consensus rule: a tx that spends another
+        // batch tx's output must follow it. Rejecting here means a child
+        // (e.g. a detach) can never be decided ahead of the parent (the
+        // attach) that funds its escrow — so batch execution can trust
+        // the decided order without re-sorting or re-checking.
+        if !batch_is_ordered(transactions) {
+            return Ok(Some("transactions not in dependency order"));
+        }
+        let txids: Vec<String> = transactions
+            .iter()
+            .map(|tx| tx.compute_txid().to_string())
+            .collect();
+        let existing = select_existing_txids(conn, &txids)
             .await
             .context("Failed to query existing txids")?;
         if !existing.is_empty() {

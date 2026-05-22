@@ -40,6 +40,8 @@ export type {
   Recipient,
   SubmittedAttachment,
 } from "./attach";
+export { Offer, IncomingOffer } from "./offer";
+export type { OfferData, OfferInspection } from "./offer";
 export { HttpTransport, http } from "./transport/http";
 export type { HttpTransportOptions, Utxo } from "./transport/http";
 export { signet } from "./chains";
