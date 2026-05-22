@@ -56,6 +56,17 @@ export interface OpResultRaw {
   error?: string;
   /** WAVE-encoded result. Absent on non-Ok status / void-return Insts. */
   value?: string;
+  /** The function this op invoked (e.g. `transfer`). */
+  func: string;
+  /** Contract the op ran on, wire form (`name_height_txIndex`). */
+  contract: string;
+  /**
+   * The op's position in the broadcast tx — Bitcoin input index and
+   * op index within that input. For a single-Inst `submit` the user's
+   * op is `(0, 0)`; `wait()` selects on these.
+   */
+  inputIndex: number | null;
+  opIndex: number | null;
 }
 
 /**

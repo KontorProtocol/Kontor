@@ -190,7 +190,10 @@ export class Inst<T> implements PromiseLike<T> {
       txid,
       async wait(opts?: WaitOptions): Promise<OpResult<T>> {
         try {
-          return await waitForTx(events, txid, decode, opts);
+          // A single Inst is always op (0, 0) of its own tx. Multi-Inst
+          // (`bulk`) and aggregate bundles go through `Insts`, which
+          // maps every op of the tx itself.
+          return await waitForTx(events, txid, decode, 0, 0, opts);
         } finally {
           await events.return?.();
         }
@@ -250,21 +253,28 @@ function unwrapOrThrow<T>(r: OpResult<T>): T {
 
 /**
  * Drain the poller's event stream until the `tx` event for `txid`
- * arrives, then decode its (single) op outcome into an `OpResult<T>`.
- * Honors `timeoutMs` / `signal` from `WaitOptions`.
+ * arrives, then decode the op at `(inputIndex, opIndex)` into an
+ * `OpResult<T>`. Honors `timeoutMs` / `signal` from `WaitOptions`.
  */
 async function waitForTx<T>(
   events: AsyncIterableIterator<ChainEvent>,
   txid: string,
   decode: InstDecoder<T>,
+  inputIndex: number,
+  opIndex: number,
   opts?: WaitOptions,
 ): Promise<OpResult<T>> {
   const scan = async (): Promise<OpResult<T>> => {
     for await (const ev of events) {
       if (ev.kind !== "tx" || ev.txid !== txid) continue;
-      const raw = ev.outcomes[0];
+      // The poller has collapsed each op to its canonical result.
+      const raw = ev.outcomes.find(
+        (o) => o.inputIndex === inputIndex && o.opIndex === opIndex,
+      );
       if (raw === undefined) {
-        throw new TransportError(`wait: tx ${txid} landed with no op results`);
+        throw new TransportError(
+          `wait: tx ${txid} carried no result for op (${inputIndex}, ${opIndex})`,
+        );
       }
       return {
         status: raw.status,

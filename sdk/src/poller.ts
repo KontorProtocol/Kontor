@@ -366,11 +366,34 @@ export class ResultsPoller {
     // Results with no txid (shouldn't occur for contract calls) carry
     // no transaction to surface — skip the group.
     if (last.txid == null) return;
-    const outcomes: OpResultRaw[] = rows.map((r) => ({
-      status: r.status,
-      gas: BigInt(r.gas),
-      value: r.value ?? undefined,
-    }));
+    // Collapse each (input_index, op_index) to its highest-`result_index`
+    // row — the op's canonical result, mirroring the indexer's
+    // `get_op_result`. Drops intermediate sub-results and the implicit
+    // gas op (which shares the user op's indices at a lower
+    // `result_index`).
+    const canonical = new Map<string, ResultRow>();
+    for (const r of rows) {
+      const key = `${r.input_index}:${r.op_index}`;
+      const prev = canonical.get(key);
+      if (prev === undefined || r.result_index > prev.result_index) {
+        canonical.set(key, r);
+      }
+    }
+    const outcomes: OpResultRaw[] = [...canonical.values()]
+      .sort(
+        (a, b) =>
+          (a.input_index ?? 0) - (b.input_index ?? 0) ||
+          (a.op_index ?? 0) - (b.op_index ?? 0),
+      )
+      .map((r) => ({
+        status: r.status,
+        gas: BigInt(r.gas),
+        value: r.value ?? undefined,
+        func: r.func,
+        contract: r.contract,
+        inputIndex: r.input_index,
+        opIndex: r.op_index,
+      }));
     this.emit({
       kind: "tx",
       id: last.id,
