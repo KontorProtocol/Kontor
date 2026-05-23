@@ -65,6 +65,17 @@ fn materialize_op(
     let Inst { payment, kind } = inst;
     let (payment, kind) = match kind {
         InstKind::Issuance => (core_payment(), OpKind::Issuance),
+        // Sponsor is a payer-redirection directive — it does not become
+        // an executable op. The reactor's batch-processing path consumes
+        // it at materialization (see task #23: Sponsor one-step-lookahead
+        // + Ctx.payer). Until that wiring lands, reject so a stray
+        // Sponsor can't reach the runtime in an undefined state.
+        InstKind::Sponsor { .. } => {
+            return Err(anyhow::anyhow!(
+                "Sponsor InstKind reached materialize_op — directive handling \
+                 not yet implemented (task #23)"
+            ));
+        }
         other => {
             let resolved = resolve_payment(&payment, base.signer_id, publisher)?;
             let op_kind = match other {
@@ -80,6 +91,7 @@ fn materialize_op(
                     bls_sig,
                 },
                 InstKind::Issuance => unreachable!("Issuance handled above"),
+                InstKind::Sponsor { .. } => unreachable!("Sponsor handled above"),
             };
             (resolved, op_kind)
         }

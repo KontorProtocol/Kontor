@@ -790,6 +790,26 @@ pub enum InstKind {
         schnorr_sig: Vec<u8>,
         bls_sig: Vec<u8>,
     },
+    /// A unilateral payer designation: the signer of the input carrying
+    /// this `Sponsor` agrees to pay gas, up to `gas_limit`, for every op
+    /// in the *next* input. Those ops see this Sponsor's signer as
+    /// `ctx.payer()`.
+    ///
+    /// Drives the marketplace swap path — the buyer's input carries a
+    /// `Sponsor` and the escrow input that follows carries the detach,
+    /// so the buyer pays the detach's gas and is the asset's recipient.
+    /// Without a `Sponsor`, the next input's ops default to "payer =
+    /// signer of that input" — which is exactly how revoke works: seller
+    /// spends own escrow → payer = seller → detach back to seller.
+    ///
+    /// Sponsor itself is a directive consumed at materialization — it
+    /// does not execute against a contract and produces no `OpResult`.
+    /// At most one `Sponsor` per input; multiple → invalid batch. Not
+    /// aggregatable (rejected in BLS-aggregate inputs).
+    Sponsor {
+        #[ts(type = "number")]
+        gas_limit: u64,
+    },
 }
 
 impl Inst {

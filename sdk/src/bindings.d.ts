@@ -161,7 +161,8 @@ export type InstKind =
       schnorr_sig: Array<number>;
       bls_sig: Array<number>;
     };
-  };
+  }
+  | { "Sponsor": { gas_limit: number } };
 
 export type InstructionQuery = {
   address: string;

@@ -135,6 +135,14 @@ pub fn validate_aggregate_shape(insts: &Insts) -> Result<&indexer_types::Aggrega
                     "aggregate path supports Call and RegisterBlsKey (got Issuance)"
                 ));
             }
+            // Sponsor is a unilateral payer designation — by construction
+            // it can have only one signer (the input it rides on) and is
+            // not aggregatable across BLS co-signers.
+            InstKind::Sponsor { .. } => {
+                return Err(anyhow!(
+                    "aggregate path does not support Sponsor (not aggregatable)"
+                ));
+            }
         }
     }
     Ok(agg)
