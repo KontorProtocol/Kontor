@@ -975,6 +975,361 @@ fn parse_hex_script(hex_str: &str) -> Result<ScriptBuf> {
     Ok(ScriptBuf::from_bytes(bytes))
 }
 
+/// Append a `RevealOutput` to a dummy reveal tx for vbyte estimation.
+/// Uses real values for Fixed/ChainedEnvelope and placeholder 0 for
+/// Change/OpReturn (which still adds the correct vsize contribution).
+fn add_output_to_dummy(dummy: &mut Transaction, output: &RevealOutput) -> Result<()> {
+    match output {
+        RevealOutput::Fixed { value, script_pubkey } => {
+            dummy.output.push(TxOut {
+                value: Amount::from_sat(*value),
+                script_pubkey: parse_hex_script(script_pubkey)?,
+            });
+        }
+        RevealOutput::Change { script_pubkey } => {
+            dummy.output.push(TxOut {
+                value: Amount::from_sat(0),
+                script_pubkey: parse_hex_script(script_pubkey)?,
+            });
+        }
+        RevealOutput::ChainedEnvelope { insts, value, internal_key } => {
+            let internal_pk = XOnlyPublicKey::from_str(internal_key)?;
+            let insts_bytes = serialize(insts)?;
+            let (_, addr, _) = build_tap_script_and_script_address(internal_pk, insts_bytes)?;
+            dummy.output.push(TxOut {
+                value: Amount::from_sat(*value),
+                script_pubkey: addr.script_pubkey(),
+            });
+        }
+        RevealOutput::OpReturn { data } => {
+            if data.len() > MAX_OP_RETURN_BYTES {
+                return Err(anyhow!("OP_RETURN data exceeds {} bytes", MAX_OP_RETURN_BYTES));
+            }
+            let mut s = ScriptBuf::new();
+            s.push_opcode(OP_RETURN);
+            s.push_slice(PushBytesBuf::try_from(data.clone())?);
+            dummy.output.push(TxOut {
+                value: Amount::from_sat(0),
+                script_pubkey: s,
+            });
+        }
+    }
+    Ok(())
+}
+
+/// Estimate the vbytes of the reveal tx built from `reveal`. Builds a
+/// dummy tx with placeholder witnesses (Schnorr sig + script + control
+/// block for tap-leaf participants; Schnorr sig for key-path extras).
+/// Used by both `compose_commit_v2` (to size Build tap outputs) and
+/// `compose_reveal_v2` (to compute the actual reveal fee).
+fn estimate_reveal_vbytes(reveal: &Reveal) -> Result<u64> {
+    let mut dummy = Transaction {
+        version: Version(2),
+        lock_time: LockTime::ZERO,
+        input: vec![],
+        output: vec![],
+    };
+
+    // Participants — tap-leaf script-spend inputs
+    for p in &reveal.participants {
+        let x_only_pk = XOnlyPublicKey::from_str(&p.x_only_public_key)?;
+        let insts_bytes = serialize(&p.commit_insts)?;
+        let (script, _, control_block) =
+            build_tap_script_and_script_address(x_only_pk, insts_bytes)?;
+        let mut txin = TxIn::default();
+        let mut w = Witness::new();
+        w.push(vec![0u8; SCHNORR_SIGNATURE_SIZE]);
+        w.push(script.as_bytes());
+        w.push(control_block.serialize());
+        txin.witness = w;
+        dummy.input.push(txin);
+    }
+
+    // Extra inputs — key-path spends
+    for _ in &reveal.extra_inputs {
+        let mut txin = TxIn::default();
+        let mut w = Witness::new();
+        w.push(vec![0u8; SCHNORR_SIGNATURE_SIZE]);
+        txin.witness = w;
+        dummy.input.push(txin);
+    }
+
+    // Outputs — same layout algorithm as compose_reveal_v2
+    let max_paired_idx = reveal
+        .participants
+        .iter()
+        .enumerate()
+        .rev()
+        .find(|(_, p)| p.output.is_some())
+        .map(|(i, _)| i);
+    let mut extras_cursor = 0usize;
+    if let Some(max_idx) = max_paired_idx {
+        for i in 0..=max_idx {
+            if let Some(out) = reveal.participants[i].output.as_ref() {
+                add_output_to_dummy(&mut dummy, out)?;
+            } else {
+                let out = reveal.extra_outputs.get(extras_cursor).ok_or_else(|| {
+                    anyhow!(
+                        "participant {} has no paired output and no extra_output to fill its slot",
+                        i
+                    )
+                })?;
+                add_output_to_dummy(&mut dummy, out)?;
+                extras_cursor += 1;
+            }
+        }
+    }
+    while extras_cursor < reveal.extra_outputs.len() {
+        add_output_to_dummy(&mut dummy, &reveal.extra_outputs[extras_cursor])?;
+        extras_cursor += 1;
+    }
+
+    Ok(dummy.vsize() as u64)
+}
+
+/// Build commit transactions for each `CommitSource::Build` participant
+/// in `reveal`. Each Build participant gets its own standalone commit
+/// tx (separate funding, separate change). The Build's tap output value
+/// is sized so the entire future reveal can be funded: each Build pays
+/// an equal share of `(total_fixed_outputs + reveal_fee − existing_input_contributions)`.
+///
+/// Returns the built commit txs plus the input `Reveal` with each Build
+/// participant converted to `Existing` (outpoint/prevout filled in).
+/// Caller signs + broadcasts the commits, then later passes the returned
+/// `reveal` to `compose_reveal_v2` to build the reveal PSBT.
+pub async fn compose_commit_v2(
+    reveal: Reveal,
+    network: bitcoin::Network,
+    bitcoin_client: &Client,
+    default_sat_per_vbyte: u64,
+) -> Result<indexer_types::CommitOutputsV2> {
+    if reveal.participants.is_empty() {
+        return Err(anyhow!("Reveal must have at least one participant"));
+    }
+    if reveal.participants.len() > MAX_PARTICIPANTS {
+        return Err(anyhow!("Too many participants (max {})", MAX_PARTICIPANTS));
+    }
+
+    let sat_per_vbyte = reveal.sat_per_vbyte.unwrap_or(default_sat_per_vbyte);
+    if sat_per_vbyte == 0 {
+        return Err(anyhow!("Invalid fee rate"));
+    }
+    let fee_rate =
+        FeeRate::from_sat_per_vb(sat_per_vbyte).ok_or_else(|| anyhow!("Invalid fee rate"))?;
+
+    // Find Build participants
+    let build_indices: Vec<usize> = reveal
+        .participants
+        .iter()
+        .enumerate()
+        .filter_map(|(i, p)| matches!(p.commit_source, CommitSource::Build { .. }).then_some(i))
+        .collect();
+    if build_indices.is_empty() {
+        return Err(anyhow!(
+            "compose_commit_v2 requires at least one Build participant"
+        ));
+    }
+
+    // Estimate future reveal fee
+    let reveal_vbytes = estimate_reveal_vbytes(&reveal)?;
+    let reveal_fee = fee_rate
+        .fee_vb(reveal_vbytes)
+        .ok_or_else(|| anyhow!("reveal fee overflow"))?
+        .to_sat();
+
+    // Sum non-Change output values from the future reveal
+    let sum_output_values = |output: &RevealOutput| -> u64 {
+        match output {
+            RevealOutput::Fixed { value, .. } => *value,
+            RevealOutput::ChainedEnvelope { value, .. } => *value,
+            RevealOutput::Change { .. } | RevealOutput::OpReturn { .. } => 0,
+        }
+    };
+    let total_fixed_outputs: u64 = reveal
+        .participants
+        .iter()
+        .filter_map(|p| p.output.as_ref().map(sum_output_values))
+        .sum::<u64>()
+        .saturating_add(reveal.extra_outputs.iter().map(sum_output_values).sum::<u64>());
+
+    // Existing participants' prevouts + extra_inputs' prevouts contribute
+    // value to the reveal already; Build participants must collectively
+    // cover the remainder.
+    let existing_contribution: u64 = reveal
+        .participants
+        .iter()
+        .filter_map(|p| match &p.commit_source {
+            CommitSource::Existing { prevout, .. } => Some(prevout.value.to_sat()),
+            _ => None,
+        })
+        .sum::<u64>()
+        .saturating_add(
+            reveal
+                .extra_inputs
+                .iter()
+                .map(|e| e.prevout.value.to_sat())
+                .sum::<u64>(),
+        );
+
+    let total_build_contribution = total_fixed_outputs
+        .saturating_add(reveal_fee)
+        .saturating_sub(existing_contribution);
+
+    // Equal split across Build participants (deterministic remainder allocation)
+    let n_builds = build_indices.len() as u64;
+    let base_share = total_build_contribution / n_builds;
+    let remainder = total_build_contribution % n_builds;
+
+    // Standalone commit tx per Build participant
+    let mut commits: Vec<indexer_types::CommitTx> = Vec::with_capacity(build_indices.len());
+    let mut updated_participants = reveal.participants.clone();
+
+    for (build_order, &build_idx) in build_indices.iter().enumerate() {
+        let participant = &reveal.participants[build_idx];
+        let (build_addr_str, funding_utxo_ids) = match &participant.commit_source {
+            CommitSource::Build {
+                address,
+                funding_utxo_ids,
+            } => (address, funding_utxo_ids),
+            _ => unreachable!(),
+        };
+
+        let tap_output_value =
+            base_share + if (build_order as u64) < remainder { 1 } else { 0 };
+
+        let build_address = Address::from_str(build_addr_str)?.require_network(network)?;
+        match build_address.address_type() {
+            Some(AddressType::P2tr) => {}
+            _ => return Err(anyhow!("Build participant address must be P2TR")),
+        }
+        let x_only_pk = XOnlyPublicKey::from_str(&participant.x_only_public_key)?;
+        let insts_bytes = serialize(&participant.commit_insts)?;
+        if insts_bytes.is_empty() || insts_bytes.len() > MAX_SCRIPT_BYTES {
+            return Err(anyhow!("Build participant leaf data size invalid"));
+        }
+        let (_, tap_addr, _) = build_tap_script_and_script_address(x_only_pk, insts_bytes)?;
+
+        let funding_utxos = get_utxos(bitcoin_client, funding_utxo_ids.join(",")).await?;
+        if funding_utxos.len() > MAX_UTXOS_PER_PARTICIPANT {
+            return Err(anyhow!(
+                "too many utxos for Build participant (max {})",
+                MAX_UTXOS_PER_PARTICIPANT
+            ));
+        }
+
+        // Build an empty commit tx with just the tap output
+        let mut psbt = Psbt::from_unsigned_tx(Transaction {
+            version: Version(2),
+            lock_time: LockTime::ZERO,
+            input: vec![],
+            output: vec![TxOut {
+                value: Amount::from_sat(tap_output_value),
+                script_pubkey: tap_addr.script_pubkey(),
+            }],
+        })?;
+        psbt.outputs.push(bitcoin::psbt::Output::default());
+
+        // Select UTXOs covering tap output + commit fee. For standalone
+        // commits, the full empty-tx header overhead is borne by this
+        // single tx (no sharing), so pass the full header fee directly.
+        let base_header_fee = calculate_base_header_fee_for_participant(0, 1, fee_rate)?;
+        let (selected, commit_fee) = select_utxos_for_commit(
+            &psbt.unsigned_tx,
+            funding_utxos,
+            tap_output_value,
+            fee_rate,
+            MIN_ENVELOPE_SATS,
+            base_header_fee,
+        )
+        .map_err(|e| anyhow!("Build participant {}: {}", build_idx, e))?;
+
+        let selected_sum: u64 = selected.iter().map(|(_, txo)| txo.value.to_sat()).sum();
+
+        for (op, prev) in &selected {
+            psbt.unsigned_tx.input.push(TxIn {
+                previous_output: *op,
+                ..Default::default()
+            });
+            psbt.inputs.push(bitcoin::psbt::Input {
+                witness_utxo: Some(prev.clone()),
+                tap_internal_key: Some(x_only_pk),
+                ..Default::default()
+            });
+        }
+
+        // Change to the Build participant's address
+        let change = selected_sum.saturating_sub(tap_output_value + commit_fee);
+        if change >= MIN_ENVELOPE_SATS {
+            psbt.unsigned_tx.output.push(TxOut {
+                value: Amount::from_sat(change),
+                script_pubkey: build_address.script_pubkey(),
+            });
+            psbt.outputs.push(bitcoin::psbt::Output::default());
+        }
+
+        let commit_tx = psbt.unsigned_tx.clone();
+        let commit_txid = commit_tx.compute_txid();
+        let commit_tx_hex = hex::encode(serialize_tx(&commit_tx));
+        let commit_psbt_hex = psbt.serialize_hex();
+
+        commits.push(indexer_types::CommitTx {
+            transaction: commit_tx,
+            transaction_hex: commit_tx_hex,
+            psbt_hex: commit_psbt_hex,
+        });
+
+        // Build → Existing transformation
+        updated_participants[build_idx].commit_source = CommitSource::Existing {
+            outpoint: OutPoint {
+                txid: commit_txid,
+                vout: 0,
+            },
+            prevout: TxOut {
+                value: Amount::from_sat(tap_output_value),
+                script_pubkey: tap_addr.script_pubkey(),
+            },
+        };
+    }
+
+    let updated_reveal = Reveal {
+        sat_per_vbyte: reveal.sat_per_vbyte,
+        participants: updated_participants,
+        extra_inputs: reveal.extra_inputs,
+        extra_outputs: reveal.extra_outputs,
+    };
+
+    Ok(indexer_types::CommitOutputsV2 {
+        commits,
+        reveal: updated_reveal,
+    })
+}
+
+/// Combined compose: builds whatever needs building. If any Build
+/// participants exist, builds those commits first (via `compose_commit_v2`);
+/// then builds the reveal PSBT (via `compose_reveal_v2`) using the
+/// resulting all-Existing Reveal.
+pub async fn compose_v2(
+    reveal: Reveal,
+    network: bitcoin::Network,
+    bitcoin_client: &Client,
+    default_sat_per_vbyte: u64,
+) -> Result<(Vec<indexer_types::CommitTx>, RevealOutputs)> {
+    let has_build = reveal
+        .participants
+        .iter()
+        .any(|p| matches!(p.commit_source, CommitSource::Build { .. }));
+
+    let (commits, reveal_to_build) = if has_build {
+        let commit_outputs = compose_commit_v2(reveal, network, bitcoin_client, default_sat_per_vbyte).await?;
+        (commit_outputs.commits, commit_outputs.reveal)
+    } else {
+        (Vec::new(), reveal)
+    };
+
+    let reveal_outputs = compose_reveal_v2(reveal_to_build)?;
+    Ok((commits, reveal_outputs))
+}
+
 // ============================================================================
 
 pub fn build_tap_script_and_script_address(
