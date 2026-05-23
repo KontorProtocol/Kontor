@@ -40,7 +40,7 @@ use bitcoin::{
     transaction::Version,
 };
 use indexer_types::{
-    ComposeOutputs, ComposeQuery, Info, Inst, InstKind, InstructionQuery, Insts, OpWithResult,
+    ComposeOutputs, ComposeQuery, Info, Inst, InstKind, Insts, OpWithResult,
     ResultRow, RevealOutputs, RevealQuery, TransactionHex, ViewResult,
 };
 use tempfile::TempDir;
@@ -394,30 +394,44 @@ impl RegTesterInner {
         ident: &mut Identity,
         insts: Insts,
     ) -> Result<(ComposeOutputs, String, String)> {
-        let instructions = InstructionQuery::builder()
-            .address(ident.address.to_string())
-            .x_only_public_key(ident.x_only_public_key().to_string())
-            .funding_utxo_ids(outpoint_to_utxo_id(&ident.next_funding_utxo.0))
-            .insts(insts)
-            .build();
-        // sat_per_vbyte omitted on purpose — exercises the API's
-        // fastest_fee fallback. Under regtest the published fastest_fee
-        // sits at Fees::floor(1) until the reactor's first tick, so
-        // composes always see a valid (non-zero) rate.
-        let query = ComposeQuery::builder()
-            .instructions(vec![instructions])
-            .build();
-        let mut compose_res = self.kontor_client.compose(query).await?;
+        // Build a Reveal describing the simple commit+reveal pattern:
+        // one participant (this identity) building a commit, with the
+        // reveal having a single Change output back to the participant's
+        // address — the v1 "auto-generated change" behavior, now made
+        // explicit. sat_per_vbyte left None to exercise the API's
+        // fastest_fee fallback (same as the v1 path).
+        let reveal = indexer_types::Reveal {
+            sat_per_vbyte: None,
+            participants: vec![indexer_types::RevealParticipant {
+                x_only_public_key: ident.x_only_public_key().to_string(),
+                commit_insts: insts,
+                output: Some(indexer_types::RevealOutput::Change {
+                    script_pubkey: hex::encode(ident.address.script_pubkey().as_bytes()),
+                }),
+                commit_source: indexer_types::CommitSource::Build {
+                    address: ident.address.to_string(),
+                    funding_utxo_ids: vec![outpoint_to_utxo_id(&ident.next_funding_utxo.0)],
+                },
+            }],
+            extra_inputs: vec![],
+            extra_outputs: vec![],
+        };
+        let v2_res = self.kontor_client.compose_v2(reveal).await?;
+
+        // The single Build participant produces one commit tx.
+        let mut commit_transaction = v2_res.commits[0].transaction.clone();
+        let mut reveal_transaction = v2_res.reveal.transaction.clone();
+
         let secp = Secp256k1::new();
         test_utils::sign_key_spend(
             &secp,
-            &mut compose_res.commit_transaction,
+            &mut commit_transaction,
             std::slice::from_ref(&ident.next_funding_utxo.1),
             &ident.keypair,
             0,
             None,
         )?;
-        let tap_script = &compose_res.per_participant[0].commit_tap_leaf_script.script;
+        let tap_script = &v2_res.reveal.participants[0].commit_tap_leaf_script.script;
         let taproot_spend_info = TaprootBuilder::new()
             .add_leaf(0, tap_script.clone())
             .map_err(|e| anyhow!("Failed to add leaf: {}", e))?
@@ -426,18 +440,31 @@ impl RegTesterInner {
         test_utils::sign_script_spend(
             &secp,
             &taproot_spend_info,
-            &compose_res.per_participant[0].commit_tap_leaf_script.script,
-            &mut compose_res.reveal_transaction,
-            &[compose_res.commit_transaction.output[0].clone()],
+            tap_script,
+            &mut reveal_transaction,
+            &[commit_transaction.output[0].clone()],
             &ident.keypair,
             0,
         )?;
 
-        let commit_tx_hex = hex::encode(serialize_tx(&compose_res.commit_transaction));
-        let reveal_tx_hex = hex::encode(serialize_tx(&compose_res.reveal_transaction));
+        let commit_tx_hex = hex::encode(serialize_tx(&commit_transaction));
+        let reveal_tx_hex = hex::encode(serialize_tx(&reveal_transaction));
 
         self.mempool_accept(&[commit_tx_hex.clone(), reveal_tx_hex.clone()])
             .await?;
+
+        // Reconstruct a ComposeOutputs for the existing return signature so
+        // call sites don't change. (Cleanup will replace this signature
+        // with one that returns ComposeV2Response directly.)
+        let compose_res = ComposeOutputs::builder()
+            .commit_transaction(commit_transaction.clone())
+            .commit_transaction_hex(hex::encode(serialize_tx(&commit_transaction)))
+            .commit_psbt_hex(v2_res.commits[0].psbt_hex.clone())
+            .reveal_transaction(reveal_transaction.clone())
+            .reveal_transaction_hex(hex::encode(serialize_tx(&reveal_transaction)))
+            .reveal_psbt_hex(v2_res.reveal.psbt_hex.clone())
+            .per_participant(v2_res.reveal.participants.clone())
+            .build();
         Ok((compose_res, commit_tx_hex, reveal_tx_hex))
     }
 

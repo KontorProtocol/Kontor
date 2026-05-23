@@ -1171,12 +1171,29 @@ pub async fn compose_commit_v2(
                 .sum::<u64>(),
         );
 
+    // If the future reveal has a Change output, leave a dust buffer so
+    // the Change actually materializes as a non-dust output rather than
+    // getting silently dropped to fee. Also enforce that each Build's
+    // tap output value is itself ≥ dust threshold (a tap output below
+    // dust would make the commit tx non-standard / non-relayable).
+    let has_change = reveal
+        .participants
+        .iter()
+        .any(|p| matches!(p.output, Some(RevealOutput::Change { .. })))
+        || reveal
+            .extra_outputs
+            .iter()
+            .any(|o| matches!(o, RevealOutput::Change { .. }));
+    let change_buffer = if has_change { MIN_ENVELOPE_SATS } else { 0 };
+
+    let n_builds = build_indices.len() as u64;
     let total_build_contribution = total_fixed_outputs
         .saturating_add(reveal_fee)
-        .saturating_sub(existing_contribution);
+        .saturating_add(change_buffer)
+        .saturating_sub(existing_contribution)
+        .max(n_builds.saturating_mul(MIN_ENVELOPE_SATS));
 
     // Equal split across Build participants (deterministic remainder allocation)
-    let n_builds = build_indices.len() as u64;
     let base_share = total_build_contribution / n_builds;
     let remainder = total_build_contribution % n_builds;
 
