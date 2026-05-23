@@ -57,6 +57,19 @@ impl Runtime {
         Ok(table.push(signer)?)
     }
 
+    pub(super) async fn _proc_payer<T>(
+        &self,
+        accessor: &Accessor<T, Self>,
+        self_: Resource<ProcContext>,
+    ) -> Result<Resource<Holder>> {
+        Fuel::ProcPayer
+            .consume(accessor, self.gauge.as_ref())
+            .await?;
+        let mut table = self.table.lock().await;
+        let payer = table.get(&self_)?.payer.clone();
+        Ok(table.push(payer)?)
+    }
+
     pub(super) async fn _proc_contract_signer<T>(
         &self,
         accessor: &Accessor<T, Self>,
@@ -183,6 +196,23 @@ impl Runtime {
             .transpose()?)
     }
 
+    pub(super) async fn _fall_payer<T>(
+        &self,
+        accessor: &Accessor<T, Self>,
+        self_: Resource<FallContext>,
+    ) -> Result<Option<Resource<Holder>>> {
+        Fuel::FallPayer
+            .consume(accessor, self.gauge.as_ref())
+            .await?;
+        let mut table = self.table.lock().await;
+        Ok(table
+            .get(&self_)?
+            .payer
+            .clone()
+            .map(|h| table.push(h))
+            .transpose()?)
+    }
+
     pub(super) async fn _fall_proc_context<T>(
         &self,
         accessor: &Accessor<T, Self>,
@@ -194,13 +224,18 @@ impl Runtime {
         let mut table = self.table.lock().await;
         let res = table.get(&self_)?;
         let contract_id = res.contract_id;
-        Ok(res
-            .signer
-            .clone()
-            .map(|signer| {
+        // Inherit both signer and payer from the fall context (a fall→proc
+        // promotion is just unwrapping the optional signer + payer, not an
+        // initial op call, so no override resolution happens here).
+        let signer = res.signer.clone();
+        let payer = res.payer.clone();
+        Ok(signer
+            .zip(payer)
+            .map(|(signer, payer)| {
                 table.push(ProcContext {
                     contract_id,
                     signer,
+                    payer,
                 })
             })
             .transpose()?)
@@ -231,9 +266,13 @@ impl Runtime {
         let res = table.get(&self_)?;
         let contract_id = res.contract_id;
         let signer = res.signer.clone();
+        // Core→Proc promotion: system context, no payer override applies.
+        // Payer = signer-as-holder (the Core signer pays itself).
+        let payer = Holder::for_signer_id(signer.signer_id().unwrap_or(0) as u64);
         Ok(table.push(ProcContext {
             contract_id,
             signer: Signer::Core(Box::new(signer)),
+            payer,
         })?)
     }
 
@@ -263,9 +302,13 @@ impl Runtime {
         let res = table.get(&self_)?;
         let contract_id = res.contract_id;
         let signer = res.signer.clone();
+        // Same as `_core_proc_context` but the signer is the inner signer,
+        // not wrapped in `Signer::Core`. Payer = signer-as-holder.
+        let payer = Holder::for_signer_id(signer.signer_id().unwrap_or(0) as u64);
         Ok(table.push(ProcContext {
             contract_id,
             signer,
+            payer,
         })?)
     }
 

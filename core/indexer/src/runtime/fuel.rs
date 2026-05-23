@@ -31,12 +31,14 @@ pub enum Fuel {
     DeleteMatchingPaths(u64),
     ContractAddress,
     ProcSigner,
+    ProcPayer,
     ProcContractSigner,
     ProcViewContext,
     ProcTransaction,
     ProcStorage,
     ViewStorage,
     FallSigner,
+    FallPayer,
     FallProcContext,
     FallViewContext,
     CoreProcContext,
@@ -100,10 +102,12 @@ impl Fuel {
             Self::DeleteMatchingPaths(regexp_len) => 1000 + 10 * regexp_len,
             Self::ContractAddress => 100,
             Self::ProcSigner | Self::ProcContractSigner | Self::ProcTransaction => 500,
+            Self::ProcPayer => 500,
             Self::ProcViewContext => 200,
             Self::ProcStorage => 200,
             Self::ViewStorage => 200,
             Self::FallSigner
+            | Self::FallPayer
             | Self::FallProcContext
             | Self::FallViewContext
             | Self::CoreProcContext => 100,

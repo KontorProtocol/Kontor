@@ -3,7 +3,7 @@ use wasmtime::component::{Accessor, Resource};
 
 use crate::runtime::Runtime;
 use crate::runtime::wit::kontor::built_in;
-use crate::runtime::wit::{FallContext, ProcContext, Signer, ViewContext};
+use crate::runtime::wit::{FallContext, Holder, ProcContext, Signer, ViewContext};
 
 impl built_in::context::HostFallContext for Runtime {}
 
@@ -22,6 +22,16 @@ impl built_in::context::HostFallContextWithStore for Runtime {
         accessor
             .with(|mut access| access.get().clone())
             ._fall_signer(accessor, self_)
+            .await
+    }
+
+    async fn payer<T>(
+        accessor: &Accessor<T, Self>,
+        self_: Resource<FallContext>,
+    ) -> Result<Option<Resource<Holder>>> {
+        accessor
+            .with(|mut access| access.get().clone())
+            ._fall_payer(accessor, self_)
             .await
     }
 

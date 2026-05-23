@@ -122,6 +122,14 @@ impl HasContractId for ProcStorage {
 pub struct ProcContext {
     pub contract_id: i64,
     pub signer: Signer,
+    /// Who pays this op's gas. A `Holder` (not a `Signer`) by design —
+    /// contracts can credit but not spend on the payer's behalf, since
+    /// the payer only consented to pay this op's gas. Defaults to
+    /// `signer.as_holder()`; redirected by a cross-input `Sponsor` Inst
+    /// (direct context) or by `AggregateSigner.sponsored = true`
+    /// (aggregate context). Constructed at the top-level call site from
+    /// `op.metadata.payment.signer_id`.
+    pub payer: Holder,
 }
 
 impl HasContractId for ProcContext {
@@ -133,6 +141,9 @@ impl HasContractId for ProcContext {
 pub struct FallContext {
     pub contract_id: i64,
     pub signer: Option<Signer>,
+    /// See `ProcContext.payer`. `None` when `signer` is also `None` (a
+    /// fall context with no acting signer has no payer either).
+    pub payer: Option<Holder>,
 }
 
 impl HasContractId for FallContext {
@@ -156,11 +167,22 @@ impl HasContractId for CoreContext {
     }
 }
 
+#[derive(Clone)]
 pub struct Holder {
     pub holder_ref: HolderRef,
 }
 
 impl Holder {
+    /// Build a Holder for a known signer_id without a DB lookup. Used at
+    /// op-execution time to construct `ProcContext.payer` from
+    /// `op.metadata.payment.signer_id`, which is already a resolved
+    /// signer (set by `walker.materialize` per the override rules).
+    pub fn for_signer_id(signer_id: u64) -> Self {
+        Self {
+            holder_ref: HolderRef::SignerId(signer_id),
+        }
+    }
+
     pub async fn from_holder_ref(
         mut holder_ref: HolderRef,
         conn: &libsql::Connection,

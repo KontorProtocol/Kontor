@@ -25,8 +25,22 @@ use super::{
     stack::Stack,
     token,
     types::default_val_for_type,
-    wit::{CoreContext, FallContext, ProcContext, Signer, ViewContext},
+    wit::{CoreContext, FallContext, Holder, ProcContext, Signer, ViewContext},
 };
+
+/// Derive the payer's `Holder` for a top-level proc context. The payer's
+/// signer_id comes from `Payment.signer_id` — the post-override value
+/// `walker.materialize` recorded — falling back to the signer's own
+/// signer_id when no Payment is supplied (non-proc paths). Returns a
+/// Holder rather than a Signer so the contract cannot impersonate the
+/// payer to authorize moves on their behalf.
+fn payer_holder(signer: &Signer, payment: Option<&Payment>) -> Holder {
+    let signer_id = payment
+        .map(|p| p.signer_id)
+        .or_else(|| signer.signer_id().map(|i| i as u64))
+        .unwrap_or(0);
+    Holder::for_signer_id(signer_id)
+}
 
 impl Runtime {
     pub(crate) async fn prepare_call(
@@ -175,12 +189,20 @@ impl Runtime {
                     if t.eq(&wasmtime::component::ResourceType::host::<ProcContext>()) =>
                 {
                     is_proc = true;
+                    // Payer is a Holder (not a Signer) by design — contracts
+                    // can credit but not spend on the payer's behalf. The
+                    // signer_id comes from the resolved Payment, which the
+                    // reactor's `walker.materialize` already redirected per
+                    // the override rules (cross-input Sponsor or aggregate-
+                    // publisher).
+                    let payer = payer_holder(signer, payment);
                     params.insert(
                         0,
                         wasmtime::component::Val::Resource(
                             table
                                 .push(ProcContext {
                                     signer: signer.clone(),
+                                    payer,
                                     contract_id,
                                 })
                                 .map_err(anyhow::Error::from)?
@@ -192,12 +214,16 @@ impl Runtime {
 
                 (t, signer) if t.eq(&wasmtime::component::ResourceType::host::<FallContext>()) => {
                     is_proc = signer.is_some();
+                    // FallContext has a payer iff it has a signer — a fall
+                    // context with no acting signer has no payer either.
+                    let payer = signer.map(|s| payer_holder(s, payment));
                     params.insert(
                         0,
                         wasmtime::component::Val::Resource(
                             table
                                 .push(FallContext {
                                     signer: signer.cloned(),
+                                    payer,
                                     contract_id,
                                 })
                                 .map_err(anyhow::Error::from)?
