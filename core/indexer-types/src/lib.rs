@@ -134,6 +134,29 @@ pub enum RevealOutput {
     OpReturn { data: Vec<u8> },
 }
 
+/// One commit transaction built by `compose_commit` / `compose`. There's
+/// one entry per `CommitSource::Build` participant in the input `Reveal`,
+/// in participant order.
+#[derive(Serialize, Builder, Clone, TS)]
+#[ts(export, export_to = "../../../sdk/src/bindings.d.ts")]
+pub struct CommitTx {
+    #[ts(as = "String")]
+    pub transaction: bitcoin::Transaction,
+    pub transaction_hex: String,
+    pub psbt_hex: String,
+}
+
+/// Response from `compose_commit`: one `CommitTx` per Build participant,
+/// plus the input `Reveal` with each Build participant's `CommitSource`
+/// converted to `Existing` (outpoint + prevout filled in from the built
+/// commit). The caller signs + broadcasts the commits, then later passes
+/// the returned `reveal` to `compose_reveal` to build the reveal PSBT.
+#[derive(Serialize, Builder, Clone, TS)]
+#[ts(export, export_to = "../../../sdk/src/bindings.d.ts")]
+pub struct CommitOutputsV2 {
+    pub commits: Vec<CommitTx>,
+    pub reveal: Reveal,
+}
 
 #[derive(Serialize, Deserialize, Builder, TS)]
 #[ts(export, export_to = "../../../sdk/src/bindings.d.ts")]

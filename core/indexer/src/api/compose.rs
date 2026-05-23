@@ -20,8 +20,9 @@ use bitcoin::Txid;
 use bitcoin::hashes::Hash;
 use bitcoin::key::constants::SCHNORR_SIGNATURE_SIZE;
 use indexer_types::{
-    CommitOutputs, ComposeOutputs, ComposeQuery, ParticipantScripts, RevealInputs, RevealOutputs,
-    RevealParticipantInputs, RevealQuery, TapLeafScript, serialize,
+    CommitOutputs, CommitSource, ComposeOutputs, ComposeQuery, ParticipantScripts, Reveal,
+    RevealInputs, RevealOutput, RevealOutputs, RevealParticipantInputs, RevealQuery,
+    TapLeafScript, serialize,
 };
 use rand::rngs::StdRng;
 use rand::{SeedableRng, seq::SliceRandom};
@@ -570,6 +571,411 @@ pub fn compose_reveal(params: RevealInputs) -> Result<RevealOutputs> {
         .participants(participant_scripts)
         .build())
 }
+
+// ============================================================================
+// New Reveal-centric compose API
+// ============================================================================
+//
+// `compose_reveal_v2` takes a `Reveal` directly. All participants must have
+// `CommitSource::Existing`; the indexer builds the reveal PSBT and computes
+// fees from the assembled tx's vbytes. No per-participant fee splitting —
+// the value flow is validated as a whole: sum(inputs) == sum(outputs) + fee.
+//
+// Output layout: for each participant whose `output` is `Some`, the output
+// is placed at the participant's input index (BIP-341 SACP alignment).
+// Participants with `None` leave a slot that's filled by `extra_outputs`
+// in order. After all participant slots (including Nones), remaining
+// `extra_outputs` are appended.
+//
+// Validation:
+//   - All participants must be `Existing` (Build is rejected by compose_reveal).
+//   - `Change` may only appear at the tx's last output position. Anywhere
+//     else, sub-dust Change is an error (skipping it shifts later outputs
+//     and breaks SACP alignment).
+//   - Sum(input prevout values + extra_input values) ≥
+//     sum(Fixed values + ChainedEnvelope values + computed Change values) + fee.
+//
+// Fee math: tx vbytes (assembled tx with full witness placeholders) × fee_rate.
+
+pub fn compose_reveal_v2(reveal: Reveal) -> Result<RevealOutputs> {
+    if reveal.participants.is_empty() && reveal.extra_inputs.is_empty() {
+        return Err(anyhow!("Reveal must have at least one input"));
+    }
+
+    let sat_per_vbyte = reveal
+        .sat_per_vbyte
+        .ok_or_else(|| anyhow!("sat_per_vbyte required"))?;
+    if sat_per_vbyte == 0 {
+        return Err(anyhow!("Invalid fee rate"));
+    }
+    let fee_rate =
+        FeeRate::from_sat_per_vb(sat_per_vbyte).ok_or_else(|| anyhow!("Invalid fee rate"))?;
+
+    // All participants must be Existing for compose_reveal — Build is only
+    // valid in compose_commit / compose.
+    for (i, p) in reveal.participants.iter().enumerate() {
+        if !matches!(p.commit_source, CommitSource::Existing { .. }) {
+            return Err(anyhow!(
+                "compose_reveal: participant {} has CommitSource::Build; use compose() or compose_commit() to build commits",
+                i
+            ));
+        }
+    }
+
+    // Resolve each participant's per-input bits: the leaf script, control
+    // block, x-only key, outpoint, prevout. Validate the leaf-script data
+    // (serialized Insts) is non-empty + within size limits.
+    struct ResolvedParticipant {
+        x_only_public_key: XOnlyPublicKey,
+        outpoint: OutPoint,
+        prevout: TxOut,
+        tap_leaf_script: TapLeafScript,
+        output: Option<RevealOutput>,
+    }
+    let mut resolved: Vec<ResolvedParticipant> = Vec::with_capacity(reveal.participants.len());
+    for (i, p) in reveal.participants.iter().enumerate() {
+        let (outpoint, prevout) = match &p.commit_source {
+            CommitSource::Existing { outpoint, prevout } => (*outpoint, prevout.clone()),
+            CommitSource::Build { .. } => unreachable!(),
+        };
+        let x_only_public_key = XOnlyPublicKey::from_str(&p.x_only_public_key)
+            .map_err(|e| anyhow!("participant {}: invalid x_only_public_key: {}", i, e))?;
+        let insts_bytes = serialize(&p.commit_insts)
+            .map_err(|e| anyhow!("participant {}: failed to serialize insts: {}", i, e))?;
+        if insts_bytes.is_empty() || insts_bytes.len() > MAX_SCRIPT_BYTES {
+            return Err(anyhow!("participant {}: leaf script data size invalid", i));
+        }
+        let (script, _, control_block) =
+            build_tap_script_and_script_address(x_only_public_key, insts_bytes)?;
+        resolved.push(ResolvedParticipant {
+            x_only_public_key,
+            outpoint,
+            prevout,
+            tap_leaf_script: TapLeafScript {
+                leaf_version: LeafVersion::TapScript,
+                script,
+                control_block: ScriptBuf::from_bytes(control_block.serialize()),
+            },
+            output: p.output.clone(),
+        });
+    }
+
+    // Compute the output layout: positions 0..N where N = max participant
+    // index with Some output (or 0 if none). Participants with Some go at
+    // their position; Nones get filled by extras in order; any remaining
+    // extras append at the end.
+    //
+    // We track outputs as `LayoutSlot` (an enum) so Change values can be
+    // computed at the end once we know the total fee.
+    enum LayoutSlot {
+        FromParticipant(usize),   // participants[idx].output (which is Some)
+        FromExtra(usize),         // reveal.extra_outputs[idx]
+    }
+    let max_paired_idx = resolved
+        .iter()
+        .enumerate()
+        .rev()
+        .find(|(_, p)| p.output.is_some())
+        .map(|(i, _)| i);
+    let mut layout: Vec<LayoutSlot> = Vec::new();
+    let mut extras_cursor = 0usize;
+    if let Some(max_idx) = max_paired_idx {
+        for i in 0..=max_idx {
+            if resolved[i].output.is_some() {
+                layout.push(LayoutSlot::FromParticipant(i));
+            } else {
+                // Slot gap from a None participant — must be filled by an extra
+                if extras_cursor >= reveal.extra_outputs.len() {
+                    return Err(anyhow!(
+                        "participant {} has no paired output but no extra_output available to fill its slot",
+                        i
+                    ));
+                }
+                layout.push(LayoutSlot::FromExtra(extras_cursor));
+                extras_cursor += 1;
+            }
+        }
+    }
+    // Append remaining extras after the participant region
+    while extras_cursor < reveal.extra_outputs.len() {
+        layout.push(LayoutSlot::FromExtra(extras_cursor));
+        extras_cursor += 1;
+    }
+
+    // Validate Change positions: any Change in the layout must be at the
+    // last position. Anywhere else, dust would force a drop that shifts
+    // later outputs (breaking SACP). So we enforce "Change at end only."
+    for (slot_idx, slot) in layout.iter().enumerate() {
+        let output = match slot {
+            LayoutSlot::FromParticipant(i) => resolved[*i].output.as_ref().unwrap(),
+            LayoutSlot::FromExtra(j) => &reveal.extra_outputs[*j],
+        };
+        if matches!(output, RevealOutput::Change { .. }) && slot_idx + 1 != layout.len() {
+            return Err(anyhow!(
+                "Change output at position {} is not the last output (would force dust-shift breaking SACP); place Change last or use Fixed",
+                slot_idx
+            ));
+        }
+    }
+
+    // Pre-compute output script + value (Change values are resolved last)
+    enum ResolvedOutputValue {
+        Fixed { script: ScriptBuf, value: u64 },
+        Change { script: ScriptBuf },
+        ChainedEnvelope { script: ScriptBuf, value: u64 },
+        OpReturn { script: ScriptBuf },
+    }
+    let mut resolved_outputs: Vec<ResolvedOutputValue> = Vec::with_capacity(layout.len());
+    for slot in &layout {
+        let output = match slot {
+            LayoutSlot::FromParticipant(i) => resolved[*i].output.as_ref().unwrap().clone(),
+            LayoutSlot::FromExtra(j) => reveal.extra_outputs[*j].clone(),
+        };
+        let resolved = match output {
+            RevealOutput::Fixed { script_pubkey, value } => {
+                let script = parse_hex_script(&script_pubkey)?;
+                ResolvedOutputValue::Fixed { script, value }
+            }
+            RevealOutput::Change { script_pubkey } => {
+                let script = parse_hex_script(&script_pubkey)?;
+                ResolvedOutputValue::Change { script }
+            }
+            RevealOutput::ChainedEnvelope {
+                insts,
+                value,
+                internal_key,
+            } => {
+                let internal_pk = XOnlyPublicKey::from_str(&internal_key)?;
+                let insts_bytes = serialize(&insts)?;
+                if insts_bytes.is_empty() || insts_bytes.len() > MAX_SCRIPT_BYTES {
+                    return Err(anyhow!("ChainedEnvelope leaf data size invalid"));
+                }
+                let (_, addr, _) = build_tap_script_and_script_address(internal_pk, insts_bytes)?;
+                ResolvedOutputValue::ChainedEnvelope {
+                    script: addr.script_pubkey(),
+                    value,
+                }
+            }
+            RevealOutput::OpReturn { data } => {
+                if data.len() > MAX_OP_RETURN_BYTES {
+                    return Err(anyhow!(
+                        "OP_RETURN data exceeds {} bytes",
+                        MAX_OP_RETURN_BYTES
+                    ));
+                }
+                let mut s = ScriptBuf::new();
+                s.push_opcode(OP_RETURN);
+                s.push_slice(PushBytesBuf::try_from(data)?);
+                ResolvedOutputValue::OpReturn { script: s }
+            }
+        };
+        resolved_outputs.push(resolved);
+    }
+
+    // Total input value (used to resolve Change later)
+    let total_input_value: u64 = resolved
+        .iter()
+        .map(|p| p.prevout.value.to_sat())
+        .sum::<u64>()
+        .saturating_add(
+            reveal
+                .extra_inputs
+                .iter()
+                .map(|e| e.prevout.value.to_sat())
+                .sum::<u64>(),
+        );
+
+    // Sum of non-Change output values (Fixed + ChainedEnvelope + OpReturn[0])
+    let total_fixed_value: u64 = resolved_outputs
+        .iter()
+        .map(|o| match o {
+            ResolvedOutputValue::Fixed { value, .. } => *value,
+            ResolvedOutputValue::ChainedEnvelope { value, .. } => *value,
+            ResolvedOutputValue::Change { .. } | ResolvedOutputValue::OpReturn { .. } => 0,
+        })
+        .sum();
+
+    // Build PSBT inputs (participants first, then extra_inputs)
+    let mut psbt = Psbt::from_unsigned_tx(Transaction {
+        version: Version(2),
+        lock_time: LockTime::ZERO,
+        input: vec![],
+        output: vec![],
+    })?;
+    for rp in &resolved {
+        psbt.unsigned_tx.input.push(TxIn {
+            previous_output: rp.outpoint,
+            ..Default::default()
+        });
+        psbt.inputs.push(bitcoin::psbt::Input {
+            witness_utxo: Some(rp.prevout.clone()),
+            tap_internal_key: Some(rp.x_only_public_key),
+            ..Default::default()
+        });
+    }
+    for extra in &reveal.extra_inputs {
+        psbt.unsigned_tx.input.push(TxIn {
+            previous_output: extra.outpoint,
+            ..Default::default()
+        });
+        psbt.inputs.push(bitcoin::psbt::Input {
+            witness_utxo: Some(extra.prevout.clone()),
+            ..Default::default()
+        });
+    }
+
+    // Compute fee from a tx populated with all outputs + witness placeholders.
+    // Outputs use real values for Fixed/ChainedEnvelope/OpReturn; Change is
+    // placeholder for sizing only. Witnesses: participants are script-spend
+    // (sig + script + control block); extras are key-path (sig only).
+    let mut dummy_tx = psbt.unsigned_tx.clone();
+    for (i, rp) in resolved.iter().enumerate() {
+        let mut w = Witness::new();
+        w.push(vec![0u8; SCHNORR_SIGNATURE_SIZE]);
+        w.push(rp.tap_leaf_script.script.as_bytes());
+        w.push(rp.tap_leaf_script.control_block.as_bytes());
+        dummy_tx.input[i].witness = w;
+    }
+    for i in 0..reveal.extra_inputs.len() {
+        let idx = resolved.len() + i;
+        let mut w = Witness::new();
+        w.push(vec![0u8; SCHNORR_SIGNATURE_SIZE]);
+        dummy_tx.input[idx].witness = w;
+    }
+    for ro in &resolved_outputs {
+        let (value, script) = match ro {
+            ResolvedOutputValue::Fixed { value, script } => (*value, script.clone()),
+            ResolvedOutputValue::ChainedEnvelope { value, script } => (*value, script.clone()),
+            ResolvedOutputValue::Change { script } => {
+                // Placeholder value for sizing; resolved next.
+                (0, script.clone())
+            }
+            ResolvedOutputValue::OpReturn { script } => (0, script.clone()),
+        };
+        dummy_tx.output.push(TxOut {
+            value: Amount::from_sat(value),
+            script_pubkey: script,
+        });
+    }
+    let tx_vsize = dummy_tx.vsize() as u64;
+    let fee = fee_rate
+        .fee_vb(tx_vsize)
+        .ok_or_else(|| anyhow!("fee calculation overflow"))?
+        .to_sat();
+
+    // Resolve Change values. There's at most one Change (validated by the
+    // Change-must-be-last rule, since only the last slot can be Change).
+    let total_needed_no_change: u64 = total_fixed_value.saturating_add(fee);
+    if total_input_value < total_needed_no_change {
+        return Err(anyhow!(
+            "insufficient input value: have {} sats, need {} (fixed outputs {} + fee {})",
+            total_input_value,
+            total_needed_no_change,
+            total_fixed_value,
+            fee
+        ));
+    }
+    let change_value = total_input_value - total_needed_no_change;
+
+    // Add outputs to the PSBT. For Change: if value < dust, drop the
+    // output entirely (the leftover becomes additional fee).
+    for ro in resolved_outputs {
+        match ro {
+            ResolvedOutputValue::Fixed { value, script } => {
+                psbt.unsigned_tx.output.push(TxOut {
+                    value: Amount::from_sat(value),
+                    script_pubkey: script,
+                });
+                psbt.outputs.push(bitcoin::psbt::Output::default());
+            }
+            ResolvedOutputValue::ChainedEnvelope { value, script } => {
+                psbt.unsigned_tx.output.push(TxOut {
+                    value: Amount::from_sat(value),
+                    script_pubkey: script,
+                });
+                psbt.outputs.push(bitcoin::psbt::Output::default());
+            }
+            ResolvedOutputValue::Change { script } => {
+                if change_value >= MIN_ENVELOPE_SATS {
+                    psbt.unsigned_tx.output.push(TxOut {
+                        value: Amount::from_sat(change_value),
+                        script_pubkey: script,
+                    });
+                    psbt.outputs.push(bitcoin::psbt::Output::default());
+                }
+                // else: drop the Change output; dust becomes additional fee
+            }
+            ResolvedOutputValue::OpReturn { script } => {
+                psbt.unsigned_tx.output.push(TxOut {
+                    value: Amount::from_sat(0),
+                    script_pubkey: script,
+                });
+                psbt.outputs.push(bitcoin::psbt::Output::default());
+            }
+        }
+    }
+
+    // If there are no outputs (rare — e.g., all-None participants and
+    // empty extras), Bitcoin would reject the tx. Emit a minimal OP_RETURN
+    // carrying the protocol tag so the tx is structurally valid.
+    if psbt.unsigned_tx.output.is_empty() {
+        psbt.unsigned_tx.output.push(TxOut {
+            value: Amount::from_sat(0),
+            script_pubkey: {
+                let mut s = ScriptBuf::new();
+                s.push_opcode(OP_RETURN);
+                s.push_slice(PROTOCOL_TAG);
+                s
+            },
+        });
+        psbt.outputs.push(bitcoin::psbt::Output::default());
+    }
+
+    // Build per-participant scripts (callers use these to sign their inputs).
+    // Note: chained_tap_leaf_script is None — chained leaves are now declared
+    // via the ChainedEnvelope output variant, not via a separate participant
+    // field. The participant_scripts entry just carries the commit's tap leaf.
+    let participant_scripts: Vec<ParticipantScripts> = resolved
+        .iter()
+        .map(|rp| {
+            let addr = Address::p2tr_tweaked(
+                bitcoin::taproot::TaprootBuilder::new()
+                    .add_leaf(0, rp.tap_leaf_script.script.clone())
+                    .unwrap()
+                    .finalize(&Secp256k1::new(), rp.x_only_public_key)
+                    .unwrap()
+                    .output_key(),
+                KnownHrp::Mainnet,
+            );
+            ParticipantScripts {
+                address: addr.to_string(),
+                x_only_public_key: rp.x_only_public_key.to_string(),
+                commit_tap_leaf_script: rp.tap_leaf_script.clone(),
+                chained_tap_leaf_script: None,
+            }
+        })
+        .collect();
+
+    let reveal_transaction = psbt.unsigned_tx.clone();
+    let reveal_transaction_hex = hex::encode(serialize_tx(&reveal_transaction));
+    let psbt_hex = psbt.serialize_hex();
+
+    Ok(RevealOutputs::builder()
+        .transaction(reveal_transaction)
+        .transaction_hex(reveal_transaction_hex)
+        .psbt_hex(psbt_hex)
+        .participants(participant_scripts)
+        .build())
+}
+
+/// Parse a hex-encoded scriptPubKey into a `ScriptBuf`.
+fn parse_hex_script(hex_str: &str) -> Result<ScriptBuf> {
+    let bytes = hex::decode(hex_str)
+        .map_err(|e| anyhow!("invalid hex in script_pubkey: {}", e))?;
+    Ok(ScriptBuf::from_bytes(bytes))
+}
+
+// ============================================================================
 
 pub fn build_tap_script_and_script_address(
     x_only_public_key: XOnlyPublicKey,
