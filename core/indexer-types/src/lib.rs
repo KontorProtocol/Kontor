@@ -1,6 +1,7 @@
 extern crate alloc;
 
 use anyhow::Result;
+use bitcoin::hex::DisplayHex;
 use bitcoin::{BlockHash, FeeRate, ScriptBuf, TxOut, Txid, XOnlyPublicKey, taproot::LeafVersion};
 use bon::Builder;
 use macros::{contract_address, holder_ref};
@@ -70,8 +71,71 @@ pub struct Reveal {
 pub struct RevealParticipant {
     pub x_only_public_key: String,
     pub commit_insts: Insts,
+    /// Optional. The common seller-offer pattern (chained envelope +
+    /// change in extras) leaves this unset; the marketplace swap sets
+    /// it to the SACP-paired output (Change for buyer, Fixed for seller).
     pub output: Option<RevealOutput>,
     pub commit_source: CommitSource,
+}
+
+impl CommitSource {
+    /// Construct a `CommitSource::Build` for a commit to be built by
+    /// this call. Accepts any iterable of `OutPoint` for funding — the
+    /// helper formats them into the wire-string shape internally.
+    pub fn build(
+        address: &bitcoin::Address,
+        funding: impl IntoIterator<Item = bitcoin::OutPoint>,
+    ) -> Self {
+        Self::Build {
+            address: address.to_string(),
+            funding_utxo_ids: funding
+                .into_iter()
+                .map(|op| format!("{}:{}", op.txid, op.vout))
+                .collect(),
+        }
+    }
+
+    /// Construct a `CommitSource::Existing` for an already-on-chain commit.
+    pub fn existing(outpoint: bitcoin::OutPoint, prevout: bitcoin::TxOut) -> Self {
+        Self::Existing { outpoint, prevout }
+    }
+}
+
+impl RevealOutput {
+    /// Fixed-value output. Accepts a `ScriptBuf` (any output script type)
+    /// and hex-encodes it internally for the wire shape.
+    pub fn fixed(script: &bitcoin::Script, value: u64) -> Self {
+        Self::Fixed {
+            script_pubkey: script.as_bytes().to_lower_hex_string(),
+            value,
+        }
+    }
+
+    /// Auto-computed change to `script`. Hex-encodes internally.
+    pub fn change(script: &bitcoin::Script) -> Self {
+        Self::Change {
+            script_pubkey: script.as_bytes().to_lower_hex_string(),
+        }
+    }
+
+    /// Inscription envelope committing to `insts` with `internal_key` as
+    /// the tap internal key. Takes the typed `XOnlyPublicKey`.
+    pub fn chained_envelope(
+        insts: Insts,
+        value: u64,
+        internal_key: bitcoin::XOnlyPublicKey,
+    ) -> Self {
+        Self::ChainedEnvelope {
+            insts,
+            value,
+            internal_key: internal_key.to_string(),
+        }
+    }
+
+    /// OP_RETURN with arbitrary data.
+    pub fn op_return(data: Vec<u8>) -> Self {
+        Self::OpReturn { data }
+    }
 }
 
 /// Whether this participant's commit already exists on chain or needs

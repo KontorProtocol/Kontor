@@ -55,33 +55,23 @@ async fn test_native_token_attach_contract() -> Result<()> {
     };
 
     // Build the seller's attach + chained-detach reveal under the v2
-    // API. Single Build participant carrying the attach inst; its output
-    // is None (the chained envelope and change go in extras). extras
-    // hold the ChainedEnvelope (escrow committing to detach) and the
-    // Change to the seller.
-    let reveal = Reveal {
-        sat_per_vbyte: Some(2),
-        participants: vec![RevealParticipant {
-            x_only_public_key: internal_key.to_string(),
-            commit_insts: Insts::single(attach_inst.clone()),
-            output: None,
-            commit_source: CommitSource::Build {
-                address: seller_address.to_string(),
-                funding_utxo_ids: vec![format!("{}:{}", out_point.txid, out_point.vout)],
-            },
-        }],
-        extra_inputs: vec![],
-        extra_outputs: vec![
-            RevealOutput::ChainedEnvelope {
-                insts: Insts::single(detach_inst.clone()),
-                value: 600,
-                internal_key: internal_key.to_string(),
-            },
-            RevealOutput::Change {
-                script_pubkey: hex::encode(seller_address.script_pubkey().as_bytes()),
-            },
-        ],
-    };
+    // API. Single Build participant carrying the attach inst; the
+    // chained envelope (escrow committing to detach) and the Change to
+    // the seller go in extra_outputs.
+    let reveal = Reveal::builder()
+        .sat_per_vbyte(2)
+        .participants(vec![
+            RevealParticipant::builder()
+                .x_only_public_key(internal_key.to_string())
+                .commit_insts(Insts::single(attach_inst.clone()))
+                .commit_source(CommitSource::build(&seller_address, [out_point]))
+                .build(),
+        ])
+        .extra_outputs(vec![
+            RevealOutput::chained_envelope(Insts::single(detach_inst.clone()), 600, internal_key),
+            RevealOutput::change(&seller_address.script_pubkey()),
+        ])
+        .build();
 
     let v2_res = rt.compose_v2(reveal).await?;
 
@@ -138,25 +128,23 @@ async fn test_native_token_attach_contract() -> Result<()> {
     // a paired Change output back to the seller. The seller's signer
     // signs the detach, no Sponsor, so ctx.payer() defaults to the
     // seller — asset returns to them.
-    let detach_reveal = Reveal {
-        sat_per_vbyte: Some(2),
-        participants: vec![RevealParticipant {
-            x_only_public_key: internal_key.to_string(),
-            commit_insts: Insts::single(detach_inst.clone()),
-            output: Some(RevealOutput::Change {
-                script_pubkey: hex::encode(seller_address.script_pubkey().as_bytes()),
-            }),
-            commit_source: CommitSource::Existing {
-                outpoint: bitcoin::OutPoint {
-                    txid: reveal_transaction.compute_txid(),
-                    vout: 0,
-                },
-                prevout: reveal_transaction.output[0].clone(),
-            },
-        }],
-        extra_inputs: vec![],
-        extra_outputs: vec![],
-    };
+    let detach_reveal = Reveal::builder()
+        .sat_per_vbyte(2)
+        .participants(vec![
+            RevealParticipant::builder()
+                .x_only_public_key(internal_key.to_string())
+                .commit_insts(Insts::single(detach_inst.clone()))
+                .output(RevealOutput::change(&seller_address.script_pubkey()))
+                .commit_source(CommitSource::existing(
+                    bitcoin::OutPoint {
+                        txid: reveal_transaction.compute_txid(),
+                        vout: 0,
+                    },
+                    reveal_transaction.output[0].clone(),
+                ))
+                .build(),
+        ])
+        .build();
 
     let detach_outputs = rt.compose_reveal_v2(detach_reveal).await?;
     let mut detach_transaction = detach_outputs.transaction;

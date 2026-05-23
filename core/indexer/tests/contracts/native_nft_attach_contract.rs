@@ -6,9 +6,9 @@ use bitcoin::taproot::TaprootBuilder;
 use indexer::database::types::OpResultId;
 use indexer::test_utils;
 use indexer::{bitcoin_client::client::RegtestRpc, runtime};
+use indexer::api::compose::build_tap_script_and_script_address;
 use indexer_types::{
-    ComposeQuery, Inst, InstKind, InstructionQuery, Insts, RevealParticipantQuery,
-    RevealQuery, serialize,
+    CommitSource, Inst, InstKind, Insts, Reveal, RevealOutput, RevealParticipant, serialize,
 };
 use testlib::*;
 
@@ -107,34 +107,37 @@ async fn test_native_nft_attach_contract() -> Result<()> {
         },
     };
 
-    let query = ComposeQuery::builder()
-        .instructions(vec![
-            InstructionQuery::builder()
-                .address(seller_address.to_string())
+    // Seller's attach + chained-detach reveal under v2 (mirrors the
+    // pattern documented in native_token_attach_contract.rs).
+    let reveal = Reveal::builder()
+        .sat_per_vbyte(2)
+        .participants(vec![
+            RevealParticipant::builder()
                 .x_only_public_key(internal_key.to_string())
-                .funding_utxo_ids(format!("{}:{}", out_point.txid, out_point.vout))
-                .insts(Insts::single(attach_inst.clone()))
-                .chained_insts(Insts::single(detach_inst.clone()))
+                .commit_insts(Insts::single(attach_inst.clone()))
+                .commit_source(CommitSource::build(&seller_address, [out_point]))
                 .build(),
         ])
-        .sat_per_vbyte(2)
-        .envelope(600)
+        .extra_outputs(vec![
+            RevealOutput::chained_envelope(Insts::single(detach_inst.clone()), 600, internal_key),
+            RevealOutput::change(&seller_address.script_pubkey()),
+        ])
         .build();
 
-    let compose_outputs = rt.compose(query).await?;
+    let v2_res = rt.compose_v2(reveal).await?;
 
-    let mut commit_transaction = compose_outputs.commit_transaction;
-    let mut reveal_transaction = compose_outputs.reveal_transaction;
-    let tap_script = compose_outputs.per_participant[0]
+    let mut commit_transaction = v2_res.commits[0].transaction.clone();
+    let mut reveal_transaction = v2_res.reveal.transaction.clone();
+    let tap_script = v2_res.reveal.participants[0]
         .commit_tap_leaf_script
         .script
         .clone();
-    let chained_tap_script = compose_outputs.per_participant[0]
-        .chained_tap_leaf_script
-        .as_ref()
-        .unwrap()
-        .script
-        .clone();
+    // Rebuild the chained leaf script locally — not surfaced on the v2
+    // response (chained envelopes are now outputs, not separate fields).
+    let (chained_tap_script, _, _) = build_tap_script_and_script_address(
+        internal_key,
+        serialize(&Insts::single(detach_inst.clone()))?,
+    )?;
 
     let commit_prevout = TxOut {
         value: utxo_for_output.value,
@@ -169,27 +172,26 @@ async fn test_native_nft_attach_contract() -> Result<()> {
     let commit_tx_hex = hex::encode(serialize_tx(&commit_transaction));
     let reveal_tx_hex = hex::encode(serialize_tx(&reveal_transaction));
 
-    let chained_script_data_bytes = serialize(&detach_inst)?;
-
-    let reveal_query = RevealQuery {
-        sat_per_vbyte: Some(2),
-        participants: vec![
-            RevealParticipantQuery::builder()
-                .address(seller_address.to_string())
+    // Detach reveal under v2: single Existing participant + paired Change.
+    let detach_reveal = Reveal::builder()
+        .sat_per_vbyte(2)
+        .participants(vec![
+            RevealParticipant::builder()
                 .x_only_public_key(internal_key.to_string())
-                .commit_outpoint(bitcoin::OutPoint {
-                    txid: reveal_transaction.compute_txid(),
-                    vout: 0,
-                })
-                .commit_prevout(reveal_transaction.output[0].clone())
-                .commit_script_data(chained_script_data_bytes)
+                .commit_insts(Insts::single(detach_inst.clone()))
+                .output(RevealOutput::change(&seller_address.script_pubkey()))
+                .commit_source(CommitSource::existing(
+                    bitcoin::OutPoint {
+                        txid: reveal_transaction.compute_txid(),
+                        vout: 0,
+                    },
+                    reveal_transaction.output[0].clone(),
+                ))
                 .build(),
-        ],
-        op_return_data: None,
-        envelope: None,
-    };
+        ])
+        .build();
 
-    let detach_outputs = rt.compose_reveal(reveal_query).await?;
+    let detach_outputs = rt.compose_reveal_v2(detach_reveal).await?;
     let mut detach_transaction = detach_outputs.transaction;
 
     assert_eq!(detach_transaction.input.len(), 1);
