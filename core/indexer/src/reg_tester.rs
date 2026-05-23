@@ -41,7 +41,7 @@ use bitcoin::{
 };
 use indexer_types::{
     ComposeOutputs, ComposeQuery, Info, Inst, InstKind, InstructionQuery, Insts, OpWithResult,
-    PaymentIntent, ResultRow, RevealOutputs, RevealQuery, TransactionHex, ViewResult,
+    ResultRow, RevealOutputs, RevealQuery, TransactionHex, ViewResult,
 };
 use tempfile::TempDir;
 use tokio::{
@@ -1417,11 +1417,11 @@ impl RegTesterCluster {
             let proof = RegistrationProof::new(&ident.keypair, &ident.bls_secret_key)?;
             let insts = Insts::direct(vec![
                 Inst {
-                    payment: PaymentIntent::self_pay(10_000),
+                    gas_limit: 10_000,
                     kind: InstKind::Issuance,
                 },
                 Inst {
-                    payment: PaymentIntent::self_pay(10_000),
+                    gas_limit: 10_000,
                     kind: InstKind::RegisterBlsKey {
                         bls_pubkey: proof.bls_pubkey.to_vec(),
                         schnorr_sig: proof.schnorr_sig.to_vec(),

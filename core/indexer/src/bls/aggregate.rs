@@ -112,15 +112,17 @@ pub fn validate_aggregate_shape(insts: &Insts) -> Result<&indexer_types::Aggrega
             insts.ops.len()
         ));
     }
-    // Publisher's sponsorship offer must be a positive cap when present.
-    // `Some(0)` would silently trap every sponsored op out-of-fuel on the
-    // first instruction — almost certainly a publisher misconfiguration, so
-    // reject the whole bulk.
-    if let Some(0) = agg.publisher_sponsorship {
-        return Err(anyhow!(
-            "AggregateInfo.publisher_sponsorship = Some(0) is invalid; \
-             use None to opt out of sponsorship"
-        ));
+    // Per-op `gas_limit == 0` on a sponsored op would silently trap the
+    // op out-of-fuel on its first instruction — almost certainly a
+    // publisher misconfiguration since the publisher signs the bulk and
+    // controls the gas_limit. Reject early.
+    for (inst, signer) in insts.ops.iter().zip(agg.signers.iter()) {
+        if signer.sponsored && inst.gas_limit == 0 {
+            return Err(anyhow!(
+                "aggregate sponsored op has Inst.gas_limit = 0; \
+                 the publisher's commitment must be a positive cap"
+            ));
+        }
     }
     for inst in &insts.ops {
         match &inst.kind {
@@ -138,7 +140,7 @@ pub fn validate_aggregate_shape(insts: &Insts) -> Result<&indexer_types::Aggrega
             // Sponsor is a unilateral payer designation — by construction
             // it can have only one signer (the input it rides on) and is
             // not aggregatable across BLS co-signers.
-            InstKind::Sponsor { .. } => {
+            InstKind::Sponsor => {
                 return Err(anyhow!(
                     "aggregate path does not support Sponsor (not aggregatable)"
                 ));
@@ -194,7 +196,11 @@ pub async fn verify_aggregate(runtime: &mut Runtime, insts: &Insts) -> Result<Ag
         // Build the signing message and enforce the bytes cap before any
         // identity resolution or DB lookups — keeps oversized payloads from
         // costing us I/O.
-        let msg = inst.aggregate_signing_message(&agg_signer.identity, agg_signer.nonce)?;
+        let msg = inst.aggregate_signing_message(
+            &agg_signer.identity,
+            agg_signer.nonce,
+            agg_signer.sponsored,
+        )?;
         total_message_bytes = total_message_bytes.saturating_add(msg.len());
         if total_message_bytes > MAX_BLS_BULK_TOTAL_MESSAGE_BYTES {
             return Err(anyhow!(

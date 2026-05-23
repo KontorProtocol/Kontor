@@ -274,10 +274,16 @@ pub struct OpMetadata {
 
 /// Resolved per-op execution payment, lives on `OpMetadata`.
 ///
-/// Built from the co-signer's `PaymentIntent` plus any aggregate-level
-/// `publisher_sponsorship` offer. `signer_id` identifies who funds the
-/// op's gas (the applicative signer for SelfPay, the publisher for
-/// Sponsored). `gas_limit` is the effective fuel cap for execution.
+/// `signer_id` is who funds this op's gas; `gas_limit` is the cap.
+///
+/// Derived from:
+/// - Direct input, no `Sponsor`: `signer_id` = input signer, `gas_limit` = `Inst.gas_limit`.
+/// - Direct input, prev-input `Sponsor` active: `signer_id` = sponsor's signer,
+///   `gas_limit` = sponsor's cap (overrides `Inst.gas_limit`).
+/// - Aggregate input, `AggregateSigner.sponsored = false`: `signer_id` =
+///   co-signer, `gas_limit` = `Inst.gas_limit`.
+/// - Aggregate input, `AggregateSigner.sponsored = true`: `signer_id` =
+///   publisher (the input's signer), `gas_limit` = `Inst.gas_limit`.
 ///
 /// `Issuance` carries a sentinel `Payment { signer_id: CORE_SIGNER_ID,
 /// gas_limit: 0 }` since it's system-paid via the `Signer::Core` bypass
@@ -295,19 +301,16 @@ pub struct Payment {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[ts(export, export_to = "../../../sdk/src/bindings.d.ts")]
 pub struct AggregateInfo {
-    /// One entry per op in `Insts.ops`, in parallel order. Each entry binds
-    /// a co-signer claim (existing `signer_id` or fresh x-only `PubKey`) to
-    /// the nonce that op claims, which protects BLS aggregate signatures
-    /// from replay.
+    /// One entry per op in `Insts.ops`, in parallel order. Binds each
+    /// co-signer claim (existing `signer_id` or fresh x-only `PubKey`)
+    /// to its nonce (replay protection) and to a `sponsored` flag (whether
+    /// the publisher pays the op's gas).
     pub signers: Vec<AggregateSigner>,
     pub signature: Vec<u8>,
-    /// Publisher's gas-sponsorship commitment for this bulk.
-    /// - `None`: no sponsorship offered. Any op signing `PaymentIntent::Sponsored`
-    ///   is rejected.
-    /// - `Some(n)`: publisher commits up to `n` per sponsored op. Validated
-    ///   `n > 0` in `validate_aggregate_shape`.
-    #[ts(type = "number | null")]
-    pub publisher_sponsorship: Option<u64>,
+    // Publisher-sponsorship is no longer a separate `Option<u64>` on
+    // AggregateInfo. The publisher commits to each sponsored op's cap
+    // implicitly by signing the bulk — the cap is the per-Inst
+    // `gas_limit`. Per-op opt-in lives on `AggregateSigner.sponsored`.
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
@@ -316,6 +319,11 @@ pub struct AggregateSigner {
     pub identity: SignerRef,
     #[ts(type = "number")]
     pub nonce: u64,
+    /// `true` → this op's gas is paid by the publisher (the input's
+    /// signer) up to `Inst.gas_limit`. `false` → co-signer self-pays up
+    /// to `Inst.gas_limit`. The publisher commits by signing the bulk;
+    /// the co-signer commits via their BLS signature contribution.
+    pub sponsored: bool,
 }
 
 /// How a co-signer identifies themselves in an aggregate bulk.
@@ -409,6 +417,13 @@ pub enum OpKind {
         schnorr_sig: Vec<u8>,
         bls_sig: Vec<u8>,
     },
+    /// Sponsor's on-chain effect: when this op is processed in the per-tx
+    /// loop, the executor sets `pending_for_next` from the op's `Payment`
+    /// (signer = sponsor; gas_limit = sponsor's cap). At the next input
+    /// boundary, `pending_for_next` becomes `active` and overrides every
+    /// op's Payment in that input. Sponsor itself does not call into a
+    /// contract.
+    Sponsor,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Builder, TS)]
@@ -739,35 +754,33 @@ pub struct OpReturnEntry {
     pub recipient: SignerRef,
 }
 
-/// Co-signer's payment commitment, signed as part of the Inst.
-///
-/// - `SelfPay { limit }`: the co-signer commits up to `limit` from their own
-///   token balance for this op's gas.
-/// - `Sponsored`: the co-signer accepts publisher-paid gas. Only meaningful
-///   in BLS aggregate inputs that also carry `AggregateInfo.publisher_sponsorship`;
-///   rejected at validation in any other context.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
-#[ts(export, export_to = "../../../sdk/src/bindings.d.ts")]
-pub enum PaymentIntent {
-    SelfPay {
-        #[ts(type = "number")]
-        limit: u64,
-    },
-    Sponsored,
-}
-
-impl PaymentIntent {
-    /// Shorthand for the common `SelfPay { limit }` case.
-    pub fn self_pay(limit: u64) -> Self {
-        Self::SelfPay { limit }
-    }
-}
-
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[ts(export, export_to = "../../../sdk/src/bindings.d.ts")]
 pub struct Inst {
-    pub payment: PaymentIntent,
+    /// Gas cap for this op. Self-pay default — the input's signer is
+    /// charged up to this amount.
+    ///
+    /// Overridden in two cases:
+    /// - Direct context with a previous-input `Sponsor` Inst → the
+    ///   Sponsor's own `gas_limit` is the cap and its signer is the payer.
+    /// - BLS aggregate with `AggregateSigner.sponsored = true` → the
+    ///   publisher (the input's signer) is the payer; `gas_limit` here is
+    ///   the cap they signed off on by signing the bulk.
+    ///
+    /// Otherwise: input signer is payer; `gas_limit` is the cap.
+    ///
+    /// Sentinel `0` is used for ops the runtime pays for (currently only
+    /// `InstKind::Issuance`, which bypasses gas accounting via `Signer::Core`).
+    #[ts(type = "number")]
+    pub gas_limit: u64,
     pub kind: InstKind,
+}
+
+impl Inst {
+    /// Shorthand for an op that self-pays up to `gas_limit`.
+    pub fn self_pay(gas_limit: u64, kind: InstKind) -> Self {
+        Self { gas_limit, kind }
+    }
 }
 
 #[serde_as]
@@ -791,9 +804,10 @@ pub enum InstKind {
         bls_sig: Vec<u8>,
     },
     /// A unilateral payer designation: the signer of the input carrying
-    /// this `Sponsor` agrees to pay gas, up to `gas_limit`, for every op
-    /// in the *next* input. Those ops see this Sponsor's signer as
-    /// `ctx.payer()`.
+    /// this `Sponsor` agrees to pay gas (up to the outer `Inst.gas_limit`)
+    /// for every op in the *next* input. Those ops see this Sponsor's
+    /// signer as `ctx.payer()` and run with this Sponsor's cap,
+    /// overriding the next input's per-Inst `gas_limit`.
     ///
     /// Drives the marketplace swap path — the buyer's input carries a
     /// `Sponsor` and the escrow input that follows carries the detach,
@@ -806,24 +820,31 @@ pub enum InstKind {
     /// does not execute against a contract and produces no `OpResult`.
     /// At most one `Sponsor` per input; multiple → invalid batch. Not
     /// aggregatable (rejected in BLS-aggregate inputs).
-    Sponsor {
-        #[ts(type = "number")]
-        gas_limit: u64,
-    },
+    Sponsor,
 }
 
 impl Inst {
     /// Build the domain-separated signing message for one operation in an aggregate batch.
     ///
-    /// Returns `KONTOR-OP-V1 || postcard((claim, nonce, self))` where `claim`
-    /// and `nonce` come from the matching `AggregateSigner` entry in
-    /// `AggregateInfo.signers`. Signing over the `SignerRef` rather than a
-    /// resolved `signer_id` is what lets a brand-new co-signer (no
-    /// `signer_id` yet) participate in aggregates: they sign over their
-    /// `SignerRef::XOnlyPubkey(self_x_only)`, which they know locally.
-    pub fn aggregate_signing_message(&self, claim: &SignerRef, nonce: u64) -> Result<Vec<u8>> {
+    /// Returns `KONTOR-OP-V1 || postcard((claim, nonce, sponsored, self))` —
+    /// `claim` and `nonce` are the matching `AggregateSigner` entry's fields
+    /// and `sponsored` is that entry's `sponsored` flag. Including `sponsored`
+    /// in the signed bytes prevents the publisher from flipping a
+    /// co-signer's choice after the fact (a publisher-side rug on who pays
+    /// gas).
+    ///
+    /// Signing over the `SignerRef` rather than a resolved `signer_id` lets
+    /// a brand-new co-signer (no `signer_id` yet) participate in aggregates:
+    /// they sign over `SignerRef::XOnlyPubkey(self_x_only)`, which they
+    /// know locally.
+    pub fn aggregate_signing_message(
+        &self,
+        claim: &SignerRef,
+        nonce: u64,
+        sponsored: bool,
+    ) -> Result<Vec<u8>> {
         const KONTOR_OP_PREFIX: &[u8] = b"KONTOR-OP-V1";
-        let op_bytes = serialize(&(claim, nonce, self))?;
+        let op_bytes = serialize(&(claim, nonce, sponsored, self))?;
         let mut msg = Vec::with_capacity(KONTOR_OP_PREFIX.len() + op_bytes.len());
         msg.extend_from_slice(KONTOR_OP_PREFIX);
         msg.extend_from_slice(&op_bytes);

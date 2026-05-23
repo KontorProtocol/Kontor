@@ -36,7 +36,6 @@ import type {
   Inst as WireInst,
   InstKind as WireInstKind,
   Insts as WireInsts,
-  PaymentIntent as WirePaymentIntent,
 } from "./bindings.js";
 import type { ContractAddress } from "./canonical/ContractAddress.js";
 import { ContractError, SignerError, TransportError } from "./errors.js";
@@ -45,22 +44,10 @@ import type { BroadcastResult, OpResult, OpResultRaw } from "./json-codec.js";
 import type { KontorSession } from "./session.js";
 
 /**
- * Payment commitment carried by each `Inst`. Mirrors the chain's
- * `PaymentIntent` enum:
- *
- * - `SelfPay { limit }` — signer commits up to `limit` from their own
- *   balance for this Inst's gas.
- * - `Sponsored` — signer accepts publisher-paid gas; only valid inside
- *   a BLS aggregate that carries `publisher_sponsorship`.
- */
-export type PaymentIntent =
-  | { kind: "SelfPay"; limit: bigint }
-  | { kind: "Sponsored" };
-
-/**
  * The payload of an `Inst`. Codegen-emitted Contract methods always
  * produce `Call` insts; the other variants exist for SDK-internal
- * deployment / system flows.
+ * deployment / system flows or — for `Sponsor` — the marketplace
+ * payer-redirection mechanism.
  */
 export type InstKind =
   | {
@@ -78,7 +65,15 @@ export type InstKind =
       blsPubkey: Uint8Array;
       schnorrSig: Uint8Array;
       blsSig: Uint8Array;
-    };
+    }
+  /**
+   * Payer-redirection directive: the signer of the input carrying this
+   * Inst commits to paying gas (up to the outer `Inst.gasLimit`) for
+   * every op in the *next* input. Used by the marketplace swap path so
+   * the buyer's signature on their own input redirects payment for the
+   * seller-signed detach. See the project's attach/detach redesign.
+   */
+  | { kind: "Sponsor" };
 
 /**
  * Per-Inst decoder. Takes the WAVE-encoded result string the chain
@@ -122,26 +117,31 @@ export interface SubmittedTx<R> {
 
 export class Inst<T> implements PromiseLike<T> {
   /**
-   * @param session  Bound execution surface.
-   * @param payment  Payment commitment for this Inst.
-   * @param kind     The Inst payload (Call / Publish / Issuance / RegisterBlsKey).
-   * @param decode   Maps the raw WAVE-result string back into the user-typed value.
+   * @param session   Bound execution surface.
+   * @param gasLimit  Per-op gas cap. Default self-pay (input signer
+   *                  pays up to this); overridden by a previous-input
+   *                  `Sponsor` Inst in direct context, or by a
+   *                  publisher-sponsored `AggregateSigner` in aggregate
+   *                  context.
+   * @param kind      The Inst payload (Call / Publish / Issuance /
+   *                  RegisterBlsKey / Sponsor).
+   * @param decode    Maps the raw WAVE-result string back into the user-typed value.
    */
   constructor(
     private readonly session: KontorSession,
-    readonly payment: PaymentIntent,
+    readonly gasLimit: bigint,
     readonly kind: InstKind,
     private readonly decode: InstDecoder<T>,
   ) {}
 
   /**
-   * Return a copy of this Inst with a different payment commitment.
-   * Immutable — the original is left untouched, so an Inst can be
-   * shared (passed into `session.bulk(...)`, an aggregate, ...) without
-   * a later `.pay()` changing it underneath the holder.
+   * Return a copy of this Inst with a different gas cap. Immutable —
+   * the original is left untouched, so an Inst can be shared (passed
+   * into `session.bulk(...)`, an aggregate, ...) without a later
+   * `.withGasLimit()` changing it underneath the holder.
    */
-  pay(payment: PaymentIntent): Inst<T> {
-    return new Inst<T>(this.session, payment, this.kind, this.decode);
+  withGasLimit(gasLimit: bigint): Inst<T> {
+    return new Inst<T>(this.session, gasLimit, this.kind, this.decode);
   }
 
   /**
@@ -418,15 +418,9 @@ export function withWaitDeadline<R>(
  */
 export function instToWire(inst: Inst<unknown>): WireInst {
   return {
-    payment: paymentToWire(inst.payment),
+    gas_limit: Number(inst.gasLimit),
     kind: instKindToWire(inst.kind),
   };
-}
-
-function paymentToWire(p: PaymentIntent): WirePaymentIntent {
-  return p.kind === "SelfPay"
-    ? { SelfPay: { limit: Number(p.limit) } }
-    : "Sponsored";
 }
 
 function instKindToWire(k: InstKind): WireInstKind {
@@ -445,5 +439,7 @@ function instKindToWire(k: InstKind): WireInstKind {
           bls_sig: [...k.blsSig],
         },
       };
+    case "Sponsor":
+      return "Sponsor";
   }
 }

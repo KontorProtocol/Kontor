@@ -11,7 +11,7 @@ use indexer::info::{compute_info_core, run_info_publisher};
 use indexer::keygen::{self, KeygenArgs};
 use indexer::{api, block, built_info, reactor, reg_tester, runtime};
 use indexer::{bitcoin_client, bitcoin_follower, config::Config, database, logging, stopper};
-use indexer_types::{Inst, InstKind, PaymentIntent};
+use indexer_types::{Inst, InstKind};
 use tokio::signal::unix::{SignalKind, signal};
 use tokio::sync::{RwLock, mpsc, oneshot};
 use tokio_util::sync::CancellationToken;
@@ -82,7 +82,7 @@ async fn run_regtest() -> Result<()> {
         .instruction(
             &mut cluster.identity,
             Inst {
-                payment: PaymentIntent::self_pay(10_000),
+                gas_limit: 10_000,
                 kind: InstKind::Issuance,
             },
         )

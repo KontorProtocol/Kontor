@@ -2,7 +2,7 @@ use anyhow::{Result, anyhow};
 use blst::min_sig::{AggregateSignature, SecretKey as BlsSecretKey};
 use indexer::bls::{KONTOR_BLS_DST, RegistrationProof};
 use indexer_types::{
-    AggregateInfo, AggregateSigner, Inst, InstKind, Insts, PaymentIntent, SignerRef,
+    AggregateInfo, AggregateSigner, Inst, InstKind, Insts, SignerRef,
 };
 use testlib::*;
 
@@ -16,11 +16,11 @@ async fn bls_user_registry_register_direct_regtest() -> Result<()> {
         &mut user,
         Insts::direct(vec![
             Inst {
-                payment: PaymentIntent::self_pay(10_000),
+                gas_limit: 10_000,
                 kind: InstKind::Issuance,
             },
             Inst {
-                payment: PaymentIntent::self_pay(10_000),
+                gas_limit: 10_000,
                 kind: InstKind::RegisterBlsKey {
                     bls_pubkey: proof.bls_pubkey.to_vec(),
                     schnorr_sig: proof.schnorr_sig.to_vec(),
@@ -51,11 +51,11 @@ async fn bls_user_registry_register_same_key_twice_is_idempotent_regtest() -> Re
         &mut user,
         Insts::direct(vec![
             Inst {
-                payment: PaymentIntent::self_pay(10_000),
+                gas_limit: 10_000,
                 kind: InstKind::Issuance,
             },
             Inst {
-                payment: PaymentIntent::self_pay(10_000),
+                gas_limit: 10_000,
                 kind: InstKind::RegisterBlsKey {
                     bls_pubkey: proof.bls_pubkey.to_vec(),
                     schnorr_sig: proof.schnorr_sig.to_vec(),
@@ -76,7 +76,7 @@ async fn bls_user_registry_register_same_key_twice_is_idempotent_regtest() -> Re
         .instruction(
             &mut user,
             Inst {
-                payment: PaymentIntent::self_pay(10_000),
+                gas_limit: 10_000,
                 kind: InstKind::RegisterBlsKey {
                     bls_pubkey: proof.bls_pubkey.to_vec(),
                     schnorr_sig: proof.schnorr_sig.to_vec(),
@@ -104,11 +104,11 @@ async fn bls_user_registry_rejects_different_key_for_same_signer_regtest() -> Re
         &mut user,
         Insts::direct(vec![
             Inst {
-                payment: PaymentIntent::self_pay(10_000),
+                gas_limit: 10_000,
                 kind: InstKind::Issuance,
             },
             Inst {
-                payment: PaymentIntent::self_pay(10_000),
+                gas_limit: 10_000,
                 kind: InstKind::RegisterBlsKey {
                     bls_pubkey: original.bls_pubkey.to_vec(),
                     schnorr_sig: original.schnorr_sig.to_vec(),
@@ -134,7 +134,7 @@ async fn bls_user_registry_rejects_different_key_for_same_signer_regtest() -> Re
         .instruction(
             &mut user,
             Inst {
-                payment: PaymentIntent::self_pay(10_000),
+                gas_limit: 10_000,
                 kind: InstKind::RegisterBlsKey {
                     bls_pubkey: alt_proof.bls_pubkey.to_vec(),
                     schnorr_sig: alt_proof.schnorr_sig.to_vec(),
@@ -178,7 +178,7 @@ async fn bls_user_registry_register_in_aggregate_sponsored_regtest() -> Result<(
     let proof = RegistrationProof::new(&user.keypair, &user.bls_secret_key)?;
 
     let op = Inst {
-        payment: PaymentIntent::Sponsored,
+        gas_limit: 10_000,
         kind: InstKind::RegisterBlsKey {
             bls_pubkey: proof.bls_pubkey.to_vec(),
             schnorr_sig: proof.schnorr_sig.to_vec(),
@@ -186,10 +186,11 @@ async fn bls_user_registry_register_in_aggregate_sponsored_regtest() -> Result<(
         },
     };
 
-    // Registrant signs over their own SignerRef::XOnlyPubkey — they don't yet
-    // have a signer_id to sign over.
+    // Registrant signs over their own SignerRef::XOnlyPubkey — they don't
+    // yet have a signer_id to sign over. They commit to `sponsored = true`
+    // so the publisher can't unilaterally flip them to self-pay.
     let claim = SignerRef::XOnlyPubkey(user_xonly_pk);
-    let msg = op.aggregate_signing_message(&claim, 0)?;
+    let msg = op.aggregate_signing_message(&claim, 0, true)?;
     let user_sk = BlsSecretKey::from_bytes(&user.bls_secret_key)
         .map_err(|e| anyhow!("invalid user BLS secret key: {e:?}"))?;
     let sig = user_sk.sign(&msg, KONTOR_BLS_DST, &[]);
@@ -205,9 +206,9 @@ async fn bls_user_registry_register_in_aggregate_sponsored_regtest() -> Result<(
                     signers: vec![AggregateSigner {
                         identity: claim,
                         nonce: 0,
+                        sponsored: true,
                     }],
                     signature: aggregate_sig.to_signature().to_bytes().to_vec(),
-                    publisher_sponsorship: Some(10_000),
                 }),
             },
         )
@@ -253,7 +254,7 @@ async fn bls_user_registry_register_in_aggregate_via_id_claim_regtest() -> Resul
     rt.instruction(
         &mut user,
         Inst {
-            payment: PaymentIntent::self_pay(10_000),
+            gas_limit: 10_000,
             kind: InstKind::Issuance,
         },
     )
@@ -273,7 +274,7 @@ async fn bls_user_registry_register_in_aggregate_via_id_claim_regtest() -> Resul
     // RegisterBlsKey, identifying the user via SignerRef::SignerId.
     let proof = RegistrationProof::new(&user.keypair, &user.bls_secret_key)?;
     let op = Inst {
-        payment: PaymentIntent::Sponsored,
+        gas_limit: 10_000,
         kind: InstKind::RegisterBlsKey {
             bls_pubkey: proof.bls_pubkey.to_vec(),
             schnorr_sig: proof.schnorr_sig.to_vec(),
@@ -281,7 +282,7 @@ async fn bls_user_registry_register_in_aggregate_via_id_claim_regtest() -> Resul
         },
     };
     let claim = SignerRef::SignerId(user_signer_id);
-    let msg = op.aggregate_signing_message(&claim, 0)?;
+    let msg = op.aggregate_signing_message(&claim, 0, true)?;
     let user_sk = BlsSecretKey::from_bytes(&user.bls_secret_key)
         .map_err(|e| anyhow!("invalid user BLS secret key: {e:?}"))?;
     let sig = user_sk.sign(&msg, KONTOR_BLS_DST, &[]);
@@ -296,9 +297,9 @@ async fn bls_user_registry_register_in_aggregate_via_id_claim_regtest() -> Resul
                 signers: vec![AggregateSigner {
                     identity: claim,
                     nonce: 0,
+                    sponsored: true,
                 }],
                 signature: aggregate_sig.to_signature().to_bytes().to_vec(),
-                publisher_sponsorship: Some(10_000),
             }),
         },
     )

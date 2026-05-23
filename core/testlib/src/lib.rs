@@ -15,7 +15,7 @@ use indexer::{
     test_utils::new_mock_transaction,
 };
 pub use indexer::{logging::setup as logging, testlib_exports::*};
-use indexer_types::{Inst, InstKind, Insts, Payment, PaymentIntent, TransactionRow};
+use indexer_types::{Inst, InstKind, Insts, Payment, TransactionRow};
 use std::{cell::Cell, collections::HashMap, path::PathBuf, rc::Rc};
 use tempfile::TempDir;
 pub use tokio;
@@ -492,7 +492,7 @@ impl RuntimeRegtest {
             *nonce += 1;
 
             ops.push(Inst {
-                payment: PaymentIntent::self_pay(10_000),
+                gas_limit: 10_000,
                 kind: InstKind::Call {
                     contract: (*contract).clone().into(),
                     expr: expr.to_string(),
@@ -501,6 +501,7 @@ impl RuntimeRegtest {
             agg_signers.push(indexer_types::AggregateSigner {
                 identity: indexer_types::SignerRef::SignerId(signer_id),
                 nonce: current_nonce,
+                sponsored: false,
             });
         }
 
@@ -513,8 +514,11 @@ impl RuntimeRegtest {
                 .ok_or_else(|| anyhow!("Identity not found for BLS signing"))?;
             let sk = BlsSecretKey::from_bytes(&identity.bls_secret_key)
                 .map_err(|e| anyhow!("Invalid BLS secret key: {:?}", e))?;
-            let msg =
-                ops[i].aggregate_signing_message(&agg_signers[i].identity, agg_signers[i].nonce)?;
+            let msg = ops[i].aggregate_signing_message(
+                &agg_signers[i].identity,
+                agg_signers[i].nonce,
+                agg_signers[i].sponsored,
+            )?;
             sigs.push(sk.sign(&msg, KONTOR_BLS_DST, &[]));
         }
 
@@ -527,7 +531,6 @@ impl RuntimeRegtest {
             aggregate: Some(indexer_types::AggregateInfo {
                 signers: agg_signers,
                 signature: aggregate.to_signature().to_bytes().to_vec(),
-                publisher_sponsorship: None,
             }),
         })
     }
@@ -567,7 +570,7 @@ impl RuntimeImpl for RuntimeRegtest {
             .send_instruction(
                 identity,
                 Inst {
-                    payment: PaymentIntent::self_pay(10_000),
+                    gas_limit: 10_000,
                     kind: InstKind::Publish {
                         name: name.to_string(),
                         bytes: contract.to_vec(),
@@ -615,7 +618,7 @@ impl RuntimeImpl for RuntimeRegtest {
                 .instruction(
                     identity,
                     Inst {
-                        payment: PaymentIntent::self_pay(10_000),
+                        gas_limit: 10_000,
                         kind: InstKind::Call {
                             contract: contract_address.clone().into(),
                             expr: expr.to_string(),
@@ -655,7 +658,7 @@ impl RuntimeImpl for RuntimeRegtest {
             .instruction(
                 identity,
                 Inst {
-                    payment: PaymentIntent::self_pay(10_000),
+                    gas_limit: 10_000,
                     kind: InstKind::Issuance,
                 },
             )
@@ -696,7 +699,7 @@ impl RuntimeImpl for RuntimeRegtest {
                         .send_instruction(
                             identity,
                             Inst {
-                                payment: PaymentIntent::self_pay(10_000),
+                                gas_limit: 10_000,
                                 kind: InstKind::Call {
                                     contract: (*contract).clone().into(),
                                     expr: expr.to_string(),
@@ -713,7 +716,7 @@ impl RuntimeImpl for RuntimeRegtest {
                     let insts: Vec<Inst> = calls
                         .iter()
                         .map(|(contract, expr)| Inst {
-                            payment: PaymentIntent::self_pay(10_000),
+                            gas_limit: 10_000,
                             kind: InstKind::Call {
                                 contract: (*contract).clone().into(),
                                 expr: expr.to_string(),

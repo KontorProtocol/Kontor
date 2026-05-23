@@ -13,7 +13,7 @@ test("publish", () => {
   let inst = {
     ops: [
       {
-        payment: { SelfPay: { limit: 1000000 } },
+        gas_limit: 1000000,
         kind: {
           Publish: {
             name: "foo",
@@ -34,7 +34,7 @@ test("call", () => {
   let inst = {
     ops: [
       {
-        payment: { SelfPay: { limit: 1000000 } },
+        gas_limit: 1000000,
         kind: {
           Call: {
             contract: "foo_1_2",
@@ -51,11 +51,13 @@ test("call", () => {
   expect(inst).toStrictEqual(JSON.parse(result));
 });
 
-test("call with sponsored payment in aggregate", () => {
+test("call with publisher-sponsored co-signer in aggregate", () => {
+  // `AggregateSigner.sponsored = true` opts this op into publisher-pays;
+  // the cap is `Inst.gas_limit` (the publisher signs the bulk and commits).
   let inst = {
     ops: [
       {
-        payment: "Sponsored",
+        gas_limit: 100000,
         kind: {
           Call: {
             contract: "foo_1_2",
@@ -69,10 +71,10 @@ test("call with sponsored payment in aggregate", () => {
         {
           identity: { SignerId: 1 },
           nonce: 0,
+          sponsored: true,
         },
       ],
       signature: Array.from(new Uint8Array(48)),
-      publisher_sponsorship: 100000,
     },
   };
   const str = JSON.stringify(inst);
@@ -85,7 +87,7 @@ test("aggregate with XOnlyPubkey signer ref", () => {
   let inst = {
     ops: [
       {
-        payment: "Sponsored",
+        gas_limit: 100000,
         kind: {
           Call: {
             contract: "foo_1_2",
@@ -102,10 +104,10 @@ test("aggregate with XOnlyPubkey signer ref", () => {
               "eb1e64766d59b13670f8766f306e87b15874789948dd28a4376749e0270fbe19",
           },
           nonce: 0,
+          sponsored: true,
         },
       ],
       signature: Array.from(new Uint8Array(48)),
-      publisher_sponsorship: 100000,
     },
   };
   const str = JSON.stringify(inst);
@@ -118,7 +120,7 @@ test("issuance", () => {
   let inst = {
     ops: [
       {
-        payment: { SelfPay: { limit: 1000000 } },
+        gas_limit: 1000000,
         kind: "Issuance",
       },
     ],

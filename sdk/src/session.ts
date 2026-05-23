@@ -35,7 +35,7 @@ import { ContractAddress } from "./canonical/ContractAddress.js";
 import type { Account } from "./account/index.js";
 import type { Chain } from "./chains.js";
 import { ContractError } from "./errors.js";
-import { Inst, type InstDecoder, type PaymentIntent } from "./inst.js";
+import { Inst, type InstDecoder } from "./inst.js";
 import { Insts } from "./insts.js";
 import { IncomingOffer, type OfferData } from "./offer.js";
 import type { AggregateFragment } from "./aggregate.js";
@@ -59,12 +59,12 @@ export interface KontorSessionOptions {
    */
   fetch?: typeof fetch;
   /**
-   * Default payment commitment for proc `Inst`s built via `call(...)`.
-   * Overridable per-Inst with `inst.pay(...)`. When omitted, defaults
-   * to `SelfPay` with a provisional limit — the transport refines the
-   * actual gas at submit time; this is the signer's ceiling.
+   * Default gas cap for proc `Inst`s built via `call(...)`.
+   * Overridable per-Inst with `inst.withGasLimit(...)`. When omitted,
+   * defaults to a provisional ceiling — the transport refines the
+   * actual gas at submit time; this is the signer's authorized cap.
    */
-  defaultPayment?: PaymentIntent;
+  defaultGasLimit?: bigint;
   /**
    * Results-poller configuration. The poller starts in the constructor
    * — it follows the chain for `events()` / `wait()` and doubles as a
@@ -75,11 +75,11 @@ export interface KontorSessionOptions {
 }
 
 /**
- * Provisional default `SelfPay` ceiling when `KontorSessionOptions`
+ * Provisional default self-pay ceiling when `KontorSessionOptions`
  * doesn't specify one. Tunable; the transport estimates real gas at
  * submit time, so this is just the cap the signer authorizes.
  */
-const DEFAULT_PAYMENT: PaymentIntent = { kind: "SelfPay", limit: 100_000n };
+const DEFAULT_GAS_LIMIT: bigint = 100_000n;
 
 /**
  * Unwrap the `T` from each `Inst<T>` in a tuple, producing a tuple of
@@ -95,8 +95,8 @@ export class KontorSession {
   readonly account: Account;
   /** Public so `Inst<T>` / `Insts<T>` can route through it directly. */
   readonly transport: KontorTransport;
-  /** Default payment for proc `Inst`s; see `KontorSessionOptions`. */
-  readonly defaultPayment: PaymentIntent;
+  /** Default gas cap for proc `Inst`s; see `KontorSessionOptions`. */
+  readonly defaultGasLimit: bigint;
   /**
    * The session's results poller — one shared loop, started here in the
    * constructor. Backs `events()` and (later) `inst.submit().wait()`.
@@ -106,7 +106,7 @@ export class KontorSession {
   constructor(opts: KontorSessionOptions) {
     this.chain = opts.chain;
     this.account = opts.account;
-    this.defaultPayment = opts.defaultPayment ?? DEFAULT_PAYMENT;
+    this.defaultGasLimit = opts.defaultGasLimit ?? DEFAULT_GAS_LIMIT;
     const make =
       opts.transport ??
       (({ chain, account }) => new HttpTransport({ chain, account }));
@@ -124,8 +124,8 @@ export class KontorSession {
    * Build a proc-context `Call` `Inst`. Codegen-emitted proc methods
    * are one-liners delegating here — this is the narrow facade that
    * keeps generated code free of `Inst` / `InstKind` internals and of
-   * payment policy. The Inst carries the session's `defaultPayment`;
-   * override per-call with `inst.pay(...)`.
+   * gas-cap policy. The Inst carries the session's `defaultGasLimit`;
+   * override per-call with `inst.withGasLimit(...)`.
    */
   call<T>(
     contract: ContractAddress,
@@ -135,7 +135,7 @@ export class KontorSession {
   ): Inst<T> {
     return new Inst<T>(
       this,
-      this.defaultPayment,
+      this.defaultGasLimit,
       { kind: "Call", contract, fnName, expr },
       decode,
     );

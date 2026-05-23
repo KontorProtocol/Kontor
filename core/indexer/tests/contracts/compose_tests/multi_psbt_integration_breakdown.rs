@@ -6,7 +6,7 @@ use indexer::{
     logging,
     multi_psbt_test_utils::{NodeInfo, get_node_addresses, get_portal_info, tx_vbytes},
 };
-use indexer_types::{Inst, InstKind, PaymentIntent, serialize};
+use indexer_types::{Inst, InstKind, serialize};
 use rand::RngExt;
 use testlib::RegTester;
 use tracing::info;
@@ -66,7 +66,7 @@ pub async fn test_portal_coordinated_compose_flow(reg_tester: &mut RegTester) ->
                 .funding_utxos(vec![n.next_funding_utxo.clone()])
                 .instruction(
                     serialize(&Inst {
-                        payment: PaymentIntent::self_pay(50_000),
+                        gas_limit: 50_000,
                         kind: InstKind::Publish {
                             name: "test".to_string(),
                             bytes: format!("compose-mpsbt-flow-data-0123456789-{}", i)

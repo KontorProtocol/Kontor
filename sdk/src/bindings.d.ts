@@ -2,24 +2,26 @@
 
 export type AggregateInfo = {
   /**
-   * One entry per op in `Insts.ops`, in parallel order. Each entry binds
-   * a co-signer claim (existing `signer_id` or fresh x-only `PubKey`) to
-   * the nonce that op claims, which protects BLS aggregate signatures
-   * from replay.
+   * One entry per op in `Insts.ops`, in parallel order. Binds each
+   * co-signer claim (existing `signer_id` or fresh x-only `PubKey`)
+   * to its nonce (replay protection) and to a `sponsored` flag (whether
+   * the publisher pays the op's gas).
    */
   signers: Array<AggregateSigner>;
   signature: Array<number>;
-  /**
-   * Publisher's gas-sponsorship commitment for this bulk.
-   * - `None`: no sponsorship offered. Any op signing `PaymentIntent::Sponsored`
-   *   is rejected.
-   * - `Some(n)`: publisher commits up to `n` per sponsored op. Validated
-   *   `n > 0` in `validate_aggregate_shape`.
-   */
-  publisher_sponsorship: number | null;
 };
 
-export type AggregateSigner = { identity: SignerRef; nonce: number };
+export type AggregateSigner = {
+  identity: SignerRef;
+  nonce: number;
+  /**
+   * `true` → this op's gas is paid by the publisher (the input's
+   * signer) up to `Inst.gas_limit`. `false` → co-signer self-pays up
+   * to `Inst.gas_limit`. The publisher commits by signing the bulk;
+   * the co-signer commits via their BLS signature contribution.
+   */
+  sponsored: boolean;
+};
 
 export type Block = {
   height: number;
@@ -149,7 +151,26 @@ export type Input = {
   insts: Insts;
 };
 
-export type Inst = { payment: PaymentIntent; kind: InstKind };
+export type Inst = {
+  /**
+   * Gas cap for this op. Self-pay default — the input's signer is
+   * charged up to this amount.
+   *
+   * Overridden in two cases:
+   * - Direct context with a previous-input `Sponsor` Inst → the
+   *   Sponsor's own `gas_limit` is the cap and its signer is the payer.
+   * - BLS aggregate with `AggregateSigner.sponsored = true` → the
+   *   publisher (the input's signer) is the payer; `gas_limit` here is
+   *   the cap they signed off on by signing the bulk.
+   *
+   * Otherwise: input signer is payer; `gas_limit` is the cap.
+   *
+   * Sentinel `0` is used for ops the runtime pays for (currently only
+   * `InstKind::Issuance`, which bypasses gas accounting via `Signer::Core`).
+   */
+  gas_limit: number;
+  kind: InstKind;
+};
 
 export type InstKind =
   | { "Publish": { name: string; bytes: Array<number> } }
@@ -162,7 +183,7 @@ export type InstKind =
       bls_sig: Array<number>;
     };
   }
-  | { "Sponsor": { gas_limit: number } };
+  | "Sponsor";
 
 export type InstructionQuery = {
   address: string;
@@ -186,7 +207,8 @@ export type OpKind =
       schnorr_sig: Array<number>;
       bls_sig: Array<number>;
     };
-  };
+  }
+  | "Sponsor";
 
 export type OpMetadata = {
   previous_output: string;
@@ -264,10 +286,16 @@ export type ParticipantScripts = {
 /**
  * Resolved per-op execution payment, lives on `OpMetadata`.
  *
- * Built from the co-signer's `PaymentIntent` plus any aggregate-level
- * `publisher_sponsorship` offer. `signer_id` identifies who funds the
- * op's gas (the applicative signer for SelfPay, the publisher for
- * Sponsored). `gas_limit` is the effective fuel cap for execution.
+ * `signer_id` is who funds this op's gas; `gas_limit` is the cap.
+ *
+ * Derived from:
+ * - Direct input, no `Sponsor`: `signer_id` = input signer, `gas_limit` = `Inst.gas_limit`.
+ * - Direct input, prev-input `Sponsor` active: `signer_id` = sponsor's signer,
+ *   `gas_limit` = sponsor's cap (overrides `Inst.gas_limit`).
+ * - Aggregate input, `AggregateSigner.sponsored = false`: `signer_id` =
+ *   co-signer, `gas_limit` = `Inst.gas_limit`.
+ * - Aggregate input, `AggregateSigner.sponsored = true`: `signer_id` =
+ *   publisher (the input's signer), `gas_limit` = `Inst.gas_limit`.
  *
  * `Issuance` carries a sentinel `Payment { signer_id: CORE_SIGNER_ID,
  * gas_limit: 0 }` since it's system-paid via the `Signer::Core` bypass
@@ -275,17 +303,6 @@ export type ParticipantScripts = {
  * itself.
  */
 export type Payment = { signer_id: number; gas_limit: number };
-
-/**
- * Co-signer's payment commitment, signed as part of the Inst.
- *
- * - `SelfPay { limit }`: the co-signer commits up to `limit` from their own
- *   token balance for this op's gas.
- * - `Sponsored`: the co-signer accepts publisher-paid gas. Only meaningful
- *   in BLS aggregate inputs that also carry `AggregateInfo.publisher_sponsorship`;
- *   rejected at validation in any other context.
- */
-export type PaymentIntent = { "SelfPay": { limit: number } } | "Sponsored";
 
 /**
  * One entry in `Info::recent_blocks` — a `BlockRow` trimmed to the

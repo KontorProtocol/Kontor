@@ -26,7 +26,7 @@ use indexer::test_utils;
 use indexer_types::{OpReturnEntry, SignerRef};
 use indexer_types::RevealInputs;
 use indexer_types::RevealParticipantInputs;
-use indexer_types::{ContractAddress, Inst, InstKind, Insts, PaymentIntent, serialize};
+use indexer_types::{ContractAddress, Inst, InstKind, Insts, serialize};
 use testlib::RegTester;
 use tracing::info;
 
@@ -63,7 +63,7 @@ async fn setup_swap_test(params: SwapTestParams) -> Result<SwapTestContext> {
     let buyer_out_point = params.buyer_out_point;
     let buyer_utxo_for_output = params.buyer_utxo_for_output;
     let instruction = Inst {
-        payment: PaymentIntent::self_pay(50_000),
+        gas_limit: 50_000,
         kind: InstKind::Call {
             contract: ContractAddress {
                 name: "token".to_string(),
@@ -77,7 +77,7 @@ async fn setup_swap_test(params: SwapTestParams) -> Result<SwapTestContext> {
     let serialized_instruction = serialize(&Insts::single(instruction.clone()))?;
 
     let chained_instructions = Inst {
-        payment: PaymentIntent::self_pay(50_000),
+        gas_limit: 50_000,
         kind: InstKind::Call {
             contract: ContractAddress {
                 name: "token".to_string(),
