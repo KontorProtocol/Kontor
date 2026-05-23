@@ -15,6 +15,7 @@ mod native_nft_attach_contract;
 mod native_nft_contract;
 mod native_token_attach_contract;
 mod native_token_contract;
+mod native_token_sponsor_swap;
 mod ops_contract;
 mod pool_contract;
 mod regtester_cluster;
@@ -60,6 +61,7 @@ testlib::regtest_tests! {
     fib_contract,
     native_token_attach_contract,
     native_token_contract,
+    native_token_sponsor_swap,
     ops_contract,
     pool_contract,
     shared_account_contract,
