@@ -209,7 +209,6 @@ async fn test_commit_reveal_chained_reveal(reg_tester: &mut RegTester) -> Result
 
     let chained_reveal_tx = compose_reveal(
         RevealInputs::builder()
-            .commit_tx(reveal_tx.clone())
             .fee_rate(FeeRate::from_sat_per_vb(2).unwrap())
             .participants(vec![
                 RevealParticipantInputs::builder()

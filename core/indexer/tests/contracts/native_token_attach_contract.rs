@@ -119,13 +119,16 @@ async fn test_native_token_attach_contract() -> Result<()> {
     let chained_script_data_bytes = serialize(&detach_inst)?;
 
     let reveal_query = RevealQuery {
-        commit_tx_hex: reveal_tx_hex.clone(),
         sat_per_vbyte: Some(2),
         participants: vec![
             RevealParticipantQuery::builder()
                 .address(seller_address.to_string())
                 .x_only_public_key(internal_key.to_string())
-                .commit_vout(0)
+                .commit_outpoint(bitcoin::OutPoint {
+                    txid: reveal_transaction.compute_txid(),
+                    vout: 0,
+                })
+                .commit_prevout(reveal_transaction.output[0].clone())
                 .commit_script_data(chained_script_data_bytes)
                 .build(),
         ],

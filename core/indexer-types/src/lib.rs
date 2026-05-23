@@ -77,12 +77,30 @@ pub struct CommitOutputs {
     pub reveal_inputs: RevealInputs,
 }
 
+/// One participant in a reveal: the outpoint they will script-spend in
+/// the reveal tx, the prevout of that outpoint, and the leaf-script data
+/// committed in its tap tree.
+///
+/// `commit_*` here refers to the *tap-tree commitment* — the leaf script
+/// that was committed to the spent output's tap tree — not the
+/// commit-reveal pattern. The spent tx may itself be a commit tx (the
+/// usual case) or a prior reveal tx whose output carried a chained leaf
+/// (e.g. the seller's attach reveal whose output 0 carries the detach
+/// leaf, then script-spent again in a swap).
+///
+/// Each participant supplies its own `commit_outpoint`/`commit_prevout`,
+/// so a single reveal can spend from multiple unrelated prior txs
+/// (e.g. a swap that spends both a buyer's Sponsor commit and a seller's
+/// attach reveal).
 #[derive(Serialize, Deserialize, Clone, Builder, TS)]
 #[ts(export, export_to = "../../../sdk/src/bindings.d.ts")]
 pub struct RevealParticipantQuery {
     pub address: String,
     pub x_only_public_key: String,
-    pub commit_vout: u32,
+    #[ts(as = "String")]
+    pub commit_outpoint: bitcoin::OutPoint,
+    #[ts(as = "TxOutSchema")]
+    pub commit_prevout: bitcoin::TxOut,
     pub commit_script_data: Vec<u8>,
     pub chained_instruction: Option<Vec<u8>>,
 }
@@ -90,7 +108,6 @@ pub struct RevealParticipantQuery {
 #[derive(Serialize, Deserialize, TS, Clone, Builder)]
 #[ts(export, export_to = "../../../sdk/src/bindings.d.ts")]
 pub struct RevealQuery {
-    pub commit_tx_hex: String,
     /// Optional: when omitted, the server falls back to its currently
     /// published `fastest_fee` (sat/vB) from `/api/fees`.
     #[ts(type = "number | null")]
@@ -127,8 +144,6 @@ pub struct RevealParticipantInputs {
 #[derive(Builder, Serialize, Clone, TS)]
 #[ts(export, export_to = "../../../sdk/src/bindings.d.ts")]
 pub struct RevealInputs {
-    #[ts(as = "String")]
-    pub commit_tx: bitcoin::Transaction,
     #[ts(type = "number")]
     pub fee_rate: FeeRate,
     pub participants: Vec<RevealParticipantInputs>,

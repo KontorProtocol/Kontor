@@ -218,7 +218,6 @@ async fn setup_swap_test(params: SwapTestParams) -> Result<SwapTestContext> {
         .clone();
 
     let reveal_inputs = RevealInputs::builder()
-        .commit_tx(attach_reveal_tx.clone())
         .fee_rate(FeeRate::from_sat_per_vb(2).unwrap())
         .participants(vec![
             RevealParticipantInputs::builder()

@@ -179,8 +179,6 @@ pub async fn reveal_inputs_from_query(
     }
     let fee_rate = FeeRate::from_sat_per_vb(sat_per_vbyte).ok_or(anyhow!("Invalid fee rate"))?;
 
-    let commit_tx = encode::deserialize_hex::<bitcoin::Transaction>(&query.commit_tx_hex)?;
-
     if query.participants.is_empty() {
         return Err(anyhow!("participants cannot be empty"));
     }
@@ -193,16 +191,6 @@ pub async fn reveal_inputs_from_query(
             _ => return Err(anyhow!("Invalid address type (must be P2TR)")),
         }
         let x_only_public_key = XOnlyPublicKey::from_str(&p.x_only_public_key)?;
-        let commit_outpoint = OutPoint {
-            txid: commit_tx.compute_txid(),
-            vout: p.commit_vout,
-        };
-
-        let commit_prevout = commit_tx
-            .output
-            .get(commit_outpoint.vout as usize)
-            .cloned()
-            .ok_or_else(|| anyhow!("commit vout {} out of bounds", commit_outpoint.vout))?;
 
         // Build TapScriptPair from raw commit_script_data
         let (script, _, control_block) =
@@ -211,8 +199,8 @@ pub async fn reveal_inputs_from_query(
         participants_inputs.push(RevealParticipantInputs {
             address,
             x_only_public_key,
-            commit_outpoint,
-            commit_prevout,
+            commit_outpoint: p.commit_outpoint,
+            commit_prevout: p.commit_prevout.clone(),
             commit_tap_leaf_script: TapLeafScript {
                 leaf_version: LeafVersion::TapScript,
                 script,
@@ -228,7 +216,6 @@ pub async fn reveal_inputs_from_query(
         .max(MIN_ENVELOPE_SATS);
 
     Ok(RevealInputs {
-        commit_tx,
         fee_rate,
         participants: participants_inputs,
         op_return_data: query.op_return_data,
@@ -414,7 +401,6 @@ pub fn compose_commit(params: CommitInputs) -> Result<CommitOutputs> {
     }
 
     let reveal_inputs = RevealInputs::builder()
-        .commit_tx(commit_transaction.clone())
         .fee_rate(params.fee_rate)
         .participants(participants)
         .envelope(params.envelope)

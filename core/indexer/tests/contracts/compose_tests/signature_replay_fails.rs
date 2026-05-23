@@ -377,7 +377,6 @@ pub async fn test_psbt_signature_replay_fails(reg_tester: &mut RegTester) -> Res
     let transfer_bytes = serialize(&transfer_data)?;
 
     let reveal_inputs = RevealInputs::builder()
-        .commit_tx(attach_reveal_tx.clone())
         .fee_rate(FeeRate::from_sat_per_vb(5).unwrap())
         .participants(vec![
             RevealParticipantInputs::builder()

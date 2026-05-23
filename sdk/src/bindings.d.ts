@@ -340,7 +340,6 @@ export type ResultRow = {
 };
 
 export type RevealInputs = {
-  commit_tx: string;
   fee_rate: number;
   participants: Array<RevealParticipantInputs>;
   op_return_data: Array<number> | null;
@@ -363,16 +362,33 @@ export type RevealParticipantInputs = {
   chained_instruction: Array<number> | null;
 };
 
+/**
+ * One participant in a reveal: the outpoint they will script-spend in
+ * the reveal tx, the prevout of that outpoint, and the leaf-script data
+ * committed in its tap tree.
+ *
+ * `commit_*` here refers to the *tap-tree commitment* — the leaf script
+ * that was committed to the spent output's tap tree — not the
+ * commit-reveal pattern. The spent tx may itself be a commit tx (the
+ * usual case) or a prior reveal tx whose output carried a chained leaf
+ * (e.g. the seller's attach reveal whose output 0 carries the detach
+ * leaf, then script-spent again in a swap).
+ *
+ * Each participant supplies its own `commit_outpoint`/`commit_prevout`,
+ * so a single reveal can spend from multiple unrelated prior txs
+ * (e.g. a swap that spends both a buyer's Sponsor commit and a seller's
+ * attach reveal).
+ */
 export type RevealParticipantQuery = {
   address: string;
   x_only_public_key: string;
-  commit_vout: number;
+  commit_outpoint: string;
+  commit_prevout: TxOutSchema;
   commit_script_data: Array<number>;
   chained_instruction: Array<number> | null;
 };
 
 export type RevealQuery = {
-  commit_tx_hex: string;
   /**
    * Optional: when omitted, the server falls back to its currently
    * published `fastest_fee` (sat/vB) from `/api/fees`.

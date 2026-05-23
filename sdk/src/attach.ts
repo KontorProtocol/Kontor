@@ -27,6 +27,9 @@
  * builds a persistable `Offer`; see `offer.ts`.
  */
 
+import { hex } from "@scure/base";
+import { Transaction } from "@scure/btc-signer";
+
 import { serializeInst } from "./component/kontor-sdk.js";
 import { TransportError } from "./errors.js";
 import {
@@ -41,6 +44,14 @@ import { Offer, buildSellerDetachPsbt, type OfferData } from "./offer.js";
 import { encodeRecipientOpReturn } from "./op-return.js";
 import type { KontorSession } from "./session.js";
 import { signCommit, signReveal, txidOf } from "./transport/signing.js";
+
+/** Lenient `Transaction.fromRaw` opts — Kontor reveals carry a
+ *  non-standard taproot leaf; we only ever inspect, never re-validate. */
+const LENIENT_TX = {
+  disableScriptCheck: true,
+  allowUnknownOutputs: true,
+  allowUnknownInputs: true,
+} as const;
 
 /**
  * Who an attached asset is detached to. Either a 32-byte x-only public
@@ -133,15 +144,31 @@ export class Attachment<T> {
     // 3. Build the detach reveal — it spends the attach reveal's escrow
     // output (vout 0); `commit_script_data` is the detach bundle, and
     // the OP_RETURN names the recipient. Same `detachWire` object the
-    // compose committed to, so the leaf scripts match.
+    // compose committed to, so the leaf scripts match. We parse the
+    // attach reveal locally to extract the outpoint + prevout the
+    // detach reveal will script-spend.
+    const attachRevealTx = Transaction.fromRaw(
+      hex.decode(attachRevealHex),
+      LENIENT_TX,
+    );
+    const escrow = attachRevealTx.getOutput(0);
+    if (escrow.script == null || escrow.amount == null) {
+      throw new TransportError(
+        "attach: attach reveal has no escrow output 0",
+        { docsPath: "/sdk/attach" },
+      );
+    }
     const detachReveal = await transport.composeReveal({
-      commit_tx_hex: attachRevealHex,
       sat_per_vbyte: null,
       participants: [
         {
           address: participant.address,
           x_only_public_key: participant.x_only_public_key,
-          commit_vout: 0,
+          commit_outpoint: `${attachRevealTx.id}:0`,
+          commit_prevout: {
+            value: Number(escrow.amount),
+            script_pubkey: hex.encode(escrow.script),
+          },
           commit_script_data: [...serializeInst(JSON.stringify(detachWire))],
           chained_instruction: null,
         },

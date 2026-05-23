@@ -855,14 +855,7 @@ pub async fn test_compose_reveal_op_return_size_validation(
 
     // With single-push OP_RETURN, total payload includes the tag ("kon").
     // So max user data length is 80 - 3 = 77 bytes.
-    let dummy_commit_tx = bitcoin::Transaction {
-        version: bitcoin::transaction::Version(2),
-        lock_time: bitcoin::absolute::LockTime::ZERO,
-        input: vec![],
-        output: vec![commit_prevout.clone()],
-    };
     let ok_inputs = RevealInputs::builder()
-        .commit_tx(dummy_commit_tx.clone())
         .fee_rate(FeeRate::from_sat_per_vb(2).unwrap())
         .participants(vec![participant.clone()])
         .op_return_data(vec![1u8; 80])
@@ -872,7 +865,6 @@ pub async fn test_compose_reveal_op_return_size_validation(
     assert!(ok.is_ok(), "80-byte OP_RETURN payload should be accepted");
 
     let err_inputs = RevealInputs::builder()
-        .commit_tx(dummy_commit_tx)
         .fee_rate(FeeRate::from_sat_per_vb(2).unwrap())
         .participants(vec![participant])
         .op_return_data(vec![2u8; 81])
