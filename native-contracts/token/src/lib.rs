@@ -130,17 +130,22 @@ impl Guest for Token {
     }
 
     fn detach(ctx: &ProcContext) -> Result<Transfer, Error> {
+        // Recipient = `ctx.payer()`. The reactor's Sponsor mechanism
+        // determines the payer per the override rules:
+        //   - Direct + cross-input Sponsor (swap path): payer = sponsor's
+        //     signer (the buyer) → asset detaches to the buyer.
+        //   - Direct + no Sponsor (revoke path): payer = signer of this
+        //     input (the seller, who pre-signed the escrow leaf) → asset
+        //     returns to the seller.
+        // `ctx.payer()` is a Holder (not a Signer) by design — we can
+        // credit it but not spend on its behalf.
         let src = utxo_holder(ctx.transaction().out_point());
         let amt = ctx
             .model()
             .ledger()
             .get(&src)
             .ok_or(Error::Message("Source has no balance".to_string()))?;
-        let dst = match ctx.transaction().op_return_data() {
-            Some(recipient) => HolderRef::from(recipient).try_into()?,
-            None => ctx.signer().into(),
-        };
-        transfer(ctx, src, dst, amt)
+        transfer(ctx, src, ctx.payer(), amt)
     }
 
     fn balance(ctx: &ViewContext, acc: HolderRef) -> Option<Decimal> {
