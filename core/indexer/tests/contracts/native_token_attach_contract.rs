@@ -3,12 +3,12 @@ use bitcoin::TxOut;
 use bitcoin::consensus::encode::serialize as serialize_tx;
 use bitcoin::key::Secp256k1;
 use bitcoin::taproot::TaprootBuilder;
+use indexer::api::compose::build_tap_script_and_script_address;
 use indexer::database::types::OpResultId;
 use indexer::test_utils;
 use indexer::{bitcoin_client::client::RegtestRpc, runtime};
 use indexer_types::{
-    ComposeQuery, Inst, InstKind, InstructionQuery, Insts, RevealParticipantQuery,
-    RevealQuery, serialize,
+    CommitSource, Inst, InstKind, Insts, Reveal, RevealOutput, RevealParticipant, serialize,
 };
 use testlib::*;
 
@@ -54,34 +54,51 @@ async fn test_native_token_attach_contract() -> Result<()> {
         },
     };
 
-    let query = ComposeQuery::builder()
-        .instructions(vec![
-            InstructionQuery::builder()
-                .address(seller_address.to_string())
-                .x_only_public_key(internal_key.to_string())
-                .funding_utxo_ids(format!("{}:{}", out_point.txid, out_point.vout))
-                .insts(Insts::single(attach_inst.clone()))
-                .chained_insts(Insts::single(detach_inst.clone()))
-                .build(),
-        ])
-        .sat_per_vbyte(2)
-        .envelope(600)
-        .build();
+    // Build the seller's attach + chained-detach reveal under the v2
+    // API. Single Build participant carrying the attach inst; its output
+    // is None (the chained envelope and change go in extras). extras
+    // hold the ChainedEnvelope (escrow committing to detach) and the
+    // Change to the seller.
+    let reveal = Reveal {
+        sat_per_vbyte: Some(2),
+        participants: vec![RevealParticipant {
+            x_only_public_key: internal_key.to_string(),
+            commit_insts: Insts::single(attach_inst.clone()),
+            output: None,
+            commit_source: CommitSource::Build {
+                address: seller_address.to_string(),
+                funding_utxo_ids: vec![format!("{}:{}", out_point.txid, out_point.vout)],
+            },
+        }],
+        extra_inputs: vec![],
+        extra_outputs: vec![
+            RevealOutput::ChainedEnvelope {
+                insts: Insts::single(detach_inst.clone()),
+                value: 600,
+                internal_key: internal_key.to_string(),
+            },
+            RevealOutput::Change {
+                script_pubkey: hex::encode(seller_address.script_pubkey().as_bytes()),
+            },
+        ],
+    };
 
-    let compose_outputs = rt.compose(query).await?;
+    let v2_res = rt.compose_v2(reveal).await?;
 
-    let mut commit_transaction = compose_outputs.commit_transaction;
-    let mut reveal_transaction = compose_outputs.reveal_transaction;
-    let tap_script = compose_outputs.per_participant[0]
+    let mut commit_transaction = v2_res.commits[0].transaction.clone();
+    let mut reveal_transaction = v2_res.reveal.transaction.clone();
+    let tap_script = v2_res.reveal.participants[0]
         .commit_tap_leaf_script
         .script
         .clone();
-    let chained_tap_script = compose_outputs.per_participant[0]
-        .chained_tap_leaf_script
-        .as_ref()
-        .unwrap()
-        .script
-        .clone();
+    // The chained leaf script is no longer surfaced by compose_v2's
+    // response — under v2 the chained envelope is just an output of the
+    // reveal, and the test rebuilds the leaf script locally from the
+    // same Insts the ChainedEnvelope output committed to.
+    let (chained_tap_script, _, _) = build_tap_script_and_script_address(
+        internal_key,
+        serialize(&Insts::single(detach_inst.clone()))?,
+    )?;
 
     let commit_prevout = TxOut {
         value: utxo_for_output.value,
@@ -116,27 +133,32 @@ async fn test_native_token_attach_contract() -> Result<()> {
     let commit_tx_hex = hex::encode(serialize_tx(&commit_transaction));
     let reveal_tx_hex = hex::encode(serialize_tx(&reveal_transaction));
 
-    let chained_script_data_bytes = serialize(&detach_inst)?;
-
-    let reveal_query = RevealQuery {
+    // Detach reveal under v2: single Existing participant (spending the
+    // attach reveal's escrow output via the chained detach leaf), with
+    // a paired Change output back to the seller. The seller's signer
+    // signs the detach, no Sponsor, so ctx.payer() defaults to the
+    // seller — asset returns to them.
+    let detach_reveal = Reveal {
         sat_per_vbyte: Some(2),
-        participants: vec![
-            RevealParticipantQuery::builder()
-                .address(seller_address.to_string())
-                .x_only_public_key(internal_key.to_string())
-                .commit_outpoint(bitcoin::OutPoint {
+        participants: vec![RevealParticipant {
+            x_only_public_key: internal_key.to_string(),
+            commit_insts: Insts::single(detach_inst.clone()),
+            output: Some(RevealOutput::Change {
+                script_pubkey: hex::encode(seller_address.script_pubkey().as_bytes()),
+            }),
+            commit_source: CommitSource::Existing {
+                outpoint: bitcoin::OutPoint {
                     txid: reveal_transaction.compute_txid(),
                     vout: 0,
-                })
-                .commit_prevout(reveal_transaction.output[0].clone())
-                .commit_script_data(chained_script_data_bytes)
-                .build(),
-        ],
-        op_return_data: None,
-        envelope: None,
+                },
+                prevout: reveal_transaction.output[0].clone(),
+            },
+        }],
+        extra_inputs: vec![],
+        extra_outputs: vec![],
     };
 
-    let detach_outputs = rt.compose_reveal(reveal_query).await?;
+    let detach_outputs = rt.compose_reveal_v2(detach_reveal).await?;
     let mut detach_transaction = detach_outputs.transaction;
 
     assert_eq!(detach_transaction.input.len(), 1);
