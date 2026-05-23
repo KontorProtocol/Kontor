@@ -1,9 +1,12 @@
 /**
  * Unit tests for the `Attachment` runtime surface. The full
- * `to(recipient)` / `offer(...)` flows — chained compose, taproot
- * signing, broadcast — are exercised by the live regtest suite; here we
- * cover the cheap guards: recipient validation, and that each terminal
- * is wired through to the transport.
+ * `offer(...)` flow — chained compose, taproot signing, PSBT build —
+ * is exercised by the live regtest marketplace suite; here we just
+ * cover the cheap guard that the terminal is wired through to the
+ * transport.
+ *
+ * Gifts go through `contract.transfer(recipient, amount)`, not through
+ * `Attachment` — see attach.ts header.
  */
 import { test, expect, afterEach } from "vitest";
 import {
@@ -75,25 +78,6 @@ function attachment(session: KontorSession): Attachment<string> {
     session.call(addr, "detach", "detach()", decode),
   );
 }
-
-// secp256k1's generator point x-coordinate — a guaranteed-valid x-only
-// pubkey (the WASM codec validates the curve point).
-const VALID_PUBKEY =
-  "79be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798";
-
-test("Attachment.to: rejects a malformed recipient before any network call", async () => {
-  // The WASM codec validates the recipient pubkey; a bad one fails fast,
-  // before the stub transport is ever reached.
-  const att = attachment(stubSession());
-  await expect(att.to("deadbeef")).rejects.toThrow(/invalid detach recipient/);
-});
-
-test("Attachment.to: a valid recipient passes validation, then hits the transport", async () => {
-  // A valid pubkey clears `encodeRecipientOpReturn`; the rejection here
-  // is the stub `compose`, proving validation let it through.
-  const att = attachment(stubSession());
-  await expect(att.to(VALID_PUBKEY)).rejects.toThrow(/transport unused/);
-});
 
 test("Attachment.offer: composes the attach through the transport", async () => {
   // offer() builds the attach via transport.compose; the stub rejects

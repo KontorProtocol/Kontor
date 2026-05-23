@@ -35,11 +35,6 @@ export { KontorSession } from "./session";
 export type { Inst } from "./inst";
 export { ContractBase } from "./contract-base";
 export { Attachment } from "./attach";
-export type {
-  AttachmentOutcome,
-  Recipient,
-  SubmittedAttachment,
-} from "./attach";
 export { Offer, IncomingOffer } from "./offer";
 export type { OfferData, OfferInspection } from "./offer";
 export { HttpTransport, http } from "./transport/http";
