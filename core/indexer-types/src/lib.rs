@@ -19,6 +19,122 @@ pub struct InstructionQuery {
     pub chained_insts: Option<Insts>,
 }
 
+// ────────────────────────────────────────────────────────────────────
+// New Reveal-centric compose API
+//
+// `Reveal` is the universal input: it describes a Kontor reveal
+// transaction — its participants (tap-leaf script-spend inputs), any
+// additional non-Kontor inputs (key-path), and its outputs in order.
+//
+// Used as the body of three endpoints:
+//   - compose:        builds whatever needs building (commits + reveal).
+//                     If all participants are Existing, builds only the
+//                     reveal. If any are Build, builds those commits too.
+//   - compose_commit: builds only the commits for Build participants;
+//                     returns the Reveal with their outpoints filled in.
+//                     For the split-flow case (commit now, reveal later).
+//   - compose_reveal: shorthand for compose where all participants are
+//                     Existing; builds only the reveal PSBT.
+//
+// `CommitSource` per participant captures whether the commit already
+// exists on chain (Existing) or needs to be built by this call (Build).
+// The same Reveal value can drive all three endpoints — endpoint choice
+// determines what gets built.
+//
+// Output structure is explicit: `extra_outputs` lists every non-paired
+// output, and each `RevealParticipant.output` is the tx output at that
+// participant's input index (for SACP alignment). No implicit defaults.
+// ────────────────────────────────────────────────────────────────────
+
+/// A complete description of a Kontor reveal tx. Used by `compose`,
+/// `compose_commit`, and `compose_reveal`.
+#[derive(Serialize, Deserialize, Clone, Builder, TS)]
+#[ts(export, export_to = "../../../sdk/src/bindings.d.ts")]
+pub struct Reveal {
+    /// Optional: when omitted, the server falls back to its currently
+    /// published `fastest_fee` (sat/vB) from `/api/fees`.
+    #[ts(type = "number | null")]
+    pub sat_per_vbyte: Option<u64>,
+    pub participants: Vec<RevealParticipant>,
+    #[builder(default)]
+    pub extra_inputs: Vec<ExtraInput>,
+    #[builder(default)]
+    pub extra_outputs: Vec<RevealOutput>,
+}
+
+/// One participant in the reveal: the tap-leaf script-spend input plus
+/// the output paired with it (placed at the same index, which BIP-341
+/// SIGHASH_SINGLE pre-signed signatures commit to).
+#[derive(Serialize, Deserialize, Clone, Builder, TS)]
+#[ts(export, export_to = "../../../sdk/src/bindings.d.ts")]
+pub struct RevealParticipant {
+    pub x_only_public_key: String,
+    pub commit_insts: Insts,
+    pub output: Option<RevealOutput>,
+    pub commit_source: CommitSource,
+}
+
+/// Whether this participant's commit already exists on chain or needs
+/// to be built by this call.
+#[derive(Serialize, Deserialize, Clone, TS)]
+#[ts(export, export_to = "../../../sdk/src/bindings.d.ts")]
+pub enum CommitSource {
+    /// The commit already exists. Caller supplies the outpoint + prevout.
+    Existing {
+        #[ts(as = "String")]
+        outpoint: bitcoin::OutPoint,
+        #[ts(as = "TxOutSchema")]
+        prevout: bitcoin::TxOut,
+    },
+    /// The commit needs to be built (by this call or a later one).
+    /// Caller supplies funding for the commit tx.
+    Build {
+        address: String,
+        funding_utxo_ids: Vec<String>,
+    },
+}
+
+/// A non-Kontor input (key-path spend) bringing extra value into the
+/// reveal — beyond what the tap-leaf participants contribute.
+#[derive(Serialize, Deserialize, Clone, TS)]
+#[ts(export, export_to = "../../../sdk/src/bindings.d.ts")]
+pub struct ExtraInput {
+    #[ts(as = "String")]
+    pub outpoint: bitcoin::OutPoint,
+    #[ts(as = "TxOutSchema")]
+    pub prevout: bitcoin::TxOut,
+}
+
+/// One output kind in a reveal tx. Appears either on a participant
+/// (paired with that input's index, for SACP alignment) or in
+/// `extra_outputs` (appended after all participant outputs in order).
+///
+/// `Change` is the only variant whose value is computed by the
+/// indexer (= leftover after fees + fixed outputs). It may only appear
+/// at the tx's *last* output position; the indexer errors if a non-last
+/// Change would be sub-dust (skipping it would shift later outputs and
+/// break SACP positioning).
+#[derive(Serialize, Deserialize, Clone, TS)]
+#[ts(export, export_to = "../../../sdk/src/bindings.d.ts")]
+pub enum RevealOutput {
+    /// Fixed-value output. Caller specifies the exact value.
+    Fixed { script_pubkey: String, value: u64 },
+    /// Auto-computed change. Value = sum(inputs) − sum(other outputs) − fee.
+    /// Must be the last output of the tx; sub-dust is silently dropped.
+    Change { script_pubkey: String },
+    /// Inscription envelope output committing to `insts` in a tap leaf
+    /// with `internal_key` as the internal key. `value` is the output's
+    /// sat amount.
+    ChainedEnvelope {
+        insts: Insts,
+        value: u64,
+        internal_key: String,
+    },
+    /// OP_RETURN with arbitrary data.
+    OpReturn { data: Vec<u8> },
+}
+
+
 #[derive(Serialize, Deserialize, Builder, TS)]
 #[ts(export, export_to = "../../../sdk/src/bindings.d.ts")]
 pub struct ComposeQuery {
