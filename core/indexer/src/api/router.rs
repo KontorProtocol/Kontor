@@ -28,7 +28,10 @@ use crate::api::handlers::{
 
 use super::{
     API_REQUEST_TIMEOUT_MS, Env,
-    handlers::{get_block, get_block_latest, post_compose_commit, post_compose_reveal},
+    handlers::{
+        get_block, get_block_latest, post_compose_commit, post_compose_commit_v2,
+        post_compose_reveal, post_compose_reveal_v2, post_compose_v2,
+    },
 };
 
 #[derive(Clone)]
@@ -127,7 +130,10 @@ pub fn new(context: Env, prom_handle: PrometheusHandle) -> Router {
                             Router::new()
                                 .route("/", post(post_compose))
                                 .route("/commit", post(post_compose_commit))
-                                .route("/reveal", post(post_compose_reveal)),
+                                .route("/reveal", post(post_compose_reveal))
+                                .route("/v2", post(post_compose_v2))
+                                .route("/commit/v2", post(post_compose_commit_v2))
+                                .route("/reveal/v2", post(post_compose_reveal_v2)),
                         ),
                 )
                 .nest(
