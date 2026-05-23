@@ -25,12 +25,16 @@ async fn test_native_token_attach_contract() -> Result<()> {
 
     let rt = runtime.reg_tester().unwrap();
 
+    // Revoke / self round-trip: one identity attaches the asset to a UTXO
+    // and immediately detaches it back. Under the Sponsor + ctx.payer()
+    // model the detach has no Sponsor and the seller signs the escrow
+    // input, so the default payer = signer = seller, and the asset
+    // returns to the seller. See task #34 for the swap-path companion
+    // (cross-input Sponsor → payer = buyer).
     let identity = rt.identity().await?;
-    let buyer_identity = rt.identity().await?;
     let seller_address = identity.address;
     let keypair = identity.keypair;
     let (out_point, utxo_for_output) = identity.next_funding_utxo;
-    let buyer_x_only = buyer_identity.x_only_public_key();
 
     let (internal_key, _parity) = keypair.x_only_public_key();
 
@@ -125,10 +129,7 @@ async fn test_native_token_attach_contract() -> Result<()> {
                 .commit_script_data(chained_script_data_bytes)
                 .build(),
         ],
-        op_return_data: Some(serialize(&vec![indexer_types::OpReturnEntry {
-            input_index: 0,
-            recipient: indexer_types::SignerRef::XOnlyPubkey(buyer_x_only),
-        }])?),
+        op_return_data: None,
         envelope: None,
     };
 
@@ -208,11 +209,6 @@ async fn test_native_token_attach_contract() -> Result<()> {
     let balance = token::balance(runtime, HolderRef::Utxo(utxo_ref)).await?;
     assert_eq!(balance, Some(2u64.try_into().unwrap()));
 
-    let buyer_ref = HolderRef::XOnlyPubkey(buyer_x_only.to_string());
-    let buyer_balance_before = token::balance(runtime, buyer_ref.clone())
-        .await?
-        .unwrap_or(0u64.try_into().unwrap());
-
     let bitcoin_client = rt.bitcoin_client().await;
     bitcoin_client.send_raw_transaction(&detach_tx_hex).await?;
     bitcoin_client
@@ -233,18 +229,14 @@ async fn test_native_token_attach_contract() -> Result<()> {
     let transfer =
         token::wave::detach_parse_return_expr(&detach_result.value.expect("Expected value"))?;
 
+    // The detach credited the seller in full (contract-reported `amt`).
+    // We don't compare the seller's net ledger delta because the same
+    // identity also paid gas for this op, which burns a small amount
+    // from their balance — that gas burn is correct behaviour under the
+    // new payer model and would mask the 2-token credit.
     assert_eq!(transfer.src.to_string(), utxo_id);
-    let buyer_signer_id = rt
-        .get_signer_id(&buyer_x_only.to_string())
-        .await?
-        .expect("buyer signer_id");
-    assert_eq!(transfer.dst, HolderRef::SignerId(buyer_signer_id));
-
-    let buyer_balance_after = token::balance(runtime, buyer_ref).await?.unwrap();
-    assert_eq!(
-        buyer_balance_after - buyer_balance_before,
-        2u64.try_into().unwrap()
-    );
+    assert_eq!(transfer.dst, HolderRef::SignerId(seller_signer_id));
+    assert_eq!(transfer.amt, 2u64.try_into().unwrap());
 
     Ok(())
 }

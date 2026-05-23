@@ -25,11 +25,15 @@ async fn test_native_nft_attach_contract() -> Result<()> {
 
     let mut rt = runtime.reg_tester().unwrap();
 
+    // Revoke / self round-trip: one identity mints + attaches the NFT to a
+    // UTXO and immediately detaches it back. Under the Sponsor +
+    // ctx.payer() model the detach has no Sponsor and the seller signs
+    // the escrow input, so the default payer = signer = seller, and the
+    // NFT returns to the seller. See task #34 for the swap-path companion
+    // (cross-input Sponsor → payer = buyer).
     let mut identity = rt.identity().await?;
-    let buyer_identity = rt.identity().await?;
     let seller_address = identity.address.clone();
     let keypair = identity.keypair;
-    let buyer_x_only = buyer_identity.x_only_public_key();
 
     let (internal_key, _parity) = keypair.x_only_public_key();
 
@@ -178,10 +182,7 @@ async fn test_native_nft_attach_contract() -> Result<()> {
                 .commit_script_data(chained_script_data_bytes)
                 .build(),
         ],
-        op_return_data: Some(serialize(&vec![indexer_types::OpReturnEntry {
-            input_index: 0,
-            recipient: indexer_types::SignerRef::XOnlyPubkey(buyer_x_only),
-        }])?),
+        op_return_data: None,
         envelope: None,
     };
 
@@ -282,18 +283,14 @@ async fn test_native_nft_attach_contract() -> Result<()> {
 
     assert_eq!(transfer.nft_id, nft_id);
     assert_eq!(transfer.src.to_string(), utxo_id);
-    let buyer_signer_id = rt
-        .get_signer_id(&buyer_x_only.to_string())
-        .await?
-        .expect("buyer signer_id");
-    assert_eq!(transfer.dst, HolderRef::SignerId(buyer_signer_id));
+    assert_eq!(transfer.dst, HolderRef::SignerId(seller_signer_id));
 
     let info_after_detach = nft::get_info(runtime, &nft_id)
         .await?
         .expect("nft should still exist after detach");
     assert_eq!(
         info_after_detach.owner,
-        HolderRef::SignerId(buyer_signer_id)
+        HolderRef::SignerId(seller_signer_id)
     );
 
     Ok(())
