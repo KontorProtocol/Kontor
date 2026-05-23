@@ -111,9 +111,11 @@ export class Offer {
   }
 
   /**
-   * Cancel the offer — detach the asset back to the seller. The detach
-   * transaction carries no OP_RETURN recipient, so the contract falls
-   * back to `ctx.signer()`: the seller, who signs the escrow input here.
+   * Cancel the offer — detach the asset back to the seller. No
+   * `Sponsor` input is involved, so the reactor's payer defaults to
+   * the signer of the escrow input (the seller); the contract's
+   * `detach` reads `ctx.payer()` and credits the asset back to that
+   * signer. Single-party, no buyer needed.
    *
    * Spends the escrow plus a `funding` UTXO (the escrow output is dust;
    * `funding` covers the Bitcoin fee) into one output back to the
@@ -148,9 +150,11 @@ export class Offer {
       );
     }
 
-    // Spend the escrow through the detach leaf — no OP_RETURN, so the
-    // contract detaches to the signer — plus a funding input for the
-    // fee; one output returns everything to the seller.
+    // Spend the escrow through the detach leaf; the seller is the
+    // signer, no Sponsor is in play, so `ctx.payer()` inside detach
+    // resolves to the seller and the asset is credited back. The
+    // funding input covers the Bitcoin fee; one output returns
+    // everything to the seller.
     const leafScript = btcUtils.concatBytes(
       hex.decode(data.detachLeaf.script),
       new Uint8Array([data.detachLeaf.leafVersion]),

@@ -4,10 +4,12 @@
  * The seller builds an offer (composes the attach, pre-signs the
  * detach), then changes their mind and revokes it. `revoke()` broadcasts
  * `[attachCommit, attachReveal, detachTx]`: the attach moves the asset
- * into the escrow, the detach — carrying no OP_RETURN recipient — hands
- * it straight back to the seller. The seller's token balance therefore
- * round-trips and ends exactly where it started; a broken detach would
- * strand the asset in the escrow, leaving the balance short.
+ * into the escrow, the detach — built without a `Sponsor` input, so
+ * the reactor's payer defaults to the signer of the detach input (the
+ * seller) — hands it straight back. The seller's token balance
+ * therefore round-trips and ends exactly where it started; a broken
+ * detach would strand the asset in the escrow, leaving the balance
+ * short.
  *
  * The seller is the dev account (it holds the issued tokens and the
  * Bitcoin funding). Funding: the offer's attach-compose takes
@@ -65,12 +67,14 @@ test("offer/revoke: the seller cancels an offer and the asset returns", async ()
     await offer.revoke({ funding: revokeFunding });
 
     // revoke() broadcasts attach + detach: the attach moves 2 tokens into
-    // the escrow and the detach (no OP_RETURN recipient) returns them to
-    // the seller. Both ops burn a sliver of gas, so the balance ends a
-    // hair below `before` — never 2 whole tokens short, which is what a
-    // broken detach (asset stranded in the escrow) would leave. Poll past
-    // the early iterations (the txs may not have processed yet), then
-    // stop once the balance has round-tripped to within gas of `before`.
+    // the escrow and the detach (no Sponsor → payer defaults to the
+    // seller, ctx.payer() inside detach resolves to seller's holder)
+    // returns them to the seller. Both ops burn a sliver of gas, so the
+    // balance ends a hair below `before` — never 2 whole tokens short,
+    // which is what a broken detach (asset stranded in the escrow) would
+    // leave. Poll past the early iterations (the txs may not have
+    // processed yet), then stop once the balance has round-tripped to
+    // within gas of `before`.
     let after: Decimal | null = null;
     for (let i = 0; i < 90; i++) {
       await new Promise((r) => setTimeout(r, 1000));
