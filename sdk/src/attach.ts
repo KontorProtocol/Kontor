@@ -205,7 +205,7 @@ export class Attachment<T> {
    * deferred offer, or calls `offer.publishAttach()` to put the escrow
    * on chain upfront. See `offer.ts`.
    */
-  async offer(opts: { price: bigint }): Promise<Offer<T>> {
+  async offer(opts: { price: bigint }): Promise<Offer> {
     const { transport, account } = this.session;
     const attachWire: WireInsts = {
       ops: [instToWire(this.attach)],
@@ -248,7 +248,7 @@ export class Attachment<T> {
       price: opts.price.toString(),
       seller: account.xOnlyPubKey,
     };
-    return new Offer(this.session, data, (raw) => this.detach._decode(raw));
+    return new Offer(this.session, data);
   }
 }
 

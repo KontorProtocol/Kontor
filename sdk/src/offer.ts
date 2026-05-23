@@ -16,7 +16,8 @@
  *     escrow is provably live on chain ("hard" offer).
  *
  * The buyer side — `session.openOffer(blob)` → `IncomingOffer` with
- * `inspect()` / `accept()` — is the next slice.
+ * `inspect()` / `accept()` — completes the swap. `Offer.revoke()` is the
+ * seller's escape hatch: detach the asset back to themselves.
  */
 
 import { hex } from "@scure/base";
@@ -25,8 +26,7 @@ import { TaprootControlBlock, Transaction, p2tr, utils as btcUtils } from "@scur
 import type { Account } from "./account/index.js";
 import type { TapLeafScript } from "./bindings.js";
 import type { BitcoinNetwork } from "./chains.js";
-import { ContractError, SignerError } from "./errors.js";
-import type { InstDecoder } from "./inst.js";
+import { SignerError } from "./errors.js";
 import type { BroadcastResult, WireInsts } from "./json-codec.js";
 import { encodeRecipientOpReturn } from "./op-return.js";
 import type { KontorSession } from "./session.js";
@@ -83,16 +83,13 @@ export interface OfferData {
 
 /**
  * A marketplace offer the seller holds — built by `Attachment.offer()`.
- * `T` is the detach op's result type; it's lost across `serialize()`,
- * so the buyer side (`IncomingOffer`) is untyped.
+ * Hand `serialize()` out to buyers; `revoke()` takes the asset back.
  */
-export class Offer<T> {
+export class Offer {
   constructor(
     private readonly session: KontorSession,
     /** The raw offer blob — also what `serialize()` emits. */
     readonly data: OfferData,
-    /** Decoder for the detach op's WAVE result. */
-    private readonly decodeDetach: InstDecoder<T>,
   ) {}
 
   /** The persistable offer blob as a JSON string. */
@@ -114,16 +111,109 @@ export class Offer<T> {
   }
 
   /**
-   * Cancel the offer by detaching the asset back to the seller — a
-   * detach-to-self. Implemented with the buyer-side detach machinery.
+   * Cancel the offer — detach the asset back to the seller. The detach
+   * transaction carries no OP_RETURN recipient, so the contract falls
+   * back to `ctx.signer()`: the seller, who signs the escrow input here.
+   *
+   * Spends the escrow plus a `funding` UTXO (the escrow output is dust;
+   * `funding` covers the Bitcoin fee) into one output back to the
+   * seller. Broadcasts `[attachCommit, attachReveal, detachTx]` — the
+   * same package shape as `accept()`, so a deferred offer is revoked
+   * even if its attach was never published.
+   *
+   * @param opts.funding  A seller UTXO covering `fee`.
+   * @param opts.fee      Flat fee in sats. Default `DEFAULT_SWAP_FEE`.
    */
-  revoke(): Promise<never> {
-    void this.decodeDetach;
-    return Promise.reject(
-      new ContractError("Offer.revoke: not implemented yet (Phase D)", {
+  async revoke(opts: { funding: Utxo; fee?: bigint }): Promise<BroadcastResult> {
+    const { data } = this;
+    const { account, chain, transport } = this.session;
+    const fee = opts.fee ?? DEFAULT_SWAP_FEE;
+
+    // The escrow — the attach reveal's output 0.
+    const reveal = Transaction.fromRaw(hex.decode(data.attachReveal), LENIENT_TX);
+    const escrow = reveal.getOutput(0);
+    if (escrow.script == null || escrow.amount == null) {
+      throw new SignerError("revoke: attach reveal has no escrow output 0", {
         docsPath: "/sdk/offer",
-      }),
+      });
+    }
+
+    const sellerXOnly = hex.decode(account.xOnlyPubKey);
+    const recovered = escrow.amount + opts.funding.value - fee;
+    if (recovered < DUST_SATS) {
+      throw new SignerError(
+        `revoke: escrow ${escrow.amount} + funding ${opts.funding.value} ` +
+          `sats cannot cover fee ${fee}`,
+        { docsPath: "/sdk/offer" },
+      );
+    }
+
+    // Spend the escrow through the detach leaf — no OP_RETURN, so the
+    // contract detaches to the signer — plus a funding input for the
+    // fee; one output returns everything to the seller.
+    const leafScript = btcUtils.concatBytes(
+      hex.decode(data.detachLeaf.script),
+      new Uint8Array([data.detachLeaf.leafVersion]),
     );
+    const controlBlock = TaprootControlBlock.decode(
+      hex.decode(data.detachLeaf.controlBlock),
+    );
+
+    const tx = new Transaction({ allowUnknownOutputs: true });
+    tx.addInput({
+      txid: reveal.id,
+      index: 0,
+      witnessUtxo: { script: escrow.script, amount: escrow.amount },
+      tapLeafScript: [[controlBlock, leafScript]],
+    });
+    tx.addInput({
+      txid: opts.funding.txid,
+      index: opts.funding.vout,
+      witnessUtxo: {
+        script: hex.decode(opts.funding.scriptPubKey),
+        amount: opts.funding.value,
+      },
+      tapInternalKey: sellerXOnly,
+      // Opt-in RBF on the seller's funding input.
+      sequence: 0xfffffffd,
+    });
+    tx.addOutput({
+      script: p2tr(sellerXOnly, undefined, chain.network).script,
+      amount: recovered,
+    });
+
+    // The seller owns both inputs; sign both `default`. Unlike the
+    // offer's detach PSBT there is no buyer to leave outputs open for.
+    const signed = await account.signPsbt(tx.toPSBT(), {
+      inputs: [{ index: 0 }, { index: 1 }],
+    });
+
+    // Finalize by hand: input 0 the escrow's script-path spend, input 1
+    // a plain key-path spend.
+    const finalTx = Transaction.fromPSBT(signed);
+    const escrowSig = finalTx.getInput(0).tapScriptSig?.[0]?.[1];
+    if (escrowSig == null) {
+      throw new SignerError("revoke: the escrow input was not signed");
+    }
+    finalTx.updateInput(0, {
+      finalScriptWitness: [
+        escrowSig,
+        hex.decode(data.detachLeaf.script),
+        hex.decode(data.detachLeaf.controlBlock),
+      ],
+    });
+    const fundingSig = finalTx.getInput(1).tapKeySig;
+    if (fundingSig == null) {
+      throw new SignerError("revoke: the funding input was not signed");
+    }
+    finalTx.updateInput(1, { finalScriptWitness: [fundingSig] });
+
+    const detachTxHex = hex.encode(finalTx.extract());
+    return transport.broadcast([
+      data.attachCommit,
+      data.attachReveal,
+      detachTxHex,
+    ]);
   }
 }
 
