@@ -98,7 +98,7 @@ pub async fn post_compose_reveal(
 // the env-level default sat_per_vbyte if the Reveal omits it.
 // ============================================================================
 
-#[derive(serde::Serialize, ts_rs::TS)]
+#[derive(serde::Serialize, serde::Deserialize, ts_rs::TS)]
 #[ts(export, export_to = "../../../sdk/src/bindings.d.ts")]
 pub struct ComposeV2Response {
     pub commits: Vec<indexer_types::CommitTx>,

@@ -137,7 +137,7 @@ pub enum RevealOutput {
 /// One commit transaction built by `compose_commit` / `compose`. There's
 /// one entry per `CommitSource::Build` participant in the input `Reveal`,
 /// in participant order.
-#[derive(Serialize, Builder, Clone, TS)]
+#[derive(Serialize, Deserialize, Builder, Clone, TS)]
 #[ts(export, export_to = "../../../sdk/src/bindings.d.ts")]
 pub struct CommitTx {
     #[ts(as = "String")]
@@ -151,7 +151,7 @@ pub struct CommitTx {
 /// converted to `Existing` (outpoint + prevout filled in from the built
 /// commit). The caller signs + broadcasts the commits, then later passes
 /// the returned `reveal` to `compose_reveal` to build the reveal PSBT.
-#[derive(Serialize, Builder, Clone, TS)]
+#[derive(Serialize, Deserialize, Builder, Clone, TS)]
 #[ts(export, export_to = "../../../sdk/src/bindings.d.ts")]
 pub struct CommitOutputsV2 {
     pub commits: Vec<CommitTx>,

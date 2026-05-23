@@ -53,6 +53,34 @@ export type CommitOutputs = {
   reveal_inputs: RevealInputs;
 };
 
+/**
+ * Response from `compose_commit`: one `CommitTx` per Build participant,
+ * plus the input `Reveal` with each Build participant's `CommitSource`
+ * converted to `Existing` (outpoint + prevout filled in from the built
+ * commit). The caller signs + broadcasts the commits, then later passes
+ * the returned `reveal` to `compose_reveal` to build the reveal PSBT.
+ */
+export type CommitOutputsV2 = { commits: Array<CommitTx>; reveal: Reveal };
+
+/**
+ * Whether this participant's commit already exists on chain or needs
+ * to be built by this call.
+ */
+export type CommitSource = {
+  "Existing": { outpoint: string; prevout: TxOutSchema };
+} | { "Build": { address: string; funding_utxo_ids: Array<string> } };
+
+/**
+ * One commit transaction built by `compose_commit` / `compose`. There's
+ * one entry per `CommitSource::Build` participant in the input `Reveal`,
+ * in participant order.
+ */
+export type CommitTx = {
+  transaction: string;
+  transaction_hex: string;
+  psbt_hex: string;
+};
+
 export type ComposeOutputs = {
   commit_transaction: string;
   commit_transaction_hex: string;
@@ -94,6 +122,12 @@ export type ContractListRow = {
 export type ContractResponse = { wit: string };
 
 export type ErrorResponse = { error: string };
+
+/**
+ * A non-Kontor input (key-path spend) bringing extra value into the
+ * reveal — beyond what the tap-leaf participants contribute.
+ */
+export type ExtraInput = { outpoint: string; prevout: TxOutSchema };
 
 export type Fees = {
   /**
@@ -339,6 +373,21 @@ export type ResultRow = {
   payer_signer_id: number | null;
 };
 
+/**
+ * A complete description of a Kontor reveal tx. Used by `compose`,
+ * `compose_commit`, and `compose_reveal`.
+ */
+export type Reveal = {
+  /**
+   * Optional: when omitted, the server falls back to its currently
+   * published `fastest_fee` (sat/vB) from `/api/fees`.
+   */
+  sat_per_vbyte: number | null;
+  participants: Array<RevealParticipant>;
+  extra_inputs: Array<ExtraInput>;
+  extra_outputs: Array<RevealOutput>;
+};
+
 export type RevealInputs = {
   fee_rate: number;
   participants: Array<RevealParticipantInputs>;
@@ -346,11 +395,40 @@ export type RevealInputs = {
   envelope: number;
 };
 
+/**
+ * One output kind in a reveal tx. Appears either on a participant
+ * (paired with that input's index, for SACP alignment) or in
+ * `extra_outputs` (appended after all participant outputs in order).
+ *
+ * `Change` is the only variant whose value is computed by the
+ * indexer (= leftover after fees + fixed outputs). It may only appear
+ * at the tx's *last* output position; the indexer errors if a non-last
+ * Change would be sub-dust (skipping it would shift later outputs and
+ * break SACP positioning).
+ */
+export type RevealOutput =
+  | { "Fixed": { script_pubkey: string; value: bigint } }
+  | { "Change": { script_pubkey: string } }
+  | { "ChainedEnvelope": { insts: Insts; value: bigint; internal_key: string } }
+  | { "OpReturn": { data: Array<number> } };
+
 export type RevealOutputs = {
   transaction: string;
   transaction_hex: string;
   psbt_hex: string;
   participants: Array<ParticipantScripts>;
+};
+
+/**
+ * One participant in the reveal: the tap-leaf script-spend input plus
+ * the output paired with it (placed at the same index, which BIP-341
+ * SIGHASH_SINGLE pre-signed signatures commit to).
+ */
+export type RevealParticipant = {
+  x_only_public_key: string;
+  commit_insts: Insts;
+  output: RevealOutput | null;
+  commit_source: CommitSource;
 };
 
 export type RevealParticipantInputs = {

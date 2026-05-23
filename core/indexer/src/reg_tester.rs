@@ -686,6 +686,37 @@ impl RegTester {
             .await
     }
 
+    pub async fn compose_v2(
+        &self,
+        reveal: indexer_types::Reveal,
+    ) -> Result<crate::api::handlers::ComposeV2Response> {
+        self.inner.lock().await.kontor_client.compose_v2(reveal).await
+    }
+
+    pub async fn compose_commit_v2(
+        &self,
+        reveal: indexer_types::Reveal,
+    ) -> Result<indexer_types::CommitOutputsV2> {
+        self.inner
+            .lock()
+            .await
+            .kontor_client
+            .compose_commit_v2(reveal)
+            .await
+    }
+
+    pub async fn compose_reveal_v2(
+        &self,
+        reveal: indexer_types::Reveal,
+    ) -> Result<RevealOutputs> {
+        self.inner
+            .lock()
+            .await
+            .kontor_client
+            .compose_reveal_v2(reveal)
+            .await
+    }
+
     pub async fn compose_instruction(
         &mut self,
         ident: &mut Identity,

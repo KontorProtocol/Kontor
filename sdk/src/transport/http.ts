@@ -36,11 +36,14 @@ import type {
   WireInsts,
 } from "../json-codec.js";
 import type {
+  CommitOutputsV2,
   ComposeOutputs,
   ComposeQuery,
+  ComposeV2Response,
   ErrorResponse,
   OpWithResult,
   ResultResponse,
+  Reveal,
   RevealOutputs,
   RevealQuery,
   ViewExpr,
@@ -200,6 +203,35 @@ export class HttpTransport implements KontorTransport {
       "/transactions/compose/reveal",
       query,
     );
+  }
+
+  // ─── v2: Reveal-centric compose API ─────────────────────────────────
+
+  /**
+   * Combined commit + reveal. Builds any commits required by Build
+   * participants, then builds the reveal PSBT. If all participants are
+   * Existing, only builds the reveal.
+   */
+  composeV2(reveal: Reveal): Promise<ComposeV2Response> {
+    return this.postJson<ComposeV2Response>("/transactions/compose/v2", reveal);
+  }
+
+  /**
+   * Builds only the commits for Build participants and returns the
+   * input Reveal with each Build → Existing (outpoint filled in).
+   * Caller signs/broadcasts the commits, then later passes the
+   * returned reveal to `composeRevealV2`.
+   */
+  composeCommitV2(reveal: Reveal): Promise<CommitOutputsV2> {
+    return this.postJson<CommitOutputsV2>("/transactions/compose/commit/v2", reveal);
+  }
+
+  /**
+   * Builds only the reveal PSBT. All participants must be
+   * CommitSource::Existing (no commits to build here).
+   */
+  composeRevealV2(reveal: Reveal): Promise<RevealOutputs> {
+    return this.postJson<RevealOutputs>("/transactions/compose/reveal/v2", reveal);
   }
 
   /**
