@@ -588,10 +588,13 @@ fn estimate_reveal_vbytes(reveal: &Reveal) -> Result<u64> {
     for output in &plan {
         push_resolved_output_to_dummy(&mut dummy, output);
     }
-    // Mirror compose_reveal's fallback OP_RETURN for an all-Nones/no-extras
-    // layout — otherwise the commit's tap output gets sized too small and
-    // compose_reveal later errors with "insufficient input value".
-    if plan.is_empty() {
+    // Mirror compose_reveal's fallback: if the dummy ends up with zero
+    // outputs (here only via an all-Nones/no-extras layout — estimate
+    // doesn't drop sub-dust Change), add the same fallback OP_RETURN so
+    // the commit's tap output is sized for a structurally valid reveal.
+    // Uses `output.is_empty()` to match compose_reveal's wording exactly,
+    // so a future change to either drop-logic stays in sync.
+    if dummy.output.is_empty() {
         dummy.output.push(TxOut {
             value: Amount::from_sat(0),
             script_pubkey: empty_op_return_script(),
