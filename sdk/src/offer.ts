@@ -24,12 +24,12 @@ import { hex } from "@scure/base";
 import { TaprootControlBlock, Transaction, p2tr, utils as btcUtils } from "@scure/btc-signer";
 
 import type { Account } from "./account/index.js";
-import type { TapLeafScript } from "./bindings.js";
+import type { Reveal, TapLeafScript } from "./bindings.js";
 import type { BitcoinNetwork } from "./chains.js";
 import { SignerError } from "./errors.js";
 import type { BroadcastResult, Utxo, WireInsts } from "./json-codec.js";
-import { encodeRecipientOpReturn } from "./op-return.js";
 import type { KontorSession } from "./session.js";
+import { signCommit } from "./transport/signing.js";
 
 /** P2TR dust floor — change below this is dropped into the fee. */
 const DUST_SATS = 330n;
@@ -277,10 +277,12 @@ export class IncomingOffer {
       Transaction.fromRaw(hex.decode(data.attachCommit), LENIENT_TX);
       Transaction.fromRaw(hex.decode(data.attachReveal), LENIENT_TX);
       const detach = Transaction.fromPSBT(hex.decode(data.detachPsbt));
-      if (detach.getInput(0).tapScriptSig == null) {
+      // Escrow at input 1, price at output 1 — slot 0 is a dummy
+      // placeholder the buyer overwrites (see `buildSellerDetachPsbt`).
+      if (detach.getInput(1).tapScriptSig == null) {
         throw new Error("the seller's detach input is not signed");
       }
-      if (detach.getOutput(0).amount !== price) {
+      if (detach.getOutput(1).amount !== price) {
         throw new Error("the detach payout does not match the stated price");
       }
       return Promise.resolve({ price, seller, valid: true });
@@ -295,122 +297,163 @@ export class IncomingOffer {
   }
 
   /**
-   * Complete the swap. Assembles one transaction —
-   *   inputs:  [0] escrow (the seller's pre-signed `SINGLE|ANYONECANPAY`
-   *                input), [1] the buyer's funding UTXO;
-   *   outputs: [0] price → seller, [1] OP_RETURN naming the buyer as
-   *                recipient, [2] buyer change
-   * — signs the buyer's input `default` (committing every output, so
-   * the OP_RETURN can't be redirected), and broadcasts
-   * `[attachCommit, attachReveal, swapTx]` atomically.
+   * Complete the swap under the Sponsor + ctx.payer() model.
    *
-   * @param opts.funding    A buyer UTXO covering `price` + `fee`.
-   * @param opts.fee        Flat fee in sats. Default `DEFAULT_SWAP_FEE`.
-   * @param opts.recipient  Who the asset detaches to — an x-only pubkey.
-   *                        Defaults to the accepting account (buyer is
-   *                        recipient); override to detach elsewhere.
+   * Build a Reveal with two participants — the buyer at input 0
+   * (Sponsor commit, funded by `opts.funding`), the seller at input 1
+   * (Existing escrow, pre-signed SACP). The indexer composes the
+   * buyer's commit tx + the swap reveal PSBT; the buyer signs both
+   * (key-path spend on the commit; script-path spend revealing the
+   * Sponsor leaf on the swap reveal's input 0); the seller's pre-signed
+   * SACP witness is injected at input 1; everything broadcasts as one
+   * package: `[attachCommit, attachReveal, buyerCommit, swapReveal]`.
+   *
+   * The Sponsor at input 0 sponsors input 1's first op (the detach), so
+   * `ctx.payer()` resolves to the buyer; the asset detaches to the
+   * buyer (= signer of this `accept()` call). No OP_RETURN is involved.
    */
-  async accept(opts: {
-    funding: Utxo;
-    fee?: bigint;
-    recipient?: string;
-  }): Promise<BroadcastResult> {
+  async accept(opts: { funding: Utxo }): Promise<BroadcastResult> {
     const { data } = this;
     const { account, chain, transport } = this.session;
-    const fee = opts.fee ?? DEFAULT_SWAP_FEE;
 
-    // The seller's pre-signed detach: input 0 = escrow, output 0 = price.
+    // The seller's pre-signed detach PSBT: escrow at input 1, price at
+    // output 1. The buyer extracts the SACP witness, the escrow's
+    // prevout (for `CommitSource::Existing`), and the price-payout
+    // shape (for the seller participant's paired Fixed output).
     const sellerTx = Transaction.fromPSBT(hex.decode(data.detachPsbt));
-    const escrowIn = sellerTx.getInput(0);
-    const priceOut = sellerTx.getOutput(0);
+    const escrowIn = sellerTx.getInput(1);
+    const priceOut = sellerTx.getOutput(1);
     const sellerSig = escrowIn.tapScriptSig?.[0]?.[1];
     if (escrowIn.witnessUtxo == null || sellerSig == null) {
       throw new SignerError("accept: offer's detach input is not signed", {
         docsPath: "/sdk/offer",
       });
     }
-    if (priceOut.script == null || priceOut.amount == null) {
-      throw new SignerError("accept: offer has no price output", {
+    if (
+      escrowIn.txid == null ||
+      escrowIn.index == null ||
+      priceOut.script == null ||
+      priceOut.amount == null
+    ) {
+      throw new SignerError("accept: offer's detach PSBT is malformed", {
         docsPath: "/sdk/offer",
       });
     }
 
-    const escrowValue = escrowIn.witnessUtxo.amount;
-    const change = escrowValue + opts.funding.value - priceOut.amount - fee;
-    if (change < 0n) {
+    const buyerXOnly = account.xOnlyPubKey;
+    const buyerScriptPubKey = hex.encode(
+      p2tr(hex.decode(buyerXOnly), undefined, chain.network).script,
+    );
+    const escrowOutpoint = `${hex.encode(escrowIn.txid)}:${escrowIn.index}`;
+    const escrowPrevoutScript = hex.encode(escrowIn.witnessUtxo.script);
+
+    // Build the swap Reveal:
+    //   participant 0 — buyer, Build with a Sponsor inst, paired
+    //     Change so the buyer's leftover funding returns to them.
+    //   participant 1 — seller, Existing (escrow), paired Fixed payout
+    //     matching what the seller pre-signed (output 1 → price → seller).
+    const reveal: Reveal = {
+      sat_per_vbyte: await transport.feeRate(),
+      participants: [
+        {
+          x_only_public_key: buyerXOnly,
+          commit_insts: {
+            ops: [{ gas_limit: 50_000, kind: "Sponsor" }],
+            aggregate: null,
+          },
+          output: { Change: { script_pubkey: buyerScriptPubKey } },
+          commit_source: {
+            Build: {
+              address: account.address,
+              funding_utxo_ids: [`${opts.funding.txid}:${opts.funding.vout}`],
+            },
+          },
+        },
+        {
+          x_only_public_key: data.seller,
+          commit_insts: data.detachInsts,
+          output: {
+            Fixed: {
+              script_pubkey: hex.encode(priceOut.script),
+              value: priceOut.amount,
+            },
+          },
+          commit_source: {
+            Existing: {
+              outpoint: escrowOutpoint,
+              prevout: {
+                value: Number(escrowIn.witnessUtxo.amount),
+                script_pubkey: escrowPrevoutScript,
+              },
+            },
+          },
+        },
+      ],
+      extra_inputs: [],
+      extra_outputs: [],
+    };
+
+    // Indexer builds the buyer's commit AND the swap reveal PSBT.
+    const composed = await transport.compose(reveal);
+    if (composed.commits.length !== 1) {
       throw new SignerError(
-        `accept: funding ${opts.funding.value} sats cannot cover ` +
-          `price ${priceOut.amount} + fee ${fee}`,
+        `accept: expected 1 commit, got ${composed.commits.length}`,
         { docsPath: "/sdk/offer" },
       );
     }
-
-    // OP_RETURN names the recipient; signing `default` below binds it
-    // (rewriting it breaks the buyer's signature).
-    const opReturn = opReturnScript(
-      encodeRecipientOpReturn([
-        { inputIndex: 0, recipient: opts.recipient ?? account.xOnlyPubKey },
-      ]),
+    const buyerCommitHex = await signCommit(
+      account,
+      composed.commits[0]!.psbt_hex,
     );
-    const buyerXOnly = hex.decode(account.xOnlyPubKey);
 
-    const tx = new Transaction({ allowUnknownOutputs: true });
-    // Input 0 + output 0 must stay aligned — the seller's SIGHASH_SINGLE
-    // commits input 0 to output 0.
-    tx.addInput({
-      txid: escrowIn.txid,
-      index: escrowIn.index,
-      witnessUtxo: escrowIn.witnessUtxo,
-      tapLeafScript: escrowIn.tapLeafScript,
+    // Mixed-sighash signing on the swap reveal:
+    //   input 0 — buyer's Sponsor leaf, sign `default` (commits all)
+    //   input 1 — seller's pre-signed SACP, inject witness as-is
+    const swapPrep = Transaction.fromPSBT(hex.decode(composed.reveal.psbt_hex));
+    const buyerLeaf = composed.reveal.commit_tap_leaf_scripts[0]!;
+    const buyerLeafScript = btcUtils.concatBytes(
+      hex.decode(buyerLeaf.script),
+      new Uint8Array([buyerLeaf.leafVersion]),
+    );
+    const buyerControlBlock = TaprootControlBlock.decode(
+      hex.decode(buyerLeaf.controlBlock),
+    );
+    swapPrep.updateInput(
+      0,
+      { tapLeafScript: [[buyerControlBlock, buyerLeafScript]] },
+      true,
+    );
+
+    const swapSigned = await account.signPsbt(swapPrep.toPSBT(), {
+      inputs: [{ index: 0 }],
     });
-    tx.addOutput({ script: priceOut.script, amount: priceOut.amount });
-    tx.addOutput({ script: opReturn, amount: 0n });
-    tx.addInput({
-      txid: opts.funding.txid,
-      index: opts.funding.vout,
-      witnessUtxo: {
-        script: hex.decode(opts.funding.scriptPubKey),
-        amount: opts.funding.value,
-      },
-      tapInternalKey: buyerXOnly,
-      // Opt-in RBF on the buyer's own input.
-      sequence: 0xfffffffd,
-    });
-    if (change >= DUST_SATS) {
-      tx.addOutput({
-        script: p2tr(buyerXOnly, undefined, chain.network).script,
-        amount: change,
+    const swapFinal = Transaction.fromPSBT(swapSigned);
+    const buyerSig = swapFinal.getInput(0).tapScriptSig?.[0]?.[1];
+    if (buyerSig == null) {
+      throw new SignerError("accept: buyer's Sponsor input was not signed", {
+        docsPath: "/sdk/offer",
       });
     }
-
-    // Sign only the buyer's funding input, `default` sighash.
-    const signed = await account.signPsbt(tx.toPSBT(), {
-      inputs: [{ index: 1 }],
+    swapFinal.updateInput(0, {
+      finalScriptWitness: [
+        buyerSig,
+        hex.decode(buyerLeaf.script),
+        hex.decode(buyerLeaf.controlBlock),
+      ],
     });
-
-    // Finalize by hand: the escrow input's witness is the seller's
-    // script-path spend; the buyer's is a plain key-path spend.
-    const finalTx = Transaction.fromPSBT(signed);
-    finalTx.updateInput(0, {
+    swapFinal.updateInput(1, {
       finalScriptWitness: [
         sellerSig,
         hex.decode(data.detachLeaf.script),
         hex.decode(data.detachLeaf.controlBlock),
       ],
     });
-    const buyerSig = finalTx.getInput(1).tapKeySig;
-    if (buyerSig == null) {
-      throw new SignerError("accept: the buyer funding input was not signed");
-    }
-    finalTx.updateInput(1, { finalScriptWitness: [buyerSig] });
 
-    const swapTxHex = hex.encode(finalTx.extract());
-    // Broadcast the attach + the swap as one package. (A buyer who knows
-    // the attach is already on chain could submit just the swap — left
-    // for the upfront-offer path.)
+    const swapTxHex = hex.encode(swapFinal.extract());
     return transport.broadcast([
       data.attachCommit,
       data.attachReveal,
+      buyerCommitHex,
       swapTxHex,
     ]);
   }
@@ -429,14 +472,19 @@ export interface SellerDetachParams {
 }
 
 /**
- * Hand-build the seller's detach PSBT — one input spending the escrow
- * (`attachReveal` output 0) via the detach leaf, one output paying the
- * seller `price` — and sign that input `single-anyonecanpay`. Returns
- * the partially-signed PSBT as hex.
+ * Hand-build the seller's detach PSBT — escrow at input 1, price-payout
+ * at output 1, with a dummy input/output filling slot 0 — and sign the
+ * escrow input `single-anyonecanpay`. Returns the partially-signed PSBT
+ * as hex.
  *
- * `SINGLE|ANYONECANPAY` commits to only this input and output 0 (the
- * payout): the seller's signature pins their payment but leaves the
- * recipient OP_RETURN, the buyer's funding input, and change open.
+ * Input 1 / output 1 (not 0) because the swap reveal the buyer
+ * assembles places its own Sponsor input at index 0; `SINGLE|ANYONECANPAY`
+ * commits the seller's signature to *this* input's index, so the
+ * escrow must be signed at the index it'll actually land at in the
+ * final tx. The dummy at slot 0 is purely structural — `SINGLE|ANYONECANPAY`
+ * doesn't hash other inputs/outputs, so the buyer can replace it with
+ * anything (the real Sponsor commit input + paired change/etc.) without
+ * invalidating the seller's signature.
  */
 export async function buildSellerDetachPsbt(
   account: Account,
@@ -467,17 +515,29 @@ export async function buildSellerDetachPsbt(
     params.network,
   ).script;
 
+  // 32-byte all-zeros txid + vout 0 — not a real outpoint, fine as a
+  // placeholder since this input is never signed and the buyer replaces
+  // it before broadcasting.
+  const dummyTxid = "0".repeat(64);
   const tx = new Transaction({ allowUnknownOutputs: true });
+  tx.addInput({
+    txid: dummyTxid,
+    index: 0,
+    witnessUtxo: { script: new Uint8Array(), amount: 0n },
+  });
   tx.addInput({
     txid: reveal.id,
     index: 0,
     witnessUtxo: { script: escrow.script, amount: escrow.amount },
     tapLeafScript: [[controlBlock, leafScript]],
   });
+  // Output 0 mirrors the dummy input — pure structural filler so output 1
+  // sits at index 1 (where the seller's SACP signature commits to it).
+  tx.addOutput({ script: opReturnScript(new Uint8Array([0])), amount: 0n });
   tx.addOutput({ script: sellerScript, amount: params.price });
 
   const signed = await account.signPsbt(tx.toPSBT(), {
-    inputs: [{ index: 0, sighash: "single-anyonecanpay" }],
+    inputs: [{ index: 1, sighash: "single-anyonecanpay" }],
   });
   return hex.encode(signed);
 }

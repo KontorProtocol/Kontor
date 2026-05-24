@@ -128,7 +128,7 @@ export class HttpTransport implements KontorTransport {
       res = await this.fetchImpl(url, {
         method: "POST",
         headers: { "content-type": "application/json", ...this.opts.headers },
-        body: JSON.stringify(body),
+        body: JSON.stringify(body, bigIntReplacer),
       });
     } catch (cause) {
       throw new TransportError(`POST ${url} failed`, {
@@ -349,6 +349,27 @@ function opWithResultToRaw(o: OpWithResult): OpResultRaw {
     inputIndex: o.op.metadata.input_index,
     opIndex: o.op.metadata.op_index,
   };
+}
+
+/**
+ * `JSON.stringify` replacer that serializes `bigint` as a plain JSON
+ * number. ts-rs maps Rust `u64` to TS `bigint` for precision, but the
+ * wire is a JSON number — bitcoind/indexer sat amounts fit comfortably
+ * inside `Number.MAX_SAFE_INTEGER` (2^53 ≈ 9e15, vs total BTC supply
+ * 2.1e15 sats), so the round-trip is lossless. Errors on values
+ * outside that range.
+ */
+function bigIntReplacer(_key: string, value: unknown): unknown {
+  if (typeof value !== "bigint") return value;
+  if (
+    value > BigInt(Number.MAX_SAFE_INTEGER) ||
+    value < BigInt(Number.MIN_SAFE_INTEGER)
+  ) {
+    throw new TypeError(
+      `cannot serialize bigint ${value} as JSON number (outside safe integer range)`,
+    );
+  }
+  return Number(value);
 }
 
 /**

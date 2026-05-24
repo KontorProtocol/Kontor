@@ -19,10 +19,15 @@ import {
   signet,
 } from "@kontor/sdk";
 
+// secp256k1 generator x-coordinate — a real on-curve x-only pubkey, so
+// the SDK's `p2tr()` derivations succeed and the test reaches the
+// transport-call site as intended.
+const STUB_XONLY =
+  "79be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798";
 const stubAccount: Account = {
-  xOnlyPubKey: "00".repeat(32),
+  xOnlyPubKey: STUB_XONLY,
   address: "tb1pstub",
-  holderRef: HolderRef.xOnlyPubkey("00".repeat(32)),
+  holderRef: HolderRef.xOnlyPubkey(STUB_XONLY),
   signMessage: () => Promise.reject(new Error("stub")),
   signPsbt: () => Promise.reject(new Error("stub")),
 };
@@ -54,7 +59,10 @@ function stubSession(): KontorSession {
     inspect: fail,
     simulate: fail,
     submit: fail,
+    utxos: fail,
+    feeRate: fail,
     compose: fail,
+    composeCommit: fail,
     composeReveal: fail,
     broadcast: fail,
   };
