@@ -5,7 +5,9 @@ use bitcoin::script::{Builder, PushBytesBuf};
 use bitcoin::taproot::TaprootBuilder;
 use bitcoin::{Address, FeeRate, KnownHrp, OutPoint, TapSighashType, TxOut};
 use bitcoin::{consensus::encode::serialize as serialize_tx, key::Secp256k1};
-use indexer::api::compose::{ComposeInputs, InstructionInputs, compose, compose_reveal};
+use indexer::api::compose::{
+    ComposeInputs, InstructionInputs, build_tap_script_and_script_address, compose, compose_reveal,
+};
 use indexer::test_utils;
 use indexer::witness_data::{TokenBalance, WitnessData};
 use indexer_types::{
@@ -185,23 +187,31 @@ pub async fn test_compose_all_fields(reg_tester: &mut RegTester) -> Result<()> {
         },
     };
 
-    let query = ComposeQuery::builder()
-        .instructions(vec![InstructionQuery {
-            address: seller_address.to_string(),
-            x_only_public_key: internal_key.to_string(),
-            funding_utxo_ids: format!("{}:{}", out_point.txid, out_point.vout),
-            insts: Insts::single(instruction.clone()),
-            chained_insts: Some(Insts::single(chained_instructions.clone())),
-        }])
+    // v2: chained leaf is declared via ChainedEnvelope output in extras.
+    let reveal = Reveal::builder()
         .sat_per_vbyte(2)
-        .envelope(600)
+        .participants(vec![
+            RevealParticipant::builder()
+                .x_only_public_key(internal_key.to_string())
+                .commit_insts(Insts::single(instruction.clone()))
+                .commit_source(CommitSource::build(&seller_address, [out_point]))
+                .build(),
+        ])
+        .extra_outputs(vec![
+            RevealOutput::chained_envelope(
+                Insts::single(chained_instructions.clone()),
+                600,
+                internal_key,
+            ),
+            RevealOutput::change(&seller_address.script_pubkey()),
+        ])
         .build();
 
-    let compose_outputs = reg_tester.compose(query).await?;
+    let compose_outputs = reg_tester.compose_v2(reveal).await?;
 
-    let mut commit_transaction = compose_outputs.commit_transaction;
+    let mut commit_transaction = compose_outputs.commits[0].transaction.clone();
 
-    let tap_script = compose_outputs.per_participant[0]
+    let tap_script = compose_outputs.reveal.participants[0]
         .commit_tap_leaf_script
         .script
         .clone();
@@ -242,14 +252,15 @@ pub async fn test_compose_all_fields(reg_tester: &mut RegTester) -> Result<()> {
         );
     }
 
-    let mut reveal_transaction = compose_outputs.reveal_transaction;
+    let mut reveal_transaction = compose_outputs.reveal.transaction.clone();
 
-    let chained_tap_script = compose_outputs.per_participant[0]
-        .chained_tap_leaf_script
-        .as_ref()
-        .unwrap()
-        .script
-        .clone();
+    // Under v2, the chained leaf isn't surfaced on the response — it's
+    // an output of the reveal. Rebuild the leaf script locally from the
+    // same Insts the ChainedEnvelope output committed to.
+    let (chained_tap_script, _, _) = build_tap_script_and_script_address(
+        internal_key,
+        serialize(&Insts::single(chained_instructions.clone()))?,
+    )?;
 
     let derived_chained_tap_script = serialize(b"Hello, World!")?;
 
@@ -346,15 +357,21 @@ pub async fn test_compose_all_fields(reg_tester: &mut RegTester) -> Result<()> {
 }
 
 pub async fn test_compose_missing_params(reg_tester: &mut RegTester) -> Result<()> {
-    let query = ComposeQuery::builder()
-        .instructions(vec![])
+    // Empty participants is rejected by compose — there's nothing to
+    // build a commit/reveal for. v2 rejects with "must have at least
+    // one participant".
+    let reveal = Reveal::builder()
         .sat_per_vbyte(2)
-        .envelope(600)
+        .participants(vec![])
         .build();
 
-    match reg_tester.compose(query).await {
+    match reg_tester.compose_v2(reveal).await {
         Ok(_) => panic!("Expected error, got success"),
-        Err(e) => assert!(e.to_string().contains("No instructions provided")),
+        Err(e) => assert!(
+            e.to_string().contains("at least one input"),
+            "expected 'at least one input' error, got: {}",
+            e
+        ),
     }
     Ok(())
 }
