@@ -136,20 +136,23 @@ pub fn compose_reveal(reveal: Reveal) -> Result<RevealOutputs> {
         extras_cursor += 1;
     }
 
-    // Validate Change positions: any Change in the layout must be at the
-    // last position. Anywhere else, dust would force a drop that shifts
-    // later outputs (breaking SACP). So we enforce "Change at end only."
-    for (slot_idx, slot) in layout.iter().enumerate() {
-        let output = match slot {
-            LayoutSlot::FromParticipant(i) => resolved[*i].output.as_ref().unwrap(),
-            LayoutSlot::FromExtra(j) => &reveal.extra_outputs[*j],
-        };
-        if matches!(output, RevealOutput::Change { .. }) && slot_idx + 1 != layout.len() {
-            return Err(anyhow!(
-                "Change output at position {} is not the last output (would force dust-shift breaking SACP); place Change last or use Fixed",
-                slot_idx
-            ));
-        }
+    // At most one Change output (no well-defined way to split the
+    // leftover across multiple).
+    let change_count = layout
+        .iter()
+        .filter(|slot| {
+            let output = match slot {
+                LayoutSlot::FromParticipant(i) => resolved[*i].output.as_ref().unwrap(),
+                LayoutSlot::FromExtra(j) => &reveal.extra_outputs[*j],
+            };
+            matches!(output, RevealOutput::Change { .. })
+        })
+        .count();
+    if change_count > 1 {
+        return Err(anyhow!(
+            "at most one Change output allowed (got {})",
+            change_count
+        ));
     }
 
     // Pre-compute output script + value (Change values are resolved last).
@@ -311,8 +314,7 @@ pub fn compose_reveal(reveal: Reveal) -> Result<RevealOutputs> {
         .ok_or_else(|| anyhow!("fee calculation overflow"))?
         .to_sat();
 
-    // Resolve Change values. There's at most one Change (validated by the
-    // Change-must-be-last rule, since only the last slot can be Change).
+    // Resolve Change values. At most one Change in the layout (validated above).
     let total_needed_no_change: u64 = total_fixed_value.saturating_add(fee);
     if total_input_value < total_needed_no_change {
         return Err(anyhow!(
@@ -327,10 +329,16 @@ pub fn compose_reveal(reveal: Reveal) -> Result<RevealOutputs> {
 
     // Add outputs to the PSBT and build the parallel `output_info` Vec
     // describing each output's kind (Fixed/Change/ChainedEnvelope/OpReturn).
-    // For Change: if value < dust, drop the output entirely (the
-    // leftover becomes additional fee, and no output_info entry is emitted).
+    // Change handling:
+    //   - value >= dust: always materialize, regardless of position.
+    //   - value < dust AND Change is the very last output: silently drop
+    //     to fee (no positional shift, safe for SACP).
+    //   - value < dust AND Change is anywhere else: hard error (a silent
+    //     drop would shift later outputs and break any input's
+    //     SIGHASH_SINGLE | ANYONECANPAY commitment).
     let mut output_info: Vec<RevealOutputInfo> = Vec::with_capacity(resolved_outputs.len());
-    for ro in resolved_outputs {
+    let last_idx = resolved_outputs.len().saturating_sub(1);
+    for (idx, ro) in resolved_outputs.into_iter().enumerate() {
         match ro {
             ResolvedOutputValue::Fixed { value, script } => {
                 psbt.unsigned_tx.output.push(TxOut {
@@ -353,6 +361,14 @@ pub fn compose_reveal(reveal: Reveal) -> Result<RevealOutputs> {
                 output_info.push(RevealOutputInfo::ChainedEnvelope { tap_leaf_script });
             }
             ResolvedOutputValue::Change { script } => {
+                if change_value < MIN_ENVELOPE_SATS && idx != last_idx {
+                    return Err(anyhow!(
+                        "Change at position {} would be sub-dust ({} sats < {} dust floor); silently dropping would shift later outputs and break SACP — place Change last, raise input value, or use Fixed",
+                        idx,
+                        change_value,
+                        MIN_ENVELOPE_SATS
+                    ));
+                }
                 if change_value >= MIN_ENVELOPE_SATS {
                     psbt.unsigned_tx.output.push(TxOut {
                         value: Amount::from_sat(change_value),
@@ -361,7 +377,7 @@ pub fn compose_reveal(reveal: Reveal) -> Result<RevealOutputs> {
                     psbt.outputs.push(bitcoin::psbt::Output::default());
                     output_info.push(RevealOutputInfo::Change);
                 }
-                // else: drop the Change output; dust becomes additional fee
+                // else: sub-dust Change at the last position — silent drop to fee.
             }
             ResolvedOutputValue::OpReturn { script } => {
                 psbt.unsigned_tx.output.push(TxOut {
