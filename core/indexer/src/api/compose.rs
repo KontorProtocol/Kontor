@@ -1083,10 +1083,21 @@ pub fn estimate_participant_commit_fees(
         temp_tx.input.push(txin);
     }
 
-    // Add change output. The script output (the Build's tap output) is
-    // already present in `base_tx` — `compose_commit` builds the commit
-    // PSBT with that output pre-placed before calling here, so the only
-    // marginal output to account for is the change.
+    // Re-add a placeholder for the tap output that's already in
+    // `base_tx`. This is NOT double-counting: the delta is
+    // `temp_vb − base_vb`, which would otherwise subtract the tap
+    // output's vbytes (they sit in base_vb), leaving the fee short
+    // by ~34 vbytes per Build. The placeholder restores those bytes
+    // in temp_vb so the subtraction nets out and the participant
+    // pays for their own tap output. Empty `base_tx` callers (the
+    // unit tests) end up counting an extra 34 vbytes, but they
+    // assert the delta range, not exact values.
+    temp_tx.output.push(TxOut {
+        value: Amount::ZERO,
+        script_pubkey: ScriptBuf::from_bytes(vec![0u8; P2TR_OUTPUT_SIZE]),
+    });
+
+    // Add change output
     temp_tx.output.push(TxOut {
         value: Amount::ZERO,
         script_pubkey: ScriptBuf::from_bytes(vec![0u8; P2TR_OUTPUT_SIZE]),
