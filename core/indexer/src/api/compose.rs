@@ -108,7 +108,7 @@ pub fn compose_reveal(reveal: Reveal) -> Result<RevealOutputs> {
     // with `estimate_reveal_vbytes` so the commit's sizing reflects the
     // same outputs the reveal will actually emit — script construction
     // lives in `plan_resolved_outputs` only, never duplicated.
-    let resolved_outputs = plan_resolved_outputs(&reveal)?;
+    let resolved_outputs = plan_resolved_outputs(&reveal, &layout)?;
 
     // Total input value (used to resolve Change later)
     let total_input_value: u64 = resolved
@@ -458,11 +458,16 @@ enum ResolvedOutputValue {
 }
 
 /// Resolve every output in `reveal` into its final shape, in layout
-/// order. See `ResolvedOutputValue` for why this lives in one place.
-fn plan_resolved_outputs(reveal: &Reveal) -> Result<Vec<ResolvedOutputValue>> {
-    let layout = compute_output_layout(reveal)?;
+/// order. Takes the precomputed `layout` (rather than computing it
+/// internally) so callers that also need the raw layout for other
+/// checks don't pay the cost twice. See `ResolvedOutputValue` for
+/// why this lives in one place.
+fn plan_resolved_outputs(
+    reveal: &Reveal,
+    layout: &[LayoutSlot],
+) -> Result<Vec<ResolvedOutputValue>> {
     let mut resolved_outputs = Vec::with_capacity(layout.len());
-    for slot in &layout {
+    for slot in layout {
         let output = match slot {
             LayoutSlot::FromParticipant(i) => reveal.participants[*i]
                 .output
@@ -578,7 +583,8 @@ fn estimate_reveal_vbytes(reveal: &Reveal) -> Result<u64> {
     // Outputs — defer to the shared resolver that compose_reveal also
     // uses, so per-variant script construction lives in one place and
     // sizing matches the reveal's actual output set.
-    let plan = plan_resolved_outputs(reveal)?;
+    let layout = compute_output_layout(reveal)?;
+    let plan = plan_resolved_outputs(reveal, &layout)?;
     for output in &plan {
         push_resolved_output_to_dummy(&mut dummy, output);
     }
