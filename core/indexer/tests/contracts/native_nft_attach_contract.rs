@@ -123,12 +123,11 @@ async fn test_native_nft_attach_contract() -> Result<()> {
         ])
         .build();
 
-    let compose_outputs = rt.compose_v2(reveal).await?;
+    let compose_outputs = rt.compose(reveal).await?;
 
     let mut commit_transaction = compose_outputs.commits[0].transaction.clone();
     let mut reveal_transaction = compose_outputs.reveal.transaction.clone();
-    let tap_script = compose_outputs.reveal.participants[0]
-        .commit_tap_leaf_script
+    let tap_script = compose_outputs.reveal.commit_tap_leaf_scripts[0]
         .script
         .clone();
     // The chained leaf lives in the reveal's output_info: position 0 of
@@ -192,7 +191,7 @@ async fn test_native_nft_attach_contract() -> Result<()> {
         ])
         .build();
 
-    let detach_outputs = rt.compose_reveal_v2(detach_reveal).await?;
+    let detach_outputs = rt.compose_reveal(detach_reveal).await?;
     let mut detach_transaction = detach_outputs.transaction;
 
     assert_eq!(detach_transaction.input.len(), 1);

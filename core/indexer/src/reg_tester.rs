@@ -40,8 +40,8 @@ use bitcoin::{
     transaction::Version,
 };
 use indexer_types::{
-    ComposeOutputs, ComposeQuery, Info, Inst, InstKind, Insts, OpWithResult,
-    ResultRow, RevealOutputs, RevealQuery, TransactionHex, ViewResult,
+    Info, Inst, InstKind, Insts, OpWithResult, ResultRow, RevealOutputs, TransactionHex,
+    ViewResult,
 };
 use tempfile::TempDir;
 use tokio::{
@@ -322,6 +322,13 @@ pub struct SendInstructionResult {
     pub reveal_tx_hex: String,
 }
 
+pub struct ComposeInstsResult {
+    pub commit_transaction: Transaction,
+    pub reveal_transaction: Transaction,
+    pub commit_tx_hex: String,
+    pub reveal_tx_hex: String,
+}
+
 pub struct InstructionResult {
     pub result: ResultRow,
     pub commit_tx_hex: String,
@@ -385,7 +392,7 @@ impl RegTesterInner {
         &mut self,
         ident: &mut Identity,
         inst: Inst,
-    ) -> Result<(ComposeOutputs, String, String)> {
+    ) -> Result<ComposeInstsResult> {
         self.compose_insts(ident, Insts::single(inst)).await
     }
 
@@ -393,7 +400,7 @@ impl RegTesterInner {
         &mut self,
         ident: &mut Identity,
         insts: Insts,
-    ) -> Result<(ComposeOutputs, String, String)> {
+    ) -> Result<ComposeInstsResult> {
         // Build a Reveal describing the simple commit+reveal pattern:
         // one participant (this identity) building a commit, with the
         // reveal having a single Change output back to the participant's
@@ -416,7 +423,7 @@ impl RegTesterInner {
             extra_inputs: vec![],
             extra_outputs: vec![],
         };
-        let compose_outputs = self.kontor_client.compose_v2(reveal).await?;
+        let compose_outputs = self.kontor_client.compose(reveal).await?;
 
         // The single Build participant produces one commit tx.
         let mut commit_transaction = compose_outputs.commits[0].transaction.clone();
@@ -431,7 +438,7 @@ impl RegTesterInner {
             0,
             None,
         )?;
-        let tap_script = &compose_outputs.reveal.participants[0].commit_tap_leaf_script.script;
+        let tap_script = &compose_outputs.reveal.commit_tap_leaf_scripts[0].script;
         let taproot_spend_info = TaprootBuilder::new()
             .add_leaf(0, tap_script.clone())
             .map_err(|e| anyhow!("Failed to add leaf: {}", e))?
@@ -453,19 +460,12 @@ impl RegTesterInner {
         self.mempool_accept(&[commit_tx_hex.clone(), reveal_tx_hex.clone()])
             .await?;
 
-        // Reconstruct a ComposeOutputs for the existing return signature so
-        // call sites don't change. (Cleanup will replace this signature
-        // with one that returns ComposeV2Response directly.)
-        let compose_res = ComposeOutputs::builder()
-            .commit_transaction(commit_transaction.clone())
-            .commit_transaction_hex(hex::encode(serialize_tx(&commit_transaction)))
-            .commit_psbt_hex(compose_outputs.commits[0].psbt_hex.clone())
-            .reveal_transaction(reveal_transaction.clone())
-            .reveal_transaction_hex(hex::encode(serialize_tx(&reveal_transaction)))
-            .reveal_psbt_hex(compose_outputs.reveal.psbt_hex.clone())
-            .per_participant(compose_outputs.reveal.participants.clone())
-            .build();
-        Ok((compose_res, commit_tx_hex, reveal_tx_hex))
+        Ok(ComposeInstsResult {
+            commit_transaction,
+            reveal_transaction,
+            commit_tx_hex,
+            reveal_tx_hex,
+        })
     }
 
     /// Compose, sign, and send an instruction to the mempool without mining.
@@ -483,29 +483,24 @@ impl RegTesterInner {
         ident: &mut Identity,
         insts: Insts,
     ) -> Result<SendInstructionResult> {
-        let (compose_res, commit_tx_hex, reveal_tx_hex) = self.compose_insts(ident, insts).await?;
-        let reveal_txid = compose_res.reveal_transaction.compute_txid();
+        let composed = self.compose_insts(ident, insts).await?;
+        let reveal_txid = composed.reveal_transaction.compute_txid();
         let txids = self
-            .send_to_mempool(&[commit_tx_hex.clone(), reveal_tx_hex.clone()])
+            .send_to_mempool(&[composed.commit_tx_hex.clone(), composed.reveal_tx_hex.clone()])
             .await?;
 
         ident.next_funding_utxo = (
             OutPoint {
                 txid: txids[0],
-                vout: (compose_res.commit_transaction.output.len() - 1) as u32,
+                vout: (composed.commit_transaction.output.len() - 1) as u32,
             },
-            compose_res
-                .commit_transaction
-                .output
-                .last()
-                .unwrap()
-                .clone(),
+            composed.commit_transaction.output.last().unwrap().clone(),
         );
 
         Ok(SendInstructionResult {
             reveal_txid,
-            commit_tx_hex,
-            reveal_tx_hex,
+            commit_tx_hex: composed.commit_tx_hex,
+            reveal_tx_hex: composed.reveal_tx_hex,
         })
     }
 
@@ -700,39 +695,26 @@ impl RegTester {
             .await
     }
 
-    pub async fn compose(&self, query: ComposeQuery) -> Result<ComposeOutputs> {
-        self.inner.lock().await.kontor_client.compose(query).await
+    pub async fn compose(
+        &self,
+        reveal: indexer_types::Reveal,
+    ) -> Result<crate::api::handlers::ComposeOutputs> {
+        self.inner.lock().await.kontor_client.compose(reveal).await
     }
 
-    pub async fn compose_reveal(&self, query: RevealQuery) -> Result<RevealOutputs> {
+    pub async fn compose_commit(
+        &self,
+        reveal: indexer_types::Reveal,
+    ) -> Result<indexer_types::CommitOutputs> {
         self.inner
             .lock()
             .await
             .kontor_client
-            .compose_reveal(query)
+            .compose_commit(reveal)
             .await
     }
 
-    pub async fn compose_v2(
-        &self,
-        reveal: indexer_types::Reveal,
-    ) -> Result<crate::api::handlers::ComposeV2Response> {
-        self.inner.lock().await.kontor_client.compose_v2(reveal).await
-    }
-
-    pub async fn compose_commit_v2(
-        &self,
-        reveal: indexer_types::Reveal,
-    ) -> Result<indexer_types::CommitOutputsV2> {
-        self.inner
-            .lock()
-            .await
-            .kontor_client
-            .compose_commit_v2(reveal)
-            .await
-    }
-
-    pub async fn compose_reveal_v2(
+    pub async fn compose_reveal(
         &self,
         reveal: indexer_types::Reveal,
     ) -> Result<RevealOutputs> {
@@ -740,7 +722,7 @@ impl RegTester {
             .lock()
             .await
             .kontor_client
-            .compose_reveal_v2(reveal)
+            .compose_reveal(reveal)
             .await
     }
 
@@ -748,7 +730,7 @@ impl RegTester {
         &mut self,
         ident: &mut Identity,
         inst: Inst,
-    ) -> Result<(ComposeOutputs, String, String)> {
+    ) -> Result<ComposeInstsResult> {
         self.inner
             .lock()
             .await
@@ -760,7 +742,7 @@ impl RegTester {
         &mut self,
         ident: &mut Identity,
         insts: Insts,
-    ) -> Result<(ComposeOutputs, String, String)> {
+    ) -> Result<ComposeInstsResult> {
         self.inner.lock().await.compose_insts(ident, insts).await
     }
 

@@ -16,7 +16,7 @@ async fn simulate_success_has_no_error_message() -> Result<()> {
 
     let mut rt = runtime.reg_tester().unwrap();
     let mut ident = rt.identity().await?;
-    let (_, _, reveal_tx_hex) = rt
+    let ComposeInstsResult { reveal_tx_hex, .. } = rt
         .compose_instruction(
             &mut ident,
             Inst {
@@ -58,7 +58,7 @@ async fn simulate_parse_error_surfaces_message() -> Result<()> {
 
     let mut rt = runtime.reg_tester().unwrap();
     let mut ident = rt.identity().await?;
-    let (_, _, reveal_tx_hex) = rt
+    let ComposeInstsResult { reveal_tx_hex, .. } = rt
         .compose_instruction(
             &mut ident,
             Inst {
@@ -103,7 +103,7 @@ async fn simulate_contract_not_found_surfaces_message() -> Result<()> {
         height: 0,
         tx_index: 0,
     };
-    let (_, _, reveal_tx_hex) = rt
+    let ComposeInstsResult { reveal_tx_hex, .. } = rt
         .compose_instruction(
             &mut ident,
             Inst {
@@ -144,7 +144,7 @@ async fn simulate_mixed_outcomes_align_positionally() -> Result<()> {
     let mut rt = runtime.reg_tester().unwrap();
     let mut ident = rt.identity().await?;
     // 3 ops: op 0 succeeds, op 1 is malformed (parse error), op 2 succeeds.
-    let (_, _, reveal_tx_hex) = rt
+    let ComposeInstsResult { reveal_tx_hex, .. } = rt
         .compose_insts(
             &mut ident,
             Insts::direct(vec![

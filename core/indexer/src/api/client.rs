@@ -1,8 +1,7 @@
 use anyhow::{Result, anyhow};
 use indexer_types::{
-    CommitOutputsV2, ComposeOutputs, ComposeQuery, ContractResponse, ErrorResponse, Info,
-    OpWithResult, Reveal, ResultResponse, ResultRow, RevealOutputs, RevealQuery, SignerResponse,
-    TransactionHex, TransactionRow, ViewExpr, ViewResult,
+    CommitOutputs, ContractResponse, ErrorResponse, Info, OpWithResult, Reveal, ResultResponse,
+    ResultRow, RevealOutputs, SignerResponse, TransactionHex, TransactionRow, ViewExpr, ViewResult,
 };
 use reqwest::{Client as HttpClient, ClientBuilder, Response, StatusCode};
 use serde::{Deserialize, Serialize};
@@ -66,59 +65,32 @@ impl Client {
         .await
     }
 
-    pub async fn compose(&self, query: ComposeQuery) -> Result<ComposeOutputs> {
+    pub async fn compose(&self, reveal: Reveal) -> Result<crate::api::handlers::ComposeOutputs> {
         Self::handle_response(
             self.client
                 .post(format!("{}/transactions/compose", &self.url))
-                .json(&query)
+                .json(&reveal)
                 .send()
                 .await?,
         )
         .await
     }
 
-    pub async fn compose_reveal(&self, query: RevealQuery) -> Result<RevealOutputs> {
+    pub async fn compose_commit(&self, reveal: Reveal) -> Result<CommitOutputs> {
+        Self::handle_response(
+            self.client
+                .post(format!("{}/transactions/compose/commit", &self.url))
+                .json(&reveal)
+                .send()
+                .await?,
+        )
+        .await
+    }
+
+    pub async fn compose_reveal(&self, reveal: Reveal) -> Result<RevealOutputs> {
         Self::handle_response(
             self.client
                 .post(format!("{}/transactions/compose/reveal", &self.url))
-                .json(&query)
-                .send()
-                .await?,
-        )
-        .await
-    }
-
-    // ─── v2: Reveal-centric compose API ─────────────────────────────────
-
-    pub async fn compose_v2(
-        &self,
-        reveal: Reveal,
-    ) -> Result<crate::api::handlers::ComposeV2Response> {
-        Self::handle_response(
-            self.client
-                .post(format!("{}/transactions/compose/v2", &self.url))
-                .json(&reveal)
-                .send()
-                .await?,
-        )
-        .await
-    }
-
-    pub async fn compose_commit_v2(&self, reveal: Reveal) -> Result<CommitOutputsV2> {
-        Self::handle_response(
-            self.client
-                .post(format!("{}/transactions/compose/commit/v2", &self.url))
-                .json(&reveal)
-                .send()
-                .await?,
-        )
-        .await
-    }
-
-    pub async fn compose_reveal_v2(&self, reveal: Reveal) -> Result<RevealOutputs> {
-        Self::handle_response(
-            self.client
-                .post(format!("{}/transactions/compose/reveal/v2", &self.url))
                 .json(&reveal)
                 .send()
                 .await?,

@@ -863,11 +863,11 @@ pub async fn test_compose_reveal_op_return_size_validation(
             .build()
     };
 
-    let ok = reg_tester.compose_reveal_v2(make_reveal(vec![1u8; 80])).await;
+    let ok = reg_tester.compose_reveal(make_reveal(vec![1u8; 80])).await;
     assert!(ok.is_ok(), "80-byte OP_RETURN payload should be accepted");
 
     let err = reg_tester
-        .compose_reveal_v2(make_reveal(vec![2u8; 81]))
+        .compose_reveal(make_reveal(vec![2u8; 81]))
         .await;
     assert!(err.is_err(), "81-byte OP_RETURN payload should be rejected");
     let msg = err.err().unwrap().to_string();

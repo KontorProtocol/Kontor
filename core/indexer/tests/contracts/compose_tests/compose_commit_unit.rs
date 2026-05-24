@@ -31,7 +31,7 @@ pub async fn test_compose_commit_psbt_inputs_have_metadata(
         ])
         .build();
 
-    let commit_outputs = reg_tester.compose_commit_v2(reveal).await?;
+    let commit_outputs = reg_tester.compose_commit(reveal).await?;
     let commit = &commit_outputs.commits[0];
     let psbt_bytes = hex::decode(&commit.psbt_hex).expect("hex decode");
     let psbt = bitcoin::psbt::Psbt::deserialize(&psbt_bytes).expect("psbt decode");

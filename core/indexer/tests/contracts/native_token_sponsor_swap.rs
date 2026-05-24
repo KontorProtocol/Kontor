@@ -85,12 +85,11 @@ async fn test_native_token_sponsor_swap() -> Result<()> {
         ])
         .build();
 
-    let seller_compose = rt.compose_v2(seller_reveal).await?;
+    let seller_compose = rt.compose(seller_reveal).await?;
 
     let mut seller_commit_tx = seller_compose.commits[0].transaction.clone();
     let mut seller_attach_reveal_tx = seller_compose.reveal.transaction.clone();
-    let seller_attach_leaf = seller_compose.reveal.participants[0]
-        .commit_tap_leaf_script
+    let seller_attach_leaf = seller_compose.reveal.commit_tap_leaf_scripts[0]
         .script
         .clone();
     let RevealOutputInfo::ChainedEnvelope { tap_leaf_script } =
@@ -185,11 +184,10 @@ async fn test_native_token_sponsor_swap() -> Result<()> {
                 .build(),
         ])
         .build();
-    let buyer_compose = rt.compose_v2(buyer_reveal).await?;
+    let buyer_compose = rt.compose(buyer_reveal).await?;
 
     let mut buyer_commit_tx = buyer_compose.commits[0].transaction.clone();
-    let buyer_sponsor_leaf = buyer_compose.reveal.participants[0]
-        .commit_tap_leaf_script
+    let buyer_sponsor_leaf = buyer_compose.reveal.commit_tap_leaf_scripts[0]
         .script
         .clone();
 
@@ -256,7 +254,7 @@ async fn test_native_token_sponsor_swap() -> Result<()> {
                 .build(),
         ])
         .build();
-    let swap_outputs = rt.compose_reveal_v2(swap_reveal).await?;
+    let swap_outputs = rt.compose_reveal(swap_reveal).await?;
     let mut swap_tx = swap_outputs.transaction;
     assert_eq!(swap_tx.input.len(), 2, "swap tx must have 2 inputs");
 

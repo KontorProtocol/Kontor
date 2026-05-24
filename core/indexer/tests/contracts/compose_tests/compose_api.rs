@@ -53,12 +53,11 @@ pub async fn test_compose(reg_tester: &mut RegTester) -> Result<()> {
         ])
         .build();
 
-    let compose_outputs = reg_tester.compose_v2(reveal).await?;
+    let compose_outputs = reg_tester.compose(reveal).await?;
 
     let mut commit_transaction = compose_outputs.commits[0].transaction.clone();
 
-    let tap_script = compose_outputs.reveal.participants[0]
-        .commit_tap_leaf_script
+    let tap_script = compose_outputs.reveal.commit_tap_leaf_scripts[0]
         .script
         .clone();
 
@@ -203,12 +202,11 @@ pub async fn test_compose_all_fields(reg_tester: &mut RegTester) -> Result<()> {
         ])
         .build();
 
-    let compose_outputs = reg_tester.compose_v2(reveal).await?;
+    let compose_outputs = reg_tester.compose(reveal).await?;
 
     let mut commit_transaction = compose_outputs.commits[0].transaction.clone();
 
-    let tap_script = compose_outputs.reveal.participants[0]
-        .commit_tap_leaf_script
+    let tap_script = compose_outputs.reveal.commit_tap_leaf_scripts[0]
         .script
         .clone();
 
@@ -362,7 +360,7 @@ pub async fn test_compose_missing_params(reg_tester: &mut RegTester) -> Result<(
         .participants(vec![])
         .build();
 
-    match reg_tester.compose_v2(reveal).await {
+    match reg_tester.compose(reveal).await {
         Ok(_) => panic!("Expected error, got success"),
         Err(e) => assert!(
             e.to_string().contains("at least one input"),
@@ -416,7 +414,7 @@ pub async fn test_compose_duplicate_address_and_duplicate_utxo(
         ])
         .build();
 
-    match reg_tester.compose_v2(reveal_cross).await {
+    match reg_tester.compose(reveal_cross).await {
         Ok(_) => panic!("Expected error, got success"),
         Err(e) => assert!(
             e.to_string()
@@ -437,7 +435,7 @@ pub async fn test_compose_duplicate_address_and_duplicate_utxo(
         ])
         .build();
 
-    match reg_tester.compose_v2(reveal_within).await {
+    match reg_tester.compose(reveal_within).await {
         Ok(_) => panic!("Expected error, got success"),
         Err(e) => assert!(
             e.to_string()
@@ -474,7 +472,7 @@ pub async fn test_compose_param_bounds_and_fee_rate(reg_tester: &mut RegTester) 
         ])
         .build();
 
-    match reg_tester.compose_v2(reveal).await {
+    match reg_tester.compose(reveal).await {
         Ok(_) => panic!("Expected error, got success"),
         Err(e) => assert!(
             e.to_string()
@@ -514,7 +512,7 @@ pub async fn test_compose_param_bounds_and_fee_rate(reg_tester: &mut RegTester) 
         )])
         .build();
 
-    match reg_tester.compose_v2(reveal2).await {
+    match reg_tester.compose(reveal2).await {
         Ok(_) => panic!("Expected error, got success"),
         Err(e) => assert!(
             e.to_string()
@@ -541,7 +539,7 @@ pub async fn test_compose_param_bounds_and_fee_rate(reg_tester: &mut RegTester) 
                 .build(),
         ])
         .build();
-    match reg_tester.compose_v2(reveal3).await {
+    match reg_tester.compose(reveal3).await {
         Ok(_) => panic!("Expected error, got success"),
         Err(e) => assert!(e.to_string().contains("Invalid fee rate"), "got: {e}"),
     }
@@ -581,12 +579,11 @@ pub async fn test_reveal_with_op_return_mempool_accept(reg_tester: &mut RegTeste
         ])
         .build();
 
-    let compose_outputs = reg_tester.compose_v2(reveal).await?;
+    let compose_outputs = reg_tester.compose(reveal).await?;
 
     let mut commit_tx = compose_outputs.commits[0].transaction.clone();
     let mut reveal_tx_signed = compose_outputs.reveal.transaction.clone();
-    let tap_script = compose_outputs.reveal.participants[0]
-        .commit_tap_leaf_script
+    let tap_script = compose_outputs.reveal.commit_tap_leaf_scripts[0]
         .script
         .clone();
 
@@ -673,7 +670,7 @@ pub async fn test_compose_nonexistent_utxo(reg_tester: &mut RegTester) -> Result
         ])
         .build();
 
-    match reg_tester.compose_v2(reveal).await {
+    match reg_tester.compose(reveal).await {
         Ok(_) => panic!("Expected error, got success"),
         Err(e) => assert!(
             e.to_string()
@@ -723,7 +720,7 @@ pub async fn test_compose_invalid_address(reg_tester: &mut RegTester) -> Result<
         ])
         .build();
 
-    match reg_tester.compose_v2(reveal).await {
+    match reg_tester.compose(reveal).await {
         Ok(_) => panic!("Expected error, got success"),
         Err(e) => assert!(
             e.to_string()
@@ -774,7 +771,7 @@ pub async fn test_compose_insufficient_funds(reg_tester: &mut RegTester) -> Resu
         )])
         .build();
 
-    match reg_tester.compose_v2(reveal).await {
+    match reg_tester.compose(reveal).await {
         Ok(_) => panic!("Expected error, got success"),
         Err(e) => assert!(e.to_string().contains("Insufficient"), "got: {e}"),
     }

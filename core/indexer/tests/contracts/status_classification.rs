@@ -25,7 +25,7 @@ async fn simulate_call(
     contract: indexer_types::ContractAddress,
     expr: &str,
 ) -> Result<Vec<indexer_types::OpWithResult>> {
-    let (_, _, reveal_tx_hex) = rt
+    let ComposeInstsResult { reveal_tx_hex, .. } = rt
         .compose_instruction(
             ident,
             Inst {

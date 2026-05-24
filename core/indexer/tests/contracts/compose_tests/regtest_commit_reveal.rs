@@ -44,12 +44,11 @@ pub async fn test_taproot_transaction_regtest(reg_tester: &mut RegTester) -> Res
         ])
         .build();
 
-    let compose_outputs = reg_tester.compose_v2(reveal).await?;
+    let compose_outputs = reg_tester.compose(reveal).await?;
 
     let mut attach_tx = compose_outputs.commits[0].transaction.clone();
     let mut spend_tx = compose_outputs.reveal.transaction.clone();
-    let tap_script = compose_outputs.reveal.participants[0]
-        .commit_tap_leaf_script
+    let tap_script = compose_outputs.reveal.commit_tap_leaf_scripts[0]
         .script
         .clone();
 

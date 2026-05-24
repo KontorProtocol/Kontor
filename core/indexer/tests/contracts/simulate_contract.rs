@@ -12,7 +12,7 @@ async fn test_crypto_contract_simulate() -> Result<()> {
 
     let mut rt = runtime.reg_tester().unwrap();
     let mut ident = rt.identity().await?;
-    let (_, _, reveal_tx_hex) = rt
+    let ComposeInstsResult { reveal_tx_hex, .. } = rt
         .compose_instruction(
             &mut ident,
             Inst {

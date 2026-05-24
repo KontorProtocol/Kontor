@@ -2,7 +2,7 @@ extern crate alloc;
 
 use anyhow::Result;
 use bitcoin::hex::DisplayHex;
-use bitcoin::{BlockHash, FeeRate, ScriptBuf, TxOut, Txid, XOnlyPublicKey, taproot::LeafVersion};
+use bitcoin::{BlockHash, ScriptBuf, Txid, XOnlyPublicKey, taproot::LeafVersion};
 use bon::Builder;
 use macros::{contract_address, holder_ref};
 use serde::{Deserialize, Serialize};
@@ -10,18 +10,8 @@ use serde_with::{DisplayFromStr, serde_as};
 use ts_rs::TS;
 pub use wit_bindgen;
 
-#[derive(Serialize, Deserialize, Clone, Builder, TS)]
-#[ts(export, export_to = "../../../sdk/src/bindings.d.ts")]
-pub struct InstructionQuery {
-    pub address: String,
-    pub x_only_public_key: String,
-    pub funding_utxo_ids: String,
-    pub insts: Insts,
-    pub chained_insts: Option<Insts>,
-}
-
 // ────────────────────────────────────────────────────────────────────
-// New Reveal-centric compose API
+// Reveal-centric compose API
 //
 // `Reveal` is the universal input: it describes a Kontor reveal
 // transaction — its participants (tap-leaf script-spend inputs), any
@@ -217,21 +207,9 @@ pub struct CommitTx {
 /// the returned `reveal` to `compose_reveal` to build the reveal PSBT.
 #[derive(Serialize, Deserialize, Builder, Clone, TS)]
 #[ts(export, export_to = "../../../sdk/src/bindings.d.ts")]
-pub struct CommitOutputsV2 {
+pub struct CommitOutputs {
     pub commits: Vec<CommitTx>,
     pub reveal: Reveal,
-}
-
-#[derive(Serialize, Deserialize, Builder, TS)]
-#[ts(export, export_to = "../../../sdk/src/bindings.d.ts")]
-pub struct ComposeQuery {
-    pub instructions: Vec<InstructionQuery>,
-    /// Optional: when omitted, the server falls back to its currently
-    /// published `fastest_fee` (sat/vB) from `/api/fees`.
-    #[ts(type = "number | null")]
-    pub sat_per_vbyte: Option<u64>,
-    #[ts(type = "number | null")]
-    pub envelope: Option<u64>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, TS)]
@@ -247,112 +225,12 @@ pub struct TapLeafScript {
     pub control_block: ScriptBuf,
 }
 
-#[derive(Debug, Serialize, Deserialize, Clone, TS)]
-#[ts(export, export_to = "../../../sdk/src/bindings.d.ts")]
-pub struct ParticipantScripts {
-    pub address: String,
-    pub x_only_public_key: String,
-    pub commit_tap_leaf_script: TapLeafScript,
-    pub chained_tap_leaf_script: Option<TapLeafScript>,
-}
-
-#[derive(Debug, Serialize, Deserialize, Builder, TS)]
-#[ts(export, export_to = "../../../sdk/src/bindings.d.ts")]
-pub struct ComposeOutputs {
-    #[ts(as = "String")]
-    pub commit_transaction: bitcoin::Transaction,
-    pub commit_transaction_hex: String,
-    pub commit_psbt_hex: String,
-    #[ts(as = "String")]
-    pub reveal_transaction: bitcoin::Transaction,
-    pub reveal_transaction_hex: String,
-    pub reveal_psbt_hex: String,
-    pub per_participant: Vec<ParticipantScripts>,
-}
-
-#[derive(Builder, Serialize, Clone, TS)]
-#[ts(export, export_to = "../../../sdk/src/bindings.d.ts")]
-pub struct CommitOutputs {
-    #[ts(as = "String")]
-    pub commit_transaction: bitcoin::Transaction,
-    pub commit_transaction_hex: String,
-    pub commit_psbt_hex: String,
-    pub reveal_inputs: RevealInputs,
-}
-
-/// One participant in a reveal: the outpoint they will script-spend in
-/// the reveal tx, the prevout of that outpoint, and the leaf-script data
-/// committed in its tap tree.
-///
-/// `commit_*` here refers to the *tap-tree commitment* — the leaf script
-/// that was committed to the spent output's tap tree — not the
-/// commit-reveal pattern. The spent tx may itself be a commit tx (the
-/// usual case) or a prior reveal tx whose output carried a chained leaf
-/// (e.g. the seller's attach reveal whose output 0 carries the detach
-/// leaf, then script-spent again in a swap).
-///
-/// Each participant supplies its own `commit_outpoint`/`commit_prevout`,
-/// so a single reveal can spend from multiple unrelated prior txs
-/// (e.g. a swap that spends both a buyer's Sponsor commit and a seller's
-/// attach reveal).
-#[derive(Serialize, Deserialize, Clone, Builder, TS)]
-#[ts(export, export_to = "../../../sdk/src/bindings.d.ts")]
-pub struct RevealParticipantQuery {
-    pub address: String,
-    pub x_only_public_key: String,
-    #[ts(as = "String")]
-    pub commit_outpoint: bitcoin::OutPoint,
-    #[ts(as = "TxOutSchema")]
-    pub commit_prevout: bitcoin::TxOut,
-    pub commit_script_data: Vec<u8>,
-    pub chained_instruction: Option<Vec<u8>>,
-}
-
-#[derive(Serialize, Deserialize, TS, Clone, Builder)]
-#[ts(export, export_to = "../../../sdk/src/bindings.d.ts")]
-pub struct RevealQuery {
-    /// Optional: when omitted, the server falls back to its currently
-    /// published `fastest_fee` (sat/vB) from `/api/fees`.
-    #[ts(type = "number | null")]
-    pub sat_per_vbyte: Option<u64>,
-    pub participants: Vec<RevealParticipantQuery>,
-    pub op_return_data: Option<Vec<u8>>,
-    #[ts(type = "number | null")]
-    pub envelope: Option<u64>,
-}
-
 #[derive(Serialize, Deserialize, TS)]
 #[ts(export, export_to = "../../../sdk/src/bindings.d.ts")]
 pub struct TxOutSchema {
     #[ts(type = "number")]
     pub value: u64,
     pub script_pubkey: String,
-}
-
-#[derive(Clone, Serialize, Builder, TS)]
-#[ts(export, export_to = "../../../sdk/src/bindings.d.ts")]
-pub struct RevealParticipantInputs {
-    #[ts(as = "String")]
-    pub address: bitcoin::Address,
-    #[ts(as = "String")]
-    pub x_only_public_key: XOnlyPublicKey,
-    #[ts(as = "String")]
-    pub commit_outpoint: bitcoin::OutPoint,
-    #[ts(as = "TxOutSchema")]
-    pub commit_prevout: TxOut,
-    pub commit_tap_leaf_script: TapLeafScript,
-    pub chained_instruction: Option<Vec<u8>>,
-}
-
-#[derive(Builder, Serialize, Clone, TS)]
-#[ts(export, export_to = "../../../sdk/src/bindings.d.ts")]
-pub struct RevealInputs {
-    #[ts(type = "number")]
-    pub fee_rate: FeeRate,
-    pub participants: Vec<RevealParticipantInputs>,
-    pub op_return_data: Option<Vec<u8>>,
-    #[ts(type = "number")]
-    pub envelope: u64,
 }
 
 #[derive(Builder, Serialize, Deserialize, TS)]
@@ -362,15 +240,16 @@ pub struct RevealOutputs {
     pub transaction: bitcoin::Transaction,
     pub transaction_hex: String,
     pub psbt_hex: String,
-    pub participants: Vec<ParticipantScripts>,
+    /// Per-participant tap leaf script + control block, parallel to the
+    /// reveal tx's inputs. Callers need these to assemble the script-path
+    /// witness when signing their input.
+    pub commit_tap_leaf_scripts: Vec<TapLeafScript>,
     /// Per-output kind + any extra info, in tx output order (same
     /// length as `transaction.output`). Mirrors the input `RevealOutput`
     /// enum and surfaces info derivable from compose-time state but not
     /// from the tx alone — notably the tap leaf script + control block
     /// for `ChainedEnvelope` outputs, which the caller needs to
-    /// script-spend that output in a follow-up tx. v1's compose_reveal
-    /// leaves this empty.
-    #[builder(default)]
+    /// script-spend that output in a follow-up tx.
     pub output_info: Vec<RevealOutputInfo>,
 }
 
