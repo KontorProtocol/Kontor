@@ -35,6 +35,9 @@ pub fn compose_reveal(reveal: Reveal) -> Result<RevealOutputs> {
     if reveal.participants.is_empty() && reveal.extra_inputs.is_empty() {
         return Err(anyhow!("Reveal must have at least one input"));
     }
+    if reveal.participants.len() > MAX_PARTICIPANTS {
+        return Err(anyhow!("Too many participants (max {})", MAX_PARTICIPANTS));
+    }
 
     let sat_per_vbyte = reveal
         .sat_per_vbyte
