@@ -478,8 +478,7 @@ pub async fn test_compose_param_bounds_and_fee_rate(reg_tester: &mut RegTester) 
     match reg_tester.compose(reveal).await {
         Ok(_) => panic!("Expected error, got success"),
         Err(e) => assert!(
-            e.to_string()
-                .contains("Build participant leaf data size invalid"),
+            e.to_string().contains("leaf script data size invalid"),
             "got: {e}"
         ),
     }

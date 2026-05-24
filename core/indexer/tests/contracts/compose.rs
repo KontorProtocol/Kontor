@@ -20,45 +20,7 @@ use compose_tests::compose_helpers::{
     test_build_tap_script_and_script_address_empty_data_errs,
     test_build_tap_script_and_script_address_multi_push_and_structure,
     test_build_tap_script_chunk_boundaries_push_count,
-    test_calculate_op_return_fee_for_participant_deterministic,
-    test_calculate_op_return_fee_for_participant_exact_division,
-    test_calculate_op_return_fee_for_participant_fee_rate_scaling,
-    test_calculate_op_return_fee_for_participant_high_fee_rate,
-    test_calculate_op_return_fee_for_participant_large_participant_count,
-    test_calculate_op_return_fee_for_participant_many_participants_exact_sum,
-    test_calculate_op_return_fee_for_participant_minimum_fee_rate,
-    test_calculate_op_return_fee_for_participant_no_op_return,
-    test_calculate_op_return_fee_for_participant_seven_participants_exact_coverage,
-    test_calculate_op_return_fee_for_participant_single_participant,
-    test_calculate_op_return_fee_for_participant_small_payload_scales_down,
-    test_calculate_op_return_fee_for_participant_three_participants_split,
-    test_calculate_op_return_fee_for_participant_two_participants_exact,
-    test_calculate_op_return_fee_for_participant_vsize_matches_serialized_output,
-    test_calculate_op_return_fee_for_participant_zero_participants,
-    test_calculate_reveal_fee_delta_chained_adds_output_fee,
-    test_calculate_reveal_fee_delta_deterministic,
-    test_calculate_reveal_fee_delta_envelope_does_not_affect_fee,
-    test_calculate_reveal_fee_delta_fee_rate_scaling,
-    test_calculate_reveal_fee_delta_high_fee_rate,
-    test_calculate_reveal_fee_delta_larger_control_block_higher_fee,
-    test_calculate_reveal_fee_delta_larger_script_higher_fee,
-    test_calculate_reveal_fee_delta_minimum_fee_rate,
-    test_calculate_reveal_fee_delta_modifies_dummy_tx,
-    test_calculate_reveal_fee_delta_multiple_participants_sequential,
-    test_calculate_reveal_fee_delta_single_participant_no_chained,
-    test_calculate_reveal_fee_delta_single_participant_with_chained,
-    test_calculate_reveal_fee_delta_very_large_script,
-    test_calculate_reveal_fee_delta_with_real_tap_script,
-    test_calculate_reveal_fee_delta_witness_structure,
-    test_compose_reveal_op_return_size_validation, test_estimate_key_spend_fee_deterministic,
-    test_estimate_key_spend_fee_does_not_modify_original_tx, test_estimate_key_spend_fee_empty_tx,
-    test_estimate_key_spend_fee_fee_rate_scaling, test_estimate_key_spend_fee_high_fee_rate,
-    test_estimate_key_spend_fee_many_inputs, test_estimate_key_spend_fee_minimum_fee_rate,
-    test_estimate_key_spend_fee_more_outputs_higher_fee,
-    test_estimate_key_spend_fee_multiple_inputs_scales_linearly,
-    test_estimate_key_spend_fee_overwrites_existing_witness,
-    test_estimate_key_spend_fee_signature_size_is_64_bytes,
-    test_estimate_key_spend_fee_single_input, test_estimate_key_spend_fee_with_real_commit_tx,
+    test_compose_reveal_op_return_size_validation,
     test_estimate_participant_commit_fees_change_output_difference,
     test_estimate_participant_commit_fees_deterministic,
     test_estimate_participant_commit_fees_does_not_modify_base_tx,
@@ -154,21 +116,6 @@ async fn test_compose_regtest() -> Result<()> {
     test_compose_reveal_op_return_size_validation(&mut reg_tester.clone()).await?;
     test_build_tap_script_chunk_boundaries_push_count(&mut reg_tester.clone()).await?;
 
-    info!("estimate_key_spend_fee");
-    test_estimate_key_spend_fee_empty_tx();
-    test_estimate_key_spend_fee_single_input();
-    test_estimate_key_spend_fee_multiple_inputs_scales_linearly();
-    test_estimate_key_spend_fee_fee_rate_scaling();
-    test_estimate_key_spend_fee_more_outputs_higher_fee();
-    test_estimate_key_spend_fee_deterministic();
-    test_estimate_key_spend_fee_overwrites_existing_witness();
-    test_estimate_key_spend_fee_does_not_modify_original_tx();
-    test_estimate_key_spend_fee_minimum_fee_rate();
-    test_estimate_key_spend_fee_high_fee_rate();
-    test_estimate_key_spend_fee_many_inputs();
-    test_estimate_key_spend_fee_signature_size_is_64_bytes();
-    test_estimate_key_spend_fee_with_real_commit_tx(&mut reg_tester.clone()).await?;
-
     info!("estimate_participant_commit_fees");
     test_estimate_participant_commit_fees_empty_utxos();
     test_estimate_participant_commit_fees_single_utxo();
@@ -204,40 +151,6 @@ async fn test_compose_regtest() -> Result<()> {
     test_select_utxos_for_commit_insufficient_with_fees();
     test_select_utxos_for_commit_edge_case_change_equals_envelope();
     test_select_utxos_for_commit_with_real_utxo(&mut reg_tester.clone()).await?;
-
-    info!("calculate_reveal_fee_delta");
-    test_calculate_reveal_fee_delta_single_participant_no_chained();
-    test_calculate_reveal_fee_delta_single_participant_with_chained();
-    test_calculate_reveal_fee_delta_chained_adds_output_fee();
-    test_calculate_reveal_fee_delta_fee_rate_scaling();
-    test_calculate_reveal_fee_delta_larger_script_higher_fee();
-    test_calculate_reveal_fee_delta_larger_control_block_higher_fee();
-    test_calculate_reveal_fee_delta_envelope_does_not_affect_fee();
-    test_calculate_reveal_fee_delta_modifies_dummy_tx();
-    test_calculate_reveal_fee_delta_multiple_participants_sequential();
-    test_calculate_reveal_fee_delta_deterministic();
-    test_calculate_reveal_fee_delta_minimum_fee_rate();
-    test_calculate_reveal_fee_delta_high_fee_rate();
-    test_calculate_reveal_fee_delta_very_large_script();
-    test_calculate_reveal_fee_delta_witness_structure();
-    test_calculate_reveal_fee_delta_with_real_tap_script(&mut reg_tester.clone()).await?;
-
-    info!("calculate_op_return_fee_for_participant");
-    test_calculate_op_return_fee_for_participant_no_op_return();
-    test_calculate_op_return_fee_for_participant_zero_participants();
-    test_calculate_op_return_fee_for_participant_single_participant();
-    test_calculate_op_return_fee_for_participant_two_participants_exact();
-    test_calculate_op_return_fee_for_participant_three_participants_split();
-    test_calculate_op_return_fee_for_participant_many_participants_exact_sum();
-    test_calculate_op_return_fee_for_participant_fee_rate_scaling();
-    test_calculate_op_return_fee_for_participant_deterministic();
-    test_calculate_op_return_fee_for_participant_seven_participants_exact_coverage();
-    test_calculate_op_return_fee_for_participant_minimum_fee_rate();
-    test_calculate_op_return_fee_for_participant_high_fee_rate();
-    test_calculate_op_return_fee_for_participant_vsize_matches_serialized_output();
-    test_calculate_op_return_fee_for_participant_small_payload_scales_down();
-    test_calculate_op_return_fee_for_participant_large_participant_count();
-    test_calculate_op_return_fee_for_participant_exact_division();
 
     info!("legacy_taproot_envelope");
     test_legacy_taproot_envelope_psbt_inscription(&mut reg_tester.clone()).await?;

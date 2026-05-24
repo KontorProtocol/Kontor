@@ -2,7 +2,7 @@ use anyhow::{Result, anyhow};
 use bitcoin::{
     Address, AddressType, Amount, FeeRate, KnownHrp, OutPoint, Psbt, ScriptBuf, TxOut, Witness,
     absolute::LockTime,
-    consensus::encode::{self, serialize as serialize_tx},
+    consensus::encode::serialize as serialize_tx,
     opcodes::{
         OP_0, OP_FALSE,
         all::{OP_CHECKSIG, OP_ENDIF, OP_IF, OP_RETURN},
@@ -16,7 +16,8 @@ use bitcoin::{
 use bitcoin::Txid;
 use bitcoin::key::constants::SCHNORR_SIGNATURE_SIZE;
 use indexer_types::{
-    CommitSource, Reveal, RevealOutput, RevealOutputInfo, RevealOutputs, TapLeafScript, serialize,
+    CommitSource, Reveal, RevealOutput, RevealOutputInfo, RevealOutputs, RevealParticipant,
+    TapLeafScript, serialize,
 };
 use std::{collections::HashSet, str::FromStr};
 
@@ -48,42 +49,23 @@ pub fn compose_reveal(reveal: Reveal) -> Result<RevealOutputs> {
     let fee_rate =
         FeeRate::from_sat_per_vb(sat_per_vbyte).ok_or_else(|| anyhow!("Invalid fee rate"))?;
 
-    // All participants must be Existing for compose_reveal — Build is only
-    // valid in compose_commit / compose.
-    for (i, p) in reveal.participants.iter().enumerate() {
-        if !matches!(p.commit_source, CommitSource::Existing { .. }) {
-            return Err(anyhow!(
-                "compose_reveal: participant {} has CommitSource::Build; use compose() or compose_commit() to build commits",
-                i
-            ));
-        }
-    }
-
-    // Resolve each participant's per-input bits: the leaf script, control
-    // block, x-only key, outpoint, prevout. Validate the leaf-script data
-    // (serialized Insts) is non-empty + within size limits.
-    struct ResolvedParticipant {
-        x_only_public_key: XOnlyPublicKey,
-        outpoint: OutPoint,
-        prevout: TxOut,
-        tap_leaf_script: TapLeafScript,
-        output: Option<RevealOutput>,
-    }
+    // Resolve each participant's per-input bits: leaf script, control
+    // block, x-only key, outpoint, prevout. All participants must be
+    // Existing here — Build is only valid in compose_commit / compose.
+    // Validation lives in `participant_tap_data`.
     let mut resolved: Vec<ResolvedParticipant> = Vec::with_capacity(reveal.participants.len());
     for (i, p) in reveal.participants.iter().enumerate() {
         let (outpoint, prevout) = match &p.commit_source {
             CommitSource::Existing { outpoint, prevout } => (*outpoint, prevout.clone()),
-            CommitSource::Build { .. } => unreachable!(),
+            CommitSource::Build { .. } => {
+                return Err(anyhow!(
+                    "compose_reveal: participant {} has CommitSource::Build; use compose() or compose_commit() to build commits",
+                    i
+                ));
+            }
         };
-        let x_only_public_key = XOnlyPublicKey::from_str(&p.x_only_public_key)
-            .map_err(|e| anyhow!("participant {}: invalid x_only_public_key: {}", i, e))?;
-        let insts_bytes = serialize(&p.commit_insts)
-            .map_err(|e| anyhow!("participant {}: failed to serialize insts: {}", i, e))?;
-        if insts_bytes.is_empty() || insts_bytes.len() > MAX_SCRIPT_BYTES {
-            return Err(anyhow!("participant {}: leaf script data size invalid", i));
-        }
-        let (script, _, control_block) =
-            build_tap_script_and_script_address(x_only_public_key, insts_bytes)?;
+        let (x_only_public_key, script, control_block) =
+            participant_tap_data(p).map_err(|e| anyhow!("participant {}: {}", i, e))?;
         resolved.push(ResolvedParticipant {
             x_only_public_key,
             outpoint,
@@ -122,83 +104,11 @@ pub fn compose_reveal(reveal: Reveal) -> Result<RevealOutputs> {
         ));
     }
 
-    // Pre-compute output script + value (Change values are resolved last).
-    // ChainedEnvelope also carries its tap leaf script (built from the
-    // committed insts + internal key) — the SDK needs this to script-spend
-    // the chained output in a follow-up tx, and we surface it via
-    // `RevealOutputs.output_info`.
-    enum ResolvedOutputValue {
-        Fixed {
-            script: ScriptBuf,
-            value: u64,
-        },
-        Change {
-            script: ScriptBuf,
-        },
-        ChainedEnvelope {
-            script: ScriptBuf,
-            value: u64,
-            tap_leaf_script: TapLeafScript,
-        },
-        OpReturn {
-            script: ScriptBuf,
-        },
-    }
-    let mut resolved_outputs: Vec<ResolvedOutputValue> = Vec::with_capacity(layout.len());
-    for slot in &layout {
-        let output = match slot {
-            LayoutSlot::FromParticipant(i) => resolved[*i].output.as_ref().unwrap().clone(),
-            LayoutSlot::FromExtra(j) => reveal.extra_outputs[*j].clone(),
-        };
-        let resolved = match output {
-            RevealOutput::Fixed {
-                script_pubkey,
-                value,
-            } => {
-                let script = parse_hex_script(&script_pubkey)?;
-                ResolvedOutputValue::Fixed { script, value }
-            }
-            RevealOutput::Change { script_pubkey } => {
-                let script = parse_hex_script(&script_pubkey)?;
-                ResolvedOutputValue::Change { script }
-            }
-            RevealOutput::ChainedEnvelope {
-                insts,
-                value,
-                internal_key,
-            } => {
-                let internal_pk = XOnlyPublicKey::from_str(&internal_key)?;
-                let insts_bytes = serialize(&insts)?;
-                if insts_bytes.is_empty() || insts_bytes.len() > MAX_SCRIPT_BYTES {
-                    return Err(anyhow!("ChainedEnvelope leaf data size invalid"));
-                }
-                let (script, addr, control_block) =
-                    build_tap_script_and_script_address(internal_pk, insts_bytes)?;
-                ResolvedOutputValue::ChainedEnvelope {
-                    script: addr.script_pubkey(),
-                    value,
-                    tap_leaf_script: TapLeafScript {
-                        leaf_version: LeafVersion::TapScript,
-                        script,
-                        control_block: ScriptBuf::from_bytes(control_block.serialize()),
-                    },
-                }
-            }
-            RevealOutput::OpReturn { data } => {
-                if data.len() > MAX_OP_RETURN_BYTES {
-                    return Err(anyhow!(
-                        "OP_RETURN data exceeds {} bytes",
-                        MAX_OP_RETURN_BYTES
-                    ));
-                }
-                let mut s = ScriptBuf::new();
-                s.push_opcode(OP_RETURN);
-                s.push_slice(PushBytesBuf::try_from(data)?);
-                ResolvedOutputValue::OpReturn { script: s }
-            }
-        };
-        resolved_outputs.push(resolved);
-    }
+    // Resolve every output's script + value in layout order. Shared
+    // with `estimate_reveal_vbytes` so the commit's sizing reflects the
+    // same outputs the reveal will actually emit — script construction
+    // lives in `plan_resolved_outputs` only, never duplicated.
+    let resolved_outputs = plan_resolved_outputs(&reveal)?;
 
     // Total input value (used to resolve Change later)
     let total_input_value: u64 = resolved
@@ -213,15 +123,8 @@ pub fn compose_reveal(reveal: Reveal) -> Result<RevealOutputs> {
                 .sum::<u64>(),
         );
 
-    // Sum of non-Change output values (Fixed + ChainedEnvelope + OpReturn[0])
-    let total_fixed_value: u64 = resolved_outputs
-        .iter()
-        .map(|o| match o {
-            ResolvedOutputValue::Fixed { value, .. } => *value,
-            ResolvedOutputValue::ChainedEnvelope { value, .. } => *value,
-            ResolvedOutputValue::Change { .. } | ResolvedOutputValue::OpReturn { .. } => 0,
-        })
-        .sum();
+    // Sum of non-Change output values (Fixed + ChainedEnvelope + OpReturn[0]).
+    let total_fixed_value = total_fixed_output_value(&reveal);
 
     // Build PSBT inputs (participants first, then extra_inputs)
     let mut psbt = Psbt::from_unsigned_tx(Transaction {
@@ -258,32 +161,17 @@ pub fn compose_reveal(reveal: Reveal) -> Result<RevealOutputs> {
     // (sig + script + control block); extras are key-path (sig only).
     let mut dummy_tx = psbt.unsigned_tx.clone();
     for (i, rp) in resolved.iter().enumerate() {
-        let mut w = Witness::new();
-        w.push(vec![0u8; SCHNORR_SIGNATURE_SIZE]);
-        w.push(rp.tap_leaf_script.script.as_bytes());
-        w.push(rp.tap_leaf_script.control_block.as_bytes());
-        dummy_tx.input[i].witness = w;
+        dummy_tx.input[i].witness = placeholder_tap_script_witness(
+            rp.tap_leaf_script.script.as_bytes(),
+            rp.tap_leaf_script.control_block.as_bytes(),
+        );
     }
     for i in 0..reveal.extra_inputs.len() {
         let idx = resolved.len() + i;
-        let mut w = Witness::new();
-        w.push(vec![0u8; SCHNORR_SIGNATURE_SIZE]);
-        dummy_tx.input[idx].witness = w;
+        dummy_tx.input[idx].witness = placeholder_key_spend_witness();
     }
-    for ro in &resolved_outputs {
-        let (value, script) = match ro {
-            ResolvedOutputValue::Fixed { value, script } => (*value, script.clone()),
-            ResolvedOutputValue::ChainedEnvelope { value, script, .. } => (*value, script.clone()),
-            ResolvedOutputValue::Change { script } => {
-                // Placeholder value for sizing; resolved next.
-                (0, script.clone())
-            }
-            ResolvedOutputValue::OpReturn { script } => (0, script.clone()),
-        };
-        dummy_tx.output.push(TxOut {
-            value: Amount::from_sat(value),
-            script_pubkey: script,
-        });
+    for output in &resolved_outputs {
+        push_resolved_output_to_dummy(&mut dummy_tx, output);
     }
     let tx_vsize = dummy_tx.vsize() as u64;
     let fee = fee_rate
@@ -417,6 +305,82 @@ fn parse_hex_script(hex_str: &str) -> Result<ScriptBuf> {
     Ok(ScriptBuf::from_bytes(bytes))
 }
 
+/// A `RevealParticipant` resolved to the data both `compose_reveal`
+/// (real PSBT build) and the dummy-tx sizing path need: parsed key,
+/// the outpoint/prevout pulled out of `CommitSource::Existing`, the
+/// tap leaf script + control block, and the participant's paired
+/// output (if any). All compose_reveal participants are Existing —
+/// `participant_tap_data` does the parsing + size validation.
+struct ResolvedParticipant {
+    x_only_public_key: XOnlyPublicKey,
+    outpoint: OutPoint,
+    prevout: TxOut,
+    tap_leaf_script: TapLeafScript,
+    output: Option<RevealOutput>,
+}
+
+/// Parse + size-validate a participant's tap-leaf data. Returns the
+/// parsed x-only key, the leaf script, and its control block — the
+/// inputs both `compose_reveal` (for real PSBT inputs + witness
+/// placeholders) and `estimate_reveal_vbytes` (for witness
+/// placeholders only) need. Single source of truth, so adding a new
+/// per-participant validation can't silently miss either path.
+fn participant_tap_data(
+    p: &RevealParticipant,
+) -> Result<(XOnlyPublicKey, ScriptBuf, ControlBlock)> {
+    let x_only_pk = XOnlyPublicKey::from_str(&p.x_only_public_key)
+        .map_err(|e| anyhow!("invalid x_only_public_key: {}", e))?;
+    let insts_bytes =
+        serialize(&p.commit_insts).map_err(|e| anyhow!("failed to serialize insts: {}", e))?;
+    if insts_bytes.is_empty() || insts_bytes.len() > MAX_SCRIPT_BYTES {
+        return Err(anyhow!("leaf script data size invalid"));
+    }
+    let (script, _, control_block) = build_tap_script_and_script_address(x_only_pk, insts_bytes)?;
+    Ok((x_only_pk, script, control_block))
+}
+
+/// Placeholder witness for a tap-leaf script-spend input — 64-byte
+/// Schnorr signature + leaf script + control block. Used for vbyte
+/// sizing only; the real witness is built at signing time.
+fn placeholder_tap_script_witness(script_bytes: &[u8], control_block_bytes: &[u8]) -> Witness {
+    let mut w = Witness::new();
+    w.push(vec![0u8; SCHNORR_SIGNATURE_SIZE]);
+    w.push(script_bytes);
+    w.push(control_block_bytes);
+    w
+}
+
+/// Placeholder witness for a key-path (BIP-86) spend — single 64-byte
+/// Schnorr signature.
+fn placeholder_key_spend_witness() -> Witness {
+    let mut w = Witness::new();
+    w.push(vec![0u8; SCHNORR_SIGNATURE_SIZE]);
+    w
+}
+
+/// Sum of every non-Change, non-OpReturn output value in `reveal` —
+/// the part of the tx's output sum that's caller-fixed (Fixed +
+/// ChainedEnvelope). Change is computed by the indexer; OpReturn
+/// carries 0 sats. Shared between `compose_reveal` (resolving the
+/// `change_value = inputs − fixed − fee` equation) and
+/// `compose_commit` (sizing the Build tap output that covers the
+/// reveal's fixed outputs + fee).
+fn total_fixed_output_value(reveal: &Reveal) -> u64 {
+    let value_of = |o: &RevealOutput| -> u64 {
+        match o {
+            RevealOutput::Fixed { value, .. } => *value,
+            RevealOutput::ChainedEnvelope { value, .. } => *value,
+            RevealOutput::Change { .. } | RevealOutput::OpReturn { .. } => 0,
+        }
+    };
+    reveal
+        .participants
+        .iter()
+        .filter_map(|p| p.output.as_ref().map(value_of))
+        .sum::<u64>()
+        .saturating_add(reveal.extra_outputs.iter().map(value_of).sum::<u64>())
+}
+
 /// Where each tx output comes from — pinned to a participant's paired
 /// `output` (placed at that participant's input index for SACP
 /// alignment) or pulled from `extra_outputs` (filling a participant
@@ -467,56 +431,116 @@ fn compute_output_layout(reveal: &Reveal) -> Result<Vec<LayoutSlot>> {
     Ok(layout)
 }
 
-/// Append a `RevealOutput` to a dummy reveal tx for vbyte estimation.
-/// Uses real values for Fixed/ChainedEnvelope and placeholder 0 for
-/// Change/OpReturn (which still adds the correct vsize contribution).
-fn add_output_to_dummy(dummy: &mut Transaction, output: &RevealOutput) -> Result<()> {
-    match output {
-        RevealOutput::Fixed {
-            value,
-            script_pubkey,
-        } => {
-            dummy.output.push(TxOut {
-                value: Amount::from_sat(*value),
-                script_pubkey: parse_hex_script(script_pubkey)?,
-            });
-        }
-        RevealOutput::Change { script_pubkey } => {
-            dummy.output.push(TxOut {
-                value: Amount::from_sat(0),
-                script_pubkey: parse_hex_script(script_pubkey)?,
-            });
-        }
-        RevealOutput::ChainedEnvelope {
-            insts,
-            value,
-            internal_key,
-        } => {
-            let internal_pk = XOnlyPublicKey::from_str(internal_key)?;
-            let insts_bytes = serialize(insts)?;
-            let (_, addr, _) = build_tap_script_and_script_address(internal_pk, insts_bytes)?;
-            dummy.output.push(TxOut {
-                value: Amount::from_sat(*value),
-                script_pubkey: addr.script_pubkey(),
-            });
-        }
-        RevealOutput::OpReturn { data } => {
-            if data.len() > MAX_OP_RETURN_BYTES {
-                return Err(anyhow!(
-                    "OP_RETURN data exceeds {} bytes",
-                    MAX_OP_RETURN_BYTES
-                ));
+/// Each output slot resolved to its final script + value, with all
+/// script construction (hex-parsing, tap-tree building, OP_RETURN
+/// wrapping) and per-variant size validation done up front. `Change`
+/// carries no value — that's resolved by the caller once the total
+/// fee is known. Single source of truth shared by `compose_reveal`
+/// (the real build) and `estimate_reveal_vbytes` (the commit's
+/// sizing dummy) so adding a new `RevealOutput` variant or tweaking
+/// script shape can't silently desync the two paths.
+enum ResolvedOutputValue {
+    Fixed {
+        script: ScriptBuf,
+        value: u64,
+    },
+    Change {
+        script: ScriptBuf,
+    },
+    ChainedEnvelope {
+        script: ScriptBuf,
+        value: u64,
+        tap_leaf_script: TapLeafScript,
+    },
+    OpReturn {
+        script: ScriptBuf,
+    },
+}
+
+/// Resolve every output in `reveal` into its final shape, in layout
+/// order. See `ResolvedOutputValue` for why this lives in one place.
+fn plan_resolved_outputs(reveal: &Reveal) -> Result<Vec<ResolvedOutputValue>> {
+    let layout = compute_output_layout(reveal)?;
+    let mut resolved_outputs = Vec::with_capacity(layout.len());
+    for slot in &layout {
+        let output = match slot {
+            LayoutSlot::FromParticipant(i) => reveal.participants[*i]
+                .output
+                .as_ref()
+                .expect("participant slot has Some output"),
+            LayoutSlot::FromExtra(j) => &reveal.extra_outputs[*j],
+        };
+        let resolved = match output {
+            RevealOutput::Fixed {
+                script_pubkey,
+                value,
+            } => {
+                let script = parse_hex_script(script_pubkey)?;
+                ResolvedOutputValue::Fixed {
+                    script,
+                    value: *value,
+                }
             }
-            let mut s = ScriptBuf::new();
-            s.push_opcode(OP_RETURN);
-            s.push_slice(PushBytesBuf::try_from(data.clone())?);
-            dummy.output.push(TxOut {
-                value: Amount::from_sat(0),
-                script_pubkey: s,
-            });
-        }
+            RevealOutput::Change { script_pubkey } => {
+                let script = parse_hex_script(script_pubkey)?;
+                ResolvedOutputValue::Change { script }
+            }
+            RevealOutput::ChainedEnvelope {
+                insts,
+                value,
+                internal_key,
+            } => {
+                let internal_pk = XOnlyPublicKey::from_str(internal_key)?;
+                let insts_bytes = serialize(insts)?;
+                if insts_bytes.is_empty() || insts_bytes.len() > MAX_SCRIPT_BYTES {
+                    return Err(anyhow!("ChainedEnvelope leaf data size invalid"));
+                }
+                let (script, addr, control_block) =
+                    build_tap_script_and_script_address(internal_pk, insts_bytes)?;
+                ResolvedOutputValue::ChainedEnvelope {
+                    script: addr.script_pubkey(),
+                    value: *value,
+                    tap_leaf_script: TapLeafScript {
+                        leaf_version: LeafVersion::TapScript,
+                        script,
+                        control_block: ScriptBuf::from_bytes(control_block.serialize()),
+                    },
+                }
+            }
+            RevealOutput::OpReturn { data } => {
+                if data.len() > MAX_OP_RETURN_BYTES {
+                    return Err(anyhow!(
+                        "OP_RETURN data exceeds {} bytes",
+                        MAX_OP_RETURN_BYTES
+                    ));
+                }
+                let mut s = ScriptBuf::new();
+                s.push_opcode(OP_RETURN);
+                s.push_slice(PushBytesBuf::try_from(data.clone())?);
+                ResolvedOutputValue::OpReturn { script: s }
+            }
+        };
+        resolved_outputs.push(resolved);
     }
-    Ok(())
+    Ok(resolved_outputs)
+}
+
+/// Push the dummy `TxOut` for a resolved output onto a vbytes-sizing
+/// transaction. `Change` and `OpReturn` use 0 sats as the placeholder
+/// value (vsize doesn't depend on it); `Fixed`/`ChainedEnvelope` use
+/// their declared value (also irrelevant for vsize, but cheap to be
+/// consistent).
+fn push_resolved_output_to_dummy(dummy: &mut Transaction, output: &ResolvedOutputValue) {
+    let (value, script) = match output {
+        ResolvedOutputValue::Fixed { value, script } => (*value, script.clone()),
+        ResolvedOutputValue::Change { script } => (0, script.clone()),
+        ResolvedOutputValue::ChainedEnvelope { value, script, .. } => (*value, script.clone()),
+        ResolvedOutputValue::OpReturn { script } => (0, script.clone()),
+    };
+    dummy.output.push(TxOut {
+        value: Amount::from_sat(value),
+        script_pubkey: script,
+    });
 }
 
 /// Estimate the vbytes of the reveal tx built from `reveal`. Builds a
@@ -534,45 +558,34 @@ fn estimate_reveal_vbytes(reveal: &Reveal) -> Result<u64> {
 
     // Participants — tap-leaf script-spend inputs
     for p in &reveal.participants {
-        let x_only_pk = XOnlyPublicKey::from_str(&p.x_only_public_key)?;
-        let insts_bytes = serialize(&p.commit_insts)?;
-        let (script, _, control_block) =
-            build_tap_script_and_script_address(x_only_pk, insts_bytes)?;
-        let mut txin = TxIn::default();
-        let mut w = Witness::new();
-        w.push(vec![0u8; SCHNORR_SIGNATURE_SIZE]);
-        w.push(script.as_bytes());
-        w.push(control_block.serialize());
-        txin.witness = w;
+        let (_, script, control_block) = participant_tap_data(p)?;
+        let txin = TxIn {
+            witness: placeholder_tap_script_witness(script.as_bytes(), &control_block.serialize()),
+            ..Default::default()
+        };
         dummy.input.push(txin);
     }
 
     // Extra inputs — key-path spends
     for _ in &reveal.extra_inputs {
-        let mut txin = TxIn::default();
-        let mut w = Witness::new();
-        w.push(vec![0u8; SCHNORR_SIGNATURE_SIZE]);
-        txin.witness = w;
+        let txin = TxIn {
+            witness: placeholder_key_spend_witness(),
+            ..Default::default()
+        };
         dummy.input.push(txin);
     }
 
-    // Outputs — defer to the shared layout helper that `compose_reveal`
-    // also uses, so sizing here matches the actual reveal exactly.
-    let layout = compute_output_layout(reveal)?;
-    for slot in &layout {
-        let out = match slot {
-            LayoutSlot::FromParticipant(i) => reveal.participants[*i]
-                .output
-                .as_ref()
-                .expect("participant slot has Some output"),
-            LayoutSlot::FromExtra(j) => &reveal.extra_outputs[*j],
-        };
-        add_output_to_dummy(&mut dummy, out)?;
+    // Outputs — defer to the shared resolver that compose_reveal also
+    // uses, so per-variant script construction lives in one place and
+    // sizing matches the reveal's actual output set.
+    let plan = plan_resolved_outputs(reveal)?;
+    for output in &plan {
+        push_resolved_output_to_dummy(&mut dummy, output);
     }
     // Mirror compose_reveal's fallback OP_RETURN for an all-Nones/no-extras
     // layout — otherwise the commit's tap output gets sized too small and
     // compose_reveal later errors with "insufficient input value".
-    if layout.is_empty() {
+    if plan.is_empty() {
         dummy.output.push(TxOut {
             value: Amount::from_sat(0),
             script_pubkey: empty_op_return_script(),
@@ -582,13 +595,21 @@ fn estimate_reveal_vbytes(reveal: &Reveal) -> Result<u64> {
     Ok(dummy.vsize() as u64)
 }
 
-/// `OP_RETURN <empty>` — a minimal standard `nulldata` output used as
-/// a structural-validity filler when a reveal would otherwise have zero
-/// outputs (Bitcoin rejects 0-output txs). Carries no Kontor semantics.
+/// `OP_RETURN <4 zero bytes>` — a minimal standard `nulldata` output
+/// used as a structural-validity filler when a reveal would otherwise
+/// have zero outputs (Bitcoin rejects 0-output txs). Carries no Kontor
+/// semantics.
+///
+/// The 4-byte payload is sized to clear Bitcoin's
+/// `MIN_STANDARD_TX_NONWITNESS_SIZE = 65` floor. A 1-input/1-output tx's
+/// base (witness-stripped) size is `60 + scriptPubKey_len`; an empty
+/// OP_RETURN script (`6a 00`) gives 62 bytes total and would be rejected
+/// as `tx-size-small`. 4 bytes pushes the script to 6 bytes and the tx
+/// to 66 bytes — one byte of margin past the floor.
 fn empty_op_return_script() -> ScriptBuf {
     let mut s = ScriptBuf::new();
     s.push_opcode(OP_RETURN);
-    s.push_slice(b"");
+    s.push_slice(b"\0\0\0\0");
     s
 }
 
@@ -668,26 +689,8 @@ pub async fn compose_commit(
         .ok_or_else(|| anyhow!("reveal fee overflow"))?
         .to_sat();
 
-    // Sum non-Change output values from the future reveal
-    let sum_output_values = |output: &RevealOutput| -> u64 {
-        match output {
-            RevealOutput::Fixed { value, .. } => *value,
-            RevealOutput::ChainedEnvelope { value, .. } => *value,
-            RevealOutput::Change { .. } | RevealOutput::OpReturn { .. } => 0,
-        }
-    };
-    let total_fixed_outputs: u64 = reveal
-        .participants
-        .iter()
-        .filter_map(|p| p.output.as_ref().map(sum_output_values))
-        .sum::<u64>()
-        .saturating_add(
-            reveal
-                .extra_outputs
-                .iter()
-                .map(sum_output_values)
-                .sum::<u64>(),
-        );
+    // Sum non-Change output values from the future reveal.
+    let total_fixed_outputs = total_fixed_output_value(&reveal);
 
     // Existing participants' prevouts + extra_inputs' prevouts contribute
     // value to the reveal already; Build participants must collectively
@@ -760,20 +763,23 @@ pub async fn compose_commit(
             Some(AddressType::P2tr) => {}
             _ => return Err(anyhow!("Build participant address must be P2TR")),
         }
+        // Size + parse validation already happened in
+        // `estimate_reveal_vbytes` above (via `participant_tap_data`),
+        // so by here the leaf data is known-good.
         let x_only_pk = XOnlyPublicKey::from_str(&participant.x_only_public_key)?;
         let insts_bytes = serialize(&participant.commit_insts)?;
-        if insts_bytes.is_empty() || insts_bytes.len() > MAX_SCRIPT_BYTES {
-            return Err(anyhow!("Build participant leaf data size invalid"));
-        }
         let (_, tap_addr, _) = build_tap_script_and_script_address(x_only_pk, insts_bytes)?;
 
-        let funding_utxos = get_utxos(bitcoin_client, funding_utxo_ids.join(",")).await?;
-        if funding_utxos.len() > MAX_UTXOS_PER_PARTICIPANT {
+        // Bound the funding list before the RPC — a malformed request
+        // with thousands of outpoints shouldn't trigger a bitcoind
+        // round-trip to bounce.
+        if funding_utxo_ids.len() > MAX_UTXOS_PER_PARTICIPANT {
             return Err(anyhow!(
                 "too many utxos for Build participant (max {})",
                 MAX_UTXOS_PER_PARTICIPANT
             ));
         }
+        let funding_utxos = get_utxos(bitcoin_client, funding_utxo_ids.join(",")).await?;
 
         // Build an empty commit tx with just the tap output.
         // `Psbt::from_unsigned_tx` already initializes `psbt.outputs`
@@ -794,7 +800,7 @@ pub async fn compose_commit(
         // Select UTXOs covering tap output + commit fee. For standalone
         // commits, the full empty-tx header overhead is borne by this
         // single tx (no sharing), so pass the full header fee directly.
-        let base_header_fee = calculate_base_header_fee_for_participant(0, 1, fee_rate)?;
+        let base_header_fee = empty_tx_header_fee(fee_rate)?;
         let (selected, commit_fee) = select_utxos_for_commit(
             &psbt.unsigned_tx,
             funding_utxos,
@@ -953,168 +959,30 @@ pub fn build_tap_script_and_script_address(
 // Fee Estimation
 // ============================================================================
 
-/// Distribute `total` evenly across `num_participants`, returning the
-/// share for participant `participant_index`. The first `total % N`
-/// participants pay `base + 1`; the rest pay `base`, where `base =
-/// total / N`. Summing across all indices yields `total` exactly — no
-/// over-collection (unlike a naive `div_ceil`).
-fn distribute_fee(total: u64, participant_index: usize, num_participants: usize) -> u64 {
-    if num_participants == 0 {
-        return 0;
-    }
-    let n = num_participants as u64;
-    let base = total / n;
-    let remainder = total % n;
-    base + if (participant_index as u64) < remainder {
-        1
-    } else {
-        0
-    }
-}
-
-/// Calculate this participant's share of the OP_RETURN output fee.
-///
-/// Returns 0 if no OP_RETURN data is present or no participants. The
-/// total fee is derived from the actual serialized size of the
-/// OP_RETURN output (not the policy maximum), so smaller payloads
-/// pay proportionally less. Split using `distribute_fee` so the sum
-/// across all participants exactly covers the output — no stray sats.
-pub fn calculate_op_return_fee_for_participant(
-    op_return_data: Option<&[u8]>,
-    participant_index: usize,
-    num_participants: usize,
-    fee_rate: FeeRate,
-) -> Result<u64> {
-    let Some(data) = op_return_data else {
-        return Ok(0);
-    };
-    if num_participants == 0 {
-        return Ok(0);
-    }
-    let mut script = ScriptBuf::new();
-    script.push_opcode(OP_RETURN);
-    script.push_slice(PushBytesBuf::try_from(data.to_vec())?);
-    let txout = TxOut {
-        value: Amount::ZERO,
-        script_pubkey: script,
-    };
-    // OP_RETURN is a non-witness output; its vsize contribution equals
-    // its serialized length.
-    let op_return_vsize = encode::serialize(&txout).len() as u64;
-    let total_fee = fee_rate
-        .fee_vb(op_return_vsize)
-        .ok_or(anyhow!("fee calculation overflow"))?
-        .to_sat();
-    Ok(distribute_fee(
-        total_fee,
-        participant_index,
-        num_participants,
-    ))
-}
-
-/// Calculate this participant's share of the empty-tx header overhead.
-///
-/// Per-participant delta-based fee accounting (`calculate_reveal_fee_delta`,
-/// `estimate_participant_commit_fees`) only charges each participant for
-/// the marginal vbytes they add. The base tx header (version + counts +
-/// locktime — about 11 vbytes) is never billed to anyone, so the signed
-/// tx falls below the requested fee rate. Split that overhead using
-/// `distribute_fee` so every participant pays the same effective rate
-/// and the total exactly covers the header — no over-collection.
-pub fn calculate_base_header_fee_for_participant(
-    participant_index: usize,
-    num_participants: usize,
-    fee_rate: FeeRate,
-) -> Result<u64> {
-    if num_participants == 0 {
-        return Ok(0);
-    }
+/// Fee for the empty-tx header overhead (version + tx-in/out counts +
+/// locktime — about 11 vbytes). Per-participant delta-based fee
+/// accounting (`estimate_participant_commit_fees`) only charges each
+/// participant for the marginal vbytes they add, so the header is
+/// never billed otherwise — this covers it.
+pub fn empty_tx_header_fee(fee_rate: FeeRate) -> Result<u64> {
     let empty_tx = Transaction {
         version: Version(2),
         lock_time: LockTime::ZERO,
         input: vec![],
         output: vec![],
     };
-    let header_vsize = empty_tx.vsize() as u64;
-    let total_fee = fee_rate
-        .fee_vb(header_vsize)
-        .ok_or(anyhow!("fee calculation overflow"))?
-        .to_sat();
-    Ok(distribute_fee(
-        total_fee,
-        participant_index,
-        num_participants,
-    ))
+    fee_rate
+        .fee_vb(empty_tx.vsize() as u64)
+        .ok_or(anyhow!("fee calculation overflow"))
+        .map(|a| a.to_sat())
 }
 
-/// Calculate reveal fee delta for a single participant.
-///
-/// Mutates the dummy transaction by adding the participant's input and outputs,
-/// then returns the fee based on the vsize delta.
-///
-/// This is used in the single-pass commit/reveal building loops.
-pub fn calculate_reveal_fee_delta(
-    dummy_tx: &mut Transaction,
-    tap_script: &ScriptBuf,
-    control_block_bytes: &[u8],
-    has_chained: bool,
-    fee_rate: FeeRate,
-    envelope: u64,
-) -> Result<u64> {
-    let vsize_before = dummy_tx.vsize() as u64;
-
-    // Add input with script-spend witness
-    let mut txin = TxIn::default();
-    let mut w = Witness::new();
-    w.push(vec![0u8; SCHNORR_SIGNATURE_SIZE]);
-    w.push(tap_script.as_bytes());
-    w.push(control_block_bytes);
-    txin.witness = w;
-    dummy_tx.input.push(txin);
-
-    // Add chained output if present
-    if has_chained {
-        dummy_tx.output.push(TxOut {
-            value: Amount::from_sat(envelope),
-            script_pubkey: ScriptBuf::from_bytes(vec![0u8; P2TR_OUTPUT_SIZE]),
-        });
-    }
-
-    // Add change output (assume it exists for fee calculation)
-    dummy_tx.output.push(TxOut {
-        value: Amount::from_sat(envelope),
-        script_pubkey: ScriptBuf::from_bytes(vec![0u8; P2TR_OUTPUT_SIZE]),
-    });
-
-    let vsize_after = dummy_tx.vsize() as u64;
-    let delta = vsize_after.saturating_sub(vsize_before);
-    let fee = fee_rate
-        .fee_vb(delta)
-        .ok_or(anyhow!("fee calculation overflow"))?
-        .to_sat();
-
-    Ok(fee)
-}
-
-/// Estimate fee for a tx assuming key-spend inputs (64-byte signature witnesses).
-pub fn estimate_key_spend_fee(tx: &Transaction, fee_rate: FeeRate) -> Option<u64> {
-    let mut dummy = tx.clone();
-    for inp in &mut dummy.input {
-        let mut w = Witness::new();
-        w.push(vec![0u8; SCHNORR_SIGNATURE_SIZE]);
-        inp.witness = w;
-    }
-    fee_rate.fee_vb(dummy.vsize() as u64).map(|a| a.to_sat())
-}
-
-/// Select UTXOs for a commit participant using delta-based fee accounting.
-///
-/// This function accurately calculates fees by measuring the actual vsize delta
-/// that this participant adds to the shared transaction, rather than assuming
-/// a fixed transaction structure.
-///
-/// Returns (selected_utxos, participant_fee) or errors if insufficient funds.
-/// // TODO: is this necessary???
+/// Select UTXOs to fund a Build participant's commit tx. Picks UTXOs
+/// greedily until they cover `script_spend_output_value + commit_fee +
+/// envelope (dust buffer for change)`, where `commit_fee` is sized from
+/// the actual vsize delta the selected inputs + change output would add
+/// to `current_tx`. Returns `(selected_utxos, participant_fee)` or
+/// errors with "Insufficient funds" if the pool can't cover it.
 pub fn select_utxos_for_commit(
     current_tx: &Transaction,
     utxos: Vec<(OutPoint, TxOut)>,

@@ -227,9 +227,21 @@ async fn test_native_nft_attach_contract() -> Result<()> {
         .await?;
 
     assert_eq!(result.len(), 3, "Expected three transaction results");
-    assert!(result[0].allowed, "Commit transaction was rejected");
-    assert!(result[1].allowed, "Reveal transaction was rejected");
-    assert!(result[2].allowed, "Detach transaction was rejected");
+    assert!(
+        result[0].allowed,
+        "Commit transaction was rejected: {:?}",
+        result[0].reject_reason
+    );
+    assert!(
+        result[1].allowed,
+        "Reveal transaction was rejected: {:?}",
+        result[1].reject_reason
+    );
+    assert!(
+        result[2].allowed,
+        "Detach transaction was rejected: {:?}",
+        result[2].reject_reason
+    );
 
     let bitcoin_client = rt.bitcoin_client().await;
     bitcoin_client.send_raw_transaction(&commit_tx_hex).await?;
