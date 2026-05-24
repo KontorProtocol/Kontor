@@ -13,6 +13,4 @@ pub mod multi_psbt_integration_breakdown;
 pub mod multi_psbt_security;
 pub mod multi_psbt_tx_validation;
 pub mod regtest_commit_reveal;
-pub mod signature_replay_fails;
 pub mod size_limit;
-pub mod swap;

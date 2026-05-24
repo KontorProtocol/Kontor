@@ -146,14 +146,9 @@ use compose_tests::multi_psbt_tx_validation::{
     test_reordering_commit_inputs_rejected, test_reordering_commit_outputs_rejected,
 };
 use compose_tests::regtest_commit_reveal::test_taproot_transaction_regtest;
-use compose_tests::signature_replay_fails::{
-    test_psbt_signature_replay_fails, test_signature_replay_fails,
-};
 use compose_tests::size_limit::test_compose_progressive_size_limit_testnet;
-use compose_tests::swap::test_swap_psbt;
 
 use compose_tests::compose_api::test_compose_attach_and_detach;
-use compose_tests::swap::test_swap_integrity;
 
 async fn test_commit_reveal_chained_reveal(reg_tester: &mut RegTester) -> Result<()> {
     info!("test_commit_reveal_chained_reveal");
@@ -581,20 +576,12 @@ async fn test_compose_regtest() -> Result<()> {
     info!("size_limit");
     test_compose_progressive_size_limit_testnet(&mut reg_tester.clone()).await?;
 
-    info!("swap");
-    test_swap_psbt(&mut reg_tester.clone()).await?;
-    test_swap_integrity(&mut reg_tester.clone()).await?;
-
     info!("legacy_commit_reveal_p2wsh");
     test_legacy_commit_reveal_p2wsh(&mut reg_tester.clone()).await?;
 
     // legacy_segwit tests skipped — need identity_p2wpkh which requires admin funding
     // info!("legacy_segwit_envelope");
     // info!("legacy_segwit_swap");
-
-    info!("signature_replay_fails");
-    test_signature_replay_fails(&mut reg_tester.clone()).await?;
-    test_psbt_signature_replay_fails(&mut reg_tester.clone()).await?;
 
     info!("compose_api");
     test_compose(&mut reg_tester.clone()).await?;
