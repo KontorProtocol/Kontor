@@ -1,9 +1,7 @@
 use anyhow::{Result, anyhow};
 use blst::min_sig::{AggregateSignature, SecretKey as BlsSecretKey};
 use indexer::bls::{KONTOR_BLS_DST, RegistrationProof};
-use indexer_types::{
-    AggregateInfo, AggregateSigner, Inst, InstKind, Insts, SignerRef,
-};
+use indexer_types::{AggregateInfo, AggregateSigner, Inst, InstKind, Insts, SignerRef};
 use testlib::*;
 
 #[testlib::test(contracts_dir = "../../test-contracts", regtest_only)]

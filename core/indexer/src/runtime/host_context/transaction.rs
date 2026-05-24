@@ -4,7 +4,7 @@ use wasmtime::component::{Accessor, Resource};
 use crate::runtime::Runtime;
 use crate::runtime::wit::Transaction;
 use crate::runtime::wit::kontor::built_in;
-use crate::runtime::wit::kontor::built_in::context::{SignerRef, OutPoint};
+use crate::runtime::wit::kontor::built_in::context::{OutPoint, SignerRef};
 
 impl built_in::context::HostTransaction for Runtime {}
 

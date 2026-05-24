@@ -496,20 +496,15 @@ async fn process_aggregate_input(
         // publisher offer, which it computes from `signer.sponsored` +
         // the publisher's signer_id we pass in. Capture is a no-op in
         // practice — BLS shape validation rejects Sponsor in aggregates.
-        let op = match walker.materialize(
-            input,
-            op_index,
-            signer_id,
-            Some(publisher_signer_id),
-            inst,
-        ) {
-            Ok(op) => op,
-            Err(e) => {
-                warn!("Rejected aggregate op for signer {signer_id}: {e:#}");
-                errors.push(Some(e));
-                continue;
-            }
-        };
+        let op =
+            match walker.materialize(input, op_index, signer_id, Some(publisher_signer_id), inst) {
+                Ok(op) => op,
+                Err(e) => {
+                    warn!("Rejected aggregate op for signer {signer_id}: {e:#}");
+                    errors.push(Some(e));
+                    continue;
+                }
+            };
         errors.push(execute_op(runtime, &op).await?);
     }
     Ok(errors)

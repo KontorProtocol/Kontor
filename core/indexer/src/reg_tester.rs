@@ -40,8 +40,7 @@ use bitcoin::{
     transaction::Version,
 };
 use indexer_types::{
-    Info, Inst, InstKind, Insts, OpWithResult, ResultRow, RevealOutputs, TransactionHex,
-    ViewResult,
+    Info, Inst, InstKind, Insts, OpWithResult, ResultRow, RevealOutputs, TransactionHex, ViewResult,
 };
 use tempfile::TempDir;
 use tokio::{
@@ -486,7 +485,10 @@ impl RegTesterInner {
         let composed = self.compose_insts(ident, insts).await?;
         let reveal_txid = composed.reveal_transaction.compute_txid();
         let txids = self
-            .send_to_mempool(&[composed.commit_tx_hex.clone(), composed.reveal_tx_hex.clone()])
+            .send_to_mempool(&[
+                composed.commit_tx_hex.clone(),
+                composed.reveal_tx_hex.clone(),
+            ])
             .await?;
 
         ident.next_funding_utxo = (
@@ -714,10 +716,7 @@ impl RegTester {
             .await
     }
 
-    pub async fn compose_reveal(
-        &self,
-        reveal: indexer_types::Reveal,
-    ) -> Result<RevealOutputs> {
+    pub async fn compose_reveal(&self, reveal: indexer_types::Reveal) -> Result<RevealOutputs> {
         self.inner
             .lock()
             .await
@@ -1262,10 +1261,7 @@ impl RegTesterCluster {
     /// them. Lets independent regtest tests each spend a distinct UTXO
     /// without colliding on one shared funding output. The dev
     /// identity's `next_funding_utxo` is left pointing at the first.
-    pub async fn split_dev_funding(
-        &mut self,
-        parts: usize,
-    ) -> Result<Vec<(OutPoint, TxOut)>> {
+    pub async fn split_dev_funding(&mut self, parts: usize) -> Result<Vec<(OutPoint, TxOut)>> {
         assert!(parts >= 1, "split_dev_funding: need at least one part");
         let secp = Secp256k1::new();
         let (in_point, in_txout) = self.identity.next_funding_utxo.clone();
@@ -1302,7 +1298,15 @@ impl RegTesterCluster {
             .output
             .iter()
             .enumerate()
-            .map(|(i, o)| (OutPoint { txid, vout: i as u32 }, o.clone()))
+            .map(|(i, o)| {
+                (
+                    OutPoint {
+                        txid,
+                        vout: i as u32,
+                    },
+                    o.clone(),
+                )
+            })
             .collect();
         self.identity.next_funding_utxo = utxos[0].clone();
         Ok(utxos)

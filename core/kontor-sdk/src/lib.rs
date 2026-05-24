@@ -93,7 +93,10 @@ fn op_return_encode(entries: Vec<OpReturnEntry>) -> Result<Vec<u8>, String> {
 fn op_return_decode(bytes: Vec<u8>) -> Result<Vec<OpReturnEntry>, String> {
     let payload: Vec<indexer_types::OpReturnEntry> =
         indexer_types::deserialize(&bytes).map_err(|e| e.to_string())?;
-    Ok(payload.into_iter().map(op_return_entry_from_indexer).collect())
+    Ok(payload
+        .into_iter()
+        .map(op_return_entry_from_indexer)
+        .collect())
 }
 
 fn op_return_entry_to_indexer(

@@ -7,8 +7,7 @@ use bitcoin::key::rand::RngCore;
 use bitcoin::key::{Keypair, Secp256k1};
 use blst::min_sig::{SecretKey as BlsSecretKey, Signature as BlsSignature};
 use indexer_types::{
-    AggregateInfo, AggregateSigner, ContractAddress, Inst, InstKind, Insts,
-    SignerRef,
+    AggregateInfo, AggregateSigner, ContractAddress, Inst, InstKind, Insts, SignerRef,
 };
 use tempfile::TempDir;
 
@@ -162,7 +161,7 @@ async fn verify_aggregate_rejects_wrong_signature_length() {
             signers: vec![AggregateSigner {
                 identity: SignerRef::SignerId(0),
                 nonce: 0,
-            sponsored: false,
+                sponsored: false,
             }],
             signature: vec![0u8; BLS_SIGNATURE_BYTES - 1],
         }),
@@ -200,7 +199,7 @@ async fn verify_aggregate_rejects_invalid_signature_bytes() {
             signers: vec![AggregateSigner {
                 identity: SignerRef::SignerId(0),
                 nonce: 0,
-            sponsored: false,
+                sponsored: false,
             }],
             signature: bad_sig.to_vec(),
         }),
@@ -237,7 +236,7 @@ async fn verify_aggregate_enforces_op_count_cap() {
                 AggregateSigner {
                     identity: SignerRef::SignerId(0),
                     nonce: 0,
-            sponsored: false,
+                    sponsored: false,
                 };
                 MAX_BLS_BULK_OPS + 1
             ],
@@ -272,7 +271,7 @@ async fn verify_aggregate_enforces_total_message_bytes_cap() {
             signers: vec![AggregateSigner {
                 identity: SignerRef::SignerId(0),
                 nonce: 0,
-            sponsored: false,
+                sponsored: false,
             }],
             signature: bls_sk
                 .sign(b"cap-test", KONTOR_BLS_DST, &[])
@@ -550,7 +549,7 @@ fn aggregate_info_postcard_roundtrip() {
 
 fn call_op(gas_limit: u64, contract: ContractAddress, expr: impl Into<String>) -> Inst {
     Inst {
-        gas_limit: gas_limit,
+        gas_limit,
         kind: InstKind::Call {
             contract,
             expr: expr.into(),

@@ -133,7 +133,6 @@ use compose_tests::multi_psbt_tx_validation::{
 };
 use compose_tests::regtest_commit_reveal::test_taproot_transaction_regtest;
 
-
 #[testlib::test(contracts_dir = "../../test-contracts", regtest_only)]
 async fn test_compose_regtest() -> Result<()> {
     let reg_tester = runtime.reg_tester().unwrap();

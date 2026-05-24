@@ -70,10 +70,10 @@ fn dependency_sort(txs: &[bitcoin::Transaction]) -> Vec<usize> {
     for (i, tx) in txs.iter().enumerate() {
         let mut parents: HashSet<usize> = HashSet::new();
         for input in &tx.input {
-            if let Some(&p) = index_of.get(&input.previous_output.txid) {
-                if p != i {
-                    parents.insert(p);
-                }
+            if let Some(&p) = index_of.get(&input.previous_output.txid)
+                && p != i
+            {
+                parents.insert(p);
             }
         }
         in_degree[i] = parents.len();
@@ -128,10 +128,10 @@ pub(super) fn batch_is_ordered(txs: &[bitcoin::Transaction]) -> bool {
         .collect();
     for (i, tx) in txs.iter().enumerate() {
         for input in &tx.input {
-            if let Some(&p) = index_of.get(&input.previous_output.txid) {
-                if p > i {
-                    return false;
-                }
+            if let Some(&p) = index_of.get(&input.previous_output.txid)
+                && p > i
+            {
+                return false;
             }
         }
     }

@@ -164,10 +164,7 @@ impl TxWalker {
             return Some(active.clone());
         }
         let agg = input.insts.aggregate.as_ref()?;
-        let sponsored = agg
-            .signers
-            .get(op_index)
-            .is_some_and(|s| s.sponsored);
+        let sponsored = agg.signers.get(op_index).is_some_and(|s| s.sponsored);
         if !sponsored {
             return None;
         }
@@ -285,8 +282,7 @@ pub fn filter_map((tx_index, tx): (usize, bitcoin::Transaction)) -> Option<Trans
         let mut op_return_instructions = op_return.script_pubkey.instructions();
         if let Some(Ok(Instruction::Op(OP_RETURN))) = op_return_instructions.next()
             && let Some(Ok(Instruction::PushBytes(data))) = op_return_instructions.next()
-            && let Ok(entries) =
-                deserialize::<Vec<indexer_types::OpReturnEntry>>(data.as_bytes())
+            && let Ok(entries) = deserialize::<Vec<indexer_types::OpReturnEntry>>(data.as_bytes())
         {
             op_return_data = entries;
         }
@@ -320,13 +316,8 @@ pub async fn inspect(
 
         for (op_index, inst) in input.insts.ops.iter().enumerate() {
             let signer_id = signer_ids.get(op_index).copied().unwrap_or(0);
-            let op = match walker.materialize(
-                input,
-                op_index,
-                signer_id,
-                publisher_signer_id,
-                inst,
-            ) {
+            let op = match walker.materialize(input, op_index, signer_id, publisher_signer_id, inst)
+            {
                 Ok(op) => op,
                 Err(e) => {
                     tracing::warn!("inspect: op {op_index} rejected at materialize: {e:#}");
@@ -661,7 +652,7 @@ mod tests {
     // materialize_op — payer + gas_limit resolution
     // -----------------------------------------------------------------------
 
-    use super::{materialize_op, OpMetadataBase};
+    use super::{OpMetadataBase, materialize_op};
     use indexer_types::{OpKind, Payment};
 
     fn dummy_call_inst(gas_limit: u64) -> Inst {
@@ -788,7 +779,11 @@ mod tests {
     fn walker_payment_override_is_none_with_no_active_and_direct_input() {
         let walker = TxWalker::new();
         let input = direct_input(Insts::single(dummy_call_inst(123)));
-        assert!(walker.payment_override(&input, 0, None, &input.insts.ops[0]).is_none());
+        assert!(
+            walker
+                .payment_override(&input, 0, None, &input.insts.ops[0])
+                .is_none()
+        );
     }
 
     #[test]
@@ -811,9 +806,11 @@ mod tests {
     fn walker_payment_override_is_none_for_aggregate_non_sponsored() {
         let walker = TxWalker::new();
         let input = aggregate_input(vec![dummy_call_inst(123)], vec![false]);
-        assert!(walker
-            .payment_override(&input, 0, Some(7), &input.insts.ops[0])
-            .is_none());
+        assert!(
+            walker
+                .payment_override(&input, 0, Some(7), &input.insts.ops[0])
+                .is_none()
+        );
     }
 
     #[test]
@@ -868,9 +865,11 @@ mod tests {
         walker.capture(&sponsor_op);
         // Before the input boundary, active is still None.
         let input = direct_input(Insts::single(dummy_call_inst(50)));
-        assert!(walker
-            .payment_override(&input, 0, None, &input.insts.ops[0])
-            .is_none());
+        assert!(
+            walker
+                .payment_override(&input, 0, None, &input.insts.ops[0])
+                .is_none()
+        );
         walker.next_input();
         // After the boundary, active reflects the captured Sponsor.
         let got = walker
@@ -892,9 +891,11 @@ mod tests {
         walker.capture(&call_op);
         walker.next_input();
         let input = direct_input(Insts::single(dummy_call_inst(50)));
-        assert!(walker
-            .payment_override(&input, 0, None, &input.insts.ops[0])
-            .is_none());
+        assert!(
+            walker
+                .payment_override(&input, 0, None, &input.insts.ops[0])
+                .is_none()
+        );
     }
 
     #[test]
@@ -920,9 +921,11 @@ mod tests {
         // Input 3: active is gone — Sponsor only sponsors the immediately
         // following input.
         let input = direct_input(Insts::single(dummy_call_inst(50)));
-        assert!(walker
-            .payment_override(&input, 0, None, &input.insts.ops[0])
-            .is_none());
+        assert!(
+            walker
+                .payment_override(&input, 0, None, &input.insts.ops[0])
+                .is_none()
+        );
     }
 
     #[test]

@@ -8,9 +8,7 @@ use indexer::api::compose::{
     calculate_reveal_fee_delta, estimate_key_spend_fee, estimate_participant_commit_fees,
     select_utxos_for_commit,
 };
-use indexer_types::{
-    CommitSource, Inst, InstKind, Insts, Reveal, RevealOutput, RevealParticipant,
-};
+use indexer_types::{CommitSource, Inst, InstKind, Insts, Reveal, RevealOutput, RevealParticipant};
 use std::str::FromStr;
 use testlib::RegTester;
 use tracing::info;
@@ -855,7 +853,10 @@ pub async fn test_compose_reveal_op_return_size_validation(
                             bytes: b"data".to_vec(),
                         },
                     }))
-                    .commit_source(CommitSource::existing(commit_outpoint, commit_prevout.clone()))
+                    .commit_source(CommitSource::existing(
+                        commit_outpoint,
+                        commit_prevout.clone(),
+                    ))
                     .output(RevealOutput::change(&seller_address.script_pubkey()))
                     .build(),
             ])
@@ -866,9 +867,7 @@ pub async fn test_compose_reveal_op_return_size_validation(
     let ok = reg_tester.compose_reveal(make_reveal(vec![1u8; 80])).await;
     assert!(ok.is_ok(), "80-byte OP_RETURN payload should be accepted");
 
-    let err = reg_tester
-        .compose_reveal(make_reveal(vec![2u8; 81]))
-        .await;
+    let err = reg_tester.compose_reveal(make_reveal(vec![2u8; 81])).await;
     assert!(err.is_err(), "81-byte OP_RETURN payload should be rejected");
     let msg = err.err().unwrap().to_string();
     assert!(

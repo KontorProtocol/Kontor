@@ -15,25 +15,14 @@ interface!(name = "arith", path = "../../test-contracts/arith/wit",);
 /// Build an aggregate Insts. Publisher's sponsorship is now per-op on
 /// `AggregateSigner.sponsored`; the cap is `Inst.gas_limit` (the publisher
 /// signs the bulk including each Inst's gas_limit, so they've committed).
-fn aggregate_insts(
-    ops: Vec<Inst>,
-    signers: Vec<AggregateSigner>,
-    signature: Vec<u8>,
-) -> Insts {
+fn aggregate_insts(ops: Vec<Inst>, signers: Vec<AggregateSigner>, signature: Vec<u8>) -> Insts {
     Insts {
         ops,
-        aggregate: Some(AggregateInfo {
-            signers,
-            signature,
-        }),
+        aggregate: Some(AggregateInfo { signers, signature }),
     }
 }
 
-fn call_with_gas_limit(
-    gas_limit: u64,
-    contract: IndexerContractAddress,
-    expr: String,
-) -> Inst {
+fn call_with_gas_limit(gas_limit: u64, contract: IndexerContractAddress, expr: String) -> Inst {
     Inst {
         gas_limit,
         kind: InstKind::Call { contract, expr },
@@ -100,10 +89,14 @@ async fn bls_publisher_pays_all_sponsored_regtest() -> Result<()> {
 
     // Two sponsored ops — co-signers commit nothing of their own balance;
     // publisher's offer covers them at per_op_limit = 50_000 each.
-    let op0 = call_with_gas_limit(50_000, arith_contract.clone(),
+    let op0 = call_with_gas_limit(
+        50_000,
+        arith_contract.clone(),
         arith::wave::eval_call_expr(10, arith::Op::Id),
     );
-    let op1 = call_with_gas_limit(50_000, arith_contract.clone(),
+    let op1 = call_with_gas_limit(
+        50_000,
+        arith_contract.clone(),
         arith::wave::eval_call_expr(10, arith::Op::Sum(arith::Operand { y: 8 })),
     );
 
@@ -223,11 +216,15 @@ async fn bls_publisher_pays_mixed_regtest() -> Result<()> {
         .ok_or_else(|| anyhow!("missing signer_id for publisher"))?;
 
     // op0: SelfPay — signer1 pays from their own balance.
-    let op0 = call_with_gas_limit(50_000, arith_contract.clone(),
+    let op0 = call_with_gas_limit(
+        50_000,
+        arith_contract.clone(),
         arith::wave::eval_call_expr(10, arith::Op::Id),
     );
     // op1: Sponsored — publisher covers it.
-    let op1 = call_with_gas_limit(50_000, arith_contract.clone(),
+    let op1 = call_with_gas_limit(
+        50_000,
+        arith_contract.clone(),
         arith::wave::eval_call_expr(10, arith::Op::Sum(arith::Operand { y: 8 })),
     );
 

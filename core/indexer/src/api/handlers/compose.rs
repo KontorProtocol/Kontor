@@ -37,10 +37,9 @@ pub async fn post_compose(
     if reveal.sat_per_vbyte.is_none() {
         reveal.sat_per_vbyte = Some(default_fee);
     }
-    let (commits, reveal_outputs) =
-        compose(reveal, env.config.network, &env.bitcoin, default_fee)
-            .await
-            .map_err(|e| HttpError::BadRequest(e.to_string()))?;
+    let (commits, reveal_outputs) = compose(reveal, env.config.network, &env.bitcoin, default_fee)
+        .await
+        .map_err(|e| HttpError::BadRequest(e.to_string()))?;
     Ok(ComposeOutputs {
         commits,
         reveal: reveal_outputs,

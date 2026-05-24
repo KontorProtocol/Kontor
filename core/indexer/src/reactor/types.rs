@@ -28,4 +28,3 @@ impl From<indexer_types::SignerRef> for SignerRef {
         }
     }
 }
-

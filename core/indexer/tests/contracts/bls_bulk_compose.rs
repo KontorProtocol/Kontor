@@ -14,7 +14,7 @@ interface!(name = "arith", path = "../../test-contracts/arith/wit",);
 
 fn aggregate_call(gas_limit: u64, contract: IndexerContractAddress, expr: String) -> Inst {
     Inst {
-        gas_limit: gas_limit,
+        gas_limit,
         kind: InstKind::Call { contract, expr },
     }
 }
@@ -30,10 +30,7 @@ fn signer_by_id(id: u64, nonce: u64) -> AggregateSigner {
 fn aggregate_insts(ops: Vec<Inst>, signers: Vec<AggregateSigner>, signature: Vec<u8>) -> Insts {
     Insts {
         ops,
-        aggregate: Some(AggregateInfo {
-            signers,
-            signature,
-        }),
+        aggregate: Some(AggregateInfo { signers, signature }),
     }
 }
 

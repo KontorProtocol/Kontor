@@ -1,7 +1,7 @@
 use anyhow::{Result, anyhow};
 use indexer_types::{
-    CommitOutputs, ContractResponse, ErrorResponse, Info, OpWithResult, Reveal, ResultResponse,
-    ResultRow, RevealOutputs, SignerResponse, TransactionHex, TransactionRow, ViewExpr, ViewResult,
+    CommitOutputs, ContractResponse, ErrorResponse, Info, OpWithResult, ResultResponse, ResultRow,
+    Reveal, RevealOutputs, SignerResponse, TransactionHex, TransactionRow, ViewExpr, ViewResult,
 };
 use reqwest::{Client as HttpClient, ClientBuilder, Response, StatusCode};
 use serde::{Deserialize, Serialize};

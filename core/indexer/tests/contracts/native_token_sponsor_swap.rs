@@ -44,8 +44,7 @@ async fn test_native_token_sponsor_swap() -> Result<()> {
     let seller_identity = rt.identity().await?;
     let seller_address = seller_identity.address.clone();
     let seller_keypair = seller_identity.keypair;
-    let (seller_funding_outpoint, seller_funding_utxo) =
-        seller_identity.next_funding_utxo.clone();
+    let (seller_funding_outpoint, seller_funding_utxo) = seller_identity.next_funding_utxo.clone();
     let (seller_internal_key, _) = seller_keypair.x_only_public_key();
 
     let attach_inst = Inst {
@@ -131,14 +130,19 @@ async fn test_native_token_sponsor_swap() -> Result<()> {
     let seller_attach_reveal_tx_hex = hex::encode(serialize_tx(&seller_attach_reveal_tx));
 
     let bitcoin_client = rt.bitcoin_client().await;
-    bitcoin_client.send_raw_transaction(&seller_commit_tx_hex).await?;
-    bitcoin_client.send_raw_transaction(&seller_attach_reveal_tx_hex).await?;
+    bitcoin_client
+        .send_raw_transaction(&seller_commit_tx_hex)
+        .await?;
+    bitcoin_client
+        .send_raw_transaction(&seller_attach_reveal_tx_hex)
+        .await?;
     bitcoin_client
         .generate_to_address(1, &seller_address.to_string())
         .await?;
 
     let attach_reveal_txid = seller_attach_reveal_tx.compute_txid().to_string();
-    rt.wait_for_txids(&[attach_reveal_txid.clone()]).await?;
+    rt.wait_for_txids(std::slice::from_ref(&attach_reveal_txid))
+        .await?;
 
     // Sanity: the attach landed and the asset is at the escrow UTXO.
     let attach_result = rt
@@ -147,9 +151,8 @@ async fn test_native_token_sponsor_swap() -> Result<()> {
         .result(&OpResultId::builder().txid(attach_reveal_txid).build())
         .await?
         .ok_or(anyhow::anyhow!("attach result missing"))?;
-    let attach_transfer = token::wave::attach_parse_return_expr(
-        &attach_result.value.expect("attach value"),
-    )?;
+    let attach_transfer =
+        token::wave::attach_parse_return_expr(&attach_result.value.expect("attach value"))?;
     let utxo_ref = OutPoint {
         txid: seller_attach_reveal_tx.compute_txid().to_string(),
         vout: 0,
@@ -164,8 +167,7 @@ async fn test_native_token_sponsor_swap() -> Result<()> {
     let buyer_identity = rt.identity().await?;
     let buyer_address = buyer_identity.address.clone();
     let buyer_keypair = buyer_identity.keypair;
-    let (buyer_funding_outpoint, buyer_funding_utxo) =
-        buyer_identity.next_funding_utxo.clone();
+    let (buyer_funding_outpoint, buyer_funding_utxo) = buyer_identity.next_funding_utxo.clone();
     let (buyer_internal_key, _) = buyer_keypair.x_only_public_key();
 
     let sponsor_inst = Inst {
@@ -179,7 +181,10 @@ async fn test_native_token_sponsor_swap() -> Result<()> {
             RevealParticipant::builder()
                 .x_only_public_key(buyer_internal_key.to_string())
                 .commit_insts(Insts::single(sponsor_inst.clone()))
-                .commit_source(CommitSource::build(&buyer_address, [buyer_funding_outpoint]))
+                .commit_source(CommitSource::build(
+                    &buyer_address,
+                    [buyer_funding_outpoint],
+                ))
                 .output(RevealOutput::change(&buyer_address.script_pubkey()))
                 .build(),
         ])
@@ -204,7 +209,9 @@ async fn test_native_token_sponsor_swap() -> Result<()> {
     )?;
 
     let buyer_commit_tx_hex = hex::encode(serialize_tx(&buyer_commit_tx));
-    bitcoin_client.send_raw_transaction(&buyer_commit_tx_hex).await?;
+    bitcoin_client
+        .send_raw_transaction(&buyer_commit_tx_hex)
+        .await?;
     bitcoin_client
         .generate_to_address(1, &buyer_address.to_string())
         .await?;
@@ -302,7 +309,7 @@ async fn test_native_token_sponsor_swap() -> Result<()> {
         .await?;
 
     let swap_txid = swap_tx.compute_txid().to_string();
-    rt.wait_for_txids(&[swap_txid.clone()]).await?;
+    rt.wait_for_txids(std::slice::from_ref(&swap_txid)).await?;
 
     // The detach result is on input 1, op 0 (input 0 is the Sponsor
     // directive, which short-circuits without producing a result row).
@@ -318,12 +325,14 @@ async fn test_native_token_sponsor_swap() -> Result<()> {
         )
         .await?
         .ok_or(anyhow::anyhow!("detach result missing"))?;
-    let detach_transfer = token::wave::detach_parse_return_expr(
-        &detach_result.value.expect("detach value"),
-    )?;
+    let detach_transfer =
+        token::wave::detach_parse_return_expr(&detach_result.value.expect("detach value"))?;
 
     // ── Routing: the Sponsor redirected the payer; asset went to buyer. ──
-    assert_eq!(detach_transfer.src.to_string(), format!("{}:{}", utxo_ref.txid, utxo_ref.vout));
+    assert_eq!(
+        detach_transfer.src.to_string(),
+        format!("{}:{}", utxo_ref.txid, utxo_ref.vout)
+    );
     assert_eq!(detach_transfer.dst, buyer_ref.clone());
     assert_eq!(detach_transfer.amt, 2u64.try_into().unwrap());
 
@@ -337,7 +346,8 @@ async fn test_native_token_sponsor_swap() -> Result<()> {
     assert!(
         buyer_balance_after > buyer_balance_before,
         "buyer's balance must grow (asset credit > gas spent): before={:?} after={:?}",
-        buyer_balance_before, buyer_balance_after
+        buyer_balance_before,
+        buyer_balance_after
     );
 
     Ok(())

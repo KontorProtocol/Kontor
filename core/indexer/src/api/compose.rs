@@ -102,8 +102,8 @@ pub fn compose_reveal(reveal: Reveal) -> Result<RevealOutputs> {
     // We track outputs as `LayoutSlot` (an enum) so Change values can be
     // computed at the end once we know the total fee.
     enum LayoutSlot {
-        FromParticipant(usize),   // participants[idx].output (which is Some)
-        FromExtra(usize),         // reveal.extra_outputs[idx]
+        FromParticipant(usize), // participants[idx].output (which is Some)
+        FromExtra(usize),       // reveal.extra_outputs[idx]
     }
     let max_paired_idx = resolved
         .iter()
@@ -114,8 +114,8 @@ pub fn compose_reveal(reveal: Reveal) -> Result<RevealOutputs> {
     let mut layout: Vec<LayoutSlot> = Vec::new();
     let mut extras_cursor = 0usize;
     if let Some(max_idx) = max_paired_idx {
-        for i in 0..=max_idx {
-            if resolved[i].output.is_some() {
+        for (i, p) in resolved.iter().enumerate().take(max_idx + 1) {
+            if p.output.is_some() {
                 layout.push(LayoutSlot::FromParticipant(i));
             } else {
                 // Slot gap from a None participant — must be filled by an extra
@@ -161,14 +161,21 @@ pub fn compose_reveal(reveal: Reveal) -> Result<RevealOutputs> {
     // the chained output in a follow-up tx, and we surface it via
     // `RevealOutputs.output_info`.
     enum ResolvedOutputValue {
-        Fixed { script: ScriptBuf, value: u64 },
-        Change { script: ScriptBuf },
+        Fixed {
+            script: ScriptBuf,
+            value: u64,
+        },
+        Change {
+            script: ScriptBuf,
+        },
         ChainedEnvelope {
             script: ScriptBuf,
             value: u64,
             tap_leaf_script: TapLeafScript,
         },
-        OpReturn { script: ScriptBuf },
+        OpReturn {
+            script: ScriptBuf,
+        },
     }
     let mut resolved_outputs: Vec<ResolvedOutputValue> = Vec::with_capacity(layout.len());
     for slot in &layout {
@@ -177,7 +184,10 @@ pub fn compose_reveal(reveal: Reveal) -> Result<RevealOutputs> {
             LayoutSlot::FromExtra(j) => reveal.extra_outputs[*j].clone(),
         };
         let resolved = match output {
-            RevealOutput::Fixed { script_pubkey, value } => {
+            RevealOutput::Fixed {
+                script_pubkey,
+                value,
+            } => {
                 let script = parse_hex_script(&script_pubkey)?;
                 ResolvedOutputValue::Fixed { script, value }
             }
@@ -406,8 +416,10 @@ pub fn compose_reveal(reveal: Reveal) -> Result<RevealOutputs> {
         psbt.outputs.push(bitcoin::psbt::Output::default());
     }
 
-    let commit_tap_leaf_scripts: Vec<TapLeafScript> =
-        resolved.iter().map(|rp| rp.tap_leaf_script.clone()).collect();
+    let commit_tap_leaf_scripts: Vec<TapLeafScript> = resolved
+        .iter()
+        .map(|rp| rp.tap_leaf_script.clone())
+        .collect();
 
     let reveal_transaction = psbt.unsigned_tx.clone();
     let reveal_transaction_hex = hex::encode(serialize_tx(&reveal_transaction));
@@ -424,8 +436,7 @@ pub fn compose_reveal(reveal: Reveal) -> Result<RevealOutputs> {
 
 /// Parse a hex-encoded scriptPubKey into a `ScriptBuf`.
 fn parse_hex_script(hex_str: &str) -> Result<ScriptBuf> {
-    let bytes = hex::decode(hex_str)
-        .map_err(|e| anyhow!("invalid hex in script_pubkey: {}", e))?;
+    let bytes = hex::decode(hex_str).map_err(|e| anyhow!("invalid hex in script_pubkey: {}", e))?;
     Ok(ScriptBuf::from_bytes(bytes))
 }
 
@@ -434,7 +445,10 @@ fn parse_hex_script(hex_str: &str) -> Result<ScriptBuf> {
 /// Change/OpReturn (which still adds the correct vsize contribution).
 fn add_output_to_dummy(dummy: &mut Transaction, output: &RevealOutput) -> Result<()> {
     match output {
-        RevealOutput::Fixed { value, script_pubkey } => {
+        RevealOutput::Fixed {
+            value,
+            script_pubkey,
+        } => {
             dummy.output.push(TxOut {
                 value: Amount::from_sat(*value),
                 script_pubkey: parse_hex_script(script_pubkey)?,
@@ -446,7 +460,11 @@ fn add_output_to_dummy(dummy: &mut Transaction, output: &RevealOutput) -> Result
                 script_pubkey: parse_hex_script(script_pubkey)?,
             });
         }
-        RevealOutput::ChainedEnvelope { insts, value, internal_key } => {
+        RevealOutput::ChainedEnvelope {
+            insts,
+            value,
+            internal_key,
+        } => {
             let internal_pk = XOnlyPublicKey::from_str(internal_key)?;
             let insts_bytes = serialize(insts)?;
             let (_, addr, _) = build_tap_script_and_script_address(internal_pk, insts_bytes)?;
@@ -457,7 +475,10 @@ fn add_output_to_dummy(dummy: &mut Transaction, output: &RevealOutput) -> Result
         }
         RevealOutput::OpReturn { data } => {
             if data.len() > MAX_OP_RETURN_BYTES {
-                return Err(anyhow!("OP_RETURN data exceeds {} bytes", MAX_OP_RETURN_BYTES));
+                return Err(anyhow!(
+                    "OP_RETURN data exceeds {} bytes",
+                    MAX_OP_RETURN_BYTES
+                ));
             }
             let mut s = ScriptBuf::new();
             s.push_opcode(OP_RETURN);
@@ -630,7 +651,13 @@ pub async fn compose_commit(
         .iter()
         .filter_map(|p| p.output.as_ref().map(sum_output_values))
         .sum::<u64>()
-        .saturating_add(reveal.extra_outputs.iter().map(sum_output_values).sum::<u64>());
+        .saturating_add(
+            reveal
+                .extra_outputs
+                .iter()
+                .map(sum_output_values)
+                .sum::<u64>(),
+        );
 
     // Existing participants' prevouts + extra_inputs' prevouts contribute
     // value to the reveal already; Build participants must collectively
@@ -691,8 +718,12 @@ pub async fn compose_commit(
             _ => unreachable!(),
         };
 
-        let tap_output_value =
-            base_share + if (build_order as u64) < remainder { 1 } else { 0 };
+        let tap_output_value = base_share
+            + if (build_order as u64) < remainder {
+                1
+            } else {
+                0
+            };
 
         let build_address = Address::from_str(build_addr_str)?.require_network(network)?;
         match build_address.address_type() {
@@ -817,7 +848,8 @@ pub async fn compose(
         .any(|p| matches!(p.commit_source, CommitSource::Build { .. }));
 
     let (commits, reveal_to_build) = if has_build {
-        let commit_outputs = compose_commit(reveal, network, bitcoin_client, default_sat_per_vbyte).await?;
+        let commit_outputs =
+            compose_commit(reveal, network, bitcoin_client, default_sat_per_vbyte).await?;
         (commit_outputs.commits, commit_outputs.reveal)
     } else {
         (Vec::new(), reveal)
@@ -1409,5 +1441,4 @@ mod tests {
         assert!(current_size > 5_000_000);
         Ok(())
     }
-
 }

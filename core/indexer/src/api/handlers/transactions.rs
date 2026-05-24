@@ -102,9 +102,7 @@ pub async fn post_transaction_broadcast(
                 .values()
                 .find_map(|r| r.error.clone())
                 .unwrap_or(result.package_msg);
-            return Err(
-                HttpError::BadRequest(format!("package rejected: {detail}")).into(),
-            );
+            return Err(HttpError::BadRequest(format!("package rejected: {detail}")).into());
         }
     } else {
         for raw in &transactions {

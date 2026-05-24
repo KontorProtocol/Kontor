@@ -8,8 +8,8 @@ use bitcoin::{consensus::encode::serialize as serialize_tx, key::Secp256k1};
 use indexer::test_utils;
 use indexer::witness_data::{TokenBalance, WitnessData};
 use indexer_types::{
-    CommitSource, Inst, InstKind, Insts, Reveal, RevealOutput, RevealOutputInfo,
-    RevealParticipant, serialize,
+    CommitSource, Inst, InstKind, Insts, Reveal, RevealOutput, RevealOutputInfo, RevealParticipant,
+    serialize,
 };
 use testlib::RegTester;
 
@@ -430,7 +430,10 @@ pub async fn test_compose_duplicate_address_and_duplicate_utxo(
             RevealParticipant::builder()
                 .x_only_public_key(internal_key.to_string())
                 .commit_insts(Insts::single(instruction))
-                .commit_source(CommitSource::build(&seller_address, [out_point1, out_point1]))
+                .commit_source(CommitSource::build(
+                    &seller_address,
+                    [out_point1, out_point1],
+                ))
                 .build(),
         ])
         .build();
@@ -778,4 +781,3 @@ pub async fn test_compose_insufficient_funds(reg_tester: &mut RegTester) -> Resu
 
     Ok(())
 }
-
