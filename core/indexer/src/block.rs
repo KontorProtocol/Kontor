@@ -151,27 +151,43 @@ impl TxWalker {
 
     /// Compute the per-op `payment_override` for `op_index` in `input`:
     /// the active cross-input `Sponsor` payment wins over an aggregate's
-    /// per-op publisher offer; otherwise `None` (the op self-pays from
-    /// the input signer at its own `Inst.gas_limit`).
+    /// per-op publisher offer; otherwise `Ok(None)` (the op self-pays
+    /// from the input signer at its own `Inst.gas_limit`).
+    ///
+    /// Returns `Err` when the op is aggregate-sponsored but no
+    /// `publisher_signer_id` was supplied — falling through to `None`
+    /// there would silently swap the payer to the co-signer, mis-
+    /// attributing who paid gas. The executor always resolves the
+    /// publisher via `get_or_create_identity` so it never hits this;
+    /// `block::inspect`'s DB lookup can miss (no signers row) and is
+    /// where the rejection surfaces, matching the old `PaymentIntent::
+    /// Sponsored`-without-offer reject behavior.
     pub fn payment_override(
         &self,
         input: &Input,
         op_index: usize,
         publisher_signer_id: Option<u64>,
         inst: &Inst,
-    ) -> Option<Payment> {
+    ) -> Result<Option<Payment>, anyhow::Error> {
         if let Some(active) = &self.active {
-            return Some(active.clone());
+            return Ok(Some(active.clone()));
         }
-        let agg = input.insts.aggregate.as_ref()?;
+        let Some(agg) = input.insts.aggregate.as_ref() else {
+            return Ok(None);
+        };
         let sponsored = agg.signers.get(op_index).is_some_and(|s| s.sponsored);
         if !sponsored {
-            return None;
+            return Ok(None);
         }
-        publisher_signer_id.map(|signer_id| Payment {
+        let signer_id = publisher_signer_id.ok_or_else(|| {
+            anyhow::anyhow!(
+                "op {op_index} is aggregate-sponsored but the publisher has no resolved signer_id"
+            )
+        })?;
+        Ok(Some(Payment {
             signer_id,
             gas_limit: inst.gas_limit,
-        })
+        }))
     }
 
     /// Call after materializing each op. If the op is a `Sponsor`, its
@@ -215,7 +231,7 @@ impl TxWalker {
             op_index: op_index as i64,
             signer_id,
         };
-        let payment_override = self.payment_override(input, op_index, publisher_signer_id, inst);
+        let payment_override = self.payment_override(input, op_index, publisher_signer_id, inst)?;
         let op = materialize_op(inst.clone(), base, payment_override)?;
         self.capture(&op);
         Ok(op)
@@ -782,6 +798,7 @@ mod tests {
         assert!(
             walker
                 .payment_override(&input, 0, None, &input.insts.ops[0])
+                .unwrap()
                 .is_none()
         );
     }
@@ -792,6 +809,7 @@ mod tests {
         let input = aggregate_input(vec![dummy_call_inst(123)], vec![true]);
         let got = walker
             .payment_override(&input, 0, Some(7), &input.insts.ops[0])
+            .unwrap()
             .expect("sponsored aggregate op → publisher override");
         assert_eq!(
             got,
@@ -803,12 +821,29 @@ mod tests {
     }
 
     #[test]
+    fn walker_payment_override_errors_when_sponsored_but_publisher_missing() {
+        // Mirrors the old PaymentIntent::Sponsored-without-offer reject:
+        // a sponsored aggregate op with no resolved publisher must not
+        // silently fall back to the co-signer self-paying.
+        let walker = TxWalker::new();
+        let input = aggregate_input(vec![dummy_call_inst(123)], vec![true]);
+        let err = walker
+            .payment_override(&input, 0, None, &input.insts.ops[0])
+            .expect_err("missing publisher must error, not silent self-pay");
+        assert!(
+            err.to_string().contains("publisher"),
+            "error should mention the missing publisher: {err}"
+        );
+    }
+
+    #[test]
     fn walker_payment_override_is_none_for_aggregate_non_sponsored() {
         let walker = TxWalker::new();
         let input = aggregate_input(vec![dummy_call_inst(123)], vec![false]);
         assert!(
             walker
                 .payment_override(&input, 0, Some(7), &input.insts.ops[0])
+                .unwrap()
                 .is_none()
         );
     }
@@ -836,6 +871,7 @@ mod tests {
         let input = aggregate_input(vec![dummy_call_inst(123)], vec![true]);
         let got = walker
             .payment_override(&input, 0, Some(7), &input.insts.ops[0])
+            .unwrap()
             .expect("active sponsor present");
         assert_eq!(
             got,
@@ -868,12 +904,14 @@ mod tests {
         assert!(
             walker
                 .payment_override(&input, 0, None, &input.insts.ops[0])
+                .unwrap()
                 .is_none()
         );
         walker.next_input();
         // After the boundary, active reflects the captured Sponsor.
         let got = walker
             .payment_override(&input, 0, None, &input.insts.ops[0])
+            .unwrap()
             .expect("active promoted from pending");
         assert_eq!(
             got,
@@ -894,6 +932,7 @@ mod tests {
         assert!(
             walker
                 .payment_override(&input, 0, None, &input.insts.ops[0])
+                .unwrap()
                 .is_none()
         );
     }
@@ -924,6 +963,7 @@ mod tests {
         assert!(
             walker
                 .payment_override(&input, 0, None, &input.insts.ops[0])
+                .unwrap()
                 .is_none()
         );
     }
@@ -950,6 +990,7 @@ mod tests {
         let input = direct_input(Insts::single(dummy_call_inst(50)));
         let got = walker
             .payment_override(&input, 0, None, &input.insts.ops[0])
+            .unwrap()
             .expect("last Sponsor's payment is active");
         assert_eq!(
             got,
