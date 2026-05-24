@@ -363,6 +363,29 @@ pub struct RevealOutputs {
     pub transaction_hex: String,
     pub psbt_hex: String,
     pub participants: Vec<ParticipantScripts>,
+    /// Per-output kind + any extra info, in tx output order (same
+    /// length as `transaction.output`). Mirrors the input `RevealOutput`
+    /// enum and surfaces info derivable from compose-time state but not
+    /// from the tx alone — notably the tap leaf script + control block
+    /// for `ChainedEnvelope` outputs, which the caller needs to
+    /// script-spend that output in a follow-up tx. v1's compose_reveal
+    /// leaves this empty.
+    #[builder(default)]
+    pub output_info: Vec<RevealOutputInfo>,
+}
+
+/// Per-output annotation describing what kind of output occupies each
+/// position in the reveal tx. Mirrors the input `RevealOutput` enum.
+/// The wire shape includes only what the SDK can't derive from the tx
+/// itself; in particular `ChainedEnvelope` carries the tap leaf script
+/// that the chained tap output committed to.
+#[derive(Serialize, Deserialize, Clone, TS)]
+#[ts(export, export_to = "../../../sdk/src/bindings.d.ts")]
+pub enum RevealOutputInfo {
+    Fixed,
+    Change,
+    ChainedEnvelope { tap_leaf_script: TapLeafScript },
+    OpReturn,
 }
 
 /// Request body for `POST /api/transactions/broadcast`: raw Bitcoin tx

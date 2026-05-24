@@ -6,9 +6,8 @@ use bitcoin::taproot::TaprootBuilder;
 use indexer::database::types::OpResultId;
 use indexer::test_utils;
 use indexer::{bitcoin_client::client::RegtestRpc, runtime};
-use indexer::api::compose::build_tap_script_and_script_address;
 use indexer_types::{
-    CommitSource, Inst, InstKind, Insts, Reveal, RevealOutput, RevealParticipant, serialize,
+    CommitSource, Inst, InstKind, Insts, Reveal, RevealOutput, RevealOutputInfo, RevealParticipant,
 };
 use testlib::*;
 
@@ -132,12 +131,14 @@ async fn test_native_nft_attach_contract() -> Result<()> {
         .commit_tap_leaf_script
         .script
         .clone();
-    // Rebuild the chained leaf script locally — not surfaced on the v2
-    // response (chained envelopes are now outputs, not separate fields).
-    let (chained_tap_script, _, _) = build_tap_script_and_script_address(
-        internal_key,
-        serialize(&Insts::single(detach_inst.clone()))?,
-    )?;
+    // The chained leaf lives in the reveal's output_info: position 0 of
+    // the reveal tx is the ChainedEnvelope we declared in extra_outputs.
+    let RevealOutputInfo::ChainedEnvelope { tap_leaf_script } =
+        &compose_outputs.reveal.output_info[0]
+    else {
+        panic!("output 0 should be ChainedEnvelope");
+    };
+    let chained_tap_script = tap_leaf_script.script.clone();
 
     let commit_prevout = TxOut {
         value: utxo_for_output.value,

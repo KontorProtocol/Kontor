@@ -21,8 +21,8 @@ use bitcoin::hashes::Hash;
 use bitcoin::key::constants::SCHNORR_SIGNATURE_SIZE;
 use indexer_types::{
     CommitOutputs, CommitSource, ComposeOutputs, ComposeQuery, ParticipantScripts, Reveal,
-    RevealInputs, RevealOutput, RevealOutputs, RevealParticipantInputs, RevealQuery,
-    TapLeafScript, serialize,
+    RevealInputs, RevealOutput, RevealOutputInfo, RevealOutputs, RevealParticipantInputs,
+    RevealQuery, TapLeafScript, serialize,
 };
 use rand::rngs::StdRng;
 use rand::{SeedableRng, seq::SliceRandom};
@@ -718,11 +718,19 @@ pub fn compose_reveal_v2(reveal: Reveal) -> Result<RevealOutputs> {
         }
     }
 
-    // Pre-compute output script + value (Change values are resolved last)
+    // Pre-compute output script + value (Change values are resolved last).
+    // ChainedEnvelope also carries its tap leaf script (built from the
+    // committed insts + internal key) — the SDK needs this to script-spend
+    // the chained output in a follow-up tx, and we surface it via
+    // `RevealOutputs.output_info`.
     enum ResolvedOutputValue {
         Fixed { script: ScriptBuf, value: u64 },
         Change { script: ScriptBuf },
-        ChainedEnvelope { script: ScriptBuf, value: u64 },
+        ChainedEnvelope {
+            script: ScriptBuf,
+            value: u64,
+            tap_leaf_script: TapLeafScript,
+        },
         OpReturn { script: ScriptBuf },
     }
     let mut resolved_outputs: Vec<ResolvedOutputValue> = Vec::with_capacity(layout.len());
@@ -750,10 +758,16 @@ pub fn compose_reveal_v2(reveal: Reveal) -> Result<RevealOutputs> {
                 if insts_bytes.is_empty() || insts_bytes.len() > MAX_SCRIPT_BYTES {
                     return Err(anyhow!("ChainedEnvelope leaf data size invalid"));
                 }
-                let (_, addr, _) = build_tap_script_and_script_address(internal_pk, insts_bytes)?;
+                let (script, addr, control_block) =
+                    build_tap_script_and_script_address(internal_pk, insts_bytes)?;
                 ResolvedOutputValue::ChainedEnvelope {
                     script: addr.script_pubkey(),
                     value,
+                    tap_leaf_script: TapLeafScript {
+                        leaf_version: LeafVersion::TapScript,
+                        script,
+                        control_block: ScriptBuf::from_bytes(control_block.serialize()),
+                    },
                 }
             }
             RevealOutput::OpReturn { data } => {
@@ -845,7 +859,7 @@ pub fn compose_reveal_v2(reveal: Reveal) -> Result<RevealOutputs> {
     for ro in &resolved_outputs {
         let (value, script) = match ro {
             ResolvedOutputValue::Fixed { value, script } => (*value, script.clone()),
-            ResolvedOutputValue::ChainedEnvelope { value, script } => (*value, script.clone()),
+            ResolvedOutputValue::ChainedEnvelope { value, script, .. } => (*value, script.clone()),
             ResolvedOutputValue::Change { script } => {
                 // Placeholder value for sizing; resolved next.
                 (0, script.clone())
@@ -877,8 +891,11 @@ pub fn compose_reveal_v2(reveal: Reveal) -> Result<RevealOutputs> {
     }
     let change_value = total_input_value - total_needed_no_change;
 
-    // Add outputs to the PSBT. For Change: if value < dust, drop the
-    // output entirely (the leftover becomes additional fee).
+    // Add outputs to the PSBT and build the parallel `output_info` Vec
+    // describing each output's kind (Fixed/Change/ChainedEnvelope/OpReturn).
+    // For Change: if value < dust, drop the output entirely (the
+    // leftover becomes additional fee, and no output_info entry is emitted).
+    let mut output_info: Vec<RevealOutputInfo> = Vec::with_capacity(resolved_outputs.len());
     for ro in resolved_outputs {
         match ro {
             ResolvedOutputValue::Fixed { value, script } => {
@@ -887,13 +904,19 @@ pub fn compose_reveal_v2(reveal: Reveal) -> Result<RevealOutputs> {
                     script_pubkey: script,
                 });
                 psbt.outputs.push(bitcoin::psbt::Output::default());
+                output_info.push(RevealOutputInfo::Fixed);
             }
-            ResolvedOutputValue::ChainedEnvelope { value, script } => {
+            ResolvedOutputValue::ChainedEnvelope {
+                value,
+                script,
+                tap_leaf_script,
+            } => {
                 psbt.unsigned_tx.output.push(TxOut {
                     value: Amount::from_sat(value),
                     script_pubkey: script,
                 });
                 psbt.outputs.push(bitcoin::psbt::Output::default());
+                output_info.push(RevealOutputInfo::ChainedEnvelope { tap_leaf_script });
             }
             ResolvedOutputValue::Change { script } => {
                 if change_value >= MIN_ENVELOPE_SATS {
@@ -902,6 +925,7 @@ pub fn compose_reveal_v2(reveal: Reveal) -> Result<RevealOutputs> {
                         script_pubkey: script,
                     });
                     psbt.outputs.push(bitcoin::psbt::Output::default());
+                    output_info.push(RevealOutputInfo::Change);
                 }
                 // else: drop the Change output; dust becomes additional fee
             }
@@ -911,6 +935,7 @@ pub fn compose_reveal_v2(reveal: Reveal) -> Result<RevealOutputs> {
                     script_pubkey: script,
                 });
                 psbt.outputs.push(bitcoin::psbt::Output::default());
+                output_info.push(RevealOutputInfo::OpReturn);
             }
         }
     }
@@ -965,6 +990,7 @@ pub fn compose_reveal_v2(reveal: Reveal) -> Result<RevealOutputs> {
         .transaction_hex(reveal_transaction_hex)
         .psbt_hex(psbt_hex)
         .participants(participant_scripts)
+        .output_info(output_info)
         .build())
 }
 

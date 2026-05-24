@@ -5,14 +5,12 @@ use bitcoin::script::{Builder, PushBytesBuf};
 use bitcoin::taproot::TaprootBuilder;
 use bitcoin::{Address, FeeRate, KnownHrp, OutPoint, TapSighashType, TxOut};
 use bitcoin::{consensus::encode::serialize as serialize_tx, key::Secp256k1};
-use indexer::api::compose::{
-    ComposeInputs, InstructionInputs, build_tap_script_and_script_address, compose, compose_reveal,
-};
+use indexer::api::compose::{ComposeInputs, InstructionInputs, compose, compose_reveal};
 use indexer::test_utils;
 use indexer::witness_data::{TokenBalance, WitnessData};
 use indexer_types::{
     CommitSource, ComposeQuery, ContractAddress, Inst, InstKind, InstructionQuery, Insts,
-    OpReturnEntry, Reveal, RevealInputs, RevealOutput, RevealParticipant,
+    OpReturnEntry, Reveal, RevealInputs, RevealOutput, RevealOutputInfo, RevealParticipant,
     RevealParticipantInputs, RevealParticipantQuery, RevealQuery, SignerRef, serialize,
 };
 use testlib::RegTester;
@@ -254,13 +252,14 @@ pub async fn test_compose_all_fields(reg_tester: &mut RegTester) -> Result<()> {
 
     let mut reveal_transaction = compose_outputs.reveal.transaction.clone();
 
-    // Under v2, the chained leaf isn't surfaced on the response — it's
-    // an output of the reveal. Rebuild the leaf script locally from the
-    // same Insts the ChainedEnvelope output committed to.
-    let (chained_tap_script, _, _) = build_tap_script_and_script_address(
-        internal_key,
-        serialize(&Insts::single(chained_instructions.clone()))?,
-    )?;
+    // The chained leaf lives in the reveal's output_info: position 0 of
+    // the reveal tx is the ChainedEnvelope we declared in extra_outputs.
+    let RevealOutputInfo::ChainedEnvelope { tap_leaf_script } =
+        &compose_outputs.reveal.output_info[0]
+    else {
+        panic!("output 0 should be ChainedEnvelope");
+    };
+    let chained_tap_script = tap_leaf_script.script.clone();
 
     let derived_chained_tap_script = serialize(b"Hello, World!")?;
 

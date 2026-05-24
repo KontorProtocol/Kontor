@@ -412,11 +412,32 @@ export type RevealOutput =
   | { "ChainedEnvelope": { insts: Insts; value: bigint; internal_key: string } }
   | { "OpReturn": { data: Array<number> } };
 
+/**
+ * Per-output annotation describing what kind of output occupies each
+ * position in the reveal tx. Mirrors the input `RevealOutput` enum.
+ * The wire shape includes only what the SDK can't derive from the tx
+ * itself; in particular `ChainedEnvelope` carries the tap leaf script
+ * that the chained tap output committed to.
+ */
+export type RevealOutputInfo = "Fixed" | "Change" | {
+  "ChainedEnvelope": { tap_leaf_script: TapLeafScript };
+} | "OpReturn";
+
 export type RevealOutputs = {
   transaction: string;
   transaction_hex: string;
   psbt_hex: string;
   participants: Array<ParticipantScripts>;
+  /**
+   * Per-output kind + any extra info, in tx output order (same
+   * length as `transaction.output`). Mirrors the input `RevealOutput`
+   * enum and surfaces info derivable from compose-time state but not
+   * from the tx alone — notably the tap leaf script + control block
+   * for `ChainedEnvelope` outputs, which the caller needs to
+   * script-spend that output in a follow-up tx. v1's compose_reveal
+   * leaves this empty.
+   */
+  output_info: Array<RevealOutputInfo>;
 };
 
 /**
@@ -427,6 +448,11 @@ export type RevealOutputs = {
 export type RevealParticipant = {
   x_only_public_key: string;
   commit_insts: Insts;
+  /**
+   * Optional. The common seller-offer pattern (chained envelope +
+   * change in extras) leaves this unset; the marketplace swap sets
+   * it to the SACP-paired output (Change for buyer, Fixed for seller).
+   */
   output: RevealOutput | null;
   commit_source: CommitSource;
 };
