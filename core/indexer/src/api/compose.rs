@@ -757,7 +757,12 @@ pub async fn compose_commit(
             ));
         }
 
-        // Build an empty commit tx with just the tap output
+        // Build an empty commit tx with just the tap output.
+        // `Psbt::from_unsigned_tx` already initializes `psbt.outputs`
+        // with one default entry per tx output, so the single tap
+        // output's PSBT slot exists without an extra push (a stray push
+        // here would desync psbt.outputs.len() from tx.output.len() and
+        // produce a structurally invalid PSBT).
         let mut psbt = Psbt::from_unsigned_tx(Transaction {
             version: Version(2),
             lock_time: LockTime::ZERO,
@@ -767,7 +772,6 @@ pub async fn compose_commit(
                 script_pubkey: tap_addr.script_pubkey(),
             }],
         })?;
-        psbt.outputs.push(bitcoin::psbt::Output::default());
 
         // Select UTXOs covering tap output + commit fee. For standalone
         // commits, the full empty-tx header overhead is borne by this
@@ -831,8 +835,11 @@ pub async fn compose_commit(
         };
     }
 
+    // Propagate the resolved fee rate (the original may have been
+    // `None`, in which case we filled it from `default_sat_per_vbyte`)
+    // — `compose_reveal` requires it to be `Some`.
     let updated_reveal = Reveal {
-        sat_per_vbyte: reveal.sat_per_vbyte,
+        sat_per_vbyte: Some(sat_per_vbyte),
         participants: updated_participants,
         extra_inputs: reveal.extra_inputs,
         extra_outputs: reveal.extra_outputs,
