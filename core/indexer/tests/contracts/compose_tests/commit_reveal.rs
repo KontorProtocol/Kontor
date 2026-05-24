@@ -1,15 +1,14 @@
 use anyhow::Result;
-use bitcoin::FeeRate;
 use bitcoin::TapSighashType;
 use bitcoin::consensus::encode::serialize as serialize_tx;
 use bitcoin::key::Secp256k1;
 use bitcoin::taproot::LeafVersion;
 use bitcoin::taproot::TaprootBuilder;
-use indexer::api::compose::compose;
-use indexer::api::compose::{ComposeInputs, InstructionInputs};
 use indexer::test_utils;
 use indexer::witness_data::TokenBalance;
-use indexer_types::serialize;
+use indexer_types::{
+    CommitSource, Inst, InstKind, Insts, Reveal, RevealOutput, RevealParticipant, serialize,
+};
 use testlib::RegTester;
 use tracing::info;
 
@@ -23,32 +22,36 @@ pub async fn test_commit_reveal(reg_tester: &mut RegTester) -> Result<()> {
 
     let secp = Secp256k1::new();
 
-    // Create token balance data
-    let token_value = 1000;
     let token_balance = TokenBalance {
-        value: token_value,
+        value: 1000,
         name: "token_name".to_string(),
     };
-
     let serialized_token_balance = serialize(&token_balance)?;
 
-    let instruction = InstructionInputs::builder()
-        .address(seller_address.clone())
-        .x_only_public_key(internal_key)
-        .funding_utxos(vec![(out_point, utxo_for_output.clone())])
-        .instruction(serialized_token_balance)
-        .build();
-    let compose_params = ComposeInputs::builder()
-        .instructions(vec![instruction])
-        .fee_rate(FeeRate::from_sat_per_vb(2).unwrap())
-        .envelope(546)
+    let inst = Inst {
+        gas_limit: 50_000,
+        kind: InstKind::Publish {
+            name: "commit-reveal".to_string(),
+            bytes: serialized_token_balance,
+        },
+    };
+    let reveal = Reveal::builder()
+        .sat_per_vbyte(2)
+        .participants(vec![
+            RevealParticipant::builder()
+                .x_only_public_key(internal_key.to_string())
+                .commit_insts(Insts::single(inst))
+                .commit_source(CommitSource::build(&seller_address, [out_point]))
+                .output(RevealOutput::change(&seller_address.script_pubkey()))
+                .build(),
+        ])
         .build();
 
-    let compose_outputs = compose(compose_params)?;
+    let compose_outputs = reg_tester.compose_v2(reveal).await?;
 
-    let mut attach_tx = compose_outputs.commit_transaction;
-    let mut spend_tx = compose_outputs.reveal_transaction;
-    let tap_script = compose_outputs.per_participant[0]
+    let mut attach_tx = compose_outputs.commits[0].transaction.clone();
+    let mut spend_tx = compose_outputs.reveal.transaction.clone();
+    let tap_script = compose_outputs.reveal.participants[0]
         .commit_tap_leaf_script
         .script
         .clone();

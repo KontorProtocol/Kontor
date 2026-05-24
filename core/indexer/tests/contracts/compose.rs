@@ -1,17 +1,4 @@
 use anyhow::Result;
-use bitcoin::taproot::TaprootBuilder;
-use bitcoin::{FeeRate, TapSighashType};
-use bitcoin::{OutPoint, consensus::encode::serialize as serialize_tx, key::Secp256k1};
-use indexer::api::compose::{compose, compose_reveal};
-
-use bitcoin::Psbt;
-use indexer::api::compose::{ComposeInputs, InstructionInputs};
-use indexer::test_utils;
-use indexer::witness_data::TokenBalance;
-use indexer_types::{
-    OpReturnEntry, RevealInputs, RevealParticipantInputs, SignerRef, serialize,
-};
-
 use testlib::*;
 use tracing::info;
 
@@ -122,7 +109,6 @@ use compose_tests::legacy_taproot_swap::{
     test_taproot_swap_without_tapscript, test_taproot_swap_without_token_balance,
 };
 use compose_tests::multi_psbt_integration::test_portal_coordinated_commit_reveal_flow_integration;
-use compose_tests::multi_psbt_integration_breakdown::test_portal_coordinated_compose_flow;
 use compose_tests::multi_psbt_security::{
     test_async_node_sign_and_merge_flows, test_commit_outputs_whitelist_including_portal,
     test_commit_psbt_security_invariants,
@@ -146,273 +132,11 @@ use compose_tests::multi_psbt_tx_validation::{
     test_reordering_commit_inputs_rejected, test_reordering_commit_outputs_rejected,
 };
 use compose_tests::regtest_commit_reveal::test_taproot_transaction_regtest;
-use compose_tests::size_limit::test_compose_progressive_size_limit_testnet;
 
-use compose_tests::compose_api::test_compose_attach_and_detach;
-
-async fn test_commit_reveal_chained_reveal(reg_tester: &mut RegTester) -> Result<()> {
-    info!("test_commit_reveal_chained_reveal");
-    let secp = Secp256k1::new();
-
-    let identity = reg_tester.identity().await?;
-    let seller_address = identity.address;
-    let keypair = identity.keypair;
-    let (internal_key, _parity) = keypair.x_only_public_key();
-    let (out_point, utxo_for_output) = identity.next_funding_utxo;
-
-    // Create token balance data
-    let token_value = 1000;
-    let token_balance = TokenBalance {
-        value: token_value,
-        name: "token_name".to_string(),
-    };
-
-    let serialized_token_balance = serialize(&token_balance)?;
-
-    let compose_params = ComposeInputs::builder()
-        .instructions(vec![InstructionInputs {
-            address: seller_address.clone(),
-            x_only_public_key: internal_key,
-            funding_utxos: vec![(out_point, utxo_for_output.clone())],
-            instruction: b"Hello, world!".to_vec(),
-            chained_instruction: Some(serialized_token_balance.clone()),
-        }])
-        .fee_rate(FeeRate::from_sat_per_vb(2).unwrap())
-        .envelope(546)
-        .build();
-
-    let compose_outputs = compose(compose_params)?;
-
-    let mut commit_tx = compose_outputs.commit_transaction;
-    let tap_script = compose_outputs.per_participant[0]
-        .commit_tap_leaf_script
-        .script
-        .clone();
-    let mut reveal_tx = compose_outputs.reveal_transaction;
-    let chained_tap_script = compose_outputs.per_participant[0]
-        .chained_tap_leaf_script
-        .as_ref()
-        .unwrap()
-        .script
-        .clone();
-
-    let transfer_data = vec![OpReturnEntry {
-        input_index: 0,
-        recipient: SignerRef::XOnlyPubkey(internal_key),
-    }];
-    let transfer_bytes = serialize(&transfer_data)?;
-
-    let chained_reveal_tx = compose_reveal(
-        RevealInputs::builder()
-            .fee_rate(FeeRate::from_sat_per_vb(2).unwrap())
-            .participants(vec![
-                RevealParticipantInputs::builder()
-                    .address(seller_address.clone())
-                    .x_only_public_key(internal_key)
-                    .commit_outpoint(OutPoint {
-                        txid: reveal_tx.compute_txid(),
-                        vout: 0,
-                    })
-                    .commit_prevout(reveal_tx.output[0].clone())
-                    .commit_tap_leaf_script(
-                        compose_outputs.per_participant[0]
-                            .chained_tap_leaf_script
-                            .as_ref()
-                            .unwrap()
-                            .clone(),
-                    )
-                    .build(),
-            ])
-            .envelope(546)
-            .op_return_data(transfer_bytes)
-            .build(),
-    )?;
-
-    // 1. SIGN THE ORIGINAL COMMIT
-    test_utils::sign_key_spend(
-        &secp,
-        &mut commit_tx,
-        &[utxo_for_output],
-        &keypair,
-        0,
-        Some(TapSighashType::All),
-    )?;
-
-    let spend_tx_prevouts = vec![commit_tx.output[0].clone()];
-
-    // 2. SIGN THE REVEAL
-
-    // sign the script_spend input for the reveal transaction
-    let reveal_taproot_spend_info = TaprootBuilder::new()
-        .add_leaf(0, tap_script.clone())
-        .expect("Failed to add leaf")
-        .finalize(&secp, internal_key)
-        .expect("Failed to finalize Taproot tree");
-
-    test_utils::sign_script_spend(
-        &secp,
-        &reveal_taproot_spend_info,
-        &tap_script,
-        &mut reveal_tx,
-        &spend_tx_prevouts,
-        &keypair,
-        0,
-    )?;
-
-    let mut chained_reveal_tx = chained_reveal_tx.transaction;
-
-    // 3. SIGN THE CHAINED REVEAL
-    let reveal_tx_prevouts = vec![reveal_tx.output[0].clone()];
-
-    // sign the script_spend input for the chained reveal transaction
-    let chained_taproot_spend_info = TaprootBuilder::new()
-        .add_leaf(0, chained_tap_script.clone())
-        .expect("Failed to add leaf")
-        .finalize(&secp, internal_key)
-        .expect("Failed to finalize Taproot tree");
-
-    test_utils::sign_script_spend(
-        &secp,
-        &chained_taproot_spend_info,
-        &chained_tap_script,
-        &mut chained_reveal_tx,
-        &reveal_tx_prevouts,
-        &keypair,
-        0,
-    )?;
-    println!("commit_tx:!!!!!!!!!!!!!!!!!!!!!!!!!!! {:#?}", commit_tx);
-    println!("reveal_tx:!!!!!!!!!!!!!!!!!!!!!!!!!!! {:#?}", reveal_tx);
-    println!(
-        "chained_reveal_tx:!!!!!!!!!!!!!!!!!!!!!!!!!!! {:#?}",
-        chained_reveal_tx
-    );
-
-    let commit_tx_hex = hex::encode(serialize_tx(&commit_tx));
-    let reveal_tx_hex = hex::encode(serialize_tx(&reveal_tx));
-    let chained_reveal_tx_hex = hex::encode(serialize_tx(&chained_reveal_tx));
-
-    let result = reg_tester
-        .mempool_accept_result(&[commit_tx_hex, reveal_tx_hex, chained_reveal_tx_hex])
-        .await?;
-
-    assert_eq!(
-        result.len(),
-        3,
-        "Expected exactly three transaction results"
-    );
-
-    println!("result:!!!!!!!!!!!!!!!!!!!!!!!!!!! {:#?}", result);
-
-    assert!(
-        result[0].allowed,
-        "Commit transaction was rejected: {:?}",
-        result[0].reject_reason
-    );
-    assert!(
-        result[1].allowed,
-        "Reveal transaction was rejected: {:?}",
-        result[1].reject_reason
-    );
-    assert!(
-        result[2].allowed,
-        "Chained reveal transaction was rejected: {:?}",
-        result[2].reject_reason
-    );
-
-    Ok(())
-}
-
-async fn test_compose_end_to_end_mapping_and_reveal_psbt_hex_decodes(
-    reg_tester: &mut RegTester,
-) -> Result<()> {
-    info!("test_compose_end_to_end_mapping_and_reveal_psbt_hex_decodes");
-    let (nodes, _secrets) =
-        indexer::multi_psbt_test_utils::get_node_addresses(&mut reg_tester.clone()).await?;
-
-    let mut instructions = Vec::new();
-    for n in nodes.iter() {
-        let instruction = indexer::api::compose::InstructionInputs::builder()
-            .address(n.address.clone())
-            .x_only_public_key(n.internal_key)
-            .funding_utxos(vec![(n.next_funding_utxo.clone())])
-            .instruction(b"hello-world".to_vec())
-            .build();
-        instructions.push(instruction);
-    }
-
-    let params = ComposeInputs::builder()
-        .instructions(instructions.clone())
-        .fee_rate(bitcoin::FeeRate::from_sat_per_vb(2).unwrap())
-        .envelope(600)
-        .build();
-
-    let outputs = compose(params)?;
-
-    assert_eq!(outputs.per_participant.len(), instructions.len());
-    for (i, p) in outputs.per_participant.iter().enumerate() {
-        assert_eq!(p.address, instructions[i].address.to_string());
-        assert_eq!(
-            p.x_only_public_key,
-            instructions[i].x_only_public_key.to_string()
-        );
-    }
-
-    // Decode PSBTs
-    let commit_psbt: Psbt = Psbt::deserialize(&hex::decode(&outputs.commit_psbt_hex)?)?;
-    let reveal_psbt: Psbt = Psbt::deserialize(&hex::decode(&outputs.reveal_psbt_hex)?)?;
-
-    // Txids match between PSBTs and returned transactions
-    assert_eq!(
-        commit_psbt.unsigned_tx.compute_txid(),
-        outputs.commit_transaction.compute_txid()
-    );
-    assert_eq!(
-        reveal_psbt.unsigned_tx.compute_txid(),
-        outputs.reveal_transaction.compute_txid()
-    );
-
-    // Inputs/outputs counts are consistent
-    assert_eq!(
-        commit_psbt.inputs.len(),
-        outputs.commit_transaction.input.len()
-    );
-    assert_eq!(
-        commit_psbt.outputs.len(),
-        outputs.commit_transaction.output.len()
-    );
-    assert_eq!(
-        reveal_psbt.inputs.len(),
-        outputs.reveal_transaction.input.len()
-    );
-    assert_eq!(
-        reveal_psbt.outputs.len(),
-        outputs.reveal_transaction.output.len()
-    );
-
-    // Required PSBT metadata is present
-    assert!(commit_psbt.inputs.iter().all(|i| i.witness_utxo.is_some()));
-    assert!(
-        commit_psbt
-            .inputs
-            .iter()
-            .all(|i| i.tap_internal_key.is_some())
-    );
-    assert!(reveal_psbt.inputs.iter().all(|i| i.witness_utxo.is_some()));
-    assert!(
-        reveal_psbt
-            .inputs
-            .iter()
-            .all(|i| i.tap_internal_key.is_some())
-    );
-
-    Ok(())
-}
 
 #[testlib::test(contracts_dir = "../../test-contracts", regtest_only)]
 async fn test_compose_regtest() -> Result<()> {
     let reg_tester = runtime.reg_tester().unwrap();
-    test_commit_reveal_chained_reveal(&mut reg_tester.clone()).await?;
-    test_compose_end_to_end_mapping_and_reveal_psbt_hex_decodes(&mut reg_tester.clone()).await?;
 
     info!("commit_reveal_random_keypair");
     test_commit_reveal_ordinals(&mut reg_tester.clone()).await?;
@@ -536,8 +260,7 @@ async fn test_compose_regtest() -> Result<()> {
     test_taproot_swap_without_token_balance(&mut reg_tester.clone()).await?;
     test_taproot_swap_with_wrong_token(&mut reg_tester.clone()).await?;
 
-    info!("multi_psbt_integration_breakdown");
-    test_portal_coordinated_compose_flow(&mut reg_tester.clone()).await?;
+    info!("multi_psbt_integration");
     test_portal_coordinated_commit_reveal_flow_integration(&mut reg_tester.clone()).await?;
 
     info!("multi_psbt_security");
@@ -573,9 +296,6 @@ async fn test_compose_regtest() -> Result<()> {
     info!("regtest_commit_reveal");
     test_taproot_transaction_regtest(&mut reg_tester.clone()).await?;
 
-    info!("size_limit");
-    test_compose_progressive_size_limit_testnet(&mut reg_tester.clone()).await?;
-
     info!("legacy_commit_reveal_p2wsh");
     test_legacy_commit_reveal_p2wsh(&mut reg_tester.clone()).await?;
 
@@ -593,7 +313,6 @@ async fn test_compose_regtest() -> Result<()> {
     test_compose_duplicate_address_and_duplicate_utxo(&mut reg_tester.clone()).await?;
     test_compose_param_bounds_and_fee_rate(&mut reg_tester.clone()).await?;
     test_reveal_with_op_return_mempool_accept(&mut reg_tester.clone()).await?;
-    test_compose_attach_and_detach(&mut reg_tester.clone()).await?;
 
     Ok(())
 }

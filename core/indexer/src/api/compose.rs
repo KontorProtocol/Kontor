@@ -1156,6 +1156,32 @@ pub async fn compose_commit_v2(
         ));
     }
 
+    // Reject duplicate funding outpoints — within a single Build
+    // participant's funding list, or across multiple Build participants.
+    // Two inputs spending the same outpoint would make the commit tx
+    // double-spend its own input.
+    let mut global_funding: HashSet<&String> = HashSet::new();
+    for &build_idx in &build_indices {
+        if let CommitSource::Build {
+            funding_utxo_ids, ..
+        } = &reveal.participants[build_idx].commit_source
+        {
+            let mut local_funding: HashSet<&String> = HashSet::new();
+            for op in funding_utxo_ids {
+                if !local_funding.insert(op) {
+                    return Err(anyhow!(
+                        "duplicate funding outpoint provided for participant"
+                    ));
+                }
+                if !global_funding.insert(op) {
+                    return Err(anyhow!(
+                        "duplicate funding outpoint provided across participants"
+                    ));
+                }
+            }
+        }
+    }
+
     // Estimate future reveal fee
     let reveal_vbytes = estimate_reveal_vbytes(&reveal)?;
     let reveal_fee = fee_rate

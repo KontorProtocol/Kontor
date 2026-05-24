@@ -1,15 +1,16 @@
 use anyhow::Result;
 use bitcoin::absolute::LockTime;
 use bitcoin::script::Instruction;
-use bitcoin::taproot::LeafVersion;
 use bitcoin::transaction::{Transaction, TxIn, TxOut, Version};
 use bitcoin::{Amount, FeeRate, OutPoint, ScriptBuf, Txid};
 use indexer::api::compose::{
     build_tap_script_and_script_address, calculate_op_return_fee_for_participant,
-    calculate_reveal_fee_delta, compose_reveal, estimate_key_spend_fee,
-    estimate_participant_commit_fees, select_utxos_for_commit,
+    calculate_reveal_fee_delta, estimate_key_spend_fee, estimate_participant_commit_fees,
+    select_utxos_for_commit,
 };
-use indexer_types::{RevealInputs, RevealParticipantInputs, TapLeafScript};
+use indexer_types::{
+    CommitSource, Inst, InstKind, Insts, Reveal, RevealOutput, RevealParticipant,
+};
 use std::str::FromStr;
 use testlib::RegTester;
 use tracing::info;
@@ -825,52 +826,49 @@ pub async fn test_compose_reveal_op_return_size_validation(
 ) -> Result<()> {
     info!("test_compose_reveal_op_return_size_validation");
     let identity = reg_tester.identity().await?;
+    let seller_address = identity.address.clone();
     let keypair = identity.keypair;
     let (xonly, _parity) = keypair.x_only_public_key();
     let commit_data = b"data".to_vec();
-    let (tap_script, script_addr, control_block) =
-        build_tap_script_and_script_address(xonly, commit_data.clone()).expect("build");
-    let commit_prevout = bitcoin::TxOut {
+    let (_, script_addr, _) =
+        build_tap_script_and_script_address(xonly, commit_data).expect("build");
+    let commit_outpoint = OutPoint {
+        txid: Txid::from_str("0000000000000000000000000000000000000000000000000000000000000003")
+            .unwrap(),
+        vout: 0,
+    };
+    let commit_prevout = TxOut {
         value: Amount::from_sat(10_000),
         script_pubkey: script_addr.script_pubkey(),
     };
 
-    let participant = RevealParticipantInputs::builder()
-        .address(script_addr.clone())
-        .x_only_public_key(xonly)
-        .commit_outpoint(OutPoint {
-            txid: Txid::from_str(
-                "0000000000000000000000000000000000000000000000000000000000000003",
-            )
-            .unwrap(),
-            vout: 0,
-        })
-        .commit_prevout(commit_prevout.clone())
-        .commit_tap_leaf_script(TapLeafScript {
-            leaf_version: LeafVersion::TapScript,
-            script: tap_script,
-            control_block: ScriptBuf::from_bytes(control_block.serialize()),
-        })
-        .build();
+    let make_reveal = |op_return_bytes: Vec<u8>| {
+        Reveal::builder()
+            .sat_per_vbyte(2)
+            .participants(vec![
+                RevealParticipant::builder()
+                    .x_only_public_key(xonly.to_string())
+                    .commit_insts(Insts::single(Inst {
+                        gas_limit: 50_000,
+                        kind: InstKind::Publish {
+                            name: "op-return-size".to_string(),
+                            bytes: b"data".to_vec(),
+                        },
+                    }))
+                    .commit_source(CommitSource::existing(commit_outpoint, commit_prevout.clone()))
+                    .output(RevealOutput::change(&seller_address.script_pubkey()))
+                    .build(),
+            ])
+            .extra_outputs(vec![RevealOutput::op_return(op_return_bytes)])
+            .build()
+    };
 
-    // With single-push OP_RETURN, total payload includes the tag ("kon").
-    // So max user data length is 80 - 3 = 77 bytes.
-    let ok_inputs = RevealInputs::builder()
-        .fee_rate(FeeRate::from_sat_per_vb(2).unwrap())
-        .participants(vec![participant.clone()])
-        .op_return_data(vec![1u8; 80])
-        .envelope(546)
-        .build();
-    let ok = compose_reveal(ok_inputs);
+    let ok = reg_tester.compose_reveal_v2(make_reveal(vec![1u8; 80])).await;
     assert!(ok.is_ok(), "80-byte OP_RETURN payload should be accepted");
 
-    let err_inputs = RevealInputs::builder()
-        .fee_rate(FeeRate::from_sat_per_vb(2).unwrap())
-        .participants(vec![participant])
-        .op_return_data(vec![2u8; 81])
-        .envelope(546)
-        .build();
-    let err = compose_reveal(err_inputs);
+    let err = reg_tester
+        .compose_reveal_v2(make_reveal(vec![2u8; 81]))
+        .await;
     assert!(err.is_err(), "81-byte OP_RETURN payload should be rejected");
     let msg = err.err().unwrap().to_string();
     assert!(

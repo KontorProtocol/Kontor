@@ -7,8 +7,7 @@ use indexer::database::types::OpResultId;
 use indexer::test_utils;
 use indexer::{bitcoin_client::client::RegtestRpc, runtime};
 use indexer_types::{
-    ComposeQuery, Inst, InstKind, InstructionQuery, Insts, RevealParticipantQuery,
-    RevealQuery, serialize,
+    CommitSource, Inst, InstKind, Insts, Reveal, RevealOutput, RevealOutputInfo, RevealParticipant,
 };
 use testlib::*;
 
@@ -64,39 +63,42 @@ async fn test_native_token_sponsor_swap() -> Result<()> {
         },
     };
 
-    let seller_compose = rt
-        .compose(
-            ComposeQuery::builder()
-                .instructions(vec![
-                    InstructionQuery::builder()
-                        .address(seller_address.to_string())
-                        .x_only_public_key(seller_internal_key.to_string())
-                        .funding_utxo_ids(format!(
-                            "{}:{}",
-                            seller_funding_outpoint.txid, seller_funding_outpoint.vout
-                        ))
-                        .insts(Insts::single(attach_inst.clone()))
-                        .chained_insts(Insts::single(detach_inst.clone()))
-                        .build(),
-                ])
-                .sat_per_vbyte(2)
-                .envelope(600)
+    let seller_reveal = Reveal::builder()
+        .sat_per_vbyte(2)
+        .participants(vec![
+            RevealParticipant::builder()
+                .x_only_public_key(seller_internal_key.to_string())
+                .commit_insts(Insts::single(attach_inst.clone()))
+                .commit_source(CommitSource::build(
+                    &seller_address,
+                    [seller_funding_outpoint],
+                ))
                 .build(),
-        )
-        .await?;
+        ])
+        .extra_outputs(vec![
+            RevealOutput::chained_envelope(
+                Insts::single(detach_inst.clone()),
+                600,
+                seller_internal_key,
+            ),
+            RevealOutput::change(&seller_address.script_pubkey()),
+        ])
+        .build();
 
-    let mut seller_commit_tx = seller_compose.commit_transaction;
-    let mut seller_attach_reveal_tx = seller_compose.reveal_transaction;
-    let seller_attach_leaf = seller_compose.per_participant[0]
+    let seller_compose = rt.compose_v2(seller_reveal).await?;
+
+    let mut seller_commit_tx = seller_compose.commits[0].transaction.clone();
+    let mut seller_attach_reveal_tx = seller_compose.reveal.transaction.clone();
+    let seller_attach_leaf = seller_compose.reveal.participants[0]
         .commit_tap_leaf_script
         .script
         .clone();
-    let seller_detach_leaf = seller_compose.per_participant[0]
-        .chained_tap_leaf_script
-        .as_ref()
-        .unwrap()
-        .script
-        .clone();
+    let RevealOutputInfo::ChainedEnvelope { tap_leaf_script } =
+        &seller_compose.reveal.output_info[0]
+    else {
+        panic!("output 0 should be ChainedEnvelope");
+    };
+    let seller_detach_leaf = tap_leaf_script.script.clone();
 
     test_utils::sign_key_spend(
         &secp,
@@ -172,28 +174,21 @@ async fn test_native_token_sponsor_swap() -> Result<()> {
         kind: InstKind::Sponsor,
     };
 
-    let buyer_compose = rt
-        .compose(
-            ComposeQuery::builder()
-                .instructions(vec![
-                    InstructionQuery::builder()
-                        .address(buyer_address.to_string())
-                        .x_only_public_key(buyer_internal_key.to_string())
-                        .funding_utxo_ids(format!(
-                            "{}:{}",
-                            buyer_funding_outpoint.txid, buyer_funding_outpoint.vout
-                        ))
-                        .insts(Insts::single(sponsor_inst.clone()))
-                        .build(),
-                ])
-                .sat_per_vbyte(2)
-                .envelope(600)
+    let buyer_reveal = Reveal::builder()
+        .sat_per_vbyte(2)
+        .participants(vec![
+            RevealParticipant::builder()
+                .x_only_public_key(buyer_internal_key.to_string())
+                .commit_insts(Insts::single(sponsor_inst.clone()))
+                .commit_source(CommitSource::build(&buyer_address, [buyer_funding_outpoint]))
+                .output(RevealOutput::change(&buyer_address.script_pubkey()))
                 .build(),
-        )
-        .await?;
+        ])
+        .build();
+    let buyer_compose = rt.compose_v2(buyer_reveal).await?;
 
-    let mut buyer_commit_tx = buyer_compose.commit_transaction;
-    let buyer_sponsor_leaf = buyer_compose.per_participant[0]
+    let mut buyer_commit_tx = buyer_compose.commits[0].transaction.clone();
+    let buyer_sponsor_leaf = buyer_compose.reveal.participants[0]
         .commit_tap_leaf_script
         .script
         .clone();
@@ -233,34 +228,35 @@ async fn test_native_token_sponsor_swap() -> Result<()> {
     // ── Phase 3: build the 2-input swap reveal ──
     // input 0: buyer commit output 0 (reveals the Sponsor leaf)
     // input 1: seller attach reveal output 0 (reveals the detach leaf)
-    let swap_query = RevealQuery {
-        sat_per_vbyte: Some(2),
-        participants: vec![
-            RevealParticipantQuery::builder()
-                .address(buyer_address.to_string())
+    let swap_reveal = Reveal::builder()
+        .sat_per_vbyte(2)
+        .participants(vec![
+            RevealParticipant::builder()
                 .x_only_public_key(buyer_internal_key.to_string())
-                .commit_outpoint(bitcoin::OutPoint {
-                    txid: buyer_commit_tx.compute_txid(),
-                    vout: 0,
-                })
-                .commit_prevout(buyer_commit_tx.output[0].clone())
-                .commit_script_data(serialize(&Insts::single(sponsor_inst.clone()))?)
+                .commit_insts(Insts::single(sponsor_inst.clone()))
+                .commit_source(CommitSource::existing(
+                    bitcoin::OutPoint {
+                        txid: buyer_commit_tx.compute_txid(),
+                        vout: 0,
+                    },
+                    buyer_commit_tx.output[0].clone(),
+                ))
+                .output(RevealOutput::change(&buyer_address.script_pubkey()))
                 .build(),
-            RevealParticipantQuery::builder()
-                .address(seller_address.to_string())
+            RevealParticipant::builder()
                 .x_only_public_key(seller_internal_key.to_string())
-                .commit_outpoint(bitcoin::OutPoint {
-                    txid: seller_attach_reveal_tx.compute_txid(),
-                    vout: 0,
-                })
-                .commit_prevout(seller_attach_reveal_tx.output[0].clone())
-                .commit_script_data(serialize(&Insts::single(detach_inst.clone()))?)
+                .commit_insts(Insts::single(detach_inst.clone()))
+                .commit_source(CommitSource::existing(
+                    bitcoin::OutPoint {
+                        txid: seller_attach_reveal_tx.compute_txid(),
+                        vout: 0,
+                    },
+                    seller_attach_reveal_tx.output[0].clone(),
+                ))
                 .build(),
-        ],
-        op_return_data: None,
-        envelope: None,
-    };
-    let swap_outputs = rt.compose_reveal(swap_query).await?;
+        ])
+        .build();
+    let swap_outputs = rt.compose_reveal_v2(swap_reveal).await?;
     let mut swap_tx = swap_outputs.transaction;
     assert_eq!(swap_tx.input.len(), 2, "swap tx must have 2 inputs");
 

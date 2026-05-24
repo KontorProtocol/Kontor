@@ -1,6 +1,5 @@
 use anyhow::Result;
-use bitcoin::FeeRate;
-use indexer::api::compose::{CommitInputs, ComposeInputs, InstructionInputs, compose_commit};
+use indexer_types::{CommitSource, Inst, InstKind, Insts, Reveal, RevealParticipant};
 use testlib::RegTester;
 use tracing::info;
 
@@ -12,25 +11,30 @@ pub async fn test_compose_commit_psbt_inputs_have_metadata(
     let addr = identity.address.clone();
     let keypair = identity.keypair;
     let (internal_key, _parity) = keypair.x_only_public_key();
-    let next_funding_utxo = identity.next_funding_utxo;
+    let (out_point, _) = identity.next_funding_utxo;
 
-    let inputs = ComposeInputs::builder()
-        .instructions(vec![
-            InstructionInputs::builder()
-                .address(addr.clone())
-                .x_only_public_key(internal_key)
-                .funding_utxos(vec![next_funding_utxo])
-                .instruction(b"x".to_vec())
+    let inst = Inst {
+        gas_limit: 50_000,
+        kind: InstKind::Publish {
+            name: "psbt-metadata".to_string(),
+            bytes: b"x".to_vec(),
+        },
+    };
+    let reveal = Reveal::builder()
+        .sat_per_vbyte(2)
+        .participants(vec![
+            RevealParticipant::builder()
+                .x_only_public_key(internal_key.to_string())
+                .commit_insts(Insts::single(inst))
+                .commit_source(CommitSource::build(&addr, [out_point]))
                 .build(),
         ])
-        .fee_rate(FeeRate::from_sat_per_vb(2).unwrap())
-        .envelope(546)
         .build();
-    let commit = compose_commit(CommitInputs::from(inputs)).expect("commit");
-    let psbt_hex = commit.commit_psbt_hex;
-    let psbt_bytes = hex::decode(&psbt_hex).expect("hex decode");
-    let psbt: bitcoin::psbt::Psbt =
-        bitcoin::psbt::Psbt::deserialize(&psbt_bytes).expect("psbt decode");
+
+    let commit_outputs = reg_tester.compose_commit_v2(reveal).await?;
+    let commit = &commit_outputs.commits[0];
+    let psbt_bytes = hex::decode(&commit.psbt_hex).expect("hex decode");
+    let psbt = bitcoin::psbt::Psbt::deserialize(&psbt_bytes).expect("psbt decode");
     assert!(!psbt.inputs.is_empty());
     for inp in psbt.inputs.iter() {
         assert!(inp.witness_utxo.is_some());
