@@ -907,13 +907,6 @@ pub struct Inst {
     pub kind: InstKind,
 }
 
-impl Inst {
-    /// Shorthand for an op that self-pays up to `gas_limit`.
-    pub fn self_pay(gas_limit: u64, kind: InstKind) -> Self {
-        Self { gas_limit, kind }
-    }
-}
-
 #[serde_as]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[ts(export, export_to = "../../../sdk/src/bindings.d.ts")]

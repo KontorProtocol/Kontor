@@ -203,14 +203,6 @@ async fn simulate_mixed_outcomes_align_positionally() -> Result<()> {
     Ok(())
 }
 
-// `simulate_materialize_fail_surfaces_as_rejected_variant` was deleted
-// in the PaymentIntent → gas_limit cleanup: it exercised "orphan
-// PaymentIntent::Sponsored on a direct input is rejected at
-// materialization." With PaymentIntent gone (direct ops just self-pay),
-// that rejection path no longer exists. Positional alignment of
-// `OpWithResult::Rejected` with execution failures is still covered by
-// `simulate_mixed_outcomes_align_positionally` (above).
-
 /// Inspect (not simulate) never sets error_message, even after a tx with
 /// failures has actually been processed on chain.
 #[testlib::test(contracts_dir = "../../test-contracts", regtest_only)]

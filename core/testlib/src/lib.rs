@@ -643,9 +643,8 @@ impl RuntimeImpl for RuntimeRegtest {
         expr: &str,
     ) -> Result<String> {
         // Regtest path: api wrappers map to the same regtest instruction
-        // mechanism as user calls. The `PaymentIntent::self_pay(10_000)` is
-        // a test-friendly default that lets the cluster's executor resolve
-        // payment normally. Sponsored regtest scenarios construct Inst directly.
+        // mechanism as user calls. Sponsored scenarios construct Inst
+        // directly with `InstKind::Sponsor`.
         self.execute(signer, contract_address, expr).await
     }
 
