@@ -94,47 +94,11 @@ pub fn compose_reveal(reveal: Reveal) -> Result<RevealOutputs> {
         });
     }
 
-    // Compute the output layout: positions 0..N where N = max participant
-    // index with Some output (or 0 if none). Participants with Some go at
-    // their position; Nones get filled by extras in order; any remaining
-    // extras append at the end.
-    //
-    // We track outputs as `LayoutSlot` (an enum) so Change values can be
-    // computed at the end once we know the total fee.
-    enum LayoutSlot {
-        FromParticipant(usize), // participants[idx].output (which is Some)
-        FromExtra(usize),       // reveal.extra_outputs[idx]
-    }
-    let max_paired_idx = resolved
-        .iter()
-        .enumerate()
-        .rev()
-        .find(|(_, p)| p.output.is_some())
-        .map(|(i, _)| i);
-    let mut layout: Vec<LayoutSlot> = Vec::new();
-    let mut extras_cursor = 0usize;
-    if let Some(max_idx) = max_paired_idx {
-        for (i, p) in resolved.iter().enumerate().take(max_idx + 1) {
-            if p.output.is_some() {
-                layout.push(LayoutSlot::FromParticipant(i));
-            } else {
-                // Slot gap from a None participant — must be filled by an extra
-                if extras_cursor >= reveal.extra_outputs.len() {
-                    return Err(anyhow!(
-                        "participant {} has no paired output but no extra_output available to fill its slot",
-                        i
-                    ));
-                }
-                layout.push(LayoutSlot::FromExtra(extras_cursor));
-                extras_cursor += 1;
-            }
-        }
-    }
-    // Append remaining extras after the participant region
-    while extras_cursor < reveal.extra_outputs.len() {
-        layout.push(LayoutSlot::FromExtra(extras_cursor));
-        extras_cursor += 1;
-    }
+    // Compute the output layout. Shared with `estimate_reveal_vbytes` so
+    // the commit's sizing matches the actual reveal exactly — if these
+    // diverged the commit's tap output value would silently undercover
+    // the reveal's real fee.
+    let layout = compute_output_layout(&reveal)?;
 
     // At most one Change output (no well-defined way to split the
     // leftover across multiple).
@@ -339,13 +303,21 @@ pub fn compose_reveal(reveal: Reveal) -> Result<RevealOutputs> {
 
     // Add outputs to the PSBT and build the parallel `output_info` Vec
     // describing each output's kind (Fixed/Change/ChainedEnvelope/OpReturn).
-    // Change handling:
+    //
+    // Change handling — only silent-drop sub-dust if doing so can't
+    // invalidate a participant's signature:
     //   - value >= dust: always materialize, regardless of position.
-    //   - value < dust AND Change is the very last output: silently drop
-    //     to fee (no positional shift, safe for SACP).
-    //   - value < dust AND Change is anywhere else: hard error (a silent
-    //     drop would shift later outputs and break any input's
-    //     SIGHASH_SINGLE | ANYONECANPAY commitment).
+    //   - value < dust AND Change is the very last output AND either
+    //     (a) there's exactly one participant — they sign after compose
+    //         returns, so they bind to the post-drop layout, OR
+    //     (b) Change sits past every participant index — no participant's
+    //         input commits (under any sighash) to this position, so
+    //         the drop is positionally invisible.
+    //   - value < dust anywhere else: hard error. A drop in a multi-
+    //     participant tx at or before the participant region risks
+    //     invalidating a participant's pre-signed SACP witness (output
+    //     at their index disappears or shifts).
+    let n_participants = reveal.participants.len();
     let mut output_info: Vec<RevealOutputInfo> = Vec::with_capacity(resolved_outputs.len());
     let last_idx = resolved_outputs.len().saturating_sub(1);
     for (idx, ro) in resolved_outputs.into_iter().enumerate() {
@@ -371,12 +343,15 @@ pub fn compose_reveal(reveal: Reveal) -> Result<RevealOutputs> {
                 output_info.push(RevealOutputInfo::ChainedEnvelope { tap_leaf_script });
             }
             ResolvedOutputValue::Change { script } => {
-                if change_value < MIN_ENVELOPE_SATS && idx != last_idx {
+                let is_last = idx == last_idx;
+                let droppable = is_last && (n_participants <= 1 || idx >= n_participants);
+                if change_value < MIN_ENVELOPE_SATS && !droppable {
                     return Err(anyhow!(
-                        "Change at position {} would be sub-dust ({} sats < {} dust floor); silently dropping would shift later outputs and break SACP — place Change last, raise input value, or use Fixed",
+                        "Change at position {} would be sub-dust ({} sats < {} dust floor); silently dropping in a {}-participant tx could invalidate a participant's pre-signed witness — raise input value, place Change last past all participants, or use Fixed",
                         idx,
                         change_value,
-                        MIN_ENVELOPE_SATS
+                        MIN_ENVELOPE_SATS,
+                        n_participants,
                     ));
                 }
                 if change_value >= MIN_ENVELOPE_SATS {
@@ -387,7 +362,8 @@ pub fn compose_reveal(reveal: Reveal) -> Result<RevealOutputs> {
                     psbt.outputs.push(bitcoin::psbt::Output::default());
                     output_info.push(RevealOutputInfo::Change);
                 }
-                // else: sub-dust Change at the last position — silent drop to fee.
+                // else: sub-dust Change at a position where dropping is
+                // safe — silent drop to fee.
             }
             ResolvedOutputValue::OpReturn { script } => {
                 psbt.unsigned_tx.output.push(TxOut {
@@ -438,6 +414,56 @@ pub fn compose_reveal(reveal: Reveal) -> Result<RevealOutputs> {
 fn parse_hex_script(hex_str: &str) -> Result<ScriptBuf> {
     let bytes = hex::decode(hex_str).map_err(|e| anyhow!("invalid hex in script_pubkey: {}", e))?;
     Ok(ScriptBuf::from_bytes(bytes))
+}
+
+/// Where each tx output comes from — pinned to a participant's paired
+/// `output` (placed at that participant's input index for SACP
+/// alignment) or pulled from `extra_outputs` (filling a participant
+/// slot with `None`, or appended after the participant region).
+enum LayoutSlot {
+    FromParticipant(usize),
+    FromExtra(usize),
+}
+
+/// Compute the reveal's output layout — positions 0..N where
+/// N = max participant index with a `Some` output. Each participant
+/// with `Some` goes at its own input index; `None` slots are filled
+/// by `extra_outputs` in order; any remaining extras append at the
+/// end. Shared by `compose_reveal` (the real build) and
+/// `estimate_reveal_vbytes` (the commit's fee-sizing dummy build) so
+/// the two never diverge — divergence would silently underfund the
+/// commit's tap output.
+fn compute_output_layout(reveal: &Reveal) -> Result<Vec<LayoutSlot>> {
+    let max_paired_idx = reveal
+        .participants
+        .iter()
+        .enumerate()
+        .rev()
+        .find(|(_, p)| p.output.is_some())
+        .map(|(i, _)| i);
+    let mut layout: Vec<LayoutSlot> = Vec::new();
+    let mut extras_cursor = 0usize;
+    if let Some(max_idx) = max_paired_idx {
+        for (i, p) in reveal.participants.iter().enumerate().take(max_idx + 1) {
+            if p.output.is_some() {
+                layout.push(LayoutSlot::FromParticipant(i));
+            } else {
+                if extras_cursor >= reveal.extra_outputs.len() {
+                    return Err(anyhow!(
+                        "participant {} has no paired output but no extra_output available to fill its slot",
+                        i
+                    ));
+                }
+                layout.push(LayoutSlot::FromExtra(extras_cursor));
+                extras_cursor += 1;
+            }
+        }
+    }
+    while extras_cursor < reveal.extra_outputs.len() {
+        layout.push(LayoutSlot::FromExtra(extras_cursor));
+        extras_cursor += 1;
+    }
+    Ok(layout)
 }
 
 /// Append a `RevealOutput` to a dummy reveal tx for vbyte estimation.
@@ -529,34 +555,17 @@ fn estimate_reveal_vbytes(reveal: &Reveal) -> Result<u64> {
         dummy.input.push(txin);
     }
 
-    // Outputs — same layout algorithm as compose_reveal
-    let max_paired_idx = reveal
-        .participants
-        .iter()
-        .enumerate()
-        .rev()
-        .find(|(_, p)| p.output.is_some())
-        .map(|(i, _)| i);
-    let mut extras_cursor = 0usize;
-    if let Some(max_idx) = max_paired_idx {
-        for i in 0..=max_idx {
-            if let Some(out) = reveal.participants[i].output.as_ref() {
-                add_output_to_dummy(&mut dummy, out)?;
-            } else {
-                let out = reveal.extra_outputs.get(extras_cursor).ok_or_else(|| {
-                    anyhow!(
-                        "participant {} has no paired output and no extra_output to fill its slot",
-                        i
-                    )
-                })?;
-                add_output_to_dummy(&mut dummy, out)?;
-                extras_cursor += 1;
-            }
-        }
-    }
-    while extras_cursor < reveal.extra_outputs.len() {
-        add_output_to_dummy(&mut dummy, &reveal.extra_outputs[extras_cursor])?;
-        extras_cursor += 1;
+    // Outputs — defer to the shared layout helper that `compose_reveal`
+    // also uses, so sizing here matches the actual reveal exactly.
+    for slot in compute_output_layout(reveal)? {
+        let out = match slot {
+            LayoutSlot::FromParticipant(i) => reveal.participants[i]
+                .output
+                .as_ref()
+                .expect("participant slot has Some output"),
+            LayoutSlot::FromExtra(j) => &reveal.extra_outputs[j],
+        };
+        add_output_to_dummy(&mut dummy, out)?;
     }
 
     Ok(dummy.vsize() as u64)

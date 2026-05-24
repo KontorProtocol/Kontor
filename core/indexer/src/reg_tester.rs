@@ -104,8 +104,13 @@ async fn run_bitcoin(data_dir: &Path) -> Result<(Child, bitcoin_client::Client, 
         );
     }
 
+    // Drop bitcoind's stdout — it inherits the parent's pipe and its
+    // startup writes interleave with kontor's own `println!`s, splitting
+    // long single-line outputs (notably the regtest `KONTOR_REGTEST_INFO`
+    // payload) at noise newlines. stderr is left inherited for debug.
     let process = Command::new("bitcoind")
         .arg(format!("-datadir={}", data_dir.to_string_lossy()))
+        .stdout(std::process::Stdio::null())
         .spawn()?;
     let config = RegtestConfig {
         bitcoin_rpc_url: format!("http://127.0.0.1:{rpc_port}"),

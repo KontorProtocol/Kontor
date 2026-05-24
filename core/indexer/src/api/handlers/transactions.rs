@@ -83,13 +83,16 @@ pub async fn post_transaction_broadcast(
         .map_err(|e| HttpError::BadRequest(format!("invalid transaction hex: {e}")))?
         .compute_txid();
 
-    // `submitpackage` only accepts a child-with-parents topology (≤2
-    // generations): a `[commit, reveal]` pair qualifies and gets atomic
-    // package validation. A longer dependency chain — `[commit, attach
-    // reveal, detach reveal]` — does not, so it is relayed tx-by-tx.
-    // Every Kontor tx funds its own fee (compose sizes each), so no
-    // package CPFP is needed; sent in dependency order, each parent is
-    // already in the mempool when its child arrives.
+    // `submitpackage` (Bitcoin Core 30) only accepts child-with-parents
+    // topology — a single child plus its direct parents. The 2-tx
+    // commit-reveal pair fits; the marketplace swap's 4-tx
+    // `[attachCommit, attachReveal, buyerCommit, swapReveal]` DAG
+    // (swapReveal has two independent roots: attachReveal's parent +
+    // buyerCommit) does not. For larger packages we fall back to
+    // tx-by-tx relay; each Kontor tx funds its own fee (compose sizes
+    // each), so a successful parent followed by a failing child orphans
+    // the parent in mempool until it expires — recoverable, but the
+    // caller sees a half-broadcast state.
     if transactions.len() <= 2 {
         let result = env
             .bitcoin
