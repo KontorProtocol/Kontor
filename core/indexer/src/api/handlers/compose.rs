@@ -23,14 +23,10 @@ pub async fn post_compose(
     State(env): State<Env>,
     Json(mut reveal): Json<Reveal>,
 ) -> Result<ComposeOutputs> {
-    let default_fee = match reveal.sat_per_vbyte {
-        Some(v) => v,
-        None => default_sat_per_vbyte(&env).await?,
-    };
     if reveal.sat_per_vbyte.is_none() {
-        reveal.sat_per_vbyte = Some(default_fee);
+        reveal.sat_per_vbyte = Some(default_sat_per_vbyte(&env).await?);
     }
-    let (commits, reveal_outputs) = compose(reveal, env.config.network, &env.bitcoin, default_fee)
+    let (commits, reveal_outputs) = compose(reveal, env.config.network, &env.bitcoin)
         .await
         .map_err(|e| HttpError::BadRequest(e.to_string()))?;
     Ok(ComposeOutputs {
@@ -44,14 +40,10 @@ pub async fn post_compose_commit(
     State(env): State<Env>,
     Json(mut reveal): Json<Reveal>,
 ) -> Result<CommitOutputs> {
-    let default_fee = match reveal.sat_per_vbyte {
-        Some(v) => v,
-        None => default_sat_per_vbyte(&env).await?,
-    };
     if reveal.sat_per_vbyte.is_none() {
-        reveal.sat_per_vbyte = Some(default_fee);
+        reveal.sat_per_vbyte = Some(default_sat_per_vbyte(&env).await?);
     }
-    let outputs = compose_commit(reveal, env.config.network, &env.bitcoin, default_fee)
+    let outputs = compose_commit(reveal, env.config.network, &env.bitcoin)
         .await
         .map_err(|e| HttpError::BadRequest(e.to_string()))?;
     Ok(outputs.into())

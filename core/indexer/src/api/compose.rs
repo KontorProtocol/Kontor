@@ -636,7 +636,6 @@ pub async fn compose_commit(
     reveal: Reveal,
     network: bitcoin::Network,
     bitcoin_client: &Client,
-    default_sat_per_vbyte: u64,
 ) -> Result<indexer_types::CommitOutputs> {
     if reveal.participants.is_empty() {
         return Err(anyhow!("Reveal must have at least one participant"));
@@ -645,7 +644,9 @@ pub async fn compose_commit(
         return Err(anyhow!("Too many participants (max {})", MAX_PARTICIPANTS));
     }
 
-    let sat_per_vbyte = reveal.sat_per_vbyte.unwrap_or(default_sat_per_vbyte);
+    let sat_per_vbyte = reveal
+        .sat_per_vbyte
+        .ok_or_else(|| anyhow!("sat_per_vbyte required"))?;
     if sat_per_vbyte == 0 {
         return Err(anyhow!("Invalid fee rate"));
     }
@@ -889,10 +890,9 @@ pub async fn compose_commit(
 /// then builds the reveal PSBT (via `compose_reveal`) using the
 /// resulting all-Existing Reveal.
 pub async fn compose(
-    mut reveal: Reveal,
+    reveal: Reveal,
     network: bitcoin::Network,
     bitcoin_client: &Client,
-    default_sat_per_vbyte: u64,
 ) -> Result<(Vec<indexer_types::CommitTx>, RevealOutputs)> {
     let has_build = reveal
         .participants
@@ -900,19 +900,9 @@ pub async fn compose(
         .any(|p| matches!(p.commit_source, CommitSource::Build { .. }));
 
     let (commits, reveal_to_build) = if has_build {
-        // compose_commit resolves sat_per_vbyte internally and stamps
-        // it onto the returned reveal.
-        let commit_outputs =
-            compose_commit(reveal, network, bitcoin_client, default_sat_per_vbyte).await?;
+        let commit_outputs = compose_commit(reveal, network, bitcoin_client).await?;
         (commit_outputs.commits, commit_outputs.reveal)
     } else {
-        // No-Build short-circuit: hand the reveal straight to
-        // `compose_reveal`. Fill `sat_per_vbyte` from the default so
-        // that path doesn't have to know about the indexer-level
-        // fallback.
-        if reveal.sat_per_vbyte.is_none() {
-            reveal.sat_per_vbyte = Some(default_sat_per_vbyte);
-        }
         (Vec::new(), reveal)
     };
 
