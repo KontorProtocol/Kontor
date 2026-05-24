@@ -1018,11 +1018,6 @@ pub fn insts_bytes_to_json(bytes: Vec<u8>) -> Result<String, String> {
     bytes_to_json::<Insts>(bytes)
 }
 
-/// The full OP_RETURN payload of a Kontor transaction — one entry per
-/// reveal input that carries a directive. This is what a reveal embeds
-/// and what `block.rs` postcard-decodes when indexing.
-pub type OpReturnPayload = Vec<OpReturnEntry>;
-
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[ts(export, export_to = "../../../sdk/src/bindings.d.ts")]
 pub struct SignerResponse {

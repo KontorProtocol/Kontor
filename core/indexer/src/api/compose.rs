@@ -381,7 +381,9 @@ pub fn compose_reveal(reveal: Reveal) -> Result<RevealOutputs> {
 
     // If there are no outputs (rare — e.g., all-None participants and
     // empty extras), Bitcoin would reject the tx. Emit a minimal OP_RETURN
-    // carrying the protocol tag so the tx is structurally valid.
+    // carrying the protocol tag so the tx is structurally valid. Push a
+    // matching `output_info` entry so its invariant — same length as
+    // `transaction.output` — is preserved.
     if psbt.unsigned_tx.output.is_empty() {
         psbt.unsigned_tx.output.push(TxOut {
             value: Amount::from_sat(0),
@@ -393,6 +395,7 @@ pub fn compose_reveal(reveal: Reveal) -> Result<RevealOutputs> {
             },
         });
         psbt.outputs.push(bitcoin::psbt::Output::default());
+        output_info.push(RevealOutputInfo::OpReturn);
     }
 
     let commit_tap_leaf_scripts: Vec<TapLeafScript> = resolved
