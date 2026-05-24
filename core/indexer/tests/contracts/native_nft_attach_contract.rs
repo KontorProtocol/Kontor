@@ -124,11 +124,11 @@ async fn test_native_nft_attach_contract() -> Result<()> {
         ])
         .build();
 
-    let v2_res = rt.compose_v2(reveal).await?;
+    let compose_outputs = rt.compose_v2(reveal).await?;
 
-    let mut commit_transaction = v2_res.commits[0].transaction.clone();
-    let mut reveal_transaction = v2_res.reveal.transaction.clone();
-    let tap_script = v2_res.reveal.participants[0]
+    let mut commit_transaction = compose_outputs.commits[0].transaction.clone();
+    let mut reveal_transaction = compose_outputs.reveal.transaction.clone();
+    let tap_script = compose_outputs.reveal.participants[0]
         .commit_tap_leaf_script
         .script
         .clone();

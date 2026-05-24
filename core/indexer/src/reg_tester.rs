@@ -416,11 +416,11 @@ impl RegTesterInner {
             extra_inputs: vec![],
             extra_outputs: vec![],
         };
-        let v2_res = self.kontor_client.compose_v2(reveal).await?;
+        let compose_outputs = self.kontor_client.compose_v2(reveal).await?;
 
         // The single Build participant produces one commit tx.
-        let mut commit_transaction = v2_res.commits[0].transaction.clone();
-        let mut reveal_transaction = v2_res.reveal.transaction.clone();
+        let mut commit_transaction = compose_outputs.commits[0].transaction.clone();
+        let mut reveal_transaction = compose_outputs.reveal.transaction.clone();
 
         let secp = Secp256k1::new();
         test_utils::sign_key_spend(
@@ -431,7 +431,7 @@ impl RegTesterInner {
             0,
             None,
         )?;
-        let tap_script = &v2_res.reveal.participants[0].commit_tap_leaf_script.script;
+        let tap_script = &compose_outputs.reveal.participants[0].commit_tap_leaf_script.script;
         let taproot_spend_info = TaprootBuilder::new()
             .add_leaf(0, tap_script.clone())
             .map_err(|e| anyhow!("Failed to add leaf: {}", e))?
@@ -459,11 +459,11 @@ impl RegTesterInner {
         let compose_res = ComposeOutputs::builder()
             .commit_transaction(commit_transaction.clone())
             .commit_transaction_hex(hex::encode(serialize_tx(&commit_transaction)))
-            .commit_psbt_hex(v2_res.commits[0].psbt_hex.clone())
+            .commit_psbt_hex(compose_outputs.commits[0].psbt_hex.clone())
             .reveal_transaction(reveal_transaction.clone())
             .reveal_transaction_hex(hex::encode(serialize_tx(&reveal_transaction)))
-            .reveal_psbt_hex(v2_res.reveal.psbt_hex.clone())
-            .per_participant(v2_res.reveal.participants.clone())
+            .reveal_psbt_hex(compose_outputs.reveal.psbt_hex.clone())
+            .per_participant(compose_outputs.reveal.participants.clone())
             .build();
         Ok((compose_res, commit_tx_hex, reveal_tx_hex))
     }

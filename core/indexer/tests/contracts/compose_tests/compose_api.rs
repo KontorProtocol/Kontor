@@ -9,8 +9,9 @@ use indexer::api::compose::{ComposeInputs, InstructionInputs, compose, compose_r
 use indexer::test_utils;
 use indexer::witness_data::{TokenBalance, WitnessData};
 use indexer_types::{
-    ComposeQuery, ContractAddress, Inst, InstKind, InstructionQuery, Insts, OpReturnEntry, RevealInputs, RevealParticipantInputs, RevealParticipantQuery,
-    RevealQuery, SignerRef, serialize,
+    CommitSource, ComposeQuery, ContractAddress, Inst, InstKind, InstructionQuery, Insts,
+    OpReturnEntry, Reveal, RevealInputs, RevealOutput, RevealParticipant,
+    RevealParticipantInputs, RevealParticipantQuery, RevealQuery, SignerRef, serialize,
 };
 use testlib::RegTester;
 
@@ -39,23 +40,26 @@ pub async fn test_compose(reg_tester: &mut RegTester) -> Result<()> {
         },
     };
 
-    let query = ComposeQuery::builder()
-        .instructions(vec![
-            InstructionQuery::builder()
-                .address(seller_address.to_string())
+    // v2 Reveal: single Build participant w/ paired Change to seller.
+    // (No chained envelope or extras — this is the simple "commit + reveal
+    // that just runs the inst and returns change" case.)
+    let reveal = Reveal::builder()
+        .sat_per_vbyte(2)
+        .participants(vec![
+            RevealParticipant::builder()
                 .x_only_public_key(internal_key.to_string())
-                .funding_utxo_ids(format!("{}:{}", out_point.txid, out_point.vout))
-                .insts(Insts::single(instruction.clone()))
+                .commit_insts(Insts::single(instruction.clone()))
+                .output(RevealOutput::change(&seller_address.script_pubkey()))
+                .commit_source(CommitSource::build(&seller_address, [out_point]))
                 .build(),
         ])
-        .sat_per_vbyte(2)
         .build();
 
-    let compose_outputs = reg_tester.compose(query).await?;
+    let compose_outputs = reg_tester.compose_v2(reveal).await?;
 
-    let mut commit_transaction = compose_outputs.commit_transaction;
+    let mut commit_transaction = compose_outputs.commits[0].transaction.clone();
 
-    let tap_script = compose_outputs.per_participant[0]
+    let tap_script = compose_outputs.reveal.participants[0]
         .commit_tap_leaf_script
         .script
         .clone();
@@ -90,7 +94,7 @@ pub async fn test_compose(reg_tester: &mut RegTester) -> Result<()> {
     );
     assert!(commit_transaction.output[0].value.to_sat() >= 330);
 
-    let mut reveal_transaction = compose_outputs.reveal_transaction;
+    let mut reveal_transaction = compose_outputs.reveal.transaction.clone();
 
     assert_eq!(reveal_transaction.input.len(), 1);
     assert_eq!(
