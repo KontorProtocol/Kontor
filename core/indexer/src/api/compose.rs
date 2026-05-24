@@ -380,19 +380,14 @@ pub fn compose_reveal(reveal: Reveal) -> Result<RevealOutputs> {
     }
 
     // If there are no outputs (rare — e.g., all-None participants and
-    // empty extras), Bitcoin would reject the tx. Emit a minimal OP_RETURN
-    // carrying the protocol tag so the tx is structurally valid. Push a
-    // matching `output_info` entry so its invariant — same length as
+    // empty extras), Bitcoin would reject the tx. Emit a minimal empty
+    // OP_RETURN so the tx is structurally valid. Push a matching
+    // `output_info` entry so its invariant — same length as
     // `transaction.output` — is preserved.
     if psbt.unsigned_tx.output.is_empty() {
         psbt.unsigned_tx.output.push(TxOut {
             value: Amount::from_sat(0),
-            script_pubkey: {
-                let mut s = ScriptBuf::new();
-                s.push_opcode(OP_RETURN);
-                s.push_slice(PROTOCOL_TAG);
-                s
-            },
+            script_pubkey: empty_op_return_script(),
         });
         psbt.outputs.push(bitcoin::psbt::Output::default());
         output_info.push(RevealOutputInfo::OpReturn);
@@ -563,18 +558,38 @@ fn estimate_reveal_vbytes(reveal: &Reveal) -> Result<u64> {
 
     // Outputs — defer to the shared layout helper that `compose_reveal`
     // also uses, so sizing here matches the actual reveal exactly.
-    for slot in compute_output_layout(reveal)? {
+    let layout = compute_output_layout(reveal)?;
+    for slot in &layout {
         let out = match slot {
-            LayoutSlot::FromParticipant(i) => reveal.participants[i]
+            LayoutSlot::FromParticipant(i) => reveal.participants[*i]
                 .output
                 .as_ref()
                 .expect("participant slot has Some output"),
-            LayoutSlot::FromExtra(j) => &reveal.extra_outputs[j],
+            LayoutSlot::FromExtra(j) => &reveal.extra_outputs[*j],
         };
         add_output_to_dummy(&mut dummy, out)?;
     }
+    // Mirror compose_reveal's fallback OP_RETURN for an all-Nones/no-extras
+    // layout — otherwise the commit's tap output gets sized too small and
+    // compose_reveal later errors with "insufficient input value".
+    if layout.is_empty() {
+        dummy.output.push(TxOut {
+            value: Amount::from_sat(0),
+            script_pubkey: empty_op_return_script(),
+        });
+    }
 
     Ok(dummy.vsize() as u64)
+}
+
+/// `OP_RETURN <empty>` — a minimal standard `nulldata` output used as
+/// a structural-validity filler when a reveal would otherwise have zero
+/// outputs (Bitcoin rejects 0-output txs). Carries no Kontor semantics.
+fn empty_op_return_script() -> ScriptBuf {
+    let mut s = ScriptBuf::new();
+    s.push_opcode(OP_RETURN);
+    s.push_slice(b"");
+    s
 }
 
 /// Build commit transactions for each `CommitSource::Build` participant
