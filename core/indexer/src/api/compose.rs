@@ -1083,13 +1083,10 @@ pub fn estimate_participant_commit_fees(
         temp_tx.input.push(txin);
     }
 
-    // Add script output (P2TR size = 34 bytes)
-    temp_tx.output.push(TxOut {
-        value: Amount::ZERO,
-        script_pubkey: ScriptBuf::from_bytes(vec![0u8; 34]),
-    });
-
-    // Add change output
+    // Add change output. The script output (the Build's tap output) is
+    // already present in `base_tx` — `compose_commit` builds the commit
+    // PSBT with that output pre-placed before calling here, so the only
+    // marginal output to account for is the change.
     temp_tx.output.push(TxOut {
         value: Amount::ZERO,
         script_pubkey: ScriptBuf::from_bytes(vec![0u8; P2TR_OUTPUT_SIZE]),

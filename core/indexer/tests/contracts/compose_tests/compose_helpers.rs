@@ -757,18 +757,20 @@ pub fn test_estimate_participant_commit_fees_with_existing_base_tx() {
 
     let (fee_with, fee_no) = estimate_participant_commit_fees(&base_tx, &utxos, fee_rate).unwrap();
 
-    // Should only charge for delta (1 input + script output + optional change)
-    // Not for the existing 2 inputs + 2 outputs in base_tx
-    // Delta: 1 input (~57) + script output (43) + change output (43) = ~143 vbytes = 1430 sats
+    // Should only charge for delta (1 input + optional change). The
+    // caller is responsible for placing the script (tap) output in
+    // `base_tx` before calling — estimate_participant_commit_fees no
+    // longer auto-adds one.
+    // Delta: 1 input (~57) + change output (43) = ~100 vbytes = 1000 sats
     assert!(
-        (1300..=1600).contains(&fee_with),
-        "Delta with change should be ~1430 sats: got {}",
+        (870..=1130).contains(&fee_with),
+        "Delta with change should be ~1000 sats: got {}",
         fee_with
     );
-    // Delta: 1 input (~57) + script output (43) = ~100 vbytes = 1000 sats
+    // Delta: 1 input (~57) = ~57 vbytes = 570 sats
     assert!(
-        (900..=1100).contains(&fee_no),
-        "Delta without change should be ~1000 sats: got {}",
+        (470..=680).contains(&fee_no),
+        "Delta without change should be ~570 sats: got {}",
         fee_no
     );
 }
@@ -832,15 +834,15 @@ pub fn test_estimate_participant_commit_fees_high_fee_rate() {
     let (fee_with, fee_no) = estimate_participant_commit_fees(&base_tx, &utxos, fee_rate).unwrap();
 
     // At 500 sat/vb:
-    // ~143 vbytes (with change) = 71,500 sats
-    // ~100 vbytes (no change) = 50,000 sats
+    // ~100 vbytes (with change: 1 input + 1 change output) = 50,000 sats
+    // ~57 vbytes (no change: 1 input only) = ~28,500 sats
     assert!(
-        fee_with > 50_000,
+        fee_with > 40_000,
         "High fee rate should result in high fee: {}",
         fee_with
     );
     assert!(
-        fee_no > 40_000,
+        fee_no > 20_000,
         "High fee rate (no change) should result in high fee: {}",
         fee_no
     );
@@ -854,16 +856,16 @@ pub fn test_estimate_participant_commit_fees_many_utxos() {
     let (fee_with, fee_no) = estimate_participant_commit_fees(&base_tx, &utxos, fee_rate).unwrap();
 
     // 10 inputs at ~57 vbytes each = 570 vbytes
-    // + script output (43) + change output (43) = 656 vbytes = 6560 sats
+    // + change output (43) = 613 vbytes = 6130 sats
     assert!(
-        (6000..=7500).contains(&fee_with),
-        "10 inputs + 2 outputs should be ~6500 sats: got {}",
+        (5500..=7000).contains(&fee_with),
+        "10 inputs + change output should be ~6130 sats: got {}",
         fee_with
     );
-    // Without change: 570 + 43 = 613 vbytes = 6130 sats
+    // Without change: 10 inputs only = 570 vbytes = 5700 sats
     assert!(
-        (5500..=7000).contains(&fee_no),
-        "10 inputs + 1 output should be ~6100 sats: got {}",
+        (5000..=6500).contains(&fee_no),
+        "10 inputs (no change) should be ~5700 sats: got {}",
         fee_no
     );
 }
@@ -1136,11 +1138,13 @@ pub fn test_select_utxos_for_commit_change_above_dust() {
         envelope
     );
 
-    // Fee should include change output since change >= envelope
-    // At 10 sat/vb, 1 input + 2 outputs (script + change) = ~143 vbytes = ~1430 sats
+    // Fee should include change output since change >= envelope. Base
+    // is (0,0) so the script (tap) output isn't pre-placed here — the
+    // function measures only the delta from the empty base, which is
+    // 1 input + 1 change output ≈ 100 vbytes ≈ 1000 sats at 10 sat/vb.
     assert!(
-        (1200..=1700).contains(&fee),
-        "Fee with change should be ~1430: got {}",
+        (800..=1200).contains(&fee),
+        "Fee with change should be ~1000: got {}",
         fee
     );
 }
@@ -1154,12 +1158,12 @@ pub fn test_select_utxos_for_commit_change_below_dust() {
     // 1. It's enough to cover script_output + fee_no_change
     // 2. But the leftover (change) is < envelope
     //
-    // fee_no_change for 1 input, 1 output at 10 sat/vb:
-    // ~100 vbytes = ~1000 sats
-    // So if script_output = 1000, we need UTXO > 2000 but change < 330
-    // UTXO = 2300 gives us: 2300 - 1000 - 1000 = 300 change (below 330)
+    // fee_no_change here is the marginal cost of 1 input over an empty
+    // base = ~57 vbytes = ~570 sats. With script_output = 1000, the
+    // pick must satisfy UTXO ∈ [1570, 1900): UTXO = 1700 → leftover
+    // 1700 − 1000 − 570 = 130 (< 330 dust floor).
 
-    let utxos = make_utxos_with_values(&[2300]);
+    let utxos = make_utxos_with_values(&[1700]);
     let script_output = 1000;
 
     let result = select_utxos_for_commit(&base_tx, utxos, script_output, fee_rate, envelope, 0);
@@ -1177,11 +1181,11 @@ pub fn test_select_utxos_for_commit_change_below_dust() {
         envelope
     );
 
-    // Fee should NOT include change output since change < envelope
-    // At 10 sat/vb, 1 input + 1 output = ~100 vbytes = ~1000 sats
+    // Fee should NOT include change output since change < envelope.
+    // 1 input over empty base ≈ 57 vbytes ≈ 570 sats at 10 sat/vb.
     assert!(
-        (800..=1200).contains(&fee),
-        "Fee without change should be ~1000: got {}",
+        (470..=680).contains(&fee),
+        "Fee without change should be ~570: got {}",
         fee
     );
 }
@@ -1270,11 +1274,12 @@ pub fn test_select_utxos_for_commit_with_existing_base_tx() {
     let (selected, fee) = result.unwrap();
     assert_eq!(selected.len(), 1);
 
-    // Fee should be for delta only (1 new input + 2 new outputs)
-    // Not for the entire tx including existing inputs/outputs
+    // Fee should be for delta only (1 new input + 1 new change output)
+    // — the script (tap) output is the caller's responsibility to
+    // place in `base_tx` and isn't re-added here.
     assert!(
-        (1200..=1700).contains(&fee),
-        "Delta fee should be ~1430: got {}",
+        (800..=1200).contains(&fee),
+        "Delta fee should be ~1000: got {}",
         fee
     );
 }
@@ -1316,12 +1321,13 @@ pub fn test_select_utxos_for_commit_exact_amount_no_change() {
     let envelope = 330;
     let script_output = 1000;
 
-    // Calculate what we need for exact amount (no change scenario)
-    // 1 input + 1 output (script) = ~100 vbytes = ~1000 sats fee
-    // Total needed: 1000 (script) + 1000 (fee) = 2000 sats
-    // If we have exactly 2000 sats, change = 0 (< envelope)
+    // Calculate what we need for the "no change" path. fee_no_change
+    // is the marginal cost of 1 input over an empty base ≈ 57 vbytes
+    // ≈ 570 sats. Total needed: 1000 (script) + 570 (fee) = 1570 sats.
+    // Pick 1600 → leftover 30 (< envelope), the function returns the
+    // no-change fee.
 
-    let utxos = make_utxos_with_values(&[2000]);
+    let utxos = make_utxos_with_values(&[1600]);
 
     let result = select_utxos_for_commit(&base_tx, utxos, script_output, fee_rate, envelope, 0);
 
@@ -1451,12 +1457,12 @@ pub fn test_select_utxos_for_commit_edge_case_change_equals_envelope() {
     let envelope = 330;
     let script_output = 1000;
 
-    // We want change to be exactly at envelope boundary
-    // This is tricky because we need: total - script - fee_with_change = envelope
-    // At 10 sat/vb with 1 input + 2 outputs: fee ~1430 sats
-    // So: total = 1000 + 1430 + 330 = 2760
+    // We want change to be exactly at envelope boundary. fee_with_change
+    // for 1 input + 1 change output over an empty base ≈ 100 vbytes ≈
+    // 1000 sats at 10 sat/vb. So: total = 1000 (script) + 1000 (fee) +
+    // 330 (envelope) = 2330.
 
-    let utxos = make_utxos_with_values(&[2800]); // Slightly above to ensure success
+    let utxos = make_utxos_with_values(&[2400]); // Slightly above to ensure success
 
     let result = select_utxos_for_commit(&base_tx, utxos, script_output, fee_rate, envelope, 0);
 
