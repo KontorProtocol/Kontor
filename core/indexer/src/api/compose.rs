@@ -859,7 +859,7 @@ pub async fn compose_commit(
 /// then builds the reveal PSBT (via `compose_reveal`) using the
 /// resulting all-Existing Reveal.
 pub async fn compose(
-    reveal: Reveal,
+    mut reveal: Reveal,
     network: bitcoin::Network,
     bitcoin_client: &Client,
     default_sat_per_vbyte: u64,
@@ -870,10 +870,19 @@ pub async fn compose(
         .any(|p| matches!(p.commit_source, CommitSource::Build { .. }));
 
     let (commits, reveal_to_build) = if has_build {
+        // compose_commit resolves sat_per_vbyte internally and stamps
+        // it onto the returned reveal.
         let commit_outputs =
             compose_commit(reveal, network, bitcoin_client, default_sat_per_vbyte).await?;
         (commit_outputs.commits, commit_outputs.reveal)
     } else {
+        // No-Build short-circuit: hand the reveal straight to
+        // `compose_reveal`. Fill `sat_per_vbyte` from the default so
+        // that path doesn't have to know about the indexer-level
+        // fallback.
+        if reveal.sat_per_vbyte.is_none() {
+            reveal.sat_per_vbyte = Some(default_sat_per_vbyte);
+        }
         (Vec::new(), reveal)
     };
 
