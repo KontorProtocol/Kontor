@@ -22,7 +22,7 @@
 
 import type { ChildProcess } from "node:child_process";
 import { regtestChain, type Chain } from "./chains.js";
-import type { Utxo } from "./transport/http.js";
+import type { Utxo } from "./json-codec.js";
 
 // `regtestChain` is a pure, browser-safe chain builder — it lives in
 // `chains.ts` next to `signet`. Re-exported here so `@kontor/sdk/regtest`

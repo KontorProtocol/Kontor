@@ -24,6 +24,9 @@
  * `WireInsts` payload.
  */
 
+import { hex } from "@scure/base";
+import { p2tr } from "@scure/btc-signer";
+
 import type { Account } from "../account/index.js";
 import type { Chain } from "../chains.js";
 import type { ContractAddress } from "../canonical/ContractAddress.js";
@@ -33,31 +36,20 @@ import type {
   BroadcastResult,
   KontorTransport,
   OpResultRaw,
+  Utxo,
   WireInsts,
 } from "../json-codec.js";
 import type {
-  CommitOutputsV2,
+  CommitOutputs,
   ComposeOutputs,
-  ComposeQuery,
-  ComposeV2Response,
   ErrorResponse,
   OpWithResult,
   ResultResponse,
   Reveal,
   RevealOutputs,
-  RevealQuery,
   ViewExpr,
   ViewResult,
 } from "../bindings.js";
-
-export interface Utxo {
-  txid: string;
-  vout: number;
-  /** Value in satoshis. */
-  value: bigint;
-  /** ScriptPubKey hex (for PSBT input building). */
-  scriptPubKey: string;
-}
 
 export interface HttpTransportOptions {
   chain: Chain;
@@ -171,84 +163,73 @@ export class HttpTransport implements KontorTransport {
   }
 
   /**
-   * Compose a Kontor transaction for `insts` — commit + (attach) reveal,
-   * unsigned. `chainedInsts` carries a detach to chain after. Funding
-   * UTXOs and fee rate are caller-supplied (`utxos` / `feeRate`).
-   */
-  async compose(
-    insts: WireInsts,
-    chainedInsts?: WireInsts,
-  ): Promise<ComposeOutputs> {
-    const { account } = this.opts;
-    const utxos = await this.resolveUtxos();
-    const query: ComposeQuery = {
-      instructions: [
-        {
-          address: account.address,
-          x_only_public_key: account.xOnlyPubKey,
-          funding_utxo_ids: utxos.map((u) => `${u.txid}:${u.vout}`).join(","),
-          insts,
-          chained_insts: chainedInsts ?? null,
-        },
-      ],
-      sat_per_vbyte: await this.resolveFeeRate(),
-      envelope: null,
-    };
-    return this.postJson<ComposeOutputs>("/transactions/compose", query);
-  }
-
-  /** Build a reveal tx (e.g. the detach reveal) from a composed parent. */
-  composeReveal(query: RevealQuery): Promise<RevealOutputs> {
-    return this.postJson<RevealOutputs>(
-      "/transactions/compose/reveal",
-      query,
-    );
-  }
-
-  // ─── v2: Reveal-centric compose API ─────────────────────────────────
-
-  /**
    * Combined commit + reveal. Builds any commits required by Build
    * participants, then builds the reveal PSBT. If all participants are
    * Existing, only builds the reveal.
    */
-  composeV2(reveal: Reveal): Promise<ComposeV2Response> {
-    return this.postJson<ComposeV2Response>("/transactions/compose/v2", reveal);
+  compose(reveal: Reveal): Promise<ComposeOutputs> {
+    return this.postJson<ComposeOutputs>("/transactions/compose", reveal);
   }
 
   /**
    * Builds only the commits for Build participants and returns the
    * input Reveal with each Build → Existing (outpoint filled in).
    * Caller signs/broadcasts the commits, then later passes the
-   * returned reveal to `composeRevealV2`.
+   * returned reveal to `composeReveal`.
    */
-  composeCommitV2(reveal: Reveal): Promise<CommitOutputsV2> {
-    return this.postJson<CommitOutputsV2>("/transactions/compose/commit/v2", reveal);
+  composeCommit(reveal: Reveal): Promise<CommitOutputs> {
+    return this.postJson<CommitOutputs>("/transactions/compose/commit", reveal);
   }
 
   /**
    * Builds only the reveal PSBT. All participants must be
    * CommitSource::Existing (no commits to build here).
    */
-  composeRevealV2(reveal: Reveal): Promise<RevealOutputs> {
-    return this.postJson<RevealOutputs>("/transactions/compose/reveal/v2", reveal);
+  composeReveal(reveal: Reveal): Promise<RevealOutputs> {
+    return this.postJson<RevealOutputs>("/transactions/compose/reveal", reveal);
   }
 
   /**
    * Compose a Kontor transaction for `insts` and sign the commit +
    * reveal — the shared front half of `submit` / `inspect` / `simulate`.
+   *
+   * Builds a single-Build-participant Reveal: the account funds and
+   * signs the commit, the commit's tap-leaf output is script-spent in
+   * the reveal whose paired output is Change back to the account.
    */
   private async composeAndSign(
     insts: WireInsts,
   ): Promise<{ commitHex: string; revealHex: string }> {
-    const composed = await this.compose(insts);
     const { account } = this.opts;
+    const utxos = await this.utxos();
+    const scriptPubKeyHex = hex.encode(
+      p2tr(hex.decode(account.xOnlyPubKey), undefined, this.opts.chain.network).script,
+    );
+    const reveal: Reveal = {
+      sat_per_vbyte: await this.feeRate(),
+      participants: [
+        {
+          x_only_public_key: account.xOnlyPubKey,
+          commit_insts: insts,
+          output: { Change: { script_pubkey: scriptPubKeyHex } },
+          commit_source: {
+            Build: {
+              address: account.address,
+              funding_utxo_ids: utxos.map((u) => `${u.txid}:${u.vout}`),
+            },
+          },
+        },
+      ],
+      extra_inputs: [],
+      extra_outputs: [],
+    };
+    const composed = await this.compose(reveal);
     return {
-      commitHex: await signCommit(account, composed.commit_psbt_hex),
+      commitHex: await signCommit(account, composed.commits[0]!.psbt_hex),
       revealHex: await signReveal(
         account,
-        composed.reveal_psbt_hex,
-        composed.per_participant,
+        composed.reveal.psbt_hex,
+        composed.reveal.commit_tap_leaf_scripts,
       ),
     };
   }
@@ -303,7 +284,7 @@ export class HttpTransport implements KontorTransport {
   }
 
   /** Caller-supplied funding UTXOs; the SDK never sources them itself. */
-  private async resolveUtxos(): Promise<Utxo[]> {
+  async utxos(): Promise<Utxo[]> {
     if (this.opts.utxos == null) {
       throw new ChainError(
         "submit: no funding UTXOs — set a `utxos` provider on the transport",
@@ -320,7 +301,7 @@ export class HttpTransport implements KontorTransport {
   }
 
   /** Fee rate in sat/vB, or `null` to let the indexer pick `fastest_fee`. */
-  private async resolveFeeRate(): Promise<number | null> {
+  async feeRate(): Promise<number | null> {
     const f = this.opts.feeRate;
     if (f == null) return null;
     return typeof f === "number" ? f : await f();

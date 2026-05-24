@@ -14,6 +14,10 @@
  * an OP_RETURN-driven recipient mechanism that no longer exists.
  */
 
+import { hex } from "@scure/base";
+import { p2tr } from "@scure/btc-signer";
+
+import type { Reveal } from "./bindings.js";
 import { instToWire, type Inst } from "./inst.js";
 import type { WireInsts } from "./json-codec.js";
 import { Offer, buildSellerDetachPsbt, type OfferData } from "./offer.js";
@@ -59,24 +63,67 @@ export class Attachment<T> {
       aggregate: null,
     };
 
-    const composed = await transport.compose(attachWire, detachWire);
-    const participant = composed.per_participant[0];
-    if (participant?.chained_tap_leaf_script == null) {
+    // Seller's reveal: one Build participant carrying the attach,
+    // ChainedEnvelope output committing to the detach for the future
+    // buyer to spend, and Change back to the seller (last position).
+    const sellerScriptPubKey = hex.encode(
+      p2tr(hex.decode(account.xOnlyPubKey), undefined, this.session.chain.network).script,
+    );
+    const utxos = await transport.utxos();
+    const reveal: Reveal = {
+      sat_per_vbyte: await transport.feeRate(),
+      participants: [
+        {
+          x_only_public_key: account.xOnlyPubKey,
+          commit_insts: attachWire,
+          output: null,
+          commit_source: {
+            Build: {
+              address: account.address,
+              funding_utxo_ids: utxos.map((u) => `${u.txid}:${u.vout}`),
+            },
+          },
+        },
+      ],
+      extra_inputs: [],
+      extra_outputs: [
+        {
+          ChainedEnvelope: {
+            insts: detachWire,
+            value: 600n,
+            internal_key: account.xOnlyPubKey,
+          },
+        },
+        { Change: { script_pubkey: sellerScriptPubKey } },
+      ],
+    };
+    const composed = await transport.compose(reveal);
+
+    // The chained detach leaf script (for the future buyer to spend the
+    // escrow output) lives on output 0 of the reveal — same position as
+    // the ChainedEnvelope we declared in extra_outputs.
+    const firstOutputInfo = composed.reveal.output_info[0];
+    if (
+      firstOutputInfo == null ||
+      typeof firstOutputInfo === "string" ||
+      !("ChainedEnvelope" in firstOutputInfo)
+    ) {
       throw new TransportError(
-        "offer: compose returned no detach (chained) leaf script",
+        "offer: compose returned no ChainedEnvelope at reveal output 0",
         { docsPath: "/sdk/attach" },
       );
     }
+    const detachLeaf = firstOutputInfo.ChainedEnvelope.tap_leaf_script;
 
-    const commitHex = await signCommit(account, composed.commit_psbt_hex);
+    const commitHex = await signCommit(account, composed.commits[0]!.psbt_hex);
     const attachRevealHex = await signReveal(
       account,
-      composed.reveal_psbt_hex,
-      composed.per_participant,
+      composed.reveal.psbt_hex,
+      composed.reveal.commit_tap_leaf_scripts,
     );
     const detachPsbt = await buildSellerDetachPsbt(account, {
       attachRevealHex,
-      detachLeaf: participant.chained_tap_leaf_script,
+      detachLeaf,
       price: opts.price,
       network: this.session.chain.network,
     });
@@ -86,7 +133,7 @@ export class Attachment<T> {
       attachCommit: commitHex,
       attachReveal: attachRevealHex,
       detachInsts: detachWire,
-      detachLeaf: participant.chained_tap_leaf_script,
+      detachLeaf,
       detachPsbt,
       price: opts.price.toString(),
       seller: account.xOnlyPubKey,

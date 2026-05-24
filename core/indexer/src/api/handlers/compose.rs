@@ -1,5 +1,5 @@
 use axum::{Json, extract::State};
-use indexer_types::{CommitOutputs, Reveal, RevealOutputs};
+use indexer_types::{CommitOutputs, ComposeOutputs, Reveal, RevealOutputs};
 
 use crate::api::compose::{compose, compose_commit, compose_reveal};
 use crate::api::{Env, error::HttpError, result::Result};
@@ -17,13 +17,6 @@ async fn default_sat_per_vbyte(env: &Env) -> std::result::Result<u64, HttpError>
         ));
     }
     Ok(env.fees_rx.borrow().fastest)
-}
-
-#[derive(serde::Serialize, serde::Deserialize, ts_rs::TS)]
-#[ts(export, export_to = "../../../sdk/src/bindings.d.ts")]
-pub struct ComposeOutputs {
-    pub commits: Vec<indexer_types::CommitTx>,
-    pub reveal: RevealOutputs,
 }
 
 pub async fn post_compose(

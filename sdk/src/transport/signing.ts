@@ -21,7 +21,7 @@ import { hex } from "@scure/base";
 import { TaprootControlBlock, Transaction, utils as btcUtils } from "@scure/btc-signer";
 
 import type { Account } from "../account/index.js";
-import type { ParticipantScripts } from "../bindings.js";
+import type { TapLeafScript } from "../bindings.js";
 import { SignerError } from "../errors.js";
 
 /**
@@ -40,20 +40,19 @@ export async function signCommit(
 
 /**
  * Sign a reveal PSBT — a taproot script-path spend. Each input's leaf
- * script + control block (from the compose response's `per_participant`,
- * parallel to the PSBT inputs) is injected before signing, and the
- * witness — `[schnorr sig, leaf script, control block]` — assembled by
- * hand afterwards.
+ * script + control block (from the compose response's
+ * `commit_tap_leaf_scripts`, parallel to the PSBT inputs) is injected
+ * before signing, and the witness — `[schnorr sig, leaf script, control
+ * block]` — assembled by hand afterwards.
  */
 export async function signReveal(
   account: Account,
   psbtHex: string,
-  participants: ParticipantScripts[],
+  leaves: TapLeafScript[],
 ): Promise<string> {
   // Prepare: inject each input's leaf script + control block.
   const prep = Transaction.fromPSBT(hex.decode(psbtHex));
-  participants.forEach((p, i) => {
-    const leaf = p.commit_tap_leaf_script;
+  leaves.forEach((leaf, i) => {
     const scriptWithVersion = btcUtils.concatBytes(
       hex.decode(leaf.script),
       new Uint8Array([leaf.leafVersion]),
@@ -68,7 +67,7 @@ export async function signReveal(
 
   // Finalize by hand: witness = [schnorr sig, leaf script, control block].
   const tx = Transaction.fromPSBT(signed);
-  participants.forEach((p, i) => {
+  leaves.forEach((leaf, i) => {
     const sig = tx.getInput(i).tapScriptSig?.[0]?.[1];
     if (sig == null) {
       throw new SignerError(
@@ -76,7 +75,6 @@ export async function signReveal(
         { docsPath: "/sdk/transport" },
       );
     }
-    const leaf = p.commit_tap_leaf_script;
     tx.updateInput(i, {
       finalScriptWitness: [
         sig,

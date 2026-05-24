@@ -1,7 +1,8 @@
 use anyhow::{Result, anyhow};
 use indexer_types::{
-    CommitOutputs, ContractResponse, ErrorResponse, Info, OpWithResult, ResultResponse, ResultRow,
-    Reveal, RevealOutputs, SignerResponse, TransactionHex, TransactionRow, ViewExpr, ViewResult,
+    CommitOutputs, ComposeOutputs, ContractResponse, ErrorResponse, Info, OpWithResult,
+    ResultResponse, ResultRow, Reveal, RevealOutputs, SignerResponse, TransactionHex,
+    TransactionRow, ViewExpr, ViewResult,
 };
 use reqwest::{Client as HttpClient, ClientBuilder, Response, StatusCode};
 use serde::{Deserialize, Serialize};
@@ -65,7 +66,7 @@ impl Client {
         .await
     }
 
-    pub async fn compose(&self, reveal: Reveal) -> Result<crate::api::handlers::ComposeOutputs> {
+    pub async fn compose(&self, reveal: Reveal) -> Result<ComposeOutputs> {
         Self::handle_response(
             self.client
                 .post(format!("{}/transactions/compose", &self.url))

@@ -212,6 +212,17 @@ pub struct CommitOutputs {
     pub reveal: Reveal,
 }
 
+/// Response from `compose`: built commits (one per Build participant)
+/// plus the built reveal PSBT. The caller signs each commit's input,
+/// signs the reveal's tap-script-spend inputs (using
+/// `RevealOutputs.commit_tap_leaf_scripts`), and broadcasts the package.
+#[derive(Serialize, Deserialize, TS)]
+#[ts(export, export_to = "../../../sdk/src/bindings.d.ts")]
+pub struct ComposeOutputs {
+    pub commits: Vec<CommitTx>,
+    pub reveal: RevealOutputs,
+}
+
 #[derive(Debug, Serialize, Deserialize, Clone, TS)]
 #[ts(export, export_to = "../../../sdk/src/bindings.d.ts")]
 pub struct TapLeafScript {

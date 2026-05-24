@@ -700,7 +700,7 @@ impl RegTester {
     pub async fn compose(
         &self,
         reveal: indexer_types::Reveal,
-    ) -> Result<crate::api::handlers::ComposeOutputs> {
+    ) -> Result<indexer_types::ComposeOutputs> {
         self.inner.lock().await.kontor_client.compose(reveal).await
     }
 

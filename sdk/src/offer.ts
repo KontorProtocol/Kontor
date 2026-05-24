@@ -27,10 +27,9 @@ import type { Account } from "./account/index.js";
 import type { TapLeafScript } from "./bindings.js";
 import type { BitcoinNetwork } from "./chains.js";
 import { SignerError } from "./errors.js";
-import type { BroadcastResult, WireInsts } from "./json-codec.js";
+import type { BroadcastResult, Utxo, WireInsts } from "./json-codec.js";
 import { encodeRecipientOpReturn } from "./op-return.js";
 import type { KontorSession } from "./session.js";
-import type { Utxo } from "./transport/http.js";
 
 /** P2TR dust floor — change below this is dropped into the fee. */
 const DUST_SATS = 330n;

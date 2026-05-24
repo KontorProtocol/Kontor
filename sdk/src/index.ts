@@ -38,7 +38,8 @@ export { Attachment } from "./attach";
 export { Offer, IncomingOffer } from "./offer";
 export type { OfferData, OfferInspection } from "./offer";
 export { HttpTransport, http } from "./transport/http";
-export type { HttpTransportOptions, Utxo } from "./transport/http";
+export type { HttpTransportOptions } from "./transport/http";
+export type { Utxo } from "./json-codec";
 export { signet } from "./chains";
 export type { Chain } from "./chains";
 export type {
