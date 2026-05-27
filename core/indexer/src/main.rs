@@ -89,10 +89,12 @@ async fn run_regtest() -> Result<()> {
         .await?;
 
     // Split the dev account's funding into independent Bitcoin UTXOs so
-    // distinct regtest test files (transfer, attach, …) can each spend
-    // one without colliding on a single shared output. The SDK passes
-    // these to `submit` as funding — it never sources UTXOs itself.
-    let funding = cluster.split_dev_funding(7).await?;
+    // distinct regtest test files (transfer, publish, bulk, offer,
+    // revoke, …) can each claim one without colliding on a single
+    // shared output. The SDK passes these to `submit` as funding — it
+    // never sources UTXOs itself. Bump this count when adding a new
+    // regtest file that needs its own slot.
+    let funding = cluster.split_dev_funding(8).await?;
 
     let api_port = cluster.node_configs[0].api_port;
     let dev = &cluster.identity;

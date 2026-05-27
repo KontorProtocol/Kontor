@@ -32,6 +32,7 @@ export type { KontorTransport } from "./json-codec";
 // The full client-layer export pass — Account impls, transport, errors,
 // aggregate — lands with the runtime implementation (work item #13).
 export { KontorSession } from "./session";
+export { Result, ResultUnwrapError } from "./result";
 export type { Inst } from "./inst";
 export { ContractBase } from "./contract-base";
 export { Attachment } from "./attach";

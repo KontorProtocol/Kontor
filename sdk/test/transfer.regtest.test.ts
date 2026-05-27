@@ -9,7 +9,7 @@
  * alike. Run via `npm run test:regtest` / `npm run test:regtest:browser`.
  */
 import { test, expect, inject } from "vitest";
-import { Decimal, KontorSession, LocalAccount, http } from "@kontor/sdk";
+import { Decimal, KontorSession, LocalAccount, Result, http } from "@kontor/sdk";
 import { regtestChain } from "@kontor/sdk/regtest";
 import { Contract } from "./__generated__/token.js";
 import "./regtest-context.js";
@@ -58,9 +58,7 @@ test("transfer(): submit/wait moves tokens; balance() view reflects it", async (
     // `await` on the proc Inst fires submit → wait; throws on a non-Ok
     // op status, so reaching here means the transfer landed.
     const result = await token.transfer(recipient.holderRef, Decimal.from("1"));
-    expect(result.kind).toBe("ok");
-    if (result.kind !== "ok") throw new Error("transfer returned err");
-    expect(result.value.amt.toString()).toBe("1");
+    expect(Result.unwrap(result).amt.toString()).toBe("1");
 
     const after = await token.balance(recipient.holderRef);
     expect(after?.toString()).toBe("1");
