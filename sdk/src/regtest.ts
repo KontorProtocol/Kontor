@@ -21,8 +21,12 @@
  */
 
 import type { ChildProcess } from "node:child_process";
+import { hex } from "@scure/base";
+import { Transaction, p2tr } from "@scure/btc-signer";
 import { regtestChain, type Chain } from "./chains.js";
 import type { Utxo } from "./json-codec.js";
+import { LocalAccount } from "./account/local.js";
+import type { Account } from "./account/index.js";
 
 // `regtestChain` is a pure, browser-safe chain builder — it lives in
 // `chains.ts` next to `signet`. Re-exported here so `@kontor/sdk/regtest`
@@ -70,12 +74,98 @@ export interface RegtestInfo {
   devFundingUtxos: Utxo[];
 }
 
-/** A running `kontor regtest` devnet. */
-export interface Regtest extends RegtestInfo {
+/**
+ * Devnet client-side view: the connection info plus ready-made helpers
+ * (`devAccount`, `fundAddress`, `createAccount`). Available both to the
+ * process that owns the devnet (via `startRegtest`) and to test workers
+ * that didn't spawn it (via `connectRegtest(info)`).
+ *
+ * Does NOT include `stop()` — only the spawning process can kill the
+ * child.
+ */
+export interface RegtestClient extends RegtestInfo {
   /** A `Chain` wired to this devnet — pass straight to `KontorSession`. */
   chain: Chain;
+  /** The dev account as a ready-to-sign `LocalAccount`. */
+  devAccount: LocalAccount;
+  /**
+   * Send `sats` from `sourceAccount` (default: the dev account) to
+   * `destAddress`. Builds a one-in/two-out P2TR key-path tx, signs it,
+   * and broadcasts via the devnet's bitcoind RPC. Returns the new UTXO
+   * at output 0; the change at output 1 stays with `sourceAccount`.
+   *
+   * Does NOT mine — `KontorSession.submit` happily spends mempool UTXOs
+   * (CPFP). Throws if the source can't cover `sats + feeSats`.
+   */
+  fundAddress(opts: FundAddressOptions): Promise<Utxo>;
+  /**
+   * Mint a fresh `LocalAccount` with random keys and fund it with
+   * `sats` from `sourceUtxo` (typically one of `devFundingUtxos`).
+   * One-line equivalent of: generate key → build LocalAccount → call
+   * `fundAddress`.
+   *
+   *     const { account, fundingUtxo } = await regtest.createAccount({
+   *       sats: 50_000n,
+   *       sourceUtxo: regtest.devFundingUtxos[3],
+   *     });
+   */
+  createAccount(opts: CreateAccountOptions): Promise<{
+    account: LocalAccount;
+    fundingUtxo: Utxo;
+  }>;
+  /**
+   * Mine `count` blocks (default 1) to the dev address, immediately
+   * advancing the chain. Returns the new block hashes.
+   *
+   * Most ops don't need this — the devnet's auto-miner ticks every
+   * 10s, and the reactor batches `Call`/`Issuance`/`Sponsor`/
+   * `RegisterBlsKey` between blocks. `Publish` is the exception: a
+   * contract's address is `name@<height>_<tx_index>`, so the result
+   * row can't materialize until the publish tx lands in a block.
+   * Call `mine()` right after a Publish to drop the up-to-10s tail.
+   */
+  mine(count?: number): Promise<string[]>;
+}
+
+/**
+ * A running `kontor regtest` devnet — `RegtestClient` plus the
+ * process-owning `stop()`. Returned only by `startRegtest()`.
+ */
+export interface Regtest extends RegtestClient {
   /** Stop the devnet: SIGTERM the process and wait for a clean exit. */
   stop(): Promise<void>;
+}
+
+export interface FundAddressOptions {
+  /** Destination P2TR address (bech32m). */
+  destAddress: string;
+  /** Destination's x-only taproot pubkey, hex. */
+  destXOnlyPubKey: string;
+  /** Amount to send. */
+  sats: bigint;
+  /** UTXO to spend. Typically `regtest.devFundingUtxos[i]`. */
+  sourceUtxo: Utxo;
+  /**
+   * Account that owns `sourceUtxo` and signs the spend. Defaults to
+   * the dev account.
+   */
+  sourceAccount?: Account;
+  /** Flat fee in sats. Default: 500. */
+  feeSats?: bigint;
+}
+
+export interface CreateAccountOptions {
+  /** How many sats to fund the new account with. */
+  sats: bigint;
+  /** UTXO to spend. Typically `regtest.devFundingUtxos[i]`. */
+  sourceUtxo: Utxo;
+  /**
+   * Account that owns `sourceUtxo` and signs the funding spend.
+   * Defaults to the dev account.
+   */
+  sourceAccount?: Account;
+  /** Flat fee in sats. Default: 500. */
+  feeSats?: bigint;
 }
 
 /** The single stdout line `kontor regtest` prints once the devnet is up. */
@@ -181,6 +271,181 @@ function resolveKontorBin(opt?: string): string {
   return opt ?? process.env.KONTOR_BIN ?? "kontor";
 }
 
+/** Minimal Bitcoin Core JSON-RPC POST helper for the regtest devnet. */
+async function bitcoinRpc(
+  url: string,
+  method: string,
+  params: unknown[],
+): Promise<unknown> {
+  const parsed = new URL(url);
+  // Auth lives in the URL (rpc:rpc@host:port); strip it for the body URL.
+  const auth =
+    parsed.username !== ""
+      ? btoa(`${parsed.username}:${parsed.password}`)
+      : null;
+  const cleanUrl = `${parsed.protocol}//${parsed.host}${parsed.pathname}`;
+  const res = await fetch(cleanUrl, {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      ...(auth != null ? { authorization: `Basic ${auth}` } : {}),
+    },
+    body: JSON.stringify({ jsonrpc: "1.0", id: "kontor-regtest", method, params }),
+  });
+  const json = (await res.json()) as { result?: unknown; error?: unknown };
+  if (json.error != null) {
+    throw new Error(`bitcoinRpc ${method}: ${JSON.stringify(json.error)}`);
+  }
+  return json.result;
+}
+
+/**
+ * Build, sign, and broadcast a one-in/two-out P2TR key-path send.
+ * Shared body of `fundAddress`; broken out so `createAccount` can call
+ * the same path without re-marshalling.
+ */
+async function performFundAddress(
+  bitcoinRpcUrl: string,
+  chain: Chain,
+  defaultAccount: Account,
+  opts: FundAddressOptions,
+): Promise<Utxo> {
+  const feeSats = opts.feeSats ?? 500n;
+  const change = opts.sourceUtxo.value - opts.sats - feeSats;
+  if (change < 0n) {
+    throw new Error(
+      `fundAddress: source ${opts.sourceUtxo.value} cannot cover ${opts.sats}+${feeSats}`,
+    );
+  }
+  const source = opts.sourceAccount ?? defaultAccount;
+  const sourceXOnly = hex.decode(source.xOnlyPubKey);
+  const destScript = p2tr(
+    hex.decode(opts.destXOnlyPubKey),
+    undefined,
+    chain.network,
+  ).script;
+  const changeScript = p2tr(sourceXOnly, undefined, chain.network).script;
+
+  const tx = new Transaction({ allowUnknownOutputs: true });
+  tx.addInput({
+    txid: opts.sourceUtxo.txid,
+    index: opts.sourceUtxo.vout,
+    witnessUtxo: {
+      script: hex.decode(opts.sourceUtxo.scriptPubKey),
+      amount: opts.sourceUtxo.value,
+    },
+    tapInternalKey: sourceXOnly,
+  });
+  tx.addOutput({ script: destScript, amount: opts.sats });
+  tx.addOutput({ script: changeScript, amount: change });
+
+  const signed = await source.signPsbt(tx.toPSBT());
+  const final = Transaction.fromPSBT(signed);
+  const sig = final.getInput(0).tapKeySig;
+  if (sig == null) throw new Error("fundAddress: source input not signed");
+  final.updateInput(0, { finalScriptWitness: [sig] });
+  const rawHex = hex.encode(final.extract());
+  const txid = (await bitcoinRpc(bitcoinRpcUrl, "sendrawtransaction", [
+    rawHex,
+  ])) as string;
+
+  return {
+    txid,
+    vout: 0,
+    value: opts.sats,
+    scriptPubKey: hex.encode(destScript),
+  };
+}
+
+/** Generate a random 32-byte private key as lowercase hex. */
+function randomPrivateKey(): string {
+  const bytes = new Uint8Array(32);
+  globalThis.crypto.getRandomValues(bytes);
+  return hex.encode(bytes);
+}
+
+/**
+ * Wire shape of `RegtestInfo` that crosses vitest's `provide()`/
+ * `inject()` boundary or any other structured-clone-via-string path.
+ * UTXO `value` is `bigint | string | number` because bigints survive
+ * structured clone in Node but historically were stringified to
+ * keep the payload browser-worker-safe.
+ */
+export interface ProvidedRegtestInfo {
+  apiUrl: string;
+  bitcoinRpc: string;
+  devPrivateKey: string;
+  devPublicKey: string;
+  devAddress: string;
+  devFundingUtxos: Array<{
+    txid: string;
+    vout: number;
+    value: bigint | string | number;
+    scriptPubKey: string;
+  }>;
+}
+
+/**
+ * Build the client-side `RegtestClient` view (chain + devAccount +
+ * fundAddress + createAccount) from a serialized `RegtestInfo`. The
+ * counterpart to `startRegtest()` for test workers that didn't spawn
+ * the devnet themselves — vitest's `provide()`/`inject()` only carries
+ * serializable data, so the helpers can't ride on the `Regtest` object
+ * through that boundary. Tests call `connectRegtest(inject("regtest"))`
+ * to recover them.
+ *
+ * Accepts the wide `ProvidedRegtestInfo` shape so callers don't have
+ * to pre-`BigInt()` their UTXO values themselves.
+ */
+export function connectRegtest(info: ProvidedRegtestInfo): RegtestClient {
+  const normalizedInfo: RegtestInfo = {
+    ...info,
+    devFundingUtxos: info.devFundingUtxos.map((u) => ({
+      txid: u.txid,
+      vout: u.vout,
+      value: typeof u.value === "bigint" ? u.value : BigInt(u.value),
+      scriptPubKey: u.scriptPubKey,
+    })),
+  };
+  const chain = regtestChain(normalizedInfo);
+  const devAccount = LocalAccount.fromPrivateKey({
+    privateKey: normalizedInfo.devPrivateKey,
+    chain,
+  });
+  const fundAddress = (opts: FundAddressOptions): Promise<Utxo> =>
+    performFundAddress(normalizedInfo.bitcoinRpc, chain, devAccount, opts);
+  const mine = async (count: number = 1): Promise<string[]> =>
+    (await bitcoinRpc(normalizedInfo.bitcoinRpc, "generatetoaddress", [
+      count,
+      normalizedInfo.devAddress,
+    ])) as string[];
+  const createAccount = async (
+    opts: CreateAccountOptions,
+  ): Promise<{ account: LocalAccount; fundingUtxo: Utxo }> => {
+    const account = LocalAccount.fromPrivateKey({
+      privateKey: randomPrivateKey(),
+      chain,
+    });
+    const fundingUtxo = await fundAddress({
+      destAddress: account.address,
+      destXOnlyPubKey: account.xOnlyPubKey,
+      sats: opts.sats,
+      sourceUtxo: opts.sourceUtxo,
+      sourceAccount: opts.sourceAccount,
+      feeSats: opts.feeSats,
+    });
+    return { account, fundingUtxo };
+  };
+  return {
+    ...normalizedInfo,
+    chain,
+    devAccount,
+    fundAddress,
+    createAccount,
+    mine,
+  };
+}
+
 /** SIGTERM the child, escalating to SIGKILL if it doesn't exit promptly. */
 function stopChild(child: ChildProcess): Promise<void> {
   return new Promise((resolve) => {
@@ -263,8 +528,7 @@ export async function startRegtest(
       }
       if (info == null) return;
       finish(null, {
-        ...info,
-        chain: regtestChain(info),
+        ...connectRegtest(info),
         stop: () => stopChild(child),
       });
     }
