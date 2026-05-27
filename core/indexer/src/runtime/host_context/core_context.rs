@@ -45,13 +45,13 @@ impl built_in::context::HostCoreContextWithStore for Runtime {
             .await
     }
 
-    async fn self_<T>(
+    async fn contract<T>(
         accessor: &Accessor<T, Self>,
         self_: Resource<CoreContext>,
     ) -> Result<Resource<Contract>> {
         accessor
             .with(|mut access| access.get().clone())
-            ._core_self(accessor, self_)
+            ._core_contract(accessor, self_)
             .await
     }
 }

@@ -27,8 +27,9 @@ fn mint(model: &TokenStorageWriteModel, to: Holder, n: Integer) -> Result<(), Er
 }
 
 impl Guest for TestToken {
-    fn init(ctx: &ProcContext) {
+    fn init(ctx: &ProcContext) -> Contract {
         TokenStorage::default().init(ctx);
+        ctx.contract()
     }
 
     fn mint(ctx: &ProcContext, n: Integer) -> Result<(), Error> {

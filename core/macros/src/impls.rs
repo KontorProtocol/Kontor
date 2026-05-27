@@ -143,7 +143,7 @@ pub fn generate(config: Config) -> TokenStream {
     };
 
     quote! {
-        contract_address!(kontor::built_in::foreign::ContractAddress);
+        contract_address!(kontor::built_in::context::ContractAddress);
         holder_ref!(kontor::built_in::context::HolderRef);
 
         #signer_and_holder_impls

@@ -8,7 +8,7 @@ use crate::runtime::wit::{
     Contract, CoreContext, FallContext, Holder, Keys, ProcContext, ProcStorage, Signer,
     Transaction, ViewContext, ViewStorage,
 };
-use crate::runtime::{ContractAddress, Runtime, fuel::Fuel, hash_bytes};
+use crate::runtime::{Runtime, fuel::Fuel, hash_bytes};
 
 impl Runtime {
     pub(super) async fn _generate_id<T>(&self, accessor: &Accessor<T, Self>) -> Result<String> {
@@ -70,12 +70,12 @@ impl Runtime {
         Ok(table.push(payer)?)
     }
 
-    pub(super) async fn _proc_self<T>(
+    pub(super) async fn _proc_contract<T>(
         &self,
         accessor: &Accessor<T, Self>,
         self_: Resource<ProcContext>,
     ) -> Result<Resource<Contract>> {
-        Fuel::ProcSelf
+        Fuel::ProcContract
             .consume(accessor, self.gauge.as_ref())
             .await?;
         let contract_id = {
@@ -91,12 +91,33 @@ impl Runtime {
         Ok(table.push(Contract { address })?)
     }
 
-    pub(super) async fn _core_self<T>(
+    pub(super) async fn _core_contract<T>(
         &self,
         accessor: &Accessor<T, Self>,
         self_: Resource<CoreContext>,
     ) -> Result<Resource<Contract>> {
-        Fuel::CoreSelf
+        Fuel::CoreContract
+            .consume(accessor, self.gauge.as_ref())
+            .await?;
+        let contract_id = {
+            let table = self.table.lock().await;
+            table.get(&self_)?.contract_id
+        };
+        let address = self
+            .storage
+            .contract_address(contract_id)
+            .await?
+            .ok_or_else(|| anyhow::anyhow!("contract_id {contract_id} has no address"))?;
+        let mut table = self.table.lock().await;
+        Ok(table.push(Contract { address })?)
+    }
+
+    pub(super) async fn _view_contract<T>(
+        &self,
+        accessor: &Accessor<T, Self>,
+        self_: Resource<ViewContext>,
+    ) -> Result<Resource<Contract>> {
+        Fuel::ViewContract
             .consume(accessor, self.gauge.as_ref())
             .await?;
         let contract_id = {
@@ -382,21 +403,6 @@ impl Runtime {
             })?;
         let mut table = self.table.lock().await;
         Ok(table.push(holder)?)
-    }
-
-    pub(crate) async fn _get_contract_address<T>(
-        &self,
-        accessor: &Accessor<T, Self>,
-    ) -> Result<ContractAddress> {
-        Fuel::ContractAddress
-            .consume(accessor, self.gauge.as_ref())
-            .await?;
-        let id = self.stack.peek().await.expect("Stack is empty");
-        Ok(self
-            .storage
-            .contract_address(id)
-            .await?
-            .expect("Failed to get contract address"))
     }
 
     pub(crate) async fn _drop<T: 'static>(&self, rep: Resource<T>) -> Result<()> {

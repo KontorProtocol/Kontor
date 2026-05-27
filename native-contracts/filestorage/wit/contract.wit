@@ -2,7 +2,7 @@ package root:component;
 
 world root {
   include kontor:built-in/built-in;
-  use kontor:built-in/context.{view-context, proc-context, core-context};
+  use kontor:built-in/context.{view-context, proc-context, core-context, contract};
   use kontor:built-in/error.{error};
   use kontor:built-in/file-registry.{raw-file-descriptor};
 
@@ -64,7 +64,7 @@ world root {
   // Functions
   // ─────────────────────────────────────────────────────────────────
 
-  export init: async func(ctx: borrow<proc-context>);
+  export init: async func(ctx: borrow<proc-context>) -> contract;
 
   // Agreement management
   export create-agreement: async func(

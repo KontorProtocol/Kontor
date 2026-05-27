@@ -91,14 +91,15 @@ fn pool_not_found() -> Error {
 }
 
 impl Guest for Amm {
-    fn init(ctx: &ProcContext) {
+    fn init(ctx: &ProcContext) -> Contract {
         let custodian = ctx.contract_signer().to_string();
 
         AMMStorage {
             pools: Map::default(),
             custodian,
         }
-        .init(ctx)
+        .init(ctx);
+        ctx.contract()
     }
 
     fn create(

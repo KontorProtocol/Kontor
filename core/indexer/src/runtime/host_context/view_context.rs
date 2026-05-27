@@ -3,7 +3,7 @@ use wasmtime::component::{Accessor, Resource};
 
 use crate::runtime::Runtime;
 use crate::runtime::wit::kontor::built_in;
-use crate::runtime::wit::{ViewContext, ViewStorage};
+use crate::runtime::wit::{Contract, ViewContext, ViewStorage};
 
 impl built_in::context::HostViewContext for Runtime {}
 
@@ -22,6 +22,16 @@ impl built_in::context::HostViewContextWithStore for Runtime {
         accessor
             .with(|mut access| access.get().clone())
             ._view_storage(accessor, self_)
+            .await
+    }
+
+    async fn contract<T>(
+        accessor: &Accessor<T, Self>,
+        self_: Resource<ViewContext>,
+    ) -> Result<Resource<Contract>> {
+        accessor
+            .with(|mut access| access.get().clone())
+            ._view_contract(accessor, self_)
             .await
     }
 }

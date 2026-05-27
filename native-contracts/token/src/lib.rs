@@ -57,8 +57,9 @@ fn transfer(ctx: &ProcContext, src: Holder, dst: Holder, amt: Decimal) -> Result
 }
 
 impl Guest for Token {
-    fn init(ctx: &ProcContext) {
+    fn init(ctx: &ProcContext) -> Contract {
         TokenStorage::default().init(ctx);
+        ctx.contract()
     }
 
     fn issuance(ctx: &CoreContext, amt: Decimal) -> Result<Mint, Error> {

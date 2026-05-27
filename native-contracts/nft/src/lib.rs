@@ -134,8 +134,9 @@ fn change_owner(
 }
 
 impl Guest for Nft {
-    fn init(ctx: &ProcContext) {
+    fn init(ctx: &ProcContext) -> Contract {
         NftStorage::default().init(ctx);
+        ctx.contract()
     }
 
     fn mint(

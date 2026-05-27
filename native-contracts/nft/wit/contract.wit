@@ -2,7 +2,7 @@ package root:component;
 
 world root {
   include kontor:built-in/built-in;
-  use kontor:built-in/context.{holder-ref, view-context, proc-context};
+  use kontor:built-in/context.{holder-ref, view-context, proc-context, contract};
   use kontor:built-in/error.{error};
   use kontor:built-in/file-registry.{raw-file-descriptor};
 
@@ -24,7 +24,7 @@ world root {
     value: string,
   }
 
-  export init: async func(ctx: borrow<proc-context>);
+  export init: async func(ctx: borrow<proc-context>) -> contract;
 
   /// Mint a new NFT backed by a filestorage agreement created from `file-descriptor`.
   ///

@@ -95,13 +95,13 @@ impl built_in::context::HostProcContextWithStore for Runtime {
         Ok(runtime.storage.height as u64)
     }
 
-    async fn self_<T>(
+    async fn contract<T>(
         accessor: &Accessor<T, Self>,
         self_: Resource<ProcContext>,
     ) -> Result<Resource<Contract>> {
         accessor
             .with(|mut access| access.get().clone())
-            ._proc_self(accessor, self_)
+            ._proc_contract(accessor, self_)
             .await
     }
 }

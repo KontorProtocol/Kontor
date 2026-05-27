@@ -18,8 +18,9 @@ impl Guest for Proxy {
         }
     }
 
-    fn init(ctx: &ProcContext) {
-        ProxyStorage::default().init(ctx)
+    fn init(ctx: &ProcContext) -> Contract {
+        ProxyStorage::default().init(ctx);
+        ctx.contract()
     }
 
     fn get_contract_address(ctx: &ViewContext) -> Option<ContractAddress> {

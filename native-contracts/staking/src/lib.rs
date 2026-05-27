@@ -57,11 +57,12 @@ fn make_validator_info(x_only_pubkey: &Holder, entry: &ValidatorEntryModel) -> V
 }
 
 impl Guest for Staking {
-    fn init(ctx: &ProcContext) {
+    fn init(ctx: &ProcContext) -> Contract {
         let storage = StakingStorage::default();
         storage.init(ctx);
         let model = ctx.model();
         model.set_min_stake(1u64.try_into().unwrap());
+        ctx.contract()
     }
 
     fn register_validator(

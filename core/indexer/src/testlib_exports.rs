@@ -10,7 +10,7 @@ pub use crate::{
                 context::{HolderRef, OutPoint},
                 error::Error,
                 file_registry::RawFileDescriptor,
-                foreign::ContractAddress,
+                context::ContractAddress,
                 numbers::{Decimal, Integer},
             },
         },
