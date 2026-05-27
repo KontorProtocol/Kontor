@@ -61,7 +61,18 @@ async fn test_get_ops_from_api() -> Result<()> {
             "contract address should start with test-token_, got: {}",
             result.contract
         );
-        assert_eq!(result.value, Some("".to_string()));
+        // Publish ops now carry the new contract's address as their
+        // result value — init returns a `contract` resource that the
+        // host drains to a `contract-address` record at the WAVE
+        // boundary. See project_contract_resource_publish_return.
+        let value = result
+            .value
+            .as_ref()
+            .expect("publish must surface an address");
+        assert!(
+            value.contains("name: \"test-token\""),
+            "publish result value should be the new contract's address record; got: {value}"
+        );
         assert!(result.gas > 0);
     } else {
         bail!("Unexpected result event: {:?}", result);
