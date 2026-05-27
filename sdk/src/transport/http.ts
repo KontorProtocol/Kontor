@@ -40,13 +40,11 @@ import type {
   WireInsts,
 } from "../json-codec.js";
 import type {
-  CommitOutputs,
   ComposeOutputs,
   ErrorResponse,
   OpWithResult,
   ResultResponse,
   Reveal,
-  RevealOutputs,
   ViewExpr,
   ViewResult,
 } from "../bindings.js";
@@ -256,24 +254,6 @@ export class HttpTransport implements KontorTransport {
    */
   compose(reveal: Reveal): Promise<ComposeOutputs> {
     return this.postJson<ComposeOutputs>("/transactions/compose", reveal);
-  }
-
-  /**
-   * Builds only the commits for Build participants and returns the
-   * input Reveal with each Build → Existing (outpoint filled in).
-   * Caller signs/broadcasts the commits, then later passes the
-   * returned reveal to `composeReveal`.
-   */
-  composeCommit(reveal: Reveal): Promise<CommitOutputs> {
-    return this.postJson<CommitOutputs>("/transactions/compose/commit", reveal);
-  }
-
-  /**
-   * Builds only the reveal PSBT. All participants must be
-   * CommitSource::Existing (no commits to build here).
-   */
-  composeReveal(reveal: Reveal): Promise<RevealOutputs> {
-    return this.postJson<RevealOutputs>("/transactions/compose/reveal", reveal);
   }
 
   /**

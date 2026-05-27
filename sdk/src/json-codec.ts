@@ -37,13 +37,11 @@
  */
 import type { ContractAddress } from "./canonical/ContractAddress.js";
 import type {
-  CommitOutputs,
   ComposeOutputs,
   Inst as WireInst,
   Insts as WireInsts,
   OpStatus,
   Reveal,
-  RevealOutputs,
 } from "./bindings.js";
 
 export type { WireInst, WireInsts, OpStatus };
@@ -164,22 +162,6 @@ export interface KontorTransport {
    * package in one call.
    */
   compose(reveal: Reveal): Promise<ComposeOutputs>;
-
-  /**
-   * Build only the commits for Build participants. Returns one
-   * `CommitTx` per Build participant plus the input Reveal with those
-   * participants rewritten as Existing (outpoints filled in). The
-   * caller signs + broadcasts the commits and later passes the returned
-   * Reveal to `composeReveal` for the reveal PSBT.
-   */
-  composeCommit(reveal: Reveal): Promise<CommitOutputs>;
-
-  /**
-   * Build only the reveal PSBT. All participants must already be
-   * `CommitSource::Existing`. Used by the attach/detach runtime for the
-   * detach reveal that script-spends an existing escrow output.
-   */
-  composeReveal(reveal: Reveal): Promise<RevealOutputs>;
 
   /**
    * Broadcast already-signed raw transactions — in dependency order
