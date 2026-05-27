@@ -91,7 +91,7 @@ async fn test_native_token_sponsor_swap() -> Result<()> {
     let seller_attach_leaf = seller_compose.reveal.commit_tap_leaf_scripts[0]
         .script
         .clone();
-    let RevealOutputInfo::ChainedEnvelope { tap_leaf_script } =
+    let RevealOutputInfo::ChainedEnvelope { tap_leaf_script, .. } =
         &seller_compose.reveal.output_info[0]
     else {
         panic!("output 0 should be ChainedEnvelope");

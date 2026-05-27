@@ -219,7 +219,7 @@ pub fn compose_reveal(reveal: Reveal) -> Result<RevealOutputs> {
                     script_pubkey: script,
                 });
                 psbt.outputs.push(bitcoin::psbt::Output::default());
-                output_info.push(RevealOutputInfo::Fixed);
+                output_info.push(RevealOutputInfo::Fixed { value });
             }
             ResolvedOutputValue::ChainedEnvelope {
                 value,
@@ -231,7 +231,10 @@ pub fn compose_reveal(reveal: Reveal) -> Result<RevealOutputs> {
                     script_pubkey: script,
                 });
                 psbt.outputs.push(bitcoin::psbt::Output::default());
-                output_info.push(RevealOutputInfo::ChainedEnvelope { tap_leaf_script });
+                output_info.push(RevealOutputInfo::ChainedEnvelope {
+                    value,
+                    tap_leaf_script,
+                });
             }
             ResolvedOutputValue::Change { script } => {
                 let is_last = idx == last_idx;
@@ -251,7 +254,9 @@ pub fn compose_reveal(reveal: Reveal) -> Result<RevealOutputs> {
                         script_pubkey: script,
                     });
                     psbt.outputs.push(bitcoin::psbt::Output::default());
-                    output_info.push(RevealOutputInfo::Change);
+                    output_info.push(RevealOutputInfo::Change {
+                        value: change_value,
+                    });
                 }
                 // else: sub-dust Change at a position where dropping is
                 // safe — silent drop to fee.
@@ -287,6 +292,7 @@ pub fn compose_reveal(reveal: Reveal) -> Result<RevealOutputs> {
         .collect();
 
     let reveal_transaction = psbt.unsigned_tx.clone();
+    let reveal_txid = reveal_transaction.compute_txid().to_string();
     let reveal_transaction_hex = hex::encode(serialize_tx(&reveal_transaction));
     let psbt_hex = psbt.serialize_hex();
 
@@ -294,6 +300,7 @@ pub fn compose_reveal(reveal: Reveal) -> Result<RevealOutputs> {
         .transaction(reveal_transaction)
         .transaction_hex(reveal_transaction_hex)
         .psbt_hex(psbt_hex)
+        .txid(reveal_txid)
         .commit_tap_leaf_scripts(commit_tap_leaf_scripts)
         .output_info(output_info)
         .build())
@@ -835,15 +842,21 @@ pub async fn compose_commit(
             });
         }
 
-        // Change to the Build participant's address
+        // Change to the Build participant's address. Track whether
+        // it materialized — when below dust it's silently dropped to
+        // fee — so the SDK can decide whether to chain the next
+        // submit through this output without parsing the hex.
         let change = selected_sum.saturating_sub(tap_output_value + commit_fee);
-        if change >= MIN_ENVELOPE_SATS {
+        let change_value = if change >= MIN_ENVELOPE_SATS {
             psbt.unsigned_tx.output.push(TxOut {
                 value: Amount::from_sat(change),
                 script_pubkey: build_address.script_pubkey(),
             });
             psbt.outputs.push(bitcoin::psbt::Output::default());
-        }
+            Some(change)
+        } else {
+            None
+        };
 
         let commit_tx = psbt.unsigned_tx.clone();
         let commit_txid = commit_tx.compute_txid();
@@ -854,6 +867,8 @@ pub async fn compose_commit(
             transaction: commit_tx,
             transaction_hex: commit_tx_hex,
             psbt_hex: commit_psbt_hex,
+            txid: commit_txid.to_string(),
+            change_value,
         });
 
         // Build → Existing transformation

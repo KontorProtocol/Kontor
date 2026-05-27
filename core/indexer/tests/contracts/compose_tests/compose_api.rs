@@ -250,7 +250,7 @@ pub async fn test_compose_all_fields(reg_tester: &mut RegTester) -> Result<()> {
 
     // The chained leaf lives in the reveal's output_info: position 0 of
     // the reveal tx is the ChainedEnvelope we declared in extra_outputs.
-    let RevealOutputInfo::ChainedEnvelope { tap_leaf_script } =
+    let RevealOutputInfo::ChainedEnvelope { tap_leaf_script, .. } =
         &compose_outputs.reveal.output_info[0]
     else {
         panic!("output 0 should be ChainedEnvelope");

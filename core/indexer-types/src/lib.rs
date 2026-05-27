@@ -198,6 +198,17 @@ pub struct CommitTx {
     pub transaction: bitcoin::Transaction,
     pub transaction_hex: String,
     pub psbt_hex: String,
+    /// Display-order txid — taproot witness data is segregated, so this
+    /// equals the txid of the signed tx too. Provided so the SDK can
+    /// reference this commit as a UTXO source without parsing the hex.
+    pub txid: String,
+    /// Value (sats) of the commit's change output at vout 1, or `None`
+    /// when the leftover was sub-dust and silently dropped to fee.
+    /// Compose computes this exactly (`selected_sum - tap_output_value
+    /// - commit_fee`), so the SDK gets it for free without parsing the
+    /// signed commit hex.
+    #[ts(type = "number | null")]
+    pub change_value: Option<u64>,
 }
 
 /// Response from `compose_commit`: one `CommitTx` per Build participant,
@@ -251,30 +262,46 @@ pub struct RevealOutputs {
     pub transaction: bitcoin::Transaction,
     pub transaction_hex: String,
     pub psbt_hex: String,
+    /// Display-order txid. Taproot witness data is segregated, so the
+    /// txid of the unsigned reveal here equals the signed-tx txid the
+    /// SDK eventually broadcasts. Lets the SDK reference reveal
+    /// outputs as UTXOs without parsing the hex.
+    pub txid: String,
     /// Per-participant tap leaf script + control block, parallel to the
     /// reveal tx's inputs. Callers need these to assemble the script-path
     /// witness when signing their input.
     pub commit_tap_leaf_scripts: Vec<TapLeafScript>,
     /// Per-output kind + any extra info, in tx output order (same
-    /// length as `transaction.output`). Mirrors the input `RevealOutput`
-    /// enum and surfaces info derivable from compose-time state but not
-    /// from the tx alone — notably the tap leaf script + control block
-    /// for `ChainedEnvelope` outputs, which the caller needs to
-    /// script-spend that output in a follow-up tx.
+    /// length as `transaction.output`). Each variant carries the
+    /// output's value in sats — derivable from the tx but exposed
+    /// here so the SDK can extract change UTXOs / inspect output
+    /// values without parsing the raw hex.
     pub output_info: Vec<RevealOutputInfo>,
 }
 
 /// Per-output annotation describing what kind of output occupies each
 /// position in the reveal tx. Mirrors the input `RevealOutput` enum.
-/// The wire shape includes only what the SDK can't derive from the tx
-/// itself; in particular `ChainedEnvelope` carries the tap leaf script
-/// that the chained tap output committed to.
+/// Each variant carries the output's value in sats so the SDK can
+/// extract change UTXOs / read fixed payouts without re-parsing the tx
+/// hex; `ChainedEnvelope` additionally carries the tap leaf script the
+/// chained output commits to (the future spender needs it).
 #[derive(Serialize, Deserialize, Clone, TS)]
 #[ts(export, export_to = "../../../sdk/src/bindings.d.ts")]
 pub enum RevealOutputInfo {
-    Fixed,
-    Change,
-    ChainedEnvelope { tap_leaf_script: TapLeafScript },
+    Fixed {
+        #[ts(type = "number")]
+        value: u64,
+    },
+    Change {
+        #[ts(type = "number")]
+        value: u64,
+    },
+    ChainedEnvelope {
+        #[ts(type = "number")]
+        value: u64,
+        tap_leaf_script: TapLeafScript,
+    },
+    /// Empty OP_RETURN — value is always 0 sats, so no field carried.
     OpReturn,
 }
 
