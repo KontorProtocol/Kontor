@@ -18,6 +18,10 @@ use stdlib::CheckedArithmetics;
 
 use crate::database::types::Identity;
 
+use std::sync::Arc;
+use tokio::sync::Mutex;
+use wasmtime::component::ResourceTable;
+
 use super::{
     ContractAddress, Decimal, Runtime,
     fuel::Fuel,
@@ -25,7 +29,7 @@ use super::{
     stack::Stack,
     token,
     types::default_val_for_type,
-    wit::{CoreContext, FallContext, Holder, ProcContext, Signer, ViewContext},
+    wit::{Contract, CoreContext, FallContext, Holder, ProcContext, Signer, ViewContext},
 };
 
 /// Derive the payer's `Holder` for a top-level proc context. The payer's
@@ -325,7 +329,7 @@ impl Runtime {
         mut results: Vec<Val>,
         is_fallback: bool,
     ) -> Result<(Result<String, ExecutionError>, Store<Runtime>)> {
-        let (result, results, store) = tokio::spawn(async move {
+        let (result, results, mut store) = tokio::spawn(async move {
             match std::panic::AssertUnwindSafe(func.call_async(&mut store, &params, &mut results))
                 .catch_unwind()
                 .await
@@ -346,7 +350,9 @@ impl Runtime {
         .await
         .map_err(|e| anyhow::anyhow!("tokio task failed: {e}"))?;
 
-        let call_result = self.handle_call(is_fallback, result, results).await;
+        let call_result = self
+            .handle_call(is_fallback, result, results, &mut store)
+            .await;
 
         Ok((call_result, store))
     }
@@ -367,6 +373,7 @@ impl Runtime {
         is_fallback: bool,
         result: std::result::Result<std::result::Result<(), wasmtime::Error>, String>,
         mut results: Vec<Val>,
+        store: &mut Store<Runtime>,
     ) -> Result<String, ExecutionError> {
         self.stack.pop().await;
 
@@ -409,7 +416,7 @@ impl Runtime {
                     Err(anyhow!("fallback did not return a string"))
                 }
             } else {
-                val.to_wave().map_err(Into::into)
+                val_to_wave(val, store, &self.table).await
             }
         };
 
@@ -599,6 +606,42 @@ impl Runtime {
 /// - `Err(NonDeterministic)` shouldn't normally produce a row — those
 ///   propagate as fatal infrastructure errors and the block won't commit.
 ///   Mapped to `Other` for completeness.
+/// Serialize a contract function's return value to a WAVE string.
+///
+/// `wasm_wave::to_string` (via `val.to_wave()`) covers every record /
+/// variant / primitive shape, but maps `Val::Resource` to
+/// `WasmTypeKind::Unsupported` and panics in the writer. So before
+/// delegating, special-case resources that the host knows how to
+/// serialize against the resource table — currently just `Contract`,
+/// which drains to its underlying `contract-address` record so the SDK
+/// reads back the new address from a publish's result row the same way
+/// any Call op surfaces its return.
+///
+/// Other resource types remain a deterministic error: a contract can't
+/// return a `holder` / `signer` / `view-context` etc. across the
+/// result-row boundary without an explicit serialization, and silently
+/// trapping on the wasm-wave panic would mask the failure. Add new
+/// types to this branch as they become legitimately returnable.
+async fn val_to_wave(
+    val: Val,
+    store: &mut Store<Runtime>,
+    table: &Arc<Mutex<ResourceTable>>,
+) -> Result<String> {
+    match val {
+        Val::Resource(resource_any) => {
+            let handle: Resource<Contract> = resource_any
+                .try_into_resource::<Contract>(&mut *store)
+                .map_err(|e| {
+                    anyhow!("function returned a resource that is not a `contract`: {e}")
+                })?;
+            let table = table.lock().await;
+            let contract = table.get(&handle)?;
+            Ok(stdlib::to_wave_expr(contract.address.clone()))
+        }
+        other => other.to_wave().map_err(Into::into),
+    }
+}
+
 fn classify_result(result: &Result<String, ExecutionError>) -> OpStatus {
     match result {
         Ok(v) if v.starts_with("err(") => OpStatus::ContractErr,
