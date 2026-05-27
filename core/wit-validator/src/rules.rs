@@ -130,7 +130,13 @@ fn validate_function_signatures(resolve: &Resolve) -> Vec<ValidationError> {
 }
 
 /// Validate the `init` function signature.
-/// Must be: `async func(ctx: borrow<proc-context>)`
+/// Must be: `async func(ctx: borrow<proc-context>) -> contract`
+///
+/// The `contract` return is the executing contract's own identity as a
+/// host-issued resource — the only way to obtain one is `ctx.self()`.
+/// Surfacing it on init's row is what makes a publish op's result row
+/// carry the new contract's address through the same WAVE-decode path
+/// as any other Call op (see project_contract_resource_publish_return).
 fn validate_init_function(resolve: &Resolve, func: &wit_parser::Function) -> Vec<ValidationError> {
     let mut errors = Vec::new();
 
@@ -156,11 +162,18 @@ fn validate_init_function(resolve: &Resolve, func: &wit_parser::Function) -> Vec
         }
     }
 
-    if func.result.is_some() {
-        errors.push(ValidationError::new(
-            "init must not have a return type",
+    match &func.result {
+        Some(ty) => match get_owned_or_resource_type_name(resolve, ty) {
+            Some(name) if name == "contract" => {}
+            _ => errors.push(ValidationError::new(
+                "init must return `contract` (obtain it via ctx.self())",
+                func.span,
+            )),
+        },
+        None => errors.push(ValidationError::new(
+            "init must return `contract` (obtain it via ctx.self())",
             func.span,
-        ));
+        )),
     }
 
     errors
@@ -560,6 +573,27 @@ fn get_borrowed_type_name(resolve: &Resolve, ty: &Type) -> Option<String> {
         }
     }
     None
+}
+
+/// Resolve a return-position type to a resource name. wit-parser may
+/// represent `func() -> contract` either as a direct resource handle
+/// (`Type::Id` pointing at a `TypeDefKind::Resource`) or as an explicit
+/// `own<contract>` wrapper. Both shape mean the same thing across the
+/// component-model boundary: the host receives the resource.
+fn get_owned_or_resource_type_name(resolve: &Resolve, ty: &Type) -> Option<String> {
+    if let Type::Id(id) = ty {
+        let type_def = &resolve.types[*id];
+        match &type_def.kind {
+            TypeDefKind::Handle(Handle::Own(resource_id)) => {
+                let resource_def = &resolve.types[*resource_id];
+                resource_def.name.clone()
+            }
+            TypeDefKind::Resource => type_def.name.clone(),
+            _ => None,
+        }
+    } else {
+        None
+    }
 }
 
 fn is_inline_record(resolve: &Resolve, ty: &Type) -> bool {
