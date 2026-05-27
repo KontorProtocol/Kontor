@@ -283,10 +283,8 @@ export class HttpTransport implements KontorTransport {
         composed.commits.length > 0
           ? await signCommit(account, composed.commits[0]!.psbt_hex)
           : "",
-      revealHex: await signReveal(
-        account,
-        composed.reveal.psbt_hex,
-        composed.reveal.commit_tap_leaf_scripts,
+      revealHex: hex.encode(
+        (await signReveal(account, composed.reveal.psbt_hex)).extract(),
       ),
       composed,
     };

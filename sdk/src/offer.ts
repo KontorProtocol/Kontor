@@ -29,7 +29,7 @@ import type { BitcoinNetwork } from "./chains.js";
 import { SignerError } from "./errors.js";
 import type { BroadcastResult, Utxo, WireInsts } from "./json-codec.js";
 import type { KontorSession } from "./session.js";
-import { signCommit } from "./transport/signing.js";
+import { signCommit, signReveal } from "./transport/signing.js";
 
 /** P2TR dust floor — change below this is dropped into the fee. */
 const DUST_SATS = 330n;
@@ -383,41 +383,13 @@ export class IncomingOffer {
       composed.commits[0]!.psbt_hex,
     );
 
-    // Mixed-sighash signing on the swap reveal:
-    //   input 0 — buyer's Sponsor leaf, sign `default` (commits all)
-    //   input 1 — seller's pre-signed SACP, inject witness as-is
-    const swapPrep = Transaction.fromPSBT(hex.decode(composed.reveal.psbt_hex));
-    const buyerLeaf = composed.reveal.commit_tap_leaf_scripts[0]!;
-    const buyerLeafScript = btcUtils.concatBytes(
-      hex.decode(buyerLeaf.script),
-      new Uint8Array([buyerLeaf.leafVersion]),
-    );
-    const buyerControlBlock = TaprootControlBlock.decode(
-      hex.decode(buyerLeaf.controlBlock),
-    );
-    swapPrep.updateInput(
-      0,
-      { tapLeafScript: [[buyerControlBlock, buyerLeafScript]] },
-      true,
-    );
-
-    const swapSigned = await account.signPsbt(swapPrep.toPSBT(), {
-      inputs: [{ index: 0 }],
-    });
-    const swapFinal = Transaction.fromPSBT(swapSigned);
-    const buyerSig = swapFinal.getInput(0).tapScriptSig?.[0]?.[1];
-    if (buyerSig == null) {
-      throw new SignerError("accept: buyer's Sponsor input was not signed", {
-        docsPath: "/sdk/offer",
-      });
-    }
-    swapFinal.updateInput(0, {
-      finalScriptWitness: [
-        buyerSig,
-        hex.decode(buyerLeaf.script),
-        hex.decode(buyerLeaf.controlBlock),
-      ],
-    });
+    // signReveal walks the PSBT: input 0 has the buyer's
+    // `tap_internal_key` set, so it signs script-path through the
+    // Sponsor leaf and finalizes its witness; input 1's
+    // `tap_internal_key` is the seller's, so signReveal treats it as
+    // foreign and leaves its witness alone — we inject the seller's
+    // pre-signed SACP witness here, then extract.
+    const swapFinal = await signReveal(account, composed.reveal.psbt_hex);
     swapFinal.updateInput(1, {
       finalScriptWitness: [
         sellerSig,

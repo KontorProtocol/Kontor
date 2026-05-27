@@ -267,10 +267,6 @@ pub struct RevealOutputs {
     /// SDK eventually broadcasts. Lets the SDK reference reveal
     /// outputs as UTXOs without parsing the hex.
     pub txid: String,
-    /// Per-participant tap leaf script + control block, parallel to the
-    /// reveal tx's inputs. Callers need these to assemble the script-path
-    /// witness when signing their input.
-    pub commit_tap_leaf_scripts: Vec<TapLeafScript>,
     /// Per-output kind + any extra info, in tx output order (same
     /// length as `transaction.output`). Each variant carries the
     /// output's value in sats — derivable from the tx but exposed

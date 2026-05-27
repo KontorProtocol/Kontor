@@ -88,9 +88,11 @@ async fn test_native_token_sponsor_swap() -> Result<()> {
 
     let mut seller_commit_tx = seller_compose.commits[0].transaction.clone();
     let mut seller_attach_reveal_tx = seller_compose.reveal.transaction.clone();
-    let seller_attach_leaf = seller_compose.reveal.commit_tap_leaf_scripts[0]
-        .script
-        .clone();
+    let seller_reveal_psbt = bitcoin::Psbt::deserialize(&hex::decode(
+        &seller_compose.reveal.psbt_hex,
+    )?)?;
+    let (seller_attach_leaf, _) =
+        indexer::test_utils::participant_tap_script(&seller_reveal_psbt.inputs[0])?;
     let RevealOutputInfo::ChainedEnvelope { tap_leaf_script, .. } =
         &seller_compose.reveal.output_info[0]
     else {
@@ -192,9 +194,11 @@ async fn test_native_token_sponsor_swap() -> Result<()> {
     let buyer_compose = rt.compose(buyer_reveal).await?;
 
     let mut buyer_commit_tx = buyer_compose.commits[0].transaction.clone();
-    let buyer_sponsor_leaf = buyer_compose.reveal.commit_tap_leaf_scripts[0]
-        .script
-        .clone();
+    let buyer_reveal_psbt = bitcoin::Psbt::deserialize(&hex::decode(
+        &buyer_compose.reveal.psbt_hex,
+    )?)?;
+    let (buyer_sponsor_leaf, _) =
+        indexer::test_utils::participant_tap_script(&buyer_reveal_psbt.inputs[0])?;
 
     test_utils::sign_key_spend(
         &secp,

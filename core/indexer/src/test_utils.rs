@@ -101,6 +101,23 @@ pub fn sign_key_spend(
     Ok(())
 }
 
+/// Pull a participant input's tap leaf script + version out of its
+/// PSBT `tap_scripts` map (`PSBT_IN_TAP_LEAF_SCRIPT`, BIP 371). By
+/// our convention each participant input carries exactly one leaf
+/// script, so we take the first map entry. Replaces the old
+/// `RevealOutputs.commit_tap_leaf_scripts[i]` lookup — the leaf
+/// script now lives in the PSBT proper, so wallets that speak
+/// taproot PSBT can sign without any client-side fixup.
+pub fn participant_tap_script(
+    input: &bitcoin::psbt::Input,
+) -> Result<(ScriptBuf, LeafVersion)> {
+    input
+        .tap_scripts
+        .first_key_value()
+        .map(|(_cb, sv)| sv.clone())
+        .ok_or_else(|| anyhow::anyhow!("PSBT input has no tap leaf script"))
+}
+
 pub fn sign_script_spend(
     secp: &Secp256k1<All>,
     taproot_spend_info: &TaprootSpendInfo,

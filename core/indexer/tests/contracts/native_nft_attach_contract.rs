@@ -127,9 +127,11 @@ async fn test_native_nft_attach_contract() -> Result<()> {
 
     let mut commit_transaction = compose_outputs.commits[0].transaction.clone();
     let mut reveal_transaction = compose_outputs.reveal.transaction.clone();
-    let tap_script = compose_outputs.reveal.commit_tap_leaf_scripts[0]
-        .script
-        .clone();
+    let reveal_psbt = bitcoin::Psbt::deserialize(&hex::decode(
+        &compose_outputs.reveal.psbt_hex,
+    )?)?;
+    let (tap_script, _) =
+        indexer::test_utils::participant_tap_script(&reveal_psbt.inputs[0])?;
     // The chained leaf lives in the reveal's output_info: position 0 of
     // the reveal tx is the ChainedEnvelope we declared in extra_outputs.
     let RevealOutputInfo::ChainedEnvelope { tap_leaf_script, .. } =

@@ -51,9 +51,11 @@ pub async fn test_commit_reveal(reg_tester: &mut RegTester) -> Result<()> {
 
     let mut attach_tx = compose_outputs.commits[0].transaction.clone();
     let mut spend_tx = compose_outputs.reveal.transaction.clone();
-    let tap_script = compose_outputs.reveal.commit_tap_leaf_scripts[0]
-        .script
-        .clone();
+    let reveal_psbt = bitcoin::Psbt::deserialize(&hex::decode(
+        &compose_outputs.reveal.psbt_hex,
+    )?)?;
+    let (tap_script, _) =
+        indexer::test_utils::participant_tap_script(&reveal_psbt.inputs[0])?;
 
     // Sign the attach transaction
     test_utils::sign_key_spend(

@@ -133,17 +133,35 @@ pub fn compose_reveal(reveal: Reveal) -> Result<RevealOutputs> {
         input: vec![],
         output: vec![],
     })?;
+    // Populate participant inputs with the standard taproot PSBT
+    // fields: `tap_internal_key` identifies the signer, `tap_scripts`
+    // (PSBT_IN_TAP_LEAF_SCRIPT, BIP 371) carries the leaf script the
+    // SDK script-spends through. With both populated, wallets that
+    // speak taproot PSBT can sign without any client-side fixup.
     for rp in &resolved {
         psbt.unsigned_tx.input.push(TxIn {
             previous_output: rp.outpoint,
             ..Default::default()
         });
+        let control_block = ControlBlock::decode(rp.tap_leaf_script.control_block.as_bytes())
+            .map_err(|e| anyhow!("invalid control block: {}", e))?;
+        let mut tap_scripts = std::collections::BTreeMap::new();
+        tap_scripts.insert(
+            control_block,
+            (rp.tap_leaf_script.script.clone(), rp.tap_leaf_script.leaf_version),
+        );
         psbt.inputs.push(bitcoin::psbt::Input {
             witness_utxo: Some(rp.prevout.clone()),
             tap_internal_key: Some(rp.x_only_public_key),
+            tap_scripts,
             ..Default::default()
         });
     }
+    // Extra inputs are key-path P2TR spends. By convention they belong
+    // to participant 0 (the call's primary actor) — `tap_internal_key`
+    // gets that key so the wallet knows what to sign without the SDK
+    // having to inject it client-side.
+    let extra_internal_key = resolved.first().map(|rp| rp.x_only_public_key);
     for extra in &reveal.extra_inputs {
         psbt.unsigned_tx.input.push(TxIn {
             previous_output: extra.outpoint,
@@ -151,6 +169,7 @@ pub fn compose_reveal(reveal: Reveal) -> Result<RevealOutputs> {
         });
         psbt.inputs.push(bitcoin::psbt::Input {
             witness_utxo: Some(extra.prevout.clone()),
+            tap_internal_key: extra_internal_key,
             ..Default::default()
         });
     }
@@ -286,11 +305,6 @@ pub fn compose_reveal(reveal: Reveal) -> Result<RevealOutputs> {
         output_info.push(RevealOutputInfo::OpReturn);
     }
 
-    let commit_tap_leaf_scripts: Vec<TapLeafScript> = resolved
-        .iter()
-        .map(|rp| rp.tap_leaf_script.clone())
-        .collect();
-
     let reveal_transaction = psbt.unsigned_tx.clone();
     let reveal_txid = reveal_transaction.compute_txid().to_string();
     let reveal_transaction_hex = hex::encode(serialize_tx(&reveal_transaction));
@@ -301,7 +315,6 @@ pub fn compose_reveal(reveal: Reveal) -> Result<RevealOutputs> {
         .transaction_hex(reveal_transaction_hex)
         .psbt_hex(psbt_hex)
         .txid(reveal_txid)
-        .commit_tap_leaf_scripts(commit_tap_leaf_scripts)
         .output_info(output_info)
         .build())
 }
