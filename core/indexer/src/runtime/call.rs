@@ -588,24 +588,6 @@ impl Runtime {
     }
 }
 
-/// Categorize the result of a wasm call into a persisted `OpStatus`.
-///
-/// - `Ok(s)` where `s` starts with `"err("` means the contract function
-///   returned a `result<_, error>::Err` value. The call ran cleanly but the
-///   semantic outcome was a failure; storage was rolled back. Treated as
-///   `OpStatus::ContractErr`.
-/// - `Ok(_)` otherwise is a successful call returning either a value or
-///   nothing. `OpStatus::Ok`.
-/// - `Err(ExecutionError::Deterministic(e))` is mapped by looking at the
-///   underlying error for a `wasmtime::Trap` variant. `Trap::OutOfFuel`
-///   becomes `OpStatus::OutOfFuel`; other trap variants become
-///   `OpStatus::Trap`. If the error isn't a trap (host-side `Fuel::consume`
-///   exhaustion produces an `anyhow!("Insufficient fuel")` rather than a
-///   wasmtime trap, so check the message too), classify as `OutOfFuel` or
-///   `Other`.
-/// - `Err(NonDeterministic)` shouldn't normally produce a row — those
-///   propagate as fatal infrastructure errors and the block won't commit.
-///   Mapped to `Other` for completeness.
 /// Serialize a contract function's return value to a WAVE string.
 ///
 /// `wasm_wave::to_string` (via `val.to_wave()`) covers every record /
@@ -642,6 +624,24 @@ async fn val_to_wave(
     }
 }
 
+/// Categorize the result of a wasm call into a persisted `OpStatus`.
+///
+/// - `Ok(s)` where `s` starts with `"err("` means the contract function
+///   returned a `result<_, error>::Err` value. The call ran cleanly but
+///   the semantic outcome was a failure; storage was rolled back. Treated
+///   as `OpStatus::ContractErr`.
+/// - `Ok(_)` otherwise is a successful call returning either a value or
+///   nothing. `OpStatus::Ok`.
+/// - `Err(ExecutionError::Deterministic(e))` is mapped by looking at the
+///   underlying error for a `wasmtime::Trap` variant. `Trap::OutOfFuel`
+///   becomes `OpStatus::OutOfFuel`; other trap variants become
+///   `OpStatus::Trap`. If the error isn't a trap (host-side
+///   `Fuel::consume` exhaustion produces an `anyhow!("Insufficient fuel")`
+///   rather than a wasmtime trap, so check the message too), classify
+///   as `OutOfFuel` or `Other`.
+/// - `Err(NonDeterministic)` shouldn't normally produce a row — those
+///   propagate as fatal infrastructure errors and the block won't
+///   commit. Mapped to `Other` for completeness.
 fn classify_result(result: &Result<String, ExecutionError>) -> OpStatus {
     match result {
         Ok(v) if v.starts_with("err(") => OpStatus::ContractErr,

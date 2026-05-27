@@ -148,7 +148,10 @@ pub fn compose_reveal(reveal: Reveal) -> Result<RevealOutputs> {
         let mut tap_scripts = std::collections::BTreeMap::new();
         tap_scripts.insert(
             control_block,
-            (rp.tap_leaf_script.script.clone(), rp.tap_leaf_script.leaf_version),
+            (
+                rp.tap_leaf_script.script.clone(),
+                rp.tap_leaf_script.leaf_version,
+            ),
         );
         psbt.inputs.push(bitcoin::psbt::Input {
             witness_utxo: Some(rp.prevout.clone()),

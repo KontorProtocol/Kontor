@@ -446,9 +446,8 @@ impl RegTesterInner {
         // — the indexer populates it as `PSBT_IN_TAP_LEAF_SCRIPT` on
         // each participant input (was a parallel `commit_tap_leaf_
         // scripts` Vec in the response previously).
-        let reveal_psbt = bitcoin::Psbt::deserialize(&hex::decode(
-            &compose_outputs.reveal.psbt_hex,
-        )?)?;
+        let reveal_psbt =
+            bitcoin::Psbt::deserialize(&hex::decode(&compose_outputs.reveal.psbt_hex)?)?;
         let (tap_script, _) = test_utils::participant_tap_script(&reveal_psbt.inputs[0])?;
         let taproot_spend_info = TaprootBuilder::new()
             .add_leaf(0, tap_script.clone())

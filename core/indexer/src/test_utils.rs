@@ -108,9 +108,7 @@ pub fn sign_key_spend(
 /// `RevealOutputs.commit_tap_leaf_scripts[i]` lookup — the leaf
 /// script now lives in the PSBT proper, so wallets that speak
 /// taproot PSBT can sign without any client-side fixup.
-pub fn participant_tap_script(
-    input: &bitcoin::psbt::Input,
-) -> Result<(ScriptBuf, LeafVersion)> {
+pub fn participant_tap_script(input: &bitcoin::psbt::Input) -> Result<(ScriptBuf, LeafVersion)> {
     input
         .tap_scripts
         .first_key_value()

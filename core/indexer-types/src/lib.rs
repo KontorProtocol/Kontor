@@ -204,9 +204,9 @@ pub struct CommitTx {
     pub txid: String,
     /// Value (sats) of the commit's change output at vout 1, or `None`
     /// when the leftover was sub-dust and silently dropped to fee.
-    /// Compose computes this exactly (`selected_sum - tap_output_value
-    /// - commit_fee`), so the SDK gets it for free without parsing the
-    /// signed commit hex.
+    /// Compose computes this exactly (selected funding sum minus
+    /// tap-output value minus commit fee), so the SDK gets it for free
+    /// without parsing the signed commit hex.
     #[ts(type = "number | null")]
     pub change_value: Option<u64>,
 }

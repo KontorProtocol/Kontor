@@ -57,11 +57,8 @@ pub async fn test_compose(reg_tester: &mut RegTester) -> Result<()> {
 
     let mut commit_transaction = compose_outputs.commits[0].transaction.clone();
 
-    let reveal_psbt = bitcoin::Psbt::deserialize(&hex::decode(
-        &compose_outputs.reveal.psbt_hex,
-    )?)?;
-    let (tap_script, _) =
-        indexer::test_utils::participant_tap_script(&reveal_psbt.inputs[0])?;
+    let reveal_psbt = bitcoin::Psbt::deserialize(&hex::decode(&compose_outputs.reveal.psbt_hex)?)?;
+    let (tap_script, _) = indexer::test_utils::participant_tap_script(&reveal_psbt.inputs[0])?;
 
     let derived_token_data = serialize(&Insts::single(instruction.clone()))?;
 
@@ -208,11 +205,8 @@ pub async fn test_compose_all_fields(reg_tester: &mut RegTester) -> Result<()> {
 
     let mut commit_transaction = compose_outputs.commits[0].transaction.clone();
 
-    let reveal_psbt = bitcoin::Psbt::deserialize(&hex::decode(
-        &compose_outputs.reveal.psbt_hex,
-    )?)?;
-    let (tap_script, _) =
-        indexer::test_utils::participant_tap_script(&reveal_psbt.inputs[0])?;
+    let reveal_psbt = bitcoin::Psbt::deserialize(&hex::decode(&compose_outputs.reveal.psbt_hex)?)?;
+    let (tap_script, _) = indexer::test_utils::participant_tap_script(&reveal_psbt.inputs[0])?;
 
     let derived_token_data = serialize(&Insts::single(instruction.clone()))?;
 
@@ -254,8 +248,9 @@ pub async fn test_compose_all_fields(reg_tester: &mut RegTester) -> Result<()> {
 
     // The chained leaf lives in the reveal's output_info: position 0 of
     // the reveal tx is the ChainedEnvelope we declared in extra_outputs.
-    let RevealOutputInfo::ChainedEnvelope { tap_leaf_script, .. } =
-        &compose_outputs.reveal.output_info[0]
+    let RevealOutputInfo::ChainedEnvelope {
+        tap_leaf_script, ..
+    } = &compose_outputs.reveal.output_info[0]
     else {
         panic!("output 0 should be ChainedEnvelope");
     };
@@ -589,11 +584,8 @@ pub async fn test_reveal_with_op_return_mempool_accept(reg_tester: &mut RegTeste
 
     let mut commit_tx = compose_outputs.commits[0].transaction.clone();
     let mut reveal_tx_signed = compose_outputs.reveal.transaction.clone();
-    let reveal_psbt = bitcoin::Psbt::deserialize(&hex::decode(
-        &compose_outputs.reveal.psbt_hex,
-    )?)?;
-    let (tap_script, _) =
-        indexer::test_utils::participant_tap_script(&reveal_psbt.inputs[0])?;
+    let reveal_psbt = bitcoin::Psbt::deserialize(&hex::decode(&compose_outputs.reveal.psbt_hex)?)?;
+    let (tap_script, _) = indexer::test_utils::participant_tap_script(&reveal_psbt.inputs[0])?;
 
     let commit_prevout = TxOut {
         value: utxo_for_output.value,

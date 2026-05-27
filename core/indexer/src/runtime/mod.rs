@@ -87,10 +87,10 @@ impl From<anyhow::Error> for ExecutionError {
 }
 
 pub use wit::kontor;
+pub use wit::kontor::built_in::context::ContractAddress;
 pub use wit::kontor::built_in::context::OutPoint;
 pub use wit::kontor::built_in::error::Error;
 pub use wit::kontor::built_in::file_registry::{ChallengeInput, RawFileDescriptor, VerifyResult};
-pub use wit::kontor::built_in::context::ContractAddress;
 pub use wit::kontor::built_in::numbers::{
     Decimal, Integer, Ordering as NumericOrdering, Sign as NumericSign,
 };
