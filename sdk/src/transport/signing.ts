@@ -96,3 +96,31 @@ export function txidOf(rawTxHex: string): string {
     allowUnknownInputs: true,
   }).id;
 }
+
+/**
+ * Read output `vout` of `rawTxHex` and return it as a `Utxo`. The
+ * compose endpoint tells us exactly which output is change (commit
+ * tx's vout 1 by construction, reveal tx's index per `output_info`),
+ * so callers know the index up front — this just lifts the value +
+ * scriptPubKey out of the parsed tx for the change-tracking cursor.
+ */
+export function utxoAt(
+  rawTxHex: string,
+  vout: number,
+): { txid: string; vout: number; value: bigint; scriptPubKey: string } {
+  const tx = Transaction.fromRaw(hex.decode(rawTxHex), {
+    disableScriptCheck: true,
+    allowUnknownOutputs: true,
+    allowUnknownInputs: true,
+  });
+  const out = tx.getOutput(vout);
+  if (out.script == null || out.amount == null) {
+    throw new Error(`utxoAt: tx ${tx.id} vout ${vout} has no script/amount`);
+  }
+  return {
+    txid: tx.id,
+    vout,
+    value: out.amount,
+    scriptPubKey: hex.encode(out.script),
+  };
+}
