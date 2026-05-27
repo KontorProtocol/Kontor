@@ -14,8 +14,7 @@
  *     via `decodeContractAddressWave` and surfaces it as
  *     `Inst<ContractAddress>`'s typed return.
  *
- * Funding: devFundingUtxos[1] (currently unclaimed across the other
- * regtest files — see the comments in transfer/offer/revoke).
+ * Funding: identities[2] (the slot claimed for this suite).
  */
 import { readFileSync } from "node:fs";
 import path from "node:path";
@@ -50,18 +49,14 @@ const COUNTER_WASM_BR = readFileSync(
 
 test("session.publish deploys a contract and returns its address", async () => {
   const regtest = connectRegtest(inject("regtest"));
-  const { chain, devAccount } = regtest;
-
-  // devFundingUtxos[1] — claim slot for the publish suite. transfer
-  // owns [0]; offer/revoke own [2]..[6]. See the comments in those
-  // files for the convention.
-  const funding = regtest.devFundingUtxos[1]!;
+  const { chain } = regtest;
+  const { account: publisher, fundingUtxo } = regtest.accounts[2]!;
 
   const session = new KontorSession({
     chain,
-    account: devAccount,
+    account: publisher,
     transport: ({ chain, account }) =>
-      http({ chain, account, utxos: () => Promise.resolve([funding]) }),
+      http({ chain, account, utxos: [fundingUtxo] }),
   });
 
   try {

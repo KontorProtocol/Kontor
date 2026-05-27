@@ -31,11 +31,16 @@ export default async function setup({ provide }: GlobalSetupContext) {
     devPrivateKey: devnet.devPrivateKey,
     devPublicKey: devnet.devPublicKey,
     devAddress: devnet.devAddress,
-    devFundingUtxos: devnet.devFundingUtxos.map((u) => ({
-      txid: u.txid,
-      vout: u.vout,
-      value: u.value.toString(),
-      scriptPubKey: u.scriptPubKey,
+    identities: devnet.identities.map((id) => ({
+      privateKey: id.privateKey,
+      publicKey: id.publicKey,
+      address: id.address,
+      fundingUtxo: {
+        txid: id.fundingUtxo.txid,
+        vout: id.fundingUtxo.vout,
+        value: id.fundingUtxo.value.toString(),
+        scriptPubKey: id.fundingUtxo.scriptPubKey,
+      },
     })),
   });
 

@@ -184,8 +184,47 @@ export interface KontorTransport {
   /**
    * Broadcast already-signed raw transactions — in dependency order
    * (commit, reveal, …) — as one package. Used by the attach/detach
-   * runtime, which builds and signs its txs by hand rather than going
-   * through `submit`.
+   * runtime, which builds its txs (e.g. the seller's pre-signed detach
+   * PSBT, the buyer's swap reveal) outside the generic `submit` path.
    */
   broadcast(transactions: string[]): Promise<BroadcastResult>;
+
+  /**
+   * Compose a Reveal and sign all participant inputs that belong to
+   * this transport's account, returning the prepared package. Pure:
+   * does NOT broadcast and does NOT update funding tracking. Callers
+   * that will broadcast (now or later) should also call
+   * `advanceTracking` so subsequent `utxos()` reflects the spent
+   * inputs + change outputs.
+   *
+   * `submit` is the simple-Reveal shorthand (single Build participant
+   * with Change). Higher-level flows (attach: ChainedEnvelope +
+   * Change; marketplace: multi-participant) build their own Reveal
+   * and route through this.
+   */
+  composeAndSign(
+    reveal: Reveal,
+    suppliedUtxos: Utxo[],
+  ): Promise<{
+    commitHex: string;
+    revealHex: string;
+    composed: ComposeOutputs;
+  }>;
+
+  /**
+   * After broadcasting a commit/reveal pair that this transport
+   * prepared via `composeAndSign`, advance the funding tracker so its
+   * spent inputs are filtered out of `utxos()` and its change outputs
+   * become the new pool. Called automatically by `submit`; called by
+   * `attach.ts`'s offer build after it broadcasts the attach.
+   *
+   * Optional — implementations that don't track funding (e.g. test
+   * mocks) may leave it undefined.
+   */
+  advanceTracking?(opts: {
+    suppliedUtxos: Utxo[];
+    composed: ComposeOutputs;
+    commitHex: string;
+    revealHex: string;
+  }): void;
 }

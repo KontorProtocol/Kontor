@@ -9,8 +9,7 @@
  * decoder runs on the right slot, and the bundled `await` resolves to
  * the typed tuple.
  *
- * Funding: devFundingUtxos[7] (the slot claimed for this suite; see
- * the bump from 7 → 8 splits in `kontor regtest`).
+ * Funding: identities[1] (the slot claimed for this suite).
  */
 import { test, expect, inject } from "vitest";
 import { Decimal, KontorSession, LocalAccount, Result, http } from "@kontor/sdk";
@@ -20,7 +19,8 @@ import "./regtest-context.js";
 
 test("session.bulk: two transfers in one tx land both balances", async () => {
   const regtest = connectRegtest(inject("regtest"));
-  const { chain, devAccount: sender } = regtest;
+  const { chain } = regtest;
+  const { account: sender, fundingUtxo } = regtest.accounts[1]!;
 
   const recipientA = LocalAccount.fromPrivateKey({
     privateKey: "aa".repeat(32),
@@ -31,15 +31,11 @@ test("session.bulk: two transfers in one tx land both balances", async () => {
     chain,
   });
 
-  // devFundingUtxos[7] — the slot for the bulk regtest. One submit,
-  // one UTXO; bundle of two ops in the same input.
-  const funding = regtest.devFundingUtxos[7]!;
-
   const session = new KontorSession({
     chain,
     account: sender,
     transport: ({ chain, account }) =>
-      http({ chain, account, utxos: () => Promise.resolve([funding]) }),
+      http({ chain, account, utxos: [fundingUtxo] }),
   });
 
   try {

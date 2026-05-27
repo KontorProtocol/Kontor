@@ -2,7 +2,11 @@
  * Live regtest capstone — the depth-first slice end to end against a
  * real `kontor regtest` chain: bind the codegen'd token `Contract`,
  * `transfer(...)` (submit → poll → wait), and confirm the recipient's
- * `balance()` view reflects the credit.
+ * `balance()` view reflects the credit. The test fires *two* transfers
+ * back-to-back from the same sender to exercise the HTTP transport's
+ * change-tracking: submit 2 must chain through submit 1's change
+ * outputs (no fresh bootstrap UTXO available), proving `trackedFunding`
+ * drives funding after the bootstrap is consumed.
  *
  * The devnet is started once by `vitest.regtest.globalSetup.ts`; this
  * file is a pure HTTP client, so it runs in Node and the browser
@@ -10,35 +14,30 @@
  */
 import { test, expect, inject } from "vitest";
 import { Decimal, KontorSession, LocalAccount, Result, http } from "@kontor/sdk";
-import { regtestChain } from "@kontor/sdk/regtest";
+import { connectRegtest } from "@kontor/sdk/regtest";
 import { Contract } from "./__generated__/token.js";
 import "./regtest-context.js";
 
-test("transfer(): submit/wait moves tokens; balance() view reflects it", async () => {
-  const rt = inject("regtest");
-  const chain = regtestChain({ apiUrl: rt.apiUrl, bitcoinRpc: rt.bitcoinRpc });
+test("transfer(): two chained submits land both credits via change-tracking", async () => {
+  const regtest = connectRegtest(inject("regtest"));
+  const { chain } = regtest;
 
-  const account = LocalAccount.fromPrivateKey({
-    privateKey: rt.devPrivateKey,
-    chain,
-  });
+  // Identity slot 0 — pre-issued tokens + 1M-sat funding UTXO. The second
+  // submit *must* chain through the first's change to land, since this
+  // identity has only its single bootstrap UTXO.
+  const { account, fundingUtxo } = regtest.accounts[0]!;
   // A fresh, never-funded recipient — its balance starts empty.
   const recipient = LocalAccount.fromPrivateKey({
     privateKey: "22".repeat(32),
     chain,
   });
-  // Funding UTXO 0 — the attach suite takes index 1, so the two test
-  // files never collide on a shared output.
-  const funding = {
-    ...rt.devFundingUtxos[0]!,
-    value: BigInt(rt.devFundingUtxos[0]!.value),
-  };
 
   const session = new KontorSession({
     chain,
     account,
-    transport: ({ chain, account }) =>
-      http({ chain, account, utxos: () => Promise.resolve([funding]) }),
+    // Array form: bootstrap-once, then HTTP transport's trackedFunding
+    // takes over for subsequent submits.
+    transport: ({ chain, account }) => http({ chain, account, utxos: [fundingUtxo] }),
   });
 
   try {
@@ -55,13 +54,17 @@ test("transfer(): submit/wait moves tokens; balance() view reflects it", async (
     expect(sim.status).toBe("Ok");
     expect(sim.value?.kind).toBe("ok");
 
-    // `await` on the proc Inst fires submit → wait; throws on a non-Ok
-    // op status, so reaching here means the transfer landed.
-    const result = await token.transfer(recipient.holderRef, Decimal.from("1"));
-    expect(Result.unwrap(result).amt.toString()).toBe("1");
+    // Submit 1 — spends the bootstrap UTXO; change becomes trackedFunding.
+    const first = await token.transfer(recipient.holderRef, Decimal.from("1"));
+    expect(Result.unwrap(first).amt.toString()).toBe("1");
+    expect((await token.balance(recipient.holderRef))?.toString()).toBe("1");
 
-    const after = await token.balance(recipient.holderRef);
-    expect(after?.toString()).toBe("1");
+    // Submit 2 — bootstrap is consumed; funding must come from submit 1's
+    // change UTXOs. If change-tracking is broken, this errors with no
+    // funding available.
+    const second = await token.transfer(recipient.holderRef, Decimal.from("1"));
+    expect(Result.unwrap(second).amt.toString()).toBe("1");
+    expect((await token.balance(recipient.holderRef))?.toString()).toBe("2");
   } finally {
     session.close();
   }

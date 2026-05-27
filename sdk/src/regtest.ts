@@ -53,32 +53,63 @@ export interface StartRegtestOptions {
   inheritStdio?: boolean;
 }
 
+/**
+ * A pre-created identity from `kontor regtest`'s identity pool — its own
+ * secp256k1 keypair, a P2TR address, one funded UTXO (1M sats), and a
+ * fresh chunk of native tokens already issued by the binary. Tests claim
+ * one identity per slot, fully isolated from each other.
+ */
+export interface RegtestIdentity {
+  /** 32-byte secp256k1 private key, hex. */
+  privateKey: string;
+  /** x-only taproot pubkey, hex. */
+  publicKey: string;
+  /** bech32m (P2TR) address. */
+  address: string;
+  /** The identity's single funded UTXO — pass to `submit` as bootstrap. */
+  fundingUtxo: Utxo;
+}
+
 /** The dev-account material + endpoints parsed from `kontor regtest`. */
 export interface RegtestInfo {
   /** Indexer HTTP API base, e.g. `http://localhost:34197/api`. */
   apiUrl: string;
   /** Bitcoin Core regtest RPC endpoint, `rpc:rpc` credentials embedded. */
   bitcoinRpc: string;
-  /** The pre-funded dev account's 32-byte secp256k1 secret, hex. */
+  /** The pre-funded dev (admin) account's 32-byte secp256k1 secret, hex. */
   devPrivateKey: string;
   /** The dev account's x-only taproot pubkey, hex. */
   devPublicKey: string;
-  /** The dev account's bech32m (p2tr) address. */
+  /** The dev account's bech32m (P2TR) address. */
   devAddress: string;
   /**
-   * Spendable Bitcoin UTXOs owned by the dev account — pass one to
-   * `submit` as funding (the SDK never sources UTXOs itself). The
-   * devnet splits the dev funding into several independent outputs so
-   * distinct test files can each spend one without colliding.
+   * Pre-created identity pool. Each is independently keyed, funded with
+   * 1M sats (one UTXO), and pre-issued native tokens — ready to call
+   * gas-paying ops or transfer/sell without any further setup. SDK
+   * tests claim a slot by index (`identities[0]`, `identities[1]`, …).
    */
-  devFundingUtxos: Utxo[];
+  identities: RegtestIdentity[];
+}
+
+/**
+ * One pre-created identity, ready for a test slot — the `RegtestIdentity`
+ * material lifted into runnable form (`LocalAccount` + `fundingUtxo` to
+ * pass straight to `http({ utxos: [fundingUtxo] })`).
+ */
+export interface RegtestAccount {
+  /** Same as the matching `RegtestIdentity.privateKey`. */
+  privateKey: string;
+  /** A `LocalAccount` derived from `privateKey`, ready to sign. */
+  account: LocalAccount;
+  /** The identity's single 1M-sat funding UTXO. */
+  fundingUtxo: Utxo;
 }
 
 /**
  * Devnet client-side view: the connection info plus ready-made helpers
- * (`devAccount`, `fundAddress`, `createAccount`). Available both to the
- * process that owns the devnet (via `startRegtest`) and to test workers
- * that didn't spawn it (via `connectRegtest(info)`).
+ * (`devAccount`, `accounts`, `fundAddress`, `createAccount`). Available
+ * both to the process that owns the devnet (via `startRegtest`) and to
+ * test workers that didn't spawn it (via `connectRegtest(info)`).
  *
  * Does NOT include `stop()` — only the spawning process can kill the
  * child.
@@ -86,8 +117,14 @@ export interface RegtestInfo {
 export interface RegtestClient extends RegtestInfo {
   /** A `Chain` wired to this devnet — pass straight to `KontorSession`. */
   chain: Chain;
-  /** The dev account as a ready-to-sign `LocalAccount`. */
+  /** The dev (admin) account as a ready-to-sign `LocalAccount`. */
   devAccount: LocalAccount;
+  /**
+   * Pre-created identity pool lifted into runnable form. Each slot
+   * carries its own `LocalAccount` + funding UTXO; tests claim a slot
+   * by index. Indices match `RegtestInfo.identities[i]`.
+   */
+  accounts: RegtestAccount[];
   /**
    * Send `sats` from `sourceAccount` (default: the dev account) to
    * `destAddress`. Builds a one-in/two-out P2TR key-path tx, signs it,
@@ -100,14 +137,10 @@ export interface RegtestClient extends RegtestInfo {
   fundAddress(opts: FundAddressOptions): Promise<Utxo>;
   /**
    * Mint a fresh `LocalAccount` with random keys and fund it with
-   * `sats` from `sourceUtxo` (typically one of `devFundingUtxos`).
-   * One-line equivalent of: generate key → build LocalAccount → call
-   * `fundAddress`.
-   *
-   *     const { account, fundingUtxo } = await regtest.createAccount({
-   *       sats: 50_000n,
-   *       sourceUtxo: regtest.devFundingUtxos[3],
-   *     });
+   * `sats` from `sourceUtxo`. One-line equivalent of: generate key →
+   * build LocalAccount → call `fundAddress`. Most tests can use a
+   * pre-created `accounts[i]` instead; this remains for ad-hoc cases
+   * where extra accounts are needed beyond the pool.
    */
   createAccount(opts: CreateAccountOptions): Promise<{
     account: LocalAccount;
@@ -234,24 +267,45 @@ function parseInfoPayload(json: string): RegtestInfo {
     devPrivateKey: obj.devPrivateKey as string,
     devPublicKey: obj.devPublicKey as string,
     devAddress: obj.devAddress as string,
-    devFundingUtxos: parseFundingUtxos(obj.devFundingUtxos),
+    identities: parseIdentities(obj.identities),
   };
 }
 
-/** Parse + validate the `devFundingUtxos` array into `Utxo`s. */
-function parseFundingUtxos(raw: unknown): Utxo[] {
+/** Parse + validate the `identities` array. */
+function parseIdentities(raw: unknown): RegtestIdentity[] {
   if (!Array.isArray(raw) || raw.length === 0) {
     throw new Error(
-      "KONTOR_REGTEST_INFO: devFundingUtxos missing, not an array, or empty",
+      "KONTOR_REGTEST_INFO: identities missing, not an array, or empty",
     );
   }
-  return raw.map(parseFundingUtxo);
+  return raw.map(parseIdentity);
+}
+
+/** Parse + validate one identity object. */
+function parseIdentity(raw: unknown): RegtestIdentity {
+  if (typeof raw !== "object" || raw === null) {
+    throw new Error("KONTOR_REGTEST_INFO: identity missing or not an object");
+  }
+  const i = raw as Record<string, unknown>;
+  if (
+    typeof i.privateKey !== "string" ||
+    typeof i.publicKey !== "string" ||
+    typeof i.address !== "string"
+  ) {
+    throw new Error("KONTOR_REGTEST_INFO: identity has missing or mistyped fields");
+  }
+  return {
+    privateKey: i.privateKey,
+    publicKey: i.publicKey,
+    address: i.address,
+    fundingUtxo: parseFundingUtxo(i.fundingUtxo),
+  };
 }
 
 /** Parse + validate one funding-UTXO object into a `Utxo`. */
 function parseFundingUtxo(raw: unknown): Utxo {
   if (typeof raw !== "object" || raw === null) {
-    throw new Error("KONTOR_REGTEST_INFO: devFundingUtxo missing or not an object");
+    throw new Error("KONTOR_REGTEST_INFO: fundingUtxo missing or not an object");
   }
   const u = raw as Record<string, unknown>;
   if (
@@ -260,7 +314,7 @@ function parseFundingUtxo(raw: unknown): Utxo {
     typeof u.value !== "number" ||
     typeof u.scriptPubKey !== "string"
   ) {
-    throw new Error("KONTOR_REGTEST_INFO: devFundingUtxo has missing or mistyped fields");
+    throw new Error("KONTOR_REGTEST_INFO: fundingUtxo has missing or mistyped fields");
   }
   // `value` arrives as a JSON number of satoshis; `Utxo.value` is bigint.
   return { txid: u.txid, vout: u.vout, value: BigInt(u.value), scriptPubKey: u.scriptPubKey };
@@ -377,11 +431,16 @@ export interface ProvidedRegtestInfo {
   devPrivateKey: string;
   devPublicKey: string;
   devAddress: string;
-  devFundingUtxos: Array<{
-    txid: string;
-    vout: number;
-    value: bigint | string | number;
-    scriptPubKey: string;
+  identities: Array<{
+    privateKey: string;
+    publicKey: string;
+    address: string;
+    fundingUtxo: {
+      txid: string;
+      vout: number;
+      value: bigint | string | number;
+      scriptPubKey: string;
+    };
   }>;
 }
 
@@ -400,11 +459,19 @@ export interface ProvidedRegtestInfo {
 export function connectRegtest(info: ProvidedRegtestInfo): RegtestClient {
   const normalizedInfo: RegtestInfo = {
     ...info,
-    devFundingUtxos: info.devFundingUtxos.map((u) => ({
-      txid: u.txid,
-      vout: u.vout,
-      value: typeof u.value === "bigint" ? u.value : BigInt(u.value),
-      scriptPubKey: u.scriptPubKey,
+    identities: info.identities.map((id) => ({
+      privateKey: id.privateKey,
+      publicKey: id.publicKey,
+      address: id.address,
+      fundingUtxo: {
+        txid: id.fundingUtxo.txid,
+        vout: id.fundingUtxo.vout,
+        value:
+          typeof id.fundingUtxo.value === "bigint"
+            ? id.fundingUtxo.value
+            : BigInt(id.fundingUtxo.value),
+        scriptPubKey: id.fundingUtxo.scriptPubKey,
+      },
     })),
   };
   const chain = regtestChain(normalizedInfo);
@@ -412,6 +479,11 @@ export function connectRegtest(info: ProvidedRegtestInfo): RegtestClient {
     privateKey: normalizedInfo.devPrivateKey,
     chain,
   });
+  const accounts: RegtestAccount[] = normalizedInfo.identities.map((id) => ({
+    privateKey: id.privateKey,
+    account: LocalAccount.fromPrivateKey({ privateKey: id.privateKey, chain }),
+    fundingUtxo: id.fundingUtxo,
+  }));
   const fundAddress = (opts: FundAddressOptions): Promise<Utxo> =>
     performFundAddress(normalizedInfo.bitcoinRpc, chain, devAccount, opts);
   const mine = async (count: number = 1): Promise<string[]> =>
@@ -440,6 +512,7 @@ export function connectRegtest(info: ProvidedRegtestInfo): RegtestClient {
     ...normalizedInfo,
     chain,
     devAccount,
+    accounts,
     fundAddress,
     createAccount,
     mine,

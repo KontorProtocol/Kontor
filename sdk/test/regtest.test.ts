@@ -7,8 +7,8 @@ import { test, expect } from "vitest";
 import { parseRegtestInfo, regtestChain } from "../src/regtest.js";
 
 /** The `KONTOR_REGTEST_INFO` JSON payload as the binary prints it —
- *  each `devFundingUtxos` entry's `value` is a plain number of
- *  satoshis on the wire. */
+ *  each identity's `fundingUtxo.value` is a plain number of satoshis
+ *  on the wire. */
 const INFO = {
   apiUrl: "http://localhost:32889/api",
   bitcoinRpc: "http://rpc:rpc@127.0.0.1:44745",
@@ -17,20 +17,34 @@ const INFO = {
   devPublicKey:
     "3285de1e9b50e8eec053b840fb5c6b886cefcfdb729c37bba2a7e27a066f86fe",
   devAddress: "bcrt1pfj2vd8zrgmrt2tu75t7kx29ju673v3mc8peqnp676524aayl0tvq0jq7mh",
-  devFundingUtxos: [
+  identities: [
     {
-      txid: "a1b2c3d4e5f6071829303142535465768798a0b1c2d3e4f50617283940516273",
-      vout: 0,
-      value: 2499990000,
-      scriptPubKey:
-        "51204c953681c8d18d6a5f3d45f5b194597b5e8b23783875099d76aa2abdef27ded8",
+      privateKey: "11".repeat(32),
+      publicKey:
+        "abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890",
+      address:
+        "bcrt1pqq2vd8zrgmrt2tu75t7kx29ju673v3mc8peqnp676524aayl0tvqxxxxxx",
+      fundingUtxo: {
+        txid: "a1b2c3d4e5f6071829303142535465768798a0b1c2d3e4f50617283940516273",
+        vout: 0,
+        value: 1_000_000,
+        scriptPubKey:
+          "51204c953681c8d18d6a5f3d45f5b194597b5e8b23783875099d76aa2abdef27ded8",
+      },
     },
     {
-      txid: "a1b2c3d4e5f6071829303142535465768798a0b1c2d3e4f50617283940516273",
-      vout: 1,
-      value: 2499990000,
-      scriptPubKey:
-        "51204c953681c8d18d6a5f3d45f5b194597b5e8b23783875099d76aa2abdef27ded8",
+      privateKey: "22".repeat(32),
+      publicKey:
+        "fedcba0987654321fedcba0987654321fedcba0987654321fedcba0987654321",
+      address:
+        "bcrt1pww2vd8zrgmrt2tu75t7kx29ju673v3mc8peqnp676524aayl0tvqyyyyyy",
+      fundingUtxo: {
+        txid: "a1b2c3d4e5f6071829303142535465768798a0b1c2d3e4f50617283940516273",
+        vout: 1,
+        value: 1_000_000,
+        scriptPubKey:
+          "51204c953681c8d18d6a5f3d45f5b194597b5e8b23783875099d76aa2abdef27ded8",
+      },
     },
   ],
 };
@@ -56,18 +70,28 @@ test("parseRegtestInfo: extracts every field, value as a bigint", () => {
   expect(info.devPrivateKey).toBe(INFO.devPrivateKey);
   expect(info.devPublicKey).toBe(INFO.devPublicKey);
   expect(info.devAddress).toBe(INFO.devAddress);
-  expect(info.devFundingUtxos).toEqual([
+  expect(info.identities).toEqual([
     {
-      txid: INFO.devFundingUtxos[0]!.txid,
-      vout: 0,
-      value: 2499990000n,
-      scriptPubKey: INFO.devFundingUtxos[0]!.scriptPubKey,
+      privateKey: INFO.identities[0]!.privateKey,
+      publicKey: INFO.identities[0]!.publicKey,
+      address: INFO.identities[0]!.address,
+      fundingUtxo: {
+        txid: INFO.identities[0]!.fundingUtxo.txid,
+        vout: 0,
+        value: 1_000_000n,
+        scriptPubKey: INFO.identities[0]!.fundingUtxo.scriptPubKey,
+      },
     },
     {
-      txid: INFO.devFundingUtxos[1]!.txid,
-      vout: 1,
-      value: 2499990000n,
-      scriptPubKey: INFO.devFundingUtxos[1]!.scriptPubKey,
+      privateKey: INFO.identities[1]!.privateKey,
+      publicKey: INFO.identities[1]!.publicKey,
+      address: INFO.identities[1]!.address,
+      fundingUtxo: {
+        txid: INFO.identities[1]!.fundingUtxo.txid,
+        vout: 1,
+        value: 1_000_000n,
+        scriptPubKey: INFO.identities[1]!.fundingUtxo.scriptPubKey,
+      },
     },
   ]);
 });
@@ -88,9 +112,9 @@ test("parseRegtestInfo: throws on a complete-but-malformed info line", () => {
   expect(() => parseRegtestInfo(`KONTOR_REGTEST_INFO ${noBitcoinRpc}\n`)).toThrow(
     /missing string field 'bitcoinRpc'/,
   );
-  const noUtxo = JSON.stringify({ ...INFO, devFundingUtxos: undefined });
-  expect(() => parseRegtestInfo(`KONTOR_REGTEST_INFO ${noUtxo}\n`)).toThrow(
-    /devFundingUtxos/,
+  const noIdentities = JSON.stringify({ ...INFO, identities: undefined });
+  expect(() => parseRegtestInfo(`KONTOR_REGTEST_INFO ${noIdentities}\n`)).toThrow(
+    /identities/,
   );
 });
 

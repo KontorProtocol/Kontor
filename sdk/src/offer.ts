@@ -52,13 +52,18 @@ function opReturnScript(payload: Uint8Array): Uint8Array {
  * The persistable offer blob — everything a buyer needs to complete the
  * swap with no contact with the seller. `Offer.serialize()` emits this
  * as JSON; `session.openOffer` rehydrates it.
+ *
+ * The attach commit + reveal are broadcast at offer-creation time
+ * (`Attachment.offer`), so the blob only needs the reveal hex — its
+ * txid + output 0 form the escrow outpoint the buyer references in the
+ * swap reveal.
  */
 export interface OfferData {
   /** Blob format version. */
   v: 1;
-  /** The signed attach commit transaction, raw hex. */
-  attachCommit: string;
-  /** The signed attach reveal transaction, raw hex — output 0 is the escrow. */
+  /** The broadcast attach reveal transaction, raw hex — output 0 is the
+   *  escrow. The commit isn't included: it's already on chain and only
+   *  needed for sequencing, which the broadcast already established. */
   attachReveal: string;
   /** The detach `Insts` — kept for tooling/inspection of the offer. */
   detachInsts: WireInsts;
@@ -97,126 +102,87 @@ export class Offer {
   }
 
   /**
-   * Broadcast the attach (commit + reveal) now, so the escrow is live
-   * on chain before any buyer — the "hard offer" path. Optional: a
-   * deferred offer skips this and lets the buyer's `accept()` broadcast
-   * the attach.
-   */
-  publishAttach(): Promise<BroadcastResult> {
-    return this.session.transport.broadcast([
-      this.data.attachCommit,
-      this.data.attachReveal,
-    ]);
-  }
-
-  /**
-   * Cancel the offer — detach the asset back to the seller. No
-   * `Sponsor` input is involved, so the reactor's payer defaults to
-   * the signer of the escrow input (the seller); the contract's
-   * `detach` reads `ctx.payer()` and credits the asset back to that
-   * signer. Single-party, no buyer needed.
+   * Cancel the offer — detach the asset back to the seller. The escrow
+   * is already on chain (broadcast at offer creation), so this is just
+   * the detach tx: spend the escrow (script-path through the detach
+   * leaf) plus a funding input from `transport.utxos()` covering the
+   * Bitcoin fee. No `Sponsor` is involved, so the reactor's payer
+   * defaults to the signer of the escrow input (the seller); the
+   * contract's `detach` reads `ctx.payer()` and credits the asset back.
    *
-   * Spends the escrow plus a `funding` UTXO (the escrow output is dust;
-   * `funding` covers the Bitcoin fee) into one output back to the
-   * seller. Broadcasts `[attachCommit, attachReveal, detachTx]` — the
-   * same package shape as `accept()`, so a deferred offer is revoked
-   * even if its attach was never published.
-   *
-   * @param opts.funding  A seller UTXO covering `fee`.
    * @param opts.fee      Flat fee in sats. Default `DEFAULT_SWAP_FEE`.
    */
-  async revoke(opts: { funding: Utxo; fee?: bigint }): Promise<BroadcastResult> {
+  async revoke(): Promise<BroadcastResult> {
     const { data } = this;
     const { account, chain, transport } = this.session;
-    const fee = opts.fee ?? DEFAULT_SWAP_FEE;
+
+    const fundingUtxos = await transport.utxos();
+    if (fundingUtxos.length === 0) {
+      throw new SignerError(
+        "revoke: transport has no spendable UTXOs for the detach fee",
+        { docsPath: "/sdk/offer" },
+      );
+    }
 
     // The escrow — the attach reveal's output 0.
-    const reveal = Transaction.fromRaw(hex.decode(data.attachReveal), LENIENT_TX);
-    const escrow = reveal.getOutput(0);
+    const attachReveal = Transaction.fromRaw(hex.decode(data.attachReveal), LENIENT_TX);
+    const escrow = attachReveal.getOutput(0);
     if (escrow.script == null || escrow.amount == null) {
       throw new SignerError("revoke: attach reveal has no escrow output 0", {
         docsPath: "/sdk/offer",
       });
     }
 
-    const sellerXOnly = hex.decode(account.xOnlyPubKey);
-    const recovered = escrow.amount + opts.funding.value - fee;
-    if (recovered < DUST_SATS) {
-      throw new SignerError(
-        `revoke: escrow ${escrow.amount} + funding ${opts.funding.value} ` +
-          `sats cannot cover fee ${fee}`,
-        { docsPath: "/sdk/offer" },
-      );
-    }
-
-    // Spend the escrow through the detach leaf; the seller is the
-    // signer, no Sponsor is in play, so `ctx.payer()` inside detach
-    // resolves to the seller and the asset is credited back. The
-    // funding input covers the Bitcoin fee; one output returns
-    // everything to the seller.
-    const leafScript = btcUtils.concatBytes(
-      hex.decode(data.detachLeaf.script),
-      new Uint8Array([data.detachLeaf.leafVersion]),
+    const sellerScriptPubKey = hex.encode(
+      p2tr(hex.decode(account.xOnlyPubKey), undefined, chain.network).script,
     );
-    const controlBlock = TaprootControlBlock.decode(
-      hex.decode(data.detachLeaf.controlBlock),
-    );
-
-    const tx = new Transaction({ allowUnknownOutputs: true });
-    tx.addInput({
-      txid: reveal.id,
-      index: 0,
-      witnessUtxo: { script: escrow.script, amount: escrow.amount },
-      tapLeafScript: [[controlBlock, leafScript]],
-    });
-    tx.addInput({
-      txid: opts.funding.txid,
-      index: opts.funding.vout,
-      witnessUtxo: {
-        script: hex.decode(opts.funding.scriptPubKey),
-        amount: opts.funding.value,
-      },
-      tapInternalKey: sellerXOnly,
-      // Opt-in RBF on the seller's funding input.
-      sequence: 0xfffffffd,
-    });
-    tx.addOutput({
-      script: p2tr(sellerXOnly, undefined, chain.network).script,
-      amount: recovered,
-    });
-
-    // The seller owns both inputs; sign both `default`. Unlike the
-    // offer's detach PSBT there is no buyer to leave outputs open for.
-    const signed = await account.signPsbt(tx.toPSBT(), {
-      inputs: [{ index: 0 }, { index: 1 }],
-    });
-
-    // Finalize by hand: input 0 the escrow's script-path spend, input 1
-    // a plain key-path spend.
-    const finalTx = Transaction.fromPSBT(signed);
-    const escrowSig = finalTx.getInput(0).tapScriptSig?.[0]?.[1];
-    if (escrowSig == null) {
-      throw new SignerError("revoke: the escrow input was not signed");
-    }
-    finalTx.updateInput(0, {
-      finalScriptWitness: [
-        escrowSig,
-        hex.decode(data.detachLeaf.script),
-        hex.decode(data.detachLeaf.controlBlock),
+    // Build a single-participant Existing Reveal: the participant's
+    // input is the escrow (script-path via the detach leaf, derived by
+    // the indexer from `detachInsts`); the seller's funding UTXOs ride
+    // as `extra_inputs` (key-path) to cover the Bitcoin fee. No
+    // Sponsor → `ctx.payer()` resolves to the signer (the seller), so
+    // `detach` credits the asset back to them. Compose handles fee +
+    // change layout the same as any other call.
+    const reveal: Reveal = {
+      sat_per_vbyte: await transport.feeRate(),
+      participants: [
+        {
+          x_only_public_key: account.xOnlyPubKey,
+          commit_insts: data.detachInsts,
+          output: { Change: { script_pubkey: sellerScriptPubKey } },
+          commit_source: {
+            Existing: {
+              outpoint: `${attachReveal.id}:0`,
+              prevout: {
+                value: Number(escrow.amount),
+                script_pubkey: hex.encode(escrow.script),
+              },
+            },
+          },
+        },
       ],
-    });
-    const fundingSig = finalTx.getInput(1).tapKeySig;
-    if (fundingSig == null) {
-      throw new SignerError("revoke: the funding input was not signed");
-    }
-    finalTx.updateInput(1, { finalScriptWitness: [fundingSig] });
+      extra_inputs: fundingUtxos.map((u) => ({
+        outpoint: `${u.txid}:${u.vout}`,
+        prevout: {
+          value: Number(u.value),
+          script_pubkey: u.scriptPubKey,
+        },
+      })),
+      extra_outputs: [],
+    };
 
-    const detachTxHex = hex.encode(finalTx.extract());
-    return transport.broadcast([
-      data.attachCommit,
-      data.attachReveal,
-      detachTxHex,
-    ]);
+    const { revealHex, composed } = await transport.composeAndSign(
+      reveal,
+      fundingUtxos,
+    );
+    const result = await transport.broadcast([revealHex]);
+    transport.advanceTracking?.({
+      suppliedUtxos: fundingUtxos,
+      composed,
+      commitHex: "",
+      revealHex,
+    });
+    return result;
   }
 }
 
@@ -274,7 +240,6 @@ export class IncomingOffer {
         throw new Error(`unsupported offer blob version: ${String(data.v)}`);
       }
       if (price <= 0n) throw new Error("price must be positive");
-      Transaction.fromRaw(hex.decode(data.attachCommit), LENIENT_TX);
       Transaction.fromRaw(hex.decode(data.attachReveal), LENIENT_TX);
       const detach = Transaction.fromPSBT(hex.decode(data.detachPsbt));
       // Escrow at input 1, price at output 1 — slot 0 is a dummy
@@ -305,16 +270,28 @@ export class IncomingOffer {
    * buyer's commit tx + the swap reveal PSBT; the buyer signs both
    * (key-path spend on the commit; script-path spend revealing the
    * Sponsor leaf on the swap reveal's input 0); the seller's pre-signed
-   * SACP witness is injected at input 1; everything broadcasts as one
-   * package: `[attachCommit, attachReveal, buyerCommit, swapReveal]`.
+   * SACP witness is injected at input 1; the buyer's commit + the
+   * swap reveal broadcast as one package (`[buyerCommit, swapReveal]`).
+   * The attach was already broadcast at offer-creation, so it isn't
+   * part of this package.
    *
    * The Sponsor at input 0 sponsors input 1's first op (the detach), so
    * `ctx.payer()` resolves to the buyer; the asset detaches to the
    * buyer (= signer of this `accept()` call). No OP_RETURN is involved.
    */
-  async accept(opts: { funding: Utxo }): Promise<BroadcastResult> {
+  async accept(): Promise<BroadcastResult> {
     const { data } = this;
     const { account, chain, transport } = this.session;
+
+    // Buyer's funding for the Sponsor commit comes from the transport
+    // — the same place every other call sources its UTXOs.
+    const buyerUtxos = await transport.utxos();
+    if (buyerUtxos.length === 0) {
+      throw new SignerError(
+        "accept: transport has no spendable UTXOs for the buyer's commit",
+        { docsPath: "/sdk/offer" },
+      );
+    }
 
     // The seller's pre-signed detach PSBT: escrow at input 1, price at
     // output 1. The buyer extracts the SACP witness, the escrow's
@@ -365,7 +342,7 @@ export class IncomingOffer {
           commit_source: {
             Build: {
               address: account.address,
-              funding_utxo_ids: [`${opts.funding.txid}:${opts.funding.vout}`],
+              funding_utxo_ids: buyerUtxos.map((u) => `${u.txid}:${u.vout}`),
             },
           },
         },
@@ -450,12 +427,7 @@ export class IncomingOffer {
     });
 
     const swapTxHex = hex.encode(swapFinal.extract());
-    return transport.broadcast([
-      data.attachCommit,
-      data.attachReveal,
-      buyerCommitHex,
-      swapTxHex,
-    ]);
+    return transport.broadcast([buyerCommitHex, swapTxHex]);
   }
 }
 

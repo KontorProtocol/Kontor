@@ -32,25 +32,41 @@ export async function signCommit(
   account: Account,
   psbtHex: string,
 ): Promise<string> {
-  const signed = await account.signPsbt(hex.decode(psbtHex));
+  // Explicit inputs spec: sats-connect-style wallets won't sign
+  // without one. Every commit input belongs to this account
+  // (the indexer fills `funding_utxo_ids` only with the seller's
+  // UTXOs), so sign each one with the default sighash.
+  const prep = Transaction.fromPSBT(hex.decode(psbtHex));
+  const inputsToSign = Array.from({ length: prep.inputsLength }, (_, index) => ({
+    index,
+  }));
+  const signed = await account.signPsbt(hex.decode(psbtHex), {
+    inputs: inputsToSign,
+  });
   const tx = Transaction.fromPSBT(signed);
   tx.finalize();
   return hex.encode(tx.extract());
 }
 
 /**
- * Sign a reveal PSBT — a taproot script-path spend. Each input's leaf
- * script + control block (from the compose response's
- * `commit_tap_leaf_scripts`, parallel to the PSBT inputs) is injected
- * before signing, and the witness — `[schnorr sig, leaf script, control
- * block]` — assembled by hand afterwards.
+ * Sign a reveal PSBT. Inputs `0..leaves.length-1` are participant
+ * inputs (taproot script-path spends): each one gets its `leaf script
+ * + control block` injected before signing and a `[schnorr sig, leaf
+ * script, control block]` witness assembled afterwards. Any input
+ * past `leaves.length-1` is an `extra_inputs` entry — a plain
+ * key-path spend, finalized with the tap key-sig alone.
  */
 export async function signReveal(
   account: Account,
   psbtHex: string,
   leaves: TapLeafScript[],
 ): Promise<string> {
-  // Prepare: inject each input's leaf script + control block.
+  // Prepare: inject each participant input's leaf script + control
+  // block. The indexer puts these on the wire as the parallel
+  // `commit_tap_leaf_scripts`, not on the PSBT, so we have to slot
+  // them in before signing. Trailing `extra_inputs` are key-path
+  // P2TR spends; they need `tapInternalKey` populated for the signer
+  // to know which key to use (the indexer leaves that empty too).
   const prep = Transaction.fromPSBT(hex.decode(psbtHex));
   leaves.forEach((leaf, i) => {
     const scriptWithVersion = btcUtils.concatBytes(
@@ -62,27 +78,52 @@ export async function signReveal(
     );
     prep.updateInput(i, { tapLeafScript: [[controlBlock, scriptWithVersion]] }, true);
   });
+  const accountXOnly = hex.decode(account.xOnlyPubKey);
+  for (let i = leaves.length; i < prep.inputsLength; i++) {
+    prep.updateInput(i, { tapInternalKey: accountXOnly }, true);
+  }
 
-  const signed = await account.signPsbt(prep.toPSBT());
+  // Explicit inputs spec: required by sats-connect-style wallets (Xverse,
+  // Leather, etc.), which won't sign without one. Every input here
+  // belongs to this account — participants 0..leaves.length-1 are
+  // script-path, the rest are key-path `extra_inputs` — all signed
+  // with default sighash.
+  const inputsToSign = Array.from({ length: prep.inputsLength }, (_, index) => ({
+    index,
+  }));
+  const signed = await account.signPsbt(prep.toPSBT(), { inputs: inputsToSign });
 
-  // Finalize by hand: witness = [schnorr sig, leaf script, control block].
+  // Finalize by hand. Participant inputs (0..leaves.length-1) get the
+  // script-path witness; trailing `extra_inputs` are key-path.
   const tx = Transaction.fromPSBT(signed);
-  leaves.forEach((leaf, i) => {
-    const sig = tx.getInput(i).tapScriptSig?.[0]?.[1];
-    if (sig == null) {
-      throw new SignerError(
-        `reveal input ${i} was not signed by the account`,
-        { docsPath: "/sdk/transport" },
-      );
+  for (let i = 0; i < tx.inputsLength; i++) {
+    if (i < leaves.length) {
+      const leaf = leaves[i]!;
+      const sig = tx.getInput(i).tapScriptSig?.[0]?.[1];
+      if (sig == null) {
+        throw new SignerError(
+          `reveal participant input ${i} was not signed by the account`,
+          { docsPath: "/sdk/transport" },
+        );
+      }
+      tx.updateInput(i, {
+        finalScriptWitness: [
+          sig,
+          hex.decode(leaf.script),
+          hex.decode(leaf.controlBlock),
+        ],
+      });
+    } else {
+      const sig = tx.getInput(i).tapKeySig;
+      if (sig == null) {
+        throw new SignerError(
+          `reveal extra input ${i} was not signed by the account`,
+          { docsPath: "/sdk/transport" },
+        );
+      }
+      tx.updateInput(i, { finalScriptWitness: [sig] });
     }
-    tx.updateInput(i, {
-      finalScriptWitness: [
-        sig,
-        hex.decode(leaf.script),
-        hex.decode(leaf.controlBlock),
-      ],
-    });
-  });
+  }
   return hex.encode(tx.extract());
 }
 
