@@ -142,6 +142,46 @@ export class KontorSession {
   }
 
   /**
+   * Build a `Publish` Inst that deploys `bytes` under `name`.
+   *
+   * Resolves to the new contract's `ContractAddress` once the publish
+   * lands on chain. The address comes back as init's return value —
+   * every contract's `init` returns its own `contract` resource (see
+   * project_contract_resource_publish_return), which the host drains
+   * to a `contract-address` record at the WAVE boundary so the SDK
+   * reads it through the same standard result-row pipeline as any
+   * Call return.
+   *
+   * The publish op needs a containing Bitcoin block to resolve its
+   * address (the address is `name@<height>.<txIndex>`), so a freshly
+   * broadcast publish may not surface a result for up to one block
+   * confirmation (the regtest `mine()` helper short-circuits that
+   * latency for tests).
+   */
+  publish(name: string, bytes: Uint8Array): Inst<ContractAddress> {
+    return new Inst<ContractAddress>(
+      this,
+      this.defaultGasLimit,
+      { kind: "Publish", name, bytes },
+      decodeContractAddressWave,
+    );
+  }
+
+  /**
+   * Build an `Issuance` Inst — credits the signer with native tokens.
+   * System-paid: bypasses gas accounting, so a freshly-funded account
+   * can self-issue without an existing balance. Returns no value.
+   */
+  issuance(): Inst<void> {
+    return new Inst<void>(
+      this,
+      this.defaultGasLimit,
+      { kind: "Issuance" },
+      () => undefined,
+    );
+  }
+
+  /**
    * Instantiate a generated Contract class against a specific
    * deployment. The returned Contract's methods produce either
    * `Inst`s (proc) or `Promise<T>`s (view), bound to this session.
@@ -262,6 +302,29 @@ function parseContractAddress(s: string): ContractAddress {
   if (m == null) {
     throw new Error(
       `invalid contract address '${s}'; expected '<name>@<height>.<txIndex>'`,
+    );
+  }
+  return new ContractAddress(m[1]!, BigInt(m[2]!), BigInt(m[3]!));
+}
+
+/**
+ * Decode a `contract-address` WAVE record into a `ContractAddress`.
+ * The shape is `{name: "<n>", height: <u64>, tx-index: <u64>}` — what
+ * `to_wave_expr(ContractAddress)` produces on the indexer side.
+ *
+ * A small custom regex parser rather than a full built-in WIT codec:
+ * publish is the only built-in (non-contract) return that the SDK
+ * decodes, the format is rigid, and bringing the built-in WIT into
+ * the bundle just for this would be wildly over-built. If more
+ * built-in returns appear, switch this to a real WIT codec instance.
+ */
+function decodeContractAddressWave(wave: string): ContractAddress {
+  const m = wave.match(
+    /^\{\s*name:\s*"([^"]*)"\s*,\s*height:\s*(\d+)\s*,\s*tx-index:\s*(\d+)\s*\}$/,
+  );
+  if (m == null) {
+    throw new Error(
+      `expected contract-address WAVE record, got: ${wave}`,
     );
   }
   return new ContractAddress(m[1]!, BigInt(m[2]!), BigInt(m[3]!));
