@@ -22,6 +22,11 @@ export default defineConfig({
     include: ["test/**/*.regtest.test.ts"],
     // A submit → block → result round-trip on the auto-mined devnet.
     testTimeout: 120_000,
+    // One devnet is shared across every file. Run files one at a time so
+    // a test can assert on the dev account's own state without another
+    // file mutating it concurrently (e.g. `revoke` detaches to the
+    // seller — the dev account — so its balance must hold still).
+    fileParallelism: false,
     browser: {
       enabled: false,
       provider: playwright(),

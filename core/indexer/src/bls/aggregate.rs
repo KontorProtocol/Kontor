@@ -2,7 +2,7 @@ use std::collections::HashMap;
 
 use anyhow::{Result, anyhow};
 use blst::min_sig::{PublicKey as BlsPublicKey, Signature as BlsSignature};
-use indexer_types::{InstKind, Insts, SignerClaim};
+use indexer_types::{InstKind, Insts, SignerRef};
 
 use super::{
     BLS_SIGNATURE_BYTES, KONTOR_BLS_DST, MAX_BLS_BULK_OPS, MAX_BLS_BULK_TOTAL_MESSAGE_BYTES,
@@ -60,7 +60,7 @@ impl SignerResolver {
     /// still expects the signer_id → x_only_pubkey mapping to be available.
     ///
     /// If `claim_pubkey` is provided (the call site already had the x_only
-    /// from a `SignerClaim::PubKey`), it's used directly; otherwise we read
+    /// from a `SignerRef::XOnlyPubkey`), it's used directly; otherwise we read
     /// it from the signers table.
     pub(super) async fn ensure_x_only(
         &mut self,
@@ -112,15 +112,17 @@ pub fn validate_aggregate_shape(insts: &Insts) -> Result<&indexer_types::Aggrega
             insts.ops.len()
         ));
     }
-    // Publisher's sponsorship offer must be a positive cap when present.
-    // `Some(0)` would silently trap every sponsored op out-of-fuel on the
-    // first instruction — almost certainly a publisher misconfiguration, so
-    // reject the whole bulk.
-    if let Some(0) = agg.publisher_sponsorship {
-        return Err(anyhow!(
-            "AggregateInfo.publisher_sponsorship = Some(0) is invalid; \
-             use None to opt out of sponsorship"
-        ));
+    // Per-op `gas_limit == 0` on a sponsored op would silently trap the
+    // op out-of-fuel on its first instruction — almost certainly a
+    // publisher misconfiguration since the publisher signs the bulk and
+    // controls the gas_limit. Reject early.
+    for (inst, signer) in insts.ops.iter().zip(agg.signers.iter()) {
+        if signer.sponsored && inst.gas_limit == 0 {
+            return Err(anyhow!(
+                "aggregate sponsored op has Inst.gas_limit = 0; \
+                 the publisher's commitment must be a positive cap"
+            ));
+        }
     }
     for inst in &insts.ops {
         match &inst.kind {
@@ -135,12 +137,20 @@ pub fn validate_aggregate_shape(insts: &Insts) -> Result<&indexer_types::Aggrega
                     "aggregate path supports Call and RegisterBlsKey (got Issuance)"
                 ));
             }
+            // Sponsor is a unilateral payer designation — by construction
+            // it can have only one signer (the input it rides on) and is
+            // not aggregatable across BLS co-signers.
+            InstKind::Sponsor => {
+                return Err(anyhow!(
+                    "aggregate path does not support Sponsor (not aggregatable)"
+                ));
+            }
         }
     }
     Ok(agg)
 }
 
-/// Resolved aggregate output: per-op `signer_id` (after `SignerClaim`
+/// Resolved aggregate output: per-op `signer_id` (after `SignerRef`
 /// resolution) paired with the `signer_id → x_only_pubkey` map so the caller
 /// can avoid redundant registry lookups during op execution.
 #[derive(Debug)]
@@ -151,8 +161,8 @@ pub struct AggregateResolved {
 
 /// Verify the BLS aggregate signature on an `Insts` envelope.
 ///
-/// Resolves each `SignerClaim` to an internal `signer_id`
-/// (`SignerClaim::Id` direct, `SignerClaim::PubKey` via
+/// Resolves each `SignerRef` to an internal `signer_id`
+/// (`SignerRef::SignerId` direct, `SignerRef::XOnlyPubkey` via
 /// `get_or_create_identity`), sources the verification BLS pubkey
 /// per-op-kind (DB lookup for `Call`; payload bytes for `RegisterBlsKey`,
 /// since the registrant has no prior bls_keys row), and verifies the
@@ -186,7 +196,11 @@ pub async fn verify_aggregate(runtime: &mut Runtime, insts: &Insts) -> Result<Ag
         // Build the signing message and enforce the bytes cap before any
         // identity resolution or DB lookups — keeps oversized payloads from
         // costing us I/O.
-        let msg = inst.aggregate_signing_message(&agg_signer.identity, agg_signer.nonce)?;
+        let msg = inst.aggregate_signing_message(
+            &agg_signer.identity,
+            agg_signer.nonce,
+            agg_signer.sponsored,
+        )?;
         total_message_bytes = total_message_bytes.saturating_add(msg.len());
         if total_message_bytes > MAX_BLS_BULK_TOTAL_MESSAGE_BYTES {
             return Err(anyhow!(
@@ -196,12 +210,12 @@ pub async fn verify_aggregate(runtime: &mut Runtime, insts: &Insts) -> Result<Ag
         }
 
         let (signer_id, claim_pubkey) = match &agg_signer.identity {
-            SignerClaim::Id(id) => (*id, None),
-            SignerClaim::PubKey(pk) => {
+            SignerRef::SignerId(id) => (*id, None),
+            SignerRef::XOnlyPubkey(pk) => {
                 let identity = runtime
                     .get_or_create_identity(&pk.to_string())
                     .await
-                    .map_err(|e| anyhow!("resolving SignerClaim::PubKey: {e}"))?;
+                    .map_err(|e| anyhow!("resolving SignerRef::XOnlyPubkey: {e}"))?;
                 (identity.signer_id() as u64, Some(pk.to_string()))
             }
         };

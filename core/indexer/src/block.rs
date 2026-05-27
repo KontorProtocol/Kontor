@@ -4,10 +4,9 @@ use bitcoin::{
     script::Instruction,
 };
 use indexer_types::{
-    Input, Inst, InstKind, Insts, Op, OpKind, OpMetadata, OpWithResult, Payment, PaymentIntent,
-    Transaction, deserialize,
+    Input, Inst, InstKind, Insts, Op, OpKind, OpMetadata, OpWithResult, Payment, Transaction,
+    deserialize,
 };
-use indexmap::IndexMap;
 use libsql::Connection;
 
 use crate::database::{
@@ -17,39 +16,9 @@ use crate::database::{
 
 pub type TransactionFilterMap = fn((usize, bitcoin::Transaction)) -> Option<Transaction>;
 
-/// Publisher's resolved offer for a BLS aggregate bulk. Built once per bulk
-/// in `process_aggregate_input` by combining `AggregateInfo.publisher_sponsorship`
-/// (the publisher's signed commitment) with the publisher's resolved signer_id
-/// (the Bitcoin x_only_pubkey, ensured into the signers table).
-#[derive(Debug, Clone, Copy)]
-pub struct PublisherOffer {
-    pub signer_id: u64,
-    pub gas_limit_per_op: u64,
-}
-
-/// Build an `Op` from a direct (non-aggregate) `Inst`. `PaymentIntent::Sponsored`
-/// is rejected here: direct inputs have no publisher to fall back to.
-pub fn op_from_direct_inst(inst: Inst, metadata_base: OpMetadataBase) -> Result<Op, anyhow::Error> {
-    materialize_op(inst, metadata_base, None)
-}
-
-/// Build an `Op` from an aggregate `Inst` applying the sponsorship resolution
-/// table:
-///   SelfPay  | any        → user pays at their signed limit
-///   Sponsored| Some(offer)→ publisher pays at offer.gas_limit_per_op
-///   Sponsored| None       → rejected (orphan op, co-signer accepted sponsorship
-///                          but no publisher offered)
-pub fn op_from_aggregate_inst(
-    inst: Inst,
-    metadata_base: OpMetadataBase,
-    publisher: Option<PublisherOffer>,
-) -> Result<Op, anyhow::Error> {
-    materialize_op(inst, metadata_base, publisher)
-}
-
-/// Origin-only OpMetadata fields supplied by the reactor. The `payment` part of
-/// `OpMetadata` is resolved inside `materialize_op` from the `Inst.payment`
-/// intent and any publisher offer.
+/// Origin-only OpMetadata fields supplied by the reactor. The `payment`
+/// part of `OpMetadata` is filled in by `materialize_op` from
+/// `Inst.gas_limit` and the optional payer override.
 #[derive(Debug, Clone, Copy)]
 pub struct OpMetadataBase {
     pub previous_output: bitcoin::OutPoint,
@@ -58,16 +27,52 @@ pub struct OpMetadataBase {
     pub signer_id: u64,
 }
 
-fn materialize_op(
+/// Build an `Op` from an `Inst`. Same entry point for direct and
+/// aggregate inputs — the only thing that differs is `payment_override`,
+/// which the caller (or `TxWalker::materialize`) computes:
+///
+/// - Direct, no Sponsor active → `None` (input signer pays at `inst.gas_limit`).
+/// - Direct, cross-input Sponsor active → `Some(sponsor_payment)` (sponsor
+///   pays at the sponsor's `gas_limit`, overriding `inst.gas_limit`).
+/// - Aggregate, `AggregateSigner.sponsored = false` → `None` (co-signer pays).
+/// - Aggregate, `AggregateSigner.sponsored = true` → `Some(Payment {
+///   signer_id: publisher, gas_limit: inst.gas_limit })`.
+/// - Aggregate with a cross-input Sponsor still active → sponsor wins.
+///
+/// The Sponsor Op itself is always materialized with `(base.signer_id,
+/// inst.gas_limit)` (the sponsorship terms the reactor reads back to
+/// drive subsequent inputs), regardless of any incoming override.
+pub fn materialize_op(
     inst: Inst,
     base: OpMetadataBase,
-    publisher: Option<PublisherOffer>,
+    payment_override: Option<Payment>,
 ) -> Result<Op, anyhow::Error> {
-    let Inst { payment, kind } = inst;
+    let Inst { gas_limit, kind } = inst;
     let (payment, kind) = match kind {
         InstKind::Issuance => (core_payment(), OpKind::Issuance),
+        // Sponsor materializes as an Op so its sponsorship terms ride in
+        // OpMetadata.payment for the reactor to read back. The Op itself
+        // does *not* dispatch to a contract — `execute_op` short-circuits
+        // OpKind::Sponsor — and the per-tx loop captures `payment` into
+        // `pending_for_next` to drive the next input. The cross-input
+        // `payment_override` (which would otherwise apply to this op) is
+        // ignored here so the Sponsor's own commitment is preserved.
+        InstKind::Sponsor => (
+            Payment {
+                signer_id: base.signer_id,
+                gas_limit,
+            },
+            OpKind::Sponsor,
+        ),
         other => {
-            let resolved = resolve_payment(&payment, base.signer_id, publisher)?;
+            // Override replaces both payer and cap; otherwise default to
+            // "input signer pays up to Inst.gas_limit." Override sources:
+            // (a) cross-input Sponsor active from a previous input, or
+            // (b) aggregate-sponsored (publisher pays at Inst.gas_limit).
+            let payment = payment_override.unwrap_or(Payment {
+                signer_id: base.signer_id,
+                gas_limit,
+            });
             let op_kind = match other {
                 InstKind::Publish { name, bytes } => OpKind::Publish { name, bytes },
                 InstKind::Call { contract, expr } => OpKind::Call { contract, expr },
@@ -81,8 +86,9 @@ fn materialize_op(
                     bls_sig,
                 },
                 InstKind::Issuance => unreachable!("Issuance handled above"),
+                InstKind::Sponsor => unreachable!("Sponsor handled above"),
             };
-            (resolved, op_kind)
+            (payment, op_kind)
         }
     };
 
@@ -106,23 +112,129 @@ fn core_payment() -> Payment {
     }
 }
 
-fn resolve_payment(
-    intent: &PaymentIntent,
-    signer_id: u64,
-    publisher: Option<PublisherOffer>,
-) -> Result<Payment, anyhow::Error> {
-    match (intent, publisher) {
-        (PaymentIntent::SelfPay { limit }, _) => Ok(Payment {
+/// Per-tx walker that owns the Sponsor state machine + payment-override
+/// computation. Callers (block::inspect and the reactor's process_*_input)
+/// do their own outer per-input loop — they differ on per-input work
+/// (DB result lookup vs BLS verification + execution) — but the
+/// active/pending_for_next dance, the override precedence rule, and the
+/// per-input boundary reset are identical and dangerous to drift on.
+///
+/// Usage skeleton:
+/// ```ignore
+/// let mut walker = TxWalker::new();
+/// for input in &tx.inputs {
+///     let publisher = resolve_publisher_signer_id(input).await?;
+///     for (op_index, inst) in input.insts.ops.iter().enumerate() {
+///         let override_ = walker.payment_override(input, op_index, publisher, inst);
+///         let op = op_from_*_inst(inst.clone(), base, override_)?;
+///         walker.capture(&op);
+///         // ...caller-specific per-op work (emit OpWithResult / execute_op)...
+///     }
+///     walker.next_input();
+/// }
+/// ```
+#[derive(Debug, Default)]
+pub struct TxWalker {
+    /// Carried in from the previous input's `Sponsor` — overrides
+    /// non-Sponsor non-Issuance ops in the current input.
+    active: Option<Payment>,
+    /// Captured during the current input from any `Sponsor` Op; promoted
+    /// to `active` at the input boundary, then cleared. Sponsors sponsor
+    /// only the input immediately following them.
+    pending_for_next: Option<Payment>,
+}
+
+impl TxWalker {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Compute the per-op `payment_override` for `op_index` in `input`:
+    /// the active cross-input `Sponsor` payment wins over an aggregate's
+    /// per-op publisher offer; otherwise `Ok(None)` (the op self-pays
+    /// from the input signer at its own `Inst.gas_limit`).
+    ///
+    /// Returns `Err` when the op is aggregate-sponsored but no
+    /// `publisher_signer_id` was supplied — falling through to `None`
+    /// there would silently swap the payer to the co-signer, mis-
+    /// attributing who paid gas. The executor always resolves the
+    /// publisher via `get_or_create_identity` so it never hits this;
+    /// `block::inspect`'s DB lookup can miss (no signers row) and is
+    /// where the rejection surfaces, matching the old `PaymentIntent::
+    /// Sponsored`-without-offer reject behavior.
+    pub fn payment_override(
+        &self,
+        input: &Input,
+        op_index: usize,
+        publisher_signer_id: Option<u64>,
+        inst: &Inst,
+    ) -> Result<Option<Payment>, anyhow::Error> {
+        if let Some(active) = &self.active {
+            return Ok(Some(active.clone()));
+        }
+        let Some(agg) = input.insts.aggregate.as_ref() else {
+            return Ok(None);
+        };
+        let sponsored = agg.signers.get(op_index).is_some_and(|s| s.sponsored);
+        if !sponsored {
+            return Ok(None);
+        }
+        let signer_id = publisher_signer_id.ok_or_else(|| {
+            anyhow::anyhow!(
+                "op {op_index} is aggregate-sponsored but the publisher has no resolved signer_id"
+            )
+        })?;
+        Ok(Some(Payment {
             signer_id,
-            gas_limit: *limit,
-        }),
-        (PaymentIntent::Sponsored, Some(offer)) => Ok(Payment {
-            signer_id: offer.signer_id,
-            gas_limit: offer.gas_limit_per_op,
-        }),
-        (PaymentIntent::Sponsored, None) => Err(anyhow::anyhow!(
-            "PaymentIntent::Sponsored without a publisher offer"
-        )),
+            gas_limit: inst.gas_limit,
+        }))
+    }
+
+    /// Call after materializing each op. If the op is a `Sponsor`, its
+    /// `OpMetadata.payment` becomes the sponsorship payment for the NEXT
+    /// input. (Multiple Sponsors in one input: last-wins.)
+    pub fn capture(&mut self, op: &Op) {
+        if matches!(op.kind, OpKind::Sponsor) {
+            self.pending_for_next = Some(op.metadata.payment.clone());
+        }
+    }
+
+    /// Call at the end of each input's op loop. Promotes the captured
+    /// sponsor (if any) to `active` for the next input's ops, and clears
+    /// `pending_for_next`. A Sponsor-less input clears any previously
+    /// active sponsor, since Sponsor only sponsors the input immediately
+    /// following it.
+    pub fn next_input(&mut self) {
+        self.active = self.pending_for_next.take();
+    }
+
+    /// One-stop per-op materialization: builds the `OpMetadataBase`,
+    /// computes the payment override (cross-input Sponsor wins over the
+    /// aggregate's per-op publisher offer), calls `materialize_op`, and
+    /// captures any `Sponsor` Op's terms into `pending_for_next`.
+    ///
+    /// Callers (`block::inspect` and the reactor's `process_*_input`)
+    /// supply the per-op `signer_id` (DB lookup / `get_or_create_identity`
+    /// / BLS-resolved) and `publisher_signer_id` (only meaningful for
+    /// aggregate inputs; `None` for direct).
+    pub fn materialize(
+        &mut self,
+        input: &Input,
+        op_index: usize,
+        signer_id: u64,
+        publisher_signer_id: Option<u64>,
+        inst: &Inst,
+    ) -> Result<Op, anyhow::Error> {
+        let base = OpMetadataBase {
+            previous_output: input.previous_output,
+            input_index: input.input_index,
+            op_index: op_index as i64,
+            signer_id,
+        };
+        let payment_override = self.payment_override(input, op_index, publisher_signer_id, inst)?;
+        let op = materialize_op(inst.clone(), base, payment_override)?;
+        self.capture(&op);
+        Ok(op)
     }
 }
 
@@ -180,16 +292,15 @@ pub fn filter_map((tx_index, tx): (usize, bitcoin::Transaction)) -> Option<Trans
     }
 
     let op_return = tx.output.iter().find(|o| o.script_pubkey.is_op_return());
-    let mut op_return_data = IndexMap::new();
+    let mut op_return_data: Vec<indexer_types::OpReturnEntry> = Vec::new();
 
     if let Some(op_return) = op_return {
         let mut op_return_instructions = op_return.script_pubkey.instructions();
         if let Some(Ok(Instruction::Op(OP_RETURN))) = op_return_instructions.next()
             && let Some(Ok(Instruction::PushBytes(data))) = op_return_instructions.next()
-            && let Ok(entries) =
-                deserialize::<Vec<(u64, indexer_types::OpReturnData)>>(data.as_bytes())
+            && let Ok(entries) = deserialize::<Vec<indexer_types::OpReturnEntry>>(data.as_bytes())
         {
-            op_return_data = IndexMap::from_iter(entries);
+            op_return_data = entries;
         }
     }
 
@@ -206,81 +317,23 @@ pub async fn inspect(
     tx: &indexer_types::Transaction,
 ) -> anyhow::Result<Vec<OpWithResult>> {
     let mut ops = Vec::new();
+    let mut walker = TxWalker::new();
     for input in &tx.inputs {
-        // Per-op signer_ids: aggregates resolve each `SignerClaim` (Id is
+        // Per-op signer_ids: aggregates resolve each `SignerRef` (Id is
         // already-resolved; PubKey is looked up against the registry — by
         // the time inspect runs, any PubKey claim on a successfully
         // executed aggregate must have a corresponding signers row).
         // Direct inputs broadcast the witness signer to every op.
-        let signer_ids: Vec<u64> = match &input.insts.aggregate {
-            Some(agg) => {
-                let mut ids = Vec::with_capacity(agg.signers.len());
-                for s in &agg.signers {
-                    let id = match &s.identity {
-                        indexer_types::SignerClaim::Id(id) => *id,
-                        indexer_types::SignerClaim::PubKey(pk) => {
-                            crate::database::queries::get_signer_entry_by_x_only_pubkey(
-                                conn,
-                                &pk.to_string(),
-                            )
-                            .await?
-                            .map(|e| e.signer_id as u64)
-                            .unwrap_or(0)
-                        }
-                    };
-                    ids.push(id);
-                }
-                ids
-            }
-            None => {
-                let id = crate::database::queries::get_signer_entry_by_x_only_pubkey(
-                    conn,
-                    &input.x_only_pubkey.to_string(),
-                )
-                .await?
-                .map(|e| e.signer_id as u64)
-                .unwrap_or(0);
-                vec![id; input.insts.ops.len()]
-            }
-        };
-
-        // For aggregate inputs with a sponsorship offer, resolve the publisher's
-        // signer_id so sponsored ops materialize with the same Payment the
-        // executor used. The `payer_signer_id` column on result rows is the
-        // durable record of who paid (queryable in SQL / future readers); this
-        // local resolution is what inspect needs to reconstruct `Op` for ops
-        // that have no result row yet (e.g. `should_skip_result` cases).
-        let publisher_offer: Option<PublisherOffer> = match &input.insts.aggregate {
-            Some(agg) if agg.publisher_sponsorship.is_some() => {
-                crate::database::queries::get_signer_entry_by_x_only_pubkey(
-                    conn,
-                    &input.x_only_pubkey.to_string(),
-                )
-                .await?
-                .map(|e| PublisherOffer {
-                    signer_id: e.signer_id as u64,
-                    gas_limit_per_op: agg.publisher_sponsorship.unwrap(),
-                })
-            }
-            _ => None,
-        };
+        let signer_ids = resolve_input_signer_ids_via_db(conn, input).await?;
+        // For aggregate inputs, the publisher's signer_id is the payer
+        // for any op whose `AggregateSigner.sponsored = true`. `None` for
+        // direct inputs.
+        let publisher_signer_id = resolve_publisher_signer_id_via_db(conn, input).await?;
 
         for (op_index, inst) in input.insts.ops.iter().enumerate() {
-            let base = OpMetadataBase {
-                previous_output: input.previous_output,
-                input_index: input.input_index,
-                op_index: op_index as i64,
-                signer_id: signer_ids.get(op_index).copied().unwrap_or(0),
-            };
-            // Dispatch on input shape so the entry point matches the
-            // executor's (op_from_direct_inst for direct inputs,
-            // op_from_aggregate_inst for aggregate inputs).
-            let materialized = if input.insts.aggregate.is_some() {
-                op_from_aggregate_inst(inst.clone(), base, publisher_offer)
-            } else {
-                op_from_direct_inst(inst.clone(), base)
-            };
-            let op = match materialized {
+            let signer_id = signer_ids.get(op_index).copied().unwrap_or(0);
+            let op = match walker.materialize(input, op_index, signer_id, publisher_signer_id, inst)
+            {
                 Ok(op) => op,
                 Err(e) => {
                     tracing::warn!("inspect: op {op_index} rejected at materialize: {e:#}");
@@ -314,8 +367,69 @@ pub async fn inspect(
                 error_message: None,
             });
         }
+        walker.next_input();
     }
     Ok(ops)
+}
+
+/// DB-backed signer resolution for `block::inspect`. Aggregate inputs:
+/// per-AggregateSigner; `SignerId(id)` is already resolved, `XOnlyPubkey`
+/// is looked up. Direct inputs: the witness signer broadcast across every
+/// op. Missing entries become `0` (preserves pre-refactor inspect
+/// semantics — inspect is best-effort over historical state).
+async fn resolve_input_signer_ids_via_db(
+    conn: &Connection,
+    input: &Input,
+) -> anyhow::Result<Vec<u64>> {
+    match &input.insts.aggregate {
+        Some(agg) => {
+            let mut ids = Vec::with_capacity(agg.signers.len());
+            for s in &agg.signers {
+                let id = match &s.identity {
+                    indexer_types::SignerRef::SignerId(id) => *id,
+                    indexer_types::SignerRef::XOnlyPubkey(pk) => {
+                        crate::database::queries::get_signer_entry_by_x_only_pubkey(
+                            conn,
+                            &pk.to_string(),
+                        )
+                        .await?
+                        .map(|e| e.signer_id as u64)
+                        .unwrap_or(0)
+                    }
+                };
+                ids.push(id);
+            }
+            Ok(ids)
+        }
+        None => {
+            let id = crate::database::queries::get_signer_entry_by_x_only_pubkey(
+                conn,
+                &input.x_only_pubkey.to_string(),
+            )
+            .await?
+            .map(|e| e.signer_id as u64)
+            .unwrap_or(0);
+            Ok(vec![id; input.insts.ops.len()])
+        }
+    }
+}
+
+/// DB-backed publisher signer_id resolution for `block::inspect`. Returns
+/// `Some` for aggregate inputs (the input's x_only_pubkey, looked up in
+/// the signers table), `None` for direct inputs.
+async fn resolve_publisher_signer_id_via_db(
+    conn: &Connection,
+    input: &Input,
+) -> anyhow::Result<Option<u64>> {
+    if input.insts.aggregate.is_none() {
+        return Ok(None);
+    }
+    Ok(crate::database::queries::get_signer_entry_by_x_only_pubkey(
+        conn,
+        &input.x_only_pubkey.to_string(),
+    )
+    .await?
+    .map(|e| e.signer_id as u64))
 }
 
 #[cfg(test)]
@@ -329,8 +443,8 @@ mod tests {
     use bitcoin::transaction::Version;
     use bitcoin::{Amount, OutPoint, ScriptBuf, Sequence, Transaction, TxIn, TxOut, Witness};
     use indexer_types::{
-        AggregateInfo, AggregateSigner, ContractAddress, Inst, InstKind, Insts, PaymentIntent,
-        SignerClaim, serialize,
+        AggregateInfo, AggregateSigner, ContractAddress, Inst, InstKind, Insts, SignerRef,
+        serialize,
     };
 
     use super::filter_map;
@@ -385,7 +499,7 @@ mod tests {
             tx_index: 2,
         };
         let op = Inst {
-            payment: PaymentIntent::self_pay(123),
+            gas_limit: 123,
             kind: InstKind::Call {
                 contract,
                 expr: "noop()".to_string(),
@@ -395,11 +509,11 @@ mod tests {
             ops: vec![op.clone()],
             aggregate: Some(AggregateInfo {
                 signers: vec![AggregateSigner {
-                    identity: SignerClaim::Id(7),
+                    identity: SignerRef::SignerId(7),
                     nonce: 0,
+                    sponsored: false,
                 }],
                 signature: vec![9u8; 48],
-                publisher_sponsorship: None,
             }),
         };
         let payload = serialize(&insts).expect("serialize Insts");
@@ -417,7 +531,7 @@ mod tests {
     fn filter_map_rejects_wrong_marker() {
         let xonly = random_xonly();
         let payload = serialize(&Insts::single(Inst {
-            payment: PaymentIntent::self_pay(10_000),
+            gas_limit: 10_000,
             kind: InstKind::Issuance,
         }))
         .expect("serialize");
@@ -439,7 +553,7 @@ mod tests {
     fn filter_map_rejects_trailing_instructions_after_endif() {
         let xonly = random_xonly();
         let payload = serialize(&Insts::single(Inst {
-            payment: PaymentIntent::self_pay(10_000),
+            gas_limit: 10_000,
             kind: InstKind::Issuance,
         }))
         .expect("serialize");
@@ -462,7 +576,7 @@ mod tests {
     fn filter_map_concatenates_multi_push_payload() {
         let xonly = random_xonly();
         let inst = Inst {
-            payment: PaymentIntent::self_pay(7),
+            gas_limit: 7,
             kind: InstKind::Call {
                 contract: ContractAddress {
                     name: "arith".to_string(),
@@ -494,10 +608,10 @@ mod tests {
         assert_eq!(input.insts.ops.len(), 1);
         match &input.insts.ops[0] {
             Inst {
-                payment,
+                gas_limit,
                 kind: InstKind::Call { contract, expr },
             } => {
-                assert_eq!(*payment, PaymentIntent::self_pay(7));
+                assert_eq!(*gas_limit, 7);
                 assert_eq!(contract.name, "arith");
                 assert_eq!(expr, "eval(10, id)");
             }
@@ -509,7 +623,7 @@ mod tests {
     fn filter_map_rejects_non_pushbytes_inside_envelope() {
         let xonly = random_xonly();
         let payload = serialize(&Insts::single(Inst {
-            payment: PaymentIntent::self_pay(10_000),
+            gas_limit: 10_000,
             kind: InstKind::Issuance,
         }))
         .expect("serialize");
@@ -532,7 +646,7 @@ mod tests {
     fn filter_map_rejects_invalid_xonly_pubkey_bytes() {
         let internal_key = random_xonly();
         let payload = serialize(&Insts::single(Inst {
-            payment: PaymentIntent::self_pay(10_000),
+            gas_limit: 10_000,
             kind: InstKind::Issuance,
         }))
         .expect("serialize");
@@ -551,15 +665,15 @@ mod tests {
     }
 
     // -----------------------------------------------------------------------
-    // op_from_*_inst sponsorship resolution
+    // materialize_op — payer + gas_limit resolution
     // -----------------------------------------------------------------------
 
-    use super::{OpMetadataBase, PublisherOffer, op_from_aggregate_inst, op_from_direct_inst};
+    use super::{OpMetadataBase, materialize_op};
     use indexer_types::{OpKind, Payment};
 
-    fn dummy_call_inst(payment: PaymentIntent) -> Inst {
+    fn dummy_call_inst(gas_limit: u64) -> Inst {
         Inst {
-            payment,
+            gas_limit,
             kind: InstKind::Call {
                 contract: ContractAddress {
                     name: "c".into(),
@@ -581,9 +695,9 @@ mod tests {
     }
 
     #[test]
-    fn op_from_direct_inst_self_pay_uses_signer_id() {
-        let inst = dummy_call_inst(PaymentIntent::self_pay(123));
-        let op = op_from_direct_inst(inst, dummy_base(42)).unwrap();
+    fn materialize_uses_input_signer_and_inst_gas_limit_with_no_override() {
+        let inst = dummy_call_inst(123);
+        let op = materialize_op(inst, dummy_base(42), None).unwrap();
         assert!(matches!(op.kind, OpKind::Call { .. }));
         assert_eq!(
             op.metadata.payment,
@@ -595,56 +709,295 @@ mod tests {
     }
 
     #[test]
-    fn op_from_direct_inst_rejects_sponsored() {
-        let inst = dummy_call_inst(PaymentIntent::Sponsored);
-        let err = op_from_direct_inst(inst, dummy_base(42))
-            .expect_err("Sponsored in direct path must be rejected");
-        assert!(err.to_string().contains("Sponsored"));
-    }
-
-    #[test]
-    fn op_from_aggregate_inst_self_pay_ignores_offer() {
-        // SelfPay always uses the co-signer's own commitment, even when a
-        // publisher offer is present in the bulk.
-        let inst = dummy_call_inst(PaymentIntent::self_pay(123));
-        let offer = Some(PublisherOffer {
+    fn materialize_override_replaces_both_signer_and_cap() {
+        // Used for both the cross-input Sponsor case (override = sponsor's
+        // payment) and the aggregate-sponsored case (override = publisher's
+        // payment + inst.gas_limit). One mechanism.
+        let inst = dummy_call_inst(123);
+        let override_payment = Payment {
             signer_id: 99,
-            gas_limit_per_op: 9999,
-        });
-        let op = op_from_aggregate_inst(inst, dummy_base(42), offer).unwrap();
-        assert!(matches!(op.kind, OpKind::Call { .. }));
-        assert_eq!(
-            op.metadata.payment,
-            Payment {
-                signer_id: 42,
-                gas_limit: 123,
-            }
-        );
-    }
-
-    #[test]
-    fn op_from_aggregate_inst_sponsored_uses_publisher_offer() {
-        let inst = dummy_call_inst(PaymentIntent::Sponsored);
-        let offer = Some(PublisherOffer {
-            signer_id: 99,
-            gas_limit_per_op: 9999,
-        });
-        let op = op_from_aggregate_inst(inst, dummy_base(42), offer).unwrap();
-        assert!(matches!(op.kind, OpKind::Call { .. }));
+            gas_limit: 9_999,
+        };
+        let op = materialize_op(inst, dummy_base(42), Some(override_payment)).unwrap();
         assert_eq!(
             op.metadata.payment,
             Payment {
                 signer_id: 99,
-                gas_limit: 9999,
+                gas_limit: 9_999,
+            }
+        );
+        // The op's *signer* (the input's signer) is unchanged — override
+        // only redirects the payer.
+        assert_eq!(op.metadata.signer_id, 42);
+    }
+
+    #[test]
+    fn materialize_sponsor_uses_its_own_payment_ignoring_override() {
+        // Sponsor materializes as OpKind::Sponsor; metadata.payment
+        // captures the sponsorship terms (input signer + inst.gas_limit).
+        // An incoming override does NOT apply to Sponsor itself — its own
+        // Payment is what the reactor reads back to drive the next input.
+        let inst = Inst {
+            gas_limit: 5_000,
+            kind: InstKind::Sponsor,
+        };
+        let unrelated_override = Payment {
+            signer_id: 99,
+            gas_limit: 9_999,
+        };
+        let op = materialize_op(inst, dummy_base(42), Some(unrelated_override)).unwrap();
+        assert!(matches!(op.kind, OpKind::Sponsor));
+        assert_eq!(
+            op.metadata.payment,
+            Payment {
+                signer_id: 42,
+                gas_limit: 5_000,
+            }
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // TxWalker: Sponsor state machine + payment-override precedence
+    // -----------------------------------------------------------------------
+
+    use super::TxWalker;
+    use indexer_types::{Input, Op};
+
+    fn direct_input(insts: Insts) -> Input {
+        Input {
+            previous_output: bitcoin::OutPoint::null(),
+            input_index: 0,
+            x_only_pubkey: random_xonly(),
+            insts,
+        }
+    }
+
+    fn aggregate_input(insts: Vec<Inst>, sponsored_flags: Vec<bool>) -> Input {
+        let signers = sponsored_flags
+            .into_iter()
+            .map(|sponsored| AggregateSigner {
+                identity: SignerRef::SignerId(0),
+                nonce: 0,
+                sponsored,
+            })
+            .collect();
+        let bundle = Insts {
+            ops: insts,
+            aggregate: Some(AggregateInfo {
+                signers,
+                signature: vec![0u8; 48],
+            }),
+        };
+        direct_input(bundle)
+    }
+
+    #[test]
+    fn walker_payment_override_is_none_with_no_active_and_direct_input() {
+        let walker = TxWalker::new();
+        let input = direct_input(Insts::single(dummy_call_inst(123)));
+        assert!(
+            walker
+                .payment_override(&input, 0, None, &input.insts.ops[0])
+                .unwrap()
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn walker_payment_override_uses_publisher_for_aggregate_sponsored() {
+        let walker = TxWalker::new();
+        let input = aggregate_input(vec![dummy_call_inst(123)], vec![true]);
+        let got = walker
+            .payment_override(&input, 0, Some(7), &input.insts.ops[0])
+            .unwrap()
+            .expect("sponsored aggregate op → publisher override");
+        assert_eq!(
+            got,
+            Payment {
+                signer_id: 7,
+                gas_limit: 123,
             }
         );
     }
 
     #[test]
-    fn op_from_aggregate_inst_sponsored_without_offer_rejected() {
-        let inst = dummy_call_inst(PaymentIntent::Sponsored);
-        let err = op_from_aggregate_inst(inst, dummy_base(42), None)
-            .expect_err("Sponsored without a publisher offer must be rejected");
-        assert!(err.to_string().contains("Sponsored"));
+    fn walker_payment_override_errors_when_sponsored_but_publisher_missing() {
+        // Mirrors the old PaymentIntent::Sponsored-without-offer reject:
+        // a sponsored aggregate op with no resolved publisher must not
+        // silently fall back to the co-signer self-paying.
+        let walker = TxWalker::new();
+        let input = aggregate_input(vec![dummy_call_inst(123)], vec![true]);
+        let err = walker
+            .payment_override(&input, 0, None, &input.insts.ops[0])
+            .expect_err("missing publisher must error, not silent self-pay");
+        assert!(
+            err.to_string().contains("publisher"),
+            "error should mention the missing publisher: {err}"
+        );
+    }
+
+    #[test]
+    fn walker_payment_override_is_none_for_aggregate_non_sponsored() {
+        let walker = TxWalker::new();
+        let input = aggregate_input(vec![dummy_call_inst(123)], vec![false]);
+        assert!(
+            walker
+                .payment_override(&input, 0, Some(7), &input.insts.ops[0])
+                .unwrap()
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn walker_active_beats_publisher_offer() {
+        let mut walker = TxWalker::new();
+        let sponsor_op = Op {
+            metadata: indexer_types::OpMetadata {
+                previous_output: bitcoin::OutPoint::null(),
+                input_index: 0,
+                op_index: 0,
+                signer_id: 0,
+                payment: Payment {
+                    signer_id: 42,
+                    gas_limit: 5_000,
+                },
+            },
+            kind: OpKind::Sponsor,
+        };
+        walker.capture(&sponsor_op);
+        walker.next_input();
+        // Even with publisher_signer_id provided, active (cross-input
+        // Sponsor) wins.
+        let input = aggregate_input(vec![dummy_call_inst(123)], vec![true]);
+        let got = walker
+            .payment_override(&input, 0, Some(7), &input.insts.ops[0])
+            .unwrap()
+            .expect("active sponsor present");
+        assert_eq!(
+            got,
+            Payment {
+                signer_id: 42,
+                gas_limit: 5_000,
+            }
+        );
+    }
+
+    #[test]
+    fn walker_capture_then_next_input_promotes_pending_to_active() {
+        let mut walker = TxWalker::new();
+        let sponsor_op = Op {
+            metadata: indexer_types::OpMetadata {
+                previous_output: bitcoin::OutPoint::null(),
+                input_index: 0,
+                op_index: 0,
+                signer_id: 0,
+                payment: Payment {
+                    signer_id: 99,
+                    gas_limit: 1_000,
+                },
+            },
+            kind: OpKind::Sponsor,
+        };
+        walker.capture(&sponsor_op);
+        // Before the input boundary, active is still None.
+        let input = direct_input(Insts::single(dummy_call_inst(50)));
+        assert!(
+            walker
+                .payment_override(&input, 0, None, &input.insts.ops[0])
+                .unwrap()
+                .is_none()
+        );
+        walker.next_input();
+        // After the boundary, active reflects the captured Sponsor.
+        let got = walker
+            .payment_override(&input, 0, None, &input.insts.ops[0])
+            .unwrap()
+            .expect("active promoted from pending");
+        assert_eq!(
+            got,
+            Payment {
+                signer_id: 99,
+                gas_limit: 1_000,
+            }
+        );
+    }
+
+    #[test]
+    fn walker_capture_ignores_non_sponsor_ops() {
+        let mut walker = TxWalker::new();
+        let call_op = materialize_op(dummy_call_inst(123), dummy_base(42), None).unwrap();
+        walker.capture(&call_op);
+        walker.next_input();
+        let input = direct_input(Insts::single(dummy_call_inst(50)));
+        assert!(
+            walker
+                .payment_override(&input, 0, None, &input.insts.ops[0])
+                .unwrap()
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn walker_next_input_clears_active_if_no_sponsor_this_round() {
+        let mut walker = TxWalker::new();
+        // First input: capture a Sponsor → active for input 2.
+        walker.capture(&Op {
+            metadata: indexer_types::OpMetadata {
+                previous_output: bitcoin::OutPoint::null(),
+                input_index: 0,
+                op_index: 0,
+                signer_id: 0,
+                payment: Payment {
+                    signer_id: 99,
+                    gas_limit: 1_000,
+                },
+            },
+            kind: OpKind::Sponsor,
+        });
+        walker.next_input();
+        // Input 2: no new Sponsor captured.
+        walker.next_input();
+        // Input 3: active is gone — Sponsor only sponsors the immediately
+        // following input.
+        let input = direct_input(Insts::single(dummy_call_inst(50)));
+        assert!(
+            walker
+                .payment_override(&input, 0, None, &input.insts.ops[0])
+                .unwrap()
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn walker_capture_last_sponsor_wins_within_one_input() {
+        let mut walker = TxWalker::new();
+        for &signer_id in &[1u64, 2, 3] {
+            walker.capture(&Op {
+                metadata: indexer_types::OpMetadata {
+                    previous_output: bitcoin::OutPoint::null(),
+                    input_index: 0,
+                    op_index: 0,
+                    signer_id: 0,
+                    payment: Payment {
+                        signer_id,
+                        gas_limit: 100 * signer_id,
+                    },
+                },
+                kind: OpKind::Sponsor,
+            });
+        }
+        walker.next_input();
+        let input = direct_input(Insts::single(dummy_call_inst(50)));
+        let got = walker
+            .payment_override(&input, 0, None, &input.insts.ops[0])
+            .unwrap()
+            .expect("last Sponsor's payment is active");
+        assert_eq!(
+            got,
+            Payment {
+                signer_id: 3,
+                gas_limit: 300,
+            }
+        );
     }
 }

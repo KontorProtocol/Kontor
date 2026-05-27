@@ -3,7 +3,7 @@ use wasmtime::component::{Accessor, Resource};
 
 use crate::runtime::Runtime;
 use crate::runtime::wit::kontor::built_in;
-use crate::runtime::wit::{ProcContext, ProcStorage, Signer, Transaction, ViewContext};
+use crate::runtime::wit::{Holder, ProcContext, ProcStorage, Signer, Transaction, ViewContext};
 
 impl built_in::context::HostProcContext for Runtime {}
 
@@ -22,6 +22,16 @@ impl built_in::context::HostProcContextWithStore for Runtime {
         accessor
             .with(|mut access| access.get().clone())
             ._proc_signer(accessor, self_)
+            .await
+    }
+
+    async fn payer<T>(
+        accessor: &Accessor<T, Self>,
+        self_: Resource<ProcContext>,
+    ) -> Result<Resource<Holder>> {
+        accessor
+            .with(|mut access| access.get().clone())
+            ._proc_payer(accessor, self_)
             .await
     }
 

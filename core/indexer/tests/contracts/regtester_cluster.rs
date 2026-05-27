@@ -1,7 +1,7 @@
 use anyhow::Result;
 use indexer::reg_tester::{RegTesterCluster, default_kontor_bin};
 use indexer::runtime::ContractAddress;
-use indexer_types::{Inst, InstKind, PaymentIntent};
+use indexer_types::{Inst, InstKind};
 use testlib::*;
 
 interface!(name = "counter", path = "../../test-contracts/counter/wit");
@@ -40,7 +40,7 @@ async fn cluster_counter_increment_via_consensus() -> Result<()> {
         .instruction(
             &mut ident,
             Inst {
-                payment: PaymentIntent::self_pay(10_000),
+                gas_limit: 10_000,
                 kind: InstKind::Publish {
                     name: "counter".to_string(),
                     bytes: contract_bytes,
@@ -76,7 +76,7 @@ async fn cluster_counter_increment_via_consensus() -> Result<()> {
     rt.send_instruction(
         &mut ident,
         Inst {
-            payment: PaymentIntent::self_pay(10_000),
+            gas_limit: 10_000,
             kind: InstKind::Call {
                 contract: contract_addr,
                 expr: counter::wave::increment_call_expr(),
@@ -148,7 +148,7 @@ async fn cluster_multi_batch_convergence() -> Result<()> {
         .instruction(
             &mut ident,
             Inst {
-                payment: PaymentIntent::self_pay(10_000),
+                gas_limit: 10_000,
                 kind: InstKind::Publish {
                     name: "counter".to_string(),
                     bytes: contract_bytes,
@@ -187,7 +187,7 @@ async fn cluster_multi_batch_convergence() -> Result<()> {
         rt.send_instruction(
             &mut ident,
             Inst {
-                payment: PaymentIntent::self_pay(10_000),
+                gas_limit: 10_000,
                 kind: InstKind::Call {
                     contract: contract_addr.clone(),
                     expr: counter::wave::increment_call_expr(),
@@ -263,7 +263,7 @@ async fn cluster_node_restart_recovery() -> Result<()> {
         .instruction(
             &mut ident,
             Inst {
-                payment: PaymentIntent::self_pay(10_000),
+                gas_limit: 10_000,
                 kind: InstKind::Publish {
                     name: "counter".to_string(),
                     bytes: contract_bytes,
@@ -302,7 +302,7 @@ async fn cluster_node_restart_recovery() -> Result<()> {
         rt.send_instruction(
             &mut ident,
             Inst {
-                payment: PaymentIntent::self_pay(10_000),
+                gas_limit: 10_000,
                 kind: InstKind::Call {
                     contract: contract_addr.clone(),
                     expr: counter::wave::increment_call_expr(),
@@ -331,7 +331,7 @@ async fn cluster_node_restart_recovery() -> Result<()> {
         rt.send_instruction(
             &mut ident,
             Inst {
-                payment: PaymentIntent::self_pay(10_000),
+                gas_limit: 10_000,
                 kind: InstKind::Call {
                     contract: contract_addr.clone(),
                     expr: counter::wave::increment_call_expr(),
@@ -393,7 +393,7 @@ async fn cluster_late_joiner_sync() -> Result<()> {
         .instruction(
             &mut ident,
             Inst {
-                payment: PaymentIntent::self_pay(10_000),
+                gas_limit: 10_000,
                 kind: InstKind::Publish {
                     name: "counter".to_string(),
                     bytes: contract_bytes,
@@ -433,7 +433,7 @@ async fn cluster_late_joiner_sync() -> Result<()> {
         rt.send_instruction(
             &mut ident,
             Inst {
-                payment: PaymentIntent::self_pay(10_000),
+                gas_limit: 10_000,
                 kind: InstKind::Call {
                     contract: contract_addr.clone(),
                     expr: counter::wave::increment_call_expr(),
@@ -503,7 +503,7 @@ async fn cluster_validator_lifecycle() -> Result<()> {
         .instruction(
             &mut ident,
             Inst {
-                payment: PaymentIntent::self_pay(10_000),
+                gas_limit: 10_000,
                 kind: InstKind::Publish {
                     name: "counter".to_string(),
                     bytes: contract_bytes,
@@ -562,7 +562,7 @@ async fn cluster_validator_lifecycle() -> Result<()> {
     rt.instruction(
         &mut ident,
         Inst {
-            payment: PaymentIntent::self_pay(10_000),
+            gas_limit: 10_000,
             kind: InstKind::Call {
                 contract: staking_addr.clone(),
                 expr: staking::wave::register_validator_call_expr(
@@ -601,7 +601,7 @@ async fn cluster_validator_lifecycle() -> Result<()> {
     rt.instruction(
         &mut ident,
         Inst {
-            payment: PaymentIntent::self_pay(10_000),
+            gas_limit: 10_000,
             kind: InstKind::Call {
                 contract: counter_addr.clone(),
                 expr: counter::wave::increment_call_expr(),
@@ -630,7 +630,7 @@ async fn cluster_validator_lifecycle() -> Result<()> {
     rt.send_instruction(
         &mut ident,
         Inst {
-            payment: PaymentIntent::self_pay(10_000),
+            gas_limit: 10_000,
             kind: InstKind::Call {
                 contract: counter_addr.clone(),
                 expr: counter::wave::increment_call_expr(),
@@ -666,7 +666,7 @@ async fn cluster_validator_lifecycle() -> Result<()> {
     rt.instruction(
         &mut ident,
         Inst {
-            payment: PaymentIntent::self_pay(10_000),
+            gas_limit: 10_000,
             kind: InstKind::Call {
                 contract: staking_addr.clone(),
                 expr: staking::wave::begin_unstake_call_expr(),
@@ -697,7 +697,7 @@ async fn cluster_validator_lifecycle() -> Result<()> {
     rt.send_instruction(
         &mut ident,
         Inst {
-            payment: PaymentIntent::self_pay(10_000),
+            gas_limit: 10_000,
             kind: InstKind::Call {
                 contract: counter_addr,
                 expr: counter::wave::increment_call_expr(),

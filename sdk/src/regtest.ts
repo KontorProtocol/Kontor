@@ -22,7 +22,7 @@
 
 import type { ChildProcess } from "node:child_process";
 import { regtestChain, type Chain } from "./chains.js";
-import type { Utxo } from "./transport/http.js";
+import type { Utxo } from "./json-codec.js";
 
 // `regtestChain` is a pure, browser-safe chain builder — it lives in
 // `chains.ts` next to `signet`. Re-exported here so `@kontor/sdk/regtest`
@@ -62,11 +62,12 @@ export interface RegtestInfo {
   /** The dev account's bech32m (p2tr) address. */
   devAddress: string;
   /**
-   * A spendable Bitcoin UTXO owned by the dev account — pass it to
-   * `submit` as funding (the SDK never sources UTXOs itself). One UTXO;
-   * a multi-tx test must chain its own change.
+   * Spendable Bitcoin UTXOs owned by the dev account — pass one to
+   * `submit` as funding (the SDK never sources UTXOs itself). The
+   * devnet splits the dev funding into several independent outputs so
+   * distinct test files can each spend one without colliding.
    */
-  devFundingUtxo: Utxo;
+  devFundingUtxos: Utxo[];
 }
 
 /** A running `kontor regtest` devnet. */
@@ -143,11 +144,21 @@ function parseInfoPayload(json: string): RegtestInfo {
     devPrivateKey: obj.devPrivateKey as string,
     devPublicKey: obj.devPublicKey as string,
     devAddress: obj.devAddress as string,
-    devFundingUtxo: parseFundingUtxo(obj.devFundingUtxo),
+    devFundingUtxos: parseFundingUtxos(obj.devFundingUtxos),
   };
 }
 
-/** Parse + validate the `devFundingUtxo` object into a `Utxo`. */
+/** Parse + validate the `devFundingUtxos` array into `Utxo`s. */
+function parseFundingUtxos(raw: unknown): Utxo[] {
+  if (!Array.isArray(raw) || raw.length === 0) {
+    throw new Error(
+      "KONTOR_REGTEST_INFO: devFundingUtxos missing, not an array, or empty",
+    );
+  }
+  return raw.map(parseFundingUtxo);
+}
+
+/** Parse + validate one funding-UTXO object into a `Utxo`. */
 function parseFundingUtxo(raw: unknown): Utxo {
   if (typeof raw !== "object" || raw === null) {
     throw new Error("KONTOR_REGTEST_INFO: devFundingUtxo missing or not an object");
@@ -225,9 +236,11 @@ export async function startRegtest(
       if (settled) return;
       settled = true;
       clearTimeout(timer);
-      child.stdout?.removeListener("data", onData);
       child.removeListener("error", onError);
       child.removeListener("exit", onExit);
+      // `onData` stays attached — it keeps draining stdout (so the child
+      // never blocks on a full pipe) and, with `inheritStdio`, keeps
+      // forwarding the devnet's logs past the readiness line.
       if (err != null) {
         child.kill("SIGTERM");
         reject(err);
@@ -237,8 +250,10 @@ export async function startRegtest(
     }
 
     function onData(chunk: Buffer): void {
-      stdout += chunk.toString("utf8");
       if (opts.inheritStdio) process.stderr.write(chunk);
+      // Post-ready: just drain (forwarded above); nothing left to parse.
+      if (settled) return;
+      stdout += chunk.toString("utf8");
       let info: RegtestInfo | null;
       try {
         info = parseRegtestInfo(stdout);
@@ -247,10 +262,6 @@ export async function startRegtest(
         return;
       }
       if (info == null) return;
-      // Keep draining stdout post-ready so the child never blocks on a
-      // full pipe; the data is just discarded.
-      child.stdout?.removeListener("data", onData);
-      child.stdout?.resume();
       finish(null, {
         ...info,
         chain: regtestChain(info),

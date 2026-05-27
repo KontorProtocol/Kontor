@@ -1,16 +1,14 @@
 use anyhow::Result;
 use bitcoin::{
-    FeeRate, TapSighashType,
+    TapSighashType,
     consensus::encode::serialize as serialize_tx,
     key::Secp256k1,
     taproot::{LeafVersion, TaprootBuilder},
 };
-use indexer::{
-    api::compose::{ComposeInputs, InstructionInputs, compose},
-    test_utils,
-    witness_data::TokenBalance,
+use indexer::{test_utils, witness_data::TokenBalance};
+use indexer_types::{
+    CommitSource, Inst, InstKind, Insts, Reveal, RevealOutput, RevealParticipant, serialize,
 };
-use indexer_types::serialize;
 use testlib::RegTester;
 
 pub async fn test_taproot_transaction_regtest(reg_tester: &mut RegTester) -> Result<()> {
@@ -18,36 +16,39 @@ pub async fn test_taproot_transaction_regtest(reg_tester: &mut RegTester) -> Res
     let seller_address = identity.address;
     let keypair = identity.keypair;
     let (internal_key, _parity) = keypair.x_only_public_key();
-    let (out_point, utxo_for_output) = identity.next_funding_utxo; // Create token balance data
-    let token_value = 500;
+    let (out_point, utxo_for_output) = identity.next_funding_utxo;
     let secp = Secp256k1::new();
 
     let token_balance = TokenBalance {
-        value: token_value,
+        value: 500,
         name: "token_name".to_string(),
     };
-
     let serialized_token_balance = serialize(&token_balance)?;
 
-    let compose_params = ComposeInputs::builder()
-        .instructions(vec![
-            InstructionInputs::builder()
-                .address(seller_address.clone())
-                .x_only_public_key(internal_key)
-                .funding_utxos(vec![(out_point, utxo_for_output.clone())])
-                .instruction(serialized_token_balance)
+    let inst = Inst {
+        gas_limit: 50_000,
+        kind: InstKind::Publish {
+            name: "regtest-commit-reveal".to_string(),
+            bytes: serialized_token_balance,
+        },
+    };
+    let reveal = Reveal::builder()
+        .sat_per_vbyte(1)
+        .participants(vec![
+            RevealParticipant::builder()
+                .x_only_public_key(internal_key.to_string())
+                .commit_insts(Insts::single(inst))
+                .commit_source(CommitSource::build(&seller_address, [out_point]))
+                .output(RevealOutput::change(&seller_address.script_pubkey()))
                 .build(),
         ])
-        .fee_rate(FeeRate::from_sat_per_vb(1).unwrap()) // Lower fee rate for regtest
-        .envelope(546)
         .build();
 
-    let compose_outputs = compose(compose_params)?;
+    let compose_outputs = reg_tester.compose(reveal).await?;
 
-    let mut attach_tx = compose_outputs.commit_transaction;
-    let mut spend_tx = compose_outputs.reveal_transaction;
-    let tap_script = compose_outputs.per_participant[0]
-        .commit_tap_leaf_script
+    let mut attach_tx = compose_outputs.commits[0].transaction.clone();
+    let mut spend_tx = compose_outputs.reveal.transaction.clone();
+    let tap_script = compose_outputs.reveal.commit_tap_leaf_scripts[0]
         .script
         .clone();
 

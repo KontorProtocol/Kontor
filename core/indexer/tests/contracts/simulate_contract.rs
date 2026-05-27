@@ -1,4 +1,4 @@
-use indexer_types::{Inst, InstKind, PaymentIntent, TransactionHex};
+use indexer_types::{Inst, InstKind, TransactionHex};
 use testlib::*;
 
 interface!(name = "crypto", path = "../../test-contracts/crypto/wit");
@@ -12,11 +12,11 @@ async fn test_crypto_contract_simulate() -> Result<()> {
 
     let mut rt = runtime.reg_tester().unwrap();
     let mut ident = rt.identity().await?;
-    let (_, _, reveal_tx_hex) = rt
+    let ComposeInstsResult { reveal_tx_hex, .. } = rt
         .compose_instruction(
             &mut ident,
             Inst {
-                payment: PaymentIntent::self_pay(10_000),
+                gas_limit: 10_000,
                 kind: InstKind::Call {
                     contract: crypto.clone().into(),
                     expr: "set-hash(\"foo\")".to_string(),

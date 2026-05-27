@@ -7,7 +7,8 @@ import { test, expect } from "vitest";
 import { parseRegtestInfo, regtestChain } from "../src/regtest.js";
 
 /** The `KONTOR_REGTEST_INFO` JSON payload as the binary prints it —
- *  `devFundingUtxo.value` is a plain number of satoshis on the wire. */
+ *  each `devFundingUtxos` entry's `value` is a plain number of
+ *  satoshis on the wire. */
 const INFO = {
   apiUrl: "http://localhost:32889/api",
   bitcoinRpc: "http://rpc:rpc@127.0.0.1:44745",
@@ -16,13 +17,22 @@ const INFO = {
   devPublicKey:
     "3285de1e9b50e8eec053b840fb5c6b886cefcfdb729c37bba2a7e27a066f86fe",
   devAddress: "bcrt1pfj2vd8zrgmrt2tu75t7kx29ju673v3mc8peqnp676524aayl0tvq0jq7mh",
-  devFundingUtxo: {
-    txid: "a1b2c3d4e5f6071829303142535465768798a0b1c2d3e4f50617283940516273",
-    vout: 1,
-    value: 4999990000,
-    scriptPubKey:
-      "51204c953681c8d18d6a5f3d45f5b194597b5e8b23783875099d76aa2abdef27ded8",
-  },
+  devFundingUtxos: [
+    {
+      txid: "a1b2c3d4e5f6071829303142535465768798a0b1c2d3e4f50617283940516273",
+      vout: 0,
+      value: 2499990000,
+      scriptPubKey:
+        "51204c953681c8d18d6a5f3d45f5b194597b5e8b23783875099d76aa2abdef27ded8",
+    },
+    {
+      txid: "a1b2c3d4e5f6071829303142535465768798a0b1c2d3e4f50617283940516273",
+      vout: 1,
+      value: 2499990000,
+      scriptPubKey:
+        "51204c953681c8d18d6a5f3d45f5b194597b5e8b23783875099d76aa2abdef27ded8",
+    },
+  ],
 };
 
 /** A realistic `kontor regtest` stdout slice — the info line in log noise. */
@@ -46,12 +56,20 @@ test("parseRegtestInfo: extracts every field, value as a bigint", () => {
   expect(info.devPrivateKey).toBe(INFO.devPrivateKey);
   expect(info.devPublicKey).toBe(INFO.devPublicKey);
   expect(info.devAddress).toBe(INFO.devAddress);
-  expect(info.devFundingUtxo).toEqual({
-    txid: INFO.devFundingUtxo.txid,
-    vout: 1,
-    value: 4999990000n,
-    scriptPubKey: INFO.devFundingUtxo.scriptPubKey,
-  });
+  expect(info.devFundingUtxos).toEqual([
+    {
+      txid: INFO.devFundingUtxos[0]!.txid,
+      vout: 0,
+      value: 2499990000n,
+      scriptPubKey: INFO.devFundingUtxos[0]!.scriptPubKey,
+    },
+    {
+      txid: INFO.devFundingUtxos[1]!.txid,
+      vout: 1,
+      value: 2499990000n,
+      scriptPubKey: INFO.devFundingUtxos[1]!.scriptPubKey,
+    },
+  ]);
 });
 
 test("parseRegtestInfo: an info line still streaming in is not matched", () => {
@@ -70,9 +88,9 @@ test("parseRegtestInfo: throws on a complete-but-malformed info line", () => {
   expect(() => parseRegtestInfo(`KONTOR_REGTEST_INFO ${noBitcoinRpc}\n`)).toThrow(
     /missing string field 'bitcoinRpc'/,
   );
-  const noUtxo = JSON.stringify({ ...INFO, devFundingUtxo: undefined });
+  const noUtxo = JSON.stringify({ ...INFO, devFundingUtxos: undefined });
   expect(() => parseRegtestInfo(`KONTOR_REGTEST_INFO ${noUtxo}\n`)).toThrow(
-    /devFundingUtxo/,
+    /devFundingUtxos/,
   );
 });
 

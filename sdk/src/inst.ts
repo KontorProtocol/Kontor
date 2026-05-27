@@ -36,31 +36,18 @@ import type {
   Inst as WireInst,
   InstKind as WireInstKind,
   Insts as WireInsts,
-  PaymentIntent as WirePaymentIntent,
 } from "./bindings.js";
 import type { ContractAddress } from "./canonical/ContractAddress.js";
 import { ContractError, SignerError, TransportError } from "./errors.js";
 import type { ChainEvent } from "./events.js";
-import type { BroadcastResult, OpResult } from "./json-codec.js";
+import type { BroadcastResult, OpResult, OpResultRaw } from "./json-codec.js";
 import type { KontorSession } from "./session.js";
-
-/**
- * Payment commitment carried by each `Inst`. Mirrors the chain's
- * `PaymentIntent` enum:
- *
- * - `SelfPay { limit }` — signer commits up to `limit` from their own
- *   balance for this Inst's gas.
- * - `Sponsored` — signer accepts publisher-paid gas; only valid inside
- *   a BLS aggregate that carries `publisher_sponsorship`.
- */
-export type PaymentIntent =
-  | { kind: "SelfPay"; limit: bigint }
-  | { kind: "Sponsored" };
 
 /**
  * The payload of an `Inst`. Codegen-emitted Contract methods always
  * produce `Call` insts; the other variants exist for SDK-internal
- * deployment / system flows.
+ * deployment / system flows or — for `Sponsor` — the marketplace
+ * payer-redirection mechanism.
  */
 export type InstKind =
   | {
@@ -78,7 +65,15 @@ export type InstKind =
       blsPubkey: Uint8Array;
       schnorrSig: Uint8Array;
       blsSig: Uint8Array;
-    };
+    }
+  /**
+   * Payer-redirection directive: the signer of the input carrying this
+   * Inst commits to paying gas (up to the outer `Inst.gasLimit`) for
+   * every op in the *next* input. Used by the marketplace swap path so
+   * the buyer's signature on their own input redirects payment for the
+   * seller-signed detach. See the project's attach/detach redesign.
+   */
+  | { kind: "Sponsor" };
 
 /**
  * Per-Inst decoder. Takes the WAVE-encoded result string the chain
@@ -122,26 +117,31 @@ export interface SubmittedTx<R> {
 
 export class Inst<T> implements PromiseLike<T> {
   /**
-   * @param session  Bound execution surface.
-   * @param payment  Payment commitment for this Inst.
-   * @param kind     The Inst payload (Call / Publish / Issuance / RegisterBlsKey).
-   * @param decode   Maps the raw WAVE-result string back into the user-typed value.
+   * @param session   Bound execution surface.
+   * @param gasLimit  Per-op gas cap. Default self-pay (input signer
+   *                  pays up to this); overridden by a previous-input
+   *                  `Sponsor` Inst in direct context, or by a
+   *                  publisher-sponsored `AggregateSigner` in aggregate
+   *                  context.
+   * @param kind      The Inst payload (Call / Publish / Issuance /
+   *                  RegisterBlsKey / Sponsor).
+   * @param decode    Maps the raw WAVE-result string back into the user-typed value.
    */
   constructor(
     private readonly session: KontorSession,
-    readonly payment: PaymentIntent,
+    readonly gasLimit: bigint,
     readonly kind: InstKind,
     private readonly decode: InstDecoder<T>,
   ) {}
 
   /**
-   * Return a copy of this Inst with a different payment commitment.
-   * Immutable — the original is left untouched, so an Inst can be
-   * shared (passed into `session.bulk(...)`, an aggregate, ...) without
-   * a later `.pay()` changing it underneath the holder.
+   * Return a copy of this Inst with a different gas cap. Immutable —
+   * the original is left untouched, so an Inst can be shared (passed
+   * into `session.bulk(...)`, an aggregate, ...) without a later
+   * `.withGasLimit()` changing it underneath the holder.
    */
-  pay(payment: PaymentIntent): Inst<T> {
-    return new Inst<T>(this.session, payment, this.kind, this.decode);
+  withGasLimit(gasLimit: bigint): Inst<T> {
+    return new Inst<T>(this.session, gasLimit, this.kind, this.decode);
   }
 
   /**
@@ -190,10 +190,19 @@ export class Inst<T> implements PromiseLike<T> {
       txid,
       async wait(opts?: WaitOptions): Promise<OpResult<T>> {
         try {
+          const outcomes = await waitForTxOutcomes(events, txid, opts);
           // A single Inst is always op (0, 0) of its own tx. Multi-Inst
           // (`bulk`) and aggregate bundles go through `Insts`, which
           // maps every op of the tx itself.
-          return await waitForTx(events, txid, decode, 0, 0, opts);
+          const raw = outcomes.find(
+            (o) => o.inputIndex === 0 && o.opIndex === 0,
+          );
+          if (raw === undefined) {
+            throw new TransportError(
+              `wait: tx ${txid} carried no result for op (0, 0)`,
+            );
+          }
+          return rawToOpResult(raw, decode);
         } finally {
           await events.return?.();
         }
@@ -208,7 +217,11 @@ export class Inst<T> implements PromiseLike<T> {
    * estimation and result preview.
    */
   async simulate(): Promise<OpResult<T>> {
-    throw new Error("Inst.simulate: not implemented");
+    const wire: WireInsts = { ops: [instToWire(this)], aggregate: null };
+    return this.decodeOwnOp(
+      await this.session.transport.simulate(wire),
+      "simulate",
+    );
   }
 
   /**
@@ -218,7 +231,23 @@ export class Inst<T> implements PromiseLike<T> {
    * etc.) without touching contract state.
    */
   async inspect(): Promise<OpResult<T>> {
-    throw new Error("Inst.inspect: not implemented");
+    const wire: WireInsts = { ops: [instToWire(this)], aggregate: null };
+    return this.decodeOwnOp(
+      await this.session.transport.inspect(wire),
+      "inspect",
+    );
+  }
+
+  /**
+   * Pick this single Inst's op — input 0, op 0 — out of a transport's
+   * per-op outcomes and decode it into a typed `OpResult<T>`.
+   */
+  private decodeOwnOp(outcomes: OpResultRaw[], label: string): OpResult<T> {
+    const raw = outcomes.find((o) => o.inputIndex === 0 && o.opIndex === 0);
+    if (raw === undefined) {
+      throw new TransportError(`${label}: no result for the submitted op`);
+    }
+    return rawToOpResult(raw, this.decode);
   }
 
   /**
@@ -242,6 +271,23 @@ export class Inst<T> implements PromiseLike<T> {
   }
 }
 
+/**
+ * Decode a transport `OpResultRaw` into a typed `OpResult<T>`.
+ *
+ * @internal
+ */
+export function rawToOpResult<T>(
+  raw: OpResultRaw,
+  decode: InstDecoder<T>,
+): OpResult<T> {
+  return {
+    status: raw.status,
+    gas: raw.gas,
+    error: raw.error,
+    value: raw.value !== undefined ? decode(raw.value) : undefined,
+  };
+}
+
 function unwrapOrThrow<T>(r: OpResult<T>): T {
   if (r.status === "Ok" && r.value !== undefined) {
     return r.value;
@@ -253,50 +299,81 @@ function unwrapOrThrow<T>(r: OpResult<T>): T {
 
 /**
  * Drain the poller's event stream until the `tx` event for `txid`
- * arrives, then decode the op at `(inputIndex, opIndex)` into an
- * `OpResult<T>`. Honors `timeoutMs` / `signal` from `WaitOptions`.
+ * arrives, returning its per-op outcomes. Honors `timeoutMs` / `signal`
+ * from `WaitOptions`. Shared by `Inst` and `Insts` `wait()`.
+ *
+ * @internal
  */
-async function waitForTx<T>(
+export function waitForTxOutcomes(
   events: AsyncIterableIterator<ChainEvent>,
   txid: string,
-  decode: InstDecoder<T>,
-  inputIndex: number,
-  opIndex: number,
   opts?: WaitOptions,
-): Promise<OpResult<T>> {
-  const scan = async (): Promise<OpResult<T>> => {
-    for await (const ev of events) {
-      if (ev.kind !== "tx" || ev.txid !== txid) continue;
-      // The poller has collapsed each op to its canonical result.
-      const raw = ev.outcomes.find(
-        (o) => o.inputIndex === inputIndex && o.opIndex === opIndex,
-      );
-      if (raw === undefined) {
-        throw new TransportError(
-          `wait: tx ${txid} carried no result for op (${inputIndex}, ${opIndex})`,
-        );
+): Promise<OpResultRaw[]> {
+  return withWaitDeadline(
+    async () => {
+      for await (const ev of events) {
+        if (ev.kind === "tx" && ev.txid === txid) return ev.outcomes;
       }
-      return {
-        status: raw.status,
-        gas: raw.gas,
-        error: raw.error,
-        value: raw.value !== undefined ? decode(raw.value) : undefined,
-      };
-    }
-    throw new TransportError(
-      `wait: event stream ended before tx ${txid} landed`,
-    );
-  };
+      throw new TransportError(
+        `wait: event stream ended before tx ${txid} landed`,
+      );
+    },
+    `tx ${txid}`,
+    opts,
+  );
+}
 
+/**
+ * Like `waitForTxOutcomes`, but waits for several txids at once on one
+ * event iterator — the attach/detach package broadcasts a commit and
+ * two reveals, and the caller wants every reveal's outcomes. Returns a
+ * map keyed by txid; resolves only once every requested txid is seen.
+ *
+ * @internal
+ */
+export function waitForTxsOutcomes(
+  events: AsyncIterableIterator<ChainEvent>,
+  txids: readonly string[],
+  opts?: WaitOptions,
+): Promise<Map<string, OpResultRaw[]>> {
+  return withWaitDeadline(
+    async () => {
+      const pending = new Set(txids);
+      const seen = new Map<string, OpResultRaw[]>();
+      for await (const ev of events) {
+        if (ev.kind === "tx" && pending.delete(ev.txid)) {
+          seen.set(ev.txid, ev.outcomes);
+          if (pending.size === 0) return seen;
+        }
+      }
+      throw new TransportError(
+        `wait: event stream ended before txs [${[...pending]}] landed`,
+      );
+    },
+    `txs [${txids.join(", ")}]`,
+    opts,
+  );
+}
+
+/**
+ * Race `scan` against the `WaitOptions` timeout / abort signal. With
+ * neither set, `scan` runs unguarded. The losing `scan` unblocks when
+ * the caller's `finally` closes the underlying event iterator.
+ *
+ * @internal
+ */
+export function withWaitDeadline<R>(
+  scan: () => Promise<R>,
+  label: string,
+  opts?: WaitOptions,
+): Promise<R> {
   if (opts?.timeoutMs == null && opts?.signal == null) return scan();
 
-  // Race the scan against the timeout / abort signal. The losing `scan`
-  // unblocks when the caller's `finally` closes the event iterator.
-  return new Promise<OpResult<T>>((resolve, reject) => {
+  return new Promise<R>((resolve, reject) => {
     let settled = false;
     let timer: ReturnType<typeof setTimeout> | undefined;
     const onAbort = (): void =>
-      settle(() => reject(new TransportError(`wait: aborted for tx ${txid}`)));
+      settle(() => reject(new TransportError(`wait: aborted (${label})`)));
 
     // First settler wins; on the way out, release the timer and abort
     // listener so neither keeps the event loop (or the signal) alive.
@@ -318,7 +395,7 @@ async function waitForTx<T>(
           settle(() =>
             reject(
               new TransportError(
-                `wait: tx ${txid} not seen within ${opts.timeoutMs}ms`,
+                `wait: ${label} not seen within ${opts.timeoutMs}ms`,
               ),
             ),
           ),
@@ -341,15 +418,9 @@ async function waitForTx<T>(
  */
 export function instToWire(inst: Inst<unknown>): WireInst {
   return {
-    payment: paymentToWire(inst.payment),
+    gas_limit: Number(inst.gasLimit),
     kind: instKindToWire(inst.kind),
   };
-}
-
-function paymentToWire(p: PaymentIntent): WirePaymentIntent {
-  return p.kind === "SelfPay"
-    ? { SelfPay: { limit: Number(p.limit) } }
-    : "Sponsored";
 }
 
 function instKindToWire(k: InstKind): WireInstKind {
@@ -368,5 +439,7 @@ function instKindToWire(k: InstKind): WireInstKind {
           bls_sig: [...k.blsSig],
         },
       };
+    case "Sponsor":
+      return "Sponsor";
   }
 }

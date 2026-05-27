@@ -1,35 +1,226 @@
 extern crate alloc;
 
 use anyhow::Result;
-use bitcoin::{BlockHash, FeeRate, ScriptBuf, TxOut, Txid, XOnlyPublicKey, taproot::LeafVersion};
+use bitcoin::hex::DisplayHex;
+use bitcoin::{BlockHash, ScriptBuf, Txid, XOnlyPublicKey, taproot::LeafVersion};
 use bon::Builder;
-use indexmap::IndexMap;
 use macros::{contract_address, holder_ref};
 use serde::{Deserialize, Serialize};
 use serde_with::{DisplayFromStr, serde_as};
 use ts_rs::TS;
 pub use wit_bindgen;
 
+// ────────────────────────────────────────────────────────────────────
+// Reveal-centric compose API
+//
+// `Reveal` is the universal input: it describes a Kontor reveal
+// transaction — its participants (tap-leaf script-spend inputs), any
+// additional non-Kontor inputs (key-path), and its outputs in order.
+//
+// Used as the body of three endpoints:
+//   - compose:        builds whatever needs building (commits + reveal).
+//                     If all participants are Existing, builds only the
+//                     reveal. If any are Build, builds those commits too.
+//   - compose_commit: builds only the commits for Build participants;
+//                     returns the Reveal with their outpoints filled in.
+//                     For the split-flow case (commit now, reveal later).
+//   - compose_reveal: shorthand for compose where all participants are
+//                     Existing; builds only the reveal PSBT.
+//
+// `CommitSource` per participant captures whether the commit already
+// exists on chain (Existing) or needs to be built by this call (Build).
+// The same Reveal value can drive all three endpoints — endpoint choice
+// determines what gets built.
+//
+// Output structure is explicit: `extra_outputs` lists every non-paired
+// output, and each `RevealParticipant.output` is the tx output at that
+// participant's input index (for SACP alignment). No implicit defaults.
+// ────────────────────────────────────────────────────────────────────
+
+/// A complete description of a Kontor reveal tx. Used by `compose`,
+/// `compose_commit`, and `compose_reveal`.
 #[derive(Serialize, Deserialize, Clone, Builder, TS)]
 #[ts(export, export_to = "../../../sdk/src/bindings.d.ts")]
-pub struct InstructionQuery {
-    pub address: String,
-    pub x_only_public_key: String,
-    pub funding_utxo_ids: String,
-    pub insts: Insts,
-    pub chained_insts: Option<Insts>,
-}
-
-#[derive(Serialize, Deserialize, Builder, TS)]
-#[ts(export, export_to = "../../../sdk/src/bindings.d.ts")]
-pub struct ComposeQuery {
-    pub instructions: Vec<InstructionQuery>,
+pub struct Reveal {
     /// Optional: when omitted, the server falls back to its currently
     /// published `fastest_fee` (sat/vB) from `/api/fees`.
     #[ts(type = "number | null")]
     pub sat_per_vbyte: Option<u64>,
-    #[ts(type = "number | null")]
-    pub envelope: Option<u64>,
+    pub participants: Vec<RevealParticipant>,
+    #[builder(default)]
+    pub extra_inputs: Vec<ExtraInput>,
+    #[builder(default)]
+    pub extra_outputs: Vec<RevealOutput>,
+}
+
+/// One participant in the reveal: the tap-leaf script-spend input plus
+/// the output paired with it (placed at the same index, which BIP-341
+/// SIGHASH_SINGLE pre-signed signatures commit to).
+#[derive(Serialize, Deserialize, Clone, Builder, TS)]
+#[ts(export, export_to = "../../../sdk/src/bindings.d.ts")]
+pub struct RevealParticipant {
+    pub x_only_public_key: String,
+    pub commit_insts: Insts,
+    /// Optional. The common seller-offer pattern (chained envelope +
+    /// change in extras) leaves this unset; the marketplace swap sets
+    /// it to the SACP-paired output (Change for buyer, Fixed for seller).
+    pub output: Option<RevealOutput>,
+    pub commit_source: CommitSource,
+}
+
+impl CommitSource {
+    /// Construct a `CommitSource::Build` for a commit to be built by
+    /// this call. Accepts any iterable of `OutPoint` for funding — the
+    /// helper formats them into the wire-string shape internally.
+    pub fn build(
+        address: &bitcoin::Address,
+        funding: impl IntoIterator<Item = bitcoin::OutPoint>,
+    ) -> Self {
+        Self::Build {
+            address: address.to_string(),
+            funding_utxo_ids: funding
+                .into_iter()
+                .map(|op| format!("{}:{}", op.txid, op.vout))
+                .collect(),
+        }
+    }
+
+    /// Construct a `CommitSource::Existing` for an already-on-chain commit.
+    pub fn existing(outpoint: bitcoin::OutPoint, prevout: bitcoin::TxOut) -> Self {
+        Self::Existing { outpoint, prevout }
+    }
+}
+
+impl RevealOutput {
+    /// Fixed-value output. Accepts a `ScriptBuf` (any output script type)
+    /// and hex-encodes it internally for the wire shape.
+    pub fn fixed(script: &bitcoin::Script, value: u64) -> Self {
+        Self::Fixed {
+            script_pubkey: script.as_bytes().to_lower_hex_string(),
+            value,
+        }
+    }
+
+    /// Auto-computed change to `script`. Hex-encodes internally.
+    pub fn change(script: &bitcoin::Script) -> Self {
+        Self::Change {
+            script_pubkey: script.as_bytes().to_lower_hex_string(),
+        }
+    }
+
+    /// Inscription envelope committing to `insts` with `internal_key` as
+    /// the tap internal key. Takes the typed `XOnlyPublicKey`.
+    pub fn chained_envelope(
+        insts: Insts,
+        value: u64,
+        internal_key: bitcoin::XOnlyPublicKey,
+    ) -> Self {
+        Self::ChainedEnvelope {
+            insts,
+            value,
+            internal_key: internal_key.to_string(),
+        }
+    }
+
+    /// OP_RETURN with arbitrary data.
+    pub fn op_return(data: Vec<u8>) -> Self {
+        Self::OpReturn { data }
+    }
+}
+
+/// Whether this participant's commit already exists on chain or needs
+/// to be built by this call.
+#[derive(Serialize, Deserialize, Clone, TS)]
+#[ts(export, export_to = "../../../sdk/src/bindings.d.ts")]
+pub enum CommitSource {
+    /// The commit already exists. Caller supplies the outpoint + prevout.
+    Existing {
+        #[ts(as = "String")]
+        outpoint: bitcoin::OutPoint,
+        #[ts(as = "TxOutSchema")]
+        prevout: bitcoin::TxOut,
+    },
+    /// The commit needs to be built (by this call or a later one).
+    /// Caller supplies funding for the commit tx.
+    Build {
+        address: String,
+        funding_utxo_ids: Vec<String>,
+    },
+}
+
+/// A non-Kontor input (key-path spend) bringing extra value into the
+/// reveal — beyond what the tap-leaf participants contribute.
+#[derive(Serialize, Deserialize, Clone, TS)]
+#[ts(export, export_to = "../../../sdk/src/bindings.d.ts")]
+pub struct ExtraInput {
+    #[ts(as = "String")]
+    pub outpoint: bitcoin::OutPoint,
+    #[ts(as = "TxOutSchema")]
+    pub prevout: bitcoin::TxOut,
+}
+
+/// One output kind in a reveal tx. Appears either on a participant
+/// (paired with that input's index, for SACP alignment) or in
+/// `extra_outputs` (appended after all participant outputs in order).
+///
+/// `Change` is the only variant whose value is computed by the
+/// indexer (= leftover after fees + fixed outputs). It may only appear
+/// at the tx's *last* output position; the indexer errors if a non-last
+/// Change would be sub-dust (skipping it would shift later outputs and
+/// break SACP positioning).
+#[derive(Serialize, Deserialize, Clone, TS)]
+#[ts(export, export_to = "../../../sdk/src/bindings.d.ts")]
+pub enum RevealOutput {
+    /// Fixed-value output. Caller specifies the exact value.
+    Fixed { script_pubkey: String, value: u64 },
+    /// Auto-computed change. Value = sum(inputs) − sum(other outputs) − fee.
+    /// Must be the last output of the tx; sub-dust is silently dropped.
+    Change { script_pubkey: String },
+    /// Inscription envelope output committing to `insts` in a tap leaf
+    /// with `internal_key` as the internal key. `value` is the output's
+    /// sat amount.
+    ChainedEnvelope {
+        insts: Insts,
+        value: u64,
+        internal_key: String,
+    },
+    /// OP_RETURN with arbitrary data.
+    OpReturn { data: Vec<u8> },
+}
+
+/// One commit transaction built by `compose_commit` / `compose`. There's
+/// one entry per `CommitSource::Build` participant in the input `Reveal`,
+/// in participant order.
+#[derive(Serialize, Deserialize, Builder, Clone, TS)]
+#[ts(export, export_to = "../../../sdk/src/bindings.d.ts")]
+pub struct CommitTx {
+    #[ts(as = "String")]
+    pub transaction: bitcoin::Transaction,
+    pub transaction_hex: String,
+    pub psbt_hex: String,
+}
+
+/// Response from `compose_commit`: one `CommitTx` per Build participant,
+/// plus the input `Reveal` with each Build participant's `CommitSource`
+/// converted to `Existing` (outpoint + prevout filled in from the built
+/// commit). The caller signs + broadcasts the commits, then later passes
+/// the returned `reveal` to `compose_reveal` to build the reveal PSBT.
+#[derive(Serialize, Deserialize, Builder, Clone, TS)]
+#[ts(export, export_to = "../../../sdk/src/bindings.d.ts")]
+pub struct CommitOutputs {
+    pub commits: Vec<CommitTx>,
+    pub reveal: Reveal,
+}
+
+/// Response from `compose`: built commits (one per Build participant)
+/// plus the built reveal PSBT. The caller signs each commit's input,
+/// signs the reveal's tap-script-spend inputs (using
+/// `RevealOutputs.commit_tap_leaf_scripts`), and broadcasts the package.
+#[derive(Serialize, Deserialize, TS)]
+#[ts(export, export_to = "../../../sdk/src/bindings.d.ts")]
+pub struct ComposeOutputs {
+    pub commits: Vec<CommitTx>,
+    pub reveal: RevealOutputs,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, TS)]
@@ -45,97 +236,12 @@ pub struct TapLeafScript {
     pub control_block: ScriptBuf,
 }
 
-#[derive(Debug, Serialize, Deserialize, Clone, TS)]
-#[ts(export, export_to = "../../../sdk/src/bindings.d.ts")]
-pub struct ParticipantScripts {
-    pub address: String,
-    pub x_only_public_key: String,
-    pub commit_tap_leaf_script: TapLeafScript,
-    pub chained_tap_leaf_script: Option<TapLeafScript>,
-}
-
-#[derive(Debug, Serialize, Deserialize, Builder, TS)]
-#[ts(export, export_to = "../../../sdk/src/bindings.d.ts")]
-pub struct ComposeOutputs {
-    #[ts(as = "String")]
-    pub commit_transaction: bitcoin::Transaction,
-    pub commit_transaction_hex: String,
-    pub commit_psbt_hex: String,
-    #[ts(as = "String")]
-    pub reveal_transaction: bitcoin::Transaction,
-    pub reveal_transaction_hex: String,
-    pub reveal_psbt_hex: String,
-    pub per_participant: Vec<ParticipantScripts>,
-}
-
-#[derive(Builder, Serialize, Clone, TS)]
-#[ts(export, export_to = "../../../sdk/src/bindings.d.ts")]
-pub struct CommitOutputs {
-    #[ts(as = "String")]
-    pub commit_transaction: bitcoin::Transaction,
-    pub commit_transaction_hex: String,
-    pub commit_psbt_hex: String,
-    pub reveal_inputs: RevealInputs,
-}
-
-#[derive(Serialize, Deserialize, Clone, Builder, TS)]
-#[ts(export, export_to = "../../../sdk/src/bindings.d.ts")]
-pub struct RevealParticipantQuery {
-    pub address: String,
-    pub x_only_public_key: String,
-    pub commit_vout: u32,
-    pub commit_script_data: Vec<u8>,
-    pub chained_instruction: Option<Vec<u8>>,
-}
-
-#[derive(Serialize, Deserialize, TS, Clone, Builder)]
-#[ts(export, export_to = "../../../sdk/src/bindings.d.ts")]
-pub struct RevealQuery {
-    pub commit_tx_hex: String,
-    /// Optional: when omitted, the server falls back to its currently
-    /// published `fastest_fee` (sat/vB) from `/api/fees`.
-    #[ts(type = "number | null")]
-    pub sat_per_vbyte: Option<u64>,
-    pub participants: Vec<RevealParticipantQuery>,
-    pub op_return_data: Option<Vec<u8>>,
-    #[ts(type = "number | null")]
-    pub envelope: Option<u64>,
-}
-
 #[derive(Serialize, Deserialize, TS)]
 #[ts(export, export_to = "../../../sdk/src/bindings.d.ts")]
 pub struct TxOutSchema {
     #[ts(type = "number")]
     pub value: u64,
     pub script_pubkey: String,
-}
-
-#[derive(Clone, Serialize, Builder, TS)]
-#[ts(export, export_to = "../../../sdk/src/bindings.d.ts")]
-pub struct RevealParticipantInputs {
-    #[ts(as = "String")]
-    pub address: bitcoin::Address,
-    #[ts(as = "String")]
-    pub x_only_public_key: XOnlyPublicKey,
-    #[ts(as = "String")]
-    pub commit_outpoint: bitcoin::OutPoint,
-    #[ts(as = "TxOutSchema")]
-    pub commit_prevout: TxOut,
-    pub commit_tap_leaf_script: TapLeafScript,
-    pub chained_instruction: Option<Vec<u8>>,
-}
-
-#[derive(Builder, Serialize, Clone, TS)]
-#[ts(export, export_to = "../../../sdk/src/bindings.d.ts")]
-pub struct RevealInputs {
-    #[ts(as = "String")]
-    pub commit_tx: bitcoin::Transaction,
-    #[ts(type = "number")]
-    pub fee_rate: FeeRate,
-    pub participants: Vec<RevealParticipantInputs>,
-    pub op_return_data: Option<Vec<u8>>,
-    #[ts(type = "number")]
-    pub envelope: u64,
 }
 
 #[derive(Builder, Serialize, Deserialize, TS)]
@@ -145,7 +251,31 @@ pub struct RevealOutputs {
     pub transaction: bitcoin::Transaction,
     pub transaction_hex: String,
     pub psbt_hex: String,
-    pub participants: Vec<ParticipantScripts>,
+    /// Per-participant tap leaf script + control block, parallel to the
+    /// reveal tx's inputs. Callers need these to assemble the script-path
+    /// witness when signing their input.
+    pub commit_tap_leaf_scripts: Vec<TapLeafScript>,
+    /// Per-output kind + any extra info, in tx output order (same
+    /// length as `transaction.output`). Mirrors the input `RevealOutput`
+    /// enum and surfaces info derivable from compose-time state but not
+    /// from the tx alone — notably the tap leaf script + control block
+    /// for `ChainedEnvelope` outputs, which the caller needs to
+    /// script-spend that output in a follow-up tx.
+    pub output_info: Vec<RevealOutputInfo>,
+}
+
+/// Per-output annotation describing what kind of output occupies each
+/// position in the reveal tx. Mirrors the input `RevealOutput` enum.
+/// The wire shape includes only what the SDK can't derive from the tx
+/// itself; in particular `ChainedEnvelope` carries the tap leaf script
+/// that the chained tap output committed to.
+#[derive(Serialize, Deserialize, Clone, TS)]
+#[ts(export, export_to = "../../../sdk/src/bindings.d.ts")]
+pub enum RevealOutputInfo {
+    Fixed,
+    Change,
+    ChainedEnvelope { tap_leaf_script: TapLeafScript },
+    OpReturn,
 }
 
 /// Request body for `POST /api/transactions/broadcast`: raw Bitcoin tx
@@ -209,9 +339,8 @@ pub struct Transaction {
     #[ts(type = "number")]
     pub index: i64,
     pub inputs: Vec<Input>,
-    #[ts(type = "Record<number, OpReturnData>")]
-    #[serde(with = "indexmap::map::serde_seq")]
-    pub op_return_data: IndexMap<u64, OpReturnData>,
+    /// OP_RETURN directives, one entry per reveal input that carries one.
+    pub op_return_data: Vec<OpReturnEntry>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, TS)]
@@ -276,10 +405,16 @@ pub struct OpMetadata {
 
 /// Resolved per-op execution payment, lives on `OpMetadata`.
 ///
-/// Built from the co-signer's `PaymentIntent` plus any aggregate-level
-/// `publisher_sponsorship` offer. `signer_id` identifies who funds the
-/// op's gas (the applicative signer for SelfPay, the publisher for
-/// Sponsored). `gas_limit` is the effective fuel cap for execution.
+/// `signer_id` is who funds this op's gas; `gas_limit` is the cap.
+///
+/// Derived from:
+/// - Direct input, no `Sponsor`: `signer_id` = input signer, `gas_limit` = `Inst.gas_limit`.
+/// - Direct input, prev-input `Sponsor` active: `signer_id` = sponsor's signer,
+///   `gas_limit` = sponsor's cap (overrides `Inst.gas_limit`).
+/// - Aggregate input, `AggregateSigner.sponsored = false`: `signer_id` =
+///   co-signer, `gas_limit` = `Inst.gas_limit`.
+/// - Aggregate input, `AggregateSigner.sponsored = true`: `signer_id` =
+///   publisher (the input's signer), `gas_limit` = `Inst.gas_limit`.
 ///
 /// `Issuance` carries a sentinel `Payment { signer_id: CORE_SIGNER_ID,
 /// gas_limit: 0 }` since it's system-paid via the `Signer::Core` bypass
@@ -297,27 +432,29 @@ pub struct Payment {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[ts(export, export_to = "../../../sdk/src/bindings.d.ts")]
 pub struct AggregateInfo {
-    /// One entry per op in `Insts.ops`, in parallel order. Each entry binds
-    /// a co-signer claim (existing `signer_id` or fresh x-only `PubKey`) to
-    /// the nonce that op claims, which protects BLS aggregate signatures
-    /// from replay.
+    /// One entry per op in `Insts.ops`, in parallel order. Binds each
+    /// co-signer claim (existing `signer_id` or fresh x-only `PubKey`)
+    /// to its nonce (replay protection) and to a `sponsored` flag (whether
+    /// the publisher pays the op's gas).
     pub signers: Vec<AggregateSigner>,
     pub signature: Vec<u8>,
-    /// Publisher's gas-sponsorship commitment for this bulk.
-    /// - `None`: no sponsorship offered. Any op signing `PaymentIntent::Sponsored`
-    ///   is rejected.
-    /// - `Some(n)`: publisher commits up to `n` per sponsored op. Validated
-    ///   `n > 0` in `validate_aggregate_shape`.
-    #[ts(type = "number | null")]
-    pub publisher_sponsorship: Option<u64>,
+    // Publisher-sponsorship is no longer a separate `Option<u64>` on
+    // AggregateInfo. The publisher commits to each sponsored op's cap
+    // implicitly by signing the bulk — the cap is the per-Inst
+    // `gas_limit`. Per-op opt-in lives on `AggregateSigner.sponsored`.
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[ts(export, export_to = "../../../sdk/src/bindings.d.ts")]
 pub struct AggregateSigner {
-    pub identity: SignerClaim,
+    pub identity: SignerRef,
     #[ts(type = "number")]
     pub nonce: u64,
+    /// `true` → this op's gas is paid by the publisher (the input's
+    /// signer) up to `Inst.gas_limit`. `false` → co-signer self-pays up
+    /// to `Inst.gas_limit`. The publisher commits by signing the bulk;
+    /// the co-signer commits via their BLS signature contribution.
+    pub sponsored: bool,
 }
 
 /// How a co-signer identifies themselves in an aggregate bulk.
@@ -333,9 +470,31 @@ pub struct AggregateSigner {
 /// the verification key, not which key.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[ts(export, export_to = "../../../sdk/src/bindings.d.ts")]
-pub enum SignerClaim {
-    Id(#[ts(type = "number")] u64),
-    PubKey(#[ts(as = "String")] XOnlyPublicKey),
+pub enum SignerRef {
+    SignerId(#[ts(type = "number")] u64),
+    XOnlyPubkey(#[ts(as = "String")] XOnlyPublicKey),
+}
+
+impl SignerRef {
+    /// Build an `XOnlyPubkey` ref from an x-only pubkey hex string,
+    /// validating that it is a real curve point. Used at the codec
+    /// boundary, where the input is an untrusted string.
+    pub fn pubkey_from_hex(hex: &str) -> Result<Self, String> {
+        hex.parse::<XOnlyPublicKey>()
+            .map(Self::XOnlyPubkey)
+            .map_err(|e| format!("invalid x-only pubkey '{hex}': {e}"))
+    }
+}
+
+/// `SignerRef` is exactly the two real-account arms of `HolderRef`;
+/// this widening is total.
+impl From<SignerRef> for HolderRef {
+    fn from(value: SignerRef) -> Self {
+        match value {
+            SignerRef::SignerId(id) => HolderRef::SignerId(id),
+            SignerRef::XOnlyPubkey(pk) => HolderRef::XOnlyPubkey(pk.to_string()),
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
@@ -389,6 +548,13 @@ pub enum OpKind {
         schnorr_sig: Vec<u8>,
         bls_sig: Vec<u8>,
     },
+    /// Sponsor's on-chain effect: when this op is processed in the per-tx
+    /// loop, the executor sets `pending_for_next` from the op's `Payment`
+    /// (signer = sponsor; gas_limit = sponsor's cap). At the next input
+    /// boundary, `pending_for_next` becomes `active` and overrides every
+    /// op's Payment in that input. Sponsor itself does not call into a
+    /// contract.
+    Sponsor,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Builder, TS)]
@@ -706,39 +872,38 @@ pub struct ResultRow {
     pub payer_signer_id: Option<i64>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub enum OpReturnData {
-    PubKey(XOnlyPublicKey),
-}
-
-/// Co-signer's payment commitment, signed as part of the Inst.
-///
-/// - `SelfPay { limit }`: the co-signer commits up to `limit` from their own
-///   token balance for this op's gas.
-/// - `Sponsored`: the co-signer accepts publisher-paid gas. Only meaningful
-///   in BLS aggregate inputs that also carry `AggregateInfo.publisher_sponsorship`;
-///   rejected at validation in any other context.
+/// One OP_RETURN directive bound to the reveal input it applies to:
+/// where the asset detached by that input's op should land. A
+/// transaction's OP_RETURN payload is a `Vec<OpReturnEntry>` — the
+/// per-input binding kept as a plain list (not a map) so it is fully
+/// expressible in WIT — `list<op-return-entry>`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[ts(export, export_to = "../../../sdk/src/bindings.d.ts")]
-pub enum PaymentIntent {
-    SelfPay {
-        #[ts(type = "number")]
-        limit: u64,
-    },
-    Sponsored,
-}
-
-impl PaymentIntent {
-    /// Shorthand for the common `SelfPay { limit }` case.
-    pub fn self_pay(limit: u64) -> Self {
-        Self::SelfPay { limit }
-    }
+pub struct OpReturnEntry {
+    #[ts(type = "number")]
+    pub input_index: u32,
+    pub recipient: SignerRef,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[ts(export, export_to = "../../../sdk/src/bindings.d.ts")]
 pub struct Inst {
-    pub payment: PaymentIntent,
+    /// Gas cap for this op. Self-pay default — the input's signer is
+    /// charged up to this amount.
+    ///
+    /// Overridden in two cases:
+    /// - Direct context with a previous-input `Sponsor` Inst → the
+    ///   Sponsor's own `gas_limit` is the cap and its signer is the payer.
+    /// - BLS aggregate with `AggregateSigner.sponsored = true` → the
+    ///   publisher (the input's signer) is the payer; `gas_limit` here is
+    ///   the cap they signed off on by signing the bulk.
+    ///
+    /// Otherwise: input signer is payer; `gas_limit` is the cap.
+    ///
+    /// Sentinel `0` is used for ops the runtime pays for (currently only
+    /// `InstKind::Issuance`, which bypasses gas accounting via `Signer::Core`).
+    #[ts(type = "number")]
+    pub gas_limit: u64,
     pub kind: InstKind,
 }
 
@@ -762,20 +927,48 @@ pub enum InstKind {
         schnorr_sig: Vec<u8>,
         bls_sig: Vec<u8>,
     },
+    /// A unilateral payer designation: the signer of the input carrying
+    /// this `Sponsor` agrees to pay gas (up to the outer `Inst.gas_limit`)
+    /// for every op in the *next* input. Those ops see this Sponsor's
+    /// signer as `ctx.payer()` and run with this Sponsor's cap,
+    /// overriding the next input's per-Inst `gas_limit`.
+    ///
+    /// Drives the marketplace swap path — the buyer's input carries a
+    /// `Sponsor` and the escrow input that follows carries the detach,
+    /// so the buyer pays the detach's gas and is the asset's recipient.
+    /// Without a `Sponsor`, the next input's ops default to "payer =
+    /// signer of that input" — which is exactly how revoke works: seller
+    /// spends own escrow → payer = seller → detach back to seller.
+    ///
+    /// Sponsor itself is a directive consumed at materialization — it
+    /// does not execute against a contract and produces no `OpResult`.
+    /// At most one `Sponsor` per input; multiple → invalid batch. Not
+    /// aggregatable (rejected in BLS-aggregate inputs).
+    Sponsor,
 }
 
 impl Inst {
     /// Build the domain-separated signing message for one operation in an aggregate batch.
     ///
-    /// Returns `KONTOR-OP-V1 || postcard((claim, nonce, self))` where `claim`
-    /// and `nonce` come from the matching `AggregateSigner` entry in
-    /// `AggregateInfo.signers`. Signing over the `SignerClaim` rather than a
-    /// resolved `signer_id` is what lets a brand-new co-signer (no
-    /// `signer_id` yet) participate in aggregates: they sign over their
-    /// `SignerClaim::PubKey(self_x_only)`, which they know locally.
-    pub fn aggregate_signing_message(&self, claim: &SignerClaim, nonce: u64) -> Result<Vec<u8>> {
+    /// Returns `KONTOR-OP-V1 || postcard((claim, nonce, sponsored, self))` —
+    /// `claim` and `nonce` are the matching `AggregateSigner` entry's fields
+    /// and `sponsored` is that entry's `sponsored` flag. Including `sponsored`
+    /// in the signed bytes prevents the publisher from flipping a
+    /// co-signer's choice after the fact (a publisher-side rug on who pays
+    /// gas).
+    ///
+    /// Signing over the `SignerRef` rather than a resolved `signer_id` lets
+    /// a brand-new co-signer (no `signer_id` yet) participate in aggregates:
+    /// they sign over `SignerRef::XOnlyPubkey(self_x_only)`, which they
+    /// know locally.
+    pub fn aggregate_signing_message(
+        &self,
+        claim: &SignerRef,
+        nonce: u64,
+        sponsored: bool,
+    ) -> Result<Vec<u8>> {
         const KONTOR_OP_PREFIX: &[u8] = b"KONTOR-OP-V1";
-        let op_bytes = serialize(&(claim, nonce, self))?;
+        let op_bytes = serialize(&(claim, nonce, sponsored, self))?;
         let mut msg = Vec::with_capacity(KONTOR_OP_PREFIX.len() + op_bytes.len());
         msg.extend_from_slice(KONTOR_OP_PREFIX);
         msg.extend_from_slice(&op_bytes);
@@ -791,30 +984,31 @@ pub fn deserialize<T: for<'a> Deserialize<'a>>(buffer: &[u8]) -> Result<T> {
     Ok(postcard::from_bytes(buffer)?)
 }
 
-pub fn json_to_bytes<T: for<'a> Deserialize<'a> + Serialize>(json: String) -> Vec<u8> {
-    let inst = serde_json::from_str::<T>(&json).expect("Invalid JSON string");
-    serialize(&inst).expect("Failed to serialize to postcard")
+/// Parse `json` as a `T` and postcard-encode it. Both halves can fail
+/// — malformed JSON, or a value that fails `T`'s own validation (an
+/// x-only pubkey not on the curve, say) — so the error is returned, not
+/// panicked: callers across the WASM boundary get a catchable string.
+pub fn json_to_bytes<T: for<'a> Deserialize<'a> + Serialize>(
+    json: String,
+) -> Result<Vec<u8>, String> {
+    let value = serde_json::from_str::<T>(&json).map_err(|e| e.to_string())?;
+    serialize(&value).map_err(|e| e.to_string())
 }
 
-pub fn bytes_to_json<T: for<'a> Deserialize<'a> + Serialize>(bytes: Vec<u8>) -> String {
-    let inst = deserialize::<T>(&bytes).expect("Failed to deserialize from postcard");
-    serde_json::to_string(&inst).expect("Failed to serialize to JSON")
+/// Postcard-decode `bytes` as a `T` and re-encode it as JSON.
+pub fn bytes_to_json<T: for<'a> Deserialize<'a> + Serialize>(
+    bytes: Vec<u8>,
+) -> Result<String, String> {
+    let value = deserialize::<T>(&bytes).map_err(|e| e.to_string())?;
+    serde_json::to_string(&value).map_err(|e| e.to_string())
 }
 
-pub fn insts_json_to_bytes(json: String) -> Vec<u8> {
+pub fn insts_json_to_bytes(json: String) -> Result<Vec<u8>, String> {
     json_to_bytes::<Insts>(json)
 }
 
-pub fn insts_bytes_to_json(bytes: Vec<u8>) -> String {
+pub fn insts_bytes_to_json(bytes: Vec<u8>) -> Result<String, String> {
     bytes_to_json::<Insts>(bytes)
-}
-
-pub fn op_return_data_json_to_bytes(json: String) -> Vec<u8> {
-    json_to_bytes::<OpReturnData>(json)
-}
-
-pub fn op_return_data_bytes_to_json(bytes: Vec<u8>) -> String {
-    bytes_to_json::<OpReturnData>(bytes)
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]

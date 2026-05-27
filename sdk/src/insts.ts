@@ -25,9 +25,15 @@
  */
 
 import type { AggregateInfo } from "./aggregate.js";
-import { ContractError } from "./errors.js";
-import type { Inst, SubmittedTx } from "./inst.js";
-import type { OpResult } from "./json-codec.js";
+import { ContractError, TransportError } from "./errors.js";
+import { instToWire, rawToOpResult, waitForTxOutcomes } from "./inst.js";
+import type { Inst, SubmittedTx, WaitOptions } from "./inst.js";
+import type {
+  BroadcastResult,
+  OpResult,
+  OpResultRaw,
+  WireInsts,
+} from "./json-codec.js";
 import type { KontorSession } from "./session.js";
 
 /**
@@ -82,18 +88,74 @@ export class Insts<T extends readonly unknown[]> implements PromiseLike<T> {
    * `OpResult`s (`InstsOpResults<T>`) once the indexer surfaces them.
    */
   async submit(): Promise<SubmittedTx<InstsOpResults<T>>> {
-    throw new Error("Insts.submit: not implemented");
+    // Attach to the poller before broadcasting — same race-close as
+    // `Inst.submit`.
+    const events = this.session.events();
+    let broadcast: BroadcastResult;
+    try {
+      broadcast = await this.session.transport.submit(this.toWire());
+    } catch (e) {
+      await events.return?.();
+      throw e;
+    }
+    const { txid } = broadcast;
+    const insts = this.insts;
+    return {
+      txid,
+      async wait(opts?: WaitOptions): Promise<InstsOpResults<T>> {
+        try {
+          return mapBundleOutcomes<T>(
+            insts,
+            await waitForTxOutcomes(events, txid, opts),
+          );
+        } finally {
+          await events.return?.();
+        }
+      },
+    };
   }
 
   /** Sandboxed live execution; returns the same tuple shape as `submit`. */
   async simulate(): Promise<InstsOpResults<T>> {
-    throw new Error("Insts.simulate: not implemented");
+    return mapBundleOutcomes<T>(
+      this.insts,
+      await this.session.transport.simulate(this.toWire()),
+    );
   }
 
   /** Static analysis; returns the same tuple shape as `submit`. */
   async inspect(): Promise<InstsOpResults<T>> {
-    throw new Error("Insts.inspect: not implemented");
+    return mapBundleOutcomes<T>(
+      this.insts,
+      await this.session.transport.inspect(this.toWire()),
+    );
   }
+
+  /** The wire `Insts` for this bundle — every Inst as one op. */
+  private toWire(): WireInsts {
+    // `bulk` bundles carry no aggregate; `combineAggregate` will extend
+    // this once the aggregate flow lands.
+    return { ops: this.insts.map((inst) => instToWire(inst)), aggregate: null };
+  }
+}
+
+/**
+ * Map a tx's per-op outcomes back onto the bundle's Insts: Inst `i` is
+ * op `(input 0, op i)` of the broadcast tx. Each is decoded with its
+ * own Inst's decoder, preserving per-slot typing.
+ */
+function mapBundleOutcomes<T extends readonly unknown[]>(
+  insts: readonly Inst<unknown>[],
+  outcomes: OpResultRaw[],
+): InstsOpResults<T> {
+  const mapped = insts.map((inst, i) => {
+    const raw = outcomes.find((o) => o.inputIndex === 0 && o.opIndex === i);
+    if (raw === undefined) {
+      throw new TransportError(`bulk: tx carried no result for op ${i}`);
+    }
+    return rawToOpResult(raw, (wave) => inst._decode(wave));
+  });
+  return mapped as unknown as InstsOpResults<T>;
 }
 
 function unwrapAllOrThrow<T extends readonly unknown[]>(

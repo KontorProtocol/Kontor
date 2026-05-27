@@ -11,7 +11,7 @@ use indexer::info::{compute_info_core, run_info_publisher};
 use indexer::keygen::{self, KeygenArgs};
 use indexer::{api, block, built_info, reactor, reg_tester, runtime};
 use indexer::{bitcoin_client, bitcoin_follower, config::Config, database, logging, stopper};
-use indexer_types::{Inst, InstKind, PaymentIntent};
+use indexer_types::{Inst, InstKind};
 use tokio::signal::unix::{SignalKind, signal};
 use tokio::sync::{RwLock, mpsc, oneshot};
 use tokio_util::sync::CancellationToken;
@@ -82,18 +82,20 @@ async fn run_regtest() -> Result<()> {
         .instruction(
             &mut cluster.identity,
             Inst {
-                payment: PaymentIntent::self_pay(10_000),
+                gas_limit: 10_000,
                 kind: InstKind::Issuance,
             },
         )
         .await?;
 
+    // Split the dev account's funding into independent Bitcoin UTXOs so
+    // distinct regtest test files (transfer, attach, …) can each spend
+    // one without colliding on a single shared output. The SDK passes
+    // these to `submit` as funding — it never sources UTXOs itself.
+    let funding = cluster.split_dev_funding(7).await?;
+
     let api_port = cluster.node_configs[0].api_port;
     let dev = &cluster.identity;
-    // The dev account's current spendable Bitcoin UTXO (the change output
-    // of the Issuance above) — the SDK passes it to `submit` as funding,
-    // since the SDK never sources UTXOs itself.
-    let funding = &dev.next_funding_utxo;
     // One JSON line, consumed by `@kontor/sdk/regtest`'s `startRegtest()`.
     // A single line is parsed atomically — it can't be matched while still
     // half-streamed the way five independent marker lines could.
@@ -103,12 +105,17 @@ async fn run_regtest() -> Result<()> {
         "devPrivateKey": hex::encode(dev.keypair.secret_bytes()),
         "devPublicKey": dev.x_only_public_key().to_string(),
         "devAddress": dev.address.to_string(),
-        "devFundingUtxo": {
-            "txid": funding.0.txid.to_string(),
-            "vout": funding.0.vout,
-            "value": funding.1.value.to_sat(),
-            "scriptPubKey": hex::encode(funding.1.script_pubkey.as_bytes()),
-        },
+        "devFundingUtxos": funding
+            .iter()
+            .map(|(outpoint, txout)| {
+                serde_json::json!({
+                    "txid": outpoint.txid.to_string(),
+                    "vout": outpoint.vout,
+                    "value": txout.value.to_sat(),
+                    "scriptPubKey": hex::encode(txout.script_pubkey.as_bytes()),
+                })
+            })
+            .collect::<Vec<_>>(),
     });
     println!("KONTOR_REGTEST_INFO {info}");
     println!("kontor regtest devnet running — Ctrl-C to stop");

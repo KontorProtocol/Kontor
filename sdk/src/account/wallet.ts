@@ -15,7 +15,7 @@
 
 import { HolderRef } from "../canonical/HolderRef.js";
 import { SignerError } from "../errors.js";
-import type { Account } from "./index.js";
+import type { Account, SignPsbtOptions } from "./index.js";
 import type { Chain } from "../chains.js";
 
 export interface ConnectOptions {
@@ -53,7 +53,7 @@ export class WalletAccount implements Account {
     throw new SignerError("WalletAccount.signMessage: not implemented");
   }
 
-  signPsbt(_psbt: Uint8Array, _signInputs?: number[]): Promise<Uint8Array> {
+  signPsbt(_psbt: Uint8Array, _opts?: SignPsbtOptions): Promise<Uint8Array> {
     throw new SignerError("WalletAccount.signPsbt: not implemented");
   }
 }

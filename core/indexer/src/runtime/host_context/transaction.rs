@@ -4,7 +4,7 @@ use wasmtime::component::{Accessor, Resource};
 use crate::runtime::Runtime;
 use crate::runtime::wit::Transaction;
 use crate::runtime::wit::kontor::built_in;
-use crate::runtime::wit::kontor::built_in::context::{OpReturnData, OutPoint};
+use crate::runtime::wit::kontor::built_in::context::{OutPoint, SignerRef};
 
 impl built_in::context::HostTransaction for Runtime {}
 
@@ -36,7 +36,7 @@ impl built_in::context::HostTransactionWithStore for Runtime {
     async fn op_return_data<T>(
         accessor: &Accessor<T, Self>,
         _: Resource<Transaction>,
-    ) -> Result<Option<OpReturnData>> {
+    ) -> Result<Option<SignerRef>> {
         Ok(accessor.with(|mut access| access.get().op_return_data.clone()))
     }
 }

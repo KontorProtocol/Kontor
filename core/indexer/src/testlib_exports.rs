@@ -1,6 +1,6 @@
 pub use crate::{
     logging,
-    reg_tester::RegTester,
+    reg_tester::{ComposeInstsResult, RegTester},
     runtime::{
         CheckedArithmetics, FromWaveValue, WaveType, from_wave_expr, from_wave_value,
         numerics as numbers, to_wave_expr, wave_type,

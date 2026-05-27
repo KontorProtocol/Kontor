@@ -14,7 +14,7 @@ use bitcoin::secp256k1::Message;
 use blst::min_sig::SecretKey as BlsSecretKey;
 use indexer::bls::{BLS_BINDING_PREFIX, KONTOR_BLS_DST, RegistrationProof, SCHNORR_BINDING_PREFIX};
 use indexer::test_utils::bls_test::construct_rogue_g2_pubkey;
-use indexer_types::{Inst, InstKind, PaymentIntent};
+use indexer_types::{Inst, InstKind};
 use testlib::*;
 
 #[testlib::test(contracts_dir = "../../test-contracts", regtest_only)]
@@ -62,7 +62,7 @@ async fn bls_attack_rogue_key_registration_rejected() -> Result<()> {
         .instruction(
             &mut attacker,
             Inst {
-                payment: PaymentIntent::self_pay(10_000),
+                gas_limit: 10_000,
                 kind: InstKind::RegisterBlsKey {
                     bls_pubkey: rogue_pk_bytes.to_vec(),
                     schnorr_sig: schnorr_sig.to_vec(),
@@ -111,7 +111,7 @@ async fn bls_attack_proof_replay_rejected() -> Result<()> {
         .instruction(
             &mut eve,
             Inst {
-                payment: PaymentIntent::self_pay(10_000),
+                gas_limit: 10_000,
                 kind: InstKind::RegisterBlsKey {
                     bls_pubkey: alice.bls_pubkey.to_vec(),
                     schnorr_sig: eve_schnorr_sig.to_vec(),
@@ -172,7 +172,7 @@ async fn bls_attack_valid_schnorr_forged_bls_binding() -> Result<()> {
         .instruction(
             &mut eve,
             Inst {
-                payment: PaymentIntent::self_pay(10_000),
+                gas_limit: 10_000,
                 kind: InstKind::RegisterBlsKey {
                     bls_pubkey: eve_bls_pk.to_bytes().to_vec(),
                     schnorr_sig: schnorr_sig.to_vec(),

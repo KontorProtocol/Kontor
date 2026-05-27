@@ -7,9 +7,7 @@ use indexer_types::{InstKind, OpKind};
 
 use crate::bitcoin_client::types::Acceptance;
 use crate::bitcoin_client::{Client, check_mempool_acceptance};
-use crate::block::{
-    OpMetadataBase, PublisherOffer, filter_map, op_from_aggregate_inst, op_from_direct_inst,
-};
+use crate::block::{TxWalker, filter_map};
 use crate::database;
 use crate::retry::{new_backoff_limited, retry};
 use crate::runtime::ExecutionError;
@@ -251,10 +249,21 @@ impl Executor for RuntimeExecutor {
         tx: &indexer_types::Transaction,
     ) -> Result<Vec<Vec<Option<anyhow::Error>>>> {
         let mut all = Vec::with_capacity(tx.inputs.len());
+        // `TxWalker` owns the cross-input Sponsor state machine + the
+        // payment-override computation; the same instance walks every
+        // input, capturing Sponsor Ops and advancing at each input
+        // boundary. Shared with `block::inspect` so simulate's zip stays
+        // aligned.
+        let mut walker = TxWalker::new();
         for input in &tx.inputs {
-            let op_return_data = tx.op_return_data.get(&(input.input_index as u64)).cloned();
+            let op_return_data = tx
+                .op_return_data
+                .iter()
+                .find(|e| e.input_index as i64 == input.input_index)
+                .map(|e| e.recipient.clone());
             let per_input = process_input(
                 runtime,
+                &mut walker,
                 input,
                 height,
                 Some(tx_id),
@@ -281,25 +290,31 @@ impl Executor for RuntimeExecutor {
     }
 }
 
-/// Process every op in one Bitcoin-input's `Insts`. Returns a positional
-/// vector aligned with `input.insts.ops`: `None` at position i means the
-/// i-th op executed without a deterministic failure; `Some(err)` means
-/// either pre-execution rejection (parse/aggregate/nonce/materialization)
-/// or in-execution deterministic failure (trap/OOG/contract-err/etc.). The
-/// caller decides what to do with the vec — the canonical reactor path
-/// discards it; the simulate handler zips it into the response.
+/// Process every op in one Bitcoin-input's `Insts`. Returns the
+/// positional failure vector aligned with `input.insts.ops` — `None` at
+/// position j means the j-th op executed without a deterministic failure,
+/// `Some(err)` means rejection or in-execution failure. `OpKind::Sponsor`
+/// ops short-circuit `execute_op` (no contract dispatch, no result row
+/// outside this in-memory vec) and contribute `None`.
+///
+/// `walker` carries the cross-input Sponsor state across calls — the
+/// caller (`execute_transaction`) owns it and reuses the same instance
+/// for every input; this function captures any Sponsor in `input` and
+/// advances at the input boundary.
 pub async fn process_input(
     runtime: &mut Runtime,
+    walker: &mut TxWalker,
     input: &indexer_types::Input,
     height: i64,
     tx_id: Option<i64>,
     tx_index: i64,
     txid: bitcoin::Txid,
-    op_return_data: Option<indexer_types::OpReturnData>,
+    op_return_data: Option<indexer_types::SignerRef>,
 ) -> Result<Vec<Option<anyhow::Error>>> {
-    if input.insts.is_aggregate() {
+    let errors = if input.insts.is_aggregate() {
         process_aggregate_input(
             runtime,
+            walker,
             input,
             height,
             tx_id,
@@ -307,10 +322,11 @@ pub async fn process_input(
             txid,
             op_return_data,
         )
-        .await
+        .await?
     } else {
         process_direct_input(
             runtime,
+            walker,
             input,
             height,
             tx_id,
@@ -318,32 +334,33 @@ pub async fn process_input(
             txid,
             op_return_data,
         )
-        .await
-    }
+        .await?
+    };
+    walker.next_input();
+    Ok(errors)
 }
 
 async fn process_direct_input(
     runtime: &mut Runtime,
+    walker: &mut TxWalker,
     input: &indexer_types::Input,
     height: i64,
     tx_id: Option<i64>,
     tx_index: i64,
     txid: bitcoin::Txid,
-    op_return_data: Option<indexer_types::OpReturnData>,
+    op_return_data: Option<indexer_types::SignerRef>,
 ) -> Result<Vec<Option<anyhow::Error>>> {
     let identity = runtime
         .get_or_create_identity(&input.x_only_pubkey.to_string())
         .await?;
 
+    let signer_id = identity.signer_id() as u64;
     let mut errors: Vec<Option<anyhow::Error>> = Vec::with_capacity(input.insts.ops.len());
     for (op_index, inst) in input.insts.ops.iter().enumerate() {
-        let base = OpMetadataBase {
-            previous_output: input.previous_output,
-            input_index: input.input_index,
-            op_index: op_index as i64,
-            signer_id: identity.signer_id() as u64,
-        };
-        let op = match op_from_direct_inst(inst.clone(), base) {
+        // Direct inputs have no publisher — only a cross-input Sponsor
+        // (held in `walker.active`) can override the input signer's
+        // self-pay default. `walker.materialize` handles that internally.
+        let op = match walker.materialize(input, op_index, signer_id, None, inst) {
             Ok(op) => op,
             Err(e) => {
                 warn!("Rejected direct op: {e:#}");
@@ -351,6 +368,14 @@ async fn process_direct_input(
                 continue;
             }
         };
+
+        // Sponsor Op short-circuits — it's a directive, not a contract
+        // call. Its terms have already been captured by `walker.materialize`
+        // and will drive the next input's payment overrides.
+        if matches!(op.kind, OpKind::Sponsor) {
+            errors.push(None);
+            continue;
+        }
 
         runtime
             .set_context(
@@ -374,12 +399,13 @@ async fn process_direct_input(
 
 async fn process_aggregate_input(
     runtime: &mut Runtime,
+    walker: &mut TxWalker,
     input: &indexer_types::Input,
     height: i64,
     tx_id: Option<i64>,
     tx_index: i64,
     txid: bitcoin::Txid,
-    op_return_data: Option<indexer_types::OpReturnData>,
+    op_return_data: Option<indexer_types::SignerRef>,
 ) -> Result<Vec<Option<anyhow::Error>>> {
     let n_ops = input.insts.ops.len();
     let resolved = match crate::bls::verify_aggregate(runtime, &input.insts).await {
@@ -388,6 +414,8 @@ async fn process_aggregate_input(
             warn!("Aggregate verification failed: {e}");
             // Fan the input-wide rejection across every op slot so the
             // positional vector remains length-aligned with input.insts.ops.
+            // Aggregates can't carry `Sponsor` (BLS shape validation rejects),
+            // so the walker has nothing to capture this input.
             let msg = format!("aggregate verification failed: {e:#}");
             return Ok((0..n_ops).map(|_| Some(anyhow::anyhow!("{msg}"))).collect());
         }
@@ -399,19 +427,14 @@ async fn process_aggregate_input(
         .as_ref()
         .expect("aggregate must be present after successful verification");
 
-    // Resolve the publisher offer once if this bulk advertises sponsorship.
-    // The publisher's signer_id is derived from the Bitcoin x_only_pubkey
-    // (ensured into the signers table on first sponsorship).
-    let publisher_offer = if let Some(per_op_limit) = agg.publisher_sponsorship {
+    // Resolve the publisher's signer_id once — payer for any op with
+    // `AggregateSigner.sponsored = true`. The publisher is the Bitcoin
+    // input's x_only_pubkey, ensured into the signers table.
+    let publisher_signer_id = {
         let identity = runtime
             .get_or_create_identity(&input.x_only_pubkey.to_string())
             .await?;
-        Some(PublisherOffer {
-            signer_id: identity.signer_id() as u64,
-            gas_limit_per_op: per_op_limit,
-        })
-    } else {
-        None
+        identity.signer_id() as u64
     };
 
     let mut errors: Vec<Option<anyhow::Error>> = Vec::with_capacity(n_ops);
@@ -468,20 +491,20 @@ async fn process_aggregate_input(
             }
         }
 
-        let base = OpMetadataBase {
-            previous_output: input.previous_output,
-            input_index: input.input_index,
-            op_index: op_index as i64,
-            signer_id,
-        };
-        let op = match op_from_aggregate_inst(inst.clone(), base, publisher_offer) {
-            Ok(op) => op,
-            Err(e) => {
-                warn!("Rejected aggregate op for signer {signer_id}: {e:#}");
-                errors.push(Some(e));
-                continue;
-            }
-        };
+        // `walker.materialize` handles the precedence: cross-input
+        // Sponsor (`walker.active`) wins over the aggregate's per-op
+        // publisher offer, which it computes from `signer.sponsored` +
+        // the publisher's signer_id we pass in. Capture is a no-op in
+        // practice — BLS shape validation rejects Sponsor in aggregates.
+        let op =
+            match walker.materialize(input, op_index, signer_id, Some(publisher_signer_id), inst) {
+                Ok(op) => op,
+                Err(e) => {
+                    warn!("Rejected aggregate op for signer {signer_id}: {e:#}");
+                    errors.push(Some(e));
+                    continue;
+                }
+            };
         errors.push(execute_op(runtime, &op).await?);
     }
     Ok(errors)
@@ -540,6 +563,13 @@ async fn execute_op(
                 Err(e.context("Issuance infrastructure failure"))
             }
         },
+        // Sponsor is a payer-redirection directive: no contract dispatch,
+        // no gas held against the runtime. The per-input loop captures
+        // `op.metadata.payment` from the materialized Op into
+        // `pending_for_next` before reaching `execute_op` (see
+        // `process_direct_input`), so this branch is the no-op success
+        // that keeps the failure vector positionally aligned.
+        OpKind::Sponsor => Ok(None),
         OpKind::RegisterBlsKey {
             bls_pubkey,
             schnorr_sig,

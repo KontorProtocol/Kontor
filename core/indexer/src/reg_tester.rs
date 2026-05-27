@@ -40,8 +40,7 @@ use bitcoin::{
     transaction::Version,
 };
 use indexer_types::{
-    ComposeOutputs, ComposeQuery, Info, Inst, InstKind, InstructionQuery, Insts, OpWithResult,
-    PaymentIntent, ResultRow, RevealOutputs, RevealQuery, TransactionHex, ViewResult,
+    Info, Inst, InstKind, Insts, OpWithResult, ResultRow, RevealOutputs, TransactionHex, ViewResult,
 };
 use tempfile::TempDir;
 use tokio::{
@@ -105,8 +104,13 @@ async fn run_bitcoin(data_dir: &Path) -> Result<(Child, bitcoin_client::Client, 
         );
     }
 
+    // Drop bitcoind's stdout — it inherits the parent's pipe and its
+    // startup writes interleave with kontor's own `println!`s, splitting
+    // long single-line outputs (notably the regtest `KONTOR_REGTEST_INFO`
+    // payload) at noise newlines. stderr is left inherited for debug.
     let process = Command::new("bitcoind")
         .arg(format!("-datadir={}", data_dir.to_string_lossy()))
+        .stdout(std::process::Stdio::null())
         .spawn()?;
     let config = RegtestConfig {
         bitcoin_rpc_url: format!("http://127.0.0.1:{rpc_port}"),
@@ -322,6 +326,13 @@ pub struct SendInstructionResult {
     pub reveal_tx_hex: String,
 }
 
+pub struct ComposeInstsResult {
+    pub commit_transaction: Transaction,
+    pub reveal_transaction: Transaction,
+    pub commit_tx_hex: String,
+    pub reveal_tx_hex: String,
+}
+
 pub struct InstructionResult {
     pub result: ResultRow,
     pub commit_tx_hex: String,
@@ -385,7 +396,7 @@ impl RegTesterInner {
         &mut self,
         ident: &mut Identity,
         inst: Inst,
-    ) -> Result<(ComposeOutputs, String, String)> {
+    ) -> Result<ComposeInstsResult> {
         self.compose_insts(ident, Insts::single(inst)).await
     }
 
@@ -393,31 +404,45 @@ impl RegTesterInner {
         &mut self,
         ident: &mut Identity,
         insts: Insts,
-    ) -> Result<(ComposeOutputs, String, String)> {
-        let instructions = InstructionQuery::builder()
-            .address(ident.address.to_string())
-            .x_only_public_key(ident.x_only_public_key().to_string())
-            .funding_utxo_ids(outpoint_to_utxo_id(&ident.next_funding_utxo.0))
-            .insts(insts)
-            .build();
-        // sat_per_vbyte omitted on purpose — exercises the API's
-        // fastest_fee fallback. Under regtest the published fastest_fee
-        // sits at Fees::floor(1) until the reactor's first tick, so
-        // composes always see a valid (non-zero) rate.
-        let query = ComposeQuery::builder()
-            .instructions(vec![instructions])
-            .build();
-        let mut compose_res = self.kontor_client.compose(query).await?;
+    ) -> Result<ComposeInstsResult> {
+        // Build a Reveal describing the simple commit+reveal pattern:
+        // one participant (this identity) building a commit, with the
+        // reveal having a single Change output back to the participant's
+        // address — the v1 "auto-generated change" behavior, now made
+        // explicit. sat_per_vbyte left None to exercise the API's
+        // fastest_fee fallback (same as the v1 path).
+        let reveal = indexer_types::Reveal {
+            sat_per_vbyte: None,
+            participants: vec![indexer_types::RevealParticipant {
+                x_only_public_key: ident.x_only_public_key().to_string(),
+                commit_insts: insts,
+                output: Some(indexer_types::RevealOutput::Change {
+                    script_pubkey: hex::encode(ident.address.script_pubkey().as_bytes()),
+                }),
+                commit_source: indexer_types::CommitSource::Build {
+                    address: ident.address.to_string(),
+                    funding_utxo_ids: vec![outpoint_to_utxo_id(&ident.next_funding_utxo.0)],
+                },
+            }],
+            extra_inputs: vec![],
+            extra_outputs: vec![],
+        };
+        let compose_outputs = self.kontor_client.compose(reveal).await?;
+
+        // The single Build participant produces one commit tx.
+        let mut commit_transaction = compose_outputs.commits[0].transaction.clone();
+        let mut reveal_transaction = compose_outputs.reveal.transaction.clone();
+
         let secp = Secp256k1::new();
         test_utils::sign_key_spend(
             &secp,
-            &mut compose_res.commit_transaction,
+            &mut commit_transaction,
             std::slice::from_ref(&ident.next_funding_utxo.1),
             &ident.keypair,
             0,
             None,
         )?;
-        let tap_script = &compose_res.per_participant[0].commit_tap_leaf_script.script;
+        let tap_script = &compose_outputs.reveal.commit_tap_leaf_scripts[0].script;
         let taproot_spend_info = TaprootBuilder::new()
             .add_leaf(0, tap_script.clone())
             .map_err(|e| anyhow!("Failed to add leaf: {}", e))?
@@ -426,19 +451,25 @@ impl RegTesterInner {
         test_utils::sign_script_spend(
             &secp,
             &taproot_spend_info,
-            &compose_res.per_participant[0].commit_tap_leaf_script.script,
-            &mut compose_res.reveal_transaction,
-            &[compose_res.commit_transaction.output[0].clone()],
+            tap_script,
+            &mut reveal_transaction,
+            &[commit_transaction.output[0].clone()],
             &ident.keypair,
             0,
         )?;
 
-        let commit_tx_hex = hex::encode(serialize_tx(&compose_res.commit_transaction));
-        let reveal_tx_hex = hex::encode(serialize_tx(&compose_res.reveal_transaction));
+        let commit_tx_hex = hex::encode(serialize_tx(&commit_transaction));
+        let reveal_tx_hex = hex::encode(serialize_tx(&reveal_transaction));
 
         self.mempool_accept(&[commit_tx_hex.clone(), reveal_tx_hex.clone()])
             .await?;
-        Ok((compose_res, commit_tx_hex, reveal_tx_hex))
+
+        Ok(ComposeInstsResult {
+            commit_transaction,
+            reveal_transaction,
+            commit_tx_hex,
+            reveal_tx_hex,
+        })
     }
 
     /// Compose, sign, and send an instruction to the mempool without mining.
@@ -456,29 +487,27 @@ impl RegTesterInner {
         ident: &mut Identity,
         insts: Insts,
     ) -> Result<SendInstructionResult> {
-        let (compose_res, commit_tx_hex, reveal_tx_hex) = self.compose_insts(ident, insts).await?;
-        let reveal_txid = compose_res.reveal_transaction.compute_txid();
+        let composed = self.compose_insts(ident, insts).await?;
+        let reveal_txid = composed.reveal_transaction.compute_txid();
         let txids = self
-            .send_to_mempool(&[commit_tx_hex.clone(), reveal_tx_hex.clone()])
+            .send_to_mempool(&[
+                composed.commit_tx_hex.clone(),
+                composed.reveal_tx_hex.clone(),
+            ])
             .await?;
 
         ident.next_funding_utxo = (
             OutPoint {
                 txid: txids[0],
-                vout: (compose_res.commit_transaction.output.len() - 1) as u32,
+                vout: (composed.commit_transaction.output.len() - 1) as u32,
             },
-            compose_res
-                .commit_transaction
-                .output
-                .last()
-                .unwrap()
-                .clone(),
+            composed.commit_transaction.output.last().unwrap().clone(),
         );
 
         Ok(SendInstructionResult {
             reveal_txid,
-            commit_tx_hex,
-            reveal_tx_hex,
+            commit_tx_hex: composed.commit_tx_hex,
+            reveal_tx_hex: composed.reveal_tx_hex,
         })
     }
 
@@ -673,16 +702,31 @@ impl RegTester {
             .await
     }
 
-    pub async fn compose(&self, query: ComposeQuery) -> Result<ComposeOutputs> {
-        self.inner.lock().await.kontor_client.compose(query).await
+    pub async fn compose(
+        &self,
+        reveal: indexer_types::Reveal,
+    ) -> Result<indexer_types::ComposeOutputs> {
+        self.inner.lock().await.kontor_client.compose(reveal).await
     }
 
-    pub async fn compose_reveal(&self, query: RevealQuery) -> Result<RevealOutputs> {
+    pub async fn compose_commit(
+        &self,
+        reveal: indexer_types::Reveal,
+    ) -> Result<indexer_types::CommitOutputs> {
         self.inner
             .lock()
             .await
             .kontor_client
-            .compose_reveal(query)
+            .compose_commit(reveal)
+            .await
+    }
+
+    pub async fn compose_reveal(&self, reveal: indexer_types::Reveal) -> Result<RevealOutputs> {
+        self.inner
+            .lock()
+            .await
+            .kontor_client
+            .compose_reveal(reveal)
             .await
     }
 
@@ -690,7 +734,7 @@ impl RegTester {
         &mut self,
         ident: &mut Identity,
         inst: Inst,
-    ) -> Result<(ComposeOutputs, String, String)> {
+    ) -> Result<ComposeInstsResult> {
         self.inner
             .lock()
             .await
@@ -702,7 +746,7 @@ impl RegTester {
         &mut self,
         ident: &mut Identity,
         insts: Insts,
-    ) -> Result<(ComposeOutputs, String, String)> {
+    ) -> Result<ComposeInstsResult> {
         self.inner.lock().await.compose_insts(ident, insts).await
     }
 
@@ -1217,6 +1261,62 @@ impl RegTesterCluster {
         self.reg_tester.clone()
     }
 
+    /// Split the dev identity's funding UTXO into `parts` roughly-equal
+    /// outputs back to the dev address, broadcast + mine, and return
+    /// them. Lets independent regtest tests each spend a distinct UTXO
+    /// without colliding on one shared funding output. The dev
+    /// identity's `next_funding_utxo` is left pointing at the first.
+    pub async fn split_dev_funding(&mut self, parts: usize) -> Result<Vec<(OutPoint, TxOut)>> {
+        assert!(parts >= 1, "split_dev_funding: need at least one part");
+        let secp = Secp256k1::new();
+        let (in_point, in_txout) = self.identity.next_funding_utxo.clone();
+        let fee = Amount::from_sat(1000 + parts as u64 * 50);
+        let each = (in_txout.value.to_sat() - fee.to_sat()) / parts as u64;
+        let mut tx = Transaction {
+            version: Version(2),
+            lock_time: LockTime::ZERO,
+            input: vec![TxIn {
+                previous_output: in_point,
+                ..Default::default()
+            }],
+            output: (0..parts)
+                .map(|_| TxOut {
+                    value: Amount::from_sat(each),
+                    script_pubkey: self.identity.address.script_pubkey(),
+                })
+                .collect(),
+        };
+        test_utils::sign_key_spend(
+            &secp,
+            &mut tx,
+            std::slice::from_ref(&in_txout),
+            &self.identity.keypair,
+            0,
+            None,
+        )?;
+        let txid = tx.compute_txid();
+        self.reg_tester
+            .send_to_mempool(&[hex::encode(serialize_tx(&tx))])
+            .await?;
+        self.mine(1).await?;
+        let utxos: Vec<(OutPoint, TxOut)> = tx
+            .output
+            .iter()
+            .enumerate()
+            .map(|(i, o)| {
+                (
+                    OutPoint {
+                        txid,
+                        vout: i as u32,
+                    },
+                    o.clone(),
+                )
+            })
+            .collect();
+        self.identity.next_funding_utxo = utxos[0].clone();
+        Ok(utxos)
+    }
+
     /// Create an independent `RegTester` for a test module. Round-robins across
     /// running nodes. Pops a funding identity from the shared pool. Each returned
     /// `RegTester` has its own websocket, UTXO chain, and publish cache.
@@ -1366,11 +1466,11 @@ impl RegTesterCluster {
             let proof = RegistrationProof::new(&ident.keypair, &ident.bls_secret_key)?;
             let insts = Insts::direct(vec![
                 Inst {
-                    payment: PaymentIntent::self_pay(10_000),
+                    gas_limit: 10_000,
                     kind: InstKind::Issuance,
                 },
                 Inst {
-                    payment: PaymentIntent::self_pay(10_000),
+                    gas_limit: 10_000,
                     kind: InstKind::RegisterBlsKey {
                         bls_pubkey: proof.bls_pubkey.to_vec(),
                         schnorr_sig: proof.schnorr_sig.to_vec(),

@@ -10,7 +10,7 @@
 //! proc-context call returns `result<_, error>::Err`, which classifier
 //! catches via the `"err("` prefix.
 
-use indexer_types::{Inst, InstKind, OpStatus, PaymentIntent, TransactionHex};
+use indexer_types::{Inst, InstKind, OpStatus, TransactionHex};
 use testlib::*;
 
 interface!(
@@ -25,11 +25,11 @@ async fn simulate_call(
     contract: indexer_types::ContractAddress,
     expr: &str,
 ) -> Result<Vec<indexer_types::OpWithResult>> {
-    let (_, _, reveal_tx_hex) = rt
+    let ComposeInstsResult { reveal_tx_hex, .. } = rt
         .compose_instruction(
             ident,
             Inst {
-                payment: PaymentIntent::self_pay(10_000),
+                gas_limit: 10_000,
                 kind: InstKind::Call {
                     contract,
                     expr: expr.to_string(),

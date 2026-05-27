@@ -8,10 +8,14 @@ export {
   numerics,
   serializeInst,
   deserializeInst,
-  serializeOpReturnData,
-  deserializeOpReturnData,
+  encodeOpReturn,
+  decodeOpReturn,
   validateWit,
 } from "./component/kontor-sdk.js";
+// `OpReturnData` / `OpReturnEntry` / `SignerClaim` are intentionally not
+// re-exported here: the indexer wire types of the same name come
+// through `./bindings` below. The codec functions are structural — a
+// caller passes object literals without naming the component types.
 export type {
   ValidationError,
   ValidationResult,
@@ -29,11 +33,21 @@ export type { KontorTransport } from "./json-codec";
 // aggregate — lands with the runtime implementation (work item #13).
 export { KontorSession } from "./session";
 export type { Inst } from "./inst";
+export { ContractBase } from "./contract-base";
+export { Attachment } from "./attach";
+export { Offer, IncomingOffer } from "./offer";
+export type { OfferData, OfferInspection } from "./offer";
 export { HttpTransport, http } from "./transport/http";
-export type { HttpTransportOptions, Utxo } from "./transport/http";
+export type { HttpTransportOptions } from "./transport/http";
+export type { Utxo } from "./json-codec";
 export { signet } from "./chains";
 export type { Chain } from "./chains";
-export type { Account } from "./account/index";
+export type {
+  Account,
+  SighashKind,
+  SignInput,
+  SignPsbtOptions,
+} from "./account/index";
 export { LocalAccount } from "./account/local";
 export type {
   Bip86Indices,

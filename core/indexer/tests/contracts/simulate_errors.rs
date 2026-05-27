@@ -3,7 +3,7 @@
 //! response, with positional alignment across multi-op and multi-input
 //! transactions.
 
-use indexer_types::{Inst, InstKind, Insts, OpWithResult, PaymentIntent, TransactionHex};
+use indexer_types::{Inst, InstKind, Insts, TransactionHex};
 use testlib::*;
 
 interface!(name = "crypto", path = "../../test-contracts/crypto/wit");
@@ -16,11 +16,11 @@ async fn simulate_success_has_no_error_message() -> Result<()> {
 
     let mut rt = runtime.reg_tester().unwrap();
     let mut ident = rt.identity().await?;
-    let (_, _, reveal_tx_hex) = rt
+    let ComposeInstsResult { reveal_tx_hex, .. } = rt
         .compose_instruction(
             &mut ident,
             Inst {
-                payment: PaymentIntent::self_pay(10_000),
+                gas_limit: 10_000,
                 kind: InstKind::Call {
                     contract: crypto.clone().into(),
                     expr: "set-hash(\"foo\")".to_string(),
@@ -58,11 +58,11 @@ async fn simulate_parse_error_surfaces_message() -> Result<()> {
 
     let mut rt = runtime.reg_tester().unwrap();
     let mut ident = rt.identity().await?;
-    let (_, _, reveal_tx_hex) = rt
+    let ComposeInstsResult { reveal_tx_hex, .. } = rt
         .compose_instruction(
             &mut ident,
             Inst {
-                payment: PaymentIntent::self_pay(10_000),
+                gas_limit: 10_000,
                 kind: InstKind::Call {
                     contract: crypto.clone().into(),
                     expr: "this-is-not-valid-wave-syntax(((".to_string(),
@@ -103,11 +103,11 @@ async fn simulate_contract_not_found_surfaces_message() -> Result<()> {
         height: 0,
         tx_index: 0,
     };
-    let (_, _, reveal_tx_hex) = rt
+    let ComposeInstsResult { reveal_tx_hex, .. } = rt
         .compose_instruction(
             &mut ident,
             Inst {
-                payment: PaymentIntent::self_pay(10_000),
+                gas_limit: 10_000,
                 kind: InstKind::Call {
                     contract: bogus,
                     expr: "anything()".to_string(),
@@ -144,26 +144,26 @@ async fn simulate_mixed_outcomes_align_positionally() -> Result<()> {
     let mut rt = runtime.reg_tester().unwrap();
     let mut ident = rt.identity().await?;
     // 3 ops: op 0 succeeds, op 1 is malformed (parse error), op 2 succeeds.
-    let (_, _, reveal_tx_hex) = rt
+    let ComposeInstsResult { reveal_tx_hex, .. } = rt
         .compose_insts(
             &mut ident,
             Insts::direct(vec![
                 Inst {
-                    payment: PaymentIntent::self_pay(10_000),
+                    gas_limit: 10_000,
                     kind: InstKind::Call {
                         contract: crypto.clone().into(),
                         expr: "set-hash(\"a\")".to_string(),
                     },
                 },
                 Inst {
-                    payment: PaymentIntent::self_pay(10_000),
+                    gas_limit: 10_000,
                     kind: InstKind::Call {
                         contract: crypto.clone().into(),
                         expr: "garbage)))".to_string(),
                     },
                 },
                 Inst {
-                    payment: PaymentIntent::self_pay(10_000),
+                    gas_limit: 10_000,
                     kind: InstKind::Call {
                         contract: crypto.clone().into(),
                         expr: "set-hash(\"c\")".to_string(),
@@ -203,108 +203,6 @@ async fn simulate_mixed_outcomes_align_positionally() -> Result<()> {
     Ok(())
 }
 
-/// A materialize-failed op (orphan `Sponsored` on a direct input — no
-/// publisher offer to pay for it) shows up as an `OpWithResult::Rejected`
-/// entry in simulate's response. Positional alignment must hold: position 1
-/// in a `[SelfPay, Sponsored, SelfPay]` input is `Rejected`, and positions
-/// 0 and 2 are successful `Materialized` entries with no misattributed
-/// error message.
-#[testlib::test(contracts_dir = "../../test-contracts", regtest_only)]
-async fn simulate_materialize_fail_surfaces_as_rejected_variant() -> Result<()> {
-    let alice = runtime.identity().await?;
-    let crypto = runtime.publish(&alice, "crypto").await?;
-
-    let mut rt = runtime.reg_tester().unwrap();
-    let mut ident = rt.identity().await?;
-    let (_, _, reveal_tx_hex) = rt
-        .compose_insts(
-            &mut ident,
-            Insts::direct(vec![
-                Inst {
-                    payment: PaymentIntent::self_pay(10_000),
-                    kind: InstKind::Call {
-                        contract: crypto.clone().into(),
-                        expr: "set-hash(\"a\")".to_string(),
-                    },
-                },
-                // Orphan Sponsored on a direct input — no publisher offer
-                // exists, so materialize_op rejects it before execution.
-                Inst {
-                    payment: PaymentIntent::Sponsored,
-                    kind: InstKind::Call {
-                        contract: crypto.clone().into(),
-                        expr: "set-hash(\"b\")".to_string(),
-                    },
-                },
-                Inst {
-                    payment: PaymentIntent::self_pay(10_000),
-                    kind: InstKind::Call {
-                        contract: crypto.clone().into(),
-                        expr: "set-hash(\"c\")".to_string(),
-                    },
-                },
-            ]),
-        )
-        .await?;
-
-    let result = rt
-        .kontor_client()
-        .await
-        .transaction_simulate(TransactionHex { hex: reveal_tx_hex })
-        .await?;
-    assert_eq!(result.len(), 3, "one entry per inst in input.insts.ops");
-
-    // Position 0: materialized + executed cleanly.
-    assert!(
-        matches!(
-            &result[0],
-            OpWithResult::Materialized {
-                result: Some(_),
-                error_message: None,
-                ..
-            }
-        ),
-        "op 0 should be a successful Materialized entry, got {:?}",
-        result[0]
-    );
-
-    // Position 1: rejected at materialization with surfaced error.
-    match &result[1] {
-        OpWithResult::Rejected {
-            input_index,
-            op_index,
-            error_message,
-        } => {
-            assert_eq!(*op_index, 1, "rejected op_index should be 1");
-            assert_eq!(*input_index, 0, "rejected input_index should be 0");
-            let msg = error_message
-                .as_ref()
-                .expect("Rejected via simulate must carry an error_message");
-            assert!(
-                msg.contains("Sponsored"),
-                "rejection reason should mention Sponsored, got: {msg}"
-            );
-        }
-        other => panic!("op 1 should be Rejected, got {other:?}"),
-    }
-
-    // Position 2: materialized + executed cleanly, NOT carrying op 1's error.
-    assert!(
-        matches!(
-            &result[2],
-            OpWithResult::Materialized {
-                result: Some(_),
-                error_message: None,
-                ..
-            }
-        ),
-        "op 2 must be a successful Materialized entry (not carrying op 1's error), got {:?}",
-        result[2]
-    );
-
-    Ok(())
-}
-
 /// Inspect (not simulate) never sets error_message, even after a tx with
 /// failures has actually been processed on chain.
 #[testlib::test(contracts_dir = "../../test-contracts", regtest_only)]
@@ -319,7 +217,7 @@ async fn inspect_never_populates_error_message() -> Result<()> {
         .instruction(
             &mut ident,
             Inst {
-                payment: PaymentIntent::self_pay(10_000),
+                gas_limit: 10_000,
                 kind: InstKind::Call {
                     contract: crypto.clone().into(),
                     expr: "definitely-bad-wave)))".to_string(),
@@ -343,7 +241,7 @@ async fn inspect_never_populates_error_message() -> Result<()> {
     // the message, then confirm inspect's response (against a successful tx
     // we've also submitted) does not.
     let happy_inst = Inst {
-        payment: PaymentIntent::self_pay(10_000),
+        gas_limit: 10_000,
         kind: InstKind::Call {
             contract: crypto.clone().into(),
             expr: "set-hash(\"inspect-check\")".to_string(),

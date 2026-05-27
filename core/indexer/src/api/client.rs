@@ -1,7 +1,7 @@
 use anyhow::{Result, anyhow};
 use indexer_types::{
-    ComposeOutputs, ComposeQuery, ContractResponse, ErrorResponse, Info, OpWithResult,
-    ResultResponse, ResultRow, RevealOutputs, RevealQuery, SignerResponse, TransactionHex,
+    CommitOutputs, ComposeOutputs, ContractResponse, ErrorResponse, Info, OpWithResult,
+    ResultResponse, ResultRow, Reveal, RevealOutputs, SignerResponse, TransactionHex,
     TransactionRow, ViewExpr, ViewResult,
 };
 use reqwest::{Client as HttpClient, ClientBuilder, Response, StatusCode};
@@ -66,22 +66,33 @@ impl Client {
         .await
     }
 
-    pub async fn compose(&self, query: ComposeQuery) -> Result<ComposeOutputs> {
+    pub async fn compose(&self, reveal: Reveal) -> Result<ComposeOutputs> {
         Self::handle_response(
             self.client
                 .post(format!("{}/transactions/compose", &self.url))
-                .json(&query)
+                .json(&reveal)
                 .send()
                 .await?,
         )
         .await
     }
 
-    pub async fn compose_reveal(&self, query: RevealQuery) -> Result<RevealOutputs> {
+    pub async fn compose_commit(&self, reveal: Reveal) -> Result<CommitOutputs> {
+        Self::handle_response(
+            self.client
+                .post(format!("{}/transactions/compose/commit", &self.url))
+                .json(&reveal)
+                .send()
+                .await?,
+        )
+        .await
+    }
+
+    pub async fn compose_reveal(&self, reveal: Reveal) -> Result<RevealOutputs> {
         Self::handle_response(
             self.client
                 .post(format!("{}/transactions/compose/reveal", &self.url))
-                .json(&query)
+                .json(&reveal)
                 .send()
                 .await?,
         )

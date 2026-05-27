@@ -83,19 +83,37 @@ pub async fn post_transaction_broadcast(
         .map_err(|e| HttpError::BadRequest(format!("invalid transaction hex: {e}")))?
         .compute_txid();
 
-    let result = env
-        .bitcoin
-        .submit_package(&transactions)
-        .await
-        .map_err(|e| HttpError::BadRequest(format!("broadcast failed: {e}")))?;
-
-    if result.package_msg != "success" {
-        let detail = result
-            .tx_results
-            .values()
-            .find_map(|r| r.error.clone())
-            .unwrap_or(result.package_msg);
-        return Err(HttpError::BadRequest(format!("package rejected: {detail}")).into());
+    // `submitpackage` (Bitcoin Core 30) only accepts child-with-parents
+    // topology — a single child plus its direct parents. The 2-tx
+    // commit-reveal pair fits; the marketplace swap's 4-tx
+    // `[attachCommit, attachReveal, buyerCommit, swapReveal]` DAG
+    // (swapReveal has two independent roots: attachReveal's parent +
+    // buyerCommit) does not. For larger packages we fall back to
+    // tx-by-tx relay; each Kontor tx funds its own fee (compose sizes
+    // each), so a successful parent followed by a failing child orphans
+    // the parent in mempool until it expires — recoverable, but the
+    // caller sees a half-broadcast state.
+    if transactions.len() <= 2 {
+        let result = env
+            .bitcoin
+            .submit_package(&transactions)
+            .await
+            .map_err(|e| HttpError::BadRequest(format!("broadcast failed: {e}")))?;
+        if result.package_msg != "success" {
+            let detail = result
+                .tx_results
+                .values()
+                .find_map(|r| r.error.clone())
+                .unwrap_or(result.package_msg);
+            return Err(HttpError::BadRequest(format!("package rejected: {detail}")).into());
+        }
+    } else {
+        for raw in &transactions {
+            env.bitcoin
+                .send_raw_transaction(raw)
+                .await
+                .map_err(|e| HttpError::BadRequest(format!("broadcast failed: {e}")))?;
+        }
     }
 
     Ok(BroadcastResult {

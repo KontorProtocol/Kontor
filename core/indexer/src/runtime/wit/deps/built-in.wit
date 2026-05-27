@@ -23,8 +23,9 @@ interface context {
         as-ref: async func() -> holder-ref;
     }
 
-    variant op-return-data {
-        pub-key(string),
+    variant signer-ref {
+        signer-id(u64),
+        x-only-pubkey(string),
     }
 
     record out-point {
@@ -35,7 +36,7 @@ interface context {
     resource transaction {
         id: async func() -> string;
         out-point: async func() -> out-point;
-        op-return-data: async func() -> option<op-return-data>;
+        op-return-data: async func() -> option<signer-ref>;
     }
 
     resource keys {
@@ -79,6 +80,13 @@ interface context {
 
     resource proc-context {
         signer: async func() -> signer;
+        /// Who pays this op's gas. A `holder` (not a `signer`) by design —
+        /// contracts can credit the payer's balance but cannot spend on
+        /// their behalf, since the payer only consented to pay this op's
+        /// gas. Equals `signer.as-holder()` by default; redirected by a
+        /// previous-input `Sponsor` Inst (direct context) or by
+        /// `AggregateSigner.sponsored = true` (aggregate context).
+        payer: async func() -> holder;
         contract-signer: async func() -> signer;
         view-context: async func() -> view-context;
         generate-id: async func() -> string;
@@ -89,6 +97,9 @@ interface context {
 
     resource fall-context {
         signer: async func() -> option<signer>;
+        /// See `proc-context.payer`. `none` when `signer` is also `none`
+        /// (a fall context with no acting signer has no payer either).
+        payer: async func() -> option<holder>;
         proc-context: async func() -> option<proc-context>;
         view-context: async func() -> view-context;
     }

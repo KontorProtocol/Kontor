@@ -1,4 +1,5 @@
-use std::collections::HashSet;
+use std::cmp::Reverse;
+use std::collections::{BinaryHeap, HashMap, HashSet};
 use std::time::Instant;
 
 use anyhow::{Context, Result};
@@ -45,6 +46,96 @@ const FEE_THRESHOLD_MULTIPLIER: f64 = 0.9;
 fn compute_fee_threshold(fee_index: &MempoolFeeIndex) -> u64 {
     let raw = (fee_index.fastest_fee() as f64 * FEE_THRESHOLD_MULTIPLIER) as u64;
     raw.max(fee_index.min_fee())
+}
+
+/// Topologically sort a batch's transactions so a tx that spends another
+/// batch tx's output comes after that producer. The proposer collects
+/// candidate txs from the mempool in arbitrary order; sorting here lets it
+/// propose a batch that already satisfies the dependency-order consensus
+/// rule (`batch_is_ordered`) rather than having peers vote it down.
+///
+/// Returns batch indices in proposal order. Kahn's algorithm, breaking
+/// ties by lowest original index. Falls back to identity order if a cycle
+/// is somehow present (impossible for valid Bitcoin transactions, but the
+/// sort must still total).
+fn dependency_sort(txs: &[bitcoin::Transaction]) -> Vec<usize> {
+    let index_of: HashMap<Txid, usize> = txs
+        .iter()
+        .enumerate()
+        .map(|(i, tx)| (tx.compute_txid(), i))
+        .collect();
+
+    let mut in_degree = vec![0usize; txs.len()];
+    let mut children: Vec<Vec<usize>> = vec![Vec::new(); txs.len()];
+    for (i, tx) in txs.iter().enumerate() {
+        let mut parents: HashSet<usize> = HashSet::new();
+        for input in &tx.input {
+            if let Some(&p) = index_of.get(&input.previous_output.txid)
+                && p != i
+            {
+                parents.insert(p);
+            }
+        }
+        in_degree[i] = parents.len();
+        for p in parents {
+            children[p].push(i);
+        }
+    }
+
+    let mut ready: BinaryHeap<Reverse<usize>> = (0..txs.len())
+        .filter(|&i| in_degree[i] == 0)
+        .map(Reverse)
+        .collect();
+    let mut ordered = Vec::with_capacity(txs.len());
+    while let Some(Reverse(i)) = ready.pop() {
+        ordered.push(i);
+        for &c in &children[i] {
+            in_degree[c] -= 1;
+            if in_degree[c] == 0 {
+                ready.push(Reverse(c));
+            }
+        }
+    }
+
+    if ordered.len() != txs.len() {
+        return (0..txs.len()).collect();
+    }
+    ordered
+}
+
+/// Check that a batch's transactions are in a valid dependency order:
+/// every tx that spends another batch tx's output appears *after* that
+/// producer.
+///
+/// The rule constrains only that parent-before-child relation — it does
+/// not canonicalize the batch. Independent transactions (sharing no UTXO)
+/// may appear in any order, chosen by the proposer. Note this is a
+/// Bitcoin-UTXO dependency, not a contract-state one: two UTXO-independent
+/// txs can still touch the same contract state, so their order — fixed in
+/// the decided value — can change results. That ordering is the
+/// proposer's prerogative, like tx order within a block; the rule enforces
+/// only the structural requirement that an escrow exists before it is
+/// spent (otherwise a detach simply finds nothing to detach).
+///
+/// The dependency-order rule of `ConsensusState::validate_batch`; lives
+/// here next to `dependency_sort`, the proposer-side helper that produces
+/// an order this accepts.
+pub(super) fn batch_is_ordered(txs: &[bitcoin::Transaction]) -> bool {
+    let index_of: HashMap<Txid, usize> = txs
+        .iter()
+        .enumerate()
+        .map(|(i, tx)| (tx.compute_txid(), i))
+        .collect();
+    for (i, tx) in txs.iter().enumerate() {
+        for input in &tx.input {
+            if let Some(&p) = index_of.get(&input.previous_output.txid)
+                && p > i
+            {
+                return false;
+            }
+        }
+    }
+    true
 }
 
 impl<E: Executor> Reactor<E> {
@@ -98,6 +189,9 @@ impl<E: Executor> Reactor<E> {
             return Ok(());
         }
 
+        // Execute in decided order. `validate_batch` enforces dependency
+        // order at propose/accept time, so a decided batch — carrying 2/3+
+        // signatures — is already ordered; no re-sort or re-check here.
         let parsed_txs: Vec<indexer_types::Transaction> = batch_txs
             .iter()
             .map(|btx| {
@@ -270,19 +364,16 @@ impl<E: Executor> Reactor<E> {
             return Ok(None);
         }
 
+        // Propose in dependency order — `pending_transactions` enumerates
+        // in arbitrary order, but `validate_batch` rejects a batch with a
+        // child ahead of its parent, so sort before validating.
+        let order = dependency_sort(&txs);
+        let txs: Vec<bitcoin::Transaction> = order.into_iter().map(|i| txs[i].clone()).collect();
+
         // Batch-level validation (already-processed check will pass since we pre-filtered)
-        let candidate_txids: Vec<String> =
-            txs.iter().map(|tx| tx.compute_txid().to_string()).collect();
         if let Some(reason) = self
             .consensus
-            .validate_batch(
-                &conn,
-                last_height,
-                last_hash,
-                &candidate_txids,
-                last_height,
-                last_hash,
-            )
+            .validate_batch(&conn, last_height, last_hash, &txs, last_height, last_hash)
             .await?
         {
             info!("Not proposing batch: {reason}");
@@ -329,17 +420,13 @@ impl<E: Executor> Reactor<E> {
                 anchor_hash,
                 transactions,
             } => {
-                let txid_strs: Vec<String> = transactions
-                    .iter()
-                    .map(|tx| tx.compute_txid().to_string())
-                    .collect();
                 if let Some(reason) = self
                     .consensus
                     .validate_batch(
                         &conn,
                         *anchor_height,
                         *anchor_hash,
-                        &txid_strs,
+                        transactions,
                         last_height,
                         last_hash,
                     )
@@ -755,5 +842,91 @@ impl<E: Executor> Reactor<E> {
             .map_err(|_| anyhow::anyhow!("Failed to send Finalized reply"))?;
 
         Ok(result)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{batch_is_ordered, dependency_sort};
+    use bitcoin::absolute::LockTime;
+    use bitcoin::transaction::Version;
+    use bitcoin::{Amount, OutPoint, ScriptBuf, Sequence, Transaction, TxIn, TxOut, Witness};
+
+    /// A tx spending each outpoint in `parents`, with one output. `nonce`
+    /// perturbs the output value so distinct txs get distinct txids.
+    fn tx(parents: &[OutPoint], nonce: u64) -> Transaction {
+        Transaction {
+            version: Version::TWO,
+            lock_time: LockTime::ZERO,
+            input: parents
+                .iter()
+                .map(|&previous_output| TxIn {
+                    previous_output,
+                    script_sig: ScriptBuf::new(),
+                    sequence: Sequence::MAX,
+                    witness: Witness::new(),
+                })
+                .collect(),
+            output: vec![TxOut {
+                value: Amount::from_sat(1000 + nonce),
+                script_pubkey: ScriptBuf::new(),
+            }],
+        }
+    }
+
+    /// The first output of `tx`, as an outpoint a child can spend.
+    fn spend(tx: &Transaction) -> OutPoint {
+        OutPoint {
+            txid: tx.compute_txid(),
+            vout: 0,
+        }
+    }
+
+    #[test]
+    fn batch_is_ordered_rejects_child_before_parent() {
+        let parent = tx(&[OutPoint::null()], 1);
+        let child = tx(&[spend(&parent)], 2);
+        assert!(!batch_is_ordered(&[child.clone(), parent.clone()]));
+        assert!(batch_is_ordered(&[parent, child]));
+    }
+
+    #[test]
+    fn batch_is_ordered_accepts_independent_txs_in_any_order() {
+        let a = tx(&[OutPoint::null()], 1);
+        let b = tx(&[OutPoint::null()], 2);
+        assert!(batch_is_ordered(&[a.clone(), b.clone()]));
+        assert!(batch_is_ordered(&[b, a]));
+    }
+
+    #[test]
+    fn dependency_sort_lifts_parent_ahead_of_child() {
+        let parent = tx(&[OutPoint::null()], 1);
+        let child = tx(&[spend(&parent)], 2);
+        // Batch deliberately mis-ordered: child at index 0, parent at 1.
+        let batch = vec![child, parent];
+        let order = dependency_sort(&batch);
+        let position = |i: usize| order.iter().position(|&x| x == i).unwrap();
+        assert!(position(1) < position(0));
+    }
+
+    #[test]
+    fn dependency_sort_resolves_a_three_tx_chain() {
+        let a = tx(&[OutPoint::null()], 1);
+        let b = tx(&[spend(&a)], 2);
+        let c = tx(&[spend(&b)], 3);
+        // Reverse order in — sort must walk it back to a, b, c.
+        let batch = vec![c, b, a];
+        let order = dependency_sort(&batch);
+        assert_eq!(order, vec![2, 1, 0]);
+        let sorted: Vec<Transaction> = order.iter().map(|&i| batch[i].clone()).collect();
+        assert!(batch_is_ordered(&sorted));
+    }
+
+    #[test]
+    fn dependency_sort_preserves_order_of_independent_txs() {
+        let a = tx(&[OutPoint::null()], 1);
+        let b = tx(&[OutPoint::null()], 2);
+        let c = tx(&[OutPoint::null()], 3);
+        assert_eq!(dependency_sort(&[a, b, c]), vec![0, 1, 2]);
     }
 }

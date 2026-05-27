@@ -25,7 +25,7 @@ use bitcoin::{
 
 use indexer::test_utils;
 use indexer::witness_data::TokenBalance;
-use indexer_types::OpReturnData;
+use indexer_types::{OpReturnEntry, SignerRef};
 use indexer_types::{deserialize, serialize};
 use testlib::RegTester;
 use tracing::info;
@@ -120,7 +120,10 @@ pub async fn test_commit_reveal_ordinals(reg_tester: &mut RegTester) -> Result<(
                     op_return_script.push_opcode(OP_RETURN);
                     op_return_script.push_slice(b"kon");
 
-                    let reveal_data = OpReturnData::PubKey(random_xonly_pubkey);
+                    let reveal_data = vec![OpReturnEntry {
+                        input_index: 0,
+                        recipient: SignerRef::XOnlyPubkey(random_xonly_pubkey),
+                    }];
                     op_return_script.push_slice(PushBytesBuf::try_from(serialize(&reveal_data)?)?);
                     op_return_script
                 },

@@ -15,6 +15,38 @@
 
 import type { HolderRef } from "../canonical/HolderRef.js";
 
+/**
+ * Per-input sighash for `signPsbt`. The `Account` interface speaks
+ * these neutral names rather than raw Bitcoin sighash bytes, so a
+ * `WalletAccount` never has to surface `@scure/btc-signer` types
+ * across the wallet boundary.
+ *
+ * - `default` — taproot's implicit sighash; commits to every input and
+ *   output of the transaction.
+ * - `all` — `SIGHASH_ALL`.
+ * - `single-anyonecanpay` — `SIGHASH_SINGLE | ANYONECANPAY`: commits to
+ *   only this input and the output at its index, leaving the rest of
+ *   the transaction open for others to complete. The marketplace
+ *   seller signs the detach input this way.
+ */
+export type SighashKind = "default" | "all" | "single-anyonecanpay";
+
+/** One input to sign, and the sighash to sign it under. */
+export interface SignInput {
+  /** Input index within the PSBT. */
+  index: number;
+  /** Sighash for this input; omitted means `default`. */
+  sighash?: SighashKind;
+}
+
+export interface SignPsbtOptions {
+  /**
+   * Which inputs to sign, and under which sighash. Omit to sign every
+   * input that belongs to this account, each under `default`.
+   */
+  inputs?: SignInput[];
+}
+
 export interface Account {
   /** Taproot x-only public key, lowercase hex. */
   readonly xOnlyPubKey: string;
@@ -35,12 +67,12 @@ export interface Account {
   signMessage(message: string | Uint8Array): Promise<string>;
 
   /**
-   * Sign a PSBT in-place. If `signInputs` is provided, only those
-   * input indices are signed; otherwise the implementation signs every
-   * input that belongs to this account.
+   * Sign a PSBT. With `opts.inputs`, only those inputs are signed, each
+   * under its requested sighash; otherwise every input that belongs to
+   * this account is signed under `default`.
    *
    * Returns the signed PSBT bytes. Implementations don't broadcast —
-   * that's `transport.broadcastTransaction(...)`'s job.
+   * that's the transport's job.
    */
-  signPsbt(psbt: Uint8Array, signInputs?: number[]): Promise<Uint8Array>;
+  signPsbt(psbt: Uint8Array, opts?: SignPsbtOptions): Promise<Uint8Array>;
 }

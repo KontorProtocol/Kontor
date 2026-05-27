@@ -120,6 +120,25 @@ pub fn generate(config: Config) -> TokenStream {
                     holder.as_ref()
                 }
             }
+
+            // `SignerRef` is the two real-account arms of `HolderRef`;
+            // widening it is total. Lets `detach` turn an op-return
+            // recipient into a `HolderRef` (then a `Holder`) directly.
+            #[automatically_derived]
+            impl From<kontor::built_in::context::SignerRef>
+                for kontor::built_in::context::HolderRef
+            {
+                fn from(signer_ref: kontor::built_in::context::SignerRef) -> Self {
+                    match signer_ref {
+                        kontor::built_in::context::SignerRef::SignerId(id) => {
+                            Self::SignerId(id)
+                        }
+                        kontor::built_in::context::SignerRef::XOnlyPubkey(pk) => {
+                            Self::XOnlyPubkey(pk)
+                        }
+                    }
+                }
+            }
         }
     };
 

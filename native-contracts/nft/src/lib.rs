@@ -219,15 +219,23 @@ impl Guest for Nft {
     }
 
     fn detach(ctx: &ProcContext, nft_id: String) -> Result<NftTransfer, Error> {
+        // Recipient = `ctx.payer()`. The reactor's Sponsor mechanism
+        // determines the payer per the override rules:
+        //   - Direct + cross-input Sponsor (swap path): payer = sponsor's
+        //     signer (the buyer) → NFT detaches to the buyer.
+        //   - Direct + no Sponsor (revoke path): payer = signer of this
+        //     input (the seller, who pre-signed the escrow leaf) → NFT
+        //     returns to the seller.
+        // `ctx.payer()` is a Holder (not a Signer) — we can transfer the
+        // NFT to it but not authorize spends on its behalf.
         let src = utxo_holder(ctx.transaction().out_point());
-        let dst: Holder = if let Some(context::OpReturnData::PubKey(pubkey)) =
-            ctx.transaction().op_return_data()
-        {
-            HolderRef::XOnlyPubkey(pubkey).try_into()?
-        } else {
-            (&ctx.signer()).into()
-        };
-        change_owner(ctx, nft_id, src, dst, "nft is not attached to this utxo")
+        change_owner(
+            ctx,
+            nft_id,
+            src,
+            ctx.payer(),
+            "nft is not attached to this utxo",
+        )
     }
 
     fn get_info(ctx: &ViewContext, nft_id: String) -> Option<NftInfo> {

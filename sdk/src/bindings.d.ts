@@ -2,24 +2,26 @@
 
 export type AggregateInfo = {
   /**
-   * One entry per op in `Insts.ops`, in parallel order. Each entry binds
-   * a co-signer claim (existing `signer_id` or fresh x-only `PubKey`) to
-   * the nonce that op claims, which protects BLS aggregate signatures
-   * from replay.
+   * One entry per op in `Insts.ops`, in parallel order. Binds each
+   * co-signer claim (existing `signer_id` or fresh x-only `PubKey`)
+   * to its nonce (replay protection) and to a `sponsored` flag (whether
+   * the publisher pays the op's gas).
    */
   signers: Array<AggregateSigner>;
   signature: Array<number>;
-  /**
-   * Publisher's gas-sponsorship commitment for this bulk.
-   * - `None`: no sponsorship offered. Any op signing `PaymentIntent::Sponsored`
-   *   is rejected.
-   * - `Some(n)`: publisher commits up to `n` per sponsored op. Validated
-   *   `n > 0` in `validate_aggregate_shape`.
-   */
-  publisher_sponsorship: number | null;
 };
 
-export type AggregateSigner = { identity: SignerClaim; nonce: number };
+export type AggregateSigner = {
+  identity: SignerRef;
+  nonce: number;
+  /**
+   * `true` → this op's gas is paid by the publisher (the input's
+   * signer) up to `Inst.gas_limit`. `false` → co-signer self-pays up
+   * to `Inst.gas_limit`. The publisher commits by signing the bulk;
+   * the co-signer commits via their BLS signature contribution.
+   */
+  sponsored: boolean;
+};
 
 export type Block = {
   height: number;
@@ -30,31 +32,57 @@ export type Block = {
 
 export type BlockRow = { height: number; hash: string; relevant: boolean };
 
-export type CommitOutputs = {
-  commit_transaction: string;
-  commit_transaction_hex: string;
-  commit_psbt_hex: string;
-  reveal_inputs: RevealInputs;
+/**
+ * Request body for `POST /api/transactions/broadcast`: raw Bitcoin tx
+ * hex in dependency order (e.g. `[commit, reveal]`), relayed to bitcoind
+ * as a single `submitpackage`.
+ */
+export type BroadcastQuery = { transactions: Array<string> };
+
+/**
+ * Response from `POST /api/transactions/broadcast`: the txid of the last
+ * transaction in the package — the reveal, which carries the Kontor op
+ * and is what callers wait on for results.
+ */
+export type BroadcastResult = { txid: string };
+
+/**
+ * Response from `compose_commit`: one `CommitTx` per Build participant,
+ * plus the input `Reveal` with each Build participant's `CommitSource`
+ * converted to `Existing` (outpoint + prevout filled in from the built
+ * commit). The caller signs + broadcasts the commits, then later passes
+ * the returned `reveal` to `compose_reveal` to build the reveal PSBT.
+ */
+export type CommitOutputs = { commits: Array<CommitTx>; reveal: Reveal };
+
+/**
+ * Whether this participant's commit already exists on chain or needs
+ * to be built by this call.
+ */
+export type CommitSource = {
+  "Existing": { outpoint: string; prevout: TxOutSchema };
+} | { "Build": { address: string; funding_utxo_ids: Array<string> } };
+
+/**
+ * One commit transaction built by `compose_commit` / `compose`. There's
+ * one entry per `CommitSource::Build` participant in the input `Reveal`,
+ * in participant order.
+ */
+export type CommitTx = {
+  transaction: string;
+  transaction_hex: string;
+  psbt_hex: string;
 };
 
+/**
+ * Response from `compose`: built commits (one per Build participant)
+ * plus the built reveal PSBT. The caller signs each commit's input,
+ * signs the reveal's tap-script-spend inputs (using
+ * `RevealOutputs.commit_tap_leaf_scripts`), and broadcasts the package.
+ */
 export type ComposeOutputs = {
-  commit_transaction: string;
-  commit_transaction_hex: string;
-  commit_psbt_hex: string;
-  reveal_transaction: string;
-  reveal_transaction_hex: string;
-  reveal_psbt_hex: string;
-  per_participant: Array<ParticipantScripts>;
-};
-
-export type ComposeQuery = {
-  instructions: Array<InstructionQuery>;
-  /**
-   * Optional: when omitted, the server falls back to its currently
-   * published `fastest_fee` (sat/vB) from `/api/fees`.
-   */
-  sat_per_vbyte: number | null;
-  envelope: number | null;
+  commits: Array<CommitTx>;
+  reveal: RevealOutputs;
 };
 
 /**
@@ -78,6 +106,12 @@ export type ContractListRow = {
 export type ContractResponse = { wit: string };
 
 export type ErrorResponse = { error: string };
+
+/**
+ * A non-Kontor input (key-path spend) bringing extra value into the
+ * reveal — beyond what the tap-leaf participants contribute.
+ */
+export type ExtraInput = { outpoint: string; prevout: TxOutSchema };
 
 export type Fees = {
   /**
@@ -135,7 +169,26 @@ export type Input = {
   insts: Insts;
 };
 
-export type Inst = { payment: PaymentIntent; kind: InstKind };
+export type Inst = {
+  /**
+   * Gas cap for this op. Self-pay default — the input's signer is
+   * charged up to this amount.
+   *
+   * Overridden in two cases:
+   * - Direct context with a previous-input `Sponsor` Inst → the
+   *   Sponsor's own `gas_limit` is the cap and its signer is the payer.
+   * - BLS aggregate with `AggregateSigner.sponsored = true` → the
+   *   publisher (the input's signer) is the payer; `gas_limit` here is
+   *   the cap they signed off on by signing the bulk.
+   *
+   * Otherwise: input signer is payer; `gas_limit` is the cap.
+   *
+   * Sentinel `0` is used for ops the runtime pays for (currently only
+   * `InstKind::Issuance`, which bypasses gas accounting via `Signer::Core`).
+   */
+  gas_limit: number;
+  kind: InstKind;
+};
 
 export type InstKind =
   | { "Publish": { name: string; bytes: Array<number> } }
@@ -147,15 +200,8 @@ export type InstKind =
       schnorr_sig: Array<number>;
       bls_sig: Array<number>;
     };
-  };
-
-export type InstructionQuery = {
-  address: string;
-  x_only_public_key: string;
-  funding_utxo_ids: string;
-  insts: Insts;
-  chained_insts: Insts | null;
-};
+  }
+  | "Sponsor";
 
 export type Insts = { ops: Array<Inst>; aggregate: AggregateInfo | null };
 
@@ -171,7 +217,8 @@ export type OpKind =
       schnorr_sig: Array<number>;
       bls_sig: Array<number>;
     };
-  };
+  }
+  | "Sponsor";
 
 export type OpMetadata = {
   previous_output: string;
@@ -180,6 +227,15 @@ export type OpMetadata = {
   signer_id: number;
   payment: Payment;
 };
+
+/**
+ * One OP_RETURN directive bound to the reveal input it applies to:
+ * where the asset detached by that input's op should land. A
+ * transaction's OP_RETURN payload is a `Vec<OpReturnEntry>` — the
+ * per-input binding kept as a plain list (not a map) so it is fully
+ * expressible in WIT — `list<op-return-entry>`.
+ */
+export type OpReturnEntry = { input_index: number; recipient: SignerRef };
 
 /**
  * What happened when this op ran. Persisted per row in `contract_results`.
@@ -230,20 +286,19 @@ export type PaginationMeta = {
   total_count: number;
 };
 
-export type ParticipantScripts = {
-  address: string;
-  x_only_public_key: string;
-  commit_tap_leaf_script: TapLeafScript;
-  chained_tap_leaf_script: TapLeafScript | null;
-};
-
 /**
  * Resolved per-op execution payment, lives on `OpMetadata`.
  *
- * Built from the co-signer's `PaymentIntent` plus any aggregate-level
- * `publisher_sponsorship` offer. `signer_id` identifies who funds the
- * op's gas (the applicative signer for SelfPay, the publisher for
- * Sponsored). `gas_limit` is the effective fuel cap for execution.
+ * `signer_id` is who funds this op's gas; `gas_limit` is the cap.
+ *
+ * Derived from:
+ * - Direct input, no `Sponsor`: `signer_id` = input signer, `gas_limit` = `Inst.gas_limit`.
+ * - Direct input, prev-input `Sponsor` active: `signer_id` = sponsor's signer,
+ *   `gas_limit` = sponsor's cap (overrides `Inst.gas_limit`).
+ * - Aggregate input, `AggregateSigner.sponsored = false`: `signer_id` =
+ *   co-signer, `gas_limit` = `Inst.gas_limit`.
+ * - Aggregate input, `AggregateSigner.sponsored = true`: `signer_id` =
+ *   publisher (the input's signer), `gas_limit` = `Inst.gas_limit`.
  *
  * `Issuance` carries a sentinel `Payment { signer_id: CORE_SIGNER_ID,
  * gas_limit: 0 }` since it's system-paid via the `Signer::Core` bypass
@@ -251,17 +306,6 @@ export type ParticipantScripts = {
  * itself.
  */
 export type Payment = { signer_id: number; gas_limit: number };
-
-/**
- * Co-signer's payment commitment, signed as part of the Inst.
- *
- * - `SelfPay { limit }`: the co-signer commits up to `limit` from their own
- *   token balance for this op's gas.
- * - `Sponsored`: the co-signer accepts publisher-paid gas. Only meaningful
- *   in BLS aggregate inputs that also carry `AggregateInfo.publisher_sponsorship`;
- *   rejected at validation in any other context.
- */
-export type PaymentIntent = { "SelfPay": { limit: number } } | "Sponsored";
 
 /**
  * One entry in `Info::recent_blocks` — a `BlockRow` trimmed to the
@@ -298,48 +342,85 @@ export type ResultRow = {
   payer_signer_id: number | null;
 };
 
-export type RevealInputs = {
-  commit_tx: string;
-  fee_rate: number;
-  participants: Array<RevealParticipantInputs>;
-  op_return_data: Array<number> | null;
-  envelope: number;
-};
-
-export type RevealOutputs = {
-  transaction: string;
-  transaction_hex: string;
-  psbt_hex: string;
-  participants: Array<ParticipantScripts>;
-};
-
-export type RevealParticipantInputs = {
-  address: string;
-  x_only_public_key: string;
-  commit_outpoint: string;
-  commit_prevout: TxOutSchema;
-  commit_tap_leaf_script: TapLeafScript;
-  chained_instruction: Array<number> | null;
-};
-
-export type RevealParticipantQuery = {
-  address: string;
-  x_only_public_key: string;
-  commit_vout: number;
-  commit_script_data: Array<number>;
-  chained_instruction: Array<number> | null;
-};
-
-export type RevealQuery = {
-  commit_tx_hex: string;
+/**
+ * A complete description of a Kontor reveal tx. Used by `compose`,
+ * `compose_commit`, and `compose_reveal`.
+ */
+export type Reveal = {
   /**
    * Optional: when omitted, the server falls back to its currently
    * published `fastest_fee` (sat/vB) from `/api/fees`.
    */
   sat_per_vbyte: number | null;
-  participants: Array<RevealParticipantQuery>;
-  op_return_data: Array<number> | null;
-  envelope: number | null;
+  participants: Array<RevealParticipant>;
+  extra_inputs: Array<ExtraInput>;
+  extra_outputs: Array<RevealOutput>;
+};
+
+/**
+ * One output kind in a reveal tx. Appears either on a participant
+ * (paired with that input's index, for SACP alignment) or in
+ * `extra_outputs` (appended after all participant outputs in order).
+ *
+ * `Change` is the only variant whose value is computed by the
+ * indexer (= leftover after fees + fixed outputs). It may only appear
+ * at the tx's *last* output position; the indexer errors if a non-last
+ * Change would be sub-dust (skipping it would shift later outputs and
+ * break SACP positioning).
+ */
+export type RevealOutput =
+  | { "Fixed": { script_pubkey: string; value: bigint } }
+  | { "Change": { script_pubkey: string } }
+  | { "ChainedEnvelope": { insts: Insts; value: bigint; internal_key: string } }
+  | { "OpReturn": { data: Array<number> } };
+
+/**
+ * Per-output annotation describing what kind of output occupies each
+ * position in the reveal tx. Mirrors the input `RevealOutput` enum.
+ * The wire shape includes only what the SDK can't derive from the tx
+ * itself; in particular `ChainedEnvelope` carries the tap leaf script
+ * that the chained tap output committed to.
+ */
+export type RevealOutputInfo = "Fixed" | "Change" | {
+  "ChainedEnvelope": { tap_leaf_script: TapLeafScript };
+} | "OpReturn";
+
+export type RevealOutputs = {
+  transaction: string;
+  transaction_hex: string;
+  psbt_hex: string;
+  /**
+   * Per-participant tap leaf script + control block, parallel to the
+   * reveal tx's inputs. Callers need these to assemble the script-path
+   * witness when signing their input.
+   */
+  commit_tap_leaf_scripts: Array<TapLeafScript>;
+  /**
+   * Per-output kind + any extra info, in tx output order (same
+   * length as `transaction.output`). Mirrors the input `RevealOutput`
+   * enum and surfaces info derivable from compose-time state but not
+   * from the tx alone — notably the tap leaf script + control block
+   * for `ChainedEnvelope` outputs, which the caller needs to
+   * script-spend that output in a follow-up tx.
+   */
+  output_info: Array<RevealOutputInfo>;
+};
+
+/**
+ * One participant in the reveal: the tap-leaf script-spend input plus
+ * the output paired with it (placed at the same index, which BIP-341
+ * SIGHASH_SINGLE pre-signed signatures commit to).
+ */
+export type RevealParticipant = {
+  x_only_public_key: string;
+  commit_insts: Insts;
+  /**
+   * Optional. The common seller-offer pattern (chained envelope +
+   * change in extras) leaves this unset; the marketplace swap sets
+   * it to the SACP-paired output (Change for buyer, Fixed for seller).
+   */
+  output: RevealOutput | null;
+  commit_source: CommitSource;
 };
 
 /**
@@ -355,7 +436,7 @@ export type RevealQuery = {
  * which variant is chosen — the variant only controls how to *index*
  * the verification key, not which key.
  */
-export type SignerClaim = { "Id": number } | { "PubKey": string };
+export type SignerRef = { "SignerId": number } | { "XOnlyPubkey": string };
 
 export type SignerResponse = {
   signer_id: number;
@@ -374,7 +455,10 @@ export type Transaction = {
   txid: string;
   index: number;
   inputs: Array<Input>;
-  op_return_data: Record<number, OpReturnData>;
+  /**
+   * OP_RETURN directives, one entry per reveal input that carries one.
+   */
+  op_return_data: Array<OpReturnEntry>;
 };
 
 export type TransactionHex = { hex: string };
