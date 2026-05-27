@@ -30,8 +30,12 @@ pub enum Fuel {
     Set(u64),
     DeleteMatchingPaths(u64),
     ContractAddress,
+    ContractName,
+    ContractHeight,
+    ContractTxIndex,
     ProcSigner,
     ProcPayer,
+    ProcSelf,
     ProcContractSigner,
     ProcViewContext,
     ProcTransaction,
@@ -42,6 +46,7 @@ pub enum Fuel {
     FallProcContext,
     FallViewContext,
     CoreProcContext,
+    CoreSelf,
     CryptoHash(u64),
     CryptoGenerateId,
     AddFile,
@@ -101,8 +106,9 @@ impl Fuel {
             Self::Set(value_len) | Self::Result(value_len) => 200 + 10 * value_len,
             Self::DeleteMatchingPaths(regexp_len) => 1000 + 10 * regexp_len,
             Self::ContractAddress => 100,
+            Self::ContractName | Self::ContractHeight | Self::ContractTxIndex => 50,
             Self::ProcSigner | Self::ProcContractSigner | Self::ProcTransaction => 500,
-            Self::ProcPayer => 500,
+            Self::ProcPayer | Self::ProcSelf => 500,
             Self::ProcViewContext => 200,
             Self::ProcStorage => 200,
             Self::ViewStorage => 200,
@@ -110,7 +116,8 @@ impl Fuel {
             | Self::FallPayer
             | Self::FallProcContext
             | Self::FallViewContext
-            | Self::CoreProcContext => 100,
+            | Self::CoreProcContext
+            | Self::CoreSelf => 100,
             Self::CryptoHash(input_len) => 500 + 10 * input_len,
             Self::CryptoGenerateId => 500,
             Self::AddFile => 500,

@@ -1,6 +1,7 @@
 use crate::runtime::Runtime;
 use crate::runtime::wit::kontor::built_in;
 
+mod contract;
 mod core_context;
 mod fall_context;
 mod holder;

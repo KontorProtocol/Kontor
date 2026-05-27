@@ -5,8 +5,8 @@ use wasmtime::component::{Accessor, Resource};
 
 use crate::runtime::wit::kontor::built_in::context::HolderRef;
 use crate::runtime::wit::{
-    CoreContext, FallContext, Holder, Keys, ProcContext, ProcStorage, Signer, Transaction,
-    ViewContext, ViewStorage,
+    Contract, CoreContext, FallContext, Holder, Keys, ProcContext, ProcStorage, Signer,
+    Transaction, ViewContext, ViewStorage,
 };
 use crate::runtime::{ContractAddress, Runtime, fuel::Fuel, hash_bytes};
 
@@ -68,6 +68,48 @@ impl Runtime {
         let mut table = self.table.lock().await;
         let payer = table.get(&self_)?.payer.clone();
         Ok(table.push(payer)?)
+    }
+
+    pub(super) async fn _proc_self<T>(
+        &self,
+        accessor: &Accessor<T, Self>,
+        self_: Resource<ProcContext>,
+    ) -> Result<Resource<Contract>> {
+        Fuel::ProcSelf
+            .consume(accessor, self.gauge.as_ref())
+            .await?;
+        let contract_id = {
+            let table = self.table.lock().await;
+            table.get(&self_)?.contract_id
+        };
+        let address = self
+            .storage
+            .contract_address(contract_id)
+            .await?
+            .ok_or_else(|| anyhow::anyhow!("contract_id {contract_id} has no address"))?;
+        let mut table = self.table.lock().await;
+        Ok(table.push(Contract { address })?)
+    }
+
+    pub(super) async fn _core_self<T>(
+        &self,
+        accessor: &Accessor<T, Self>,
+        self_: Resource<CoreContext>,
+    ) -> Result<Resource<Contract>> {
+        Fuel::CoreSelf
+            .consume(accessor, self.gauge.as_ref())
+            .await?;
+        let contract_id = {
+            let table = self.table.lock().await;
+            table.get(&self_)?.contract_id
+        };
+        let address = self
+            .storage
+            .contract_address(contract_id)
+            .await?
+            .ok_or_else(|| anyhow::anyhow!("contract_id {contract_id} has no address"))?;
+        let mut table = self.table.lock().await;
+        Ok(table.push(Contract { address })?)
     }
 
     pub(super) async fn _proc_contract_signer<T>(

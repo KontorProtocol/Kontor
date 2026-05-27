@@ -3,6 +3,25 @@ package kontor:built-in;
 interface context {
     use error.{error};
 
+    /// Active proof of "I am the contract at this address." The address
+    /// fields (`name`, `height`, `tx-index`) match `foreign.contract-address`
+    /// (the freely-constructible record used for cross-contract calls) —
+    /// same HolderRef/Holder split: the record is the passive reference,
+    /// this resource is the integrity-bound proof.
+    ///
+    /// Only the host can construct a `contract`; contracts obtain one
+    /// via `proc-context.self` / `core-context.self`. Returning a
+    /// `contract` from `init` is how a contract proves which address it
+    /// is — there's no way to fabricate one pointing at another contract.
+    /// Once a `contract` crosses the result-row boundary the host drains
+    /// it to a `foreign.contract-address` record for WAVE serialization;
+    /// integrity is in-execution only.
+    resource contract {
+        name: async func() -> string;
+        height: async func() -> u64;
+        tx-index: async func() -> u64;
+    }
+
     variant holder-ref {
         x-only-pubkey(string),
         signer-id(u64),
@@ -93,6 +112,12 @@ interface context {
         storage: async func() -> proc-storage;
         transaction: async func() -> transaction;
         block-height: async func() -> u64;
+        /// The executing contract's own identity as a `contract` resource —
+        /// the only way for the contract to obtain one pointing at itself.
+        /// Returned from `init` so the new contract's address surfaces on
+        /// the publish op's result row; usable by any proc-context method
+        /// that needs to assert "I am the contract at <address>."
+        self: async func() -> contract;
     }
 
     resource fall-context {
@@ -108,6 +133,9 @@ interface context {
         proc-context: async func() -> proc-context;
         signer-proc-context: async func() -> proc-context;
         core-signer: async func() -> signer;
+        /// See `proc-context.self`. Native contracts running as core also
+        /// need an integrity-bound handle to their own identity.
+        self: async func() -> contract;
     }
 }
 

@@ -85,6 +85,7 @@ pub fn import(
         if let Some(name) = def.name.as_deref() {
             ![
                 "transaction",
+                "contract",
                 "contract-address",
                 "view-context",
                 "view-storage",
