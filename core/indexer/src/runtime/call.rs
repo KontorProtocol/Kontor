@@ -616,9 +616,13 @@ async fn val_to_wave(
                 .map_err(|e| {
                     anyhow!("function returned a resource that is not a `contract`: {e}")
                 })?;
-            let table = table.lock().await;
-            let contract = table.get(&handle)?;
-            Ok(stdlib::to_wave_expr(contract.address.clone()))
+            // Drain the resource: `delete` removes the entry from the
+            // table and returns the owned `Contract`. `get` would only
+            // borrow, leaving the entry in the `ResourceTable` for the
+            // pooled runtime's lifetime — once per publish, accumulating.
+            let mut table = table.lock().await;
+            let contract = table.delete(handle)?;
+            Ok(stdlib::to_wave_expr(contract.address))
         }
         other => other.to_wave().map_err(Into::into),
     }
