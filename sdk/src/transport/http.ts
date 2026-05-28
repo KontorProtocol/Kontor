@@ -103,10 +103,12 @@ export interface HttpTransportOptions {
    */
   utxos?: Utxo[] | (() => Promise<Utxo[]>);
   /**
-   * Override automatic fee estimation. Number = fixed sats/vB; function
-   * = called per-submit. Default: read from a mempool feerate endpoint.
+   * Default Bitcoin fee rate in sat/vB. Omit (or `null`) to let the
+   * indexer pick its current `fastest_fee` when composing. Static —
+   * if you need per-call control, compose your own Reveal and pass
+   * `sat_per_vbyte` directly.
    */
-  feeRate?: number | (() => Promise<number>);
+  feeRate?: number;
   /**
    * Override automatic gas estimation. Default: simulate the call first
    * and use the reported gas + a small buffer.
@@ -300,7 +302,7 @@ export class HttpTransport implements KontorTransport {
       p2tr(hex.decode(account.xOnlyPubKey), undefined, this.opts.chain.network).script,
     );
     return {
-      sat_per_vbyte: await this.feeRate(),
+      sat_per_vbyte: this.opts.feeRate ?? null,
       participants: [
         {
           x_only_public_key: account.xOnlyPubKey,
@@ -334,14 +336,56 @@ export class HttpTransport implements KontorTransport {
    * neither is touched — those UTXOs aren't actually spent.
    */
   async submit(insts: WireInsts): Promise<BroadcastResult> {
-    return this.lock.runExclusive(async () => {
-      const suppliedUtxos = await this.utxos();
-      const reveal = await this.buildSimpleReveal(insts, suppliedUtxos);
+    const { result } = await this.submitReveal(async (utxos) => {
+      const reveal = await this.buildSimpleReveal(insts, utxos);
       const { commitHex, revealTx, composed } = await this.composeAndSign(reveal);
+      return {
+        commitHexes: commitHex ? [commitHex] : [],
+        revealTx,
+        composed,
+      };
+    });
+    return result;
+  }
+
+  /**
+   * The only blessed broadcast path for funding-state-mutating txs.
+   * See `KontorTransport.submitReveal` for the full contract.
+   *
+   * Body holds `this.lock` for the entire critical section: read
+   * `utxos()` consistently, hand them to the `prepare` callback to
+   * shape the Reveal + compose+sign (and inject any foreign reveal
+   * witness), then extract → broadcast → `advanceTracking` — all
+   * before the lock is released. Two concurrent callers serialize.
+   */
+  async submitReveal(
+    prepare: (utxos: Utxo[]) => Promise<{
+      commitHexes: string[];
+      revealTx: Transaction;
+      composed: ComposeOutputs;
+    }>,
+  ): Promise<{
+    result: BroadcastResult;
+    commitHexes: string[];
+    revealHex: string;
+    composed: ComposeOutputs;
+  }> {
+    return this.lock.runExclusive(async () => {
+      const utxos = await this.utxos();
+      const { commitHexes, revealTx, composed } = await prepare(utxos);
       const revealHex = hex.encode(revealTx.extract());
-      const result = await this.broadcast([commitHex, revealHex]);
-      this.advanceTracking({ suppliedUtxos, composed, commitHex, revealHex });
-      return result;
+      const result = await this.broadcast([...commitHexes, revealHex]);
+      // advanceTracking today inspects a single commit (≤1 commits
+      // across all flows). When multi-commit flows arrive it'll
+      // generalize to iterate `commitHexes`; the prefix-of-suppliedUtxos
+      // model still applies per commit.
+      this.advanceTracking({
+        suppliedUtxos: utxos,
+        composed,
+        commitHex: commitHexes[0] ?? "",
+        revealHex,
+      });
+      return { result, commitHexes, revealHex, composed };
     });
   }
 
@@ -481,12 +525,6 @@ export class HttpTransport implements KontorTransport {
     );
   }
 
-  /** Fee rate in sat/vB, or `null` to let the indexer pick `fastest_fee`. */
-  async feeRate(): Promise<number | null> {
-    const f = this.opts.feeRate;
-    if (f == null) return null;
-    return typeof f === "number" ? f : await f();
-  }
 }
 
 /**

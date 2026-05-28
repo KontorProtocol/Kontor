@@ -151,13 +151,6 @@ export interface KontorTransport {
   utxos(): Promise<Utxo[]>;
 
   /**
-   * sat/vB to use when composing. `null` means "let the indexer pick its
-   * current `fastest_fee`". Higher-level flows populate
-   * `Reveal.sat_per_vbyte` with this.
-   */
-  feeRate(): Promise<number | null>;
-
-  /**
    * Combined compose: build any commits required by Build participants,
    * then build the reveal PSBT. All-Existing Reveals skip commit building.
    * Used by the attach/detach runtime to assemble the full commit/reveal
@@ -197,6 +190,43 @@ export interface KontorTransport {
   composeAndSign(reveal: Reveal): Promise<{
     commitHex: string;
     revealTx: Transaction;
+    composed: ComposeOutputs;
+  }>;
+
+  /**
+   * The only blessed broadcast path for funding-state-mutating txs.
+   * Holds the transport's internal lock for the full body, so two
+   * concurrent callers serialize naturally — no race on `utxos()`,
+   * the broadcast, or the tracking update.
+   *
+   * The `prepare` callback runs *inside* the lock with a consistent
+   * snapshot of `utxos()`. It owns the Reveal shape, the
+   * compose+sign work (via `composeAndSign`), and any foreign-witness
+   * injection on `revealTx` before this method extracts. Returning
+   * `{commitHexes, revealTx, composed}` hands the prepared package
+   * back; `submitReveal` extracts the reveal, broadcasts
+   * `[...commitHexes, revealHex]` as a Bitcoin package, and advances
+   * funding tracking — all atomically.
+   *
+   * Multi-commit (0..N) is the natural package shape; today every
+   * SDK flow has 0 or 1 commits (`revoke` is the no-commit case).
+   *
+   * Adding a new submission flow? Route it through here — there is
+   * no other safe broadcast path for funding-state-mutating txs.
+   * `broadcast`/`advanceTracking` exist as primitives but using them
+   * directly bypasses the lock; only `inspect`/`simulate` (read-only)
+   * are safe outside.
+   */
+  submitReveal(
+    prepare: (utxos: Utxo[]) => Promise<{
+      commitHexes: string[];
+      revealTx: Transaction;
+      composed: ComposeOutputs;
+    }>,
+  ): Promise<{
+    result: BroadcastResult;
+    commitHexes: string[];
+    revealHex: string;
     composed: ComposeOutputs;
   }>;
 

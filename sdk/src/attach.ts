@@ -71,37 +71,43 @@ export class Attachment<T> {
     const sellerScriptPubKey = hex.encode(
       p2tr(hex.decode(account.xOnlyPubKey), undefined, this.session.chain.network).script,
     );
-    const utxos = await transport.utxos();
-    const reveal: Reveal = {
-      sat_per_vbyte: await transport.feeRate(),
-      participants: [
-        {
-          x_only_public_key: account.xOnlyPubKey,
-          commit_insts: attachWire,
-          output: null,
-          commit_source: {
-            Build: {
-              address: account.address,
-              funding_utxo_ids: utxos.map((u) => `${u.txid}:${u.vout}`),
+    // Route through `submitReveal` so utxos/compose/sign/broadcast/track
+    // run as one atomic block — no race with a concurrent `submit` or
+    // marketplace flow on the same transport.
+    const { composed, revealHex: attachRevealHex } = await transport.submitReveal(
+      async (utxos) => {
+        const reveal: Reveal = {
+          sat_per_vbyte: this.session.feeRate,
+          participants: [
+            {
+              x_only_public_key: account.xOnlyPubKey,
+              commit_insts: attachWire,
+              output: null,
+              commit_source: {
+                Build: {
+                  address: account.address,
+                  funding_utxo_ids: utxos.map((u) => `${u.txid}:${u.vout}`),
+                },
+              },
             },
-          },
-        },
-      ],
-      extra_inputs: [],
-      extra_outputs: [
-        {
-          ChainedEnvelope: {
-            insts: detachWire,
-            value: 600n,
-            internal_key: account.xOnlyPubKey,
-          },
-        },
-        { Change: { script_pubkey: sellerScriptPubKey } },
-      ],
-    };
-    const { commitHex, revealTx, composed } =
-      await transport.composeAndSign(reveal);
-    const attachRevealHex = hex.encode(revealTx.extract());
+          ],
+          extra_inputs: [],
+          extra_outputs: [
+            {
+              ChainedEnvelope: {
+                insts: detachWire,
+                value: 600n,
+                internal_key: account.xOnlyPubKey,
+              },
+            },
+            { Change: { script_pubkey: sellerScriptPubKey } },
+          ],
+        };
+        const { commitHex, revealTx, composed } =
+          await transport.composeAndSign(reveal);
+        return { commitHexes: [commitHex], revealTx, composed };
+      },
+    );
 
     // The chained detach leaf script (for the future buyer to spend the
     // escrow output) lives on output 0 of the reveal — same position as
@@ -124,17 +130,6 @@ export class Attachment<T> {
       detachLeaf,
       price: opts.price,
       network: this.session.chain.network,
-    });
-
-    // Broadcast the attach + advance funding tracking so subsequent
-    // calls (revoke, accept) see the spent-bootstrap / new-change view
-    // through `transport.utxos()` like any other submit.
-    await transport.broadcast([commitHex, attachRevealHex]);
-    transport.advanceTracking?.({
-      suppliedUtxos: utxos,
-      composed,
-      commitHex,
-      revealHex: attachRevealHex,
     });
 
     const data: OfferData = {

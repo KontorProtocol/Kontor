@@ -115,14 +115,6 @@ export class Offer {
     const { data } = this;
     const { account, chain, transport } = this.session;
 
-    const fundingUtxos = await transport.utxos();
-    if (fundingUtxos.length === 0) {
-      throw new SignerError(
-        "revoke: transport has no spendable UTXOs for the detach fee",
-        { docsPath: "/sdk/offer" },
-      );
-    }
-
     // The escrow — the attach reveal's output 0.
     const attachReveal = Transaction.fromRaw(hex.decode(data.attachReveal), LENIENT_TX);
     const escrow = attachReveal.getOutput(0);
@@ -131,53 +123,58 @@ export class Offer {
         docsPath: "/sdk/offer",
       });
     }
+    // Capture narrowed values into locals — the closure below loses
+    // TypeScript's non-null narrowing across its async boundary.
+    const escrowScript = escrow.script;
+    const escrowAmount = escrow.amount;
 
     const sellerScriptPubKey = hex.encode(
       p2tr(hex.decode(account.xOnlyPubKey), undefined, chain.network).script,
     );
+
     // Build a single-participant Existing Reveal: the participant's
     // input is the escrow (script-path via the detach leaf, derived by
     // the indexer from `detachInsts`); the seller's funding UTXOs ride
     // as `extra_inputs` (key-path) to cover the Bitcoin fee. No
     // Sponsor → `ctx.payer()` resolves to the signer (the seller), so
-    // `detach` credits the asset back to them. Compose handles fee +
-    // change layout the same as any other call.
-    const reveal: Reveal = {
-      sat_per_vbyte: await transport.feeRate(),
-      participants: [
-        {
-          x_only_public_key: account.xOnlyPubKey,
-          commit_insts: data.detachInsts,
-          output: { Change: { script_pubkey: sellerScriptPubKey } },
-          commit_source: {
-            Existing: {
-              outpoint: `${attachReveal.id}:0`,
-              prevout: {
-                value: Number(escrow.amount),
-                script_pubkey: hex.encode(escrow.script),
+    // `detach` credits the asset back to them. submitReveal serializes
+    // the whole compose/sign/broadcast/track sequence under the lock.
+    const { result } = await transport.submitReveal(async (fundingUtxos) => {
+      if (fundingUtxos.length === 0) {
+        throw new SignerError(
+          "revoke: transport has no spendable UTXOs for the detach fee",
+          { docsPath: "/sdk/offer" },
+        );
+      }
+      const reveal: Reveal = {
+        sat_per_vbyte: this.session.feeRate,
+        participants: [
+          {
+            x_only_public_key: account.xOnlyPubKey,
+            commit_insts: data.detachInsts,
+            output: { Change: { script_pubkey: sellerScriptPubKey } },
+            commit_source: {
+              Existing: {
+                outpoint: `${attachReveal.id}:0`,
+                prevout: {
+                  value: Number(escrowAmount),
+                  script_pubkey: hex.encode(escrowScript),
+                },
               },
             },
           },
-        },
-      ],
-      extra_inputs: fundingUtxos.map((u) => ({
-        outpoint: `${u.txid}:${u.vout}`,
-        prevout: {
-          value: Number(u.value),
-          script_pubkey: u.scriptPubKey,
-        },
-      })),
-      extra_outputs: [],
-    };
-
-    const { revealTx, composed } = await transport.composeAndSign(reveal);
-    const revealHex = hex.encode(revealTx.extract());
-    const result = await transport.broadcast([revealHex]);
-    transport.advanceTracking?.({
-      suppliedUtxos: fundingUtxos,
-      composed,
-      commitHex: "",
-      revealHex,
+        ],
+        extra_inputs: fundingUtxos.map((u) => ({
+          outpoint: `${u.txid}:${u.vout}`,
+          prevout: {
+            value: Number(u.value),
+            script_pubkey: u.scriptPubKey,
+          },
+        })),
+        extra_outputs: [],
+      };
+      const { revealTx, composed } = await transport.composeAndSign(reveal);
+      return { commitHexes: [], revealTx, composed };
     });
     return result;
   }
@@ -280,16 +277,6 @@ export class IncomingOffer {
     const { data } = this;
     const { account, chain, transport } = this.session;
 
-    // Buyer's funding for the Sponsor commit comes from the transport
-    // — the same place every other call sources its UTXOs.
-    const buyerUtxos = await transport.utxos();
-    if (buyerUtxos.length === 0) {
-      throw new SignerError(
-        "accept: transport has no spendable UTXOs for the buyer's commit",
-        { docsPath: "/sdk/offer" },
-      );
-    }
-
     // The seller's pre-signed detach PSBT: escrow at input 1, price at
     // output 1. The buyer extracts the SACP witness, the escrow's
     // prevout (for `CommitSource::Existing`), and the price-payout
@@ -320,85 +307,89 @@ export class IncomingOffer {
     );
     const escrowOutpoint = `${hex.encode(escrowIn.txid)}:${escrowIn.index}`;
     const escrowPrevoutScript = hex.encode(escrowIn.witnessUtxo.script);
+    // Capture the narrowed escrow values into locals so the closure
+    // below doesn't lose TypeScript's non-null narrowing across its
+    // async boundary.
+    const escrowAmount = escrowIn.witnessUtxo.amount;
+    const priceScript = priceOut.script;
+    const priceAmount = priceOut.amount;
 
-    // Build the swap Reveal:
-    //   participant 0 — buyer, Build with a Sponsor inst, paired
-    //     Change so the buyer's leftover funding returns to them.
-    //   participant 1 — seller, Existing (escrow), paired Fixed payout
-    //     matching what the seller pre-signed (output 1 → price → seller).
-    const reveal: Reveal = {
-      sat_per_vbyte: await transport.feeRate(),
-      participants: [
-        {
-          x_only_public_key: buyerXOnly,
-          commit_insts: {
-            ops: [{ gas_limit: 50_000, kind: "Sponsor" }],
-            aggregate: null,
-          },
-          output: { Change: { script_pubkey: buyerScriptPubKey } },
-          commit_source: {
-            Build: {
-              address: account.address,
-              funding_utxo_ids: buyerUtxos.map((u) => `${u.txid}:${u.vout}`),
+    // submitReveal holds the lock for compose/sign/broadcast/track.
+    // Inside the prepare callback we build the 2-participant Reveal,
+    // composeAndSign (signs the buyer's input 0; leaves seller's
+    // input 1 untouched because its `tap_internal_key` is foreign),
+    // then inject the seller's pre-signed SACP witness onto input 1.
+    // `submitReveal` then extracts and broadcasts atomically.
+    const { result } = await transport.submitReveal(async (buyerUtxos) => {
+      if (buyerUtxos.length === 0) {
+        throw new SignerError(
+          "accept: transport has no spendable UTXOs for the buyer's commit",
+          { docsPath: "/sdk/offer" },
+        );
+      }
+      // Build the swap Reveal:
+      //   participant 0 — buyer, Build with a Sponsor inst, paired
+      //     Change so the buyer's leftover funding returns to them.
+      //   participant 1 — seller, Existing (escrow), paired Fixed
+      //     payout matching what the seller pre-signed.
+      const reveal: Reveal = {
+        sat_per_vbyte: this.session.feeRate,
+        participants: [
+          {
+            x_only_public_key: buyerXOnly,
+            commit_insts: {
+              ops: [{ gas_limit: 50_000, kind: "Sponsor" }],
+              aggregate: null,
             },
-          },
-        },
-        {
-          x_only_public_key: data.seller,
-          commit_insts: data.detachInsts,
-          output: {
-            Fixed: {
-              script_pubkey: hex.encode(priceOut.script),
-              value: priceOut.amount,
-            },
-          },
-          commit_source: {
-            Existing: {
-              outpoint: escrowOutpoint,
-              prevout: {
-                value: Number(escrowIn.witnessUtxo.amount),
-                script_pubkey: escrowPrevoutScript,
+            output: { Change: { script_pubkey: buyerScriptPubKey } },
+            commit_source: {
+              Build: {
+                address: account.address,
+                funding_utxo_ids: buyerUtxos.map((u) => `${u.txid}:${u.vout}`),
               },
             },
           },
-        },
-      ],
-      extra_inputs: [],
-      extra_outputs: [],
-    };
-
-    // Compose + sign in one pass: composeAndSign returns the swap
-    // reveal as a parsed Transaction with the buyer's input 0
-    // finalized; input 1 (seller's escrow, foreign `tap_internal_key`)
-    // is left untouched. We inject the seller's pre-signed SACP
-    // witness, then extract.
-    const { commitHex: buyerCommitHex, revealTx: swapTx, composed } =
-      await transport.composeAndSign(reveal);
-    if (composed.commits.length !== 1) {
-      throw new SignerError(
-        `accept: expected 1 commit, got ${composed.commits.length}`,
-        { docsPath: "/sdk/offer" },
-      );
-    }
-    swapTx.updateInput(1, {
-      finalScriptWitness: [
-        sellerSig,
-        hex.decode(data.detachLeaf.script),
-        hex.decode(data.detachLeaf.controlBlock),
-      ],
-    });
-
-    const swapTxHex = hex.encode(swapTx.extract());
-    const result = await transport.broadcast([buyerCommitHex, swapTxHex]);
-    // Advance the transport's funding tracker — buyer's commit consumed
-    // a prefix of `buyerUtxos`, swap reveal's Change is the next
-    // spendable UTXO. Without this, the buyer's next op from this
-    // transport would try to re-spend the bootstrap.
-    transport.advanceTracking?.({
-      suppliedUtxos: buyerUtxos,
-      composed,
-      commitHex: buyerCommitHex,
-      revealHex: swapTxHex,
+          {
+            x_only_public_key: data.seller,
+            commit_insts: data.detachInsts,
+            output: {
+              Fixed: {
+                script_pubkey: hex.encode(priceScript),
+                value: priceAmount,
+              },
+            },
+            commit_source: {
+              Existing: {
+                outpoint: escrowOutpoint,
+                prevout: {
+                  value: Number(escrowAmount),
+                  script_pubkey: escrowPrevoutScript,
+                },
+              },
+            },
+          },
+        ],
+        extra_inputs: [],
+        extra_outputs: [],
+      };
+      const { commitHex, revealTx: swapTx, composed } =
+        await transport.composeAndSign(reveal);
+      if (composed.commits.length !== 1) {
+        throw new SignerError(
+          `accept: expected 1 commit, got ${composed.commits.length}`,
+          { docsPath: "/sdk/offer" },
+        );
+      }
+      // Inject the seller's pre-signed SACP witness onto input 1
+      // before submitReveal extracts.
+      swapTx.updateInput(1, {
+        finalScriptWitness: [
+          sellerSig,
+          hex.decode(data.detachLeaf.script),
+          hex.decode(data.detachLeaf.controlBlock),
+        ],
+      });
+      return { commitHexes: [commitHex], revealTx: swapTx, composed };
     });
     return result;
   }

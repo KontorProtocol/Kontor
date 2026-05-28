@@ -60,11 +60,10 @@ function stubSession(): KontorSession {
     simulate: fail,
     submit: fail,
     utxos: fail,
-    feeRate: fail,
     compose: fail,
-    composeCommit: fail,
-    composeReveal: fail,
+    composeAndSign: fail,
     broadcast: fail,
+    submitReveal: fail,
   };
   const session = new KontorSession({
     chain: signet,

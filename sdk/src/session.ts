@@ -50,9 +50,14 @@ export interface KontorSessionOptions {
   /**
    * Override the default `HttpTransport`. Useful for tests (swap in a
    * mock) or for custom backends that proxy through a different
-   * protocol.
+   * protocol. `feeRate` mirrors `KontorSessionOptions.feeRate` so a
+   * custom transport can honor the session-level default.
    */
-  transport?: (opts: { chain: Chain; account: Account }) => KontorTransport;
+  transport?: (opts: {
+    chain: Chain;
+    account: Account;
+    feeRate: number | null;
+  }) => KontorTransport;
   /**
    * `fetch` implementation for the results poller. Inject a mock in
    * tests; defaults to `globalThis.fetch`.
@@ -72,6 +77,14 @@ export interface KontorSessionOptions {
    * cursor; `filter` narrows the stream. Omit for "follow from the tip".
    */
   events?: EventsOptions;
+  /**
+   * Default Bitcoin fee rate in sat/vB, applied to every Reveal the
+   * SDK composes (single submits, attach/offer/revoke/accept). Omit to
+   * let the indexer pick its current `fastest_fee`. Power users wanting
+   * a per-call override can compose their own Reveal via
+   * `transport.composeAndSign` + `transport.submitReveal`.
+   */
+  feeRate?: number;
 }
 
 /**
@@ -97,6 +110,9 @@ export class KontorSession {
   readonly transport: KontorTransport;
   /** Default gas cap for proc `Inst`s; see `KontorSessionOptions`. */
   readonly defaultGasLimit: bigint;
+  /** Default sat/vB for every Reveal the SDK composes; `null` = let the
+   *  indexer pick its current `fastest_fee`. */
+  readonly feeRate: number | null;
   /**
    * The session's results poller — one shared loop, started here in the
    * constructor. Backs `events()` and (later) `inst.submit().wait()`.
@@ -107,10 +123,16 @@ export class KontorSession {
     this.chain = opts.chain;
     this.account = opts.account;
     this.defaultGasLimit = opts.defaultGasLimit ?? DEFAULT_GAS_LIMIT;
+    this.feeRate = opts.feeRate ?? null;
     const make =
       opts.transport ??
-      (({ chain, account }) => new HttpTransport({ chain, account }));
-    this.transport = make({ chain: opts.chain, account: opts.account });
+      (({ chain, account, feeRate }) =>
+        new HttpTransport({ chain, account, feeRate: feeRate ?? undefined }));
+    this.transport = make({
+      chain: opts.chain,
+      account: opts.account,
+      feeRate: this.feeRate,
+    });
     this.poller = new ResultsPoller({
       baseUrl: opts.chain.urls.http,
       fetch: opts.fetch ?? globalThis.fetch.bind(globalThis),
