@@ -32,13 +32,12 @@ import type { Chain } from "../chains.js";
 import type { ContractAddress } from "../canonical/ContractAddress.js";
 import { ChainError, ContractError, TransportError } from "../errors.js";
 import { signCommit, signReveal } from "./signing.js";
-import {
-  bigIntReplacer,
-  type BroadcastResult,
-  type KontorTransport,
-  type OpResultRaw,
-  type Utxo,
-  type WireInsts,
+import type {
+  BroadcastResult,
+  KontorTransport,
+  OpResultRaw,
+  Utxo,
+  WireInsts,
 } from "../json-codec.js";
 import type {
   ComposeOutputs,
@@ -220,7 +219,7 @@ export class HttpTransport implements KontorTransport {
       res = await this.fetchImpl(url, {
         method: "POST",
         headers: { "content-type": "application/json", ...this.opts.headers },
-        body: JSON.stringify(body, bigIntReplacer),
+        body: JSON.stringify(body),
       });
     } catch (cause) {
       throw new TransportError(`POST ${url} failed`, {

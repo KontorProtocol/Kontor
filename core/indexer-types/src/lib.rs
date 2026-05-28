@@ -172,7 +172,11 @@ pub struct ExtraInput {
 #[ts(export, export_to = "../../../sdk/src/bindings.d.ts")]
 pub enum RevealOutput {
     /// Fixed-value output. Caller specifies the exact value.
-    Fixed { script_pubkey: String, value: u64 },
+    Fixed {
+        script_pubkey: String,
+        #[ts(type = "number")]
+        value: u64,
+    },
     /// Auto-computed change. Value = sum(inputs) − sum(other outputs) − fee.
     /// Must be the last output of the tx; sub-dust is silently dropped.
     Change { script_pubkey: String },
@@ -181,6 +185,7 @@ pub enum RevealOutput {
     /// sat amount.
     ChainedEnvelope {
         insts: Insts,
+        #[ts(type = "number")]
         value: u64,
         internal_key: String,
     },
@@ -387,7 +392,7 @@ pub struct OutPoint {
 #[ts(export, export_to = "../../../sdk/src/bindings.d.ts")]
 pub enum HolderRef {
     XOnlyPubkey(String),
-    SignerId(u64),
+    SignerId(#[ts(type = "number")] u64),
     Core,
     Burner,
     Utxo(OutPoint),
@@ -889,7 +894,6 @@ pub struct ResultRow {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[ts(export, export_to = "../../../sdk/src/bindings.d.ts")]
 pub struct OpReturnEntry {
-    #[ts(type = "number")]
     pub input_index: u32,
     pub recipient: SignerRef,
 }

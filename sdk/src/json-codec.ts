@@ -37,31 +37,6 @@
  */
 import type { Transaction } from "@scure/btc-signer";
 
-/**
- * `JSON.stringify` replacer that serializes `bigint` as a plain JSON
- * number. ts-rs maps Rust `u64` to TS `bigint` for precision, but the
- * Kontor wire is a JSON number — sat amounts and gas / nonce values
- * fit comfortably inside `Number.MAX_SAFE_INTEGER` (2^53 ≈ 9e15, vs
- * total BTC supply 2.1e15 sats), so the round-trip is lossless. Errors
- * on values outside that range.
- *
- * Single source of truth used at every site that JSON-stringifies a
- * Kontor wire object with bigint fields — `HttpTransport` POSTs, the
- * aggregate signing/verify wasm calls, and the per-Inst signing flow.
- */
-export function bigIntReplacer(_key: string, value: unknown): unknown {
-  if (typeof value !== "bigint") return value;
-  if (
-    value > BigInt(Number.MAX_SAFE_INTEGER) ||
-    value < BigInt(Number.MIN_SAFE_INTEGER)
-  ) {
-    throw new TypeError(
-      `cannot serialize bigint ${value} as JSON number (outside safe integer range)`,
-    );
-  }
-  return Number(value);
-}
-
 import type { ContractAddress } from "./canonical/ContractAddress.js";
 import type {
   ComposeOutputs,

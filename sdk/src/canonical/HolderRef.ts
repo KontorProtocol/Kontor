@@ -14,7 +14,7 @@
  */
 
 /** A UTXO reference: txid is hex, vout is the output index. */
-export type OutPoint = { txid: string; vout: bigint };
+export type OutPoint = { txid: string; vout: number };
 
 type Variant =
   | { kind: "x-only-pubkey"; value: string }
@@ -23,7 +23,7 @@ type Variant =
   | { kind: "burner" }
   | { kind: "utxo"; value: OutPoint };
 
-type RawOutPoint = { txid: string; vout: string };
+type RawOutPoint = { txid: string; vout: number };
 
 type Raw =
   | { kind: "x-only-pubkey"; value: string }
@@ -68,7 +68,7 @@ export class HolderRef {
       case "utxo":
         return HolderRef.utxo({
           txid: raw.value.txid,
-          vout: BigInt(raw.value.vout),
+          vout: raw.value.vout,
         });
     }
   }
@@ -87,7 +87,7 @@ export class HolderRef {
       case "utxo":
         return {
           kind: "utxo",
-          value: { txid: v.value.txid, vout: v.value.vout.toString() },
+          value: { txid: v.value.txid, vout: v.value.vout },
         };
     }
   }

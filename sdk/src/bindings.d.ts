@@ -144,7 +144,7 @@ export type Fees = {
 
 export type HolderRef =
   | { "XOnlyPubkey": string }
-  | { "SignerId": bigint }
+  | { "SignerId": number }
   | "Core"
   | "Burner"
   | { "Utxo": OutPoint };
@@ -383,9 +383,9 @@ export type Reveal = {
  * break SACP positioning).
  */
 export type RevealOutput =
-  | { "Fixed": { script_pubkey: string; value: bigint } }
+  | { "Fixed": { script_pubkey: string; value: number } }
   | { "Change": { script_pubkey: string } }
-  | { "ChainedEnvelope": { insts: Insts; value: bigint; internal_key: string } }
+  | { "ChainedEnvelope": { insts: Insts; value: number; internal_key: string } }
   | { "OpReturn": { data: Array<number> } };
 
 /**

@@ -96,7 +96,7 @@ export class Attachment<T> {
             {
               ChainedEnvelope: {
                 insts: detachWire,
-                value: 600n,
+                value: 600,
                 internal_key: account.xOnlyPubKey,
               },
             },

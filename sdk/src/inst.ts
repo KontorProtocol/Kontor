@@ -44,11 +44,10 @@ import type {
 import { ContractAddress } from "./canonical/ContractAddress.js";
 import { ContractError, SignerError, TransportError } from "./errors.js";
 import type { ChainEvent } from "./events.js";
-import {
-  bigIntReplacer,
-  type BroadcastResult,
-  type OpResult,
-  type OpResultRaw,
+import type {
+  BroadcastResult,
+  OpResult,
+  OpResultRaw,
 } from "./json-codec.js";
 import type { KontorSession } from "./session.js";
 
@@ -289,7 +288,7 @@ export class Inst<T> implements PromiseLike<T> {
 
     const wireInst = instToWire(this);
     const claimJson = JSON.stringify({ XOnlyPubkey: account.xOnlyPubKey });
-    const instJson = JSON.stringify(wireInst, bigIntReplacer);
+    const instJson = JSON.stringify(wireInst);
 
     const msg = aggregateSigningMessage(claimJson, nonce, sponsored, instJson);
     const sig = blsKey.signBls(msg);

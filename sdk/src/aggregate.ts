@@ -34,7 +34,7 @@ import {
   blsVerify,
 } from "./component/kontor-sdk.js";
 import { SignerError } from "./errors.js";
-import { bigIntReplacer, type WireInst } from "./json-codec.js";
+import type { WireInst } from "./json-codec.js";
 
 /**
  * Wire shape of a fragment — exactly what `serialize()` emits as
@@ -114,7 +114,7 @@ export class AggregateFragment {
     const claimJson = JSON.stringify({
       XOnlyPubkey: this.data.signerXOnlyPubKey,
     });
-    const instJson = JSON.stringify(this.data.inst, bigIntReplacer);
+    const instJson = JSON.stringify(this.data.inst);
     const msg = aggregateSigningMessage(
       claimJson,
       BigInt(this.data.nonce),
