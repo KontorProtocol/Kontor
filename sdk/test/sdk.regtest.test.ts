@@ -37,25 +37,20 @@ import {
 } from "@kontor/sdk";
 import { connectRegtest } from "@kontor/sdk/regtest";
 import { Contract as Token } from "./__generated__/token.js";
-import { Contract as Counter } from "./__generated__/counter.js";
 import "./regtest-context.js";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 
-/** Brotli-compressed counter wasm — what the indexer's `Storage`
+/** Brotli-compressed token wasm — what the indexer's `Storage`
  *  expects on `insert_contract` (it decompresses via
- *  `component_bytes`). Built by `test-contracts/build.sh`. */
-const COUNTER_WASM_BR = readFileSync(
-  path.join(
-    here,
-    "..",
-    "..",
-    "test-contracts",
-    "target",
-    "wasm32-unknown-unknown",
-    "release",
-    "counter.wasm.br",
-  ),
+ *  `component_bytes`). We use the native token binary (committed at
+ *  `native-contracts/binaries/`) rather than a test-contract wasm
+ *  built ad-hoc, so CI doesn't have to build `test-contracts/`
+ *  before running the SDK regtest. Publishing this wasm creates a
+ *  fresh, independent token instance at a runtime-assigned address —
+ *  different storage from the genesis `token@0.0`. */
+const TOKEN_WASM_BR = readFileSync(
+  path.join(here, "..", "..", "native-contracts", "binaries", "token.wasm.br"),
 );
 
 /** How many whole tokens `b` is below `a` — used by the revoke phase
@@ -81,9 +76,12 @@ test("SDK capstone: publish, transfer, bulk, marketplace", async () => {
       await session.ready();
       // Broadcast the publish, force the containing block — Publish's
       // result address depends on block height — then wait for the
-      // result row.
+      // result row. Publishing the native token wasm a second time
+      // produces a fresh instance at a runtime-assigned address with
+      // its own storage; it doesn't collide with the genesis
+      // `token@0.0`.
       const submitted = await session
-        .publish("kontor-tested-counter", new Uint8Array(COUNTER_WASM_BR))
+        .publish("republished-token", new Uint8Array(TOKEN_WASM_BR))
         .submit();
       await regtest.mine();
       const result = await submitted.wait();
@@ -94,12 +92,16 @@ test("SDK capstone: publish, transfer, bulk, marketplace", async () => {
           `publish returned no address; result=${JSON.stringify(result)}`,
         );
       }
-      expect(address.name).toBe("kontor-tested-counter");
+      expect(address.name).toBe("republished-token");
       expect(address.height).toBeGreaterThan(0n);
 
-      // Confirm init ran.
-      const counter = session.bind(Counter, address);
-      expect(await counter.get()).toBe(0n);
+      // Confirm init ran by binding `Token` to the new instance and
+      // reading a known-empty initial state: a fresh token contract
+      // has no balances issued, so `balance(...)` for the publisher
+      // returns null (or "0").
+      const token = session.bind(Token, address);
+      const bal = await token.balance(account.holderRef);
+      expect(bal == null || bal.toString() === "0").toBe(true);
     } finally {
       session.close();
     }

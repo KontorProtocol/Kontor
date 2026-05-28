@@ -8,14 +8,10 @@
  */
 import type { GlobalSetupContext } from "vitest/node";
 import { startRegtest, type Regtest } from "./src/regtest.js";
-import {
-  generateCounterBindings,
-  generateTokenBindings,
-} from "./vitest.globalSetup.js";
+import { generateTokenBindings } from "./vitest.globalSetup.js";
 
 export default async function setup({ provide }: GlobalSetupContext) {
   generateTokenBindings();
-  generateCounterBindings();
 
   const devnet: Regtest = await startRegtest({
     kontorBin: process.env.KONTOR_BIN ?? "../core/target/release/kontor",
