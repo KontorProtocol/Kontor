@@ -25,11 +25,11 @@ pub async fn insert_batch(
     Ok(())
 }
 
-pub async fn delete_batches_above_anchor(conn: &Connection, max_anchor: i64) -> Result<u64, Error> {
+pub async fn delete_batches_above_anchor(conn: &Connection, max_anchor: u64) -> Result<u64, Error> {
     let rows = conn
         .execute(
             "DELETE FROM batches WHERE anchor_height > ?",
-            params![max_anchor],
+            params![Value::try_from(max_anchor)?],
         )
         .await?;
 
@@ -57,7 +57,7 @@ pub async fn select_batch(
     Ok(results.into_iter().next())
 }
 
-pub async fn select_min_batch_height(conn: &Connection) -> Result<Option<i64>, Error> {
+pub async fn select_min_batch_height(conn: &Connection) -> Result<Option<u64>, Error> {
     let mut rows = conn
         .query("SELECT MIN(consensus_height) FROM batches", params![])
         .await?;
@@ -66,20 +66,20 @@ pub async fn select_min_batch_height(conn: &Connection) -> Result<Option<i64>, E
         return Ok(None);
     };
 
-    Ok(row.get::<Option<i64>>(0)?)
+    Ok(row.get::<Option<u64>>(0)?)
 }
 
 pub async fn select_batches_from_anchor(
     conn: &Connection,
-    from_anchor: i64,
+    from_anchor: u64,
 ) -> Result<Vec<BatchQueryResult>, Error> {
     query_batches(conn, &format!("WHERE b.anchor_height >= {from_anchor}")).await
 }
 
 pub async fn select_batches_in_range(
     conn: &Connection,
-    start: i64,
-    end: i64,
+    start: u64,
+    end: u64,
 ) -> Result<Vec<BatchQueryResult>, Error> {
     query_batches(
         conn,

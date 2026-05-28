@@ -138,7 +138,7 @@ impl LiteExecutor {
                 )
                 .await;
             let payment = indexer_types::Payment {
-                signer_id: signer.signer_id().expect("test signer must have id") as u64,
+                signer_id: signer.signer_id().expect("test signer must have id"),
                 gas_limit: runtime.gas_limit_for_non_procs,
             };
             runtime

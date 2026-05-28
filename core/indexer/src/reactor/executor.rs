@@ -354,7 +354,7 @@ async fn process_direct_input(
         .get_or_create_identity(&input.x_only_pubkey.to_string())
         .await?;
 
-    let signer_id = identity.signer_id() as u64;
+    let signer_id = identity.signer_id();
     let mut errors: Vec<Option<anyhow::Error>> = Vec::with_capacity(input.insts.ops.len());
     for (op_index, inst) in input.insts.ops.iter().enumerate() {
         // Direct inputs have no publisher — only a cross-input Sponsor

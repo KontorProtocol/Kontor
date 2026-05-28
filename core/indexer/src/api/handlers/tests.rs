@@ -99,7 +99,7 @@ async fn register_user(runtime: &mut Runtime) -> Result<RegisteredUser> {
         .expect("signer entry must exist after registration");
 
     Ok(RegisteredUser {
-        signer_id: entry.signer_id as u64,
+        signer_id: entry.signer_id,
         x_only_pubkey: x_only.to_string(),
         bls_pubkey: proof.bls_pubkey.to_vec(),
     })

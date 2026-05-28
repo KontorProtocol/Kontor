@@ -216,7 +216,7 @@ pub async fn verify_aggregate(runtime: &mut Runtime, insts: &Insts) -> Result<Ag
                     .get_or_create_identity(&pk.to_string())
                     .await
                     .map_err(|e| anyhow!("resolving SignerRef::XOnlyPubkey: {e}"))?;
-                (identity.signer_id() as u64, Some(pk.to_string()))
+                (identity.signer_id(), Some(pk.to_string()))
             }
         };
 

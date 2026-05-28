@@ -296,7 +296,7 @@ impl Runtime {
         let signer = res.signer.clone();
         // Core→Proc promotion: system context, no payer override applies.
         // Payer = signer-as-holder (the Core signer pays itself).
-        let payer = Holder::for_signer_id(signer.signer_id().unwrap_or(0) as u64);
+        let payer = Holder::for_signer_id(signer.signer_id().unwrap_or(0));
         Ok(table.push(ProcContext {
             contract_id,
             signer: Signer::Core(Box::new(signer)),
@@ -332,7 +332,7 @@ impl Runtime {
         let signer = res.signer.clone();
         // Same as `_core_proc_context` but the signer is the inner signer,
         // not wrapped in `Signer::Core`. Payer = signer-as-holder.
-        let payer = Holder::for_signer_id(signer.signer_id().unwrap_or(0) as u64);
+        let payer = Holder::for_signer_id(signer.signer_id().unwrap_or(0));
         Ok(table.push(ProcContext {
             contract_id,
             signer,

@@ -135,7 +135,7 @@ impl ConsensusState {
         // Delete batch decisions that reference anchor heights above what we've
         // actually processed. These were committed to the batches table but never
         // executed before the node shut down.
-        if let Ok(deleted) = delete_batches_above_anchor(&conn, last_block_height as i64).await
+        if let Ok(deleted) = delete_batches_above_anchor(&conn, last_block_height).await
             && deleted > 0
         {
             info!(
@@ -381,7 +381,7 @@ impl ConsensusState {
         conn: &libsql::Connection,
         from_anchor: u64,
     ) -> Result<Vec<DeferredDecision>> {
-        let batches = select_batches_from_anchor(conn, from_anchor as i64)
+        let batches = select_batches_from_anchor(conn, from_anchor)
             .await
             .context("Failed to query batches from anchor")?;
 
@@ -489,7 +489,7 @@ impl ConsensusState {
         start: Height,
         end: Height,
     ) -> Result<Vec<(Value, crate::consensus::CommitCertificate<Ctx>)>> {
-        let batches = select_batches_in_range(conn, start.as_u64() as i64, end.as_u64() as i64)
+        let batches = select_batches_in_range(conn, start.as_u64(), end.as_u64())
             .await
             .context("Failed to query batches for sync range")?;
 
@@ -517,7 +517,7 @@ impl ConsensusState {
         Ok(select_min_batch_height(conn)
             .await
             .context("Failed to query min batch height")?
-            .map(|h| Height::new(h as u64)))
+            .map(Height::new))
     }
 
     /// Run finality checks. Returns (rollback_anchor, excluded_txids) if a rollback is needed.

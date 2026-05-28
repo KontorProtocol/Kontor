@@ -212,7 +212,7 @@ impl Holder {
                     .get_or_create_identity(&pk.to_string())
                     .await
                     .map_err(|e| Error::Validation(format!("identity resolution failed: {e}")))?;
-                holder_ref = HolderRef::SignerId(identity.signer_id() as u64);
+                holder_ref = HolderRef::SignerId(identity.signer_id());
             }
             HolderRef::SignerId(_) => {}
             HolderRef::Utxo(out_point) => {
