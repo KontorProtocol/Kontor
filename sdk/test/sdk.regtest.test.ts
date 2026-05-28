@@ -19,6 +19,11 @@
  *      buyer.
  *   5. `offer + revoke` — seller's escape hatch: detach the asset
  *      back to themselves, balance round-trips minus a sliver of gas.
+ *   6. `registerBls` — mint a fresh account, JS-generate a BlsKey,
+ *      submit `session.registerBls(blsKey)`, then query the indexer's
+ *      `/signers/{xonly}` endpoint and assert it carries the bls_pubkey
+ *      we just registered. Exercises the bls-crypto wasm bridge end-
+ *      to-end: schnorr/BLS proof bytes produced in JS verify on chain.
  *
  * Runs via `npm run test:regtest` / `npm run test:regtest:browser`;
  * pure HTTP client, so it works in Node and the browser alike.
@@ -29,12 +34,14 @@ import { fileURLToPath } from "node:url";
 
 import { test, expect, inject } from "vitest";
 import {
+  BlsKey,
   Decimal,
   KontorSession,
   LocalAccount,
   Result,
   http,
 } from "@kontor/sdk";
+import { hex } from "@scure/base";
 import { connectRegtest } from "@kontor/sdk/regtest";
 import { Contract as Token } from "./__generated__/token.js";
 import "./regtest-context.js";
@@ -284,6 +291,57 @@ test("SDK capstone: publish, transfer, bulk, marketplace", async () => {
       const lost = deficit(before!, after!);
       expect(lost).toBeGreaterThan(0); // gas was paid — the ops really ran
       expect(lost).toBeLessThan(1); // the 2 tokens returned, not stranded
+    } finally {
+      session.close();
+    }
+  }
+
+  // ─── Phase 6 — BLS validator registration ───────────────────────
+  {
+    // Mint a fresh account funded from accounts[6]'s slot. The
+    // pre-created pool entries already have a BLS pubkey registered
+    // (the regtest binary registers them deterministically via the
+    // Rust EIP-2333 path), so re-registering them with a freshly
+    // JS-generated key would fail "already registered". A fresh
+    // account has no BLS row yet, so this exercises the full path.
+    const sourceAccount = regtest.accounts[6]!.account;
+    const { account, fundingUtxo } = await regtest.createAccount({
+      sats: 200_000n,
+      sourceUtxo: regtest.accounts[6]!.fundingUtxo,
+      sourceAccount,
+    });
+    const session = new KontorSession({
+      chain,
+      account,
+      transport: ({ chain, account }) =>
+        http({ chain, account, utxos: [fundingUtxo] }),
+    });
+    try {
+      await session.ready();
+
+      // Issuance is system-paid, so the fresh account picks up tokens
+      // without needing any prior balance. RegisterBlsKey is NOT
+      // system-paid — it goes through `registry.registered()` and
+      // charges gas — so the account needs a balance before the
+      // registration call.
+      const issued = await session.issuance().submit();
+      expect((await issued.wait()).status).toBe("Ok");
+
+      const blsKey = BlsKey.generate();
+      await session.registerBls(blsKey);
+
+      // Read back the signer entry and assert the chain stored exactly
+      // the bls_pubkey we just produced in JS.
+      const res = await fetch(
+        `${regtest.apiUrl}/signers/${account.xOnlyPubKey}`,
+      );
+      expect(res.ok).toBe(true);
+      const body = (await res.json()) as {
+        result: { bls_pubkey: number[] | null };
+      };
+      expect(body.result.bls_pubkey).not.toBeNull();
+      const storedHex = hex.encode(new Uint8Array(body.result.bls_pubkey!));
+      expect(storedHex).toBe(hex.encode(blsKey.pubkey));
     } finally {
       session.close();
     }

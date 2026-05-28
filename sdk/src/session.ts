@@ -33,6 +33,7 @@
 
 import { ContractAddress } from "./canonical/ContractAddress.js";
 import type { Account } from "./account/index.js";
+import { BlsKey, buildRegistrationProof } from "./bls.js";
 import type { Chain } from "./chains.js";
 import { ContractError } from "./errors.js";
 import { Inst, type InstDecoder } from "./inst.js";
@@ -187,6 +188,36 @@ export class KontorSession {
       { kind: "Publish", name, bytes },
       decodeContractAddressWave,
     );
+  }
+
+  /**
+   * Register the BLS public key behind `blsKey` for this session's
+   * account, broadcasting + waiting for confirmation. After this
+   * resolves, the indexer's signer entry for this account carries
+   * `bls_pubkey` and the account can participate in BLS-aggregate
+   * flows.
+   *
+   * Single high-level call rather than "build the Inst, submit it" —
+   * the intermediate `Inst<void>` can't be safely returned across an
+   * `async` boundary because awaiting `Promise<Inst<void>>` would
+   * chain into the Inst's own PromiseLike submit semantics. Aggregate
+   * flows that want the Inst (without broadcasting) will get a
+   * different non-thenable handle when that work lands.
+   */
+  async registerBls(blsKey: BlsKey): Promise<void> {
+    const proof = await buildRegistrationProof(this.account, blsKey);
+    const inst = new Inst<void>(
+      this,
+      this.defaultGasLimit,
+      {
+        kind: "RegisterBlsKey",
+        blsPubkey: proof.blsPubkey,
+        schnorrSig: proof.schnorrSig,
+        blsSig: proof.blsSig,
+      },
+      () => undefined,
+    );
+    await inst;
   }
 
   /**

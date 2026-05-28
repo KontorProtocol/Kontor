@@ -30,6 +30,7 @@ const stubAccount: Account = {
   holderRef: HolderRef.xOnlyPubkey(STUB_XONLY),
   signMessage: () => Promise.reject(new Error("stub")),
   signPsbt: () => Promise.reject(new Error("stub")),
+  signSchnorr: () => Promise.reject(new Error("stub")),
   runExclusive: (fn) => fn(),
 };
 

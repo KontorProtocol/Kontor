@@ -289,8 +289,11 @@ export function rawToOpResult<T>(
 }
 
 function unwrapOrThrow<T>(r: OpResult<T>): T {
-  if (r.status === "Ok" && r.value !== undefined) {
-    return r.value;
+  // `value` is absent for void-returning Insts (Issuance, RegisterBlsKey)
+  // even on success — gate solely on status so awaiting `inst<void>`
+  // resolves to undefined rather than throwing.
+  if (r.status === "Ok") {
+    return r.value as T;
   }
   throw new ContractError(`contract call failed with status: ${r.status}`, {
     details: r.error,
