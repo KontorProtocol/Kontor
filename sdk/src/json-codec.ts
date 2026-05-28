@@ -195,9 +195,10 @@ export interface KontorTransport {
 
   /**
    * The only blessed broadcast path for funding-state-mutating txs.
-   * Holds the transport's internal lock for the full body, so two
-   * concurrent callers serialize naturally — no race on `utxos()`,
-   * the broadcast, or the tracking update.
+   * Holds the account's lock for the full body, so two concurrent
+   * callers — even on separate transports binding the same Account
+   * — serialize naturally. No race on `utxos()`, the broadcast, or
+   * the tracking update.
    *
    * The `prepare` callback runs *inside* the lock with a consistent
    * snapshot of `utxos()`. It owns the Reveal shape, the
@@ -208,14 +209,13 @@ export interface KontorTransport {
    * `[...commitHexes, revealHex]` as a Bitcoin package, and advances
    * funding tracking — all atomically.
    *
-   * Multi-commit (0..N) is the natural package shape; today every
+   * Multi-commit (0..N) is supported in the API shape; today every
    * SDK flow has 0 or 1 commits (`revoke` is the no-commit case).
    *
-   * Adding a new submission flow? Route it through here — there is
-   * no other safe broadcast path for funding-state-mutating txs.
-   * `broadcast`/`advanceTracking` exist as primitives but using them
-   * directly bypasses the lock; only `inspect`/`simulate` (read-only)
-   * are safe outside.
+   * Adding a new submission flow? Route it through here. The
+   * `broadcast` / `advanceTracking` primitives exist on the
+   * interface but using them directly bypasses the lock — only
+   * read-only methods (`view`) are safe outside.
    */
   submitReveal(
     prepare: (utxos: Utxo[]) => Promise<{
@@ -231,11 +231,11 @@ export interface KontorTransport {
   }>;
 
   /**
-   * After broadcasting a commit/reveal pair that this transport
+   * After broadcasting a commit/reveal package that this transport
    * prepared via `composeAndSign`, advance the funding tracker so its
    * spent inputs are filtered out of `utxos()` and its change outputs
-   * become the new pool. Called automatically by `submit`; called by
-   * `attach.ts`'s offer build after it broadcasts the attach.
+   * become the new pool. Called automatically by `submitReveal` —
+   * direct callers bypass the account's lock, so don't.
    *
    * Optional — implementations that don't track funding (e.g. test
    * mocks) may leave it undefined.

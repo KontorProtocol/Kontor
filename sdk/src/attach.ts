@@ -72,8 +72,8 @@ export class Attachment<T> {
       p2tr(hex.decode(account.xOnlyPubKey), undefined, this.session.chain.network).script,
     );
     // Route through `submitReveal` so utxos/compose/sign/broadcast/track
-    // run as one atomic block — no race with a concurrent `submit` or
-    // marketplace flow on the same transport.
+    // run as one atomic block under the account's lock — no race with
+    // a concurrent `submit` or marketplace flow on the same account.
     const { composed, revealHex: attachRevealHex } = await transport.submitReveal(
       async (utxos) => {
         const reveal: Reveal = {

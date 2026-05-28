@@ -236,12 +236,13 @@ export class HttpTransport implements KontorTransport {
   /**
    * Compose a Reveal and sign all participant inputs belonging to
    * this transport's account. Pure: NO broadcast, NO tracking
-   * update. Callers that will broadcast must also call
-   * `advanceTracking` after a successful broadcast.
+   * update — callers feed the result into `submitReveal`'s prepare
+   * callback, which handles broadcast + tracking under the lock.
    *
    * Public so `attach.ts` / marketplace flows can route their custom
    * Reveal shapes (ChainedEnvelope outputs, multi-participant) through
-   * the same primitive `submit` uses for the simple single-Build case.
+   * the same compose+sign primitive `submit` uses for the simple
+   * single-Build case.
    */
   async composeAndSign(reveal: Reveal): Promise<{
     /** One finalized hex per Build participant's commit, in
