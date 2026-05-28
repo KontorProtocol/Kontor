@@ -113,20 +113,42 @@ impl Identity {
     }
 }
 
-pub async fn get_or_create_identity(
+/// Look up the signer identity for `x_only_pubkey`. Read-only — no
+/// writes, no side effects. Returns `None` if no row exists yet
+/// (typical when a view-context query references a pubkey nobody has
+/// transacted as).
+///
+/// Use this from any path that must not mutate, especially anything
+/// dispatched under a `ViewContext` frame. Use [`ensure_identity`]
+/// when the caller is allowed to create the row on miss (proc-context
+/// execution, reactor / aggregate-verify paths).
+pub async fn get_identity(
     conn: &Connection,
     x_only_pubkey: &str,
-    height: i64,
-) -> Result<Identity, Error> {
+) -> Result<Option<Identity>, Error> {
     let mut rows = conn
         .query(
             "SELECT signer_id FROM x_only_pubkeys WHERE x_only_pubkey = ?",
             params![x_only_pubkey],
         )
         .await?;
+    match rows.next().await? {
+        Some(row) => Ok(Some(Identity::new(row.get(0)?))),
+        None => Ok(None),
+    }
+}
 
-    if let Some(row) = rows.next().await? {
-        return Ok(Identity::new(row.get(0)?));
+/// Look up the signer identity for `x_only_pubkey`, creating the
+/// signers / x_only_pubkeys / nonces rows on miss. Mutating — call
+/// only from contexts where state growth is permitted (proc-context
+/// contract calls, reactor processing).
+pub async fn ensure_identity(
+    conn: &Connection,
+    x_only_pubkey: &str,
+    height: i64,
+) -> Result<Identity, Error> {
+    if let Some(existing) = get_identity(conn, x_only_pubkey).await? {
+        return Ok(existing);
     }
 
     conn.execute("INSERT INTO signers (height) VALUES (?)", params![height])

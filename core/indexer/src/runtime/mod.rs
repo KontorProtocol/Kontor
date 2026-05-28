@@ -109,7 +109,12 @@ use crate::database;
 use crate::database::native_contracts::NATIVE_CONTRACTS;
 use crate::database::types::CORE_SIGNER_ID;
 use crate::runtime::kontor::built_in::context::SignerRef;
-use crate::runtime::{counter::Counter, fuel::FuelGauge, stack::Stack, wit::Signer};
+use crate::runtime::{
+    counter::Counter,
+    fuel::FuelGauge,
+    stack::{CallFrame, Stack},
+    wit::Signer,
+};
 
 #[derive(Clone, Debug)]
 pub struct GenesisValidator {
@@ -161,7 +166,7 @@ pub struct Runtime {
     pub file_ledger: FileLedger,
     pub id_generation_counter: Counter,
     pub result_id_counter: Counter,
-    pub stack: Stack<i64>,
+    pub stack: Stack<CallFrame>,
     pub gauge: Option<FuelGauge>,
     pub gas_limit_for_non_procs: u64,
     pub gas_to_fuel_multiplier: u64,
@@ -384,13 +389,43 @@ impl Runtime {
         Ok(())
     }
 
+    /// True when the *top* of the cross-contract call stack is a view
+    /// frame — i.e. we're currently executing a `ViewContext` function
+    /// (possibly nested under any number of outer proc / view frames).
+    /// An empty stack means no contract is executing: a system caller
+    /// (reactor, aggregate verifier, block-processing path) that's
+    /// allowed to mutate state. So empty = NOT view.
+    ///
+    /// Host functions that have DB-mutating side effects gate on this:
+    /// see `get_or_create_identity` below — inside a view frame it
+    /// degrades to a lookup-only path and returns `Err` on miss
+    /// rather than silently creating signer rows during a read-only
+    /// API query.
+    pub async fn is_in_view_context(&self) -> bool {
+        match self.stack.peek().await {
+            Some(frame) => !frame.is_proc,
+            None => false,
+        }
+    }
+
     pub async fn get_or_create_identity(
         &self,
         x_only_pubkey: &str,
     ) -> Result<database::types::Identity, ExecutionError> {
         let conn = self.get_storage_conn();
+        if self.is_in_view_context().await {
+            return database::queries::get_identity(&conn, x_only_pubkey)
+                .await
+                .map_err(|e| ExecutionError::NonDeterministic(e.into()))?
+                .ok_or_else(|| {
+                    ExecutionError::Deterministic(anyhow!(
+                        "signer not found for x-only-pubkey {x_only_pubkey} \
+                         (view context — signer creation requires a proc context)"
+                    ))
+                });
+        }
         let height = self.storage.height;
-        database::queries::get_or_create_identity(&conn, x_only_pubkey, height)
+        database::queries::ensure_identity(&conn, x_only_pubkey, height)
             .await
             .map_err(|e| ExecutionError::NonDeterministic(e.into()))
     }

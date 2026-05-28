@@ -372,7 +372,7 @@ impl RuntimeImpl for RuntimeLocal {
     async fn identity(&mut self) -> Result<Signer> {
         let x_only_pubkey = reg_tester::random_x_only_pubkey();
         let conn = self.runtime.get_storage_conn();
-        let identity = indexer::database::queries::get_or_create_identity(
+        let identity = indexer::database::queries::ensure_identity(
             &conn,
             &x_only_pubkey,
             self.runtime.storage.height,

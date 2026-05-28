@@ -26,7 +26,7 @@ use super::{
     ContractAddress, Decimal, Runtime,
     fuel::Fuel,
     should_skip_result,
-    stack::Stack,
+    stack::{CallFrame, Stack},
     token,
     types::default_val_for_type,
     wit::{Contract, CoreContext, FallContext, Holder, ProcContext, Signer, ViewContext},
@@ -141,7 +141,7 @@ impl Runtime {
         }?;
 
         if let Some(Signer::Contract { id, .. }) = signer
-            && self.stack.peek().await != Some(*id)
+            && self.stack.peek().await.map(|f| f.contract_id) != Some(*id)
         {
             return Err(ExecutionError::Deterministic(anyhow!(
                 "Invalid contract id signer"
@@ -300,7 +300,10 @@ impl Runtime {
         }
 
         self.stack
-            .push(contract_id)
+            .push(CallFrame {
+                contract_id,
+                is_proc,
+            })
             .await
             .map_err(|e| ExecutionError::Deterministic(e.into()))?;
         self.storage.savepoint().await?;

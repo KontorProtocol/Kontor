@@ -4,8 +4,8 @@ use std::str::FromStr;
 use bitcoin::{Txid, XOnlyPublicKey};
 use futures_util::Stream;
 
-use crate::database::queries::get_or_create_identity;
 use crate::database::types::{CORE_SIGNER_ID, FileMetadataRow, Identity, bytes_to_field_element};
+use crate::runtime::Runtime;
 use crate::runtime::kontor::built_in::context::HolderRef;
 use crate::runtime::kontor::built_in::{error::Error, file_registry::RawFileDescriptor};
 use kontor_crypto::Proof as CryptoProof;
@@ -196,15 +196,20 @@ impl Holder {
 
     pub async fn from_holder_ref(
         mut holder_ref: HolderRef,
-        conn: &libsql::Connection,
-        height: i64,
+        runtime: &Runtime,
     ) -> Result<Self, Error> {
         match &holder_ref {
             HolderRef::XOnlyPubkey(s) => {
-                // Canonicalize to lowercase hex and ensure the signer row exists.
+                // Canonicalize to lowercase hex. Whether we *resolve*
+                // (lookup) or *resolve-or-create* the signer row is the
+                // runtime's call: inside a view frame, this is
+                // lookup-only and yields a deterministic Err on miss
+                // rather than silently inserting signer rows from a
+                // read-only API path.
                 let pk = XOnlyPublicKey::from_str(s)
                     .map_err(|e| Error::Validation(format!("invalid x-only-pubkey: {e}")))?;
-                let identity = get_or_create_identity(conn, &pk.to_string(), height)
+                let identity = runtime
+                    .get_or_create_identity(&pk.to_string())
                     .await
                     .map_err(|e| Error::Validation(format!("identity resolution failed: {e}")))?;
                 holder_ref = HolderRef::SignerId(identity.signer_id() as u64);

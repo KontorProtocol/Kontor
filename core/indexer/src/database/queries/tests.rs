@@ -834,14 +834,14 @@ async fn test_get_contracts_signer_id_filter() -> Result<()> {
     )
     .await?;
 
-    let signer_a = get_or_create_identity(
+    let signer_a = ensure_identity(
         &conn,
         "1111111111111111111111111111111111111111111111111111111111111111",
         1,
     )
     .await?
     .signer_id();
-    let signer_b = get_or_create_identity(
+    let signer_b = ensure_identity(
         &conn,
         "2222222222222222222222222222222222222222222222222222222222222222",
         1,
@@ -1044,7 +1044,7 @@ async fn test_contract_result_operations() -> Result<()> {
 
     let tx_id = insert_transaction(&conn, tx1.clone()).await?;
 
-    let signer_id = get_or_create_identity(
+    let signer_id = ensure_identity(
         &conn,
         "aabbccdd00112233aabbccdd00112233aabbccdd00112233aabbccdd00112233",
         height,
@@ -1525,7 +1525,7 @@ async fn test_get_results_query() -> Result<()> {
     )
     .await?;
 
-    let signer_id = get_or_create_identity(
+    let signer_id = ensure_identity(
         &conn,
         "aabbccdd00112233aabbccdd00112233aabbccdd00112233aabbccdd00112233",
         1,
@@ -1677,7 +1677,7 @@ async fn test_get_results_query() -> Result<()> {
     // Second signer with a single result at height 1 — exercises the
     // signer_id filter narrowing without affecting the height-filtered
     // assertion below (which counts only height=2 rows).
-    let signer_id_2 = get_or_create_identity(
+    let signer_id_2 = ensure_identity(
         &conn,
         "ffeeddcc99887766ffeeddcc99887766ffeeddcc99887766ffeeddcc99887766",
         1,
@@ -2370,14 +2370,14 @@ async fn test_transaction_signer_id_querying() -> Result<()> {
     )
     .await?;
 
-    let signer_a = get_or_create_identity(
+    let signer_a = ensure_identity(
         &conn,
         "1111111111111111111111111111111111111111111111111111111111111111",
         1,
     )
     .await?
     .signer_id();
-    let signer_b = get_or_create_identity(
+    let signer_b = ensure_identity(
         &conn,
         "2222222222222222222222222222222222222222222222222222222222222222",
         1,
@@ -2568,13 +2568,13 @@ async fn setup_block(conn: &Connection, height: i64) -> Result<()> {
 }
 
 #[tokio::test]
-async fn test_get_or_create_identity_creates_new() -> Result<()> {
+async fn test_ensure_identity_creates_new() -> Result<()> {
     let (_, writer, _temp_dir) = new_test_db().await?;
     let conn = writer.connection();
     setup_block(&conn, 1).await?;
 
     let pubkey = "aabbccdd00112233aabbccdd00112233aabbccdd00112233aabbccdd00112233";
-    let identity = get_or_create_identity(&conn, pubkey, 1).await?;
+    let identity = ensure_identity(&conn, pubkey, 1).await?;
     assert!(identity.signer_id() > 0);
     assert_eq!(identity.x_only_pubkey(&conn).await?, pubkey);
 
@@ -2582,15 +2582,15 @@ async fn test_get_or_create_identity_creates_new() -> Result<()> {
 }
 
 #[tokio::test]
-async fn test_get_or_create_identity_returns_existing() -> Result<()> {
+async fn test_ensure_identity_returns_existing() -> Result<()> {
     let (_, writer, _temp_dir) = new_test_db().await?;
     let conn = writer.connection();
     setup_block(&conn, 1).await?;
     setup_block(&conn, 2).await?;
 
     let pubkey = "aabbccdd00112233aabbccdd00112233aabbccdd00112233aabbccdd00112233";
-    let id1 = get_or_create_identity(&conn, pubkey, 1).await?;
-    let id2 = get_or_create_identity(&conn, pubkey, 2).await?;
+    let id1 = ensure_identity(&conn, pubkey, 1).await?;
+    let id2 = ensure_identity(&conn, pubkey, 2).await?;
     assert_eq!(id1.signer_id(), id2.signer_id());
 
     Ok(())
@@ -2630,7 +2630,7 @@ async fn test_advance_nonce() -> Result<()> {
     setup_block(&conn, 2).await?;
 
     let pubkey = "aabbccdd00112233aabbccdd00112233aabbccdd00112233aabbccdd00112233";
-    let row = get_or_create_identity(&conn, pubkey, 1).await?;
+    let row = ensure_identity(&conn, pubkey, 1).await?;
 
     let next = row.advance_nonce(&conn, 0, 1).await?;
     assert_eq!(next, 1);
@@ -2648,7 +2648,7 @@ async fn test_advance_nonce_gap() -> Result<()> {
     setup_block(&conn, 1).await?;
 
     let pubkey = "aabbccdd00112233aabbccdd00112233aabbccdd00112233aabbccdd00112233";
-    let row = get_or_create_identity(&conn, pubkey, 1).await?;
+    let row = ensure_identity(&conn, pubkey, 1).await?;
 
     let next = row.advance_nonce(&conn, 5, 1).await?;
     assert_eq!(next, 6);
@@ -2668,7 +2668,7 @@ async fn test_advance_nonce_replay_rejected() -> Result<()> {
     setup_block(&conn, 2).await?;
 
     let pubkey = "aabbccdd00112233aabbccdd00112233aabbccdd00112233aabbccdd00112233";
-    let row = get_or_create_identity(&conn, pubkey, 1).await?;
+    let row = ensure_identity(&conn, pubkey, 1).await?;
 
     row.advance_nonce(&conn, 0, 1).await?;
     let result = row.advance_nonce(&conn, 0, 2).await;
@@ -2684,7 +2684,7 @@ async fn test_register_bls_key() -> Result<()> {
     setup_block(&conn, 1).await?;
 
     let pubkey = "aabbccdd00112233aabbccdd00112233aabbccdd00112233aabbccdd00112233";
-    let row = get_or_create_identity(&conn, pubkey, 1).await?;
+    let row = ensure_identity(&conn, pubkey, 1).await?;
 
     let bls_key = vec![1u8; 48];
     row.register_bls_key(&conn, &bls_key, 1).await?;
@@ -2704,7 +2704,7 @@ async fn test_get_signer_entry_by_x_only_pubkey() -> Result<()> {
     setup_block(&conn, 1).await?;
 
     let pubkey = "aabbccdd00112233aabbccdd00112233aabbccdd00112233aabbccdd00112233";
-    let row = get_or_create_identity(&conn, pubkey, 1).await?;
+    let row = ensure_identity(&conn, pubkey, 1).await?;
 
     let entry = get_signer_entry_by_x_only_pubkey(&conn, pubkey)
         .await?
@@ -2724,7 +2724,7 @@ async fn test_get_signer_entry_by_id() -> Result<()> {
     setup_block(&conn, 1).await?;
 
     let pubkey = "aabbccdd00112233aabbccdd00112233aabbccdd00112233aabbccdd00112233";
-    let row = get_or_create_identity(&conn, pubkey, 1).await?;
+    let row = ensure_identity(&conn, pubkey, 1).await?;
 
     let entry = get_signer_entry_by_id(&conn, row.signer_id())
         .await?
@@ -2742,7 +2742,7 @@ async fn test_get_signer_entry_by_bls_pubkey() -> Result<()> {
     setup_block(&conn, 1).await?;
 
     let pubkey = "aabbccdd00112233aabbccdd00112233aabbccdd00112233aabbccdd00112233";
-    let row = get_or_create_identity(&conn, pubkey, 1).await?;
+    let row = ensure_identity(&conn, pubkey, 1).await?;
     let bls_key = vec![7u8; 48];
     row.register_bls_key(&conn, &bls_key, 1).await?;
 
@@ -2789,7 +2789,7 @@ async fn test_signer_rollback() -> Result<()> {
     setup_block(&conn, 3).await?;
 
     let pubkey = "aabbccdd00112233aabbccdd00112233aabbccdd00112233aabbccdd00112233";
-    let row = get_or_create_identity(&conn, pubkey, 1).await?;
+    let row = ensure_identity(&conn, pubkey, 1).await?;
     row.advance_nonce(&conn, 0, 2).await?;
     row.register_bls_key(&conn, &[1u8; 48], 3).await?;
 
@@ -2817,7 +2817,7 @@ async fn test_identity_dao() -> Result<()> {
     setup_block(&conn, 1).await?;
 
     let pubkey = "aabbccdd00112233aabbccdd00112233aabbccdd00112233aabbccdd00112233";
-    let identity = get_or_create_identity(&conn, pubkey, 1).await?;
+    let identity = ensure_identity(&conn, pubkey, 1).await?;
 
     assert_eq!(identity.x_only_pubkey(&conn).await?, pubkey);
     assert_eq!(identity.bls_pubkey(&conn).await?, None);
@@ -2834,15 +2834,15 @@ async fn test_identity_dao() -> Result<()> {
 }
 
 #[tokio::test]
-async fn test_get_or_create_identity_idempotent() -> Result<()> {
+async fn test_ensure_identity_idempotent() -> Result<()> {
     let (_, writer, _temp_dir) = new_test_db().await?;
     let conn = writer.connection();
     setup_block(&conn, 1).await?;
     setup_block(&conn, 2).await?;
 
     let pubkey = "aabbccdd00112233aabbccdd00112233aabbccdd00112233aabbccdd00112233";
-    let id1 = get_or_create_identity(&conn, pubkey, 1).await?;
-    let id2 = get_or_create_identity(&conn, pubkey, 2).await?;
+    let id1 = ensure_identity(&conn, pubkey, 1).await?;
+    let id2 = ensure_identity(&conn, pubkey, 2).await?;
     assert_eq!(id1.signer_id(), id2.signer_id());
 
     Ok(())

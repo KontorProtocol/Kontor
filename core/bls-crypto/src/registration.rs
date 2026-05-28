@@ -64,7 +64,9 @@ impl RegistrationProof {
         // modes are secure; the no-rand path lets the wallet-side
         // construction link to wasm32 without secp256k1's `rand`
         // feature.
-        let schnorr_sig = secp.sign_schnorr_no_aux_rand(&schnorr_msg, keypair).serialize();
+        let schnorr_sig = secp
+            .sign_schnorr_no_aux_rand(&schnorr_msg, keypair)
+            .serialize();
 
         let bls_msg = bls_binding_message(&x_only_pubkey);
         let bls_sig = bls_sk.sign(&bls_msg, KONTOR_BLS_DST, &[]).to_bytes();

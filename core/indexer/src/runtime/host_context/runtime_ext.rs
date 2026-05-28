@@ -358,9 +358,7 @@ impl Runtime {
         };
         let holder_ref = Self::_signer_to_holder_ref(&signer);
         tracing::debug!("_signer_as_holder: signer={signer:?} holder_ref={holder_ref:?}");
-        let conn = self.get_storage_conn();
-        let height = self.storage.height;
-        let holder = Holder::from_holder_ref(holder_ref, &conn, height)
+        let holder = Holder::from_holder_ref(holder_ref, self)
             .await
             .map_err(|e| {
                 tracing::error!("holder resolution failed for signer {signer:?}: {e:?}");

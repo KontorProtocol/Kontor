@@ -64,15 +64,12 @@ impl Guest for Lib {
                 ikm.len()
             ));
         }
-        let sk = BlsSecretKey::key_gen(&ikm, &[])
-            .map_err(|e| format!("BLS key_gen failed: {e:?}"))?;
+        let sk =
+            BlsSecretKey::key_gen(&ikm, &[]).map_err(|e| format!("BLS key_gen failed: {e:?}"))?;
         Ok(sk.to_bytes().to_vec())
     }
 
-    fn bls_secret_from_seed_eip2333(
-        seed: Vec<u8>,
-        path: Vec<u32>,
-    ) -> Result<Vec<u8>, String> {
+    fn bls_secret_from_seed_eip2333(seed: Vec<u8>, path: Vec<u32>) -> Result<Vec<u8>, String> {
         let sk = derive_bls_secret_key_eip2333(&seed, &path).map_err(|e| e.to_string())?;
         Ok(sk.to_bytes().to_vec())
     }

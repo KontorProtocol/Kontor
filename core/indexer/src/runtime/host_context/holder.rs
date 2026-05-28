@@ -36,12 +36,15 @@ impl built_in::context::HostHolderWithStore for Runtime {
         Fuel::HolderFromRef
             .consume(accessor, runtime.gauge.as_ref())
             .await?;
-        let conn = runtime.get_storage_conn();
-        let height = runtime.storage.height;
-        let holder = match Holder::from_holder_ref(ref_.clone(), &conn, height).await {
+        let holder = match Holder::from_holder_ref(ref_.clone(), &runtime).await {
             Ok(h) => h,
             Err(e) => {
-                tracing::error!("Holder::from_ref failed for {ref_:?}: {e:?}");
+                // Debug-level: a "signer not found" in view context is
+                // a legitimate deterministic outcome (the contract sees
+                // it as Err and decides what to do — usually return
+                // None). The WIT result already carries the error to
+                // the contract; logging is purely diagnostic.
+                tracing::debug!("Holder::from_ref returning Err for {ref_:?}: {e:?}");
                 return Ok(Err(e));
             }
         };
