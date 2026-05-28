@@ -99,8 +99,9 @@ export class Attachment<T> {
         { Change: { script_pubkey: sellerScriptPubKey } },
       ],
     };
-    const { commitHex, revealHex: attachRevealHex, composed } =
+    const { commitHex, revealTx, composed } =
       await transport.composeAndSign(reveal, utxos);
+    const attachRevealHex = hex.encode(revealTx.extract());
 
     // The chained detach leaf script (for the future buyer to spend the
     // escrow output) lives on output 0 of the reveal — same position as

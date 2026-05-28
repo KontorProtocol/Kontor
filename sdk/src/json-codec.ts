@@ -35,6 +35,8 @@
  * decoders), so the wire shapes get the `Wire` prefix wherever they
  * appear together.
  */
+import type { Transaction } from "@scure/btc-signer";
+
 import type { ContractAddress } from "./canonical/ContractAddress.js";
 import type {
   ComposeOutputs,
@@ -183,13 +185,21 @@ export interface KontorTransport {
    * with Change). Higher-level flows (attach: ChainedEnvelope +
    * Change; marketplace: multi-participant) build their own Reveal
    * and route through this.
+   *
+   * Returns the reveal as a parsed `Transaction` (NOT an extracted-tx
+   * hex) because only inputs owned by this transport's account are
+   * finalized — foreign inputs (e.g. a seller's pre-signed escrow on
+   * a marketplace swap) are left untouched for the caller to fill in
+   * before extracting. Common single-owner callers do
+   * `hex.encode(revealTx.extract())` immediately; mixed-signer
+   * callers inject the foreign witness first.
    */
   composeAndSign(
     reveal: Reveal,
     suppliedUtxos: Utxo[],
   ): Promise<{
     commitHex: string;
-    revealHex: string;
+    revealTx: Transaction;
     composed: ComposeOutputs;
   }>;
 

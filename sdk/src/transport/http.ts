@@ -273,7 +273,10 @@ export class HttpTransport implements KontorTransport {
     /** Empty string when the Reveal has no Build participants (every
      *  input is Existing / extra_input — no commit to broadcast). */
     commitHex: string;
-    revealHex: string;
+    /** Reveal as a parsed `Transaction`. Only inputs whose
+     *  `tap_internal_key` matches this account were finalized;
+     *  callers extract once every input's witness is in place. */
+    revealTx: Transaction;
     composed: ComposeOutputs;
   }> {
     const { account } = this.opts;
@@ -283,9 +286,7 @@ export class HttpTransport implements KontorTransport {
         composed.commits.length > 0
           ? await signCommit(account, composed.commits[0]!.psbt_hex)
           : "",
-      revealHex: hex.encode(
-        (await signReveal(account, composed.reveal.psbt_hex)).extract(),
-      ),
+      revealTx: await signReveal(account, composed.reveal.psbt_hex),
       composed,
     };
   }
@@ -339,10 +340,11 @@ export class HttpTransport implements KontorTransport {
     return this.lock.runExclusive(async () => {
       const suppliedUtxos = await this.utxos();
       const reveal = await this.buildSimpleReveal(insts, suppliedUtxos);
-      const { commitHex, revealHex, composed } = await this.composeAndSign(
+      const { commitHex, revealTx, composed } = await this.composeAndSign(
         reveal,
         suppliedUtxos,
       );
+      const revealHex = hex.encode(revealTx.extract());
       const result = await this.broadcast([commitHex, revealHex]);
       this.advanceTracking({ suppliedUtxos, composed, commitHex, revealHex });
       return result;
@@ -413,10 +415,10 @@ export class HttpTransport implements KontorTransport {
   async inspect(insts: WireInsts): Promise<OpResultRaw[]> {
     const utxos = await this.utxos();
     const reveal = await this.buildSimpleReveal(insts, utxos);
-    const { revealHex } = await this.composeAndSign(reveal, utxos);
+    const { revealTx } = await this.composeAndSign(reveal, utxos);
     const ops = await this.postJson<OpWithResult[]>(
       "/transactions/inspect",
-      { hex: revealHex },
+      { hex: hex.encode(revealTx.extract()) },
     );
     // Don't call advanceTracking: inspect didn't broadcast, so the
     // tx's outputs aren't on chain. The next real submit reuses the
@@ -432,10 +434,10 @@ export class HttpTransport implements KontorTransport {
   async simulate(insts: WireInsts): Promise<OpResultRaw[]> {
     const utxos = await this.utxos();
     const reveal = await this.buildSimpleReveal(insts, utxos);
-    const { revealHex } = await this.composeAndSign(reveal, utxos);
+    const { revealTx } = await this.composeAndSign(reveal, utxos);
     const ops = await this.postJson<OpWithResult[]>(
       "/transactions/simulate",
-      { hex: revealHex },
+      { hex: hex.encode(revealTx.extract()) },
     );
     // Same as inspect: simulate runs sandboxed, doesn't broadcast, so
     // trackedFunding stays put for the next real submit.

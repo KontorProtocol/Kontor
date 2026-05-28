@@ -29,7 +29,6 @@ import type { BitcoinNetwork } from "./chains.js";
 import { SignerError } from "./errors.js";
 import type { BroadcastResult, Utxo, WireInsts } from "./json-codec.js";
 import type { KontorSession } from "./session.js";
-import { signCommit, signReveal } from "./transport/signing.js";
 
 /** P2TR dust floor — change below this is dropped into the fee. */
 const DUST_SATS = 330n;
@@ -171,10 +170,11 @@ export class Offer {
       extra_outputs: [],
     };
 
-    const { revealHex, composed } = await transport.composeAndSign(
+    const { revealTx, composed } = await transport.composeAndSign(
       reveal,
       fundingUtxos,
     );
+    const revealHex = hex.encode(revealTx.extract());
     const result = await transport.broadcast([revealHex]);
     transport.advanceTracking?.({
       suppliedUtxos: fundingUtxos,
@@ -370,27 +370,20 @@ export class IncomingOffer {
       extra_outputs: [],
     };
 
-    // Indexer builds the buyer's commit AND the swap reveal PSBT.
-    const composed = await transport.compose(reveal);
+    // Compose + sign in one pass: composeAndSign returns the swap
+    // reveal as a parsed Transaction with the buyer's input 0
+    // finalized; input 1 (seller's escrow, foreign `tap_internal_key`)
+    // is left untouched. We inject the seller's pre-signed SACP
+    // witness, then extract.
+    const { commitHex: buyerCommitHex, revealTx: swapTx, composed } =
+      await transport.composeAndSign(reveal, buyerUtxos);
     if (composed.commits.length !== 1) {
       throw new SignerError(
         `accept: expected 1 commit, got ${composed.commits.length}`,
         { docsPath: "/sdk/offer" },
       );
     }
-    const buyerCommitHex = await signCommit(
-      account,
-      composed.commits[0]!.psbt_hex,
-    );
-
-    // signReveal walks the PSBT: input 0 has the buyer's
-    // `tap_internal_key` set, so it signs script-path through the
-    // Sponsor leaf and finalizes its witness; input 1's
-    // `tap_internal_key` is the seller's, so signReveal treats it as
-    // foreign and leaves its witness alone — we inject the seller's
-    // pre-signed SACP witness here, then extract.
-    const swapFinal = await signReveal(account, composed.reveal.psbt_hex);
-    swapFinal.updateInput(1, {
+    swapTx.updateInput(1, {
       finalScriptWitness: [
         sellerSig,
         hex.decode(data.detachLeaf.script),
@@ -398,7 +391,7 @@ export class IncomingOffer {
       ],
     });
 
-    const swapTxHex = hex.encode(swapFinal.extract());
+    const swapTxHex = hex.encode(swapTx.extract());
     const result = await transport.broadcast([buyerCommitHex, swapTxHex]);
     // Advance the transport's funding tracker — buyer's commit consumed
     // a prefix of `buyerUtxos`, swap reveal's Change is the next
