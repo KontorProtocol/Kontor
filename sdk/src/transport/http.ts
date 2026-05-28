@@ -266,10 +266,7 @@ export class HttpTransport implements KontorTransport {
    * Reveal shapes (ChainedEnvelope outputs, multi-participant) through
    * the same primitive `submit` uses for the simple single-Build case.
    */
-  async composeAndSign(
-    reveal: Reveal,
-    suppliedUtxos: Utxo[],
-  ): Promise<{
+  async composeAndSign(reveal: Reveal): Promise<{
     /** Empty string when the Reveal has no Build participants (every
      *  input is Existing / extra_input — no commit to broadcast). */
     commitHex: string;
@@ -340,10 +337,7 @@ export class HttpTransport implements KontorTransport {
     return this.lock.runExclusive(async () => {
       const suppliedUtxos = await this.utxos();
       const reveal = await this.buildSimpleReveal(insts, suppliedUtxos);
-      const { commitHex, revealTx, composed } = await this.composeAndSign(
-        reveal,
-        suppliedUtxos,
-      );
+      const { commitHex, revealTx, composed } = await this.composeAndSign(reveal);
       const revealHex = hex.encode(revealTx.extract());
       const result = await this.broadcast([commitHex, revealHex]);
       this.advanceTracking({ suppliedUtxos, composed, commitHex, revealHex });
@@ -415,7 +409,7 @@ export class HttpTransport implements KontorTransport {
   async inspect(insts: WireInsts): Promise<OpResultRaw[]> {
     const utxos = await this.utxos();
     const reveal = await this.buildSimpleReveal(insts, utxos);
-    const { revealTx } = await this.composeAndSign(reveal, utxos);
+    const { revealTx } = await this.composeAndSign(reveal);
     const ops = await this.postJson<OpWithResult[]>(
       "/transactions/inspect",
       { hex: hex.encode(revealTx.extract()) },
@@ -434,7 +428,7 @@ export class HttpTransport implements KontorTransport {
   async simulate(insts: WireInsts): Promise<OpResultRaw[]> {
     const utxos = await this.utxos();
     const reveal = await this.buildSimpleReveal(insts, utxos);
-    const { revealTx } = await this.composeAndSign(reveal, utxos);
+    const { revealTx } = await this.composeAndSign(reveal);
     const ops = await this.postJson<OpWithResult[]>(
       "/transactions/simulate",
       { hex: hex.encode(revealTx.extract()) },

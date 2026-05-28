@@ -100,7 +100,7 @@ export class Attachment<T> {
       ],
     };
     const { commitHex, revealTx, composed } =
-      await transport.composeAndSign(reveal, utxos);
+      await transport.composeAndSign(reveal);
     const attachRevealHex = hex.encode(revealTx.extract());
 
     // The chained detach leaf script (for the future buyer to spend the

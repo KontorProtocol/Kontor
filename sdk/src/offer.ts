@@ -170,10 +170,7 @@ export class Offer {
       extra_outputs: [],
     };
 
-    const { revealTx, composed } = await transport.composeAndSign(
-      reveal,
-      fundingUtxos,
-    );
+    const { revealTx, composed } = await transport.composeAndSign(reveal);
     const revealHex = hex.encode(revealTx.extract());
     const result = await transport.broadcast([revealHex]);
     transport.advanceTracking?.({
@@ -376,7 +373,7 @@ export class IncomingOffer {
     // is left untouched. We inject the seller's pre-signed SACP
     // witness, then extract.
     const { commitHex: buyerCommitHex, revealTx: swapTx, composed } =
-      await transport.composeAndSign(reveal, buyerUtxos);
+      await transport.composeAndSign(reveal);
     if (composed.commits.length !== 1) {
       throw new SignerError(
         `accept: expected 1 commit, got ${composed.commits.length}`,
