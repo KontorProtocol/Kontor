@@ -53,30 +53,6 @@ import type {
 const keyOf = (u: { txid: string; vout: number }): string =>
   `${u.txid}:${u.vout}`;
 
-/**
- * Minimal in-house async mutex — serializes its body across concurrent
- * callers via a promise chain. Each `runExclusive` attaches its work to
- * the tail of the chain; the body runs after the prior tail resolves
- * (success or failure), guaranteeing one body at a time. No deps.
- */
-class SubmitLock {
-  private chain: Promise<void> = Promise.resolve();
-
-  async runExclusive<T>(fn: () => Promise<T>): Promise<T> {
-    const prev = this.chain;
-    let release!: () => void;
-    this.chain = new Promise<void>((resolve) => {
-      release = resolve;
-    });
-    try {
-      await prev;
-      return await fn();
-    } finally {
-      release();
-    }
-  }
-}
-
 export interface HttpTransportOptions {
   chain: Chain;
   account: Account;
@@ -151,7 +127,6 @@ export class HttpTransport implements KontorTransport {
    * sweep mooted the prior state).
    */
   private recentlySpent: Set<string> = new Set();
-  private readonly lock = new SubmitLock();
 
   constructor(private readonly opts: HttpTransportOptions) {
     this.baseUrl = (opts.url ?? opts.chain.urls.http).replace(/\/+$/, "");
@@ -350,11 +325,13 @@ export class HttpTransport implements KontorTransport {
    * The only blessed broadcast path for funding-state-mutating txs.
    * See `KontorTransport.submitReveal` for the full contract.
    *
-   * Body holds `this.lock` for the entire critical section: read
-   * `utxos()` consistently, hand them to the `prepare` callback to
-   * shape the Reveal + compose+sign (and inject any foreign reveal
-   * witness), then extract → broadcast → `advanceTracking` — all
-   * before the lock is released. Two concurrent callers serialize.
+   * Body runs under the account's `runExclusive` for the entire
+   * critical section: read `utxos()` consistently, hand them to the
+   * `prepare` callback to shape the Reveal + compose+sign (and inject
+   * any foreign reveal witness), then extract → broadcast →
+   * `advanceTracking` — all before the lock is released. Two
+   * concurrent callers — even on separate transports binding the same
+   * Account — serialize.
    */
   async submitReveal(
     prepare: (utxos: Utxo[]) => Promise<{
@@ -368,7 +345,7 @@ export class HttpTransport implements KontorTransport {
     revealHex: string;
     composed: ComposeOutputs;
   }> {
-    return this.lock.runExclusive(async () => {
+    return this.opts.account.runExclusive(async () => {
       const utxos = await this.utxos();
       const { commitHexes, revealTx, composed } = await prepare(utxos);
       const revealHex = hex.encode(revealTx.extract());
@@ -448,13 +425,13 @@ export class HttpTransport implements KontorTransport {
    * executing it. One outcome per Inst; a rejected op surfaces as a
    * non-Ok `OpResultRaw` carrying its error.
    *
-   * Held under `lock` so concurrent submit / submitReveal can't shift
-   * the funding pool out from under us mid-compose. Doesn't broadcast,
-   * doesn't advance tracking — the next real submit reuses the same
-   * UTXOs.
+   * Held under the account's lock so concurrent submit / submitReveal
+   * can't shift the funding pool out from under us mid-compose.
+   * Doesn't broadcast, doesn't advance tracking — the next real
+   * submit reuses the same UTXOs.
    */
   async inspect(insts: WireInsts): Promise<OpResultRaw[]> {
-    return this.lock.runExclusive(async () => {
+    return this.opts.account.runExclusive(async () => {
       const utxos = await this.utxos();
       const reveal = await this.buildSimpleReveal(insts, utxos);
       const { revealTx } = await this.composeAndSign(reveal);
@@ -471,11 +448,11 @@ export class HttpTransport implements KontorTransport {
    * current chain state in a throwaway tx, returning predicted per-Inst
    * outcomes (real gas, real results) without broadcasting.
    *
-   * Held under `lock` for the same reason as `inspect`: read a
-   * consistent funding snapshot, no interleave with submitReveal.
+   * Held under the account's lock for the same reason as `inspect`:
+   * read a consistent funding snapshot, no interleave with submitReveal.
    */
   async simulate(insts: WireInsts): Promise<OpResultRaw[]> {
-    return this.lock.runExclusive(async () => {
+    return this.opts.account.runExclusive(async () => {
       const utxos = await this.utxos();
       const reveal = await this.buildSimpleReveal(insts, utxos);
       const { revealTx } = await this.composeAndSign(reveal);

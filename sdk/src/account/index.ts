@@ -75,4 +75,18 @@ export interface Account {
    * that's the transport's job.
    */
   signPsbt(psbt: Uint8Array, opts?: SignPsbtOptions): Promise<Uint8Array>;
+
+  /**
+   * Serialize broadcast-mutating sequences that read or update this
+   * account's funding state. The transport's `submitReveal`,
+   * `inspect`, and `simulate` paths all route through here so two
+   * concurrent flows — even on separate transports binding the same
+   * Account — won't race on funding selection or change tracking.
+   *
+   * The body runs with no other locked body in flight; queued callers
+   * resume in FIFO order. Re-entry from within a held body deadlocks
+   * — don't call `runExclusive` from inside a `prepare` callback or
+   * any other locked critical section.
+   */
+  runExclusive<T>(fn: () => Promise<T>): Promise<T>;
 }

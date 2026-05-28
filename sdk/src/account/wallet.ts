@@ -16,6 +16,7 @@
 import { HolderRef } from "../canonical/HolderRef.js";
 import { SignerError } from "../errors.js";
 import type { Account, SignPsbtOptions } from "./index.js";
+import { AccountLock } from "./lock.js";
 import type { Chain } from "../chains.js";
 
 export interface ConnectOptions {
@@ -31,6 +32,7 @@ export class WalletAccount implements Account {
   readonly xOnlyPubKey: string;
   readonly address: string;
   readonly holderRef: HolderRef;
+  private readonly lock = new AccountLock();
 
   private constructor(xOnlyPubKey: string, address: string) {
     this.xOnlyPubKey = xOnlyPubKey;
@@ -55,5 +57,9 @@ export class WalletAccount implements Account {
 
   signPsbt(_psbt: Uint8Array, _opts?: SignPsbtOptions): Promise<Uint8Array> {
     throw new SignerError("WalletAccount.signPsbt: not implemented");
+  }
+
+  runExclusive<T>(fn: () => Promise<T>): Promise<T> {
+    return this.lock.runExclusive(fn);
   }
 }
