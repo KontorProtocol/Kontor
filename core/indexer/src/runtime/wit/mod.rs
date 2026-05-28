@@ -23,7 +23,7 @@ wasmtime::component::bindgen!({
         "kontor:built-in/file-registry.file-descriptor": FileDescriptor,
         "kontor:built-in/file-registry.proof": Proof,
     },
-    additional_derives: [stdlib::Wavey],
+    additional_derives: [stdlib::Wavey, serde::Deserialize],
     imports: {
         // async func in wits automatically makes them "async | store"
         // but we still need this here from implicit built-ins like resource drops.

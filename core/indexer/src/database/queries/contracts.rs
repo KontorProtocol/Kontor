@@ -1,5 +1,5 @@
 use indexer_types::{ContractListRow, PaginationMeta};
-use libsql::{Connection, Value, params};
+use libsql::{Connection, Value, de::from_row, params};
 
 use super::Error;
 use super::pagination::{PageOptions, get_paginated};
@@ -103,19 +103,7 @@ pub async fn get_contract_address_from_id(
         )
         .await?;
 
-    let row = rows.next().await?;
-    if let Some(row) = row {
-        let name = row.get(0)?;
-        let height = row.get(1)?;
-        let tx_index = row.get(2)?;
-        Ok(Some(ContractAddress {
-            name,
-            height,
-            tx_index,
-        }))
-    } else {
-        Ok(None)
-    }
+    Ok(rows.next().await?.map(|r| from_row(&r)).transpose()?)
 }
 
 pub async fn get_contract_id_from_address(
