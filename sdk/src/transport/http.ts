@@ -380,26 +380,6 @@ export class HttpTransport implements KontorTransport {
     revealHex: string;
   }): void {
     const { suppliedUtxos, commitHexes, composed } = opts;
-    if (commitHexes.length === 0) {
-      // No commits — `suppliedUtxos` went straight into the reveal as
-      // `extra_inputs`, every one consumed.
-      for (const u of suppliedUtxos) this.recentlySpent.add(keyOf(u));
-    } else {
-      // Each commit consumes a prefix of `suppliedUtxos` chosen by the
-      // indexer's greedy selector. Walk commits in order, peeling
-      // `inputsLength` UTXOs off the front per commit.
-      let offset = 0;
-      for (const commitHex of commitHexes) {
-        const commitTx = Transaction.fromRaw(hex.decode(commitHex), {
-          disableScriptCheck: true,
-          allowUnknownOutputs: true,
-          allowUnknownInputs: true,
-        });
-        const used = suppliedUtxos.slice(offset, offset + commitTx.inputsLength);
-        for (const u of used) this.recentlySpent.add(keyOf(u));
-        offset += commitTx.inputsLength;
-      }
-    }
     const accountScriptPubKey = hex.encode(
       p2tr(
         hex.decode(this.opts.account.xOnlyPubKey),
@@ -407,7 +387,61 @@ export class HttpTransport implements KontorTransport {
         this.opts.chain.network,
       ).script,
     );
-    this.trackedFunding = extractChangeUtxos(composed, accountScriptPubKey);
+    const changeUtxos: Utxo[] = [];
+
+    // Reveal-change first — the dust-floor 330-sat output is what the
+    // indexer's greedy `select_utxos_for_commit` pulls in alongside the
+    // larger commit-change UTXO on the next submit, consolidating the
+    // dust naturally rather than letting it accumulate.
+    const revealChangeIdx = composed.reveal.output_info.findIndex(
+      (info) => typeof info === "object" && "Change" in info,
+    );
+    if (revealChangeIdx >= 0) {
+      const info = composed.reveal.output_info[revealChangeIdx]!;
+      if (typeof info === "object" && "Change" in info) {
+        changeUtxos.push({
+          txid: composed.reveal.txid,
+          vout: revealChangeIdx,
+          value: BigInt(info.Change.value),
+          scriptPubKey: accountScriptPubKey,
+        });
+      }
+    }
+
+    // Walk every commit once: spent-input prefix accounting and
+    // change-output recovery happen in lockstep so a future multi-Build
+    // flow can't lose tracked funding through a half-generalized
+    // iteration. Each commit consumes a prefix of `suppliedUtxos`
+    // (length = `inputsLength`, greedy selection from the head), then
+    // its vout 1 is change when `change_value != null`.
+    if (commitHexes.length === 0) {
+      // No commits — `suppliedUtxos` went straight into the reveal as
+      // `extra_inputs`, every one consumed.
+      for (const u of suppliedUtxos) this.recentlySpent.add(keyOf(u));
+    } else {
+      let offset = 0;
+      for (let i = 0; i < commitHexes.length; i++) {
+        const meta = composed.commits[i]!;
+        const commitTx = Transaction.fromRaw(hex.decode(commitHexes[i]!), {
+          disableScriptCheck: true,
+          allowUnknownOutputs: true,
+          allowUnknownInputs: true,
+        });
+        const used = suppliedUtxos.slice(offset, offset + commitTx.inputsLength);
+        for (const u of used) this.recentlySpent.add(keyOf(u));
+        offset += commitTx.inputsLength;
+        if (meta.change_value != null) {
+          changeUtxos.push({
+            txid: meta.txid,
+            vout: 1,
+            value: BigInt(meta.change_value),
+            scriptPubKey: accountScriptPubKey,
+          });
+        }
+      }
+    }
+
+    this.trackedFunding = changeUtxos;
   }
 
   /**
@@ -583,59 +617,3 @@ export function http(opts: HttpTransportOptions): HttpTransport {
   return new HttpTransport(opts);
 }
 
-/**
- * Extract the change UTXOs from a just-broadcast commit-reveal pair.
- * The indexer's `compose` response carries everything we need
- * structurally: each commit's `txid` + `change_value`, and each
- * reveal output's value embedded in its `output_info` variant. So
- * this is pure record assembly — no tx-hex parsing.
- *
- * Both change outputs pay the account's P2TR scriptPubKey by
- * construction (commit-change to the Build's address, reveal-Change
- * to the script the SDK passed in the Reveal request — both this
- * account), so we derive the scriptPubKey once from the account.
- *
- * Order matters: the reveal's Change is the 330-sat minimum-envelope
- * dust buffer, so we put it FIRST so the indexer's greedy
- * `select_utxos_for_commit` pulls it in alongside the larger
- * commit-change UTXO on the next submit, consolidating the dust
- * naturally rather than letting it accumulate.
- */
-function extractChangeUtxos(
-  composed: ComposeOutputs,
-  accountScriptPubKey: string,
-): Utxo[] {
-  const out: Utxo[] = [];
-
-  // Reveal tx: scan output_info for the Change variant.
-  const revealChangeIdx = composed.reveal.output_info.findIndex(
-    (info) => typeof info === "object" && "Change" in info,
-  );
-  if (revealChangeIdx >= 0) {
-    const info = composed.reveal.output_info[revealChangeIdx]!;
-    if (typeof info === "object" && "Change" in info) {
-      out.push({
-        txid: composed.reveal.txid,
-        vout: revealChangeIdx,
-        value: BigInt(info.Change.value),
-        scriptPubKey: accountScriptPubKey,
-      });
-    }
-  }
-
-  // Commit tx: vout 0 is the tap output (consumed by the reveal we
-  // just broadcast); vout 1 is change, present only when the leftover
-  // after fees cleared the dust floor (signaled by non-null
-  // `change_value`).
-  const commit = composed.commits[0];
-  if (commit != null && commit.change_value != null) {
-    out.push({
-      txid: commit.txid,
-      vout: 1,
-      value: BigInt(commit.change_value),
-      scriptPubKey: accountScriptPubKey,
-    });
-  }
-
-  return out;
-}
