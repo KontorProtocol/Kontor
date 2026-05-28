@@ -399,7 +399,18 @@ export class IncomingOffer {
     });
 
     const swapTxHex = hex.encode(swapFinal.extract());
-    return transport.broadcast([buyerCommitHex, swapTxHex]);
+    const result = await transport.broadcast([buyerCommitHex, swapTxHex]);
+    // Advance the transport's funding tracker — buyer's commit consumed
+    // a prefix of `buyerUtxos`, swap reveal's Change is the next
+    // spendable UTXO. Without this, the buyer's next op from this
+    // transport would try to re-spend the bootstrap.
+    transport.advanceTracking?.({
+      suppliedUtxos: buyerUtxos,
+      composed,
+      commitHex: buyerCommitHex,
+      revealHex: swapTxHex,
+    });
+    return result;
   }
 }
 
