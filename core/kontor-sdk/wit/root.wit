@@ -68,6 +68,28 @@ world root {
   export serialize-inst: func(json-str: string) -> result<list<u8>, string>;
   export deserialize-inst: func(bytes: list<u8>) -> result<string, string>;
 
+  // BLS12-381 key material + signing. Bytes are guaranteed identical
+  // to the indexer-side verification path because both link the same
+  // `bls-crypto` crate (and therefore the same `blst`).
+  //
+  // - `bls-secret-key-gen`: HKDF-based KeyGen from draft-irtf-cfrg-
+  //   bls-signature-05. Caller supplies ≥32 bytes of input keying
+  //   material (the TS side reads it from webcrypto); blst always
+  //   produces a valid scalar < curve order. Entropy generation
+  //   stays in the host so the wasm doesn't have to depend on
+  //   `getrandom`'s `js` feature.
+  // - `bls-secret-from-seed-eip2333`: deterministic derivation along
+  //   `path` (EIP-2334-style indices). The TS side builds the path
+  //   from its `Chain` — the Kontor convention is
+  //   `[12381, coin_type, 0, 0]` (0 mainnet, 1 elsewhere).
+  // - `bls-pubkey-from-secret`: 96-byte compressed G2 pubkey (min_sig).
+  // - `bls-sign`: 48-byte compressed G1 signature under KONTOR_BLS_DST.
+  //   Hash-to-curve happens inside blst — pass the raw message bytes.
+  export bls-secret-key-gen: func(ikm: list<u8>) -> result<list<u8>, string>;
+  export bls-secret-from-seed-eip2333: func(seed: list<u8>, path: list<u32>) -> result<list<u8>, string>;
+  export bls-pubkey-from-secret: func(secret: list<u8>) -> result<list<u8>, string>;
+  export bls-sign: func(secret: list<u8>, message: list<u8>) -> result<list<u8>, string>;
+
   // A transaction's OP_RETURN payload: one `op-return-entry` per reveal
   // input that detaches an asset, binding that input to the recipient
   // the asset lands with. `signer-ref` names a party by existing signer

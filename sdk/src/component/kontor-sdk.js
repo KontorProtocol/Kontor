@@ -2808,6 +2808,458 @@ function deserializeInst(arg0) {
   return retCopy.val;
   
 }
+let exports1BlsSecretKeyGen;
+
+function blsSecretKeyGen(arg0) {
+  var val0 = arg0;
+  var len0 = Array.isArray(val0) ? val0.length : val0.byteLength;
+  var ptr0 = realloc0(0, 0, 1, len0 * 1);
+  
+  let valData0;
+  const valLenBytes0 = len0 * 1;
+  if (Array.isArray(val0)) {
+    // Regular array likely containing numbers, write values to memory
+    let offset = 0;
+    const dv0 = new DataView(memory0.buffer);
+    for (const v of val0) {
+      _requireValidNumericPrimitive.bind(null, 'u8')(v);
+      dv0.setUint8(ptr0+ offset, v, true);
+      offset += 1;
+    }
+  } else {
+    // TypedArray / ArrayBuffer-like, direct copy
+    valData0 = new Uint8Array(val0.buffer || val0, val0.byteOffset, valLenBytes0);
+    const out0 = new Uint8Array(memory0.buffer, ptr0, valLenBytes0);
+    out0.set(valData0);
+  }
+  
+  _debugLog('[iface="bls-secret-key-gen", function="bls-secret-key-gen"][Instruction::CallWasm] enter', {
+    funcName: 'bls-secret-key-gen',
+    paramCount: 2,
+    async: false,
+    postReturn: true,
+  });
+  const hostProvided = false;
+  
+  const [task, _wasm_call_currentTaskID] = createNewCurrentTask({
+    componentIdx: 0,
+    isAsync: false,
+    isManualAsync: false,
+    entryFnName: 'exports1BlsSecretKeyGen',
+    getCallbackFn: () => null,
+    callbackFnName: 'null',
+    errHandling: 'throw-result-err',
+    callingWasmExport: true,
+  });
+  
+  const started = task.enterSync();
+  task.setReturnMemoryIdx(0);
+  task.setReturnMemory(memory0);
+  let ret =   _withGlobalCurrentTaskMeta({
+    taskID: task.id(),
+    componentIdx: task.componentIdx(),
+    fn: () => exports1BlsSecretKeyGen(ptr0, len0),
+  });
+  
+  let variant3;
+  switch (dataView(memory0).getUint8(ret + 0, true)) {
+    case 0: {
+      var ptr1 = dataView(memory0).getUint32(ret + 4, true);
+      var len1 = dataView(memory0).getUint32(ret + 8, true);
+      var result1 = new Uint8Array(memory0.buffer.slice(ptr1, ptr1 + len1 * 1));
+      variant3= {
+        tag: 'ok',
+        val: result1
+      };
+      break;
+    }
+    case 1: {
+      var ptr2 = dataView(memory0).getUint32(ret + 4, true);
+      var len2 = dataView(memory0).getUint32(ret + 8, true);
+      var result2 = TEXT_DECODER_UTF8.decode(new Uint8Array(memory0.buffer, ptr2, len2));
+      variant3= {
+        tag: 'err',
+        val: result2
+      };
+      break;
+    }
+    default: {
+      throw new TypeError('invalid variant discriminant for expected');
+    }
+  }
+  _debugLog('[iface="bls-secret-key-gen", function="bls-secret-key-gen"][Instruction::Return]', {
+    funcName: 'bls-secret-key-gen',
+    paramCount: 1,
+    async: false,
+    postReturn: true
+  });
+  const retCopy = variant3;
+  task.resolve([retCopy.val]);
+  
+  let cstate = getOrCreateAsyncState(0);
+  cstate.mayLeave = false;
+  postReturn0(ret);
+  cstate.mayLeave = true;
+  task.exit();
+  
+  
+  
+  if (typeof retCopy === 'object' && retCopy.tag === 'err') {
+    throw new ComponentError(retCopy.val);
+  }
+  return retCopy.val;
+  
+}
+let exports1BlsSecretFromSeedEip2333;
+
+function blsSecretFromSeedEip2333(arg0, arg1) {
+  var val0 = arg0;
+  var len0 = Array.isArray(val0) ? val0.length : val0.byteLength;
+  var ptr0 = realloc0(0, 0, 1, len0 * 1);
+  
+  let valData0;
+  const valLenBytes0 = len0 * 1;
+  if (Array.isArray(val0)) {
+    // Regular array likely containing numbers, write values to memory
+    let offset = 0;
+    const dv0 = new DataView(memory0.buffer);
+    for (const v of val0) {
+      _requireValidNumericPrimitive.bind(null, 'u8')(v);
+      dv0.setUint8(ptr0+ offset, v, true);
+      offset += 1;
+    }
+  } else {
+    // TypedArray / ArrayBuffer-like, direct copy
+    valData0 = new Uint8Array(val0.buffer || val0, val0.byteOffset, valLenBytes0);
+    const out0 = new Uint8Array(memory0.buffer, ptr0, valLenBytes0);
+    out0.set(valData0);
+  }
+  
+  var val1 = arg1;
+  var len1 = val1.length;
+  var ptr1 = realloc0(0, 0, 4, len1 * 4);
+  
+  let valData1;
+  const valLenBytes1 = len1 * 4;
+  if (Array.isArray(val1)) {
+    // Regular array likely containing numbers, write values to memory
+    let offset = 0;
+    const dv1 = new DataView(memory0.buffer);
+    for (const v of val1) {
+      _requireValidNumericPrimitive.bind(null, 'u32')(v);
+      dv1.setUint32(ptr1+ offset, v, true);
+      offset += 4;
+    }
+  } else {
+    // TypedArray / ArrayBuffer-like, direct copy
+    valData1 = new Uint8Array(val1.buffer || val1, val1.byteOffset, valLenBytes1);
+    const out1 = new Uint8Array(memory0.buffer, ptr1, valLenBytes1);
+    out1.set(valData1);
+  }
+  
+  _debugLog('[iface="bls-secret-from-seed-eip2333", function="bls-secret-from-seed-eip2333"][Instruction::CallWasm] enter', {
+    funcName: 'bls-secret-from-seed-eip2333',
+    paramCount: 4,
+    async: false,
+    postReturn: true,
+  });
+  const hostProvided = false;
+  
+  const [task, _wasm_call_currentTaskID] = createNewCurrentTask({
+    componentIdx: 0,
+    isAsync: false,
+    isManualAsync: false,
+    entryFnName: 'exports1BlsSecretFromSeedEip2333',
+    getCallbackFn: () => null,
+    callbackFnName: 'null',
+    errHandling: 'throw-result-err',
+    callingWasmExport: true,
+  });
+  
+  const started = task.enterSync();
+  task.setReturnMemoryIdx(0);
+  task.setReturnMemory(memory0);
+  let ret =   _withGlobalCurrentTaskMeta({
+    taskID: task.id(),
+    componentIdx: task.componentIdx(),
+    fn: () => exports1BlsSecretFromSeedEip2333(ptr0, len0, ptr1, len1),
+  });
+  
+  let variant4;
+  switch (dataView(memory0).getUint8(ret + 0, true)) {
+    case 0: {
+      var ptr2 = dataView(memory0).getUint32(ret + 4, true);
+      var len2 = dataView(memory0).getUint32(ret + 8, true);
+      var result2 = new Uint8Array(memory0.buffer.slice(ptr2, ptr2 + len2 * 1));
+      variant4= {
+        tag: 'ok',
+        val: result2
+      };
+      break;
+    }
+    case 1: {
+      var ptr3 = dataView(memory0).getUint32(ret + 4, true);
+      var len3 = dataView(memory0).getUint32(ret + 8, true);
+      var result3 = TEXT_DECODER_UTF8.decode(new Uint8Array(memory0.buffer, ptr3, len3));
+      variant4= {
+        tag: 'err',
+        val: result3
+      };
+      break;
+    }
+    default: {
+      throw new TypeError('invalid variant discriminant for expected');
+    }
+  }
+  _debugLog('[iface="bls-secret-from-seed-eip2333", function="bls-secret-from-seed-eip2333"][Instruction::Return]', {
+    funcName: 'bls-secret-from-seed-eip2333',
+    paramCount: 1,
+    async: false,
+    postReturn: true
+  });
+  const retCopy = variant4;
+  task.resolve([retCopy.val]);
+  
+  let cstate = getOrCreateAsyncState(0);
+  cstate.mayLeave = false;
+  postReturn0(ret);
+  cstate.mayLeave = true;
+  task.exit();
+  
+  
+  
+  if (typeof retCopy === 'object' && retCopy.tag === 'err') {
+    throw new ComponentError(retCopy.val);
+  }
+  return retCopy.val;
+  
+}
+let exports1BlsPubkeyFromSecret;
+
+function blsPubkeyFromSecret(arg0) {
+  var val0 = arg0;
+  var len0 = Array.isArray(val0) ? val0.length : val0.byteLength;
+  var ptr0 = realloc0(0, 0, 1, len0 * 1);
+  
+  let valData0;
+  const valLenBytes0 = len0 * 1;
+  if (Array.isArray(val0)) {
+    // Regular array likely containing numbers, write values to memory
+    let offset = 0;
+    const dv0 = new DataView(memory0.buffer);
+    for (const v of val0) {
+      _requireValidNumericPrimitive.bind(null, 'u8')(v);
+      dv0.setUint8(ptr0+ offset, v, true);
+      offset += 1;
+    }
+  } else {
+    // TypedArray / ArrayBuffer-like, direct copy
+    valData0 = new Uint8Array(val0.buffer || val0, val0.byteOffset, valLenBytes0);
+    const out0 = new Uint8Array(memory0.buffer, ptr0, valLenBytes0);
+    out0.set(valData0);
+  }
+  
+  _debugLog('[iface="bls-pubkey-from-secret", function="bls-pubkey-from-secret"][Instruction::CallWasm] enter', {
+    funcName: 'bls-pubkey-from-secret',
+    paramCount: 2,
+    async: false,
+    postReturn: true,
+  });
+  const hostProvided = false;
+  
+  const [task, _wasm_call_currentTaskID] = createNewCurrentTask({
+    componentIdx: 0,
+    isAsync: false,
+    isManualAsync: false,
+    entryFnName: 'exports1BlsPubkeyFromSecret',
+    getCallbackFn: () => null,
+    callbackFnName: 'null',
+    errHandling: 'throw-result-err',
+    callingWasmExport: true,
+  });
+  
+  const started = task.enterSync();
+  task.setReturnMemoryIdx(0);
+  task.setReturnMemory(memory0);
+  let ret =   _withGlobalCurrentTaskMeta({
+    taskID: task.id(),
+    componentIdx: task.componentIdx(),
+    fn: () => exports1BlsPubkeyFromSecret(ptr0, len0),
+  });
+  
+  let variant3;
+  switch (dataView(memory0).getUint8(ret + 0, true)) {
+    case 0: {
+      var ptr1 = dataView(memory0).getUint32(ret + 4, true);
+      var len1 = dataView(memory0).getUint32(ret + 8, true);
+      var result1 = new Uint8Array(memory0.buffer.slice(ptr1, ptr1 + len1 * 1));
+      variant3= {
+        tag: 'ok',
+        val: result1
+      };
+      break;
+    }
+    case 1: {
+      var ptr2 = dataView(memory0).getUint32(ret + 4, true);
+      var len2 = dataView(memory0).getUint32(ret + 8, true);
+      var result2 = TEXT_DECODER_UTF8.decode(new Uint8Array(memory0.buffer, ptr2, len2));
+      variant3= {
+        tag: 'err',
+        val: result2
+      };
+      break;
+    }
+    default: {
+      throw new TypeError('invalid variant discriminant for expected');
+    }
+  }
+  _debugLog('[iface="bls-pubkey-from-secret", function="bls-pubkey-from-secret"][Instruction::Return]', {
+    funcName: 'bls-pubkey-from-secret',
+    paramCount: 1,
+    async: false,
+    postReturn: true
+  });
+  const retCopy = variant3;
+  task.resolve([retCopy.val]);
+  
+  let cstate = getOrCreateAsyncState(0);
+  cstate.mayLeave = false;
+  postReturn0(ret);
+  cstate.mayLeave = true;
+  task.exit();
+  
+  
+  
+  if (typeof retCopy === 'object' && retCopy.tag === 'err') {
+    throw new ComponentError(retCopy.val);
+  }
+  return retCopy.val;
+  
+}
+let exports1BlsSign;
+
+function blsSign(arg0, arg1) {
+  var val0 = arg0;
+  var len0 = Array.isArray(val0) ? val0.length : val0.byteLength;
+  var ptr0 = realloc0(0, 0, 1, len0 * 1);
+  
+  let valData0;
+  const valLenBytes0 = len0 * 1;
+  if (Array.isArray(val0)) {
+    // Regular array likely containing numbers, write values to memory
+    let offset = 0;
+    const dv0 = new DataView(memory0.buffer);
+    for (const v of val0) {
+      _requireValidNumericPrimitive.bind(null, 'u8')(v);
+      dv0.setUint8(ptr0+ offset, v, true);
+      offset += 1;
+    }
+  } else {
+    // TypedArray / ArrayBuffer-like, direct copy
+    valData0 = new Uint8Array(val0.buffer || val0, val0.byteOffset, valLenBytes0);
+    const out0 = new Uint8Array(memory0.buffer, ptr0, valLenBytes0);
+    out0.set(valData0);
+  }
+  
+  var val1 = arg1;
+  var len1 = Array.isArray(val1) ? val1.length : val1.byteLength;
+  var ptr1 = realloc0(0, 0, 1, len1 * 1);
+  
+  let valData1;
+  const valLenBytes1 = len1 * 1;
+  if (Array.isArray(val1)) {
+    // Regular array likely containing numbers, write values to memory
+    let offset = 0;
+    const dv1 = new DataView(memory0.buffer);
+    for (const v of val1) {
+      _requireValidNumericPrimitive.bind(null, 'u8')(v);
+      dv1.setUint8(ptr1+ offset, v, true);
+      offset += 1;
+    }
+  } else {
+    // TypedArray / ArrayBuffer-like, direct copy
+    valData1 = new Uint8Array(val1.buffer || val1, val1.byteOffset, valLenBytes1);
+    const out1 = new Uint8Array(memory0.buffer, ptr1, valLenBytes1);
+    out1.set(valData1);
+  }
+  
+  _debugLog('[iface="bls-sign", function="bls-sign"][Instruction::CallWasm] enter', {
+    funcName: 'bls-sign',
+    paramCount: 4,
+    async: false,
+    postReturn: true,
+  });
+  const hostProvided = false;
+  
+  const [task, _wasm_call_currentTaskID] = createNewCurrentTask({
+    componentIdx: 0,
+    isAsync: false,
+    isManualAsync: false,
+    entryFnName: 'exports1BlsSign',
+    getCallbackFn: () => null,
+    callbackFnName: 'null',
+    errHandling: 'throw-result-err',
+    callingWasmExport: true,
+  });
+  
+  const started = task.enterSync();
+  task.setReturnMemoryIdx(0);
+  task.setReturnMemory(memory0);
+  let ret =   _withGlobalCurrentTaskMeta({
+    taskID: task.id(),
+    componentIdx: task.componentIdx(),
+    fn: () => exports1BlsSign(ptr0, len0, ptr1, len1),
+  });
+  
+  let variant4;
+  switch (dataView(memory0).getUint8(ret + 0, true)) {
+    case 0: {
+      var ptr2 = dataView(memory0).getUint32(ret + 4, true);
+      var len2 = dataView(memory0).getUint32(ret + 8, true);
+      var result2 = new Uint8Array(memory0.buffer.slice(ptr2, ptr2 + len2 * 1));
+      variant4= {
+        tag: 'ok',
+        val: result2
+      };
+      break;
+    }
+    case 1: {
+      var ptr3 = dataView(memory0).getUint32(ret + 4, true);
+      var len3 = dataView(memory0).getUint32(ret + 8, true);
+      var result3 = TEXT_DECODER_UTF8.decode(new Uint8Array(memory0.buffer, ptr3, len3));
+      variant4= {
+        tag: 'err',
+        val: result3
+      };
+      break;
+    }
+    default: {
+      throw new TypeError('invalid variant discriminant for expected');
+    }
+  }
+  _debugLog('[iface="bls-sign", function="bls-sign"][Instruction::Return]', {
+    funcName: 'bls-sign',
+    paramCount: 1,
+    async: false,
+    postReturn: true
+  });
+  const retCopy = variant4;
+  task.resolve([retCopy.val]);
+  
+  let cstate = getOrCreateAsyncState(0);
+  cstate.mayLeave = false;
+  postReturn0(ret);
+  cstate.mayLeave = true;
+  task.exit();
+  
+  
+  
+  if (typeof retCopy === 'object' && retCopy.tag === 'err') {
+    throw new ComponentError(retCopy.val);
+  }
+  return retCopy.val;
+  
+}
 let exports1EncodeOpReturn;
 
 function encodeOpReturn(arg0) {
@@ -7206,12 +7658,12 @@ const $init = (() => {
       realloc0Async = exports1.cabi_realloc;
     }
     
-    postReturn0 = exports1['cabi_post_deserialize-inst'];
+    postReturn0 = exports1['cabi_post_bls-pubkey-from-secret'];
     
     try {
-      postReturn0Async = WebAssembly.promising(exports1['cabi_post_deserialize-inst']);
+      postReturn0Async = WebAssembly.promising(exports1['cabi_post_bls-pubkey-from-secret']);
     } catch(err) {
-      postReturn0Async = exports1['cabi_post_deserialize-inst'];
+      postReturn0Async = exports1['cabi_post_bls-pubkey-from-secret'];
     }
     
     postReturn1 = exports1['cabi_post_decode-op-return'];
@@ -7256,6 +7708,10 @@ const $init = (() => {
     
     exports1SerializeInst = exports1['serialize-inst'];
     exports1DeserializeInst = exports1['deserialize-inst'];
+    exports1BlsSecretKeyGen = exports1['bls-secret-key-gen'];
+    exports1BlsSecretFromSeedEip2333 = exports1['bls-secret-from-seed-eip2333'];
+    exports1BlsPubkeyFromSecret = exports1['bls-pubkey-from-secret'];
+    exports1BlsSign = exports1['bls-sign'];
     exports1EncodeOpReturn = exports1['encode-op-return'];
     exports1DecodeOpReturn = exports1['decode-op-return'];
     exports1ValidateWit = exports1['validate-wit'];
@@ -7346,4 +7802,4 @@ const witCodec = {
   
 };
 
-export { numerics, witCodec, decodeOpReturn, deserializeInst, encodeOpReturn, numerics as 'root:component/numerics', witCodec as 'root:component/wit-codec', serializeInst, validateWit,  }
+export { numerics, witCodec, blsPubkeyFromSecret, blsSecretFromSeedEip2333, blsSecretKeyGen, blsSign, decodeOpReturn, deserializeInst, encodeOpReturn, numerics as 'root:component/numerics', witCodec as 'root:component/wit-codec', serializeInst, validateWit,  }

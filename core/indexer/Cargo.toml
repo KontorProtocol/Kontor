@@ -67,6 +67,7 @@ kontor-crypto = "0.2.0"
 ff = "=0.13.1"
 moka = { version = "0.12.11", features = ["future"] }
 blst = "=0.3.16"
+bls-crypto = { path = "../bls-crypto" }
 metrics = "=0.24.5"
 metrics-exporter-prometheus = "=0.18.3"
 

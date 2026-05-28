@@ -1,0 +1,16 @@
+[package]
+name = "bls-crypto"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+# `portable` so the same crate links into wasm32-unknown-unknown for the
+# kontor-sdk component — blst's default mode pulls in x86/aarch64 asm
+# that doesn't lower to wasm.
+blst = { version = "=0.3.16", features = ["portable"] }
+# Default features bring in `rand` / `rand-std`, which transitively
+# pulls `getrandom` and breaks wasm32-unknown-unknown linkage. We only
+# need types (XOnlyPublicKey, Keypair, Secp256k1, sha256) for the
+# RegistrationProof + derivation modules — `std` is enough.
+bitcoin = { version = "=0.32.8", default-features = false, features = ["std"] }
+anyhow = { workspace = true }

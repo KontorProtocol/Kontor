@@ -32,6 +32,10 @@ export * as witCodec from './interfaces/root-component-wit-codec.js'; // export 
 export * as numerics from './interfaces/root-component-numerics.js'; // export root:component/numerics
 export function serializeInst(jsonStr: string): Uint8Array;
 export function deserializeInst(bytes: Uint8Array): string;
+export function blsSecretKeyGen(ikm: Uint8Array): Uint8Array;
+export function blsSecretFromSeedEip2333(seed: Uint8Array, path: Uint32Array): Uint8Array;
+export function blsPubkeyFromSecret(secret: Uint8Array): Uint8Array;
+export function blsSign(secret: Uint8Array, message: Uint8Array): Uint8Array;
 export function encodeOpReturn(entries: Array<OpReturnEntry>): Uint8Array;
 export function decodeOpReturn(bytes: Uint8Array): Array<OpReturnEntry>;
 export function validateWit(witContent: string): ValidationResult;
