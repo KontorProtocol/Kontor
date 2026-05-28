@@ -53,7 +53,7 @@ pub async fn get_results_paginated(
 
     if let Some(height) = query.height {
         where_clauses.push("r.height = :height".to_string());
-        params.push((":height".to_string(), Value::Integer(height)));
+        params.push((":height".to_string(), Value::try_from(height)?));
     }
 
     if let Some(height) = query.start_height {
@@ -65,7 +65,7 @@ pub async fn get_results_paginated(
                 ">="
             }
         ));
-        params.push((":start_height".to_string(), Value::Integer(height)));
+        params.push((":start_height".to_string(), Value::try_from(height)?));
     }
 
     if let Some(signer_id) = query.signer_id {

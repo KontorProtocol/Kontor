@@ -490,7 +490,7 @@ pub fn new_random_blockchain(n: u64) -> Vec<Block> {
     gen_random_blocks(0, n, None)
 }
 
-pub async fn await_block_at_height(conn: &Connection, height: i64) -> BlockRow {
+pub async fn await_block_at_height(conn: &Connection, height: u64) -> BlockRow {
     loop {
         match queries::select_block_at_height(conn, height).await {
             Ok(Some(row)) => return row,
@@ -522,7 +522,7 @@ pub fn valid_seed_field(n: u64) -> ValidSeed {
 }
 
 /// Helper to create a fake FileMetadataRow for testing.
-pub fn create_fake_file_metadata(file_id: &str, filename: &str, height: i64) -> FileMetadataRow {
+pub fn create_fake_file_metadata(file_id: &str, filename: &str, height: u64) -> FileMetadataRow {
     // Create a simple valid root (32 bytes, small enough to be a valid field element)
     let mut root = [0u8; 32];
     root[0] = 1; // Non-zero but small value

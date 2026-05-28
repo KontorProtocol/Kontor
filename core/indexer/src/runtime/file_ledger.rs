@@ -189,7 +189,7 @@ mod tests {
     }
 
     /// Helper to set up a block and transaction in the database
-    async fn setup_block_and_tx(conn: &libsql::Connection, height: i64) -> Result<()> {
+    async fn setup_block_and_tx(conn: &libsql::Connection, height: u64) -> Result<()> {
         let hash = new_mock_block_hash(height as u32);
         let block = BlockRow::builder().height(height).hash(hash).build();
         insert_block(conn, block).await?;
@@ -534,7 +534,7 @@ mod tests {
             let metadata = create_fake_file_metadata(
                 &format!("file_{:03}_id", i),
                 &filename,
-                800000 + i as i64,
+                800000 + i as u64,
             );
             ledger.add_file(&storage.conn, &metadata).await?;
         }
@@ -615,7 +615,7 @@ mod tests {
         let storage = create_test_storage(conn.clone());
 
         // Set up 4 blocks
-        let block_heights: Vec<i64> = vec![800000, 800001, 800002, 800003];
+        let block_heights: Vec<u64> = vec![800000, 800001, 800002, 800003];
         for height in &block_heights {
             setup_block_and_tx(&conn, *height).await?;
         }

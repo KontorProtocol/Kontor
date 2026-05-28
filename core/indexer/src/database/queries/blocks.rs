@@ -62,12 +62,12 @@ pub async fn select_block_by_height_or_hash(
 
 pub async fn select_block_at_height(
     conn: &Connection,
-    height: i64,
+    height: u64,
 ) -> Result<Option<BlockRow>, Error> {
     let mut rows = conn
         .query(
             "SELECT height, hash, relevant FROM blocks WHERE height = ?",
-            params![height],
+            params![Value::try_from(height)?],
         )
         .await?;
     Ok(rows.next().await?.map(|r| from_row(&r)).transpose()?)

@@ -31,7 +31,7 @@ async fn info_test_server(
     Ok((TestServer::new(app), info_tx, dir))
 }
 
-fn core_with_signature(signature: &str, height: i64) -> InfoCore {
+fn core_with_signature(signature: &str, height: u64) -> InfoCore {
     InfoCore {
         height,
         signature: signature.to_string(),
@@ -45,20 +45,20 @@ fn core_with_signature(signature: &str, height: i64) -> InfoCore {
 async fn info_signature_tracks_chain_state() -> Result<()> {
     let (_env, conn, _dir) = new_test_env().await?;
 
-    let empty = compute_info_core(&conn, -1).await?.signature;
+    let empty = compute_info_core(&conn, 0).await?.signature;
 
     insert_block_at(&conn, 0, ZERO_HASH).await?;
-    let one_block = compute_info_core(&conn, -1).await?.signature;
+    let one_block = compute_info_core(&conn, 0).await?.signature;
     assert_ne!(empty, one_block, "signature must change when a block lands");
 
     insert_block_at(&conn, 1, ONE_HASH).await?;
-    let two_blocks = compute_info_core(&conn, -1).await?.signature;
+    let two_blocks = compute_info_core(&conn, 0).await?.signature;
     assert_ne!(
         one_block, two_blocks,
         "signature must change on a new block"
     );
 
-    let recomputed = compute_info_core(&conn, -1).await?.signature;
+    let recomputed = compute_info_core(&conn, 0).await?.signature;
     assert_eq!(two_blocks, recomputed, "signature must be deterministic");
     Ok(())
 }

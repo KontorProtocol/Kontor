@@ -10,7 +10,13 @@ use crate::database::types::TransactionQuery;
 pub async fn insert_transaction(conn: &Connection, row: TransactionRow) -> Result<i64, Error> {
     conn.execute(
         "INSERT INTO transactions (height, txid, confirmed_height, tx_index, batch_height) VALUES (?, ?, ?, ?, ?)",
-        params![row.height, row.txid, row.confirmed_height, row.tx_index, row.batch_height],
+        params![
+            Value::try_from(row.height)?,
+            row.txid,
+            row.confirmed_height.map(Value::try_from).transpose()?,
+            row.tx_index,
+            row.batch_height.map(Value::try_from).transpose()?,
+        ],
     )
     .await?;
     Ok(conn.last_insert_rowid())
@@ -19,12 +25,12 @@ pub async fn insert_transaction(conn: &Connection, row: TransactionRow) -> Resul
 pub async fn confirm_transaction(
     conn: &Connection,
     txid: &str,
-    confirmed_height: i64,
+    confirmed_height: u64,
     tx_index: i64,
 ) -> Result<(), Error> {
     conn.execute(
         "UPDATE transactions SET confirmed_height = ?, tx_index = ? WHERE txid = ?",
-        params![confirmed_height, tx_index, txid],
+        params![Value::try_from(confirmed_height)?, tx_index, txid],
     )
     .await?;
     delete_unconfirmed_batch_tx(conn, txid).await?;
@@ -47,12 +53,12 @@ pub async fn get_transaction_by_txid(
 
 pub async fn get_transactions_at_height(
     conn: &Connection,
-    height: i64,
+    height: u64,
 ) -> Result<Vec<TransactionRow>, Error> {
     let mut rows = conn
         .query(
             "SELECT id, txid, height, confirmed_height, tx_index, batch_height FROM transactions WHERE height = ?",
-            params![height],
+            params![Value::try_from(height)?],
         )
         .await?;
 
@@ -101,7 +107,7 @@ pub async fn get_transactions_paginated(
 
     if let Some(height) = query.height {
         where_clauses.push("t.height = :height".to_string());
-        params.push((":height".to_string(), Value::Integer(height)));
+        params.push((":height".to_string(), Value::try_from(height)?));
     }
 
     get_paginated(

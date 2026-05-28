@@ -176,7 +176,7 @@ impl Executor for LiteExecutor {
     async fn execute_transaction(
         &self,
         runtime: &mut Runtime,
-        height: i64,
+        height: u64,
         tx_id: i64,
         tx: &indexer_types::Transaction,
     ) -> anyhow::Result<Vec<Vec<Option<anyhow::Error>>>> {

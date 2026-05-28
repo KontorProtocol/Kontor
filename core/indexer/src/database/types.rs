@@ -62,7 +62,7 @@ impl std::str::FromStr for OrderDirection {
 
 impl HasRowId for BlockRow {
     fn id(&self) -> i64 {
-        self.height
+        self.height as i64
     }
 
     fn id_name() -> &'static str {
@@ -72,7 +72,7 @@ impl HasRowId for BlockRow {
 
 #[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq)]
 pub struct CheckpointRow {
-    pub height: i64,
+    pub height: u64,
     pub hash: String,
 }
 
@@ -115,8 +115,8 @@ pub struct SignerEntry {
 
 #[derive(Debug, Clone)]
 pub struct BatchQueryResult {
-    pub consensus_height: i64,
-    pub anchor_height: i64,
+    pub consensus_height: u64,
+    pub anchor_height: u64,
     pub anchor_hash: String,
     pub certificate: Vec<u8>,
     pub is_block: bool,
@@ -126,7 +126,7 @@ pub struct BatchQueryResult {
 #[derive(Debug, Clone, Serialize, Deserialize, Builder)]
 pub struct ContractStateRow {
     pub contract_id: i64,
-    pub height: i64,
+    pub height: u64,
     pub tx_id: Option<i64>,
     pub path: String,
     #[builder(default = vec![])]
@@ -179,7 +179,7 @@ pub struct ContractRow {
     #[builder(default = 0)]
     pub id: i64,
     pub name: String,
-    pub height: i64,
+    pub height: u64,
     pub tx_index: i64,
     pub bytes: Vec<u8>,
     pub signer_id: Option<i64>,
@@ -231,7 +231,7 @@ pub struct TransactionQuery {
     #[serde(default)]
     pub order: OrderDirection,
 
-    pub height: Option<i64>,
+    pub height: Option<u64>,
     #[serde_as(as = "Option<DisplayFromStr>")]
     pub contract: Option<ContractAddress>,
     pub signer_id: Option<i64>,
@@ -249,8 +249,8 @@ pub struct ResultQuery {
     #[serde(default)]
     pub order: OrderDirection,
 
-    pub height: Option<i64>,
-    pub start_height: Option<i64>,
+    pub height: Option<u64>,
+    pub start_height: Option<u64>,
     #[serde_as(as = "Option<DisplayFromStr>")]
     pub contract: Option<ContractAddress>,
     pub func: Option<String>,
@@ -261,7 +261,7 @@ pub struct ResultQuery {
 pub struct ContractResultRow {
     #[builder(default = 0)]
     pub id: i64,
-    pub height: i64,
+    pub height: u64,
     pub tx_id: Option<i64>,
     pub input_index: Option<i64>,
     pub op_index: Option<i64>,
@@ -297,7 +297,7 @@ impl ContractResultRow {
 pub struct ContractResultPublicRow {
     #[builder(default = 0)]
     pub id: i64,
-    pub height: i64,
+    pub height: u64,
     pub tx_index: Option<i64>,
     pub input_index: Option<i64>,
     pub op_index: Option<i64>,
@@ -308,7 +308,7 @@ pub struct ContractResultPublicRow {
     pub gas: i64,
     pub value: Option<String>,
     pub contract_name: String,
-    pub contract_height: i64,
+    pub contract_height: u64,
     pub contract_tx_index: i64,
     pub txid: Option<String>,
     pub signer_id: i64,
@@ -342,7 +342,7 @@ impl From<ContractResultPublicRow> for ResultRow {
             value: row.value,
             contract: ContractAddress {
                 name: row.contract_name,
-                height: row.contract_height as u64,
+                height: row.contract_height,
                 tx_index: row.contract_tx_index as u64,
             }
             .to_string(),
@@ -412,7 +412,7 @@ pub struct FileMetadataRow {
     pub padded_len: u64,
     pub original_size: u64,
     pub filename: String,
-    pub height: i64,
+    pub height: u64,
     pub historical_root: Option<[u8; 32]>,
 }
 

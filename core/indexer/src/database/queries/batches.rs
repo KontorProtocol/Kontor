@@ -1,19 +1,25 @@
-use libsql::{Connection, params};
+use libsql::{Connection, Value, params};
 
 use super::Error;
 use crate::database::types::BatchQueryResult;
 
 pub async fn insert_batch(
     conn: &Connection,
-    consensus_height: i64,
-    anchor_height: i64,
+    consensus_height: u64,
+    anchor_height: u64,
     anchor_hash: &str,
     certificate: &[u8],
     is_block: bool,
 ) -> Result<(), Error> {
     conn.execute(
         "INSERT OR IGNORE INTO batches (consensus_height, anchor_height, anchor_hash, certificate, is_block) VALUES (?, ?, ?, ?, ?)",
-        params![consensus_height, anchor_height, anchor_hash, certificate, is_block as i64],
+        params![
+            Value::try_from(consensus_height)?,
+            Value::try_from(anchor_height)?,
+            anchor_hash,
+            certificate,
+            is_block as i64,
+        ],
     )
     .await?;
     Ok(())
@@ -30,7 +36,7 @@ pub async fn delete_batches_above_anchor(conn: &Connection, max_anchor: i64) -> 
     Ok(rows)
 }
 
-pub async fn select_latest_consensus_height(conn: &Connection) -> Result<Option<i64>, Error> {
+pub async fn select_latest_consensus_height(conn: &Connection) -> Result<Option<u64>, Error> {
     Ok(conn
         .query("SELECT MAX(consensus_height) FROM batches", ())
         .await?
@@ -41,7 +47,7 @@ pub async fn select_latest_consensus_height(conn: &Connection) -> Result<Option<
 
 pub async fn select_batch(
     conn: &Connection,
-    consensus_height: i64,
+    consensus_height: u64,
 ) -> Result<Option<BatchQueryResult>, Error> {
     let results = query_batches(
         conn,
@@ -98,7 +104,7 @@ async fn query_batches(
 
     let mut results: Vec<BatchQueryResult> = Vec::new();
     while let Some(row) = rows.next().await? {
-        let consensus_height: i64 = row.get(0)?;
+        let consensus_height: u64 = row.get(0)?;
         let txid: Option<String> = row.get(5)?;
 
         if results
@@ -126,12 +132,12 @@ async fn query_batches(
 pub async fn insert_unconfirmed_batch_tx(
     conn: &Connection,
     txid: &str,
-    batch_height: i64,
+    batch_height: u64,
     raw_tx: &[u8],
 ) -> Result<(), Error> {
     conn.execute(
         "INSERT OR IGNORE INTO unconfirmed_batch_txs (txid, batch_height, raw_tx) VALUES (?, ?, ?)",
-        params![txid, batch_height, raw_tx],
+        params![txid, Value::try_from(batch_height)?, raw_tx],
     )
     .await?;
     Ok(())
@@ -148,12 +154,12 @@ pub async fn delete_unconfirmed_batch_tx(conn: &Connection, txid: &str) -> Resul
 
 pub async fn select_unconfirmed_batch_txs(
     conn: &Connection,
-    batch_height: i64,
+    batch_height: u64,
 ) -> Result<Vec<Vec<u8>>, Error> {
     let mut rows = conn
         .query(
             "SELECT raw_tx FROM unconfirmed_batch_txs WHERE batch_height = ?",
-            params![batch_height],
+            params![Value::try_from(batch_height)?],
         )
         .await?;
     let mut results = Vec::new();

@@ -46,7 +46,7 @@ pub struct Storage {
     #[builder(default = Stack::builder().build())]
     pub savepoint_stack: Stack<u64>,
     #[builder(default = 1)]
-    pub height: i64,
+    pub height: u64,
     pub tx_context: Option<TransactionContext>,
 }
 

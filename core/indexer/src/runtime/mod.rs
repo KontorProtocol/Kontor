@@ -244,7 +244,7 @@ impl Runtime {
 
     pub async fn set_context(
         &mut self,
-        height: i64,
+        height: u64,
         tx_context: Option<TransactionContext>,
         previous_output: Option<bitcoin::OutPoint>,
         op_return_data: Option<SignerRef>,
@@ -336,7 +336,7 @@ impl Runtime {
     ) -> Result<String, ExecutionError> {
         let address = ContractAddress {
             name: name.to_string(),
-            height: self.storage.height as u64,
+            height: self.storage.height,
             tx_index: self
                 .tx_context()
                 .expect("Transaction context must be set to public contracts")

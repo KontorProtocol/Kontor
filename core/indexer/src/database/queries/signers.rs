@@ -53,7 +53,7 @@ impl Identity {
         &self,
         conn: &Connection,
         caller_nonce: i64,
-        height: i64,
+        height: u64,
     ) -> Result<i64, Error> {
         let mut rows = conn
             .query(
@@ -102,7 +102,7 @@ impl Identity {
         &self,
         conn: &Connection,
         bls_pubkey: &[u8],
-        height: i64,
+        height: u64,
     ) -> Result<(), Error> {
         conn.execute(
             "INSERT OR REPLACE INTO bls_keys (signer_id, bls_pubkey, height) VALUES (?, ?, ?)",
@@ -145,7 +145,7 @@ pub async fn get_identity(
 pub async fn ensure_identity(
     conn: &Connection,
     x_only_pubkey: &str,
-    height: i64,
+    height: u64,
 ) -> Result<Identity, Error> {
     if let Some(existing) = get_identity(conn, x_only_pubkey).await? {
         return Ok(existing);
@@ -204,7 +204,7 @@ pub async fn create_core_signer(conn: &Connection) -> Result<i64, Error> {
 
 /// Create a signer row for a contract. No x_only_pubkey — contracts don't
 /// have bitcoin keys. The signer_id is assigned by auto-increment.
-pub async fn create_contract_signer(conn: &Connection, height: i64) -> Result<i64, Error> {
+pub async fn create_contract_signer(conn: &Connection, height: u64) -> Result<i64, Error> {
     conn.execute("INSERT INTO signers (height) VALUES (?)", params![height])
         .await?;
     Ok(conn.last_insert_rowid())

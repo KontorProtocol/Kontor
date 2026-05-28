@@ -268,8 +268,8 @@ impl RuntimeLocal {
         signer: &Signer,
         contracts: &[(&str, &[u8])],
     ) -> Result<()> {
-        let height = 1;
-        let tx_index = 0;
+        let height = 1u64;
+        let tx_index = 0i64;
         let conn = self.runtime.get_storage_conn();
         let tx = new_mock_transaction(1);
         if get_transaction_by_txid(&conn, &tx.txid.to_string())
@@ -313,7 +313,7 @@ impl RuntimeLocal {
                         Some(payment),
                         &ContractAddress {
                             name: name.to_string(),
-                            height: height as u64,
+                            height,
                             tx_index: tx_index as u64,
                         },
                         "init()",
@@ -332,7 +332,7 @@ impl RuntimeLocal {
     pub async fn new() -> Result<Self> {
         let (mut runtime, _db_dir, _db_name) = indexer::test_utils::test_runtime().await?;
         let conn = runtime.get_storage_conn();
-        let height = 1i64;
+        let height = 1u64;
         let tx_index = 1i64;
         let txid = new_mock_transaction(0).txid;
         let tx_id = insert_transaction(

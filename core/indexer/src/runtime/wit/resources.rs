@@ -237,7 +237,7 @@ impl FileDescriptor {
         Self { file_metadata_row }
     }
 
-    pub fn try_from_raw(raw: RawFileDescriptor, height: i64) -> Result<Self, Error> {
+    pub fn try_from_raw(raw: RawFileDescriptor, height: u64) -> Result<Self, Error> {
         let root: [u8; 32] = raw
             .root
             .try_into()

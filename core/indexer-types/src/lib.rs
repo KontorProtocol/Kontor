@@ -584,7 +584,7 @@ pub enum OpKind {
 #[ts(export, export_to = "../../../sdk/src/bindings.d.ts")]
 pub struct BlockRow {
     #[ts(type = "number")]
-    pub height: i64,
+    pub height: u64,
     #[ts(as = "String")]
     pub hash: BlockHash,
     #[builder(default = false)]
@@ -594,7 +594,7 @@ pub struct BlockRow {
 impl From<&Block> for BlockRow {
     fn from(b: &Block) -> Self {
         Self {
-            height: b.height as i64,
+            height: b.height,
             hash: b.hash,
             relevant: !b.transactions.is_empty(),
         }
@@ -609,13 +609,13 @@ pub struct TransactionRow {
     pub id: i64,
     pub txid: String,
     #[ts(type = "number")]
-    pub height: i64,
+    pub height: u64,
     #[ts(type = "number | null")]
-    pub confirmed_height: Option<i64>,
+    pub confirmed_height: Option<u64>,
     #[ts(type = "number | null")]
     pub tx_index: Option<i64>,
     #[ts(type = "number | null")]
-    pub batch_height: Option<i64>,
+    pub batch_height: Option<u64>,
 }
 
 #[derive(Eq, PartialEq, Debug, Clone, Serialize, Deserialize, TS)]
@@ -625,7 +625,7 @@ pub struct ContractListRow {
     pub id: i64,
     pub name: String,
     #[ts(type = "number")]
-    pub height: i64,
+    pub height: u64,
     #[ts(type = "number")]
     pub tx_index: i64,
     #[ts(type = "number")]
@@ -681,7 +681,7 @@ pub enum ConsensusMode {
 #[ts(export, export_to = "../../../sdk/src/bindings.d.ts")]
 pub struct RecentBlock {
     #[ts(type = "number")]
-    pub height: i64,
+    pub height: u64,
     #[ts(as = "String")]
     pub hash: BlockHash,
 }
@@ -695,10 +695,10 @@ pub struct Info {
     pub available: bool,
     pub consensus_mode: ConsensusMode,
     #[ts(type = "number")]
-    pub height: i64,
+    pub height: u64,
     pub checkpoint: Option<String>,
     #[ts(type = "number | null")]
-    pub consensus_height: Option<i64>,
+    pub consensus_height: Option<u64>,
     /// Highest `contract_results.id` — the SDK's forward cursor for
     /// draining `/api/results`. 0 when no results exist yet.
     #[ts(type = "number")]
@@ -867,7 +867,7 @@ pub struct ResultRow {
     #[ts(type = "number")]
     pub id: i64,
     #[ts(type = "number")]
-    pub height: i64,
+    pub height: u64,
     #[ts(type = "number | null")]
     pub tx_index: Option<i64>,
     #[ts(type = "number | null")]

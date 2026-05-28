@@ -1557,7 +1557,7 @@ impl RegTesterCluster {
     /// Poll all running nodes until they all reach at least the expected height.
     pub async fn poll_all_nodes_height(
         &self,
-        expected_height: i64,
+        expected_height: u64,
         timeout_secs: u64,
     ) -> Result<()> {
         poll_nodes!(
@@ -1571,7 +1571,7 @@ impl RegTesterCluster {
     /// Poll all running nodes until they all reach at least the expected consensus height.
     pub async fn poll_all_nodes_consensus_height(
         &self,
-        expected: i64,
+        expected: u64,
         timeout_secs: u64,
     ) -> Result<()> {
         poll_nodes!(

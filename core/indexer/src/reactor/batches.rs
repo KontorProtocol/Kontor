@@ -162,8 +162,8 @@ impl<E: Executor> Reactor<E> {
         if batch_txs.is_empty() {
             insert_batch(
                 &conn,
-                consensus_height.as_u64() as i64,
-                anchor_height as i64,
+                consensus_height.as_u64(),
+                anchor_height,
                 &anchor_hash.to_string(),
                 certificate,
                 false,
@@ -222,8 +222,8 @@ impl<E: Executor> Reactor<E> {
 
         insert_batch(
             &conn,
-            consensus_height.as_u64() as i64,
-            anchor_height as i64,
+            consensus_height.as_u64(),
+            anchor_height,
             &anchor_hash.to_string(),
             certificate,
             false,
@@ -238,7 +238,7 @@ impl<E: Executor> Reactor<E> {
             insert_unconfirmed_batch_tx(
                 &conn,
                 &txid.to_string(),
-                consensus_height.as_u64() as i64,
+                consensus_height.as_u64(),
                 &serialized,
             )
             .await
@@ -249,8 +249,8 @@ impl<E: Executor> Reactor<E> {
             let tx_id = insert_transaction(
                 &conn,
                 indexer_types::TransactionRow::builder()
-                    .height(anchor_height as i64)
-                    .batch_height(consensus_height.as_u64() as i64)
+                    .height(anchor_height)
+                    .batch_height(consensus_height.as_u64())
                     .txid(t.txid.to_string())
                     .build(),
             )
@@ -262,7 +262,7 @@ impl<E: Executor> Reactor<E> {
             // execute_op. Only non-deterministic errors (Result::Err) abort.
             let _failures = self
                 .executor
-                .execute_transaction(&mut self.runtime, anchor_height as i64, tx_id, t)
+                .execute_transaction(&mut self.runtime, anchor_height, tx_id, t)
                 .await
                 .context("execute_transaction failed")?;
         }
@@ -737,8 +737,8 @@ impl<E: Executor> Reactor<E> {
                         );
                         insert_batch(
                             &conn,
-                            certificate.height.as_u64() as i64,
-                            *anchor_height as i64,
+                            certificate.height.as_u64(),
+                            *anchor_height,
                             &anchor_hash.to_string(),
                             &cert_bytes,
                             false,
@@ -798,7 +798,7 @@ impl<E: Executor> Reactor<E> {
                             },
                         );
                     } else {
-                        let is_stale = match select_block_at_height(&conn, *height as i64).await {
+                        let is_stale = match select_block_at_height(&conn, *height).await {
                             Ok(Some(row)) => row.hash != *hash,
                             _ => false,
                         };

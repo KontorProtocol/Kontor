@@ -117,7 +117,7 @@ pub async fn get_latest_contract_state_value(
 
 pub async fn delete_contract_state(
     conn: &Connection,
-    height: i64,
+    height: u64,
     tx_id: Option<i64>,
     contract_id: i64,
     path: &str,
@@ -203,7 +203,7 @@ pub async fn matching_path(
 pub async fn delete_matching_paths(
     conn: &Connection,
     contract_id: i64,
-    height: i64,
+    height: u64,
     path_regexp: &str,
 ) -> Result<u64, Error> {
     Ok(conn

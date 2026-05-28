@@ -301,7 +301,7 @@ async fn test_checkpoint_trigger() {
 
 #[tokio::test]
 async fn test_database() -> Result<()> {
-    let height: i64 = 800000;
+    let height: u64 = 800000;
     let hash = new_mock_block_hash(height as u32);
     let block = BlockRow::builder().height(height).hash(hash).build();
 
@@ -726,7 +726,7 @@ async fn test_contracts() -> Result<()> {
 async fn test_contracts_gapless() -> Result<()> {
     let (_reader, writer, _temp_dir) = new_test_db().await?;
     let conn = writer.connection();
-    let insert = async |conn: &Connection, i: i64| {
+    let insert = async |conn: &Connection, i: u64| {
         insert_block(
             conn,
             BlockRow::builder()
@@ -744,7 +744,7 @@ async fn test_contracts_gapless() -> Result<()> {
             .build();
         insert_contract(conn, row.clone()).await.unwrap();
     };
-    for i in 1i64..=5 {
+    for i in 1u64..=5 {
         insert(&conn, i).await;
     }
     let query = "SELECT id FROM contracts ORDER BY height ASC";
@@ -760,7 +760,7 @@ async fn test_contracts_gapless() -> Result<()> {
     assert_eq!(get_ids(&conn).await, vec![1, 2, 3, 4, 5]);
     rollback_to_height(&conn, 3).await?;
     assert_eq!(get_ids(&conn).await, vec![1, 2, 3]);
-    for i in 4i64..=5 {
+    for i in 4u64..=5 {
         insert(&conn, i).await;
     }
     assert_eq!(get_ids(&conn).await, vec![1, 2, 3, 4, 5]);
@@ -1188,7 +1188,7 @@ async fn test_file_metadata_operations() -> Result<()> {
     assert_eq!(entries[1].file_id, file_id2);
 
     // Test rollback deletes file metadata entries (ON DELETE CASCADE)
-    rollback_to_height(&conn, height as u64).await?;
+    rollback_to_height(&conn, height).await?;
 
     let entries = select_all_file_metadata(&conn).await?;
     assert_eq!(entries.len(), 1);
@@ -1202,7 +1202,7 @@ async fn test_insert_and_select_batch() -> Result<()> {
     let (_reader, writer, _temp_dir) = new_test_db().await?;
     let conn = writer.connection();
 
-    let height: i64 = 100;
+    let height: u64 = 100;
     let hash = new_mock_block_hash(height as u32);
     insert_block(&conn, BlockRow::builder().height(height).hash(hash).build()).await?;
 
@@ -1251,7 +1251,7 @@ async fn test_select_min_batch_height() -> Result<()> {
 
     assert!(select_min_batch_height(&conn).await?.is_none());
 
-    let height: i64 = 100;
+    let height: u64 = 100;
     let hash = new_mock_block_hash(height as u32);
     insert_block(&conn, BlockRow::builder().height(height).hash(hash).build()).await?;
 
@@ -1270,7 +1270,7 @@ async fn test_select_batches_from_anchor() -> Result<()> {
     let conn = writer.connection();
 
     // Create blocks at heights 100 and 200
-    for h in [100i64, 200] {
+    for h in [100u64, 200] {
         let hash = new_mock_block_hash(h as u32);
         insert_block(&conn, BlockRow::builder().height(h).hash(hash).build()).await?;
     }
@@ -1433,7 +1433,7 @@ async fn test_get_blocks_query() -> Result<()> {
     assert_eq!(blocks.len(), 1);
     assert_eq!(blocks[0].height, 102);
     assert!(meta.has_more);
-    assert_eq!(meta.next_cursor, Some(blocks[0].height));
+    assert_eq!(meta.next_cursor, Some(blocks[0].height as i64));
     assert_eq!(meta.total_count, 3);
 
     let (blocks, meta) = get_blocks_paginated(
@@ -1448,7 +1448,7 @@ async fn test_get_blocks_query() -> Result<()> {
     assert_eq!(blocks.len(), 1);
     assert_eq!(blocks[0].height, 101);
     assert!(meta.has_more);
-    assert_eq!(meta.next_cursor, Some(blocks[0].height));
+    assert_eq!(meta.next_cursor, Some(blocks[0].height as i64));
 
     let (blocks, meta) = get_blocks_paginated(
         &conn,
@@ -1462,7 +1462,7 @@ async fn test_get_blocks_query() -> Result<()> {
     assert_eq!(blocks.len(), 1);
     assert_eq!(blocks[0].height, 100);
     assert!(!meta.has_more);
-    assert_eq!(meta.next_cursor, Some(blocks[0].height));
+    assert_eq!(meta.next_cursor, Some(blocks[0].height as i64));
 
     Ok(())
 }
@@ -1496,7 +1496,7 @@ async fn test_get_blocks_query_relevant() -> Result<()> {
     assert_eq!(blocks.len(), 1);
     assert_eq!(blocks[0].height, 100);
     assert!(!meta.has_more);
-    assert_eq!(meta.next_cursor, Some(blocks[0].height));
+    assert_eq!(meta.next_cursor, Some(blocks[0].height as i64));
     assert_eq!(meta.total_count, 1);
 
     let (blocks, meta) =
@@ -1505,7 +1505,7 @@ async fn test_get_blocks_query_relevant() -> Result<()> {
     assert_eq!(blocks.len(), 1);
     assert_eq!(blocks[0].height, 101);
     assert!(!meta.has_more);
-    assert_eq!(meta.next_cursor, Some(blocks[0].height));
+    assert_eq!(meta.next_cursor, Some(blocks[0].height as i64));
     assert_eq!(meta.total_count, 1);
 
     Ok(())
@@ -2554,7 +2554,7 @@ async fn test_transaction_signer_id_querying() -> Result<()> {
     Ok(())
 }
 
-async fn setup_block(conn: &Connection, height: i64) -> Result<()> {
+async fn setup_block(conn: &Connection, height: u64) -> Result<()> {
     insert_block(
         conn,
         BlockRow {

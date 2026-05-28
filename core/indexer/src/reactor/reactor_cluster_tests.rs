@@ -539,7 +539,7 @@ impl ReactorCluster {
                     state_events.push(se);
                 }
                 Some(ev) = self.event_rx.recv() => {
-                    if matches!(&ev, Event::Processed { block, .. } if block.height == height as i64) {
+                    if matches!(&ev, Event::Processed { block, .. } if block.height == height) {
                         event_count += 1;
                     }
                     events.push(ev);

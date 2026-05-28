@@ -36,7 +36,7 @@ impl<E: Executor> Reactor<E> {
             .context("file_ledger resync after rollback failed")?;
         self.last_height = height;
 
-        if let Ok(Some(row)) = select_block_at_height(&self.db_conn(), height as i64).await {
+        if let Ok(Some(row)) = select_block_at_height(&self.db_conn(), height).await {
             self.last_hash = Some(row.hash);
             info!("Rollback to height {} ({})", height, row.hash);
         } else {
@@ -77,7 +77,7 @@ impl<E: Executor> Reactor<E> {
         insert_block(
             &self.db_conn(),
             BlockRow::builder()
-                .height(block.height as i64)
+                .height(block.height)
                 .hash(block.hash)
                 .relevant(!block.transactions.is_empty())
                 .build(),
@@ -95,14 +95,9 @@ impl<E: Executor> Reactor<E> {
                 .context("get_transaction_by_txid failed")?
                 .is_some()
             {
-                confirm_transaction(
-                    &self.db_conn(),
-                    &t.txid.to_string(),
-                    block.height as i64,
-                    i as i64,
-                )
-                .await
-                .context("confirm_transaction failed")?;
+                confirm_transaction(&self.db_conn(), &t.txid.to_string(), block.height, i as i64)
+                    .await
+                    .context("confirm_transaction failed")?;
                 failures.push(Vec::new());
                 continue;
             }
@@ -116,9 +111,9 @@ impl<E: Executor> Reactor<E> {
             let tx_id = insert_transaction(
                 &self.db_conn(),
                 indexer_types::TransactionRow::builder()
-                    .height(block.height as i64)
+                    .height(block.height)
                     .tx_index(i as i64)
-                    .confirmed_height(block.height as i64)
+                    .confirmed_height(block.height)
                     .txid(t.txid.to_string())
                     .build(),
             )
@@ -127,7 +122,7 @@ impl<E: Executor> Reactor<E> {
 
             let tx_failures = self
                 .executor
-                .execute_transaction(&mut self.runtime, block.height as i64, tx_id, t)
+                .execute_transaction(&mut self.runtime, block.height, tx_id, t)
                 .await
                 .context("execute_transaction failed")?;
             failures.push(tx_failures);
@@ -153,7 +148,7 @@ impl<E: Executor> Reactor<E> {
         let block_row = select_block_latest(&self.db_conn())
             .await
             .context("Failed to query latest block for simulation")?;
-        let height = block_row.as_ref().map_or(1, |row| row.height as u64 + 1);
+        let height = block_row.as_ref().map_or(1, |row| row.height + 1);
         let block = Block {
             height,
             hash: new_mock_block_hash(height as u32),
@@ -202,7 +197,7 @@ impl<E: Executor> Reactor<E> {
         let core_signer = Signer::Core(Box::new(Signer::Nobody));
         let block_hash: Vec<u8> = block.hash.to_byte_array().to_vec();
         self.runtime
-            .set_context(block.height as i64, None, None, None)
+            .set_context(block.height, None, None, None)
             .await;
         expire_challenges(&mut self.runtime, &core_signer, block.height)
             .await
@@ -244,8 +239,8 @@ impl<E: Executor> Reactor<E> {
     ) -> Result<()> {
         insert_batch(
             &self.db_conn(),
-            decision.consensus_height.as_u64() as i64,
-            block.height as i64,
+            decision.consensus_height.as_u64(),
+            block.height,
             &block.hash.to_string(),
             &decision.certificate,
             true,

@@ -35,7 +35,7 @@ pub(super) async fn new_test_env() -> Result<(Env, Connection, TempDir)> {
 }
 
 /// Insert a block row at `height` with the given hex hash.
-pub(super) async fn insert_block_at(conn: &Connection, height: i64, hash: &str) -> Result<()> {
+pub(super) async fn insert_block_at(conn: &Connection, height: u64, hash: &str) -> Result<()> {
     insert_block(
         conn,
         BlockRow::builder()
@@ -50,7 +50,7 @@ pub(super) async fn insert_block_at(conn: &Connection, height: i64, hash: &str) 
 /// Insert a transaction row. Returns the assigned row id.
 pub(super) async fn insert_tx_at(
     conn: &Connection,
-    height: i64,
+    height: u64,
     tx_index: i64,
     txid: &str,
 ) -> Result<i64> {
@@ -850,7 +850,7 @@ mod transactions_pagination {
     async fn setup() -> Result<(TestServer, TempDir)> {
         let (env, conn, db_dir) = new_test_env().await?;
 
-        for height in 800000..=800005i64 {
+        for height in 800000..=800005u64 {
             insert_block_at(&conn, height, &format!("{:064x}", height)).await?;
         }
 
@@ -867,7 +867,7 @@ mod transactions_pagination {
 
         // Per-height transaction counts. Some indexes also modify the token
         // contract — captured below in `contract_state_writes`.
-        let counts: &[(i64, i64)] = &[
+        let counts: &[(u64, i64)] = &[
             (800000, 5),
             (800001, 3),
             (800002, 7),
@@ -875,7 +875,7 @@ mod transactions_pagination {
             (800004, 4),
             (800005, 2),
         ];
-        let mut tx_ids: std::collections::HashMap<i64, Vec<i64>> = std::collections::HashMap::new();
+        let mut tx_ids: std::collections::HashMap<u64, Vec<i64>> = std::collections::HashMap::new();
         for &(height, count) in counts {
             let mut ids = Vec::with_capacity(count as usize);
             for tx_index in 0..count {
@@ -887,7 +887,7 @@ mod transactions_pagination {
 
         // Contract-state touches at (height, tx_index, path).
         let contract_state_writes = [
-            (800000i64, 1usize, "foo"),
+            (800000u64, 1usize, "foo"),
             (800001, 2, "bar"),
             (800002, 3, "biz"),
         ];

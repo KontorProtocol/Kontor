@@ -33,9 +33,9 @@ pub const RECENT_BLOCKS_WINDOW: i64 = 10;
 /// by [`run_info_publisher`], read by the `GET /api/` handler.
 #[derive(Debug, Clone, Default)]
 pub struct InfoCore {
-    pub height: i64,
+    pub height: u64,
     pub checkpoint: Option<String>,
-    pub consensus_height: Option<i64>,
+    pub consensus_height: Option<u64>,
     pub last_result_id: i64,
     pub recent_blocks: Vec<RecentBlock>,
     /// Hash of `last_result_id` + `recent_blocks` — the long-poll
@@ -45,7 +45,7 @@ pub struct InfoCore {
 
 /// Recompute `InfoCore` from the database. `fallback_height` is used as
 /// `height` only when no blocks are indexed yet (startup seed).
-pub async fn compute_info_core(conn: &Connection, fallback_height: i64) -> Result<InfoCore> {
+pub async fn compute_info_core(conn: &Connection, fallback_height: u64) -> Result<InfoCore> {
     let checkpoint = get_checkpoint_latest(conn).await?.map(|c| c.hash);
     let consensus_height = select_latest_consensus_height(conn).await?;
     let recent_blocks: Vec<RecentBlock> = select_recent_blocks(conn, RECENT_BLOCKS_WINDOW)
@@ -96,7 +96,7 @@ pub fn run_info_publisher(
     starting_block_height: u64,
     info_tx: watch::Sender<InfoCore>,
 ) -> JoinHandle<()> {
-    let fallback_height = starting_block_height as i64 - 1;
+    let fallback_height = starting_block_height.saturating_sub(1);
     tokio::spawn(async move {
         loop {
             tokio::select! {

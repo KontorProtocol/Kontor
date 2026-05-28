@@ -146,7 +146,7 @@ impl ConsensusState {
 
         let current_height = match select_latest_consensus_height(&conn).await {
             Ok(Some(h)) => {
-                let resume = Height::new(h as u64 + 1);
+                let resume = Height::new(h + 1);
                 info!(%resume, "Resuming consensus from DB");
                 resume
             }
@@ -393,17 +393,17 @@ impl ConsensusState {
                     .parse::<bitcoin::BlockHash>()
                     .context("Failed to parse anchor hash from DB")?;
                 let value = if b.is_block {
-                    Value::new_block(b.anchor_height as u64, anchor_hash)
+                    Value::new_block(b.anchor_height, anchor_hash)
                 } else {
                     let txids: Vec<Txid> = b
                         .txids
                         .iter()
                         .map(|s| s.parse().context("Failed to parse txid from DB"))
                         .collect::<Result<Vec<_>>>()?;
-                    Value::new_batch(b.anchor_height as u64, anchor_hash, txids)
+                    Value::new_batch(b.anchor_height, anchor_hash, txids)
                 };
                 Ok(DeferredDecision {
-                    consensus_height: Height::new(b.consensus_height as u64),
+                    consensus_height: Height::new(b.consensus_height),
                     value,
                     certificate: b.certificate,
                 })
@@ -416,7 +416,7 @@ impl ConsensusState {
         conn: &libsql::Connection,
         height: u64,
     ) -> Option<bitcoin::BlockHash> {
-        match select_block_at_height(conn, height as i64).await {
+        match select_block_at_height(conn, height).await {
             Ok(Some(row)) => Some(row.hash),
             _ => None,
         }
@@ -425,8 +425,8 @@ impl ConsensusState {
     async fn load_raw_txs_if_unfinalized(
         &self,
         conn: &libsql::Connection,
-        anchor_height: i64,
-        consensus_height: i64,
+        anchor_height: u64,
+        consensus_height: u64,
     ) -> Result<Option<Vec<bitcoin::Transaction>>> {
         let tip = match select_block_latest(conn)
             .await
@@ -435,7 +435,7 @@ impl ConsensusState {
             Some(tip) => tip,
             None => return Ok(None),
         };
-        if (anchor_height as u64) + FINALITY_WINDOW <= tip.height as u64 {
+        if anchor_height + FINALITY_WINDOW <= tip.height {
             return Ok(None);
         }
         let raw_bytes = select_unconfirmed_batch_txs(conn, consensus_height)
@@ -465,14 +465,14 @@ impl ConsensusState {
             .context("Failed to parse anchor hash from DB")?;
 
         let value = if b.is_block {
-            Value::new_block(b.anchor_height as u64, anchor_hash)
+            Value::new_block(b.anchor_height, anchor_hash)
         } else {
             let txids: Vec<Txid> = b
                 .txids
                 .iter()
                 .map(|s| s.parse().context("Failed to parse txid from DB"))
                 .collect::<Result<Vec<_>>>()?;
-            Value::new_batch(b.anchor_height as u64, anchor_hash, txids)
+            Value::new_batch(b.anchor_height, anchor_hash, txids)
         };
 
         let proto = crate::consensus::proto::CommitCertificate::decode(b.certificate.as_slice())

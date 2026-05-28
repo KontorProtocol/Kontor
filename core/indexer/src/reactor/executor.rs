@@ -75,7 +75,7 @@ pub trait Executor {
     async fn execute_transaction(
         &self,
         runtime: &mut Runtime,
-        height: i64,
+        height: u64,
         tx_id: i64,
         tx: &indexer_types::Transaction,
     ) -> Result<Vec<Vec<Option<anyhow::Error>>>>;
@@ -105,7 +105,7 @@ impl Executor for NoopExecutor {
     async fn execute_transaction(
         &self,
         _runtime: &mut Runtime,
-        _height: i64,
+        _height: u64,
         _tx_id: i64,
         _tx: &indexer_types::Transaction,
     ) -> Result<Vec<Vec<Option<anyhow::Error>>>> {
@@ -244,7 +244,7 @@ impl Executor for RuntimeExecutor {
     async fn execute_transaction(
         &self,
         runtime: &mut Runtime,
-        height: i64,
+        height: u64,
         tx_id: i64,
         tx: &indexer_types::Transaction,
     ) -> Result<Vec<Vec<Option<anyhow::Error>>>> {
@@ -305,7 +305,7 @@ pub async fn process_input(
     runtime: &mut Runtime,
     walker: &mut TxWalker,
     input: &indexer_types::Input,
-    height: i64,
+    height: u64,
     tx_id: Option<i64>,
     tx_index: i64,
     txid: bitcoin::Txid,
@@ -344,7 +344,7 @@ async fn process_direct_input(
     runtime: &mut Runtime,
     walker: &mut TxWalker,
     input: &indexer_types::Input,
-    height: i64,
+    height: u64,
     tx_id: Option<i64>,
     tx_index: i64,
     txid: bitcoin::Txid,
@@ -401,7 +401,7 @@ async fn process_aggregate_input(
     runtime: &mut Runtime,
     walker: &mut TxWalker,
     input: &indexer_types::Input,
-    height: i64,
+    height: u64,
     tx_id: Option<i64>,
     tx_index: i64,
     txid: bitcoin::Txid,
