@@ -269,9 +269,12 @@ export class HttpTransport implements KontorTransport {
    * the same primitive `submit` uses for the simple single-Build case.
    */
   async composeAndSign(reveal: Reveal): Promise<{
-    /** Empty string when the Reveal has no Build participants (every
-     *  input is Existing / extra_input — no commit to broadcast). */
-    commitHex: string;
+    /** One finalized hex per Build participant's commit, in
+     *  `composed.commits` order. Empty when every input is Existing /
+     *  extra_input (no commits to broadcast). Today every commit is
+     *  signed by this account — a future mixed-account flow would
+     *  need to skip foreign commits here. */
+    commitHexes: string[];
     /** Reveal as a parsed `Transaction`. Only inputs whose
      *  `tap_internal_key` matches this account were finalized;
      *  callers extract once every input's witness is in place. */
@@ -280,11 +283,11 @@ export class HttpTransport implements KontorTransport {
   }> {
     const { account } = this.opts;
     const composed = await this.compose(reveal);
+    const commitHexes = await Promise.all(
+      composed.commits.map((c) => signCommit(account, c.psbt_hex)),
+    );
     return {
-      commitHex:
-        composed.commits.length > 0
-          ? await signCommit(account, composed.commits[0]!.psbt_hex)
-          : "",
+      commitHexes,
       revealTx: await signReveal(account, composed.reveal.psbt_hex),
       composed,
     };
@@ -338,12 +341,7 @@ export class HttpTransport implements KontorTransport {
   async submit(insts: WireInsts): Promise<BroadcastResult> {
     const { result } = await this.submitReveal(async (utxos) => {
       const reveal = await this.buildSimpleReveal(insts, utxos);
-      const { commitHex, revealTx, composed } = await this.composeAndSign(reveal);
-      return {
-        commitHexes: commitHex ? [commitHex] : [],
-        revealTx,
-        composed,
-      };
+      return this.composeAndSign(reveal);
     });
     return result;
   }
@@ -375,14 +373,10 @@ export class HttpTransport implements KontorTransport {
       const { commitHexes, revealTx, composed } = await prepare(utxos);
       const revealHex = hex.encode(revealTx.extract());
       const result = await this.broadcast([...commitHexes, revealHex]);
-      // advanceTracking today inspects a single commit (≤1 commits
-      // across all flows). When multi-commit flows arrive it'll
-      // generalize to iterate `commitHexes`; the prefix-of-suppliedUtxos
-      // model still applies per commit.
       this.advanceTracking({
         suppliedUtxos: utxos,
         composed,
-        commitHex: commitHexes[0] ?? "",
+        commitHexes,
         revealHex,
       });
       return { result, commitHexes, revealHex, composed };
@@ -404,25 +398,29 @@ export class HttpTransport implements KontorTransport {
   advanceTracking(opts: {
     suppliedUtxos: Utxo[];
     composed: ComposeOutputs;
-    commitHex: string;
+    commitHexes: string[];
     revealHex: string;
   }): void {
-    const { suppliedUtxos, composed, commitHex } = opts;
-    if (composed.commits.length > 0) {
-      // With a Build participant, the commit consumes a prefix of
-      // `suppliedUtxos` chosen by the indexer's greedy selector — the
-      // commit tx's input count tells us how deep.
-      const commitTx = Transaction.fromRaw(hex.decode(commitHex), {
-        disableScriptCheck: true,
-        allowUnknownOutputs: true,
-        allowUnknownInputs: true,
-      });
-      const used = suppliedUtxos.slice(0, commitTx.inputsLength);
-      for (const u of used) this.recentlySpent.add(keyOf(u));
-    } else {
-      // No commit — `suppliedUtxos` went straight into the reveal as
+    const { suppliedUtxos, commitHexes, composed } = opts;
+    if (commitHexes.length === 0) {
+      // No commits — `suppliedUtxos` went straight into the reveal as
       // `extra_inputs`, every one consumed.
       for (const u of suppliedUtxos) this.recentlySpent.add(keyOf(u));
+    } else {
+      // Each commit consumes a prefix of `suppliedUtxos` chosen by the
+      // indexer's greedy selector. Walk commits in order, peeling
+      // `inputsLength` UTXOs off the front per commit.
+      let offset = 0;
+      for (const commitHex of commitHexes) {
+        const commitTx = Transaction.fromRaw(hex.decode(commitHex), {
+          disableScriptCheck: true,
+          allowUnknownOutputs: true,
+          allowUnknownInputs: true,
+        });
+        const used = suppliedUtxos.slice(offset, offset + commitTx.inputsLength);
+        for (const u of used) this.recentlySpent.add(keyOf(u));
+        offset += commitTx.inputsLength;
+      }
     }
     const accountScriptPubKey = hex.encode(
       p2tr(
@@ -449,37 +447,44 @@ export class HttpTransport implements KontorTransport {
    * Static analysis — the indexer parses the composed reveal without
    * executing it. One outcome per Inst; a rejected op surfaces as a
    * non-Ok `OpResultRaw` carrying its error.
+   *
+   * Held under `lock` so concurrent submit / submitReveal can't shift
+   * the funding pool out from under us mid-compose. Doesn't broadcast,
+   * doesn't advance tracking — the next real submit reuses the same
+   * UTXOs.
    */
   async inspect(insts: WireInsts): Promise<OpResultRaw[]> {
-    const utxos = await this.utxos();
-    const reveal = await this.buildSimpleReveal(insts, utxos);
-    const { revealTx } = await this.composeAndSign(reveal);
-    const ops = await this.postJson<OpWithResult[]>(
-      "/transactions/inspect",
-      { hex: hex.encode(revealTx.extract()) },
-    );
-    // Don't call advanceTracking: inspect didn't broadcast, so the
-    // tx's outputs aren't on chain. The next real submit reuses the
-    // same funding UTXOs.
-    return ops.map(opWithResultToRaw);
+    return this.lock.runExclusive(async () => {
+      const utxos = await this.utxos();
+      const reveal = await this.buildSimpleReveal(insts, utxos);
+      const { revealTx } = await this.composeAndSign(reveal);
+      const ops = await this.postJson<OpWithResult[]>(
+        "/transactions/inspect",
+        { hex: hex.encode(revealTx.extract()) },
+      );
+      return ops.map(opWithResultToRaw);
+    });
   }
 
   /**
    * Sandboxed live execution — runs the composed reveal's ops against
    * current chain state in a throwaway tx, returning predicted per-Inst
    * outcomes (real gas, real results) without broadcasting.
+   *
+   * Held under `lock` for the same reason as `inspect`: read a
+   * consistent funding snapshot, no interleave with submitReveal.
    */
   async simulate(insts: WireInsts): Promise<OpResultRaw[]> {
-    const utxos = await this.utxos();
-    const reveal = await this.buildSimpleReveal(insts, utxos);
-    const { revealTx } = await this.composeAndSign(reveal);
-    const ops = await this.postJson<OpWithResult[]>(
-      "/transactions/simulate",
-      { hex: hex.encode(revealTx.extract()) },
-    );
-    // Same as inspect: simulate runs sandboxed, doesn't broadcast, so
-    // trackedFunding stays put for the next real submit.
-    return ops.map(opWithResultToRaw);
+    return this.lock.runExclusive(async () => {
+      const utxos = await this.utxos();
+      const reveal = await this.buildSimpleReveal(insts, utxos);
+      const { revealTx } = await this.composeAndSign(reveal);
+      const ops = await this.postJson<OpWithResult[]>(
+        "/transactions/simulate",
+        { hex: hex.encode(revealTx.extract()) },
+      );
+      return ops.map(opWithResultToRaw);
+    });
   }
 
   /**

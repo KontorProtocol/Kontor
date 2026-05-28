@@ -103,9 +103,7 @@ export class Attachment<T> {
             { Change: { script_pubkey: sellerScriptPubKey } },
           ],
         };
-        const { commitHex, revealTx, composed } =
-          await transport.composeAndSign(reveal);
-        return { commitHexes: [commitHex], revealTx, composed };
+        return transport.composeAndSign(reveal);
       },
     );
 

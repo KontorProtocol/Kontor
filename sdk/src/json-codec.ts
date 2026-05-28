@@ -188,7 +188,7 @@ export interface KontorTransport {
    * callers inject the foreign witness first.
    */
   composeAndSign(reveal: Reveal): Promise<{
-    commitHex: string;
+    commitHexes: string[];
     revealTx: Transaction;
     composed: ComposeOutputs;
   }>;
@@ -243,7 +243,7 @@ export interface KontorTransport {
   advanceTracking?(opts: {
     suppliedUtxos: Utxo[];
     composed: ComposeOutputs;
-    commitHex: string;
+    commitHexes: string[];
     revealHex: string;
   }): void;
 }

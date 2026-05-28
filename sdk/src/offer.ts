@@ -173,8 +173,7 @@ export class Offer {
         })),
         extra_outputs: [],
       };
-      const { revealTx, composed } = await transport.composeAndSign(reveal);
-      return { commitHexes: [], revealTx, composed };
+      return transport.composeAndSign(reveal);
     });
     return result;
   }
@@ -372,24 +371,23 @@ export class IncomingOffer {
         extra_inputs: [],
         extra_outputs: [],
       };
-      const { commitHex, revealTx: swapTx, composed } =
-        await transport.composeAndSign(reveal);
-      if (composed.commits.length !== 1) {
+      const prepared = await transport.composeAndSign(reveal);
+      if (prepared.commitHexes.length !== 1) {
         throw new SignerError(
-          `accept: expected 1 commit, got ${composed.commits.length}`,
+          `accept: expected 1 commit, got ${prepared.commitHexes.length}`,
           { docsPath: "/sdk/offer" },
         );
       }
       // Inject the seller's pre-signed SACP witness onto input 1
       // before submitReveal extracts.
-      swapTx.updateInput(1, {
+      prepared.revealTx.updateInput(1, {
         finalScriptWitness: [
           sellerSig,
           hex.decode(data.detachLeaf.script),
           hex.decode(data.detachLeaf.controlBlock),
         ],
       });
-      return { commitHexes: [commitHex], revealTx: swapTx, composed };
+      return prepared;
     });
     return result;
   }
