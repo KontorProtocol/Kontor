@@ -27,11 +27,11 @@ pub async fn insert_contract(conn: &Connection, row: ContractRow) -> Result<i64,
             "#,
         params![
             row.name.clone(),
-            row.height,
+            Value::try_from(row.height)?,
             row.tx_index,
             row.size(),
             row.bytes,
-            row.signer_id
+            row.signer_id.map(Value::try_from).transpose()?,
         ],
     )
     .await?;
@@ -48,7 +48,7 @@ pub async fn get_contracts_paginated(
     let mut params: Vec<(String, Value)> = vec![];
     if let Some(signer_id) = query.signer_id {
         where_clauses.push("c.signer_id = :signer_id".to_string());
-        params.push((":signer_id".to_string(), Value::Integer(signer_id)));
+        params.push((":signer_id".to_string(), Value::try_from(signer_id)?));
     }
     get_paginated(
         conn,

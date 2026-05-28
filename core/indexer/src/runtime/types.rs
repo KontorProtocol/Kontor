@@ -79,7 +79,7 @@ impl From<bitcoin::OutPoint> for OutPoint {
     fn from(value: bitcoin::OutPoint) -> Self {
         Self {
             txid: value.txid.to_string(),
-            vout: value.vout as u64,
+            vout: value.vout,
         }
     }
 }

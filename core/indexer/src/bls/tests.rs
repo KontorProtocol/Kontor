@@ -915,7 +915,7 @@ mod proptest_bulk {
             gas_limit in any::<u64>(),
             name in any::<String>(),
             height in any::<u64>(),
-            tx_index in any::<u64>(),
+            tx_index in any::<u32>(),
             expr in any::<String>(),
         ) {
             let op = call_op(gas_limit, ContractAddress { name, height, tx_index }, expr);

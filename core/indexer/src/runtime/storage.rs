@@ -29,11 +29,11 @@ pub struct TransactionContext {
     pub tx_id: Option<i64>,
     /// Position in the confirming Bitcoin block (for contracts table)
     #[builder(default = 0)]
-    pub tx_index: i64,
+    pub tx_index: u32,
     #[builder(default = 0)]
-    pub input_index: i64,
+    pub input_index: u32,
     #[builder(default = 0)]
-    pub op_index: i64,
+    pub op_index: u32,
     #[builder(default = new_mock_transaction(0).txid)]
     pub txid: Txid,
 }
@@ -172,13 +172,13 @@ impl Storage {
 
     pub fn build_contract_result_row(
         &self,
-        result_index: i64,
+        result_index: u32,
         contract_id: i64,
         func: String,
-        gas: i64,
+        gas: u64,
         value: Option<String>,
-        signer_id: i64,
-        payer_signer_id: Option<i64>,
+        signer_id: u64,
+        payer_signer_id: Option<u64>,
         status: indexer_types::OpStatus,
     ) -> ContractResultRow {
         ContractResultRow::builder()
@@ -199,13 +199,13 @@ impl Storage {
 
     pub async fn insert_contract_result(
         &self,
-        result_index: i64,
+        result_index: u32,
         contract_id: i64,
         func: String,
-        gas: i64,
+        gas: u64,
         value: Option<String>,
-        signer_id: i64,
-        payer_signer_id: Option<i64>,
+        signer_id: u64,
+        payer_signer_id: Option<u64>,
         status: indexer_types::OpStatus,
     ) -> Result<i64> {
         Ok(insert_contract_result(

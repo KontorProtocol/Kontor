@@ -51,7 +51,7 @@ pub(super) async fn insert_block_at(conn: &Connection, height: u64, hash: &str) 
 pub(super) async fn insert_tx_at(
     conn: &Connection,
     height: u64,
-    tx_index: i64,
+    tx_index: u32,
     txid: &str,
 ) -> Result<i64> {
     Ok(insert_transaction(
@@ -354,7 +354,7 @@ async fn test_nonce_reverts_on_reorg_rollback() -> Result<()> {
     runtime.storage.height = 1;
 
     let user = register_user(&mut runtime).await?;
-    let entry = get_signer_entry_by_id(&conn, user.signer_id as i64)
+    let entry = get_signer_entry_by_id(&conn, user.signer_id)
         .await?
         .expect("entry must exist");
     assert_eq!(entry.next_nonce, Some(0));
@@ -366,17 +366,17 @@ async fn test_nonce_reverts_on_reorg_rollback() -> Result<()> {
     )
     .await?;
 
-    crate::database::types::Identity::new(user.signer_id as i64)
+    crate::database::types::Identity::new(user.signer_id)
         .advance_nonce(&conn, 0, 2)
         .await?;
-    let entry = get_signer_entry_by_id(&conn, user.signer_id as i64)
+    let entry = get_signer_entry_by_id(&conn, user.signer_id)
         .await?
         .expect("entry must exist after advance");
     assert_eq!(entry.next_nonce, Some(1), "nonce must be 1 after advance");
 
     rollback_to_height(&conn, 1).await?;
 
-    let entry = get_signer_entry_by_id(&conn, user.signer_id as i64)
+    let entry = get_signer_entry_by_id(&conn, user.signer_id)
         .await?
         .expect("entry must survive rollback (registered at height 1)");
     assert_eq!(
@@ -392,10 +392,10 @@ async fn test_nonce_reverts_on_reorg_rollback() -> Result<()> {
     )
     .await?;
 
-    crate::database::types::Identity::new(user.signer_id as i64)
+    crate::database::types::Identity::new(user.signer_id)
         .advance_nonce(&conn, 0, 2)
         .await?;
-    let entry = get_signer_entry_by_id(&conn, user.signer_id as i64)
+    let entry = get_signer_entry_by_id(&conn, user.signer_id)
         .await?
         .expect("entry must exist after re-advance");
     assert_eq!(
@@ -867,7 +867,7 @@ mod transactions_pagination {
 
         // Per-height transaction counts. Some indexes also modify the token
         // contract — captured below in `contract_state_writes`.
-        let counts: &[(u64, i64)] = &[
+        let counts: &[(u64, u32)] = &[
             (800000, 5),
             (800001, 3),
             (800002, 7),
@@ -1130,7 +1130,7 @@ mod transactions_pagination {
             );
 
             // Verify ordering (DESC by tx_index: 4, 3, 2, 1, 0)
-            let expected_indices: [i64; 5] = [4, 3, 2, 1, 0];
+            let expected_indices: [u32; 5] = [4, 3, 2, 1, 0];
             for (i, tx) in cursor_transactions.iter().enumerate() {
                 assert_eq!(
                     tx.tx_index,
@@ -1185,7 +1185,7 @@ mod transactions_pagination {
             );
 
             // Verify ordering (DESC by tx_index: 6, 5, 4, 3, 2, 1, 0)
-            let expected_indices: [i64; 7] = [6, 5, 4, 3, 2, 1, 0];
+            let expected_indices: [u32; 7] = [6, 5, 4, 3, 2, 1, 0];
             for (i, tx) in cursor_transactions.iter().enumerate() {
                 assert_eq!(
                     tx.tx_index,

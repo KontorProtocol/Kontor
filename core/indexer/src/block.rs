@@ -22,8 +22,8 @@ pub type TransactionFilterMap = fn((usize, bitcoin::Transaction)) -> Option<Tran
 #[derive(Debug, Clone, Copy)]
 pub struct OpMetadataBase {
     pub previous_output: bitcoin::OutPoint,
-    pub input_index: i64,
-    pub op_index: i64,
+    pub input_index: u32,
+    pub op_index: u32,
     pub signer_id: u64,
 }
 
@@ -107,7 +107,7 @@ pub fn materialize_op(
 /// here exist for shape uniformity rather than runtime effect.
 fn core_payment() -> Payment {
     Payment {
-        signer_id: CORE_SIGNER_ID as u64,
+        signer_id: CORE_SIGNER_ID,
         gas_limit: 0,
     }
 }
@@ -228,7 +228,7 @@ impl TxWalker {
         let base = OpMetadataBase {
             previous_output: input.previous_output,
             input_index: input.input_index,
-            op_index: op_index as i64,
+            op_index: op_index as u32,
             signer_id,
         };
         let payment_override = self.payment_override(input, op_index, publisher_signer_id, inst)?;
@@ -276,7 +276,7 @@ pub fn filter_map((tx_index, tx): (usize, bitcoin::Transaction)) -> Option<Trans
                     {
                         return Some(Input {
                             previous_output: input.previous_output,
-                            input_index: input_index as i64,
+                            input_index: input_index as u32,
                             x_only_pubkey: signer,
                             insts,
                         });
@@ -306,7 +306,7 @@ pub fn filter_map((tx_index, tx): (usize, bitcoin::Transaction)) -> Option<Trans
 
     Some(Transaction {
         txid: tx.compute_txid(),
-        index: tx_index as i64,
+        index: tx_index as u32,
         inputs,
         op_return_data,
     })
@@ -339,7 +339,7 @@ pub async fn inspect(
                     tracing::warn!("inspect: op {op_index} rejected at materialize: {e:#}");
                     ops.push(OpWithResult::Rejected {
                         input_index: input.input_index,
-                        op_index: op_index as i64,
+                        op_index: op_index as u32,
                         error_message: None,
                     });
                     continue;
@@ -348,7 +348,7 @@ pub async fn inspect(
             let id = OpResultId::builder()
                 .txid(tx.txid.to_string())
                 .input_index(input.input_index)
-                .op_index(op_index as i64)
+                .op_index(op_index as u32)
                 .build();
             let result = get_op_result(conn, &id)
                 .await?
@@ -393,7 +393,7 @@ async fn resolve_input_signer_ids_via_db(
                             &pk.to_string(),
                         )
                         .await?
-                        .map(|e| e.signer_id as u64)
+                        .map(|e| e.signer_id)
                         .unwrap_or(0)
                     }
                 };
@@ -407,7 +407,7 @@ async fn resolve_input_signer_ids_via_db(
                 &input.x_only_pubkey.to_string(),
             )
             .await?
-            .map(|e| e.signer_id as u64)
+            .map(|e| e.signer_id)
             .unwrap_or(0);
             Ok(vec![id; input.insts.ops.len()])
         }
@@ -429,7 +429,7 @@ async fn resolve_publisher_signer_id_via_db(
         &input.x_only_pubkey.to_string(),
     )
     .await?
-    .map(|e| e.signer_id as u64))
+    .map(|e| e.signer_id))
 }
 
 #[cfg(test)]

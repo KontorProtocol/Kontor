@@ -286,7 +286,7 @@ export type OpWithResult = {
   error_message: string | null;
 };
 
-export type OutPoint = { txid: string; vout: bigint };
+export type OutPoint = { txid: string; vout: number };
 
 export type PaginatedResponse<T> = {
   results: Array<T>;

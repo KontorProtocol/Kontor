@@ -70,7 +70,7 @@ pub async fn get_results_paginated(
 
     if let Some(signer_id) = query.signer_id {
         where_clauses.push("r.signer_id = :signer_id".to_string());
-        params.push((":signer_id".to_string(), Value::Integer(signer_id)));
+        params.push((":signer_id".to_string(), Value::try_from(signer_id)?));
     }
 
     get_paginated(
@@ -135,9 +135,9 @@ pub async fn get_op_result(
 pub async fn get_contract_result(
     conn: &Connection,
     tx_id: Option<i64>,
-    input_index: Option<i64>,
-    op_index: Option<i64>,
-    result_index: i64,
+    input_index: Option<u32>,
+    op_index: Option<u32>,
+    result_index: u32,
 ) -> Result<Option<ContractResultRow>, Error> {
     let mut rows = conn
         .query(
@@ -210,15 +210,15 @@ pub async fn insert_contract_result(
             row.contract_id,
             row.size(),
             row.func,
-            row.height,
+            Value::try_from(row.height)?,
             row.tx_id,
             row.input_index,
             row.op_index,
             row.result_index,
-            row.gas,
+            Value::try_from(row.gas)?,
             row.value,
-            row.signer_id,
-            row.payer_signer_id,
+            Value::try_from(row.signer_id)?,
+            row.payer_signer_id.map(Value::try_from).transpose()?,
             row.status.as_str(),
         ],
     )

@@ -196,7 +196,7 @@ impl Executor for LiteExecutor {
             .await;
 
         let payment = indexer_types::Payment {
-            signer_id: self.signer.signer_id().unwrap_or(0) as u64,
+            signer_id: self.signer.signer_id().unwrap_or(0),
             gas_limit: runtime.gas_limit_for_non_procs,
         };
         match runtime

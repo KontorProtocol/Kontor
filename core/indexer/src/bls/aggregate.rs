@@ -37,7 +37,7 @@ impl SignerResolver {
         }
 
         let conn = runtime.get_storage_conn();
-        let entry = get_signer_entry_by_id(&conn, signer_id as i64)
+        let entry = get_signer_entry_by_id(&conn, signer_id)
             .await?
             .ok_or_else(|| anyhow!("unknown signer_id {signer_id}"))?;
         let x_only_pubkey = entry.x_only_pubkey.clone().ok_or_else(|| {
@@ -75,7 +75,7 @@ impl SignerResolver {
             Some(pk) => pk,
             None => {
                 let conn = runtime.get_storage_conn();
-                let entry = get_signer_entry_by_id(&conn, signer_id as i64)
+                let entry = get_signer_entry_by_id(&conn, signer_id)
                     .await?
                     .ok_or_else(|| anyhow!("unknown signer_id {signer_id}"))?;
                 entry.x_only_pubkey.ok_or_else(|| {

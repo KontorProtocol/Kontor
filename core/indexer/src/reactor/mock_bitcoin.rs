@@ -21,7 +21,7 @@ pub fn make_tx(nonce: u32) -> bitcoin::Transaction {
 fn to_indexer_tx(index: usize, tx: &bitcoin::Transaction) -> indexer_types::Transaction {
     indexer_types::Transaction {
         txid: tx.compute_txid(),
-        index: index as i64,
+        index: index as u32,
         inputs: vec![],
         op_return_data: Default::default(),
     }

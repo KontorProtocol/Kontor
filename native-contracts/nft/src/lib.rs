@@ -204,7 +204,7 @@ impl Guest for Nft {
     // instruction, the NFT remains permanently orphaned under the old UTXO.
     // The caller is responsible for always spending this UTXO via a Kontor
     // transaction that includes `detach`.
-    fn attach(ctx: &ProcContext, nft_id: String, vout: u64) -> Result<NftTransfer, Error> {
+    fn attach(ctx: &ProcContext, nft_id: String, vout: u32) -> Result<NftTransfer, Error> {
         let out_point = context::OutPoint {
             txid: ctx.transaction().id(),
             vout,

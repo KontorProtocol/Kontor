@@ -285,7 +285,7 @@ impl Runtime {
     /// Build a Payment for system (Core-paid) operations.
     pub fn core_payment(&self) -> Payment {
         Payment {
-            signer_id: CORE_SIGNER_ID as u64,
+            signer_id: CORE_SIGNER_ID,
             gas_limit: self.gas_limit_for_non_procs,
         }
     }
@@ -340,7 +340,7 @@ impl Runtime {
             tx_index: self
                 .tx_context()
                 .expect("Transaction context must be set to public contracts")
-                .tx_index as u64,
+                .tx_index,
         };
         if self
             .storage
@@ -510,7 +510,7 @@ impl Runtime {
         expr: &str,
     ) -> Result<String, ExecutionError> {
         let payment = signer.and_then(|s| s.signer_id()).map(|id| Payment {
-            signer_id: id as u64,
+            signer_id: id,
             gas_limit: self.gas_limit_for_non_procs,
         });
         self.execute(signer, payment, contract_address, expr).await

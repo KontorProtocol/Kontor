@@ -95,7 +95,7 @@ impl<E: Executor> Reactor<E> {
                 .context("get_transaction_by_txid failed")?
                 .is_some()
             {
-                confirm_transaction(&self.db_conn(), &t.txid.to_string(), block.height, i as i64)
+                confirm_transaction(&self.db_conn(), &t.txid.to_string(), block.height, i as u32)
                     .await
                     .context("confirm_transaction failed")?;
                 failures.push(Vec::new());
@@ -112,7 +112,7 @@ impl<E: Executor> Reactor<E> {
                 &self.db_conn(),
                 indexer_types::TransactionRow::builder()
                     .height(block.height)
-                    .tx_index(i as i64)
+                    .tx_index(i as u32)
                     .confirmed_height(block.height)
                     .txid(t.txid.to_string())
                     .build(),

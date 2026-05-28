@@ -41,7 +41,7 @@ use super::{
 fn payer_holder(signer: &Signer, payment: Option<&Payment>) -> Holder {
     let signer_id = payment
         .map(|p| p.signer_id)
-        .or_else(|| signer.signer_id().map(|i| i as u64))
+        .or_else(|| signer.signer_id())
         .unwrap_or(0);
     Holder::for_signer_id(signer_id)
 }
@@ -263,7 +263,7 @@ impl Runtime {
             && !signer.is_core()
         {
             let payment = payment.expect("payment is required for top-level proc calls");
-            let payer = Signer::Id(Identity::new(payment.signer_id as i64));
+            let payer = Signer::Id(Identity::new(payment.signer_id));
             let hold_amount = Decimal::try_from(fuel_limit)
                 .expect("u64 to decimal")
                 .div(
@@ -480,7 +480,7 @@ impl Runtime {
 
         if is_op_result && !signer.is_core() {
             let payment = payment.expect("payment required for op-result release");
-            let payer = Signer::Id(Identity::new(payment.signer_id as i64));
+            let payer = Signer::Id(Identity::new(payment.signer_id));
             let burn_amount = Decimal::try_from(gas)
                 .expect("u64 to decimal")
                 .mul(self.gas_to_token_multiplier)
@@ -515,20 +515,20 @@ impl Runtime {
         }
         let value = result.as_ref().map(|v| v.clone()).ok();
         let status = classify_result(&result);
-        let result_index = self.result_id_counter.get().await as i64;
+        let result_index = self.result_id_counter.get().await as u32;
         let signer_id = signer
             .signer_id()
             .expect("signer_id must be set for result attribution");
         // Payer for this op — equals `signer_id` for self-pay, differs for
         // BLS-aggregate sponsored ops. `None` when there's no Payment (Core-
         // paid system calls that bypass hold/release).
-        let payer_signer_id = payment.map(|p| p.signer_id as i64);
+        let payer_signer_id = payment.map(|p| p.signer_id);
         self.storage
             .insert_contract_result(
                 result_index,
                 contract_id,
                 func_name.to_string(),
-                gas as i64,
+                gas,
                 value,
                 signer_id,
                 payer_signer_id,

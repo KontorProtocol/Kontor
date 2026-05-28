@@ -122,7 +122,7 @@ impl Guest for Token {
         transfer(ctx, ctx.signer().into(), dst.try_into()?, amt)
     }
 
-    fn attach(ctx: &ProcContext, vout: u64, amt: Decimal) -> Result<Transfer, Error> {
+    fn attach(ctx: &ProcContext, vout: u32, amt: Decimal) -> Result<Transfer, Error> {
         let out_point = context::OutPoint {
             txid: ctx.transaction().id(),
             vout,

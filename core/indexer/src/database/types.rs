@@ -78,19 +78,19 @@ pub struct CheckpointRow {
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct Identity {
-    signer_id: i64,
+    signer_id: u64,
     key: String,
 }
 
 impl Identity {
-    pub fn new(signer_id: i64) -> Self {
+    pub fn new(signer_id: u64) -> Self {
         Self {
             signer_id,
             key: signer_id.to_string(),
         }
     }
 
-    pub fn signer_id(&self) -> i64 {
+    pub fn signer_id(&self) -> u64 {
         self.signer_id
     }
 
@@ -103,14 +103,14 @@ impl Identity {
 /// Core row is the first one inserted into `signers` at genesis, so SQLite
 /// auto-increment assigns it id = 1. This constant pins that contract and is
 /// asserted by `create_core_signer`.
-pub const CORE_SIGNER_ID: i64 = 1;
+pub const CORE_SIGNER_ID: u64 = 1;
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct SignerEntry {
-    pub signer_id: i64,
+    pub signer_id: u64,
     pub x_only_pubkey: Option<String>,
     pub bls_pubkey: Option<Vec<u8>>,
-    pub next_nonce: Option<i64>,
+    pub next_nonce: Option<u64>,
 }
 
 #[derive(Debug, Clone)]
@@ -180,9 +180,9 @@ pub struct ContractRow {
     pub id: i64,
     pub name: String,
     pub height: u64,
-    pub tx_index: i64,
+    pub tx_index: u32,
     pub bytes: Vec<u8>,
-    pub signer_id: Option<i64>,
+    pub signer_id: Option<u64>,
 }
 
 impl ContractRow {
@@ -216,7 +216,7 @@ pub struct ContractQuery {
     #[serde_as(as = "DefaultOnNull<DisplayFromStr>")]
     #[serde(default)]
     pub order: OrderDirection,
-    pub signer_id: Option<i64>,
+    pub signer_id: Option<u64>,
 }
 
 #[serde_as]
@@ -234,7 +234,7 @@ pub struct TransactionQuery {
     pub height: Option<u64>,
     #[serde_as(as = "Option<DisplayFromStr>")]
     pub contract: Option<ContractAddress>,
-    pub signer_id: Option<i64>,
+    pub signer_id: Option<u64>,
 }
 
 #[serde_as]
@@ -254,7 +254,7 @@ pub struct ResultQuery {
     #[serde_as(as = "Option<DisplayFromStr>")]
     pub contract: Option<ContractAddress>,
     pub func: Option<String>,
-    pub signer_id: Option<i64>,
+    pub signer_id: Option<u64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Builder, Eq, PartialEq)]
@@ -263,23 +263,23 @@ pub struct ContractResultRow {
     pub id: i64,
     pub height: u64,
     pub tx_id: Option<i64>,
-    pub input_index: Option<i64>,
-    pub op_index: Option<i64>,
+    pub input_index: Option<u32>,
+    pub op_index: Option<u32>,
     #[builder(default = 0)]
-    pub result_index: i64,
+    pub result_index: u32,
     #[builder(default = 0)]
     pub contract_id: i64,
     #[builder(default = "".to_string())]
     pub func: String,
-    pub gas: i64,
+    pub gas: u64,
     pub value: Option<String>,
     #[builder(default = 0)]
-    pub signer_id: i64,
+    pub signer_id: u64,
     /// Who funded gas for this op. Equals `signer_id` for self-pay ops; for
     /// BLS-aggregate sponsored ops it's the publisher's signer_id. `None` for
     /// ops that don't go through user-side gas accounting (Issuance,
     /// RegisterBlsKey via the Core-paid path).
-    pub payer_signer_id: Option<i64>,
+    pub payer_signer_id: Option<u64>,
     /// Outcome of the call. Populated by `handle_procedure` from the wasm
     /// result before writing the row.
     #[builder(default = OpStatus::Ok)]
@@ -298,21 +298,21 @@ pub struct ContractResultPublicRow {
     #[builder(default = 0)]
     pub id: i64,
     pub height: u64,
-    pub tx_index: Option<i64>,
-    pub input_index: Option<i64>,
-    pub op_index: Option<i64>,
+    pub tx_index: Option<u32>,
+    pub input_index: Option<u32>,
+    pub op_index: Option<u32>,
     #[builder(default = 0)]
-    pub result_index: i64,
+    pub result_index: u32,
     #[builder(default = "".to_string())]
     pub func: String,
-    pub gas: i64,
+    pub gas: u64,
     pub value: Option<String>,
     pub contract_name: String,
     pub contract_height: u64,
-    pub contract_tx_index: i64,
+    pub contract_tx_index: u32,
     pub txid: Option<String>,
-    pub signer_id: i64,
-    pub payer_signer_id: Option<i64>,
+    pub signer_id: u64,
+    pub payer_signer_id: Option<u64>,
     #[builder(default = OpStatus::Ok)]
     pub status: OpStatus,
 }
@@ -343,7 +343,7 @@ impl From<ContractResultPublicRow> for ResultRow {
             contract: ContractAddress {
                 name: row.contract_name,
                 height: row.contract_height,
-                tx_index: row.contract_tx_index as u64,
+                tx_index: row.contract_tx_index,
             }
             .to_string(),
             txid: row.txid,
@@ -357,9 +357,9 @@ impl From<ContractResultPublicRow> for ResultRow {
 pub struct OpResultId {
     pub txid: String,
     #[builder(default = 0)]
-    pub input_index: i64,
+    pub input_index: u32,
     #[builder(default = 0)]
-    pub op_index: i64,
+    pub op_index: u32,
 }
 
 impl Display for OpResultId {
@@ -385,11 +385,11 @@ impl std::str::FromStr for OpResultId {
         }
 
         let input_index = parts[1]
-            .parse::<i64>()
+            .parse::<u32>()
             .map_err(|e| format!("Failed to parse input_index '{}': {e}", parts[1]))?;
 
         let op_index = parts[2]
-            .parse::<i64>()
+            .parse::<u32>()
             .map_err(|e| format!("Failed to parse op_index '{}': {e}", parts[2]))?;
 
         Ok(OpResultId {

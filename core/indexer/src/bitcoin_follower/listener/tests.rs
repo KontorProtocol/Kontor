@@ -51,7 +51,7 @@ fn accept_all(pair: (usize, bitcoin::Transaction)) -> Option<indexer_types::Tran
     let (index, tx) = pair;
     Some(indexer_types::Transaction {
         txid: tx.compute_txid(),
-        index: index as i64,
+        index: index as u32,
         inputs: vec![],
         op_return_data: Default::default(),
     })
@@ -102,7 +102,7 @@ async fn fetch_mempool_returns_filtered_transactions() {
         if tx.lock_time.to_consensus_u32() % 2 == 1 {
             Some(indexer_types::Transaction {
                 txid: tx.compute_txid(),
-                index: index as i64,
+                index: index as u32,
                 inputs: vec![],
                 op_return_data: Default::default(),
             })

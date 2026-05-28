@@ -71,7 +71,7 @@ where
         .await?
         .next()
         .await?
-        .map_or(0, |r| r.get::<i64>(0).unwrap_or(0));
+        .map_or(0u32, |r| r.get::<i64>(0).unwrap_or(0) as u32);
 
     let mut offset_clause = "";
     if cursor.is_none()
@@ -117,7 +117,7 @@ where
 
     let next_offset = cursor
         .is_none()
-        .then(|| offset.unwrap_or(0) + results.len() as i64);
+        .then(|| (offset.unwrap_or(0) as u32) + results.len() as u32);
 
     let pagination = PaginationMeta {
         next_cursor,

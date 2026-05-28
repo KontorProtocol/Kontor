@@ -25,7 +25,7 @@ pub fn generate(input: TokenStream) -> TokenStream {
                 let name = parts[0].to_string();
                 let height = parts[1].parse::<u64>()
                     .map_err(|e| alloc::format!("invalid height: {e}"))?;
-                let tx_index = parts[2].parse::<u64>()
+                let tx_index = parts[2].parse::<u32>()
                     .map_err(|e| alloc::format!("invalid tx_index: {e}"))?;
                 Ok(#ty { name, height, tx_index })
             }

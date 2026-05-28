@@ -781,7 +781,7 @@ async fn test_get_contracts_paginated() -> Result<()> {
     .await?;
 
     let mut ids = Vec::new();
-    for i in 0i64..5 {
+    for i in 0u32..5 {
         let id = insert_contract(
             &conn,
             ContractRow::builder()
@@ -2398,12 +2398,12 @@ async fn test_transaction_signer_id_querying() -> Result<()> {
 
     // Insert 5 txs and capture their ids.
     let mut tx_ids = Vec::new();
-    for i in 0i64..5 {
+    for i in 0u32..5 {
         let id = insert_transaction(
             &conn,
             TransactionRow::builder()
                 .height(1)
-                .txid(new_mock_transaction((i + 1) as u32).txid.to_string())
+                .txid(new_mock_transaction(i + 1).txid.to_string())
                 .tx_index(i)
                 .build(),
         )
@@ -2418,7 +2418,7 @@ async fn test_transaction_signer_id_querying() -> Result<()> {
     // tx 3: signer_a, 1 result + a contract_state row on `token`
     //       (covers signer_id + contract combined — two joins)
     // tx 4: no results (control — must not appear in any signer query)
-    let insert_result = async |tx_id: i64, signer_id: i64, result_index: i64| {
+    let insert_result = async |tx_id: i64, signer_id: u64, result_index: u32| {
         insert_contract_result(
             &conn,
             ContractResultRow::builder()

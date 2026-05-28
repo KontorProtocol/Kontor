@@ -52,7 +52,9 @@ pub fn is_primitive_type(ty: &syn::Type) -> bool {
         matches!(
             segment.as_deref(),
             Some(
-                "u64"
+                "u32"
+                    | "i32"
+                    | "u64"
                     | "i64"
                     | "String"
                     | "bool"
@@ -88,6 +90,8 @@ pub fn wit_type_to_rust_type(
 ) -> anyhow::Result<TokenStream> {
     match (ty, use_str) {
         (WitType::U8, _) => Ok(quote! { u8 }),
+        (WitType::U32, _) => Ok(quote! { u32 }),
+        (WitType::S32, _) => Ok(quote! { i32 }),
         (WitType::U64, _) => Ok(quote! { u64 }),
         (WitType::S64, _) => Ok(quote! { i64 }),
         (WitType::Bool, _) => Ok(quote! { bool }),

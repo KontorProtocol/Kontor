@@ -26,7 +26,7 @@ pub async fn confirm_transaction(
     conn: &Connection,
     txid: &str,
     confirmed_height: u64,
-    tx_index: i64,
+    tx_index: u32,
 ) -> Result<(), Error> {
     conn.execute(
         "UPDATE transactions SET confirmed_height = ?, tx_index = ? WHERE txid = ?",
@@ -98,7 +98,7 @@ pub async fn get_transactions_paginated(
         needs_distinct = true;
         from = format!("{} JOIN contract_results r ON r.tx_id = t.id", from);
         where_clauses.push("r.signer_id = :signer_id".to_string());
-        params.push((":signer_id".to_string(), Value::Integer(signer_id)));
+        params.push((":signer_id".to_string(), Value::try_from(signer_id)?));
     }
 
     if needs_distinct {

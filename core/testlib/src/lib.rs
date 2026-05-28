@@ -166,7 +166,7 @@ pub struct RuntimeConfig<'a> {
 /// Used by test wrappers and by tests that drive the indexer runtime directly.
 pub fn user_payment(runtime: &IndexerRuntime, signer: &Signer) -> Option<Payment> {
     signer.signer_id().map(|id| Payment {
-        signer_id: id as u64,
+        signer_id: id,
         gas_limit: runtime.gas_limit_for_non_procs,
     })
 }
@@ -269,7 +269,7 @@ impl RuntimeLocal {
         contracts: &[(&str, &[u8])],
     ) -> Result<()> {
         let height = 1u64;
-        let tx_index = 0i64;
+        let tx_index = 0u32;
         let conn = self.runtime.get_storage_conn();
         let tx = new_mock_transaction(1);
         if get_transaction_by_txid(&conn, &tx.txid.to_string())
@@ -304,7 +304,7 @@ impl RuntimeLocal {
                 // User-driven publish in test setup: the publisher pays for
                 // init() out of their own (test-issued) balance.
                 let payment = Payment {
-                    signer_id: signer.signer_id().expect("test signer must have id") as u64,
+                    signer_id: signer.signer_id().expect("test signer must have id"),
                     gas_limit: self.runtime.gas_limit_for_non_procs,
                 };
                 self.runtime
@@ -314,7 +314,7 @@ impl RuntimeLocal {
                         &ContractAddress {
                             name: name.to_string(),
                             height,
-                            tx_index: tx_index as u64,
+                            tx_index,
                         },
                         "init()",
                     )
@@ -333,7 +333,7 @@ impl RuntimeLocal {
         let (mut runtime, _db_dir, _db_name) = indexer::test_utils::test_runtime().await?;
         let conn = runtime.get_storage_conn();
         let height = 1u64;
-        let tx_index = 1i64;
+        let tx_index = 1u32;
         let txid = new_mock_transaction(0).txid;
         let tx_id = insert_transaction(
             &conn,
@@ -483,7 +483,7 @@ impl RuntimeRegtest {
 
         for (signer, contract, expr) in calls {
             let signer_id = match signer {
-                Signer::Id(identity) => identity.signer_id() as u64,
+                Signer::Id(identity) => identity.signer_id(),
                 _ => anyhow::bail!("BLS aggregate requires Id signer"),
             };
 
@@ -545,7 +545,7 @@ impl RuntimeImpl for RuntimeRegtest {
             .get_signer_id(&identity.x_only_public_key().to_string())
             .await?
             .expect("identity must be registered");
-        let signer = Signer::Id(indexer::database::types::Identity::new(signer_id as i64));
+        let signer = Signer::Id(indexer::database::types::Identity::new(signer_id));
         self.identities.insert(signer.clone(), identity);
         Ok(signer)
     }
@@ -768,7 +768,7 @@ impl RuntimeImpl for RuntimeRegtest {
             for op_index in 0..sent.op_count {
                 let id = OpResultId::builder()
                     .txid(sent.txid.clone())
-                    .op_index(op_index as i64)
+                    .op_index(op_index as u32)
                     .build();
                 let result = client.result(&id).await?.ok_or(anyhow!(
                     "Could not find op result for txid {} op_index {}",

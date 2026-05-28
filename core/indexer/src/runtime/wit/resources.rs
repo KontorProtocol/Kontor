@@ -18,14 +18,14 @@ pub enum Signer {
     Core(Box<Signer>),
     Contract {
         id: i64,
-        signer_id: i64,
+        signer_id: u64,
         key: String,
     },
     Nobody,
 }
 
 impl Signer {
-    pub fn new_contract(id: i64, signer_id: i64) -> Self {
+    pub fn new_contract(id: i64, signer_id: u64) -> Self {
         Self::Contract {
             id,
             signer_id,
@@ -43,7 +43,7 @@ impl Signer {
     /// - `Core(inner)` → unwraps to inner's signer_id
     /// - `Contract` → the contract's signer_id
     /// - `Nobody` → None (only valid inside `Core`)
-    pub fn signer_id(&self) -> Option<i64> {
+    pub fn signer_id(&self) -> Option<u64> {
         match self {
             Signer::Id(identity) => Some(identity.signer_id()),
             Signer::Core(inner) => match inner.as_ref() {
@@ -78,8 +78,8 @@ impl core::fmt::Display for Signer {
 impl From<&Signer> for HolderRef {
     fn from(signer: &Signer) -> Self {
         match signer {
-            Signer::Id(identity) => HolderRef::SignerId(identity.signer_id() as u64),
-            Signer::Contract { signer_id, .. } => HolderRef::SignerId(*signer_id as u64),
+            Signer::Id(identity) => HolderRef::SignerId(identity.signer_id()),
+            Signer::Contract { signer_id, .. } => HolderRef::SignerId(*signer_id),
             Signer::Core(_) => HolderRef::Core,
             Signer::Nobody => unreachable!("Nobody signer has no HolderRef"),
         }
