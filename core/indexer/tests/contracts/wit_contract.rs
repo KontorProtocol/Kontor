@@ -7,7 +7,7 @@ world root {
   import kontor:built-in/error;
   import kontor:built-in/context;
   import kontor:built-in/numbers;
-  use kontor:built-in/context.{view-context, proc-context, signer, holder-ref};
+  use kontor:built-in/context.{view-context, proc-context, signer, holder-ref, contract};
   use kontor:built-in/error.{error};
   use kontor:built-in/numbers.{decimal};
 

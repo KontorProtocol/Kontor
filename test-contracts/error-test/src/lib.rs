@@ -7,8 +7,9 @@ use stdlib::*;
 struct ErrorTestStorage {}
 
 impl Guest for ErrorTest {
-    fn init(ctx: &ProcContext) {
+    fn init(ctx: &ProcContext) -> Contract {
         ErrorTestStorage {}.init(ctx);
+        ctx.contract()
     }
 
     fn succeed(_ctx: &ViewContext) -> u64 {

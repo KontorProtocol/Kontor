@@ -2,10 +2,10 @@ package root:component;
 
 world root {
 	include kontor:built-in/built-in;
-	use kontor:built-in/context.{view-context, proc-context};
+	use kontor:built-in/context.{view-context, proc-context, contract};
 	use kontor:built-in/error.{error};
 
-	export init: async func(ctx: borrow<proc-context>);
+	export init: async func(ctx: borrow<proc-context>) -> contract;
 
 	// Case 1: Normal success
 	export succeed: async func(ctx: borrow<view-context>) -> u64;

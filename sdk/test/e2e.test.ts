@@ -20,6 +20,7 @@ import {
   Decimal,
   HolderRef,
   KontorSession,
+  Result,
   signet,
 } from "@kontor/sdk";
 import { Contract } from "./__generated__/token";
@@ -159,11 +160,10 @@ test("e2e: proc transfer() decoder round-trips the ok arm of Result<Transfer, Er
   const r = inst._decode(
     `ok({src: x-only-pubkey("aa"), dst: x-only-pubkey("bb"), amt: ${decimalWave("42")}})`,
   );
-  expect(r.kind).toBe("ok");
-  if (r.kind !== "ok") throw new Error("expected ok");
-  expect(r.value.amt).toBeInstanceOf(Decimal);
-  expect(r.value.amt.toString()).toBe("42");
-  expect(r.value.src.kind).toBe("x-only-pubkey");
+  const ok = Result.unwrap(r);
+  expect(ok.amt).toBeInstanceOf(Decimal);
+  expect(ok.amt.toString()).toBe("42");
+  expect(ok.src.kind).toBe("x-only-pubkey");
 });
 
 test("e2e: proc transfer() decoder round-trips the err arm", () => {
@@ -172,10 +172,9 @@ test("e2e: proc transfer() decoder round-trips the err arm", () => {
   const inst = c.transfer(HolderRef.core(), Decimal.from("0"));
 
   const r = inst._decode('err(message("not enough funds"))');
-  expect(r.kind).toBe("err");
-  if (r.kind !== "err") throw new Error("expected err");
-  expect(r.value.kind).toBe("message");
-  if (r.value.kind === "message") {
-    expect(r.value.value).toBe("not enough funds");
+  const err = Result.unwrapErr(r);
+  expect(err.kind).toBe("message");
+  if (err.kind === "message") {
+    expect(err.value).toBe("not enough funds");
   }
 });

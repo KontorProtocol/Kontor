@@ -18,6 +18,10 @@ use stdlib::CheckedArithmetics;
 
 use crate::database::types::Identity;
 
+use std::sync::Arc;
+use tokio::sync::Mutex;
+use wasmtime::component::ResourceTable;
+
 use super::{
     ContractAddress, Decimal, Runtime,
     fuel::Fuel,
@@ -25,7 +29,7 @@ use super::{
     stack::Stack,
     token,
     types::default_val_for_type,
-    wit::{CoreContext, FallContext, Holder, ProcContext, Signer, ViewContext},
+    wit::{Contract, CoreContext, FallContext, Holder, ProcContext, Signer, ViewContext},
 };
 
 /// Derive the payer's `Holder` for a top-level proc context. The payer's
@@ -325,7 +329,7 @@ impl Runtime {
         mut results: Vec<Val>,
         is_fallback: bool,
     ) -> Result<(Result<String, ExecutionError>, Store<Runtime>)> {
-        let (result, results, store) = tokio::spawn(async move {
+        let (result, results, mut store) = tokio::spawn(async move {
             match std::panic::AssertUnwindSafe(func.call_async(&mut store, &params, &mut results))
                 .catch_unwind()
                 .await
@@ -346,7 +350,9 @@ impl Runtime {
         .await
         .map_err(|e| anyhow::anyhow!("tokio task failed: {e}"))?;
 
-        let call_result = self.handle_call(is_fallback, result, results).await;
+        let call_result = self
+            .handle_call(is_fallback, result, results, &mut store)
+            .await;
 
         Ok((call_result, store))
     }
@@ -367,6 +373,7 @@ impl Runtime {
         is_fallback: bool,
         result: std::result::Result<std::result::Result<(), wasmtime::Error>, String>,
         mut results: Vec<Val>,
+        store: &mut Store<Runtime>,
     ) -> Result<String, ExecutionError> {
         self.stack.pop().await;
 
@@ -409,7 +416,7 @@ impl Runtime {
                     Err(anyhow!("fallback did not return a string"))
                 }
             } else {
-                val.to_wave().map_err(Into::into)
+                val_to_wave(val, store, &self.table).await
             }
         };
 
@@ -581,24 +588,64 @@ impl Runtime {
     }
 }
 
+/// Serialize a contract function's return value to a WAVE string.
+///
+/// `wasm_wave::to_string` (via `val.to_wave()`) covers every record /
+/// variant / primitive shape, but maps `Val::Resource` to
+/// `WasmTypeKind::Unsupported` and panics in the writer. So before
+/// delegating, special-case resources that the host knows how to
+/// serialize against the resource table — currently just `Contract`,
+/// which drains to its underlying `contract-address` record so the SDK
+/// reads back the new address from a publish's result row the same way
+/// any Call op surfaces its return.
+///
+/// Other resource types remain a deterministic error: a contract can't
+/// return a `holder` / `signer` / `view-context` etc. across the
+/// result-row boundary without an explicit serialization, and silently
+/// trapping on the wasm-wave panic would mask the failure. Add new
+/// types to this branch as they become legitimately returnable.
+async fn val_to_wave(
+    val: Val,
+    store: &mut Store<Runtime>,
+    table: &Arc<Mutex<ResourceTable>>,
+) -> Result<String> {
+    match val {
+        Val::Resource(resource_any) => {
+            let handle: Resource<Contract> = resource_any
+                .try_into_resource::<Contract>(&mut *store)
+                .map_err(|e| {
+                    anyhow!("function returned a resource that is not a `contract`: {e}")
+                })?;
+            // Drain the resource: `delete` removes the entry from the
+            // table and returns the owned `Contract`. `get` would only
+            // borrow, leaving the entry in the `ResourceTable` for the
+            // pooled runtime's lifetime — once per publish, accumulating.
+            let mut table = table.lock().await;
+            let contract = table.delete(handle)?;
+            Ok(stdlib::to_wave_expr(contract.address))
+        }
+        other => other.to_wave().map_err(Into::into),
+    }
+}
+
 /// Categorize the result of a wasm call into a persisted `OpStatus`.
 ///
 /// - `Ok(s)` where `s` starts with `"err("` means the contract function
-///   returned a `result<_, error>::Err` value. The call ran cleanly but the
-///   semantic outcome was a failure; storage was rolled back. Treated as
-///   `OpStatus::ContractErr`.
+///   returned a `result<_, error>::Err` value. The call ran cleanly but
+///   the semantic outcome was a failure; storage was rolled back. Treated
+///   as `OpStatus::ContractErr`.
 /// - `Ok(_)` otherwise is a successful call returning either a value or
 ///   nothing. `OpStatus::Ok`.
 /// - `Err(ExecutionError::Deterministic(e))` is mapped by looking at the
 ///   underlying error for a `wasmtime::Trap` variant. `Trap::OutOfFuel`
 ///   becomes `OpStatus::OutOfFuel`; other trap variants become
-///   `OpStatus::Trap`. If the error isn't a trap (host-side `Fuel::consume`
-///   exhaustion produces an `anyhow!("Insufficient fuel")` rather than a
-///   wasmtime trap, so check the message too), classify as `OutOfFuel` or
-///   `Other`.
+///   `OpStatus::Trap`. If the error isn't a trap (host-side
+///   `Fuel::consume` exhaustion produces an `anyhow!("Insufficient fuel")`
+///   rather than a wasmtime trap, so check the message too), classify
+///   as `OutOfFuel` or `Other`.
 /// - `Err(NonDeterministic)` shouldn't normally produce a row — those
-///   propagate as fatal infrastructure errors and the block won't commit.
-///   Mapped to `Other` for completeness.
+///   propagate as fatal infrastructure errors and the block won't
+///   commit. Mapped to `Other` for completeness.
 fn classify_result(result: &Result<String, ExecutionError>) -> OpStatus {
     match result {
         Ok(v) if v.starts_with("err(") => OpStatus::ContractErr,

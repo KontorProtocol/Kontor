@@ -3,7 +3,7 @@ package root:component;
 world root {
   include kontor:built-in/built-in;
   use kontor:built-in/foreign.{contract-address};
-  use kontor:built-in/context.{view-context, proc-context};
+  use kontor:built-in/context.{view-context, proc-context, contract};
   use kontor:built-in/error.{error};
 
   record operand {
@@ -21,7 +21,7 @@ world root {
     value: u64
   }
 
-  export init: async func(ctx: borrow<proc-context>);
+  export init: async func(ctx: borrow<proc-context>) -> contract;
 
   export eval: async func(ctx: borrow<proc-context>, x: u64, op: op) -> arith-return;
 

@@ -42,11 +42,12 @@ impl Fib {
 }
 
 impl Guest for Fib {
-    fn init(ctx: &ProcContext) {
+    fn init(ctx: &ProcContext) -> Contract {
         FibStorage {
             cache: Map::new(&[(0, FibValue { value: 0 })]),
         }
         .init(ctx);
+        ctx.contract()
     }
 
     fn fib(ctx: &ProcContext, arith_address: ContractAddress, n: u64) -> u64 {

@@ -3,10 +3,10 @@ package root:component;
 world root {
   include kontor:built-in/built-in;
   use kontor:built-in/foreign.{contract-address};
-  use kontor:built-in/context.{fall-context, view-context, proc-context, signer};
+  use kontor:built-in/context.{fall-context, view-context, proc-context, signer, contract};
   use kontor:built-in/error.{error};
 
-  export init: async func(ctx: borrow<proc-context>);
+  export init: async func(ctx: borrow<proc-context>) -> contract;
 
   export fib: async func(ctx: borrow<proc-context>, arith-address: contract-address, n: u64) -> u64;
 

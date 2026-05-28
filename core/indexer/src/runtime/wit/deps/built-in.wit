@@ -3,6 +3,31 @@ package kontor:built-in;
 interface context {
     use error.{error};
 
+    /// Freely-constructible record naming a contract — used as the
+    /// target for cross-contract calls (`foreign.call`). The passive
+    /// side of the contract-identity pair (see `contract` resource).
+    record contract-address {
+        name: string,
+        height: u64,
+        tx-index: u64,
+    }
+
+    /// Active proof of "I am the contract at this address." Same
+    /// HolderRef/Holder split: `contract-address` is the freely-
+    /// constructible record (anyone can pass one around); `contract`
+    /// is the host-issued resource that can only be obtained from the
+    /// host via `proc-context.contract` / `core-context.contract` /
+    /// `view-context.contract`.
+    ///
+    /// Returning a `contract` from `init` is how a contract proves
+    /// which address it is — there's no way to fabricate one pointing
+    /// at another contract. Once a `contract` crosses the result-row
+    /// boundary the host drains it to a `contract-address` record for
+    /// WAVE serialization; integrity is in-execution only.
+    resource contract {
+        address: async func() -> contract-address;
+    }
+
     variant holder-ref {
         x-only-pubkey(string),
         signer-id(u64),
@@ -76,6 +101,10 @@ interface context {
 
     resource view-context {
         storage: async func() -> view-storage;
+        /// See `proc-context.contract`. View functions may also need
+        /// to know which contract they're running in (e.g. for self-
+        /// referential lookups).
+        contract: async func() -> contract;
     }
 
     resource proc-context {
@@ -93,6 +122,12 @@ interface context {
         storage: async func() -> proc-storage;
         transaction: async func() -> transaction;
         block-height: async func() -> u64;
+        /// The executing contract's own identity as a `contract` resource —
+        /// the only way for the contract to obtain one pointing at itself.
+        /// Returned from `init` so the new contract's address surfaces on
+        /// the publish op's result row; usable by any proc-context method
+        /// that needs to assert "I am the contract at <address>."
+        contract: async func() -> contract;
     }
 
     resource fall-context {
@@ -108,21 +143,16 @@ interface context {
         proc-context: async func() -> proc-context;
         signer-proc-context: async func() -> proc-context;
         core-signer: async func() -> signer;
+        /// See `proc-context.contract`. Native contracts running as core
+        /// also need an integrity-bound handle to their own identity.
+        contract: async func() -> contract;
     }
 }
 
 interface foreign {
-    use context.{signer};
-
-    record contract-address {
-        name: string,
-        height: u64,
-        tx-index: u64,
-    }
+    use context.{signer, contract-address};
 
     call: async func(signer: option<signer>, contract-address: contract-address, expr: string) -> string;
-
-    get-contract-address: async func() -> contract-address;
 }
 
 interface crypto {

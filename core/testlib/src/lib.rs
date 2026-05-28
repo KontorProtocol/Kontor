@@ -590,10 +590,14 @@ impl RuntimeImpl for RuntimeRegtest {
             .result(&id)
             .await?
             .ok_or(anyhow!("Could not find op result for {}", name))?;
-        let addr: ContractAddress = result
-            .contract
-            .parse()
-            .map_err(|e: String| anyhow!("Failed to parse contract address: {}", e))?;
+        // Read the address from the publish op's result value — init
+        // returns its own `contract` resource, which the host drains to
+        // a `contract-address` record on the WAVE boundary. Same path
+        // any Call return uses. See project_contract_resource_publish_return.
+        let value = result.value.ok_or_else(|| {
+            anyhow!("publish '{name}' produced no result value (expected contract-address)")
+        })?;
+        let addr: ContractAddress = from_wave_expr(&value);
 
         *guard = Some(addr.clone());
         Ok(addr)

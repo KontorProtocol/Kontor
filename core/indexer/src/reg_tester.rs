@@ -442,7 +442,13 @@ impl RegTesterInner {
             0,
             None,
         )?;
-        let tap_script = &compose_outputs.reveal.commit_tap_leaf_scripts[0].script;
+        // Pull the participant's tap leaf script out of the reveal PSBT
+        // — the indexer populates it as `PSBT_IN_TAP_LEAF_SCRIPT` on
+        // each participant input (was a parallel `commit_tap_leaf_
+        // scripts` Vec in the response previously).
+        let reveal_psbt =
+            bitcoin::Psbt::deserialize(&hex::decode(&compose_outputs.reveal.psbt_hex)?)?;
+        let (tap_script, _) = test_utils::participant_tap_script(&reveal_psbt.inputs[0])?;
         let taproot_spend_info = TaprootBuilder::new()
             .add_leaf(0, tap_script.clone())
             .map_err(|e| anyhow!("Failed to add leaf: {}", e))?
@@ -451,7 +457,7 @@ impl RegTesterInner {
         test_utils::sign_script_spend(
             &secp,
             &taproot_spend_info,
-            tap_script,
+            &tap_script,
             &mut reveal_transaction,
             &[commit_transaction.output[0].clone()],
             &ident.keypair,

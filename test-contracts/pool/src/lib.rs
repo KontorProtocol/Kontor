@@ -94,7 +94,7 @@ fn calc_swap_result(
 
 impl Guest for Pool {
     // Dummy implementation for testing purposes.
-    fn init(ctx: &ProcContext) {
+    fn init(ctx: &ProcContext) -> Contract {
         PoolStorage {
             token_a: ContractAddress {
                 name: "".to_string(),
@@ -112,6 +112,7 @@ impl Guest for Pool {
             custodian: "".to_string(),
         }
         .init(ctx);
+        ctx.contract()
     }
 
     // This represents the production init function.

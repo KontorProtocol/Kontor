@@ -50,9 +50,14 @@ export interface KontorSessionOptions {
   /**
    * Override the default `HttpTransport`. Useful for tests (swap in a
    * mock) or for custom backends that proxy through a different
-   * protocol.
+   * protocol. `feeRate` mirrors `KontorSessionOptions.feeRate` so a
+   * custom transport can honor the session-level default.
    */
-  transport?: (opts: { chain: Chain; account: Account }) => KontorTransport;
+  transport?: (opts: {
+    chain: Chain;
+    account: Account;
+    feeRate: number | null;
+  }) => KontorTransport;
   /**
    * `fetch` implementation for the results poller. Inject a mock in
    * tests; defaults to `globalThis.fetch`.
@@ -72,6 +77,14 @@ export interface KontorSessionOptions {
    * cursor; `filter` narrows the stream. Omit for "follow from the tip".
    */
   events?: EventsOptions;
+  /**
+   * Default Bitcoin fee rate in sat/vB, applied to every Reveal the
+   * SDK composes (single submits, attach/offer/revoke/accept). Omit to
+   * let the indexer pick its current `fastest_fee`. Power users wanting
+   * a per-call override can compose their own Reveal via
+   * `transport.composeAndSign` + `transport.submitReveal`.
+   */
+  feeRate?: number;
 }
 
 /**
@@ -97,6 +110,9 @@ export class KontorSession {
   readonly transport: KontorTransport;
   /** Default gas cap for proc `Inst`s; see `KontorSessionOptions`. */
   readonly defaultGasLimit: bigint;
+  /** Default sat/vB for every Reveal the SDK composes; `null` = let the
+   *  indexer pick its current `fastest_fee`. */
+  readonly feeRate: number | null;
   /**
    * The session's results poller — one shared loop, started here in the
    * constructor. Backs `events()` and (later) `inst.submit().wait()`.
@@ -107,10 +123,16 @@ export class KontorSession {
     this.chain = opts.chain;
     this.account = opts.account;
     this.defaultGasLimit = opts.defaultGasLimit ?? DEFAULT_GAS_LIMIT;
+    this.feeRate = opts.feeRate ?? null;
     const make =
       opts.transport ??
-      (({ chain, account }) => new HttpTransport({ chain, account }));
-    this.transport = make({ chain: opts.chain, account: opts.account });
+      (({ chain, account, feeRate }) =>
+        new HttpTransport({ chain, account, feeRate: feeRate ?? undefined }));
+    this.transport = make({
+      chain: opts.chain,
+      account: opts.account,
+      feeRate: this.feeRate,
+    });
     this.poller = new ResultsPoller({
       baseUrl: opts.chain.urls.http,
       fetch: opts.fetch ?? globalThis.fetch.bind(globalThis),
@@ -138,6 +160,46 @@ export class KontorSession {
       this.defaultGasLimit,
       { kind: "Call", contract, fnName, expr },
       decode,
+    );
+  }
+
+  /**
+   * Build a `Publish` Inst that deploys `bytes` under `name`.
+   *
+   * Resolves to the new contract's `ContractAddress` once the publish
+   * lands on chain. The address comes back as init's return value —
+   * every contract's `init` returns its own `contract` resource (see
+   * project_contract_resource_publish_return), which the host drains
+   * to a `contract-address` record at the WAVE boundary so the SDK
+   * reads it through the same standard result-row pipeline as any
+   * Call return.
+   *
+   * The publish op needs a containing Bitcoin block to resolve its
+   * address (the address is `name@<height>.<txIndex>`), so a freshly
+   * broadcast publish may not surface a result for up to one block
+   * confirmation (the regtest `mine()` helper short-circuits that
+   * latency for tests).
+   */
+  publish(name: string, bytes: Uint8Array): Inst<ContractAddress> {
+    return new Inst<ContractAddress>(
+      this,
+      this.defaultGasLimit,
+      { kind: "Publish", name, bytes },
+      decodeContractAddressWave,
+    );
+  }
+
+  /**
+   * Build an `Issuance` Inst — credits the signer with native tokens.
+   * System-paid: bypasses gas accounting, so a freshly-funded account
+   * can self-issue without an existing balance. Returns no value.
+   */
+  issuance(): Inst<void> {
+    return new Inst<void>(
+      this,
+      this.defaultGasLimit,
+      { kind: "Issuance" },
+      () => undefined,
     );
   }
 
@@ -262,6 +324,29 @@ function parseContractAddress(s: string): ContractAddress {
   if (m == null) {
     throw new Error(
       `invalid contract address '${s}'; expected '<name>@<height>.<txIndex>'`,
+    );
+  }
+  return new ContractAddress(m[1]!, BigInt(m[2]!), BigInt(m[3]!));
+}
+
+/**
+ * Decode a `contract-address` WAVE record into a `ContractAddress`.
+ * The shape is `{name: "<n>", height: <u64>, tx-index: <u64>}` — what
+ * `to_wave_expr(ContractAddress)` produces on the indexer side.
+ *
+ * A small custom regex parser rather than a full built-in WIT codec:
+ * publish is the only built-in (non-contract) return that the SDK
+ * decodes, the format is rigid, and bringing the built-in WIT into
+ * the bundle just for this would be wildly over-built. If more
+ * built-in returns appear, switch this to a real WIT codec instance.
+ */
+function decodeContractAddressWave(wave: string): ContractAddress {
+  const m = wave.match(
+    /^\{\s*name:\s*"([^"]*)"\s*,\s*height:\s*(\d+)\s*,\s*tx-index:\s*(\d+)\s*\}$/,
+  );
+  if (m == null) {
+    throw new Error(
+      `expected contract-address WAVE record, got: ${wave}`,
     );
   }
   return new ContractAddress(m[1]!, BigInt(m[2]!), BigInt(m[3]!));

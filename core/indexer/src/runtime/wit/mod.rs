@@ -1,7 +1,7 @@
 mod resources;
 
 pub use resources::{
-    CoreContext, FallContext, FileDescriptor, HasContractId, Holder, Keys, ProcContext,
+    Contract, CoreContext, FallContext, FileDescriptor, HasContractId, Holder, Keys, ProcContext,
     ProcStorage, Proof, Signer, Transaction, ViewContext, ViewStorage,
 };
 
@@ -18,6 +18,7 @@ wasmtime::component::bindgen!({
         "kontor:built-in/context.proc-storage": ProcStorage,
         "kontor:built-in/context.keys": Keys,
         "kontor:built-in/context.holder": Holder,
+        "kontor:built-in/context.contract": Contract,
         "kontor:built-in/context.transaction": Transaction,
         "kontor:built-in/file-registry.file-descriptor": FileDescriptor,
         "kontor:built-in/file-registry.proof": Proof,

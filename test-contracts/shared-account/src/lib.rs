@@ -35,8 +35,9 @@ fn unknown_error() -> Error {
 }
 
 impl Guest for SharedAccount {
-    fn init(ctx: &ProcContext) {
+    fn init(ctx: &ProcContext) -> Contract {
         SharedAccountStorage::default().init(ctx);
+        ctx.contract()
     }
 
     fn open(

@@ -420,11 +420,4 @@ impl built_in::foreign::HostWithStore for Runtime {
             ._call(accessor, signer, &contract_address, &expr)
             .await
     }
-
-    async fn get_contract_address<T>(accessor: &Accessor<T, Self>) -> Result<ContractAddress> {
-        accessor
-            .with(|mut access| access.get().clone())
-            ._get_contract_address(accessor)
-            .await
-    }
 }

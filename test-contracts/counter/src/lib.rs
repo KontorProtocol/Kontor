@@ -9,8 +9,9 @@ struct CounterStorage {
 }
 
 impl Guest for Counter {
-    fn init(ctx: &ProcContext) {
+    fn init(ctx: &ProcContext) -> Contract {
         CounterStorage::default().init(ctx);
+        ctx.contract()
     }
 
     fn increment(ctx: &ProcContext) {

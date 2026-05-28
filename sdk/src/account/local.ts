@@ -28,6 +28,7 @@ import { SigHash, Transaction, p2tr, utils as btcUtils } from "@scure/btc-signer
 import { HolderRef } from "../canonical/HolderRef.js";
 import { SignerError } from "../errors.js";
 import type { Account, SighashKind, SignPsbtOptions } from "./index.js";
+import { AccountLock } from "./lock.js";
 import type { BitcoinNetwork, Chain } from "../chains.js";
 
 /** `SighashKind` → the `@scure/btc-signer` sighash flag. `default` is
@@ -77,6 +78,7 @@ export class LocalAccount implements Account {
   readonly xOnlyPubKey: string;
   readonly address: string;
   readonly holderRef: HolderRef;
+  private readonly lock = new AccountLock();
 
   private constructor(
     /** Raw 32-byte secp256k1 secret. Held for the instance's lifetime. */
@@ -196,6 +198,10 @@ export class LocalAccount implements Account {
       );
     }
     return Promise.resolve(tx.toPSBT());
+  }
+
+  runExclusive<T>(fn: () => Promise<T>): Promise<T> {
+    return this.lock.runExclusive(fn);
   }
 }
 

@@ -30,6 +30,7 @@ const stubAccount: Account = {
   holderRef: HolderRef.xOnlyPubkey(STUB_XONLY),
   signMessage: () => Promise.reject(new Error("stub")),
   signPsbt: () => Promise.reject(new Error("stub")),
+  runExclusive: (fn) => fn(),
 };
 
 /** Idle poller: bootstraps, then long-polls with nothing to report. */
@@ -60,11 +61,10 @@ function stubSession(): KontorSession {
     simulate: fail,
     submit: fail,
     utxos: fail,
-    feeRate: fail,
     compose: fail,
-    composeCommit: fail,
-    composeReveal: fail,
+    composeAndSign: fail,
     broadcast: fail,
+    submitReveal: fail,
   };
   const session = new KontorSession({
     chain: signet,

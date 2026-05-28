@@ -2,7 +2,7 @@ package root:component;
 
 world root {
   include kontor:built-in/built-in;
-  use kontor:built-in/context.{core-context, view-context, proc-context};
+  use kontor:built-in/context.{core-context, view-context, proc-context, contract};
   use kontor:built-in/error.{error};
   use kontor:built-in/numbers.{decimal};
 
@@ -38,7 +38,7 @@ world root {
     deactivated: u64,
   }
 
-  export init: async func(ctx: borrow<proc-context>);
+  export init: async func(ctx: borrow<proc-context>) -> contract;
 
   // --- Validator lifecycle (ProcContext — user-facing) ---
   export register-validator: async func(ctx: borrow<proc-context>, ed25519-pubkey: list<u8>, stake-amount: decimal) -> result<validator-info, error>;

@@ -13,8 +13,9 @@ fn _generate_id(ctx: &ProcContext) -> String {
 }
 
 impl Guest for Crypto {
-    fn init(ctx: &ProcContext) {
+    fn init(ctx: &ProcContext) -> Contract {
         VecU8 { bytes: None }.init(ctx);
+        ctx.contract()
     }
 
     fn hash(_ctx: &ViewContext, input: String) -> String {

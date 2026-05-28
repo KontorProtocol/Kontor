@@ -2,7 +2,7 @@ package root:component;
 
 world root {
   include kontor:built-in/built-in;
-  use kontor:built-in/context.{core-context, view-context, proc-context, signer, holder-ref};
+  use kontor:built-in/context.{core-context, view-context, proc-context, signer, holder-ref, contract};
   use kontor:built-in/error.{error};
   use kontor:built-in/numbers.{decimal};
 
@@ -32,7 +32,7 @@ world root {
   export hold: async func(ctx: borrow<core-context>, amt: decimal) -> result<transfer, error>;
   export release: async func(ctx: borrow<core-context>, burn-amt: decimal) -> result<burn, error>;
 
-  export init: async func(ctx: borrow<proc-context>);
+  export init: async func(ctx: borrow<proc-context>) -> contract;
 
   export mint: async func(ctx: borrow<proc-context>, amt: decimal) -> result<mint, error>;
   export burn: async func(ctx: borrow<proc-context>, amt: decimal) -> result<burn, error>;

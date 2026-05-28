@@ -22,7 +22,6 @@ import { instToWire, type Inst } from "./inst.js";
 import type { WireInsts } from "./json-codec.js";
 import { Offer, buildSellerDetachPsbt, type OfferData } from "./offer.js";
 import type { KontorSession } from "./session.js";
-import { signCommit, signReveal } from "./transport/signing.js";
 import { TransportError } from "./errors.js";
 
 /**
@@ -44,13 +43,16 @@ export class Attachment<T> {
   ) {}
 
   /**
-   * Open-offer terminal — compose the attach, pre-sign a detach PSBT
-   * (`single-anyonecanpay`, paying the seller `price`), and bundle it
-   * into a persistable `Offer` claimable by anyone who meets `price`.
+   * Open-offer terminal — compose the attach (commit + reveal),
+   * broadcast it so the escrow is live on chain, pre-sign a detach
+   * PSBT (`single-anyonecanpay`, paying the seller `price`), and
+   * bundle it into a persistable `Offer` claimable by anyone who
+   * meets `price`.
    *
-   * Broadcasts nothing: the seller hands out `offer.serialize()` as a
-   * deferred offer, or calls `offer.publishAttach()` to put the escrow
-   * on chain upfront. See `offer.ts`.
+   * The attach is broadcast immediately (the seller commits the asset
+   * to the escrow on creation, the way OpenSea / Magic Eden lock the
+   * asset at listing time): subsequent `revoke()` and `accept()` only
+   * need to send the detach / swap tx, not re-broadcast attach.
    */
   async offer(opts: { price: bigint }): Promise<Offer> {
     const { transport, account } = this.session;
@@ -69,35 +71,41 @@ export class Attachment<T> {
     const sellerScriptPubKey = hex.encode(
       p2tr(hex.decode(account.xOnlyPubKey), undefined, this.session.chain.network).script,
     );
-    const utxos = await transport.utxos();
-    const reveal: Reveal = {
-      sat_per_vbyte: await transport.feeRate(),
-      participants: [
-        {
-          x_only_public_key: account.xOnlyPubKey,
-          commit_insts: attachWire,
-          output: null,
-          commit_source: {
-            Build: {
-              address: account.address,
-              funding_utxo_ids: utxos.map((u) => `${u.txid}:${u.vout}`),
+    // Route through `submitReveal` so utxos/compose/sign/broadcast/track
+    // run as one atomic block under the account's lock — no race with
+    // a concurrent `submit` or marketplace flow on the same account.
+    const { composed, revealHex: attachRevealHex } = await transport.submitReveal(
+      async (utxos) => {
+        const reveal: Reveal = {
+          sat_per_vbyte: this.session.feeRate,
+          participants: [
+            {
+              x_only_public_key: account.xOnlyPubKey,
+              commit_insts: attachWire,
+              output: null,
+              commit_source: {
+                Build: {
+                  address: account.address,
+                  funding_utxo_ids: utxos.map((u) => `${u.txid}:${u.vout}`),
+                },
+              },
             },
-          },
-        },
-      ],
-      extra_inputs: [],
-      extra_outputs: [
-        {
-          ChainedEnvelope: {
-            insts: detachWire,
-            value: 600n,
-            internal_key: account.xOnlyPubKey,
-          },
-        },
-        { Change: { script_pubkey: sellerScriptPubKey } },
-      ],
-    };
-    const composed = await transport.compose(reveal);
+          ],
+          extra_inputs: [],
+          extra_outputs: [
+            {
+              ChainedEnvelope: {
+                insts: detachWire,
+                value: 600n,
+                internal_key: account.xOnlyPubKey,
+              },
+            },
+            { Change: { script_pubkey: sellerScriptPubKey } },
+          ],
+        };
+        return transport.composeAndSign(reveal);
+      },
+    );
 
     // The chained detach leaf script (for the future buyer to spend the
     // escrow output) lives on output 0 of the reveal — same position as
@@ -115,12 +123,6 @@ export class Attachment<T> {
     }
     const detachLeaf = firstOutputInfo.ChainedEnvelope.tap_leaf_script;
 
-    const commitHex = await signCommit(account, composed.commits[0]!.psbt_hex);
-    const attachRevealHex = await signReveal(
-      account,
-      composed.reveal.psbt_hex,
-      composed.reveal.commit_tap_leaf_scripts,
-    );
     const detachPsbt = await buildSellerDetachPsbt(account, {
       attachRevealHex,
       detachLeaf,
@@ -130,7 +132,6 @@ export class Attachment<T> {
 
     const data: OfferData = {
       v: 1,
-      attachCommit: commitHex,
       attachReveal: attachRevealHex,
       detachInsts: detachWire,
       detachLeaf,

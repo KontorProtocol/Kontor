@@ -35,15 +35,15 @@
  * decoders), so the wire shapes get the `Wire` prefix wherever they
  * appear together.
  */
+import type { Transaction } from "@scure/btc-signer";
+
 import type { ContractAddress } from "./canonical/ContractAddress.js";
 import type {
-  CommitOutputs,
   ComposeOutputs,
   Inst as WireInst,
   Insts as WireInsts,
   OpStatus,
   Reveal,
-  RevealOutputs,
 } from "./bindings.js";
 
 export type { WireInst, WireInsts, OpStatus };
@@ -151,13 +151,6 @@ export interface KontorTransport {
   utxos(): Promise<Utxo[]>;
 
   /**
-   * sat/vB to use when composing. `null` means "let the indexer pick its
-   * current `fastest_fee`". Higher-level flows populate
-   * `Reveal.sat_per_vbyte` with this.
-   */
-  feeRate(): Promise<number | null>;
-
-  /**
    * Combined compose: build any commits required by Build participants,
    * then build the reveal PSBT. All-Existing Reveals skip commit building.
    * Used by the attach/detach runtime to assemble the full commit/reveal
@@ -166,26 +159,91 @@ export interface KontorTransport {
   compose(reveal: Reveal): Promise<ComposeOutputs>;
 
   /**
-   * Build only the commits for Build participants. Returns one
-   * `CommitTx` per Build participant plus the input Reveal with those
-   * participants rewritten as Existing (outpoints filled in). The
-   * caller signs + broadcasts the commits and later passes the returned
-   * Reveal to `composeReveal` for the reveal PSBT.
-   */
-  composeCommit(reveal: Reveal): Promise<CommitOutputs>;
-
-  /**
-   * Build only the reveal PSBT. All participants must already be
-   * `CommitSource::Existing`. Used by the attach/detach runtime for the
-   * detach reveal that script-spends an existing escrow output.
-   */
-  composeReveal(reveal: Reveal): Promise<RevealOutputs>;
-
-  /**
    * Broadcast already-signed raw transactions — in dependency order
    * (commit, reveal, …) — as one package. Used by the attach/detach
-   * runtime, which builds and signs its txs by hand rather than going
-   * through `submit`.
+   * runtime, which builds its txs (e.g. the seller's pre-signed detach
+   * PSBT, the buyer's swap reveal) outside the generic `submit` path.
    */
   broadcast(transactions: string[]): Promise<BroadcastResult>;
+
+  /**
+   * Compose a Reveal and sign all participant inputs that belong to
+   * this transport's account, returning the prepared package. Pure:
+   * does NOT broadcast and does NOT update funding tracking. Callers
+   * that will broadcast (now or later) should also call
+   * `advanceTracking` so subsequent `utxos()` reflects the spent
+   * inputs + change outputs.
+   *
+   * `submit` is the simple-Reveal shorthand (single Build participant
+   * with Change). Higher-level flows (attach: ChainedEnvelope +
+   * Change; marketplace: multi-participant) build their own Reveal
+   * and route through this.
+   *
+   * Returns the reveal as a parsed `Transaction` (NOT an extracted-tx
+   * hex) because only inputs owned by this transport's account are
+   * finalized — foreign inputs (e.g. a seller's pre-signed escrow on
+   * a marketplace swap) are left untouched for the caller to fill in
+   * before extracting. Common single-owner callers do
+   * `hex.encode(revealTx.extract())` immediately; mixed-signer
+   * callers inject the foreign witness first.
+   */
+  composeAndSign(reveal: Reveal): Promise<{
+    commitHexes: string[];
+    revealTx: Transaction;
+    composed: ComposeOutputs;
+  }>;
+
+  /**
+   * The only blessed broadcast path for funding-state-mutating txs.
+   * Holds the account's lock for the full body, so two concurrent
+   * callers — even on separate transports binding the same Account
+   * — serialize naturally. No race on `utxos()`, the broadcast, or
+   * the tracking update.
+   *
+   * The `prepare` callback runs *inside* the lock with a consistent
+   * snapshot of `utxos()`. It owns the Reveal shape, the
+   * compose+sign work (via `composeAndSign`), and any foreign-witness
+   * injection on `revealTx` before this method extracts. Returning
+   * `{commitHexes, revealTx, composed}` hands the prepared package
+   * back; `submitReveal` extracts the reveal, broadcasts
+   * `[...commitHexes, revealHex]` as a Bitcoin package, and advances
+   * funding tracking — all atomically.
+   *
+   * Multi-commit (0..N) is supported in the API shape; today every
+   * SDK flow has 0 or 1 commits (`revoke` is the no-commit case).
+   *
+   * Adding a new submission flow? Route it through here. The
+   * `broadcast` / `advanceTracking` primitives exist on the
+   * interface but using them directly bypasses the lock — only
+   * read-only methods (`view`) are safe outside.
+   */
+  submitReveal(
+    prepare: (utxos: Utxo[]) => Promise<{
+      commitHexes: string[];
+      revealTx: Transaction;
+      composed: ComposeOutputs;
+    }>,
+  ): Promise<{
+    result: BroadcastResult;
+    commitHexes: string[];
+    revealHex: string;
+    composed: ComposeOutputs;
+  }>;
+
+  /**
+   * After broadcasting a commit/reveal package that this transport
+   * prepared via `composeAndSign`, advance the funding tracker so its
+   * spent inputs are filtered out of `utxos()` and its change outputs
+   * become the new pool. Called automatically by `submitReveal` —
+   * direct callers bypass the account's lock, so don't.
+   *
+   * Optional — implementations that don't track funding (e.g. test
+   * mocks) may leave it undefined.
+   */
+  advanceTracking?(opts: {
+    suppliedUtxos: Utxo[];
+    composed: ComposeOutputs;
+    commitHexes: string[];
+    revealHex: string;
+  }): void;
 }

@@ -7,8 +7,9 @@ use stdlib::*;
 struct RegistryStorage {}
 
 impl Guest for Registry {
-    fn init(ctx: &ProcContext) {
+    fn init(ctx: &ProcContext) -> Contract {
         RegistryStorage::default().init(ctx);
+        ctx.contract()
     }
 
     fn registered(_ctx: &ProcContext) {

@@ -72,6 +72,20 @@ export type CommitTx = {
   transaction: string;
   transaction_hex: string;
   psbt_hex: string;
+  /**
+   * Display-order txid — taproot witness data is segregated, so this
+   * equals the txid of the signed tx too. Provided so the SDK can
+   * reference this commit as a UTXO source without parsing the hex.
+   */
+  txid: string;
+  /**
+   * Value (sats) of the commit's change output at vout 1, or `None`
+   * when the leftover was sub-dust and silently dropped to fee.
+   * Compose computes this exactly (selected funding sum minus
+   * tap-output value minus commit fee), so the SDK gets it for free
+   * without parsing the signed commit hex.
+   */
+  change_value: number | null;
 };
 
 /**
@@ -377,31 +391,34 @@ export type RevealOutput =
 /**
  * Per-output annotation describing what kind of output occupies each
  * position in the reveal tx. Mirrors the input `RevealOutput` enum.
- * The wire shape includes only what the SDK can't derive from the tx
- * itself; in particular `ChainedEnvelope` carries the tap leaf script
- * that the chained tap output committed to.
+ * Each variant carries the output's value in sats so the SDK can
+ * extract change UTXOs / read fixed payouts without re-parsing the tx
+ * hex; `ChainedEnvelope` additionally carries the tap leaf script the
+ * chained output commits to (the future spender needs it).
  */
-export type RevealOutputInfo = "Fixed" | "Change" | {
-  "ChainedEnvelope": { tap_leaf_script: TapLeafScript };
-} | "OpReturn";
+export type RevealOutputInfo =
+  | { "Fixed": { value: number } }
+  | { "Change": { value: number } }
+  | { "ChainedEnvelope": { value: number; tap_leaf_script: TapLeafScript } }
+  | "OpReturn";
 
 export type RevealOutputs = {
   transaction: string;
   transaction_hex: string;
   psbt_hex: string;
   /**
-   * Per-participant tap leaf script + control block, parallel to the
-   * reveal tx's inputs. Callers need these to assemble the script-path
-   * witness when signing their input.
+   * Display-order txid. Taproot witness data is segregated, so the
+   * txid of the unsigned reveal here equals the signed-tx txid the
+   * SDK eventually broadcasts. Lets the SDK reference reveal
+   * outputs as UTXOs without parsing the hex.
    */
-  commit_tap_leaf_scripts: Array<TapLeafScript>;
+  txid: string;
   /**
    * Per-output kind + any extra info, in tx output order (same
-   * length as `transaction.output`). Mirrors the input `RevealOutput`
-   * enum and surfaces info derivable from compose-time state but not
-   * from the tx alone — notably the tap leaf script + control block
-   * for `ChainedEnvelope` outputs, which the caller needs to
-   * script-spend that output in a follow-up tx.
+   * length as `transaction.output`). Each variant carries the
+   * output's value in sats — derivable from the tx but exposed
+   * here so the SDK can extract change UTXOs / inspect output
+   * values without parsing the raw hex.
    */
   output_info: Array<RevealOutputInfo>;
 };

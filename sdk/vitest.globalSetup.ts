@@ -26,6 +26,22 @@ export function generateTokenBindings(): void {
   writeFileSync(path.join(dir, "token.ts"), generate(tokenWit));
 }
 
+/**
+ * Generate `test/__generated__/counter.ts` from the test counter's WIT —
+ * the publish-round-trip regtest deploys the counter wasm from JS and
+ * binds the result.
+ */
+export function generateCounterBindings(): void {
+  const counterWit = readFileSync(
+    path.join(here, "..", "test-contracts", "counter", "wit", "contract.wit"),
+    "utf8",
+  );
+  const dir = path.join(here, "test", "__generated__");
+  mkdirSync(dir, { recursive: true });
+  writeFileSync(path.join(dir, "counter.ts"), generate(counterWit));
+}
+
 export default async function setup(): Promise<void> {
   generateTokenBindings();
+  generateCounterBindings();
 }

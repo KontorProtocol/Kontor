@@ -52,7 +52,7 @@ struct ProtocolState {
 // ─────────────────────────────────────────────────────────────────
 
 impl Guest for Filestorage {
-    fn init(ctx: &ProcContext) {
+    fn init(ctx: &ProcContext) -> Contract {
         ProtocolState {
             min_nodes: DEFAULT_MIN_NODES,
             challenge_deadline_blocks: DEFAULT_CHALLENGE_DEADLINE_BLOCKS,
@@ -65,6 +65,7 @@ impl Guest for Filestorage {
             challenges: Map::default(),
         }
         .init(ctx);
+        ctx.contract()
     }
 
     fn create_agreement(

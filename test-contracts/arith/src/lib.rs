@@ -11,11 +11,12 @@ struct ArithStorage {
 }
 
 impl Guest for Arith {
-    fn init(ctx: &ProcContext) {
+    fn init(ctx: &ProcContext) -> Contract {
         ArithStorage {
             last_op: Some(Op::Id),
         }
-        .init(ctx)
+        .init(ctx);
+        ctx.contract()
     }
 
     fn eval(ctx: &ProcContext, x: u64, op: Op) -> ArithReturn {
@@ -43,6 +44,6 @@ impl Guest for Arith {
 
     // for cycle detection test
     fn fib(ctx: &ProcContext, contract_address: ContractAddress, n: u64) -> u64 {
-        fib::fib(&contract_address, ctx.signer(), get_contract_address(), n)
+        fib::fib(&contract_address, ctx.signer(), ctx.contract().address(), n)
     }
 }

@@ -81,7 +81,7 @@ mod tests {
 
 world root {{
     include kontor:built-in/built-in;
-    use kontor:built-in/context.{{proc-context, view-context, fall-context}};
+    use kontor:built-in/context.{{proc-context, view-context, fall-context, contract}};
     use kontor:built-in/error.{{error}};
 
 {content}
@@ -106,7 +106,7 @@ world root {{
     fn test_valid_basic() {
         let result = validate(
             r#"
-    export init: async func(ctx: borrow<proc-context>);
+    export init: async func(ctx: borrow<proc-context>) -> contract;
     export get-value: async func(ctx: borrow<view-context>) -> string;
     export set-value: async func(ctx: borrow<proc-context>, val: string) -> result<_, error>;
 "#,
@@ -123,7 +123,7 @@ world root {{
         name: string,
     }
 
-    export init: async func(ctx: borrow<proc-context>);
+    export init: async func(ctx: borrow<proc-context>) -> contract;
     export get-data: async func(ctx: borrow<view-context>) -> my-data;
 "#,
         );
@@ -138,7 +138,7 @@ world root {{
     fn test_invalid_no_context_parameter() {
         let result = validate(
             r#"
-    export init: async func(ctx: borrow<proc-context>);
+    export init: async func(ctx: borrow<proc-context>) -> contract;
     export bad-func: async func() -> string;
 "#,
         );
@@ -152,7 +152,7 @@ world root {{
             r#"
     resource my-context {}
 
-    export init: async func(ctx: borrow<proc-context>);
+    export init: async func(ctx: borrow<proc-context>) -> contract;
     export bad-func: async func(ctx: borrow<my-context>) -> string;
 "#,
         );
@@ -171,7 +171,7 @@ world root {{
             r#"
     record empty {}
 
-    export init: async func(ctx: borrow<proc-context>);
+    export init: async func(ctx: borrow<proc-context>) -> contract;
     export get: async func(ctx: borrow<view-context>) -> empty;
 "#,
         );
@@ -190,7 +190,7 @@ world root {{
             r#"
     record my-error { msg: string }
 
-    export init: async func(ctx: borrow<proc-context>);
+    export init: async func(ctx: borrow<proc-context>) -> contract;
     export bad: async func(ctx: borrow<proc-context>) -> result<string, my-error>;
 "#,
         );
@@ -202,7 +202,7 @@ world root {{
     fn test_invalid_nested_list() {
         let result = validate(
             r#"
-    export init: async func(ctx: borrow<proc-context>);
+    export init: async func(ctx: borrow<proc-context>) -> contract;
     export bad: async func(ctx: borrow<view-context>) -> list<list<string>>;
 "#,
         );
@@ -221,7 +221,7 @@ world root {{
             r#"
     record bad { names: list<string> }
 
-    export init: async func(ctx: borrow<proc-context>);
+    export init: async func(ctx: borrow<proc-context>) -> contract;
     export get: async func(ctx: borrow<view-context>) -> bad;
 "#,
         );
@@ -233,7 +233,7 @@ world root {{
     fn test_invalid_result_in_param() {
         let result = validate(
             r#"
-    export init: async func(ctx: borrow<proc-context>);
+    export init: async func(ctx: borrow<proc-context>) -> contract;
     export bad: async func(ctx: borrow<proc-context>, r: result<string, error>) -> string;
 "#,
         );
@@ -250,7 +250,7 @@ world root {{
     fn test_invalid_float() {
         let result = validate(
             r#"
-    export init: async func(ctx: borrow<proc-context>);
+    export init: async func(ctx: borrow<proc-context>) -> contract;
     export bad: async func(ctx: borrow<view-context>) -> f64;
 "#,
         );
@@ -269,7 +269,7 @@ world root {{
             r#"
     flags perms { read, write, exec }
 
-    export init: async func(ctx: borrow<proc-context>);
+    export init: async func(ctx: borrow<proc-context>) -> contract;
     export get: async func(ctx: borrow<view-context>) -> perms;
 "#,
         );
@@ -283,7 +283,7 @@ world root {{
             r#"
     record node { value: string, next: node }
 
-    export init: async func(ctx: borrow<proc-context>);
+    export init: async func(ctx: borrow<proc-context>) -> contract;
     export get: async func(ctx: borrow<view-context>) -> node;
 "#,
         ));
@@ -295,7 +295,7 @@ world root {{
     fn test_invalid_sync_export() {
         let result = validate(
             r#"
-    export init: async func(ctx: borrow<proc-context>);
+    export init: async func(ctx: borrow<proc-context>) -> contract;
     export bad: func(ctx: borrow<view-context>) -> string;
 "#,
         );
@@ -307,7 +307,7 @@ world root {{
     fn test_valid_init_fallback() {
         let result = validate(
             r#"
-    export init: async func(ctx: borrow<proc-context>);
+    export init: async func(ctx: borrow<proc-context>) -> contract;
     export fallback: async func(ctx: borrow<fall-context>, expr: string) -> string;
     export get-value: async func(ctx: borrow<view-context>) -> string;
 "#,
@@ -346,7 +346,7 @@ world root {{
     fn test_invalid_fallback_wrong_context() {
         let result = validate(
             r#"
-    export init: async func(ctx: borrow<proc-context>);
+    export init: async func(ctx: borrow<proc-context>) -> contract;
     export fallback: async func(ctx: borrow<proc-context>, expr: string) -> string;
 "#,
         );
@@ -363,7 +363,7 @@ world root {{
     fn test_invalid_fallback_wrong_return() {
         let result = validate(
             r#"
-    export init: async func(ctx: borrow<proc-context>);
+    export init: async func(ctx: borrow<proc-context>) -> contract;
     export fallback: async func(ctx: borrow<fall-context>, expr: string) -> u64;
 "#,
         );
@@ -375,7 +375,7 @@ world root {{
     fn test_render_includes_source_location() {
         let wit = wrap(
             r#"
-    export init: async func(ctx: borrow<proc-context>);
+    export init: async func(ctx: borrow<proc-context>) -> contract;
     export bad: func(ctx: borrow<view-context>) -> string;
 "#,
         );
@@ -414,7 +414,7 @@ world root {{
     record wrapper { data: my-variant }
     variant my-variant { some(wrapper), none }
 
-    export init: async func(ctx: borrow<proc-context>);
+    export init: async func(ctx: borrow<proc-context>) -> contract;
     export get: async func(ctx: borrow<view-context>) -> wrapper;
 "#,
         ));
@@ -427,7 +427,7 @@ world root {{
             r#"
     variant tree { leaf(string), branch(tree) }
 
-    export init: async func(ctx: borrow<proc-context>);
+    export init: async func(ctx: borrow<proc-context>) -> contract;
     export get: async func(ctx: borrow<view-context>) -> tree;
 "#,
         ));
@@ -442,7 +442,7 @@ world root {{
     record b { c-field: c }
     record c { a-field: a }
 
-    export init: async func(ctx: borrow<proc-context>);
+    export init: async func(ctx: borrow<proc-context>) -> contract;
     export get: async func(ctx: borrow<view-context>) -> a;
 "#,
         ));

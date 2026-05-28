@@ -19,16 +19,24 @@ export default async function setup({ provide }: GlobalSetupContext) {
   });
 
   // `provide` values cross into (possibly browser) test workers, so each
-  // funding UTXO's bigint `value` goes over as a string.
+  // funding UTXO's bigint `value` goes over as a string. The matching
+  // `connectRegtest()` accepts that wire shape and converts back.
   provide("regtest", {
     apiUrl: devnet.apiUrl,
     bitcoinRpc: devnet.bitcoinRpc,
     devPrivateKey: devnet.devPrivateKey,
-    devFundingUtxos: devnet.devFundingUtxos.map((u) => ({
-      txid: u.txid,
-      vout: u.vout,
-      value: u.value.toString(),
-      scriptPubKey: u.scriptPubKey,
+    devPublicKey: devnet.devPublicKey,
+    devAddress: devnet.devAddress,
+    identities: devnet.identities.map((id) => ({
+      privateKey: id.privateKey,
+      publicKey: id.publicKey,
+      address: id.address,
+      fundingUtxo: {
+        txid: id.fundingUtxo.txid,
+        vout: id.fundingUtxo.vout,
+        value: id.fundingUtxo.value.toString(),
+        scriptPubKey: id.fundingUtxo.scriptPubKey,
+      },
     })),
   });
 

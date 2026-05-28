@@ -61,10 +61,14 @@ pub fn default_val_for_type(ty: Type) -> Val {
             }
         }
         Type::Flags(_) => Val::Flags(Vec::new()),
-        Type::Own(_) => panic!("Cannot create a default Own value without a resource context"),
-        Type::Borrow(_) => {
-            panic!("Cannot create a default Borrow value without a resource context")
-        }
+        // Resource handles can only be constructed by the host (via the
+        // store's resource table) or returned from a guest call. For
+        // pre-allocating a `results` slot before `Func::call_async`,
+        // wasmtime only checks that `results.len()` matches; it
+        // overwrites every slot on success. So a simple `Val::Bool(false)`
+        // placeholder is sufficient — the call's actual return value
+        // (a `Val::Resource(ResourceAny)`) replaces it.
+        Type::Own(_) | Type::Borrow(_) => Val::Bool(false),
         _ => {
             panic!("Unknnown type encountered")
         }

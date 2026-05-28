@@ -167,6 +167,17 @@ impl HasContractId for CoreContext {
     }
 }
 
+/// Host-side state for the `kontor:built-in/context.contract` resource.
+/// Holds the executing contract's address as known to the runtime; the
+/// resource handle is the integrity-bound proof that the executing
+/// contract IS this address — only the host can populate one (via
+/// `proc-context.self` / `core-context.self`), so a contract can never
+/// fabricate a handle pointing at a different address.
+#[derive(Clone)]
+pub struct Contract {
+    pub address: crate::runtime::ContractAddress,
+}
+
 #[derive(Clone)]
 pub struct Holder {
     pub holder_ref: HolderRef,

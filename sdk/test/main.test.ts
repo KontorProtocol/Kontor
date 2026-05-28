@@ -152,10 +152,10 @@ package root:component;
 
 world root {
     include kontor:built-in/built-in;
-    use kontor:built-in/context.{proc-context, view-context};
+    use kontor:built-in/context.{proc-context, view-context, contract};
     use kontor:built-in/error.{error};
 
-    export init: async func(ctx: borrow<proc-context>);
+    export init: async func(ctx: borrow<proc-context>) -> contract;
     export get-value: async func(ctx: borrow<view-context>) -> string;
     export set-value: async func(ctx: borrow<proc-context>, val: string) -> result<_, error>;
 }
@@ -215,10 +215,10 @@ const KONTOR_HEADER = `package root:component;
 
 world root {
     include kontor:built-in/built-in;
-    use kontor:built-in/context.{proc-context, view-context};
+    use kontor:built-in/context.{proc-context, view-context, contract};
     use kontor:built-in/error.{error};
 
-    export init: async func(ctx: borrow<proc-context>);
+    export init: async func(ctx: borrow<proc-context>) -> contract;
 `;
 
 test("Wit.encodeCall renders a single bool arg (skipping ctx)", () => {
@@ -657,10 +657,10 @@ test("Wit.parse returns valid JSON describing the Resolve graph", () => {
 
 world root {
     include kontor:built-in/built-in;
-    use kontor:built-in/context.{proc-context, view-context};
+    use kontor:built-in/context.{proc-context, view-context, contract};
     use kontor:built-in/error.{error};
 
-    export init: async func(ctx: borrow<proc-context>);
+    export init: async func(ctx: borrow<proc-context>) -> contract;
     export set-flag: async func(ctx: borrow<proc-context>, flag: bool) -> result<_, error>;
 }`;
   const w = new Wit(cleanWit);

@@ -63,20 +63,29 @@ const REGTEST_DEV_SEED: [u8; 64] = [0x42u8; 64];
 async fn run_regtest() -> Result<()> {
     logging::setup_with_format(logging::Format::Plain);
 
+    /// Pre-created identity pool size. Each identity is independently
+    /// funded (1M sats) and pre-issued native tokens, so SDK tests can
+    /// pay gas + transfer/sell without further setup. Bump this when
+    /// adding a regtest file that needs its own slot.
+    const IDENTITY_COUNT: usize = 8;
+
     let kontor_bin = std::env::current_exe()?;
     let mut cluster = reg_tester::RegTesterCluster::setup_with(
         1,
         1,
         1,
-        0,
+        IDENTITY_COUNT,
         0,
         Some(REGTEST_DEV_SEED),
         &kontor_bin,
     )
     .await?;
 
-    // Issue native tokens to the dev account so the devnet is usable for
-    // contract publishes and gas-paying calls straight out of the box.
+    // Issue native tokens to the dev (admin) account too — the dev key
+    // remains useful for ad-hoc admin ops (e.g. `fundAddress` from SDK
+    // tests), so giving it issuance keeps that path working. The N
+    // pre-created identities already received Issuance + BLS
+    // registration inside `setup_with`.
     let mut reg_tester = cluster.reg_tester();
     reg_tester
         .instruction(
@@ -88,11 +97,13 @@ async fn run_regtest() -> Result<()> {
         )
         .await?;
 
-    // Split the dev account's funding into independent Bitcoin UTXOs so
-    // distinct regtest test files (transfer, attach, …) can each spend
-    // one without colliding on a single shared output. The SDK passes
-    // these to `submit` as funding — it never sources UTXOs itself.
-    let funding = cluster.split_dev_funding(7).await?;
+    // Drain the registered identity pool. Each identity holds 1M sats
+    // (one funding UTXO) plus a fresh chunk of native tokens — ready
+    // for SDK tests to claim one per test slot.
+    let mut identities = Vec::with_capacity(IDENTITY_COUNT);
+    for _ in 0..IDENTITY_COUNT {
+        identities.push(cluster.pool.pop_registered().await?);
+    }
 
     let api_port = cluster.node_configs[0].api_port;
     let dev = &cluster.identity;
@@ -105,14 +116,20 @@ async fn run_regtest() -> Result<()> {
         "devPrivateKey": hex::encode(dev.keypair.secret_bytes()),
         "devPublicKey": dev.x_only_public_key().to_string(),
         "devAddress": dev.address.to_string(),
-        "devFundingUtxos": funding
+        "identities": identities
             .iter()
-            .map(|(outpoint, txout)| {
+            .map(|id| {
+                let (outpoint, txout) = &id.next_funding_utxo;
                 serde_json::json!({
-                    "txid": outpoint.txid.to_string(),
-                    "vout": outpoint.vout,
-                    "value": txout.value.to_sat(),
-                    "scriptPubKey": hex::encode(txout.script_pubkey.as_bytes()),
+                    "privateKey": hex::encode(id.keypair.secret_bytes()),
+                    "publicKey": id.x_only_public_key().to_string(),
+                    "address": id.address.to_string(),
+                    "fundingUtxo": {
+                        "txid": outpoint.txid.to_string(),
+                        "vout": outpoint.vout,
+                        "value": txout.value.to_sat(),
+                        "scriptPubKey": hex::encode(txout.script_pubkey.as_bytes()),
+                    },
                 })
             })
             .collect::<Vec<_>>(),
