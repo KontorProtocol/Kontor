@@ -158,7 +158,7 @@ impl From<ContractRow> for ContractListRow {
             name: row.name,
             height: row.height,
             tx_index: row.tx_index,
-            size: row.bytes.len() as i64,
+            size: row.bytes.len() as u64,
             signer_id: row.signer_id,
         }
     }

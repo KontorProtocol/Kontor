@@ -623,7 +623,7 @@ pub struct ContractListRow {
     pub height: u64,
     pub tx_index: u32,
     #[ts(type = "number")]
-    pub size: i64,
+    pub size: u64,
     #[ts(type = "number | null")]
     pub signer_id: Option<u64>,
 }
