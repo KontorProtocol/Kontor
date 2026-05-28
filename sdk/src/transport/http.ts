@@ -414,12 +414,13 @@ export class HttpTransport implements KontorTransport {
     // iteration. Each commit consumes a prefix of `suppliedUtxos`
     // (length = `inputsLength`, greedy selection from the head), then
     // its vout 1 is change when `change_value != null`.
+    let consumed = 0;
     if (commitHexes.length === 0) {
       // No commits — `suppliedUtxos` went straight into the reveal as
       // `extra_inputs`, every one consumed.
       for (const u of suppliedUtxos) this.recentlySpent.add(keyOf(u));
+      consumed = suppliedUtxos.length;
     } else {
-      let offset = 0;
       for (let i = 0; i < commitHexes.length; i++) {
         const meta = composed.commits[i]!;
         const commitTx = Transaction.fromRaw(hex.decode(commitHexes[i]!), {
@@ -427,9 +428,9 @@ export class HttpTransport implements KontorTransport {
           allowUnknownOutputs: true,
           allowUnknownInputs: true,
         });
-        const used = suppliedUtxos.slice(offset, offset + commitTx.inputsLength);
+        const used = suppliedUtxos.slice(consumed, consumed + commitTx.inputsLength);
         for (const u of used) this.recentlySpent.add(keyOf(u));
-        offset += commitTx.inputsLength;
+        consumed += commitTx.inputsLength;
         if (meta.change_value != null) {
           changeUtxos.push({
             txid: meta.txid,
@@ -441,7 +442,12 @@ export class HttpTransport implements KontorTransport {
       }
     }
 
-    this.trackedFunding = changeUtxos;
+    // `trackedFunding` is the next submit's funding pool. New change
+    // first (dust-first for consolidation, per the indexer's greedy
+    // head-walking selector); then the unconsumed tail of
+    // `suppliedUtxos` — those are still unspent on chain, dropping
+    // them would strand the funding in array/bootstrap mode.
+    this.trackedFunding = [...changeUtxos, ...suppliedUtxos.slice(consumed)];
   }
 
   /**
