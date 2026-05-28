@@ -2621,6 +2621,8 @@ let postReturn4;
 let postReturn4Async;
 let postReturn5;
 let postReturn5Async;
+let postReturn6;
+let postReturn6Async;
 let exports1SerializeInst;
 
 function serializeInst(arg0) {
@@ -3260,6 +3262,350 @@ function blsSign(arg0, arg1) {
   return retCopy.val;
   
 }
+let exports1BlsVerify;
+
+function blsVerify(arg0, arg1, arg2) {
+  var val0 = arg0;
+  var len0 = Array.isArray(val0) ? val0.length : val0.byteLength;
+  var ptr0 = realloc0(0, 0, 1, len0 * 1);
+  
+  let valData0;
+  const valLenBytes0 = len0 * 1;
+  if (Array.isArray(val0)) {
+    // Regular array likely containing numbers, write values to memory
+    let offset = 0;
+    const dv0 = new DataView(memory0.buffer);
+    for (const v of val0) {
+      _requireValidNumericPrimitive.bind(null, 'u8')(v);
+      dv0.setUint8(ptr0+ offset, v, true);
+      offset += 1;
+    }
+  } else {
+    // TypedArray / ArrayBuffer-like, direct copy
+    valData0 = new Uint8Array(val0.buffer || val0, val0.byteOffset, valLenBytes0);
+    const out0 = new Uint8Array(memory0.buffer, ptr0, valLenBytes0);
+    out0.set(valData0);
+  }
+  
+  var val1 = arg1;
+  var len1 = Array.isArray(val1) ? val1.length : val1.byteLength;
+  var ptr1 = realloc0(0, 0, 1, len1 * 1);
+  
+  let valData1;
+  const valLenBytes1 = len1 * 1;
+  if (Array.isArray(val1)) {
+    // Regular array likely containing numbers, write values to memory
+    let offset = 0;
+    const dv1 = new DataView(memory0.buffer);
+    for (const v of val1) {
+      _requireValidNumericPrimitive.bind(null, 'u8')(v);
+      dv1.setUint8(ptr1+ offset, v, true);
+      offset += 1;
+    }
+  } else {
+    // TypedArray / ArrayBuffer-like, direct copy
+    valData1 = new Uint8Array(val1.buffer || val1, val1.byteOffset, valLenBytes1);
+    const out1 = new Uint8Array(memory0.buffer, ptr1, valLenBytes1);
+    out1.set(valData1);
+  }
+  
+  var val2 = arg2;
+  var len2 = Array.isArray(val2) ? val2.length : val2.byteLength;
+  var ptr2 = realloc0(0, 0, 1, len2 * 1);
+  
+  let valData2;
+  const valLenBytes2 = len2 * 1;
+  if (Array.isArray(val2)) {
+    // Regular array likely containing numbers, write values to memory
+    let offset = 0;
+    const dv2 = new DataView(memory0.buffer);
+    for (const v of val2) {
+      _requireValidNumericPrimitive.bind(null, 'u8')(v);
+      dv2.setUint8(ptr2+ offset, v, true);
+      offset += 1;
+    }
+  } else {
+    // TypedArray / ArrayBuffer-like, direct copy
+    valData2 = new Uint8Array(val2.buffer || val2, val2.byteOffset, valLenBytes2);
+    const out2 = new Uint8Array(memory0.buffer, ptr2, valLenBytes2);
+    out2.set(valData2);
+  }
+  
+  _debugLog('[iface="bls-verify", function="bls-verify"][Instruction::CallWasm] enter', {
+    funcName: 'bls-verify',
+    paramCount: 6,
+    async: false,
+    postReturn: true,
+  });
+  const hostProvided = false;
+  
+  const [task, _wasm_call_currentTaskID] = createNewCurrentTask({
+    componentIdx: 0,
+    isAsync: false,
+    isManualAsync: false,
+    entryFnName: 'exports1BlsVerify',
+    getCallbackFn: () => null,
+    callbackFnName: 'null',
+    errHandling: 'throw-result-err',
+    callingWasmExport: true,
+  });
+  
+  const started = task.enterSync();
+  task.setReturnMemoryIdx(0);
+  task.setReturnMemory(memory0);
+  let ret =   _withGlobalCurrentTaskMeta({
+    taskID: task.id(),
+    componentIdx: task.componentIdx(),
+    fn: () => exports1BlsVerify(ptr0, len0, ptr1, len1, ptr2, len2),
+  });
+  
+  let variant5;
+  switch (dataView(memory0).getUint8(ret + 0, true)) {
+    case 0: {
+      var bool3 = dataView(memory0).getUint8(ret + 4, true);
+      variant5= {
+        tag: 'ok',
+        val: bool3 == 0 ? false : (bool3 == 1 ? true : throwInvalidBool())
+      };
+      break;
+    }
+    case 1: {
+      var ptr4 = dataView(memory0).getUint32(ret + 4, true);
+      var len4 = dataView(memory0).getUint32(ret + 8, true);
+      var result4 = TEXT_DECODER_UTF8.decode(new Uint8Array(memory0.buffer, ptr4, len4));
+      variant5= {
+        tag: 'err',
+        val: result4
+      };
+      break;
+    }
+    default: {
+      throw new TypeError('invalid variant discriminant for expected');
+    }
+  }
+  _debugLog('[iface="bls-verify", function="bls-verify"][Instruction::Return]', {
+    funcName: 'bls-verify',
+    paramCount: 1,
+    async: false,
+    postReturn: true
+  });
+  const retCopy = variant5;
+  task.resolve([retCopy.val]);
+  
+  let cstate = getOrCreateAsyncState(0);
+  cstate.mayLeave = false;
+  postReturn1(ret);
+  cstate.mayLeave = true;
+  task.exit();
+  
+  
+  
+  if (typeof retCopy === 'object' && retCopy.tag === 'err') {
+    throw new ComponentError(retCopy.val);
+  }
+  return retCopy.val;
+  
+}
+let exports1AggregateSigningMessage;
+
+function aggregateSigningMessage(arg0, arg1, arg2, arg3) {
+  
+  var encodeRes = _utf8AllocateAndEncode(arg0, realloc0, memory0);
+  var ptr0= encodeRes.ptr;
+  var len0 = encodeRes.len;
+  
+  
+  var encodeRes = _utf8AllocateAndEncode(arg3, realloc0, memory0);
+  var ptr1= encodeRes.ptr;
+  var len1 = encodeRes.len;
+  
+  _debugLog('[iface="aggregate-signing-message", function="aggregate-signing-message"][Instruction::CallWasm] enter', {
+    funcName: 'aggregate-signing-message',
+    paramCount: 6,
+    async: false,
+    postReturn: true,
+  });
+  const hostProvided = false;
+  
+  const [task, _wasm_call_currentTaskID] = createNewCurrentTask({
+    componentIdx: 0,
+    isAsync: false,
+    isManualAsync: false,
+    entryFnName: 'exports1AggregateSigningMessage',
+    getCallbackFn: () => null,
+    callbackFnName: 'null',
+    errHandling: 'throw-result-err',
+    callingWasmExport: true,
+  });
+  
+  const started = task.enterSync();
+  task.setReturnMemoryIdx(0);
+  task.setReturnMemory(memory0);
+  let ret =   _withGlobalCurrentTaskMeta({
+    taskID: task.id(),
+    componentIdx: task.componentIdx(),
+    fn: () => exports1AggregateSigningMessage(ptr0, len0, toUint64(arg1), arg2 ? 1 : 0, ptr1, len1),
+  });
+  
+  let variant4;
+  switch (dataView(memory0).getUint8(ret + 0, true)) {
+    case 0: {
+      var ptr2 = dataView(memory0).getUint32(ret + 4, true);
+      var len2 = dataView(memory0).getUint32(ret + 8, true);
+      var result2 = new Uint8Array(memory0.buffer.slice(ptr2, ptr2 + len2 * 1));
+      variant4= {
+        tag: 'ok',
+        val: result2
+      };
+      break;
+    }
+    case 1: {
+      var ptr3 = dataView(memory0).getUint32(ret + 4, true);
+      var len3 = dataView(memory0).getUint32(ret + 8, true);
+      var result3 = TEXT_DECODER_UTF8.decode(new Uint8Array(memory0.buffer, ptr3, len3));
+      variant4= {
+        tag: 'err',
+        val: result3
+      };
+      break;
+    }
+    default: {
+      throw new TypeError('invalid variant discriminant for expected');
+    }
+  }
+  _debugLog('[iface="aggregate-signing-message", function="aggregate-signing-message"][Instruction::Return]', {
+    funcName: 'aggregate-signing-message',
+    paramCount: 1,
+    async: false,
+    postReturn: true
+  });
+  const retCopy = variant4;
+  task.resolve([retCopy.val]);
+  
+  let cstate = getOrCreateAsyncState(0);
+  cstate.mayLeave = false;
+  postReturn0(ret);
+  cstate.mayLeave = true;
+  task.exit();
+  
+  
+  
+  if (typeof retCopy === 'object' && retCopy.tag === 'err') {
+    throw new ComponentError(retCopy.val);
+  }
+  return retCopy.val;
+  
+}
+let exports1BlsAggregateSignatures;
+
+function blsAggregateSignatures(arg0) {
+  var vec1 = arg0;
+  var len1 = vec1.length;
+  var result1 = realloc0(0, 0, 4, len1 * 8);
+  for (let i = 0; i < vec1.length; i++) {
+    const e = vec1[i];
+    const base = result1 + i * 8;var val0 = e;
+    var len0 = Array.isArray(val0) ? val0.length : val0.byteLength;
+    var ptr0 = realloc0(0, 0, 1, len0 * 1);
+    
+    let valData0;
+    const valLenBytes0 = len0 * 1;
+    if (Array.isArray(val0)) {
+      // Regular array likely containing numbers, write values to memory
+      let offset = 0;
+      const dv0 = new DataView(memory0.buffer);
+      for (const v of val0) {
+        _requireValidNumericPrimitive.bind(null, 'u8')(v);
+        dv0.setUint8(ptr0+ offset, v, true);
+        offset += 1;
+      }
+    } else {
+      // TypedArray / ArrayBuffer-like, direct copy
+      valData0 = new Uint8Array(val0.buffer || val0, val0.byteOffset, valLenBytes0);
+      const out0 = new Uint8Array(memory0.buffer, ptr0, valLenBytes0);
+      out0.set(valData0);
+    }
+    
+    dataView(memory0).setUint32(base + 4, len0, true);
+    dataView(memory0).setUint32(base + 0, ptr0, true);
+  }
+  _debugLog('[iface="bls-aggregate-signatures", function="bls-aggregate-signatures"][Instruction::CallWasm] enter', {
+    funcName: 'bls-aggregate-signatures',
+    paramCount: 2,
+    async: false,
+    postReturn: true,
+  });
+  const hostProvided = false;
+  
+  const [task, _wasm_call_currentTaskID] = createNewCurrentTask({
+    componentIdx: 0,
+    isAsync: false,
+    isManualAsync: false,
+    entryFnName: 'exports1BlsAggregateSignatures',
+    getCallbackFn: () => null,
+    callbackFnName: 'null',
+    errHandling: 'throw-result-err',
+    callingWasmExport: true,
+  });
+  
+  const started = task.enterSync();
+  task.setReturnMemoryIdx(0);
+  task.setReturnMemory(memory0);
+  let ret =   _withGlobalCurrentTaskMeta({
+    taskID: task.id(),
+    componentIdx: task.componentIdx(),
+    fn: () => exports1BlsAggregateSignatures(result1, len1),
+  });
+  
+  let variant4;
+  switch (dataView(memory0).getUint8(ret + 0, true)) {
+    case 0: {
+      var ptr2 = dataView(memory0).getUint32(ret + 4, true);
+      var len2 = dataView(memory0).getUint32(ret + 8, true);
+      var result2 = new Uint8Array(memory0.buffer.slice(ptr2, ptr2 + len2 * 1));
+      variant4= {
+        tag: 'ok',
+        val: result2
+      };
+      break;
+    }
+    case 1: {
+      var ptr3 = dataView(memory0).getUint32(ret + 4, true);
+      var len3 = dataView(memory0).getUint32(ret + 8, true);
+      var result3 = TEXT_DECODER_UTF8.decode(new Uint8Array(memory0.buffer, ptr3, len3));
+      variant4= {
+        tag: 'err',
+        val: result3
+      };
+      break;
+    }
+    default: {
+      throw new TypeError('invalid variant discriminant for expected');
+    }
+  }
+  _debugLog('[iface="bls-aggregate-signatures", function="bls-aggregate-signatures"][Instruction::Return]', {
+    funcName: 'bls-aggregate-signatures',
+    paramCount: 1,
+    async: false,
+    postReturn: true
+  });
+  const retCopy = variant4;
+  task.resolve([retCopy.val]);
+  
+  let cstate = getOrCreateAsyncState(0);
+  cstate.mayLeave = false;
+  postReturn0(ret);
+  cstate.mayLeave = true;
+  task.exit();
+  
+  
+  
+  if (typeof retCopy === 'object' && retCopy.tag === 'err') {
+    throw new ComponentError(retCopy.val);
+  }
+  return retCopy.val;
+  
+}
 let exports1EncodeOpReturn;
 
 function encodeOpReturn(arg0) {
@@ -3492,7 +3838,7 @@ function decodeOpReturn(arg0) {
   
   let cstate = getOrCreateAsyncState(0);
   cstate.mayLeave = false;
-  postReturn1(ret);
+  postReturn2(ret);
   cstate.mayLeave = true;
   task.exit();
   
@@ -3596,7 +3942,7 @@ function validateWit(arg0) {
   
   let cstate = getOrCreateAsyncState(0);
   cstate.mayLeave = false;
-  postReturn2(ret);
+  postReturn3(ret);
   cstate.mayLeave = true;
   task.exit();
   return retCopy;
@@ -4226,7 +4572,7 @@ function stringToInteger(arg0) {
   
   let cstate = getOrCreateAsyncState(0);
   cstate.mayLeave = false;
-  postReturn3(ret);
+  postReturn4(ret);
   cstate.mayLeave = true;
   task.exit();
   
@@ -4303,7 +4649,7 @@ function integerToString(arg0) {
   
   let cstate = getOrCreateAsyncState(0);
   cstate.mayLeave = false;
-  postReturn4(ret);
+  postReturn5(ret);
   cstate.mayLeave = true;
   task.exit();
   return retCopy;
@@ -4664,7 +5010,7 @@ function addInteger(arg0, arg1) {
   
   let cstate = getOrCreateAsyncState(0);
   cstate.mayLeave = false;
-  postReturn3(ret);
+  postReturn4(ret);
   cstate.mayLeave = true;
   task.exit();
   
@@ -4854,7 +5200,7 @@ function subInteger(arg0, arg1) {
   
   let cstate = getOrCreateAsyncState(0);
   cstate.mayLeave = false;
-  postReturn3(ret);
+  postReturn4(ret);
   cstate.mayLeave = true;
   task.exit();
   
@@ -5044,7 +5390,7 @@ function mulInteger(arg0, arg1) {
   
   let cstate = getOrCreateAsyncState(0);
   cstate.mayLeave = false;
-  postReturn3(ret);
+  postReturn4(ret);
   cstate.mayLeave = true;
   task.exit();
   
@@ -5234,7 +5580,7 @@ function divInteger(arg0, arg1) {
   
   let cstate = getOrCreateAsyncState(0);
   cstate.mayLeave = false;
-  postReturn3(ret);
+  postReturn4(ret);
   cstate.mayLeave = true;
   task.exit();
   
@@ -5404,7 +5750,7 @@ function sqrtInteger(arg0) {
   
   let cstate = getOrCreateAsyncState(0);
   cstate.mayLeave = false;
-  postReturn3(ret);
+  postReturn4(ret);
   cstate.mayLeave = true;
   task.exit();
   
@@ -5574,7 +5920,7 @@ function integerToDecimal(arg0) {
   
   let cstate = getOrCreateAsyncState(0);
   cstate.mayLeave = false;
-  postReturn3(ret);
+  postReturn4(ret);
   cstate.mayLeave = true;
   task.exit();
   
@@ -5744,7 +6090,7 @@ function decimalToInteger(arg0) {
   
   let cstate = getOrCreateAsyncState(0);
   cstate.mayLeave = false;
-  postReturn3(ret);
+  postReturn4(ret);
   cstate.mayLeave = true;
   task.exit();
   
@@ -5894,7 +6240,7 @@ function u64ToDecimal(arg0) {
   
   let cstate = getOrCreateAsyncState(0);
   cstate.mayLeave = false;
-  postReturn3(ret);
+  postReturn4(ret);
   cstate.mayLeave = true;
   task.exit();
   
@@ -6044,7 +6390,7 @@ function s64ToDecimal(arg0) {
   
   let cstate = getOrCreateAsyncState(0);
   cstate.mayLeave = false;
-  postReturn3(ret);
+  postReturn4(ret);
   cstate.mayLeave = true;
   task.exit();
   
@@ -6194,7 +6540,7 @@ function f64ToDecimal(arg0) {
   
   let cstate = getOrCreateAsyncState(0);
   cstate.mayLeave = false;
-  postReturn3(ret);
+  postReturn4(ret);
   cstate.mayLeave = true;
   task.exit();
   
@@ -6349,7 +6695,7 @@ function stringToDecimal(arg0) {
   
   let cstate = getOrCreateAsyncState(0);
   cstate.mayLeave = false;
-  postReturn3(ret);
+  postReturn4(ret);
   cstate.mayLeave = true;
   task.exit();
   
@@ -6426,7 +6772,7 @@ function decimalToString(arg0) {
   
   let cstate = getOrCreateAsyncState(0);
   cstate.mayLeave = false;
-  postReturn4(ret);
+  postReturn5(ret);
   cstate.mayLeave = true;
   task.exit();
   return retCopy;
@@ -6591,7 +6937,7 @@ function eqDecimal(arg0, arg1) {
   
   let cstate = getOrCreateAsyncState(0);
   cstate.mayLeave = false;
-  postReturn5(ret);
+  postReturn6(ret);
   cstate.mayLeave = true;
   task.exit();
   
@@ -6878,7 +7224,7 @@ function addDecimal(arg0, arg1) {
   
   let cstate = getOrCreateAsyncState(0);
   cstate.mayLeave = false;
-  postReturn3(ret);
+  postReturn4(ret);
   cstate.mayLeave = true;
   task.exit();
   
@@ -7068,7 +7414,7 @@ function subDecimal(arg0, arg1) {
   
   let cstate = getOrCreateAsyncState(0);
   cstate.mayLeave = false;
-  postReturn3(ret);
+  postReturn4(ret);
   cstate.mayLeave = true;
   task.exit();
   
@@ -7258,7 +7604,7 @@ function mulDecimal(arg0, arg1) {
   
   let cstate = getOrCreateAsyncState(0);
   cstate.mayLeave = false;
-  postReturn3(ret);
+  postReturn4(ret);
   cstate.mayLeave = true;
   task.exit();
   
@@ -7448,7 +7794,7 @@ function divDecimal(arg0, arg1) {
   
   let cstate = getOrCreateAsyncState(0);
   cstate.mayLeave = false;
-  postReturn3(ret);
+  postReturn4(ret);
   cstate.mayLeave = true;
   task.exit();
   
@@ -7618,7 +7964,7 @@ function log10Decimal(arg0) {
   
   let cstate = getOrCreateAsyncState(0);
   cstate.mayLeave = false;
-  postReturn3(ret);
+  postReturn4(ret);
   cstate.mayLeave = true;
   task.exit();
   
@@ -7658,52 +8004,60 @@ const $init = (() => {
       realloc0Async = exports1.cabi_realloc;
     }
     
-    postReturn0 = exports1['cabi_post_bls-pubkey-from-secret'];
+    postReturn0 = exports1['cabi_post_aggregate-signing-message'];
     
     try {
-      postReturn0Async = WebAssembly.promising(exports1['cabi_post_bls-pubkey-from-secret']);
+      postReturn0Async = WebAssembly.promising(exports1['cabi_post_aggregate-signing-message']);
     } catch(err) {
-      postReturn0Async = exports1['cabi_post_bls-pubkey-from-secret'];
+      postReturn0Async = exports1['cabi_post_aggregate-signing-message'];
     }
     
-    postReturn1 = exports1['cabi_post_decode-op-return'];
+    postReturn1 = exports1['cabi_post_bls-verify'];
     
     try {
-      postReturn1Async = WebAssembly.promising(exports1['cabi_post_decode-op-return']);
+      postReturn1Async = WebAssembly.promising(exports1['cabi_post_bls-verify']);
     } catch(err) {
-      postReturn1Async = exports1['cabi_post_decode-op-return'];
+      postReturn1Async = exports1['cabi_post_bls-verify'];
     }
     
-    postReturn2 = exports1['cabi_post_validate-wit'];
+    postReturn2 = exports1['cabi_post_decode-op-return'];
     
     try {
-      postReturn2Async = WebAssembly.promising(exports1['cabi_post_validate-wit']);
+      postReturn2Async = WebAssembly.promising(exports1['cabi_post_decode-op-return']);
     } catch(err) {
-      postReturn2Async = exports1['cabi_post_validate-wit'];
+      postReturn2Async = exports1['cabi_post_decode-op-return'];
     }
     
-    postReturn3 = exports1['cabi_post_root:component/numerics#add-decimal'];
+    postReturn3 = exports1['cabi_post_validate-wit'];
     
     try {
-      postReturn3Async = WebAssembly.promising(exports1['cabi_post_root:component/numerics#add-decimal']);
+      postReturn3Async = WebAssembly.promising(exports1['cabi_post_validate-wit']);
     } catch(err) {
-      postReturn3Async = exports1['cabi_post_root:component/numerics#add-decimal'];
+      postReturn3Async = exports1['cabi_post_validate-wit'];
     }
     
-    postReturn4 = exports1['cabi_post_root:component/numerics#decimal-to-string'];
+    postReturn4 = exports1['cabi_post_root:component/numerics#add-decimal'];
     
     try {
-      postReturn4Async = WebAssembly.promising(exports1['cabi_post_root:component/numerics#decimal-to-string']);
+      postReturn4Async = WebAssembly.promising(exports1['cabi_post_root:component/numerics#add-decimal']);
     } catch(err) {
-      postReturn4Async = exports1['cabi_post_root:component/numerics#decimal-to-string'];
+      postReturn4Async = exports1['cabi_post_root:component/numerics#add-decimal'];
     }
     
-    postReturn5 = exports1['cabi_post_root:component/numerics#eq-decimal'];
+    postReturn5 = exports1['cabi_post_root:component/numerics#decimal-to-string'];
     
     try {
-      postReturn5Async = WebAssembly.promising(exports1['cabi_post_root:component/numerics#eq-decimal']);
+      postReturn5Async = WebAssembly.promising(exports1['cabi_post_root:component/numerics#decimal-to-string']);
     } catch(err) {
-      postReturn5Async = exports1['cabi_post_root:component/numerics#eq-decimal'];
+      postReturn5Async = exports1['cabi_post_root:component/numerics#decimal-to-string'];
+    }
+    
+    postReturn6 = exports1['cabi_post_root:component/numerics#eq-decimal'];
+    
+    try {
+      postReturn6Async = WebAssembly.promising(exports1['cabi_post_root:component/numerics#eq-decimal']);
+    } catch(err) {
+      postReturn6Async = exports1['cabi_post_root:component/numerics#eq-decimal'];
     }
     
     exports1SerializeInst = exports1['serialize-inst'];
@@ -7712,6 +8066,9 @@ const $init = (() => {
     exports1BlsSecretFromSeedEip2333 = exports1['bls-secret-from-seed-eip2333'];
     exports1BlsPubkeyFromSecret = exports1['bls-pubkey-from-secret'];
     exports1BlsSign = exports1['bls-sign'];
+    exports1BlsVerify = exports1['bls-verify'];
+    exports1AggregateSigningMessage = exports1['aggregate-signing-message'];
+    exports1BlsAggregateSignatures = exports1['bls-aggregate-signatures'];
     exports1EncodeOpReturn = exports1['encode-op-return'];
     exports1DecodeOpReturn = exports1['decode-op-return'];
     exports1ValidateWit = exports1['validate-wit'];
@@ -7802,4 +8159,4 @@ const witCodec = {
   
 };
 
-export { numerics, witCodec, blsPubkeyFromSecret, blsSecretFromSeedEip2333, blsSecretKeyGen, blsSign, decodeOpReturn, deserializeInst, encodeOpReturn, numerics as 'root:component/numerics', witCodec as 'root:component/wit-codec', serializeInst, validateWit,  }
+export { numerics, witCodec, aggregateSigningMessage, blsAggregateSignatures, blsPubkeyFromSecret, blsSecretFromSeedEip2333, blsSecretKeyGen, blsSign, blsVerify, decodeOpReturn, deserializeInst, encodeOpReturn, numerics as 'root:component/numerics', witCodec as 'root:component/wit-codec', serializeInst, validateWit,  }

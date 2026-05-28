@@ -35,8 +35,16 @@ import { ContractAddress } from "./canonical/ContractAddress.js";
 import type { Account } from "./account/index.js";
 import { BlsKey, buildRegistrationProof } from "./bls.js";
 import type { Chain } from "./chains.js";
-import { ContractError } from "./errors.js";
-import { Inst, type InstDecoder } from "./inst.js";
+import { hex } from "@scure/base";
+
+import type {
+  AggregateInfo,
+  AggregateSigner,
+  Inst as WireInst,
+} from "./bindings.js";
+import { blsAggregateSignatures } from "./component/kontor-sdk.js";
+import { ContractError, SignerError } from "./errors.js";
+import { Inst, type InstDecoder, wireInstToInst } from "./inst.js";
 import { Insts } from "./insts.js";
 import { IncomingOffer, type OfferData } from "./offer.js";
 import type { AggregateFragment } from "./aggregate.js";
@@ -298,15 +306,52 @@ export class KontorSession {
   }
 
   /**
-   * Build an `Insts` bundle from collected `AggregateFragment`s. The
-   * aggregator verifies each fragment locally first (callers should
-   * `fragment.verify()` before passing in), then this method assembles
-   * the multi-signer bundle and prepares it for broadcast.
+   * Build a broadcastable `Insts<unknown[]>` from a set of
+   * `AggregateFragment`s collected from contributors. Callers should
+   * `fragment.verify()` each fragment before passing it in — this
+   * method trusts the inputs cryptographically and only sanity-checks
+   * that the bundle isn't empty.
+   *
+   * Combines every per-op BLS signature into one 48-byte aggregate
+   * via the kontor-sdk wasm (`blst::AggregateSignature::aggregate`)
+   * and embeds it in `Insts.aggregate.signature`. Each fragment
+   * supplies one op + one `AggregateSigner` entry, in the same order
+   * as `fragments`.
+   *
+   * The returned bundle has `Inst<unknown>` slots — contributor
+   * result types don't survive the serialization boundary, so the
+   * aggregator's `wait()` returns the raw WAVE strings.
    */
   combineAggregate(
-    _fragments: readonly AggregateFragment[],
+    fragments: readonly AggregateFragment[],
   ): Insts<unknown[]> {
-    throw new Error("KontorSession.combineAggregate: not implemented");
+    if (fragments.length === 0) {
+      throw new SignerError(
+        "combineAggregate: requires at least one fragment",
+        { docsPath: "/sdk/aggregate" },
+      );
+    }
+    const sigs = fragments.map((f) => hex.decode(f.data.signature));
+    const aggregatedSig = blsAggregateSignatures(sigs);
+
+    const signers: AggregateSigner[] = fragments.map((f) => ({
+      identity: { XOnlyPubkey: f.data.signerXOnlyPubKey },
+      nonce: Number(f.data.nonce),
+      sponsored: f.data.sponsored,
+    }));
+    const aggregate: AggregateInfo = {
+      signers,
+      signature: [...aggregatedSig],
+    };
+
+    // Wrap each fragment's wire Inst as an Inst<unknown> for the
+    // bundle. The decoder is identity — the aggregator doesn't know
+    // contributor result types, so `wait()` surfaces raw WAVE strings.
+    const insts: Inst<unknown>[] = fragments.map((f) =>
+      wireInstToInst(this, f.data.inst),
+    );
+
+    return new Insts<unknown[]>(this, insts, aggregate);
   }
 
   /**

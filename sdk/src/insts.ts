@@ -24,7 +24,7 @@
  * (throws `ContractError` if any Inst's status is not Ok).
  */
 
-import type { AggregateInfo } from "./aggregate.js";
+import type { AggregateInfo } from "./bindings.js";
 import { ContractError, TransportError } from "./errors.js";
 import { instToWire, rawToOpResult, waitForTxOutcomes } from "./inst.js";
 import type { Inst, SubmittedTx, WaitOptions } from "./inst.js";
@@ -133,9 +133,10 @@ export class Insts<T extends readonly unknown[]> implements PromiseLike<T> {
 
   /** The wire `Insts` for this bundle — every Inst as one op. */
   private toWire(): WireInsts {
-    // `bulk` bundles carry no aggregate; `combineAggregate` will extend
-    // this once the aggregate flow lands.
-    return { ops: this.insts.map((inst) => instToWire(inst)), aggregate: null };
+    return {
+      ops: this.insts.map((inst) => instToWire(inst)),
+      aggregate: this.aggregate,
+    };
   }
 }
 

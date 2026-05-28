@@ -46,4 +46,16 @@ export class ContractAddress {
   toWire(): string {
     return `${this.name}_${this.height}_${this.txIndex}`;
   }
+
+  /** Inverse of `toWire`. Throws if the string doesn't match
+   *  `name_height_txIndex` shape. */
+  static fromWire(wire: string): ContractAddress {
+    const m = wire.match(/^([^_]+)_(\d+)_(\d+)$/);
+    if (m == null) {
+      throw new Error(
+        `invalid contract address wire form '${wire}'; expected 'name_height_txIndex'`,
+      );
+    }
+    return new ContractAddress(m[1]!, BigInt(m[2]!), BigInt(m[3]!));
+  }
 }

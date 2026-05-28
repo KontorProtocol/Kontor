@@ -89,6 +89,28 @@ world root {
   export bls-secret-from-seed-eip2333: func(seed: list<u8>, path: list<u32>) -> result<list<u8>, string>;
   export bls-pubkey-from-secret: func(secret: list<u8>) -> result<list<u8>, string>;
   export bls-sign: func(secret: list<u8>, message: list<u8>) -> result<list<u8>, string>;
+  // BLS single-signature verify under KONTOR_BLS_DST. Returns Ok(true)
+  // on valid, Ok(false) on a well-formed but non-verifying signature,
+  // Err for malformed pubkey / signature bytes. Subgroup-validates
+  // both. Used by the aggregator side to gate fragments before combining.
+  export bls-verify: func(pubkey: list<u8>, message: list<u8>, signature: list<u8>) -> result<bool, string>;
+
+  // Aggregate-call building blocks. The bytes flowing through these are
+  // exactly what the indexer's `bls/aggregate.rs` verifier consumes —
+  // implemented against the same `indexer-types` / `bls-crypto` source
+  // so contributor signatures verify on chain.
+  //
+  // - `aggregate-signing-message`: per-op message a contributor BLS-
+  //   signs. Mirrors `Inst::aggregate_signing_message` —
+  //   `"KONTOR-OP-V1" ++ postcard((SignerRef, nonce, sponsored, Inst))`.
+  //   Takes the `claim` and `inst` as JSON (round-trips through the
+  //   same `indexer_types` types so bytes are guaranteed identical to
+  //   what the indexer would produce).
+  // - `bls-aggregate-signatures`: combine per-op signatures into one
+  //   48-byte aggregate signature (blst's `AggregateSignature`). The
+  //   aggregator embeds the result in `AggregateInfo.signature`.
+  export aggregate-signing-message: func(claim-json: string, nonce: u64, sponsored: bool, inst-json: string) -> result<list<u8>, string>;
+  export bls-aggregate-signatures: func(signatures: list<list<u8>>) -> result<list<u8>, string>;
 
   // A transaction's OP_RETURN payload: one `op-return-entry` per reveal
   // input that detaches an asset, binding that input to the recipient

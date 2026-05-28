@@ -32,12 +32,13 @@ import type { Chain } from "../chains.js";
 import type { ContractAddress } from "../canonical/ContractAddress.js";
 import { ChainError, ContractError, TransportError } from "../errors.js";
 import { signCommit, signReveal } from "./signing.js";
-import type {
-  BroadcastResult,
-  KontorTransport,
-  OpResultRaw,
-  Utxo,
-  WireInsts,
+import {
+  bigIntReplacer,
+  type BroadcastResult,
+  type KontorTransport,
+  type OpResultRaw,
+  type Utxo,
+  type WireInsts,
 } from "../json-codec.js";
 import type {
   ComposeOutputs,
@@ -45,6 +46,7 @@ import type {
   OpWithResult,
   ResultResponse,
   Reveal,
+  SignerResponse,
   ViewExpr,
   ViewResult,
 } from "../bindings.js";
@@ -175,6 +177,34 @@ export class HttpTransport implements KontorTransport {
       details: result.message,
       docsPath: "/sdk/transport",
     });
+  }
+
+  async signer(identifier: string): Promise<SignerResponse | null> {
+    const url = `${this.baseUrl}/signers/${identifier}`;
+    let res: Response;
+    try {
+      res = await this.fetchImpl(url);
+    } catch (cause) {
+      throw new TransportError(`GET ${url} failed`, {
+        cause: cause instanceof Error ? cause : undefined,
+        docsPath: "/sdk/transport",
+      });
+    }
+    if (res.status === 404) return null;
+    const text = await res.text();
+    if (!res.ok) {
+      let detail = text;
+      try {
+        detail = (JSON.parse(text) as ErrorResponse).error ?? text;
+      } catch {
+        /* not JSON */
+      }
+      throw new TransportError(`GET ${url} returned HTTP ${res.status}`, {
+        details: detail,
+        docsPath: "/sdk/transport",
+      });
+    }
+    return (JSON.parse(text) as ResultResponse<SignerResponse>).result;
   }
 
   /**
@@ -591,27 +621,6 @@ function opWithResultToRaw(o: OpWithResult): OpResultRaw {
     inputIndex: o.op.metadata.input_index,
     opIndex: o.op.metadata.op_index,
   };
-}
-
-/**
- * `JSON.stringify` replacer that serializes `bigint` as a plain JSON
- * number. ts-rs maps Rust `u64` to TS `bigint` for precision, but the
- * wire is a JSON number — bitcoind/indexer sat amounts fit comfortably
- * inside `Number.MAX_SAFE_INTEGER` (2^53 ≈ 9e15, vs total BTC supply
- * 2.1e15 sats), so the round-trip is lossless. Errors on values
- * outside that range.
- */
-function bigIntReplacer(_key: string, value: unknown): unknown {
-  if (typeof value !== "bigint") return value;
-  if (
-    value > BigInt(Number.MAX_SAFE_INTEGER) ||
-    value < BigInt(Number.MIN_SAFE_INTEGER)
-  ) {
-    throw new TypeError(
-      `cannot serialize bigint ${value} as JSON number (outside safe integer range)`,
-    );
-  }
-  return Number(value);
 }
 
 /**

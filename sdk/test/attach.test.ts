@@ -58,6 +58,7 @@ function stubSession(): KontorSession {
   const fail = () => Promise.reject(new Error("attach test: transport unused"));
   const transport: KontorTransport = {
     view: fail,
+    signer: fail,
     inspect: fail,
     simulate: fail,
     submit: fail,

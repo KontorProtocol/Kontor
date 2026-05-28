@@ -30,17 +30,26 @@
  * through `session.bulk(...)` (which produces an `Insts<...>` bundle).
  */
 
-import type { AggregateFragment } from "./aggregate.js";
+import { hex } from "@scure/base";
+
+import { AggregateFragment } from "./aggregate.js";
 import type { Account } from "./account/index.js";
+import type { BlsKey } from "./bls.js";
+import { aggregateSigningMessage } from "./component/kontor-sdk.js";
 import type {
   Inst as WireInst,
   InstKind as WireInstKind,
   Insts as WireInsts,
 } from "./bindings.js";
-import type { ContractAddress } from "./canonical/ContractAddress.js";
+import { ContractAddress } from "./canonical/ContractAddress.js";
 import { ContractError, SignerError, TransportError } from "./errors.js";
 import type { ChainEvent } from "./events.js";
-import type { BroadcastResult, OpResult, OpResultRaw } from "./json-codec.js";
+import {
+  bigIntReplacer,
+  type BroadcastResult,
+  type OpResult,
+  type OpResultRaw,
+} from "./json-codec.js";
 import type { KontorSession } from "./session.js";
 
 /**
@@ -251,17 +260,47 @@ export class Inst<T> implements PromiseLike<T> {
   }
 
   /**
-   * Sign this single Inst for inclusion in an aggregate broadcast by
-   * another party. Returns one fragment carrying the Inst's payload +
-   * the contributor's signature over the op-hash.
+   * Sign this single Inst for inclusion in a BLS-aggregate broadcast
+   * by another party. Fetches the contributor's `next_nonce` from the
+   * indexer, builds the per-op signing message via the kontor-sdk wasm
+   * (`"KONTOR-OP-V1" ++ postcard((SignerRef::XOnlyPubkey, nonce, sponsored, Inst))`),
+   * BLS-signs it with `blsKey`, and returns the fragment.
    *
-   * The aggregator collects fragments from multiple contributors and
-   * builds the combined `Insts` via `session.combineAggregate(...)`
-   * before broadcasting.
+   * `opts.sponsored` defaults to `false`; pass `true` for the
+   * publisher-pays flow (the publisher's fragment will cover this op's
+   * gas).
+   *
+   * The aggregator collects fragments, calls `fragment.verify()`,
+   * then `session.combineAggregate(fragments).submit()`.
    */
-  async signForAggregate(_signer: Account): Promise<AggregateFragment> {
-    throw new SignerError("Inst.signForAggregate: not implemented", {
-      docsPath: "/sdk/aggregate",
+  async signForAggregate(
+    blsKey: BlsKey,
+    opts?: { sponsored?: boolean },
+  ): Promise<AggregateFragment> {
+    const account = this.session.account;
+    const sponsored = opts?.sponsored ?? false;
+
+    const entry = await this.session.transport.signer(account.xOnlyPubKey);
+    // Pre-registration signers (no DB row yet) carry an implicit nonce
+    // of 0 — the indexer's `advance_nonce` accepts it and writes the
+    // row on first use. Established signers reuse their stored
+    // `next_nonce`.
+    const nonce = BigInt(entry?.next_nonce ?? 0);
+
+    const wireInst = instToWire(this);
+    const claimJson = JSON.stringify({ XOnlyPubkey: account.xOnlyPubKey });
+    const instJson = JSON.stringify(wireInst, bigIntReplacer);
+
+    const msg = aggregateSigningMessage(claimJson, nonce, sponsored, instJson);
+    const sig = blsKey.signBls(msg);
+
+    return new AggregateFragment({
+      inst: wireInst,
+      signerXOnlyPubKey: account.xOnlyPubKey,
+      blsPubkey: hex.encode(blsKey.pubkey),
+      nonce: nonce.toString(),
+      sponsored,
+      signature: hex.encode(sig),
     });
   }
 
@@ -424,6 +463,59 @@ export function instToWire(inst: Inst<unknown>): WireInst {
     gas_limit: Number(inst.gasLimit),
     kind: instKindToWire(inst.kind),
   };
+}
+
+/**
+ * Inverse of `instToWire` — reconstructs an `Inst<unknown>` from the
+ * wire payload. Used by `session.combineAggregate` to wrap
+ * contributor-supplied Insts back into the Inst class so they fit
+ * `Insts<...>`'s constructor. The decoder is identity (the aggregator
+ * doesn't know contributor result types).
+ *
+ * For `Call`: the wire payload only carries `contract` + `expr` (no
+ * `fnName`), so the reconstructed Inst has `fnName: ""`. That's fine
+ * here — `fnName` is only used by codegen at signing time, not by
+ * `instToWire` when broadcasting.
+ */
+export function wireInstToInst(
+  session: KontorSession,
+  wire: WireInst,
+): Inst<unknown> {
+  return new Inst<unknown>(
+    session,
+    BigInt(wire.gas_limit),
+    wireKindToInstKind(wire.kind),
+    (w) => w as unknown,
+  );
+}
+
+function wireKindToInstKind(k: WireInstKind): InstKind {
+  if (k === "Issuance") return { kind: "Issuance" };
+  if (k === "Sponsor") return { kind: "Sponsor" };
+  if ("Call" in k) {
+    return {
+      kind: "Call",
+      contract: ContractAddress.fromWire(k.Call.contract),
+      fnName: "",
+      expr: k.Call.expr,
+    };
+  }
+  if ("Publish" in k) {
+    return {
+      kind: "Publish",
+      name: k.Publish.name,
+      bytes: Uint8Array.from(k.Publish.bytes),
+    };
+  }
+  if ("RegisterBlsKey" in k) {
+    return {
+      kind: "RegisterBlsKey",
+      blsPubkey: Uint8Array.from(k.RegisterBlsKey.bls_pubkey),
+      schnorrSig: Uint8Array.from(k.RegisterBlsKey.schnorr_sig),
+      blsSig: Uint8Array.from(k.RegisterBlsKey.bls_sig),
+    };
+  }
+  throw new Error(`unknown wire Inst kind: ${JSON.stringify(k)}`);
 }
 
 function instKindToWire(k: InstKind): WireInstKind {
