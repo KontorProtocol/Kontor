@@ -5,8 +5,8 @@ use wasmtime::component::{Accessor, Resource};
 
 use crate::runtime::wit::kontor::built_in::context::HolderRef;
 use crate::runtime::wit::{
-    Contract, CoreContext, FallContext, Holder, Keys, ProcContext, ProcStorage, Signer,
-    Transaction, ViewContext, ViewStorage,
+    Contract, CoreContext, FallContext, HasContractId, Holder, Keys, ProcContext, ProcStorage,
+    Signer, Transaction, ViewContext, ViewStorage,
 };
 use crate::runtime::{Runtime, fuel::Fuel, hash_bytes};
 
@@ -70,59 +70,24 @@ impl Runtime {
         Ok(table.push(payer)?)
     }
 
-    pub(super) async fn _proc_contract<T>(
+    /// Look up a context resource's `contract_id`, resolve it to the
+    /// contract's address via storage, and push a fresh `Contract`
+    /// resource. Generic over the context type via `HasContractId` so
+    /// `proc`, `core`, and `view` all share one implementation; the
+    /// caller picks the right `Fuel` variant for the cost model.
+    pub(super) async fn _contract<C, T>(
         &self,
         accessor: &Accessor<T, Self>,
-        self_: Resource<ProcContext>,
-    ) -> Result<Resource<Contract>> {
-        Fuel::ProcContract
-            .consume(accessor, self.gauge.as_ref())
-            .await?;
+        self_: Resource<C>,
+        fuel: Fuel,
+    ) -> Result<Resource<Contract>>
+    where
+        C: HasContractId,
+    {
+        fuel.consume(accessor, self.gauge.as_ref()).await?;
         let contract_id = {
             let table = self.table.lock().await;
-            table.get(&self_)?.contract_id
-        };
-        let address = self
-            .storage
-            .contract_address(contract_id)
-            .await?
-            .ok_or_else(|| anyhow::anyhow!("contract_id {contract_id} has no address"))?;
-        let mut table = self.table.lock().await;
-        Ok(table.push(Contract { address })?)
-    }
-
-    pub(super) async fn _core_contract<T>(
-        &self,
-        accessor: &Accessor<T, Self>,
-        self_: Resource<CoreContext>,
-    ) -> Result<Resource<Contract>> {
-        Fuel::CoreContract
-            .consume(accessor, self.gauge.as_ref())
-            .await?;
-        let contract_id = {
-            let table = self.table.lock().await;
-            table.get(&self_)?.contract_id
-        };
-        let address = self
-            .storage
-            .contract_address(contract_id)
-            .await?
-            .ok_or_else(|| anyhow::anyhow!("contract_id {contract_id} has no address"))?;
-        let mut table = self.table.lock().await;
-        Ok(table.push(Contract { address })?)
-    }
-
-    pub(super) async fn _view_contract<T>(
-        &self,
-        accessor: &Accessor<T, Self>,
-        self_: Resource<ViewContext>,
-    ) -> Result<Resource<Contract>> {
-        Fuel::ViewContract
-            .consume(accessor, self.gauge.as_ref())
-            .await?;
-        let contract_id = {
-            let table = self.table.lock().await;
-            table.get(&self_)?.contract_id
+            table.get(&self_)?.get_contract_id()
         };
         let address = self
             .storage
