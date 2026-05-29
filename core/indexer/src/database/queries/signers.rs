@@ -213,7 +213,7 @@ pub async fn create_contract_signer(conn: &Connection, height: u64) -> Result<u6
 /// Look up the signer_id associated with a contract.
 pub async fn get_contract_signer_id(
     conn: &Connection,
-    contract_id: i64,
+    contract_id: u64,
 ) -> Result<Option<u64>, Error> {
     let mut rows = conn
         .query(
@@ -221,11 +221,7 @@ pub async fn get_contract_signer_id(
             params![contract_id],
         )
         .await?;
-    Ok(rows
-        .next()
-        .await?
-        .map(|r| r.get::<i64>(0).map(|v| v as u64))
-        .transpose()?)
+    Ok(rows.next().await?.map(|r| r.get(0)).transpose()?)
 }
 
 /// Shared SELECT + JOIN body for signer entry lookups. Uses LEFT JOINs so

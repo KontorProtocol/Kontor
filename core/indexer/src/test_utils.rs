@@ -328,10 +328,10 @@ pub async fn new_test_db() -> Result<(Reader, Writer, (TempDir, String))> {
 
 /// Shared engine + pre-compiled native contract components.
 /// First caller compiles all native contracts; subsequent callers get cached results.
-async fn shared_test_engine() -> (wasmtime::Engine, Vec<(i64, wasmtime::component::Component)>) {
+async fn shared_test_engine() -> (wasmtime::Engine, Vec<(u64, wasmtime::component::Component)>) {
     static ONCE: tokio::sync::OnceCell<(
         wasmtime::Engine,
-        Vec<(i64, wasmtime::component::Component)>,
+        Vec<(u64, wasmtime::component::Component)>,
     )> = tokio::sync::OnceCell::const_new();
 
     ONCE.get_or_init(|| async {
@@ -365,7 +365,7 @@ async fn shared_test_engine() -> (wasmtime::Engine, Vec<(i64, wasmtime::componen
         // at 1 and are assigned in publish order; see
         // `Runtime::publish_native_contracts`.
         let mut components = Vec::new();
-        for id in 1..=NATIVE_CONTRACTS.len() as i64 {
+        for id in 1..=NATIVE_CONTRACTS.len() as u64 {
             if let Some(component) = cache.get(&id).await {
                 components.push((id, component));
             }

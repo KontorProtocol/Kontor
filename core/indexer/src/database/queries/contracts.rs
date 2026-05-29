@@ -6,7 +6,7 @@ use super::pagination::{PageOptions, get_paginated};
 use crate::database::types::{ContractQuery, ContractRow};
 use crate::runtime::ContractAddress;
 
-pub async fn insert_contract(conn: &Connection, row: ContractRow) -> Result<i64, Error> {
+pub async fn insert_contract(conn: &Connection, row: ContractRow) -> Result<u64, Error> {
     conn.execute(
         r#"
             INSERT INTO contracts (
@@ -36,7 +36,7 @@ pub async fn insert_contract(conn: &Connection, row: ContractRow) -> Result<i64,
     )
     .await?;
 
-    Ok(conn.last_insert_rowid())
+    Ok(conn.last_insert_rowid() as u64)
 }
 
 pub async fn get_contracts_paginated(
@@ -91,7 +91,7 @@ pub async fn get_contract_bytes_by_address(
 
 pub async fn get_contract_address_from_id(
     conn: &Connection,
-    id: i64,
+    id: u64,
 ) -> Result<Option<ContractAddress>, Error> {
     let mut rows = conn
         .query(
@@ -109,7 +109,7 @@ pub async fn get_contract_address_from_id(
 pub async fn get_contract_id_from_address(
     conn: &Connection,
     address: &ContractAddress,
-) -> Result<Option<i64>, Error> {
+) -> Result<Option<u64>, Error> {
     let mut rows = conn
         .query(
             r#"
@@ -130,7 +130,7 @@ pub async fn get_contract_id_from_address(
 
 pub async fn get_contract_bytes_by_id(
     conn: &Connection,
-    id: i64,
+    id: u64,
 ) -> Result<Option<Vec<u8>>, Error> {
     let mut rows = conn
         .query("SELECT bytes FROM contracts WHERE id = ?", params![id])

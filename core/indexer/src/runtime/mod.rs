@@ -577,7 +577,7 @@ impl Runtime {
         result
     }
 
-    pub async fn load_component(&self, contract_id: i64) -> Result<Component> {
+    pub async fn load_component(&self, contract_id: u64) -> Result<Component> {
         Ok(match self.component_cache.get(&contract_id).await {
             Some(component) => component,
             None => {

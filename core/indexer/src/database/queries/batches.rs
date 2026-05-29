@@ -37,12 +37,20 @@ pub async fn delete_batches_above_anchor(conn: &Connection, max_anchor: u64) -> 
 }
 
 pub async fn select_latest_consensus_height(conn: &Connection) -> Result<Option<u64>, Error> {
-    Ok(conn
+    // `SELECT MAX(...)` always yields a row (NULL on empty table). Read the
+    // column directly as `Option<u64>` so NULL surfaces as `None` and any
+    // decode error propagates instead of being silently swallowed — a lost
+    // error here would restart consensus from height 1 and discard all
+    // prior batch history. Matches the pattern in `select_min_batch_height`.
+    let Some(row) = conn
         .query("SELECT MAX(consensus_height) FROM batches", ())
         .await?
         .next()
         .await?
-        .and_then(|row| row.get(0).ok()))
+    else {
+        return Ok(None);
+    };
+    Ok(row.get::<Option<u64>>(0)?)
 }
 
 pub async fn select_batch(

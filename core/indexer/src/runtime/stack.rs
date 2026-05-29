@@ -23,7 +23,7 @@ pub enum StackError {
 /// regardless of whether the new entry would be a proc or view.
 #[derive(Clone, Copy, Debug)]
 pub struct CallFrame {
-    pub contract_id: i64,
+    pub contract_id: u64,
     pub is_proc: bool,
 }
 

@@ -607,7 +607,7 @@ impl From<&Block> for BlockRow {
 pub struct TransactionRow {
     #[ts(type = "number")]
     #[builder(default = 0)]
-    pub id: i64,
+    pub id: u64,
     pub txid: String,
     #[ts(type = "number")]
     pub height: u64,
@@ -622,7 +622,7 @@ pub struct TransactionRow {
 #[ts(export, export_to = "../../../sdk/src/bindings.d.ts")]
 pub struct ContractListRow {
     #[ts(type = "number")]
-    pub id: i64,
+    pub id: u64,
     pub name: String,
     #[ts(type = "number")]
     pub height: u64,
@@ -640,7 +640,7 @@ pub struct PaginationMeta {
     #[ts(as = "String")]
     #[serde(skip_serializing_if = "Option::is_none")]
     #[serde_as(as = "Option<DisplayFromStr>")]
-    pub next_cursor: Option<i64>,
+    pub next_cursor: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub next_offset: Option<u32>,
     pub has_more: bool,
@@ -699,7 +699,7 @@ pub struct Info {
     /// Highest `contract_results.id` — the SDK's forward cursor for
     /// draining `/api/results`. 0 when no results exist yet.
     #[ts(type = "number")]
-    pub last_result_id: i64,
+    pub last_result_id: u64,
     /// The last 10 indexed blocks, height-descending. The SDK compares
     /// these against its local block-hash cache for reorg detection.
     pub recent_blocks: Vec<RecentBlock>,
@@ -860,7 +860,7 @@ impl OpStatus {
 #[ts(export, export_to = "../../../sdk/src/bindings.d.ts")]
 pub struct ResultRow {
     #[ts(type = "number")]
-    pub id: i64,
+    pub id: u64,
     #[ts(type = "number")]
     pub height: u64,
     pub tx_index: Option<u32>,

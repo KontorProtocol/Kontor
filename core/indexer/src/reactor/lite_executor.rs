@@ -177,7 +177,7 @@ impl Executor for LiteExecutor {
         &self,
         runtime: &mut Runtime,
         height: u64,
-        tx_id: i64,
+        tx_id: u64,
         tx: &indexer_types::Transaction,
     ) -> anyhow::Result<Vec<Vec<Option<anyhow::Error>>>> {
         runtime

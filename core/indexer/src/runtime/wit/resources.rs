@@ -17,7 +17,7 @@ pub enum Signer {
     Id(Identity),
     Core(Box<Signer>),
     Contract {
-        id: i64,
+        id: u64,
         signer_id: u64,
         key: String,
     },
@@ -25,7 +25,7 @@ pub enum Signer {
 }
 
 impl Signer {
-    pub fn new_contract(id: i64, signer_id: u64) -> Self {
+    pub fn new_contract(id: u64, signer_id: u64) -> Self {
         Self::Contract {
             id,
             signer_id,
@@ -86,41 +86,41 @@ impl From<&Signer> for HolderRef {
     }
 }
 pub trait HasContractId: 'static {
-    fn get_contract_id(&self) -> i64;
+    fn get_contract_id(&self) -> u64;
 }
 
 pub struct ViewContext {
-    pub contract_id: i64,
+    pub contract_id: u64,
 }
 
 impl HasContractId for ViewContext {
-    fn get_contract_id(&self) -> i64 {
+    fn get_contract_id(&self) -> u64 {
         self.contract_id
     }
 }
 
 pub struct ViewStorage {
-    pub contract_id: i64,
+    pub contract_id: u64,
 }
 
 impl HasContractId for ViewStorage {
-    fn get_contract_id(&self) -> i64 {
+    fn get_contract_id(&self) -> u64 {
         self.contract_id
     }
 }
 
 pub struct ProcStorage {
-    pub contract_id: i64,
+    pub contract_id: u64,
 }
 
 impl HasContractId for ProcStorage {
-    fn get_contract_id(&self) -> i64 {
+    fn get_contract_id(&self) -> u64 {
         self.contract_id
     }
 }
 
 pub struct ProcContext {
-    pub contract_id: i64,
+    pub contract_id: u64,
     pub signer: Signer,
     /// Who pays this op's gas. A `Holder` (not a `Signer`) by design —
     /// contracts can credit but not spend on the payer's behalf, since
@@ -133,13 +133,13 @@ pub struct ProcContext {
 }
 
 impl HasContractId for ProcContext {
-    fn get_contract_id(&self) -> i64 {
+    fn get_contract_id(&self) -> u64 {
         self.contract_id
     }
 }
 
 pub struct FallContext {
-    pub contract_id: i64,
+    pub contract_id: u64,
     pub signer: Option<Signer>,
     /// See `ProcContext.payer`. `None` when `signer` is also `None` (a
     /// fall context with no acting signer has no payer either).
@@ -147,7 +147,7 @@ pub struct FallContext {
 }
 
 impl HasContractId for FallContext {
-    fn get_contract_id(&self) -> i64 {
+    fn get_contract_id(&self) -> u64 {
         self.contract_id
     }
 }
@@ -157,12 +157,12 @@ pub struct Keys {
 }
 
 pub struct CoreContext {
-    pub contract_id: i64,
+    pub contract_id: u64,
     pub signer: Signer,
 }
 
 impl HasContractId for CoreContext {
-    fn get_contract_id(&self) -> i64 {
+    fn get_contract_id(&self) -> u64 {
         self.contract_id
     }
 }

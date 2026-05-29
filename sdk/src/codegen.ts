@@ -557,7 +557,7 @@ function emitAttachment(
   const resultTs = typeRefToTs(attach.result as TypeRef, ctx);
 
   // `vout` is pinned to 0 — the escrow is always reveal output 0.
-  const attachWire = ['"vout": "0"']
+  const attachWire = ['"vout": 0']
     .concat(
       attachArgs.map(
         (p) =>

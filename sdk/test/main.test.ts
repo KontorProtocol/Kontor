@@ -806,7 +806,7 @@ test("codegen Tier 2: attach/detach pair collapses into an attachment() builder"
   expect(out).not.toMatch(/\n  detach\(/);
   // The builder drops the compose-owned `vout` param (pinned to 0).
   expect(out).toMatch(/attachment\(amt: Decimal\)/);
-  expect(out).toMatch(/"vout": "0"/);
+  expect(out).toMatch(/"vout": 0/);
   // It delegates to ContractBase._attachment, which builds both Insts.
   expect(out).toMatch(/this\._attachment\([\s\S]*?"attach"[\s\S]*?"detach"/);
 });

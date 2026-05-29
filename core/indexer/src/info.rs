@@ -36,7 +36,7 @@ pub struct InfoCore {
     pub height: u64,
     pub checkpoint: Option<String>,
     pub consensus_height: Option<u64>,
-    pub last_result_id: i64,
+    pub last_result_id: u64,
     pub recent_blocks: Vec<RecentBlock>,
     /// Hash of `last_result_id` + `recent_blocks` — the long-poll
     /// `?since=` token. Changes exactly when a new snapshot is published.
@@ -76,7 +76,7 @@ pub async fn compute_info_core(conn: &Connection, fallback_height: u64) -> Resul
 /// Opaque token over the long-poll-relevant state. Deliberately excludes
 /// fields (`available` / `consensus_mode` / statics) that don't move with
 /// the chain.
-fn info_signature(last_result_id: i64, recent_blocks: &[RecentBlock]) -> String {
+fn info_signature(last_result_id: u64, recent_blocks: &[RecentBlock]) -> String {
     let mut buf = format!("r{last_result_id}");
     for b in recent_blocks {
         buf.push_str(&format!(";{}:{}", b.height, b.hash));

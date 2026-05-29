@@ -7,7 +7,7 @@ use super::contracts::get_contract_id_from_address;
 use super::pagination::{PageOptions, get_paginated};
 use crate::database::types::TransactionQuery;
 
-pub async fn insert_transaction(conn: &Connection, row: TransactionRow) -> Result<i64, Error> {
+pub async fn insert_transaction(conn: &Connection, row: TransactionRow) -> Result<u64, Error> {
     conn.execute(
         "INSERT INTO transactions (height, txid, confirmed_height, tx_index, batch_height) VALUES (?, ?, ?, ?, ?)",
         params![
@@ -19,7 +19,7 @@ pub async fn insert_transaction(conn: &Connection, row: TransactionRow) -> Resul
         ],
     )
     .await?;
-    Ok(conn.last_insert_rowid())
+    Ok(conn.last_insert_rowid() as u64)
 }
 
 pub async fn confirm_transaction(

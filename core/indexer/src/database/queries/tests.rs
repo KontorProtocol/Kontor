@@ -898,7 +898,7 @@ async fn test_get_contracts_signer_id_filter() -> Result<()> {
         get_contracts_paginated(&conn, ContractQuery::builder().signer_id(signer_a).build())
             .await?;
     assert_eq!(meta.total_count, 2);
-    let returned: Vec<i64> = rows.iter().map(|r| r.id).collect();
+    let returned: Vec<u64> = rows.iter().map(|r| r.id).collect();
     assert_eq!(returned, vec![id_a2, id_a1]);
     assert!(rows.iter().all(|r| r.signer_id == Some(signer_a)));
 
@@ -1433,7 +1433,7 @@ async fn test_get_blocks_query() -> Result<()> {
     assert_eq!(blocks.len(), 1);
     assert_eq!(blocks[0].height, 102);
     assert!(meta.has_more);
-    assert_eq!(meta.next_cursor, Some(blocks[0].height as i64));
+    assert_eq!(meta.next_cursor, Some(blocks[0].height));
     assert_eq!(meta.total_count, 3);
 
     let (blocks, meta) = get_blocks_paginated(
@@ -1448,7 +1448,7 @@ async fn test_get_blocks_query() -> Result<()> {
     assert_eq!(blocks.len(), 1);
     assert_eq!(blocks[0].height, 101);
     assert!(meta.has_more);
-    assert_eq!(meta.next_cursor, Some(blocks[0].height as i64));
+    assert_eq!(meta.next_cursor, Some(blocks[0].height));
 
     let (blocks, meta) = get_blocks_paginated(
         &conn,
@@ -1462,7 +1462,7 @@ async fn test_get_blocks_query() -> Result<()> {
     assert_eq!(blocks.len(), 1);
     assert_eq!(blocks[0].height, 100);
     assert!(!meta.has_more);
-    assert_eq!(meta.next_cursor, Some(blocks[0].height as i64));
+    assert_eq!(meta.next_cursor, Some(blocks[0].height));
 
     Ok(())
 }
@@ -1496,7 +1496,7 @@ async fn test_get_blocks_query_relevant() -> Result<()> {
     assert_eq!(blocks.len(), 1);
     assert_eq!(blocks[0].height, 100);
     assert!(!meta.has_more);
-    assert_eq!(meta.next_cursor, Some(blocks[0].height as i64));
+    assert_eq!(meta.next_cursor, Some(blocks[0].height));
     assert_eq!(meta.total_count, 1);
 
     let (blocks, meta) =
@@ -1505,7 +1505,7 @@ async fn test_get_blocks_query_relevant() -> Result<()> {
     assert_eq!(blocks.len(), 1);
     assert_eq!(blocks[0].height, 101);
     assert!(!meta.has_more);
-    assert_eq!(meta.next_cursor, Some(blocks[0].height as i64));
+    assert_eq!(meta.next_cursor, Some(blocks[0].height));
     assert_eq!(meta.total_count, 1);
 
     Ok(())
@@ -2418,7 +2418,7 @@ async fn test_transaction_signer_id_querying() -> Result<()> {
     // tx 3: signer_a, 1 result + a contract_state row on `token`
     //       (covers signer_id + contract combined — two joins)
     // tx 4: no results (control — must not appear in any signer query)
-    let insert_result = async |tx_id: i64, signer_id: u64, result_index: u32| {
+    let insert_result = async |tx_id: u64, signer_id: u64, result_index: u32| {
         insert_contract_result(
             &conn,
             ContractResultRow::builder()
@@ -2463,7 +2463,7 @@ async fn test_transaction_signer_id_querying() -> Result<()> {
     .await?;
     assert_eq!(txs.len(), 3);
     assert_eq!(meta.total_count, 3);
-    let ids: Vec<i64> = txs.iter().map(|t| t.id).collect();
+    let ids: Vec<u64> = txs.iter().map(|t| t.id).collect();
     assert_eq!(ids, vec![tx_ids[0], tx_ids[1], tx_ids[3]]);
 
     // 2) signer_b → 1 tx

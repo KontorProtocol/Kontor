@@ -21,7 +21,7 @@ pub use transactions::*;
 use crate::api::error::HttpError;
 
 pub fn validate_query(
-    cursor: Option<i64>,
+    cursor: Option<u64>,
     offset: Option<i64>,
 ) -> std::result::Result<(), HttpError> {
     if cursor.is_some() && offset.is_some() {

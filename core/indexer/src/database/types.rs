@@ -27,7 +27,7 @@ pub fn field_element_to_bytes(fe: &FieldElement) -> [u8; 32] {
 // ─────────────────────────────────────────────────────────────────
 
 pub trait HasRowId {
-    fn id(&self) -> i64;
+    fn id(&self) -> u64;
     fn id_name() -> &'static str;
 }
 
@@ -61,8 +61,8 @@ impl std::str::FromStr for OrderDirection {
 }
 
 impl HasRowId for BlockRow {
-    fn id(&self) -> i64 {
-        self.height as i64
+    fn id(&self) -> u64 {
+        self.height
     }
 
     fn id_name() -> &'static str {
@@ -125,9 +125,9 @@ pub struct BatchQueryResult {
 
 #[derive(Debug, Clone, Serialize, Deserialize, Builder)]
 pub struct ContractStateRow {
-    pub contract_id: i64,
+    pub contract_id: u64,
     pub height: u64,
-    pub tx_id: Option<i64>,
+    pub tx_id: Option<u64>,
     pub path: String,
     #[builder(default = vec![])]
     pub value: Vec<u8>,
@@ -142,7 +142,7 @@ impl ContractStateRow {
 }
 
 impl HasRowId for TransactionRow {
-    fn id(&self) -> i64 {
+    fn id(&self) -> u64 {
         self.id
     }
 
@@ -165,7 +165,7 @@ impl From<ContractRow> for ContractListRow {
 }
 
 impl HasRowId for ContractListRow {
-    fn id(&self) -> i64 {
+    fn id(&self) -> u64 {
         self.id
     }
 
@@ -177,7 +177,7 @@ impl HasRowId for ContractListRow {
 #[derive(Debug, Clone, Serialize, Deserialize, Builder)]
 pub struct ContractRow {
     #[builder(default = 0)]
-    pub id: i64,
+    pub id: u64,
     pub name: String,
     pub height: u64,
     pub tx_index: u32,
@@ -195,7 +195,7 @@ impl ContractRow {
 #[derive(Debug, Clone, Serialize, Deserialize, Builder, Eq, PartialEq)]
 pub struct BlockQuery {
     #[serde_as(as = "Option<DisplayFromStr>")]
-    pub cursor: Option<i64>,
+    pub cursor: Option<u64>,
     pub offset: Option<i64>,
     pub limit: Option<i64>,
     #[builder(default)]
@@ -209,7 +209,7 @@ pub struct BlockQuery {
 #[derive(Debug, Clone, Serialize, Deserialize, Builder, Eq, PartialEq)]
 pub struct ContractQuery {
     #[serde_as(as = "Option<DisplayFromStr>")]
-    pub cursor: Option<i64>,
+    pub cursor: Option<u64>,
     pub offset: Option<i64>,
     pub limit: Option<i64>,
     #[builder(default)]
@@ -223,7 +223,7 @@ pub struct ContractQuery {
 #[derive(Debug, Clone, Serialize, Deserialize, Builder, Eq, PartialEq)]
 pub struct TransactionQuery {
     #[serde_as(as = "Option<DisplayFromStr>")]
-    pub cursor: Option<i64>,
+    pub cursor: Option<u64>,
     pub offset: Option<i64>,
     pub limit: Option<i64>,
     #[builder(default)]
@@ -241,7 +241,7 @@ pub struct TransactionQuery {
 #[derive(Debug, Clone, Serialize, Deserialize, Builder, Eq, PartialEq)]
 pub struct ResultQuery {
     #[serde_as(as = "Option<DisplayFromStr>")]
-    pub cursor: Option<i64>,
+    pub cursor: Option<u64>,
     pub offset: Option<i64>,
     pub limit: Option<i64>,
     #[builder(default)]
@@ -260,15 +260,15 @@ pub struct ResultQuery {
 #[derive(Debug, Clone, Serialize, Deserialize, Builder, Eq, PartialEq)]
 pub struct ContractResultRow {
     #[builder(default = 0)]
-    pub id: i64,
+    pub id: u64,
     pub height: u64,
-    pub tx_id: Option<i64>,
+    pub tx_id: Option<u64>,
     pub input_index: Option<u32>,
     pub op_index: Option<u32>,
     #[builder(default = 0)]
     pub result_index: u32,
     #[builder(default = 0)]
-    pub contract_id: i64,
+    pub contract_id: u64,
     #[builder(default = "".to_string())]
     pub func: String,
     pub gas: u64,
@@ -296,7 +296,7 @@ impl ContractResultRow {
 #[derive(Debug, Clone, Serialize, Deserialize, Builder, Eq, PartialEq)]
 pub struct ContractResultPublicRow {
     #[builder(default = 0)]
-    pub id: i64,
+    pub id: u64,
     pub height: u64,
     pub tx_index: Option<u32>,
     pub input_index: Option<u32>,
@@ -318,7 +318,7 @@ pub struct ContractResultPublicRow {
 }
 
 impl HasRowId for ContractResultPublicRow {
-    fn id(&self) -> i64 {
+    fn id(&self) -> u64 {
         self.id
     }
 
@@ -404,7 +404,7 @@ impl std::str::FromStr for OpResultId {
 #[derive(Debug, Clone, Serialize, Deserialize, Builder, Eq, PartialEq)]
 pub struct FileMetadataRow {
     #[builder(default = 0)]
-    pub id: i64,
+    pub id: u64,
     pub file_id: String,
     pub object_id: String,
     pub nonce: Vec<u8>,

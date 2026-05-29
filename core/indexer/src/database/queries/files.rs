@@ -60,7 +60,7 @@ pub async fn select_file_metadata_by_file_id(
 pub async fn insert_file_metadata(
     conn: &Connection,
     entry: &FileMetadataRow,
-) -> Result<i64, Error> {
+) -> Result<u64, Error> {
     let historical_root_value: Value = match &entry.historical_root {
         Some(root) => Value::Blob(root.to_vec()),
         None => Value::Null,
@@ -92,5 +92,5 @@ pub async fn insert_file_metadata(
         ],
     )
     .await?;
-    Ok(conn.last_insert_rowid())
+    Ok(conn.last_insert_rowid() as u64)
 }

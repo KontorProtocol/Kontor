@@ -134,7 +134,7 @@ pub async fn get_op_result(
 
 pub async fn get_contract_result(
     conn: &Connection,
-    tx_id: Option<i64>,
+    tx_id: Option<u64>,
     input_index: Option<u32>,
     op_index: Option<u32>,
     result_index: u32,
@@ -163,7 +163,7 @@ pub async fn get_contract_result(
               AND result_index = :result_index
             "#,
             named_params! {
-                ":tx_id": tx_id,
+                ":tx_id": tx_id.map(Value::try_from).transpose()?,
                 ":input_index": input_index,
                 ":op_index": op_index,
                 ":result_index": result_index,
@@ -175,19 +175,26 @@ pub async fn get_contract_result(
 
 /// Highest `contract_results.id`, or `None` when the table is empty.
 /// Serves as the SDK's forward cursor for draining `/api/results`.
-pub async fn select_latest_result_id(conn: &Connection) -> Result<Option<i64>, Error> {
-    Ok(conn
+pub async fn select_latest_result_id(conn: &Connection) -> Result<Option<u64>, Error> {
+    // `SELECT MAX(...)` always yields a row (NULL on empty table). Read
+    // the column as `Option<u64>` so NULL surfaces as `None` and any
+    // decode error propagates — silently dropping it here would have the
+    // SDK re-drain the entire results stream.
+    let Some(row) = conn
         .query("SELECT MAX(id) FROM contract_results", ())
         .await?
         .next()
         .await?
-        .and_then(|row| row.get(0).ok()))
+    else {
+        return Ok(None);
+    };
+    Ok(row.get::<Option<u64>>(0)?)
 }
 
 pub async fn insert_contract_result(
     conn: &Connection,
     row: ContractResultRow,
-) -> Result<i64, Error> {
+) -> Result<u64, Error> {
     conn.execute(
         r#"
             INSERT INTO contract_results (
@@ -207,11 +214,11 @@ pub async fn insert_contract_result(
             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         "#,
         params![
-            row.contract_id,
+            Value::try_from(row.contract_id)?,
             row.size(),
             row.func,
             Value::try_from(row.height)?,
-            row.tx_id,
+            row.tx_id.map(Value::try_from).transpose()?,
             row.input_index,
             row.op_index,
             row.result_index,
@@ -224,5 +231,5 @@ pub async fn insert_contract_result(
     )
     .await?;
 
-    Ok(conn.last_insert_rowid())
+    Ok(conn.last_insert_rowid() as u64)
 }

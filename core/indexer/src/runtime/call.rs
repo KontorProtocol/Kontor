@@ -58,7 +58,7 @@ impl Runtime {
     ) -> Result<
         (
             Store<Runtime>,
-            i64,
+            u64,
             String,
             bool,
             Vec<Val>,
@@ -456,7 +456,7 @@ impl Runtime {
         &mut self,
         signer: &Signer,
         payment: Option<&Payment>,
-        contract_id: i64,
+        contract_id: u64,
         contract_address: &ContractAddress,
         func_name: &str,
         is_op_result: bool,

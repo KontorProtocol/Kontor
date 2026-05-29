@@ -76,7 +76,7 @@ pub trait Executor {
         &self,
         runtime: &mut Runtime,
         height: u64,
-        tx_id: i64,
+        tx_id: u64,
         tx: &indexer_types::Transaction,
     ) -> Result<Vec<Vec<Option<anyhow::Error>>>>;
 
@@ -106,7 +106,7 @@ impl Executor for NoopExecutor {
         &self,
         _runtime: &mut Runtime,
         _height: u64,
-        _tx_id: i64,
+        _tx_id: u64,
         _tx: &indexer_types::Transaction,
     ) -> Result<Vec<Vec<Option<anyhow::Error>>>> {
         Ok(Vec::new())
@@ -245,7 +245,7 @@ impl Executor for RuntimeExecutor {
         &self,
         runtime: &mut Runtime,
         height: u64,
-        tx_id: i64,
+        tx_id: u64,
         tx: &indexer_types::Transaction,
     ) -> Result<Vec<Vec<Option<anyhow::Error>>>> {
         let mut all = Vec::with_capacity(tx.inputs.len());
@@ -306,7 +306,7 @@ pub async fn process_input(
     walker: &mut TxWalker,
     input: &indexer_types::Input,
     height: u64,
-    tx_id: Option<i64>,
+    tx_id: Option<u64>,
     tx_index: u32,
     txid: bitcoin::Txid,
     op_return_data: Option<indexer_types::SignerRef>,
@@ -345,7 +345,7 @@ async fn process_direct_input(
     walker: &mut TxWalker,
     input: &indexer_types::Input,
     height: u64,
-    tx_id: Option<i64>,
+    tx_id: Option<u64>,
     tx_index: u32,
     txid: bitcoin::Txid,
     op_return_data: Option<indexer_types::SignerRef>,
@@ -402,7 +402,7 @@ async fn process_aggregate_input(
     walker: &mut TxWalker,
     input: &indexer_types::Input,
     height: u64,
-    tx_id: Option<i64>,
+    tx_id: Option<u64>,
     tx_index: u32,
     txid: bitcoin::Txid,
     op_return_data: Option<indexer_types::SignerRef>,

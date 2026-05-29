@@ -53,7 +53,7 @@ pub(super) async fn insert_tx_at(
     height: u64,
     tx_index: u32,
     txid: &str,
-) -> Result<i64> {
+) -> Result<u64> {
     Ok(insert_transaction(
         conn,
         TransactionRow::builder()
@@ -875,7 +875,7 @@ mod transactions_pagination {
             (800004, 4),
             (800005, 2),
         ];
-        let mut tx_ids: std::collections::HashMap<u64, Vec<i64>> = std::collections::HashMap::new();
+        let mut tx_ids: std::collections::HashMap<u64, Vec<u64>> = std::collections::HashMap::new();
         for &(height, count) in counts {
             let mut ids = Vec::with_capacity(count as usize);
             for tx_index in 0..count {
@@ -920,7 +920,7 @@ mod transactions_pagination {
         height: Option<u32>,
     ) -> Result<Vec<TransactionRow>> {
         let mut all_transactions = Vec::new();
-        let mut cursor: Option<i64> = None;
+        let mut cursor: Option<u64> = None;
         let mut iterations = 0;
         const MAX_ITERATIONS: usize = 50; // Safety limit
 
@@ -1333,7 +1333,7 @@ mod transactions_pagination {
         let (server, _db) = setup().await?;
 
         // Test that total_count decreases as we paginate (showing remaining items)
-        let mut cursor: Option<i64> = None;
+        let mut cursor: Option<u64> = None;
         let mut page_count = 0;
         let limit = 3;
         let mut previous_total_count = None;
