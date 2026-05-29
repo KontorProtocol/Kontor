@@ -14,6 +14,13 @@ import type { ProvidedRegtestInfo } from "@kontor/sdk/regtest";
 
 declare module "vitest" {
   interface ProvidedContext {
-    regtest: ProvidedRegtestInfo;
+    regtest: ProvidedRegtestInfo & {
+      /** Brotli-compressed token wasm, base64-encoded. The browser
+       *  can't `fetch` the `.br` file directly — Vite/Chrome
+       *  auto-decompresses brotli, which makes the indexer's publish
+       *  step fail with "Invalid Data". So globalSetup reads it Node-
+       *  side and ships the raw compressed bytes through `provide()`. */
+      tokenWasmBrBase64: string;
+    };
   }
 }

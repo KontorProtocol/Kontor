@@ -33,10 +33,6 @@
  * Runs via `npm run test:regtest` / `npm run test:regtest:browser`;
  * pure HTTP client, so it works in Node and the browser alike.
  */
-import { readFileSync } from "node:fs";
-import path from "node:path";
-import { fileURLToPath } from "node:url";
-
 import { test, expect, inject } from "vitest";
 import {
   BlsKey,
@@ -47,24 +43,10 @@ import {
   http,
   type Utxo,
 } from "@kontor/sdk";
-import { hex } from "@scure/base";
+import { hex, base64 } from "@scure/base";
 import { connectRegtest } from "@kontor/sdk/regtest";
 import { Contract as Token } from "./__generated__/token.js";
 import "./regtest-context.js";
-
-const here = path.dirname(fileURLToPath(import.meta.url));
-
-/** Brotli-compressed token wasm — what the indexer's `Storage`
- *  expects on `insert_contract` (it decompresses via
- *  `component_bytes`). We use the native token binary (committed at
- *  `native-contracts/binaries/`) rather than a test-contract wasm
- *  built ad-hoc, so CI doesn't have to build `test-contracts/`
- *  before running the SDK regtest. Publishing this wasm creates a
- *  fresh, independent token instance at a runtime-assigned address —
- *  different storage from the genesis `token@0.0`. */
-const TOKEN_WASM_BR = readFileSync(
-  path.join(here, "..", "..", "native-contracts", "binaries", "token.wasm.br"),
-);
 
 /** How many whole tokens `b` is below `a` — used by the revoke phase
  *  to assert the balance round-tripped to within gas of the original. */
@@ -73,8 +55,10 @@ function deficit(a: Decimal, b: Decimal): number {
 }
 
 test("SDK capstone: publish, transfer, bulk, marketplace", async () => {
-  const regtest = connectRegtest(inject("regtest"));
+  const injected = inject("regtest");
+  const regtest = connectRegtest(injected);
   const { chain } = regtest;
+  const tokenWasmBr = base64.decode(injected.tokenWasmBrBase64);
 
   // ─── Phase 1 — publish ──────────────────────────────────────────
   {
@@ -94,7 +78,7 @@ test("SDK capstone: publish, transfer, bulk, marketplace", async () => {
       // its own storage; it doesn't collide with the genesis
       // `token@0.0`.
       const submitted = await session
-        .publish("republished-token", new Uint8Array(TOKEN_WASM_BR))
+        .publish("republished-token", tokenWasmBr)
         .submit();
       await regtest.mine();
       const result = await submitted.wait();
