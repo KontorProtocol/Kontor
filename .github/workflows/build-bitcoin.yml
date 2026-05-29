@@ -3,6 +3,9 @@ name: Build Bitcoin Binaries
 on:
   workflow_dispatch:
 
+env:
+  BITCOIN_VERSION: v31.0
+
 jobs:
   build:
     name: Build Bitcoin (${{ matrix.runner }})
@@ -16,17 +19,30 @@ jobs:
     steps:
       - name: Install dependencies (Linux)
         if: runner.os == 'Linux'
-        run: sudo apt-get update && sudo apt-get install -y cmake build-essential pkg-config libzmq3-dev libboost-all-dev
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            cmake build-essential pkg-config \
+            libevent-dev libboost-dev \
+            libzmq3-dev
 
       - name: Install dependencies (macOS)
         if: runner.os == 'macOS'
-        run: brew install zmq boost
+        # Explicit `libevent` + `pkgconf` per the v31.0 macOS build doc.
+        # When the runner image changes Homebrew's libevent ABI version
+        # (e.g. 2.1.7 → 2.1.8), the resulting binary's dyld path bumps with
+        # it; rerun this workflow on the new image to refresh the release.
+        run: brew install boost pkgconf libevent zeromq
 
-      - name: Build Bitcoin Core v30.2
+      - name: Build Bitcoin Core ${{ env.BITCOIN_VERSION }}
         run: |
-          git clone https://github.com/bitcoin/bitcoin.git --depth 1 --branch v30.2
+          git clone https://github.com/bitcoin/bitcoin.git \
+            --depth 1 --branch ${{ env.BITCOIN_VERSION }}
           cd bitcoin
-          cmake -B build -DENABLE_WALLET=OFF -DENABLE_IPC=OFF -DWITH_ZMQ=ON
+          cmake -B build \
+            -DENABLE_WALLET=OFF \
+            -DENABLE_IPC=OFF \
+            -DWITH_ZMQ=ON
           cmake --build build --parallel 4
 
       - name: Verify build
