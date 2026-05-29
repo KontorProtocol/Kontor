@@ -185,3 +185,4 @@ async fn info_publisher_republishes_on_event() -> Result<()> {
     handle.await?;
     Ok(())
 }
+

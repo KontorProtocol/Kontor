@@ -25,7 +25,7 @@ use crate::api::handlers::{
     get_block_transactions, get_blocks, get_contract, get_contracts, get_fees, get_index,
     get_metrics, get_result, get_results, get_signer, get_transaction, get_transaction_inspect,
     get_transactions, post_compose, post_contract, post_simulate, post_transaction_broadcast,
-    post_transaction_hex_inspect, stop,
+    post_transaction_hex_inspect,
 };
 
 use super::{
@@ -161,12 +161,8 @@ pub fn new(context: Env, prom_handle: PrometheusHandle) -> Router {
         .route("/signers/{identifier}", get(get_signer))
         .layer(from_fn_with_state(context.clone(), require_available));
 
-    // `/stop` sits outside the availability gate so an admin can issue
-    // shutdown even when the reactor never reaches ready.
-    let stop_route = Router::new().route("/stop", get(stop));
-
     Router::new()
-        .nest("/api", chain_routes.merge(stop_route))
+        .nest("/api", chain_routes)
         .layer(
             ServiceBuilder::new()
                 .layer(SetRequestIdLayer::new(

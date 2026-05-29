@@ -17,13 +17,6 @@ Returns indexer status, current height, version and availability.
 Response: `Info`
 
 
-#### GET `/stop`
-
-Gracefully shuts down the indexer (cancels the main task). Returns the same info as `/`.
-
-Response: `Info`
-
-
 ### Blocks
 
 #### GET `/blocks`

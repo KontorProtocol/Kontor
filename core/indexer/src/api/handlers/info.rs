@@ -73,7 +73,3 @@ pub async fn get_index(Query(query): Query<InfoQuery>, State(env): State<Env>) -
     Ok(current_info(&env)?.into())
 }
 
-pub async fn stop(State(env): State<Env>) -> Result<Info> {
-    env.cancel_token.cancel();
-    Ok(current_info(&env)?.into())
-}
