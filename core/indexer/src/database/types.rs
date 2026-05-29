@@ -196,8 +196,8 @@ impl ContractRow {
 pub struct BlockQuery {
     #[serde_as(as = "Option<DisplayFromStr>")]
     pub cursor: Option<u64>,
-    pub offset: Option<i64>,
-    pub limit: Option<i64>,
+    pub offset: Option<u64>,
+    pub limit: Option<u32>,
     #[builder(default)]
     #[serde_as(as = "DefaultOnNull<DisplayFromStr>")]
     #[serde(default)]
@@ -210,8 +210,8 @@ pub struct BlockQuery {
 pub struct ContractQuery {
     #[serde_as(as = "Option<DisplayFromStr>")]
     pub cursor: Option<u64>,
-    pub offset: Option<i64>,
-    pub limit: Option<i64>,
+    pub offset: Option<u64>,
+    pub limit: Option<u32>,
     #[builder(default)]
     #[serde_as(as = "DefaultOnNull<DisplayFromStr>")]
     #[serde(default)]
@@ -224,8 +224,8 @@ pub struct ContractQuery {
 pub struct TransactionQuery {
     #[serde_as(as = "Option<DisplayFromStr>")]
     pub cursor: Option<u64>,
-    pub offset: Option<i64>,
-    pub limit: Option<i64>,
+    pub offset: Option<u64>,
+    pub limit: Option<u32>,
     #[builder(default)]
     #[serde_as(as = "DefaultOnNull<DisplayFromStr>")]
     #[serde(default)]
@@ -242,8 +242,8 @@ pub struct TransactionQuery {
 pub struct ResultQuery {
     #[serde_as(as = "Option<DisplayFromStr>")]
     pub cursor: Option<u64>,
-    pub offset: Option<i64>,
-    pub limit: Option<i64>,
+    pub offset: Option<u64>,
+    pub limit: Option<u32>,
     #[builder(default)]
     #[serde_as(as = "DefaultOnNull<DisplayFromStr>")]
     #[serde(default)]

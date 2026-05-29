@@ -641,10 +641,12 @@ pub struct PaginationMeta {
     #[serde(skip_serializing_if = "Option::is_none")]
     #[serde_as(as = "Option<DisplayFromStr>")]
     pub next_cursor: Option<u64>,
+    #[ts(type = "number | null")]
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub next_offset: Option<u32>,
+    pub next_offset: Option<u64>,
     pub has_more: bool,
-    pub total_count: u32,
+    #[ts(type = "number")]
+    pub total_count: u64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]

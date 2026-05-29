@@ -746,12 +746,11 @@ mod transactions {
         let (app, _db) = create_test_app().await?;
         let server = TestServer::new(app);
 
-        // Test minimum limit
+        // Negative limit is now rejected at the type boundary (limit: u32);
+        // axum's query-string parser returns 400 instead of silently clamping
+        // to 0 like the prior i64 path did.
         let response: TestResponse = server.get("/api/transactions?limit=-1").await;
-        assert_eq!(response.status_code(), StatusCode::OK);
-        let result: ApiResult<PaginatedResponse<TransactionRow>> =
-            serde_json::from_slice(response.as_bytes())?;
-        assert_eq!(result.result.results.len(), 0); // Clamped to 0
+        assert_eq!(response.status_code(), StatusCode::BAD_REQUEST);
 
         // Test maximum limit
         let response: TestResponse = server.get("/api/transactions?limit=2000").await;

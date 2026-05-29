@@ -5,8 +5,8 @@ use serde::de::DeserializeOwned;
 use super::Error;
 use crate::database::types::{HasRowId, OrderDirection};
 
-pub fn clamp_limit(limit: Option<i64>) -> i64 {
-    limit.map_or(20, |l| l.clamp(0, 1000))
+pub fn clamp_limit(limit: Option<u32>) -> u32 {
+    limit.map_or(20, |l| l.min(1000))
 }
 
 /// Pagination controls extracted from a Query type.
@@ -15,14 +15,13 @@ pub fn clamp_limit(limit: Option<i64>) -> i64 {
 /// wins and `offset` is ignored (and `next_offset` is suppressed in the
 /// response). Callers should treat them as alternative pagination modes.
 ///
-/// `cursor` is the rowid of the last seen row — a u64 because rowids are
-/// never negative. `offset` stays i64 for now (its narrowing belongs in a
-/// follow-up that also tightens limit and validates at the API layer).
+/// All three are unsigned: rowids and offsets are positions in the table
+/// (never negative); limit is a per-page count clamped to 1000.
 pub struct PageOptions {
     pub order: OrderDirection,
     pub cursor: Option<u64>,
-    pub offset: Option<i64>,
-    pub limit: Option<i64>,
+    pub offset: Option<u64>,
+    pub limit: Option<u32>,
 }
 
 pub async fn get_paginated<T>(
@@ -62,11 +61,10 @@ where
         format!("WHERE {}", where_clauses.join(" AND "))
     };
 
-    // COUNT(...) is i64-shaped in SQLite; saturate at u32::MAX since the
-    // wire type is `number` (u32). Hitting 2^32 distinct rows in a single
-    // paginated endpoint is unrealistic, but the truncation would be
-    // silently wrong rather than visibly clamped — saturate so the
-    // boundary is at least honest.
+    // SQLite COUNT(...) is i64-shaped; the value is the count of distinct
+    // rowids and can't actually be negative, but we still read into i64
+    // and cast — propagating any libsql decode error via `?` rather than
+    // swallowing it.
     let total_count = match conn
         .query(
             &format!("SELECT COUNT(DISTINCT {var}.{id_name}) FROM {from} {where_sql}"),
@@ -76,7 +74,7 @@ where
         .next()
         .await?
     {
-        Some(row) => u32::try_from(row.get::<i64>(0)?).unwrap_or(u32::MAX),
+        Some(row) => row.get::<i64>(0)? as u64,
         None => 0,
     };
 
@@ -85,10 +83,10 @@ where
         && let Some(offset) = offset
     {
         offset_clause = "OFFSET :offset";
-        params.push((":offset".to_string(), Value::Integer(offset)));
+        params.push((":offset".to_string(), Value::try_from(offset)?));
     }
 
-    params.push((":limit".to_string(), Value::Integer(limit + 1)));
+    params.push((":limit".to_string(), Value::Integer(i64::from(limit) + 1)));
 
     let mut rows = conn
         .query(
@@ -122,15 +120,9 @@ where
         .filter(|_| offset.is_none())
         .map(|last_tx| last_tx.id());
 
-    // `offset` is i64 from the public Query API (negatives clamp to 0;
-    // values past u32::MAX saturate). `results.len()` is bounded by
-    // `clamp_limit` (≤ 1000) so adding it can't overflow. Same rationale
-    // as `total_count`: u32 is the wire type and silent truncation would
-    // be a lie — saturate honestly at the boundary.
-    let next_offset = cursor.is_none().then(|| {
-        let base = u32::try_from(offset.unwrap_or(0).max(0)).unwrap_or(u32::MAX);
-        base.saturating_add(results.len() as u32)
-    });
+    let next_offset = cursor
+        .is_none()
+        .then(|| offset.unwrap_or(0).saturating_add(results.len() as u64));
 
     let pagination = PaginationMeta {
         next_cursor,
