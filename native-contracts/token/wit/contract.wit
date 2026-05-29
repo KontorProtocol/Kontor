@@ -40,6 +40,6 @@ world root {
   export balance: async func(ctx: borrow<view-context>, acc: holder-ref) -> option<decimal>;
   export balances: async func(ctx: borrow<view-context>) -> list<balance>;
   export total-supply: async func(ctx: borrow<view-context>) -> decimal;
-  export attach: async func(ctx: borrow<proc-context>, vout: u64, amt: decimal) -> result<transfer, error>;
+  export attach: async func(ctx: borrow<proc-context>, vout: u32, amt: decimal) -> result<transfer, error>;
   export detach: async func(ctx: borrow<proc-context>) -> result<transfer, error>;
 }

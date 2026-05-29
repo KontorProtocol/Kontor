@@ -24,6 +24,7 @@ import { HDKey } from "@scure/bip32";
 import { mnemonicToSeedSync, validateMnemonic } from "@scure/bip39";
 import { wordlist } from "@scure/bip39/wordlists/english.js";
 import { SigHash, Transaction, p2tr, utils as btcUtils } from "@scure/btc-signer";
+import { signSchnorr } from "@scure/btc-signer/utils.js";
 
 import { HolderRef } from "../canonical/HolderRef.js";
 import { SignerError } from "../errors.js";
@@ -198,6 +199,20 @@ export class LocalAccount implements Account {
       );
     }
     return Promise.resolve(tx.toPSBT());
+  }
+
+  signSchnorr(digest: Uint8Array): Promise<Uint8Array> {
+    if (digest.length !== 32) {
+      return Promise.reject(
+        new SignerError(
+          `signSchnorr: digest must be 32 bytes, got ${digest.length}`,
+        ),
+      );
+    }
+    // Deterministic schnorr (no aux rand) — matches the indexer-side
+    // `RegistrationProof::new` so the resulting signature is byte-for-
+    // byte the shape the chain verifier expects.
+    return Promise.resolve(signSchnorr(digest, this.privateKey));
   }
 
   runExclusive<T>(fn: () => Promise<T>): Promise<T> {

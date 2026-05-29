@@ -806,7 +806,7 @@ test("codegen Tier 2: attach/detach pair collapses into an attachment() builder"
   expect(out).not.toMatch(/\n  detach\(/);
   // The builder drops the compose-owned `vout` param (pinned to 0).
   expect(out).toMatch(/attachment\(amt: Decimal\)/);
-  expect(out).toMatch(/"vout": "0"/);
+  expect(out).toMatch(/"vout": 0/);
   // It delegates to ContractBase._attachment, which builds both Insts.
   expect(out).toMatch(/this\._attachment\([\s\S]*?"attach"[\s\S]*?"detach"/);
 });
@@ -985,9 +985,9 @@ test("HolderRef: toRaw quotes u64 fields and unwraps payloads", () => {
     value: "42",
   });
   expect(HolderRef.core().toRaw()).toEqual({ kind: "core" });
-  expect(HolderRef.utxo({ txid: "deadbeef", vout: 7n }).toRaw()).toEqual({
+  expect(HolderRef.utxo({ txid: "deadbeef", vout: 7 }).toRaw()).toEqual({
     kind: "utxo",
-    value: { txid: "deadbeef", vout: "7" },
+    value: { txid: "deadbeef", vout: 7 },
   });
 });
 
@@ -997,7 +997,7 @@ test("HolderRef: fromRaw round-trips every variant", () => {
     { kind: "signer-id", value: "42" },
     { kind: "core" },
     { kind: "burner" },
-    { kind: "utxo", value: { txid: "deadbeef", vout: "7" } },
+    { kind: "utxo", value: { txid: "deadbeef", vout: 7 } },
   ];
   for (const raw of cases) {
     expect(HolderRef.fromRaw(raw).toRaw()).toEqual(raw);

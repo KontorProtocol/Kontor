@@ -1,12 +1,12 @@
 use indexer_types::{ContractListRow, PaginationMeta};
-use libsql::{Connection, Value, params};
+use libsql::{Connection, Value, de::from_row, params};
 
 use super::Error;
 use super::pagination::{PageOptions, get_paginated};
 use crate::database::types::{ContractQuery, ContractRow};
 use crate::runtime::ContractAddress;
 
-pub async fn insert_contract(conn: &Connection, row: ContractRow) -> Result<i64, Error> {
+pub async fn insert_contract(conn: &Connection, row: ContractRow) -> Result<u64, Error> {
     conn.execute(
         r#"
             INSERT INTO contracts (
@@ -31,12 +31,12 @@ pub async fn insert_contract(conn: &Connection, row: ContractRow) -> Result<i64,
             row.tx_index,
             row.size(),
             row.bytes,
-            row.signer_id
+            row.signer_id.map(Value::try_from).transpose()?,
         ],
     )
     .await?;
 
-    Ok(conn.last_insert_rowid())
+    Ok(conn.last_insert_rowid() as u64)
 }
 
 pub async fn get_contracts_paginated(
@@ -48,7 +48,7 @@ pub async fn get_contracts_paginated(
     let mut params: Vec<(String, Value)> = vec![];
     if let Some(signer_id) = query.signer_id {
         where_clauses.push("c.signer_id = :signer_id".to_string());
-        params.push((":signer_id".to_string(), Value::Integer(signer_id)));
+        params.push((":signer_id".to_string(), Value::try_from(signer_id)?));
     }
     get_paginated(
         conn,
@@ -91,7 +91,7 @@ pub async fn get_contract_bytes_by_address(
 
 pub async fn get_contract_address_from_id(
     conn: &Connection,
-    id: i64,
+    id: u64,
 ) -> Result<Option<ContractAddress>, Error> {
     let mut rows = conn
         .query(
@@ -103,25 +103,13 @@ pub async fn get_contract_address_from_id(
         )
         .await?;
 
-    let row = rows.next().await?;
-    if let Some(row) = row {
-        let name = row.get(0)?;
-        let height = row.get(1)?;
-        let tx_index = row.get(2)?;
-        Ok(Some(ContractAddress {
-            name,
-            height,
-            tx_index,
-        }))
-    } else {
-        Ok(None)
-    }
+    Ok(rows.next().await?.map(|r| from_row(&r)).transpose()?)
 }
 
 pub async fn get_contract_id_from_address(
     conn: &Connection,
     address: &ContractAddress,
-) -> Result<Option<i64>, Error> {
+) -> Result<Option<u64>, Error> {
     let mut rows = conn
         .query(
             r#"
@@ -142,7 +130,7 @@ pub async fn get_contract_id_from_address(
 
 pub async fn get_contract_bytes_by_id(
     conn: &Connection,
-    id: i64,
+    id: u64,
 ) -> Result<Option<Vec<u8>>, Error> {
     let mut rows = conn
         .query("SELECT bytes FROM contracts WHERE id = ?", params![id])

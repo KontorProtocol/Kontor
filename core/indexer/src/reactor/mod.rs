@@ -518,7 +518,7 @@ pub async fn create_runtime_executor(
             (starting_block_height - 1, None)
         }
         Some(block) => {
-            let block_height = block.height as u64;
+            let block_height = block.height;
             if block_height < starting_block_height - 1 {
                 bail!(
                     "Latest block has height {}, less than start height {}",

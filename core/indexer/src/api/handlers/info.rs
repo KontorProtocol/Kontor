@@ -28,17 +28,21 @@ pub struct InfoQuery {
 }
 
 /// Build the full `Info` from the reactor-published `InfoCore` snapshot,
-/// overlaying the static fields and the `available` readiness flag. No
-/// database access — the snapshot is maintained by the reactor.
-async fn current_info(env: &Env) -> Info {
+/// overlaying the static fields. The `require_available` middleware
+/// ensures `InfoCore.height` is `Some` before any request reaches this
+/// handler, so `.expect` here is unreachable in normal operation. No
+/// database access — the snapshot is maintained by the info publisher.
+fn current_info(env: &Env) -> Info {
     let core = env.info_rx.borrow().clone();
+    let height = core
+        .height
+        .expect("require_available middleware ensures InfoCore.height is Some");
     Info {
         version: built_info::PKG_VERSION.to_string(),
         target: built_info::TARGET.to_string(),
         network: env.config.network.to_string(),
-        available: *env.available.read().await,
         consensus_mode: env.config.consensus_mode,
-        height: core.height,
+        height,
         checkpoint: core.checkpoint,
         consensus_height: core.consensus_height,
         last_result_id: core.last_result_id,
@@ -64,12 +68,6 @@ pub async fn get_index(Query(query): Query<InfoQuery>, State(env): State<Env>) -
         if !already_moved {
             let _ = timeout(Duration::from_millis(wait_ms), rx.changed()).await;
         }
-        return Ok(current_info(&env).await.into());
     }
-    Ok(current_info(&env).await.into())
-}
-
-pub async fn stop(State(env): State<Env>) -> Result<Info> {
-    env.cancel_token.cancel();
-    Ok(current_info(&env).await.into())
+    Ok(current_info(&env).into())
 }

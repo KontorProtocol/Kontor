@@ -56,16 +56,6 @@ impl Client {
         Self::handle_response(self.client.get(url).send().await?).await
     }
 
-    pub async fn stop(&self) -> Result<Info> {
-        Self::handle_response(
-            self.client
-                .get(format!("{}/stop", &self.url))
-                .send()
-                .await?,
-        )
-        .await
-    }
-
     pub async fn compose(&self, reveal: Reveal) -> Result<ComposeOutputs> {
         Self::handle_response(
             self.client

@@ -16,14 +16,11 @@ pub async fn get_signer(
     Path(identifier): Path<String>,
     State(env): State<Env>,
 ) -> Result<SignerResponse> {
-    if !*env.available.read().await {
-        return Err(HttpError::ServiceUnavailable("Indexer is not available".to_string()).into());
-    }
     let runtime = env.runtime_pool.get().await?;
     let conn = runtime.get_storage_conn();
 
     let entry = if let Ok(signer_id) = identifier.parse::<u64>() {
-        get_signer_entry_by_id(&conn, signer_id as i64).await
+        get_signer_entry_by_id(&conn, signer_id).await
     } else if is_hex_of_len(&identifier, 64) {
         get_signer_entry_by_x_only_pubkey(&conn, &identifier).await
     } else if is_hex_of_len(&identifier, 192) {
@@ -41,10 +38,10 @@ pub async fn get_signer(
 
     match entry {
         Some(e) => Ok(SignerResponse {
-            signer_id: e.signer_id as u64,
+            signer_id: e.signer_id,
             x_only_pubkey: e.x_only_pubkey,
             bls_pubkey: e.bls_pubkey,
-            next_nonce: e.next_nonce.map(|n| n as u64),
+            next_nonce: e.next_nonce,
         }
         .into()),
         None => Err(HttpError::NotFound(format!("signer not found for: {identifier}")).into()),

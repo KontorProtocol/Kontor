@@ -143,7 +143,7 @@ async fn bls_publisher_pays_all_sponsored_regtest() -> Result<()> {
     // The publisher must be charged for both sponsored ops.
     assert_eq!(
         res.result.payer_signer_id,
-        Some(publisher_id as i64),
+        Some(publisher_id),
         "sponsored op 0 should be charged to the publisher"
     );
 
@@ -159,7 +159,7 @@ async fn bls_publisher_pays_all_sponsored_regtest() -> Result<()> {
         .ok_or_else(|| anyhow!("missing result for inner op 1"))?;
     assert_eq!(
         result1.payer_signer_id,
-        Some(publisher_id as i64),
+        Some(publisher_id),
         "sponsored op 1 should be charged to the publisher"
     );
 
@@ -261,7 +261,7 @@ async fn bls_publisher_pays_mixed_regtest() -> Result<()> {
     // op 0 (SelfPay) — signer1 must be the payer.
     assert_eq!(
         res.result.payer_signer_id,
-        Some(signer1_id as i64),
+        Some(signer1_id),
         "SelfPay op 0 should be charged to signer1, not the publisher"
     );
 
@@ -278,7 +278,7 @@ async fn bls_publisher_pays_mixed_regtest() -> Result<()> {
         .ok_or_else(|| anyhow!("missing result for inner op 1"))?;
     assert_eq!(
         result1.payer_signer_id,
-        Some(publisher_id as i64),
+        Some(publisher_id),
         "Sponsored op 1 should be charged to the publisher, not signer2"
     );
 

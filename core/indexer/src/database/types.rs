@@ -27,7 +27,7 @@ pub fn field_element_to_bytes(fe: &FieldElement) -> [u8; 32] {
 // ─────────────────────────────────────────────────────────────────
 
 pub trait HasRowId {
-    fn id(&self) -> i64;
+    fn id(&self) -> u64;
     fn id_name() -> &'static str;
 }
 
@@ -61,7 +61,7 @@ impl std::str::FromStr for OrderDirection {
 }
 
 impl HasRowId for BlockRow {
-    fn id(&self) -> i64 {
+    fn id(&self) -> u64 {
         self.height
     }
 
@@ -72,25 +72,25 @@ impl HasRowId for BlockRow {
 
 #[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq)]
 pub struct CheckpointRow {
-    pub height: i64,
+    pub height: u64,
     pub hash: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct Identity {
-    signer_id: i64,
+    signer_id: u64,
     key: String,
 }
 
 impl Identity {
-    pub fn new(signer_id: i64) -> Self {
+    pub fn new(signer_id: u64) -> Self {
         Self {
             signer_id,
             key: signer_id.to_string(),
         }
     }
 
-    pub fn signer_id(&self) -> i64 {
+    pub fn signer_id(&self) -> u64 {
         self.signer_id
     }
 
@@ -103,20 +103,20 @@ impl Identity {
 /// Core row is the first one inserted into `signers` at genesis, so SQLite
 /// auto-increment assigns it id = 1. This constant pins that contract and is
 /// asserted by `create_core_signer`.
-pub const CORE_SIGNER_ID: i64 = 1;
+pub const CORE_SIGNER_ID: u64 = 1;
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct SignerEntry {
-    pub signer_id: i64,
+    pub signer_id: u64,
     pub x_only_pubkey: Option<String>,
     pub bls_pubkey: Option<Vec<u8>>,
-    pub next_nonce: Option<i64>,
+    pub next_nonce: Option<u64>,
 }
 
 #[derive(Debug, Clone)]
 pub struct BatchQueryResult {
-    pub consensus_height: i64,
-    pub anchor_height: i64,
+    pub consensus_height: u64,
+    pub anchor_height: u64,
     pub anchor_hash: String,
     pub certificate: Vec<u8>,
     pub is_block: bool,
@@ -125,9 +125,9 @@ pub struct BatchQueryResult {
 
 #[derive(Debug, Clone, Serialize, Deserialize, Builder)]
 pub struct ContractStateRow {
-    pub contract_id: i64,
-    pub height: i64,
-    pub tx_id: Option<i64>,
+    pub contract_id: u64,
+    pub height: u64,
+    pub tx_id: Option<u64>,
     pub path: String,
     #[builder(default = vec![])]
     pub value: Vec<u8>,
@@ -142,7 +142,7 @@ impl ContractStateRow {
 }
 
 impl HasRowId for TransactionRow {
-    fn id(&self) -> i64 {
+    fn id(&self) -> u64 {
         self.id
     }
 
@@ -158,14 +158,14 @@ impl From<ContractRow> for ContractListRow {
             name: row.name,
             height: row.height,
             tx_index: row.tx_index,
-            size: row.bytes.len() as i64,
+            size: row.bytes.len() as u64,
             signer_id: row.signer_id,
         }
     }
 }
 
 impl HasRowId for ContractListRow {
-    fn id(&self) -> i64 {
+    fn id(&self) -> u64 {
         self.id
     }
 
@@ -177,12 +177,12 @@ impl HasRowId for ContractListRow {
 #[derive(Debug, Clone, Serialize, Deserialize, Builder)]
 pub struct ContractRow {
     #[builder(default = 0)]
-    pub id: i64,
+    pub id: u64,
     pub name: String,
-    pub height: i64,
-    pub tx_index: i64,
+    pub height: u64,
+    pub tx_index: u32,
     pub bytes: Vec<u8>,
-    pub signer_id: Option<i64>,
+    pub signer_id: Option<u64>,
 }
 
 impl ContractRow {
@@ -195,9 +195,9 @@ impl ContractRow {
 #[derive(Debug, Clone, Serialize, Deserialize, Builder, Eq, PartialEq)]
 pub struct BlockQuery {
     #[serde_as(as = "Option<DisplayFromStr>")]
-    pub cursor: Option<i64>,
-    pub offset: Option<i64>,
-    pub limit: Option<i64>,
+    pub cursor: Option<u64>,
+    pub offset: Option<u64>,
+    pub limit: Option<u32>,
     #[builder(default)]
     #[serde_as(as = "DefaultOnNull<DisplayFromStr>")]
     #[serde(default)]
@@ -209,77 +209,77 @@ pub struct BlockQuery {
 #[derive(Debug, Clone, Serialize, Deserialize, Builder, Eq, PartialEq)]
 pub struct ContractQuery {
     #[serde_as(as = "Option<DisplayFromStr>")]
-    pub cursor: Option<i64>,
-    pub offset: Option<i64>,
-    pub limit: Option<i64>,
+    pub cursor: Option<u64>,
+    pub offset: Option<u64>,
+    pub limit: Option<u32>,
     #[builder(default)]
     #[serde_as(as = "DefaultOnNull<DisplayFromStr>")]
     #[serde(default)]
     pub order: OrderDirection,
-    pub signer_id: Option<i64>,
+    pub signer_id: Option<u64>,
 }
 
 #[serde_as]
 #[derive(Debug, Clone, Serialize, Deserialize, Builder, Eq, PartialEq)]
 pub struct TransactionQuery {
     #[serde_as(as = "Option<DisplayFromStr>")]
-    pub cursor: Option<i64>,
-    pub offset: Option<i64>,
-    pub limit: Option<i64>,
+    pub cursor: Option<u64>,
+    pub offset: Option<u64>,
+    pub limit: Option<u32>,
     #[builder(default)]
     #[serde_as(as = "DefaultOnNull<DisplayFromStr>")]
     #[serde(default)]
     pub order: OrderDirection,
 
-    pub height: Option<i64>,
+    pub height: Option<u64>,
     #[serde_as(as = "Option<DisplayFromStr>")]
     pub contract: Option<ContractAddress>,
-    pub signer_id: Option<i64>,
+    pub signer_id: Option<u64>,
 }
 
 #[serde_as]
 #[derive(Debug, Clone, Serialize, Deserialize, Builder, Eq, PartialEq)]
 pub struct ResultQuery {
     #[serde_as(as = "Option<DisplayFromStr>")]
-    pub cursor: Option<i64>,
-    pub offset: Option<i64>,
-    pub limit: Option<i64>,
+    pub cursor: Option<u64>,
+    pub offset: Option<u64>,
+    pub limit: Option<u32>,
     #[builder(default)]
     #[serde_as(as = "DefaultOnNull<DisplayFromStr>")]
     #[serde(default)]
     pub order: OrderDirection,
 
-    pub height: Option<i64>,
-    pub start_height: Option<i64>,
+    pub height: Option<u64>,
+    pub start_height: Option<u64>,
     #[serde_as(as = "Option<DisplayFromStr>")]
     pub contract: Option<ContractAddress>,
     pub func: Option<String>,
-    pub signer_id: Option<i64>,
+    pub signer_id: Option<u64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Builder, Eq, PartialEq)]
 pub struct ContractResultRow {
     #[builder(default = 0)]
-    pub id: i64,
-    pub height: i64,
-    pub tx_id: Option<i64>,
-    pub input_index: Option<i64>,
-    pub op_index: Option<i64>,
+    pub id: u64,
+    pub height: u64,
+    pub tx_id: Option<u64>,
+    pub input_index: Option<u32>,
+    pub op_index: Option<u32>,
     #[builder(default = 0)]
-    pub result_index: i64,
+    pub result_index: u32,
     #[builder(default = 0)]
-    pub contract_id: i64,
+    pub contract_id: u64,
     #[builder(default = "".to_string())]
     pub func: String,
-    pub gas: i64,
+    pub gas: u64,
     pub value: Option<String>,
     #[builder(default = 0)]
-    pub signer_id: i64,
+    pub signer_id: u64,
     /// Who funded gas for this op. Equals `signer_id` for self-pay ops; for
     /// BLS-aggregate sponsored ops it's the publisher's signer_id. `None` for
     /// ops that don't go through user-side gas accounting (Issuance,
     /// RegisterBlsKey via the Core-paid path).
-    pub payer_signer_id: Option<i64>,
+    pub payer_signer_id: Option<u64>,
     /// Outcome of the call. Populated by `handle_procedure` from the wasm
     /// result before writing the row.
     #[builder(default = OpStatus::Ok)]
@@ -296,29 +296,29 @@ impl ContractResultRow {
 #[derive(Debug, Clone, Serialize, Deserialize, Builder, Eq, PartialEq)]
 pub struct ContractResultPublicRow {
     #[builder(default = 0)]
-    pub id: i64,
-    pub height: i64,
-    pub tx_index: Option<i64>,
-    pub input_index: Option<i64>,
-    pub op_index: Option<i64>,
+    pub id: u64,
+    pub height: u64,
+    pub tx_index: Option<u32>,
+    pub input_index: Option<u32>,
+    pub op_index: Option<u32>,
     #[builder(default = 0)]
-    pub result_index: i64,
+    pub result_index: u32,
     #[builder(default = "".to_string())]
     pub func: String,
-    pub gas: i64,
+    pub gas: u64,
     pub value: Option<String>,
     pub contract_name: String,
-    pub contract_height: i64,
-    pub contract_tx_index: i64,
+    pub contract_height: u64,
+    pub contract_tx_index: u32,
     pub txid: Option<String>,
-    pub signer_id: i64,
-    pub payer_signer_id: Option<i64>,
+    pub signer_id: u64,
+    pub payer_signer_id: Option<u64>,
     #[builder(default = OpStatus::Ok)]
     pub status: OpStatus,
 }
 
 impl HasRowId for ContractResultPublicRow {
-    fn id(&self) -> i64 {
+    fn id(&self) -> u64 {
         self.id
     }
 
@@ -342,8 +342,8 @@ impl From<ContractResultPublicRow> for ResultRow {
             value: row.value,
             contract: ContractAddress {
                 name: row.contract_name,
-                height: row.contract_height as u64,
-                tx_index: row.contract_tx_index as u64,
+                height: row.contract_height,
+                tx_index: row.contract_tx_index,
             }
             .to_string(),
             txid: row.txid,
@@ -357,9 +357,9 @@ impl From<ContractResultPublicRow> for ResultRow {
 pub struct OpResultId {
     pub txid: String,
     #[builder(default = 0)]
-    pub input_index: i64,
+    pub input_index: u32,
     #[builder(default = 0)]
-    pub op_index: i64,
+    pub op_index: u32,
 }
 
 impl Display for OpResultId {
@@ -385,11 +385,11 @@ impl std::str::FromStr for OpResultId {
         }
 
         let input_index = parts[1]
-            .parse::<i64>()
+            .parse::<u32>()
             .map_err(|e| format!("Failed to parse input_index '{}': {e}", parts[1]))?;
 
         let op_index = parts[2]
-            .parse::<i64>()
+            .parse::<u32>()
             .map_err(|e| format!("Failed to parse op_index '{}': {e}", parts[2]))?;
 
         Ok(OpResultId {
@@ -404,7 +404,7 @@ impl std::str::FromStr for OpResultId {
 #[derive(Debug, Clone, Serialize, Deserialize, Builder, Eq, PartialEq)]
 pub struct FileMetadataRow {
     #[builder(default = 0)]
-    pub id: i64,
+    pub id: u64,
     pub file_id: String,
     pub object_id: String,
     pub nonce: Vec<u8>,
@@ -412,7 +412,7 @@ pub struct FileMetadataRow {
     pub padded_len: u64,
     pub original_size: u64,
     pub filename: String,
-    pub height: i64,
+    pub height: u64,
     pub historical_root: Option<[u8; 32]>,
 }
 

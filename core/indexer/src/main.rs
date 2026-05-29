@@ -1,5 +1,6 @@
 use std::panic;
 use std::sync::Arc;
+use std::sync::atomic::AtomicBool;
 use std::thread::available_parallelism;
 
 use crate::api::Env;
@@ -13,7 +14,7 @@ use indexer::{api, block, built_info, reactor, reg_tester, runtime};
 use indexer::{bitcoin_client, bitcoin_follower, config::Config, database, logging, stopper};
 use indexer_types::{Inst, InstKind};
 use tokio::signal::unix::{SignalKind, signal};
-use tokio::sync::{RwLock, mpsc, oneshot};
+use tokio::sync::{mpsc, oneshot};
 use tokio_util::sync::CancellationToken;
 use tracing::{error, info};
 
@@ -198,14 +199,14 @@ async fn run_daemon(config: Config) -> Result<()> {
     let filename = "state.db";
     let reader = database::Reader::new(&config.data_dir, filename).await?;
     let writer = database::Writer::new(&config.data_dir, filename).await?;
-    let available = Arc::new(RwLock::new(false));
+    let reactor_ready = Arc::new(AtomicBool::new(false));
     let (event_tx, event_rx) = mpsc::channel(10);
     let event_subscriber = EventSubscriber::new();
     // Seed the info snapshot from current DB state; the reactor republishes
     // it on every block/batch/rollback. Shared with Env for long-polling.
     let initial_info = {
         let conn = reader.connection().await?;
-        compute_info_core(&conn, config.starting_block_height as i64 - 1).await?
+        compute_info_core(&conn).await?
     };
     let (info_tx, info_rx) = tokio::sync::watch::channel(initial_info);
     // Recomputes `InfoCore` off the `Event` broadcast and republishes it
@@ -214,7 +215,6 @@ async fn run_daemon(config: Config) -> Result<()> {
         cancel_token.clone(),
         event_subscriber.subscribe(),
         reader.clone(),
-        config.starting_block_height,
         info_tx,
     ));
     let (simulate_tx, simulate_rx) = mpsc::channel(available_parallelism()?.into());
@@ -225,7 +225,7 @@ async fn run_daemon(config: Config) -> Result<()> {
             Env {
                 config: config.clone(),
                 cancel_token: cancel_token.clone(),
-                available: available.clone(),
+                reactor_ready: reactor_ready.clone(),
                 reader: reader.clone(),
                 event_subscriber: event_subscriber.clone(),
                 bitcoin: bitcoin.clone(),
@@ -245,7 +245,7 @@ async fn run_daemon(config: Config) -> Result<()> {
         let recent_blocks = select_recent_blocks(&conn, 50).await?;
         recent_blocks
             .iter()
-            .map(|b| (b.height as u64, b.hash))
+            .map(|b| (b.height, b.hash))
             .collect::<Vec<_>>()
     };
 
@@ -297,11 +297,7 @@ async fn run_daemon(config: Config) -> Result<()> {
         Some(fees_tx),
     ));
     ready_rx.await?;
-    {
-        let mut available = available.write().await;
-        *available = true;
-    }
-
+    reactor_ready.store(true, std::sync::atomic::Ordering::Relaxed);
     info!("Initialized");
     for handle in handles {
         let _ = handle.await;

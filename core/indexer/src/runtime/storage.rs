@@ -26,14 +26,14 @@ use crate::{
 pub struct TransactionContext {
     /// Autoincrement id from the transactions table (for contract_state/contract_results FK).
     /// None when no transaction row exists (e.g. publish_native_contracts).
-    pub tx_id: Option<i64>,
+    pub tx_id: Option<u64>,
     /// Position in the confirming Bitcoin block (for contracts table)
     #[builder(default = 0)]
-    pub tx_index: i64,
+    pub tx_index: u32,
     #[builder(default = 0)]
-    pub input_index: i64,
+    pub input_index: u32,
     #[builder(default = 0)]
-    pub op_index: i64,
+    pub op_index: u32,
     #[builder(default = new_mock_transaction(0).txid)]
     pub txid: Txid,
 }
@@ -46,16 +46,16 @@ pub struct Storage {
     #[builder(default = Stack::builder().build())]
     pub savepoint_stack: Stack<u64>,
     #[builder(default = 1)]
-    pub height: i64,
+    pub height: u64,
     pub tx_context: Option<TransactionContext>,
 }
 
 impl Storage {
-    pub async fn get(&self, fuel: u64, contract_id: i64, path: &str) -> Result<Option<Vec<u8>>> {
+    pub async fn get(&self, fuel: u64, contract_id: u64, path: &str) -> Result<Option<Vec<u8>>> {
         Ok(get_latest_contract_state_value(&self.conn, fuel, contract_id, path).await?)
     }
 
-    pub async fn set(&self, contract_id: i64, path: &str, value: &[u8]) -> Result<()> {
+    pub async fn set(&self, contract_id: u64, path: &str, value: &[u8]) -> Result<()> {
         insert_contract_state(
             &self.conn,
             ContractStateRow::builder()
@@ -70,7 +70,7 @@ impl Storage {
         Ok(())
     }
 
-    pub async fn delete(&self, contract_id: i64, path: &str) -> Result<bool> {
+    pub async fn delete(&self, contract_id: u64, path: &str) -> Result<bool> {
         Ok(delete_contract_state(
             &self.conn,
             self.height,
@@ -81,36 +81,36 @@ impl Storage {
         .await?)
     }
 
-    pub async fn exists(&self, contract_id: i64, path: &str) -> Result<bool> {
+    pub async fn exists(&self, contract_id: u64, path: &str) -> Result<bool> {
         Ok(exists_contract_state(&self.conn, contract_id, path).await?)
     }
 
     pub async fn extend_path_with_match(
         &self,
-        contract_id: i64,
+        contract_id: u64,
         path: &str,
         regexp: &str,
     ) -> Result<Option<String>> {
         Ok(matching_path(&self.conn, contract_id, path, regexp).await?)
     }
 
-    pub async fn delete_matching_paths(&self, contract_id: i64, regexp: &str) -> Result<u64> {
+    pub async fn delete_matching_paths(&self, contract_id: u64, regexp: &str) -> Result<u64> {
         Ok(delete_matching_paths(&self.conn, contract_id, self.height, regexp).await?)
     }
 
-    pub async fn contract_id(&self, contract_address: &ContractAddress) -> Result<Option<i64>> {
+    pub async fn contract_id(&self, contract_address: &ContractAddress) -> Result<Option<u64>> {
         Ok(get_contract_id_from_address(&self.conn, contract_address).await?)
     }
 
-    pub async fn contract_address(&self, contract_id: i64) -> Result<Option<ContractAddress>> {
+    pub async fn contract_address(&self, contract_id: u64) -> Result<Option<ContractAddress>> {
         Ok(get_contract_address_from_id(&self.conn, contract_id).await?)
     }
 
-    pub async fn contract_bytes(&self, contract_id: i64) -> Result<Option<Vec<u8>>> {
+    pub async fn contract_bytes(&self, contract_id: u64) -> Result<Option<Vec<u8>>> {
         Ok(get_contract_bytes_by_id(&self.conn, contract_id).await?)
     }
 
-    pub async fn component_bytes(&self, contract_id: i64) -> Result<Vec<u8>> {
+    pub async fn component_bytes(&self, contract_id: u64) -> Result<Vec<u8>> {
         let compressed_bytes = self
             .contract_bytes(contract_id)
             .await?
@@ -129,7 +129,7 @@ impl Storage {
             .encode()
     }
 
-    pub async fn component_wit(&self, contract_id: i64) -> Result<String> {
+    pub async fn component_wit(&self, contract_id: u64) -> Result<String> {
         let bs = self.component_bytes(contract_id).await?;
         let decoded = wit_component::decode(&bs).context("Failed to decode component")?;
         let mut printer = WitPrinter::default();
@@ -146,7 +146,7 @@ impl Storage {
         Ok(wit)
     }
 
-    pub async fn insert_contract(&self, name: &str, bytes: &[u8]) -> Result<i64> {
+    pub async fn insert_contract(&self, name: &str, bytes: &[u8]) -> Result<u64> {
         let signer_id = create_contract_signer(&self.conn, self.height).await?;
         Ok(insert_contract(
             &self.conn,
@@ -166,19 +166,19 @@ impl Storage {
         .await?)
     }
 
-    fn effective_tx_id(&self) -> Option<i64> {
+    fn effective_tx_id(&self) -> Option<u64> {
         self.tx_context.as_ref().and_then(|c| c.tx_id)
     }
 
     pub fn build_contract_result_row(
         &self,
-        result_index: i64,
-        contract_id: i64,
+        result_index: u32,
+        contract_id: u64,
         func: String,
-        gas: i64,
+        gas: u64,
         value: Option<String>,
-        signer_id: i64,
-        payer_signer_id: Option<i64>,
+        signer_id: u64,
+        payer_signer_id: Option<u64>,
         status: indexer_types::OpStatus,
     ) -> ContractResultRow {
         ContractResultRow::builder()
@@ -199,15 +199,15 @@ impl Storage {
 
     pub async fn insert_contract_result(
         &self,
-        result_index: i64,
-        contract_id: i64,
+        result_index: u32,
+        contract_id: u64,
         func: String,
-        gas: i64,
+        gas: u64,
         value: Option<String>,
-        signer_id: i64,
-        payer_signer_id: Option<i64>,
+        signer_id: u64,
+        payer_signer_id: Option<u64>,
         status: indexer_types::OpStatus,
-    ) -> Result<i64> {
+    ) -> Result<u64> {
         Ok(insert_contract_result(
             &self.conn,
             self.build_contract_result_row(
@@ -226,7 +226,7 @@ impl Storage {
 
     pub async fn keys(
         &self,
-        contract_id: i64,
+        contract_id: u64,
         path: String,
     ) -> Result<impl Stream<Item = Result<String, libsql::Error>> + Send + 'static> {
         Ok(path_prefix_filter_contract_state(&self.conn, contract_id, path).await?)

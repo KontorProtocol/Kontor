@@ -1,5 +1,5 @@
 use futures_util::{Stream, stream};
-use libsql::{Connection, de::from_row, params};
+use libsql::{Connection, Value, de::from_row, params};
 
 use super::Error;
 use crate::database::types::ContractStateRow;
@@ -41,7 +41,7 @@ pub async fn insert_contract_state(conn: &Connection, row: ContractStateRow) -> 
             params![
                 row.contract_id,
                 row.height,
-                row.tx_id,
+                row.tx_id.map(Value::try_from).transpose()?,
                 row.size(),
                 row.path,
                 row.value,
@@ -53,7 +53,7 @@ pub async fn insert_contract_state(conn: &Connection, row: ContractStateRow) -> 
 
 pub async fn get_latest_contract_state(
     conn: &Connection,
-    contract_id: i64,
+    contract_id: u64,
     path: &str,
 ) -> Result<Option<ContractStateRow>, Error> {
     let mut rows = conn
@@ -81,7 +81,7 @@ pub async fn get_latest_contract_state(
 pub async fn get_latest_contract_state_value(
     conn: &Connection,
     fuel: u64,
-    contract_id: i64,
+    contract_id: u64,
     path: &str,
 ) -> Result<Option<Vec<u8>>, Error> {
     let mut rows = conn
@@ -117,9 +117,9 @@ pub async fn get_latest_contract_state_value(
 
 pub async fn delete_contract_state(
     conn: &Connection,
-    height: i64,
-    tx_id: Option<i64>,
-    contract_id: i64,
+    height: u64,
+    tx_id: Option<u64>,
+    contract_id: u64,
     path: &str,
 ) -> Result<bool, Error> {
     Ok(
@@ -138,7 +138,7 @@ pub async fn delete_contract_state(
 
 pub async fn exists_contract_state(
     conn: &Connection,
-    contract_id: i64,
+    contract_id: u64,
     path: &str,
 ) -> Result<bool, Error> {
     let mut rows = conn
@@ -158,7 +158,7 @@ pub async fn exists_contract_state(
 
 pub async fn path_prefix_filter_contract_state(
     conn: &Connection,
-    contract_id: i64,
+    contract_id: u64,
     path: String,
 ) -> Result<impl Stream<Item = Result<String, libsql::Error>> + Send + 'static, Error> {
     let rows = conn
@@ -183,7 +183,7 @@ pub async fn path_prefix_filter_contract_state(
 
 pub async fn matching_path(
     conn: &Connection,
-    contract_id: i64,
+    contract_id: u64,
     base_path: &str,
     regexp: &str,
 ) -> Result<Option<String>, Error> {
@@ -202,8 +202,8 @@ pub async fn matching_path(
 
 pub async fn delete_matching_paths(
     conn: &Connection,
-    contract_id: i64,
-    height: i64,
+    contract_id: u64,
+    height: u64,
     path_regexp: &str,
 ) -> Result<u64, Error> {
     Ok(conn
@@ -218,7 +218,7 @@ pub async fn delete_matching_paths(
         .await?)
 }
 
-pub async fn contract_has_state(conn: &Connection, contract_id: i64) -> Result<bool, Error> {
+pub async fn contract_has_state(conn: &Connection, contract_id: u64) -> Result<bool, Error> {
     let mut rows = conn
         .query(
             "SELECT COUNT(*) FROM contract_state WHERE contract_id = ?",

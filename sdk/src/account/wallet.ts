@@ -59,6 +59,16 @@ export class WalletAccount implements Account {
     throw new SignerError("WalletAccount.signPsbt: not implemented");
   }
 
+  signSchnorr(_digest: Uint8Array): Promise<Uint8Array> {
+    return Promise.reject(
+      new SignerError(
+        "WalletAccount.signSchnorr: not implemented — most sats-connect " +
+          "wallets don't expose raw schnorr-sign of arbitrary digests",
+        { docsPath: "/sdk/account/wallet" },
+      ),
+    );
+  }
+
   runExclusive<T>(fn: () => Promise<T>): Promise<T> {
     return this.lock.runExclusive(fn);
   }

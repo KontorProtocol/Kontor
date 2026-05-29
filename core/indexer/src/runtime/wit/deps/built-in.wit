@@ -9,7 +9,7 @@ interface context {
     record contract-address {
         name: string,
         height: u64,
-        tx-index: u64,
+        tx-index: u32,
     }
 
     /// Active proof of "I am the contract at this address." Same
@@ -55,7 +55,7 @@ interface context {
 
     record out-point {
         txid: string,
-        vout: u64,
+        vout: u32,
     }
 
     resource transaction {

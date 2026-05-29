@@ -519,7 +519,7 @@ function findAttachPair(
   const attach = methods.find(([n]) => n === "attach")?.[1].function;
   const detach = methods.find(([n]) => n === "detach")?.[1].function;
   if (attach == null || detach == null) return null;
-  if (!attach.params.some((p) => p.name === "vout" && p.type === "u64")) {
+  if (!attach.params.some((p) => p.name === "vout" && p.type === "u32")) {
     return null;
   }
   if (!isResultRef(attach.result, ctx) || !isResultRef(detach.result, ctx)) {
@@ -557,7 +557,7 @@ function emitAttachment(
   const resultTs = typeRefToTs(attach.result as TypeRef, ctx);
 
   // `vout` is pinned to 0 — the escrow is always reveal output 0.
-  const attachWire = ['"vout": "0"']
+  const attachWire = ['"vout": 0']
     .concat(
       attachArgs.map(
         (p) =>

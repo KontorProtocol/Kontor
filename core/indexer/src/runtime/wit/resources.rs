@@ -4,8 +4,8 @@ use std::str::FromStr;
 use bitcoin::{Txid, XOnlyPublicKey};
 use futures_util::Stream;
 
-use crate::database::queries::get_or_create_identity;
 use crate::database::types::{CORE_SIGNER_ID, FileMetadataRow, Identity, bytes_to_field_element};
+use crate::runtime::Runtime;
 use crate::runtime::kontor::built_in::context::HolderRef;
 use crate::runtime::kontor::built_in::{error::Error, file_registry::RawFileDescriptor};
 use kontor_crypto::Proof as CryptoProof;
@@ -17,15 +17,15 @@ pub enum Signer {
     Id(Identity),
     Core(Box<Signer>),
     Contract {
-        id: i64,
-        signer_id: i64,
+        id: u64,
+        signer_id: u64,
         key: String,
     },
     Nobody,
 }
 
 impl Signer {
-    pub fn new_contract(id: i64, signer_id: i64) -> Self {
+    pub fn new_contract(id: u64, signer_id: u64) -> Self {
         Self::Contract {
             id,
             signer_id,
@@ -43,7 +43,7 @@ impl Signer {
     /// - `Core(inner)` → unwraps to inner's signer_id
     /// - `Contract` → the contract's signer_id
     /// - `Nobody` → None (only valid inside `Core`)
-    pub fn signer_id(&self) -> Option<i64> {
+    pub fn signer_id(&self) -> Option<u64> {
         match self {
             Signer::Id(identity) => Some(identity.signer_id()),
             Signer::Core(inner) => match inner.as_ref() {
@@ -78,49 +78,49 @@ impl core::fmt::Display for Signer {
 impl From<&Signer> for HolderRef {
     fn from(signer: &Signer) -> Self {
         match signer {
-            Signer::Id(identity) => HolderRef::SignerId(identity.signer_id() as u64),
-            Signer::Contract { signer_id, .. } => HolderRef::SignerId(*signer_id as u64),
+            Signer::Id(identity) => HolderRef::SignerId(identity.signer_id()),
+            Signer::Contract { signer_id, .. } => HolderRef::SignerId(*signer_id),
             Signer::Core(_) => HolderRef::Core,
             Signer::Nobody => unreachable!("Nobody signer has no HolderRef"),
         }
     }
 }
 pub trait HasContractId: 'static {
-    fn get_contract_id(&self) -> i64;
+    fn get_contract_id(&self) -> u64;
 }
 
 pub struct ViewContext {
-    pub contract_id: i64,
+    pub contract_id: u64,
 }
 
 impl HasContractId for ViewContext {
-    fn get_contract_id(&self) -> i64 {
+    fn get_contract_id(&self) -> u64 {
         self.contract_id
     }
 }
 
 pub struct ViewStorage {
-    pub contract_id: i64,
+    pub contract_id: u64,
 }
 
 impl HasContractId for ViewStorage {
-    fn get_contract_id(&self) -> i64 {
+    fn get_contract_id(&self) -> u64 {
         self.contract_id
     }
 }
 
 pub struct ProcStorage {
-    pub contract_id: i64,
+    pub contract_id: u64,
 }
 
 impl HasContractId for ProcStorage {
-    fn get_contract_id(&self) -> i64 {
+    fn get_contract_id(&self) -> u64 {
         self.contract_id
     }
 }
 
 pub struct ProcContext {
-    pub contract_id: i64,
+    pub contract_id: u64,
     pub signer: Signer,
     /// Who pays this op's gas. A `Holder` (not a `Signer`) by design —
     /// contracts can credit but not spend on the payer's behalf, since
@@ -133,13 +133,13 @@ pub struct ProcContext {
 }
 
 impl HasContractId for ProcContext {
-    fn get_contract_id(&self) -> i64 {
+    fn get_contract_id(&self) -> u64 {
         self.contract_id
     }
 }
 
 pub struct FallContext {
-    pub contract_id: i64,
+    pub contract_id: u64,
     pub signer: Option<Signer>,
     /// See `ProcContext.payer`. `None` when `signer` is also `None` (a
     /// fall context with no acting signer has no payer either).
@@ -147,7 +147,7 @@ pub struct FallContext {
 }
 
 impl HasContractId for FallContext {
-    fn get_contract_id(&self) -> i64 {
+    fn get_contract_id(&self) -> u64 {
         self.contract_id
     }
 }
@@ -157,12 +157,12 @@ pub struct Keys {
 }
 
 pub struct CoreContext {
-    pub contract_id: i64,
+    pub contract_id: u64,
     pub signer: Signer,
 }
 
 impl HasContractId for CoreContext {
-    fn get_contract_id(&self) -> i64 {
+    fn get_contract_id(&self) -> u64 {
         self.contract_id
     }
 }
@@ -196,18 +196,23 @@ impl Holder {
 
     pub async fn from_holder_ref(
         mut holder_ref: HolderRef,
-        conn: &libsql::Connection,
-        height: i64,
+        runtime: &Runtime,
     ) -> Result<Self, Error> {
         match &holder_ref {
             HolderRef::XOnlyPubkey(s) => {
-                // Canonicalize to lowercase hex and ensure the signer row exists.
+                // Canonicalize to lowercase hex. Whether we *resolve*
+                // (lookup) or *resolve-or-create* the signer row is the
+                // runtime's call: inside a view frame, this is
+                // lookup-only and yields a deterministic Err on miss
+                // rather than silently inserting signer rows from a
+                // read-only API path.
                 let pk = XOnlyPublicKey::from_str(s)
                     .map_err(|e| Error::Validation(format!("invalid x-only-pubkey: {e}")))?;
-                let identity = get_or_create_identity(conn, &pk.to_string(), height)
+                let identity = runtime
+                    .get_or_create_identity(&pk.to_string())
                     .await
                     .map_err(|e| Error::Validation(format!("identity resolution failed: {e}")))?;
-                holder_ref = HolderRef::SignerId(identity.signer_id() as u64);
+                holder_ref = HolderRef::SignerId(identity.signer_id());
             }
             HolderRef::SignerId(_) => {}
             HolderRef::Utxo(out_point) => {
@@ -232,7 +237,7 @@ impl FileDescriptor {
         Self { file_metadata_row }
     }
 
-    pub fn try_from_raw(raw: RawFileDescriptor, height: i64) -> Result<Self, Error> {
+    pub fn try_from_raw(raw: RawFileDescriptor, height: u64) -> Result<Self, Error> {
         let root: [u8; 32] = raw
             .root
             .try_into()

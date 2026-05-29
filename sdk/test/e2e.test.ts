@@ -128,13 +128,12 @@ test("e2e: view balance() decodes none → null", async () => {
   expect(await c.balance(HolderRef.core())).toBeNull();
 });
 
-test("e2e: view balance() round-trips HolderRef.utxo with bigint vout", async () => {
+test("e2e: view balance() round-trips HolderRef.utxo", async () => {
   const { session, calls } = mockSession({
     balance: `some(${decimalWave("0")})`,
   });
   const c = session.bind(Contract, "token@0.0");
-  await c.balance(HolderRef.utxo({ txid: "deadbeef", vout: 7n }));
-  // u64 vout becomes an unquoted decimal in WAVE.
+  await c.balance(HolderRef.utxo({ txid: "deadbeef", vout: 7 }));
   expect(calls[0]).toBe('balance(utxo({txid: "deadbeef", vout: 7}))');
 });
 

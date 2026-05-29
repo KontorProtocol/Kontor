@@ -44,6 +44,7 @@ import type {
   Insts as WireInsts,
   OpStatus,
   Reveal,
+  SignerResponse,
 } from "./bindings.js";
 
 export type { WireInst, WireInsts, OpStatus };
@@ -116,6 +117,15 @@ export interface KontorTransport {
    * Not bundled, not signed, not broadcast — just an RPC.
    */
   view(contract: ContractAddress, wave: string): Promise<string>;
+
+  /**
+   * Look up a signer by `identifier` — numeric `signer_id`, 64-char
+   * x-only pubkey hex, or 192-char BLS pubkey hex. Returns the
+   * registry row (`signer_id`, `x_only_pubkey`, `bls_pubkey`,
+   * `next_nonce`). `null` when no row exists. Used by the aggregate
+   * flow to source the contributor's current `next_nonce`.
+   */
+  signer(identifier: string): Promise<SignerResponse | null>;
 
   /**
    * Static analysis on a wire-Insts bundle. Does not execute against

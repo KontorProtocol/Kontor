@@ -53,7 +53,7 @@ pub async fn get_results_paginated(
 
     if let Some(height) = query.height {
         where_clauses.push("r.height = :height".to_string());
-        params.push((":height".to_string(), Value::Integer(height)));
+        params.push((":height".to_string(), Value::try_from(height)?));
     }
 
     if let Some(height) = query.start_height {
@@ -65,12 +65,12 @@ pub async fn get_results_paginated(
                 ">="
             }
         ));
-        params.push((":start_height".to_string(), Value::Integer(height)));
+        params.push((":start_height".to_string(), Value::try_from(height)?));
     }
 
     if let Some(signer_id) = query.signer_id {
         where_clauses.push("r.signer_id = :signer_id".to_string());
-        params.push((":signer_id".to_string(), Value::Integer(signer_id)));
+        params.push((":signer_id".to_string(), Value::try_from(signer_id)?));
     }
 
     get_paginated(
@@ -134,10 +134,10 @@ pub async fn get_op_result(
 
 pub async fn get_contract_result(
     conn: &Connection,
-    tx_id: Option<i64>,
-    input_index: Option<i64>,
-    op_index: Option<i64>,
-    result_index: i64,
+    tx_id: Option<u64>,
+    input_index: Option<u32>,
+    op_index: Option<u32>,
+    result_index: u32,
 ) -> Result<Option<ContractResultRow>, Error> {
     let mut rows = conn
         .query(
@@ -163,7 +163,7 @@ pub async fn get_contract_result(
               AND result_index = :result_index
             "#,
             named_params! {
-                ":tx_id": tx_id,
+                ":tx_id": tx_id.map(Value::try_from).transpose()?,
                 ":input_index": input_index,
                 ":op_index": op_index,
                 ":result_index": result_index,
@@ -175,19 +175,26 @@ pub async fn get_contract_result(
 
 /// Highest `contract_results.id`, or `None` when the table is empty.
 /// Serves as the SDK's forward cursor for draining `/api/results`.
-pub async fn select_latest_result_id(conn: &Connection) -> Result<Option<i64>, Error> {
-    Ok(conn
+pub async fn select_latest_result_id(conn: &Connection) -> Result<Option<u64>, Error> {
+    // `SELECT MAX(...)` always yields a row (NULL on empty table). Read
+    // the column as `Option<u64>` so NULL surfaces as `None` and any
+    // decode error propagates — silently dropping it here would have the
+    // SDK re-drain the entire results stream.
+    let Some(row) = conn
         .query("SELECT MAX(id) FROM contract_results", ())
         .await?
         .next()
         .await?
-        .and_then(|row| row.get(0).ok()))
+    else {
+        return Ok(None);
+    };
+    Ok(row.get::<Option<u64>>(0)?)
 }
 
 pub async fn insert_contract_result(
     conn: &Connection,
     row: ContractResultRow,
-) -> Result<i64, Error> {
+) -> Result<u64, Error> {
     conn.execute(
         r#"
             INSERT INTO contract_results (
@@ -211,18 +218,18 @@ pub async fn insert_contract_result(
             row.size(),
             row.func,
             row.height,
-            row.tx_id,
+            row.tx_id.map(Value::try_from).transpose()?,
             row.input_index,
             row.op_index,
             row.result_index,
             row.gas,
             row.value,
             row.signer_id,
-            row.payer_signer_id,
+            row.payer_signer_id.map(Value::try_from).transpose()?,
             row.status.as_str(),
         ],
     )
     .await?;
 
-    Ok(conn.last_insert_rowid())
+    Ok(conn.last_insert_rowid() as u64)
 }

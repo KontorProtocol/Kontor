@@ -172,7 +172,11 @@ pub struct ExtraInput {
 #[ts(export, export_to = "../../../sdk/src/bindings.d.ts")]
 pub enum RevealOutput {
     /// Fixed-value output. Caller specifies the exact value.
-    Fixed { script_pubkey: String, value: u64 },
+    Fixed {
+        script_pubkey: String,
+        #[ts(type = "number")]
+        value: u64,
+    },
     /// Auto-computed change. Value = sum(inputs) − sum(other outputs) − fee.
     /// Must be the last output of the tx; sub-dust is silently dropped.
     Change { script_pubkey: String },
@@ -181,6 +185,7 @@ pub enum RevealOutput {
     /// sat amount.
     ChainedEnvelope {
         insts: Insts,
+        #[ts(type = "number")]
         value: u64,
         internal_key: String,
     },
@@ -347,8 +352,7 @@ pub enum Event {
 pub struct Input {
     #[ts(as = "String")]
     pub previous_output: bitcoin::OutPoint,
-    #[ts(type = "number")]
-    pub input_index: i64,
+    pub input_index: u32,
     #[ts(as = "String")]
     pub x_only_pubkey: XOnlyPublicKey,
     pub insts: Insts,
@@ -359,8 +363,7 @@ pub struct Input {
 pub struct Transaction {
     #[ts(type = "string")]
     pub txid: Txid,
-    #[ts(type = "number")]
-    pub index: i64,
+    pub index: u32,
     pub inputs: Vec<Input>,
     /// OP_RETURN directives, one entry per reveal input that carries one.
     pub op_return_data: Vec<OpReturnEntry>,
@@ -382,14 +385,14 @@ pub struct Block {
 #[ts(export, export_to = "../../../sdk/src/bindings.d.ts")]
 pub struct OutPoint {
     pub txid: String,
-    pub vout: u64,
+    pub vout: u32,
 }
 
 #[derive(Debug, Clone, Hash, Serialize, Deserialize, TS)]
 #[ts(export, export_to = "../../../sdk/src/bindings.d.ts")]
 pub enum HolderRef {
     XOnlyPubkey(String),
-    SignerId(u64),
+    SignerId(#[ts(type = "number")] u64),
     Core,
     Burner,
     Utxo(OutPoint),
@@ -407,7 +410,7 @@ impl core::fmt::Display for OutPoint {
 pub struct ContractAddress {
     pub name: String,
     pub height: u64,
-    pub tx_index: u64,
+    pub tx_index: u32,
 }
 
 contract_address!(ContractAddress);
@@ -417,10 +420,8 @@ contract_address!(ContractAddress);
 pub struct OpMetadata {
     #[ts(as = "String")]
     pub previous_output: bitcoin::OutPoint,
-    #[ts(type = "number")]
-    pub input_index: i64,
-    #[ts(type = "number")]
-    pub op_index: i64,
+    pub input_index: u32,
+    pub op_index: u32,
     #[ts(type = "number")]
     pub signer_id: u64,
     pub payment: Payment,
@@ -584,7 +585,7 @@ pub enum OpKind {
 #[ts(export, export_to = "../../../sdk/src/bindings.d.ts")]
 pub struct BlockRow {
     #[ts(type = "number")]
-    pub height: i64,
+    pub height: u64,
     #[ts(as = "String")]
     pub hash: BlockHash,
     #[builder(default = false)]
@@ -594,7 +595,7 @@ pub struct BlockRow {
 impl From<&Block> for BlockRow {
     fn from(b: &Block) -> Self {
         Self {
-            height: b.height as i64,
+            height: b.height,
             hash: b.hash,
             relevant: !b.transactions.is_empty(),
         }
@@ -606,32 +607,30 @@ impl From<&Block> for BlockRow {
 pub struct TransactionRow {
     #[ts(type = "number")]
     #[builder(default = 0)]
-    pub id: i64,
+    pub id: u64,
     pub txid: String,
     #[ts(type = "number")]
-    pub height: i64,
+    pub height: u64,
     #[ts(type = "number | null")]
-    pub confirmed_height: Option<i64>,
+    pub confirmed_height: Option<u64>,
+    pub tx_index: Option<u32>,
     #[ts(type = "number | null")]
-    pub tx_index: Option<i64>,
-    #[ts(type = "number | null")]
-    pub batch_height: Option<i64>,
+    pub batch_height: Option<u64>,
 }
 
 #[derive(Eq, PartialEq, Debug, Clone, Serialize, Deserialize, TS)]
 #[ts(export, export_to = "../../../sdk/src/bindings.d.ts")]
 pub struct ContractListRow {
     #[ts(type = "number")]
-    pub id: i64,
+    pub id: u64,
     pub name: String,
     #[ts(type = "number")]
-    pub height: i64,
+    pub height: u64,
+    pub tx_index: u32,
     #[ts(type = "number")]
-    pub tx_index: i64,
-    #[ts(type = "number")]
-    pub size: i64,
+    pub size: u64,
     #[ts(type = "number | null")]
-    pub signer_id: Option<i64>,
+    pub signer_id: Option<u64>,
 }
 
 #[serde_as]
@@ -641,13 +640,13 @@ pub struct PaginationMeta {
     #[ts(as = "String")]
     #[serde(skip_serializing_if = "Option::is_none")]
     #[serde_as(as = "Option<DisplayFromStr>")]
-    pub next_cursor: Option<i64>,
+    pub next_cursor: Option<u64>,
     #[ts(type = "number | null")]
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub next_offset: Option<i64>,
+    pub next_offset: Option<u64>,
     pub has_more: bool,
     #[ts(type = "number")]
-    pub total_count: i64,
+    pub total_count: u64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
@@ -681,7 +680,7 @@ pub enum ConsensusMode {
 #[ts(export, export_to = "../../../sdk/src/bindings.d.ts")]
 pub struct RecentBlock {
     #[ts(type = "number")]
-    pub height: i64,
+    pub height: u64,
     #[ts(as = "String")]
     pub hash: BlockHash,
 }
@@ -692,17 +691,16 @@ pub struct Info {
     pub version: String,
     pub target: String,
     pub network: String,
-    pub available: bool,
     pub consensus_mode: ConsensusMode,
     #[ts(type = "number")]
-    pub height: i64,
+    pub height: u64,
     pub checkpoint: Option<String>,
     #[ts(type = "number | null")]
-    pub consensus_height: Option<i64>,
+    pub consensus_height: Option<u64>,
     /// Highest `contract_results.id` — the SDK's forward cursor for
     /// draining `/api/results`. 0 when no results exist yet.
     #[ts(type = "number")]
-    pub last_result_id: i64,
+    pub last_result_id: u64,
     /// The last 10 indexed blocks, height-descending. The SDK compares
     /// these against its local block-hash cache for reorg detection.
     pub recent_blocks: Vec<RecentBlock>,
@@ -763,10 +761,8 @@ pub enum OpWithResult {
         error_message: Option<String>,
     },
     Rejected {
-        #[ts(type = "number")]
-        input_index: i64,
-        #[ts(type = "number")]
-        op_index: i64,
+        input_index: u32,
+        op_index: u32,
         error_message: Option<String>,
     },
 }
@@ -793,14 +789,14 @@ impl OpWithResult {
         }
     }
 
-    pub fn input_index(&self) -> i64 {
+    pub fn input_index(&self) -> u32 {
         match self {
             OpWithResult::Materialized { op, .. } => op.metadata.input_index,
             OpWithResult::Rejected { input_index, .. } => *input_index,
         }
     }
 
-    pub fn op_index(&self) -> i64 {
+    pub fn op_index(&self) -> u32 {
         match self {
             OpWithResult::Materialized { op, .. } => op.metadata.op_index,
             OpWithResult::Rejected { op_index, .. } => *op_index,
@@ -865,20 +861,16 @@ impl OpStatus {
 #[ts(export, export_to = "../../../sdk/src/bindings.d.ts")]
 pub struct ResultRow {
     #[ts(type = "number")]
-    pub id: i64,
+    pub id: u64,
     #[ts(type = "number")]
-    pub height: i64,
-    #[ts(type = "number | null")]
-    pub tx_index: Option<i64>,
-    #[ts(type = "number | null")]
-    pub input_index: Option<i64>,
-    #[ts(type = "number | null")]
-    pub op_index: Option<i64>,
-    #[ts(type = "number")]
-    pub result_index: i64,
+    pub height: u64,
+    pub tx_index: Option<u32>,
+    pub input_index: Option<u32>,
+    pub op_index: Option<u32>,
+    pub result_index: u32,
     pub func: String,
     #[ts(type = "number")]
-    pub gas: i64,
+    pub gas: u64,
     /// Outcome category for this op. `Ok` for successful calls (regardless
     /// of whether the contract returned `ok(...)` or just a value); the
     /// failure variants distinguish what went wrong.
@@ -887,12 +879,12 @@ pub struct ResultRow {
     pub contract: String,
     pub txid: Option<String>,
     #[ts(type = "number")]
-    pub signer_id: i64,
+    pub signer_id: u64,
     /// Who funded gas for this op. Equals `signer_id` for self-pay ops;
     /// for BLS-aggregate sponsored ops it's the publisher's signer_id.
     /// `null` for ops that don't go through user-side gas accounting.
     #[ts(type = "number | null")]
-    pub payer_signer_id: Option<i64>,
+    pub payer_signer_id: Option<u64>,
 }
 
 /// One OP_RETURN directive bound to the reveal input it applies to:
@@ -903,7 +895,6 @@ pub struct ResultRow {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[ts(export, export_to = "../../../sdk/src/bindings.d.ts")]
 pub struct OpReturnEntry {
-    #[ts(type = "number")]
     pub input_index: u32,
     pub recipient: SignerRef,
 }

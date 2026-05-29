@@ -228,7 +228,7 @@ async fn bls_user_registry_register_in_aggregate_sponsored_regtest() -> Result<(
     // registry.registered contract call), not the registrant.
     assert_eq!(
         res.result.payer_signer_id,
-        Some(publisher_id as i64),
+        Some(publisher_id),
         "sponsored RegisterBlsKey gas must be charged to the publisher"
     );
 

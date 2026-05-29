@@ -354,7 +354,7 @@ export class IncomingOffer {
             output: {
               Fixed: {
                 script_pubkey: hex.encode(priceScript),
-                value: priceAmount,
+                value: Number(priceAmount),
               },
             },
             commit_source: {

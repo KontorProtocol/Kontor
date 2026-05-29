@@ -14,6 +14,11 @@ wasm-wave = { workspace = true, features = ["std", "wit"] }
 wit-parser = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
+# Shared protocol crypto — same source the indexer compiles, so the
+# wasm-side BLS keygen / sign produces byte-identical output to the
+# verification path. The `portable` feature on `blst` (declared in
+# bls-crypto) is what lets this link to wasm32-unknown-unknown.
+bls-crypto = { path = "../bls-crypto" }
 
 [lib]
 crate-type = ["cdylib"]

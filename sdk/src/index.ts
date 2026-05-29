@@ -50,6 +50,7 @@ export type {
   SignPsbtOptions,
 } from "./account/index";
 export { LocalAccount } from "./account/local";
+export { BlsKey, blsDerivationPath } from "./bls";
 export type {
   Bip86Indices,
   FromHdKeyOptions,

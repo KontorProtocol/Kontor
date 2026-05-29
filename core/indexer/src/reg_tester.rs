@@ -194,12 +194,12 @@ async fn run_kontor(
     // parallel; under heavy CI load, the standard ~25s budget isn't
     // always enough for DB init + mempool sync + initial fee
     // projection + consensus startup to complete on each one.
+    // `client.index()` itself returns an error when the indexer 503s
+    // (`require_available` middleware), so a successful response is
+    // the availability signal — no separate flag to inspect.
     retry_extended(async || {
-        let i = client.index().await?;
-        if !i.available {
-            bail!("Not available");
-        }
-        Ok(())
+        let _ = client.index().await?;
+        Ok::<_, anyhow::Error>(())
     })
     .await?;
     Ok((process, client))
@@ -1557,7 +1557,7 @@ impl RegTesterCluster {
     /// Poll all running nodes until they all reach at least the expected height.
     pub async fn poll_all_nodes_height(
         &self,
-        expected_height: i64,
+        expected_height: u64,
         timeout_secs: u64,
     ) -> Result<()> {
         poll_nodes!(
@@ -1571,7 +1571,7 @@ impl RegTesterCluster {
     /// Poll all running nodes until they all reach at least the expected consensus height.
     pub async fn poll_all_nodes_consensus_height(
         &self,
-        expected: i64,
+        expected: u64,
         timeout_secs: u64,
     ) -> Result<()> {
         poll_nodes!(

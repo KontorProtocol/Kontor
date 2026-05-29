@@ -5,7 +5,7 @@ use crate::database::types::CheckpointRow;
 
 pub async fn get_checkpoint_by_height(
     conn: &Connection,
-    height: i64,
+    height: u64,
 ) -> Result<Option<CheckpointRow>, Error> {
     let mut row = conn
         .query(

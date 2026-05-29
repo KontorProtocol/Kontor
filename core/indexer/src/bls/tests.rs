@@ -39,8 +39,7 @@ fn example_1_registration_proof_from_fixed_seed() {
     // Regtest/testnet paths (coin_type=1) — Example 1's network.
     let keypair = crate::reg_tester::derive_taproot_keypair_from_seed(&seed, "m/86'/1'/0'/0/0")
         .expect("taproot derivation");
-    let bls_sk = derivation::derive_bls_secret_key_eip2333(&seed, &[12381, 1, 0, 0])
-        .expect("bls derivation");
+    let bls_sk = derive_bls_secret_key_eip2333(&seed, &[12381, 1, 0, 0]).expect("bls derivation");
 
     let proof = RegistrationProof::new(&keypair, &bls_sk.to_bytes()).expect("registration proof");
     proof.verify().expect("proof verifies");
@@ -916,7 +915,7 @@ mod proptest_bulk {
             gas_limit in any::<u64>(),
             name in any::<String>(),
             height in any::<u64>(),
-            tx_index in any::<u64>(),
+            tx_index in any::<u32>(),
             expr in any::<String>(),
         ) {
             let op = call_op(gas_limit, ContractAddress { name, height, tx_index }, expr);

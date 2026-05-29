@@ -19,39 +19,34 @@
  *      buyer.
  *   5. `offer + revoke` — seller's escape hatch: detach the asset
  *      back to themselves, balance round-trips minus a sliver of gas.
+ *   6. `registerBls` — mint a fresh account, JS-generate a BlsKey,
+ *      submit `session.registerBls(blsKey)`, then query the indexer's
+ *      `/signers/{xonly}` endpoint and assert it carries the bls_pubkey
+ *      we just registered. Exercises the bls-crypto wasm bridge end-
+ *      to-end: schnorr/BLS proof bytes produced in JS verify on chain.
+ *   7. `combineAggregate` — two contributors each sign a transfer
+ *      fragment with their own BLS key; an aggregator combines the
+ *      per-op signatures into one BLS aggregate, broadcasts, and both
+ *      recipients land their credits. Proves the contributor → fragment
+ *      → aggregator → combined Insts → on-chain verify pipeline.
  *
  * Runs via `npm run test:regtest` / `npm run test:regtest:browser`;
  * pure HTTP client, so it works in Node and the browser alike.
  */
-import { readFileSync } from "node:fs";
-import path from "node:path";
-import { fileURLToPath } from "node:url";
-
 import { test, expect, inject } from "vitest";
 import {
+  BlsKey,
   Decimal,
   KontorSession,
   LocalAccount,
   Result,
   http,
+  type Utxo,
 } from "@kontor/sdk";
+import { hex, base64 } from "@scure/base";
 import { connectRegtest } from "@kontor/sdk/regtest";
 import { Contract as Token } from "./__generated__/token.js";
 import "./regtest-context.js";
-
-const here = path.dirname(fileURLToPath(import.meta.url));
-
-/** Brotli-compressed token wasm — what the indexer's `Storage`
- *  expects on `insert_contract` (it decompresses via
- *  `component_bytes`). We use the native token binary (committed at
- *  `native-contracts/binaries/`) rather than a test-contract wasm
- *  built ad-hoc, so CI doesn't have to build `test-contracts/`
- *  before running the SDK regtest. Publishing this wasm creates a
- *  fresh, independent token instance at a runtime-assigned address —
- *  different storage from the genesis `token@0.0`. */
-const TOKEN_WASM_BR = readFileSync(
-  path.join(here, "..", "..", "native-contracts", "binaries", "token.wasm.br"),
-);
 
 /** How many whole tokens `b` is below `a` — used by the revoke phase
  *  to assert the balance round-tripped to within gas of the original. */
@@ -60,8 +55,10 @@ function deficit(a: Decimal, b: Decimal): number {
 }
 
 test("SDK capstone: publish, transfer, bulk, marketplace", async () => {
-  const regtest = connectRegtest(inject("regtest"));
+  const injected = inject("regtest");
+  const regtest = connectRegtest(injected);
   const { chain } = regtest;
+  const tokenWasmBr = base64.decode(injected.tokenWasmBrBase64);
 
   // ─── Phase 1 — publish ──────────────────────────────────────────
   {
@@ -81,7 +78,7 @@ test("SDK capstone: publish, transfer, bulk, marketplace", async () => {
       // its own storage; it doesn't collide with the genesis
       // `token@0.0`.
       const submitted = await session
-        .publish("republished-token", new Uint8Array(TOKEN_WASM_BR))
+        .publish("republished-token", tokenWasmBr)
         .submit();
       await regtest.mine();
       const result = await submitted.wait();
@@ -286,6 +283,158 @@ test("SDK capstone: publish, transfer, bulk, marketplace", async () => {
       expect(lost).toBeLessThan(1); // the 2 tokens returned, not stranded
     } finally {
       session.close();
+    }
+  }
+
+  // ─── Phase 6 — BLS validator registration ───────────────────────
+  {
+    // Mint a fresh account funded from accounts[6]'s slot. The
+    // pre-created pool entries already have a BLS pubkey registered
+    // (the regtest binary registers them deterministically via the
+    // Rust EIP-2333 path), so re-registering them with a freshly
+    // JS-generated key would fail "already registered". A fresh
+    // account has no BLS row yet, so this exercises the full path.
+    const sourceAccount = regtest.accounts[6]!.account;
+    const { account, fundingUtxo } = await regtest.createAccount({
+      sats: 200_000n,
+      sourceUtxo: regtest.accounts[6]!.fundingUtxo,
+      sourceAccount,
+    });
+    const session = new KontorSession({
+      chain,
+      account,
+      transport: ({ chain, account }) =>
+        http({ chain, account, utxos: [fundingUtxo] }),
+    });
+    try {
+      await session.ready();
+
+      // Issuance is system-paid, so the fresh account picks up tokens
+      // without needing any prior balance. RegisterBlsKey is NOT
+      // system-paid — it goes through `registry.registered()` and
+      // charges gas — so the account needs a balance before the
+      // registration call.
+      const issued = await session.issuance().submit();
+      expect((await issued.wait()).status).toBe("Ok");
+
+      const blsKey = BlsKey.generate();
+      await session.registerBls(blsKey);
+
+      // Read back the signer entry and assert the chain stored exactly
+      // the bls_pubkey we just produced in JS.
+      const res = await fetch(
+        `${regtest.apiUrl}/signers/${account.xOnlyPubKey}`,
+      );
+      expect(res.ok).toBe(true);
+      const body = (await res.json()) as {
+        result: { bls_pubkey: number[] | null };
+      };
+      expect(body.result.bls_pubkey).not.toBeNull();
+      const storedHex = hex.encode(new Uint8Array(body.result.bls_pubkey!));
+      expect(storedHex).toBe(hex.encode(blsKey.pubkey));
+    } finally {
+      session.close();
+    }
+  }
+
+  // ─── Phase 7 — BLS aggregate calls ──────────────────────────────
+  {
+    // Chain-fund three fresh accounts (two contributors + an
+    // aggregator) from accounts[7]'s unspent slot. After each
+    // `createAccount`, the source's change output (same txid, vout 1)
+    // becomes the source for the next call.
+    let chainSource = regtest.accounts[7]!.fundingUtxo;
+    const chainSourceAccount = regtest.accounts[7]!.account;
+    const fund = async (sats: bigint): Promise<{ account: LocalAccount; fundingUtxo: Utxo }> => {
+      const r = await regtest.createAccount({
+        sats,
+        sourceUtxo: chainSource,
+        sourceAccount: chainSourceAccount,
+      });
+      chainSource = {
+        txid: r.fundingUtxo.txid,
+        vout: 1,
+        value: chainSource.value - sats - 500n,
+        scriptPubKey: chainSource.scriptPubKey,
+      };
+      return r;
+    };
+    const contribA = await fund(200_000n);
+    const contribB = await fund(200_000n);
+    const aggregator = await fund(300_000n);
+
+    /** Set a fresh account up as a contributor: open a session, mint
+     *  tokens via Issuance (system-paid), and register a JS-generated
+     *  BlsKey so the indexer can verify aggregate signatures. */
+    const setupContributor = async (a: { account: LocalAccount; fundingUtxo: Utxo }) => {
+      const session = new KontorSession({
+        chain,
+        account: a.account,
+        transport: ({ chain, account }) =>
+          http({ chain, account, utxos: [a.fundingUtxo] }),
+      });
+      await session.ready();
+      await (await session.issuance().submit()).wait();
+      const blsKey = BlsKey.generate();
+      await session.registerBls(blsKey);
+      return { session, blsKey };
+    };
+    const cA = await setupContributor(contribA);
+    const cB = await setupContributor(contribB);
+
+    const aggregatorSession = new KontorSession({
+      chain,
+      account: aggregator.account,
+      transport: ({ chain, account }) =>
+        http({ chain, account, utxos: [aggregator.fundingUtxo] }),
+    });
+    try {
+      await aggregatorSession.ready();
+
+      const recipientA = LocalAccount.fromPrivateKey({
+        privateKey: "77".repeat(32),
+        chain,
+      });
+      const recipientB = LocalAccount.fromPrivateKey({
+        privateKey: "88".repeat(32),
+        chain,
+      });
+
+      // Each contributor signs a transfer fragment with their own
+      // BlsKey. The Inst is built against their session (= their
+      // identity); only the per-op BLS signature changes between A
+      // and B.
+      const tokenA = cA.session.bind(Token, "token@0.0");
+      const tokenB = cB.session.bind(Token, "token@0.0");
+
+      const fragmentA = await tokenA
+        .transfer(recipientA.holderRef, Decimal.from("1"))
+        .signForAggregate(cA.blsKey);
+      const fragmentB = await tokenB
+        .transfer(recipientB.holderRef, Decimal.from("2"))
+        .signForAggregate(cB.blsKey);
+
+      expect(fragmentA.verify()).toBe(true);
+      expect(fragmentB.verify()).toBe(true);
+
+      // Aggregator combines the per-op BLS signatures into one
+      // aggregate signature and broadcasts the bundle. Aggregator pays
+      // the Bitcoin fee; each contributor's op pays its own token gas.
+      const bundle = aggregatorSession.combineAggregate([fragmentA, fragmentB]);
+      const submitted = await bundle.submit();
+      const results = await submitted.wait();
+      expect(results.every((r) => r.status === "Ok")).toBe(true);
+
+      // Both transfers landed: recipients see their credits, viewed
+      // through the aggregator's session (any session works — view
+      // queries are stateless).
+      const aggToken = aggregatorSession.bind(Token, "token@0.0");
+      expect((await aggToken.balance(recipientA.holderRef))?.toString()).toBe("1");
+      expect((await aggToken.balance(recipientB.holderRef))?.toString()).toBe("2");
+    } finally {
+      cA.session.close();
+      cB.session.close();
+      aggregatorSession.close();
     }
   }
 });

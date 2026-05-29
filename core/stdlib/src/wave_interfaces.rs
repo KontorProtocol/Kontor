@@ -10,6 +10,18 @@ impl WaveType for u8 {
     }
 }
 
+impl WaveType for u32 {
+    fn wave_type() -> wasm_wave::value::Type {
+        wasm_wave::value::Type::U32
+    }
+}
+
+impl WaveType for i32 {
+    fn wave_type() -> wasm_wave::value::Type {
+        wasm_wave::value::Type::S32
+    }
+}
+
 impl WaveType for u64 {
     fn wave_type() -> wasm_wave::value::Type {
         wasm_wave::value::Type::U64
@@ -75,6 +87,18 @@ pub trait FromWaveValue {
 impl FromWaveValue for u8 {
     fn from_wave_value(value: wasm_wave::value::Value) -> Self {
         wasm_wave::wasm::WasmValue::unwrap_u8(&value)
+    }
+}
+
+impl FromWaveValue for u32 {
+    fn from_wave_value(value: wasm_wave::value::Value) -> Self {
+        wasm_wave::wasm::WasmValue::unwrap_u32(&value)
+    }
+}
+
+impl FromWaveValue for i32 {
+    fn from_wave_value(value: wasm_wave::value::Value) -> Self {
+        wasm_wave::wasm::WasmValue::unwrap_s32(&value)
     }
 }
 

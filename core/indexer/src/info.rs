@@ -31,21 +31,30 @@ pub const RECENT_BLOCKS_WINDOW: i64 = 10;
 
 /// Everything in `Info` that changes as the indexer advances. Published
 /// by [`run_info_publisher`], read by the `GET /api/` handler.
+///
+/// `height` is `Option<u64>` rather than `u64` because the indexer can be
+/// fully running yet still have nothing to report (fresh DB, waiting for
+/// the first block). The wire `Info.height: u64` is only built from the
+/// `Some` variant; the `None` case turns into a 503 in the handler. This
+/// keeps "no tip yet" out of the `u64` range, which previously had to
+/// be encoded as a sentinel (`starting_block_height - 1`) and tripped a
+/// silent regression when that math saturated at 0 instead of going
+/// negative after the i64→u64 cleanup.
 #[derive(Debug, Clone, Default)]
 pub struct InfoCore {
-    pub height: i64,
+    pub height: Option<u64>,
     pub checkpoint: Option<String>,
-    pub consensus_height: Option<i64>,
-    pub last_result_id: i64,
+    pub consensus_height: Option<u64>,
+    pub last_result_id: u64,
     pub recent_blocks: Vec<RecentBlock>,
     /// Hash of `last_result_id` + `recent_blocks` — the long-poll
     /// `?since=` token. Changes exactly when a new snapshot is published.
     pub signature: String,
 }
 
-/// Recompute `InfoCore` from the database. `fallback_height` is used as
-/// `height` only when no blocks are indexed yet (startup seed).
-pub async fn compute_info_core(conn: &Connection, fallback_height: i64) -> Result<InfoCore> {
+/// Recompute `InfoCore` from the database. `height` is `None` until the
+/// first block is indexed; see [`InfoCore`] for the rationale.
+pub async fn compute_info_core(conn: &Connection) -> Result<InfoCore> {
     let checkpoint = get_checkpoint_latest(conn).await?.map(|c| c.hash);
     let consensus_height = select_latest_consensus_height(conn).await?;
     let recent_blocks: Vec<RecentBlock> = select_recent_blocks(conn, RECENT_BLOCKS_WINDOW)
@@ -57,10 +66,7 @@ pub async fn compute_info_core(conn: &Connection, fallback_height: i64) -> Resul
         })
         .collect();
     // `recent_blocks` is height-descending, so its head is the tip.
-    let height = recent_blocks
-        .first()
-        .map(|b| b.height)
-        .unwrap_or(fallback_height);
+    let height = recent_blocks.first().map(|b| b.height);
     let last_result_id = select_latest_result_id(conn).await?.unwrap_or(0);
     let signature = info_signature(last_result_id, &recent_blocks);
     Ok(InfoCore {
@@ -76,7 +82,7 @@ pub async fn compute_info_core(conn: &Connection, fallback_height: i64) -> Resul
 /// Opaque token over the long-poll-relevant state. Deliberately excludes
 /// fields (`available` / `consensus_mode` / statics) that don't move with
 /// the chain.
-fn info_signature(last_result_id: i64, recent_blocks: &[RecentBlock]) -> String {
+fn info_signature(last_result_id: u64, recent_blocks: &[RecentBlock]) -> String {
     let mut buf = format!("r{last_result_id}");
     for b in recent_blocks {
         buf.push_str(&format!(";{}:{}", b.height, b.hash));
@@ -93,10 +99,8 @@ pub fn run_info_publisher(
     cancel: CancellationToken,
     mut events: broadcast::Receiver<Event>,
     reader: database::Reader,
-    starting_block_height: u64,
     info_tx: watch::Sender<InfoCore>,
 ) -> JoinHandle<()> {
-    let fallback_height = starting_block_height as i64 - 1;
     tokio::spawn(async move {
         loop {
             tokio::select! {
@@ -106,7 +110,7 @@ pub fn run_info_publisher(
                         // is a snapshot, so one recompute reflects them all.
                         while events.try_recv().is_ok() {}
                         match reader.connection().await {
-                            Ok(conn) => match compute_info_core(&conn, fallback_height).await {
+                            Ok(conn) => match compute_info_core(&conn).await {
                                 Ok(core) => {
                                     let _ = info_tx.send(core);
                                 }

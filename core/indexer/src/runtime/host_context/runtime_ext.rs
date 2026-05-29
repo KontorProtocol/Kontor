@@ -296,7 +296,7 @@ impl Runtime {
         let signer = res.signer.clone();
         // Core→Proc promotion: system context, no payer override applies.
         // Payer = signer-as-holder (the Core signer pays itself).
-        let payer = Holder::for_signer_id(signer.signer_id().unwrap_or(0) as u64);
+        let payer = Holder::for_signer_id(signer.signer_id().unwrap_or(0));
         Ok(table.push(ProcContext {
             contract_id,
             signer: Signer::Core(Box::new(signer)),
@@ -332,7 +332,7 @@ impl Runtime {
         let signer = res.signer.clone();
         // Same as `_core_proc_context` but the signer is the inner signer,
         // not wrapped in `Signer::Core`. Payer = signer-as-holder.
-        let payer = Holder::for_signer_id(signer.signer_id().unwrap_or(0) as u64);
+        let payer = Holder::for_signer_id(signer.signer_id().unwrap_or(0));
         Ok(table.push(ProcContext {
             contract_id,
             signer,
@@ -358,9 +358,7 @@ impl Runtime {
         };
         let holder_ref = Self::_signer_to_holder_ref(&signer);
         tracing::debug!("_signer_as_holder: signer={signer:?} holder_ref={holder_ref:?}");
-        let conn = self.get_storage_conn();
-        let height = self.storage.height;
-        let holder = Holder::from_holder_ref(holder_ref, &conn, height)
+        let holder = Holder::from_holder_ref(holder_ref, self)
             .await
             .map_err(|e| {
                 tracing::error!("holder resolution failed for signer {signer:?}: {e:?}");

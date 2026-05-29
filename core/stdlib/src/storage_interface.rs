@@ -52,6 +52,22 @@ impl<T: ReadStorage + ?Sized> Retrieve<T> for i64 {
     }
 }
 
+// u32/i32 are stored through the underlying u64/s64 slots — the WIT
+// proc-storage interface only carries 64-bit getters/setters, but every
+// in-range value round-trips. Out-of-range bits would indicate storage
+// corruption; the truncating `as` cast keeps the read path infallible.
+impl<T: ReadStorage + ?Sized> Retrieve<T> for u32 {
+    fn __get(ctx: &alloc::rc::Rc<T>, path: DotPathBuf) -> Option<Self> {
+        ctx.__get_u64(&path).map(|v| v as u32)
+    }
+}
+
+impl<T: ReadStorage + ?Sized> Retrieve<T> for i32 {
+    fn __get(ctx: &alloc::rc::Rc<T>, path: DotPathBuf) -> Option<Self> {
+        ctx.__get_s64(&path).map(|v| v as i32)
+    }
+}
+
 impl<T: ReadStorage + ?Sized> Retrieve<T> for String {
     fn __get(ctx: &alloc::rc::Rc<T>, path: DotPathBuf) -> Option<Self> {
         ctx.__get_str(&path)
@@ -105,6 +121,18 @@ impl<T: WriteStorage + ?Sized> Store<T> for u64 {
 impl<T: WriteStorage + ?Sized> Store<T> for i64 {
     fn __set(ctx: &alloc::rc::Rc<T>, path: DotPathBuf, value: i64) {
         ctx.__set_s64(&path, value);
+    }
+}
+
+impl<T: WriteStorage + ?Sized> Store<T> for u32 {
+    fn __set(ctx: &alloc::rc::Rc<T>, path: DotPathBuf, value: u32) {
+        ctx.__set_u64(&path, value as u64);
+    }
+}
+
+impl<T: WriteStorage + ?Sized> Store<T> for i32 {
+    fn __set(ctx: &alloc::rc::Rc<T>, path: DotPathBuf, value: i32) {
+        ctx.__set_s64(&path, value as i64);
     }
 }
 

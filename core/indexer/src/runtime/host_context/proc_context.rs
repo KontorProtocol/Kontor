@@ -93,7 +93,7 @@ impl built_in::context::HostProcContextWithStore for Runtime {
         _self: Resource<ProcContext>,
     ) -> Result<u64> {
         let runtime = accessor.with(|mut access| access.get().clone());
-        Ok(runtime.storage.height as u64)
+        Ok(runtime.storage.height)
     }
 
     async fn contract<T>(

@@ -34,7 +34,7 @@ impl Identity {
         Ok(rows.next().await?.map(|row| row.get(0)).transpose()?)
     }
 
-    pub async fn next_nonce(&self, conn: &Connection) -> Result<i64, Error> {
+    pub async fn next_nonce(&self, conn: &Connection) -> Result<u64, Error> {
         let mut rows = conn
             .query(
                 "SELECT next_nonce FROM nonces WHERE signer_id = ? ORDER BY height DESC LIMIT 1",
@@ -52,9 +52,9 @@ impl Identity {
     pub async fn advance_nonce(
         &self,
         conn: &Connection,
-        caller_nonce: i64,
-        height: i64,
-    ) -> Result<i64, Error> {
+        caller_nonce: u64,
+        height: u64,
+    ) -> Result<u64, Error> {
         let mut rows = conn
             .query(
                 "SELECT next_nonce FROM nonces WHERE signer_id = ? ORDER BY height DESC LIMIT 1",
@@ -62,7 +62,7 @@ impl Identity {
             )
             .await?;
 
-        let stored_nonce: i64 = rows
+        let stored_nonce: u64 = rows
             .next()
             .await?
             .ok_or_else(|| {
@@ -70,7 +70,7 @@ impl Identity {
             })?
             .get(0)?;
 
-        const MAX_NONCE_GAP: i64 = 10_000;
+        const MAX_NONCE_GAP: u64 = 10_000;
 
         if caller_nonce < stored_nonce {
             return Err(Error::InvalidData(format!(
@@ -102,7 +102,7 @@ impl Identity {
         &self,
         conn: &Connection,
         bls_pubkey: &[u8],
-        height: i64,
+        height: u64,
     ) -> Result<(), Error> {
         conn.execute(
             "INSERT OR REPLACE INTO bls_keys (signer_id, bls_pubkey, height) VALUES (?, ?, ?)",
@@ -113,25 +113,47 @@ impl Identity {
     }
 }
 
-pub async fn get_or_create_identity(
+/// Look up the signer identity for `x_only_pubkey`. Read-only — no
+/// writes, no side effects. Returns `None` if no row exists yet
+/// (typical when a view-context query references a pubkey nobody has
+/// transacted as).
+///
+/// Use this from any path that must not mutate, especially anything
+/// dispatched under a `ViewContext` frame. Use [`ensure_identity`]
+/// when the caller is allowed to create the row on miss (proc-context
+/// execution, reactor / aggregate-verify paths).
+pub async fn get_identity(
     conn: &Connection,
     x_only_pubkey: &str,
-    height: i64,
-) -> Result<Identity, Error> {
+) -> Result<Option<Identity>, Error> {
     let mut rows = conn
         .query(
             "SELECT signer_id FROM x_only_pubkeys WHERE x_only_pubkey = ?",
             params![x_only_pubkey],
         )
         .await?;
+    match rows.next().await? {
+        Some(row) => Ok(Some(Identity::new(row.get::<i64>(0)? as u64))),
+        None => Ok(None),
+    }
+}
 
-    if let Some(row) = rows.next().await? {
-        return Ok(Identity::new(row.get(0)?));
+/// Look up the signer identity for `x_only_pubkey`, creating the
+/// signers / x_only_pubkeys / nonces rows on miss. Mutating — call
+/// only from contexts where state growth is permitted (proc-context
+/// contract calls, reactor processing).
+pub async fn ensure_identity(
+    conn: &Connection,
+    x_only_pubkey: &str,
+    height: u64,
+) -> Result<Identity, Error> {
+    if let Some(existing) = get_identity(conn, x_only_pubkey).await? {
+        return Ok(existing);
     }
 
     conn.execute("INSERT INTO signers (height) VALUES (?)", params![height])
         .await?;
-    let signer_id = conn.last_insert_rowid();
+    let signer_id = conn.last_insert_rowid() as u64;
 
     conn.execute(
         "INSERT INTO x_only_pubkeys (signer_id, x_only_pubkey, height) VALUES (?, ?, ?)",
@@ -153,13 +175,13 @@ pub async fn get_or_create_identity(
 /// `signers` at genesis, before any other signer. Idempotent — returns the
 /// existing id on repeat calls. Asserts the produced id matches the constant
 /// so downstream code can rely on `CORE_SIGNER_ID` as compile-time-known.
-pub async fn create_core_signer(conn: &Connection) -> Result<i64, Error> {
+pub async fn create_core_signer(conn: &Connection) -> Result<u64, Error> {
     let existing = conn
         .query("SELECT id FROM signers ORDER BY id ASC LIMIT 1", ())
         .await?
         .next()
         .await?
-        .map(|r| r.get::<i64>(0))
+        .map(|r| r.get::<i64>(0).map(|v| v as u64))
         .transpose()?;
     if let Some(id) = existing {
         if id != CORE_SIGNER_ID {
@@ -171,7 +193,7 @@ pub async fn create_core_signer(conn: &Connection) -> Result<i64, Error> {
     }
     conn.execute("INSERT INTO signers (height) VALUES (0)", ())
         .await?;
-    let id = conn.last_insert_rowid();
+    let id = conn.last_insert_rowid() as u64;
     if id != CORE_SIGNER_ID {
         return Err(Error::InvalidData(format!(
             "newly-created Core signer id ({id}) does not match CORE_SIGNER_ID ({CORE_SIGNER_ID})"
@@ -182,17 +204,17 @@ pub async fn create_core_signer(conn: &Connection) -> Result<i64, Error> {
 
 /// Create a signer row for a contract. No x_only_pubkey — contracts don't
 /// have bitcoin keys. The signer_id is assigned by auto-increment.
-pub async fn create_contract_signer(conn: &Connection, height: i64) -> Result<i64, Error> {
+pub async fn create_contract_signer(conn: &Connection, height: u64) -> Result<u64, Error> {
     conn.execute("INSERT INTO signers (height) VALUES (?)", params![height])
         .await?;
-    Ok(conn.last_insert_rowid())
+    Ok(conn.last_insert_rowid() as u64)
 }
 
 /// Look up the signer_id associated with a contract.
 pub async fn get_contract_signer_id(
     conn: &Connection,
-    contract_id: i64,
-) -> Result<Option<i64>, Error> {
+    contract_id: u64,
+) -> Result<Option<u64>, Error> {
     let mut rows = conn
         .query(
             "SELECT signer_id FROM contracts WHERE id = ?",
@@ -229,7 +251,7 @@ pub async fn get_signer_entry_by_x_only_pubkey(
 
 pub async fn get_signer_entry_by_id(
     conn: &Connection,
-    signer_id: i64,
+    signer_id: u64,
 ) -> Result<Option<SignerEntry>, Error> {
     let sql = format!("{SIGNER_ENTRY_SELECT} WHERE s.id = ?");
     let mut rows = conn.query(&sql, params![signer_id]).await?;
@@ -249,8 +271,8 @@ pub async fn get_signer_entry_by_bls_pubkey(
             params![bls_pubkey.to_vec()],
         )
         .await?;
-    let signer_id: i64 = match rows.next().await? {
-        Some(row) => row.get(0)?,
+    let signer_id: u64 = match rows.next().await? {
+        Some(row) => row.get::<i64>(0)? as u64,
         None => return Ok(None),
     };
     get_signer_entry_by_id(conn, signer_id).await

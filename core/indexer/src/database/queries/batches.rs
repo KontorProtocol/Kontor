@@ -5,21 +5,27 @@ use crate::database::types::BatchQueryResult;
 
 pub async fn insert_batch(
     conn: &Connection,
-    consensus_height: i64,
-    anchor_height: i64,
+    consensus_height: u64,
+    anchor_height: u64,
     anchor_hash: &str,
     certificate: &[u8],
     is_block: bool,
 ) -> Result<(), Error> {
     conn.execute(
         "INSERT OR IGNORE INTO batches (consensus_height, anchor_height, anchor_hash, certificate, is_block) VALUES (?, ?, ?, ?, ?)",
-        params![consensus_height, anchor_height, anchor_hash, certificate, is_block as i64],
+        params![
+            consensus_height,
+            anchor_height,
+            anchor_hash,
+            certificate,
+            is_block as i64,
+        ],
     )
     .await?;
     Ok(())
 }
 
-pub async fn delete_batches_above_anchor(conn: &Connection, max_anchor: i64) -> Result<u64, Error> {
+pub async fn delete_batches_above_anchor(conn: &Connection, max_anchor: u64) -> Result<u64, Error> {
     let rows = conn
         .execute(
             "DELETE FROM batches WHERE anchor_height > ?",
@@ -30,18 +36,26 @@ pub async fn delete_batches_above_anchor(conn: &Connection, max_anchor: i64) -> 
     Ok(rows)
 }
 
-pub async fn select_latest_consensus_height(conn: &Connection) -> Result<Option<i64>, Error> {
-    Ok(conn
+pub async fn select_latest_consensus_height(conn: &Connection) -> Result<Option<u64>, Error> {
+    // `SELECT MAX(...)` always yields a row (NULL on empty table). Read the
+    // column directly as `Option<u64>` so NULL surfaces as `None` and any
+    // decode error propagates instead of being silently swallowed — a lost
+    // error here would restart consensus from height 1 and discard all
+    // prior batch history. Matches the pattern in `select_min_batch_height`.
+    let Some(row) = conn
         .query("SELECT MAX(consensus_height) FROM batches", ())
         .await?
         .next()
         .await?
-        .and_then(|row| row.get(0).ok()))
+    else {
+        return Ok(None);
+    };
+    Ok(row.get::<Option<u64>>(0)?)
 }
 
 pub async fn select_batch(
     conn: &Connection,
-    consensus_height: i64,
+    consensus_height: u64,
 ) -> Result<Option<BatchQueryResult>, Error> {
     let results = query_batches(
         conn,
@@ -51,7 +65,7 @@ pub async fn select_batch(
     Ok(results.into_iter().next())
 }
 
-pub async fn select_min_batch_height(conn: &Connection) -> Result<Option<i64>, Error> {
+pub async fn select_min_batch_height(conn: &Connection) -> Result<Option<u64>, Error> {
     let mut rows = conn
         .query("SELECT MIN(consensus_height) FROM batches", params![])
         .await?;
@@ -60,20 +74,20 @@ pub async fn select_min_batch_height(conn: &Connection) -> Result<Option<i64>, E
         return Ok(None);
     };
 
-    Ok(row.get::<Option<i64>>(0)?)
+    Ok(row.get::<Option<u64>>(0)?)
 }
 
 pub async fn select_batches_from_anchor(
     conn: &Connection,
-    from_anchor: i64,
+    from_anchor: u64,
 ) -> Result<Vec<BatchQueryResult>, Error> {
     query_batches(conn, &format!("WHERE b.anchor_height >= {from_anchor}")).await
 }
 
 pub async fn select_batches_in_range(
     conn: &Connection,
-    start: i64,
-    end: i64,
+    start: u64,
+    end: u64,
 ) -> Result<Vec<BatchQueryResult>, Error> {
     query_batches(
         conn,
@@ -98,7 +112,7 @@ async fn query_batches(
 
     let mut results: Vec<BatchQueryResult> = Vec::new();
     while let Some(row) = rows.next().await? {
-        let consensus_height: i64 = row.get(0)?;
+        let consensus_height: u64 = row.get(0)?;
         let txid: Option<String> = row.get(5)?;
 
         if results
@@ -126,7 +140,7 @@ async fn query_batches(
 pub async fn insert_unconfirmed_batch_tx(
     conn: &Connection,
     txid: &str,
-    batch_height: i64,
+    batch_height: u64,
     raw_tx: &[u8],
 ) -> Result<(), Error> {
     conn.execute(
@@ -148,7 +162,7 @@ pub async fn delete_unconfirmed_batch_tx(conn: &Connection, txid: &str) -> Resul
 
 pub async fn select_unconfirmed_batch_txs(
     conn: &Connection,
-    batch_height: i64,
+    batch_height: u64,
 ) -> Result<Vec<Vec<u8>>, Error> {
     let mut rows = conn
         .query(

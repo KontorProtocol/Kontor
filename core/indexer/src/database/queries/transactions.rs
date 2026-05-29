@@ -7,20 +7,26 @@ use super::contracts::get_contract_id_from_address;
 use super::pagination::{PageOptions, get_paginated};
 use crate::database::types::TransactionQuery;
 
-pub async fn insert_transaction(conn: &Connection, row: TransactionRow) -> Result<i64, Error> {
+pub async fn insert_transaction(conn: &Connection, row: TransactionRow) -> Result<u64, Error> {
     conn.execute(
         "INSERT INTO transactions (height, txid, confirmed_height, tx_index, batch_height) VALUES (?, ?, ?, ?, ?)",
-        params![row.height, row.txid, row.confirmed_height, row.tx_index, row.batch_height],
+        params![
+            row.height,
+            row.txid,
+            row.confirmed_height.map(Value::try_from).transpose()?,
+            row.tx_index,
+            row.batch_height.map(Value::try_from).transpose()?,
+        ],
     )
     .await?;
-    Ok(conn.last_insert_rowid())
+    Ok(conn.last_insert_rowid() as u64)
 }
 
 pub async fn confirm_transaction(
     conn: &Connection,
     txid: &str,
-    confirmed_height: i64,
-    tx_index: i64,
+    confirmed_height: u64,
+    tx_index: u32,
 ) -> Result<(), Error> {
     conn.execute(
         "UPDATE transactions SET confirmed_height = ?, tx_index = ? WHERE txid = ?",
@@ -47,7 +53,7 @@ pub async fn get_transaction_by_txid(
 
 pub async fn get_transactions_at_height(
     conn: &Connection,
-    height: i64,
+    height: u64,
 ) -> Result<Vec<TransactionRow>, Error> {
     let mut rows = conn
         .query(
@@ -92,7 +98,7 @@ pub async fn get_transactions_paginated(
         needs_distinct = true;
         from = format!("{} JOIN contract_results r ON r.tx_id = t.id", from);
         where_clauses.push("r.signer_id = :signer_id".to_string());
-        params.push((":signer_id".to_string(), Value::Integer(signer_id)));
+        params.push((":signer_id".to_string(), Value::try_from(signer_id)?));
     }
 
     if needs_distinct {
@@ -101,7 +107,7 @@ pub async fn get_transactions_paginated(
 
     if let Some(height) = query.height {
         where_clauses.push("t.height = :height".to_string());
-        params.push((":height".to_string(), Value::Integer(height)));
+        params.push((":height".to_string(), Value::try_from(height)?));
     }
 
     get_paginated(

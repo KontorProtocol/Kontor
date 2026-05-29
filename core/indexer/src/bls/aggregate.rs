@@ -37,7 +37,7 @@ impl SignerResolver {
         }
 
         let conn = runtime.get_storage_conn();
-        let entry = get_signer_entry_by_id(&conn, signer_id as i64)
+        let entry = get_signer_entry_by_id(&conn, signer_id)
             .await?
             .ok_or_else(|| anyhow!("unknown signer_id {signer_id}"))?;
         let x_only_pubkey = entry.x_only_pubkey.clone().ok_or_else(|| {
@@ -75,7 +75,7 @@ impl SignerResolver {
             Some(pk) => pk,
             None => {
                 let conn = runtime.get_storage_conn();
-                let entry = get_signer_entry_by_id(&conn, signer_id as i64)
+                let entry = get_signer_entry_by_id(&conn, signer_id)
                     .await?
                     .ok_or_else(|| anyhow!("unknown signer_id {signer_id}"))?;
                 entry.x_only_pubkey.ok_or_else(|| {
@@ -216,7 +216,7 @@ pub async fn verify_aggregate(runtime: &mut Runtime, insts: &Insts) -> Result<Ag
                     .get_or_create_identity(&pk.to_string())
                     .await
                     .map_err(|e| anyhow!("resolving SignerRef::XOnlyPubkey: {e}"))?;
-                (identity.signer_id() as u64, Some(pk.to_string()))
+                (identity.signer_id(), Some(pk.to_string()))
             }
         };
 

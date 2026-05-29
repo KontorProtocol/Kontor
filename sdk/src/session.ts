@@ -33,9 +33,18 @@
 
 import { ContractAddress } from "./canonical/ContractAddress.js";
 import type { Account } from "./account/index.js";
+import { BlsKey, buildRegistrationProof } from "./bls.js";
 import type { Chain } from "./chains.js";
-import { ContractError } from "./errors.js";
-import { Inst, type InstDecoder } from "./inst.js";
+import { hex } from "@scure/base";
+
+import type {
+  AggregateInfo,
+  AggregateSigner,
+  Inst as WireInst,
+} from "./bindings.js";
+import { blsAggregateSignatures } from "./component/kontor-sdk.js";
+import { ContractError, SignerError } from "./errors.js";
+import { Inst, type InstDecoder, wireInstToInst } from "./inst.js";
 import { Insts } from "./insts.js";
 import { IncomingOffer, type OfferData } from "./offer.js";
 import type { AggregateFragment } from "./aggregate.js";
@@ -190,6 +199,36 @@ export class KontorSession {
   }
 
   /**
+   * Register the BLS public key behind `blsKey` for this session's
+   * account, broadcasting + waiting for confirmation. After this
+   * resolves, the indexer's signer entry for this account carries
+   * `bls_pubkey` and the account can participate in BLS-aggregate
+   * flows.
+   *
+   * Single high-level call rather than "build the Inst, submit it" —
+   * the intermediate `Inst<void>` can't be safely returned across an
+   * `async` boundary because awaiting `Promise<Inst<void>>` would
+   * chain into the Inst's own PromiseLike submit semantics. Aggregate
+   * flows that want the Inst (without broadcasting) will get a
+   * different non-thenable handle when that work lands.
+   */
+  async registerBls(blsKey: BlsKey): Promise<void> {
+    const proof = await buildRegistrationProof(this.account, blsKey);
+    const inst = new Inst<void>(
+      this,
+      this.defaultGasLimit,
+      {
+        kind: "RegisterBlsKey",
+        blsPubkey: proof.blsPubkey,
+        schnorrSig: proof.schnorrSig,
+        blsSig: proof.blsSig,
+      },
+      () => undefined,
+    );
+    await inst;
+  }
+
+  /**
    * Build an `Issuance` Inst — credits the signer with native tokens.
    * System-paid: bypasses gas accounting, so a freshly-funded account
    * can self-issue without an existing balance. Returns no value.
@@ -267,15 +306,52 @@ export class KontorSession {
   }
 
   /**
-   * Build an `Insts` bundle from collected `AggregateFragment`s. The
-   * aggregator verifies each fragment locally first (callers should
-   * `fragment.verify()` before passing in), then this method assembles
-   * the multi-signer bundle and prepares it for broadcast.
+   * Build a broadcastable `Insts<unknown[]>` from a set of
+   * `AggregateFragment`s collected from contributors. Callers should
+   * `fragment.verify()` each fragment before passing it in — this
+   * method trusts the inputs cryptographically and only sanity-checks
+   * that the bundle isn't empty.
+   *
+   * Combines every per-op BLS signature into one 48-byte aggregate
+   * via the kontor-sdk wasm (`blst::AggregateSignature::aggregate`)
+   * and embeds it in `Insts.aggregate.signature`. Each fragment
+   * supplies one op + one `AggregateSigner` entry, in the same order
+   * as `fragments`.
+   *
+   * The returned bundle has `Inst<unknown>` slots — contributor
+   * result types don't survive the serialization boundary, so the
+   * aggregator's `wait()` returns the raw WAVE strings.
    */
   combineAggregate(
-    _fragments: readonly AggregateFragment[],
+    fragments: readonly AggregateFragment[],
   ): Insts<unknown[]> {
-    throw new Error("KontorSession.combineAggregate: not implemented");
+    if (fragments.length === 0) {
+      throw new SignerError(
+        "combineAggregate: requires at least one fragment",
+        { docsPath: "/sdk/aggregate" },
+      );
+    }
+    const sigs = fragments.map((f) => hex.decode(f.data.signature));
+    const aggregatedSig = blsAggregateSignatures(sigs);
+
+    const signers: AggregateSigner[] = fragments.map((f) => ({
+      identity: { XOnlyPubkey: f.data.signerXOnlyPubKey },
+      nonce: Number(f.data.nonce),
+      sponsored: f.data.sponsored,
+    }));
+    const aggregate: AggregateInfo = {
+      signers,
+      signature: [...aggregatedSig],
+    };
+
+    // Wrap each fragment's wire Inst as an Inst<unknown> for the
+    // bundle. The decoder is identity — the aggregator doesn't know
+    // contributor result types, so `wait()` surfaces raw WAVE strings.
+    const insts: Inst<unknown>[] = fragments.map((f) =>
+      wireInstToInst(this, f.data.inst),
+    );
+
+    return new Insts<unknown[]>(this, insts, aggregate);
   }
 
   /**

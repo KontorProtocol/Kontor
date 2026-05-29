@@ -31,7 +31,7 @@ pub fn generate(input: TokenStream) -> TokenStream {
                 } else if let Ok(id) = s.parse::<u64>() {
                     Self::SignerId(id)
                 } else if let Some((txid, vout)) = s.rsplit_once(':') {
-                    let vout = vout.parse::<u64>()
+                    let vout = vout.parse::<u32>()
                         .map_err(|e| alloc::format!("invalid vout: {e}"))?;
                     Self::Utxo(OutPoint { txid: txid.to_string(), vout })
                 } else {

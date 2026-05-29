@@ -75,8 +75,8 @@ pub trait Executor {
     async fn execute_transaction(
         &self,
         runtime: &mut Runtime,
-        height: i64,
-        tx_id: i64,
+        height: u64,
+        tx_id: u64,
         tx: &indexer_types::Transaction,
     ) -> Result<Vec<Vec<Option<anyhow::Error>>>>;
 
@@ -105,8 +105,8 @@ impl Executor for NoopExecutor {
     async fn execute_transaction(
         &self,
         _runtime: &mut Runtime,
-        _height: i64,
-        _tx_id: i64,
+        _height: u64,
+        _tx_id: u64,
         _tx: &indexer_types::Transaction,
     ) -> Result<Vec<Vec<Option<anyhow::Error>>>> {
         Ok(Vec::new())
@@ -244,8 +244,8 @@ impl Executor for RuntimeExecutor {
     async fn execute_transaction(
         &self,
         runtime: &mut Runtime,
-        height: i64,
-        tx_id: i64,
+        height: u64,
+        tx_id: u64,
         tx: &indexer_types::Transaction,
     ) -> Result<Vec<Vec<Option<anyhow::Error>>>> {
         let mut all = Vec::with_capacity(tx.inputs.len());
@@ -259,7 +259,7 @@ impl Executor for RuntimeExecutor {
             let op_return_data = tx
                 .op_return_data
                 .iter()
-                .find(|e| e.input_index as i64 == input.input_index)
+                .find(|e| e.input_index == input.input_index)
                 .map(|e| e.recipient.clone());
             let per_input = process_input(
                 runtime,
@@ -305,9 +305,9 @@ pub async fn process_input(
     runtime: &mut Runtime,
     walker: &mut TxWalker,
     input: &indexer_types::Input,
-    height: i64,
-    tx_id: Option<i64>,
-    tx_index: i64,
+    height: u64,
+    tx_id: Option<u64>,
+    tx_index: u32,
     txid: bitcoin::Txid,
     op_return_data: Option<indexer_types::SignerRef>,
 ) -> Result<Vec<Option<anyhow::Error>>> {
@@ -344,9 +344,9 @@ async fn process_direct_input(
     runtime: &mut Runtime,
     walker: &mut TxWalker,
     input: &indexer_types::Input,
-    height: i64,
-    tx_id: Option<i64>,
-    tx_index: i64,
+    height: u64,
+    tx_id: Option<u64>,
+    tx_index: u32,
     txid: bitcoin::Txid,
     op_return_data: Option<indexer_types::SignerRef>,
 ) -> Result<Vec<Option<anyhow::Error>>> {
@@ -354,7 +354,7 @@ async fn process_direct_input(
         .get_or_create_identity(&input.x_only_pubkey.to_string())
         .await?;
 
-    let signer_id = identity.signer_id() as u64;
+    let signer_id = identity.signer_id();
     let mut errors: Vec<Option<anyhow::Error>> = Vec::with_capacity(input.insts.ops.len());
     for (op_index, inst) in input.insts.ops.iter().enumerate() {
         // Direct inputs have no publisher — only a cross-input Sponsor
@@ -384,7 +384,7 @@ async fn process_direct_input(
                     tx_id,
                     tx_index,
                     input_index: input.input_index,
-                    op_index: op_index as i64,
+                    op_index: op_index as u32,
                     txid,
                 }),
                 Some(input.previous_output),
@@ -401,9 +401,9 @@ async fn process_aggregate_input(
     runtime: &mut Runtime,
     walker: &mut TxWalker,
     input: &indexer_types::Input,
-    height: i64,
-    tx_id: Option<i64>,
-    tx_index: i64,
+    height: u64,
+    tx_id: Option<u64>,
+    tx_index: u32,
     txid: bitcoin::Txid,
     op_return_data: Option<indexer_types::SignerRef>,
 ) -> Result<Vec<Option<anyhow::Error>>> {
@@ -434,7 +434,7 @@ async fn process_aggregate_input(
         let identity = runtime
             .get_or_create_identity(&input.x_only_pubkey.to_string())
             .await?;
-        identity.signer_id() as u64
+        identity.signer_id()
     };
 
     let mut errors: Vec<Option<anyhow::Error>> = Vec::with_capacity(n_ops);
@@ -461,7 +461,7 @@ async fn process_aggregate_input(
                     tx_id,
                     tx_index,
                     input_index: input.input_index,
-                    op_index: op_index as i64,
+                    op_index: op_index as u32,
                     txid,
                 }),
                 Some(input.previous_output),
@@ -473,9 +473,9 @@ async fn process_aggregate_input(
         // ("Call only") is enforced separately in validate_aggregate_shape; here
         // we just consume the nonce the co-signer committed to in their BLS sig.
         let conn = runtime.get_storage_conn();
-        let identity = database::types::Identity::new(signer_id as i64);
+        let identity = database::types::Identity::new(signer_id);
         match identity
-            .advance_nonce(&conn, agg_signer.nonce as i64, height)
+            .advance_nonce(&conn, agg_signer.nonce, height)
             .await
         {
             Ok(_) => {}
@@ -521,7 +521,7 @@ async fn execute_op(
     runtime: &mut Runtime,
     op: &indexer_types::Op,
 ) -> Result<Option<anyhow::Error>> {
-    let identity = database::types::Identity::new(op.metadata.signer_id as i64);
+    let identity = database::types::Identity::new(op.metadata.signer_id);
     let signer = Signer::Id(identity);
     let payment = op.metadata.payment.clone();
 

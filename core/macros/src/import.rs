@@ -17,7 +17,7 @@ pub struct Config {
     name: String,
     mod_name: Option<String>,
     height: u64,
-    tx_index: u64,
+    tx_index: u32,
     path: String,
     public: Option<bool>,
 }
@@ -45,7 +45,7 @@ pub fn import(
     path: String,
     module_name: Ident,
     world_name: String,
-    contract_id: Option<(&str, u64, u64)>,
+    contract_id: Option<(&str, u64, u32)>,
     test: bool,
     public: bool,
 ) -> TokenStream {
@@ -334,7 +334,7 @@ pub fn generate_functions(
     test: bool,
     public: bool,
     export: &Function,
-    contract_id: Option<(&str, u64, u64)>,
+    contract_id: Option<(&str, u64, u32)>,
 ) -> Result<TokenStream> {
     let fn_name = make_fn_ident(export);
     let mut params = make_params(resolve, export)?;

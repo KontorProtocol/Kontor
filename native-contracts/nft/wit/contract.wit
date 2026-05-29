@@ -60,7 +60,7 @@ world root {
   export attach: async func(
     ctx: borrow<proc-context>,
     nft-id: string,
-    vout: u64
+    vout: u32
   ) -> result<nft-transfer, error>;
 
   export detach: async func(

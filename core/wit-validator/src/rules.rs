@@ -439,9 +439,9 @@ fn validate_type_in_context(
                 span,
             ));
         }
-        Type::U16 | Type::U32 | Type::S8 | Type::S16 | Type::S32 => {
+        Type::U16 | Type::S8 | Type::S16 => {
             errors.push(ValidationError::new(
-                "8/16/32-bit integer types are not supported; use s64 or u64",
+                "8/16-bit integer types are not supported; use s32, u32, s64, or u64",
                 span,
             ));
         }

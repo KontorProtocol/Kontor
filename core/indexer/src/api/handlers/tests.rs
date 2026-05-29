@@ -35,7 +35,7 @@ pub(super) async fn new_test_env() -> Result<(Env, Connection, TempDir)> {
 }
 
 /// Insert a block row at `height` with the given hex hash.
-pub(super) async fn insert_block_at(conn: &Connection, height: i64, hash: &str) -> Result<()> {
+pub(super) async fn insert_block_at(conn: &Connection, height: u64, hash: &str) -> Result<()> {
     insert_block(
         conn,
         BlockRow::builder()
@@ -50,10 +50,10 @@ pub(super) async fn insert_block_at(conn: &Connection, height: i64, hash: &str) 
 /// Insert a transaction row. Returns the assigned row id.
 pub(super) async fn insert_tx_at(
     conn: &Connection,
-    height: i64,
-    tx_index: i64,
+    height: u64,
+    tx_index: u32,
     txid: &str,
-) -> Result<i64> {
+) -> Result<u64> {
     Ok(insert_transaction(
         conn,
         TransactionRow::builder()
@@ -99,7 +99,7 @@ async fn register_user(runtime: &mut Runtime) -> Result<RegisteredUser> {
         .expect("signer entry must exist after registration");
 
     Ok(RegisteredUser {
-        signer_id: entry.signer_id as u64,
+        signer_id: entry.signer_id,
         x_only_pubkey: x_only.to_string(),
         bls_pubkey: proof.bls_pubkey.to_vec(),
     })
@@ -354,7 +354,7 @@ async fn test_nonce_reverts_on_reorg_rollback() -> Result<()> {
     runtime.storage.height = 1;
 
     let user = register_user(&mut runtime).await?;
-    let entry = get_signer_entry_by_id(&conn, user.signer_id as i64)
+    let entry = get_signer_entry_by_id(&conn, user.signer_id)
         .await?
         .expect("entry must exist");
     assert_eq!(entry.next_nonce, Some(0));
@@ -366,17 +366,17 @@ async fn test_nonce_reverts_on_reorg_rollback() -> Result<()> {
     )
     .await?;
 
-    crate::database::types::Identity::new(user.signer_id as i64)
+    crate::database::types::Identity::new(user.signer_id)
         .advance_nonce(&conn, 0, 2)
         .await?;
-    let entry = get_signer_entry_by_id(&conn, user.signer_id as i64)
+    let entry = get_signer_entry_by_id(&conn, user.signer_id)
         .await?
         .expect("entry must exist after advance");
     assert_eq!(entry.next_nonce, Some(1), "nonce must be 1 after advance");
 
     rollback_to_height(&conn, 1).await?;
 
-    let entry = get_signer_entry_by_id(&conn, user.signer_id as i64)
+    let entry = get_signer_entry_by_id(&conn, user.signer_id)
         .await?
         .expect("entry must survive rollback (registered at height 1)");
     assert_eq!(
@@ -392,10 +392,10 @@ async fn test_nonce_reverts_on_reorg_rollback() -> Result<()> {
     )
     .await?;
 
-    crate::database::types::Identity::new(user.signer_id as i64)
+    crate::database::types::Identity::new(user.signer_id)
         .advance_nonce(&conn, 0, 2)
         .await?;
-    let entry = get_signer_entry_by_id(&conn, user.signer_id as i64)
+    let entry = get_signer_entry_by_id(&conn, user.signer_id)
         .await?
         .expect("entry must exist after re-advance");
     assert_eq!(
@@ -746,12 +746,11 @@ mod transactions {
         let (app, _db) = create_test_app().await?;
         let server = TestServer::new(app);
 
-        // Test minimum limit
+        // Negative limit is now rejected at the type boundary (limit: u32);
+        // axum's query-string parser returns 400 instead of silently clamping
+        // to 0 like the prior i64 path did.
         let response: TestResponse = server.get("/api/transactions?limit=-1").await;
-        assert_eq!(response.status_code(), StatusCode::OK);
-        let result: ApiResult<PaginatedResponse<TransactionRow>> =
-            serde_json::from_slice(response.as_bytes())?;
-        assert_eq!(result.result.results.len(), 0); // Clamped to 0
+        assert_eq!(response.status_code(), StatusCode::BAD_REQUEST);
 
         // Test maximum limit
         let response: TestResponse = server.get("/api/transactions?limit=2000").await;
@@ -850,7 +849,7 @@ mod transactions_pagination {
     async fn setup() -> Result<(TestServer, TempDir)> {
         let (env, conn, db_dir) = new_test_env().await?;
 
-        for height in 800000..=800005i64 {
+        for height in 800000..=800005u64 {
             insert_block_at(&conn, height, &format!("{:064x}", height)).await?;
         }
 
@@ -867,7 +866,7 @@ mod transactions_pagination {
 
         // Per-height transaction counts. Some indexes also modify the token
         // contract — captured below in `contract_state_writes`.
-        let counts: &[(i64, i64)] = &[
+        let counts: &[(u64, u32)] = &[
             (800000, 5),
             (800001, 3),
             (800002, 7),
@@ -875,7 +874,7 @@ mod transactions_pagination {
             (800004, 4),
             (800005, 2),
         ];
-        let mut tx_ids: std::collections::HashMap<i64, Vec<i64>> = std::collections::HashMap::new();
+        let mut tx_ids: std::collections::HashMap<u64, Vec<u64>> = std::collections::HashMap::new();
         for &(height, count) in counts {
             let mut ids = Vec::with_capacity(count as usize);
             for tx_index in 0..count {
@@ -887,7 +886,7 @@ mod transactions_pagination {
 
         // Contract-state touches at (height, tx_index, path).
         let contract_state_writes = [
-            (800000i64, 1usize, "foo"),
+            (800000u64, 1usize, "foo"),
             (800001, 2, "bar"),
             (800002, 3, "biz"),
         ];
@@ -920,7 +919,7 @@ mod transactions_pagination {
         height: Option<u32>,
     ) -> Result<Vec<TransactionRow>> {
         let mut all_transactions = Vec::new();
-        let mut cursor: Option<i64> = None;
+        let mut cursor: Option<u64> = None;
         let mut iterations = 0;
         const MAX_ITERATIONS: usize = 50; // Safety limit
 
@@ -1130,7 +1129,7 @@ mod transactions_pagination {
             );
 
             // Verify ordering (DESC by tx_index: 4, 3, 2, 1, 0)
-            let expected_indices: [i64; 5] = [4, 3, 2, 1, 0];
+            let expected_indices: [u32; 5] = [4, 3, 2, 1, 0];
             for (i, tx) in cursor_transactions.iter().enumerate() {
                 assert_eq!(
                     tx.tx_index,
@@ -1185,7 +1184,7 @@ mod transactions_pagination {
             );
 
             // Verify ordering (DESC by tx_index: 6, 5, 4, 3, 2, 1, 0)
-            let expected_indices: [i64; 7] = [6, 5, 4, 3, 2, 1, 0];
+            let expected_indices: [u32; 7] = [6, 5, 4, 3, 2, 1, 0];
             for (i, tx) in cursor_transactions.iter().enumerate() {
                 assert_eq!(
                     tx.tx_index,
@@ -1333,7 +1332,7 @@ mod transactions_pagination {
         let (server, _db) = setup().await?;
 
         // Test that total_count decreases as we paginate (showing remaining items)
-        let mut cursor: Option<i64> = None;
+        let mut cursor: Option<u64> = None;
         let mut page_count = 0;
         let limit = 3;
         let mut previous_total_count = None;

@@ -135,7 +135,7 @@ impl ConsensusState {
         // Delete batch decisions that reference anchor heights above what we've
         // actually processed. These were committed to the batches table but never
         // executed before the node shut down.
-        if let Ok(deleted) = delete_batches_above_anchor(&conn, last_block_height as i64).await
+        if let Ok(deleted) = delete_batches_above_anchor(&conn, last_block_height).await
             && deleted > 0
         {
             info!(
@@ -146,7 +146,7 @@ impl ConsensusState {
 
         let current_height = match select_latest_consensus_height(&conn).await {
             Ok(Some(h)) => {
-                let resume = Height::new(h as u64 + 1);
+                let resume = Height::new(h + 1);
                 info!(%resume, "Resuming consensus from DB");
                 resume
             }
@@ -381,7 +381,7 @@ impl ConsensusState {
         conn: &libsql::Connection,
         from_anchor: u64,
     ) -> Result<Vec<DeferredDecision>> {
-        let batches = select_batches_from_anchor(conn, from_anchor as i64)
+        let batches = select_batches_from_anchor(conn, from_anchor)
             .await
             .context("Failed to query batches from anchor")?;
 
@@ -393,17 +393,17 @@ impl ConsensusState {
                     .parse::<bitcoin::BlockHash>()
                     .context("Failed to parse anchor hash from DB")?;
                 let value = if b.is_block {
-                    Value::new_block(b.anchor_height as u64, anchor_hash)
+                    Value::new_block(b.anchor_height, anchor_hash)
                 } else {
                     let txids: Vec<Txid> = b
                         .txids
                         .iter()
                         .map(|s| s.parse().context("Failed to parse txid from DB"))
                         .collect::<Result<Vec<_>>>()?;
-                    Value::new_batch(b.anchor_height as u64, anchor_hash, txids)
+                    Value::new_batch(b.anchor_height, anchor_hash, txids)
                 };
                 Ok(DeferredDecision {
-                    consensus_height: Height::new(b.consensus_height as u64),
+                    consensus_height: Height::new(b.consensus_height),
                     value,
                     certificate: b.certificate,
                 })
@@ -416,7 +416,7 @@ impl ConsensusState {
         conn: &libsql::Connection,
         height: u64,
     ) -> Option<bitcoin::BlockHash> {
-        match select_block_at_height(conn, height as i64).await {
+        match select_block_at_height(conn, height).await {
             Ok(Some(row)) => Some(row.hash),
             _ => None,
         }
@@ -425,8 +425,8 @@ impl ConsensusState {
     async fn load_raw_txs_if_unfinalized(
         &self,
         conn: &libsql::Connection,
-        anchor_height: i64,
-        consensus_height: i64,
+        anchor_height: u64,
+        consensus_height: u64,
     ) -> Result<Option<Vec<bitcoin::Transaction>>> {
         let tip = match select_block_latest(conn)
             .await
@@ -435,7 +435,7 @@ impl ConsensusState {
             Some(tip) => tip,
             None => return Ok(None),
         };
-        if (anchor_height as u64) + FINALITY_WINDOW <= tip.height as u64 {
+        if anchor_height + FINALITY_WINDOW <= tip.height {
             return Ok(None);
         }
         let raw_bytes = select_unconfirmed_batch_txs(conn, consensus_height)
@@ -465,14 +465,14 @@ impl ConsensusState {
             .context("Failed to parse anchor hash from DB")?;
 
         let value = if b.is_block {
-            Value::new_block(b.anchor_height as u64, anchor_hash)
+            Value::new_block(b.anchor_height, anchor_hash)
         } else {
             let txids: Vec<Txid> = b
                 .txids
                 .iter()
                 .map(|s| s.parse().context("Failed to parse txid from DB"))
                 .collect::<Result<Vec<_>>>()?;
-            Value::new_batch(b.anchor_height as u64, anchor_hash, txids)
+            Value::new_batch(b.anchor_height, anchor_hash, txids)
         };
 
         let proto = crate::consensus::proto::CommitCertificate::decode(b.certificate.as_slice())
@@ -489,7 +489,7 @@ impl ConsensusState {
         start: Height,
         end: Height,
     ) -> Result<Vec<(Value, crate::consensus::CommitCertificate<Ctx>)>> {
-        let batches = select_batches_in_range(conn, start.as_u64() as i64, end.as_u64() as i64)
+        let batches = select_batches_in_range(conn, start.as_u64(), end.as_u64())
             .await
             .context("Failed to query batches for sync range")?;
 
@@ -517,7 +517,7 @@ impl ConsensusState {
         Ok(select_min_batch_height(conn)
             .await
             .context("Failed to query min batch height")?
-            .map(|h| Height::new(h as u64)))
+            .map(Height::new))
     }
 
     /// Run finality checks. Returns (rollback_anchor, excluded_txids) if a rollback is needed.

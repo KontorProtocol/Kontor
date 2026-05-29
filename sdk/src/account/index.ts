@@ -77,6 +77,20 @@ export interface Account {
   signPsbt(psbt: Uint8Array, opts?: SignPsbtOptions): Promise<Uint8Array>;
 
   /**
+   * BIP-340 schnorr-sign a raw 32-byte digest with this account's key,
+   * returning the 64-byte signature. Deterministic — no auxiliary
+   * randomness — matching what Bitcoin Core itself does and what the
+   * indexer's `bls-crypto::RegistrationProof` produces.
+   *
+   * This is **not** BIP-322 message signing. It's the lower-level
+   * primitive used to construct registration proofs and other in-chain
+   * authorizations the SDK has to assemble itself. Most account
+   * impls back this directly with their private key; wallet-mediated
+   * accounts will typically not expose it and throw `SignerError`.
+   */
+  signSchnorr(digest: Uint8Array): Promise<Uint8Array>;
+
+  /**
    * Serialize broadcast-mutating sequences that read or update this
    * account's funding state. The transport's `submitReveal`,
    * `inspect`, and `simulate` paths all route through here so two

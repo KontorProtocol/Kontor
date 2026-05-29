@@ -301,7 +301,7 @@ async fn test_checkpoint_trigger() {
 
 #[tokio::test]
 async fn test_database() -> Result<()> {
-    let height: i64 = 800000;
+    let height: u64 = 800000;
     let hash = new_mock_block_hash(height as u32);
     let block = BlockRow::builder().height(height).hash(hash).build();
 
@@ -726,7 +726,7 @@ async fn test_contracts() -> Result<()> {
 async fn test_contracts_gapless() -> Result<()> {
     let (_reader, writer, _temp_dir) = new_test_db().await?;
     let conn = writer.connection();
-    let insert = async |conn: &Connection, i: i64| {
+    let insert = async |conn: &Connection, i: u64| {
         insert_block(
             conn,
             BlockRow::builder()
@@ -744,7 +744,7 @@ async fn test_contracts_gapless() -> Result<()> {
             .build();
         insert_contract(conn, row.clone()).await.unwrap();
     };
-    for i in 1i64..=5 {
+    for i in 1u64..=5 {
         insert(&conn, i).await;
     }
     let query = "SELECT id FROM contracts ORDER BY height ASC";
@@ -760,7 +760,7 @@ async fn test_contracts_gapless() -> Result<()> {
     assert_eq!(get_ids(&conn).await, vec![1, 2, 3, 4, 5]);
     rollback_to_height(&conn, 3).await?;
     assert_eq!(get_ids(&conn).await, vec![1, 2, 3]);
-    for i in 4i64..=5 {
+    for i in 4u64..=5 {
         insert(&conn, i).await;
     }
     assert_eq!(get_ids(&conn).await, vec![1, 2, 3, 4, 5]);
@@ -781,7 +781,7 @@ async fn test_get_contracts_paginated() -> Result<()> {
     .await?;
 
     let mut ids = Vec::new();
-    for i in 0i64..5 {
+    for i in 0u32..5 {
         let id = insert_contract(
             &conn,
             ContractRow::builder()
@@ -834,14 +834,14 @@ async fn test_get_contracts_signer_id_filter() -> Result<()> {
     )
     .await?;
 
-    let signer_a = get_or_create_identity(
+    let signer_a = ensure_identity(
         &conn,
         "1111111111111111111111111111111111111111111111111111111111111111",
         1,
     )
     .await?
     .signer_id();
-    let signer_b = get_or_create_identity(
+    let signer_b = ensure_identity(
         &conn,
         "2222222222222222222222222222222222222222222222222222222222222222",
         1,
@@ -898,7 +898,7 @@ async fn test_get_contracts_signer_id_filter() -> Result<()> {
         get_contracts_paginated(&conn, ContractQuery::builder().signer_id(signer_a).build())
             .await?;
     assert_eq!(meta.total_count, 2);
-    let returned: Vec<i64> = rows.iter().map(|r| r.id).collect();
+    let returned: Vec<u64> = rows.iter().map(|r| r.id).collect();
     assert_eq!(returned, vec![id_a2, id_a1]);
     assert!(rows.iter().all(|r| r.signer_id == Some(signer_a)));
 
@@ -1044,7 +1044,7 @@ async fn test_contract_result_operations() -> Result<()> {
 
     let tx_id = insert_transaction(&conn, tx1.clone()).await?;
 
-    let signer_id = get_or_create_identity(
+    let signer_id = ensure_identity(
         &conn,
         "aabbccdd00112233aabbccdd00112233aabbccdd00112233aabbccdd00112233",
         height,
@@ -1188,7 +1188,7 @@ async fn test_file_metadata_operations() -> Result<()> {
     assert_eq!(entries[1].file_id, file_id2);
 
     // Test rollback deletes file metadata entries (ON DELETE CASCADE)
-    rollback_to_height(&conn, height as u64).await?;
+    rollback_to_height(&conn, height).await?;
 
     let entries = select_all_file_metadata(&conn).await?;
     assert_eq!(entries.len(), 1);
@@ -1202,7 +1202,7 @@ async fn test_insert_and_select_batch() -> Result<()> {
     let (_reader, writer, _temp_dir) = new_test_db().await?;
     let conn = writer.connection();
 
-    let height: i64 = 100;
+    let height: u64 = 100;
     let hash = new_mock_block_hash(height as u32);
     insert_block(&conn, BlockRow::builder().height(height).hash(hash).build()).await?;
 
@@ -1251,7 +1251,7 @@ async fn test_select_min_batch_height() -> Result<()> {
 
     assert!(select_min_batch_height(&conn).await?.is_none());
 
-    let height: i64 = 100;
+    let height: u64 = 100;
     let hash = new_mock_block_hash(height as u32);
     insert_block(&conn, BlockRow::builder().height(height).hash(hash).build()).await?;
 
@@ -1270,7 +1270,7 @@ async fn test_select_batches_from_anchor() -> Result<()> {
     let conn = writer.connection();
 
     // Create blocks at heights 100 and 200
-    for h in [100i64, 200] {
+    for h in [100u64, 200] {
         let hash = new_mock_block_hash(h as u32);
         insert_block(&conn, BlockRow::builder().height(h).hash(hash).build()).await?;
     }
@@ -1525,7 +1525,7 @@ async fn test_get_results_query() -> Result<()> {
     )
     .await?;
 
-    let signer_id = get_or_create_identity(
+    let signer_id = ensure_identity(
         &conn,
         "aabbccdd00112233aabbccdd00112233aabbccdd00112233aabbccdd00112233",
         1,
@@ -1677,7 +1677,7 @@ async fn test_get_results_query() -> Result<()> {
     // Second signer with a single result at height 1 — exercises the
     // signer_id filter narrowing without affecting the height-filtered
     // assertion below (which counts only height=2 rows).
-    let signer_id_2 = get_or_create_identity(
+    let signer_id_2 = ensure_identity(
         &conn,
         "ffeeddcc99887766ffeeddcc99887766ffeeddcc99887766ffeeddcc99887766",
         1,
@@ -2370,14 +2370,14 @@ async fn test_transaction_signer_id_querying() -> Result<()> {
     )
     .await?;
 
-    let signer_a = get_or_create_identity(
+    let signer_a = ensure_identity(
         &conn,
         "1111111111111111111111111111111111111111111111111111111111111111",
         1,
     )
     .await?
     .signer_id();
-    let signer_b = get_or_create_identity(
+    let signer_b = ensure_identity(
         &conn,
         "2222222222222222222222222222222222222222222222222222222222222222",
         1,
@@ -2398,12 +2398,12 @@ async fn test_transaction_signer_id_querying() -> Result<()> {
 
     // Insert 5 txs and capture their ids.
     let mut tx_ids = Vec::new();
-    for i in 0i64..5 {
+    for i in 0u32..5 {
         let id = insert_transaction(
             &conn,
             TransactionRow::builder()
                 .height(1)
-                .txid(new_mock_transaction((i + 1) as u32).txid.to_string())
+                .txid(new_mock_transaction(i + 1).txid.to_string())
                 .tx_index(i)
                 .build(),
         )
@@ -2418,7 +2418,7 @@ async fn test_transaction_signer_id_querying() -> Result<()> {
     // tx 3: signer_a, 1 result + a contract_state row on `token`
     //       (covers signer_id + contract combined — two joins)
     // tx 4: no results (control — must not appear in any signer query)
-    let insert_result = async |tx_id: i64, signer_id: i64, result_index: i64| {
+    let insert_result = async |tx_id: u64, signer_id: u64, result_index: u32| {
         insert_contract_result(
             &conn,
             ContractResultRow::builder()
@@ -2463,7 +2463,7 @@ async fn test_transaction_signer_id_querying() -> Result<()> {
     .await?;
     assert_eq!(txs.len(), 3);
     assert_eq!(meta.total_count, 3);
-    let ids: Vec<i64> = txs.iter().map(|t| t.id).collect();
+    let ids: Vec<u64> = txs.iter().map(|t| t.id).collect();
     assert_eq!(ids, vec![tx_ids[0], tx_ids[1], tx_ids[3]]);
 
     // 2) signer_b → 1 tx
@@ -2554,7 +2554,7 @@ async fn test_transaction_signer_id_querying() -> Result<()> {
     Ok(())
 }
 
-async fn setup_block(conn: &Connection, height: i64) -> Result<()> {
+async fn setup_block(conn: &Connection, height: u64) -> Result<()> {
     insert_block(
         conn,
         BlockRow {
@@ -2568,13 +2568,13 @@ async fn setup_block(conn: &Connection, height: i64) -> Result<()> {
 }
 
 #[tokio::test]
-async fn test_get_or_create_identity_creates_new() -> Result<()> {
+async fn test_ensure_identity_creates_new() -> Result<()> {
     let (_, writer, _temp_dir) = new_test_db().await?;
     let conn = writer.connection();
     setup_block(&conn, 1).await?;
 
     let pubkey = "aabbccdd00112233aabbccdd00112233aabbccdd00112233aabbccdd00112233";
-    let identity = get_or_create_identity(&conn, pubkey, 1).await?;
+    let identity = ensure_identity(&conn, pubkey, 1).await?;
     assert!(identity.signer_id() > 0);
     assert_eq!(identity.x_only_pubkey(&conn).await?, pubkey);
 
@@ -2582,15 +2582,15 @@ async fn test_get_or_create_identity_creates_new() -> Result<()> {
 }
 
 #[tokio::test]
-async fn test_get_or_create_identity_returns_existing() -> Result<()> {
+async fn test_ensure_identity_returns_existing() -> Result<()> {
     let (_, writer, _temp_dir) = new_test_db().await?;
     let conn = writer.connection();
     setup_block(&conn, 1).await?;
     setup_block(&conn, 2).await?;
 
     let pubkey = "aabbccdd00112233aabbccdd00112233aabbccdd00112233aabbccdd00112233";
-    let id1 = get_or_create_identity(&conn, pubkey, 1).await?;
-    let id2 = get_or_create_identity(&conn, pubkey, 2).await?;
+    let id1 = ensure_identity(&conn, pubkey, 1).await?;
+    let id2 = ensure_identity(&conn, pubkey, 2).await?;
     assert_eq!(id1.signer_id(), id2.signer_id());
 
     Ok(())
@@ -2630,7 +2630,7 @@ async fn test_advance_nonce() -> Result<()> {
     setup_block(&conn, 2).await?;
 
     let pubkey = "aabbccdd00112233aabbccdd00112233aabbccdd00112233aabbccdd00112233";
-    let row = get_or_create_identity(&conn, pubkey, 1).await?;
+    let row = ensure_identity(&conn, pubkey, 1).await?;
 
     let next = row.advance_nonce(&conn, 0, 1).await?;
     assert_eq!(next, 1);
@@ -2648,7 +2648,7 @@ async fn test_advance_nonce_gap() -> Result<()> {
     setup_block(&conn, 1).await?;
 
     let pubkey = "aabbccdd00112233aabbccdd00112233aabbccdd00112233aabbccdd00112233";
-    let row = get_or_create_identity(&conn, pubkey, 1).await?;
+    let row = ensure_identity(&conn, pubkey, 1).await?;
 
     let next = row.advance_nonce(&conn, 5, 1).await?;
     assert_eq!(next, 6);
@@ -2668,7 +2668,7 @@ async fn test_advance_nonce_replay_rejected() -> Result<()> {
     setup_block(&conn, 2).await?;
 
     let pubkey = "aabbccdd00112233aabbccdd00112233aabbccdd00112233aabbccdd00112233";
-    let row = get_or_create_identity(&conn, pubkey, 1).await?;
+    let row = ensure_identity(&conn, pubkey, 1).await?;
 
     row.advance_nonce(&conn, 0, 1).await?;
     let result = row.advance_nonce(&conn, 0, 2).await;
@@ -2684,7 +2684,7 @@ async fn test_register_bls_key() -> Result<()> {
     setup_block(&conn, 1).await?;
 
     let pubkey = "aabbccdd00112233aabbccdd00112233aabbccdd00112233aabbccdd00112233";
-    let row = get_or_create_identity(&conn, pubkey, 1).await?;
+    let row = ensure_identity(&conn, pubkey, 1).await?;
 
     let bls_key = vec![1u8; 48];
     row.register_bls_key(&conn, &bls_key, 1).await?;
@@ -2704,7 +2704,7 @@ async fn test_get_signer_entry_by_x_only_pubkey() -> Result<()> {
     setup_block(&conn, 1).await?;
 
     let pubkey = "aabbccdd00112233aabbccdd00112233aabbccdd00112233aabbccdd00112233";
-    let row = get_or_create_identity(&conn, pubkey, 1).await?;
+    let row = ensure_identity(&conn, pubkey, 1).await?;
 
     let entry = get_signer_entry_by_x_only_pubkey(&conn, pubkey)
         .await?
@@ -2724,7 +2724,7 @@ async fn test_get_signer_entry_by_id() -> Result<()> {
     setup_block(&conn, 1).await?;
 
     let pubkey = "aabbccdd00112233aabbccdd00112233aabbccdd00112233aabbccdd00112233";
-    let row = get_or_create_identity(&conn, pubkey, 1).await?;
+    let row = ensure_identity(&conn, pubkey, 1).await?;
 
     let entry = get_signer_entry_by_id(&conn, row.signer_id())
         .await?
@@ -2742,7 +2742,7 @@ async fn test_get_signer_entry_by_bls_pubkey() -> Result<()> {
     setup_block(&conn, 1).await?;
 
     let pubkey = "aabbccdd00112233aabbccdd00112233aabbccdd00112233aabbccdd00112233";
-    let row = get_or_create_identity(&conn, pubkey, 1).await?;
+    let row = ensure_identity(&conn, pubkey, 1).await?;
     let bls_key = vec![7u8; 48];
     row.register_bls_key(&conn, &bls_key, 1).await?;
 
@@ -2789,7 +2789,7 @@ async fn test_signer_rollback() -> Result<()> {
     setup_block(&conn, 3).await?;
 
     let pubkey = "aabbccdd00112233aabbccdd00112233aabbccdd00112233aabbccdd00112233";
-    let row = get_or_create_identity(&conn, pubkey, 1).await?;
+    let row = ensure_identity(&conn, pubkey, 1).await?;
     row.advance_nonce(&conn, 0, 2).await?;
     row.register_bls_key(&conn, &[1u8; 48], 3).await?;
 
@@ -2817,7 +2817,7 @@ async fn test_identity_dao() -> Result<()> {
     setup_block(&conn, 1).await?;
 
     let pubkey = "aabbccdd00112233aabbccdd00112233aabbccdd00112233aabbccdd00112233";
-    let identity = get_or_create_identity(&conn, pubkey, 1).await?;
+    let identity = ensure_identity(&conn, pubkey, 1).await?;
 
     assert_eq!(identity.x_only_pubkey(&conn).await?, pubkey);
     assert_eq!(identity.bls_pubkey(&conn).await?, None);
@@ -2834,15 +2834,15 @@ async fn test_identity_dao() -> Result<()> {
 }
 
 #[tokio::test]
-async fn test_get_or_create_identity_idempotent() -> Result<()> {
+async fn test_ensure_identity_idempotent() -> Result<()> {
     let (_, writer, _temp_dir) = new_test_db().await?;
     let conn = writer.connection();
     setup_block(&conn, 1).await?;
     setup_block(&conn, 2).await?;
 
     let pubkey = "aabbccdd00112233aabbccdd00112233aabbccdd00112233aabbccdd00112233";
-    let id1 = get_or_create_identity(&conn, pubkey, 1).await?;
-    let id2 = get_or_create_identity(&conn, pubkey, 2).await?;
+    let id1 = ensure_identity(&conn, pubkey, 1).await?;
+    let id2 = ensure_identity(&conn, pubkey, 2).await?;
     assert_eq!(id1.signer_id(), id2.signer_id());
 
     Ok(())
