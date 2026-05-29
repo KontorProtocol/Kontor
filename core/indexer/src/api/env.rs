@@ -1,4 +1,6 @@
 use std::path::Path;
+use std::sync::Arc;
+use std::sync::atomic::AtomicBool;
 
 use anyhow::Result;
 use deadpool::managed::Pool;
@@ -20,15 +22,21 @@ pub struct Env {
     pub bitcoin: Client,
     pub runtime_pool: Pool<runtime::pool::Manager>,
     pub simulate_tx: Sender<Simulation>,
+    /// Set true once the reactor signals ready (consensus up + initial
+    /// mempool sync complete). Half of the `require_available` middleware
+    /// check; the other half is `info_rx.borrow().height.is_some()`.
+    /// Both signals are required so a warm-DB restart (where chain state
+    /// exists from disk before the reactor has populated `fees_rx`) still
+    /// 503s until the reactor catches up.
+    pub reactor_ready: Arc<AtomicBool>,
     /// Latest fee tier snapshot published by the reactor. `borrow()` is
     /// non-blocking and returns the most recent value.
     pub fees_rx: watch::Receiver<Fees>,
     /// Latest chain/result snapshot published by the reactor on every
     /// block/batch/rollback. The `GET /api/` handler reads it (and
     /// long-polls on `changed()`) without touching the database; the
-    /// `require_available` middleware also reads it to gate every
-    /// `/api/*` request — `InfoCore.height.is_some()` is the single
-    /// availability signal.
+    /// `require_available` middleware also reads it as the chain-state
+    /// half of the availability check.
     pub info_rx: watch::Receiver<InfoCore>,
 }
 
@@ -44,6 +52,9 @@ impl Env {
             bitcoin: Client::new("".to_string(), "".to_string(), "".to_string())?,
             config: Config::new_na(),
             cancel_token: CancellationToken::new(),
+            // Unit-test env skips the reactor; flip ready so handlers that
+            // get mounted directly into a test router aren't perma-503'd.
+            reactor_ready: Arc::new(AtomicBool::new(true)),
             event_subscriber: EventSubscriber::new(),
             runtime_pool: runtime::pool::new(db_path.to_path_buf(), db_name).await?,
             reader,

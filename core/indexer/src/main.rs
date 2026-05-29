@@ -1,4 +1,6 @@
 use std::panic;
+use std::sync::Arc;
+use std::sync::atomic::AtomicBool;
 use std::thread::available_parallelism;
 
 use crate::api::Env;
@@ -197,6 +199,7 @@ async fn run_daemon(config: Config) -> Result<()> {
     let filename = "state.db";
     let reader = database::Reader::new(&config.data_dir, filename).await?;
     let writer = database::Writer::new(&config.data_dir, filename).await?;
+    let reactor_ready = Arc::new(AtomicBool::new(false));
     let (event_tx, event_rx) = mpsc::channel(10);
     let event_subscriber = EventSubscriber::new();
     // Seed the info snapshot from current DB state; the reactor republishes
@@ -222,6 +225,7 @@ async fn run_daemon(config: Config) -> Result<()> {
             Env {
                 config: config.clone(),
                 cancel_token: cancel_token.clone(),
+                reactor_ready: reactor_ready.clone(),
                 reader: reader.clone(),
                 event_subscriber: event_subscriber.clone(),
                 bitcoin: bitcoin.clone(),
@@ -293,6 +297,7 @@ async fn run_daemon(config: Config) -> Result<()> {
         Some(fees_tx),
     ));
     ready_rx.await?;
+    reactor_ready.store(true, std::sync::atomic::Ordering::Relaxed);
     info!("Initialized");
     for handle in handles {
         let _ = handle.await;

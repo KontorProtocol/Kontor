@@ -74,15 +74,21 @@ impl<B> OnFailure<B> for NoOpOnFailure {
 }
 
 /// Tower middleware that 503s every `/api/*` request until the indexer
-/// has chain state to report (`InfoCore.height.is_some()`). Single
-/// source of truth — both the gate and `current_info` read the same
-/// `info_rx` snapshot, so there's no two-flag race.
+/// is both (a) reactor-ready — `ready_rx` signaled, mempool sync done,
+/// `fees_rx` carrying a real estimate — and (b) holding chain state
+/// (`InfoCore.height.is_some()`). A warm-DB restart can pass (b) on
+/// startup (height seeded from disk by `compute_info_core`) before
+/// passing (a), so both must be checked; checking both *here* keeps
+/// the decision single-point — handlers downstream of the gate can
+/// trust the snapshot and don't re-decide.
 async fn require_available(
     State(env): State<Env>,
     req: AxumRequest,
     next: Next,
 ) -> std::result::Result<axum::response::Response, super::error::Error> {
-    if env.info_rx.borrow().height.is_none() {
+    let reactor_ready = env.reactor_ready.load(std::sync::atomic::Ordering::Relaxed);
+    let has_chain_state = env.info_rx.borrow().height.is_some();
+    if !reactor_ready || !has_chain_state {
         return Err(HttpError::ServiceUnavailable("Indexer is not available".to_string()).into());
     }
     Ok(next.run(req).await)
