@@ -11,7 +11,7 @@ pub async fn insert_transaction(conn: &Connection, row: TransactionRow) -> Resul
     conn.execute(
         "INSERT INTO transactions (height, txid, confirmed_height, tx_index, batch_height) VALUES (?, ?, ?, ?, ?)",
         params![
-            Value::try_from(row.height)?,
+            row.height,
             row.txid,
             row.confirmed_height.map(Value::try_from).transpose()?,
             row.tx_index,
@@ -30,7 +30,7 @@ pub async fn confirm_transaction(
 ) -> Result<(), Error> {
     conn.execute(
         "UPDATE transactions SET confirmed_height = ?, tx_index = ? WHERE txid = ?",
-        params![Value::try_from(confirmed_height)?, tx_index, txid],
+        params![confirmed_height, tx_index, txid],
     )
     .await?;
     delete_unconfirmed_batch_tx(conn, txid).await?;
@@ -58,7 +58,7 @@ pub async fn get_transactions_at_height(
     let mut rows = conn
         .query(
             "SELECT id, txid, height, confirmed_height, tx_index, batch_height FROM transactions WHERE height = ?",
-            params![Value::try_from(height)?],
+            params![height],
         )
         .await?;
 

@@ -157,13 +157,13 @@ pub async fn ensure_identity(
 
     conn.execute(
         "INSERT INTO x_only_pubkeys (signer_id, x_only_pubkey, height) VALUES (?, ?, ?)",
-        params![signer_id as i64, x_only_pubkey, height],
+        params![signer_id, x_only_pubkey, height],
     )
     .await?;
 
     conn.execute(
         "INSERT INTO nonces (signer_id, next_nonce, height) VALUES (?, 0, ?)",
-        params![signer_id as i64, height],
+        params![signer_id, height],
     )
     .await?;
 
@@ -254,7 +254,7 @@ pub async fn get_signer_entry_by_id(
     signer_id: u64,
 ) -> Result<Option<SignerEntry>, Error> {
     let sql = format!("{SIGNER_ENTRY_SELECT} WHERE s.id = ?");
-    let mut rows = conn.query(&sql, params![signer_id as i64]).await?;
+    let mut rows = conn.query(&sql, params![signer_id]).await?;
     Ok(rows.next().await?.map(|r| from_row(&r)).transpose()?)
 }
 

@@ -1,4 +1,4 @@
-use libsql::{Connection, Value, params};
+use libsql::{Connection, params};
 
 use super::Error;
 use crate::database::types::BatchQueryResult;
@@ -14,8 +14,8 @@ pub async fn insert_batch(
     conn.execute(
         "INSERT OR IGNORE INTO batches (consensus_height, anchor_height, anchor_hash, certificate, is_block) VALUES (?, ?, ?, ?, ?)",
         params![
-            Value::try_from(consensus_height)?,
-            Value::try_from(anchor_height)?,
+            consensus_height,
+            anchor_height,
             anchor_hash,
             certificate,
             is_block as i64,
@@ -29,7 +29,7 @@ pub async fn delete_batches_above_anchor(conn: &Connection, max_anchor: u64) -> 
     let rows = conn
         .execute(
             "DELETE FROM batches WHERE anchor_height > ?",
-            params![Value::try_from(max_anchor)?],
+            params![max_anchor],
         )
         .await?;
 
@@ -145,7 +145,7 @@ pub async fn insert_unconfirmed_batch_tx(
 ) -> Result<(), Error> {
     conn.execute(
         "INSERT OR IGNORE INTO unconfirmed_batch_txs (txid, batch_height, raw_tx) VALUES (?, ?, ?)",
-        params![txid, Value::try_from(batch_height)?, raw_tx],
+        params![txid, batch_height, raw_tx],
     )
     .await?;
     Ok(())
@@ -167,7 +167,7 @@ pub async fn select_unconfirmed_batch_txs(
     let mut rows = conn
         .query(
             "SELECT raw_tx FROM unconfirmed_batch_txs WHERE batch_height = ?",
-            params![Value::try_from(batch_height)?],
+            params![batch_height],
         )
         .await?;
     let mut results = Vec::new();

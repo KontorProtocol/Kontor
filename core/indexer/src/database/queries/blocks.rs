@@ -67,7 +67,7 @@ pub async fn select_block_at_height(
     let mut rows = conn
         .query(
             "SELECT height, hash, relevant FROM blocks WHERE height = ?",
-            params![Value::try_from(height)?],
+            params![height],
         )
         .await?;
     Ok(rows.next().await?.map(|r| from_row(&r)).transpose()?)

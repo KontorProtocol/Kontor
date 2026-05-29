@@ -27,7 +27,7 @@ pub async fn insert_contract(conn: &Connection, row: ContractRow) -> Result<u64,
             "#,
         params![
             row.name.clone(),
-            Value::try_from(row.height)?,
+            row.height,
             row.tx_index,
             row.size(),
             row.bytes,

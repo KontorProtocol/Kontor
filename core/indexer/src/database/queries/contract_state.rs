@@ -39,7 +39,7 @@ pub async fn insert_contract_state(conn: &Connection, row: ContractStateRow) -> 
             ) VALUES (?, ?, ?, ?, ?, ?, ?)
         "#,
             params![
-                Value::try_from(row.contract_id)?,
+                row.contract_id,
                 row.height,
                 row.tx_id.map(Value::try_from).transpose()?,
                 row.size(),

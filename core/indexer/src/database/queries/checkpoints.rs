@@ -1,4 +1,4 @@
-use libsql::{Connection, Value, de::from_row, params};
+use libsql::{Connection, de::from_row, params};
 
 use super::Error;
 use crate::database::types::CheckpointRow;
@@ -10,7 +10,7 @@ pub async fn get_checkpoint_by_height(
     let mut row = conn
         .query(
             "SELECT height, hash FROM checkpoints WHERE height = ?",
-            params![Value::try_from(height)?],
+            params![height],
         )
         .await?;
     Ok(row.next().await?.map(|r| from_row(&r)).transpose()?)
