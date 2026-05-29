@@ -1,9 +1,9 @@
-use std::{path::Path, sync::Arc};
+use std::path::Path;
 
 use anyhow::Result;
 use deadpool::managed::Pool;
 use indexer_types::Fees;
-use tokio::sync::{RwLock, mpsc::Sender, watch};
+use tokio::sync::{mpsc::Sender, watch};
 use tokio_util::sync::CancellationToken;
 
 use crate::{
@@ -15,7 +15,6 @@ use crate::{
 pub struct Env {
     pub config: Config,
     pub cancel_token: CancellationToken,
-    pub available: Arc<RwLock<bool>>,
     pub reader: database::Reader,
     pub event_subscriber: EventSubscriber,
     pub bitcoin: Client,
@@ -26,7 +25,10 @@ pub struct Env {
     pub fees_rx: watch::Receiver<Fees>,
     /// Latest chain/result snapshot published by the reactor on every
     /// block/batch/rollback. The `GET /api/` handler reads it (and
-    /// long-polls on `changed()`) without touching the database.
+    /// long-polls on `changed()`) without touching the database; the
+    /// `require_available` middleware also reads it to gate every
+    /// `/api/*` request — `InfoCore.height.is_some()` is the single
+    /// availability signal.
     pub info_rx: watch::Receiver<InfoCore>,
 }
 
@@ -42,7 +44,6 @@ impl Env {
             bitcoin: Client::new("".to_string(), "".to_string(), "".to_string())?,
             config: Config::new_na(),
             cancel_token: CancellationToken::new(),
-            available: Arc::new(RwLock::new(true)),
             event_subscriber: EventSubscriber::new(),
             runtime_pool: runtime::pool::new(db_path.to_path_buf(), db_name).await?,
             reader,

@@ -1,5 +1,4 @@
 use std::panic;
-use std::sync::Arc;
 use std::thread::available_parallelism;
 
 use crate::api::Env;
@@ -13,7 +12,7 @@ use indexer::{api, block, built_info, reactor, reg_tester, runtime};
 use indexer::{bitcoin_client, bitcoin_follower, config::Config, database, logging, stopper};
 use indexer_types::{Inst, InstKind};
 use tokio::signal::unix::{SignalKind, signal};
-use tokio::sync::{RwLock, mpsc, oneshot};
+use tokio::sync::{mpsc, oneshot};
 use tokio_util::sync::CancellationToken;
 use tracing::{error, info};
 
@@ -198,7 +197,6 @@ async fn run_daemon(config: Config) -> Result<()> {
     let filename = "state.db";
     let reader = database::Reader::new(&config.data_dir, filename).await?;
     let writer = database::Writer::new(&config.data_dir, filename).await?;
-    let available = Arc::new(RwLock::new(false));
     let (event_tx, event_rx) = mpsc::channel(10);
     let event_subscriber = EventSubscriber::new();
     // Seed the info snapshot from current DB state; the reactor republishes
@@ -224,7 +222,6 @@ async fn run_daemon(config: Config) -> Result<()> {
             Env {
                 config: config.clone(),
                 cancel_token: cancel_token.clone(),
-                available: available.clone(),
                 reader: reader.clone(),
                 event_subscriber: event_subscriber.clone(),
                 bitcoin: bitcoin.clone(),
@@ -296,11 +293,6 @@ async fn run_daemon(config: Config) -> Result<()> {
         Some(fees_tx),
     ));
     ready_rx.await?;
-    {
-        let mut available = available.write().await;
-        *available = true;
-    }
-
     info!("Initialized");
     for handle in handles {
         let _ = handle.await;

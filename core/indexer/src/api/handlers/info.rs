@@ -5,7 +5,7 @@ use indexer_types::Info;
 use serde::Deserialize;
 use tokio::time::timeout;
 
-use crate::api::{API_REQUEST_TIMEOUT_MS, Env, error::HttpError, result::Result};
+use crate::api::{API_REQUEST_TIMEOUT_MS, Env, result::Result};
 use crate::built_info;
 
 /// Upper bound on a long-poll `?wait=`, derived from the router's
@@ -28,17 +28,16 @@ pub struct InfoQuery {
 }
 
 /// Build the full `Info` from the reactor-published `InfoCore` snapshot,
-/// overlaying the static fields. Returns `ServiceUnavailable` while the
-/// indexer hasn't yet indexed a block — the wire `height: u64` only
-/// carries a real, observed tip; "no blocks yet" is the absence of a
-/// response, never a sentinel value in one. No database access — the
-/// snapshot is maintained by the info publisher.
-fn current_info(env: &Env) -> std::result::Result<Info, HttpError> {
+/// overlaying the static fields. The `require_available` middleware
+/// ensures `InfoCore.height` is `Some` before any request reaches this
+/// handler, so `.expect` here is unreachable in normal operation. No
+/// database access — the snapshot is maintained by the info publisher.
+fn current_info(env: &Env) -> Info {
     let core = env.info_rx.borrow().clone();
     let height = core
         .height
-        .ok_or_else(|| HttpError::ServiceUnavailable("Indexer is not available".to_string()))?;
-    Ok(Info {
+        .expect("require_available middleware ensures InfoCore.height is Some");
+    Info {
         version: built_info::PKG_VERSION.to_string(),
         target: built_info::TARGET.to_string(),
         network: env.config.network.to_string(),
@@ -49,7 +48,7 @@ fn current_info(env: &Env) -> std::result::Result<Info, HttpError> {
         last_result_id: core.last_result_id,
         recent_blocks: core.recent_blocks,
         signature: core.signature,
-    })
+    }
 }
 
 /// `GET /api/` — current indexer `Info`.
@@ -70,5 +69,5 @@ pub async fn get_index(Query(query): Query<InfoQuery>, State(env): State<Env>) -
             let _ = timeout(Duration::from_millis(wait_ms), rx.changed()).await;
         }
     }
-    Ok(current_info(&env)?.into())
+    Ok(current_info(&env).into())
 }

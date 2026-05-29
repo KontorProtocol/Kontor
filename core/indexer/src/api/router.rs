@@ -73,16 +73,16 @@ impl<B> OnFailure<B> for NoOpOnFailure {
     fn on_failure(&mut self, _res: B, _latency: Duration, _span: &Span) {}
 }
 
-/// Tower middleware that 503s every chain-state-dependent endpoint while
-/// the reactor isn't ready. Single source of truth for the rule that the
-/// per-handler `if !available` blocks used to encode — the handlers
-/// themselves now assume availability.
+/// Tower middleware that 503s every `/api/*` request until the indexer
+/// has chain state to report (`InfoCore.height.is_some()`). Single
+/// source of truth — both the gate and `current_info` read the same
+/// `info_rx` snapshot, so there's no two-flag race.
 async fn require_available(
     State(env): State<Env>,
     req: AxumRequest,
     next: Next,
 ) -> std::result::Result<axum::response::Response, super::error::Error> {
-    if !*env.available.read().await {
+    if env.info_rx.borrow().height.is_none() {
         return Err(HttpError::ServiceUnavailable("Indexer is not available".to_string()).into());
     }
     Ok(next.run(req).await)
