@@ -16,9 +16,6 @@ pub async fn get_signer(
     Path(identifier): Path<String>,
     State(env): State<Env>,
 ) -> Result<SignerResponse> {
-    if !*env.available.read().await {
-        return Err(HttpError::ServiceUnavailable("Indexer is not available".to_string()).into());
-    }
     let runtime = env.runtime_pool.get().await?;
     let conn = runtime.get_storage_conn();
 

@@ -2,7 +2,9 @@ use std::time::Duration;
 
 use axum::{
     Json, Router,
+    extract::{Request as AxumRequest, State},
     http::{HeaderName, Request, Response},
+    middleware::{Next, from_fn_with_state},
     response::IntoResponse,
     routing::{get, post},
 };
@@ -28,6 +30,7 @@ use crate::api::handlers::{
 
 use super::{
     API_REQUEST_TIMEOUT_MS, Env,
+    error::HttpError,
     handlers::{get_block, get_block_latest, post_compose_commit, post_compose_reveal},
 };
 
@@ -70,6 +73,21 @@ impl<B> OnFailure<B> for NoOpOnFailure {
     fn on_failure(&mut self, _res: B, _latency: Duration, _span: &Span) {}
 }
 
+/// Tower middleware that 503s every chain-state-dependent endpoint while
+/// the reactor isn't ready. Single source of truth for the rule that the
+/// per-handler `if !available` blocks used to encode — the handlers
+/// themselves now assume availability.
+async fn require_available(
+    State(env): State<Env>,
+    req: AxumRequest,
+    next: Next,
+) -> std::result::Result<axum::response::Response, super::error::Error> {
+    if !*env.available.read().await {
+        return Err(HttpError::ServiceUnavailable("Indexer is not available".to_string()).into());
+    }
+    Ok(next.run(req).await)
+}
+
 fn handle_panic(panic: Box<dyn std::any::Any + Send>) -> axum::response::Response {
     let message = panic
         .downcast_ref::<String>()
@@ -98,52 +116,57 @@ pub fn new(context: Env, prom_handle: PrometheusHandle) -> Router {
         .route("/metrics", get(get_metrics))
         .with_state(prom_handle);
 
-    Router::new()
+    // Chain-state-dependent endpoints — gated by the `require_available`
+    // middleware below.
+    let chain_routes = Router::new()
+        .route("/", get(get_index))
+        .route("/fees", get(get_fees))
         .nest(
-            "/api",
+            "/blocks",
             Router::new()
-                .route("/", get(get_index))
-                .route("/stop", get(stop))
-                .route("/fees", get(get_fees))
-                .nest(
-                    "/blocks",
-                    Router::new()
-                        .route("/", get(get_blocks))
-                        .route("/latest", get(get_block_latest))
-                        .route("/{height|hash}", get(get_block))
-                        .route("/{height|hash}/transactions", get(get_block_transactions)),
-                )
-                .nest(
-                    "/transactions",
-                    Router::new()
-                        .route("/", get(get_transactions))
-                        .route("/{txid}", get(get_transaction))
-                        .route("/{txid}/inspect", get(get_transaction_inspect))
-                        .route("/inspect", post(post_transaction_hex_inspect))
-                        .route("/simulate", post(post_simulate))
-                        .route("/broadcast", post(post_transaction_broadcast))
-                        .nest(
-                            "/compose",
-                            Router::new()
-                                .route("/", post(post_compose))
-                                .route("/commit", post(post_compose_commit))
-                                .route("/reveal", post(post_compose_reveal)),
-                        ),
-                )
-                .nest(
-                    "/contracts",
-                    Router::new()
-                        .route("/", get(get_contracts))
-                        .route("/{address}", get(get_contract).post(post_contract)),
-                )
-                .nest(
-                    "/results",
-                    Router::new()
-                        .route("/", get(get_results))
-                        .route("/{id}", get(get_result)),
-                )
-                .route("/signers/{identifier}", get(get_signer)),
+                .route("/", get(get_blocks))
+                .route("/latest", get(get_block_latest))
+                .route("/{height|hash}", get(get_block))
+                .route("/{height|hash}/transactions", get(get_block_transactions)),
         )
+        .nest(
+            "/transactions",
+            Router::new()
+                .route("/", get(get_transactions))
+                .route("/{txid}", get(get_transaction))
+                .route("/{txid}/inspect", get(get_transaction_inspect))
+                .route("/inspect", post(post_transaction_hex_inspect))
+                .route("/simulate", post(post_simulate))
+                .route("/broadcast", post(post_transaction_broadcast))
+                .nest(
+                    "/compose",
+                    Router::new()
+                        .route("/", post(post_compose))
+                        .route("/commit", post(post_compose_commit))
+                        .route("/reveal", post(post_compose_reveal)),
+                ),
+        )
+        .nest(
+            "/contracts",
+            Router::new()
+                .route("/", get(get_contracts))
+                .route("/{address}", get(get_contract).post(post_contract)),
+        )
+        .nest(
+            "/results",
+            Router::new()
+                .route("/", get(get_results))
+                .route("/{id}", get(get_result)),
+        )
+        .route("/signers/{identifier}", get(get_signer))
+        .layer(from_fn_with_state(context.clone(), require_available));
+
+    // `/stop` sits outside the availability gate so an admin can issue
+    // shutdown even when the reactor never reaches ready.
+    let stop_route = Router::new().route("/stop", get(stop));
+
+    Router::new()
+        .nest("/api", chain_routes.merge(stop_route))
         .layer(
             ServiceBuilder::new()
                 .layer(SetRequestIdLayer::new(

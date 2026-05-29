@@ -33,7 +33,7 @@ async fn info_test_server(
 
 fn core_with_signature(signature: &str, height: u64) -> InfoCore {
     InfoCore {
-        height,
+        height: Some(height),
         signature: signature.to_string(),
         ..Default::default()
     }
@@ -45,20 +45,20 @@ fn core_with_signature(signature: &str, height: u64) -> InfoCore {
 async fn info_signature_tracks_chain_state() -> Result<()> {
     let (_env, conn, _dir) = new_test_env().await?;
 
-    let empty = compute_info_core(&conn, 0).await?.signature;
+    let empty = compute_info_core(&conn).await?.signature;
 
     insert_block_at(&conn, 0, ZERO_HASH).await?;
-    let one_block = compute_info_core(&conn, 0).await?.signature;
+    let one_block = compute_info_core(&conn).await?.signature;
     assert_ne!(empty, one_block, "signature must change when a block lands");
 
     insert_block_at(&conn, 1, ONE_HASH).await?;
-    let two_blocks = compute_info_core(&conn, 0).await?.signature;
+    let two_blocks = compute_info_core(&conn).await?.signature;
     assert_ne!(
         one_block, two_blocks,
         "signature must change on a new block"
     );
 
-    let recomputed = compute_info_core(&conn, 0).await?.signature;
+    let recomputed = compute_info_core(&conn).await?.signature;
     assert_eq!(two_blocks, recomputed, "signature must be deterministic");
     Ok(())
 }
@@ -168,14 +168,15 @@ async fn info_publisher_republishes_on_event() -> Result<()> {
     let (info_tx, mut info_rx) = watch::channel(InfoCore::default());
     let (event_tx, event_rx) = broadcast::channel(16);
     let cancel = CancellationToken::new();
-    let handle = run_info_publisher(cancel.clone(), event_rx, env.reader.clone(), 1, info_tx);
+    let handle = run_info_publisher(cancel.clone(), event_rx, env.reader.clone(), info_tx);
 
     event_tx.send(Event::BatchProcessed { txids: vec![] })?;
     info_rx.changed().await?;
 
     let core = info_rx.borrow_and_update().clone();
     assert_eq!(
-        core.height, 7,
+        core.height,
+        Some(7),
         "publisher must recompute from current DB state"
     );
     assert_eq!(core.recent_blocks.len(), 2);

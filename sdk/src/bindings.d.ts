@@ -153,7 +153,6 @@ export type Info = {
   version: string;
   target: string;
   network: string;
-  available: boolean;
   consensus_mode: ConsensusMode;
   height: number;
   checkpoint: string | null;

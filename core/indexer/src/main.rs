@@ -205,7 +205,7 @@ async fn run_daemon(config: Config) -> Result<()> {
     // it on every block/batch/rollback. Shared with Env for long-polling.
     let initial_info = {
         let conn = reader.connection().await?;
-        compute_info_core(&conn, config.starting_block_height.saturating_sub(1)).await?
+        compute_info_core(&conn).await?
     };
     let (info_tx, info_rx) = tokio::sync::watch::channel(initial_info);
     // Recomputes `InfoCore` off the `Event` broadcast and republishes it
@@ -214,7 +214,6 @@ async fn run_daemon(config: Config) -> Result<()> {
         cancel_token.clone(),
         event_subscriber.subscribe(),
         reader.clone(),
-        config.starting_block_height,
         info_tx,
     ));
     let (simulate_tx, simulate_rx) = mpsc::channel(available_parallelism()?.into());

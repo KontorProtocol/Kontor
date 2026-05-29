@@ -194,12 +194,12 @@ async fn run_kontor(
     // parallel; under heavy CI load, the standard ~25s budget isn't
     // always enough for DB init + mempool sync + initial fee
     // projection + consensus startup to complete on each one.
+    // `client.index()` itself returns an error when the indexer 503s
+    // (`require_available` middleware), so a successful response is
+    // the availability signal — no separate flag to inspect.
     retry_extended(async || {
-        let i = client.index().await?;
-        if !i.available {
-            bail!("Not available");
-        }
-        Ok(())
+        let _ = client.index().await?;
+        Ok::<_, anyhow::Error>(())
     })
     .await?;
     Ok((process, client))

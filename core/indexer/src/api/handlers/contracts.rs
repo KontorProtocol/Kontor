@@ -15,9 +15,6 @@ pub async fn post_contract(
     State(env): State<Env>,
     Json(ViewExpr { expr }): Json<ViewExpr>,
 ) -> Result<ViewResult> {
-    if !*env.available.read().await {
-        return Err(HttpError::ServiceUnavailable("Indexer is not available".to_string()).into());
-    }
     let contract_address = address
         .parse::<ContractAddress>()
         .map_err(|_| HttpError::BadRequest("Invalid contract address".to_string()))?;
@@ -54,9 +51,6 @@ pub async fn get_contract(
     Path(address): Path<String>,
     State(env): State<Env>,
 ) -> Result<ContractResponse> {
-    if !*env.available.read().await {
-        return Err(HttpError::ServiceUnavailable("Indexer is not available".to_string()).into());
-    }
     let contract_address = address
         .parse::<ContractAddress>()
         .map_err(|_| HttpError::BadRequest("Invalid contract address".to_string()))?;

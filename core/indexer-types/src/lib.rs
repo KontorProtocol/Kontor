@@ -691,7 +691,6 @@ pub struct Info {
     pub version: String,
     pub target: String,
     pub network: String,
-    pub available: bool,
     pub consensus_mode: ConsensusMode,
     #[ts(type = "number")]
     pub height: u64,
