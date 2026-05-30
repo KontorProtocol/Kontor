@@ -405,9 +405,7 @@ impl Guest for Staking {
         tau_slash_bps: u64,
     ) -> Result<(), Error> {
         if tau_slash_bps > BPS_DENOM {
-            return Err(Error::Message(
-                "tau_slash_bps must be <= 10000".to_string(),
-            ));
+            return Err(Error::Message("tau_slash_bps must be <= 10000".to_string()));
         }
         let model = ctx.proc_context().model();
         model.set_lambda_slash(lambda_slash);
@@ -459,9 +457,10 @@ impl Guest for Staking {
             let holder: Holder = pk
                 .parse()
                 .map_err(|_| Error::Message("invalid x_only_pubkey".to_string()))?;
-            let entry = model.validators().get(&holder).ok_or(Error::Message(
-                "slash recipient not registered".to_string(),
-            ))?;
+            let entry = model
+                .validators()
+                .get(&holder)
+                .ok_or(Error::Message("slash recipient not registered".to_string()))?;
             entry.set_stake(entry.stake().add(credit)?);
             if entry.status() == STATUS_ACTIVE {
                 model.try_update_total_active_stake(|s| s.add(credit))?;
