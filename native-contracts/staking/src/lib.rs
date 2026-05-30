@@ -28,7 +28,22 @@ struct StakingStorage {
     pub validators: Map<Holder, ValidatorEntry>,
     pub active_count: u64,
     pub total_active_stake: Decimal,
+    /// Storage-slash multiplier (spec `λ_slash`). A failed storage challenge
+    /// slashes `λ_slash · k_f` of the node's pooled stake.
+    pub lambda_slash: u64,
+    /// Burn share of a slash, in basis points (spec `τ_slash`, 0–10000). The
+    /// remaining `(10000 − τ_slash_bps)` is returned to the caller to
+    /// redistribute to the file's other nodes.
+    pub tau_slash_bps: u64,
 }
+
+/// Basis-points denominator for fractional params (e.g. `τ_slash`).
+const BPS_DENOM: u64 = 10_000;
+
+/// Default `λ_slash` (storage-slash multiplier). Source: `specs/v1-parameters`.
+const DEFAULT_LAMBDA_SLASH: u64 = 30;
+/// Default `τ_slash` = 50% burn share. Source: `specs/params.typ` `econ.tauSlash`.
+const DEFAULT_TAU_SLASH_BPS: u64 = 5_000;
 
 #[allow(dead_code)]
 const STATUS_INACTIVE: u64 = 0;
@@ -62,6 +77,8 @@ impl Guest for Staking {
         storage.init(ctx);
         let model = ctx.model();
         model.set_min_stake(1u64.try_into().unwrap());
+        model.set_lambda_slash(DEFAULT_LAMBDA_SLASH);
+        model.set_tau_slash_bps(DEFAULT_TAU_SLASH_BPS);
         ctx.contract()
     }
 
@@ -326,5 +343,83 @@ impl Guest for Staking {
 
     fn get_active_count(ctx: &ViewContext) -> u64 {
         ctx.model().active_count()
+    }
+
+    /// Slash a node's pooled stake by `amount` (saturating at the node's
+    /// balance, per the spec's `reduce_stake`). The `τ_slash` share is burned
+    /// from the contract's escrowed stake; the remainder is reported back to the
+    /// caller (the reactor) to redistribute to the file's other nodes. The node
+    /// is not removed from the validator set here — the caller handles role
+    /// unwinding. Core-context only (reactor-orchestrated).
+    fn slash(
+        ctx: &CoreContext,
+        x_only_pubkey: String,
+        amount: Decimal,
+    ) -> Result<SlashResult, Error> {
+        let model = ctx.proc_context().model();
+        let holder: Holder = x_only_pubkey
+            .parse()
+            .map_err(|_| Error::Message("invalid x_only_pubkey".to_string()))?;
+        let entry = model
+            .validators()
+            .get(&holder)
+            .ok_or(Error::Message("not registered".to_string()))?;
+
+        let zero: Decimal = 0u64.try_into()?;
+        let stake = entry.stake();
+        // Saturating reduction: deduct min(amount, stake); shortfall not carried.
+        let actual = if amount > stake { stake } else { amount };
+        if actual <= zero {
+            return Ok(SlashResult {
+                slashed: zero,
+                burned: zero,
+                redistributable: zero,
+            });
+        }
+
+        entry.set_stake(stake.sub(actual)?);
+        if entry.status() == STATUS_ACTIVE {
+            model.try_update_total_active_stake(|s| s.sub(actual))?;
+        }
+
+        // Burn the τ_slash share from the contract's escrowed stake.
+        let tau_bps: Decimal = model.tau_slash_bps().try_into()?;
+        let denom: Decimal = BPS_DENOM.try_into()?;
+        let burned = actual.mul(tau_bps)?.div(denom)?;
+        if burned > zero {
+            token::burn(ctx.proc_context().contract_signer(), burned)?;
+        }
+        let redistributable = actual.sub(burned)?;
+
+        Ok(SlashResult {
+            slashed: actual,
+            burned,
+            redistributable,
+        })
+    }
+
+    /// Core-context (reactor/admin) setter for the slashing parameters.
+    fn set_slash_params(
+        ctx: &CoreContext,
+        lambda_slash: u64,
+        tau_slash_bps: u64,
+    ) -> Result<(), Error> {
+        if tau_slash_bps > BPS_DENOM {
+            return Err(Error::Message(
+                "tau_slash_bps must be <= 10000".to_string(),
+            ));
+        }
+        let model = ctx.proc_context().model();
+        model.set_lambda_slash(lambda_slash);
+        model.set_tau_slash_bps(tau_slash_bps);
+        Ok(())
+    }
+
+    fn get_slash_params(ctx: &ViewContext) -> SlashParams {
+        let model = ctx.model();
+        SlashParams {
+            lambda_slash: model.lambda_slash(),
+            tau_slash_bps: model.tau_slash_bps(),
+        }
     }
 }
