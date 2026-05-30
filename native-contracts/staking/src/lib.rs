@@ -422,4 +422,51 @@ impl Guest for Staking {
             tau_slash_bps: model.tau_slash_bps(),
         }
     }
+
+    /// Redistribute `amount` (the `(1 − τ_slash)` remainder of a slash, already
+    /// held by the contract as escrowed stake) equally across `recipients` by
+    /// crediting their pooled stake. Core-context only; the reactor supplies the
+    /// file's other nodes. Conservation is exact regardless of `Decimal` rounding:
+    /// the first `n−1` (in sorted order) each get `amount / n` and the last
+    /// absorbs the remainder. Recipients are processed in sorted order for
+    /// cross-indexer determinism.
+    fn distribute_slash(
+        ctx: &CoreContext,
+        recipients: Vec<String>,
+        amount: Decimal,
+    ) -> Result<(), Error> {
+        let model = ctx.proc_context().model();
+        let zero: Decimal = 0u64.try_into()?;
+        if amount <= zero {
+            return Ok(());
+        }
+        if recipients.is_empty() {
+            return Err(Error::Message(
+                "no recipients for slash redistribution".to_string(),
+            ));
+        }
+
+        let mut sorted = recipients;
+        sorted.sort();
+        let n = sorted.len();
+        let n_dec: Decimal = (n as u64).try_into()?;
+        let per = amount.div(n_dec)?;
+        let head_total = per.mul(((n - 1) as u64).try_into()?)?;
+        let last_share = amount.sub(head_total)?; // absorbs the rounding remainder
+
+        for (i, pk) in sorted.iter().enumerate() {
+            let credit = if i + 1 == n { last_share } else { per };
+            let holder: Holder = pk
+                .parse()
+                .map_err(|_| Error::Message("invalid x_only_pubkey".to_string()))?;
+            let entry = model.validators().get(&holder).ok_or(Error::Message(
+                "slash recipient not registered".to_string(),
+            ))?;
+            entry.set_stake(entry.stake().add(credit)?);
+            if entry.status() == STATUS_ACTIVE {
+                model.try_update_total_active_stake(|s| s.add(credit))?;
+            }
+        }
+        Ok(())
+    }
 }
