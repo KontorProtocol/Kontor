@@ -202,7 +202,7 @@ impl Guest for Filestorage {
         let model = ctx.model();
 
         // Validate agreement exists
-        let _agreement = model
+        let agreement = model
             .agreements()
             .get(&agreement_id)
             .ok_or(Error::Message(format!(
@@ -225,9 +225,19 @@ impl Guest for Filestorage {
             )));
         }
 
-        // TODO: the storage protocol spec does not allow
-        // voluntary departure when the agreement would be at/below the minimum replication
-        // threshold (|N_f| <= n_min). We do not enforce that rule yet.
+        // Enforce minimum replication (storage-protocol spec): a node may not
+        // voluntarily leave an *active* agreement when doing so would drop live
+        // replication to or below the minimum threshold n_min. Still-forming
+        // (inactive) agreements are exempt — they carry no retrievability
+        // guarantee yet, so a node may back out before the agreement activates.
+        let min_nodes = model.min_nodes();
+        let node_count = nodes_state.node_count();
+        if agreement.active() && node_count <= min_nodes {
+            return Err(Error::Message(format!(
+                "cannot leave agreement {}: active replication {} is at or below the minimum {}",
+                agreement_id, node_count, min_nodes
+            )));
+        }
 
         // Mark node as inactive (don't delete, just set to false)
         nodes_state.nodes().set(&node_id, false);
