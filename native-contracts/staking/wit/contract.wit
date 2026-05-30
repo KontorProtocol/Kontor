@@ -38,6 +38,17 @@ world root {
     deactivated: u64,
   }
 
+  record slash-result {
+    slashed: decimal,
+    burned: decimal,
+    redistributable: decimal,
+  }
+
+  record slash-params {
+    lambda-slash: u64,
+    tau-slash-bps: u64,
+  }
+
   export init: async func(ctx: borrow<proc-context>) -> contract;
 
   // --- Validator lifecycle (ProcContext — user-facing) ---
@@ -50,6 +61,11 @@ world root {
 
   // --- Per-block validator processing (CoreContext — called by block handler) ---
   export process-pending-validators: async func(ctx: borrow<core-context>, block-height: u64) -> result<validator-set-change, error>;
+
+  // --- Slashing (CoreContext — reactor-orchestrated) ---
+  export slash: async func(ctx: borrow<core-context>, x-only-pubkey: string, amount: decimal) -> result<slash-result, error>;
+  export set-slash-params: async func(ctx: borrow<core-context>, lambda-slash: u64, tau-slash-bps: u64) -> result<_, error>;
+  export get-slash-params: async func(ctx: borrow<view-context>) -> slash-params;
 
   // --- Queries (ViewContext) ---
   export get-active-set: async func(ctx: borrow<view-context>) -> list<active-validator-info>;
