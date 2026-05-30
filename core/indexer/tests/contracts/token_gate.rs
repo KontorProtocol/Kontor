@@ -32,9 +32,6 @@ async fn dev_mint_defaults_on_and_core_can_disable() -> Result<()> {
     token::set_dev_mint(&mut rt, &core(), true)
         .await?
         .map_err(|e| anyhow!("{e:?}"))?;
-    assert!(
-        token::dev_mint_enabled(&mut rt).await?,
-        "re-enabling works"
-    );
+    assert!(token::dev_mint_enabled(&mut rt).await?, "re-enabling works");
     Ok(())
 }

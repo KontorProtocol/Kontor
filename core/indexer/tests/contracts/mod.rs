@@ -25,8 +25,8 @@ mod simulate_contract;
 mod simulate_errors;
 mod staking_contract;
 mod status_classification;
-mod token_gate;
 mod token_contract;
+mod token_gate;
 mod wit_contract;
 
 use indexer::reg_tester::RegTesterCluster;
