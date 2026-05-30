@@ -3,6 +3,12 @@ contract!(name = "token");
 
 use stdlib::*;
 
+/// Per-call cap on the *public, unprivileged* `mint` — a dev/test affordance
+/// (signet/testnet/regtest funding), to be gated off mainnet. It does NOT apply
+/// to the privileged core-context `issuance`/`issue_to` path that protocol
+/// emissions (and genesis stake issuance) use.
+const DEV_MINT_CAP: u64 = 1000;
+
 #[derive(Clone, Default, StorageRoot)]
 struct TokenStorage {
     pub ledger: Map<Holder, Decimal>,
@@ -23,9 +29,6 @@ fn assert_gt_zero(n: Decimal) -> Result<(), Error> {
 
 fn mint(model: &TokenStorageWriteModel, dst: Holder, amt: Decimal) -> Result<Mint, Error> {
     assert_gt_zero(amt)?;
-    if amt > 1000u64.try_into()? {
-        return Err(Error::Message("Amount exceeds limit".to_string()));
-    }
     let ledger = model.ledger();
     let new_amt = ledger.get(&dst).unwrap_or_default().add(amt)?;
     ledger.set(&dst, new_amt);
@@ -106,6 +109,12 @@ impl Guest for Token {
     }
 
     fn mint(ctx: &ProcContext, amt: Decimal) -> Result<Mint, Error> {
+        // Public mint is a dev/test affordance only (see DEV_MINT_CAP); protocol
+        // emissions mint via the privileged `issuance`/`issue_to` core-context
+        // path, which is uncapped. TODO(economic-layer): gate this off on mainnet.
+        if amt > DEV_MINT_CAP.try_into()? {
+            return Err(Error::Message("Amount exceeds dev mint limit".to_string()));
+        }
         mint(&ctx.model(), ctx.signer().into(), amt)
     }
 
