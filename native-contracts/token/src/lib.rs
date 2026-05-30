@@ -18,7 +18,23 @@ struct TokenStorage {
     /// off via the core-context `set_dev_mint(false)` (the only KOR mint path on
     /// mainnet is protocol emissions via `issuance`).
     pub dev_mint_enabled: bool,
+    /// Annual service-emission rate μ₀ in basis points (spec `econ.mu0` = 5%).
+    pub mu0_bps: u64,
+    /// Ordering-emission share χ in basis points (spec `econ.chi` = 10%); the
+    /// remaining `(10000 − χ)` funds storage.
+    pub chi_bps: u64,
+    /// Blocks per year B — the per-block emission denominator (≈ 52,560).
+    pub blocks_per_year: u64,
 }
+
+/// Basis-points denominator for fractional params.
+const BPS_DENOM: u64 = 10_000;
+/// Default μ₀ = 5% annual inflation. Source: `specs/params.typ` `econ.mu0`.
+const DEFAULT_MU0_BPS: u64 = 500;
+/// Default χ = 10% ordering share. Source: `specs/params.typ` `econ.chi`.
+const DEFAULT_CHI_BPS: u64 = 1_000;
+/// Default B = blocks/year (~10-minute blocks).
+const DEFAULT_BLOCKS_PER_YEAR: u64 = 52_560;
 
 fn utxo_holder(out_point: context::OutPoint) -> Holder {
     Holder::from_ref(&HolderRef::Utxo(out_point)).unwrap()
@@ -67,9 +83,13 @@ fn transfer(ctx: &ProcContext, src: Holder, dst: Holder, amt: Decimal) -> Result
 impl Guest for Token {
     fn init(ctx: &ProcContext) -> Contract {
         TokenStorage::default().init(ctx);
+        let model = ctx.model();
         // Public dev mint is on by default (signet/testnet/regtest); mainnet
         // genesis disables it via `set_dev_mint(false)`.
-        ctx.model().set_dev_mint_enabled(true);
+        model.set_dev_mint_enabled(true);
+        model.set_mu0_bps(DEFAULT_MU0_BPS);
+        model.set_chi_bps(DEFAULT_CHI_BPS);
+        model.set_blocks_per_year(DEFAULT_BLOCKS_PER_YEAR);
         ctx.contract()
     }
 
@@ -207,5 +227,67 @@ impl Guest for Token {
 
     fn total_supply(ctx: &ViewContext) -> Decimal {
         ctx.model().total_supply()
+    }
+
+    /// Mint one block's gross service emission `ε = total_supply · μ₀ / B` into
+    /// the protocol pool (`CORE`), and report the storage/ordering split
+    /// (`ordering = ε·χ`, `storage = ε − ordering`). The reactor calls this at
+    /// block-end; distribution of the pooled emission to storers/orderers is
+    /// handled by the storage/ordering reward paths. Core-context only.
+    fn mint_emission(ctx: &CoreContext) -> Result<EmissionResult, Error> {
+        let model = ctx.proc_context().model();
+        let zero: Decimal = 0u64.try_into()?;
+        let denom: Decimal = BPS_DENOM.try_into()?;
+        let mu0: Decimal = model.mu0_bps().try_into()?;
+        let b: Decimal = model.blocks_per_year().try_into()?;
+
+        let total = model.total_supply().mul(mu0)?.div(denom)?.div(b)?;
+        if total <= zero {
+            return Ok(EmissionResult {
+                total: zero,
+                storage: zero,
+                ordering: zero,
+            });
+        }
+
+        let chi: Decimal = model.chi_bps().try_into()?;
+        let ordering = total.mul(chi)?.div(denom)?;
+        let storage = total.sub(ordering)?;
+
+        mint(&model, CORE(), total)?;
+        Ok(EmissionResult {
+            total,
+            storage,
+            ordering,
+        })
+    }
+
+    /// Core-context (reactor/admin) setter for the emission parameters.
+    fn set_emission_params(
+        ctx: &CoreContext,
+        mu0_bps: u64,
+        chi_bps: u64,
+        blocks_per_year: u64,
+    ) -> Result<(), Error> {
+        if chi_bps > BPS_DENOM {
+            return Err(Error::Message("chi_bps must be <= 10000".to_string()));
+        }
+        if blocks_per_year == 0 {
+            return Err(Error::Message("blocks_per_year must be > 0".to_string()));
+        }
+        let model = ctx.proc_context().model();
+        model.set_mu0_bps(mu0_bps);
+        model.set_chi_bps(chi_bps);
+        model.set_blocks_per_year(blocks_per_year);
+        Ok(())
+    }
+
+    fn emission_params(ctx: &ViewContext) -> EmissionParams {
+        let model = ctx.model();
+        EmissionParams {
+            mu0_bps: model.mu0_bps(),
+            chi_bps: model.chi_bps(),
+            blocks_per_year: model.blocks_per_year(),
+        }
     }
 }
