@@ -24,9 +24,24 @@ use indexer_types::Event;
 use indexer_types::OpWithResult;
 use malachitebft_app_channel::app::types::core::VotingPower;
 
-fn allocate_port() -> u16 {
-    static NEXT_PORT: std::sync::atomic::AtomicU16 = std::sync::atomic::AtomicU16::new(19000);
-    NEXT_PORT.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+/// Allocate `n` distinct ephemeral ports by briefly binding each to
+/// `127.0.0.1:0`, mirroring `reg_tester::allocate_ports`. Every listener is held
+/// until all are bound so the ports are guaranteed distinct; dropping them hands
+/// the ports to the consensus engine. The previous fixed-base allocator
+/// (`19000 + counter`) did not check availability, so a port could collide with
+/// another listener or a lingering `TIME_WAIT` socket — which surfaced as libp2p
+/// "failed to negotiate transport protocol" hangs on macOS CI loopback.
+fn allocate_ports(n: usize) -> Vec<u16> {
+    let mut ports = Vec::with_capacity(n);
+    let mut listeners = Vec::with_capacity(n);
+    for _ in 0..n {
+        let listener =
+            std::net::TcpListener::bind("127.0.0.1:0").expect("bind ephemeral port for test node");
+        ports.push(listener.local_addr().expect("read local_addr").port());
+        listeners.push(listener);
+    }
+    drop(listeners);
+    ports
 }
 
 async fn wait_matching<T>(
@@ -134,7 +149,7 @@ impl ReactorCluster {
         let validator_set = ValidatorSet::new(validators);
         let genesis = Genesis { validator_set };
 
-        let ports: Vec<u16> = (0..total).map(|_| allocate_port()).collect();
+        let ports: Vec<u16> = allocate_ports(total);
 
         let (mempool_tx, _) = broadcast::channel::<MempoolEvent>(256);
         let cancel = CancellationToken::new();
