@@ -747,7 +747,138 @@ pub async fn run_regtest(runtime: &mut Runtime) -> Result<()> {
     Ok(())
 }
 
+// ─────────────────────────────────────────────────────────────────
+// Storage Economics Tests
+// ─────────────────────────────────────────────────────────────────
+
+/// Exercises the storage-emission weights (ω_f, k_f), the Ω accumulator, and
+/// reward distribution. Assumes a fresh runtime (run first in the aggregator).
+async fn storage_economics_smoke(runtime: &mut Runtime) -> Result<()> {
+    let signer = runtime.identity().await?;
+    let core_identity = runtime.identity().await?;
+    let core_signer = Signer::Core(Box::new(core_identity));
+
+    // Genesis economics: parameter defaults and Ω == Ω_genesis, no active files.
+    let params = filestorage::get_storage_params(runtime).await?;
+    assert_eq!(params.omega_genesis, 1000);
+    assert_eq!(params.r_offset, 1000);
+    assert_eq!(params.f_scale, 1000);
+    let omega0 = filestorage::get_omega(runtime).await?;
+    assert_eq!(omega0, 1000u64.try_into().unwrap());
+    let files0 = filestorage::get_active_file_count(runtime).await?;
+    assert_eq!(files0, 0);
+
+    // Distributing into a network with no active files yields nothing.
+    let empty = filestorage::distribute_storage_rewards(
+        runtime,
+        &core_signer,
+        1_000_000u64.try_into().unwrap(),
+    )
+    .await??;
+    assert!(empty.is_empty());
+
+    // Create a large then a small file. Weights are fixed at creation.
+    let big = filestorage::create_agreement(
+        runtime,
+        &signer,
+        make_descriptor(
+            "econ_big".to_string(),
+            vec![20u8; 32],
+            16,
+            1_000_000,
+            "big.bin".to_string(),
+        ),
+    )
+    .await??;
+    let small = filestorage::create_agreement(
+        runtime,
+        &signer,
+        make_descriptor(
+            "econ_small".to_string(),
+            vec![21u8; 32],
+            16,
+            10,
+            "small.bin".to_string(),
+        ),
+    )
+    .await??;
+
+    let big_econ = filestorage::get_agreement_economics(runtime, &big.agreement_id)
+        .await?
+        .expect("big economics present");
+    let small_econ = filestorage::get_agreement_economics(runtime, &small.agreement_id)
+        .await?
+        .expect("small economics present");
+
+    assert_eq!(big_econ.s_bytes, 1_000_000);
+    assert_eq!(small_econ.s_bytes, 10);
+    // rank_f = files_ever_created_at_creation + r_offset + 1; created back to
+    // back, so small's rank is exactly one past big's.
+    assert_eq!(big_econ.rank_f, 1001);
+    assert_eq!(small_econ.rank_f, 1002);
+    let zero: Decimal = 0u64.try_into().unwrap();
+    assert!(big_econ.omega_f > zero);
+    assert!(small_econ.omega_f > zero);
+    assert!(big_econ.k_f > zero);
+    // Larger file carries more emission weight despite its marginally lower rank.
+    assert!(
+        big_econ.omega_f > small_econ.omega_f,
+        "larger file must have larger ω_f"
+    );
+
+    // Creating (inactive) agreements must not move Ω or |F|.
+    assert_eq!(filestorage::get_omega(runtime).await?, omega0);
+    assert_eq!(filestorage::get_active_file_count(runtime).await?, files0);
+
+    // Activate the big file: Ω grows by ω_f, |F| increments.
+    let mut ops = Ops::new(&signer);
+    ops.push(filestorage::join_agreement_call(&big.agreement_id, "n1"));
+    ops.push(filestorage::join_agreement_call(&big.agreement_id, "n2"));
+    ops.push(filestorage::join_agreement_call(&big.agreement_id, "n3"));
+    let mut submit = runtime.submit();
+    submit.add(ops);
+    submit.execute().await?;
+
+    assert_eq!(
+        filestorage::get_active_file_count(runtime).await?,
+        files0 + 1
+    );
+    let omega1 = filestorage::get_omega(runtime).await?;
+    assert!(omega1 > omega0, "Ω must grow when a file activates");
+
+    // Distribute a reward pool: one positive allocation per active node of the
+    // big file, each strictly below the pool (genesis dilution + 3-way split).
+    let pool: Decimal = 1_000_000u64.try_into().unwrap();
+    let rewards = filestorage::distribute_storage_rewards(runtime, &core_signer, pool).await??;
+    let big_rewards: Vec<_> = rewards
+        .iter()
+        .filter(|r| r.agreement_id == big.agreement_id)
+        .collect();
+    assert_eq!(big_rewards.len(), 3, "one allocation per active node");
+    for r in &big_rewards {
+        assert!(r.amount > zero, "reward must be positive");
+        assert!(r.amount < pool, "a single node's share is below the pool");
+    }
+
+    // Admin can retune parameters.
+    let new_params = filestorage::StorageParams {
+        omega_genesis: 2000,
+        r_offset: 500,
+        c_stake: 3u64.try_into().unwrap(),
+        f_scale: 7000,
+    };
+    filestorage::set_storage_params(runtime, &core_signer, new_params).await??;
+    let got = filestorage::get_storage_params(runtime).await?;
+    assert_eq!(got.omega_genesis, 2000);
+    assert_eq!(got.r_offset, 500);
+    assert_eq!(got.f_scale, 7000);
+    assert_eq!(got.c_stake, 3u64.try_into().unwrap());
+
+    Ok(())
+}
+
 pub async fn run_core_signer_smoke(runtime: &mut Runtime) -> Result<()> {
+    storage_economics_smoke(runtime).await?;
     challenge_gen_smoke_test(runtime).await
 }
 

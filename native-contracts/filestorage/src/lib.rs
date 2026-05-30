@@ -23,6 +23,23 @@ const DEFAULT_BLOCKS_PER_YEAR: u64 = 52560;
 /// Number of sectors/symbols sampled per challenge
 const DEFAULT_S_CHAL: u64 = 100;
 
+/// Storage-economics genesis dilution mass Ω_genesis (v1-parameters §5).
+const DEFAULT_OMEGA_GENESIS: u64 = 1000;
+
+/// Additive rank offset r_offset — flattens the early-file emission curve so the
+/// first file does not capture the bulk of storage emissions (v1-parameters §5).
+const DEFAULT_R_OFFSET: u64 = 1000;
+
+/// File-count normalization F_scale in the base-stake formula. Post-launch
+/// tuning (v1-parameters §`c_stake` and `F_scale`); placeholder default.
+const DEFAULT_F_SCALE: u64 = 1000;
+
+/// Stake-budget multiplier c_stake (KOR). Post-launch tuning; placeholder default.
+const DEFAULT_C_STAKE: u64 = 1;
+
+/// ln(10) as 18-dp fixed point, for natural log via `log10(x) · LN10`.
+const LN10: &str = "2.302585092994045684";
+
 // ─────────────────────────────────────────────────────────────────
 // State Types
 // ─────────────────────────────────────────────────────────────────
@@ -45,6 +62,24 @@ struct ProtocolState {
     pub agreement_nodes: Map<String, AgreementNodes>,
     pub agreement_count: u64,
     pub challenges: Map<String, ChallengeData>,
+
+    // ── Storage economics ───────────────────────────────────────────
+    /// Ω — emission-weight normalizer: `Ω_genesis + Σ_active ω_f`.
+    pub omega: Decimal,
+    /// Monotonic count of all agreements ever created; drives `rank_f`.
+    pub total_files_ever_created: u64,
+    /// |F| — number of currently active agreements.
+    pub active_file_count: u64,
+    /// Ω_genesis dilution mass (admin-tunable).
+    pub omega_genesis: u64,
+    /// r_offset rank-curve offset (admin-tunable).
+    pub r_offset: u64,
+    /// c_stake base-stake KOR multiplier (admin-tunable).
+    pub c_stake: Decimal,
+    /// F_scale file-count normalization (admin-tunable).
+    pub f_scale: u64,
+    /// Per-agreement emission weights, fixed at creation.
+    pub agreement_economics: Map<String, AgreementEconomics>,
 }
 
 // ─────────────────────────────────────────────────────────────────
@@ -53,6 +88,10 @@ struct ProtocolState {
 
 impl Guest for Filestorage {
     fn init(ctx: &ProcContext) -> Contract {
+        let omega_genesis: Decimal = DEFAULT_OMEGA_GENESIS
+            .try_into()
+            .expect("omega_genesis fits in Decimal");
+        let c_stake: Decimal = DEFAULT_C_STAKE.try_into().expect("c_stake fits in Decimal");
         ProtocolState {
             min_nodes: DEFAULT_MIN_NODES,
             challenge_deadline_blocks: DEFAULT_CHALLENGE_DEADLINE_BLOCKS,
@@ -63,6 +102,14 @@ impl Guest for Filestorage {
             agreement_nodes: Map::default(),
             agreement_count: 0,
             challenges: Map::default(),
+            omega: omega_genesis,
+            total_files_ever_created: 0,
+            active_file_count: 0,
+            omega_genesis: DEFAULT_OMEGA_GENESIS,
+            r_offset: DEFAULT_R_OFFSET,
+            c_stake,
+            f_scale: DEFAULT_F_SCALE,
+            agreement_economics: Map::default(),
         }
         .init(ctx);
         ctx.contract()
@@ -108,6 +155,26 @@ impl Guest for Filestorage {
         model
             .agreement_nodes()
             .set(&agreement_id, AgreementNodes::default());
+
+        // ── Storage economics ────────────────────────────────────────
+        // Fix this file's emission weight ω_f and per-node base stake k_f at
+        // creation time, from the network state *before* this file activates
+        // (the `+1` bootstrap offsets handle the very first file).
+        let s_bytes = descriptor.original_size;
+        if s_bytes == 0 {
+            return Err(Error::Message("original_size must be positive".to_string()));
+        }
+        let economics = compute_agreement_economics(
+            s_bytes,
+            model.total_files_ever_created(),
+            model.r_offset(),
+            model.active_file_count(),
+            model.omega(),
+            model.c_stake(),
+            model.f_scale(),
+        )?;
+        model.agreement_economics().set(&agreement_id, economics);
+        model.update_total_files_ever_created(|c| c + 1);
 
         // Increment count
         model.update_agreement_count(|c| c + 1);
@@ -185,6 +252,17 @@ impl Guest for Filestorage {
 
         if activated {
             agreement.set_active(true);
+
+            // Storage economics: a newly-active file joins the emission-weight
+            // pool. Ω grows by its ω_f and the active-file count |F| increments.
+            // (Deactivation is not yet modeled — see leave_agreement TODO — so Ω
+            // and |F| are currently monotonic. If/when agreements deactivate,
+            // both must be decremented here's counterpart.)
+            if let Some(econ) = model.agreement_economics().get(&agreement_id) {
+                let omega_f = econ.omega_f();
+                model.try_update_omega(|o| o.add(omega_f))?;
+            }
+            model.update_active_file_count(|c| c + 1);
         }
 
         Ok(JoinAgreementResult {
@@ -268,6 +346,131 @@ impl Guest for Filestorage {
 
     fn get_min_nodes(ctx: &ViewContext) -> u64 {
         ctx.model().min_nodes()
+    }
+
+    // ─────────────────────────────────────────────────────────────────
+    // Storage Economics
+    // ─────────────────────────────────────────────────────────────────
+
+    fn get_agreement_economics(
+        ctx: &ViewContext,
+        agreement_id: String,
+    ) -> Option<AgreementEconomics> {
+        ctx.model()
+            .agreement_economics()
+            .get(&agreement_id)
+            .map(|e| e.load())
+    }
+
+    fn get_omega(ctx: &ViewContext) -> Decimal {
+        ctx.model().omega()
+    }
+
+    fn get_active_file_count(ctx: &ViewContext) -> u64 {
+        ctx.model().active_file_count()
+    }
+
+    fn get_storage_params(ctx: &ViewContext) -> StorageParams {
+        let model = ctx.model();
+        StorageParams {
+            omega_genesis: model.omega_genesis(),
+            r_offset: model.r_offset(),
+            c_stake: model.c_stake(),
+            f_scale: model.f_scale(),
+        }
+    }
+
+    fn set_storage_params(
+        ctx: &CoreContext,
+        params: StorageParams,
+    ) -> Result<StorageParams, Error> {
+        let model = ctx.proc_context().model();
+        // Note: retuning omega_genesis here does NOT retroactively rewrite the
+        // live Ω accumulator (it already folded in the old genesis mass and the
+        // active ω_f). New values take effect for weight math going forward.
+        model.update_omega_genesis(|_| params.omega_genesis);
+        model.update_r_offset(|_| params.r_offset);
+        model.update_c_stake(|_| params.c_stake);
+        model.update_f_scale(|_| params.f_scale);
+        Ok(params)
+    }
+
+    fn distribute_storage_rewards(
+        ctx: &CoreContext,
+        pool: Decimal,
+    ) -> Result<Vec<StorageReward>, Error> {
+        let model = ctx.proc_context().model();
+        let omega = model.omega();
+
+        // Active agreements, sorted by id for deterministic iteration.
+        let mut agreement_ids: Vec<String> = model
+            .agreements()
+            .keys()
+            .filter(|aid: &String| model.agreements().get(aid).is_some_and(|a| a.active()))
+            .collect();
+        agreement_ids.sort();
+
+        // Flatten to (agreement_id, node_id, weight): each active node of file f
+        // receives an equal share of ω_f.
+        let mut slots: Vec<(String, String, Decimal)> = Vec::new();
+        for aid in &agreement_ids {
+            let econ = match model.agreement_economics().get(aid) {
+                Some(e) => e,
+                None => continue,
+            };
+            let nodes_state = match model.agreement_nodes().get(aid) {
+                Some(s) => s,
+                None => continue,
+            };
+            let mut active_nodes: Vec<String> = nodes_state
+                .nodes()
+                .keys()
+                .filter(|nid: &String| nodes_state.nodes().get(nid).unwrap_or(false))
+                .collect();
+            active_nodes.sort();
+            if active_nodes.is_empty() {
+                continue;
+            }
+            let count: Decimal = (active_nodes.len() as u64).try_into()?;
+            let per_node = econ.omega_f().div(count)?;
+            for nid in active_nodes {
+                slots.push((aid.clone(), nid, per_node));
+            }
+        }
+
+        if slots.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        // Distributed total = pool · (Σ weight) / Ω. The genesis dilution mass
+        // (Ω_genesis / Ω) is intentionally left undistributed. The last slot
+        // absorbs the rounding remainder for exact conservation of that total.
+        let zero: Decimal = 0u64.try_into()?;
+        let mut total_weight = zero;
+        for (_, _, w) in &slots {
+            total_weight = total_weight.add(*w)?;
+        }
+        let distributed_total = pool.mul(total_weight)?.div(omega)?;
+
+        let mut rewards: Vec<StorageReward> = Vec::new();
+        let mut allocated = zero;
+        let n = slots.len();
+        for (i, (agreement_id, node_id, weight)) in slots.into_iter().enumerate() {
+            let amount = if i + 1 == n {
+                distributed_total.sub(allocated)?
+            } else {
+                let a = pool.mul(weight)?.div(omega)?;
+                allocated = allocated.add(a)?;
+                a
+            };
+            rewards.push(StorageReward {
+                node_id,
+                agreement_id,
+                amount,
+            });
+        }
+
+        Ok(rewards)
     }
 
     // ─────────────────────────────────────────────────────────────────
@@ -768,6 +971,47 @@ pub fn uniform_index_from_u64(n: usize, next_u64: &mut impl FnMut() -> u64) -> u
         }
         // Otherwise reject and generate a new value
     }
+}
+
+/// Compute a new agreement's emission weight ω_f and per-node base stake k_f
+/// from the network state captured at creation time.
+///
+///   rank_f = total_files_ever_created + r_offset + 1
+///   ω_f    = log10(s_bytes) / log10(1 + rank_f)
+///   k_f    = (ω_f / Ω) · c_stake · ln(1 + (|F| + 1) / F_scale)
+///
+/// ω_f is `ln(s)/ln(1+rank)`; the ln(10) factors cancel, so base-10 log alone
+/// suffices. Only k_f's outer natural log needs `log10(x) · ln(10)`. All math
+/// uses the host's deterministic fixed-point `Decimal` (consensus-safe).
+fn compute_agreement_economics(
+    s_bytes: u64,
+    total_files_ever_created: u64,
+    r_offset: u64,
+    active_file_count: u64,
+    omega: Decimal,
+    c_stake: Decimal,
+    f_scale: u64,
+) -> Result<AgreementEconomics, Error> {
+    let rank_f = total_files_ever_created + r_offset + 1;
+
+    let s_dec: Decimal = s_bytes.try_into()?;
+    let rank_denom: Decimal = (rank_f + 1).try_into()?;
+    let omega_f = s_dec.log10()?.div(rank_denom.log10()?)?;
+
+    let one: Decimal = 1u64.try_into()?;
+    let active_plus_one: Decimal = (active_file_count + 1).try_into()?;
+    let f_scale_dec: Decimal = f_scale.try_into()?;
+    let inner = one.add(active_plus_one.div(f_scale_dec)?)?;
+    let ln10: Decimal = LN10.into();
+    let ln_inner = inner.log10()?.mul(ln10)?;
+    let k_f = omega_f.div(omega)?.mul(c_stake)?.mul(ln_inner)?;
+
+    Ok(AgreementEconomics {
+        rank_f,
+        s_bytes,
+        omega_f,
+        k_f,
+    })
 }
 
 /// Validate and register a file descriptor with the file registry host.
