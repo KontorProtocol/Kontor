@@ -25,6 +25,7 @@ mod simulate_contract;
 mod simulate_errors;
 mod staking_contract;
 mod status_classification;
+mod token_gate;
 mod token_contract;
 mod wit_contract;
 
