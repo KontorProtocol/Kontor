@@ -261,7 +261,14 @@ impl Guest for Staking {
         let mut activated = 0u64;
         let mut deactivated = 0u64;
 
-        let keys: Vec<Holder> = model.validators().keys().collect();
+        // Deterministic processing order. The storage backend's key iteration is
+        // unordered (the underlying query has no final ORDER BY), so two indexers
+        // could otherwise process validators in different orders. Because the loop
+        // mutates shared totals (total_active_stake, active_count) and can early-
+        // return on a `?` error, a divergent order can produce divergent state —
+        // forking the validator set. Sort by canonical id to pin the order.
+        let mut keys: Vec<Holder> = model.validators().keys().collect();
+        keys.sort_by_key(|k| k.to_string());
         for key in keys {
             if let Some(entry) = model.validators().get(&key) {
                 match entry.status() {
