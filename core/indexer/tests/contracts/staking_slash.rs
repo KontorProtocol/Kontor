@@ -79,9 +79,14 @@ async fn distribute_slash_credits_recipients_evenly() -> Result<()> {
     let (mut rt, _dir, _name) = test_runtime_with_genesis(&gvs).await?;
 
     // Redistribute 30 across nodes 1 and 2 -> 15 each (even split, exact).
-    staking::distribute_slash(&mut rt, &core(), vec![pks[1].as_str(), pks[2].as_str()], dec(30))
-        .await?
-        .map_err(|e| anyhow!("{e:?}"))?;
+    staking::distribute_slash(
+        &mut rt,
+        &core(),
+        vec![pks[1].as_str(), pks[2].as_str()],
+        dec(30),
+    )
+    .await?
+    .map_err(|e| anyhow!("{e:?}"))?;
 
     for pk in [&pks[1], &pks[2]] {
         let v = staking::get_validator(&mut rt, pk)
