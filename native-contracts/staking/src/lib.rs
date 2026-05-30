@@ -468,4 +468,56 @@ impl Guest for Staking {
         }
         Ok(())
     }
+
+    /// Distribute `amount` — one block's ordering emission, already moved into
+    /// the staking contract by the reactor — across active validators in
+    /// proportion to their stake, crediting pooled stake. Exact conservation:
+    /// the last active validator (sorted) absorbs the rounding remainder.
+    /// Processed in sorted order for cross-indexer determinism. Core-context only.
+    fn distribute_ordering_reward(ctx: &CoreContext, amount: Decimal) -> Result<(), Error> {
+        let model = ctx.proc_context().model();
+        let zero: Decimal = 0u64.try_into()?;
+        if amount <= zero {
+            return Ok(());
+        }
+        let total = model.total_active_stake();
+        if total <= zero {
+            return Err(Error::Message("no active stake to reward".to_string()));
+        }
+
+        let mut keys: Vec<Holder> = model.validators().keys().collect();
+        keys.sort_by_key(|k| k.to_string());
+        let actives: Vec<Holder> = keys
+            .into_iter()
+            .filter(|h| {
+                model
+                    .validators()
+                    .get(h)
+                    .map(|e| e.status() == STATUS_ACTIVE)
+                    .unwrap_or(false)
+            })
+            .collect();
+        if actives.is_empty() {
+            return Err(Error::Message("no active validators".to_string()));
+        }
+
+        let n = actives.len();
+        let mut distributed: Decimal = zero;
+        for (i, h) in actives.iter().enumerate() {
+            let entry = model
+                .validators()
+                .get(h)
+                .ok_or(Error::Message("validator gone".to_string()))?;
+            let share = if i + 1 == n {
+                amount.sub(distributed)?
+            } else {
+                let s = amount.mul(entry.stake())?.div(total)?;
+                distributed = distributed.add(s)?;
+                s
+            };
+            entry.set_stake(entry.stake().add(share)?);
+        }
+        model.try_update_total_active_stake(|s| s.add(amount))?;
+        Ok(())
+    }
 }

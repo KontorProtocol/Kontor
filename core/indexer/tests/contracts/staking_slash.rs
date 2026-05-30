@@ -101,3 +101,42 @@ async fn distribute_slash_credits_recipients_evenly() -> Result<()> {
     assert_eq!(v0.stake, dec(100), "non-recipient unchanged");
     Ok(())
 }
+
+#[tokio::test]
+async fn distribute_ordering_reward_is_stake_weighted() -> Result<()> {
+    // Two validators with unequal stake: 100 and 300 (total 400).
+    let seed = [0x33u8; 32];
+    let mk = |i: u32, stake: u64| {
+        let k = derive_validator(&seed, i);
+        let pk = hex::encode(k.x_only_pubkey);
+        (
+            GenesisValidator {
+                x_only_pubkey: pk.clone(),
+                stake: dec(stake),
+                ed25519_pubkey: k.ed25519_pubkey.to_vec(),
+            },
+            pk,
+        )
+    };
+    let (g0, pk0) = mk(0, 100);
+    let (g1, pk1) = mk(1, 300);
+    let (mut rt, _dir, _name) = test_runtime_with_genesis(&[g0, g1]).await?;
+
+    // Distribute 40 in proportion to stake: 40·100/400 = 10, 40·300/400 = 30.
+    staking::distribute_ordering_reward(&mut rt, &core(), dec(40))
+        .await?
+        .map_err(|e| anyhow!("{e:?}"))?;
+
+    let v0 = staking::get_validator(&mut rt, &pk0).await?.expect("v0");
+    let v1 = staking::get_validator(&mut rt, &pk1).await?.expect("v1");
+    assert_eq!(v0.stake, dec(110), "100 + 40·100/400");
+    assert_eq!(v1.stake, dec(330), "300 + 40·300/400");
+
+    let info = staking::get_staking_info(&mut rt).await?;
+    assert_eq!(
+        info.total_stake,
+        dec(440),
+        "total active stake grew by the reward"
+    );
+    Ok(())
+}
