@@ -4,15 +4,20 @@ contract!(name = "token");
 use stdlib::*;
 
 /// Per-call cap on the *public, unprivileged* `mint` — a dev/test affordance
-/// (signet/testnet/regtest funding), to be gated off mainnet. It does NOT apply
-/// to the privileged core-context `issuance`/`issue_to` path that protocol
-/// emissions (and genesis stake issuance) use.
+/// (signet/testnet/regtest funding). It does NOT apply to the privileged
+/// core-context `issuance`/`issue_to` path that protocol emissions (and genesis
+/// stake issuance) use.
 const DEV_MINT_CAP: u64 = 1000;
 
 #[derive(Clone, Default, StorageRoot)]
 struct TokenStorage {
     pub ledger: Map<Holder, Decimal>,
     pub total_supply: Decimal,
+    /// Whether the public dev/test `mint` is permitted. Seeded `true` at `init`
+    /// so signet/testnet/regtest funding keeps working; mainnet genesis flips it
+    /// off via the core-context `set_dev_mint(false)` (the only KOR mint path on
+    /// mainnet is protocol emissions via `issuance`).
+    pub dev_mint_enabled: bool,
 }
 
 fn utxo_holder(out_point: context::OutPoint) -> Holder {
@@ -62,6 +67,9 @@ fn transfer(ctx: &ProcContext, src: Holder, dst: Holder, amt: Decimal) -> Result
 impl Guest for Token {
     fn init(ctx: &ProcContext) -> Contract {
         TokenStorage::default().init(ctx);
+        // Public dev mint is on by default (signet/testnet/regtest); mainnet
+        // genesis disables it via `set_dev_mint(false)`.
+        ctx.model().set_dev_mint_enabled(true);
         ctx.contract()
     }
 
@@ -109,13 +117,29 @@ impl Guest for Token {
     }
 
     fn mint(ctx: &ProcContext, amt: Decimal) -> Result<Mint, Error> {
-        // Public mint is a dev/test affordance only (see DEV_MINT_CAP); protocol
-        // emissions mint via the privileged `issuance`/`issue_to` core-context
-        // path, which is uncapped. TODO(economic-layer): gate this off on mainnet.
+        // Public mint is a dev/test affordance only — disabled on mainnet (see
+        // `set_dev_mint`). Protocol emissions mint via the privileged
+        // `issuance`/`issue_to` core-context path, which is uncapped and always on.
+        if !ctx.model().dev_mint_enabled() {
+            return Err(Error::Message(
+                "public mint is disabled on this network".to_string(),
+            ));
+        }
         if amt > DEV_MINT_CAP.try_into()? {
             return Err(Error::Message("Amount exceeds dev mint limit".to_string()));
         }
         mint(&ctx.model(), ctx.signer().into(), amt)
+    }
+
+    /// Core-context (reactor/admin) toggle for the public dev mint. Mainnet
+    /// genesis calls `set_dev_mint(false)`; signet/testnet/regtest leave it on.
+    fn set_dev_mint(ctx: &CoreContext, enabled: bool) -> Result<(), Error> {
+        ctx.proc_context().model().set_dev_mint_enabled(enabled);
+        Ok(())
+    }
+
+    fn dev_mint_enabled(ctx: &ViewContext) -> bool {
+        ctx.model().dev_mint_enabled()
     }
 
     fn burn(ctx: &ProcContext, amt: Decimal) -> Result<Burn, Error> {
