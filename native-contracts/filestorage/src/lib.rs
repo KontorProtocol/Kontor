@@ -37,12 +37,14 @@ const DEFAULT_OMEGA_GENESIS: u64 = 1000;
 /// first file does not capture the bulk of storage emissions (v1-parameters §5).
 const DEFAULT_R_OFFSET: u64 = 1000;
 
-/// File-count normalization F_scale in the base-stake formula. Post-launch
-/// tuning (v1-parameters §`c_stake` and `F_scale`); placeholder default.
+/// File-count normalization F_scale in the base-stake formula (knee of
+/// `ln(1 + |F|/F_scale)`). Anchor-calibrated (v1-parameters §5).
 const DEFAULT_F_SCALE: u64 = 1000;
 
-/// Stake-budget multiplier c_stake (KOR). Post-launch tuning; placeholder default.
-const DEFAULT_C_STAKE: u64 = 1;
+/// Stake-budget multiplier c_stake (KOR). Anchor-calibrated (Documentation
+/// `modeling/analyses/12`, rounded to 1M): a single 1 GB-file commitment locks
+/// ~$237 effective stake at |F|=100k.
+const DEFAULT_C_STAKE: u64 = 1_000_000;
 
 /// ln(10) as 18-dp fixed point, for natural log via `log10(x) · LN10`.
 const LN10: &str = "2.302585092994045684";
@@ -84,15 +86,15 @@ struct ProtocolState {
     pub total_files_ever_created: u64,
     /// |F| — number of currently active agreements.
     pub active_file_count: u64,
-    /// Ω_genesis dilution mass (admin-tunable).
+    /// Ω_genesis dilution mass.
     pub omega_genesis: u64,
-    /// r_offset rank-curve offset (admin-tunable).
+    /// r_offset rank-curve offset.
     pub r_offset: u64,
-    /// c_stake base-stake KOR multiplier (admin-tunable).
+    /// c_stake base-stake KOR multiplier.
     pub c_stake: Decimal,
-    /// F_scale file-count normalization (admin-tunable).
+    /// F_scale file-count normalization.
     pub f_scale: u64,
-    /// χ_fee storage-fee multiplier in basis points (admin-tunable).
+    /// χ_fee storage-fee multiplier in basis points.
     pub chi_fee_bps: u64,
     /// Per-agreement emission weights, fixed at creation.
     pub agreement_economics: Map<String, AgreementEconomics>,
@@ -574,8 +576,11 @@ impl Guest for Filestorage {
             })
             .collect();
 
-        // Get eligible agreements: active and agreement not already challenged
-        let eligible_agreement_ids: Vec<String> = model
+        // Get eligible agreements: active and agreement not already challenged.
+        // MUST be sorted before RNG-indexing below: `Map::keys()` has no
+        // defined order, so unsorted iteration would let two indexers select
+        // different agreements from the same seed → consensus fork.
+        let mut eligible_agreement_ids: Vec<String> = model
             .agreements()
             .keys()
             .filter(|aid: &String| {
@@ -585,6 +590,7 @@ impl Guest for Filestorage {
                     .is_some_and(|a| a.active() && !challenged_agreement_ids.contains(aid))
             })
             .collect();
+        eligible_agreement_ids.sort();
 
         let total_files = eligible_agreement_ids.len();
         if total_files == 0 {
@@ -647,11 +653,14 @@ impl Guest for Filestorage {
                 Some(s) => s,
                 None => continue,
             };
-            let active_nodes: Vec<String> = nodes_state
+            // Sorted before RNG node selection below — same determinism
+            // requirement as the agreement list (Map::keys() is unordered).
+            let mut active_nodes: Vec<String> = nodes_state
                 .nodes()
                 .keys()
                 .filter(|nid: &String| nodes_state.nodes().get(nid).unwrap_or(false))
                 .collect();
+            active_nodes.sort();
 
             if active_nodes.is_empty() {
                 continue;

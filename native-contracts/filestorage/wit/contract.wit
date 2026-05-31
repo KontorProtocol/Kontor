@@ -45,7 +45,7 @@ world root {
     amount: decimal,
   }
 
-  // Admin-tunable storage-economics parameters (post-launch calibration).
+  // Storage-economics parameters.
   record storage-params {
     omega-genesis: u64,
     r-offset: u64,
