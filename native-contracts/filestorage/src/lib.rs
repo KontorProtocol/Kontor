@@ -4,6 +4,13 @@ contract!(name = "filestorage");
 use alloc::collections::BTreeSet;
 use stdlib::*;
 
+import!(
+    name = "token",
+    height = 0,
+    tx_index = 0,
+    path = "../token/wit"
+);
+
 // ─────────────────────────────────────────────────────────────────
 // Protocol Constants
 // ─────────────────────────────────────────────────────────────────
@@ -39,6 +46,13 @@ const DEFAULT_C_STAKE: u64 = 1;
 
 /// ln(10) as 18-dp fixed point, for natural log via `log10(x) · LN10`.
 const LN10: &str = "2.302585092994045684";
+
+/// Basis-points denominator for fractional params (e.g. `χ_fee`).
+const BPS_DENOM: u64 = 10_000;
+
+/// Default storage-fee multiplier `χ_fee` = 0.3% of `k_f` (v1-parameters §File
+/// Storage). The creation fee `υ_f = χ_fee · k_f` is burned from the creator.
+const DEFAULT_CHI_FEE_BPS: u64 = 30;
 
 // ─────────────────────────────────────────────────────────────────
 // State Types
@@ -78,6 +92,8 @@ struct ProtocolState {
     pub c_stake: Decimal,
     /// F_scale file-count normalization (admin-tunable).
     pub f_scale: u64,
+    /// χ_fee storage-fee multiplier in basis points (admin-tunable).
+    pub chi_fee_bps: u64,
     /// Per-agreement emission weights, fixed at creation.
     pub agreement_economics: Map<String, AgreementEconomics>,
 }
@@ -109,6 +125,7 @@ impl Guest for Filestorage {
             r_offset: DEFAULT_R_OFFSET,
             c_stake,
             f_scale: DEFAULT_F_SCALE,
+            chi_fee_bps: DEFAULT_CHI_FEE_BPS,
             agreement_economics: Map::default(),
         }
         .init(ctx);
@@ -173,13 +190,25 @@ impl Guest for Filestorage {
             model.c_stake(),
             model.f_scale(),
         )?;
+        let k_f = economics.k_f;
         model.agreement_economics().set(&agreement_id, economics);
         model.update_total_files_ever_created(|c| c + 1);
 
         // Increment count
         model.update_agreement_count(|c| c + 1);
 
-        Ok(CreateAgreementResult { agreement_id })
+        // Storage creation fee υ_f = χ_fee · k_f, burned from the creator's
+        // spendable balance (interaction last, after all state effects — CEI;
+        // an insufficient balance rolls the whole agreement back).
+        let chi_fee_bps: Decimal = model.chi_fee_bps().try_into()?;
+        let denom: Decimal = BPS_DENOM.try_into()?;
+        let fee = k_f.mul(chi_fee_bps)?.div(denom)?;
+        let zero: Decimal = 0u64.try_into()?;
+        if fee > zero {
+            token::burn(ctx.signer(), fee)?;
+        }
+
+        Ok(CreateAgreementResult { agreement_id, fee })
     }
 
     fn get_agreement(ctx: &ViewContext, agreement_id: String) -> Option<AgreementData> {
@@ -377,6 +406,7 @@ impl Guest for Filestorage {
             r_offset: model.r_offset(),
             c_stake: model.c_stake(),
             f_scale: model.f_scale(),
+            chi_fee_bps: model.chi_fee_bps(),
         }
     }
 
@@ -392,6 +422,7 @@ impl Guest for Filestorage {
         model.update_r_offset(|_| params.r_offset);
         model.update_c_stake(|_| params.c_stake);
         model.update_f_scale(|_| params.f_scale);
+        model.update_chi_fee_bps(|_| params.chi_fee_bps);
         Ok(params)
     }
 

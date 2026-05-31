@@ -763,6 +763,7 @@ async fn storage_economics_smoke(runtime: &mut Runtime) -> Result<()> {
     assert_eq!(params.omega_genesis, 1000);
     assert_eq!(params.r_offset, 1000);
     assert_eq!(params.f_scale, 1000);
+    assert_eq!(params.chi_fee_bps, 30); // χ_fee = 0.3%
     let omega0 = filestorage::get_omega(runtime).await?;
     assert_eq!(omega0, 1000u64.try_into().unwrap());
     let files0 = filestorage::get_active_file_count(runtime).await?;
@@ -825,6 +826,11 @@ async fn storage_economics_smoke(runtime: &mut Runtime) -> Result<()> {
         big_econ.omega_f > small_econ.omega_f,
         "larger file must have larger ω_f"
     );
+    // Storage creation fee υ_f = χ_fee · k_f was charged from the creator and is
+    // a small fraction of k_f (χ_fee = 0.3%).
+    assert!(big.fee > zero, "storage creation fee charged");
+    assert!(big.fee < big_econ.k_f, "fee is a fraction of k_f");
+    assert!(small.fee > zero, "small file also charged a fee");
 
     // Creating (inactive) agreements must not move Ω or |F|.
     assert_eq!(filestorage::get_omega(runtime).await?, omega0);
@@ -866,6 +872,7 @@ async fn storage_economics_smoke(runtime: &mut Runtime) -> Result<()> {
         r_offset: 500,
         c_stake: 3u64.try_into().unwrap(),
         f_scale: 7000,
+        chi_fee_bps: 50,
     };
     filestorage::set_storage_params(runtime, &core_signer, new_params).await??;
     let got = filestorage::get_storage_params(runtime).await?;
@@ -873,6 +880,7 @@ async fn storage_economics_smoke(runtime: &mut Runtime) -> Result<()> {
     assert_eq!(got.r_offset, 500);
     assert_eq!(got.f_scale, 7000);
     assert_eq!(got.c_stake, 3u64.try_into().unwrap());
+    assert_eq!(got.chi_fee_bps, 50);
 
     Ok(())
 }

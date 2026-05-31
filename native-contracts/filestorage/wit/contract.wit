@@ -24,6 +24,8 @@ world root {
 
   record create-agreement-result {
     agreement-id: string,
+    // Storage creation fee burned from the creator: υ_f = χ_fee · k_f.
+    fee: decimal,
   }
 
   // Per-agreement storage-emission weights, fixed at creation time.
@@ -49,6 +51,8 @@ world root {
     r-offset: u64,
     c-stake: decimal,
     f-scale: u64,
+    // Storage-fee multiplier χ_fee in basis points (υ_f = χ_fee · k_f).
+    chi-fee-bps: u64,
   }
 
   record join-agreement-result {
