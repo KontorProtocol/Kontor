@@ -1,0 +1,316 @@
+package kontor:built-in;
+
+interface context {
+    use error.{error};
+
+    /// Freely-constructible record naming a contract — used as the
+    /// target for cross-contract calls (`foreign.call`). The passive
+    /// side of the contract-identity pair (see `contract` resource).
+    record contract-address {
+        name: string,
+        height: u64,
+        tx-index: u32,
+    }
+
+    /// Active proof of "I am the contract at this address." Same
+    /// HolderRef/Holder split: `contract-address` is the freely-
+    /// constructible record (anyone can pass one around); `contract`
+    /// is the host-issued resource that can only be obtained from the
+    /// host via `proc-context.contract` / `core-context.contract` /
+    /// `view-context.contract`.
+    ///
+    /// Returning a `contract` from `init` is how a contract proves
+    /// which address it is — there's no way to fabricate one pointing
+    /// at another contract. Once a `contract` crosses the result-row
+    /// boundary the host drains it to a `contract-address` record for
+    /// WAVE serialization; integrity is in-execution only.
+    resource contract {
+        address: async func() -> contract-address;
+    }
+
+    variant holder-ref {
+        x-only-pubkey(string),
+        signer-id(u64),
+        core,
+        burner,
+        utxo(out-point),
+    }
+
+    resource holder {
+        key: async func() -> string;
+        from-ref: static async func(ref: holder-ref) -> result<holder, error>;
+        as-ref: async func() -> holder-ref;
+    }
+
+    resource signer {
+        key: async func() -> string;
+        as-holder: async func() -> holder;
+        as-ref: async func() -> holder-ref;
+    }
+
+    variant signer-ref {
+        signer-id(u64),
+        x-only-pubkey(string),
+    }
+
+    record out-point {
+        txid: string,
+        vout: u32,
+    }
+
+    resource transaction {
+        id: async func() -> string;
+        out-point: async func() -> out-point;
+        op-return-data: async func() -> option<signer-ref>;
+    }
+
+    resource keys {
+        next: async func() -> option<string>;
+    }
+
+    resource view-storage {
+        get-str: async func(path: string) -> option<string>;
+        get-u64: async func(path: string) -> option<u64>;
+        get-s64: async func(path: string) -> option<s64>;
+        get-bool: async func(path: string) -> option<bool>;
+        get-list-u8: async func(path: string) -> option<list<u8>>;
+        get-keys: async func(path: string) -> keys;
+        exists: async func(path: string) -> bool;
+        extend-path-with-match: async func(path: string, variants: list<string>) -> option<string>;
+    }
+
+    resource proc-storage {
+        get-str: async func(path: string) -> option<string>;
+        get-u64: async func(path: string) -> option<u64>;
+        get-s64: async func(path: string) -> option<s64>;
+        get-bool: async func(path: string) -> option<bool>;
+        get-list-u8: async func(path: string) -> option<list<u8>>;
+        get-keys: async func(path: string) -> keys;
+        exists: async func(path: string) -> bool;
+        extend-path-with-match: async func(path: string, variants: list<string>) -> option<string>;
+
+        set-str: async func(path: string, value: string);
+        set-u64: async func(path: string, value: u64);
+        set-s64: async func(path: string, value: s64);
+        set-bool: async func(path: string, value: bool);
+        set-list-u8: async func(path: string, value: list<u8>);
+        set-void: async func(path: string);
+        delete-matching-paths: async func(base-path: string, variants: list<string>) -> u64;
+        view-storage: async func() -> view-storage;
+    }
+
+    resource view-context {
+        storage: async func() -> view-storage;
+        /// See `proc-context.contract`. View functions may also need
+        /// to know which contract they're running in (e.g. for self-
+        /// referential lookups).
+        contract: async func() -> contract;
+    }
+
+    resource proc-context {
+        signer: async func() -> signer;
+        /// Who pays this op's gas. A `holder` (not a `signer`) by design —
+        /// contracts can credit the payer's balance but cannot spend on
+        /// their behalf, since the payer only consented to pay this op's
+        /// gas. Equals `signer.as-holder()` by default; redirected by a
+        /// previous-input `Sponsor` Inst (direct context) or by
+        /// `AggregateSigner.sponsored = true` (aggregate context).
+        payer: async func() -> holder;
+        contract-signer: async func() -> signer;
+        view-context: async func() -> view-context;
+        generate-id: async func() -> string;
+        storage: async func() -> proc-storage;
+        transaction: async func() -> transaction;
+        block-height: async func() -> u64;
+        /// The executing contract's own identity as a `contract` resource —
+        /// the only way for the contract to obtain one pointing at itself.
+        /// Returned from `init` so the new contract's address surfaces on
+        /// the publish op's result row; usable by any proc-context method
+        /// that needs to assert "I am the contract at <address>."
+        contract: async func() -> contract;
+    }
+
+    resource fall-context {
+        signer: async func() -> option<signer>;
+        /// See `proc-context.payer`. `none` when `signer` is also `none`
+        /// (a fall context with no acting signer has no payer either).
+        payer: async func() -> option<holder>;
+        proc-context: async func() -> option<proc-context>;
+        view-context: async func() -> view-context;
+    }
+
+    resource core-context {
+        proc-context: async func() -> proc-context;
+        signer-proc-context: async func() -> proc-context;
+        core-signer: async func() -> signer;
+        /// See `proc-context.contract`. Native contracts running as core
+        /// also need an integrity-bound handle to their own identity.
+        contract: async func() -> contract;
+    }
+}
+
+interface foreign {
+    use context.{signer, contract-address};
+
+    call: async func(signer: option<signer>, contract-address: contract-address, expr: string) -> string;
+}
+
+interface crypto {
+    hash: async func(input: string) -> tuple<string, list<u8>>;
+    hash-with-salt: async func(input: string, salt: string) -> tuple<string, list<u8>>;
+
+    hkdf-derive: async func(
+        ikm: list<u8>,
+        salt: list<u8>,
+        info: list<u8>
+    ) -> list<u8>;
+}
+
+interface error {
+    variant error {
+        message(string),
+        overflow(string),
+        div-by-zero(string),
+        syntax(string),
+        validation(string),
+    }
+}
+
+interface numbers {
+    use error.{error};
+
+    enum sign {
+        plus,
+        minus
+    }
+
+    record integer {
+        r0: u64,
+        r1: u64,
+        r2: u64,
+        r3: u64,
+        sign: sign
+    }
+
+    record decimal {
+        r0: u64,
+        r1: u64,
+        r2: u64,
+        r3: u64,
+        sign: sign
+    }
+
+    enum ordering {
+        less,
+        equal,
+        greater
+    }
+
+    u64-to-integer: async func(i: u64) -> integer;
+    s64-to-integer: async func(i: s64) -> integer;
+    string-to-integer: async func(s: string) -> result<integer, error>;
+    integer-to-string: async func(i: integer) -> string;
+    eq-integer: async func(a: integer, b: integer) -> bool;
+    cmp-integer: async func(a: integer, b: integer) -> ordering;
+    add-integer: async func(a: integer, b: integer) -> result<integer, error>;
+    sub-integer: async func(a: integer, b: integer) -> result<integer, error>;
+    mul-integer: async func(a: integer, b: integer) -> result<integer, error>;
+    div-integer: async func(a: integer, b: integer) -> result<integer, error>;
+    sqrt-integer: async func(i: integer) -> result<integer, error>;
+
+    integer-to-decimal: async func(i: integer) -> result<decimal, error>;
+    decimal-to-integer: async func(d: decimal) -> result<integer, error>;
+    u64-to-decimal: async func(i: u64) -> result<decimal, error>;
+    s64-to-decimal: async func(i: s64) -> result<decimal, error>;
+    f64-to-decimal: async func(f: f64) -> result<decimal, error>;
+    string-to-decimal: async func(s: string) -> result<decimal, error>;
+    decimal-to-string: async func(d: decimal) -> string;
+    eq-decimal: async func(a: decimal, b: decimal) -> result<bool, error>;
+    cmp-decimal: async func(a: decimal, b: decimal) -> ordering;
+    add-decimal: async func(a: decimal, b: decimal) -> result<decimal, error>;
+    sub-decimal: async func(a: decimal, b: decimal) -> result<decimal, error>;
+    mul-decimal: async func(a: decimal, b: decimal) -> result<decimal, error>;
+    div-decimal: async func(a: decimal, b: decimal) -> result<decimal, error>;
+    log10-decimal: async func(a: decimal) -> result<decimal, error>;
+}
+
+interface file-registry {
+    use error.{error};
+
+    record raw-file-descriptor {
+        file-id: string,
+        object-id: string,
+        nonce: list<u8>,
+        root: list<u8>,
+        padded-len: u64,
+        original-size: u64,
+        filename: string,
+    }
+
+    resource file-descriptor {
+        file-id: async func() -> string;
+        from-raw: static async func(raw: raw-file-descriptor) -> result<file-descriptor, error>;
+        compute-challenge-id: async func(
+            block-height: u64,
+            num-challenges: u64,
+            seed: list<u8>,
+            prover-id: string
+        ) -> result<string, error>;
+    }
+
+    add-file: async func(file-descriptor: borrow<file-descriptor>);
+
+    get-file-descriptor: async func(file-id: string) -> option<file-descriptor>;
+
+    // ─────────────────────────────────────────────────────────────────
+    // Proof Verification
+    // ─────────────────────────────────────────────────────────────────
+
+    record challenge-input {
+        challenge-id: string,
+        file-id: string,
+        block-height: u64,
+        num-challenges: u64,
+        seed: list<u8>,
+        prover-id: string,
+    }
+
+    enum verify-result {
+        verified,
+        rejected,
+        invalid,
+    }
+
+    resource proof {
+        from-bytes: static async func(bytes: list<u8>) -> result<proof, error>;
+        challenge-ids: async func() -> list<string>;
+        verify: async func(challenges: list<challenge-input>) -> result<verify-result, error>;
+    }
+}
+
+interface testing {
+    /// Always returns an error. Used to test host function error propagation.
+    host-error: async func() -> string;
+    /// Always panics. Used to test host function panic propagation.
+    host-panic: async func() -> string;
+}
+
+interface registry {
+    /// Consume fuel for a RegisterBlsKey operation. The actual verification
+    /// and DB write happen in the reactor (outside the contract's fuel
+    /// scope); this call meters the caller for the operation so the fuel
+    /// accounting matches reality. Traps on insufficient fuel — aborts
+    /// the enclosing contract call.
+    register-bls-key: async func();
+}
+
+world built-in {
+    import context;
+    import foreign;
+    import crypto;
+    import error;
+    import numbers;
+    import file-registry;
+    import testing;
+    import registry;
+}
