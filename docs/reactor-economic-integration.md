@@ -70,7 +70,7 @@ Bond amounts are **read from the batch's frozen `tx_bonds`**, never recomputed (
 
 ## 5. Atomicity & privilege rules
 
-- **Block clock**: Phase 0–4 run inside the existing block savepoint (`blocks.rs:288`–`302`), so they're atomic with the block. A failure in any phase rolls back the whole block.
+- **Block clock**: Phase 0–4 run inside the existing block savepoint (`blocks.rs:290`–`304`), so they're atomic with the block. A failure in any phase rolls back the whole block.
 - **Batch clock**: runs *outside* the block savepoint. Each settlement event (one confirmed batch, one expired batch, one rollback) gets its own savepoint and commits atomically — paying signers, releasing reservations, and burning either all commit or all roll back. Never leave reservations released but fees unpaid. Group by event, not per-tx.
 - **Privilege**: every call uses the core signer; no user signer ever reaches these paths. Crediting `token::issue_to` / burning / transferring is the reactor's responsibility — the contracts compute and return allocations (the established `distribute_*` pattern), the reactor moves the KOR.
 
@@ -98,7 +98,7 @@ The storage/staking per-block half (§3) is wireable once #1–#4 land; the per-
 
 ## 8. Validation
 
-The checkpoint hash-chain (`database/sql/checkpoint_trigger.sql`) already fingerprints all economic state, so cross-node agreement is checked for free by `assert_checkpoints_match`. Beyond that, every rule in §5–§6 is a target of the **deterministic-simulation test suite** — see the companion design `docs/determinism-simulation-testing.md`. In particular the frozen-amount replay rule (§6.1) and the two-clock atomicity (§5) are precisely the properties that only a reindex/fault-injection oracle catches.
+The checkpoint hash-chain (`database/sql/checkpoint_trigger.sql`) already fingerprints all economic state, so cross-node agreement is checked for free by `assert_checkpoints_match`. Beyond that, every rule in §5–§6 is a target of the **deterministic-simulation test suite** — see the companion design `docs/determinism-simulation-testing.md`. In particular the frozen-amount replay rule (#443 §6.1) and the two-clock atomicity (§5) are precisely the properties that only a reindex/fault-injection oracle catches.
 
 ## 9. Ownership
 
