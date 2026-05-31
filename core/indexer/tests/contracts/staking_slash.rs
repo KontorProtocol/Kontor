@@ -103,6 +103,58 @@ async fn distribute_slash_credits_recipients_evenly() -> Result<()> {
 }
 
 #[tokio::test]
+async fn slash_equivocation_takes_all_ejects_and_splits_bounty() -> Result<()> {
+    let (gvs, pks) = validators(3, 100); // 3 active validators, 100 each (total 300)
+    let (mut rt, _dir, _name) = test_runtime_with_genesis(&gvs).await?;
+
+    let before = staking::get_staking_info(&mut rt).await?;
+    assert_eq!(before.active_count, 3);
+    assert_eq!(before.total_stake, dec(300));
+
+    // pks[0] equivocates; pks[2] publishes the evidence.
+    let res = staking::slash_equivocation(&mut rt, &core(), &pks[0], &pks[2])
+        .await?
+        .map_err(|e| anyhow!("{e:?}"))?;
+
+    // λ_equiv = 100% (entire stake); r_evid default = 5% (500 bps): 100 -> bounty 5, burn 95.
+    assert_eq!(
+        res.slashed,
+        dec(100),
+        "entire stake slashed (λ_equiv = 100%)"
+    );
+    assert_eq!(res.bounty, dec(5), "5% evidence-publication bounty");
+    assert_eq!(res.burned, dec(95), "remaining 95% burned");
+    assert_eq!(res.publisher, pks[2], "publisher echoed back");
+
+    // Offender is zeroed and ejected from the set.
+    let off = staking::get_validator(&mut rt, &pks[0])
+        .await?
+        .expect("offender exists");
+    assert_eq!(off.stake, dec(0), "offender stake driven to zero");
+    assert_eq!(
+        off.status,
+        staking::ValidatorStatus::Inactive,
+        "offender ejected from the set"
+    );
+
+    // The bounty is paid to the publisher's *spendable* balance, NOT its stake.
+    let pubv = staking::get_validator(&mut rt, &pks[2])
+        .await?
+        .expect("publisher exists");
+    assert_eq!(
+        pubv.stake,
+        dec(100),
+        "publisher's staked balance is unchanged (bounty is spendable)"
+    );
+
+    // Active set shrank by one; total active stake dropped by the offender's stake.
+    let after = staking::get_staking_info(&mut rt).await?;
+    assert_eq!(after.active_count, 2, "ejected from the active set");
+    assert_eq!(after.total_stake, dec(200), "total active stake 300 -> 200");
+    Ok(())
+}
+
+#[tokio::test]
 async fn distribute_ordering_reward_is_stake_weighted() -> Result<()> {
     // Two validators with unequal stake: 100 and 300 (total 400).
     let seed = [0x33u8; 32];

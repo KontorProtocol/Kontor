@@ -35,6 +35,10 @@ struct StakingStorage {
     /// remaining `(10000 − τ_slash_bps)` is returned to the caller to
     /// redistribute to the file's other nodes.
     pub tau_slash_bps: u64,
+    /// Evidence-publication bounty for an equivocation slash, in basis points
+    /// (spec `r_evid`, 0–10000). This fraction of the slashed stake is paid to
+    /// the evidence publisher; the remaining `(10000 − r_evid_bps)` is burned.
+    pub r_evid_bps: u64,
 }
 
 /// Basis-points denominator for fractional params (e.g. `τ_slash`).
@@ -44,6 +48,10 @@ const BPS_DENOM: u64 = 10_000;
 const DEFAULT_LAMBDA_SLASH: u64 = 30;
 /// Default `τ_slash` = 50% burn share. Source: `specs/params.typ` `econ.tauSlash`.
 const DEFAULT_TAU_SLASH_BPS: u64 = 5_000;
+/// Default `r_evid` = 5% evidence-publication bounty. Source: optimistic-consensus
+/// spec (`econ.rEvid`); calibrated to make report publication strictly profitable
+/// while keeping the burn share dominant.
+const DEFAULT_R_EVID_BPS: u64 = 500;
 
 #[allow(dead_code)]
 const STATUS_INACTIVE: u64 = 0;
@@ -79,6 +87,7 @@ impl Guest for Staking {
         model.set_min_stake(1u64.try_into().unwrap());
         model.set_lambda_slash(DEFAULT_LAMBDA_SLASH);
         model.set_tau_slash_bps(DEFAULT_TAU_SLASH_BPS);
+        model.set_r_evid_bps(DEFAULT_R_EVID_BPS);
         ctx.contract()
     }
 
@@ -398,18 +407,94 @@ impl Guest for Staking {
         })
     }
 
+    /// Slash an equivocating staker. Equivocation is provable malice, so the
+    /// penalty is the **entire** stake (`λ_equiv = 100%`) and the staker is
+    /// **ejected** from the set immediately. A fraction `r_evid` of the slashed
+    /// stake is paid to the evidence `publisher` as a bounty (making report
+    /// publication strictly profitable for any observer); the remaining
+    /// `(1 − r_evid)` is burned. Core-context only — the reactor verifies the
+    /// two-conflicting-batches evidence and supplies the offender + publisher.
+    fn slash_equivocation(
+        ctx: &CoreContext,
+        x_only_pubkey: String,
+        publisher: String,
+    ) -> Result<EquivocationResult, Error> {
+        let model = ctx.proc_context().model();
+        let holder: Holder = x_only_pubkey
+            .parse()
+            .map_err(|_| Error::Message("invalid x_only_pubkey".to_string()))?;
+        let pub_holder: Holder = publisher
+            .parse()
+            .map_err(|_| Error::Message("invalid publisher key".to_string()))?;
+        let entry = model
+            .validators()
+            .get(&holder)
+            .ok_or(Error::Message("not registered".to_string()))?;
+
+        let zero: Decimal = 0u64.try_into()?;
+        let penalty = entry.stake(); // λ_equiv = 100% — the entire stake
+
+        // Eject from the active set (effective immediately). Aggregate active
+        // counters are only adjusted if the offender was currently active.
+        if entry.status() == STATUS_ACTIVE {
+            model.try_update_total_active_stake(|s| s.sub(penalty))?;
+            model.update_active_count(|c| c.saturating_sub(1));
+        }
+        entry.set_status(STATUS_INACTIVE);
+        entry.set_stake(zero);
+
+        if penalty <= zero {
+            return Ok(EquivocationResult {
+                slashed: zero,
+                burned: zero,
+                bounty: zero,
+                publisher,
+            });
+        }
+
+        // Split the slashed stake: r_evid bounty to the publisher, rest burned.
+        // Both move out of the contract's escrowed-stake balance.
+        let r_evid_bps: Decimal = model.r_evid_bps().try_into()?;
+        let denom: Decimal = BPS_DENOM.try_into()?;
+        let bounty = penalty.mul(r_evid_bps)?.div(denom)?;
+        let burned = penalty.sub(bounty)?;
+
+        if burned > zero {
+            token::burn(ctx.proc_context().contract_signer(), burned)?;
+        }
+        if bounty > zero {
+            token::transfer(
+                ctx.proc_context().contract_signer(),
+                pub_holder.as_ref(),
+                bounty,
+            )?;
+        }
+
+        Ok(EquivocationResult {
+            slashed: penalty,
+            burned,
+            bounty,
+            publisher,
+        })
+    }
+
     /// Core-context (reactor/admin) setter for the slashing parameters.
     fn set_slash_params(
         ctx: &CoreContext,
         lambda_slash: u64,
         tau_slash_bps: u64,
+        r_evid_bps: u64,
     ) -> Result<(), Error> {
         if tau_slash_bps > BPS_DENOM {
             return Err(Error::Message("tau_slash_bps must be <= 10000".to_string()));
         }
+        if r_evid_bps > BPS_DENOM {
+            return Err(Error::Message("r_evid_bps must be <= 10000".to_string()));
+        }
         let model = ctx.proc_context().model();
         model.set_lambda_slash(lambda_slash);
         model.set_tau_slash_bps(tau_slash_bps);
+        model.set_r_evid_bps(r_evid_bps);
         Ok(())
     }
 
@@ -418,6 +503,7 @@ impl Guest for Staking {
         SlashParams {
             lambda_slash: model.lambda_slash(),
             tau_slash_bps: model.tau_slash_bps(),
+            r_evid_bps: model.r_evid_bps(),
         }
     }
 

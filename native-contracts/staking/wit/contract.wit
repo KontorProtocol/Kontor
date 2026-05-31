@@ -47,6 +47,17 @@ world root {
   record slash-params {
     lambda-slash: u64,
     tau-slash-bps: u64,
+    r-evid-bps: u64,
+  }
+
+  // Result of an equivocation slash: the whole stake is taken (λ_equiv = 100%),
+  // `bounty` (= r_evid · slashed) is paid to the evidence `publisher`, and the
+  // remainder is burned.
+  record equivocation-result {
+    slashed: decimal,
+    burned: decimal,
+    bounty: decimal,
+    publisher: string,
   }
 
   export init: async func(ctx: borrow<proc-context>) -> contract;
@@ -64,9 +75,10 @@ world root {
 
   // --- Slashing (CoreContext — reactor-orchestrated) ---
   export slash: async func(ctx: borrow<core-context>, x-only-pubkey: string, amount: decimal) -> result<slash-result, error>;
+  export slash-equivocation: async func(ctx: borrow<core-context>, x-only-pubkey: string, publisher: string) -> result<equivocation-result, error>;
   export distribute-slash: async func(ctx: borrow<core-context>, recipients: list<string>, amount: decimal) -> result<_, error>;
   export distribute-ordering-reward: async func(ctx: borrow<core-context>, amount: decimal) -> result<_, error>;
-  export set-slash-params: async func(ctx: borrow<core-context>, lambda-slash: u64, tau-slash-bps: u64) -> result<_, error>;
+  export set-slash-params: async func(ctx: borrow<core-context>, lambda-slash: u64, tau-slash-bps: u64, r-evid-bps: u64) -> result<_, error>;
   export get-slash-params: async func(ctx: borrow<view-context>) -> slash-params;
 
   // --- Queries (ViewContext) ---
