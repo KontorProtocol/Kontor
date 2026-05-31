@@ -155,6 +155,29 @@ async fn slash_equivocation_takes_all_ejects_and_splits_bounty() -> Result<()> {
 }
 
 #[tokio::test]
+async fn slash_equivocation_self_publication_burns_everything() -> Result<()> {
+    let (gvs, pks) = validators(2, 100);
+    let (mut rt, _dir, _name) = test_runtime_with_genesis(&gvs).await?;
+
+    // The offender names their OWN key as the evidence publisher to try to
+    // recover the 5% bounty. Self-publication is forbidden: bounty must be 0 and
+    // the entire stake burned (no rebate).
+    let res = staking::slash_equivocation(&mut rt, &core(), &pks[0], &pks[0])
+        .await?
+        .map_err(|e| anyhow!("{e:?}"))?;
+    assert_eq!(res.slashed, dec(100), "entire stake slashed");
+    assert_eq!(res.bounty, dec(0), "no self-publication bounty");
+    assert_eq!(res.burned, dec(100), "entire penalty burned");
+
+    let off = staking::get_validator(&mut rt, &pks[0])
+        .await?
+        .expect("offender exists");
+    assert_eq!(off.stake, dec(0), "offender zeroed");
+    assert_eq!(off.status, staking::ValidatorStatus::Inactive, "ejected");
+    Ok(())
+}
+
+#[tokio::test]
 async fn distribute_ordering_reward_is_stake_weighted() -> Result<()> {
     // Two validators with unequal stake: 100 and 300 (total 400).
     let seed = [0x33u8; 32];

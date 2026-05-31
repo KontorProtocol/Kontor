@@ -454,9 +454,21 @@ impl Guest for Staking {
 
         // Split the slashed stake: r_evid bounty to the publisher, rest burned.
         // Both move out of the contract's escrowed-stake balance.
+        //
+        // Self-publication is forbidden (spec §Evidence): an equivocator must not
+        // recover any of their own slashed stake by naming their own key as the
+        // publisher — so when publisher == offender the bounty is zero and the
+        // entire penalty is burned. The broader rule (publisher must not be a
+        // co-signer of either conflicting batch) requires the batch signer sets,
+        // which the contract does not hold; the reactor MUST reject a publisher
+        // that signed either batch before calling this.
         let r_evid_bps: Decimal = model.r_evid_bps().try_into()?;
         let denom: Decimal = BPS_DENOM.try_into()?;
-        let bounty = penalty.mul(r_evid_bps)?.div(denom)?;
+        let bounty = if pub_holder == holder {
+            zero
+        } else {
+            penalty.mul(r_evid_bps)?.div(denom)?
+        };
         let burned = penalty.sub(bounty)?;
 
         if burned > zero {
