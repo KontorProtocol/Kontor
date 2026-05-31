@@ -64,6 +64,8 @@ world root {
   record leave-agreement-result {
     agreement-id: string,
     node-id: string,
+    // Leave fee burned from the signer: φ_leave = k_f · (n_min/|N_f|)².
+    fee: decimal,
   }
 
   // Challenge types

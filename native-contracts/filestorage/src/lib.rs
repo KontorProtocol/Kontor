@@ -311,7 +311,7 @@ impl Guest for Filestorage {
         let model = ctx.model();
 
         // Validate agreement exists
-        let _agreement = model
+        let agreement = model
             .agreements()
             .get(&agreement_id)
             .ok_or(Error::Message(format!(
@@ -334,19 +334,50 @@ impl Guest for Filestorage {
             )));
         }
 
-        // TODO: the storage protocol spec does not allow
-        // voluntary departure when the agreement would be at/below the minimum replication
-        // threshold (|N_f| <= n_min). We do not enforce that rule yet.
+        // The min-replication guard and leave fee apply only to *active*
+        // agreements, where a stored file's replication must be protected. A node
+        // may leave an inactive agreement (one that never reached n_min, so no
+        // file is being stored/challenged) freely and fee-free.
+        let zero: Decimal = 0u64.try_into()?;
+        let node_count = nodes_state.node_count();
+        let min_nodes = model.min_nodes();
+        let fee = if agreement.active() {
+            // Spec (Leave-Agreement): voluntary departure is forbidden when it
+            // would take the agreement at or below minimum replication
+            // (|N_f| <= n_min); |N_f| is the active node count before departure.
+            if node_count <= min_nodes {
+                return Err(Error::Message(format!(
+                    "cannot leave: agreement {} is at minimum replication ({} <= {})",
+                    agreement_id, node_count, min_nodes
+                )));
+            }
+            // φ_leave = k_f · (n_min/|N_f|)² — quadratic, escalating as replication
+            // nears n_min — burned from the signer's spendable balance.
+            let k_f = model
+                .agreement_economics()
+                .get(&agreement_id)
+                .map(|e| e.k_f())
+                .unwrap_or(zero);
+            let n_min_d: Decimal = min_nodes.try_into()?;
+            let n_f_d: Decimal = node_count.try_into()?;
+            let ratio = n_min_d.div(n_f_d)?;
+            k_f.mul(ratio)?.mul(ratio)?
+        } else {
+            zero
+        };
 
-        // Mark node as inactive (don't delete, just set to false)
+        // Effects before the burn interaction (CEI): mark inactive + decrement.
         nodes_state.nodes().set(&node_id, false);
-
-        // Decrement node count
         nodes_state.update_node_count(|c| c.saturating_sub(1));
+
+        if fee > zero {
+            token::burn(ctx.signer(), fee)?;
+        }
 
         Ok(LeaveAgreementResult {
             agreement_id,
             node_id,
+            fee,
         })
     }
 

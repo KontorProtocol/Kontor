@@ -357,30 +357,28 @@ async fn filestorage_leave_agreement(runtime: &mut Runtime) -> Result<()> {
         "leave.txt".to_string(),
     );
 
-    // Create agreement and join
+    // Create agreement and join four nodes, so a single departure stays above
+    // n_min (3) and is therefore permitted.
     let created = filestorage::create_agreement(runtime, &signer, descriptor).await??;
     let mut ops = Ops::new(&signer);
-    ops.push(filestorage::join_agreement_call(
-        &created.agreement_id,
-        "node_1",
-    ));
-    ops.push(filestorage::join_agreement_call(
-        &created.agreement_id,
-        "node_2",
-    ));
+    for n in ["node_1", "node_2", "node_3", "node_4"] {
+        ops.push(filestorage::join_agreement_call(&created.agreement_id, n));
+    }
     let mut submit = runtime.submit();
     submit.add(ops);
     submit.execute().await?;
 
-    // Leave with node_1
+    // Leave with node_1 — allowed (|N_f| = 4 > n_min); charges the φ_leave fee.
     let result =
         filestorage::leave_agreement(runtime, &signer, &created.agreement_id, "node_1").await??;
     assert_eq!(result.agreement_id, created.agreement_id);
     assert_eq!(result.node_id, "node_1");
+    let zero: Decimal = 0u64.try_into().unwrap();
+    assert!(result.fee > zero, "φ_leave fee charged");
 
     // Verify node is removed
     let nodes = filestorage::get_agreement_nodes(runtime, &created.agreement_id).await?;
-    assert_eq!(nodes.len(), 2);
+    assert_eq!(nodes.len(), 4);
     assert!(has_node(&nodes, "node_1", false));
     assert!(has_node(&nodes, "node_2", true));
 
@@ -417,53 +415,51 @@ async fn filestorage_leave_nonexistent_agreement_fails(runtime: &mut Runtime) ->
     Ok(())
 }
 
-async fn filestorage_leave_does_not_deactivate(runtime: &mut Runtime) -> Result<()> {
+async fn filestorage_leave_blocked_at_min_replication(runtime: &mut Runtime) -> Result<()> {
     let signer = runtime.identity().await?;
     let descriptor = make_descriptor(
-        "no_deactivate_test".to_string(),
+        "min_repl_test".to_string(),
         vec![7u8; 32],
         16,
         10,
-        "no_deactivate.txt".to_string(),
+        "min_repl.txt".to_string(),
     );
 
-    // Create agreement and activate it
+    // Activate at exactly n_min (3) nodes — the replication floor.
     let created = filestorage::create_agreement(runtime, &signer, descriptor).await??;
     let mut ops = Ops::new(&signer);
-    ops.push(filestorage::join_agreement_call(
-        &created.agreement_id,
-        "node_1",
-    ));
-    ops.push(filestorage::join_agreement_call(
-        &created.agreement_id,
-        "node_2",
-    ));
-    ops.push(filestorage::join_agreement_call(
-        &created.agreement_id,
-        "node_3",
-    ));
+    for n in ["node_1", "node_2", "node_3"] {
+        ops.push(filestorage::join_agreement_call(&created.agreement_id, n));
+    }
     let mut submit = runtime.submit();
     submit.add(ops);
     submit.execute().await?;
+    assert!(
+        filestorage::get_agreement(runtime, &created.agreement_id)
+            .await?
+            .expect("exists")
+            .active
+    );
 
-    // Verify active
-    let agreement = filestorage::get_agreement(runtime, &created.agreement_id).await?;
-    assert!(agreement.expect("exists").active);
+    // Leaving at |N_f| = n_min is forbidden (would violate minimum replication).
+    let err =
+        filestorage::leave_agreement(runtime, &signer, &created.agreement_id, "node_1").await?;
+    assert!(
+        matches!(err, Err(Error::Message(_))),
+        "cannot leave at minimum replication"
+    );
 
-    // Leave nodes until below min_nodes
+    // Add a 4th node; now a single departure is permitted again.
+    filestorage::join_agreement(runtime, &signer, &created.agreement_id, "node_4").await??;
     filestorage::leave_agreement(runtime, &signer, &created.agreement_id, "node_1").await??;
-    filestorage::leave_agreement(runtime, &signer, &created.agreement_id, "node_2").await??;
-
-    // Agreement should still be active (no deactivation)
-    let agreement = filestorage::get_agreement(runtime, &created.agreement_id).await?;
-    let agreement = agreement.expect("agreement should exist");
-    assert!(agreement.active); // Still active!
 
     let nodes = filestorage::get_agreement_nodes(runtime, &created.agreement_id).await?;
-    assert_eq!(nodes.len(), 3);
     assert!(has_node(&nodes, "node_1", false));
-    assert!(has_node(&nodes, "node_2", false));
-    assert!(has_node(&nodes, "node_3", true));
+    assert_eq!(
+        nodes.iter().filter(|n| n.active).count(),
+        3,
+        "3 active after add + leave"
+    );
 
     Ok(())
 }
@@ -739,7 +735,7 @@ pub async fn run_regtest(runtime: &mut Runtime) -> Result<()> {
     filestorage_leave_agreement(runtime).await?;
     filestorage_leave_nonmember_fails(runtime).await?;
     filestorage_leave_nonexistent_agreement_fails(runtime).await?;
-    filestorage_leave_does_not_deactivate(runtime).await?;
+    filestorage_leave_blocked_at_min_replication(runtime).await?;
     filestorage_is_node_in_agreement(runtime).await?;
     filestorage_is_node_in_nonexistent_agreement(runtime).await?;
     filestorage_rejoin_after_leave(runtime).await?;
