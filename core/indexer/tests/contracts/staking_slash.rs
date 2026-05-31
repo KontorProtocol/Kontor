@@ -215,3 +215,63 @@ async fn distribute_ordering_reward_is_stake_weighted() -> Result<()> {
     );
     Ok(())
 }
+
+/// Property: `distribute_ordering_reward` conserves value exactly — for ANY
+/// stake distribution and pool size, the active-stake total grows by exactly
+/// the pool and the sum of individual stakes still equals that total (the
+/// last-recipient-absorbs-remainder rule leaves no dust unaccounted). Driven
+/// over many deterministic pseudo-random cases.
+#[tokio::test]
+async fn distribute_ordering_reward_conserves_over_random_cases() -> Result<()> {
+    for seed in 0u64..24 {
+        let n = 2 + (seed % 5) as u32; // 2..=6 validators
+        let seed_bytes = [(seed as u8).wrapping_mul(37).wrapping_add(1); 32];
+
+        let mut gvs = Vec::new();
+        let mut pks = Vec::new();
+        let mut staked_total = 0u64;
+        for i in 0..n {
+            let k = derive_validator(&seed_bytes, i);
+            // ≤ 1000: genesis stake is minted via token::issue_to, which on this
+            // branch still carries main's 1000 dev-mint cap (lifted by #437).
+            let stake = 1 + (seed.wrapping_mul(101).wrapping_add(i as u64 * 17) % 1000);
+            staked_total += stake;
+            pks.push(hex::encode(k.x_only_pubkey));
+            gvs.push(GenesisValidator {
+                x_only_pubkey: pks[i as usize].clone(),
+                stake: dec(stake),
+                ed25519_pubkey: k.ed25519_pubkey.to_vec(),
+            });
+        }
+
+        let (mut rt, _dir, _name) = test_runtime_with_genesis(&gvs).await?;
+        let pool = 1 + (seed.wrapping_mul(7).wrapping_add(3) % 9999);
+
+        staking::distribute_ordering_reward(&mut rt, &core(), dec(pool))
+            .await?
+            .map_err(|e| anyhow!("{e:?}"))?;
+
+        // Aggregate grew by exactly the pool.
+        let info = staking::get_staking_info(&mut rt).await?;
+        assert_eq!(
+            info.total_stake,
+            dec(staked_total + pool),
+            "case {seed}: total must grow by exactly the pool"
+        );
+
+        // Sum of the per-validator stakes equals the reported total — no dust
+        // created or lost across the distribution.
+        let mut summed = dec(0);
+        for pk in &pks {
+            let v = staking::get_validator(&mut rt, pk)
+                .await?
+                .expect("validator");
+            summed = summed + v.stake;
+        }
+        assert_eq!(
+            summed, info.total_stake,
+            "case {seed}: Σ individual stakes must equal the reported total"
+        );
+    }
+    Ok(())
+}
