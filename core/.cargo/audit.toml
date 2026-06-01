@@ -1,0 +1,41 @@
+# cargo-audit configuration for the `core` workspace.
+#
+# The advisories ignored below are all in TRANSITIVE dependencies that cannot
+# currently be patched at the lockfile level — each is pinned by a major
+# dependency (libsql, or the circlefin/malachite consensus fork via libp2p)
+# whose fixed release would require a breaking upgrade out of scope for a
+# routine audit pass. Each entry documents why it is not reachable on Kontor's
+# critical path and what upstream bump would clear it. Re-audit and prune this
+# list whenever those upstreams move.
+#
+# Run `cargo audit` after any dependency change to confirm no NEW advisory is
+# silently swept under these ignores — the list is intentionally explicit (no
+# wildcards) so a fresh advisory still fails the build.
+
+[advisories]
+ignore = [
+    # ── rustls-webpki 0.102.8 ────────────────────────────────────────────────
+    # Pulled in only by libsql 0.9.30 → hyper-rustls 0.25 → rustls 0.22, i.e.
+    # libsql's *remote* (Turso/sqld over HTTPS) client path. Kontor uses libsql
+    # in embedded/local mode; the outbound-TLS code these advisories live in is
+    # not exercised, and all are reachable only when validating certificates
+    # from an attacker-controlled TLS endpoint. The fixed line (rustls-webpki
+    # 0.103.x) is already present elsewhere in the tree — only libsql's rustls
+    # 0.22 pin holds 0.102 here. Cleared by libsql 0.10 (rustls 0.23 / webpki
+    # 0.103); tracked for a deliberate libsql major bump.
+    "RUSTSEC-2026-0104", # reachable panic parsing a certificate revocation list
+    "RUSTSEC-2026-0098", # URI-name name-constraints incorrectly accepted
+    "RUSTSEC-2026-0099", # wildcard-name name-constraints incorrectly accepted
+    "RUSTSEC-2026-0049", # CRL distribution-point authority matching logic
+
+    # ── hickory-proto 0.25.2 ─────────────────────────────────────────────────
+    # Pulled in only by libp2p 0.56 (mDNS / DNS peer discovery), itself pinned
+    # by the circlefin/malachite fork at git rev 9109e96e4547. Both advisories
+    # are DoS-class (CPU exhaustion / unbounded loop) reachable only by a
+    # malicious DNS responder during libp2p peer discovery on the local network.
+    # 0119 is fixed in hickory 0.26.1; 0118 has no fixed release yet. Both are
+    # cleared only by a libp2p upgrade, which requires advancing the pinned
+    # malachite fork rev — tracked against that upstream bump.
+    "RUSTSEC-2026-0119", # O(n²) name compression → CPU exhaustion on encode
+    "RUSTSEC-2026-0118", # NSEC3 closest-encloser proof → unbounded loop
+]
