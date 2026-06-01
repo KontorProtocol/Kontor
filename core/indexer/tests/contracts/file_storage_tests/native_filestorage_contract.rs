@@ -32,12 +32,16 @@ async fn filestorage_defaults(runtime: &mut Runtime) -> Result<()> {
     assert_eq!(filestorage::get_c_target(runtime).await?, 12);
     assert_eq!(filestorage::get_blocks_per_year(runtime).await?, 52560);
     assert_eq!(filestorage::get_s_chal(runtime).await?, 100);
+    assert_eq!(filestorage::get_lambda_slash(runtime).await?, 30);
 
     // In local mode, no challenges should exist yet.
     // In regtest mode, prior tests on the shared cluster may have generated challenges.
     if runtime.reg_tester().is_none() {
         let active = filestorage::get_active_challenges(runtime).await?;
         assert!(active.is_empty());
+        // No proofs have been rejected, so the slashable set is empty too.
+        let failed = filestorage::get_failed_challenges(runtime).await?;
+        assert!(failed.is_empty());
     }
 
     // Unknown IDs should be safe.

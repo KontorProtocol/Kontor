@@ -172,6 +172,7 @@ world root {
   export get-c-target: async func(ctx: borrow<view-context>) -> u64;
   export get-blocks-per-year: async func(ctx: borrow<view-context>) -> u64;
   export get-s-chal: async func(ctx: borrow<view-context>) -> u64;
+  export get-lambda-slash: async func(ctx: borrow<view-context>) -> u64;
 
   // ─────────────────────────────────────────────────────────────────
   // Challenge Management
@@ -183,6 +184,11 @@ world root {
   ) -> option<challenge-data>;
 
   export get-active-challenges: async func(
+    ctx: borrow<view-context>
+  ) -> list<challenge-data>;
+
+  // Challenges whose proof was rejected — the Phase 2 slashable set.
+  export get-failed-challenges: async func(
     ctx: borrow<view-context>
   ) -> list<challenge-data>;
 

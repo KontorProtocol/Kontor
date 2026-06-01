@@ -56,6 +56,17 @@ const BPS_DENOM: u64 = 10_000;
 /// Storage). The creation fee `υ_f = χ_fee · k_f` is burned from the creator.
 const DEFAULT_CHI_FEE_BPS: u64 = 30;
 
+/// Storage-failure slash multiplier `λ_slash` (spec `econ.lambdaSlash`). When a
+/// node fails a Proof-of-Retrievability challenge, the penalty magnitude is
+/// `λ_slash · k_f` (the per-node base stake). This parameter lives in
+/// filestorage — not staking — because the *magnitude* of a storage slash is
+/// storage-domain policy: filestorage computes the amount and calls the generic
+/// `staking::slash(amount)`, which applies the stake reduction and the
+/// (consensus-domain) `τ_slash` burn/redistribute split. The challenge→slash
+/// wiring itself is deferred to Phase 2 (requires node-id ↔ staking-identity
+/// coupling); this constant fixes the magnitude that wiring will use.
+const DEFAULT_LAMBDA_SLASH: u64 = 30;
+
 // ─────────────────────────────────────────────────────────────────
 // State Types
 // ─────────────────────────────────────────────────────────────────
@@ -96,6 +107,8 @@ struct ProtocolState {
     pub f_scale: u64,
     /// χ_fee storage-fee multiplier in basis points.
     pub chi_fee_bps: u64,
+    /// λ_slash storage-failure slash multiplier (penalty = `λ_slash · k_f`).
+    pub lambda_slash: u64,
     /// Per-agreement emission weights, fixed at creation.
     pub agreement_economics: Map<String, AgreementEconomics>,
 }
@@ -128,6 +141,7 @@ impl Guest for Filestorage {
             c_stake,
             f_scale: DEFAULT_F_SCALE,
             chi_fee_bps: DEFAULT_CHI_FEE_BPS,
+            lambda_slash: DEFAULT_LAMBDA_SLASH,
             agreement_economics: Map::default(),
         }
         .init(ctx);
@@ -563,6 +577,24 @@ impl Guest for Filestorage {
             .collect()
     }
 
+    fn get_failed_challenges(ctx: &ViewContext) -> Vec<ChallengeData> {
+        // Challenges whose proof was rejected (`ChallengeStatus::Failed`). This
+        // is the slashable set: a Phase 2 slasher enumerates these, maps each
+        // `prover_id` to its staking identity, and slashes `λ_slash · k_f`.
+        let model = ctx.model();
+        model
+            .challenges()
+            .keys()
+            .filter_map(|challenge_id: String| {
+                let c = model.challenges().get(&challenge_id)?;
+                if c.status().load() != ChallengeStatus::Failed {
+                    return None;
+                }
+                Some(c.load())
+            })
+            .collect()
+    }
+
     fn expire_challenges(ctx: &CoreContext, current_height: u64) -> u64 {
         let model = ctx.proc_context().model();
         let mut expired = 0u64;
@@ -846,6 +878,10 @@ impl Guest for Filestorage {
 
     fn get_s_chal(ctx: &ViewContext) -> u64 {
         ctx.model().s_chal()
+    }
+
+    fn get_lambda_slash(ctx: &ViewContext) -> u64 {
+        ctx.model().lambda_slash()
     }
 
     // ─────────────────────────────────────────────────────────────────
