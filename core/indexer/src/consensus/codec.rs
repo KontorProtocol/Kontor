@@ -480,7 +480,18 @@ pub fn decode_synced_value(
     })
 }
 
-#[allow(dead_code)]
+impl Codec<PolkaCertificate<Ctx>> for ProtobufCodec {
+    type Error = ProtoError;
+
+    fn decode(&self, bytes: Bytes) -> Result<PolkaCertificate<Ctx>, Self::Error> {
+        decode_polka_certificate(proto::PolkaCertificate::decode(bytes.as_ref())?)
+    }
+
+    fn encode(&self, msg: &PolkaCertificate<Ctx>) -> Result<Bytes, Self::Error> {
+        Ok(Bytes::from(encode_polka_certificate(msg)?.encode_to_vec()))
+    }
+}
+
 pub(crate) fn encode_polka_certificate(
     polka_certificate: &PolkaCertificate<Ctx>,
 ) -> Result<proto::PolkaCertificate, ProtoError> {

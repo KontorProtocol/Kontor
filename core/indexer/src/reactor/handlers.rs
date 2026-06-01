@@ -222,6 +222,7 @@ impl<E: Executor> Reactor<E> {
             AppMsg::Decided {
                 certificate,
                 extensions: _,
+                reply,
             } => {
                 info!(
                     height = %certificate.height,
@@ -229,6 +230,11 @@ impl<E: Executor> Reactor<E> {
                     value = %certificate.value_id,
                     "Decided"
                 );
+                // The reactor commits decisions in the Finalized handler, so just
+                // ack here to let consensus proceed to finalization.
+                reply
+                    .send(())
+                    .map_err(|_| anyhow::anyhow!("Failed to send Decided reply"))?;
             }
 
             AppMsg::Finalized {

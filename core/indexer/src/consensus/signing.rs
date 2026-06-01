@@ -4,8 +4,8 @@ use anyhow::{Context, anyhow, bail};
 use async_trait::async_trait;
 use bytes::Bytes;
 
-use malachitebft_core_types::{SignedExtension, SignedProposal, SignedVote};
-use malachitebft_signing::{Error, SigningProvider, VerificationResult};
+use malachitebft_core_types::{SignedExtension, SignedProposal, SignedVote, ValidatorProof};
+use malachitebft_signing::{Error, Signer, VerificationResult, Verifier};
 
 use crate::consensus::{Ctx, Proposal, Vote};
 
@@ -109,29 +109,7 @@ impl Ed25519Provider {
 }
 
 #[async_trait]
-impl SigningProvider<Ctx> for Ed25519Provider {
-    async fn sign_bytes(&self, bytes: &[u8]) -> Result<Signature, Error> {
-        Ok(self.sign(bytes))
-    }
-
-    async fn verify_signed_bytes(
-        &self,
-        bytes: &[u8],
-        signature: &Signature,
-        public_key: &PublicKey,
-    ) -> Result<VerificationResult, Error> {
-        if self.verify(bytes, signature, public_key) {
-            Ok(VerificationResult::Valid)
-        } else {
-            Ok(VerificationResult::Invalid)
-        }
-    }
-
-    async fn sign_vote(&self, vote: Vote) -> Result<SignedVote<Ctx>, Error> {
-        let signature = self.sign(&vote.to_sign_bytes());
-        Ok(SignedVote::new(vote, signature))
-    }
-
+impl Verifier<Ctx> for Ed25519Provider {
     async fn verify_signed_vote(
         &self,
         vote: &Vote,
@@ -141,11 +119,6 @@ impl SigningProvider<Ctx> for Ed25519Provider {
         Ok(VerificationResult::from_bool(
             public_key.verify(&vote.to_sign_bytes(), signature).is_ok(),
         ))
-    }
-
-    async fn sign_proposal(&self, proposal: Proposal) -> Result<SignedProposal<Ctx>, Error> {
-        let signature = self.private_key.sign(&proposal.to_sign_bytes());
-        Ok(SignedProposal::new(proposal, signature))
     }
 
     async fn verify_signed_proposal(
@@ -161,13 +134,6 @@ impl SigningProvider<Ctx> for Ed25519Provider {
         ))
     }
 
-    async fn sign_vote_extension(&self, extension: Bytes) -> Result<SignedExtension<Ctx>, Error> {
-        let signature = self.private_key.sign(extension.as_ref());
-        Ok(malachitebft_core_types::SignedMessage::new(
-            extension, signature,
-        ))
-    }
-
     async fn verify_signed_vote_extension(
         &self,
         extension: &Bytes,
@@ -177,6 +143,50 @@ impl SigningProvider<Ctx> for Ed25519Provider {
         Ok(VerificationResult::from_bool(
             public_key.verify(extension.as_ref(), signature).is_ok(),
         ))
+    }
+
+    // PoV is network-agnostic: verify the canonical preimage with no domain prefix.
+    async fn verify_validator_proof(
+        &self,
+        proof: &ValidatorProof<Ctx>,
+    ) -> Result<VerificationResult, Error> {
+        let public_key = proof.decoded_public_key().map_err(|e| {
+            Error::from_source(format!("Invalid public key in validator proof: {e}"))
+        })?;
+        Ok(VerificationResult::from_bool(
+            self.verify(&proof.preimage(), &proof.signature, &public_key),
+        ))
+    }
+}
+
+#[async_trait]
+impl Signer<Ctx> for Ed25519Provider {
+    async fn sign_vote(&self, vote: Vote) -> Result<SignedVote<Ctx>, Error> {
+        let signature = self.sign(&vote.to_sign_bytes());
+        Ok(SignedVote::new(vote, signature))
+    }
+
+    async fn sign_proposal(&self, proposal: Proposal) -> Result<SignedProposal<Ctx>, Error> {
+        let signature = self.private_key.sign(&proposal.to_sign_bytes());
+        Ok(SignedProposal::new(proposal, signature))
+    }
+
+    async fn sign_vote_extension(&self, extension: Bytes) -> Result<SignedExtension<Ctx>, Error> {
+        let signature = self.private_key.sign(extension.as_ref());
+        Ok(malachitebft_core_types::SignedMessage::new(
+            extension, signature,
+        ))
+    }
+
+    // PoV is network-agnostic: sign the canonical preimage with no domain prefix.
+    async fn sign_validator_proof(
+        &self,
+        public_key: Vec<u8>,
+        peer_id: Vec<u8>,
+    ) -> Result<ValidatorProof<Ctx>, Error> {
+        let preimage = ValidatorProof::<Ctx>::signing_bytes(&public_key, &peer_id);
+        let signature = self.private_key.sign(&preimage);
+        Ok(ValidatorProof::new(public_key, peer_id, signature))
     }
 }
 
