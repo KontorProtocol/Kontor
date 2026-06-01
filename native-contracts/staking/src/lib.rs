@@ -28,9 +28,6 @@ struct StakingStorage {
     pub validators: Map<Holder, ValidatorEntry>,
     pub active_count: u64,
     pub total_active_stake: Decimal,
-    /// Storage-slash multiplier (spec `λ_slash`). A failed storage challenge
-    /// slashes `λ_slash · k_f` of the node's pooled stake.
-    pub lambda_slash: u64,
     /// Burn share of a slash, in basis points (spec `τ_slash`, 0–10000). The
     /// remaining `(10000 − τ_slash_bps)` is returned to the caller to
     /// redistribute to the file's other nodes.
@@ -44,8 +41,6 @@ struct StakingStorage {
 /// Basis-points denominator for fractional params (e.g. `τ_slash`).
 const BPS_DENOM: u64 = 10_000;
 
-/// Default `λ_slash` (storage-slash multiplier). Source: `specs/v1-parameters`.
-const DEFAULT_LAMBDA_SLASH: u64 = 30;
 /// Default `τ_slash` = 50% burn share. Source: `specs/params.typ` `econ.tauSlash`.
 const DEFAULT_TAU_SLASH_BPS: u64 = 5_000;
 /// Default `r_evid` = 5% evidence-publication bounty. Source: optimistic-consensus
@@ -85,7 +80,6 @@ impl Guest for Staking {
         storage.init(ctx);
         let model = ctx.model();
         model.set_min_stake(1u64.try_into().unwrap());
-        model.set_lambda_slash(DEFAULT_LAMBDA_SLASH);
         model.set_tau_slash_bps(DEFAULT_TAU_SLASH_BPS);
         model.set_r_evid_bps(DEFAULT_R_EVID_BPS);
         ctx.contract()
@@ -490,10 +484,12 @@ impl Guest for Staking {
         })
     }
 
-    /// Core-context (reactor/admin) setter for the slashing parameters.
+    /// Core-context (reactor/admin) setter for the slashing parameters. Only
+    /// the consensus-domain shares live here: `τ_slash` (burn fraction) and
+    /// `r_evid` (equivocation-evidence bounty). The storage-slash *magnitude*
+    /// `λ_slash` is filestorage-domain policy and lives in that contract.
     fn set_slash_params(
         ctx: &CoreContext,
-        lambda_slash: u64,
         tau_slash_bps: u64,
         r_evid_bps: u64,
     ) -> Result<(), Error> {
@@ -504,7 +500,6 @@ impl Guest for Staking {
             return Err(Error::Message("r_evid_bps must be <= 10000".to_string()));
         }
         let model = ctx.proc_context().model();
-        model.set_lambda_slash(lambda_slash);
         model.set_tau_slash_bps(tau_slash_bps);
         model.set_r_evid_bps(r_evid_bps);
         Ok(())
@@ -513,7 +508,6 @@ impl Guest for Staking {
     fn get_slash_params(ctx: &ViewContext) -> SlashParams {
         let model = ctx.model();
         SlashParams {
-            lambda_slash: model.lambda_slash(),
             tau_slash_bps: model.tau_slash_bps(),
             r_evid_bps: model.r_evid_bps(),
         }

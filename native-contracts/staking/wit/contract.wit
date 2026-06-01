@@ -45,7 +45,6 @@ world root {
   }
 
   record slash-params {
-    lambda-slash: u64,
     tau-slash-bps: u64,
     r-evid-bps: u64,
   }
@@ -78,7 +77,7 @@ world root {
   export slash-equivocation: async func(ctx: borrow<core-context>, x-only-pubkey: string, publisher: string) -> result<equivocation-result, error>;
   export distribute-slash: async func(ctx: borrow<core-context>, recipients: list<string>, amount: decimal) -> result<_, error>;
   export distribute-ordering-reward: async func(ctx: borrow<core-context>, amount: decimal) -> result<_, error>;
-  export set-slash-params: async func(ctx: borrow<core-context>, lambda-slash: u64, tau-slash-bps: u64, r-evid-bps: u64) -> result<_, error>;
+  export set-slash-params: async func(ctx: borrow<core-context>, tau-slash-bps: u64, r-evid-bps: u64) -> result<_, error>;
   export get-slash-params: async func(ctx: borrow<view-context>) -> slash-params;
 
   // --- Queries (ViewContext) ---
