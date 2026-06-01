@@ -518,7 +518,6 @@ pub(crate) fn encode_polka_certificate(
     })
 }
 
-#[allow(dead_code)]
 pub(crate) fn decode_polka_certificate(
     certificate: proto::PolkaCertificate,
 ) -> Result<PolkaCertificate<Ctx>, ProtoError> {
