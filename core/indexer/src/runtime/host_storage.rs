@@ -99,6 +99,22 @@ impl Runtime {
             .await
     }
 
+    pub(crate) async fn _delete<S, T: HasContractId>(
+        &self,
+        accessor: &Accessor<S, Self>,
+        self_: Resource<T>,
+        path: String,
+    ) -> Result<bool> {
+        // A tombstone is a single state write: charge the path cost plus a
+        // zero-length value write, mirroring `_set_primitive`'s accounting.
+        Fuel::Path(path.clone())
+            .consume(accessor, self.gauge.as_ref())
+            .await?;
+        Fuel::Set(0).consume(accessor, self.gauge.as_ref()).await?;
+        let contract_id = self.table.lock().await.get(&self_)?.get_contract_id();
+        self.storage.delete(contract_id, &path).await
+    }
+
     pub(crate) async fn _set_primitive<S, T: HasContractId, V: Serialize>(
         &self,
         accessor: &Accessor<S, Self>,
