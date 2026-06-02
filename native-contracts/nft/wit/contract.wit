@@ -122,13 +122,14 @@ world root {
   ) -> u64;
 
   /// Return up to `limit` NFTs currently held by `holder`, skipping the first
-  /// `offset` matches. Backed by a mutable holder→nft-ids index that is
-  /// populated at `mint` and kept current on every ownership change
-  /// (`transfer`, `attach`, `detach`).
+  /// `offset` matches. Backed by an append-only holder→nft-ids index populated
+  /// on every ownership change (`mint`, `transfer`, `attach`, `detach`); ids a
+  /// holder has since transferred away linger in the index and are filtered out
+  /// here by re-checking current ownership, so the result always reflects who
+  /// owns the NFTs today.
   ///
-  /// Unlike `list-nfts-by-creator` (immutable creator index), this reflects
-  /// who owns the NFTs today. The same clamping rules as `list-nfts` apply.
-  /// An invalid or never-seen `holder` yields an empty list rather than an error.
+  /// The same clamping rules as `list-nfts` apply. An invalid or never-seen
+  /// `holder` yields an empty list rather than an error.
   export list-nfts-by-holder: async func(
     ctx: borrow<view-context>,
     holder: holder-ref,

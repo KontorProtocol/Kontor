@@ -96,12 +96,6 @@ interface context {
         set-list-u8: async func(path: string, value: list<u8>);
         set-void: async func(path: string);
         delete-matching-paths: async func(base-path: string, variants: list<string>) -> u64;
-        // Tombstone the exact `path` (writes a `deleted` marker at the current
-        // height) and report whether a value was present. Unlike
-        // `delete-matching-paths`, which physically removes rows at the current
-        // height only, a tombstone shadows a value written in an earlier block,
-        // so the key also disappears from `get-keys` iteration across heights.
-        delete: async func(path: string) -> bool;
         view-storage: async func() -> view-storage;
     }
 

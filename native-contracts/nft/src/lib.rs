@@ -97,24 +97,17 @@ fn holder_index_add(model: &NftStorageWriteModel, holder: &Holder, nft_id: &str)
     entry.set_count(entry.count() + 1);
 }
 
-// Remove `nft_id` from `holder`'s bucket. Takes `ctx` directly because the
-// generated map model exposes no key-removal method, so we tombstone the exact
-// storage path ourselves.
-fn holder_index_remove(ctx: &ProcContext, holder: &Holder, nft_id: &str) {
-    let Some(entry) = ctx.model().holder_index().get(holder) else {
-        return;
-    };
-    entry.set_count(entry.count().saturating_sub(1));
-    // `delete` writes a tombstone at the current height. This is what makes the
-    // key vanish from `nft_ids().keys()` even though its live row was written
-    // when the NFT first entered this bucket — possibly in an earlier block.
-    // A height-scoped physical delete would only remove a row written in *this*
-    // block, leaving a stale entry behind after a cross-block transfer. The
-    // path is exactly what the generated Map model builds for this key:
-    // `holder_index.{holder}.nft_ids.{nft_id}` (`nft_id` is validated to a
-    // dot-free charset in `validate`, so it stays a single path segment).
-    ctx.storage()
-        .delete(&format!("holder_index.{}.nft_ids.{}", holder, nft_id));
+// Decrement `holder`'s live count when an NFT leaves its bucket on a transfer.
+// The id is intentionally NOT removed from `nft_ids`: this index is append-only
+// (the storage layer exposes no key-removal primitive), so ids a holder once
+// owned linger in the map and are filtered out at read time by
+// `list_nfts_by_holder` re-checking current ownership. `count` stays exact
+// because it is decremented here and incremented in `holder_index_add`, keeping
+// `count_nfts_by_holder` O(1).
+fn holder_index_dec(model: &NftStorageWriteModel, holder: &Holder) {
+    if let Some(entry) = model.holder_index().get(holder) {
+        entry.set_count(entry.count().saturating_sub(1));
+    }
 }
 
 fn validate(
@@ -180,7 +173,7 @@ fn change_owner(
         return Err(Error::Message(not_owner_msg.to_string()));
     }
     nft.set_owner(new_owner.clone());
-    holder_index_remove(ctx, &expected_owner, &nft_id);
+    holder_index_dec(&ctx.model(), &expected_owner);
     holder_index_add(&ctx.model(), &new_owner, &nft_id);
     Ok(NftTransfer {
         nft_id,
@@ -418,21 +411,26 @@ impl Guest for Nft {
         };
         let offset = usize::try_from(offset).unwrap_or(usize::MAX);
         let nfts = ctx.model().nfts();
-        // Unlike creator_index (append-only), this index is kept current:
-        // every key in `nft_ids` is a live member, so skip/take is correct.
+        // `holder_index` is append-only: `nft_ids` retains every id this holder
+        // has ever owned, including ones since transferred away (no key-removal
+        // primitive exists, so stale ids are never pruned). Re-check current
+        // ownership to drop them; `offset`/`limit` paginate over the live set, so
+        // the ownership filter must run before skip/take.
         entry
             .nft_ids()
             .keys()
+            .filter_map(|nft_id: String| {
+                nfts.get(&nft_id)
+                    .filter(|nft| nft.owner() == holder)
+                    .map(|nft| NftInfo {
+                        nft_id,
+                        owner: nft.owner().as_ref(),
+                        creator: nft.creator().as_ref(),
+                        agreement_id: nft.agreement_id(),
+                    })
+            })
             .skip(offset)
             .take(limit)
-            .filter_map(|nft_id: String| {
-                nfts.get(&nft_id).map(|nft| NftInfo {
-                    nft_id,
-                    owner: nft.owner().as_ref(),
-                    creator: nft.creator().as_ref(),
-                    agreement_id: nft.agreement_id(),
-                })
-            })
             .collect()
     }
 

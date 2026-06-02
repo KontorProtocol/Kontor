@@ -889,11 +889,13 @@ async fn test_native_nft_contract() -> Result<()> {
 }
 
 // Regression: the holder index must stay accurate when ownership changes in a
-// *later block* than the one that recorded the current holder. The rest of the
-// suite runs every op at a single pinned height, so a stale-key bug in the
-// remove path (the removed entry was written at an earlier height and a
-// height-scoped delete never touched it) would pass there but corrupt the index
-// in production, where mint and transfer land in different blocks.
+// *later block* than the one that recorded the current holder. The index is
+// append-only (ids are never physically removed), so cross-block correctness
+// rests on two things holding at any height: the losing holder's `count` being
+// decremented, and `list_nfts_by_holder` filtering out ids that holder no
+// longer owns. The rest of the suite runs every op at a single pinned height,
+// so a height-sensitive bug here would pass there yet break in production,
+// where mint and transfer land in different blocks.
 #[testlib::test(contracts_dir = "../../test-contracts")]
 async fn test_native_nft_holder_index_cross_height() -> Result<()> {
     let alice = runtime.identity().await?;
@@ -985,16 +987,13 @@ async fn test_native_nft_holder_index_cross_height() -> Result<()> {
     Ok(())
 }
 
-// Regression: removing several NFTs from the *same* holder within a *single*
-// block must keep the holder's bucket queryable while it still has members.
-// Each `transfer` tombstones a `holder_index.{alice}.nft_ids.{id}` leaf at the
-// current height and rewrites `holder_index.{alice}.count` at that same height.
-// `Map::get(&alice)` (used by both the view functions and the remove path)
-// gates on a prefix `exists`, which ranks every row under the bucket by height
-// and would tie the live `count` against the same-height tombstones. If a
-// tombstone won that tie, `get` would report the still-populated bucket as
-// absent — wrong count/list, and a corrupted index on the second remove. The
-// live `count` must win deterministically.
+// Regression: dropping several NFTs from the *same* holder within a *single*
+// block must leave the holder's bucket with an accurate count and list. Each
+// `transfer` decrements `holder_index.{alice}.count` (the id itself stays in
+// the append-only `nft_ids` map and is filtered out at read time by ownership).
+// Two removals in one block rewrite `count` twice at the same height, so the
+// latest write must win — otherwise the bucket would misreport the one NFT
+// alice kept after the churn.
 #[testlib::test(contracts_dir = "../../test-contracts")]
 async fn test_native_nft_holder_index_same_block_multi_remove() -> Result<()> {
     let alice = runtime.identity().await?;
