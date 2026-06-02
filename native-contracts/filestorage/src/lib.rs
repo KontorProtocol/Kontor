@@ -75,6 +75,10 @@ const DEFAULT_LAMBDA_SLASH: u64 = 30;
 struct AgreementNodes {
     /// node_id -> is_active (true means active, false means left)
     pub nodes: Map<String, bool>,
+    /// node_id -> the staking identity (x-only pubkey / Holder string) that
+    /// authenticated the membership at join time. This is the coupling that
+    /// makes a failed challenge's `prover_id` resolve to a slashable stake.
+    pub owners: Map<String, String>,
     pub node_count: u64,
 }
 
@@ -111,6 +115,17 @@ struct ProtocolState {
     pub lambda_slash: u64,
     /// Per-agreement emission weights, fixed at creation.
     pub agreement_economics: Map<String, AgreementEconomics>,
+    /// Storage collateral reserved per staking identity (Holder string) — the
+    /// running `Σ k_f` over every agreement that identity has joined. Collateral
+    /// is the same stake as consensus: storage providers are validators, and a
+    /// node's stake both backs its storage obligations and counts as its
+    /// consensus voting power (unified pool). This field is the portion of that
+    /// stake committed to storage; incremented on join, decremented on leave.
+    /// The solvency check (`stake ≥ reserved`) and the slash itself are
+    /// reactor-orchestrated (core-context) — reading staking stake and calling
+    /// `staking::slash` are cross-contract operations the reactor performs each
+    /// block; this contract owns the per-identity accounting they read.
+    pub node_reservations: Map<String, Decimal>,
 }
 
 // ─────────────────────────────────────────────────────────────────
@@ -143,6 +158,7 @@ impl Guest for Filestorage {
             chi_fee_bps: DEFAULT_CHI_FEE_BPS,
             lambda_slash: DEFAULT_LAMBDA_SLASH,
             agreement_economics: Map::default(),
+            node_reservations: Map::default(),
         }
         .init(ctx);
         ctx.contract()
@@ -284,6 +300,33 @@ impl Guest for Filestorage {
             )));
         }
 
+        // ── Authenticated node ↔ staking-identity coupling ─────────────
+        // A storage node IS a staker: bind this membership to the joining
+        // signer's staking identity (its x-only pubkey / Holder). This is the
+        // lynchpin that lets a failed PoR challenge's `prover_id` resolve to a
+        // slashable stake (Phase 2 reactor: get_failed_challenges → owner →
+        // staking::slash(owner, λ_slash·k_f)).
+        let owner: Holder = (&ctx.signer()).into();
+        let owner_str = owner.to_string();
+
+        // Reserve this agreement's per-node base stake k_f against the owner's
+        // (unified) staking collateral — `Σ k_f` over all its memberships — so a
+        // node cannot back more storage than its stake covers. The solvency
+        // check (`stake ≥ reserved`) is reactor-side (reading staking stake is a
+        // cross-contract op); here we own the accounting it reads against. k_f
+        // is fixed at agreement creation.
+        let zero: Decimal = 0u64.try_into()?;
+        let k_f = model
+            .agreement_economics()
+            .get(&agreement_id)
+            .map(|e| e.k_f())
+            .unwrap_or(zero);
+        let reserved = model.node_reservations().get(&owner_str).unwrap_or(zero);
+        model
+            .node_reservations()
+            .set(&owner_str, reserved.add(k_f)?);
+        nodes_state.owners().set(&node_id, owner_str);
+
         // Add node to agreement (or reactivate if previously left)
         nodes_state.nodes().set(&node_id, true);
 
@@ -348,11 +391,29 @@ impl Guest for Filestorage {
             )));
         }
 
+        // Only the staking identity that joined may leave its own membership.
+        let owner: Holder = (&ctx.signer()).into();
+        let owner_str = owner.to_string();
+        if nodes_state.owners().get(&node_id).unwrap_or_default() != owner_str {
+            return Err(Error::Message(format!(
+                "node {} in agreement {} is owned by a different staking identity",
+                node_id, agreement_id
+            )));
+        }
+
+        // The agreement's per-node base stake k_f (fixed at creation) drives both
+        // the leave fee (active agreements only) and the collateral release.
+        let zero: Decimal = 0u64.try_into()?;
+        let k_f = model
+            .agreement_economics()
+            .get(&agreement_id)
+            .map(|e| e.k_f())
+            .unwrap_or(zero);
+
         // The min-replication guard and leave fee apply only to *active*
         // agreements, where a stored file's replication must be protected. A node
         // may leave an inactive agreement (one that never reached n_min, so no
         // file is being stored/challenged) freely and fee-free.
-        let zero: Decimal = 0u64.try_into()?;
         let node_count = nodes_state.node_count();
         let min_nodes = model.min_nodes();
         let fee = if agreement.active() {
@@ -367,11 +428,6 @@ impl Guest for Filestorage {
             }
             // φ_leave = k_f · (n_min/|N_f|)² — quadratic, escalating as replication
             // nears n_min — burned from the signer's spendable balance.
-            let k_f = model
-                .agreement_economics()
-                .get(&agreement_id)
-                .map(|e| e.k_f())
-                .unwrap_or(zero);
             let n_min_d: Decimal = min_nodes.try_into()?;
             let n_f_d: Decimal = node_count.try_into()?;
             let ratio = n_min_d.div(n_f_d)?;
@@ -380,9 +436,17 @@ impl Guest for Filestorage {
             zero
         };
 
-        // Effects before the burn interaction (CEI): mark inactive + decrement.
+        // Effects before the burn interaction (CEI): mark inactive + decrement,
+        // and release this membership's storage-collateral reservation.
         nodes_state.nodes().set(&node_id, false);
         nodes_state.update_node_count(|c| c.saturating_sub(1));
+        let reserved = model.node_reservations().get(&owner_str).unwrap_or(zero);
+        let released = if reserved > k_f {
+            reserved.sub(k_f)?
+        } else {
+            zero
+        };
+        model.node_reservations().set(&owner_str, released);
 
         if fee > zero {
             token::burn(ctx.signer(), fee)?;
@@ -418,6 +482,26 @@ impl Guest for Filestorage {
             .get(&agreement_id)
             .map(|s| s.nodes().get(&node_id).unwrap_or(false))
             .unwrap_or(false)
+    }
+
+    fn get_node_owner(ctx: &ViewContext, agreement_id: String, node_id: String) -> Option<String> {
+        // The staking identity (x-only pubkey) bound to a membership at join.
+        // The Phase 2 slasher resolves a failed challenge's prover_id (= node_id)
+        // to this identity before calling staking::slash.
+        ctx.model()
+            .agreement_nodes()
+            .get(&agreement_id)
+            .and_then(|s| s.owners().get(&node_id))
+            .filter(|o| !o.is_empty())
+    }
+
+    fn get_node_reservation(ctx: &ViewContext, x_only_pubkey: String) -> Decimal {
+        // Total storage collateral (`Σ k_f`) this identity has committed across
+        // its agreements. The reactor enforces `staking_stake ≥ this`.
+        ctx.model()
+            .node_reservations()
+            .get(&x_only_pubkey)
+            .unwrap_or_else(|| 0u64.try_into().expect("zero fits in Decimal"))
     }
 
     fn get_min_nodes(ctx: &ViewContext) -> u64 {

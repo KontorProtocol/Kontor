@@ -140,6 +140,20 @@ world root {
     node-id: string
   ) -> bool;
 
+  // The staking identity (x-only pubkey) bound to a membership at join — the
+  // bridge from a challenge's prover_id to a slashable stake.
+  export get-node-owner: async func(
+    ctx: borrow<view-context>,
+    agreement-id: string,
+    node-id: string
+  ) -> option<string>;
+
+  // Total storage collateral (Σ k_f) an identity has committed across agreements.
+  export get-node-reservation: async func(
+    ctx: borrow<view-context>,
+    x-only-pubkey: string
+  ) -> decimal;
+
   // ─────────────────────────────────────────────────────────────────
   // Storage economics
   // ─────────────────────────────────────────────────────────────────
