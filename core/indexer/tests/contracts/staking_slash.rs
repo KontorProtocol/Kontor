@@ -275,3 +275,135 @@ async fn distribute_ordering_reward_conserves_over_random_cases() -> Result<()> 
     }
     Ok(())
 }
+
+/// `slash` conserves: `burned + redistributable == slashed`, `burned` is exactly
+/// the τ_slash (50%) share, `slashed == min(amount, stake)` (saturates, never
+/// negative), and the validator's stake drops by exactly `slashed`.
+#[tokio::test]
+async fn slash_conserves_burn_and_redistribute_over_random_cases() -> Result<()> {
+    for seed in 0u64..24 {
+        let stake = 10 + (seed.wrapping_mul(131).wrapping_add(7) % 990); // 10..=999
+        // amount can exceed stake to exercise saturation.
+        let amount = 1 + (seed.wrapping_mul(97).wrapping_add(3) % (stake + 50));
+        let (gvs, pks) = validators(1, stake);
+        let (mut rt, _dir, _name) = test_runtime_with_genesis(&gvs).await?;
+
+        let res = staking::slash(&mut rt, &core(), &pks[0], dec(amount))
+            .await?
+            .map_err(|e| anyhow!("{e:?}"))?;
+
+        let expected = amount.min(stake);
+        assert_eq!(
+            res.slashed,
+            dec(expected),
+            "seed {seed}: slashed == min(amount, stake)"
+        );
+        assert_eq!(
+            res.burned + res.redistributable,
+            res.slashed,
+            "seed {seed}: burned + redistributable == slashed (conservation)"
+        );
+        // τ_slash = 50%, so burned is exactly half (checked via burned·2 == slashed).
+        assert_eq!(
+            res.burned + res.burned,
+            res.slashed,
+            "seed {seed}: burned == 50% of slashed"
+        );
+
+        let v = staking::get_validator(&mut rt, &pks[0])
+            .await?
+            .expect("validator");
+        assert_eq!(
+            v.stake,
+            dec(stake - expected),
+            "seed {seed}: stake reduced by slashed, never negative"
+        );
+    }
+    Ok(())
+}
+
+/// `distribute_slash` conserves exactly: the recipients' total stake rises by the
+/// full `amount` with no dust lost or created (last recipient absorbs rounding).
+#[tokio::test]
+async fn distribute_slash_conserves_over_random_cases() -> Result<()> {
+    let base = 100u64;
+    for seed in 0u64..20 {
+        let n = 2 + (seed % 5) as u32; // 2..=6 recipients
+        let amount = 1 + (seed.wrapping_mul(83).wrapping_add(11) % 1000);
+        let (gvs, pks) = validators(n, base);
+        let (mut rt, _dir, _name) = test_runtime_with_genesis(&gvs).await?;
+
+        let recipients: Vec<&str> = pks.iter().map(|s| s.as_str()).collect();
+        staking::distribute_slash(&mut rt, &core(), recipients, dec(amount))
+            .await?
+            .map_err(|e| anyhow!("{e:?}"))?;
+
+        let mut summed = dec(0);
+        for pk in &pks {
+            let v = staking::get_validator(&mut rt, pk)
+                .await?
+                .expect("validator");
+            summed = summed + v.stake;
+        }
+        assert_eq!(
+            summed,
+            dec(n as u64 * base + amount),
+            "seed {seed}: Σ recipient stake == n·base + amount (exact, no dust)"
+        );
+    }
+    Ok(())
+}
+
+/// `slash_equivocation` (λ_equiv = 100%): the whole stake is taken, `burned +
+/// bounty == slashed`, the offender is zeroed, and self-publication earns no
+/// bounty (the entire penalty is burned).
+#[tokio::test]
+async fn slash_equivocation_conserves_over_random_cases() -> Result<()> {
+    for seed in 0u64..20 {
+        let stake = 20 + (seed.wrapping_mul(149).wrapping_add(5) % 980);
+        let self_pub = seed % 2 == 0;
+        let (gvs, pks) = validators(2, stake); // offender = pks[0]
+        let (mut rt, _dir, _name) = test_runtime_with_genesis(&gvs).await?;
+
+        let publisher = if self_pub {
+            pks[0].clone()
+        } else {
+            pks[1].clone()
+        };
+        let res = staking::slash_equivocation(&mut rt, &core(), &pks[0], &publisher)
+            .await?
+            .map_err(|e| anyhow!("{e:?}"))?;
+
+        assert_eq!(
+            res.slashed,
+            dec(stake),
+            "seed {seed}: equivocation slashes the full stake"
+        );
+        assert_eq!(
+            res.burned + res.bounty,
+            res.slashed,
+            "seed {seed}: burned + bounty == slashed"
+        );
+        if self_pub {
+            assert_eq!(
+                res.bounty,
+                dec(0),
+                "seed {seed}: self-publication earns no bounty"
+            );
+        } else {
+            assert!(
+                res.bounty > dec(0),
+                "seed {seed}: external publisher earns the r_evid bounty"
+            );
+        }
+        let v = staking::get_validator(&mut rt, &pks[0])
+            .await?
+            .expect("validator");
+        assert_eq!(
+            v.stake,
+            dec(0),
+            "seed {seed}: offender stake zeroed (ejected)"
+        );
+    }
+    Ok(())
+}
