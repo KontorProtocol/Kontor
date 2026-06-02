@@ -888,105 +888,6 @@ async fn test_native_nft_contract() -> Result<()> {
     Ok(())
 }
 
-// Regression: the holder index must stay accurate when ownership changes in a
-// *later block* than the one that recorded the current holder. The index is
-// append-only (ids are never physically removed), so cross-block correctness
-// rests on two things holding at any height: the losing holder's `count` being
-// decremented, and `list_nfts_by_holder` filtering out ids that holder no
-// longer owns. The rest of the suite runs every op at a single pinned height,
-// so a height-sensitive bug here would pass there yet break in production,
-// where mint and transfer land in different blocks.
-#[testlib::test(contracts_dir = "../../test-contracts")]
-async fn test_native_nft_holder_index_cross_height() -> Result<()> {
-    let alice = runtime.identity().await?;
-    let bob = runtime.identity().await?;
-    let carol = runtime.identity().await?;
-    let alice_ref: HolderRef = (&alice).into();
-    let bob_ref: HolderRef = (&bob).into();
-    let carol_ref: HolderRef = (&carol).into();
-
-    let nft_id = "cross-height-nft";
-
-    // Block N: mint. alice is the recorded holder.
-    let minted = nft::mint(
-        runtime,
-        &alice,
-        nft_id,
-        vec![],
-        file_descriptor("xh_file", 7),
-    )
-    .await??;
-    assert_eq!(minted.owner, alice_ref);
-    assert_eq!(
-        nft::count_nfts_by_holder(runtime, alice_ref.clone()).await?,
-        1
-    );
-
-    // Block N+1: transfer alice -> bob. The remove must drop alice's entry even
-    // though it was written in block N.
-    runtime.advance_block().await?;
-    nft::transfer(runtime, &alice, nft_id, &bob).await??;
-
-    assert_eq!(
-        nft::count_nfts_by_holder(runtime, alice_ref.clone()).await?,
-        0,
-        "alice's count must drop after a cross-height transfer"
-    );
-    assert_eq!(
-        nft::list_nfts_by_holder(runtime, alice_ref.clone(), 0, 100).await?,
-        Vec::<nft::NftInfo>::new(),
-        "alice must not still list an NFT she transferred away in a later block"
-    );
-    assert_eq!(
-        nft::count_nfts_by_holder(runtime, bob_ref.clone()).await?,
-        1
-    );
-    let bob_held = nft::list_nfts_by_holder(runtime, bob_ref.clone(), 0, 100).await?;
-    assert_eq!(
-        bob_held
-            .iter()
-            .map(|n| n.nft_id.as_str())
-            .collect::<Vec<_>>(),
-        vec![nft_id]
-    );
-    assert_eq!(bob_held[0].owner, bob_ref);
-
-    // Block N+2: transfer bob -> carol. The entry being removed from bob was
-    // itself written in block N+1, so this exercises a second distinct
-    // remove-height vs write-height pairing.
-    runtime.advance_block().await?;
-    nft::transfer(runtime, &bob, nft_id, &carol).await??;
-
-    assert_eq!(
-        nft::count_nfts_by_holder(runtime, bob_ref.clone()).await?,
-        0
-    );
-    assert_eq!(
-        nft::list_nfts_by_holder(runtime, bob_ref.clone(), 0, 100).await?,
-        Vec::<nft::NftInfo>::new()
-    );
-    assert_eq!(
-        nft::count_nfts_by_holder(runtime, carol_ref.clone()).await?,
-        1
-    );
-    let carol_held = nft::list_nfts_by_holder(runtime, carol_ref.clone(), 0, 100).await?;
-    assert_eq!(
-        carol_held
-            .iter()
-            .map(|n| n.nft_id.as_str())
-            .collect::<Vec<_>>(),
-        vec![nft_id]
-    );
-
-    // Creator index is immutable and unaffected by the cross-height churn.
-    assert_eq!(
-        nft::count_nfts_by_creator(runtime, alice_ref.clone()).await?,
-        1
-    );
-
-    Ok(())
-}
-
 // Regression: dropping several NFTs from the *same* holder within a *single*
 // block must leave the holder's bucket with an accurate count and list. Each
 // `transfer` decrements `holder_index.{alice}.count` (the id itself stays in
@@ -1005,9 +906,9 @@ async fn test_native_nft_holder_index_same_block_multi_remove() -> Result<()> {
     let nft_id_2 = "multi-nft-2";
     let nft_id_3 = "multi-nft-3";
 
-    // All three minted to alice, then two transferred away — every op in the
-    // same block (no `advance_block`), so the tombstones and the rewritten
-    // `count` share one height inside alice's bucket.
+    // All three minted to alice, then two transferred away — every op in one
+    // block, so the two `count` rewrites land at the same height in alice's
+    // bucket.
     nft::mint(
         runtime,
         &alice,

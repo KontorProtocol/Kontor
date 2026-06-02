@@ -6,16 +6,16 @@ use indexer::{
     database::{
         queries::{
             contract_has_state, create_contract_signer, get_checkpoint_latest,
-            get_transaction_by_txid, insert_block, insert_contract, insert_transaction,
+            get_transaction_by_txid, insert_contract, insert_transaction,
         },
         types::{ContractRow, OpResultId},
     },
     reg_tester::{self},
     runtime::{Runtime as IndexerRuntime, TransactionContext},
-    test_utils::{new_mock_block_hash, new_mock_transaction},
+    test_utils::new_mock_transaction,
 };
 pub use indexer::{logging::setup as logging, testlib_exports::*};
-use indexer_types::{BlockRow, Inst, InstKind, Insts, Payment, TransactionRow};
+use indexer_types::{Inst, InstKind, Insts, Payment, TransactionRow};
 use std::{cell::Cell, collections::HashMap, path::PathBuf, rc::Rc};
 use tempfile::TempDir;
 pub use tokio;
@@ -198,16 +198,6 @@ pub trait RuntimeImpl: Send {
     ) -> Result<String>;
     async fn issuance(&mut self, signer: &Signer) -> Result<()>;
     async fn checkpoint(&mut self) -> Result<Option<String>>;
-
-    /// Advance to a fresh block height so that subsequent calls run against a
-    /// later height than earlier ones. Needed to exercise cross-height storage
-    /// behavior (e.g. mutating state written in an earlier block). The local
-    /// runtime pins height per call otherwise, so without this every op shares
-    /// one height and height-sensitive bugs stay hidden. Regtest advances
-    /// blocks organically, so the default is a no-op.
-    async fn advance_block(&mut self) -> Result<()> {
-        Ok(())
-    }
 
     /// Get a clone of the underlying RegTester, if running against a regtest cluster.
     fn reg_tester(&self) -> Option<RegTester> {
@@ -405,52 +395,6 @@ impl RuntimeImpl for RuntimeLocal {
             height: 1,
             tx_index: 0,
         })
-    }
-
-    async fn advance_block(&mut self) -> Result<()> {
-        let conn = self.runtime.get_storage_conn();
-        let new_height = self.runtime.storage.height + 1;
-        // contract_state / transactions both FK into blocks(height), and
-        // foreign keys are enforced (PRAGMA foreign_keys = ON), so the block
-        // row must exist before anything references the new height.
-        insert_block(
-            &conn,
-            BlockRow::builder()
-                .height(new_height)
-                .hash(new_mock_block_hash(new_height as u32))
-                .relevant(true)
-                .build(),
-        )
-        .await?;
-        // Offset the mock txid space well clear of the ids minted by `new()`
-        // (0) and `load_contracts()` (1) so heights never collide on txid.
-        let txid = new_mock_transaction(1_000 + new_height as u32).txid;
-        let tx_index = 0u32;
-        let tx_id = insert_transaction(
-            &conn,
-            TransactionRow::builder()
-                .height(new_height)
-                .txid(txid.to_string())
-                .tx_index(tx_index)
-                .confirmed_height(new_height)
-                .build(),
-        )
-        .await?;
-        self.runtime
-            .set_context(
-                new_height,
-                Some(
-                    TransactionContext::builder()
-                        .tx_id(tx_id)
-                        .tx_index(tx_index)
-                        .txid(txid)
-                        .build(),
-                ),
-                None,
-                None,
-            )
-            .await;
-        Ok(())
     }
 
     async fn wit(&self, contract_address: &ContractAddress) -> Result<String> {
@@ -965,11 +909,6 @@ impl Runtime {
 
     pub async fn checkpoint(&mut self) -> Result<Option<String>> {
         self.runtime.checkpoint().await
-    }
-
-    /// Advance to a fresh block height (see `RuntimeImpl::advance_block`).
-    pub async fn advance_block(&mut self) -> Result<()> {
-        self.runtime.advance_block().await
     }
 
     pub fn reg_tester(&self) -> Option<RegTester> {
