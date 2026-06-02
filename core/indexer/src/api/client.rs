@@ -1,7 +1,7 @@
 use anyhow::{Result, anyhow};
 use indexer_types::{
-    CommitOutputs, ComposeOutputs, ContractResponse, ErrorResponse, Info, OpWithResult,
-    ResultResponse, ResultRow, Reveal, RevealOutputs, SignerResponse, TransactionHex,
+    CheckpointRow, CommitOutputs, ComposeOutputs, ContractResponse, ErrorResponse, Info,
+    OpWithResult, ResultResponse, ResultRow, Reveal, RevealOutputs, SignerResponse, TransactionHex,
     TransactionRow, ViewExpr, ViewResult,
 };
 use reqwest::{Client as HttpClient, ClientBuilder, Response, StatusCode};
@@ -54,6 +54,17 @@ impl Client {
         // `since` is a sha256 hex digest — URL-safe, no escaping needed.
         let url = format!("{}?wait={}&since={}", &self.url, wait_ms, since);
         Self::handle_response(self.client.get(url).send().await?).await
+    }
+
+    /// The node's checkpoint as of `height` (latest checkpoint at or before it).
+    pub async fn checkpoint_at(&self, height: u64) -> Result<CheckpointRow> {
+        Self::handle_response(
+            self.client
+                .get(format!("{}/checkpoints/{height}", &self.url))
+                .send()
+                .await?,
+        )
+        .await
     }
 
     pub async fn compose(&self, reveal: Reveal) -> Result<ComposeOutputs> {

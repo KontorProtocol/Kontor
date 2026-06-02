@@ -46,6 +46,8 @@ export type BroadcastQuery = { transactions: Array<string> };
  */
 export type BroadcastResult = { txid: string };
 
+export type CheckpointRow = { height: number; hash: string };
+
 /**
  * Response from `compose_commit`: one `CommitTx` per Build participant,
  * plus the input `Reveal` with each Build participant's `CommitSource`

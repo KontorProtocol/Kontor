@@ -1,4 +1,5 @@
 mod blocks;
+mod checkpoints;
 mod compose;
 mod contracts;
 mod fees;
@@ -9,6 +10,7 @@ mod signers;
 mod transactions;
 
 pub use blocks::*;
+pub use checkpoints::*;
 pub use compose::*;
 pub use contracts::*;
 pub use fees::*;
