@@ -1,3 +1,4 @@
+use std::collections::HashSet;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -415,6 +416,35 @@ impl ReactorCluster {
         for _ in 0..self.node_count {
             let _ = self.ready_rx.recv().await;
         }
+
+        // Reactor-init is not mesh-readiness. If a test drives the cluster the
+        // instant reactors are up, the first proposal races an unformed gossip
+        // mesh and gets dropped (NoPeersSubscribedToTopic) — the proposer's peers
+        // never see it, so height 1 churns through round changes. Under parallel
+        // test load that startup churn is what pushes later finality waits past
+        // their timeouts. Block here until every node has decided consensus height
+        // 1, which proves the mesh is formed and consensus works on all nodes.
+        let target = self.node_count;
+        let mut decided: HashSet<usize> = HashSet::new();
+        let barrier = tokio::time::timeout(Duration::from_secs(30), async {
+            while decided.len() < target {
+                match self.decided_rx.recv().await {
+                    Some(d) if d.consensus_height.as_u64() >= 1 => {
+                        if let Some(idx) = d.validator_index {
+                            decided.insert(idx);
+                        }
+                    }
+                    Some(_) => {}
+                    None => break,
+                }
+            }
+        })
+        .await;
+        assert!(
+            barrier.is_ok(),
+            "consensus readiness barrier timed out: only {}/{target} nodes decided height 1",
+            decided.len()
+        );
     }
 
     fn send_block_event(&self, event: BlockEvent) {

@@ -42,7 +42,8 @@ impl<E: Executor> Reactor<E> {
         let proposals: Vec<_> = self
             .consensus
             .undecided
-            .get(&(height, round))
+            .get(&height)
+            .and_then(|rounds| rounds.get(&round))
             .cloned()
             .into_iter()
             .collect();
@@ -66,7 +67,12 @@ impl<E: Executor> Reactor<E> {
         } else {
             match &part.content {
                 StreamContent::Data(ProposalPart::Data(data)) => {
-                    if !self.consensus.undecided.contains_key(&(height, round)) {
+                    if !self
+                        .consensus
+                        .undecided
+                        .get(&height)
+                        .is_some_and(|rounds| rounds.contains_key(&round))
+                    {
                         self.validate_and_accept_proposal(data, height, round)
                             .await?
                     } else {
@@ -131,7 +137,9 @@ impl<E: Executor> Reactor<E> {
                 };
                 self.consensus
                     .undecided
-                    .insert((height, round), proposed.clone());
+                    .entry(height)
+                    .or_default()
+                    .insert(round, proposed.clone());
                 Some(proposed)
             } else {
                 None
@@ -155,7 +163,11 @@ impl<E: Executor> Reactor<E> {
         } else {
             valid_round
         };
-        if let Some(proposal) = self.consensus.undecided.get(&(height, lookup_round))
+        if let Some(proposal) = self
+            .consensus
+            .undecided
+            .get(&height)
+            .and_then(|rounds| rounds.get(&lookup_round))
             && proposal.value.id() == value_id
         {
             let locally_proposed = LocallyProposedValue::new(height, round, proposal.value.clone());
@@ -222,6 +234,7 @@ impl<E: Executor> Reactor<E> {
             AppMsg::Decided {
                 certificate,
                 extensions: _,
+                reply,
             } => {
                 info!(
                     height = %certificate.height,
@@ -229,6 +242,11 @@ impl<E: Executor> Reactor<E> {
                     value = %certificate.value_id,
                     "Decided"
                 );
+                // The reactor commits decisions in the Finalized handler, so just
+                // ack here to let consensus proceed to finalization.
+                reply
+                    .send(())
+                    .map_err(|_| anyhow::anyhow!("Failed to send Decided reply"))?;
             }
 
             AppMsg::Finalized {

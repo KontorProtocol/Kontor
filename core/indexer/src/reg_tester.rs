@@ -1582,26 +1582,39 @@ impl RegTesterCluster {
         )
     }
 
-    /// Assert all running nodes have matching non-empty checkpoints. Returns the checkpoint value.
+    /// Assert all running nodes agree on state, by comparing each node's checkpoint
+    /// at a common past height. Returns that checkpoint hash.
+    ///
+    /// Comparing nodes' *current* checkpoints is racy — the auto-miner keeps
+    /// advancing block height and a late joiner may still be catching up, so two
+    /// nodes read back-to-back can be at different heights (different checkpoints).
+    /// Instead we anchor on the lowest height any node has reached and compare each
+    /// node's checkpoint *as of* that height: a past checkpoint is immutable once
+    /// processed, so it's comparable regardless of how far each node has advanced.
     pub async fn assert_checkpoints_match(&self) -> Result<String> {
-        let mut checkpoints = Vec::new();
-        for (i, nc) in self.node_configs.iter().enumerate() {
+        let mut min_height = u64::MAX;
+        for nc in &self.node_configs {
             if let Some(cn) = &nc.running {
-                let info = cn.client.index().await?;
-                let checkpoint = info
-                    .checkpoint
-                    .unwrap_or_else(|| panic!("Node {i} should have a checkpoint"));
-                checkpoints.push((i, info.height, info.consensus_height, checkpoint));
+                min_height = min_height.min(cn.client.index().await?.height);
             }
         }
-        let (ref_node, _, _, ref_cp) = &checkpoints[0];
-        for (i, height, consensus_height, cp) in &checkpoints[1..] {
-            assert_eq!(
-                cp, ref_cp,
-                "Node {i} checkpoint mismatch with node {ref_node} (height={height}, consensus_height={consensus_height:?})"
-            );
+
+        let mut reference: Option<(usize, String)> = None;
+        for (i, nc) in self.node_configs.iter().enumerate() {
+            if let Some(cn) = &nc.running {
+                let cp = cn.client.checkpoint_at(min_height).await?;
+                match &reference {
+                    None => reference = Some((i, cp.hash)),
+                    Some((ref_node, ref_hash)) => assert_eq!(
+                        &cp.hash, ref_hash,
+                        "Node {i} checkpoint diverges from node {ref_node} at height {min_height}"
+                    ),
+                }
+            }
         }
-        Ok(checkpoints.into_iter().next().unwrap().3)
+        Ok(reference
+            .expect("no running nodes to compare checkpoints")
+            .1)
     }
 
     /// Shut down all nodes.

@@ -31,7 +31,9 @@ use crate::api::handlers::{
 use super::{
     API_REQUEST_TIMEOUT_MS, Env,
     error::HttpError,
-    handlers::{get_block, get_block_latest, post_compose_commit, post_compose_reveal},
+    handlers::{
+        get_block, get_block_latest, get_checkpoint, post_compose_commit, post_compose_reveal,
+    },
 };
 
 #[derive(Clone)]
@@ -164,6 +166,7 @@ pub fn new(context: Env, prom_handle: PrometheusHandle) -> Router {
                 .route("/", get(get_results))
                 .route("/{id}", get(get_result)),
         )
+        .route("/checkpoints/{height}", get(get_checkpoint))
         .route("/signers/{identifier}", get(get_signer))
         .layer(from_fn_with_state(context.clone(), require_available));
 

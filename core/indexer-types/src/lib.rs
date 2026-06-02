@@ -581,6 +581,14 @@ pub enum OpKind {
     Sponsor,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export, export_to = "../../../sdk/src/bindings.d.ts")]
+pub struct CheckpointRow {
+    #[ts(type = "number")]
+    pub height: u64,
+    pub hash: String,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Builder, TS)]
 #[ts(export, export_to = "../../../sdk/src/bindings.d.ts")]
 pub struct BlockRow {

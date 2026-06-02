@@ -70,12 +70,6 @@ impl HasRowId for BlockRow {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq)]
-pub struct CheckpointRow {
-    pub height: u64,
-    pub hash: String,
-}
-
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct Identity {
     signer_id: u64,
