@@ -79,7 +79,11 @@ pub struct ConsensusState {
     pub mempool_fee_index: MempoolFeeIndex,
     pub current_height: Height,
     pub current_round: Round,
-    pub undecided: BTreeMap<(Height, Round), ProposedValue<Ctx>>,
+    // Proposed values not yet decided, grouped by height then round. Grouping by
+    // height lets `handle_finalized` find the decided value by value_id within the
+    // height (the decided round can differ from the round we filed it under) and
+    // drop every losing-round proposal for a height in one step once it's decided.
+    pub undecided: BTreeMap<Height, BTreeMap<Round, ProposedValue<Ctx>>>,
 
     // Finality tracking
     pub unfinalized_batches: Vec<UnfinalizedBatch>,

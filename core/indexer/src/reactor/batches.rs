@@ -474,7 +474,9 @@ impl<E: Executor> Reactor<E> {
         };
         self.consensus
             .undecided
-            .insert((height, round), proposed.clone());
+            .entry(height)
+            .or_default()
+            .insert(round, proposed.clone());
         Ok(Some(proposed))
     }
 
@@ -512,7 +514,9 @@ impl<E: Executor> Reactor<E> {
         };
         self.consensus
             .undecided
-            .insert((pending.height, pending.round), proposed);
+            .entry(pending.height)
+            .or_default()
+            .insert(pending.round, proposed);
         let proposal = LocallyProposedValue::new(pending.height, pending.round, value);
         self.send_proposal_parts(&proposal, Round::Nil).await?;
         let _ = pending.reply.send(proposal);
@@ -654,7 +658,12 @@ impl<E: Executor> Reactor<E> {
     ) -> Result<()> {
         info!(%height, %round, "Building value to propose");
 
-        if let Some(existing) = self.consensus.undecided.get(&(height, round)) {
+        if let Some(existing) = self
+            .consensus
+            .undecided
+            .get(&height)
+            .and_then(|rounds| rounds.get(&round))
+        {
             let proposal =
                 LocallyProposedValue::new(existing.height, existing.round, existing.value.clone());
             self.send_proposal_parts(&proposal, Round::Nil).await?;
@@ -670,7 +679,11 @@ impl<E: Executor> Reactor<E> {
                 value: value.clone(),
                 validity: Validity::Valid,
             };
-            self.consensus.undecided.insert((height, round), proposed);
+            self.consensus
+                .undecided
+                .entry(height)
+                .or_default()
+                .insert(round, proposed);
             let proposal = LocallyProposedValue::new(height, round, value);
             self.send_proposal_parts(&proposal, Round::Nil).await?;
             reply
@@ -698,11 +711,21 @@ impl<E: Executor> Reactor<E> {
         let last_height = self.last_height;
         let mut result = consensus_state::ConsensusResult::None;
 
-        if let Some(proposal) = self
+        // Take every proposal we held for this height (all rounds) and pick the
+        // one matching the decided value. We match on value_id, not round: a node
+        // can decide a round it locally advanced past, so the value is often filed
+        // under a different round than the one in the certificate.
+        let decided = self
             .consensus
             .undecided
-            .remove(&(certificate.height, certificate.round))
-        {
+            .remove(&certificate.height)
+            .and_then(|rounds| {
+                rounds
+                    .into_values()
+                    .find(|p| p.value.id() == certificate.value_id)
+            });
+
+        if let Some(proposal) = decided {
             if let Some(obs) = &self.consensus.observation {
                 let _ = obs.decided_tx.try_send(DecidedBatch {
                     validator_index: self.consensus.validator_index,
@@ -826,6 +849,17 @@ impl<E: Executor> Reactor<E> {
                     }
                 }
             }
+        } else {
+            // We decided a value we never assembled locally. For blocks this can't
+            // happen (every node rebuilds the same block reference when proposing);
+            // it would mean a batch decided at a round whose proposal we never saw
+            // and whose txs aren't in our pool. Surface it rather than dropping it
+            // silently, which would leave a hole in the decided sequence.
+            warn!(
+                height = %certificate.height,
+                value = %certificate.value_id,
+                "Finalized a value not held among our undecided proposals for this height"
+            );
         }
 
         self.consensus.current_height = certificate.height.increment();
