@@ -461,6 +461,27 @@ impl Guest for Filestorage {
         ctx: &CoreContext,
         params: StorageParams,
     ) -> Result<StorageParams, Error> {
+        // Validate before writing — a bad value here would brick the contract or
+        // distort fees (every sibling contract guards its tunable params).
+        if params.f_scale == 0 {
+            return Err(Error::Message(
+                "f_scale must be positive (0 would div-by-zero in create_agreement)".to_string(),
+            ));
+        }
+        if params.omega_genesis == 0 {
+            return Err(Error::Message("omega_genesis must be positive".to_string()));
+        }
+        if params.chi_fee_bps > BPS_DENOM {
+            return Err(Error::Message(format!(
+                "chi_fee_bps must be <= {} (creation fee cannot exceed k_f)",
+                BPS_DENOM
+            )));
+        }
+        let zero: Decimal = 0u64.try_into()?;
+        if params.c_stake <= zero {
+            return Err(Error::Message("c_stake must be positive".to_string()));
+        }
+
         let model = ctx.proc_context().model();
         // Note: retuning omega_genesis here does NOT retroactively rewrite the
         // live Ω accumulator (it already folded in the old genesis mass and the
