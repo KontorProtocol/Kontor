@@ -99,7 +99,8 @@ pub async fn start(config: EngineConfig) -> Result<EngineOutput> {
         Some(address.to_string()),
     );
 
-    let engine_provider = Ed25519Provider::new(config.private_key.clone());
+    let verifier = Ed25519Provider::new(config.private_key.clone());
+    let signer = Ed25519Provider::new(config.private_key.clone());
     let app_provider = Ed25519Provider::new(config.private_key);
 
     let (channels, handle) = malachitebft_app_channel::start_engine(
@@ -107,7 +108,7 @@ pub async fn start(config: EngineConfig) -> Result<EngineOutput> {
         node_config,
         WalContext::new(wal_path, ProtobufCodec),
         NetworkContext::new(identity, ProtobufCodec),
-        ConsensusContext::new(address, engine_provider),
+        ConsensusContext::new_validator(address, Box::new(verifier), Box::new(signer)),
         SyncContext::new(ProtobufCodec),
         RequestContext::new(100),
     )

@@ -30,7 +30,7 @@ ignore = [
 
     # ── hickory-proto 0.25.2 ─────────────────────────────────────────────────
     # Pulled in only by libp2p 0.56 (mDNS / DNS peer discovery), itself pinned
-    # by the circlefin/malachite fork at git rev 9109e96e4547. Both advisories
+    # by the circlefin/malachite fork (git rev in core/Cargo.toml). Both advisories
     # are DoS-class (CPU exhaustion / unbounded loop) reachable only by a
     # malicious DNS responder during libp2p peer discovery on the local network.
     # 0119 is fixed in hickory 0.26.1; 0118 has no fixed release yet. Both are
