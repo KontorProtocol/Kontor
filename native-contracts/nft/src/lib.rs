@@ -137,8 +137,7 @@ fn validate(
         .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_')
     {
         return Err(Error::Message(
-            "nft_id must contain only alphanumeric characters, hyphens, or underscores"
-                .to_string(),
+            "nft_id must contain only alphanumeric characters, hyphens, or underscores".to_string(),
         ));
     }
     if model.nfts().get(&nft_id.to_string()).is_some() {

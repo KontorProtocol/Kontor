@@ -294,21 +294,14 @@ async fn test_native_nft_attach_contract() -> Result<()> {
         0
     );
     assert_eq!(
-        nft::list_nfts_by_holder(
-            runtime,
-            HolderRef::SignerId(seller_signer_id),
-            0,
-            100,
-        )
-        .await?,
+        nft::list_nfts_by_holder(runtime, HolderRef::SignerId(seller_signer_id), 0, 100,).await?,
         Vec::<nft::NftInfo>::new()
     );
     assert_eq!(
         nft::count_nfts_by_holder(runtime, utxo_holder_ref.clone()).await?,
         1
     );
-    let utxo_held =
-        nft::list_nfts_by_holder(runtime, utxo_holder_ref.clone(), 0, 100).await?;
+    let utxo_held = nft::list_nfts_by_holder(runtime, utxo_holder_ref.clone(), 0, 100).await?;
     assert_eq!(utxo_held.len(), 1);
     assert_eq!(utxo_held[0].nft_id, nft_id);
 

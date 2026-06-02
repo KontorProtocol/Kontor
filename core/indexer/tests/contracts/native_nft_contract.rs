@@ -354,8 +354,7 @@ async fn test_native_nft_contract() -> Result<()> {
     );
     // Pagination on alice's two-entry bucket: lexicographic order on nft_id
     // puts genesis-nft-1 before third-nft.
-    let alice_held_p1 =
-        nft::list_nfts_by_holder(runtime, alice_ref.clone(), 0, 1).await?;
+    let alice_held_p1 = nft::list_nfts_by_holder(runtime, alice_ref.clone(), 0, 1).await?;
     assert_eq!(
         alice_held_p1
             .iter()
@@ -363,8 +362,7 @@ async fn test_native_nft_contract() -> Result<()> {
             .collect::<Vec<_>>(),
         vec![nft_id_1]
     );
-    let alice_held_p2 =
-        nft::list_nfts_by_holder(runtime, alice_ref.clone(), 1, 1).await?;
+    let alice_held_p2 = nft::list_nfts_by_holder(runtime, alice_ref.clone(), 1, 1).await?;
     assert_eq!(
         alice_held_p2
             .iter()
@@ -584,8 +582,7 @@ async fn test_native_nft_contract() -> Result<()> {
         nft::count_nfts_by_holder(runtime, bob_ref.clone()).await?,
         2
     );
-    let alice_after_ab =
-        nft::list_nfts_by_holder(runtime, alice_ref.clone(), 0, 100).await?;
+    let alice_after_ab = nft::list_nfts_by_holder(runtime, alice_ref.clone(), 0, 100).await?;
     assert_eq!(
         alice_after_ab
             .iter()
@@ -593,8 +590,7 @@ async fn test_native_nft_contract() -> Result<()> {
             .collect::<Vec<_>>(),
         vec![nft_id_3]
     );
-    let bob_after_ab =
-        nft::list_nfts_by_holder(runtime, bob_ref.clone(), 0, 100).await?;
+    let bob_after_ab = nft::list_nfts_by_holder(runtime, bob_ref.clone(), 0, 100).await?;
     // genesis-nft-1 < second-nft lexicographically.
     assert_eq!(
         bob_after_ab
@@ -665,8 +661,7 @@ async fn test_native_nft_contract() -> Result<()> {
         nft::count_nfts_by_holder(runtime, carol_ref.clone()).await?,
         1
     );
-    let bob_after_bc =
-        nft::list_nfts_by_holder(runtime, bob_ref.clone(), 0, 100).await?;
+    let bob_after_bc = nft::list_nfts_by_holder(runtime, bob_ref.clone(), 0, 100).await?;
     assert_eq!(
         bob_after_bc
             .iter()
@@ -674,8 +669,7 @@ async fn test_native_nft_contract() -> Result<()> {
             .collect::<Vec<_>>(),
         vec![nft_id_2]
     );
-    let carol_after_bc =
-        nft::list_nfts_by_holder(runtime, carol_ref.clone(), 0, 100).await?;
+    let carol_after_bc = nft::list_nfts_by_holder(runtime, carol_ref.clone(), 0, 100).await?;
     assert_eq!(
         carol_after_bc
             .iter()
@@ -721,8 +715,7 @@ async fn test_native_nft_contract() -> Result<()> {
         nft::list_nfts_by_holder(runtime, carol_ref.clone(), 0, 100).await?,
         Vec::<nft::NftInfo>::new()
     );
-    let burner_held =
-        nft::list_nfts_by_holder(runtime, HolderRef::Burner, 0, 100).await?;
+    let burner_held = nft::list_nfts_by_holder(runtime, HolderRef::Burner, 0, 100).await?;
     assert_eq!(
         burner_held
             .iter()
@@ -913,7 +906,14 @@ async fn test_native_nft_holder_index_cross_height() -> Result<()> {
     let nft_id = "cross-height-nft";
 
     // Block N: mint. alice is the recorded holder.
-    let minted = nft::mint(runtime, &alice, nft_id, vec![], file_descriptor("xh_file", 7)).await??;
+    let minted = nft::mint(
+        runtime,
+        &alice,
+        nft_id,
+        vec![],
+        file_descriptor("xh_file", 7),
+    )
+    .await??;
     assert_eq!(minted.owner, alice_ref);
     assert_eq!(
         nft::count_nfts_by_holder(runtime, alice_ref.clone()).await?,
@@ -941,7 +941,10 @@ async fn test_native_nft_holder_index_cross_height() -> Result<()> {
     );
     let bob_held = nft::list_nfts_by_holder(runtime, bob_ref.clone(), 0, 100).await?;
     assert_eq!(
-        bob_held.iter().map(|n| n.nft_id.as_str()).collect::<Vec<_>>(),
+        bob_held
+            .iter()
+            .map(|n| n.nft_id.as_str())
+            .collect::<Vec<_>>(),
         vec![nft_id]
     );
     assert_eq!(bob_held[0].owner, bob_ref);
@@ -966,7 +969,10 @@ async fn test_native_nft_holder_index_cross_height() -> Result<()> {
     );
     let carol_held = nft::list_nfts_by_holder(runtime, carol_ref.clone(), 0, 100).await?;
     assert_eq!(
-        carol_held.iter().map(|n| n.nft_id.as_str()).collect::<Vec<_>>(),
+        carol_held
+            .iter()
+            .map(|n| n.nft_id.as_str())
+            .collect::<Vec<_>>(),
         vec![nft_id]
     );
 
@@ -1003,9 +1009,30 @@ async fn test_native_nft_holder_index_same_block_multi_remove() -> Result<()> {
     // All three minted to alice, then two transferred away — every op in the
     // same block (no `advance_block`), so the tombstones and the rewritten
     // `count` share one height inside alice's bucket.
-    nft::mint(runtime, &alice, nft_id_1, vec![], file_descriptor("multi_1", 11)).await??;
-    nft::mint(runtime, &alice, nft_id_2, vec![], file_descriptor("multi_2", 12)).await??;
-    nft::mint(runtime, &alice, nft_id_3, vec![], file_descriptor("multi_3", 13)).await??;
+    nft::mint(
+        runtime,
+        &alice,
+        nft_id_1,
+        vec![],
+        file_descriptor("multi_1", 11),
+    )
+    .await??;
+    nft::mint(
+        runtime,
+        &alice,
+        nft_id_2,
+        vec![],
+        file_descriptor("multi_2", 12),
+    )
+    .await??;
+    nft::mint(
+        runtime,
+        &alice,
+        nft_id_3,
+        vec![],
+        file_descriptor("multi_3", 13),
+    )
+    .await??;
     assert_eq!(
         nft::count_nfts_by_holder(runtime, alice_ref.clone()).await?,
         3
