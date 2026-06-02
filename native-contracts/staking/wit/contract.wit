@@ -79,6 +79,9 @@ world root {
   export distribute-ordering-reward: async func(ctx: borrow<core-context>, amount: decimal) -> result<_, error>;
   export set-slash-params: async func(ctx: borrow<core-context>, tau-slash-bps: u64, r-evid-bps: u64) -> result<_, error>;
   export get-slash-params: async func(ctx: borrow<view-context>) -> slash-params;
+  // σ_min — minimum stake to register as a validator (the ordering-stake floor).
+  export set-sigma-min: async func(ctx: borrow<core-context>, value: decimal) -> result<_, error>;
+  export get-sigma-min: async func(ctx: borrow<view-context>) -> decimal;
 
   // --- Queries (ViewContext) ---
   export get-active-set: async func(ctx: borrow<view-context>) -> list<active-validator-info>;

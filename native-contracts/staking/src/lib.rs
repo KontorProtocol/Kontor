@@ -24,7 +24,10 @@ struct ValidatorEntry {
 
 #[derive(Clone, Default, StorageRoot)]
 struct StakingStorage {
-    pub min_stake: Decimal,
+    /// σ_min — minimum stake to register as a validator (spec `econ.sigmaMin`).
+    /// In the unified pool this is the ordering-stake floor; calibrated to keep
+    /// the active set from collapsing to a few large stakers.
+    pub sigma_min: Decimal,
     pub validators: Map<Holder, ValidatorEntry>,
     pub active_count: u64,
     pub total_active_stake: Decimal,
@@ -40,6 +43,11 @@ struct StakingStorage {
 
 /// Basis-points denominator for fractional params (e.g. `τ_slash`).
 const BPS_DENOM: u64 = 10_000;
+
+/// Default `σ_min` = 5,000,000 KOR (spec `econ.sigmaMin`, ~0.5% of a 1B genesis
+/// supply). The minimum stake to register as a validator; calibrated for a
+/// healthy active-set size. Admin-tunable via `set_sigma_min` during beta.
+const DEFAULT_SIGMA_MIN: u64 = 5_000_000;
 
 /// Default `τ_slash` = 50% burn share. Source: `specs/params.typ` `econ.tauSlash`.
 const DEFAULT_TAU_SLASH_BPS: u64 = 5_000;
@@ -79,7 +87,7 @@ impl Guest for Staking {
         let storage = StakingStorage::default();
         storage.init(ctx);
         let model = ctx.model();
-        model.set_min_stake(1u64.try_into().unwrap());
+        model.set_sigma_min(DEFAULT_SIGMA_MIN.try_into().unwrap());
         model.set_tau_slash_bps(DEFAULT_TAU_SLASH_BPS);
         model.set_r_evid_bps(DEFAULT_R_EVID_BPS);
         ctx.contract()
@@ -105,8 +113,8 @@ impl Guest for Staking {
             return Err(Error::Message("already registered".to_string()));
         }
 
-        if stake_amount < model.min_stake() {
-            return Err(Error::Message("stake below minimum".to_string()));
+        if stake_amount < model.sigma_min() {
+            return Err(Error::Message("stake below sigma_min".to_string()));
         }
         if stake_amount > MAX_STAKE.try_into().unwrap() {
             return Err(Error::Message("stake exceeds maximum".to_string()));
@@ -511,6 +519,22 @@ impl Guest for Staking {
             tau_slash_bps: model.tau_slash_bps(),
             r_evid_bps: model.r_evid_bps(),
         }
+    }
+
+    /// Core-context (reactor/admin) setter for σ_min, the minimum-stake floor.
+    /// `set_genesis_set` deliberately bypasses this floor (the genesis set is the
+    /// trusted bootstrap), so lowering σ_min in tests does not affect genesis.
+    fn set_sigma_min(ctx: &CoreContext, value: Decimal) -> Result<(), Error> {
+        let zero: Decimal = 0u64.try_into()?;
+        if value < zero {
+            return Err(Error::Message("sigma_min must be non-negative".to_string()));
+        }
+        ctx.proc_context().model().set_sigma_min(value);
+        Ok(())
+    }
+
+    fn get_sigma_min(ctx: &ViewContext) -> Decimal {
+        ctx.model().sigma_min()
     }
 
     /// Redistribute `amount` (the `(1 − τ_slash)` remainder of a slash, already
