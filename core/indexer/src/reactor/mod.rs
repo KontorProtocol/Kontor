@@ -464,8 +464,9 @@ async fn build_validator_set(runtime: &mut Runtime) -> Result<ValidatorSet> {
             );
             let mut key_bytes = [0u8; 32];
             key_bytes.copy_from_slice(&v.ed25519_pubkey);
-            let public_key = PublicKey::from_bytes(key_bytes)
-                .with_context(|| format!("Invalid ed25519 pubkey for validator {}", v.x_only_pubkey))?;
+            let public_key = PublicKey::from_bytes(key_bytes).with_context(|| {
+                format!("Invalid ed25519 pubkey for validator {}", v.x_only_pubkey)
+            })?;
             let voting_power = stake_to_voting_power(v.stake)
                 .with_context(|| format!("Invalid stake for validator {}", v.x_only_pubkey))?;
             Ok(Validator::new(public_key, voting_power))

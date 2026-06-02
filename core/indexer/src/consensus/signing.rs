@@ -153,9 +153,11 @@ impl Verifier<Ctx> for Ed25519Provider {
         let public_key = proof.decoded_public_key().map_err(|e| {
             Error::from_source(format!("Invalid public key in validator proof: {e}"))
         })?;
-        Ok(VerificationResult::from_bool(
-            self.verify(&proof.preimage(), &proof.signature, &public_key),
-        ))
+        Ok(VerificationResult::from_bool(self.verify(
+            &proof.preimage(),
+            &proof.signature,
+            &public_key,
+        )))
     }
 }
 
