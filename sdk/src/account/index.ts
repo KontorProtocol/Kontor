@@ -77,20 +77,6 @@ export interface Account {
   signPsbt(psbt: Uint8Array, opts?: SignPsbtOptions): Promise<Uint8Array>;
 
   /**
-   * BIP-340 schnorr-sign a raw 32-byte digest with this account's key,
-   * returning the 64-byte signature. Deterministic — no auxiliary
-   * randomness — matching what Bitcoin Core itself does and what the
-   * indexer's `bls-crypto::RegistrationProof` produces.
-   *
-   * This is **not** BIP-322 message signing. It's the lower-level
-   * primitive used to construct registration proofs and other in-chain
-   * authorizations the SDK has to assemble itself. Most account
-   * impls back this directly with their private key; wallet-mediated
-   * accounts will typically not expose it and throw `SignerError`.
-   */
-  signSchnorr(digest: Uint8Array): Promise<Uint8Array>;
-
-  /**
    * Serialize broadcast-mutating sequences that read or update this
    * account's funding state. The transport's `submitReveal`,
    * `inspect`, and `simulate` paths all route through here so two
@@ -103,4 +89,30 @@ export interface Account {
    * any other locked critical section.
    */
   runExclusive<T>(fn: () => Promise<T>): Promise<T>;
+}
+
+/**
+ * An `Account` that can also produce a raw BIP-340 Schnorr signature over a
+ * 32-byte digest. Required to build the Taproot↔BLS registration binding
+ * (`buildRegistrationProof` / `session.registerBls`).
+ *
+ * Seed-holding accounts (`LocalAccount`) are `BlsCapableAccount`; wallet-
+ * mediated accounts (`WalletAccount`) are not — browser wallets don't expose
+ * raw Schnorr-over-digest, and BLS keys need seed access anyway (EIP-2333), so
+ * BLS is a seed-holding-only capability rather than a divergent account flavor.
+ */
+export interface BlsCapableAccount extends Account {
+  /**
+   * BIP-340 Schnorr-sign a raw 32-byte digest, returning the 64-byte
+   * signature. Deterministic (no auxiliary randomness), matching the indexer's
+   * `bls-crypto::RegistrationProof`. This is **not** BIP-322 message signing.
+   */
+  signSchnorr(digest: Uint8Array): Promise<Uint8Array>;
+}
+
+/** Narrow an `Account` to `BlsCapableAccount` (it exposes `signSchnorr`). */
+export function isBlsCapable(account: Account): account is BlsCapableAccount {
+  return (
+    typeof (account as Partial<BlsCapableAccount>).signSchnorr === "function"
+  );
 }

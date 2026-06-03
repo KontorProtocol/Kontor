@@ -32,7 +32,7 @@
  */
 
 import { ContractAddress } from "./canonical/ContractAddress.js";
-import type { Account } from "./account/index.js";
+import { isBlsCapable, type Account } from "./account/index.js";
 import { BlsKey, buildRegistrationProof } from "./bls.js";
 import type { Chain } from "./chains.js";
 import { hex } from "@scure/base";
@@ -213,6 +213,13 @@ export class KontorSession {
    * different non-thenable handle when that work lands.
    */
   async registerBls(blsKey: BlsKey): Promise<void> {
+    if (!isBlsCapable(this.account)) {
+      throw new SignerError(
+        "registerBls requires a seed-holding (BLS-capable) account — a " +
+          "browser-wallet account can't produce the Taproot↔BLS binding signature",
+        { docsPath: "/sdk/bls" },
+      );
+    }
     const proof = await buildRegistrationProof(this.account, blsKey);
     const inst = new Inst<void>(
       this,
