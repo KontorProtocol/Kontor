@@ -885,6 +885,141 @@ async fn storage_economics_smoke(runtime: &mut Runtime) -> Result<()> {
     Ok(())
 }
 
+/// Property invariants over random file sizes: ω_f/k_f positivity, deterministic
+/// rank_f increments, Ω monotone on activation, |F| increments, and
+/// reward-pool conservation (`Σ allocations ≤ pool`). Self-relative — captures
+/// the starting Ω / |F| so it doesn't assume a pristine runtime.
+async fn storage_economics_invariants_over_random_sizes(runtime: &mut Runtime) -> Result<()> {
+    let signer = runtime.identity().await?;
+    let core_signer = Signer::Core(Box::new(runtime.identity().await?));
+    let zero: Decimal = 0u64.try_into().unwrap();
+
+    let files0 = filestorage::get_active_file_count(runtime).await?;
+    let omega_start = filestorage::get_omega(runtime).await?;
+
+    let mut created = Vec::new();
+    for seed in 0u64..12 {
+        let size = 1 + (seed.wrapping_mul(7919).wrapping_add(11) % 5_000_000); // 1..=5M bytes
+        let id = format!("rnd_{seed}");
+        let res = filestorage::create_agreement(
+            runtime,
+            &signer,
+            make_descriptor(
+                id.clone(),
+                vec![(seed as u8).wrapping_add(1); 32],
+                16,
+                size,
+                format!("{id}.bin"),
+            ),
+        )
+        .await??;
+        let econ = filestorage::get_agreement_economics(runtime, &res.agreement_id)
+            .await?
+            .expect("economics present");
+        assert!(econ.omega_f > zero, "seed {seed}: ω_f > 0");
+        assert!(econ.k_f > zero, "seed {seed}: k_f > 0");
+        assert_eq!(econ.s_bytes, size, "seed {seed}: s_bytes recorded");
+        created.push((res.agreement_id, econ.rank_f));
+    }
+
+    // rank_f increments by exactly 1 per creation.
+    for w in created.windows(2) {
+        assert_eq!(w[1].1, w[0].1 + 1, "rank_f increments by 1 per creation");
+    }
+    // Inactive creates do not move Ω.
+    assert_eq!(
+        filestorage::get_omega(runtime).await?,
+        omega_start,
+        "Ω unchanged by inactive creates"
+    );
+
+    // Activate each file; Ω strictly increases and |F| increments.
+    let mut prev_omega = omega_start;
+    let mut activated = 0u64;
+    for (aid, _) in &created {
+        let mut ops = Ops::new(&signer);
+        ops.push(filestorage::join_agreement_call(aid, "n1"));
+        ops.push(filestorage::join_agreement_call(aid, "n2"));
+        ops.push(filestorage::join_agreement_call(aid, "n3"));
+        let mut submit = runtime.submit();
+        submit.add(ops);
+        submit.execute().await?;
+        activated += 1;
+        assert_eq!(
+            filestorage::get_active_file_count(runtime).await?,
+            files0 + activated
+        );
+        let omega = filestorage::get_omega(runtime).await?;
+        assert!(omega > prev_omega, "Ω strictly increases on activation");
+        prev_omega = omega;
+    }
+
+    // Reward distribution conserves: Σ allocations ≤ pool, each positive.
+    let pool: Decimal = 10_000_000u64.try_into().unwrap();
+    let rewards = filestorage::distribute_storage_rewards(runtime, &core_signer, pool).await??;
+    assert!(!rewards.is_empty(), "active files yield allocations");
+    let mut summed = zero;
+    for r in &rewards {
+        assert!(r.amount > zero, "each allocation positive");
+        summed = summed + r.amount;
+    }
+    assert!(
+        summed <= pool,
+        "Σ allocations ≤ pool (genesis dilution leaves a remainder)"
+    );
+
+    Ok(())
+}
+
+/// ω_f = log10(s)/log10(1+rank): at equal size, a later (higher-rank) file has
+/// strictly smaller ω_f.
+async fn storage_omega_f_decreases_with_rank_at_equal_size(runtime: &mut Runtime) -> Result<()> {
+    let signer = runtime.identity().await?;
+    let size = 1_000u64;
+    let a = filestorage::create_agreement(
+        runtime,
+        &signer,
+        make_descriptor(
+            "eq_a".to_string(),
+            vec![1u8; 32],
+            16,
+            size,
+            "a.bin".to_string(),
+        ),
+    )
+    .await??;
+    let b = filestorage::create_agreement(
+        runtime,
+        &signer,
+        make_descriptor(
+            "eq_b".to_string(),
+            vec![2u8; 32],
+            16,
+            size,
+            "b.bin".to_string(),
+        ),
+    )
+    .await??;
+    let ea = filestorage::get_agreement_economics(runtime, &a.agreement_id)
+        .await?
+        .expect("a econ");
+    let eb = filestorage::get_agreement_economics(runtime, &b.agreement_id)
+        .await?
+        .expect("b econ");
+    assert_eq!(ea.s_bytes, eb.s_bytes, "same size");
+    assert_eq!(eb.rank_f, ea.rank_f + 1, "B created after A ⇒ rank+1");
+    assert!(
+        eb.omega_f < ea.omega_f,
+        "equal size, higher rank ⇒ strictly smaller ω_f"
+    );
+    Ok(())
+}
+
+pub async fn run_storage_properties(runtime: &mut Runtime) -> Result<()> {
+    storage_economics_invariants_over_random_sizes(runtime).await?;
+    storage_omega_f_decreases_with_rank_at_equal_size(runtime).await
+}
+
 pub async fn run_core_signer_smoke(runtime: &mut Runtime) -> Result<()> {
     storage_economics_smoke(runtime).await?;
     challenge_gen_smoke_test(runtime).await
