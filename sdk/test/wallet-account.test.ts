@@ -6,6 +6,7 @@
  * envelope) without a wallet extension or prompts.
  */
 import { test, expect } from "vitest";
+import { base64 } from "@scure/base";
 import { Transaction, p2tr } from "@scure/btc-signer";
 
 import { LocalAccount } from "../src/account/local.js";
@@ -112,15 +113,20 @@ test("signPsbt: maps single-anyonecanpay to allowedSignHash 131", async () => {
 
   // The request carried allowedSignHash 131 (= SIGHASH_SINGLE|ANYONECANPAY).
   const signPsbtCall = calls.find((c) => c.method === "signPsbt")!;
-  expect((signPsbtCall.params as { allowedSignHash?: number }).allowedSignHash).toBe(0x83);
+  const params = signPsbtCall.params as {
+    psbt: string;
+    allowedSignHash?: number;
+    signInputs: Record<string, number[]>;
+  };
+  expect(params.allowedSignHash).toBe(0x83);
   // signInputs is keyed by the account address.
-  expect(
-    (signPsbtCall.params as { signInputs: Record<string, number[]> }).signInputs[
-      local.address
-    ],
-  ).toEqual([0]);
+  expect(params.signInputs[local.address]).toEqual([0]);
 
-  // And the signed input is pinned to 0x83.
+  // The sighash is ALSO pinned on the PSBT we hand the wallet (not only via
+  // allowedSignHash), so wallets that read PSBT_IN_SIGHASH_TYPE sign 0x83.
+  expect(Transaction.fromPSBT(base64.decode(params.psbt)).getInput(0).sighashType).toBe(0x83);
+
+  // And the returned signed input is pinned to 0x83.
   expect(Transaction.fromPSBT(signed).getInput(0).sighashType).toBe(0x83);
 });
 

@@ -19,7 +19,7 @@
  */
 
 import { base64, hex } from "@scure/base";
-import { SigHash } from "@scure/btc-signer";
+import { SigHash, Transaction } from "@scure/btc-signer";
 
 import { HolderRef } from "../canonical/HolderRef.js";
 import { SignerError } from "../errors.js";
@@ -142,13 +142,28 @@ export class WalletAccount implements Account {
       );
     }
 
+    const kind = resolveSighashKind(opts.inputs);
+
+    // Pin the sighash onto the PSBT inputs (like LocalAccount does), not just
+    // on sats-connect's `allowedSignHash`. Some wallets derive the sighash to
+    // sign with from PSBT_IN_SIGHASH_TYPE, not from allowedSignHash; without
+    // the field they'd sign a non-default input (e.g. a SIGHASH_SINGLE|
+    // ANYONECANPAY marketplace detach) with the default taproot sighash and
+    // produce an invalid signature. Setting both covers either mechanism.
+    let outgoing = psbt;
+    if (kind !== "default") {
+      const flag = SIGHASH_NUMBER[kind];
+      const tx = Transaction.fromPSBT(psbt);
+      for (const i of opts.inputs) tx.updateInput(i.index, { sighashType: flag });
+      outgoing = tx.toPSBT();
+    }
+
     const params: Record<string, unknown> = {
-      psbt: base64.encode(psbt),
+      psbt: base64.encode(outgoing),
       signInputs: { [this.address]: opts.inputs.map((i) => i.index) },
       broadcast: false,
     };
-    const allowedSignHash = resolveAllowedSignHash(opts.inputs);
-    if (allowedSignHash != null) params.allowedSignHash = allowedSignHash;
+    if (kind !== "default") params.allowedSignHash = SIGHASH_NUMBER[kind];
 
     const result = unwrap(
       await this.request("signPsbt", params),
@@ -206,7 +221,7 @@ function normalizeXOnly(publicKey: string): string {
 /** sats-connect carries a single per-request `allowedSignHash`, so every
  *  input in one call must share a sighash. Our flows do (each party signs
  *  its own inputs under one sighash); a mix is a programming error. */
-function resolveAllowedSignHash(inputs: SignInput[]): number | undefined {
+function resolveSighashKind(inputs: SignInput[]): SighashKind {
   const kinds = new Set(inputs.map((i) => i.sighash ?? "default"));
   if (kinds.size > 1) {
     throw new SignerError(
@@ -216,5 +231,5 @@ function resolveAllowedSignHash(inputs: SignInput[]): number | undefined {
     );
   }
   const [kind] = kinds as Set<SighashKind>;
-  return kind === "default" ? undefined : SIGHASH_NUMBER[kind];
+  return kind;
 }
