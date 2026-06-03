@@ -8,6 +8,13 @@ import!(
     path = "../../native-contracts/filestorage/wit",
 );
 
+import!(
+    name = "token",
+    height = 0,
+    tx_index = 0,
+    path = "../../native-contracts/token/wit",
+);
+
 fn has_node(nodes: &[filestorage::NodeInfo], node_id: &str, active: bool) -> bool {
     nodes
         .iter()
@@ -136,7 +143,25 @@ async fn filestorage_create_and_get(runtime: &mut Runtime) -> Result<()> {
     let signer = runtime.identity().await?;
     let descriptor = prepare_real_descriptor().await?;
 
+    // Economic state through the full execution path: the storage creation fee
+    // υ_f is burned from the creator, so total supply strictly decreases — by at
+    // least the fee (the remainder is gas, also burned). This runs in-process
+    // (the _local variant) and, via the regtest variant, end-to-end through a
+    // mined Bitcoin block → indexer → contract → asserted supply change.
+    let supply_before = token::total_supply(runtime).await?;
     let created = filestorage::create_agreement(runtime, &signer, descriptor.clone()).await??;
+    let supply_after = token::total_supply(runtime).await?;
+    let zero: Decimal = 0u64.try_into().unwrap();
+    assert!(created.fee > zero, "storage creation fee charged");
+    assert!(
+        supply_after < supply_before,
+        "creation fee burned: total supply must strictly decrease"
+    );
+    assert!(
+        supply_after + created.fee <= supply_before,
+        "total supply dropped by at least the creation fee υ_f"
+    );
+
     assert_eq!(created.agreement_id, descriptor.file_id);
 
     let got = filestorage::get_agreement(runtime, created.agreement_id.as_str()).await?;
