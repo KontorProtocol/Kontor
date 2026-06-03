@@ -142,6 +142,13 @@ export class WalletAccount implements Account {
       );
     }
 
+    if (opts.inputs.length === 0) {
+      // No owned inputs to sign (e.g. signReveal where this account owns none
+      // of the reveal's inputs). Match LocalAccount: no-op, don't prompt the
+      // wallet to sign nothing. Returning the PSBT unchanged.
+      return psbt;
+    }
+
     const kind = resolveSighashKind(opts.inputs);
 
     // Pin the sighash onto the PSBT inputs (like LocalAccount does), not just

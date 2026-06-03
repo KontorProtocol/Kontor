@@ -153,6 +153,17 @@ test("signPsbt: rejects a mixed-sighash request", async () => {
   ).rejects.toThrow(/can't mix sighash/);
 });
 
+test("signPsbt: empty inputs no-ops without calling the wallet", async () => {
+  const { local, request, calls } = fixture();
+  const acct = await WalletAccount.connect({ chain: signet, request });
+  const psbt = taprootPsbt(local.xOnlyPubKey, local.address);
+
+  const out = await acct.signPsbt(psbt, { inputs: [] });
+
+  expect(out).toEqual(psbt);
+  expect(calls.some((c) => c.method === "signPsbt")).toBe(false);
+});
+
 test("signPsbt: requires an explicit inputs spec", async () => {
   const { local, request } = fixture();
   const acct = await WalletAccount.connect({ chain: signet, request });
