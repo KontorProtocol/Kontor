@@ -27,11 +27,17 @@ use malachitebft_app_channel::app::types::core::VotingPower;
 
 /// Allocate `n` distinct ephemeral ports by briefly binding each to
 /// `127.0.0.1:0`, mirroring `reg_tester::allocate_ports`. Every listener is held
-/// until all are bound so the ports are guaranteed distinct; dropping them hands
-/// the ports to the consensus engine. The previous fixed-base allocator
-/// (`19000 + counter`) did not check availability, so a port could collide with
-/// another listener or a lingering `TIME_WAIT` socket — which surfaced as libp2p
-/// "failed to negotiate transport protocol" hangs on macOS CI loopback.
+/// until all are bound so the ports are distinct *within this call*; dropping
+/// them hands the ports to the consensus engine. The previous fixed-base
+/// allocator (`19000 + counter`) did not check availability at all.
+///
+/// There is still a release→rebind gap: between dropping these listeners and the
+/// engine binding the port, a concurrent nextest process can steal it, which
+/// surfaces as a libp2p "failed to negotiate transport protocol" hang. The
+/// caller (`start_with`) closes that residual race by retrying bring-up with a
+/// fresh allocation when a node reports a failed bind. A race-free fix would let
+/// libp2p bind `/tcp/0` itself and exchange the resulting ports — see the
+/// tracking issue.
 fn allocate_ports(n: usize) -> Vec<u16> {
     let mut ports = Vec::with_capacity(n);
     let mut listeners = Vec::with_capacity(n);
@@ -150,85 +156,129 @@ impl ReactorCluster {
         let validator_set = ValidatorSet::new(validators);
         let genesis = Genesis { validator_set };
 
-        let ports: Vec<u16> = allocate_ports(total);
-
-        let (mempool_tx, _) = broadcast::channel::<MempoolEvent>(256);
-        let cancel = CancellationToken::new();
-        let mut block_txs = Vec::new();
-        let mock_bitcoin = Arc::new(Mutex::new(MockBitcoin::new(0)));
-        let shared_pubkey = random_x_only_pubkey();
         let (engine, component_cache) = shared_engine_and_cache().await;
 
-        let (decided_tx, decided_rx) = mpsc::channel(1024);
-        let (finality_tx, finality_rx) = mpsc::channel(1024);
-        let (state_tx, state_rx) = mpsc::channel(1024);
-        let (ready_tx, ready_rx) = mpsc::channel(total);
-        let (event_tx, event_rx) = mpsc::channel(1024);
+        // Bring-up retry. Test ports are probed then released before the
+        // consensus engine binds them (see `allocate_ports`), so under nextest's
+        // parallel processes another test can steal a port in that gap and the
+        // node fails to bind — surfacing as a libp2p "failed to negotiate
+        // transport protocol" hang. Each node now reports whether its listener
+        // bound; if any in the initial set lost the race we tear the attempt down
+        // and retry with a fresh allocation. Production is unaffected: operators
+        // bind a configured consensus port directly, with no probe/release gap.
+        const MAX_BRINGUP_ATTEMPTS: usize = 3;
+        for attempt in 1..=MAX_BRINGUP_ATTEMPTS {
+            let ports: Vec<u16> = allocate_ports(total);
 
-        let mut join_set = JoinSet::new();
-        let mut started_nodes = vec![false; total];
-        let mut simulate_txs = Vec::new();
+            let (mempool_tx, _) = broadcast::channel::<MempoolEvent>(256);
+            let cancel = CancellationToken::new();
+            let mut block_txs = Vec::new();
+            let mock_bitcoin = Arc::new(Mutex::new(MockBitcoin::new(0)));
+            let shared_pubkey = random_x_only_pubkey();
 
-        for i in 0..initial {
-            let (node_block_tx, node_block_rx) = mpsc::channel(256);
-            block_txs.push(node_block_tx.clone());
+            let (decided_tx, decided_rx) = mpsc::channel(1024);
+            let (finality_tx, finality_rx) = mpsc::channel(1024);
+            let (state_tx, state_rx) = mpsc::channel(1024);
+            let (ready_tx, ready_rx) = mpsc::channel(total);
+            let (event_tx, event_rx) = mpsc::channel(1024);
+            let (bind_tx, mut bind_rx) = mpsc::channel::<bool>(total.max(1));
 
-            let node_mempool_rx = Self::bridge_mempool(&mempool_tx, &cancel);
-            let (sim_tx, sim_rx) = mpsc::channel(1);
-            simulate_txs.push(sim_tx);
+            let mut join_set = JoinSet::new();
+            let mut started_nodes = vec![false; total];
+            let mut simulate_txs = Vec::new();
 
-            Self::spawn_node(
-                i,
-                private_keys[i].clone(),
-                &genesis,
-                &genesis_validators,
-                &ports,
-                node_block_tx,
-                node_block_rx,
-                node_mempool_rx,
-                cancel.clone(),
-                decided_tx.clone(),
-                finality_tx.clone(),
-                state_tx.clone(),
-                ready_tx.clone(),
-                event_tx.clone(),
-                Some(sim_rx),
-                mock_bitcoin.clone(),
-                shared_pubkey.clone(),
-                engine.clone(),
-                component_cache.clone(),
-                &mut join_set,
+            for i in 0..initial {
+                let (node_block_tx, node_block_rx) = mpsc::channel(256);
+                block_txs.push(node_block_tx.clone());
+
+                let node_mempool_rx = Self::bridge_mempool(&mempool_tx, &cancel);
+                let (sim_tx, sim_rx) = mpsc::channel(1);
+                simulate_txs.push(sim_tx);
+
+                Self::spawn_node(
+                    i,
+                    private_keys[i].clone(),
+                    &genesis,
+                    &genesis_validators,
+                    &ports,
+                    node_block_tx,
+                    node_block_rx,
+                    node_mempool_rx,
+                    cancel.clone(),
+                    decided_tx.clone(),
+                    finality_tx.clone(),
+                    state_tx.clone(),
+                    ready_tx.clone(),
+                    bind_tx.clone(),
+                    event_tx.clone(),
+                    Some(sim_rx),
+                    mock_bitcoin.clone(),
+                    shared_pubkey.clone(),
+                    engine.clone(),
+                    component_cache.clone(),
+                    &mut join_set,
+                );
+                started_nodes[i] = true;
+            }
+            drop(bind_tx);
+
+            if Self::await_all_bound(&mut bind_rx, initial).await {
+                return Ok(Self {
+                    block_txs,
+                    mempool_tx,
+                    decided_rx,
+                    finality_rx,
+                    state_rx,
+                    cancel,
+                    join_set,
+                    node_count: initial,
+                    ready_rx,
+                    mock_bitcoin,
+                    genesis,
+                    genesis_validators,
+                    private_keys,
+                    ports,
+                    shared_pubkey,
+                    engine,
+                    component_cache,
+                    decided_tx,
+                    finality_tx,
+                    state_tx,
+                    ready_tx,
+                    event_rx,
+                    event_tx,
+                    simulate_txs,
+                    started_nodes,
+                });
+            }
+
+            // Lost the port race: drop this attempt's listeners and retry.
+            cancel.cancel();
+            join_set.shutdown().await;
+            tracing::warn!(
+                attempt,
+                max = MAX_BRINGUP_ATTEMPTS,
+                "reactor-cluster bring-up hit a loopback port collision; retrying with fresh ephemeral ports"
             );
-            started_nodes[i] = true;
         }
 
-        Ok(Self {
-            block_txs,
-            mempool_tx,
-            decided_rx,
-            finality_rx,
-            state_rx,
-            cancel,
-            join_set,
-            node_count: initial,
-            ready_rx,
-            mock_bitcoin,
-            genesis,
-            genesis_validators,
-            private_keys,
-            ports,
-            shared_pubkey,
-            engine,
-            component_cache,
-            decided_tx,
-            finality_tx,
-            state_tx,
-            ready_tx,
-            event_rx,
-            event_tx,
-            simulate_txs,
-            started_nodes,
-        })
+        anyhow::bail!(
+            "reactor-cluster failed to bind {initial} nodes after {MAX_BRINGUP_ATTEMPTS} attempts (loopback port contention)"
+        )
+    }
+
+    /// Wait for each of the `expected` initial nodes to report whether its
+    /// consensus listener bound. Returns `true` only if all bound; a `false`
+    /// ack (port stolen in the allocate→bind gap), an early channel close, or a
+    /// timeout all mean the bring-up lost the port race and should be retried.
+    async fn await_all_bound(bind_rx: &mut mpsc::Receiver<bool>, expected: usize) -> bool {
+        for _ in 0..expected {
+            match tokio::time::timeout(Duration::from_secs(20), bind_rx.recv()).await {
+                Ok(Some(true)) => {}
+                Ok(Some(false)) | Ok(None) | Err(_) => return false,
+            }
+        }
+        true
     }
 
     async fn start(n: usize) -> Result<Self> {
@@ -273,6 +323,7 @@ impl ReactorCluster {
         ftx: mpsc::Sender<FinalityEvent>,
         stx: mpsc::Sender<StateEvent>,
         rtx: mpsc::Sender<usize>,
+        btx: mpsc::Sender<bool>,
         etx: mpsc::Sender<Event>,
         sim_rx: Option<mpsc::Receiver<Simulation>>,
         mock_btc: Arc<Mutex<MockBitcoin>>,
@@ -314,12 +365,18 @@ impl ReactorCluster {
             let engine_output = match engine::start(engine_config).await {
                 Ok(o) => o,
                 Err(e) => {
+                    // Most commonly a loopback port stolen in the allocate→bind
+                    // gap (see `allocate_ports`). Report the failed bind so the
+                    // caller can retry with fresh ports instead of hanging on a
+                    // downstream dial timeout.
                     tracing::error!(node = i, %e, "Failed to start engine");
+                    let _ = btx.send(false).await;
                     return;
                 }
             };
 
             info!(node = i, address = %engine_output.address, "Engine started");
+            let _ = btx.send(true).await;
 
             let validator_index = genesis
                 .validator_set
@@ -380,6 +437,7 @@ impl ReactorCluster {
         let node_mempool_rx = Self::bridge_mempool(&self.mempool_tx, &self.cancel);
         let (sim_tx, sim_rx) = mpsc::channel(1);
         self.simulate_txs.push(sim_tx);
+        let (bind_tx, mut bind_rx) = mpsc::channel::<bool>(1);
 
         Self::spawn_node(
             i,
@@ -395,6 +453,7 @@ impl ReactorCluster {
             self.finality_tx.clone(),
             self.state_tx.clone(),
             self.ready_tx.clone(),
+            bind_tx,
             self.event_tx.clone(),
             Some(sim_rx),
             self.mock_bitcoin.clone(),
@@ -407,6 +466,12 @@ impl ReactorCluster {
         self.started_nodes[i] = true;
         self.node_count += 1;
 
+        // Surface a lost port race as a clear error rather than a ready-wait hang.
+        if !Self::await_all_bound(&mut bind_rx, 1).await {
+            anyhow::bail!(
+                "added node {i} failed to bind its consensus port (loopback port contention)"
+            );
+        }
         let _ = self.ready_rx.recv().await;
 
         Ok(i)
