@@ -86,3 +86,78 @@ async fn congestion_smoothstep_band_and_decay_floor() -> Result<()> {
 
     Ok(())
 }
+
+/// β(t) region/bound invariants over a deterministic random walk of
+/// utilizations spanning all three regions. Checks the structural properties
+/// (robust to fixed-point rounding) rather than re-deriving exact values:
+/// region 1 decays (β'≤β), region 3 grows (β'≥max(β,1)), region 2 is bounded by
+/// the smoothstep ceiling (β'≤max(β,1)), β never goes negative, and the fee
+/// multiplier always equals φ_base·β.
+#[tokio::test]
+async fn congestion_beta_invariants_over_random_walk() -> Result<()> {
+    let (mut rt, _dir, _name) = test_runtime_with_genesis(&[]).await?;
+    let p = congestion::get_congestion_params(&mut rt).await?;
+    let one = dec(1);
+    let zero = dec(0);
+
+    let mut prev = congestion::get_beta(&mut rt).await?;
+    for seed in 0u64..60 {
+        let u_bps = seed.wrapping_mul(167).wrapping_add(13) % 10_001; // 0..=10000
+        let u = frac(u_bps, 10_000);
+
+        let b = congestion::update_beta(&mut rt, &core(), u)
+            .await?
+            .map_err(|e| anyhow!("{e:?}"))?;
+
+        assert!(b >= zero, "seed {seed}: β never negative");
+        if u_bps < p.u_low_bps {
+            assert!(b <= prev, "seed {seed}: region 1 decays (β' ≤ β)");
+        } else if u_bps > p.u_high_bps {
+            assert!(b >= one, "seed {seed}: region 3 β' ≥ 1");
+            assert!(b >= prev, "seed {seed}: region 3 grows (β' ≥ β)");
+        } else {
+            let ceil = if prev > one { prev } else { one };
+            assert!(
+                b <= ceil,
+                "seed {seed}: region 2 β' ≤ max(β,1) (smoothstep ≤ 1)"
+            );
+        }
+
+        let m = congestion::fee_multiplier(&mut rt)
+            .await?
+            .map_err(|e| anyhow!("{e:?}"))?;
+        assert_eq!(m, p.phi_base * b, "seed {seed}: fee multiplier = φ_base·β");
+
+        prev = b;
+    }
+    Ok(())
+}
+
+/// Smoothstep is continuous with the neighbouring regions at the band edges:
+/// at u_high, x=1 ⇒ S(1)=1 (joins region 3's floor); at u_low, x=0 ⇒ S(0)=0,
+/// so β' is the region-1 decay floor.
+#[tokio::test]
+async fn congestion_smoothstep_continuous_at_band_edges() -> Result<()> {
+    let (mut rt, _dir, _name) = test_runtime_with_genesis(&[]).await?;
+    let p = congestion::get_congestion_params(&mut rt).await?;
+    let u_low = frac(p.u_low_bps, 10_000); // 0.20
+    let u_high = frac(p.u_high_bps, 10_000); // 0.80
+
+    // Upper edge: from β=0, S(1)=1 ⇒ max(1, 0·0.95) = 1.
+    let b = congestion::update_beta(&mut rt, &core(), u_high)
+        .await?
+        .map_err(|e| anyhow!("{e:?}"))?;
+    assert_eq!(b, dec(1), "smoothstep top S(1)=1 at u_high");
+
+    // Lower edge: now β=1, S(0)=0 ⇒ max(0, 1·0.95) = 0.95 (decay floor).
+    let b = congestion::update_beta(&mut rt, &core(), u_low)
+        .await?
+        .map_err(|e| anyhow!("{e:?}"))?;
+    assert_eq!(
+        b,
+        frac(95, 100),
+        "smoothstep bottom S(0)=0, floored by decay 0.95"
+    );
+
+    Ok(())
+}
