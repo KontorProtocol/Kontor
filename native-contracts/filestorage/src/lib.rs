@@ -300,9 +300,11 @@ impl Guest for Filestorage {
 
             // Storage economics: a newly-active file joins the emission-weight
             // pool. Ω grows by its ω_f and the active-file count |F| increments.
-            // (Deactivation is not yet modeled — see leave_agreement TODO — so Ω
-            // and |F| are currently monotonic. If/when agreements deactivate,
-            // both must be decremented here's counterpart.)
+            // Ω and |F| are monotonic by design: once active, an agreement never
+            // leaves F (spec: Activation Permanence). leave_agreement enforces the
+            // n_min floor so voluntary departure can't deactivate a file, and the
+            // accounting record persists even if slashing empties the node set —
+            // so there is deliberately no decrement counterpart here.
             if let Some(econ) = model.agreement_economics().get(&agreement_id) {
                 let omega_f = econ.omega_f();
                 model.try_update_omega(|o| o.add(omega_f))?;
