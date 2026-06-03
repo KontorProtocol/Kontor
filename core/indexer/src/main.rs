@@ -295,6 +295,7 @@ async fn run_daemon(config: Config) -> Result<()> {
         None,
         config.consensus_propose_timeout_ms,
         Some(fees_tx),
+        config.network,
     ));
     ready_rx.await?;
     reactor_ready.store(true, std::sync::atomic::Ordering::Relaxed);

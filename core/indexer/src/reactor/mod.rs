@@ -501,6 +501,7 @@ pub async fn create_runtime_executor(
     bitcoin_client: crate::bitcoin_client::Client,
     replay_tx: Option<mpsc::Sender<u64>>,
     genesis_validators: &[crate::runtime::GenesisValidator],
+    network: bitcoin::Network,
 ) -> Result<(executor::RuntimeExecutor, Runtime, u64, Option<BlockHash>)> {
     let conn = writer.connection();
     let (last_height, last_hash) = match select_block_latest(&conn)
@@ -575,6 +576,21 @@ pub async fn create_runtime_executor(
         .await
         .context("Failed to publish native contracts")?;
 
+    // On mainnet, permanently disable the unauthorized public dev mint at
+    // genesis. The token contract's gate flag defaults on so signet/testnet/
+    // regtest keep a faucet; this is its indexer-side activation for mainnet
+    // (#435). After genesis the only KOR mint path is privileged emissions.
+    if network == bitcoin::Network::Bitcoin {
+        crate::runtime::token::api::set_dev_mint(
+            &mut runtime,
+            &crate::runtime::wit::Signer::Core(Box::new(crate::runtime::wit::Signer::Nobody)),
+            false,
+        )
+        .await
+        .context("Failed to disable public dev mint on mainnet genesis")?
+        .map_err(|e| anyhow::anyhow!("token rejected set_dev_mint(false) at genesis: {e:?}"))?;
+    }
+
     let mut exec = executor::RuntimeExecutor::new(cancel_token, bitcoin_client);
     if let Some(tx) = replay_tx {
         exec = exec.with_replay_tx(tx);
@@ -643,6 +659,7 @@ pub fn run(
     observation_channels: Option<consensus_state::ObservationChannels>,
     consensus_propose_timeout_ms: u64,
     fee_tx: Option<tokio::sync::watch::Sender<Fees>>,
+    network: bitcoin::Network,
 ) -> JoinHandle<()> {
     tokio::spawn({
         async move {
@@ -654,6 +671,7 @@ pub fn run(
                     bitcoin_client,
                     replay_tx,
                     &genesis_validators,
+                    network,
                 )
                 .await
                 .context("create_runtime_executor failed")?;
