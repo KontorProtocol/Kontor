@@ -63,3 +63,72 @@ async fn mint_emission_computes_epsilon_and_splits() -> Result<()> {
     );
     Ok(())
 }
+
+/// The emission split conserves over random (supply, μ₀, χ, B): `storage +
+/// ordering == total`, `0 ≤ ordering ≤ total`, `storage ≥ 0`, and the total
+/// supply grows by exactly the minted ε.
+#[tokio::test]
+async fn emission_split_conserves_over_random_params() -> Result<()> {
+    let zero = dec(0);
+    for seed in 0u64..24 {
+        let supply = 1_000 + (seed.wrapping_mul(7331).wrapping_add(17) % 1_000_000);
+        let mu0_bps = 1 + (seed.wrapping_mul(53).wrapping_add(3) % 10_000); // 1..=10000
+        let chi_bps = seed.wrapping_mul(411).wrapping_add(1) % 10_001; // 0..=10000
+        let b = 1 + (seed.wrapping_mul(29).wrapping_add(1) % 100_000);
+
+        let (mut rt, _dir, _name) = test_runtime_with_genesis(&one_validator(supply)).await?;
+        let before = token::total_supply(&mut rt).await?;
+        assert_eq!(before, dec(supply), "seed {seed}: genesis supply == stake");
+
+        token::set_emission_params(&mut rt, &core(), mu0_bps, chi_bps, b)
+            .await?
+            .map_err(|e| anyhow!("{e:?}"))?;
+        let r = token::mint_emission(&mut rt, &core())
+            .await?
+            .map_err(|e| anyhow!("{e:?}"))?;
+
+        // Conservation: the split sums to the total (storage = total − ordering).
+        assert_eq!(
+            r.storage + r.ordering,
+            r.total,
+            "seed {seed}: storage + ordering == total"
+        );
+        assert!(r.total >= zero, "seed {seed}: ε ≥ 0");
+        assert!(r.ordering >= zero, "seed {seed}: ordering ≥ 0");
+        assert!(r.ordering <= r.total, "seed {seed}: ordering ≤ ε");
+        assert!(r.storage >= zero, "seed {seed}: storage ≥ 0");
+
+        let after = token::total_supply(&mut rt).await?;
+        assert_eq!(
+            after,
+            before + r.total,
+            "seed {seed}: supply grew by exactly ε"
+        );
+    }
+    Ok(())
+}
+
+/// Split extremes: χ=0 routes all of ε to storage; χ=100% routes all to ordering.
+#[tokio::test]
+async fn emission_split_extremes() -> Result<()> {
+    let (mut rt, _dir, _name) = test_runtime_with_genesis(&one_validator(1000)).await?;
+    token::set_emission_params(&mut rt, &core(), 10_000, 0, 10)
+        .await?
+        .map_err(|e| anyhow!("{e:?}"))?;
+    let r = token::mint_emission(&mut rt, &core())
+        .await?
+        .map_err(|e| anyhow!("{e:?}"))?;
+    assert_eq!(r.ordering, dec(0), "χ=0 ⇒ no ordering share");
+    assert_eq!(r.storage, r.total, "χ=0 ⇒ all storage");
+
+    let (mut rt, _dir, _name) = test_runtime_with_genesis(&one_validator(1000)).await?;
+    token::set_emission_params(&mut rt, &core(), 10_000, 10_000, 10)
+        .await?
+        .map_err(|e| anyhow!("{e:?}"))?;
+    let r = token::mint_emission(&mut rt, &core())
+        .await?
+        .map_err(|e| anyhow!("{e:?}"))?;
+    assert_eq!(r.storage, dec(0), "χ=100% ⇒ no storage share");
+    assert_eq!(r.ordering, r.total, "χ=100% ⇒ all ordering");
+    Ok(())
+}
