@@ -27,11 +27,26 @@ world root {
     amt: decimal,
   }
 
+  record emission-result {
+    total: decimal,
+    storage: decimal,
+    ordering: decimal,
+  }
+
+  record emission-params {
+    mu0-bps: u64,
+    chi-bps: u64,
+    blocks-per-year: u64,
+  }
+
   export issuance: async func(ctx: borrow<core-context>, amt: decimal) -> result<mint, error>;
   export issue-to: async func(ctx: borrow<core-context>, dst: holder-ref, amt: decimal) -> result<mint, error>;
   export hold: async func(ctx: borrow<core-context>, amt: decimal) -> result<transfer, error>;
   export release: async func(ctx: borrow<core-context>, burn-amt: decimal) -> result<burn, error>;
   export set-dev-mint: async func(ctx: borrow<core-context>, enabled: bool) -> result<_, error>;
+  export mint-emission: async func(ctx: borrow<core-context>) -> result<emission-result, error>;
+  export set-emission-params: async func(ctx: borrow<core-context>, mu0-bps: u64, chi-bps: u64, blocks-per-year: u64) -> result<_, error>;
+  export emission-params: async func(ctx: borrow<view-context>) -> emission-params;
 
   export init: async func(ctx: borrow<proc-context>) -> contract;
 
