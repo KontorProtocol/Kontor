@@ -14,8 +14,21 @@ import!(
     path = "../../native-contracts/token/wit",
 );
 
+fn core() -> Signer {
+    Signer::Core(Box::new(Signer::Nobody))
+}
+
+/// Lower σ_min so these lifecycle tests can keep using small illustrative
+/// stakes — the production default is 5,000,000 KOR. (Genesis bypasses σ_min,
+/// so genesis-driven economic tests don't need this.)
+async fn relax_sigma_min(runtime: &mut Runtime) -> Result<()> {
+    staking::set_sigma_min(runtime, &core(), 1u64.try_into().unwrap()).await??;
+    Ok(())
+}
+
 #[testlib::test(contracts_dir = "../../test-contracts", local_only)]
 async fn test_register_validator() -> Result<()> {
+    relax_sigma_min(runtime).await?;
     let validator = runtime.identity().await?;
     let ed25519_key = vec![1u8; 32];
 
@@ -47,6 +60,7 @@ async fn test_register_validator() -> Result<()> {
 
 #[testlib::test(contracts_dir = "../../test-contracts", local_only)]
 async fn test_register_validator_errors() -> Result<()> {
+    relax_sigma_min(runtime).await?;
     let validator = runtime.identity().await?;
 
     // Stake exceeds maximum
@@ -99,6 +113,7 @@ async fn test_register_validator_errors() -> Result<()> {
 
 #[testlib::test(contracts_dir = "../../test-contracts", local_only)]
 async fn test_add_stake() -> Result<()> {
+    relax_sigma_min(runtime).await?;
     let validator = runtime.identity().await?;
 
     staking::register_validator(runtime, &validator, vec![1u8; 32], 3u64.try_into().unwrap())
@@ -138,6 +153,7 @@ async fn test_add_stake() -> Result<()> {
 
 #[testlib::test(contracts_dir = "../../test-contracts", local_only)]
 async fn test_add_stake_rejected_during_pending_exit() -> Result<()> {
+    relax_sigma_min(runtime).await?;
     let validator = runtime.identity().await?;
 
     staking::register_validator(runtime, &validator, vec![1u8; 32], 3u64.try_into().unwrap())
@@ -166,6 +182,7 @@ async fn test_add_stake_rejected_during_pending_exit() -> Result<()> {
 
 #[testlib::test(contracts_dir = "../../test-contracts", local_only)]
 async fn test_begin_unstake_from_pending() -> Result<()> {
+    relax_sigma_min(runtime).await?;
     let validator = runtime.identity().await?;
 
     let balance_before = token::balance(runtime, &validator).await?.unwrap();
@@ -188,6 +205,7 @@ async fn test_begin_unstake_from_pending() -> Result<()> {
 
 #[testlib::test(contracts_dir = "../../test-contracts", local_only)]
 async fn test_unstake_returns_tokens() -> Result<()> {
+    relax_sigma_min(runtime).await?;
     let validator = runtime.identity().await?;
 
     let balance_before = token::balance(runtime, &validator).await?.unwrap();
@@ -212,6 +230,7 @@ async fn test_unstake_returns_tokens() -> Result<()> {
 
 #[testlib::test(contracts_dir = "../../test-contracts", local_only)]
 async fn test_multiple_validators() -> Result<()> {
+    relax_sigma_min(runtime).await?;
     let v1 = runtime.identity().await?;
     let v2 = runtime.identity().await?;
 
@@ -229,6 +248,7 @@ async fn test_multiple_validators() -> Result<()> {
 
 #[testlib::test(contracts_dir = "../../test-contracts", local_only)]
 async fn test_duplicate_ed25519_key_rejected() -> Result<()> {
+    relax_sigma_min(runtime).await?;
     let v1 = runtime.identity().await?;
     let v2 = runtime.identity().await?;
     let same_key = vec![1u8; 32];
@@ -249,6 +269,7 @@ async fn test_duplicate_ed25519_key_rejected() -> Result<()> {
 
 #[testlib::test(contracts_dir = "../../test-contracts", local_only)]
 async fn test_duplicate_ed25519_key_allowed_after_inactive() -> Result<()> {
+    relax_sigma_min(runtime).await?;
     let v1 = runtime.identity().await?;
     let v2 = runtime.identity().await?;
     let same_key = vec![1u8; 32];
@@ -267,6 +288,7 @@ async fn test_duplicate_ed25519_key_allowed_after_inactive() -> Result<()> {
 
 #[testlib::test(contracts_dir = "../../test-contracts", local_only)]
 async fn test_register_validator_token_balance() -> Result<()> {
+    relax_sigma_min(runtime).await?;
     let validator = runtime.identity().await?;
 
     let balance_before = token::balance(runtime, &validator).await?.unwrap();
@@ -278,6 +300,38 @@ async fn test_register_validator_token_balance() -> Result<()> {
     let diff = balance_before - balance_after;
     assert!(diff >= 5u64.try_into().unwrap());
     assert!(diff < 6u64.try_into().unwrap());
+
+    Ok(())
+}
+
+#[testlib::test(contracts_dir = "../../test-contracts", local_only)]
+async fn test_sigma_min_floor_enforced() -> Result<()> {
+    // No relax here — exercise the production default.
+    let validator = runtime.identity().await?;
+
+    // Default σ_min is the spec floor (5,000,000 KOR).
+    assert_eq!(
+        staking::get_sigma_min(runtime).await?,
+        5_000_000u64.try_into().unwrap()
+    );
+
+    // Registering below σ_min is rejected (fails before any token transfer).
+    let result =
+        staking::register_validator(runtime, &validator, vec![1u8; 32], 5u64.try_into().unwrap())
+            .await?;
+    assert_eq!(
+        result,
+        Err(Error::Message("stake below sigma_min".to_string()))
+    );
+
+    // The core/admin setter lowers it; registration then succeeds.
+    staking::set_sigma_min(runtime, &core(), 1u64.try_into().unwrap()).await??;
+    assert_eq!(
+        staking::get_sigma_min(runtime).await?,
+        1u64.try_into().unwrap()
+    );
+    staking::register_validator(runtime, &validator, vec![1u8; 32], 5u64.try_into().unwrap())
+        .await??;
 
     Ok(())
 }
