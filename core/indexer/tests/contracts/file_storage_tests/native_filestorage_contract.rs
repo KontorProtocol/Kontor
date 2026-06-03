@@ -748,6 +748,61 @@ async fn challenge_gen_with_lucky_hash(runtime: &mut Runtime) -> Result<()> {
     Ok(())
 }
 
+/// The node ↔ staking-identity coupling: a membership is bound to the joining
+/// signer's identity (resolvable for slashing), and each membership reserves the
+/// agreement's per-node base stake k_f, released on leave.
+async fn filestorage_node_staking_coupling(runtime: &mut Runtime) -> Result<()> {
+    let signer = runtime.identity().await?;
+    let created = filestorage::create_agreement(
+        runtime,
+        &signer,
+        make_descriptor(
+            "coupling_test".to_string(),
+            vec![7u8; 32],
+            16,
+            100,
+            "coupling.txt".to_string(),
+        ),
+    )
+    .await??;
+    let zero: Decimal = 0u64.try_into().unwrap();
+    let id = signer.to_string();
+
+    // No reservation before joining.
+    assert_eq!(filestorage::get_node_reservation(runtime, &id).await?, zero);
+
+    // Join node_1 → membership bound to the signer's staking identity; k_f reserved.
+    filestorage::join_agreement(runtime, &signer, &created.agreement_id, "node_1").await??;
+    assert_eq!(
+        filestorage::get_node_owner(runtime, &created.agreement_id, "node_1").await?,
+        Some(id.clone()),
+        "membership bound to the joiner's staking identity"
+    );
+    let r1 = filestorage::get_node_reservation(runtime, &id).await?;
+    assert!(r1 > zero, "k_f reserved on join");
+
+    // Unknown node has no owner.
+    assert_eq!(
+        filestorage::get_node_owner(runtime, &created.agreement_id, "ghost").await?,
+        None
+    );
+
+    // A second membership accumulates another k_f against the same identity.
+    filestorage::join_agreement(runtime, &signer, &created.agreement_id, "node_2").await??;
+    let r2 = filestorage::get_node_reservation(runtime, &id).await?;
+    assert!(r2 > r1, "second membership reserves additional collateral");
+
+    // Leaving (inactive agreement → fee-free) releases exactly that membership's k_f.
+    filestorage::leave_agreement(runtime, &signer, &created.agreement_id, "node_1").await??;
+    assert_eq!(
+        filestorage::get_node_reservation(runtime, &id).await?,
+        r1,
+        "leaving releases one k_f back to the single-membership reservation"
+    );
+
+    Ok(())
+}
+
 pub async fn run_regtest(runtime: &mut Runtime) -> Result<()> {
     filestorage_defaults(runtime).await?;
     filestorage_empty_file_id_fails(runtime).await?;
@@ -769,6 +824,7 @@ pub async fn run_regtest(runtime: &mut Runtime) -> Result<()> {
     filestorage_is_node_in_nonexistent_agreement(runtime).await?;
     filestorage_rejoin_after_leave(runtime).await?;
     filestorage_join_after_activation_not_reactivated(runtime).await?;
+    filestorage_node_staking_coupling(runtime).await?;
     Ok(())
 }
 
