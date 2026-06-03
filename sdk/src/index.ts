@@ -45,10 +45,12 @@ export { signet } from "./chains";
 export type { Chain } from "./chains";
 export type {
   Account,
+  BlsCapableAccount,
   SighashKind,
   SignInput,
   SignPsbtOptions,
 } from "./account/index";
+export { isBlsCapable } from "./account/index";
 export { LocalAccount } from "./account/local";
 export { BlsKey, blsDerivationPath } from "./bls";
 export type {

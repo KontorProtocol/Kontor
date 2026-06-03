@@ -28,7 +28,11 @@ import { signSchnorr } from "@scure/btc-signer/utils.js";
 
 import { HolderRef } from "../canonical/HolderRef.js";
 import { SignerError } from "../errors.js";
-import type { Account, SighashKind, SignPsbtOptions } from "./index.js";
+import type {
+  BlsCapableAccount,
+  SighashKind,
+  SignPsbtOptions,
+} from "./index.js";
 import { AccountLock } from "./lock.js";
 import type { BitcoinNetwork, Chain } from "../chains.js";
 
@@ -75,7 +79,7 @@ export interface FromMnemonicOptions extends Bip86Indices {
   passphrase?: string;
 }
 
-export class LocalAccount implements Account {
+export class LocalAccount implements BlsCapableAccount {
   readonly xOnlyPubKey: string;
   readonly address: string;
   readonly holderRef: HolderRef;
