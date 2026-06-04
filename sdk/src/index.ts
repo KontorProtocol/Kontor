@@ -51,6 +51,8 @@ export type {
   SignPsbtOptions,
 } from "./signing";
 export { canSignSchnorr } from "./signing";
+export type { FundingSource } from "./funding";
+export { inMemoryFunding, queryFunding } from "./funding";
 export { LocalKey } from "./local-key";
 export { BlsKey, blsDerivationPath } from "./bls";
 export type {

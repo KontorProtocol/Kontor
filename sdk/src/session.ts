@@ -34,6 +34,7 @@
 import { ContractAddress } from "./canonical/ContractAddress.js";
 import { canSignSchnorr, type Signing } from "./signing.js";
 import type { Identity } from "./identity.js";
+import type { FundingSource } from "./funding.js";
 import { BlsKey, buildRegistrationProof } from "./bls.js";
 import type { Chain } from "./chains.js";
 import { hex } from "@scure/base";
@@ -59,6 +60,14 @@ export interface KontorSessionOptions {
   /** The signing capability for this session. Carries its own `identity`
    *  (so identity and key can't be mismatched). */
   signing: Signing;
+  /**
+   * Where the default transport gets spendable UTXOs (and reports back
+   * spent/change). Use `inMemoryFunding([utxo])` for optimistic chaining
+   * or `queryFunding(fetch)` for a stateless wallet/indexer source. Omit
+   * for read-only sessions (submit/inspect/simulate then throw). Ignored
+   * when a custom `transport` is supplied — that factory owns funding.
+   */
+  funding?: FundingSource;
   /**
    * Override the default `HttpTransport`. Useful for tests (swap in a
    * mock) or for custom backends that proxy through a different
@@ -148,6 +157,7 @@ export class KontorSession {
           chain,
           identity,
           signing,
+          funding: opts.funding,
           feeRate: feeRate ?? undefined,
         }));
     this.transport = make({

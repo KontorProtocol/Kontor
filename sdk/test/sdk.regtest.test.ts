@@ -40,7 +40,7 @@ import {
   KontorSession,
   LocalKey,
   Result,
-  http,
+  inMemoryFunding,
   type Utxo,
 } from "@kontor/sdk";
 import { hex, base64 } from "@scure/base";
@@ -66,8 +66,7 @@ test("SDK capstone: publish, transfer, bulk, marketplace", async () => {
     const session = new KontorSession({
       chain,
       signing,
-      transport: ({ chain, identity, signing }) =>
-        http({ chain, identity, signing, utxos: [fundingUtxo] }),
+      funding: inMemoryFunding([fundingUtxo]),
     });
     try {
       await session.ready();
@@ -114,8 +113,7 @@ test("SDK capstone: publish, transfer, bulk, marketplace", async () => {
     const session = new KontorSession({
       chain,
       signing,
-      transport: ({ chain, identity, signing }) =>
-        http({ chain, identity, signing, utxos: [fundingUtxo] }),
+      funding: inMemoryFunding([fundingUtxo]),
     });
     try {
       await session.ready();
@@ -160,8 +158,7 @@ test("SDK capstone: publish, transfer, bulk, marketplace", async () => {
     const session = new KontorSession({
       chain,
       signing,
-      transport: ({ chain, identity, signing }) =>
-        http({ chain, identity, signing, utxos: [fundingUtxo] }),
+      funding: inMemoryFunding([fundingUtxo]),
     });
     try {
       await session.ready();
@@ -190,14 +187,12 @@ test("SDK capstone: publish, transfer, bulk, marketplace", async () => {
     const sellerSession = new KontorSession({
       chain,
       signing: seller,
-      transport: ({ chain, identity, signing }) =>
-        http({ chain, identity, signing, utxos: [sellerFunding] }),
+      funding: inMemoryFunding([sellerFunding]),
     });
     const buyerSession = new KontorSession({
       chain,
       signing: buyer,
-      transport: ({ chain, identity, signing }) =>
-        http({ chain, identity, signing, utxos: [buyerFunding] }),
+      funding: inMemoryFunding([buyerFunding]),
     });
     try {
       await sellerSession.ready();
@@ -250,8 +245,7 @@ test("SDK capstone: publish, transfer, bulk, marketplace", async () => {
     const session = new KontorSession({
       chain,
       signing,
-      transport: ({ chain, identity, signing }) =>
-        http({ chain, identity, signing, utxos: [fundingUtxo] }),
+      funding: inMemoryFunding([fundingUtxo]),
     });
     try {
       await session.ready();
@@ -303,8 +297,7 @@ test("SDK capstone: publish, transfer, bulk, marketplace", async () => {
     const session = new KontorSession({
       chain,
       signing,
-      transport: ({ chain, identity, signing }) =>
-        http({ chain, identity, signing, utxos: [fundingUtxo] }),
+      funding: inMemoryFunding([fundingUtxo]),
     });
     try {
       await session.ready();
@@ -370,8 +363,7 @@ test("SDK capstone: publish, transfer, bulk, marketplace", async () => {
       const session = new KontorSession({
         chain,
         signing: a.signing,
-        transport: ({ chain, identity, signing }) =>
-          http({ chain, identity, signing, utxos: [a.fundingUtxo] }),
+        funding: inMemoryFunding([a.fundingUtxo]),
       });
       await session.ready();
       await (await session.issuance().submit()).wait();
@@ -385,8 +377,7 @@ test("SDK capstone: publish, transfer, bulk, marketplace", async () => {
     const aggregatorSession = new KontorSession({
       chain,
       signing: aggregator.signing,
-      transport: ({ chain, identity, signing }) =>
-        http({ chain, identity, signing, utxos: [aggregator.fundingUtxo] }),
+      funding: inMemoryFunding([aggregator.fundingUtxo]),
     });
     try {
       await aggregatorSession.ready();
