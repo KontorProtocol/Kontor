@@ -88,6 +88,8 @@ export class Insts<T extends readonly unknown[]> implements PromiseLike<T> {
    * `OpResult`s (`InstsOpResults<T>`) once the indexer surfaces them.
    */
   async submit(): Promise<SubmittedTx<InstsOpResults<T>>> {
+    // Reject a read-only submit before any side effect (starting the poller).
+    this.session.assertWritable();
     // Attach to the poller before broadcasting — same race-close as
     // `Inst.submit`.
     const events = this.session.events();

@@ -408,6 +408,23 @@ export class KontorSession {
   }
 
   /**
+   * Throw if this session can't broadcast (read-only — built with a bare
+   * `identity`, no `signing`). The submit paths call this *before*
+   * `events()`, so a read-only `submit()` fails without the side effect of
+   * starting the background poller. Keeps a read-only session genuinely
+   * side-effect-free / server-safe even if `submit` is called by mistake.
+   */
+  assertWritable(): void {
+    if (this.signing == null) {
+      throw new SignerError(
+        "submit requires a signer — this is a read-only session (construct " +
+          "with `signing`)",
+        { docsPath: "/sdk/session" },
+      );
+    }
+  }
+
+  /**
    * Follow chain events — the indexer-following API. Returns a fresh
    * async iterator over `ChainEvent`s (tx outcomes + reorg signals),
    * attached to the session's already-running poller. Multiple
