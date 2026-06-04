@@ -17,7 +17,7 @@
 import { hex } from "@scure/base";
 import { TaprootControlBlock, Transaction } from "@scure/btc-signer";
 
-import type { Account } from "../account/index.js";
+import type { Signing } from "../signing.js";
 import { SignerError } from "../errors.js";
 
 /**
@@ -25,18 +25,18 @@ import { SignerError } from "../errors.js";
  * finalized raw transaction hex.
  */
 export async function signCommit(
-  account: Account,
+  signing: Signing,
   psbtHex: string,
 ): Promise<string> {
   // Explicit inputs spec: sats-connect-style wallets won't sign
-  // without one. Every commit input belongs to this account
+  // without one. Every commit input belongs to this identity
   // (the indexer fills `funding_utxo_ids` only with the seller's
   // UTXOs), so sign each one with the default sighash.
   const prep = Transaction.fromPSBT(hex.decode(psbtHex));
   const inputsToSign = Array.from({ length: prep.inputsLength }, (_, index) => ({
     index,
   }));
-  const signed = await account.signPsbt(hex.decode(psbtHex), {
+  const signed = await signing.psbt(hex.decode(psbtHex), {
     inputs: inputsToSign,
   });
   const tx = Transaction.fromPSBT(signed);
@@ -61,19 +61,19 @@ export async function signCommit(
  * extract directly.
  */
 export async function signReveal(
-  account: Account,
+  signing: Signing,
   psbtHex: string,
 ): Promise<Transaction> {
   const psbtBytes = hex.decode(psbtHex);
   const prep = Transaction.fromPSBT(psbtBytes);
-  const accountXOnly = hex.decode(account.xOnlyPubKey);
+  const ownXOnly = hex.decode(signing.identity.xOnlyPubKey);
   const ownsInput = (i: number): boolean => {
     const tik = prep.getInput(i).tapInternalKey;
-    return tik != null && bytesEqual(tik, accountXOnly);
+    return tik != null && bytesEqual(tik, ownXOnly);
   };
 
   // Explicit inputs spec: sats-connect-style wallets won't sign
-  // without one. Sign only the inputs this account owns; the wallet
+  // without one. Sign only the inputs this identity owns; the wallet
   // skips the rest.
   const inputsToSign: { index: number }[] = [];
   for (let i = 0; i < prep.inputsLength; i++) {
@@ -81,7 +81,7 @@ export async function signReveal(
   }
   // Pass the original PSBT bytes straight through — we only read
   // tap_internal_key from `prep`, no edits, no need to re-serialize.
-  const signed = await account.signPsbt(psbtBytes, { inputs: inputsToSign });
+  const signed = await signing.psbt(psbtBytes, { inputs: inputsToSign });
 
   // Finalize by hand. For each owned input, build the witness from
   // its leaf-script presence: script-path inputs land their schnorr

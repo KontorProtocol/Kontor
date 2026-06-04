@@ -55,7 +55,7 @@ export class Attachment<T> {
    * need to send the detach / swap tx, not re-broadcast attach.
    */
   async offer(opts: { price: bigint }): Promise<Offer> {
-    const { transport, account } = this.session;
+    const { transport, identity, signing } = this.session;
     const attachWire: WireInsts = {
       ops: [instToWire(this.attach)],
       aggregate: null,
@@ -69,7 +69,7 @@ export class Attachment<T> {
     // ChainedEnvelope output committing to the detach for the future
     // buyer to spend, and Change back to the seller (last position).
     const sellerScriptPubKey = hex.encode(
-      p2tr(hex.decode(account.xOnlyPubKey), undefined, this.session.chain.network).script,
+      p2tr(hex.decode(identity.xOnlyPubKey), undefined, this.session.chain.network).script,
     );
     // Route through `submitReveal` so utxos/compose/sign/broadcast/track
     // run as one atomic block under the account's lock — no race with
@@ -80,12 +80,12 @@ export class Attachment<T> {
           sat_per_vbyte: this.session.feeRate,
           participants: [
             {
-              x_only_public_key: account.xOnlyPubKey,
+              x_only_public_key: identity.xOnlyPubKey,
               commit_insts: attachWire,
               output: null,
               commit_source: {
                 Build: {
-                  address: account.address,
+                  address: identity.address,
                   funding_utxo_ids: utxos.map((u) => `${u.txid}:${u.vout}`),
                 },
               },
@@ -97,7 +97,7 @@ export class Attachment<T> {
               ChainedEnvelope: {
                 insts: detachWire,
                 value: 600,
-                internal_key: account.xOnlyPubKey,
+                internal_key: identity.xOnlyPubKey,
               },
             },
             { Change: { script_pubkey: sellerScriptPubKey } },
@@ -123,7 +123,7 @@ export class Attachment<T> {
     }
     const detachLeaf = firstOutputInfo.ChainedEnvelope.tap_leaf_script;
 
-    const detachPsbt = await buildSellerDetachPsbt(account, {
+    const detachPsbt = await buildSellerDetachPsbt(signing, {
       attachRevealHex,
       detachLeaf,
       price: opts.price,
@@ -137,7 +137,7 @@ export class Attachment<T> {
       detachLeaf,
       detachPsbt,
       price: opts.price.toString(),
-      seller: account.xOnlyPubKey,
+      seller: identity.xOnlyPubKey,
     };
     return new Offer(this.session, data);
   }
