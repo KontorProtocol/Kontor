@@ -28,6 +28,10 @@
     "./regtest": {
       "types": "./dist/regtest.d.ts",
       "import": "./dist/regtest.js"
+    },
+    "./wallets/sats-connect": {
+      "types": "./dist/wallets/sats-connect.d.ts",
+      "import": "./dist/wallets/sats-connect.js"
     }
   },
   "bin": {

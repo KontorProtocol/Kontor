@@ -26,6 +26,7 @@ export default defineConfig({
         vite: resolve(__dirname, "src/vite.ts"),
         regtest: resolve(__dirname, "src/regtest.ts"),
         cli: resolve(__dirname, "src/cli.ts"),
+        "wallets/sats-connect": resolve(__dirname, "src/wallets/sats-connect.ts"),
       },
       formats: ["es"],
     },

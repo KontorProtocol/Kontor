@@ -1,21 +1,22 @@
 /**
- * Account backed by an external browser wallet (Xverse, Leather, OKX,
- * Magic Eden, Phantom, UniSat, …) reached through a sats-connect-style
- * provider. Signing happens in the wallet's sandbox — the SDK never sees
+ * `@kontor/sdk/wallets/sats-connect` — a wallet `Signing` adapter for any
+ * sats-connect-style provider (Xverse, Leather, OKX, Magic Eden, Phantom,
+ * UniSat, …). Signing happens in the wallet's sandbox; the SDK never sees
  * the private key.
  *
- * The provider is an injected `request(method, params)` function (the
- * shape `sats-connect`'s `request` exports). Pass sats-connect's `request`
- * in real apps; tests pass a fake. The SDK does not depend on sats-connect
- * — it only speaks this small request contract, so any conforming provider
- * (a future bespoke adapter, a mock) drops in unchanged.
+ * This is the **reference wallet adapter**. A new wallet adapter is a
+ * module under `src/wallets/<name>.ts` that:
+ *   - exports a `connect(opts)` returning a `Signing` (identity + `psbt`,
+ *     resolved from the wallet at connect time),
+ *   - takes its wallet's SDK as an *optional peer dependency* (this one
+ *     takes none — it speaks a small injected `request` contract instead),
+ *   - is wired as a `@kontor/sdk/wallets/<name>` subpath export.
+ * To add Horizon (or any wallet), copy this file and swap the wallet calls.
  *
- * Bitcoin identity model: Kontor identities are x-only **Taproot (P2TR)**
- * keys, so `WalletAccount` binds to the wallet's P2TR address and signs
- * Taproot inputs with it. The user funds that Taproot address (the compose
- * pipeline builds Taproot-only reveal inputs today). BLS is *not* available
- * on a wallet account — it's a seed-holding-only capability, so this
- * implements the base `Account`, not `BlsCapableAccount`.
+ * BLS is *not* part of a wallet adapter — `Signing` here has `psbt` but no
+ * `schnorr`. BLS binding is an optional capability sourced separately for
+ * the identity (a key-holding signer); a wallet adapter stays a pure
+ * Bitcoin signer.
  */
 
 import { base64, hex } from "@scure/base";
@@ -49,6 +50,46 @@ export interface ConnectOptions {
   message?: string;
 }
 
+/**
+ * Trigger the wallet's connect flow and return a `Signing` bound to its
+ * Taproot (P2TR) address. The wallet prompts the user; on approval we read
+ * the P2TR address and its x-only public key — Kontor's identity.
+ */
+export async function connect(opts: ConnectOptions): Promise<Signing> {
+  const result = unwrap(
+    await opts.request("getAccounts", {
+      purposes: ["payment", "ordinals"],
+      message: opts.message ?? "Connect your Kontor account",
+    }),
+    "getAccounts",
+  );
+
+  const entries = asAddressEntries(result);
+  const taproot = pickTaprootAddress(entries);
+  if (taproot == null) {
+    throw new SignerError(
+      "sats-connect: the wallet exposed no Taproot (p2tr) address — " +
+        "Kontor requires a P2TR identity",
+      { docsPath: "/sdk/wallets/sats-connect" },
+    );
+  }
+
+  const hrp = opts.chain.network.bech32;
+  if (!taproot.address.startsWith(`${hrp}1p`)) {
+    throw new SignerError(
+      `sats-connect: wallet returned a "${taproot.address.slice(0, 6)}…" ` +
+        `address, but this session is bound to the "${hrp}" network`,
+      { docsPath: "/sdk/wallets/sats-connect" },
+    );
+  }
+
+  return new SatsConnectSigning(
+    opts.request,
+    normalizeXOnly(taproot.publicKey),
+    taproot.address,
+  );
+}
+
 /** `SighashKind` → the numeric sighash sats-connect's `allowedSignHash` wants.
  *  `default` is absent — a default-sighash call omits `allowedSignHash`. */
 const SIGHASH_NUMBER: Record<Exclude<SighashKind, "default">, number> = {
@@ -63,10 +104,12 @@ interface AddressEntry {
   purpose?: string;
 }
 
-export class WalletAccount implements Signing {
+/** The `Signing` returned by `connect` — delegates each PSBT sign to the
+ *  wallet over the `request` contract. Internal; callers hold a `Signing`. */
+class SatsConnectSigning implements Signing {
   readonly identity: Identity;
 
-  private constructor(
+  constructor(
     private readonly request: WalletRequest,
     xOnlyPubKey: string,
     address: string,
@@ -76,46 +119,6 @@ export class WalletAccount implements Signing {
       address,
       holderRef: HolderRef.xOnlyPubkey(xOnlyPubKey),
     };
-  }
-
-  /**
-   * Trigger the wallet's connect flow and bind to its Taproot (P2TR)
-   * address. The wallet prompts the user; on approval we read the P2TR
-   * address and its x-only public key — Kontor's identity.
-   */
-  static async connect(opts: ConnectOptions): Promise<WalletAccount> {
-    const result = unwrap(
-      await opts.request("getAccounts", {
-        purposes: ["payment", "ordinals"],
-        message: opts.message ?? "Connect your Kontor account",
-      }),
-      "getAccounts",
-    );
-
-    const entries = asAddressEntries(result);
-    const taproot = pickTaprootAddress(entries);
-    if (taproot == null) {
-      throw new SignerError(
-        "WalletAccount.connect: the wallet exposed no Taproot (p2tr) address — " +
-          "Kontor requires a P2TR identity",
-        { docsPath: "/sdk/account/wallet" },
-      );
-    }
-
-    const hrp = opts.chain.network.bech32;
-    if (!taproot.address.startsWith(`${hrp}1p`)) {
-      throw new SignerError(
-        `WalletAccount.connect: wallet returned a "${taproot.address.slice(0, 6)}…" ` +
-          `address, but this session is bound to the "${hrp}" network`,
-        { docsPath: "/sdk/account/wallet" },
-      );
-    }
-
-    return new WalletAccount(
-      opts.request,
-      normalizeXOnly(taproot.publicKey),
-      taproot.address,
-    );
   }
 
   async message(message: string | Uint8Array): Promise<string> {
@@ -128,7 +131,7 @@ export class WalletAccount implements Signing {
       "signMessage",
     ) as { signature?: string };
     if (typeof result.signature !== "string") {
-      throw new SignerError("WalletAccount.message: wallet returned no signature");
+      throw new SignerError("sats-connect: wallet returned no message signature");
     }
     return result.signature;
   }
@@ -139,22 +142,22 @@ export class WalletAccount implements Signing {
       // (sats-connect-style wallets require one), so we never have to walk
       // the PSBT to discover owned inputs.
       throw new SignerError(
-        "WalletAccount.signPsbt requires an explicit `inputs` spec",
-        { docsPath: "/sdk/account/wallet" },
+        "sats-connect.psbt requires an explicit `inputs` spec",
+        { docsPath: "/sdk/wallets/sats-connect" },
       );
     }
 
     if (opts.inputs.length === 0) {
-      // No owned inputs to sign (e.g. signReveal where this account owns none
-      // of the reveal's inputs). Match LocalAccount: no-op, don't prompt the
-      // wallet to sign nothing. Returning the PSBT unchanged.
+      // No owned inputs to sign (e.g. signReveal where this identity owns
+      // none of the reveal's inputs). Match LocalKey: no-op, don't prompt
+      // the wallet to sign nothing. Returning the PSBT unchanged.
       return psbt;
     }
 
     const kind = resolveSighashKind(opts.inputs);
 
-    // Pin the sighash onto the PSBT inputs (like LocalAccount does), not just
-    // on sats-connect's `allowedSignHash`. Some wallets derive the sighash to
+    // Pin the sighash onto the PSBT inputs (like LocalKey does), not just on
+    // sats-connect's `allowedSignHash`. Some wallets derive the sighash to
     // sign with from PSBT_IN_SIGHASH_TYPE, not from allowedSignHash; without
     // the field they'd sign a non-default input (e.g. a SIGHASH_SINGLE|
     // ANYONECANPAY marketplace detach) with the default taproot sighash and
@@ -179,7 +182,7 @@ export class WalletAccount implements Signing {
       "signPsbt",
     ) as { psbt?: string };
     if (typeof result.psbt !== "string") {
-      throw new SignerError("WalletAccount.psbt: wallet returned no signed PSBT");
+      throw new SignerError("sats-connect: wallet returned no signed PSBT");
     }
     return base64.decode(result.psbt);
   }
@@ -189,8 +192,8 @@ export class WalletAccount implements Signing {
 function unwrap(res: WalletRpcResponse, method: string): unknown {
   if (res.status === "success") return res.result;
   const detail = res.error?.message ? `: ${res.error.message}` : "";
-  throw new SignerError(`WalletAccount: wallet rejected "${method}"${detail}`, {
-    docsPath: "/sdk/account/wallet",
+  throw new SignerError(`sats-connect: wallet rejected "${method}"${detail}`, {
+    docsPath: "/sdk/wallets/sats-connect",
   });
 }
 
@@ -218,8 +221,8 @@ function normalizeXOnly(publicKey: string): string {
   if (h.length === 64) return h;
   if (h.length === 66) return h.slice(2); // drop the 02/03 compression prefix byte
   throw new SignerError(
-    `WalletAccount: unexpected public key length (${h.length} hex chars)`,
-    { docsPath: "/sdk/account/wallet" },
+    `sats-connect: unexpected public key length (${h.length} hex chars)`,
+    { docsPath: "/sdk/wallets/sats-connect" },
   );
 }
 
@@ -230,9 +233,9 @@ function resolveSighashKind(inputs: SignInput[]): SighashKind {
   const kinds = new Set(inputs.map((i) => i.sighash ?? "default"));
   if (kinds.size > 1) {
     throw new SignerError(
-      "WalletAccount.signPsbt: one signPsbt call can't mix sighash types — " +
+      "sats-connect.psbt: one signPsbt call can't mix sighash types — " +
         "sats-connect's allowedSignHash is per-request",
-      { docsPath: "/sdk/account/wallet" },
+      { docsPath: "/sdk/wallets/sats-connect" },
     );
   }
   const [kind] = kinds as Set<SighashKind>;
