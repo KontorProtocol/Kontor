@@ -25,7 +25,12 @@ import { SigHash, Transaction } from "@scure/btc-signer";
 import { HolderRef } from "../canonical/HolderRef.js";
 import { SignerError } from "../errors.js";
 import type { Identity } from "../identity.js";
-import type { Signing, SighashKind, SignInput, SignPsbtOptions } from "../signing.js";
+import type {
+  Signing,
+  SighashKind,
+  SignInput,
+  SignPsbtOptions,
+} from "../signing.js";
 import type { Chain } from "../chains.js";
 
 /** A sats-connect-style RPC response envelope. */
@@ -131,7 +136,9 @@ class SatsConnectSigning implements Signing {
       "signMessage",
     ) as { signature?: string };
     if (typeof result.signature !== "string") {
-      throw new SignerError("sats-connect: wallet returned no message signature");
+      throw new SignerError(
+        "sats-connect: wallet returned no message signature",
+      );
     }
     return result.signature;
   }
@@ -166,7 +173,8 @@ class SatsConnectSigning implements Signing {
     if (kind !== "default") {
       const flag = SIGHASH_NUMBER[kind];
       const tx = Transaction.fromPSBT(psbt);
-      for (const i of opts.inputs) tx.updateInput(i.index, { sighashType: flag });
+      for (const i of opts.inputs)
+        tx.updateInput(i.index, { sighashType: flag });
       outgoing = tx.toPSBT();
     }
 

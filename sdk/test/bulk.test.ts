@@ -26,7 +26,10 @@ const stubSigning: Signing = {
 /** Idle poller: bootstraps, then long-polls with nothing to report. */
 const pollerFetch = (async (url: string) => {
   const body = url.includes("/results")
-    ? { results: [], pagination: { has_more: false, next_offset: null, total_count: 0 } }
+    ? {
+        results: [],
+        pagination: { has_more: false, next_offset: null, total_count: 0 },
+      }
     : { last_result_id: 0, recent_blocks: [], signature: "idle" };
   if (url.includes("?wait=")) await new Promise((r) => setTimeout(r, 5));
   return new Response(JSON.stringify({ result: body }), {
@@ -66,8 +69,24 @@ function mockSession(simulate: KontorTransport["simulate"]): KontorSession {
 test("bulk: simulate maps each op to its slot, decoded per-Inst", async () => {
   const session = mockSession(() =>
     Promise.resolve([
-      { status: "Ok", gas: 1n, value: "42", func: "f", contract: "c_0_0", inputIndex: 0, opIndex: 0 },
-      { status: "Ok", gas: 2n, value: "99", func: "g", contract: "c_0_0", inputIndex: 0, opIndex: 1 },
+      {
+        status: "Ok",
+        gas: 1n,
+        value: "42",
+        func: "f",
+        contract: "c_0_0",
+        inputIndex: 0,
+        opIndex: 0,
+      },
+      {
+        status: "Ok",
+        gas: 2n,
+        value: "99",
+        func: "g",
+        contract: "c_0_0",
+        inputIndex: 0,
+        opIndex: 1,
+      },
     ]),
   );
   const addr = new ContractAddress("c", 0n, 0n);
@@ -86,13 +105,32 @@ test("bulk: a wrongly-ordered transport response is realigned by op index", asyn
   // Op 1 listed before op 0 — `mapBundleOutcomes` selects by index.
   const session = mockSession(() =>
     Promise.resolve([
-      { status: "Ok", gas: 2n, value: "b", func: "g", contract: "c_0_0", inputIndex: 0, opIndex: 1 },
-      { status: "Ok", gas: 1n, value: "a", func: "f", contract: "c_0_0", inputIndex: 0, opIndex: 0 },
+      {
+        status: "Ok",
+        gas: 2n,
+        value: "b",
+        func: "g",
+        contract: "c_0_0",
+        inputIndex: 0,
+        opIndex: 1,
+      },
+      {
+        status: "Ok",
+        gas: 1n,
+        value: "a",
+        func: "f",
+        contract: "c_0_0",
+        inputIndex: 0,
+        opIndex: 0,
+      },
     ]),
   );
   const addr = new ContractAddress("c", 0n, 0n);
   const [r1, r2] = await session
-    .bulk(session.call(addr, "f", "f()", (w) => w), session.call(addr, "g", "g()", (w) => w))
+    .bulk(
+      session.call(addr, "f", "f()", (w) => w),
+      session.call(addr, "g", "g()", (w) => w),
+    )
     .simulate();
   expect(r1.value).toBe("a");
   expect(r2.value).toBe("b");

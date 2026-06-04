@@ -41,7 +41,9 @@ export interface StartProxyOptions {
   apiUrl: string;
 }
 
-export async function startRpcProxy(opts: StartProxyOptions): Promise<RpcProxy> {
+export async function startRpcProxy(
+  opts: StartProxyOptions,
+): Promise<RpcProxy> {
   const bitcoinUpstream = new URL(opts.bitcoinRpc);
   const bitcoinOrigin = `${bitcoinUpstream.protocol}//${bitcoinUpstream.host}${bitcoinUpstream.pathname.replace(/\/$/, "")}`;
   const apiUpstream = new URL(opts.apiUrl);

@@ -29,10 +29,7 @@
 
 import { hex } from "@scure/base";
 
-import {
-  aggregateSigningMessage,
-  blsVerify,
-} from "./component/kontor-sdk.js";
+import { aggregateSigningMessage, blsVerify } from "./component/kontor-sdk.js";
 import { SignerError } from "./errors.js";
 import type { WireInst } from "./json-codec.js";
 

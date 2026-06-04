@@ -16,8 +16,7 @@ import { SignerError } from "../src/errors.js";
 import { regtestChain, signet } from "../src/chains.js";
 import { mockWalletRequest } from "./mock-wallet.js";
 
-const MNEMONIC =
-  "test test test test test test test test test test test junk";
+const MNEMONIC = "test test test test test test test test test test test junk";
 
 function xOnlyBytes(h: string): Uint8Array {
   return Uint8Array.from(h.match(/.{2}/g)!.map((b) => parseInt(b, 16)));
@@ -81,13 +80,18 @@ test("connect: rejects a wallet with no Taproot address", async () => {
       ? {
           status: "success",
           result: [
-            { address: "tb1qexamplepaymentaddrxxxxxxxxxxxxxxxxxxxx", publicKey: "ab".repeat(33), addressType: "p2wpkh", purpose: "payment" },
+            {
+              address: "tb1qexamplepaymentaddrxxxxxxxxxxxxxxxxxxxx",
+              publicKey: "ab".repeat(33),
+              addressType: "p2wpkh",
+              purpose: "payment",
+            },
           ],
         }
       : { status: "error", error: { message: "unexpected" } };
-  await expect(
-    connect({ chain: signet, request }),
-  ).rejects.toThrow(/no Taproot/);
+  await expect(connect({ chain: signet, request })).rejects.toThrow(
+    /no Taproot/,
+  );
 });
 
 test("signPsbt: produces a valid, finalizable signed PSBT", async () => {
@@ -124,7 +128,9 @@ test("signPsbt: maps single-anyonecanpay to allowedSignHash 131", async () => {
 
   // The sighash is ALSO pinned on the PSBT we hand the wallet (not only via
   // allowedSignHash), so wallets that read PSBT_IN_SIGHASH_TYPE sign 0x83.
-  expect(Transaction.fromPSBT(base64.decode(params.psbt)).getInput(0).sighashType).toBe(0x83);
+  expect(
+    Transaction.fromPSBT(base64.decode(params.psbt)).getInput(0).sighashType,
+  ).toBe(0x83);
 
   // And the returned signed input is pinned to 0x83.
   expect(Transaction.fromPSBT(signed).getInput(0).sighashType).toBe(0x83);
@@ -133,9 +139,12 @@ test("signPsbt: maps single-anyonecanpay to allowedSignHash 131", async () => {
 test("signPsbt: default sighash omits allowedSignHash", async () => {
   const { local, request, calls } = fixture();
   const acct = await connect({ chain: signet, request });
-  await acct.psbt(taprootPsbt(local.identity.xOnlyPubKey, local.identity.address), {
-    inputs: [{ index: 0 }],
-  });
+  await acct.psbt(
+    taprootPsbt(local.identity.xOnlyPubKey, local.identity.address),
+    {
+      inputs: [{ index: 0 }],
+    },
+  );
   const call = calls.find((c) => c.method === "signPsbt")!;
   expect("allowedSignHash" in (call.params as object)).toBe(false);
 });
@@ -145,10 +154,7 @@ test("signPsbt: rejects a mixed-sighash request", async () => {
   const acct = await connect({ chain: signet, request });
   await expect(
     acct.psbt(taprootPsbt(local.identity.xOnlyPubKey, local.identity.address), {
-      inputs: [
-        { index: 0 },
-        { index: 1, sighash: "single-anyonecanpay" },
-      ],
+      inputs: [{ index: 0 }, { index: 1, sighash: "single-anyonecanpay" }],
     }),
   ).rejects.toThrow(/can't mix sighash/);
 });
@@ -178,7 +184,10 @@ test("signPsbt: surfaces a wallet rejection as SignerError", async () => {
   const base = mockWalletRequest(local);
   const request: WalletRequest = (method, params) =>
     method === "signPsbt"
-      ? Promise.resolve({ status: "error", error: { message: "user declined" } })
+      ? Promise.resolve({
+          status: "error",
+          error: { message: "user declined" },
+        })
       : base(method, params);
   const acct = await connect({ chain: signet, request });
   await expect(

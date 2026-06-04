@@ -75,13 +75,17 @@ export class Attachment<T> {
     // ChainedEnvelope output committing to the detach for the future
     // buyer to spend, and Change back to the seller (last position).
     const sellerScriptPubKey = hex.encode(
-      p2tr(hex.decode(identity.xOnlyPubKey), undefined, this.session.chain.network).script,
+      p2tr(
+        hex.decode(identity.xOnlyPubKey),
+        undefined,
+        this.session.chain.network,
+      ).script,
     );
     // Route through `submitReveal` so utxos/compose/sign/broadcast/track
     // run as one atomic block under the account's lock — no race with
     // a concurrent `submit` or marketplace flow on the same account.
-    const { composed, revealHex: attachRevealHex } = await transport.submitReveal(
-      async (utxos) => {
+    const { composed, revealHex: attachRevealHex } =
+      await transport.submitReveal(async (utxos) => {
         const reveal: Reveal = {
           sat_per_vbyte: this.session.feeRate,
           participants: [
@@ -110,8 +114,7 @@ export class Attachment<T> {
           ],
         };
         return transport.composeAndSign(reveal);
-      },
-    );
+      });
 
     // The chained detach leaf script (for the future buyer to spend the
     // escrow output) lives on output 0 of the reveal — same position as

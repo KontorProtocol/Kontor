@@ -53,12 +53,15 @@
     "test": "vitest",
     "test:browser": "vitest --browser",
     "test:regtest": "npm run build && vitest --config vitest.regtest.config.ts",
-    "test:regtest:browser": "npm run build && vitest --config vitest.regtest.config.ts --browser"
+    "test:regtest:browser": "npm run build && vitest --config vitest.regtest.config.ts --browser",
+    "format": "prettier --write .",
+    "format:check": "prettier --check ."
   },
   "devDependencies": {
     "@bytecodealliance/jco": "^1.19.0",
     "@types/node": "^25.8.0",
     "@vitest/browser-playwright": "^4.1.6",
+    "prettier": "^3.8.3",
     "typescript": "^6.0.3",
     "vite": "^8.0.13",
     "vite-plugin-dts": "^5.0.0",

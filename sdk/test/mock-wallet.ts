@@ -53,7 +53,9 @@ export function mockWalletRequest(
         // deterministic placeholder so the request path stays testable.
         return {
           status: "success",
-          result: { signature: base64.encode(new TextEncoder().encode("mock-sig")) },
+          result: {
+            signature: base64.encode(new TextEncoder().encode("mock-sig")),
+          },
         };
       }
 

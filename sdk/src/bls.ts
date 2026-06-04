@@ -117,7 +117,9 @@ export class BlsKey {
 export { BLS_PUBKEY_BYTES, BLS_SECRET_BYTES, BLS_SIG_BYTES };
 
 /** Protocol prefix the schnorr binding signs (`KONTOR_XONLY_TO_BLS_V1`). */
-const SCHNORR_BINDING_PREFIX = new TextEncoder().encode("KONTOR_XONLY_TO_BLS_V1");
+const SCHNORR_BINDING_PREFIX = new TextEncoder().encode(
+  "KONTOR_XONLY_TO_BLS_V1",
+);
 /** Protocol prefix the BLS binding signs (`KONTOR_BLS_TO_XONLY_V1`). */
 const BLS_BINDING_PREFIX = new TextEncoder().encode("KONTOR_BLS_TO_XONLY_V1");
 
@@ -138,7 +140,11 @@ const BLS_BINDING_PREFIX = new TextEncoder().encode("KONTOR_BLS_TO_XONLY_V1");
 export async function buildRegistrationProof(
   signing: Signing & { schnorr(digest: Uint8Array): Promise<Uint8Array> },
   blsKey: BlsKey,
-): Promise<{ blsPubkey: Uint8Array; schnorrSig: Uint8Array; blsSig: Uint8Array }> {
+): Promise<{
+  blsPubkey: Uint8Array;
+  schnorrSig: Uint8Array;
+  blsSig: Uint8Array;
+}> {
   const schnorrMsg = sha256(
     btcUtils.concatBytes(SCHNORR_BINDING_PREFIX, blsKey.pubkey),
   );

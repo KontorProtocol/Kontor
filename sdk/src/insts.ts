@@ -167,10 +167,9 @@ function unwrapAllOrThrow<T extends readonly unknown[]>(
     if (r.status === "Ok" && r.value !== undefined) {
       out.push(r.value);
     } else {
-      throw new ContractError(
-        `bulk Inst failed with status: ${r.status}`,
-        { details: r.error },
-      );
+      throw new ContractError(`bulk Inst failed with status: ${r.status}`, {
+        details: r.error,
+      });
     }
   }
   return out as unknown as T;

@@ -24,9 +24,9 @@ test("read-only session: registerBls throws a clear read-only error", async () =
     chain: signet,
     identity: Identity.fromXOnly(XONLY, signet),
   });
-  await expect(
-    session.registerBls(undefined as never),
-  ).rejects.toThrow(/read-only/i);
+  await expect(session.registerBls(undefined as never)).rejects.toThrow(
+    /read-only/i,
+  );
   session.close();
 });
 

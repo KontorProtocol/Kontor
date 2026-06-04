@@ -60,7 +60,10 @@ afterEach(() => {
  */
 const pollerFetch = (async (url: string) => {
   const body = url.includes("/results")
-    ? { results: [], pagination: { has_more: false, next_offset: null, total_count: 0 } }
+    ? {
+        results: [],
+        pagination: { has_more: false, next_offset: null, total_count: 0 },
+      }
     : { last_result_id: 0, recent_blocks: [], signature: "idle" };
   if (url.includes("?wait=")) await new Promise((r) => setTimeout(r, 5));
   return new Response(JSON.stringify({ result: body }), {

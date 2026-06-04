@@ -279,7 +279,8 @@ export class HttpTransport implements KontorTransport {
   ): Promise<Reveal> {
     const { identity } = this.opts;
     const scriptPubKeyHex = hex.encode(
-      p2tr(hex.decode(identity.xOnlyPubKey), undefined, this.opts.chain.network).script,
+      p2tr(hex.decode(identity.xOnlyPubKey), undefined, this.opts.chain.network)
+        .script,
     );
     return {
       sat_per_vbyte: this.opts.feeRate ?? null,
@@ -360,7 +361,9 @@ export class HttpTransport implements KontorTransport {
       funding.release(taken);
       throw err;
     }
-    funding.settle(this.computeFundingDelta({ suppliedUtxos: taken, composed, commitHexes }));
+    funding.settle(
+      this.computeFundingDelta({ suppliedUtxos: taken, composed, commitHexes }),
+    );
     return { result, commitHexes, revealHex, composed };
   }
 
@@ -457,10 +460,9 @@ export class HttpTransport implements KontorTransport {
     try {
       const reveal = await this.buildSimpleReveal(insts, taken);
       const { revealTx } = await this.composeAndSign(reveal);
-      const ops = await this.postJson<OpWithResult[]>(
-        "/transactions/inspect",
-        { hex: hex.encode(revealTx.extract()) },
-      );
+      const ops = await this.postJson<OpWithResult[]>("/transactions/inspect", {
+        hex: hex.encode(revealTx.extract()),
+      });
       return ops.map(opWithResultToRaw);
     } finally {
       funding.release(taken);
@@ -541,4 +543,3 @@ function opWithResultToRaw(o: OpWithResult): OpResultRaw {
 export function http(opts: HttpTransportOptions): HttpTransport {
   return new HttpTransport(opts);
 }
-

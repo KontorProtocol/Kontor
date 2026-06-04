@@ -377,9 +377,7 @@ export class KontorSession {
    * result types don't survive the serialization boundary, so the
    * aggregator's `wait()` returns the raw WAVE strings.
    */
-  combineAggregate(
-    fragments: readonly AggregateFragment[],
-  ): Insts<unknown[]> {
+  combineAggregate(fragments: readonly AggregateFragment[]): Insts<unknown[]> {
     if (fragments.length === 0) {
       throw new SignerError(
         "combineAggregate: requires at least one fragment",
@@ -478,9 +476,7 @@ function decodeContractAddressWave(wave: string): ContractAddress {
     /^\{\s*name:\s*"([^"]*)"\s*,\s*height:\s*(\d+)\s*,\s*tx-index:\s*(\d+)\s*\}$/,
   );
   if (m == null) {
-    throw new Error(
-      `expected contract-address WAVE record, got: ${wave}`,
-    );
+    throw new Error(`expected contract-address WAVE record, got: ${wave}`);
   }
   return new ContractAddress(m[1]!, BigInt(m[2]!), BigInt(m[3]!));
 }

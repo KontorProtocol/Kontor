@@ -33,9 +33,12 @@ export async function signCommit(
   // (the indexer fills `funding_utxo_ids` only with the seller's
   // UTXOs), so sign each one with the default sighash.
   const prep = Transaction.fromPSBT(hex.decode(psbtHex));
-  const inputsToSign = Array.from({ length: prep.inputsLength }, (_, index) => ({
-    index,
-  }));
+  const inputsToSign = Array.from(
+    { length: prep.inputsLength },
+    (_, index) => ({
+      index,
+    }),
+  );
   const signed = await signing.psbt(hex.decode(psbtHex), {
     inputs: inputsToSign,
   });
@@ -105,7 +108,11 @@ export async function signReveal(
       // wants the script bytes alone and the encoded control block.
       const script = scriptWithVersion.slice(0, -1);
       tx.updateInput(i, {
-        finalScriptWitness: [sig, script, TaprootControlBlock.encode(controlBlock)],
+        finalScriptWitness: [
+          sig,
+          script,
+          TaprootControlBlock.encode(controlBlock),
+        ],
       });
     } else {
       const sig = input.tapKeySig;

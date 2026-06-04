@@ -26,7 +26,10 @@ export default defineConfig({
         vite: resolve(__dirname, "src/vite.ts"),
         regtest: resolve(__dirname, "src/regtest.ts"),
         cli: resolve(__dirname, "src/cli.ts"),
-        "wallets/sats-connect": resolve(__dirname, "src/wallets/sats-connect.ts"),
+        "wallets/sats-connect": resolve(
+          __dirname,
+          "src/wallets/sats-connect.ts",
+        ),
       },
       formats: ["es"],
     },
@@ -46,8 +49,7 @@ export default defineConfig({
       output: {
         // Restore the shebang Rollup strips from CLI sources, so the
         // emitted dist/cli.js is directly executable by Node.
-        banner: (chunk) =>
-          chunk.name === "cli" ? "#!/usr/bin/env node" : "",
+        banner: (chunk) => (chunk.name === "cli" ? "#!/usr/bin/env node" : ""),
       },
     },
   },

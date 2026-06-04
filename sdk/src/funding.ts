@@ -34,7 +34,8 @@ export interface FundingSource {
   release(taken: Utxo[]): void;
 }
 
-const keyOf = (u: { txid: string; vout: number }): string => `${u.txid}:${u.vout}`;
+const keyOf = (u: { txid: string; vout: number }): string =>
+  `${u.txid}:${u.vout}`;
 
 /** Order UTXOs smallest-value-first. `take()` hands the pool to the
  *  indexer's greedy head-walking selector, so dust at the head gets pulled
@@ -42,7 +43,9 @@ const keyOf = (u: { txid: string; vout: number }): string => `${u.txid}:${u.vout
  *  dust outputs (the 330-sat reveal change) accumulate over many submits.
  *  Value is sats (`bigint`); compare directly, no `Number()` precision risk. */
 function dustFirst(utxos: Utxo[]): Utxo[] {
-  return [...utxos].sort((a, b) => (a.value < b.value ? -1 : a.value > b.value ? 1 : 0));
+  return [...utxos].sort((a, b) =>
+    a.value < b.value ? -1 : a.value > b.value ? 1 : 0,
+  );
 }
 
 /**
@@ -75,9 +78,12 @@ export function inMemoryFunding(initial: Utxo[]): FundingSource {
       }
       if (pool.length === 0) {
         return Promise.reject(
-          new ChainError("inMemoryFunding: no spendable UTXOs left in the pool", {
-            docsPath: "/sdk/funding",
-          }),
+          new ChainError(
+            "inMemoryFunding: no spendable UTXOs left in the pool",
+            {
+              docsPath: "/sdk/funding",
+            },
+          ),
         );
       }
       // Reserve synchronously — no await between read and remove, so two
@@ -89,7 +95,9 @@ export function inMemoryFunding(initial: Utxo[]): FundingSource {
 
     settle({ spent, change }): void {
       const spentKeys = new Set(spent.map(keyOf));
-      const unspent = (outstanding ?? []).filter((u) => !spentKeys.has(keyOf(u)));
+      const unspent = (outstanding ?? []).filter(
+        (u) => !spentKeys.has(keyOf(u)),
+      );
       pool = dustFirst([...change, ...unspent]);
       outstanding = null;
     },

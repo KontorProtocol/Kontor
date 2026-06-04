@@ -548,9 +548,7 @@ function emitAttachment(
   detach: WitFunction,
   ctx: Ctx,
 ): string[] {
-  const attachArgs = attach.params
-    .slice(1)
-    .filter((p) => p.name !== "vout");
+  const attachArgs = attach.params.slice(1).filter((p) => p.name !== "vout");
   const sig = attachArgs
     .map((p) => `${toCamel(p.name)}: ${typeRefToTs(p.type, ctx)}`)
     .join(", ");

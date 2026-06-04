@@ -1,0 +1,13 @@
+# Build output
+dist
+
+# Dependencies
+node_modules
+
+# Generated code (don't format — regenerated from source of truth)
+src/component
+src/bindings.d.ts
+test/__generated__
+
+# Lockfile
+package-lock.json

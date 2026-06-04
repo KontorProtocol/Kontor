@@ -43,11 +43,7 @@ import type {
 import { ContractAddress } from "./canonical/ContractAddress.js";
 import { ContractError, SignerError, TransportError } from "./errors.js";
 import type { ChainEvent } from "./events.js";
-import type {
-  BroadcastResult,
-  OpResult,
-  OpResultRaw,
-} from "./json-codec.js";
+import type { BroadcastResult, OpResult, OpResultRaw } from "./json-codec.js";
 import type { KontorSession } from "./session.js";
 
 /**

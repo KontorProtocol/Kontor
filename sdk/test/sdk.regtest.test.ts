@@ -130,15 +130,25 @@ test("SDK capstone: publish, transfer, bulk, marketplace", async () => {
       expect(sim.value?.kind).toBe("ok");
 
       // Submit 1 — spends the bootstrap UTXO.
-      const first = await token.transfer(recipient.identity.holderRef, Decimal.from("1"));
+      const first = await token.transfer(
+        recipient.identity.holderRef,
+        Decimal.from("1"),
+      );
       expect(Result.unwrap(first).amt.toString()).toBe("1");
-      expect((await token.balance(recipient.identity.holderRef))?.toString()).toBe("1");
+      expect(
+        (await token.balance(recipient.identity.holderRef))?.toString(),
+      ).toBe("1");
 
       // Submit 2 — must chain through submit 1's change. If
       // change-tracking is broken, this errors with no funding.
-      const second = await token.transfer(recipient.identity.holderRef, Decimal.from("1"));
+      const second = await token.transfer(
+        recipient.identity.holderRef,
+        Decimal.from("1"),
+      );
       expect(Result.unwrap(second).amt.toString()).toBe("1");
-      expect((await token.balance(recipient.identity.holderRef))?.toString()).toBe("2");
+      expect(
+        (await token.balance(recipient.identity.holderRef))?.toString(),
+      ).toBe("2");
     } finally {
       session.close();
     }
@@ -172,8 +182,12 @@ test("SDK capstone: publish, transfer, bulk, marketplace", async () => {
       );
       expect(Result.unwrap(resA).amt.toString()).toBe("1");
       expect(Result.unwrap(resB).amt.toString()).toBe("2");
-      expect((await token.balance(recipientA.identity.holderRef))?.toString()).toBe("1");
-      expect((await token.balance(recipientB.identity.holderRef))?.toString()).toBe("2");
+      expect(
+        (await token.balance(recipientA.identity.holderRef))?.toString(),
+      ).toBe("1");
+      expect(
+        (await token.balance(recipientB.identity.holderRef))?.toString(),
+      ).toBe("2");
     } finally {
       session.close();
     }
@@ -181,7 +195,8 @@ test("SDK capstone: publish, transfer, bulk, marketplace", async () => {
 
   // ─── Phase 4 — marketplace: offer + accept ──────────────────────
   {
-    const { signing: seller, fundingUtxo: sellerFunding } = regtest.accounts[3]!;
+    const { signing: seller, fundingUtxo: sellerFunding } =
+      regtest.accounts[3]!;
     const { signing: buyer, fundingUtxo: buyerFunding } = regtest.accounts[4]!;
 
     const sellerSession = new KontorSession({
@@ -201,7 +216,8 @@ test("SDK capstone: publish, transfer, bulk, marketplace", async () => {
       const buyerToken = buyerSession.bind(Token, "token@0.0");
 
       const buyerBaseline =
-        (await buyerToken.balance(buyer.identity.holderRef)) ?? Decimal.from("0");
+        (await buyerToken.balance(buyer.identity.holderRef)) ??
+        Decimal.from("0");
 
       // Seller creates an offer; attach broadcasts immediately.
       const offer = await sellerToken
@@ -338,7 +354,9 @@ test("SDK capstone: publish, transfer, bulk, marketplace", async () => {
     // becomes the source for the next call.
     let chainSource = regtest.accounts[7]!.fundingUtxo;
     const chainSourceAccount = regtest.accounts[7]!.signing;
-    const fund = async (sats: bigint): Promise<{ signing: LocalKey; fundingUtxo: Utxo }> => {
+    const fund = async (
+      sats: bigint,
+    ): Promise<{ signing: LocalKey; fundingUtxo: Utxo }> => {
       const r = await regtest.createAccount({
         sats,
         sourceUtxo: chainSource,
@@ -359,7 +377,10 @@ test("SDK capstone: publish, transfer, bulk, marketplace", async () => {
     /** Set a fresh account up as a contributor: open a session, mint
      *  tokens via Issuance (system-paid), and register a JS-generated
      *  BlsKey so the indexer can verify aggregate signatures. */
-    const setupContributor = async (a: { signing: LocalKey; fundingUtxo: Utxo }) => {
+    const setupContributor = async (a: {
+      signing: LocalKey;
+      fundingUtxo: Utxo;
+    }) => {
       const session = new KontorSession({
         chain,
         signing: a.signing,
@@ -420,8 +441,12 @@ test("SDK capstone: publish, transfer, bulk, marketplace", async () => {
       // through the aggregator's session (any session works — view
       // queries are stateless).
       const aggToken = aggregatorSession.bind(Token, "token@0.0");
-      expect((await aggToken.balance(recipientA.identity.holderRef))?.toString()).toBe("1");
-      expect((await aggToken.balance(recipientB.identity.holderRef))?.toString()).toBe("2");
+      expect(
+        (await aggToken.balance(recipientA.identity.holderRef))?.toString(),
+      ).toBe("1");
+      expect(
+        (await aggToken.balance(recipientB.identity.holderRef))?.toString(),
+      ).toBe("2");
     } finally {
       cA.session.close();
       cB.session.close();

@@ -23,7 +23,12 @@ import { hex } from "@scure/base";
 import { HDKey } from "@scure/bip32";
 import { mnemonicToSeedSync, validateMnemonic } from "@scure/bip39";
 import { wordlist } from "@scure/bip39/wordlists/english.js";
-import { SigHash, Transaction, p2tr, utils as btcUtils } from "@scure/btc-signer";
+import {
+  SigHash,
+  Transaction,
+  p2tr,
+  utils as btcUtils,
+} from "@scure/btc-signer";
 import { signSchnorr } from "@scure/btc-signer/utils.js";
 
 import { HolderRef } from "./canonical/HolderRef.js";
@@ -193,7 +198,9 @@ export class LocalKey implements Signing {
   schnorr(digest: Uint8Array): Promise<Uint8Array> {
     if (digest.length !== 32) {
       return Promise.reject(
-        new SignerError(`signSchnorr: digest must be 32 bytes, got ${digest.length}`),
+        new SignerError(
+          `signSchnorr: digest must be 32 bytes, got ${digest.length}`,
+        ),
       );
     }
     // Deterministic schnorr (no aux rand) — matches the indexer-side
