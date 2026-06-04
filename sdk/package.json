@@ -1,6 +1,6 @@
 {
   "name": "@kontor/sdk",
-  "version": "0.3.0-rc.1",
+  "version": "0.3.0-rc.2",
   "author": "Unspendable Labs <dev@unspendablelabs.com>",
   "repository": {
     "type": "git",
@@ -12,25 +12,25 @@
   },
   "type": "module",
   "main": "./dist/index.js",
-  "types": "./dist/index.d.ts",
+  "types": "./dist/src/index.d.ts",
   "files": [
     "dist"
   ],
   "exports": {
     ".": {
-      "types": "./dist/index.d.ts",
+      "types": "./dist/src/index.d.ts",
       "import": "./dist/index.js"
     },
     "./vite": {
-      "types": "./dist/vite.d.ts",
+      "types": "./dist/src/vite.d.ts",
       "import": "./dist/vite.js"
     },
     "./regtest": {
-      "types": "./dist/regtest.d.ts",
+      "types": "./dist/src/regtest.d.ts",
       "import": "./dist/regtest.js"
     },
     "./wallets/sats-connect": {
-      "types": "./dist/wallets/sats-connect.d.ts",
+      "types": "./dist/src/wallets/sats-connect.d.ts",
       "import": "./dist/wallets/sats-connect.js"
     }
   },

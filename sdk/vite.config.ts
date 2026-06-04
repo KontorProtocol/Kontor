@@ -59,9 +59,10 @@ export default defineConfig({
       // The CLI is a bin, never imported — no .d.ts needed.
       exclude: ["src/cli.ts"],
       rollupTypes: false,
-      // Emit declarations at the dist/ root (dist/index.d.ts) mirroring
-      // the bundled JS entries. Without this they land under dist/src/
-      // and package.json's `types` path can't resolve them.
+      // vite-plugin-dts emits per-file declarations under `dist/src/`
+      // (mirroring the source tree); the runtime JS is bundled at the
+      // `dist/` root. So package.json's `types` paths point into
+      // `dist/src/**`, while `import` paths point at `dist/*.js`.
       entryRoot: "src",
     }),
     {
