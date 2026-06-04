@@ -135,6 +135,18 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      # Node + format check first, so a formatting violation fails in
+      # seconds rather than after the release `cargo build`.
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Install SDK dependencies
+        run: npm ci
+        working-directory: ./sdk
+      - name: Check formatting (sdk)
+        run: npm run format:check
+        working-directory: ./sdk
       - uses: dtolnay/rust-toolchain@stable
       - name: Cache Cargo registry
         uses: actions/cache@v4
@@ -168,13 +180,6 @@ jobs:
       - name: Build kontor binary
         run: cargo build --release --bin kontor
         working-directory: ./core
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: "22"
-      - name: Install SDK dependencies
-        run: npm ci
-        working-directory: ./sdk
       - name: Build SDK
         run: npm run build
         working-directory: ./sdk
