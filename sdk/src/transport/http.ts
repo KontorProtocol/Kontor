@@ -27,7 +27,9 @@
 import { hex } from "@scure/base";
 import { p2tr, Transaction } from "@scure/btc-signer";
 
-import type { Account } from "../account/index.js";
+import type { Identity } from "../identity.js";
+import type { Signing } from "../signing.js";
+import { AccountLock } from "../account/lock.js";
 import type { Chain } from "../chains.js";
 import type { ContractAddress } from "../canonical/ContractAddress.js";
 import { ChainError, ContractError, TransportError } from "../errors.js";
@@ -56,7 +58,10 @@ const keyOf = (u: { txid: string; vout: number }): string =>
 
 export interface HttpTransportOptions {
   chain: Chain;
-  account: Account;
+  /** Identity funding + signing for this transport (the P2TR address/key). */
+  identity: Identity;
+  /** Signing capability — the SDK calls `signing.psbt(...)` to authorize. */
+  signing: Signing;
 
   /** Override the chain's HTTP endpoint. */
   url?: string;
@@ -128,6 +133,14 @@ export class HttpTransport implements KontorTransport {
    * sweep mooted the prior state).
    */
   private recentlySpent: Set<string> = new Set();
+  /**
+   * Serializes funding-state-mutating sequences (`submitReveal` /
+   * `inspect` / `simulate`) so concurrent callers don't race on UTXO
+   * selection or the tracking update. Transport-owned (per identity's
+   * funding pool); replaced by the pluggable `FundingSource` protocol in
+   * the funding refactor.
+   */
+  private readonly lock = new AccountLock();
 
   constructor(private readonly opts: HttpTransportOptions) {
     this.baseUrl = (opts.url ?? opts.chain.urls.http).replace(/\/+$/, "");
@@ -286,14 +299,14 @@ export class HttpTransport implements KontorTransport {
     revealTx: Transaction;
     composed: ComposeOutputs;
   }> {
-    const { account } = this.opts;
+    const { signing } = this.opts;
     const composed = await this.compose(reveal);
     const commitHexes = await Promise.all(
-      composed.commits.map((c) => signCommit(account, c.psbt_hex)),
+      composed.commits.map((c) => signCommit(signing, c.psbt_hex)),
     );
     return {
       commitHexes,
-      revealTx: await signReveal(account, composed.reveal.psbt_hex),
+      revealTx: await signReveal(signing, composed.reveal.psbt_hex),
       composed,
     };
   }
@@ -305,20 +318,20 @@ export class HttpTransport implements KontorTransport {
     insts: WireInsts,
     utxos: Utxo[],
   ): Promise<Reveal> {
-    const { account } = this.opts;
+    const { identity } = this.opts;
     const scriptPubKeyHex = hex.encode(
-      p2tr(hex.decode(account.xOnlyPubKey), undefined, this.opts.chain.network).script,
+      p2tr(hex.decode(identity.xOnlyPubKey), undefined, this.opts.chain.network).script,
     );
     return {
       sat_per_vbyte: this.opts.feeRate ?? null,
       participants: [
         {
-          x_only_public_key: account.xOnlyPubKey,
+          x_only_public_key: identity.xOnlyPubKey,
           commit_insts: insts,
           output: { Change: { script_pubkey: scriptPubKeyHex } },
           commit_source: {
             Build: {
-              address: account.address,
+              address: identity.address,
               funding_utxo_ids: utxos.map((u) => `${u.txid}:${u.vout}`),
             },
           },
@@ -375,7 +388,7 @@ export class HttpTransport implements KontorTransport {
     revealHex: string;
     composed: ComposeOutputs;
   }> {
-    return this.opts.account.runExclusive(async () => {
+    return this.lock.runExclusive(async () => {
       const utxos = await this.utxos();
       const { commitHexes, revealTx, composed } = await prepare(utxos);
       const revealHex = hex.encode(revealTx.extract());
@@ -411,7 +424,7 @@ export class HttpTransport implements KontorTransport {
     const { suppliedUtxos, commitHexes, composed } = opts;
     const accountScriptPubKey = hex.encode(
       p2tr(
-        hex.decode(this.opts.account.xOnlyPubKey),
+        hex.decode(this.opts.identity.xOnlyPubKey),
         undefined,
         this.opts.chain.network,
       ).script,
@@ -501,7 +514,7 @@ export class HttpTransport implements KontorTransport {
    * submit reuses the same UTXOs.
    */
   async inspect(insts: WireInsts): Promise<OpResultRaw[]> {
-    return this.opts.account.runExclusive(async () => {
+    return this.lock.runExclusive(async () => {
       const utxos = await this.utxos();
       const reveal = await this.buildSimpleReveal(insts, utxos);
       const { revealTx } = await this.composeAndSign(reveal);
@@ -522,7 +535,7 @@ export class HttpTransport implements KontorTransport {
    * read a consistent funding snapshot, no interleave with submitReveal.
    */
   async simulate(insts: WireInsts): Promise<OpResultRaw[]> {
-    return this.opts.account.runExclusive(async () => {
+    return this.lock.runExclusive(async () => {
       const utxos = await this.utxos();
       const reveal = await this.buildSimpleReveal(insts, utxos);
       const { revealTx } = await this.composeAndSign(reveal);

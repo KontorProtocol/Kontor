@@ -25,8 +25,8 @@ import { hex } from "@scure/base";
 import { Transaction, p2tr } from "@scure/btc-signer";
 import { regtestChain, type Chain } from "./chains.js";
 import type { Utxo } from "./json-codec.js";
-import { LocalAccount } from "./account/local.js";
-import type { Account } from "./account/index.js";
+import { LocalKey } from "./local-key.js";
+import type { Signing } from "./signing.js";
 
 // `regtestChain` is a pure, browser-safe chain builder — it lives in
 // `chains.ts` next to `signet`. Re-exported here so `@kontor/sdk/regtest`
@@ -93,14 +93,14 @@ export interface RegtestInfo {
 
 /**
  * One pre-created identity, ready for a test slot — the `RegtestIdentity`
- * material lifted into runnable form (`LocalAccount` + `fundingUtxo` to
+ * material lifted into runnable form (`LocalKey` + `fundingUtxo` to
  * pass straight to `http({ utxos: [fundingUtxo] })`).
  */
 export interface RegtestAccount {
   /** Same as the matching `RegtestIdentity.privateKey`. */
   privateKey: string;
-  /** A `LocalAccount` derived from `privateKey`, ready to sign. */
-  account: LocalAccount;
+  /** A `LocalKey` (a `Signing`) derived from `privateKey`, ready to sign. */
+  signing: LocalKey;
   /** The identity's single 1M-sat funding UTXO. */
   fundingUtxo: Utxo;
 }
@@ -117,11 +117,11 @@ export interface RegtestAccount {
 export interface RegtestClient extends RegtestInfo {
   /** A `Chain` wired to this devnet — pass straight to `KontorSession`. */
   chain: Chain;
-  /** The dev (admin) account as a ready-to-sign `LocalAccount`. */
-  devAccount: LocalAccount;
+  /** The dev (admin) account as a ready-to-sign `LocalKey`. */
+  devAccount: LocalKey;
   /**
    * Pre-created identity pool lifted into runnable form. Each slot
-   * carries its own `LocalAccount` + funding UTXO; tests claim a slot
+   * carries its own `LocalKey` + funding UTXO; tests claim a slot
    * by index. Indices match `RegtestInfo.identities[i]`.
    */
   accounts: RegtestAccount[];
@@ -136,14 +136,14 @@ export interface RegtestClient extends RegtestInfo {
    */
   fundAddress(opts: FundAddressOptions): Promise<Utxo>;
   /**
-   * Mint a fresh `LocalAccount` with random keys and fund it with
+   * Mint a fresh `LocalKey` with random keys and fund it with
    * `sats` from `sourceUtxo`. One-line equivalent of: generate key →
-   * build LocalAccount → call `fundAddress`. Most tests can use a
+   * build LocalKey → call `fundAddress`. Most tests can use a
    * pre-created `accounts[i]` instead; this remains for ad-hoc cases
    * where extra accounts are needed beyond the pool.
    */
   createAccount(opts: CreateAccountOptions): Promise<{
-    account: LocalAccount;
+    signing: LocalKey;
     fundingUtxo: Utxo;
   }>;
   /**
@@ -182,7 +182,7 @@ export interface FundAddressOptions {
    * Account that owns `sourceUtxo` and signs the spend. Defaults to
    * the dev account.
    */
-  sourceAccount?: Account;
+  sourceAccount?: Signing;
   /** Flat fee in sats. Default: 500. */
   feeSats?: bigint;
 }
@@ -196,7 +196,7 @@ export interface CreateAccountOptions {
    * Account that owns `sourceUtxo` and signs the funding spend.
    * Defaults to the dev account.
    */
-  sourceAccount?: Account;
+  sourceAccount?: Signing;
   /** Flat fee in sats. Default: 500. */
   feeSats?: bigint;
 }
@@ -361,7 +361,7 @@ async function bitcoinRpc(
 async function performFundAddress(
   bitcoinRpcUrl: string,
   chain: Chain,
-  defaultAccount: Account,
+  defaultSigning: Signing,
   opts: FundAddressOptions,
 ): Promise<Utxo> {
   const feeSats = opts.feeSats ?? 500n;
@@ -371,8 +371,8 @@ async function performFundAddress(
       `fundAddress: source ${opts.sourceUtxo.value} cannot cover ${opts.sats}+${feeSats}`,
     );
   }
-  const source = opts.sourceAccount ?? defaultAccount;
-  const sourceXOnly = hex.decode(source.xOnlyPubKey);
+  const source = opts.sourceAccount ?? defaultSigning;
+  const sourceXOnly = hex.decode(source.identity.xOnlyPubKey);
   const destScript = p2tr(
     hex.decode(opts.destXOnlyPubKey),
     undefined,
@@ -393,7 +393,7 @@ async function performFundAddress(
   tx.addOutput({ script: destScript, amount: opts.sats });
   tx.addOutput({ script: changeScript, amount: change });
 
-  const signed = await source.signPsbt(tx.toPSBT());
+  const signed = await source.psbt(tx.toPSBT());
   const final = Transaction.fromPSBT(signed);
   const sig = final.getInput(0).tapKeySig;
   if (sig == null) throw new Error("fundAddress: source input not signed");
@@ -475,13 +475,13 @@ export function connectRegtest(info: ProvidedRegtestInfo): RegtestClient {
     })),
   };
   const chain = regtestChain(normalizedInfo);
-  const devAccount = LocalAccount.fromPrivateKey({
+  const devAccount = LocalKey.fromPrivateKey({
     privateKey: normalizedInfo.devPrivateKey,
     chain,
   });
   const accounts: RegtestAccount[] = normalizedInfo.identities.map((id) => ({
     privateKey: id.privateKey,
-    account: LocalAccount.fromPrivateKey({ privateKey: id.privateKey, chain }),
+    signing: LocalKey.fromPrivateKey({ privateKey: id.privateKey, chain }),
     fundingUtxo: id.fundingUtxo,
   }));
   const fundAddress = (opts: FundAddressOptions): Promise<Utxo> =>
@@ -493,20 +493,20 @@ export function connectRegtest(info: ProvidedRegtestInfo): RegtestClient {
     ])) as string[];
   const createAccount = async (
     opts: CreateAccountOptions,
-  ): Promise<{ account: LocalAccount; fundingUtxo: Utxo }> => {
-    const account = LocalAccount.fromPrivateKey({
+  ): Promise<{ signing: LocalKey; fundingUtxo: Utxo }> => {
+    const signing = LocalKey.fromPrivateKey({
       privateKey: randomPrivateKey(),
       chain,
     });
     const fundingUtxo = await fundAddress({
-      destAddress: account.address,
-      destXOnlyPubKey: account.xOnlyPubKey,
+      destAddress: signing.identity.address,
+      destXOnlyPubKey: signing.identity.xOnlyPubKey,
       sats: opts.sats,
       sourceUtxo: opts.sourceUtxo,
       sourceAccount: opts.sourceAccount,
       feeSats: opts.feeSats,
     });
-    return { account, fundingUtxo };
+    return { signing, fundingUtxo };
   };
   return {
     ...normalizedInfo,

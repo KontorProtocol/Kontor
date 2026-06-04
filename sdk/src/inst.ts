@@ -33,7 +33,6 @@
 import { hex } from "@scure/base";
 
 import { AggregateFragment } from "./aggregate.js";
-import type { Account } from "./account/index.js";
 import type { BlsKey } from "./bls.js";
 import { aggregateSigningMessage } from "./component/kontor-sdk.js";
 import type {
@@ -276,10 +275,10 @@ export class Inst<T> implements PromiseLike<T> {
     blsKey: BlsKey,
     opts?: { sponsored?: boolean },
   ): Promise<AggregateFragment> {
-    const account = this.session.account;
+    const { identity } = this.session;
     const sponsored = opts?.sponsored ?? false;
 
-    const entry = await this.session.transport.signer(account.xOnlyPubKey);
+    const entry = await this.session.transport.signer(identity.xOnlyPubKey);
     // Pre-registration signers (no DB row yet) carry an implicit nonce
     // of 0 — the indexer's `advance_nonce` accepts it and writes the
     // row on first use. Established signers reuse their stored
@@ -287,7 +286,7 @@ export class Inst<T> implements PromiseLike<T> {
     const nonce = BigInt(entry?.next_nonce ?? 0);
 
     const wireInst = instToWire(this);
-    const claimJson = JSON.stringify({ XOnlyPubkey: account.xOnlyPubKey });
+    const claimJson = JSON.stringify({ XOnlyPubkey: identity.xOnlyPubKey });
     const instJson = JSON.stringify(wireInst);
 
     const msg = aggregateSigningMessage(claimJson, nonce, sponsored, instJson);
@@ -295,7 +294,7 @@ export class Inst<T> implements PromiseLike<T> {
 
     return new AggregateFragment({
       inst: wireInst,
-      signerXOnlyPubKey: account.xOnlyPubKey,
+      signerXOnlyPubKey: identity.xOnlyPubKey,
       blsPubkey: hex.encode(blsKey.pubkey),
       nonce: nonce.toString(),
       sponsored,

@@ -43,22 +43,22 @@ export type { HttpTransportOptions } from "./transport/http";
 export type { Utxo } from "./json-codec";
 export { signet } from "./chains";
 export type { Chain } from "./chains";
+export { Identity } from "./identity";
 export type {
-  Account,
-  BlsCapableAccount,
+  Signing,
   SighashKind,
   SignInput,
   SignPsbtOptions,
-} from "./account/index";
-export { isBlsCapable } from "./account/index";
-export { LocalAccount } from "./account/local";
+} from "./signing";
+export { canSignSchnorr } from "./signing";
+export { LocalKey } from "./local-key";
 export { BlsKey, blsDerivationPath } from "./bls";
 export type {
   Bip86Indices,
   FromHdKeyOptions,
   FromMnemonicOptions,
   FromPrivateKeyOptions,
-} from "./account/local";
+} from "./local-key";
 export { Decimal } from "./canonical/Decimal";
 export { Integer } from "./canonical/Integer";
 export { HolderRef } from "./canonical/HolderRef";

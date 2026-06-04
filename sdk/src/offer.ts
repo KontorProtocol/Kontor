@@ -23,7 +23,7 @@
 import { hex } from "@scure/base";
 import { TaprootControlBlock, Transaction, p2tr, utils as btcUtils } from "@scure/btc-signer";
 
-import type { Account } from "./account/index.js";
+import type { Signing } from "./signing.js";
 import type { Reveal, TapLeafScript } from "./bindings.js";
 import type { BitcoinNetwork } from "./chains.js";
 import { SignerError } from "./errors.js";
@@ -113,7 +113,7 @@ export class Offer {
    */
   async revoke(): Promise<BroadcastResult> {
     const { data } = this;
-    const { account, chain, transport } = this.session;
+    const { identity, chain, transport } = this.session;
 
     // The escrow — the attach reveal's output 0.
     const attachReveal = Transaction.fromRaw(hex.decode(data.attachReveal), LENIENT_TX);
@@ -129,7 +129,7 @@ export class Offer {
     const escrowAmount = escrow.amount;
 
     const sellerScriptPubKey = hex.encode(
-      p2tr(hex.decode(account.xOnlyPubKey), undefined, chain.network).script,
+      p2tr(hex.decode(identity.xOnlyPubKey), undefined, chain.network).script,
     );
 
     // Build a single-participant Existing Reveal: the participant's
@@ -150,7 +150,7 @@ export class Offer {
         sat_per_vbyte: this.session.feeRate,
         participants: [
           {
-            x_only_public_key: account.xOnlyPubKey,
+            x_only_public_key: identity.xOnlyPubKey,
             commit_insts: data.detachInsts,
             output: { Change: { script_pubkey: sellerScriptPubKey } },
             commit_source: {
@@ -274,7 +274,7 @@ export class IncomingOffer {
    */
   async accept(): Promise<BroadcastResult> {
     const { data } = this;
-    const { account, chain, transport } = this.session;
+    const { identity, chain, transport } = this.session;
 
     // The seller's pre-signed detach PSBT: escrow at input 1, price at
     // output 1. The buyer extracts the SACP witness, the escrow's
@@ -300,7 +300,7 @@ export class IncomingOffer {
       });
     }
 
-    const buyerXOnly = account.xOnlyPubKey;
+    const buyerXOnly = identity.xOnlyPubKey;
     const buyerScriptPubKey = hex.encode(
       p2tr(hex.decode(buyerXOnly), undefined, chain.network).script,
     );
@@ -343,7 +343,7 @@ export class IncomingOffer {
             output: { Change: { script_pubkey: buyerScriptPubKey } },
             commit_source: {
               Build: {
-                address: account.address,
+                address: identity.address,
                 funding_utxo_ids: buyerUtxos.map((u) => `${u.txid}:${u.vout}`),
               },
             },
@@ -421,7 +421,7 @@ export interface SellerDetachParams {
  * invalidating the seller's signature.
  */
 export async function buildSellerDetachPsbt(
-  account: Account,
+  signing: Signing,
   params: SellerDetachParams,
 ): Promise<string> {
   // Lenient parse — the reveal carries a non-standard taproot leaf.
@@ -444,7 +444,7 @@ export async function buildSellerDetachPsbt(
     hex.decode(params.detachLeaf.controlBlock),
   );
   const sellerScript = p2tr(
-    hex.decode(account.xOnlyPubKey),
+    hex.decode(signing.identity.xOnlyPubKey),
     undefined,
     params.network,
   ).script;
@@ -470,7 +470,7 @@ export async function buildSellerDetachPsbt(
   tx.addOutput({ script: opReturnScript(new Uint8Array([0])), amount: 0n });
   tx.addOutput({ script: sellerScript, amount: params.price });
 
-  const signed = await account.signPsbt(tx.toPSBT(), {
+  const signed = await signing.psbt(tx.toPSBT(), {
     inputs: [{ index: 1, sighash: "single-anyonecanpay" }],
   });
   return hex.encode(signed);

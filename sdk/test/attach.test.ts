@@ -10,7 +10,7 @@
  */
 import { test, expect, afterEach } from "vitest";
 import {
-  type Account,
+  type Signing,
   type KontorTransport,
   Attachment,
   ContractAddress,
@@ -24,14 +24,14 @@ import {
 // transport-call site as intended.
 const STUB_XONLY =
   "79be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798";
-const stubAccount: Account = {
-  xOnlyPubKey: STUB_XONLY,
-  address: "tb1pstub",
-  holderRef: HolderRef.xOnlyPubkey(STUB_XONLY),
-  signMessage: () => Promise.reject(new Error("stub")),
-  signPsbt: () => Promise.reject(new Error("stub")),
-  signSchnorr: () => Promise.reject(new Error("stub")),
-  runExclusive: (fn) => fn(),
+const stubSigning: Signing = {
+  identity: {
+    xOnlyPubKey: STUB_XONLY,
+    address: "tb1pstub",
+    holderRef: HolderRef.xOnlyPubkey(STUB_XONLY),
+  },
+  psbt: () => Promise.reject(new Error("stub")),
+  schnorr: () => Promise.reject(new Error("stub")),
 };
 
 /** Idle poller: bootstraps, then long-polls with nothing to report. */
@@ -70,7 +70,7 @@ function stubSession(): KontorSession {
   };
   const session = new KontorSession({
     chain: signet,
-    account: stubAccount,
+    signing: stubSigning,
     transport: () => transport,
     fetch: pollerFetch,
   });

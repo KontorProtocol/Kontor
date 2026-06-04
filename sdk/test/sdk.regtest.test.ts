@@ -19,7 +19,7 @@
  *      buyer.
  *   5. `offer + revoke` — seller's escape hatch: detach the asset
  *      back to themselves, balance round-trips minus a sliver of gas.
- *   6. `registerBls` — mint a fresh account, JS-generate a BlsKey,
+ *   6. `registerBls` — mint a fresh signing, JS-generate a BlsKey,
  *      submit `session.registerBls(blsKey)`, then query the indexer's
  *      `/signers/{xonly}` endpoint and assert it carries the bls_pubkey
  *      we just registered. Exercises the bls-crypto wasm bridge end-
@@ -38,7 +38,7 @@ import {
   BlsKey,
   Decimal,
   KontorSession,
-  LocalAccount,
+  LocalKey,
   Result,
   http,
   type Utxo,
@@ -62,12 +62,12 @@ test("SDK capstone: publish, transfer, bulk, marketplace", async () => {
 
   // ─── Phase 1 — publish ──────────────────────────────────────────
   {
-    const { account, fundingUtxo } = regtest.accounts[0]!;
+    const { signing, fundingUtxo } = regtest.accounts[0]!;
     const session = new KontorSession({
       chain,
-      account,
-      transport: ({ chain, account }) =>
-        http({ chain, account, utxos: [fundingUtxo] }),
+      signing,
+      transport: ({ chain, identity, signing }) =>
+        http({ chain, identity, signing, utxos: [fundingUtxo] }),
     });
     try {
       await session.ready();
@@ -97,7 +97,7 @@ test("SDK capstone: publish, transfer, bulk, marketplace", async () => {
       // has no balances issued, so `balance(...)` for the publisher
       // returns null (or "0").
       const token = session.bind(Token, address);
-      const bal = await token.balance(account.holderRef);
+      const bal = await token.balance(signing.identity.holderRef);
       expect(bal == null || bal.toString() === "0").toBe(true);
     } finally {
       session.close();
@@ -106,41 +106,41 @@ test("SDK capstone: publish, transfer, bulk, marketplace", async () => {
 
   // ─── Phase 2 — transfer + chained transfer (change-tracking) ────
   {
-    const { account, fundingUtxo } = regtest.accounts[1]!;
-    const recipient = LocalAccount.fromPrivateKey({
+    const { signing, fundingUtxo } = regtest.accounts[1]!;
+    const recipient = LocalKey.fromPrivateKey({
       privateKey: "22".repeat(32),
       chain,
     });
     const session = new KontorSession({
       chain,
-      account,
-      transport: ({ chain, account }) =>
-        http({ chain, account, utxos: [fundingUtxo] }),
+      signing,
+      transport: ({ chain, identity, signing }) =>
+        http({ chain, identity, signing, utxos: [fundingUtxo] }),
     });
     try {
       await session.ready();
       const token = session.bind(Token, "token@0.0");
 
-      const before = await token.balance(recipient.holderRef);
+      const before = await token.balance(recipient.identity.holderRef);
       expect(before == null || before.toString() === "0").toBe(true);
 
       // Dry-run.
       const sim = await token
-        .transfer(recipient.holderRef, Decimal.from("1"))
+        .transfer(recipient.identity.holderRef, Decimal.from("1"))
         .simulate();
       expect(sim.status).toBe("Ok");
       expect(sim.value?.kind).toBe("ok");
 
       // Submit 1 — spends the bootstrap UTXO.
-      const first = await token.transfer(recipient.holderRef, Decimal.from("1"));
+      const first = await token.transfer(recipient.identity.holderRef, Decimal.from("1"));
       expect(Result.unwrap(first).amt.toString()).toBe("1");
-      expect((await token.balance(recipient.holderRef))?.toString()).toBe("1");
+      expect((await token.balance(recipient.identity.holderRef))?.toString()).toBe("1");
 
       // Submit 2 — must chain through submit 1's change. If
       // change-tracking is broken, this errors with no funding.
-      const second = await token.transfer(recipient.holderRef, Decimal.from("1"));
+      const second = await token.transfer(recipient.identity.holderRef, Decimal.from("1"));
       expect(Result.unwrap(second).amt.toString()).toBe("1");
-      expect((await token.balance(recipient.holderRef))?.toString()).toBe("2");
+      expect((await token.balance(recipient.identity.holderRef))?.toString()).toBe("2");
     } finally {
       session.close();
     }
@@ -148,20 +148,20 @@ test("SDK capstone: publish, transfer, bulk, marketplace", async () => {
 
   // ─── Phase 3 — bulk submit ──────────────────────────────────────
   {
-    const { account, fundingUtxo } = regtest.accounts[2]!;
-    const recipientA = LocalAccount.fromPrivateKey({
+    const { signing, fundingUtxo } = regtest.accounts[2]!;
+    const recipientA = LocalKey.fromPrivateKey({
       privateKey: "aa".repeat(32),
       chain,
     });
-    const recipientB = LocalAccount.fromPrivateKey({
+    const recipientB = LocalKey.fromPrivateKey({
       privateKey: "bb".repeat(32),
       chain,
     });
     const session = new KontorSession({
       chain,
-      account,
-      transport: ({ chain, account }) =>
-        http({ chain, account, utxos: [fundingUtxo] }),
+      signing,
+      transport: ({ chain, identity, signing }) =>
+        http({ chain, identity, signing, utxos: [fundingUtxo] }),
     });
     try {
       await session.ready();
@@ -170,13 +170,13 @@ test("SDK capstone: publish, transfer, bulk, marketplace", async () => {
       // Bundle two transfers in one Bitcoin tx. Each per-Inst decoder
       // runs on its own positional slot ((0,0) and (0,1)).
       const [resA, resB] = await session.bulk(
-        token.transfer(recipientA.holderRef, Decimal.from("1")),
-        token.transfer(recipientB.holderRef, Decimal.from("2")),
+        token.transfer(recipientA.identity.holderRef, Decimal.from("1")),
+        token.transfer(recipientB.identity.holderRef, Decimal.from("2")),
       );
       expect(Result.unwrap(resA).amt.toString()).toBe("1");
       expect(Result.unwrap(resB).amt.toString()).toBe("2");
-      expect((await token.balance(recipientA.holderRef))?.toString()).toBe("1");
-      expect((await token.balance(recipientB.holderRef))?.toString()).toBe("2");
+      expect((await token.balance(recipientA.identity.holderRef))?.toString()).toBe("1");
+      expect((await token.balance(recipientB.identity.holderRef))?.toString()).toBe("2");
     } finally {
       session.close();
     }
@@ -184,20 +184,20 @@ test("SDK capstone: publish, transfer, bulk, marketplace", async () => {
 
   // ─── Phase 4 — marketplace: offer + accept ──────────────────────
   {
-    const { account: seller, fundingUtxo: sellerFunding } = regtest.accounts[3]!;
-    const { account: buyer, fundingUtxo: buyerFunding } = regtest.accounts[4]!;
+    const { signing: seller, fundingUtxo: sellerFunding } = regtest.accounts[3]!;
+    const { signing: buyer, fundingUtxo: buyerFunding } = regtest.accounts[4]!;
 
     const sellerSession = new KontorSession({
       chain,
-      account: seller,
-      transport: ({ chain, account }) =>
-        http({ chain, account, utxos: [sellerFunding] }),
+      signing: seller,
+      transport: ({ chain, identity, signing }) =>
+        http({ chain, identity, signing, utxos: [sellerFunding] }),
     });
     const buyerSession = new KontorSession({
       chain,
-      account: buyer,
-      transport: ({ chain, account }) =>
-        http({ chain, account, utxos: [buyerFunding] }),
+      signing: buyer,
+      transport: ({ chain, identity, signing }) =>
+        http({ chain, identity, signing, utxos: [buyerFunding] }),
     });
     try {
       await sellerSession.ready();
@@ -206,7 +206,7 @@ test("SDK capstone: publish, transfer, bulk, marketplace", async () => {
       const buyerToken = buyerSession.bind(Token, "token@0.0");
 
       const buyerBaseline =
-        (await buyerToken.balance(buyer.holderRef)) ?? Decimal.from("0");
+        (await buyerToken.balance(buyer.identity.holderRef)) ?? Decimal.from("0");
 
       // Seller creates an offer; attach broadcasts immediately.
       const offer = await sellerToken
@@ -235,7 +235,7 @@ test("SDK capstone: publish, transfer, bulk, marketplace", async () => {
         i++
       ) {
         await new Promise((r) => setTimeout(r, 1000));
-        after = await buyerToken.balance(buyer.holderRef);
+        after = await buyerToken.balance(buyer.identity.holderRef);
       }
       expect(after?.cmp(threshold)).toBe("greater");
     } finally {
@@ -246,18 +246,18 @@ test("SDK capstone: publish, transfer, bulk, marketplace", async () => {
 
   // ─── Phase 5 — marketplace: offer + revoke ──────────────────────
   {
-    const { account, fundingUtxo } = regtest.accounts[5]!;
+    const { signing, fundingUtxo } = regtest.accounts[5]!;
     const session = new KontorSession({
       chain,
-      account,
-      transport: ({ chain, account }) =>
-        http({ chain, account, utxos: [fundingUtxo] }),
+      signing,
+      transport: ({ chain, identity, signing }) =>
+        http({ chain, identity, signing, utxos: [fundingUtxo] }),
     });
     try {
       await session.ready();
       const token = session.bind(Token, "token@0.0");
 
-      const before = await token.balance(account.holderRef);
+      const before = await token.balance(signing.identity.holderRef);
       expect(before).not.toBeNull();
 
       // Seller offers (attach moves 2 tokens into escrow), then
@@ -274,7 +274,7 @@ test("SDK capstone: publish, transfer, bulk, marketplace", async () => {
       let after: Decimal | null = null;
       for (let i = 0; i < 90; i++) {
         await new Promise((r) => setTimeout(r, 1000));
-        after = await token.balance(account.holderRef);
+        after = await token.balance(signing.identity.holderRef);
         if (i >= 15 && after != null && deficit(before!, after) < 1) break;
       }
       expect(after).not.toBeNull();
@@ -294,17 +294,17 @@ test("SDK capstone: publish, transfer, bulk, marketplace", async () => {
     // Rust EIP-2333 path), so re-registering them with a freshly
     // JS-generated key would fail "already registered". A fresh
     // account has no BLS row yet, so this exercises the full path.
-    const sourceAccount = regtest.accounts[6]!.account;
-    const { account, fundingUtxo } = await regtest.createAccount({
+    const sourceAccount = regtest.accounts[6]!.signing;
+    const { signing, fundingUtxo } = await regtest.createAccount({
       sats: 200_000n,
       sourceUtxo: regtest.accounts[6]!.fundingUtxo,
       sourceAccount,
     });
     const session = new KontorSession({
       chain,
-      account,
-      transport: ({ chain, account }) =>
-        http({ chain, account, utxos: [fundingUtxo] }),
+      signing,
+      transport: ({ chain, identity, signing }) =>
+        http({ chain, identity, signing, utxos: [fundingUtxo] }),
     });
     try {
       await session.ready();
@@ -323,7 +323,7 @@ test("SDK capstone: publish, transfer, bulk, marketplace", async () => {
       // Read back the signer entry and assert the chain stored exactly
       // the bls_pubkey we just produced in JS.
       const res = await fetch(
-        `${regtest.apiUrl}/signers/${account.xOnlyPubKey}`,
+        `${regtest.apiUrl}/signers/${signing.identity.xOnlyPubKey}`,
       );
       expect(res.ok).toBe(true);
       const body = (await res.json()) as {
@@ -344,8 +344,8 @@ test("SDK capstone: publish, transfer, bulk, marketplace", async () => {
     // `createAccount`, the source's change output (same txid, vout 1)
     // becomes the source for the next call.
     let chainSource = regtest.accounts[7]!.fundingUtxo;
-    const chainSourceAccount = regtest.accounts[7]!.account;
-    const fund = async (sats: bigint): Promise<{ account: LocalAccount; fundingUtxo: Utxo }> => {
+    const chainSourceAccount = regtest.accounts[7]!.signing;
+    const fund = async (sats: bigint): Promise<{ signing: LocalKey; fundingUtxo: Utxo }> => {
       const r = await regtest.createAccount({
         sats,
         sourceUtxo: chainSource,
@@ -366,12 +366,12 @@ test("SDK capstone: publish, transfer, bulk, marketplace", async () => {
     /** Set a fresh account up as a contributor: open a session, mint
      *  tokens via Issuance (system-paid), and register a JS-generated
      *  BlsKey so the indexer can verify aggregate signatures. */
-    const setupContributor = async (a: { account: LocalAccount; fundingUtxo: Utxo }) => {
+    const setupContributor = async (a: { signing: LocalKey; fundingUtxo: Utxo }) => {
       const session = new KontorSession({
         chain,
-        account: a.account,
-        transport: ({ chain, account }) =>
-          http({ chain, account, utxos: [a.fundingUtxo] }),
+        signing: a.signing,
+        transport: ({ chain, identity, signing }) =>
+          http({ chain, identity, signing, utxos: [a.fundingUtxo] }),
       });
       await session.ready();
       await (await session.issuance().submit()).wait();
@@ -384,18 +384,18 @@ test("SDK capstone: publish, transfer, bulk, marketplace", async () => {
 
     const aggregatorSession = new KontorSession({
       chain,
-      account: aggregator.account,
-      transport: ({ chain, account }) =>
-        http({ chain, account, utxos: [aggregator.fundingUtxo] }),
+      signing: aggregator.signing,
+      transport: ({ chain, identity, signing }) =>
+        http({ chain, identity, signing, utxos: [aggregator.fundingUtxo] }),
     });
     try {
       await aggregatorSession.ready();
 
-      const recipientA = LocalAccount.fromPrivateKey({
+      const recipientA = LocalKey.fromPrivateKey({
         privateKey: "77".repeat(32),
         chain,
       });
-      const recipientB = LocalAccount.fromPrivateKey({
+      const recipientB = LocalKey.fromPrivateKey({
         privateKey: "88".repeat(32),
         chain,
       });
@@ -408,10 +408,10 @@ test("SDK capstone: publish, transfer, bulk, marketplace", async () => {
       const tokenB = cB.session.bind(Token, "token@0.0");
 
       const fragmentA = await tokenA
-        .transfer(recipientA.holderRef, Decimal.from("1"))
+        .transfer(recipientA.identity.holderRef, Decimal.from("1"))
         .signForAggregate(cA.blsKey);
       const fragmentB = await tokenB
-        .transfer(recipientB.holderRef, Decimal.from("2"))
+        .transfer(recipientB.identity.holderRef, Decimal.from("2"))
         .signForAggregate(cB.blsKey);
 
       expect(fragmentA.verify()).toBe(true);
@@ -429,8 +429,8 @@ test("SDK capstone: publish, transfer, bulk, marketplace", async () => {
       // through the aggregator's session (any session works — view
       // queries are stateless).
       const aggToken = aggregatorSession.bind(Token, "token@0.0");
-      expect((await aggToken.balance(recipientA.holderRef))?.toString()).toBe("1");
-      expect((await aggToken.balance(recipientB.holderRef))?.toString()).toBe("2");
+      expect((await aggToken.balance(recipientA.identity.holderRef))?.toString()).toBe("1");
+      expect((await aggToken.balance(recipientB.identity.holderRef))?.toString()).toBe("2");
     } finally {
       cA.session.close();
       cB.session.close();

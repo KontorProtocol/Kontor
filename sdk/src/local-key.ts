@@ -1,22 +1,22 @@
 /**
  * In-process signer. Holds a secp256k1 private key directly and signs
- * without it leaving the SDK — use it for backend services, CLIs,
- * tests, and the regtest devnet's pre-funded dev key.
+ * without it leaving the SDK — use it for backend services, CLIs, tests,
+ * and the regtest devnet's pre-funded dev key.
  *
- * Three constructors, all converging on the same shape: a 32-byte
- * secret, the BIP-340 x-only taproot pubkey, and the bech32m P2TR
- * address for the bound chain.
+ * A `LocalKey` is a `Signing` that carries its own `Identity`. Because it
+ * holds the seed it also exposes `schnorr` (so it's BLS-capable). Three
+ * constructors, all converging on the same shape:
  *
- *   - `LocalAccount.fromPrivateKey({ privateKey, chain })`
- *   - `LocalAccount.fromHdKey({ hdKey, chain, ... })`
- *   - `LocalAccount.fromMnemonic({ mnemonic, chain, ... })`
+ *   - `LocalKey.fromPrivateKey({ privateKey, chain })`
+ *   - `LocalKey.fromHdKey({ hdKey, chain, ... })`
+ *   - `LocalKey.fromMnemonic({ mnemonic, chain, ... })`
  *
- * HD derivation is BIP-86 — `m/86'/coin'/account'/change/address` —
- * with coin type 0 for mainnet and 1 for every test network. Address
- * encoding and PSBT signing run through `@scure/btc-signer`, the same
- * primitives Bitcoin Core verifies against; no custom crypto here.
+ * HD derivation is BIP-86 — `m/86'/coin'/account'/change/address` — with
+ * coin type 0 for mainnet and 1 for every test network. Address encoding
+ * and PSBT signing run through `@scure/btc-signer`.
  *
- * For browser / wallet-mediated signing, use `WalletAccount` instead.
+ * For browser / wallet-mediated signing, use a `@kontor/sdk/wallets/*`
+ * adapter instead.
  */
 
 import { hex } from "@scure/base";
@@ -26,15 +26,11 @@ import { wordlist } from "@scure/bip39/wordlists/english.js";
 import { SigHash, Transaction, p2tr, utils as btcUtils } from "@scure/btc-signer";
 import { signSchnorr } from "@scure/btc-signer/utils.js";
 
-import { HolderRef } from "../canonical/HolderRef.js";
-import { SignerError } from "../errors.js";
-import type {
-  BlsCapableAccount,
-  SighashKind,
-  SignPsbtOptions,
-} from "./index.js";
-import { AccountLock } from "./lock.js";
-import type { BitcoinNetwork, Chain } from "../chains.js";
+import { HolderRef } from "./canonical/HolderRef.js";
+import { SignerError } from "./errors.js";
+import type { Identity } from "./identity.js";
+import type { Signing, SighashKind, SignPsbtOptions } from "./signing.js";
+import type { BitcoinNetwork, Chain } from "./chains.js";
 
 /** `SighashKind` → the `@scure/btc-signer` sighash flag. `default` is
  *  absent: a default-sighash input gets no explicit `sighashType`. */
@@ -79,11 +75,8 @@ export interface FromMnemonicOptions extends Bip86Indices {
   passphrase?: string;
 }
 
-export class LocalAccount implements BlsCapableAccount {
-  readonly xOnlyPubKey: string;
-  readonly address: string;
-  readonly holderRef: HolderRef;
-  private readonly lock = new AccountLock();
+export class LocalKey implements Signing {
+  readonly identity: Identity;
 
   private constructor(
     /** Raw 32-byte secp256k1 secret. Held for the instance's lifetime. */
@@ -93,37 +86,39 @@ export class LocalAccount implements BlsCapableAccount {
     const xOnly = btcUtils.pubSchnorr(privateKey);
     const payment = p2tr(xOnly, undefined, network);
     if (payment.address == null) {
-      throw new SignerError("LocalAccount: could not derive a P2TR address");
+      throw new SignerError("LocalKey: could not derive a P2TR address");
     }
-    this.xOnlyPubKey = hex.encode(xOnly);
-    this.address = payment.address;
-    this.holderRef = HolderRef.xOnlyPubkey(this.xOnlyPubKey);
+    const xOnlyHex = hex.encode(xOnly);
+    this.identity = {
+      xOnlyPubKey: xOnlyHex,
+      address: payment.address,
+      holderRef: HolderRef.xOnlyPubkey(xOnlyHex),
+    };
   }
 
   /**
-   * Build an account from a raw 32-byte private key. The key is held in
+   * Build a signer from a raw 32-byte private key. The key is held in
    * memory for the lifetime of the instance.
    */
-  static fromPrivateKey(opts: FromPrivateKeyOptions): LocalAccount {
+  static fromPrivateKey(opts: FromPrivateKeyOptions): LocalKey {
     const key =
       typeof opts.privateKey === "string"
         ? hexToBytes(opts.privateKey)
         : opts.privateKey;
     if (key.length !== 32) {
-      throw new SignerError(
-        `private key must be 32 bytes, got ${key.length}`,
-        { docsPath: "/sdk/account" },
-      );
+      throw new SignerError(`private key must be 32 bytes, got ${key.length}`, {
+        docsPath: "/sdk/account",
+      });
     }
-    return new LocalAccount(key, opts.chain.network);
+    return new LocalKey(key, opts.chain.network);
   }
 
   /**
-   * Build an account from a `@scure/bip32` HD node, deriving the BIP-86
-   * (P2TR) child key. The node must be private (a master seed node or
-   * an xprv) — an xpub-only node has no private key to sign with.
+   * Build a signer from a `@scure/bip32` HD node, deriving the BIP-86
+   * (P2TR) child key. The node must be private (a master seed node or an
+   * xprv) — an xpub-only node has no private key to sign with.
    */
-  static fromHdKey(opts: FromHdKeyOptions): LocalAccount {
+  static fromHdKey(opts: FromHdKeyOptions): LocalKey {
     const path = opts.path ?? bip86Path(opts.chain, opts);
     const node = opts.hdKey.derive(path);
     if (node.privateKey == null) {
@@ -133,22 +128,22 @@ export class LocalAccount implements BlsCapableAccount {
         { docsPath: "/sdk/account" },
       );
     }
-    return new LocalAccount(node.privateKey, opts.chain.network);
+    return new LocalKey(node.privateKey, opts.chain.network);
   }
 
   /**
-   * Build an account from a BIP-39 mnemonic, deriving the key via the
+   * Build a signer from a BIP-39 mnemonic, deriving the key via the
    * BIP-86 path `m/86'/coin'/account'/change/address`. `coin` is taken
    * from the chain — 0 for mainnet, 1 for every test network.
    */
-  static fromMnemonic(opts: FromMnemonicOptions): LocalAccount {
+  static fromMnemonic(opts: FromMnemonicOptions): LocalKey {
     if (!validateMnemonic(opts.mnemonic, wordlist)) {
       throw new SignerError("fromMnemonic: invalid BIP-39 mnemonic", {
         docsPath: "/sdk/account",
       });
     }
     const seed = mnemonicToSeedSync(opts.mnemonic, opts.passphrase);
-    return LocalAccount.fromHdKey({
+    return LocalKey.fromHdKey({
       hdKey: HDKey.fromMasterSeed(seed),
       chain: opts.chain,
       accountIndex: opts.accountIndex,
@@ -157,17 +152,7 @@ export class LocalAccount implements BlsCapableAccount {
     });
   }
 
-  signMessage(_message: string | Uint8Array): Promise<string> {
-    return Promise.reject(
-      new SignerError(
-        "LocalAccount.signMessage: not yet implemented — BIP-322 message " +
-          "signing lands with the wallet/auth work, not the contract-call path",
-        { docsPath: "/sdk/account" },
-      ),
-    );
-  }
-
-  signPsbt(psbt: Uint8Array, opts?: SignPsbtOptions): Promise<Uint8Array> {
+  psbt(psbt: Uint8Array, opts?: SignPsbtOptions): Promise<Uint8Array> {
     let tx: Transaction;
     try {
       tx = Transaction.fromPSBT(psbt);
@@ -205,22 +190,16 @@ export class LocalAccount implements BlsCapableAccount {
     return Promise.resolve(tx.toPSBT());
   }
 
-  signSchnorr(digest: Uint8Array): Promise<Uint8Array> {
+  schnorr(digest: Uint8Array): Promise<Uint8Array> {
     if (digest.length !== 32) {
       return Promise.reject(
-        new SignerError(
-          `signSchnorr: digest must be 32 bytes, got ${digest.length}`,
-        ),
+        new SignerError(`signSchnorr: digest must be 32 bytes, got ${digest.length}`),
       );
     }
     // Deterministic schnorr (no aux rand) — matches the indexer-side
-    // `RegistrationProof::new` so the resulting signature is byte-for-
-    // byte the shape the chain verifier expects.
+    // `RegistrationProof::new` so the resulting signature is byte-for-byte
+    // the shape the chain verifier expects.
     return Promise.resolve(signSchnorr(digest, this.privateKey));
-  }
-
-  runExclusive<T>(fn: () => Promise<T>): Promise<T> {
-    return this.lock.runExclusive(fn);
   }
 }
 

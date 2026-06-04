@@ -23,8 +23,8 @@ import { SigHash, Transaction } from "@scure/btc-signer";
 
 import { HolderRef } from "../canonical/HolderRef.js";
 import { SignerError } from "../errors.js";
-import type { Account, SighashKind, SignInput, SignPsbtOptions } from "./index.js";
-import { AccountLock } from "./lock.js";
+import type { Identity } from "../identity.js";
+import type { Signing, SighashKind, SignInput, SignPsbtOptions } from "../signing.js";
 import type { Chain } from "../chains.js";
 
 /** A sats-connect-style RPC response envelope. */
@@ -63,20 +63,19 @@ interface AddressEntry {
   purpose?: string;
 }
 
-export class WalletAccount implements Account {
-  readonly xOnlyPubKey: string;
-  readonly address: string;
-  readonly holderRef: HolderRef;
-  private readonly lock = new AccountLock();
+export class WalletAccount implements Signing {
+  readonly identity: Identity;
 
   private constructor(
     private readonly request: WalletRequest,
     xOnlyPubKey: string,
     address: string,
   ) {
-    this.xOnlyPubKey = xOnlyPubKey;
-    this.address = address;
-    this.holderRef = HolderRef.xOnlyPubkey(xOnlyPubKey);
+    this.identity = {
+      xOnlyPubKey,
+      address,
+      holderRef: HolderRef.xOnlyPubkey(xOnlyPubKey),
+    };
   }
 
   /**
@@ -119,19 +118,22 @@ export class WalletAccount implements Account {
     );
   }
 
-  async signMessage(message: string | Uint8Array): Promise<string> {
+  async message(message: string | Uint8Array): Promise<string> {
     const msg = typeof message === "string" ? message : hex.encode(message);
     const result = unwrap(
-      await this.request("signMessage", { address: this.address, message: msg }),
+      await this.request("signMessage", {
+        address: this.identity.address,
+        message: msg,
+      }),
       "signMessage",
     ) as { signature?: string };
     if (typeof result.signature !== "string") {
-      throw new SignerError("WalletAccount.signMessage: wallet returned no signature");
+      throw new SignerError("WalletAccount.message: wallet returned no signature");
     }
     return result.signature;
   }
 
-  async signPsbt(psbt: Uint8Array, opts?: SignPsbtOptions): Promise<Uint8Array> {
+  async psbt(psbt: Uint8Array, opts?: SignPsbtOptions): Promise<Uint8Array> {
     if (opts?.inputs == null) {
       // The SDK's signCommit/signReveal always pass an explicit inputs spec
       // (sats-connect-style wallets require one), so we never have to walk
@@ -167,7 +169,7 @@ export class WalletAccount implements Account {
 
     const params: Record<string, unknown> = {
       psbt: base64.encode(outgoing),
-      signInputs: { [this.address]: opts.inputs.map((i) => i.index) },
+      signInputs: { [this.identity.address]: opts.inputs.map((i) => i.index) },
       broadcast: false,
     };
     if (kind !== "default") params.allowedSignHash = SIGHASH_NUMBER[kind];
@@ -177,13 +179,9 @@ export class WalletAccount implements Account {
       "signPsbt",
     ) as { psbt?: string };
     if (typeof result.psbt !== "string") {
-      throw new SignerError("WalletAccount.signPsbt: wallet returned no signed PSBT");
+      throw new SignerError("WalletAccount.psbt: wallet returned no signed PSBT");
     }
     return base64.decode(result.psbt);
-  }
-
-  runExclusive<T>(fn: () => Promise<T>): Promise<T> {
-    return this.lock.runExclusive(fn);
   }
 }
 

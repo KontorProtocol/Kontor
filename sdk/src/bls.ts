@@ -19,7 +19,7 @@ import { hex } from "@scure/base";
 import { utils as btcUtils } from "@scure/btc-signer";
 import { sha256 } from "@scure/btc-signer/utils.js";
 
-import type { BlsCapableAccount } from "./account/index.js";
+import type { Signing } from "./signing.js";
 import {
   blsPubkeyFromSecret,
   blsSecretFromSeedEip2333,
@@ -136,15 +136,15 @@ const BLS_BINDING_PREFIX = new TextEncoder().encode("KONTOR_BLS_TO_XONLY_V1");
  * via the generated `Inst.RegisterBlsKey` shape from `bindings`.
  */
 export async function buildRegistrationProof(
-  account: BlsCapableAccount,
+  signing: Signing & { schnorr(digest: Uint8Array): Promise<Uint8Array> },
   blsKey: BlsKey,
 ): Promise<{ blsPubkey: Uint8Array; schnorrSig: Uint8Array; blsSig: Uint8Array }> {
   const schnorrMsg = sha256(
     btcUtils.concatBytes(SCHNORR_BINDING_PREFIX, blsKey.pubkey),
   );
-  const schnorrSig = await account.signSchnorr(schnorrMsg);
+  const schnorrSig = await signing.schnorr(schnorrMsg);
 
-  const xonly = hex.decode(account.xOnlyPubKey);
+  const xonly = hex.decode(signing.identity.xOnlyPubKey);
   const blsMsg = btcUtils.concatBytes(BLS_BINDING_PREFIX, xonly);
   const blsSig = blsKey.signBls(blsMsg);
 

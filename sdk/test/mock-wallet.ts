@@ -7,8 +7,8 @@
  */
 import { base64 } from "@scure/base";
 import { SigHash } from "@scure/btc-signer";
-import type { LocalAccount } from "../src/account/local.js";
-import type { SighashKind } from "../src/account/index.js";
+import type { LocalKey } from "../src/local-key.js";
+import type { SighashKind } from "../src/signing.js";
 import type {
   WalletRequest,
   WalletRpcResponse,
@@ -23,7 +23,7 @@ export interface MockWalletOptions {
 
 /** Build a `WalletRequest` that signs with `account`. */
 export function mockWalletRequest(
-  account: LocalAccount,
+  signing: LocalKey,
   opts?: MockWalletOptions,
 ): WalletRequest {
   return async (method, params): Promise<WalletRpcResponse> => {
@@ -33,13 +33,13 @@ export function mockWalletRequest(
         // A fake `02` prefix is fine — `normalizeXOnly` only strips a byte.
         const publicKey =
           opts?.pubkeyForm === "compressed"
-            ? `02${account.xOnlyPubKey}`
-            : account.xOnlyPubKey;
+            ? `02${signing.identity.xOnlyPubKey}`
+            : signing.identity.xOnlyPubKey;
         return {
           status: "success",
           result: [
             {
-              address: account.address,
+              address: signing.identity.address,
               publicKey,
               addressType: opts?.addressType ?? "p2tr",
               purpose: "payment",
@@ -63,9 +63,9 @@ export function mockWalletRequest(
           signInputs: Record<string, number[]>;
           allowedSignHash?: number;
         };
-        const indexes = p.signInputs[account.address] ?? [];
+        const indexes = p.signInputs[signing.identity.address] ?? [];
         const sighash = allowedSignHashToKind(p.allowedSignHash);
-        const signed = await account.signPsbt(base64.decode(p.psbt), {
+        const signed = await signing.psbt(base64.decode(p.psbt), {
           inputs: indexes.map((index) => ({ index, sighash })),
         });
         return { status: "success", result: { psbt: base64.encode(signed) } };

@@ -4,11 +4,11 @@
  * via `bind(ContractClass, address)`; execute Insts (single, bulk, or
  * aggregate) through the session.
  *
- *     const session = new KontorSession({ chain: signet, account });
+ *     const session = new KontorSession({ chain: signet, signing });
  *     const token = session.bind(Token, "token@0.0");
  *
  *     // View — Promise<T> directly, hits transport.view (no tx)
- *     const balance = await token.balance(account.holderRef);
+ *     const balance = await token.balance(session.identity.holderRef);
  *
  *     // Proc single — await the Inst fires submit; throws on non-Ok
  *     await token.transfer(dst, amt);
@@ -20,7 +20,7 @@
  *     );
  *
  *     // Aggregate (contributor)
- *     const fragment = await token.transfer(dst, amt).signForAggregate(account);
+ *     const fragment = await token.transfer(dst, amt).signForAggregate(blsKey);
  *     // out-of-band: send fragment.serialize() to the aggregator
  *
  *     // Aggregate (aggregator)
@@ -32,7 +32,8 @@
  */
 
 import { ContractAddress } from "./canonical/ContractAddress.js";
-import { isBlsCapable, type Account } from "./account/index.js";
+import { canSignSchnorr, type Signing } from "./signing.js";
+import type { Identity } from "./identity.js";
 import { BlsKey, buildRegistrationProof } from "./bls.js";
 import type { Chain } from "./chains.js";
 import { hex } from "@scure/base";
@@ -55,7 +56,9 @@ import type { KontorTransport } from "./json-codec.js";
 
 export interface KontorSessionOptions {
   chain: Chain;
-  account: Account;
+  /** The signing capability for this session. Carries its own `identity`
+   *  (so identity and key can't be mismatched). */
+  signing: Signing;
   /**
    * Override the default `HttpTransport`. Useful for tests (swap in a
    * mock) or for custom backends that proxy through a different
@@ -64,7 +67,8 @@ export interface KontorSessionOptions {
    */
   transport?: (opts: {
     chain: Chain;
-    account: Account;
+    identity: Identity;
+    signing: Signing;
     feeRate: number | null;
   }) => KontorTransport;
   /**
@@ -114,7 +118,10 @@ type InstResults<Ts extends readonly Inst<unknown>[]> = {
 
 export class KontorSession {
   readonly chain: Chain;
-  readonly account: Account;
+  /** The signing capability bound to this session. */
+  readonly signing: Signing;
+  /** Who this session acts as — `signing.identity`, cached. */
+  readonly identity: Identity;
   /** Public so `Inst<T>` / `Insts<T>` can route through it directly. */
   readonly transport: KontorTransport;
   /** Default gas cap for proc `Inst`s; see `KontorSessionOptions`. */
@@ -130,16 +137,23 @@ export class KontorSession {
 
   constructor(opts: KontorSessionOptions) {
     this.chain = opts.chain;
-    this.account = opts.account;
+    this.signing = opts.signing;
+    this.identity = opts.signing.identity;
     this.defaultGasLimit = opts.defaultGasLimit ?? DEFAULT_GAS_LIMIT;
     this.feeRate = opts.feeRate ?? null;
     const make =
       opts.transport ??
-      (({ chain, account, feeRate }) =>
-        new HttpTransport({ chain, account, feeRate: feeRate ?? undefined }));
+      (({ chain, identity, signing, feeRate }) =>
+        new HttpTransport({
+          chain,
+          identity,
+          signing,
+          feeRate: feeRate ?? undefined,
+        }));
     this.transport = make({
       chain: opts.chain,
-      account: opts.account,
+      identity: this.identity,
+      signing: opts.signing,
       feeRate: this.feeRate,
     });
     this.poller = new ResultsPoller({
@@ -213,14 +227,15 @@ export class KontorSession {
    * different non-thenable handle when that work lands.
    */
   async registerBls(blsKey: BlsKey): Promise<void> {
-    if (!isBlsCapable(this.account)) {
+    const signing = this.signing;
+    if (!canSignSchnorr(signing)) {
       throw new SignerError(
-        "registerBls requires a seed-holding (BLS-capable) account — a " +
-          "browser-wallet account can't produce the Taproot↔BLS binding signature",
+        "registerBls requires a seed-holding (BLS-capable) signer — a " +
+          "browser-wallet signer can't produce the Taproot↔BLS binding signature",
         { docsPath: "/sdk/bls" },
       );
     }
-    const proof = await buildRegistrationProof(this.account, blsKey);
+    const proof = await buildRegistrationProof(signing, blsKey);
     const inst = new Inst<void>(
       this,
       this.defaultGasLimit,
