@@ -57,9 +57,20 @@ import type { KontorTransport } from "./json-codec.js";
 
 export interface KontorSessionOptions {
   chain: Chain;
-  /** The signing capability for this session. Carries its own `identity`
-   *  (so identity and key can't be mismatched). */
-  signing: Signing;
+  /**
+   * The signing capability for this session. Carries its own `identity`
+   * (so identity and key can't be mismatched). Omit for a **read-only**
+   * session — pass `identity` instead. A read-only session can `view`
+   * (and is safe to build on a server / in an RSC); `submit` / `inspect`
+   * / `simulate` / `registerBls` throw.
+   */
+  signing?: Signing;
+  /**
+   * Identity for a read-only session, when no `signing` is given. Ignored
+   * if `signing` is present (its `signing.identity` wins). A plain
+   * serializable value — no key material — so it's safe server-side.
+   */
+  identity?: Identity;
   /**
    * Where the default transport gets spendable UTXOs (and reports back
    * spent/change). Use `inMemoryFunding([utxo])` for optimistic chaining
@@ -77,7 +88,8 @@ export interface KontorSessionOptions {
   transport?: (opts: {
     chain: Chain;
     identity: Identity;
-    signing: Signing;
+    /** Absent for a read-only session. */
+    signing: Signing | undefined;
     feeRate: number | null;
   }) => KontorTransport;
   /**
@@ -127,9 +139,11 @@ type InstResults<Ts extends readonly Inst<unknown>[]> = {
 
 export class KontorSession {
   readonly chain: Chain;
-  /** The signing capability bound to this session. */
-  readonly signing: Signing;
-  /** Who this session acts as — `signing.identity`, cached. */
+  /** The signing capability bound to this session, or `undefined` for a
+   *  read-only session. */
+  readonly signing: Signing | undefined;
+  /** Who this session acts as — from `signing.identity` or the read-only
+   *  `identity` option. */
   readonly identity: Identity;
   /** Public so `Inst<T>` / `Insts<T>` can route through it directly. */
   readonly transport: KontorTransport;
@@ -139,15 +153,24 @@ export class KontorSession {
    *  indexer pick its current `fastest_fee`. */
   readonly feeRate: number | null;
   /**
-   * The session's results poller — one shared loop, started here in the
-   * constructor. Backs `events()` and (later) `inst.submit().wait()`.
+   * The session's results poller — one shared loop. Started lazily on the
+   * first `events()` / `ready()` (and thus `submit().wait()`), so just
+   * constructing a session has no side effects and a read-only / view-only
+   * session never starts a loop. `close()` stops it.
    */
   private readonly poller: ResultsPoller;
 
   constructor(opts: KontorSessionOptions) {
+    const identity = opts.signing?.identity ?? opts.identity;
+    if (identity == null) {
+      throw new SignerError(
+        "KontorSession requires `signing` (read+write) or `identity` (read-only)",
+        { docsPath: "/sdk/session" },
+      );
+    }
     this.chain = opts.chain;
     this.signing = opts.signing;
-    this.identity = opts.signing.identity;
+    this.identity = identity;
     this.defaultGasLimit = opts.defaultGasLimit ?? DEFAULT_GAS_LIMIT;
     this.feeRate = opts.feeRate ?? null;
     const make =
@@ -172,7 +195,6 @@ export class KontorSession {
       from: opts.events?.from,
       filter: opts.events?.filter,
     });
-    this.poller.start();
   }
 
   /**
@@ -238,10 +260,11 @@ export class KontorSession {
    */
   async registerBls(blsKey: BlsKey): Promise<void> {
     const signing = this.signing;
-    if (!canSignSchnorr(signing)) {
+    if (signing == null || !canSignSchnorr(signing)) {
       throw new SignerError(
         "registerBls requires a seed-holding (BLS-capable) signer — a " +
-          "browser-wallet signer can't produce the Taproot↔BLS binding signature",
+          "read-only or browser-wallet session can't produce the Taproot↔BLS " +
+          "binding signature",
         { docsPath: "/sdk/bls" },
       );
     }
@@ -405,6 +428,7 @@ export class KontorSession {
    * via `KontorSessionOptions.events` — not per call.
    */
   events(): AsyncIterableIterator<ChainEvent> {
+    this.poller.start(); // idempotent — lazy-starts the loop on first use
     return this.poller.events();
   }
 
@@ -414,6 +438,7 @@ export class KontorSession {
    * after the poller's bootstrap retries.
    */
   ready(): Promise<void> {
+    this.poller.start(); // idempotent — lazy-starts the loop on first use
     return this.poller.ready();
   }
 

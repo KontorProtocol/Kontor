@@ -56,6 +56,12 @@ export class Attachment<T> {
    */
   async offer(opts: { price: bigint }): Promise<Offer> {
     const { transport, identity, signing } = this.session;
+    if (signing == null) {
+      throw new TransportError(
+        "Attachment.offer requires a signer — this is a read-only session",
+        { docsPath: "/sdk/offer" },
+      );
+    }
     const attachWire: WireInsts = {
       ops: [instToWire(this.attach)],
       aggregate: null,

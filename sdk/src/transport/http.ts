@@ -56,8 +56,10 @@ export interface HttpTransportOptions {
   chain: Chain;
   /** Identity funding + signing for this transport (the P2TR address/key). */
   identity: Identity;
-  /** Signing capability — the SDK calls `signing.psbt(...)` to authorize. */
-  signing: Signing;
+  /** Signing capability — the SDK calls `signing.psbt(...)` to authorize.
+   *  Absent for a read-only transport (`view` works; submit/inspect/simulate
+   *  throw). */
+  signing?: Signing;
 
   /** Override the chain's HTTP endpoint. */
   url?: string;
@@ -107,6 +109,18 @@ export class HttpTransport implements KontorTransport {
   constructor(private readonly opts: HttpTransportOptions) {
     this.baseUrl = (opts.url ?? opts.chain.urls.http).replace(/\/+$/, "");
     this.fetchImpl = opts.fetch ?? globalThis.fetch.bind(globalThis);
+  }
+
+  /** The signer, or a clear error on a read-only transport. */
+  private requireSigning(): Signing {
+    if (this.opts.signing == null) {
+      throw new ChainError(
+        "this is a read-only session (no signer) — only `view` is available; " +
+          "construct with `signing` to submit/inspect/simulate",
+        { docsPath: "/sdk/session" },
+      );
+    }
+    return this.opts.signing;
   }
 
   /** The funding source, or a clear error if none was configured. */
@@ -244,7 +258,7 @@ export class HttpTransport implements KontorTransport {
     revealTx: Transaction;
     composed: ComposeOutputs;
   }> {
-    const { signing } = this.opts;
+    const signing = this.requireSigning();
     const composed = await this.compose(reveal);
     const commitHexes = await Promise.all(
       composed.commits.map((c) => signCommit(signing, c.psbt_hex)),
