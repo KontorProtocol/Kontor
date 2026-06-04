@@ -237,12 +237,12 @@ test("Wit construction rejects WIT that fails validation", () => {
     export bad-func: async func(val: string) -> string;
 }`;
   const w = new Wit(badWit);
-  expect(() => w.encodeCall("bad-func", '{}')).toThrow(/WIT validation/);
+  expect(() => w.encodeCall("bad-func", "{}")).toThrow(/WIT validation/);
 });
 
 test("Wit construction rejects malformed WIT", () => {
   const w = new Wit("this is not valid wit at all");
-  expect(() => w.encodeCall("anything", '{}')).toThrow(/WIT parse error/);
+  expect(() => w.encodeCall("anything", "{}")).toThrow(/WIT parse error/);
 });
 
 test("Wit.encodeCall errors when function missing", () => {
@@ -364,7 +364,7 @@ test("Wit option<string> round-trips with null for none, value for some", () => 
   const w = new Wit(wit);
 
   // none ↔ null
-  expect(w.encodeCall("echo", '{"x": null}')).toBe('echo(none)');
+  expect(w.encodeCall("echo", '{"x": null}')).toBe("echo(none)");
   expect(w.decodeResult("echo", "none")).toBe("null");
 
   // some ↔ inner value directly (no wrapping)
@@ -386,7 +386,7 @@ test("Wit option<u64> round-trips preserving bigint-quoting", () => {
   expect(JSON.parse(decoded)).toBe(max);
 
   // none still null even for bigint inner
-  expect(w.encodeCall("echo", '{"x": null}')).toBe('echo(none)');
+  expect(w.encodeCall("echo", '{"x": null}')).toBe("echo(none)");
   expect(w.decodeResult("echo", "none")).toBe("null");
 });
 
@@ -411,9 +411,9 @@ test("Wit variant round-trips: unit cases as {kind}, payload cases as {kind,valu
   expect(w.decodeResult("run", "retry")).toBe('{"kind":"retry"}');
 
   // payload case with string
-  expect(w.encodeCall("run", '{"o": {"kind": "success", "value": "done"}}')).toBe(
-    'run(success("done"))',
-  );
+  expect(
+    w.encodeCall("run", '{"o": {"kind": "success", "value": "done"}}'),
+  ).toBe('run(success("done"))');
   expect(w.decodeResult("run", 'success("done")')).toBe(
     '{"kind":"success","value":"done"}',
   );
@@ -453,9 +453,9 @@ test("Wit variant rejects shape mismatches (value on unit case, missing value on
   expect(() =>
     w.encodeCall("run", '{"o": {"kind": "unit", "value": "bad"}}'),
   ).toThrow(/is unit but JSON has 'value'/);
-  expect(() =>
-    w.encodeCall("run", '{"o": {"kind": "with-payload"}}'),
-  ).toThrow(/requires 'value' field/);
+  expect(() => w.encodeCall("run", '{"o": {"kind": "with-payload"}}')).toThrow(
+    /requires 'value' field/,
+  );
 });
 
 // ─── result<T, E> ─────────────────────────────────────────────────────
@@ -627,7 +627,10 @@ test("smoke: decodeResult against real token.wit balance (option<decimal>)", () 
   //   some({r0: 42, r1: 0, r2: 0, r3: 0, sign: plus})
   expect(
     JSON.parse(
-      w.decodeResult("balance", "some({r0: 42, r1: 0, r2: 0, r3: 0, sign: plus})"),
+      w.decodeResult(
+        "balance",
+        "some({r0: 42, r1: 0, r2: 0, r3: 0, sign: plus})",
+      ),
     ),
   ).toEqual({ r0: "42", r1: "0", r2: "0", r3: "0", sign: "plus" });
 
@@ -725,13 +728,14 @@ test("codegen Tier 1: result<T,E> renders as discriminated union", () => {
   const out = generate(tokenWit);
   // hold returns result<transfer, error>; should render as
   // { kind: "ok"; value: ... } | { kind: "err"; value: ... }
-  expect(out).toMatch(/\{ kind: "ok"; value: .+ \} \| \{ kind: "err"; value: .+ \}/);
+  expect(out).toMatch(
+    /\{ kind: "ok"; value: .+ \} \| \{ kind: "err"; value: .+ \}/,
+  );
 });
 
 test("codegen Tier 1: rejects invalid WIT", () => {
   expect(() => generate("garbage")).toThrow(/WIT parse error/);
 });
-
 
 // ─── codegen Tier 2: Contract class end-to-end ────────────────────────
 
@@ -1047,4 +1051,3 @@ test("ContractAddress: fromRaw decodes string-quoted bigints", () => {
 test("ContractAddress: toString gives a human-readable form", () => {
   expect(new ContractAddress("foo", 100n, 3n).toString()).toBe("foo@100.3");
 });
-

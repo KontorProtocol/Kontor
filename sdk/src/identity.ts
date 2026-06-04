@@ -35,7 +35,9 @@ export const Identity = {
     const lower = xOnlyPubKey.toLowerCase().replace(/^0x/, "");
     const payment = p2tr(hex.decode(lower), undefined, chain.network);
     if (payment.address == null) {
-      throw new SignerError("Identity.fromXOnly: could not derive a P2TR address");
+      throw new SignerError(
+        "Identity.fromXOnly: could not derive a P2TR address",
+      );
     }
     return {
       xOnlyPubKey: lower,

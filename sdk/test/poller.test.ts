@@ -76,7 +76,10 @@ function mockFetch(opts: {
       pollCount += 1;
       result = opts.infos[Math.min(pollCount, opts.infos.length - 1)];
     } else if (path.startsWith("/results")) {
-      result = { results: opts.results ?? [], pagination: { has_more: false, next_offset: null, total_count: 0 } };
+      result = {
+        results: opts.results ?? [],
+        pagination: { has_more: false, next_offset: null, total_count: 0 },
+      };
     } else {
       throw new Error(`unexpected mock path: ${path}`);
     }
@@ -114,8 +117,18 @@ function row(
 test("ResultsPoller: drains results into a per-tx event", async () => {
   const fetch = mockFetch({
     infos: [
-      { height: 1, last_result_id: 0, recent_blocks: [{ height: 1, hash: "a" }], signature: "s0" },
-      { height: 1, last_result_id: 2, recent_blocks: [{ height: 1, hash: "a" }], signature: "s1" },
+      {
+        height: 1,
+        last_result_id: 0,
+        recent_blocks: [{ height: 1, hash: "a" }],
+        signature: "s0",
+      },
+      {
+        height: 1,
+        last_result_id: 2,
+        recent_blocks: [{ height: 1, hash: "a" }],
+        signature: "s1",
+      },
     ],
     // two distinct ops (op_index 0 and 1) of one txid → one `tx` event,
     // two outcomes.
@@ -145,8 +158,18 @@ test("ResultsPoller: collapses one op's rows to its max-result_index result", as
   // — one canonical outcome, mirroring the indexer's `get_op_result`.
   const fetch = mockFetch({
     infos: [
-      { height: 1, last_result_id: 0, recent_blocks: [{ height: 1, hash: "a" }], signature: "s0" },
-      { height: 1, last_result_id: 2, recent_blocks: [{ height: 1, hash: "a" }], signature: "s1" },
+      {
+        height: 1,
+        last_result_id: 0,
+        recent_blocks: [{ height: 1, hash: "a" }],
+        signature: "s0",
+      },
+      {
+        height: 1,
+        last_result_id: 2,
+        recent_blocks: [{ height: 1, hash: "a" }],
+        signature: "s1",
+      },
     ],
     results: [
       { ...row(1, "txGG", 1, 0, 0), func: "release", gas: 5 },
@@ -208,7 +231,12 @@ test("ResultsPoller: a changed recent-block hash yields a reorg event", async ()
 test("ResultsPoller: ready() resolves once the node is reachable", async () => {
   const fetch = mockFetch({
     infos: [
-      { height: 1, last_result_id: 0, recent_blocks: [{ height: 1, hash: "a" }], signature: "s0" },
+      {
+        height: 1,
+        last_result_id: 0,
+        recent_blocks: [{ height: 1, hash: "a" }],
+        signature: "s0",
+      },
     ],
   });
   const poller = new ResultsPoller({ baseUrl: "http://test/api", fetch });

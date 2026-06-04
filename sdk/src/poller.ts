@@ -23,7 +23,12 @@
  * share one polling loop, each getting its own fan-out queue.
  */
 
-import type { BlockRow, Info, PaginatedResponse, ResultRow } from "./bindings.js";
+import type {
+  BlockRow,
+  Info,
+  PaginatedResponse,
+  ResultRow,
+} from "./bindings.js";
 import type { ChainEvent, EventsFilter } from "./events.js";
 import { DeepReorgError, TransportError } from "./errors.js";
 import type { OpResultRaw } from "./json-codec.js";
@@ -236,7 +241,9 @@ export class ResultsPoller {
         // retry, since an always-on poller must survive these.
         if (e instanceof DeepReorgError) throw e;
         failures += 1;
-        await this.sleep(Math.min(this.backoff * failures, MAX_RETRY_BACKOFF_MS));
+        await this.sleep(
+          Math.min(this.backoff * failures, MAX_RETRY_BACKOFF_MS),
+        );
       }
     }
   }
@@ -286,7 +293,9 @@ export class ResultsPoller {
    * window; if every cached height there disagrees, the slow path
    * walks `/api/blocks/{h}` down to the fork.
    */
-  private async detectReorg(recent: ReadonlyArray<Info["recent_blocks"][number]>): Promise<void> {
+  private async detectReorg(
+    recent: ReadonlyArray<Info["recent_blocks"][number]>,
+  ): Promise<void> {
     const diverged = recent.some((b) => {
       const cached = this.cache.get(b.height);
       return cached !== undefined && cached !== b.hash;

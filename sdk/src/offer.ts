@@ -21,7 +21,12 @@
  */
 
 import { hex } from "@scure/base";
-import { TaprootControlBlock, Transaction, p2tr, utils as btcUtils } from "@scure/btc-signer";
+import {
+  TaprootControlBlock,
+  Transaction,
+  p2tr,
+  utils as btcUtils,
+} from "@scure/btc-signer";
 
 import type { Signing } from "./signing.js";
 import type { Reveal, TapLeafScript } from "./bindings.js";
@@ -41,10 +46,7 @@ function opReturnScript(payload: Uint8Array): Uint8Array {
   if (payload.length >= 0x4c) {
     throw new SignerError("offer: OP_RETURN payload too large");
   }
-  return btcUtils.concatBytes(
-    new Uint8Array([0x6a, payload.length]),
-    payload,
-  );
+  return btcUtils.concatBytes(new Uint8Array([0x6a, payload.length]), payload);
 }
 
 /**
@@ -116,7 +118,10 @@ export class Offer {
     const { identity, chain, transport } = this.session;
 
     // The escrow — the attach reveal's output 0.
-    const attachReveal = Transaction.fromRaw(hex.decode(data.attachReveal), LENIENT_TX);
+    const attachReveal = Transaction.fromRaw(
+      hex.decode(data.attachReveal),
+      LENIENT_TX,
+    );
     const escrow = attachReveal.getOutput(0);
     if (escrow.script == null || escrow.amount == null) {
       throw new SignerError("revoke: attach reveal has no escrow output 0", {

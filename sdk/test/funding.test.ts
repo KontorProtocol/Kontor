@@ -8,13 +8,22 @@ import { inMemoryFunding, queryFunding } from "../src/funding.js";
 import type { Utxo } from "../src/json-codec.js";
 
 function utxo(tag: string, value: bigint): Utxo {
-  return { txid: tag.repeat(64).slice(0, 64), vout: 0, value, scriptPubKey: "51" };
+  return {
+    txid: tag.repeat(64).slice(0, 64),
+    vout: 0,
+    value,
+    scriptPubKey: "51",
+  };
 }
 
 const values = (us: Utxo[]): bigint[] => us.map((u) => u.value);
 
 test("inMemoryFunding: take() returns the pool smallest-value-first", async () => {
-  const f = inMemoryFunding([utxo("a", 50_000n), utxo("b", 330n), utxo("c", 10_000n)]);
+  const f = inMemoryFunding([
+    utxo("a", 50_000n),
+    utxo("b", 330n),
+    utxo("c", 10_000n),
+  ]);
   expect(values(await f.take())).toEqual([330n, 10_000n, 50_000n]);
 });
 

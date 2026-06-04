@@ -292,7 +292,9 @@ function parseIdentity(raw: unknown): RegtestIdentity {
     typeof i.publicKey !== "string" ||
     typeof i.address !== "string"
   ) {
-    throw new Error("KONTOR_REGTEST_INFO: identity has missing or mistyped fields");
+    throw new Error(
+      "KONTOR_REGTEST_INFO: identity has missing or mistyped fields",
+    );
   }
   return {
     privateKey: i.privateKey,
@@ -305,7 +307,9 @@ function parseIdentity(raw: unknown): RegtestIdentity {
 /** Parse + validate one funding-UTXO object into a `Utxo`. */
 function parseFundingUtxo(raw: unknown): Utxo {
   if (typeof raw !== "object" || raw === null) {
-    throw new Error("KONTOR_REGTEST_INFO: fundingUtxo missing or not an object");
+    throw new Error(
+      "KONTOR_REGTEST_INFO: fundingUtxo missing or not an object",
+    );
   }
   const u = raw as Record<string, unknown>;
   if (
@@ -314,10 +318,17 @@ function parseFundingUtxo(raw: unknown): Utxo {
     typeof u.value !== "number" ||
     typeof u.scriptPubKey !== "string"
   ) {
-    throw new Error("KONTOR_REGTEST_INFO: fundingUtxo has missing or mistyped fields");
+    throw new Error(
+      "KONTOR_REGTEST_INFO: fundingUtxo has missing or mistyped fields",
+    );
   }
   // `value` arrives as a JSON number of satoshis; `Utxo.value` is bigint.
-  return { txid: u.txid, vout: u.vout, value: BigInt(u.value), scriptPubKey: u.scriptPubKey };
+  return {
+    txid: u.txid,
+    vout: u.vout,
+    value: BigInt(u.value),
+    scriptPubKey: u.scriptPubKey,
+  };
 }
 
 /** Resolve the `kontor` binary path: explicit option → `$KONTOR_BIN` → PATH. */
@@ -344,7 +355,12 @@ async function bitcoinRpc(
       "content-type": "application/json",
       ...(auth != null ? { authorization: `Basic ${auth}` } : {}),
     },
-    body: JSON.stringify({ jsonrpc: "1.0", id: "kontor-regtest", method, params }),
+    body: JSON.stringify({
+      jsonrpc: "1.0",
+      id: "kontor-regtest",
+      method,
+      params,
+    }),
   });
   const json = (await res.json()) as { result?: unknown; error?: unknown };
   if (json.error != null) {
@@ -607,7 +623,9 @@ export async function startRegtest(
     }
 
     function onError(err: Error): void {
-      finish(new Error(`startRegtest: failed to spawn '${bin}': ${err.message}`));
+      finish(
+        new Error(`startRegtest: failed to spawn '${bin}': ${err.message}`),
+      );
     }
 
     function onExit(code: number | null, signal: NodeJS.Signals | null): void {

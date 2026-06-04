@@ -12,7 +12,7 @@ import type { SighashKind } from "../src/signing.js";
 import type {
   WalletRequest,
   WalletRpcResponse,
-} from "../src/account/wallet.js";
+} from "../src/wallets/sats-connect.js";
 
 export interface MockWalletOptions {
   /** `addressType` the mock reports for its address (default `"p2tr"`). */
@@ -53,7 +53,9 @@ export function mockWalletRequest(
         // deterministic placeholder so the request path stays testable.
         return {
           status: "success",
-          result: { signature: base64.encode(new TextEncoder().encode("mock-sig")) },
+          result: {
+            signature: base64.encode(new TextEncoder().encode("mock-sig")),
+          },
         };
       }
 

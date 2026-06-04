@@ -12,8 +12,7 @@ import { regtestChain, signet } from "../src/chains.js";
 
 // BIP-39 test vector mnemonic (the "test … junk" phrase). Deriving it at
 // BIP-86 `m/86'/1'/0'/0/0` on a testnet chain is a fixed, known answer.
-const MNEMONIC =
-  "test test test test test test test test test test test junk";
+const MNEMONIC = "test test test test test test test test test test test junk";
 const SIGNET_ADDRESS =
   "tb1pfewlxm8meyyvgjydfu7v8j4ej64symj6ut8sf66h9germp94qgzsgnnjhk";
 const SIGNET_XONLY =
@@ -81,12 +80,18 @@ test("schnorr: signs a 32-byte digest, rejects a wrong-length one", async () => 
   const acct = LocalKey.fromMnemonic({ mnemonic: MNEMONIC, chain: signet });
   const sig = await acct.schnorr(new Uint8Array(32));
   expect(sig.length).toBe(64);
-  await expect(acct.schnorr(new Uint8Array(31))).rejects.toBeInstanceOf(SignerError);
+  await expect(acct.schnorr(new Uint8Array(31))).rejects.toBeInstanceOf(
+    SignerError,
+  );
 });
 
 test("psbt: signs a taproot key-path input", async () => {
   const acct = LocalKey.fromMnemonic({ mnemonic: MNEMONIC, chain: signet });
-  const payment = p2tr(xOnlyBytes(acct.identity.xOnlyPubKey), undefined, signet.network);
+  const payment = p2tr(
+    xOnlyBytes(acct.identity.xOnlyPubKey),
+    undefined,
+    signet.network,
+  );
 
   const tx = new Transaction();
   tx.addInput({
@@ -109,7 +114,11 @@ test("psbt: signs a taproot key-path input", async () => {
 
 test("psbt: signs a chosen input under an explicit sighash", async () => {
   const acct = LocalKey.fromMnemonic({ mnemonic: MNEMONIC, chain: signet });
-  const payment = p2tr(xOnlyBytes(acct.identity.xOnlyPubKey), undefined, signet.network);
+  const payment = p2tr(
+    xOnlyBytes(acct.identity.xOnlyPubKey),
+    undefined,
+    signet.network,
+  );
 
   const tx = new Transaction();
   tx.addInput({
@@ -132,7 +141,7 @@ test("psbt: signs a chosen input under an explicit sighash", async () => {
 
 test("psbt: rejects bytes that aren't a PSBT", async () => {
   const acct = LocalKey.fromMnemonic({ mnemonic: MNEMONIC, chain: signet });
-  await expect(
-    acct.psbt(new Uint8Array([1, 2, 3])),
-  ).rejects.toBeInstanceOf(SignerError);
+  await expect(acct.psbt(new Uint8Array([1, 2, 3]))).rejects.toBeInstanceOf(
+    SignerError,
+  );
 });
