@@ -276,6 +276,7 @@ async fn run_daemon(config: Config) -> Result<()> {
         persistent_peers: config.consensus_peers.clone(),
         data_dir: config.data_dir.clone(),
         consensus_enabled,
+        discovery_enabled: true,
     };
 
     let (ready_tx, ready_rx) = oneshot::channel();

@@ -307,6 +307,7 @@ impl ReactorCluster {
                     .collect(),
                 data_dir: executor.data_dir(),
                 consensus_enabled: true,
+                discovery_enabled: false,
             };
 
             let conn = runtime.get_storage_conn();
