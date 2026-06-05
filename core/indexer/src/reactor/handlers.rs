@@ -1,5 +1,5 @@
 use anyhow::{Context, Result};
-use malachitebft_app_channel::AppMsg;
+use malachitebft_app_channel::{AppMsg, NetworkRequest};
 use malachitebft_app_channel::app::streaming::{StreamContent, StreamMessage};
 use malachitebft_app_channel::app::types::codec::Codec;
 use malachitebft_app_channel::app::types::sync::RawDecidedValue;
@@ -190,6 +190,16 @@ impl<E: Executor> Reactor<E> {
                 reply
                     .send((start_height, self.consensus.height_params()))
                     .map_err(|_| anyhow::anyhow!("Failed to send ConsensusReady reply"))?;
+
+                // This fires on the first `Listening`, so the swarm has bound and
+                // the resolved consensus listen address is now in network state.
+                // Read it once (surfaced on `/api/status`).
+                if let Ok(Some(dump)) =
+                    NetworkRequest::dump_state(&self.consensus.channels.net_requests).await
+                {
+                    *self.consensus_listen_addr.write().unwrap() =
+                        Some(dump.local_node.listen_addr.to_string());
+                }
             }
 
             AppMsg::StartedRound {

@@ -6,6 +6,7 @@ use std::{
         Arc,
         atomic::{AtomicUsize, Ordering},
     },
+    time::Duration,
 };
 
 use backon::BackoffBuilder;
@@ -146,6 +147,11 @@ pub fn default_kontor_bin() -> PathBuf {
     ))
 }
 
+/// Spawn a `kontor` node process and return a handle + API client. Returns as
+/// soon as the process is launched — it does *not* wait for the node to become
+/// available. Callers decide what to wait for: a seed waits only for its listen
+/// address ([`RegTesterCluster::wait_for_listen_addr`]), while nodes that will
+/// reach quorum wait for availability ([`RegTesterCluster::wait_for_available`]).
 async fn run_kontor(
     data_dir: &Path,
     api_port: u16,
@@ -190,18 +196,6 @@ async fn run_kontor(
 
     let process = cmd.spawn()?;
     let client = KontorClient::new(format!("http://localhost:{api_port}/api"))?;
-    // Extended budget: cluster tests run 5 indexer processes in
-    // parallel; under heavy CI load, the standard ~25s budget isn't
-    // always enough for DB init + mempool sync + initial fee
-    // projection + consensus startup to complete on each one.
-    // `client.index()` itself returns an error when the indexer 503s
-    // (`require_available` middleware), so a successful response is
-    // the availability signal — no separate flag to inspect.
-    retry_extended(async || {
-        let _ = client.index().await?;
-        Ok::<_, anyhow::Error>(())
-    })
-    .await?;
     Ok((process, client))
 }
 
@@ -881,7 +875,6 @@ macro_rules! poll_nodes {
 
 pub struct NodeConfig {
     pub api_port: u16,
-    pub consensus_port: u16,
     pub ed25519_key: Ed25519PrivateKey,
     pub data_dir: TempDir,
     pub running: Option<ClusterNode>,
@@ -925,6 +918,11 @@ pub struct RegTesterCluster {
     /// Node binary spawned for each validator; retained so `start_node`
     /// restarts with the same binary `setup_with` was given.
     kontor_bin: PathBuf,
+    /// Node 0's resolved consensus listen multiaddr — the bootstrap seed every
+    /// other node discovers the cluster through. Read back from node 0 after it
+    /// binds its `:0` port. Node 0 is never restarted (tests only cycle higher
+    /// indices), so this stays valid for the cluster's lifetime.
+    seed_addr: String,
     miner_cmd_tx: tokio::sync::mpsc::Sender<MinerCmd>,
     _miner_handle: tokio::task::JoinHandle<()>,
     _bitcoin_child: Child,
@@ -1032,44 +1030,71 @@ impl RegTesterCluster {
         let genesis_path = genesis_dir.path().join("genesis.json");
         std::fs::write(&genesis_path, serde_json::to_string(&genesis_config)?)?;
 
-        // Allocate ports and build NodeConfigs
+        // Allocate API ports up front (the harness connects to each node's
+        // HTTP API by port). Consensus nodes bind `:0` instead — the OS
+        // assigns the port atomically at bind time, so there is no
+        // probe-then-release window for a parallel test to race into. The
+        // resolved port is read back from node 0 (the seed) and discovered by
+        // everyone else via libp2p.
         let api_ports = allocate_ports(total)?;
-        let consensus_ports = allocate_ports(total)?;
 
         let mut node_configs: Vec<NodeConfig> = (0..total)
             .map(|i| NodeConfig {
                 api_port: api_ports[i],
-                consensus_port: consensus_ports[i],
                 ed25519_key: ed25519_keys[i].clone(),
                 data_dir: TempDir::new().expect("Failed to create temp dir"),
                 running: None,
             })
             .collect();
 
-        // Start active nodes
-        let all_consensus_ports: Vec<u16> =
-            node_configs.iter().map(|nc| nc.consensus_port).collect();
-        let launch_futures: Vec<_> = node_configs
-            .iter()
+        // Seed-first bring-up, no fixed ports. The seed (node 0) boots with no
+        // peers; we wait only for its *listen address* — a lone node can't
+        // decide a block (no quorum) so it never becomes "available", and
+        // waiting for that here would deadlock against the very followers it's
+        // meant to seed. The address is read from the ungated
+        // `/consensus/listen-addr` endpoint (answers before availability).
+        assert!(active >= 1, "cluster needs at least the seed node (index 0)");
+        let (seed_child, seed_client) = Self::spawn_node(
+            &node_configs[0],
+            &[],
+            &genesis_path,
+            &bitcoin_rpc_url,
+            zmq_port,
+            kontor_bin,
+        )
+        .await?;
+        let seed_addr = Self::wait_for_listen_addr(&seed_client, Duration::from_secs(30)).await?;
+        node_configs[0].running = Some(ClusterNode {
+            client: seed_client,
+            child: seed_child,
+        });
+
+        // Spawn the remaining active nodes, all bootstrapping from the seed and
+        // discovering each other. Spawn first, then wait for availability: with
+        // the seed already participating they reach quorum together, so each
+        // does become available (unlike the lone seed).
+        let spawns = node_configs.iter().skip(1).take(active - 1).map(|nc| {
+            Self::spawn_node(
+                nc,
+                std::slice::from_ref(&seed_addr),
+                &genesis_path,
+                &bitcoin_rpc_url,
+                zmq_port,
+                kontor_bin,
+            )
+        });
+        let mut follower_clients = Vec::new();
+        for (offset, result) in futures_util::future::join_all(spawns)
+            .await
+            .into_iter()
             .enumerate()
-            .take(active)
-            .map(|(i, nc)| {
-                Self::launch_node(
-                    nc,
-                    i,
-                    &all_consensus_ports,
-                    &genesis_path,
-                    &bitcoin_rpc_url,
-                    zmq_port,
-                    kontor_bin,
-                )
-            })
-            .collect();
-        let results = futures_util::future::join_all(launch_futures).await;
-        for (i, result) in results.into_iter().enumerate() {
+        {
             let (child, client) = result?;
-            node_configs[i].running = Some(ClusterNode { client, child });
+            follower_clients.push(client.clone());
+            node_configs[offset + 1].running = Some(ClusterNode { client, child });
         }
+        futures_util::future::try_join_all(follower_clients.iter().map(Self::wait_for_available))
+            .await?;
 
         // Mine a block so we can verify all nodes process it (proves peer connectivity).
         bitcoin_client
@@ -1138,6 +1163,7 @@ impl RegTesterCluster {
             node_counter: AtomicUsize::new(0),
             genesis_path,
             kontor_bin: kontor_bin.to_path_buf(),
+            seed_addr,
             miner_cmd_tx,
             _miner_handle: miner_handle,
             _bitcoin_child: bitcoin_child,
@@ -1161,10 +1187,35 @@ impl RegTesterCluster {
         Ok(cluster)
     }
 
-    async fn launch_node(
+    /// Poll a node's `GET /api/status` until it reports a bound consensus listen
+    /// address (the libp2p bind is async, so it lands shortly after the API
+    /// comes up). Used to read back the seed's OS-assigned `:0` port.
+    async fn wait_for_listen_addr(client: &KontorClient, timeout: Duration) -> Result<String> {
+        let deadline = tokio::time::Instant::now() + timeout;
+        loop {
+            // Ungated endpoint — answers as soon as the swarm binds, well before
+            // the node is "available" (which needs quorum, hence the followers
+            // we're about to bootstrap from this very address).
+            if let Ok(status) = client.status().await
+                && let Some(addr) = status.consensus_listen_addr
+            {
+                return Ok(addr);
+            }
+            if tokio::time::Instant::now() >= deadline {
+                bail!("seed node never reported a bound consensus listen address within {timeout:?}");
+            }
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+    }
+
+    /// Spawn a validator node, binding an OS-assigned consensus port
+    /// (`/tcp/0`, no probe/release race). `peers` is the bootstrap seed set —
+    /// empty for the seed itself, `[seed_addr]` for everyone else, who learn
+    /// the rest of the cluster via discovery. Returns immediately; the caller
+    /// waits for whatever it needs.
+    async fn spawn_node(
         nc: &NodeConfig,
-        index: usize,
-        all_consensus_ports: &[u16],
+        peers: &[String],
         genesis_path: &std::path::Path,
         bitcoin_rpc_url: &str,
         zmq_port: u16,
@@ -1172,13 +1223,8 @@ impl RegTesterCluster {
     ) -> Result<(Child, KontorClient)> {
         let consensus_config = ConsensusNodeConfig {
             private_key_hex: hex::encode(nc.ed25519_key.inner().to_bytes()),
-            listen_addr: format!("/ip4/127.0.0.1/tcp/{}", nc.consensus_port),
-            peers: all_consensus_ports
-                .iter()
-                .enumerate()
-                .filter(|(j, _)| *j != index)
-                .map(|(_, &port)| format!("/ip4/127.0.0.1/tcp/{port}"))
-                .collect(),
+            listen_addr: "/ip4/127.0.0.1/tcp/0".to_string(),
+            peers: peers.to_vec(),
             genesis_file: genesis_path.to_string_lossy().into_owned(),
         };
         run_kontor(
@@ -1189,6 +1235,21 @@ impl RegTesterCluster {
             Some(&consensus_config),
             kontor_bin,
         )
+        .await
+    }
+
+    /// Wait until a node's `/api/` reports available — i.e. consensus has
+    /// decided a block. Only meaningful once quorum can form (the seed can't
+    /// satisfy this alone). Extended budget: cluster tests run several indexer
+    /// processes in parallel, so DB init + mempool sync + initial fee
+    /// projection + consensus startup can exceed the standard ~25s budget.
+    /// `client.index()` errors while the indexer 503s (`require_available`),
+    /// so a successful response is the availability signal.
+    async fn wait_for_available(client: &KontorClient) -> Result<()> {
+        retry_extended(async || {
+            let _ = client.index().await?;
+            Ok::<_, anyhow::Error>(())
+        })
         .await
     }
 
@@ -1221,44 +1282,25 @@ impl RegTesterCluster {
         Ok(())
     }
 
-    /// Start or restart a node.
+    /// Start or restart a node. Restarted/late-joining nodes bootstrap from
+    /// the seed (node 0) and rediscover the rest of the cluster; node 0 itself
+    /// is never restarted (see [`Self::seed_addr`]).
     pub async fn start_node(&mut self, index: usize) -> Result<()> {
-        let all_consensus_ports: Vec<u16> = self
-            .node_configs
-            .iter()
-            .map(|nc| nc.consensus_port)
-            .collect();
         let nc = &self.node_configs[index];
-        let (child, client) = Self::launch_node(
+        let (child, client) = Self::spawn_node(
             nc,
-            index,
-            &all_consensus_ports,
+            std::slice::from_ref(&self.seed_addr),
             &self.genesis_path,
             &self.bitcoin_rpc_url,
             self.zmq_port,
             &self.kontor_bin,
         )
         .await?;
+        // A restart/late-joiner joins an existing quorum, so it does become
+        // available.
+        Self::wait_for_available(&client).await?;
         self.node_configs[index].running = Some(ClusterNode { client, child });
-
-        let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(30);
-        loop {
-            if self.node_configs[index]
-                .running
-                .as_ref()
-                .unwrap()
-                .client
-                .index()
-                .await
-                .is_ok()
-            {
-                return Ok(());
-            }
-            if tokio::time::Instant::now() >= deadline {
-                bail!("Node {index} failed to become available within 30s");
-            }
-            tokio::time::sleep(std::time::Duration::from_millis(500)).await;
-        }
+        Ok(())
     }
 
     /// Get a `RegTester` for the cluster. Returns a clone of the shared

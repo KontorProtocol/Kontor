@@ -3,6 +3,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use anyhow::Result;
+use malachitebft_app_channel::NetworkRequest;
 use tokio::sync::{broadcast, mpsc};
 use tokio::task::JoinSet;
 use tokio_util::sync::CancellationToken;
@@ -24,26 +25,6 @@ use bitcoin::hashes::Hash;
 use indexer_types::Event;
 use indexer_types::OpWithResult;
 use malachitebft_app_channel::app::types::core::VotingPower;
-
-/// Allocate `n` distinct ephemeral ports by briefly binding each to
-/// `127.0.0.1:0`, mirroring `reg_tester::allocate_ports`. Every listener is held
-/// until all are bound so the ports are guaranteed distinct; dropping them hands
-/// the ports to the consensus engine. The previous fixed-base allocator
-/// (`19000 + counter`) did not check availability, so a port could collide with
-/// another listener or a lingering `TIME_WAIT` socket — which surfaced as libp2p
-/// "failed to negotiate transport protocol" hangs on macOS CI loopback.
-fn allocate_ports(n: usize) -> Vec<u16> {
-    let mut ports = Vec::with_capacity(n);
-    let mut listeners = Vec::with_capacity(n);
-    for _ in 0..n {
-        let listener =
-            std::net::TcpListener::bind("127.0.0.1:0").expect("bind ephemeral port for test node");
-        ports.push(listener.local_addr().expect("read local_addr").port());
-        listeners.push(listener);
-    }
-    drop(listeners);
-    ports
-}
 
 async fn wait_matching<T>(
     rx: &mut mpsc::Receiver<T>,
@@ -85,7 +66,12 @@ struct ReactorCluster {
     genesis: Genesis,
     genesis_validators: Vec<GenesisValidator>,
     private_keys: Vec<PrivateKey>,
-    ports: Vec<u16>,
+    /// Node 0's resolved consensus listen multiaddr — the bootstrap seed every
+    /// other node (including late joiners via `add_node`) discovers the cluster
+    /// through. No fixed ports: each node binds `/tcp/0` and reports its
+    /// resolved address back over `addr_tx`.
+    seed_addr: String,
+    addr_tx: mpsc::Sender<(usize, String)>,
     shared_pubkey: String,
     engine: wasmtime::Engine,
     component_cache: crate::runtime::ComponentCache,
@@ -150,8 +136,6 @@ impl ReactorCluster {
         let validator_set = ValidatorSet::new(validators);
         let genesis = Genesis { validator_set };
 
-        let ports: Vec<u16> = allocate_ports(total);
-
         let (mempool_tx, _) = broadcast::channel::<MempoolEvent>(256);
         let cancel = CancellationToken::new();
         let mut block_txs = Vec::new();
@@ -164,11 +148,17 @@ impl ReactorCluster {
         let (state_tx, state_rx) = mpsc::channel(1024);
         let (ready_tx, ready_rx) = mpsc::channel(total);
         let (event_tx, event_rx) = mpsc::channel(1024);
+        // Each node binds `/tcp/0` and reports its resolved listen address here.
+        let (addr_tx, mut addr_rx) = mpsc::channel::<(usize, String)>(total);
 
         let mut join_set = JoinSet::new();
         let mut started_nodes = vec![false; total];
         let mut simulate_txs = Vec::new();
 
+        // Seed-first bring-up, no fixed ports. Node 0 boots with no peers; we
+        // wait only for it to report its resolved listen address, then point
+        // the rest at it. libp2p discovery meshes the cluster from there.
+        let mut seed_addr = String::new();
         for i in 0..initial {
             let (node_block_tx, node_block_rx) = mpsc::channel(256);
             block_txs.push(node_block_tx.clone());
@@ -177,12 +167,19 @@ impl ReactorCluster {
             let (sim_tx, sim_rx) = mpsc::channel(1);
             simulate_txs.push(sim_tx);
 
+            let peers = if i == 0 {
+                vec![]
+            } else {
+                vec![seed_addr.clone()]
+            };
+
             Self::spawn_node(
                 i,
                 private_keys[i].clone(),
                 &genesis,
                 &genesis_validators,
-                &ports,
+                peers,
+                addr_tx.clone(),
                 node_block_tx,
                 node_block_rx,
                 node_mempool_rx,
@@ -200,6 +197,13 @@ impl ReactorCluster {
                 &mut join_set,
             );
             started_nodes[i] = true;
+
+            if i == 0 {
+                seed_addr = match addr_rx.recv().await {
+                    Some((0, addr)) => addr,
+                    _ => return Err(anyhow::anyhow!("seed never reported a listen address")),
+                };
+            }
         }
 
         Ok(Self {
@@ -216,7 +220,8 @@ impl ReactorCluster {
             genesis,
             genesis_validators,
             private_keys,
-            ports,
+            seed_addr,
+            addr_tx,
             shared_pubkey,
             engine,
             component_cache,
@@ -264,7 +269,8 @@ impl ReactorCluster {
         private_key: PrivateKey,
         genesis: &Genesis,
         genesis_validators: &[GenesisValidator],
-        ports: &[u16],
+        peers: Vec<String>,
+        addr_tx: mpsc::Sender<(usize, String)>,
         node_block_tx: mpsc::Sender<BlockEvent>,
         node_block_rx: mpsc::Receiver<BlockEvent>,
         node_mempool_rx: mpsc::Receiver<MempoolEvent>,
@@ -283,7 +289,6 @@ impl ReactorCluster {
     ) {
         let genesis = genesis.clone();
         let genesis_vals = genesis_validators.to_vec();
-        let ports = ports.to_vec();
         join_set.spawn(async move {
             let (executor, runtime) = LiteExecutor::new(
                 mock_btc,
@@ -298,16 +303,14 @@ impl ReactorCluster {
 
             let engine_config = EngineConfig {
                 private_key,
-                listen_addr: format!("/ip4/127.0.0.1/tcp/{}", ports[i]),
-                persistent_peers: ports
-                    .iter()
-                    .enumerate()
-                    .filter(|(j, _)| *j != i)
-                    .map(|(_, &port)| format!("/ip4/127.0.0.1/tcp/{port}"))
-                    .collect(),
+                // OS-assigned port (no probe/release race). The seed boots with
+                // no peers; everyone else bootstraps from the seed's reported
+                // address and discovers the rest of the cluster.
+                listen_addr: "/ip4/127.0.0.1/tcp/0".to_string(),
+                persistent_peers: peers,
                 data_dir: executor.data_dir(),
                 consensus_enabled: true,
-                discovery_enabled: false,
+                discovery_enabled: true,
             };
 
             let conn = runtime.get_storage_conn();
@@ -319,6 +322,24 @@ impl ReactorCluster {
                     return;
                 }
             };
+
+            // Report this node's resolved listen address by polling the network
+            // state (the patched engine stores it on bind). Race-free: a stored
+            // snapshot, unlike a fleeting event. The seed's address is what
+            // `start_with`/`add_node` use to bootstrap the followers.
+            {
+                let net_requests = engine_output.channels.net_requests.clone();
+                let listen_addr = loop {
+                    if let Ok(Some(dump)) = NetworkRequest::dump_state(&net_requests).await {
+                        let addr = dump.local_node.listen_addr.to_string();
+                        if !addr.ends_with("/tcp/0") {
+                            break addr;
+                        }
+                    }
+                    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+                };
+                let _ = addr_tx.send((i, listen_addr)).await;
+            }
 
             info!(node = i, address = %engine_output.address, "Engine started");
 
@@ -358,6 +379,10 @@ impl ReactorCluster {
                 state,
                 0,
                 None,
+                // The in-process test reads each engine's address directly via
+                // dump_state (reported over addr_tx); this Env-shared slot is
+                // unused here.
+                std::sync::Arc::new(std::sync::RwLock::new(None)),
             );
 
             let _ = rtx.send(i).await;
@@ -387,7 +412,8 @@ impl ReactorCluster {
             self.private_keys[i].clone(),
             &self.genesis,
             &self.genesis_validators,
-            &self.ports,
+            vec![self.seed_addr.clone()],
+            self.addr_tx.clone(),
             node_block_tx,
             node_block_rx,
             node_mempool_rx,

@@ -1,8 +1,10 @@
+use std::sync::atomic::Ordering;
 use std::time::Duration;
 
+use axum::Json;
 use axum::extract::{Query, State};
-use indexer_types::Info;
-use serde::Deserialize;
+use indexer_types::{ConsensusMode, Info};
+use serde::{Deserialize, Serialize};
 use tokio::time::timeout;
 
 use crate::api::{API_REQUEST_TIMEOUT_MS, Env, result::Result};
@@ -70,4 +72,33 @@ pub async fn get_index(Query(query): Query<InfoQuery>, State(env): State<Env>) -
         }
     }
     Ok(current_info(&env).into())
+}
+
+/// Node status available *before* the node is "available" — static identity
+/// plus the pre-consensus signals (`reactor_ready`, the resolved consensus
+/// listen address). Deliberately served outside the `require_available` gate:
+/// a cluster bootstrapping from a seed must read the seed's listen address
+/// before quorum (and thus availability) exists.
+#[derive(Debug, Serialize, Deserialize)]
+pub struct NodeStatus {
+    pub version: String,
+    pub target: String,
+    pub network: String,
+    pub consensus_mode: ConsensusMode,
+    pub reactor_ready: bool,
+    /// Resolved consensus listen multiaddr, or `null` until bound / for
+    /// non-consensus nodes.
+    pub consensus_listen_addr: Option<String>,
+}
+
+/// `GET /api/status` — ungated node status (see [`NodeStatus`]).
+pub async fn get_status(State(env): State<Env>) -> Json<NodeStatus> {
+    Json(NodeStatus {
+        version: built_info::PKG_VERSION.to_string(),
+        target: built_info::TARGET.to_string(),
+        network: env.config.network.to_string(),
+        consensus_mode: env.config.consensus_mode,
+        reactor_ready: env.reactor_ready.load(Ordering::Relaxed),
+        consensus_listen_addr: env.consensus_listen_addr.read().unwrap().clone(),
+    })
 }
