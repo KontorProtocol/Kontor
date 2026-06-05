@@ -24,6 +24,7 @@ mod shared_cluster;
 mod simulate_contract;
 mod simulate_errors;
 mod staking_contract;
+mod staking_slash;
 mod status_classification;
 mod token_contract;
 mod wit_contract;
