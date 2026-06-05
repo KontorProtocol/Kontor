@@ -5,6 +5,7 @@ world root {
   use kontor:built-in/context.{view-context, proc-context, core-context, contract};
   use kontor:built-in/error.{error};
   use kontor:built-in/file-registry.{raw-file-descriptor};
+  use kontor:built-in/numbers.{decimal};
 
   // ─────────────────────────────────────────────────────────────────
   // Output/Storage Types
@@ -23,6 +24,35 @@ world root {
 
   record create-agreement-result {
     agreement-id: string,
+    // Storage creation fee burned from the creator: υ_f = χ_fee · k_f.
+    fee: decimal,
+  }
+
+  // Per-agreement storage-emission weights, fixed at creation time.
+  //   omega-f = log10(s-bytes) / log10(1 + rank-f)
+  //   k-f     = (omega-f / Omega) * c-stake * ln(1 + (|F| + 1) / f-scale)
+  record agreement-economics {
+    rank-f: u64,
+    s-bytes: u64,
+    omega-f: decimal,
+    k-f: decimal,
+  }
+
+  // A single storage-reward allocation produced by distribute-storage-rewards.
+  record storage-reward {
+    node-id: string,
+    agreement-id: string,
+    amount: decimal,
+  }
+
+  // Storage-economics parameters.
+  record storage-params {
+    omega-genesis: u64,
+    r-offset: u64,
+    c-stake: decimal,
+    f-scale: u64,
+    // Storage-fee multiplier χ_fee in basis points (υ_f = χ_fee · k_f).
+    chi-fee-bps: u64,
   }
 
   record join-agreement-result {
@@ -34,6 +64,8 @@ world root {
   record leave-agreement-result {
     agreement-id: string,
     node-id: string,
+    // Leave fee burned from the signer: φ_leave = k_f · (n_min/|N_f|)².
+    fee: decimal,
   }
 
   // Challenge types
@@ -108,11 +140,39 @@ world root {
     node-id: string
   ) -> bool;
 
+  // ─────────────────────────────────────────────────────────────────
+  // Storage economics
+  // ─────────────────────────────────────────────────────────────────
+
+  export get-agreement-economics: async func(
+    ctx: borrow<view-context>,
+    agreement-id: string
+  ) -> option<agreement-economics>;
+
+  export get-omega: async func(ctx: borrow<view-context>) -> decimal;
+  export get-active-file-count: async func(ctx: borrow<view-context>) -> u64;
+  export get-storage-params: async func(ctx: borrow<view-context>) -> storage-params;
+
+  export set-storage-params: async func(
+    ctx: borrow<core-context>,
+    params: storage-params
+  ) -> result<storage-params, error>;
+
+  // Split a per-block storage-reward pool across active files (weighted by
+  // omega-f / Omega) and equally among each file's active nodes. The genesis
+  // dilution mass is intentionally left undistributed. Returns the allocation;
+  // crediting is the caller's (reactor's) responsibility.
+  export distribute-storage-rewards: async func(
+    ctx: borrow<core-context>,
+    pool: decimal
+  ) -> result<list<storage-reward>, error>;
+
   // Protocol parameters
   export get-min-nodes: async func(ctx: borrow<view-context>) -> u64;
   export get-c-target: async func(ctx: borrow<view-context>) -> u64;
   export get-blocks-per-year: async func(ctx: borrow<view-context>) -> u64;
   export get-s-chal: async func(ctx: borrow<view-context>) -> u64;
+  export get-lambda-slash: async func(ctx: borrow<view-context>) -> u64;
 
   // ─────────────────────────────────────────────────────────────────
   // Challenge Management
@@ -124,6 +184,11 @@ world root {
   ) -> option<challenge-data>;
 
   export get-active-challenges: async func(
+    ctx: borrow<view-context>
+  ) -> list<challenge-data>;
+
+  // Challenges whose proof was rejected — the Phase 2 slashable set.
+  export get-failed-challenges: async func(
     ctx: borrow<view-context>
   ) -> list<challenge-data>;
 

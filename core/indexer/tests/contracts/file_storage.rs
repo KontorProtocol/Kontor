@@ -29,6 +29,12 @@ async fn test_file_storage_core_signer_smoke() -> Result<()> {
 }
 
 #[testlib::test(contracts_dir = "../../test-contracts", local_only)]
+async fn test_file_storage_storage_properties() -> Result<()> {
+    file_storage_tests::native_filestorage_contract::run_storage_properties(runtime).await?;
+    Ok(())
+}
+
+#[testlib::test(contracts_dir = "../../test-contracts", local_only)]
 async fn test_file_storage_core_signer_proof_verification() -> Result<()> {
     file_storage_tests::proof_verification::run_core_signer(runtime).await?;
     Ok(())

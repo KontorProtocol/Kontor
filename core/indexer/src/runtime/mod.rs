@@ -30,8 +30,8 @@ use futures_util::future::OptionFuture;
 use libsql::Connection;
 use sha2::{Digest, Sha256};
 pub use stdlib::{
-    CheckedArithmetics, FromWaveValue, WaveType, from_wave_expr, from_wave_value, to_wave_expr,
-    wave_type,
+    CheckedArithmetics, FromWaveValue, Log10, WaveType, from_wave_expr, from_wave_value,
+    to_wave_expr, wave_type,
 };
 use stdlib::{contract_address, holder_ref, impls};
 pub use storage::{Storage, TransactionContext};

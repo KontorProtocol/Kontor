@@ -263,6 +263,14 @@ pub fn generate(config: Config) -> TokenStream {
         }
 
         #[automatically_derived]
+        impl Log10<kontor::built_in::error::Error> for kontor::built_in::numbers::Decimal {
+            type Output = Self;
+            fn log10(self) -> Result<Self::Output, kontor::built_in::error::Error> {
+                #numerics_mod_name::log10_decimal(self)
+            }
+        }
+
+        #[automatically_derived]
         impl core::ops::Add for kontor::built_in::numbers::Integer {
             type Output = Self;
 
