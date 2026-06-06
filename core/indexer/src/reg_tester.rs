@@ -1086,17 +1086,28 @@ impl RegTesterCluster {
                 kontor_bin,
             )
         });
-        let mut follower_clients = Vec::new();
         for (offset, result) in futures_util::future::join_all(spawns)
             .await
             .into_iter()
             .enumerate()
         {
             let (child, client) = result?;
-            follower_clients.push(client.clone());
             node_configs[offset + 1].running = Some(ClusterNode { client, child });
         }
-        futures_util::future::try_join_all(follower_clients.iter().map(Self::wait_for_available))
+
+        // Now wait for *every* active node — seed included — to become available.
+        // The seed was only waited for its listen address above (so its bootstrap
+        // address could be handed to the followers before they existed); now that
+        // the full active set is running it reaches quorum and they all go
+        // available together. For a single-node devnet (no followers) this is the
+        // only availability barrier — without it, bring-up races ahead of the lone
+        // seed and the first `/api` poll 503s.
+        let active_clients: Vec<KontorClient> = node_configs
+            .iter()
+            .take(active)
+            .filter_map(|nc| nc.running.as_ref().map(|cn| cn.client.clone()))
+            .collect();
+        futures_util::future::try_join_all(active_clients.iter().map(Self::wait_for_available))
             .await?;
 
         // Mine a block so we can verify all nodes process it (proves peer connectivity).
