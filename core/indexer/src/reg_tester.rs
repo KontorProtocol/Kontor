@@ -1,5 +1,6 @@
 use std::{
     collections::HashMap,
+    io::Write,
     path::{Path, PathBuf},
     str::FromStr,
     sync::{
@@ -120,7 +121,7 @@ async fn run_bitcoin(data_dir: &Path) -> Result<(Child, bitcoin_client::Client, 
         );
     }
 
-    let mut last_err = None;
+    let mut last_exit = None;
     for _ in 0..BITCOIND_BIND_ATTEMPTS {
         let rpc_port = random_low_port();
         let mut zmq_port = random_low_port();
@@ -143,40 +144,58 @@ async fn run_bitcoin(data_dir: &Path) -> Result<(Child, bitcoin_client::Client, 
         };
         let client = bitcoin_client::Client::new_from_config(&config)?;
 
-        match wait_bitcoind_ready(&mut process, &client).await {
-            Ok(()) => return Ok((process, client, config.bitcoin_rpc_url, zmq_port)),
-            Err(e) => {
-                // Likely a port collision: bitcoind exited during start-up.
-                // Make sure it's gone, then retry with a fresh port pair.
-                let _ = process.start_kill();
-                let _ = process.wait().await;
-                last_err = Some(e);
+        // Only a process *exit* means a port collision (or other fatal start-up
+        // error) — that's the one outcome worth retrying with fresh ports. A
+        // slow-but-alive bitcoind, a wrong network, or an I/O error propagate
+        // straight out: respawning on new ports wouldn't fix any of them.
+        match wait_bitcoind_ready(&mut process, &client).await? {
+            BitcoindStartup::Ready => {
+                return Ok((process, client, config.bitcoin_rpc_url, zmq_port));
+            }
+            BitcoindStartup::Exited(status) => {
+                // `try_wait` already reaped it; just record and re-pick ports.
+                last_exit = Some(status);
             }
         }
     }
     bail!(
-        "bitcoind failed to bind after {BITCOIND_BIND_ATTEMPTS} attempts: {}",
-        last_err.map_or_else(|| "unknown".to_string(), |e| format!("{e:#}"))
+        "bitcoind exited on every one of {BITCOIND_BIND_ATTEMPTS} port attempts \
+         (last exit: {last_exit:?}) — likely sustained port pressure"
     )
 }
 
-/// Wait for a freshly-spawned bitcoind to answer RPC on regtest. Distinguishes
-/// "not up yet" (keep waiting) from "process exited" (a bind collision — caller
-/// retries with new ports).
-async fn wait_bitcoind_ready(process: &mut Child, client: &bitcoin_client::Client) -> Result<()> {
-    let deadline = tokio::time::Instant::now() + Duration::from_secs(30);
+/// Outcome of waiting on a freshly-spawned bitcoind.
+enum BitcoindStartup {
+    /// RPC answered on regtest — bitcoind is up.
+    Ready,
+    /// The process exited during start-up — almost always a port bind
+    /// collision. The caller retries with a fresh port pair.
+    Exited(std::process::ExitStatus),
+}
+
+/// Wait for a freshly-spawned bitcoind to either answer RPC on regtest
+/// ([`BitcoindStartup::Ready`]) or exit ([`BitcoindStartup::Exited`], the
+/// retryable port-collision case). A readiness *timeout while the process is
+/// still alive* is **not** a collision — new ports wouldn't help — so it
+/// surfaces as a hard error instead. The budget matches `retry_extended`
+/// (~65s): under parallel CI load a healthy bitcoind can be slow to answer RPC.
+async fn wait_bitcoind_ready(
+    process: &mut Child,
+    client: &bitcoin_client::Client,
+) -> Result<BitcoindStartup> {
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(65);
     loop {
         if let Some(status) = process.try_wait()? {
-            bail!("bitcoind exited during start-up ({status}) — likely a port bind collision");
+            return Ok(BitcoindStartup::Exited(status));
         }
         if let Ok(i) = client.get_blockchain_info().await {
             if i.chain != Network::Regtest {
-                bail!("Network not regtest");
+                bail!("bitcoind came up on {:?}, expected regtest", i.chain);
             }
-            return Ok(());
+            return Ok(BitcoindStartup::Ready);
         }
         if tokio::time::Instant::now() >= deadline {
-            bail!("bitcoind did not become ready within 30s");
+            bail!("bitcoind alive but did not answer RPC within 65s (not a port collision)");
         }
         tokio::time::sleep(Duration::from_millis(200)).await;
     }
@@ -269,11 +288,16 @@ async fn read_api_port_from_logs(stdout: ChildStdout, timeout: Duration) -> Resu
         match tokio::time::timeout_at(deadline, lines.next_line()).await {
             Ok(Ok(Some(line))) => {
                 let port = parse_http_server_port(&line);
-                println!("{line}");
+                let _ = writeln!(std::io::stdout(), "{line}");
                 if let Some(port) = port {
+                    // Keep draining the child's stdout for its whole life so it
+                    // never blocks on a full pipe; forward best-effort and ignore
+                    // write errors (e.g. the test's captured stdout closing) so a
+                    // broken parent pipe can't kill the drain and leave the child
+                    // spewing into a closed pipe.
                     tokio::spawn(async move {
                         while let Ok(Some(line)) = lines.next_line().await {
-                            println!("{line}");
+                            let _ = writeln!(std::io::stdout(), "{line}");
                         }
                     });
                     return Ok(port);
@@ -1156,7 +1180,10 @@ impl RegTesterCluster {
         )
         .await?;
         node_configs[0].api_port = seed_api_port;
-        let seed_addr = Self::wait_for_listen_addr(&seed_client, Duration::from_secs(30)).await?;
+        // ≥ the `retry_extended` budget `wait_for_available` uses: the seed only
+        // publishes its listen address after initial mempool sync + consensus
+        // start-up, which under parallel CI load can run well past 30s.
+        let seed_addr = Self::wait_for_listen_addr(&seed_client, Duration::from_secs(90)).await?;
         node_configs[0].running = Some(ClusterNode {
             client: seed_client,
             child: seed_child,
