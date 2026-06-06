@@ -193,12 +193,14 @@ impl<E: Executor> Reactor<E> {
 
                 // This fires on the first `Listening`, so the swarm has bound and
                 // the resolved consensus listen address is now in network state.
-                // Read it once (surfaced on `/api/status`).
+                // Read it once and publish on the watch (surfaced on `/api/status`;
+                // in-process cluster tests await it to bootstrap followers).
                 if let Ok(Some(dump)) =
                     NetworkRequest::dump_state(&self.consensus.channels.net_requests).await
                 {
-                    *self.consensus_listen_addr.write().unwrap() =
-                        Some(dump.local_node.listen_addr.to_string());
+                    let _ = self
+                        .consensus_listen_addr
+                        .send(Some(dump.local_node.listen_addr.to_string()));
                 }
             }
 

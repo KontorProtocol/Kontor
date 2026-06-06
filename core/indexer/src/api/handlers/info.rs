@@ -99,6 +99,6 @@ pub async fn get_status(State(env): State<Env>) -> Json<NodeStatus> {
         network: env.config.network.to_string(),
         consensus_mode: env.config.consensus_mode,
         reactor_ready: env.reactor_ready.load(Ordering::Relaxed),
-        consensus_listen_addr: env.consensus_listen_addr.read().unwrap().clone(),
+        consensus_listen_addr: env.consensus_listen_addr.borrow().clone(),
     })
 }

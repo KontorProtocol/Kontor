@@ -200,7 +200,7 @@ async fn run_daemon(config: Config) -> Result<()> {
     let reader = database::Reader::new(&config.data_dir, filename).await?;
     let writer = database::Writer::new(&config.data_dir, filename).await?;
     let reactor_ready = Arc::new(AtomicBool::new(false));
-    let consensus_listen_addr = Arc::new(std::sync::RwLock::new(None));
+    let (consensus_listen_addr_tx, consensus_listen_addr_rx) = tokio::sync::watch::channel(None);
     let (event_tx, event_rx) = mpsc::channel(10);
     let event_subscriber = EventSubscriber::new();
     // Seed the info snapshot from current DB state; the reactor republishes
@@ -227,7 +227,7 @@ async fn run_daemon(config: Config) -> Result<()> {
                 config: config.clone(),
                 cancel_token: cancel_token.clone(),
                 reactor_ready: reactor_ready.clone(),
-                consensus_listen_addr: consensus_listen_addr.clone(),
+                consensus_listen_addr: consensus_listen_addr_rx.clone(),
                 reader: reader.clone(),
                 event_subscriber: event_subscriber.clone(),
                 bitcoin: bitcoin.clone(),
@@ -298,7 +298,7 @@ async fn run_daemon(config: Config) -> Result<()> {
         None,
         config.consensus_propose_timeout_ms,
         Some(fees_tx),
-        consensus_listen_addr,
+        consensus_listen_addr_tx,
     ));
     ready_rx.await?;
     reactor_ready.store(true, std::sync::atomic::Ordering::Relaxed);

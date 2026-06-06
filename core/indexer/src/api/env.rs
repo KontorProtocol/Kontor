@@ -1,6 +1,6 @@
 use std::path::Path;
+use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
-use std::sync::{Arc, RwLock};
 
 use anyhow::Result;
 use deadpool::managed::Pool;
@@ -29,10 +29,12 @@ pub struct Env {
     /// exists from disk before the reactor has populated `fees_rx`) still
     /// 503s until the reactor catches up.
     pub reactor_ready: Arc<AtomicBool>,
-    /// This node's resolved consensus listen address, written by the reactor on
+    /// This node's resolved consensus listen address, sent by the reactor on
     /// the first `Listening` (before consensus is available) and surfaced by the
-    /// ungated `GET /api/status`. `None` until bound / for non-consensus nodes.
-    pub consensus_listen_addr: Arc<RwLock<Option<String>>>,
+    /// ungated `GET /api/status`. A watch so in-process cluster tests can await
+    /// the bind event-driven rather than poll. `None` until bound / for
+    /// non-consensus nodes.
+    pub consensus_listen_addr: watch::Receiver<Option<String>>,
     /// Latest fee tier snapshot published by the reactor. `borrow()` is
     /// non-blocking and returns the most recent value.
     pub fees_rx: watch::Receiver<Fees>,
@@ -59,7 +61,7 @@ impl Env {
             // Unit-test env skips the reactor; flip ready so handlers that
             // get mounted directly into a test router aren't perma-503'd.
             reactor_ready: Arc::new(AtomicBool::new(true)),
-            consensus_listen_addr: Arc::new(RwLock::new(None)),
+            consensus_listen_addr: watch::channel(None).1,
             event_subscriber: EventSubscriber::new(),
             runtime_pool: runtime::pool::new(db_path.to_path_buf(), db_name).await?,
             reader,
