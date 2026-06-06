@@ -1,9 +1,9 @@
 use anyhow::{Context, Result};
-use malachitebft_app_channel::{AppMsg, NetworkRequest};
 use malachitebft_app_channel::app::streaming::{StreamContent, StreamMessage};
 use malachitebft_app_channel::app::types::codec::Codec;
 use malachitebft_app_channel::app::types::sync::RawDecidedValue;
 use malachitebft_app_channel::app::types::{LocallyProposedValue, ProposedValue};
+use malachitebft_app_channel::{AppMsg, NetworkRequest};
 use malachitebft_core_consensus::Role;
 use malachitebft_core_types::{Round, Validity};
 use tracing::info;

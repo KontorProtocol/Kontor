@@ -34,7 +34,6 @@ use malachitebft_app_channel::app::types::core::VotingPower;
 use malachitebft_core_types::{LinearTimeouts, Round};
 use tracing::{debug, error, info, warn};
 
-
 use crate::consensus::finality_types::StateEvent;
 use crate::consensus::{BatchTx, Ctx};
 use crate::{

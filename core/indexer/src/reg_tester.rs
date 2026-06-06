@@ -1052,8 +1052,11 @@ impl RegTesterCluster {
         // decide a block (no quorum) so it never becomes "available", and
         // waiting for that here would deadlock against the very followers it's
         // meant to seed. The address is read from the ungated
-        // `/consensus/listen-addr` endpoint (answers before availability).
-        assert!(active >= 1, "cluster needs at least the seed node (index 0)");
+        // `/api/status` endpoint (answers before availability).
+        assert!(
+            active >= 1,
+            "cluster needs at least the seed node (index 0)"
+        );
         let (seed_child, seed_client) = Self::spawn_node(
             &node_configs[0],
             &[],
@@ -1202,7 +1205,9 @@ impl RegTesterCluster {
                 return Ok(addr);
             }
             if tokio::time::Instant::now() >= deadline {
-                bail!("seed node never reported a bound consensus listen address within {timeout:?}");
+                bail!(
+                    "seed node never reported a bound consensus listen address within {timeout:?}"
+                );
             }
             tokio::time::sleep(Duration::from_millis(100)).await;
         }
