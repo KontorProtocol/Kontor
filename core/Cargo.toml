@@ -67,3 +67,28 @@ ts-rs = { version = "=12.0.1", features = ["format"] }
 
 # Malachite BFT consensus
 malachitebft-app-channel = { git = "https://github.com/circlefin/malachite", rev = "8ee5d998545087e73710c37e457cc03cb56b1463", package = "arc-malachitebft-app-channel" }
+
+# Pin malachite to the KontorProtocol fork (branch listen-addr-event): stores the
+# resolved consensus listen address in network state so it's readable via
+# dump_state — used to bring up clusters on `/tcp/0` (no fixed-port allocation).
+# Drop this [patch] block once the change lands upstream in circlefin.
+[patch."https://github.com/circlefin/malachite"]
+arc-malachitebft-app = { git = "https://github.com/KontorProtocol/malachite", rev = "e600da33cee22fd9d848fefc4d33bcf77b204fc8" }
+arc-malachitebft-app-channel = { git = "https://github.com/KontorProtocol/malachite", rev = "e600da33cee22fd9d848fefc4d33bcf77b204fc8" }
+arc-malachitebft-codec = { git = "https://github.com/KontorProtocol/malachite", rev = "e600da33cee22fd9d848fefc4d33bcf77b204fc8" }
+arc-malachitebft-config = { git = "https://github.com/KontorProtocol/malachite", rev = "e600da33cee22fd9d848fefc4d33bcf77b204fc8" }
+arc-malachitebft-core-consensus = { git = "https://github.com/KontorProtocol/malachite", rev = "e600da33cee22fd9d848fefc4d33bcf77b204fc8" }
+arc-malachitebft-core-driver = { git = "https://github.com/KontorProtocol/malachite", rev = "e600da33cee22fd9d848fefc4d33bcf77b204fc8" }
+arc-malachitebft-core-state-machine = { git = "https://github.com/KontorProtocol/malachite", rev = "e600da33cee22fd9d848fefc4d33bcf77b204fc8" }
+arc-malachitebft-core-types = { git = "https://github.com/KontorProtocol/malachite", rev = "e600da33cee22fd9d848fefc4d33bcf77b204fc8" }
+arc-malachitebft-core-votekeeper = { git = "https://github.com/KontorProtocol/malachite", rev = "e600da33cee22fd9d848fefc4d33bcf77b204fc8" }
+arc-malachitebft-discovery = { git = "https://github.com/KontorProtocol/malachite", rev = "e600da33cee22fd9d848fefc4d33bcf77b204fc8" }
+arc-malachitebft-engine = { git = "https://github.com/KontorProtocol/malachite", rev = "e600da33cee22fd9d848fefc4d33bcf77b204fc8" }
+arc-malachitebft-metrics = { git = "https://github.com/KontorProtocol/malachite", rev = "e600da33cee22fd9d848fefc4d33bcf77b204fc8" }
+arc-malachitebft-network = { git = "https://github.com/KontorProtocol/malachite", rev = "e600da33cee22fd9d848fefc4d33bcf77b204fc8" }
+arc-malachitebft-peer = { git = "https://github.com/KontorProtocol/malachite", rev = "e600da33cee22fd9d848fefc4d33bcf77b204fc8" }
+arc-malachitebft-proto = { git = "https://github.com/KontorProtocol/malachite", rev = "e600da33cee22fd9d848fefc4d33bcf77b204fc8" }
+arc-malachitebft-signing = { git = "https://github.com/KontorProtocol/malachite", rev = "e600da33cee22fd9d848fefc4d33bcf77b204fc8" }
+arc-malachitebft-signing-ed25519 = { git = "https://github.com/KontorProtocol/malachite", rev = "e600da33cee22fd9d848fefc4d33bcf77b204fc8" }
+arc-malachitebft-sync = { git = "https://github.com/KontorProtocol/malachite", rev = "e600da33cee22fd9d848fefc4d33bcf77b204fc8" }
+arc-malachitebft-wal = { git = "https://github.com/KontorProtocol/malachite", rev = "e600da33cee22fd9d848fefc4d33bcf77b204fc8" }

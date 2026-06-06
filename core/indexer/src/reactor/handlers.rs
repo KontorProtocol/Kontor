@@ -1,12 +1,12 @@
 use anyhow::{Context, Result};
-use malachitebft_app_channel::AppMsg;
 use malachitebft_app_channel::app::streaming::{StreamContent, StreamMessage};
 use malachitebft_app_channel::app::types::codec::Codec;
 use malachitebft_app_channel::app::types::sync::RawDecidedValue;
 use malachitebft_app_channel::app::types::{LocallyProposedValue, ProposedValue};
+use malachitebft_app_channel::{AppMsg, NetworkRequest};
 use malachitebft_core_consensus::Role;
 use malachitebft_core_types::{Round, Validity};
-use tracing::info;
+use tracing::{info, warn};
 
 use crate::consensus::codec::ProtobufCodec;
 use crate::consensus::{Address, Ctx, Height, ProposalPart, ValueId};
@@ -190,6 +190,30 @@ impl<E: Executor> Reactor<E> {
                 reply
                     .send((start_height, self.consensus.height_params()))
                     .map_err(|_| anyhow::anyhow!("Failed to send ConsensusReady reply"))?;
+
+                // `ConsensusReady` is emitted only from the network `Listening`
+                // event, and the swarm records its resolved address *before*
+                // emitting `Listening` — so by here the address is bound and
+                // recorded, and this read is race-free (never the unresolved
+                // `/tcp/0`). Publish it once on the watch (surfaced on
+                // `/api/status`; in-process cluster tests await it to bootstrap
+                // followers). The address is observability-only, so on the
+                // unexpected failure paths we just warn and leave it unset rather
+                // than block or crash — a genuinely dead swarm surfaces through
+                // consensus liveness, not here.
+                match NetworkRequest::dump_state(&self.consensus.channels.net_requests).await {
+                    Ok(Some(dump)) => {
+                        let _ = self
+                            .consensus_listen_addr
+                            .send(Some(dump.local_node.listen_addr.to_string()));
+                    }
+                    Ok(None) => {
+                        warn!("Network state dump empty; consensus listen address left unset");
+                    }
+                    Err(e) => {
+                        warn!(%e, "Failed to read network state for consensus listen address");
+                    }
+                }
             }
 
             AppMsg::StartedRound {
