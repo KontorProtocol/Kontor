@@ -35,9 +35,21 @@ pub async fn run(env: Env, prom_handle: PrometheusHandle) -> Result<JoinHandle<(
         }
     });
 
+    // Log the *resolved* bound address once the listener is up. With
+    // `api_port = 0` (OS-assigned — used by the regtest harness to bind without
+    // a probe/release port race) the configured `addr` reads `:0`, so the real
+    // port is only knowable after bind; `Handle::listening()` surfaces it.
+    tokio::spawn({
+        let handle = handle.clone();
+        async move {
+            if let Some(bound) = handle.listening().await {
+                info!("HTTP server running @ http://{}", bound);
+            }
+        }
+    });
+
     let router = router::new(env, prom_handle);
 
-    info!("HTTP server running @ http://{}", addr);
     Ok(tokio::spawn(async move {
         if axum_server::bind(addr)
             .handle(handle)

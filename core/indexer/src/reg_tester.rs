@@ -24,7 +24,7 @@ use crate::{
     consensus::signing::PrivateKey as Ed25519PrivateKey,
     database::types::OpResultId,
     keygen,
-    retry::{retry_extended, retry_simple},
+    retry::retry_extended,
     runtime::ContractAddress,
     test_utils,
 };
@@ -35,7 +35,7 @@ use bitcoin::{
     absolute::LockTime,
     bip32::{DerivationPath, Xpriv},
     consensus::serialize as serialize_tx,
-    key::rand::RngCore,
+    key::rand::{Rng, RngCore},
     key::{Keypair, PrivateKey, Secp256k1, rand},
     taproot::TaprootBuilder,
     transaction::Version,
@@ -46,8 +46,8 @@ use indexer_types::{
 use tempfile::TempDir;
 use tokio::{
     fs,
-    io::AsyncWriteExt,
-    process::{Child, Command},
+    io::{AsyncBufReadExt, AsyncWriteExt, BufReader},
+    process::{Child, ChildStdout, Command},
     sync::Mutex,
 };
 
@@ -89,15 +89,30 @@ async fn create_bitcoin_conf(data_dir: &Path, rpc_port: u16, zmq_port: u16) -> R
     Ok(())
 }
 
-/// Returns (child, client, rpc_url, zmq_port)
-async fn run_bitcoin(data_dir: &Path) -> Result<(Child, bitcoin_client::Client, String, u16)> {
-    let rpc_port = allocate_ports(1)?[0];
-    let zmq_port = allocate_ports(1)?[0];
-    create_bitcoin_conf(data_dir, rpc_port, zmq_port).await?;
+/// A consensus/test port drawn from a band *below* the OS ephemeral range
+/// (Linux `32768+`, macOS `49152+`) and above the privileged range. Ports the
+/// kernel hands out for `:0` binds — the indexer's API, bitcoind's outbound
+/// sockets, anything — all come from the ephemeral range, so a port from this
+/// band can never collide with a `:0` allocation. Non-privileged and portable
+/// across CI runners.
+fn random_low_port() -> u16 {
+    rand::thread_rng().gen_range(10_000..32_000)
+}
 
+/// Number of (rpc, zmq) port draws to try before giving up on bitcoind bind-up.
+const BITCOIND_BIND_ATTEMPTS: usize = 8;
+
+/// Returns (child, client, rpc_url, zmq_port)
+///
+/// bitcoind can't self-assign its RPC port (it rejects both `-rpcport=0` and
+/// `-rpcbind=…:0`), so we pick candidate ports ourselves. Rather than probe and
+/// release a listener (the old `allocate_ports` TOCTOU race), we let bitcoind's
+/// own bind be the source of truth: pick ports from a collision-resistant band,
+/// start bitcoind, and if it exits during start-up (a taken port makes it fail
+/// fast and loud) re-pick and respawn. Bounded; effectively never exhausts.
+async fn run_bitcoin(data_dir: &Path) -> Result<(Child, bitcoin_client::Client, String, u16)> {
     // Check if bitcoind is in PATH
     let bitcoind_check = Command::new("which").arg("bitcoind").output().await;
-
     if bitcoind_check.is_err() || !bitcoind_check.unwrap().status.success() {
         bail!(
             "bitcoind not found in PATH. Regtest tests require Bitcoin Core.\n\
@@ -105,29 +120,66 @@ async fn run_bitcoin(data_dir: &Path) -> Result<(Child, bitcoin_client::Client, 
         );
     }
 
-    // Drop bitcoind's stdout — it inherits the parent's pipe and its
-    // startup writes interleave with kontor's own `println!`s, splitting
-    // long single-line outputs (notably the regtest `KONTOR_REGTEST_INFO`
-    // payload) at noise newlines. stderr is left inherited for debug.
-    let process = Command::new("bitcoind")
-        .arg(format!("-datadir={}", data_dir.to_string_lossy()))
-        .stdout(std::process::Stdio::null())
-        .spawn()?;
-    let config = RegtestConfig {
-        bitcoin_rpc_url: format!("http://127.0.0.1:{rpc_port}"),
-        ..RegtestConfig::default()
-    };
-    let client = bitcoin_client::Client::new_from_config(&config)?;
-    retry_simple(async || {
-        let i = client.get_blockchain_info().await?;
-        if i.chain != Network::Regtest {
-            bail!("Network not regtest");
+    let mut last_err = None;
+    for _ in 0..BITCOIND_BIND_ATTEMPTS {
+        let rpc_port = random_low_port();
+        let mut zmq_port = random_low_port();
+        while zmq_port == rpc_port {
+            zmq_port = random_low_port();
         }
-        Ok(())
-    })
-    .await?;
-    let rpc_url = config.bitcoin_rpc_url;
-    Ok((process, client, rpc_url, zmq_port))
+        create_bitcoin_conf(data_dir, rpc_port, zmq_port).await?;
+
+        // Drop bitcoind's stdout — it inherits the parent's pipe and its
+        // startup writes interleave with kontor's own `println!`s, splitting
+        // long single-line outputs (notably the regtest `KONTOR_REGTEST_INFO`
+        // payload) at noise newlines. stderr is left inherited for debug.
+        let mut process = Command::new("bitcoind")
+            .arg(format!("-datadir={}", data_dir.to_string_lossy()))
+            .stdout(std::process::Stdio::null())
+            .spawn()?;
+        let config = RegtestConfig {
+            bitcoin_rpc_url: format!("http://127.0.0.1:{rpc_port}"),
+            ..RegtestConfig::default()
+        };
+        let client = bitcoin_client::Client::new_from_config(&config)?;
+
+        match wait_bitcoind_ready(&mut process, &client).await {
+            Ok(()) => return Ok((process, client, config.bitcoin_rpc_url, zmq_port)),
+            Err(e) => {
+                // Likely a port collision: bitcoind exited during start-up.
+                // Make sure it's gone, then retry with a fresh port pair.
+                let _ = process.start_kill();
+                let _ = process.wait().await;
+                last_err = Some(e);
+            }
+        }
+    }
+    bail!(
+        "bitcoind failed to bind after {BITCOIND_BIND_ATTEMPTS} attempts: {}",
+        last_err.map_or_else(|| "unknown".to_string(), |e| format!("{e:#}"))
+    )
+}
+
+/// Wait for a freshly-spawned bitcoind to answer RPC on regtest. Distinguishes
+/// "not up yet" (keep waiting) from "process exited" (a bind collision — caller
+/// retries with new ports).
+async fn wait_bitcoind_ready(process: &mut Child, client: &bitcoin_client::Client) -> Result<()> {
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(30);
+    loop {
+        if let Some(status) = process.try_wait()? {
+            bail!("bitcoind exited during start-up ({status}) — likely a port bind collision");
+        }
+        if let Ok(i) = client.get_blockchain_info().await {
+            if i.chain != Network::Regtest {
+                bail!("Network not regtest");
+            }
+            return Ok(());
+        }
+        if tokio::time::Instant::now() >= deadline {
+            bail!("bitcoind did not become ready within 30s");
+        }
+        tokio::time::sleep(Duration::from_millis(200)).await;
+    }
 }
 
 struct ConsensusNodeConfig {
@@ -147,24 +199,25 @@ pub fn default_kontor_bin() -> PathBuf {
     ))
 }
 
-/// Spawn a `kontor` node process and return a handle + API client. Returns as
-/// soon as the process is launched — it does *not* wait for the node to become
-/// available. Callers decide what to wait for: a seed waits only for its listen
-/// address ([`RegTesterCluster::wait_for_listen_addr`]), while nodes that will
-/// reach quorum wait for availability ([`RegTesterCluster::wait_for_available`]).
+/// Spawn a `kontor` node process and return a handle, API client, and the
+/// node's resolved API port. Binds the API on `--api-port 0` (OS-assigned, no
+/// probe/release race) and reads the real port back from the node's logs.
+/// Returns as soon as the API port is known — it does *not* wait for the node
+/// to become available. Callers decide what to wait for: a seed waits only for
+/// its listen address ([`RegTesterCluster::wait_for_listen_addr`]), while nodes
+/// that reach quorum wait for availability ([`RegTesterCluster::wait_for_available`]).
 async fn run_kontor(
     data_dir: &Path,
-    api_port: u16,
     bitcoin_rpc_url: &str,
     zmq_port: u16,
     consensus: Option<&ConsensusNodeConfig>,
     kontor_bin: &Path,
-) -> Result<(Child, KontorClient)> {
+) -> Result<(Child, KontorClient, u16)> {
     let config = RegtestConfig::default();
     let mut cmd = Command::new(kontor_bin);
     cmd.arg("run")
         .arg("--api-port")
-        .arg(api_port.to_string())
+        .arg("0")
         .arg("--data-dir")
         .arg(data_dir.to_string_lossy().into_owned())
         .arg("--network")
@@ -194,9 +247,58 @@ async fn run_kontor(
         }
     }
 
-    let process = cmd.spawn()?;
+    let mut process = cmd.stdout(std::process::Stdio::piped()).spawn()?;
+    let stdout = process
+        .stdout
+        .take()
+        .ok_or_else(|| anyhow!("kontor child has no piped stdout"))?;
+    let api_port = read_api_port_from_logs(stdout, Duration::from_secs(30)).await?;
     let client = KontorClient::new(format!("http://localhost:{api_port}/api"))?;
-    Ok((process, client))
+    Ok((process, client, api_port))
+}
+
+/// Read a `kontor run` child's resolved API port from its stdout. The node
+/// binds `--api-port 0` and logs the resolved address ("HTTP server running @
+/// http://0.0.0.0:PORT"); we scan for that line, then detach a task that keeps
+/// draining (and re-emitting) the rest so the child never blocks on a full
+/// stdout pipe and its logs stay visible in test output.
+async fn read_api_port_from_logs(stdout: ChildStdout, timeout: Duration) -> Result<u16> {
+    let mut lines = BufReader::new(stdout).lines();
+    let deadline = tokio::time::Instant::now() + timeout;
+    loop {
+        match tokio::time::timeout_at(deadline, lines.next_line()).await {
+            Ok(Ok(Some(line))) => {
+                let port = parse_http_server_port(&line);
+                println!("{line}");
+                if let Some(port) = port {
+                    tokio::spawn(async move {
+                        while let Ok(Some(line)) = lines.next_line().await {
+                            println!("{line}");
+                        }
+                    });
+                    return Ok(port);
+                }
+            }
+            Ok(Ok(None)) => bail!("kontor exited before reporting its API port"),
+            Ok(Err(e)) => return Err(e.into()),
+            Err(_) => bail!("kontor did not report its API port within {timeout:?}"),
+        }
+    }
+}
+
+/// Extract the port from the indexer's "HTTP server running @ http://<addr>:<port>"
+/// log line (matches both plain and JSON log formats). `None` for any other line.
+fn parse_http_server_port(line: &str) -> Option<u16> {
+    if !line.contains("HTTP server running") {
+        return None;
+    }
+    let after_scheme = line.split("http://").nth(1)?;
+    let port_part = after_scheme.rsplit(':').next()?;
+    let digits: String = port_part
+        .chars()
+        .take_while(|c| c.is_ascii_digit())
+        .collect();
+    digits.parse().ok()
 }
 
 /// Generate a random x-only public key string (for test signers that don't need a full identity).
@@ -885,18 +987,6 @@ pub struct ClusterNode {
     child: Child,
 }
 
-fn allocate_ports(n: usize) -> std::io::Result<Vec<u16>> {
-    let mut ports = Vec::with_capacity(n);
-    let mut listeners = Vec::with_capacity(n);
-    for _ in 0..n {
-        let listener = std::net::TcpListener::bind("127.0.0.1:0")?;
-        ports.push(listener.local_addr()?.port());
-        listeners.push(listener);
-    }
-    drop(listeners);
-    Ok(ports)
-}
-
 enum MinerCmd {
     Pause(tokio::sync::oneshot::Sender<()>),
     Resume(tokio::sync::oneshot::Sender<()>),
@@ -1030,17 +1120,16 @@ impl RegTesterCluster {
         let genesis_path = genesis_dir.path().join("genesis.json");
         std::fs::write(&genesis_path, serde_json::to_string(&genesis_config)?)?;
 
-        // Allocate API ports up front (the harness connects to each node's
-        // HTTP API by port). Consensus nodes bind `:0` instead — the OS
-        // assigns the port atomically at bind time, so there is no
-        // probe-then-release window for a parallel test to race into. The
-        // resolved port is read back from node 0 (the seed) and discovered by
-        // everyone else via libp2p.
-        let api_ports = allocate_ports(total)?;
-
+        // No port pre-allocation anywhere: each node binds both its HTTP API
+        // (`--api-port 0`) and its consensus listener (`/tcp/0`) on OS-assigned
+        // ports, atomically at bind time, so there is no probe-then-release
+        // window for a parallel test to race into. The resolved API port is read
+        // back from each node's logs (`api_port` is filled in after spawn); the
+        // consensus address is read from node 0 and discovered by everyone else
+        // via libp2p.
         let mut node_configs: Vec<NodeConfig> = (0..total)
             .map(|i| NodeConfig {
-                api_port: api_ports[i],
+                api_port: 0,
                 ed25519_key: ed25519_keys[i].clone(),
                 data_dir: TempDir::new().expect("Failed to create temp dir"),
                 running: None,
@@ -1057,7 +1146,7 @@ impl RegTesterCluster {
             active >= 1,
             "cluster needs at least the seed node (index 0)"
         );
-        let (seed_child, seed_client) = Self::spawn_node(
+        let (seed_child, seed_client, seed_api_port) = Self::spawn_node(
             &node_configs[0],
             &[],
             &genesis_path,
@@ -1066,6 +1155,7 @@ impl RegTesterCluster {
             kontor_bin,
         )
         .await?;
+        node_configs[0].api_port = seed_api_port;
         let seed_addr = Self::wait_for_listen_addr(&seed_client, Duration::from_secs(30)).await?;
         node_configs[0].running = Some(ClusterNode {
             client: seed_client,
@@ -1091,7 +1181,8 @@ impl RegTesterCluster {
             .into_iter()
             .enumerate()
         {
-            let (child, client) = result?;
+            let (child, client, api_port) = result?;
+            node_configs[offset + 1].api_port = api_port;
             node_configs[offset + 1].running = Some(ClusterNode { client, child });
         }
 
@@ -1236,7 +1327,7 @@ impl RegTesterCluster {
         bitcoin_rpc_url: &str,
         zmq_port: u16,
         kontor_bin: &Path,
-    ) -> Result<(Child, KontorClient)> {
+    ) -> Result<(Child, KontorClient, u16)> {
         let consensus_config = ConsensusNodeConfig {
             private_key_hex: hex::encode(nc.ed25519_key.inner().to_bytes()),
             listen_addr: "/ip4/127.0.0.1/tcp/0".to_string(),
@@ -1245,7 +1336,6 @@ impl RegTesterCluster {
         };
         run_kontor(
             nc.data_dir.path(),
-            nc.api_port,
             bitcoin_rpc_url,
             zmq_port,
             Some(&consensus_config),
@@ -1303,7 +1393,7 @@ impl RegTesterCluster {
     /// is never restarted (see [`Self::seed_addr`]).
     pub async fn start_node(&mut self, index: usize) -> Result<()> {
         let nc = &self.node_configs[index];
-        let (child, client) = Self::spawn_node(
+        let (child, client, api_port) = Self::spawn_node(
             nc,
             std::slice::from_ref(&self.seed_addr),
             &self.genesis_path,
@@ -1315,6 +1405,7 @@ impl RegTesterCluster {
         // A restart/late-joiner joins an existing quorum, so it does become
         // available.
         Self::wait_for_available(&client).await?;
+        self.node_configs[index].api_port = api_port;
         self.node_configs[index].running = Some(ClusterNode { client, child });
         Ok(())
     }
