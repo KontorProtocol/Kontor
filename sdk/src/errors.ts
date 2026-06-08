@@ -83,10 +83,7 @@ export class BaseError extends Error {
   }
 }
 
-function walkCause(
-  err: unknown,
-  fn?: (err: unknown) => boolean,
-): unknown {
+function walkCause(err: unknown, fn?: (err: unknown) => boolean): unknown {
   if (fn?.(err)) return err;
   if (err && typeof err === "object" && "cause" in err && err.cause != null) {
     return walkCause(err.cause, fn);

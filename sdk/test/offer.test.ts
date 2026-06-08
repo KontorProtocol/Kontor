@@ -6,25 +6,29 @@
  */
 import { test, expect, afterEach } from "vitest";
 import {
-  type Account,
+  type Signing,
   type KontorTransport,
   HolderRef,
   KontorSession,
   signet,
 } from "@kontor/sdk";
 
-const stubAccount: Account = {
-  xOnlyPubKey: "00".repeat(32),
-  address: "tb1pstub",
-  holderRef: HolderRef.xOnlyPubkey("00".repeat(32)),
-  signMessage: () => Promise.reject(new Error("stub")),
-  signPsbt: () => Promise.reject(new Error("stub")),
+const stubSigning: Signing = {
+  identity: {
+    xOnlyPubKey: "00".repeat(32),
+    address: "tb1pstub",
+    holderRef: HolderRef.xOnlyPubkey("00".repeat(32)),
+  },
+  psbt: () => Promise.reject(new Error("stub")),
 };
 
 /** Idle poller: bootstraps, then long-polls with nothing to report. */
 const pollerFetch = (async (url: string) => {
   const body = url.includes("/results")
-    ? { results: [], pagination: { has_more: false, next_offset: null, total_count: 0 } }
+    ? {
+        results: [],
+        pagination: { has_more: false, next_offset: null, total_count: 0 },
+      }
     : { last_result_id: 0, recent_blocks: [], signature: "idle" };
   if (url.includes("?wait=")) await new Promise((r) => setTimeout(r, 5));
   return new Response(JSON.stringify({ result: body }), {
@@ -54,7 +58,7 @@ function stubSession(): KontorSession {
   };
   const session = new KontorSession({
     chain: signet,
-    account: stubAccount,
+    signing: stubSigning,
     transport: () => transport,
     fetch: pollerFetch,
   });
@@ -69,9 +73,9 @@ test("openOffer: rejects a blob that isn't JSON", () => {
 });
 
 test("openOffer: rejects an unrecognized blob version", () => {
-  expect(() =>
-    stubSession().openOffer(JSON.stringify({ v: 99 })),
-  ).toThrow(/not a recognized offer/);
+  expect(() => stubSession().openOffer(JSON.stringify({ v: 99 }))).toThrow(
+    /not a recognized offer/,
+  );
 });
 
 test("inspect: flags a malformed offer rather than throwing", async () => {

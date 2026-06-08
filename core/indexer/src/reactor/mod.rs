@@ -72,6 +72,9 @@ pub struct Reactor<E: Executor> {
 
     last_height: u64,
     last_hash: Option<BlockHash>,
+    /// Shared with the API (`Env.consensus_listen_addr`); written on the first
+    /// `Listening` (see `handle_consensus_msg`'s `ConsensusReady` arm).
+    consensus_listen_addr: tokio::sync::watch::Sender<Option<String>>,
 }
 
 impl<E: Executor> Reactor<E> {
@@ -88,6 +91,7 @@ impl<E: Executor> Reactor<E> {
         consensus: consensus_state::ConsensusState,
         last_height: u64,
         last_hash: Option<BlockHash>,
+        consensus_listen_addr: tokio::sync::watch::Sender<Option<String>>,
     ) -> Self {
         let mut runtime = runtime;
         runtime.node_label = consensus
@@ -106,6 +110,7 @@ impl<E: Executor> Reactor<E> {
             ready_tx,
             event_tx,
             consensus,
+            consensus_listen_addr,
         }
     }
 
@@ -643,6 +648,7 @@ pub fn run(
     observation_channels: Option<consensus_state::ObservationChannels>,
     consensus_propose_timeout_ms: u64,
     fee_tx: Option<tokio::sync::watch::Sender<Fees>>,
+    consensus_listen_addr: tokio::sync::watch::Sender<Option<String>>,
 ) -> JoinHandle<()> {
     tokio::spawn({
         async move {
@@ -757,6 +763,7 @@ pub fn run(
                     consensus,
                     last_height,
                     last_hash,
+                    consensus_listen_addr,
                 );
 
                 reactor.run().await

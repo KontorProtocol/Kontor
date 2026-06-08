@@ -27,7 +27,9 @@
 import { hex } from "@scure/base";
 import { p2tr, Transaction } from "@scure/btc-signer";
 
-import type { Account } from "../account/index.js";
+import type { Identity } from "../identity.js";
+import type { Signing } from "../signing.js";
+import type { FundingSource } from "../funding.js";
 import type { Chain } from "../chains.js";
 import type { ContractAddress } from "../canonical/ContractAddress.js";
 import { ChainError, ContractError, TransportError } from "../errors.js";
@@ -50,13 +52,14 @@ import type {
   ViewResult,
 } from "../bindings.js";
 
-/** "txid:vout" outpoint key — the unit we dedupe / filter UTXOs by. */
-const keyOf = (u: { txid: string; vout: number }): string =>
-  `${u.txid}:${u.vout}`;
-
 export interface HttpTransportOptions {
   chain: Chain;
-  account: Account;
+  /** Identity funding + signing for this transport (the P2TR address/key). */
+  identity: Identity;
+  /** Signing capability — the SDK calls `signing.psbt(...)` to authorize.
+   *  Absent for a read-only transport (`view` works; submit/inspect/simulate
+   *  throw). */
+  signing?: Signing;
 
   /** Override the chain's HTTP endpoint. */
   url?: string;
@@ -66,19 +69,13 @@ export interface HttpTransportOptions {
   headers?: Record<string, string>;
 
   /**
-   * Funding source for submits. Two modes, picked by the value's shape:
-   *
-   *   - `Utxo[]` — bootstrap-once. Used on the first submit only;
-   *     afterwards `trackedFunding` (the change outputs of the prior
-   *     submit) takes over. The array is never consulted again.
-   *
-   *   - `() => Promise<Utxo[]>` — wallet-managed. Called on every
-   *     submit. The SDK auto-filters outpoints it just spent (so a
-   *     stale wallet view that still reports them won't double-spend),
-   *     but otherwise the callback's return value drives funding.
-   *     Tracking via `trackedFunding` is bypassed in this mode.
+   * Where submits get spendable UTXOs and report back spent/change. The
+   * transport holds no funding state itself — see `FundingSource`
+   * (`inMemoryFunding` for optimistic chaining, `queryFunding` for a
+   * stateless wallet/indexer source). Omit for read-only transports;
+   * `submit`/`inspect`/`simulate` then throw.
    */
-  utxos?: Utxo[] | (() => Promise<Utxo[]>);
+  funding?: FundingSource;
   /**
    * Default Bitcoin fee rate in sat/vB. Omit (or `null`) to let the
    * indexer pick its current `fastest_fee` when composing. Static —
@@ -108,59 +105,34 @@ export class HttpTransport implements KontorTransport {
   /** Indexer API base, trailing slash trimmed (so `${base}/contracts/…`). */
   private readonly baseUrl: string;
   private readonly fetchImpl: typeof fetch;
-  /**
-   * Change UTXOs from the most recent successful submit. In array
-   * (bootstrap) mode, after submit 1 this takes over and is the sole
-   * funding source thereafter. In callback mode it's not used — the
-   * callback is consulted every submit.
-   *
-   * `null` = no submit landed yet (or last broadcast failed); fall back
-   * to `opts.utxos`.
-   */
-  private trackedFunding: Utxo[] | null = null;
-  /**
-   * Outpoints this transport has spent in successful broadcasts so far.
-   * Consulted only in callback mode — a stale wallet that still reports
-   * a spent UTXO gets it filtered out before compose sees it. The set
-   * grows for the transport's lifetime; entries are tiny (a string per
-   * outpoint), so we don't bother with expiry. `clearTracking()` wipes
-   * it if the user wants a clean slate (e.g. an externally-broadcast
-   * sweep mooted the prior state).
-   */
-  private recentlySpent: Set<string> = new Set();
 
   constructor(private readonly opts: HttpTransportOptions) {
     this.baseUrl = (opts.url ?? opts.chain.urls.http).replace(/\/+$/, "");
     this.fetchImpl = opts.fetch ?? globalThis.fetch.bind(globalThis);
   }
 
-  /**
-   * Inject additional UTXOs into the tracked pool (array/bootstrap
-   * mode). Useful when fresh funding arrives mid-session — e.g. the
-   * user received a payment outside the SDK and wants the next submit
-   * to see it. Outpoints already in `recentlySpent` are dropped on
-   * the way in. No-op in callback mode (the callback owns funding).
-   */
-  addUtxos(more: Utxo[]): void {
-    if (typeof this.opts.utxos === "function") return;
-    const fresh = more.filter((u) => !this.recentlySpent.has(keyOf(u)));
-    if (fresh.length === 0) return;
-    const existing = this.trackedFunding ?? [];
-    const have = new Set(existing.map(keyOf));
-    const add = fresh.filter((u) => !have.has(keyOf(u)));
-    this.trackedFunding = [...existing, ...add];
+  /** The signer, or a clear error on a read-only transport. */
+  private requireSigning(): Signing {
+    if (this.opts.signing == null) {
+      throw new ChainError(
+        "this is a read-only session (no signer) — only `view` is available; " +
+          "construct with `signing` to submit/inspect/simulate",
+        { docsPath: "/sdk/session" },
+      );
+    }
+    return this.opts.signing;
   }
 
-  /**
-   * Wipe all transport-side funding state — `trackedFunding` and
-   * `recentlySpent`. After this, behavior reverts to the bootstrap
-   * state: array form re-reads `opts.utxos` on the next submit;
-   * callback form's filter is empty. Call this if external action
-   * (e.g. a manual sweep tx) has rendered the tracked state stale.
-   */
-  clearTracking(): void {
-    this.trackedFunding = null;
-    this.recentlySpent.clear();
+  /** The funding source, or a clear error if none was configured. */
+  private funding(): FundingSource {
+    if (this.opts.funding == null) {
+      throw new ChainError(
+        "this transport has no funding source — set `funding` on the session " +
+          "(e.g. `inMemoryFunding([utxo])` or `queryFunding(fetch)`)",
+        { docsPath: "/sdk/funding" },
+      );
+    }
+    return this.opts.funding;
   }
 
   async view(contract: ContractAddress, wave: string): Promise<string> {
@@ -286,14 +258,14 @@ export class HttpTransport implements KontorTransport {
     revealTx: Transaction;
     composed: ComposeOutputs;
   }> {
-    const { account } = this.opts;
+    const signing = this.requireSigning();
     const composed = await this.compose(reveal);
     const commitHexes = await Promise.all(
-      composed.commits.map((c) => signCommit(account, c.psbt_hex)),
+      composed.commits.map((c) => signCommit(signing, c.psbt_hex)),
     );
     return {
       commitHexes,
-      revealTx: await signReveal(account, composed.reveal.psbt_hex),
+      revealTx: await signReveal(signing, composed.reveal.psbt_hex),
       composed,
     };
   }
@@ -305,20 +277,21 @@ export class HttpTransport implements KontorTransport {
     insts: WireInsts,
     utxos: Utxo[],
   ): Promise<Reveal> {
-    const { account } = this.opts;
+    const { identity } = this.opts;
     const scriptPubKeyHex = hex.encode(
-      p2tr(hex.decode(account.xOnlyPubKey), undefined, this.opts.chain.network).script,
+      p2tr(hex.decode(identity.xOnlyPubKey), undefined, this.opts.chain.network)
+        .script,
     );
     return {
       sat_per_vbyte: this.opts.feeRate ?? null,
       participants: [
         {
-          x_only_public_key: account.xOnlyPubKey,
+          x_only_public_key: identity.xOnlyPubKey,
           commit_insts: insts,
           output: { Change: { script_pubkey: scriptPubKeyHex } },
           commit_source: {
             Build: {
-              address: account.address,
+              address: identity.address,
               funding_utxo_ids: utxos.map((u) => `${u.txid}:${u.vout}`),
             },
           },
@@ -352,16 +325,13 @@ export class HttpTransport implements KontorTransport {
   }
 
   /**
-   * The only blessed broadcast path for funding-state-mutating txs.
-   * See `KontorTransport.submitReveal` for the full contract.
-   *
-   * Body runs under the account's `runExclusive` for the entire
-   * critical section: read `utxos()` consistently, hand them to the
-   * `prepare` callback to shape the Reveal + compose+sign (and inject
-   * any foreign reveal witness), then extract → broadcast →
-   * `advanceTracking` — all before the lock is released. Two
-   * concurrent callers — even on separate transports binding the same
-   * Account — serialize.
+   * The blessed broadcast path for funding-spending txs. `take()` from
+   * the funding source, hand the candidates to `prepare` (which shapes
+   * the Reveal + compose+signs, and may inject a foreign reveal witness),
+   * extract → broadcast, then `settle()` the funding source with what was
+   * spent and the change created. On failure before broadcast, `release()`
+   * the reservation. No lock — serialization (if any) is the funding
+   * source's concern.
    */
   async submitReveal(
     prepare: (utxos: Utxo[]) => Promise<{
@@ -375,79 +345,73 @@ export class HttpTransport implements KontorTransport {
     revealHex: string;
     composed: ComposeOutputs;
   }> {
-    return this.opts.account.runExclusive(async () => {
-      const utxos = await this.utxos();
-      const { commitHexes, revealTx, composed } = await prepare(utxos);
-      const revealHex = hex.encode(revealTx.extract());
-      const result = await this.broadcast([...commitHexes, revealHex]);
-      this.advanceTracking({
-        suppliedUtxos: utxos,
-        composed,
-        commitHexes,
-        revealHex,
-      });
-      return { result, commitHexes, revealHex, composed };
-    });
+    const funding = this.funding();
+    const taken = await funding.take();
+    let commitHexes: string[];
+    let revealHex: string;
+    let composed: ComposeOutputs;
+    let result: BroadcastResult;
+    try {
+      const prepared = await prepare(taken);
+      commitHexes = prepared.commitHexes;
+      composed = prepared.composed;
+      revealHex = hex.encode(prepared.revealTx.extract());
+      result = await this.broadcast([...commitHexes, revealHex]);
+    } catch (err) {
+      funding.release(taken);
+      throw err;
+    }
+    funding.settle(
+      this.computeFundingDelta({ suppliedUtxos: taken, composed, commitHexes }),
+    );
+    return { result, commitHexes, revealHex, composed };
   }
 
   /**
-   * Update internal funding tracking after a commit/reveal package
-   * has been broadcast. The commit consumes a prefix of
-   * `suppliedUtxos` (length = `commitTx.inputsLength` — the indexer
-   * greedily picks from the head of the list); those go into
-   * `recentlySpent` so they don't resurface from `utxos()`, and the
-   * package's change outputs become `trackedFunding`.
-   *
-   * Called automatically by `submit`. Called by `attach.ts`'s offer
-   * build after it broadcasts the attach. Implements the
-   * `KontorTransport.advanceTracking` interface.
+   * Compute what a broadcast commit/reveal package spent and what change
+   * it created — fed to `FundingSource.settle`. The commit consumes a
+   * prefix of `suppliedUtxos` (length = `commitTx.inputsLength` — the
+   * indexer greedily picks from the head). Change is the reveal's
+   * dust-floor Change output (first, for consolidation) plus each commit's
+   * vout-1 change. Pure: no mutation.
    */
-  advanceTracking(opts: {
+  private computeFundingDelta(opts: {
     suppliedUtxos: Utxo[];
     composed: ComposeOutputs;
     commitHexes: string[];
-    revealHex: string;
-  }): void {
+  }): { spent: Utxo[]; change: Utxo[] } {
     const { suppliedUtxos, commitHexes, composed } = opts;
-    const accountScriptPubKey = hex.encode(
+    const ownScriptPubKey = hex.encode(
       p2tr(
-        hex.decode(this.opts.account.xOnlyPubKey),
+        hex.decode(this.opts.identity.xOnlyPubKey),
         undefined,
         this.opts.chain.network,
       ).script,
     );
-    const changeUtxos: Utxo[] = [];
+    const change: Utxo[] = [];
 
     // Reveal-change first — the dust-floor 330-sat output is what the
-    // indexer's greedy `select_utxos_for_commit` pulls in alongside the
-    // larger commit-change UTXO on the next submit, consolidating the
-    // dust naturally rather than letting it accumulate.
+    // indexer's greedy selector pulls in alongside the larger commit-change
+    // UTXO on the next submit, consolidating the dust naturally.
     const revealChangeIdx = composed.reveal.output_info.findIndex(
       (info) => typeof info === "object" && "Change" in info,
     );
     if (revealChangeIdx >= 0) {
       const info = composed.reveal.output_info[revealChangeIdx]!;
       if (typeof info === "object" && "Change" in info) {
-        changeUtxos.push({
+        change.push({
           txid: composed.reveal.txid,
           vout: revealChangeIdx,
           value: BigInt(info.Change.value),
-          scriptPubKey: accountScriptPubKey,
+          scriptPubKey: ownScriptPubKey,
         });
       }
     }
 
-    // Walk every commit once: spent-input prefix accounting and
-    // change-output recovery happen in lockstep so a future multi-Build
-    // flow can't lose tracked funding through a half-generalized
-    // iteration. Each commit consumes a prefix of `suppliedUtxos`
-    // (length = `inputsLength`, greedy selection from the head), then
-    // its vout 1 is change when `change_value != null`.
     let consumed = 0;
     if (commitHexes.length === 0) {
       // No commits — `suppliedUtxos` went straight into the reveal as
       // `extra_inputs`, every one consumed.
-      for (const u of suppliedUtxos) this.recentlySpent.add(keyOf(u));
       consumed = suppliedUtxos.length;
     } else {
       for (let i = 0; i < commitHexes.length; i++) {
@@ -457,26 +421,19 @@ export class HttpTransport implements KontorTransport {
           allowUnknownOutputs: true,
           allowUnknownInputs: true,
         });
-        const used = suppliedUtxos.slice(consumed, consumed + commitTx.inputsLength);
-        for (const u of used) this.recentlySpent.add(keyOf(u));
         consumed += commitTx.inputsLength;
         if (meta.change_value != null) {
-          changeUtxos.push({
+          change.push({
             txid: meta.txid,
             vout: 1,
             value: BigInt(meta.change_value),
-            scriptPubKey: accountScriptPubKey,
+            scriptPubKey: ownScriptPubKey,
           });
         }
       }
     }
 
-    // `trackedFunding` is the next submit's funding pool. New change
-    // first (dust-first for consolidation, per the indexer's greedy
-    // head-walking selector); then the unconsumed tail of
-    // `suppliedUtxos` — those are still unspent on chain, dropping
-    // them would strand the funding in array/bootstrap mode.
-    this.trackedFunding = [...changeUtxos, ...suppliedUtxos.slice(consumed)];
+    return { spent: suppliedUtxos.slice(0, consumed), change };
   }
 
   /**
@@ -493,90 +450,46 @@ export class HttpTransport implements KontorTransport {
   /**
    * Static analysis — the indexer parses the composed reveal without
    * executing it. One outcome per Inst; a rejected op surfaces as a
-   * non-Ok `OpResultRaw` carrying its error.
-   *
-   * Held under the account's lock so concurrent submit / submitReveal
-   * can't shift the funding pool out from under us mid-compose.
-   * Doesn't broadcast, doesn't advance tracking — the next real
-   * submit reuses the same UTXOs.
+   * non-Ok `OpResultRaw` carrying its error. Takes funding to build a
+   * valid reveal, but doesn't broadcast — so it `release()`s the
+   * reservation rather than settling.
    */
   async inspect(insts: WireInsts): Promise<OpResultRaw[]> {
-    return this.opts.account.runExclusive(async () => {
-      const utxos = await this.utxos();
-      const reveal = await this.buildSimpleReveal(insts, utxos);
+    const funding = this.funding();
+    const taken = await funding.take();
+    try {
+      const reveal = await this.buildSimpleReveal(insts, taken);
       const { revealTx } = await this.composeAndSign(reveal);
-      const ops = await this.postJson<OpWithResult[]>(
-        "/transactions/inspect",
-        { hex: hex.encode(revealTx.extract()) },
-      );
+      const ops = await this.postJson<OpWithResult[]>("/transactions/inspect", {
+        hex: hex.encode(revealTx.extract()),
+      });
       return ops.map(opWithResultToRaw);
-    });
+    } finally {
+      funding.release(taken);
+    }
   }
 
   /**
    * Sandboxed live execution — runs the composed reveal's ops against
    * current chain state in a throwaway tx, returning predicted per-Inst
-   * outcomes (real gas, real results) without broadcasting.
-   *
-   * Held under the account's lock for the same reason as `inspect`:
-   * read a consistent funding snapshot, no interleave with submitReveal.
+   * outcomes (real gas, real results) without broadcasting. Like
+   * `inspect`, it `release()`s its funding (nothing is spent).
    */
   async simulate(insts: WireInsts): Promise<OpResultRaw[]> {
-    return this.opts.account.runExclusive(async () => {
-      const utxos = await this.utxos();
-      const reveal = await this.buildSimpleReveal(insts, utxos);
+    const funding = this.funding();
+    const taken = await funding.take();
+    try {
+      const reveal = await this.buildSimpleReveal(insts, taken);
       const { revealTx } = await this.composeAndSign(reveal);
       const ops = await this.postJson<OpWithResult[]>(
         "/transactions/simulate",
         { hex: hex.encode(revealTx.extract()) },
       );
       return ops.map(opWithResultToRaw);
-    });
-  }
-
-  /**
-   * Funding UTXOs for the next submit. Two paths, by `opts.utxos` shape:
-   *
-   *   - Array (bootstrap-once): use `trackedFunding` if it's set
-   *     (post-submit), otherwise the bootstrap array.
-   *   - Callback (wallet-managed): always call the callback; filter
-   *     out any outpoints we know we've already spent.
-   *
-   * Inputs are returned in funding-priority order. The indexer's
-   * `select_utxos_for_commit` walks the list greedily and stops once it
-   * has enough, so ordering here drives selection — dust (reveal
-   * Change, 330) lives at the head of `trackedFunding` for consolidation.
-   *
-   * Public because the attach/detach runtime composes its own reveals
-   * outside of `submit` and needs the same funding source.
-   */
-  async utxos(): Promise<Utxo[]> {
-    if (Array.isArray(this.opts.utxos)) {
-      const list = this.trackedFunding ?? this.opts.utxos;
-      if (list.length === 0) {
-        throw new ChainError("submit: bootstrap utxos array is empty", {
-          docsPath: "/sdk/transport",
-        });
-      }
-      return list;
+    } finally {
+      funding.release(taken);
     }
-    if (typeof this.opts.utxos === "function") {
-      const supplied = await this.opts.utxos();
-      const fresh = supplied.filter((u) => !this.recentlySpent.has(keyOf(u)));
-      if (fresh.length === 0) {
-        throw new ChainError(
-          "submit: utxos() returned no unspent UTXOs (after filtering recently-spent)",
-          { docsPath: "/sdk/transport" },
-        );
-      }
-      return fresh;
-    }
-    throw new ChainError(
-      "submit: no funding UTXOs — set a `utxos` source on the transport",
-      { docsPath: "/sdk/transport" },
-    );
   }
-
 }
 
 /**
@@ -625,9 +538,8 @@ function opWithResultToRaw(o: OpWithResult): OpResultRaw {
 /**
  * Convenience factory mirroring Viem's `http()` style:
  *
- *     const transport = http({ chain: signet, account });
+ *     const transport = http({ chain: signet, identity, signing });
  */
 export function http(opts: HttpTransportOptions): HttpTransport {
   return new HttpTransport(opts);
 }
-

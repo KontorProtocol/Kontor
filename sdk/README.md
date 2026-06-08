@@ -2,7 +2,6 @@
 
 Types and utilities useful for working with the Kontor indexer.
 
-
 ```bash
 # setup
 npm install

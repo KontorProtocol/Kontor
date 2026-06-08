@@ -15,7 +15,7 @@
  */
 import { test, expect, afterEach } from "vitest";
 import {
-  type Account,
+  type Signing,
   type KontorTransport,
   Decimal,
   HolderRef,
@@ -36,13 +36,14 @@ function decimalWave(value: string): string {
   return `{r0: ${raw.r0}, r1: ${raw.r1}, r2: ${raw.r2}, r3: ${raw.r3}, sign: ${raw.sign}}`;
 }
 
-/** Throwaway Account — the mock-transport e2e never signs or broadcasts. */
-const stubAccount: Account = {
-  xOnlyPubKey: "00".repeat(32),
-  address: "tb1pstub",
-  holderRef: HolderRef.xOnlyPubkey("00".repeat(32)),
-  signMessage: () => Promise.reject(new Error("stub account: signMessage")),
-  signPsbt: () => Promise.reject(new Error("stub account: signPsbt")),
+/** Throwaway Signing — the mock-transport e2e never signs or broadcasts. */
+const stubSigning: Signing = {
+  identity: {
+    xOnlyPubKey: "00".repeat(32),
+    address: "tb1pstub",
+    holderRef: HolderRef.xOnlyPubkey("00".repeat(32)),
+  },
+  psbt: () => Promise.reject(new Error("stub signing: psbt")),
 };
 
 /** Sessions created by `mockSession`, closed after each test so the
@@ -59,7 +60,10 @@ afterEach(() => {
  */
 const pollerFetch = (async (url: string) => {
   const body = url.includes("/results")
-    ? { results: [], pagination: { has_more: false, next_offset: null, total_count: 0 } }
+    ? {
+        results: [],
+        pagination: { has_more: false, next_offset: null, total_count: 0 },
+      }
     : { last_result_id: 0, recent_blocks: [], signature: "idle" };
   if (url.includes("?wait=")) await new Promise((r) => setTimeout(r, 5));
   return new Response(JSON.stringify({ result: body }), {
@@ -103,7 +107,7 @@ function mockSession(viewResponses: Record<string, string>): {
   };
   const session = new KontorSession({
     chain: signet,
-    account: stubAccount,
+    signing: stubSigning,
     transport: () => transport,
     fetch: pollerFetch,
   });

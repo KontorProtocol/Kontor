@@ -4,11 +4,11 @@
  * via `bind(ContractClass, address)`; execute Insts (single, bulk, or
  * aggregate) through the session.
  *
- *     const session = new KontorSession({ chain: signet, account });
+ *     const session = new KontorSession({ chain: signet, signing });
  *     const token = session.bind(Token, "token@0.0");
  *
  *     // View — Promise<T> directly, hits transport.view (no tx)
- *     const balance = await token.balance(account.holderRef);
+ *     const balance = await token.balance(session.identity.holderRef);
  *
  *     // Proc single — await the Inst fires submit; throws on non-Ok
  *     await token.transfer(dst, amt);
@@ -20,7 +20,7 @@
  *     );
  *
  *     // Aggregate (contributor)
- *     const fragment = await token.transfer(dst, amt).signForAggregate(account);
+ *     const fragment = await token.transfer(dst, amt).signForAggregate(blsKey);
  *     // out-of-band: send fragment.serialize() to the aggregator
  *
  *     // Aggregate (aggregator)
@@ -32,7 +32,9 @@
  */
 
 import { ContractAddress } from "./canonical/ContractAddress.js";
-import type { Account } from "./account/index.js";
+import { canSignSchnorr, type Signing } from "./signing.js";
+import type { Identity } from "./identity.js";
+import type { FundingSource } from "./funding.js";
 import { BlsKey, buildRegistrationProof } from "./bls.js";
 import type { Chain } from "./chains.js";
 import { hex } from "@scure/base";
@@ -55,7 +57,28 @@ import type { KontorTransport } from "./json-codec.js";
 
 export interface KontorSessionOptions {
   chain: Chain;
-  account: Account;
+  /**
+   * The signing capability for this session. Carries its own `identity`
+   * (so identity and key can't be mismatched). Omit for a **read-only**
+   * session — pass `identity` instead. A read-only session can `view`
+   * (and is safe to build on a server / in an RSC); `submit` / `inspect`
+   * / `simulate` / `registerBls` throw.
+   */
+  signing?: Signing;
+  /**
+   * Identity for a read-only session, when no `signing` is given. Ignored
+   * if `signing` is present (its `signing.identity` wins). A plain
+   * serializable value — no key material — so it's safe server-side.
+   */
+  identity?: Identity;
+  /**
+   * Where the default transport gets spendable UTXOs (and reports back
+   * spent/change). Use `inMemoryFunding([utxo])` for optimistic chaining
+   * or `queryFunding(fetch)` for a stateless wallet/indexer source. Omit
+   * for read-only sessions (submit/inspect/simulate then throw). Ignored
+   * when a custom `transport` is supplied — that factory owns funding.
+   */
+  funding?: FundingSource;
   /**
    * Override the default `HttpTransport`. Useful for tests (swap in a
    * mock) or for custom backends that proxy through a different
@@ -64,7 +87,9 @@ export interface KontorSessionOptions {
    */
   transport?: (opts: {
     chain: Chain;
-    account: Account;
+    identity: Identity;
+    /** Absent for a read-only session. */
+    signing: Signing | undefined;
     feeRate: number | null;
   }) => KontorTransport;
   /**
@@ -114,7 +139,12 @@ type InstResults<Ts extends readonly Inst<unknown>[]> = {
 
 export class KontorSession {
   readonly chain: Chain;
-  readonly account: Account;
+  /** The signing capability bound to this session, or `undefined` for a
+   *  read-only session. */
+  readonly signing: Signing | undefined;
+  /** Who this session acts as — from `signing.identity` or the read-only
+   *  `identity` option. */
+  readonly identity: Identity;
   /** Public so `Inst<T>` / `Insts<T>` can route through it directly. */
   readonly transport: KontorTransport;
   /** Default gas cap for proc `Inst`s; see `KontorSessionOptions`. */
@@ -123,23 +153,40 @@ export class KontorSession {
    *  indexer pick its current `fastest_fee`. */
   readonly feeRate: number | null;
   /**
-   * The session's results poller — one shared loop, started here in the
-   * constructor. Backs `events()` and (later) `inst.submit().wait()`.
+   * The session's results poller — one shared loop. Started lazily on the
+   * first `events()` / `ready()` (and thus `submit().wait()`), so just
+   * constructing a session has no side effects and a read-only / view-only
+   * session never starts a loop. `close()` stops it.
    */
   private readonly poller: ResultsPoller;
 
   constructor(opts: KontorSessionOptions) {
+    const identity = opts.signing?.identity ?? opts.identity;
+    if (identity == null) {
+      throw new SignerError(
+        "KontorSession requires `signing` (read+write) or `identity` (read-only)",
+        { docsPath: "/sdk/session" },
+      );
+    }
     this.chain = opts.chain;
-    this.account = opts.account;
+    this.signing = opts.signing;
+    this.identity = identity;
     this.defaultGasLimit = opts.defaultGasLimit ?? DEFAULT_GAS_LIMIT;
     this.feeRate = opts.feeRate ?? null;
     const make =
       opts.transport ??
-      (({ chain, account, feeRate }) =>
-        new HttpTransport({ chain, account, feeRate: feeRate ?? undefined }));
+      (({ chain, identity, signing, feeRate }) =>
+        new HttpTransport({
+          chain,
+          identity,
+          signing,
+          funding: opts.funding,
+          feeRate: feeRate ?? undefined,
+        }));
     this.transport = make({
       chain: opts.chain,
-      account: opts.account,
+      identity: this.identity,
+      signing: opts.signing,
       feeRate: this.feeRate,
     });
     this.poller = new ResultsPoller({
@@ -148,7 +195,6 @@ export class KontorSession {
       from: opts.events?.from,
       filter: opts.events?.filter,
     });
-    this.poller.start();
   }
 
   /**
@@ -213,7 +259,16 @@ export class KontorSession {
    * different non-thenable handle when that work lands.
    */
   async registerBls(blsKey: BlsKey): Promise<void> {
-    const proof = await buildRegistrationProof(this.account, blsKey);
+    const signing = this.signing;
+    if (signing == null || !canSignSchnorr(signing)) {
+      throw new SignerError(
+        "registerBls requires a seed-holding (BLS-capable) signer — a " +
+          "read-only or browser-wallet session can't produce the Taproot↔BLS " +
+          "binding signature",
+        { docsPath: "/sdk/bls" },
+      );
+    }
+    const proof = await buildRegistrationProof(signing, blsKey);
     const inst = new Inst<void>(
       this,
       this.defaultGasLimit,
@@ -322,9 +377,7 @@ export class KontorSession {
    * result types don't survive the serialization boundary, so the
    * aggregator's `wait()` returns the raw WAVE strings.
    */
-  combineAggregate(
-    fragments: readonly AggregateFragment[],
-  ): Insts<unknown[]> {
+  combineAggregate(fragments: readonly AggregateFragment[]): Insts<unknown[]> {
     if (fragments.length === 0) {
       throw new SignerError(
         "combineAggregate: requires at least one fragment",
@@ -355,6 +408,23 @@ export class KontorSession {
   }
 
   /**
+   * Throw if this session can't broadcast (read-only — built with a bare
+   * `identity`, no `signing`). The submit paths call this *before*
+   * `events()`, so a read-only `submit()` fails without the side effect of
+   * starting the background poller. Keeps a read-only session genuinely
+   * side-effect-free / server-safe even if `submit` is called by mistake.
+   */
+  assertWritable(): void {
+    if (this.signing == null) {
+      throw new SignerError(
+        "submit requires a signer — this is a read-only session (construct " +
+          "with `signing`)",
+        { docsPath: "/sdk/session" },
+      );
+    }
+  }
+
+  /**
    * Follow chain events — the indexer-following API. Returns a fresh
    * async iterator over `ChainEvent`s (tx outcomes + reorg signals),
    * attached to the session's already-running poller. Multiple
@@ -373,6 +443,7 @@ export class KontorSession {
    * via `KontorSessionOptions.events` — not per call.
    */
   events(): AsyncIterableIterator<ChainEvent> {
+    this.poller.start(); // idempotent — lazy-starts the loop on first use
     return this.poller.events();
   }
 
@@ -382,6 +453,7 @@ export class KontorSession {
    * after the poller's bootstrap retries.
    */
   ready(): Promise<void> {
+    this.poller.start(); // idempotent — lazy-starts the loop on first use
     return this.poller.ready();
   }
 
@@ -421,9 +493,7 @@ function decodeContractAddressWave(wave: string): ContractAddress {
     /^\{\s*name:\s*"([^"]*)"\s*,\s*height:\s*(\d+)\s*,\s*tx-index:\s*(\d+)\s*\}$/,
   );
   if (m == null) {
-    throw new Error(
-      `expected contract-address WAVE record, got: ${wave}`,
-    );
+    throw new Error(`expected contract-address WAVE record, got: ${wave}`);
   }
   return new ContractAddress(m[1]!, BigInt(m[2]!), BigInt(m[3]!));
 }

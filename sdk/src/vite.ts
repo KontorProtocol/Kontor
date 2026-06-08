@@ -41,8 +41,7 @@ export function kontor(opts: KontorPluginOptions): Plugin {
   let root = process.cwd();
   const inputs = Array.isArray(opts.input) ? opts.input : [opts.input];
 
-  const resolved = (): string[] =>
-    inputs.map((p) => path.resolve(root, p));
+  const resolved = (): string[] => inputs.map((p) => path.resolve(root, p));
 
   const targetFor = (witAbs: string): string =>
     path.resolve(root, opts.outDir, `${path.basename(witAbs, ".wit")}.ts`);

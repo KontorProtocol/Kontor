@@ -8,6 +8,7 @@ use reqwest::{Client as HttpClient, ClientBuilder, Response, StatusCode};
 use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 
+use crate::api::handlers::NodeStatus;
 use crate::{config::Config, database::types::OpResultId, runtime::ContractAddress};
 
 #[derive(Clone, Debug)]
@@ -45,6 +46,19 @@ impl Client {
 
     pub async fn index(&self) -> Result<Info> {
         Self::handle_response(self.client.get(&self.url).send().await?).await
+    }
+
+    /// Node status. Unlike `index`, this is not gated by availability, so it
+    /// answers during bootstrap (before quorum exists) — used to read back a
+    /// node's resolved `consensus_listen_addr`.
+    pub async fn status(&self) -> Result<NodeStatus> {
+        Ok(self
+            .client
+            .get(format!("{}/status", &self.url))
+            .send()
+            .await?
+            .json::<NodeStatus>()
+            .await?)
     }
 
     /// Long-poll variant of `index`: the server holds the request until

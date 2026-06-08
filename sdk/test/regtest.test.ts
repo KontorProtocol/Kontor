@@ -16,7 +16,8 @@ const INFO = {
     "b02e485eed90477077e90585b3fa3b225f55a5085f0244c17315549afce0e447",
   devPublicKey:
     "3285de1e9b50e8eec053b840fb5c6b886cefcfdb729c37bba2a7e27a066f86fe",
-  devAddress: "bcrt1pfj2vd8zrgmrt2tu75t7kx29ju673v3mc8peqnp676524aayl0tvq0jq7mh",
+  devAddress:
+    "bcrt1pfj2vd8zrgmrt2tu75t7kx29ju673v3mc8peqnp676524aayl0tvq0jq7mh",
   identities: [
     {
       privateKey: "11".repeat(32),
@@ -109,13 +110,13 @@ test("parseRegtestInfo: throws on a complete-but-malformed info line", () => {
     /not valid JSON/,
   );
   const noBitcoinRpc = JSON.stringify({ ...INFO, bitcoinRpc: undefined });
-  expect(() => parseRegtestInfo(`KONTOR_REGTEST_INFO ${noBitcoinRpc}\n`)).toThrow(
-    /missing string field 'bitcoinRpc'/,
-  );
+  expect(() =>
+    parseRegtestInfo(`KONTOR_REGTEST_INFO ${noBitcoinRpc}\n`),
+  ).toThrow(/missing string field 'bitcoinRpc'/);
   const noIdentities = JSON.stringify({ ...INFO, identities: undefined });
-  expect(() => parseRegtestInfo(`KONTOR_REGTEST_INFO ${noIdentities}\n`)).toThrow(
-    /identities/,
-  );
+  expect(() =>
+    parseRegtestInfo(`KONTOR_REGTEST_INFO ${noIdentities}\n`),
+  ).toThrow(/identities/);
 });
 
 test("regtestChain: builds a bcrt chain wired to the parsed endpoints", () => {

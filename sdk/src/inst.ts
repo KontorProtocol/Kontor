@@ -33,7 +33,6 @@
 import { hex } from "@scure/base";
 
 import { AggregateFragment } from "./aggregate.js";
-import type { Account } from "./account/index.js";
 import type { BlsKey } from "./bls.js";
 import { aggregateSigningMessage } from "./component/kontor-sdk.js";
 import type {
@@ -44,11 +43,7 @@ import type {
 import { ContractAddress } from "./canonical/ContractAddress.js";
 import { ContractError, SignerError, TransportError } from "./errors.js";
 import type { ChainEvent } from "./events.js";
-import type {
-  BroadcastResult,
-  OpResult,
-  OpResultRaw,
-} from "./json-codec.js";
+import type { BroadcastResult, OpResult, OpResultRaw } from "./json-codec.js";
 import type { KontorSession } from "./session.js";
 
 /**
@@ -181,6 +176,8 @@ export class Inst<T> implements PromiseLike<T> {
    * once the indexer surfaces the outcome.
    */
   async submit(): Promise<SubmittedTx<OpResult<T>>> {
+    // Reject a read-only submit before any side effect (starting the poller).
+    this.session.assertWritable();
     const wire: WireInsts = { ops: [instToWire(this)], aggregate: null };
     // Attach to the poller's event stream *before* broadcasting, so the
     // tx's result event can't slip past between broadcast and wait().
@@ -276,10 +273,10 @@ export class Inst<T> implements PromiseLike<T> {
     blsKey: BlsKey,
     opts?: { sponsored?: boolean },
   ): Promise<AggregateFragment> {
-    const account = this.session.account;
+    const { identity } = this.session;
     const sponsored = opts?.sponsored ?? false;
 
-    const entry = await this.session.transport.signer(account.xOnlyPubKey);
+    const entry = await this.session.transport.signer(identity.xOnlyPubKey);
     // Pre-registration signers (no DB row yet) carry an implicit nonce
     // of 0 — the indexer's `advance_nonce` accepts it and writes the
     // row on first use. Established signers reuse their stored
@@ -287,7 +284,7 @@ export class Inst<T> implements PromiseLike<T> {
     const nonce = BigInt(entry?.next_nonce ?? 0);
 
     const wireInst = instToWire(this);
-    const claimJson = JSON.stringify({ XOnlyPubkey: account.xOnlyPubKey });
+    const claimJson = JSON.stringify({ XOnlyPubkey: identity.xOnlyPubKey });
     const instJson = JSON.stringify(wireInst);
 
     const msg = aggregateSigningMessage(claimJson, nonce, sponsored, instJson);
@@ -295,7 +292,7 @@ export class Inst<T> implements PromiseLike<T> {
 
     return new AggregateFragment({
       inst: wireInst,
-      signerXOnlyPubKey: account.xOnlyPubKey,
+      signerXOnlyPubKey: identity.xOnlyPubKey,
       blsPubkey: hex.encode(blsKey.pubkey),
       nonce: nonce.toString(),
       sponsored,
