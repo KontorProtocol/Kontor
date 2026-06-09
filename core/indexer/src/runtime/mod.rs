@@ -5,7 +5,6 @@ pub mod counter;
 pub mod file_ledger;
 pub mod filestorage;
 pub mod fuel;
-pub mod nft;
 pub mod numerics;
 pub mod pool;
 pub mod registry;

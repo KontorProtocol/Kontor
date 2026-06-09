@@ -8,7 +8,7 @@ import!(
     name = "filestorage",
     height = 0,
     tx_index = 0,
-    path = "../filestorage/wit"
+    path = "../../native-contracts/filestorage/wit"
 );
 
 const MAX_NFT_ID_LEN_BYTES: usize = 64;
