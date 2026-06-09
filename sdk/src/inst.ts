@@ -43,6 +43,7 @@ import type {
 import { ContractAddress } from "./canonical/ContractAddress.js";
 import { ContractError, SignerError, TransportError } from "./errors.js";
 import type { ChainEvent } from "./events.js";
+import type { ExtraOutput } from "./outputs.js";
 import type { BroadcastResult, OpResult, OpResultRaw } from "./json-codec.js";
 import type { KontorSession } from "./session.js";
 
@@ -175,7 +176,9 @@ export class Inst<T> implements PromiseLike<T> {
    * immediately, `handle.wait()` resolves the typed `OpResult<T>`
    * once the indexer surfaces the outcome.
    */
-  async submit(): Promise<SubmittedTx<OpResult<T>>> {
+  async submit(opts?: {
+    extraOutputs?: ExtraOutput[];
+  }): Promise<SubmittedTx<OpResult<T>>> {
     // Reject a read-only submit before any side effect (starting the poller).
     this.session.assertWritable();
     const wire: WireInsts = { ops: [instToWire(this)], aggregate: null };
@@ -184,7 +187,7 @@ export class Inst<T> implements PromiseLike<T> {
     const events = this.session.events();
     let broadcast: BroadcastResult;
     try {
-      broadcast = await this.session.transport.submit(wire);
+      broadcast = await this.session.transport.submit(wire, opts);
     } catch (e) {
       await events.return?.();
       throw e;

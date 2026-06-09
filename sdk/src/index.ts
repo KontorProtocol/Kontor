@@ -38,6 +38,7 @@ export { ContractBase } from "./contract-base";
 export { Attachment } from "./attach";
 export { Offer, IncomingOffer } from "./offer";
 export type { OfferData, OfferInspection } from "./offer";
+export type { ExtraOutput } from "./outputs";
 export { HttpTransport, http } from "./transport/http";
 export type { HttpTransportOptions } from "./transport/http";
 export type { Utxo } from "./json-codec";

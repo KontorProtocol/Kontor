@@ -34,6 +34,7 @@ import type { Chain } from "../chains.js";
 import type { ContractAddress } from "../canonical/ContractAddress.js";
 import { ChainError, ContractError, TransportError } from "../errors.js";
 import { signCommit, signReveal } from "./signing.js";
+import { toRevealOutputs, type ExtraOutput } from "../outputs.js";
 import type {
   BroadcastResult,
   KontorTransport,
@@ -276,6 +277,7 @@ export class HttpTransport implements KontorTransport {
   private async buildSimpleReveal(
     insts: WireInsts,
     utxos: Utxo[],
+    extraOutputs?: ExtraOutput[],
   ): Promise<Reveal> {
     const { identity } = this.opts;
     const scriptPubKeyHex = hex.encode(
@@ -288,7 +290,13 @@ export class HttpTransport implements KontorTransport {
         {
           x_only_public_key: identity.xOnlyPubKey,
           commit_insts: insts,
-          output: { Change: { script_pubkey: scriptPubKeyHex } },
+          // Change rides as the final extra_output (below), not a paired
+          // output: rider outputs slot in front of it so Change stays
+          // last. The indexer only silently drops sub-dust Change when
+          // it's the final output, so a paired Change at index 0 with
+          // riders appended after would turn a would-be-dropped dust
+          // change into a hard compose error.
+          output: null,
           commit_source: {
             Build: {
               address: identity.address,
@@ -298,7 +306,10 @@ export class HttpTransport implements KontorTransport {
         },
       ],
       extra_inputs: [],
-      extra_outputs: [],
+      extra_outputs: [
+        ...toRevealOutputs(extraOutputs, this.opts.chain.network),
+        { Change: { script_pubkey: scriptPubKeyHex } },
+      ],
     };
   }
 
@@ -316,9 +327,16 @@ export class HttpTransport implements KontorTransport {
    * in `recentlySpent` (callback mode's filter). On broadcast failure,
    * neither is touched — those UTXOs aren't actually spent.
    */
-  async submit(insts: WireInsts): Promise<BroadcastResult> {
+  async submit(
+    insts: WireInsts,
+    opts?: { extraOutputs?: ExtraOutput[] },
+  ): Promise<BroadcastResult> {
     const { result } = await this.submitReveal(async (utxos) => {
-      const reveal = await this.buildSimpleReveal(insts, utxos);
+      const reveal = await this.buildSimpleReveal(
+        insts,
+        utxos,
+        opts?.extraOutputs,
+      );
       return this.composeAndSign(reveal);
     });
     return result;

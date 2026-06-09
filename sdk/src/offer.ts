@@ -30,6 +30,7 @@ import {
 
 import type { Signing } from "./signing.js";
 import type { Reveal, TapLeafScript } from "./bindings.js";
+import { toRevealOutputs, type ExtraOutput } from "./outputs.js";
 import type { BitcoinNetwork } from "./chains.js";
 import { SignerError } from "./errors.js";
 import type { BroadcastResult, Utxo, WireInsts } from "./json-codec.js";
@@ -277,7 +278,9 @@ export class IncomingOffer {
    * `ctx.payer()` resolves to the buyer; the asset detaches to the
    * buyer (= signer of this `accept()` call). No OP_RETURN is involved.
    */
-  async accept(): Promise<BroadcastResult> {
+  async accept(opts?: {
+    extraOutputs?: ExtraOutput[];
+  }): Promise<BroadcastResult> {
     const { data } = this;
     const { identity, chain, transport } = this.session;
 
@@ -374,7 +377,9 @@ export class IncomingOffer {
           },
         ],
         extra_inputs: [],
-        extra_outputs: [],
+        // Both participants carry paired outputs (buyer Change, seller
+        // Fixed); these append after them in the layout.
+        extra_outputs: toRevealOutputs(opts?.extraOutputs, chain.network),
       };
       const prepared = await transport.composeAndSign(reveal);
       if (prepared.commitHexes.length !== 1) {
