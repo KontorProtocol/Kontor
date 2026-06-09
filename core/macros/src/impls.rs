@@ -33,6 +33,17 @@ pub fn generate(config: Config) -> TokenStream {
                 }
             }
 
+            impl kontor::built_in::context::Network {
+                /// True on the production Bitcoin mainnet chain.
+                pub fn is_mainnet(&self) -> bool {
+                    matches!(self, kontor::built_in::context::Network::Mainnet)
+                }
+                /// True on the local regtest chain (dev/test).
+                pub fn is_regtest(&self) -> bool {
+                    matches!(self, kontor::built_in::context::Network::Regtest)
+                }
+            }
+
             #[automatically_derived]
             impl Clone for kontor::built_in::context::Holder {
                 fn clone(&self) -> Self {

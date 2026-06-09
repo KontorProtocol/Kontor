@@ -63,7 +63,12 @@ impl Env {
             reactor_ready: Arc::new(AtomicBool::new(true)),
             consensus_listen_addr: watch::channel(None).1,
             event_subscriber: EventSubscriber::new(),
-            runtime_pool: runtime::pool::new(db_path.to_path_buf(), db_name).await?,
+            runtime_pool: runtime::pool::new(
+                db_path.to_path_buf(),
+                db_name,
+                bitcoin::Network::Regtest,
+            )
+            .await?,
             reader,
             simulate_tx,
             fees_rx,
