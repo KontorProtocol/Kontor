@@ -506,6 +506,7 @@ pub async fn create_runtime_executor(
     bitcoin_client: crate::bitcoin_client::Client,
     replay_tx: Option<mpsc::Sender<u64>>,
     genesis_validators: &[crate::runtime::GenesisValidator],
+    network: bitcoin::Network,
 ) -> Result<(executor::RuntimeExecutor, Runtime, u64, Option<BlockHash>)> {
     let conn = writer.connection();
     let (last_height, last_hash) = match select_block_latest(&conn)
@@ -575,6 +576,10 @@ pub async fn create_runtime_executor(
     let mut runtime = Runtime::new(ComponentCache::new(), storage)
         .await
         .context("Failed to initialize runtime")?;
+    // Set the chain network *before* publishing — native-contract `init` reads
+    // it via the `network()` built-in to self-condition per-network defaults
+    // (e.g. token's dev mint is off at mainnet genesis).
+    runtime.network = network;
     runtime
         .publish_native_contracts(genesis_validators)
         .await
@@ -649,6 +654,7 @@ pub fn run(
     consensus_propose_timeout_ms: u64,
     fee_tx: Option<tokio::sync::watch::Sender<Fees>>,
     consensus_listen_addr: tokio::sync::watch::Sender<Option<String>>,
+    network: bitcoin::Network,
 ) -> JoinHandle<()> {
     tokio::spawn({
         async move {
@@ -660,6 +666,7 @@ pub fn run(
                     bitcoin_client,
                     replay_tx,
                     &genesis_validators,
+                    network,
                 )
                 .await
                 .context("create_runtime_executor failed")?;

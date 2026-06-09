@@ -96,6 +96,21 @@ impl built_in::context::HostProcContextWithStore for Runtime {
         Ok(runtime.storage.height)
     }
 
+    async fn network<T>(
+        accessor: &Accessor<T, Self>,
+        _self: Resource<ProcContext>,
+    ) -> Result<built_in::context::Network> {
+        let runtime = accessor.with(|mut access| access.get().clone());
+        // `bitcoin::Network` is `#[non_exhaustive]`; fold Testnet4 and any
+        // future test network into `testnet`.
+        Ok(match runtime.network {
+            bitcoin::Network::Bitcoin => built_in::context::Network::Mainnet,
+            bitcoin::Network::Signet => built_in::context::Network::Signet,
+            bitcoin::Network::Regtest => built_in::context::Network::Regtest,
+            _ => built_in::context::Network::Testnet,
+        })
+    }
+
     async fn contract<T>(
         accessor: &Accessor<T, Self>,
         self_: Resource<ProcContext>,

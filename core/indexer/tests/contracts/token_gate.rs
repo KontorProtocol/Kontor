@@ -5,7 +5,7 @@
 
 use anyhow::{Result, anyhow};
 use indexer::runtime::token::api as token;
-use indexer::test_utils::test_runtime;
+use indexer::test_utils::{test_runtime, test_runtime_with_network};
 use testlib::Signer;
 
 fn core() -> Signer {
@@ -33,5 +33,17 @@ async fn dev_mint_defaults_on_and_core_can_disable() -> Result<()> {
         .await?
         .map_err(|e| anyhow!("{e:?}"))?;
     assert!(token::dev_mint_enabled(&mut rt).await?, "re-enabling works");
+    Ok(())
+}
+
+#[tokio::test]
+async fn dev_mint_disabled_on_mainnet() -> Result<()> {
+    // `init` runs under mainnet, so the public dev mint self-disables via the
+    // `network()` built-in — no genesis wiring needed.
+    let (mut rt, _dir, _name) = test_runtime_with_network(bitcoin::Network::Bitcoin).await?;
+    assert!(
+        !token::dev_mint_enabled(&mut rt).await?,
+        "public mint is off at mainnet genesis"
+    );
     Ok(())
 }

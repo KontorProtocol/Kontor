@@ -24,10 +24,15 @@ pub struct Manager {
     engine: Engine,
     linker: Linker<Runtime>,
     component_cache: ComponentCache,
+    network: bitcoin::Network,
 }
 
 impl Manager {
-    pub fn new(data_dir: PathBuf, filename: String) -> anyhow::Result<Self> {
+    pub fn new(
+        data_dir: PathBuf,
+        filename: String,
+        network: bitcoin::Network,
+    ) -> anyhow::Result<Self> {
         let engine = Runtime::new_engine()?;
         let linker = Runtime::new_linker(&engine)?;
         Ok(Self {
@@ -36,6 +41,7 @@ impl Manager {
             engine,
             linker,
             component_cache: ComponentCache::new(),
+            network,
         })
     }
 }
@@ -45,16 +51,20 @@ impl managed::Manager for Manager {
     type Error = RuntimeError;
 
     async fn create(&self) -> Result<Self::Type, Self::Error> {
-        Runtime::new_read_only(
+        let conn = new_connection(&self.data_dir, &self.filename)
+            .await
+            .map_err(|e| RuntimeError::DatabaseConnection(e.to_string()))?;
+        let mut runtime = Runtime::new_read_only(
             self.engine.clone(),
             self.linker.clone(),
             self.component_cache.clone(),
-            new_connection(&self.data_dir, &self.filename)
-                .await
-                .map_err(|e| RuntimeError::DatabaseConnection(e.to_string()))?,
+            conn,
         )
         .await
-        .map_err(|e| RuntimeError::CreationFailed(e.to_string()))
+        .map_err(|e| RuntimeError::CreationFailed(e.to_string()))?;
+        // Chain-identity constant, surfaced to contracts via `network()`.
+        runtime.network = self.network;
+        Ok(runtime)
     }
 
     async fn recycle(
@@ -66,8 +76,12 @@ impl managed::Manager for Manager {
     }
 }
 
-pub async fn new(data_dir: PathBuf, filename: String) -> anyhow::Result<Pool<Manager>> {
-    Pool::builder(Manager::new(data_dir, filename)?)
+pub async fn new(
+    data_dir: PathBuf,
+    filename: String,
+    network: bitcoin::Network,
+) -> anyhow::Result<Pool<Manager>> {
+    Pool::builder(Manager::new(data_dir, filename, network)?)
         .max_size(std::thread::available_parallelism()?.into())
         .build()
         .context("Failed to build runtime pool")

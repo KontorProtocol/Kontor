@@ -174,6 +174,11 @@ pub struct Runtime {
     pub previous_output: Option<bitcoin::OutPoint>,
     pub op_return_data: Option<SignerRef>,
     pub node_label: String,
+    /// The chain's Bitcoin network — a genesis-fixed constant exposed to
+    /// contracts via the `network()` built-in. Defaults to `Regtest` (tests /
+    /// lite executor); production paths (reactor, runtime pool) set it from
+    /// `config.network`.
+    pub network: bitcoin::Network,
 }
 
 impl Runtime {
@@ -224,6 +229,7 @@ impl Runtime {
             previous_output: None,
             op_return_data: None,
             node_label: String::new(),
+            network: bitcoin::Network::Regtest,
         })
     }
 

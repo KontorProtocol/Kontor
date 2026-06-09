@@ -67,9 +67,10 @@ fn transfer(ctx: &ProcContext, src: Holder, dst: Holder, amt: Decimal) -> Result
 impl Guest for Token {
     fn init(ctx: &ProcContext) -> Contract {
         TokenStorage::default().init(ctx);
-        // Public dev mint is on by default (signet/testnet/regtest); mainnet
-        // genesis disables it via `set_dev_mint(false)`.
-        ctx.model().set_dev_mint_enabled(true);
+        // Public dev mint is a dev/test affordance — enabled on every network
+        // except mainnet, where the only KOR mint path is protocol emissions.
+        // Self-conditioning via the `network()` built-in; no genesis wiring.
+        ctx.model().set_dev_mint_enabled(!ctx.network().is_mainnet());
         ctx.contract()
     }
 

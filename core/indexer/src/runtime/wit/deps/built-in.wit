@@ -107,6 +107,15 @@ interface context {
         contract: async func() -> contract;
     }
 
+    /// The Bitcoin network this chain runs on — a chain-identity constant,
+    /// fixed at genesis. `Testnet4` is folded into `testnet`.
+    enum network {
+        mainnet,
+        signet,
+        testnet,
+        regtest,
+    }
+
     resource proc-context {
         signer: async func() -> signer;
         /// Who pays this op's gas. A `holder` (not a `signer`) by design —
@@ -122,6 +131,9 @@ interface context {
         storage: async func() -> proc-storage;
         transaction: async func() -> transaction;
         block-height: async func() -> u64;
+        /// The chain's Bitcoin network — a genesis-fixed constant, safe to
+        /// branch consensus state on (e.g. network-specific defaults in `init`).
+        network: async func() -> network;
         /// The executing contract's own identity as a `contract` resource —
         /// the only way for the contract to obtain one pointing at itself.
         /// Returned from `init` so the new contract's address surfaces on
