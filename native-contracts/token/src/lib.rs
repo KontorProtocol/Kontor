@@ -13,10 +13,10 @@ const DEV_MINT_CAP: u64 = 1000;
 struct TokenStorage {
     pub ledger: Map<Holder, Decimal>,
     pub total_supply: Decimal,
-    /// Whether the public dev/test `mint` is permitted. Seeded `true` at `init`
-    /// so signet/testnet/regtest funding keeps working; mainnet genesis flips it
-    /// off via the core-context `set_dev_mint(false)` (the only KOR mint path on
-    /// mainnet is protocol emissions via `issuance`).
+    /// Whether the public dev/test `mint` is permitted. Set at `init` from the
+    /// chain `network()` — on for signet/testnet/regtest (faucet), off on
+    /// mainnet (the only KOR mint path there is protocol emissions via
+    /// `issuance`). Runtime-tunable via the core-context `set_dev_mint`.
     pub dev_mint_enabled: bool,
 }
 
@@ -70,7 +70,8 @@ impl Guest for Token {
         // Public dev mint is a dev/test affordance — enabled on every network
         // except mainnet, where the only KOR mint path is protocol emissions.
         // Self-conditioning via the `network()` built-in; no genesis wiring.
-        ctx.model().set_dev_mint_enabled(!ctx.network().is_mainnet());
+        ctx.model()
+            .set_dev_mint_enabled(!ctx.network().is_mainnet());
         ctx.contract()
     }
 
