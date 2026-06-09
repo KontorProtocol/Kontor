@@ -290,7 +290,13 @@ export class HttpTransport implements KontorTransport {
         {
           x_only_public_key: identity.xOnlyPubKey,
           commit_insts: insts,
-          output: { Change: { script_pubkey: scriptPubKeyHex } },
+          // Change rides as the final extra_output (below), not a paired
+          // output: rider outputs slot in front of it so Change stays
+          // last. The indexer only silently drops sub-dust Change when
+          // it's the final output, so a paired Change at index 0 with
+          // riders appended after would turn a would-be-dropped dust
+          // change into a hard compose error.
+          output: null,
           commit_source: {
             Build: {
               address: identity.address,
@@ -300,9 +306,10 @@ export class HttpTransport implements KontorTransport {
         },
       ],
       extra_inputs: [],
-      // Change is the participant's *paired* output above; these append
-      // after it in the layout.
-      extra_outputs: toRevealOutputs(extraOutputs, this.opts.chain.network),
+      extra_outputs: [
+        ...toRevealOutputs(extraOutputs, this.opts.chain.network),
+        { Change: { script_pubkey: scriptPubKeyHex } },
+      ],
     };
   }
 
