@@ -3,10 +3,21 @@ contract!(name = "token");
 
 use stdlib::*;
 
+/// Per-call cap on the *public, unprivileged* `mint` — a dev/test affordance
+/// (signet/testnet/regtest funding). It does NOT apply to the privileged
+/// core-context `issuance`/`issue_to` path that protocol emissions (and genesis
+/// stake issuance) use.
+const DEV_MINT_CAP: u64 = 1000;
+
 #[derive(Clone, Default, StorageRoot)]
 struct TokenStorage {
     pub ledger: Map<Holder, Decimal>,
     pub total_supply: Decimal,
+    /// Whether the public dev/test `mint` is permitted. Set once at `init` from
+    /// the chain `network()` — on for signet/testnet/regtest (faucet), off on
+    /// mainnet (the only KOR mint path there is protocol emissions via
+    /// `issuance`).
+    pub dev_mint_enabled: bool,
 }
 
 fn utxo_holder(out_point: context::OutPoint) -> Holder {
@@ -23,9 +34,6 @@ fn assert_gt_zero(n: Decimal) -> Result<(), Error> {
 
 fn mint(model: &TokenStorageWriteModel, dst: Holder, amt: Decimal) -> Result<Mint, Error> {
     assert_gt_zero(amt)?;
-    if amt > 1000u64.try_into()? {
-        return Err(Error::Message("Amount exceeds limit".to_string()));
-    }
     let ledger = model.ledger();
     let new_amt = ledger.get(&dst).unwrap_or_default().add(amt)?;
     ledger.set(&dst, new_amt);
@@ -59,6 +67,11 @@ fn transfer(ctx: &ProcContext, src: Holder, dst: Holder, amt: Decimal) -> Result
 impl Guest for Token {
     fn init(ctx: &ProcContext) -> Contract {
         TokenStorage::default().init(ctx);
+        // Public dev mint is a dev/test affordance — enabled on every network
+        // except mainnet, where the only KOR mint path is protocol emissions.
+        // Self-conditioning via the `network()` built-in; no genesis wiring.
+        ctx.model()
+            .set_dev_mint_enabled(!ctx.network().is_mainnet());
         ctx.contract()
     }
 
@@ -106,7 +119,22 @@ impl Guest for Token {
     }
 
     fn mint(ctx: &ProcContext, amt: Decimal) -> Result<Mint, Error> {
+        // Public mint is a dev/test affordance only — off on mainnet (the flag is
+        // set from `network()` at `init`). Protocol emissions mint via the
+        // privileged `issuance`/`issue_to` core path, uncapped and always on.
+        if !ctx.model().dev_mint_enabled() {
+            return Err(Error::Message(
+                "public mint is disabled on this network".to_string(),
+            ));
+        }
+        if amt > DEV_MINT_CAP.try_into()? {
+            return Err(Error::Message("Amount exceeds dev mint limit".to_string()));
+        }
         mint(&ctx.model(), ctx.signer().into(), amt)
+    }
+
+    fn dev_mint_enabled(ctx: &ViewContext) -> bool {
+        ctx.model().dev_mint_enabled()
     }
 
     fn burn(ctx: &ProcContext, amt: Decimal) -> Result<Burn, Error> {

@@ -231,8 +231,12 @@ async fn run_daemon(config: Config) -> Result<()> {
                 reader: reader.clone(),
                 event_subscriber: event_subscriber.clone(),
                 bitcoin: bitcoin.clone(),
-                runtime_pool: runtime::pool::new(config.data_dir.clone(), filename.to_string())
-                    .await?,
+                runtime_pool: runtime::pool::new(
+                    config.data_dir.clone(),
+                    filename.to_string(),
+                    config.network,
+                )
+                .await?,
                 simulate_tx,
                 fees_rx,
                 info_rx,
@@ -299,6 +303,7 @@ async fn run_daemon(config: Config) -> Result<()> {
         config.consensus_propose_timeout_ms,
         Some(fees_tx),
         consensus_listen_addr_tx,
+        config.network,
     ));
     ready_rx.await?;
     reactor_ready.store(true, std::sync::atomic::Ordering::Relaxed);
