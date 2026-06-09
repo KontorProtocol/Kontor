@@ -13,10 +13,10 @@ const DEV_MINT_CAP: u64 = 1000;
 struct TokenStorage {
     pub ledger: Map<Holder, Decimal>,
     pub total_supply: Decimal,
-    /// Whether the public dev/test `mint` is permitted. Set at `init` from the
-    /// chain `network()` — on for signet/testnet/regtest (faucet), off on
+    /// Whether the public dev/test `mint` is permitted. Set once at `init` from
+    /// the chain `network()` — on for signet/testnet/regtest (faucet), off on
     /// mainnet (the only KOR mint path there is protocol emissions via
-    /// `issuance`). Runtime-tunable via the core-context `set_dev_mint`.
+    /// `issuance`).
     pub dev_mint_enabled: bool,
 }
 
@@ -119,9 +119,9 @@ impl Guest for Token {
     }
 
     fn mint(ctx: &ProcContext, amt: Decimal) -> Result<Mint, Error> {
-        // Public mint is a dev/test affordance only — disabled on mainnet (see
-        // `set_dev_mint`). Protocol emissions mint via the privileged
-        // `issuance`/`issue_to` core-context path, which is uncapped and always on.
+        // Public mint is a dev/test affordance only — off on mainnet (the flag is
+        // set from `network()` at `init`). Protocol emissions mint via the
+        // privileged `issuance`/`issue_to` core path, uncapped and always on.
         if !ctx.model().dev_mint_enabled() {
             return Err(Error::Message(
                 "public mint is disabled on this network".to_string(),
@@ -131,13 +131,6 @@ impl Guest for Token {
             return Err(Error::Message("Amount exceeds dev mint limit".to_string()));
         }
         mint(&ctx.model(), ctx.signer().into(), amt)
-    }
-
-    /// Core-context (reactor/admin) toggle for the public dev mint. Mainnet
-    /// genesis calls `set_dev_mint(false)`; signet/testnet/regtest leave it on.
-    fn set_dev_mint(ctx: &CoreContext, enabled: bool) -> Result<(), Error> {
-        ctx.proc_context().model().set_dev_mint_enabled(enabled);
-        Ok(())
     }
 
     fn dev_mint_enabled(ctx: &ViewContext) -> bool {

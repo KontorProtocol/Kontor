@@ -1,38 +1,19 @@
-//! Lite test for the token contract's dev-mint network gate: the flag defaults
-//! on and the core-context `set_dev_mint` toggles it. Also validates that the
-//! rebuilt `token.wasm.br` actually carries the new methods (the indexer
-//! deploys the committed binary, not source).
+//! Lite tests for the token contract's network-conditioned dev mint: on for
+//! test networks, off at mainnet genesis. Also validates the rebuilt
+//! `token.wasm.br` (the indexer deploys the committed binary, not source).
 
-use anyhow::{Result, anyhow};
+use anyhow::Result;
 use indexer::runtime::token::api as token;
 use indexer::test_utils::{test_runtime, test_runtime_with_network};
-use testlib::Signer;
-
-fn core() -> Signer {
-    Signer::Core(Box::new(Signer::Nobody))
-}
 
 #[tokio::test]
-async fn dev_mint_defaults_on_and_core_can_disable() -> Result<()> {
+async fn dev_mint_on_for_test_networks() -> Result<()> {
+    // Default test runtime is regtest → faucet on.
     let (mut rt, _dir, _name) = test_runtime().await?;
-
     assert!(
         token::dev_mint_enabled(&mut rt).await?,
-        "public dev mint is on by default (signet/testnet/regtest)"
+        "public dev mint is on for signet/testnet/regtest"
     );
-
-    token::set_dev_mint(&mut rt, &core(), false)
-        .await?
-        .map_err(|e| anyhow!("{e:?}"))?;
-    assert!(
-        !token::dev_mint_enabled(&mut rt).await?,
-        "set_dev_mint(false) disables the public mint (mainnet genesis path)"
-    );
-
-    token::set_dev_mint(&mut rt, &core(), true)
-        .await?
-        .map_err(|e| anyhow!("{e:?}"))?;
-    assert!(token::dev_mint_enabled(&mut rt).await?, "re-enabling works");
     Ok(())
 }
 
