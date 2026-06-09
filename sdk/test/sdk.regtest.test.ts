@@ -44,6 +44,7 @@ import {
   type Utxo,
 } from "@kontor/sdk";
 import { hex, base64 } from "@scure/base";
+import { Transaction, p2tr } from "@scure/btc-signer";
 import { connectRegtest } from "@kontor/sdk/regtest";
 import { Contract as Token } from "./__generated__/token.js";
 import "./regtest-context.js";
@@ -219,11 +220,40 @@ test("SDK capstone: publish, transfer, bulk, marketplace", async () => {
         (await buyerToken.balance(buyer.identity.holderRef)) ??
         Decimal.from("0");
 
-      // Seller creates an offer; attach broadcasts immediately.
-      const offer = await sellerToken
-        .attachment(Decimal.from("2"))
-        .offer({ price: 600n });
+      // Seller creates an offer; attach broadcasts immediately. A
+      // marketplace listing fee rides along as an `extraOutputs`
+      // payment, settled in the same attach reveal rather than a
+      // separate tx — `accounts[0]` stands in as the marketplace.
+      const market = regtest.accounts[0]!.signing.identity;
+      const marketFee = 1_500n;
+      const offer = await sellerToken.attachment(Decimal.from("2")).offer({
+        price: 600n,
+        extraOutputs: [{ pay: { address: market.address, value: marketFee } }],
+      });
       const blob = offer.serialize();
+
+      // The attach reveal carries a fixed output paying the fee to the
+      // market's script — proves the rider output landed in the same tx.
+      const marketScript = hex.encode(
+        p2tr(hex.decode(market.xOnlyPubKey), undefined, chain.network).script,
+      );
+      const attachReveal = Transaction.fromRaw(
+        hex.decode(JSON.parse(blob).attachReveal as string),
+        { disableScriptCheck: true, allowUnknownOutputs: true },
+      );
+      let feePaid = false;
+      for (let i = 0; i < attachReveal.outputsLength; i++) {
+        const o = attachReveal.getOutput(i);
+        if (
+          o.script != null &&
+          hex.encode(o.script) === marketScript &&
+          o.amount === marketFee
+        ) {
+          feePaid = true;
+          break;
+        }
+      }
+      expect(feePaid).toBe(true);
 
       // Buyer opens + inspects.
       const incoming = buyerSession.openOffer(blob);

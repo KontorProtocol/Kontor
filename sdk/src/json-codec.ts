@@ -38,6 +38,7 @@
 import type { Transaction } from "@scure/btc-signer";
 
 import type { ContractAddress } from "./canonical/ContractAddress.js";
+import type { ExtraOutput } from "./outputs.js";
 import type {
   ComposeOutputs,
   Inst as WireInst,
@@ -148,8 +149,14 @@ export interface KontorTransport {
    * txid. Does NOT wait for inclusion — per-Inst outcomes are
    * resolved later by the session's results poller. This keeps
    * `submit` fast and lets callers see the txid before the tx lands.
+   *
+   * `opts.extraOutputs` appends caller-supplied rider outputs (e.g. a
+   * marketplace fee) to the reveal, after the account's change output.
    */
-  submit(insts: WireInsts): Promise<BroadcastResult>;
+  submit(
+    insts: WireInsts,
+    opts?: { extraOutputs?: ExtraOutput[] },
+  ): Promise<BroadcastResult>;
 
   /**
    * Combined compose: build any commits required by Build participants,

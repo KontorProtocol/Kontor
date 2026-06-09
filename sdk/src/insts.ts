@@ -28,6 +28,7 @@ import type { AggregateInfo } from "./bindings.js";
 import { ContractError, TransportError } from "./errors.js";
 import { instToWire, rawToOpResult, waitForTxOutcomes } from "./inst.js";
 import type { Inst, SubmittedTx, WaitOptions } from "./inst.js";
+import type { ExtraOutput } from "./outputs.js";
 import type {
   BroadcastResult,
   OpResult,
@@ -87,7 +88,9 @@ export class Insts<T extends readonly unknown[]> implements PromiseLike<T> {
    * immediately, `handle.wait()` resolves the tuple of per-Inst
    * `OpResult`s (`InstsOpResults<T>`) once the indexer surfaces them.
    */
-  async submit(): Promise<SubmittedTx<InstsOpResults<T>>> {
+  async submit(opts?: {
+    extraOutputs?: ExtraOutput[];
+  }): Promise<SubmittedTx<InstsOpResults<T>>> {
     // Reject a read-only submit before any side effect (starting the poller).
     this.session.assertWritable();
     // Attach to the poller before broadcasting — same race-close as
@@ -95,7 +98,7 @@ export class Insts<T extends readonly unknown[]> implements PromiseLike<T> {
     const events = this.session.events();
     let broadcast: BroadcastResult;
     try {
-      broadcast = await this.session.transport.submit(this.toWire());
+      broadcast = await this.session.transport.submit(this.toWire(), opts);
     } catch (e) {
       await events.return?.();
       throw e;

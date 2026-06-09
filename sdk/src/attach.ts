@@ -18,6 +18,7 @@ import { hex } from "@scure/base";
 import { p2tr } from "@scure/btc-signer";
 
 import type { Reveal } from "./bindings.js";
+import { toRevealOutputs, type ExtraOutput } from "./outputs.js";
 import { instToWire, type Inst } from "./inst.js";
 import type { WireInsts } from "./json-codec.js";
 import { Offer, buildSellerDetachPsbt, type OfferData } from "./offer.js";
@@ -54,7 +55,13 @@ export class Attachment<T> {
    * asset at listing time): subsequent `revoke()` and `accept()` only
    * need to send the detach / swap tx, not re-broadcast attach.
    */
-  async offer(opts: { price: bigint }): Promise<Offer> {
+  async offer(opts: {
+    price: bigint;
+    /** Rider outputs (e.g. a marketplace listing fee) settled in the
+     *  same attach reveal. Spliced after the escrow output and before
+     *  Change, which must stay last. */
+    extraOutputs?: ExtraOutput[];
+  }): Promise<Offer> {
     const { transport, identity, signing } = this.session;
     if (signing == null) {
       throw new TransportError(
@@ -110,6 +117,8 @@ export class Attachment<T> {
                 internal_key: identity.xOnlyPubKey,
               },
             },
+            ...toRevealOutputs(opts.extraOutputs, this.session.chain.network),
+            // Change MUST stay last — it absorbs leftover sats after fees.
             { Change: { script_pubkey: sellerScriptPubKey } },
           ],
         };
