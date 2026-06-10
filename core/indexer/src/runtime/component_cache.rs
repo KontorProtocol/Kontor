@@ -24,4 +24,11 @@ impl ComponentCache {
     pub async fn put(&self, key: u64, value: Component) {
         self.inner.insert(key, value).await
     }
+
+    /// Drop a cached component. Used when a publish rolls back: the contract id
+    /// may be reused by a later publish with different bytes, so a stale entry
+    /// must not survive.
+    pub async fn invalidate(&self, key: u64) {
+        self.inner.invalidate(&key).await
+    }
 }

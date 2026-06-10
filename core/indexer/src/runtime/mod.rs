@@ -425,6 +425,11 @@ impl Runtime {
                 .rollback()
                 .await
                 .map_err(ExecutionError::NonDeterministic)?;
+            // The contract row is gone and SQLite may hand this id to a later
+            // publish with different bytes. Drop the component we compiled and
+            // cached during validation/init so `load_component` can't serve stale
+            // WASM for whatever contract reuses the id.
+            self.component_cache.invalidate(contract_id).await;
             result
         } else {
             self.storage
@@ -837,6 +842,42 @@ mod tests {
         assert!(
             err.to_string().contains("init"),
             "error should point at the missing init: {err}"
+        );
+    }
+
+    /// A failed publish must not leave its compiled component in the cache: the
+    /// contract id is rolled back and SQLite can reuse it for a different
+    /// contract, which would then be served stale WASM by `load_component`.
+    #[tokio::test]
+    async fn failed_publish_evicts_component_cache() {
+        use crate::database::native_contracts::{FILESTORAGE, NATIVE_CONTRACTS};
+
+        let (mut runtime, _dir, _name) = test_runtime().await.expect("test runtime");
+        runtime
+            .set_context(
+                0,
+                Some(super::TransactionContext::builder().build()),
+                None,
+                None,
+            )
+            .await;
+        // The first user id — what this failed publish gets and then frees.
+        let reused_id = NATIVE_CONTRACTS.len() as u64 + 1;
+
+        // filestorage imports `file-registry`; published as a user contract it is
+        // rejected at the link check and rolled back. (Signer is irrelevant — the
+        // rejection is by contract id, before `init`.)
+        let signer = super::Signer::Core(Box::new(super::Signer::Nobody));
+        let payment = runtime.core_payment();
+        let result = runtime.publish(&signer, payment, "evil", FILESTORAGE).await;
+        assert!(
+            result.is_err(),
+            "publish of a file-registry-importing user contract must fail"
+        );
+
+        assert!(
+            runtime.component_cache.get(&reused_id).await.is_none(),
+            "failed publish must evict the cached component for its rolled-back id"
         );
     }
 }
