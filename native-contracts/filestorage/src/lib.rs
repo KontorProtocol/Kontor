@@ -23,6 +23,12 @@ const DEFAULT_BLOCKS_PER_YEAR: u64 = 52560;
 /// Number of sectors/symbols sampled per challenge
 const DEFAULT_S_CHAL: u64 = 100;
 
+/// Challenge count on regtest. The PoR prover (a Nova recursive SNARK) costs
+/// roughly linearly in this count; a small value keeps proof generation fast on
+/// the dev network and in tests. Soundness only matters on real networks, so
+/// signet/testnet/mainnet keep `DEFAULT_S_CHAL`.
+const REGTEST_S_CHAL: u64 = 8;
+
 // ─────────────────────────────────────────────────────────────────
 // State Types
 // ─────────────────────────────────────────────────────────────────
@@ -53,11 +59,19 @@ struct ProtocolState {
 
 impl Guest for Filestorage {
     fn init(ctx: &ProcContext) -> Contract {
+        // Smaller challenge count on regtest so the Nova prover stays fast for
+        // the dev network and tests; production networks use the full count.
+        // Self-conditioning via the `network()` built-in (cf. token dev-mint).
+        let s_chal = if ctx.network().is_regtest() {
+            REGTEST_S_CHAL
+        } else {
+            DEFAULT_S_CHAL
+        };
         ProtocolState {
             min_nodes: DEFAULT_MIN_NODES,
             challenge_deadline_blocks: DEFAULT_CHALLENGE_DEADLINE_BLOCKS,
             c_target: DEFAULT_C_TARGET,
-            s_chal: DEFAULT_S_CHAL,
+            s_chal,
             blocks_per_year: DEFAULT_BLOCKS_PER_YEAR,
             agreements: Map::default(),
             agreement_nodes: Map::default(),
@@ -144,9 +158,17 @@ impl Guest for Filestorage {
     fn join_agreement(
         ctx: &ProcContext,
         agreement_id: String,
-        node_id: String,
     ) -> Result<JoinAgreementResult, Error> {
         let model = ctx.model();
+
+        // Membership is keyed on the joining signer's identity, so one signer
+        // holds at most one slot per agreement (enforced by the dup-check
+        // below). This is a legitimacy guardrail — not a replication guarantee:
+        // replication is economic, and an operator behind multiple keys is
+        // undetectable by design. Keying on the signer also makes a failed
+        // challenge's `prover_id` resolve to a slashable stake.
+        let holder: Holder = (&ctx.signer()).into();
+        let node_id = holder.to_string();
 
         // Validate agreement exists
         let agreement = model
@@ -197,9 +219,13 @@ impl Guest for Filestorage {
     fn leave_agreement(
         ctx: &ProcContext,
         agreement_id: String,
-        node_id: String,
     ) -> Result<LeaveAgreementResult, Error> {
         let model = ctx.model();
+
+        // Only the signer that joined can leave its own membership — auth is
+        // structural now that the key is the signer's identity.
+        let holder: Holder = (&ctx.signer()).into();
+        let node_id = holder.to_string();
 
         // Validate agreement exists
         let _agreement = model

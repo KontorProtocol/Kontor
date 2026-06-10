@@ -84,16 +84,16 @@ world root {
   ) -> list<agreement-data>;
 
   // Node participation
+  // The node identity is the signer (one slot per signer per agreement); it is
+  // not a caller-supplied parameter.
   export join-agreement: async func(
     ctx: borrow<proc-context>,
-    agreement-id: string,
-    node-id: string
+    agreement-id: string
   ) -> result<join-agreement-result, error>;
 
   export leave-agreement: async func(
     ctx: borrow<proc-context>,
-    agreement-id: string,
-    node-id: string
+    agreement-id: string
   ) -> result<leave-agreement-result, error>;
 
   // Node queries
