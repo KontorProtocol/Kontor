@@ -75,8 +75,8 @@ impl LiteExecutor {
         .await?;
 
         let storage = Storage::builder().height(0).conn(conn).build();
-        let linker = Runtime::new_linker(&engine)?;
-        let mut runtime = Runtime::new_with(engine, linker, component_cache, storage).await?;
+        let linkers = Runtime::new_linkers(&engine)?;
+        let mut runtime = Runtime::new_with(engine, linkers, component_cache, storage).await?;
         runtime.publish_native_contracts(genesis_validators).await?;
 
         let identity = runtime.get_or_create_identity(&shared_pubkey).await?;

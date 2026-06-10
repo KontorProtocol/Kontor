@@ -16,6 +16,7 @@ use wasmtime::{
 use indexer_types::{OpStatus, Payment};
 use stdlib::CheckedArithmetics;
 
+use crate::database::native_contracts::is_native_contract_id;
 use crate::database::types::Identity;
 
 use std::sync::Arc;
@@ -91,8 +92,15 @@ impl Runtime {
         let mut store = self
             .make_store(fuel_limit)
             .map_err(ExecutionError::NonDeterministic)?;
-        let instance = self
-            .linker
+        // Native contracts get the privileged linker (file-registry, registry);
+        // user contracts get the common-only linker, so importing a registry
+        // interface fails to instantiate.
+        let linker = if is_native_contract_id(contract_id) {
+            &self.linkers.native
+        } else {
+            &self.linkers.user
+        };
+        let instance = linker
             .instantiate_async(&mut store, &component)
             .await
             .map_err(|e| ExecutionError::NonDeterministic(e.into()))?;

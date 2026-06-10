@@ -3,11 +3,11 @@ use std::path::PathBuf;
 use anyhow::Context;
 use deadpool::managed::{self, Pool, RecycleResult};
 use thiserror::Error;
-use wasmtime::{Engine, component::Linker};
+use wasmtime::Engine;
 
 use crate::{
     database::connection::new_connection,
-    runtime::{ComponentCache, Runtime},
+    runtime::{ComponentCache, Linkers, Runtime},
 };
 
 #[derive(Debug, Error)]
@@ -22,7 +22,7 @@ pub struct Manager {
     data_dir: PathBuf,
     filename: String,
     engine: Engine,
-    linker: Linker<Runtime>,
+    linkers: Linkers,
     component_cache: ComponentCache,
     network: bitcoin::Network,
 }
@@ -34,12 +34,12 @@ impl Manager {
         network: bitcoin::Network,
     ) -> anyhow::Result<Self> {
         let engine = Runtime::new_engine()?;
-        let linker = Runtime::new_linker(&engine)?;
+        let linkers = Runtime::new_linkers(&engine)?;
         Ok(Self {
             data_dir,
             filename,
             engine,
-            linker,
+            linkers,
             component_cache: ComponentCache::new(),
             network,
         })
@@ -56,7 +56,7 @@ impl managed::Manager for Manager {
             .map_err(|e| RuntimeError::DatabaseConnection(e.to_string()))?;
         let mut runtime = Runtime::new_read_only(
             self.engine.clone(),
-            self.linker.clone(),
+            self.linkers.clone(),
             self.component_cache.clone(),
             conn,
         )

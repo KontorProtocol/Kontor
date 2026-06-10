@@ -157,10 +157,21 @@ impl PartialEq for RawFileDescriptor {
 
 impl Eq for RawFileDescriptor {}
 
+/// The two host capability surfaces over a single `Runtime`. `user` registers
+/// only the common built-ins; `native` additionally registers the privileged
+/// registries (`file-registry`, `registry`). Both share the same `Runtime`
+/// host state — they differ only in which interfaces a component can import.
+/// `prepare_call` selects one per contract by native contract id.
+#[derive(Clone)]
+pub struct Linkers {
+    pub user: Linker<Runtime>,
+    pub native: Linker<Runtime>,
+}
+
 #[derive(Clone)]
 pub struct Runtime {
     pub engine: Engine,
-    pub linker: Linker<Self>,
+    pub linkers: Linkers,
     pub table: Arc<Mutex<ResourceTable>>,
     pub component_cache: ComponentCache,
     pub storage: Storage,
@@ -194,28 +205,52 @@ impl Runtime {
         Ok(Engine::new(&config)?)
     }
 
-    pub fn new_linker(engine: &Engine) -> Result<Linker<Self>> {
-        let mut linker = Linker::new(engine);
-        Root::add_to_linker::<_, Self>(&mut linker, |s| s)?;
-        Ok(linker)
+    /// Built-ins every contract gets (the user-land surface, plus the
+    /// types-only `file-registry-types` for cross-contract ABIs).
+    fn register_common(linker: &mut Linker<Self>) -> Result<()> {
+        kontor::built_in::error::add_to_linker::<_, Self>(linker, |s| s)?;
+        kontor::built_in::context::add_to_linker::<_, Self>(linker, |s| s)?;
+        kontor::built_in::foreign::add_to_linker::<_, Self>(linker, |s| s)?;
+        kontor::built_in::crypto::add_to_linker::<_, Self>(linker, |s| s)?;
+        kontor::built_in::numbers::add_to_linker::<_, Self>(linker, |s| s)?;
+        kontor::built_in::testing::add_to_linker::<_, Self>(linker, |s| s)?;
+        kontor::built_in::file_registry_types::add_to_linker::<_, Self>(linker, |s| s)?;
+        Ok(())
+    }
+
+    /// Privileged registries — registered only into the native linker, so a
+    /// user contract that imports them fails to instantiate.
+    fn register_native(linker: &mut Linker<Self>) -> Result<()> {
+        kontor::built_in::file_registry::add_to_linker::<_, Self>(linker, |s| s)?;
+        kontor::built_in::registry::add_to_linker::<_, Self>(linker, |s| s)?;
+        Ok(())
+    }
+
+    pub fn new_linkers(engine: &Engine) -> Result<Linkers> {
+        let mut user = Linker::new(engine);
+        Self::register_common(&mut user)?;
+        let mut native = Linker::new(engine);
+        Self::register_common(&mut native)?;
+        Self::register_native(&mut native)?;
+        Ok(Linkers { user, native })
     }
 
     pub async fn new(component_cache: ComponentCache, storage: Storage) -> Result<Self> {
         let engine = Self::new_engine()?;
-        let linker = Self::new_linker(&engine)?;
-        Self::new_with(engine, linker, component_cache, storage).await
+        let linkers = Self::new_linkers(&engine)?;
+        Self::new_with(engine, linkers, component_cache, storage).await
     }
 
     pub async fn new_with(
         engine: Engine,
-        linker: Linker<Self>,
+        linkers: Linkers,
         component_cache: ComponentCache,
         storage: Storage,
     ) -> Result<Self> {
         let file_ledger = FileLedger::rebuild_from_db(&storage.conn).await?;
         Ok(Self {
             engine,
-            linker,
+            linkers,
             table: Arc::new(Mutex::new(ResourceTable::new())),
             component_cache,
             storage,
@@ -236,13 +271,13 @@ impl Runtime {
 
     pub async fn new_read_only(
         engine: Engine,
-        linker: Linker<Self>,
+        linkers: Linkers,
         component_cache: ComponentCache,
         conn: Connection,
     ) -> Result<Self> {
         Runtime::new_with(
             engine,
-            linker,
+            linkers,
             component_cache,
             Storage::builder().conn(conn).build(),
         )
