@@ -104,6 +104,7 @@ use wasmtime::{
 };
 
 use indexer_types::Payment;
+use wit_validator::Validator as WitValidator;
 
 use crate::bls::RegistrationProof;
 use crate::database;
@@ -412,7 +413,7 @@ impl Runtime {
         // failure is a Deterministic rejection (roll back and continue), never
         // a node shutdown. The linker itself is the allowlist, so there is no
         // separate interface list to keep in sync.
-        let result = match self.validate_publishable_links(contract_id).await {
+        let result = match self.validate_publishable(contract_id).await {
             Ok(()) => {
                 self.execute(Some(signer), Some(payment), &address, "init()")
                     .await
@@ -434,12 +435,21 @@ impl Runtime {
         }
     }
 
-    /// Resolve the contract's imports against the linker it will run under
-    /// (native for ids 1..=NATIVE_CONTRACTS.len(), the restricted user linker
-    /// otherwise). A failure means the contract imports an interface that linker
-    /// does not provide — e.g. a user contract reaching for `file-registry`.
-    /// This is a pure (component, linker) check, so the failure is Deterministic.
-    async fn validate_publishable_links(&self, contract_id: u64) -> Result<(), ExecutionError> {
+    /// Deterministic publish-time validation. All checks are pure functions of
+    /// the contract bytes (and fixed code), so they reject identically on every
+    /// node — `Deterministic`, never a shutdown.
+    ///
+    /// 1. **Link check** (all contracts): the component's imports must resolve
+    ///    against the linker it will run under (native for ids
+    ///    1..=NATIVE_CONTRACTS.len(), the restricted user linker otherwise).
+    ///    Catches a user contract reaching for `file-registry`/`registry`.
+    /// 2. **WIT rule check** (user contracts only): the extracted WIT must
+    ///    satisfy the Kontor rules the linker can't see — `init` exists with the
+    ///    right shape, exports are `async`, valid context/return types, no
+    ///    floats/flags/nested-lists/cycles, etc. Native contracts use the
+    ///    privileged surface (core-context, file-registry) and are validated at
+    ///    compile time, so the user-surface validator is skipped for them.
+    async fn validate_publishable(&self, contract_id: u64) -> Result<(), ExecutionError> {
         let component = self
             .load_component(contract_id)
             .await
@@ -454,6 +464,31 @@ impl Runtime {
                 "contract imports an interface it is not permitted to use: {e:#}"
             ))
         })?;
+
+        if !is_native_contract_id(contract_id) {
+            let wit = self
+                .storage
+                .component_wit_raw(contract_id)
+                .await
+                .map_err(ExecutionError::NonDeterministic)?;
+            match WitValidator::validate_str(&wit) {
+                Ok((result, resolve)) if result.has_errors() => {
+                    let detail: Vec<String> =
+                        result.errors.iter().map(|e| e.render(&resolve)).collect();
+                    return Err(ExecutionError::Deterministic(anyhow!(
+                        "contract WIT failed validation: {}",
+                        detail.join("; ")
+                    )));
+                }
+                Ok(_) => {}
+                Err(e) => {
+                    return Err(ExecutionError::Deterministic(anyhow!(
+                        "contract WIT could not be parsed: {}",
+                        e.message
+                    )));
+                }
+            }
+        }
         Ok(())
     }
 
@@ -731,7 +766,7 @@ mod tests {
 
     /// Publish-time enforcement, end-to-end: a user-published contract (id past
     /// the native range) whose component imports a native-only interface is
-    /// rejected DETERMINISTICALLY by `validate_publishable_links` — not stored,
+    /// rejected DETERMINISTICALLY by `validate_publishable` — not stored,
     /// not a node shutdown. We reuse filestorage's bytes (which import
     /// `file-registry`) and insert them as a user contract.
     #[tokio::test]
@@ -760,7 +795,7 @@ mod tests {
         );
 
         let err = runtime
-            .validate_publishable_links(contract_id)
+            .validate_publishable(contract_id)
             .await
             .expect_err("user contract importing file-registry must be rejected");
         assert!(

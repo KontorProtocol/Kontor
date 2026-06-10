@@ -129,14 +129,22 @@ impl Storage {
             .encode()
     }
 
-    pub async fn component_wit(&self, contract_id: u64) -> Result<String> {
+    /// The component's WIT exactly as embedded — `init`, core-context and all.
+    /// Used for on-chain publish validation, where the validator must see the
+    /// real surface. (`component_wit` strips `init`/core-context for client
+    /// display, which would make a valid contract look invalid.)
+    pub async fn component_wit_raw(&self, contract_id: u64) -> Result<String> {
         let bs = self.component_bytes(contract_id).await?;
         let decoded = wit_component::decode(&bs).context("Failed to decode component")?;
         let mut printer = WitPrinter::default();
         printer
             .print(decoded.resolve(), decoded.package(), &[])
             .context("Failed to print component")?;
-        let wit = format!("{}", printer.output);
+        Ok(format!("{}", printer.output))
+    }
+
+    pub async fn component_wit(&self, contract_id: u64) -> Result<String> {
+        let wit = self.component_wit_raw(contract_id).await?;
         // regexr.com/8i6dk
         let re = RegexBuilder::new(r"(\n^.*(borrow<core-context>|export init:|\{\s*core-context\s*\}).*$|[,]{0,1}\s*core-context[,]{0,1}\s*)")
             .multi_line(true)

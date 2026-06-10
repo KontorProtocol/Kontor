@@ -3820,6 +3820,7 @@ dependencies = [
  "wasm-wave 0.251.0",
  "wasmtime",
  "wit-component 0.251.0",
+ "wit-validator",
  "zmq",
 ]
 
