@@ -17,7 +17,9 @@ mod types;
 pub use error::{ValidationError, ValidationResult};
 pub use wit_parser::Resolve;
 
-const BUILT_IN_WIT: &str = include_str!("../../indexer/src/runtime/wit/deps/built-in.wit");
+// User-land surface only (no file-registry / registry): user contracts are
+// validated against this, so referencing native-only registries fails to resolve.
+const BUILT_IN_WIT: &str = include_str!("../../indexer/src/runtime/wit/deps/built-in/common.wit");
 
 /// Validates WIT files against Kontor-specific rules.
 pub struct Validator;

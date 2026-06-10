@@ -1,7 +1,7 @@
 package root:component;
 
 world root {
-  include kontor:built-in/built-in;
+  include kontor:built-in/built-in-native;
   use kontor:built-in/context.{view-context, proc-context, contract};
 
   export init: async func(ctx: borrow<proc-context>) -> contract;

@@ -239,6 +239,10 @@ impl Runtime {
 
 impl built_in::error::Host for Runtime {}
 
+// Types-only interface (raw-file-descriptor lives here for the cross-contract
+// ABI); no functions, so just the marker impl — like `error`.
+impl built_in::file_registry_types::Host for Runtime {}
+
 impl built_in::testing::Host for Runtime {}
 
 impl built_in::testing::HostWithStore for Runtime {

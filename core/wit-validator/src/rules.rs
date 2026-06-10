@@ -29,8 +29,9 @@ fn validate_required_exports(resolve: &Resolve) -> Vec<ValidationError> {
     let mut errors = Vec::new();
 
     for (_world_id, world) in resolve.worlds.iter() {
-        // Skip the built-in world
-        if world.name == "built-in" {
+        // Skip the built-in worlds (`built-in`, `built-in-native`) — only the
+        // contract's own world must export `init`.
+        if world.name.starts_with("built-in") {
             continue;
         }
 

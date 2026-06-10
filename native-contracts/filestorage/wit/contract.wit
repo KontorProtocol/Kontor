@@ -1,10 +1,10 @@
 package root:component;
 
 world root {
-  include kontor:built-in/built-in;
+  include kontor:built-in/built-in-native;
   use kontor:built-in/context.{view-context, proc-context, core-context, contract};
   use kontor:built-in/error.{error};
-  use kontor:built-in/file-registry.{raw-file-descriptor};
+  use kontor:built-in/file-registry-types.{raw-file-descriptor};
 
   // ─────────────────────────────────────────────────────────────────
   // Output/Storage Types

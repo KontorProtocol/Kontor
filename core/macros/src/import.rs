@@ -160,7 +160,7 @@ pub fn import(
             use super::context::HolderRef;
             use super::foreign;
             use super::context::ContractAddress;
-            use super::file_registry::RawFileDescriptor;
+            use super::file_registry_types::RawFileDescriptor;
             use super::error::Error;
             use super::numbers::{ Decimal, Integer };
         }
