@@ -1,5 +1,5 @@
 package root:component;
 
 world root {
-    include kontor:built-in/built-in;
+    include kontor:built-in/built-in-native;
 }

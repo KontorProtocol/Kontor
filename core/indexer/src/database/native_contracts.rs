@@ -18,3 +18,9 @@ pub const NATIVE_CONTRACTS: &[(&str, &[u8])] = &[
     ("registry", REGISTRY),
     ("nft", NFT),
 ];
+
+/// Native contracts get 1-indexed ids in publish order (1..=len). Used by the
+/// runtime to select the privileged (native) linker at instantiation.
+pub fn is_native_contract_id(contract_id: u64) -> bool {
+    contract_id >= 1 && (contract_id as usize) <= NATIVE_CONTRACTS.len()
+}

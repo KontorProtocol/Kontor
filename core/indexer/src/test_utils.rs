@@ -352,8 +352,8 @@ async fn shared_test_engine() -> (wasmtime::Engine, Vec<(u64, wasmtime::componen
         .expect("insert block");
 
         let storage = Storage::builder().height(0).conn(conn).build();
-        let linker = Runtime::new_linker(&engine).expect("linker");
-        let mut runtime = Runtime::new_with(engine.clone(), linker, cache.clone(), storage)
+        let linkers = Runtime::new_linkers(&engine).expect("linkers");
+        let mut runtime = Runtime::new_with(engine.clone(), linkers, cache.clone(), storage)
             .await
             .expect("runtime");
         runtime
@@ -428,8 +428,8 @@ async fn test_runtime_inner(
     for (id, component) in &prewarmed {
         cache.put(*id, component.clone()).await;
     }
-    let linker = Runtime::new_linker(&engine)?;
-    let mut runtime = Runtime::new_with(engine, linker, cache, storage).await?;
+    let linkers = Runtime::new_linkers(&engine)?;
+    let mut runtime = Runtime::new_with(engine, linkers, cache, storage).await?;
     // Set before publish so contract `init` sees it (the `network()` built-in).
     runtime.network = network;
     runtime.publish_native_contracts(genesis_validators).await?;

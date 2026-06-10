@@ -19,6 +19,7 @@ stdlib = { path = "../stdlib" }
 macros = { path = "../macros" }
 numerics = { path = "../numerics" }
 indexer-types = { path = "../indexer-types" }
+wit-validator = { path = "../wit-validator" }
 anyhow = { workspace = true }
 axum = { workspace = true }
 tokio = { workspace = true }

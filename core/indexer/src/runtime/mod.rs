@@ -34,10 +34,10 @@ pub use stdlib::{
     wave_type,
 };
 use stdlib::{contract_address, holder_ref, impls};
+use storage::print_component_wit;
 pub use storage::{Storage, TransactionContext};
 use tokio::sync::Mutex;
 pub use types::default_val_for_type;
-pub use wit::Root;
 
 use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, LazyLock};
@@ -90,7 +90,8 @@ pub use wit::kontor;
 pub use wit::kontor::built_in::context::ContractAddress;
 pub use wit::kontor::built_in::context::OutPoint;
 pub use wit::kontor::built_in::error::Error;
-pub use wit::kontor::built_in::file_registry::{ChallengeInput, RawFileDescriptor, VerifyResult};
+pub use wit::kontor::built_in::file_registry::{ChallengeInput, VerifyResult};
+pub use wit::kontor::built_in::file_registry_types::RawFileDescriptor;
 pub use wit::kontor::built_in::numbers::{
     Decimal, Integer, Ordering as NumericOrdering, Sign as NumericSign,
 };
@@ -103,10 +104,11 @@ use wasmtime::{
 };
 
 use indexer_types::Payment;
+use wit_validator::Validator as WitValidator;
 
 use crate::bls::RegistrationProof;
 use crate::database;
-use crate::database::native_contracts::NATIVE_CONTRACTS;
+use crate::database::native_contracts::{NATIVE_CONTRACTS, is_native_contract_id};
 use crate::database::types::CORE_SIGNER_ID;
 use crate::runtime::kontor::built_in::context::SignerRef;
 use crate::runtime::{
@@ -156,10 +158,21 @@ impl PartialEq for RawFileDescriptor {
 
 impl Eq for RawFileDescriptor {}
 
+/// The two host capability surfaces over a single `Runtime`. `user` registers
+/// only the common built-ins; `native` additionally registers the privileged
+/// registries (`file-registry`, `registry`). Both share the same `Runtime`
+/// host state — they differ only in which interfaces a component can import.
+/// `prepare_call` selects one per contract by native contract id.
+#[derive(Clone)]
+pub struct Linkers {
+    pub user: Linker<Runtime>,
+    pub native: Linker<Runtime>,
+}
+
 #[derive(Clone)]
 pub struct Runtime {
     pub engine: Engine,
-    pub linker: Linker<Self>,
+    pub linkers: Linkers,
     pub table: Arc<Mutex<ResourceTable>>,
     pub component_cache: ComponentCache,
     pub storage: Storage,
@@ -193,28 +206,52 @@ impl Runtime {
         Ok(Engine::new(&config)?)
     }
 
-    pub fn new_linker(engine: &Engine) -> Result<Linker<Self>> {
-        let mut linker = Linker::new(engine);
-        Root::add_to_linker::<_, Self>(&mut linker, |s| s)?;
-        Ok(linker)
+    /// Built-ins every contract gets (the user-land surface, plus the
+    /// types-only `file-registry-types` for cross-contract ABIs).
+    fn register_common(linker: &mut Linker<Self>) -> Result<()> {
+        kontor::built_in::error::add_to_linker::<_, Self>(linker, |s| s)?;
+        kontor::built_in::context::add_to_linker::<_, Self>(linker, |s| s)?;
+        kontor::built_in::foreign::add_to_linker::<_, Self>(linker, |s| s)?;
+        kontor::built_in::crypto::add_to_linker::<_, Self>(linker, |s| s)?;
+        kontor::built_in::numbers::add_to_linker::<_, Self>(linker, |s| s)?;
+        kontor::built_in::testing::add_to_linker::<_, Self>(linker, |s| s)?;
+        kontor::built_in::file_registry_types::add_to_linker::<_, Self>(linker, |s| s)?;
+        Ok(())
+    }
+
+    /// Privileged registries — registered only into the native linker, so a
+    /// user contract that imports them fails to instantiate.
+    fn register_native(linker: &mut Linker<Self>) -> Result<()> {
+        kontor::built_in::file_registry::add_to_linker::<_, Self>(linker, |s| s)?;
+        kontor::built_in::registry::add_to_linker::<_, Self>(linker, |s| s)?;
+        Ok(())
+    }
+
+    pub fn new_linkers(engine: &Engine) -> Result<Linkers> {
+        let mut user = Linker::new(engine);
+        Self::register_common(&mut user)?;
+        let mut native = Linker::new(engine);
+        Self::register_common(&mut native)?;
+        Self::register_native(&mut native)?;
+        Ok(Linkers { user, native })
     }
 
     pub async fn new(component_cache: ComponentCache, storage: Storage) -> Result<Self> {
         let engine = Self::new_engine()?;
-        let linker = Self::new_linker(&engine)?;
-        Self::new_with(engine, linker, component_cache, storage).await
+        let linkers = Self::new_linkers(&engine)?;
+        Self::new_with(engine, linkers, component_cache, storage).await
     }
 
     pub async fn new_with(
         engine: Engine,
-        linker: Linker<Self>,
+        linkers: Linkers,
         component_cache: ComponentCache,
         storage: Storage,
     ) -> Result<Self> {
         let file_ledger = FileLedger::rebuild_from_db(&storage.conn).await?;
         Ok(Self {
             engine,
-            linker,
+            linkers,
             table: Arc::new(Mutex::new(ResourceTable::new())),
             component_cache,
             storage,
@@ -235,13 +272,13 @@ impl Runtime {
 
     pub async fn new_read_only(
         engine: Engine,
-        linker: Linker<Self>,
+        linkers: Linkers,
         component_cache: ComponentCache,
         conn: Connection,
     ) -> Result<Self> {
         Runtime::new_with(
             engine,
-            linker,
+            linkers,
             component_cache,
             Storage::builder().conn(conn).build(),
         )
@@ -362,18 +399,37 @@ impl Runtime {
             .savepoint()
             .await
             .map_err(ExecutionError::NonDeterministic)?;
-        self.storage
+        let contract_id = self
+            .storage
             .insert_contract(name, bytes)
             .await
             .map_err(ExecutionError::NonDeterministic)?;
-        let result = self
-            .execute(Some(signer), Some(payment), &address, "init()")
-            .await;
+        // Publish-time link validation: the contract must resolve all of its
+        // imports against the built-in surface it will run under. A user
+        // contract that imports a native-only interface (`file-registry` /
+        // `registry`) is rejected here — deterministically, before `init`
+        // runs and before any state is committed. `instantiate_pre` is a pure
+        // function of (component, linker), identical on every node, so its
+        // failure is a Deterministic rejection (roll back and continue), never
+        // a node shutdown. The linker itself is the allowlist, so there is no
+        // separate interface list to keep in sync.
+        let result = match self.validate_publishable(contract_id).await {
+            Ok(()) => {
+                self.execute(Some(signer), Some(payment), &address, "init()")
+                    .await
+            }
+            Err(e) => Err(e),
+        };
         if result.is_err() {
             self.storage
                 .rollback()
                 .await
                 .map_err(ExecutionError::NonDeterministic)?;
+            // The contract row is gone and SQLite may hand this id to a later
+            // publish with different bytes. Drop the component we compiled and
+            // cached during validation/init so `load_component` can't serve stale
+            // WASM for whatever contract reuses the id.
+            self.component_cache.invalidate(contract_id).await;
             result
         } else {
             self.storage
@@ -381,6 +437,68 @@ impl Runtime {
                 .await
                 .map_err(ExecutionError::NonDeterministic)?;
             Ok(to_wave_expr(address.clone()))
+        }
+    }
+
+    /// Deterministic publish-time validation. All checks are pure functions of
+    /// the contract bytes (and fixed code), so they reject identically on every
+    /// node — `Deterministic`, never a shutdown.
+    ///
+    /// 1. **Link check** (all contracts): the component's imports must resolve
+    ///    against the linker it will run under (native for ids
+    ///    1..=NATIVE_CONTRACTS.len(), the restricted user linker otherwise).
+    ///    Catches a user contract reaching for `file-registry`/`registry`.
+    /// 2. **WIT rule check** (user contracts only): the extracted WIT must
+    ///    satisfy the Kontor rules the linker can't see — `init` exists with the
+    ///    right shape, exports are `async`, valid context/return types, no
+    ///    floats/flags/nested-lists/cycles, etc. Native contracts use the
+    ///    privileged surface (core-context, file-registry) and are validated at
+    ///    compile time, so the user-surface validator is skipped for them.
+    async fn validate_publishable(&self, contract_id: u64) -> Result<(), ExecutionError> {
+        // Compile + cache the component once here; `init` and every later call
+        // reuse the cached artifact. We keep the encoded `bytes` so the WIT check
+        // below decodes from them instead of recomputing them.
+        let (bytes, component) = self
+            .component_bytes_and_compiled(contract_id)
+            .await
+            .map_err(ExecutionError::NonDeterministic)?;
+        let linker = if is_native_contract_id(contract_id) {
+            &self.linkers.native
+        } else {
+            &self.linkers.user
+        };
+        linker.instantiate_pre(&component).map_err(|e| {
+            ExecutionError::Deterministic(anyhow!(
+                "contract imports an interface it is not permitted to use: {e:#}"
+            ))
+        })?;
+
+        if !is_native_contract_id(contract_id) {
+            let wit = print_component_wit(&bytes).map_err(ExecutionError::NonDeterministic)?;
+            Self::validate_user_wit(&wit)?;
+        }
+        Ok(())
+    }
+
+    /// Run the Kontor WIT rules over a user contract's extracted WIT (validated
+    /// against the user-land built-in surface). A rule violation — missing
+    /// `init`, sync export, bad context/return type, floats, etc. — is a
+    /// Deterministic rejection. Pure function of the WIT string.
+    fn validate_user_wit(wit: &str) -> Result<(), ExecutionError> {
+        match WitValidator::validate_str(wit) {
+            Ok((result, resolve)) if result.has_errors() => {
+                let detail: Vec<String> =
+                    result.errors.iter().map(|e| e.render(&resolve)).collect();
+                Err(ExecutionError::Deterministic(anyhow!(
+                    "contract WIT failed validation: {}",
+                    detail.join("; ")
+                )))
+            }
+            Ok(_) => Ok(()),
+            Err(e) => Err(ExecutionError::Deterministic(anyhow!(
+                "contract WIT could not be parsed: {}",
+                e.message
+            ))),
         }
     }
 
@@ -583,17 +701,23 @@ impl Runtime {
         result
     }
 
+    /// Fetch + JIT-compile the component and cache the compiled artifact,
+    /// returning the encoded `bytes` too so a caller that also needs the embedded
+    /// WIT pays the decompress/encode/compile exactly once. The bytes are not
+    /// cached — only the compiled `Component`.
+    async fn component_bytes_and_compiled(&self, contract_id: u64) -> Result<(Vec<u8>, Component)> {
+        let bytes = self.storage.component_bytes(contract_id).await?;
+        let component = Component::from_binary(&self.engine, &bytes)?;
+        self.component_cache
+            .put(contract_id, component.clone())
+            .await;
+        Ok((bytes, component))
+    }
+
     pub async fn load_component(&self, contract_id: u64) -> Result<Component> {
         Ok(match self.component_cache.get(&contract_id).await {
             Some(component) => component,
-            None => {
-                let component_bytes = self.storage.component_bytes(contract_id).await?;
-                let component = Component::from_binary(&self.engine, &component_bytes)?;
-                self.component_cache
-                    .put(contract_id, component.clone())
-                    .await;
-                component
-            }
+            None => self.component_bytes_and_compiled(contract_id).await?.1,
         })
     }
 
@@ -615,4 +739,161 @@ fn should_skip_result(contract_address: &ContractAddress, func_name: &str) -> bo
 
 impl HasData for Runtime {
     type Data<'a> = &'a mut Runtime;
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::test_utils::test_runtime;
+
+    /// The structural security boundary: filestorage's component imports the
+    /// native-only `file-registry` interface, so it links against the native
+    /// linker but is *rejected* by the user linker. This is what stops a
+    /// user-published contract from reaching the privileged registries.
+    ///
+    /// The rejection happens at `instantiate_pre` — import resolution, a pure
+    /// function of (component, linker) and thus identical on every node. That is
+    /// why `prepare_call` classifies it `ExecutionError::Deterministic` (reject
+    /// the op and continue) rather than `NonDeterministic` (which shuts the node
+    /// down). A misclassification here would let one publish tx halt the network.
+    #[tokio::test]
+    async fn user_linker_rejects_native_registry_imports() {
+        let (runtime, _dir, _name) = test_runtime().await.expect("test runtime");
+        // filestorage = native contract id 2; its WIT imports `file-registry`.
+        let component = runtime
+            .load_component(2)
+            .await
+            .expect("load filestorage component");
+
+        // Native linker resolves the file-registry imports.
+        runtime
+            .linkers
+            .native
+            .instantiate_pre(&component)
+            .expect("native linker must satisfy file-registry imports");
+
+        // User linker does NOT provide file-registry → fails at import
+        // resolution (the deterministic phase), so prepare_call rejects the op
+        // deterministically instead of crashing.
+        assert!(
+            runtime.linkers.user.instantiate_pre(&component).is_err(),
+            "user linker must reject a component importing native-only file-registry"
+        );
+    }
+
+    /// Publish-time enforcement, end-to-end: a user-published contract (id past
+    /// the native range) whose component imports a native-only interface is
+    /// rejected DETERMINISTICALLY by `validate_publishable` — not stored,
+    /// not a node shutdown. We reuse filestorage's bytes (which import
+    /// `file-registry`) and insert them as a user contract.
+    #[tokio::test]
+    async fn publish_rejects_user_contract_importing_native_interface() {
+        use crate::database::native_contracts::{FILESTORAGE, NATIVE_CONTRACTS};
+
+        let (mut runtime, _dir, _name) = test_runtime().await.expect("test runtime");
+        // Block 0 exists (genesis); the next contract id is past the native
+        // range, so it resolves to the restricted user linker.
+        runtime
+            .set_context(
+                0,
+                Some(super::TransactionContext::builder().build()),
+                None,
+                None,
+            )
+            .await;
+        let contract_id = runtime
+            .storage
+            .insert_contract("evil", FILESTORAGE)
+            .await
+            .expect("insert contract");
+        assert!(
+            contract_id > NATIVE_CONTRACTS.len() as u64,
+            "expected a user-range id, got {contract_id}"
+        );
+
+        let err = runtime
+            .validate_publishable(contract_id)
+            .await
+            .expect_err("user contract importing file-registry must be rejected");
+        assert!(
+            matches!(err, super::ExecutionError::Deterministic(_)),
+            "rejection must be Deterministic (graceful reject), not NonDeterministic (shutdown): {err}"
+        );
+    }
+
+    /// A user contract that *links* fine but violates a Kontor WIT rule (here,
+    /// no `init`) must still be rejected at publish — and DETERMINISTICALLY. This
+    /// exercises the WIT-rule branch of `validate_publishable`, which the link
+    /// check alone can't catch. The WIT is in the printed-component shape the
+    /// publish path actually validates.
+    #[test]
+    fn publish_wit_validation_rejects_rule_violation() {
+        let wit = "package root:component;\n\
+            world root {\n\
+              include kontor:built-in/built-in;\n\
+              use kontor:built-in/context.{view-context};\n\
+              export get-value: async func(ctx: borrow<view-context>) -> string;\n\
+            }\n";
+        let err = super::Runtime::validate_user_wit(wit)
+            .expect_err("a contract with no init must be rejected");
+        assert!(
+            matches!(err, super::ExecutionError::Deterministic(_)),
+            "WIT rule violation must be Deterministic, got: {err}"
+        );
+        assert!(
+            err.to_string().contains("init"),
+            "error should point at the missing init: {err}"
+        );
+    }
+
+    /// A failed publish must not leave its compiled component in the cache: the
+    /// contract id is rolled back and SQLite can reuse it for a different
+    /// contract, which would then be served stale WASM by `load_component`.
+    #[tokio::test]
+    async fn failed_publish_evicts_component_cache() {
+        use crate::database::native_contracts::{FILESTORAGE, NATIVE_CONTRACTS};
+
+        let (mut runtime, _dir, _name) = test_runtime().await.expect("test runtime");
+        runtime
+            .set_context(
+                0,
+                Some(super::TransactionContext::builder().build()),
+                None,
+                None,
+            )
+            .await;
+        // The first user id — what this failed publish gets and then frees.
+        let reused_id = NATIVE_CONTRACTS.len() as u64 + 1;
+
+        // filestorage imports `file-registry`; published as a user contract it is
+        // rejected at the link check and rolled back. (Signer is irrelevant — the
+        // rejection is by contract id, before `init`.)
+        let signer = super::Signer::Core(Box::new(super::Signer::Nobody));
+        let payment = runtime.core_payment();
+        let result = runtime.publish(&signer, payment, "evil", FILESTORAGE).await;
+        assert!(
+            result.is_err(),
+            "publish of a file-registry-importing user contract must fail"
+        );
+
+        assert!(
+            runtime.component_cache.get(&reused_id).await.is_none(),
+            "failed publish must evict the cached component for its rolled-back id"
+        );
+    }
+
+    /// `clear()` (used on reorg) must make subsequent `get`s miss, so reused ids
+    /// recompile from fresh bytes. Guards the moka `invalidate_all` semantics.
+    #[tokio::test]
+    async fn cache_clear_drops_entries() {
+        let (runtime, _dir, _name) = test_runtime().await.expect("test runtime");
+        // token = native id 1; populate the cache.
+        runtime.load_component(1).await.expect("load token");
+        assert!(runtime.component_cache.get(&1).await.is_some());
+
+        runtime.component_cache.clear();
+        assert!(
+            runtime.component_cache.get(&1).await.is_none(),
+            "clear() must drop cached components"
+        );
+    }
 }

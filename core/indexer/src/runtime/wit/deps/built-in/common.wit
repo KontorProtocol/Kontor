@@ -160,13 +160,11 @@ interface context {
         contract: async func() -> contract;
     }
 }
-
 interface foreign {
     use context.{signer, contract-address};
 
     call: async func(signer: option<signer>, contract-address: contract-address, expr: string) -> string;
 }
-
 interface crypto {
     hash: async func(input: string) -> tuple<string, list<u8>>;
     hash-with-salt: async func(input: string, salt: string) -> tuple<string, list<u8>>;
@@ -177,7 +175,6 @@ interface crypto {
         info: list<u8>
     ) -> list<u8>;
 }
-
 interface error {
     variant error {
         message(string),
@@ -187,7 +184,6 @@ interface error {
         validation(string),
     }
 }
-
 interface numbers {
     use error.{error};
 
@@ -245,10 +241,18 @@ interface numbers {
     div-decimal: async func(a: decimal, b: decimal) -> result<decimal, error>;
     log10-decimal: async func(a: decimal) -> result<decimal, error>;
 }
+interface testing {
+    /// Always returns an error. Used to test host function error propagation.
+    host-error: async func() -> string;
+    /// Always panics. Used to test host function panic propagation.
+    host-panic: async func() -> string;
+}
 
-interface file-registry {
-    use error.{error};
-
+// Plain data types that appear in cross-contract ABIs (e.g. filestorage's
+// `create-agreement(raw-file-descriptor)`). User contracts need the *type* to
+// call into native contracts, but not the file-registry *functions* — those
+// stay native-only (see built-in-native). Keep this types-only (no functions).
+interface file-registry-types {
     record raw-file-descriptor {
         file-id: string,
         object-id: string,
@@ -258,62 +262,6 @@ interface file-registry {
         original-size: u64,
         filename: string,
     }
-
-    resource file-descriptor {
-        file-id: async func() -> string;
-        from-raw: static async func(raw: raw-file-descriptor) -> result<file-descriptor, error>;
-        compute-challenge-id: async func(
-            block-height: u64,
-            num-challenges: u64,
-            seed: list<u8>,
-            prover-id: string
-        ) -> result<string, error>;
-    }
-
-    add-file: async func(file-descriptor: borrow<file-descriptor>);
-
-    get-file-descriptor: async func(file-id: string) -> option<file-descriptor>;
-
-    // ─────────────────────────────────────────────────────────────────
-    // Proof Verification
-    // ─────────────────────────────────────────────────────────────────
-
-    record challenge-input {
-        challenge-id: string,
-        file-id: string,
-        block-height: u64,
-        num-challenges: u64,
-        seed: list<u8>,
-        prover-id: string,
-    }
-
-    enum verify-result {
-        verified,
-        rejected,
-        invalid,
-    }
-
-    resource proof {
-        from-bytes: static async func(bytes: list<u8>) -> result<proof, error>;
-        challenge-ids: async func() -> list<string>;
-        verify: async func(challenges: list<challenge-input>) -> result<verify-result, error>;
-    }
-}
-
-interface testing {
-    /// Always returns an error. Used to test host function error propagation.
-    host-error: async func() -> string;
-    /// Always panics. Used to test host function panic propagation.
-    host-panic: async func() -> string;
-}
-
-interface registry {
-    /// Consume fuel for a RegisterBlsKey operation. The actual verification
-    /// and DB write happen in the reactor (outside the contract's fuel
-    /// scope); this call meters the caller for the operation so the fuel
-    /// accounting matches reality. Traps on insufficient fuel — aborts
-    /// the enclosing contract call.
-    register-bls-key: async func();
 }
 
 world built-in {
@@ -322,7 +270,6 @@ world built-in {
     import crypto;
     import error;
     import numbers;
-    import file-registry;
     import testing;
-    import registry;
+    import file-registry-types;
 }

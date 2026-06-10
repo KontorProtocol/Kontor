@@ -1,0 +1,60 @@
+package kontor:built-in;
+
+interface file-registry {
+    use error.{error};
+    use file-registry-types.{raw-file-descriptor};
+
+    resource file-descriptor {
+        file-id: async func() -> string;
+        from-raw: static async func(raw: raw-file-descriptor) -> result<file-descriptor, error>;
+        compute-challenge-id: async func(
+            block-height: u64,
+            num-challenges: u64,
+            seed: list<u8>,
+            prover-id: string
+        ) -> result<string, error>;
+    }
+
+    add-file: async func(file-descriptor: borrow<file-descriptor>);
+
+    get-file-descriptor: async func(file-id: string) -> option<file-descriptor>;
+
+    // ─────────────────────────────────────────────────────────────────
+    // Proof Verification
+    // ─────────────────────────────────────────────────────────────────
+
+    record challenge-input {
+        challenge-id: string,
+        file-id: string,
+        block-height: u64,
+        num-challenges: u64,
+        seed: list<u8>,
+        prover-id: string,
+    }
+
+    enum verify-result {
+        verified,
+        rejected,
+        invalid,
+    }
+
+    resource proof {
+        from-bytes: static async func(bytes: list<u8>) -> result<proof, error>;
+        challenge-ids: async func() -> list<string>;
+        verify: async func(challenges: list<challenge-input>) -> result<verify-result, error>;
+    }
+}
+interface registry {
+    /// Consume fuel for a RegisterBlsKey operation. The actual verification
+    /// and DB write happen in the reactor (outside the contract's fuel
+    /// scope); this call meters the caller for the operation so the fuel
+    /// accounting matches reality. Traps on insufficient fuel — aborts
+    /// the enclosing contract call.
+    register-bls-key: async func();
+}
+
+world built-in-native {
+    include built-in;
+    import file-registry;
+    import registry;
+}
