@@ -1,6 +1,7 @@
 use libsql::{Connection, de::from_row, params};
 
 use super::Error;
+use super::versioned::latest_one;
 use crate::database::types::{CORE_SIGNER_ID, Identity, SignerEntry};
 
 impl Identity {
@@ -10,8 +11,7 @@ impl Identity {
     pub async fn x_only_pubkey(&self, conn: &Connection) -> Result<String, Error> {
         let mut rows = conn
             .query(
-                "SELECT x_only_pubkey FROM x_only_pubkeys \
-                 WHERE signer_id = ? ORDER BY height DESC LIMIT 1",
+                &latest_one("x_only_pubkeys", "signer_id", "x_only_pubkey"),
                 params![self.signer_id()],
             )
             .await?;
@@ -27,7 +27,7 @@ impl Identity {
     pub async fn bls_pubkey(&self, conn: &Connection) -> Result<Option<Vec<u8>>, Error> {
         let mut rows = conn
             .query(
-                "SELECT bls_pubkey FROM bls_keys WHERE signer_id = ? ORDER BY height DESC LIMIT 1",
+                &latest_one("bls_keys", "signer_id", "bls_pubkey"),
                 params![self.signer_id()],
             )
             .await?;
@@ -37,7 +37,7 @@ impl Identity {
     pub async fn next_nonce(&self, conn: &Connection) -> Result<u64, Error> {
         let mut rows = conn
             .query(
-                "SELECT next_nonce FROM nonces WHERE signer_id = ? ORDER BY height DESC LIMIT 1",
+                &latest_one("nonces", "signer_id", "next_nonce"),
                 params![self.signer_id()],
             )
             .await?;
@@ -57,7 +57,7 @@ impl Identity {
     ) -> Result<u64, Error> {
         let mut rows = conn
             .query(
-                "SELECT next_nonce FROM nonces WHERE signer_id = ? ORDER BY height DESC LIMIT 1",
+                &latest_one("nonces", "signer_id", "next_nonce"),
                 params![self.signer_id()],
             )
             .await?;
@@ -267,7 +267,7 @@ pub async fn get_signer_entry_by_bls_pubkey(
 ) -> Result<Option<SignerEntry>, Error> {
     let mut rows = conn
         .query(
-            "SELECT signer_id FROM bls_keys WHERE bls_pubkey = ? ORDER BY height DESC LIMIT 1",
+            &latest_one("bls_keys", "bls_pubkey", "signer_id"),
             params![bls_pubkey.to_vec()],
         )
         .await?;
