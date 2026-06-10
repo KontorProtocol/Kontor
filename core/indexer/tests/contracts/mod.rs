@@ -11,11 +11,11 @@ mod crypto_contract;
 mod error_classification;
 mod fib_contract;
 mod file_storage;
-mod native_nft_attach_contract;
-mod native_nft_contract;
 mod native_token_attach_contract;
 mod native_token_contract;
 mod native_token_sponsor_swap;
+mod nft_attach_contract;
+mod nft_contract;
 mod ops_contract;
 mod pool_contract;
 mod regtester_cluster;
@@ -39,7 +39,7 @@ async fn regtest_file_storage() -> anyhow::Result<()> {
     // Dedicated cluster: `test_file_storage_regtest_e2e` uses precomputed
     // KontorPoR proof fixtures pinned to a specific `file_ledger.historical_roots`
     // trajectory. Sharing the cluster with other tests that mutate the file
-    // ledger (e.g. `native_nft_contract` via `filestorage::create_agreement`)
+    // ledger (e.g. `nft_contract` via `filestorage::create_agreement`)
     // would invalidate those roots and break the proofs.
     let cluster = RegTesterCluster::setup(3, 300, 50).await?;
     let mut runtime = shared_cluster::build_runtime(&cluster).await?;
@@ -74,17 +74,17 @@ testlib::regtest_tests! {
 }
 
 #[tokio::test]
-async fn regtest_native_nft() -> anyhow::Result<()> {
+async fn regtest_nft() -> anyhow::Result<()> {
     if std::env::var("REGTEST").is_err() {
         return Ok(());
     }
-    // Dedicated cluster: `native_nft_contract` asserts on absolute counts
+    // Dedicated cluster: `nft_contract` asserts on absolute counts
     // (total_minted, list_nfts ordering) that would be wrong if the attach
     // test's mint ran first on the shared cluster. Running both tests
     // sequentially on their own chain gives each test a clean slate.
     let cluster = RegTesterCluster::setup(3, 300, 50).await?;
     let mut runtime = shared_cluster::build_runtime(&cluster).await?;
-    native_nft_contract::test_native_nft_contract(&mut runtime).await?;
-    native_nft_attach_contract::test_native_nft_attach_contract(&mut runtime).await?;
+    nft_contract::test_nft_contract(&mut runtime).await?;
+    nft_attach_contract::test_nft_attach_contract(&mut runtime).await?;
     cluster.teardown().await
 }

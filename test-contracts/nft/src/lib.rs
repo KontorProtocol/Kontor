@@ -8,15 +8,17 @@ import!(
     name = "filestorage",
     height = 0,
     tx_index = 0,
-    path = "../filestorage/wit"
+    path = "../../native-contracts/filestorage/wit"
 );
 
 const MAX_NFT_ID_LEN_BYTES: usize = 64;
 const MAX_ATTRIBUTES: usize = 32;
 const MAX_ATTR_KEY_LEN_BYTES: usize = 64;
 const MAX_ATTR_VALUE_LEN_BYTES: usize = 2048;
-// Upper bound on `limit` accepted by `list_nfts` to keep response sizes
-// predictable. Callers paginate by issuing successive calls with `offset`.
+// Upper bound on `limit` accepted by every paginated `list_*` view
+// (`list_nfts`, `list_nfts_by_creator`, `list_nfts_by_holder`) to keep
+// response sizes predictable. Callers paginate by issuing successive calls
+// with `offset`.
 const MAX_LIST_LIMIT: u64 = 100;
 
 fn utxo_holder(out_point: context::OutPoint) -> Holder {
@@ -36,26 +38,30 @@ struct NftRecord {
     pub attributes: Map<String, String>,
 }
 
-// Per-creator secondary index used by `list_nfts_by_creator`. Append
-// only: `nft_ids` is populated at `mint` and never mutated afterwards
-// (transfers do not move NFTs across creator buckets), so the bool
-// value is always `true` and exists solely because the storage layer
-// requires a primitive value type. `count` mirrors the size of the map
-// so that `count_nfts_by_creator` is O(1) and so that the parent path
-// `creator_index.{creator}` materializes on first insert (writing the
-// `count` primitive is what forces path creation; an empty `Map` write
-// would be a no-op).
+// Generic index bucket shared by `creator_index` and `holder_index`.
+// `count` mirrors the map size for O(1) count queries. The `bool` value
+// in `nft_ids` is always `true`; a Map<String, bool> is used because the
+// storage layer requires a primitive value — a Set is not available.
+// Writing `count` on first insert also materialises the parent path
+// so that `creator_index.{creator}` / `holder_index.{holder}` exist
+// even before any `nft_ids` entry is added.
 #[derive(Clone, Default, Storage)]
-struct CreatorIndex {
+struct NftIndex {
     pub count: u64,
     pub nft_ids: Map<String, bool>,
 }
 
+// Both secondary indexes are populated from this contract version onward and
+// have no retroactive backfill: any NFT minted before the index existed is
+// absent from it until the next operation that touches its bucket (a transfer
+// records the *new* holder; the old, never-indexed holder is simply skipped).
+// On a fresh deployment this is a non-issue — there is no prior NFT state.
 #[derive(Clone, Default, StorageRoot)]
 struct NftStorage {
     pub nfts: Map<String, NftRecord>,
     pub total_minted: u64,
-    pub creator_index: Map<Holder, CreatorIndex>,
+    pub creator_index: Map<Holder, NftIndex>,
+    pub holder_index: Map<Holder, NftIndex>,
 }
 
 // Record `nft_id` under `creator`'s bucket. Only called from `mint`,
@@ -63,16 +69,45 @@ struct NftStorage {
 // and creator is immutable), so this is a pure append.
 fn creator_index_add(model: &NftStorageWriteModel, creator: &Holder, nft_id: &str) {
     let creator_index = model.creator_index();
-    if creator_index.get(creator).is_none() {
-        creator_index.set(creator, CreatorIndex::default());
-    }
-    // Safe to unwrap: writing the `count` primitive above materializes
-    // the parent path so `get` is guaranteed to succeed.
-    let entry = creator_index
-        .get(creator)
-        .expect("creator_index entry just inserted");
+    let entry = match creator_index.get(creator) {
+        Some(e) => e,
+        None => {
+            creator_index.set(creator, NftIndex::default());
+            creator_index
+                .get(creator)
+                .expect("creator_index entry just inserted")
+        }
+    };
     entry.nft_ids().set(&nft_id.to_string(), true);
     entry.set_count(entry.count() + 1);
+}
+
+fn holder_index_add(model: &NftStorageWriteModel, holder: &Holder, nft_id: &str) {
+    let holder_index = model.holder_index();
+    let entry = match holder_index.get(holder) {
+        Some(e) => e,
+        None => {
+            holder_index.set(holder, NftIndex::default());
+            holder_index
+                .get(holder)
+                .expect("holder_index entry just inserted")
+        }
+    };
+    entry.nft_ids().set(&nft_id.to_string(), true);
+    entry.set_count(entry.count() + 1);
+}
+
+// Decrement `holder`'s live count when an NFT leaves its bucket on a transfer.
+// The id is intentionally NOT removed from `nft_ids`: this index is append-only
+// (the storage layer exposes no key-removal primitive), so ids a holder once
+// owned linger in the map and are filtered out at read time by
+// `list_nfts_by_holder` re-checking current ownership. `count` stays exact
+// because it is decremented here and incremented in `holder_index_add`, keeping
+// `count_nfts_by_holder` O(1).
+fn holder_index_dec(model: &NftStorageWriteModel, holder: &Holder) {
+    if let Some(entry) = model.holder_index().get(holder) {
+        entry.set_count(entry.count().saturating_sub(1));
+    }
 }
 
 fn validate(
@@ -85,6 +120,18 @@ fn validate(
     }
     if nft_id.len() > MAX_NFT_ID_LEN_BYTES {
         return Err(Error::Message("nft_id is too long".to_string()));
+    }
+    // `nft_id` is used verbatim as a storage path segment (in `nfts.{nft_id}`
+    // and `…nft_ids.{nft_id}`). Map-key iteration splits paths on `.`, so a
+    // `.` in the id would fracture the segment and corrupt `keys()` grouping;
+    // restricting to a dot-free charset keeps every id a single clean segment.
+    if !nft_id
+        .bytes()
+        .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_')
+    {
+        return Err(Error::Message(
+            "nft_id must contain only alphanumeric characters, hyphens, or underscores".to_string(),
+        ));
     }
     if model.nfts().get(&nft_id.to_string()).is_some() {
         return Err(Error::Message("nft_id already exists".to_string()));
@@ -126,6 +173,8 @@ fn change_owner(
         return Err(Error::Message(not_owner_msg.to_string()));
     }
     nft.set_owner(new_owner.clone());
+    holder_index_dec(&ctx.model(), &expected_owner);
+    holder_index_add(&ctx.model(), &new_owner, &nft_id);
     Ok(NftTransfer {
         nft_id,
         src: expected_owner.as_ref(),
@@ -174,6 +223,7 @@ impl Guest for Nft {
         }
         model.update_total_minted(|total| total + 1);
         creator_index_add(&model, &creator, &nft_id);
+        holder_index_add(&model, &owner, &nft_id);
 
         Ok(NftInfo {
             nft_id,
@@ -335,6 +385,64 @@ impl Guest for Nft {
         ctx.model()
             .creator_index()
             .get(&creator)
+            .map(|entry| entry.count())
+            .unwrap_or(0)
+    }
+
+    fn list_nfts_by_holder(
+        ctx: &ViewContext,
+        holder: HolderRef,
+        offset: u64,
+        limit: u64,
+    ) -> Vec<NftInfo> {
+        // Same lenient semantics as `list_nfts_by_creator`: silently clamp
+        // `limit` to `MAX_LIST_LIMIT`, treat `limit == 0` and an out-of-range
+        // `offset` as an empty page, and degrade an invalid `HolderRef` to an
+        // empty list rather than surfacing an error.
+        let limit = limit.min(MAX_LIST_LIMIT) as usize;
+        if limit == 0 {
+            return Vec::new();
+        }
+        let Ok(holder): Result<Holder, _> = holder.try_into() else {
+            return Vec::new();
+        };
+        let Some(entry) = ctx.model().holder_index().get(&holder) else {
+            return Vec::new();
+        };
+        let offset = usize::try_from(offset).unwrap_or(usize::MAX);
+        let nfts = ctx.model().nfts();
+        // `holder_index` is append-only: `nft_ids` retains every id this holder
+        // has ever owned, including ones since transferred away (no key-removal
+        // primitive exists, so stale ids are never pruned). Re-check current
+        // ownership to drop them; `offset`/`limit` paginate over the live set, so
+        // the ownership filter must run before skip/take.
+        entry
+            .nft_ids()
+            .keys()
+            .filter_map(|nft_id: String| {
+                nfts.get(&nft_id)
+                    .filter(|nft| nft.owner() == holder)
+                    .map(|nft| NftInfo {
+                        nft_id,
+                        owner: nft.owner().as_ref(),
+                        creator: nft.creator().as_ref(),
+                        agreement_id: nft.agreement_id(),
+                    })
+            })
+            .skip(offset)
+            .take(limit)
+            .collect()
+    }
+
+    fn count_nfts_by_holder(ctx: &ViewContext, holder: HolderRef) -> u64 {
+        // Mirrors `count_nfts_by_creator`'s lenient input handling: an unknown
+        // or invalid holder is reported as 0 NFTs. O(1) via the cached `count`.
+        let Ok(holder): Result<Holder, _> = holder.try_into() else {
+            return 0;
+        };
+        ctx.model()
+            .holder_index()
+            .get(&holder)
             .map(|entry| entry.count())
             .unwrap_or(0)
     }

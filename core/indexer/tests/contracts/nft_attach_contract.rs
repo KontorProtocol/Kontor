@@ -3,26 +3,28 @@ use bitcoin::TxOut;
 use bitcoin::consensus::encode::serialize as serialize_tx;
 use bitcoin::key::Secp256k1;
 use bitcoin::taproot::TaprootBuilder;
+use indexer::bitcoin_client::client::RegtestRpc;
 use indexer::database::types::OpResultId;
 use indexer::test_utils;
-use indexer::{bitcoin_client::client::RegtestRpc, runtime};
 use indexer_types::{
     CommitSource, Inst, InstKind, Insts, Reveal, RevealOutput, RevealOutputInfo, RevealParticipant,
 };
 use testlib::*;
 
-import!(
-    name = "nft",
-    height = 0,
-    tx_index = 0,
-    path = "../../native-contracts/nft/wit",
-);
+interface!(name = "nft", path = "../../test-contracts/nft/wit");
 
 #[testlib::test(contracts_dir = "../../test-contracts", regtest_only)]
-async fn test_native_nft_attach_contract() -> Result<()> {
+async fn test_nft_attach_contract() -> Result<()> {
     let secp = Secp256k1::new();
 
     let mut rt = runtime.reg_tester().unwrap();
+
+    // nft is no longer a genesis-native contract: publish it on the regtest
+    // chain and drive the raw attach/detach instructions at its published
+    // address. The publisher uses a host-side `Signer` from
+    // `runtime.identity()`, independent of the seller `rt.identity()` below.
+    let admin = runtime.identity().await?;
+    let nft_addr = runtime.publish(&admin, "nft").await?;
 
     // Revoke / self round-trip: one identity mints + attaches the NFT to a
     // UTXO and immediately detaches it back. Under the Sponsor +
@@ -39,7 +41,7 @@ async fn test_native_nft_attach_contract() -> Result<()> {
     // Pre-mint an NFT to the seller via a raw instruction. We mint with the
     // seller's `reg_tester::Identity` directly so the same identity (and its
     // funding UTXO) can drive the subsequent Bitcoin attach/detach flow. The
-    // host-side `nft::mint(runtime, &signer, ...)` helper requires a `Signer`
+    // host-side `nft::mint(runtime, &nft_addr, &signer, ...)` helper requires a `Signer`
     // registered in the regtest runtime's identity map, which doesn't match
     // an identity popped via `rt.identity()`, hence the raw Inst here.
     let nft_id = "attach-nft-1".to_string();
@@ -64,7 +66,7 @@ async fn test_native_nft_attach_contract() -> Result<()> {
     let mint_inst = Inst {
         gas_limit: 50_000,
         kind: InstKind::Call {
-            contract: runtime::nft::address().into(),
+            contract: nft_addr.clone().into(),
             expr: nft::wave::mint_call_expr(&nft_id, attributes, file_descriptor),
         },
     };
@@ -83,17 +85,33 @@ async fn test_native_nft_attach_contract() -> Result<()> {
         .get_signer_id(&internal_key.to_string())
         .await?
         .expect("seller signer_id");
-    let info_after_mint = nft::get_info(runtime, &nft_id)
+    let info_after_mint = nft::get_info(runtime, &nft_addr, &nft_id)
         .await?
         .expect("nft should exist after mint");
     assert_eq!(info_after_mint.owner, HolderRef::SignerId(seller_signer_id));
+    // Holder index: seller starts with exactly 1 NFT.
+    assert_eq!(
+        nft::count_nfts_by_holder(runtime, &nft_addr, HolderRef::SignerId(seller_signer_id))
+            .await?,
+        1
+    );
+    let seller_held_after_mint = nft::list_nfts_by_holder(
+        runtime,
+        &nft_addr,
+        HolderRef::SignerId(seller_signer_id),
+        0,
+        100,
+    )
+    .await?;
+    assert_eq!(seller_held_after_mint.len(), 1);
+    assert_eq!(seller_held_after_mint[0].nft_id, nft_id);
 
     let (out_point, utxo_for_output) = identity.next_funding_utxo.clone();
 
     let attach_inst = Inst {
         gas_limit: 50_000,
         kind: InstKind::Call {
-            contract: runtime::nft::address().into(),
+            contract: nft_addr.clone().into(),
             expr: nft::wave::attach_call_expr(&nft_id, 0),
         },
     };
@@ -101,7 +119,7 @@ async fn test_native_nft_attach_contract() -> Result<()> {
     let detach_inst = Inst {
         gas_limit: 50_000,
         kind: InstKind::Call {
-            contract: runtime::nft::address().into(),
+            contract: nft_addr.clone().into(),
             expr: nft::wave::detach_call_expr(&nft_id),
         },
     };
@@ -273,10 +291,37 @@ async fn test_native_nft_attach_contract() -> Result<()> {
     };
     assert_eq!(transfer.dst, HolderRef::Utxo(utxo_ref.clone()));
 
-    let info_after_attach = nft::get_info(runtime, &nft_id)
+    let info_after_attach = nft::get_info(runtime, &nft_addr, &nft_id)
         .await?
         .expect("nft should still exist after attach");
-    assert_eq!(info_after_attach.owner, HolderRef::Utxo(utxo_ref));
+    assert_eq!(info_after_attach.owner, HolderRef::Utxo(utxo_ref.clone()));
+
+    // Holder index: seller loses the NFT (count 0, list empty); UTXO gains it (count 1).
+    let utxo_holder_ref = HolderRef::Utxo(utxo_ref.clone());
+    assert_eq!(
+        nft::count_nfts_by_holder(runtime, &nft_addr, HolderRef::SignerId(seller_signer_id))
+            .await?,
+        0
+    );
+    assert_eq!(
+        nft::list_nfts_by_holder(
+            runtime,
+            &nft_addr,
+            HolderRef::SignerId(seller_signer_id),
+            0,
+            100,
+        )
+        .await?,
+        Vec::<nft::NftInfo>::new()
+    );
+    assert_eq!(
+        nft::count_nfts_by_holder(runtime, &nft_addr, utxo_holder_ref.clone()).await?,
+        1
+    );
+    let utxo_held =
+        nft::list_nfts_by_holder(runtime, &nft_addr, utxo_holder_ref.clone(), 0, 100).await?;
+    assert_eq!(utxo_held.len(), 1);
+    assert_eq!(utxo_held[0].nft_id, nft_id);
 
     let bitcoin_client = rt.bitcoin_client().await;
     bitcoin_client.send_raw_transaction(&detach_tx_hex).await?;
@@ -302,12 +347,37 @@ async fn test_native_nft_attach_contract() -> Result<()> {
     assert_eq!(transfer.src.to_string(), utxo_id);
     assert_eq!(transfer.dst, HolderRef::SignerId(seller_signer_id));
 
-    let info_after_detach = nft::get_info(runtime, &nft_id)
+    let info_after_detach = nft::get_info(runtime, &nft_addr, &nft_id)
         .await?
         .expect("nft should still exist after detach");
     assert_eq!(
         info_after_detach.owner,
         HolderRef::SignerId(seller_signer_id)
+    );
+
+    // Holder index: seller regains the NFT (count 1); UTXO drops to 0.
+    assert_eq!(
+        nft::count_nfts_by_holder(runtime, &nft_addr, HolderRef::SignerId(seller_signer_id))
+            .await?,
+        1
+    );
+    let seller_held_after_detach = nft::list_nfts_by_holder(
+        runtime,
+        &nft_addr,
+        HolderRef::SignerId(seller_signer_id),
+        0,
+        100,
+    )
+    .await?;
+    assert_eq!(seller_held_after_detach.len(), 1);
+    assert_eq!(seller_held_after_detach[0].nft_id, nft_id);
+    assert_eq!(
+        nft::count_nfts_by_holder(runtime, &nft_addr, utxo_holder_ref.clone()).await?,
+        0
+    );
+    assert_eq!(
+        nft::list_nfts_by_holder(runtime, &nft_addr, utxo_holder_ref, 0, 100).await?,
+        Vec::<nft::NftInfo>::new()
     );
 
     Ok(())
