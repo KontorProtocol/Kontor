@@ -409,6 +409,33 @@ world root {{
         assert!(result.errors.iter().any(|e| e.message.contains("init")));
     }
 
+    /// The init-required rule must skip *all* built-in worlds — `built-in` and
+    /// `built-in-native` (the privileged native surface). Native contracts'
+    /// resolves include `world built-in-native`, which has no `init`; flagging
+    /// it would break every native contract's compile-time validation.
+    #[test]
+    fn test_built_in_native_world_skipped_by_init_rule() {
+        let mut resolve = Resolve::new();
+        resolve
+            .push_str(
+                "bi.wit",
+                "package kontor:built-in;\n\
+                 interface error { variant error { generic(string) } }\n\
+                 world built-in { import error; }\n\
+                 world built-in-native { import error; }\n",
+            )
+            .expect("parse built-in package");
+        let result = Validator::validate_resolve(&resolve);
+        // Neither built-in world exports init, but both must be skipped.
+        assert!(
+            !result
+                .errors
+                .iter()
+                .any(|e| e.message.contains("init function")),
+            "built-in/built-in-native worlds must be skipped by the init-required rule, got: {result}"
+        );
+    }
+
     #[test]
     fn test_cross_type_cycle_record_variant() {
         let result = Validator::validate_str(&wrap(
