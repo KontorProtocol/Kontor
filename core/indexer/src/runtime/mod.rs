@@ -658,10 +658,15 @@ mod tests {
     use crate::test_utils::test_runtime;
 
     /// The structural security boundary: filestorage's component imports the
-    /// native-only `file-registry` interface, so it instantiates against the
-    /// native linker but is *rejected* by the user linker. This is what stops a
-    /// user-published contract from reaching the privileged registries — the
-    /// import is simply not provided, so instantiation fails.
+    /// native-only `file-registry` interface, so it links against the native
+    /// linker but is *rejected* by the user linker. This is what stops a
+    /// user-published contract from reaching the privileged registries.
+    ///
+    /// The rejection happens at `instantiate_pre` — import resolution, a pure
+    /// function of (component, linker) and thus identical on every node. That is
+    /// why `prepare_call` classifies it `ExecutionError::Deterministic` (reject
+    /// the op and continue) rather than `NonDeterministic` (which shuts the node
+    /// down). A misclassification here would let one publish tx halt the network.
     #[tokio::test]
     async fn user_linker_rejects_native_registry_imports() {
         let (runtime, _dir, _name) = test_runtime().await.expect("test runtime");
@@ -671,24 +676,18 @@ mod tests {
             .await
             .expect("load filestorage component");
 
-        // Native linker provides file-registry → instantiation succeeds.
-        let mut store = runtime.make_store(10_000_000).expect("store");
+        // Native linker resolves the file-registry imports.
         runtime
             .linkers
             .native
-            .instantiate_async(&mut store, &component)
-            .await
+            .instantiate_pre(&component)
             .expect("native linker must satisfy file-registry imports");
 
-        // User linker does NOT provide file-registry → instantiation fails.
-        let mut store = runtime.make_store(10_000_000).expect("store");
+        // User linker does NOT provide file-registry → fails at import
+        // resolution (the deterministic phase), so prepare_call rejects the op
+        // deterministically instead of crashing.
         assert!(
-            runtime
-                .linkers
-                .user
-                .instantiate_async(&mut store, &component)
-                .await
-                .is_err(),
+            runtime.linkers.user.instantiate_pre(&component).is_err(),
             "user linker must reject a component importing native-only file-registry"
         );
     }
