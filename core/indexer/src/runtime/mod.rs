@@ -38,7 +38,6 @@ use storage::print_component_wit;
 pub use storage::{Storage, TransactionContext};
 use tokio::sync::Mutex;
 pub use types::default_val_for_type;
-pub use wit::Root;
 
 use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, LazyLock};
@@ -471,25 +470,31 @@ impl Runtime {
 
         if !is_native_contract_id(contract_id) {
             let wit = print_component_wit(&bytes).map_err(ExecutionError::NonDeterministic)?;
-            match WitValidator::validate_str(&wit) {
-                Ok((result, resolve)) if result.has_errors() => {
-                    let detail: Vec<String> =
-                        result.errors.iter().map(|e| e.render(&resolve)).collect();
-                    return Err(ExecutionError::Deterministic(anyhow!(
-                        "contract WIT failed validation: {}",
-                        detail.join("; ")
-                    )));
-                }
-                Ok(_) => {}
-                Err(e) => {
-                    return Err(ExecutionError::Deterministic(anyhow!(
-                        "contract WIT could not be parsed: {}",
-                        e.message
-                    )));
-                }
-            }
+            Self::validate_user_wit(&wit)?;
         }
         Ok(())
+    }
+
+    /// Run the Kontor WIT rules over a user contract's extracted WIT (validated
+    /// against the user-land built-in surface). A rule violation — missing
+    /// `init`, sync export, bad context/return type, floats, etc. — is a
+    /// Deterministic rejection. Pure function of the WIT string.
+    fn validate_user_wit(wit: &str) -> Result<(), ExecutionError> {
+        match WitValidator::validate_str(wit) {
+            Ok((result, resolve)) if result.has_errors() => {
+                let detail: Vec<String> =
+                    result.errors.iter().map(|e| e.render(&resolve)).collect();
+                Err(ExecutionError::Deterministic(anyhow!(
+                    "contract WIT failed validation: {}",
+                    detail.join("; ")
+                )))
+            }
+            Ok(_) => Ok(()),
+            Err(e) => Err(ExecutionError::Deterministic(anyhow!(
+                "contract WIT could not be parsed: {}",
+                e.message
+            ))),
+        }
     }
 
     pub async fn issuance(&mut self, signer: &Signer) -> Result<(), ExecutionError> {
@@ -807,6 +812,31 @@ mod tests {
         assert!(
             matches!(err, super::ExecutionError::Deterministic(_)),
             "rejection must be Deterministic (graceful reject), not NonDeterministic (shutdown): {err}"
+        );
+    }
+
+    /// A user contract that *links* fine but violates a Kontor WIT rule (here,
+    /// no `init`) must still be rejected at publish — and DETERMINISTICALLY. This
+    /// exercises the WIT-rule branch of `validate_publishable`, which the link
+    /// check alone can't catch. The WIT is in the printed-component shape the
+    /// publish path actually validates.
+    #[test]
+    fn publish_wit_validation_rejects_rule_violation() {
+        let wit = "package root:component;\n\
+            world root {\n\
+              include kontor:built-in/built-in;\n\
+              use kontor:built-in/context.{view-context};\n\
+              export get-value: async func(ctx: borrow<view-context>) -> string;\n\
+            }\n";
+        let err = super::Runtime::validate_user_wit(wit)
+            .expect_err("a contract with no init must be rejected");
+        assert!(
+            matches!(err, super::ExecutionError::Deterministic(_)),
+            "WIT rule violation must be Deterministic, got: {err}"
+        );
+        assert!(
+            err.to_string().contains("init"),
+            "error should point at the missing init: {err}"
         );
     }
 }
