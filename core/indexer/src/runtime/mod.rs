@@ -34,6 +34,7 @@ pub use stdlib::{
     wave_type,
 };
 use stdlib::{contract_address, holder_ref, impls};
+use storage::print_component_wit;
 pub use storage::{Storage, TransactionContext};
 use tokio::sync::Mutex;
 pub use types::default_val_for_type;
@@ -450,8 +451,11 @@ impl Runtime {
     ///    privileged surface (core-context, file-registry) and are validated at
     ///    compile time, so the user-surface validator is skipped for them.
     async fn validate_publishable(&self, contract_id: u64) -> Result<(), ExecutionError> {
-        let component = self
-            .load_component(contract_id)
+        // Compile + cache the component once here; `init` and every later call
+        // reuse the cached artifact. We keep the encoded `bytes` so the WIT check
+        // below decodes from them instead of recomputing them.
+        let (bytes, component) = self
+            .component_bytes_and_compiled(contract_id)
             .await
             .map_err(ExecutionError::NonDeterministic)?;
         let linker = if is_native_contract_id(contract_id) {
@@ -466,11 +470,7 @@ impl Runtime {
         })?;
 
         if !is_native_contract_id(contract_id) {
-            let wit = self
-                .storage
-                .component_wit_raw(contract_id)
-                .await
-                .map_err(ExecutionError::NonDeterministic)?;
+            let wit = print_component_wit(&bytes).map_err(ExecutionError::NonDeterministic)?;
             match WitValidator::validate_str(&wit) {
                 Ok((result, resolve)) if result.has_errors() => {
                     let detail: Vec<String> =
@@ -691,17 +691,23 @@ impl Runtime {
         result
     }
 
+    /// Fetch + JIT-compile the component and cache the compiled artifact,
+    /// returning the encoded `bytes` too so a caller that also needs the embedded
+    /// WIT pays the decompress/encode/compile exactly once. The bytes are not
+    /// cached — only the compiled `Component`.
+    async fn component_bytes_and_compiled(&self, contract_id: u64) -> Result<(Vec<u8>, Component)> {
+        let bytes = self.storage.component_bytes(contract_id).await?;
+        let component = Component::from_binary(&self.engine, &bytes)?;
+        self.component_cache
+            .put(contract_id, component.clone())
+            .await;
+        Ok((bytes, component))
+    }
+
     pub async fn load_component(&self, contract_id: u64) -> Result<Component> {
         Ok(match self.component_cache.get(&contract_id).await {
             Some(component) => component,
-            None => {
-                let component_bytes = self.storage.component_bytes(contract_id).await?;
-                let component = Component::from_binary(&self.engine, &component_bytes)?;
-                self.component_cache
-                    .put(contract_id, component.clone())
-                    .await;
-                component
-            }
+            None => self.component_bytes_and_compiled(contract_id).await?.1,
         })
     }
 

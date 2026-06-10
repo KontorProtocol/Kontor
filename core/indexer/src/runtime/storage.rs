@@ -22,6 +22,20 @@ use crate::{
     test_utils::new_mock_transaction,
 };
 
+/// Decode the WIT embedded in already-encoded component bytes, unmodified
+/// (`init`/core-context preserved) — for on-chain publish validation, where the
+/// validator must see the real surface. `component_wit` strips `init`/core-context
+/// afterward for client display. Pure, so callers that already hold the bytes
+/// avoid re-fetching them.
+pub(crate) fn print_component_wit(component_bytes: &[u8]) -> Result<String> {
+    let decoded = wit_component::decode(component_bytes).context("Failed to decode component")?;
+    let mut printer = WitPrinter::default();
+    printer
+        .print(decoded.resolve(), decoded.package(), &[])
+        .context("Failed to print component")?;
+    Ok(format!("{}", printer.output))
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Builder)]
 pub struct TransactionContext {
     /// Autoincrement id from the transactions table (for contract_state/contract_results FK).
@@ -129,22 +143,8 @@ impl Storage {
             .encode()
     }
 
-    /// The component's WIT exactly as embedded — `init`, core-context and all.
-    /// Used for on-chain publish validation, where the validator must see the
-    /// real surface. (`component_wit` strips `init`/core-context for client
-    /// display, which would make a valid contract look invalid.)
-    pub async fn component_wit_raw(&self, contract_id: u64) -> Result<String> {
-        let bs = self.component_bytes(contract_id).await?;
-        let decoded = wit_component::decode(&bs).context("Failed to decode component")?;
-        let mut printer = WitPrinter::default();
-        printer
-            .print(decoded.resolve(), decoded.package(), &[])
-            .context("Failed to print component")?;
-        Ok(format!("{}", printer.output))
-    }
-
     pub async fn component_wit(&self, contract_id: u64) -> Result<String> {
-        let wit = self.component_wit_raw(contract_id).await?;
+        let wit = print_component_wit(&self.component_bytes(contract_id).await?)?;
         // regexr.com/8i6dk
         let re = RegexBuilder::new(r"(\n^.*(borrow<core-context>|export init:|\{\s*core-context\s*\}).*$|[,]{0,1}\s*core-context[,]{0,1}\s*)")
             .multi_line(true)
