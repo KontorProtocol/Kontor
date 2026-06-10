@@ -31,4 +31,11 @@ impl ComponentCache {
     pub async fn invalidate(&self, key: u64) {
         self.inner.invalidate(&key).await
     }
+
+    /// Drop every cached component. Used on reorg, where cascade-deleted
+    /// contracts free their ids for reuse by replayed publishes — a stale entry
+    /// would otherwise let `load_component` serve the wrong WASM for a reused id.
+    pub fn clear(&self) {
+        self.inner.invalidate_all()
+    }
 }

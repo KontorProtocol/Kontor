@@ -880,4 +880,20 @@ mod tests {
             "failed publish must evict the cached component for its rolled-back id"
         );
     }
+
+    /// `clear()` (used on reorg) must make subsequent `get`s miss, so reused ids
+    /// recompile from fresh bytes. Guards the moka `invalidate_all` semantics.
+    #[tokio::test]
+    async fn cache_clear_drops_entries() {
+        let (runtime, _dir, _name) = test_runtime().await.expect("test runtime");
+        // token = native id 1; populate the cache.
+        runtime.load_component(1).await.expect("load token");
+        assert!(runtime.component_cache.get(&1).await.is_some());
+
+        runtime.component_cache.clear();
+        assert!(
+            runtime.component_cache.get(&1).await.is_none(),
+            "clear() must drop cached components"
+        );
+    }
 }

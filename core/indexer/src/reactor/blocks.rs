@@ -34,6 +34,9 @@ impl<E: Executor> Reactor<E> {
             .force_resync_from_db(&self.runtime.storage.conn)
             .await
             .context("file_ledger resync after rollback failed")?;
+        // Cascade-deleted contracts free their ids for reuse by replayed
+        // publishes; drop cached components so none is served stale WASM.
+        self.runtime.component_cache.clear();
         self.last_height = height;
 
         if let Ok(Some(row)) = select_block_at_height(&self.db_conn(), height).await {
