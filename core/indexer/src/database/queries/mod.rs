@@ -10,6 +10,7 @@ mod files;
 mod pagination;
 mod signers;
 mod transactions;
+mod versioned;
 
 pub use batches::*;
 pub use blocks::*;

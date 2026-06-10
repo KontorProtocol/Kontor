@@ -2,27 +2,25 @@ use futures_util::{Stream, stream};
 use libsql::{Connection, Value, de::from_row, params};
 
 use super::Error;
+use super::versioned::LatestMany;
 use crate::database::types::ContractStateRow;
 
-const BASE_CONTRACT_STATE_QUERY: &str = include_str!("../sql/base_contract_state_query.sql");
-
-fn base_contract_state_query() -> String {
-    BASE_CONTRACT_STATE_QUERY
-        .replace("{{path_operator}}", "=")
-        .replace("{{path_prefix}}", "")
-        .replace("{{path_suffix}}", "")
-}
-
-fn base_exists_contract_state_query() -> String {
-    BASE_CONTRACT_STATE_QUERY.replace(
-        "AND path {{path_operator}} {{path_prefix}} :path {{path_suffix}}",
-        "AND (path LIKE :path || '.%' OR path = :path)",
-    )
-}
-
-const PATH_PREFIX_FILTER_QUERY: &str = include_str!("../sql/path_prefix_filter_query.sql");
-const MATCHING_PATH_CONTRACT_STATE_QUERY: &str = include_str!("../sql/matching_path_query.sql");
 const DELETE_MATCHING_PATHS_QUERY: &str = include_str!("../sql/delete_matching_paths.sql");
+
+/// `contract_state` is height-versioned per `(contract_id, path)`. These build
+/// the latest-version reads. Note `deleted = false` placement differs by intent:
+/// the point reads apply it as a *post* predicate (the current value, or nothing
+/// if the latest write deleted it), while the prefix scan filters deleted rows
+/// *before* ranking (latest surviving version per captured prefix).
+fn latest_state(select: &str, filter: &str) -> String {
+    LatestMany::builder()
+        .table("contract_state")
+        .select(select)
+        .filter(filter)
+        .post("deleted = false")
+        .build()
+        .to_sql()
+}
 
 pub async fn insert_contract_state(conn: &Connection, row: ContractStateRow) -> Result<u64, Error> {
     Ok(conn
@@ -58,18 +56,9 @@ pub async fn get_latest_contract_state(
 ) -> Result<Option<ContractStateRow>, Error> {
     let mut rows = conn
         .query(
-            &format!(
-                r#"
-                SELECT
-                    contract_id,
-                    height,
-                    tx_id,
-                    path,
-                    value,
-                    deleted
-                {}
-                "#,
-                base_contract_state_query()
+            &latest_state(
+                "contract_id, height, tx_id, path, value, deleted",
+                "contract_id = :contract_id AND path = :path",
             ),
             ((":contract_id", contract_id), (":path", path)),
         )
@@ -86,16 +75,9 @@ pub async fn get_latest_contract_state_value(
 ) -> Result<Option<Vec<u8>>, Error> {
     let mut rows = conn
         .query(
-            &format!(
-                r#"
-                SELECT
-                  CASE
-                    WHEN size <= :fuel THEN value
-                    ELSE null
-                  END AS value
-                {}
-                "#,
-                base_contract_state_query()
+            &latest_state(
+                "CASE WHEN size <= :fuel THEN value ELSE null END AS value",
+                "contract_id = :contract_id AND path = :path",
             ),
             (
                 (":contract_id", contract_id),
@@ -143,12 +125,9 @@ pub async fn exists_contract_state(
 ) -> Result<bool, Error> {
     let mut rows = conn
         .query(
-            &format!(
-                r#"
-                SELECT 1
-                {}
-                "#,
-                base_exists_contract_state_query()
+            &latest_state(
+                "1",
+                "contract_id = :contract_id AND (path LIKE :path || '.%' OR path = :path)",
             ),
             ((":contract_id", contract_id), (":path", path)),
         )
@@ -161,9 +140,19 @@ pub async fn path_prefix_filter_contract_state(
     contract_id: u64,
     path: String,
 ) -> Result<impl Stream<Item = Result<String, libsql::Error>> + Send + 'static, Error> {
+    // Latest surviving segment per captured prefix: partition by the prefix
+    // capture, filter `deleted` before ranking (so a deleted newest row falls
+    // back to the prior live one).
+    let query = LatestMany::builder()
+        .table("contract_state")
+        .select(r"regexp_capture(path, '^' || :path || '\.([^.]*)(\.|$)', 1)")
+        .partition_by(r"regexp_capture(path, '^(' || :path || '\.[^.]*)(\.|$)', 1)")
+        .filter("contract_id = :contract_id AND path LIKE :path || '%' AND deleted = false")
+        .build()
+        .to_sql();
     let rows = conn
         .query(
-            PATH_PREFIX_FILTER_QUERY,
+            &query,
             ((":contract_id", contract_id), (":path", path.clone())),
         )
         .await?;
@@ -187,9 +176,14 @@ pub async fn matching_path(
     base_path: &str,
     regexp: &str,
 ) -> Result<Option<String>, Error> {
+    // Latest live path under `base_path`, then REGEXP-filtered.
+    let inner = latest_state(
+        "path",
+        "contract_id = :contract_id AND path LIKE :base_path || '%'",
+    );
     let mut rows = conn
         .query(
-            MATCHING_PATH_CONTRACT_STATE_QUERY,
+            &format!("SELECT path FROM ({inner}) WHERE path REGEXP :path"),
             (
                 (":contract_id", contract_id),
                 (":base_path", base_path),

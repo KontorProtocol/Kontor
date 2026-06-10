@@ -1,6 +1,7 @@
 use libsql::{Connection, de::from_row, params};
 
 use super::Error;
+use super::versioned::{latest_one, max_height_of};
 use crate::database::types::{CORE_SIGNER_ID, Identity, SignerEntry};
 
 impl Identity {
@@ -10,8 +11,7 @@ impl Identity {
     pub async fn x_only_pubkey(&self, conn: &Connection) -> Result<String, Error> {
         let mut rows = conn
             .query(
-                "SELECT x_only_pubkey FROM x_only_pubkeys \
-                 WHERE signer_id = ? ORDER BY height DESC LIMIT 1",
+                &latest_one("x_only_pubkeys", "signer_id", "x_only_pubkey"),
                 params![self.signer_id()],
             )
             .await?;
@@ -27,7 +27,7 @@ impl Identity {
     pub async fn bls_pubkey(&self, conn: &Connection) -> Result<Option<Vec<u8>>, Error> {
         let mut rows = conn
             .query(
-                "SELECT bls_pubkey FROM bls_keys WHERE signer_id = ? ORDER BY height DESC LIMIT 1",
+                &latest_one("bls_keys", "signer_id", "bls_pubkey"),
                 params![self.signer_id()],
             )
             .await?;
@@ -37,7 +37,7 @@ impl Identity {
     pub async fn next_nonce(&self, conn: &Connection) -> Result<u64, Error> {
         let mut rows = conn
             .query(
-                "SELECT next_nonce FROM nonces WHERE signer_id = ? ORDER BY height DESC LIMIT 1",
+                &latest_one("nonces", "signer_id", "next_nonce"),
                 params![self.signer_id()],
             )
             .await?;
@@ -57,7 +57,7 @@ impl Identity {
     ) -> Result<u64, Error> {
         let mut rows = conn
             .query(
-                "SELECT next_nonce FROM nonces WHERE signer_id = ? ORDER BY height DESC LIMIT 1",
+                &latest_one("nonces", "signer_id", "next_nonce"),
                 params![self.signer_id()],
             )
             .await?;
@@ -226,25 +226,34 @@ pub async fn get_contract_signer_id(
 
 /// Shared SELECT + JOIN body for signer entry lookups. Uses LEFT JOINs so
 /// core and contract signers (which lack x_only_pubkeys/nonces rows) are
-/// returned with NULL fields rather than filtered out.
-const SIGNER_ENTRY_SELECT: &str = r#"SELECT
+/// returned with NULL fields rather than filtered out. Each join pins the
+/// latest-by-height row via a `max_height_of` scalar in the `ON` clause — the
+/// one latest-by-height form usable inside a join condition.
+fn signer_entry_select() -> String {
+    format!(
+        r#"SELECT
         s.id AS signer_id,
         p.x_only_pubkey,
         b.bls_pubkey,
         n.next_nonce
     FROM signers s
     LEFT JOIN x_only_pubkeys p ON p.signer_id = s.id
-        AND p.height = (SELECT MAX(height) FROM x_only_pubkeys WHERE signer_id = s.id)
+        AND p.height = {x_only}
     LEFT JOIN bls_keys b ON b.signer_id = s.id
-        AND b.height = (SELECT MAX(height) FROM bls_keys WHERE signer_id = s.id)
+        AND b.height = {bls}
     LEFT JOIN nonces n ON n.signer_id = s.id
-        AND n.height = (SELECT MAX(height) FROM nonces WHERE signer_id = s.id)"#;
+        AND n.height = {nonce}"#,
+        x_only = max_height_of("x_only_pubkeys", "signer_id", "s.id"),
+        bls = max_height_of("bls_keys", "signer_id", "s.id"),
+        nonce = max_height_of("nonces", "signer_id", "s.id"),
+    )
+}
 
 pub async fn get_signer_entry_by_x_only_pubkey(
     conn: &Connection,
     x_only_pubkey: &str,
 ) -> Result<Option<SignerEntry>, Error> {
-    let sql = format!("{SIGNER_ENTRY_SELECT} WHERE p.x_only_pubkey = ?");
+    let sql = format!("{} WHERE p.x_only_pubkey = ?", signer_entry_select());
     let mut rows = conn.query(&sql, params![x_only_pubkey]).await?;
     Ok(rows.next().await?.map(|r| from_row(&r)).transpose()?)
 }
@@ -253,7 +262,7 @@ pub async fn get_signer_entry_by_id(
     conn: &Connection,
     signer_id: u64,
 ) -> Result<Option<SignerEntry>, Error> {
-    let sql = format!("{SIGNER_ENTRY_SELECT} WHERE s.id = ?");
+    let sql = format!("{} WHERE s.id = ?", signer_entry_select());
     let mut rows = conn.query(&sql, params![signer_id]).await?;
     Ok(rows.next().await?.map(|r| from_row(&r)).transpose()?)
 }
@@ -267,7 +276,7 @@ pub async fn get_signer_entry_by_bls_pubkey(
 ) -> Result<Option<SignerEntry>, Error> {
     let mut rows = conn
         .query(
-            "SELECT signer_id FROM bls_keys WHERE bls_pubkey = ? ORDER BY height DESC LIMIT 1",
+            &latest_one("bls_keys", "bls_pubkey", "signer_id"),
             params![bls_pubkey.to_vec()],
         )
         .await?;
