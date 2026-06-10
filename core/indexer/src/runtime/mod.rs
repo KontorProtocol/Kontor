@@ -652,3 +652,44 @@ fn should_skip_result(contract_address: &ContractAddress, func_name: &str) -> bo
 impl HasData for Runtime {
     type Data<'a> = &'a mut Runtime;
 }
+
+#[cfg(test)]
+mod tests {
+    use crate::test_utils::test_runtime;
+
+    /// The structural security boundary: filestorage's component imports the
+    /// native-only `file-registry` interface, so it instantiates against the
+    /// native linker but is *rejected* by the user linker. This is what stops a
+    /// user-published contract from reaching the privileged registries — the
+    /// import is simply not provided, so instantiation fails.
+    #[tokio::test]
+    async fn user_linker_rejects_native_registry_imports() {
+        let (runtime, _dir, _name) = test_runtime().await.expect("test runtime");
+        // filestorage = native contract id 2; its WIT imports `file-registry`.
+        let component = runtime
+            .load_component(2)
+            .await
+            .expect("load filestorage component");
+
+        // Native linker provides file-registry → instantiation succeeds.
+        let mut store = runtime.make_store(10_000_000).expect("store");
+        runtime
+            .linkers
+            .native
+            .instantiate_async(&mut store, &component)
+            .await
+            .expect("native linker must satisfy file-registry imports");
+
+        // User linker does NOT provide file-registry → instantiation fails.
+        let mut store = runtime.make_store(10_000_000).expect("store");
+        assert!(
+            runtime
+                .linkers
+                .user
+                .instantiate_async(&mut store, &component)
+                .await
+                .is_err(),
+            "user linker must reject a component importing native-only file-registry"
+        );
+    }
+}
