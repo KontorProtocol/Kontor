@@ -244,15 +244,6 @@ export type OpMetadata = {
 };
 
 /**
- * One OP_RETURN directive bound to the reveal input it applies to:
- * where the asset detached by that input's op should land. A
- * transaction's OP_RETURN payload is a `Vec<OpReturnEntry>` — the
- * per-input binding kept as a plain list (not a map) so it is fully
- * expressible in WIT — `list<op-return-entry>`.
- */
-export type OpReturnEntry = { input_index: number; recipient: SignerRef };
-
-/**
  * What happened when this op ran. Persisted per row in `contract_results`.
  *
  * - `Ok`: the contract function returned successfully.
@@ -474,14 +465,10 @@ export type Transaction = {
   index: number;
   inputs: Array<Input>;
   /**
-   * OP_RETURN directives, one entry per reveal input that carries one.
-   */
-  op_return_data: Array<OpReturnEntry>;
-  /**
    * The transaction's raw OP_RETURN payload (the bytes pushed after
    * `OP_RETURN`), if any. Surfaced verbatim to contracts via
-   * `transaction.op-return-data()` so they own decoding — independent of
-   * whether the bytes parse as `op_return_data` entries.
+   * `transaction.op-return-data()`, which own any decoding; the host does
+   * not interpret it.
    */
   op_return_raw: Array<number> | null;
 };

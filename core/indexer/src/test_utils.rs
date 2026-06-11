@@ -313,7 +313,6 @@ pub fn new_mock_transaction(txid_num: u32) -> Transaction {
         txid: Txid::from_slice(&bytes).unwrap(),
         index: 0,
         inputs: vec![],
-        op_return_data: Vec::new(),
         op_return_raw: None,
     }
 }

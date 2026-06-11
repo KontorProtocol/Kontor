@@ -234,7 +234,6 @@ impl Executor for LiteExecutor {
             txid: tx.compute_txid(),
             index: 0,
             inputs: vec![],
-            op_return_data: Default::default(),
             op_return_raw: None,
         })
     }

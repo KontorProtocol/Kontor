@@ -53,7 +53,6 @@ fn accept_all(pair: (usize, bitcoin::Transaction)) -> Option<indexer_types::Tran
         txid: tx.compute_txid(),
         index: index as u32,
         inputs: vec![],
-        op_return_data: Default::default(),
         op_return_raw: None,
     })
 }
@@ -105,7 +104,6 @@ async fn fetch_mempool_returns_filtered_transactions() {
                 txid: tx.compute_txid(),
                 index: index as u32,
                 inputs: vec![],
-                op_return_data: Default::default(),
                 op_return_raw: None,
             })
         } else {

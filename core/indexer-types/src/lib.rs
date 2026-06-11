@@ -365,12 +365,10 @@ pub struct Transaction {
     pub txid: Txid,
     pub index: u32,
     pub inputs: Vec<Input>,
-    /// OP_RETURN directives, one entry per reveal input that carries one.
-    pub op_return_data: Vec<OpReturnEntry>,
     /// The transaction's raw OP_RETURN payload (the bytes pushed after
     /// `OP_RETURN`), if any. Surfaced verbatim to contracts via
-    /// `transaction.op-return-data()` so they own decoding — independent of
-    /// whether the bytes parse as `op_return_data` entries.
+    /// `transaction.op-return-data()`, which own any decoding; the host does
+    /// not interpret it.
     pub op_return_raw: Option<Vec<u8>>,
 }
 
@@ -898,18 +896,6 @@ pub struct ResultRow {
     /// `null` for ops that don't go through user-side gas accounting.
     #[ts(type = "number | null")]
     pub payer_signer_id: Option<u64>,
-}
-
-/// One OP_RETURN directive bound to the reveal input it applies to:
-/// where the asset detached by that input's op should land. A
-/// transaction's OP_RETURN payload is a `Vec<OpReturnEntry>` — the
-/// per-input binding kept as a plain list (not a map) so it is fully
-/// expressible in WIT — `list<op-return-entry>`.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
-#[ts(export, export_to = "../../../sdk/src/bindings.d.ts")]
-pub struct OpReturnEntry {
-    pub input_index: u32,
-    pub recipient: SignerRef,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
