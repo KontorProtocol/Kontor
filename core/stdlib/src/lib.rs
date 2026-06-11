@@ -2,10 +2,12 @@
 extern crate alloc;
 
 mod dot_path_buf;
+mod indexed_map;
 mod storage_interface;
 mod wave_interfaces;
 
 pub use dot_path_buf::*;
+pub use indexed_map::*;
 pub use macros::{
     Model, Root, Storage, StorageRoot, Store, Wavey, contract, contract_address, holder_ref, impls,
     import, interface,

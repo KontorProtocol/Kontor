@@ -104,7 +104,7 @@ pub fn generate(config: Config) -> TokenStream {
                 self.get_list_u8(path)
             }
 
-            fn __get_keys<'a, T: ToString + FromStr + Clone + 'a>(self: &alloc::rc::Rc<Self>, path: &'a str) -> impl Iterator<Item = T> + 'a
+            fn __get_keys<T: ToString + FromStr + Clone>(self: &alloc::rc::Rc<Self>, path: &str) -> impl Iterator<Item = T> + use<T>
             where
                 <T as FromStr>::Err: Debug,
             {
@@ -146,7 +146,7 @@ pub fn generate(config: Config) -> TokenStream {
                 self.get_list_u8(path)
             }
 
-            fn __get_keys<'a, T: ToString + FromStr + Clone + 'a>(self: &alloc::rc::Rc<Self>, path: &'a str) -> impl Iterator<Item = T> + 'a
+            fn __get_keys<T: ToString + FromStr + Clone>(self: &alloc::rc::Rc<Self>, path: &str) -> impl Iterator<Item = T> + use<T>
             where
                 <T as FromStr>::Err: Debug,
             {

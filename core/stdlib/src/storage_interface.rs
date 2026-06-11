@@ -18,10 +18,14 @@ pub trait ReadStorage {
 
     fn __get_list_u8(self: &alloc::rc::Rc<Self>, path: &str) -> Option<Vec<u8>>;
 
-    fn __get_keys<'a, T: ToString + FromStr + Clone + 'a>(
+    // The returned iterator owns its key source (see `make_keys_iterator`), so it
+    // does not borrow `path`. `use<Self, T>` makes that explicit — capturing only
+    // the types, not the `self`/`path` lifetimes — so callers can scan a
+    // freshly-built path (e.g. an index bucket) and still return the iterator.
+    fn __get_keys<T: ToString + FromStr + Clone>(
         self: &alloc::rc::Rc<Self>,
-        path: &'a str,
-    ) -> impl Iterator<Item = T> + 'a
+        path: &str,
+    ) -> impl Iterator<Item = T> + use<Self, T>
     where
         <T as FromStr>::Err: Debug;
 
