@@ -1,7 +1,7 @@
 use indexer::database::queries::{append_challenge_status, insert_challenge, latest_challenge_status};
 use indexer::database::types::{ChallengeRow, ChallengeStatus};
 use indexer::test_utils::{
-    insert_test_block, metadata_to_descriptor, por_valid_proof, prepare_por_file, valid_seed_field,
+    metadata_to_descriptor, por_valid_proof, prepare_por_file, valid_seed_field,
 };
 use testlib::*;
 
@@ -138,15 +138,16 @@ pub async fn run_core_signer(runtime: &mut Runtime) -> Result<()> {
     filestorage::join_agreement(runtime, &s3, &created.agreement_id).await??;
 
     // Generate the proof, then seed a matching ledger challenge for its id.
-    // (regtest s_chal = 8.)
+    // (regtest s_chal = 8.) Issue it at genesis so its `active` row is older
+    // than the `proven` row verify-proof writes at the current height (the
+    // latest-by-height status is what `get-challenges` surfaces).
     let s_chal = 8usize;
-    let block_height = 50_000u64;
+    let block_height = 0u64;
     let seed = valid_seed_field(7);
     let (proof_bytes, challenge_id) =
         por_valid_proof(&prepared, metadata, block_height, s_chal, seed.field, &prover)?;
 
     let conn = runtime.storage_conn();
-    insert_test_block(&conn, block_height).await?;
     let prover_id: u64 = prover.parse().expect("prover is a signer_id");
     let row = ChallengeRow::builder()
         .challenge_id(challenge_id.clone())

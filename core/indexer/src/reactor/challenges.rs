@@ -35,12 +35,24 @@ const S_CHAL: u64 = 100;
 /// this keeps dev/test proof generation fast. Soundness only matters on real
 /// networks (cf. token dev-mint conditioning on `network()`).
 const REGTEST_S_CHAL: u64 = 8;
+/// On regtest, challenge every eligible file each block (so a single mined block
+/// deterministically produces challenges to test against) rather than spreading
+/// them across a production-length year.
+const REGTEST_BLOCKS_PER_YEAR: u64 = 1;
 
 fn s_chal_for(network: bitcoin::Network) -> u64 {
     if network == bitcoin::Network::Regtest {
         REGTEST_S_CHAL
     } else {
         S_CHAL
+    }
+}
+
+fn blocks_per_year_for(network: bitcoin::Network) -> u64 {
+    if network == bitcoin::Network::Regtest {
+        REGTEST_BLOCKS_PER_YEAR
+    } else {
+        BLOCKS_PER_YEAR
     }
 }
 
@@ -141,6 +153,7 @@ pub async fn generate_challenges_for_block(
     block_hash: &[u8],
 ) -> Result<u64> {
     let s_chal = s_chal_for(runtime.network);
+    let blocks_per_year = blocks_per_year_for(runtime.network);
 
     // Read economic state through the contract's view exports.
     let agreements = get_all_active_agreements(runtime)
@@ -172,9 +185,9 @@ pub async fn generate_challenges_for_block(
         &agreement_seed,
         &mut counter,
         b"roll",
-        BLOCKS_PER_YEAR as usize,
+        blocks_per_year as usize,
     ) as u64;
-    let num_to_challenge = compute_num_to_challenge(C_TARGET, total_files, BLOCKS_PER_YEAR, roll);
+    let num_to_challenge = compute_num_to_challenge(C_TARGET, total_files, blocks_per_year, roll);
     if num_to_challenge == 0 {
         return Ok(0);
     }
