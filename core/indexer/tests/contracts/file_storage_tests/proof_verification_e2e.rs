@@ -71,7 +71,7 @@ async fn e2e_invalid_proof_rejected(runtime: &mut Runtime) -> Result<()> {
     // network's challenge count (no challenge is registered, so verify_proof
     // rejects it regardless — this exercises the rejection path, not a fixture).
     let s_chal = filestorage::get_s_chal(runtime).await? as usize;
-    let proof_bytes = por_invalid_proof_bytes(&prover, s_chal)?;
+    let proof_bytes = por_invalid_proof_bytes(prover, s_chal)?;
     let result = filestorage::verify_proof(runtime, &s1, proof_bytes).await?;
     assert!(result.is_err(), "Invalid proof should be rejected");
 
@@ -127,7 +127,7 @@ async fn e2e_cross_block_aggregation_with_new_agreement(runtime: &mut Runtime) -
         runtime,
         &s1,
         &created_a.agreement_id,
-        &prover,
+        prover,
         block_n,
         valid_seed_field(200).bytes.to_vec(),
     )
@@ -137,7 +137,7 @@ async fn e2e_cross_block_aggregation_with_new_agreement(runtime: &mut Runtime) -
         runtime,
         &s1,
         &created_b.agreement_id,
-        &prover,
+        prover,
         block_n,
         valid_seed_field(201).bytes.to_vec(),
     )
@@ -157,7 +157,7 @@ async fn e2e_cross_block_aggregation_with_new_agreement(runtime: &mut Runtime) -
     // Step 4: Generate the aggregated proof inline for `prover` over A and B (at
     // the network's challenge count), then verify it through the contract.
     let s_chal = filestorage::get_s_chal(runtime).await? as usize;
-    let proof_bytes = por_cross_block_proof_bytes(&prover, s_chal)?;
+    let proof_bytes = por_cross_block_proof_bytes(prover, s_chal)?;
     let result = filestorage::verify_proof(runtime, &s1, proof_bytes).await??;
 
     assert_eq!(

@@ -85,7 +85,7 @@ impl Runtime {
         block_height: u64,
         num_challenges: u64,
         seed: Vec<u8>,
-        prover_id: String,
+        prover_id: u64,
     ) -> Result<Result<String, Error>> {
         Fuel::ComputeChallengeId
             .consume(accessor, self.gauge.as_ref())
@@ -94,7 +94,15 @@ impl Runtime {
         let table = self.table.lock().await;
         let file_descriptor = table.get(&rep)?;
 
-        Ok(file_descriptor.compute_challenge_id(block_height, num_challenges, &seed, prover_id))
+        // The crypto adapter binds the prover into the challenge hash as a
+        // decimal string; produce that one representation here so the format is
+        // owned at the boundary, not inherited from a holder serialization.
+        Ok(file_descriptor.compute_challenge_id(
+            block_height,
+            num_challenges,
+            &seed,
+            prover_id.to_string(),
+        ))
     }
 
     async fn _proof_from_bytes<T>(
@@ -160,7 +168,7 @@ impl Runtime {
                 input.block_height,
                 input.num_challenges,
                 &input.seed,
-                input.prover_id.clone(),
+                input.prover_id.to_string(),
             ) {
                 Ok(challenge) => challenges.push(challenge),
                 Err(e) => return Ok(Err(e)),
@@ -325,7 +333,7 @@ impl built_in::file_registry::HostFileDescriptorWithStore for Runtime {
         block_height: u64,
         num_challenges: u64,
         seed: Vec<u8>,
-        prover_id: String,
+        prover_id: u64,
     ) -> Result<Result<String, Error>> {
         accessor
             .with(|mut access| access.get().clone())

@@ -177,8 +177,8 @@ pub async fn run_core_signer(runtime: &mut Runtime) -> Result<()> {
             "Deadline should be after challenge creation block"
         );
         assert!(
-            !challenge.prover_id.is_empty(),
-            "Challenge should have a prover ID"
+            challenge.prover_id > 0,
+            "Challenge should have a prover ID (a real signer_id)"
         );
         assert_eq!(
             challenge.seed.len(),

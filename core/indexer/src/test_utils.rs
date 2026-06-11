@@ -665,7 +665,7 @@ fn prepare_por_file(content: &[u8], filename: &str) -> (api::PreparedFile, api::
 /// flipped. `prover_id`/`num_challenges` must match the challenge the contract
 /// would store. Generated inline (not from a fixture) so it tracks the
 /// contract's signer-derived `prover_id` and per-network `s_chal`.
-pub fn por_invalid_proof_bytes(prover_id: &str, num_challenges: usize) -> Result<Vec<u8>> {
+pub fn por_invalid_proof_bytes(prover_id: u64, num_challenges: usize) -> Result<Vec<u8>> {
     let (prepared, metadata) = prepare_por_file(b"Second file with different content", "file2.txt");
     let mut ledger = FileLedger::new();
     ledger.add_file(&metadata)?;
@@ -694,7 +694,7 @@ pub fn por_invalid_proof_bytes(prover_id: &str, num_challenges: usize) -> Result
 /// per-file seeds (200/201). The ledger is built A, B, C (C present but not
 /// proven) to match the on-chain ledger state at verify time.
 /// `num_challenges` must equal the contract's `s_chal`.
-pub fn por_cross_block_proof_bytes(prover_id: &str, num_challenges: usize) -> Result<Vec<u8>> {
+pub fn por_cross_block_proof_bytes(prover_id: u64, num_challenges: usize) -> Result<Vec<u8>> {
     let (prepared_a, metadata_a) =
         prepare_por_file(b"Content of file A for cross-block", "cross_a.txt");
     let (prepared_b, metadata_b) =
