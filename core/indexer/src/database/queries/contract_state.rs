@@ -142,12 +142,16 @@ pub async fn path_prefix_filter_contract_state(
 ) -> Result<impl Stream<Item = Result<String, libsql::Error>> + Send + 'static, Error> {
     // Latest surviving segment per captured prefix: partition by the prefix
     // capture, filter `deleted` before ranking (so a deleted newest row falls
-    // back to the prior live one).
+    // back to the prior live one). Order by `path` so `keys()` iteration is
+    // deterministic across nodes — a contract that consumes this positionally
+    // (e.g. filestorage selecting challenge targets by index) would otherwise
+    // rely on SQLite's unspecified row order, a latent consensus hazard.
     let query = LatestMany::builder()
         .table("contract_state")
         .select(r"regexp_capture(path, '^' || :path || '\.([^.]*)(\.|$)', 1)")
         .partition_by(r"regexp_capture(path, '^(' || :path || '\.[^.]*)(\.|$)', 1)")
         .filter("contract_id = :contract_id AND path LIKE :path || '%' AND deleted = false")
+        .order_by("path")
         .build()
         .to_sql();
     let rows = conn
