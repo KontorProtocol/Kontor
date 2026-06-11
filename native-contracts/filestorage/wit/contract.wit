@@ -2,7 +2,7 @@ package root:component;
 
 world root {
   include kontor:built-in/built-in-native;
-  use kontor:built-in/context.{view-context, proc-context, core-context, contract};
+  use kontor:built-in/context.{view-context, proc-context, core-context, contract, holder-ref};
   use kontor:built-in/error.{error};
   use kontor:built-in/file-registry-types.{raw-file-descriptor};
 
@@ -11,7 +11,7 @@ world root {
   // ─────────────────────────────────────────────────────────────────
 
   record node-info {
-    node-id: string,
+    node-id: u64,
     active: bool,
   }
 
@@ -27,13 +27,13 @@ world root {
 
   record join-agreement-result {
     agreement-id: string,
-    node-id: string,
+    node-id: u64,
     activated: bool,
   }
 
   record leave-agreement-result {
     agreement-id: string,
-    node-id: string,
+    node-id: u64,
   }
 
   // Challenge types
@@ -51,7 +51,7 @@ world root {
     block-height: u64,
     num-challenges: u64,
     seed: list<u8>,
-    prover-id: string,
+    prover-id: u64,
     deadline-height: u64,
     status: challenge-status,
   }
@@ -84,16 +84,16 @@ world root {
   ) -> list<agreement-data>;
 
   // Node participation
+  // The node identity is the signer (one slot per signer per agreement); it is
+  // not a caller-supplied parameter.
   export join-agreement: async func(
     ctx: borrow<proc-context>,
-    agreement-id: string,
-    node-id: string
+    agreement-id: string
   ) -> result<join-agreement-result, error>;
 
   export leave-agreement: async func(
     ctx: borrow<proc-context>,
-    agreement-id: string,
-    node-id: string
+    agreement-id: string
   ) -> result<leave-agreement-result, error>;
 
   // Node queries
@@ -105,7 +105,7 @@ world root {
   export is-node-in-agreement: async func(
     ctx: borrow<view-context>,
     agreement-id: string,
-    node-id: string
+    node-id: u64
   ) -> bool;
 
   // Protocol parameters
@@ -138,11 +138,11 @@ world root {
     block-hash: list<u8>
   ) -> list<challenge-data>;
 
-  // Create a challenge for a specific agreement and node (deterministic, for testing)
+  // Create a challenge for a specific agreement and prover (deterministic, for testing)
   export create-challenge-for-agreement: async func(
     ctx: borrow<proc-context>,
     agreement-id: string,
-    node-id: string,
+    prover-id: u64,
     block-height: u64,
     seed: list<u8>
   ) -> result<challenge-data, error>;

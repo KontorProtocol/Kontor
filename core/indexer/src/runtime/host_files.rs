@@ -85,7 +85,7 @@ impl Runtime {
         block_height: u64,
         num_challenges: u64,
         seed: Vec<u8>,
-        prover_id: String,
+        prover_id: u64,
     ) -> Result<Result<String, Error>> {
         Fuel::ComputeChallengeId
             .consume(accessor, self.gauge.as_ref())
@@ -160,7 +160,7 @@ impl Runtime {
                 input.block_height,
                 input.num_challenges,
                 &input.seed,
-                input.prover_id.clone(),
+                input.prover_id,
             ) {
                 Ok(challenge) => challenges.push(challenge),
                 Err(e) => return Ok(Err(e)),
@@ -325,7 +325,7 @@ impl built_in::file_registry::HostFileDescriptorWithStore for Runtime {
         block_height: u64,
         num_challenges: u64,
         seed: Vec<u8>,
-        prover_id: String,
+        prover_id: u64,
     ) -> Result<Result<String, Error>> {
         accessor
             .with(|mut access| access.get().clone())

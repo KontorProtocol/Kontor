@@ -23,14 +23,21 @@ const DEFAULT_BLOCKS_PER_YEAR: u64 = 52560;
 /// Number of sectors/symbols sampled per challenge
 const DEFAULT_S_CHAL: u64 = 100;
 
+/// Challenge count on regtest. The PoR prover (a Nova recursive SNARK) costs
+/// roughly linearly in this count; a small value keeps proof generation fast on
+/// the dev network and in tests. Soundness only matters on real networks, so
+/// signet/testnet/mainnet keep `DEFAULT_S_CHAL`.
+const REGTEST_S_CHAL: u64 = 8;
+
 // ─────────────────────────────────────────────────────────────────
 // State Types
 // ─────────────────────────────────────────────────────────────────
 
 #[derive(Clone, Default, Storage)]
 struct AgreementNodes {
-    /// node_id -> is_active (true means active, false means left)
-    pub nodes: Map<String, bool>,
+    /// signer_id -> is_active (true means active, false means left). The node
+    /// identity is the joining signer, so the key is its u64 signer_id.
+    pub nodes: Map<u64, bool>,
     pub node_count: u64,
 }
 
@@ -51,13 +58,34 @@ struct ProtocolState {
 // Contract Implementation
 // ─────────────────────────────────────────────────────────────────
 
+/// The caller's `u64` signer_id, which is the storage-node identity. Members
+/// must be registered signers (a failed challenge has to resolve to a slashable
+/// stake), so a non-signer holder — core, raw pubkey, utxo — is bad input here
+/// rather than a silently skipped join.
+fn require_signer_id(signer: &context::Signer) -> Result<u64, Error> {
+    match signer.into() {
+        HolderRef::SignerId(id) => Ok(id),
+        _ => Err(Error::Message(
+            "caller must be a registered signer identity".to_string(),
+        )),
+    }
+}
+
 impl Guest for Filestorage {
     fn init(ctx: &ProcContext) -> Contract {
+        // Smaller challenge count on regtest so the Nova prover stays fast for
+        // the dev network and tests; production networks use the full count.
+        // Self-conditioning via the `network()` built-in (cf. token dev-mint).
+        let s_chal = if ctx.network().is_regtest() {
+            REGTEST_S_CHAL
+        } else {
+            DEFAULT_S_CHAL
+        };
         ProtocolState {
             min_nodes: DEFAULT_MIN_NODES,
             challenge_deadline_blocks: DEFAULT_CHALLENGE_DEADLINE_BLOCKS,
             c_target: DEFAULT_C_TARGET,
-            s_chal: DEFAULT_S_CHAL,
+            s_chal,
             blocks_per_year: DEFAULT_BLOCKS_PER_YEAR,
             agreements: Map::default(),
             agreement_nodes: Map::default(),
@@ -144,9 +172,16 @@ impl Guest for Filestorage {
     fn join_agreement(
         ctx: &ProcContext,
         agreement_id: String,
-        node_id: String,
     ) -> Result<JoinAgreementResult, Error> {
         let model = ctx.model();
+
+        // Membership is keyed on the joining signer's u64 signer_id, so one
+        // signer holds at most one slot per agreement (enforced by the dup-check
+        // below). This is a legitimacy guardrail — not a replication guarantee:
+        // replication is economic, and an operator behind multiple keys is
+        // undetectable by design. Keying on the signer also makes a failed
+        // challenge's `prover_id` resolve to a slashable stake.
+        let node_id = require_signer_id(&ctx.signer())?;
 
         // Validate agreement exists
         let agreement = model
@@ -197,9 +232,12 @@ impl Guest for Filestorage {
     fn leave_agreement(
         ctx: &ProcContext,
         agreement_id: String,
-        node_id: String,
     ) -> Result<LeaveAgreementResult, Error> {
         let model = ctx.model();
+
+        // Only the signer that joined can leave its own membership — auth is
+        // structural now that the key is the signer's identity.
+        let node_id = require_signer_id(&ctx.signer())?;
 
         // Validate agreement exists
         let _agreement = model
@@ -249,8 +287,8 @@ impl Guest for Filestorage {
                 // Return all nodes we’ve seen, including inactive ones
                 s.nodes()
                     .keys()
-                    .map(|node_id: String| NodeInfo {
-                        node_id: node_id.clone(),
+                    .map(|node_id: u64| NodeInfo {
+                        node_id,
                         active: s.nodes().get(&node_id).unwrap_or(false),
                     })
                     .collect()
@@ -258,7 +296,7 @@ impl Guest for Filestorage {
             .unwrap_or_default()
     }
 
-    fn is_node_in_agreement(ctx: &ViewContext, agreement_id: String, node_id: String) -> bool {
+    fn is_node_in_agreement(ctx: &ViewContext, agreement_id: String, node_id: u64) -> bool {
         ctx.model()
             .agreement_nodes()
             .get(&agreement_id)
@@ -413,10 +451,10 @@ impl Guest for Filestorage {
                 Some(s) => s,
                 None => continue,
             };
-            let active_nodes: Vec<String> = nodes_state
+            let active_nodes: Vec<u64> = nodes_state
                 .nodes()
                 .keys()
-                .filter(|nid: &String| nodes_state.nodes().get(nid).unwrap_or(false))
+                .filter(|nid: &u64| nodes_state.nodes().get(nid).unwrap_or(false))
                 .collect();
 
             if active_nodes.is_empty() {
@@ -432,7 +470,7 @@ impl Guest for Filestorage {
             let mut node_counter: u64 = 0;
             let node_index =
                 uniform_index(&node_seed, &mut node_counter, b"node", active_nodes.len());
-            let prover_id = active_nodes[node_index].clone();
+            let prover_id = active_nodes[node_index];
 
             // Per-challenge seed used by kontor-crypto as the Challenge.seed field.
             // Derived deterministically from the per-block batch seed and the file_id.
@@ -446,7 +484,7 @@ impl Guest for Filestorage {
 
             // Compute challenge ID via file descriptor method
             let challenge_id =
-                match descriptor.compute_challenge_id(block_height, s_chal, &seed, &prover_id) {
+                match descriptor.compute_challenge_id(block_height, s_chal, &seed, prover_id) {
                     Ok(id) => id,
                     Err(_) => continue,
                 };
@@ -476,7 +514,7 @@ impl Guest for Filestorage {
     fn create_challenge_for_agreement(
         ctx: &ProcContext,
         agreement_id: String,
-        node_id: String,
+        prover_id: u64,
         block_height: u64,
         seed: Vec<u8>,
     ) -> Result<ChallengeData, Error> {
@@ -504,11 +542,11 @@ impl Guest for Filestorage {
             .get(&agreement_id)
             .ok_or(Error::Message("No nodes for agreement".to_string()))?;
 
-        let is_active = nodes_state.nodes().get(&node_id).unwrap_or(false);
+        let is_active = nodes_state.nodes().get(&prover_id).unwrap_or(false);
         if !is_active {
             return Err(Error::Message(format!(
                 "Node {} is not active in agreement {}",
-                node_id, agreement_id
+                prover_id, agreement_id
             )));
         }
 
@@ -542,7 +580,7 @@ impl Guest for Filestorage {
         ))?;
 
         let challenge_id =
-            descriptor.compute_challenge_id(block_height, s_chal, &seed, &node_id)?;
+            descriptor.compute_challenge_id(block_height, s_chal, &seed, prover_id)?;
 
         let challenge = ChallengeData {
             challenge_id,
@@ -550,7 +588,7 @@ impl Guest for Filestorage {
             block_height,
             num_challenges: s_chal,
             seed,
-            prover_id: node_id,
+            prover_id,
             deadline_height,
             status: ChallengeStatus::Active,
         };

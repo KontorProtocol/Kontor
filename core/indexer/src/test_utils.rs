@@ -1,4 +1,4 @@
-use anyhow::Result;
+use anyhow::{Result, anyhow};
 
 use bitcoin::hashes::Hash;
 use bitcoin::key::TapTweak;
@@ -25,8 +25,13 @@ use crate::database::native_contracts::NATIVE_CONTRACTS;
 use crate::database::queries::insert_block;
 use crate::database::types::FileMetadataRow;
 use crate::database::{Reader, Writer, queries};
+use crate::runtime::wit::prover_challenge_key;
 use crate::runtime::{ComponentCache, GenesisValidator, RawFileDescriptor, Runtime, Storage};
-use kontor_crypto::{api::FieldElement, field_from_uniform_bytes};
+use kontor_crypto::{
+    FileLedger, PorSystem,
+    api::{self, Challenge, FieldElement},
+    field_from_uniform_bytes,
+};
 
 pub enum PublicKey<'a> {
     Segwit(&'a CompressedPublicKey),
@@ -309,7 +314,7 @@ pub fn new_mock_transaction(txid_num: u32) -> Transaction {
         txid: Txid::from_slice(&bytes).unwrap(),
         index: 0,
         inputs: vec![],
-        op_return_data: Vec::new(),
+        op_return_raw: None,
     }
 }
 
@@ -646,113 +651,82 @@ pub mod bls_test {
     }
 }
 
-#[cfg(test)]
-mod fixture_gen {
-    use anyhow::{Result, anyhow};
-    use kontor_crypto::{
-        FileLedger, PorSystem,
-        api::{self, Challenge},
-    };
-    use serde::Serialize;
-
-    use super::valid_seed_field;
-
-    #[derive(Debug, Serialize)]
-    struct PorProofFixtures {
-        invalid_proof_hex: String,
-        cross_block_agg_hex: String,
-        note: String,
+/// Deterministically prepare a file for PoR proving (filename doubles as the
+/// nonce, matching the e2e tests so the resulting metadata/root line up with
+/// the agreements they register).
+fn prepare_por_file(content: &[u8], filename: &str) -> (api::PreparedFile, api::FileMetadata) {
+    let mut nonce = [0u8; 32];
+    for (i, b) in filename.bytes().enumerate().take(32) {
+        nonce[i] = b;
     }
+    api::prepare_file(content, filename, &nonce).expect("prepare_file")
+}
 
-    fn prepare_test_file(content: &[u8], filename: &str) -> (api::PreparedFile, api::FileMetadata) {
-        let mut nonce = [0u8; 32];
-        for (i, b) in filename.bytes().enumerate().take(32) {
-            nonce[i] = b;
-        }
-        api::prepare_file(content, filename, &nonce).expect("Failed to prepare file")
+/// A well-formed but invalid PoR proof: a valid single-file proof with one byte
+/// flipped. `prover_id`/`num_challenges` must match the challenge the contract
+/// would store. Generated inline (not from a fixture) so it tracks the
+/// contract's signer-derived `prover_id` and per-network `s_chal`.
+pub fn por_invalid_proof_bytes(prover_id: u64, num_challenges: usize) -> Result<Vec<u8>> {
+    let (prepared, metadata) = prepare_por_file(b"Second file with different content", "file2.txt");
+    let mut ledger = FileLedger::new();
+    ledger.add_file(&metadata)?;
+    let challenge = Challenge::new(
+        metadata,
+        20000u64,
+        num_challenges,
+        valid_seed_field(99).field,
+        prover_challenge_key(prover_id),
+    );
+    let system = PorSystem::new(&ledger);
+    let proof = system
+        .prove(vec![&prepared], std::slice::from_ref(&challenge))
+        .map_err(|e| anyhow!("prove (invalid): {e}"))?;
+    let mut bytes = proof
+        .to_bytes()
+        .map_err(|e| anyhow!("serialize proof: {e}"))?;
+    if let Some(last) = bytes.last_mut() {
+        *last ^= 0x01;
     }
+    Ok(bytes)
+}
 
-    fn generate_invalid_proof_hex() -> Result<String> {
-        let file2_content = b"Second file with different content";
-        let (prepared_file2, metadata2) = prepare_test_file(file2_content, "file2.txt");
-        let mut ledger = FileLedger::new();
-        ledger.add_file(&metadata2)?;
-        let challenge = Challenge::new(
-            metadata2,
-            20000u64,
-            100,
-            valid_seed_field(99).field,
-            "node_1".to_string(),
-        );
-        let system = PorSystem::new(&ledger);
-        let proof = system
-            .prove(vec![&prepared_file2], std::slice::from_ref(&challenge))
-            .map_err(|e| anyhow!("Failed to generate proof: {e}"))?;
-        let mut bytes = proof
-            .to_bytes()
-            .map_err(|e| anyhow!("Failed to serialize proof: {e}"))?;
-        if let Some(last) = bytes.last_mut() {
-            *last ^= 0x01;
-        }
-        Ok(hex::encode(bytes))
-    }
-
-    fn generate_cross_block_agg_hex() -> Result<String> {
-        let (prepared_a, metadata_a) =
-            prepare_test_file(b"Content of file A for cross-block", "cross_a.txt");
-        let (prepared_b, metadata_b) =
-            prepare_test_file(b"Content of file B for cross-block", "cross_b.txt");
-        let (_prepared_c, metadata_c) =
-            prepare_test_file(b"Content of file C - new agreement", "cross_c.txt");
-        let mut ledger = FileLedger::new();
-        ledger.add_file(&metadata_a)?;
-        ledger.add_file(&metadata_b)?;
-        ledger.add_file(&metadata_c)?;
-        let challenges = vec![
-            Challenge::new(
-                metadata_a,
-                40000u64,
-                100,
-                valid_seed_field(200).field,
-                "node_1".to_string(),
-            ),
-            Challenge::new(
-                metadata_b,
-                40000u64,
-                100,
-                valid_seed_field(201).field,
-                "node_1".to_string(),
-            ),
-        ];
-        let system = PorSystem::new(&ledger);
-        let proof = system
-            .prove(vec![&prepared_a, &prepared_b], &challenges)
-            .map_err(|e| anyhow!("Failed to generate aggregated proof: {e}"))?;
-        let bytes = proof
-            .to_bytes()
-            .map_err(|e| anyhow!("Failed to serialize proof: {e}"))?;
-        Ok(hex::encode(bytes))
-    }
-
-    /// Regenerate POR proof fixtures. Run with:
-    /// `cargo test -p indexer --release --lib generate_por_fixtures -- --ignored`
-    #[test]
-    #[ignore]
-    fn generate_por_fixtures() {
-        let fixtures = PorProofFixtures {
-            invalid_proof_hex: generate_invalid_proof_hex().expect("invalid proof"),
-            cross_block_agg_hex: generate_cross_block_agg_hex().expect("cross block agg"),
-            note: "Generated by generate_por_fixtures".to_string(),
-        };
-        let output_path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("tests")
-            .join("fixtures")
-            .join("por_proof_fixtures.json");
-        if let Some(parent) = output_path.parent() {
-            std::fs::create_dir_all(parent).expect("create fixtures dir");
-        }
-        let json = serde_json::to_string_pretty(&fixtures).expect("serialize");
-        std::fs::write(&output_path, json).expect("write fixtures");
-        println!("Wrote fixtures to {}", output_path.display());
-    }
+/// A valid aggregated PoR proof over files A and B for a single `prover_id` —
+/// mirrors the e2e cross-block test's file contents, block height (40000), and
+/// per-file seeds (200/201). The ledger is built A, B, C (C present but not
+/// proven) to match the on-chain ledger state at verify time.
+/// `num_challenges` must equal the contract's `s_chal`.
+pub fn por_cross_block_proof_bytes(prover_id: u64, num_challenges: usize) -> Result<Vec<u8>> {
+    let (prepared_a, metadata_a) =
+        prepare_por_file(b"Content of file A for cross-block", "cross_a.txt");
+    let (prepared_b, metadata_b) =
+        prepare_por_file(b"Content of file B for cross-block", "cross_b.txt");
+    let (_prepared_c, metadata_c) =
+        prepare_por_file(b"Content of file C - new agreement", "cross_c.txt");
+    let mut ledger = FileLedger::new();
+    ledger.add_file(&metadata_a)?;
+    ledger.add_file(&metadata_b)?;
+    ledger.add_file(&metadata_c)?;
+    let challenges = vec![
+        Challenge::new(
+            metadata_a,
+            40000u64,
+            num_challenges,
+            valid_seed_field(200).field,
+            prover_challenge_key(prover_id),
+        ),
+        Challenge::new(
+            metadata_b,
+            40000u64,
+            num_challenges,
+            valid_seed_field(201).field,
+            prover_challenge_key(prover_id),
+        ),
+    ];
+    let system = PorSystem::new(&ledger);
+    let proof = system
+        .prove(vec![&prepared_a, &prepared_b], &challenges)
+        .map_err(|e| anyhow!("prove (cross-block): {e}"))?;
+    proof
+        .to_bytes()
+        .map_err(|e| anyhow!("serialize proof: {e}"))
 }

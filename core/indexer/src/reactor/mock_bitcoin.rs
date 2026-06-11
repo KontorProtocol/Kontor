@@ -23,7 +23,7 @@ fn to_indexer_tx(index: usize, tx: &bitcoin::Transaction) -> indexer_types::Tran
         txid: tx.compute_txid(),
         index: index as u32,
         inputs: vec![],
-        op_return_data: Default::default(),
+        op_return_raw: None,
     }
 }
 
@@ -76,7 +76,7 @@ impl MockBitcoin {
                 txid: tx.compute_txid(),
                 index: 0,
                 inputs: vec![],
-                op_return_data: Default::default(),
+                op_return_raw: None,
             };
             let txid = tx.compute_txid();
             let fee = MempoolEntry {

@@ -1296,7 +1296,7 @@ async fn prod_reactor_simulate_transaction() -> Result<()> {
         txid: bitcoin::Txid::from_slice(&[0xAA; 32]).unwrap(),
         index: 0,
         inputs: vec![],
-        op_return_data: Default::default(),
+        op_return_raw: None,
     };
 
     // Simulate on node 0 — exercises savepoint → execute → inspect → rollback

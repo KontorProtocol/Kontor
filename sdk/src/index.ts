@@ -8,14 +8,8 @@ export {
   numerics,
   serializeInst,
   deserializeInst,
-  encodeOpReturn,
-  decodeOpReturn,
   validateWit,
 } from "./component/kontor-sdk.js";
-// `OpReturnData` / `OpReturnEntry` / `SignerClaim` are intentionally not
-// re-exported here: the indexer wire types of the same name come
-// through `./bindings` below. The codec functions are structural — a
-// caller passes object literals without naming the component types.
 export type {
   ValidationError,
   ValidationResult,

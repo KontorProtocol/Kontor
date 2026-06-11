@@ -255,12 +255,12 @@ impl Executor for RuntimeExecutor {
         // boundary. Shared with `block::inspect` so simulate's zip stays
         // aligned.
         let mut walker = TxWalker::new();
+        // The contract-facing OP_RETURN surface is the tx's raw payload — the
+        // same for every input — so borrow it once instead of re-cloning per
+        // input. The runtime clones it only where it actually stores it (per
+        // op, in `set_context`).
+        let op_return_data = tx.op_return_raw.as_deref();
         for input in &tx.inputs {
-            let op_return_data = tx
-                .op_return_data
-                .iter()
-                .find(|e| e.input_index == input.input_index)
-                .map(|e| e.recipient.clone());
             let per_input = process_input(
                 runtime,
                 &mut walker,
@@ -309,7 +309,7 @@ pub async fn process_input(
     tx_id: Option<u64>,
     tx_index: u32,
     txid: bitcoin::Txid,
-    op_return_data: Option<indexer_types::SignerRef>,
+    op_return_data: Option<&[u8]>,
 ) -> Result<Vec<Option<anyhow::Error>>> {
     let errors = if input.insts.is_aggregate() {
         process_aggregate_input(
@@ -348,7 +348,7 @@ async fn process_direct_input(
     tx_id: Option<u64>,
     tx_index: u32,
     txid: bitcoin::Txid,
-    op_return_data: Option<indexer_types::SignerRef>,
+    op_return_data: Option<&[u8]>,
 ) -> Result<Vec<Option<anyhow::Error>>> {
     let identity = runtime
         .get_or_create_identity(&input.x_only_pubkey.to_string())
@@ -388,7 +388,7 @@ async fn process_direct_input(
                     txid,
                 }),
                 Some(input.previous_output),
-                op_return_data.clone().map(Into::into),
+                op_return_data.map(|b| b.to_vec()),
             )
             .await;
 
@@ -405,7 +405,7 @@ async fn process_aggregate_input(
     tx_id: Option<u64>,
     tx_index: u32,
     txid: bitcoin::Txid,
-    op_return_data: Option<indexer_types::SignerRef>,
+    op_return_data: Option<&[u8]>,
 ) -> Result<Vec<Option<anyhow::Error>>> {
     let n_ops = input.insts.ops.len();
     let resolved = match crate::bls::verify_aggregate(runtime, &input.insts).await {
@@ -465,7 +465,7 @@ async fn process_aggregate_input(
                     txid,
                 }),
                 Some(input.previous_output),
-                op_return_data.clone().map(Into::into),
+                op_return_data.map(|b| b.to_vec()),
             )
             .await;
 

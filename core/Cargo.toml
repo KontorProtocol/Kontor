@@ -92,3 +92,22 @@ arc-malachitebft-signing = { git = "https://github.com/KontorProtocol/malachite"
 arc-malachitebft-signing-ed25519 = { git = "https://github.com/KontorProtocol/malachite", rev = "e600da33cee22fd9d848fefc4d33bcf77b204fc8" }
 arc-malachitebft-sync = { git = "https://github.com/KontorProtocol/malachite", rev = "e600da33cee22fd9d848fefc4d33bcf77b204fc8" }
 arc-malachitebft-wal = { git = "https://github.com/KontorProtocol/malachite", rev = "e600da33cee22fd9d848fefc4d33bcf77b204fc8" }
+
+# Optimize the proof-system crates even in dev/test builds. Proof
+# generation (kontor-crypto's Nova prover) is exercised only in tests and
+# is ~20-30x slower unoptimized; compiling just these deps at opt-level=3
+# keeps test proving near release speed while the rest stays debug.
+[profile.dev.package.kontor-crypto]
+opt-level = 3
+[profile.dev.package.kontor-crypto-core]
+opt-level = 3
+[profile.dev.package.nova-snark]
+opt-level = 3
+[profile.dev.package.halo2curves]
+opt-level = 3
+[profile.dev.package.ff]
+opt-level = 3
+[profile.dev.package.group]
+opt-level = 3
+[profile.dev.package.generic-array]
+opt-level = 3

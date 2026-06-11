@@ -11,7 +11,7 @@ interface file-registry {
             block-height: u64,
             num-challenges: u64,
             seed: list<u8>,
-            prover-id: string
+            prover-id: u64
         ) -> result<string, error>;
     }
 
@@ -29,7 +29,7 @@ interface file-registry {
         block-height: u64,
         num-challenges: u64,
         seed: list<u8>,
-        prover-id: string,
+        prover-id: u64,
     }
 
     enum verify-result {

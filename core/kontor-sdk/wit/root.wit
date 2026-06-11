@@ -20,10 +20,12 @@ interface wit-codec {
 /// chain. Backed by the shared `core/numerics` crate so SDK arithmetic
 /// is byte-for-byte identical to chain arithmetic.
 interface numerics {
-  enum sign { plus, minus }
-  enum ordering { less, equal, greater }
-  record integer { r0: u64, r1: u64, r2: u64, r3: u64, sign: sign }
-  record decimal { r0: u64, r1: u64, r2: u64, r3: u64, sign: sign }
+  // Single source of truth: the number types are the built-in chain types,
+  // borrowed from `kontor:built-in/numbers` (resolved via the symlinked
+  // `wit/deps/built-in/common.wit`). Only the SDK-specific error + ops below
+  // are declared here.
+  use kontor:built-in/numbers.{sign, ordering, integer, decimal};
+
   variant numerics-error {
     message(string),
     overflow(string),
@@ -111,24 +113,6 @@ world root {
   //   aggregator embeds the result in `AggregateInfo.signature`.
   export aggregate-signing-message: func(claim-json: string, nonce: u64, sponsored: bool, inst-json: string) -> result<list<u8>, string>;
   export bls-aggregate-signatures: func(signatures: list<list<u8>>) -> result<list<u8>, string>;
-
-  // A transaction's OP_RETURN payload: one `op-return-entry` per reveal
-  // input that detaches an asset, binding that input to the recipient
-  // the asset lands with. `signer-ref` names a party by existing signer
-  // id or by x-only pubkey. `encode`/`decode` own the wire (postcard)
-  // shape — these types mirror the Rust 1:1.
-  variant signer-ref {
-    signer-id(u64),
-    x-only-pubkey(string),
-  }
-
-  record op-return-entry {
-    input-index: u32,
-    recipient: signer-ref,
-  }
-
-  export encode-op-return: func(entries: list<op-return-entry>) -> result<list<u8>, string>;
-  export decode-op-return: func(bytes: list<u8>) -> result<list<op-return-entry>, string>;
 
   record validation-error {
     message: string,

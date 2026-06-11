@@ -2,7 +2,7 @@ mod resources;
 
 pub use resources::{
     Contract, CoreContext, FallContext, FileDescriptor, HasContractId, Holder, Keys, ProcContext,
-    ProcStorage, Proof, Signer, Transaction, ViewContext, ViewStorage,
+    ProcStorage, Proof, Signer, Transaction, ViewContext, ViewStorage, prover_challenge_key,
 };
 
 wasmtime::component::bindgen!({
