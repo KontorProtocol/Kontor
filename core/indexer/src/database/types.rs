@@ -410,6 +410,85 @@ pub struct FileMetadataRow {
     pub historical_root: Option<[u8; 32]>,
 }
 
+/// Current state of a filestorage challenge. Stored as the lowercase variant
+/// name in `challenge_status.status`; the latest row by height is authoritative.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ChallengeStatus {
+    Active,
+    Proven,
+    Expired,
+    Failed,
+    Invalid,
+}
+
+impl ChallengeStatus {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            ChallengeStatus::Active => "active",
+            ChallengeStatus::Proven => "proven",
+            ChallengeStatus::Expired => "expired",
+            ChallengeStatus::Failed => "failed",
+            ChallengeStatus::Invalid => "invalid",
+        }
+    }
+}
+
+impl Display for ChallengeStatus {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+impl std::str::FromStr for ChallengeStatus {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "active" => Ok(ChallengeStatus::Active),
+            "proven" => Ok(ChallengeStatus::Proven),
+            "expired" => Ok(ChallengeStatus::Expired),
+            "failed" => Ok(ChallengeStatus::Failed),
+            "invalid" => Ok(ChallengeStatus::Invalid),
+            other => Err(format!("invalid challenge status: {other}")),
+        }
+    }
+}
+
+/// Write-once issuance facts for a challenge (the `challenges` table). Status
+/// lives separately in the append-only `challenge_status` log.
+#[derive(Debug, Clone, Serialize, Deserialize, Builder, Eq, PartialEq)]
+pub struct ChallengeRow {
+    pub challenge_id: String,
+    /// `signers.id` of the prover being challenged.
+    pub prover_id: u64,
+    /// FK-by-value to the contract's agreement (agreements live in
+    /// `contract_state`, not as relational rows — no SQL join).
+    pub agreement_id: String,
+    pub num_challenges: u64,
+    pub seed: Vec<u8>,
+    pub deadline_height: u64,
+    /// Issue block: the chain height the row is written at (reorg-cascade FK) and
+    /// the block the id is derived from — the same block, so it's also the
+    /// `compute_challenge_id` input.
+    pub height: u64,
+}
+
+/// A challenge joined to its latest status. `status` is `None` only if no
+/// status row exists yet (the `LEFT JOIN` miss); the write path pairs issuance
+/// with an initial `active` row, so in practice it's always `Some`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ChallengeWithStatus {
+    pub challenge_id: String,
+    pub prover_id: u64,
+    pub agreement_id: String,
+    pub num_challenges: u64,
+    pub seed: Vec<u8>,
+    pub deadline_height: u64,
+    pub height: u64,
+    pub status: Option<ChallengeStatus>,
+}
+
 impl FileDescriptor for FileMetadataRow {
     fn file_id(&self) -> &str {
         &self.file_id

@@ -9,8 +9,8 @@ use sha2::{Digest, Sha256};
 
 use super::*;
 use crate::database::types::{
-    BlockQuery, ContractQuery, ContractResultRow, ContractRow, ContractStateRow, FileMetadataRow,
-    OpResultId, OrderDirection, ResultQuery, TransactionQuery,
+    BlockQuery, ChallengeRow, ChallengeStatus, ContractQuery, ContractResultRow, ContractRow,
+    ContractStateRow, FileMetadataRow, OpResultId, OrderDirection, ResultQuery, TransactionQuery,
 };
 use crate::runtime::ContractAddress;
 use crate::test_utils::{new_mock_block_hash, new_mock_transaction, new_test_db};
@@ -2844,6 +2844,163 @@ async fn test_ensure_identity_idempotent() -> Result<()> {
     let id1 = ensure_identity(&conn, pubkey, 1).await?;
     let id2 = ensure_identity(&conn, pubkey, 2).await?;
     assert_eq!(id1.signer_id(), id2.signer_id());
+
+    Ok(())
+}
+
+// ── Challenge ledger ──────────────────────────────────────────────
+
+fn challenge_row(id: &str, prover_id: u64, agreement_id: &str, height: u64) -> ChallengeRow {
+    ChallengeRow::builder()
+        .challenge_id(id.to_string())
+        .prover_id(prover_id)
+        .agreement_id(agreement_id.to_string())
+        .num_challenges(3)
+        .seed(vec![0xab; 32])
+        .deadline_height(height + 10)
+        .height(height)
+        .build()
+}
+
+#[tokio::test]
+async fn test_challenge_insert_and_status() -> Result<()> {
+    let (_, writer, _temp_dir) = new_test_db().await?;
+    let conn = writer.connection();
+    setup_block(&conn, 1).await?;
+
+    let prover = create_contract_signer(&conn, 1).await?;
+    let row = challenge_row("chal_1", prover, "agr_1", 1);
+    insert_challenge(&conn, &row).await?;
+
+    // Round-trips the issuance row.
+    assert_eq!(get_challenge(&conn, "chal_1").await?.as_ref(), Some(&row));
+    assert_eq!(get_challenge(&conn, "missing").await?, None);
+
+    // No status row yet.
+    assert_eq!(latest_challenge_status(&conn, "chal_1").await?, None);
+
+    append_challenge_status(&conn, "chal_1", ChallengeStatus::Active, 1).await?;
+    assert_eq!(
+        latest_challenge_status(&conn, "chal_1").await?,
+        Some(ChallengeStatus::Active)
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_challenge_status_latest_wins() -> Result<()> {
+    let (_, writer, _temp_dir) = new_test_db().await?;
+    let conn = writer.connection();
+    for h in 1..=3 {
+        setup_block(&conn, h).await?;
+    }
+
+    let prover = create_contract_signer(&conn, 1).await?;
+    insert_challenge(&conn, &challenge_row("chal_1", prover, "agr_1", 1)).await?;
+    append_challenge_status(&conn, "chal_1", ChallengeStatus::Active, 1).await?;
+    append_challenge_status(&conn, "chal_1", ChallengeStatus::Proven, 3).await?;
+
+    assert_eq!(
+        latest_challenge_status(&conn, "chal_1").await?,
+        Some(ChallengeStatus::Proven)
+    );
+
+    // Idempotent re-apply at the same height.
+    append_challenge_status(&conn, "chal_1", ChallengeStatus::Proven, 3).await?;
+    let with_status = get_challenges_by_prover(&conn, prover, None).await?;
+    assert_eq!(with_status.len(), 1);
+    assert_eq!(with_status[0].status, Some(ChallengeStatus::Proven));
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_get_challenges_by_prover_filters() -> Result<()> {
+    let (_, writer, _temp_dir) = new_test_db().await?;
+    let conn = writer.connection();
+    setup_block(&conn, 1).await?;
+
+    let alice = create_contract_signer(&conn, 1).await?;
+    let bob = create_contract_signer(&conn, 1).await?;
+
+    for (id, prover, status) in [
+        ("chal_a1", alice, ChallengeStatus::Active),
+        ("chal_a2", alice, ChallengeStatus::Proven),
+        ("chal_b1", bob, ChallengeStatus::Active),
+    ] {
+        insert_challenge(&conn, &challenge_row(id, prover, "agr_1", 1)).await?;
+        append_challenge_status(&conn, id, status, 1).await?;
+    }
+
+    // All of alice's challenges (order isn't guaranteed; sort to assert).
+    let mut all = get_challenges_by_prover(&conn, alice, None).await?;
+    all.sort_by(|a, b| a.challenge_id.cmp(&b.challenge_id));
+    assert_eq!(all.len(), 2);
+    assert_eq!(all[0].challenge_id, "chal_a1");
+    assert_eq!(all[1].challenge_id, "chal_a2");
+
+    // Status-filtered.
+    let active = get_challenges_by_prover(&conn, alice, Some(ChallengeStatus::Active)).await?;
+    assert_eq!(active.len(), 1);
+    assert_eq!(active[0].challenge_id, "chal_a1");
+    assert_eq!(active[0].prover_id, alice);
+
+    // Bob's are isolated.
+    assert_eq!(get_challenges_by_prover(&conn, bob, None).await?.len(), 1);
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_overdue_active_challenges() -> Result<()> {
+    let (_, writer, _temp_dir) = new_test_db().await?;
+    let conn = writer.connection();
+    setup_block(&conn, 1).await?;
+
+    let prover = create_contract_signer(&conn, 1).await?;
+    // deadline_height = height + 10 → 11.
+    insert_challenge(&conn, &challenge_row("chal_1", prover, "agr_1", 1)).await?;
+    append_challenge_status(&conn, "chal_1", ChallengeStatus::Active, 1).await?;
+    // Already proven — must not surface as overdue even past its deadline.
+    insert_challenge(&conn, &challenge_row("chal_2", prover, "agr_1", 1)).await?;
+    append_challenge_status(&conn, "chal_2", ChallengeStatus::Proven, 1).await?;
+
+    // Before the deadline: nothing overdue.
+    assert!(get_overdue_active_challenges(&conn, 11).await?.is_empty());
+
+    // Past the deadline: only the still-active one.
+    let overdue = get_overdue_active_challenges(&conn, 12).await?;
+    assert_eq!(overdue.len(), 1);
+    assert_eq!(overdue[0].challenge_id, "chal_1");
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_challenge_rollback() -> Result<()> {
+    let (_, writer, _temp_dir) = new_test_db().await?;
+    let conn = writer.connection();
+    for h in 1..=3 {
+        setup_block(&conn, h).await?;
+    }
+
+    let prover = create_contract_signer(&conn, 1).await?;
+    insert_challenge(&conn, &challenge_row("chal_1", prover, "agr_1", 1)).await?;
+    append_challenge_status(&conn, "chal_1", ChallengeStatus::Active, 1).await?;
+    append_challenge_status(&conn, "chal_1", ChallengeStatus::Proven, 3).await?;
+
+    // Roll back past the `proven` append (height 3) — status reverts to active.
+    rollback_to_height(&conn, 2).await?;
+    assert_eq!(
+        latest_challenge_status(&conn, "chal_1").await?,
+        Some(ChallengeStatus::Active)
+    );
+
+    // Roll back past issuance (height 1) — the challenge and its status vanish.
+    rollback_to_height(&conn, 0).await?;
+    assert_eq!(get_challenge(&conn, "chal_1").await?, None);
+    assert_eq!(latest_challenge_status(&conn, "chal_1").await?, None);
 
     Ok(())
 }

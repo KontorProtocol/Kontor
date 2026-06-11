@@ -2,6 +2,7 @@ use thiserror::Error as ThisError;
 
 mod batches;
 mod blocks;
+mod challenges;
 mod checkpoints;
 mod contract_results;
 mod contract_state;
@@ -14,6 +15,7 @@ mod versioned;
 
 pub use batches::*;
 pub use blocks::*;
+pub use challenges::*;
 pub use checkpoints::*;
 pub use contract_results::*;
 pub use contract_state::*;

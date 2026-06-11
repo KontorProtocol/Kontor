@@ -149,3 +149,43 @@ CREATE TABLE IF NOT EXISTS unconfirmed_batch_txs (
   raw_tx BLOB NOT NULL,
   FOREIGN KEY (batch_height) REFERENCES batches (consensus_height)
 );
+
+-- Filestorage challenge ledger. Two tables: write-once issuance facts +
+-- append-only status log. Reorg reverts both via the shared blocks-height
+-- cascade (challenges have no accumulator, so no bespoke resync). The ledger
+-- lives outside the consensus checkpoint, kept consistent by determinism +
+-- cascade and anchored by its economic projection into contract_state.
+
+CREATE TABLE IF NOT EXISTS challenges (
+  challenge_id TEXT NOT NULL PRIMARY KEY,
+  prover_id INTEGER NOT NULL,
+  agreement_id TEXT NOT NULL,
+  num_challenges INTEGER NOT NULL,
+  seed BLOB NOT NULL,
+  deadline_height INTEGER NOT NULL,
+  -- Issue block: the chain height the challenge was generated and written at.
+  -- Generation always derives from the block it's processing, so this same
+  -- value is also fed into `compute_challenge_id` as a cryptographic input.
+  -- Doubles as the reorg-cascade FK.
+  height INTEGER NOT NULL,
+  FOREIGN KEY (prover_id) REFERENCES signers (id),
+  FOREIGN KEY (height) REFERENCES blocks (height) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_challenges_prover ON challenges (prover_id);
+
+CREATE INDEX IF NOT EXISTS idx_challenges_agreement ON challenges (agreement_id);
+
+-- Append-only: a status transition is a new row, never an UPDATE — reorg can
+-- only delete (cascade), so any revertible field must be append-only. Latest
+-- row per challenge_id (by height) is the current status.
+CREATE TABLE IF NOT EXISTS challenge_status (
+  challenge_id TEXT NOT NULL,
+  status TEXT NOT NULL, -- active | proven | expired | failed | invalid
+  height INTEGER NOT NULL,
+  PRIMARY KEY (challenge_id, height),
+  FOREIGN KEY (challenge_id) REFERENCES challenges (challenge_id),
+  FOREIGN KEY (height) REFERENCES blocks (height) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_challenge_status_latest ON challenge_status (challenge_id, height DESC);
