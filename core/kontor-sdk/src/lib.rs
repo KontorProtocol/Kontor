@@ -11,7 +11,7 @@ use indexer_types::*;
 use wit_resource::WitResource;
 use wit_validator::Validator;
 
-wit_bindgen::generate!({ world: "root", runtime_path: "indexer_types::wit_bindgen::rt"});
+wit_bindgen::generate!({ world: "root", runtime_path: "indexer_types::wit_bindgen::rt", generate_all });
 
 use exports::root::component::wit_codec::{Guest as WitCodecGuest, GuestWit};
 

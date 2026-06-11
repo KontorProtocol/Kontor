@@ -20,10 +20,12 @@ interface wit-codec {
 /// chain. Backed by the shared `core/numerics` crate so SDK arithmetic
 /// is byte-for-byte identical to chain arithmetic.
 interface numerics {
-  enum sign { plus, minus }
-  enum ordering { less, equal, greater }
-  record integer { r0: u64, r1: u64, r2: u64, r3: u64, sign: sign }
-  record decimal { r0: u64, r1: u64, r2: u64, r3: u64, sign: sign }
+  // Single source of truth: the number types are the built-in chain types,
+  // borrowed from `kontor:built-in/numbers` (resolved via the symlinked
+  // `wit/deps/built-in/common.wit`). Only the SDK-specific error + ops below
+  // are declared here.
+  use kontor:built-in/numbers.{sign, ordering, integer, decimal};
+
   variant numerics-error {
     message(string),
     overflow(string),
