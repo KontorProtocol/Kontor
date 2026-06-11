@@ -149,7 +149,6 @@ pub fn import(
             use super::ContractAddress;
             use super::HolderRef;
             use super::RawFileDescriptor;
-            use super::ChallengeStatus;
             use super::Error;
             use super::AnyhowError;
             use super::Runtime;
@@ -164,7 +163,6 @@ pub fn import(
             use super::foreign;
             use super::context::ContractAddress;
             use super::file_registry_types::RawFileDescriptor;
-            use super::challenge_types::ChallengeStatus;
             use super::error::Error;
             use super::numbers::{ Decimal, Integer };
         }

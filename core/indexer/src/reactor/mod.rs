@@ -1,5 +1,6 @@
 mod batches;
 mod blocks;
+pub mod challenges;
 pub mod consensus_state;
 pub mod engine;
 pub mod executor;

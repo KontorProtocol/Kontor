@@ -13,11 +13,7 @@ use crate::database::queries::{
     rollback_to_height, select_block_at_height, select_block_latest,
 };
 use crate::metrics::{BLOCK_HEIGHT, ITEMS_INDEXED};
-use crate::runtime::{
-    filestorage::api::{expire_challenges, generate_challenges_for_block},
-    staking::api::process_pending_validators,
-    wit::Signer,
-};
+use crate::runtime::{staking::api::process_pending_validators, wit::Signer};
 use crate::test_utils::new_mock_block_hash;
 
 use super::Reactor;
@@ -202,22 +198,19 @@ impl<E: Executor> Reactor<E> {
         self.runtime
             .set_context(block.height, None, None, None)
             .await;
-        expire_challenges(&mut self.runtime, &core_signer, block.height)
+        // Challenge issuance/expiry are reactor-native now (host SQL ledger);
+        // the reactor reads agreements/members through the contract's views.
+        super::challenges::expire_challenges(&self.runtime, block.height)
             .await
             .context("Failed to expire challenges")?;
-        let challenges = generate_challenges_for_block(
-            &mut self.runtime,
-            &core_signer,
-            block.height,
-            block_hash,
-        )
-        .await
-        .context("Failed to generate challenges")?;
-        if !challenges.is_empty() {
+        let generated =
+            super::challenges::generate_challenges_for_block(&mut self.runtime, block.height, &block_hash)
+                .await
+                .context("Failed to generate challenges")?;
+        if generated > 0 {
             info!(
                 "Generated {} challenges at block height {}",
-                challenges.len(),
-                block.height
+                generated, block.height
             );
         }
 

@@ -1,4 +1,8 @@
-use indexer::test_utils::make_descriptor;
+use indexer::database::queries::{append_challenge_status, insert_challenge, latest_challenge_status};
+use indexer::database::types::{ChallengeRow, ChallengeStatus};
+use indexer::test_utils::{
+    insert_test_block, metadata_to_descriptor, por_valid_proof, prepare_por_file, valid_seed_field,
+};
 use testlib::*;
 
 import!(
@@ -7,53 +11,6 @@ import!(
     tx_index = 0,
     path = "../../native-contracts/filestorage/wit",
 );
-
-/// Helper to create an active agreement with challenges
-async fn setup_active_agreement_with_challenge(
-    runtime: &mut Runtime,
-    file_id: &str,
-    block_height: u64,
-) -> Result<(String, Vec<filestorage::ChallengeData>)> {
-    let signer = runtime.identity().await?;
-    let core_identity = runtime.identity().await?;
-    let core_signer = Signer::Core(Box::new(core_identity));
-    let descriptor = make_descriptor(
-        file_id.to_string(),
-        vec![1u8; 32],
-        16,
-        100,
-        format!("{}.txt", file_id),
-    );
-
-    // Create agreement
-    let created = filestorage::create_agreement(runtime, &signer, descriptor).await??;
-
-    // Activate it with 3 nodes
-    let mut ops = Ops::new(&signer);
-    ops.push(filestorage::join_agreement_call(
-        &created.agreement_id,
-        "node_1",
-    ));
-    ops.push(filestorage::join_agreement_call(
-        &created.agreement_id,
-        "node_2",
-    ));
-    ops.push(filestorage::join_agreement_call(
-        &created.agreement_id,
-        "node_3",
-    ));
-    let mut submit = runtime.submit();
-    submit.add(ops);
-    submit.execute().await?;
-
-    // Generate a challenge (core-only)
-    let block_hash = vec![42u8; 32];
-    let challenges =
-        filestorage::generate_challenges_for_block(runtime, &core_signer, block_height, block_hash)
-            .await?;
-
-    Ok((created.agreement_id, challenges))
-}
 
 // ─────────────────────────────────────────────────────────────────
 // verify_proof Deserialization Error Tests
@@ -161,110 +118,64 @@ pub async fn run_regtest(runtime: &mut Runtime) -> Result<()> {
     Ok(())
 }
 
+/// End-to-end happy path: an active agreement, a challenge seeded into the host
+/// ledger, and a live PoR proof that the contract verifies — recording the
+/// outcome back to the ledger.
 pub async fn run_core_signer(runtime: &mut Runtime) -> Result<()> {
-    let (agreement_id, challenges) =
-        setup_active_agreement_with_challenge(runtime, "baseline_checks", 1000).await?;
+    // Three distinct signers activate the agreement; s1 is the prover.
+    let s1 = runtime.identity().await?;
+    let s2 = runtime.identity().await?;
+    let s3 = runtime.identity().await?;
 
-    if !challenges.is_empty() {
-        let challenge_id = &challenges[0].challenge_id;
-        let challenge = filestorage::get_challenge(runtime, challenge_id)
-            .await?
-            .expect("Challenge should exist");
+    let (prepared, metadata) = prepare_por_file(b"proof success content", "proof_success.txt");
+    let created =
+        filestorage::create_agreement(runtime, &s1, metadata_to_descriptor(&metadata)).await??;
+    // The join result's node_id is the prover identity (signer_id, stringified).
+    let prover = filestorage::join_agreement(runtime, &s1, &created.agreement_id)
+        .await??
+        .node_id;
+    filestorage::join_agreement(runtime, &s2, &created.agreement_id).await??;
+    filestorage::join_agreement(runtime, &s3, &created.agreement_id).await??;
 
-        assert_eq!(
-            challenge.status,
-            ChallengeStatus::Active,
-            "New challenge should have Active status"
-        );
-        assert_eq!(
-            challenge.agreement_id, agreement_id,
-            "Challenge should reference its parent agreement"
-        );
-        assert_eq!(
-            challenge.block_height, 1000,
-            "Challenge should have correct block height"
-        );
-        assert!(
-            challenge.deadline_height > 1000,
-            "Deadline should be after challenge creation block"
-        );
-        assert!(
-            !challenge.prover_id.is_empty(),
-            "Challenge should have a prover ID"
-        );
-        assert_eq!(
-            challenge.seed.len(),
-            64,
-            "Challenge seed should be 64 bytes"
-        );
+    // Generate the proof, then seed a matching ledger challenge for its id.
+    // (regtest s_chal = 8.)
+    let s_chal = 8usize;
+    let block_height = 50_000u64;
+    let seed = valid_seed_field(7);
+    let (proof_bytes, challenge_id) =
+        por_valid_proof(&prepared, metadata, block_height, s_chal, seed.field, &prover)?;
 
-        let core_identity = runtime.identity().await?;
-        let core_signer = Signer::Core(Box::new(core_identity));
-        let deadline = challenge.deadline_height;
-        let before_expire = filestorage::get_active_challenges(runtime).await?;
-        // Core-only: expire_challenges requires core signer
-        filestorage::expire_challenges(runtime, &core_signer, deadline + 1).await?;
+    let conn = runtime.storage_conn();
+    insert_test_block(&conn, block_height).await?;
+    let prover_id: u64 = prover.parse().expect("prover is a signer_id");
+    let row = ChallengeRow::builder()
+        .challenge_id(challenge_id.clone())
+        .prover_id(prover_id)
+        .agreement_id(created.agreement_id.clone())
+        .num_challenges(s_chal as u64)
+        .seed(seed.bytes.to_vec())
+        .deadline_height(block_height + 2016)
+        .height(block_height)
+        .build();
+    insert_challenge(&conn, &row).await?;
+    append_challenge_status(
+        &conn,
+        &challenge_id,
+        ChallengeStatus::Active,
+        block_height,
+    )
+    .await?;
 
-        let challenge_after = filestorage::get_challenge(runtime, challenge_id)
-            .await?
-            .unwrap();
-        assert_eq!(
-            challenge_after.status,
-            ChallengeStatus::Expired,
-            "Challenge should be Expired after deadline"
-        );
+    // verify-proof reads the ledger, verifies, and records the outcome.
+    let result = filestorage::verify_proof(runtime, &s1, proof_bytes).await??;
+    assert_eq!(result.verified_count, 1, "one challenge should verify");
 
-        let after_expire = filestorage::get_active_challenges(runtime).await?;
-        assert!(
-            !after_expire.iter().any(|c| c.challenge_id == *challenge_id),
-            "Expired challenge should not appear in active challenges"
-        );
-        if before_expire.len() == 1 {
-            assert_eq!(
-                after_expire.len(),
-                0,
-                "Expired challenge should reduce active challenge count"
-            );
-        }
-    }
-
-    let (agreement_id1, challenges1) =
-        setup_active_agreement_with_challenge(runtime, "active_only_test_1", 3000).await?;
-    let (agreement_id2, challenges2) =
-        setup_active_agreement_with_challenge(runtime, "active_only_test_2", 3000).await?;
-
-    let active = filestorage::get_active_challenges(runtime).await?;
-    for challenge in &active {
-        assert_eq!(
-            challenge.status,
-            ChallengeStatus::Active,
-            "get_active_challenges should only return Active challenges"
-        );
-    }
-
-    let expected_count = challenges1.len() + challenges2.len();
+    let status = latest_challenge_status(&conn, &challenge_id).await?;
     assert_eq!(
-        active.len(),
-        expected_count,
-        "Should have {} active challenges",
-        expected_count
+        status,
+        Some(ChallengeStatus::Proven),
+        "challenge should be Proven after a valid proof"
     );
-
-    if !challenges1.is_empty() && !challenges2.is_empty() {
-        let c1 = filestorage::get_challenge(runtime, &challenges1[0].challenge_id)
-            .await?
-            .unwrap();
-        let c2 = filestorage::get_challenge(runtime, &challenges2[0].challenge_id)
-            .await?
-            .unwrap();
-
-        assert_eq!(c1.agreement_id, agreement_id1);
-        assert_eq!(c2.agreement_id, agreement_id2);
-        assert_ne!(
-            c1.challenge_id, c2.challenge_id,
-            "Challenges should have different IDs"
-        );
-    }
 
     Ok(())
 }

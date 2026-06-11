@@ -85,7 +85,7 @@ impl Runtime {
         block_height: u64,
         num_challenges: u64,
         seed: Vec<u8>,
-        prover_id: String,
+        signer_id: u64,
     ) -> Result<Result<String, Error>> {
         Fuel::ComputeChallengeId
             .consume(accessor, self.gauge.as_ref())
@@ -94,7 +94,7 @@ impl Runtime {
         let table = self.table.lock().await;
         let file_descriptor = table.get(&rep)?;
 
-        Ok(file_descriptor.compute_challenge_id(block_height, num_challenges, &seed, prover_id))
+        Ok(file_descriptor.compute_challenge_id(block_height, num_challenges, &seed, signer_id))
     }
 
     async fn _proof_from_bytes<T>(
@@ -325,11 +325,11 @@ impl built_in::file_registry::HostFileDescriptorWithStore for Runtime {
         block_height: u64,
         num_challenges: u64,
         seed: Vec<u8>,
-        prover_id: String,
+        signer_id: u64,
     ) -> Result<Result<String, Error>> {
         accessor
             .with(|mut access| access.get().clone())
-            ._compute_challenge_id(accessor, rep, block_height, num_challenges, seed, prover_id)
+            ._compute_challenge_id(accessor, rep, block_height, num_challenges, seed, signer_id)
             .await
     }
 }

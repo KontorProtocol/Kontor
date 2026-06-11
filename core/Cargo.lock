@@ -7551,6 +7551,7 @@ dependencies = [
  "glob",
  "indexer",
  "indexer-types",
+ "libsql",
  "tempfile",
  "tokio",
  "tracing",

@@ -88,9 +88,28 @@ pub async fn get_challenge(
     Ok(rows.next().await?.map(|r| from_row(&r)).transpose()?)
 }
 
+/// A single challenge joined to its current status, by id. Used by
+/// verify-proof to reconstruct a challenge from the host ledger.
+pub async fn get_challenge_with_status(
+    conn: &Connection,
+    challenge_id: &str,
+) -> Result<Option<ChallengeWithStatus>, Error> {
+    let base = challenge_with_status_select();
+    let mut rows = conn
+        .query(
+            &format!("{base} WHERE c.challenge_id = ?"),
+            params![challenge_id],
+        )
+        .await?;
+    match rows.next().await? {
+        Some(row) => Ok(Some(challenge_with_status_from_row(&row)?)),
+        None => Ok(None),
+    }
+}
+
 /// All challenges for a prover with their current status, optionally filtered
 /// to a single status. Filters on the immutable issuance side (`prover_id`) and
-/// `LEFT JOIN`s out to the latest status via `max_height_of` in the `ON` clause.
+/// joins out to the latest status via `max_height_of` in the `ON` clause.
 pub async fn get_challenges_by_prover(
     conn: &Connection,
     prover_id: u64,
@@ -111,6 +130,26 @@ pub async fn get_challenges_by_prover(
         }
     };
     collect_challenges(rows).await
+}
+
+/// Agreement ids that currently have an active challenge — the reactor's
+/// generation-eligibility exclusion set (an agreement with a live challenge
+/// isn't re-challenged). May contain duplicates; callers dedup.
+pub async fn get_active_challenge_agreement_ids(
+    conn: &Connection,
+) -> Result<Vec<String>, Error> {
+    let base = challenge_with_status_select();
+    let mut rows = conn
+        .query(
+            &format!("{base} WHERE st.status = ?"),
+            params![ChallengeStatus::Active.as_str()],
+        )
+        .await?;
+    let mut out = Vec::new();
+    while let Some(row) = rows.next().await? {
+        out.push(row.get::<String>(2)?);
+    }
+    Ok(out)
 }
 
 /// Active challenges whose deadline has passed as of `current_height` — the

@@ -261,13 +261,16 @@ impl FileDescriptor {
         })
     }
 
-    /// Build a kontor-crypto Challenge from this FileDescriptor and challenge parameters.
+    /// Build a kontor-crypto Challenge from this FileDescriptor and challenge
+    /// parameters. The prover is identified by `signer_id`; its string form
+    /// (`signer_id.to_string()`) is bound into the challenge id here and nowhere
+    /// else — callers (reactor, verify-proof, WIT) deal only in `signer_id`.
     pub fn build_challenge(
         &self,
         block_height: u64,
         num_challenges: u64,
         seed: &[u8],
-        prover_id: String,
+        signer_id: u64,
     ) -> Result<Challenge, Error> {
         // Convert root bytes to FieldElement (root is a Poseidon hash output, already valid)
         let root = bytes_to_field_element(&self.file_metadata_row.root)
@@ -297,7 +300,7 @@ impl FileDescriptor {
             block_height,
             num_challenges as usize,
             seed_field,
-            prover_id,
+            signer_id.to_string(),
         ))
     }
 
@@ -307,9 +310,9 @@ impl FileDescriptor {
         block_height: u64,
         num_challenges: u64,
         seed: &[u8],
-        prover_id: String,
+        signer_id: u64,
     ) -> Result<String, Error> {
-        let challenge = self.build_challenge(block_height, num_challenges, seed, prover_id)?;
+        let challenge = self.build_challenge(block_height, num_challenges, seed, signer_id)?;
         Ok(hex::encode(challenge.id().0))
     }
 }
@@ -385,19 +388,19 @@ mod tests {
         let metadata = create_fake_file_metadata("file1", "test.txt", 800000);
         let descriptor = FileDescriptor::from_row(metadata);
         let seed = valid_seed_field(1);
-        let result = descriptor.build_challenge(800000, 100, &seed.bytes, "prover1".to_string());
+        let result = descriptor.build_challenge(800000, 100, &seed.bytes, 1);
         assert!(result.is_ok());
         let challenge = result.unwrap();
         assert_eq!(challenge.block_height, 800000);
         assert_eq!(challenge.num_challenges, 100);
-        assert_eq!(challenge.prover_id, "prover1");
+        assert_eq!(challenge.prover_id, "1");
     }
 
     #[test]
     fn test_build_challenge_invalid_seed_length() {
         let metadata = create_fake_file_metadata("file1", "test.txt", 800000);
         let descriptor = FileDescriptor::from_row(metadata);
-        let result = descriptor.build_challenge(800000, 100, &[0u8; 16], "prover1".to_string());
+        let result = descriptor.build_challenge(800000, 100, &[0u8; 16], 1);
         assert!(result.is_err());
         assert!(matches!(result.unwrap_err(), Error::Validation(_)));
     }
@@ -408,7 +411,7 @@ mod tests {
         let descriptor = FileDescriptor::from_row(metadata);
         assert!(
             descriptor
-                .build_challenge(800000, 100, &[], "prover1".to_string())
+                .build_challenge(800000, 100, &[], 1)
                 .is_err()
         );
     }
@@ -419,7 +422,7 @@ mod tests {
         let descriptor = FileDescriptor::from_row(metadata);
         let seed = valid_seed_field(1);
         let id = descriptor
-            .compute_challenge_id(800000, 100, &seed.bytes, "prover1".to_string())
+            .compute_challenge_id(800000, 100, &seed.bytes, 1)
             .unwrap();
         assert_eq!(id.len(), 64);
         assert!(id.chars().all(|c| c.is_ascii_hexdigit()));
@@ -435,7 +438,7 @@ mod tests {
         let descriptor = FileDescriptor::from_row(metadata);
         let seed = valid_seed_field(1);
         let c = descriptor
-            .build_challenge(800000, 100, &seed.bytes, "prover1".to_string())
+            .build_challenge(800000, 100, &seed.bytes, 1)
             .unwrap();
         assert_eq!(c.file_metadata.file_id, expected_file_id);
         assert_eq!(c.file_metadata.padded_len, expected_padded_len as usize);

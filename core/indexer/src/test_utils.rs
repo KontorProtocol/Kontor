@@ -23,10 +23,14 @@ use tokio::time::{Duration, sleep};
 
 use crate::database::native_contracts::NATIVE_CONTRACTS;
 use crate::database::queries::insert_block;
-use crate::database::types::FileMetadataRow;
+use crate::database::types::{FileMetadataRow, field_element_to_bytes};
 use crate::database::{Reader, Writer, queries};
 use crate::runtime::{ComponentCache, GenesisValidator, RawFileDescriptor, Runtime, Storage};
-use kontor_crypto::{api::FieldElement, field_from_uniform_bytes};
+use kontor_crypto::{
+    FileLedger, PorSystem,
+    api::{self, Challenge, FieldElement},
+    field_from_uniform_bytes,
+};
 
 pub enum PublicKey<'a> {
     Segwit(&'a CompressedPublicKey),
@@ -508,6 +512,22 @@ pub fn new_random_blockchain(n: u64) -> Vec<Block> {
     gen_random_blocks(0, n, None)
 }
 
+/// Insert a relevant block at `height` so rows with a `height` FK (e.g. the
+/// challenge ledger) can be written there. Idempotent enough for tests that
+/// pick distinct heights.
+pub async fn insert_test_block(conn: &Connection, height: u64) -> Result<()> {
+    queries::insert_block(
+        conn,
+        BlockRow::builder()
+            .height(height)
+            .hash(new_mock_block_hash(height as u32))
+            .relevant(true)
+            .build(),
+    )
+    .await?;
+    Ok(())
+}
+
 pub async fn await_block_at_height(conn: &Connection, height: u64) -> BlockRow {
     loop {
         match queries::select_block_at_height(conn, height).await {
@@ -646,113 +666,125 @@ pub mod bls_test {
     }
 }
 
-#[cfg(test)]
-mod fixture_gen {
-    use anyhow::{Result, anyhow};
-    use kontor_crypto::{
-        FileLedger, PorSystem,
-        api::{self, Challenge},
-    };
-    use serde::Serialize;
-
-    use super::valid_seed_field;
-
-    #[derive(Debug, Serialize)]
-    struct PorProofFixtures {
-        invalid_proof_hex: String,
-        cross_block_agg_hex: String,
-        note: String,
+/// Prepare a PoR file with a deterministic nonce derived from the filename,
+/// returning the prepared file plus its metadata. The *same* metadata must be
+/// registered on-chain (via `create-agreement`) for a proof to verify against
+/// the host file ledger.
+pub fn prepare_por_file(content: &[u8], filename: &str) -> (api::PreparedFile, api::FileMetadata) {
+    let mut nonce = [0u8; 32];
+    for (i, b) in filename.bytes().enumerate().take(32) {
+        nonce[i] = b;
     }
+    api::prepare_file(content, filename, &nonce).expect("prepare_file")
+}
 
-    fn prepare_test_file(content: &[u8], filename: &str) -> (api::PreparedFile, api::FileMetadata) {
-        let mut nonce = [0u8; 32];
-        for (i, b) in filename.bytes().enumerate().take(32) {
-            nonce[i] = b;
-        }
-        api::prepare_file(content, filename, &nonce).expect("Failed to prepare file")
+/// Generate a valid PoR proof for a single challenge, returning
+/// `(proof_bytes, challenge_id)`. The id is what the host challenge ledger must
+/// store for `verify-proof` to find and reconstruct it. Generated live (no
+/// fixture) so it tracks the signer-derived `prover_id` and per-network
+/// `s_chal` — `prover_id` is the prover's `signer_id` as a string.
+pub fn por_valid_proof(
+    prepared: &api::PreparedFile,
+    metadata: api::FileMetadata,
+    block_height: u64,
+    num_challenges: usize,
+    seed_field: FieldElement,
+    prover_id: &str,
+) -> Result<(Vec<u8>, String)> {
+    let mut ledger = FileLedger::new();
+    ledger.add_file(&metadata)?;
+    let challenge = Challenge::new(
+        metadata,
+        block_height,
+        num_challenges,
+        seed_field,
+        prover_id.to_string(),
+    );
+    let challenge_id = hex::encode(challenge.id().0);
+    let system = PorSystem::new(&ledger);
+    let proof = system
+        .prove(vec![prepared], std::slice::from_ref(&challenge))
+        .map_err(|e| anyhow::anyhow!("prove: {e}"))?;
+    let bytes = proof
+        .to_bytes()
+        .map_err(|e| anyhow::anyhow!("serialize proof: {e}"))?;
+    Ok((bytes, challenge_id))
+}
+
+/// Turn crypto `FileMetadata` into the on-chain `RawFileDescriptor` so the file
+/// a proof was generated for is the same one registered via `create-agreement`.
+pub fn metadata_to_descriptor(metadata: &api::FileMetadata) -> RawFileDescriptor {
+    let root: [u8; 32] = field_element_to_bytes(&metadata.root);
+    RawFileDescriptor {
+        file_id: metadata.file_id.clone(),
+        object_id: metadata.object_id.clone(),
+        nonce: metadata.nonce.clone(),
+        root: root.to_vec(),
+        padded_len: metadata.padded_len as u64,
+        original_size: metadata.original_size as u64,
+        filename: metadata.filename.clone(),
     }
+}
 
-    fn generate_invalid_proof_hex() -> Result<String> {
-        let file2_content = b"Second file with different content";
-        let (prepared_file2, metadata2) = prepare_test_file(file2_content, "file2.txt");
-        let mut ledger = FileLedger::new();
-        ledger.add_file(&metadata2)?;
+/// Generate one aggregated PoR proof over several files for a single prover,
+/// returning `(proof_bytes, challenge_ids)` — one id per file, in order. The
+/// caller registers the same files on-chain and seeds the host ledger with a
+/// challenge per returned id.
+pub fn por_aggregated_proof(
+    files: Vec<(api::PreparedFile, api::FileMetadata, FieldElement)>,
+    block_height: u64,
+    num_challenges: usize,
+    prover_id: &str,
+) -> Result<(Vec<u8>, Vec<String>)> {
+    let mut ledger = FileLedger::new();
+    for (_, metadata, _) in &files {
+        ledger.add_file(metadata)?;
+    }
+    let mut prepared = Vec::new();
+    let mut challenges = Vec::new();
+    let mut challenge_ids = Vec::new();
+    for (file, metadata, seed_field) in files {
         let challenge = Challenge::new(
-            metadata2,
-            20000u64,
-            100,
-            valid_seed_field(99).field,
-            "node_1".to_string(),
+            metadata,
+            block_height,
+            num_challenges,
+            seed_field,
+            prover_id.to_string(),
         );
-        let system = PorSystem::new(&ledger);
-        let proof = system
-            .prove(vec![&prepared_file2], std::slice::from_ref(&challenge))
-            .map_err(|e| anyhow!("Failed to generate proof: {e}"))?;
-        let mut bytes = proof
-            .to_bytes()
-            .map_err(|e| anyhow!("Failed to serialize proof: {e}"))?;
-        if let Some(last) = bytes.last_mut() {
-            *last ^= 0x01;
-        }
-        Ok(hex::encode(bytes))
+        challenge_ids.push(hex::encode(challenge.id().0));
+        challenges.push(challenge);
+        prepared.push(file);
     }
+    let system = PorSystem::new(&ledger);
+    let proof = system
+        .prove(prepared.iter().collect(), &challenges)
+        .map_err(|e| anyhow::anyhow!("prove (aggregated): {e}"))?;
+    let bytes = proof
+        .to_bytes()
+        .map_err(|e| anyhow::anyhow!("serialize proof: {e}"))?;
+    Ok((bytes, challenge_ids))
+}
 
-    fn generate_cross_block_agg_hex() -> Result<String> {
-        let (prepared_a, metadata_a) =
-            prepare_test_file(b"Content of file A for cross-block", "cross_a.txt");
-        let (prepared_b, metadata_b) =
-            prepare_test_file(b"Content of file B for cross-block", "cross_b.txt");
-        let (_prepared_c, metadata_c) =
-            prepare_test_file(b"Content of file C - new agreement", "cross_c.txt");
-        let mut ledger = FileLedger::new();
-        ledger.add_file(&metadata_a)?;
-        ledger.add_file(&metadata_b)?;
-        ledger.add_file(&metadata_c)?;
-        let challenges = vec![
-            Challenge::new(
-                metadata_a,
-                40000u64,
-                100,
-                valid_seed_field(200).field,
-                "node_1".to_string(),
-            ),
-            Challenge::new(
-                metadata_b,
-                40000u64,
-                100,
-                valid_seed_field(201).field,
-                "node_1".to_string(),
-            ),
-        ];
-        let system = PorSystem::new(&ledger);
-        let proof = system
-            .prove(vec![&prepared_a, &prepared_b], &challenges)
-            .map_err(|e| anyhow!("Failed to generate aggregated proof: {e}"))?;
-        let bytes = proof
-            .to_bytes()
-            .map_err(|e| anyhow!("Failed to serialize proof: {e}"))?;
-        Ok(hex::encode(bytes))
+/// A well-formed but invalid PoR proof: a valid single-file proof with one byte
+/// flipped, so it deserializes but fails verification.
+pub fn por_invalid_proof(
+    prepared: &api::PreparedFile,
+    metadata: api::FileMetadata,
+    block_height: u64,
+    num_challenges: usize,
+    seed_field: FieldElement,
+    prover_id: &str,
+) -> Result<Vec<u8>> {
+    let (mut bytes, _) = por_valid_proof(
+        prepared,
+        metadata,
+        block_height,
+        num_challenges,
+        seed_field,
+        prover_id,
+    )?;
+    if let Some(last) = bytes.last_mut() {
+        *last ^= 0x01;
     }
-
-    /// Regenerate POR proof fixtures. Run with:
-    /// `cargo test -p indexer --release --lib generate_por_fixtures -- --ignored`
-    #[test]
-    #[ignore]
-    fn generate_por_fixtures() {
-        let fixtures = PorProofFixtures {
-            invalid_proof_hex: generate_invalid_proof_hex().expect("invalid proof"),
-            cross_block_agg_hex: generate_cross_block_agg_hex().expect("cross block agg"),
-            note: "Generated by generate_por_fixtures".to_string(),
-        };
-        let output_path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("tests")
-            .join("fixtures")
-            .join("por_proof_fixtures.json");
-        if let Some(parent) = output_path.parent() {
-            std::fs::create_dir_all(parent).expect("create fixtures dir");
-        }
-        let json = serde_json::to_string_pretty(&fixtures).expect("serialize");
-        std::fs::write(&output_path, json).expect("write fixtures");
-        println!("Wrote fixtures to {}", output_path.display());
-    }
+    Ok(bytes)
 }

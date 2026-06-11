@@ -1,5 +1,6 @@
 use async_trait::async_trait;
 use bon::Builder;
+use libsql::Connection;
 use glob::Paths;
 use indexer::{
     bls::KONTOR_BLS_DST,
@@ -204,6 +205,13 @@ pub trait RuntimeImpl: Send {
         None
     }
 
+    /// The underlying host storage connection, for local runtimes only (regtest
+    /// clusters have no in-process DB). Lets tests seed/read host-side tables
+    /// such as the challenge ledger directly.
+    fn storage_conn(&self) -> Option<Connection> {
+        None
+    }
+
     /// Publish multiple contracts in a single block. Default implementation
     /// falls back to sequential publishes.
     async fn publish_many(
@@ -381,6 +389,10 @@ impl RuntimeImpl for RuntimeLocal {
         let signer = Signer::Id(identity);
         self.issuance(&signer).await?;
         Ok(signer)
+    }
+
+    fn storage_conn(&self) -> Option<Connection> {
+        Some(self.runtime.get_storage_conn())
     }
 
     async fn publish(
@@ -826,6 +838,15 @@ impl Runtime {
 
     pub async fn identity(&mut self) -> Result<Signer> {
         self.runtime.identity().await
+    }
+
+    /// The host storage connection (local runtimes only). Panics on a regtest
+    /// cluster, which has no in-process DB — challenge-ledger tests that need it
+    /// are `local_only`.
+    pub fn storage_conn(&self) -> Connection {
+        self.runtime
+            .storage_conn()
+            .expect("storage_conn is only available on local runtimes")
     }
 
     pub async fn publish(&mut self, signer: &Signer, name: &str) -> Result<ContractAddress> {

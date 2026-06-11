@@ -11,7 +11,7 @@ interface file-registry {
             block-height: u64,
             num-challenges: u64,
             seed: list<u8>,
-            prover-id: string
+            prover-id: u64
         ) -> result<string, error>;
     }
 
@@ -29,7 +29,7 @@ interface file-registry {
         block-height: u64,
         num-challenges: u64,
         seed: list<u8>,
-        prover-id: string,
+        prover-id: u64,
     }
 
     enum verify-result {
@@ -53,11 +53,11 @@ interface registry {
     register-bls-key: async func();
 }
 
-/// Shared challenge enum, single source of truth for both the ledger
-/// (`challenge-registry`) and the filestorage contract. Types-only, mirroring
-/// `file-registry-types` — keeps the same name from being defined twice when a
-/// native contract includes this world (which would collide in codegen).
-interface challenge-types {
+/// Host-side challenge ledger. Native-only: user contracts can't forge proof
+/// outcomes. Issuance + expiry are written reactor-native (direct SQL); this
+/// interface is the contract's seam — recording a `proven` transition from
+/// verify-proof, and reading a prover's challenges for the get-challenges view.
+interface challenge-registry {
     enum challenge-status {
         active,
         proven,
@@ -65,14 +65,6 @@ interface challenge-types {
         failed,
         invalid,
     }
-}
-
-/// Host-side challenge ledger. Native-only: user contracts can't forge proof
-/// outcomes. Issuance + expiry are written reactor-native (direct SQL); this
-/// interface is the contract's seam — recording a `proven` transition from
-/// verify-proof, and reading a prover's challenges for the get-challenges view.
-interface challenge-registry {
-    use challenge-types.{challenge-status};
 
     record challenge {
         challenge-id: string,
@@ -95,12 +87,15 @@ interface challenge-registry {
         prover-id: u64,
         status: option<challenge-status>
     ) -> list<challenge>;
+
+    /// A single challenge by id with its current status — used by verify-proof
+    /// to reconstruct the challenge from the ledger.
+    get-challenge: async func(challenge-id: string) -> option<challenge>;
 }
 
 world built-in-native {
     include built-in;
     import file-registry;
     import registry;
-    import challenge-types;
     import challenge-registry;
 }

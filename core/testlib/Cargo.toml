@@ -14,6 +14,7 @@ bon = { workspace = true }
 tokio = { workspace = true }
 glob = { workspace = true }
 async-trait = { workspace = true }
+libsql = { workspace = true }
 tracing = { workspace = true }
 tempfile = { workspace = true }
 blst = { workspace = true }

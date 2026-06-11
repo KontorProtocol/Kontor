@@ -2,11 +2,12 @@ use anyhow::Result;
 use wasmtime::component::Accessor;
 
 use super::{Runtime, fuel::Fuel, wit::kontor::built_in};
-use crate::database::queries::{append_challenge_status, get_challenges_by_prover};
+use crate::database::queries::{
+    append_challenge_status, get_challenge_with_status, get_challenges_by_prover,
+};
 use crate::database::types::{ChallengeStatus as DbChallengeStatus, ChallengeWithStatus};
 
-use built_in::challenge_registry::Challenge;
-use built_in::challenge_types::ChallengeStatus;
+use built_in::challenge_registry::{Challenge, ChallengeStatus};
 
 impl From<ChallengeStatus> for DbChallengeStatus {
     fn from(s: ChallengeStatus) -> Self {
@@ -82,9 +83,19 @@ impl Runtime {
             get_challenges_by_prover(&self.storage.conn, prover_id, status.map(Into::into)).await?;
         Ok(rows.into_iter().map(Challenge::from).collect())
     }
-}
 
-impl built_in::challenge_types::Host for Runtime {}
+    async fn _get_challenge<T>(
+        &self,
+        accessor: &Accessor<T, Self>,
+        challenge_id: String,
+    ) -> Result<Option<Challenge>> {
+        Fuel::QueryChallenges
+            .consume(accessor, self.gauge.as_ref())
+            .await?;
+        let row = get_challenge_with_status(&self.storage.conn, &challenge_id).await?;
+        Ok(row.map(Challenge::from))
+    }
+}
 
 impl built_in::challenge_registry::Host for Runtime {}
 
@@ -108,6 +119,16 @@ impl built_in::challenge_registry::HostWithStore for Runtime {
         accessor
             .with(|mut access| access.get().clone())
             ._query_challenges(accessor, prover_id, status)
+            .await
+    }
+
+    async fn get_challenge<T>(
+        accessor: &Accessor<T, Self>,
+        challenge_id: String,
+    ) -> Result<Option<Challenge>> {
+        accessor
+            .with(|mut access| access.get().clone())
+            ._get_challenge(accessor, challenge_id)
             .await
     }
 }
