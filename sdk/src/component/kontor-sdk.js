@@ -27,9 +27,10 @@ const CURRENT_TASK_META = {};
 
 function _getGlobalCurrentTaskMeta(componentIdx) {
   const v = CURRENT_TASK_META[componentIdx];
-  if (v === undefined) { return v; }
+  if (v === undefined || v === null) { return undefined; }
   return { ...v };
 }
+
 
 function _setGlobalCurrentTaskMeta(args) {
   if (!args) { throw new TypeError('args missing'); }
@@ -38,6 +39,7 @@ function _setGlobalCurrentTaskMeta(args) {
   const { taskID, componentIdx } = args;
   return CURRENT_TASK_META[componentIdx] = { taskID, componentIdx };
 }
+
 
 function _withGlobalCurrentTaskMeta(args) {
   _debugLog('[_withGlobalCurrentTaskMeta()] args', args);
@@ -217,7 +219,9 @@ class RepTable {
 const _coinFlip = () => { return Math.random() > 0.5; };
 let SCOPE_ID = 0;
 const I32_MIN = -2_147_483_648;
-const I32_MAX = 2_147_483_647;
+
+const I32_MAX= 2_147_483_647;
+
 
 function _isValidNumericPrimitive(ty, v) {
   if (v === undefined || v === null) { return false; }
@@ -259,7 +263,9 @@ function _requireValidNumericPrimitive(ty, v) {
   }
   return true;
 }
+
 const _typeCheckValidI32 = (n) => typeof n === 'number' && n >= I32_MIN && n <= I32_MAX;
+
 
 const _typeCheckAsyncFn= (f) => {
   return f instanceof ASYNC_FN_CTOR;
@@ -296,7 +302,9 @@ function clearCurrentTask(componentIdx, taskID) {
   const taskMeta = tasks.pop();
   return taskMeta.task;
 }
-const CURRENT_TASK_MAY_BLOCK = new WebAssembly.Global({ value: 'i32', mutable: true }, 0);
+
+const CURRENT_TASK_MAY_BLOCK= globalThis.WebAssembly ? new globalThis.WebAssembly.Global({ value: 'i32', mutable: true }, 0) : false;
+
 const ASYNC_CURRENT_TASK_IDS = [];
 const ASYNC_CURRENT_COMPONENT_IDXS = [];
 
@@ -508,11 +516,7 @@ class AsyncSubtask {
     
     if (this.#onProgressFn) { this.#onProgressFn(); }
     
-    if (subtaskValue === null) {
-      if (this.#cancelRequested) {
-        throw new Error('cancel was not requested, but no value present at return');
-      }
-      
+    if (subtaskValue === null && this.#cancelRequested) {
       if (this.#state === AsyncSubtask.State.STARTING) {
         this.#state = AsyncSubtask.State.CANCELLED_BEFORE_STARTED;
       } else {
@@ -1164,12 +1168,6 @@ class Waitable {
     return BigInt.asUintN(64, converted);
   }
   
-  
-  function toUint32(val) {
-    
-    return val >>> 0;
-  }
-  
   const TEXT_DECODER_UTF8 = new TextDecoder();
   const TEXT_ENCODER_UTF8 = new TextEncoder();
   
@@ -1312,8 +1310,6 @@ class Waitable {
     
     #parentSubtask = null;
     
-    #needsExclusiveLock = false;
-    
     #errHandling;
     
     #backpressurePromise;
@@ -1388,7 +1384,6 @@ class Waitable {
       
       if (opts.parentSubtask) { this.#parentSubtask = opts.parentSubtask; }
       
-      this.#needsExclusiveLock = this.isSync() || !this.hasCallback();
       
       if (opts.errHandling) { this.#errHandling = opts.errHandling; }
     }
@@ -1462,8 +1457,12 @@ class Waitable {
     }
     
     async runCallbackFn(...args) {
-      if (!this.#callbackFn) { throw new Error('on callback function has been set for task'); }
-      return await this.#callbackFn.apply(null, args);
+      if (!this.#callbackFn) { throw new Error('no callback function has been set for task'); }
+      return _withGlobalCurrentTaskMetaAsync({
+        taskID: this.#id,
+        componentIdx: this.#componentIdx,
+        fn: () => { return this.#callbackFn.apply(null, args); }
+      });
     }
     
     getCalleeParams() {
@@ -1494,6 +1493,11 @@ class Waitable {
     enterSync() {
       if (this.needsExclusiveLock()) {
         const cstate = getOrCreateAsyncState(this.#componentIdx);
+        // TODO(???): it is *very possible* for a the line below to fail if
+        // an async function is already running (and holding the exclusive lock)
+        //
+        // It's not really possible to fix this unless we turn every sync export into
+        // an async export that will use the regular async enabled `enter()`.
         cstate.exclusiveLock();
       }
       return true;
@@ -1504,6 +1508,7 @@ class Waitable {
         taskID: this.#id,
         componentIdx: this.#componentIdx,
         subtaskID: this.getParentSubtask()?.id(),
+        entryFnName: this.#entryFnName,
       });
       
       if (this.#entered) {
@@ -1512,12 +1517,14 @@ class Waitable {
       
       const cstate = getOrCreateAsyncState(this.#componentIdx);
       
+      await cstate.nextTaskExecutionSlot({ task: this });
+      
       // If a task is either synchronous or host-provided (e.g. a host import, whether sync or async)
       // then we can avoid component-relevant tracking and immediately enter
       if (this.isSync() || opts?.isHost) {
         this.#entered = true;
         
-        // TODO(breaking): remove once manually-spccifying async fns is removed
+        // TODO(breaking): remove once manually-specifying async fns is removed
         // It is currently possible for an actually sync export to be specified
         // as async via JSPI
         if (this.#isManualAsync) {
@@ -1527,11 +1534,15 @@ class Waitable {
         return this.#entered;
       }
       
-      if (cstate.hasBackpressure()) {
+      // Perform intial backpressure check
+      if (cstate.hasBackpressure() || this.needsExclusiveLock() && cstate.isExclusivelyLocked()) {
         cstate.addBackpressureWaiter();
         
         const result = await this.waitUntil({
-          readyFn: () => !cstate.hasBackpressure(),
+          readyFn: () => {
+            return !(cstate.hasBackpressure()
+            || this.needsExclusiveLock() && cstate.isExclusivelyLocked());
+          },
           cancellable: true,
         });
         
@@ -1543,7 +1554,32 @@ class Waitable {
         }
       }
       
-      if (this.needsExclusiveLock()) { cstate.exclusiveLock(); }
+      // Lock the component state or keep trying until we can/do
+      try {
+        if (this.needsExclusiveLock()) { cstate.exclusiveLock(); }
+      } catch {
+        // Continuously attempt to lock until we can
+        while (cstate.hasBackpressure() || this.needsExclusiveLock() && cstate.isExclusivelyLocked()) {
+          try {
+            if (this.needsExclusiveLock()) { cstate.exclusiveLock(); }
+            break;
+          } catch(err) {
+            cstate.addBackpressureWaiter();
+            const result = await this.waitUntil({
+              readyFn: () => {
+                return !(cstate.hasBackpressure()
+                || this.needsExclusiveLock() && cstate.isExclusivelyLocked());
+              },
+              cancellable: true,
+            });
+            cstate.removeBackpressureWaiter();
+            if (result === AsyncTask.BlockResult.CANCELLED) {
+              this.cancel();
+              return false;
+            }
+          }
+        }
+      }
       
       this.#entered = true;
       return this.#entered;
@@ -1554,38 +1590,19 @@ class Waitable {
     isResolved() { return this.#state === AsyncTask.State.RESOLVED; }
     
     async waitUntil(opts) {
-      const { readyFn, waitableSetRep, cancellable } = opts;
-      _debugLog('[AsyncTask#waitUntil()] args', { taskID: this.#id, waitableSetRep, cancellable });
+      const { readyFn, cancellable } = opts;
+      _debugLog('[AsyncTask#waitUntil()] args', { taskID: this.#id, cancellable });
       
-      const state = getOrCreateAsyncState(this.#componentIdx);
-      const wset = state.handles.get(waitableSetRep);
-      
-      let event;
-      
-      wset.incrementNumWaiting();
+      // TODO(fix): check for cancel
+      // TODO(fix): determinism
+      // TODO(threads): add this thread to waiting list
       
       const keepGoing = await this.suspendUntil({
-        readyFn: () => {
-          const hasPendingEvent = wset.hasPendingEvent();
-          const ready = readyFn();
-          return ready && hasPendingEvent;
-        },
+        readyFn,
         cancellable,
       });
       
-      if (keepGoing) {
-        event = wset.getPendingEvent();
-      } else {
-        event = {
-          code: ASYNC_EVENT_CODE.TASK_CANCELLED,
-          payload0: 0,
-          payload1: 0,
-        };
-      }
-      
-      wset.decrementNumWaiting();
-      
-      return event;
+      return keepGoing;
     }
     
     async yieldUntil(opts) {
@@ -1626,9 +1643,8 @@ class Waitable {
       
       const ready = readyFn();
       if (ready && ASYNC_DETERMINISM === 'random') {
-        // const coinFlip = _coinFlip();
-        // if (coinFlip) { return true }
-        return true;
+        const coinFlip = _coinFlip();
+        if (coinFlip) { return true }
       }
       
       const keepGoing = await this.immediateSuspend({ cancellable, readyFn });
@@ -1755,7 +1771,6 @@ class Waitable {
     
     // TODO: do cleanup here to reset the machinery so we can run again?
     
-    
     this.cancel({ error: taskErr });
   }
   
@@ -1797,7 +1812,7 @@ class Waitable {
     }
   }
   
-  exit() {
+  exit(args) {
     _debugLog('[AsyncTask#exit()]', {
       componentIdx: this.#componentIdx,
       taskID: this.#id,
@@ -1832,8 +1847,10 @@ class Waitable {
     if (!state) { throw new Error('missing async state for component [' + this.#componentIdx + ']'); }
     
     // Exempt the host from exclusive lock check
-    if (this.#componentIdx !== -1 && this.needsExclusiveLock() && !state.isExclusivelyLocked()) {
-      throw new Error(`task [${this.#id}] exit: component [${this.#componentIdx}] should have been exclusively locked`);
+    if (this.#componentIdx !== -1 && !args?.skipExclusiveLockCheck) {
+      if (this.needsExclusiveLock() && !state.isExclusivelyLocked()) {
+        throw new Error(`task [${this.#id}] exit: component [${this.#componentIdx}] should have been exclusively locked`);
+      }
     }
     
     state.exclusiveRelease();
@@ -2084,8 +2101,6 @@ class ComponentAsyncState {
     this.#locked = locked;
   }
   
-  // TODO(fix): we might want to check for pre-locked status here, we should be deterministically
-  // going from locked -> unlocked and vice versa
   exclusiveLock() {
     _debugLog('[ComponentAsyncState#exclusiveLock()]', {
       locked: this.#locked,
@@ -2116,6 +2131,54 @@ class ComponentAsyncState {
   onNextExclusiveRelease(fn) {
     _debugLog('[ComponentAsyncState#()onNextExclusiveRelease] registering');
     this.#onExclusiveReleaseHandlers.push(fn);
+  }
+  
+  // nextTaskPromise & nextTaskQueue are used to await current task completion and queues
+  // any tasks attempting to enter() and complete.
+  //
+  // see: nextTaskExecutionSlot()
+  //
+  // TODO(threads): this should be unnecessary once threads are properly implemented,
+  // as the task.enter() logic should suffice (it should be guaranteed that we cannot re-enter
+  // unless the task in question is the current task in the thread execution, and only one can
+  // run at a time)
+  #nextTaskPromise = Promise.resolve(true);
+  #nextTaskQueue = [];
+  
+  async nextTaskExecutionSlot(args) {
+    const { task } = args;
+    
+    const placeholder = {
+      completed: false,
+      task,
+      promise: task.exitPromise().then(() => {
+        placeholder.completed = true;
+      }),
+    };
+    this.#nextTaskQueue.push(placeholder);
+    
+    let next;
+    while (true) {
+      await this.#nextTaskPromise;
+      
+      next = this.#nextTaskQueue.find(placeholder => !placeholder.completed);
+      
+      // This task is next in the queue, we can continue
+      if (next === undefined || next === placeholder) {
+        this.#nextTaskPromise = next.promise;
+        if (this.#nextTaskQueue.length > 1000) {
+          this.#nextTaskQueue = this.#nextTaskQueue.filter(p => !p.completed);
+          if (this.#nextTaskQueue.length > 1000) {
+            _debugLog('[ComponentAsyncState#()nextTaskExecutionSlot] next task queue length > 1000 even after cleanup, tasks may be leaking');
+          }
+        }
+        break;
+      }
+      
+      // If we get here, this task was *not* next in the queue, continue waiting
+      // (at this point the task that *is* next will likely have already set itself
+      // as this.#nextTaskPromise)
+    }
   }
   
   #getSuspendedTaskMeta(taskID) {
@@ -2563,7 +2626,12 @@ class ComponentAsyncState {
   
 }
 
-const base64Compile = str => WebAssembly.compile(typeof Buffer !== 'undefined' ? Buffer.from(str, 'base64') : Uint8Array.from(atob(str), b => b.charCodeAt(0)));
+const base64Compile = str => WebAssembly.compile(
+typeof Buffer !== 'undefined'
+? Buffer.from(str, 'base64')
+: Uint8Array.from(atob(str), b => b.charCodeAt(0))
+);
+
 
 const isNode = typeof process !== 'undefined' && process.versions && process.versions.node;
 let _fs;
@@ -2621,8 +2689,6 @@ let postReturn4;
 let postReturn4Async;
 let postReturn5;
 let postReturn5Async;
-let postReturn6;
-let postReturn6Async;
 let exports1SerializeInst;
 
 function serializeInst(arg0) {
@@ -2645,19 +2711,35 @@ function serializeInst(arg0) {
     isManualAsync: false,
     entryFnName: 'exports1SerializeInst',
     getCallbackFn: () => null,
-    callbackFnName: 'null',
+    callbackFnName: null,
     errHandling: 'throw-result-err',
     callingWasmExport: true,
   });
   
   const started = task.enterSync();
-  task.setReturnMemoryIdx(0);
-  task.setReturnMemory(memory0);
-  let ret =   _withGlobalCurrentTaskMeta({
-    taskID: task.id(),
-    componentIdx: task.componentIdx(),
-    fn: () => exports1SerializeInst(ptr0, len0),
-  });
+  
+  if (0!== null) {
+    task.setReturnMemoryIdx(0);
+    task.setReturnMemory(() => memory0());
+  }
+  
+  
+  let ret;
+  
+  try {
+    ret =   _withGlobalCurrentTaskMeta({
+      taskID: task.id(),
+      componentIdx: task.componentIdx(),
+      fn: () => exports1SerializeInst(ptr0, len0),
+    });
+  } catch (err) {
+    
+    task.setErrored(err);
+    task.reject(err);
+    task.exit();
+    throw err;
+    
+  }
   
   let variant3;
   switch (dataView(memory0).getUint8(ret + 0, true)) {
@@ -2747,19 +2829,35 @@ function deserializeInst(arg0) {
     isManualAsync: false,
     entryFnName: 'exports1DeserializeInst',
     getCallbackFn: () => null,
-    callbackFnName: 'null',
+    callbackFnName: null,
     errHandling: 'throw-result-err',
     callingWasmExport: true,
   });
   
   const started = task.enterSync();
-  task.setReturnMemoryIdx(0);
-  task.setReturnMemory(memory0);
-  let ret =   _withGlobalCurrentTaskMeta({
-    taskID: task.id(),
-    componentIdx: task.componentIdx(),
-    fn: () => exports1DeserializeInst(ptr0, len0),
-  });
+  
+  if (0!== null) {
+    task.setReturnMemoryIdx(0);
+    task.setReturnMemory(() => memory0());
+  }
+  
+  
+  let ret;
+  
+  try {
+    ret =   _withGlobalCurrentTaskMeta({
+      taskID: task.id(),
+      componentIdx: task.componentIdx(),
+      fn: () => exports1DeserializeInst(ptr0, len0),
+    });
+  } catch (err) {
+    
+    task.setErrored(err);
+    task.reject(err);
+    task.exit();
+    throw err;
+    
+  }
   
   let variant3;
   switch (dataView(memory0).getUint8(ret + 0, true)) {
@@ -2849,19 +2947,35 @@ function blsSecretKeyGen(arg0) {
     isManualAsync: false,
     entryFnName: 'exports1BlsSecretKeyGen',
     getCallbackFn: () => null,
-    callbackFnName: 'null',
+    callbackFnName: null,
     errHandling: 'throw-result-err',
     callingWasmExport: true,
   });
   
   const started = task.enterSync();
-  task.setReturnMemoryIdx(0);
-  task.setReturnMemory(memory0);
-  let ret =   _withGlobalCurrentTaskMeta({
-    taskID: task.id(),
-    componentIdx: task.componentIdx(),
-    fn: () => exports1BlsSecretKeyGen(ptr0, len0),
-  });
+  
+  if (0!== null) {
+    task.setReturnMemoryIdx(0);
+    task.setReturnMemory(() => memory0());
+  }
+  
+  
+  let ret;
+  
+  try {
+    ret =   _withGlobalCurrentTaskMeta({
+      taskID: task.id(),
+      componentIdx: task.componentIdx(),
+      fn: () => exports1BlsSecretKeyGen(ptr0, len0),
+    });
+  } catch (err) {
+    
+    task.setErrored(err);
+    task.reject(err);
+    task.exit();
+    throw err;
+    
+  }
   
   let variant3;
   switch (dataView(memory0).getUint8(ret + 0, true)) {
@@ -2973,19 +3087,35 @@ function blsSecretFromSeedEip2333(arg0, arg1) {
     isManualAsync: false,
     entryFnName: 'exports1BlsSecretFromSeedEip2333',
     getCallbackFn: () => null,
-    callbackFnName: 'null',
+    callbackFnName: null,
     errHandling: 'throw-result-err',
     callingWasmExport: true,
   });
   
   const started = task.enterSync();
-  task.setReturnMemoryIdx(0);
-  task.setReturnMemory(memory0);
-  let ret =   _withGlobalCurrentTaskMeta({
-    taskID: task.id(),
-    componentIdx: task.componentIdx(),
-    fn: () => exports1BlsSecretFromSeedEip2333(ptr0, len0, ptr1, len1),
-  });
+  
+  if (0!== null) {
+    task.setReturnMemoryIdx(0);
+    task.setReturnMemory(() => memory0());
+  }
+  
+  
+  let ret;
+  
+  try {
+    ret =   _withGlobalCurrentTaskMeta({
+      taskID: task.id(),
+      componentIdx: task.componentIdx(),
+      fn: () => exports1BlsSecretFromSeedEip2333(ptr0, len0, ptr1, len1),
+    });
+  } catch (err) {
+    
+    task.setErrored(err);
+    task.reject(err);
+    task.exit();
+    throw err;
+    
+  }
   
   let variant4;
   switch (dataView(memory0).getUint8(ret + 0, true)) {
@@ -3075,19 +3205,35 @@ function blsPubkeyFromSecret(arg0) {
     isManualAsync: false,
     entryFnName: 'exports1BlsPubkeyFromSecret',
     getCallbackFn: () => null,
-    callbackFnName: 'null',
+    callbackFnName: null,
     errHandling: 'throw-result-err',
     callingWasmExport: true,
   });
   
   const started = task.enterSync();
-  task.setReturnMemoryIdx(0);
-  task.setReturnMemory(memory0);
-  let ret =   _withGlobalCurrentTaskMeta({
-    taskID: task.id(),
-    componentIdx: task.componentIdx(),
-    fn: () => exports1BlsPubkeyFromSecret(ptr0, len0),
-  });
+  
+  if (0!== null) {
+    task.setReturnMemoryIdx(0);
+    task.setReturnMemory(() => memory0());
+  }
+  
+  
+  let ret;
+  
+  try {
+    ret =   _withGlobalCurrentTaskMeta({
+      taskID: task.id(),
+      componentIdx: task.componentIdx(),
+      fn: () => exports1BlsPubkeyFromSecret(ptr0, len0),
+    });
+  } catch (err) {
+    
+    task.setErrored(err);
+    task.reject(err);
+    task.exit();
+    throw err;
+    
+  }
   
   let variant3;
   switch (dataView(memory0).getUint8(ret + 0, true)) {
@@ -3199,19 +3345,35 @@ function blsSign(arg0, arg1) {
     isManualAsync: false,
     entryFnName: 'exports1BlsSign',
     getCallbackFn: () => null,
-    callbackFnName: 'null',
+    callbackFnName: null,
     errHandling: 'throw-result-err',
     callingWasmExport: true,
   });
   
   const started = task.enterSync();
-  task.setReturnMemoryIdx(0);
-  task.setReturnMemory(memory0);
-  let ret =   _withGlobalCurrentTaskMeta({
-    taskID: task.id(),
-    componentIdx: task.componentIdx(),
-    fn: () => exports1BlsSign(ptr0, len0, ptr1, len1),
-  });
+  
+  if (0!== null) {
+    task.setReturnMemoryIdx(0);
+    task.setReturnMemory(() => memory0());
+  }
+  
+  
+  let ret;
+  
+  try {
+    ret =   _withGlobalCurrentTaskMeta({
+      taskID: task.id(),
+      componentIdx: task.componentIdx(),
+      fn: () => exports1BlsSign(ptr0, len0, ptr1, len1),
+    });
+  } catch (err) {
+    
+    task.setErrored(err);
+    task.reject(err);
+    task.exit();
+    throw err;
+    
+  }
   
   let variant4;
   switch (dataView(memory0).getUint8(ret + 0, true)) {
@@ -3345,19 +3507,35 @@ function blsVerify(arg0, arg1, arg2) {
     isManualAsync: false,
     entryFnName: 'exports1BlsVerify',
     getCallbackFn: () => null,
-    callbackFnName: 'null',
+    callbackFnName: null,
     errHandling: 'throw-result-err',
     callingWasmExport: true,
   });
   
   const started = task.enterSync();
-  task.setReturnMemoryIdx(0);
-  task.setReturnMemory(memory0);
-  let ret =   _withGlobalCurrentTaskMeta({
-    taskID: task.id(),
-    componentIdx: task.componentIdx(),
-    fn: () => exports1BlsVerify(ptr0, len0, ptr1, len1, ptr2, len2),
-  });
+  
+  if (0!== null) {
+    task.setReturnMemoryIdx(0);
+    task.setReturnMemory(() => memory0());
+  }
+  
+  
+  let ret;
+  
+  try {
+    ret =   _withGlobalCurrentTaskMeta({
+      taskID: task.id(),
+      componentIdx: task.componentIdx(),
+      fn: () => exports1BlsVerify(ptr0, len0, ptr1, len1, ptr2, len2),
+    });
+  } catch (err) {
+    
+    task.setErrored(err);
+    task.reject(err);
+    task.exit();
+    throw err;
+    
+  }
   
   let variant5;
   switch (dataView(memory0).getUint8(ret + 0, true)) {
@@ -3433,19 +3611,35 @@ function aggregateSigningMessage(arg0, arg1, arg2, arg3) {
     isManualAsync: false,
     entryFnName: 'exports1AggregateSigningMessage',
     getCallbackFn: () => null,
-    callbackFnName: 'null',
+    callbackFnName: null,
     errHandling: 'throw-result-err',
     callingWasmExport: true,
   });
   
   const started = task.enterSync();
-  task.setReturnMemoryIdx(0);
-  task.setReturnMemory(memory0);
-  let ret =   _withGlobalCurrentTaskMeta({
-    taskID: task.id(),
-    componentIdx: task.componentIdx(),
-    fn: () => exports1AggregateSigningMessage(ptr0, len0, toUint64(arg1), arg2 ? 1 : 0, ptr1, len1),
-  });
+  
+  if (0!== null) {
+    task.setReturnMemoryIdx(0);
+    task.setReturnMemory(() => memory0());
+  }
+  
+  
+  let ret;
+  
+  try {
+    ret =   _withGlobalCurrentTaskMeta({
+      taskID: task.id(),
+      componentIdx: task.componentIdx(),
+      fn: () => exports1AggregateSigningMessage(ptr0, len0, toUint64(arg1), arg2 ? 1 : 0, ptr1, len1),
+    });
+  } catch (err) {
+    
+    task.setErrored(err);
+    task.reject(err);
+    task.exit();
+    throw err;
+    
+  }
   
   let variant4;
   switch (dataView(memory0).getUint8(ret + 0, true)) {
@@ -3543,19 +3737,35 @@ function blsAggregateSignatures(arg0) {
     isManualAsync: false,
     entryFnName: 'exports1BlsAggregateSignatures',
     getCallbackFn: () => null,
-    callbackFnName: 'null',
+    callbackFnName: null,
     errHandling: 'throw-result-err',
     callingWasmExport: true,
   });
   
   const started = task.enterSync();
-  task.setReturnMemoryIdx(0);
-  task.setReturnMemory(memory0);
-  let ret =   _withGlobalCurrentTaskMeta({
-    taskID: task.id(),
-    componentIdx: task.componentIdx(),
-    fn: () => exports1BlsAggregateSignatures(result1, len1),
-  });
+  
+  if (0!== null) {
+    task.setReturnMemoryIdx(0);
+    task.setReturnMemory(() => memory0());
+  }
+  
+  
+  let ret;
+  
+  try {
+    ret =   _withGlobalCurrentTaskMeta({
+      taskID: task.id(),
+      componentIdx: task.componentIdx(),
+      fn: () => exports1BlsAggregateSignatures(result1, len1),
+    });
+  } catch (err) {
+    
+    task.setErrored(err);
+    task.reject(err);
+    task.exit();
+    throw err;
+    
+  }
   
   let variant4;
   switch (dataView(memory0).getUint8(ret + 0, true)) {
@@ -3606,250 +3816,6 @@ function blsAggregateSignatures(arg0) {
   return retCopy.val;
   
 }
-let exports1EncodeOpReturn;
-
-function encodeOpReturn(arg0) {
-  var vec3 = arg0;
-  var len3 = vec3.length;
-  var result3 = realloc0(0, 0, 8, len3 * 24);
-  for (let i = 0; i < vec3.length; i++) {
-    const e = vec3[i];
-    const base = result3 + i * 24;var {inputIndex: v0_0, recipient: v0_1 } = e;
-    dataView(memory0).setInt32(base + 0, toUint32(v0_0), true);
-    var variant2 = v0_1;
-    switch (variant2.tag) {
-      case 'signer-id': {
-        const e = variant2.val;
-        dataView(memory0).setInt8(base + 8, 0, true);
-        dataView(memory0).setBigInt64(base + 16, toUint64(e), true);
-        break;
-      }
-      case 'x-only-pubkey': {
-        const e = variant2.val;
-        dataView(memory0).setInt8(base + 8, 1, true);
-        
-        var encodeRes = _utf8AllocateAndEncode(e, realloc0, memory0);
-        var ptr1= encodeRes.ptr;
-        var len1 = encodeRes.len;
-        
-        dataView(memory0).setUint32(base + 20, len1, true);
-        dataView(memory0).setUint32(base + 16, ptr1, true);
-        break;
-      }
-      default: {
-        throw new TypeError(`invalid variant tag value \`${JSON.stringify(variant2.tag)}\` (received \`${variant2}\`) specified for \`SignerRef\``);
-      }
-    }
-  }
-  _debugLog('[iface="encode-op-return", function="encode-op-return"][Instruction::CallWasm] enter', {
-    funcName: 'encode-op-return',
-    paramCount: 2,
-    async: false,
-    postReturn: true,
-  });
-  const hostProvided = false;
-  
-  const [task, _wasm_call_currentTaskID] = createNewCurrentTask({
-    componentIdx: 0,
-    isAsync: false,
-    isManualAsync: false,
-    entryFnName: 'exports1EncodeOpReturn',
-    getCallbackFn: () => null,
-    callbackFnName: 'null',
-    errHandling: 'throw-result-err',
-    callingWasmExport: true,
-  });
-  
-  const started = task.enterSync();
-  task.setReturnMemoryIdx(0);
-  task.setReturnMemory(memory0);
-  let ret =   _withGlobalCurrentTaskMeta({
-    taskID: task.id(),
-    componentIdx: task.componentIdx(),
-    fn: () => exports1EncodeOpReturn(result3, len3),
-  });
-  
-  let variant6;
-  switch (dataView(memory0).getUint8(ret + 0, true)) {
-    case 0: {
-      var ptr4 = dataView(memory0).getUint32(ret + 4, true);
-      var len4 = dataView(memory0).getUint32(ret + 8, true);
-      var result4 = new Uint8Array(memory0.buffer.slice(ptr4, ptr4 + len4 * 1));
-      variant6= {
-        tag: 'ok',
-        val: result4
-      };
-      break;
-    }
-    case 1: {
-      var ptr5 = dataView(memory0).getUint32(ret + 4, true);
-      var len5 = dataView(memory0).getUint32(ret + 8, true);
-      var result5 = TEXT_DECODER_UTF8.decode(new Uint8Array(memory0.buffer, ptr5, len5));
-      variant6= {
-        tag: 'err',
-        val: result5
-      };
-      break;
-    }
-    default: {
-      throw new TypeError('invalid variant discriminant for expected');
-    }
-  }
-  _debugLog('[iface="encode-op-return", function="encode-op-return"][Instruction::Return]', {
-    funcName: 'encode-op-return',
-    paramCount: 1,
-    async: false,
-    postReturn: true
-  });
-  const retCopy = variant6;
-  task.resolve([retCopy.val]);
-  
-  let cstate = getOrCreateAsyncState(0);
-  cstate.mayLeave = false;
-  postReturn0(ret);
-  cstate.mayLeave = true;
-  task.exit();
-  
-  
-  
-  if (typeof retCopy === 'object' && retCopy.tag === 'err') {
-    throw new ComponentError(retCopy.val);
-  }
-  return retCopy.val;
-  
-}
-let exports1DecodeOpReturn;
-
-function decodeOpReturn(arg0) {
-  var val0 = arg0;
-  var len0 = Array.isArray(val0) ? val0.length : val0.byteLength;
-  var ptr0 = realloc0(0, 0, 1, len0 * 1);
-  
-  let valData0;
-  const valLenBytes0 = len0 * 1;
-  if (Array.isArray(val0)) {
-    // Regular array likely containing numbers, write values to memory
-    let offset = 0;
-    const dv0 = new DataView(memory0.buffer);
-    for (const v of val0) {
-      _requireValidNumericPrimitive.bind(null, 'u8')(v);
-      dv0.setUint8(ptr0+ offset, v, true);
-      offset += 1;
-    }
-  } else {
-    // TypedArray / ArrayBuffer-like, direct copy
-    valData0 = new Uint8Array(val0.buffer || val0, val0.byteOffset, valLenBytes0);
-    const out0 = new Uint8Array(memory0.buffer, ptr0, valLenBytes0);
-    out0.set(valData0);
-  }
-  
-  _debugLog('[iface="decode-op-return", function="decode-op-return"][Instruction::CallWasm] enter', {
-    funcName: 'decode-op-return',
-    paramCount: 2,
-    async: false,
-    postReturn: true,
-  });
-  const hostProvided = false;
-  
-  const [task, _wasm_call_currentTaskID] = createNewCurrentTask({
-    componentIdx: 0,
-    isAsync: false,
-    isManualAsync: false,
-    entryFnName: 'exports1DecodeOpReturn',
-    getCallbackFn: () => null,
-    callbackFnName: 'null',
-    errHandling: 'throw-result-err',
-    callingWasmExport: true,
-  });
-  
-  const started = task.enterSync();
-  task.setReturnMemoryIdx(0);
-  task.setReturnMemory(memory0);
-  let ret =   _withGlobalCurrentTaskMeta({
-    taskID: task.id(),
-    componentIdx: task.componentIdx(),
-    fn: () => exports1DecodeOpReturn(ptr0, len0),
-  });
-  
-  let variant5;
-  switch (dataView(memory0).getUint8(ret + 0, true)) {
-    case 0: {
-      var len3 = dataView(memory0).getUint32(ret + 8, true);
-      var base3 = dataView(memory0).getUint32(ret + 4, true);
-      var result3 = [];
-      for (let i = 0; i < len3; i++) {
-        const base = base3 + i * 24;
-        let variant2;
-        switch (dataView(memory0).getUint8(base + 8, true)) {
-          case 0: {
-            variant2= {
-              tag: 'signer-id',
-              val: BigInt.asUintN(64, BigInt(dataView(memory0).getBigInt64(base + 16, true)))
-            };
-            break;
-          }
-          case 1: {
-            var ptr1 = dataView(memory0).getUint32(base + 16, true);
-            var len1 = dataView(memory0).getUint32(base + 20, true);
-            var result1 = TEXT_DECODER_UTF8.decode(new Uint8Array(memory0.buffer, ptr1, len1));
-            variant2= {
-              tag: 'x-only-pubkey',
-              val: result1
-            };
-            break;
-          }
-          default: {
-            throw new TypeError('invalid variant discriminant for SignerRef');
-          }
-        }
-        result3.push({
-          inputIndex: dataView(memory0).getInt32(base + 0, true) >>> 0,
-          recipient: variant2,
-        });
-      }
-      variant5= {
-        tag: 'ok',
-        val: result3
-      };
-      break;
-    }
-    case 1: {
-      var ptr4 = dataView(memory0).getUint32(ret + 4, true);
-      var len4 = dataView(memory0).getUint32(ret + 8, true);
-      var result4 = TEXT_DECODER_UTF8.decode(new Uint8Array(memory0.buffer, ptr4, len4));
-      variant5= {
-        tag: 'err',
-        val: result4
-      };
-      break;
-    }
-    default: {
-      throw new TypeError('invalid variant discriminant for expected');
-    }
-  }
-  _debugLog('[iface="decode-op-return", function="decode-op-return"][Instruction::Return]', {
-    funcName: 'decode-op-return',
-    paramCount: 1,
-    async: false,
-    postReturn: true
-  });
-  const retCopy = variant5;
-  task.resolve([retCopy.val]);
-  
-  let cstate = getOrCreateAsyncState(0);
-  cstate.mayLeave = false;
-  postReturn2(ret);
-  cstate.mayLeave = true;
-  task.exit();
-  
-  
-  
-  if (typeof retCopy === 'object' && retCopy.tag === 'err') {
-    throw new ComponentError(retCopy.val);
-  }
-  return retCopy.val;
-  
-}
 let exports1ValidateWit;
 
 function validateWit(arg0) {
@@ -3872,19 +3838,35 @@ function validateWit(arg0) {
     isManualAsync: false,
     entryFnName: 'exports1ValidateWit',
     getCallbackFn: () => null,
-    callbackFnName: 'null',
+    callbackFnName: null,
     errHandling: 'none',
     callingWasmExport: true,
   });
   
   const started = task.enterSync();
-  task.setReturnMemoryIdx(0);
-  task.setReturnMemory(memory0);
-  let ret =   _withGlobalCurrentTaskMeta({
-    taskID: task.id(),
-    componentIdx: task.componentIdx(),
-    fn: () => exports1ValidateWit(ptr0, len0),
-  });
+  
+  if (0!== null) {
+    task.setReturnMemoryIdx(0);
+    task.setReturnMemory(() => memory0());
+  }
+  
+  
+  let ret;
+  
+  try {
+    ret =   _withGlobalCurrentTaskMeta({
+      taskID: task.id(),
+      componentIdx: task.componentIdx(),
+      fn: () => exports1ValidateWit(ptr0, len0),
+    });
+  } catch (err) {
+    
+    task.setErrored(err);
+    task.reject(err);
+    task.exit();
+    throw err;
+    
+  }
   
   let variant5;
   switch (dataView(memory0).getUint8(ret + 0, true)) {
@@ -3942,7 +3924,7 @@ function validateWit(arg0) {
   
   let cstate = getOrCreateAsyncState(0);
   cstate.mayLeave = false;
-  postReturn3(ret);
+  postReturn2(ret);
   cstate.mayLeave = true;
   task.exit();
   return retCopy;
@@ -3978,19 +3960,35 @@ class Wit{
       isManualAsync: false,
       entryFnName: 'witCodecConstructorWit',
       getCallbackFn: () => null,
-      callbackFnName: 'null',
+      callbackFnName: null,
       errHandling: 'none',
       callingWasmExport: true,
     });
     
     const started = task.enterSync();
-    task.setReturnMemoryIdx(0);
-    task.setReturnMemory(memory0);
-    let ret =   _withGlobalCurrentTaskMeta({
-      taskID: task.id(),
-      componentIdx: task.componentIdx(),
-      fn: () => witCodecConstructorWit(ptr0, len0),
-    });
+    
+    if (0!== null) {
+      task.setReturnMemoryIdx(0);
+      task.setReturnMemory(() => memory0());
+    }
+    
+    
+    let ret;
+    
+    try {
+      ret =   _withGlobalCurrentTaskMeta({
+        taskID: task.id(),
+        componentIdx: task.componentIdx(),
+        fn: () => witCodecConstructorWit(ptr0, len0),
+      });
+    } catch (err) {
+      
+      task.setErrored(err);
+      task.reject(err);
+      task.exit();
+      throw err;
+      
+    }
     
     var handle2 = ret;
     var rsc1 = new.target === Wit ? this : Object.create(Wit.prototype);
@@ -4048,19 +4046,35 @@ Wit.prototype.encodeCall = function encodeCall(arg1, arg2) {
     isManualAsync: false,
     entryFnName: 'witCodecMethodWitEncodeCall',
     getCallbackFn: () => null,
-    callbackFnName: 'null',
+    callbackFnName: null,
     errHandling: 'throw-result-err',
     callingWasmExport: true,
   });
   
   const started = task.enterSync();
-  task.setReturnMemoryIdx(0);
-  task.setReturnMemory(memory0);
-  let ret =   _withGlobalCurrentTaskMeta({
-    taskID: task.id(),
-    componentIdx: task.componentIdx(),
-    fn: () => witCodecMethodWitEncodeCall(handle0, ptr2, len2, ptr3, len3),
-  });
+  
+  if (0!== null) {
+    task.setReturnMemoryIdx(0);
+    task.setReturnMemory(() => memory0());
+  }
+  
+  
+  let ret;
+  
+  try {
+    ret =   _withGlobalCurrentTaskMeta({
+      taskID: task.id(),
+      componentIdx: task.componentIdx(),
+      fn: () => witCodecMethodWitEncodeCall(handle0, ptr2, len2, ptr3, len3),
+    });
+  } catch (err) {
+    
+    task.setErrored(err);
+    task.reject(err);
+    task.exit();
+    throw err;
+    
+  }
   
   let variant6;
   switch (dataView(memory0).getUint8(ret + 0, true)) {
@@ -4145,19 +4159,35 @@ Wit.prototype.decodeResult = function decodeResult(arg1, arg2) {
     isManualAsync: false,
     entryFnName: 'witCodecMethodWitDecodeResult',
     getCallbackFn: () => null,
-    callbackFnName: 'null',
+    callbackFnName: null,
     errHandling: 'throw-result-err',
     callingWasmExport: true,
   });
   
   const started = task.enterSync();
-  task.setReturnMemoryIdx(0);
-  task.setReturnMemory(memory0);
-  let ret =   _withGlobalCurrentTaskMeta({
-    taskID: task.id(),
-    componentIdx: task.componentIdx(),
-    fn: () => witCodecMethodWitDecodeResult(handle0, ptr2, len2, ptr3, len3),
-  });
+  
+  if (0!== null) {
+    task.setReturnMemoryIdx(0);
+    task.setReturnMemory(() => memory0());
+  }
+  
+  
+  let ret;
+  
+  try {
+    ret =   _withGlobalCurrentTaskMeta({
+      taskID: task.id(),
+      componentIdx: task.componentIdx(),
+      fn: () => witCodecMethodWitDecodeResult(handle0, ptr2, len2, ptr3, len3),
+    });
+  } catch (err) {
+    
+    task.setErrored(err);
+    task.reject(err);
+    task.exit();
+    throw err;
+    
+  }
   
   let variant6;
   switch (dataView(memory0).getUint8(ret + 0, true)) {
@@ -4232,19 +4262,35 @@ Wit.prototype.parse = function parse() {
     isManualAsync: false,
     entryFnName: 'witCodecMethodWitParse',
     getCallbackFn: () => null,
-    callbackFnName: 'null',
+    callbackFnName: null,
     errHandling: 'throw-result-err',
     callingWasmExport: true,
   });
   
   const started = task.enterSync();
-  task.setReturnMemoryIdx(0);
-  task.setReturnMemory(memory0);
-  let ret =   _withGlobalCurrentTaskMeta({
-    taskID: task.id(),
-    componentIdx: task.componentIdx(),
-    fn: () => witCodecMethodWitParse(handle0),
-  });
+  
+  if (0!== null) {
+    task.setReturnMemoryIdx(0);
+    task.setReturnMemory(() => memory0());
+  }
+  
+  
+  let ret;
+  
+  try {
+    ret =   _withGlobalCurrentTaskMeta({
+      taskID: task.id(),
+      componentIdx: task.componentIdx(),
+      fn: () => witCodecMethodWitParse(handle0),
+    });
+  } catch (err) {
+    
+    task.setErrored(err);
+    task.reject(err);
+    task.exit();
+    throw err;
+    
+  }
   
   let variant4;
   switch (dataView(memory0).getUint8(ret + 0, true)) {
@@ -4312,19 +4358,35 @@ function u64ToInteger(arg0) {
     isManualAsync: false,
     entryFnName: 'numericsU64ToInteger',
     getCallbackFn: () => null,
-    callbackFnName: 'null',
+    callbackFnName: null,
     errHandling: 'none',
     callingWasmExport: true,
   });
   
   const started = task.enterSync();
-  task.setReturnMemoryIdx(0);
-  task.setReturnMemory(memory0);
-  let ret =   _withGlobalCurrentTaskMeta({
-    taskID: task.id(),
-    componentIdx: task.componentIdx(),
-    fn: () => numericsU64ToInteger(toUint64(arg0)),
-  });
+  
+  if (0!== null) {
+    task.setReturnMemoryIdx(0);
+    task.setReturnMemory(() => memory0());
+  }
+  
+  
+  let ret;
+  
+  try {
+    ret =   _withGlobalCurrentTaskMeta({
+      taskID: task.id(),
+      componentIdx: task.componentIdx(),
+      fn: () => numericsU64ToInteger(toUint64(arg0)),
+    });
+  } catch (err) {
+    
+    task.setErrored(err);
+    task.reject(err);
+    task.exit();
+    throw err;
+    
+  }
   
   let enum0;
   switch (dataView(memory0).getUint8(ret + 32, true)) {
@@ -4379,19 +4441,35 @@ function s64ToInteger(arg0) {
     isManualAsync: false,
     entryFnName: 'numericsS64ToInteger',
     getCallbackFn: () => null,
-    callbackFnName: 'null',
+    callbackFnName: null,
     errHandling: 'none',
     callingWasmExport: true,
   });
   
   const started = task.enterSync();
-  task.setReturnMemoryIdx(0);
-  task.setReturnMemory(memory0);
-  let ret =   _withGlobalCurrentTaskMeta({
-    taskID: task.id(),
-    componentIdx: task.componentIdx(),
-    fn: () => numericsS64ToInteger(toInt64(arg0)),
-  });
+  
+  if (0!== null) {
+    task.setReturnMemoryIdx(0);
+    task.setReturnMemory(() => memory0());
+  }
+  
+  
+  let ret;
+  
+  try {
+    ret =   _withGlobalCurrentTaskMeta({
+      taskID: task.id(),
+      componentIdx: task.componentIdx(),
+      fn: () => numericsS64ToInteger(toInt64(arg0)),
+    });
+  } catch (err) {
+    
+    task.setErrored(err);
+    task.reject(err);
+    task.exit();
+    throw err;
+    
+  }
   
   let enum0;
   switch (dataView(memory0).getUint8(ret + 32, true)) {
@@ -4451,19 +4529,35 @@ function stringToInteger(arg0) {
     isManualAsync: false,
     entryFnName: 'numericsStringToInteger',
     getCallbackFn: () => null,
-    callbackFnName: 'null',
+    callbackFnName: null,
     errHandling: 'throw-result-err',
     callingWasmExport: true,
   });
   
   const started = task.enterSync();
-  task.setReturnMemoryIdx(0);
-  task.setReturnMemory(memory0);
-  let ret =   _withGlobalCurrentTaskMeta({
-    taskID: task.id(),
-    componentIdx: task.componentIdx(),
-    fn: () => numericsStringToInteger(ptr0, len0),
-  });
+  
+  if (0!== null) {
+    task.setReturnMemoryIdx(0);
+    task.setReturnMemory(() => memory0());
+  }
+  
+  
+  let ret;
+  
+  try {
+    ret =   _withGlobalCurrentTaskMeta({
+      taskID: task.id(),
+      componentIdx: task.componentIdx(),
+      fn: () => numericsStringToInteger(ptr0, len0),
+    });
+  } catch (err) {
+    
+    task.setErrored(err);
+    task.reject(err);
+    task.exit();
+    throw err;
+    
+  }
   
   let variant8;
   switch (dataView(memory0).getUint8(ret + 0, true)) {
@@ -4572,7 +4666,7 @@ function stringToInteger(arg0) {
   
   let cstate = getOrCreateAsyncState(0);
   cstate.mayLeave = false;
-  postReturn4(ret);
+  postReturn3(ret);
   cstate.mayLeave = true;
   task.exit();
   
@@ -4621,19 +4715,35 @@ function integerToString(arg0) {
     isManualAsync: false,
     entryFnName: 'numericsIntegerToString',
     getCallbackFn: () => null,
-    callbackFnName: 'null',
+    callbackFnName: null,
     errHandling: 'none',
     callingWasmExport: true,
   });
   
   const started = task.enterSync();
-  task.setReturnMemoryIdx(0);
-  task.setReturnMemory(memory0);
-  let ret =   _withGlobalCurrentTaskMeta({
-    taskID: task.id(),
-    componentIdx: task.componentIdx(),
-    fn: () => numericsIntegerToString(toUint64(v0_0), toUint64(v0_1), toUint64(v0_2), toUint64(v0_3), enum1),
-  });
+  
+  if (0!== null) {
+    task.setReturnMemoryIdx(0);
+    task.setReturnMemory(() => memory0());
+  }
+  
+  
+  let ret;
+  
+  try {
+    ret =   _withGlobalCurrentTaskMeta({
+      taskID: task.id(),
+      componentIdx: task.componentIdx(),
+      fn: () => numericsIntegerToString(toUint64(v0_0), toUint64(v0_1), toUint64(v0_2), toUint64(v0_3), enum1),
+    });
+  } catch (err) {
+    
+    task.setErrored(err);
+    task.reject(err);
+    task.exit();
+    throw err;
+    
+  }
   
   var ptr2 = dataView(memory0).getUint32(ret + 0, true);
   var len2 = dataView(memory0).getUint32(ret + 4, true);
@@ -4649,7 +4759,7 @@ function integerToString(arg0) {
   
   let cstate = getOrCreateAsyncState(0);
   cstate.mayLeave = false;
-  postReturn5(ret);
+  postReturn4(ret);
   cstate.mayLeave = true;
   task.exit();
   return retCopy;
@@ -4712,17 +4822,35 @@ function eqInteger(arg0, arg1) {
     isManualAsync: false,
     entryFnName: 'numericsEqInteger',
     getCallbackFn: () => null,
-    callbackFnName: 'null',
+    callbackFnName: null,
     errHandling: 'none',
     callingWasmExport: true,
   });
   
   const started = task.enterSync();
-  let ret =   _withGlobalCurrentTaskMeta({
-    taskID: task.id(),
-    componentIdx: task.componentIdx(),
-    fn: () => numericsEqInteger(toUint64(v0_0), toUint64(v0_1), toUint64(v0_2), toUint64(v0_3), enum1, toUint64(v2_0), toUint64(v2_1), toUint64(v2_2), toUint64(v2_3), enum3),
-  });
+  
+  if (null!== null) {
+    task.setReturnMemoryIdx(null);
+    task.setReturnMemory(() => null());
+  }
+  
+  
+  let ret;
+  
+  try {
+    ret =   _withGlobalCurrentTaskMeta({
+      taskID: task.id(),
+      componentIdx: task.componentIdx(),
+      fn: () => numericsEqInteger(toUint64(v0_0), toUint64(v0_1), toUint64(v0_2), toUint64(v0_3), enum1, toUint64(v2_0), toUint64(v2_1), toUint64(v2_2), toUint64(v2_3), enum3),
+    });
+  } catch (err) {
+    
+    task.setErrored(err);
+    task.reject(err);
+    task.exit();
+    throw err;
+    
+  }
   
   var bool4 = ret;
   _debugLog('[iface="root:component/numerics", function="eq-integer"][Instruction::Return]', {
@@ -4792,17 +4920,35 @@ function cmpInteger(arg0, arg1) {
     isManualAsync: false,
     entryFnName: 'numericsCmpInteger',
     getCallbackFn: () => null,
-    callbackFnName: 'null',
+    callbackFnName: null,
     errHandling: 'none',
     callingWasmExport: true,
   });
   
   const started = task.enterSync();
-  let ret =   _withGlobalCurrentTaskMeta({
-    taskID: task.id(),
-    componentIdx: task.componentIdx(),
-    fn: () => numericsCmpInteger(toUint64(v0_0), toUint64(v0_1), toUint64(v0_2), toUint64(v0_3), enum1, toUint64(v2_0), toUint64(v2_1), toUint64(v2_2), toUint64(v2_3), enum3),
-  });
+  
+  if (null!== null) {
+    task.setReturnMemoryIdx(null);
+    task.setReturnMemory(() => null());
+  }
+  
+  
+  let ret;
+  
+  try {
+    ret =   _withGlobalCurrentTaskMeta({
+      taskID: task.id(),
+      componentIdx: task.componentIdx(),
+      fn: () => numericsCmpInteger(toUint64(v0_0), toUint64(v0_1), toUint64(v0_2), toUint64(v0_3), enum1, toUint64(v2_0), toUint64(v2_1), toUint64(v2_2), toUint64(v2_3), enum3),
+    });
+  } catch (err) {
+    
+    task.setErrored(err);
+    task.reject(err);
+    task.exit();
+    throw err;
+    
+  }
   
   let enum4;
   switch (ret) {
@@ -4889,19 +5035,35 @@ function addInteger(arg0, arg1) {
     isManualAsync: false,
     entryFnName: 'numericsAddInteger',
     getCallbackFn: () => null,
-    callbackFnName: 'null',
+    callbackFnName: null,
     errHandling: 'throw-result-err',
     callingWasmExport: true,
   });
   
   const started = task.enterSync();
-  task.setReturnMemoryIdx(0);
-  task.setReturnMemory(memory0);
-  let ret =   _withGlobalCurrentTaskMeta({
-    taskID: task.id(),
-    componentIdx: task.componentIdx(),
-    fn: () => numericsAddInteger(toUint64(v0_0), toUint64(v0_1), toUint64(v0_2), toUint64(v0_3), enum1, toUint64(v2_0), toUint64(v2_1), toUint64(v2_2), toUint64(v2_3), enum3),
-  });
+  
+  if (0!== null) {
+    task.setReturnMemoryIdx(0);
+    task.setReturnMemory(() => memory0());
+  }
+  
+  
+  let ret;
+  
+  try {
+    ret =   _withGlobalCurrentTaskMeta({
+      taskID: task.id(),
+      componentIdx: task.componentIdx(),
+      fn: () => numericsAddInteger(toUint64(v0_0), toUint64(v0_1), toUint64(v0_2), toUint64(v0_3), enum1, toUint64(v2_0), toUint64(v2_1), toUint64(v2_2), toUint64(v2_3), enum3),
+    });
+  } catch (err) {
+    
+    task.setErrored(err);
+    task.reject(err);
+    task.exit();
+    throw err;
+    
+  }
   
   let variant11;
   switch (dataView(memory0).getUint8(ret + 0, true)) {
@@ -5010,7 +5172,7 @@ function addInteger(arg0, arg1) {
   
   let cstate = getOrCreateAsyncState(0);
   cstate.mayLeave = false;
-  postReturn4(ret);
+  postReturn3(ret);
   cstate.mayLeave = true;
   task.exit();
   
@@ -5079,19 +5241,35 @@ function subInteger(arg0, arg1) {
     isManualAsync: false,
     entryFnName: 'numericsSubInteger',
     getCallbackFn: () => null,
-    callbackFnName: 'null',
+    callbackFnName: null,
     errHandling: 'throw-result-err',
     callingWasmExport: true,
   });
   
   const started = task.enterSync();
-  task.setReturnMemoryIdx(0);
-  task.setReturnMemory(memory0);
-  let ret =   _withGlobalCurrentTaskMeta({
-    taskID: task.id(),
-    componentIdx: task.componentIdx(),
-    fn: () => numericsSubInteger(toUint64(v0_0), toUint64(v0_1), toUint64(v0_2), toUint64(v0_3), enum1, toUint64(v2_0), toUint64(v2_1), toUint64(v2_2), toUint64(v2_3), enum3),
-  });
+  
+  if (0!== null) {
+    task.setReturnMemoryIdx(0);
+    task.setReturnMemory(() => memory0());
+  }
+  
+  
+  let ret;
+  
+  try {
+    ret =   _withGlobalCurrentTaskMeta({
+      taskID: task.id(),
+      componentIdx: task.componentIdx(),
+      fn: () => numericsSubInteger(toUint64(v0_0), toUint64(v0_1), toUint64(v0_2), toUint64(v0_3), enum1, toUint64(v2_0), toUint64(v2_1), toUint64(v2_2), toUint64(v2_3), enum3),
+    });
+  } catch (err) {
+    
+    task.setErrored(err);
+    task.reject(err);
+    task.exit();
+    throw err;
+    
+  }
   
   let variant11;
   switch (dataView(memory0).getUint8(ret + 0, true)) {
@@ -5200,7 +5378,7 @@ function subInteger(arg0, arg1) {
   
   let cstate = getOrCreateAsyncState(0);
   cstate.mayLeave = false;
-  postReturn4(ret);
+  postReturn3(ret);
   cstate.mayLeave = true;
   task.exit();
   
@@ -5269,19 +5447,35 @@ function mulInteger(arg0, arg1) {
     isManualAsync: false,
     entryFnName: 'numericsMulInteger',
     getCallbackFn: () => null,
-    callbackFnName: 'null',
+    callbackFnName: null,
     errHandling: 'throw-result-err',
     callingWasmExport: true,
   });
   
   const started = task.enterSync();
-  task.setReturnMemoryIdx(0);
-  task.setReturnMemory(memory0);
-  let ret =   _withGlobalCurrentTaskMeta({
-    taskID: task.id(),
-    componentIdx: task.componentIdx(),
-    fn: () => numericsMulInteger(toUint64(v0_0), toUint64(v0_1), toUint64(v0_2), toUint64(v0_3), enum1, toUint64(v2_0), toUint64(v2_1), toUint64(v2_2), toUint64(v2_3), enum3),
-  });
+  
+  if (0!== null) {
+    task.setReturnMemoryIdx(0);
+    task.setReturnMemory(() => memory0());
+  }
+  
+  
+  let ret;
+  
+  try {
+    ret =   _withGlobalCurrentTaskMeta({
+      taskID: task.id(),
+      componentIdx: task.componentIdx(),
+      fn: () => numericsMulInteger(toUint64(v0_0), toUint64(v0_1), toUint64(v0_2), toUint64(v0_3), enum1, toUint64(v2_0), toUint64(v2_1), toUint64(v2_2), toUint64(v2_3), enum3),
+    });
+  } catch (err) {
+    
+    task.setErrored(err);
+    task.reject(err);
+    task.exit();
+    throw err;
+    
+  }
   
   let variant11;
   switch (dataView(memory0).getUint8(ret + 0, true)) {
@@ -5390,7 +5584,7 @@ function mulInteger(arg0, arg1) {
   
   let cstate = getOrCreateAsyncState(0);
   cstate.mayLeave = false;
-  postReturn4(ret);
+  postReturn3(ret);
   cstate.mayLeave = true;
   task.exit();
   
@@ -5459,19 +5653,35 @@ function divInteger(arg0, arg1) {
     isManualAsync: false,
     entryFnName: 'numericsDivInteger',
     getCallbackFn: () => null,
-    callbackFnName: 'null',
+    callbackFnName: null,
     errHandling: 'throw-result-err',
     callingWasmExport: true,
   });
   
   const started = task.enterSync();
-  task.setReturnMemoryIdx(0);
-  task.setReturnMemory(memory0);
-  let ret =   _withGlobalCurrentTaskMeta({
-    taskID: task.id(),
-    componentIdx: task.componentIdx(),
-    fn: () => numericsDivInteger(toUint64(v0_0), toUint64(v0_1), toUint64(v0_2), toUint64(v0_3), enum1, toUint64(v2_0), toUint64(v2_1), toUint64(v2_2), toUint64(v2_3), enum3),
-  });
+  
+  if (0!== null) {
+    task.setReturnMemoryIdx(0);
+    task.setReturnMemory(() => memory0());
+  }
+  
+  
+  let ret;
+  
+  try {
+    ret =   _withGlobalCurrentTaskMeta({
+      taskID: task.id(),
+      componentIdx: task.componentIdx(),
+      fn: () => numericsDivInteger(toUint64(v0_0), toUint64(v0_1), toUint64(v0_2), toUint64(v0_3), enum1, toUint64(v2_0), toUint64(v2_1), toUint64(v2_2), toUint64(v2_3), enum3),
+    });
+  } catch (err) {
+    
+    task.setErrored(err);
+    task.reject(err);
+    task.exit();
+    throw err;
+    
+  }
   
   let variant11;
   switch (dataView(memory0).getUint8(ret + 0, true)) {
@@ -5580,7 +5790,7 @@ function divInteger(arg0, arg1) {
   
   let cstate = getOrCreateAsyncState(0);
   cstate.mayLeave = false;
-  postReturn4(ret);
+  postReturn3(ret);
   cstate.mayLeave = true;
   task.exit();
   
@@ -5629,19 +5839,35 @@ function sqrtInteger(arg0) {
     isManualAsync: false,
     entryFnName: 'numericsSqrtInteger',
     getCallbackFn: () => null,
-    callbackFnName: 'null',
+    callbackFnName: null,
     errHandling: 'throw-result-err',
     callingWasmExport: true,
   });
   
   const started = task.enterSync();
-  task.setReturnMemoryIdx(0);
-  task.setReturnMemory(memory0);
-  let ret =   _withGlobalCurrentTaskMeta({
-    taskID: task.id(),
-    componentIdx: task.componentIdx(),
-    fn: () => numericsSqrtInteger(toUint64(v0_0), toUint64(v0_1), toUint64(v0_2), toUint64(v0_3), enum1),
-  });
+  
+  if (0!== null) {
+    task.setReturnMemoryIdx(0);
+    task.setReturnMemory(() => memory0());
+  }
+  
+  
+  let ret;
+  
+  try {
+    ret =   _withGlobalCurrentTaskMeta({
+      taskID: task.id(),
+      componentIdx: task.componentIdx(),
+      fn: () => numericsSqrtInteger(toUint64(v0_0), toUint64(v0_1), toUint64(v0_2), toUint64(v0_3), enum1),
+    });
+  } catch (err) {
+    
+    task.setErrored(err);
+    task.reject(err);
+    task.exit();
+    throw err;
+    
+  }
   
   let variant9;
   switch (dataView(memory0).getUint8(ret + 0, true)) {
@@ -5750,7 +5976,7 @@ function sqrtInteger(arg0) {
   
   let cstate = getOrCreateAsyncState(0);
   cstate.mayLeave = false;
-  postReturn4(ret);
+  postReturn3(ret);
   cstate.mayLeave = true;
   task.exit();
   
@@ -5799,19 +6025,35 @@ function integerToDecimal(arg0) {
     isManualAsync: false,
     entryFnName: 'numericsIntegerToDecimal',
     getCallbackFn: () => null,
-    callbackFnName: 'null',
+    callbackFnName: null,
     errHandling: 'throw-result-err',
     callingWasmExport: true,
   });
   
   const started = task.enterSync();
-  task.setReturnMemoryIdx(0);
-  task.setReturnMemory(memory0);
-  let ret =   _withGlobalCurrentTaskMeta({
-    taskID: task.id(),
-    componentIdx: task.componentIdx(),
-    fn: () => numericsIntegerToDecimal(toUint64(v0_0), toUint64(v0_1), toUint64(v0_2), toUint64(v0_3), enum1),
-  });
+  
+  if (0!== null) {
+    task.setReturnMemoryIdx(0);
+    task.setReturnMemory(() => memory0());
+  }
+  
+  
+  let ret;
+  
+  try {
+    ret =   _withGlobalCurrentTaskMeta({
+      taskID: task.id(),
+      componentIdx: task.componentIdx(),
+      fn: () => numericsIntegerToDecimal(toUint64(v0_0), toUint64(v0_1), toUint64(v0_2), toUint64(v0_3), enum1),
+    });
+  } catch (err) {
+    
+    task.setErrored(err);
+    task.reject(err);
+    task.exit();
+    throw err;
+    
+  }
   
   let variant9;
   switch (dataView(memory0).getUint8(ret + 0, true)) {
@@ -5920,7 +6162,7 @@ function integerToDecimal(arg0) {
   
   let cstate = getOrCreateAsyncState(0);
   cstate.mayLeave = false;
-  postReturn4(ret);
+  postReturn3(ret);
   cstate.mayLeave = true;
   task.exit();
   
@@ -5969,19 +6211,35 @@ function decimalToInteger(arg0) {
     isManualAsync: false,
     entryFnName: 'numericsDecimalToInteger',
     getCallbackFn: () => null,
-    callbackFnName: 'null',
+    callbackFnName: null,
     errHandling: 'throw-result-err',
     callingWasmExport: true,
   });
   
   const started = task.enterSync();
-  task.setReturnMemoryIdx(0);
-  task.setReturnMemory(memory0);
-  let ret =   _withGlobalCurrentTaskMeta({
-    taskID: task.id(),
-    componentIdx: task.componentIdx(),
-    fn: () => numericsDecimalToInteger(toUint64(v0_0), toUint64(v0_1), toUint64(v0_2), toUint64(v0_3), enum1),
-  });
+  
+  if (0!== null) {
+    task.setReturnMemoryIdx(0);
+    task.setReturnMemory(() => memory0());
+  }
+  
+  
+  let ret;
+  
+  try {
+    ret =   _withGlobalCurrentTaskMeta({
+      taskID: task.id(),
+      componentIdx: task.componentIdx(),
+      fn: () => numericsDecimalToInteger(toUint64(v0_0), toUint64(v0_1), toUint64(v0_2), toUint64(v0_3), enum1),
+    });
+  } catch (err) {
+    
+    task.setErrored(err);
+    task.reject(err);
+    task.exit();
+    throw err;
+    
+  }
   
   let variant9;
   switch (dataView(memory0).getUint8(ret + 0, true)) {
@@ -6090,7 +6348,7 @@ function decimalToInteger(arg0) {
   
   let cstate = getOrCreateAsyncState(0);
   cstate.mayLeave = false;
-  postReturn4(ret);
+  postReturn3(ret);
   cstate.mayLeave = true;
   task.exit();
   
@@ -6119,19 +6377,35 @@ function u64ToDecimal(arg0) {
     isManualAsync: false,
     entryFnName: 'numericsU64ToDecimal',
     getCallbackFn: () => null,
-    callbackFnName: 'null',
+    callbackFnName: null,
     errHandling: 'throw-result-err',
     callingWasmExport: true,
   });
   
   const started = task.enterSync();
-  task.setReturnMemoryIdx(0);
-  task.setReturnMemory(memory0);
-  let ret =   _withGlobalCurrentTaskMeta({
-    taskID: task.id(),
-    componentIdx: task.componentIdx(),
-    fn: () => numericsU64ToDecimal(toUint64(arg0)),
-  });
+  
+  if (0!== null) {
+    task.setReturnMemoryIdx(0);
+    task.setReturnMemory(() => memory0());
+  }
+  
+  
+  let ret;
+  
+  try {
+    ret =   _withGlobalCurrentTaskMeta({
+      taskID: task.id(),
+      componentIdx: task.componentIdx(),
+      fn: () => numericsU64ToDecimal(toUint64(arg0)),
+    });
+  } catch (err) {
+    
+    task.setErrored(err);
+    task.reject(err);
+    task.exit();
+    throw err;
+    
+  }
   
   let variant7;
   switch (dataView(memory0).getUint8(ret + 0, true)) {
@@ -6240,7 +6514,7 @@ function u64ToDecimal(arg0) {
   
   let cstate = getOrCreateAsyncState(0);
   cstate.mayLeave = false;
-  postReturn4(ret);
+  postReturn3(ret);
   cstate.mayLeave = true;
   task.exit();
   
@@ -6269,19 +6543,35 @@ function s64ToDecimal(arg0) {
     isManualAsync: false,
     entryFnName: 'numericsS64ToDecimal',
     getCallbackFn: () => null,
-    callbackFnName: 'null',
+    callbackFnName: null,
     errHandling: 'throw-result-err',
     callingWasmExport: true,
   });
   
   const started = task.enterSync();
-  task.setReturnMemoryIdx(0);
-  task.setReturnMemory(memory0);
-  let ret =   _withGlobalCurrentTaskMeta({
-    taskID: task.id(),
-    componentIdx: task.componentIdx(),
-    fn: () => numericsS64ToDecimal(toInt64(arg0)),
-  });
+  
+  if (0!== null) {
+    task.setReturnMemoryIdx(0);
+    task.setReturnMemory(() => memory0());
+  }
+  
+  
+  let ret;
+  
+  try {
+    ret =   _withGlobalCurrentTaskMeta({
+      taskID: task.id(),
+      componentIdx: task.componentIdx(),
+      fn: () => numericsS64ToDecimal(toInt64(arg0)),
+    });
+  } catch (err) {
+    
+    task.setErrored(err);
+    task.reject(err);
+    task.exit();
+    throw err;
+    
+  }
   
   let variant7;
   switch (dataView(memory0).getUint8(ret + 0, true)) {
@@ -6390,7 +6680,7 @@ function s64ToDecimal(arg0) {
   
   let cstate = getOrCreateAsyncState(0);
   cstate.mayLeave = false;
-  postReturn4(ret);
+  postReturn3(ret);
   cstate.mayLeave = true;
   task.exit();
   
@@ -6419,19 +6709,35 @@ function f64ToDecimal(arg0) {
     isManualAsync: false,
     entryFnName: 'numericsF64ToDecimal',
     getCallbackFn: () => null,
-    callbackFnName: 'null',
+    callbackFnName: null,
     errHandling: 'throw-result-err',
     callingWasmExport: true,
   });
   
   const started = task.enterSync();
-  task.setReturnMemoryIdx(0);
-  task.setReturnMemory(memory0);
-  let ret =   _withGlobalCurrentTaskMeta({
-    taskID: task.id(),
-    componentIdx: task.componentIdx(),
-    fn: () => numericsF64ToDecimal(+arg0),
-  });
+  
+  if (0!== null) {
+    task.setReturnMemoryIdx(0);
+    task.setReturnMemory(() => memory0());
+  }
+  
+  
+  let ret;
+  
+  try {
+    ret =   _withGlobalCurrentTaskMeta({
+      taskID: task.id(),
+      componentIdx: task.componentIdx(),
+      fn: () => numericsF64ToDecimal(+arg0),
+    });
+  } catch (err) {
+    
+    task.setErrored(err);
+    task.reject(err);
+    task.exit();
+    throw err;
+    
+  }
   
   let variant7;
   switch (dataView(memory0).getUint8(ret + 0, true)) {
@@ -6540,7 +6846,7 @@ function f64ToDecimal(arg0) {
   
   let cstate = getOrCreateAsyncState(0);
   cstate.mayLeave = false;
-  postReturn4(ret);
+  postReturn3(ret);
   cstate.mayLeave = true;
   task.exit();
   
@@ -6574,19 +6880,35 @@ function stringToDecimal(arg0) {
     isManualAsync: false,
     entryFnName: 'numericsStringToDecimal',
     getCallbackFn: () => null,
-    callbackFnName: 'null',
+    callbackFnName: null,
     errHandling: 'throw-result-err',
     callingWasmExport: true,
   });
   
   const started = task.enterSync();
-  task.setReturnMemoryIdx(0);
-  task.setReturnMemory(memory0);
-  let ret =   _withGlobalCurrentTaskMeta({
-    taskID: task.id(),
-    componentIdx: task.componentIdx(),
-    fn: () => numericsStringToDecimal(ptr0, len0),
-  });
+  
+  if (0!== null) {
+    task.setReturnMemoryIdx(0);
+    task.setReturnMemory(() => memory0());
+  }
+  
+  
+  let ret;
+  
+  try {
+    ret =   _withGlobalCurrentTaskMeta({
+      taskID: task.id(),
+      componentIdx: task.componentIdx(),
+      fn: () => numericsStringToDecimal(ptr0, len0),
+    });
+  } catch (err) {
+    
+    task.setErrored(err);
+    task.reject(err);
+    task.exit();
+    throw err;
+    
+  }
   
   let variant8;
   switch (dataView(memory0).getUint8(ret + 0, true)) {
@@ -6695,7 +7017,7 @@ function stringToDecimal(arg0) {
   
   let cstate = getOrCreateAsyncState(0);
   cstate.mayLeave = false;
-  postReturn4(ret);
+  postReturn3(ret);
   cstate.mayLeave = true;
   task.exit();
   
@@ -6744,19 +7066,35 @@ function decimalToString(arg0) {
     isManualAsync: false,
     entryFnName: 'numericsDecimalToString',
     getCallbackFn: () => null,
-    callbackFnName: 'null',
+    callbackFnName: null,
     errHandling: 'none',
     callingWasmExport: true,
   });
   
   const started = task.enterSync();
-  task.setReturnMemoryIdx(0);
-  task.setReturnMemory(memory0);
-  let ret =   _withGlobalCurrentTaskMeta({
-    taskID: task.id(),
-    componentIdx: task.componentIdx(),
-    fn: () => numericsDecimalToString(toUint64(v0_0), toUint64(v0_1), toUint64(v0_2), toUint64(v0_3), enum1),
-  });
+  
+  if (0!== null) {
+    task.setReturnMemoryIdx(0);
+    task.setReturnMemory(() => memory0());
+  }
+  
+  
+  let ret;
+  
+  try {
+    ret =   _withGlobalCurrentTaskMeta({
+      taskID: task.id(),
+      componentIdx: task.componentIdx(),
+      fn: () => numericsDecimalToString(toUint64(v0_0), toUint64(v0_1), toUint64(v0_2), toUint64(v0_3), enum1),
+    });
+  } catch (err) {
+    
+    task.setErrored(err);
+    task.reject(err);
+    task.exit();
+    throw err;
+    
+  }
   
   var ptr2 = dataView(memory0).getUint32(ret + 0, true);
   var len2 = dataView(memory0).getUint32(ret + 4, true);
@@ -6772,7 +7110,7 @@ function decimalToString(arg0) {
   
   let cstate = getOrCreateAsyncState(0);
   cstate.mayLeave = false;
-  postReturn5(ret);
+  postReturn4(ret);
   cstate.mayLeave = true;
   task.exit();
   return retCopy;
@@ -6835,19 +7173,35 @@ function eqDecimal(arg0, arg1) {
     isManualAsync: false,
     entryFnName: 'numericsEqDecimal',
     getCallbackFn: () => null,
-    callbackFnName: 'null',
+    callbackFnName: null,
     errHandling: 'throw-result-err',
     callingWasmExport: true,
   });
   
   const started = task.enterSync();
-  task.setReturnMemoryIdx(0);
-  task.setReturnMemory(memory0);
-  let ret =   _withGlobalCurrentTaskMeta({
-    taskID: task.id(),
-    componentIdx: task.componentIdx(),
-    fn: () => numericsEqDecimal(toUint64(v0_0), toUint64(v0_1), toUint64(v0_2), toUint64(v0_3), enum1, toUint64(v2_0), toUint64(v2_1), toUint64(v2_2), toUint64(v2_3), enum3),
-  });
+  
+  if (0!== null) {
+    task.setReturnMemoryIdx(0);
+    task.setReturnMemory(() => memory0());
+  }
+  
+  
+  let ret;
+  
+  try {
+    ret =   _withGlobalCurrentTaskMeta({
+      taskID: task.id(),
+      componentIdx: task.componentIdx(),
+      fn: () => numericsEqDecimal(toUint64(v0_0), toUint64(v0_1), toUint64(v0_2), toUint64(v0_3), enum1, toUint64(v2_0), toUint64(v2_1), toUint64(v2_2), toUint64(v2_3), enum3),
+    });
+  } catch (err) {
+    
+    task.setErrored(err);
+    task.reject(err);
+    task.exit();
+    throw err;
+    
+  }
   
   let variant11;
   switch (dataView(memory0).getUint8(ret + 0, true)) {
@@ -6937,7 +7291,7 @@ function eqDecimal(arg0, arg1) {
   
   let cstate = getOrCreateAsyncState(0);
   cstate.mayLeave = false;
-  postReturn6(ret);
+  postReturn5(ret);
   cstate.mayLeave = true;
   task.exit();
   
@@ -7006,17 +7360,35 @@ function cmpDecimal(arg0, arg1) {
     isManualAsync: false,
     entryFnName: 'numericsCmpDecimal',
     getCallbackFn: () => null,
-    callbackFnName: 'null',
+    callbackFnName: null,
     errHandling: 'none',
     callingWasmExport: true,
   });
   
   const started = task.enterSync();
-  let ret =   _withGlobalCurrentTaskMeta({
-    taskID: task.id(),
-    componentIdx: task.componentIdx(),
-    fn: () => numericsCmpDecimal(toUint64(v0_0), toUint64(v0_1), toUint64(v0_2), toUint64(v0_3), enum1, toUint64(v2_0), toUint64(v2_1), toUint64(v2_2), toUint64(v2_3), enum3),
-  });
+  
+  if (null!== null) {
+    task.setReturnMemoryIdx(null);
+    task.setReturnMemory(() => null());
+  }
+  
+  
+  let ret;
+  
+  try {
+    ret =   _withGlobalCurrentTaskMeta({
+      taskID: task.id(),
+      componentIdx: task.componentIdx(),
+      fn: () => numericsCmpDecimal(toUint64(v0_0), toUint64(v0_1), toUint64(v0_2), toUint64(v0_3), enum1, toUint64(v2_0), toUint64(v2_1), toUint64(v2_2), toUint64(v2_3), enum3),
+    });
+  } catch (err) {
+    
+    task.setErrored(err);
+    task.reject(err);
+    task.exit();
+    throw err;
+    
+  }
   
   let enum4;
   switch (ret) {
@@ -7103,19 +7475,35 @@ function addDecimal(arg0, arg1) {
     isManualAsync: false,
     entryFnName: 'numericsAddDecimal',
     getCallbackFn: () => null,
-    callbackFnName: 'null',
+    callbackFnName: null,
     errHandling: 'throw-result-err',
     callingWasmExport: true,
   });
   
   const started = task.enterSync();
-  task.setReturnMemoryIdx(0);
-  task.setReturnMemory(memory0);
-  let ret =   _withGlobalCurrentTaskMeta({
-    taskID: task.id(),
-    componentIdx: task.componentIdx(),
-    fn: () => numericsAddDecimal(toUint64(v0_0), toUint64(v0_1), toUint64(v0_2), toUint64(v0_3), enum1, toUint64(v2_0), toUint64(v2_1), toUint64(v2_2), toUint64(v2_3), enum3),
-  });
+  
+  if (0!== null) {
+    task.setReturnMemoryIdx(0);
+    task.setReturnMemory(() => memory0());
+  }
+  
+  
+  let ret;
+  
+  try {
+    ret =   _withGlobalCurrentTaskMeta({
+      taskID: task.id(),
+      componentIdx: task.componentIdx(),
+      fn: () => numericsAddDecimal(toUint64(v0_0), toUint64(v0_1), toUint64(v0_2), toUint64(v0_3), enum1, toUint64(v2_0), toUint64(v2_1), toUint64(v2_2), toUint64(v2_3), enum3),
+    });
+  } catch (err) {
+    
+    task.setErrored(err);
+    task.reject(err);
+    task.exit();
+    throw err;
+    
+  }
   
   let variant11;
   switch (dataView(memory0).getUint8(ret + 0, true)) {
@@ -7224,7 +7612,7 @@ function addDecimal(arg0, arg1) {
   
   let cstate = getOrCreateAsyncState(0);
   cstate.mayLeave = false;
-  postReturn4(ret);
+  postReturn3(ret);
   cstate.mayLeave = true;
   task.exit();
   
@@ -7293,19 +7681,35 @@ function subDecimal(arg0, arg1) {
     isManualAsync: false,
     entryFnName: 'numericsSubDecimal',
     getCallbackFn: () => null,
-    callbackFnName: 'null',
+    callbackFnName: null,
     errHandling: 'throw-result-err',
     callingWasmExport: true,
   });
   
   const started = task.enterSync();
-  task.setReturnMemoryIdx(0);
-  task.setReturnMemory(memory0);
-  let ret =   _withGlobalCurrentTaskMeta({
-    taskID: task.id(),
-    componentIdx: task.componentIdx(),
-    fn: () => numericsSubDecimal(toUint64(v0_0), toUint64(v0_1), toUint64(v0_2), toUint64(v0_3), enum1, toUint64(v2_0), toUint64(v2_1), toUint64(v2_2), toUint64(v2_3), enum3),
-  });
+  
+  if (0!== null) {
+    task.setReturnMemoryIdx(0);
+    task.setReturnMemory(() => memory0());
+  }
+  
+  
+  let ret;
+  
+  try {
+    ret =   _withGlobalCurrentTaskMeta({
+      taskID: task.id(),
+      componentIdx: task.componentIdx(),
+      fn: () => numericsSubDecimal(toUint64(v0_0), toUint64(v0_1), toUint64(v0_2), toUint64(v0_3), enum1, toUint64(v2_0), toUint64(v2_1), toUint64(v2_2), toUint64(v2_3), enum3),
+    });
+  } catch (err) {
+    
+    task.setErrored(err);
+    task.reject(err);
+    task.exit();
+    throw err;
+    
+  }
   
   let variant11;
   switch (dataView(memory0).getUint8(ret + 0, true)) {
@@ -7414,7 +7818,7 @@ function subDecimal(arg0, arg1) {
   
   let cstate = getOrCreateAsyncState(0);
   cstate.mayLeave = false;
-  postReturn4(ret);
+  postReturn3(ret);
   cstate.mayLeave = true;
   task.exit();
   
@@ -7483,19 +7887,35 @@ function mulDecimal(arg0, arg1) {
     isManualAsync: false,
     entryFnName: 'numericsMulDecimal',
     getCallbackFn: () => null,
-    callbackFnName: 'null',
+    callbackFnName: null,
     errHandling: 'throw-result-err',
     callingWasmExport: true,
   });
   
   const started = task.enterSync();
-  task.setReturnMemoryIdx(0);
-  task.setReturnMemory(memory0);
-  let ret =   _withGlobalCurrentTaskMeta({
-    taskID: task.id(),
-    componentIdx: task.componentIdx(),
-    fn: () => numericsMulDecimal(toUint64(v0_0), toUint64(v0_1), toUint64(v0_2), toUint64(v0_3), enum1, toUint64(v2_0), toUint64(v2_1), toUint64(v2_2), toUint64(v2_3), enum3),
-  });
+  
+  if (0!== null) {
+    task.setReturnMemoryIdx(0);
+    task.setReturnMemory(() => memory0());
+  }
+  
+  
+  let ret;
+  
+  try {
+    ret =   _withGlobalCurrentTaskMeta({
+      taskID: task.id(),
+      componentIdx: task.componentIdx(),
+      fn: () => numericsMulDecimal(toUint64(v0_0), toUint64(v0_1), toUint64(v0_2), toUint64(v0_3), enum1, toUint64(v2_0), toUint64(v2_1), toUint64(v2_2), toUint64(v2_3), enum3),
+    });
+  } catch (err) {
+    
+    task.setErrored(err);
+    task.reject(err);
+    task.exit();
+    throw err;
+    
+  }
   
   let variant11;
   switch (dataView(memory0).getUint8(ret + 0, true)) {
@@ -7604,7 +8024,7 @@ function mulDecimal(arg0, arg1) {
   
   let cstate = getOrCreateAsyncState(0);
   cstate.mayLeave = false;
-  postReturn4(ret);
+  postReturn3(ret);
   cstate.mayLeave = true;
   task.exit();
   
@@ -7673,19 +8093,35 @@ function divDecimal(arg0, arg1) {
     isManualAsync: false,
     entryFnName: 'numericsDivDecimal',
     getCallbackFn: () => null,
-    callbackFnName: 'null',
+    callbackFnName: null,
     errHandling: 'throw-result-err',
     callingWasmExport: true,
   });
   
   const started = task.enterSync();
-  task.setReturnMemoryIdx(0);
-  task.setReturnMemory(memory0);
-  let ret =   _withGlobalCurrentTaskMeta({
-    taskID: task.id(),
-    componentIdx: task.componentIdx(),
-    fn: () => numericsDivDecimal(toUint64(v0_0), toUint64(v0_1), toUint64(v0_2), toUint64(v0_3), enum1, toUint64(v2_0), toUint64(v2_1), toUint64(v2_2), toUint64(v2_3), enum3),
-  });
+  
+  if (0!== null) {
+    task.setReturnMemoryIdx(0);
+    task.setReturnMemory(() => memory0());
+  }
+  
+  
+  let ret;
+  
+  try {
+    ret =   _withGlobalCurrentTaskMeta({
+      taskID: task.id(),
+      componentIdx: task.componentIdx(),
+      fn: () => numericsDivDecimal(toUint64(v0_0), toUint64(v0_1), toUint64(v0_2), toUint64(v0_3), enum1, toUint64(v2_0), toUint64(v2_1), toUint64(v2_2), toUint64(v2_3), enum3),
+    });
+  } catch (err) {
+    
+    task.setErrored(err);
+    task.reject(err);
+    task.exit();
+    throw err;
+    
+  }
   
   let variant11;
   switch (dataView(memory0).getUint8(ret + 0, true)) {
@@ -7794,7 +8230,7 @@ function divDecimal(arg0, arg1) {
   
   let cstate = getOrCreateAsyncState(0);
   cstate.mayLeave = false;
-  postReturn4(ret);
+  postReturn3(ret);
   cstate.mayLeave = true;
   task.exit();
   
@@ -7843,19 +8279,35 @@ function log10Decimal(arg0) {
     isManualAsync: false,
     entryFnName: 'numericsLog10Decimal',
     getCallbackFn: () => null,
-    callbackFnName: 'null',
+    callbackFnName: null,
     errHandling: 'throw-result-err',
     callingWasmExport: true,
   });
   
   const started = task.enterSync();
-  task.setReturnMemoryIdx(0);
-  task.setReturnMemory(memory0);
-  let ret =   _withGlobalCurrentTaskMeta({
-    taskID: task.id(),
-    componentIdx: task.componentIdx(),
-    fn: () => numericsLog10Decimal(toUint64(v0_0), toUint64(v0_1), toUint64(v0_2), toUint64(v0_3), enum1),
-  });
+  
+  if (0!== null) {
+    task.setReturnMemoryIdx(0);
+    task.setReturnMemory(() => memory0());
+  }
+  
+  
+  let ret;
+  
+  try {
+    ret =   _withGlobalCurrentTaskMeta({
+      taskID: task.id(),
+      componentIdx: task.componentIdx(),
+      fn: () => numericsLog10Decimal(toUint64(v0_0), toUint64(v0_1), toUint64(v0_2), toUint64(v0_3), enum1),
+    });
+  } catch (err) {
+    
+    task.setErrored(err);
+    task.reject(err);
+    task.exit();
+    throw err;
+    
+  }
   
   let variant9;
   switch (dataView(memory0).getUint8(ret + 0, true)) {
@@ -7964,7 +8416,7 @@ function log10Decimal(arg0) {
   
   let cstate = getOrCreateAsyncState(0);
   cstate.mayLeave = false;
-  postReturn4(ret);
+  postReturn3(ret);
   cstate.mayLeave = true;
   task.exit();
   
@@ -8020,44 +8472,36 @@ const $init = (() => {
       postReturn1Async = exports1['cabi_post_bls-verify'];
     }
     
-    postReturn2 = exports1['cabi_post_decode-op-return'];
+    postReturn2 = exports1['cabi_post_validate-wit'];
     
     try {
-      postReturn2Async = WebAssembly.promising(exports1['cabi_post_decode-op-return']);
+      postReturn2Async = WebAssembly.promising(exports1['cabi_post_validate-wit']);
     } catch(err) {
-      postReturn2Async = exports1['cabi_post_decode-op-return'];
+      postReturn2Async = exports1['cabi_post_validate-wit'];
     }
     
-    postReturn3 = exports1['cabi_post_validate-wit'];
+    postReturn3 = exports1['cabi_post_root:component/numerics#add-decimal'];
     
     try {
-      postReturn3Async = WebAssembly.promising(exports1['cabi_post_validate-wit']);
+      postReturn3Async = WebAssembly.promising(exports1['cabi_post_root:component/numerics#add-decimal']);
     } catch(err) {
-      postReturn3Async = exports1['cabi_post_validate-wit'];
+      postReturn3Async = exports1['cabi_post_root:component/numerics#add-decimal'];
     }
     
-    postReturn4 = exports1['cabi_post_root:component/numerics#add-decimal'];
+    postReturn4 = exports1['cabi_post_root:component/numerics#decimal-to-string'];
     
     try {
-      postReturn4Async = WebAssembly.promising(exports1['cabi_post_root:component/numerics#add-decimal']);
+      postReturn4Async = WebAssembly.promising(exports1['cabi_post_root:component/numerics#decimal-to-string']);
     } catch(err) {
-      postReturn4Async = exports1['cabi_post_root:component/numerics#add-decimal'];
+      postReturn4Async = exports1['cabi_post_root:component/numerics#decimal-to-string'];
     }
     
-    postReturn5 = exports1['cabi_post_root:component/numerics#decimal-to-string'];
+    postReturn5 = exports1['cabi_post_root:component/numerics#eq-decimal'];
     
     try {
-      postReturn5Async = WebAssembly.promising(exports1['cabi_post_root:component/numerics#decimal-to-string']);
+      postReturn5Async = WebAssembly.promising(exports1['cabi_post_root:component/numerics#eq-decimal']);
     } catch(err) {
-      postReturn5Async = exports1['cabi_post_root:component/numerics#decimal-to-string'];
-    }
-    
-    postReturn6 = exports1['cabi_post_root:component/numerics#eq-decimal'];
-    
-    try {
-      postReturn6Async = WebAssembly.promising(exports1['cabi_post_root:component/numerics#eq-decimal']);
-    } catch(err) {
-      postReturn6Async = exports1['cabi_post_root:component/numerics#eq-decimal'];
+      postReturn5Async = exports1['cabi_post_root:component/numerics#eq-decimal'];
     }
     
     exports1SerializeInst = exports1['serialize-inst'];
@@ -8069,8 +8513,6 @@ const $init = (() => {
     exports1BlsVerify = exports1['bls-verify'];
     exports1AggregateSigningMessage = exports1['aggregate-signing-message'];
     exports1BlsAggregateSignatures = exports1['bls-aggregate-signatures'];
-    exports1EncodeOpReturn = exports1['encode-op-return'];
-    exports1DecodeOpReturn = exports1['decode-op-return'];
     exports1ValidateWit = exports1['validate-wit'];
     witCodecConstructorWit = exports1['root:component/wit-codec#[constructor]wit'];
     witCodecMethodWitEncodeCall = exports1['root:component/wit-codec#[method]wit.encode-call'];
@@ -8159,4 +8601,4 @@ const witCodec = {
   
 };
 
-export { numerics, witCodec, aggregateSigningMessage, blsAggregateSignatures, blsPubkeyFromSecret, blsSecretFromSeedEip2333, blsSecretKeyGen, blsSign, blsVerify, decodeOpReturn, deserializeInst, encodeOpReturn, numerics as 'root:component/numerics', witCodec as 'root:component/wit-codec', serializeInst, validateWit,  }
+export { numerics, witCodec, aggregateSigningMessage, blsAggregateSignatures, blsPubkeyFromSecret, blsSecretFromSeedEip2333, blsSecretKeyGen, blsSign, blsVerify, deserializeInst, numerics as 'root:component/numerics', witCodec as 'root:component/wit-codec', serializeInst, validateWit,  }
