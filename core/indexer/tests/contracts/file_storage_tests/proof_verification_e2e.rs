@@ -80,11 +80,21 @@ async fn e2e_cross_file_aggregation(runtime: &mut Runtime) -> Result<()> {
     let result = filestorage::verify_proof(runtime, &prover_signer, proof_bytes).await??;
     assert_eq!(result.verified_count, 2, "both challenges should verify");
 
+    // Read the outcome back through the contract's get-challenges view (the
+    // prover's read surface: view-context → native challenge-registry → host
+    // ledger), filtered to proven — exercising the whole read path, not the DB.
+    let proven = filestorage::get_challenges(runtime, prover_id, Some("proven")).await?;
+    let proven_ids: std::collections::HashSet<String> =
+        proven.iter().map(|c| c.challenge_id.clone()).collect();
+    assert_eq!(
+        proven.len(),
+        2,
+        "both challenges should read back as proven"
+    );
     for cid in &challenge_ids {
-        assert_eq!(
-            latest_challenge_status(&conn, cid).await?,
-            Some(ChallengeStatus::Proven),
-            "challenge {cid} should be Proven"
+        assert!(
+            proven_ids.contains(cid),
+            "get-challenges should return {cid} as proven"
         );
     }
 

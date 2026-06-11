@@ -36,6 +36,11 @@ pub struct LatestMany<'a> {
     partition_by: Option<&'a str>,
     /// Extra predicate on the collapsed (`rank = 1`) row, e.g. `deleted = false`.
     post: Option<&'a str>,
+    /// Outer `ORDER BY` for a deterministic result order. SQLite leaves row
+    /// order unspecified without it — required when the caller consumes rows
+    /// positionally and the order must be reproducible (e.g. `keys()` feeding
+    /// consensus-critical selection).
+    order_by: Option<&'a str>,
 }
 
 impl LatestMany<'_> {
@@ -45,12 +50,16 @@ impl LatestMany<'_> {
             .map(|p| format!("PARTITION BY {p} "))
             .unwrap_or_default();
         let post = self.post.map(|p| format!(" AND {p}")).unwrap_or_default();
+        let order_by = self
+            .order_by
+            .map(|o| format!(" ORDER BY {o}"))
+            .unwrap_or_default();
         format!(
             "SELECT {select} FROM (\n  \
                SELECT *, ROW_NUMBER() OVER ({partition}ORDER BY height DESC) AS rank\n  \
                FROM {table}\n  \
                WHERE {filter}\n\
-             ) t WHERE rank = 1{post}",
+             ) t WHERE rank = 1{post}{order_by}",
             select = self.select,
             table = self.table,
             filter = self.filter,
