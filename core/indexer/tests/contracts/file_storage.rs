@@ -3,14 +3,13 @@ use testlib::*;
 #[path = "file_storage_tests/mod.rs"]
 mod file_storage_tests;
 
-// TODO(challenge-ledger migration): e2e + native_filestorage_contract tests are
-// temporarily disabled — they call contract challenge functions removed in the
-// shrink. Re-enable after rewriting them (e2e needs the get-challenges view).
-// #[testlib::test(contracts_dir = "../../test-contracts")]
-// async fn test_file_storage_regtest_e2e() -> Result<()> {
-//     file_storage_tests::proof_verification_e2e::run(runtime).await?;
-//     Ok(())
-// }
+// The aggregated-proof e2e is local: it seeds the host ledger directly (no
+// cluster storage_conn) and verifies a live proof — no precomputed fixtures.
+#[testlib::test(contracts_dir = "../../test-contracts", local_only)]
+async fn test_file_storage_e2e_aggregated_proof() -> Result<()> {
+    file_storage_tests::proof_verification_e2e::run(runtime).await?;
+    Ok(())
+}
 
 #[testlib::test(contracts_dir = "../../test-contracts")]
 async fn test_file_storage_regtest() -> Result<()> {
