@@ -50,6 +50,11 @@ pub fn generate_struct(
                             pub fn set(&self, key: &#k_ty, value: #v_ty) {
                                 stdlib::WriteStorage::__set(&self.ctx, self.base_path.push(key.to_string()), value)
                             }
+
+                            /// Remove a single entry (tombstone). Returns true if a live value existed.
+                            pub fn remove(&self, key: &#k_ty) -> bool {
+                                stdlib::WriteStorage::__delete(&self.ctx, &self.base_path.push(key.to_string()))
+                            }
                         }
                     } else {
                         quote!{}

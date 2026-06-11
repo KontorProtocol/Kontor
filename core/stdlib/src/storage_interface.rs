@@ -101,6 +101,9 @@ pub trait WriteStorage {
 
     fn __set<T: Store<Self>>(self: &alloc::rc::Rc<Self>, path: DotPathBuf, value: T);
 
+    /// Tombstone a single path. Returns true if a live value was removed.
+    fn __delete(self: &alloc::rc::Rc<Self>, path: &str) -> bool;
+
     fn __delete_matching_paths(
         self: &alloc::rc::Rc<Self>,
         base_path: &str,

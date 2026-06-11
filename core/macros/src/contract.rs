@@ -196,6 +196,10 @@ pub fn generate(config: Config) -> TokenStream {
                 T::__set(self, path, value)
             }
 
+            fn __delete(self: &alloc::rc::Rc<Self>, path: &str) -> bool {
+                self.delete(path)
+            }
+
             fn __delete_matching_paths(self: &alloc::rc::Rc<Self>, base_path: &str, variants: &[&str]) -> u64 {
                 self.delete_matching_paths(base_path, &variants.iter().map(|s| s.to_string()).collect::<Vec<_>>())
             }

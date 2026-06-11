@@ -97,6 +97,10 @@ interface context {
         set-bool: async func(path: string, value: bool);
         set-list-u8: async func(path: string, value: list<u8>);
         set-void: async func(path: string);
+        // Tombstone a single path (height-versioned delete). Returns true if a
+        // live value existed. The single-key counterpart to
+        // `delete-matching-paths`; needed for removing one map entry.
+        delete: async func(path: string) -> bool;
         delete-matching-paths: async func(base-path: string, variants: list<string>) -> u64;
         view-storage: async func() -> view-storage;
     }
