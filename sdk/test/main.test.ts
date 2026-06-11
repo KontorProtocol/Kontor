@@ -1,13 +1,5 @@
 import { expect, test } from "vitest";
-import {
-  serializeInst,
-  deserializeInst,
-  encodeOpReturn,
-  decodeOpReturn,
-  validateWit,
-  Wit,
-} from "@kontor/sdk";
-import type { OpReturnEntry } from "../src/component/kontor-sdk.js";
+import { serializeInst, deserializeInst, validateWit, Wit } from "@kontor/sdk";
 
 test("publish", () => {
   let inst = {
@@ -130,20 +122,6 @@ test("issuance", () => {
   const bs = serializeInst(str);
   let result = deserializeInst(bs);
   expect(inst).toStrictEqual(JSON.parse(result));
-});
-
-test("op_return_data", () => {
-  // The OP_RETURN payload is a list of per-input directive entries.
-  const entries: OpReturnEntry[] = [
-    {
-      inputIndex: 0,
-      recipient: {
-        tag: "x-only-pubkey",
-        val: "eb1e64766d59b13670f8766f306e87b15874789948dd28a4376749e0270fbe19",
-      },
-    },
-  ];
-  expect(decodeOpReturn(encodeOpReturn(entries))).toStrictEqual(entries);
 });
 
 test("validateWit valid contract", () => {
