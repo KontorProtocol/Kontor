@@ -477,6 +477,13 @@ export type Transaction = {
    * OP_RETURN directives, one entry per reveal input that carries one.
    */
   op_return_data: Array<OpReturnEntry>;
+  /**
+   * The transaction's raw OP_RETURN payload (the bytes pushed after
+   * `OP_RETURN`), if any. Surfaced verbatim to contracts via
+   * `transaction.op-return-data()` so they own decoding — independent of
+   * whether the bytes parse as `op_return_data` entries.
+   */
+  op_return_raw: Array<number> | null;
 };
 
 export type TransactionHex = { hex: string };

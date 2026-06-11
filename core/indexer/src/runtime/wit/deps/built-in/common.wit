@@ -61,7 +61,9 @@ interface context {
     resource transaction {
         id: async func() -> string;
         out-point: async func() -> out-point;
-        op-return-data: async func() -> option<signer-ref>;
+        // The raw OP_RETURN payload (bytes after `OP_RETURN`), if any. Contracts
+        // own decoding; the host does not interpret it.
+        op-return-data: async func() -> option<list<u8>>;
     }
 
     resource keys {

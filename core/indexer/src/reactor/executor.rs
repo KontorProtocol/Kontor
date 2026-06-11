@@ -256,11 +256,10 @@ impl Executor for RuntimeExecutor {
         // aligned.
         let mut walker = TxWalker::new();
         for input in &tx.inputs {
-            let op_return_data = tx
-                .op_return_data
-                .iter()
-                .find(|e| e.input_index == input.input_index)
-                .map(|e| e.recipient.clone());
+            // The contract-facing OP_RETURN surface is the tx's raw payload
+            // (same for every input); per-input recipient entries drive asset
+            // landing separately, off `tx.op_return_data`.
+            let op_return_data = tx.op_return_raw.clone();
             let per_input = process_input(
                 runtime,
                 &mut walker,
@@ -309,7 +308,7 @@ pub async fn process_input(
     tx_id: Option<u64>,
     tx_index: u32,
     txid: bitcoin::Txid,
-    op_return_data: Option<indexer_types::SignerRef>,
+    op_return_data: Option<Vec<u8>>,
 ) -> Result<Vec<Option<anyhow::Error>>> {
     let errors = if input.insts.is_aggregate() {
         process_aggregate_input(
@@ -348,7 +347,7 @@ async fn process_direct_input(
     tx_id: Option<u64>,
     tx_index: u32,
     txid: bitcoin::Txid,
-    op_return_data: Option<indexer_types::SignerRef>,
+    op_return_data: Option<Vec<u8>>,
 ) -> Result<Vec<Option<anyhow::Error>>> {
     let identity = runtime
         .get_or_create_identity(&input.x_only_pubkey.to_string())
@@ -388,7 +387,7 @@ async fn process_direct_input(
                     txid,
                 }),
                 Some(input.previous_output),
-                op_return_data.clone().map(Into::into),
+                op_return_data.clone(),
             )
             .await;
 
@@ -405,7 +404,7 @@ async fn process_aggregate_input(
     tx_id: Option<u64>,
     tx_index: u32,
     txid: bitcoin::Txid,
-    op_return_data: Option<indexer_types::SignerRef>,
+    op_return_data: Option<Vec<u8>>,
 ) -> Result<Vec<Option<anyhow::Error>>> {
     let n_ops = input.insts.ops.len();
     let resolved = match crate::bls::verify_aggregate(runtime, &input.insts).await {
@@ -465,7 +464,7 @@ async fn process_aggregate_input(
                     txid,
                 }),
                 Some(input.previous_output),
-                op_return_data.clone().map(Into::into),
+                op_return_data.clone(),
             )
             .await;
 

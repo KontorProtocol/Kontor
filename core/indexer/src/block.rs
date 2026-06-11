@@ -293,14 +293,19 @@ pub fn filter_map((tx_index, tx): (usize, bitcoin::Transaction)) -> Option<Trans
 
     let op_return = tx.output.iter().find(|o| o.script_pubkey.is_op_return());
     let mut op_return_data: Vec<indexer_types::OpReturnEntry> = Vec::new();
+    let mut op_return_raw: Option<Vec<u8>> = None;
 
     if let Some(op_return) = op_return {
         let mut op_return_instructions = op_return.script_pubkey.instructions();
         if let Some(Ok(Instruction::Op(OP_RETURN))) = op_return_instructions.next()
             && let Some(Ok(Instruction::PushBytes(data))) = op_return_instructions.next()
-            && let Ok(entries) = deserialize::<Vec<indexer_types::OpReturnEntry>>(data.as_bytes())
         {
-            op_return_data = entries;
+            // Keep the raw payload regardless of whether it parses as entries —
+            // contracts decode it themselves; entry parsing is a separate concern.
+            op_return_raw = Some(data.as_bytes().to_vec());
+            if let Ok(entries) = deserialize::<Vec<indexer_types::OpReturnEntry>>(data.as_bytes()) {
+                op_return_data = entries;
+            }
         }
     }
 
@@ -309,6 +314,7 @@ pub fn filter_map((tx_index, tx): (usize, bitcoin::Transaction)) -> Option<Trans
         index: tx_index as u32,
         inputs,
         op_return_data,
+        op_return_raw,
     })
 }
 

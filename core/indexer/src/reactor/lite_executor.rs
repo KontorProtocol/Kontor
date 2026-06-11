@@ -235,6 +235,7 @@ impl Executor for LiteExecutor {
             index: 0,
             inputs: vec![],
             op_return_data: Default::default(),
+            op_return_raw: None,
         })
     }
 }

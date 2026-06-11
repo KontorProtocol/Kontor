@@ -110,7 +110,6 @@ use crate::bls::RegistrationProof;
 use crate::database;
 use crate::database::native_contracts::{NATIVE_CONTRACTS, is_native_contract_id};
 use crate::database::types::CORE_SIGNER_ID;
-use crate::runtime::kontor::built_in::context::SignerRef;
 use crate::runtime::{
     counter::Counter,
     fuel::FuelGauge,
@@ -185,7 +184,7 @@ pub struct Runtime {
     pub gas_to_fuel_multiplier: u64,
     pub gas_to_token_multiplier: Decimal,
     pub previous_output: Option<bitcoin::OutPoint>,
-    pub op_return_data: Option<SignerRef>,
+    pub op_return_data: Option<Vec<u8>>,
     pub node_label: String,
     /// The chain's Bitcoin network — a genesis-fixed constant exposed to
     /// contracts via the `network()` built-in. Defaults to `Regtest` (tests /
@@ -290,7 +289,7 @@ impl Runtime {
         height: u64,
         tx_context: Option<TransactionContext>,
         previous_output: Option<bitcoin::OutPoint>,
-        op_return_data: Option<SignerRef>,
+        op_return_data: Option<Vec<u8>>,
     ) {
         self.storage.height = height;
         self.storage.tx_context = tx_context;

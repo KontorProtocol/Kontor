@@ -367,6 +367,11 @@ pub struct Transaction {
     pub inputs: Vec<Input>,
     /// OP_RETURN directives, one entry per reveal input that carries one.
     pub op_return_data: Vec<OpReturnEntry>,
+    /// The transaction's raw OP_RETURN payload (the bytes pushed after
+    /// `OP_RETURN`), if any. Surfaced verbatim to contracts via
+    /// `transaction.op-return-data()` so they own decoding — independent of
+    /// whether the bytes parse as `op_return_data` entries.
+    pub op_return_raw: Option<Vec<u8>>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, TS)]
