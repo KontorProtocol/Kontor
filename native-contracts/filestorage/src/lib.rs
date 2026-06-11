@@ -30,6 +30,86 @@ const DEFAULT_S_CHAL: u64 = 100;
 const REGTEST_S_CHAL: u64 = 8;
 
 // ─────────────────────────────────────────────────────────────────
+// GOAL END-STATE — target storage shape
+//
+// Design, not yet built: depends on a proposed `IndexedMap<K, V>` stdlib
+// type. Captured here so the contract documents where its storage is headed.
+//
+// Intent: every challenge-generation and lifecycle access pattern becomes an
+// indexed prefix lookup — no `.keys()` scan-and-filter, no nested scans, and
+// no hand-maintained index maps. All state stays in-contract (as it is today),
+// so it remains height-versioned and folded into the checkpoint hash; the only
+// thing that changes is that filtered reads hit a declared index instead of
+// scanning the whole collection.
+//
+// `IndexedMap<K, V>` = a primary `Map<K, V>` plus framework-maintained
+// secondary indexes. Each `#[index]` is a derived sub-map under a reserved
+// path whose membership IS the predicate, written/removed automatically on
+// every set/remove. `filter` makes it a partial index (only matching rows are
+// indexed). Index entries are ordinary contract_state rows: versioned,
+// reorg-safe, checkpoint-covered. The bookkeeping lives in IndexedMap (audited
+// once in stdlib), not hand-rolled per contract.
+//
+//   struct AgreementData {
+//       agreement_id: String,
+//       file_id: String,
+//       active: bool,
+//       active_challenge: Option<String>,  // co-located: "already challenged?"
+//                                          // is a point read, not a challenge scan
+//   }
+//
+//   struct Membership {                    // flattened from nested AgreementNodes
+//       agreement_id: String,
+//       signer_id: u64,                    // the node IS the signer (post-#476)
+//       active: bool,
+//   }
+//
+//   struct ChallengeData {                 // unchanged from today
+//       challenge_id: String,
+//       agreement_id: String,
+//       block_height: u64,
+//       num_challenges: u64,
+//       seed: Vec<u8>,
+//       prover_id: u64,                    // signer_id (post-#476)
+//       deadline_height: u64,
+//       status: ChallengeStatus,           // Active | Proven | Expired | Failed
+//   }
+//
+//   struct ProtocolState {
+//       min_nodes: u64,
+//       challenge_deadline_blocks: u64,
+//       c_target: u64,
+//       s_chal: u64,
+//       blocks_per_year: u64,
+//       agreement_count: u64,
+//
+//       #[index(by = "active")]                            // active-agreement set
+//       agreements: IndexedMap<String, AgreementData>,        // key = agreement_id
+//
+//       #[index(by = "agreement_id", filter = "active")]   // active nodes per agreement
+//       memberships: IndexedMap<(String, u64), Membership>,    // key = (agreement_id, signer_id)
+//
+//       #[index(by = "status")]                            // active / proven / expired sets
+//       #[index(by = ("status", "deadline_height"))]       // sortable overdue sweep (early-break)
+//       challenges: IndexedMap<String, ChallengeData>,        // key = challenge_id
+//   }
+//
+// Access pattern  →  index that serves it (all O(result), no scan):
+//   active agreements (get_all_active_agreements) → agreements[active]
+//   agreement already challenged? (generation)    → AgreementData.active_challenge (point read)
+//   active nodes for agreement (prover select)    → memberships[agreement_id, filter active]
+//   overdue active challenges (expire)            → challenges[(status, deadline_height)], break past h
+//   active challenges (get_active_challenges)     → challenges[status = active]
+//   challenge by id (verify_proof, get_challenge) → primary get (no index)
+//
+// Net: today's three bad scans — expire's full challenge scan, generation's
+// nested challenge×agreement scan (the `Vec::contains` inside the agreement
+// loop), and get_active_challenges' full scan — all collapse to indexed
+// lookups, and the index bookkeeping is owned by IndexedMap, not written by
+// hand in this contract.
+// ─────────────────────────────────────────────────────────────────
+
+// ─────────────────────────────────────────────────────────────────
 // State Types
 // ─────────────────────────────────────────────────────────────────
 
