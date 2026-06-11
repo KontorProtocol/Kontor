@@ -94,15 +94,7 @@ impl Runtime {
         let table = self.table.lock().await;
         let file_descriptor = table.get(&rep)?;
 
-        // The crypto adapter binds the prover into the challenge hash as a
-        // decimal string; produce that one representation here so the format is
-        // owned at the boundary, not inherited from a holder serialization.
-        Ok(file_descriptor.compute_challenge_id(
-            block_height,
-            num_challenges,
-            &seed,
-            prover_id.to_string(),
-        ))
+        Ok(file_descriptor.compute_challenge_id(block_height, num_challenges, &seed, prover_id))
     }
 
     async fn _proof_from_bytes<T>(
@@ -168,7 +160,7 @@ impl Runtime {
                 input.block_height,
                 input.num_challenges,
                 &input.seed,
-                input.prover_id.to_string(),
+                input.prover_id,
             ) {
                 Ok(challenge) => challenges.push(challenge),
                 Err(e) => return Ok(Err(e)),

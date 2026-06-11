@@ -25,6 +25,7 @@ use crate::database::native_contracts::NATIVE_CONTRACTS;
 use crate::database::queries::insert_block;
 use crate::database::types::FileMetadataRow;
 use crate::database::{Reader, Writer, queries};
+use crate::runtime::wit::prover_challenge_key;
 use crate::runtime::{ComponentCache, GenesisValidator, RawFileDescriptor, Runtime, Storage};
 use kontor_crypto::{
     FileLedger, PorSystem,
@@ -674,7 +675,7 @@ pub fn por_invalid_proof_bytes(prover_id: u64, num_challenges: usize) -> Result<
         20000u64,
         num_challenges,
         valid_seed_field(99).field,
-        prover_id.to_string(),
+        prover_challenge_key(prover_id),
     );
     let system = PorSystem::new(&ledger);
     let proof = system
@@ -711,14 +712,14 @@ pub fn por_cross_block_proof_bytes(prover_id: u64, num_challenges: usize) -> Res
             40000u64,
             num_challenges,
             valid_seed_field(200).field,
-            prover_id.to_string(),
+            prover_challenge_key(prover_id),
         ),
         Challenge::new(
             metadata_b,
             40000u64,
             num_challenges,
             valid_seed_field(201).field,
-            prover_id.to_string(),
+            prover_challenge_key(prover_id),
         ),
     ];
     let system = PorSystem::new(&ledger);

@@ -62,8 +62,8 @@ struct ProtocolState {
 /// must be registered signers (a failed challenge has to resolve to a slashable
 /// stake), so a non-signer holder — core, raw pubkey, utxo — is bad input here
 /// rather than a silently skipped join.
-fn require_signer_id(holder_ref: HolderRef) -> Result<u64, Error> {
-    match holder_ref {
+fn require_signer_id(signer: &context::Signer) -> Result<u64, Error> {
+    match signer.into() {
         HolderRef::SignerId(id) => Ok(id),
         _ => Err(Error::Message(
             "caller must be a registered signer identity".to_string(),
@@ -181,7 +181,7 @@ impl Guest for Filestorage {
         // replication is economic, and an operator behind multiple keys is
         // undetectable by design. Keying on the signer also makes a failed
         // challenge's `prover_id` resolve to a slashable stake.
-        let node_id = require_signer_id((&ctx.signer()).into())?;
+        let node_id = require_signer_id(&ctx.signer())?;
 
         // Validate agreement exists
         let agreement = model
@@ -237,7 +237,7 @@ impl Guest for Filestorage {
 
         // Only the signer that joined can leave its own membership — auth is
         // structural now that the key is the signer's identity.
-        let node_id = require_signer_id((&ctx.signer()).into())?;
+        let node_id = require_signer_id(&ctx.signer())?;
 
         // Validate agreement exists
         let _agreement = model
