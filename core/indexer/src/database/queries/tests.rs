@@ -2967,10 +2967,11 @@ async fn test_overdue_active_challenges() -> Result<()> {
     append_challenge_status(&conn, "chal_2", ChallengeStatus::Proven, 1).await?;
 
     // Before the deadline: nothing overdue.
-    assert!(get_overdue_active_challenges(&conn, 11).await?.is_empty());
+    assert!(get_overdue_active_challenges(&conn, 10).await?.is_empty());
 
-    // Past the deadline: only the still-active one.
-    let overdue = get_overdue_active_challenges(&conn, 12).await?;
+    // At the deadline block: the still-active one is overdue (the deadline block
+    // is the last acceptance block; expiry runs after that block's proofs).
+    let overdue = get_overdue_active_challenges(&conn, 11).await?;
     assert_eq!(overdue.len(), 1);
     assert_eq!(overdue[0].challenge_id, "chal_1");
 

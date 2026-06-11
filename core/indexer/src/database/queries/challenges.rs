@@ -151,8 +151,10 @@ pub async fn get_active_challenge_agreement_ids(conn: &Connection) -> Result<Vec
 }
 
 /// Active challenges whose deadline has passed as of `current_height` — the
-/// reactor's expiry sweep input. (`deadline_height < current_height`: the
-/// deadline block is the last block a proof is accepted in.)
+/// reactor's expiry sweep input. (`deadline_height <= current_height`: the
+/// deadline block is the last block a proof is accepted in. Expiry runs after
+/// `execute_block`, so a proof landing at the deadline block is still verified
+/// before this sweep expires the challenge that same block.)
 pub async fn get_overdue_active_challenges(
     conn: &Connection,
     current_height: u64,
@@ -160,7 +162,7 @@ pub async fn get_overdue_active_challenges(
     let base = challenge_with_status_select();
     let rows = conn
         .query(
-            &format!("{base} WHERE st.status = ? AND c.deadline_height < ?"),
+            &format!("{base} WHERE st.status = ? AND c.deadline_height <= ?"),
             params![ChallengeStatus::Active.as_str(), current_height],
         )
         .await?;
