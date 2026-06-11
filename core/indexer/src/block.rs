@@ -1,6 +1,6 @@
 use bitcoin::{
     XOnlyPublicKey,
-    opcodes::all::{OP_CHECKSIG, OP_ENDIF, OP_IF, OP_RETURN},
+    opcodes::all::{OP_CHECKSIG, OP_ENDIF, OP_IF},
     script::Instruction,
 };
 use indexer_types::{
@@ -291,19 +291,16 @@ pub fn filter_map((tx_index, tx): (usize, bitcoin::Transaction)) -> Option<Trans
         return None;
     }
 
-    let op_return = tx.output.iter().find(|o| o.script_pubkey.is_op_return());
-    let mut op_return_raw: Option<Vec<u8>> = None;
-
-    if let Some(op_return) = op_return {
-        let mut op_return_instructions = op_return.script_pubkey.instructions();
-        if let Some(Ok(Instruction::Op(OP_RETURN))) = op_return_instructions.next()
-            && let Some(Ok(Instruction::PushBytes(data))) = op_return_instructions.next()
-        {
-            // The raw payload, surfaced verbatim to contracts; the host does
-            // not interpret it.
-            op_return_raw = Some(data.as_bytes().to_vec());
-        }
-    }
+    // The full payload after the single-byte OP_RETURN opcode, surfaced verbatim
+    // to contracts; the host does not interpret it. An OP_RETURN script can carry
+    // several pushes (e.g. a marker push then a payload push), so take everything
+    // past the opcode rather than just the first push. `is_op_return` guarantees
+    // the leading byte is the opcode, so `[1..]` is safe.
+    let op_return_raw = tx
+        .output
+        .iter()
+        .find(|o| o.script_pubkey.is_op_return())
+        .map(|o| o.script_pubkey.as_bytes()[1..].to_vec());
 
     Some(Transaction {
         txid: tx.compute_txid(),
@@ -437,7 +434,7 @@ async fn resolve_publisher_signer_id_via_db(
 mod tests {
     use bitcoin::absolute::LockTime;
     use bitcoin::key::{Keypair, Secp256k1, rand};
-    use bitcoin::opcodes::all::{OP_ADD, OP_CHECKSIG, OP_ENDIF, OP_IF};
+    use bitcoin::opcodes::all::{OP_ADD, OP_CHECKSIG, OP_ENDIF, OP_IF, OP_RETURN};
     use bitcoin::opcodes::{OP_0, OP_FALSE};
     use bitcoin::script::{Builder, PushBytesBuf};
     use bitcoin::taproot::{LeafVersion, TaprootBuilder};
@@ -526,6 +523,47 @@ mod tests {
         let input = &parsed.inputs[0];
         assert_eq!(input.x_only_pubkey, xonly);
         assert_eq!(input.insts, insts);
+    }
+
+    #[test]
+    fn filter_map_captures_full_multi_push_op_return() {
+        let xonly = random_xonly();
+        let payload = serialize(&Insts::single(Inst {
+            gas_limit: 10_000,
+            kind: InstKind::Issuance,
+        }))
+        .expect("serialize");
+        let tap_script =
+            build_inscription(payload, TestPublicKey::Taproot(&xonly)).expect("build tap script");
+        let mut tx = tx_with_taproot_script_witness(tap_script, xonly);
+
+        // OP_RETURN carrying two pushes: a marker then a 32-byte payload. The
+        // capture must expose everything after the opcode, not just "kon".
+        let op_return = Builder::new()
+            .push_opcode(OP_RETURN)
+            .push_slice(b"kon")
+            .push_slice([0xABu8; 32])
+            .into_script();
+        tx.output.push(TxOut {
+            value: Amount::from_sat(0),
+            script_pubkey: op_return.clone(),
+        });
+
+        let parsed = filter_map((0, tx)).expect("recognized Kontor tx");
+        // The whole script after the single OP_RETURN opcode byte.
+        assert_eq!(
+            parsed.op_return_raw,
+            Some(op_return.as_bytes()[1..].to_vec())
+        );
+        // The second push must be present — the old first-push-only capture
+        // would have dropped it.
+        assert!(
+            parsed
+                .op_return_raw
+                .unwrap()
+                .windows(32)
+                .any(|w| w == [0xABu8; 32])
+        );
     }
 
     #[test]
