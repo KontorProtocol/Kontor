@@ -160,7 +160,7 @@ impl Runtime {
                 input.block_height,
                 input.num_challenges,
                 &input.seed,
-                input.prover_id.clone(),
+                input.prover_id,
             ) {
                 Ok(challenge) => challenges.push(challenge),
                 Err(e) => return Ok(Err(e)),

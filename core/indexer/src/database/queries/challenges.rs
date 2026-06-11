@@ -135,9 +135,7 @@ pub async fn get_challenges_by_prover(
 /// Agreement ids that currently have an active challenge — the reactor's
 /// generation-eligibility exclusion set (an agreement with a live challenge
 /// isn't re-challenged). May contain duplicates; callers dedup.
-pub async fn get_active_challenge_agreement_ids(
-    conn: &Connection,
-) -> Result<Vec<String>, Error> {
+pub async fn get_active_challenge_agreement_ids(conn: &Connection) -> Result<Vec<String>, Error> {
     let base = challenge_with_status_select();
     let mut rows = conn
         .query(

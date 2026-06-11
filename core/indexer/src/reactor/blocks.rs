@@ -203,10 +203,13 @@ impl<E: Executor> Reactor<E> {
         super::challenges::expire_challenges(&self.runtime, block.height)
             .await
             .context("Failed to expire challenges")?;
-        let generated =
-            super::challenges::generate_challenges_for_block(&mut self.runtime, block.height, &block_hash)
-                .await
-                .context("Failed to generate challenges")?;
+        let generated = super::challenges::generate_challenges_for_block(
+            &mut self.runtime,
+            block.height,
+            &block_hash,
+        )
+        .await
+        .context("Failed to generate challenges")?;
         if generated > 0 {
             info!(
                 "Generated {} challenges at block height {}",

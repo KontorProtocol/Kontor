@@ -1,4 +1,6 @@
-use indexer::database::queries::{append_challenge_status, insert_challenge, latest_challenge_status};
+use indexer::database::queries::{
+    append_challenge_status, insert_challenge, latest_challenge_status,
+};
 use indexer::database::types::{ChallengeRow, ChallengeStatus};
 use indexer::test_utils::{
     metadata_to_descriptor, por_valid_proof, prepare_por_file, valid_seed_field,
@@ -144,8 +146,14 @@ pub async fn run_core_signer(runtime: &mut Runtime) -> Result<()> {
     let s_chal = 8usize;
     let block_height = 0u64;
     let seed = valid_seed_field(7);
-    let (proof_bytes, challenge_id) =
-        por_valid_proof(&prepared, metadata, block_height, s_chal, seed.field, &prover)?;
+    let (proof_bytes, challenge_id) = por_valid_proof(
+        &prepared,
+        metadata,
+        block_height,
+        s_chal,
+        seed.field,
+        &prover,
+    )?;
 
     let conn = runtime.storage_conn();
     let prover_id: u64 = prover.parse().expect("prover is a signer_id");
@@ -159,13 +167,7 @@ pub async fn run_core_signer(runtime: &mut Runtime) -> Result<()> {
         .height(block_height)
         .build();
     insert_challenge(&conn, &row).await?;
-    append_challenge_status(
-        &conn,
-        &challenge_id,
-        ChallengeStatus::Active,
-        block_height,
-    )
-    .await?;
+    append_challenge_status(&conn, &challenge_id, ChallengeStatus::Active, block_height).await?;
 
     // verify-proof reads the ledger, verifies, and records the outcome.
     let result = filestorage::verify_proof(runtime, &s1, proof_bytes).await??;

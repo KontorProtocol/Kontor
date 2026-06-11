@@ -164,11 +164,10 @@ pub async fn generate_challenges_for_block(
     }
 
     // Eligible = active and not already under a live challenge.
-    let challenged: HashSet<String> =
-        get_active_challenge_agreement_ids(&runtime.storage.conn)
-            .await?
-            .into_iter()
-            .collect();
+    let challenged: HashSet<String> = get_active_challenge_agreement_ids(&runtime.storage.conn)
+        .await?
+        .into_iter()
+        .collect();
     let eligible: Vec<_> = agreements
         .into_iter()
         .filter(|a| !challenged.contains(&a.agreement_id))
@@ -248,11 +247,11 @@ pub async fn generate_challenges_for_block(
         else {
             continue;
         };
-        let challenge_id =
-            match fd.compute_challenge_id(block_height, s_chal, &p.seed, p.prover_id) {
-                Ok(id) => id,
-                Err(_) => continue,
-            };
+        let challenge_id = match fd.compute_challenge_id(block_height, s_chal, &p.seed, p.prover_id)
+        {
+            Ok(id) => id,
+            Err(_) => continue,
+        };
         let row = ChallengeRow::builder()
             .challenge_id(challenge_id.clone())
             .prover_id(p.prover_id)
@@ -289,4 +288,42 @@ pub async fn expire_challenges(runtime: &Runtime, current_height: u64) -> Result
         .await?;
     }
     Ok(count)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{compute_num_to_challenge, uniform_index};
+
+    #[test]
+    fn num_to_challenge_zero_inputs() {
+        assert_eq!(compute_num_to_challenge(12, 0, 52560, 0), 0);
+        assert_eq!(compute_num_to_challenge(12, 10, 0, 0), 0);
+    }
+
+    #[test]
+    fn num_to_challenge_base_and_stochastic_bump() {
+        // c_target*files / blocks_per_year = 12*10/12 = 10 base, no remainder.
+        assert_eq!(compute_num_to_challenge(12, 10, 12, 0), 10);
+        // 12*1/52560 = 0 base, remainder 12 → bumps to 1 only when roll < 12.
+        assert_eq!(compute_num_to_challenge(12, 1, 52560, 0), 1);
+        assert_eq!(compute_num_to_challenge(12, 1, 52560, 11), 1);
+        assert_eq!(compute_num_to_challenge(12, 1, 52560, 12), 0);
+    }
+
+    #[test]
+    fn num_to_challenge_caps_to_total_files() {
+        // base would be 24 but only 2 files exist.
+        assert_eq!(compute_num_to_challenge(12, 2, 1, 0), 2);
+    }
+
+    #[test]
+    fn uniform_index_in_range_and_zero() {
+        let seed = [7u8; 64];
+        let mut counter = 0;
+        assert_eq!(uniform_index(&seed, &mut counter, b"x", 0), 0);
+        for _ in 0..50 {
+            let i = uniform_index(&seed, &mut counter, b"x", 5);
+            assert!(i < 5);
+        }
+    }
 }

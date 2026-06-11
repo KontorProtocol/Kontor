@@ -409,11 +409,7 @@ mod tests {
     fn test_build_challenge_empty_seed() {
         let metadata = create_fake_file_metadata("file1", "test.txt", 800000);
         let descriptor = FileDescriptor::from_row(metadata);
-        assert!(
-            descriptor
-                .build_challenge(800000, 100, &[], 1)
-                .is_err()
-        );
+        assert!(descriptor.build_challenge(800000, 100, &[], 1).is_err());
     }
 
     #[test]
