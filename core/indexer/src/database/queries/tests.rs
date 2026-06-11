@@ -2910,7 +2910,7 @@ async fn test_challenge_status_latest_wins() -> Result<()> {
     append_challenge_status(&conn, "chal_1", ChallengeStatus::Proven, 3).await?;
     let with_status = get_challenges_by_prover(&conn, prover, None).await?;
     assert_eq!(with_status.len(), 1);
-    assert_eq!(with_status[0].status, Some(ChallengeStatus::Proven));
+    assert_eq!(with_status[0].status, ChallengeStatus::Proven);
 
     Ok(())
 }

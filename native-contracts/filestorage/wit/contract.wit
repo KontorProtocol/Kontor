@@ -5,6 +5,7 @@ world root {
   use kontor:built-in/context.{view-context, proc-context, core-context, contract};
   use kontor:built-in/error.{error};
   use kontor:built-in/file-registry-types.{raw-file-descriptor};
+  use kontor:built-in/challenge-types.{challenge-status};
 
   // ─────────────────────────────────────────────────────────────────
   // Output/Storage Types
@@ -36,15 +37,7 @@ world root {
     node-id: string,
   }
 
-  // Challenge types
-  enum challenge-status {
-    active,
-    proven,
-    expired,
-    failed,
-    invalid,
-  }
-
+  // challenge-status is shared from kontor:built-in/challenge-types (use above).
   record challenge-data {
     challenge-id: string,
     agreement-id: string,

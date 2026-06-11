@@ -216,7 +216,7 @@ async fn e2e_cross_block_aggregation_with_new_agreement(runtime: &mut Runtime) -
         .expect("Challenge A should exist");
     assert_eq!(
         challenge_a_after.status,
-        filestorage::ChallengeStatus::Proven,
+        ChallengeStatus::Proven,
         "Challenge A should be Proven"
     );
 
@@ -225,7 +225,7 @@ async fn e2e_cross_block_aggregation_with_new_agreement(runtime: &mut Runtime) -
         .expect("Challenge B should exist");
     assert_eq!(
         challenge_b_after.status,
-        filestorage::ChallengeStatus::Proven,
+        ChallengeStatus::Proven,
         "Challenge B should be Proven"
     );
 

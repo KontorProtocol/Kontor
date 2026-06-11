@@ -130,9 +130,10 @@ pub async fn get_overdue_active_challenges(
     collect_challenges(rows).await
 }
 
-/// `SELECT` + `LEFT JOIN` body shared by the status-joined reads. The latest
-/// status is pinned by a `max_height_of` scalar in the `ON` clause — the only
-/// latest-by-height form usable inside a join condition.
+/// `SELECT` + `JOIN` body shared by the status-joined reads. The latest status
+/// is pinned by a `max_height_of` scalar in the `ON` clause — the only
+/// latest-by-height form usable inside a join condition. INNER JOIN: every
+/// challenge has a status (issuance co-writes the initial `active` row).
 fn challenge_with_status_select() -> String {
     format!(
         r#"SELECT
@@ -145,7 +146,7 @@ fn challenge_with_status_select() -> String {
         c.height,
         st.status
     FROM challenges c
-    LEFT JOIN challenge_status st ON st.challenge_id = c.challenge_id
+    JOIN challenge_status st ON st.challenge_id = c.challenge_id
         AND st.height = {latest}"#,
         latest = max_height_of("challenge_status", "challenge_id", "c.challenge_id"),
     )
@@ -159,13 +160,9 @@ async fn collect_challenges(mut rows: libsql::Rows) -> Result<Vec<ChallengeWithS
     Ok(out)
 }
 
-// Manual extraction (rather than `from_row`) so the nullable `status` TEXT maps
-// cleanly to `Option<ChallengeStatus>` via `FromStr`.
+// Manual extraction (rather than `from_row`) so the `status` TEXT maps to
+// `ChallengeStatus` via `FromStr`.
 fn challenge_with_status_from_row(row: &Row) -> Result<ChallengeWithStatus, Error> {
-    let status = row
-        .get::<Option<String>>(7)?
-        .map(parse_status)
-        .transpose()?;
     Ok(ChallengeWithStatus {
         challenge_id: row.get(0)?,
         prover_id: row.get::<i64>(1)? as u64,
@@ -174,7 +171,7 @@ fn challenge_with_status_from_row(row: &Row) -> Result<ChallengeWithStatus, Erro
         seed: row.get(4)?,
         deadline_height: row.get::<i64>(5)? as u64,
         height: row.get::<i64>(6)? as u64,
-        status,
+        status: parse_status(row.get(7)?)?,
     })
 }
 

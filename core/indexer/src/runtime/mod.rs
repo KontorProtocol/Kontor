@@ -17,6 +17,7 @@ mod types;
 pub mod wit;
 
 mod call;
+mod host_challenges;
 mod host_context;
 mod host_files;
 mod host_numbers;
@@ -224,6 +225,8 @@ impl Runtime {
     fn register_native(linker: &mut Linker<Self>) -> Result<()> {
         kontor::built_in::file_registry::add_to_linker::<_, Self>(linker, |s| s)?;
         kontor::built_in::registry::add_to_linker::<_, Self>(linker, |s| s)?;
+        kontor::built_in::challenge_types::add_to_linker::<_, Self>(linker, |s| s)?;
+        kontor::built_in::challenge_registry::add_to_linker::<_, Self>(linker, |s| s)?;
         Ok(())
     }
 

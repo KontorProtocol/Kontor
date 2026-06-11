@@ -474,9 +474,9 @@ pub struct ChallengeRow {
     pub height: u64,
 }
 
-/// A challenge joined to its latest status. `status` is `None` only if no
-/// status row exists yet (the `LEFT JOIN` miss); the write path pairs issuance
-/// with an initial `active` row, so in practice it's always `Some`.
+/// A challenge joined to its latest status. Status is never absent: issuance
+/// co-writes an initial `active` row at the same height, and a reorg deletes
+/// both together — so a challenge always has a status (the read INNER-JOINs).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ChallengeWithStatus {
     pub challenge_id: String,
@@ -486,7 +486,7 @@ pub struct ChallengeWithStatus {
     pub seed: Vec<u8>,
     pub deadline_height: u64,
     pub height: u64,
-    pub status: Option<ChallengeStatus>,
+    pub status: ChallengeStatus,
 }
 
 impl FileDescriptor for FileMetadataRow {

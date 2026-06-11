@@ -173,7 +173,7 @@ pub async fn run_core_signer(runtime: &mut Runtime) -> Result<()> {
 
         assert_eq!(
             challenge.status,
-            filestorage::ChallengeStatus::Active,
+            ChallengeStatus::Active,
             "New challenge should have Active status"
         );
         assert_eq!(
@@ -210,7 +210,7 @@ pub async fn run_core_signer(runtime: &mut Runtime) -> Result<()> {
             .unwrap();
         assert_eq!(
             challenge_after.status,
-            filestorage::ChallengeStatus::Expired,
+            ChallengeStatus::Expired,
             "Challenge should be Expired after deadline"
         );
 
@@ -237,7 +237,7 @@ pub async fn run_core_signer(runtime: &mut Runtime) -> Result<()> {
     for challenge in &active {
         assert_eq!(
             challenge.status,
-            filestorage::ChallengeStatus::Active,
+            ChallengeStatus::Active,
             "get_active_challenges should only return Active challenges"
         );
     }

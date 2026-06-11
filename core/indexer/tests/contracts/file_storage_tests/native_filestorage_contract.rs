@@ -714,7 +714,7 @@ async fn challenge_gen_with_lucky_hash(runtime: &mut Runtime) -> Result<()> {
     let challenge = &challenges[0];
     assert_eq!(challenge.agreement_id, created.agreement_id);
     assert_eq!(challenge.block_height, block_height);
-    assert_eq!(challenge.status, filestorage::ChallengeStatus::Active);
+    assert_eq!(challenge.status, ChallengeStatus::Active);
 
     // Verify get_active_challenges reflects the new challenge
     let after_active = filestorage::get_active_challenges(runtime).await?;
