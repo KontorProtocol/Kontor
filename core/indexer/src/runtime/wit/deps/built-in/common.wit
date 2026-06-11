@@ -264,6 +264,32 @@ interface file-registry-types {
     }
 }
 
+// Challenge data is public, observational state — provers read their challenges
+// (via filestorage's get-challenges view) and may cross-call for them. Only the
+// *write* (recording a proof outcome) is privileged, so the type lives here in
+// the common world while the functions stay native-only (see challenge-registry
+// in built-in-native). Types-only, like file-registry-types.
+interface challenge-types {
+    enum challenge-status {
+        active,
+        proven,
+        expired,
+        failed,
+        invalid,
+    }
+
+    record challenge {
+        challenge-id: string,
+        prover-id: u64,
+        agreement-id: string,
+        num-challenges: u64,
+        seed: list<u8>,
+        deadline-height: u64,
+        height: u64,
+        status: challenge-status,
+    }
+}
+
 world built-in {
     import context;
     import foreign;
@@ -272,4 +298,5 @@ world built-in {
     import numbers;
     import testing;
     import file-registry-types;
+    import challenge-types;
 }

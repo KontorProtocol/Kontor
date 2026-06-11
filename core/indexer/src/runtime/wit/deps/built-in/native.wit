@@ -57,25 +57,10 @@ interface registry {
 /// outcomes. Issuance + expiry are written reactor-native (direct SQL); this
 /// interface is the contract's seam — recording a `proven` transition from
 /// verify-proof, and reading a prover's challenges for the get-challenges view.
+/// The `challenge`/`challenge-status` types are public (challenge-types, common
+/// world); only these functions are privileged.
 interface challenge-registry {
-    enum challenge-status {
-        active,
-        proven,
-        expired,
-        failed,
-        invalid,
-    }
-
-    record challenge {
-        challenge-id: string,
-        prover-id: u64,
-        agreement-id: string,
-        num-challenges: u64,
-        seed: list<u8>,
-        deadline-height: u64,
-        height: u64,
-        status: challenge-status,
-    }
+    use challenge-types.{challenge, challenge-status};
 
     /// Append a status transition for a challenge at the current block height
     /// (the host supplies the height — the caller can't backdate it).

@@ -217,6 +217,7 @@ impl Runtime {
         kontor::built_in::numbers::add_to_linker::<_, Self>(linker, |s| s)?;
         kontor::built_in::testing::add_to_linker::<_, Self>(linker, |s| s)?;
         kontor::built_in::file_registry_types::add_to_linker::<_, Self>(linker, |s| s)?;
+        kontor::built_in::challenge_types::add_to_linker::<_, Self>(linker, |s| s)?;
         Ok(())
     }
 

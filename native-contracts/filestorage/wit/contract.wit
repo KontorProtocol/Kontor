@@ -5,6 +5,7 @@ world root {
   use kontor:built-in/context.{view-context, proc-context, core-context, contract};
   use kontor:built-in/error.{error};
   use kontor:built-in/file-registry-types.{raw-file-descriptor};
+  use kontor:built-in/challenge-types.{challenge};
 
   // ─────────────────────────────────────────────────────────────────
   // Output/Storage Types
@@ -39,6 +40,7 @@ world root {
   record verify-proof-result {
     verified-count: u64,
   }
+
 
   // ─────────────────────────────────────────────────────────────────
   // Functions
@@ -99,5 +101,14 @@ world root {
     ctx: borrow<proc-context>,
     proof-bytes: list<u8>
   ) -> result<verify-proof-result, error>;
+
+  // A prover's challenges from the host ledger, optionally filtered to a single
+  // status (active / proven / expired / failed / invalid). The read surface for
+  // provers discovering what they must prove.
+  export get-challenges: async func(
+    ctx: borrow<view-context>,
+    prover-id: u64,
+    status: option<string>
+  ) -> list<challenge>;
 
 }

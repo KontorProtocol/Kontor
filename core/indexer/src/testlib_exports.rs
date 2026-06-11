@@ -7,6 +7,7 @@ pub use crate::{
         wit::{
             Signer,
             kontor::built_in::{
+                challenge_types::Challenge,
                 context::ContractAddress,
                 context::{HolderRef, OutPoint},
                 error::Error,

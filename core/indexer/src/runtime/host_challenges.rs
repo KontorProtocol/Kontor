@@ -7,7 +7,7 @@ use crate::database::queries::{
 };
 use crate::database::types::{ChallengeStatus as DbChallengeStatus, ChallengeWithStatus};
 
-use built_in::challenge_registry::{Challenge, ChallengeStatus};
+use built_in::challenge_types::{Challenge, ChallengeStatus};
 
 impl From<ChallengeStatus> for DbChallengeStatus {
     fn from(s: ChallengeStatus) -> Self {
@@ -96,6 +96,8 @@ impl Runtime {
         Ok(row.map(Challenge::from))
     }
 }
+
+impl built_in::challenge_types::Host for Runtime {}
 
 impl built_in::challenge_registry::Host for Runtime {}
 

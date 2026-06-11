@@ -325,6 +325,25 @@ impl Guest for Filestorage {
             verified_count: challenge_ids.len() as u64,
         })
     }
+
+    /// A prover's challenges from the host ledger (read through the native-only
+    /// challenge-registry), optionally filtered to a single status. Status is
+    /// surfaced as a string so the contract's ABI carries no challenge-status
+    /// enum. An unrecognized status filter yields an empty list.
+    fn get_challenges(
+        _ctx: &ViewContext,
+        prover_id: u64,
+        status: Option<String>,
+    ) -> Vec<Challenge> {
+        let filter = match status.as_deref() {
+            None => None,
+            Some(s) => match parse_status(s) {
+                Some(st) => Some(st),
+                None => return Vec::new(),
+            },
+        };
+        challenge_registry::query_challenges(prover_id, filter)
+    }
 }
 
 /// Validate and register a file descriptor with the file registry host.
@@ -332,5 +351,16 @@ fn register_file_descriptor(descriptor: &RawFileDescriptor) -> Result<(), Error>
     let fd: file_registry::FileDescriptor = file_registry::FileDescriptor::from_raw(descriptor)?;
     file_registry::add_file(&fd);
     Ok(())
+}
+
+fn parse_status(s: &str) -> Option<challenge_types::ChallengeStatus> {
+    match s {
+        "active" => Some(challenge_types::ChallengeStatus::Active),
+        "proven" => Some(challenge_types::ChallengeStatus::Proven),
+        "expired" => Some(challenge_types::ChallengeStatus::Expired),
+        "failed" => Some(challenge_types::ChallengeStatus::Failed),
+        "invalid" => Some(challenge_types::ChallengeStatus::Invalid),
+        _ => None,
+    }
 }
 
