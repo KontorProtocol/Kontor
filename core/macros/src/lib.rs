@@ -10,6 +10,7 @@ mod contract_address;
 mod holder_ref;
 mod impls;
 mod import;
+mod indexed;
 mod interface;
 mod model;
 mod regtest;
@@ -101,6 +102,34 @@ pub fn derive_store(input: TokenStream) -> TokenStream {
     };
 
     TokenStream::from(expanded)
+}
+
+#[proc_macro_derive(Indexed, attributes(index))]
+pub fn derive_indexed(input: TokenStream) -> TokenStream {
+    let input = parse_macro_input!(input as DeriveInput);
+    let name = &input.ident;
+
+    let body = match &input.data {
+        Data::Struct(data_struct) => indexed::generate_index_entries(data_struct, name),
+        _ => Err(Error::new(
+            name.span(),
+            "Indexed derive only supports structs",
+        )),
+    };
+    let body = match body {
+        Ok(body) => body,
+        Err(err) => return err.to_compile_error().into(),
+    };
+
+    quote! {
+        #[automatically_derived]
+        impl stdlib::Indexed for #name {
+            fn index_entries(&self) -> alloc::vec::Vec<(&'static str, alloc::string::String)> {
+                #body
+            }
+        }
+    }
+    .into()
 }
 
 #[proc_macro_derive(Model)]

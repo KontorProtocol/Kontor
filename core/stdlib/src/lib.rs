@@ -9,8 +9,8 @@ mod wave_interfaces;
 pub use dot_path_buf::*;
 pub use indexed_map::*;
 pub use macros::{
-    Model, Root, Storage, StorageRoot, Store, Wavey, contract, contract_address, holder_ref, impls,
-    import, interface,
+    Indexed, Model, Root, Storage, StorageRoot, Store, Wavey, contract, contract_address,
+    holder_ref, impls, import, interface,
 };
 pub use storage_interface::*;
 pub use wasm_wave;
