@@ -34,44 +34,51 @@ one orthogonal concern:
 | *(orthogonal)* **primary key K** | may be compound/tuple; encoded into the `<pk>` segment(s) | scalar |
 
 The whole point: these compose. A "due challenges" index is bucket=`status`,
-sort=`deadline_height`; make it covering by adding project=`[agreement_id]`; make
-it partial with predicate=`active`. None of those choices interfere.
+sort=`deadline_height`; make it covering by adding project=`agreement_id`; turn a
+bucket field into a composite over a discriminant (`Option`/enum) to get a filter
+without a predicate DSL. None of those choices interfere.
 
 ## Storage layout — one leaf shape
 
-Every index, regardless of axes, is a sibling subtree `<map>#idx/<index>/…`:
+Every index, regardless of axes, is a sibling subtree `<map>#idx/<index>/…`, and
+**the member leaf is always exactly one segment under its bucket**:
 
 ```text
-<map>#idx/<index>/<bucket…>[/<sort>]/<pk>   ->   () | <projection>
-<map>#idx/<index>/<bucket…>                 ->   <count: u64>     (per-bucket count, shipped)
+<map>#idx/<index>/<bucket…>/<sort‖pk>   ->   () | <projection>
+<map>#idx/<index>/<bucket…>             ->   <count: u64>     (per-bucket count, shipped)
 ```
 
 - `<bucket…>` — one segment per bucket field (`IndexKey`); composite = several
   segments in declared order.
-- `<sort>` — present only for sortable indexes: the `SortKey` (order-preserving,
-  fixed-width) of the sort field. Inserted **before** `<pk>` so path order ==
-  sort order.
+- `<sort‖pk>` — the **member segment**: an optional fixed-width `SortKey` prefix
+  concatenated with the primary key. Because the sort prefix is fixed width,
+  lexicographic order of this one segment == (sort order, then pk order), and the
+  pk is recovered by stripping the known-width prefix. Unsorted index ⇒ no prefix
+  ⇒ the segment *is* the pk (today's layout). Keeping sort+pk in **one** segment
+  means an ordered scan is a **single** `keys()` cursor (not a nested two-level
+  walk), and the count / `by_index` logic is unchanged — members are still direct
+  children of the bucket.
 - `<pk>` — the primary key (`ToString`); compound keys encode here (§ Compound
   keys).
-- **leaf value** — `()` (void) for a plain index, or the packed `<projection>`
-  for a covering index.
-- **count** — unchanged: lives *at* the deepest bucket node, members are its
-  descendants, so it stays invisible to the child-scan.
+- **leaf value** — `()` (void) for a plain index, or the `<projection>` for a
+  covering index. A value at the leaf is invisible to `keys()`/the count (those
+  see child *segments*), so covering is transparent to them.
+- **count** — unchanged: lives *at* the bucket node; members are its direct
+  children, so it stays invisible to the child-scan.
 
 This single shape is the forward-compatibility lever — each axis is an
-independent edit to the leaf path/value:
+independent edit to the member segment or the leaf value:
 
 ```text
 plain single-field   <map>#idx/status/active/<pk> -> ()                 (today)
 composite            <map>#idx/owner_status/42/active/<pk> -> ()
-sortable             <map>#idx/due/active/<padDeadline>/<pk> -> ()
+sortable             <map>#idx/due/active/<padDeadline‖pk> -> ()
 covering             <map>#idx/active/true/<pk> -> <proj>
-sortable+covering    <map>#idx/due/active/<padDeadline>/<pk> -> <proj>
-partial              any of the above, but the leaf exists only while predicate holds
+sortable+covering    <map>#idx/due/active/<padDeadline‖pk> -> <proj>
 ```
 
-The shipped single-field index is exactly the degenerate case (no sort segment,
-void leaf, always-present), so it keeps working untouched.
+The shipped single-field index is exactly the degenerate case (no sort prefix,
+void leaf), so it keeps working untouched.
 
 ## Sortable key encoding (`SortKey`)
 
@@ -93,8 +100,10 @@ Bucketing and ordering are **different jobs**, so two traits:
 
 Rules: sort fields must be `SortKey`; the width is part of the index's on-disk
 format, fixed for the life of the (immutable) contract — no migration story
-needed (see Resolved decisions). This same encoding fixes the standalone
-"`u64` keys sort lexicographically" footgun for primary keys too.
+needed (see Resolved decisions). Hex is used (not raw big-endian bytes) so the
+segment is path-safe (printable, no `.`); the cost is a fixed 16 chars on every
+sorted leaf's path — acceptable. This same encoding fixes the standalone "`u64`
+keys sort lexicographically" footgun for primary keys too.
 
 ## Declaration syntax
 
@@ -149,27 +158,58 @@ struct IndexEntry {
 }
 ```
 
-The single field model still computes `old`/`new` descriptor sets and hands them
-to **one** generalized `apply_index_diff`, which builds the leaf path
-`<index>/<bucket…>[/<sort>]/<pk>`, writes `()` or the projection, and adjusts the
-bucket count exactly as today (gated on `__delete`'s result). Partial = the
-descriptor set just doesn't include the entry when the predicate is false (the
-diff then removes it on the transition). So **no new maintenance code path per
-axis** — they're all variations of "which descriptors, and what's in the leaf."
+The field model computes `old`/`new` descriptor sets and hands them to **one**
+generalized `apply_index_diff`. The diff **keys on the leaf PATH**
+(`<index>/<bucket…>/<sort‖pk>`), with the projection as the leaf *value* — not on
+full-descriptor equality — so the three transitions are distinct:
+- path in `new` not in `old` → write the leaf, **+count**.
+- path in `old` not in `new` → tombstone the leaf, **−count** (gated on
+  `__delete`'s result, as today).
+- path in both, projection differs → **overwrite the leaf value in place, no count
+  change.** (Keying on equality instead would tombstone+rewrite the same path and
+  flip the count down-then-up on every projected-field change — wasted ops.)
+
+So **no new maintenance code path per axis** — they're variations of "which
+descriptors, and what's in the leaf."
+
+**Covering ⇄ in-place setters.** Today the generated `set_<field>` reconciles the
+index only when `<field>` is a *bucket* field (membership moves). A covering index
+adds a second trigger: setting a field that a covering index *projects* must also
+update that field's slot inside every such leaf. So `set_<field>` reconciles when
+the field is **bucketed OR projected** (or sorted — a sort-field change moves the
+member segment). Concretely: projecting a field makes every write of it also an
+index write — the covering cost, paid on the write path, to save reads on the
+scan path. The macro knows each field's index roles, so it emits exactly the
+needed reconciles.
 
 ## Query API (generated per index)
 
-- `where_<i>(bucket…) -> impl Iterator<Item = K>` — unsorted bucket scan (today).
+- `where_<i>(bucket…) -> impl Iterator<Item = K>` — bucket scan (today; ordered by
+  the member segment, which for a sorted index means sort order).
 - `count_<i>(bucket…) -> u64` — O(1) bucket size (today).
-- **sortable** adds a bounded/ordered scan over the `<sort>` level:
-  `where_<i>(bucket…).up_to(bound)` / `.range(lo..=hi)` — yields `(SortVal, K)` in
-  order and **stops early** at the bound. Implemented as a two-level `keys()`
-  walk (outer = sort segments in path order, early-break; inner = pks), so it
-  needs **no new host primitive** (host already returns ordered child segments).
+- **sortable** adds a bounded scan: `where_<i>(bucket…).up_to(bound)` /
+  `.range(lo..=hi)`. Implemented as a **single** `keys()` cursor over the member
+  segments (already returned in path order); the bound is the **encoded** SortKey
+  prefix, so early-break is a string comparison on the segment prefix — **no
+  SortKey decode**, and it yields plain `K` (strip the fixed-width prefix). Needs
+  **no new host primitive**.
 - **covering** changes the item type to the projection (or `(K, Proj)`): the scan
-  reads the leaf value instead of doing a follow-up `get`.
+  reads each leaf's *value* instead of a follow-up `get` on the primary map —
+  useful for **scan-and-read** endpoints, not scan-and-mutate (you need the full
+  value to mutate anyway).
 
 These are additive method generations keyed off the index's declared axes.
+
+> **Cost honesty.** `up_to`'s early-break cuts the **contract/fuel** cost to
+> O(expiring) — the expensive part. But `keys()` is backed by `live_latest`
+> (window-rank + `DISTINCT` + `ORDER BY`), so the **host still materializes the
+> whole ordered bucket** per call — O(bucket) DB work. That's still a big win (DB
+> sort ≪ wasm execution). Making the *host* sublinear too needs a **bounded
+> `keys()`/range-scan host primitive** (push `WHERE segment ≤ bound ORDER BY
+> segment LIMIT` into SQL). That primitive ranges over `path` (TEXT), so it's
+> **inside** the storage invariant — a legitimate generic follow-on, distinct
+> from the forbidden typed-column approach. Add it only if host scan cost ever
+> shows up.
 
 ## Worked example — `expire_challenges` (the motivating case)
 
@@ -197,15 +237,18 @@ fn expire_challenges(ctx, current_height) -> u64 {
 }
 ```
 
-Cost drops from O(all active challenges) per block to O(expiring + 1). With
-`include = [agreement_id]` (covering) the inner `get` for `agreement_id`
-disappears too.
+Contract/fuel cost drops from O(all active challenges) per block to O(expiring + 1)
+(the host still scans the bucket — see *Cost honesty*). Covering does **not** help
+here: `expire` mutates each due challenge, so it must `get(id)` regardless.
+Covering pays off for **scan-and-read** endpoints like `get_active_challenges`,
+which return data without mutating — there, projecting the returned fields removes
+the per-key `get`.
 
 ## Build order (each step ships independently, no rework)
 
-1. **`SortKey` + sortable single-bucket index** — the `<sort>` segment, the
-   two-level ordered/`up_to` scan, the encoding. Unblocks `expire`. (Also ships
-   the numeric-key sortability fix.)
+1. **`SortKey` + sortable single-bucket index** — the `sort‖pk` member segment,
+   the single-cursor `up_to`/`range` scan, the encoding. Unblocks `expire`. (Also
+   ships the numeric-key sortability fix.)
 2. **Composite bucket + `Option`/enum discriminant bucketing** — multiple
    `<bucket…>` segments + multi-arg `where_`, and `IndexKey for Option`. Covers
    the filestorage "eligible" filter (replaces a predicate DSL).
@@ -230,9 +273,13 @@ generalizes to an encoded tuple. Requirements:
 - **deterministic** `ToString`/`FromStr` round-trip.
 - ideally **`SortKey`** too, if you want ordered primary scans.
 This is independent of the index axes (the `<pk>` slot is the same in every leaf
-shape), so it can land last without touching index layout. Likely a length-
-prefixed or fixed-width tuple encoding (NOT naive `a:b`, which isn't delimiter-
-safe for arbitrary `a`).
+shape), so it can land last without touching index layout. For the common
+`(variable, fixed-width)` shape — e.g. `(agreement_id: String, node_id: u64)` —
+the clean encoding is a **fixed-width suffix**: `<agreement_id><16hex-node_id>`,
+recovered by splitting off the known-width tail. It's unambiguous because the
+variable part is already `.`-free and the numeric part is fixed width, and it
+sorts by `agreement_id` then `node_id`. (NOT naive `a:b`, which isn't delimiter-
+safe for arbitrary `a`.) General N-tuples of variable parts need length-prefixing.
 
 ## Resolved decisions (investigated against the codebase)
 
@@ -261,13 +308,17 @@ declare indexes through the `indexed = "…"` **string** arg, and a Rust
 expression-in-a-string is a non-starter. Sidestep it. The partial-like query we
 actually want — filestorage eligibility = `active ∧ no active_challenge` — is a
 **composite index over two discriminant-valued fields**:
-`#[index(eligible, by = (active, active_challenge))]` → `where_eligible(true, None)`.
+`#[index(eligible, by = (active, active_challenge))]` →
+`where_eligible(true, Presence::Absent)`.
 This needs only:
 1. composite buckets (already in the plan), and
 2. a small extension: **index an `Option<T>` field by its `none`/`some`
    discriminant** — an `IndexKey for Option` that keys on the discriminant (just
    like an enum). No predicate expressions, no string DSL; works identically for
-   internal structs and WIT records (you only name fields).
+   internal structs and WIT records (you only name fields). The discriminant gets
+   a generated marker (like `<E>Kind`) so the call reads `where_eligible(true,
+   Presence::Absent)` rather than a bare `None::<String>` that needs a type
+   annotation.
 
 This keeps every value in *some* bucket (`active/none`, `active/some`, …) rather
 than omitting rows. **True partial indexes** (omit a row entirely when a
