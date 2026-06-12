@@ -305,6 +305,27 @@ pub fn generate_struct(
                                     Ok(())
                                 }
                             })
+                        } else if is_indexed {
+                            // Indexed non-primitive field (e.g. an enum). Read the
+                            // old value through its model (live, via `ctx`) to
+                            // reconcile this field's index entry, then write. The
+                            // field's value must be `Display` (it becomes the
+                            // index-bucket key).
+                            let v_model_ty = get_model_ident(true, field_ty, field.span())?;
+                            Ok(quote! {
+                                pub fn #set_field_name(&self, value: #field_ty) {
+                                    let path = self.base_path.push(#field_name_str);
+                                    if let Some((index_root, index_key)) = &self.index_binding {
+                                        let old = #v_model_ty::new(self.ctx.clone(), path.clone()).load();
+                                        stdlib::apply_index_diff(
+                                            &self.ctx, index_root, index_key,
+                                            &[(#field_name_str, alloc::string::ToString::to_string(&old))],
+                                            &[(#field_name_str, alloc::string::ToString::to_string(&value))],
+                                        );
+                                    }
+                                    stdlib::WriteStorage::__set(&self.ctx, path, value);
+                                }
+                            })
                         } else {
                             Ok(setter)
                         }
