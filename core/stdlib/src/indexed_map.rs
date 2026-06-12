@@ -139,16 +139,18 @@ fn bump_bucket_count<S: WriteStorage + ReadStorage + ?Sized>(
     up: bool,
 ) {
     let current = ctx.__get_u64(bucket).unwrap_or(0);
-    // `saturating_sub` is defensive only — a decrement always follows a counted
-    // insert, so underflow would be a framework bug, not contract input.
-    ctx.__set_u64(
-        bucket,
-        if up {
-            current + 1
-        } else {
-            current.saturating_sub(1)
-        },
-    );
+    // A decrement always follows a counted insert (reorgs roll the count row back
+    // as versioned state, they don't decrement), so underflow can only mean a
+    // framework bug. Trap loudly and deterministically rather than clamp and let a
+    // wrong count drive wrong decisions — surfacing corruption, not masking it.
+    let next = if up {
+        current + 1
+    } else {
+        current
+            .checked_sub(1)
+            .expect("IndexedMap bucket count underflow — framework bug")
+    };
+    ctx.__set_u64(bucket, next);
 }
 
 storage_placeholder!(
