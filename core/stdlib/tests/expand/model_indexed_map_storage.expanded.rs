@@ -1,8 +1,10 @@
 use stdlib::{Indexed, Model, Storage};
+#[index(due, by = status, sort = deadline)]
 struct Challenge {
     pub prover: u64,
     #[index]
     pub status: u64,
+    pub deadline: u64,
 }
 #[automatically_derived]
 impl ::core::clone::Clone for Challenge {
@@ -11,6 +13,7 @@ impl ::core::clone::Clone for Challenge {
         Challenge {
             prover: ::core::clone::Clone::clone(&self.prover),
             status: ::core::clone::Clone::clone(&self.status),
+            deadline: ::core::clone::Clone::clone(&self.deadline),
         }
     }
 }
@@ -23,6 +26,7 @@ impl stdlib::Store<crate::context::ProcStorage> for Challenge {
     ) {
         stdlib::WriteStorage::__set(ctx, base_path.push("prover"), value.prover);
         stdlib::WriteStorage::__set(ctx, base_path.push("status"), value.status);
+        stdlib::WriteStorage::__set(ctx, base_path.push("deadline"), value.deadline);
     }
 }
 pub struct ChallengeModel {
@@ -40,12 +44,20 @@ impl ChallengeModel {
         }
     }
     pub fn __index_entries(&self) -> alloc::vec::Vec<stdlib::IndexEntry> {
+        let __idx_status = self.status();
+        let __idx_deadline = self.deadline();
         let mut entries = alloc::vec::Vec::new();
         entries
             .push(stdlib::IndexEntry {
                 name: "status",
                 bucket: (/*ERROR*/),
                 sort: None,
+            });
+        entries
+            .push(stdlib::IndexEntry {
+                name: "due",
+                bucket: (/*ERROR*/),
+                sort: Some(stdlib::SortKey::sort_key(&__idx_deadline).into()),
             });
         entries
     }
@@ -55,10 +67,14 @@ impl ChallengeModel {
     pub fn status(&self) -> u64 {
         stdlib::ReadStorage::__get(&self.ctx, self.base_path.push("status")).unwrap()
     }
+    pub fn deadline(&self) -> u64 {
+        stdlib::ReadStorage::__get(&self.ctx, self.base_path.push("deadline")).unwrap()
+    }
     pub fn load(&self) -> Challenge {
         Challenge {
             prover: self.prover(),
             status: self.status(),
+            deadline: self.deadline(),
         }
     }
 }
@@ -98,6 +114,9 @@ impl ChallengeWriteModel {
     pub fn status(&self) -> u64 {
         stdlib::ReadStorage::__get(&self.ctx, self.base_path.push("status")).unwrap()
     }
+    pub fn deadline(&self) -> u64 {
+        stdlib::ReadStorage::__get(&self.ctx, self.base_path.push("deadline")).unwrap()
+    }
     pub fn set_prover(&self, value: u64) {
         stdlib::WriteStorage::__set(&self.ctx, self.base_path.push("prover"), value);
     }
@@ -122,6 +141,7 @@ impl ChallengeWriteModel {
         let old: u64 = stdlib::ReadStorage::__get(&self.ctx, path.clone()).unwrap();
         let new = value;
         if let Some((index_root, index_key)) = &self.index_binding {
+            let __idx_deadline = self.deadline();
             stdlib::apply_index_diff(
                 &self.ctx,
                 index_root,
@@ -132,12 +152,22 @@ impl ChallengeWriteModel {
                         bucket: (/*ERROR*/),
                         sort: None,
                     },
+                    stdlib::IndexEntry {
+                        name: "due",
+                        bucket: (/*ERROR*/),
+                        sort: Some(stdlib::SortKey::sort_key(&__idx_deadline).into()),
+                    },
                 ],
                 &[
                     stdlib::IndexEntry {
                         name: "status",
                         bucket: (/*ERROR*/),
                         sort: None,
+                    },
+                    stdlib::IndexEntry {
+                        name: "due",
+                        bucket: (/*ERROR*/),
+                        sort: Some(stdlib::SortKey::sort_key(&__idx_deadline).into()),
                     },
                 ],
             );
@@ -149,6 +179,7 @@ impl ChallengeWriteModel {
         let old: u64 = stdlib::ReadStorage::__get(&self.ctx, path.clone()).unwrap();
         let new = f(old.clone());
         if let Some((index_root, index_key)) = &self.index_binding {
+            let __idx_deadline = self.deadline();
             stdlib::apply_index_diff(
                 &self.ctx,
                 index_root,
@@ -159,12 +190,22 @@ impl ChallengeWriteModel {
                         bucket: (/*ERROR*/),
                         sort: None,
                     },
+                    stdlib::IndexEntry {
+                        name: "due",
+                        bucket: (/*ERROR*/),
+                        sort: Some(stdlib::SortKey::sort_key(&__idx_deadline).into()),
+                    },
                 ],
                 &[
                     stdlib::IndexEntry {
                         name: "status",
                         bucket: (/*ERROR*/),
                         sort: None,
+                    },
+                    stdlib::IndexEntry {
+                        name: "due",
+                        bucket: (/*ERROR*/),
+                        sort: Some(stdlib::SortKey::sort_key(&__idx_deadline).into()),
                     },
                 ],
             );
@@ -179,6 +220,7 @@ impl ChallengeWriteModel {
         let old: u64 = stdlib::ReadStorage::__get(&self.ctx, path.clone()).unwrap();
         let new = f(old.clone())?;
         if let Some((index_root, index_key)) = &self.index_binding {
+            let __idx_deadline = self.deadline();
             stdlib::apply_index_diff(
                 &self.ctx,
                 index_root,
@@ -189,12 +231,110 @@ impl ChallengeWriteModel {
                         bucket: (/*ERROR*/),
                         sort: None,
                     },
+                    stdlib::IndexEntry {
+                        name: "due",
+                        bucket: (/*ERROR*/),
+                        sort: Some(stdlib::SortKey::sort_key(&__idx_deadline).into()),
+                    },
                 ],
                 &[
                     stdlib::IndexEntry {
                         name: "status",
                         bucket: (/*ERROR*/),
                         sort: None,
+                    },
+                    stdlib::IndexEntry {
+                        name: "due",
+                        bucket: (/*ERROR*/),
+                        sort: Some(stdlib::SortKey::sort_key(&__idx_deadline).into()),
+                    },
+                ],
+            );
+        }
+        stdlib::WriteStorage::__set(&self.ctx, path, new);
+        Ok(())
+    }
+    pub fn set_deadline(&self, value: u64) {
+        let path = self.base_path.push("deadline");
+        let old: u64 = stdlib::ReadStorage::__get(&self.ctx, path.clone()).unwrap();
+        let new = value;
+        if let Some((index_root, index_key)) = &self.index_binding {
+            let __idx_status = self.status();
+            stdlib::apply_index_diff(
+                &self.ctx,
+                index_root,
+                index_key,
+                &[
+                    stdlib::IndexEntry {
+                        name: "due",
+                        bucket: (/*ERROR*/),
+                        sort: Some(stdlib::SortKey::sort_key(&old).into()),
+                    },
+                ],
+                &[
+                    stdlib::IndexEntry {
+                        name: "due",
+                        bucket: (/*ERROR*/),
+                        sort: Some(stdlib::SortKey::sort_key(&new).into()),
+                    },
+                ],
+            );
+        }
+        stdlib::WriteStorage::__set(&self.ctx, path, new);
+    }
+    pub fn update_deadline(&self, f: impl Fn(u64) -> u64) {
+        let path = self.base_path.push("deadline");
+        let old: u64 = stdlib::ReadStorage::__get(&self.ctx, path.clone()).unwrap();
+        let new = f(old.clone());
+        if let Some((index_root, index_key)) = &self.index_binding {
+            let __idx_status = self.status();
+            stdlib::apply_index_diff(
+                &self.ctx,
+                index_root,
+                index_key,
+                &[
+                    stdlib::IndexEntry {
+                        name: "due",
+                        bucket: (/*ERROR*/),
+                        sort: Some(stdlib::SortKey::sort_key(&old).into()),
+                    },
+                ],
+                &[
+                    stdlib::IndexEntry {
+                        name: "due",
+                        bucket: (/*ERROR*/),
+                        sort: Some(stdlib::SortKey::sort_key(&new).into()),
+                    },
+                ],
+            );
+        }
+        stdlib::WriteStorage::__set(&self.ctx, path, new);
+    }
+    pub fn try_update_deadline(
+        &self,
+        f: impl Fn(u64) -> Result<u64, crate::error::Error>,
+    ) -> Result<(), crate::error::Error> {
+        let path = self.base_path.push("deadline");
+        let old: u64 = stdlib::ReadStorage::__get(&self.ctx, path.clone()).unwrap();
+        let new = f(old.clone())?;
+        if let Some((index_root, index_key)) = &self.index_binding {
+            let __idx_status = self.status();
+            stdlib::apply_index_diff(
+                &self.ctx,
+                index_root,
+                index_key,
+                &[
+                    stdlib::IndexEntry {
+                        name: "due",
+                        bucket: (/*ERROR*/),
+                        sort: Some(stdlib::SortKey::sort_key(&old).into()),
+                    },
+                ],
+                &[
+                    stdlib::IndexEntry {
+                        name: "due",
+                        bucket: (/*ERROR*/),
+                        sort: Some(stdlib::SortKey::sort_key(&new).into()),
                     },
                 ],
             );
@@ -206,6 +346,7 @@ impl ChallengeWriteModel {
         Challenge {
             prover: self.prover(),
             status: self.status(),
+            deadline: self.deadline(),
         }
     }
 }
@@ -226,6 +367,12 @@ impl stdlib::Indexed for Challenge {
                 sort: None,
             });
         entries
+            .push(stdlib::IndexEntry {
+                name: "due",
+                bucket: (/*ERROR*/),
+                sort: Some(stdlib::SortKey::sort_key(&self.deadline).into()),
+            });
+        entries
     }
 }
 pub trait ChallengeIndex<K>
@@ -243,15 +390,15 @@ where
         index_key: &str,
     ) -> impl Iterator<Item = K> + use<Self, K>;
     /// Ordered bucket scan for a *sorted* index: the bucket's `<sort‖pk>`
-    /// child segments, wrapped so `SortedScan` strips the `sort_width`-char
-    /// prefix to yield `K` and `up_to`/`range` can bound on the encoded
-    /// prefix.
-    fn by_index_sorted(
+    /// child segments, wrapped in a `SortedScan` that strips the
+    /// `S::WIDTH`-char prefix to yield `K` and bounds `up_to`/`range` on the
+    /// encoded prefix. `S` is the index's sort field type, so the bound type
+    /// and the stored prefix width can't disagree.
+    fn by_index_sorted<S: stdlib::SortKey>(
         &self,
         index_name: &str,
         index_key: &str,
-        sort_width: usize,
-    ) -> stdlib::SortedScan<K>;
+    ) -> stdlib::SortedScan<K, S>;
     /// O(1) member count of a `(index_name, index_key)` bucket, the
     /// framework-maintained size of what the scans would walk.
     fn bucket_count(&self, index_name: &str, index_key: &str) -> u64;
@@ -260,6 +407,12 @@ where
     }
     fn count_status(&self, status: u64) -> u64 {
         self.bucket_count("status", &stdlib::IndexKey::index_key(&status))
+    }
+    fn where_due(&self, status: u64) -> stdlib::SortedScan<K, u64> {
+        self.by_index_sorted::<u64>("due", &stdlib::IndexKey::index_key(&status))
+    }
+    fn count_due(&self, status: u64) -> u64 {
+        self.bucket_count("due", &stdlib::IndexKey::index_key(&status))
     }
 }
 struct ChallengeStorage {
@@ -330,17 +483,16 @@ impl ChallengeIndex<u64> for ChallengeStorageChallengesModel {
         let bucket = self.index_path.push(index_name).push(index_key);
         stdlib::ReadStorage::__get_keys(&self.ctx, &bucket)
     }
-    fn by_index_sorted(
+    fn by_index_sorted<S: stdlib::SortKey>(
         &self,
         index_name: &str,
         index_key: &str,
-        sort_width: usize,
-    ) -> stdlib::SortedScan<u64> {
+    ) -> stdlib::SortedScan<u64, S> {
         let bucket = self.index_path.push(index_name).push(index_key);
         let segments = stdlib::ReadStorage::__get_keys::<
             alloc::string::String,
         >(&self.ctx, &bucket);
-        stdlib::SortedScan::new(alloc::boxed::Box::new(segments), sort_width)
+        stdlib::SortedScan::new(alloc::boxed::Box::new(segments))
     }
     fn bucket_count(&self, index_name: &str, index_key: &str) -> u64 {
         let bucket = self.index_path.push(index_name).push(index_key);
@@ -453,17 +605,16 @@ impl ChallengeIndex<u64> for ChallengeStorageChallengesWriteModel {
         let bucket = self.index_path.push(index_name).push(index_key);
         stdlib::ReadStorage::__get_keys(&self.ctx, &bucket)
     }
-    fn by_index_sorted(
+    fn by_index_sorted<S: stdlib::SortKey>(
         &self,
         index_name: &str,
         index_key: &str,
-        sort_width: usize,
-    ) -> stdlib::SortedScan<u64> {
+    ) -> stdlib::SortedScan<u64, S> {
         let bucket = self.index_path.push(index_name).push(index_key);
         let segments = stdlib::ReadStorage::__get_keys::<
             alloc::string::String,
         >(&self.ctx, &bucket);
-        stdlib::SortedScan::new(alloc::boxed::Box::new(segments), sort_width)
+        stdlib::SortedScan::new(alloc::boxed::Box::new(segments))
     }
     fn bucket_count(&self, index_name: &str, index_key: &str) -> u64 {
         let bucket = self.index_path.push(index_name).push(index_key);

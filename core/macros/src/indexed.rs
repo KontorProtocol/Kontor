@@ -90,9 +90,9 @@ pub fn generate_lookup_trait(
                 Some(sort_field) => {
                     let sort_ty = index_decl::field_type(fields, sort_field);
                     quote! {
-                        fn #where_method(&self, #param) -> stdlib::SortedScan<K> {
+                        fn #where_method(&self, #param) -> stdlib::SortedScan<K, #sort_ty> {
                             #key_stmt
-                            self.by_index_sorted(#name, &#key_ref, <#sort_ty as stdlib::SortKey>::WIDTH)
+                            self.by_index_sorted::<#sort_ty>(#name, &#key_ref)
                         }
                     }
                 }
@@ -128,10 +128,11 @@ pub fn generate_lookup_trait(
             fn by_index(&self, index_name: &str, index_key: &str) -> impl Iterator<Item = K> + use<Self, K>;
 
             /// Ordered bucket scan for a *sorted* index: the bucket's `<sort‖pk>`
-            /// child segments, wrapped so `SortedScan` strips the `sort_width`-char
-            /// prefix to yield `K` and `up_to`/`range` can bound on the encoded
-            /// prefix.
-            fn by_index_sorted(&self, index_name: &str, index_key: &str, sort_width: usize) -> stdlib::SortedScan<K>;
+            /// child segments, wrapped in a `SortedScan` that strips the
+            /// `S::WIDTH`-char prefix to yield `K` and bounds `up_to`/`range` on the
+            /// encoded prefix. `S` is the index's sort field type, so the bound type
+            /// and the stored prefix width can't disagree.
+            fn by_index_sorted<S: stdlib::SortKey>(&self, index_name: &str, index_key: &str) -> stdlib::SortedScan<K, S>;
 
             /// O(1) member count of a `(index_name, index_key)` bucket, the
             /// framework-maintained size of what the scans would walk.

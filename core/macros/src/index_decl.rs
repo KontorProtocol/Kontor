@@ -158,6 +158,21 @@ fn field_exists(fields: &FieldsNamed, ident: &Ident) -> bool {
         .any(|f| f.ident.as_ref() == Some(ident))
 }
 
+/// Distinct fields referenced (bucket + sort) across `decls`, in first-seen
+/// order. Reading each once before building entries avoids re-reading a storage
+/// slot that two indexes share, or that a setter's old and new entry both need.
+pub fn referenced_fields<'a>(decls: impl IntoIterator<Item = &'a IndexDecl>) -> Vec<&'a Ident> {
+    let mut out: Vec<&Ident> = Vec::new();
+    for decl in decls {
+        for field in decl.by.iter().chain(decl.sort.iter()) {
+            if !out.contains(&field) {
+                out.push(field);
+            }
+        }
+    }
+    out
+}
+
 /// The declared type of a named field. Callers only pass idents that [`parse`]
 /// already validated against `fields`, so the lookup can't miss.
 pub fn field_type<'a>(fields: &'a FieldsNamed, ident: &Ident) -> &'a Type {

@@ -9,6 +9,12 @@ use syn::{
 use crate::index_decl::{self, IndexDecl};
 use crate::utils;
 
+/// The local an index-participating field is read into once, so building entries
+/// (and a setter's old + new sides) never re-reads the same storage slot.
+fn idx_local(field: &Ident) -> Ident {
+    Ident::new(&format!("__idx_{field}"), field.span())
+}
+
 pub fn generate_struct(
     data_struct: &DataStruct,
     struct_attrs: &[Attribute],
@@ -187,14 +193,15 @@ pub fn generate_struct(
                                 stdlib::ReadStorage::__get_keys(&self.ctx, &bucket)
                             }
 
-                            fn by_index_sorted(&self, index_name: &str, index_key: &str, sort_width: usize) -> stdlib::SortedScan<#k_ty> {
+                            fn by_index_sorted<S: stdlib::SortKey>(&self, index_name: &str, index_key: &str) -> stdlib::SortedScan<#k_ty, S> {
                                 let bucket = self.index_path.push(index_name).push(index_key);
                                 // Member segments are `<sort‖pk>`; pull them raw (as
                                 // `String`) so the fixed-width sort prefix survives —
                                 // parsing straight into the key type would choke on
-                                // it. `SortedScan` strips the prefix to recover `K`.
+                                // it. `SortedScan` strips the prefix (`S::WIDTH`) to
+                                // recover `K`.
                                 let segments = stdlib::ReadStorage::__get_keys::<alloc::string::String>(&self.ctx, &bucket);
-                                stdlib::SortedScan::new(alloc::boxed::Box::new(segments), sort_width)
+                                stdlib::SortedScan::new(alloc::boxed::Box::new(segments))
                             }
 
                             fn bucket_count(&self, index_name: &str, index_key: &str) -> u64 {
@@ -301,11 +308,34 @@ pub fn generate_struct(
                             .collect();
                         let participates = !relevant.is_empty();
                         let reconcile = if participates {
+                            // Read every OTHER participating field once; the changed
+                            // field uses the `old`/`new` locals, so neither the two
+                            // entry sides nor two indexes sharing a field re-read it.
+                            let others: Vec<&Ident> =
+                                index_decl::referenced_fields(relevant.iter().copied())
+                                    .into_iter()
+                                    .filter(|f| *f != field_name)
+                                    .collect();
+                            let hoists = others.iter().map(|f| {
+                                let local = idx_local(f);
+                                let read = current_value(f);
+                                quote! { let #local = #read; }
+                            });
                             let value_old = |g: &Ident| {
-                                if g == field_name { quote! { old } } else { current_value(g) }
+                                if g == field_name {
+                                    quote! { old }
+                                } else {
+                                    let local = idx_local(g);
+                                    quote! { #local }
+                                }
                             };
                             let value_new = |g: &Ident| {
-                                if g == field_name { quote! { new } } else { current_value(g) }
+                                if g == field_name {
+                                    quote! { new }
+                                } else {
+                                    let local = idx_local(g);
+                                    quote! { #local }
+                                }
                             };
                             let old_entries =
                                 relevant.iter().map(|d| index_decl::index_entry(d, &value_old));
@@ -313,6 +343,7 @@ pub fn generate_struct(
                                 relevant.iter().map(|d| index_decl::index_entry(d, &value_new));
                             quote! {
                                 if let Some((index_root, index_key)) = &self.index_binding {
+                                    #(#hoists)*
                                     stdlib::apply_index_diff(
                                         &self.ctx, index_root, index_key,
                                         &[#(#old_entries),*],
@@ -457,12 +488,25 @@ pub fn generate_struct(
             // wrote. Works for WIT values too — they get the index declarations
             // injected by `contract!`'s `indexed = "..."`.
             let index_reader = if !write && has_indexed {
+                // Read each referenced field once (a field shared by two indexes
+                // would otherwise be read per index), then build entries from the
+                // locals.
+                let hoists = index_decl::referenced_fields(&decls).into_iter().map(|f| {
+                    let local = idx_local(f);
+                    let read = current_value(f);
+                    quote! { let #local = #read; }
+                });
+                let value_for = |f: &Ident| {
+                    let local = idx_local(f);
+                    quote! { #local }
+                };
                 let pushes = decls.iter().map(|decl| {
-                    let entry = index_decl::index_entry(decl, &current_value);
+                    let entry = index_decl::index_entry(decl, &value_for);
                     quote! { entries.push(#entry); }
                 });
                 quote! {
                     pub fn __index_entries(&self) -> alloc::vec::Vec<stdlib::IndexEntry> {
+                        #(#hoists)*
                         let mut entries = alloc::vec::Vec::new();
                         #(#pushes)*
                         entries

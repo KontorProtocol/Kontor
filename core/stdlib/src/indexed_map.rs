@@ -125,77 +125,78 @@ sort_key_signed!(i8 => u8, 2, i16 => u16, 4, i32 => u32, 8, i64 => u64, 16);
 /// An ordered scan over a *sorted* index bucket. The bucket's child segments are
 /// `<sort‖pk>` (a fixed-width [`SortKey`] prefix followed by the primary key),
 /// already handed back in ascending path order by `keys()`. The scan strips the
-/// `width`-char prefix to recover each primary key `K`.
+/// prefix — exactly [`SortKey::WIDTH`] chars for the sort type `S` — to recover
+/// each primary key `K`.
 ///
 /// Iterating it directly walks the whole bucket in sort order. [`up_to`] /
 /// [`range`] bound it by comparing the **encoded** SortKey prefix — a plain
 /// string compare, no decode — and early-break, so the contract pays only for the
 /// members it keeps (the host still materializes the bucket; see the module's
-/// cost note). The bound is `impl SortKey`, so callers pass the field's real type
-/// (`up_to(height)`) and it's encoded here at the same width.
+/// cost note). The bound is typed `S` — the index's own sort field type — so its
+/// encoding can't be a different width than the stored prefix, and passing the
+/// wrong integer type is a compile error rather than a silent miscompare.
 ///
 /// [`up_to`]: SortedScan::up_to
 /// [`range`]: SortedScan::range
-pub struct SortedScan<K> {
+pub struct SortedScan<K, S> {
     // Boxed so the generated `where_<index>` can name a single return type
-    // (`SortedScan<K>`) without threading the concrete `keys()` iterator type
+    // (`SortedScan<K, S>`) without threading the concrete `keys()` iterator type
     // through the lookup trait. One box per scan — negligible next to the bucket
     // walk it wraps.
     segments: alloc::boxed::Box<dyn Iterator<Item = String>>,
-    width: usize,
     _key: core::marker::PhantomData<K>,
+    _sort: core::marker::PhantomData<S>,
 }
 
-impl<K> SortedScan<K>
+impl<K, S> SortedScan<K, S>
 where
     K: FromStr,
     <K as FromStr>::Err: core::fmt::Debug,
+    S: SortKey,
 {
-    pub fn new(segments: alloc::boxed::Box<dyn Iterator<Item = String>>, width: usize) -> Self {
+    pub fn new(segments: alloc::boxed::Box<dyn Iterator<Item = String>>) -> Self {
         Self {
             segments,
-            width,
             _key: core::marker::PhantomData,
+            _sort: core::marker::PhantomData,
         }
     }
 
     /// Members whose sort value is `≤ bound`, in ascending order. Early-breaks at
     /// the first member above the bound — nothing later in a sorted bucket can
     /// qualify.
-    pub fn up_to(self, bound: impl SortKey) -> impl Iterator<Item = K> {
+    pub fn up_to(self, bound: S) -> impl Iterator<Item = K> {
         let bound = bound.sort_key();
-        let width = self.width;
         self.segments
-            .take_while(move |seg| seg[..width] <= bound[..])
-            .map(move |seg| K::from_str(&seg[width..]).unwrap())
+            .take_while(move |seg| seg[..S::WIDTH] <= bound[..])
+            .map(|seg| K::from_str(&seg[S::WIDTH..]).unwrap())
     }
 
     /// Members whose sort value is within `range` (inclusive), in ascending order.
     /// Skips below `lo`, then early-breaks past `hi`.
-    pub fn range(self, range: core::ops::RangeInclusive<impl SortKey>) -> impl Iterator<Item = K> {
+    pub fn range(self, range: core::ops::RangeInclusive<S>) -> impl Iterator<Item = K> {
         let lo = range.start().sort_key();
         let hi = range.end().sort_key();
-        let width = self.width;
         self.segments
-            .skip_while(move |seg| seg[..width] < lo[..])
-            .take_while(move |seg| seg[..width] <= hi[..])
-            .map(move |seg| K::from_str(&seg[width..]).unwrap())
+            .skip_while(move |seg| seg[..S::WIDTH] < lo[..])
+            .take_while(move |seg| seg[..S::WIDTH] <= hi[..])
+            .map(|seg| K::from_str(&seg[S::WIDTH..]).unwrap())
     }
 }
 
-impl<K> Iterator for SortedScan<K>
+impl<K, S> Iterator for SortedScan<K, S>
 where
     K: FromStr,
     <K as FromStr>::Err: core::fmt::Debug,
+    S: SortKey,
 {
     type Item = K;
 
     /// Unbounded walk of the bucket in sort order.
     fn next(&mut self) -> Option<K> {
-        let width = self.width;
         self.segments
             .next()
-            .map(|seg| K::from_str(&seg[width..]).unwrap())
+            .map(|seg| K::from_str(&seg[S::WIDTH..]).unwrap())
     }
 }
 
@@ -768,7 +769,7 @@ mod tests {
                 .into_iter(),
             ) as alloc::boxed::Box<dyn Iterator<Item = String>>
         };
-        let scan = || SortedScan::<String>::new(segs(), <u16 as SortKey>::WIDTH);
+        let scan = || SortedScan::<String, u16>::new(segs());
 
         assert_eq!(scan().collect::<Vec<_>>(), vec!["a", "b", "c"]);
         // up_to is inclusive and early-breaks past the bound.
@@ -799,10 +800,7 @@ mod tests {
 
         let bucket = index.push("due").push("active");
         let scan = || {
-            SortedScan::<String>::new(
-                alloc::boxed::Box::new(ctx.__get_keys::<String>(&bucket)),
-                <u64 as SortKey>::WIDTH,
-            )
+            SortedScan::<String, u64>::new(alloc::boxed::Box::new(ctx.__get_keys::<String>(&bucket)))
         };
         assert_eq!(scan().collect::<Vec<_>>(), vec!["a", "b", "c"]);
         assert_eq!(scan().up_to(20u64).collect::<Vec<_>>(), vec!["a", "b"]);

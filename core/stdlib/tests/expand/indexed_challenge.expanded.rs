@@ -41,15 +41,15 @@ where
         index_key: &str,
     ) -> impl Iterator<Item = K> + use<Self, K>;
     /// Ordered bucket scan for a *sorted* index: the bucket's `<sort‖pk>`
-    /// child segments, wrapped so `SortedScan` strips the `sort_width`-char
-    /// prefix to yield `K` and `up_to`/`range` can bound on the encoded
-    /// prefix.
-    fn by_index_sorted(
+    /// child segments, wrapped in a `SortedScan` that strips the
+    /// `S::WIDTH`-char prefix to yield `K` and bounds `up_to`/`range` on the
+    /// encoded prefix. `S` is the index's sort field type, so the bound type
+    /// and the stored prefix width can't disagree.
+    fn by_index_sorted<S: stdlib::SortKey>(
         &self,
         index_name: &str,
         index_key: &str,
-        sort_width: usize,
-    ) -> stdlib::SortedScan<K>;
+    ) -> stdlib::SortedScan<K, S>;
     /// O(1) member count of a `(index_name, index_key)` bucket, the
     /// framework-maintained size of what the scans would walk.
     fn bucket_count(&self, index_name: &str, index_key: &str) -> u64;
