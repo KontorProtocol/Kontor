@@ -9405,6 +9405,7 @@ dependencies = [
 [[package]]
 name = "wit-bindgen-core"
 version = "0.58.0"
+source = "git+https://github.com/wilfreddenton/wit-bindgen?rev=2a872647adb6adec4dcd7c0504e73d3b26acb241#2a872647adb6adec4dcd7c0504e73d3b26acb241"
 dependencies = [
  "anyhow",
  "heck",
@@ -9430,6 +9431,7 @@ dependencies = [
 [[package]]
 name = "wit-bindgen-rust"
 version = "0.58.0"
+source = "git+https://github.com/wilfreddenton/wit-bindgen?rev=2a872647adb6adec4dcd7c0504e73d3b26acb241#2a872647adb6adec4dcd7c0504e73d3b26acb241"
 dependencies = [
  "anyhow",
  "heck",
@@ -9459,6 +9461,7 @@ dependencies = [
 [[package]]
 name = "wit-bindgen-rust-macro"
 version = "0.58.0"
+source = "git+https://github.com/wilfreddenton/wit-bindgen?rev=2a872647adb6adec4dcd7c0504e73d3b26acb241#2a872647adb6adec4dcd7c0504e73d3b26acb241"
 dependencies = [
  "anyhow",
  "macro-string",
