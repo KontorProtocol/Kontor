@@ -79,9 +79,7 @@ pub fn generate_struct(
                                 Map::new(&[])
                             }
 
-                            pub fn keys<'a>(
-                                &'a self,
-                            ) -> impl Iterator<Item = #k_ty> + 'a {
+                            pub fn keys(&self) -> impl Iterator<Item = #k_ty> {
                                 stdlib::ReadStorage::__get_keys(&self.ctx, &self.base_path)
                             }
                         }
@@ -160,7 +158,7 @@ pub fn generate_struct(
                                 IndexedMap::new(&[])
                             }
 
-                            pub fn keys<'a>(&'a self) -> impl Iterator<Item = #k_ty> + 'a {
+                            pub fn keys(&self) -> impl Iterator<Item = #k_ty> {
                                 stdlib::ReadStorage::__get_keys(&self.ctx, &self.base_path)
                             }
 
@@ -244,32 +242,45 @@ pub fn generate_struct(
                         let is_indexed = field.attrs.iter().any(|a| a.path().is_ident("index"));
                         if utils::is_map_type(field_ty) || utils::is_indexed_map_type(field_ty) {
                             Ok(quote! {})
-                        } else if utils::is_primitive_type(field_ty) && is_indexed {
-                            // Indexed field: every write reconciles this field's
-                            // index entry (named after the field) when the value
-                            // is bound to an IndexedMap, so an in-place set keeps
-                            // the index consistent — no need to re-set the whole
-                            // value. The reconcile reads the OLD field value first
-                            // (live, via `ctx`), then diffs against the new one.
+                        } else if utils::is_primitive_type(field_ty) {
                             let update_field_name = Ident::new(&format!("update_{}", field_name), field_name.span());
                             let try_update_field_name = Ident::new(&format!("try_update_{}", field_name), field_name.span());
-                            let reconcile = quote! {
-                                if let Some((index_root, index_key)) = &self.index_binding {
-                                    stdlib::apply_index_diff(
-                                        &self.ctx, index_root, index_key,
-                                        &[(#field_name_str, alloc::string::ToString::to_string(&old))],
-                                        &[(#field_name_str, alloc::string::ToString::to_string(&new))],
-                                    );
+                            // For an `#[index]` field bound to an IndexedMap, every
+                            // write reconciles this field's index entry (named after
+                            // the field) against its old value — so an in-place set
+                            // keeps the index consistent. Non-indexed fields: empty,
+                            // so `update`/`try_update` collapse to a plain read-modify-write.
+                            let reconcile = if is_indexed {
+                                quote! {
+                                    if let Some((index_root, index_key)) = &self.index_binding {
+                                        stdlib::apply_index_diff(
+                                            &self.ctx, index_root, index_key,
+                                            &[(#field_name_str, alloc::string::ToString::to_string(&old))],
+                                            &[(#field_name_str, alloc::string::ToString::to_string(&new))],
+                                        );
+                                    }
                                 }
+                            } else {
+                                quote! {}
+                            };
+                            // The indexed `set` must read the old value to diff it;
+                            // the plain `set` has nothing to reconcile, so it skips
+                            // the read.
+                            let set_fn = if is_indexed {
+                                quote! {
+                                    pub fn #set_field_name(&self, value: #field_ty) {
+                                        let path = self.base_path.push(#field_name_str);
+                                        let old: #field_ty = stdlib::ReadStorage::__get(&self.ctx, path.clone()).unwrap();
+                                        let new = value;
+                                        #reconcile
+                                        stdlib::WriteStorage::__set(&self.ctx, path, new);
+                                    }
+                                }
+                            } else {
+                                setter
                             };
                             Ok(quote! {
-                                pub fn #set_field_name(&self, value: #field_ty) {
-                                    let path = self.base_path.push(#field_name_str);
-                                    let old: #field_ty = stdlib::ReadStorage::__get(&self.ctx, path.clone()).unwrap();
-                                    let new = value;
-                                    #reconcile
-                                    stdlib::WriteStorage::__set(&self.ctx, path, new);
-                                }
+                                #set_fn
 
                                 pub fn #update_field_name(&self, f: impl Fn(#field_ty) -> #field_ty) {
                                     let path = self.base_path.push(#field_name_str);
@@ -285,23 +296,6 @@ pub fn generate_struct(
                                     let new = f(old.clone())?;
                                     #reconcile
                                     stdlib::WriteStorage::__set(&self.ctx, path, new);
-                                    Ok(())
-                                }
-                            })
-                        } else if utils::is_primitive_type(field_ty) {
-                            let update_field_name = Ident::new(&format!("update_{}", field_name), field_name.span());
-                            let try_update_field_name = Ident::new(&format!("try_update_{}", field_name), field_name.span());
-                            Ok(quote! {
-                                #setter
-
-                                pub fn #update_field_name(&self, f: impl Fn(#field_ty) -> #field_ty) {
-                                    let path = self.base_path.push(#field_name_str);
-                                    stdlib::WriteStorage::__set(&self.ctx, path.clone(), f(stdlib::ReadStorage::__get(&self.ctx, path).unwrap()));
-                                }
-
-                                pub fn #try_update_field_name(&self, f: impl Fn(#field_ty) -> Result<#field_ty, crate::error::Error>) -> Result<(), crate::error::Error> {
-                                    let path = self.base_path.push(#field_name_str);
-                                    stdlib::WriteStorage::__set(&self.ctx, path.clone(), f(stdlib::ReadStorage::__get(&self.ctx, path).unwrap())?);
                                     Ok(())
                                 }
                             })

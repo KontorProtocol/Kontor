@@ -50,7 +50,7 @@ impl TokenStorageLedgerModel {
     pub fn load(&self) -> Map<String, u64> {
         Map::new(&[])
     }
-    pub fn keys<'a>(&'a self) -> impl Iterator<Item = String> + 'a {
+    pub fn keys(&self) -> impl Iterator<Item = String> {
         stdlib::ReadStorage::__get_keys(&self.ctx, &self.base_path)
     }
 }
@@ -137,7 +137,7 @@ impl TokenStorageLedgerWriteModel {
     pub fn load(&self) -> Map<String, u64> {
         Map::new(&[])
     }
-    pub fn keys<'a>(&'a self) -> impl Iterator<Item = String> + 'a {
+    pub fn keys(&self) -> impl Iterator<Item = String> {
         stdlib::ReadStorage::__get_keys(&self.ctx, &self.base_path)
     }
 }

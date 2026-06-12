@@ -29,7 +29,6 @@ use alloc::format;
 use alloc::rc::Rc;
 use alloc::string::{String, ToString};
 use alloc::vec::Vec;
-use core::marker::PhantomData;
 use core::str::FromStr;
 
 use crate::{DotPathBuf, Store, WriteStorage};
@@ -59,10 +58,11 @@ fn assert_segment(s: &str) {
 /// entries are left untouched (zero ops). Index roots are siblings of the
 /// primary map.
 ///
-/// The caller computes `old`/`new`: the field model reads the old value's
-/// indexed fields through its generated model; the bulk [`Store`] impl starts
-/// from empty (a fresh wholesale write). Either way the maintenance logic lives
-/// only here.
+/// The caller computes `old`/`new`: the field model's `set`/`remove` load the
+/// prior value and read its `Indexed::index_entries`; an in-place indexed-field
+/// setter diffs just that field's entry; the bulk [`Store`] impl starts from
+/// empty (a fresh wholesale write). Either way the maintenance logic lives only
+/// here.
 pub fn apply_index_diff<S: WriteStorage + ?Sized>(
     ctx: &Rc<S>,
     index_root: &DotPathBuf,
@@ -84,45 +84,13 @@ pub fn apply_index_diff<S: WriteStorage + ?Sized>(
     }
 }
 
-/// Inert placeholder a contract declares as an `IndexedMap<K, V>` field (the
-/// `contract!` preamble aliases `IndexedMap` to this). Holds no live data — the
-/// generated field model is the real accessor — except when written wholesale,
-/// where the [`Store`] impl maintains the index.
-pub struct StorageIndexedMap<K, V, S: ?Sized> {
-    pub entries: Vec<(K, V)>,
-    pub _marker: PhantomData<S>,
-}
-
-impl<K, V, S: ?Sized> StorageIndexedMap<K, V, S>
-where
-    K: Clone,
-    V: Clone,
-{
-    pub fn new(entries: &[(K, V)]) -> Self {
-        StorageIndexedMap {
-            entries: entries.to_vec(),
-            _marker: PhantomData,
-        }
-    }
-}
-
-impl<K: Clone, V: Clone, S: ?Sized> Clone for StorageIndexedMap<K, V, S> {
-    fn clone(&self) -> Self {
-        Self {
-            entries: self.entries.clone(),
-            _marker: PhantomData,
-        }
-    }
-}
-
-impl<K, V, S: ?Sized> Default for StorageIndexedMap<K, V, S> {
-    fn default() -> Self {
-        Self {
-            entries: Vec::new(),
-            _marker: PhantomData,
-        }
-    }
-}
+storage_placeholder!(
+    /// Inert placeholder a contract declares as an `IndexedMap<K, V>` field (the
+    /// `contract!` preamble aliases `IndexedMap` to this). Holds no live data —
+    /// the generated field model is the real accessor — except when written
+    /// wholesale, where the [`Store`] impl below maintains the index.
+    StorageIndexedMap
+);
 
 impl<K, V, S> Store<S> for StorageIndexedMap<K, V, S>
 where

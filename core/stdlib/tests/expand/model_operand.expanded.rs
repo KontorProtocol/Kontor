@@ -60,22 +60,18 @@ impl OperandWriteModel {
     }
     pub fn update_y(&self, f: impl Fn(u64) -> u64) {
         let path = self.base_path.push("y");
-        stdlib::WriteStorage::__set(
-            &self.ctx,
-            path.clone(),
-            f(stdlib::ReadStorage::__get(&self.ctx, path).unwrap()),
-        );
+        let old: u64 = stdlib::ReadStorage::__get(&self.ctx, path.clone()).unwrap();
+        let new = f(old.clone());
+        stdlib::WriteStorage::__set(&self.ctx, path, new);
     }
     pub fn try_update_y(
         &self,
         f: impl Fn(u64) -> Result<u64, crate::error::Error>,
     ) -> Result<(), crate::error::Error> {
         let path = self.base_path.push("y");
-        stdlib::WriteStorage::__set(
-            &self.ctx,
-            path.clone(),
-            f(stdlib::ReadStorage::__get(&self.ctx, path).unwrap())?,
-        );
+        let old: u64 = stdlib::ReadStorage::__get(&self.ctx, path.clone()).unwrap();
+        let new = f(old.clone())?;
+        stdlib::WriteStorage::__set(&self.ctx, path, new);
         Ok(())
     }
     pub fn load(&self) -> Operand {

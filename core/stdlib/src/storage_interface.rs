@@ -1,4 +1,4 @@
-use core::{fmt::Debug, marker::PhantomData, str::FromStr};
+use core::{fmt::Debug, str::FromStr};
 
 use alloc::{
     string::{String, ToString},
@@ -221,44 +221,11 @@ where
     }
 }
 
-pub struct StorageMap<K: ToString + FromStr + Clone, V: Store<S> + Clone, S: WriteStorage + ?Sized>
-{
-    pub entries: Vec<(K, V)>,
-    pub _marker: PhantomData<S>,
-}
-
-impl<K: ToString + FromStr + Clone, V: Store<S> + Clone, S: WriteStorage + ?Sized>
-    StorageMap<K, V, S>
-{
-    pub fn new(entries: &[(K, V)]) -> Self {
-        StorageMap {
-            entries: entries.to_vec(),
-            _marker: PhantomData,
-        }
-    }
-}
-
-impl<K: ToString + FromStr + Clone, V: Store<S> + Clone, S: WriteStorage + ?Sized> Clone
-    for StorageMap<K, V, S>
-{
-    fn clone(&self) -> Self {
-        Self {
-            entries: self.entries.clone(),
-            _marker: PhantomData,
-        }
-    }
-}
-
-impl<K: ToString + FromStr + Clone, V: Store<S> + Clone, S: WriteStorage + ?Sized> Default
-    for StorageMap<K, V, S>
-{
-    fn default() -> Self {
-        Self {
-            entries: Default::default(),
-            _marker: PhantomData,
-        }
-    }
-}
+storage_placeholder!(
+    /// The declared `Map<K, V>` field placeholder. The generated field model is
+    /// the real accessor; this only holds entries for a wholesale `Store` write.
+    StorageMap
+);
 
 impl<K: ToString + FromStr + Clone, V: Store<S> + Clone, S: WriteStorage + ?Sized> Store<S>
     for StorageMap<K, V, S>

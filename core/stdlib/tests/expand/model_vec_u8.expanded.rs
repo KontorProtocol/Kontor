@@ -72,22 +72,18 @@ impl VecU8WriteModel {
     }
     pub fn update_bytes(&self, f: impl Fn(Vec<u8>) -> Vec<u8>) {
         let path = self.base_path.push("bytes");
-        stdlib::WriteStorage::__set(
-            &self.ctx,
-            path.clone(),
-            f(stdlib::ReadStorage::__get(&self.ctx, path).unwrap()),
-        );
+        let old: Vec<u8> = stdlib::ReadStorage::__get(&self.ctx, path.clone()).unwrap();
+        let new = f(old.clone());
+        stdlib::WriteStorage::__set(&self.ctx, path, new);
     }
     pub fn try_update_bytes(
         &self,
         f: impl Fn(Vec<u8>) -> Result<Vec<u8>, crate::error::Error>,
     ) -> Result<(), crate::error::Error> {
         let path = self.base_path.push("bytes");
-        stdlib::WriteStorage::__set(
-            &self.ctx,
-            path.clone(),
-            f(stdlib::ReadStorage::__get(&self.ctx, path).unwrap())?,
-        );
+        let old: Vec<u8> = stdlib::ReadStorage::__get(&self.ctx, path.clone()).unwrap();
+        let new = f(old.clone())?;
+        stdlib::WriteStorage::__set(&self.ctx, path, new);
         Ok(())
     }
     pub fn set_bytes_other(&self, value: Vec<u8>) {
@@ -99,22 +95,18 @@ impl VecU8WriteModel {
     }
     pub fn update_bytes_other(&self, f: impl Fn(Vec<u8>) -> Vec<u8>) {
         let path = self.base_path.push("bytes_other");
-        stdlib::WriteStorage::__set(
-            &self.ctx,
-            path.clone(),
-            f(stdlib::ReadStorage::__get(&self.ctx, path).unwrap()),
-        );
+        let old: Vec<u8> = stdlib::ReadStorage::__get(&self.ctx, path.clone()).unwrap();
+        let new = f(old.clone());
+        stdlib::WriteStorage::__set(&self.ctx, path, new);
     }
     pub fn try_update_bytes_other(
         &self,
         f: impl Fn(Vec<u8>) -> Result<Vec<u8>, crate::error::Error>,
     ) -> Result<(), crate::error::Error> {
         let path = self.base_path.push("bytes_other");
-        stdlib::WriteStorage::__set(
-            &self.ctx,
-            path.clone(),
-            f(stdlib::ReadStorage::__get(&self.ctx, path).unwrap())?,
-        );
+        let old: Vec<u8> = stdlib::ReadStorage::__get(&self.ctx, path.clone()).unwrap();
+        let new = f(old.clone())?;
+        stdlib::WriteStorage::__set(&self.ctx, path, new);
         Ok(())
     }
     pub fn load(&self) -> VecU8 {

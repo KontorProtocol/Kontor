@@ -95,22 +95,18 @@ impl ChallengeWriteModel {
     }
     pub fn update_prover(&self, f: impl Fn(u64) -> u64) {
         let path = self.base_path.push("prover");
-        stdlib::WriteStorage::__set(
-            &self.ctx,
-            path.clone(),
-            f(stdlib::ReadStorage::__get(&self.ctx, path).unwrap()),
-        );
+        let old: u64 = stdlib::ReadStorage::__get(&self.ctx, path.clone()).unwrap();
+        let new = f(old.clone());
+        stdlib::WriteStorage::__set(&self.ctx, path, new);
     }
     pub fn try_update_prover(
         &self,
         f: impl Fn(u64) -> Result<u64, crate::error::Error>,
     ) -> Result<(), crate::error::Error> {
         let path = self.base_path.push("prover");
-        stdlib::WriteStorage::__set(
-            &self.ctx,
-            path.clone(),
-            f(stdlib::ReadStorage::__get(&self.ctx, path).unwrap())?,
-        );
+        let old: u64 = stdlib::ReadStorage::__get(&self.ctx, path.clone()).unwrap();
+        let new = f(old.clone())?;
+        stdlib::WriteStorage::__set(&self.ctx, path, new);
         Ok(())
     }
     pub fn set_status(&self, value: u64) {
@@ -238,7 +234,7 @@ impl ChallengeStorageChallengesModel {
     pub fn load(&self) -> IndexedMap<u64, Challenge> {
         IndexedMap::new(&[])
     }
-    pub fn keys<'a>(&'a self) -> impl Iterator<Item = u64> + 'a {
+    pub fn keys(&self) -> impl Iterator<Item = u64> {
         stdlib::ReadStorage::__get_keys(&self.ctx, &self.base_path)
     }
     /// Primary keys in the `(index_name, index_key)` bucket — the indexed
@@ -363,7 +359,7 @@ impl ChallengeStorageChallengesWriteModel {
     pub fn load(&self) -> IndexedMap<u64, Challenge> {
         IndexedMap::new(&[])
     }
-    pub fn keys<'a>(&'a self) -> impl Iterator<Item = u64> + 'a {
+    pub fn keys(&self) -> impl Iterator<Item = u64> {
         stdlib::ReadStorage::__get_keys(&self.ctx, &self.base_path)
     }
     /// Primary keys in the `(index_name, index_key)` bucket — the indexed

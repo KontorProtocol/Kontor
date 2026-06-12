@@ -81,22 +81,18 @@ impl ContractAddressWriteModel {
     }
     pub fn update_name(&self, f: impl Fn(String) -> String) {
         let path = self.base_path.push("name");
-        stdlib::WriteStorage::__set(
-            &self.ctx,
-            path.clone(),
-            f(stdlib::ReadStorage::__get(&self.ctx, path).unwrap()),
-        );
+        let old: String = stdlib::ReadStorage::__get(&self.ctx, path.clone()).unwrap();
+        let new = f(old.clone());
+        stdlib::WriteStorage::__set(&self.ctx, path, new);
     }
     pub fn try_update_name(
         &self,
         f: impl Fn(String) -> Result<String, crate::error::Error>,
     ) -> Result<(), crate::error::Error> {
         let path = self.base_path.push("name");
-        stdlib::WriteStorage::__set(
-            &self.ctx,
-            path.clone(),
-            f(stdlib::ReadStorage::__get(&self.ctx, path).unwrap())?,
-        );
+        let old: String = stdlib::ReadStorage::__get(&self.ctx, path.clone()).unwrap();
+        let new = f(old.clone())?;
+        stdlib::WriteStorage::__set(&self.ctx, path, new);
         Ok(())
     }
     pub fn set_height(&self, value: i64) {
@@ -104,22 +100,18 @@ impl ContractAddressWriteModel {
     }
     pub fn update_height(&self, f: impl Fn(i64) -> i64) {
         let path = self.base_path.push("height");
-        stdlib::WriteStorage::__set(
-            &self.ctx,
-            path.clone(),
-            f(stdlib::ReadStorage::__get(&self.ctx, path).unwrap()),
-        );
+        let old: i64 = stdlib::ReadStorage::__get(&self.ctx, path.clone()).unwrap();
+        let new = f(old.clone());
+        stdlib::WriteStorage::__set(&self.ctx, path, new);
     }
     pub fn try_update_height(
         &self,
         f: impl Fn(i64) -> Result<i64, crate::error::Error>,
     ) -> Result<(), crate::error::Error> {
         let path = self.base_path.push("height");
-        stdlib::WriteStorage::__set(
-            &self.ctx,
-            path.clone(),
-            f(stdlib::ReadStorage::__get(&self.ctx, path).unwrap())?,
-        );
+        let old: i64 = stdlib::ReadStorage::__get(&self.ctx, path.clone()).unwrap();
+        let new = f(old.clone())?;
+        stdlib::WriteStorage::__set(&self.ctx, path, new);
         Ok(())
     }
     pub fn set_tx_index(&self, value: i64) {
@@ -127,22 +119,18 @@ impl ContractAddressWriteModel {
     }
     pub fn update_tx_index(&self, f: impl Fn(i64) -> i64) {
         let path = self.base_path.push("tx_index");
-        stdlib::WriteStorage::__set(
-            &self.ctx,
-            path.clone(),
-            f(stdlib::ReadStorage::__get(&self.ctx, path).unwrap()),
-        );
+        let old: i64 = stdlib::ReadStorage::__get(&self.ctx, path.clone()).unwrap();
+        let new = f(old.clone());
+        stdlib::WriteStorage::__set(&self.ctx, path, new);
     }
     pub fn try_update_tx_index(
         &self,
         f: impl Fn(i64) -> Result<i64, crate::error::Error>,
     ) -> Result<(), crate::error::Error> {
         let path = self.base_path.push("tx_index");
-        stdlib::WriteStorage::__set(
-            &self.ctx,
-            path.clone(),
-            f(stdlib::ReadStorage::__get(&self.ctx, path).unwrap())?,
-        );
+        let old: i64 = stdlib::ReadStorage::__get(&self.ctx, path.clone()).unwrap();
+        let new = f(old.clone())?;
+        stdlib::WriteStorage::__set(&self.ctx, path, new);
         Ok(())
     }
     pub fn load(&self) -> ContractAddress {

@@ -1,6 +1,49 @@
 #![no_std]
 extern crate alloc;
 
+/// The inert placeholder behind a declared `Map`/`IndexedMap` field: holds no
+/// live data (the generated field model is the real accessor), it exists only so
+/// the field has a type and so a wholesale `Store` write can persist entries.
+/// `Map` and `IndexedMap` share this shape and differ only in their `Store`
+/// impl, so the boilerplate lives here once. Defined before the modules that use
+/// it (textual macro scoping).
+macro_rules! storage_placeholder {
+    ($(#[$meta:meta])* $name:ident) => {
+        $(#[$meta])*
+        pub struct $name<K, V, S: ?Sized> {
+            pub entries: alloc::vec::Vec<(K, V)>,
+            pub _marker: core::marker::PhantomData<S>,
+        }
+
+        impl<K: Clone, V: Clone, S: ?Sized> $name<K, V, S> {
+            pub fn new(entries: &[(K, V)]) -> Self {
+                Self {
+                    entries: entries.to_vec(),
+                    _marker: core::marker::PhantomData,
+                }
+            }
+        }
+
+        impl<K: Clone, V: Clone, S: ?Sized> Clone for $name<K, V, S> {
+            fn clone(&self) -> Self {
+                Self {
+                    entries: self.entries.clone(),
+                    _marker: core::marker::PhantomData,
+                }
+            }
+        }
+
+        impl<K, V, S: ?Sized> Default for $name<K, V, S> {
+            fn default() -> Self {
+                Self {
+                    entries: alloc::vec::Vec::new(),
+                    _marker: core::marker::PhantomData,
+                }
+            }
+        }
+    };
+}
+
 mod dot_path_buf;
 mod indexed_map;
 mod storage_interface;
