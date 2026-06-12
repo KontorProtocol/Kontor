@@ -25,6 +25,7 @@
 //! struct set through `Store`) index-consistent — the field model's per-key path
 //! can't catch that.
 
+use alloc::borrow::Cow;
 use alloc::format;
 use alloc::rc::Rc;
 use alloc::string::{String, ToString};
@@ -42,18 +43,22 @@ use crate::{DotPathBuf, Store, WriteStorage};
 /// Primitives key by their `Display`. A storage enum keys by its DISCRIMINANT
 /// (case name), not its payload — so a payload-carrying case like `Failed(r)`
 /// always lands in bucket `"failed"`, and changing the payload is a no-op for
-/// the index. `#[derive(StorageEnum)]` supplies that impl (and a payload-free
+/// the index. The `Storage` derive supplies that impl (and a payload-free
 /// `<E>Kind` marker for referencing a case without constructing one).
+///
+/// Returns `Cow` so an enum discriminant (a `&'static str`) costs no allocation
+/// — the hot case, since the key is built on every `set`/`where_` just to compare
+/// or borrow as `&str`. Primitives still own (their `Display` allocates anyway).
 pub trait IndexKey {
-    fn index_key(&self) -> String;
+    fn index_key(&self) -> Cow<'static, str>;
 }
 
 macro_rules! index_key_via_display {
     ($($t:ty),*) => {
         $(
             impl IndexKey for $t {
-                fn index_key(&self) -> String {
-                    ToString::to_string(self)
+                fn index_key(&self) -> Cow<'static, str> {
+                    Cow::Owned(ToString::to_string(self))
                 }
             }
         )*
@@ -61,7 +66,7 @@ macro_rules! index_key_via_display {
 }
 
 // Primitive index keys are just their `Display`. (No blanket `impl<T: Display>`
-// — that would collide with the discriminant impl `#[derive(StorageEnum)]`
+// — that would collide with the discriminant impl the `Storage` derive
 // generates for enums.)
 index_key_via_display!(bool, u64, i64, u32, i32, String, str, &str);
 
@@ -71,7 +76,7 @@ index_key_via_display!(bool, u64, i64, u32, i32, String, str, &str);
 /// it must serialise deterministically (reproducible across nodes) and without
 /// the path delimiter (`.`); [`apply_index_diff`] enforces the latter.
 pub trait Indexed {
-    fn index_entries(&self) -> Vec<(&'static str, String)>;
+    fn index_entries(&self) -> Vec<(&'static str, Cow<'static, str>)>;
 }
 
 /// A path segment carries one index/primary key. `.` is the path delimiter, so a
@@ -99,19 +104,19 @@ pub fn apply_index_diff<S: WriteStorage + ?Sized>(
     ctx: &Rc<S>,
     index_root: &DotPathBuf,
     key: &str,
-    old: &[(&'static str, String)],
-    new: &[(&'static str, String)],
+    old: &[(&'static str, Cow<'static, str>)],
+    new: &[(&'static str, Cow<'static, str>)],
 ) {
     assert_segment(key);
     for (name, index_key) in old {
         if !new.iter().any(|(n, k)| n == name && k == index_key) {
-            ctx.__delete(&index_root.push(*name).push(index_key).push(key));
+            ctx.__delete(&index_root.push(*name).push(index_key.as_ref()).push(key));
         }
     }
     for (name, index_key) in new {
         assert_segment(index_key);
         if !old.iter().any(|(n, k)| n == name && k == index_key) {
-            ctx.__set_void(&index_root.push(*name).push(index_key).push(key));
+            ctx.__set_void(&index_root.push(*name).push(index_key.as_ref()).push(key));
         }
     }
 }
@@ -271,8 +276,8 @@ mod tests {
     }
 
     impl Indexed for Position {
-        fn index_entries(&self) -> Vec<(&'static str, String)> {
-            vec![("status", self.status.to_string())]
+        fn index_entries(&self) -> Vec<(&'static str, Cow<'static, str>)> {
+            vec![("status", self.status.to_string().into())]
         }
     }
 
@@ -289,7 +294,7 @@ mod tests {
             &index,
             "k",
             &[],
-            &[("status", "active".to_string()), ("owner", "1".to_string())],
+            &[("status", "active".into()), ("owner", "1".into())],
         );
         assert_eq!(*ctx.void_sets.borrow(), 2);
         assert_eq!(*ctx.deletes.borrow(), 0);
@@ -300,8 +305,8 @@ mod tests {
             &ctx,
             &index,
             "k",
-            &[("status", "active".to_string()), ("owner", "1".to_string())],
-            &[("status", "proven".to_string()), ("owner", "1".to_string())],
+            &[("status", "active".into()), ("owner", "1".into())],
+            &[("status", "proven".into()), ("owner", "1".into())],
         );
         assert_eq!(*ctx.deletes.borrow(), 1);
         assert_eq!(*ctx.void_sets.borrow(), 3); // 2 + 1
@@ -309,7 +314,8 @@ mod tests {
         // A no-op re-set (old == new) touches nothing.
         *ctx.void_sets.borrow_mut() = 0;
         *ctx.deletes.borrow_mut() = 0;
-        let same = [("status", "proven".to_string()), ("owner", "1".to_string())];
+        let same: [(&'static str, Cow<'static, str>); 2] =
+            [("status", "proven".into()), ("owner", "1".into())];
         apply_index_diff(&ctx, &index, "k", &same, &same);
         assert_eq!(*ctx.deletes.borrow(), 0);
         assert_eq!(*ctx.void_sets.borrow(), 0);
@@ -436,8 +442,8 @@ mod tests {
     }
 
     impl Indexed for Bag {
-        fn index_entries(&self) -> Vec<(&'static str, String)> {
-            vec![("tag", self.tag.to_string())]
+        fn index_entries(&self) -> Vec<(&'static str, Cow<'static, str>)> {
+            vec![("tag", self.tag.to_string().into())]
         }
     }
 
@@ -465,6 +471,6 @@ mod tests {
     #[should_panic(expected = "path delimiter")]
     fn rejects_dotted_index_key() {
         let ctx = Rc::new(Mock::default());
-        apply_index_diff(&ctx, &p("t#idx"), "k", &[], &[("name", "a.b".to_string())]);
+        apply_index_diff(&ctx, &p("t#idx"), "k", &[], &[("name", "a.b".into())]);
     }
 }

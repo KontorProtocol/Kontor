@@ -314,7 +314,7 @@ pub fn generate_struct(
                             // reconcile this field's index entry, then write. The
                             // field's value must be `IndexKey` (it becomes the
                             // index-bucket key) — a storage enum keys by its
-                            // discriminant via `#[derive(StorageEnum)]`.
+                            // discriminant via the `Storage` derive.
                             let v_model_ty = get_model_ident(true, field_ty, field.span())?;
                             Ok(quote! {
                                 pub fn #set_field_name(&self, value: #field_ty) {
@@ -428,7 +428,7 @@ pub fn generate_struct(
                     }
                 });
                 quote! {
-                    pub fn __index_entries(&self) -> alloc::vec::Vec<(&'static str, alloc::string::String)> {
+                    pub fn __index_entries(&self) -> alloc::vec::Vec<(&'static str, alloc::borrow::Cow<'static, str>)> {
                         let mut entries = alloc::vec::Vec::new();
                         #(#pushes)*
                         entries

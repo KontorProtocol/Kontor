@@ -359,11 +359,12 @@ impl Guest for Filestorage {
             .get(&agreement_id)
             .map(|s| {
                 // Return all nodes we’ve seen, including inactive ones
-                s.nodes()
+                let nodes = s.nodes();
+                nodes
                     .keys()
                     .map(|node_id: u64| NodeInfo {
                         node_id,
-                        active: s.nodes().get(&node_id).map(|n| n.active()).unwrap_or(false),
+                        active: nodes.get(&node_id).map(|n| n.active()).unwrap_or(false),
                     })
                     .collect()
             })

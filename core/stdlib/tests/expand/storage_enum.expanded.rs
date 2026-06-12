@@ -197,13 +197,13 @@ impl core::convert::From<ChallengeStatus> for ChallengeStatusKind {
 }
 #[automatically_derived]
 impl stdlib::IndexKey for ChallengeStatusKind {
-    fn index_key(&self) -> alloc::string::String {
-        alloc::string::ToString::to_string(self.index_key_str())
+    fn index_key(&self) -> alloc::borrow::Cow<'static, str> {
+        alloc::borrow::Cow::Borrowed(self.index_key_str())
     }
 }
 #[automatically_derived]
 impl stdlib::IndexKey for ChallengeStatus {
-    fn index_key(&self) -> alloc::string::String {
+    fn index_key(&self) -> alloc::borrow::Cow<'static, str> {
         stdlib::IndexKey::index_key(&ChallengeStatusKind::from(self))
     }
 }

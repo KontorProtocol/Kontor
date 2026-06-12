@@ -76,21 +76,23 @@ pub fn generate_impls(name: &Ident, variants: &[VariantSpec]) -> TokenStream {
 
         #[automatically_derived]
         impl stdlib::IndexKey for #kind_name {
-            fn index_key(&self) -> alloc::string::String {
-                alloc::string::ToString::to_string(self.index_key_str())
+            fn index_key(&self) -> alloc::borrow::Cow<'static, str> {
+                // The discriminant is `&'static str` — borrow it, no allocation.
+                alloc::borrow::Cow::Borrowed(self.index_key_str())
             }
         }
 
         #[automatically_derived]
         impl stdlib::IndexKey for #name {
-            fn index_key(&self) -> alloc::string::String {
+            fn index_key(&self) -> alloc::borrow::Cow<'static, str> {
                 stdlib::IndexKey::index_key(&#kind_name::from(self))
             }
         }
     }
 }
 
-/// `StorageEnum` derive entry point — variants come from the `syn` enum.
+/// Entry point for the `Storage` derive's enum branch — variants come from the
+/// `syn` enum.
 pub fn generate(data_enum: &DataEnum, name: &Ident) -> Result<TokenStream> {
     let variants: Vec<VariantSpec> = data_enum
         .variants

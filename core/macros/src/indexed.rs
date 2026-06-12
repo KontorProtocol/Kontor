@@ -7,7 +7,7 @@ use crate::utils;
 /// Body of `Indexed::index_entries` for a struct: one `(field_name, index key)`
 /// entry per `#[index]`-tagged field. The key is `IndexKey::index_key` — the one
 /// source every index path stringifies through, so each indexed field must be
-/// `IndexKey` (primitives are; storage enums get it from `#[derive(StorageEnum)]`).
+/// `IndexKey` (primitives are; storage enums get it from the `Storage` derive).
 pub fn generate_index_entries(data_struct: &DataStruct, type_name: &Ident) -> Result<TokenStream> {
     let Fields::Named(fields) = &data_struct.fields else {
         return Err(Error::new(
@@ -37,7 +37,7 @@ pub fn generate_index_entries(data_struct: &DataStruct, type_name: &Ident) -> Re
 }
 
 /// The `<E>Kind` discriminant-marker type for an enum index field, named from
-/// the field type's last path segment (matching `#[derive(StorageEnum)]`). A
+/// the field type's last path segment (matching the `Storage` derive's `<E>Kind`). A
 /// non-path type falls back to `<ty>Kind` tokens, which simply won't resolve —
 /// surfacing as "no such type" if a non-enum, non-primitive field is `#[index]`ed.
 fn enum_kind_ident(ty: &syn::Type) -> TokenStream {

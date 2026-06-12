@@ -9,7 +9,9 @@ struct Challenge {
 }
 #[automatically_derived]
 impl stdlib::Indexed for Challenge {
-    fn index_entries(&self) -> alloc::vec::Vec<(&'static str, alloc::string::String)> {
+    fn index_entries(
+        &self,
+    ) -> alloc::vec::Vec<(&'static str, alloc::borrow::Cow<'static, str>)> {
         let mut entries = alloc::vec::Vec::new();
         entries.push(("status", stdlib::IndexKey::index_key(&self.status)));
         entries.push(("prover_id", stdlib::IndexKey::index_key(&self.prover_id)));
