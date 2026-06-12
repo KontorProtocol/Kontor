@@ -92,6 +92,87 @@ pub fn generate_struct(
                             #field_model_name { base_path: self.base_path.push(#field_name_str), ctx: self.ctx.clone() }
                         }
                     })
+                } else if utils::is_indexed_map_type(field_ty) {
+                    let (k_ty, v_ty) = get_indexed_map_types(field_ty)?;
+                    let field_model_name = Ident::new(&format!("{}{}{}Model", type_name, &field_name.to_string().to_pascal_case(), write_prefix), field.span());
+                    // Index rows live in a sibling root so they never show up in
+                    // the primary's `keys()`.
+                    let index_field_name = format!("{}#idx", field_name_str);
+
+                    // IndexedMap values are always structs deriving `Indexed` +
+                    // `Storage`, so `get` returns the value model (like a nested
+                    // struct field), never a bare primitive.
+                    let v_model_ty = get_model_ident(write, &v_ty, field.span())?;
+
+                    // Mutators only on the write model. They maintain the index
+                    // through the shared diff helper. New entries come from the
+                    // value; old entries are read back through the value model's
+                    // generated `__index_entries`, which touches only the
+                    // `#[index]` columns — not the whole struct.
+                    let mutators = if write {
+                        quote! {
+                            pub fn set(&self, key: &#k_ty, value: #v_ty) {
+                                let key_str = key.to_string();
+                                let new_entries = stdlib::Indexed::index_entries(&value);
+                                let old_entries = self.get(key).map(|m| m.__index_entries()).unwrap_or_default();
+                                stdlib::apply_index_diff(&self.ctx, &self.index_path, &key_str, &old_entries, &new_entries);
+                                stdlib::WriteStorage::__set(&self.ctx, self.base_path.push(key_str), value);
+                            }
+
+                            /// Remove the entry and its index rows. Returns true if a live value existed.
+                            pub fn remove(&self, key: &#k_ty) -> bool {
+                                let key_str = key.to_string();
+                                let old_entries = self.get(key).map(|m| m.__index_entries()).unwrap_or_default();
+                                stdlib::apply_index_diff(&self.ctx, &self.index_path, &key_str, &old_entries, &[]);
+                                stdlib::WriteStorage::__delete(&self.ctx, &self.base_path.push(key_str))
+                            }
+                        }
+                    } else {
+                        quote!{}
+                    };
+
+                    special_models.push(quote! {
+                        #[derive(Clone)]
+                        pub struct #field_model_name {
+                            pub base_path: stdlib::DotPathBuf,
+                            index_path: stdlib::DotPathBuf,
+                            ctx: alloc::rc::Rc<#context_param>,
+                        }
+
+                        impl #field_model_name {
+                            pub fn get(&self, key: &#k_ty) -> Option<#v_model_ty> {
+                                let base_path = self.base_path.push(key.to_string());
+                                stdlib::ReadStorage::__exists(&self.ctx, &base_path).then(|| #v_model_ty::new(self.ctx.clone(), base_path))
+                            }
+
+                            #mutators
+
+                            pub fn load(&self) -> IndexedMap<#k_ty, #v_ty> {
+                                IndexedMap::new(&[])
+                            }
+
+                            pub fn keys<'a>(&'a self) -> impl Iterator<Item = #k_ty> + 'a {
+                                stdlib::ReadStorage::__get_keys(&self.ctx, &self.base_path)
+                            }
+
+                            /// Primary keys in the `(index_name, index_key)` bucket — the indexed
+                            /// lookup that replaces a `keys()` scan-and-filter.
+                            pub fn by_index(&self, index_name: &str, index_key: &str) -> impl Iterator<Item = #k_ty> {
+                                let bucket = self.index_path.push(index_name).push(index_key);
+                                stdlib::ReadStorage::__get_keys(&self.ctx, &bucket)
+                            }
+                        }
+                    });
+
+                    Ok(quote! {
+                        pub fn #field_name(&self) -> #field_model_name {
+                            #field_model_name {
+                                base_path: self.base_path.push(#field_name_str),
+                                index_path: self.base_path.push(#index_field_name),
+                                ctx: self.ctx.clone(),
+                            }
+                        }
+                    })
                 } else if utils::is_option_type(field_ty) {
                     let inner_ty = get_option_inner_type(field_ty)?;
                     let base_path = quote! { self.base_path.push(#field_name_str) };
@@ -151,7 +232,7 @@ pub fn generate_struct(
                                 stdlib::WriteStorage::__set(&self.ctx, self.base_path.push(#field_name_str), value);
                             }
                         };
-                        if utils::is_map_type(field_ty) {
+                        if utils::is_map_type(field_ty) || utils::is_indexed_map_type(field_ty) {
                             Ok(quote! {})
                         } else if utils::is_primitive_type(field_ty) {
                             let update_field_name = Ident::new(&format!("update_{}", field_name), field_name.span());
@@ -216,6 +297,37 @@ pub fn generate_struct(
                 })
                 .collect::<Result<Vec<_>>>()?;
 
+            // When this struct is an `IndexedMap` value, its `#[index]` fields
+            // drive index maintenance. Generate (read model only — the write
+            // model derefs to it) a reader that pulls just those columns from
+            // storage, so the field model can diff old vs new without loading the
+            // whole value. Mirrors the value-level `Indexed::index_entries`.
+            let index_reader = {
+                let pushes = fields
+                    .named
+                    .iter()
+                    .filter(|f| f.attrs.iter().any(|a| a.path().is_ident("index")))
+                    .map(|field| {
+                        let fname = field.ident.as_ref().unwrap();
+                        let name_str = fname.to_string();
+                        quote! {
+                            entries.push((#name_str, alloc::string::ToString::to_string(&self.#fname())));
+                        }
+                    })
+                    .collect::<Vec<_>>();
+                if write || pushes.is_empty() {
+                    quote! {}
+                } else {
+                    quote! {
+                        pub fn __index_entries(&self) -> alloc::vec::Vec<(&'static str, alloc::string::String)> {
+                            let mut entries = alloc::vec::Vec::new();
+                            #(#pushes)*
+                            entries
+                        }
+                    }
+                }
+            };
+
             let proc_props = if write {
                 quote! {
                     model: #read_only_model_name,
@@ -274,6 +386,8 @@ pub fn generate_struct(
                     #(#getters)*
 
                     #(#setters)*
+
+                    #index_reader
 
                     pub fn load(&self) -> #type_name {
                         #type_name {
@@ -460,4 +574,18 @@ fn get_map_types(ty: &Type) -> Result<(Type, Type)> {
         return Ok((k_ty.clone(), v_ty.clone()));
     }
     Err(Error::new(ty.span(), "Expected Map<K, V> type"))
+}
+
+fn get_indexed_map_types(ty: &Type) -> Result<(Type, Type)> {
+    if let Type::Path(type_path) = ty
+        && let Some(segment) = type_path.path.segments.last()
+        && segment.ident == "IndexedMap"
+        && let PathArguments::AngleBracketed(args) = &segment.arguments
+        && args.args.len() == 2
+        && let (GenericArgument::Type(k_ty), GenericArgument::Type(v_ty)) =
+            (&args.args[0], &args.args[1])
+    {
+        return Ok((k_ty.clone(), v_ty.clone()));
+    }
+    Err(Error::new(ty.span(), "Expected IndexedMap<K, V> type"))
 }

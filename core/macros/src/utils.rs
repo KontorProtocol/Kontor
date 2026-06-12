@@ -83,6 +83,19 @@ pub fn is_map_type(ty: &syn::Type) -> bool {
     }
 }
 
+pub fn is_indexed_map_type(ty: &syn::Type) -> bool {
+    if let syn::Type::Path(type_path) = ty {
+        type_path
+            .path
+            .segments
+            .last()
+            .map(|segment| segment.ident == "IndexedMap")
+            .unwrap_or(false)
+    } else {
+        false
+    }
+}
+
 pub fn wit_type_to_rust_type(
     resolve: &Resolve,
     ty: &WitType,

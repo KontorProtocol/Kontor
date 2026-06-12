@@ -67,6 +67,7 @@ pub fn generate(config: Config) -> TokenStream {
         use kontor::built_in::numbers::{IntegerModel, IntegerWriteModel, DecimalModel, DecimalWriteModel};
 
         type Map<K, V> = stdlib::StorageMap<K, V, context::ProcStorage>;
+        type IndexedMap<K, V> = stdlib::StorageIndexedMap<K, V, context::ProcStorage>;
 
         fn BURNER() -> Holder {
             Holder::from_ref(&context::HolderRef::Burner).unwrap()

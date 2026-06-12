@@ -118,6 +118,10 @@ impl TokenStorageLedgerWriteModel {
             value,
         )
     }
+    /// Remove a single entry (tombstone). Returns true if a live value existed.
+    pub fn remove(&self, key: &String) -> bool {
+        stdlib::WriteStorage::__delete(&self.ctx, &self.base_path.push(key.to_string()))
+    }
     pub fn load(&self) -> Map<String, u64> {
         Map::new(&[])
     }

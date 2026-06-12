@@ -200,6 +200,10 @@ impl FibStorageCacheWriteModel {
             value,
         )
     }
+    /// Remove a single entry (tombstone). Returns true if a live value existed.
+    pub fn remove(&self, key: &u64) -> bool {
+        stdlib::WriteStorage::__delete(&self.ctx, &self.base_path.push(key.to_string()))
+    }
     pub fn load(&self) -> Map<u64, FibValue> {
         Map::new(&[])
     }
