@@ -122,6 +122,83 @@ macro_rules! sort_key_signed {
 }
 sort_key_signed!(i8 => u8, 2, i16 => u16, 4, i32 => u32, 8, i64 => u64, 16);
 
+/// An ordered scan over a *sorted* index bucket. The bucket's child segments are
+/// `<sort‖pk>` (a fixed-width [`SortKey`] prefix followed by the primary key),
+/// already handed back in ascending path order by `keys()`. The scan strips the
+/// `width`-char prefix to recover each primary key `K`.
+///
+/// Iterating it directly walks the whole bucket in sort order. [`up_to`] /
+/// [`range`] bound it by comparing the **encoded** SortKey prefix — a plain
+/// string compare, no decode — and early-break, so the contract pays only for the
+/// members it keeps (the host still materializes the bucket; see the module's
+/// cost note). The bound is `impl SortKey`, so callers pass the field's real type
+/// (`up_to(height)`) and it's encoded here at the same width.
+///
+/// [`up_to`]: SortedScan::up_to
+/// [`range`]: SortedScan::range
+pub struct SortedScan<K> {
+    // Boxed so the generated `where_<index>` can name a single return type
+    // (`SortedScan<K>`) without threading the concrete `keys()` iterator type
+    // through the lookup trait. One box per scan — negligible next to the bucket
+    // walk it wraps.
+    segments: alloc::boxed::Box<dyn Iterator<Item = String>>,
+    width: usize,
+    _key: core::marker::PhantomData<K>,
+}
+
+impl<K> SortedScan<K>
+where
+    K: FromStr,
+    <K as FromStr>::Err: core::fmt::Debug,
+{
+    pub fn new(segments: alloc::boxed::Box<dyn Iterator<Item = String>>, width: usize) -> Self {
+        Self {
+            segments,
+            width,
+            _key: core::marker::PhantomData,
+        }
+    }
+
+    /// Members whose sort value is `≤ bound`, in ascending order. Early-breaks at
+    /// the first member above the bound — nothing later in a sorted bucket can
+    /// qualify.
+    pub fn up_to(self, bound: impl SortKey) -> impl Iterator<Item = K> {
+        let bound = bound.sort_key();
+        let width = self.width;
+        self.segments
+            .take_while(move |seg| seg[..width] <= bound[..])
+            .map(move |seg| K::from_str(&seg[width..]).unwrap())
+    }
+
+    /// Members whose sort value is within `range` (inclusive), in ascending order.
+    /// Skips below `lo`, then early-breaks past `hi`.
+    pub fn range(self, range: core::ops::RangeInclusive<impl SortKey>) -> impl Iterator<Item = K> {
+        let lo = range.start().sort_key();
+        let hi = range.end().sort_key();
+        let width = self.width;
+        self.segments
+            .skip_while(move |seg| seg[..width] < lo[..])
+            .take_while(move |seg| seg[..width] <= hi[..])
+            .map(move |seg| K::from_str(&seg[width..]).unwrap())
+    }
+}
+
+impl<K> Iterator for SortedScan<K>
+where
+    K: FromStr,
+    <K as FromStr>::Err: core::fmt::Debug,
+{
+    type Item = K;
+
+    /// Unbounded walk of the bucket in sort order.
+    fn next(&mut self) -> Option<K> {
+        let width = self.width;
+        self.segments
+            .next()
+            .map(|seg| K::from_str(&seg[width..]).unwrap())
+    }
+}
+
 /// One secondary-index membership of a value: which index, which bucket, and
 /// (optionally) where it sorts within that bucket. The leaf it maps to is
 /// `<index>/<bucket…>/<sort‖pk>` (see the `IndexedMap` module docs). All segments
@@ -674,5 +751,61 @@ mod tests {
         assert_eq!(i8::MIN.sort_key(), "00");
         assert_eq!(0i8.sort_key(), "80");
         assert_eq!(i8::MAX.sort_key(), "ff");
+    }
+
+    // SortedScan in isolation: strip the fixed-width sort prefix to recover K, and
+    // bound on the ENCODED prefix (a string compare, no decode).
+    #[test]
+    fn sorted_scan_strips_prefix_and_bounds() {
+        // width-4 (u16) sort prefix + a single-char primary key, ascending.
+        let segs = || {
+            alloc::boxed::Box::new(
+                alloc::vec![
+                    alloc::format!("{}a", 1u16.sort_key()),
+                    alloc::format!("{}b", 3u16.sort_key()),
+                    alloc::format!("{}c", 5u16.sort_key()),
+                ]
+                .into_iter(),
+            ) as alloc::boxed::Box<dyn Iterator<Item = String>>
+        };
+        let scan = || SortedScan::<String>::new(segs(), <u16 as SortKey>::WIDTH);
+
+        assert_eq!(scan().collect::<Vec<_>>(), vec!["a", "b", "c"]);
+        // up_to is inclusive and early-breaks past the bound.
+        assert_eq!(scan().up_to(3u16).collect::<Vec<_>>(), vec!["a", "b"]);
+        assert_eq!(scan().up_to(0u16).collect::<Vec<_>>(), Vec::<String>::new());
+        // range is inclusive on both ends.
+        assert_eq!(scan().range(3u16..=5u16).collect::<Vec<_>>(), vec!["b", "c"]);
+        assert_eq!(scan().range(2u16..=2u16).collect::<Vec<_>>(), Vec::<String>::new());
+    }
+
+    // End-to-end: a sorted index entry writes a `<sort‖pk>` member, and a
+    // SortedScan over that bucket recovers the keys in value order regardless of
+    // insertion order — the shape `where_<index>` builds.
+    #[test]
+    fn sorted_scan_over_bucket_recovers_keys_in_order() {
+        let ctx = Rc::new(Mock::default());
+        let index = p("t#idx");
+        // Index "due", bucket "active", sorted by a u64 height.
+        let entry = |height: u64| IndexEntry {
+            name: "due",
+            bucket: alloc::vec!["active".to_string().into()],
+            sort: Some(height.sort_key().into()),
+        };
+        // Insert out of order.
+        apply_index_diff(&ctx, &index, "c", &[], &[entry(30)]);
+        apply_index_diff(&ctx, &index, "a", &[], &[entry(10)]);
+        apply_index_diff(&ctx, &index, "b", &[], &[entry(20)]);
+
+        let bucket = index.push("due").push("active");
+        let scan = || {
+            SortedScan::<String>::new(
+                alloc::boxed::Box::new(ctx.__get_keys::<String>(&bucket)),
+                <u64 as SortKey>::WIDTH,
+            )
+        };
+        assert_eq!(scan().collect::<Vec<_>>(), vec!["a", "b", "c"]);
+        assert_eq!(scan().up_to(20u64).collect::<Vec<_>>(), vec!["a", "b"]);
+        assert_eq!(scan().range(20u64..=30u64).collect::<Vec<_>>(), vec!["b", "c"]);
     }
 }

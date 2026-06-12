@@ -10,6 +10,7 @@ mod contract_address;
 mod holder_ref;
 mod impls;
 mod import;
+mod index_decl;
 mod indexed;
 mod interface;
 mod model;
@@ -111,14 +112,17 @@ pub fn derive_indexed(input: TokenStream) -> TokenStream {
     let name = &input.ident;
 
     let result = match &input.data {
-        Data::Struct(data_struct) => {
-            let body = indexed::generate_index_entries(data_struct, name);
-            let lookup_trait = indexed::generate_lookup_trait(data_struct, name);
-            body.and_then(|body| lookup_trait.map(|lookup_trait| (body, lookup_trait)))
-        }
+        Data::Struct(syn::DataStruct {
+            fields: syn::Fields::Named(fields),
+            ..
+        }) => index_decl::parse(&input.attrs, fields).map(|decls| {
+            let body = indexed::generate_index_entries(&decls);
+            let lookup_trait = indexed::generate_lookup_trait(&decls, fields, name);
+            (body, lookup_trait)
+        }),
         _ => Err(Error::new(
             name.span(),
-            "Indexed derive only supports structs",
+            "Indexed derive only supports structs with named fields",
         )),
     };
     let (body, lookup_trait) = match result {
@@ -146,7 +150,7 @@ pub fn derive_model(input: TokenStream) -> TokenStream {
     let generics = &input.generics;
 
     let body = match &input.data {
-        Data::Struct(data_struct) => model::generate_struct(data_struct, name, false),
+        Data::Struct(data_struct) => model::generate_struct(data_struct, &input.attrs, name, false),
         Data::Enum(data_enum) => model::generate_enum(data_enum, name, false),
         Data::Union(_) => Err(Error::new(
             name.span(),
@@ -159,7 +163,7 @@ pub fn derive_model(input: TokenStream) -> TokenStream {
     };
 
     let body_cont = match &input.data {
-        Data::Struct(data_struct) => model::generate_struct(data_struct, name, true),
+        Data::Struct(data_struct) => model::generate_struct(data_struct, &input.attrs, name, true),
         Data::Enum(data_enum) => model::generate_enum(data_enum, name, true),
         Data::Union(_) => Err(Error::new(
             name.span(),

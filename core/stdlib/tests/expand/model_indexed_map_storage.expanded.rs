@@ -233,19 +233,27 @@ where
     K: alloc::string::ToString + core::str::FromStr + Clone,
     <K as core::str::FromStr>::Err: core::fmt::Debug,
 {
-    /// Raw bucket scan — the single primitive the field model supplies;
-    /// the typed `where_*` methods wrap it. Kept public as an escape
-    /// hatch for index keys built at runtime. The returned iterator owns
-    /// its source (`use<Self, K>`, no lifetime capture), so the typed
-    /// wrappers can hand it a borrow of a temporary key string.
+    /// Raw bucket scan — yields the primary keys of an unsorted index
+    /// bucket. The returned iterator owns its source (`use<Self, K>`, no
+    /// lifetime capture), so the typed wrappers can hand it a borrow of a
+    /// temporary key string.
     fn by_index(
         &self,
         index_name: &str,
         index_key: &str,
     ) -> impl Iterator<Item = K> + use<Self, K>;
+    /// Ordered bucket scan for a *sorted* index: the bucket's `<sort‖pk>`
+    /// child segments, wrapped so `SortedScan` strips the `sort_width`-char
+    /// prefix to yield `K` and `up_to`/`range` can bound on the encoded
+    /// prefix.
+    fn by_index_sorted(
+        &self,
+        index_name: &str,
+        index_key: &str,
+        sort_width: usize,
+    ) -> stdlib::SortedScan<K>;
     /// O(1) member count of a `(index_name, index_key)` bucket, the
-    /// framework-maintained size of what `by_index` would scan. The other
-    /// required primitive the field model supplies.
+    /// framework-maintained size of what the scans would walk.
     fn bucket_count(&self, index_name: &str, index_key: &str) -> u64;
     fn where_status(&self, status: u64) -> impl Iterator<Item = K> {
         self.by_index("status", &stdlib::IndexKey::index_key(&status))
@@ -321,6 +329,18 @@ impl ChallengeIndex<u64> for ChallengeStorageChallengesModel {
     ) -> impl Iterator<Item = u64> + use<> {
         let bucket = self.index_path.push(index_name).push(index_key);
         stdlib::ReadStorage::__get_keys(&self.ctx, &bucket)
+    }
+    fn by_index_sorted(
+        &self,
+        index_name: &str,
+        index_key: &str,
+        sort_width: usize,
+    ) -> stdlib::SortedScan<u64> {
+        let bucket = self.index_path.push(index_name).push(index_key);
+        let segments = stdlib::ReadStorage::__get_keys::<
+            alloc::string::String,
+        >(&self.ctx, &bucket);
+        stdlib::SortedScan::new(alloc::boxed::Box::new(segments), sort_width)
     }
     fn bucket_count(&self, index_name: &str, index_key: &str) -> u64 {
         let bucket = self.index_path.push(index_name).push(index_key);
@@ -432,6 +452,18 @@ impl ChallengeIndex<u64> for ChallengeStorageChallengesWriteModel {
     ) -> impl Iterator<Item = u64> + use<> {
         let bucket = self.index_path.push(index_name).push(index_key);
         stdlib::ReadStorage::__get_keys(&self.ctx, &bucket)
+    }
+    fn by_index_sorted(
+        &self,
+        index_name: &str,
+        index_key: &str,
+        sort_width: usize,
+    ) -> stdlib::SortedScan<u64> {
+        let bucket = self.index_path.push(index_name).push(index_key);
+        let segments = stdlib::ReadStorage::__get_keys::<
+            alloc::string::String,
+        >(&self.ctx, &bucket);
+        stdlib::SortedScan::new(alloc::boxed::Box::new(segments), sort_width)
     }
     fn bucket_count(&self, index_name: &str, index_key: &str) -> u64 {
         let bucket = self.index_path.push(index_name).push(index_key);

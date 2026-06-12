@@ -1,46 +1,26 @@
 use proc_macro2::TokenStream;
 use quote::quote;
-use syn::{DataStruct, Error, Fields, Ident, Result};
+use syn::{FieldsNamed, Ident};
 
+use crate::index_decl::{self, IndexDecl};
 use crate::utils;
 
-/// Body of `Indexed::index_entries` for a struct: one `(field_name, index key)`
-/// entry per `#[index]`-tagged field. The key is `IndexKey::index_key` — the one
-/// source every index path stringifies through, so each indexed field must be
-/// `IndexKey` (primitives are; storage enums get it from the `Storage` derive).
-pub fn generate_index_entries(data_struct: &DataStruct, type_name: &Ident) -> Result<TokenStream> {
-    let Fields::Named(fields) = &data_struct.fields else {
-        return Err(Error::new(
-            type_name.span(),
-            "Indexed derive only supports structs with named fields",
-        ));
-    };
+/// Body of `Indexed::index_entries` for a struct: one `IndexEntry` per declared
+/// index. Operates on the real value, so each field's value is `self.<field>`.
+/// The bucket/sort encoding goes through [`index_decl::index_entry`], the one
+/// source every index path stringifies through — so a write and a later diff
+/// can't disagree.
+pub fn generate_index_entries(decls: &[IndexDecl]) -> TokenStream {
+    let pushes = decls.iter().map(|decl| {
+        let entry = index_decl::index_entry(decl, &|field| quote! { self.#field });
+        quote! { entries.push(#entry); }
+    });
 
-    let pushes: Vec<TokenStream> = fields
-        .named
-        .iter()
-        .filter(|f| f.attrs.iter().any(|a| a.path().is_ident("index")))
-        .map(|field| {
-            let field_name = field.ident.as_ref().unwrap();
-            let name_str = field_name.to_string();
-            // Single-field index: the field name is the index, its `IndexKey` the
-            // one bucket segment, no sort. (Composite/sorted indexes come from the
-            // struct-level `#[index(...)]` form.)
-            quote! {
-                entries.push(stdlib::IndexEntry {
-                    name: #name_str,
-                    bucket: alloc::vec![stdlib::IndexKey::index_key(&self.#field_name)],
-                    sort: None,
-                });
-            }
-        })
-        .collect();
-
-    Ok(quote! {
+    quote! {
         let mut entries = alloc::vec::Vec::new();
         #(#pushes)*
         entries
-    })
+    }
 }
 
 /// The `<E>Kind` discriminant-marker type for an enum index field, named from
@@ -57,87 +37,107 @@ fn enum_kind_ident(ty: &syn::Type) -> TokenStream {
     quote! { #ty Kind }
 }
 
-/// The per-value typed index-lookup trait. For each `#[index]` field it adds a
-/// `where_<field>(value)` method taking the field's real type, so a contract
-/// queries an index by value (`where_status(Status::Active)`) instead of a
-/// stringly-typed name + hand-built key. Generated here (the value derive sees
-/// its own `#[index]` fields); the `Model` derive can't, since it only sees the
-/// `IndexedMap<K, V>` field, not `V`'s fields — so the field model implements
-/// the one required primitive (`by_index`) and inherits the typed wrappers. The
-/// wrappers stringify with the same `ToString` the index rows are written with,
-/// so a lookup and its stored bucket can't drift.
-pub fn generate_lookup_trait(data_struct: &DataStruct, type_name: &Ident) -> Result<TokenStream> {
-    let Fields::Named(fields) = &data_struct.fields else {
-        return Err(Error::new(
-            type_name.span(),
-            "Indexed derive only supports structs with named fields",
-        ));
-    };
-
+/// The per-value typed index-lookup trait. For each declared index it adds a
+/// `where_<index>(bucket)` method taking the bucket field's real type, so a
+/// contract queries by value (`where_status(Status::Active)`) instead of a
+/// stringly-typed name + hand-built key. A *sorted* index's `where_` returns a
+/// [`stdlib::SortedScan`], adding `.up_to(bound)` / `.range(lo..=hi)`; an unsorted
+/// one returns a plain iterator (today's behavior).
+///
+/// Generated here (the value derive sees its own index declarations); the `Model`
+/// derive can't, since it only sees the `IndexedMap<K, V>` field, not `V` — so the
+/// field model implements the required primitives (`by_index`, `by_index_sorted`,
+/// `bucket_count`) and inherits the typed wrappers. The wrappers stringify with
+/// the same `IndexKey` the index rows are written with, so a lookup and its stored
+/// bucket can't drift.
+pub fn generate_lookup_trait(
+    decls: &[IndexDecl],
+    fields: &FieldsNamed,
+    type_name: &Ident,
+) -> TokenStream {
     let trait_name = Ident::new(&format!("{type_name}Index"), type_name.span());
 
-    let methods: Vec<TokenStream> = fields
-        .named
+    let methods: Vec<TokenStream> = decls
         .iter()
-        .filter(|f| f.attrs.iter().any(|a| a.path().is_ident("index")))
-        .map(|field| {
-            let field_name = field.ident.as_ref().unwrap();
-            let field_ty = &field.ty;
-            let name_str = field_name.to_string();
-            let where_method = Ident::new(&format!("where_{field_name}"), field_name.span());
-            let count_method = Ident::new(&format!("count_{field_name}"), field_name.span());
-            // A primitive field's lookup takes the value directly. A storage
-            // enum's takes `impl Into<<E>Kind>` — so a unit enum's full value
-            // (`Status::Active`) AND a payload-carrying case's marker
-            // (`StatusKind::Failed`) both work, and the bucket is keyed by the
-            // discriminant via `IndexKey`. Both stringify through `IndexKey`, the
-            // same source `index_entries` uses, so lookup and stored bucket agree.
-            // `count_<field>` is the O(1) framework-maintained size of the same
-            // bucket `where_<field>` would scan.
-            if utils::is_primitive_type(field_ty) {
-                quote! {
-                    fn #where_method(&self, #field_name: #field_ty) -> impl Iterator<Item = K> {
-                        self.by_index(#name_str, &stdlib::IndexKey::index_key(&#field_name))
-                    }
-                    fn #count_method(&self, #field_name: #field_ty) -> u64 {
-                        self.bucket_count(#name_str, &stdlib::IndexKey::index_key(&#field_name))
+        .map(|decl| {
+            let name = &decl.name;
+            let by = &decl.by[0];
+            let by_ty = index_decl::field_type(fields, by);
+            let where_method = Ident::new(&format!("where_{name}"), type_name.span());
+            let count_method = Ident::new(&format!("count_{name}"), type_name.span());
+
+            // The bucket field's value → its `IndexKey`. A primitive is taken by
+            // value; a storage enum by `impl Into<<E>Kind>`, so a unit enum's full
+            // value AND a payload-carrying case's marker both work and key by the
+            // discriminant. `key_stmt` binds the temporary the key borrows; both
+            // stringify through `IndexKey`, the same source `index_entries` uses.
+            let (param, key_stmt, key_ref) = if utils::is_primitive_type(by_ty) {
+                (
+                    quote! { #by: #by_ty },
+                    quote! {},
+                    quote! { stdlib::IndexKey::index_key(&#by) },
+                )
+            } else {
+                let kind_ty = enum_kind_ident(by_ty);
+                (
+                    quote! { #by: impl core::convert::Into<#kind_ty> },
+                    quote! { let kind: #kind_ty = #by.into(); },
+                    quote! { stdlib::IndexKey::index_key(&kind) },
+                )
+            };
+
+            let where_body = match &decl.sort {
+                Some(sort_field) => {
+                    let sort_ty = index_decl::field_type(fields, sort_field);
+                    quote! {
+                        fn #where_method(&self, #param) -> stdlib::SortedScan<K> {
+                            #key_stmt
+                            self.by_index_sorted(#name, &#key_ref, <#sort_ty as stdlib::SortKey>::WIDTH)
+                        }
                     }
                 }
-            } else {
-                let kind_ty = enum_kind_ident(field_ty);
-                quote! {
-                    fn #where_method(&self, #field_name: impl core::convert::Into<#kind_ty>) -> impl Iterator<Item = K> {
-                        let kind: #kind_ty = #field_name.into();
-                        self.by_index(#name_str, &stdlib::IndexKey::index_key(&kind))
+                None => quote! {
+                    fn #where_method(&self, #param) -> impl Iterator<Item = K> {
+                        #key_stmt
+                        self.by_index(#name, &#key_ref)
                     }
-                    fn #count_method(&self, #field_name: impl core::convert::Into<#kind_ty>) -> u64 {
-                        let kind: #kind_ty = #field_name.into();
-                        self.bucket_count(#name_str, &stdlib::IndexKey::index_key(&kind))
-                    }
+                },
+            };
+
+            quote! {
+                #where_body
+
+                fn #count_method(&self, #param) -> u64 {
+                    #key_stmt
+                    self.bucket_count(#name, &#key_ref)
                 }
             }
         })
         .collect();
 
-    Ok(quote! {
+    quote! {
         pub trait #trait_name<K>
         where
             K: alloc::string::ToString + core::str::FromStr + Clone,
             <K as core::str::FromStr>::Err: core::fmt::Debug,
         {
-            /// Raw bucket scan — the single primitive the field model supplies;
-            /// the typed `where_*` methods wrap it. Kept public as an escape
-            /// hatch for index keys built at runtime. The returned iterator owns
-            /// its source (`use<Self, K>`, no lifetime capture), so the typed
-            /// wrappers can hand it a borrow of a temporary key string.
+            /// Raw bucket scan — yields the primary keys of an unsorted index
+            /// bucket. The returned iterator owns its source (`use<Self, K>`, no
+            /// lifetime capture), so the typed wrappers can hand it a borrow of a
+            /// temporary key string.
             fn by_index(&self, index_name: &str, index_key: &str) -> impl Iterator<Item = K> + use<Self, K>;
 
+            /// Ordered bucket scan for a *sorted* index: the bucket's `<sort‖pk>`
+            /// child segments, wrapped so `SortedScan` strips the `sort_width`-char
+            /// prefix to yield `K` and `up_to`/`range` can bound on the encoded
+            /// prefix.
+            fn by_index_sorted(&self, index_name: &str, index_key: &str, sort_width: usize) -> stdlib::SortedScan<K>;
+
             /// O(1) member count of a `(index_name, index_key)` bucket, the
-            /// framework-maintained size of what `by_index` would scan. The other
-            /// required primitive the field model supplies.
+            /// framework-maintained size of what the scans would walk.
             fn bucket_count(&self, index_name: &str, index_key: &str) -> u64;
 
             #(#methods)*
         }
-    })
+    }
 }

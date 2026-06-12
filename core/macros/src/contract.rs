@@ -1,7 +1,8 @@
 use darling::FromMeta;
-use heck::ToPascalCase;
+use heck::{ToPascalCase, ToSnakeCase};
 use proc_macro2::TokenStream;
 use quote::quote;
+use std::collections::BTreeMap;
 use std::path::Path;
 use syn::Ident;
 use wit_parser::Resolve;
@@ -11,48 +12,95 @@ use wit_validator::Validator;
 pub struct Config {
     name: String,
     path: Option<String>,
-    /// Comma-separated `record.field` entries (kebab-case, as in the WIT) whose
-    /// fields back a secondary index, e.g.
-    /// `indexed = "agreement-data.active, challenge-data.status"`. Each names a
-    /// field of a WIT record stored in an `IndexedMap`; `contract!` injects
-    /// `#[index]` on the field and `#[derive(stdlib::Indexed)]` on the record
-    /// (via the forked wit-bindgen) so the generated model maintains the index.
+    /// Secondary-index declarations on WIT records stored in an `IndexedMap`.
+    /// Semicolon-separated entries, each `record: name [by field] [sort field]`
+    /// (kebab-case, as in the WIT); `record: field` is sugar for a single-field
+    /// index. E.g.
+    /// ```text
+    /// indexed = "
+    ///   agreement-data: active;
+    ///   challenge-data: status;
+    ///   challenge-data: due by status sort deadline-height;
+    /// "
+    /// ```
+    /// `contract!` injects the matching struct-level `#[index(...)]` plus
+    /// `#[derive(stdlib::Indexed)]` on each record (via the forked wit-bindgen) so
+    /// the generated model maintains the index. `by`/`sort` fields are mapped to
+    /// the generated snake_case Rust field names.
     indexed: Option<String>,
 }
 
-/// Build the `additional_type_attributes` / `additional_field_attributes` option
-/// tokens for the wit-bindgen `generate!` from the `indexed` spec: `#[index]` on
-/// each named field, `#[derive(stdlib::Indexed)]` on each owning record. (Storage
-/// enums are NOT injected here — the fork applies type attributes only to records,
-/// not enums/variants — they're generated directly from the WIT, see
+/// Translate one `name [by field] [sort field]` entry (the part after `record:`)
+/// into the Rust struct-level attribute string `#[index(name, by = …, sort = …)]`.
+/// kebab names map to the generated snake_case Rust idents.
+fn index_attr(spec: &str) -> String {
+    let mut tokens = spec.split_whitespace();
+    let name = tokens
+        .next()
+        .unwrap_or_else(|| panic!("`indexed` entry is missing an index name: {spec:?}"))
+        .to_snake_case();
+    let mut by: Option<String> = None;
+    let mut sort: Option<String> = None;
+    while let Some(keyword) = tokens.next() {
+        let field = tokens
+            .next()
+            .unwrap_or_else(|| panic!("`{keyword}` needs a field in indexed entry: {spec:?}"))
+            .to_snake_case();
+        match keyword {
+            "by" => by = Some(field),
+            "sort" => sort = Some(field),
+            other => panic!("unexpected `{other}` in indexed entry (expected `by`/`sort`): {spec:?}"),
+        }
+    }
+    let mut args = name;
+    if let Some(by) = by {
+        args.push_str(&format!(", by = {by}"));
+    }
+    if let Some(sort) = sort {
+        args.push_str(&format!(", sort = {sort}"));
+    }
+    format!("#[index({args})]")
+}
+
+/// Build the `additional_type_attributes` option tokens for the wit-bindgen
+/// `generate!` from the `indexed` spec: `#[derive(stdlib::Indexed)]` once per
+/// record plus one `#[index(...)]` per declared index. The fork emits each as its
+/// own attribute line on the (owned) record, and the `Indexed`/`Model` derives
+/// parse them via the shared index-declaration grammar. (Storage enums are NOT
+/// injected here — the fork applies type attributes only to records, not
+/// enums/variants — they're generated directly from the WIT, see
 /// [`storage_enum_impls`].)
-fn index_attr_options(indexed: Option<&str>) -> (TokenStream, TokenStream) {
+fn index_attr_options(indexed: Option<&str>) -> TokenStream {
     let Some(spec) = indexed else {
-        return (quote! {}, quote! {});
+        return quote! {};
     };
-    let mut records = std::collections::BTreeSet::new();
-    let mut field_pairs = Vec::new();
-    for entry in spec.split(',') {
+    // record (kebab wit name) -> its `#[index(...)]` lines, in declared order.
+    // BTreeMap keeps the emitted output deterministic across runs.
+    let mut by_record: BTreeMap<String, Vec<String>> = BTreeMap::new();
+    for entry in spec.split(';') {
         let entry = entry.trim();
         if entry.is_empty() {
             continue;
         }
-        let (record, _field) = entry
-            .split_once('.')
-            .unwrap_or_else(|| panic!("`indexed` entry must be `record.field`: {entry}"));
-        records.insert(record.to_string());
-        field_pairs.push(quote! { #entry: "#[index]", });
+        let (record, rest) = entry.split_once(':').unwrap_or_else(|| {
+            panic!("`indexed` entry must be `record: name [by field] [sort field]`: {entry:?}")
+        });
+        by_record
+            .entry(record.trim().to_string())
+            .or_default()
+            .push(index_attr(rest.trim()));
     }
-    if field_pairs.is_empty() {
-        return (quote! {}, quote! {});
+    if by_record.is_empty() {
+        return quote! {};
     }
-    let type_pairs = records
-        .into_iter()
-        .map(|r| quote! { #r: "#[derive(stdlib::Indexed)]", });
-    (
-        quote! { additional_type_attributes: { #(#type_pairs)* }, },
-        quote! { additional_field_attributes: { #(#field_pairs)* }, },
-    )
+    let mut type_pairs = Vec::new();
+    for (record, attrs) in by_record {
+        type_pairs.push(quote! { #record: "#[derive(stdlib::Indexed)]", });
+        for attr in attrs {
+            type_pairs.push(quote! { #record: #attr, });
+        }
+    }
+    quote! { additional_type_attributes: { #(#type_pairs)* }, }
 }
 
 pub fn generate(config: Config) -> TokenStream {
@@ -82,7 +130,7 @@ pub fn generate(config: Config) -> TokenStream {
     }
 
     let path = abs_path.to_string_lossy().to_string();
-    let (type_attrs, field_attrs) = index_attr_options(config.indexed.as_deref());
+    let type_attrs = index_attr_options(config.indexed.as_deref());
     quote! {
         extern crate alloc;
 
@@ -100,7 +148,6 @@ pub fn generate(config: Config) -> TokenStream {
             generate_unused_types: true,
             additional_derives: [stdlib::Storage, stdlib::Wavey],
             #type_attrs
-            #field_attrs
             export_macro_name: "__export__",
             runtime_path: "stdlib::wit_bindgen::rt",
             async: false,
