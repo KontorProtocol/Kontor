@@ -170,9 +170,7 @@ impl Guest for Filestorage {
         // set), so a '.' would corrupt the path. Reject it as bad input rather
         // than let the path layer trap.
         if descriptor.file_id.contains('.') {
-            return Err(Error::Message(
-                "file_id must not contain '.'".to_string(),
-            ));
+            return Err(Error::Message("file_id must not contain '.'".to_string()));
         }
         if descriptor.padded_len == 0 || !descriptor.padded_len.is_power_of_two() {
             return Err(Error::Message(

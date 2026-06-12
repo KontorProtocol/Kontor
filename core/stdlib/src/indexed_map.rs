@@ -141,7 +141,14 @@ fn bump_bucket_count<S: WriteStorage + ReadStorage + ?Sized>(
     let current = ctx.__get_u64(bucket).unwrap_or(0);
     // `saturating_sub` is defensive only — a decrement always follows a counted
     // insert, so underflow would be a framework bug, not contract input.
-    ctx.__set_u64(bucket, if up { current + 1 } else { current.saturating_sub(1) });
+    ctx.__set_u64(
+        bucket,
+        if up {
+            current + 1
+        } else {
+            current.saturating_sub(1)
+        },
+    );
 }
 
 storage_placeholder!(

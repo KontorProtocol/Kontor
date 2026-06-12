@@ -106,7 +106,11 @@ pub fn generate(data_enum: &DataEnum, name: &Ident) -> Result<TokenStream> {
                 Fields::Unnamed(_) => quote! { #name::#ident(..) },
                 Fields::Named(_) => quote! { #name::#ident { .. } },
             };
-            VariantSpec { ident, key, pattern }
+            VariantSpec {
+                ident,
+                key,
+                pattern,
+            }
         })
         .collect();
 

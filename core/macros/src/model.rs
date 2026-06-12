@@ -663,7 +663,10 @@ fn index_trait_ident(ty: &Type, span: Span) -> Result<Ident> {
             .map(|segment| Ident::new(&format!("{}Index", segment.ident), span))
             .ok_or_else(|| Error::new(span, "Expected a named type for IndexedMap value"))
     } else {
-        Err(Error::new(span, "Expected a named type for IndexedMap value"))
+        Err(Error::new(
+            span,
+            "Expected a named type for IndexedMap value",
+        ))
     }
 }
 
