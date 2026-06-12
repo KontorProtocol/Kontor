@@ -1,5 +1,8 @@
 #![no_std]
-contract!(name = "filestorage", indexed = "agreement-data.active");
+contract!(
+    name = "filestorage",
+    indexed = "agreement-data.active, challenge-data.status"
+);
 
 use alloc::collections::BTreeSet;
 use stdlib::*;
@@ -79,8 +82,9 @@ struct ProtocolState {
     pub challenges: IndexedMap<String, ChallengeData>,
 }
 
-/// Stringify a challenge status into its index-bucket key. Centralised so the
-/// `Indexed` impl and every `by_index("status", …)` lookup name the same bucket.
+/// Stringify a challenge status into its index-bucket key. `Display` is what the
+/// generated `Indexed` impl + index-aware `set_status` use to name the bucket,
+/// and every `by_index("status", …)` lookup must pass the same string.
 fn challenge_status_key(status: ChallengeStatus) -> &'static str {
     match status {
         ChallengeStatus::Active => "active",
@@ -91,16 +95,16 @@ fn challenge_status_key(status: ChallengeStatus) -> &'static str {
     }
 }
 
-// `agreement-data` is indexed by `active` via the `indexed = "..."` arg on
-// `contract!`, which injects `#[index]` + `#[derive(Indexed)]` onto the WIT
-// record (forked wit-bindgen) — so its `Indexed` impl + index-aware setters are
-// generated. `challenge-data` is indexed by an enum field (`status`), which the
-// generated index-aware setter doesn't cover yet, so it keeps a hand impl.
-impl Indexed for ChallengeData {
-    fn index_entries(&self) -> Vec<(&'static str, String)> {
-        alloc::vec![("status", challenge_status_key(self.status).to_string())]
+impl core::fmt::Display for ChallengeStatus {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.write_str(challenge_status_key(*self))
     }
 }
+
+// `agreement-data`/`challenge-data` are indexed (by `active`/`status`) via the
+// `indexed = "..."` arg on `contract!`, which injects `#[index]` +
+// `#[derive(Indexed)]` onto the WIT records (forked wit-bindgen) — so their
+// `Indexed` impls and index-aware setters are generated, not hand-written.
 
 // ─────────────────────────────────────────────────────────────────
 // Contract Implementation
@@ -391,9 +395,8 @@ impl Guest for Filestorage {
             if let Some(challenge) = model.challenges().get(&challenge_id)
                 && challenge.deadline_height() <= current_height
             {
-                let mut data = challenge.load();
-                data.status = ChallengeStatus::Expired;
-                model.challenges().set(&challenge_id, data);
+                // In-place; the `status` index follows via the get() binding.
+                challenge.set_status(ChallengeStatus::Expired);
                 expired = expired.saturating_add(1);
             }
         }
@@ -721,13 +724,10 @@ impl Guest for Filestorage {
             file_registry::VerifyResult::Invalid => ChallengeStatus::Invalid,
         };
 
-        // Re-set the whole value so the `status` index follows — a bare
-        // `set_status` sub-field write would leave the index stale.
+        // In-place; the `status` index follows via the get() binding.
         for cid in &challenge_ids {
             if let Some(c) = model.challenges().get(cid) {
-                let mut data = c.load();
-                data.status = new_status;
-                model.challenges().set(cid, data);
+                c.set_status(new_status);
             }
         }
 
