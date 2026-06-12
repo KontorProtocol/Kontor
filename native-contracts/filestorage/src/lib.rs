@@ -1,5 +1,5 @@
 #![no_std]
-contract!(name = "filestorage");
+contract!(name = "filestorage", indexed = "agreement-data.active");
 
 use alloc::collections::BTreeSet;
 use stdlib::*;
@@ -91,15 +91,11 @@ fn challenge_status_key(status: ChallengeStatus) -> &'static str {
     }
 }
 
-// `agreement-data` / `challenge-data` are WIT records, so they can't carry
-// `#[index]` field attributes — we supply the index spec by hand. IndexedMap's
-// field model and bulk `Store` maintain the buckets from this single source.
-impl Indexed for AgreementData {
-    fn index_entries(&self) -> Vec<(&'static str, String)> {
-        alloc::vec![("active", self.active.to_string())]
-    }
-}
-
+// `agreement-data` is indexed by `active` via the `indexed = "..."` arg on
+// `contract!`, which injects `#[index]` + `#[derive(Indexed)]` onto the WIT
+// record (forked wit-bindgen) — so its `Indexed` impl + index-aware setters are
+// generated. `challenge-data` is indexed by an enum field (`status`), which the
+// generated index-aware setter doesn't cover yet, so it keeps a hand impl.
 impl Indexed for ChallengeData {
     fn index_entries(&self) -> Vec<(&'static str, String)> {
         alloc::vec![("status", challenge_status_key(self.status).to_string())]
@@ -267,12 +263,9 @@ impl Guest for Filestorage {
         let activated = !agreement.active() && node_count >= min_nodes;
 
         if activated {
-            // Re-set the whole value through IndexedMap so the `active` index
-            // moves with it — an in-place `set_active` would leave the index
-            // stale (sub-field writes bypass index maintenance).
-            let mut data = agreement.load();
-            data.active = true;
-            model.agreements().set(&agreement_id, data);
+            // In-place set: the `active` index is maintained automatically
+            // because `agreements().get()` binds the value model to the index.
+            agreement.set_active(true);
         }
 
         Ok(JoinAgreementResult {
