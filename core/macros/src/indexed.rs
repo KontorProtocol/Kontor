@@ -77,25 +77,35 @@ pub fn generate_lookup_trait(data_struct: &DataStruct, type_name: &Ident) -> Res
             let field_name = field.ident.as_ref().unwrap();
             let field_ty = &field.ty;
             let name_str = field_name.to_string();
-            let method = Ident::new(&format!("where_{field_name}"), field_name.span());
+            let where_method = Ident::new(&format!("where_{field_name}"), field_name.span());
+            let count_method = Ident::new(&format!("count_{field_name}"), field_name.span());
             // A primitive field's lookup takes the value directly. A storage
             // enum's takes `impl Into<<E>Kind>` — so a unit enum's full value
             // (`Status::Active`) AND a payload-carrying case's marker
             // (`StatusKind::Failed`) both work, and the bucket is keyed by the
             // discriminant via `IndexKey`. Both stringify through `IndexKey`, the
             // same source `index_entries` uses, so lookup and stored bucket agree.
+            // `count_<field>` is the O(1) framework-maintained size of the same
+            // bucket `where_<field>` would scan.
             if utils::is_primitive_type(field_ty) {
                 quote! {
-                    fn #method(&self, #field_name: #field_ty) -> impl Iterator<Item = K> {
+                    fn #where_method(&self, #field_name: #field_ty) -> impl Iterator<Item = K> {
                         self.by_index(#name_str, &stdlib::IndexKey::index_key(&#field_name))
+                    }
+                    fn #count_method(&self, #field_name: #field_ty) -> u64 {
+                        self.bucket_count(#name_str, &stdlib::IndexKey::index_key(&#field_name))
                     }
                 }
             } else {
                 let kind_ty = enum_kind_ident(field_ty);
                 quote! {
-                    fn #method(&self, #field_name: impl core::convert::Into<#kind_ty>) -> impl Iterator<Item = K> {
+                    fn #where_method(&self, #field_name: impl core::convert::Into<#kind_ty>) -> impl Iterator<Item = K> {
                         let kind: #kind_ty = #field_name.into();
                         self.by_index(#name_str, &stdlib::IndexKey::index_key(&kind))
+                    }
+                    fn #count_method(&self, #field_name: impl core::convert::Into<#kind_ty>) -> u64 {
+                        let kind: #kind_ty = #field_name.into();
+                        self.bucket_count(#name_str, &stdlib::IndexKey::index_key(&kind))
                     }
                 }
             }
@@ -114,6 +124,11 @@ pub fn generate_lookup_trait(data_struct: &DataStruct, type_name: &Ident) -> Res
             /// its source (`use<Self, K>`, no lifetime capture), so the typed
             /// wrappers can hand it a borrow of a temporary key string.
             fn by_index(&self, index_name: &str, index_key: &str) -> impl Iterator<Item = K> + use<Self, K>;
+
+            /// O(1) member count of a `(index_name, index_key)` bucket, the
+            /// framework-maintained size of what `by_index` would scan. The other
+            /// required primitive the field model supplies.
+            fn bucket_count(&self, index_name: &str, index_key: &str) -> u64;
 
             #(#methods)*
         }

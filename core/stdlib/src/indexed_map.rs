@@ -32,7 +32,7 @@ use alloc::string::{String, ToString};
 use alloc::vec::Vec;
 use core::str::FromStr;
 
-use crate::{DotPathBuf, Store, WriteStorage};
+use crate::{DotPathBuf, ReadStorage, Store, WriteStorage};
 
 /// The canonical string a value contributes to an index bucket. The SINGLE
 /// source every index path stringifies through — a value's
@@ -100,7 +100,7 @@ fn assert_segment(s: &str) {
 /// setter diffs just that field's entry; the bulk [`Store`] impl starts from
 /// empty (a fresh wholesale write). Either way the maintenance logic lives only
 /// here.
-pub fn apply_index_diff<S: WriteStorage + ?Sized>(
+pub fn apply_index_diff<S: WriteStorage + ReadStorage + ?Sized>(
     ctx: &Rc<S>,
     index_root: &DotPathBuf,
     key: &str,
@@ -110,15 +110,38 @@ pub fn apply_index_diff<S: WriteStorage + ?Sized>(
     assert_segment(key);
     for (name, index_key) in old {
         if !new.iter().any(|(n, k)| n == name && k == index_key) {
-            ctx.__delete(&index_root.push(*name).push(index_key.as_ref()).push(key));
+            let bucket = index_root.push(*name).push(index_key.as_ref());
+            ctx.__delete(&bucket.push(key));
+            bump_bucket_count(ctx, &bucket, false);
         }
     }
     for (name, index_key) in new {
         assert_segment(index_key);
         if !old.iter().any(|(n, k)| n == name && k == index_key) {
-            ctx.__set_void(&index_root.push(*name).push(index_key.as_ref()).push(key));
+            let bucket = index_root.push(*name).push(index_key.as_ref());
+            ctx.__set_void(&bucket.push(key));
+            bump_bucket_count(ctx, &bucket, true);
         }
     }
+}
+
+/// Adjust a bucket's framework-maintained member count. The count lives AT the
+/// bucket-prefix path (`<map>#idx/<name>/<key>`); the bucket's members are its
+/// CHILDREN (`…/<key>/<primary_key>`), so this value is invisible to the
+/// `by_index` child-scan and to `keys()`. Maintained only here — the one site
+/// every index add/remove funnels through (field-model `set`/`remove`, in-place
+/// setter, and the bulk `Store`) — so it can't drift from the membership it
+/// counts. It's an ordinary height-versioned `contract_state` row, so it rolls
+/// back with everything else on a reorg.
+fn bump_bucket_count<S: WriteStorage + ReadStorage + ?Sized>(
+    ctx: &Rc<S>,
+    bucket: &DotPathBuf,
+    up: bool,
+) {
+    let current = ctx.__get_u64(bucket).unwrap_or(0);
+    // `saturating_sub` is defensive only — a decrement always follows a counted
+    // insert, so underflow would be a framework bug, not contract input.
+    ctx.__set_u64(bucket, if up { current + 1 } else { current.saturating_sub(1) });
 }
 
 storage_placeholder!(
@@ -133,7 +156,7 @@ impl<K, V, S> Store<S> for StorageIndexedMap<K, V, S>
 where
     K: ToString + FromStr + Clone,
     V: Store<S> + Clone + Indexed,
-    S: WriteStorage + ?Sized,
+    S: WriteStorage + ReadStorage + ?Sized,
 {
     /// Wholesale write: persist every entry's value AND its index rows, so a map
     /// populated before `init` (at the root or any nested level) lands
@@ -324,6 +347,12 @@ mod tests {
         assert!(ctx.__exists("t#idx.status.proven.k"));
         assert!(!ctx.__exists("t#idx.status.active.k"));
         assert!(ctx.__exists("t#idx.owner.1.k"));
+
+        // Framework-maintained bucket counts track the membership: status moved
+        // active(0) -> proven(1); owner.1 stayed at 1.
+        assert_eq!(ctx.__get_u64("t#idx.status.proven"), Some(1));
+        assert_eq!(ctx.__get_u64("t#idx.status.active"), Some(0));
+        assert_eq!(ctx.__get_u64("t#idx.owner.1"), Some(1));
     }
 
     // The bulk `Store` path: a map populated before a wholesale write must land
@@ -353,6 +382,14 @@ mod tests {
         let mut keys: Vec<u64> = ctx.__get_keys(&bucket).collect();
         keys.sort();
         assert_eq!(keys, vec![1, 2]);
+
+        // The bulk path maintains bucket counts too (it funnels through
+        // apply_index_diff): status 2 has {1,2}, status 5 has {3}.
+        assert_eq!(ctx.__get_u64("positions#idx.status.2"), Some(2));
+        assert_eq!(ctx.__get_u64("positions#idx.status.5"), Some(1));
+        // The count lives AT the bucket path, NOT as a child — so it never leaks
+        // into a `by_index` scan of that bucket's members.
+        assert_eq!(ctx.__get_keys::<u64>(&bucket).count(), 2);
     }
 
     // An IndexedMap nested inside a struct. Its `Store::__set` writes the field

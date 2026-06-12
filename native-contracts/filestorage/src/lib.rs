@@ -60,6 +60,10 @@ const REGTEST_S_CHAL: u64 = 8;
 // no load→mutate→set dance. Departed/terminal rows move to the off bucket
 // (`active/false`, `status/expired`…), out of the live scan but kept for history.
 //
+// Bucket sizes are framework-maintained: `count_active(true)` is the live-member
+// count (no hand-kept `node_count`), and the agreement total is the sum of its
+// `active` buckets (no hand-kept `agreement_count`) — neither can drift.
+//
 // Deferred (single-field index suffices today): partial/`filter` indexes,
 // composite `(status, deadline_height)` sortable sweep, covering indexes (avoid
 // the where_*→get N reads), and flattening `agreement_nodes` to a tuple-keyed
@@ -85,9 +89,10 @@ struct NodeState {
 struct AgreementNodes {
     /// signer_id -> membership. The node identity is the joining signer, so the
     /// key is its u64 signer_id. Indexed by `active` so live-member lookup is a
-    /// prefix scan, not a scan-and-filter over every node that ever joined.
+    /// prefix scan, not a scan-and-filter over every node that ever joined — and
+    /// the active count is `nodes().count_active(true)`, framework-maintained, so
+    /// there's no hand-kept counter to drift.
     pub nodes: IndexedMap<u64, NodeState>,
-    pub node_count: u64,
 }
 
 #[derive(Clone, Default, StorageRoot)]
@@ -99,7 +104,6 @@ struct ProtocolState {
     pub blocks_per_year: u64,
     pub agreements: IndexedMap<String, AgreementData>,
     pub agreement_nodes: Map<String, AgreementNodes>,
-    pub agreement_count: u64,
     pub challenges: IndexedMap<String, ChallengeData>,
 }
 
@@ -148,7 +152,6 @@ impl Guest for Filestorage {
             blocks_per_year: DEFAULT_BLOCKS_PER_YEAR,
             agreements: IndexedMap::default(),
             agreement_nodes: Map::default(),
-            agreement_count: 0,
             challenges: IndexedMap::default(),
         }
         .init(ctx);
@@ -192,13 +195,12 @@ impl Guest for Filestorage {
         };
 
         // Store the agreement and initialize node tracking
+        // Stored with `active: false`, so it lands in the `active/false` index
+        // bucket; the framework bucket counts are the agreement total (see
+        // `agreement_count`), so there's no separate counter to bump. The
+        // `agreement_nodes` entry isn't created here — it's written lazily by the
+        // first `join` (an empty node-set would persist no rows anyway).
         model.agreements().set(&agreement_id, agreement);
-        model
-            .agreement_nodes()
-            .set(&agreement_id, AgreementNodes::default());
-
-        // Increment count
-        model.update_agreement_count(|c| c + 1);
 
         Ok(CreateAgreementResult { agreement_id })
     }
@@ -211,7 +213,11 @@ impl Guest for Filestorage {
     }
 
     fn agreement_count(ctx: &ViewContext) -> u64 {
-        ctx.model().agreement_count()
+        // Every agreement is in exactly one `active` bucket (`true` once enough
+        // nodes join, `false` before that), and agreements are never removed —
+        // so the total is the sum of the two framework-maintained bucket counts.
+        let agreements = ctx.model().agreements();
+        agreements.count_active(true) + agreements.count_active(false)
     }
 
     fn get_all_active_agreements(ctx: &ViewContext) -> Vec<AgreementData> {
@@ -247,19 +253,16 @@ impl Guest for Filestorage {
                 "agreement not found: {}",
                 agreement_id
             )))?;
-        let nodes_state = model
-            .agreement_nodes()
-            .get(&agreement_id)
-            .ok_or(Error::Message(format!(
-                "agreement nodes not found: {}",
-                agreement_id
-            )))?;
+        // The node-set persists lazily: an agreement with no joined nodes has no
+        // `agreement_nodes` entry at all (an `AgreementNodes` whose only field is
+        // an empty `IndexedMap` writes zero rows). So a missing entry just means
+        // "no members yet".
+        let nodes_state = model.agreement_nodes().get(&agreement_id);
 
         // Check if node is already active in agreement
         if nodes_state
-            .nodes()
-            .get(&node_id)
-            .map(|n| n.active())
+            .as_ref()
+            .and_then(|s| s.nodes().get(&node_id).map(|n| n.active()))
             .unwrap_or(false)
         {
             return Err(Error::Message(format!(
@@ -268,15 +271,26 @@ impl Guest for Filestorage {
             )));
         }
 
-        // Add node to agreement (or reactivate if previously left) — `set`
-        // moves it into the `active/true` index bucket.
-        nodes_state
-            .nodes()
-            .set(&node_id, NodeState { active: true });
+        // Add the node, reactivating if it previously left and creating the
+        // node-set on the very first join. Either way `set` lands it in the
+        // `active/true` bucket and bumps that bucket's framework-maintained count.
+        match &nodes_state {
+            Some(s) => s.nodes().set(&node_id, NodeState { active: true }),
+            None => model.agreement_nodes().set(
+                &agreement_id,
+                AgreementNodes {
+                    nodes: IndexedMap::new(&[(node_id, NodeState { active: true })]),
+                },
+            ),
+        }
 
-        // Increment node count
-        nodes_state.update_node_count(|c| c + 1);
-        let node_count = nodes_state.node_count();
+        // Active-node count is the `active/true` bucket size — read straight from
+        // the index, no hand-kept counter.
+        let node_count = model
+            .agreement_nodes()
+            .get(&agreement_id)
+            .map(|s| s.nodes().count_active(true))
+            .unwrap_or(0);
 
         // Check if we should activate (only if not already active)
         let min_nodes = model.min_nodes();
@@ -339,13 +353,11 @@ impl Guest for Filestorage {
         // threshold (|N_f| <= n_min). We do not enforce that rule yet.
 
         // Mark node as inactive (kept as a row; `set` moves it to the
-        // `active/false` index bucket, out of the live-member scan).
+        // `active/false` index bucket, out of the live-member scan, and the
+        // framework decrements the `active/true` bucket count automatically).
         nodes_state
             .nodes()
             .set(&node_id, NodeState { active: false });
-
-        // Decrement node count
-        nodes_state.update_node_count(|c| c.saturating_sub(1));
 
         Ok(LeaveAgreementResult {
             agreement_id,

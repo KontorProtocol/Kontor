@@ -170,12 +170,19 @@ pub fn generate_struct(
                             }
                         }
 
-                        // The typed `where_<field>` lookups come from the value's
-                        // `<Value>Index` trait; this supplies its one primitive.
+                        // The typed `where_<field>`/`count_<field>` lookups come
+                        // from the value's `<Value>Index` trait; this supplies its
+                        // two primitives. `bucket_count` reads the count the
+                        // framework maintains AT the bucket-prefix path.
                         impl #index_trait<#k_ty> for #field_model_name {
                             fn by_index(&self, index_name: &str, index_key: &str) -> impl Iterator<Item = #k_ty> + use<> {
                                 let bucket = self.index_path.push(index_name).push(index_key);
                                 stdlib::ReadStorage::__get_keys(&self.ctx, &bucket)
+                            }
+
+                            fn bucket_count(&self, index_name: &str, index_key: &str) -> u64 {
+                                let bucket = self.index_path.push(index_name).push(index_key);
+                                stdlib::ReadStorage::__get_u64(&self.ctx, &bucket).unwrap_or(0)
                             }
                         }
                     });

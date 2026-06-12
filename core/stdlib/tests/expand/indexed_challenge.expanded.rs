@@ -33,10 +33,20 @@ where
         index_name: &str,
         index_key: &str,
     ) -> impl Iterator<Item = K> + use<Self, K>;
+    /// O(1) member count of a `(index_name, index_key)` bucket, the
+    /// framework-maintained size of what `by_index` would scan. The other
+    /// required primitive the field model supplies.
+    fn bucket_count(&self, index_name: &str, index_key: &str) -> u64;
     fn where_status(&self, status: u64) -> impl Iterator<Item = K> {
         self.by_index("status", &stdlib::IndexKey::index_key(&status))
     }
+    fn count_status(&self, status: u64) -> u64 {
+        self.bucket_count("status", &stdlib::IndexKey::index_key(&status))
+    }
     fn where_prover_id(&self, prover_id: u64) -> impl Iterator<Item = K> {
         self.by_index("prover_id", &stdlib::IndexKey::index_key(&prover_id))
+    }
+    fn count_prover_id(&self, prover_id: u64) -> u64 {
+        self.bucket_count("prover_id", &stdlib::IndexKey::index_key(&prover_id))
     }
 }

@@ -201,8 +201,15 @@ where
         index_name: &str,
         index_key: &str,
     ) -> impl Iterator<Item = K> + use<Self, K>;
+    /// O(1) member count of a `(index_name, index_key)` bucket, the
+    /// framework-maintained size of what `by_index` would scan. The other
+    /// required primitive the field model supplies.
+    fn bucket_count(&self, index_name: &str, index_key: &str) -> u64;
     fn where_status(&self, status: u64) -> impl Iterator<Item = K> {
         self.by_index("status", &stdlib::IndexKey::index_key(&status))
+    }
+    fn count_status(&self, status: u64) -> u64 {
+        self.bucket_count("status", &stdlib::IndexKey::index_key(&status))
     }
 }
 struct ChallengeStorage {
@@ -272,6 +279,10 @@ impl ChallengeIndex<u64> for ChallengeStorageChallengesModel {
     ) -> impl Iterator<Item = u64> + use<> {
         let bucket = self.index_path.push(index_name).push(index_key);
         stdlib::ReadStorage::__get_keys(&self.ctx, &bucket)
+    }
+    fn bucket_count(&self, index_name: &str, index_key: &str) -> u64 {
+        let bucket = self.index_path.push(index_name).push(index_key);
+        stdlib::ReadStorage::__get_u64(&self.ctx, &bucket).unwrap_or(0)
     }
 }
 pub struct ChallengeStorageWriteModel {
@@ -379,5 +390,9 @@ impl ChallengeIndex<u64> for ChallengeStorageChallengesWriteModel {
     ) -> impl Iterator<Item = u64> + use<> {
         let bucket = self.index_path.push(index_name).push(index_key);
         stdlib::ReadStorage::__get_keys(&self.ctx, &bucket)
+    }
+    fn bucket_count(&self, index_name: &str, index_key: &str) -> u64 {
+        let bucket = self.index_path.push(index_name).push(index_key);
+        stdlib::ReadStorage::__get_u64(&self.ctx, &bucket).unwrap_or(0)
     }
 }
