@@ -111,8 +111,14 @@ pub fn apply_index_diff<S: WriteStorage + ReadStorage + ?Sized>(
     for (name, index_key) in old {
         if !new.iter().any(|(n, k)| n == name && k == index_key) {
             let bucket = index_root.push(*name).push(index_key.as_ref());
-            ctx.__delete(&bucket.push(key));
-            bump_bucket_count(ctx, &bucket, false);
+            // Decrement ONLY when the delete actually removed a live row.
+            // `__delete` returns false for a no-op (the entry was already
+            // tombstoned or never written — an index/count that drifted); counting
+            // that as a removal would underflow the bucket count and trap. The
+            // delete result is the authority on whether membership changed.
+            if ctx.__delete(&bucket.push(key)) {
+                bump_bucket_count(ctx, &bucket, false);
+            }
         }
     }
     for (name, index_key) in new {
@@ -365,6 +371,26 @@ mod tests {
         assert_eq!(ctx.__get_u64("t#idx.status.proven"), Some(1));
         assert_eq!(ctx.__get_u64("t#idx.status.active"), Some(0));
         assert_eq!(ctx.__get_u64("t#idx.owner.1"), Some(1));
+    }
+
+    // A removal whose index row isn't live (already tombstoned / never written —
+    // a count that drifted) must be a no-op for the count, NOT a decrement: the
+    // `__delete` returns false, and decrementing anyway would underflow the bucket
+    // count and trap mid-update. Regression for "index diff ignores delete result".
+    #[test]
+    fn apply_index_diff_noop_delete_does_not_decrement() {
+        let ctx = Rc::new(Mock::default());
+        let index = p("t#idx");
+
+        // `old` claims `k` is in the `status.active` bucket, but no void row was
+        // ever written there and the count is unset (0). Removing it is a no-op
+        // delete; an unconditional decrement would `checked_sub(0)` → trap.
+        apply_index_diff(&ctx, &index, "k", &[("status", "active".into())], &[]);
+
+        // Reaching here means no trap. The delete was attempted but removed
+        // nothing, so the (absent) count was left untouched.
+        assert_eq!(*ctx.deletes.borrow(), 1);
+        assert_eq!(ctx.__get_u64("t#idx.status.active"), None);
     }
 
     // The bulk `Store` path: a map populated before a wholesale write must land
