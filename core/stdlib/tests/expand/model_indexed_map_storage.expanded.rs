@@ -45,13 +45,6 @@ impl ChallengeModel {
     pub fn status(&self) -> u64 {
         stdlib::ReadStorage::__get(&self.ctx, self.base_path.push("status")).unwrap()
     }
-    pub fn __index_entries(
-        &self,
-    ) -> alloc::vec::Vec<(&'static str, alloc::string::String)> {
-        let mut entries = alloc::vec::Vec::new();
-        entries.push(("status", alloc::string::ToString::to_string(&self.status())));
-        entries
-    }
     pub fn load(&self) -> Challenge {
         Challenge {
             prover: self.prover(),
@@ -285,7 +278,10 @@ impl ChallengeStorageChallengesWriteModel {
     pub fn set(&self, key: &u64, value: Challenge) {
         let key_str = key.to_string();
         let new_entries = stdlib::Indexed::index_entries(&value);
-        let old_entries = self.get(key).map(|m| m.__index_entries()).unwrap_or_default();
+        let old_entries = self
+            .get(key)
+            .map(|m| stdlib::Indexed::index_entries(&m.load()))
+            .unwrap_or_default();
         stdlib::apply_index_diff(
             &self.ctx,
             &self.index_path,
@@ -298,7 +294,10 @@ impl ChallengeStorageChallengesWriteModel {
     /// Remove the entry and its index rows. Returns true if a live value existed.
     pub fn remove(&self, key: &u64) -> bool {
         let key_str = key.to_string();
-        let old_entries = self.get(key).map(|m| m.__index_entries()).unwrap_or_default();
+        let old_entries = self
+            .get(key)
+            .map(|m| stdlib::Indexed::index_entries(&m.load()))
+            .unwrap_or_default();
         stdlib::apply_index_diff(
             &self.ctx,
             &self.index_path,

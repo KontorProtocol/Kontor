@@ -106,15 +106,16 @@ pub fn generate_struct(
 
                     // Mutators only on the write model. They maintain the index
                     // through the shared diff helper. New entries come from the
-                    // value; old entries are read back through the value model's
-                    // generated `__index_entries`, which touches only the
-                    // `#[index]` columns — not the whole struct.
+                    // value's `Indexed` impl; old entries from loading the prior
+                    // value and asking it the same way — one spec source, so it
+                    // also works for WIT value types (which supply `Indexed` by
+                    // hand, no field attrs to derive from).
                     let mutators = if write {
                         quote! {
                             pub fn set(&self, key: &#k_ty, value: #v_ty) {
                                 let key_str = key.to_string();
                                 let new_entries = stdlib::Indexed::index_entries(&value);
-                                let old_entries = self.get(key).map(|m| m.__index_entries()).unwrap_or_default();
+                                let old_entries = self.get(key).map(|m| stdlib::Indexed::index_entries(&m.load())).unwrap_or_default();
                                 stdlib::apply_index_diff(&self.ctx, &self.index_path, &key_str, &old_entries, &new_entries);
                                 stdlib::WriteStorage::__set(&self.ctx, self.base_path.push(key_str), value);
                             }
@@ -122,7 +123,7 @@ pub fn generate_struct(
                             /// Remove the entry and its index rows. Returns true if a live value existed.
                             pub fn remove(&self, key: &#k_ty) -> bool {
                                 let key_str = key.to_string();
-                                let old_entries = self.get(key).map(|m| m.__index_entries()).unwrap_or_default();
+                                let old_entries = self.get(key).map(|m| stdlib::Indexed::index_entries(&m.load())).unwrap_or_default();
                                 stdlib::apply_index_diff(&self.ctx, &self.index_path, &key_str, &old_entries, &[]);
                                 stdlib::WriteStorage::__delete(&self.ctx, &self.base_path.push(key_str))
                             }
@@ -297,37 +298,6 @@ pub fn generate_struct(
                 })
                 .collect::<Result<Vec<_>>>()?;
 
-            // When this struct is an `IndexedMap` value, its `#[index]` fields
-            // drive index maintenance. Generate (read model only — the write
-            // model derefs to it) a reader that pulls just those columns from
-            // storage, so the field model can diff old vs new without loading the
-            // whole value. Mirrors the value-level `Indexed::index_entries`.
-            let index_reader = {
-                let pushes = fields
-                    .named
-                    .iter()
-                    .filter(|f| f.attrs.iter().any(|a| a.path().is_ident("index")))
-                    .map(|field| {
-                        let fname = field.ident.as_ref().unwrap();
-                        let name_str = fname.to_string();
-                        quote! {
-                            entries.push((#name_str, alloc::string::ToString::to_string(&self.#fname())));
-                        }
-                    })
-                    .collect::<Vec<_>>();
-                if write || pushes.is_empty() {
-                    quote! {}
-                } else {
-                    quote! {
-                        pub fn __index_entries(&self) -> alloc::vec::Vec<(&'static str, alloc::string::String)> {
-                            let mut entries = alloc::vec::Vec::new();
-                            #(#pushes)*
-                            entries
-                        }
-                    }
-                }
-            };
-
             let proc_props = if write {
                 quote! {
                     model: #read_only_model_name,
@@ -386,8 +356,6 @@ pub fn generate_struct(
                     #(#getters)*
 
                     #(#setters)*
-
-                    #index_reader
 
                     pub fn load(&self) -> #type_name {
                         #type_name {
