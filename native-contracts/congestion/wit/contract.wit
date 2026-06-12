@@ -1,0 +1,29 @@
+package root:component;
+
+world root {
+  include kontor:built-in/built-in;
+  use kontor:built-in/context.{view-context, proc-context, core-context, contract};
+  use kontor:built-in/error.{error};
+  use kontor:built-in/numbers.{decimal};
+
+  // Congestion-pricing parameters (economics spec §Congestion Pricing).
+  record congestion-params {
+    u-low-bps: u64,
+    u-high-bps: u64,
+    lambda-decay-bps: u64,
+    kappa-cong-bps: u64,
+    phi-base: decimal,
+  }
+
+  export init: async func(ctx: borrow<proc-context>) -> contract;
+
+  // Advance β(t) from the prior block's utilization (fraction in [0,1]).
+  // Core-context: the reactor calls this once per block. Returns the new β.
+  export update-beta: async func(ctx: borrow<core-context>, utilization: decimal) -> result<decimal, error>;
+
+  export get-beta: async func(ctx: borrow<view-context>) -> decimal;
+  // Current gas-fee multiplier: φ_base · β (KOR per gas unit).
+  export fee-multiplier: async func(ctx: borrow<view-context>) -> result<decimal, error>;
+  export get-congestion-params: async func(ctx: borrow<view-context>) -> congestion-params;
+  export set-congestion-params: async func(ctx: borrow<core-context>, params: congestion-params) -> result<_, error>;
+}
