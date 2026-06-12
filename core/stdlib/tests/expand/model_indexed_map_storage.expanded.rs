@@ -55,6 +55,8 @@ impl ChallengeModel {
 pub struct ChallengeWriteModel {
     pub base_path: stdlib::DotPathBuf,
     ctx: alloc::rc::Rc<crate::context::ProcStorage>,
+    #[allow(dead_code)]
+    index_binding: Option<(stdlib::DotPathBuf, alloc::string::String)>,
     model: ChallengeModel,
 }
 impl ChallengeWriteModel {
@@ -66,11 +68,21 @@ impl ChallengeWriteModel {
         Self {
             base_path: base_path.clone(),
             ctx,
+            index_binding: None,
             model: ChallengeModel::new(
                 alloc::rc::Rc::new(view_storage),
                 base_path.clone(),
             ),
         }
+    }
+    #[allow(dead_code)]
+    pub fn with_index(
+        mut self,
+        index_root: stdlib::DotPathBuf,
+        index_key: alloc::string::String,
+    ) -> Self {
+        self.index_binding = Some((index_root, index_key));
+        self
     }
     pub fn prover(&self) -> u64 {
         stdlib::ReadStorage::__get(&self.ctx, self.base_path.push("prover")).unwrap()
@@ -102,26 +114,52 @@ impl ChallengeWriteModel {
         Ok(())
     }
     pub fn set_status(&self, value: u64) {
-        stdlib::WriteStorage::__set(&self.ctx, self.base_path.push("status"), value);
+        let path = self.base_path.push("status");
+        let old: u64 = stdlib::ReadStorage::__get(&self.ctx, path.clone()).unwrap();
+        let new = value;
+        if let Some((index_root, index_key)) = &self.index_binding {
+            stdlib::apply_index_diff(
+                &self.ctx,
+                index_root,
+                index_key,
+                &[("status", alloc::string::ToString::to_string(&old))],
+                &[("status", alloc::string::ToString::to_string(&new))],
+            );
+        }
+        stdlib::WriteStorage::__set(&self.ctx, path, new);
     }
     pub fn update_status(&self, f: impl Fn(u64) -> u64) {
         let path = self.base_path.push("status");
-        stdlib::WriteStorage::__set(
-            &self.ctx,
-            path.clone(),
-            f(stdlib::ReadStorage::__get(&self.ctx, path).unwrap()),
-        );
+        let old: u64 = stdlib::ReadStorage::__get(&self.ctx, path.clone()).unwrap();
+        let new = f(old.clone());
+        if let Some((index_root, index_key)) = &self.index_binding {
+            stdlib::apply_index_diff(
+                &self.ctx,
+                index_root,
+                index_key,
+                &[("status", alloc::string::ToString::to_string(&old))],
+                &[("status", alloc::string::ToString::to_string(&new))],
+            );
+        }
+        stdlib::WriteStorage::__set(&self.ctx, path, new);
     }
     pub fn try_update_status(
         &self,
         f: impl Fn(u64) -> Result<u64, crate::error::Error>,
     ) -> Result<(), crate::error::Error> {
         let path = self.base_path.push("status");
-        stdlib::WriteStorage::__set(
-            &self.ctx,
-            path.clone(),
-            f(stdlib::ReadStorage::__get(&self.ctx, path).unwrap())?,
-        );
+        let old: u64 = stdlib::ReadStorage::__get(&self.ctx, path.clone()).unwrap();
+        let new = f(old.clone())?;
+        if let Some((index_root, index_key)) = &self.index_binding {
+            stdlib::apply_index_diff(
+                &self.ctx,
+                index_root,
+                index_key,
+                &[("status", alloc::string::ToString::to_string(&old))],
+                &[("status", alloc::string::ToString::to_string(&new))],
+            );
+        }
+        stdlib::WriteStorage::__set(&self.ctx, path, new);
         Ok(())
     }
     pub fn load(&self) -> Challenge {
@@ -217,6 +255,8 @@ impl ChallengeStorageChallengesModel {
 pub struct ChallengeStorageWriteModel {
     pub base_path: stdlib::DotPathBuf,
     ctx: alloc::rc::Rc<crate::context::ProcStorage>,
+    #[allow(dead_code)]
+    index_binding: Option<(stdlib::DotPathBuf, alloc::string::String)>,
     model: ChallengeStorageModel,
 }
 impl ChallengeStorageWriteModel {
@@ -228,11 +268,21 @@ impl ChallengeStorageWriteModel {
         Self {
             base_path: base_path.clone(),
             ctx,
+            index_binding: None,
             model: ChallengeStorageModel::new(
                 alloc::rc::Rc::new(view_storage),
                 base_path.clone(),
             ),
         }
+    }
+    #[allow(dead_code)]
+    pub fn with_index(
+        mut self,
+        index_root: stdlib::DotPathBuf,
+        index_key: alloc::string::String,
+    ) -> Self {
+        self.index_binding = Some((index_root, index_key));
+        self
     }
     pub fn challenges(&self) -> ChallengeStorageChallengesWriteModel {
         ChallengeStorageChallengesWriteModel {
@@ -273,7 +323,10 @@ impl ChallengeStorageChallengesWriteModel {
     pub fn get(&self, key: &u64) -> Option<ChallengeWriteModel> {
         let base_path = self.base_path.push(key.to_string());
         stdlib::ReadStorage::__exists(&self.ctx, &base_path)
-            .then(|| ChallengeWriteModel::new(self.ctx.clone(), base_path))
+            .then(|| {
+                ChallengeWriteModel::new(self.ctx.clone(), base_path)
+                    .with_index(self.index_path.clone(), key.to_string())
+            })
     }
     pub fn set(&self, key: &u64, value: Challenge) {
         let key_str = key.to_string();
