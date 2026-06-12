@@ -105,7 +105,10 @@ pub trait WriteStorage {
 
     fn __set<T: Store<Self>>(self: &alloc::rc::Rc<Self>, path: DotPathBuf, value: T);
 
-    /// Tombstone a single path. Returns true if a live value was removed.
+    /// Tombstone a path and its whole subtree (every live descendant), so a
+    /// struct/map value stored under child paths is fully removed — not just the
+    /// exact path. Returns true if any live row was tombstoned. (A leaf path,
+    /// e.g. an index void, has no descendants, so this is a single tombstone.)
     fn __delete(self: &alloc::rc::Rc<Self>, path: &str) -> bool;
 
     fn __delete_matching_paths(

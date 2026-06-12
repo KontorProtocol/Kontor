@@ -97,6 +97,13 @@ pub async fn get_latest_contract_state_value(
     Ok(None)
 }
 
+/// Remove an entry by tombstoning its WHOLE subtree: the path itself AND every
+/// live descendant (`path.field`, nested struct/map rows, …). A struct value
+/// persists under child paths, so tombstoning only the exact path would leave
+/// live primary rows behind while the caller (`Map`/`IndexedMap` `remove`) has
+/// already cleared the index — a half-removed entry. Height-versioned (one
+/// `deleted = true` row per live path at the current height), so reorg-safe.
+/// Returns true if any live row was tombstoned.
 pub async fn delete_contract_state(
     conn: &Connection,
     height: u64,
@@ -104,18 +111,37 @@ pub async fn delete_contract_state(
     contract_id: u64,
     path: &str,
 ) -> Result<bool, Error> {
-    Ok(
-        match get_latest_contract_state(conn, contract_id, path).await? {
-            Some(mut row) => {
-                row.deleted = true;
-                row.height = height;
-                row.tx_id = tx_id;
-                insert_contract_state(conn, row).await?;
-                true
-            }
-            None => false,
-        },
-    )
+    // Latest live version of every path at/under `path` (the entry root + its
+    // descendants). Re-inserted as a tombstone below; `partition_by("path")` +
+    // post `deleted = false` mirrors `exists`, so an already-tombstoned path is
+    // skipped (not re-tombstoned).
+    let query = LatestMany::builder()
+        .table("contract_state")
+        .select("contract_id, height, tx_id, path, value, deleted")
+        .partition_by("path")
+        .post("deleted = false")
+        .filter("contract_id = :contract_id AND (path = :path OR path LIKE :path || '.%')")
+        .build()
+        .to_sql();
+    let mut result = conn
+        .query(&query, ((":contract_id", contract_id), (":path", path)))
+        .await?;
+
+    // Materialise the live rows BEFORE writing tombstones (don't read and write
+    // `contract_state` in the same statement).
+    let mut live: Vec<ContractStateRow> = Vec::new();
+    while let Some(row) = result.next().await? {
+        live.push(from_row(&row)?);
+    }
+
+    let removed = !live.is_empty();
+    for mut row in live {
+        row.deleted = true;
+        row.height = height;
+        row.tx_id = tx_id;
+        insert_contract_state(conn, row).await?;
+    }
+    Ok(removed)
 }
 
 pub async fn exists_contract_state(

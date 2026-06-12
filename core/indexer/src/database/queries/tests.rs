@@ -485,6 +485,88 @@ async fn test_contract_state_operations() -> Result<()> {
     Ok(())
 }
 
+// `delete_contract_state` must tombstone the WHOLE subtree of an entry, not just
+// the exact path: a struct/map value persists under child paths (`key.field`),
+// so removing it has to clear every live descendant — else `Map`/`IndexedMap`
+// `remove` leaves live primary rows behind after clearing the index. Sibling
+// entries (boundaried at `.`) must be untouched. Regression for "remove skips
+// nested stored fields".
+#[tokio::test]
+async fn test_delete_tombstones_whole_subtree() -> Result<()> {
+    let (_reader, writer, _temp_dir) = new_test_db().await?;
+    let conn = writer.connection();
+    let cid = 123;
+    let height = 800000u64;
+    insert_block(
+        &conn,
+        BlockRow::builder()
+            .height(height)
+            .hash(new_mock_block_hash(height as u32))
+            .build(),
+    )
+    .await?;
+    let tx = insert_transaction(
+        &conn,
+        TransactionRow::builder()
+            .height(height)
+            .txid(format!("aaaa{:060}", 0))
+            .tx_index(0)
+            .confirmed_height(height)
+            .build(),
+    )
+    .await?;
+    let insert = async |path: &str| -> Result<()> {
+        insert_contract_state(
+            &conn,
+            ContractStateRow::builder()
+                .contract_id(cid)
+                .tx_id(tx)
+                .height(height)
+                .path(path.to_string())
+                .value(vec![1])
+                .build(),
+        )
+        .await?;
+        Ok(())
+    };
+
+    // Struct value `m.k` lives under child field paths (incl. a nested struct);
+    // `m.k2` is a sibling entry that must survive.
+    insert("m.k.field1").await?;
+    insert("m.k.field2").await?;
+    insert("m.k.nested.inner").await?;
+    insert("m.k2.field1").await?;
+
+    let removed = delete_contract_state(&conn, height, Some(tx), cid, "m.k").await?;
+    assert!(removed, "the subtree had live rows to tombstone");
+
+    // Every descendant of `m.k` is gone (not just the exact path).
+    assert!(!exists_contract_state(&conn, cid, "m.k").await?);
+    assert!(
+        get_latest_contract_state(&conn, cid, "m.k.field1")
+            .await?
+            .is_none()
+    );
+    assert!(
+        get_latest_contract_state(&conn, cid, "m.k.nested.inner")
+            .await?
+            .is_none()
+    );
+
+    // The `.`-boundaried sibling `m.k2` is untouched.
+    assert!(exists_contract_state(&conn, cid, "m.k2").await?);
+    assert!(
+        get_latest_contract_state(&conn, cid, "m.k2.field1")
+            .await?
+            .is_some()
+    );
+
+    // A second remove finds nothing live → no-op, returns false.
+    assert!(!delete_contract_state(&conn, height, Some(tx), cid, "m.k").await?);
+
+    Ok(())
+}
+
 #[tokio::test]
 async fn test_transaction_operations() -> Result<()> {
     let (_reader, writer, _temp_dir) = new_test_db().await?;
