@@ -181,6 +181,7 @@ impl Guest for Filestorage {
             agreement_id: agreement_id.clone(),
             file_id: descriptor.file_id.clone(),
             active: false,
+            active_challenge: None,
         };
 
         // Store the agreement and initialize node tracking
@@ -397,6 +398,10 @@ impl Guest for Filestorage {
             {
                 // In-place; the `status` index follows via the get() binding.
                 challenge.set_status(ChallengeStatus::Expired);
+                // The agreement is free to be challenged again.
+                if let Some(agreement) = model.agreements().get(&challenge.agreement_id()) {
+                    agreement.set_active_challenge(None);
+                }
                 expired = expired.saturating_add(1);
             }
         }
@@ -418,20 +423,18 @@ impl Guest for Filestorage {
         // Per-block batch seed: σ_batch = HKDF_SHA256(block_hash, "KONTOR-CHAL::v1" || block_height)
         let sigma_batch = derive_batch_seed(&block_hash, block_height);
 
-        // Exclude any agreement_id that already has an active challenge — the
-        // active challenges are an indexed lookup, not a full-collection scan.
-        let challenged_agreement_ids: Vec<String> = model
-            .challenges()
-            .by_index("status", challenge_status_key(ChallengeStatus::Active))
-            .filter_map(|cid: String| model.challenges().get(&cid).map(|c| c.agreement_id()))
-            .collect();
-
-        // Eligible agreements: active (indexed) and not already challenged. The
-        // former nested agreement×challenge scan collapses to two index reads.
+        // Eligible agreements: active (indexed) and not already challenged.
+        // "Already challenged?" is a point read of the agreement's co-located
+        // `active_challenge` — no scan of the active-challenge set.
         let eligible_agreement_ids: Vec<String> = model
             .agreements()
             .by_index("active", "true")
-            .filter(|aid: &String| !challenged_agreement_ids.contains(aid))
+            .filter(|aid: &String| {
+                model
+                    .agreements()
+                    .get(aid)
+                    .is_some_and(|a| a.active_challenge().is_none())
+            })
             .collect();
 
         let total_files = eligible_agreement_ids.len();
@@ -546,6 +549,7 @@ impl Guest for Filestorage {
             model
                 .challenges()
                 .set(&challenge.challenge_id, challenge.clone());
+            agreement.set_active_challenge(Some(challenge.challenge_id.clone()));
 
             new_challenges.push(challenge);
         }
@@ -594,18 +598,9 @@ impl Guest for Filestorage {
             )));
         }
 
-        // Check no active challenge already exists for this agreement — scan the
-        // active bucket (small), not every challenge ever.
-        let has_active = model
-            .challenges()
-            .by_index("status", challenge_status_key(ChallengeStatus::Active))
-            .any(|cid: String| {
-                model
-                    .challenges()
-                    .get(&cid)
-                    .is_some_and(|c| c.agreement_id() == agreement_id)
-            });
-        if has_active {
+        // No active challenge already exists for this agreement — a point read
+        // of the co-located `active_challenge`, not a scan.
+        if agreement.active_challenge().is_some() {
             return Err(Error::Message(format!(
                 "Agreement {} already has an active challenge",
                 agreement_id
@@ -645,6 +640,7 @@ impl Guest for Filestorage {
         model
             .challenges()
             .set(&challenge.challenge_id, challenge.clone());
+        agreement.set_active_challenge(Some(challenge.challenge_id.clone()));
 
         Ok(challenge)
     }
@@ -724,10 +720,15 @@ impl Guest for Filestorage {
             file_registry::VerifyResult::Invalid => ChallengeStatus::Invalid,
         };
 
-        // In-place; the `status` index follows via the get() binding.
+        // In-place; the `status` index follows via the get() binding. The status
+        // is terminal (proven/failed/invalid), so the agreement's challenge slot
+        // is cleared.
         for cid in &challenge_ids {
             if let Some(c) = model.challenges().get(cid) {
                 c.set_status(new_status);
+                if let Some(agreement) = model.agreements().get(&c.agreement_id()) {
+                    agreement.set_active_challenge(None);
+                }
             }
         }
 
