@@ -39,6 +39,13 @@ impl ChallengeModel {
             ctx,
         }
     }
+    pub fn __index_entries(
+        &self,
+    ) -> alloc::vec::Vec<(&'static str, alloc::string::String)> {
+        let mut entries = alloc::vec::Vec::new();
+        entries.push(("status", alloc::string::ToString::to_string(&self.status())));
+        entries
+    }
     pub fn prover(&self) -> u64 {
         stdlib::ReadStorage::__get(&self.ctx, self.base_path.push("prover")).unwrap()
     }
@@ -55,7 +62,6 @@ impl ChallengeModel {
 pub struct ChallengeWriteModel {
     pub base_path: stdlib::DotPathBuf,
     ctx: alloc::rc::Rc<crate::context::ProcStorage>,
-    #[allow(dead_code)]
     index_binding: Option<(stdlib::DotPathBuf, alloc::string::String)>,
     model: ChallengeModel,
 }
@@ -75,7 +81,6 @@ impl ChallengeWriteModel {
             ),
         }
     }
-    #[allow(dead_code)]
     pub fn with_index(
         mut self,
         index_root: stdlib::DotPathBuf,
@@ -251,8 +256,6 @@ impl ChallengeStorageChallengesModel {
 pub struct ChallengeStorageWriteModel {
     pub base_path: stdlib::DotPathBuf,
     ctx: alloc::rc::Rc<crate::context::ProcStorage>,
-    #[allow(dead_code)]
-    index_binding: Option<(stdlib::DotPathBuf, alloc::string::String)>,
     model: ChallengeStorageModel,
 }
 impl ChallengeStorageWriteModel {
@@ -264,21 +267,11 @@ impl ChallengeStorageWriteModel {
         Self {
             base_path: base_path.clone(),
             ctx,
-            index_binding: None,
             model: ChallengeStorageModel::new(
                 alloc::rc::Rc::new(view_storage),
                 base_path.clone(),
             ),
         }
-    }
-    #[allow(dead_code)]
-    pub fn with_index(
-        mut self,
-        index_root: stdlib::DotPathBuf,
-        index_key: alloc::string::String,
-    ) -> Self {
-        self.index_binding = Some((index_root, index_key));
-        self
     }
     pub fn challenges(&self) -> ChallengeStorageChallengesWriteModel {
         ChallengeStorageChallengesWriteModel {
@@ -327,10 +320,7 @@ impl ChallengeStorageChallengesWriteModel {
     pub fn set(&self, key: &u64, value: Challenge) {
         let key_str = key.to_string();
         let new_entries = stdlib::Indexed::index_entries(&value);
-        let old_entries = self
-            .get(key)
-            .map(|m| stdlib::Indexed::index_entries(&m.load()))
-            .unwrap_or_default();
+        let old_entries = self.get(key).map(|m| m.__index_entries()).unwrap_or_default();
         stdlib::apply_index_diff(
             &self.ctx,
             &self.index_path,
@@ -343,10 +333,7 @@ impl ChallengeStorageChallengesWriteModel {
     /// Remove the entry and its index rows. Returns true if a live value existed.
     pub fn remove(&self, key: &u64) -> bool {
         let key_str = key.to_string();
-        let old_entries = self
-            .get(key)
-            .map(|m| stdlib::Indexed::index_entries(&m.load()))
-            .unwrap_or_default();
+        let old_entries = self.get(key).map(|m| m.__index_entries()).unwrap_or_default();
         stdlib::apply_index_diff(
             &self.ctx,
             &self.index_path,

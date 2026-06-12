@@ -111,17 +111,16 @@ pub fn generate_struct(
                     };
 
                     // Mutators only on the write model. They maintain the index
-                    // through the shared diff helper. New entries come from the
-                    // value's `Indexed` impl; old entries from loading the prior
-                    // value and asking it the same way — one spec source, so it
-                    // also works for WIT value types (which supply `Indexed` by
-                    // hand, no field attrs to derive from).
+                    // through the shared diff helper: new entries from the value's
+                    // `Indexed` impl, old entries from the prior value's model via
+                    // `__index_entries` — which reads only the `#[index]` columns,
+                    // not the whole struct.
                     let mutators = if write {
                         quote! {
                             pub fn set(&self, key: &#k_ty, value: #v_ty) {
                                 let key_str = key.to_string();
                                 let new_entries = stdlib::Indexed::index_entries(&value);
-                                let old_entries = self.get(key).map(|m| stdlib::Indexed::index_entries(&m.load())).unwrap_or_default();
+                                let old_entries = self.get(key).map(|m| m.__index_entries()).unwrap_or_default();
                                 stdlib::apply_index_diff(&self.ctx, &self.index_path, &key_str, &old_entries, &new_entries);
                                 stdlib::WriteStorage::__set(&self.ctx, self.base_path.push(key_str), value);
                             }
@@ -129,7 +128,7 @@ pub fn generate_struct(
                             /// Remove the entry and its index rows. Returns true if a live value existed.
                             pub fn remove(&self, key: &#k_ty) -> bool {
                                 let key_str = key.to_string();
-                                let old_entries = self.get(key).map(|m| stdlib::Indexed::index_entries(&m.load())).unwrap_or_default();
+                                let old_entries = self.get(key).map(|m| m.__index_entries()).unwrap_or_default();
                                 stdlib::apply_index_diff(&self.ctx, &self.index_path, &key_str, &old_entries, &[]);
                                 stdlib::WriteStorage::__delete(&self.ctx, &self.base_path.push(key_str))
                             }
@@ -366,21 +365,28 @@ pub fn generate_struct(
                 })
                 .collect::<Result<Vec<_>>>()?;
 
-            // Write models carry an optional binding to the IndexedMap that owns
-            // them (the `#idx` root + this entry's key), injected by the field
-            // model's `get` via `with_index`. Indexed-field setters consult it to
-            // keep the index in step. Present on every write model (harmless when
-            // unbound) so the field model's `get` can call `with_index`
-            // uniformly.
-            let (binding_field, binding_init, with_index_method) = if write {
+            // A struct is an IndexedMap value iff it carries `#[index]` fields. A
+            // proc-macro derive only sees the type it's on — never where that type
+            // is used — so this attribute is the build-time signal that index
+            // machinery is wanted. Only these structs get it; the rest stay lean.
+            let indexed_fields: Vec<&syn::Field> = fields
+                .named
+                .iter()
+                .filter(|f| f.attrs.iter().any(|a| a.path().is_ident("index")))
+                .collect();
+            let has_indexed = !indexed_fields.is_empty();
+
+            // Write model: an optional binding to the owning IndexedMap (`#idx`
+            // root + this entry's key), injected by the field model's `get` via
+            // `with_index`; indexed-field setters consult it to keep the index in
+            // step.
+            let (binding_field, binding_init, with_index_method) = if write && has_indexed {
                 (
                     quote! {
-                        #[allow(dead_code)]
                         index_binding: Option<(stdlib::DotPathBuf, alloc::string::String)>,
                     },
                     quote! { index_binding: None, },
                     quote! {
-                        #[allow(dead_code)]
                         pub fn with_index(mut self, index_root: stdlib::DotPathBuf, index_key: alloc::string::String) -> Self {
                             self.index_binding = Some((index_root, index_key));
                             self
@@ -389,6 +395,36 @@ pub fn generate_struct(
                 )
             } else {
                 (quote! {}, quote! {}, quote! {})
+            };
+
+            // Read model: pull ONLY the `#[index]` columns (via the getters), so
+            // the field model can compute a value's index entries for a diff
+            // without loading the whole struct. Works for WIT values too — they
+            // get `#[index]` injected by `contract!`'s `indexed = "..."`.
+            let index_reader = if !write && has_indexed {
+                let pushes = indexed_fields.iter().map(|field| {
+                    let fname = field.ident.as_ref().unwrap();
+                    let name_str = fname.to_string();
+                    // A primitive field's getter yields the value; a non-primitive
+                    // (e.g. enum) field's getter yields a model, so `.load()` it.
+                    let value = if utils::is_primitive_type(&field.ty) {
+                        quote! { self.#fname() }
+                    } else {
+                        quote! { self.#fname().load() }
+                    };
+                    quote! {
+                        entries.push((#name_str, alloc::string::ToString::to_string(&#value)));
+                    }
+                });
+                quote! {
+                    pub fn __index_entries(&self) -> alloc::vec::Vec<(&'static str, alloc::string::String)> {
+                        let mut entries = alloc::vec::Vec::new();
+                        #(#pushes)*
+                        entries
+                    }
+                }
+            } else {
+                quote! {}
             };
 
             let proc_props = if write {
@@ -449,6 +485,8 @@ pub fn generate_struct(
                     }
 
                     #with_index_method
+
+                    #index_reader
 
                     #(#getters)*
 

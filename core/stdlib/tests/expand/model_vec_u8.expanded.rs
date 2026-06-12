@@ -34,8 +34,6 @@ impl VecU8Model {
 pub struct VecU8WriteModel {
     pub base_path: stdlib::DotPathBuf,
     ctx: alloc::rc::Rc<crate::context::ProcStorage>,
-    #[allow(dead_code)]
-    index_binding: Option<(stdlib::DotPathBuf, alloc::string::String)>,
     model: VecU8Model,
 }
 impl VecU8WriteModel {
@@ -47,18 +45,8 @@ impl VecU8WriteModel {
         Self {
             base_path: base_path.clone(),
             ctx,
-            index_binding: None,
             model: VecU8Model::new(alloc::rc::Rc::new(view_storage), base_path.clone()),
         }
-    }
-    #[allow(dead_code)]
-    pub fn with_index(
-        mut self,
-        index_root: stdlib::DotPathBuf,
-        index_key: alloc::string::String,
-    ) -> Self {
-        self.index_binding = Some((index_root, index_key));
-        self
     }
     pub fn bytes(&self) -> Vec<u8> {
         stdlib::ReadStorage::__get(&self.ctx, self.base_path.push("bytes")).unwrap()

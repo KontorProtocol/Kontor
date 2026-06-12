@@ -38,8 +38,6 @@ impl ContractAddressModel {
 pub struct ContractAddressWriteModel {
     pub base_path: stdlib::DotPathBuf,
     ctx: alloc::rc::Rc<crate::context::ProcStorage>,
-    #[allow(dead_code)]
-    index_binding: Option<(stdlib::DotPathBuf, alloc::string::String)>,
     model: ContractAddressModel,
 }
 impl ContractAddressWriteModel {
@@ -51,21 +49,11 @@ impl ContractAddressWriteModel {
         Self {
             base_path: base_path.clone(),
             ctx,
-            index_binding: None,
             model: ContractAddressModel::new(
                 alloc::rc::Rc::new(view_storage),
                 base_path.clone(),
             ),
         }
-    }
-    #[allow(dead_code)]
-    pub fn with_index(
-        mut self,
-        index_root: stdlib::DotPathBuf,
-        index_key: alloc::string::String,
-    ) -> Self {
-        self.index_binding = Some((index_root, index_key));
-        self
     }
     pub fn name(&self) -> String {
         stdlib::ReadStorage::__get(&self.ctx, self.base_path.push("name")).unwrap()
