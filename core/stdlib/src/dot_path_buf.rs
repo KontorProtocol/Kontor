@@ -16,17 +16,33 @@ impl DotPathBuf {
         }
     }
 
+    /// Append one path segment. This is the single choke point every segment
+    /// passes through — structural names AND keys (`K::to_string()`, index keys)
+    /// — so it's where key integrity is enforced. A segment is stored verbatim
+    /// into the `.`-joined string the host actually keys on, so a segment that
+    /// contains `.` would silently split into extra segments (the host re-parses
+    /// `joined`, disagreeing with our `segments` vec) and an empty segment would
+    /// collapse onto the parent path. Both corrupt consensus state, so reject
+    /// them loudly here rather than store an unfindable/aliased row. No legitimate
+    /// structural segment is ever empty or dotted, so this only ever fires on a
+    /// bad key.
     pub fn push(&self, segment: impl Into<String>) -> Self {
         let segment = segment.into();
+        assert!(
+            !segment.is_empty(),
+            "path segment must not be empty (an empty map/index key would collapse onto the parent path)"
+        );
+        assert!(
+            !segment.contains('.'),
+            "path segment must not contain the delimiter '.': {segment:?} (a key with a '.' would corrupt the path)"
+        );
         let mut new_segments = self.segments.clone();
         let mut new_joined = self.joined.clone();
-        if !segment.is_empty() {
-            new_segments.push(segment.clone());
-            if !new_joined.is_empty() {
-                new_joined.push('.');
-            }
-            new_joined.push_str(&segment);
+        new_segments.push(segment.clone());
+        if !new_joined.is_empty() {
+            new_joined.push('.');
         }
+        new_joined.push_str(&segment);
         DotPathBuf {
             segments: new_segments,
             joined: new_joined,
@@ -143,9 +159,6 @@ mod tests {
         assert_eq!(path.to_string(), "a.b.c");
         assert_eq!(path.segments().collect::<Vec<_>>(), vec!["a", "b", "c"]);
 
-        let path = path.push("");
-        assert_eq!(path.to_string(), "a.b.c");
-
         let (path, popped) = path.pop();
         assert_eq!(popped, Some("c".to_string()));
         assert_eq!(path.to_string(), "a.b");
@@ -183,5 +196,19 @@ mod tests {
         let path = DotPathBuf::new();
         assert_eq!(path.segments().collect::<Vec<_>>(), vec![] as Vec<&str>);
         assert_eq!(path.to_string(), "");
+    }
+
+    #[test]
+    #[should_panic(expected = "delimiter")]
+    fn push_rejects_dotted_segment() {
+        // A key containing the path delimiter would corrupt the path.
+        DotPathBuf::new().push("a").push("b.c");
+    }
+
+    #[test]
+    #[should_panic(expected = "empty")]
+    fn push_rejects_empty_segment() {
+        // An empty key would collapse onto the parent path.
+        DotPathBuf::new().push("a").push("");
     }
 }

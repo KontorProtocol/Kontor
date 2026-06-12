@@ -282,8 +282,11 @@ mod tests {
         }
     }
 
+    // Build a path from a dotted string by SPLITTING on `.` (each piece a
+    // segment), not a single `push` of the whole string — `push` now rejects a
+    // segment containing `.`.
     fn p(s: &str) -> DotPathBuf {
-        DotPathBuf::new().push(s)
+        DotPathBuf::from(s)
     }
 
     // A struct value with one indexed field — the shape an IndexedMap holds.
