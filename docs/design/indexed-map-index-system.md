@@ -29,8 +29,8 @@ one orthogonal concern:
 |---|---|---|
 | **bucket** | 1+ fields whose `IndexKey` values partition the index; `where_<i>(b)` scans a bucket | 1 field |
 | **sort** *(opt)* | a field whose **order-preserving** `SortKey` orders members *within* a bucket → range scan + early-break | — |
-| **project** *(opt, "covering")* | fields stored in the index leaf so a scan returns data without a follow-up `get` | — |
-| **predicate** *(opt, "partial")* | a value is in the index only when it holds; terminal/irrelevant rows fall out | — |
+| **project** *(opt, "covering")* | a field (or few) stored in the index leaf so a scan returns it without a follow-up `get` | — |
+| **predicate** *(opt, "partial")* | omit a row entirely when false — a pure index-*size* optimization. **Mostly unneeded:** the functional "filter" case is a composite bucket over discriminant fields (incl. `Option` none/some), see Resolved decisions. True partial deferred. | — |
 | *(orthogonal)* **primary key K** | may be compound/tuple; encoded into the `<pk>` segment(s) | scalar |
 
 The whole point: these compose. A "due challenges" index is bucket=`status`,
@@ -92,7 +92,8 @@ Bucketing and ordering are **different jobs**, so two traits:
   meaningful order exists; otherwise a field isn't sortable.
 
 Rules: sort fields must be `SortKey`; the width is part of the index's on-disk
-format (changing it is a migration). This same encoding fixes the standalone
+format, fixed for the life of the (immutable) contract — no migration story
+needed (see Resolved decisions). This same encoding fixes the standalone
 "`u64` keys sort lexicographically" footgun for primary keys too.
 
 ## Declaration syntax
@@ -103,18 +104,20 @@ format (changing it is a migration). This same encoding fixes the standalone
 #[derive(Storage, Indexed)]
 #[index(active)]                                          // sugar: by = active
 #[index(due, by = status, sort = deadline_height)]        // composite + sortable
-#[index(active_list, by = active, include = [agreement_id, file_id])] // covering
-#[index(eligible, by = active, where = active && active_challenge.is_none())] // partial
+#[index(active_id, by = active, include = agreement_id)]   // covering (single scalar)
+#[index(eligible, by = (active, active_challenge))]        // "partial" via composite + Option discriminant
 struct Challenge { /* … */ }
 ```
 
 - Field-level `#[index] f` stays as sugar for `#[index(f, by = f)]`.
-- `by = a` or `by = (a, b)` → bucket segments (order significant).
-- `sort = f` → the `<sort>` segment (f: `SortKey`).
-- `include = [..]` → covering projection (stored in the leaf).
-- `where = <expr over fields>` → partial; the derive emits the entry only when the
-  expression (over `self`'s fields) is true. (Open question: predicate ergonomics
-  — see below.)
+- `by = a` or `by = (a, b)` → bucket segments (order significant). A bucket field
+  may be a bool, an enum (discriminant), or an `Option` (`none`/`some`
+  discriminant) — that last one replaces a predicate DSL for the filter case.
+- `sort = f` → the `<sort>` segment (`f: SortKey`).
+- `include = f` → covering projection stored in the leaf (single scalar for now;
+  multi-field later).
+- *No `where =` predicate DSL* — see Resolved decisions (composite-over-
+  discriminant covers the need; true partial deferred).
 
 ### WIT records — `contract!`'s `indexed`
 
@@ -203,15 +206,20 @@ disappears too.
 1. **`SortKey` + sortable single-bucket index** — the `<sort>` segment, the
    two-level ordered/`up_to` scan, the encoding. Unblocks `expire`. (Also ships
    the numeric-key sortability fix.)
-2. **Composite bucket** — multiple `<bucket…>` segments + multi-arg `where_`.
-3. **Covering** — projection packed into the leaf value + projection-returning
-   scans.
-4. **Partial** — declaration sugar (`where =`); maintenance already supports it.
-5. **Compound primary keys** — generalize `<pk>` encoding (see below).
+2. **Composite bucket + `Option`/enum discriminant bucketing** — multiple
+   `<bucket…>` segments + multi-arg `where_`, and `IndexKey for Option`. Covers
+   the filestorage "eligible" filter (replaces a predicate DSL).
+3. **Covering (single scalar)** — write the projected field into the leaf's
+   existing value slot; projection-returning scans. Multi-field/blob later.
+4. **Compound primary keys** — generalize the `<pk>` encoding (see below).
+5. *(deferred)* **True partial** — omit rows when a predicate is false; only if a
+   real index-size problem appears. Likely via an `Option`-returning computed key.
 
-The leaf layout and the descriptor-based maintenance already accommodate all
-five, so later steps are additive edits, not redesigns. That's the
-"don't shut ourselves out" guarantee: ship #1 now, the rest slot in.
+The leaf layout and the descriptor-based maintenance already accommodate all of
+these, so later steps are additive edits, not redesigns — and there's **no
+migration machinery** to build, because contracts are immutable (see Resolved
+decisions). That's the "don't shut ourselves out" guarantee: ship #1 now, the
+rest slot in.
 
 ## Compound primary keys (orthogonal)
 
@@ -226,19 +234,66 @@ shape), so it can land last without touching index layout. Likely a length-
 prefixed or fixed-width tuple encoding (NOT naive `a:b`, which isn't delimiter-
 safe for arbitrary `a`).
 
-## Open questions
+## Resolved decisions (investigated against the codebase)
 
-- **Partial predicate ergonomics.** `where = <expr over self's fields>` is
-  parseable (syn::Expr) but referencing fields and keeping it well-formed is
-  fiddly; the fallback is a hand-written `Indexed` impl. Decide: support
-  a restricted predicate grammar, or document the hand-impl escape hatch.
-- **Projection encoding.** Single packed blob at the leaf (compact, needs
-  generated pack/unpack) vs. a sub-tree via the existing `Store` (reuses
-  load/store, but more rows and muddier scan). Lean packed-blob; confirm.
-- **Sort over enums.** Only if an explicit ordinal is declared; otherwise reject
-  `sort = <enum field>` at macro time.
-- **Width changes = migration.** A `SortKey` width or bucket-field-set change
-  alters the on-disk index format. Since indexes are derived from values, the
-  practical migration is "rebuild the index subtree" — needs a story if we ever
-  change an index's shape on a live contract.
+### No index migration is needed — contracts are immutable
+
+`publish` is a plain `INSERT INTO contracts` that assigns a **new** `contract_id`
+every time, then runs a fresh `init()`; there is **no** upgrade / reinit /
+set-code path in the runtime. So a generic contract's code — and therefore its
+index shape — can never change on live state: a new version is a new contract
+with state built from scratch by its own `init`/writes. There is no "reshape an
+index on existing state" scenario to migrate.
+
+The only case where new code meets old state is a **native** contract (fixed id,
+part of the protocol) being replaced by a **coordinated network upgrade** — a
+hard-fork-class event. An index change there rides that upgrade path (and would
+rebuild the index subtree as part of it) exactly like any other native-contract
+code change; it is out of scope for the index system to auto-migrate. So: **drop
+shape-versioning / online-migration from the design entirely.** A `SortKey` width
+or bucket-set is simply part of an index's definition, fixed for the life of the
+(immutable) contract.
+
+### "Partial" need → composite indexes over discriminant fields, not a predicate DSL
+
+A `where = <Rust expr>` predicate is awkward exactly where we need it: WIT records
+declare indexes through the `indexed = "…"` **string** arg, and a Rust
+expression-in-a-string is a non-starter. Sidestep it. The partial-like query we
+actually want — filestorage eligibility = `active ∧ no active_challenge` — is a
+**composite index over two discriminant-valued fields**:
+`#[index(eligible, by = (active, active_challenge))]` → `where_eligible(true, None)`.
+This needs only:
+1. composite buckets (already in the plan), and
+2. a small extension: **index an `Option<T>` field by its `none`/`some`
+   discriminant** — an `IndexKey for Option` that keys on the discriminant (just
+   like an enum). No predicate expressions, no string DSL; works identically for
+   internal structs and WIT records (you only name fields).
+
+This keeps every value in *some* bucket (`active/none`, `active/some`, …) rather
+than omitting rows. **True partial indexes** (omit a row entirely when a
+predicate is false — purely an index-*size* optimization) stay deferred; if ever
+needed, the clean form is a **computed key returning `Option`** (`None` ⇒ not in
+the index), which also subsumes the "computed/closure index key" backlog item —
+but the WIT-record declaration ergonomics (a function in a string) are the real
+blocker, so it waits for a concrete need. For now, composite-over-discriminants
+covers the functional case with zero DSL.
+
+### Covering: reuse the leaf's value slot; tier by projection size
+
+The index leaf is an ordinary `contract_state` row that **already has a value
+slot** (we write `()` today). A covering index writes the projection there:
+- **single scalar** (the high-value case — project the one field a scan needs:
+  the sort field, a filter field, or a display id) → store via the existing typed
+  setter (`__set_str`/`__set_u64`), read via `__get` — **zero new machinery.**
+- **multi-field** → a packed blob in the leaf value (generated pack/unpack) —
+  defer until needed.
+- **whole value** → that's just denormalization (a full duplicate re-synced on
+  every write). Usually NOT worth it; the active sets are bounded, so the `get`
+  per key is fine. Frame covering as "project what the scan needs," not "copy the
+  value."
+
+### Sort over enums
+
+Only if an explicit ordinal is declared on the enum; otherwise `sort = <enum>` is
+a macro-time error. Numeric (`SortKey`) fields are the intended sort targets.
 ```
