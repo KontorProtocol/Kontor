@@ -150,6 +150,7 @@ impl ::core::cmp::PartialEq for ChallengeStatusKind {
 }
 #[automatically_derived]
 impl ::core::cmp::Eq for ChallengeStatusKind {
+    #[inline]
     #[doc(hidden)]
     #[coverage(off)]
     fn assert_fields_are_eq(&self) {}
