@@ -20,8 +20,12 @@ pub struct Config {
     indexed: Option<String>,
 }
 
-/// Build the `additional_type_attributes` / `additional_field_attributes`
-/// option tokens for the wit-bindgen `generate!` from the `indexed` spec.
+/// Build the `additional_type_attributes` / `additional_field_attributes` option
+/// tokens for the wit-bindgen `generate!` from the `indexed` spec: `#[index]` on
+/// each named field, `#[derive(stdlib::Indexed)]` on each owning record. (Storage
+/// enums are NOT injected here — the fork applies type attributes only to records,
+/// not enums/variants — they're generated directly from the WIT, see
+/// [`storage_enum_impls`].)
 fn index_attr_options(indexed: Option<&str>) -> (TokenStream, TokenStream) {
     let Some(spec) = indexed else {
         return (quote! {}, quote! {});

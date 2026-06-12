@@ -33,6 +33,38 @@ use core::str::FromStr;
 
 use crate::{DotPathBuf, Store, WriteStorage};
 
+/// The canonical string a value contributes to an index bucket. The SINGLE
+/// source every index path stringifies through — a value's
+/// [`Indexed::index_entries`], the read model's `__index_entries`, the in-place
+/// indexed-field setter, and the generated `where_<field>` lookup — so the
+/// bucket a write lands in and the bucket a lookup scans can never drift.
+///
+/// Primitives key by their `Display`. A storage enum keys by its DISCRIMINANT
+/// (case name), not its payload — so a payload-carrying case like `Failed(r)`
+/// always lands in bucket `"failed"`, and changing the payload is a no-op for
+/// the index. `#[derive(StorageEnum)]` supplies that impl (and a payload-free
+/// `<E>Kind` marker for referencing a case without constructing one).
+pub trait IndexKey {
+    fn index_key(&self) -> String;
+}
+
+macro_rules! index_key_via_display {
+    ($($t:ty),*) => {
+        $(
+            impl IndexKey for $t {
+                fn index_key(&self) -> String {
+                    ToString::to_string(self)
+                }
+            }
+        )*
+    };
+}
+
+// Primitive index keys are just their `Display`. (No blanket `impl<T: Display>`
+// — that would collide with the discriminant impl `#[derive(StorageEnum)]`
+// generates for enums.)
+index_key_via_display!(bool, u64, i64, u32, i32, String, str, &str);
+
 /// A value's secondary-index memberships: `(index_name, index_key)` pairs.
 /// An empty result means "in no index" — partial indexes fall out by omitting
 /// the pair when a predicate is false. `index_key` becomes a path segment, so

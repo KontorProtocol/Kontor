@@ -102,6 +102,14 @@ pub fn generate_struct(
                     // struct field), never a bare primitive.
                     let v_model_ty = get_model_ident(write, &v_ty, field.span())?;
 
+                    // The value's `Indexed` derive generates `<Value>Index`, a
+                    // trait carrying the typed `where_<field>` lookups; the field
+                    // model implements its one required primitive (`by_index`) and
+                    // inherits the wrappers. Generated there, not here, because this
+                    // site only sees `IndexedMap<K, V>` — never `V`'s `#[index]`
+                    // fields.
+                    let index_trait = index_trait_ident(&v_ty, field.span())?;
+
                     // On the write model, bind the returned value model to this
                     // index so its indexed-field setters reconcile in place.
                     let with_index_call = if write {
@@ -160,10 +168,12 @@ pub fn generate_struct(
                             pub fn keys(&self) -> impl Iterator<Item = #k_ty> {
                                 stdlib::ReadStorage::__get_keys(&self.ctx, &self.base_path)
                             }
+                        }
 
-                            /// Primary keys in the `(index_name, index_key)` bucket — the indexed
-                            /// lookup that replaces a `keys()` scan-and-filter.
-                            pub fn by_index(&self, index_name: &str, index_key: &str) -> impl Iterator<Item = #k_ty> {
+                        // The typed `where_<field>` lookups come from the value's
+                        // `<Value>Index` trait; this supplies its one primitive.
+                        impl #index_trait<#k_ty> for #field_model_name {
+                            fn by_index(&self, index_name: &str, index_key: &str) -> impl Iterator<Item = #k_ty> + use<> {
                                 let bucket = self.index_path.push(index_name).push(index_key);
                                 stdlib::ReadStorage::__get_keys(&self.ctx, &bucket)
                             }
@@ -254,8 +264,8 @@ pub fn generate_struct(
                                     if let Some((index_root, index_key)) = &self.index_binding {
                                         stdlib::apply_index_diff(
                                             &self.ctx, index_root, index_key,
-                                            &[(#field_name_str, alloc::string::ToString::to_string(&old))],
-                                            &[(#field_name_str, alloc::string::ToString::to_string(&new))],
+                                            &[(#field_name_str, stdlib::IndexKey::index_key(&old))],
+                                            &[(#field_name_str, stdlib::IndexKey::index_key(&new))],
                                         );
                                     }
                                 }
@@ -302,8 +312,9 @@ pub fn generate_struct(
                             // Indexed non-primitive field (e.g. an enum). Read the
                             // old value through its model (live, via `ctx`) to
                             // reconcile this field's index entry, then write. The
-                            // field's value must be `Display` (it becomes the
-                            // index-bucket key).
+                            // field's value must be `IndexKey` (it becomes the
+                            // index-bucket key) — a storage enum keys by its
+                            // discriminant via `#[derive(StorageEnum)]`.
                             let v_model_ty = get_model_ident(true, field_ty, field.span())?;
                             Ok(quote! {
                                 pub fn #set_field_name(&self, value: #field_ty) {
@@ -312,8 +323,8 @@ pub fn generate_struct(
                                         let old = #v_model_ty::new(self.ctx.clone(), path.clone()).load();
                                         stdlib::apply_index_diff(
                                             &self.ctx, index_root, index_key,
-                                            &[(#field_name_str, alloc::string::ToString::to_string(&old))],
-                                            &[(#field_name_str, alloc::string::ToString::to_string(&value))],
+                                            &[(#field_name_str, stdlib::IndexKey::index_key(&old))],
+                                            &[(#field_name_str, stdlib::IndexKey::index_key(&value))],
                                         );
                                     }
                                     stdlib::WriteStorage::__set(&self.ctx, path, value);
@@ -413,7 +424,7 @@ pub fn generate_struct(
                         quote! { self.#fname().load() }
                     };
                     quote! {
-                        entries.push((#name_str, alloc::string::ToString::to_string(&#value)));
+                        entries.push((#name_str, stdlib::IndexKey::index_key(&#value)));
                     }
                 });
                 quote! {
@@ -632,6 +643,21 @@ pub fn generate_enum(data_enum: &DataEnum, type_name: &Ident, write: bool) -> Re
             }
         }
     })
+}
+
+/// The `<Value>Index` lookup trait generated by the value type's `Indexed`
+/// derive — named from the value type's last path segment, matching the derive.
+fn index_trait_ident(ty: &Type, span: Span) -> Result<Ident> {
+    if let Type::Path(type_path) = ty {
+        type_path
+            .path
+            .segments
+            .last()
+            .map(|segment| Ident::new(&format!("{}Index", segment.ident), span))
+            .ok_or_else(|| Error::new(span, "Expected a named type for IndexedMap value"))
+    } else {
+        Err(Error::new(span, "Expected a named type for IndexedMap value"))
+    }
 }
 
 fn get_model_ident(write: bool, ty: &Type, span: Span) -> Result<Ident> {

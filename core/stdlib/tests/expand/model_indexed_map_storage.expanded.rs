@@ -43,7 +43,7 @@ impl ChallengeModel {
         &self,
     ) -> alloc::vec::Vec<(&'static str, alloc::string::String)> {
         let mut entries = alloc::vec::Vec::new();
-        entries.push(("status", alloc::string::ToString::to_string(&self.status())));
+        entries.push(("status", stdlib::IndexKey::index_key(&self.status())));
         entries
     }
     pub fn prover(&self) -> u64 {
@@ -123,8 +123,8 @@ impl ChallengeWriteModel {
                 &self.ctx,
                 index_root,
                 index_key,
-                &[("status", alloc::string::ToString::to_string(&old))],
-                &[("status", alloc::string::ToString::to_string(&new))],
+                &[("status", stdlib::IndexKey::index_key(&old))],
+                &[("status", stdlib::IndexKey::index_key(&new))],
             );
         }
         stdlib::WriteStorage::__set(&self.ctx, path, new);
@@ -138,8 +138,8 @@ impl ChallengeWriteModel {
                 &self.ctx,
                 index_root,
                 index_key,
-                &[("status", alloc::string::ToString::to_string(&old))],
-                &[("status", alloc::string::ToString::to_string(&new))],
+                &[("status", stdlib::IndexKey::index_key(&old))],
+                &[("status", stdlib::IndexKey::index_key(&new))],
             );
         }
         stdlib::WriteStorage::__set(&self.ctx, path, new);
@@ -156,8 +156,8 @@ impl ChallengeWriteModel {
                 &self.ctx,
                 index_root,
                 index_key,
-                &[("status", alloc::string::ToString::to_string(&old))],
-                &[("status", alloc::string::ToString::to_string(&new))],
+                &[("status", stdlib::IndexKey::index_key(&old))],
+                &[("status", stdlib::IndexKey::index_key(&new))],
             );
         }
         stdlib::WriteStorage::__set(&self.ctx, path, new);
@@ -180,8 +180,27 @@ impl core::ops::Deref for ChallengeWriteModel {
 impl stdlib::Indexed for Challenge {
     fn index_entries(&self) -> alloc::vec::Vec<(&'static str, alloc::string::String)> {
         let mut entries = alloc::vec::Vec::new();
-        entries.push(("status", alloc::string::ToString::to_string(&self.status)));
+        entries.push(("status", stdlib::IndexKey::index_key(&self.status)));
         entries
+    }
+}
+pub trait ChallengeIndex<K>
+where
+    K: alloc::string::ToString + core::str::FromStr + Clone,
+    <K as core::str::FromStr>::Err: core::fmt::Debug,
+{
+    /// Raw bucket scan — the single primitive the field model supplies;
+    /// the typed `where_*` methods wrap it. Kept public as an escape
+    /// hatch for index keys built at runtime. The returned iterator owns
+    /// its source (`use<Self, K>`, no lifetime capture), so the typed
+    /// wrappers can hand it a borrow of a temporary key string.
+    fn by_index(
+        &self,
+        index_name: &str,
+        index_key: &str,
+    ) -> impl Iterator<Item = K> + use<Self, K>;
+    fn where_status(&self, status: u64) -> impl Iterator<Item = K> {
+        self.by_index("status", &stdlib::IndexKey::index_key(&status))
     }
 }
 struct ChallengeStorage {
@@ -242,13 +261,13 @@ impl ChallengeStorageChallengesModel {
     pub fn keys(&self) -> impl Iterator<Item = u64> {
         stdlib::ReadStorage::__get_keys(&self.ctx, &self.base_path)
     }
-    /// Primary keys in the `(index_name, index_key)` bucket — the indexed
-    /// lookup that replaces a `keys()` scan-and-filter.
-    pub fn by_index(
+}
+impl ChallengeIndex<u64> for ChallengeStorageChallengesModel {
+    fn by_index(
         &self,
         index_name: &str,
         index_key: &str,
-    ) -> impl Iterator<Item = u64> {
+    ) -> impl Iterator<Item = u64> + use<> {
         let bucket = self.index_path.push(index_name).push(index_key);
         stdlib::ReadStorage::__get_keys(&self.ctx, &bucket)
     }
@@ -349,13 +368,13 @@ impl ChallengeStorageChallengesWriteModel {
     pub fn keys(&self) -> impl Iterator<Item = u64> {
         stdlib::ReadStorage::__get_keys(&self.ctx, &self.base_path)
     }
-    /// Primary keys in the `(index_name, index_key)` bucket — the indexed
-    /// lookup that replaces a `keys()` scan-and-filter.
-    pub fn by_index(
+}
+impl ChallengeIndex<u64> for ChallengeStorageChallengesWriteModel {
+    fn by_index(
         &self,
         index_name: &str,
         index_key: &str,
-    ) -> impl Iterator<Item = u64> {
+    ) -> impl Iterator<Item = u64> + use<> {
         let bucket = self.index_path.push(index_name).push(index_key);
         stdlib::ReadStorage::__get_keys(&self.ctx, &bucket)
     }
