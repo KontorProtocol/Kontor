@@ -70,6 +70,58 @@ macro_rules! index_key_via_display {
 // generates for enums.)
 index_key_via_display!(bool, u64, i64, u32, i32, String, str, &str);
 
+/// An **order-preserving, fixed-width** path segment for *ordering* members
+/// within an index bucket: the lexicographic byte order of `sort_key()` equals
+/// the numeric order of the value. This is what lets a sortable index scan in
+/// value order and early-break, while storage stays the generic `contract_state`
+/// log (sortability lives in the key, never a column).
+///
+/// Distinct from [`IndexKey`], which only needs a *distinct, delimiter-free*
+/// bucket segment — order irrelevant. A field can be both (a `u64` buckets via
+/// `Display`, orders via `SortKey`).
+///
+/// Encoded as fixed-width **hex** so the segment is path-safe (printable, no
+/// `.`); `WIDTH` is the exact char count, which the scan strips to recover the
+/// primary key from a `<sort‖pk>` member segment. Signed types are sign-biased
+/// (flip the sign bit) so negatives sort before positives.
+pub trait SortKey {
+    /// Exact character width of every `sort_key()` for this type. Part of an
+    /// index's on-disk format (fixed for the life of the immutable contract).
+    const WIDTH: usize;
+    fn sort_key(&self) -> String;
+}
+
+macro_rules! sort_key_unsigned {
+    ($($t:ty => $width:expr),* $(,)?) => {
+        $(
+            impl SortKey for $t {
+                const WIDTH: usize = $width;
+                fn sort_key(&self) -> String {
+                    alloc::format!("{:0width$x}", self, width = $width)
+                }
+            }
+        )*
+    };
+}
+sort_key_unsigned!(u8 => 2, u16 => 4, u32 => 8, u64 => 16);
+
+macro_rules! sort_key_signed {
+    ($($t:ty => $unsigned:ty, $width:expr),* $(,)?) => {
+        $(
+            impl SortKey for $t {
+                const WIDTH: usize = $width;
+                fn sort_key(&self) -> String {
+                    // Bias by 2^(bits-1) (flip the sign bit) so the most-negative
+                    // value maps to all-zero hex and ordering is preserved.
+                    let biased = (*self as $unsigned) ^ (1 as $unsigned).rotate_right(1);
+                    alloc::format!("{:0width$x}", biased, width = $width)
+                }
+            }
+        )*
+    };
+}
+sort_key_signed!(i8 => u8, 2, i16 => u16, 4, i32 => u32, 8, i64 => u64, 16);
+
 /// A value's secondary-index memberships: `(index_name, index_key)` pairs.
 /// An empty result means "in no index" — partial indexes fall out by omitting
 /// the pair when a predicate is false. `index_key` becomes a path segment, so
@@ -547,5 +599,27 @@ mod tests {
     fn rejects_dotted_index_key() {
         let ctx = Rc::new(Mock::default());
         apply_index_diff(&ctx, &p("t#idx"), "k", &[], &[("name", "a.b".into())]);
+    }
+
+    #[test]
+    fn sort_key_is_order_preserving_and_fixed_width() {
+        // Unsigned: lexicographic == numeric, fixed width.
+        assert!(0u64.sort_key() < 1u64.sort_key());
+        assert!(1u64.sort_key() < 256u64.sort_key());
+        assert!((u64::MAX - 1).sort_key() < u64::MAX.sort_key());
+        assert_eq!(0u64.sort_key().len(), <u64 as SortKey>::WIDTH);
+        assert_eq!(u64::MAX.sort_key().len(), 16);
+        assert_eq!(0u8.sort_key().len(), 2);
+        assert_eq!(0u32.sort_key().len(), 8);
+
+        // Signed: negatives sort before positives, monotone across zero.
+        assert!(i64::MIN.sort_key() < (-1i64).sort_key());
+        assert!((-1i64).sort_key() < 0i64.sort_key());
+        assert!(0i64.sort_key() < 1i64.sort_key());
+        assert!(1i64.sort_key() < i64::MAX.sort_key());
+        assert_eq!((-1i64).sort_key().len(), 16);
+        assert_eq!(i8::MIN.sort_key(), "00");
+        assert_eq!(0i8.sort_key(), "80");
+        assert_eq!(i8::MAX.sort_key(), "ff");
     }
 }

@@ -1,6 +1,7 @@
 # IndexedMap index system — design
 
-Status: **design / proposed**. Extends the shipped single-field `#[index]` (one
+Status: **confirmed** — implementing in build order (step 1 first). Extends the
+shipped single-field `#[index]` (one
 bucket per distinct field value) into a coherent system covering **sortable**,
 **composite**, **covering**, and **partial** indexes plus **compound primary
 keys**, designed so each lands additively without reworking the others.
