@@ -1015,7 +1015,9 @@ async fn test_map_keys() -> Result<()> {
 // Reproduces the filestorage `get_agreement_nodes` failure after a member
 // leaves: an IndexedMap whose struct value has a sub-field, plus a sibling
 // `#idx` index that churns on update (tombstone + re-add). `keys(m)` must return
-// the primary keys regardless of the index churn or the value update.
+// the primary keys regardless of the index churn or the value update, AND a scan
+// of an index bucket (`by_index`) must drop a member whose entry was tombstoned —
+// not fall back to its older live row.
 #[tokio::test]
 async fn test_keys_with_idx_sibling_after_update() -> Result<()> {
     let (_reader, writer, _temp_dir) = new_test_db().await?;
@@ -1081,10 +1083,22 @@ async fn test_keys_with_idx_sibling_after_update() -> Result<()> {
     .await?;
     insert(txs[1], 800001, &format!("{m}#idx.active.false.44")).await?;
 
+    // `keys(m)` — both members are still in the primary map (44's value row was
+    // updated, not removed), regardless of index churn.
     let stream = path_prefix_filter_contract_state(&conn, cid, m.to_string()).await?;
     let mut keys = stream.try_collect::<Vec<String>>().await?;
     keys.sort();
     assert_eq!(keys, vec!["44".to_string(), "45".to_string()]);
+
+    // `by_index("active","true")` = a scan of the `active.true` bucket. 44 left,
+    // so `<m>#idx.active.true.44` was tombstoned at H2; only 45 remains. The
+    // departed member must NOT reappear via its older (H1) live row — that was
+    // the pre-rank `deleted = false` bug, which let a tombstoned entry fall back.
+    let active = path_prefix_filter_contract_state(&conn, cid, format!("{m}#idx.active.true"))
+        .await?
+        .try_collect::<Vec<String>>()
+        .await?;
+    assert_eq!(active, vec!["45".to_string()]);
 
     Ok(())
 }

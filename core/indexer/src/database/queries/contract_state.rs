@@ -147,23 +147,29 @@ pub async fn path_prefix_filter_contract_state(
     contract_id: u64,
     path: String,
 ) -> Result<impl Stream<Item = Result<String, libsql::Error>> + Send + 'static, Error> {
-    // Latest surviving segment per captured prefix: partition by the prefix
-    // capture, filter `deleted` before ranking (so a deleted newest row falls
-    // back to the prior live one). Order by `path` so `keys()` iteration is
-    // deterministic across nodes — a contract that consumes this positionally
-    // (e.g. filestorage selecting challenge targets by index) would otherwise
-    // rely on SQLite's unspecified row order, a latent consensus hazard.
+    // Direct child segments under `path` that are STILL LIVE. Liveness must be
+    // judged on each path's LATEST version, so rank PER PATH and apply
+    // `deleted = false` as a POST predicate (not a pre-rank filter). A pre-rank
+    // `deleted = false` would, after a height-versioned tombstone (a `__delete`
+    // / `apply_index_diff` removal), fall back to the path's older live row and
+    // keep returning a child that point reads + `exists` already treat as gone —
+    // e.g. a departed node still surfacing in `by_index("active","true")` while
+    // its bucket count has dropped. `DISTINCT` collapses a struct value's many
+    // field paths to one child; ordering by the segment keeps `keys()` iteration
+    // deterministic across nodes (filestorage selects challenge targets by index
+    // positionally, so SQLite's unspecified order would be a consensus hazard).
     let query = LatestMany::builder()
         .table("contract_state")
-        .select(r"regexp_capture(path, '^' || :path || '\.([^.]*)(\.|$)', 1)")
-        .partition_by(r"regexp_capture(path, '^(' || :path || '\.[^.]*)(\.|$)', 1)")
-        // Boundary the prefix at the `.` separator (matching the capture regexes
+        .select(r"DISTINCT regexp_capture(path, '^' || :path || '\.([^.]*)(\.|$)', 1) AS segment")
+        .partition_by("path")
+        .post("deleted = false")
+        // Boundary the prefix at the `.` separator (matching the capture regex
         // above): a sibling whose name merely string-extends `path` — e.g. an
         // IndexedMap's `<map>#idx` index root vs the `<map>` primary — must NOT
         // leak into `<map>`'s keys (it has no `path.`-rooted segment, so the
         // capture would yield NULL → "Null value").
-        .filter("contract_id = :contract_id AND path LIKE :path || '.%' AND deleted = false")
-        .order_by("path")
+        .filter("contract_id = :contract_id AND path LIKE :path || '.%'")
+        .order_by("segment")
         .build()
         .to_sql();
     let rows = conn
