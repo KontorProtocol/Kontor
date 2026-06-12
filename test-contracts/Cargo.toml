@@ -17,3 +17,9 @@ unit_arg = "allow"
 
 [workspace.dependencies]
 stdlib = { path = "../core/stdlib" }
+
+# Match core's forked wit-bindgen (adds per-type/per-field attribute injection
+# for contract!'s `indexed = {...}`). Drop once upstreamed.
+[patch.crates-io]
+wit-bindgen-rust = { path = "../../wit-bindgen/crates/rust" }
+wit-bindgen-rust-macro = { path = "../../wit-bindgen/crates/guest-rust/macro" }
