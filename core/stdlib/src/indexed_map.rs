@@ -5,14 +5,21 @@
 //! Layout (all ordinary path-prefixed `contract_state` rows, so versioned,
 //! reorg-safe, and folded into the checkpoint hash):
 //! ```text
-//!   <primary>/<key>                       -> V
+//!   <primary>/<key>                        -> V
 //!   <index>/<index_name>/<index_key>/<key> -> ()   (sibling of <primary>)
 //! ```
-//! `by_index(name, key)` scans `<index>/<name>/<key>/`, whose child segments
-//! ARE the primary keys. The index set is derived from the value via [`Indexed`]
-//! and kept consistent on every `set`/`remove`: stale entries (from the prior
-//! value) are deleted, fresh ones written. The maintenance lives here, once —
-//! not hand-rolled per contract.
+//! `by_index(name, key)` scans `<index>/<name>/<key>/`, whose child segments ARE
+//! the primary keys. A key's index memberships are derived from its value via
+//! [`Indexed`] — there is no separate record of them, so the value stays the one
+//! source of truth (same as every other generated model). On update the prior
+//! entries are recomputed from the old value and diffed against the new ones via
+//! [`apply_index_diff`]: delete `old − new`, write `new − old`, so an unchanged
+//! index (or a no-op re-set) costs zero index ops.
+//!
+//! This generic type covers values that round-trip through [`Retrieve`]
+//! (primitives). Struct values read their old indexed fields back through a
+//! generated model, so they're driven by the `#[index]` macro, which calls
+//! [`apply_index_diff`] the same way — the maintenance is audited once, here.
 
 use alloc::rc::Rc;
 use alloc::string::{String, ToString};
@@ -31,11 +38,39 @@ pub trait Indexed {
     fn index_entries(&self) -> Vec<(&'static str, String)>;
 }
 
+/// Reconcile one key's index rows from `old` to `new`: delete entries in `old`
+/// that aren't in `new`, write entries in `new` that weren't in `old`. Unchanged
+/// entries are left untouched (zero ops). Index roots are siblings of the
+/// primary map.
+///
+/// The caller computes `old`/`new`: the generic [`IndexedMap`] reads the old
+/// value back via [`Retrieve`]; the `#[index]` macro reads the old value's
+/// indexed fields through its generated model. Either way the maintenance logic
+/// lives only here.
+pub fn apply_index_diff<S: WriteStorage + ?Sized>(
+    ctx: &Rc<S>,
+    index_root: &DotPathBuf,
+    key: &str,
+    old: &[(&'static str, String)],
+    new: &[(&'static str, String)],
+) {
+    for (name, index_key) in old {
+        if !new.iter().any(|(n, k)| n == name && k == index_key) {
+            ctx.__delete(&index_root.push(*name).push(index_key).push(key));
+        }
+    }
+    for (name, index_key) in new {
+        if !old.iter().any(|(n, k)| n == name && k == index_key) {
+            ctx.__set_void(&index_root.push(*name).push(index_key).push(key));
+        }
+    }
+}
+
 pub struct IndexedMap<K, V, S: ?Sized> {
     ctx: Rc<S>,
     /// Primary map root, e.g. `challenges`.
     primary: DotPathBuf,
-    /// Index root, a sibling of `primary`, e.g. `challenges#idx`. Kept separate
+    /// Index root, a sibling of `primary` (e.g. `challenges#idx`), kept separate
     /// so index rows never appear in the primary's `keys()`.
     index: DotPathBuf,
     _marker: PhantomData<(K, V)>,
@@ -48,6 +83,8 @@ where
     V: Store<S> + Retrieve<S> + Indexed,
     S: ReadStorage + WriteStorage + ?Sized,
 {
+    /// `primary` and `index` are sibling paths a contract/macro supplies so the
+    /// index never collides with primary keys.
     pub fn new(ctx: Rc<S>, primary: DotPathBuf, index: DotPathBuf) -> Self {
         Self {
             ctx,
@@ -57,65 +94,44 @@ where
         }
     }
 
-    fn index_entry(&self, name: &str, index_key: &str, key: &K) -> DotPathBuf {
-        self.index.push(name).push(index_key).push(key.to_string())
-    }
-
     pub fn get(&self, key: &K) -> Option<V> {
         self.ctx.__get(self.primary.push(key.to_string()))
     }
 
-    /// Upsert. Diffs the prior value's index entries against the new ones so
-    /// only the entries that actually changed are touched: delete `old − new`,
-    /// write `new − old`. An index whose key is unchanged (or a re-set with no
-    /// change) costs zero storage ops, instead of a delete-then-rewrite per
-    /// index. Index counts per value are tiny, so the linear membership checks
-    /// are far cheaper than the storage ops they avoid.
+    /// Upsert. Recomputes the old value's index entries and diffs them against
+    /// the new value's, touching only what changed.
     pub fn set(&self, key: &K, value: V) {
-        let key_path = self.primary.push(key.to_string());
+        let key_str = key.to_string();
         let new_entries = value.index_entries();
         let old_entries = self
             .ctx
-            .__get::<V>(key_path.clone())
+            .__get::<V>(self.primary.push(&key_str))
             .map(|old| old.index_entries())
             .unwrap_or_default();
 
-        for (name, index_key) in &old_entries {
-            if !new_entries.iter().any(|(n, k)| n == name && k == index_key) {
-                self.ctx.__delete(&self.index_entry(name, index_key, key));
-            }
-        }
-        for (name, index_key) in &new_entries {
-            if !old_entries.iter().any(|(n, k)| n == name && k == index_key) {
-                self.ctx.__set_void(&self.index_entry(name, index_key, key));
-            }
-        }
-        self.ctx.__set(key_path, value);
+        apply_index_diff(&self.ctx, &self.index, &key_str, &old_entries, &new_entries);
+        self.ctx.__set(self.primary.push(&key_str), value);
     }
 
     /// Remove the entry and its index rows. Returns true if a value existed.
     pub fn remove(&self, key: &K) -> bool {
-        let key_path = self.primary.push(key.to_string());
-        match self.ctx.__get::<V>(key_path.clone()) {
+        let key_str = key.to_string();
+        match self.ctx.__get::<V>(self.primary.push(&key_str)) {
             Some(old) => {
-                for (name, index_key) in old.index_entries() {
-                    self.ctx.__delete(&self.index_entry(name, &index_key, key));
-                }
-                self.ctx.__delete(&key_path)
+                apply_index_diff(&self.ctx, &self.index, &key_str, &old.index_entries(), &[]);
+                self.ctx.__delete(&self.primary.push(&key_str))
             }
             None => false,
         }
     }
 
-    /// All primary keys (deterministic order). Lazy, like `Map::keys` — it
-    /// borrows the stored primary path.
+    /// All primary keys (deterministic order). Lazy, like `Map::keys`.
     pub fn keys(&self) -> impl Iterator<Item = K> + '_ {
         self.ctx.__get_keys(&self.primary)
     }
 
     /// Primary keys in the `(name, index_key)` bucket — the indexed lookup that
-    /// replaces a scan-and-filter. Lazy: `__get_keys`'s iterator owns its key
-    /// source, so it does not borrow the per-call `bucket` path.
+    /// replaces a scan-and-filter. Lazy: the iterator owns its key source.
     pub fn by_index(&self, name: &str, index_key: &str) -> impl Iterator<Item = K> {
         let bucket = self.index.push(name).push(index_key);
         self.ctx.__get_keys(&bucket)
@@ -244,18 +260,18 @@ mod tests {
         }
     }
 
-    fn map(ctx: &Rc<Mock>) -> IndexedMap<u64, u64, Mock> {
-        IndexedMap::new(
-            ctx.clone(),
-            DotPathBuf::new().push("nums"),
-            DotPathBuf::new().push("nums#idx"),
-        )
+    fn p(s: &str) -> DotPathBuf {
+        DotPathBuf::new().push(s)
+    }
+
+    fn nums(ctx: &Rc<Mock>) -> IndexedMap<u64, u64, Mock> {
+        IndexedMap::new(ctx.clone(), p("nums"), p("nums#idx"))
     }
 
     #[test]
     fn maintains_indexes_on_set_update_remove() {
         let ctx = Rc::new(Mock::default());
-        let m = map(&ctx);
+        let m = nums(&ctx);
 
         m.set(&1, 10); // even
         m.set(&2, 11); // odd
@@ -281,7 +297,7 @@ mod tests {
     #[test]
     fn set_diff_only_touches_changed_indexes() {
         let ctx = Rc::new(Mock::default());
-        let m = map(&ctx);
+        let m = nums(&ctx);
 
         m.set(&1, 0); // parity=even, zeroness=zero
         *ctx.void_sets.borrow_mut() = 0;
@@ -308,15 +324,51 @@ mod tests {
         assert_eq!(*ctx.deletes.borrow(), 0, "no-op re-set deletes nothing");
         assert_eq!(*ctx.void_sets.borrow(), 0, "no-op re-set writes nothing");
 
-        // ...and the indexes are still correct after the churn-free updates.
         assert_eq!(m.by_index("parity", "even").collect::<Vec<_>>(), vec![1]);
         assert_eq!(
             m.by_index("zeroness", "nonzero").collect::<Vec<_>>(),
             vec![1]
         );
         assert_eq!(
-            m.by_index("zeroness", "zero").collect::<Vec<_>>(),
+            m.by_index("zeroness", "zero").collect::<Vec<u64>>(),
             Vec::<u64>::new()
         );
+    }
+
+    // Drive `apply_index_diff` directly with arbitrary old/new entry sets — the
+    // shape the `#[index]` macro uses (old entries read from a struct's indexed
+    // fields, not via `Retrieve`).
+    #[test]
+    fn apply_index_diff_reconciles_entries() {
+        let ctx = Rc::new(Mock::default());
+        let index = p("t#idx");
+
+        // From nothing -> {status:active, owner:1}: two writes.
+        apply_index_diff(
+            &ctx,
+            &index,
+            "k",
+            &[],
+            &[("status", "active".to_string()), ("owner", "1".to_string())],
+        );
+        assert_eq!(*ctx.void_sets.borrow(), 2);
+        assert_eq!(*ctx.deletes.borrow(), 0);
+
+        // {active,1} -> {proven,1}: only status moves (1 delete + 1 write); owner
+        // is unchanged and untouched.
+        apply_index_diff(
+            &ctx,
+            &index,
+            "k",
+            &[("status", "active".to_string()), ("owner", "1".to_string())],
+            &[("status", "proven".to_string()), ("owner", "1".to_string())],
+        );
+        assert_eq!(*ctx.deletes.borrow(), 1);
+        assert_eq!(*ctx.void_sets.borrow(), 3); // 2 + 1
+
+        // The status entry moved buckets; the owner entry is still in place.
+        assert!(ctx.__exists("t#idx.status.proven.k"));
+        assert!(!ctx.__exists("t#idx.status.active.k"));
+        assert!(ctx.__exists("t#idx.owner.1.k"));
     }
 }
