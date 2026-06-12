@@ -1223,6 +1223,124 @@ async fn test_matching_path_after_enum_reset() -> Result<()> {
     Ok(())
 }
 
+// `matching_path` must return the NEWEST live variant when a stale one lingers
+// live at a lower height (an old variant whose tombstone never landed). This is
+// the `Op` enum case — `id` written earlier, `sum` later, both live — where the
+// resolver must pick `sum`, not arbitrarily `id`.
+#[tokio::test]
+async fn test_matching_path_newest_of_multiple_live() -> Result<()> {
+    let (_reader, writer, _temp_dir) = new_test_db().await?;
+    let conn = writer.connection();
+    let cid = 123;
+
+    let mut txs = Vec::new();
+    for (i, height) in [800000u64, 800001].into_iter().enumerate() {
+        insert_block(
+            &conn,
+            BlockRow::builder()
+                .height(height)
+                .hash(new_mock_block_hash(height as u32))
+                .build(),
+        )
+        .await?;
+        txs.push(
+            insert_transaction(
+                &conn,
+                TransactionRow::builder()
+                    .height(height)
+                    .txid(format!("eeee{:060}", i))
+                    .tx_index(0)
+                    .confirmed_height(height)
+                    .build(),
+            )
+            .await?,
+        );
+    }
+
+    // Old variant `id` at H1, new variant `sum` at H2 — both live.
+    for (tx, height, path) in [
+        (txs[0], 800000u64, "c.op.id"),
+        (txs[1], 800001, "c.op.sum.y"),
+    ] {
+        insert_contract_state(
+            &conn,
+            ContractStateRow::builder()
+                .contract_id(cid)
+                .tx_id(tx)
+                .height(height)
+                .path(path.to_string())
+                .value(vec![1])
+                .build(),
+        )
+        .await?;
+    }
+
+    let found = matching_path(&conn, cid, "c.op", r"^c.op.(id|sum)(\..*|$)").await?;
+    assert_eq!(found, Some("c.op.sum.y".to_string()));
+
+    Ok(())
+}
+
+// The `Option` resolver asks only "does `<field>.none` exist?". A stale `none`
+// lingering live at a lower height (from an earlier value) must be outranked by
+// the newer `some` write, so the none-check finds nothing → the field reads as
+// Some. (Regression: a per-path resolver would have surfaced the stale `none`.)
+#[tokio::test]
+async fn test_matching_path_stale_none_outranked_by_some() -> Result<()> {
+    let (_reader, writer, _temp_dir) = new_test_db().await?;
+    let conn = writer.connection();
+    let cid = 123;
+
+    let mut txs = Vec::new();
+    for (i, height) in [800000u64, 800001].into_iter().enumerate() {
+        insert_block(
+            &conn,
+            BlockRow::builder()
+                .height(height)
+                .hash(new_mock_block_hash(height as u32))
+                .build(),
+        )
+        .await?;
+        txs.push(
+            insert_transaction(
+                &conn,
+                TransactionRow::builder()
+                    .height(height)
+                    .txid(format!("ffff{:060}", i))
+                    .tx_index(0)
+                    .confirmed_height(height)
+                    .build(),
+            )
+            .await?,
+        );
+    }
+
+    // Stale `none` at H1, then a `some` value at H2 — both live.
+    for (tx, height, path) in [
+        (txs[0], 800000u64, "c.opt.none"),
+        (txs[1], 800001, "c.opt.some"),
+    ] {
+        insert_contract_state(
+            &conn,
+            ContractStateRow::builder()
+                .contract_id(cid)
+                .tx_id(tx)
+                .height(height)
+                .path(path.to_string())
+                .value(vec![1])
+                .build(),
+        )
+        .await?;
+    }
+
+    // The none-check (only `none` in the alternation) must NOT match the newer
+    // `some`, so it returns None and the field resolves to Some.
+    let found = matching_path(&conn, cid, "c.opt", r"^c.opt.(none)(\..*|$)").await?;
+    assert_eq!(found, None);
+
+    Ok(())
+}
+
 #[tokio::test]
 async fn test_contract_result_operations() -> Result<()> {
     let (_reader, writer, _temp_dir) = new_test_db().await?;

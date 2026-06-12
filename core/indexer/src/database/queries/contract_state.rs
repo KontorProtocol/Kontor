@@ -16,13 +16,8 @@ fn latest_state(select: &str, filter: &str) -> String {
     LatestMany::builder()
         .table("contract_state")
         .select(select)
-        // Rank per path so a prefix `filter` yields each path's own latest
-        // version. Without it a single newest tombstone (e.g. an IndexedMap
-        // index `__delete`, or a re-set enum's old variant) would decide the
-        // result for the whole subtree. No-op for single-path callers.
-        .partition_by("path")
-        .post("deleted = false")
         .filter(filter)
+        .post("deleted = false")
         .build()
         .to_sql()
 }
@@ -197,18 +192,28 @@ pub async fn matching_path(
     base_path: &str,
     regexp: &str,
 ) -> Result<Option<String>, Error> {
-    // Latest live path under `base_path`, then REGEXP-filtered.
-    let inner = latest_state(
-        "path",
-        "contract_id = :contract_id AND path LIKE :base_path || '%'",
-    );
+    // Resolve an enum/option to its current variant by taking the single NEWEST
+    // row under `base_path` (by height, then rowid) and returning it only if it
+    // is live and matches `regexp`. This is deliberately a GLOBAL pick, not a
+    // per-path one: the resolver asks e.g. "is the current value a `none`?", so
+    // a stale variant lingering live at a lower height (an old `none`, or an old
+    // enum case) must be outranked by the newer write. `rowid` breaks same-height
+    // ties (the write following an in-tx `delete_matching` has the higher rowid),
+    // keeping the result consistent across nodes.
+    let query = r"
+        SELECT path FROM (
+            SELECT path, deleted,
+                   ROW_NUMBER() OVER (ORDER BY height DESC, rowid DESC) AS rank
+            FROM contract_state
+            WHERE contract_id = :contract_id AND path LIKE :base_path || '%'
+        ) WHERE rank = 1 AND deleted = false AND path REGEXP :regexp";
     let mut rows = conn
         .query(
-            &format!("SELECT path FROM ({inner}) WHERE path REGEXP :path"),
+            query,
             (
                 (":contract_id", contract_id),
                 (":base_path", base_path),
-                (":path", regexp),
+                (":regexp", regexp),
             ),
         )
         .await?;
