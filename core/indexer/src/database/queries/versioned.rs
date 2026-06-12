@@ -55,8 +55,11 @@ impl LatestMany<'_> {
             .map(|o| format!(" ORDER BY {o}"))
             .unwrap_or_default();
         format!(
+            // `rowid` breaks same-height ties deterministically (later insert
+            // wins — e.g. the write following an in-tx `delete_matching`), so the
+            // ranked row is reproducible across nodes.
             "SELECT {select} FROM (\n  \
-               SELECT *, ROW_NUMBER() OVER ({partition}ORDER BY height DESC) AS rank\n  \
+               SELECT *, ROW_NUMBER() OVER ({partition}ORDER BY height DESC, rowid DESC) AS rank\n  \
                FROM {table}\n  \
                WHERE {filter}\n\
              ) t WHERE rank = 1{post}{order_by}",
@@ -96,7 +99,7 @@ mod tests {
             .post("deleted = false")
             .build()
             .to_sql();
-        assert!(sql.contains("ROW_NUMBER() OVER (ORDER BY height DESC) AS rank"));
+        assert!(sql.contains("ROW_NUMBER() OVER (ORDER BY height DESC, rowid DESC) AS rank"));
         assert!(sql.contains("WHERE contract_id = :contract_id AND path = :path"));
         assert!(
             sql.trim_end()
@@ -114,7 +117,7 @@ mod tests {
             .build()
             .to_sql();
         assert!(sql.contains(
-            "ROW_NUMBER() OVER (PARTITION BY challenge_id ORDER BY height DESC) AS rank"
+            "ROW_NUMBER() OVER (PARTITION BY challenge_id ORDER BY height DESC, rowid DESC) AS rank"
         ));
         assert!(sql.trim_end().ends_with("WHERE rank = 1"));
     }

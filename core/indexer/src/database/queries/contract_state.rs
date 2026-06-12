@@ -193,23 +193,22 @@ pub async fn matching_path(
     regexp: &str,
 ) -> Result<Option<String>, Error> {
     // Resolve an enum/option to its current variant by taking the single NEWEST
-    // row under `base_path` (by height, then rowid) and returning it only if it
-    // is live and matches `regexp`. This is deliberately a GLOBAL pick, not a
-    // per-path one: the resolver asks e.g. "is the current value a `none`?", so
-    // a stale variant lingering live at a lower height (an old `none`, or an old
-    // enum case) must be outranked by the newer write. `rowid` breaks same-height
-    // ties (the write following an in-tx `delete_matching` has the higher rowid),
-    // keeping the result consistent across nodes.
-    let query = r"
-        SELECT path FROM (
-            SELECT path, deleted,
-                   ROW_NUMBER() OVER (ORDER BY height DESC, rowid DESC) AS rank
-            FROM contract_state
-            WHERE contract_id = :contract_id AND path LIKE :base_path || '%'
-        ) WHERE rank = 1 AND deleted = false AND path REGEXP :regexp";
+    // live row under `base_path` (by height, then rowid) that matches `regexp`.
+    // Deliberately a GLOBAL pick (no `partition_by`), not a per-path one: the
+    // resolver asks e.g. "is the current value a `none`?", so a stale variant
+    // lingering live at a lower height (an old `none`, or an old enum case) must
+    // be outranked by the newer write. The REGEXP is a `post` predicate so it's
+    // applied to the single ranked row, not used to pick among rows.
+    let query = LatestMany::builder()
+        .table("contract_state")
+        .select("path")
+        .filter("contract_id = :contract_id AND path LIKE :base_path || '%'")
+        .post("deleted = false AND path REGEXP :regexp")
+        .build()
+        .to_sql();
     let mut rows = conn
         .query(
-            query,
+            &query,
             (
                 (":contract_id", contract_id),
                 (":base_path", base_path),
