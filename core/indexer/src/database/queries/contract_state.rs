@@ -16,8 +16,13 @@ fn latest_state(select: &str, filter: &str) -> String {
     LatestMany::builder()
         .table("contract_state")
         .select(select)
-        .filter(filter)
+        // Rank per path so a prefix `filter` yields each path's own latest
+        // version. Without it a single newest tombstone (e.g. an IndexedMap
+        // index `__delete`, or a re-set enum's old variant) would decide the
+        // result for the whole subtree. No-op for single-path callers.
+        .partition_by("path")
         .post("deleted = false")
+        .filter(filter)
         .build()
         .to_sql()
 }
@@ -123,14 +128,21 @@ pub async fn exists_contract_state(
     contract_id: u64,
     path: &str,
 ) -> Result<bool, Error> {
+    // "Any live path at/under `path`". This must rank PER PATH (unlike the
+    // generic point-read `latest_state`): the prefix matches many paths, and a
+    // single newest row that happens to be a tombstone — e.g. an IndexedMap
+    // index `__delete` under `<map>#idx` — must not hide sibling paths that are
+    // still live. (Global ranking + `deleted=false` post would do exactly that.)
+    let query = LatestMany::builder()
+        .table("contract_state")
+        .select("1")
+        .partition_by("path")
+        .post("deleted = false")
+        .filter("contract_id = :contract_id AND (path LIKE :path || '.%' OR path = :path)")
+        .build()
+        .to_sql();
     let mut rows = conn
-        .query(
-            &latest_state(
-                "1",
-                "contract_id = :contract_id AND (path LIKE :path || '.%' OR path = :path)",
-            ),
-            ((":contract_id", contract_id), (":path", path)),
-        )
+        .query(&query, ((":contract_id", contract_id), (":path", path)))
         .await?;
     Ok(rows.next().await?.is_some())
 }
@@ -150,7 +162,12 @@ pub async fn path_prefix_filter_contract_state(
         .table("contract_state")
         .select(r"regexp_capture(path, '^' || :path || '\.([^.]*)(\.|$)', 1)")
         .partition_by(r"regexp_capture(path, '^(' || :path || '\.[^.]*)(\.|$)', 1)")
-        .filter("contract_id = :contract_id AND path LIKE :path || '%' AND deleted = false")
+        // Boundary the prefix at the `.` separator (matching the capture regexes
+        // above): a sibling whose name merely string-extends `path` — e.g. an
+        // IndexedMap's `<map>#idx` index root vs the `<map>` primary — must NOT
+        // leak into `<map>`'s keys (it has no `path.`-rooted segment, so the
+        // capture would yield NULL → "Null value").
+        .filter("contract_id = :contract_id AND path LIKE :path || '.%' AND deleted = false")
         .order_by("path")
         .build()
         .to_sql();
