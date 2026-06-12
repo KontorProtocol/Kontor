@@ -271,8 +271,8 @@ pub fn generate_struct(
                                     if let Some((index_root, index_key)) = &self.index_binding {
                                         stdlib::apply_index_diff(
                                             &self.ctx, index_root, index_key,
-                                            &[(#field_name_str, stdlib::IndexKey::index_key(&old))],
-                                            &[(#field_name_str, stdlib::IndexKey::index_key(&new))],
+                                            &[stdlib::IndexEntry { name: #field_name_str, bucket: alloc::vec![stdlib::IndexKey::index_key(&old)], sort: None }],
+                                            &[stdlib::IndexEntry { name: #field_name_str, bucket: alloc::vec![stdlib::IndexKey::index_key(&new)], sort: None }],
                                         );
                                     }
                                 }
@@ -330,8 +330,8 @@ pub fn generate_struct(
                                         let old = #v_model_ty::new(self.ctx.clone(), path.clone()).load();
                                         stdlib::apply_index_diff(
                                             &self.ctx, index_root, index_key,
-                                            &[(#field_name_str, stdlib::IndexKey::index_key(&old))],
-                                            &[(#field_name_str, stdlib::IndexKey::index_key(&value))],
+                                            &[stdlib::IndexEntry { name: #field_name_str, bucket: alloc::vec![stdlib::IndexKey::index_key(&old)], sort: None }],
+                                            &[stdlib::IndexEntry { name: #field_name_str, bucket: alloc::vec![stdlib::IndexKey::index_key(&value)], sort: None }],
                                         );
                                     }
                                     stdlib::WriteStorage::__set(&self.ctx, path, value);
@@ -431,11 +431,15 @@ pub fn generate_struct(
                         quote! { self.#fname().load() }
                     };
                     quote! {
-                        entries.push((#name_str, stdlib::IndexKey::index_key(&#value)));
+                        entries.push(stdlib::IndexEntry {
+                            name: #name_str,
+                            bucket: alloc::vec![stdlib::IndexKey::index_key(&#value)],
+                            sort: None,
+                        });
                     }
                 });
                 quote! {
-                    pub fn __index_entries(&self) -> alloc::vec::Vec<(&'static str, alloc::borrow::Cow<'static, str>)> {
+                    pub fn __index_entries(&self) -> alloc::vec::Vec<stdlib::IndexEntry> {
                         let mut entries = alloc::vec::Vec::new();
                         #(#pushes)*
                         entries

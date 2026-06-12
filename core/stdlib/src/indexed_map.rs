@@ -122,13 +122,55 @@ macro_rules! sort_key_signed {
 }
 sort_key_signed!(i8 => u8, 2, i16 => u16, 4, i32 => u32, 8, i64 => u64, 16);
 
-/// A value's secondary-index memberships: `(index_name, index_key)` pairs.
-/// An empty result means "in no index" — partial indexes fall out by omitting
-/// the pair when a predicate is false. `index_key` becomes a path segment, so
-/// it must serialise deterministically (reproducible across nodes) and without
-/// the path delimiter (`.`); [`apply_index_diff`] enforces the latter.
+/// One secondary-index membership of a value: which index, which bucket, and
+/// (optionally) where it sorts within that bucket. The leaf it maps to is
+/// `<index>/<bucket…>/<sort‖pk>` (see the `IndexedMap` module docs). All segments
+/// must be delimiter-free (`.`); [`apply_index_diff`] enforces it.
+///
+/// `bucket` is a vec so a composite index can partition on several fields (one
+/// segment each, in declared order); a single-field index has one. `sort` is the
+/// fixed-width [`SortKey`] segment prepended to the primary key in the member
+/// segment, so the bucket scans in value order. (A covering projection will be
+/// added here later as the leaf *value*; the diff already keys on the leaf path
+/// so that stays additive.)
+pub struct IndexEntry {
+    pub name: &'static str,
+    pub bucket: Vec<Cow<'static, str>>,
+    pub sort: Option<Cow<'static, str>>,
+}
+
+impl IndexEntry {
+    /// The bucket-prefix path `<index>/<bucket…>` (where the count lives; members
+    /// are its children).
+    fn bucket_path(&self, index_root: &DotPathBuf) -> DotPathBuf {
+        let mut path = index_root.push(self.name);
+        for segment in &self.bucket {
+            path = path.push(segment.as_ref());
+        }
+        path
+    }
+
+    /// The member segment `<sort‖pk>`: the sort key (fixed width) prepended to the
+    /// primary key, or just the primary key when unsorted.
+    fn member_segment(&self, key: &str) -> String {
+        match &self.sort {
+            Some(sort) => alloc::format!("{sort}{key}"),
+            None => key.to_string(),
+        }
+    }
+
+    /// Two entries share a leaf (same `<index>/<bucket…>/<sort‖pk>`) iff they agree
+    /// on name+bucket+sort. The diff keys on this; a future covering projection is
+    /// the leaf *value*, updated in place when the path matches.
+    fn same_leaf(&self, other: &IndexEntry) -> bool {
+        self.name == other.name && self.bucket == other.bucket && self.sort == other.sort
+    }
+}
+
+/// A value's secondary-index memberships. An empty result means "in no index" —
+/// partial indexes fall out by omitting an entry when a predicate is false.
 pub trait Indexed {
-    fn index_entries(&self) -> Vec<(&'static str, Cow<'static, str>)>;
+    fn index_entries(&self) -> Vec<IndexEntry>;
 }
 
 /// A path segment carries one index/primary key. `.` is the path delimiter, so a
@@ -156,28 +198,30 @@ pub fn apply_index_diff<S: WriteStorage + ReadStorage + ?Sized>(
     ctx: &Rc<S>,
     index_root: &DotPathBuf,
     key: &str,
-    old: &[(&'static str, Cow<'static, str>)],
-    new: &[(&'static str, Cow<'static, str>)],
+    old: &[IndexEntry],
+    new: &[IndexEntry],
 ) {
     assert_segment(key);
-    for (name, index_key) in old {
-        if !new.iter().any(|(n, k)| n == name && k == index_key) {
-            let bucket = index_root.push(*name).push(index_key.as_ref());
+    for entry in old {
+        if !new.iter().any(|n| n.same_leaf(entry)) {
+            let bucket = entry.bucket_path(index_root);
             // Decrement ONLY when the delete actually removed a live row.
             // `__delete` returns false for a no-op (the entry was already
             // tombstoned or never written — an index/count that drifted); counting
             // that as a removal would underflow the bucket count and trap. The
             // delete result is the authority on whether membership changed.
-            if ctx.__delete(&bucket.push(key)) {
+            if ctx.__delete(&bucket.push(entry.member_segment(key))) {
                 bump_bucket_count(ctx, &bucket, false);
             }
         }
     }
-    for (name, index_key) in new {
-        assert_segment(index_key);
-        if !old.iter().any(|(n, k)| n == name && k == index_key) {
-            let bucket = index_root.push(*name).push(index_key.as_ref());
-            ctx.__set_void(&bucket.push(key));
+    for entry in new {
+        for segment in &entry.bucket {
+            assert_segment(segment);
+        }
+        if !old.iter().any(|o| o.same_leaf(entry)) {
+            let bucket = entry.bucket_path(index_root);
+            ctx.__set_void(&bucket.push(entry.member_segment(key)));
             bump_bucket_count(ctx, &bucket, true);
         }
     }
@@ -356,6 +400,16 @@ mod tests {
         DotPathBuf::from(s)
     }
 
+    // A single-field index entry (one bucket segment, unsorted) — the shape the
+    // shipped `#[index]` produces.
+    fn e(name: &'static str, key: &str) -> IndexEntry {
+        IndexEntry {
+            name,
+            bucket: alloc::vec![key.to_string().into()],
+            sort: None,
+        }
+    }
+
     // A struct value with one indexed field — the shape an IndexedMap holds.
     #[derive(Clone)]
     struct Position {
@@ -369,8 +423,8 @@ mod tests {
     }
 
     impl Indexed for Position {
-        fn index_entries(&self) -> Vec<(&'static str, Cow<'static, str>)> {
-            vec![("status", self.status.to_string().into())]
+        fn index_entries(&self) -> Vec<IndexEntry> {
+            alloc::vec![e("status", &self.status.to_string())]
         }
     }
 
@@ -387,7 +441,7 @@ mod tests {
             &index,
             "k",
             &[],
-            &[("status", "active".into()), ("owner", "1".into())],
+            &[e("status", "active"), e("owner", "1")],
         );
         assert_eq!(*ctx.void_sets.borrow(), 2);
         assert_eq!(*ctx.deletes.borrow(), 0);
@@ -398,8 +452,8 @@ mod tests {
             &ctx,
             &index,
             "k",
-            &[("status", "active".into()), ("owner", "1".into())],
-            &[("status", "proven".into()), ("owner", "1".into())],
+            &[e("status", "active"), e("owner", "1")],
+            &[e("status", "proven"), e("owner", "1")],
         );
         assert_eq!(*ctx.deletes.borrow(), 1);
         assert_eq!(*ctx.void_sets.borrow(), 3); // 2 + 1
@@ -407,8 +461,7 @@ mod tests {
         // A no-op re-set (old == new) touches nothing.
         *ctx.void_sets.borrow_mut() = 0;
         *ctx.deletes.borrow_mut() = 0;
-        let same: [(&'static str, Cow<'static, str>); 2] =
-            [("status", "proven".into()), ("owner", "1".into())];
+        let same = [e("status", "proven"), e("owner", "1")];
         apply_index_diff(&ctx, &index, "k", &same, &same);
         assert_eq!(*ctx.deletes.borrow(), 0);
         assert_eq!(*ctx.void_sets.borrow(), 0);
@@ -437,7 +490,7 @@ mod tests {
         // `old` claims `k` is in the `status.active` bucket, but no void row was
         // ever written there and the count is unset (0). Removing it is a no-op
         // delete; an unconditional decrement would `checked_sub(0)` → trap.
-        apply_index_diff(&ctx, &index, "k", &[("status", "active".into())], &[]);
+        apply_index_diff(&ctx, &index, "k", &[e("status", "active")], &[]);
 
         // Reaching here means no trap. The delete was attempted but removed
         // nothing, so the (absent) count was left untouched.
@@ -569,8 +622,8 @@ mod tests {
     }
 
     impl Indexed for Bag {
-        fn index_entries(&self) -> Vec<(&'static str, Cow<'static, str>)> {
-            vec![("tag", self.tag.to_string().into())]
+        fn index_entries(&self) -> Vec<IndexEntry> {
+            alloc::vec![e("tag", &self.tag.to_string())]
         }
     }
 
@@ -598,7 +651,7 @@ mod tests {
     #[should_panic(expected = "path delimiter")]
     fn rejects_dotted_index_key() {
         let ctx = Rc::new(Mock::default());
-        apply_index_diff(&ctx, &p("t#idx"), "k", &[], &[("name", "a.b".into())]);
+        apply_index_diff(&ctx, &p("t#idx"), "k", &[], &[e("name", "a.b")]);
     }
 
     #[test]

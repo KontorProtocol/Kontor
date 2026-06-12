@@ -23,8 +23,15 @@ pub fn generate_index_entries(data_struct: &DataStruct, type_name: &Ident) -> Re
         .map(|field| {
             let field_name = field.ident.as_ref().unwrap();
             let name_str = field_name.to_string();
+            // Single-field index: the field name is the index, its `IndexKey` the
+            // one bucket segment, no sort. (Composite/sorted indexes come from the
+            // struct-level `#[index(...)]` form.)
             quote! {
-                entries.push((#name_str, stdlib::IndexKey::index_key(&self.#field_name)));
+                entries.push(stdlib::IndexEntry {
+                    name: #name_str,
+                    bucket: alloc::vec![stdlib::IndexKey::index_key(&self.#field_name)],
+                    sort: None,
+                });
             }
         })
         .collect();

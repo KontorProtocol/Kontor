@@ -39,11 +39,14 @@ impl ChallengeModel {
             ctx,
         }
     }
-    pub fn __index_entries(
-        &self,
-    ) -> alloc::vec::Vec<(&'static str, alloc::borrow::Cow<'static, str>)> {
+    pub fn __index_entries(&self) -> alloc::vec::Vec<stdlib::IndexEntry> {
         let mut entries = alloc::vec::Vec::new();
-        entries.push(("status", stdlib::IndexKey::index_key(&self.status())));
+        entries
+            .push(stdlib::IndexEntry {
+                name: "status",
+                bucket: (/*ERROR*/),
+                sort: None,
+            });
         entries
     }
     pub fn prover(&self) -> u64 {
@@ -123,8 +126,20 @@ impl ChallengeWriteModel {
                 &self.ctx,
                 index_root,
                 index_key,
-                &[("status", stdlib::IndexKey::index_key(&old))],
-                &[("status", stdlib::IndexKey::index_key(&new))],
+                &[
+                    stdlib::IndexEntry {
+                        name: "status",
+                        bucket: (/*ERROR*/),
+                        sort: None,
+                    },
+                ],
+                &[
+                    stdlib::IndexEntry {
+                        name: "status",
+                        bucket: (/*ERROR*/),
+                        sort: None,
+                    },
+                ],
             );
         }
         stdlib::WriteStorage::__set(&self.ctx, path, new);
@@ -138,8 +153,20 @@ impl ChallengeWriteModel {
                 &self.ctx,
                 index_root,
                 index_key,
-                &[("status", stdlib::IndexKey::index_key(&old))],
-                &[("status", stdlib::IndexKey::index_key(&new))],
+                &[
+                    stdlib::IndexEntry {
+                        name: "status",
+                        bucket: (/*ERROR*/),
+                        sort: None,
+                    },
+                ],
+                &[
+                    stdlib::IndexEntry {
+                        name: "status",
+                        bucket: (/*ERROR*/),
+                        sort: None,
+                    },
+                ],
             );
         }
         stdlib::WriteStorage::__set(&self.ctx, path, new);
@@ -156,8 +183,20 @@ impl ChallengeWriteModel {
                 &self.ctx,
                 index_root,
                 index_key,
-                &[("status", stdlib::IndexKey::index_key(&old))],
-                &[("status", stdlib::IndexKey::index_key(&new))],
+                &[
+                    stdlib::IndexEntry {
+                        name: "status",
+                        bucket: (/*ERROR*/),
+                        sort: None,
+                    },
+                ],
+                &[
+                    stdlib::IndexEntry {
+                        name: "status",
+                        bucket: (/*ERROR*/),
+                        sort: None,
+                    },
+                ],
             );
         }
         stdlib::WriteStorage::__set(&self.ctx, path, new);
@@ -178,11 +217,14 @@ impl core::ops::Deref for ChallengeWriteModel {
 }
 #[automatically_derived]
 impl stdlib::Indexed for Challenge {
-    fn index_entries(
-        &self,
-    ) -> alloc::vec::Vec<(&'static str, alloc::borrow::Cow<'static, str>)> {
+    fn index_entries(&self) -> alloc::vec::Vec<stdlib::IndexEntry> {
         let mut entries = alloc::vec::Vec::new();
-        entries.push(("status", stdlib::IndexKey::index_key(&self.status)));
+        entries
+            .push(stdlib::IndexEntry {
+                name: "status",
+                bucket: (/*ERROR*/),
+                sort: None,
+            });
         entries
     }
 }

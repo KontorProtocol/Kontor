@@ -129,7 +129,7 @@ pub fn derive_indexed(input: TokenStream) -> TokenStream {
     quote! {
         #[automatically_derived]
         impl stdlib::Indexed for #name {
-            fn index_entries(&self) -> alloc::vec::Vec<(&'static str, alloc::borrow::Cow<'static, str>)> {
+            fn index_entries(&self) -> alloc::vec::Vec<stdlib::IndexEntry> {
                 #body
             }
         }
