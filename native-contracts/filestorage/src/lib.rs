@@ -35,37 +35,56 @@ const REGTEST_S_CHAL: u64 = 8;
 // ─────────────────────────────────────────────────────────────────
 // STORAGE INDEX MODEL
 //
-// `agreements` and `challenges` are `IndexedMap`s: a primary `Map<K, V>` plus
-// framework-maintained secondary indexes (sibling `<map>#idx/...` rows, all
-// ordinary contract_state — versioned, reorg-safe, checkpoint-covered). The
-// index bookkeeping lives in stdlib (audited once), not hand-rolled here; the
-// only per-contract declaration is each value's `Indexed` impl naming the
-// indexed field (above), since the WIT record types can't carry `#[index]`.
+// `IndexedMap` = a primary `Map<K, V>` plus framework-maintained secondary
+// indexes (sibling `<map>#idx/...` rows — ordinary contract_state, so versioned,
+// reorg-safe, checkpoint-covered). The bookkeeping lives in stdlib (audited
+// once), not hand-rolled here.
 //
-//   agreements  indexed by `active`  → by_index("active","true")  = active set
-//   challenges  indexed by `status`  → by_index("status","active") = active set
+//   agreements            indexed by `active` → by_index("active","true")
+//   challenges            indexed by `status` → by_index("status","active")
+//   agreement_nodes.nodes indexed by `active` → by_index("active","true")
+//                                               (per agreement; nested IndexedMap)
 //
-// This collapses the three former scans — expire's full challenge scan,
-// generation's nested challenge×agreement scan, and get_active_challenges'
-// full scan — to indexed prefix reads over just the active subset. `get`/`set`
-// on the IndexedMap maintain the buckets automatically; updating an INDEXED
-// field must re-`set` the whole value (a sub-field `set_status`/`set_active`
-// bypasses index maintenance — see join/expire/verify).
+// This collapses every former scan — expire's full challenge scan, generation's
+// nested challenge×agreement scan, get_active_challenges' full scan, and the
+// per-agreement active-node scan-and-filter — to indexed prefix reads over just
+// the live subset. Index keys come from the value's `Indexed` impl: for the WIT
+// records (`agreement-data`/`challenge-data`) `#[index]` + `#[derive(Indexed)]`
+// are injected by the `indexed = "..."` arg on `contract!` (forked wit-bindgen);
+// internal structs (`NodeState`) carry `#[index]` directly.
+//
+// `set`/`remove` maintain the index, AND an in-place indexed-field setter does
+// too (`get(&k).set_status(...)` / `set_active(...)` reconcile the bucket) — so
+// no load→mutate→set dance. Departed/terminal rows move to the off bucket
+// (`active/false`, `status/expired`…), out of the live scan but kept for history.
 //
 // Deferred (single-field index suffices today): partial/`filter` indexes,
-// composite `(status, deadline_height)` sortable sweep, and flattening
-// `agreement_nodes` into a `memberships` IndexedMap. See the upgrade backlog.
+// composite `(status, deadline_height)` sortable sweep, covering indexes (avoid
+// the by_index→get N reads), and flattening `agreement_nodes` to a tuple-keyed
+// `memberships` IndexedMap. See the upgrade backlog.
 // ─────────────────────────────────────────────────────────────────
 
 // ─────────────────────────────────────────────────────────────────
 // State Types
 // ─────────────────────────────────────────────────────────────────
 
+/// A node's membership in an agreement. Internal (non-WIT), so its `active`
+/// flag is indexed with a plain `#[index]` — `nodes.by_index("active","true")`
+/// returns the agreement's live members directly. Departed nodes keep an entry
+/// with `active = false`; they sit in the `active/false` bucket and never
+/// pollute the active scan.
+#[derive(Clone, Default, Storage, Indexed)]
+struct NodeState {
+    #[index]
+    pub active: bool,
+}
+
 #[derive(Clone, Default, Storage)]
 struct AgreementNodes {
-    /// signer_id -> is_active (true means active, false means left). The node
-    /// identity is the joining signer, so the key is its u64 signer_id.
-    pub nodes: Map<u64, bool>,
+    /// signer_id -> membership. The node identity is the joining signer, so the
+    /// key is its u64 signer_id. Indexed by `active` so live-member lookup is a
+    /// prefix scan, not a scan-and-filter over every node that ever joined.
+    pub nodes: IndexedMap<u64, NodeState>,
     pub node_count: u64,
 }
 
@@ -249,15 +268,23 @@ impl Guest for Filestorage {
             )))?;
 
         // Check if node is already active in agreement
-        if nodes_state.nodes().get(&node_id).unwrap_or(false) {
+        if nodes_state
+            .nodes()
+            .get(&node_id)
+            .map(|n| n.active())
+            .unwrap_or(false)
+        {
             return Err(Error::Message(format!(
                 "node {} already in agreement {}",
                 node_id, agreement_id
             )));
         }
 
-        // Add node to agreement (or reactivate if previously left)
-        nodes_state.nodes().set(&node_id, true);
+        // Add node to agreement (or reactivate if previously left) — `set`
+        // moves it into the `active/true` index bucket.
+        nodes_state
+            .nodes()
+            .set(&node_id, NodeState { active: true });
 
         // Increment node count
         nodes_state.update_node_count(|c| c + 1);
@@ -307,7 +334,12 @@ impl Guest for Filestorage {
             )))?;
 
         // Validate node is active in agreement
-        if !nodes_state.nodes().get(&node_id).unwrap_or(false) {
+        if !nodes_state
+            .nodes()
+            .get(&node_id)
+            .map(|n| n.active())
+            .unwrap_or(false)
+        {
             return Err(Error::Message(format!(
                 "node {} not in agreement {}",
                 node_id, agreement_id
@@ -318,8 +350,11 @@ impl Guest for Filestorage {
         // voluntary departure when the agreement would be at/below the minimum replication
         // threshold (|N_f| <= n_min). We do not enforce that rule yet.
 
-        // Mark node as inactive (don't delete, just set to false)
-        nodes_state.nodes().set(&node_id, false);
+        // Mark node as inactive (kept as a row; `set` moves it to the
+        // `active/false` index bucket, out of the live-member scan).
+        nodes_state
+            .nodes()
+            .set(&node_id, NodeState { active: false });
 
         // Decrement node count
         nodes_state.update_node_count(|c| c.saturating_sub(1));
@@ -340,7 +375,7 @@ impl Guest for Filestorage {
                     .keys()
                     .map(|node_id: u64| NodeInfo {
                         node_id,
-                        active: s.nodes().get(&node_id).unwrap_or(false),
+                        active: s.nodes().get(&node_id).map(|n| n.active()).unwrap_or(false),
                     })
                     .collect()
             })
@@ -351,7 +386,7 @@ impl Guest for Filestorage {
         ctx.model()
             .agreement_nodes()
             .get(&agreement_id)
-            .map(|s| s.nodes().get(&node_id).unwrap_or(false))
+            .and_then(|s| s.nodes().get(&node_id).map(|n| n.active()))
             .unwrap_or(false)
     }
 
@@ -498,11 +533,9 @@ impl Guest for Filestorage {
                 Some(s) => s,
                 None => continue,
             };
-            let active_nodes: Vec<u64> = nodes_state
-                .nodes()
-                .keys()
-                .filter(|nid: &u64| nodes_state.nodes().get(nid).unwrap_or(false))
-                .collect();
+            // Live members of this agreement — an indexed prefix scan, not a
+            // scan-and-filter over every node that ever joined.
+            let active_nodes: Vec<u64> = nodes_state.nodes().by_index("active", "true").collect();
 
             if active_nodes.is_empty() {
                 continue;
@@ -590,7 +623,11 @@ impl Guest for Filestorage {
             .get(&agreement_id)
             .ok_or(Error::Message("No nodes for agreement".to_string()))?;
 
-        let is_active = nodes_state.nodes().get(&prover_id).unwrap_or(false);
+        let is_active = nodes_state
+            .nodes()
+            .get(&prover_id)
+            .map(|n| n.active())
+            .unwrap_or(false);
         if !is_active {
             return Err(Error::Message(format!(
                 "Node {} is not active in agreement {}",
