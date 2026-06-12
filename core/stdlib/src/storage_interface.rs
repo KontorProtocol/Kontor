@@ -1,4 +1,4 @@
-use core::{fmt::Debug, marker::PhantomData, str::FromStr};
+use core::{fmt::Debug, str::FromStr};
 
 use alloc::{
     string::{String, ToString},
@@ -18,10 +18,14 @@ pub trait ReadStorage {
 
     fn __get_list_u8(self: &alloc::rc::Rc<Self>, path: &str) -> Option<Vec<u8>>;
 
-    fn __get_keys<'a, T: ToString + FromStr + Clone + 'a>(
+    // The returned iterator owns its key source (see `make_keys_iterator`), so it
+    // does not borrow `path`. `use<Self, T>` makes that explicit — capturing only
+    // the types, not the `self`/`path` lifetimes — so callers can scan a
+    // freshly-built path (e.g. an index bucket) and still return the iterator.
+    fn __get_keys<T: ToString + FromStr + Clone>(
         self: &alloc::rc::Rc<Self>,
-        path: &'a str,
-    ) -> impl Iterator<Item = T> + 'a
+        path: &str,
+    ) -> impl Iterator<Item = T> + use<Self, T>
     where
         <T as FromStr>::Err: Debug;
 
@@ -100,6 +104,12 @@ pub trait WriteStorage {
     fn __set_void(self: &alloc::rc::Rc<Self>, path: &str);
 
     fn __set<T: Store<Self>>(self: &alloc::rc::Rc<Self>, path: DotPathBuf, value: T);
+
+    /// Tombstone a path and its whole subtree (every live descendant), so a
+    /// struct/map value stored under child paths is fully removed — not just the
+    /// exact path. Returns true if any live row was tombstoned. (A leaf path,
+    /// e.g. an index void, has no descendants, so this is a single tombstone.)
+    fn __delete(self: &alloc::rc::Rc<Self>, path: &str) -> bool;
 
     fn __delete_matching_paths(
         self: &alloc::rc::Rc<Self>,
@@ -214,44 +224,11 @@ where
     }
 }
 
-pub struct StorageMap<K: ToString + FromStr + Clone, V: Store<S> + Clone, S: WriteStorage + ?Sized>
-{
-    pub entries: Vec<(K, V)>,
-    pub _marker: PhantomData<S>,
-}
-
-impl<K: ToString + FromStr + Clone, V: Store<S> + Clone, S: WriteStorage + ?Sized>
-    StorageMap<K, V, S>
-{
-    pub fn new(entries: &[(K, V)]) -> Self {
-        StorageMap {
-            entries: entries.to_vec(),
-            _marker: PhantomData,
-        }
-    }
-}
-
-impl<K: ToString + FromStr + Clone, V: Store<S> + Clone, S: WriteStorage + ?Sized> Clone
-    for StorageMap<K, V, S>
-{
-    fn clone(&self) -> Self {
-        Self {
-            entries: self.entries.clone(),
-            _marker: PhantomData,
-        }
-    }
-}
-
-impl<K: ToString + FromStr + Clone, V: Store<S> + Clone, S: WriteStorage + ?Sized> Default
-    for StorageMap<K, V, S>
-{
-    fn default() -> Self {
-        Self {
-            entries: Default::default(),
-            _marker: PhantomData,
-        }
-    }
-}
+storage_placeholder!(
+    /// The declared `Map<K, V>` field placeholder. The generated field model is
+    /// the real accessor; this only holds entries for a wholesale `Store` write.
+    StorageMap
+);
 
 impl<K: ToString + FromStr + Clone, V: Store<S> + Clone, S: WriteStorage + ?Sized> Store<S>
     for StorageMap<K, V, S>

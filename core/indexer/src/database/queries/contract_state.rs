@@ -97,6 +97,13 @@ pub async fn get_latest_contract_state_value(
     Ok(None)
 }
 
+/// Remove an entry by tombstoning its WHOLE subtree: the path itself AND every
+/// live descendant (`path.field`, nested struct/map rows, …). A struct value
+/// persists under child paths, so tombstoning only the exact path would leave
+/// live primary rows behind while the caller (`Map`/`IndexedMap` `remove`) has
+/// already cleared the index — a half-removed entry. Height-versioned (one
+/// `deleted = true` row per live path at the current height), so reorg-safe.
+/// Returns true if any live row was tombstoned.
 pub async fn delete_contract_state(
     conn: &Connection,
     height: u64,
@@ -104,18 +111,37 @@ pub async fn delete_contract_state(
     contract_id: u64,
     path: &str,
 ) -> Result<bool, Error> {
-    Ok(
-        match get_latest_contract_state(conn, contract_id, path).await? {
-            Some(mut row) => {
-                row.deleted = true;
-                row.height = height;
-                row.tx_id = tx_id;
-                insert_contract_state(conn, row).await?;
-                true
-            }
-            None => false,
-        },
-    )
+    // Latest live version of every path at/under `path` (the entry root + its
+    // descendants). Re-inserted as a tombstone below; `partition_by("path")` +
+    // post `deleted = false` mirrors `exists`, so an already-tombstoned path is
+    // skipped (not re-tombstoned).
+    let query = LatestMany::builder()
+        .table("contract_state")
+        .select("contract_id, height, tx_id, path, value, deleted")
+        .partition_by("path")
+        .post("deleted = false")
+        .filter("contract_id = :contract_id AND (path = :path OR path LIKE :path || '.%')")
+        .build()
+        .to_sql();
+    let mut result = conn
+        .query(&query, ((":contract_id", contract_id), (":path", path)))
+        .await?;
+
+    // Materialise the live rows BEFORE writing tombstones (don't read and write
+    // `contract_state` in the same statement).
+    let mut live: Vec<ContractStateRow> = Vec::new();
+    while let Some(row) = result.next().await? {
+        live.push(from_row(&row)?);
+    }
+
+    let removed = !live.is_empty();
+    for mut row in live {
+        row.deleted = true;
+        row.height = height;
+        row.tx_id = tx_id;
+        insert_contract_state(conn, row).await?;
+    }
+    Ok(removed)
 }
 
 pub async fn exists_contract_state(
@@ -123,14 +149,21 @@ pub async fn exists_contract_state(
     contract_id: u64,
     path: &str,
 ) -> Result<bool, Error> {
+    // "Any live path at/under `path`". This must rank PER PATH (unlike the
+    // generic point-read `latest_state`): the prefix matches many paths, and a
+    // single newest row that happens to be a tombstone — e.g. an IndexedMap
+    // index `__delete` under `<map>#idx` — must not hide sibling paths that are
+    // still live. (Global ranking + `deleted=false` post would do exactly that.)
+    let query = LatestMany::builder()
+        .table("contract_state")
+        .select("1")
+        .partition_by("path")
+        .post("deleted = false")
+        .filter("contract_id = :contract_id AND (path LIKE :path || '.%' OR path = :path)")
+        .build()
+        .to_sql();
     let mut rows = conn
-        .query(
-            &latest_state(
-                "1",
-                "contract_id = :contract_id AND (path LIKE :path || '.%' OR path = :path)",
-            ),
-            ((":contract_id", contract_id), (":path", path)),
-        )
+        .query(&query, ((":contract_id", contract_id), (":path", path)))
         .await?;
     Ok(rows.next().await?.is_some())
 }
@@ -140,14 +173,29 @@ pub async fn path_prefix_filter_contract_state(
     contract_id: u64,
     path: String,
 ) -> Result<impl Stream<Item = Result<String, libsql::Error>> + Send + 'static, Error> {
-    // Latest surviving segment per captured prefix: partition by the prefix
-    // capture, filter `deleted` before ranking (so a deleted newest row falls
-    // back to the prior live one).
+    // Direct child segments under `path` that are STILL LIVE. Liveness must be
+    // judged on each path's LATEST version, so rank PER PATH and apply
+    // `deleted = false` as a POST predicate (not a pre-rank filter). A pre-rank
+    // `deleted = false` would, after a height-versioned tombstone (a `__delete`
+    // / `apply_index_diff` removal), fall back to the path's older live row and
+    // keep returning a child that point reads + `exists` already treat as gone —
+    // e.g. a departed node still surfacing in `by_index("active","true")` while
+    // its bucket count has dropped. `DISTINCT` collapses a struct value's many
+    // field paths to one child; ordering by the segment keeps `keys()` iteration
+    // deterministic across nodes (filestorage selects challenge targets by index
+    // positionally, so SQLite's unspecified order would be a consensus hazard).
     let query = LatestMany::builder()
         .table("contract_state")
-        .select(r"regexp_capture(path, '^' || :path || '\.([^.]*)(\.|$)', 1)")
-        .partition_by(r"regexp_capture(path, '^(' || :path || '\.[^.]*)(\.|$)', 1)")
-        .filter("contract_id = :contract_id AND path LIKE :path || '%' AND deleted = false")
+        .select(r"DISTINCT regexp_capture(path, '^' || :path || '\.([^.]*)(\.|$)', 1) AS segment")
+        .partition_by("path")
+        .post("deleted = false")
+        // Boundary the prefix at the `.` separator (matching the capture regex
+        // above): a sibling whose name merely string-extends `path` — e.g. an
+        // IndexedMap's `<map>#idx` index root vs the `<map>` primary — must NOT
+        // leak into `<map>`'s keys (it has no `path.`-rooted segment, so the
+        // capture would yield NULL → "Null value").
+        .filter("contract_id = :contract_id AND path LIKE :path || '.%'")
+        .order_by("segment")
         .build()
         .to_sql();
     let rows = conn
@@ -176,18 +224,27 @@ pub async fn matching_path(
     base_path: &str,
     regexp: &str,
 ) -> Result<Option<String>, Error> {
-    // Latest live path under `base_path`, then REGEXP-filtered.
-    let inner = latest_state(
-        "path",
-        "contract_id = :contract_id AND path LIKE :base_path || '%'",
-    );
+    // Resolve an enum/option to its current variant by taking the single NEWEST
+    // live row under `base_path` (by height, then rowid) that matches `regexp`.
+    // Deliberately a GLOBAL pick (no `partition_by`), not a per-path one: the
+    // resolver asks e.g. "is the current value a `none`?", so a stale variant
+    // lingering live at a lower height (an old `none`, or an old enum case) must
+    // be outranked by the newer write. The REGEXP is a `post` predicate so it's
+    // applied to the single ranked row, not used to pick among rows.
+    let query = LatestMany::builder()
+        .table("contract_state")
+        .select("path")
+        .filter("contract_id = :contract_id AND path LIKE :base_path || '%'")
+        .post("deleted = false AND path REGEXP :regexp")
+        .build()
+        .to_sql();
     let mut rows = conn
         .query(
-            &format!("SELECT path FROM ({inner}) WHERE path REGEXP :path"),
+            &query,
             (
                 (":contract_id", contract_id),
                 (":base_path", base_path),
-                (":path", regexp),
+                (":regexp", regexp),
             ),
         )
         .await?;

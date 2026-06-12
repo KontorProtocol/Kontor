@@ -11,6 +11,48 @@ use wit_validator::Validator;
 pub struct Config {
     name: String,
     path: Option<String>,
+    /// Comma-separated `record.field` entries (kebab-case, as in the WIT) whose
+    /// fields back a secondary index, e.g.
+    /// `indexed = "agreement-data.active, challenge-data.status"`. Each names a
+    /// field of a WIT record stored in an `IndexedMap`; `contract!` injects
+    /// `#[index]` on the field and `#[derive(stdlib::Indexed)]` on the record
+    /// (via the forked wit-bindgen) so the generated model maintains the index.
+    indexed: Option<String>,
+}
+
+/// Build the `additional_type_attributes` / `additional_field_attributes` option
+/// tokens for the wit-bindgen `generate!` from the `indexed` spec: `#[index]` on
+/// each named field, `#[derive(stdlib::Indexed)]` on each owning record. (Storage
+/// enums are NOT injected here — the fork applies type attributes only to records,
+/// not enums/variants — they're generated directly from the WIT, see
+/// [`storage_enum_impls`].)
+fn index_attr_options(indexed: Option<&str>) -> (TokenStream, TokenStream) {
+    let Some(spec) = indexed else {
+        return (quote! {}, quote! {});
+    };
+    let mut records = std::collections::BTreeSet::new();
+    let mut field_pairs = Vec::new();
+    for entry in spec.split(',') {
+        let entry = entry.trim();
+        if entry.is_empty() {
+            continue;
+        }
+        let (record, _field) = entry
+            .split_once('.')
+            .unwrap_or_else(|| panic!("`indexed` entry must be `record.field`: {entry}"));
+        records.insert(record.to_string());
+        field_pairs.push(quote! { #entry: "#[index]", });
+    }
+    if field_pairs.is_empty() {
+        return (quote! {}, quote! {});
+    }
+    let type_pairs = records
+        .into_iter()
+        .map(|r| quote! { #r: "#[derive(stdlib::Indexed)]", });
+    (
+        quote! { additional_type_attributes: { #(#type_pairs)* }, },
+        quote! { additional_field_attributes: { #(#field_pairs)* }, },
+    )
 }
 
 pub fn generate(config: Config) -> TokenStream {
@@ -40,6 +82,7 @@ pub fn generate(config: Config) -> TokenStream {
     }
 
     let path = abs_path.to_string_lossy().to_string();
+    let (type_attrs, field_attrs) = index_attr_options(config.indexed.as_deref());
     quote! {
         extern crate alloc;
 
@@ -56,6 +99,8 @@ pub fn generate(config: Config) -> TokenStream {
             generate_all,
             generate_unused_types: true,
             additional_derives: [stdlib::Storage, stdlib::Wavey],
+            #type_attrs
+            #field_attrs
             export_macro_name: "__export__",
             runtime_path: "stdlib::wit_bindgen::rt",
             async: false,
@@ -67,6 +112,7 @@ pub fn generate(config: Config) -> TokenStream {
         use kontor::built_in::numbers::{IntegerModel, IntegerWriteModel, DecimalModel, DecimalWriteModel};
 
         type Map<K, V> = stdlib::StorageMap<K, V, context::ProcStorage>;
+        type IndexedMap<K, V> = stdlib::StorageIndexedMap<K, V, context::ProcStorage>;
 
         fn BURNER() -> Holder {
             Holder::from_ref(&context::HolderRef::Burner).unwrap()
@@ -104,7 +150,7 @@ pub fn generate(config: Config) -> TokenStream {
                 self.get_list_u8(path)
             }
 
-            fn __get_keys<'a, T: ToString + FromStr + Clone + 'a>(self: &alloc::rc::Rc<Self>, path: &'a str) -> impl Iterator<Item = T> + 'a
+            fn __get_keys<T: ToString + FromStr + Clone>(self: &alloc::rc::Rc<Self>, path: &str) -> impl Iterator<Item = T> + use<T>
             where
                 <T as FromStr>::Err: Debug,
             {
@@ -146,7 +192,7 @@ pub fn generate(config: Config) -> TokenStream {
                 self.get_list_u8(path)
             }
 
-            fn __get_keys<'a, T: ToString + FromStr + Clone + 'a>(self: &alloc::rc::Rc<Self>, path: &'a str) -> impl Iterator<Item = T> + 'a
+            fn __get_keys<T: ToString + FromStr + Clone>(self: &alloc::rc::Rc<Self>, path: &str) -> impl Iterator<Item = T> + use<T>
             where
                 <T as FromStr>::Err: Debug,
             {
@@ -194,6 +240,10 @@ pub fn generate(config: Config) -> TokenStream {
 
             fn __set<T: stdlib::Store<Self>>(self: &alloc::rc::Rc<Self>, path: DotPathBuf, value: T) {
                 T::__set(self, path, value)
+            }
+
+            fn __delete(self: &alloc::rc::Rc<Self>, path: &str) -> bool {
+                self.delete(path)
             }
 
             fn __delete_matching_paths(self: &alloc::rc::Rc<Self>, base_path: &str, variants: &[&str]) -> u64 {

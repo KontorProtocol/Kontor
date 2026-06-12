@@ -99,6 +99,19 @@ impl Runtime {
             .await
     }
 
+    /// Tombstone a single path. Metered like a write (it appends a deleted
+    /// version row). Returns true if a live value was removed.
+    pub(crate) async fn _delete<S, T: HasContractId>(
+        &self,
+        accessor: &Accessor<S, Self>,
+        self_: Resource<T>,
+        path: String,
+    ) -> Result<bool> {
+        Fuel::Set(0).consume(accessor, self.gauge.as_ref()).await?;
+        let contract_id = self.table.lock().await.get(&self_)?.get_contract_id();
+        self.storage.delete(contract_id, &path).await
+    }
+
     pub(crate) async fn _set_primitive<S, T: HasContractId, V: Serialize>(
         &self,
         accessor: &Accessor<S, Self>,

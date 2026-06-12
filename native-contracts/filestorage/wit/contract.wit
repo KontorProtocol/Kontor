@@ -19,6 +19,10 @@ world root {
     agreement-id: string,
     file-id: string,
     active: bool,
+    // The agreement's currently-open challenge, if any. Co-located so
+    // "is this agreement already challenged?" is a point read, not a scan of
+    // the active-challenge set. Maintained on challenge create/terminate.
+    active-challenge: option<string>,
   }
 
   record create-agreement-result {

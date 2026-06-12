@@ -485,6 +485,88 @@ async fn test_contract_state_operations() -> Result<()> {
     Ok(())
 }
 
+// `delete_contract_state` must tombstone the WHOLE subtree of an entry, not just
+// the exact path: a struct/map value persists under child paths (`key.field`),
+// so removing it has to clear every live descendant — else `Map`/`IndexedMap`
+// `remove` leaves live primary rows behind after clearing the index. Sibling
+// entries (boundaried at `.`) must be untouched. Regression for "remove skips
+// nested stored fields".
+#[tokio::test]
+async fn test_delete_tombstones_whole_subtree() -> Result<()> {
+    let (_reader, writer, _temp_dir) = new_test_db().await?;
+    let conn = writer.connection();
+    let cid = 123;
+    let height = 800000u64;
+    insert_block(
+        &conn,
+        BlockRow::builder()
+            .height(height)
+            .hash(new_mock_block_hash(height as u32))
+            .build(),
+    )
+    .await?;
+    let tx = insert_transaction(
+        &conn,
+        TransactionRow::builder()
+            .height(height)
+            .txid(format!("aaaa{:060}", 0))
+            .tx_index(0)
+            .confirmed_height(height)
+            .build(),
+    )
+    .await?;
+    let insert = async |path: &str| -> Result<()> {
+        insert_contract_state(
+            &conn,
+            ContractStateRow::builder()
+                .contract_id(cid)
+                .tx_id(tx)
+                .height(height)
+                .path(path.to_string())
+                .value(vec![1])
+                .build(),
+        )
+        .await?;
+        Ok(())
+    };
+
+    // Struct value `m.k` lives under child field paths (incl. a nested struct);
+    // `m.k2` is a sibling entry that must survive.
+    insert("m.k.field1").await?;
+    insert("m.k.field2").await?;
+    insert("m.k.nested.inner").await?;
+    insert("m.k2.field1").await?;
+
+    let removed = delete_contract_state(&conn, height, Some(tx), cid, "m.k").await?;
+    assert!(removed, "the subtree had live rows to tombstone");
+
+    // Every descendant of `m.k` is gone (not just the exact path).
+    assert!(!exists_contract_state(&conn, cid, "m.k").await?);
+    assert!(
+        get_latest_contract_state(&conn, cid, "m.k.field1")
+            .await?
+            .is_none()
+    );
+    assert!(
+        get_latest_contract_state(&conn, cid, "m.k.nested.inner")
+            .await?
+            .is_none()
+    );
+
+    // The `.`-boundaried sibling `m.k2` is untouched.
+    assert!(exists_contract_state(&conn, cid, "m.k2").await?);
+    assert!(
+        get_latest_contract_state(&conn, cid, "m.k2.field1")
+            .await?
+            .is_some()
+    );
+
+    // A second remove finds nothing live → no-op, returns false.
+    assert!(!delete_contract_state(&conn, height, Some(tx), cid, "m.k").await?);
+
+    Ok(())
+}
+
 #[tokio::test]
 async fn test_transaction_operations() -> Result<()> {
     let (_reader, writer, _temp_dir) = new_test_db().await?;
@@ -1008,6 +1090,349 @@ async fn test_map_keys() -> Result<()> {
     )
     .await?;
     assert_eq!(result, 2);
+
+    Ok(())
+}
+
+// Reproduces the filestorage `get_agreement_nodes` failure after a member
+// leaves: an IndexedMap whose struct value has a sub-field, plus a sibling
+// `#idx` index that churns on update (tombstone + re-add). `keys(m)` must return
+// the primary keys regardless of the index churn or the value update, AND a scan
+// of an index bucket (`by_index`) must drop a member whose entry was tombstoned —
+// not fall back to its older live row.
+#[tokio::test]
+async fn test_keys_with_idx_sibling_after_update() -> Result<()> {
+    let (_reader, writer, _temp_dir) = new_test_db().await?;
+    let conn = writer.connection();
+    let cid = 123;
+
+    let mut txs = Vec::new();
+    for (i, height) in [800000u64, 800001].into_iter().enumerate() {
+        insert_block(
+            &conn,
+            BlockRow::builder()
+                .height(height)
+                .hash(new_mock_block_hash(height as u32))
+                .build(),
+        )
+        .await?;
+        txs.push(
+            insert_transaction(
+                &conn,
+                TransactionRow::builder()
+                    .height(height)
+                    .txid(format!("bbbb{:060}", i))
+                    .tx_index(0)
+                    .confirmed_height(height)
+                    .build(),
+            )
+            .await?,
+        );
+    }
+    let insert = async |tx_id, height, path: &str| -> Result<()> {
+        insert_contract_state(
+            &conn,
+            ContractStateRow::builder()
+                .contract_id(cid)
+                .tx_id(tx_id)
+                .height(height)
+                .path(path.to_string())
+                .value(vec![1])
+                .build(),
+        )
+        .await?;
+        Ok(())
+    };
+
+    // H1: two members active. Exact filestorage nesting/underscores — primary
+    // `<m>.<id>.active`, index sibling `<m>#idx...` string-extends `<m>`.
+    let m = "agreement_nodes.leave_test.nodes";
+    insert(txs[0], 800000, &format!("{m}.44.active")).await?;
+    insert(txs[0], 800000, &format!("{m}.45.active")).await?;
+    insert(txs[0], 800000, &format!("{m}#idx.active.true.44")).await?;
+    insert(txs[0], 800000, &format!("{m}#idx.active.true.45")).await?;
+
+    // H2: member 44 leaves (active=false). Index churns: tombstone the old
+    // bucket entry, write the new one.
+    insert(txs[1], 800001, &format!("{m}.44.active")).await?;
+    delete_contract_state(
+        &conn,
+        800001,
+        Some(txs[1]),
+        cid,
+        &format!("{m}#idx.active.true.44"),
+    )
+    .await?;
+    insert(txs[1], 800001, &format!("{m}#idx.active.false.44")).await?;
+
+    // `keys(m)` — both members are still in the primary map (44's value row was
+    // updated, not removed), regardless of index churn.
+    let stream = path_prefix_filter_contract_state(&conn, cid, m.to_string()).await?;
+    let mut keys = stream.try_collect::<Vec<String>>().await?;
+    keys.sort();
+    assert_eq!(keys, vec!["44".to_string(), "45".to_string()]);
+
+    // `by_index("active","true")` = a scan of the `active.true` bucket. 44 left,
+    // so `<m>#idx.active.true.44` was tombstoned at H2; only 45 remains. The
+    // departed member must NOT reappear via its older (H1) live row — that was
+    // the pre-rank `deleted = false` bug, which let a tombstoned entry fall back.
+    let active = path_prefix_filter_contract_state(&conn, cid, format!("{m}#idx.active.true"))
+        .await?
+        .try_collect::<Vec<String>>()
+        .await?;
+    assert_eq!(active, vec!["45".to_string()]);
+
+    Ok(())
+}
+
+// A live value under a prefix must make `exists` true even when the
+// latest-height row under that prefix is a tombstone (e.g. an IndexedMap index
+// delete). Regression: `exists` ranked rows globally (no per-path partition),
+// so it saw only the single newest row — if that was a tombstone it wrongly
+// reported the whole subtree gone.
+#[tokio::test]
+async fn test_exists_with_tombstone_as_latest_row() -> Result<()> {
+    let (_reader, writer, _temp_dir) = new_test_db().await?;
+    let conn = writer.connection();
+    let cid = 123;
+
+    let mut txs = Vec::new();
+    for (i, height) in [800000u64, 800001].into_iter().enumerate() {
+        insert_block(
+            &conn,
+            BlockRow::builder()
+                .height(height)
+                .hash(new_mock_block_hash(height as u32))
+                .build(),
+        )
+        .await?;
+        txs.push(
+            insert_transaction(
+                &conn,
+                TransactionRow::builder()
+                    .height(height)
+                    .txid(format!("cccc{:060}", i))
+                    .tx_index(0)
+                    .confirmed_height(height)
+                    .build(),
+            )
+            .await?,
+        );
+    }
+
+    // A live value under `a` at H1.
+    insert_contract_state(
+        &conn,
+        ContractStateRow::builder()
+            .contract_id(cid)
+            .tx_id(txs[0])
+            .height(800000)
+            .path("a.live".to_string())
+            .value(vec![1])
+            .build(),
+    )
+    .await?;
+    // A tombstone under `a` at a strictly higher height (the newest row).
+    insert_contract_state(
+        &conn,
+        ContractStateRow::builder()
+            .contract_id(cid)
+            .tx_id(txs[1])
+            .height(800001)
+            .path("a.gone".to_string())
+            .value(vec![1])
+            .build(),
+    )
+    .await?;
+    delete_contract_state(&conn, 800001, Some(txs[1]), cid, "a.gone").await?;
+
+    assert!(
+        exists_contract_state(&conn, cid, "a").await?,
+        "`a.live` is still live, so `a` must exist despite the newer tombstone"
+    );
+
+    Ok(())
+}
+
+// `matching_path` resolves an enum's live variant. After a re-set (old variant
+// tombstoned, new variant written at the same height), it must return the NEW
+// variant — the per-path ranking must not let the old tombstone win.
+#[tokio::test]
+async fn test_matching_path_after_enum_reset() -> Result<()> {
+    let (_reader, writer, _temp_dir) = new_test_db().await?;
+    let conn = writer.connection();
+    let cid = 123;
+
+    let mut txs = Vec::new();
+    for (i, height) in [800000u64, 800001].into_iter().enumerate() {
+        insert_block(
+            &conn,
+            BlockRow::builder()
+                .height(height)
+                .hash(new_mock_block_hash(height as u32))
+                .build(),
+        )
+        .await?;
+        txs.push(
+            insert_transaction(
+                &conn,
+                TransactionRow::builder()
+                    .height(height)
+                    .txid(format!("dddd{:060}", i))
+                    .tx_index(0)
+                    .confirmed_height(height)
+                    .build(),
+            )
+            .await?,
+        );
+    }
+
+    // H1: status = active.
+    insert_contract_state(
+        &conn,
+        ContractStateRow::builder()
+            .contract_id(cid)
+            .tx_id(txs[0])
+            .height(800000)
+            .path("c.status.active".to_string())
+            .value(vec![])
+            .build(),
+    )
+    .await?;
+    // H2: re-set to proven — tombstone `active`, write `proven` (same height).
+    delete_contract_state(&conn, 800001, Some(txs[1]), cid, "c.status.active").await?;
+    insert_contract_state(
+        &conn,
+        ContractStateRow::builder()
+            .contract_id(cid)
+            .tx_id(txs[1])
+            .height(800001)
+            .path("c.status.proven".to_string())
+            .value(vec![])
+            .build(),
+    )
+    .await?;
+
+    let found = matching_path(&conn, cid, "c.status", r"^c.status.(active|proven)(\..*|$)").await?;
+    assert_eq!(found, Some("c.status.proven".to_string()));
+
+    Ok(())
+}
+
+// `matching_path` must return the NEWEST live variant when a stale one lingers
+// live at a lower height (an old variant whose tombstone never landed). This is
+// the `Op` enum case — `id` written earlier, `sum` later, both live — where the
+// resolver must pick `sum`, not arbitrarily `id`.
+#[tokio::test]
+async fn test_matching_path_newest_of_multiple_live() -> Result<()> {
+    let (_reader, writer, _temp_dir) = new_test_db().await?;
+    let conn = writer.connection();
+    let cid = 123;
+
+    let mut txs = Vec::new();
+    for (i, height) in [800000u64, 800001].into_iter().enumerate() {
+        insert_block(
+            &conn,
+            BlockRow::builder()
+                .height(height)
+                .hash(new_mock_block_hash(height as u32))
+                .build(),
+        )
+        .await?;
+        txs.push(
+            insert_transaction(
+                &conn,
+                TransactionRow::builder()
+                    .height(height)
+                    .txid(format!("eeee{:060}", i))
+                    .tx_index(0)
+                    .confirmed_height(height)
+                    .build(),
+            )
+            .await?,
+        );
+    }
+
+    // Old variant `id` at H1, new variant `sum` at H2 — both live.
+    for (tx, height, path) in [
+        (txs[0], 800000u64, "c.op.id"),
+        (txs[1], 800001, "c.op.sum.y"),
+    ] {
+        insert_contract_state(
+            &conn,
+            ContractStateRow::builder()
+                .contract_id(cid)
+                .tx_id(tx)
+                .height(height)
+                .path(path.to_string())
+                .value(vec![1])
+                .build(),
+        )
+        .await?;
+    }
+
+    let found = matching_path(&conn, cid, "c.op", r"^c.op.(id|sum)(\..*|$)").await?;
+    assert_eq!(found, Some("c.op.sum.y".to_string()));
+
+    Ok(())
+}
+
+// The `Option` resolver asks only "does `<field>.none` exist?". A stale `none`
+// lingering live at a lower height (from an earlier value) must be outranked by
+// the newer `some` write, so the none-check finds nothing → the field reads as
+// Some. (Regression: a per-path resolver would have surfaced the stale `none`.)
+#[tokio::test]
+async fn test_matching_path_stale_none_outranked_by_some() -> Result<()> {
+    let (_reader, writer, _temp_dir) = new_test_db().await?;
+    let conn = writer.connection();
+    let cid = 123;
+
+    let mut txs = Vec::new();
+    for (i, height) in [800000u64, 800001].into_iter().enumerate() {
+        insert_block(
+            &conn,
+            BlockRow::builder()
+                .height(height)
+                .hash(new_mock_block_hash(height as u32))
+                .build(),
+        )
+        .await?;
+        txs.push(
+            insert_transaction(
+                &conn,
+                TransactionRow::builder()
+                    .height(height)
+                    .txid(format!("ffff{:060}", i))
+                    .tx_index(0)
+                    .confirmed_height(height)
+                    .build(),
+            )
+            .await?,
+        );
+    }
+
+    // Stale `none` at H1, then a `some` value at H2 — both live.
+    for (tx, height, path) in [
+        (txs[0], 800000u64, "c.opt.none"),
+        (txs[1], 800001, "c.opt.some"),
+    ] {
+        insert_contract_state(
+            &conn,
+            ContractStateRow::builder()
+                .contract_id(cid)
+                .tx_id(tx)
+                .height(height)
+                .path(path.to_string())
+                .value(vec![1])
+                .build(),
+        )
+        .await?;
+    }
+
+    // The none-check (only `none` in the alternation) must NOT match the newer
+    // `some`, so it returns None and the field resolves to Some.
+    let found = matching_path(&conn, cid, "c.opt", r"^c.opt.(none)(\..*|$)").await?;
+    assert_eq!(found, None);
 
     Ok(())
 }

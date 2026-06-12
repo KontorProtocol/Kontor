@@ -76,22 +76,20 @@ impl ProxyStorageWriteModel {
         f: impl Fn(ContractAddress) -> ContractAddress,
     ) {
         let path = self.base_path.push("contract_address");
-        stdlib::WriteStorage::__set(
-            &self.ctx,
-            path.clone(),
-            f(stdlib::ReadStorage::__get(&self.ctx, path).unwrap()),
-        );
+        let old: ContractAddress = stdlib::ReadStorage::__get(&self.ctx, path.clone())
+            .unwrap();
+        let new = f(old.clone());
+        stdlib::WriteStorage::__set(&self.ctx, path, new);
     }
     pub fn try_update_contract_address(
         &self,
         f: impl Fn(ContractAddress) -> Result<ContractAddress, crate::error::Error>,
     ) -> Result<(), crate::error::Error> {
         let path = self.base_path.push("contract_address");
-        stdlib::WriteStorage::__set(
-            &self.ctx,
-            path.clone(),
-            f(stdlib::ReadStorage::__get(&self.ctx, path).unwrap())?,
-        );
+        let old: ContractAddress = stdlib::ReadStorage::__get(&self.ctx, path.clone())
+            .unwrap();
+        let new = f(old.clone())?;
+        stdlib::WriteStorage::__set(&self.ctx, path, new);
         Ok(())
     }
     pub fn load(&self) -> ProxyStorage {

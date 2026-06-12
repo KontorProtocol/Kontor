@@ -175,6 +175,17 @@ impl built_in::context::HostProcStorageWithStore for Runtime {
             .await
     }
 
+    async fn delete<T>(
+        accessor: &Accessor<T, Self>,
+        self_: Resource<ProcStorage>,
+        path: String,
+    ) -> Result<bool> {
+        accessor
+            .with(|mut access| access.get().clone())
+            ._delete(accessor, self_, path)
+            .await
+    }
+
     async fn delete_matching_paths<T>(
         accessor: &Accessor<T, Self>,
         self_: Resource<ProcStorage>,

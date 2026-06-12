@@ -50,7 +50,7 @@ impl TokenStorageLedgerModel {
     pub fn load(&self) -> Map<String, u64> {
         Map::new(&[])
     }
-    pub fn keys<'a>(&'a self) -> impl Iterator<Item = String> + 'a {
+    pub fn keys(&self) -> impl Iterator<Item = String> {
         stdlib::ReadStorage::__get_keys(&self.ctx, &self.base_path)
     }
 }
@@ -118,10 +118,14 @@ impl TokenStorageLedgerWriteModel {
             value,
         )
     }
+    /// Remove a single entry (tombstone). Returns true if a live value existed.
+    pub fn remove(&self, key: &String) -> bool {
+        stdlib::WriteStorage::__delete(&self.ctx, &self.base_path.push(key.to_string()))
+    }
     pub fn load(&self) -> Map<String, u64> {
         Map::new(&[])
     }
-    pub fn keys<'a>(&'a self) -> impl Iterator<Item = String> + 'a {
+    pub fn keys(&self) -> impl Iterator<Item = String> {
         stdlib::ReadStorage::__get_keys(&self.ctx, &self.base_path)
     }
 }

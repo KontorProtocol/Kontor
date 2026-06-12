@@ -51,22 +51,18 @@ impl FibValueWriteModel {
     }
     pub fn update_value(&self, f: impl Fn(u64) -> u64) {
         let path = self.base_path.push("value");
-        stdlib::WriteStorage::__set(
-            &self.ctx,
-            path.clone(),
-            f(stdlib::ReadStorage::__get(&self.ctx, path).unwrap()),
-        );
+        let old: u64 = stdlib::ReadStorage::__get(&self.ctx, path.clone()).unwrap();
+        let new = f(old.clone());
+        stdlib::WriteStorage::__set(&self.ctx, path, new);
     }
     pub fn try_update_value(
         &self,
         f: impl Fn(u64) -> Result<u64, crate::error::Error>,
     ) -> Result<(), crate::error::Error> {
         let path = self.base_path.push("value");
-        stdlib::WriteStorage::__set(
-            &self.ctx,
-            path.clone(),
-            f(stdlib::ReadStorage::__get(&self.ctx, path).unwrap())?,
-        );
+        let old: u64 = stdlib::ReadStorage::__get(&self.ctx, path.clone()).unwrap();
+        let new = f(old.clone())?;
+        stdlib::WriteStorage::__set(&self.ctx, path, new);
         Ok(())
     }
     pub fn load(&self) -> FibValue {
@@ -131,7 +127,7 @@ impl FibStorageCacheModel {
     pub fn load(&self) -> Map<u64, FibValue> {
         Map::new(&[])
     }
-    pub fn keys<'a>(&'a self) -> impl Iterator<Item = u64> + 'a {
+    pub fn keys(&self) -> impl Iterator<Item = u64> {
         stdlib::ReadStorage::__get_keys(&self.ctx, &self.base_path)
     }
 }
@@ -200,10 +196,14 @@ impl FibStorageCacheWriteModel {
             value,
         )
     }
+    /// Remove a single entry (tombstone). Returns true if a live value existed.
+    pub fn remove(&self, key: &u64) -> bool {
+        stdlib::WriteStorage::__delete(&self.ctx, &self.base_path.push(key.to_string()))
+    }
     pub fn load(&self) -> Map<u64, FibValue> {
         Map::new(&[])
     }
-    pub fn keys<'a>(&'a self) -> impl Iterator<Item = u64> + 'a {
+    pub fn keys(&self) -> impl Iterator<Item = u64> {
         stdlib::ReadStorage::__get_keys(&self.ctx, &self.base_path)
     }
 }

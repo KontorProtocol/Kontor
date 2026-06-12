@@ -10,10 +10,12 @@ mod contract_address;
 mod holder_ref;
 mod impls;
 mod import;
+mod indexed;
 mod interface;
 mod model;
 mod regtest;
 mod root;
+mod storage_enum;
 mod store;
 mod test;
 mod utils;
@@ -103,6 +105,40 @@ pub fn derive_store(input: TokenStream) -> TokenStream {
     TokenStream::from(expanded)
 }
 
+#[proc_macro_derive(Indexed, attributes(index))]
+pub fn derive_indexed(input: TokenStream) -> TokenStream {
+    let input = parse_macro_input!(input as DeriveInput);
+    let name = &input.ident;
+
+    let result = match &input.data {
+        Data::Struct(data_struct) => {
+            let body = indexed::generate_index_entries(data_struct, name);
+            let lookup_trait = indexed::generate_lookup_trait(data_struct, name);
+            body.and_then(|body| lookup_trait.map(|lookup_trait| (body, lookup_trait)))
+        }
+        _ => Err(Error::new(
+            name.span(),
+            "Indexed derive only supports structs",
+        )),
+    };
+    let (body, lookup_trait) = match result {
+        Ok(parts) => parts,
+        Err(err) => return err.to_compile_error().into(),
+    };
+
+    quote! {
+        #[automatically_derived]
+        impl stdlib::Indexed for #name {
+            fn index_entries(&self) -> alloc::vec::Vec<(&'static str, alloc::borrow::Cow<'static, str>)> {
+                #body
+            }
+        }
+
+        #lookup_trait
+    }
+    .into()
+}
+
 #[proc_macro_derive(Model)]
 pub fn derive_model(input: TokenStream) -> TokenStream {
     let input = parse_macro_input!(input as DeriveInput);
@@ -147,7 +183,20 @@ pub fn derive_model(input: TokenStream) -> TokenStream {
 #[proc_macro_derive(Storage)]
 pub fn derive_storage(input: TokenStream) -> TokenStream {
     let mut tokens = derive_store(input.clone());
-    tokens.extend(derive_model(input));
+    tokens.extend(derive_model(input.clone()));
+    // Every storage enum (each WIT enum/variant gets `#[derive(Storage)]` via the
+    // contract's `additional_derives`) gains its index machinery here: the
+    // `<E>Kind` marker, discriminant `From`, and `IndexKey`. All new names, so
+    // it's safe even on built-ins like `HolderRef` whose `Display`/`FromStr`
+    // already exist — and it deliberately doesn't emit a `Display` of its own.
+    if let Ok(parsed) = syn::parse::<DeriveInput>(input)
+        && let Data::Enum(data_enum) = &parsed.data
+    {
+        match storage_enum::generate(data_enum, &parsed.ident) {
+            Ok(body) => tokens.extend(TokenStream::from(body)),
+            Err(err) => tokens.extend(TokenStream::from(err.to_compile_error())),
+        }
+    }
     tokens
 }
 
