@@ -30,83 +30,28 @@ const DEFAULT_S_CHAL: u64 = 100;
 const REGTEST_S_CHAL: u64 = 8;
 
 // ─────────────────────────────────────────────────────────────────
-// GOAL END-STATE — target storage shape
+// STORAGE INDEX MODEL
 //
-// Design, not yet built: depends on a proposed `IndexedMap<K, V>` stdlib
-// type. Captured here so the contract documents where its storage is headed.
+// `agreements` and `challenges` are `IndexedMap`s: a primary `Map<K, V>` plus
+// framework-maintained secondary indexes (sibling `<map>#idx/...` rows, all
+// ordinary contract_state — versioned, reorg-safe, checkpoint-covered). The
+// index bookkeeping lives in stdlib (audited once), not hand-rolled here; the
+// only per-contract declaration is each value's `Indexed` impl naming the
+// indexed field (above), since the WIT record types can't carry `#[index]`.
 //
-// Intent: every challenge-generation and lifecycle access pattern becomes an
-// indexed prefix lookup — no `.keys()` scan-and-filter, no nested scans, and
-// no hand-maintained index maps. All state stays in-contract (as it is today),
-// so it remains height-versioned and folded into the checkpoint hash; the only
-// thing that changes is that filtered reads hit a declared index instead of
-// scanning the whole collection.
+//   agreements  indexed by `active`  → by_index("active","true")  = active set
+//   challenges  indexed by `status`  → by_index("status","active") = active set
 //
-// `IndexedMap<K, V>` = a primary `Map<K, V>` plus framework-maintained
-// secondary indexes. Each `#[index]` is a derived sub-map under a reserved
-// path whose membership IS the predicate, written/removed automatically on
-// every set/remove. `filter` makes it a partial index (only matching rows are
-// indexed). Index entries are ordinary contract_state rows: versioned,
-// reorg-safe, checkpoint-covered. The bookkeeping lives in IndexedMap (audited
-// once in stdlib), not hand-rolled per contract.
+// This collapses the three former scans — expire's full challenge scan,
+// generation's nested challenge×agreement scan, and get_active_challenges'
+// full scan — to indexed prefix reads over just the active subset. `get`/`set`
+// on the IndexedMap maintain the buckets automatically; updating an INDEXED
+// field must re-`set` the whole value (a sub-field `set_status`/`set_active`
+// bypasses index maintenance — see join/expire/verify).
 //
-//   struct AgreementData {
-//       agreement_id: String,
-//       file_id: String,
-//       active: bool,
-//       active_challenge: Option<String>,  // co-located: "already challenged?"
-//                                          // is a point read, not a challenge scan
-//   }
-//
-//   struct Membership {                    // flattened from nested AgreementNodes
-//       agreement_id: String,
-//       signer_id: u64,                    // the node IS the signer (post-#476)
-//       active: bool,
-//   }
-//
-//   struct ChallengeData {                 // unchanged from today
-//       challenge_id: String,
-//       agreement_id: String,
-//       block_height: u64,
-//       num_challenges: u64,
-//       seed: Vec<u8>,
-//       prover_id: u64,                    // signer_id (post-#476)
-//       deadline_height: u64,
-//       status: ChallengeStatus,           // Active | Proven | Expired | Failed
-//   }
-//
-//   struct ProtocolState {
-//       min_nodes: u64,
-//       challenge_deadline_blocks: u64,
-//       c_target: u64,
-//       s_chal: u64,
-//       blocks_per_year: u64,
-//       agreement_count: u64,
-//
-//       #[index(by = "active")]                            // active-agreement set
-//       agreements: IndexedMap<String, AgreementData>,        // key = agreement_id
-//
-//       #[index(by = "agreement_id", filter = "active")]   // active nodes per agreement
-//       memberships: IndexedMap<(String, u64), Membership>,    // key = (agreement_id, signer_id)
-//
-//       #[index(by = "status")]                            // active / proven / expired sets
-//       #[index(by = ("status", "deadline_height"))]       // sortable overdue sweep (early-break)
-//       challenges: IndexedMap<String, ChallengeData>,        // key = challenge_id
-//   }
-//
-// Access pattern  →  index that serves it (all O(result), no scan):
-//   active agreements (get_all_active_agreements) → agreements[active]
-//   agreement already challenged? (generation)    → AgreementData.active_challenge (point read)
-//   active nodes for agreement (prover select)    → memberships[agreement_id, filter active]
-//   overdue active challenges (expire)            → challenges[(status, deadline_height)], break past h
-//   active challenges (get_active_challenges)     → challenges[status = active]
-//   challenge by id (verify_proof, get_challenge) → primary get (no index)
-//
-// Net: today's three bad scans — expire's full challenge scan, generation's
-// nested challenge×agreement scan (the `Vec::contains` inside the agreement
-// loop), and get_active_challenges' full scan — all collapse to indexed
-// lookups, and the index bookkeeping is owned by IndexedMap, not written by
-// hand in this contract.
+// Deferred (single-field index suffices today): partial/`filter` indexes,
+// composite `(status, deadline_height)` sortable sweep, and flattening
+// `agreement_nodes` into a `memberships` IndexedMap. See the upgrade backlog.
 // ─────────────────────────────────────────────────────────────────
 
 // ─────────────────────────────────────────────────────────────────
@@ -128,10 +73,37 @@ struct ProtocolState {
     pub c_target: u64,
     pub s_chal: u64,
     pub blocks_per_year: u64,
-    pub agreements: Map<String, AgreementData>,
+    pub agreements: IndexedMap<String, AgreementData>,
     pub agreement_nodes: Map<String, AgreementNodes>,
     pub agreement_count: u64,
-    pub challenges: Map<String, ChallengeData>,
+    pub challenges: IndexedMap<String, ChallengeData>,
+}
+
+/// Stringify a challenge status into its index-bucket key. Centralised so the
+/// `Indexed` impl and every `by_index("status", …)` lookup name the same bucket.
+fn challenge_status_key(status: ChallengeStatus) -> &'static str {
+    match status {
+        ChallengeStatus::Active => "active",
+        ChallengeStatus::Proven => "proven",
+        ChallengeStatus::Expired => "expired",
+        ChallengeStatus::Failed => "failed",
+        ChallengeStatus::Invalid => "invalid",
+    }
+}
+
+// `agreement-data` / `challenge-data` are WIT records, so they can't carry
+// `#[index]` field attributes — we supply the index spec by hand. IndexedMap's
+// field model and bulk `Store` maintain the buckets from this single source.
+impl Indexed for AgreementData {
+    fn index_entries(&self) -> Vec<(&'static str, String)> {
+        alloc::vec![("active", self.active.to_string())]
+    }
+}
+
+impl Indexed for ChallengeData {
+    fn index_entries(&self) -> Vec<(&'static str, String)> {
+        alloc::vec![("status", challenge_status_key(self.status).to_string())]
+    }
 }
 
 // ─────────────────────────────────────────────────────────────────
@@ -167,10 +139,10 @@ impl Guest for Filestorage {
             c_target: DEFAULT_C_TARGET,
             s_chal,
             blocks_per_year: DEFAULT_BLOCKS_PER_YEAR,
-            agreements: Map::default(),
+            agreements: IndexedMap::default(),
             agreement_nodes: Map::default(),
             agreement_count: 0,
-            challenges: Map::default(),
+            challenges: IndexedMap::default(),
         }
         .init(ctx);
         ctx.contract()
@@ -238,13 +210,9 @@ impl Guest for Filestorage {
         let model = ctx.model();
         model
             .agreements()
-            .keys()
+            .by_index("active", "true")
             .filter_map(|agreement_id: String| {
-                let agreement = model.agreements().get(&agreement_id)?;
-                if !agreement.active() {
-                    return None;
-                }
-                Some(agreement.load())
+                model.agreements().get(&agreement_id).map(|a| a.load())
             })
             .collect()
     }
@@ -299,7 +267,12 @@ impl Guest for Filestorage {
         let activated = !agreement.active() && node_count >= min_nodes;
 
         if activated {
-            agreement.set_active(true);
+            // Re-set the whole value through IndexedMap so the `active` index
+            // moves with it — an in-place `set_active` would leave the index
+            // stale (sub-field writes bypass index maintenance).
+            let mut data = agreement.load();
+            data.active = true;
+            model.agreements().set(&agreement_id, data);
         }
 
         Ok(JoinAgreementResult {
@@ -403,13 +376,9 @@ impl Guest for Filestorage {
         let model = ctx.model();
         model
             .challenges()
-            .keys()
+            .by_index("status", challenge_status_key(ChallengeStatus::Active))
             .filter_map(|challenge_id: String| {
-                let c = model.challenges().get(&challenge_id)?;
-                if c.status().load() != ChallengeStatus::Active {
-                    return None;
-                }
-                Some(c.load())
+                model.challenges().get(&challenge_id).map(|c| c.load())
             })
             .collect()
     }
@@ -418,13 +387,20 @@ impl Guest for Filestorage {
         let model = ctx.proc_context().model();
         let mut expired = 0u64;
 
-        // Iterate through all challenges and expire those past deadline
-        for challenge_id in model.challenges().keys() {
+        // Snapshot the active bucket first: `set` below moves ids out of it, and
+        // mutating an index while scanning it would corrupt the lazy iteration.
+        let active_ids: Vec<String> = model
+            .challenges()
+            .by_index("status", challenge_status_key(ChallengeStatus::Active))
+            .collect();
+
+        for challenge_id in active_ids {
             if let Some(challenge) = model.challenges().get(&challenge_id)
-                && challenge.status().load() == ChallengeStatus::Active
                 && challenge.deadline_height() <= current_height
             {
-                challenge.set_status(ChallengeStatus::Expired);
+                let mut data = challenge.load();
+                data.status = ChallengeStatus::Expired;
+                model.challenges().set(&challenge_id, data);
                 expired = expired.saturating_add(1);
             }
         }
@@ -446,28 +422,20 @@ impl Guest for Filestorage {
         // Per-block batch seed: σ_batch = HKDF_SHA256(block_hash, "KONTOR-CHAL::v1" || block_height)
         let sigma_batch = derive_batch_seed(&block_hash, block_height);
 
-        // Exclude any agreement_id that already has an active challenge.
-        //
-        // TODO maybe: we could change this filter to filter by active challenges by file + node
+        // Exclude any agreement_id that already has an active challenge — the
+        // active challenges are an indexed lookup, not a full-collection scan.
         let challenged_agreement_ids: Vec<String> = model
             .challenges()
-            .keys()
-            .filter_map(|cid: String| {
-                let c = model.challenges().get(&cid)?;
-                (c.status().load() == ChallengeStatus::Active).then(|| c.agreement_id())
-            })
+            .by_index("status", challenge_status_key(ChallengeStatus::Active))
+            .filter_map(|cid: String| model.challenges().get(&cid).map(|c| c.agreement_id()))
             .collect();
 
-        // Get eligible agreements: active and agreement not already challenged
+        // Eligible agreements: active (indexed) and not already challenged. The
+        // former nested agreement×challenge scan collapses to two index reads.
         let eligible_agreement_ids: Vec<String> = model
             .agreements()
-            .keys()
-            .filter(|aid: &String| {
-                model
-                    .agreements()
-                    .get(aid)
-                    .is_some_and(|a| a.active() && !challenged_agreement_ids.contains(aid))
-            })
+            .by_index("active", "true")
+            .filter(|aid: &String| !challenged_agreement_ids.contains(aid))
             .collect();
 
         let total_files = eligible_agreement_ids.len();
@@ -630,12 +598,17 @@ impl Guest for Filestorage {
             )));
         }
 
-        // Check no active challenge already exists for this agreement
-        let has_active = model.challenges().keys().any(|cid: String| {
-            model.challenges().get(&cid).is_some_and(|c| {
-                c.status().load() == ChallengeStatus::Active && c.agreement_id() == agreement_id
-            })
-        });
+        // Check no active challenge already exists for this agreement — scan the
+        // active bucket (small), not every challenge ever.
+        let has_active = model
+            .challenges()
+            .by_index("status", challenge_status_key(ChallengeStatus::Active))
+            .any(|cid: String| {
+                model
+                    .challenges()
+                    .get(&cid)
+                    .is_some_and(|c| c.agreement_id() == agreement_id)
+            });
         if has_active {
             return Err(Error::Message(format!(
                 "Agreement {} already has an active challenge",
@@ -755,9 +728,13 @@ impl Guest for Filestorage {
             file_registry::VerifyResult::Invalid => ChallengeStatus::Invalid,
         };
 
+        // Re-set the whole value so the `status` index follows — a bare
+        // `set_status` sub-field write would leave the index stale.
         for cid in &challenge_ids {
             if let Some(c) = model.challenges().get(cid) {
-                c.set_status(new_status);
+                let mut data = c.load();
+                data.status = new_status;
+                model.challenges().set(cid, data);
             }
         }
 
