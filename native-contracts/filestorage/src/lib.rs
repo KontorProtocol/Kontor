@@ -51,8 +51,10 @@ const REGTEST_S_CHAL: u64 = 8;
 //   challenges            indexed by `status` → where_status(ChallengeStatus::Active)
 //   challenges            `due`: by `status`, sorted by `deadline_height`
 //                                → where_due(Active).up_to(height) (ordered, early-break)
-//   agreement_nodes.nodes indexed by `active` → where_active(true)
-//                                               (per agreement; nested IndexedMap)
+//   memberships           keyed by `(agreement_id, node_id)` (compound `Pair`);
+//                         `by_agreement_active`: by (`agreement_id`, `active`)
+//                                → where_by_agreement_active(aid, true) (flat, no
+//                                  nested map; count_by_agreement_active for size)
 //
 // This collapses every former scan — expire's full challenge scan, generation's
 // nested challenge×agreement scan, get_active_challenges' full scan, and the
@@ -78,35 +80,32 @@ const REGTEST_S_CHAL: u64 = 8;
 // count (no hand-kept `node_count`), and the agreement total is the sum of its
 // `active` buckets (no hand-kept `agreement_count`) — neither can drift.
 //
-// Deferred: partial/`filter` indexes, covering indexes (avoid the where_*→get N
-// reads), and flattening `agreement_nodes` to a tuple-keyed `memberships`
-// IndexedMap. See the upgrade backlog. (The `due` sorted index now covers the
-// composite `(status, deadline_height)` sweep `expire` needed.)
+// Deferred: partial/`filter` indexes and covering indexes (avoid the where_*→get
+// N reads). See the upgrade backlog. (The `due` sorted index covers the composite
+// `(status, deadline_height)` sweep `expire` needed; the `eligible` composite
+// index covers `active ∧ unchallenged`; the flat compound-keyed `memberships` map
+// replaced the nested per-agreement node map.)
 // ─────────────────────────────────────────────────────────────────
 
 // ─────────────────────────────────────────────────────────────────
 // State Types
 // ─────────────────────────────────────────────────────────────────
 
-/// A node's membership in an agreement. Internal (non-WIT), so its `active`
-/// flag is indexed with a plain `#[index]` — `nodes.where_active(true)`
-/// returns the agreement's live members directly. Departed nodes keep an entry
-/// with `active = false`; they sit in the `active/false` bucket and never
-/// pollute the active scan.
+/// A node's membership in an agreement, stored in the flat `memberships` map
+/// keyed by the compound `(agreement_id, node_id)` (a `Pair`). The composite
+/// `by_agreement_active` index — bucketed by `(agreement_id, active)` — makes an
+/// agreement's live members a single prefix scan
+/// (`where_by_agreement_active(aid, true)`) and its count framework-maintained
+/// (`count_by_agreement_active(aid, true)`), so there's no nested map and no
+/// hand-kept counter. `agreement_id` is co-located in the value (it's the bucket
+/// field; the key also carries it) so the index is computable from the value
+/// alone. Departed nodes keep a row with `active = false`, in the
+/// `(aid, false)` bucket, out of the live scan but still listable.
 #[derive(Clone, Default, Storage, Indexed)]
+#[index(by_agreement_active, by = (agreement_id, active))]
 struct NodeState {
-    #[index]
+    pub agreement_id: String,
     pub active: bool,
-}
-
-#[derive(Clone, Default, Storage)]
-struct AgreementNodes {
-    /// signer_id -> membership. The node identity is the joining signer, so the
-    /// key is its u64 signer_id. Indexed by `active` so live-member lookup is a
-    /// prefix scan, not a scan-and-filter over every node that ever joined — and
-    /// the active count is `nodes().count_active(true)`, framework-maintained, so
-    /// there's no hand-kept counter to drift.
-    pub nodes: IndexedMap<u64, NodeState>,
 }
 
 #[derive(Clone, Default, StorageRoot)]
@@ -117,7 +116,7 @@ struct ProtocolState {
     pub s_chal: u64,
     pub blocks_per_year: u64,
     pub agreements: IndexedMap<String, AgreementData>,
-    pub agreement_nodes: Map<String, AgreementNodes>,
+    pub memberships: IndexedMap<Pair<String, u64>, NodeState>,
     pub challenges: IndexedMap<String, ChallengeData>,
 }
 
@@ -166,7 +165,7 @@ impl Guest for Filestorage {
             s_chal,
             blocks_per_year: DEFAULT_BLOCKS_PER_YEAR,
             agreements: IndexedMap::default(),
-            agreement_nodes: Map::default(),
+            memberships: IndexedMap::default(),
             challenges: IndexedMap::default(),
         }
         .init(ctx);
@@ -215,12 +214,10 @@ impl Guest for Filestorage {
             active_challenge: None,
         };
 
-        // Store the agreement and initialize node tracking
-        // Stored with `active: false`, so it lands in the `active/false` index
-        // bucket; the framework bucket counts are the agreement total (see
-        // `agreement_count`), so there's no separate counter to bump. The
-        // `agreement_nodes` entry isn't created here — it's written lazily by the
-        // first `join` (an empty node-set would persist no rows anyway).
+        // Store the agreement, `active: false`, so it lands in the `active/false`
+        // index bucket; the framework bucket counts are the agreement total, so
+        // there's no separate counter to bump. Memberships are flat rows in their
+        // own map, written by `join` — nothing to initialize here.
         model.agreements().set(&agreement_id, agreement);
 
         Ok(CreateAgreementResult { agreement_id })
@@ -274,16 +271,15 @@ impl Guest for Filestorage {
                 "agreement not found: {}",
                 agreement_id
             )))?;
-        // The node-set persists lazily: an agreement with no joined nodes has no
-        // `agreement_nodes` entry at all (an `AgreementNodes` whose only field is
-        // an empty `IndexedMap` writes zero rows). So a missing entry just means
-        // "no members yet".
-        let nodes_state = model.agreement_nodes().get(&agreement_id);
+        // Membership is a single flat entry keyed by `(agreement_id, node_id)` — a
+        // missing entry just means "never joined".
+        let membership_key = Pair::new(agreement_id.clone(), node_id);
 
         // Check if node is already active in agreement
-        if nodes_state
-            .as_ref()
-            .and_then(|s| s.nodes().get(&node_id).map(|n| n.active()))
+        if model
+            .memberships()
+            .get(&membership_key)
+            .map(|n| n.active())
             .unwrap_or(false)
         {
             return Err(Error::Message(format!(
@@ -292,26 +288,22 @@ impl Guest for Filestorage {
             )));
         }
 
-        // Add the node, reactivating if it previously left and creating the
-        // node-set on the very first join. Either way `set` lands it in the
-        // `active/true` bucket and bumps that bucket's framework-maintained count.
-        match &nodes_state {
-            Some(s) => s.nodes().set(&node_id, NodeState { active: true }),
-            None => model.agreement_nodes().set(
-                &agreement_id,
-                AgreementNodes {
-                    nodes: IndexedMap::new(&[(node_id, NodeState { active: true })]),
-                },
-            ),
-        }
+        // Add (or reactivate) the node — `set` lands it in the `(agreement, true)`
+        // bucket and bumps that bucket's framework-maintained count. No nested
+        // node-set to lazily create.
+        model.memberships().set(
+            &membership_key,
+            NodeState {
+                agreement_id: agreement_id.clone(),
+                active: true,
+            },
+        );
 
-        // Active-node count is the `active/true` bucket size — read straight from
-        // the index, no hand-kept counter.
+        // Active-node count is the `(agreement, true)` bucket size — read straight
+        // from the index, no hand-kept counter.
         let node_count = model
-            .agreement_nodes()
-            .get(&agreement_id)
-            .map(|s| s.nodes().count_active(true))
-            .unwrap_or(0);
+            .memberships()
+            .count_by_agreement_active(agreement_id.clone(), true);
 
         // Check if we should activate (only if not already active)
         let min_nodes = model.min_nodes();
@@ -348,21 +340,17 @@ impl Guest for Filestorage {
                 "agreement not found: {}",
                 agreement_id
             )))?;
-        let nodes_state = model
-            .agreement_nodes()
-            .get(&agreement_id)
+        let membership_key = Pair::new(agreement_id.clone(), node_id);
+        let membership = model
+            .memberships()
+            .get(&membership_key)
             .ok_or(Error::Message(format!(
-                "agreement nodes not found: {}",
-                agreement_id
+                "node {} not in agreement {}",
+                node_id, agreement_id
             )))?;
 
         // Validate node is active in agreement
-        if !nodes_state
-            .nodes()
-            .get(&node_id)
-            .map(|n| n.active())
-            .unwrap_or(false)
-        {
+        if !membership.active() {
             return Err(Error::Message(format!(
                 "node {} not in agreement {}",
                 node_id, agreement_id
@@ -373,12 +361,10 @@ impl Guest for Filestorage {
         // voluntary departure when the agreement would be at/below the minimum replication
         // threshold (|N_f| <= n_min). We do not enforce that rule yet.
 
-        // Mark node as inactive (kept as a row; `set` moves it to the
-        // `active/false` index bucket, out of the live-member scan, and the
-        // framework decrements the `active/true` bucket count automatically).
-        nodes_state
-            .nodes()
-            .set(&node_id, NodeState { active: false });
+        // Mark node as inactive in place (kept as a row; the framework moves it to
+        // the `(agreement, false)` bucket, out of the live-member scan, and
+        // decrements the `(agreement, true)` count automatically).
+        membership.set_active(false);
 
         Ok(LeaveAgreementResult {
             agreement_id,
@@ -387,28 +373,28 @@ impl Guest for Filestorage {
     }
 
     fn get_agreement_nodes(ctx: &ViewContext, agreement_id: String) -> Vec<NodeInfo> {
-        ctx.model()
-            .agreement_nodes()
-            .get(&agreement_id)
-            .map(|s| {
-                // Return all nodes we’ve seen, including inactive ones
-                let nodes = s.nodes();
-                nodes
-                    .keys()
-                    .map(|node_id: u64| NodeInfo {
-                        node_id,
-                        active: nodes.get(&node_id).map(|n| n.active()).unwrap_or(false),
+        let memberships = ctx.model().memberships();
+        // All nodes we've seen, including inactive ones: scan both `active` buckets
+        // of the agreement. `active` is known from which bucket, so no per-node
+        // read, and the node_id is the second half of the compound key.
+        [true, false]
+            .into_iter()
+            .flat_map(|active| {
+                memberships
+                    .where_by_agreement_active(agreement_id.clone(), active)
+                    .map(move |key: Pair<String, u64>| NodeInfo {
+                        node_id: key.1,
+                        active,
                     })
-                    .collect()
             })
-            .unwrap_or_default()
+            .collect()
     }
 
     fn is_node_in_agreement(ctx: &ViewContext, agreement_id: String, node_id: u64) -> bool {
         ctx.model()
-            .agreement_nodes()
-            .get(&agreement_id)
-            .and_then(|s| s.nodes().get(&node_id).map(|n| n.active()))
+            .memberships()
+            .get(&Pair::new(agreement_id, node_id))
+            .map(|n| n.active())
             .unwrap_or(false)
     }
 
@@ -545,14 +531,14 @@ impl Guest for Filestorage {
                 None => continue,
             };
 
-            // Get active nodes for this agreement
-            let nodes_state = match model.agreement_nodes().get(agreement_id) {
-                Some(s) => s,
-                None => continue,
-            };
-            // Live members of this agreement — an indexed prefix scan, not a
-            // scan-and-filter over every node that ever joined.
-            let active_nodes: Vec<u64> = nodes_state.nodes().where_active(true).collect();
+            // Live members of this agreement — an indexed prefix scan of the
+            // `(agreement, true)` bucket, recovering each node_id from the compound
+            // key's second half.
+            let active_nodes: Vec<u64> = model
+                .memberships()
+                .where_by_agreement_active(agreement_id.clone(), true)
+                .map(|key: Pair<String, u64>| key.1)
+                .collect();
 
             if active_nodes.is_empty() {
                 continue;
@@ -634,15 +620,10 @@ impl Guest for Filestorage {
             )));
         }
 
-        // Validate node is in agreement
-        let nodes_state = model
-            .agreement_nodes()
-            .get(&agreement_id)
-            .ok_or(Error::Message("No nodes for agreement".to_string()))?;
-
-        let is_active = nodes_state
-            .nodes()
-            .get(&prover_id)
+        // Validate node is active in agreement (point read of the flat membership).
+        let is_active = model
+            .memberships()
+            .get(&Pair::new(agreement_id.clone(), prover_id))
             .map(|n| n.active())
             .unwrap_or(false);
         if !is_active {

@@ -257,7 +257,12 @@ the per-key `get`.
    predicate DSL).
 3. **Covering (single scalar)** — write the projected field into the leaf's
    existing value slot; projection-returning scans. Multi-field/blob later.
-4. **Compound primary keys** — generalize the `<pk>` encoding (see below).
+4. **Compound primary keys** — ✅ SHIPPED. `Pair<A, B>` key (`<A><fixed-width B>`,
+   `SortKey` gained a `from_sort_key` decode for the round-trip); `IndexedMap<Pair<
+   String, u64>, V>` flows through the macro unchanged. filestorage flattened the
+   nested `agreement_nodes` map-of-IndexedMaps into a flat `memberships`
+   `IndexedMap<Pair<String, u64>, NodeState>` with a composite `(agreement_id,
+   active)` index.
 5. *(deferred)* **True partial** — omit rows when a predicate is false; only if a
    real index-size problem appears. Likely via an `Option`-returning computed key.
 

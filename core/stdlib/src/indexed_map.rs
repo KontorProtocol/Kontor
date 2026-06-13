@@ -119,11 +119,18 @@ impl IndexKey for Presence {
 /// `.`); `WIDTH` is the exact char count, which the scan strips to recover the
 /// primary key from a `<sort‖pk>` member segment. Signed types are sign-biased
 /// (flip the sign bit) so negatives sort before positives.
-pub trait SortKey {
+pub trait SortKey: Sized {
     /// Exact character width of every `sort_key()` for this type. Part of an
     /// index's on-disk format (fixed for the life of the immutable contract).
     const WIDTH: usize;
     fn sort_key(&self) -> String;
+    /// Decode a `sort_key()` back to the value — the inverse of [`sort_key`], so a
+    /// fixed-width segment can carry a value that's recovered, not just compared
+    /// (e.g. the `B` tail of a [`Pair`] compound key). Panics on a malformed
+    /// segment, surfacing storage corruption rather than masking it.
+    ///
+    /// [`sort_key`]: SortKey::sort_key
+    fn from_sort_key(segment: &str) -> Self;
 }
 
 macro_rules! sort_key_unsigned {
@@ -133,6 +140,9 @@ macro_rules! sort_key_unsigned {
                 const WIDTH: usize = $width;
                 fn sort_key(&self) -> String {
                     alloc::format!("{:0width$x}", self, width = $width)
+                }
+                fn from_sort_key(segment: &str) -> Self {
+                    <$t>::from_str_radix(segment, 16).expect("malformed SortKey segment")
                 }
             }
         )*
@@ -151,11 +161,66 @@ macro_rules! sort_key_signed {
                     let biased = (*self as $unsigned) ^ (1 as $unsigned).rotate_right(1);
                     alloc::format!("{:0width$x}", biased, width = $width)
                 }
+                fn from_sort_key(segment: &str) -> Self {
+                    // Inverse of `sort_key`: decode the hex, then un-bias (XOR is its
+                    // own inverse) and cast back to the signed type.
+                    let biased = <$unsigned>::from_str_radix(segment, 16)
+                        .expect("malformed SortKey segment");
+                    (biased ^ (1 as $unsigned).rotate_right(1)) as $t
+                }
             }
         )*
     };
 }
 sort_key_signed!(i8 => u8, 2, i16 => u16, 4, i32 => u32, 8, i64 => u64, 16);
+
+/// A two-part primary key `(A, B)` for `IndexedMap`/`Map`, encoded delimiter-safe
+/// as `<A><fixed-width B>`: `A`'s `Display` (which must be `.`-free — `.` is the
+/// path delimiter, and `push` rejects it) followed by `B`'s fixed-width
+/// [`SortKey`]. Recovered by splitting the known-width `B` suffix off the tail
+/// (unambiguous because `B` is fixed width and `A` is `.`-free). Sorts by `A` then
+/// `B`, so primary `keys()` iteration is ordered without `Pair` itself being a
+/// `SortKey`.
+///
+/// `A` is the *variable* part (typically a `String`); `B` the fixed-width part (a
+/// numeric `SortKey`) — e.g. `Pair<String, u64>` for `(agreement_id, node_id)`.
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub struct Pair<A, B>(pub A, pub B);
+
+impl<A, B> Pair<A, B> {
+    pub fn new(a: A, b: B) -> Self {
+        Pair(a, b)
+    }
+}
+
+impl<A: core::fmt::Display, B: SortKey> core::fmt::Display for Pair<A, B> {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        write!(f, "{}{}", self.0, self.1.sort_key())
+    }
+}
+
+impl<A, B> FromStr for Pair<A, B>
+where
+    A: FromStr,
+    <A as FromStr>::Err: core::fmt::Debug,
+    B: SortKey,
+{
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, String> {
+        if s.len() < B::WIDTH {
+            return Err(alloc::format!(
+                "Pair key {s:?} shorter than its {}-char B suffix",
+                B::WIDTH
+            ));
+        }
+        // `B::WIDTH` ASCII hex chars at the tail ⇒ the split is always on a char
+        // boundary, even when `A` carries multi-byte UTF-8.
+        let (a, b) = s.split_at(s.len() - B::WIDTH);
+        let a = A::from_str(a).map_err(|e| alloc::format!("Pair key A part {a:?}: {e:?}"))?;
+        Ok(Pair(a, B::from_sort_key(b)))
+    }
+}
 
 /// An ordered scan over a *sorted* index bucket. The bucket's child segments are
 /// `<sort‖pk>` (a fixed-width [`SortKey`] prefix followed by the primary key),
@@ -787,6 +852,44 @@ mod tests {
         assert_eq!(i8::MIN.sort_key(), "00");
         assert_eq!(0i8.sort_key(), "80");
         assert_eq!(i8::MAX.sort_key(), "ff");
+    }
+
+    // SortKey encode/decode is a bijection, so a fixed-width segment can carry a
+    // value that's recovered (the `B` tail of a `Pair`), not just compared.
+    #[test]
+    fn sort_key_decode_round_trips() {
+        for v in [0u64, 1, 255, u64::MAX] {
+            assert_eq!(u64::from_sort_key(&v.sort_key()), v);
+        }
+        for v in [i64::MIN, -1, 0, 1, i64::MAX] {
+            assert_eq!(i64::from_sort_key(&v.sort_key()), v);
+        }
+        assert_eq!(i8::from_sort_key(&i8::MIN.sort_key()), i8::MIN);
+        assert_eq!(u8::from_sort_key(&200u8.sort_key()), 200);
+    }
+
+    // A compound `Pair<String, u64>` primary key round-trips and sorts by (A, B) —
+    // so an `IndexedMap` keyed on it iterates in key order.
+    #[test]
+    fn pair_compound_key_round_trips_and_orders() {
+        let k = Pair::new("agreement-7".to_string(), 42u64);
+        let s = k.to_string();
+        assert_eq!(s, alloc::format!("agreement-7{}", 42u64.sort_key()));
+        assert_eq!(Pair::<String, u64>::from_str(&s).unwrap(), k);
+
+        // Sorts by A, then by B within an A.
+        let a = Pair::new("a".to_string(), 2u64).to_string();
+        let b = Pair::new("a".to_string(), 10u64).to_string();
+        let c = Pair::new("b".to_string(), 1u64).to_string();
+        assert!(a < b); // same A: 2 < 10
+        assert!(b < c); // "a" < "b" regardless of B
+
+        // Empty A is fine (suffix is the whole string).
+        let empty = Pair::new(String::new(), 5u64);
+        assert_eq!(
+            Pair::<String, u64>::from_str(&empty.to_string()).unwrap(),
+            empty
+        );
     }
 
     // A composite index buckets on more than one segment (`<a>/<b>`). The member
