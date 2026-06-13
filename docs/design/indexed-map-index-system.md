@@ -247,12 +247,14 @@ the per-key `get`.
 
 ## Build order (each step ships independently, no rework)
 
-1. **`SortKey` + sortable single-bucket index** — the `sort‖pk` member segment,
-   the single-cursor `up_to`/`range` scan, the encoding. Unblocks `expire`. (Also
-   ships the numeric-key sortability fix.)
-2. **Composite bucket + `Option`/enum discriminant bucketing** — multiple
-   `<bucket…>` segments + multi-arg `where_`, and `IndexKey for Option`. Covers
-   the filestorage "eligible" filter (replaces a predicate DSL).
+1. **`SortKey` + sortable single-bucket index** — ✅ SHIPPED. The `sort‖pk` member
+   segment, the single-cursor `up_to`/`range` scan, the encoding. Unblocks
+   `expire`. (Also ships the numeric-key sortability fix.)
+2. **Composite bucket + `Option`/enum discriminant bucketing** — ✅ SHIPPED.
+   Multiple `<bucket…>` segments + multi-arg `where_`, `IndexKey for Option` +
+   `Presence` marker, primitives over `bucket: &[&str]`. Covers the filestorage
+   "eligible" filter (`where_eligible(true, Presence::Absent)`, replaces a
+   predicate DSL).
 3. **Covering (single scalar)** — write the projected field into the leaf's
    existing value slot; projection-returning scans. Multi-field/blob later.
 4. **Compound primary keys** — generalize the `<pk>` encoding (see below).

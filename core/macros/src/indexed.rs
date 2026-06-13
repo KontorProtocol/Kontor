@@ -61,45 +61,67 @@ pub fn generate_lookup_trait(
         .iter()
         .map(|decl| {
             let name = &decl.name;
-            let by = &decl.by[0];
-            let by_ty = index_decl::field_type(fields, by);
             let where_method = Ident::new(&format!("where_{name}"), type_name.span());
             let count_method = Ident::new(&format!("count_{name}"), type_name.span());
 
-            // The bucket field's value → its `IndexKey`. A primitive is taken by
-            // value; a storage enum by `impl Into<<E>Kind>`, so a unit enum's full
-            // value AND a payload-carrying case's marker both work and key by the
-            // discriminant. `key_stmt` binds the temporary the key borrows; both
-            // stringify through `IndexKey`, the same source `index_entries` uses.
-            let (param, key_stmt, key_ref) = if utils::is_primitive_type(by_ty) {
-                (
-                    quote! { #by: #by_ty },
-                    quote! {},
-                    quote! { stdlib::IndexKey::index_key(&#by) },
-                )
-            } else {
-                let kind_ty = enum_kind_ident(by_ty);
-                (
-                    quote! { #by: impl core::convert::Into<#kind_ty> },
-                    quote! { let kind: #kind_ty = #by.into(); },
-                    quote! { stdlib::IndexKey::index_key(&kind) },
-                )
-            };
+            // One parameter per `by` field (in declared order), each typed for how
+            // it buckets: a primitive by value; a storage enum by `impl Into<<E>Kind>`
+            // (so a unit enum's full value AND a payload case's marker both work);
+            // an `Option` by `impl Into<Presence>` (its none/some discriminant). Each
+            // field's key is bound to a `__b<i>` local, and the bucket is the slice of
+            // those — so a single-field index is just the one-segment case. Every key
+            // stringifies through `IndexKey`, the same source `index_entries` writes.
+            let parts: Vec<(TokenStream, TokenStream, Ident)> = decl
+                .by
+                .iter()
+                .enumerate()
+                .map(|(i, field)| {
+                    let ty = index_decl::field_type(fields, field);
+                    let binding = Ident::new(&format!("__b{i}"), type_name.span());
+                    let (param, key_expr) = if utils::is_primitive_type(ty) {
+                        (
+                            quote! { #field: #ty },
+                            quote! { stdlib::IndexKey::index_key(&#field) },
+                        )
+                    } else if utils::is_option_type(ty) {
+                        (
+                            quote! { #field: impl core::convert::Into<stdlib::Presence> },
+                            quote! {{ let __p: stdlib::Presence = #field.into(); stdlib::IndexKey::index_key(&__p) }},
+                        )
+                    } else {
+                        let kind_ty = enum_kind_ident(ty);
+                        (
+                            quote! { #field: impl core::convert::Into<#kind_ty> },
+                            quote! {{ let __k: #kind_ty = #field.into(); stdlib::IndexKey::index_key(&__k) }},
+                        )
+                    };
+                    (param, quote! { let #binding = #key_expr; }, binding)
+                })
+                .collect();
+
+            let params = parts.iter().map(|(p, _, _)| p);
+            let bindings = parts.iter().map(|(_, b, _)| b).collect::<Vec<_>>();
+            let bucket_refs = parts.iter().map(|(_, _, b)| quote! { #b.as_ref() });
+            let bucket = quote! { &[#(#bucket_refs),*] };
+
+            // `params`/`bindings`/`bucket` are each consumed once per use below;
+            // re-collect so `where_` and `count_` can both expand them.
+            let params: Vec<_> = params.collect();
 
             let where_body = match &decl.sort {
                 Some(sort_field) => {
                     let sort_ty = index_decl::field_type(fields, sort_field);
                     quote! {
-                        fn #where_method(&self, #param) -> stdlib::SortedScan<K, #sort_ty> {
-                            #key_stmt
-                            self.by_index_sorted::<#sort_ty>(#name, &#key_ref)
+                        fn #where_method(&self, #(#params),*) -> stdlib::SortedScan<K, #sort_ty> {
+                            #(#bindings)*
+                            self.by_index_sorted::<#sort_ty>(#name, #bucket)
                         }
                     }
                 }
                 None => quote! {
-                    fn #where_method(&self, #param) -> impl Iterator<Item = K> {
-                        #key_stmt
-                        self.by_index(#name, &#key_ref)
+                    fn #where_method(&self, #(#params),*) -> impl Iterator<Item = K> {
+                        #(#bindings)*
+                        self.by_index(#name, #bucket)
                     }
                 },
             };
@@ -107,9 +129,9 @@ pub fn generate_lookup_trait(
             quote! {
                 #where_body
 
-                fn #count_method(&self, #param) -> u64 {
-                    #key_stmt
-                    self.bucket_count(#name, &#key_ref)
+                fn #count_method(&self, #(#params),*) -> u64 {
+                    #(#bindings)*
+                    self.bucket_count(#name, #bucket)
                 }
             }
         })
@@ -122,21 +144,22 @@ pub fn generate_lookup_trait(
             <K as core::str::FromStr>::Err: core::fmt::Debug,
         {
             /// Raw bucket scan — yields the primary keys of an unsorted index
-            /// bucket. The returned iterator owns its source (`use<Self, K>`, no
-            /// lifetime capture), so the typed wrappers can hand it a borrow of a
-            /// temporary key string.
-            fn by_index(&self, index_name: &str, index_key: &str) -> impl Iterator<Item = K> + use<Self, K>;
+            /// bucket, identified by its segments `<bucket…>` (one per `by` field).
+            /// The returned iterator owns its source (`use<Self, K>`, no lifetime
+            /// capture), so the typed wrappers can hand it borrows of temporary key
+            /// strings.
+            fn by_index(&self, index_name: &str, bucket: &[&str]) -> impl Iterator<Item = K> + use<Self, K>;
 
             /// Ordered bucket scan for a *sorted* index: the bucket's `<sort‖pk>`
             /// child segments, wrapped in a `SortedScan` that strips the
             /// `S::WIDTH`-char prefix to yield `K` and bounds `up_to`/`range` on the
             /// encoded prefix. `S` is the index's sort field type, so the bound type
             /// and the stored prefix width can't disagree.
-            fn by_index_sorted<S: stdlib::SortKey>(&self, index_name: &str, index_key: &str) -> stdlib::SortedScan<K, S>;
+            fn by_index_sorted<S: stdlib::SortKey>(&self, index_name: &str, bucket: &[&str]) -> stdlib::SortedScan<K, S>;
 
-            /// O(1) member count of a `(index_name, index_key)` bucket, the
+            /// O(1) member count of an `(index_name, bucket…)` bucket, the
             /// framework-maintained size of what the scans would walk.
-            fn bucket_count(&self, index_name: &str, index_key: &str) -> u64;
+            fn bucket_count(&self, index_name: &str, bucket: &[&str]) -> u64;
 
             #(#methods)*
         }

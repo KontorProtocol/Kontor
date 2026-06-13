@@ -32,13 +32,14 @@ where
     <K as core::str::FromStr>::Err: core::fmt::Debug,
 {
     /// Raw bucket scan — yields the primary keys of an unsorted index
-    /// bucket. The returned iterator owns its source (`use<Self, K>`, no
-    /// lifetime capture), so the typed wrappers can hand it a borrow of a
-    /// temporary key string.
+    /// bucket, identified by its segments `<bucket…>` (one per `by` field).
+    /// The returned iterator owns its source (`use<Self, K>`, no lifetime
+    /// capture), so the typed wrappers can hand it borrows of temporary key
+    /// strings.
     fn by_index(
         &self,
         index_name: &str,
-        index_key: &str,
+        bucket: &[&str],
     ) -> impl Iterator<Item = K> + use<Self, K>;
     /// Ordered bucket scan for a *sorted* index: the bucket's `<sort‖pk>`
     /// child segments, wrapped in a `SortedScan` that strips the
@@ -48,21 +49,25 @@ where
     fn by_index_sorted<S: stdlib::SortKey>(
         &self,
         index_name: &str,
-        index_key: &str,
+        bucket: &[&str],
     ) -> stdlib::SortedScan<K, S>;
-    /// O(1) member count of a `(index_name, index_key)` bucket, the
+    /// O(1) member count of an `(index_name, bucket…)` bucket, the
     /// framework-maintained size of what the scans would walk.
-    fn bucket_count(&self, index_name: &str, index_key: &str) -> u64;
+    fn bucket_count(&self, index_name: &str, bucket: &[&str]) -> u64;
     fn where_status(&self, status: u64) -> impl Iterator<Item = K> {
-        self.by_index("status", &stdlib::IndexKey::index_key(&status))
+        let __b0 = stdlib::IndexKey::index_key(&status);
+        self.by_index("status", &[__b0.as_ref()])
     }
     fn count_status(&self, status: u64) -> u64 {
-        self.bucket_count("status", &stdlib::IndexKey::index_key(&status))
+        let __b0 = stdlib::IndexKey::index_key(&status);
+        self.bucket_count("status", &[__b0.as_ref()])
     }
     fn where_prover_id(&self, prover_id: u64) -> impl Iterator<Item = K> {
-        self.by_index("prover_id", &stdlib::IndexKey::index_key(&prover_id))
+        let __b0 = stdlib::IndexKey::index_key(&prover_id);
+        self.by_index("prover_id", &[__b0.as_ref()])
     }
     fn count_prover_id(&self, prover_id: u64) -> u64 {
-        self.bucket_count("prover_id", &stdlib::IndexKey::index_key(&prover_id))
+        let __b0 = stdlib::IndexKey::index_key(&prover_id);
+        self.bucket_count("prover_id", &[__b0.as_ref()])
     }
 }

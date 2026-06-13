@@ -30,31 +30,42 @@ pub struct Config {
     indexed: Option<String>,
 }
 
-/// Translate one `name [by field] [sort field]` entry (the part after `record:`)
+/// Translate one `name [by field…] [sort field]` entry (the part after `record:`)
 /// into the Rust struct-level attribute string `#[index(name, by = …, sort = …)]`.
-/// kebab names map to the generated snake_case Rust idents.
+/// `by` takes one or more fields (a composite bucket), consuming tokens up to the
+/// next `sort` or the end. kebab names map to the generated snake_case Rust idents.
 fn index_attr(spec: &str) -> String {
-    let mut tokens = spec.split_whitespace();
+    let mut tokens = spec.split_whitespace().peekable();
     let name = tokens
         .next()
         .unwrap_or_else(|| panic!("`indexed` entry is missing an index name: {spec:?}"))
         .to_snake_case();
-    let mut by: Option<String> = None;
+    let mut by: Vec<String> = Vec::new();
     let mut sort: Option<String> = None;
     while let Some(keyword) = tokens.next() {
-        let field = tokens
-            .next()
-            .unwrap_or_else(|| panic!("`{keyword}` needs a field in indexed entry: {spec:?}"))
-            .to_snake_case();
         match keyword {
-            "by" => by = Some(field),
-            "sort" => sort = Some(field),
+            "by" => {
+                while let Some(field) = tokens.next_if(|t| *t != "sort") {
+                    by.push(field.to_snake_case());
+                }
+                if by.is_empty() {
+                    panic!("`by` needs at least one field in indexed entry: {spec:?}");
+                }
+            }
+            "sort" => {
+                let field = tokens
+                    .next()
+                    .unwrap_or_else(|| panic!("`sort` needs a field in indexed entry: {spec:?}"));
+                sort = Some(field.to_snake_case());
+            }
             other => panic!("unexpected `{other}` in indexed entry (expected `by`/`sort`): {spec:?}"),
         }
     }
     let mut args = name;
-    if let Some(by) = by {
-        args.push_str(&format!(", by = {by}"));
+    match by.as_slice() {
+        [] => {}
+        [one] => args.push_str(&format!(", by = {one}")),
+        many => args.push_str(&format!(", by = ({})", many.join(", "))),
     }
     if let Some(sort) = sort {
         args.push_str(&format!(", sort = {sort}"));

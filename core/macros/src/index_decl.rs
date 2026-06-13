@@ -106,10 +106,10 @@ pub fn parse(struct_attrs: &[Attribute], fields: &FieldsNamed) -> Result<Vec<Ind
         }
         let args: IndexArgs = attr.parse_args()?;
         let by = args.by.unwrap_or_else(|| vec![args.name.clone()]);
-        if by.len() > 1 {
+        if by.is_empty() {
             return Err(Error::new_spanned(
                 attr,
-                "composite `by = (…)` indexes are not yet supported (build step 2)",
+                "index `by` must name at least one field",
             ));
         }
         if let Some(include) = &args.include {
@@ -192,8 +192,12 @@ pub fn field_type<'a>(fields: &'a FieldsNamed, ident: &Ident) -> &'a Type {
 /// encoding identical, so a write and a later diff can't disagree.
 pub fn index_entry(decl: &IndexDecl, value_for: &impl Fn(&Ident) -> TokenStream) -> TokenStream {
     let name = &decl.name;
-    let by = &decl.by[0];
-    let by_val = value_for(by);
+    // One bucket segment per `by` field, in declared order (a single-field index
+    // is just the one-element case).
+    let bucket = decl.by.iter().map(|field| {
+        let val = value_for(field);
+        quote! { stdlib::IndexKey::index_key(&#val) }
+    });
     let sort = match &decl.sort {
         Some(field) => {
             let sort_val = value_for(field);
@@ -204,7 +208,7 @@ pub fn index_entry(decl: &IndexDecl, value_for: &impl Fn(&Ident) -> TokenStream)
     quote! {
         stdlib::IndexEntry {
             name: #name,
-            bucket: alloc::vec![stdlib::IndexKey::index_key(&#by_val)],
+            bucket: alloc::vec![#(#bucket),*],
             sort: #sort,
         }
     }

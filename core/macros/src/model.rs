@@ -188,13 +188,13 @@ pub fn generate_struct(
                         // two primitives. `bucket_count` reads the count the
                         // framework maintains AT the bucket-prefix path.
                         impl #index_trait<#k_ty> for #field_model_name {
-                            fn by_index(&self, index_name: &str, index_key: &str) -> impl Iterator<Item = #k_ty> + use<> {
-                                let bucket = self.index_path.push(index_name).push(index_key);
+                            fn by_index(&self, index_name: &str, bucket: &[&str]) -> impl Iterator<Item = #k_ty> + use<> {
+                                let bucket = bucket.iter().fold(self.index_path.push(index_name), |p, seg| p.push(*seg));
                                 stdlib::ReadStorage::__get_keys(&self.ctx, &bucket)
                             }
 
-                            fn by_index_sorted<S: stdlib::SortKey>(&self, index_name: &str, index_key: &str) -> stdlib::SortedScan<#k_ty, S> {
-                                let bucket = self.index_path.push(index_name).push(index_key);
+                            fn by_index_sorted<S: stdlib::SortKey>(&self, index_name: &str, bucket: &[&str]) -> stdlib::SortedScan<#k_ty, S> {
+                                let bucket = bucket.iter().fold(self.index_path.push(index_name), |p, seg| p.push(*seg));
                                 // Member segments are `<sort‖pk>`; pull them raw (as
                                 // `String`) so the fixed-width sort prefix survives —
                                 // parsing straight into the key type would choke on
@@ -204,8 +204,8 @@ pub fn generate_struct(
                                 stdlib::SortedScan::new(alloc::boxed::Box::new(segments))
                             }
 
-                            fn bucket_count(&self, index_name: &str, index_key: &str) -> u64 {
-                                let bucket = self.index_path.push(index_name).push(index_key);
+                            fn bucket_count(&self, index_name: &str, bucket: &[&str]) -> u64 {
+                                let bucket = bucket.iter().fold(self.index_path.push(index_name), |p, seg| p.push(*seg));
                                 stdlib::ReadStorage::__get_u64(&self.ctx, &bucket).unwrap_or(0)
                             }
                         }
@@ -271,7 +271,10 @@ pub fn generate_struct(
             // in-place setters' reconcile (for fields they don't themselves change).
             let current_value = |field: &Ident| {
                 let ty = index_decl::field_type(fields, field);
-                if utils::is_primitive_type(ty) {
+                // An `Option` field's getter already yields the `Option`, which
+                // `IndexKey` buckets by its none/some discriminant (the payload is
+                // irrelevant) — so no `.load()`, same as a primitive.
+                if utils::is_primitive_type(ty) || utils::is_option_type(ty) {
                     quote! { self.#field() }
                 } else {
                     quote! { self.#field().load() }
@@ -396,6 +399,19 @@ pub fn generate_struct(
                                     #reconcile
                                     stdlib::WriteStorage::__set(&self.ctx, path, new);
                                     Ok(())
+                                }
+                            })
+                        } else if participates && utils::is_option_type(field_ty) {
+                            // Participating `Option` field. Read the old value via the
+                            // getter (which yields the `Option`); `IndexKey` buckets it
+                            // by its none/some discriminant, so no model load is needed.
+                            Ok(quote! {
+                                pub fn #set_field_name(&self, value: #field_ty) {
+                                    let path = self.base_path.push(#field_name_str);
+                                    let old = self.#field_name();
+                                    let new = value;
+                                    #reconcile
+                                    stdlib::WriteStorage::__set(&self.ctx, path, new);
                                 }
                             })
                         } else if participates {

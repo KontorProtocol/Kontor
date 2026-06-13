@@ -70,6 +70,41 @@ macro_rules! index_key_via_display {
 // generates for enums.)
 index_key_via_display!(bool, u64, i64, u32, i32, String, str, &str);
 
+/// An `Option<T>` indexes by its `none`/`some` **discriminant** (like an enum
+/// keys by its case), ignoring the payload — so a composite index can partition
+/// on "is this field set?" without a predicate DSL. Keys match [`Presence`], the
+/// payload-free marker a `where_*` lookup passes, so the bucket a write lands in
+/// and the bucket a lookup scans agree. Blanket over all `T`: `Option` is neither
+/// a keyed primitive nor a storage enum, so no impl overlaps it.
+impl<T> IndexKey for Option<T> {
+    fn index_key(&self) -> Cow<'static, str> {
+        match self {
+            None => Cow::Borrowed("none"),
+            Some(_) => Cow::Borrowed("some"),
+        }
+    }
+}
+
+/// The payload-free marker for bucketing an `Option` index field by presence —
+/// the `Option` analogue of a storage enum's `<E>Kind`. Lets a lookup name the
+/// bucket (`where_eligible(true, Presence::Absent)`) without constructing an
+/// `Option` value or writing `None::<T>` with a turbofish. Its [`IndexKey`]
+/// matches `Option`'s, so lookup and stored bucket can't drift.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Presence {
+    Absent,
+    Present,
+}
+
+impl IndexKey for Presence {
+    fn index_key(&self) -> Cow<'static, str> {
+        match self {
+            Presence::Absent => Cow::Borrowed("none"),
+            Presence::Present => Cow::Borrowed("some"),
+        }
+    }
+}
+
 /// An **order-preserving, fixed-width** path segment for *ordering* members
 /// within an index bucket: the lexicographic byte order of `sort_key()` equals
 /// the numeric order of the value. This is what lets a sortable index scan in
@@ -752,6 +787,58 @@ mod tests {
         assert_eq!(i8::MIN.sort_key(), "00");
         assert_eq!(0i8.sort_key(), "80");
         assert_eq!(i8::MAX.sort_key(), "ff");
+    }
+
+    // A composite index buckets on more than one segment (`<a>/<b>`). The member
+    // rows, the count, and a scan all live under the multi-segment bucket path, and
+    // a field change moves the member between buckets.
+    #[test]
+    fn composite_bucket_two_segments() {
+        let ctx = Rc::new(Mock::default());
+        let index = p("a#idx");
+        // eligible index: bucket = [active, presence].
+        let entry = |active: &str, presence: &str| IndexEntry {
+            name: "eligible",
+            bucket: alloc::vec![active.to_string().into(), presence.to_string().into()],
+            sort: None,
+        };
+        apply_index_diff(&ctx, &index, "k1", &[], &[entry("true", "none")]);
+        apply_index_diff(&ctx, &index, "k2", &[], &[entry("true", "none")]);
+        apply_index_diff(&ctx, &index, "k3", &[], &[entry("true", "some")]);
+
+        assert!(ctx.__exists("a#idx.eligible.true.none.k1"));
+        assert!(ctx.__exists("a#idx.eligible.true.some.k3"));
+        // Count lives AT the two-segment bucket path.
+        assert_eq!(ctx.__get_u64("a#idx.eligible.true.none"), Some(2));
+        assert_eq!(ctx.__get_u64("a#idx.eligible.true.some"), Some(1));
+        // Scan of the (true, none) bucket yields just its members.
+        let bucket = p("a#idx.eligible.true.none");
+        let mut keys: Vec<String> = ctx.__get_keys(&bucket).collect();
+        keys.sort();
+        assert_eq!(keys, alloc::vec!["k1".to_string(), "k2".to_string()]);
+
+        // Flip k1's presence none -> some: one delete + one write, counts follow.
+        apply_index_diff(
+            &ctx,
+            &index,
+            "k1",
+            &[entry("true", "none")],
+            &[entry("true", "some")],
+        );
+        assert!(!ctx.__exists("a#idx.eligible.true.none.k1"));
+        assert!(ctx.__exists("a#idx.eligible.true.some.k1"));
+        assert_eq!(ctx.__get_u64("a#idx.eligible.true.none"), Some(1));
+        assert_eq!(ctx.__get_u64("a#idx.eligible.true.some"), Some(2));
+    }
+
+    // An `Option` field and the `Presence` marker a lookup passes must produce the
+    // same bucket key, or a write and its query would land in different buckets.
+    #[test]
+    fn option_and_presence_index_keys_agree() {
+        assert_eq!(None::<u64>.index_key(), Presence::Absent.index_key());
+        assert_eq!(Some(7u64).index_key(), Presence::Present.index_key());
+        assert_eq!(None::<String>.index_key(), "none");
+        assert_eq!(Some(7u64).index_key(), "some");
     }
 
     // SortedScan in isolation: strip the fixed-width sort prefix to recover K, and
