@@ -70,6 +70,20 @@ macro_rules! index_key_via_display {
 // generates for enums.)
 index_key_via_display!(bool, u64, i64, u32, i32, String, str, &str);
 
+/// A byte field (e.g. a public key or hash) buckets by its **hex** rendering:
+/// `IndexKey` is `str`-typed for distinct partitioning, and raw bytes aren't
+/// UTF-8. Order within the bucket is irrelevant (equality partition), so hex's
+/// length overhead is the only cost.
+impl IndexKey for Vec<u8> {
+    fn index_key(&self) -> Cow<'static, str> {
+        let mut s = String::with_capacity(self.len() * 2);
+        for b in self {
+            s.push_str(&format!("{b:02x}"));
+        }
+        Cow::Owned(s)
+    }
+}
+
 /// An `Option<T>` indexes by its `none`/`some` **discriminant** (like an enum
 /// keys by its case), ignoring the payload — so a composite index can partition
 /// on "is this field set?" without a predicate DSL. Keys match [`Presence`], the
@@ -794,6 +808,17 @@ mod tests {
         assert!(ctx.__exists(&pb("a#idx.eligible.true.some.k1")));
         assert_eq!(ctx.__get_u64(&pb("a#idx.eligible.true.none")), Some(1));
         assert_eq!(ctx.__get_u64(&pb("a#idx.eligible.true.some")), Some(2));
+    }
+
+    // A byte field buckets by hex — distinct per value, valid UTF-8 for the
+    // str-typed bucket segment.
+    #[test]
+    fn bytes_index_key_is_hex() {
+        assert_eq!(vec![0xde_u8, 0xad, 0xbe, 0xef].index_key(), "deadbeef");
+        assert_eq!(Vec::<u8>::new().index_key(), "");
+        assert_eq!(vec![0u8, 1, 15, 16, 255].index_key(), "00010f10ff");
+        // distinct bytes → distinct buckets
+        assert_ne!(vec![0x01_u8].index_key(), vec![0x10_u8].index_key());
     }
 
     // An `Option` field and the `Presence` marker a lookup passes must produce the

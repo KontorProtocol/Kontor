@@ -360,6 +360,13 @@ pub fn generate(config: Config) -> TokenStream {
         // encodes as a string element (`Display`) and decodes via `FromStr`.
         stdlib::key_element_via_display!(context::Holder);
 
+        // A `#[index]` on a `Holder` field buckets by that same canonical string.
+        impl stdlib::IndexKey for context::Holder {
+            fn index_key(&self) -> alloc::borrow::Cow<'static, str> {
+                alloc::borrow::Cow::Owned(alloc::string::ToString::to_string(self))
+            }
+        }
+
         impl Retrieve<crate::context::ViewStorage> for numbers::Integer {
             fn __get(ctx: &alloc::rc::Rc<crate::context::ViewStorage>, path: stdlib::KeyPath) -> Option<Self> {
                 stdlib::ReadStorage::__exists(ctx, &path).then(|| numbers::IntegerModel::new(ctx.clone(), path).load())
