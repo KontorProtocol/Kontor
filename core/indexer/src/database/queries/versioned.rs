@@ -41,6 +41,10 @@ pub struct LatestMany<'a> {
     /// positionally and needs the order reproducible across nodes (e.g. a
     /// contract's `keys()` feeding consensus-relevant selection) must set this.
     order_by: Option<&'a str>,
+    /// Outer `LIMIT` — bounds the rows returned (and, with a leading-column
+    /// `order_by` the index can serve, lets the scan terminate early instead of
+    /// ranking the whole range). For paginated/bounded scans.
+    limit: Option<u64>,
 }
 
 impl LatestMany<'_> {
@@ -54,6 +58,10 @@ impl LatestMany<'_> {
             .order_by
             .map(|o| format!(" ORDER BY {o}"))
             .unwrap_or_default();
+        let limit = self
+            .limit
+            .map(|n| format!(" LIMIT {n}"))
+            .unwrap_or_default();
         format!(
             // `rowid` breaks same-height ties deterministically (later insert
             // wins — e.g. the write following an in-tx `delete_matching`), so the
@@ -62,7 +70,7 @@ impl LatestMany<'_> {
                SELECT *, ROW_NUMBER() OVER ({partition}ORDER BY height DESC, rowid DESC) AS rank\n  \
                FROM {table}\n  \
                WHERE {filter}\n\
-             ) t WHERE rank = 1{post}{order_by}",
+             ) t WHERE rank = 1{post}{order_by}{limit}",
             select = self.select,
             table = self.table,
             filter = self.filter,

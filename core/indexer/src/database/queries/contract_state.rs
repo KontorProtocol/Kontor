@@ -67,17 +67,17 @@ fn subtree_range(lo_cmp: &str, prefix: &[u8]) -> (String, Vec<(String, Value)>) 
 /// pre-rank filter. Every current-state read of a path set goes through here, so
 /// the tombstone semantics are decided in exactly one place. `order` is for the
 /// callers that consume rows positionally and need a deterministic order.
-fn live_latest(select: &str, filter: &str, order: Option<&str>) -> String {
-    let builder = LatestMany::builder()
+fn live_latest(select: &str, filter: &str, order: Option<&str>, limit: Option<u64>) -> String {
+    LatestMany::builder()
         .table("contract_state")
         .select(select)
         .partition_by("path")
         .post("deleted = false")
-        .filter(filter);
-    match order {
-        Some(order) => builder.order_by(order).build().to_sql(),
-        None => builder.build().to_sql(),
-    }
+        .filter(filter)
+        .maybe_order_by(order)
+        .maybe_limit(limit)
+        .build()
+        .to_sql()
 }
 
 pub async fn insert_contract_state(conn: &Connection, row: ContractStateRow) -> Result<u64, Error> {
@@ -118,6 +118,7 @@ pub async fn get_latest_contract_state(
                 "contract_id, height, tx_id, path, value, deleted",
                 "contract_id = :contract_id AND path = :path",
                 None,
+                None,
             ),
             (
                 (":contract_id", contract_id),
@@ -140,6 +141,7 @@ pub async fn get_latest_contract_state_value(
             &live_latest(
                 "CASE WHEN size <= :fuel THEN value ELSE null END AS value",
                 "contract_id = :contract_id AND path = :path",
+                None,
                 None,
             ),
             (
@@ -187,6 +189,7 @@ pub async fn delete_contract_state(
         "contract_id, height, tx_id, path, value, deleted",
         &format!("contract_id = :contract_id AND {range}"),
         None,
+        None,
     );
     let mut result = conn.query(&query, params).await?;
 
@@ -225,6 +228,7 @@ pub async fn exists_contract_state(
         "1",
         &format!("contract_id = :contract_id AND {range}"),
         None,
+        None,
     );
     let mut rows = conn.query(&query, params).await?;
     Ok(rows.next().await?.is_some())
@@ -243,18 +247,49 @@ pub async fn path_prefix_filter_contract_state(
     contract_id: u64,
     path: Vec<u8>,
 ) -> Result<impl Stream<Item = Result<Vec<u8>, Error>> + Send + 'static, Error> {
-    // `path > :lo` excludes the exact node (no child element to extract); `< :hi`
-    // bounds the subtree. Ordered by `path` so children are grouped for dedup.
-    let (range, mut params) = subtree_range(">", &path);
-    params.push((
-        ":contract_id".to_string(),
-        Value::Integer(contract_id as i64),
-    ));
-    let query = live_latest(
-        "path",
-        &format!("contract_id = :contract_id AND {range}"),
-        Some("path"),
-    );
+    path_prefix_filter_bounded(conn, contract_id, path, None, None, None).await
+}
+
+/// Bounded/paginated [`path_prefix_filter_contract_state`]: resume strictly after
+/// `after` (a full-path cursor; `None` = start of the subtree), stop at `upper`
+/// (exclusive, tightened against the subtree's own upper; `None` = whole subtree),
+/// and cap at `limit` ROWS.
+///
+/// `limit` is by row — correct for INDEX scans, where each member is one leaf row
+/// (`<bucket>/<member> -> ()`), so `limit = n` yields exactly `n` members. The
+/// primary-Map `keys()` (each child owns a multi-row value subtree) must pass
+/// `None`, or a limit could cut mid-child. The query shape
+/// (`path > :lo [AND path < :hi] ORDER BY path LIMIT n`) is backend-agnostic: a
+/// future current-state projection table serves the identical cursor/limit with
+/// no API change (it just drops the version-log window).
+pub async fn path_prefix_filter_bounded(
+    conn: &Connection,
+    contract_id: u64,
+    path: Vec<u8>,
+    after: Option<Vec<u8>>,
+    upper: Option<Vec<u8>>,
+    limit: Option<u64>,
+) -> Result<impl Stream<Item = Result<Vec<u8>, Error>> + Send + 'static, Error> {
+    // `path > :lo` excludes the exact node (no child element); the cursor `after`
+    // (a full path) resumes strictly past the last page. `< :hi` bounds the scan:
+    // the subtree's `strinc(path)` tightened by the caller's `upper`. Ordered by
+    // `path` so children are grouped for dedup and the indexed range can stream.
+    let lo = after.unwrap_or_else(|| path.clone());
+    let hi = match (strinc(&path), upper) {
+        (Some(s), Some(u)) => Some(core::cmp::min(u, s)),
+        (Some(s), None) => Some(s),
+        (None, u) => u, // empty/all-0xFF prefix: only the caller's upper bounds it
+    };
+    let mut params = vec![
+        (":lo".to_string(), Value::Blob(lo)),
+        (":contract_id".to_string(), Value::Integer(contract_id as i64)),
+    ];
+    let mut filter = "contract_id = :contract_id AND path > :lo".to_string();
+    if let Some(hi) = hi {
+        params.push((":hi".to_string(), Value::Blob(hi)));
+        filter.push_str(" AND path < :hi");
+    }
+    let query = live_latest("path", &filter, Some("path"), limit);
     let rows = conn.query(&query, params).await?;
 
     let prefix_len = path.len();
