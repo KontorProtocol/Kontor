@@ -1225,6 +1225,69 @@ async fn test_keys_with_idx_sibling_after_update() -> Result<()> {
 
 // A live value under a prefix must make `exists` true even when the
 // latest-height row under that prefix is a tombstone (e.g. an IndexedMap index
+// Regression: a guest can pass an empty `list<u8>` (or any degenerate path).
+// `strinc(empty)` is `None` (no exclusive upper bound), so the subtree-bound
+// builder must treat it as the whole keyspace — NOT panic via `expect`. Covers
+// exists / keys / matching / delete on an empty path.
+#[tokio::test]
+async fn test_empty_path_is_whole_keyspace_not_panic() -> Result<()> {
+    let (_reader, writer, _temp_dir) = new_test_db().await?;
+    let conn = writer.connection();
+
+    let height = 900000;
+    for h in [height, height + 1] {
+        insert_block(
+            &conn,
+            BlockRow::builder()
+                .height(h)
+                .hash(bitcoin::BlockHash::from_byte_array([h as u8; 32]))
+                .build(),
+        )
+        .await?;
+    }
+    let tx = insert_transaction(
+        &conn,
+        TransactionRow::builder()
+            .height(height)
+            .txid("bbbb000000000000000000000000000000000000000000000000000000000001".to_string())
+            .tx_index(0)
+            .confirmed_height(height)
+            .build(),
+    )
+    .await?;
+
+    let cid = 1;
+    for k in ["k1", "k2"] {
+        insert_contract_state(
+            &conn,
+            ContractStateRow::builder()
+                .contract_id(cid)
+                .tx_id(tx)
+                .height(height)
+                .path(cs_path(&["m", k]))
+                .value(vec![1])
+                .build(),
+        )
+        .await?;
+    }
+
+    // Empty path = whole keyspace: any live row makes `exists` true.
+    assert!(exists_contract_state(&conn, cid, &[]).await?);
+    // `keys()` of the root yields the single distinct top-level element ("m").
+    let top: Vec<Vec<u8>> = path_prefix_filter_contract_state(&conn, cid, Vec::new())
+        .await?
+        .try_collect()
+        .await?;
+    assert_eq!(top, vec![cs_path(&["m"])]);
+    // `matching_path` at the root must not panic.
+    let _ = matching_path(&conn, cid, &[], &["none".to_string(), "some".to_string()]).await?;
+    // Deleting the empty subtree tombstones the whole keyspace.
+    assert!(delete_contract_state(&conn, height + 1, Some(tx), cid, &[]).await?);
+    assert!(!exists_contract_state(&conn, cid, &[]).await?);
+
+    Ok(())
+}
+
 // delete). Regression: `exists` ranked rows globally (no per-path partition),
 // so it saw only the single newest row — if that was a tombstone it wrongly
 // reported the whole subtree gone.

@@ -96,13 +96,22 @@ impl Fuel {
             Self::HolderAsRef => 50,
             Self::KeysNext(key_len) => 100 + 10 * key_len,
             Self::Path(path) => {
-                // Meter by element (segment) count — walk the codec elements.
+                // Meter by element (segment) count — walk the codec elements. A
+                // malformed guest path must NOT panic metering: stop counting at the
+                // first ill-formed element. This stays deterministic (same bytes →
+                // same count), and the storage op itself surfaces the bad path as an
+                // error rather than crashing the host. `next_element` always consumes
+                // ≥1 byte on `Ok`, so the loop terminates.
                 let mut rest = path.as_slice();
                 let mut segments = 0u64;
                 while !rest.is_empty() {
-                    let (_, r) = stdlib::next_element(rest).expect("valid codec path");
-                    rest = r;
-                    segments += 1;
+                    match stdlib::next_element(rest) {
+                        Ok((_, r)) => {
+                            rest = r;
+                            segments += 1;
+                        }
+                        Err(_) => break,
+                    }
                 }
                 10 * segments
             }
@@ -311,5 +320,32 @@ impl FuelGauge {
         inner.per_type.clear();
         inner.starting_fuel = None;
         inner.ending_fuel = None;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use stdlib::KeyElement;
+
+    // A malformed guest path must not panic fuel metering (it used to `expect` a
+    // valid codec path). Cost is deterministic — well-formed elements up to the
+    // first ill-formed byte — and finite.
+    #[test]
+    fn malformed_path_does_not_panic_metering() {
+        // Pure garbage (no valid leading tag) → zero countable segments, no panic.
+        assert_eq!(Fuel::Path(vec![0xFF, 0xFF, 0xFF]).cost(), 0);
+        // A valid string element followed by a truncated one → counts the good
+        // prefix, stops at the bad tail.
+        let mut bytes = stdlib::KeyElement::encode(&"ok".to_string());
+        bytes.push(0x02); // dangling string tag with no terminator
+        assert_eq!(Fuel::Path(bytes).cost(), 10); // one well-formed segment
+        // Empty path → zero.
+        assert_eq!(Fuel::Path(Vec::new()).cost(), 0);
+        // Well-formed multi-element path counts every segment.
+        let mut p = Vec::new();
+        "a".to_string().encode_to(&mut p);
+        7u64.encode_to(&mut p);
+        assert_eq!(Fuel::Path(p).cost(), 20); // two segments
     }
 }

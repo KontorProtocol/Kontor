@@ -40,10 +40,25 @@ use super::Error;
 use super::versioned::LatestMany;
 use crate::database::types::ContractStateRow;
 
-/// The exclusive upper bound of the subtree byte range. A real path always begins
-/// with a tag byte (< `0xFF`), so `strinc` never returns `None` for one.
-fn subtree_upper(prefix: &[u8]) -> Vec<u8> {
-    strinc(prefix).expect("a contract_state path is non-empty and not all-0xFF")
+/// The subtree byte-range `WHERE` fragment + its `:lo`/`:hi` bound params for
+/// `[prefix, strinc(prefix))`. `lo_cmp` is `>=` (include the node) or `>` (children
+/// only). A normal path begins with a tag byte (< `0xFF`), so `strinc` yields an
+/// exclusive upper bound; but the guest can pass ANY codec bytes — including an
+/// empty `list<u8>` (the contract root) or an all-`0xFF` path — for which `strinc`
+/// is `None` (no exclusive upper bound: the range runs to the end of the keyspace).
+/// In that case the fragment omits `path < :hi` and the caller's `contract_id =`
+/// equality bounds the scan — so an empty/degenerate path is a well-defined
+/// whole-(sub)tree operation, not a panic. The caller appends `:contract_id` (and
+/// any other) params.
+fn subtree_range(lo_cmp: &str, prefix: &[u8]) -> (String, Vec<(String, Value)>) {
+    let mut params = vec![(":lo".to_string(), Value::Blob(prefix.to_vec()))];
+    match strinc(prefix) {
+        Some(hi) => {
+            params.push((":hi".to_string(), Value::Blob(hi)));
+            (format!("path {lo_cmp} :lo AND path < :hi"), params)
+        }
+        None => (format!("path {lo_cmp} :lo"), params),
+    }
 }
 
 /// THE liveness primitive (see the module header): the latest version of each
@@ -163,21 +178,14 @@ pub async fn delete_contract_state(
     // Every live path at/under `path`, re-inserted as a tombstone below.
     // `live_latest` skips an already-tombstoned path (its latest version isn't
     // live), so it's not re-tombstoned.
+    let (range, mut params) = subtree_range(">=", path);
+    params.push((":contract_id".to_string(), Value::Integer(contract_id as i64)));
     let query = live_latest(
         "contract_id, height, tx_id, path, value, deleted",
-        "contract_id = :contract_id AND path >= :lo AND path < :hi",
+        &format!("contract_id = :contract_id AND {range}"),
         None,
     );
-    let mut result = conn
-        .query(
-            &query,
-            (
-                (":contract_id", contract_id),
-                (":lo", Value::Blob(path.to_vec())),
-                (":hi", Value::Blob(subtree_upper(path))),
-            ),
-        )
-        .await?;
+    let mut result = conn.query(&query, params).await?;
 
     // Materialise the live rows BEFORE writing tombstones (don't read and write
     // `contract_state` in the same statement).
@@ -205,21 +213,14 @@ pub async fn exists_contract_state(
     // single newest tombstone (e.g. an IndexedMap index `__delete` under
     // `<map>#idx`) must not hide sibling paths that are still live — which is
     // exactly what `live_latest` (per-path rank + post `deleted = false`) gives.
+    let (range, mut params) = subtree_range(">=", path);
+    params.push((":contract_id".to_string(), Value::Integer(contract_id as i64)));
     let query = live_latest(
         "1",
-        "contract_id = :contract_id AND path >= :lo AND path < :hi",
+        &format!("contract_id = :contract_id AND {range}"),
         None,
     );
-    let mut rows = conn
-        .query(
-            &query,
-            (
-                (":contract_id", contract_id),
-                (":lo", Value::Blob(path.to_vec())),
-                (":hi", Value::Blob(subtree_upper(path))),
-            ),
-        )
-        .await?;
+    let mut rows = conn.query(&query, params).await?;
     Ok(rows.next().await?.is_some())
 }
 
@@ -238,21 +239,14 @@ pub async fn path_prefix_filter_contract_state(
 ) -> Result<impl Stream<Item = Result<Vec<u8>, Error>> + Send + 'static, Error> {
     // `path > :lo` excludes the exact node (no child element to extract); `< :hi`
     // bounds the subtree. Ordered by `path` so children are grouped for dedup.
+    let (range, mut params) = subtree_range(">", &path);
+    params.push((":contract_id".to_string(), Value::Integer(contract_id as i64)));
     let query = live_latest(
         "path",
-        "contract_id = :contract_id AND path > :lo AND path < :hi",
+        &format!("contract_id = :contract_id AND {range}"),
         Some("path"),
     );
-    let rows = conn
-        .query(
-            &query,
-            (
-                (":contract_id", contract_id),
-                (":lo", Value::Blob(path.clone())),
-                (":hi", Value::Blob(subtree_upper(&path))),
-            ),
-        )
-        .await?;
+    let rows = conn.query(&query, params).await?;
 
     let prefix_len = path.len();
     let stream = stream::unfold(
@@ -305,23 +299,16 @@ pub async fn matching_path(
     variants: &[String],
 ) -> Result<Option<String>, Error> {
     // Global-newest (no `partition_by`) live row under `base_path`.
+    let (range, mut params) = subtree_range(">=", base_path);
+    params.push((":contract_id".to_string(), Value::Integer(contract_id as i64)));
     let query = LatestMany::builder()
         .table("contract_state")
         .select("path")
-        .filter("contract_id = :contract_id AND path >= :lo AND path < :hi")
+        .filter(&format!("contract_id = :contract_id AND {range}"))
         .post("deleted = false")
         .build()
         .to_sql();
-    let mut rows = conn
-        .query(
-            &query,
-            (
-                (":contract_id", contract_id),
-                (":lo", Value::Blob(base_path.to_vec())),
-                (":hi", Value::Blob(subtree_upper(base_path))),
-            ),
-        )
-        .await?;
+    let mut rows = conn.query(&query, params).await?;
     let Some(row) = rows.next().await? else {
         return Ok(None);
     };
@@ -350,17 +337,16 @@ pub async fn delete_matching_paths(
     for variant in variants {
         let mut prefix = base_path.to_vec();
         variant.encode_to(&mut prefix); // base_path ++ enc(variant)
+        let (range, mut params) = subtree_range(">=", &prefix);
+        params.push((":contract_id".to_string(), Value::Integer(contract_id as i64)));
+        params.push((":height".to_string(), Value::Integer(height as i64)));
         deleted += conn
             .execute(
-                "DELETE FROM contract_state \
-                 WHERE contract_id = :contract_id AND height = :height \
-                   AND path >= :lo AND path < :hi",
-                (
-                    (":contract_id", contract_id),
-                    (":height", height),
-                    (":lo", Value::Blob(prefix.clone())),
-                    (":hi", Value::Blob(subtree_upper(&prefix))),
+                &format!(
+                    "DELETE FROM contract_state \
+                     WHERE contract_id = :contract_id AND height = :height AND {range}"
                 ),
+                params,
             )
             .await?;
     }
