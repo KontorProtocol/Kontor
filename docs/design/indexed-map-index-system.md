@@ -1,110 +1,218 @@
-# IndexedMap index system — design
+# Storage keys & indexed maps — design
 
-Status: **confirmed** — implementing in build order (step 1 first). Extends the
-shipped single-field `#[index]` (one
-bucket per distinct field value) into a coherent system covering **sortable**,
-**composite**, **covering**, and **partial** indexes plus **compound primary
-keys**, designed so each lands additively without reworking the others.
+Status: **confirmed.** Part I (the ordered key codec) is the foundation; Part II
+(the IndexedMap index system) is built on it. The index features (sortable,
+composite, compound) are already **shipped on interim encodings** (hex `SortKey`,
+`Pair` fixed-width suffix, `.`-delimited text paths); the codec is the foundational
+rework they get **re-expressed onto with no contract-facing API change** (see Build
+order). Covering and true-partial remain additive on top.
+
+The unifying realization: a **storage path, a map key, an index bucket, a sort
+prefix, and a compound key are the same thing — a sequence of order-preserving,
+typed elements.** Today we encode each differently (three ad-hoc schemes), and
+every limitation we've hit (no `.` in keys, ≤1 variable field in a compound key,
+fixed-width bookkeeping, full-table scans on subtree/`keys()`) is a symptom of
+that. One codec collapses them.
+
+---
+
+# Part I — The ordered key codec (foundation)
 
 ## Hard constraints (non-negotiable)
 
 1. **Contract storage is always the generic, height-versioned `contract_state`
-   log.** We never back a piece of contract storage with a bespoke/typed SQL
-   table. (A typed host table like the file registry is fine *because it is not
-   contract storage* — reached via host functions, not the storage interface.)
-2. **Therefore sortability/range-ability must live in the KEY (the path), not in
-   a column.** The host can only generically range over `path` (TEXT). There is
-   no "deadline column" escape hatch by design.
-3. **One audited maintenance routine.** All index rows (every shape below) are
-   maintained by the single `apply_index_diff` site so the tombstone/reorg/count
-   semantics live in one place (see the liveness refactor).
-4. **Index rows are ordinary `contract_state` rows** — versioned, reorg-safe,
-   checkpoint-covered, read through `live_latest`.
+   log.** We never back contract storage with a bespoke/typed SQL table. (A typed
+   host table like the file registry is fine *because it is not contract storage* —
+   reached via host functions, not the storage interface.)
+2. **Order/range-ability lives in the KEY, never a column.** The host ranges over
+   `path` only; there is no "deadline column" escape hatch by design. So the key
+   encoding itself must be order-preserving.
+3. **Order-preserving** — lexicographic byte order of an encoded key equals its
+   logical (element-by-element, typed) order. This is what `ORDER BY path`,
+   `keys()` determinism, sorted-index scans, and `up_to`/`range` rely on.
+4. **Prefix-scannable** — an ancestor's encoding is a byte-prefix of every
+   descendant's; a subtree is one byte range (subtree tombstone, bucket scans,
+   variant resolution).
+5. **Self-delimiting / decodable** — element boundaries and typed values are
+   recoverable from the bytes alone, with no external schema (the host extracts
+   elements for `keys()` without knowing contract types).
+6. **Deterministic & canonical** — exactly one encoding per value, identical on
+   every node; the encoded path is hashed into checkpoints, so the format is
+   consensus-critical and frozen once shipped.
+7. **Shared by guest and host** — one codec crate used by contracts
+   (`no_std`/wasm) and the indexer (the SQL/query layer).
+8. **Row semantics unchanged** — only `path` encoding changes. The versioned-log
+   model (`contract_id, height, tx_id, path, value, deleted`), per-path
+   latest-version liveness (`live_latest`), reorg rollback, the checkpoint trigger,
+   and the single `apply_index_diff` maintenance site are untouched.
 
-## The unifying model
+## The codec
 
-An index over an `IndexedMap<K, V>` value is fully described by four axes plus
-one orthogonal concern:
+Keys are byte strings (`path` is a `BLOB`, compared bytewise = `memcmp`, which is
+order-preserving for this codec). A key is a sequence of typed **elements**, each
+`tag byte + payload`, so the stream is self-describing. This is the FoundationDB
+tuple layer, adopted so it's a known quantity.
 
-| Axis | Meaning | Today |
+| Element | Tag | Payload | Order property |
+|---|---|---|---|
+| bytes | `0x01` | content with `0x00 → 0x00 0xFF`, then `0x00` terminator | terminator is the min byte ⇒ `"a" < "ab"`; content stays `0x00`-free |
+| string (utf8) | `0x02` | same as bytes | same; **any content allowed, incl. `.` `-` space** |
+| nested tuple | `0x05` | encoded elements…, then `0x00` terminator | ordered by element sequence (compound keys; sort‖pk members) |
+| integer | `0x0C`…`0x1C` | **minimal-length** big-endian; tag encodes sign+byte-count (`0x14` = zero, `0x15+n` = positive n-byte, `0x14−n` = negative n-byte stored offset so it sorts first) | tag orders by magnitude class, bytes within — fuzz-verified across full i64/u64 |
+| false / true | `0x26` / `0x27` | — | false < true |
+| none / some | `0x28` / `0x29(inner)` | some carries the inner element | none < some (matches `Presence::Absent < Present`) |
+
+- **Minimal-length ints (not fixed-width).** The byte count lives in the tag, so a
+  value uses the fewest big-endian bytes — still canonical and order-preserving,
+  but a small `height` costs 1–2 bytes, not 8. A field's declared width (`u8` vs
+  `u64`) isn't in the encoding; the guest decodes into its known type, so `5u8` and
+  `5u64` encode and order identically. Hence one `integer` family, not per-width
+  tags.
+- **`strinc(prefix)`** (exclusive upper bound of a prefix range): strip trailing
+  `0xFF`, increment the last remaining byte. Subtree of `P` = `[encode(P),
+  strinc(encode(P)))`. Computed host-side in Rust.
+- **Escaping** keeps `0x00` as a terminator-only byte, so element boundaries are
+  unambiguous and a string element can hold any bytes.
+
+### Reserved tag space (decide once, don't repaint)
+
+```
+0x00            terminator / escape sentinel (never a tag)
+0x01 bytes   0x02 string   0x05 nested tuple
+0x06 – 0x0B   RESERVED  — descending-order variants, Integer/Decimal
+0x0C – 0x1C   integer (sign+length)
+0x1D – 0x1F   RESERVED
+0x20 / 0x21   RESERVED  — order-preserving f32 / f64 (IEEE sign-flip)
+0x26 false  0x27 true   0x28 none  0x29 some
+```
+
+Reserved for three forward needs: **descending** components (encode the value's
+byte-complement — an index that sorts a field DESC), **`Integer`/`Decimal` as
+numerically-ordered keys** (today they'd key by `Display` — lexicographic, not
+numeric — a latent bug the codec can fix), and **interned field-name ints** (see
+Performance & space).
+
+### Worked bytes
+
+```
+str "ab"          → 02 61 62 00
+str "a.b"         → 02 61 2E 62 00          (the '.' is just content now)
+u64 42            → 15 2A                   (1-byte minimal, not 8)
+i64 -1            → 13 FE
+compound (s,n):
+  ("agr", 42u64)  → 05  02 61 67 72 00  15 2A  00
+path ("m", ("agr",42), "active")
+                  → 02 6D 00  05 02 61 67 72 00 15 2A 00  02 61 63 74 69 76 65 00
+```
+
+## Performance & space at scale (measured)
+
+Experiments on SQLite 3.51 (planner behavior is core-SQLite, shared with libsql).
+
+- **Range seek vs the current LIKE — a *fix*, not a cost.** The current
+  subtree/`keys()` filter `path LIKE :p || '.%'` does **not** use the
+  `(contract_id, path, …)` index — `EXPLAIN QUERY PLAN` shows `SCAN` (full scan of
+  the contract's rows), even with `case_sensitive_like=ON` (the LIKE→range opt
+  needs a *literal* prefix, which a concatenated parameter isn't). The byte-range
+  form `path >= :lo AND path < strinc(:lo)` is a `SEARCH … USING INDEX`
+  unconditionally. At 400k rows a single subtree lookup went **~26 ms (scan) →
+  ~1.4 µs (seek)**, and the scan grows with table size. Moving to range queries
+  (which the codec makes natural) removes a latent O(table) cost from the hottest
+  path.
+- **BLOB is order-correct and `0x00`-safe** — verified bytewise `ORDER BY` matches
+  `sorted()` and `0x00`-containing keys round-trip and order correctly. The NUL
+  hazard that rules out TEXT does not exist for BLOB (length-prefixed, `memcmp`).
+- **Codec is canonical + order-preserving — fuzzed** over 5,000+ ints (all
+  sign/length boundaries), strings (empty/prefix/`.`/`-`/space/`0x00`/high-byte),
+  **two-variable-string compound keys**, and `(bucket, sort, pk)` members;
+  integer encoding is injective.
+- **Space: better for index-heavy data.** Minimal-length ints averaged **5 bytes**
+  for typical heights vs 9 fixed-width vs **16** for the old hex `SortKey`; index
+  leaves shrink. Strings cost ~+1 byte/element (tag+terminator vs one dot) — minor.
+
+**Two scale levers, orthogonal to the codec (don't conflate):**
+
+1. **Version-log compaction** — every write appends a version row, so the log grows
+   faster than per-row path overhead; pruning versions below the
+   finalized-checkpoint/reorg horizon is the first real space lever and is
+   independent of the encoding.
+2. **Field-name interning** — repeated struct field-name strings dominate path
+   redundancy (SQLite doesn't prefix-compress B-tree keys, and the index stores the
+   path again). The codec is *friendly* to fixing this (ordered keys share
+   byte-prefixes — what prefix compression / a compressing VFS want), and a field
+   name being "just an element" means we can later encode it as a small
+   per-contract canonical int (declaration order, stable since contracts are
+   immutable). Reserved; not needed now. Compression is a scale optimization, not a
+   correctness need — nothing here forecloses it.
+
+## Host architecture
+
+- `path TEXT → BLOB`; `ORDER BY path` / `partition_by(path)` work unchanged
+  (bytewise).
+- Subtree / bucket / variant queries become **byte-range bounds** (`path >= :lo AND
+  path < strinc(:lo)`), a guaranteed index seek.
+- **`keys()` and variant resolution do element extraction in host Rust**, not SQL:
+  range-scan the (index-seeked) live rows, extract the child element + dedup via the
+  shared `keycodec`. No SQL function is needed — `keys()` already materializes the
+  range, and the async `libsql::Connection` only exposes `load_extension` (not Rust
+  scalar UDFs). *(A future SQL "distinct next element" pushdown is possible but
+  unneeded; index buckets are leaf-only so dedup never pulls grandchildren on the
+  hot path.)*
+- **Extension footprint shrinks.** We load sqlean `crypto` and `regexp`.
+  `crypto_sha256` is in the checkpoint trigger (consensus — stays). `regexp` is used
+  *only* for contract_state path matching — `keys()` extraction and the
+  enum/option `matching_path`/`delete_matching_paths` — all replaced by byte-range +
+  Rust extraction. **So the codec lets us drop the `regexp` extension entirely** (5
+  platform binaries, one less native dependency to keep deterministic). We add no
+  sqlean modules: the rest are redundant (`math` is built in), determinism-hazards
+  for consensus (`uuid` random, `time` wall-clock), or have no use case.
+
+---
+
+# Part II — IndexedMap on the codec
+
+## The index model
+
+An index over an `IndexedMap<K, V>` value is four axes plus one orthogonal concern:
+
+| Axis | Meaning | Status |
 |---|---|---|
-| **bucket** | 1+ fields whose `IndexKey` values partition the index; `where_<i>(b)` scans a bucket | 1 field |
-| **sort** *(opt)* | a field whose **order-preserving** `SortKey` orders members *within* a bucket → range scan + early-break | — |
-| **project** *(opt, "covering")* | a field (or few) stored in the index leaf so a scan returns it without a follow-up `get` | — |
-| **predicate** *(opt, "partial")* | omit a row entirely when false — a pure index-*size* optimization. **Mostly unneeded:** the functional "filter" case is a composite bucket over discriminant fields (incl. `Option` none/some), see Resolved decisions. True partial deferred. | — |
-| *(orthogonal)* **primary key K** | may be compound/tuple; encoded into the `<pk>` segment(s) | scalar |
+| **bucket** | 1+ fields whose values partition the index; `where_<i>(b…)` scans a bucket | shipped (single + composite) |
+| **sort** *(opt)* | a numeric field that orders members *within* a bucket → range scan + early-break | shipped (interim hex; codec re-expresses) |
+| **project** *(opt, "covering")* | a field stored in the leaf so a scan returns it without a follow-up `get` | pending |
+| **predicate** *(opt, "partial")* | omit a row when false (pure index-*size* optimization). The functional "filter" case is a composite bucket over discriminant fields (incl. `Option` none/some); true partial deferred. | composite shipped; true partial deferred |
+| *(orthogonal)* **compound key K** | a tuple key; encoded as a nested-tuple element | shipped (interim `Pair`; codec re-expresses) |
 
-The whole point: these compose. A "due challenges" index is bucket=`status`,
-sort=`deadline_height`; make it covering by adding project=`agreement_id`; turn a
-bucket field into a composite over a discriminant (`Option`/enum) to get a filter
-without a predicate DSL. None of those choices interfere.
+These compose: a "due" index is bucket=`status`, sort=`deadline_height`; make it
+covering with project=`agreement_id`; turn a bucket field into a composite over an
+`Option`/enum discriminant to get a filter with no predicate DSL.
 
-## Storage layout — one leaf shape
+## Leaf layout (one shape, in codec elements)
 
-Every index, regardless of axes, is a sibling subtree `<map>#idx/<index>/…`, and
-**the member leaf is always exactly one segment under its bucket**:
+Every index is a sibling subtree; a member is **one element** under its bucket:
 
 ```text
-<map>#idx/<index>/<bucket…>/<sort‖pk>   ->   () | <projection>
-<map>#idx/<index>/<bucket…>             ->   <count: u64>     (per-bucket count, shipped)
+unsorted:   (<map>#idx, <index>, <bucket…>, <pk>)              -> () | <projection>
+sorted:     (<map>#idx, <index>, <bucket…>, (<sort>, <pk>))    -> () | <projection>
+count:      (<map>#idx, <index>, <bucket…>)                    -> <u64>
 ```
 
-- `<bucket…>` — one segment per bucket field (`IndexKey`); composite = several
-  segments in declared order.
-- `<sort‖pk>` — the **member segment**: an optional fixed-width `SortKey` prefix
-  concatenated with the primary key. Because the sort prefix is fixed width,
-  lexicographic order of this one segment == (sort order, then pk order), and the
-  pk is recovered by stripping the known-width prefix. Unsorted index ⇒ no prefix
-  ⇒ the segment *is* the pk (today's layout). Keeping sort+pk in **one** segment
-  means an ordered scan is a **single** `keys()` cursor (not a nested two-level
-  walk), and the count / `by_index` logic is unchanged — members are still direct
-  children of the bucket.
-- `<pk>` — the primary key (`ToString`); compound keys encode here (§ Compound
-  keys).
-- **leaf value** — `()` (void) for a plain index, or the `<projection>` for a
-  covering index. A value at the leaf is invisible to `keys()`/the count (those
-  see child *segments*), so covering is transparent to them.
-- **count** — unchanged: lives *at* the bucket node; members are its direct
-  children, so it stays invisible to the child-scan.
+- `<bucket…>` — one element per bucket field (the value's bucketing aspect:
+  `Display`/discriminant/`none`·`some`); composite = several, in declared order.
+- **member** — for an unsorted index, just the `<pk>` element; for a sorted index,
+  a **nested-tuple element `(<sort>, <pk>)`**. Because it's one element ordered by
+  `sort` then `pk`, an ordered scan is a single cursor, the count/`by_index` logic
+  is unchanged (members are direct children of the bucket), and the pk is recovered
+  by decoding — no fixed-width prefix, no hex, no width bookkeeping. This is the old
+  "`sort‖pk` one segment" idea expressed as a nested tuple.
+- `<pk>` — the primary key element; a compound key is itself a nested tuple
+  (multiple sub-elements, **multiple variable-length fields now fine**).
+- **leaf value** — `()` for a plain index, the typed `<projection>` for covering
+  (invisible to `keys()`/count, which see child elements).
+- **count** — at the bucket node; framework-maintained in `apply_index_diff`.
 
-This single shape is the forward-compatibility lever — each axis is an
-independent edit to the member segment or the leaf value:
-
-```text
-plain single-field   <map>#idx/status/active/<pk> -> ()                 (today)
-composite            <map>#idx/owner_status/42/active/<pk> -> ()
-sortable             <map>#idx/due/active/<padDeadline‖pk> -> ()
-covering             <map>#idx/active/true/<pk> -> <proj>
-sortable+covering    <map>#idx/due/active/<padDeadline‖pk> -> <proj>
-```
-
-The shipped single-field index is exactly the degenerate case (no sort prefix,
-void leaf), so it keeps working untouched.
-
-## Sortable key encoding (`SortKey`)
-
-Bucketing and ordering are **different jobs**, so two traits:
-
-- `IndexKey` (shipped) — a deterministic, delimiter-free segment for *bucketing*.
-  Order doesn't matter. (`Display`-based for primitives; discriminant for enums.)
-- `SortKey` (new) — an **order-preserving, fixed-width** segment for *ordering*:
-  lexicographic byte order of the segment == semantic order of the value.
-
-`SortKey` impls:
-- `u64` → 16-char big-endian hex (`format!("{:016x}")`). Fixed width ⇒ no
-  zero-pad ambiguity; lexicographic == numeric.
-- `u32`/`u16`/`u8` → narrower fixed widths.
-- `i64` → bias by `1<<63` (flip the sign bit) then big-endian hex, so negatives
-  sort before positives.
-- Enums via `#[derive(StorageEnum)]` *may* opt into an explicit ordinal if a
-  meaningful order exists; otherwise a field isn't sortable.
-
-Rules: sort fields must be `SortKey`; the width is part of the index's on-disk
-format, fixed for the life of the (immutable) contract — no migration story
-needed (see Resolved decisions). Hex is used (not raw big-endian bytes) so the
-segment is path-safe (printable, no `.`); the cost is a fixed 16 chars on every
-sorted leaf's path — acceptable. This same encoding fixes the standalone "`u64`
-keys sort lexicographically" footgun for primary keys too.
+The shipped single-field index is the degenerate case (no sort, `pk`-only member,
+void leaf).
 
 ## Declaration syntax
 
@@ -114,121 +222,85 @@ keys sort lexicographically" footgun for primary keys too.
 #[derive(Storage, Indexed)]
 #[index(active)]                                          // sugar: by = active
 #[index(due, by = status, sort = deadline_height)]        // composite + sortable
-#[index(active_id, by = active, include = agreement_id)]   // covering (single scalar)
-#[index(eligible, by = (active, active_challenge))]        // "partial" via composite + Option discriminant
+#[index(active_id, by = active, include = agreement_id)]   // covering (pending)
+#[index(eligible, by = (active, active_challenge))]        // filter via composite + Option discriminant
 struct Challenge { /* … */ }
 ```
 
-- Field-level `#[index] f` stays as sugar for `#[index(f, by = f)]`.
-- `by = a` or `by = (a, b)` → bucket segments (order significant). A bucket field
-  may be a bool, an enum (discriminant), or an `Option` (`none`/`some`
-  discriminant) — that last one replaces a predicate DSL for the filter case.
-- `sort = f` → the `<sort>` segment (`f: SortKey`).
-- `include = f` → covering projection stored in the leaf (single scalar for now;
-  multi-field later).
-- *No `where =` predicate DSL* — see Resolved decisions (composite-over-
-  discriminant covers the need; true partial deferred).
+- Field-level `#[index] f` = sugar for `#[index(f, by = f)]`.
+- `by = a` / `by = (a, b)` → bucket elements (order significant); a bucket field
+  may be a bool, an enum (discriminant), or an `Option` (`none`/`some`).
+- `sort = f` → the sort element (`f` numeric); `include = f` → covering projection.
+- *No `where =` predicate DSL* — composite-over-discriminant covers the need.
 
 ### WIT records — `contract!`'s `indexed`
 
-WIT records can't take Rust attributes (injected via the fork), so the
-`indexed = "…"` arg gains a small grammar that mirrors the above:
+WIT records can't take Rust attributes (injected via the fork), so a small grammar
+mirrors the above (`by` takes one or more fields up to `sort`):
 
 ```
 indexed = "
   challenge-data: due by status sort deadline-height;
-  challenge-data: status;                       // (still its own single-field index)
-  agreement-data: active;
+  challenge-data: status;
+  agreement-data: eligible by active active-challenge;
 "
 ```
 
-`contract!` parses this and injects the equivalent index descriptors onto the
-generated record (it already injects `#[index]`/`#[derive(Indexed)]`).
+## Maintenance — one routine
 
-## Maintenance — generalize the descriptor, keep one routine
-
-`Indexed::index_entries` becomes a list of **index entry descriptors**, each:
+`Indexed::index_entries` yields **index entry descriptors**:
 
 ```rust
 struct IndexEntry {
-    index: &'static str,            // index name
-    bucket: SmallVec<Cow<'static,str>>, // 1+ bucket segments (IndexKey)
-    sort: Option<Cow<'static,str>>, // sort segment (SortKey), if any
-    projection: Option<Vec<u8>>,    // packed covering value, if any
-    // present? — partial indexes simply omit the descriptor
+    name: &'static str,
+    bucket: Vec<…>,          // 1+ bucket elements
+    sort: Option<…>,          // sort element, if any
+    projection: Option<…>,    // covering leaf value, if any (pending)
 }
 ```
 
-The field model computes `old`/`new` descriptor sets and hands them to **one**
-generalized `apply_index_diff`. The diff **keys on the leaf PATH**
-(`<index>/<bucket…>/<sort‖pk>`), with the projection as the leaf *value* — not on
-full-descriptor equality — so the three transitions are distinct:
-- path in `new` not in `old` → write the leaf, **+count**.
-- path in `old` not in `new` → tombstone the leaf, **−count** (gated on
-  `__delete`'s result, as today).
-- path in both, projection differs → **overwrite the leaf value in place, no count
-  change.** (Keying on equality instead would tombstone+rewrite the same path and
-  flip the count down-then-up on every projected-field change — wasted ops.)
+The field model computes `old`/`new` descriptor sets and hands them to one
+`apply_index_diff`, which **keys on the leaf path** (not full-descriptor equality):
 
-So **no new maintenance code path per axis** — they're variations of "which
-descriptors, and what's in the leaf."
+- path in `new` not `old` → write leaf, **+count**.
+- path in `old` not `new` → tombstone leaf, **−count** (gated on `__delete`'s
+  result).
+- path in both, projection differs → overwrite leaf value in place, no count
+  change.
 
-**Covering ⇄ in-place setters.** Today the generated `set_<field>` reconciles the
-index only when `<field>` is a *bucket* field (membership moves). A covering index
-adds a second trigger: setting a field that a covering index *projects* must also
-update that field's slot inside every such leaf. So `set_<field>` reconciles when
-the field is **bucketed OR projected** (or sorted — a sort-field change moves the
-member segment). Concretely: projecting a field makes every write of it also an
-index write — the covering cost, paid on the write path, to save reads on the
-scan path. The macro knows each field's index roles, so it emits exactly the
-needed reconciles.
+So no new maintenance path per axis. **In-place setters** reconcile every index a
+field participates in — bucket OR sort OR (covering) projected — and each
+participating field is read once (hoisted) so old/new entries and shared fields
+don't re-read storage.
 
 ## Query API (generated per index)
 
-- `where_<i>(bucket…) -> impl Iterator<Item = K>` — bucket scan (today; ordered by
-  the member segment, which for a sorted index means sort order).
-- `count_<i>(bucket…) -> u64` — O(1) bucket size (today).
-- **sortable** adds a bounded scan: `where_<i>(bucket…).up_to(bound)` /
-  `.range(lo..=hi)`. Implemented as a **single** `keys()` cursor over the member
-  segments (already returned in path order); the bound is the **encoded** SortKey
-  prefix, so early-break is a string comparison on the segment prefix — **no
-  SortKey decode**, and it yields plain `K` (strip the fixed-width prefix). Needs
-  **no new host primitive**.
-- **covering** changes the item type to the projection (or `(K, Proj)`): the scan
-  reads each leaf's *value* instead of a follow-up `get` on the primary map —
-  useful for **scan-and-read** endpoints, not scan-and-mutate (you need the full
-  value to mutate anyway).
+- `where_<i>(bucket…) -> impl Iterator<Item = K>` — bucket scan.
+- `count_<i>(bucket…) -> u64` — O(1) maintained bucket size.
+- **sortable** adds `where_<i>(bucket…).up_to(bound)` / `.range(lo..=hi)`, typed to
+  the sort field. On the codec these become a **host byte-range** over the member's
+  `sort` prefix (`[bucket, bucket ++ strinc(encode(bound)))`) — an index seek, so
+  the host work is **O(result), not O(bucket)**. This *resolves the old
+  cost-honesty caveat*: the deferred "bounded range-scan host primitive" is now the
+  default, because byte-range bounds are native.
+- **covering** (pending) changes the item type to the projection (or `(K, Proj)`):
+  the scan reads the leaf value instead of a follow-up `get` — for scan-and-read
+  endpoints, not scan-and-mutate.
 
-These are additive method generations keyed off the index's declared axes.
+## Worked example — `expire_challenges`
 
-> **Cost honesty.** `up_to`'s early-break cuts the **contract/fuel** cost to
-> O(expiring) — the expensive part. But `keys()` is backed by `live_latest`
-> (window-rank + `DISTINCT` + `ORDER BY`), so the **host still materializes the
-> whole ordered bucket** per call — O(bucket) DB work. That's still a big win (DB
-> sort ≪ wasm execution). Making the *host* sublinear too needs a **bounded
-> `keys()`/range-scan host primitive** (push `WHERE segment ≤ bound ORDER BY
-> segment LIMIT` into SQL). That primitive ranges over `path` (TEXT), so it's
-> **inside** the storage invariant — a legitimate generic follow-on, distinct
-> from the forbidden typed-column approach. Add it only if host scan cost ever
-> shows up.
-
-## Worked example — `expire_challenges` (the motivating case)
-
-Declared: `#[index(due, by = status, sort = deadline_height)]`. Layout:
-`challenges#idx/due/<status>/<padDeadline>/<id>`.
+Declared `#[index(due, by = status, sort = deadline_height)]`:
 
 ```rust
 fn expire_challenges(ctx, current_height) -> u64 {
     let model = ctx.proc_context().model();
-    // ordered scan of the active bucket, stop at the first not-yet-due
     let due: Vec<String> = model.challenges()
         .where_due(ChallengeStatus::Active)
-        .up_to(current_height)          // SortKey bound; early-break
-        .map(|(_, id)| id)
+        .up_to(current_height)          // host byte-range seek; O(due)
         .collect();                     // snapshot before mutating the index
     for id in &due {
         if let Some(c) = model.challenges().get(id) {
-            c.set_status(ChallengeStatus::Expired);
+            c.set_status(ChallengeStatus::Expired);  // moves status + due buckets
             if let Some(a) = model.agreements().get(&c.agreement_id()) {
                 a.set_active_challenge(None);
             }
@@ -238,121 +310,96 @@ fn expire_challenges(ctx, current_height) -> u64 {
 }
 ```
 
-Contract/fuel cost drops from O(all active challenges) per block to O(expiring + 1)
-(the host still scans the bucket — see *Cost honesty*). Covering does **not** help
-here: `expire` mutates each due challenge, so it must `get(id)` regardless.
-Covering pays off for **scan-and-read** endpoints like `get_active_challenges`,
-which return data without mutating — there, projecting the returned fields removes
-the per-key `get`.
+Contract/fuel cost is O(expiring); with the codec the host cost is also O(expiring)
+(the sort range is pushed into the index seek). Covering doesn't help here (`expire`
+mutates each due challenge, so it `get`s regardless); covering pays off for
+scan-and-read endpoints.
 
-## Build order (each step ships independently, no rework)
+---
 
-1. **`SortKey` + sortable single-bucket index** — ✅ SHIPPED. The `sort‖pk` member
-   segment, the single-cursor `up_to`/`range` scan, the encoding. Unblocks
-   `expire`. (Also ships the numeric-key sortability fix.)
-2. **Composite bucket + `Option`/enum discriminant bucketing** — ✅ SHIPPED.
-   Multiple `<bucket…>` segments + multi-arg `where_`, `IndexKey for Option` +
-   `Presence` marker, primitives over `bucket: &[&str]`. Covers the filestorage
-   "eligible" filter (`where_eligible(true, Presence::Absent)`, replaces a
-   predicate DSL).
-3. **Covering (single scalar)** — write the projected field into the leaf's
-   existing value slot; projection-returning scans. Multi-field/blob later.
-4. **Compound primary keys** — ✅ SHIPPED. `Pair<A, B>` key (`<A><fixed-width B>`,
-   `SortKey` gained a `from_sort_key` decode for the round-trip); `IndexedMap<Pair<
-   String, u64>, V>` flows through the macro unchanged. filestorage flattened the
-   nested `agreement_nodes` map-of-IndexedMaps into a flat `memberships`
-   `IndexedMap<Pair<String, u64>, NodeState>` with a composite `(agreement_id,
-   active)` index.
-5. *(deferred)* **True partial** — omit rows when a predicate is false; only if a
-   real index-size problem appears. Likely via an `Option`-returning computed key.
+# Part III — Resolved decisions
 
-The leaf layout and the descriptor-based maintenance already accommodate all of
-these, so later steps are additive edits, not redesigns — and there's **no
-migration machinery** to build, because contracts are immutable (see Resolved
-decisions). That's the "don't shut ourselves out" guarantee: ship #1 now, the
-rest slot in.
+### No migration — contracts are immutable
+`publish` is a plain `INSERT INTO contracts` with a new `contract_id` + fresh
+`init()`; there is no upgrade/reinit/set-code path, so a contract's key/index shape
+can never change on live state. The only new-code-meets-old-state case is a native
+contract replaced by a coordinated network upgrade (hard-fork-class; rebuilds its
+subtree). So: no shape-versioning, no online migration. The codec format and an
+index's axes are simply fixed for the life of the (immutable) contract; pre-prod we
+reindex from genesis once and freeze.
 
-## Compound primary keys (orthogonal)
+### Codec
+- **Type-tagged elements** (self-describing; host extracts without schema).
+- **`path` is `BLOB`**, bytewise order, `0x00`-safe (measured).
+- **A key is one path position; compound keys are nested-tuple elements** — keeps
+  `keys()` single-level and struct-field nesting unchanged.
+- **Minimal-length (FDB-style) integers**, not fixed-width — canonical, ordered,
+  smaller (fuzzed).
+- **`Key` (byte builder) replaces `DotPathBuf`**; human-readability via a debug
+  decoder.
+- **`get_keys` returns next-element bytes; the guest decodes** (the host can't type
+  `K` generically; uniform for compound keys).
+- **`keycodec` is its own `no_std` workspace crate**, shared by `stdlib` (guest)
+  and the indexer (host).
+- **No SQL UDF** — host-side Rust extraction over an index range-scan; `strinc`
+  Rust-side. Drops the `regexp` extension.
+- **Delete `SortKey`/`IndexKey` as separate hex encoders** — both become codec
+  element encodings; bucket-by-discriminant vs order-by-value stays a codegen
+  choice (which projection of the value to encode).
 
-`IndexedMap<(String, u64), V>` (e.g. flattening `agreement_nodes` to
-`memberships` keyed by `(agreement_id, node_id)`). The `<pk>` part of every leaf
-generalizes to an encoded tuple. Requirements:
-- **delimiter-safe** — the encoding must not contain `.` (would split the path).
-- **deterministic** `ToString`/`FromStr` round-trip.
-- ideally **`SortKey`** too, if you want ordered primary scans.
-This is independent of the index axes (the `<pk>` slot is the same in every leaf
-shape), so it can land last without touching index layout. For the common
-`(variable, fixed-width)` shape — e.g. `(agreement_id: String, node_id: u64)` —
-the clean encoding is a **fixed-width suffix**: `<agreement_id><16hex-node_id>`,
-recovered by splitting off the known-width tail. It's unambiguous because the
-variable part is already `.`-free and the numeric part is fixed width, and it
-sorts by `agreement_id` then `node_id`. (NOT naive `a:b`, which isn't delimiter-
-safe for arbitrary `a`.) General N-tuples of variable parts need length-prefixing.
+### "Partial" → composite over discriminant fields, not a predicate DSL
+A `where = <expr>` DSL is a non-starter in the WIT `indexed = "…"` string. The
+functional filter (e.g. `active ∧ no active_challenge`) is a composite bucket over
+discriminant fields — `#[index(eligible, by = (active, active_challenge))]` →
+`where_eligible(true, Presence::Absent)` — keeping every value in *some* bucket.
+True partial (omit rows; pure size optimization) stays deferred; the clean future
+form is a computed key returning `Option` (`None` ⇒ not indexed).
 
-## Resolved decisions (investigated against the codebase)
-
-### No index migration is needed — contracts are immutable
-
-`publish` is a plain `INSERT INTO contracts` that assigns a **new** `contract_id`
-every time, then runs a fresh `init()`; there is **no** upgrade / reinit /
-set-code path in the runtime. So a generic contract's code — and therefore its
-index shape — can never change on live state: a new version is a new contract
-with state built from scratch by its own `init`/writes. There is no "reshape an
-index on existing state" scenario to migrate.
-
-The only case where new code meets old state is a **native** contract (fixed id,
-part of the protocol) being replaced by a **coordinated network upgrade** — a
-hard-fork-class event. An index change there rides that upgrade path (and would
-rebuild the index subtree as part of it) exactly like any other native-contract
-code change; it is out of scope for the index system to auto-migrate. So: **drop
-shape-versioning / online-migration from the design entirely.** A `SortKey` width
-or bucket-set is simply part of an index's definition, fixed for the life of the
-(immutable) contract.
-
-### "Partial" need → composite indexes over discriminant fields, not a predicate DSL
-
-A `where = <Rust expr>` predicate is awkward exactly where we need it: WIT records
-declare indexes through the `indexed = "…"` **string** arg, and a Rust
-expression-in-a-string is a non-starter. Sidestep it. The partial-like query we
-actually want — filestorage eligibility = `active ∧ no active_challenge` — is a
-**composite index over two discriminant-valued fields**:
-`#[index(eligible, by = (active, active_challenge))]` →
-`where_eligible(true, Presence::Absent)`.
-This needs only:
-1. composite buckets (already in the plan), and
-2. a small extension: **index an `Option<T>` field by its `none`/`some`
-   discriminant** — an `IndexKey for Option` that keys on the discriminant (just
-   like an enum). No predicate expressions, no string DSL; works identically for
-   internal structs and WIT records (you only name fields). The discriminant gets
-   a generated marker (like `<E>Kind`) so the call reads `where_eligible(true,
-   Presence::Absent)` rather than a bare `None::<String>` that needs a type
-   annotation.
-
-This keeps every value in *some* bucket (`active/none`, `active/some`, …) rather
-than omitting rows. **True partial indexes** (omit a row entirely when a
-predicate is false — purely an index-*size* optimization) stay deferred; if ever
-needed, the clean form is a **computed key returning `Option`** (`None` ⇒ not in
-the index), which also subsumes the "computed/closure index key" backlog item —
-but the WIT-record declaration ergonomics (a function in a string) are the real
-blocker, so it waits for a concrete need. For now, composite-over-discriminants
-covers the functional case with zero DSL.
-
-### Covering: reuse the leaf's value slot; tier by projection size
-
-The index leaf is an ordinary `contract_state` row that **already has a value
-slot** (we write `()` today). A covering index writes the projection there:
-- **single scalar** (the high-value case — project the one field a scan needs:
-  the sort field, a filter field, or a display id) → store via the existing typed
-  setter (`__set_str`/`__set_u64`), read via `__get` — **zero new machinery.**
-- **multi-field** → a packed blob in the leaf value (generated pack/unpack) —
-  defer until needed.
-- **whole value** → that's just denormalization (a full duplicate re-synced on
-  every write). Usually NOT worth it; the active sets are bounded, so the `get`
-  per key is fine. Frame covering as "project what the scan needs," not "copy the
-  value."
+### Covering — reuse the leaf value slot, tier by size
+The leaf is an ordinary row with a value slot (`()` today). Covering writes the
+projection there: **single scalar** (the high-value case — the sort field, a filter
+field, a display id) via the typed setter/`__get`, zero new machinery; **multi-field**
+= a packed blob, deferred; **whole value** = denormalization, usually not worth it
+(bounded active sets make the per-key `get` fine).
 
 ### Sort over enums
+Only with an explicit declared ordinal; otherwise `sort = <enum>` is a macro-time
+error. Numeric fields are the intended sort targets.
 
-Only if an explicit ordinal is declared on the enum; otherwise `sort = <enum>` is
-a macro-time error. Numeric (`SortKey`) fields are the intended sort targets.
-```
+---
+
+# Build order (phased, all on this branch)
+
+Phases 2–4 are coupled (stdlib + WIT + macro move together to keep contracts
+compiling); land them as one working step, then re-express features.
+
+0. **`keycodec` crate** — encode/decode/`strinc`/`next_element`, unit-tested
+   (round-trip + ordering-vs-logical fuzz). No integration.
+1. **Host/DB** — `path` → `BLOB`; byte-range subtree/`keys()`/variant queries;
+   Rust-side element extraction; checkpoint hashing over BLOB; drop `regexp`. A node
+   boots and round-trips set/get/keys. *(Confirm range queries seek the index via
+   `EXPLAIN QUERY PLAN`.)*
+2. **stdlib + WIT + macro** — `Key` builder; byte-path storage traits + host-fn
+   signatures; `KeyElement` impls; codegen building typed paths. Existing contracts
+   (string/int keys) compile and pass on the new encoding.
+3. **Re-express the shipped index features** on the codec — sortable `due` (sort
+   element + member nested tuple + range-seek `up_to`), composite `eligible`,
+   compound `memberships`; retire hex `SortKey` and the `Pair` suffix. filestorage
+   regtest green, API unchanged.
+4. **Covering + named compound keys** — `#[derive(Key)]` (named-field compound keys,
+   incl. multi-string); single-scalar covering if wanted.
+5. **Cleanup** — delete retired encodings, debug decoder, docs.
+
+# Risks
+
+- **Consensus format** — the encoded path is hashed; the codec must be exactly
+  canonical and identical guest/host. Mitigation: one shared crate, minimal-length
+  ints (no varint ambiguity), ordering-fuzz tests.
+- **Host query rewrite** — the `regexp`/`LIKE` logic is load-bearing (subtree
+  delete, `keys()`, variant resolution); each ports to byte ranges + Rust
+  extraction and must pass the existing query tests.
+- **Debuggability** — opaque BLOB paths; mitigated by the decode tool shipped with
+  the schema change.
+- **Scope** — a foundation swap across stdlib, WIT, the indexer, the DB schema, and
+  the macro at once. Taken deliberately pre-prod, on this branch, with the index
+  work re-expressed on top.
