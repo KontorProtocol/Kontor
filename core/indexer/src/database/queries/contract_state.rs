@@ -313,8 +313,16 @@ pub async fn matching_path(
         return Ok(None);
     };
     let full: Vec<u8> = row.get(0)?;
+    // The newest live row may be `base_path` ITSELF (a value stored at the path,
+    // with no variant segment after it) — that's not a variant, so report no match
+    // rather than decoding an empty suffix (which errors). Matches the old REGEXP
+    // post-filter, which treated such a row as non-matching.
+    let suffix = &full[base_path.len()..];
+    if suffix.is_empty() {
+        return Ok(None);
+    }
     // The variant discriminant is the first element after `base_path`.
-    let (elem, _) = next_element(&full[base_path.len()..]).map_err(Error::KeyCodec)?;
+    let (elem, _) = next_element(suffix).map_err(Error::KeyCodec)?;
     let (variant, _) = String::decode_from(elem).map_err(Error::KeyCodec)?;
     Ok(variants.contains(&variant).then_some(variant))
 }

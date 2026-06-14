@@ -1557,6 +1557,60 @@ async fn test_matching_path_stale_none_outranked_by_some() -> Result<()> {
     Ok(())
 }
 
+// Regression: the newest live row under `base_path` can be `base_path` ITSELF — a
+// value stored at the path with no variant segment after it. `matching_path` must
+// report no match (Ok(None)), not a codec error from decoding the empty suffix.
+#[tokio::test]
+async fn test_matching_path_on_bare_base_row() -> Result<()> {
+    let (_reader, writer, _temp_dir) = new_test_db().await?;
+    let conn = writer.connection();
+    let cid = 123;
+    let height = 800000;
+    insert_block(
+        &conn,
+        BlockRow::builder()
+            .height(height)
+            .hash(new_mock_block_hash(height as u32))
+            .build(),
+    )
+    .await?;
+    let tx = insert_transaction(
+        &conn,
+        TransactionRow::builder()
+            .height(height)
+            .txid(format!("eeee{:060}", 0))
+            .tx_index(0)
+            .confirmed_height(height)
+            .build(),
+    )
+    .await?;
+
+    // A value stored AT `c.opt` exactly — no variant child under it.
+    insert_contract_state(
+        &conn,
+        ContractStateRow::builder()
+            .contract_id(cid)
+            .tx_id(tx)
+            .height(height)
+            .path(cs_path_dotted("c.opt"))
+            .value(vec![1])
+            .build(),
+    )
+    .await?;
+
+    // No variant segment after base_path → no match, and crucially no error.
+    let found = matching_path(
+        &conn,
+        cid,
+        &cs_path_dotted("c.opt"),
+        &["none".to_string(), "some".to_string()],
+    )
+    .await?;
+    assert_eq!(found, None);
+
+    Ok(())
+}
+
 #[tokio::test]
 async fn test_contract_result_operations() -> Result<()> {
     let (_reader, writer, _temp_dir) = new_test_db().await?;
