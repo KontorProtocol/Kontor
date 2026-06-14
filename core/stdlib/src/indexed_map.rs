@@ -30,8 +30,8 @@ use alloc::format;
 use alloc::rc::Rc;
 use alloc::string::{String, ToString};
 use alloc::vec::Vec;
-use core::str::FromStr;
 
+use crate::keycodec::{self, KeyElement};
 use crate::{KeyPath, ReadStorage, Store, WriteStorage};
 
 /// The canonical string a value contributes to an index bucket. The SINGLE
@@ -105,136 +105,20 @@ impl IndexKey for Presence {
     }
 }
 
-/// An **order-preserving, fixed-width** path segment for *ordering* members
-/// within an index bucket: the lexicographic byte order of `sort_key()` equals
-/// the numeric order of the value. This is what lets a sortable index scan in
-/// value order and early-break, while storage stays the generic `contract_state`
-/// log (sortability lives in the key, never a column).
-///
-/// Distinct from [`IndexKey`], which only needs a *distinct, delimiter-free*
-/// bucket segment — order irrelevant. A field can be both (a `u64` buckets via
-/// `Display`, orders via `SortKey`).
-///
-/// Encoded as fixed-width **hex** so the segment is path-safe (printable, no
-/// `.`); `WIDTH` is the exact char count, which the scan strips to recover the
-/// primary key from a `<sort‖pk>` member segment. Signed types are sign-biased
-/// (flip the sign bit) so negatives sort before positives.
-pub trait SortKey: Sized {
-    /// Exact character width of every `sort_key()` for this type. Part of an
-    /// index's on-disk format (fixed for the life of the immutable contract).
-    const WIDTH: usize;
-    fn sort_key(&self) -> String;
-    /// Decode a `sort_key()` back to the value — the inverse of [`sort_key`], so a
-    /// fixed-width segment can carry a value that's recovered, not just compared
-    /// (e.g. the `B` tail of a [`Pair`] compound key). Panics on a malformed
-    /// segment, surfacing storage corruption rather than masking it.
-    ///
-    /// [`sort_key`]: SortKey::sort_key
-    fn from_sort_key(segment: &str) -> Self;
-}
-
-macro_rules! sort_key_unsigned {
-    ($($t:ty => $width:expr),* $(,)?) => {
-        $(
-            impl SortKey for $t {
-                const WIDTH: usize = $width;
-                fn sort_key(&self) -> String {
-                    alloc::format!("{:0width$x}", self, width = $width)
-                }
-                fn from_sort_key(segment: &str) -> Self {
-                    <$t>::from_str_radix(segment, 16).expect("malformed SortKey segment")
-                }
-            }
-        )*
-    };
-}
-sort_key_unsigned!(u8 => 2, u16 => 4, u32 => 8, u64 => 16);
-
-macro_rules! sort_key_signed {
-    ($($t:ty => $unsigned:ty, $width:expr),* $(,)?) => {
-        $(
-            impl SortKey for $t {
-                const WIDTH: usize = $width;
-                fn sort_key(&self) -> String {
-                    // Bias by 2^(bits-1) (flip the sign bit) so the most-negative
-                    // value maps to all-zero hex and ordering is preserved.
-                    let biased = (*self as $unsigned) ^ (1 as $unsigned).rotate_right(1);
-                    alloc::format!("{:0width$x}", biased, width = $width)
-                }
-                fn from_sort_key(segment: &str) -> Self {
-                    // Inverse of `sort_key`: decode the hex, then un-bias (XOR is its
-                    // own inverse) and cast back to the signed type.
-                    let biased = <$unsigned>::from_str_radix(segment, 16)
-                        .expect("malformed SortKey segment");
-                    (biased ^ (1 as $unsigned).rotate_right(1)) as $t
-                }
-            }
-        )*
-    };
-}
-sort_key_signed!(i8 => u8, 2, i16 => u16, 4, i32 => u32, 8, i64 => u64, 16);
-
-/// A two-part primary key `(A, B)` for `IndexedMap`/`Map`, encoded delimiter-safe
-/// as `<A><fixed-width B>`: `A`'s `Display` (which must be `.`-free — `.` is the
-/// path delimiter, and `push` rejects it) followed by `B`'s fixed-width
-/// [`SortKey`]. Recovered by splitting the known-width `B` suffix off the tail
-/// (unambiguous because `B` is fixed width and `A` is `.`-free). Sorts by `A` then
-/// `B`, so primary `keys()` iteration is ordered without `Pair` itself being a
-/// `SortKey`.
-///
-/// `A` is the *variable* part (typically a `String`); `B` the fixed-width part (a
-/// numeric `SortKey`) — e.g. `Pair<String, u64>` for `(agreement_id, node_id)`.
-#[derive(Clone, PartialEq, Eq, Debug)]
-pub struct Pair<A, B>(pub A, pub B);
-
-impl<A, B> Pair<A, B> {
-    pub fn new(a: A, b: B) -> Self {
-        Pair(a, b)
-    }
-}
-
-impl<A: core::fmt::Display, B: SortKey> core::fmt::Display for Pair<A, B> {
-    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        write!(f, "{}{}", self.0, self.1.sort_key())
-    }
-}
-
-impl<A, B> FromStr for Pair<A, B>
-where
-    A: FromStr,
-    <A as FromStr>::Err: core::fmt::Debug,
-    B: SortKey,
-{
-    type Err = String;
-
-    fn from_str(s: &str) -> Result<Self, String> {
-        if s.len() < B::WIDTH {
-            return Err(alloc::format!(
-                "Pair key {s:?} shorter than its {}-char B suffix",
-                B::WIDTH
-            ));
-        }
-        // `B::WIDTH` ASCII hex chars at the tail ⇒ the split is always on a char
-        // boundary, even when `A` carries multi-byte UTF-8.
-        let (a, b) = s.split_at(s.len() - B::WIDTH);
-        let a = A::from_str(a).map_err(|e| alloc::format!("Pair key A part {a:?}: {e:?}"))?;
-        Ok(Pair(a, B::from_sort_key(b)))
-    }
-}
-
-/// An ordered scan over a *sorted* index bucket. The bucket's child segments are
-/// `<sort‖pk>` (a fixed-width [`SortKey`] prefix followed by the primary key),
-/// already handed back in ascending path order by `keys()`. The scan strips the
-/// prefix — exactly [`SortKey::WIDTH`] chars for the sort type `S` — to recover
-/// each primary key `K`.
+/// An ordered scan over a *sorted* index bucket. Each member segment is one
+/// `(sort, pk)` nested-tuple element, handed back in ascending path order by
+/// `keys()` — which, because the codec is order-preserving and `sort` leads the
+/// tuple, is ascending by sort value (then primary key). Decoding the tuple yields
+/// `(S, K)`; the scan drops the sort field and keeps `K`. This is what lets a
+/// sortable index scan in value order and early-break, while storage stays the
+/// generic `contract_state` log (sortability lives in the key, never a column).
 ///
 /// Iterating it directly walks the whole bucket in sort order. [`up_to`] /
-/// [`range`] bound it by comparing the **encoded** SortKey prefix — a plain
-/// string compare, no decode — and early-break, so the contract pays only for the
-/// members it keeps (the host still materializes the bucket; see the module's
-/// cost note). The bound is typed `S` — the index's own sort field type — so its
-/// encoding can't be a different width than the stored prefix, and passing the
-/// wrong integer type is a compile error rather than a silent miscompare.
+/// [`range`] bound it on the **decoded** sort value `S` and early-break, so the
+/// contract pays only for the members it keeps (the host still materializes the
+/// bucket; see the module's cost note). The bound is typed `S` — the index's own
+/// sort field type — so the wrong type is a compile error, not a silent
+/// miscompare.
 ///
 /// [`up_to`]: SortedScan::up_to
 /// [`range`]: SortedScan::range
@@ -242,61 +126,43 @@ pub struct SortedScan<K, S> {
     // Boxed so the generated `where_<index>` can name a single return type
     // (`SortedScan<K, S>`) without threading the concrete `keys()` iterator type
     // through the lookup trait. One box per scan — negligible next to the bucket
-    // walk it wraps.
-    segments: alloc::boxed::Box<dyn Iterator<Item = String>>,
-    _key: core::marker::PhantomData<K>,
-    _sort: core::marker::PhantomData<S>,
+    // walk it wraps. Yields `(sort, pk)` in ascending order.
+    members: alloc::boxed::Box<dyn Iterator<Item = (S, K)>>,
 }
 
-impl<K, S> SortedScan<K, S>
-where
-    K: FromStr,
-    <K as FromStr>::Err: core::fmt::Debug,
-    S: SortKey,
-{
-    pub fn new(segments: alloc::boxed::Box<dyn Iterator<Item = String>>) -> Self {
-        Self {
-            segments,
-            _key: core::marker::PhantomData,
-            _sort: core::marker::PhantomData,
-        }
+impl<K, S> SortedScan<K, S> {
+    pub fn new(members: alloc::boxed::Box<dyn Iterator<Item = (S, K)>>) -> Self {
+        Self { members }
     }
+}
 
+impl<K, S: PartialOrd> SortedScan<K, S> {
     /// Members whose sort value is `≤ bound`, in ascending order. Early-breaks at
     /// the first member above the bound — nothing later in a sorted bucket can
     /// qualify.
     pub fn up_to(self, bound: S) -> impl Iterator<Item = K> {
-        let bound = bound.sort_key();
-        self.segments
-            .take_while(move |seg| seg[..S::WIDTH] <= bound[..])
-            .map(|seg| K::from_str(&seg[S::WIDTH..]).unwrap())
+        self.members
+            .take_while(move |(s, _)| *s <= bound)
+            .map(|(_, k)| k)
     }
 
     /// Members whose sort value is within `range` (inclusive), in ascending order.
     /// Skips below `lo`, then early-breaks past `hi`.
     pub fn range(self, range: core::ops::RangeInclusive<S>) -> impl Iterator<Item = K> {
-        let lo = range.start().sort_key();
-        let hi = range.end().sort_key();
-        self.segments
-            .skip_while(move |seg| seg[..S::WIDTH] < lo[..])
-            .take_while(move |seg| seg[..S::WIDTH] <= hi[..])
-            .map(|seg| K::from_str(&seg[S::WIDTH..]).unwrap())
+        let (lo, hi) = range.into_inner();
+        self.members
+            .skip_while(move |(s, _)| *s < lo)
+            .take_while(move |(s, _)| *s <= hi)
+            .map(|(_, k)| k)
     }
 }
 
-impl<K, S> Iterator for SortedScan<K, S>
-where
-    K: FromStr,
-    <K as FromStr>::Err: core::fmt::Debug,
-    S: SortKey,
-{
+impl<K, S> Iterator for SortedScan<K, S> {
     type Item = K;
 
     /// Unbounded walk of the bucket in sort order.
     fn next(&mut self) -> Option<K> {
-        self.segments
-            .next()
-            .map(|seg| K::from_str(&seg[S::WIDTH..]).unwrap())
+        self.members.next().map(|(_, k)| k)
     }
 }
 
@@ -306,15 +172,16 @@ where
 /// must be delimiter-free (`.`); [`apply_index_diff`] enforces it.
 ///
 /// `bucket` is a vec so a composite index can partition on several fields (one
-/// segment each, in declared order); a single-field index has one. `sort` is the
-/// fixed-width [`SortKey`] segment prepended to the primary key in the member
-/// segment, so the bucket scans in value order. (A covering projection will be
-/// added here later as the leaf *value*; the diff already keys on the leaf path
-/// so that stays additive.)
+/// segment each, in declared order); a single-field index has one — each an
+/// [`IndexKey`] string element (distinct partitioning, order irrelevant). `sort`
+/// is the sort field's **pre-encoded** codec element (`KeyElement::encode`), which
+/// leads the `(sort, pk)` member tuple so the bucket scans in value order. (A
+/// covering projection will be added here later as the leaf *value*; the diff
+/// already keys on the leaf path so that stays additive.)
 pub struct IndexEntry {
     pub name: &'static str,
     pub bucket: Vec<Cow<'static, str>>,
-    pub sort: Option<Cow<'static, str>>,
+    pub sort: Option<Vec<u8>>,
 }
 
 impl IndexEntry {
@@ -328,16 +195,18 @@ impl IndexEntry {
         path
     }
 
-    /// The member segment `<sort‖pk>`: the sort key (fixed width) prepended to the
-    /// primary key, or just the primary key when unsorted.
-    fn member_segment(&self, key: &str) -> String {
+    /// The member element: the `(sort, pk)` nested tuple (so the bucket sorts by
+    /// value, then key), or just the primary-key element when unsorted. `key` is
+    /// the already-encoded primary-key element. Both inputs are full codec
+    /// elements, so packing them is a tuple wrap.
+    fn member_element(&self, key: &[u8]) -> Vec<u8> {
         match &self.sort {
-            Some(sort) => alloc::format!("{sort}{key}"),
-            None => key.to_string(),
+            Some(sort) => keycodec::tuple_from_elements(&[sort, key]),
+            None => key.to_vec(),
         }
     }
 
-    /// Two entries share a leaf (same `<index>/<bucket…>/<sort‖pk>`) iff they agree
+    /// Two entries share a leaf (same `<index>/<bucket…>/<member>`) iff they agree
     /// on name+bucket+sort. The diff keys on this; a future covering projection is
     /// the leaf *value*, updated in place when the path matches.
     fn same_leaf(&self, other: &IndexEntry) -> bool {
@@ -351,21 +220,16 @@ pub trait Indexed {
     fn index_entries(&self) -> Vec<IndexEntry>;
 }
 
-/// A path segment carries one index/primary key. `.` is the path delimiter, so a
-/// key containing it would silently split into extra segments and alias or
-/// corrupt the index. Indexes are only correct if their keys are delimiter-free,
-/// so we reject the violation loudly rather than store an unfindable row.
-fn assert_segment(s: &str) {
-    assert!(
-        !s.contains('.'),
-        "index/primary key must not contain the path delimiter '.': {s:?}"
-    );
-}
-
 /// Reconcile one key's index rows from `old` to `new`: delete entries in `old`
 /// that aren't in `new`, write entries in `new` that weren't in `old`. Unchanged
 /// entries are left untouched (zero ops). Index roots are siblings of the
 /// primary map.
+///
+/// `key` is the primary key's already-encoded codec element. Type-erased (raw
+/// bytes, not generic `K`) so this stays the one audited routine every caller —
+/// of differing key types — funnels through; the typed call sites encode. Because
+/// every segment is now a self-delimiting codec element, a key may contain any
+/// content (no delimiter to alias on — what the old `.`-join had to reject).
 ///
 /// The caller computes `old`/`new`: the field model's `set`/`remove` load the
 /// prior value and read its `Indexed::index_entries`; an in-place indexed-field
@@ -375,11 +239,10 @@ fn assert_segment(s: &str) {
 pub fn apply_index_diff<S: WriteStorage + ReadStorage + ?Sized>(
     ctx: &Rc<S>,
     index_root: &KeyPath,
-    key: &str,
+    key: &[u8],
     old: &[IndexEntry],
     new: &[IndexEntry],
 ) {
-    assert_segment(key);
     for entry in old {
         if !new.iter().any(|n| n.same_leaf(entry)) {
             let bucket = entry.bucket_path(index_root);
@@ -388,18 +251,15 @@ pub fn apply_index_diff<S: WriteStorage + ReadStorage + ?Sized>(
             // tombstoned or never written — an index/count that drifted); counting
             // that as a removal would underflow the bucket count and trap. The
             // delete result is the authority on whether membership changed.
-            if ctx.__delete(&bucket.push(entry.member_segment(key))) {
+            if ctx.__delete(&bucket.push_raw_element(&entry.member_element(key))) {
                 bump_bucket_count(ctx, &bucket, false);
             }
         }
     }
     for entry in new {
-        for segment in &entry.bucket {
-            assert_segment(segment);
-        }
         if !old.iter().any(|o| o.same_leaf(entry)) {
             let bucket = entry.bucket_path(index_root);
-            ctx.__set_void(&bucket.push(entry.member_segment(key)));
+            ctx.__set_void(&bucket.push_raw_element(&entry.member_element(key)));
             bump_bucket_count(ctx, &bucket, true);
         }
     }
@@ -443,7 +303,7 @@ storage_placeholder!(
 
 impl<K, V, S> Store<S> for StorageIndexedMap<K, V, S>
 where
-    K: ToString + FromStr + Clone,
+    K: KeyElement + Clone,
     V: Store<S> + Clone + Indexed,
     S: WriteStorage + ReadStorage + ?Sized,
 {
@@ -458,10 +318,10 @@ where
         let Some(last) = last else { return };
         let index_root = parent.push(format!("{last}#idx"));
         for (k, v) in value.entries.into_iter() {
-            let key_str = k.to_string();
+            let key_bytes = k.encode();
             let new_entries = v.index_entries();
-            apply_index_diff(ctx, &index_root, &key_str, &[], &new_entries);
-            ctx.__set(base_path.push(key_str.as_str()), v);
+            apply_index_diff(ctx, &index_root, &key_bytes, &[], &new_entries);
+            ctx.__set(base_path.push_element(&k), v);
         }
     }
 }
@@ -470,11 +330,10 @@ where
 mod tests {
     use super::*;
     use crate::ReadStorage;
-    use crate::keycodec::{KeyElement, next_element};
+    use crate::keycodec::next_element;
     use alloc::collections::BTreeMap;
     use alloc::vec;
     use core::cell::RefCell;
-    use core::fmt::Debug;
 
     #[derive(Clone)]
     enum Cell {
@@ -496,13 +355,10 @@ mod tests {
                 _ => None,
             }
         }
-        fn __get_keys<T: ToString + FromStr + Clone>(
+        fn __get_keys<T: KeyElement + Clone>(
             self: &Rc<Self>,
             path: &[u8],
-        ) -> impl Iterator<Item = T> + use<T>
-        where
-            <T as FromStr>::Err: Debug,
-        {
+        ) -> impl Iterator<Item = T> + use<T> {
             // Distinct child elements: byte-prefix the path, take the next element
             // of the suffix (mirrors the host's `next_element` extraction).
             let mut elems: Vec<Vec<u8>> = self
@@ -520,8 +376,8 @@ mod tests {
             elems.sort();
             elems.dedup();
             elems.into_iter().map(|e| {
-                let (s, _) = String::decode_from(&e).unwrap();
-                T::from_str(&s).unwrap()
+                let (v, _) = T::decode_from(&e).unwrap();
+                v
             })
         }
         fn __get<T: crate::Retrieve<Self>>(self: &Rc<Self>, path: KeyPath) -> Option<T> {
@@ -579,14 +435,25 @@ mod tests {
         }
     }
 
-    // A path from a dotted string (each piece a segment) → codec bytes.
+    // A path from a dotted string (each piece a string-element segment) → codec bytes.
     fn p(s: &str) -> KeyPath {
         KeyPath::from(s)
     }
 
-    // Codec bytes for an exact path string (for asserting on the Mock's map).
+    // Codec bytes for an exact string-element path (for asserting on the Mock's map).
     fn pb(s: &str) -> Vec<u8> {
         p(s).as_bytes().to_vec()
+    }
+
+    // Codec bytes of a `KeyPath` (e.g. one ending in a typed key element).
+    fn b(path: KeyPath) -> Vec<u8> {
+        path.as_bytes().to_vec()
+    }
+
+    // A primary key encoded as its codec element (what `apply_index_diff` takes,
+    // and the member segment of an unsorted index).
+    fn kb(k: impl KeyElement) -> Vec<u8> {
+        k.encode()
     }
 
     // A single-field index entry (one bucket segment, unsorted) — the shape the
@@ -628,7 +495,7 @@ mod tests {
         apply_index_diff(
             &ctx,
             &index,
-            "k",
+            &kb("k".to_string()),
             &[],
             &[e("status", "active"), e("owner", "1")],
         );
@@ -640,7 +507,7 @@ mod tests {
         apply_index_diff(
             &ctx,
             &index,
-            "k",
+            &kb("k".to_string()),
             &[e("status", "active"), e("owner", "1")],
             &[e("status", "proven"), e("owner", "1")],
         );
@@ -651,7 +518,7 @@ mod tests {
         *ctx.void_sets.borrow_mut() = 0;
         *ctx.deletes.borrow_mut() = 0;
         let same = [e("status", "proven"), e("owner", "1")];
-        apply_index_diff(&ctx, &index, "k", &same, &same);
+        apply_index_diff(&ctx, &index, &kb("k".to_string()), &same, &same);
         assert_eq!(*ctx.deletes.borrow(), 0);
         assert_eq!(*ctx.void_sets.borrow(), 0);
 
@@ -679,7 +546,7 @@ mod tests {
         // `old` claims `k` is in the `status.active` bucket, but no void row was
         // ever written there and the count is unset (0). Removing it is a no-op
         // delete; an unconditional decrement would `checked_sub(0)` → trap.
-        apply_index_diff(&ctx, &index, "k", &[e("status", "active")], &[]);
+        apply_index_diff(&ctx, &index, &kb("k".to_string()), &[e("status", "active")], &[]);
 
         // Reaching here means no trap. The delete was attempted but removed
         // nothing, so the (absent) count was left untouched.
@@ -700,14 +567,21 @@ mod tests {
 
         Store::__set(&ctx, p("positions"), m);
 
-        // Primary values (stored under the value's own field path).
-        assert_eq!(ctx.__get_u64(&pb("positions.1.status")), Some(2));
-        assert_eq!(ctx.__get_u64(&pb("positions.3.status")), Some(5));
+        // Primary values (stored under the value's own field path; the u64 map key
+        // is a native int element, not a stringified segment).
+        assert_eq!(
+            ctx.__get_u64(&b(p("positions").push_element(&1u64).push("status"))),
+            Some(2)
+        );
+        assert_eq!(
+            ctx.__get_u64(&b(p("positions").push_element(&3u64).push("status"))),
+            Some(5)
+        );
 
-        // Index rows, in the `#idx` sibling.
-        assert!(ctx.__exists(&pb("positions#idx.status.2.1")));
-        assert!(ctx.__exists(&pb("positions#idx.status.2.2")));
-        assert!(ctx.__exists(&pb("positions#idx.status.5.3")));
+        // Index rows, in the `#idx` sibling. The member is the u64 primary key.
+        assert!(ctx.__exists(&b(p("positions#idx.status.2").push_element(&1u64))));
+        assert!(ctx.__exists(&b(p("positions#idx.status.2").push_element(&2u64))));
+        assert!(ctx.__exists(&b(p("positions#idx.status.5").push_element(&3u64))));
 
         // by_index resolves to the primary keys.
         let bucket = p("positions#idx").push("status").push("2");
@@ -754,12 +628,15 @@ mod tests {
         Store::__set(&ctx, p("account"), account);
 
         // Primary values land under the nested path.
-        assert_eq!(ctx.__get_u64(&pb("account.positions.1.status")), Some(2));
+        assert_eq!(
+            ctx.__get_u64(&b(p("account.positions").push_element(&1u64).push("status"))),
+            Some(2)
+        );
 
         // Index rows are the `#idx` sibling *at depth* — same path the field
         // model would build (parent `account` + `positions#idx`).
-        assert!(ctx.__exists(&pb("account.positions#idx.status.2.1")));
-        assert!(ctx.__exists(&pb("account.positions#idx.status.5.2")));
+        assert!(ctx.__exists(&b(p("account.positions#idx.status.2").push_element(&1u64))));
+        assert!(ctx.__exists(&b(p("account.positions#idx.status.5").push_element(&2u64))));
 
         let bucket = p("account.positions#idx").push("status").push("2");
         assert_eq!(ctx.__get_keys::<u64>(&bucket).collect::<Vec<_>>(), vec![1]);
@@ -789,10 +666,28 @@ mod tests {
 
         Store::__set(&ctx, p("accounts"), accounts);
 
-        // Inner index rows land at the nested depth for each map entry.
-        assert!(ctx.__exists(&pb("accounts.7.positions#idx.status.2.1")));
-        assert!(ctx.__exists(&pb("accounts.8.positions#idx.status.5.1")));
-        assert_eq!(ctx.__get_u64(&pb("accounts.7.positions.1.status")), Some(2));
+        // Inner index rows land at the nested depth for each map entry (outer and
+        // inner keys are u64 elements; the bucket segments are strings).
+        assert!(ctx.__exists(&b(p("accounts")
+            .push_element(&7u64)
+            .push("positions#idx")
+            .push("status")
+            .push("2")
+            .push_element(&1u64))));
+        assert!(ctx.__exists(&b(p("accounts")
+            .push_element(&8u64)
+            .push("positions#idx")
+            .push("status")
+            .push("5")
+            .push_element(&1u64))));
+        assert_eq!(
+            ctx.__get_u64(&b(p("accounts")
+                .push_element(&7u64)
+                .push("positions")
+                .push_element(&1u64)
+                .push("status"))),
+            Some(2)
+        );
     }
 
     // A plain `Map` nested inside an IndexedMap *value*. The outer index is keyed
@@ -829,78 +724,34 @@ mod tests {
 
         Store::__set(&ctx, p("bags"), bags);
 
-        // Outer index maintained by the value's `tag`.
-        assert!(ctx.__exists(&pb("bags#idx.tag.9.1")));
-        // Inner map data persisted under the value's path.
-        assert_eq!(ctx.__get_u64(&pb("bags.1.items.100")), Some(1));
-        assert_eq!(ctx.__get_u64(&pb("bags.1.items.200")), Some(2));
-    }
-
-    #[test]
-    #[should_panic(expected = "path delimiter")]
-    fn rejects_dotted_index_key() {
-        let ctx = Rc::new(Mock::default());
-        apply_index_diff(&ctx, &p("t#idx"), "k", &[], &[e("name", "a.b")]);
-    }
-
-    #[test]
-    fn sort_key_is_order_preserving_and_fixed_width() {
-        // Unsigned: lexicographic == numeric, fixed width.
-        assert!(0u64.sort_key() < 1u64.sort_key());
-        assert!(1u64.sort_key() < 256u64.sort_key());
-        assert!((u64::MAX - 1).sort_key() < u64::MAX.sort_key());
-        assert_eq!(0u64.sort_key().len(), <u64 as SortKey>::WIDTH);
-        assert_eq!(u64::MAX.sort_key().len(), 16);
-        assert_eq!(0u8.sort_key().len(), 2);
-        assert_eq!(0u32.sort_key().len(), 8);
-
-        // Signed: negatives sort before positives, monotone across zero.
-        assert!(i64::MIN.sort_key() < (-1i64).sort_key());
-        assert!((-1i64).sort_key() < 0i64.sort_key());
-        assert!(0i64.sort_key() < 1i64.sort_key());
-        assert!(1i64.sort_key() < i64::MAX.sort_key());
-        assert_eq!((-1i64).sort_key().len(), 16);
-        assert_eq!(i8::MIN.sort_key(), "00");
-        assert_eq!(0i8.sort_key(), "80");
-        assert_eq!(i8::MAX.sort_key(), "ff");
-    }
-
-    // SortKey encode/decode is a bijection, so a fixed-width segment can carry a
-    // value that's recovered (the `B` tail of a `Pair`), not just compared.
-    #[test]
-    fn sort_key_decode_round_trips() {
-        for v in [0u64, 1, 255, u64::MAX] {
-            assert_eq!(u64::from_sort_key(&v.sort_key()), v);
-        }
-        for v in [i64::MIN, -1, 0, 1, i64::MAX] {
-            assert_eq!(i64::from_sort_key(&v.sort_key()), v);
-        }
-        assert_eq!(i8::from_sort_key(&i8::MIN.sort_key()), i8::MIN);
-        assert_eq!(u8::from_sort_key(&200u8.sort_key()), 200);
-    }
-
-    // A compound `Pair<String, u64>` primary key round-trips and sorts by (A, B) —
-    // so an `IndexedMap` keyed on it iterates in key order.
-    #[test]
-    fn pair_compound_key_round_trips_and_orders() {
-        let k = Pair::new("agreement-7".to_string(), 42u64);
-        let s = k.to_string();
-        assert_eq!(s, alloc::format!("agreement-7{}", 42u64.sort_key()));
-        assert_eq!(Pair::<String, u64>::from_str(&s).unwrap(), k);
-
-        // Sorts by A, then by B within an A.
-        let a = Pair::new("a".to_string(), 2u64).to_string();
-        let b = Pair::new("a".to_string(), 10u64).to_string();
-        let c = Pair::new("b".to_string(), 1u64).to_string();
-        assert!(a < b); // same A: 2 < 10
-        assert!(b < c); // "a" < "b" regardless of B
-
-        // Empty A is fine (suffix is the whole string).
-        let empty = Pair::new(String::new(), 5u64);
+        // Outer index maintained by the value's `tag` (member is the u64 key 1).
+        assert!(ctx.__exists(&b(p("bags#idx.tag.9").push_element(&1u64))));
+        // Inner map data persisted under the value's path (u64 key + u64 item keys).
         assert_eq!(
-            Pair::<String, u64>::from_str(&empty.to_string()).unwrap(),
-            empty
+            ctx.__get_u64(&b(p("bags").push_element(&1u64).push("items").push_element(&100u64))),
+            Some(1)
         );
+        assert_eq!(
+            ctx.__get_u64(&b(p("bags").push_element(&1u64).push("items").push_element(&200u64))),
+            Some(2)
+        );
+    }
+
+    // A primary key may now contain the old path delimiter `.`: every segment is a
+    // self-delimiting codec element, so a `.` is just content — distinct, recoverable
+    // bytes — not a separator that aliases (what the old `.`-join had to reject).
+    #[test]
+    fn dotted_keys_are_just_content() {
+        let ctx = Rc::new(Mock::default());
+        let index = p("t#idx");
+        apply_index_diff(&ctx, &index, &kb("a.b".to_string()), &[], &[e("name", "x")]);
+        apply_index_diff(&ctx, &index, &kb("a".to_string()), &[], &[e("name", "x")]);
+        // Distinct members despite the `.` — both live under the same bucket.
+        let bucket = p("t#idx.name.x");
+        let mut keys: Vec<String> = ctx.__get_keys(&bucket).collect();
+        keys.sort();
+        assert_eq!(keys, alloc::vec!["a".to_string(), "a.b".to_string()]);
+        assert_eq!(ctx.__get_u64(&pb("t#idx.name.x")), Some(2));
     }
 
     // A composite index buckets on more than one segment (`<a>/<b>`). The member
@@ -916,9 +767,9 @@ mod tests {
             bucket: alloc::vec![active.to_string().into(), presence.to_string().into()],
             sort: None,
         };
-        apply_index_diff(&ctx, &index, "k1", &[], &[entry("true", "none")]);
-        apply_index_diff(&ctx, &index, "k2", &[], &[entry("true", "none")]);
-        apply_index_diff(&ctx, &index, "k3", &[], &[entry("true", "some")]);
+        apply_index_diff(&ctx, &index, &kb("k1".to_string()), &[], &[entry("true", "none")]);
+        apply_index_diff(&ctx, &index, &kb("k2".to_string()), &[], &[entry("true", "none")]);
+        apply_index_diff(&ctx, &index, &kb("k3".to_string()), &[], &[entry("true", "some")]);
 
         assert!(ctx.__exists(&pb("a#idx.eligible.true.none.k1")));
         assert!(ctx.__exists(&pb("a#idx.eligible.true.some.k3")));
@@ -935,7 +786,7 @@ mod tests {
         apply_index_diff(
             &ctx,
             &index,
-            "k1",
+            &kb("k1".to_string()),
             &[entry("true", "none")],
             &[entry("true", "some")],
         );
@@ -955,22 +806,21 @@ mod tests {
         assert_eq!(Some(7u64).index_key(), "some");
     }
 
-    // SortedScan in isolation: strip the fixed-width sort prefix to recover K, and
-    // bound on the ENCODED prefix (a string compare, no decode).
+    // SortedScan in isolation: yields K in sort order and bounds on the decoded
+    // sort value `S` (no width/prefix arithmetic — the member is a typed tuple).
     #[test]
-    fn sorted_scan_strips_prefix_and_bounds() {
-        // width-4 (u16) sort prefix + a single-char primary key, ascending.
-        let segs = || {
+    fn sorted_scan_bounds_on_decoded_value() {
+        let members = || {
             alloc::boxed::Box::new(
                 alloc::vec![
-                    alloc::format!("{}a", 1u16.sort_key()),
-                    alloc::format!("{}b", 3u16.sort_key()),
-                    alloc::format!("{}c", 5u16.sort_key()),
+                    (1u16, "a".to_string()),
+                    (3u16, "b".to_string()),
+                    (5u16, "c".to_string()),
                 ]
                 .into_iter(),
-            ) as alloc::boxed::Box<dyn Iterator<Item = String>>
+            ) as alloc::boxed::Box<dyn Iterator<Item = (u16, String)>>
         };
-        let scan = || SortedScan::<String, u16>::new(segs());
+        let scan = || SortedScan::<String, u16>::new(members());
 
         assert_eq!(scan().collect::<Vec<_>>(), vec!["a", "b", "c"]);
         // up_to is inclusive and early-breaks past the bound.
@@ -981,27 +831,29 @@ mod tests {
         assert_eq!(scan().range(2u16..=2u16).collect::<Vec<_>>(), Vec::<String>::new());
     }
 
-    // End-to-end: a sorted index entry writes a `<sort‖pk>` member, and a
+    // End-to-end: a sorted index entry writes an `(sort, pk)` tuple member, and a
     // SortedScan over that bucket recovers the keys in value order regardless of
     // insertion order — the shape `where_<index>` builds.
     #[test]
     fn sorted_scan_over_bucket_recovers_keys_in_order() {
         let ctx = Rc::new(Mock::default());
         let index = p("t#idx");
-        // Index "due", bucket "active", sorted by a u64 height.
+        // Index "due", bucket "active", sorted by a u64 height (pre-encoded element).
         let entry = |height: u64| IndexEntry {
             name: "due",
             bucket: alloc::vec!["active".to_string().into()],
-            sort: Some(height.sort_key().into()),
+            sort: Some(height.encode()),
         };
         // Insert out of order.
-        apply_index_diff(&ctx, &index, "c", &[], &[entry(30)]);
-        apply_index_diff(&ctx, &index, "a", &[], &[entry(10)]);
-        apply_index_diff(&ctx, &index, "b", &[], &[entry(20)]);
+        apply_index_diff(&ctx, &index, &kb("c".to_string()), &[], &[entry(30)]);
+        apply_index_diff(&ctx, &index, &kb("a".to_string()), &[], &[entry(10)]);
+        apply_index_diff(&ctx, &index, &kb("b".to_string()), &[], &[entry(20)]);
 
         let bucket = index.push("due").push("active");
         let scan = || {
-            SortedScan::<String, u64>::new(alloc::boxed::Box::new(ctx.__get_keys::<String>(&bucket)))
+            SortedScan::<String, u64>::new(alloc::boxed::Box::new(
+                ctx.__get_keys::<(u64, String)>(&bucket),
+            ))
         };
         assert_eq!(scan().collect::<Vec<_>>(), vec!["a", "b", "c"]);
         assert_eq!(scan().up_to(20u64).collect::<Vec<_>>(), vec!["a", "b"]);

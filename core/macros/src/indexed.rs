@@ -140,8 +140,7 @@ pub fn generate_lookup_trait(
     quote! {
         pub trait #trait_name<K>
         where
-            K: alloc::string::ToString + core::str::FromStr + Clone,
-            <K as core::str::FromStr>::Err: core::fmt::Debug,
+            K: stdlib::KeyElement + Clone,
         {
             /// Raw bucket scan — yields the primary keys of an unsorted index
             /// bucket, identified by its segments `<bucket…>` (one per `by` field).
@@ -150,12 +149,11 @@ pub fn generate_lookup_trait(
             /// strings.
             fn by_index(&self, index_name: &str, bucket: &[&str]) -> impl Iterator<Item = K> + use<Self, K>;
 
-            /// Ordered bucket scan for a *sorted* index: the bucket's `<sort‖pk>`
-            /// child segments, wrapped in a `SortedScan` that strips the
-            /// `S::WIDTH`-char prefix to yield `K` and bounds `up_to`/`range` on the
-            /// encoded prefix. `S` is the index's sort field type, so the bound type
-            /// and the stored prefix width can't disagree.
-            fn by_index_sorted<S: stdlib::SortKey>(&self, index_name: &str, bucket: &[&str]) -> stdlib::SortedScan<K, S>;
+            /// Ordered bucket scan for a *sorted* index: the bucket's `(sort, pk)`
+            /// tuple child members, wrapped in a `SortedScan` that yields `K` in sort
+            /// order and bounds `up_to`/`range` on the decoded sort value. `S` is the
+            /// index's sort field type, so the wrong bound type is a compile error.
+            fn by_index_sorted<S: stdlib::KeyElement + Clone + 'static>(&self, index_name: &str, bucket: &[&str]) -> stdlib::SortedScan<K, S>;
 
             /// O(1) member count of an `(index_name, bucket…)` bucket, the
             /// framework-maintained size of what the scans would walk.

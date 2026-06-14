@@ -48,6 +48,9 @@ pub enum CodecError {
     Overflow,
     /// A string element wasn't valid UTF-8.
     Utf8,
+    /// A stringly-encoded element decoded as valid UTF-8 but didn't parse back
+    /// into its domain type (a `key_element_via_display!` type's `FromStr` failed).
+    FromStr,
 }
 
 /// A value that encodes to one order-preserving key element and decodes back.
@@ -311,6 +314,44 @@ macro_rules! key_element_tuple {
 key_element_tuple!(A, B);
 key_element_tuple!(A, B, C);
 key_element_tuple!(A, B, C, D);
+
+/// Pack several already-encoded elements into one nested-tuple element, ordered
+/// by the sequence of `parts` — the same bytes `(A, B, …)::encode_to` produces,
+/// but from parts whose Rust types differ per call (so a uniform, type-erased
+/// caller like the index-diff can build an `(sort, pk)` member). Each part MUST be
+/// exactly one encoded element; the result decodes via the matching tuple
+/// `KeyElement`.
+pub fn tuple_from_elements(parts: &[&[u8]]) -> Vec<u8> {
+    let mut out = Vec::new();
+    out.push(TAG_TUPLE);
+    for part in parts {
+        out.extend_from_slice(part);
+    }
+    out.push(TERM);
+    out
+}
+
+/// Derive [`KeyElement`] for a domain type that is keyed by its canonical string
+/// form: it encodes as a string element via `Display` and decodes via `FromStr`.
+/// For types (e.g. the built-in `Holder`) whose distinct/ordered string identity
+/// is the right key and that already round-trip through `Display`/`FromStr`.
+#[macro_export]
+macro_rules! key_element_via_display {
+    ($ty:ty) => {
+        impl $crate::KeyElement for $ty {
+            fn encode_to(&self, out: &mut alloc::vec::Vec<u8>) {
+                $crate::KeyElement::encode_to(&alloc::string::ToString::to_string(self), out)
+            }
+            fn decode_from(bytes: &[u8]) -> Result<(Self, &[u8]), $crate::CodecError> {
+                let (s, rest) =
+                    <alloc::string::String as $crate::KeyElement>::decode_from(bytes)?;
+                let v = <Self as core::str::FromStr>::from_str(&s)
+                    .map_err(|_| $crate::CodecError::FromStr)?;
+                Ok((v, rest))
+            }
+        }
+    };
+}
 
 // ── schema-agnostic helpers (host side) ────────────────────────────────────
 

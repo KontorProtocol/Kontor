@@ -61,12 +61,12 @@ pub fn generate_struct(
                     let setter = if write {
                         quote! {
                             pub fn set(&self, key: &#k_ty, value: #v_ty) {
-                                stdlib::WriteStorage::__set(&self.ctx, self.base_path.push(key.to_string()), value)
+                                stdlib::WriteStorage::__set(&self.ctx, self.base_path.push_element(key), value)
                             }
 
                             /// Remove a single entry (tombstone). Returns true if a live value existed.
                             pub fn remove(&self, key: &#k_ty) -> bool {
-                                stdlib::WriteStorage::__delete(&self.ctx, &self.base_path.push(key.to_string()))
+                                stdlib::WriteStorage::__delete(&self.ctx, &self.base_path.push_element(key))
                             }
                         }
                     } else {
@@ -82,7 +82,7 @@ pub fn generate_struct(
 
                         impl #field_model_name {
                             pub fn get(&self, key: &#k_ty) -> #get_return {
-                                let base_path = self.base_path.push(key.to_string());
+                                let base_path = self.base_path.push_element(key);
                                 #get_body
                             }
 
@@ -126,7 +126,7 @@ pub fn generate_struct(
                     // On the write model, bind the returned value model to this
                     // index so its indexed-field setters reconcile in place.
                     let with_index_call = if write {
-                        quote! { .with_index(self.index_path.clone(), key.to_string()) }
+                        quote! { .with_index(self.index_path.clone(), stdlib::KeyElement::encode(key)) }
                     } else {
                         quote! {}
                     };
@@ -139,19 +139,19 @@ pub fn generate_struct(
                     let mutators = if write {
                         quote! {
                             pub fn set(&self, key: &#k_ty, value: #v_ty) {
-                                let key_str = key.to_string();
+                                let key_bytes = stdlib::KeyElement::encode(key);
                                 let new_entries = stdlib::Indexed::index_entries(&value);
                                 let old_entries = self.get(key).map(|m| m.__index_entries()).unwrap_or_default();
-                                stdlib::apply_index_diff(&self.ctx, &self.index_path, &key_str, &old_entries, &new_entries);
-                                stdlib::WriteStorage::__set(&self.ctx, self.base_path.push(key_str), value);
+                                stdlib::apply_index_diff(&self.ctx, &self.index_path, &key_bytes, &old_entries, &new_entries);
+                                stdlib::WriteStorage::__set(&self.ctx, self.base_path.push_element(key), value);
                             }
 
                             /// Remove the entry and its index rows. Returns true if a live value existed.
                             pub fn remove(&self, key: &#k_ty) -> bool {
-                                let key_str = key.to_string();
+                                let key_bytes = stdlib::KeyElement::encode(key);
                                 let old_entries = self.get(key).map(|m| m.__index_entries()).unwrap_or_default();
-                                stdlib::apply_index_diff(&self.ctx, &self.index_path, &key_str, &old_entries, &[]);
-                                stdlib::WriteStorage::__delete(&self.ctx, &self.base_path.push(key_str))
+                                stdlib::apply_index_diff(&self.ctx, &self.index_path, &key_bytes, &old_entries, &[]);
+                                stdlib::WriteStorage::__delete(&self.ctx, &self.base_path.push_element(key))
                             }
                         }
                     } else {
@@ -168,7 +168,7 @@ pub fn generate_struct(
 
                         impl #field_model_name {
                             pub fn get(&self, key: &#k_ty) -> Option<#v_model_ty> {
-                                let base_path = self.base_path.push(key.to_string());
+                                let base_path = self.base_path.push_element(key);
                                 stdlib::ReadStorage::__exists(&self.ctx, &base_path).then(|| #v_model_ty::new(self.ctx.clone(), base_path)#with_index_call)
                             }
 
@@ -193,15 +193,13 @@ pub fn generate_struct(
                                 stdlib::ReadStorage::__get_keys(&self.ctx, &bucket)
                             }
 
-                            fn by_index_sorted<S: stdlib::SortKey>(&self, index_name: &str, bucket: &[&str]) -> stdlib::SortedScan<#k_ty, S> {
+                            fn by_index_sorted<S: stdlib::KeyElement + Clone + 'static>(&self, index_name: &str, bucket: &[&str]) -> stdlib::SortedScan<#k_ty, S> {
                                 let bucket = bucket.iter().fold(self.index_path.push(index_name), |p, seg| p.push(*seg));
-                                // Member segments are `<sort‖pk>`; pull them raw (as
-                                // `String`) so the fixed-width sort prefix survives —
-                                // parsing straight into the key type would choke on
-                                // it. `SortedScan` strips the prefix (`S::WIDTH`) to
-                                // recover `K`.
-                                let segments = stdlib::ReadStorage::__get_keys::<alloc::string::String>(&self.ctx, &bucket);
-                                stdlib::SortedScan::new(alloc::boxed::Box::new(segments))
+                                // Each member is one `(sort, pk)` tuple element; decode
+                                // it directly. `SortedScan` drops the sort field, yields
+                                // `K` in value order, and bounds on the decoded sort.
+                                let members = stdlib::ReadStorage::__get_keys::<(S, #k_ty)>(&self.ctx, &bucket);
+                                stdlib::SortedScan::new(alloc::boxed::Box::new(members))
                             }
 
                             fn bucket_count(&self, index_name: &str, bucket: &[&str]) -> u64 {
@@ -483,11 +481,11 @@ pub fn generate_struct(
             let (binding_field, binding_init, with_index_method) = if write && has_indexed {
                 (
                     quote! {
-                        index_binding: Option<(stdlib::KeyPath, alloc::string::String)>,
+                        index_binding: Option<(stdlib::KeyPath, alloc::vec::Vec<u8>)>,
                     },
                     quote! { index_binding: None, },
                     quote! {
-                        pub fn with_index(mut self, index_root: stdlib::KeyPath, index_key: alloc::string::String) -> Self {
+                        pub fn with_index(mut self, index_root: stdlib::KeyPath, index_key: alloc::vec::Vec<u8>) -> Self {
                             self.index_binding = Some((index_root, index_key));
                             self
                         }

@@ -150,7 +150,6 @@ pub fn generate(config: Config) -> TokenStream {
             string::{String, ToString},
             vec::Vec,
         };
-        use core::{fmt::Debug, str::FromStr};
 
         wit_bindgen::generate!({
             world: "root",
@@ -208,10 +207,7 @@ pub fn generate(config: Config) -> TokenStream {
                 self.get_list_u8(path)
             }
 
-            fn __get_keys<T: ToString + FromStr + Clone>(self: &alloc::rc::Rc<Self>, path: &[u8]) -> impl Iterator<Item = T> + use<T>
-            where
-                <T as FromStr>::Err: Debug,
-            {
+            fn __get_keys<T: stdlib::KeyElement + Clone>(self: &alloc::rc::Rc<Self>, path: &[u8]) -> impl Iterator<Item = T> + use<T> {
                 stdlib::make_keys_iterator(self.get_keys(path))
             }
 
@@ -250,10 +246,7 @@ pub fn generate(config: Config) -> TokenStream {
                 self.get_list_u8(path)
             }
 
-            fn __get_keys<T: ToString + FromStr + Clone>(self: &alloc::rc::Rc<Self>, path: &[u8]) -> impl Iterator<Item = T> + use<T>
-            where
-                <T as FromStr>::Err: Debug,
-            {
+            fn __get_keys<T: stdlib::KeyElement + Clone>(self: &alloc::rc::Rc<Self>, path: &[u8]) -> impl Iterator<Item = T> + use<T> {
                 stdlib::make_keys_iterator(self.get_keys(path))
             }
 
@@ -362,6 +355,10 @@ pub fn generate(config: Config) -> TokenStream {
                 stdlib::WriteStorage::__set_str(ctx, &path, &value.to_string());
             }
         }
+
+        // A `Map<Holder, _>` keys on the Holder's canonical string identity: it
+        // encodes as a string element (`Display`) and decodes via `FromStr`.
+        stdlib::key_element_via_display!(context::Holder);
 
         impl Retrieve<crate::context::ViewStorage> for numbers::Integer {
             fn __get(ctx: &alloc::rc::Rc<crate::context::ViewStorage>, path: stdlib::KeyPath) -> Option<Self> {

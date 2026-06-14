@@ -51,7 +51,7 @@ const REGTEST_S_CHAL: u64 = 8;
 //   challenges            indexed by `status` → where_status(ChallengeStatus::Active)
 //   challenges            `due`: by `status`, sorted by `deadline_height`
 //                                → where_due(Active).up_to(height) (ordered, early-break)
-//   memberships           keyed by `(agreement_id, node_id)` (compound `Pair`);
+//   memberships           keyed by the compound `(agreement_id, node_id)` tuple;
 //                         `by_agreement_active`: by (`agreement_id`, `active`)
 //                                → where_by_agreement_active(aid, true) (flat, no
 //                                  nested map; count_by_agreement_active for size)
@@ -92,7 +92,7 @@ const REGTEST_S_CHAL: u64 = 8;
 // ─────────────────────────────────────────────────────────────────
 
 /// A node's membership in an agreement, stored in the flat `memberships` map
-/// keyed by the compound `(agreement_id, node_id)` (a `Pair`). The composite
+/// keyed by the compound `(agreement_id, node_id)` tuple. The composite
 /// `by_agreement_active` index — bucketed by `(agreement_id, active)` — makes an
 /// agreement's live members a single prefix scan
 /// (`where_by_agreement_active(aid, true)`) and its count framework-maintained
@@ -116,7 +116,7 @@ struct ProtocolState {
     pub s_chal: u64,
     pub blocks_per_year: u64,
     pub agreements: IndexedMap<String, AgreementData>,
-    pub memberships: IndexedMap<Pair<String, u64>, NodeState>,
+    pub memberships: IndexedMap<(String, u64), NodeState>,
     pub challenges: IndexedMap<String, ChallengeData>,
 }
 
@@ -273,7 +273,7 @@ impl Guest for Filestorage {
             )))?;
         // Membership is a single flat entry keyed by `(agreement_id, node_id)` — a
         // missing entry just means "never joined".
-        let membership_key = Pair::new(agreement_id.clone(), node_id);
+        let membership_key = (agreement_id.clone(), node_id);
 
         // Check if node is already active in agreement
         if model
@@ -340,7 +340,7 @@ impl Guest for Filestorage {
                 "agreement not found: {}",
                 agreement_id
             )))?;
-        let membership_key = Pair::new(agreement_id.clone(), node_id);
+        let membership_key = (agreement_id.clone(), node_id);
         let membership = model
             .memberships()
             .get(&membership_key)
@@ -382,7 +382,7 @@ impl Guest for Filestorage {
             .flat_map(|active| {
                 memberships
                     .where_by_agreement_active(agreement_id.clone(), active)
-                    .map(move |key: Pair<String, u64>| NodeInfo {
+                    .map(move |key: (String, u64)| NodeInfo {
                         node_id: key.1,
                         active,
                     })
@@ -393,7 +393,7 @@ impl Guest for Filestorage {
     fn is_node_in_agreement(ctx: &ViewContext, agreement_id: String, node_id: u64) -> bool {
         ctx.model()
             .memberships()
-            .get(&Pair::new(agreement_id, node_id))
+            .get(&(agreement_id, node_id))
             .map(|n| n.active())
             .unwrap_or(false)
     }
@@ -537,7 +537,7 @@ impl Guest for Filestorage {
             let active_nodes: Vec<u64> = model
                 .memberships()
                 .where_by_agreement_active(agreement_id.clone(), true)
-                .map(|key: Pair<String, u64>| key.1)
+                .map(|key: (String, u64)| key.1)
                 .collect();
 
             if active_nodes.is_empty() {
@@ -623,7 +623,7 @@ impl Guest for Filestorage {
         // Validate node is active in agreement (point read of the flat membership).
         let is_active = model
             .memberships()
-            .get(&Pair::new(agreement_id.clone(), prover_id))
+            .get(&(agreement_id.clone(), prover_id))
             .map(|n| n.active())
             .unwrap_or(false);
         if !is_active {

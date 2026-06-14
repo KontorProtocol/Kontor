@@ -33,8 +33,25 @@ impl KeyPath {
     /// to enforce by rejecting such keys is now structural.
     pub fn push(&self, segment: impl Into<String>) -> Self {
         let segment = segment.into();
+        self.push_element(&segment)
+    }
+
+    /// Append one segment as its native codec element — an `int` key sorts
+    /// numerically, a compound key encodes as a nested tuple, etc. `push` is the
+    /// string-element special case (field names, enum discriminants).
+    pub fn push_element(&self, element: &impl KeyElement) -> Self {
+        self.push_raw_element(&element.encode())
+    }
+
+    /// Append a segment from its already-encoded element bytes. `elem` MUST be
+    /// exactly one complete codec element (e.g. from [`KeyElement::encode`] or
+    /// [`keycodec::tuple_from_elements`]) — the byte-offset bookkeeping assumes one
+    /// element per push. Lets a type-erased caller (the index diff, which builds an
+    /// `(sort, pk)` member from parts of differing types) push without a static
+    /// `KeyElement` type.
+    pub fn push_raw_element(&self, elem: &[u8]) -> Self {
         let mut bytes = self.bytes.clone();
-        segment.encode_to(&mut bytes);
+        bytes.extend_from_slice(elem);
         let mut ends = self.ends.clone();
         ends.push(bytes.len());
         KeyPath { bytes, ends }
@@ -113,7 +130,6 @@ impl Default for KeyPath {
 #[cfg(test)]
 mod tests {
     use alloc::string::ToString;
-    use alloc::vec;
 
     use super::*;
 

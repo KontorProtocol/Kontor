@@ -120,7 +120,7 @@ impl ::core::clone::Clone for FibStorageCacheModel {
 }
 impl FibStorageCacheModel {
     pub fn get(&self, key: &u64) -> Option<FibValueModel> {
-        let base_path = self.base_path.push(key.to_string());
+        let base_path = self.base_path.push_element(key);
         stdlib::ReadStorage::__exists(&self.ctx, &base_path)
             .then(|| FibValueModel::new(self.ctx.clone(), base_path))
     }
@@ -185,20 +185,16 @@ impl ::core::clone::Clone for FibStorageCacheWriteModel {
 }
 impl FibStorageCacheWriteModel {
     pub fn get(&self, key: &u64) -> Option<FibValueWriteModel> {
-        let base_path = self.base_path.push(key.to_string());
+        let base_path = self.base_path.push_element(key);
         stdlib::ReadStorage::__exists(&self.ctx, &base_path)
             .then(|| FibValueWriteModel::new(self.ctx.clone(), base_path))
     }
     pub fn set(&self, key: &u64, value: FibValue) {
-        stdlib::WriteStorage::__set(
-            &self.ctx,
-            self.base_path.push(key.to_string()),
-            value,
-        )
+        stdlib::WriteStorage::__set(&self.ctx, self.base_path.push_element(key), value)
     }
     /// Remove a single entry (tombstone). Returns true if a live value existed.
     pub fn remove(&self, key: &u64) -> bool {
-        stdlib::WriteStorage::__delete(&self.ctx, &self.base_path.push(key.to_string()))
+        stdlib::WriteStorage::__delete(&self.ctx, &self.base_path.push_element(key))
     }
     pub fn load(&self) -> Map<u64, FibValue> {
         Map::new(&[])

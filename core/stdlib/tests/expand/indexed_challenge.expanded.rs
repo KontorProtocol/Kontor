@@ -28,8 +28,7 @@ impl stdlib::Indexed for Challenge {
 }
 pub trait ChallengeIndex<K>
 where
-    K: alloc::string::ToString + core::str::FromStr + Clone,
-    <K as core::str::FromStr>::Err: core::fmt::Debug,
+    K: stdlib::KeyElement + Clone,
 {
     /// Raw bucket scan — yields the primary keys of an unsorted index
     /// bucket, identified by its segments `<bucket…>` (one per `by` field).
@@ -41,12 +40,11 @@ where
         index_name: &str,
         bucket: &[&str],
     ) -> impl Iterator<Item = K> + use<Self, K>;
-    /// Ordered bucket scan for a *sorted* index: the bucket's `<sort‖pk>`
-    /// child segments, wrapped in a `SortedScan` that strips the
-    /// `S::WIDTH`-char prefix to yield `K` and bounds `up_to`/`range` on the
-    /// encoded prefix. `S` is the index's sort field type, so the bound type
-    /// and the stored prefix width can't disagree.
-    fn by_index_sorted<S: stdlib::SortKey>(
+    /// Ordered bucket scan for a *sorted* index: the bucket's `(sort, pk)`
+    /// tuple child members, wrapped in a `SortedScan` that yields `K` in sort
+    /// order and bounds `up_to`/`range` on the decoded sort value. `S` is the
+    /// index's sort field type, so the wrong bound type is a compile error.
+    fn by_index_sorted<S: stdlib::KeyElement + Clone + 'static>(
         &self,
         index_name: &str,
         bucket: &[&str],

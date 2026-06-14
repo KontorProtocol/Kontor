@@ -201,7 +201,9 @@ pub fn index_entry(decl: &IndexDecl, value_for: &impl Fn(&Ident) -> TokenStream)
     let sort = match &decl.sort {
         Some(field) => {
             let sort_val = value_for(field);
-            quote! { Some(stdlib::SortKey::sort_key(&#sort_val).into()) }
+            // The sort field's order-preserving codec element, pre-encoded; it
+            // leads the `(sort, pk)` member tuple so the bucket scans in value order.
+            quote! { Some(stdlib::KeyElement::encode(&#sort_val)) }
         }
         None => quote! { None },
     };

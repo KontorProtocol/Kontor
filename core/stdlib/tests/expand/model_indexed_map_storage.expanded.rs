@@ -57,7 +57,7 @@ impl ChallengeModel {
             .push(stdlib::IndexEntry {
                 name: "due",
                 bucket: (/*ERROR*/),
-                sort: Some(stdlib::SortKey::sort_key(&__idx_deadline).into()),
+                sort: Some(stdlib::KeyElement::encode(&__idx_deadline)),
             });
         entries
     }
@@ -81,7 +81,7 @@ impl ChallengeModel {
 pub struct ChallengeWriteModel {
     pub base_path: stdlib::KeyPath,
     ctx: alloc::rc::Rc<crate::context::ProcStorage>,
-    index_binding: Option<(stdlib::KeyPath, alloc::string::String)>,
+    index_binding: Option<(stdlib::KeyPath, alloc::vec::Vec<u8>)>,
     model: ChallengeModel,
 }
 impl ChallengeWriteModel {
@@ -103,7 +103,7 @@ impl ChallengeWriteModel {
     pub fn with_index(
         mut self,
         index_root: stdlib::KeyPath,
-        index_key: alloc::string::String,
+        index_key: alloc::vec::Vec<u8>,
     ) -> Self {
         self.index_binding = Some((index_root, index_key));
         self
@@ -155,7 +155,7 @@ impl ChallengeWriteModel {
                     stdlib::IndexEntry {
                         name: "due",
                         bucket: (/*ERROR*/),
-                        sort: Some(stdlib::SortKey::sort_key(&__idx_deadline).into()),
+                        sort: Some(stdlib::KeyElement::encode(&__idx_deadline)),
                     },
                 ],
                 &[
@@ -167,7 +167,7 @@ impl ChallengeWriteModel {
                     stdlib::IndexEntry {
                         name: "due",
                         bucket: (/*ERROR*/),
-                        sort: Some(stdlib::SortKey::sort_key(&__idx_deadline).into()),
+                        sort: Some(stdlib::KeyElement::encode(&__idx_deadline)),
                     },
                 ],
             );
@@ -193,7 +193,7 @@ impl ChallengeWriteModel {
                     stdlib::IndexEntry {
                         name: "due",
                         bucket: (/*ERROR*/),
-                        sort: Some(stdlib::SortKey::sort_key(&__idx_deadline).into()),
+                        sort: Some(stdlib::KeyElement::encode(&__idx_deadline)),
                     },
                 ],
                 &[
@@ -205,7 +205,7 @@ impl ChallengeWriteModel {
                     stdlib::IndexEntry {
                         name: "due",
                         bucket: (/*ERROR*/),
-                        sort: Some(stdlib::SortKey::sort_key(&__idx_deadline).into()),
+                        sort: Some(stdlib::KeyElement::encode(&__idx_deadline)),
                     },
                 ],
             );
@@ -234,7 +234,7 @@ impl ChallengeWriteModel {
                     stdlib::IndexEntry {
                         name: "due",
                         bucket: (/*ERROR*/),
-                        sort: Some(stdlib::SortKey::sort_key(&__idx_deadline).into()),
+                        sort: Some(stdlib::KeyElement::encode(&__idx_deadline)),
                     },
                 ],
                 &[
@@ -246,7 +246,7 @@ impl ChallengeWriteModel {
                     stdlib::IndexEntry {
                         name: "due",
                         bucket: (/*ERROR*/),
-                        sort: Some(stdlib::SortKey::sort_key(&__idx_deadline).into()),
+                        sort: Some(stdlib::KeyElement::encode(&__idx_deadline)),
                     },
                 ],
             );
@@ -268,14 +268,14 @@ impl ChallengeWriteModel {
                     stdlib::IndexEntry {
                         name: "due",
                         bucket: (/*ERROR*/),
-                        sort: Some(stdlib::SortKey::sort_key(&old).into()),
+                        sort: Some(stdlib::KeyElement::encode(&old)),
                     },
                 ],
                 &[
                     stdlib::IndexEntry {
                         name: "due",
                         bucket: (/*ERROR*/),
-                        sort: Some(stdlib::SortKey::sort_key(&new).into()),
+                        sort: Some(stdlib::KeyElement::encode(&new)),
                     },
                 ],
             );
@@ -296,14 +296,14 @@ impl ChallengeWriteModel {
                     stdlib::IndexEntry {
                         name: "due",
                         bucket: (/*ERROR*/),
-                        sort: Some(stdlib::SortKey::sort_key(&old).into()),
+                        sort: Some(stdlib::KeyElement::encode(&old)),
                     },
                 ],
                 &[
                     stdlib::IndexEntry {
                         name: "due",
                         bucket: (/*ERROR*/),
-                        sort: Some(stdlib::SortKey::sort_key(&new).into()),
+                        sort: Some(stdlib::KeyElement::encode(&new)),
                     },
                 ],
             );
@@ -327,14 +327,14 @@ impl ChallengeWriteModel {
                     stdlib::IndexEntry {
                         name: "due",
                         bucket: (/*ERROR*/),
-                        sort: Some(stdlib::SortKey::sort_key(&old).into()),
+                        sort: Some(stdlib::KeyElement::encode(&old)),
                     },
                 ],
                 &[
                     stdlib::IndexEntry {
                         name: "due",
                         bucket: (/*ERROR*/),
-                        sort: Some(stdlib::SortKey::sort_key(&new).into()),
+                        sort: Some(stdlib::KeyElement::encode(&new)),
                     },
                 ],
             );
@@ -370,15 +370,14 @@ impl stdlib::Indexed for Challenge {
             .push(stdlib::IndexEntry {
                 name: "due",
                 bucket: (/*ERROR*/),
-                sort: Some(stdlib::SortKey::sort_key(&self.deadline).into()),
+                sort: Some(stdlib::KeyElement::encode(&self.deadline)),
             });
         entries
     }
 }
 pub trait ChallengeIndex<K>
 where
-    K: alloc::string::ToString + core::str::FromStr + Clone,
-    <K as core::str::FromStr>::Err: core::fmt::Debug,
+    K: stdlib::KeyElement + Clone,
 {
     /// Raw bucket scan — yields the primary keys of an unsorted index
     /// bucket, identified by its segments `<bucket…>` (one per `by` field).
@@ -390,12 +389,11 @@ where
         index_name: &str,
         bucket: &[&str],
     ) -> impl Iterator<Item = K> + use<Self, K>;
-    /// Ordered bucket scan for a *sorted* index: the bucket's `<sort‖pk>`
-    /// child segments, wrapped in a `SortedScan` that strips the
-    /// `S::WIDTH`-char prefix to yield `K` and bounds `up_to`/`range` on the
-    /// encoded prefix. `S` is the index's sort field type, so the bound type
-    /// and the stored prefix width can't disagree.
-    fn by_index_sorted<S: stdlib::SortKey>(
+    /// Ordered bucket scan for a *sorted* index: the bucket's `(sort, pk)`
+    /// tuple child members, wrapped in a `SortedScan` that yields `K` in sort
+    /// order and bounds `up_to`/`range` on the decoded sort value. `S` is the
+    /// index's sort field type, so the wrong bound type is a compile error.
+    fn by_index_sorted<S: stdlib::KeyElement + Clone + 'static>(
         &self,
         index_name: &str,
         bucket: &[&str],
@@ -468,7 +466,7 @@ impl ::core::clone::Clone for ChallengeStorageChallengesModel {
 }
 impl ChallengeStorageChallengesModel {
     pub fn get(&self, key: &u64) -> Option<ChallengeModel> {
-        let base_path = self.base_path.push(key.to_string());
+        let base_path = self.base_path.push_element(key);
         stdlib::ReadStorage::__exists(&self.ctx, &base_path)
             .then(|| ChallengeModel::new(self.ctx.clone(), base_path))
     }
@@ -490,7 +488,7 @@ impl ChallengeIndex<u64> for ChallengeStorageChallengesModel {
             .fold(self.index_path.push(index_name), |p, seg| p.push(*seg));
         stdlib::ReadStorage::__get_keys(&self.ctx, &bucket)
     }
-    fn by_index_sorted<S: stdlib::SortKey>(
+    fn by_index_sorted<S: stdlib::KeyElement + Clone + 'static>(
         &self,
         index_name: &str,
         bucket: &[&str],
@@ -498,10 +496,8 @@ impl ChallengeIndex<u64> for ChallengeStorageChallengesModel {
         let bucket = bucket
             .iter()
             .fold(self.index_path.push(index_name), |p, seg| p.push(*seg));
-        let segments = stdlib::ReadStorage::__get_keys::<
-            alloc::string::String,
-        >(&self.ctx, &bucket);
-        stdlib::SortedScan::new(alloc::boxed::Box::new(segments))
+        let members = stdlib::ReadStorage::__get_keys::<(S, u64)>(&self.ctx, &bucket);
+        stdlib::SortedScan::new(alloc::boxed::Box::new(members))
     }
     fn bucket_count(&self, index_name: &str, bucket: &[&str]) -> u64 {
         let bucket = bucket
@@ -567,38 +563,38 @@ impl ::core::clone::Clone for ChallengeStorageChallengesWriteModel {
 }
 impl ChallengeStorageChallengesWriteModel {
     pub fn get(&self, key: &u64) -> Option<ChallengeWriteModel> {
-        let base_path = self.base_path.push(key.to_string());
+        let base_path = self.base_path.push_element(key);
         stdlib::ReadStorage::__exists(&self.ctx, &base_path)
             .then(|| {
                 ChallengeWriteModel::new(self.ctx.clone(), base_path)
-                    .with_index(self.index_path.clone(), key.to_string())
+                    .with_index(self.index_path.clone(), stdlib::KeyElement::encode(key))
             })
     }
     pub fn set(&self, key: &u64, value: Challenge) {
-        let key_str = key.to_string();
+        let key_bytes = stdlib::KeyElement::encode(key);
         let new_entries = stdlib::Indexed::index_entries(&value);
         let old_entries = self.get(key).map(|m| m.__index_entries()).unwrap_or_default();
         stdlib::apply_index_diff(
             &self.ctx,
             &self.index_path,
-            &key_str,
+            &key_bytes,
             &old_entries,
             &new_entries,
         );
-        stdlib::WriteStorage::__set(&self.ctx, self.base_path.push(key_str), value);
+        stdlib::WriteStorage::__set(&self.ctx, self.base_path.push_element(key), value);
     }
     /// Remove the entry and its index rows. Returns true if a live value existed.
     pub fn remove(&self, key: &u64) -> bool {
-        let key_str = key.to_string();
+        let key_bytes = stdlib::KeyElement::encode(key);
         let old_entries = self.get(key).map(|m| m.__index_entries()).unwrap_or_default();
         stdlib::apply_index_diff(
             &self.ctx,
             &self.index_path,
-            &key_str,
+            &key_bytes,
             &old_entries,
             &[],
         );
-        stdlib::WriteStorage::__delete(&self.ctx, &self.base_path.push(key_str))
+        stdlib::WriteStorage::__delete(&self.ctx, &self.base_path.push_element(key))
     }
     pub fn load(&self) -> IndexedMap<u64, Challenge> {
         IndexedMap::new(&[])
@@ -618,7 +614,7 @@ impl ChallengeIndex<u64> for ChallengeStorageChallengesWriteModel {
             .fold(self.index_path.push(index_name), |p, seg| p.push(*seg));
         stdlib::ReadStorage::__get_keys(&self.ctx, &bucket)
     }
-    fn by_index_sorted<S: stdlib::SortKey>(
+    fn by_index_sorted<S: stdlib::KeyElement + Clone + 'static>(
         &self,
         index_name: &str,
         bucket: &[&str],
@@ -626,10 +622,8 @@ impl ChallengeIndex<u64> for ChallengeStorageChallengesWriteModel {
         let bucket = bucket
             .iter()
             .fold(self.index_path.push(index_name), |p, seg| p.push(*seg));
-        let segments = stdlib::ReadStorage::__get_keys::<
-            alloc::string::String,
-        >(&self.ctx, &bucket);
-        stdlib::SortedScan::new(alloc::boxed::Box::new(segments))
+        let members = stdlib::ReadStorage::__get_keys::<(S, u64)>(&self.ctx, &bucket);
+        stdlib::SortedScan::new(alloc::boxed::Box::new(members))
     }
     fn bucket_count(&self, index_name: &str, bucket: &[&str]) -> u64 {
         let bucket = bucket

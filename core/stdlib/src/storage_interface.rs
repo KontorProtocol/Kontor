@@ -1,9 +1,4 @@
-use core::{fmt::Debug, str::FromStr};
-
-use alloc::{
-    string::{String, ToString},
-    vec::Vec,
-};
+use alloc::{string::String, vec::Vec};
 
 use crate::KeyPath;
 use crate::keycodec::KeyElement;
@@ -23,12 +18,13 @@ pub trait ReadStorage {
     // does not borrow `path`. `use<Self, T>` makes that explicit — capturing only
     // the types, not the `self`/`path` lifetimes — so callers can scan a
     // freshly-built path (e.g. an index bucket) and still return the iterator.
-    fn __get_keys<T: ToString + FromStr + Clone>(
+    // `T` is decoded from each child's codec element (the map key, or an
+    // `(sort, pk)` tuple for a sorted-index member), so it sorts and round-trips
+    // natively — no stringify/parse.
+    fn __get_keys<T: KeyElement + Clone>(
         self: &alloc::rc::Rc<Self>,
         path: &[u8],
-    ) -> impl Iterator<Item = T> + use<Self, T>
-    where
-        <T as FromStr>::Err: Debug;
+    ) -> impl Iterator<Item = T> + use<Self, T>;
 
     fn __exists(self: &alloc::rc::Rc<Self>, path: &[u8]) -> bool;
 
@@ -195,14 +191,12 @@ pub trait HasNext {
 pub fn make_keys_iterator<K, T>(keys: K) -> impl Iterator<Item = T>
 where
     K: HasNext,
-    T: FromStr,
-    <T as FromStr>::Err: Debug,
+    T: KeyElement,
 {
     struct KeysIterator<K, T>
     where
         K: HasNext,
-        T: FromStr,
-        <T as FromStr>::Err: Debug,
+        T: KeyElement,
     {
         keys: K,
         _phantom: core::marker::PhantomData<T>,
@@ -211,16 +205,15 @@ where
     impl<K, T> Iterator for KeysIterator<K, T>
     where
         K: HasNext,
-        T: FromStr,
-        <T as FromStr>::Err: Debug,
+        T: KeyElement,
     {
         type Item = T;
         fn next(&mut self) -> Option<Self::Item> {
-            // Each element is a string element; decode it, then parse into `T`
-            // (the map key type) the same way the segment string used to.
+            // Each child segment is one codec element; decode it directly into `T`
+            // (the map key, or a `(sort, pk)` tuple for a sorted member).
             self.keys.next().map(|elem| {
-                let (s, _) = String::decode_from(&elem).expect("keys() element is a string");
-                T::from_str(&s).unwrap()
+                let (v, _) = T::decode_from(&elem).expect("keys() element decodes into T");
+                v
             })
         }
     }
@@ -237,12 +230,12 @@ storage_placeholder!(
     StorageMap
 );
 
-impl<K: ToString + FromStr + Clone, V: Store<S> + Clone, S: WriteStorage + ?Sized> Store<S>
+impl<K: KeyElement + Clone, V: Store<S> + Clone, S: WriteStorage + ?Sized> Store<S>
     for StorageMap<K, V, S>
 {
     fn __set(ctx: &alloc::rc::Rc<S>, base_path: KeyPath, value: StorageMap<K, V, S>) {
         for (k, v) in value.entries.into_iter() {
-            ctx.__set(base_path.push(k.to_string()), v)
+            ctx.__set(base_path.push_element(&k), v)
         }
     }
 }
