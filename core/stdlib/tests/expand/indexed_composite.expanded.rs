@@ -19,7 +19,7 @@ impl ::core::clone::Clone for Agreement {
 impl stdlib::Store<crate::context::ProcStorage> for Agreement {
     fn __set(
         ctx: &alloc::rc::Rc<crate::context::ProcStorage>,
-        base_path: stdlib::DotPathBuf,
+        base_path: stdlib::KeyPath,
         value: Agreement,
     ) {
         stdlib::WriteStorage::__set(ctx, base_path.push("active"), value.active);
@@ -27,13 +27,13 @@ impl stdlib::Store<crate::context::ProcStorage> for Agreement {
     }
 }
 pub struct AgreementModel {
-    pub base_path: stdlib::DotPathBuf,
+    pub base_path: stdlib::KeyPath,
     ctx: alloc::rc::Rc<crate::context::ViewStorage>,
 }
 impl AgreementModel {
     pub fn new(
         ctx: alloc::rc::Rc<crate::context::ViewStorage>,
-        base_path: stdlib::DotPathBuf,
+        base_path: stdlib::KeyPath,
     ) -> Self {
         Self {
             base_path: base_path.clone(),
@@ -83,15 +83,15 @@ impl AgreementModel {
     }
 }
 pub struct AgreementWriteModel {
-    pub base_path: stdlib::DotPathBuf,
+    pub base_path: stdlib::KeyPath,
     ctx: alloc::rc::Rc<crate::context::ProcStorage>,
-    index_binding: Option<(stdlib::DotPathBuf, alloc::string::String)>,
+    index_binding: Option<(stdlib::KeyPath, alloc::string::String)>,
     model: AgreementModel,
 }
 impl AgreementWriteModel {
     pub fn new(
         ctx: alloc::rc::Rc<crate::context::ProcStorage>,
-        base_path: stdlib::DotPathBuf,
+        base_path: stdlib::KeyPath,
     ) -> Self {
         let view_storage = ctx.view_storage();
         Self {
@@ -106,7 +106,7 @@ impl AgreementWriteModel {
     }
     pub fn with_index(
         mut self,
-        index_root: stdlib::DotPathBuf,
+        index_root: stdlib::KeyPath,
         index_key: alloc::string::String,
     ) -> Self {
         self.index_binding = Some((index_root, index_key));
@@ -372,13 +372,13 @@ struct AgreementStorage {
     agreements: IndexedMap<u64, Agreement>,
 }
 pub struct AgreementStorageModel {
-    pub base_path: stdlib::DotPathBuf,
+    pub base_path: stdlib::KeyPath,
     ctx: alloc::rc::Rc<crate::context::ViewStorage>,
 }
 impl AgreementStorageModel {
     pub fn new(
         ctx: alloc::rc::Rc<crate::context::ViewStorage>,
-        base_path: stdlib::DotPathBuf,
+        base_path: stdlib::KeyPath,
     ) -> Self {
         Self {
             base_path: base_path.clone(),
@@ -399,8 +399,8 @@ impl AgreementStorageModel {
     }
 }
 pub struct AgreementStorageAgreementsModel {
-    pub base_path: stdlib::DotPathBuf,
-    index_path: stdlib::DotPathBuf,
+    pub base_path: stdlib::KeyPath,
+    index_path: stdlib::KeyPath,
     ctx: alloc::rc::Rc<crate::context::ViewStorage>,
 }
 #[automatically_derived]
@@ -459,14 +459,14 @@ impl AgreementIndex<u64> for AgreementStorageAgreementsModel {
     }
 }
 pub struct AgreementStorageWriteModel {
-    pub base_path: stdlib::DotPathBuf,
+    pub base_path: stdlib::KeyPath,
     ctx: alloc::rc::Rc<crate::context::ProcStorage>,
     model: AgreementStorageModel,
 }
 impl AgreementStorageWriteModel {
     pub fn new(
         ctx: alloc::rc::Rc<crate::context::ProcStorage>,
-        base_path: stdlib::DotPathBuf,
+        base_path: stdlib::KeyPath,
     ) -> Self {
         let view_storage = ctx.view_storage();
         Self {
@@ -498,8 +498,8 @@ impl core::ops::Deref for AgreementStorageWriteModel {
     }
 }
 pub struct AgreementStorageAgreementsWriteModel {
-    pub base_path: stdlib::DotPathBuf,
-    index_path: stdlib::DotPathBuf,
+    pub base_path: stdlib::KeyPath,
+    index_path: stdlib::KeyPath,
     ctx: alloc::rc::Rc<crate::context::ProcStorage>,
 }
 #[automatically_derived]

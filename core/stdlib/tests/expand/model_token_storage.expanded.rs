@@ -3,13 +3,13 @@ struct TokenStorage {
     pub ledger: Map<String, u64>,
 }
 pub struct TokenStorageModel {
-    pub base_path: stdlib::DotPathBuf,
+    pub base_path: stdlib::KeyPath,
     ctx: alloc::rc::Rc<crate::context::ViewStorage>,
 }
 impl TokenStorageModel {
     pub fn new(
         ctx: alloc::rc::Rc<crate::context::ViewStorage>,
-        base_path: stdlib::DotPathBuf,
+        base_path: stdlib::KeyPath,
     ) -> Self {
         Self {
             base_path: base_path.clone(),
@@ -29,7 +29,7 @@ impl TokenStorageModel {
     }
 }
 pub struct TokenStorageLedgerModel {
-    pub base_path: stdlib::DotPathBuf,
+    pub base_path: stdlib::KeyPath,
     ctx: alloc::rc::Rc<crate::context::ViewStorage>,
 }
 #[automatically_derived]
@@ -55,14 +55,14 @@ impl TokenStorageLedgerModel {
     }
 }
 pub struct TokenStorageWriteModel {
-    pub base_path: stdlib::DotPathBuf,
+    pub base_path: stdlib::KeyPath,
     ctx: alloc::rc::Rc<crate::context::ProcStorage>,
     model: TokenStorageModel,
 }
 impl TokenStorageWriteModel {
     pub fn new(
         ctx: alloc::rc::Rc<crate::context::ProcStorage>,
-        base_path: stdlib::DotPathBuf,
+        base_path: stdlib::KeyPath,
     ) -> Self {
         let view_storage = ctx.view_storage();
         Self {
@@ -93,7 +93,7 @@ impl core::ops::Deref for TokenStorageWriteModel {
     }
 }
 pub struct TokenStorageLedgerWriteModel {
-    pub base_path: stdlib::DotPathBuf,
+    pub base_path: stdlib::KeyPath,
     ctx: alloc::rc::Rc<crate::context::ProcStorage>,
 }
 #[automatically_derived]

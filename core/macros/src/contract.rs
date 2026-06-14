@@ -223,7 +223,7 @@ pub fn generate(config: Config) -> TokenStream {
                 self.extend_path_with_match(path, &variants.iter().map(|s| s.to_string()).collect::<Vec<_>>())
             }
 
-            fn __get<T: Retrieve<Self>>(self: &alloc::rc::Rc<Self>, path: DotPathBuf) -> Option<T> {
+            fn __get<T: Retrieve<Self>>(self: &alloc::rc::Rc<Self>, path: KeyPath) -> Option<T> {
                 T::__get(self, path)
             }
         }
@@ -265,7 +265,7 @@ pub fn generate(config: Config) -> TokenStream {
                 self.extend_path_with_match(path, &variants.iter().map(|s| s.to_string()).collect::<Vec<_>>())
             }
 
-            fn __get<T: Retrieve<Self>>(self: &alloc::rc::Rc<Self>, path: DotPathBuf) -> Option<T> {
+            fn __get<T: Retrieve<Self>>(self: &alloc::rc::Rc<Self>, path: KeyPath) -> Option<T> {
                 T::__get(self, path)
             }
         }
@@ -296,7 +296,7 @@ pub fn generate(config: Config) -> TokenStream {
                 self.set_void(path)
             }
 
-            fn __set<T: stdlib::Store<Self>>(self: &alloc::rc::Rc<Self>, path: DotPathBuf, value: T) {
+            fn __set<T: stdlib::Store<Self>>(self: &alloc::rc::Rc<Self>, path: KeyPath, value: T) {
                 T::__set(self, path, value)
             }
 
@@ -310,26 +310,26 @@ pub fn generate(config: Config) -> TokenStream {
         }
 
         impl Retrieve<crate::context::ViewStorage> for context::ContractAddress {
-            fn __get(ctx: &alloc::rc::Rc<crate::context::ViewStorage>, path: stdlib::DotPathBuf) -> Option<Self> {
+            fn __get(ctx: &alloc::rc::Rc<crate::context::ViewStorage>, path: stdlib::KeyPath) -> Option<Self> {
                 stdlib::ReadStorage::__exists(ctx, &path).then(|| context::ContractAddressModel::new(ctx.clone(), path).load())
             }
         }
 
         impl Retrieve<crate::context::ProcStorage> for context::ContractAddress {
-            fn __get(ctx: &alloc::rc::Rc<crate::context::ProcStorage>, path: stdlib::DotPathBuf) -> Option<Self> {
+            fn __get(ctx: &alloc::rc::Rc<crate::context::ProcStorage>, path: stdlib::KeyPath) -> Option<Self> {
                 stdlib::ReadStorage::__exists(ctx, &path).then(|| context::ContractAddressWriteModel::new(ctx.clone(), path).load())
             }
         }
 
         impl Retrieve<crate::context::ViewStorage> for context::HolderRef {
-            fn __get(ctx: &alloc::rc::Rc<crate::context::ViewStorage>, path: stdlib::DotPathBuf) -> Option<Self> {
+            fn __get(ctx: &alloc::rc::Rc<crate::context::ViewStorage>, path: stdlib::KeyPath) -> Option<Self> {
                 let s: String = stdlib::ReadStorage::__get(ctx, path)?;
                 s.parse().ok()
             }
         }
 
         impl Retrieve<crate::context::ProcStorage> for context::HolderRef {
-            fn __get(ctx: &alloc::rc::Rc<crate::context::ProcStorage>, path: stdlib::DotPathBuf) -> Option<Self> {
+            fn __get(ctx: &alloc::rc::Rc<crate::context::ProcStorage>, path: stdlib::KeyPath) -> Option<Self> {
                 let s: String = stdlib::ReadStorage::__get(ctx, path)?;
                 s.parse().ok()
             }
@@ -344,45 +344,45 @@ pub fn generate(config: Config) -> TokenStream {
         // the way it does for HolderRef — we define Retrieve/Store
         // directly here.
         impl Retrieve<crate::context::ViewStorage> for context::Holder {
-            fn __get(ctx: &alloc::rc::Rc<crate::context::ViewStorage>, path: stdlib::DotPathBuf) -> Option<Self> {
+            fn __get(ctx: &alloc::rc::Rc<crate::context::ViewStorage>, path: stdlib::KeyPath) -> Option<Self> {
                 let s: String = stdlib::ReadStorage::__get(ctx, path)?;
                 s.parse().ok()
             }
         }
 
         impl Retrieve<crate::context::ProcStorage> for context::Holder {
-            fn __get(ctx: &alloc::rc::Rc<crate::context::ProcStorage>, path: stdlib::DotPathBuf) -> Option<Self> {
+            fn __get(ctx: &alloc::rc::Rc<crate::context::ProcStorage>, path: stdlib::KeyPath) -> Option<Self> {
                 let s: String = stdlib::ReadStorage::__get(ctx, path)?;
                 s.parse().ok()
             }
         }
 
         impl stdlib::Store<crate::context::ProcStorage> for context::Holder {
-            fn __set(ctx: &alloc::rc::Rc<crate::context::ProcStorage>, path: stdlib::DotPathBuf, value: Self) {
+            fn __set(ctx: &alloc::rc::Rc<crate::context::ProcStorage>, path: stdlib::KeyPath, value: Self) {
                 stdlib::WriteStorage::__set_str(ctx, &path, &value.to_string());
             }
         }
 
         impl Retrieve<crate::context::ViewStorage> for numbers::Integer {
-            fn __get(ctx: &alloc::rc::Rc<crate::context::ViewStorage>, path: stdlib::DotPathBuf) -> Option<Self> {
+            fn __get(ctx: &alloc::rc::Rc<crate::context::ViewStorage>, path: stdlib::KeyPath) -> Option<Self> {
                 stdlib::ReadStorage::__exists(ctx, &path).then(|| numbers::IntegerModel::new(ctx.clone(), path).load())
             }
         }
 
         impl Retrieve<crate::context::ProcStorage> for numbers::Integer {
-            fn __get(ctx: &alloc::rc::Rc<crate::context::ProcStorage>, path: stdlib::DotPathBuf) -> Option<Self> {
+            fn __get(ctx: &alloc::rc::Rc<crate::context::ProcStorage>, path: stdlib::KeyPath) -> Option<Self> {
                 stdlib::ReadStorage::__exists(ctx, &path).then(|| numbers::IntegerWriteModel::new(ctx.clone(), path).load())
             }
         }
 
         impl Retrieve<crate::context::ViewStorage> for numbers::Decimal {
-            fn __get(ctx: &alloc::rc::Rc<crate::context::ViewStorage>, path: stdlib::DotPathBuf) -> Option<Self> {
+            fn __get(ctx: &alloc::rc::Rc<crate::context::ViewStorage>, path: stdlib::KeyPath) -> Option<Self> {
                 stdlib::ReadStorage::__exists(ctx, &path).then(|| numbers::DecimalModel::new(ctx.clone(), path).load())
             }
         }
 
         impl Retrieve<crate::context::ProcStorage> for numbers::Decimal {
-            fn __get(ctx: &alloc::rc::Rc<crate::context::ProcStorage>, path: stdlib::DotPathBuf) -> Option<Self> {
+            fn __get(ctx: &alloc::rc::Rc<crate::context::ProcStorage>, path: stdlib::KeyPath) -> Option<Self> {
                 stdlib::ReadStorage::__exists(ctx, &path).then(|| numbers::DecimalWriteModel::new(ctx.clone(), path).load())
             }
         }

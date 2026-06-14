@@ -32,7 +32,7 @@ use alloc::string::{String, ToString};
 use alloc::vec::Vec;
 use core::str::FromStr;
 
-use crate::{DotPathBuf, ReadStorage, Store, WriteStorage};
+use crate::{KeyPath, ReadStorage, Store, WriteStorage};
 
 /// The canonical string a value contributes to an index bucket. The SINGLE
 /// source every index path stringifies through — a value's
@@ -320,7 +320,7 @@ pub struct IndexEntry {
 impl IndexEntry {
     /// The bucket-prefix path `<index>/<bucket…>` (where the count lives; members
     /// are its children).
-    fn bucket_path(&self, index_root: &DotPathBuf) -> DotPathBuf {
+    fn bucket_path(&self, index_root: &KeyPath) -> KeyPath {
         let mut path = index_root.push(self.name);
         for segment in &self.bucket {
             path = path.push(segment.as_ref());
@@ -374,7 +374,7 @@ fn assert_segment(s: &str) {
 /// here.
 pub fn apply_index_diff<S: WriteStorage + ReadStorage + ?Sized>(
     ctx: &Rc<S>,
-    index_root: &DotPathBuf,
+    index_root: &KeyPath,
     key: &str,
     old: &[IndexEntry],
     new: &[IndexEntry],
@@ -415,7 +415,7 @@ pub fn apply_index_diff<S: WriteStorage + ReadStorage + ?Sized>(
 /// back with everything else on a reorg.
 fn bump_bucket_count<S: WriteStorage + ReadStorage + ?Sized>(
     ctx: &Rc<S>,
-    bucket: &DotPathBuf,
+    bucket: &KeyPath,
     up: bool,
 ) {
     let current = ctx.__get_u64(bucket).unwrap_or(0);
@@ -453,7 +453,7 @@ where
     /// from `base_path` the same way the field model builds it. This is an
     /// upsert from empty — it adds rows, it doesn't reconcile against existing
     /// ones; per-key updates that must diff go through the field model's `set`.
-    fn __set(ctx: &Rc<S>, base_path: DotPathBuf, value: StorageIndexedMap<K, V, S>) {
+    fn __set(ctx: &Rc<S>, base_path: KeyPath, value: StorageIndexedMap<K, V, S>) {
         let (parent, last) = base_path.pop();
         let Some(last) = last else { return };
         let index_root = parent.push(format!("{last}#idx"));
@@ -524,7 +524,7 @@ mod tests {
                 T::from_str(&s).unwrap()
             })
         }
-        fn __get<T: crate::Retrieve<Self>>(self: &Rc<Self>, path: DotPathBuf) -> Option<T> {
+        fn __get<T: crate::Retrieve<Self>>(self: &Rc<Self>, path: KeyPath) -> Option<T> {
             T::__get(self, path)
         }
         fn __get_str(self: &Rc<Self>, _: &[u8]) -> Option<String> {
@@ -559,7 +559,7 @@ mod tests {
             *self.deletes.borrow_mut() += 1;
             self.map.borrow_mut().remove(path).is_some()
         }
-        fn __set<T: Store<Self>>(self: &Rc<Self>, path: DotPathBuf, value: T) {
+        fn __set<T: Store<Self>>(self: &Rc<Self>, path: KeyPath, value: T) {
             T::__set(self, path, value)
         }
         fn __set_str(self: &Rc<Self>, _: &[u8], _: &str) {
@@ -580,8 +580,8 @@ mod tests {
     }
 
     // A path from a dotted string (each piece a segment) → codec bytes.
-    fn p(s: &str) -> DotPathBuf {
-        DotPathBuf::from(s)
+    fn p(s: &str) -> KeyPath {
+        KeyPath::from(s)
     }
 
     // Codec bytes for an exact path string (for asserting on the Mock's map).
@@ -606,7 +606,7 @@ mod tests {
     }
 
     impl Store<Mock> for Position {
-        fn __set(ctx: &Rc<Mock>, base_path: DotPathBuf, value: Position) {
+        fn __set(ctx: &Rc<Mock>, base_path: KeyPath, value: Position) {
             ctx.__set(base_path.push("status"), value.status);
         }
     }
@@ -733,7 +733,7 @@ mod tests {
     }
 
     impl Store<Mock> for Account {
-        fn __set(ctx: &Rc<Mock>, base_path: DotPathBuf, value: Account) {
+        fn __set(ctx: &Rc<Mock>, base_path: KeyPath, value: Account) {
             ctx.__set(base_path.push("positions"), value.positions);
         }
     }
@@ -804,7 +804,7 @@ mod tests {
     }
 
     impl Store<Mock> for Bag {
-        fn __set(ctx: &Rc<Mock>, base_path: DotPathBuf, value: Bag) {
+        fn __set(ctx: &Rc<Mock>, base_path: KeyPath, value: Bag) {
             ctx.__set(base_path.push("tag"), value.tag);
             ctx.__set(base_path.push("items"), value.items);
         }

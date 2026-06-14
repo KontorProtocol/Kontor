@@ -8,7 +8,7 @@ enum ChallengeStatus {
 impl stdlib::Store<crate::context::ProcStorage> for ChallengeStatus {
     fn __set(
         ctx: &alloc::rc::Rc<crate::context::ProcStorage>,
-        base_path: stdlib::DotPathBuf,
+        base_path: stdlib::KeyPath,
         value: ChallengeStatus,
     ) {
         stdlib::WriteStorage::__delete_matching_paths(
@@ -37,21 +37,17 @@ pub enum ChallengeStatusModel {
 impl ChallengeStatusModel {
     pub fn new(
         ctx: alloc::rc::Rc<crate::context::ViewStorage>,
-        base_path: stdlib::DotPathBuf,
+        base_path: stdlib::KeyPath,
     ) -> Self {
         stdlib::ReadStorage::__extend_path_with_match(
                 &ctx,
                 &base_path,
                 &["active", "proven", "failed"],
             )
-            .map(|path| match path {
-                p if p.starts_with(base_path.push("active").as_ref()) => {
-                    ChallengeStatusModel::Active
-                }
-                p if p.starts_with(base_path.push("proven").as_ref()) => {
-                    ChallengeStatusModel::Proven
-                }
-                p if p.starts_with(base_path.push("failed").as_ref()) => {
+            .map(|variant| match variant.as_str() {
+                "active" => ChallengeStatusModel::Active,
+                "proven" => ChallengeStatusModel::Proven,
+                "failed" => {
                     ChallengeStatusModel::Failed(
                         stdlib::ReadStorage::__get(&ctx, base_path.push("failed"))
                             .unwrap(),
@@ -81,21 +77,17 @@ pub enum ChallengeStatusWriteModel {
 impl ChallengeStatusWriteModel {
     pub fn new(
         ctx: alloc::rc::Rc<crate::context::ProcStorage>,
-        base_path: stdlib::DotPathBuf,
+        base_path: stdlib::KeyPath,
     ) -> Self {
         stdlib::ReadStorage::__extend_path_with_match(
                 &ctx,
                 &base_path,
                 &["active", "proven", "failed"],
             )
-            .map(|path| match path {
-                p if p.starts_with(base_path.push("active").as_ref()) => {
-                    ChallengeStatusWriteModel::Active
-                }
-                p if p.starts_with(base_path.push("proven").as_ref()) => {
-                    ChallengeStatusWriteModel::Proven
-                }
-                p if p.starts_with(base_path.push("failed").as_ref()) => {
+            .map(|variant| match variant.as_str() {
+                "active" => ChallengeStatusWriteModel::Active,
+                "proven" => ChallengeStatusWriteModel::Proven,
+                "failed" => {
                     ChallengeStatusWriteModel::Failed(
                         stdlib::ReadStorage::__get(&ctx, base_path.push("failed"))
                             .unwrap(),

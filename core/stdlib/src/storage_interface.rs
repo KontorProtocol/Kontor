@@ -5,7 +5,7 @@ use alloc::{
     vec::Vec,
 };
 
-use crate::DotPathBuf;
+use crate::KeyPath;
 use crate::keycodec::KeyElement;
 
 pub trait ReadStorage {
@@ -38,21 +38,21 @@ pub trait ReadStorage {
         variants: &[&str],
     ) -> Option<String>;
 
-    fn __get<T: Retrieve<Self>>(self: &alloc::rc::Rc<Self>, path: DotPathBuf) -> Option<T>;
+    fn __get<T: Retrieve<Self>>(self: &alloc::rc::Rc<Self>, path: KeyPath) -> Option<T>;
 }
 
 pub trait Retrieve<T: ?Sized>: Clone {
-    fn __get(ctx: &alloc::rc::Rc<T>, base_path: DotPathBuf) -> Option<Self>;
+    fn __get(ctx: &alloc::rc::Rc<T>, base_path: KeyPath) -> Option<Self>;
 }
 
 impl<T: ReadStorage + ?Sized> Retrieve<T> for u64 {
-    fn __get(ctx: &alloc::rc::Rc<T>, path: DotPathBuf) -> Option<Self> {
+    fn __get(ctx: &alloc::rc::Rc<T>, path: KeyPath) -> Option<Self> {
         ctx.__get_u64(&path)
     }
 }
 
 impl<T: ReadStorage + ?Sized> Retrieve<T> for i64 {
-    fn __get(ctx: &alloc::rc::Rc<T>, path: DotPathBuf) -> Option<Self> {
+    fn __get(ctx: &alloc::rc::Rc<T>, path: KeyPath) -> Option<Self> {
         ctx.__get_s64(&path)
     }
 }
@@ -62,31 +62,31 @@ impl<T: ReadStorage + ?Sized> Retrieve<T> for i64 {
 // in-range value round-trips. Out-of-range bits would indicate storage
 // corruption; the truncating `as` cast keeps the read path infallible.
 impl<T: ReadStorage + ?Sized> Retrieve<T> for u32 {
-    fn __get(ctx: &alloc::rc::Rc<T>, path: DotPathBuf) -> Option<Self> {
+    fn __get(ctx: &alloc::rc::Rc<T>, path: KeyPath) -> Option<Self> {
         ctx.__get_u64(&path).map(|v| v as u32)
     }
 }
 
 impl<T: ReadStorage + ?Sized> Retrieve<T> for i32 {
-    fn __get(ctx: &alloc::rc::Rc<T>, path: DotPathBuf) -> Option<Self> {
+    fn __get(ctx: &alloc::rc::Rc<T>, path: KeyPath) -> Option<Self> {
         ctx.__get_s64(&path).map(|v| v as i32)
     }
 }
 
 impl<T: ReadStorage + ?Sized> Retrieve<T> for String {
-    fn __get(ctx: &alloc::rc::Rc<T>, path: DotPathBuf) -> Option<Self> {
+    fn __get(ctx: &alloc::rc::Rc<T>, path: KeyPath) -> Option<Self> {
         ctx.__get_str(&path)
     }
 }
 
 impl<T: ReadStorage + ?Sized> Retrieve<T> for bool {
-    fn __get(ctx: &alloc::rc::Rc<T>, path: DotPathBuf) -> Option<Self> {
+    fn __get(ctx: &alloc::rc::Rc<T>, path: KeyPath) -> Option<Self> {
         ctx.__get_bool(&path)
     }
 }
 
 impl<T: ReadStorage + ?Sized> Retrieve<T> for Vec<u8> {
-    fn __get(ctx: &alloc::rc::Rc<T>, path: DotPathBuf) -> Option<Self> {
+    fn __get(ctx: &alloc::rc::Rc<T>, path: KeyPath) -> Option<Self> {
         ctx.__get_list_u8(&path)
     }
 }
@@ -104,7 +104,7 @@ pub trait WriteStorage {
 
     fn __set_void(self: &alloc::rc::Rc<Self>, path: &[u8]);
 
-    fn __set<T: Store<Self>>(self: &alloc::rc::Rc<Self>, path: DotPathBuf, value: T);
+    fn __set<T: Store<Self>>(self: &alloc::rc::Rc<Self>, path: KeyPath, value: T);
 
     /// Tombstone a path and its whole subtree (every live descendant), so a
     /// struct/map value stored under child paths is fully removed — not just the
@@ -120,65 +120,65 @@ pub trait WriteStorage {
 }
 
 pub trait Store<T: WriteStorage + ?Sized> {
-    fn __set(ctx: &alloc::rc::Rc<T>, base_path: DotPathBuf, value: Self);
+    fn __set(ctx: &alloc::rc::Rc<T>, base_path: KeyPath, value: Self);
 }
 
 impl<T: WriteStorage + ?Sized> Store<T> for u64 {
-    fn __set(ctx: &alloc::rc::Rc<T>, path: DotPathBuf, value: u64) {
+    fn __set(ctx: &alloc::rc::Rc<T>, path: KeyPath, value: u64) {
         ctx.__set_u64(&path, value);
     }
 }
 
 impl<T: WriteStorage + ?Sized> Store<T> for i64 {
-    fn __set(ctx: &alloc::rc::Rc<T>, path: DotPathBuf, value: i64) {
+    fn __set(ctx: &alloc::rc::Rc<T>, path: KeyPath, value: i64) {
         ctx.__set_s64(&path, value);
     }
 }
 
 impl<T: WriteStorage + ?Sized> Store<T> for u32 {
-    fn __set(ctx: &alloc::rc::Rc<T>, path: DotPathBuf, value: u32) {
+    fn __set(ctx: &alloc::rc::Rc<T>, path: KeyPath, value: u32) {
         ctx.__set_u64(&path, value as u64);
     }
 }
 
 impl<T: WriteStorage + ?Sized> Store<T> for i32 {
-    fn __set(ctx: &alloc::rc::Rc<T>, path: DotPathBuf, value: i32) {
+    fn __set(ctx: &alloc::rc::Rc<T>, path: KeyPath, value: i32) {
         ctx.__set_s64(&path, value as i64);
     }
 }
 
 impl<T: WriteStorage + ?Sized> Store<T> for &str {
-    fn __set(ctx: &alloc::rc::Rc<T>, path: DotPathBuf, value: &str) {
+    fn __set(ctx: &alloc::rc::Rc<T>, path: KeyPath, value: &str) {
         ctx.__set_str(&path, value);
     }
 }
 
 impl<T: WriteStorage + ?Sized> Store<T> for String {
-    fn __set(ctx: &alloc::rc::Rc<T>, path: DotPathBuf, value: String) {
+    fn __set(ctx: &alloc::rc::Rc<T>, path: KeyPath, value: String) {
         ctx.__set_str(&path, &value);
     }
 }
 
 impl<T: WriteStorage + ?Sized> Store<T> for bool {
-    fn __set(ctx: &alloc::rc::Rc<T>, path: DotPathBuf, value: bool) {
+    fn __set(ctx: &alloc::rc::Rc<T>, path: KeyPath, value: bool) {
         ctx.__set_bool(&path, value);
     }
 }
 
 impl<T: WriteStorage + ?Sized> Store<T> for Vec<u8> {
-    fn __set(ctx: &alloc::rc::Rc<T>, path: DotPathBuf, value: Vec<u8>) {
+    fn __set(ctx: &alloc::rc::Rc<T>, path: KeyPath, value: Vec<u8>) {
         ctx.__set_list_u8(&path, value);
     }
 }
 
 impl<T: WriteStorage + ?Sized> Store<T> for () {
-    fn __set(ctx: &alloc::rc::Rc<T>, path: DotPathBuf, _: ()) {
+    fn __set(ctx: &alloc::rc::Rc<T>, path: KeyPath, _: ()) {
         ctx.__set_void(&path);
     }
 }
 
 impl<S: WriteStorage + ?Sized, T: Store<S>> Store<S> for Option<T> {
-    fn __set(ctx: &alloc::rc::Rc<S>, path: DotPathBuf, value: Self) {
+    fn __set(ctx: &alloc::rc::Rc<S>, path: KeyPath, value: Self) {
         ctx.__delete_matching_paths(&path, &["none", "some"]);
         match value {
             Some(inner) => ctx.__set(path.push("some"), inner),
@@ -240,7 +240,7 @@ storage_placeholder!(
 impl<K: ToString + FromStr + Clone, V: Store<S> + Clone, S: WriteStorage + ?Sized> Store<S>
     for StorageMap<K, V, S>
 {
-    fn __set(ctx: &alloc::rc::Rc<S>, base_path: DotPathBuf, value: StorageMap<K, V, S>) {
+    fn __set(ctx: &alloc::rc::Rc<S>, base_path: KeyPath, value: StorageMap<K, V, S>) {
         for (k, v) in value.entries.into_iter() {
             ctx.__set(base_path.push(k.to_string()), v)
         }

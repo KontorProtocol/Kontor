@@ -21,7 +21,7 @@ impl ::core::clone::Clone for Challenge {
 impl stdlib::Store<crate::context::ProcStorage> for Challenge {
     fn __set(
         ctx: &alloc::rc::Rc<crate::context::ProcStorage>,
-        base_path: stdlib::DotPathBuf,
+        base_path: stdlib::KeyPath,
         value: Challenge,
     ) {
         stdlib::WriteStorage::__set(ctx, base_path.push("prover"), value.prover);
@@ -30,13 +30,13 @@ impl stdlib::Store<crate::context::ProcStorage> for Challenge {
     }
 }
 pub struct ChallengeModel {
-    pub base_path: stdlib::DotPathBuf,
+    pub base_path: stdlib::KeyPath,
     ctx: alloc::rc::Rc<crate::context::ViewStorage>,
 }
 impl ChallengeModel {
     pub fn new(
         ctx: alloc::rc::Rc<crate::context::ViewStorage>,
-        base_path: stdlib::DotPathBuf,
+        base_path: stdlib::KeyPath,
     ) -> Self {
         Self {
             base_path: base_path.clone(),
@@ -79,15 +79,15 @@ impl ChallengeModel {
     }
 }
 pub struct ChallengeWriteModel {
-    pub base_path: stdlib::DotPathBuf,
+    pub base_path: stdlib::KeyPath,
     ctx: alloc::rc::Rc<crate::context::ProcStorage>,
-    index_binding: Option<(stdlib::DotPathBuf, alloc::string::String)>,
+    index_binding: Option<(stdlib::KeyPath, alloc::string::String)>,
     model: ChallengeModel,
 }
 impl ChallengeWriteModel {
     pub fn new(
         ctx: alloc::rc::Rc<crate::context::ProcStorage>,
-        base_path: stdlib::DotPathBuf,
+        base_path: stdlib::KeyPath,
     ) -> Self {
         let view_storage = ctx.view_storage();
         Self {
@@ -102,7 +102,7 @@ impl ChallengeWriteModel {
     }
     pub fn with_index(
         mut self,
-        index_root: stdlib::DotPathBuf,
+        index_root: stdlib::KeyPath,
         index_key: alloc::string::String,
     ) -> Self {
         self.index_binding = Some((index_root, index_key));
@@ -424,13 +424,13 @@ struct ChallengeStorage {
     pub challenges: IndexedMap<u64, Challenge>,
 }
 pub struct ChallengeStorageModel {
-    pub base_path: stdlib::DotPathBuf,
+    pub base_path: stdlib::KeyPath,
     ctx: alloc::rc::Rc<crate::context::ViewStorage>,
 }
 impl ChallengeStorageModel {
     pub fn new(
         ctx: alloc::rc::Rc<crate::context::ViewStorage>,
-        base_path: stdlib::DotPathBuf,
+        base_path: stdlib::KeyPath,
     ) -> Self {
         Self {
             base_path: base_path.clone(),
@@ -451,8 +451,8 @@ impl ChallengeStorageModel {
     }
 }
 pub struct ChallengeStorageChallengesModel {
-    pub base_path: stdlib::DotPathBuf,
-    index_path: stdlib::DotPathBuf,
+    pub base_path: stdlib::KeyPath,
+    index_path: stdlib::KeyPath,
     ctx: alloc::rc::Rc<crate::context::ViewStorage>,
 }
 #[automatically_derived]
@@ -511,14 +511,14 @@ impl ChallengeIndex<u64> for ChallengeStorageChallengesModel {
     }
 }
 pub struct ChallengeStorageWriteModel {
-    pub base_path: stdlib::DotPathBuf,
+    pub base_path: stdlib::KeyPath,
     ctx: alloc::rc::Rc<crate::context::ProcStorage>,
     model: ChallengeStorageModel,
 }
 impl ChallengeStorageWriteModel {
     pub fn new(
         ctx: alloc::rc::Rc<crate::context::ProcStorage>,
-        base_path: stdlib::DotPathBuf,
+        base_path: stdlib::KeyPath,
     ) -> Self {
         let view_storage = ctx.view_storage();
         Self {
@@ -550,8 +550,8 @@ impl core::ops::Deref for ChallengeStorageWriteModel {
     }
 }
 pub struct ChallengeStorageChallengesWriteModel {
-    pub base_path: stdlib::DotPathBuf,
-    index_path: stdlib::DotPathBuf,
+    pub base_path: stdlib::KeyPath,
+    index_path: stdlib::KeyPath,
     ctx: alloc::rc::Rc<crate::context::ProcStorage>,
 }
 #[automatically_derived]

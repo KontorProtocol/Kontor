@@ -363,6 +363,37 @@ fn tuple_body_len(bytes: &[u8]) -> Result<usize, CodecError> {
     }
 }
 
+/// A best-effort human-readable rendering of a codec key, for logs/debug ONLY —
+/// it is NOT canonical or round-trippable (the bytes are). String elements render
+/// as their text; anything else renders as `0x<hex>`. (Phase 2 keys are all string
+/// elements; richer rendering of typed elements can be added with them.)
+pub fn debug_render(mut bytes: &[u8]) -> String {
+    let mut out = String::new();
+    while !bytes.is_empty() {
+        let (elem, rest) = match next_element(bytes) {
+            Ok(parts) => parts,
+            Err(_) => {
+                out.push_str("/<malformed>");
+                break;
+            }
+        };
+        if !out.is_empty() {
+            out.push('/');
+        }
+        match String::decode_from(elem) {
+            Ok((s, _)) => out.push_str(&s),
+            Err(_) => {
+                out.push_str("0x");
+                for b in elem {
+                    out.push_str(&alloc::format!("{b:02x}"));
+                }
+            }
+        }
+        bytes = rest;
+    }
+    out
+}
+
 /// The exclusive upper bound of the range covering every key with `prefix` as a
 /// byte-prefix: strip trailing `0xFF`, increment the last remaining byte. `None`
 /// means "no upper bound" (the prefix is empty or all `0xFF`), i.e. scan to the

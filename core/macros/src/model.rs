@@ -76,7 +76,7 @@ pub fn generate_struct(
                     special_models.push(quote! {
                         #[derive(Clone)]
                         pub struct #field_model_name {
-                            pub base_path: stdlib::DotPathBuf,
+                            pub base_path: stdlib::KeyPath,
                             ctx: alloc::rc::Rc<#context_param>,
                         }
 
@@ -161,8 +161,8 @@ pub fn generate_struct(
                     special_models.push(quote! {
                         #[derive(Clone)]
                         pub struct #field_model_name {
-                            pub base_path: stdlib::DotPathBuf,
-                            index_path: stdlib::DotPathBuf,
+                            pub base_path: stdlib::KeyPath,
+                            index_path: stdlib::KeyPath,
                             ctx: alloc::rc::Rc<#context_param>,
                         }
 
@@ -483,11 +483,11 @@ pub fn generate_struct(
             let (binding_field, binding_init, with_index_method) = if write && has_indexed {
                 (
                     quote! {
-                        index_binding: Option<(stdlib::DotPathBuf, alloc::string::String)>,
+                        index_binding: Option<(stdlib::KeyPath, alloc::string::String)>,
                     },
                     quote! { index_binding: None, },
                     quote! {
-                        pub fn with_index(mut self, index_root: stdlib::DotPathBuf, index_key: alloc::string::String) -> Self {
+                        pub fn with_index(mut self, index_root: stdlib::KeyPath, index_key: alloc::string::String) -> Self {
                             self.index_binding = Some((index_root, index_key));
                             self
                         }
@@ -572,14 +572,14 @@ pub fn generate_struct(
 
             let result = quote! {
                 pub struct #model_name {
-                    pub base_path: stdlib::DotPathBuf,
+                    pub base_path: stdlib::KeyPath,
                     ctx: alloc::rc::Rc<#context_param>,
                     #binding_field
                     #proc_props
                 }
 
                 impl #model_name {
-                    pub fn new(ctx: alloc::rc::Rc<#context_param>, base_path: stdlib::DotPathBuf) -> Self {
+                    pub fn new(ctx: alloc::rc::Rc<#context_param>, base_path: stdlib::KeyPath) -> Self {
                         #proc_prelude
                         Self {
                             base_path: base_path.clone(),
@@ -720,7 +720,7 @@ pub fn generate_enum(data_enum: &DataEnum, type_name: &Ident, write: bool) -> Re
         }
 
         impl #model_name {
-            pub fn new(ctx: alloc::rc::Rc<#context_param>, base_path: stdlib::DotPathBuf) -> Self {
+            pub fn new(ctx: alloc::rc::Rc<#context_param>, base_path: stdlib::KeyPath) -> Self {
                 stdlib::ReadStorage::__extend_path_with_match(&ctx, &base_path, &[#(#variant_names),*])
                     .map(|variant| match variant.as_str() {
                         #(#new_arms,)*

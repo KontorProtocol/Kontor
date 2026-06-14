@@ -6,7 +6,7 @@ struct ProxyStorage {
 impl stdlib::Store<crate::context::ProcStorage> for ProxyStorage {
     fn __set(
         ctx: &alloc::rc::Rc<crate::context::ProcStorage>,
-        base_path: stdlib::DotPathBuf,
+        base_path: stdlib::KeyPath,
         value: ProxyStorage,
     ) {
         stdlib::WriteStorage::__set(
@@ -17,13 +17,13 @@ impl stdlib::Store<crate::context::ProcStorage> for ProxyStorage {
     }
 }
 pub struct ProxyStorageModel {
-    pub base_path: stdlib::DotPathBuf,
+    pub base_path: stdlib::KeyPath,
     ctx: alloc::rc::Rc<crate::context::ViewStorage>,
 }
 impl ProxyStorageModel {
     pub fn new(
         ctx: alloc::rc::Rc<crate::context::ViewStorage>,
-        base_path: stdlib::DotPathBuf,
+        base_path: stdlib::KeyPath,
     ) -> Self {
         Self {
             base_path: base_path.clone(),
@@ -41,14 +41,14 @@ impl ProxyStorageModel {
     }
 }
 pub struct ProxyStorageWriteModel {
-    pub base_path: stdlib::DotPathBuf,
+    pub base_path: stdlib::KeyPath,
     ctx: alloc::rc::Rc<crate::context::ProcStorage>,
     model: ProxyStorageModel,
 }
 impl ProxyStorageWriteModel {
     pub fn new(
         ctx: alloc::rc::Rc<crate::context::ProcStorage>,
-        base_path: stdlib::DotPathBuf,
+        base_path: stdlib::KeyPath,
     ) -> Self {
         let view_storage = ctx.view_storage();
         Self {

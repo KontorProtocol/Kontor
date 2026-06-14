@@ -11,19 +11,19 @@ pub fn generate_root_struct(data_struct: &DataStruct, type_name: &Ident) -> Resu
             Ok(quote! {
                 impl #type_name {
                     pub fn init(self, ctx: &crate::ProcContext) {
-                        stdlib::WriteStorage::__set(&alloc::rc::Rc::new(ctx.storage()),stdlib::DotPathBuf::new(), self)
+                        stdlib::WriteStorage::__set(&alloc::rc::Rc::new(ctx.storage()),stdlib::KeyPath::new(), self)
                     }
                 }
 
                 impl crate::ProcContext {
                     pub fn model(&self) -> #write_model_name {
-                        #write_model_name::new(alloc::rc::Rc::new(self.storage()), DotPathBuf::new())
+                        #write_model_name::new(alloc::rc::Rc::new(self.storage()), KeyPath::new())
                     }
                 }
 
                 impl crate::ViewContext {
                     pub fn model(&self) -> #model_name {
-                        #model_name::new(alloc::rc::Rc::new(self.storage()), DotPathBuf::new())
+                        #model_name::new(alloc::rc::Rc::new(self.storage()), KeyPath::new())
                     }
                 }
             })

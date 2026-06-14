@@ -7,7 +7,7 @@ enum Error {
 impl stdlib::Store<crate::context::ProcStorage> for Error {
     fn __set(
         ctx: &alloc::rc::Rc<crate::context::ProcStorage>,
-        base_path: stdlib::DotPathBuf,
+        base_path: stdlib::KeyPath,
         value: Error,
     ) {
         stdlib::WriteStorage::__delete_matching_paths(

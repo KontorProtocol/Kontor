@@ -6,7 +6,7 @@ struct ProxyStorage {
 impl stdlib::Store<crate::context::ProcStorage> for ProxyStorage {
     fn __set(
         ctx: &alloc::rc::Rc<crate::context::ProcStorage>,
-        base_path: stdlib::DotPathBuf,
+        base_path: stdlib::KeyPath,
         value: ProxyStorage,
     ) {
         stdlib::WriteStorage::__set(
@@ -17,13 +17,13 @@ impl stdlib::Store<crate::context::ProcStorage> for ProxyStorage {
     }
 }
 pub struct ProxyStorageModel {
-    pub base_path: stdlib::DotPathBuf,
+    pub base_path: stdlib::KeyPath,
     ctx: alloc::rc::Rc<crate::context::ViewStorage>,
 }
 impl ProxyStorageModel {
     pub fn new(
         ctx: alloc::rc::Rc<crate::context::ViewStorage>,
-        base_path: stdlib::DotPathBuf,
+        base_path: stdlib::KeyPath,
     ) -> Self {
         Self {
             base_path: base_path.clone(),
@@ -41,14 +41,14 @@ impl ProxyStorageModel {
     }
 }
 pub struct ProxyStorageWriteModel {
-    pub base_path: stdlib::DotPathBuf,
+    pub base_path: stdlib::KeyPath,
     ctx: alloc::rc::Rc<crate::context::ProcStorage>,
     model: ProxyStorageModel,
 }
 impl ProxyStorageWriteModel {
     pub fn new(
         ctx: alloc::rc::Rc<crate::context::ProcStorage>,
-        base_path: stdlib::DotPathBuf,
+        base_path: stdlib::KeyPath,
     ) -> Self {
         let view_storage = ctx.view_storage();
         Self {
@@ -108,21 +108,18 @@ impl ProxyStorage {
     pub fn init(self, ctx: &crate::ProcContext) {
         stdlib::WriteStorage::__set(
             &alloc::rc::Rc::new(ctx.storage()),
-            stdlib::DotPathBuf::new(),
+            stdlib::KeyPath::new(),
             self,
         )
     }
 }
 impl crate::ProcContext {
     pub fn model(&self) -> ProxyStorageWriteModel {
-        ProxyStorageWriteModel::new(
-            alloc::rc::Rc::new(self.storage()),
-            DotPathBuf::new(),
-        )
+        ProxyStorageWriteModel::new(alloc::rc::Rc::new(self.storage()), KeyPath::new())
     }
 }
 impl crate::ViewContext {
     pub fn model(&self) -> ProxyStorageModel {
-        ProxyStorageModel::new(alloc::rc::Rc::new(self.storage()), DotPathBuf::new())
+        ProxyStorageModel::new(alloc::rc::Rc::new(self.storage()), KeyPath::new())
     }
 }
