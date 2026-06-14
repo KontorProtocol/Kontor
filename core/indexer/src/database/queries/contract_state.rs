@@ -179,7 +179,10 @@ pub async fn delete_contract_state(
     // `live_latest` skips an already-tombstoned path (its latest version isn't
     // live), so it's not re-tombstoned.
     let (range, mut params) = subtree_range(">=", path);
-    params.push((":contract_id".to_string(), Value::Integer(contract_id as i64)));
+    params.push((
+        ":contract_id".to_string(),
+        Value::Integer(contract_id as i64),
+    ));
     let query = live_latest(
         "contract_id, height, tx_id, path, value, deleted",
         &format!("contract_id = :contract_id AND {range}"),
@@ -214,7 +217,10 @@ pub async fn exists_contract_state(
     // `<map>#idx`) must not hide sibling paths that are still live — which is
     // exactly what `live_latest` (per-path rank + post `deleted = false`) gives.
     let (range, mut params) = subtree_range(">=", path);
-    params.push((":contract_id".to_string(), Value::Integer(contract_id as i64)));
+    params.push((
+        ":contract_id".to_string(),
+        Value::Integer(contract_id as i64),
+    ));
     let query = live_latest(
         "1",
         &format!("contract_id = :contract_id AND {range}"),
@@ -240,7 +246,10 @@ pub async fn path_prefix_filter_contract_state(
     // `path > :lo` excludes the exact node (no child element to extract); `< :hi`
     // bounds the subtree. Ordered by `path` so children are grouped for dedup.
     let (range, mut params) = subtree_range(">", &path);
-    params.push((":contract_id".to_string(), Value::Integer(contract_id as i64)));
+    params.push((
+        ":contract_id".to_string(),
+        Value::Integer(contract_id as i64),
+    ));
     let query = live_latest(
         "path",
         &format!("contract_id = :contract_id AND {range}"),
@@ -300,7 +309,10 @@ pub async fn matching_path(
 ) -> Result<Option<String>, Error> {
     // Global-newest (no `partition_by`) live row under `base_path`.
     let (range, mut params) = subtree_range(">=", base_path);
-    params.push((":contract_id".to_string(), Value::Integer(contract_id as i64)));
+    params.push((
+        ":contract_id".to_string(),
+        Value::Integer(contract_id as i64),
+    ));
     let query = LatestMany::builder()
         .table("contract_state")
         .select("path")
@@ -346,7 +358,10 @@ pub async fn delete_matching_paths(
         let mut prefix = base_path.to_vec();
         variant.encode_to(&mut prefix); // base_path ++ enc(variant)
         let (range, mut params) = subtree_range(">=", &prefix);
-        params.push((":contract_id".to_string(), Value::Integer(contract_id as i64)));
+        params.push((
+            ":contract_id".to_string(),
+            Value::Integer(contract_id as i64),
+        ));
         params.push((":height".to_string(), Value::Integer(height as i64)));
         deleted += conn
             .execute(
