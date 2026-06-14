@@ -189,7 +189,7 @@ impl Runtime {
         accessor: &Accessor<T, Self>,
         self_: Resource<Keys>,
     ) -> Result<Option<String>> {
-        let k = self
+        let k: Option<Vec<u8>> = self
             .table
             .lock()
             .await
@@ -198,13 +198,16 @@ impl Runtime {
             .next()
             .await
             .transpose()?;
-        if let Some(k) = &k {
-            tracing::trace!("keys.next() returned: {k:?}");
-            Fuel::KeysNext(k.len() as u64)
+        if let Some(bytes) = &k {
+            tracing::trace!("keys.next() returned {} bytes", bytes.len());
+            Fuel::KeysNext(bytes.len() as u64)
                 .consume(accessor, self.gauge.as_ref())
                 .await?;
         }
-        Ok(k)
+        // Phase 1 placeholder: the WIT `keys.next()` still returns `string`, so
+        // render the codec child element lossily. Phase 2 changes the WIT to
+        // return `list<u8>` and the guest decodes the element directly.
+        Ok(k.map(|bytes| String::from_utf8_lossy(&bytes).into_owned()))
     }
 
     pub(super) async fn _fall_signer<T>(

@@ -21,7 +21,7 @@ impl Runtime {
         let fuel = accessor.with(|access| access.as_context().get_fuel())?;
         let table = self.table.lock().await;
         let contract_id = table.get(&self_)?.get_contract_id();
-        let raw = self.storage.get(fuel, contract_id, &path).await?;
+        let raw = self.storage.get(fuel, contract_id, path.as_bytes()).await?;
         if raw.is_none() {
             tracing::debug!(
                 "storage read returned None: contract_id={contract_id} path={path} fuel={fuel} height={}",
@@ -47,7 +47,7 @@ impl Runtime {
         let mut table = self.table.lock().await;
         let contract_id = table.get(&resource)?.get_contract_id();
         Fuel::GetKeys.consume(accessor, self.gauge.as_ref()).await?;
-        let stream = Box::pin(self.storage.keys(contract_id, path.clone()).await?);
+        let stream = Box::pin(self.storage.keys(contract_id, path.into_bytes()).await?);
         Ok(table.push(Keys { stream })?)
     }
 
@@ -60,7 +60,9 @@ impl Runtime {
         let table = self.table.lock().await;
         let _self = table.get(&resource)?;
         Fuel::Exists.consume(accessor, self.gauge.as_ref()).await?;
-        self.storage.exists(_self.get_contract_id(), &path).await
+        self.storage
+            .exists(_self.get_contract_id(), path.as_bytes())
+            .await
     }
 
     pub(crate) async fn _extend_path_with_match<S, T: HasContractId>(
@@ -76,11 +78,7 @@ impl Runtime {
             .consume(accessor, self.gauge.as_ref())
             .await?;
         self.storage
-            .extend_path_with_match(
-                _self.get_contract_id(),
-                &path,
-                &format!(r"^{}.({})(\..*|$)", path, variants.join("|")),
-            )
+            .extend_path_with_match(_self.get_contract_id(), path.as_bytes(), &variants)
             .await
     }
 
@@ -88,14 +86,15 @@ impl Runtime {
         &self,
         accessor: &Accessor<S, Self>,
         self_: Resource<T>,
-        regexp: String,
+        base_path: String,
+        variants: Vec<String>,
     ) -> Result<u64> {
-        Fuel::DeleteMatchingPaths(regexp.len() as u64)
+        Fuel::DeleteMatchingPaths(variants.len() as u64)
             .consume(accessor, self.gauge.as_ref())
             .await?;
         let contract_id = self.table.lock().await.get(&self_)?.get_contract_id();
         self.storage
-            .delete_matching_paths(contract_id, &regexp)
+            .delete_matching_paths(contract_id, base_path.as_bytes(), &variants)
             .await
     }
 
@@ -109,7 +108,7 @@ impl Runtime {
     ) -> Result<bool> {
         Fuel::Set(0).consume(accessor, self.gauge.as_ref()).await?;
         let contract_id = self.table.lock().await.get(&self_)?.get_contract_id();
-        self.storage.delete(contract_id, &path).await
+        self.storage.delete(contract_id, path.as_bytes()).await
     }
 
     pub(crate) async fn _set_primitive<S, T: HasContractId, V: Serialize>(
@@ -127,6 +126,6 @@ impl Runtime {
         Fuel::Set(bs.len() as u64)
             .consume(accessor, self.gauge.as_ref())
             .await?;
-        self.storage.set(contract_id, &path, bs).await
+        self.storage.set(contract_id, path.as_bytes(), bs).await
     }
 }

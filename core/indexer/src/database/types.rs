@@ -122,7 +122,8 @@ pub struct ContractStateRow {
     pub contract_id: u64,
     pub height: u64,
     pub tx_id: Option<u64>,
-    pub path: String,
+    /// Order-preserving tuple-codec bytes (see `stdlib::keycodec`).
+    pub path: Vec<u8>,
     #[builder(default = vec![])]
     pub value: Vec<u8>,
     #[builder(default = false)]

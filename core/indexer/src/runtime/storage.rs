@@ -65,18 +65,18 @@ pub struct Storage {
 }
 
 impl Storage {
-    pub async fn get(&self, fuel: u64, contract_id: u64, path: &str) -> Result<Option<Vec<u8>>> {
+    pub async fn get(&self, fuel: u64, contract_id: u64, path: &[u8]) -> Result<Option<Vec<u8>>> {
         Ok(get_latest_contract_state_value(&self.conn, fuel, contract_id, path).await?)
     }
 
-    pub async fn set(&self, contract_id: u64, path: &str, value: &[u8]) -> Result<()> {
+    pub async fn set(&self, contract_id: u64, path: &[u8], value: &[u8]) -> Result<()> {
         insert_contract_state(
             &self.conn,
             ContractStateRow::builder()
                 .contract_id(contract_id)
                 .maybe_tx_id(self.effective_tx_id())
                 .height(self.height)
-                .path(path.to_string())
+                .path(path.to_vec())
                 .value(value.to_vec())
                 .build(),
         )
@@ -84,7 +84,7 @@ impl Storage {
         Ok(())
     }
 
-    pub async fn delete(&self, contract_id: u64, path: &str) -> Result<bool> {
+    pub async fn delete(&self, contract_id: u64, path: &[u8]) -> Result<bool> {
         Ok(delete_contract_state(
             &self.conn,
             self.height,
@@ -95,21 +95,29 @@ impl Storage {
         .await?)
     }
 
-    pub async fn exists(&self, contract_id: u64, path: &str) -> Result<bool> {
+    pub async fn exists(&self, contract_id: u64, path: &[u8]) -> Result<bool> {
         Ok(exists_contract_state(&self.conn, contract_id, path).await?)
     }
 
+    /// Resolve which of `variants` is the current value under `base_path` (an
+    /// enum/option discriminant), or `None` if unset. The host passes the variant
+    /// names; the query checks them against the codec child element.
     pub async fn extend_path_with_match(
         &self,
         contract_id: u64,
-        path: &str,
-        regexp: &str,
+        base_path: &[u8],
+        variants: &[String],
     ) -> Result<Option<String>> {
-        Ok(matching_path(&self.conn, contract_id, path, regexp).await?)
+        Ok(matching_path(&self.conn, contract_id, base_path, variants).await?)
     }
 
-    pub async fn delete_matching_paths(&self, contract_id: u64, regexp: &str) -> Result<u64> {
-        Ok(delete_matching_paths(&self.conn, contract_id, self.height, regexp).await?)
+    pub async fn delete_matching_paths(
+        &self,
+        contract_id: u64,
+        base_path: &[u8],
+        variants: &[String],
+    ) -> Result<u64> {
+        Ok(delete_matching_paths(&self.conn, contract_id, self.height, base_path, variants).await?)
     }
 
     pub async fn contract_id(&self, contract_address: &ContractAddress) -> Result<Option<u64>> {
@@ -235,8 +243,9 @@ impl Storage {
     pub async fn keys(
         &self,
         contract_id: u64,
-        path: String,
-    ) -> Result<impl Stream<Item = Result<String, libsql::Error>> + Send + 'static> {
+        path: Vec<u8>,
+    ) -> Result<impl Stream<Item = Result<Vec<u8>, crate::database::queries::Error>> + Send + 'static>
+    {
         Ok(path_prefix_filter_contract_state(&self.conn, contract_id, path).await?)
     }
 

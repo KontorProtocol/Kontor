@@ -194,11 +194,7 @@ impl built_in::context::HostProcStorageWithStore for Runtime {
     ) -> Result<u64> {
         accessor
             .with(|mut access| access.get().clone())
-            ._delete_matching_paths(
-                accessor,
-                self_,
-                format!(r"^{}.({})(\..*|$)", base_path, variants.join("|")),
-            )
+            ._delete_matching_paths(accessor, self_, base_path, variants)
             .await
     }
 

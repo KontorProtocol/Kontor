@@ -13,7 +13,9 @@ VALUES
               crypto_sha256 (
                 concat (
                   NEW.contract_id,
-                  NEW.path,
+                  -- path is a BLOB (codec bytes); hex it so the digest is over a
+                  -- deterministic text form, like value below.
+                  hex(NEW.path),
                   hex(NEW.value),
                   NEW.deleted
                 )

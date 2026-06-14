@@ -897,7 +897,7 @@ mod transactions_pagination {
                     .contract_id(1)
                     .tx_id(tx_ids[&height][tx_index])
                     .height(height)
-                    .path(path.to_string())
+                    .path(stdlib::KeyElement::encode(&path.to_string()))
                     .build(),
             )
             .await?;

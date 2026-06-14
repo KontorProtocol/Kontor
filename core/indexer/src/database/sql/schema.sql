@@ -47,7 +47,9 @@ CREATE TABLE IF NOT EXISTS contract_state (
   height INTEGER NOT NULL,
   tx_id INTEGER,
   size INTEGER NOT NULL,
-  path TEXT NOT NULL,
+  -- Order-preserving tuple-codec bytes (see stdlib::keycodec); BLOB so it can
+  -- hold any bytes and so bytewise comparison == logical key order.
+  path BLOB NOT NULL,
   value BLOB NOT NULL,
   deleted BOOLEAN NOT NULL DEFAULT 0,
   UNIQUE (contract_id, height, path),

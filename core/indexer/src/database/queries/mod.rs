@@ -37,6 +37,8 @@ pub enum Error {
     ContractNotFound(String),
     #[error("Invalid data: {0}")]
     InvalidData(String),
+    #[error("Key codec error: {0:?}")]
+    KeyCodec(stdlib::CodecError),
 }
 
 #[cfg(test)]

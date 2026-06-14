@@ -153,7 +153,10 @@ impl HasContractId for FallContext {
 }
 
 pub struct Keys {
-    pub stream: Pin<Box<dyn Stream<Item = Result<String, libsql::Error>> + Send>>,
+    // Each item is a child key's codec element bytes (see stdlib::keycodec); the
+    // guest decodes it to `K`.
+    pub stream:
+        Pin<Box<dyn Stream<Item = Result<Vec<u8>, crate::database::queries::Error>> + Send>>,
 }
 
 pub struct CoreContext {
