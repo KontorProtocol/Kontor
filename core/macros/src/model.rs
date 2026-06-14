@@ -2,19 +2,32 @@ use heck::ToPascalCase;
 use proc_macro2::{Span, TokenStream};
 use quote::quote;
 use syn::{
-    DataEnum, DataStruct, Error, Fields, GenericArgument, Ident, PathArguments, Result, Type,
-    spanned::Spanned,
+    Attribute, DataEnum, DataStruct, Error, Fields, GenericArgument, Ident, PathArguments, Result,
+    Type, spanned::Spanned,
 };
 
+use crate::index_decl::{self, IndexDecl};
 use crate::utils;
+
+/// The local an index-participating field is read into once, so building entries
+/// (and a setter's old + new sides) never re-reads the same storage slot.
+fn idx_local(field: &Ident) -> Ident {
+    Ident::new(&format!("__idx_{field}"), field.span())
+}
 
 pub fn generate_struct(
     data_struct: &DataStruct,
+    struct_attrs: &[Attribute],
     type_name: &Ident,
     write: bool,
 ) -> Result<TokenStream> {
     match &data_struct.fields {
         Fields::Named(fields) => {
+            // The struct's declared secondary indexes (field-level `#[index]` +
+            // struct-level `#[index(...)]`). The single source the in-place
+            // setters reconcile against and the read model reads back for diffs.
+            let decls = index_decl::parse(struct_attrs, fields)?;
+            let has_indexed = !decls.is_empty();
             let write_prefix = if write { "Write" } else { "" };
             let read_only_model_name = Ident::new(&format!("{}Model", type_name), type_name.span());
             let model_name = Ident::new(
@@ -48,12 +61,12 @@ pub fn generate_struct(
                     let setter = if write {
                         quote! {
                             pub fn set(&self, key: &#k_ty, value: #v_ty) {
-                                stdlib::WriteStorage::__set(&self.ctx, self.base_path.push(key.to_string()), value)
+                                stdlib::WriteStorage::__set(&self.ctx, self.base_path.push_element(key), value)
                             }
 
                             /// Remove a single entry (tombstone). Returns true if a live value existed.
                             pub fn remove(&self, key: &#k_ty) -> bool {
-                                stdlib::WriteStorage::__delete(&self.ctx, &self.base_path.push(key.to_string()))
+                                stdlib::WriteStorage::__delete(&self.ctx, &self.base_path.push_element(key))
                             }
                         }
                     } else {
@@ -63,13 +76,13 @@ pub fn generate_struct(
                     special_models.push(quote! {
                         #[derive(Clone)]
                         pub struct #field_model_name {
-                            pub base_path: stdlib::DotPathBuf,
+                            pub base_path: stdlib::KeyPath,
                             ctx: alloc::rc::Rc<#context_param>,
                         }
 
                         impl #field_model_name {
                             pub fn get(&self, key: &#k_ty) -> #get_return {
-                                let base_path = self.base_path.push(key.to_string());
+                                let base_path = self.base_path.push_element(key);
                                 #get_body
                             }
 
@@ -113,7 +126,7 @@ pub fn generate_struct(
                     // On the write model, bind the returned value model to this
                     // index so its indexed-field setters reconcile in place.
                     let with_index_call = if write {
-                        quote! { .with_index(self.index_path.clone(), key.to_string()) }
+                        quote! { .with_index(self.index_path.clone(), stdlib::KeyElement::encode(key)) }
                     } else {
                         quote! {}
                     };
@@ -126,19 +139,19 @@ pub fn generate_struct(
                     let mutators = if write {
                         quote! {
                             pub fn set(&self, key: &#k_ty, value: #v_ty) {
-                                let key_str = key.to_string();
+                                let key_bytes = stdlib::KeyElement::encode(key);
                                 let new_entries = stdlib::Indexed::index_entries(&value);
                                 let old_entries = self.get(key).map(|m| m.__index_entries()).unwrap_or_default();
-                                stdlib::apply_index_diff(&self.ctx, &self.index_path, &key_str, &old_entries, &new_entries);
-                                stdlib::WriteStorage::__set(&self.ctx, self.base_path.push(key_str), value);
+                                stdlib::apply_index_diff(&self.ctx, &self.index_path, &key_bytes, &old_entries, &new_entries);
+                                stdlib::WriteStorage::__set(&self.ctx, self.base_path.push_element(key), value);
                             }
 
                             /// Remove the entry and its index rows. Returns true if a live value existed.
                             pub fn remove(&self, key: &#k_ty) -> bool {
-                                let key_str = key.to_string();
+                                let key_bytes = stdlib::KeyElement::encode(key);
                                 let old_entries = self.get(key).map(|m| m.__index_entries()).unwrap_or_default();
-                                stdlib::apply_index_diff(&self.ctx, &self.index_path, &key_str, &old_entries, &[]);
-                                stdlib::WriteStorage::__delete(&self.ctx, &self.base_path.push(key_str))
+                                stdlib::apply_index_diff(&self.ctx, &self.index_path, &key_bytes, &old_entries, &[]);
+                                stdlib::WriteStorage::__delete(&self.ctx, &self.base_path.push_element(key))
                             }
                         }
                     } else {
@@ -148,14 +161,14 @@ pub fn generate_struct(
                     special_models.push(quote! {
                         #[derive(Clone)]
                         pub struct #field_model_name {
-                            pub base_path: stdlib::DotPathBuf,
-                            index_path: stdlib::DotPathBuf,
+                            pub base_path: stdlib::KeyPath,
+                            index_path: stdlib::KeyPath,
                             ctx: alloc::rc::Rc<#context_param>,
                         }
 
                         impl #field_model_name {
                             pub fn get(&self, key: &#k_ty) -> Option<#v_model_ty> {
-                                let base_path = self.base_path.push(key.to_string());
+                                let base_path = self.base_path.push_element(key);
                                 stdlib::ReadStorage::__exists(&self.ctx, &base_path).then(|| #v_model_ty::new(self.ctx.clone(), base_path)#with_index_call)
                             }
 
@@ -175,13 +188,22 @@ pub fn generate_struct(
                         // two primitives. `bucket_count` reads the count the
                         // framework maintains AT the bucket-prefix path.
                         impl #index_trait<#k_ty> for #field_model_name {
-                            fn by_index(&self, index_name: &str, index_key: &str) -> impl Iterator<Item = #k_ty> + use<> {
-                                let bucket = self.index_path.push(index_name).push(index_key);
+                            fn by_index(&self, index_name: &str, bucket: &[&[u8]]) -> impl Iterator<Item = #k_ty> + use<> {
+                                let bucket = bucket.iter().fold(self.index_path.push(index_name), |p, seg| p.push_raw_element(seg));
                                 stdlib::ReadStorage::__get_keys(&self.ctx, &bucket)
                             }
 
-                            fn bucket_count(&self, index_name: &str, index_key: &str) -> u64 {
-                                let bucket = self.index_path.push(index_name).push(index_key);
+                            fn by_index_sorted<S: stdlib::KeyElement + Clone + 'static>(&self, index_name: &str, bucket: &[&[u8]]) -> stdlib::SortedScan<#k_ty, S> {
+                                let bucket = bucket.iter().fold(self.index_path.push(index_name), |p, seg| p.push_raw_element(seg));
+                                // Each member is one `(sort, pk)` tuple element; decode
+                                // it directly. `SortedScan` drops the sort field, yields
+                                // `K` in value order, and bounds on the decoded sort.
+                                let members = stdlib::ReadStorage::__get_keys::<(S, #k_ty)>(&self.ctx, &bucket);
+                                stdlib::SortedScan::new(alloc::boxed::Box::new(members))
+                            }
+
+                            fn bucket_count(&self, index_name: &str, bucket: &[&[u8]]) -> u64 {
+                                let bucket = bucket.iter().fold(self.index_path.push(index_name), |p, seg| p.push_raw_element(seg));
                                 stdlib::ReadStorage::__get_u64(&self.ctx, &bucket).unwrap_or(0)
                             }
                         }
@@ -240,6 +262,23 @@ pub fn generate_struct(
                 }
             }).collect::<Result<Vec<_>>>()?;
 
+            // A field's current stored value, as the read/write model exposes it:
+            // a primitive getter yields the value; a non-primitive (e.g. enum)
+            // getter yields a model, so `.load()` it. The value index entries are
+            // built from — shared by the read model's `__index_entries` and the
+            // in-place setters' reconcile (for fields they don't themselves change).
+            let current_value = |field: &Ident| {
+                let ty = index_decl::field_type(fields, field);
+                // An `Option` field's getter already yields the `Option`, which
+                // `IndexKey` buckets by its none/some discriminant (the payload is
+                // irrelevant) — so no `.load()`, same as a primitive.
+                if utils::is_primitive_type(ty) || utils::is_option_type(ty) {
+                    quote! { self.#field() }
+                } else {
+                    quote! { self.#field().load() }
+                }
+            };
+
             let setters = if write {
                 fields
                     .named
@@ -255,34 +294,79 @@ pub fn generate_struct(
                                 stdlib::WriteStorage::__set(&self.ctx, self.base_path.push(#field_name_str), value);
                             }
                         };
-                        let is_indexed = field.attrs.iter().any(|a| a.path().is_ident("index"));
+
+                        // Every index this field participates in, as a bucket OR a
+                        // sort field. Setting it must move the member across all of
+                        // them: the changed field uses `old`/`new`, every other
+                        // participating field is read at its current value. Empty ⇒
+                        // a plain write, nothing to reconcile.
+                        let relevant: Vec<&IndexDecl> = decls
+                            .iter()
+                            .filter(|d| {
+                                d.by.iter().any(|b| b == field_name)
+                                    || d.sort.as_ref() == Some(field_name)
+                            })
+                            .collect();
+                        let participates = !relevant.is_empty();
+                        let reconcile = if participates {
+                            // Read every OTHER participating field once; the changed
+                            // field uses the `old`/`new` locals, so neither the two
+                            // entry sides nor two indexes sharing a field re-read it.
+                            let others: Vec<&Ident> =
+                                index_decl::referenced_fields(relevant.iter().copied())
+                                    .into_iter()
+                                    .filter(|f| *f != field_name)
+                                    .collect();
+                            let hoists = others.iter().map(|f| {
+                                let local = idx_local(f);
+                                let read = current_value(f);
+                                quote! { let #local = #read; }
+                            });
+                            let value_old = |g: &Ident| {
+                                if g == field_name {
+                                    quote! { old }
+                                } else {
+                                    let local = idx_local(g);
+                                    quote! { #local }
+                                }
+                            };
+                            let value_new = |g: &Ident| {
+                                if g == field_name {
+                                    quote! { new }
+                                } else {
+                                    let local = idx_local(g);
+                                    quote! { #local }
+                                }
+                            };
+                            let old_entries =
+                                relevant.iter().map(|d| index_decl::index_entry(d, &value_old));
+                            let new_entries =
+                                relevant.iter().map(|d| index_decl::index_entry(d, &value_new));
+                            quote! {
+                                if let Some((index_root, index_key)) = &self.index_binding {
+                                    #(#hoists)*
+                                    stdlib::apply_index_diff(
+                                        &self.ctx, index_root, index_key,
+                                        &[#(#old_entries),*],
+                                        &[#(#new_entries),*],
+                                    );
+                                }
+                            }
+                        } else {
+                            quote! {}
+                        };
+
                         if utils::is_map_type(field_ty) || utils::is_indexed_map_type(field_ty) {
                             Ok(quote! {})
                         } else if utils::is_primitive_type(field_ty) {
                             let update_field_name = Ident::new(&format!("update_{}", field_name), field_name.span());
                             let try_update_field_name = Ident::new(&format!("try_update_{}", field_name), field_name.span());
-                            // For an `#[index]` field bound to an IndexedMap, every
-                            // write reconciles this field's index entry (named after
-                            // the field) against its old value — so an in-place set
-                            // keeps the index consistent. Non-indexed fields: empty,
-                            // so `update`/`try_update` collapse to a plain read-modify-write.
-                            let reconcile = if is_indexed {
-                                quote! {
-                                    if let Some((index_root, index_key)) = &self.index_binding {
-                                        stdlib::apply_index_diff(
-                                            &self.ctx, index_root, index_key,
-                                            &[(#field_name_str, stdlib::IndexKey::index_key(&old))],
-                                            &[(#field_name_str, stdlib::IndexKey::index_key(&new))],
-                                        );
-                                    }
-                                }
-                            } else {
-                                quote! {}
-                            };
-                            // The indexed `set` must read the old value to diff it;
-                            // the plain `set` has nothing to reconcile, so it skips
-                            // the read.
-                            let set_fn = if is_indexed {
+                            // A participating field's in-place write must read the old
+                            // value to diff it; a non-participating `set` has nothing
+                            // to reconcile, so it skips the read. `update`/`try_update`
+                            // already read-modify-write, so they fold the reconcile in
+                            // (empty for non-participating fields).
+                            let set_fn = if participates {
                                 quote! {
                                     pub fn #set_field_name(&self, value: #field_ty) {
                                         let path = self.base_path.push(#field_name_str);
@@ -315,26 +399,33 @@ pub fn generate_struct(
                                     Ok(())
                                 }
                             })
-                        } else if is_indexed {
-                            // Indexed non-primitive field (e.g. an enum). Read the
-                            // old value through its model (live, via `ctx`) to
-                            // reconcile this field's index entry, then write. The
-                            // field's value must be `IndexKey` (it becomes the
-                            // index-bucket key) — a storage enum keys by its
+                        } else if participates && utils::is_option_type(field_ty) {
+                            // Participating `Option` field. Read the old value via the
+                            // getter (which yields the `Option`); `IndexKey` buckets it
+                            // by its none/some discriminant, so no model load is needed.
+                            Ok(quote! {
+                                pub fn #set_field_name(&self, value: #field_ty) {
+                                    let path = self.base_path.push(#field_name_str);
+                                    let old = self.#field_name();
+                                    let new = value;
+                                    #reconcile
+                                    stdlib::WriteStorage::__set(&self.ctx, path, new);
+                                }
+                            })
+                        } else if participates {
+                            // Participating non-primitive field (a storage enum). Read
+                            // the old value through its model (live, via `ctx`) to
+                            // reconcile every index it buckets, then write. Its value
+                            // must be `IndexKey` — a storage enum keys by its
                             // discriminant via the `Storage` derive.
                             let v_model_ty = get_model_ident(true, field_ty, field.span())?;
                             Ok(quote! {
                                 pub fn #set_field_name(&self, value: #field_ty) {
                                     let path = self.base_path.push(#field_name_str);
-                                    if let Some((index_root, index_key)) = &self.index_binding {
-                                        let old = #v_model_ty::new(self.ctx.clone(), path.clone()).load();
-                                        stdlib::apply_index_diff(
-                                            &self.ctx, index_root, index_key,
-                                            &[(#field_name_str, stdlib::IndexKey::index_key(&old))],
-                                            &[(#field_name_str, stdlib::IndexKey::index_key(&value))],
-                                        );
-                                    }
-                                    stdlib::WriteStorage::__set(&self.ctx, path, value);
+                                    let old = #v_model_ty::new(self.ctx.clone(), path.clone()).load();
+                                    let new = value;
+                                    #reconcile
+                                    stdlib::WriteStorage::__set(&self.ctx, path, new);
                                 }
                             })
                         } else {
@@ -383,17 +474,6 @@ pub fn generate_struct(
                 })
                 .collect::<Result<Vec<_>>>()?;
 
-            // A struct is an IndexedMap value iff it carries `#[index]` fields. A
-            // proc-macro derive only sees the type it's on — never where that type
-            // is used — so this attribute is the build-time signal that index
-            // machinery is wanted. Only these structs get it; the rest stay lean.
-            let indexed_fields: Vec<&syn::Field> = fields
-                .named
-                .iter()
-                .filter(|f| f.attrs.iter().any(|a| a.path().is_ident("index")))
-                .collect();
-            let has_indexed = !indexed_fields.is_empty();
-
             // Write model: an optional binding to the owning IndexedMap (`#idx`
             // root + this entry's key), injected by the field model's `get` via
             // `with_index`; indexed-field setters consult it to keep the index in
@@ -401,11 +481,11 @@ pub fn generate_struct(
             let (binding_field, binding_init, with_index_method) = if write && has_indexed {
                 (
                     quote! {
-                        index_binding: Option<(stdlib::DotPathBuf, alloc::string::String)>,
+                        index_binding: Option<(stdlib::KeyPath, alloc::vec::Vec<u8>)>,
                     },
                     quote! { index_binding: None, },
                     quote! {
-                        pub fn with_index(mut self, index_root: stdlib::DotPathBuf, index_key: alloc::string::String) -> Self {
+                        pub fn with_index(mut self, index_root: stdlib::KeyPath, index_key: alloc::vec::Vec<u8>) -> Self {
                             self.index_binding = Some((index_root, index_key));
                             self
                         }
@@ -415,27 +495,32 @@ pub fn generate_struct(
                 (quote! {}, quote! {}, quote! {})
             };
 
-            // Read model: pull ONLY the `#[index]` columns (via the getters), so
-            // the field model can compute a value's index entries for a diff
-            // without loading the whole struct. Works for WIT values too — they
-            // get `#[index]` injected by `contract!`'s `indexed = "..."`.
+            // Read model: recompute a value's index entries from ONLY its indexed
+            // fields (via getters), so the field model can diff against the prior
+            // value without loading the whole struct. Goes through the shared
+            // `index_decl::index_entry`, so it matches what `Indexed::index_entries`
+            // wrote. Works for WIT values too — they get the index declarations
+            // injected by `contract!`'s `indexed = "..."`.
             let index_reader = if !write && has_indexed {
-                let pushes = indexed_fields.iter().map(|field| {
-                    let fname = field.ident.as_ref().unwrap();
-                    let name_str = fname.to_string();
-                    // A primitive field's getter yields the value; a non-primitive
-                    // (e.g. enum) field's getter yields a model, so `.load()` it.
-                    let value = if utils::is_primitive_type(&field.ty) {
-                        quote! { self.#fname() }
-                    } else {
-                        quote! { self.#fname().load() }
-                    };
-                    quote! {
-                        entries.push((#name_str, stdlib::IndexKey::index_key(&#value)));
-                    }
+                // Read each referenced field once (a field shared by two indexes
+                // would otherwise be read per index), then build entries from the
+                // locals.
+                let hoists = index_decl::referenced_fields(&decls).into_iter().map(|f| {
+                    let local = idx_local(f);
+                    let read = current_value(f);
+                    quote! { let #local = #read; }
+                });
+                let value_for = |f: &Ident| {
+                    let local = idx_local(f);
+                    quote! { #local }
+                };
+                let pushes = decls.iter().map(|decl| {
+                    let entry = index_decl::index_entry(decl, &value_for);
+                    quote! { entries.push(#entry); }
                 });
                 quote! {
-                    pub fn __index_entries(&self) -> alloc::vec::Vec<(&'static str, alloc::borrow::Cow<'static, str>)> {
+                    pub fn __index_entries(&self) -> alloc::vec::Vec<stdlib::IndexEntry> {
+                        #(#hoists)*
                         let mut entries = alloc::vec::Vec::new();
                         #(#pushes)*
                         entries
@@ -485,14 +570,14 @@ pub fn generate_struct(
 
             let result = quote! {
                 pub struct #model_name {
-                    pub base_path: stdlib::DotPathBuf,
+                    pub base_path: stdlib::KeyPath,
                     ctx: alloc::rc::Rc<#context_param>,
                     #binding_field
                     #proc_props
                 }
 
                 impl #model_name {
-                    pub fn new(ctx: alloc::rc::Rc<#context_param>, base_path: stdlib::DotPathBuf) -> Self {
+                    pub fn new(ctx: alloc::rc::Rc<#context_param>, base_path: stdlib::KeyPath) -> Self {
                         #proc_prelude
                         Self {
                             base_path: base_path.clone(),
@@ -583,20 +668,21 @@ pub fn generate_enum(data_enum: &DataEnum, type_name: &Ident, write: bool) -> Re
         let variant_ident = &variant.ident;
         let variant_name = variant_ident.to_string().to_lowercase();
 
+        // `__extend_path_with_match` returns the live variant's name; match on it.
         match &variant.fields {
             Fields::Unit => Ok(quote! {
-                p if p.starts_with(base_path.push(#variant_name).as_ref()) => #model_name::#variant_ident
+                #variant_name => #model_name::#variant_ident
             }),
             Fields::Unnamed(fields) if fields.unnamed.len() == 1 => {
                 let inner_ty = &fields.unnamed[0].ty;
                 if utils::is_primitive_type(inner_ty) {
                     Ok(quote! {
-                        p if p.starts_with(base_path.push(#variant_name).as_ref()) => #model_name::#variant_ident(stdlib::ReadStorage::__get(&ctx, base_path.push(#variant_name)).unwrap())
+                        #variant_name => #model_name::#variant_ident(stdlib::ReadStorage::__get(&ctx, base_path.push(#variant_name)).unwrap())
                     })
                 } else {
                     let inner_model_ty = get_model_ident(write, inner_ty, variant.ident.span())?;
                     Ok(quote! {
-                        p if p.starts_with(base_path.push(#variant_name).as_ref()) => #model_name::#variant_ident(#inner_model_ty::new(ctx.clone(), base_path.push(#variant_name)))
+                        #variant_name => #model_name::#variant_ident(#inner_model_ty::new(ctx.clone(), base_path.push(#variant_name)))
                     })
                 }
             }
@@ -632,9 +718,9 @@ pub fn generate_enum(data_enum: &DataEnum, type_name: &Ident, write: bool) -> Re
         }
 
         impl #model_name {
-            pub fn new(ctx: alloc::rc::Rc<#context_param>, base_path: stdlib::DotPathBuf) -> Self {
+            pub fn new(ctx: alloc::rc::Rc<#context_param>, base_path: stdlib::KeyPath) -> Self {
                 stdlib::ReadStorage::__extend_path_with_match(&ctx, &base_path, &[#(#variant_names),*])
-                    .map(|path| match path {
+                    .map(|variant| match variant.as_str() {
                         #(#new_arms,)*
                         _ => {
                             panic!("Matching path not found")

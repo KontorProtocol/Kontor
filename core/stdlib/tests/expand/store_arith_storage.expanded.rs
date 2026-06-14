@@ -5,7 +5,7 @@ pub struct ArithStorage {
 impl stdlib::Store<crate::context::ProcStorage> for ArithStorage {
     fn __set(
         ctx: &alloc::rc::Rc<crate::context::ProcStorage>,
-        base_path: stdlib::DotPathBuf,
+        base_path: stdlib::KeyPath,
         value: ArithStorage,
     ) {
         stdlib::WriteStorage::__set(ctx, base_path.push("last_op"), value.last_op);

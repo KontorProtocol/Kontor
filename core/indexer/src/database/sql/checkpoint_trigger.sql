@@ -11,10 +11,17 @@ VALUES
           SELECT
             hex(
               crypto_sha256 (
+                -- `|` delimits the fields so the digest is unambiguous: contract_id
+                -- and deleted are integers, path/value are hex'd (BLOB -> deterministic
+                -- text), and `|` appears in none of those charsets, so distinct
+                -- (contract_id, path, value, deleted) tuples can't share a hash input.
                 concat (
                   NEW.contract_id,
-                  NEW.path,
+                  '|',
+                  hex(NEW.path),
+                  '|',
                   hex(NEW.value),
+                  '|',
                   NEW.deleted
                 )
               )

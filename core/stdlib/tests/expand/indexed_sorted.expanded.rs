@@ -1,10 +1,10 @@
 use stdlib::Indexed;
+#[index(due, by = status, sort = deadline_height)]
 struct Challenge {
     id: String,
     #[index]
     status: u64,
-    #[index]
-    prover_id: u64,
+    deadline_height: u64,
     seed: u64,
 }
 #[automatically_derived]
@@ -19,9 +19,9 @@ impl stdlib::Indexed for Challenge {
             });
         entries
             .push(stdlib::IndexEntry {
-                name: "prover_id",
+                name: "due",
                 bucket: (/*ERROR*/),
-                sort: None,
+                sort: Some(stdlib::KeyElement::encode(&self.deadline_height)),
             });
         entries
     }
@@ -60,12 +60,12 @@ where
         let __b0 = stdlib::IndexKey::index_key(&status);
         self.bucket_count("status", &[__b0.as_slice()])
     }
-    fn where_prover_id(&self, prover_id: u64) -> impl Iterator<Item = K> {
-        let __b0 = stdlib::IndexKey::index_key(&prover_id);
-        self.by_index("prover_id", &[__b0.as_slice()])
+    fn where_due(&self, status: u64) -> stdlib::SortedScan<K, u64> {
+        let __b0 = stdlib::IndexKey::index_key(&status);
+        self.by_index_sorted::<u64>("due", &[__b0.as_slice()])
     }
-    fn count_prover_id(&self, prover_id: u64) -> u64 {
-        let __b0 = stdlib::IndexKey::index_key(&prover_id);
-        self.bucket_count("prover_id", &[__b0.as_slice()])
+    fn count_due(&self, status: u64) -> u64 {
+        let __b0 = stdlib::IndexKey::index_key(&status);
+        self.bucket_count("due", &[__b0.as_slice()])
     }
 }

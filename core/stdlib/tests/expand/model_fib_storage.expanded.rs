@@ -3,13 +3,13 @@ struct FibValue {
     pub value: u64,
 }
 pub struct FibValueModel {
-    pub base_path: stdlib::DotPathBuf,
+    pub base_path: stdlib::KeyPath,
     ctx: alloc::rc::Rc<crate::context::ViewStorage>,
 }
 impl FibValueModel {
     pub fn new(
         ctx: alloc::rc::Rc<crate::context::ViewStorage>,
-        base_path: stdlib::DotPathBuf,
+        base_path: stdlib::KeyPath,
     ) -> Self {
         Self {
             base_path: base_path.clone(),
@@ -24,14 +24,14 @@ impl FibValueModel {
     }
 }
 pub struct FibValueWriteModel {
-    pub base_path: stdlib::DotPathBuf,
+    pub base_path: stdlib::KeyPath,
     ctx: alloc::rc::Rc<crate::context::ProcStorage>,
     model: FibValueModel,
 }
 impl FibValueWriteModel {
     pub fn new(
         ctx: alloc::rc::Rc<crate::context::ProcStorage>,
-        base_path: stdlib::DotPathBuf,
+        base_path: stdlib::KeyPath,
     ) -> Self {
         let view_storage = ctx.view_storage();
         Self {
@@ -79,13 +79,13 @@ struct FibStorage {
     pub cache: Map<u64, FibValue>,
 }
 pub struct FibStorageModel {
-    pub base_path: stdlib::DotPathBuf,
+    pub base_path: stdlib::KeyPath,
     ctx: alloc::rc::Rc<crate::context::ViewStorage>,
 }
 impl FibStorageModel {
     pub fn new(
         ctx: alloc::rc::Rc<crate::context::ViewStorage>,
-        base_path: stdlib::DotPathBuf,
+        base_path: stdlib::KeyPath,
     ) -> Self {
         Self {
             base_path: base_path.clone(),
@@ -105,7 +105,7 @@ impl FibStorageModel {
     }
 }
 pub struct FibStorageCacheModel {
-    pub base_path: stdlib::DotPathBuf,
+    pub base_path: stdlib::KeyPath,
     ctx: alloc::rc::Rc<crate::context::ViewStorage>,
 }
 #[automatically_derived]
@@ -120,7 +120,7 @@ impl ::core::clone::Clone for FibStorageCacheModel {
 }
 impl FibStorageCacheModel {
     pub fn get(&self, key: &u64) -> Option<FibValueModel> {
-        let base_path = self.base_path.push(key.to_string());
+        let base_path = self.base_path.push_element(key);
         stdlib::ReadStorage::__exists(&self.ctx, &base_path)
             .then(|| FibValueModel::new(self.ctx.clone(), base_path))
     }
@@ -132,14 +132,14 @@ impl FibStorageCacheModel {
     }
 }
 pub struct FibStorageWriteModel {
-    pub base_path: stdlib::DotPathBuf,
+    pub base_path: stdlib::KeyPath,
     ctx: alloc::rc::Rc<crate::context::ProcStorage>,
     model: FibStorageModel,
 }
 impl FibStorageWriteModel {
     pub fn new(
         ctx: alloc::rc::Rc<crate::context::ProcStorage>,
-        base_path: stdlib::DotPathBuf,
+        base_path: stdlib::KeyPath,
     ) -> Self {
         let view_storage = ctx.view_storage();
         Self {
@@ -170,7 +170,7 @@ impl core::ops::Deref for FibStorageWriteModel {
     }
 }
 pub struct FibStorageCacheWriteModel {
-    pub base_path: stdlib::DotPathBuf,
+    pub base_path: stdlib::KeyPath,
     ctx: alloc::rc::Rc<crate::context::ProcStorage>,
 }
 #[automatically_derived]
@@ -185,20 +185,16 @@ impl ::core::clone::Clone for FibStorageCacheWriteModel {
 }
 impl FibStorageCacheWriteModel {
     pub fn get(&self, key: &u64) -> Option<FibValueWriteModel> {
-        let base_path = self.base_path.push(key.to_string());
+        let base_path = self.base_path.push_element(key);
         stdlib::ReadStorage::__exists(&self.ctx, &base_path)
             .then(|| FibValueWriteModel::new(self.ctx.clone(), base_path))
     }
     pub fn set(&self, key: &u64, value: FibValue) {
-        stdlib::WriteStorage::__set(
-            &self.ctx,
-            self.base_path.push(key.to_string()),
-            value,
-        )
+        stdlib::WriteStorage::__set(&self.ctx, self.base_path.push_element(key), value)
     }
     /// Remove a single entry (tombstone). Returns true if a live value existed.
     pub fn remove(&self, key: &u64) -> bool {
-        stdlib::WriteStorage::__delete(&self.ctx, &self.base_path.push(key.to_string()))
+        stdlib::WriteStorage::__delete(&self.ctx, &self.base_path.push_element(key))
     }
     pub fn load(&self) -> Map<u64, FibValue> {
         Map::new(&[])

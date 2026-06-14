@@ -3,13 +3,13 @@ pub struct Operand {
     pub y: u64,
 }
 pub struct OperandModel {
-    pub base_path: stdlib::DotPathBuf,
+    pub base_path: stdlib::KeyPath,
     ctx: alloc::rc::Rc<crate::context::ViewStorage>,
 }
 impl OperandModel {
     pub fn new(
         ctx: alloc::rc::Rc<crate::context::ViewStorage>,
-        base_path: stdlib::DotPathBuf,
+        base_path: stdlib::KeyPath,
     ) -> Self {
         Self {
             base_path: base_path.clone(),
@@ -24,14 +24,14 @@ impl OperandModel {
     }
 }
 pub struct OperandWriteModel {
-    pub base_path: stdlib::DotPathBuf,
+    pub base_path: stdlib::KeyPath,
     ctx: alloc::rc::Rc<crate::context::ProcStorage>,
     model: OperandModel,
 }
 impl OperandWriteModel {
     pub fn new(
         ctx: alloc::rc::Rc<crate::context::ProcStorage>,
-        base_path: stdlib::DotPathBuf,
+        base_path: stdlib::KeyPath,
     ) -> Self {
         let view_storage = ctx.view_storage();
         Self {

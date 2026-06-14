@@ -14,22 +14,22 @@ pub enum OpModel {
 impl OpModel {
     pub fn new(
         ctx: alloc::rc::Rc<crate::context::ViewStorage>,
-        base_path: stdlib::DotPathBuf,
+        base_path: stdlib::KeyPath,
     ) -> Self {
         stdlib::ReadStorage::__extend_path_with_match(
                 &ctx,
                 &base_path,
                 &["id", "sum", "mul", "div"],
             )
-            .map(|path| match path {
-                p if p.starts_with(base_path.push("id").as_ref()) => OpModel::Id,
-                p if p.starts_with(base_path.push("sum").as_ref()) => {
+            .map(|variant| match variant.as_str() {
+                "id" => OpModel::Id,
+                "sum" => {
                     OpModel::Sum(OperandModel::new(ctx.clone(), base_path.push("sum")))
                 }
-                p if p.starts_with(base_path.push("mul").as_ref()) => {
+                "mul" => {
                     OpModel::Mul(OperandModel::new(ctx.clone(), base_path.push("mul")))
                 }
-                p if p.starts_with(base_path.push("div").as_ref()) => {
+                "div" => {
                     OpModel::Div(OperandModel::new(ctx.clone(), base_path.push("div")))
                 }
                 _ => {
@@ -58,26 +58,26 @@ pub enum OpWriteModel {
 impl OpWriteModel {
     pub fn new(
         ctx: alloc::rc::Rc<crate::context::ProcStorage>,
-        base_path: stdlib::DotPathBuf,
+        base_path: stdlib::KeyPath,
     ) -> Self {
         stdlib::ReadStorage::__extend_path_with_match(
                 &ctx,
                 &base_path,
                 &["id", "sum", "mul", "div"],
             )
-            .map(|path| match path {
-                p if p.starts_with(base_path.push("id").as_ref()) => OpWriteModel::Id,
-                p if p.starts_with(base_path.push("sum").as_ref()) => {
+            .map(|variant| match variant.as_str() {
+                "id" => OpWriteModel::Id,
+                "sum" => {
                     OpWriteModel::Sum(
                         OperandWriteModel::new(ctx.clone(), base_path.push("sum")),
                     )
                 }
-                p if p.starts_with(base_path.push("mul").as_ref()) => {
+                "mul" => {
                     OpWriteModel::Mul(
                         OperandWriteModel::new(ctx.clone(), base_path.push("mul")),
                     )
                 }
-                p if p.starts_with(base_path.push("div").as_ref()) => {
+                "div" => {
                     OpWriteModel::Div(
                         OperandWriteModel::new(ctx.clone(), base_path.push("div")),
                     )

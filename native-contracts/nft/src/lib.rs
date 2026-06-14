@@ -28,51 +28,24 @@ fn utxo_holder(out_point: context::OutPoint) -> Holder {
 // keys). Default is dropped from the derive because Holder has no
 // sensible default. `creator` is set at mint and never updated;
 // `owner` changes on every transfer.
-#[derive(Clone, Storage)]
+// `creator` is indexed so `list_nfts_by_creator`/`count_nfts_by_creator` are a
+// prefix read + framework-maintained count of that creator's bucket — replacing
+// the hand-rolled `creator_index` secondary map. `creator` is immutable (set at
+// mint, never updated), so the index is pure-append: a mint adds one member, and
+// `transfer` (which only changes `owner`) never moves it.
+#[derive(Clone, Storage, Indexed)]
 struct NftRecord {
     pub owner: Holder,
+    #[index]
     pub creator: Holder,
     pub agreement_id: String,
     pub attributes: Map<String, String>,
 }
 
-// Per-creator secondary index used by `list_nfts_by_creator`. Append
-// only: `nft_ids` is populated at `mint` and never mutated afterwards
-// (transfers do not move NFTs across creator buckets), so the bool
-// value is always `true` and exists solely because the storage layer
-// requires a primitive value type. `count` mirrors the size of the map
-// so that `count_nfts_by_creator` is O(1) and so that the parent path
-// `creator_index.{creator}` materializes on first insert (writing the
-// `count` primitive is what forces path creation; an empty `Map` write
-// would be a no-op).
-#[derive(Clone, Default, Storage)]
-struct CreatorIndex {
-    pub count: u64,
-    pub nft_ids: Map<String, bool>,
-}
-
 #[derive(Clone, Default, StorageRoot)]
 struct NftStorage {
-    pub nfts: Map<String, NftRecord>,
+    pub nfts: IndexedMap<String, NftRecord>,
     pub total_minted: u64,
-    pub creator_index: Map<Holder, CreatorIndex>,
-}
-
-// Record `nft_id` under `creator`'s bucket. Only called from `mint`,
-// and only ever once per `nft_id` (because `nft_id` is globally unique
-// and creator is immutable), so this is a pure append.
-fn creator_index_add(model: &NftStorageWriteModel, creator: &Holder, nft_id: &str) {
-    let creator_index = model.creator_index();
-    if creator_index.get(creator).is_none() {
-        creator_index.set(creator, CreatorIndex::default());
-    }
-    // Safe to unwrap: writing the `count` primitive above materializes
-    // the parent path so `get` is guaranteed to succeed.
-    let entry = creator_index
-        .get(creator)
-        .expect("creator_index entry just inserted");
-    entry.nft_ids().set(&nft_id.to_string(), true);
-    entry.set_count(entry.count() + 1);
 }
 
 fn validate(
@@ -173,7 +146,6 @@ impl Guest for Nft {
             record.attributes().set(&attr.key, attr.value);
         }
         model.update_total_minted(|total| total + 1);
-        creator_index_add(&model, &creator, &nft_id);
 
         Ok(NftInfo {
             nft_id,
@@ -300,19 +272,13 @@ impl Guest for Nft {
         let Ok(creator): Result<Holder, _> = creator.try_into() else {
             return Vec::new();
         };
-        let Some(entry) = ctx.model().creator_index().get(&creator) else {
-            return Vec::new();
-        };
         // See `list_nfts` for why we saturate instead of casting.
         let offset = usize::try_from(offset).unwrap_or(usize::MAX);
         let nfts = ctx.model().nfts();
-        // The index is append-only (transfers do not move NFTs across
-        // creator buckets), so every key in `nft_ids` is a current
-        // member and we can paginate directly with skip/take without
-        // any extra filtering pass.
-        entry
-            .nft_ids()
-            .keys()
+        // The `creator` index is append-only (transfers do not move NFTs across
+        // creator buckets), so every key in the bucket is a current member and we
+        // can paginate directly with skip/take without any extra filtering pass.
+        nfts.where_creator(creator)
             .skip(offset)
             .take(limit)
             .filter_map(|nft_id: String| {
@@ -332,11 +298,7 @@ impl Guest for Nft {
         let Ok(creator): Result<Holder, _> = creator.try_into() else {
             return 0;
         };
-        ctx.model()
-            .creator_index()
-            .get(&creator)
-            .map(|entry| entry.count())
-            .unwrap_or(0)
+        ctx.model().nfts().count_creator(creator)
     }
 
     fn get_attributes(ctx: &ViewContext, nft_id: String) -> Vec<Attribute> {

@@ -76,15 +76,15 @@ pub fn generate_impls(name: &Ident, variants: &[VariantSpec]) -> TokenStream {
 
         #[automatically_derived]
         impl stdlib::IndexKey for #kind_name {
-            fn index_key(&self) -> alloc::borrow::Cow<'static, str> {
-                // The discriminant is `&'static str` — borrow it, no allocation.
-                alloc::borrow::Cow::Borrowed(self.index_key_str())
+            fn index_key(&self) -> alloc::vec::Vec<u8> {
+                // The discriminant (lowercased case name) as a string codec element.
+                stdlib::KeyElement::encode(&alloc::string::String::from(self.index_key_str()))
             }
         }
 
         #[automatically_derived]
         impl stdlib::IndexKey for #name {
-            fn index_key(&self) -> alloc::borrow::Cow<'static, str> {
+            fn index_key(&self) -> alloc::vec::Vec<u8> {
                 stdlib::IndexKey::index_key(&#kind_name::from(self))
             }
         }

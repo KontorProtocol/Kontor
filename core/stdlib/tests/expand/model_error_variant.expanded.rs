@@ -8,11 +8,11 @@ pub enum ErrorModel {
 impl ErrorModel {
     pub fn new(
         ctx: alloc::rc::Rc<crate::context::ViewStorage>,
-        base_path: stdlib::DotPathBuf,
+        base_path: stdlib::KeyPath,
     ) -> Self {
         stdlib::ReadStorage::__extend_path_with_match(&ctx, &base_path, &["message"])
-            .map(|path| match path {
-                p if p.starts_with(base_path.push("message").as_ref()) => {
+            .map(|variant| match variant.as_str() {
+                "message" => {
                     ErrorModel::Message(
                         stdlib::ReadStorage::__get(&ctx, base_path.push("message"))
                             .unwrap(),
@@ -38,11 +38,11 @@ pub enum ErrorWriteModel {
 impl ErrorWriteModel {
     pub fn new(
         ctx: alloc::rc::Rc<crate::context::ProcStorage>,
-        base_path: stdlib::DotPathBuf,
+        base_path: stdlib::KeyPath,
     ) -> Self {
         stdlib::ReadStorage::__extend_path_with_match(&ctx, &base_path, &["message"])
-            .map(|path| match path {
-                p if p.starts_with(base_path.push("message").as_ref()) => {
+            .map(|variant| match variant.as_str() {
+                "message" => {
                     ErrorWriteModel::Message(
                         stdlib::ReadStorage::__get(&ctx, base_path.push("message"))
                             .unwrap(),

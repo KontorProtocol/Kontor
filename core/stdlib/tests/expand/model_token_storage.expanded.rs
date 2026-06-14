@@ -3,13 +3,13 @@ struct TokenStorage {
     pub ledger: Map<String, u64>,
 }
 pub struct TokenStorageModel {
-    pub base_path: stdlib::DotPathBuf,
+    pub base_path: stdlib::KeyPath,
     ctx: alloc::rc::Rc<crate::context::ViewStorage>,
 }
 impl TokenStorageModel {
     pub fn new(
         ctx: alloc::rc::Rc<crate::context::ViewStorage>,
-        base_path: stdlib::DotPathBuf,
+        base_path: stdlib::KeyPath,
     ) -> Self {
         Self {
             base_path: base_path.clone(),
@@ -29,7 +29,7 @@ impl TokenStorageModel {
     }
 }
 pub struct TokenStorageLedgerModel {
-    pub base_path: stdlib::DotPathBuf,
+    pub base_path: stdlib::KeyPath,
     ctx: alloc::rc::Rc<crate::context::ViewStorage>,
 }
 #[automatically_derived]
@@ -44,7 +44,7 @@ impl ::core::clone::Clone for TokenStorageLedgerModel {
 }
 impl TokenStorageLedgerModel {
     pub fn get(&self, key: &String) -> Option<u64> {
-        let base_path = self.base_path.push(key.to_string());
+        let base_path = self.base_path.push_element(key);
         stdlib::ReadStorage::__get(&self.ctx, base_path)
     }
     pub fn load(&self) -> Map<String, u64> {
@@ -55,14 +55,14 @@ impl TokenStorageLedgerModel {
     }
 }
 pub struct TokenStorageWriteModel {
-    pub base_path: stdlib::DotPathBuf,
+    pub base_path: stdlib::KeyPath,
     ctx: alloc::rc::Rc<crate::context::ProcStorage>,
     model: TokenStorageModel,
 }
 impl TokenStorageWriteModel {
     pub fn new(
         ctx: alloc::rc::Rc<crate::context::ProcStorage>,
-        base_path: stdlib::DotPathBuf,
+        base_path: stdlib::KeyPath,
     ) -> Self {
         let view_storage = ctx.view_storage();
         Self {
@@ -93,7 +93,7 @@ impl core::ops::Deref for TokenStorageWriteModel {
     }
 }
 pub struct TokenStorageLedgerWriteModel {
-    pub base_path: stdlib::DotPathBuf,
+    pub base_path: stdlib::KeyPath,
     ctx: alloc::rc::Rc<crate::context::ProcStorage>,
 }
 #[automatically_derived]
@@ -108,19 +108,15 @@ impl ::core::clone::Clone for TokenStorageLedgerWriteModel {
 }
 impl TokenStorageLedgerWriteModel {
     pub fn get(&self, key: &String) -> Option<u64> {
-        let base_path = self.base_path.push(key.to_string());
+        let base_path = self.base_path.push_element(key);
         stdlib::ReadStorage::__get(&self.ctx, base_path)
     }
     pub fn set(&self, key: &String, value: u64) {
-        stdlib::WriteStorage::__set(
-            &self.ctx,
-            self.base_path.push(key.to_string()),
-            value,
-        )
+        stdlib::WriteStorage::__set(&self.ctx, self.base_path.push_element(key), value)
     }
     /// Remove a single entry (tombstone). Returns true if a live value existed.
     pub fn remove(&self, key: &String) -> bool {
-        stdlib::WriteStorage::__delete(&self.ctx, &self.base_path.push(key.to_string()))
+        stdlib::WriteStorage::__delete(&self.ctx, &self.base_path.push_element(key))
     }
     pub fn load(&self) -> Map<String, u64> {
         Map::new(&[])

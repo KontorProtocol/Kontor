@@ -188,8 +188,8 @@ impl Runtime {
         &self,
         accessor: &Accessor<T, Self>,
         self_: Resource<Keys>,
-    ) -> Result<Option<String>> {
-        let k = self
+    ) -> Result<Option<Vec<u8>>> {
+        let k: Option<Vec<u8>> = self
             .table
             .lock()
             .await
@@ -198,12 +198,13 @@ impl Runtime {
             .next()
             .await
             .transpose()?;
-        if let Some(k) = &k {
-            tracing::trace!("keys.next() returned: {k:?}");
-            Fuel::KeysNext(k.len() as u64)
+        if let Some(bytes) = &k {
+            tracing::trace!("keys.next() returned {} bytes", bytes.len());
+            Fuel::KeysNext(bytes.len() as u64)
                 .consume(accessor, self.gauge.as_ref())
                 .await?;
         }
+        // The child key's codec element bytes; the guest decodes it.
         Ok(k)
     }
 

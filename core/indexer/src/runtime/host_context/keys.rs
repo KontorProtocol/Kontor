@@ -18,7 +18,7 @@ impl built_in::context::HostKeysWithStore for Runtime {
     async fn next<T>(
         accessor: &Accessor<T, Self>,
         self_: Resource<Keys>,
-    ) -> Result<Option<String>> {
+    ) -> Result<Option<Vec<u8>>> {
         accessor
             .with(|mut access| access.get().clone())
             ._next(accessor, self_)

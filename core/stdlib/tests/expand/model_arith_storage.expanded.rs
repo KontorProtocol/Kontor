@@ -3,13 +3,13 @@ struct ArithStorage {
     pub last_op: Option<Op>,
 }
 pub struct ArithStorageModel {
-    pub base_path: stdlib::DotPathBuf,
+    pub base_path: stdlib::KeyPath,
     ctx: alloc::rc::Rc<crate::context::ViewStorage>,
 }
 impl ArithStorageModel {
     pub fn new(
         ctx: alloc::rc::Rc<crate::context::ViewStorage>,
-        base_path: stdlib::DotPathBuf,
+        base_path: stdlib::KeyPath,
     ) -> Self {
         Self {
             base_path: base_path.clone(),
@@ -37,14 +37,14 @@ impl ArithStorageModel {
     }
 }
 pub struct ArithStorageWriteModel {
-    pub base_path: stdlib::DotPathBuf,
+    pub base_path: stdlib::KeyPath,
     ctx: alloc::rc::Rc<crate::context::ProcStorage>,
     model: ArithStorageModel,
 }
 impl ArithStorageWriteModel {
     pub fn new(
         ctx: alloc::rc::Rc<crate::context::ProcStorage>,
-        base_path: stdlib::DotPathBuf,
+        base_path: stdlib::KeyPath,
     ) -> Self {
         let view_storage = ctx.view_storage();
         Self {

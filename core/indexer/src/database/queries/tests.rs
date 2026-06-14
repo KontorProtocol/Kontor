@@ -17,10 +17,13 @@ use crate::test_utils::{new_mock_block_hash, new_mock_transaction, new_test_db};
 
 fn calculate_row_hash(state: &ContractStateRow) -> String {
     let value_part = hex::encode(&state.value).to_uppercase();
+    let path_part = hex::encode(&state.path).to_uppercase();
+    // Mirrors `checkpoint_trigger.sql`: fields joined by `|` (impossible in any
+    // field's charset) so the digest is unambiguous.
     let input = format!(
-        "{}{}{}{}",
+        "{}|{}|{}|{}",
         state.contract_id,
-        state.path,
+        path_part,
         value_part,
         if state.deleted { "1" } else { "0" }
     );
@@ -35,6 +38,24 @@ fn calculate_combined_hash(state: &ContractStateRow, prev_hash: &str) -> String 
     let mut hasher = Sha256::new();
     hasher.update(combined.as_bytes());
     hex::encode(hasher.finalize()).to_uppercase()
+}
+
+/// Build a `contract_state` codec path from string segments — enough to exercise
+/// the byte-range / `next_element` query logic, which is element-type-agnostic.
+/// (Real guest paths mix int/string/etc. elements; the queries don't care.)
+fn cs_path(segments: &[&str]) -> Vec<u8> {
+    let mut path = Vec::new();
+    for s in segments {
+        stdlib::KeyElement::encode_to(&s.to_string(), &mut path);
+    }
+    path
+}
+
+/// Same, but from a legacy dotted path string (`"m.k.field1"`) — splitting on `.`
+/// reproduces the segment structure, so parent/child byte-prefix relationships
+/// match the old text paths.
+fn cs_path_dotted(path: &str) -> Vec<u8> {
+    cs_path(&path.split('.').collect::<Vec<_>>())
 }
 
 async fn setup_test_data(conn: &libsql::Connection) -> Result<()> {
@@ -82,7 +103,7 @@ async fn setup_test_data(conn: &libsql::Connection) -> Result<()> {
             .contract_id(1)
             .tx_id(tx_ids_800000[0])
             .height(800000)
-            .path("foo".to_string())
+            .path(cs_path_dotted("foo"))
             .build(),
     )
     .await?;
@@ -108,7 +129,7 @@ async fn setup_test_data(conn: &libsql::Connection) -> Result<()> {
             .contract_id(1)
             .tx_id(tx_ids_800001[1])
             .height(800001)
-            .path("bar".to_string())
+            .path(cs_path_dotted("bar"))
             .build(),
     )
     .await?;
@@ -118,7 +139,7 @@ async fn setup_test_data(conn: &libsql::Connection) -> Result<()> {
             .contract_id(1)
             .tx_id(tx_ids_800001[1])
             .height(800001)
-            .path("biz".to_string())
+            .path(cs_path_dotted("biz"))
             .build(),
     )
     .await?;
@@ -144,7 +165,7 @@ async fn setup_test_data(conn: &libsql::Connection) -> Result<()> {
             .contract_id(1)
             .tx_id(tx_ids_800002[0])
             .height(800002)
-            .path("baz".to_string())
+            .path(cs_path_dotted("baz"))
             .build(),
     )
     .await?;
@@ -181,7 +202,7 @@ async fn test_checkpoint_trigger() {
     let cs1 = ContractStateRow::builder()
         .contract_id(1)
         .height(10)
-        .path("/test/path1".to_string())
+        .path(cs_path_dotted("/test/path1"))
         .value(b"test value 1".to_vec())
         .build();
     insert_contract_state(&conn, cs1.clone()).await.unwrap();
@@ -196,7 +217,7 @@ async fn test_checkpoint_trigger() {
     let cs2 = ContractStateRow::builder()
         .contract_id(1)
         .height(20)
-        .path("/test/path2".to_string())
+        .path(cs_path_dotted("/test/path2"))
         .build();
     insert_contract_state(&conn, cs2.clone()).await.unwrap();
     let cp2 = get_checkpoint_by_height(&conn, 20).await.unwrap().unwrap();
@@ -210,7 +231,7 @@ async fn test_checkpoint_trigger() {
     let cs3 = ContractStateRow::builder()
         .contract_id(2)
         .height(60)
-        .path("/test/path3".to_string())
+        .path(cs_path_dotted("/test/path3"))
         .value(b"test value 3".to_vec())
         .build();
     insert_contract_state(&conn, cs3.clone()).await.unwrap();
@@ -224,7 +245,7 @@ async fn test_checkpoint_trigger() {
     let cs4 = ContractStateRow::builder()
         .contract_id(2)
         .height(75)
-        .path("/test/path4".to_string())
+        .path(cs_path_dotted("/test/path4"))
         .value(b"test value 4".to_vec())
         .build();
     insert_contract_state(&conn, cs4.clone()).await.unwrap();
@@ -238,7 +259,7 @@ async fn test_checkpoint_trigger() {
     let cs5 = ContractStateRow::builder()
         .contract_id(3)
         .height(120)
-        .path("/test/path5".to_string())
+        .path(cs_path_dotted("/test/path5"))
         .value(b"test value 5".to_vec())
         .build();
     insert_contract_state(&conn, cs5.clone()).await.unwrap();
@@ -252,7 +273,7 @@ async fn test_checkpoint_trigger() {
     let cs6 = ContractStateRow::builder()
         .contract_id(4)
         .height(190)
-        .path("/test/path6".to_string())
+        .path(cs_path_dotted("/test/path6"))
         .build();
     insert_contract_state(&conn, cs6.clone()).await.unwrap();
     let cp6 = get_checkpoint_by_height(&conn, 190).await.unwrap().unwrap();
@@ -265,7 +286,7 @@ async fn test_checkpoint_trigger() {
     let cs7 = ContractStateRow::builder()
         .contract_id(4)
         .height(199)
-        .path("/test/path7".to_string())
+        .path(cs_path_dotted("/test/path7"))
         .value(b"test value 7".to_vec())
         .build();
     insert_contract_state(&conn, cs7.clone()).await.unwrap();
@@ -283,7 +304,7 @@ async fn test_checkpoint_trigger() {
     let cs8 = ContractStateRow::builder()
         .contract_id(4)
         .height(199)
-        .path("/test/path7".to_string())
+        .path(cs_path_dotted("/test/path7"))
         .value(b"test value 7".to_vec())
         .build();
     insert_contract_state(&conn, cs8.clone()).await.unwrap();
@@ -373,7 +394,8 @@ async fn test_contract_state_operations() -> Result<()> {
 
     // Test contract state insertion and retrieval
     let contract_id = 123;
-    let path = "test.path";
+    let path = cs_path(&["test", "path"]);
+    let base = cs_path(&["test"]);
     let value = vec![1, 2, 3, 4];
 
     assert!(!contract_has_state(&conn, contract_id).await?);
@@ -382,7 +404,7 @@ async fn test_contract_state_operations() -> Result<()> {
         .contract_id(contract_id)
         .tx_id(tx_id)
         .height(height)
-        .path(path.to_string())
+        .path(path.clone())
         .value(value.clone())
         .build();
 
@@ -392,17 +414,22 @@ async fn test_contract_state_operations() -> Result<()> {
 
     // check existence
     assert!(contract_has_state(&conn, contract_id).await?);
-    assert!(exists_contract_state(&conn, contract_id, "test").await?);
+    assert!(exists_contract_state(&conn, contract_id, &base).await?);
 
     assert_eq!(
-        matching_path(&conn, contract_id, "test", r"^test.(path|foo|bar)(\..*|$)")
-            .await?
-            .unwrap(),
-        path
+        matching_path(
+            &conn,
+            contract_id,
+            &base,
+            &["path".to_string(), "foo".to_string(), "bar".to_string()],
+        )
+        .await?
+        .unwrap(),
+        "path"
     );
 
     // Get latest contract state
-    let retrieved_state = get_latest_contract_state(&conn, contract_id, path).await?;
+    let retrieved_state = get_latest_contract_state(&conn, contract_id, &path).await?;
     assert!(
         retrieved_state.is_some(),
         "Contract state should be retrieved"
@@ -410,7 +437,7 @@ async fn test_contract_state_operations() -> Result<()> {
 
     // Get latest contract state value
     let fuel = 1000;
-    let retrieved_value = get_latest_contract_state_value(&conn, 1000, contract_id, path).await?;
+    let retrieved_value = get_latest_contract_state_value(&conn, 1000, contract_id, &path).await?;
     assert!(
         retrieved_value.is_some(),
         "Contract state value should be retrieved"
@@ -445,16 +472,16 @@ async fn test_contract_state_operations() -> Result<()> {
         .contract_id(contract_id)
         .tx_id(tx_id2)
         .height(height2)
-        .path(path.to_string())
+        .path(path.clone())
         .value(updated_value.clone())
         .build();
     insert_contract_state(&conn, updated_contract_state).await?;
 
     // Verify we get the latest version
-    let latest_state = get_latest_contract_state(&conn, contract_id, path)
+    let latest_state = get_latest_contract_state(&conn, contract_id, &path)
         .await?
         .unwrap();
-    let latest_value = get_latest_contract_state_value(&conn, fuel, contract_id, path)
+    let latest_value = get_latest_contract_state_value(&conn, fuel, contract_id, &path)
         .await?
         .unwrap();
     assert_eq!(latest_state.height, height2);
@@ -462,13 +489,16 @@ async fn test_contract_state_operations() -> Result<()> {
     assert_eq!(latest_value, updated_value);
 
     // Delete the contract state
-    let deleted = delete_contract_state(&conn, height2, Some(tx_id2), contract_id, path).await?;
+    let deleted = delete_contract_state(&conn, height2, Some(tx_id2), contract_id, &path).await?;
     assert!(deleted);
 
     let count = conn
         .query(
             "SELECT COUNT(*) FROM contract_state WHERE contract_id = :contract_id AND path = :path",
-            ((":contract_id", contract_id), (":path", path)),
+            (
+                (":contract_id", contract_id),
+                (":path", libsql::Value::Blob(path.clone())),
+            ),
         )
         .await?
         .next()
@@ -479,7 +509,7 @@ async fn test_contract_state_operations() -> Result<()> {
     assert_eq!(count, 2);
 
     // Verify the contract state is deleted
-    let latest_state = get_latest_contract_state(&conn, contract_id, path).await?;
+    let latest_state = get_latest_contract_state(&conn, contract_id, &path).await?;
     assert!(latest_state.is_none());
 
     Ok(())
@@ -515,14 +545,14 @@ async fn test_delete_tombstones_whole_subtree() -> Result<()> {
             .build(),
     )
     .await?;
-    let insert = async |path: &str| -> Result<()> {
+    let insert = async |segments: &[&str]| -> Result<()> {
         insert_contract_state(
             &conn,
             ContractStateRow::builder()
                 .contract_id(cid)
                 .tx_id(tx)
                 .height(height)
-                .path(path.to_string())
+                .path(cs_path(segments))
                 .value(vec![1])
                 .build(),
         )
@@ -530,39 +560,41 @@ async fn test_delete_tombstones_whole_subtree() -> Result<()> {
         Ok(())
     };
 
-    // Struct value `m.k` lives under child field paths (incl. a nested struct);
-    // `m.k2` is a sibling entry that must survive.
-    insert("m.k.field1").await?;
-    insert("m.k.field2").await?;
-    insert("m.k.nested.inner").await?;
-    insert("m.k2.field1").await?;
+    // Struct value `m/k` lives under child field paths (incl. a nested struct);
+    // `m/k2` is a sibling entry that must survive — the codec's element
+    // terminators make `m/k` NOT a byte-prefix of `m/k2`.
+    insert(&["m", "k", "field1"]).await?;
+    insert(&["m", "k", "field2"]).await?;
+    insert(&["m", "k", "nested", "inner"]).await?;
+    insert(&["m", "k2", "field1"]).await?;
 
-    let removed = delete_contract_state(&conn, height, Some(tx), cid, "m.k").await?;
+    let removed =
+        delete_contract_state(&conn, height, Some(tx), cid, &cs_path(&["m", "k"])).await?;
     assert!(removed, "the subtree had live rows to tombstone");
 
-    // Every descendant of `m.k` is gone (not just the exact path).
-    assert!(!exists_contract_state(&conn, cid, "m.k").await?);
+    // Every descendant of `m/k` is gone (not just the exact path).
+    assert!(!exists_contract_state(&conn, cid, &cs_path(&["m", "k"])).await?);
     assert!(
-        get_latest_contract_state(&conn, cid, "m.k.field1")
+        get_latest_contract_state(&conn, cid, &cs_path(&["m", "k", "field1"]))
             .await?
             .is_none()
     );
     assert!(
-        get_latest_contract_state(&conn, cid, "m.k.nested.inner")
+        get_latest_contract_state(&conn, cid, &cs_path(&["m", "k", "nested", "inner"]))
             .await?
             .is_none()
     );
 
-    // The `.`-boundaried sibling `m.k2` is untouched.
-    assert!(exists_contract_state(&conn, cid, "m.k2").await?);
+    // The boundaried sibling `m/k2` is untouched.
+    assert!(exists_contract_state(&conn, cid, &cs_path(&["m", "k2"])).await?);
     assert!(
-        get_latest_contract_state(&conn, cid, "m.k2.field1")
+        get_latest_contract_state(&conn, cid, &cs_path(&["m", "k2", "field1"]))
             .await?
             .is_some()
     );
 
     // A second remove finds nothing live → no-op, returns false.
-    assert!(!delete_contract_state(&conn, height, Some(tx), cid, "m.k").await?);
+    assert!(!delete_contract_state(&conn, height, Some(tx), cid, &cs_path(&["m", "k"])).await?);
 
     Ok(())
 }
@@ -1040,7 +1072,7 @@ async fn test_map_keys() -> Result<()> {
         .contract_id(contract_id)
         .tx_id(tx_id1)
         .height(height)
-        .path(format!("{}.key0.foo", path))
+        .path(cs_path_dotted(&format!("{}.key0.foo", path)))
         .value(value.clone())
         .build();
 
@@ -1050,7 +1082,7 @@ async fn test_map_keys() -> Result<()> {
         .contract_id(contract_id)
         .tx_id(tx_id1)
         .height(height)
-        .path(format!("{}.key0.bar", path))
+        .path(cs_path_dotted(&format!("{}.key0.bar", path)))
         .value(value.clone())
         .build();
 
@@ -1060,7 +1092,7 @@ async fn test_map_keys() -> Result<()> {
         .contract_id(contract_id)
         .tx_id(tx_id2)
         .height(height)
-        .path(format!("{}.key2", path))
+        .path(cs_path_dotted(&format!("{}.key2", path)))
         .value(value.clone())
         .build();
     insert_contract_state(&conn, contract_state).await?;
@@ -1069,24 +1101,26 @@ async fn test_map_keys() -> Result<()> {
         .contract_id(contract_id)
         .tx_id(tx_id3)
         .height(height)
-        .path(format!("{}.key1", path))
+        .path(cs_path_dotted(&format!("{}.key1", path)))
         .value(value.clone())
         .build();
     insert_contract_state(&conn, contract_state).await?;
 
     let stream =
-        path_prefix_filter_contract_state(&conn, contract_id, "test.path".to_string()).await?;
-    let paths = stream.try_collect::<Vec<String>>().await?;
+        path_prefix_filter_contract_state(&conn, contract_id, cs_path_dotted("test.path")).await?;
+    let paths = stream.try_collect::<Vec<Vec<u8>>>().await?;
+    // Each item is the child key's codec element (one segment), deduped + ordered.
     assert_eq!(paths.len(), 3);
-    assert_eq!(paths[0], "key0");
-    assert_eq!(paths[1], "key1");
-    assert_eq!(paths[2], "key2");
+    assert_eq!(paths[0], cs_path(&["key0"]));
+    assert_eq!(paths[1], cs_path(&["key1"]));
+    assert_eq!(paths[2], cs_path(&["key2"]));
 
     let result = delete_matching_paths(
         &conn,
         contract_id,
         height,
-        &format!(r"^{}.({})(\..*|$)", "test.path", ["key0"].join("|")),
+        &cs_path_dotted("test.path"),
+        &["key0".to_string()],
     )
     .await?;
     assert_eq!(result, 2);
@@ -1136,7 +1170,7 @@ async fn test_keys_with_idx_sibling_after_update() -> Result<()> {
                 .contract_id(cid)
                 .tx_id(tx_id)
                 .height(height)
-                .path(path.to_string())
+                .path(cs_path_dotted(path))
                 .value(vec![1])
                 .build(),
         )
@@ -1160,33 +1194,100 @@ async fn test_keys_with_idx_sibling_after_update() -> Result<()> {
         800001,
         Some(txs[1]),
         cid,
-        &format!("{m}#idx.active.true.44"),
+        &cs_path_dotted(&format!("{m}#idx.active.true.44")),
     )
     .await?;
     insert(txs[1], 800001, &format!("{m}#idx.active.false.44")).await?;
 
     // `keys(m)` — both members are still in the primary map (44's value row was
     // updated, not removed), regardless of index churn.
-    let stream = path_prefix_filter_contract_state(&conn, cid, m.to_string()).await?;
-    let mut keys = stream.try_collect::<Vec<String>>().await?;
+    let stream = path_prefix_filter_contract_state(&conn, cid, cs_path_dotted(m)).await?;
+    let mut keys = stream.try_collect::<Vec<Vec<u8>>>().await?;
     keys.sort();
-    assert_eq!(keys, vec!["44".to_string(), "45".to_string()]);
+    assert_eq!(keys, vec![cs_path(&["44"]), cs_path(&["45"])]);
 
     // `by_index("active","true")` = a scan of the `active.true` bucket. 44 left,
     // so `<m>#idx.active.true.44` was tombstoned at H2; only 45 remains. The
     // departed member must NOT reappear via its older (H1) live row — that was
     // the pre-rank `deleted = false` bug, which let a tombstoned entry fall back.
-    let active = path_prefix_filter_contract_state(&conn, cid, format!("{m}#idx.active.true"))
-        .await?
-        .try_collect::<Vec<String>>()
-        .await?;
-    assert_eq!(active, vec!["45".to_string()]);
+    let active = path_prefix_filter_contract_state(
+        &conn,
+        cid,
+        cs_path_dotted(&format!("{m}#idx.active.true")),
+    )
+    .await?
+    .try_collect::<Vec<Vec<u8>>>()
+    .await?;
+    assert_eq!(active, vec![cs_path(&["45"])]);
 
     Ok(())
 }
 
 // A live value under a prefix must make `exists` true even when the
 // latest-height row under that prefix is a tombstone (e.g. an IndexedMap index
+// Regression: a guest can pass an empty `list<u8>` (or any degenerate path).
+// `strinc(empty)` is `None` (no exclusive upper bound), so the subtree-bound
+// builder must treat it as the whole keyspace — NOT panic via `expect`. Covers
+// exists / keys / matching / delete on an empty path.
+#[tokio::test]
+async fn test_empty_path_is_whole_keyspace_not_panic() -> Result<()> {
+    let (_reader, writer, _temp_dir) = new_test_db().await?;
+    let conn = writer.connection();
+
+    let height = 900000;
+    for h in [height, height + 1] {
+        insert_block(
+            &conn,
+            BlockRow::builder()
+                .height(h)
+                .hash(bitcoin::BlockHash::from_byte_array([h as u8; 32]))
+                .build(),
+        )
+        .await?;
+    }
+    let tx = insert_transaction(
+        &conn,
+        TransactionRow::builder()
+            .height(height)
+            .txid("bbbb000000000000000000000000000000000000000000000000000000000001".to_string())
+            .tx_index(0)
+            .confirmed_height(height)
+            .build(),
+    )
+    .await?;
+
+    let cid = 1;
+    for k in ["k1", "k2"] {
+        insert_contract_state(
+            &conn,
+            ContractStateRow::builder()
+                .contract_id(cid)
+                .tx_id(tx)
+                .height(height)
+                .path(cs_path(&["m", k]))
+                .value(vec![1])
+                .build(),
+        )
+        .await?;
+    }
+
+    // Empty path = whole keyspace: any live row makes `exists` true.
+    assert!(exists_contract_state(&conn, cid, &[]).await?);
+    // `keys()` of the root yields the single distinct top-level element ("m").
+    let top: Vec<Vec<u8>> = path_prefix_filter_contract_state(&conn, cid, Vec::new())
+        .await?
+        .try_collect()
+        .await?;
+    assert_eq!(top, vec![cs_path(&["m"])]);
+    // `matching_path` at the root must not panic.
+    let _ = matching_path(&conn, cid, &[], &["none".to_string(), "some".to_string()]).await?;
+    // Deleting the empty subtree tombstones the whole keyspace.
+    assert!(delete_contract_state(&conn, height + 1, Some(tx), cid, &[]).await?);
+    assert!(!exists_contract_state(&conn, cid, &[]).await?);
+
+    Ok(())
+}
+
 // delete). Regression: `exists` ranked rows globally (no per-path partition),
 // so it saw only the single newest row — if that was a tombstone it wrongly
 // reported the whole subtree gone.
@@ -1227,7 +1328,7 @@ async fn test_exists_with_tombstone_as_latest_row() -> Result<()> {
             .contract_id(cid)
             .tx_id(txs[0])
             .height(800000)
-            .path("a.live".to_string())
+            .path(cs_path_dotted("a.live"))
             .value(vec![1])
             .build(),
     )
@@ -1239,15 +1340,15 @@ async fn test_exists_with_tombstone_as_latest_row() -> Result<()> {
             .contract_id(cid)
             .tx_id(txs[1])
             .height(800001)
-            .path("a.gone".to_string())
+            .path(cs_path_dotted("a.gone"))
             .value(vec![1])
             .build(),
     )
     .await?;
-    delete_contract_state(&conn, 800001, Some(txs[1]), cid, "a.gone").await?;
+    delete_contract_state(&conn, 800001, Some(txs[1]), cid, &cs_path_dotted("a.gone")).await?;
 
     assert!(
-        exists_contract_state(&conn, cid, "a").await?,
+        exists_contract_state(&conn, cid, &cs_path_dotted("a")).await?,
         "`a.live` is still live, so `a` must exist despite the newer tombstone"
     );
 
@@ -1294,27 +1395,40 @@ async fn test_matching_path_after_enum_reset() -> Result<()> {
             .contract_id(cid)
             .tx_id(txs[0])
             .height(800000)
-            .path("c.status.active".to_string())
+            .path(cs_path_dotted("c.status.active"))
             .value(vec![])
             .build(),
     )
     .await?;
     // H2: re-set to proven — tombstone `active`, write `proven` (same height).
-    delete_contract_state(&conn, 800001, Some(txs[1]), cid, "c.status.active").await?;
+    delete_contract_state(
+        &conn,
+        800001,
+        Some(txs[1]),
+        cid,
+        &cs_path_dotted("c.status.active"),
+    )
+    .await?;
     insert_contract_state(
         &conn,
         ContractStateRow::builder()
             .contract_id(cid)
             .tx_id(txs[1])
             .height(800001)
-            .path("c.status.proven".to_string())
+            .path(cs_path_dotted("c.status.proven"))
             .value(vec![])
             .build(),
     )
     .await?;
 
-    let found = matching_path(&conn, cid, "c.status", r"^c.status.(active|proven)(\..*|$)").await?;
-    assert_eq!(found, Some("c.status.proven".to_string()));
+    let found = matching_path(
+        &conn,
+        cid,
+        &cs_path_dotted("c.status"),
+        &["active".to_string(), "proven".to_string()],
+    )
+    .await?;
+    assert_eq!(found, Some("proven".to_string()));
 
     Ok(())
 }
@@ -1364,15 +1478,21 @@ async fn test_matching_path_newest_of_multiple_live() -> Result<()> {
                 .contract_id(cid)
                 .tx_id(tx)
                 .height(height)
-                .path(path.to_string())
+                .path(cs_path_dotted(path))
                 .value(vec![1])
                 .build(),
         )
         .await?;
     }
 
-    let found = matching_path(&conn, cid, "c.op", r"^c.op.(id|sum)(\..*|$)").await?;
-    assert_eq!(found, Some("c.op.sum.y".to_string()));
+    let found = matching_path(
+        &conn,
+        cid,
+        &cs_path_dotted("c.op"),
+        &["id".to_string(), "sum".to_string()],
+    )
+    .await?;
+    assert_eq!(found, Some("sum".to_string()));
 
     Ok(())
 }
@@ -1422,7 +1542,7 @@ async fn test_matching_path_stale_none_outranked_by_some() -> Result<()> {
                 .contract_id(cid)
                 .tx_id(tx)
                 .height(height)
-                .path(path.to_string())
+                .path(cs_path_dotted(path))
                 .value(vec![1])
                 .build(),
         )
@@ -1431,10 +1551,142 @@ async fn test_matching_path_stale_none_outranked_by_some() -> Result<()> {
 
     // The none-check (only `none` in the alternation) must NOT match the newer
     // `some`, so it returns None and the field resolves to Some.
-    let found = matching_path(&conn, cid, "c.opt", r"^c.opt.(none)(\..*|$)").await?;
+    let found = matching_path(&conn, cid, &cs_path_dotted("c.opt"), &["none".to_string()]).await?;
     assert_eq!(found, None);
 
     Ok(())
+}
+
+// Regression: the newest live row under `base_path` can be `base_path` ITSELF — a
+// value stored at the path with no variant segment after it. `matching_path` must
+// report no match (Ok(None)), not a codec error from decoding the empty suffix.
+#[tokio::test]
+async fn test_matching_path_on_bare_base_row() -> Result<()> {
+    let (_reader, writer, _temp_dir) = new_test_db().await?;
+    let conn = writer.connection();
+    let cid = 123;
+    let height = 800000;
+    insert_block(
+        &conn,
+        BlockRow::builder()
+            .height(height)
+            .hash(new_mock_block_hash(height as u32))
+            .build(),
+    )
+    .await?;
+    let tx = insert_transaction(
+        &conn,
+        TransactionRow::builder()
+            .height(height)
+            .txid(format!("eeee{:060}", 0))
+            .tx_index(0)
+            .confirmed_height(height)
+            .build(),
+    )
+    .await?;
+
+    // A value stored AT `c.opt` exactly — no variant child under it.
+    insert_contract_state(
+        &conn,
+        ContractStateRow::builder()
+            .contract_id(cid)
+            .tx_id(tx)
+            .height(height)
+            .path(cs_path_dotted("c.opt"))
+            .value(vec![1])
+            .build(),
+    )
+    .await?;
+
+    // No variant segment after base_path → no match, and crucially no error.
+    let found = matching_path(
+        &conn,
+        cid,
+        &cs_path_dotted("c.opt"),
+        &["none".to_string(), "some".to_string()],
+    )
+    .await?;
+    assert_eq!(found, None);
+
+    Ok(())
+}
+
+// Fuzz the contract_state query layer: ARBITRARY guest path bytes (empty,
+// malformed, all-0xFF, base-equal, random) must never panic any of exists / keys /
+// matching / delete — the class behind the three boundary bugs (empty subtree
+// bound, malformed parse, bare-base suffix). The host ALSO rejects malformed paths
+// at ingress (`validate_path`); this guards the query layer directly so a future
+// caller can't reintroduce a panic.
+mod proptest_paths {
+    use super::*;
+    use proptest::prelude::*;
+
+    proptest! {
+        #![proptest_config(ProptestConfig::with_cases(24))]
+        #[test]
+        fn query_layer_no_panic_on_arbitrary_path(
+            path in proptest::collection::vec(any::<u8>(), 0..40),
+        ) {
+            let rt = tokio::runtime::Runtime::new().unwrap();
+            rt.block_on(async {
+                let (_reader, writer, _temp) = new_test_db().await.unwrap();
+                let conn = writer.connection();
+                let h = 700000u64;
+                for height in [h, h + 1] {
+                    insert_block(
+                        &conn,
+                        BlockRow::builder()
+                            .height(height)
+                            .hash(new_mock_block_hash(height as u32))
+                            .build(),
+                    )
+                    .await
+                    .unwrap();
+                }
+                let tx = insert_transaction(
+                    &conn,
+                    TransactionRow::builder()
+                        .height(h)
+                        .txid(format!("dddd{:060}", 0))
+                        .tx_index(0)
+                        .confirmed_height(h)
+                        .build(),
+                )
+                .await
+                .unwrap();
+                for k in ["a", "b"] {
+                    insert_contract_state(
+                        &conn,
+                        ContractStateRow::builder()
+                            .contract_id(1)
+                            .tx_id(tx)
+                            .height(h)
+                            .path(cs_path(&["m", k]))
+                            .value(vec![1])
+                            .build(),
+                    )
+                    .await
+                    .unwrap();
+                }
+                let cid = 1;
+                // None of these may panic on arbitrary `path` bytes.
+                let _ = exists_contract_state(&conn, cid, &path).await;
+                let _ = matching_path(
+                    &conn,
+                    cid,
+                    &path,
+                    &["none".to_string(), "some".to_string()],
+                )
+                .await;
+                if let Ok(stream) =
+                    path_prefix_filter_contract_state(&conn, cid, path.clone()).await
+                {
+                    let _ = stream.collect::<Vec<_>>().await;
+                }
+                let _ = delete_contract_state(&conn, h + 1, Some(tx), cid, &path).await;
+            });
+        }
+    }
 }
 
 #[tokio::test]
@@ -2870,7 +3122,7 @@ async fn test_transaction_signer_id_querying() -> Result<()> {
             .contract_id(token_id)
             .tx_id(tx_ids[3])
             .height(1)
-            .path("foo".to_string())
+            .path(cs_path_dotted("foo"))
             .build(),
     )
     .await?;

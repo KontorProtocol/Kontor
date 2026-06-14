@@ -13,19 +13,26 @@ import!(
 const ACTIVATION_DELAY: u64 = 12; // 2 * FINALITY_WINDOW (6)
 const MAX_STAKE: u64 = 1_000_000_000; // Cap to fit in u64 voting power
 
-#[derive(Clone, Default, Storage)]
+// `status` and `ed25519_pubkey` are indexed so the per-block status sweep and the
+// register-time duplicate-key check are prefix reads of a bucket, not full scans of
+// every validator. `status` partitions by lifecycle (0=inactive…3=pending_exit);
+// `ed25519_pubkey` partitions by consensus key (a bucket holds the ≤1 validators
+// sharing a key — enough to enforce uniqueness without scanning).
+#[derive(Clone, Default, Storage, Indexed)]
 struct ValidatorEntry {
     pub stake: Decimal,
+    #[index]
     pub status: u64, // 0=inactive, 1=active, 2=pending_join, 3=pending_exit
     pub activation_height: u64,
     pub deactivation_height: u64,
+    #[index]
     pub ed25519_pubkey: Vec<u8>,
 }
 
 #[derive(Clone, Default, StorageRoot)]
 struct StakingStorage {
     pub min_stake: Decimal,
-    pub validators: Map<Holder, ValidatorEntry>,
+    pub validators: IndexedMap<Holder, ValidatorEntry>,
     pub active_count: u64,
     pub total_active_stake: Decimal,
 }
@@ -93,18 +100,23 @@ impl Guest for Staking {
         }
 
         // Reject duplicate ed25519 keys — two validators with the same
-        // consensus key would cause conflicts in Malachite.
-        let keys: Vec<Holder> = model.validators().keys().collect();
-        for key in keys {
-            if let Some(entry) = model.validators().get(&key)
-                && key != holder
-                && entry.ed25519_pubkey() == ed25519_pubkey
-                && entry.status() != STATUS_INACTIVE
-            {
-                return Err(Error::Message(
-                    "ed25519 pubkey already registered by another validator".to_string(),
-                ));
-            }
+        // consensus key would cause conflicts in Malachite. The `ed25519_pubkey`
+        // index scopes this to the (≤1) holders already in that key's bucket,
+        // not every validator.
+        let dup = model
+            .validators()
+            .where_ed25519_pubkey(ed25519_pubkey.clone())
+            .any(|key| {
+                key != holder
+                    && model
+                        .validators()
+                        .get(&key)
+                        .is_some_and(|entry| entry.status() != STATUS_INACTIVE)
+            });
+        if dup {
+            return Err(Error::Message(
+                "ed25519 pubkey already registered by another validator".to_string(),
+            ));
         }
 
         // Effects before interactions (CEI pattern)
@@ -261,27 +273,40 @@ impl Guest for Staking {
         let mut activated = 0u64;
         let mut deactivated = 0u64;
 
-        let keys: Vec<Holder> = model.validators().keys().collect();
-        for key in keys {
-            if let Some(entry) = model.validators().get(&key) {
-                match entry.status() {
-                    STATUS_PENDING_JOIN if block_height >= entry.activation_height() => {
-                        entry.set_status(STATUS_ACTIVE);
-                        model.try_update_total_active_stake(|s| s.add(entry.stake()))?;
-                        model.update_active_count(|c| c + 1);
-                        activated += 1;
-                    }
-                    STATUS_PENDING_EXIT if block_height >= entry.deactivation_height() => {
-                        let stake = entry.stake();
-                        entry.set_stake(0u64.try_into().unwrap());
-                        entry.set_status(STATUS_INACTIVE);
-                        model.try_update_total_active_stake(|s| s.sub(stake))?;
-                        model.update_active_count(|c| c - 1);
-                        token::transfer(ctx.proc_context().contract_signer(), key, stake)?;
-                        deactivated += 1;
-                    }
-                    _ => {}
-                }
+        // Only pending validators can change state this block — read their two
+        // status buckets instead of scanning every validator. Collect the keys
+        // first: activating/deactivating moves the member out of the bucket, so
+        // iterating it live would mutate mid-scan.
+        let pending_join: Vec<Holder> = model
+            .validators()
+            .where_status(STATUS_PENDING_JOIN)
+            .collect();
+        let pending_exit: Vec<Holder> = model
+            .validators()
+            .where_status(STATUS_PENDING_EXIT)
+            .collect();
+
+        for key in pending_join {
+            if let Some(entry) = model.validators().get(&key)
+                && block_height >= entry.activation_height()
+            {
+                entry.set_status(STATUS_ACTIVE);
+                model.try_update_total_active_stake(|s| s.add(entry.stake()))?;
+                model.update_active_count(|c| c + 1);
+                activated += 1;
+            }
+        }
+        for key in pending_exit {
+            if let Some(entry) = model.validators().get(&key)
+                && block_height >= entry.deactivation_height()
+            {
+                let stake = entry.stake();
+                entry.set_stake(0u64.try_into().unwrap());
+                entry.set_status(STATUS_INACTIVE);
+                model.try_update_total_active_stake(|s| s.sub(stake))?;
+                model.update_active_count(|c| c - 1);
+                token::transfer(ctx.proc_context().contract_signer(), key, stake)?;
+                deactivated += 1;
             }
         }
 
@@ -292,22 +317,27 @@ impl Guest for Staking {
     }
 
     fn get_active_set(ctx: &ViewContext) -> Vec<ActiveValidatorInfo> {
-        ctx.model()
-            .validators()
-            .keys()
+        let validators = ctx.model().validators();
+        // The consensus set is ACTIVE ∪ PENDING_EXIT (exiting validators still
+        // validate until their deactivation height) — two index buckets, not a
+        // scan-and-filter over every validator.
+        let mut set: Vec<ActiveValidatorInfo> = validators
+            .where_status(STATUS_ACTIVE)
+            .chain(validators.where_status(STATUS_PENDING_EXIT))
             .filter_map(|key| {
-                let entry = ctx.model().validators().get(&key)?;
-                if entry.status() == STATUS_ACTIVE || entry.status() == STATUS_PENDING_EXIT {
-                    Some(ActiveValidatorInfo {
-                        x_only_pubkey: key.to_string(),
-                        stake: entry.stake(),
-                        ed25519_pubkey: entry.ed25519_pubkey(),
-                    })
-                } else {
-                    None
-                }
+                let entry = validators.get(&key)?;
+                Some(ActiveValidatorInfo {
+                    x_only_pubkey: key.to_string(),
+                    stake: entry.stake(),
+                    ed25519_pubkey: entry.ed25519_pubkey(),
+                })
             })
-            .collect()
+            .collect();
+        // Re-merge the two buckets into one holder-ordered set so the order the
+        // consumer (`ValidatorSet`, which preserves insertion order) sees is
+        // identical to the old full-scan order, independent of status.
+        set.sort_by(|a, b| a.x_only_pubkey.cmp(&b.x_only_pubkey));
+        set
     }
 
     fn get_validator(ctx: &ViewContext, x_only_pubkey: String) -> Option<ValidatorInfo> {
