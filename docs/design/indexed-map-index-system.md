@@ -1,11 +1,14 @@
 # Storage keys & indexed maps — design
 
-Status: **confirmed.** Part I (the ordered key codec) is the foundation; Part II
+Status: **shipped.** Part I (the ordered key codec) is the foundation; Part II
 (the IndexedMap index system) is built on it. The index features (sortable,
-composite, compound) are already **shipped on interim encodings** (hex `SortKey`,
-`Pair` fixed-width suffix, `.`-delimited text paths); the codec is the foundational
-rework they get **re-expressed onto with no contract-facing API change** (see Build
-order). Covering and true-partial remain additive on top.
+composite, compound) were first shipped on interim encodings (hex `SortKey`,
+`Pair` fixed-width suffix, `.`-delimited text paths) and have now been
+**re-expressed onto the codec with no contract-facing API change** (Phase 3+4,
+commit `21223c68`): map/sort/compound keys are native `KeyElement`s, sorted
+members are `(sort, pk)` nested tuples, `SortKey`/`Pair` are deleted. Validated:
+stdlib 23 + macro snapshots, indexer 315, full regtest 110/110. Covering and
+true-partial remain additive on top.
 
 The unifying realization: a **storage path, a map key, an index bucket, a sort
 prefix, and a compound key are the same thing — a sequence of order-preserving,
@@ -180,10 +183,10 @@ An index over an `IndexedMap<K, V>` value is four axes plus one orthogonal conce
 | Axis | Meaning | Status |
 |---|---|---|
 | **bucket** | 1+ fields whose values partition the index; `where_<i>(b…)` scans a bucket | shipped (single + composite) |
-| **sort** *(opt)* | a numeric field that orders members *within* a bucket → range scan + early-break | shipped (interim hex; codec re-expresses) |
+| **sort** *(opt)* | a numeric field that orders members *within* a bucket → range scan + early-break | shipped (native codec: `(sort, pk)` tuple member) |
 | **project** *(opt, "covering")* | a field stored in the leaf so a scan returns it without a follow-up `get` | pending |
 | **predicate** *(opt, "partial")* | omit a row when false (pure index-*size* optimization). The functional "filter" case is a composite bucket over discriminant fields (incl. `Option` none/some); true partial deferred. | composite shipped; true partial deferred |
-| *(orthogonal)* **compound key K** | a tuple key; encoded as a nested-tuple element | shipped (interim `Pair`; codec re-expresses) |
+| *(orthogonal)* **compound key K** | a tuple key; encoded as a nested-tuple element | shipped (native tuple `(A,B)`) |
 
 These compose: a "due" index is bucket=`status`, sort=`deadline_height`; make it
 covering with project=`agreement_id`; turn a bucket field into a composite over an
@@ -359,9 +362,12 @@ reindex from genesis once and freeze.
   decode into our typed `K`). None is in our tree today.
 - **No SQL UDF** — host-side Rust extraction over an index range-scan; `strinc`
   Rust-side. Drops the `regexp` extension.
-- **Delete `SortKey`/`IndexKey` as separate hex encoders** — both become codec
-  element encodings; bucket-by-discriminant vs order-by-value stays a codegen
-  choice (which projection of the value to encode).
+- **Delete the hex `SortKey` encoder** — sort fields become ordinary codec int
+  elements (order-preserving natively). `IndexKey` is KEPT, but only as the
+  *bucket*-segment encoder: buckets are equality partitions (order irrelevant), so
+  a bucket stays a string element keyed by `Display`/enum-discriminant. So
+  bucket-by-discriminant vs order-by-value is a codegen choice — which projection of
+  the value to encode, and whether as a string bucket segment or an ordered sort element.
 
 ### "Partial" → composite over discriminant fields, not a predicate DSL
 A `where = <expr>` DSL is a non-starter in the WIT `indexed = "…"` string. The
@@ -389,23 +395,24 @@ error. Numeric fields are the intended sort targets.
 Phases 2–4 are coupled (stdlib + WIT + macro move together to keep contracts
 compiling); land them as one working step, then re-express features.
 
-0. **`keycodec` module in `stdlib`** — encode/decode/`strinc`/`next_element`,
+0. ✅ **`keycodec` module in `stdlib`** — encode/decode/`strinc`/`next_element`,
    unit-tested (round-trip + ordering-vs-logical fuzz; FDB test vectors). No
    integration.
-1. **Host/DB** — `path` → `BLOB`; byte-range subtree/`keys()`/variant queries;
+1. ✅ **Host/DB** — `path` → `BLOB`; byte-range subtree/`keys()`/variant queries;
    Rust-side element extraction; checkpoint hashing over BLOB; drop `regexp`. A node
-   boots and round-trips set/get/keys. *(Confirm range queries seek the index via
-   `EXPLAIN QUERY PLAN`.)*
-2. **stdlib + WIT + macro** — `Key` builder; byte-path storage traits + host-fn
+   boots and round-trips set/get/keys.
+2. ✅ **stdlib + WIT + macro** — `KeyPath` builder; byte-path storage traits + host-fn
    signatures; `KeyElement` impls; codegen building typed paths. Existing contracts
    (string/int keys) compile and pass on the new encoding.
-3. **Re-express the shipped index features** on the codec — sortable `due` (sort
+3. ✅ **Re-express the shipped index features** on the codec — sortable `due` (sort
    element + member nested tuple + range-seek `up_to`), composite `eligible`,
-   compound `memberships`; retire hex `SortKey` and the `Pair` suffix. filestorage
-   regtest green, API unchanged.
-4. **Covering + named compound keys** — `#[derive(Key)]` (named-field compound keys,
-   incl. multi-string); single-scalar covering if wanted.
-5. **Cleanup** — delete retired encodings, debug decoder, docs.
+   compound `memberships`; retired hex `SortKey` and the `Pair` suffix (folded with
+   step 4's compound keys: `K: KeyElement`). filestorage regtest green, API unchanged.
+4. ✅ **Compound keys** — native tuples `(A,B)` (filestorage `memberships`); built-in
+   `Holder` keys via `key_element_via_display!`. *Deferred:* named-field
+   `#[derive(Key)]` and single-scalar **covering** projection (additive).
+5. ✅ **Cleanup** — retired encodings (`SortKey`/`Pair`/`assert_segment`) deleted,
+   debug decoder kept (`keycodec::debug_render`), docs updated.
 
 # Risks
 
