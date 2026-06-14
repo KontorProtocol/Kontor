@@ -405,9 +405,10 @@ fn tuple_body_len(bytes: &[u8]) -> Result<usize, CodecError> {
 }
 
 /// A best-effort human-readable rendering of a codec key, for logs/debug ONLY —
-/// it is NOT canonical or round-trippable (the bytes are). String elements render
-/// as their text; anything else renders as `0x<hex>`. (Phase 2 keys are all string
-/// elements; richer rendering of typed elements can be added with them.)
+/// it is NOT canonical or round-trippable (the bytes are). Segments are joined by
+/// `/`; each renders by type: a string as its text, an int as its number, a bool/
+/// option by name, a nested tuple as `(a,b,…)`, and raw bytes / anything
+/// unrecognized as `0x<hex>`.
 pub fn debug_render(mut bytes: &[u8]) -> String {
     let mut out = String::new();
     while !bytes.is_empty() {
@@ -421,16 +422,70 @@ pub fn debug_render(mut bytes: &[u8]) -> String {
         if !out.is_empty() {
             out.push('/');
         }
-        match String::decode_from(elem) {
-            Ok((s, _)) => out.push_str(&s),
-            Err(_) => {
-                out.push_str("0x");
-                for b in elem {
-                    out.push_str(&alloc::format!("{b:02x}"));
-                }
+        out.push_str(&render_element(elem));
+        bytes = rest;
+    }
+    out
+}
+
+/// Render one complete element (tag-led) to debug text. Recurses into `some(…)`
+/// and tuple members.
+fn render_element(elem: &[u8]) -> String {
+    match elem.first() {
+        Some(&TAG_STR) => match String::decode_from(elem) {
+            Ok((s, _)) => s,
+            Err(_) => hex(elem),
+        },
+        Some(&TAG_BYTES) => match <Vec<u8>>::decode_from(elem) {
+            Ok((content, _)) => hex(&content),
+            Err(_) => hex(elem),
+        },
+        Some(&TAG_FALSE) => String::from("false"),
+        Some(&TAG_TRUE) => String::from("true"),
+        Some(&TAG_NONE) => String::from("none"),
+        Some(&TAG_SOME) => match next_element(&elem[1..]) {
+            Ok((inner, _)) => alloc::format!("some({})", render_element(inner)),
+            Err(_) => hex(elem),
+        },
+        // Signed range covers all but u64 values above `i64::MAX`, which decode
+        // unsigned instead — so a `u64` key renders as its true magnitude.
+        Some(&t) if (TAG_INT_MIN..=TAG_INT_MAX).contains(&t) => {
+            if let Ok((v, _)) = decode_int(elem) {
+                alloc::format!("{v}")
+            } else if let Ok((v, _)) = decode_uint(elem) {
+                alloc::format!("{v}")
+            } else {
+                hex(elem)
             }
         }
-        bytes = rest;
+        Some(&TAG_TUPLE) => {
+            let mut parts = Vec::new();
+            let mut rest = &elem[1..];
+            loop {
+                match rest.first() {
+                    Some(&TERM) | None => break,
+                    Some(_) => match next_element(rest) {
+                        Ok((inner, tail)) => {
+                            parts.push(render_element(inner));
+                            rest = tail;
+                        }
+                        Err(_) => {
+                            parts.push(String::from("<malformed>"));
+                            break;
+                        }
+                    },
+                }
+            }
+            alloc::format!("({})", parts.join(","))
+        }
+        _ => hex(elem),
+    }
+}
+
+fn hex(bytes: &[u8]) -> String {
+    let mut out = String::from("0x");
+    for b in bytes {
+        out.push_str(&alloc::format!("{b:02x}"));
     }
     out
 }
@@ -611,6 +666,24 @@ mod tests {
         let (e3, r3) = next_element(r2).unwrap();
         assert_eq!(e3, &true.encode()[..]);
         assert!(r3.is_empty());
+    }
+
+    #[test]
+    fn debug_render_renders_typed_elements() {
+        // A mixed path: string segment, (string,int) tuple member, bool, option.
+        let mut p = Vec::new();
+        String::from("memberships").encode_to(&mut p);
+        (String::from("agr"), 42u64).encode_to(&mut p);
+        true.encode_to(&mut p);
+        Some(7u64).encode_to(&mut p);
+        assert_eq!(debug_render(&p), "memberships/(agr,42)/true/some(7)");
+
+        // u64 above i64::MAX renders as its true magnitude (unsigned fallback).
+        assert_eq!(debug_render(&u64::MAX.encode()), alloc::format!("{}", u64::MAX));
+        assert_eq!(debug_render(&(-5i64).encode()), "-5");
+        assert_eq!(debug_render(&None::<u64>.encode()), "none");
+        // raw bytes render as hex of their content.
+        assert_eq!(debug_render(&vec![0xde_u8, 0xad].encode()), "0xdead");
     }
 
     #[test]
