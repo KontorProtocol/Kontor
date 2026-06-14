@@ -363,11 +363,14 @@ reindex from genesis once and freeze.
 - **No SQL UDF** — host-side Rust extraction over an index range-scan; `strinc`
   Rust-side. Drops the `regexp` extension.
 - **Delete the hex `SortKey` encoder** — sort fields become ordinary codec int
-  elements (order-preserving natively). `IndexKey` is KEPT, but only as the
-  *bucket*-segment encoder: buckets are equality partitions (order irrelevant), so
-  a bucket stays a string element keyed by `Display`/enum-discriminant. So
+  elements (order-preserving natively). `IndexKey` is KEPT as the *bucket*-segment
+  encoder, but now also yields a **codec element** (`Vec<u8>`), not a string: a
+  `KeyElement` field encodes itself (a `u64` bucket is a compact int element, a
+  `Vec<u8>` its raw bytes — no hex), while a storage enum / `Option` keys by its
+  DISCRIMINANT as a string element. Buckets are equality partitions (order
+  irrelevant), so the element only has to be *distinct* per value, not ordered. So
   bucket-by-discriminant vs order-by-value is a codegen choice — which projection of
-  the value to encode, and whether as a string bucket segment or an ordered sort element.
+  the value to encode, and whether as a bucket segment or an ordered sort element.
 
 ### "Partial" → composite over discriminant fields, not a predicate DSL
 A `where = <expr>` DSL is a non-starter in the WIT `indexed = "…"` string. The

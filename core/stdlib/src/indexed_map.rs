@@ -777,6 +777,31 @@ mod tests {
         assert_eq!(ctx.__get_u64(&pb("t#idx.name.x")), Some(2));
     }
 
+    // A bucket segment is the field's TYPED codec element (not its decimal string):
+    // a `u64` bucket is an int element, so the path is compact and a lookup that
+    // encodes the same value finds the members — while the old string form ("5")
+    // is NOT where the rows live.
+    #[test]
+    fn bucket_is_typed_codec_element() {
+        let ctx = Rc::new(Mock::default());
+        let index = p("t#idx");
+        let entry = |status: u64| IndexEntry {
+            name: "status",
+            bucket: alloc::vec![status.index_key()], // int element, not "5"
+            sort: None,
+        };
+        apply_index_diff(&ctx, &index, &kb("k1".to_string()), &[], &[entry(5)]);
+        apply_index_diff(&ctx, &index, &kb("k2".to_string()), &[], &[entry(5)]);
+
+        // Rows live under the int-element bucket, NOT the string "5" bucket.
+        let int_bucket = index.push("status").push_element(&5u64);
+        assert_eq!(ctx.__get_u64(&int_bucket), Some(2));
+        assert_eq!(ctx.__get_u64(&index.push("status").push("5")), None);
+        let mut keys: Vec<String> = ctx.__get_keys(&int_bucket).collect();
+        keys.sort();
+        assert_eq!(keys, alloc::vec!["k1".to_string(), "k2".to_string()]);
+    }
+
     // A composite index buckets on more than one segment (`<a>/<b>`). The member
     // rows, the count, and a scan all live under the multi-segment bucket path, and
     // a field change moves the member between buckets.
