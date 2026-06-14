@@ -362,12 +362,27 @@ pub fn generate(config: Config) -> TokenStream {
         // encodes as a string element (`Display`) and decodes via `FromStr`.
         stdlib::key_element_via_display!(context::Holder);
 
-        // A `#[index]` on a `Holder` field buckets by that same canonical string.
-        impl stdlib::IndexKey for context::Holder {
-            fn index_key(&self) -> alloc::borrow::Cow<'static, str> {
-                alloc::borrow::Cow::Owned(alloc::string::ToString::to_string(self))
-            }
+        // `#[index]` on an identity/number field buckets by its canonical string,
+        // encoded as a string codec element (equality partition — order irrelevant).
+        // `is_primitive_type` routes all of these through the by-value `IndexKey`
+        // path, so providing the impls here is what lets them be `#[index]`ed at all
+        // (otherwise `#[index]` on, say, a `Decimal` field is a cryptic trait error).
+        macro_rules! __index_key_via_display {
+            ($($ty:ty),*) => {$(
+                impl stdlib::IndexKey for $ty {
+                    fn index_key(&self) -> alloc::vec::Vec<u8> {
+                        stdlib::KeyElement::encode(&alloc::string::ToString::to_string(self))
+                    }
+                }
+            )*};
         }
+        // (HolderRef is a storage enum and already gets a discriminant `IndexKey`.)
+        __index_key_via_display!(
+            context::Holder,
+            context::ContractAddress,
+            numbers::Integer,
+            numbers::Decimal
+        );
 
         impl Retrieve<crate::context::ViewStorage> for numbers::Integer {
             fn __get(ctx: &alloc::rc::Rc<crate::context::ViewStorage>, path: stdlib::KeyPath) -> Option<Self> {

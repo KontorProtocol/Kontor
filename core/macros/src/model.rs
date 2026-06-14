@@ -188,13 +188,13 @@ pub fn generate_struct(
                         // two primitives. `bucket_count` reads the count the
                         // framework maintains AT the bucket-prefix path.
                         impl #index_trait<#k_ty> for #field_model_name {
-                            fn by_index(&self, index_name: &str, bucket: &[&str]) -> impl Iterator<Item = #k_ty> + use<> {
-                                let bucket = bucket.iter().fold(self.index_path.push(index_name), |p, seg| p.push(*seg));
+                            fn by_index(&self, index_name: &str, bucket: &[&[u8]]) -> impl Iterator<Item = #k_ty> + use<> {
+                                let bucket = bucket.iter().fold(self.index_path.push(index_name), |p, seg| p.push_raw_element(seg));
                                 stdlib::ReadStorage::__get_keys(&self.ctx, &bucket)
                             }
 
-                            fn by_index_sorted<S: stdlib::KeyElement + Clone + 'static>(&self, index_name: &str, bucket: &[&str]) -> stdlib::SortedScan<#k_ty, S> {
-                                let bucket = bucket.iter().fold(self.index_path.push(index_name), |p, seg| p.push(*seg));
+                            fn by_index_sorted<S: stdlib::KeyElement + Clone + 'static>(&self, index_name: &str, bucket: &[&[u8]]) -> stdlib::SortedScan<#k_ty, S> {
+                                let bucket = bucket.iter().fold(self.index_path.push(index_name), |p, seg| p.push_raw_element(seg));
                                 // Each member is one `(sort, pk)` tuple element; decode
                                 // it directly. `SortedScan` drops the sort field, yields
                                 // `K` in value order, and bounds on the decoded sort.
@@ -202,8 +202,8 @@ pub fn generate_struct(
                                 stdlib::SortedScan::new(alloc::boxed::Box::new(members))
                             }
 
-                            fn bucket_count(&self, index_name: &str, bucket: &[&str]) -> u64 {
-                                let bucket = bucket.iter().fold(self.index_path.push(index_name), |p, seg| p.push(*seg));
+                            fn bucket_count(&self, index_name: &str, bucket: &[&[u8]]) -> u64 {
+                                let bucket = bucket.iter().fold(self.index_path.push(index_name), |p, seg| p.push_raw_element(seg));
                                 stdlib::ReadStorage::__get_u64(&self.ctx, &bucket).unwrap_or(0)
                             }
                         }

@@ -190,13 +190,13 @@ impl core::convert::From<ChallengeStatus> for ChallengeStatusKind {
 }
 #[automatically_derived]
 impl stdlib::IndexKey for ChallengeStatusKind {
-    fn index_key(&self) -> alloc::borrow::Cow<'static, str> {
-        alloc::borrow::Cow::Borrowed(self.index_key_str())
+    fn index_key(&self) -> alloc::vec::Vec<u8> {
+        stdlib::KeyElement::encode(&alloc::string::String::from(self.index_key_str()))
     }
 }
 #[automatically_derived]
 impl stdlib::IndexKey for ChallengeStatus {
-    fn index_key(&self) -> alloc::borrow::Cow<'static, str> {
+    fn index_key(&self) -> alloc::vec::Vec<u8> {
         stdlib::IndexKey::index_key(&ChallengeStatusKind::from(self))
     }
 }

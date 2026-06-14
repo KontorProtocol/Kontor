@@ -38,7 +38,7 @@ where
     fn by_index(
         &self,
         index_name: &str,
-        bucket: &[&str],
+        bucket: &[&[u8]],
     ) -> impl Iterator<Item = K> + use<Self, K>;
     /// Ordered bucket scan for a *sorted* index: the bucket's `(sort, pk)`
     /// tuple child members, wrapped in a `SortedScan` that yields `K` in sort
@@ -47,25 +47,25 @@ where
     fn by_index_sorted<S: stdlib::KeyElement + Clone + 'static>(
         &self,
         index_name: &str,
-        bucket: &[&str],
+        bucket: &[&[u8]],
     ) -> stdlib::SortedScan<K, S>;
     /// O(1) member count of an `(index_name, bucket…)` bucket, the
     /// framework-maintained size of what the scans would walk.
-    fn bucket_count(&self, index_name: &str, bucket: &[&str]) -> u64;
+    fn bucket_count(&self, index_name: &str, bucket: &[&[u8]]) -> u64;
     fn where_status(&self, status: u64) -> impl Iterator<Item = K> {
         let __b0 = stdlib::IndexKey::index_key(&status);
-        self.by_index("status", &[__b0.as_ref()])
+        self.by_index("status", &[__b0.as_slice()])
     }
     fn count_status(&self, status: u64) -> u64 {
         let __b0 = stdlib::IndexKey::index_key(&status);
-        self.bucket_count("status", &[__b0.as_ref()])
+        self.bucket_count("status", &[__b0.as_slice()])
     }
     fn where_due(&self, status: u64) -> stdlib::SortedScan<K, u64> {
         let __b0 = stdlib::IndexKey::index_key(&status);
-        self.by_index_sorted::<u64>("due", &[__b0.as_ref()])
+        self.by_index_sorted::<u64>("due", &[__b0.as_slice()])
     }
     fn count_due(&self, status: u64) -> u64 {
         let __b0 = stdlib::IndexKey::index_key(&status);
-        self.bucket_count("due", &[__b0.as_ref()])
+        self.bucket_count("due", &[__b0.as_slice()])
     }
 }

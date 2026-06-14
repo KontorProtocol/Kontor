@@ -25,77 +25,64 @@
 //! struct set through `Store`) index-consistent — the field model's per-key path
 //! can't catch that.
 
-use alloc::borrow::Cow;
 use alloc::format;
 use alloc::rc::Rc;
-use alloc::string::{String, ToString};
+use alloc::string::String;
 use alloc::vec::Vec;
 
 use crate::keycodec::{self, KeyElement};
 use crate::{KeyPath, ReadStorage, Store, WriteStorage};
 
-/// The canonical string a value contributes to an index bucket. The SINGLE
-/// source every index path stringifies through — a value's
-/// [`Indexed::index_entries`], the read model's `__index_entries`, the in-place
-/// indexed-field setter, and the generated `where_<field>` lookup — so the
-/// bucket a write lands in and the bucket a lookup scans can never drift.
+/// The codec element a value contributes as one index-bucket segment. The SINGLE
+/// source every index path encodes through — a value's [`Indexed::index_entries`],
+/// the read model's `__index_entries`, the in-place indexed-field setter, and the
+/// generated `where_<field>` lookup — so the bucket a write lands in and the
+/// bucket a lookup scans can never drift.
 ///
-/// Primitives key by their `Display`. A storage enum keys by its DISCRIMINANT
-/// (case name), not its payload — so a payload-carrying case like `Failed(r)`
-/// always lands in bucket `"failed"`, and changing the payload is a no-op for
-/// the index. The `Storage` derive supplies that impl (and a payload-free
+/// A bucket is an equality partition (order *within* it is irrelevant), so the
+/// only requirement is a *distinct* element per value — no ordering, unlike a
+/// [`KeyElement`] sort key. A [`KeyElement`] type encodes itself (a `u64` bucket
+/// is a compact int element; a `Vec<u8>` its raw bytes — no hex). A storage enum
+/// keys by its DISCRIMINANT (case name) as a string element, not its payload — so
+/// `Failed(r)` always lands in the `"failed"` bucket and changing the payload is a
+/// no-op for the index. The `Storage` derive supplies that impl (and a payload-free
 /// `<E>Kind` marker for referencing a case without constructing one).
-///
-/// Returns `Cow` so an enum discriminant (a `&'static str`) costs no allocation
-/// — the hot case, since the key is built on every `set`/`where_` just to compare
-/// or borrow as `&str`. Primitives still own (their `Display` allocates anyway).
 pub trait IndexKey {
-    fn index_key(&self) -> Cow<'static, str>;
+    /// One complete, self-delimiting codec element (e.g. from [`KeyElement::encode`]).
+    fn index_key(&self) -> Vec<u8>;
 }
 
-macro_rules! index_key_via_display {
+// A `KeyElement` type buckets by encoding itself — distinct per value, and far
+// more compact than its `Display` for ints/bytes (a `u64` is ≤9 bytes vs up to 20
+// decimal chars; `Vec<u8>` is raw, not 2× hex). No blanket `impl<T: KeyElement>`:
+// it would collide with the discriminant impl the `Storage` derive emits for enums.
+macro_rules! index_key_via_keyelement {
     ($($t:ty),*) => {
         $(
             impl IndexKey for $t {
-                fn index_key(&self) -> Cow<'static, str> {
-                    Cow::Owned(ToString::to_string(self))
+                fn index_key(&self) -> Vec<u8> {
+                    KeyElement::encode(self)
                 }
             }
         )*
     };
 }
+index_key_via_keyelement!(bool, u8, u16, u32, u64, i8, i16, i32, i64, String, Vec<u8>);
 
-// Primitive index keys are just their `Display`. (No blanket `impl<T: Display>`
-// — that would collide with the discriminant impl the `Storage` derive
-// generates for enums.)
-index_key_via_display!(bool, u64, i64, u32, i32, String, str, &str);
-
-/// A byte field (e.g. a public key or hash) buckets by its **hex** rendering:
-/// `IndexKey` is `str`-typed for distinct partitioning, and raw bytes aren't
-/// UTF-8. Order within the bucket is irrelevant (equality partition), so hex's
-/// length overhead is the only cost.
-impl IndexKey for Vec<u8> {
-    fn index_key(&self) -> Cow<'static, str> {
-        let mut s = String::with_capacity(self.len() * 2);
-        for b in self {
-            s.push_str(&format!("{b:02x}"));
-        }
-        Cow::Owned(s)
-    }
-}
-
-/// An `Option<T>` indexes by its `none`/`some` **discriminant** (like an enum
-/// keys by its case), ignoring the payload — so a composite index can partition
-/// on "is this field set?" without a predicate DSL. Keys match [`Presence`], the
-/// payload-free marker a `where_*` lookup passes, so the bucket a write lands in
-/// and the bucket a lookup scans agree. Blanket over all `T`: `Option` is neither
-/// a keyed primitive nor a storage enum, so no impl overlaps it.
+/// An `Option<T>` indexes by its `none`/`some` **discriminant** (like an enum keys
+/// by its case), ignoring the payload — so a composite index can partition on "is
+/// this field set?" without a predicate DSL. The discriminant is a string element,
+/// matching [`Presence`] (the payload-free marker a `where_*` lookup passes) and
+/// storage enums, so the bucket a write lands in and a lookup scans agree. Blanket
+/// over all `T`: `Option` is neither a keyed primitive nor a storage enum, so no
+/// impl overlaps it.
 impl<T> IndexKey for Option<T> {
-    fn index_key(&self) -> Cow<'static, str> {
-        match self {
-            None => Cow::Borrowed("none"),
-            Some(_) => Cow::Borrowed("some"),
-        }
+    fn index_key(&self) -> Vec<u8> {
+        let s = match self {
+            None => "none",
+            Some(_) => "some",
+        };
+        String::from(s).encode()
     }
 }
 
@@ -111,11 +98,12 @@ pub enum Presence {
 }
 
 impl IndexKey for Presence {
-    fn index_key(&self) -> Cow<'static, str> {
-        match self {
-            Presence::Absent => Cow::Borrowed("none"),
-            Presence::Present => Cow::Borrowed("some"),
-        }
+    fn index_key(&self) -> Vec<u8> {
+        let s = match self {
+            Presence::Absent => "none",
+            Presence::Present => "some",
+        };
+        String::from(s).encode()
     }
 }
 
@@ -182,29 +170,29 @@ impl<K, S> Iterator for SortedScan<K, S> {
 
 /// One secondary-index membership of a value: which index, which bucket, and
 /// (optionally) where it sorts within that bucket. The leaf it maps to is
-/// `<index>/<bucket…>/<sort‖pk>` (see the `IndexedMap` module docs). All segments
-/// must be delimiter-free (`.`); [`apply_index_diff`] enforces it.
+/// `<index>/<bucket…>/<sort‖pk>` (see the `IndexedMap` module docs).
 ///
 /// `bucket` is a vec so a composite index can partition on several fields (one
-/// segment each, in declared order); a single-field index has one — each an
-/// [`IndexKey`] string element (distinct partitioning, order irrelevant). `sort`
-/// is the sort field's **pre-encoded** codec element (`KeyElement::encode`), which
-/// leads the `(sort, pk)` member tuple so the bucket scans in value order. (A
-/// covering projection will be added here later as the leaf *value*; the diff
-/// already keys on the leaf path so that stays additive.)
+/// segment each, in declared order); a single-field index has one — each a
+/// pre-encoded [`IndexKey`] codec element (distinct partitioning, order
+/// irrelevant). `sort` is the sort field's pre-encoded codec element
+/// (`KeyElement::encode`), which leads the `(sort, pk)` member tuple so the bucket
+/// scans in value order. (A covering projection will be added here later as the
+/// leaf *value*; the diff already keys on the leaf path so that stays additive.)
 pub struct IndexEntry {
     pub name: &'static str,
-    pub bucket: Vec<Cow<'static, str>>,
+    pub bucket: Vec<Vec<u8>>,
     pub sort: Option<Vec<u8>>,
 }
 
 impl IndexEntry {
     /// The bucket-prefix path `<index>/<bucket…>` (where the count lives; members
-    /// are its children).
+    /// are its children). The index name is a structural string segment; each
+    /// bucket segment is a pre-encoded `IndexKey` element.
     fn bucket_path(&self, index_root: &KeyPath) -> KeyPath {
         let mut path = index_root.push(self.name);
         for segment in &self.bucket {
-            path = path.push(segment.as_ref());
+            path = path.push_raw_element(segment);
         }
         path
     }
@@ -346,6 +334,7 @@ mod tests {
     use crate::ReadStorage;
     use crate::keycodec::next_element;
     use alloc::collections::BTreeMap;
+    use alloc::string::ToString;
     use alloc::vec;
     use core::cell::RefCell;
 
@@ -477,7 +466,7 @@ mod tests {
     fn e(name: &'static str, key: &str) -> IndexEntry {
         IndexEntry {
             name,
-            bucket: alloc::vec![key.to_string().into()],
+            bucket: alloc::vec![key.to_string().encode()],
             sort: None,
         }
     }
@@ -798,7 +787,7 @@ mod tests {
         // eligible index: bucket = [active, presence].
         let entry = |active: &str, presence: &str| IndexEntry {
             name: "eligible",
-            bucket: alloc::vec![active.to_string().into(), presence.to_string().into()],
+            bucket: alloc::vec![active.to_string().encode(), presence.to_string().encode()],
             sort: None,
         };
         apply_index_diff(
@@ -848,15 +837,24 @@ mod tests {
         assert_eq!(ctx.__get_u64(&pb("a#idx.eligible.true.some")), Some(2));
     }
 
-    // A byte field buckets by hex — distinct per value, valid UTF-8 for the
-    // str-typed bucket segment.
+    // A byte field buckets by its raw codec bytes element (not hex) — distinct per
+    // value, and decodable back to the bytes.
     #[test]
-    fn bytes_index_key_is_hex() {
-        assert_eq!(vec![0xde_u8, 0xad, 0xbe, 0xef].index_key(), "deadbeef");
-        assert_eq!(Vec::<u8>::new().index_key(), "");
-        assert_eq!(vec![0u8, 1, 15, 16, 255].index_key(), "00010f10ff");
+    fn bytes_index_key_is_raw_element() {
+        let v = vec![0xde_u8, 0xad, 0xbe, 0xef];
+        assert_eq!(v.index_key(), v.encode());
+        let (back, _) = <Vec<u8>>::decode_from(&v.index_key()).unwrap();
+        assert_eq!(back, v);
         // distinct bytes → distinct buckets
         assert_ne!(vec![0x01_u8].index_key(), vec![0x10_u8].index_key());
+    }
+
+    // A primitive buckets by its codec element — compact, not its decimal Display.
+    #[test]
+    fn primitive_index_key_is_codec_element() {
+        assert_eq!(5u64.index_key(), 5u64.encode());
+        assert_eq!(true.index_key(), true.encode());
+        assert_ne!(1u64.index_key(), 2u64.index_key());
     }
 
     // An `Option` field and the `Presence` marker a lookup passes must produce the
@@ -865,8 +863,8 @@ mod tests {
     fn option_and_presence_index_keys_agree() {
         assert_eq!(None::<u64>.index_key(), Presence::Absent.index_key());
         assert_eq!(Some(7u64).index_key(), Presence::Present.index_key());
-        assert_eq!(None::<String>.index_key(), "none");
-        assert_eq!(Some(7u64).index_key(), "some");
+        assert_eq!(None::<String>.index_key(), String::from("none").encode());
+        assert_eq!(Some(7u64).index_key(), String::from("some").encode());
     }
 
     // SortedScan in isolation: yields K in sort order and bounds on the decoded
@@ -910,7 +908,7 @@ mod tests {
         // Index "due", bucket "active", sorted by a u64 height (pre-encoded element).
         let entry = |height: u64| IndexEntry {
             name: "due",
-            bucket: alloc::vec!["active".to_string().into()],
+            bucket: alloc::vec!["active".to_string().encode()],
             sort: Some(height.encode()),
         };
         // Insert out of order.

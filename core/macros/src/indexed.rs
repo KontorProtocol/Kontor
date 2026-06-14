@@ -101,7 +101,9 @@ pub fn generate_lookup_trait(
 
             let params = parts.iter().map(|(p, _, _)| p);
             let bindings = parts.iter().map(|(_, b, _)| b).collect::<Vec<_>>();
-            let bucket_refs = parts.iter().map(|(_, _, b)| quote! { #b.as_ref() });
+            // Each `__b<i>` is a pre-encoded `IndexKey` element (`Vec<u8>`); the
+            // bucket is the slice of their byte-slices.
+            let bucket_refs = parts.iter().map(|(_, _, b)| quote! { #b.as_slice() });
             let bucket = quote! { &[#(#bucket_refs),*] };
 
             // `params`/`bindings`/`bucket` are each consumed once per use below;
@@ -147,17 +149,17 @@ pub fn generate_lookup_trait(
             /// The returned iterator owns its source (`use<Self, K>`, no lifetime
             /// capture), so the typed wrappers can hand it borrows of temporary key
             /// strings.
-            fn by_index(&self, index_name: &str, bucket: &[&str]) -> impl Iterator<Item = K> + use<Self, K>;
+            fn by_index(&self, index_name: &str, bucket: &[&[u8]]) -> impl Iterator<Item = K> + use<Self, K>;
 
             /// Ordered bucket scan for a *sorted* index: the bucket's `(sort, pk)`
             /// tuple child members, wrapped in a `SortedScan` that yields `K` in sort
             /// order and bounds `up_to`/`range` on the decoded sort value. `S` is the
             /// index's sort field type, so the wrong bound type is a compile error.
-            fn by_index_sorted<S: stdlib::KeyElement + Clone + 'static>(&self, index_name: &str, bucket: &[&str]) -> stdlib::SortedScan<K, S>;
+            fn by_index_sorted<S: stdlib::KeyElement + Clone + 'static>(&self, index_name: &str, bucket: &[&[u8]]) -> stdlib::SortedScan<K, S>;
 
             /// O(1) member count of an `(index_name, bucket…)` bucket, the
             /// framework-maintained size of what the scans would walk.
-            fn bucket_count(&self, index_name: &str, bucket: &[&str]) -> u64;
+            fn bucket_count(&self, index_name: &str, bucket: &[&[u8]]) -> u64;
 
             #(#methods)*
         }
