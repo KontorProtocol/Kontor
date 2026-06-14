@@ -39,8 +39,10 @@ that. One codec collapses them.
 6. **Deterministic & canonical** — exactly one encoding per value, identical on
    every node; the encoded path is hashed into checkpoints, so the format is
    consensus-critical and frozen once shipped.
-7. **Shared by guest and host** — one codec crate used by contracts
-   (`no_std`/wasm) and the indexer (the SQL/query layer).
+7. **Shared by guest and host** — one codec implementation (a `stdlib` module)
+   used by contracts (`no_std`/wasm) and the indexer (the SQL/query layer), which
+   already depends on `stdlib`. One copy ⇒ no guest/host drift on a consensus
+   format.
 8. **Row semantics unchanged** — only `path` encoding changes. The versioned-log
    model (`contract_id, height, tx_id, path, value, deleted`), per-path
    latest-version liveness (`live_latest`), reorg rollback, the checkpoint trigger,
@@ -339,8 +341,22 @@ reindex from genesis once and freeze.
   decoder.
 - **`get_keys` returns next-element bytes; the guest decodes** (the host can't type
   `K` generically; uniform for compound keys).
-- **`keycodec` is its own `no_std` workspace crate**, shared by `stdlib` (guest)
-  and the indexer (host).
+- **`keycodec` is a module in `stdlib`** (no_std, alongside `dot_path_buf`, which
+  it replaces), not a new crate. The indexer (host) **already depends on `stdlib`**,
+  so there's no isolation to gain from a separate crate; a module keeps one copy of
+  a consensus-frozen format with zero packaging overhead. (Extractable to its own
+  crate later only if a lean consumer that doesn't want `stdlib`'s weight appears —
+  it's a self-contained module.)
+- **Own the codec; don't take a runtime dependency — but don't invent it.** The
+  format is the FoundationDB tuple layer / Google OrderedCode (well-documented,
+  proven); we implement that subset ourselves (~150–250 lines, exhaustively
+  fuzzed, reusing FDB's published test vectors). For a *consensus-frozen* encoding
+  hashed into checkpoints, controlling the exact bytes beats a third-party crate
+  whose format could drift across versions — and existing crates
+  (`foundationdb-tuple` is std/FDB-client-bound, `ordered-code`/`bytekey2` would
+  need no_std + tag-set vetting) don't match our needs anyway (Option `none`/`some`,
+  nested-tuple compound keys, a host-side `next_element(bytes, offset)` extractor,
+  decode into our typed `K`). None is in our tree today.
 - **No SQL UDF** — host-side Rust extraction over an index range-scan; `strinc`
   Rust-side. Drops the `regexp` extension.
 - **Delete `SortKey`/`IndexKey` as separate hex encoders** — both become codec
@@ -373,8 +389,9 @@ error. Numeric fields are the intended sort targets.
 Phases 2–4 are coupled (stdlib + WIT + macro move together to keep contracts
 compiling); land them as one working step, then re-express features.
 
-0. **`keycodec` crate** — encode/decode/`strinc`/`next_element`, unit-tested
-   (round-trip + ordering-vs-logical fuzz). No integration.
+0. **`keycodec` module in `stdlib`** — encode/decode/`strinc`/`next_element`,
+   unit-tested (round-trip + ordering-vs-logical fuzz; FDB test vectors). No
+   integration.
 1. **Host/DB** — `path` → `BLOB`; byte-range subtree/`keys()`/variant queries;
    Rust-side element extraction; checkpoint hashing over BLOB; drop `regexp`. A node
    boots and round-trips set/get/keys. *(Confirm range queries seek the index via
@@ -393,7 +410,7 @@ compiling); land them as one working step, then re-express features.
 # Risks
 
 - **Consensus format** — the encoded path is hashed; the codec must be exactly
-  canonical and identical guest/host. Mitigation: one shared crate, minimal-length
+  canonical and identical guest/host. Mitigation: one shared module, minimal-length
   ints (no varint ambiguity), ordering-fuzz tests.
 - **Host query rewrite** — the `regexp`/`LIKE` logic is load-bearing (subtree
   delete, `keys()`, variant resolution); each ports to byte ranges + Rust
