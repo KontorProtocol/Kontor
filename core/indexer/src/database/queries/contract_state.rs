@@ -266,14 +266,18 @@ pub async fn path_prefix_filter_contract_state(
                             Err(e) => return Some((Err(e.into()), (rows, last))),
                         };
                         // Recover the child's first element from the suffix after
-                        // the scanned prefix.
-                        let child = match next_element(&full[prefix_len..]) {
-                            Ok((elem, _)) => elem.to_vec(),
+                        // the scanned prefix. Compare on the borrowed slice and
+                        // only allocate for a genuinely new child — every
+                        // grandchild repeats its parent's child element, so the
+                        // dedup case is the common one in a deep subtree.
+                        let elem = match next_element(&full[prefix_len..]) {
+                            Ok((elem, _)) => elem,
                             Err(e) => return Some((Err(Error::KeyCodec(e)), (rows, last))),
                         };
-                        if last.as_deref() == Some(child.as_slice()) {
+                        if last.as_deref() == Some(elem) {
                             continue; // dedup consecutive equal children
                         }
+                        let child = elem.to_vec();
                         last = Some(child.clone());
                         return Some((Ok(child), (rows, last)));
                     }
