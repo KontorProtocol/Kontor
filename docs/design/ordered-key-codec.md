@@ -85,33 +85,59 @@ comparison = `memcmp`, which is order-preserving for this codec). Each element i
 | bytes | `0x01` | content with `0x00 → 0x00 0xFF`, then `0x00` terminator | terminator is the min byte ⇒ `"a" < "ab"`; content stays `0x00`-free |
 | string (utf8) | `0x02` | same as bytes | same; **any content allowed, incl. `.` `-` space** |
 | nested tuple | `0x05` | encoded elements…, then `0x00` terminator | ordered by element sequence (compound keys) |
-| false / true | `0x10` / `0x11` | — | false < true |
-| none / some | `0x12` / `0x13(inner)` | some carries the inner element | none < some (matches `Presence::Absent < Present`) |
-| u8…u64 | `0x20`…`0x23` | big-endian, fixed width | BE bytewise == numeric |
-| i8…i64 | `0x30`…`0x33` | sign-bit-flipped big-endian, fixed width | negatives sort first (today's `SortKey` bias) |
+| integer | `0x0C`…`0x1C` | **minimal-length** big-endian; tag encodes sign+byte-count (`0x14` = zero, `0x15+n` = positive n-byte, `0x14-n` = negative n-byte, negatives stored offset so they sort first) | tag orders by magnitude class, bytes within — fuzz-verified across full i64/u64 range |
+| false / true | `0x26` / `0x27` | — | false < true |
+| none / some | `0x28` / `0x29(inner)` | some carries the inner element | none < some (matches `Presence::Absent < Present`) |
 
-- **Fixed-width ints** (per type) keep the encoding trivially canonical — `u64` is
-  always 8 bytes; no varint ambiguity. Width is implied by the tag.
+- **Minimal-length ints (FoundationDB scheme), not fixed-width.** The byte count
+  lives in the tag, so the value is stored in the fewest big-endian bytes — still
+  exactly canonical (one encoding per value) and order-preserving, but a small
+  `height` costs 1–2 bytes instead of 8. (The earlier "fixed-width" decision was
+  wrong for space — see *Performance & space*.) A field's *declared* width (`u8`
+  vs `u64`) doesn't appear in the encoding; the guest decodes into its known type,
+  so `5u8` and `5u64` encode identically and order identically. This is why the
+  table has one `integer` family, not per-width tags.
 - A given path *position* is always the same type in our schema (a struct field /
   map key has one type), so cross-tag ordering never actually arbitrates real
   data; the tag is constant at a position and ordering is by payload.
 - **`strinc(prefix)`** (exclusive upper bound for a prefix range): strip trailing
   `0xFF`, increment the last remaining byte. Subtree of `P` = `[encode(P),
-  strinc(encode(P)))`.
+  strinc(encode(P)))`. Computed host-side in Rust — no SQL function needed.
 - **Escaping** guarantees `0x00` appears only as a terminator, so element
   boundaries are unambiguous and a string element can hold any bytes.
+
+### Reserved tag space (decide once, don't repaint)
+
+Aligned with FoundationDB's layout so it's a known quantity, with gaps reserved
+for things we'll plausibly want:
+
+```
+0x00            terminator / escape sentinel (never a tag)
+0x01 bytes   0x02 string   0x05 nested tuple
+0x06 – 0x0B   RESERVED  — descending-order variants, Integer/Decimal
+0x0C – 0x1C   integer (sign+length, as above)
+0x1D – 0x1F   RESERVED
+0x20 / 0x21   RESERVED  — order-preserving f32 / f64 (IEEE sign-flip)
+0x26 false  0x27 true   0x28 none  0x29 some
+```
+
+Three forward needs this reserves for: **descending** components (encode the
+value's byte-complement; an index that sorts a field DESC), **`Integer`/`Decimal`
+as numerically-ordered keys** (today they'd key by `Display` — lexicographic, not
+numeric — a latent bug the codec lets us fix), and **interned field-name ints**
+(see *Performance & space*).
 
 ### Worked bytes
 
 ```
 str "ab"          → 02 61 62 00
 str "a.b"         → 02 61 2E 62 00          (the '.' is just content now)
-u64 42            → 23 00 00 00 00 00 00 00 2A
-i64 -1            → 33 7F FF FF FF FF FF FF FF
+u64 42            → 15 2A                   (1-byte minimal, not 8)
+i64 -1            → 13 FE
 compound (s,n):
-  ("agr", 42u64)  → 05  02 61 67 72 00  23 00 00 00 00 00 00 00 2A  00
+  ("agr", 42u64)  → 05  02 61 67 72 00  15 2A  00
 path ("m", ("agr",42), "active")
-                  → 02 6D 00  05 02 61 67 72 00 23 …2A 00  02 61 63 74 69 76 65 00
+                  → 02 6D 00  05 02 61 67 72 00 15 2A 00  02 61 63 74 69 76 65 00
 ```
 
 `get_keys` of prefix `("m",)` returns the distinct **next element** — the whole
@@ -149,11 +175,19 @@ single-level scan and struct-field nesting is unchanged.
 3. **WIT host interface** — storage host fns take `list<u8>` paths; `get_keys`
    returns `list<list<u8>>` (each = the child's next-element bytes). Regenerate
    bindings both sides.
-4. **Indexer / host / DB** — `path TEXT → BLOB`; replace the
-   `regexp_capture('[^.]*')` segment logic and `LIKE :p || '.%'` subtree logic
-   with a codec-aware SQLite UDF (`next_element`, range bounds via `strinc`) — we
-   already register custom UDFs (`regexp_capture`), so this swaps one for a
-   smarter one. `ORDER BY path` / `partition_by(path)` work unchanged on BLOB.
+4. **Indexer / host / DB** — `path TEXT → BLOB`; replace the `LIKE :p || '.%'`
+   subtree filter and the `regexp_capture('[^.]*')` `keys()` extraction with:
+   (a) **byte-range bounds** `path >= :lo AND path < :hi` (`hi = strinc(:lo)`,
+   computed in Rust) — a guaranteed index seek; and (b) **Rust-side child-element
+   extraction + dedup** over the range-scanned live rows, using the shared
+   `keycodec`. No SQL function is needed: `keys()` already materializes the
+   bucket, and the async `libsql::Connection` only exposes `load_extension`
+   (`regexp_capture`/`crypto` are loadable C extensions; it does *not* expose Rust
+   scalar UDFs), so doing the extraction in host Rust is both simpler and avoids a
+   second extension. `ORDER BY path` / `partition_by(path)` work unchanged on BLOB
+   (bytewise). *(A future SQL-side "distinct next element" pushdown is possible if
+   pulling a struct map's grandchild rows to dedup ever shows up; index buckets are
+   leaf-only so it doesn't bite the hot `where_` path.)*
 5. **Checkpoint hashing** — now over BLOB paths; deterministic. Pre-prod ⇒ clean
    reindex from genesis; no online migration (consistent with the immutable-
    contract, no-migration stance).
@@ -178,37 +212,82 @@ What changes for a contract author: a key type implements `Key`
 (derive) instead of `ToString + FromStr`; `Pair<A,B>` becomes a named
 `#[derive(Key)] struct`; nothing else in normal use.
 
+## Performance & space at scale (measured)
+
+Experiments on SQLite 3.51 (the planner behavior is core-SQLite, shared with
+libsql); scripts were throwaway, results reproduced below.
+
+- **Range seek vs the current LIKE — this is a *fix*, not a cost.** The current
+  subtree/`keys()` filter `path LIKE :p || '.%'` does **not** use the
+  `(contract_id, path, …)` index — `EXPLAIN QUERY PLAN` shows `SCAN` (a full scan
+  of the contract's rows), and it stays a `SCAN` even with `case_sensitive_like=ON`
+  (the LIKE→range optimization needs a *literal* prefix, which a concatenated
+  parameter isn't). The byte-range form `path >= :lo AND path < strinc(:lo)` is a
+  `SEARCH … USING INDEX` unconditionally. At 400k rows a single subtree lookup went
+  **~26 ms (scan) → ~1.4 µs (seek)**, and the scan cost grows with table size. So
+  moving to range queries (which the codec makes the natural form) removes a latent
+  O(table) cost from the hottest path. *(The win is from ranges, achievable on TEXT
+  too — but only the codec also gives correctness with arbitrary content.)*
+- **BLOB is order-correct and `0x00`-safe.** Verified bytewise `ORDER BY` matches
+  `sorted()` and that keys containing `0x00` round-trip and order correctly — the
+  NUL problem that rules out TEXT does not exist for BLOB (length-prefixed,
+  `memcmp`-compared).
+- **The codec is canonical and order-preserving — fuzzed.** A reference
+  implementation passed ordering-vs-logical over 5,000+ integers (incl. all
+  sign/length boundaries), strings (empty/prefix/`.`/`-`/space/`0x00`/high-byte),
+  **two-variable-string compound keys** (the shape fixed-width couldn't do),
+  `(string,int)` and `(bucket,sort,pk)` tuples; integer encoding is injective.
+- **Space: better for index-heavy data.** Minimal-length ints averaged **5 bytes**
+  for typical heights vs 9 fixed-width vs **16** for the old hex `SortKey`; index
+  leaves shrink. Strings cost ~+1 byte/element (tag+terminator vs one dot) — minor.
+
+**Two scale levers that are orthogonal to the codec (don't conflate):**
+
+1. **Version-log compaction.** Every write appends a version row, so the log grows
+   faster than per-row path overhead; pruning versions below the finalized-
+   checkpoint/reorg horizon is the first real space lever and is independent of the
+   path encoding (the codec neither helps nor hurts it).
+2. **Field-name interning.** Repeated struct field-name strings (`"status"`,
+   `"agreement_id"`) are the dominant path-redundancy cost. SQLite doesn't prefix-
+   compress B-tree keys, and the `(contract_id, path, …)` index stores the path a
+   second time, so adjacent ordered rows share long byte-prefixes that aren't
+   elided. The codec is *friendly* to fixing this (ordered keys with shared
+   prefixes are exactly what prefix compression / a compressing VFS wants), and a
+   field name being "just an element" means we can later encode it as a small
+   per-contract canonical int (declaration order, stable since contracts are
+   immutable) — Cockroach/FDB use column IDs for this. Reserved in the tag space;
+   not needed now. Compression is a scale optimization, not a correctness need, and
+   nothing here forecloses it.
+
 ## Resolved decisions
 
 - **Type-tagged elements (not schema-driven).** The host must extract the next
   element for `keys()` without knowing the contract's types; tags make the stream
-  self-describing. +1 byte/element is negligible.
-- **`path` is `BLOB`.** Bytewise order + all-byte content. TEXT can't be
-  order-preserving with arbitrary content, and embedded `0x00` in TEXT is unsafe.
+  self-describing. ~1 byte/element, small next to field-name strings.
+- **`path` is `BLOB`.** Bytewise order + all-byte content; `0x00`-safe (measured).
+  TEXT can't be order-preserving with arbitrary content.
 - **A key occupies one path position; compound keys are nested-tuple elements.**
   Keeps `keys()` single-level and struct-field nesting unchanged; minimizes the
   macro delta.
-- **Fixed-width-per-type integers.** Canonical by construction; simplest
-  deterministic encoding.
+- **Minimal-length (FDB-style) integers, not fixed-width.** Canonical + order-
+  preserving (fuzzed) and materially smaller. Revised from the first draft.
 - **`Key` replaces `DotPathBuf`.** The `.`-string representation is retired;
-  human-readability comes from the debug UDF/decoder.
-- **No migration.** Pre-prod reindex; format frozen after. (Native-contract format
-  changes ride a coordinated upgrade, same as any other.)
-
-## Open decisions (to settle before/while implementing)
-
-1. **`get_keys` host return shape** — list of next-element byte-slices (decode
-   guest-side) vs. the host decoding to a canonical scalar. Leaning byte-slices
-   (keeps the codec one-sided-authoritative and supports compound keys uniformly).
-2. **`keycodec` placement** — its own workspace crate vs. a module in `stdlib`
-   re-exported for the host. Leaning own crate (the host isn't `no_std` and
-   shouldn't pull stdlib).
-3. **UDF surface** — one `next_element(path, offset)` + `strinc` computed in Rust
-   query-builders, vs. a richer set (`tuple_child`, `tuple_is_descendant`). Start
-   minimal.
-4. **Do we keep `SortKey`/`IndexKey` as thin trait aliases** over `keycodec` for
-   readability in generated code, or delete them entirely and emit codec calls
-   directly. Leaning delete, emit `keycodec`.
+  human-readability comes from a debug decoder.
+- **No migration.** Pre-prod reindex; format frozen after.
+- **`get_keys` returns next-element bytes; the guest decodes.** The host can't
+  decode to a typed `K` generically (and compound keys make this uniform).
+- **`keycodec` is its own `no_std` workspace crate**, depended on by both `stdlib`
+  (guest) and the indexer (host); the host isn't `no_std` and shouldn't pull
+  `stdlib`.
+- **No SQL UDF for `keys()`.** Range-scan (index seek) + extract the child element
+  and dedup in host Rust via `keycodec`; `strinc` computed Rust-side. Chosen
+  because the async `libsql::Connection` only exposes `load_extension`, not Rust
+  scalar UDFs, and because `keys()` already materializes the bucket. (Future SQL
+  pushdown possible but unneeded.)
+- **Delete `SortKey`/`IndexKey` as separate hex encoders.** Both become
+  `keycodec` element encodings; the bucket-by-discriminant vs order-by-value
+  distinction stays a codegen concern (which projection of the value to encode),
+  not two encoders.
 
 ## Build order (phased, all on this branch)
 
