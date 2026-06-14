@@ -117,7 +117,10 @@ impl Storage {
         base_path: &[u8],
         variants: &[String],
     ) -> Result<u64> {
-        Ok(delete_matching_paths(&self.conn, contract_id, self.height, base_path, variants).await?)
+        Ok(
+            delete_matching_paths(&self.conn, contract_id, self.height, base_path, variants)
+                .await?,
+        )
     }
 
     pub async fn contract_id(&self, contract_address: &ContractAddress) -> Result<Option<u64>> {

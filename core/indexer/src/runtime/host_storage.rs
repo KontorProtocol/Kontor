@@ -60,9 +60,7 @@ impl Runtime {
         let table = self.table.lock().await;
         let _self = table.get(&resource)?;
         Fuel::Exists.consume(accessor, self.gauge.as_ref()).await?;
-        self.storage
-            .exists(_self.get_contract_id(), &path)
-            .await
+        self.storage.exists(_self.get_contract_id(), &path).await
     }
 
     pub(crate) async fn _extend_path_with_match<S, T: HasContractId>(

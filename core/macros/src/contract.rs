@@ -58,7 +58,9 @@ fn index_attr(spec: &str) -> String {
                     .unwrap_or_else(|| panic!("`sort` needs a field in indexed entry: {spec:?}"));
                 sort = Some(field.to_snake_case());
             }
-            other => panic!("unexpected `{other}` in indexed entry (expected `by`/`sort`): {spec:?}"),
+            other => {
+                panic!("unexpected `{other}` in indexed entry (expected `by`/`sort`): {spec:?}")
+            }
         }
     }
     let mut args = name;

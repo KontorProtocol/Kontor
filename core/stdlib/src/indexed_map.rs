@@ -419,7 +419,9 @@ mod tests {
 
     impl WriteStorage for Mock {
         fn __set_u64(self: &Rc<Self>, path: &[u8], value: u64) {
-            self.map.borrow_mut().insert(path.to_vec(), Cell::U64(value));
+            self.map
+                .borrow_mut()
+                .insert(path.to_vec(), Cell::U64(value));
         }
         fn __set_void(self: &Rc<Self>, path: &[u8]) {
             *self.void_sets.borrow_mut() += 1;
@@ -560,7 +562,13 @@ mod tests {
         // `old` claims `k` is in the `status.active` bucket, but no void row was
         // ever written there and the count is unset (0). Removing it is a no-op
         // delete; an unconditional decrement would `checked_sub(0)` → trap.
-        apply_index_diff(&ctx, &index, &kb("k".to_string()), &[e("status", "active")], &[]);
+        apply_index_diff(
+            &ctx,
+            &index,
+            &kb("k".to_string()),
+            &[e("status", "active")],
+            &[],
+        );
 
         // Reaching here means no trap. The delete was attempted but removed
         // nothing, so the (absent) count was left untouched.
@@ -643,7 +651,9 @@ mod tests {
 
         // Primary values land under the nested path.
         assert_eq!(
-            ctx.__get_u64(&b(p("account.positions").push_element(&1u64).push("status"))),
+            ctx.__get_u64(&b(p("account.positions")
+                .push_element(&1u64)
+                .push("status"))),
             Some(2)
         );
 
@@ -682,18 +692,22 @@ mod tests {
 
         // Inner index rows land at the nested depth for each map entry (outer and
         // inner keys are u64 elements; the bucket segments are strings).
-        assert!(ctx.__exists(&b(p("accounts")
-            .push_element(&7u64)
-            .push("positions#idx")
-            .push("status")
-            .push("2")
-            .push_element(&1u64))));
-        assert!(ctx.__exists(&b(p("accounts")
-            .push_element(&8u64)
-            .push("positions#idx")
-            .push("status")
-            .push("5")
-            .push_element(&1u64))));
+        assert!(
+            ctx.__exists(&b(p("accounts")
+                .push_element(&7u64)
+                .push("positions#idx")
+                .push("status")
+                .push("2")
+                .push_element(&1u64)))
+        );
+        assert!(
+            ctx.__exists(&b(p("accounts")
+                .push_element(&8u64)
+                .push("positions#idx")
+                .push("status")
+                .push("5")
+                .push_element(&1u64)))
+        );
         assert_eq!(
             ctx.__get_u64(&b(p("accounts")
                 .push_element(&7u64)
@@ -742,11 +756,17 @@ mod tests {
         assert!(ctx.__exists(&b(p("bags#idx.tag.9").push_element(&1u64))));
         // Inner map data persisted under the value's path (u64 key + u64 item keys).
         assert_eq!(
-            ctx.__get_u64(&b(p("bags").push_element(&1u64).push("items").push_element(&100u64))),
+            ctx.__get_u64(&b(p("bags")
+                .push_element(&1u64)
+                .push("items")
+                .push_element(&100u64))),
             Some(1)
         );
         assert_eq!(
-            ctx.__get_u64(&b(p("bags").push_element(&1u64).push("items").push_element(&200u64))),
+            ctx.__get_u64(&b(p("bags")
+                .push_element(&1u64)
+                .push("items")
+                .push_element(&200u64))),
             Some(2)
         );
     }
@@ -781,9 +801,27 @@ mod tests {
             bucket: alloc::vec![active.to_string().into(), presence.to_string().into()],
             sort: None,
         };
-        apply_index_diff(&ctx, &index, &kb("k1".to_string()), &[], &[entry("true", "none")]);
-        apply_index_diff(&ctx, &index, &kb("k2".to_string()), &[], &[entry("true", "none")]);
-        apply_index_diff(&ctx, &index, &kb("k3".to_string()), &[], &[entry("true", "some")]);
+        apply_index_diff(
+            &ctx,
+            &index,
+            &kb("k1".to_string()),
+            &[],
+            &[entry("true", "none")],
+        );
+        apply_index_diff(
+            &ctx,
+            &index,
+            &kb("k2".to_string()),
+            &[],
+            &[entry("true", "none")],
+        );
+        apply_index_diff(
+            &ctx,
+            &index,
+            &kb("k3".to_string()),
+            &[],
+            &[entry("true", "some")],
+        );
 
         assert!(ctx.__exists(&pb("a#idx.eligible.true.none.k1")));
         assert!(ctx.__exists(&pb("a#idx.eligible.true.some.k3")));
@@ -852,8 +890,14 @@ mod tests {
         assert_eq!(scan().up_to(3u16).collect::<Vec<_>>(), vec!["a", "b"]);
         assert_eq!(scan().up_to(0u16).collect::<Vec<_>>(), Vec::<String>::new());
         // range is inclusive on both ends.
-        assert_eq!(scan().range(3u16..=5u16).collect::<Vec<_>>(), vec!["b", "c"]);
-        assert_eq!(scan().range(2u16..=2u16).collect::<Vec<_>>(), Vec::<String>::new());
+        assert_eq!(
+            scan().range(3u16..=5u16).collect::<Vec<_>>(),
+            vec!["b", "c"]
+        );
+        assert_eq!(
+            scan().range(2u16..=2u16).collect::<Vec<_>>(),
+            Vec::<String>::new()
+        );
     }
 
     // End-to-end: a sorted index entry writes an `(sort, pk)` tuple member, and a
@@ -882,6 +926,9 @@ mod tests {
         };
         assert_eq!(scan().collect::<Vec<_>>(), vec!["a", "b", "c"]);
         assert_eq!(scan().up_to(20u64).collect::<Vec<_>>(), vec!["a", "b"]);
-        assert_eq!(scan().range(20u64..=30u64).collect::<Vec<_>>(), vec!["b", "c"]);
+        assert_eq!(
+            scan().range(20u64..=30u64).collect::<Vec<_>>(),
+            vec!["b", "c"]
+        );
     }
 }

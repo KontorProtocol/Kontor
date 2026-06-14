@@ -61,7 +61,9 @@ impl Parse for IndexArgs {
                 other => {
                     return Err(Error::new(
                         key.span(),
-                        format!("unknown index option `{other}` (expected `by`, `sort`, or `include`)"),
+                        format!(
+                            "unknown index option `{other}` (expected `by`, `sort`, or `include`)"
+                        ),
                     ));
                 }
             }
@@ -152,10 +154,7 @@ pub fn parse(struct_attrs: &[Attribute], fields: &FieldsNamed) -> Result<Vec<Ind
 }
 
 fn field_exists(fields: &FieldsNamed, ident: &Ident) -> bool {
-    fields
-        .named
-        .iter()
-        .any(|f| f.ident.as_ref() == Some(ident))
+    fields.named.iter().any(|f| f.ident.as_ref() == Some(ident))
 }
 
 /// Distinct fields referenced (bucket + sort) across `decls`, in first-seen

@@ -44,14 +44,14 @@ macro_rules! storage_placeholder {
     };
 }
 
-mod key_path;
 mod indexed_map;
+mod key_path;
 mod keycodec;
 mod storage_interface;
 mod wave_interfaces;
 
-pub use key_path::*;
 pub use indexed_map::*;
+pub use key_path::*;
 pub use keycodec::*;
 pub use macros::{
     Indexed, Model, Root, Storage, StorageRoot, Store, Wavey, contract, contract_address,

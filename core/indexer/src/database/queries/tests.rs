@@ -566,7 +566,8 @@ async fn test_delete_tombstones_whole_subtree() -> Result<()> {
     insert(&["m", "k", "nested", "inner"]).await?;
     insert(&["m", "k2", "field1"]).await?;
 
-    let removed = delete_contract_state(&conn, height, Some(tx), cid, &cs_path(&["m", "k"])).await?;
+    let removed =
+        delete_contract_state(&conn, height, Some(tx), cid, &cs_path(&["m", "k"])).await?;
     assert!(removed, "the subtree had live rows to tombstone");
 
     // Every descendant of `m/k` is gone (not just the exact path).
@@ -1207,11 +1208,14 @@ async fn test_keys_with_idx_sibling_after_update() -> Result<()> {
     // so `<m>#idx.active.true.44` was tombstoned at H2; only 45 remains. The
     // departed member must NOT reappear via its older (H1) live row — that was
     // the pre-rank `deleted = false` bug, which let a tombstoned entry fall back.
-    let active =
-        path_prefix_filter_contract_state(&conn, cid, cs_path_dotted(&format!("{m}#idx.active.true")))
-            .await?
-            .try_collect::<Vec<Vec<u8>>>()
-            .await?;
+    let active = path_prefix_filter_contract_state(
+        &conn,
+        cid,
+        cs_path_dotted(&format!("{m}#idx.active.true")),
+    )
+    .await?
+    .try_collect::<Vec<Vec<u8>>>()
+    .await?;
     assert_eq!(active, vec![cs_path(&["45"])]);
 
     Ok(())
@@ -1332,7 +1336,14 @@ async fn test_matching_path_after_enum_reset() -> Result<()> {
     )
     .await?;
     // H2: re-set to proven — tombstone `active`, write `proven` (same height).
-    delete_contract_state(&conn, 800001, Some(txs[1]), cid, &cs_path_dotted("c.status.active")).await?;
+    delete_contract_state(
+        &conn,
+        800001,
+        Some(txs[1]),
+        cid,
+        &cs_path_dotted("c.status.active"),
+    )
+    .await?;
     insert_contract_state(
         &conn,
         ContractStateRow::builder()

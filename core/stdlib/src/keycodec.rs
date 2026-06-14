@@ -343,8 +343,7 @@ macro_rules! key_element_via_display {
                 $crate::KeyElement::encode_to(&alloc::string::ToString::to_string(self), out)
             }
             fn decode_from(bytes: &[u8]) -> Result<(Self, &[u8]), $crate::CodecError> {
-                let (s, rest) =
-                    <alloc::string::String as $crate::KeyElement>::decode_from(bytes)?;
+                let (s, rest) = <alloc::string::String as $crate::KeyElement>::decode_from(bytes)?;
                 let v = <Self as core::str::FromStr>::from_str(&s)
                     .map_err(|_| $crate::CodecError::FromStr)?;
                 Ok((v, rest))
@@ -516,7 +515,10 @@ mod tests {
     struct Lcg(u64);
     impl Lcg {
         fn next(&mut self) -> u64 {
-            self.0 = self.0.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+            self.0 = self
+                .0
+                .wrapping_mul(6364136223846793005)
+                .wrapping_add(1442695040888963407);
             self.0
         }
     }
@@ -543,8 +545,24 @@ mod tests {
     #[test]
     fn ints_roundtrip_and_order() {
         let edges = [
-            0i64, 1, -1, 255, 256, -255, -256, 257, -257, 65535, 65536, -65536,
-            i32::MAX as i64, i32::MIN as i64, 1 << 40, -(1 << 40), i64::MAX, i64::MIN,
+            0i64,
+            1,
+            -1,
+            255,
+            256,
+            -255,
+            -256,
+            257,
+            -257,
+            65535,
+            65536,
+            -65536,
+            i32::MAX as i64,
+            i32::MIN as i64,
+            1 << 40,
+            -(1 << 40),
+            i64::MAX,
+            i64::MIN,
         ];
         for &v in &edges {
             roundtrip(v);
@@ -582,14 +600,29 @@ mod tests {
         roundtrip(200u8);
         roundtrip(40_000u16);
         roundtrip(-100i8);
-        assert!(matches!(u8::decode_from(&300u16.encode()), Err(CodecError::Overflow)));
+        assert!(matches!(
+            u8::decode_from(&300u16.encode()),
+            Err(CodecError::Overflow)
+        ));
     }
 
     #[test]
     fn strings_roundtrip_and_order() {
         let words = [
-            "", "a", "ab", "a.b", "a-b", "a b", "b", "z", "aa", "a\u{0}b", "a\u{0}",
-            "\u{0}", "ünîcødé", "a\u{0}\u{0}b",
+            "",
+            "a",
+            "ab",
+            "a.b",
+            "a-b",
+            "a b",
+            "b",
+            "z",
+            "aa",
+            "a\u{0}b",
+            "a\u{0}",
+            "\u{0}",
+            "ünîcødé",
+            "a\u{0}\u{0}b",
         ];
         for w in &words {
             roundtrip(String::from(*w));
@@ -679,7 +712,10 @@ mod tests {
         assert_eq!(debug_render(&p), "memberships/(agr,42)/true/some(7)");
 
         // u64 above i64::MAX renders as its true magnitude (unsigned fallback).
-        assert_eq!(debug_render(&u64::MAX.encode()), alloc::format!("{}", u64::MAX));
+        assert_eq!(
+            debug_render(&u64::MAX.encode()),
+            alloc::format!("{}", u64::MAX)
+        );
         assert_eq!(debug_render(&(-5i64).encode()), "-5");
         assert_eq!(debug_render(&None::<u64>.encode()), "none");
         // raw bytes render as hex of their content.
@@ -710,7 +746,10 @@ mod tests {
     fn truncated_and_bad_tag_error_not_panic() {
         assert_eq!(u64::decode_from(&[]), Err(CodecError::Truncated));
         assert_eq!(u64::decode_from(&[0x1C, 0x00]), Err(CodecError::Truncated)); // wants 8 bytes
-        assert!(matches!(String::decode_from(&[0x99]), Err(CodecError::UnexpectedTag(0x99))));
+        assert!(matches!(
+            String::decode_from(&[0x99]),
+            Err(CodecError::UnexpectedTag(0x99))
+        ));
         assert_eq!(next_element(&[]), Err(CodecError::Truncated));
     }
 }
