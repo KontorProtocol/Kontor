@@ -1,4 +1,4 @@
-use anyhow::Result;
+use anyhow::{Result, anyhow};
 use futures_util::future::OptionFuture;
 use indexer_types::deserialize;
 use serde::{Deserialize, Serialize};
@@ -6,10 +6,37 @@ use wasmtime::AsContext;
 use wasmtime::component::{Accessor, Resource};
 
 use super::{
-    Runtime,
+    ExecutionError, Runtime,
     fuel::Fuel,
     wit::{HasContractId, Keys},
 };
+
+/// The storage trust boundary: reject a non-well-formed guest path ONCE, here,
+/// before it reaches any subtree/keys/matching parse or gets persisted. This is
+/// the single validation choke-point the old string scheme had at
+/// `DotPathBuf::push`, relocated to the host now that the guest sends raw codec
+/// bytes (`list<u8>`). Walking the elements once guarantees every downstream op
+/// can rely on well-formedness, and — crucially — a malformed path can never be
+/// STORED (which would later crash a `keys()` scan into a non-deterministic
+/// error). An empty path is the valid zero-element key (whole-keyspace), so it
+/// passes. The rejection is a DETERMINISTIC contract error (depends only on the
+/// input bytes, identical on every node), NOT a host/infrastructure error —
+/// otherwise it would be misclassified as non-deterministic (see `handle_call`).
+fn validate_path(path: &[u8]) -> Result<()> {
+    let mut rest = path;
+    while !rest.is_empty() {
+        match stdlib::next_element(rest) {
+            Ok((_, r)) => rest = r,
+            Err(_) => {
+                return Err(ExecutionError::Deterministic(anyhow!(
+                    "malformed storage path: not well-formed codec bytes"
+                ))
+                .into());
+            }
+        }
+    }
+    Ok(())
+}
 
 impl Runtime {
     pub(crate) async fn _get_primitive<S, T: HasContractId, R: for<'de> Deserialize<'de>>(
@@ -18,6 +45,7 @@ impl Runtime {
         self_: Resource<T>,
         path: Vec<u8>,
     ) -> Result<Option<R>> {
+        validate_path(&path)?;
         let fuel = accessor.with(|access| access.as_context().get_fuel())?;
         let table = self.table.lock().await;
         let contract_id = table.get(&self_)?.get_contract_id();
@@ -44,6 +72,7 @@ impl Runtime {
         resource: Resource<T>,
         path: Vec<u8>,
     ) -> Result<Resource<Keys>> {
+        validate_path(&path)?;
         let mut table = self.table.lock().await;
         let contract_id = table.get(&resource)?.get_contract_id();
         Fuel::GetKeys.consume(accessor, self.gauge.as_ref()).await?;
@@ -57,6 +86,7 @@ impl Runtime {
         resource: Resource<T>,
         path: Vec<u8>,
     ) -> Result<bool> {
+        validate_path(&path)?;
         let table = self.table.lock().await;
         let _self = table.get(&resource)?;
         Fuel::Exists.consume(accessor, self.gauge.as_ref()).await?;
@@ -70,6 +100,7 @@ impl Runtime {
         path: Vec<u8>,
         variants: Vec<String>,
     ) -> Result<Option<String>> {
+        validate_path(&path)?;
         let table = self.table.lock().await;
         let _self = table.get(&resource)?;
         Fuel::ExtendPathWithMatch(variants.len() as u64)
@@ -87,6 +118,7 @@ impl Runtime {
         base_path: Vec<u8>,
         variants: Vec<String>,
     ) -> Result<u64> {
+        validate_path(&base_path)?;
         Fuel::DeleteMatchingPaths(variants.len() as u64)
             .consume(accessor, self.gauge.as_ref())
             .await?;
@@ -104,6 +136,7 @@ impl Runtime {
         self_: Resource<T>,
         path: Vec<u8>,
     ) -> Result<bool> {
+        validate_path(&path)?;
         Fuel::Set(0).consume(accessor, self.gauge.as_ref()).await?;
         let contract_id = self.table.lock().await.get(&self_)?.get_contract_id();
         self.storage.delete(contract_id, &path).await
@@ -116,6 +149,7 @@ impl Runtime {
         path: Vec<u8>,
         value: V,
     ) -> Result<()> {
+        validate_path(&path)?;
         let contract_id = self.table.lock().await.get(&resource)?.get_contract_id();
         Fuel::Path(path.clone())
             .consume(accessor, self.gauge.as_ref())
@@ -125,5 +159,55 @@ impl Runtime {
             .consume(accessor, self.gauge.as_ref())
             .await?;
         self.storage.set(contract_id, &path, bs).await
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use proptest::prelude::*;
+    use stdlib::KeyElement;
+
+    proptest! {
+        // The storage trust boundary must never PANIC on arbitrary guest bytes —
+        // it returns Ok (well-formed, including empty) or a deterministic Err
+        // (malformed). This is the regression guard for the whole class of bugs
+        // that came from the host trusting raw codec bytes.
+        #[test]
+        fn validate_path_never_panics(bytes in proptest::collection::vec(any::<u8>(), 0..64)) {
+            let _ = validate_path(&bytes);
+        }
+
+        // Anything built from real codec elements is well-formed and passes.
+        #[test]
+        fn well_formed_path_always_validates(
+            s in any::<String>(),
+            n in any::<u64>(),
+            b in any::<bool>(),
+        ) {
+            let mut p = Vec::new();
+            s.encode_to(&mut p);
+            n.encode_to(&mut p);
+            b.encode_to(&mut p);
+            prop_assert!(validate_path(&p).is_ok());
+        }
+    }
+
+    #[test]
+    fn empty_path_is_valid() {
+        // The zero-element key (contract root / whole-keyspace) is well-formed.
+        assert!(validate_path(&[]).is_ok());
+    }
+
+    #[test]
+    fn malformed_paths_are_rejected() {
+        // String tag (0x02) with no terminator.
+        assert!(validate_path(&[0x02, b'a', b'b']).is_err());
+        // Int tag claiming 8 bytes but truncated.
+        assert!(validate_path(&[0x1C, 0x00]).is_err());
+        // A valid element followed by a dangling tag.
+        let mut p = "ok".to_string().encode();
+        p.push(0x02);
+        assert!(validate_path(&p).is_err());
     }
 }

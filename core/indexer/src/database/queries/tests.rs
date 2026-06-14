@@ -1611,6 +1611,84 @@ async fn test_matching_path_on_bare_base_row() -> Result<()> {
     Ok(())
 }
 
+// Fuzz the contract_state query layer: ARBITRARY guest path bytes (empty,
+// malformed, all-0xFF, base-equal, random) must never panic any of exists / keys /
+// matching / delete — the class behind the three boundary bugs (empty subtree
+// bound, malformed parse, bare-base suffix). The host ALSO rejects malformed paths
+// at ingress (`validate_path`); this guards the query layer directly so a future
+// caller can't reintroduce a panic.
+mod proptest_paths {
+    use super::*;
+    use proptest::prelude::*;
+
+    proptest! {
+        #![proptest_config(ProptestConfig::with_cases(24))]
+        #[test]
+        fn query_layer_no_panic_on_arbitrary_path(
+            path in proptest::collection::vec(any::<u8>(), 0..40),
+        ) {
+            let rt = tokio::runtime::Runtime::new().unwrap();
+            rt.block_on(async {
+                let (_reader, writer, _temp) = new_test_db().await.unwrap();
+                let conn = writer.connection();
+                let h = 700000u64;
+                for height in [h, h + 1] {
+                    insert_block(
+                        &conn,
+                        BlockRow::builder()
+                            .height(height)
+                            .hash(new_mock_block_hash(height as u32))
+                            .build(),
+                    )
+                    .await
+                    .unwrap();
+                }
+                let tx = insert_transaction(
+                    &conn,
+                    TransactionRow::builder()
+                        .height(h)
+                        .txid(format!("dddd{:060}", 0))
+                        .tx_index(0)
+                        .confirmed_height(h)
+                        .build(),
+                )
+                .await
+                .unwrap();
+                for k in ["a", "b"] {
+                    insert_contract_state(
+                        &conn,
+                        ContractStateRow::builder()
+                            .contract_id(1)
+                            .tx_id(tx)
+                            .height(h)
+                            .path(cs_path(&["m", k]))
+                            .value(vec![1])
+                            .build(),
+                    )
+                    .await
+                    .unwrap();
+                }
+                let cid = 1;
+                // None of these may panic on arbitrary `path` bytes.
+                let _ = exists_contract_state(&conn, cid, &path).await;
+                let _ = matching_path(
+                    &conn,
+                    cid,
+                    &path,
+                    &["none".to_string(), "some".to_string()],
+                )
+                .await;
+                if let Ok(stream) =
+                    path_prefix_filter_contract_state(&conn, cid, path.clone()).await
+                {
+                    let _ = stream.collect::<Vec<_>>().await;
+                }
+                let _ = delete_contract_state(&conn, h + 1, Some(tx), cid, &path).await;
+            });
+        }
+    }
+}
+
 #[tokio::test]
 async fn test_contract_result_operations() -> Result<()> {
     let (_reader, writer, _temp_dir) = new_test_db().await?;

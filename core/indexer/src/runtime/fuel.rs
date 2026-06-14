@@ -326,7 +326,18 @@ impl FuelGauge {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use proptest::prelude::*;
     use stdlib::KeyElement;
+
+    proptest! {
+        // Fuzz: arbitrary path bytes must never panic metering, and the cost is
+        // bounded by the byte length (≤ 10 fuel per element, ≤ 1 element per byte).
+        #[test]
+        fn path_cost_never_panics(bytes in proptest::collection::vec(any::<u8>(), 0..64)) {
+            let cost = Fuel::Path(bytes.clone()).cost();
+            prop_assert!(cost <= 10 * bytes.len() as u64);
+        }
+    }
 
     // A malformed guest path must not panic fuel metering (it used to `expect` a
     // valid codec path). Cost is deterministic — well-formed elements up to the
