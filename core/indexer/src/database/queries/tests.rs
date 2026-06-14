@@ -18,8 +18,10 @@ use crate::test_utils::{new_mock_block_hash, new_mock_transaction, new_test_db};
 fn calculate_row_hash(state: &ContractStateRow) -> String {
     let value_part = hex::encode(&state.value).to_uppercase();
     let path_part = hex::encode(&state.path).to_uppercase();
+    // Mirrors `checkpoint_trigger.sql`: fields joined by `|` (impossible in any
+    // field's charset) so the digest is unambiguous.
     let input = format!(
-        "{}{}{}{}",
+        "{}|{}|{}|{}",
         state.contract_id,
         path_part,
         value_part,
