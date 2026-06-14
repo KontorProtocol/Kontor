@@ -2,64 +2,51 @@ use core::{fmt::Display, ops::Deref, str::FromStr};
 
 use alloc::{string::String, vec::Vec};
 
+use crate::keycodec::KeyElement;
+
+/// A storage path: a sequence of segments encoded with the order-preserving
+/// [`keycodec`](crate::keycodec) (a `BLOB` key on the host). Keeps the segments
+/// as owned `String`s for `pop`/`segments`/debug, alongside the codec `bytes` that
+/// the host actually keys on (and which `Deref`/`AsRef` expose). For now every
+/// segment is a string element (matching the previous `K::to_string()` behavior);
+/// typed elements (numeric sort, compound keys) are layered on later.
 #[derive(Debug, Clone, PartialEq)]
 pub struct DotPathBuf {
     segments: Vec<String>,
-    joined: String, // Store the joined string
+    bytes: Vec<u8>,
 }
 
 impl DotPathBuf {
     pub fn new() -> Self {
         DotPathBuf {
             segments: Vec::new(),
-            joined: String::new(),
+            bytes: Vec::new(),
         }
     }
 
-    /// Append one path segment. This is the single choke point every segment
-    /// passes through — structural names AND keys (`K::to_string()`, index keys)
-    /// — so it's where key integrity is enforced. A segment is stored verbatim
-    /// into the `.`-joined string the host actually keys on, so a segment that
-    /// contains `.` would silently split into extra segments (the host re-parses
-    /// `joined`, disagreeing with our `segments` vec) and an empty segment would
-    /// collapse onto the parent path. Both corrupt consensus state, so reject
-    /// them loudly here rather than store an unfindable/aliased row. No legitimate
-    /// structural segment is ever empty or dotted, so this only ever fires on a
-    /// bad key.
+    /// Append one path segment — structural names AND keys (`K::to_string()`,
+    /// index keys). The segment is encoded as a string element and appended to the
+    /// codec `bytes`; because each element is self-delimiting (`0x00`-terminated,
+    /// escaped), a segment may contain ANY content (`.`, `-`, …) without aliasing
+    /// — the integrity the old `.`-join had to enforce by rejecting such keys is
+    /// now structural.
     pub fn push(&self, segment: impl Into<String>) -> Self {
         let segment = segment.into();
-        assert!(
-            !segment.is_empty(),
-            "path segment must not be empty (an empty map/index key would collapse onto the parent path)"
-        );
-        assert!(
-            !segment.contains('.'),
-            "path segment must not contain the delimiter '.': {segment:?} (a key with a '.' would corrupt the path)"
-        );
-        let mut new_segments = self.segments.clone();
-        let mut new_joined = self.joined.clone();
-        new_segments.push(segment.clone());
-        if !new_joined.is_empty() {
-            new_joined.push('.');
-        }
-        new_joined.push_str(&segment);
-        DotPathBuf {
-            segments: new_segments,
-            joined: new_joined,
-        }
+        let mut bytes = self.bytes.clone();
+        segment.encode_to(&mut bytes);
+        let mut segments = self.segments.clone();
+        segments.push(segment);
+        DotPathBuf { segments, bytes }
     }
 
     pub fn pop(&self) -> (Self, Option<String>) {
-        let mut new_segments = self.segments.clone();
-        let popped = new_segments.pop();
-        let new_joined = new_segments.join(".");
-        (
-            DotPathBuf {
-                segments: new_segments,
-                joined: new_joined,
-            },
-            popped,
-        )
+        let mut segments = self.segments.clone();
+        let popped = segments.pop();
+        let mut bytes = Vec::new();
+        for s in &segments {
+            s.encode_to(&mut bytes);
+        }
+        (DotPathBuf { segments, bytes }, popped)
     }
 
     pub fn segments(&self) -> impl Iterator<Item = &str> + '_ {
@@ -69,23 +56,24 @@ impl DotPathBuf {
     pub fn num_segments(&self) -> u64 {
         self.segments.len() as u64
     }
+
+    /// The codec bytes the host keys on.
+    pub fn as_bytes(&self) -> &[u8] {
+        &self.bytes
+    }
 }
 
-impl AsRef<str> for DotPathBuf {
-    fn as_ref(&self) -> &str {
-        &self.joined
+impl AsRef<[u8]> for DotPathBuf {
+    fn as_ref(&self) -> &[u8] {
+        &self.bytes
     }
 }
 
 impl From<&str> for DotPathBuf {
     fn from(s: &str) -> Self {
-        let segments = s
-            .split('.')
+        s.split('.')
             .filter(|s| !s.is_empty())
-            .map(String::from)
-            .collect::<Vec<String>>();
-        let joined = segments.join(".");
-        DotPathBuf { segments, joined }
+            .fold(DotPathBuf::new(), |path, seg| path.push(seg))
     }
 }
 
@@ -99,7 +87,8 @@ impl FromStr for DotPathBuf {
 
 impl Display for DotPathBuf {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        write!(f, "{}", self.joined)
+        // Debug rendering only (paths are bytes, not text).
+        write!(f, "{}", self.segments.join("."))
     }
 }
 
@@ -109,17 +98,11 @@ impl Default for DotPathBuf {
     }
 }
 
-impl From<DotPathBuf> for String {
-    fn from(path: DotPathBuf) -> Self {
-        path.joined
-    }
-}
-
 impl Deref for DotPathBuf {
-    type Target = str;
+    type Target = [u8];
 
     fn deref(&self) -> &Self::Target {
-        &self.joined // Return a &str referencing the stored joined string
+        &self.bytes
     }
 }
 
@@ -177,8 +160,18 @@ mod tests {
     #[test]
     fn test_conversions() {
         let path_buf: DotPathBuf = "x.y.z".parse().unwrap();
-        let s: String = path_buf.into();
-        assert_eq!(s, "x.y.z");
+        assert_eq!(path_buf.to_string(), "x.y.z");
+    }
+
+    // Codec elements are self-delimiting, so a segment may now contain `.` or be
+    // empty without aliasing — what the old `.`-join had to reject. Distinct
+    // content ⇒ distinct, recoverable bytes.
+    #[test]
+    fn test_segments_may_contain_delimiter() {
+        let a = DotPathBuf::new().push("a").push("b.c");
+        let b = DotPathBuf::new().push("a").push("b").push("c");
+        assert_ne!(a.as_bytes(), b.as_bytes());
+        assert_eq!(a.segments().collect::<Vec<_>>(), vec!["a", "b.c"]);
     }
 
     #[test]
@@ -198,17 +191,4 @@ mod tests {
         assert_eq!(path.to_string(), "");
     }
 
-    #[test]
-    #[should_panic(expected = "delimiter")]
-    fn push_rejects_dotted_segment() {
-        // A key containing the path delimiter would corrupt the path.
-        DotPathBuf::new().push("a").push("b.c");
-    }
-
-    #[test]
-    #[should_panic(expected = "empty")]
-    fn push_rejects_empty_segment() {
-        // An empty key would collapse onto the parent path.
-        DotPathBuf::new().push("a").push("");
-    }
 }

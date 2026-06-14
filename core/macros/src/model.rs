@@ -670,20 +670,21 @@ pub fn generate_enum(data_enum: &DataEnum, type_name: &Ident, write: bool) -> Re
         let variant_ident = &variant.ident;
         let variant_name = variant_ident.to_string().to_lowercase();
 
+        // `__extend_path_with_match` returns the live variant's name; match on it.
         match &variant.fields {
             Fields::Unit => Ok(quote! {
-                p if p.starts_with(base_path.push(#variant_name).as_ref()) => #model_name::#variant_ident
+                #variant_name => #model_name::#variant_ident
             }),
             Fields::Unnamed(fields) if fields.unnamed.len() == 1 => {
                 let inner_ty = &fields.unnamed[0].ty;
                 if utils::is_primitive_type(inner_ty) {
                     Ok(quote! {
-                        p if p.starts_with(base_path.push(#variant_name).as_ref()) => #model_name::#variant_ident(stdlib::ReadStorage::__get(&ctx, base_path.push(#variant_name)).unwrap())
+                        #variant_name => #model_name::#variant_ident(stdlib::ReadStorage::__get(&ctx, base_path.push(#variant_name)).unwrap())
                     })
                 } else {
                     let inner_model_ty = get_model_ident(write, inner_ty, variant.ident.span())?;
                     Ok(quote! {
-                        p if p.starts_with(base_path.push(#variant_name).as_ref()) => #model_name::#variant_ident(#inner_model_ty::new(ctx.clone(), base_path.push(#variant_name)))
+                        #variant_name => #model_name::#variant_ident(#inner_model_ty::new(ctx.clone(), base_path.push(#variant_name)))
                     })
                 }
             }
@@ -721,7 +722,7 @@ pub fn generate_enum(data_enum: &DataEnum, type_name: &Ident, write: bool) -> Re
         impl #model_name {
             pub fn new(ctx: alloc::rc::Rc<#context_param>, base_path: stdlib::DotPathBuf) -> Self {
                 stdlib::ReadStorage::__extend_path_with_match(&ctx, &base_path, &[#(#variant_names),*])
-                    .map(|path| match path {
+                    .map(|variant| match variant.as_str() {
                         #(#new_arms,)*
                         _ => {
                             panic!("Matching path not found")

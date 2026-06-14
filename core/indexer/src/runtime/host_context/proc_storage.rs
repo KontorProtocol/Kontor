@@ -18,7 +18,7 @@ impl built_in::context::HostProcStorageWithStore for Runtime {
     async fn get_str<T>(
         accessor: &Accessor<T, Self>,
         self_: Resource<ProcStorage>,
-        path: String,
+        path: Vec<u8>,
     ) -> Result<Option<String>> {
         accessor
             .with(|mut access| access.get().clone())
@@ -29,7 +29,7 @@ impl built_in::context::HostProcStorageWithStore for Runtime {
     async fn get_u64<T>(
         accessor: &Accessor<T, Self>,
         self_: Resource<ProcStorage>,
-        path: String,
+        path: Vec<u8>,
     ) -> Result<Option<u64>> {
         accessor
             .with(|mut access| access.get().clone())
@@ -40,7 +40,7 @@ impl built_in::context::HostProcStorageWithStore for Runtime {
     async fn get_s64<T>(
         accessor: &Accessor<T, Self>,
         self_: Resource<ProcStorage>,
-        path: String,
+        path: Vec<u8>,
     ) -> Result<Option<i64>> {
         accessor
             .with(|mut access| access.get().clone())
@@ -51,7 +51,7 @@ impl built_in::context::HostProcStorageWithStore for Runtime {
     async fn get_bool<T>(
         accessor: &Accessor<T, Self>,
         self_: Resource<ProcStorage>,
-        path: String,
+        path: Vec<u8>,
     ) -> Result<Option<bool>> {
         accessor
             .with(|mut access| access.get().clone())
@@ -62,7 +62,7 @@ impl built_in::context::HostProcStorageWithStore for Runtime {
     async fn get_list_u8<T>(
         accessor: &Accessor<T, Self>,
         self_: Resource<ProcStorage>,
-        path: String,
+        path: Vec<u8>,
     ) -> Result<Option<Vec<u8>>> {
         accessor
             .with(|mut access| access.get().clone())
@@ -73,7 +73,7 @@ impl built_in::context::HostProcStorageWithStore for Runtime {
     async fn get_keys<T>(
         accessor: &Accessor<T, Self>,
         self_: Resource<ProcStorage>,
-        path: String,
+        path: Vec<u8>,
     ) -> Result<Resource<Keys>> {
         accessor
             .with(|mut access| access.get().clone())
@@ -84,7 +84,7 @@ impl built_in::context::HostProcStorageWithStore for Runtime {
     async fn exists<T>(
         accessor: &Accessor<T, Self>,
         self_: Resource<ProcStorage>,
-        path: String,
+        path: Vec<u8>,
     ) -> Result<bool> {
         accessor
             .with(|mut access| access.get().clone())
@@ -95,7 +95,7 @@ impl built_in::context::HostProcStorageWithStore for Runtime {
     async fn extend_path_with_match<T>(
         accessor: &Accessor<T, Self>,
         self_: Resource<ProcStorage>,
-        path: String,
+        path: Vec<u8>,
         variants: Vec<String>,
     ) -> Result<Option<String>> {
         accessor
@@ -107,7 +107,7 @@ impl built_in::context::HostProcStorageWithStore for Runtime {
     async fn set_str<T>(
         accessor: &Accessor<T, Self>,
         self_: Resource<ProcStorage>,
-        path: String,
+        path: Vec<u8>,
         value: String,
     ) -> Result<()> {
         accessor
@@ -119,7 +119,7 @@ impl built_in::context::HostProcStorageWithStore for Runtime {
     async fn set_u64<T>(
         accessor: &Accessor<T, Self>,
         self_: Resource<ProcStorage>,
-        path: String,
+        path: Vec<u8>,
         value: u64,
     ) -> Result<()> {
         accessor
@@ -131,7 +131,7 @@ impl built_in::context::HostProcStorageWithStore for Runtime {
     async fn set_s64<T>(
         accessor: &Accessor<T, Self>,
         self_: Resource<ProcStorage>,
-        path: String,
+        path: Vec<u8>,
         value: i64,
     ) -> Result<()> {
         accessor
@@ -143,7 +143,7 @@ impl built_in::context::HostProcStorageWithStore for Runtime {
     async fn set_bool<T>(
         accessor: &Accessor<T, Self>,
         self_: Resource<ProcStorage>,
-        path: String,
+        path: Vec<u8>,
         value: bool,
     ) -> Result<()> {
         accessor
@@ -155,7 +155,7 @@ impl built_in::context::HostProcStorageWithStore for Runtime {
     async fn set_list_u8<T>(
         accessor: &Accessor<T, Self>,
         self_: Resource<ProcStorage>,
-        path: String,
+        path: Vec<u8>,
         value: Vec<u8>,
     ) -> Result<()> {
         accessor
@@ -167,7 +167,7 @@ impl built_in::context::HostProcStorageWithStore for Runtime {
     async fn set_void<T>(
         accessor: &Accessor<T, Self>,
         self_: Resource<ProcStorage>,
-        path: String,
+        path: Vec<u8>,
     ) -> Result<()> {
         accessor
             .with(|mut access| access.get().clone())
@@ -178,7 +178,7 @@ impl built_in::context::HostProcStorageWithStore for Runtime {
     async fn delete<T>(
         accessor: &Accessor<T, Self>,
         self_: Resource<ProcStorage>,
-        path: String,
+        path: Vec<u8>,
     ) -> Result<bool> {
         accessor
             .with(|mut access| access.get().clone())
@@ -189,7 +189,7 @@ impl built_in::context::HostProcStorageWithStore for Runtime {
     async fn delete_matching_paths<T>(
         accessor: &Accessor<T, Self>,
         self_: Resource<ProcStorage>,
-        base_path: String,
+        base_path: Vec<u8>,
         variants: Vec<String>,
     ) -> Result<u64> {
         accessor

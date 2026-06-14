@@ -16,15 +16,15 @@ impl Runtime {
         &self,
         accessor: &Accessor<S, Self>,
         self_: Resource<T>,
-        path: String,
+        path: Vec<u8>,
     ) -> Result<Option<R>> {
         let fuel = accessor.with(|access| access.as_context().get_fuel())?;
         let table = self.table.lock().await;
         let contract_id = table.get(&self_)?.get_contract_id();
-        let raw = self.storage.get(fuel, contract_id, path.as_bytes()).await?;
+        let raw = self.storage.get(fuel, contract_id, &path).await?;
         if raw.is_none() {
             tracing::debug!(
-                "storage read returned None: contract_id={contract_id} path={path} fuel={fuel} height={}",
+                "storage read returned None: contract_id={contract_id} path={path:?} fuel={fuel} height={}",
                 self.storage.height
             );
         }
@@ -42,12 +42,12 @@ impl Runtime {
         &self,
         accessor: &Accessor<S, Self>,
         resource: Resource<T>,
-        path: String,
+        path: Vec<u8>,
     ) -> Result<Resource<Keys>> {
         let mut table = self.table.lock().await;
         let contract_id = table.get(&resource)?.get_contract_id();
         Fuel::GetKeys.consume(accessor, self.gauge.as_ref()).await?;
-        let stream = Box::pin(self.storage.keys(contract_id, path.into_bytes()).await?);
+        let stream = Box::pin(self.storage.keys(contract_id, path).await?);
         Ok(table.push(Keys { stream })?)
     }
 
@@ -55,13 +55,13 @@ impl Runtime {
         &self,
         accessor: &Accessor<S, Self>,
         resource: Resource<T>,
-        path: String,
+        path: Vec<u8>,
     ) -> Result<bool> {
         let table = self.table.lock().await;
         let _self = table.get(&resource)?;
         Fuel::Exists.consume(accessor, self.gauge.as_ref()).await?;
         self.storage
-            .exists(_self.get_contract_id(), path.as_bytes())
+            .exists(_self.get_contract_id(), &path)
             .await
     }
 
@@ -69,7 +69,7 @@ impl Runtime {
         &self,
         accessor: &Accessor<S, Self>,
         resource: Resource<T>,
-        path: String,
+        path: Vec<u8>,
         variants: Vec<String>,
     ) -> Result<Option<String>> {
         let table = self.table.lock().await;
@@ -78,7 +78,7 @@ impl Runtime {
             .consume(accessor, self.gauge.as_ref())
             .await?;
         self.storage
-            .extend_path_with_match(_self.get_contract_id(), path.as_bytes(), &variants)
+            .extend_path_with_match(_self.get_contract_id(), &path, &variants)
             .await
     }
 
@@ -86,7 +86,7 @@ impl Runtime {
         &self,
         accessor: &Accessor<S, Self>,
         self_: Resource<T>,
-        base_path: String,
+        base_path: Vec<u8>,
         variants: Vec<String>,
     ) -> Result<u64> {
         Fuel::DeleteMatchingPaths(variants.len() as u64)
@@ -94,7 +94,7 @@ impl Runtime {
             .await?;
         let contract_id = self.table.lock().await.get(&self_)?.get_contract_id();
         self.storage
-            .delete_matching_paths(contract_id, base_path.as_bytes(), &variants)
+            .delete_matching_paths(contract_id, &base_path, &variants)
             .await
     }
 
@@ -104,18 +104,18 @@ impl Runtime {
         &self,
         accessor: &Accessor<S, Self>,
         self_: Resource<T>,
-        path: String,
+        path: Vec<u8>,
     ) -> Result<bool> {
         Fuel::Set(0).consume(accessor, self.gauge.as_ref()).await?;
         let contract_id = self.table.lock().await.get(&self_)?.get_contract_id();
-        self.storage.delete(contract_id, path.as_bytes()).await
+        self.storage.delete(contract_id, &path).await
     }
 
     pub(crate) async fn _set_primitive<S, T: HasContractId, V: Serialize>(
         &self,
         accessor: &Accessor<S, Self>,
         resource: Resource<T>,
-        path: String,
+        path: Vec<u8>,
         value: V,
     ) -> Result<()> {
         let contract_id = self.table.lock().await.get(&resource)?.get_contract_id();
@@ -126,6 +126,6 @@ impl Runtime {
         Fuel::Set(bs.len() as u64)
             .consume(accessor, self.gauge.as_ref())
             .await?;
-        self.storage.set(contract_id, path.as_bytes(), bs).await
+        self.storage.set(contract_id, &path, bs).await
     }
 }

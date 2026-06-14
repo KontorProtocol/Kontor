@@ -6,17 +6,18 @@ use alloc::{
 };
 
 use crate::DotPathBuf;
+use crate::keycodec::KeyElement;
 
 pub trait ReadStorage {
-    fn __get_str(self: &alloc::rc::Rc<Self>, path: &str) -> Option<String>;
+    fn __get_str(self: &alloc::rc::Rc<Self>, path: &[u8]) -> Option<String>;
 
-    fn __get_u64(self: &alloc::rc::Rc<Self>, path: &str) -> Option<u64>;
+    fn __get_u64(self: &alloc::rc::Rc<Self>, path: &[u8]) -> Option<u64>;
 
-    fn __get_s64(self: &alloc::rc::Rc<Self>, path: &str) -> Option<i64>;
+    fn __get_s64(self: &alloc::rc::Rc<Self>, path: &[u8]) -> Option<i64>;
 
-    fn __get_bool(self: &alloc::rc::Rc<Self>, path: &str) -> Option<bool>;
+    fn __get_bool(self: &alloc::rc::Rc<Self>, path: &[u8]) -> Option<bool>;
 
-    fn __get_list_u8(self: &alloc::rc::Rc<Self>, path: &str) -> Option<Vec<u8>>;
+    fn __get_list_u8(self: &alloc::rc::Rc<Self>, path: &[u8]) -> Option<Vec<u8>>;
 
     // The returned iterator owns its key source (see `make_keys_iterator`), so it
     // does not borrow `path`. `use<Self, T>` makes that explicit — capturing only
@@ -24,16 +25,16 @@ pub trait ReadStorage {
     // freshly-built path (e.g. an index bucket) and still return the iterator.
     fn __get_keys<T: ToString + FromStr + Clone>(
         self: &alloc::rc::Rc<Self>,
-        path: &str,
+        path: &[u8],
     ) -> impl Iterator<Item = T> + use<Self, T>
     where
         <T as FromStr>::Err: Debug;
 
-    fn __exists(self: &alloc::rc::Rc<Self>, path: &str) -> bool;
+    fn __exists(self: &alloc::rc::Rc<Self>, path: &[u8]) -> bool;
 
     fn __extend_path_with_match(
         self: &alloc::rc::Rc<Self>,
-        path: &str,
+        path: &[u8],
         variants: &[&str],
     ) -> Option<String>;
 
@@ -91,17 +92,17 @@ impl<T: ReadStorage + ?Sized> Retrieve<T> for Vec<u8> {
 }
 
 pub trait WriteStorage {
-    fn __set_str(self: &alloc::rc::Rc<Self>, path: &str, value: &str);
+    fn __set_str(self: &alloc::rc::Rc<Self>, path: &[u8], value: &str);
 
-    fn __set_u64(self: &alloc::rc::Rc<Self>, path: &str, value: u64);
+    fn __set_u64(self: &alloc::rc::Rc<Self>, path: &[u8], value: u64);
 
-    fn __set_s64(self: &alloc::rc::Rc<Self>, path: &str, value: i64);
+    fn __set_s64(self: &alloc::rc::Rc<Self>, path: &[u8], value: i64);
 
-    fn __set_bool(self: &alloc::rc::Rc<Self>, path: &str, value: bool);
+    fn __set_bool(self: &alloc::rc::Rc<Self>, path: &[u8], value: bool);
 
-    fn __set_list_u8(self: &alloc::rc::Rc<Self>, path: &str, value: Vec<u8>);
+    fn __set_list_u8(self: &alloc::rc::Rc<Self>, path: &[u8], value: Vec<u8>);
 
-    fn __set_void(self: &alloc::rc::Rc<Self>, path: &str);
+    fn __set_void(self: &alloc::rc::Rc<Self>, path: &[u8]);
 
     fn __set<T: Store<Self>>(self: &alloc::rc::Rc<Self>, path: DotPathBuf, value: T);
 
@@ -109,11 +110,11 @@ pub trait WriteStorage {
     /// struct/map value stored under child paths is fully removed — not just the
     /// exact path. Returns true if any live row was tombstoned. (A leaf path,
     /// e.g. an index void, has no descendants, so this is a single tombstone.)
-    fn __delete(self: &alloc::rc::Rc<Self>, path: &str) -> bool;
+    fn __delete(self: &alloc::rc::Rc<Self>, path: &[u8]) -> bool;
 
     fn __delete_matching_paths(
         self: &alloc::rc::Rc<Self>,
-        base_path: &str,
+        base_path: &[u8],
         variants: &[&str],
     ) -> u64;
 }
@@ -187,7 +188,8 @@ impl<S: WriteStorage + ?Sized, T: Store<S>> Store<S> for Option<T> {
 }
 
 pub trait HasNext {
-    fn next(&self) -> Option<String>;
+    /// The next child key's codec element bytes (a string element), or `None`.
+    fn next(&self) -> Option<Vec<u8>>;
 }
 
 pub fn make_keys_iterator<K, T>(keys: K) -> impl Iterator<Item = T>
@@ -214,7 +216,12 @@ where
     {
         type Item = T;
         fn next(&mut self) -> Option<Self::Item> {
-            self.keys.next().map(|s| T::from_str(&s).unwrap())
+            // Each element is a string element; decode it, then parse into `T`
+            // (the map key type) the same way the segment string used to.
+            self.keys.next().map(|elem| {
+                let (s, _) = String::decode_from(&elem).expect("keys() element is a string");
+                T::from_str(&s).unwrap()
+            })
         }
     }
 

@@ -188,7 +188,7 @@ impl Runtime {
         &self,
         accessor: &Accessor<T, Self>,
         self_: Resource<Keys>,
-    ) -> Result<Option<String>> {
+    ) -> Result<Option<Vec<u8>>> {
         let k: Option<Vec<u8>> = self
             .table
             .lock()
@@ -204,10 +204,8 @@ impl Runtime {
                 .consume(accessor, self.gauge.as_ref())
                 .await?;
         }
-        // Phase 1 placeholder: the WIT `keys.next()` still returns `string`, so
-        // render the codec child element lossily. Phase 2 changes the WIT to
-        // return `list<u8>` and the guest decodes the element directly.
-        Ok(k.map(|bytes| String::from_utf8_lossy(&bytes).into_owned()))
+        // The child key's codec element bytes; the guest decodes it.
+        Ok(k)
     }
 
     pub(super) async fn _fall_signer<T>(

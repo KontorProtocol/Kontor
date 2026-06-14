@@ -3,7 +3,6 @@ use std::sync::Arc;
 use anyhow::{Result, anyhow};
 use futures_util::future::OptionFuture;
 use indexmap::IndexMap;
-use stdlib::DotPathBuf;
 use strum::{EnumDiscriminants, EnumIter};
 use tokio::sync::Mutex;
 use wasmtime::{
@@ -22,7 +21,7 @@ pub enum Fuel {
     HolderFromRef,
     HolderAsRef,
     KeysNext(u64),
-    Path(String),
+    Path(Vec<u8>),
     ExtendPathWithMatch(u64),
     GetKeys,
     Exists,
@@ -96,7 +95,17 @@ impl Fuel {
             Self::HolderFromRef => 100,
             Self::HolderAsRef => 50,
             Self::KeysNext(key_len) => 100 + 10 * key_len,
-            Self::Path(path) => 10 * DotPathBuf::from(path.as_str()).num_segments(),
+            Self::Path(path) => {
+                // Meter by element (segment) count — walk the codec elements.
+                let mut rest = path.as_slice();
+                let mut segments = 0u64;
+                while !rest.is_empty() {
+                    let (_, r) = stdlib::next_element(rest).expect("valid codec path");
+                    rest = r;
+                    segments += 1;
+                }
+                10 * segments
+            }
             Self::Get(value_len) => 10 * *value_len as u64,
             Self::GetKeys => 200,
             Self::Exists => 50,

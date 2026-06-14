@@ -181,45 +181,45 @@ pub fn generate(config: Config) -> TokenStream {
         }
 
         impl stdlib::HasNext for context::Keys {
-            fn next(&self) -> Option<String> {
+            fn next(&self) -> Option<Vec<u8>> {
                 self.next()
             }
         }
 
         #[automatically_derived]
         impl stdlib::ReadStorage for context::ViewStorage {
-            fn __get_str(self: &alloc::rc::Rc<Self>, path: &str) -> Option<String> {
+            fn __get_str(self: &alloc::rc::Rc<Self>, path: &[u8]) -> Option<String> {
                 self.get_str(path)
             }
 
-            fn __get_u64(self: &alloc::rc::Rc<Self>, path: &str) -> Option<u64> {
+            fn __get_u64(self: &alloc::rc::Rc<Self>, path: &[u8]) -> Option<u64> {
                 self.get_u64(path)
             }
 
-            fn __get_s64(self: &alloc::rc::Rc<Self>, path: &str) -> Option<i64> {
+            fn __get_s64(self: &alloc::rc::Rc<Self>, path: &[u8]) -> Option<i64> {
                 self.get_s64(path)
             }
 
-            fn __get_bool(self: &alloc::rc::Rc<Self>, path: &str) -> Option<bool> {
+            fn __get_bool(self: &alloc::rc::Rc<Self>, path: &[u8]) -> Option<bool> {
                 self.get_bool(path)
             }
 
-            fn __get_list_u8(self: &alloc::rc::Rc<Self>, path: &str) -> Option<Vec<u8>> {
+            fn __get_list_u8(self: &alloc::rc::Rc<Self>, path: &[u8]) -> Option<Vec<u8>> {
                 self.get_list_u8(path)
             }
 
-            fn __get_keys<T: ToString + FromStr + Clone>(self: &alloc::rc::Rc<Self>, path: &str) -> impl Iterator<Item = T> + use<T>
+            fn __get_keys<T: ToString + FromStr + Clone>(self: &alloc::rc::Rc<Self>, path: &[u8]) -> impl Iterator<Item = T> + use<T>
             where
                 <T as FromStr>::Err: Debug,
             {
                 stdlib::make_keys_iterator(self.get_keys(path))
             }
 
-            fn __exists(self: &alloc::rc::Rc<Self>, path: &str) -> bool {
+            fn __exists(self: &alloc::rc::Rc<Self>, path: &[u8]) -> bool {
                 self.exists(path)
             }
 
-            fn __extend_path_with_match(self: &alloc::rc::Rc<Self>, path: &str, variants: &[&str]) -> Option<String> {
+            fn __extend_path_with_match(self: &alloc::rc::Rc<Self>, path: &[u8], variants: &[&str]) -> Option<String> {
                 self.extend_path_with_match(path, &variants.iter().map(|s| s.to_string()).collect::<Vec<_>>())
             }
 
@@ -230,38 +230,38 @@ pub fn generate(config: Config) -> TokenStream {
 
         #[automatically_derived]
         impl stdlib::ReadStorage for context::ProcStorage {
-            fn __get_str(self: &alloc::rc::Rc<Self>, path: &str) -> Option<String> {
+            fn __get_str(self: &alloc::rc::Rc<Self>, path: &[u8]) -> Option<String> {
                 self.get_str(path)
             }
 
-            fn __get_u64(self: &alloc::rc::Rc<Self>, path: &str) -> Option<u64> {
+            fn __get_u64(self: &alloc::rc::Rc<Self>, path: &[u8]) -> Option<u64> {
                 self.get_u64(path)
             }
 
-            fn __get_s64(self: &alloc::rc::Rc<Self>, path: &str) -> Option<i64> {
+            fn __get_s64(self: &alloc::rc::Rc<Self>, path: &[u8]) -> Option<i64> {
                 self.get_s64(path)
             }
 
-            fn __get_bool(self: &alloc::rc::Rc<Self>, path: &str) -> Option<bool> {
+            fn __get_bool(self: &alloc::rc::Rc<Self>, path: &[u8]) -> Option<bool> {
                 self.get_bool(path)
             }
 
-            fn __get_list_u8(self: &alloc::rc::Rc<Self>, path: &str) -> Option<Vec<u8>> {
+            fn __get_list_u8(self: &alloc::rc::Rc<Self>, path: &[u8]) -> Option<Vec<u8>> {
                 self.get_list_u8(path)
             }
 
-            fn __get_keys<T: ToString + FromStr + Clone>(self: &alloc::rc::Rc<Self>, path: &str) -> impl Iterator<Item = T> + use<T>
+            fn __get_keys<T: ToString + FromStr + Clone>(self: &alloc::rc::Rc<Self>, path: &[u8]) -> impl Iterator<Item = T> + use<T>
             where
                 <T as FromStr>::Err: Debug,
             {
                 stdlib::make_keys_iterator(self.get_keys(path))
             }
 
-            fn __exists(self: &alloc::rc::Rc<Self>, path: &str) -> bool {
+            fn __exists(self: &alloc::rc::Rc<Self>, path: &[u8]) -> bool {
                 self.exists(path)
             }
 
-            fn __extend_path_with_match(self: &alloc::rc::Rc<Self>, path: &str, variants: &[&str]) -> Option<String> {
+            fn __extend_path_with_match(self: &alloc::rc::Rc<Self>, path: &[u8], variants: &[&str]) -> Option<String> {
                 self.extend_path_with_match(path, &variants.iter().map(|s| s.to_string()).collect::<Vec<_>>())
             }
 
@@ -272,27 +272,27 @@ pub fn generate(config: Config) -> TokenStream {
 
         #[automatically_derived]
         impl stdlib::WriteStorage for context::ProcStorage {
-            fn __set_str(self: &alloc::rc::Rc<Self>, path: &str, value: &str) {
+            fn __set_str(self: &alloc::rc::Rc<Self>, path: &[u8], value: &str) {
                 self.set_str(path, value)
             }
 
-            fn __set_u64(self: &alloc::rc::Rc<Self>, path: &str, value: u64) {
+            fn __set_u64(self: &alloc::rc::Rc<Self>, path: &[u8], value: u64) {
                 self.set_u64(path, value)
             }
 
-            fn __set_s64(self: &alloc::rc::Rc<Self>, path: &str, value: i64) {
+            fn __set_s64(self: &alloc::rc::Rc<Self>, path: &[u8], value: i64) {
                 self.set_s64(path, value)
             }
 
-            fn __set_bool(self: &alloc::rc::Rc<Self>, path: &str, value: bool) {
+            fn __set_bool(self: &alloc::rc::Rc<Self>, path: &[u8], value: bool) {
                 self.set_bool(path, value)
             }
 
-            fn __set_list_u8(self: &alloc::rc::Rc<Self>, path: &str, value: Vec<u8>) {
+            fn __set_list_u8(self: &alloc::rc::Rc<Self>, path: &[u8], value: Vec<u8>) {
                 self.set_list_u8(path, &value)
             }
 
-            fn __set_void(self: &alloc::rc::Rc<Self>, path: &str) {
+            fn __set_void(self: &alloc::rc::Rc<Self>, path: &[u8]) {
                 self.set_void(path)
             }
 
@@ -300,11 +300,11 @@ pub fn generate(config: Config) -> TokenStream {
                 T::__set(self, path, value)
             }
 
-            fn __delete(self: &alloc::rc::Rc<Self>, path: &str) -> bool {
+            fn __delete(self: &alloc::rc::Rc<Self>, path: &[u8]) -> bool {
                 self.delete(path)
             }
 
-            fn __delete_matching_paths(self: &alloc::rc::Rc<Self>, base_path: &str, variants: &[&str]) -> u64 {
+            fn __delete_matching_paths(self: &alloc::rc::Rc<Self>, base_path: &[u8], variants: &[&str]) -> u64 {
                 self.delete_matching_paths(base_path, &variants.iter().map(|s| s.to_string()).collect::<Vec<_>>())
             }
         }

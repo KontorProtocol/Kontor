@@ -470,6 +470,7 @@ where
 mod tests {
     use super::*;
     use crate::ReadStorage;
+    use crate::keycodec::{KeyElement, next_element};
     use alloc::collections::BTreeMap;
     use alloc::vec;
     use core::cell::RefCell;
@@ -483,13 +484,13 @@ mod tests {
 
     #[derive(Default)]
     struct Mock {
-        map: RefCell<BTreeMap<String, Cell>>,
+        map: RefCell<BTreeMap<Vec<u8>, Cell>>,
         void_sets: RefCell<usize>,
         deletes: RefCell<usize>,
     }
 
     impl ReadStorage for Mock {
-        fn __get_u64(self: &Rc<Self>, path: &str) -> Option<u64> {
+        fn __get_u64(self: &Rc<Self>, path: &[u8]) -> Option<u64> {
             match self.map.borrow().get(path) {
                 Some(Cell::U64(v)) => Some(*v),
                 _ => None,
@@ -497,85 +498,95 @@ mod tests {
         }
         fn __get_keys<T: ToString + FromStr + Clone>(
             self: &Rc<Self>,
-            path: &str,
+            path: &[u8],
         ) -> impl Iterator<Item = T> + use<T>
         where
             <T as FromStr>::Err: Debug,
         {
-            let prefix = format!("{path}.");
-            let mut segs: Vec<String> = self
+            // Distinct child elements: byte-prefix the path, take the next element
+            // of the suffix (mirrors the host's `next_element` extraction).
+            let mut elems: Vec<Vec<u8>> = self
                 .map
                 .borrow()
                 .keys()
-                .filter_map(|k| k.strip_prefix(&prefix))
-                .map(|rest| rest.split('.').next().unwrap().to_string())
+                .filter_map(|k| {
+                    let rest = k.as_slice().strip_prefix(path)?;
+                    if rest.is_empty() {
+                        return None;
+                    }
+                    Some(next_element(rest).ok()?.0.to_vec())
+                })
                 .collect();
-            segs.sort();
-            segs.dedup();
-            segs.into_iter().map(|s| T::from_str(&s).unwrap())
+            elems.sort();
+            elems.dedup();
+            elems.into_iter().map(|e| {
+                let (s, _) = String::decode_from(&e).unwrap();
+                T::from_str(&s).unwrap()
+            })
         }
         fn __get<T: crate::Retrieve<Self>>(self: &Rc<Self>, path: DotPathBuf) -> Option<T> {
             T::__get(self, path)
         }
-        fn __get_str(self: &Rc<Self>, _: &str) -> Option<String> {
+        fn __get_str(self: &Rc<Self>, _: &[u8]) -> Option<String> {
             unimplemented!()
         }
-        fn __get_s64(self: &Rc<Self>, _: &str) -> Option<i64> {
+        fn __get_s64(self: &Rc<Self>, _: &[u8]) -> Option<i64> {
             unimplemented!()
         }
-        fn __get_bool(self: &Rc<Self>, _: &str) -> Option<bool> {
+        fn __get_bool(self: &Rc<Self>, _: &[u8]) -> Option<bool> {
             unimplemented!()
         }
-        fn __get_list_u8(self: &Rc<Self>, _: &str) -> Option<Vec<u8>> {
+        fn __get_list_u8(self: &Rc<Self>, _: &[u8]) -> Option<Vec<u8>> {
             unimplemented!()
         }
-        fn __exists(self: &Rc<Self>, path: &str) -> bool {
+        fn __exists(self: &Rc<Self>, path: &[u8]) -> bool {
             self.map.borrow().contains_key(path)
         }
-        fn __extend_path_with_match(self: &Rc<Self>, _: &str, _: &[&str]) -> Option<String> {
+        fn __extend_path_with_match(self: &Rc<Self>, _: &[u8], _: &[&str]) -> Option<String> {
             unimplemented!()
         }
     }
 
     impl WriteStorage for Mock {
-        fn __set_u64(self: &Rc<Self>, path: &str, value: u64) {
-            self.map
-                .borrow_mut()
-                .insert(path.to_string(), Cell::U64(value));
+        fn __set_u64(self: &Rc<Self>, path: &[u8], value: u64) {
+            self.map.borrow_mut().insert(path.to_vec(), Cell::U64(value));
         }
-        fn __set_void(self: &Rc<Self>, path: &str) {
+        fn __set_void(self: &Rc<Self>, path: &[u8]) {
             *self.void_sets.borrow_mut() += 1;
-            self.map.borrow_mut().insert(path.to_string(), Cell::Void);
+            self.map.borrow_mut().insert(path.to_vec(), Cell::Void);
         }
-        fn __delete(self: &Rc<Self>, path: &str) -> bool {
+        fn __delete(self: &Rc<Self>, path: &[u8]) -> bool {
             *self.deletes.borrow_mut() += 1;
             self.map.borrow_mut().remove(path).is_some()
         }
         fn __set<T: Store<Self>>(self: &Rc<Self>, path: DotPathBuf, value: T) {
             T::__set(self, path, value)
         }
-        fn __set_str(self: &Rc<Self>, _: &str, _: &str) {
+        fn __set_str(self: &Rc<Self>, _: &[u8], _: &str) {
             unimplemented!()
         }
-        fn __set_s64(self: &Rc<Self>, _: &str, _: i64) {
+        fn __set_s64(self: &Rc<Self>, _: &[u8], _: i64) {
             unimplemented!()
         }
-        fn __set_bool(self: &Rc<Self>, _: &str, _: bool) {
+        fn __set_bool(self: &Rc<Self>, _: &[u8], _: bool) {
             unimplemented!()
         }
-        fn __set_list_u8(self: &Rc<Self>, _: &str, _: Vec<u8>) {
+        fn __set_list_u8(self: &Rc<Self>, _: &[u8], _: Vec<u8>) {
             unimplemented!()
         }
-        fn __delete_matching_paths(self: &Rc<Self>, _: &str, _: &[&str]) -> u64 {
+        fn __delete_matching_paths(self: &Rc<Self>, _: &[u8], _: &[&str]) -> u64 {
             unimplemented!()
         }
     }
 
-    // Build a path from a dotted string by SPLITTING on `.` (each piece a
-    // segment), not a single `push` of the whole string — `push` now rejects a
-    // segment containing `.`.
+    // A path from a dotted string (each piece a segment) → codec bytes.
     fn p(s: &str) -> DotPathBuf {
         DotPathBuf::from(s)
+    }
+
+    // Codec bytes for an exact path string (for asserting on the Mock's map).
+    fn pb(s: &str) -> Vec<u8> {
+        p(s).as_bytes().to_vec()
     }
 
     // A single-field index entry (one bucket segment, unsorted) — the shape the
@@ -645,15 +656,15 @@ mod tests {
         assert_eq!(*ctx.void_sets.borrow(), 0);
 
         // The status entry moved buckets; the owner entry is still in place.
-        assert!(ctx.__exists("t#idx.status.proven.k"));
-        assert!(!ctx.__exists("t#idx.status.active.k"));
-        assert!(ctx.__exists("t#idx.owner.1.k"));
+        assert!(ctx.__exists(&pb("t#idx.status.proven.k")));
+        assert!(!ctx.__exists(&pb("t#idx.status.active.k")));
+        assert!(ctx.__exists(&pb("t#idx.owner.1.k")));
 
         // Framework-maintained bucket counts track the membership: status moved
         // active(0) -> proven(1); owner.1 stayed at 1.
-        assert_eq!(ctx.__get_u64("t#idx.status.proven"), Some(1));
-        assert_eq!(ctx.__get_u64("t#idx.status.active"), Some(0));
-        assert_eq!(ctx.__get_u64("t#idx.owner.1"), Some(1));
+        assert_eq!(ctx.__get_u64(&pb("t#idx.status.proven")), Some(1));
+        assert_eq!(ctx.__get_u64(&pb("t#idx.status.active")), Some(0));
+        assert_eq!(ctx.__get_u64(&pb("t#idx.owner.1")), Some(1));
     }
 
     // A removal whose index row isn't live (already tombstoned / never written —
@@ -673,7 +684,7 @@ mod tests {
         // Reaching here means no trap. The delete was attempted but removed
         // nothing, so the (absent) count was left untouched.
         assert_eq!(*ctx.deletes.borrow(), 1);
-        assert_eq!(ctx.__get_u64("t#idx.status.active"), None);
+        assert_eq!(ctx.__get_u64(&pb("t#idx.status.active")), None);
     }
 
     // The bulk `Store` path: a map populated before a wholesale write must land
@@ -690,13 +701,13 @@ mod tests {
         Store::__set(&ctx, p("positions"), m);
 
         // Primary values (stored under the value's own field path).
-        assert_eq!(ctx.__get_u64("positions.1.status"), Some(2));
-        assert_eq!(ctx.__get_u64("positions.3.status"), Some(5));
+        assert_eq!(ctx.__get_u64(&pb("positions.1.status")), Some(2));
+        assert_eq!(ctx.__get_u64(&pb("positions.3.status")), Some(5));
 
         // Index rows, in the `#idx` sibling.
-        assert!(ctx.__exists("positions#idx.status.2.1"));
-        assert!(ctx.__exists("positions#idx.status.2.2"));
-        assert!(ctx.__exists("positions#idx.status.5.3"));
+        assert!(ctx.__exists(&pb("positions#idx.status.2.1")));
+        assert!(ctx.__exists(&pb("positions#idx.status.2.2")));
+        assert!(ctx.__exists(&pb("positions#idx.status.5.3")));
 
         // by_index resolves to the primary keys.
         let bucket = p("positions#idx").push("status").push("2");
@@ -706,8 +717,8 @@ mod tests {
 
         // The bulk path maintains bucket counts too (it funnels through
         // apply_index_diff): status 2 has {1,2}, status 5 has {3}.
-        assert_eq!(ctx.__get_u64("positions#idx.status.2"), Some(2));
-        assert_eq!(ctx.__get_u64("positions#idx.status.5"), Some(1));
+        assert_eq!(ctx.__get_u64(&pb("positions#idx.status.2")), Some(2));
+        assert_eq!(ctx.__get_u64(&pb("positions#idx.status.5")), Some(1));
         // The count lives AT the bucket path, NOT as a child — so it never leaks
         // into a `by_index` scan of that bucket's members.
         assert_eq!(ctx.__get_keys::<u64>(&bucket).count(), 2);
@@ -743,12 +754,12 @@ mod tests {
         Store::__set(&ctx, p("account"), account);
 
         // Primary values land under the nested path.
-        assert_eq!(ctx.__get_u64("account.positions.1.status"), Some(2));
+        assert_eq!(ctx.__get_u64(&pb("account.positions.1.status")), Some(2));
 
         // Index rows are the `#idx` sibling *at depth* — same path the field
         // model would build (parent `account` + `positions#idx`).
-        assert!(ctx.__exists("account.positions#idx.status.2.1"));
-        assert!(ctx.__exists("account.positions#idx.status.5.2"));
+        assert!(ctx.__exists(&pb("account.positions#idx.status.2.1")));
+        assert!(ctx.__exists(&pb("account.positions#idx.status.5.2")));
 
         let bucket = p("account.positions#idx").push("status").push("2");
         assert_eq!(ctx.__get_keys::<u64>(&bucket).collect::<Vec<_>>(), vec![1]);
@@ -779,9 +790,9 @@ mod tests {
         Store::__set(&ctx, p("accounts"), accounts);
 
         // Inner index rows land at the nested depth for each map entry.
-        assert!(ctx.__exists("accounts.7.positions#idx.status.2.1"));
-        assert!(ctx.__exists("accounts.8.positions#idx.status.5.1"));
-        assert_eq!(ctx.__get_u64("accounts.7.positions.1.status"), Some(2));
+        assert!(ctx.__exists(&pb("accounts.7.positions#idx.status.2.1")));
+        assert!(ctx.__exists(&pb("accounts.8.positions#idx.status.5.1")));
+        assert_eq!(ctx.__get_u64(&pb("accounts.7.positions.1.status")), Some(2));
     }
 
     // A plain `Map` nested inside an IndexedMap *value*. The outer index is keyed
@@ -819,10 +830,10 @@ mod tests {
         Store::__set(&ctx, p("bags"), bags);
 
         // Outer index maintained by the value's `tag`.
-        assert!(ctx.__exists("bags#idx.tag.9.1"));
+        assert!(ctx.__exists(&pb("bags#idx.tag.9.1")));
         // Inner map data persisted under the value's path.
-        assert_eq!(ctx.__get_u64("bags.1.items.100"), Some(1));
-        assert_eq!(ctx.__get_u64("bags.1.items.200"), Some(2));
+        assert_eq!(ctx.__get_u64(&pb("bags.1.items.100")), Some(1));
+        assert_eq!(ctx.__get_u64(&pb("bags.1.items.200")), Some(2));
     }
 
     #[test]
@@ -909,11 +920,11 @@ mod tests {
         apply_index_diff(&ctx, &index, "k2", &[], &[entry("true", "none")]);
         apply_index_diff(&ctx, &index, "k3", &[], &[entry("true", "some")]);
 
-        assert!(ctx.__exists("a#idx.eligible.true.none.k1"));
-        assert!(ctx.__exists("a#idx.eligible.true.some.k3"));
+        assert!(ctx.__exists(&pb("a#idx.eligible.true.none.k1")));
+        assert!(ctx.__exists(&pb("a#idx.eligible.true.some.k3")));
         // Count lives AT the two-segment bucket path.
-        assert_eq!(ctx.__get_u64("a#idx.eligible.true.none"), Some(2));
-        assert_eq!(ctx.__get_u64("a#idx.eligible.true.some"), Some(1));
+        assert_eq!(ctx.__get_u64(&pb("a#idx.eligible.true.none")), Some(2));
+        assert_eq!(ctx.__get_u64(&pb("a#idx.eligible.true.some")), Some(1));
         // Scan of the (true, none) bucket yields just its members.
         let bucket = p("a#idx.eligible.true.none");
         let mut keys: Vec<String> = ctx.__get_keys(&bucket).collect();
@@ -928,10 +939,10 @@ mod tests {
             &[entry("true", "none")],
             &[entry("true", "some")],
         );
-        assert!(!ctx.__exists("a#idx.eligible.true.none.k1"));
-        assert!(ctx.__exists("a#idx.eligible.true.some.k1"));
-        assert_eq!(ctx.__get_u64("a#idx.eligible.true.none"), Some(1));
-        assert_eq!(ctx.__get_u64("a#idx.eligible.true.some"), Some(2));
+        assert!(!ctx.__exists(&pb("a#idx.eligible.true.none.k1")));
+        assert!(ctx.__exists(&pb("a#idx.eligible.true.some.k1")));
+        assert_eq!(ctx.__get_u64(&pb("a#idx.eligible.true.none")), Some(1));
+        assert_eq!(ctx.__get_u64(&pb("a#idx.eligible.true.some")), Some(2));
     }
 
     // An `Option` field and the `Presence` marker a lookup passes must produce the
