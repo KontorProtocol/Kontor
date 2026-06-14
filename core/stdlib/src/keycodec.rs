@@ -30,6 +30,12 @@ const TAG_TUPLE: u8 = 0x05;
 const TAG_INT_ZERO: u8 = 0x14; // 0x14-n .. 0x14 .. 0x14+n
 const TAG_INT_MIN: u8 = 0x0C; // 8-byte negative
 const TAG_INT_MAX: u8 = 0x1C; // 8-byte positive
+// 256-bit sign-magnitude (the `numerics` Integer/Decimal shape). Placed just
+// outside the 64-bit int range so the global order is 256neg < 64int < 256pos
+// (FDB-bignum-style); within a field the type is fixed, so only one pair appears.
+const TAG_NUM_NEG: u8 = 0x0B;
+const TAG_NUM_POS: u8 = 0x1D;
+const NUM_LEN: usize = 32; // big-endian magnitude width
 const TAG_FALSE: u8 = 0x26;
 const TAG_TRUE: u8 = 0x27;
 const TAG_NONE: u8 = 0x28;
@@ -315,6 +321,71 @@ key_element_tuple!(A, B);
 key_element_tuple!(A, B, C);
 key_element_tuple!(A, B, C, D);
 
+// ── 256-bit sign-magnitude integers (numerics Integer/Decimal) ──────────────
+// Magnitude is a fixed 32-byte big-endian value built from four little-endian
+// u64 limbs (`limbs[0]` least significant). Order-preserving: positives sort by
+// magnitude under `TAG_NUM_POS`; negatives are bit-inverted under the lower
+// `TAG_NUM_NEG` so a larger magnitude sorts earlier — exactly the int scheme,
+// widened to 256 bits. Zero is CANONICAL (always positive) so `+0` and `-0`
+// encode identically. `Decimal` reuses this on its raw scaled limbs (fixed scale
+// ⇒ raw-magnitude order == value order).
+
+fn limbs_to_be(limbs: [u64; 4]) -> [u8; NUM_LEN] {
+    let mut be = [0u8; NUM_LEN];
+    be[0..8].copy_from_slice(&limbs[3].to_be_bytes());
+    be[8..16].copy_from_slice(&limbs[2].to_be_bytes());
+    be[16..24].copy_from_slice(&limbs[1].to_be_bytes());
+    be[24..32].copy_from_slice(&limbs[0].to_be_bytes());
+    be
+}
+
+fn be_to_limbs(be: &[u8]) -> [u64; 4] {
+    let limb = |i: usize| {
+        let mut a = [0u8; 8];
+        a.copy_from_slice(&be[i * 8..i * 8 + 8]);
+        u64::from_be_bytes(a)
+    };
+    // be[0..8] is the most-significant limb (limbs[3]); be[24..32] the least.
+    [limb(3), limb(2), limb(1), limb(0)]
+}
+
+/// Encode a 256-bit sign-magnitude number order-preservingly (33 bytes).
+pub fn encode_int256(out: &mut Vec<u8>, negative: bool, limbs: [u64; 4]) {
+    let zero = limbs == [0, 0, 0, 0];
+    let be = limbs_to_be(limbs);
+    if negative && !zero {
+        out.push(TAG_NUM_NEG);
+        for b in be {
+            out.push(!b); // invert so larger magnitude sorts earlier
+        }
+    } else {
+        out.push(TAG_NUM_POS);
+        out.extend_from_slice(&be);
+    }
+}
+
+/// Decode a 256-bit sign-magnitude number written by [`encode_int256`], returning
+/// `(negative, limbs, rest)`. `negative` is always false for zero (canonical).
+pub fn decode_int256(bytes: &[u8]) -> Result<(bool, [u64; 4], &[u8]), CodecError> {
+    let tag = *bytes.first().ok_or(CodecError::Truncated)?;
+    let negative = match tag {
+        TAG_NUM_POS => false,
+        TAG_NUM_NEG => true,
+        other => return Err(CodecError::UnexpectedTag(other)),
+    };
+    if bytes.len() < 1 + NUM_LEN {
+        return Err(CodecError::Truncated);
+    }
+    let mut be = [0u8; NUM_LEN];
+    be.copy_from_slice(&bytes[1..1 + NUM_LEN]);
+    if negative {
+        for b in be.iter_mut() {
+            *b = !*b;
+        }
+    }
+    Ok((negative, be_to_limbs(&be), &bytes[1 + NUM_LEN..]))
+}
+
 /// Pack several already-encoded elements into one nested-tuple element, ordered
 /// by the sequence of `parts` — the same bytes `(A, B, …)::encode_to` produces,
 /// but from parts whose Rust types differ per call (so a uniform, type-erased
@@ -364,6 +435,7 @@ pub fn next_element(bytes: &[u8]) -> Result<(&[u8], &[u8]), CodecError> {
         TAG_FALSE | TAG_TRUE | TAG_NONE => 1,
         TAG_SOME => 1 + next_element(&bytes[1..])?.0.len(),
         TAG_INT_MIN..=TAG_INT_MAX => 1 + (tag.abs_diff(TAG_INT_ZERO)) as usize,
+        TAG_NUM_NEG | TAG_NUM_POS => 1 + NUM_LEN,
         TAG_BYTES | TAG_STR => 1 + blob_body_len(&bytes[1..])?,
         TAG_TUPLE => 1 + tuple_body_len(&bytes[1..])?,
         other => return Err(CodecError::UnexpectedTag(other)),
@@ -457,6 +529,16 @@ fn render_element(elem: &[u8]) -> String {
                 hex(elem)
             }
         }
+        // 256-bit number: render sign + hex magnitude (no_std has no bigint for
+        // decimal). Debug-only, so the exact decimal form isn't needed.
+        Some(&TAG_NUM_NEG) | Some(&TAG_NUM_POS) => match decode_int256(elem) {
+            Ok((negative, limbs, _)) => {
+                let be = limbs_to_be(limbs);
+                let sign = if negative { "-" } else { "" };
+                alloc::format!("{sign}{}", hex(&be))
+            }
+            Err(_) => hex(elem),
+        },
         Some(&TAG_TUPLE) => {
             let mut parts = Vec::new();
             let mut rest = &elem[1..];
@@ -699,6 +781,78 @@ mod tests {
         let (e3, r3) = next_element(r2).unwrap();
         assert_eq!(e3, &true.encode()[..]);
         assert!(r3.is_empty());
+    }
+
+    #[test]
+    fn int256_roundtrip_and_order() {
+        use core::cmp::Ordering;
+
+        // Numeric order of two 256-bit sign-magnitude values (the reference the
+        // encoded byte order must match). limbs[3] is most significant; zero is
+        // canonical (sign ignored).
+        fn mag_cmp(a: [u64; 4], b: [u64; 4]) -> Ordering {
+            for i in (0..4).rev() {
+                match a[i].cmp(&b[i]) {
+                    Ordering::Equal => {}
+                    o => return o,
+                }
+            }
+            Ordering::Equal
+        }
+        fn norm(neg: bool, m: [u64; 4]) -> bool {
+            if m == [0, 0, 0, 0] { false } else { neg }
+        }
+        fn num_cmp(a: (bool, [u64; 4]), b: (bool, [u64; 4])) -> Ordering {
+            match (norm(a.0, a.1), norm(b.0, b.1)) {
+                (true, false) => Ordering::Less,
+                (false, true) => Ordering::Greater,
+                (false, false) => mag_cmp(a.1, b.1),
+                (true, true) => mag_cmp(b.1, a.1), // larger magnitude = more negative = first
+            }
+        }
+        fn enc(neg: bool, m: [u64; 4]) -> Vec<u8> {
+            let mut o = Vec::new();
+            encode_int256(&mut o, neg, m);
+            o
+        }
+
+        let edges: &[(bool, [u64; 4])] = &[
+            (false, [0, 0, 0, 0]),
+            (true, [0, 0, 0, 0]), // -0 canonicalizes to +0
+            (false, [1, 0, 0, 0]),
+            (true, [1, 0, 0, 0]),
+            (false, [0, 0, 0, 1]),
+            (true, [0, 0, 0, 1]),
+            (false, [u64::MAX, u64::MAX, u64::MAX, u64::MAX]),
+            (true, [u64::MAX, u64::MAX, u64::MAX, u64::MAX]),
+        ];
+        for &(neg, m) in edges {
+            let bytes = enc(neg, m);
+            let (gneg, gm, rest) = decode_int256(&bytes).unwrap();
+            assert!(rest.is_empty());
+            assert_eq!((gneg, gm), (norm(neg, m), m), "roundtrip");
+            // next_element agrees on the boundary.
+            let (e, t) = next_element(&bytes).unwrap();
+            assert_eq!(e, &bytes[..]);
+            assert!(t.is_empty());
+        }
+        // +0 and -0 encode identically (canonical zero).
+        assert_eq!(enc(false, [0, 0, 0, 0]), enc(true, [0, 0, 0, 0]));
+
+        // Ordering fuzz: encoded bytewise order must equal numeric order.
+        let mut rng = Lcg(99);
+        let mut samples: Vec<(bool, [u64; 4])> = edges.to_vec();
+        for _ in 0..4000 {
+            samples.push((rng.next() & 1 == 0, [rng.next(), rng.next(), rng.next(), rng.next()]));
+            // also bias toward small magnitudes (where most real balances live)
+            samples.push((rng.next() & 1 == 0, [rng.next() & 0xffff, 0, 0, 0]));
+        }
+        samples.sort_by(|a, b| num_cmp(*a, *b));
+        samples.dedup_by(|a, b| num_cmp(*a, *b) == Ordering::Equal);
+        let encs: Vec<Vec<u8>> = samples.iter().map(|&(n, m)| enc(n, m)).collect();
+        for w in encs.windows(2) {
+            assert!(w[0] < w[1], "encoded order must match numeric order");
+        }
     }
 
     #[test]
