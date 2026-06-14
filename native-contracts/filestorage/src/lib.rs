@@ -180,12 +180,6 @@ impl Guest for Filestorage {
         if descriptor.file_id.is_empty() {
             return Err(Error::Message("file_id cannot be empty".to_string()));
         }
-        // file_id is the agreement's storage key (and a `Map` key for its node
-        // set), so a '.' would corrupt the path. Reject it as bad input rather
-        // than let the path layer trap.
-        if descriptor.file_id.contains('.') {
-            return Err(Error::Message("file_id must not contain '.'".to_string()));
-        }
         if descriptor.padded_len == 0 || !descriptor.padded_len.is_power_of_two() {
             return Err(Error::Message(
                 "padded_len must be a positive power of 2".to_string(),
