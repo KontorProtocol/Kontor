@@ -46,11 +46,13 @@ macro_rules! storage_placeholder {
 
 mod dot_path_buf;
 mod indexed_map;
+mod keycodec;
 mod storage_interface;
 mod wave_interfaces;
 
 pub use dot_path_buf::*;
 pub use indexed_map::*;
+pub use keycodec::*;
 pub use macros::{
     Indexed, Model, Root, Storage, StorageRoot, Store, Wavey, contract, contract_address,
     holder_ref, impls, import, interface,
