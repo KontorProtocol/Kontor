@@ -28,11 +28,15 @@ pub trait ReadStorage {
 
     fn __exists(self: &alloc::rc::Rc<Self>, path: &[u8]) -> bool;
 
+    /// Resolve which of `candidates` (already-encoded discriminant elements) is the
+    /// current child under `path`, returning its INDEX, or `None` if unset. The host
+    /// byte-compares, so the candidate encoding (string element or interned dict-ref)
+    /// is the guest's choice.
     fn __extend_path_with_match(
         self: &alloc::rc::Rc<Self>,
         path: &[u8],
-        variants: &[&str],
-    ) -> Option<String>;
+        candidates: &[Vec<u8>],
+    ) -> Option<u32>;
 
     fn __get<T: Retrieve<Self>>(self: &alloc::rc::Rc<Self>, path: KeyPath) -> Option<T>;
 }
@@ -111,7 +115,7 @@ pub trait WriteStorage {
     fn __delete_matching_paths(
         self: &alloc::rc::Rc<Self>,
         base_path: &[u8],
-        variants: &[&str],
+        candidates: &[Vec<u8>],
     ) -> u64;
 }
 
@@ -175,7 +179,16 @@ impl<T: WriteStorage + ?Sized> Store<T> for () {
 
 impl<S: WriteStorage + ?Sized, T: Store<S>> Store<S> for Option<T> {
     fn __set(ctx: &alloc::rc::Rc<S>, path: KeyPath, value: Self) {
-        ctx.__delete_matching_paths(&path, &["none", "some"]);
+        // `none`/`some` stay STRING discriminant segments (Option is generic, with
+        // no per-type dict to intern them into); the host byte-compares, so this
+        // mixes fine with interned enum variants elsewhere.
+        ctx.__delete_matching_paths(
+            &path,
+            &[
+                crate::keycodec::string_element("none"),
+                crate::keycodec::string_element("some"),
+            ],
+        );
         match value {
             Some(inner) => ctx.__set(path.push("some"), inner),
             None => ctx.__set(path.push("none"), ()),

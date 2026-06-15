@@ -447,6 +447,21 @@ pub fn encode_dict(out: &mut Vec<u8>, id: u8) {
     out.push(id);
 }
 
+/// The dict-ref element for interned id `id`, as standalone bytes — the
+/// discriminant candidate the guest passes to `extend-path-with-match` /
+/// `delete-matching-paths` for an interned (storage-enum) variant.
+pub fn interned_element(id: u8) -> Vec<u8> {
+    let mut out = Vec::new();
+    encode_dict(&mut out, id);
+    out
+}
+
+/// The string codec element for `s`, as standalone bytes — the discriminant
+/// candidate for a NON-interned variant (an `Option`'s `none`/`some`).
+pub fn string_element(s: &str) -> Vec<u8> {
+    KeyElement::encode(&String::from(s))
+}
+
 /// Decode a dict-ref written by [`encode_dict`], returning `(id, rest)`.
 pub fn decode_dict(bytes: &[u8]) -> Result<(u8, &[u8]), CodecError> {
     match bytes.first() {

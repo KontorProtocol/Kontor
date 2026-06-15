@@ -245,7 +245,7 @@ pub fn generate_struct(
                         Ok(quote! {
                             pub fn #field_name(&self) -> Option<#inner_ty> {
                                 let base_path = #base_path;
-                                if stdlib::ReadStorage::__extend_path_with_match(&self.ctx, &base_path, &["none"]).is_some() {
+                                if stdlib::ReadStorage::__extend_path_with_match(&self.ctx, &base_path, &[stdlib::string_element("none")]).is_some() {
                                     None
                                 } else {
                                     stdlib::ReadStorage::__get(&self.ctx, base_path.push("some"))
@@ -258,7 +258,7 @@ pub fn generate_struct(
                         Ok(quote! {
                             pub fn #field_name(&self) -> Option<#ret_ty> {
                                 let base_path = #base_path;
-                                if stdlib::ReadStorage::__extend_path_with_match(&self.ctx, &base_path, &["none"]).is_some() {
+                                if stdlib::ReadStorage::__extend_path_with_match(&self.ctx, &base_path, &[stdlib::string_element("none")]).is_some() {
                                     None
                                 } else {
                                     Some(#inner_model_ty::new(self.ctx.clone(), base_path.push("some"))#load)
@@ -676,34 +676,34 @@ pub fn generate_enum(data_enum: &DataEnum, type_name: &Ident, write: bool) -> Re
 
     let model_variants = model_variants?;
 
-    let variant_names = data_enum
-        .variants
-        .iter()
-        .map(|variant| {
-            let variant_name = variant.ident.to_string().to_lowercase();
-            quote! { #variant_name }
-        })
+    // Each variant's discriminant is an interned dict-ref id = its declaration
+    // order in the enum (a per-enum dict, distinct from struct field ids). The
+    // candidates the host byte-matches are those dict-ref elements, in the same
+    // order, so `extend_path_with_match` returns the variant's index.
+    let variant_candidates = (0..data_enum.variants.len() as u8)
+        .map(|id| quote! { stdlib::interned_element(#id) })
         .collect::<Vec<_>>();
 
-    let new_arms = data_enum.variants.iter().map(|variant| {
+    let new_arms = data_enum.variants.iter().enumerate().map(|(i, variant)| {
         let variant_ident = &variant.ident;
-        let variant_name = variant_ident.to_string().to_lowercase();
+        let variant_id = i as u8;
+        let arm_idx = i as u32;
 
-        // `__extend_path_with_match` returns the live variant's name; match on it.
+        // `__extend_path_with_match` returns the live variant's INDEX; match on it.
         match &variant.fields {
             Fields::Unit => Ok(quote! {
-                #variant_name => #model_name::#variant_ident
+                #arm_idx => #model_name::#variant_ident
             }),
             Fields::Unnamed(fields) if fields.unnamed.len() == 1 => {
                 let inner_ty = &fields.unnamed[0].ty;
                 if utils::is_primitive_type(inner_ty) {
                     Ok(quote! {
-                        #variant_name => #model_name::#variant_ident(stdlib::ReadStorage::__get(&ctx, base_path.push(#variant_name)).unwrap())
+                        #arm_idx => #model_name::#variant_ident(stdlib::ReadStorage::__get(&ctx, base_path.push_interned(#variant_id)).unwrap())
                     })
                 } else {
                     let inner_model_ty = get_model_ident(write, inner_ty, variant.ident.span())?;
                     Ok(quote! {
-                        #variant_name => #model_name::#variant_ident(#inner_model_ty::new(ctx.clone(), base_path.push(#variant_name)))
+                        #arm_idx => #model_name::#variant_ident(#inner_model_ty::new(ctx.clone(), base_path.push_interned(#variant_id)))
                     })
                 }
             }
@@ -740,8 +740,8 @@ pub fn generate_enum(data_enum: &DataEnum, type_name: &Ident, write: bool) -> Re
 
         impl #model_name {
             pub fn new(ctx: alloc::rc::Rc<#context_param>, base_path: stdlib::KeyPath) -> Self {
-                stdlib::ReadStorage::__extend_path_with_match(&ctx, &base_path, &[#(#variant_names),*])
-                    .map(|variant| match variant.as_str() {
+                stdlib::ReadStorage::__extend_path_with_match(&ctx, &base_path, &[#(#variant_candidates),*])
+                    .map(|__idx| match __idx {
                         #(#new_arms,)*
                         _ => {
                             panic!("Matching path not found")

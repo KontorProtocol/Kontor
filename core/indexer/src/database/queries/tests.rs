@@ -58,6 +58,13 @@ fn cs_path_dotted(path: &str) -> Vec<u8> {
     cs_path(&path.split('.').collect::<Vec<_>>())
 }
 
+/// Candidate discriminant elements for `matching_path`/`delete_matching_paths`,
+/// from string variant names — these host tests use string-element discriminants
+/// (the byte-compare is encoding-agnostic, so a string element is a fine stand-in).
+fn cands(names: &[&str]) -> Vec<Vec<u8>> {
+    names.iter().map(|n| stdlib::string_element(n)).collect()
+}
+
 async fn setup_test_data(conn: &libsql::Connection) -> Result<()> {
     // Insert blocks
     for height in [800000, 800001, 800002] {
@@ -416,16 +423,12 @@ async fn test_contract_state_operations() -> Result<()> {
     assert!(contract_has_state(&conn, contract_id).await?);
     assert!(exists_contract_state(&conn, contract_id, &base).await?);
 
+    // "path" is candidate index 0.
     assert_eq!(
-        matching_path(
-            &conn,
-            contract_id,
-            &base,
-            &["path".to_string(), "foo".to_string(), "bar".to_string()],
-        )
-        .await?
-        .unwrap(),
-        "path"
+        matching_path(&conn, contract_id, &base, &cands(&["path", "foo", "bar"]))
+            .await?
+            .unwrap(),
+        0
     );
 
     // Get latest contract state
@@ -1121,7 +1124,7 @@ async fn test_map_keys() -> Result<()> {
         contract_id,
         height,
         &cs_path_dotted("test.path"),
-        &["key0".to_string()],
+        &cands(&["key0"]),
     )
     .await?;
     assert_eq!(result, 2);
@@ -1282,7 +1285,7 @@ async fn test_empty_path_is_whole_keyspace_not_panic() -> Result<()> {
         .await?;
     assert_eq!(top, vec![cs_path(&["m"])]);
     // `matching_path` at the root must not panic.
-    let _ = matching_path(&conn, cid, &[], &["none".to_string(), "some".to_string()]).await?;
+    let _ = matching_path(&conn, cid, &[], &cands(&["none", "some"])).await?;
     // Deleting the empty subtree tombstones the whole keyspace.
     assert!(delete_contract_state(&conn, height + 1, Some(tx), cid, &[]).await?);
     assert!(!exists_contract_state(&conn, cid, &[]).await?);
@@ -1427,10 +1430,10 @@ async fn test_matching_path_after_enum_reset() -> Result<()> {
         &conn,
         cid,
         &cs_path_dotted("c.status"),
-        &["active".to_string(), "proven".to_string()],
+        &cands(&["active", "proven"]),
     )
     .await?;
-    assert_eq!(found, Some("proven".to_string()));
+    assert_eq!(found, Some(1)); // "proven" is candidate index 1
 
     Ok(())
 }
@@ -1487,14 +1490,8 @@ async fn test_matching_path_newest_of_multiple_live() -> Result<()> {
         .await?;
     }
 
-    let found = matching_path(
-        &conn,
-        cid,
-        &cs_path_dotted("c.op"),
-        &["id".to_string(), "sum".to_string()],
-    )
-    .await?;
-    assert_eq!(found, Some("sum".to_string()));
+    let found = matching_path(&conn, cid, &cs_path_dotted("c.op"), &cands(&["id", "sum"])).await?;
+    assert_eq!(found, Some(1)); // "sum" is candidate index 1
 
     Ok(())
 }
@@ -1553,7 +1550,7 @@ async fn test_matching_path_stale_none_outranked_by_some() -> Result<()> {
 
     // The none-check (only `none` in the alternation) must NOT match the newer
     // `some`, so it returns None and the field resolves to Some.
-    let found = matching_path(&conn, cid, &cs_path_dotted("c.opt"), &["none".to_string()]).await?;
+    let found = matching_path(&conn, cid, &cs_path_dotted("c.opt"), &cands(&["none"])).await?;
     assert_eq!(found, None);
 
     Ok(())
@@ -1605,7 +1602,7 @@ async fn test_matching_path_on_bare_base_row() -> Result<()> {
         &conn,
         cid,
         &cs_path_dotted("c.opt"),
-        &["none".to_string(), "some".to_string()],
+        &cands(&["none", "some"]),
     )
     .await?;
     assert_eq!(found, None);
@@ -1673,13 +1670,7 @@ mod proptest_paths {
                 let cid = 1;
                 // None of these may panic on arbitrary `path` bytes.
                 let _ = exists_contract_state(&conn, cid, &path).await;
-                let _ = matching_path(
-                    &conn,
-                    cid,
-                    &path,
-                    &["none".to_string(), "some".to_string()],
-                )
-                .await;
+                let _ = matching_path(&conn, cid, &path, &cands(&["none", "some"])).await;
                 if let Ok(stream) =
                     path_prefix_filter_contract_state(&conn, cid, path.clone(), None).await
                 {

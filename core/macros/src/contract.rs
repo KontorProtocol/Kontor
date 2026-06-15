@@ -217,8 +217,8 @@ pub fn generate(config: Config) -> TokenStream {
                 self.exists(path)
             }
 
-            fn __extend_path_with_match(self: &alloc::rc::Rc<Self>, path: &[u8], variants: &[&str]) -> Option<String> {
-                self.extend_path_with_match(path, &variants.iter().map(|s| s.to_string()).collect::<Vec<_>>())
+            fn __extend_path_with_match(self: &alloc::rc::Rc<Self>, path: &[u8], candidates: &[alloc::vec::Vec<u8>]) -> Option<u32> {
+                self.extend_path_with_match(path, candidates)
             }
 
             fn __get<T: Retrieve<Self>>(self: &alloc::rc::Rc<Self>, path: KeyPath) -> Option<T> {
@@ -256,8 +256,8 @@ pub fn generate(config: Config) -> TokenStream {
                 self.exists(path)
             }
 
-            fn __extend_path_with_match(self: &alloc::rc::Rc<Self>, path: &[u8], variants: &[&str]) -> Option<String> {
-                self.extend_path_with_match(path, &variants.iter().map(|s| s.to_string()).collect::<Vec<_>>())
+            fn __extend_path_with_match(self: &alloc::rc::Rc<Self>, path: &[u8], candidates: &[alloc::vec::Vec<u8>]) -> Option<u32> {
+                self.extend_path_with_match(path, candidates)
             }
 
             fn __get<T: Retrieve<Self>>(self: &alloc::rc::Rc<Self>, path: KeyPath) -> Option<T> {
@@ -299,8 +299,8 @@ pub fn generate(config: Config) -> TokenStream {
                 self.delete(path)
             }
 
-            fn __delete_matching_paths(self: &alloc::rc::Rc<Self>, base_path: &[u8], variants: &[&str]) -> u64 {
-                self.delete_matching_paths(base_path, &variants.iter().map(|s| s.to_string()).collect::<Vec<_>>())
+            fn __delete_matching_paths(self: &alloc::rc::Rc<Self>, base_path: &[u8], candidates: &[alloc::vec::Vec<u8>]) -> u64 {
+                self.delete_matching_paths(base_path, candidates)
             }
         }
 

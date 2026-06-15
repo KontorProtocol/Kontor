@@ -406,7 +406,7 @@ mod tests {
         fn __exists(self: &Rc<Self>, path: &[u8]) -> bool {
             self.map.borrow().contains_key(path)
         }
-        fn __extend_path_with_match(self: &Rc<Self>, _: &[u8], _: &[&str]) -> Option<String> {
+        fn __extend_path_with_match(self: &Rc<Self>, _: &[u8], _: &[Vec<u8>]) -> Option<u32> {
             unimplemented!()
         }
     }
@@ -440,7 +440,7 @@ mod tests {
         fn __set_list_u8(self: &Rc<Self>, _: &[u8], _: Vec<u8>) {
             unimplemented!()
         }
-        fn __delete_matching_paths(self: &Rc<Self>, _: &[u8], _: &[&str]) -> u64 {
+        fn __delete_matching_paths(self: &Rc<Self>, _: &[u8], _: &[Vec<u8>]) -> u64 {
             unimplemented!()
         }
     }

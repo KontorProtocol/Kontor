@@ -39,7 +39,7 @@
 
 use futures_util::{Stream, stream};
 use libsql::{Connection, Value, de::from_row, params};
-use stdlib::{KeyElement, next_element, strinc};
+use stdlib::{next_element, strinc};
 
 use super::Error;
 use super::versioned::LatestMany;
@@ -361,18 +361,21 @@ pub async fn path_prefix_filter_contract_state(
 }
 
 /// EXCEPTION to `live_latest` (see module header): enum/option variant resolution
-/// is GLOBAL-newest, not per-path. Returns which of `variants` is current under
-/// `base_path`, or `None` if the field is unset/deleted. Takes the single NEWEST
-/// live row under `base_path` (by height, then rowid) — a stale variant lingering
-/// live at a lower height (an old `none`, or an old enum case) must be outranked
-/// by the newer write, which a per-path pick would surface — and reads its child
-/// element (the variant discriminant, regardless of how deep the newest row is).
+/// is GLOBAL-newest, not per-path. Returns the INDEX of whichever `candidates`
+/// element is current under `base_path`, or `None` if the field is unset/deleted or
+/// the newest discriminant isn't among them. Takes the single NEWEST live row under
+/// `base_path` (by height, then rowid) — a stale variant lingering live at a lower
+/// height (an old `none`, or an old enum case) must be outranked by the newer write,
+/// which a per-path pick would surface — and reads its child element (the variant
+/// discriminant). `candidates` are the already-encoded discriminant elements (a
+/// string element, or an interned dict-ref); the match is pure BYTE equality, so the
+/// host never decodes a name — it works for any encoding the guest chooses.
 pub async fn matching_path(
     conn: &Connection,
     contract_id: u64,
     base_path: &[u8],
-    variants: &[String],
-) -> Result<Option<String>, Error> {
+    candidates: &[Vec<u8>],
+) -> Result<Option<u32>, Error> {
     // Global-newest (no `partition_by`) live row under `base_path`.
     let (range, mut params) = subtree_range(">=", base_path);
     params.push((
@@ -399,30 +402,33 @@ pub async fn matching_path(
     if suffix.is_empty() {
         return Ok(None);
     }
-    // The variant discriminant is the first element after `base_path`.
+    // The discriminant is the first element after `base_path`; match it against the
+    // candidate elements by raw bytes (no decode — encoding-agnostic).
     let (elem, _) = next_element(suffix).map_err(Error::KeyCodec)?;
-    let (variant, _) = String::decode_from(elem).map_err(Error::KeyCodec)?;
-    Ok(variants.contains(&variant).then_some(variant))
+    Ok(candidates
+        .iter()
+        .position(|c| c.as_slice() == elem)
+        .map(|i| i as u32))
 }
 
 /// EXCEPTION to the liveness model (see module header): a HARD delete of rows at
-/// the CURRENT height under any of `variants` — not a tombstone, not a
-/// latest-version read. Used only for intra-block `Option` variant cleanup (drop
-/// a just-written `some`/`none` before writing the other in the same block); it
-/// deliberately does NOT touch earlier-height rows. Each variant is the subtree
-/// `base_path ++ <variant element>`, so this is a per-variant current-height range
-/// delete.
+/// the CURRENT height under any of `candidates` — not a tombstone, not a
+/// latest-version read. Used only for intra-block `Option`/enum variant cleanup
+/// (drop a just-written `some`/`none` before writing the other in the same block);
+/// it deliberately does NOT touch earlier-height rows. Each `candidate` is an
+/// already-encoded discriminant element, so the subtree is `base_path ++ candidate`
+/// — a per-candidate current-height range delete.
 pub async fn delete_matching_paths(
     conn: &Connection,
     contract_id: u64,
     height: u64,
     base_path: &[u8],
-    variants: &[String],
+    candidates: &[Vec<u8>],
 ) -> Result<u64, Error> {
     let mut deleted = 0;
-    for variant in variants {
+    for candidate in candidates {
         let mut prefix = base_path.to_vec();
-        variant.encode_to(&mut prefix); // base_path ++ enc(variant)
+        prefix.extend_from_slice(candidate); // base_path ++ candidate element
         let (range, mut params) = subtree_range(">=", &prefix);
         params.push((
             ":contract_id".to_string(),

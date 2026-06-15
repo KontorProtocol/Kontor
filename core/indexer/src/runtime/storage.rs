@@ -106,19 +106,19 @@ impl Storage {
         &self,
         contract_id: u64,
         base_path: &[u8],
-        variants: &[String],
-    ) -> Result<Option<String>> {
-        Ok(matching_path(&self.conn, contract_id, base_path, variants).await?)
+        candidates: &[Vec<u8>],
+    ) -> Result<Option<u32>> {
+        Ok(matching_path(&self.conn, contract_id, base_path, candidates).await?)
     }
 
     pub async fn delete_matching_paths(
         &self,
         contract_id: u64,
         base_path: &[u8],
-        variants: &[String],
+        candidates: &[Vec<u8>],
     ) -> Result<u64> {
         Ok(
-            delete_matching_paths(&self.conn, contract_id, self.height, base_path, variants)
+            delete_matching_paths(&self.conn, contract_id, self.height, base_path, candidates)
                 .await?,
         )
     }

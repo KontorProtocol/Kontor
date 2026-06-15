@@ -102,16 +102,16 @@ impl Runtime {
         accessor: &Accessor<S, Self>,
         resource: Resource<T>,
         path: Vec<u8>,
-        variants: Vec<String>,
-    ) -> Result<Option<String>> {
+        candidates: Vec<Vec<u8>>,
+    ) -> Result<Option<u32>> {
         validate_path(&path)?;
         let table = self.table.lock().await;
         let _self = table.get(&resource)?;
-        Fuel::ExtendPathWithMatch(variants.len() as u64)
+        Fuel::ExtendPathWithMatch(candidates.len() as u64)
             .consume(accessor, self.gauge.as_ref())
             .await?;
         self.storage
-            .extend_path_with_match(_self.get_contract_id(), &path, &variants)
+            .extend_path_with_match(_self.get_contract_id(), &path, &candidates)
             .await
     }
 
@@ -120,15 +120,15 @@ impl Runtime {
         accessor: &Accessor<S, Self>,
         self_: Resource<T>,
         base_path: Vec<u8>,
-        variants: Vec<String>,
+        candidates: Vec<Vec<u8>>,
     ) -> Result<u64> {
         validate_path(&base_path)?;
-        Fuel::DeleteMatchingPaths(variants.len() as u64)
+        Fuel::DeleteMatchingPaths(candidates.len() as u64)
             .consume(accessor, self.gauge.as_ref())
             .await?;
         let contract_id = self.table.lock().await.get(&self_)?.get_contract_id();
         self.storage
-            .delete_matching_paths(contract_id, &base_path, &variants)
+            .delete_matching_paths(contract_id, &base_path, &candidates)
             .await
     }
 

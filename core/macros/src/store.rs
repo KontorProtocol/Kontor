@@ -42,16 +42,20 @@ pub fn generate_struct_body(data_struct: &DataStruct, type_name: &Ident) -> Resu
 }
 
 pub fn generate_enum_body(data_enum: &DataEnum, type_name: &Ident) -> Result<TokenStream> {
-    let mut variant_names = vec![];
-    let arms = data_enum.variants.iter().map(|variant| {
+    // The discriminant segment is an interned dict-ref id = the variant's
+    // declaration order (a per-enum dict). MUST match `model::generate_enum`'s
+    // read side (same enum, same order ⇒ same ids), so a write and its later read
+    // resolve to the same variant.
+    let mut variant_candidates = vec![];
+    let arms = data_enum.variants.iter().enumerate().map(|(i, variant)| {
         let variant_ident = &variant.ident;
-        let variant_name = variant_ident.to_string().to_lowercase();
-        variant_names.push(variant_name.clone());
+        let variant_id = i as u8;
+        variant_candidates.push(quote! { stdlib::interned_element(#variant_id) });
 
         match &variant.fields {
             Fields::Unit => {
                 Ok(quote! {
-                    #type_name::#variant_ident => stdlib::WriteStorage::__set(ctx, base_path.push(#variant_name), ()),
+                    #type_name::#variant_ident => stdlib::WriteStorage::__set(ctx, base_path.push_interned(#variant_id), ()),
                 })
             }
             Fields::Unnamed(fields) if fields.unnamed.len() == 1 => {
@@ -60,7 +64,7 @@ pub fn generate_enum_body(data_enum: &DataEnum, type_name: &Ident) -> Result<Tok
                     Err(Error::new(variant_ident.span(), "Store derive does not support Result type in Enums"))
                 } else {
                     Ok(quote! {
-                        #type_name::#variant_ident(inner) => stdlib::WriteStorage::__set(ctx, base_path.push(#variant_name), inner),
+                        #type_name::#variant_ident(inner) => stdlib::WriteStorage::__set(ctx, base_path.push_interned(#variant_id), inner),
                     })
                 }
             }
@@ -72,7 +76,7 @@ pub fn generate_enum_body(data_enum: &DataEnum, type_name: &Ident) -> Result<Tok
     }).collect::<Result<Vec<_>>>()?;
 
     Ok(quote! {
-        stdlib::WriteStorage::__delete_matching_paths(ctx, &base_path, &[#(#variant_names),*]);
+        stdlib::WriteStorage::__delete_matching_paths(ctx, &base_path, &[#(#variant_candidates),*]);
         match value {
             #(#arms)*
         }
