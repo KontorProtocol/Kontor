@@ -10,8 +10,8 @@ impl stdlib::Store<crate::context::ProcStorage> for ContractAddress {
         base_path: stdlib::KeyPath,
         value: ContractAddress,
     ) {
-        stdlib::WriteStorage::__set(ctx, base_path.push("name"), value.name);
-        stdlib::WriteStorage::__set(ctx, base_path.push("height"), value.height);
-        stdlib::WriteStorage::__set(ctx, base_path.push("tx_index"), value.tx_index);
+        stdlib::WriteStorage::__set(ctx, base_path.push_interned(0u8), value.name);
+        stdlib::WriteStorage::__set(ctx, base_path.push_interned(1u8), value.height);
+        stdlib::WriteStorage::__set(ctx, base_path.push_interned(2u8), value.tx_index);
     }
 }

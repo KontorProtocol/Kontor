@@ -14,17 +14,21 @@ impl stdlib::Store<crate::context::ProcStorage> for ChallengeStatus {
         stdlib::WriteStorage::__delete_matching_paths(
             ctx,
             &base_path,
-            &["active", "proven", "failed"],
+            &[
+                stdlib::interned_element(0u8),
+                stdlib::interned_element(1u8),
+                stdlib::interned_element(2u8),
+            ],
         );
         match value {
             ChallengeStatus::Active => {
-                stdlib::WriteStorage::__set(ctx, base_path.push("active"), ())
+                stdlib::WriteStorage::__set(ctx, base_path.push_interned(0u8), ())
             }
             ChallengeStatus::Proven => {
-                stdlib::WriteStorage::__set(ctx, base_path.push("proven"), ())
+                stdlib::WriteStorage::__set(ctx, base_path.push_interned(1u8), ())
             }
             ChallengeStatus::Failed(inner) => {
-                stdlib::WriteStorage::__set(ctx, base_path.push("failed"), inner)
+                stdlib::WriteStorage::__set(ctx, base_path.push_interned(2u8), inner)
             }
         }
     }
@@ -42,14 +46,18 @@ impl ChallengeStatusModel {
         stdlib::ReadStorage::__extend_path_with_match(
                 &ctx,
                 &base_path,
-                &["active", "proven", "failed"],
+                &[
+                    stdlib::interned_element(0u8),
+                    stdlib::interned_element(1u8),
+                    stdlib::interned_element(2u8),
+                ],
             )
-            .map(|variant| match variant.as_str() {
-                "active" => ChallengeStatusModel::Active,
-                "proven" => ChallengeStatusModel::Proven,
-                "failed" => {
+            .map(|__idx| match __idx {
+                0u32 => ChallengeStatusModel::Active,
+                1u32 => ChallengeStatusModel::Proven,
+                2u32 => {
                     ChallengeStatusModel::Failed(
-                        stdlib::ReadStorage::__get(&ctx, base_path.push("failed"))
+                        stdlib::ReadStorage::__get(&ctx, base_path.push_interned(2u8))
                             .unwrap(),
                     )
                 }
@@ -82,14 +90,18 @@ impl ChallengeStatusWriteModel {
         stdlib::ReadStorage::__extend_path_with_match(
                 &ctx,
                 &base_path,
-                &["active", "proven", "failed"],
+                &[
+                    stdlib::interned_element(0u8),
+                    stdlib::interned_element(1u8),
+                    stdlib::interned_element(2u8),
+                ],
             )
-            .map(|variant| match variant.as_str() {
-                "active" => ChallengeStatusWriteModel::Active,
-                "proven" => ChallengeStatusWriteModel::Proven,
-                "failed" => {
+            .map(|__idx| match __idx {
+                0u32 => ChallengeStatusWriteModel::Active,
+                1u32 => ChallengeStatusWriteModel::Proven,
+                2u32 => {
                     ChallengeStatusWriteModel::Failed(
-                        stdlib::ReadStorage::__get(&ctx, base_path.push("failed"))
+                        stdlib::ReadStorage::__get(&ctx, base_path.push_interned(2u8))
                             .unwrap(),
                     )
                 }

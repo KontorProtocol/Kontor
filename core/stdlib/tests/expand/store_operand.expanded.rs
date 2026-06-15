@@ -8,6 +8,6 @@ impl stdlib::Store<crate::context::ProcStorage> for Operand {
         base_path: stdlib::KeyPath,
         value: Operand,
     ) {
-        stdlib::WriteStorage::__set(ctx, base_path.push("y"), value.y);
+        stdlib::WriteStorage::__set(ctx, base_path.push_interned(0u8), value.y);
     }
 }

@@ -19,18 +19,29 @@ impl OpModel {
         stdlib::ReadStorage::__extend_path_with_match(
                 &ctx,
                 &base_path,
-                &["id", "sum", "mul", "div"],
+                &[
+                    stdlib::interned_element(0u8),
+                    stdlib::interned_element(1u8),
+                    stdlib::interned_element(2u8),
+                    stdlib::interned_element(3u8),
+                ],
             )
-            .map(|variant| match variant.as_str() {
-                "id" => OpModel::Id,
-                "sum" => {
-                    OpModel::Sum(OperandModel::new(ctx.clone(), base_path.push("sum")))
+            .map(|__idx| match __idx {
+                0u32 => OpModel::Id,
+                1u32 => {
+                    OpModel::Sum(
+                        OperandModel::new(ctx.clone(), base_path.push_interned(1u8)),
+                    )
                 }
-                "mul" => {
-                    OpModel::Mul(OperandModel::new(ctx.clone(), base_path.push("mul")))
+                2u32 => {
+                    OpModel::Mul(
+                        OperandModel::new(ctx.clone(), base_path.push_interned(2u8)),
+                    )
                 }
-                "div" => {
-                    OpModel::Div(OperandModel::new(ctx.clone(), base_path.push("div")))
+                3u32 => {
+                    OpModel::Div(
+                        OperandModel::new(ctx.clone(), base_path.push_interned(3u8)),
+                    )
                 }
                 _ => {
                     ::core::panicking::panic_fmt(
@@ -63,23 +74,28 @@ impl OpWriteModel {
         stdlib::ReadStorage::__extend_path_with_match(
                 &ctx,
                 &base_path,
-                &["id", "sum", "mul", "div"],
+                &[
+                    stdlib::interned_element(0u8),
+                    stdlib::interned_element(1u8),
+                    stdlib::interned_element(2u8),
+                    stdlib::interned_element(3u8),
+                ],
             )
-            .map(|variant| match variant.as_str() {
-                "id" => OpWriteModel::Id,
-                "sum" => {
+            .map(|__idx| match __idx {
+                0u32 => OpWriteModel::Id,
+                1u32 => {
                     OpWriteModel::Sum(
-                        OperandWriteModel::new(ctx.clone(), base_path.push("sum")),
+                        OperandWriteModel::new(ctx.clone(), base_path.push_interned(1u8)),
                     )
                 }
-                "mul" => {
+                2u32 => {
                     OpWriteModel::Mul(
-                        OperandWriteModel::new(ctx.clone(), base_path.push("mul")),
+                        OperandWriteModel::new(ctx.clone(), base_path.push_interned(2u8)),
                     )
                 }
-                "div" => {
+                3u32 => {
                     OpWriteModel::Div(
-                        OperandWriteModel::new(ctx.clone(), base_path.push("div")),
+                        OperandWriteModel::new(ctx.clone(), base_path.push_interned(3u8)),
                     )
                 }
                 _ => {

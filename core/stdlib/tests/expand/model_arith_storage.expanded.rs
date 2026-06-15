@@ -17,11 +17,11 @@ impl ArithStorageModel {
         }
     }
     pub fn last_op(&self) -> Option<OpModel> {
-        let base_path = self.base_path.push("last_op");
+        let base_path = self.base_path.push_interned(0u8);
         if stdlib::ReadStorage::__extend_path_with_match(
                 &self.ctx,
                 &base_path,
-                &["none"],
+                &[stdlib::string_element("none")],
             )
             .is_some()
         {
@@ -57,11 +57,11 @@ impl ArithStorageWriteModel {
         }
     }
     pub fn last_op(&self) -> Option<OpWriteModel> {
-        let base_path = self.base_path.push("last_op");
+        let base_path = self.base_path.push_interned(0u8);
         if stdlib::ReadStorage::__extend_path_with_match(
                 &self.ctx,
                 &base_path,
-                &["none"],
+                &[stdlib::string_element("none")],
             )
             .is_some()
         {
@@ -71,7 +71,7 @@ impl ArithStorageWriteModel {
         }
     }
     pub fn set_last_op(&self, value: Option<Op>) {
-        stdlib::WriteStorage::__set(&self.ctx, self.base_path.push("last_op"), value);
+        stdlib::WriteStorage::__set(&self.ctx, self.base_path.push_interned(0u8), value);
     }
     pub fn load(&self) -> ArithStorage {
         ArithStorage {
