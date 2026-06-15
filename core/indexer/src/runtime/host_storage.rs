@@ -71,12 +71,21 @@ impl Runtime {
         accessor: &Accessor<S, Self>,
         resource: Resource<T>,
         path: Vec<u8>,
+        after: Option<Vec<u8>>,
+        upper: Option<Vec<u8>>,
+        limit: Option<u64>,
     ) -> Result<Resource<Keys>> {
         validate_path(&path)?;
+        if let Some(after) = &after {
+            validate_path(after)?;
+        }
+        if let Some(upper) = &upper {
+            validate_path(upper)?;
+        }
         let mut table = self.table.lock().await;
         let contract_id = table.get(&resource)?.get_contract_id();
         Fuel::GetKeys.consume(accessor, self.gauge.as_ref()).await?;
-        let stream = Box::pin(self.storage.keys(contract_id, path).await?);
+        let stream = Box::pin(self.storage.keys(contract_id, path, after, upper, limit).await?);
         Ok(table.push(Keys { stream })?)
     }
 

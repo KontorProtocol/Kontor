@@ -210,7 +210,7 @@ pub fn generate(config: Config) -> TokenStream {
             }
 
             fn __get_keys<T: stdlib::KeyElement + Clone>(self: &alloc::rc::Rc<Self>, path: &[u8]) -> impl Iterator<Item = T> + use<T> {
-                stdlib::make_keys_iterator(self.get_keys(path))
+                stdlib::make_keys_iterator(self.get_keys(path, None, None, None))
             }
 
             fn __exists(self: &alloc::rc::Rc<Self>, path: &[u8]) -> bool {
@@ -249,7 +249,7 @@ pub fn generate(config: Config) -> TokenStream {
             }
 
             fn __get_keys<T: stdlib::KeyElement + Clone>(self: &alloc::rc::Rc<Self>, path: &[u8]) -> impl Iterator<Item = T> + use<T> {
-                stdlib::make_keys_iterator(self.get_keys(path))
+                stdlib::make_keys_iterator(self.get_keys(path, None, None, None))
             }
 
             fn __exists(self: &alloc::rc::Rc<Self>, path: &[u8]) -> bool {
