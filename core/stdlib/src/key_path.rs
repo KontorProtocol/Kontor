@@ -66,6 +66,20 @@ impl KeyPath {
         KeyPath { bytes, ends }
     }
 
+    /// Append several already-encoded elements in ONE clone — for multi-segment
+    /// builds (an index bucket path) where chaining `push_raw_element` would clone
+    /// the growing buffer once per segment (quadratic). Each `elem` MUST be exactly
+    /// one complete codec element, same contract as [`push_raw_element`].
+    pub fn push_raw_elements<E: AsRef<[u8]>>(&self, elems: &[E]) -> Self {
+        let mut bytes = self.bytes.clone();
+        let mut ends = self.ends.clone();
+        for elem in elems {
+            bytes.extend_from_slice(elem.as_ref());
+            ends.push(bytes.len());
+        }
+        KeyPath { bytes, ends }
+    }
+
     /// For a path ending in an interned name (a map / indexed-map field), the
     /// sibling "index root": the same parent with the trailing interned id's high
     /// bit set (`id | 0x80`). The field model and the generic wholesale

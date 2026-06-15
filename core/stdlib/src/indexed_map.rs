@@ -193,11 +193,9 @@ impl IndexEntry {
     /// are its children). The index name is an interned structural segment; each
     /// bucket segment is a pre-encoded `IndexKey` element.
     fn bucket_path(&self, index_root: &KeyPath) -> KeyPath {
-        let mut path = index_root.push_interned(self.name_id);
-        for segment in &self.bucket {
-            path = path.push_raw_element(segment);
-        }
-        path
+        index_root
+            .push_interned(self.name_id)
+            .push_raw_elements(&self.bucket)
     }
 
     /// The member element: the `(sort, pk)` nested tuple (so the bucket sorts by

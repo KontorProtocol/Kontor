@@ -200,12 +200,12 @@ pub fn generate_struct(
                         // framework maintains AT the bucket-prefix path.
                         impl #index_trait<#k_ty> for #field_model_name {
                             fn by_index(&self, index_id: u8, bucket: &[&[u8]]) -> impl Iterator<Item = #k_ty> + use<> {
-                                let bucket = bucket.iter().fold(self.index_path.push_interned(index_id), |p, seg| p.push_raw_element(seg));
+                                let bucket = self.index_path.push_interned(index_id).push_raw_elements(bucket);
                                 stdlib::ReadStorage::__get_keys(&self.ctx, &bucket)
                             }
 
                             fn by_index_sorted<S: stdlib::KeyElement + Clone + 'static>(&self, index_id: u8, bucket: &[&[u8]]) -> stdlib::SortedScan<#k_ty, S> {
-                                let bucket = bucket.iter().fold(self.index_path.push_interned(index_id), |p, seg| p.push_raw_element(seg));
+                                let bucket = self.index_path.push_interned(index_id).push_raw_elements(bucket);
                                 // Each member is one `(sort, pk)` tuple element; decode
                                 // it directly. `SortedScan` drops the sort field, yields
                                 // `K` in value order, and bounds on the decoded sort.
@@ -214,7 +214,7 @@ pub fn generate_struct(
                             }
 
                             fn bucket_count(&self, index_id: u8, bucket: &[&[u8]]) -> u64 {
-                                let bucket = bucket.iter().fold(self.index_path.push_interned(index_id), |p, seg| p.push_raw_element(seg));
+                                let bucket = self.index_path.push_interned(index_id).push_raw_elements(bucket);
                                 stdlib::ReadStorage::__get_u64(&self.ctx, &bucket).unwrap_or(0)
                             }
                         }
