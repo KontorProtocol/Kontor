@@ -15,14 +15,15 @@ const MAX_STAKE: u64 = 1_000_000_000; // Cap to fit in u64 voting power
 
 // `status` and `ed25519_pubkey` are indexed so the per-block status sweep and the
 // register-time duplicate-key check are prefix reads of a bucket, not full scans of
-// every validator. `status` partitions by lifecycle (0=inactive…3=pending_exit);
-// `ed25519_pubkey` partitions by consensus key (a bucket holds the ≤1 validators
-// sharing a key — enough to enforce uniqueness without scanning).
-#[derive(Clone, Default, Storage, Indexed)]
+// every validator. `status` partitions by lifecycle (the `ValidatorStatus` enum —
+// a storage enum, so it buckets by its discriminant); `ed25519_pubkey` partitions
+// by consensus key (a bucket holds the ≤1 validators sharing a key — enough to
+// enforce uniqueness without scanning).
+#[derive(Clone, Storage, Indexed)]
 struct ValidatorEntry {
     pub stake: Decimal,
     #[index]
-    pub status: u64, // 0=inactive, 1=active, 2=pending_join, 3=pending_exit
+    pub status: ValidatorStatus,
     pub activation_height: u64,
     pub deactivation_height: u64,
     #[index]
@@ -33,30 +34,23 @@ struct ValidatorEntry {
 struct StakingStorage {
     pub min_stake: Decimal,
     pub validators: IndexedMap<Holder, ValidatorEntry>,
-    pub active_count: u64,
     pub total_active_stake: Decimal,
 }
 
-#[allow(dead_code)]
-const STATUS_INACTIVE: u64 = 0;
-const STATUS_ACTIVE: u64 = 1;
-const STATUS_PENDING_JOIN: u64 = 2;
-const STATUS_PENDING_EXIT: u64 = 3;
-
-fn status_to_enum(status: u64) -> ValidatorStatus {
-    match status {
-        STATUS_ACTIVE => ValidatorStatus::Active,
-        STATUS_PENDING_JOIN => ValidatorStatus::PendingJoin,
-        STATUS_PENDING_EXIT => ValidatorStatus::PendingExit,
-        _ => ValidatorStatus::Inactive,
-    }
+/// The consensus-set size = ACTIVE ∪ PENDING_EXIT (an exiting validator still
+/// validates until its deactivation height — the same union `get_active_set`
+/// returns). The framework maintains each status bucket's count, so this is two
+/// O(1) reads of those counts — no hand-maintained `active_count` to keep in sync.
+fn active_set_size<M: ValidatorEntryIndex<Holder>>(validators: &M) -> u64 {
+    validators.count_status(ValidatorStatus::Active)
+        + validators.count_status(ValidatorStatus::PendingExit)
 }
 
 fn make_validator_info(x_only_pubkey: &Holder, entry: &ValidatorEntryModel) -> ValidatorInfo {
     ValidatorInfo {
         x_only_pubkey: x_only_pubkey.to_string(),
         stake: entry.stake(),
-        status: status_to_enum(entry.status()),
+        status: entry.status().load(),
         activation_height: entry.activation_height(),
         deactivation_height: entry.deactivation_height(),
         ed25519_pubkey: entry.ed25519_pubkey(),
@@ -87,7 +81,7 @@ impl Guest for Staking {
         let holder: Holder = (&ctx.signer()).into();
 
         if let Some(existing) = model.validators().get(&holder)
-            && existing.status() != STATUS_INACTIVE
+            && existing.status().load() != ValidatorStatus::Inactive
         {
             return Err(Error::Message("already registered".to_string()));
         }
@@ -111,7 +105,7 @@ impl Guest for Staking {
                     && model
                         .validators()
                         .get(&key)
-                        .is_some_and(|entry| entry.status() != STATUS_INACTIVE)
+                        .is_some_and(|entry| entry.status().load() != ValidatorStatus::Inactive)
             });
         if dup {
             return Err(Error::Message(
@@ -125,7 +119,7 @@ impl Guest for Staking {
             &holder,
             ValidatorEntry {
                 stake: stake_amount,
-                status: STATUS_PENDING_JOIN,
+                status: ValidatorStatus::PendingJoin,
                 activation_height,
                 deactivation_height: 0,
                 ed25519_pubkey: ed25519_pubkey.clone(),
@@ -161,8 +155,8 @@ impl Guest for Staking {
             return Err(Error::Message("amount must be positive".to_string()));
         }
 
-        let status = entry.status();
-        if status == STATUS_INACTIVE || status == STATUS_PENDING_EXIT {
+        let status = entry.status().load();
+        if status == ValidatorStatus::Inactive || status == ValidatorStatus::PendingExit {
             return Err(Error::Message(
                 "cannot add stake while inactive or pending exit".to_string(),
             ));
@@ -177,7 +171,7 @@ impl Guest for Staking {
 
         // Effects before interactions (CEI pattern)
         entry.set_stake(new_stake);
-        if status == STATUS_ACTIVE {
+        if status == ValidatorStatus::Active {
             model.try_update_total_active_stake(|s| s.add(amount))?;
         }
 
@@ -199,17 +193,17 @@ impl Guest for Staking {
             .get(&holder)
             .ok_or(Error::Message("not registered".to_string()))?;
 
-        match entry.status() {
-            STATUS_ACTIVE => {
-                entry.set_status(STATUS_PENDING_EXIT);
+        match entry.status().load() {
+            ValidatorStatus::Active => {
+                entry.set_status(ValidatorStatus::PendingExit);
                 let deactivation_height = ctx.block_height() + ACTIVATION_DELAY;
                 entry.set_deactivation_height(deactivation_height);
             }
             // Not yet activated — go straight to inactive and return tokens
-            STATUS_PENDING_JOIN => {
+            ValidatorStatus::PendingJoin => {
                 let stake = entry.stake();
                 entry.set_stake(0u64.try_into().unwrap());
-                entry.set_status(STATUS_INACTIVE);
+                entry.set_status(ValidatorStatus::Inactive);
                 token::transfer(ctx.contract_signer(), holder.as_ref(), stake)?;
             }
             _ => return Err(Error::Message("invalid status for unstaking".to_string())),
@@ -220,7 +214,7 @@ impl Guest for Staking {
 
     fn set_genesis_set(ctx: &CoreContext, validators: Vec<ActiveValidatorInfo>) {
         let model = ctx.proc_context().model();
-        if model.active_count() > 0 {
+        if active_set_size(&model.validators()) > 0 {
             return;
         }
         for v in &validators {
@@ -251,7 +245,7 @@ impl Guest for Staking {
                 &holder,
                 ValidatorEntry {
                     stake: v.stake,
-                    status: STATUS_ACTIVE,
+                    status: ValidatorStatus::Active,
                     activation_height: 0,
                     deactivation_height: 0,
                     ed25519_pubkey: v.ed25519_pubkey.clone(),
@@ -261,7 +255,8 @@ impl Guest for Staking {
                 .try_update_total_active_stake(|s| s.add(v.stake))
                 .expect("Failed to update total active stake");
         }
-        model.set_active_count(validators.len() as u64);
+        // No `active_count` to set — the `status` index's ACTIVE bucket count is
+        // maintained by these `set`s and read back via `active_set_size`.
     }
 
     fn process_pending_validators(
@@ -279,20 +274,22 @@ impl Guest for Staking {
         // iterating it live would mutate mid-scan.
         let pending_join: Vec<Holder> = model
             .validators()
-            .where_status(STATUS_PENDING_JOIN)
+            .where_status(ValidatorStatus::PendingJoin)
             .collect();
         let pending_exit: Vec<Holder> = model
             .validators()
-            .where_status(STATUS_PENDING_EXIT)
+            .where_status(ValidatorStatus::PendingExit)
             .collect();
 
+        // `set_status` reconciles the `status` index in place, so the ACTIVE/
+        // PENDING_EXIT bucket counts `active_set_size` reads stay correct with no
+        // manual counter update here.
         for key in pending_join {
             if let Some(entry) = model.validators().get(&key)
                 && block_height >= entry.activation_height()
             {
-                entry.set_status(STATUS_ACTIVE);
+                entry.set_status(ValidatorStatus::Active);
                 model.try_update_total_active_stake(|s| s.add(entry.stake()))?;
-                model.update_active_count(|c| c + 1);
                 activated += 1;
             }
         }
@@ -302,9 +299,8 @@ impl Guest for Staking {
             {
                 let stake = entry.stake();
                 entry.set_stake(0u64.try_into().unwrap());
-                entry.set_status(STATUS_INACTIVE);
+                entry.set_status(ValidatorStatus::Inactive);
                 model.try_update_total_active_stake(|s| s.sub(stake))?;
-                model.update_active_count(|c| c - 1);
                 token::transfer(ctx.proc_context().contract_signer(), key, stake)?;
                 deactivated += 1;
             }
@@ -322,8 +318,8 @@ impl Guest for Staking {
         // validate until their deactivation height) — two index buckets, not a
         // scan-and-filter over every validator.
         let mut set: Vec<ActiveValidatorInfo> = validators
-            .where_status(STATUS_ACTIVE)
-            .chain(validators.where_status(STATUS_PENDING_EXIT))
+            .where_status(ValidatorStatus::Active)
+            .chain(validators.where_status(ValidatorStatus::PendingExit))
             .filter_map(|key| {
                 let entry = validators.get(&key)?;
                 Some(ActiveValidatorInfo {
@@ -349,12 +345,12 @@ impl Guest for Staking {
     fn get_staking_info(ctx: &ViewContext) -> StakingInfo {
         let model = ctx.model();
         StakingInfo {
-            active_count: model.active_count(),
+            active_count: active_set_size(&model.validators()),
             total_stake: model.total_active_stake(),
         }
     }
 
     fn get_active_count(ctx: &ViewContext) -> u64 {
-        ctx.model().active_count()
+        active_set_size(&ctx.model().validators())
     }
 }
