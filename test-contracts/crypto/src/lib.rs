@@ -30,8 +30,10 @@ impl Guest for Crypto {
         ctx.generate_id()
     }
 
-    fn set_hash(ctx: &ProcContext, input: Vec<u8>) -> Vec<u8> {
-        let hash = crypto::sha256(&input);
+    // `input` is a string for test-ergonomics (callers invoke `set-hash("foo")`
+    // via string exprs); the crypto built-in itself is bytes-native.
+    fn set_hash(ctx: &ProcContext, input: String) -> Vec<u8> {
+        let hash = crypto::sha256(input.as_bytes());
         ctx.model().set_bytes(Some(hash.clone()));
         hash
     }

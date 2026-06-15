@@ -16,7 +16,7 @@ async fn test_crypto_contract() -> Result<()> {
     assert_eq!(result, expected_hash);
 
     // set_hash is a mutation; stores + returns the same digest.
-    let result = crypto::set_hash(runtime, &crypto, &alice, b"foo".to_vec()).await?;
+    let result = crypto::set_hash(runtime, &crypto, &alice, "foo").await?;
     assert_eq!(result, expected_hash);
     let result = crypto::get_hash(runtime, &crypto).await?;
     assert_eq!(result, Some(expected_hash));

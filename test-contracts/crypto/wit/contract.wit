@@ -12,7 +12,7 @@ world root {
 
   export generate-id: async func(ctx: borrow<proc-context>) -> string;
 
-  export set-hash: async func(ctx: borrow<proc-context>, input: list<u8>) -> list<u8>;
+  export set-hash: async func(ctx: borrow<proc-context>, input: string) -> list<u8>;
 
   export get-hash: async func(ctx: borrow<view-context>) -> option<list<u8>>;
 }
