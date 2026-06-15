@@ -59,6 +59,16 @@ impl OpModel {
             OpModel::Div(inner) => Op::Div(inner.load()),
         }
     }
+    pub fn with_index(
+        self,
+        _index_root: stdlib::KeyPath,
+        _index_key: alloc::vec::Vec<u8>,
+    ) -> Self {
+        self
+    }
+    pub fn __index_entries(&self) -> alloc::vec::Vec<stdlib::IndexEntry> {
+        alloc::vec::Vec::new()
+    }
 }
 pub enum OpWriteModel {
     Id,
@@ -113,5 +123,15 @@ impl OpWriteModel {
             OpWriteModel::Mul(inner) => Op::Mul(inner.load()),
             OpWriteModel::Div(inner) => Op::Div(inner.load()),
         }
+    }
+    pub fn with_index(
+        self,
+        _index_root: stdlib::KeyPath,
+        _index_key: alloc::vec::Vec<u8>,
+    ) -> Self {
+        self
+    }
+    pub fn __index_entries(&self) -> alloc::vec::Vec<stdlib::IndexEntry> {
+        alloc::vec::Vec::new()
     }
 }

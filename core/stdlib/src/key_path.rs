@@ -83,7 +83,7 @@ impl KeyPath {
     /// For a path ending in an interned name (a map / indexed-map field), the
     /// sibling "index root": the same parent with the trailing interned id's high
     /// bit set (`id | 0x80`). The field model and the generic wholesale
-    /// `IndexedMap` write both derive `<map>#idx` this way, so they agree on its
+    /// `Map` write both derive `<map>#idx` this way, so they agree on its
     /// location WITHOUT the contract's name dictionary — the rule is purely on the
     /// interned id. Returns `None` if the last segment isn't an interned name.
     pub fn interned_index_sibling(&self) -> Option<Self> {

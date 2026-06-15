@@ -232,17 +232,8 @@ where
 }
 
 storage_placeholder!(
-    /// The declared `Map<K, V>` field placeholder. The generated field model is
-    /// the real accessor; this only holds entries for a wholesale `Store` write.
+    /// The declared `Map<K, V>` field placeholder. The generated field model is the
+    /// real accessor; this only holds entries for a wholesale `Store` write. The
+    /// index-aware `Store` impl lives in `indexed_map` (next to `apply_index_diff`).
     StorageMap
 );
-
-impl<K: KeyElement + Clone, V: Store<S> + Clone, S: WriteStorage + ?Sized> Store<S>
-    for StorageMap<K, V, S>
-{
-    fn __set(ctx: &alloc::rc::Rc<S>, base_path: KeyPath, value: StorageMap<K, V, S>) {
-        for (k, v) in value.entries.into_iter() {
-            ctx.__set(base_path.push_element(&k), v)
-        }
-    }
-}

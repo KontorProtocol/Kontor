@@ -10,7 +10,7 @@
 //!
 //! The generated field model is the real accessor (push/pop/get/len/iter); these
 //! free functions hold the logic so the codegen stays thin (cf. `apply_index_diff`
-//! for `IndexedMap`). `iter`/`len`-scans are O(n) storage reads — use on bounded
+//! for `Map`). `iter`/`len`-scans are O(n) storage reads — use on bounded
 //! deques (or paginate), never an unbounded load.
 
 use crate::{KeyPath, ReadStorage, Retrieve, Store, WriteStorage};

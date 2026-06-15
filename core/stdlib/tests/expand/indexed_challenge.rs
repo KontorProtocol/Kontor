@@ -1,6 +1,6 @@
-use stdlib::Indexed;
+use stdlib::Storage;
 
-#[derive(Indexed)]
+#[derive(Storage)]
 struct Challenge {
     id: String,
     #[index]

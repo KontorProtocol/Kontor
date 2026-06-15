@@ -106,33 +106,31 @@ pub fn derive_store(input: TokenStream) -> TokenStream {
     TokenStream::from(expanded)
 }
 
-#[proc_macro_derive(Indexed, attributes(index))]
-pub fn derive_indexed(input: TokenStream) -> TokenStream {
-    let input = parse_macro_input!(input as DeriveInput);
+/// The `Indexed` impl + `<T>Index` lookup trait for a struct, folded into the
+/// `Storage` derive so every struct storage value is `Indexed` (empty when it has
+/// no `#[index]`). This is what lets one `Map<K, V>` serve plain and indexed
+/// values: the generated `set` keys off `HAS_INDEXES` (a `const`) to skip index
+/// maintenance entirely when there are none. Non-struct inputs get nothing here.
+fn indexed_struct_tokens(input: &DeriveInput) -> proc_macro2::TokenStream {
     let name = &input.ident;
-
-    let result = match &input.data {
-        Data::Struct(syn::DataStruct {
-            fields: syn::Fields::Named(fields),
-            ..
-        }) => index_decl::parse(&input.attrs, fields).map(|decls| {
-            let body = indexed::generate_index_entries(&decls);
-            let lookup_trait = indexed::generate_lookup_trait(&decls, fields, name);
-            (body, lookup_trait)
-        }),
-        _ => Err(Error::new(
-            name.span(),
-            "Indexed derive only supports structs with named fields",
-        )),
+    let Data::Struct(syn::DataStruct {
+        fields: syn::Fields::Named(fields),
+        ..
+    }) = &input.data
+    else {
+        return quote! {};
     };
-    let (body, lookup_trait) = match result {
-        Ok(parts) => parts,
-        Err(err) => return err.to_compile_error().into(),
+    let decls = match index_decl::parse(&input.attrs, fields) {
+        Ok(decls) => decls,
+        Err(err) => return err.to_compile_error(),
     };
-
+    let has_indexes = !decls.is_empty();
+    let body = indexed::generate_index_entries(&decls);
+    let lookup_trait = indexed::generate_lookup_trait(&decls, fields, name);
     quote! {
         #[automatically_derived]
         impl stdlib::Indexed for #name {
+            const HAS_INDEXES: bool = #has_indexes;
             fn index_entries(&self) -> alloc::vec::Vec<stdlib::IndexEntry> {
                 #body
             }
@@ -140,7 +138,31 @@ pub fn derive_indexed(input: TokenStream) -> TokenStream {
 
         #lookup_trait
     }
-    .into()
+}
+
+/// The (always-empty) `Indexed` impl + `<E>Index` lookup trait for an enum, so an
+/// enum can be a non-primitive `Map` value like any struct. Enums never declare
+/// `#[index]`, so `HAS_INDEXES` is `false` and the field model's index path
+/// const-folds out — the trait just supplies the primitives the merged `Map`
+/// codegen expects. (The enum value model gets matching no-op `with_index` /
+/// `__index_entries` from `model::generate_enum`.)
+fn indexed_enum_tokens(name: &syn::Ident) -> proc_macro2::TokenStream {
+    let empty_fields = syn::FieldsNamed {
+        brace_token: Default::default(),
+        named: syn::punctuated::Punctuated::new(),
+    };
+    let lookup_trait = indexed::generate_lookup_trait(&[], &empty_fields, name);
+    quote! {
+        #[automatically_derived]
+        impl stdlib::Indexed for #name {
+            const HAS_INDEXES: bool = false;
+            fn index_entries(&self) -> alloc::vec::Vec<stdlib::IndexEntry> {
+                alloc::vec::Vec::new()
+            }
+        }
+
+        #lookup_trait
+    }
 }
 
 #[proc_macro_derive(Model)]
@@ -184,21 +206,29 @@ pub fn derive_model(input: TokenStream) -> TokenStream {
     .into()
 }
 
-#[proc_macro_derive(Storage)]
+#[proc_macro_derive(Storage, attributes(index))]
 pub fn derive_storage(input: TokenStream) -> TokenStream {
     let mut tokens = derive_store(input.clone());
     tokens.extend(derive_model(input.clone()));
-    // Every storage enum (each WIT enum/variant gets `#[derive(Storage)]` via the
-    // contract's `additional_derives`) gains its index machinery here: the
-    // `<E>Kind` marker, discriminant `From`, and `IndexKey`. All new names, so
-    // it's safe even on built-ins like `HolderRef` whose `Display`/`FromStr`
-    // already exist — and it deliberately doesn't emit a `Display` of its own.
-    if let Ok(parsed) = syn::parse::<DeriveInput>(input)
-        && let Data::Enum(data_enum) = &parsed.data
-    {
-        match storage_enum::generate(data_enum, &parsed.ident) {
-            Ok(body) => tokens.extend(TokenStream::from(body)),
-            Err(err) => tokens.extend(TokenStream::from(err.to_compile_error())),
+    if let Ok(parsed) = syn::parse::<DeriveInput>(input) {
+        match &parsed.data {
+            // Structs fold in the index machinery (`Indexed` impl + `<T>Index`
+            // lookup trait), empty when no `#[index]` — so every struct value is
+            // `Indexed` and one `Map<K, V>` serves plain and indexed values.
+            Data::Struct(_) => tokens.extend(TokenStream::from(indexed_struct_tokens(&parsed))),
+            // Every storage enum gains its index machinery: the `<E>Kind` marker,
+            // discriminant `From`, and `IndexKey`. All new names, so it's safe even
+            // on built-ins like `HolderRef` whose `Display`/`FromStr` already exist.
+            // It also gets the empty `Indexed` + `<E>Index` (so it can be a `Map`
+            // value).
+            Data::Enum(data_enum) => {
+                match storage_enum::generate(data_enum, &parsed.ident) {
+                    Ok(body) => tokens.extend(TokenStream::from(body)),
+                    Err(err) => tokens.extend(TokenStream::from(err.to_compile_error())),
+                }
+                tokens.extend(TokenStream::from(indexed_enum_tokens(&parsed.ident)));
+            }
+            Data::Union(_) => {}
         }
     }
     tokens

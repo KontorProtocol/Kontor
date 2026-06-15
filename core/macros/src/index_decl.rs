@@ -9,7 +9,7 @@ use syn::{Attribute, Error, FieldsNamed, Ident, Meta, Result, Token, Type, token
 /// - field-level `#[index] f` — sugar for `#[index(f, by = f)]`.
 /// - struct-level `#[index(name, by = field, sort = field)]`.
 ///
-/// The single source both the `Indexed` derive (which writes the index) and the
+/// The single source both the `Storage` derive (which writes the index) and the
 /// `Model` derive (which reconciles it on in-place setters and reads it back for
 /// diffs) parse from, so the descriptor they produce can't drift.
 pub struct IndexDecl {
@@ -205,7 +205,7 @@ pub fn field_type<'a>(fields: &'a FieldsNamed, ident: &Ident) -> &'a Type {
 
 /// Render one `IndexEntry { name, bucket, sort }` literal for `decl`. `value_for`
 /// maps a field ident to the expression yielding that field's value in the
-/// caller's context — `self.field` in the `Indexed` derive (real value), or a
+/// caller's context — `self.field` in the `Storage` derive (real value), or a
 /// getter like `self.field()` / `self.field().load()` in the read model and the
 /// in-place setters. Centralizing the literal keeps every site's bucket/sort
 /// encoding identical, so a write and a later diff can't disagree.

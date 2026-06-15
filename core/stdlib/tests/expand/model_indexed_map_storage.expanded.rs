@@ -1,4 +1,4 @@
-use stdlib::{Indexed, Model, Storage};
+use stdlib::{Model, Storage};
 #[index(due, by = status, sort = deadline)]
 struct Challenge {
     pub prover: u64,
@@ -358,6 +358,7 @@ impl core::ops::Deref for ChallengeWriteModel {
 }
 #[automatically_derived]
 impl stdlib::Indexed for Challenge {
+    const HAS_INDEXES: bool = true;
     fn index_entries(&self) -> alloc::vec::Vec<stdlib::IndexEntry> {
         let mut entries = alloc::vec::Vec::new();
         entries
@@ -419,7 +420,7 @@ where
     }
 }
 struct ChallengeStorage {
-    pub challenges: IndexedMap<u64, Challenge>,
+    pub challenges: Map<u64, Challenge>,
 }
 pub struct ChallengeStorageModel {
     pub base_path: stdlib::KeyPath,
@@ -434,6 +435,10 @@ impl ChallengeStorageModel {
             base_path: base_path.clone(),
             ctx,
         }
+    }
+    pub fn __index_entries(&self) -> alloc::vec::Vec<stdlib::IndexEntry> {
+        let mut entries = alloc::vec::Vec::new();
+        entries
     }
     pub fn challenges(&self) -> ChallengeStorageChallengesModel {
         ChallengeStorageChallengesModel {
@@ -470,8 +475,8 @@ impl ChallengeStorageChallengesModel {
         stdlib::ReadStorage::__exists(&self.ctx, &base_path)
             .then(|| ChallengeModel::new(self.ctx.clone(), base_path))
     }
-    pub fn load(&self) -> IndexedMap<u64, Challenge> {
-        IndexedMap::new(&[])
+    pub fn load(&self) -> Map<u64, Challenge> {
+        Map::new(&[])
     }
     pub fn keys(&self) -> impl Iterator<Item = u64> {
         stdlib::ReadStorage::__get_keys(&self.ctx, &self.base_path)
@@ -503,6 +508,7 @@ impl ChallengeIndex<u64> for ChallengeStorageChallengesModel {
 pub struct ChallengeStorageWriteModel {
     pub base_path: stdlib::KeyPath,
     ctx: alloc::rc::Rc<crate::context::ProcStorage>,
+    index_binding: Option<(stdlib::KeyPath, alloc::vec::Vec<u8>)>,
     model: ChallengeStorageModel,
 }
 impl ChallengeStorageWriteModel {
@@ -514,11 +520,20 @@ impl ChallengeStorageWriteModel {
         Self {
             base_path: base_path.clone(),
             ctx,
+            index_binding: None,
             model: ChallengeStorageModel::new(
                 alloc::rc::Rc::new(view_storage),
                 base_path.clone(),
             ),
         }
+    }
+    pub fn with_index(
+        mut self,
+        index_root: stdlib::KeyPath,
+        index_key: alloc::vec::Vec<u8>,
+    ) -> Self {
+        self.index_binding = Some((index_root, index_key));
+        self
     }
     pub fn challenges(&self) -> ChallengeStorageChallengesWriteModel {
         ChallengeStorageChallengesWriteModel {
@@ -565,33 +580,43 @@ impl ChallengeStorageChallengesWriteModel {
             })
     }
     pub fn set(&self, key: &u64, value: Challenge) {
-        let key_bytes = stdlib::KeyElement::encode(key);
-        let new_entries = stdlib::Indexed::index_entries(&value);
-        let old_entries = self.get(key).map(|m| m.__index_entries()).unwrap_or_default();
-        stdlib::apply_index_diff(
-            &self.ctx,
-            &self.index_path,
-            &key_bytes,
-            &old_entries,
-            &new_entries,
-        );
+        if <Challenge as stdlib::Indexed>::HAS_INDEXES {
+            let key_bytes = stdlib::KeyElement::encode(key);
+            let new_entries = stdlib::Indexed::index_entries(&value);
+            let old_entries = self
+                .get(key)
+                .map(|m| m.__index_entries())
+                .unwrap_or_default();
+            stdlib::apply_index_diff(
+                &self.ctx,
+                &self.index_path,
+                &key_bytes,
+                &old_entries,
+                &new_entries,
+            );
+        }
         stdlib::WriteStorage::__set(&self.ctx, self.base_path.push_element(key), value);
     }
     /// Remove the entry and its index rows. Returns true if a live value existed.
     pub fn remove(&self, key: &u64) -> bool {
-        let key_bytes = stdlib::KeyElement::encode(key);
-        let old_entries = self.get(key).map(|m| m.__index_entries()).unwrap_or_default();
-        stdlib::apply_index_diff(
-            &self.ctx,
-            &self.index_path,
-            &key_bytes,
-            &old_entries,
-            &[],
-        );
+        if <Challenge as stdlib::Indexed>::HAS_INDEXES {
+            let key_bytes = stdlib::KeyElement::encode(key);
+            let old_entries = self
+                .get(key)
+                .map(|m| m.__index_entries())
+                .unwrap_or_default();
+            stdlib::apply_index_diff(
+                &self.ctx,
+                &self.index_path,
+                &key_bytes,
+                &old_entries,
+                &[],
+            );
+        }
         stdlib::WriteStorage::__delete(&self.ctx, &self.base_path.push_element(key))
     }
-    pub fn load(&self) -> IndexedMap<u64, Challenge> {
-        IndexedMap::new(&[])
+    pub fn load(&self) -> Map<u64, Challenge> {
+        Map::new(&[])
     }
     pub fn keys(&self) -> impl Iterator<Item = u64> {
         stdlib::ReadStorage::__get_keys(&self.ctx, &self.base_path)

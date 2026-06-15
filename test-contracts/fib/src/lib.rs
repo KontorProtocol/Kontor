@@ -23,6 +23,8 @@ struct FibStorage {
     // Exercise struct- and enum-valued `Deque`s (see `init`).
     pub history: Deque<FibValue>,
     pub steps: Deque<Step>,
+    // Enum-valued Map (no indexes) — exercises a non-primitive enum Map value.
+    pub step_map: Map<u64, Step>,
 }
 
 impl Fib {
@@ -57,8 +59,19 @@ impl Guest for Fib {
             cache: Map::new(&[(0, FibValue { value: 0 })]),
             history: Deque::default(),
             steps: Deque::default(),
+            step_map: Map::default(),
         }
         .init(ctx);
+
+        // Enum-valued Map: get returns the enum MODEL (`load()` it), set/remove take
+        // the value. No indexes, so the index path const-folds out.
+        let sm = ctx.model().step_map();
+        sm.set(&1, Step::Value(7));
+        sm.set(&2, Step::Start);
+        assert!(matches!(sm.get(&1).map(|m| m.load()), Some(Step::Value(7))));
+        assert!(matches!(sm.get(&2).map(|m| m.load()), Some(Step::Start)));
+        assert!(sm.remove(&2));
+        assert!(sm.get(&2).is_none());
 
         // Enum-valued Deque: get/iter return the enum MODEL (`load()` it), pop
         // returns the owned enum VALUE. Same uniform value-model interface as the

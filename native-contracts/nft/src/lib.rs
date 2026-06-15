@@ -33,7 +33,7 @@ fn utxo_holder(out_point: context::OutPoint) -> Holder {
 // the hand-rolled `creator_index` secondary map. `creator` is immutable (set at
 // mint, never updated), so the index is pure-append: a mint adds one member, and
 // `transfer` (which only changes `owner`) never moves it.
-#[derive(Clone, Storage, Indexed)]
+#[derive(Clone, Storage)]
 struct NftRecord {
     pub owner: Holder,
     #[index]
@@ -44,7 +44,7 @@ struct NftRecord {
 
 #[derive(Clone, Default, StorageRoot)]
 struct NftStorage {
-    pub nfts: IndexedMap<String, NftRecord>,
+    pub nfts: Map<String, NftRecord>,
     pub total_minted: u64,
 }
 

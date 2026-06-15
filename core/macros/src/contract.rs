@@ -12,7 +12,7 @@ use wit_validator::Validator;
 pub struct Config {
     name: String,
     path: Option<String>,
-    /// Secondary-index declarations on WIT records stored in an `IndexedMap`.
+    /// Secondary-index declarations on WIT records used as `Map` values.
     /// Semicolon-separated entries, each `record: name [by field] [sort field]`
     /// (kebab-case, as in the WIT); `record: field` is sugar for a single-field
     /// index. E.g.
@@ -23,10 +23,11 @@ pub struct Config {
     ///   challenge-data: due by status sort deadline-height;
     /// "
     /// ```
-    /// `contract!` injects the matching struct-level `#[index(...)]` plus
-    /// `#[derive(stdlib::Indexed)]` on each record (via the forked wit-bindgen) so
-    /// the generated model maintains the index. `by`/`sort` fields are mapped to
-    /// the generated snake_case Rust field names.
+    /// `contract!` injects the matching struct-level `#[index(...)]` on each record
+    /// (via the forked wit-bindgen); the index machinery itself is folded into
+    /// `#[derive(Storage)]` (applied to every record), so the generated model
+    /// maintains the index. `by`/`sort` fields are mapped to the generated
+    /// snake_case Rust field names.
     indexed: Option<String>,
 }
 
@@ -76,10 +77,10 @@ fn index_attr(spec: &str) -> String {
 }
 
 /// Build the `additional_type_attributes` option tokens for the wit-bindgen
-/// `generate!` from the `indexed` spec: `#[derive(stdlib::Indexed)]` once per
-/// record plus one `#[index(...)]` per declared index. The fork emits each as its
-/// own attribute line on the (owned) record, and the `Indexed`/`Model` derives
-/// parse them via the shared index-declaration grammar. (Storage enums are NOT
+/// `generate!` from the `indexed` spec: one `#[index(...)]` per declared index. The
+/// fork emits each as its own attribute line on the (owned) record, and the
+/// `Storage` derive (applied to every record, where the index machinery now lives)
+/// parses them via the shared index-declaration grammar. (Storage enums are NOT
 /// injected here — the fork applies type attributes only to records, not
 /// enums/variants — they're generated directly from the WIT, see
 /// [`storage_enum_impls`].)
@@ -108,7 +109,9 @@ fn index_attr_options(indexed: Option<&str>) -> TokenStream {
     }
     let mut type_pairs = Vec::new();
     for (record, attrs) in by_record {
-        type_pairs.push(quote! { #record: "#[derive(stdlib::Indexed)]", });
+        // The index machinery is folded into `#[derive(Storage)]` (applied to every
+        // record via the contract's `additional_derives`), so we inject only the
+        // `#[index(...)]` attributes here.
         for attr in attrs {
             type_pairs.push(quote! { #record: #attr, });
         }
@@ -171,7 +174,6 @@ pub fn generate(config: Config) -> TokenStream {
         use kontor::built_in::numbers::{IntegerModel, IntegerWriteModel, DecimalModel, DecimalWriteModel};
 
         type Map<K, V> = stdlib::StorageMap<K, V, context::ProcStorage>;
-        type IndexedMap<K, V> = stdlib::StorageIndexedMap<K, V, context::ProcStorage>;
         type Deque<V> = stdlib::StorageDeque<V, context::ProcStorage>;
 
         fn BURNER() -> Holder {
@@ -386,7 +388,7 @@ pub fn generate(config: Config) -> TokenStream {
         );
 
         // `numbers::Integer`/`Decimal` are 256-bit sign-magnitude; encode them as
-        // order-preserving codec elements so they can be `Map`/`IndexedMap` KEYS or
+        // order-preserving codec elements so they can be `Map` KEYS or
         // index SORT fields (e.g. ordering by a monetary amount). `Decimal` reuses
         // the integer encoding on its raw scaled limbs (fixed scale ⇒ raw-magnitude
         // order == value order). Distinct from the `IndexKey` (bucket) impl above.

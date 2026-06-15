@@ -35,6 +35,16 @@ impl ErrorModel {
             ErrorModel::Message(inner) => Error::Message(inner.clone()),
         }
     }
+    pub fn with_index(
+        self,
+        _index_root: stdlib::KeyPath,
+        _index_key: alloc::vec::Vec<u8>,
+    ) -> Self {
+        self
+    }
+    pub fn __index_entries(&self) -> alloc::vec::Vec<stdlib::IndexEntry> {
+        alloc::vec::Vec::new()
+    }
 }
 pub enum ErrorWriteModel {
     Message(String),
@@ -68,5 +78,15 @@ impl ErrorWriteModel {
         match self {
             ErrorWriteModel::Message(inner) => Error::Message(inner.clone()),
         }
+    }
+    pub fn with_index(
+        self,
+        _index_root: stdlib::KeyPath,
+        _index_key: alloc::vec::Vec<u8>,
+    ) -> Self {
+        self
+    }
+    pub fn __index_entries(&self) -> alloc::vec::Vec<stdlib::IndexEntry> {
+        alloc::vec::Vec::new()
     }
 }

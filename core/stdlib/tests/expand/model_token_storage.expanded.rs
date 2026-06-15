@@ -16,6 +16,10 @@ impl TokenStorageModel {
             ctx,
         }
     }
+    pub fn __index_entries(&self) -> alloc::vec::Vec<stdlib::IndexEntry> {
+        let mut entries = alloc::vec::Vec::new();
+        entries
+    }
     pub fn ledger(&self) -> TokenStorageLedgerModel {
         TokenStorageLedgerModel {
             base_path: self.base_path.push_interned(0u8),
@@ -44,8 +48,7 @@ impl ::core::clone::Clone for TokenStorageLedgerModel {
 }
 impl TokenStorageLedgerModel {
     pub fn get(&self, key: &String) -> Option<u64> {
-        let base_path = self.base_path.push_element(key);
-        stdlib::ReadStorage::__get(&self.ctx, base_path)
+        stdlib::ReadStorage::__get(&self.ctx, self.base_path.push_element(key))
     }
     pub fn load(&self) -> Map<String, u64> {
         Map::new(&[])
@@ -57,6 +60,7 @@ impl TokenStorageLedgerModel {
 pub struct TokenStorageWriteModel {
     pub base_path: stdlib::KeyPath,
     ctx: alloc::rc::Rc<crate::context::ProcStorage>,
+    index_binding: Option<(stdlib::KeyPath, alloc::vec::Vec<u8>)>,
     model: TokenStorageModel,
 }
 impl TokenStorageWriteModel {
@@ -68,11 +72,20 @@ impl TokenStorageWriteModel {
         Self {
             base_path: base_path.clone(),
             ctx,
+            index_binding: None,
             model: TokenStorageModel::new(
                 alloc::rc::Rc::new(view_storage),
                 base_path.clone(),
             ),
         }
+    }
+    pub fn with_index(
+        mut self,
+        index_root: stdlib::KeyPath,
+        index_key: alloc::vec::Vec<u8>,
+    ) -> Self {
+        self.index_binding = Some((index_root, index_key));
+        self
     }
     pub fn ledger(&self) -> TokenStorageLedgerWriteModel {
         TokenStorageLedgerWriteModel {
@@ -108,8 +121,7 @@ impl ::core::clone::Clone for TokenStorageLedgerWriteModel {
 }
 impl TokenStorageLedgerWriteModel {
     pub fn get(&self, key: &String) -> Option<u64> {
-        let base_path = self.base_path.push_element(key);
-        stdlib::ReadStorage::__get(&self.ctx, base_path)
+        stdlib::ReadStorage::__get(&self.ctx, self.base_path.push_element(key))
     }
     pub fn set(&self, key: &String, value: u64) {
         stdlib::WriteStorage::__set(&self.ctx, self.base_path.push_element(key), value)
