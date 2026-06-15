@@ -57,11 +57,14 @@ pub fn generate_struct(
                     let (k_ty, v_ty) = get_map_types(field_ty)?;
                     let field_model_name = Ident::new(&format!("{}{}{}Model", type_name, &field_name.to_string().to_pascal_case(), write_prefix), field.span());
 
-                    let (get_return, get_body) = if utils::is_primitive_type(&v_ty) {
-                        (quote! { Option<#v_ty> }, quote! { stdlib::ReadStorage::__get(&self.ctx, base_path) })
+                    let vi = value_item(write, &v_ty, field.span())?;
+                    let item_ty = &vi.item_ty;
+                    let get_return = quote! { Option<#item_ty> };
+                    let get_body = if vi.is_primitive {
+                        quote! { stdlib::ReadStorage::__get(&self.ctx, base_path) }
                     } else {
-                        let v_model_ty = get_model_ident(write, &v_ty, field.span())?;
-                        (quote! { Option<#v_model_ty> }, quote! { stdlib::ReadStorage::__exists(&self.ctx, &base_path).then(|| #v_model_ty::new(self.ctx.clone(), base_path)) })
+                        let v_model_ty = vi.model_ty.as_ref().unwrap();
+                        quote! { stdlib::ReadStorage::__exists(&self.ctx, &base_path).then(|| #v_model_ty::new(self.ctx.clone(), base_path)) }
                     };
 
                     let setter = if write {
@@ -227,6 +230,154 @@ pub fn generate_struct(
                                 index_path: self.base_path.push_interned(#idx_marker_id),
                                 ctx: self.ctx.clone(),
                             }
+                        }
+                    })
+                } else if utils::is_deque_type(field_ty) {
+                    let v_ty = get_deque_type(field_ty)?;
+                    let field_model_name = Ident::new(&format!("{}{}{}Model", type_name, &field_name.to_string().to_pascal_case(), write_prefix), field.span());
+                    let vi = value_item(write, &v_ty, field.span())?;
+                    let item_ty = &vi.item_ty;
+
+                    // `get`/`front`/`back`/`iter` yield the VALUE for a leaf element, or
+                    // the value MODEL for a struct/enum element (a subtree), like `Map`.
+                    // `pop_*` always returns an owned value (materialized via the model's
+                    // `load()` for non-leaf elements, since the entry is then deleted).
+                    let (get_body, iter_body) = if vi.is_primitive {
+                        (
+                            quote! { stdlib::deque::get::<_, #v_ty>(&self.ctx, &self.base_path, pos) },
+                            quote! {
+                                let ctx = self.ctx.clone();
+                                let base = self.base_path.clone();
+                                let n = stdlib::deque::len(&ctx, &base);
+                                (0..n).filter_map(move |i| stdlib::deque::get::<_, #v_ty>(&ctx, &base, i))
+                            },
+                        )
+                    } else {
+                        let vm = vi.model_ty.as_ref().unwrap();
+                        (
+                            quote! {
+                                let h = stdlib::deque::head(&self.ctx, &self.base_path);
+                                if pos >= stdlib::deque::tail(&self.ctx, &self.base_path).wrapping_sub(h) {
+                                    None
+                                } else {
+                                    Some(#vm::new(self.ctx.clone(), stdlib::deque::entry_path(&self.base_path, h.wrapping_add(pos))))
+                                }
+                            },
+                            quote! {
+                                let ctx = self.ctx.clone();
+                                let base = self.base_path.clone();
+                                let h = stdlib::deque::head(&ctx, &base);
+                                let n = stdlib::deque::len(&ctx, &base);
+                                (0..n).map(move |i| #vm::new(ctx.clone(), stdlib::deque::entry_path(&base, h.wrapping_add(i))))
+                            },
+                        )
+                    };
+
+                    let mutators = if write {
+                        let (pop_front_body, pop_back_body) = if vi.is_primitive {
+                            (
+                                quote! { stdlib::deque::pop_front::<_, #v_ty>(&self.ctx, &self.base_path) },
+                                quote! { stdlib::deque::pop_back::<_, #v_ty>(&self.ctx, &self.base_path) },
+                            )
+                        } else {
+                            let vm = vi.model_ty.as_ref().unwrap();
+                            (
+                                quote! {
+                                    let h = stdlib::deque::head(&self.ctx, &self.base_path);
+                                    if h == stdlib::deque::tail(&self.ctx, &self.base_path) {
+                                        return None;
+                                    }
+                                    let entry = stdlib::deque::entry_path(&self.base_path, h);
+                                    let value = #vm::new(self.ctx.clone(), entry.clone()).load();
+                                    stdlib::WriteStorage::__delete(&self.ctx, &entry);
+                                    stdlib::deque::set_head(&self.ctx, &self.base_path, h.wrapping_add(1));
+                                    Some(value)
+                                },
+                                quote! {
+                                    let t = stdlib::deque::tail(&self.ctx, &self.base_path);
+                                    if stdlib::deque::head(&self.ctx, &self.base_path) == t {
+                                        return None;
+                                    }
+                                    let pos = t.wrapping_sub(1);
+                                    let entry = stdlib::deque::entry_path(&self.base_path, pos);
+                                    let value = #vm::new(self.ctx.clone(), entry.clone()).load();
+                                    stdlib::WriteStorage::__delete(&self.ctx, &entry);
+                                    stdlib::deque::set_tail(&self.ctx, &self.base_path, pos);
+                                    Some(value)
+                                },
+                            )
+                        };
+                        quote! {
+                            pub fn push_back(&self, value: #v_ty) {
+                                stdlib::deque::push_back(&self.ctx, &self.base_path, value)
+                            }
+
+                            pub fn push_front(&self, value: #v_ty) {
+                                stdlib::deque::push_front(&self.ctx, &self.base_path, value)
+                            }
+
+                            pub fn pop_front(&self) -> Option<#v_ty> {
+                                #pop_front_body
+                            }
+
+                            pub fn pop_back(&self) -> Option<#v_ty> {
+                                #pop_back_body
+                            }
+
+                            /// Overwrite position `pos` (0 = front). Returns false if out of bounds.
+                            pub fn set(&self, pos: u64, value: #v_ty) -> bool {
+                                stdlib::deque::set(&self.ctx, &self.base_path, pos, value)
+                            }
+                        }
+                    } else {
+                        quote! {}
+                    };
+
+                    special_models.push(quote! {
+                        #[derive(Clone)]
+                        pub struct #field_model_name {
+                            pub base_path: stdlib::KeyPath,
+                            ctx: alloc::rc::Rc<#context_param>,
+                        }
+
+                        impl #field_model_name {
+                            pub fn len(&self) -> u64 {
+                                stdlib::deque::len(&self.ctx, &self.base_path)
+                            }
+
+                            pub fn is_empty(&self) -> bool {
+                                self.len() == 0
+                            }
+
+                            /// Element at relative position `pos` (0 = front).
+                            pub fn get(&self, pos: u64) -> Option<#item_ty> {
+                                #get_body
+                            }
+
+                            pub fn front(&self) -> Option<#item_ty> {
+                                self.get(0)
+                            }
+
+                            pub fn back(&self) -> Option<#item_ty> {
+                                let n = self.len();
+                                if n == 0 { None } else { self.get(n - 1) }
+                            }
+
+                            pub fn iter(&self) -> impl Iterator<Item = #item_ty> {
+                                #iter_body
+                            }
+
+                            pub fn load(&self) -> Deque<#v_ty> {
+                                Deque::new(&[])
+                            }
+
+                            #mutators
+                        }
+                    });
+
+                    Ok(quote! {
+                        pub fn #field_name(&self) -> #field_model_name {
+                            #field_model_name { base_path: self.base_path.push_interned(#field_id), ctx: self.ctx.clone() }
                         }
                     })
                 } else if utils::is_option_type(field_ty) {
@@ -771,6 +922,36 @@ fn index_trait_ident(ty: &Type, span: Span) -> Result<Ident> {
     }
 }
 
+/// The accessor element type for a collection value `v_ty`: the value itself for a
+/// leaf (`u64`, `Vec<u8>`, …), or the value MODEL (`<V>Model`/`<V>WriteModel`) for a
+/// struct/enum. Both model kinds share `new(ctx, path)` + `load()`, so callers
+/// construct and materialize them uniformly. Centralizes the primitive-vs-model
+/// dispatch shared by `Map` and `Deque`.
+struct ValueItem {
+    is_primitive: bool,
+    /// The inner accessor type: `#v_ty` (leaf) or the value-model ident (struct/enum).
+    item_ty: TokenStream,
+    /// The value-model ident, for a struct/enum value (used to `::new(...)`/`load()`).
+    model_ty: Option<Ident>,
+}
+
+fn value_item(write: bool, v_ty: &Type, span: Span) -> Result<ValueItem> {
+    if utils::is_primitive_type(v_ty) {
+        Ok(ValueItem {
+            is_primitive: true,
+            item_ty: quote! { #v_ty },
+            model_ty: None,
+        })
+    } else {
+        let model = get_model_ident(write, v_ty, span)?;
+        Ok(ValueItem {
+            is_primitive: false,
+            item_ty: quote! { #model },
+            model_ty: Some(model),
+        })
+    }
+}
+
 fn get_model_ident(write: bool, ty: &Type, span: Span) -> Result<Ident> {
     if let Type::Path(type_path) = ty {
         type_path
@@ -828,4 +1009,17 @@ fn get_indexed_map_types(ty: &Type) -> Result<(Type, Type)> {
         return Ok((k_ty.clone(), v_ty.clone()));
     }
     Err(Error::new(ty.span(), "Expected IndexedMap<K, V> type"))
+}
+
+fn get_deque_type(ty: &Type) -> Result<Type> {
+    if let Type::Path(type_path) = ty
+        && let Some(segment) = type_path.path.segments.last()
+        && segment.ident == "Deque"
+        && let PathArguments::AngleBracketed(args) = &segment.arguments
+        && args.args.len() == 1
+        && let GenericArgument::Type(v_ty) = &args.args[0]
+    {
+        return Ok(v_ty.clone());
+    }
+    Err(Error::new(ty.span(), "Expected Deque<V> type"))
 }

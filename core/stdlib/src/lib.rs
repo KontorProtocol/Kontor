@@ -44,12 +44,14 @@ macro_rules! storage_placeholder {
     };
 }
 
+pub mod deque;
 mod indexed_map;
 mod key_path;
 mod keycodec;
 mod storage_interface;
 mod wave_interfaces;
 
+pub use deque::StorageDeque;
 pub use indexed_map::*;
 pub use key_path::*;
 pub use keycodec::*;

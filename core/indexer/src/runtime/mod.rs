@@ -2,7 +2,6 @@ extern crate alloc;
 
 mod component_cache;
 pub mod counter;
-pub mod file_ledger;
 pub mod filestorage;
 pub mod fuel;
 pub mod nft;
@@ -25,7 +24,6 @@ mod host_storage;
 
 use bitcoin::XOnlyPublicKey;
 pub use component_cache::ComponentCache;
-pub use file_ledger::FileLedger;
 use futures_util::future::OptionFuture;
 use libsql::Connection;
 use sha2::{Digest, Sha256};
@@ -90,8 +88,9 @@ pub use wit::kontor;
 pub use wit::kontor::built_in::context::ContractAddress;
 pub use wit::kontor::built_in::context::OutPoint;
 pub use wit::kontor::built_in::error::Error;
-pub use wit::kontor::built_in::file_registry::{ChallengeInput, VerifyResult};
-pub use wit::kontor::built_in::file_registry_types::RawFileDescriptor;
+pub use wit::kontor::built_in::file_registry_types::{
+    ChallengeInput, RawFileDescriptor, VerifyResult,
+};
 pub use wit::kontor::built_in::numbers::{
     Decimal, Integer, Ordering as NumericOrdering, Sign as NumericSign,
 };
@@ -175,7 +174,6 @@ pub struct Runtime {
     pub table: Arc<Mutex<ResourceTable>>,
     pub component_cache: ComponentCache,
     pub storage: Storage,
-    pub file_ledger: FileLedger,
     pub id_generation_counter: Counter,
     pub result_id_counter: Counter,
     pub stack: Stack<CallFrame>,
@@ -247,14 +245,12 @@ impl Runtime {
         component_cache: ComponentCache,
         storage: Storage,
     ) -> Result<Self> {
-        let file_ledger = FileLedger::rebuild_from_db(&storage.conn).await?;
         Ok(Self {
             engine,
             linkers,
             table: Arc::new(Mutex::new(ResourceTable::new())),
             component_cache,
             storage,
-            file_ledger,
             id_generation_counter: Counter::new(),
             result_id_counter: Counter::new(),
             stack: Stack::new(),

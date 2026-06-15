@@ -17,7 +17,17 @@ world root {
 
   record agreement-data {
     agreement-id: string,
+    // ── File descriptor (folded in; was the host `file_metadata` row). The
+    // contract is now the file registry: it owns this metadata and recomputes
+    // the aggregated ledger root from it. `file-id` is also the map key /
+    // `agreement-id`. ──
     file-id: string,
+    object-id: string,
+    nonce: list<u8>,
+    root: list<u8>,
+    padded-len: u64,
+    original-size: u64,
+    filename: string,
     active: bool,
     // The agreement's currently-open challenge, if any. Co-located so
     // "is this agreement already challenged?" is a point read, not a scan of

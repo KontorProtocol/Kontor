@@ -37,6 +37,11 @@ const DEFAULT_S_CHAL: u64 = 100;
 /// signet/testnet/mainnet keep `DEFAULT_S_CHAL`.
 const REGTEST_S_CHAL: u64 = 8;
 
+/// Bound on retained aggregated roots (mirrors kontor-crypto's
+/// `DEFAULT_MAX_HISTORICAL_ROOTS`). A submitted proof's `ledger_root` must fall
+/// within this many recent roots, else verification rejects it.
+const MAX_VALID_ROOTS: u64 = 4096;
+
 // ─────────────────────────────────────────────────────────────────
 // STORAGE INDEX MODEL
 //
@@ -118,6 +123,11 @@ struct ProtocolState {
     pub agreements: IndexedMap<String, AgreementData>,
     pub memberships: IndexedMap<(String, u64), NodeState>,
     pub challenges: IndexedMap<String, ChallengeData>,
+    // The accepted aggregated-root window ({current} ∪ recent history): a new root
+    // is one O(1) push per file add (not a rewrite of the whole window). `verify`
+    // is given this set; a proof's ledger_root must be a member. Bounded by
+    // `MAX_VALID_ROOTS` via push_back + pop_front (FIFO eviction of the oldest).
+    pub valid_roots: Deque<Vec<u8>>,
 }
 
 // `agreement-data`/`challenge-data` are indexed (agreement by `active`; challenge
@@ -167,6 +177,7 @@ impl Guest for Filestorage {
             agreements: IndexedMap::default(),
             memberships: IndexedMap::default(),
             challenges: IndexedMap::default(),
+            valid_roots: Deque::default(),
         }
         .init(ctx);
         ctx.contract()
@@ -197,13 +208,17 @@ impl Guest for Filestorage {
             )));
         }
 
-        // Validate and register with the FileLedger host function
-        register_file_descriptor(&descriptor)?;
-
-        // Create the agreement (starts inactive until nodes join)
+        // Create the agreement (starts inactive until nodes join). The file
+        // descriptor is folded in — the contract owns this metadata now.
         let agreement = AgreementData {
             agreement_id: agreement_id.clone(),
             file_id: descriptor.file_id.clone(),
+            object_id: descriptor.object_id.clone(),
+            nonce: descriptor.nonce.clone(),
+            root: descriptor.root.clone(),
+            padded_len: descriptor.padded_len,
+            original_size: descriptor.original_size,
+            filename: descriptor.filename.clone(),
             active: false,
             active_challenge: None,
         };
@@ -213,6 +228,12 @@ impl Guest for Filestorage {
         // there's no separate counter to bump. Memberships are flat rows in their
         // own map, written by `join` — nothing to initialize here.
         model.agreements().set(&agreement_id, agreement);
+
+        // Recompute the aggregated ledger root over the full file set (incl. this
+        // one) and record it as a valid root. `aggregate_root` validates each
+        // descriptor's `root` field element, so a malformed descriptor aborts the
+        // whole tx here (rolling back the stored agreement).
+        record_current_root(ctx)?;
 
         Ok(CreateAgreementResult { agreement_id })
     }
@@ -554,17 +575,19 @@ impl Guest for Filestorage {
             let challenge_seed = derive_challenge_seed_for_file(&sigma_batch, &file_id);
             let seed: Vec<u8> = challenge_seed.to_vec();
 
-            let descriptor = match file_registry::get_file_descriptor(&file_id) {
-                Some(d) => d,
-                None => continue,
-            };
+            let descriptor = raw_descriptor(&agreement.load());
 
-            // Compute challenge ID via file descriptor method
-            let challenge_id =
-                match descriptor.compute_challenge_id(block_height, s_chal, &seed, prover_id) {
-                    Ok(id) => id,
-                    Err(_) => continue,
-                };
+            // Compute challenge ID from the file metadata.
+            let challenge_id = match file_registry::compute_challenge_id(
+                &descriptor,
+                block_height,
+                s_chal,
+                &seed,
+                prover_id,
+            ) {
+                Ok(id) => id,
+                Err(_) => continue,
+            };
 
             let challenge = ChallengeData {
                 challenge_id,
@@ -644,16 +667,18 @@ impl Guest for Filestorage {
             )));
         }
 
-        let file_id = agreement.file_id();
         let s_chal = model.s_chal();
         let deadline_height = block_height + model.challenge_deadline_blocks();
 
-        let descriptor = file_registry::get_file_descriptor(&file_id).ok_or(Error::Message(
-            format!("File descriptor not found for {}", file_id),
-        ))?;
+        let descriptor = raw_descriptor(&agreement.load());
 
-        let challenge_id =
-            descriptor.compute_challenge_id(block_height, s_chal, &seed, prover_id)?;
+        let challenge_id = file_registry::compute_challenge_id(
+            &descriptor,
+            block_height,
+            s_chal,
+            &seed,
+            prover_id,
+        )?;
 
         let challenge = ChallengeData {
             challenge_id,
@@ -729,9 +754,9 @@ impl Guest for Filestorage {
                         challenge.agreement_id()
                     )))?;
 
-            challenge_inputs.push(file_registry::ChallengeInput {
+            challenge_inputs.push(file_registry_types::ChallengeInput {
                 challenge_id: cid.clone(),
-                file_id: agreement.file_id(),
+                file: raw_descriptor(&agreement.load()),
                 block_height: challenge.block_height(),
                 num_challenges: challenge.num_challenges(),
                 seed: challenge.seed(),
@@ -739,14 +764,15 @@ impl Guest for Filestorage {
             });
         }
 
-        // 4. Verify the proof
-        let result = proof.verify(&challenge_inputs)?;
+        // 4. Verify the proof against the contract's valid-root window.
+        let valid_roots: Vec<Vec<u8>> = model.valid_roots().iter().collect();
+        let result = proof.verify(&challenge_inputs, &valid_roots)?;
 
         // 5. Update challenge statuses based on result
         let new_status = match result {
-            file_registry::VerifyResult::Verified => ChallengeStatus::Proven,
-            file_registry::VerifyResult::Rejected => ChallengeStatus::Failed,
-            file_registry::VerifyResult::Invalid => ChallengeStatus::Invalid,
+            file_registry_types::VerifyResult::Verified => ChallengeStatus::Proven,
+            file_registry_types::VerifyResult::Rejected => ChallengeStatus::Failed,
+            file_registry_types::VerifyResult::Invalid => ChallengeStatus::Invalid,
         };
 
         // In-place; the `status` index follows via the get() binding. The status
@@ -889,9 +915,46 @@ pub fn uniform_index_from_u64(n: usize, next_u64: &mut impl FnMut() -> u64) -> u
 }
 
 /// Validate and register a file descriptor with the file registry host.
-fn register_file_descriptor(descriptor: &RawFileDescriptor) -> Result<(), Error> {
-    let fd: file_registry::FileDescriptor = file_registry::FileDescriptor::from_raw(descriptor)?;
-    file_registry::add_file(&fd);
+/// Rebuild the `raw-file-descriptor` the host crypto fns consume from a stored
+/// agreement (the file metadata is folded into `agreement-data`).
+fn raw_descriptor(a: &AgreementData) -> RawFileDescriptor {
+    RawFileDescriptor {
+        file_id: a.file_id.clone(),
+        object_id: a.object_id.clone(),
+        nonce: a.nonce.clone(),
+        root: a.root.clone(),
+        padded_len: a.padded_len,
+        original_size: a.original_size,
+        filename: a.filename.clone(),
+    }
+}
+
+/// Recompute the aggregated ledger root over the full file set and append it to
+/// the bounded valid-root window. One O(1) row write per file add (plus an O(n)
+/// scan to feed `aggregate_root`); the window is pruned oldest-first past
+/// `MAX_VALID_ROOTS`.
+fn record_current_root(ctx: &ProcContext) -> Result<(), Error> {
+    let model = ctx.model();
+
+    // All agreements, in primary-key (lexicographic `file_id`) order = the
+    // ledger's canonical order. `aggregate_root` also sorts internally, so order
+    // here is not load-bearing.
+    let file_ids: Vec<String> = model.agreements().keys().collect();
+    let mut files = Vec::with_capacity(file_ids.len());
+    for fid in file_ids {
+        if let Some(a) = model.agreements().get(&fid) {
+            files.push(raw_descriptor(&a.load()));
+        }
+    }
+
+    let root = file_registry::aggregate_root(&files)?;
+
+    // Append the new root; evict the oldest once over the cap (FIFO window).
+    let roots = model.valid_roots();
+    roots.push_back(root);
+    if roots.len() > MAX_VALID_ROOTS {
+        roots.pop_front();
+    }
     Ok(())
 }
 

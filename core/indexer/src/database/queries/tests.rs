@@ -9,8 +9,8 @@ use sha2::{Digest, Sha256};
 
 use super::*;
 use crate::database::types::{
-    BlockQuery, ContractQuery, ContractResultRow, ContractRow, ContractStateRow, FileMetadataRow,
-    OpResultId, OrderDirection, ResultQuery, TransactionQuery,
+    BlockQuery, ContractQuery, ContractResultRow, ContractRow, ContractStateRow, OpResultId,
+    OrderDirection, ResultQuery, TransactionQuery,
 };
 use crate::runtime::ContractAddress;
 use crate::test_utils::{new_mock_block_hash, new_mock_transaction, new_test_db};
@@ -1891,121 +1891,6 @@ async fn test_contract_result_operations() -> Result<()> {
     let row = get_op_result(&conn, &OpResultId::builder().txid(txid.to_string()).build()).await?;
     assert!(row.is_some());
     assert_eq!(result.id, row.unwrap().id);
-
-    Ok(())
-}
-
-#[tokio::test]
-async fn test_file_metadata_operations() -> Result<()> {
-    let (_reader, writer, _temp_dir) = new_test_db().await?;
-    let conn = writer.connection();
-
-    // Insert a block first to satisfy foreign key constraints
-    let height = 800000;
-    let hash = "000000000000000000015d76e1b13f62d0edc4593ed326528c37b5af3c3fba04".parse()?;
-    let block = BlockRow::builder().height(height).hash(hash).build();
-    insert_block(&conn, block).await?;
-
-    // Insert a transaction
-    let txid = "abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890";
-    let tx = TransactionRow::builder()
-        .height(height)
-        .txid(txid.to_string())
-        .tx_index(0)
-        .build();
-    insert_transaction(&conn, tx.clone()).await?;
-
-    // Initially, no file metadata entries should exist
-    let entries = select_all_file_metadata(&conn).await?;
-    assert!(entries.is_empty());
-
-    // Insert a file metadata entry
-    let file_id = "file_abc123".to_string();
-    let root = [1u8; 32]; // 32 bytes for FieldElement
-    let padded_len = 1024u64;
-    let original_size = 100u64;
-    let filename = "file_abc123.dat".to_string();
-
-    let object_id = "obj_abc123".to_string();
-    let nonce = vec![3u8; 32];
-
-    let entry1 = FileMetadataRow::builder()
-        .file_id(file_id.clone())
-        .object_id(object_id.clone())
-        .nonce(nonce.clone())
-        .root(root)
-        .padded_len(padded_len)
-        .original_size(original_size)
-        .filename(filename.clone())
-        .height(height)
-        .build();
-
-    let id1 = insert_file_metadata(&conn, &entry1).await?;
-    assert!(id1 > 0, "Insert should return a valid ID");
-
-    // Verify entry was inserted
-    let entries = select_all_file_metadata(&conn).await?;
-    assert_eq!(entries.len(), 1);
-    assert_eq!(entries[0].id, id1);
-    assert_eq!(entries[0].file_id, file_id);
-    assert_eq!(entries[0].object_id, object_id);
-    assert_eq!(entries[0].nonce, nonce);
-    assert_eq!(entries[0].root, root);
-    assert_eq!(entries[0].padded_len, padded_len);
-    assert_eq!(entries[0].original_size, original_size);
-    assert_eq!(entries[0].filename, filename);
-    assert_eq!(entries[0].height, height);
-
-    // Insert another file metadata entry at a different height
-    let height2 = 800001;
-    let hash2 = "000000000000000000015d76e1b13f62d0edc4593ed326528c37b5af3c3fba05".parse()?;
-    let block2 = BlockRow::builder().height(height2).hash(hash2).build();
-    insert_block(&conn, block2).await?;
-
-    let txid2 = "fedcba0987654321fedcba0987654321fedcba0987654321fedcba0987654321";
-    let tx2 = TransactionRow::builder()
-        .height(height2)
-        .txid(txid2.to_string())
-        .tx_index(0)
-        .build();
-    insert_transaction(&conn, tx2.clone()).await?;
-
-    let file_id2 = "file_def456".to_string();
-    let object_id2 = "obj_def456".to_string();
-    let nonce2 = vec![4u8; 32];
-    let root2 = [2u8; 32];
-    let padded_len2 = 2048u64;
-    let original_size2 = 200u64;
-    let filename2 = "file_def456.dat".to_string();
-
-    let entry2 = FileMetadataRow::builder()
-        .file_id(file_id2.clone())
-        .object_id(object_id2)
-        .nonce(nonce2)
-        .root(root2)
-        .padded_len(padded_len2)
-        .original_size(original_size2)
-        .filename(filename2)
-        .height(height2)
-        .build();
-
-    let id2 = insert_file_metadata(&conn, &entry2).await?;
-    assert!(id2 > id1, "Second entry should have a higher ID");
-
-    // Verify both entries exist and are ordered by ID
-    let entries = select_all_file_metadata(&conn).await?;
-    assert_eq!(entries.len(), 2);
-    assert_eq!(entries[0].id, id1);
-    assert_eq!(entries[0].file_id, file_id);
-    assert_eq!(entries[1].id, id2);
-    assert_eq!(entries[1].file_id, file_id2);
-
-    // Test rollback deletes file metadata entries (ON DELETE CASCADE)
-    rollback_to_height(&conn, height).await?;
-
-    let entries = select_all_file_metadata(&conn).await?;
-    assert_eq!(entries.len(), 1);
-    assert_eq!(entries[0].id, id1);
 
     Ok(())
 }

@@ -20,7 +20,6 @@ wasmtime::component::bindgen!({
         "kontor:built-in/context.holder": Holder,
         "kontor:built-in/context.contract": Contract,
         "kontor:built-in/context.transaction": Transaction,
-        "kontor:built-in/file-registry.file-descriptor": FileDescriptor,
         "kontor:built-in/file-registry.proof": Proof,
     },
     additional_derives: [stdlib::Wavey, serde::Deserialize],

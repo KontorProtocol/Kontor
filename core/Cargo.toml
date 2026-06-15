@@ -98,6 +98,11 @@ arc-malachitebft-wal = { git = "https://github.com/KontorProtocol/malachite", re
 # onto specific WIT record fields/types. Drop once upstreamed (rust-lang/wit-bindgen).
 [patch.crates-io]
 wit-bindgen-rust = { git = "https://github.com/wilfreddenton/wit-bindgen", rev = "2a872647adb6adec4dcd7c0504e73d3b26acb241" }
+# LOCAL/TEMPORARY: stateless PoR verification (verify_stateless / aggregate_root)
+# for moving the file registry into contract storage. Points at a sibling checkout
+# — do NOT land on main as-is; repoint to a published version or git rev first.
+kontor-crypto = { path = "../../Kontor-Crypto/crates/kontor-crypto" }
+kontor-crypto-core = { path = "../../Kontor-Crypto/crates/kontor-crypto-core" }
 wit-bindgen-rust-macro = { git = "https://github.com/wilfreddenton/wit-bindgen", rev = "2a872647adb6adec4dcd7c0504e73d3b26acb241" }
 
 # Optimize the proof-system crates even in dev/test builds. Proof

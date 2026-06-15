@@ -29,11 +29,6 @@ impl<E: Executor> Reactor<E> {
         rollback_to_height(&self.db_conn(), height)
             .await
             .context("rollback_to_height failed")?;
-        self.runtime
-            .file_ledger
-            .force_resync_from_db(&self.runtime.storage.conn)
-            .await
-            .context("file_ledger resync after rollback failed")?;
         // Cascade-deleted contracts free their ids for reuse by replayed
         // publishes; drop cached components so none is served stale WASM.
         self.runtime.component_cache.clear();

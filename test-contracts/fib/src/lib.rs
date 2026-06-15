@@ -10,9 +10,19 @@ struct FibValue {
     pub value: u64,
 }
 
+// A storage enum (unit + payload variants) to exercise an enum-valued `Deque`.
+#[derive(Clone, Storage)]
+enum Step {
+    Start,
+    Value(u64),
+}
+
 #[derive(Clone, Default, StorageRoot)]
 struct FibStorage {
     pub cache: Map<u64, FibValue>,
+    // Exercise struct- and enum-valued `Deque`s (see `init`).
+    pub history: Deque<FibValue>,
+    pub steps: Deque<Step>,
 }
 
 impl Fib {
@@ -45,8 +55,41 @@ impl Guest for Fib {
     fn init(ctx: &ProcContext) -> Contract {
         FibStorage {
             cache: Map::new(&[(0, FibValue { value: 0 })]),
+            history: Deque::default(),
+            steps: Deque::default(),
         }
         .init(ctx);
+
+        // Enum-valued Deque: get/iter return the enum MODEL (`load()` it), pop
+        // returns the owned enum VALUE. Same uniform value-model interface as the
+        // struct case — no special handling in the Deque codegen.
+        let s = ctx.model().steps();
+        s.push_back(Step::Start);
+        s.push_back(Step::Value(42));
+        assert_eq!(s.len(), 2);
+        assert!(matches!(s.get(1).map(|m| m.load()), Some(Step::Value(42))));
+        assert!(matches!(s.pop_front(), Some(Step::Start)));
+        assert!(matches!(s.pop_back(), Some(Step::Value(42))));
+        assert!(s.is_empty());
+
+        // Exercise a struct-valued `Deque` end-to-end at publish time: push (both
+        // ends), index/iter via the value MODEL, and pop (returns the owned VALUE,
+        // materialized via `load()`). A regression traps here and fails any test
+        // that publishes this contract.
+        let h = ctx.model().history();
+        h.push_back(FibValue { value: 1 });
+        h.push_back(FibValue { value: 2 });
+        h.push_front(FibValue { value: 0 }); // [0, 1, 2]
+        assert_eq!(h.len(), 3);
+        assert_eq!(h.get(0).map(|m| m.value()), Some(0));
+        assert_eq!(h.back().map(|m| m.value()), Some(2));
+        let collected: Vec<u64> = h.iter().map(|m| m.value()).collect();
+        assert_eq!(collected, [0, 1, 2]);
+        assert_eq!(h.pop_front().map(|v| v.value), Some(0)); // pop → owned value
+        assert_eq!(h.pop_back().map(|v| v.value), Some(2));
+        assert_eq!(h.len(), 1);
+        assert_eq!(h.get(0).map(|m| m.value()), Some(1));
+
         ctx.contract()
     }
 

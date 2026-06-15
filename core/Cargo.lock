@@ -4046,8 +4046,6 @@ dependencies = [
 [[package]]
 name = "kontor-crypto"
 version = "0.2.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ba64047d9983ee210dd9af9f0132c38c5973858e6d74c4ab0f0fa520c94f4caa"
 dependencies = [
  "bincode",
  "blake2b_simd",
@@ -4073,8 +4071,6 @@ dependencies = [
 [[package]]
 name = "kontor-crypto-core"
 version = "0.2.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3c69296ba68591d88f4e9339c09e528488d0d8bcb20b2fd4cf75e835091f29d2"
 dependencies = [
  "blake2b_simd",
  "constant_time_eq 0.3.1",

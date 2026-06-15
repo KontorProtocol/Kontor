@@ -299,6 +299,26 @@ interface file-registry-types {
         original-size: u64,
         filename: string,
     }
+
+    // Proof-verification data types. Kept here (with `raw-file-descriptor`) rather
+    // than in the native-only `file-registry` interface so `challenge-input` and
+    // its `raw-file-descriptor` field generate their storage models in the SAME
+    // module — a cross-interface record field can't yet resolve its `…Model`
+    // (see `get_model_ident`). The `verify` *function* stays native-only.
+    record challenge-input {
+        challenge-id: string,
+        file: raw-file-descriptor,
+        block-height: u64,
+        num-challenges: u64,
+        seed: list<u8>,
+        prover-id: u64,
+    }
+
+    enum verify-result {
+        verified,
+        rejected,
+        invalid,
+    }
 }
 
 world built-in {

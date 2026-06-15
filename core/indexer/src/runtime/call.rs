@@ -323,7 +323,6 @@ impl Runtime {
             .await
             .map_err(|e| ExecutionError::Deterministic(e.into()))?;
         self.storage.savepoint().await?;
-        self.file_ledger.clear_dirty().await;
 
         Ok((
             store,
@@ -452,12 +451,6 @@ impl Runtime {
                 .rollback()
                 .await
                 .map_err(|e| ExecutionError::NonDeterministic(e.context("rollback failed")))?;
-            self.file_ledger
-                .resync_from_db(&self.storage.conn)
-                .await
-                .map_err(|e| {
-                    ExecutionError::NonDeterministic(e.context("file ledger resync failed"))
-                })?;
         } else {
             self.storage
                 .commit()

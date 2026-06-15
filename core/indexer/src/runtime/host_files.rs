@@ -1,6 +1,10 @@
 use anyhow::Result;
 use hkdf::Hkdf;
+use kontor_crypto::{
+    FieldElement, FileDescriptor as _, KontorPoRError, aggregate_root_from_files, verify_stateless,
+};
 use sha2::Sha256;
+use std::collections::HashSet;
 use wasmtime::component::{Accessor, Resource};
 
 use super::{
@@ -12,76 +16,37 @@ use super::{
 };
 
 impl Runtime {
-    async fn _add_file<T>(
+    async fn _aggregate_root<T>(
         &self,
         accessor: &Accessor<T, Self>,
-        file_descriptor: Resource<FileDescriptor>,
-    ) -> Result<()> {
-        Fuel::AddFile.consume(accessor, self.gauge.as_ref()).await?;
-        let table = self.table.lock().await;
-        let file_metadata_row = table.get(&file_descriptor)?.file_metadata_row.clone();
-        self.file_ledger
-            .add_file(&self.storage.conn, &file_metadata_row)
-            .await
-    }
-
-    async fn _file_id<T>(
-        &self,
-        accessor: &Accessor<T, Self>,
-        rep: Resource<FileDescriptor>,
-    ) -> Result<String> {
-        Fuel::GetFileId
-            .consume(accessor, self.gauge.as_ref())
-            .await?;
-        let table = self.table.lock().await;
-        let file_id = table.get(&rep)?.file_metadata_row.file_id.clone();
-
-        Ok(file_id)
-    }
-
-    async fn _get_file_descriptor<T>(
-        &self,
-        accessor: &Accessor<T, Self>,
-        file_id: String,
-    ) -> Result<Option<Resource<FileDescriptor>>> {
-        Fuel::GetFileDescriptor
+        files: Vec<RawFileDescriptor>,
+    ) -> Result<Result<Vec<u8>, Error>> {
+        Fuel::AggregateRoot(files.len() as u64)
             .consume(accessor, self.gauge.as_ref())
             .await?;
 
-        let fd = self
-            .file_ledger
-            .get_file_descriptor(&self.storage.conn, &file_id)
-            .await?;
-        let mut table = self.table.lock().await;
-        match fd {
-            Some(file_descriptor) => Ok(Some(table.push(file_descriptor)?)),
-            None => Ok(None),
+        let mut rows = Vec::with_capacity(files.len());
+        for raw in files {
+            match FileDescriptor::try_from_raw(raw, 0) {
+                Ok(fd) => rows.push(fd.file_metadata_row),
+                Err(e) => return Ok(Err(e)),
+            }
         }
-    }
-
-    async fn _from_raw<T>(
-        &self,
-        accessor: &Accessor<T, Self>,
-        raw: RawFileDescriptor,
-    ) -> Result<Result<Resource<FileDescriptor>, Error>> {
-        Fuel::FromRawFileDescriptor
-            .consume(accessor, self.gauge.as_ref())
-            .await?;
-
-        let mut table = self.table.lock().await;
-
-        Ok(
-            match FileDescriptor::try_from_raw(raw, self.storage.height) {
-                Ok(fd) => Ok(table.push(fd)?),
-                Err(error) => Err(error),
-            },
-        )
+        // Canonical order = lexicographic file_id (matches kontor-crypto's BTreeMap),
+        // so the recomputed root is independent of the order the contract passed.
+        rows.sort_by(|a, b| a.file_id.cmp(&b.file_id));
+        let files_rd: Vec<(FieldElement, usize)> =
+            rows.iter().map(|r| (r.root(), r.depth())).collect();
+        match aggregate_root_from_files(&files_rd) {
+            Ok(root) => Ok(Ok(root.to_vec())),
+            Err(e) => Ok(Err(Error::Validation(format!("aggregate-root failed: {}", e)))),
+        }
     }
 
     async fn _compute_challenge_id<T>(
         &self,
         accessor: &Accessor<T, Self>,
-        rep: Resource<FileDescriptor>,
+        file: RawFileDescriptor,
         block_height: u64,
         num_challenges: u64,
         seed: Vec<u8>,
@@ -91,10 +56,11 @@ impl Runtime {
             .consume(accessor, self.gauge.as_ref())
             .await?;
 
-        let table = self.table.lock().await;
-        let file_descriptor = table.get(&rep)?;
-
-        Ok(file_descriptor.compute_challenge_id(block_height, num_challenges, &seed, prover_id))
+        let fd = match FileDescriptor::try_from_raw(file, 0) {
+            Ok(fd) => fd,
+            Err(e) => return Ok(Err(e)),
+        };
+        Ok(fd.compute_challenge_id(block_height, num_challenges, &seed, prover_id))
     }
 
     async fn _proof_from_bytes<T>(
@@ -132,6 +98,7 @@ impl Runtime {
         accessor: &Accessor<T, Self>,
         rep: Resource<wit::Proof>,
         challenge_inputs: Vec<ChallengeInput>,
+        valid_roots: Vec<Vec<u8>>,
     ) -> Result<Result<VerifyResult, Error>> {
         Fuel::ProofVerify
             .consume(accessor, self.gauge.as_ref())
@@ -140,22 +107,14 @@ impl Runtime {
         let table = self.table.lock().await;
         let proof = table.get(&rep)?;
 
+        // Each input carries the file's full metadata (from the contract's own
+        // `agreement-data`), so we build the challenges directly — no host lookup.
         let mut challenges = Vec::new();
         for input in &challenge_inputs {
-            let fd = match self
-                .file_ledger
-                .get_file_descriptor(&self.storage.conn, &input.file_id)
-                .await?
-            {
-                Some(fd) => fd,
-                None => {
-                    return Ok(Err(Error::Validation(format!(
-                        "File not found: {}",
-                        input.file_id
-                    ))));
-                }
+            let fd = match FileDescriptor::try_from_raw(input.file.clone(), 0) {
+                Ok(fd) => fd,
+                Err(e) => return Ok(Err(e)),
             };
-
             match fd.build_challenge(
                 input.block_height,
                 input.num_challenges,
@@ -167,36 +126,36 @@ impl Runtime {
             }
         }
 
-        let result = self
-            .file_ledger
-            .verify_proof(&proof.inner, &challenges)
-            .await;
-
-        match result {
-            Ok(true) => Ok(Ok(VerifyResult::Verified)),
-            Ok(false) => Ok(Ok(VerifyResult::Rejected)),
-            Err(e) => {
-                use kontor_crypto::KontorPoRError;
-                match e {
-                    KontorPoRError::InvalidInput(_)
-                    | KontorPoRError::InvalidChallengeCount { .. }
-                    | KontorPoRError::FileNotInLedger { .. } => Ok(Ok(VerifyResult::Invalid)),
-
-                    KontorPoRError::Snark(_) => Ok(Ok(VerifyResult::Rejected)),
-
-                    KontorPoRError::InvalidLedgerRoot { proof_root, reason } => {
-                        Ok(Err(Error::Validation(format!(
-                            "Invalid ledger root in proof: {} - {}",
-                            proof_root, reason
-                        ))))
-                    }
-
-                    other => Ok(Err(Error::Validation(format!(
-                        "Unexpected verification error: {}",
-                        other
-                    )))),
+        let mut roots = HashSet::with_capacity(valid_roots.len());
+        for r in &valid_roots {
+            match <[u8; 32]>::try_from(r.as_slice()) {
+                Ok(arr) => {
+                    roots.insert(arr);
+                }
+                Err(_) => {
+                    return Ok(Err(Error::Validation(
+                        "valid-root must be 32 bytes".to_string(),
+                    )));
                 }
             }
+        }
+
+        match verify_stateless(&challenges, &proof.inner, &roots) {
+            Ok(true) => Ok(Ok(VerifyResult::Verified)),
+            Ok(false) => Ok(Ok(VerifyResult::Rejected)),
+            Err(KontorPoRError::InvalidInput(_))
+            | Err(KontorPoRError::InvalidChallengeCount { .. }) => Ok(Ok(VerifyResult::Invalid)),
+            Err(KontorPoRError::Snark(_)) => Ok(Ok(VerifyResult::Rejected)),
+            Err(KontorPoRError::InvalidLedgerRoot { proof_root, reason }) => Ok(Err(
+                Error::Validation(format!(
+                    "Invalid ledger root in proof: {} - {}",
+                    proof_root, reason
+                )),
+            )),
+            Err(other) => Ok(Err(Error::Validation(format!(
+                "Unexpected verification error: {}",
+                other
+            )))),
         }
     }
 
@@ -278,61 +237,20 @@ impl built_in::testing::HostWithStore for Runtime {
 
 impl built_in::file_registry::Host for Runtime {}
 
-impl built_in::file_registry::HostFileDescriptor for Runtime {}
-
 impl built_in::file_registry::HostWithStore for Runtime {
-    async fn add_file<T>(
+    async fn aggregate_root<T>(
         accessor: &Accessor<T, Self>,
-        file_descriptor: Resource<FileDescriptor>,
-    ) -> Result<()> {
+        files: Vec<RawFileDescriptor>,
+    ) -> Result<Result<Vec<u8>, Error>> {
         accessor
             .with(|mut access| access.get().clone())
-            ._add_file(accessor, file_descriptor)
-            .await
-    }
-
-    async fn get_file_descriptor<T>(
-        accessor: &Accessor<T, Self>,
-        file_id: String,
-    ) -> Result<Option<Resource<FileDescriptor>>> {
-        accessor
-            .with(|mut access| access.get().clone())
-            ._get_file_descriptor(accessor, file_id)
-            .await
-    }
-}
-
-impl built_in::file_registry::HostFileDescriptorWithStore for Runtime {
-    async fn drop<T>(accessor: &Accessor<T, Self>, rep: Resource<FileDescriptor>) -> Result<()> {
-        accessor
-            .with(|mut access| access.get().clone())
-            ._drop(rep)
-            .await
-    }
-
-    async fn file_id<T>(
-        accessor: &Accessor<T, Self>,
-        rep: Resource<FileDescriptor>,
-    ) -> Result<String> {
-        accessor
-            .with(|mut access| access.get().clone())
-            ._file_id(accessor, rep)
-            .await
-    }
-
-    async fn from_raw<T>(
-        accessor: &Accessor<T, Self>,
-        raw: RawFileDescriptor,
-    ) -> Result<Result<Resource<FileDescriptor>, Error>> {
-        accessor
-            .with(|mut access| access.get().clone())
-            ._from_raw(accessor, raw)
+            ._aggregate_root(accessor, files)
             .await
     }
 
     async fn compute_challenge_id<T>(
         accessor: &Accessor<T, Self>,
-        rep: Resource<FileDescriptor>,
+        file: RawFileDescriptor,
         block_height: u64,
         num_challenges: u64,
         seed: Vec<u8>,
@@ -340,7 +258,7 @@ impl built_in::file_registry::HostFileDescriptorWithStore for Runtime {
     ) -> Result<Result<String, Error>> {
         accessor
             .with(|mut access| access.get().clone())
-            ._compute_challenge_id(accessor, rep, block_height, num_challenges, seed, prover_id)
+            ._compute_challenge_id(accessor, file, block_height, num_challenges, seed, prover_id)
             .await
     }
 }
@@ -378,11 +296,12 @@ impl built_in::file_registry::HostProofWithStore for Runtime {
     async fn verify<T>(
         accessor: &Accessor<T, Self>,
         rep: Resource<wit::Proof>,
-        challenges: Vec<built_in::file_registry::ChallengeInput>,
+        challenges: Vec<built_in::file_registry_types::ChallengeInput>,
+        valid_roots: Vec<Vec<u8>>,
     ) -> Result<Result<VerifyResult, Error>> {
         accessor
             .with(|mut access| access.get().clone())
-            ._proof_verify(accessor, rep, challenges)
+            ._proof_verify(accessor, rep, challenges, valid_roots)
             .await
     }
 }

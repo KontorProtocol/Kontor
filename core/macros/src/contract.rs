@@ -172,6 +172,7 @@ pub fn generate(config: Config) -> TokenStream {
 
         type Map<K, V> = stdlib::StorageMap<K, V, context::ProcStorage>;
         type IndexedMap<K, V> = stdlib::StorageIndexedMap<K, V, context::ProcStorage>;
+        type Deque<V> = stdlib::StorageDeque<V, context::ProcStorage>;
 
         fn BURNER() -> Holder {
             Holder::from_ref(&context::HolderRef::Burner).unwrap()
