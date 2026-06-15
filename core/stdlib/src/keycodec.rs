@@ -16,10 +16,21 @@
 //! Tags (see also the reserved-space map in the design doc):
 //! ```text
 //!   0x00            terminator / escape sentinel (never a tag)
-//!   0x01 bytes   0x02 string   0x05 nested tuple
+//!   0x01 bytes   0x02 string   0x05 nested tuple   0x06 dict-ref
 //!   0x0C – 0x1C   integer (sign + minimal byte-length; 0x14 == zero)
 //!   0x26 false   0x27 true   0x28 none   0x29 some
 //! ```
+//!
+//! A **dict-ref** (`0x06`) is a one-byte interned id standing in for a structural
+//! path segment (a struct field / map / index name) whose string is fixed at
+//! compile time — the contract's macro assigns each such name a per-type
+//! declaration-order id and emits the id instead of the string, shrinking
+//! `field/amount/...` keys from full UTF-8 to two bytes. The id↔name mapping lives
+//! ONLY in the contract's wasm (forward as inlined constants, reverse as an
+//! optional debug table); the host never needs it — it treats a dict-ref as an
+//! opaque fixed-width element. Dict-refs appear only at "structural" levels (a
+//! struct's fields), never mixed with the dynamic keys that `keys()` iterates, so
+//! their byte order (== id order) is never observed as a sorted set.
 
 use alloc::string::String;
 use alloc::vec::Vec;
@@ -27,6 +38,8 @@ use alloc::vec::Vec;
 const TAG_BYTES: u8 = 0x01;
 const TAG_STR: u8 = 0x02;
 const TAG_TUPLE: u8 = 0x05;
+const TAG_DICT: u8 = 0x06; // interned structural-name reference (tag + 1-byte id)
+const DICT_LEN: usize = 1; // id width (≤ 256 interned names per type)
 const TAG_INT_ZERO: u8 = 0x14; // 0x14-n .. 0x14 .. 0x14+n
 const TAG_INT_MIN: u8 = 0x0C; // 8-byte negative
 const TAG_INT_MAX: u8 = 0x1C; // 8-byte positive
@@ -423,6 +436,29 @@ macro_rules! key_element_via_display {
     };
 }
 
+// ── interned structural-name references (dict-refs) ─────────────────────────
+// A compile-time-interned path segment: `TAG_DICT + id`. Not a `KeyElement` (no
+// Rust value round-trips through it); it's emitted directly by the macro for
+// structural names via [`crate::KeyPath::push_interned`]. See the module header.
+
+/// Append a dict-ref element (2 bytes) for interned id `id`.
+pub fn encode_dict(out: &mut Vec<u8>, id: u8) {
+    out.push(TAG_DICT);
+    out.push(id);
+}
+
+/// Decode a dict-ref written by [`encode_dict`], returning `(id, rest)`.
+pub fn decode_dict(bytes: &[u8]) -> Result<(u8, &[u8]), CodecError> {
+    match bytes.first() {
+        Some(&TAG_DICT) => {
+            let id = *bytes.get(1).ok_or(CodecError::Truncated)?;
+            Ok((id, &bytes[1 + DICT_LEN..]))
+        }
+        Some(&other) => Err(CodecError::UnexpectedTag(other)),
+        None => Err(CodecError::Truncated),
+    }
+}
+
 // ── schema-agnostic helpers (host side) ────────────────────────────────────
 
 /// Split the first complete element off `bytes`, returning `(element, rest)`
@@ -436,6 +472,7 @@ pub fn next_element(bytes: &[u8]) -> Result<(&[u8], &[u8]), CodecError> {
         TAG_SOME => 1 + next_element(&bytes[1..])?.0.len(),
         TAG_INT_MIN..=TAG_INT_MAX => 1 + (tag.abs_diff(TAG_INT_ZERO)) as usize,
         TAG_NUM_NEG | TAG_NUM_POS => 1 + NUM_LEN,
+        TAG_DICT => 1 + DICT_LEN,
         TAG_BYTES | TAG_STR => 1 + blob_body_len(&bytes[1..])?,
         TAG_TUPLE => 1 + tuple_body_len(&bytes[1..])?,
         other => return Err(CodecError::UnexpectedTag(other)),
@@ -509,6 +546,12 @@ fn render_element(elem: &[u8]) -> String {
         },
         Some(&TAG_BYTES) => match <Vec<u8>>::decode_from(elem) {
             Ok((content, _)) => hex(&content),
+            Err(_) => hex(elem),
+        },
+        // Interned structural name: the string lives only in the contract wasm,
+        // so debug rendering (host side) can only show the id.
+        Some(&TAG_DICT) => match decode_dict(elem) {
+            Ok((id, _)) => alloc::format!("#{id}"),
             Err(_) => hex(elem),
         },
         Some(&TAG_FALSE) => String::from("false"),
@@ -856,6 +899,40 @@ mod tests {
         for w in encs.windows(2) {
             assert!(w[0] < w[1], "encoded order must match numeric order");
         }
+    }
+
+    #[test]
+    fn dict_ref_roundtrip_and_walks() {
+        for id in [0u8, 1, 7, 42, 200, 255] {
+            let mut bytes = Vec::new();
+            encode_dict(&mut bytes, id);
+            assert_eq!(bytes.len(), 2); // tag + 1-byte id
+
+            let (got, rest) = decode_dict(&bytes).unwrap();
+            assert_eq!(got, id);
+            assert!(rest.is_empty());
+
+            // next_element treats it as one fixed-width element.
+            let (elem, tail) = next_element(&bytes).unwrap();
+            assert_eq!(elem, &bytes[..]);
+            assert!(tail.is_empty());
+        }
+
+        // Order among dict-refs is id order (a structural-level property, not
+        // consensus-relevant, but it must at least be well-defined).
+        let mut a = Vec::new();
+        encode_dict(&mut a, 3);
+        let mut b = Vec::new();
+        encode_dict(&mut b, 7);
+        assert!(a < b);
+
+        // A dict-ref interleaves with other elements in a multi-segment path and
+        // debug-renders by id (the name lives only in the contract wasm).
+        let mut path = Vec::new();
+        encode_dict(&mut path, 5);
+        7u64.encode_to(&mut path);
+        encode_dict(&mut path, 0);
+        assert_eq!(debug_render(&path), "#5/7/#0");
     }
 
     #[test]
