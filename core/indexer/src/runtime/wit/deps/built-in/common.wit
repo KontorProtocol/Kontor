@@ -76,11 +76,13 @@ interface context {
         get-s64: async func(path: list<u8>) -> option<s64>;
         get-bool: async func(path: list<u8>) -> option<bool>;
         get-list-u8: async func(path: list<u8>) -> option<list<u8>>;
-        // Distinct child keys under `path`, as a lazy cursor. `after` is a full-path
-        // resume cursor for CROSS-CALL pagination (the scan continues strictly past
-        // it; none = start of subtree). Within a call there is no bound to pass: the
-        // `keys` resource streams off the index, so the guest bounds host work by how
-        // far it iterates (`take(n)`/early-break, or for procs running out of gas).
+        // Distinct child keys under `path`, as a lazy cursor. `after` is a CROSS-CALL
+        // resume cursor: the full path of the last child node already returned (the
+        // last key re-encoded as `path ++ key`); the scan resumes past that child's
+        // WHOLE subtree, so a multi-row child is not re-emitted. none = start of
+        // subtree. Within a call there is no bound to pass: the `keys` resource
+        // streams off the index, so the guest bounds host work by how far it iterates
+        // (`take(n)`/early-break, or for procs running out of gas).
         get-keys: async func(path: list<u8>, after: option<list<u8>>) -> keys;
         exists: async func(path: list<u8>) -> bool;
         // Resolve which discriminant is current under `path`. `candidates` are the

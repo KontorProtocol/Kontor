@@ -288,10 +288,15 @@ pub async fn exists_contract_state(
 /// elements are adjacent and deduped in one pass. Each yielded item is the child
 /// element's codec bytes; the guest decodes it to `K`.
 ///
-/// `after` is a full-path resume cursor (`None` = start of subtree): the scan
-/// continues strictly past it. It exists for CROSS-CALL pagination — a view that
-/// returns one page hands its last key back as the next call's `after`. WITHIN a
-/// call the bound is the lazy iterator itself, not SQL: the `NOT EXISTS`
+/// `after` is the full path of the last CHILD NODE already returned (`None` = start
+/// of subtree); the scan resumes past that child's ENTIRE subtree. It exists for
+/// CROSS-CALL pagination — a view returns a page of keys and, to continue, re-encodes
+/// its last key as `path ++ last_child` and passes it back as `after`. The skip is
+/// `cs.path >= strinc(after)`, NOT `cs.path > after`: a child can own deeper rows
+/// (`path/child/field…`), and `path/child` sorts BEFORE them, so `> path/child` would
+/// re-scan the child's own rows and re-emit it; `strinc(after)` is the first path past
+/// all of `after`'s descendants, landing on the next sibling. WITHIN a call the bound
+/// is the lazy iterator itself, not SQL: the `NOT EXISTS`
 /// formulation (see [`live_paths_scan`]) is index-served, so `ORDER BY path`
 /// streams off the index and each `Rows::next()` steps incrementally — the guest's
 /// `take(n)`/early-break (and, for procs, running out of per-row gas) stops the
@@ -307,14 +312,20 @@ pub async fn path_prefix_filter_contract_state(
     path: Vec<u8>,
     after: Option<Vec<u8>>,
 ) -> Result<impl Stream<Item = Result<Vec<u8>, Error>> + Send + 'static, Error> {
-    // `path > :lo` excludes the exact node (no child element); the cursor `after`
-    // (a full path) resumes strictly past the last page. `< :hi` is the subtree's
-    // own `strinc(path)` bound. Ordered by `path` so children are grouped for dedup
-    // and the indexed range can stream lazily.
-    let lo = after.unwrap_or_else(|| path.clone());
+    // Lower bound of the scan. No cursor: `path > :lo` (children only, exclude the
+    // node). With a cursor: `strinc(after)` skips `after`'s whole subtree and the
+    // scan is `cs.path >= :lo`, so a multi-row child isn't re-read and re-emitted
+    // (see the fn doc). `strinc` is `None` only for an all-`0xFF` path, which isn't
+    // well-formed codec bytes (rejected upstream by `validate_path`), so the
+    // fallback is unreachable. `< :hi` is the subtree's own `strinc(path)` bound;
+    // ordered by `path` so children are grouped for dedup and the range streams.
+    let (lo, lo_cmp): (Vec<u8>, &str) = match after {
+        None => (path.clone(), ">"),
+        Some(after) => (strinc(&after).unwrap_or(after), ">="),
+    };
     let (query, params) = live_paths_scan(
         "cs.path",
-        ">",
+        lo_cmp,
         contract_id,
         lo,
         &path,

@@ -1741,8 +1741,8 @@ async fn test_path_prefix_filter_after_cursor_resumes() -> Result<()> {
         ]
     );
 
-    // Resume strictly after the full path `m/k2` (a consumer that read two and
-    // came back for more): the remaining members, no overlap with the first two.
+    // Resume after child `k2` (cursor = its child-node path `m/k2`): the remaining
+    // members, no overlap with the first two.
     let rest: Vec<Vec<u8>> =
         path_prefix_filter_contract_state(&conn, cid, cs_path(&["m"]), Some(cs_path(&["m", "k2"])))
             .await?
@@ -1752,6 +1752,75 @@ async fn test_path_prefix_filter_after_cursor_resumes() -> Result<()> {
         rest,
         vec![cs_path(&["k3"]), cs_path(&["k4"]), cs_path(&["k5"])]
     );
+
+    Ok(())
+}
+
+// Regression: a cursor resume must skip the last child's ENTIRE subtree, not just
+// the bare child-node path. Here each child owns several deeper rows (a struct/map
+// value), so resuming with `after = m/a` must NOT re-read `m/a/*` and re-emit `a`.
+// The old `cs.path > after` bound did exactly that (`m/a` sorts before `m/a/f1`);
+// `cs.path >= strinc(after)` fixes it.
+#[tokio::test]
+async fn test_after_cursor_skips_whole_child_subtree() -> Result<()> {
+    let (_reader, writer, _temp) = new_test_db().await?;
+    let conn = writer.connection();
+    let h = 600000;
+    insert_block(
+        &conn,
+        BlockRow::builder()
+            .height(h)
+            .hash(new_mock_block_hash(h as u32))
+            .build(),
+    )
+    .await?;
+    let tx = insert_transaction(
+        &conn,
+        TransactionRow::builder()
+            .height(h)
+            .txid(format!("dddd{:060}", 0))
+            .tx_index(0)
+            .confirmed_height(h)
+            .build(),
+    )
+    .await?;
+    let cid = 1;
+    // Map `m` of multi-field struct values: each child owns several deeper rows.
+    for (child, field) in [
+        ("a", "f1"),
+        ("a", "f2"),
+        ("b", "f1"),
+        ("b", "f2"),
+        ("c", "f1"),
+    ] {
+        insert_contract_state(
+            &conn,
+            ContractStateRow::builder()
+                .contract_id(cid)
+                .tx_id(tx)
+                .height(h)
+                .path(cs_path(&["m", child, field]))
+                .value(vec![1])
+                .build(),
+        )
+        .await?;
+    }
+
+    // No cursor: the three distinct child keys, deduped across their subtrees.
+    let all: Vec<Vec<u8>> = path_prefix_filter_contract_state(&conn, cid, cs_path(&["m"]), None)
+        .await?
+        .try_collect()
+        .await?;
+    assert_eq!(all, vec![cs_path(&["a"]), cs_path(&["b"]), cs_path(&["c"])]);
+
+    // Resume after child `a` (cursor = its child-node path `m/a`): must skip ALL of
+    // a's deeper rows and not re-emit `a`.
+    let rest: Vec<Vec<u8>> =
+        path_prefix_filter_contract_state(&conn, cid, cs_path(&["m"]), Some(cs_path(&["m", "a"])))
+            .await?
+            .try_collect()
+            .await?;
+    assert_eq!(rest, vec![cs_path(&["b"]), cs_path(&["c"])]);
 
     Ok(())
 }
