@@ -67,7 +67,7 @@ fn subtree_range(lo_cmp: &str, prefix: &[u8]) -> (String, Vec<(String, Value)>) 
 /// pre-rank filter. Every current-state read of a path set goes through here, so
 /// the tombstone semantics are decided in exactly one place. `order` is for the
 /// callers that consume rows positionally and need a deterministic order.
-fn live_latest(select: &str, filter: &str, order: Option<&str>, limit: Option<u64>) -> String {
+fn live_latest(select: &str, filter: &str, order: Option<&str>) -> String {
     LatestMany::builder()
         .table("contract_state")
         .select(select)
@@ -75,9 +75,39 @@ fn live_latest(select: &str, filter: &str, order: Option<&str>, limit: Option<u6
         .post("deleted = false")
         .filter(filter)
         .maybe_order_by(order)
-        .maybe_limit(limit)
         .build()
         .to_sql()
+}
+
+/// The LIVE-PATHS scan, reformulated from the `live_latest` window to `NOT EXISTS`
+/// (newest non-deleted per path = `deleted = 0` AND no higher-height row for the
+/// same path). This lets the `(contract_id, path, height DESC)` index serve BOTH
+/// the ordered outer scan AND the covering "newer height?" probe, so `ORDER BY
+/// path` + `LIMIT` STREAM and terminate early (≈O(limit)) instead of materializing
+/// and sorting the whole range like the window does. Deterministic with NO `rowid`
+/// tiebreak: `UNIQUE(contract_id, height, path)` makes the max-height row per path
+/// unique, so the per-path liveness is unambiguous (and a sibling tombstone can't
+/// hide a live sibling — each row checks only its own path). Same live set and path
+/// order as the window form, so it's a drop-in for the SET reads (`keys`, `exists`).
+/// `lo_cmp` is `>` (children only — `keys`) or `>=` (include the node — `exists`).
+fn live_paths_query(
+    select: &str,
+    lo_cmp: &str,
+    has_hi: bool,
+    order: Option<&str>,
+    limit: Option<u64>,
+) -> String {
+    let hi = if has_hi { " AND cs.path < :hi" } else { "" };
+    let order = order.map(|o| format!(" ORDER BY {o}")).unwrap_or_default();
+    let limit = limit.map(|n| format!(" LIMIT {n}")).unwrap_or_default();
+    format!(
+        "SELECT {select} FROM contract_state AS cs \
+         WHERE cs.contract_id = :contract_id AND cs.path {lo_cmp} :lo{hi} AND cs.deleted = 0 \
+           AND NOT EXISTS ( \
+             SELECT 1 FROM contract_state AS n \
+             WHERE n.contract_id = cs.contract_id AND n.path = cs.path AND n.height > cs.height \
+           ){order}{limit}"
+    )
 }
 
 pub async fn insert_contract_state(conn: &Connection, row: ContractStateRow) -> Result<u64, Error> {
@@ -118,7 +148,6 @@ pub async fn get_latest_contract_state(
                 "contract_id, height, tx_id, path, value, deleted",
                 "contract_id = :contract_id AND path = :path",
                 None,
-                None,
             ),
             (
                 (":contract_id", contract_id),
@@ -141,7 +170,6 @@ pub async fn get_latest_contract_state_value(
             &live_latest(
                 "CASE WHEN size <= :fuel THEN value ELSE null END AS value",
                 "contract_id = :contract_id AND path = :path",
-                None,
                 None,
             ),
             (
@@ -189,7 +217,6 @@ pub async fn delete_contract_state(
         "contract_id, height, tx_id, path, value, deleted",
         &format!("contract_id = :contract_id AND {range}"),
         None,
-        None,
     );
     let mut result = conn.query(&query, params).await?;
 
@@ -215,21 +242,20 @@ pub async fn exists_contract_state(
     contract_id: u64,
     path: &[u8],
 ) -> Result<bool, Error> {
-    // "Any live path at/under `path`". Per-path liveness is load-bearing here: a
-    // single newest tombstone (e.g. an IndexedMap index `__delete` under
-    // `<map>#idx`) must not hide sibling paths that are still live — which is
-    // exactly what `live_latest` (per-path rank + post `deleted = false`) gives.
-    let (range, mut params) = subtree_range(">=", path);
-    params.push((
-        ":contract_id".to_string(),
-        Value::Integer(contract_id as i64),
-    ));
-    let query = live_latest(
-        "1",
-        &format!("contract_id = :contract_id AND {range}"),
-        None,
-        None,
-    );
+    // "Any live path at/under `path`". `NOT EXISTS` + `LIMIT 1` stops at the FIRST
+    // live row instead of ranking the whole subtree. Per-path liveness is inherent
+    // (each row checks only its own path for a newer version), so a single newest
+    // tombstone — e.g. an IndexedMap index `__delete` under `<map>#idx` — can't hide
+    // a still-live sibling.
+    let hi = strinc(path);
+    let mut params = vec![
+        (":lo".to_string(), Value::Blob(path.to_vec())),
+        (":contract_id".to_string(), Value::Integer(contract_id as i64)),
+    ];
+    if let Some(hi) = &hi {
+        params.push((":hi".to_string(), Value::Blob(hi.clone())));
+    }
+    let query = live_paths_query("1", ">=", hi.is_some(), None, Some(1));
     let mut rows = conn.query(&query, params).await?;
     Ok(rows.next().await?.is_some())
 }
@@ -284,12 +310,24 @@ pub async fn path_prefix_filter_bounded(
         (":lo".to_string(), Value::Blob(lo)),
         (":contract_id".to_string(), Value::Integer(contract_id as i64)),
     ];
-    let mut filter = "contract_id = :contract_id AND path > :lo".to_string();
-    if let Some(hi) = hi {
-        params.push((":hi".to_string(), Value::Blob(hi)));
-        filter.push_str(" AND path < :hi");
+    if let Some(hi) = &hi {
+        params.push((":hi".to_string(), Value::Blob(hi.clone())));
     }
-    let query = live_latest("path", &filter, Some("path"), limit);
+    // With a `LIMIT`, use `NOT EXISTS` so `ORDER BY` streams off the index and stops
+    // early (the whole point of pagination). Without one, a full/unbounded scan
+    // visits every row anyway, so the single-pass window is the safer choice — it
+    // avoids `NOT EXISTS`'s per-row "newer?" probe, which would be a probe PER
+    // accumulated version on a long-lived path. Both yield the identical live set in
+    // identical path order.
+    let query = if limit.is_some() {
+        live_paths_query("cs.path", ">", hi.is_some(), Some("cs.path"), limit)
+    } else {
+        let mut filter = "contract_id = :contract_id AND path > :lo".to_string();
+        if hi.is_some() {
+            filter.push_str(" AND path < :hi");
+        }
+        live_latest("path", &filter, Some("path"))
+    };
     let rows = conn.query(&query, params).await?;
 
     let prefix_len = path.len();

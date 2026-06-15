@@ -41,10 +41,6 @@ pub struct LatestMany<'a> {
     /// positionally and needs the order reproducible across nodes (e.g. a
     /// contract's `keys()` feeding consensus-relevant selection) must set this.
     order_by: Option<&'a str>,
-    /// Outer `LIMIT` — bounds the rows returned (and, with a leading-column
-    /// `order_by` the index can serve, lets the scan terminate early instead of
-    /// ranking the whole range). For paginated/bounded scans.
-    limit: Option<u64>,
 }
 
 impl LatestMany<'_> {
@@ -58,19 +54,18 @@ impl LatestMany<'_> {
             .order_by
             .map(|o| format!(" ORDER BY {o}"))
             .unwrap_or_default();
-        let limit = self
-            .limit
-            .map(|n| format!(" LIMIT {n}"))
-            .unwrap_or_default();
         format!(
             // `rowid` breaks same-height ties deterministically (later insert
             // wins — e.g. the write following an in-tx `delete_matching`), so the
-            // ranked row is reproducible across nodes.
+            // ranked row is reproducible across nodes. Needed for the no-partition
+            // global-newest case (`matching_path`), where same-height rows on
+            // DIFFERENT paths coexist; the partition-by-path callers don't rely on
+            // it (`UNIQUE(contract_id, height, path)` makes height unique per path).
             "SELECT {select} FROM (\n  \
                SELECT *, ROW_NUMBER() OVER ({partition}ORDER BY height DESC, rowid DESC) AS rank\n  \
                FROM {table}\n  \
                WHERE {filter}\n\
-             ) t WHERE rank = 1{post}{order_by}{limit}",
+             ) t WHERE rank = 1{post}{order_by}",
             select = self.select,
             table = self.table,
             filter = self.filter,
