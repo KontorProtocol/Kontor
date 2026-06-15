@@ -250,7 +250,10 @@ pub async fn exists_contract_state(
     let hi = strinc(path);
     let mut params = vec![
         (":lo".to_string(), Value::Blob(path.to_vec())),
-        (":contract_id".to_string(), Value::Integer(contract_id as i64)),
+        (
+            ":contract_id".to_string(),
+            Value::Integer(contract_id as i64),
+        ),
     ];
     if let Some(hi) = &hi {
         params.push((":hi".to_string(), Value::Blob(hi.clone())));
@@ -262,72 +265,49 @@ pub async fn exists_contract_state(
 
 /// Distinct direct-child key elements under `path` whose subtree has a live path
 /// — the `keys()` / `by_index` scan. Range-scans the descendants (`path` strictly
-/// a prefix), `live_latest` decides per-path liveness, and [`next_element`]
-/// recovers each child's first element from the byte after the prefix. Rows arrive
-/// in `path` byte order (== logical order, so deterministic across nodes — a
-/// consensus requirement, since filestorage selects challenge targets by index
-/// position), so equal child elements are adjacent and deduped in one pass. Each
-/// yielded item is the child element's codec bytes; the guest decodes it to `K`.
+/// a prefix), decides per-path liveness, and [`next_element`] recovers each child's
+/// first element from the byte after the prefix. Rows arrive in `path` byte order
+/// (== logical order, so deterministic across nodes — a consensus requirement,
+/// since filestorage selects challenge targets by index position), so equal child
+/// elements are adjacent and deduped in one pass. Each yielded item is the child
+/// element's codec bytes; the guest decodes it to `K`.
+///
+/// `after` is a full-path resume cursor (`None` = start of subtree): the scan
+/// continues strictly past it. It exists for CROSS-CALL pagination — a view that
+/// returns one page hands its last key back as the next call's `after`. WITHIN a
+/// call the bound is the lazy iterator itself, not SQL: the [`NOT EXISTS`]
+/// formulation (see [`live_paths_query`]) is index-served, so `ORDER BY path`
+/// streams off the index and each `Rows::next()` steps incrementally — the guest's
+/// `take(n)`/early-break (and, for procs, running out of per-row gas) stops the
+/// host scan after ~that many rows. The window form would instead materialise and
+/// sort the WHOLE range on the first `next()`, doing unbounded host work for a flat
+/// fee — a gas/DoS hole — which is exactly why this scan uses `NOT EXISTS`
+/// unconditionally and pushes no `LIMIT`. The per-row "newer?" probe `NOT EXISTS`
+/// adds is the price of that laziness, and it's charged: each pulled row costs
+/// `Fuel::KeysNext`.
 pub async fn path_prefix_filter_contract_state(
     conn: &Connection,
     contract_id: u64,
     path: Vec<u8>,
-) -> Result<impl Stream<Item = Result<Vec<u8>, Error>> + Send + 'static, Error> {
-    path_prefix_filter_bounded(conn, contract_id, path, None, None, None).await
-}
-
-/// Bounded/paginated [`path_prefix_filter_contract_state`]: resume strictly after
-/// `after` (a full-path cursor; `None` = start of the subtree), stop at `upper`
-/// (exclusive, tightened against the subtree's own upper; `None` = whole subtree),
-/// and cap at `limit` ROWS.
-///
-/// `limit` is by row — correct for INDEX scans, where each member is one leaf row
-/// (`<bucket>/<member> -> ()`), so `limit = n` yields exactly `n` members. The
-/// primary-Map `keys()` (each child owns a multi-row value subtree) must pass
-/// `None`, or a limit could cut mid-child. The query shape
-/// (`path > :lo [AND path < :hi] ORDER BY path LIMIT n`) is backend-agnostic: a
-/// future current-state projection table serves the identical cursor/limit with
-/// no API change (it just drops the version-log window).
-pub async fn path_prefix_filter_bounded(
-    conn: &Connection,
-    contract_id: u64,
-    path: Vec<u8>,
     after: Option<Vec<u8>>,
-    upper: Option<Vec<u8>>,
-    limit: Option<u64>,
 ) -> Result<impl Stream<Item = Result<Vec<u8>, Error>> + Send + 'static, Error> {
     // `path > :lo` excludes the exact node (no child element); the cursor `after`
-    // (a full path) resumes strictly past the last page. `< :hi` bounds the scan:
-    // the subtree's `strinc(path)` tightened by the caller's `upper`. Ordered by
-    // `path` so children are grouped for dedup and the indexed range can stream.
+    // (a full path) resumes strictly past the last page. `< :hi` is the subtree's
+    // own `strinc(path)` bound. Ordered by `path` so children are grouped for dedup
+    // and the indexed range can stream lazily.
     let lo = after.unwrap_or_else(|| path.clone());
-    let hi = match (strinc(&path), upper) {
-        (Some(s), Some(u)) => Some(core::cmp::min(u, s)),
-        (Some(s), None) => Some(s),
-        (None, u) => u, // empty/all-0xFF prefix: only the caller's upper bounds it
-    };
+    let hi = strinc(&path);
     let mut params = vec![
         (":lo".to_string(), Value::Blob(lo)),
-        (":contract_id".to_string(), Value::Integer(contract_id as i64)),
+        (
+            ":contract_id".to_string(),
+            Value::Integer(contract_id as i64),
+        ),
     ];
     if let Some(hi) = &hi {
         params.push((":hi".to_string(), Value::Blob(hi.clone())));
     }
-    // With a `LIMIT`, use `NOT EXISTS` so `ORDER BY` streams off the index and stops
-    // early (the whole point of pagination). Without one, a full/unbounded scan
-    // visits every row anyway, so the single-pass window is the safer choice — it
-    // avoids `NOT EXISTS`'s per-row "newer?" probe, which would be a probe PER
-    // accumulated version on a long-lived path. Both yield the identical live set in
-    // identical path order.
-    let query = if limit.is_some() {
-        live_paths_query("cs.path", ">", hi.is_some(), Some("cs.path"), limit)
-    } else {
-        let mut filter = "contract_id = :contract_id AND path > :lo".to_string();
-        if hi.is_some() {
-            filter.push_str(" AND path < :hi");
-        }
-        live_latest("path", &filter, Some("path"))
-    };
+    let query = live_paths_query("cs.path", ">", hi.is_some(), Some("cs.path"), None);
     let rows = conn.query(&query, params).await?;
 
     let prefix_len = path.len();

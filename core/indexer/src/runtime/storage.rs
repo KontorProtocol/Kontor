@@ -14,7 +14,7 @@ use crate::{
             exists_contract_state, get_contract_address_from_id, get_contract_bytes_by_id,
             get_contract_id_from_address, get_latest_contract_state_value, insert_contract,
             insert_contract_result, insert_contract_state, matching_path,
-            path_prefix_filter_bounded,
+            path_prefix_filter_contract_state,
         },
         types::{ContractResultRow, ContractRow, ContractStateRow},
     },
@@ -248,11 +248,9 @@ impl Storage {
         contract_id: u64,
         path: Vec<u8>,
         after: Option<Vec<u8>>,
-        upper: Option<Vec<u8>>,
-        limit: Option<u64>,
     ) -> Result<impl Stream<Item = Result<Vec<u8>, crate::database::queries::Error>> + Send + 'static>
     {
-        Ok(path_prefix_filter_bounded(&self.conn, contract_id, path, after, upper, limit).await?)
+        Ok(path_prefix_filter_contract_state(&self.conn, contract_id, path, after).await?)
     }
 
     pub async fn savepoint(&self) -> Result<()> {

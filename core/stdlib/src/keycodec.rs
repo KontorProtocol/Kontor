@@ -843,7 +843,10 @@ mod tests {
         let mut rng = Lcg(99);
         let mut samples: Vec<(bool, [u64; 4])> = edges.to_vec();
         for _ in 0..4000 {
-            samples.push((rng.next() & 1 == 0, [rng.next(), rng.next(), rng.next(), rng.next()]));
+            samples.push((
+                rng.next() & 1 == 0,
+                [rng.next(), rng.next(), rng.next(), rng.next()],
+            ));
             // also bias toward small magnitudes (where most real balances live)
             samples.push((rng.next() & 1 == 0, [rng.next() & 0xffff, 0, 0, 0]));
         }

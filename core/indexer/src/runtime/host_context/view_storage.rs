@@ -75,12 +75,10 @@ impl built_in::context::HostViewStorageWithStore for Runtime {
         self_: Resource<ViewStorage>,
         path: Vec<u8>,
         after: Option<Vec<u8>>,
-        upper: Option<Vec<u8>>,
-        limit: Option<u64>,
     ) -> Result<Resource<Keys>> {
         accessor
             .with(|mut access| access.get().clone())
-            ._get_keys(accessor, self_, path, after, upper, limit)
+            ._get_keys(accessor, self_, path, after)
             .await
     }
 
