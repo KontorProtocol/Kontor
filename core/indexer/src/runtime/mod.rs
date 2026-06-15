@@ -742,7 +742,9 @@ impl HasData for Runtime {
 
 #[cfg(test)]
 mod tests {
+    use crate::database::queries::exists_contract_state;
     use crate::test_utils::test_runtime;
+    use stdlib::KeyElement;
 
     /// The structural security boundary: filestorage's component imports the
     /// native-only `file-registry` interface, so it links against the native
@@ -894,5 +896,49 @@ mod tests {
             runtime.component_cache.get(&1).await.is_none(),
             "clear() must drop cached components"
         );
+    }
+
+    /// Golden on-disk format: after publishing the native contracts, a structural
+    /// field name lands in `contract_state` as an INTERNED dict-ref, not its UTF-8
+    /// string. `TokenStorage` declares `ledger` (id 0), `total_supply` (id 1),
+    /// `dev_mint_enabled` (id 2); `init` writes `dev_mint_enabled`, so it must live
+    /// at the single-element interned path `[TAG_DICT=0x06, id=0x02]` — and the
+    /// pre-interning string-element path must be absent. Pins the format so an
+    /// accidental encoding change (which would silently fork consensus across
+    /// versions) trips here. token = native contract id 1.
+    #[tokio::test]
+    async fn golden_field_names_are_interned_in_contract_state() {
+        let (runtime, _dir, _name) = test_runtime().await.expect("test runtime");
+        let conn = &runtime.storage.conn;
+        let token_id = 1;
+
+        // The interned path: one dict-ref element, tag 0x06 + field id 0x02.
+        let interned = [0x06u8, 0x02];
+        assert!(
+            exists_contract_state(conn, token_id, &interned)
+                .await
+                .unwrap(),
+            "dev_mint_enabled must be stored at interned path [0x06, 0x02]"
+        );
+
+        // The pre-interning encoding — the field name as a string element — must
+        // NOT appear, proving the macro emits a dict-ref rather than the string.
+        let string_path = "dev_mint_enabled".to_string().encode();
+        assert!(
+            !exists_contract_state(conn, token_id, &string_path)
+                .await
+                .unwrap(),
+            "a field-name string element must not appear in contract_state"
+        );
+
+        // It reads back as the value init wrote (regtest ⇒ dev mint enabled).
+        let raw = runtime
+            .storage
+            .get(1_000_000, token_id, &interned)
+            .await
+            .unwrap()
+            .expect("dev_mint_enabled value present");
+        let val: bool = indexer_types::deserialize(&raw).unwrap();
+        assert!(val, "dev_mint_enabled is true on regtest");
     }
 }
