@@ -25,7 +25,6 @@
 //! struct set through `Store`) index-consistent — the field model's per-key path
 //! can't catch that.
 
-use alloc::format;
 use alloc::rc::Rc;
 use alloc::string::String;
 use alloc::vec::Vec;
@@ -180,21 +179,23 @@ impl<K, S> Iterator for SortedScan<K, S> {
 /// scans in value order. (A covering projection will be added here later as the
 /// leaf *value*; the diff already keys on the leaf path so that stays additive.)
 pub struct IndexEntry {
-    pub name: &'static str,
+    /// The index's interned id (its declaration order within the value type), the
+    /// structural `<index>` segment — a dict-ref, like every other structural name.
+    /// Per value type; only ever used under that value's `#idx` root, so distinct
+    /// value types' id spaces never meet.
+    pub name_id: u8,
     pub bucket: Vec<Vec<u8>>,
     pub sort: Option<Vec<u8>>,
 }
 
 impl IndexEntry {
     /// The bucket-prefix path `<index>/<bucket…>` (where the count lives; members
-    /// are its children). The index name is a structural string segment; each
+    /// are its children). The index name is an interned structural segment; each
     /// bucket segment is a pre-encoded `IndexKey` element.
     fn bucket_path(&self, index_root: &KeyPath) -> KeyPath {
-        let mut path = index_root.push(self.name);
-        for segment in &self.bucket {
-            path = path.push_raw_element(segment);
-        }
-        path
+        index_root
+            .push_interned(self.name_id)
+            .push_raw_elements(&self.bucket)
     }
 
     /// The member element: the `(sort, pk)` nested tuple (so the bucket sorts by
@@ -212,7 +213,7 @@ impl IndexEntry {
     /// on name+bucket+sort. The diff keys on this; a future covering projection is
     /// the leaf *value*, updated in place when the path matches.
     fn same_leaf(&self, other: &IndexEntry) -> bool {
-        self.name == other.name && self.bucket == other.bucket && self.sort == other.sort
+        self.name_id == other.name_id && self.bucket == other.bucket && self.sort == other.sort
     }
 }
 
@@ -316,9 +317,11 @@ where
     /// upsert from empty — it adds rows, it doesn't reconcile against existing
     /// ones; per-key updates that must diff go through the field model's `set`.
     fn __set(ctx: &Rc<S>, base_path: KeyPath, value: StorageIndexedMap<K, V, S>) {
-        let (parent, last) = base_path.pop();
-        let Some(last) = last else { return };
-        let index_root = parent.push(format!("{last}#idx"));
+        // The `<map>#idx` sibling, derived from the map's interned id by the shared
+        // byte rule (so it matches the field model's index root without the dict).
+        let Some(index_root) = base_path.interned_index_sibling() else {
+            return;
+        };
         for (k, v) in value.entries.into_iter() {
             let key_bytes = k.encode();
             let new_entries = v.index_entries();
@@ -401,7 +404,7 @@ mod tests {
         fn __exists(self: &Rc<Self>, path: &[u8]) -> bool {
             self.map.borrow().contains_key(path)
         }
-        fn __extend_path_with_match(self: &Rc<Self>, _: &[u8], _: &[&str]) -> Option<String> {
+        fn __extend_path_with_match(self: &Rc<Self>, _: &[u8], _: &[Vec<u8>]) -> Option<u32> {
             unimplemented!()
         }
     }
@@ -435,7 +438,7 @@ mod tests {
         fn __set_list_u8(self: &Rc<Self>, _: &[u8], _: Vec<u8>) {
             unimplemented!()
         }
-        fn __delete_matching_paths(self: &Rc<Self>, _: &[u8], _: &[&str]) -> u64 {
+        fn __delete_matching_paths(self: &Rc<Self>, _: &[u8], _: &[Vec<u8>]) -> u64 {
             unimplemented!()
         }
     }
@@ -445,15 +448,16 @@ mod tests {
         KeyPath::from(s)
     }
 
-    // Codec bytes for an exact string-element path (for asserting on the Mock's map).
-    fn pb(s: &str) -> Vec<u8> {
-        p(s).as_bytes().to_vec()
-    }
-
     // Codec bytes of a `KeyPath` (e.g. one ending in a typed key element).
     fn b(path: KeyPath) -> Vec<u8> {
         path.as_bytes().to_vec()
     }
+
+    // The interned id a real contract's macro would assign an IndexedMap field
+    // (its declaration index). Wholesale `Store` derives the `#idx` sibling from
+    // this via `interned_index_sibling`, so the map-field segment MUST be interned
+    // (not a string) for those tests to mirror production.
+    const IM: u8 = 0;
 
     // A primary key encoded as its codec element (what `apply_index_diff` takes,
     // and the member segment of an unsorted index).
@@ -461,11 +465,32 @@ mod tests {
         k.encode()
     }
 
+    // A test index name's interned id. The real `Indexed` derive assigns ids by
+    // declaration order; these direct unit tests don't run the macro, so we map
+    // names to stable ids here (distinct within a single `#idx` root: status≠owner).
+    fn nid(name: &str) -> u8 {
+        match name {
+            "status" => 0,
+            "owner" => 1,
+            "name" => 0,
+            "eligible" => 0,
+            "due" => 0,
+            "tag" => 0,
+            other => panic!("unknown test index name `{other}`"),
+        }
+    }
+
+    // The interned `<index>` segment under an `#idx` root — what `bucket_path`
+    // builds. Lets assertions mirror the production (interned) index-name encoding.
+    fn ix(root: &KeyPath, name: &str) -> KeyPath {
+        root.push_interned(nid(name))
+    }
+
     // A single-field index entry (one bucket segment, unsorted) — the shape the
     // shipped `#[index]` produces.
-    fn e(name: &'static str, key: &str) -> IndexEntry {
+    fn e(name: &str, key: &str) -> IndexEntry {
         IndexEntry {
-            name,
+            name_id: nid(name),
             bucket: alloc::vec![key.to_string().encode()],
             sort: None,
         }
@@ -527,16 +552,24 @@ mod tests {
         assert_eq!(*ctx.deletes.borrow(), 0);
         assert_eq!(*ctx.void_sets.borrow(), 0);
 
-        // The status entry moved buckets; the owner entry is still in place.
-        assert!(ctx.__exists(&pb("t#idx.status.proven.k")));
-        assert!(!ctx.__exists(&pb("t#idx.status.active.k")));
-        assert!(ctx.__exists(&pb("t#idx.owner.1.k")));
+        // The status entry moved buckets; the owner entry is still in place. The
+        // `<index>` name segment is interned (`ix`); the bucket value + member stay
+        // string elements (what `e`/`kb` produce).
+        assert!(ctx.__exists(&b(ix(&index, "status").push("proven").push("k"))));
+        assert!(!ctx.__exists(&b(ix(&index, "status").push("active").push("k"))));
+        assert!(ctx.__exists(&b(ix(&index, "owner").push("1").push("k"))));
 
         // Framework-maintained bucket counts track the membership: status moved
         // active(0) -> proven(1); owner.1 stayed at 1.
-        assert_eq!(ctx.__get_u64(&pb("t#idx.status.proven")), Some(1));
-        assert_eq!(ctx.__get_u64(&pb("t#idx.status.active")), Some(0));
-        assert_eq!(ctx.__get_u64(&pb("t#idx.owner.1")), Some(1));
+        assert_eq!(
+            ctx.__get_u64(&b(ix(&index, "status").push("proven"))),
+            Some(1)
+        );
+        assert_eq!(
+            ctx.__get_u64(&b(ix(&index, "status").push("active"))),
+            Some(0)
+        );
+        assert_eq!(ctx.__get_u64(&b(ix(&index, "owner").push("1"))), Some(1));
     }
 
     // A removal whose index row isn't live (already tombstoned / never written —
@@ -562,7 +595,7 @@ mod tests {
         // Reaching here means no trap. The delete was attempted but removed
         // nothing, so the (absent) count was left untouched.
         assert_eq!(*ctx.deletes.borrow(), 1);
-        assert_eq!(ctx.__get_u64(&pb("t#idx.status.active")), None);
+        assert_eq!(ctx.__get_u64(&b(ix(&index, "status").push("active"))), None);
     }
 
     // The bulk `Store` path: a map populated before a wholesale write must land
@@ -576,34 +609,37 @@ mod tests {
             (3, Position { status: 5 }),
         ]);
 
-        Store::__set(&ctx, p("positions"), m);
+        let base = KeyPath::new().push_interned(IM); // the interned `positions` field
+        Store::__set(&ctx, base.clone(), m);
 
         // Primary values (stored under the value's own field path; the u64 map key
         // is a native int element, not a stringified segment).
         assert_eq!(
-            ctx.__get_u64(&b(p("positions").push_element(&1u64).push("status"))),
+            ctx.__get_u64(&b(base.push_element(&1u64).push("status"))),
             Some(2)
         );
         assert_eq!(
-            ctx.__get_u64(&b(p("positions").push_element(&3u64).push("status"))),
+            ctx.__get_u64(&b(base.push_element(&3u64).push("status"))),
             Some(5)
         );
 
-        // Index rows, in the `#idx` sibling. The member is the u64 primary key.
-        assert!(ctx.__exists(&b(p("positions#idx.status.2").push_element(&1u64))));
-        assert!(ctx.__exists(&b(p("positions#idx.status.2").push_element(&2u64))));
-        assert!(ctx.__exists(&b(p("positions#idx.status.5").push_element(&3u64))));
+        // Index rows, in the `#idx` sibling (derived the same way production does).
+        // The member is the u64 primary key.
+        let idx = base.interned_index_sibling().unwrap();
+        assert!(ctx.__exists(&b(ix(&idx, "status").push("2").push_element(&1u64))));
+        assert!(ctx.__exists(&b(ix(&idx, "status").push("2").push_element(&2u64))));
+        assert!(ctx.__exists(&b(ix(&idx, "status").push("5").push_element(&3u64))));
 
         // by_index resolves to the primary keys.
-        let bucket = p("positions#idx").push("status").push("2");
+        let bucket = ix(&idx, "status").push("2");
         let mut keys: Vec<u64> = ctx.__get_keys(&bucket).collect();
         keys.sort();
         assert_eq!(keys, vec![1, 2]);
 
         // The bulk path maintains bucket counts too (it funnels through
         // apply_index_diff): status 2 has {1,2}, status 5 has {3}.
-        assert_eq!(ctx.__get_u64(&pb("positions#idx.status.2")), Some(2));
-        assert_eq!(ctx.__get_u64(&pb("positions#idx.status.5")), Some(1));
+        assert_eq!(ctx.__get_u64(&b(ix(&idx, "status").push("2"))), Some(2));
+        assert_eq!(ctx.__get_u64(&b(ix(&idx, "status").push("5"))), Some(1));
         // The count lives AT the bucket path, NOT as a child — so it never leaks
         // into a `by_index` scan of that bucket's members.
         assert_eq!(ctx.__get_keys::<u64>(&bucket).count(), 2);
@@ -619,7 +655,8 @@ mod tests {
 
     impl Store<Mock> for Account {
         fn __set(ctx: &Rc<Mock>, base_path: KeyPath, value: Account) {
-            ctx.__set(base_path.push("positions"), value.positions);
+            // `positions` is an interned field name (as the macro would emit).
+            ctx.__set(base_path.push_interned(IM), value.positions);
         }
     }
 
@@ -638,20 +675,22 @@ mod tests {
 
         Store::__set(&ctx, p("account"), account);
 
+        // The nested `positions` field, interned under `account`.
+        let base = p("account").push_interned(IM);
+
         // Primary values land under the nested path.
         assert_eq!(
-            ctx.__get_u64(&b(p("account.positions")
-                .push_element(&1u64)
-                .push("status"))),
+            ctx.__get_u64(&b(base.push_element(&1u64).push("status"))),
             Some(2)
         );
 
         // Index rows are the `#idx` sibling *at depth* — same path the field
         // model would build (parent `account` + `positions#idx`).
-        assert!(ctx.__exists(&b(p("account.positions#idx.status.2").push_element(&1u64))));
-        assert!(ctx.__exists(&b(p("account.positions#idx.status.5").push_element(&2u64))));
+        let idx = base.interned_index_sibling().unwrap();
+        assert!(ctx.__exists(&b(ix(&idx, "status").push("2").push_element(&1u64))));
+        assert!(ctx.__exists(&b(ix(&idx, "status").push("5").push_element(&2u64))));
 
-        let bucket = p("account.positions#idx").push("status").push("2");
+        let bucket = ix(&idx, "status").push("2");
         assert_eq!(ctx.__get_keys::<u64>(&bucket).collect::<Vec<_>>(), vec![1]);
     }
 
@@ -680,29 +719,22 @@ mod tests {
         Store::__set(&ctx, p("accounts"), accounts);
 
         // Inner index rows land at the nested depth for each map entry (outer and
-        // inner keys are u64 elements; the bucket segments are strings).
+        // inner keys are u64 elements; `positions`/`#idx` are interned, the bucket
+        // name/value segments are strings).
+        let pos7 = p("accounts").push_element(&7u64).push_interned(IM);
+        let pos8 = p("accounts").push_element(&8u64).push_interned(IM);
         assert!(
-            ctx.__exists(&b(p("accounts")
-                .push_element(&7u64)
-                .push("positions#idx")
-                .push("status")
+            ctx.__exists(&b(ix(&pos7.interned_index_sibling().unwrap(), "status")
                 .push("2")
                 .push_element(&1u64)))
         );
         assert!(
-            ctx.__exists(&b(p("accounts")
-                .push_element(&8u64)
-                .push("positions#idx")
-                .push("status")
+            ctx.__exists(&b(ix(&pos8.interned_index_sibling().unwrap(), "status")
                 .push("5")
                 .push_element(&1u64)))
         );
         assert_eq!(
-            ctx.__get_u64(&b(p("accounts")
-                .push_element(&7u64)
-                .push("positions")
-                .push_element(&1u64)
-                .push("status"))),
+            ctx.__get_u64(&b(pos7.push_element(&1u64).push("status"))),
             Some(2)
         );
     }
@@ -739,20 +771,22 @@ mod tests {
             },
         )]);
 
-        Store::__set(&ctx, p("bags"), bags);
+        let base = KeyPath::new().push_interned(IM); // the interned `bags` field
+        Store::__set(&ctx, base.clone(), bags);
 
         // Outer index maintained by the value's `tag` (member is the u64 key 1).
-        assert!(ctx.__exists(&b(p("bags#idx.tag.9").push_element(&1u64))));
+        let idx = base.interned_index_sibling().unwrap();
+        assert!(ctx.__exists(&b(ix(&idx, "tag").push("9").push_element(&1u64))));
         // Inner map data persisted under the value's path (u64 key + u64 item keys).
         assert_eq!(
-            ctx.__get_u64(&b(p("bags")
+            ctx.__get_u64(&b(base
                 .push_element(&1u64)
                 .push("items")
                 .push_element(&100u64))),
             Some(1)
         );
         assert_eq!(
-            ctx.__get_u64(&b(p("bags")
+            ctx.__get_u64(&b(base
                 .push_element(&1u64)
                 .push("items")
                 .push_element(&200u64))),
@@ -770,11 +804,11 @@ mod tests {
         apply_index_diff(&ctx, &index, &kb("a.b".to_string()), &[], &[e("name", "x")]);
         apply_index_diff(&ctx, &index, &kb("a".to_string()), &[], &[e("name", "x")]);
         // Distinct members despite the `.` — both live under the same bucket.
-        let bucket = p("t#idx.name.x");
+        let bucket = ix(&index, "name").push("x");
         let mut keys: Vec<String> = ctx.__get_keys(&bucket).collect();
         keys.sort();
         assert_eq!(keys, alloc::vec!["a".to_string(), "a.b".to_string()]);
-        assert_eq!(ctx.__get_u64(&pb("t#idx.name.x")), Some(2));
+        assert_eq!(ctx.__get_u64(&b(ix(&index, "name").push("x"))), Some(2));
     }
 
     // A bucket segment is the field's TYPED codec element (not its decimal string):
@@ -786,7 +820,7 @@ mod tests {
         let ctx = Rc::new(Mock::default());
         let index = p("t#idx");
         let entry = |status: u64| IndexEntry {
-            name: "status",
+            name_id: nid("status"),
             bucket: alloc::vec![status.index_key()], // int element, not "5"
             sort: None,
         };
@@ -794,9 +828,9 @@ mod tests {
         apply_index_diff(&ctx, &index, &kb("k2".to_string()), &[], &[entry(5)]);
 
         // Rows live under the int-element bucket, NOT the string "5" bucket.
-        let int_bucket = index.push("status").push_element(&5u64);
+        let int_bucket = ix(&index, "status").push_element(&5u64);
         assert_eq!(ctx.__get_u64(&int_bucket), Some(2));
-        assert_eq!(ctx.__get_u64(&index.push("status").push("5")), None);
+        assert_eq!(ctx.__get_u64(&ix(&index, "status").push("5")), None);
         let mut keys: Vec<String> = ctx.__get_keys(&int_bucket).collect();
         keys.sort();
         assert_eq!(keys, alloc::vec!["k1".to_string(), "k2".to_string()]);
@@ -811,7 +845,7 @@ mod tests {
         let index = p("a#idx");
         // eligible index: bucket = [active, presence].
         let entry = |active: &str, presence: &str| IndexEntry {
-            name: "eligible",
+            name_id: nid("eligible"),
             bucket: alloc::vec![active.to_string().encode(), presence.to_string().encode()],
             sort: None,
         };
@@ -837,13 +871,23 @@ mod tests {
             &[entry("true", "some")],
         );
 
-        assert!(ctx.__exists(&pb("a#idx.eligible.true.none.k1")));
-        assert!(ctx.__exists(&pb("a#idx.eligible.true.some.k3")));
+        assert!(ctx.__exists(&b(
+            ix(&index, "eligible").push("true").push("none").push("k1")
+        )));
+        assert!(ctx.__exists(&b(
+            ix(&index, "eligible").push("true").push("some").push("k3")
+        )));
         // Count lives AT the two-segment bucket path.
-        assert_eq!(ctx.__get_u64(&pb("a#idx.eligible.true.none")), Some(2));
-        assert_eq!(ctx.__get_u64(&pb("a#idx.eligible.true.some")), Some(1));
+        assert_eq!(
+            ctx.__get_u64(&b(ix(&index, "eligible").push("true").push("none"))),
+            Some(2)
+        );
+        assert_eq!(
+            ctx.__get_u64(&b(ix(&index, "eligible").push("true").push("some"))),
+            Some(1)
+        );
         // Scan of the (true, none) bucket yields just its members.
-        let bucket = p("a#idx.eligible.true.none");
+        let bucket = ix(&index, "eligible").push("true").push("none");
         let mut keys: Vec<String> = ctx.__get_keys(&bucket).collect();
         keys.sort();
         assert_eq!(keys, alloc::vec!["k1".to_string(), "k2".to_string()]);
@@ -856,10 +900,20 @@ mod tests {
             &[entry("true", "none")],
             &[entry("true", "some")],
         );
-        assert!(!ctx.__exists(&pb("a#idx.eligible.true.none.k1")));
-        assert!(ctx.__exists(&pb("a#idx.eligible.true.some.k1")));
-        assert_eq!(ctx.__get_u64(&pb("a#idx.eligible.true.none")), Some(1));
-        assert_eq!(ctx.__get_u64(&pb("a#idx.eligible.true.some")), Some(2));
+        assert!(!ctx.__exists(&b(
+            ix(&index, "eligible").push("true").push("none").push("k1")
+        )));
+        assert!(ctx.__exists(&b(
+            ix(&index, "eligible").push("true").push("some").push("k1")
+        )));
+        assert_eq!(
+            ctx.__get_u64(&b(ix(&index, "eligible").push("true").push("none"))),
+            Some(1)
+        );
+        assert_eq!(
+            ctx.__get_u64(&b(ix(&index, "eligible").push("true").push("some"))),
+            Some(2)
+        );
     }
 
     // A byte field buckets by its raw codec bytes element (not hex) — distinct per
@@ -932,7 +986,7 @@ mod tests {
         let index = p("t#idx");
         // Index "due", bucket "active", sorted by a u64 height (pre-encoded element).
         let entry = |height: u64| IndexEntry {
-            name: "due",
+            name_id: nid("due"),
             bucket: alloc::vec!["active".to_string().encode()],
             sort: Some(height.encode()),
         };
@@ -941,7 +995,7 @@ mod tests {
         apply_index_diff(&ctx, &index, &kb("a".to_string()), &[], &[entry(10)]);
         apply_index_diff(&ctx, &index, &kb("b".to_string()), &[], &[entry(20)]);
 
-        let bucket = index.push("due").push("active");
+        let bucket = ix(&index, "due").push("active");
         let scan = || {
             SortedScan::<String, u64>::new(alloc::boxed::Box::new(
                 ctx.__get_keys::<(u64, String)>(&bucket),

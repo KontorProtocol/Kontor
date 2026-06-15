@@ -17,7 +17,7 @@ impl FibValueModel {
         }
     }
     pub fn value(&self) -> u64 {
-        stdlib::ReadStorage::__get(&self.ctx, self.base_path.push("value")).unwrap()
+        stdlib::ReadStorage::__get(&self.ctx, self.base_path.push_interned(0u8)).unwrap()
     }
     pub fn load(&self) -> FibValue {
         FibValue { value: self.value() }
@@ -44,13 +44,13 @@ impl FibValueWriteModel {
         }
     }
     pub fn value(&self) -> u64 {
-        stdlib::ReadStorage::__get(&self.ctx, self.base_path.push("value")).unwrap()
+        stdlib::ReadStorage::__get(&self.ctx, self.base_path.push_interned(0u8)).unwrap()
     }
     pub fn set_value(&self, value: u64) {
-        stdlib::WriteStorage::__set(&self.ctx, self.base_path.push("value"), value);
+        stdlib::WriteStorage::__set(&self.ctx, self.base_path.push_interned(0u8), value);
     }
     pub fn update_value(&self, f: impl Fn(u64) -> u64) {
-        let path = self.base_path.push("value");
+        let path = self.base_path.push_interned(0u8);
         let old: u64 = stdlib::ReadStorage::__get(&self.ctx, path.clone()).unwrap();
         let new = f(old.clone());
         stdlib::WriteStorage::__set(&self.ctx, path, new);
@@ -59,7 +59,7 @@ impl FibValueWriteModel {
         &self,
         f: impl Fn(u64) -> Result<u64, crate::error::Error>,
     ) -> Result<(), crate::error::Error> {
-        let path = self.base_path.push("value");
+        let path = self.base_path.push_interned(0u8);
         let old: u64 = stdlib::ReadStorage::__get(&self.ctx, path.clone()).unwrap();
         let new = f(old.clone())?;
         stdlib::WriteStorage::__set(&self.ctx, path, new);
@@ -94,7 +94,7 @@ impl FibStorageModel {
     }
     pub fn cache(&self) -> FibStorageCacheModel {
         FibStorageCacheModel {
-            base_path: self.base_path.push("cache"),
+            base_path: self.base_path.push_interned(0u8),
             ctx: self.ctx.clone(),
         }
     }
@@ -153,7 +153,7 @@ impl FibStorageWriteModel {
     }
     pub fn cache(&self) -> FibStorageCacheWriteModel {
         FibStorageCacheWriteModel {
-            base_path: self.base_path.push("cache"),
+            base_path: self.base_path.push_interned(0u8),
             ctx: self.ctx.clone(),
         }
     }

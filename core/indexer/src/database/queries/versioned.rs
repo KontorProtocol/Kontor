@@ -36,11 +36,6 @@ pub struct LatestMany<'a> {
     partition_by: Option<&'a str>,
     /// Extra predicate on the collapsed (`rank = 1`) row, e.g. `deleted = false`.
     post: Option<&'a str>,
-    /// Outer `ORDER BY` for a deterministic result order. SQLite leaves row
-    /// order unspecified without it, so any caller that consumes rows
-    /// positionally and needs the order reproducible across nodes (e.g. a
-    /// contract's `keys()` feeding consensus-relevant selection) must set this.
-    order_by: Option<&'a str>,
 }
 
 impl LatestMany<'_> {
@@ -50,19 +45,18 @@ impl LatestMany<'_> {
             .map(|p| format!("PARTITION BY {p} "))
             .unwrap_or_default();
         let post = self.post.map(|p| format!(" AND {p}")).unwrap_or_default();
-        let order_by = self
-            .order_by
-            .map(|o| format!(" ORDER BY {o}"))
-            .unwrap_or_default();
         format!(
             // `rowid` breaks same-height ties deterministically (later insert
             // wins — e.g. the write following an in-tx `delete_matching`), so the
-            // ranked row is reproducible across nodes.
+            // ranked row is reproducible across nodes. Needed for the no-partition
+            // global-newest case (`matching_path`), where same-height rows on
+            // DIFFERENT paths coexist; the partition-by-path callers don't rely on
+            // it (`UNIQUE(contract_id, height, path)` makes height unique per path).
             "SELECT {select} FROM (\n  \
                SELECT *, ROW_NUMBER() OVER ({partition}ORDER BY height DESC, rowid DESC) AS rank\n  \
                FROM {table}\n  \
                WHERE {filter}\n\
-             ) t WHERE rank = 1{post}{order_by}",
+             ) t WHERE rank = 1{post}",
             select = self.select,
             table = self.table,
             filter = self.filter,
@@ -120,18 +114,5 @@ mod tests {
             "ROW_NUMBER() OVER (PARTITION BY challenge_id ORDER BY height DESC, rowid DESC) AS rank"
         ));
         assert!(sql.trim_end().ends_with("WHERE rank = 1"));
-    }
-
-    #[test]
-    fn latest_many_with_order_by() {
-        let sql = LatestMany::builder()
-            .table("contract_state")
-            .select("path")
-            .filter("contract_id = :contract_id")
-            .partition_by("path")
-            .order_by("path")
-            .build()
-            .to_sql();
-        assert!(sql.trim_end().ends_with("WHERE rank = 1 ORDER BY path"));
     }
 }

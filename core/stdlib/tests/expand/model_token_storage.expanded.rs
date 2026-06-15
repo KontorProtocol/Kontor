@@ -18,7 +18,7 @@ impl TokenStorageModel {
     }
     pub fn ledger(&self) -> TokenStorageLedgerModel {
         TokenStorageLedgerModel {
-            base_path: self.base_path.push("ledger"),
+            base_path: self.base_path.push_interned(0u8),
             ctx: self.ctx.clone(),
         }
     }
@@ -76,7 +76,7 @@ impl TokenStorageWriteModel {
     }
     pub fn ledger(&self) -> TokenStorageLedgerWriteModel {
         TokenStorageLedgerWriteModel {
-            base_path: self.base_path.push("ledger"),
+            base_path: self.base_path.push_interned(0u8),
             ctx: self.ctx.clone(),
         }
     }

@@ -74,10 +74,11 @@ impl built_in::context::HostProcStorageWithStore for Runtime {
         accessor: &Accessor<T, Self>,
         self_: Resource<ProcStorage>,
         path: Vec<u8>,
+        after: Option<Vec<u8>>,
     ) -> Result<Resource<Keys>> {
         accessor
             .with(|mut access| access.get().clone())
-            ._get_keys(accessor, self_, path)
+            ._get_keys(accessor, self_, path, after)
             .await
     }
 
@@ -96,11 +97,11 @@ impl built_in::context::HostProcStorageWithStore for Runtime {
         accessor: &Accessor<T, Self>,
         self_: Resource<ProcStorage>,
         path: Vec<u8>,
-        variants: Vec<String>,
-    ) -> Result<Option<String>> {
+        candidates: Vec<Vec<u8>>,
+    ) -> Result<Option<u32>> {
         accessor
             .with(|mut access| access.get().clone())
-            ._extend_path_with_match(accessor, self_, path, variants)
+            ._extend_path_with_match(accessor, self_, path, candidates)
             .await
     }
 
@@ -190,11 +191,11 @@ impl built_in::context::HostProcStorageWithStore for Runtime {
         accessor: &Accessor<T, Self>,
         self_: Resource<ProcStorage>,
         base_path: Vec<u8>,
-        variants: Vec<String>,
+        candidates: Vec<Vec<u8>>,
     ) -> Result<u64> {
         accessor
             .with(|mut access| access.get().clone())
-            ._delete_matching_paths(accessor, self_, base_path, variants)
+            ._delete_matching_paths(accessor, self_, base_path, candidates)
             .await
     }
 

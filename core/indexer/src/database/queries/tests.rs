@@ -58,6 +58,13 @@ fn cs_path_dotted(path: &str) -> Vec<u8> {
     cs_path(&path.split('.').collect::<Vec<_>>())
 }
 
+/// Candidate discriminant elements for `matching_path`/`delete_matching_paths`,
+/// from string variant names — these host tests use string-element discriminants
+/// (the byte-compare is encoding-agnostic, so a string element is a fine stand-in).
+fn cands(names: &[&str]) -> Vec<Vec<u8>> {
+    names.iter().map(|n| stdlib::string_element(n)).collect()
+}
+
 async fn setup_test_data(conn: &libsql::Connection) -> Result<()> {
     // Insert blocks
     for height in [800000, 800001, 800002] {
@@ -416,16 +423,12 @@ async fn test_contract_state_operations() -> Result<()> {
     assert!(contract_has_state(&conn, contract_id).await?);
     assert!(exists_contract_state(&conn, contract_id, &base).await?);
 
+    // "path" is candidate index 0.
     assert_eq!(
-        matching_path(
-            &conn,
-            contract_id,
-            &base,
-            &["path".to_string(), "foo".to_string(), "bar".to_string()],
-        )
-        .await?
-        .unwrap(),
-        "path"
+        matching_path(&conn, contract_id, &base, &cands(&["path", "foo", "bar"]))
+            .await?
+            .unwrap(),
+        0
     );
 
     // Get latest contract state
@@ -1107,7 +1110,8 @@ async fn test_map_keys() -> Result<()> {
     insert_contract_state(&conn, contract_state).await?;
 
     let stream =
-        path_prefix_filter_contract_state(&conn, contract_id, cs_path_dotted("test.path")).await?;
+        path_prefix_filter_contract_state(&conn, contract_id, cs_path_dotted("test.path"), None)
+            .await?;
     let paths = stream.try_collect::<Vec<Vec<u8>>>().await?;
     // Each item is the child key's codec element (one segment), deduped + ordered.
     assert_eq!(paths.len(), 3);
@@ -1120,7 +1124,7 @@ async fn test_map_keys() -> Result<()> {
         contract_id,
         height,
         &cs_path_dotted("test.path"),
-        &["key0".to_string()],
+        &cands(&["key0"]),
     )
     .await?;
     assert_eq!(result, 2);
@@ -1201,7 +1205,7 @@ async fn test_keys_with_idx_sibling_after_update() -> Result<()> {
 
     // `keys(m)` — both members are still in the primary map (44's value row was
     // updated, not removed), regardless of index churn.
-    let stream = path_prefix_filter_contract_state(&conn, cid, cs_path_dotted(m)).await?;
+    let stream = path_prefix_filter_contract_state(&conn, cid, cs_path_dotted(m), None).await?;
     let mut keys = stream.try_collect::<Vec<Vec<u8>>>().await?;
     keys.sort();
     assert_eq!(keys, vec![cs_path(&["44"]), cs_path(&["45"])]);
@@ -1214,6 +1218,7 @@ async fn test_keys_with_idx_sibling_after_update() -> Result<()> {
         &conn,
         cid,
         cs_path_dotted(&format!("{m}#idx.active.true")),
+        None,
     )
     .await?
     .try_collect::<Vec<Vec<u8>>>()
@@ -1274,13 +1279,13 @@ async fn test_empty_path_is_whole_keyspace_not_panic() -> Result<()> {
     // Empty path = whole keyspace: any live row makes `exists` true.
     assert!(exists_contract_state(&conn, cid, &[]).await?);
     // `keys()` of the root yields the single distinct top-level element ("m").
-    let top: Vec<Vec<u8>> = path_prefix_filter_contract_state(&conn, cid, Vec::new())
+    let top: Vec<Vec<u8>> = path_prefix_filter_contract_state(&conn, cid, Vec::new(), None)
         .await?
         .try_collect()
         .await?;
     assert_eq!(top, vec![cs_path(&["m"])]);
     // `matching_path` at the root must not panic.
-    let _ = matching_path(&conn, cid, &[], &["none".to_string(), "some".to_string()]).await?;
+    let _ = matching_path(&conn, cid, &[], &cands(&["none", "some"])).await?;
     // Deleting the empty subtree tombstones the whole keyspace.
     assert!(delete_contract_state(&conn, height + 1, Some(tx), cid, &[]).await?);
     assert!(!exists_contract_state(&conn, cid, &[]).await?);
@@ -1425,10 +1430,10 @@ async fn test_matching_path_after_enum_reset() -> Result<()> {
         &conn,
         cid,
         &cs_path_dotted("c.status"),
-        &["active".to_string(), "proven".to_string()],
+        &cands(&["active", "proven"]),
     )
     .await?;
-    assert_eq!(found, Some("proven".to_string()));
+    assert_eq!(found, Some(1)); // "proven" is candidate index 1
 
     Ok(())
 }
@@ -1485,14 +1490,8 @@ async fn test_matching_path_newest_of_multiple_live() -> Result<()> {
         .await?;
     }
 
-    let found = matching_path(
-        &conn,
-        cid,
-        &cs_path_dotted("c.op"),
-        &["id".to_string(), "sum".to_string()],
-    )
-    .await?;
-    assert_eq!(found, Some("sum".to_string()));
+    let found = matching_path(&conn, cid, &cs_path_dotted("c.op"), &cands(&["id", "sum"])).await?;
+    assert_eq!(found, Some(1)); // "sum" is candidate index 1
 
     Ok(())
 }
@@ -1551,7 +1550,7 @@ async fn test_matching_path_stale_none_outranked_by_some() -> Result<()> {
 
     // The none-check (only `none` in the alternation) must NOT match the newer
     // `some`, so it returns None and the field resolves to Some.
-    let found = matching_path(&conn, cid, &cs_path_dotted("c.opt"), &["none".to_string()]).await?;
+    let found = matching_path(&conn, cid, &cs_path_dotted("c.opt"), &cands(&["none"])).await?;
     assert_eq!(found, None);
 
     Ok(())
@@ -1603,7 +1602,7 @@ async fn test_matching_path_on_bare_base_row() -> Result<()> {
         &conn,
         cid,
         &cs_path_dotted("c.opt"),
-        &["none".to_string(), "some".to_string()],
+        &cands(&["none", "some"]),
     )
     .await?;
     assert_eq!(found, None);
@@ -1671,15 +1670,9 @@ mod proptest_paths {
                 let cid = 1;
                 // None of these may panic on arbitrary `path` bytes.
                 let _ = exists_contract_state(&conn, cid, &path).await;
-                let _ = matching_path(
-                    &conn,
-                    cid,
-                    &path,
-                    &["none".to_string(), "some".to_string()],
-                )
-                .await;
+                let _ = matching_path(&conn, cid, &path, &cands(&["none", "some"])).await;
                 if let Ok(stream) =
-                    path_prefix_filter_contract_state(&conn, cid, path.clone()).await
+                    path_prefix_filter_contract_state(&conn, cid, path.clone(), None).await
                 {
                     let _ = stream.collect::<Vec<_>>().await;
                 }
@@ -1687,6 +1680,149 @@ mod proptest_paths {
             });
         }
     }
+}
+
+// Cross-call pagination via the `after` cursor: a caller resumes a keys scan
+// strictly past the last full path it saw. Within a call the lazy stream is what
+// bounds work (the guest stops iterating); across calls `after` is the resume
+// point, so two cursor-resumed reads reconstruct the full scan with no overlap.
+#[tokio::test]
+async fn test_path_prefix_filter_after_cursor_resumes() -> Result<()> {
+    let (_reader, writer, _temp) = new_test_db().await?;
+    let conn = writer.connection();
+    let h = 600000;
+    insert_block(
+        &conn,
+        BlockRow::builder()
+            .height(h)
+            .hash(new_mock_block_hash(h as u32))
+            .build(),
+    )
+    .await?;
+    let tx = insert_transaction(
+        &conn,
+        TransactionRow::builder()
+            .height(h)
+            .txid(format!("cccc{:060}", 0))
+            .tx_index(0)
+            .confirmed_height(h)
+            .build(),
+    )
+    .await?;
+    let cid = 1;
+    // Five single-row "members" under bucket `m` (the index-scan shape).
+    for k in ["k1", "k2", "k3", "k4", "k5"] {
+        insert_contract_state(
+            &conn,
+            ContractStateRow::builder()
+                .contract_id(cid)
+                .tx_id(tx)
+                .height(h)
+                .path(cs_path(&["m", k]))
+                .value(vec![1])
+                .build(),
+        )
+        .await?;
+    }
+
+    // Full scan, no cursor: every member in path order.
+    let all: Vec<Vec<u8>> = path_prefix_filter_contract_state(&conn, cid, cs_path(&["m"]), None)
+        .await?
+        .try_collect()
+        .await?;
+    assert_eq!(
+        all,
+        vec![
+            cs_path(&["k1"]),
+            cs_path(&["k2"]),
+            cs_path(&["k3"]),
+            cs_path(&["k4"]),
+            cs_path(&["k5"]),
+        ]
+    );
+
+    // Resume after child `k2` (cursor = its child-node path `m/k2`): the remaining
+    // members, no overlap with the first two.
+    let rest: Vec<Vec<u8>> =
+        path_prefix_filter_contract_state(&conn, cid, cs_path(&["m"]), Some(cs_path(&["m", "k2"])))
+            .await?
+            .try_collect()
+            .await?;
+    assert_eq!(
+        rest,
+        vec![cs_path(&["k3"]), cs_path(&["k4"]), cs_path(&["k5"])]
+    );
+
+    Ok(())
+}
+
+// Regression: a cursor resume must skip the last child's ENTIRE subtree, not just
+// the bare child-node path. Here each child owns several deeper rows (a struct/map
+// value), so resuming with `after = m/a` must NOT re-read `m/a/*` and re-emit `a`.
+// The old `cs.path > after` bound did exactly that (`m/a` sorts before `m/a/f1`);
+// `cs.path >= strinc(after)` fixes it.
+#[tokio::test]
+async fn test_after_cursor_skips_whole_child_subtree() -> Result<()> {
+    let (_reader, writer, _temp) = new_test_db().await?;
+    let conn = writer.connection();
+    let h = 600000;
+    insert_block(
+        &conn,
+        BlockRow::builder()
+            .height(h)
+            .hash(new_mock_block_hash(h as u32))
+            .build(),
+    )
+    .await?;
+    let tx = insert_transaction(
+        &conn,
+        TransactionRow::builder()
+            .height(h)
+            .txid(format!("dddd{:060}", 0))
+            .tx_index(0)
+            .confirmed_height(h)
+            .build(),
+    )
+    .await?;
+    let cid = 1;
+    // Map `m` of multi-field struct values: each child owns several deeper rows.
+    for (child, field) in [
+        ("a", "f1"),
+        ("a", "f2"),
+        ("b", "f1"),
+        ("b", "f2"),
+        ("c", "f1"),
+    ] {
+        insert_contract_state(
+            &conn,
+            ContractStateRow::builder()
+                .contract_id(cid)
+                .tx_id(tx)
+                .height(h)
+                .path(cs_path(&["m", child, field]))
+                .value(vec![1])
+                .build(),
+        )
+        .await?;
+    }
+
+    // No cursor: the three distinct child keys, deduped across their subtrees.
+    let all: Vec<Vec<u8>> = path_prefix_filter_contract_state(&conn, cid, cs_path(&["m"]), None)
+        .await?
+        .try_collect()
+        .await?;
+    assert_eq!(all, vec![cs_path(&["a"]), cs_path(&["b"]), cs_path(&["c"])]);
+
+    // Resume after child `a` (cursor = its child-node path `m/a`): must skip ALL of
+    // a's deeper rows and not re-emit `a`.
+    let rest: Vec<Vec<u8>> =
+        path_prefix_filter_contract_state(&conn, cid, cs_path(&["m"]), Some(cs_path(&["m", "a"])))
+            .await?
+            .try_collect()
+            .await?;
+    assert_eq!(rest, vec![cs_path(&["b"]), cs_path(&["c"])]);
+
+    Ok(())
 }
 
 #[tokio::test]

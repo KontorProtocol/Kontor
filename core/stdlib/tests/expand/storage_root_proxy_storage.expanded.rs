@@ -11,7 +11,7 @@ impl stdlib::Store<crate::context::ProcStorage> for ProxyStorage {
     ) {
         stdlib::WriteStorage::__set(
             ctx,
-            base_path.push("contract_address"),
+            base_path.push_interned(0u8),
             value.contract_address,
         );
     }
@@ -31,8 +31,7 @@ impl ProxyStorageModel {
         }
     }
     pub fn contract_address(&self) -> ContractAddress {
-        stdlib::ReadStorage::__get(&self.ctx, self.base_path.push("contract_address"))
-            .unwrap()
+        stdlib::ReadStorage::__get(&self.ctx, self.base_path.push_interned(0u8)).unwrap()
     }
     pub fn load(&self) -> ProxyStorage {
         ProxyStorage {
@@ -61,21 +60,16 @@ impl ProxyStorageWriteModel {
         }
     }
     pub fn contract_address(&self) -> ContractAddress {
-        stdlib::ReadStorage::__get(&self.ctx, self.base_path.push("contract_address"))
-            .unwrap()
+        stdlib::ReadStorage::__get(&self.ctx, self.base_path.push_interned(0u8)).unwrap()
     }
     pub fn set_contract_address(&self, value: ContractAddress) {
-        stdlib::WriteStorage::__set(
-            &self.ctx,
-            self.base_path.push("contract_address"),
-            value,
-        );
+        stdlib::WriteStorage::__set(&self.ctx, self.base_path.push_interned(0u8), value);
     }
     pub fn update_contract_address(
         &self,
         f: impl Fn(ContractAddress) -> ContractAddress,
     ) {
-        let path = self.base_path.push("contract_address");
+        let path = self.base_path.push_interned(0u8);
         let old: ContractAddress = stdlib::ReadStorage::__get(&self.ctx, path.clone())
             .unwrap();
         let new = f(old.clone());
@@ -85,7 +79,7 @@ impl ProxyStorageWriteModel {
         &self,
         f: impl Fn(ContractAddress) -> Result<ContractAddress, crate::error::Error>,
     ) -> Result<(), crate::error::Error> {
-        let path = self.base_path.push("contract_address");
+        let path = self.base_path.push_interned(0u8);
         let old: ContractAddress = stdlib::ReadStorage::__get(&self.ctx, path.clone())
             .unwrap();
         let new = f(old.clone())?;

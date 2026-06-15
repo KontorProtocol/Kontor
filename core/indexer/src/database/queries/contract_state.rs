@@ -7,17 +7,22 @@
 //! the current state?" is always a DERIVED computation, and getting that
 //! derivation subtly wrong is the entire bug surface of this file.
 //!
-//! THE ONE RULE — current state is, for each path, its LATEST version (ranked by
-//! `height` then `rowid`), kept only if that latest version is live. Concretely:
-//! rank PER PATH, then apply `deleted = false` as a **post** predicate. The
-//! recurring footgun is filtering `deleted = false` *before* ranking: after a
-//! tombstone that drops the path's older live row back into view, so a path that
-//! point reads and `exists` treat as gone keeps surfacing in `keys()`/`by_index`.
+//! THE ONE RULE — current state is, for each path, its LATEST version (by
+//! `height`), kept only if that latest version is live. The "live" test is a
+//! **post** predicate (`deleted = false` applied AFTER picking the latest), never a
+//! pre-rank filter: filtering `deleted = false` first lets a tombstone drop the
+//! path's older live row back into view, so a path that point reads and `exists`
+//! treat as gone keeps surfacing in `keys()`/`by_index`.
 //!
-//! So every read of a SET of current paths — point read, `exists`, `keys`/
-//! `by_index`, subtree delete — funnels through [`live_latest`], which bakes in
-//! `partition_by("path")` + post `deleted = false`. Don't hand-roll a ranking
-//! query; if a new read needs the current state, build it on `live_latest`.
+//! That rule has TWO equivalent SQL formulations, and every current-state read of a
+//! path set uses one of them — never a hand-rolled ranking query:
+//!   - [`live_latest`] — a `ROW_NUMBER` window (per-path rank, post `deleted =
+//!     false`). MATERIALIZES its rows, so it's for the point reads and the
+//!     subtree-delete pass, which consume a known-small set.
+//!   - [`live_paths_scan`] — the same live set as `NOT EXISTS` (no higher-height row
+//!     for the path) `AND deleted = 0`. Index-served, so it STREAMS in `path` order
+//!     and terminates early — the form behind the `keys`/`by_index` scan and
+//!     `exists`. Same result as the window; the split is materialize vs. stream.
 //!
 //! **Paths are [`stdlib::keycodec`] bytes** (a `BLOB` column), not text. They are
 //! order-preserving and *prefix-structured*: an encoded ancestor is an exact
@@ -34,7 +39,7 @@
 
 use futures_util::{Stream, stream};
 use libsql::{Connection, Value, de::from_row, params};
-use stdlib::{KeyElement, next_element, strinc};
+use stdlib::{next_element, strinc};
 
 use super::Error;
 use super::versioned::LatestMany;
@@ -61,23 +66,77 @@ fn subtree_range(lo_cmp: &str, prefix: &[u8]) -> (String, Vec<(String, Value)>) 
     }
 }
 
-/// THE liveness primitive (see the module header): the latest version of each
-/// path that passes `filter`, kept only if that version is live. `partition_by`
+/// THE window liveness primitive (see the module header): the latest version of
+/// each path that passes `filter`, kept only if that version is live. `partition_by`
 /// gives the per-path rank; `deleted = false` is a **post** predicate, never a
-/// pre-rank filter. Every current-state read of a path set goes through here, so
-/// the tombstone semantics are decided in exactly one place. `order` is for the
-/// callers that consume rows positionally and need a deterministic order.
-fn live_latest(select: &str, filter: &str, order: Option<&str>) -> String {
-    let builder = LatestMany::builder()
+/// pre-rank filter. Used by the point reads and the subtree-delete materialization,
+/// which consume a known-small row set; the streaming SET reads use
+/// [`live_paths_scan`] (`NOT EXISTS`) instead. Same live set either way — the split
+/// is purely about whether the result is materialized or streamed.
+fn live_latest(select: &str, filter: &str) -> String {
+    LatestMany::builder()
         .table("contract_state")
         .select(select)
         .partition_by("path")
         .post("deleted = false")
-        .filter(filter);
-    match order {
-        Some(order) => builder.order_by(order).build().to_sql(),
-        None => builder.build().to_sql(),
-    }
+        .filter(filter)
+        .build()
+        .to_sql()
+}
+
+/// The LIVE-PATHS scan **with its bound params**, returned together so the
+/// `cs.path < :hi` clause and the `:hi` bind can't drift (the same fragment/params
+/// coupling [`subtree_range`] gives the window callers).
+///
+/// Reformulated from the `live_latest` window to `NOT EXISTS` (newest non-deleted
+/// per path = `deleted = 0` AND no higher-height row for the same path). This lets
+/// the `(contract_id, path, height DESC)` index serve BOTH the ordered outer scan
+/// AND the covering "newer height?" probe, so `ORDER BY path` + `LIMIT` STREAM and
+/// terminate early (≈O(limit)) instead of materializing and sorting the whole range
+/// like the window does. Deterministic with NO `rowid` tiebreak: `UNIQUE(contract_id,
+/// height, path)` makes the max-height row per path unique, so the per-path liveness
+/// is unambiguous (and a sibling tombstone can't hide a live sibling — each row
+/// checks only its own path). Same live set and path order as the window form, so
+/// it's a drop-in for the SET reads (`keys`, `exists`).
+///
+/// `lo` is the scan-start bind (`:lo`); `lo_cmp` is `>` (children only — `keys`) or
+/// `>=` (include the node — `exists`). `subtree` is the prefix whose `strinc` gives
+/// the exclusive upper bound (`:hi`, omitted when `strinc` is `None` — an empty or
+/// all-`0xFF` prefix runs to the end of the keyspace, bounded only by `contract_id`).
+fn live_paths_scan(
+    select: &str,
+    lo_cmp: &str,
+    contract_id: u64,
+    lo: Vec<u8>,
+    subtree: &[u8],
+    order: Option<&str>,
+    limit: Option<u64>,
+) -> (String, Vec<(String, Value)>) {
+    let mut params = vec![
+        (":lo".to_string(), Value::Blob(lo)),
+        (
+            ":contract_id".to_string(),
+            Value::Integer(contract_id as i64),
+        ),
+    ];
+    let hi_clause = match strinc(subtree) {
+        Some(hi) => {
+            params.push((":hi".to_string(), Value::Blob(hi)));
+            " AND cs.path < :hi"
+        }
+        None => "",
+    };
+    let order = order.map(|o| format!(" ORDER BY {o}")).unwrap_or_default();
+    let limit = limit.map(|n| format!(" LIMIT {n}")).unwrap_or_default();
+    let sql = format!(
+        "SELECT {select} FROM contract_state AS cs \
+         WHERE cs.contract_id = :contract_id AND cs.path {lo_cmp} :lo{hi_clause} AND cs.deleted = 0 \
+           AND NOT EXISTS ( \
+             SELECT 1 FROM contract_state AS n \
+             WHERE n.contract_id = cs.contract_id AND n.path = cs.path AND n.height > cs.height \
+           ){order}{limit}"
+    );
+    (sql, params)
 }
 
 pub async fn insert_contract_state(conn: &Connection, row: ContractStateRow) -> Result<u64, Error> {
@@ -117,7 +176,6 @@ pub async fn get_latest_contract_state(
             &live_latest(
                 "contract_id, height, tx_id, path, value, deleted",
                 "contract_id = :contract_id AND path = :path",
-                None,
             ),
             (
                 (":contract_id", contract_id),
@@ -140,7 +198,6 @@ pub async fn get_latest_contract_state_value(
             &live_latest(
                 "CASE WHEN size <= :fuel THEN value ELSE null END AS value",
                 "contract_id = :contract_id AND path = :path",
-                None,
             ),
             (
                 (":contract_id", contract_id),
@@ -186,7 +243,6 @@ pub async fn delete_contract_state(
     let query = live_latest(
         "contract_id, height, tx_id, path, value, deleted",
         &format!("contract_id = :contract_id AND {range}"),
-        None,
     );
     let mut result = conn.query(&query, params).await?;
 
@@ -212,48 +268,69 @@ pub async fn exists_contract_state(
     contract_id: u64,
     path: &[u8],
 ) -> Result<bool, Error> {
-    // "Any live path at/under `path`". Per-path liveness is load-bearing here: a
-    // single newest tombstone (e.g. an IndexedMap index `__delete` under
-    // `<map>#idx`) must not hide sibling paths that are still live — which is
-    // exactly what `live_latest` (per-path rank + post `deleted = false`) gives.
-    let (range, mut params) = subtree_range(">=", path);
-    params.push((
-        ":contract_id".to_string(),
-        Value::Integer(contract_id as i64),
-    ));
-    let query = live_latest(
-        "1",
-        &format!("contract_id = :contract_id AND {range}"),
-        None,
-    );
+    // "Any live path at/under `path`". `NOT EXISTS` + `LIMIT 1` stops at the FIRST
+    // live row instead of ranking the whole subtree. Per-path liveness is inherent
+    // (each row checks only its own path for a newer version), so a single newest
+    // tombstone — e.g. an IndexedMap index `__delete` under `<map>#idx` — can't hide
+    // a still-live sibling. `>=` includes the node itself, not just descendants.
+    let (query, params) =
+        live_paths_scan("1", ">=", contract_id, path.to_vec(), path, None, Some(1));
     let mut rows = conn.query(&query, params).await?;
     Ok(rows.next().await?.is_some())
 }
 
 /// Distinct direct-child key elements under `path` whose subtree has a live path
 /// — the `keys()` / `by_index` scan. Range-scans the descendants (`path` strictly
-/// a prefix), `live_latest` decides per-path liveness, and [`next_element`]
-/// recovers each child's first element from the byte after the prefix. Rows arrive
-/// in `path` byte order (== logical order, so deterministic across nodes — a
-/// consensus requirement, since filestorage selects challenge targets by index
-/// position), so equal child elements are adjacent and deduped in one pass. Each
-/// yielded item is the child element's codec bytes; the guest decodes it to `K`.
+/// a prefix), decides per-path liveness, and [`next_element`] recovers each child's
+/// first element from the byte after the prefix. Rows arrive in `path` byte order
+/// (== logical order, so deterministic across nodes — a consensus requirement,
+/// since filestorage selects challenge targets by index position), so equal child
+/// elements are adjacent and deduped in one pass. Each yielded item is the child
+/// element's codec bytes; the guest decodes it to `K`.
+///
+/// `after` is the full path of the last CHILD NODE already returned (`None` = start
+/// of subtree); the scan resumes past that child's ENTIRE subtree. It exists for
+/// CROSS-CALL pagination — a view returns a page of keys and, to continue, re-encodes
+/// its last key as `path ++ last_child` and passes it back as `after`. The skip is
+/// `cs.path >= strinc(after)`, NOT `cs.path > after`: a child can own deeper rows
+/// (`path/child/field…`), and `path/child` sorts BEFORE them, so `> path/child` would
+/// re-scan the child's own rows and re-emit it; `strinc(after)` is the first path past
+/// all of `after`'s descendants, landing on the next sibling. WITHIN a call the bound
+/// is the lazy iterator itself, not SQL: the `NOT EXISTS`
+/// formulation (see [`live_paths_scan`]) is index-served, so `ORDER BY path`
+/// streams off the index and each `Rows::next()` steps incrementally — the guest's
+/// `take(n)`/early-break (and, for procs, running out of per-row gas) stops the
+/// host scan after ~that many rows. The window form would instead materialise and
+/// sort the WHOLE range on the first `next()`, doing unbounded host work for a flat
+/// fee — a gas/DoS hole — which is exactly why this scan uses `NOT EXISTS`
+/// unconditionally and pushes no `LIMIT`. The per-row "newer?" probe `NOT EXISTS`
+/// adds is the price of that laziness, and it's charged: each pulled row costs
+/// `Fuel::KeysNext`.
 pub async fn path_prefix_filter_contract_state(
     conn: &Connection,
     contract_id: u64,
     path: Vec<u8>,
+    after: Option<Vec<u8>>,
 ) -> Result<impl Stream<Item = Result<Vec<u8>, Error>> + Send + 'static, Error> {
-    // `path > :lo` excludes the exact node (no child element to extract); `< :hi`
-    // bounds the subtree. Ordered by `path` so children are grouped for dedup.
-    let (range, mut params) = subtree_range(">", &path);
-    params.push((
-        ":contract_id".to_string(),
-        Value::Integer(contract_id as i64),
-    ));
-    let query = live_latest(
-        "path",
-        &format!("contract_id = :contract_id AND {range}"),
-        Some("path"),
+    // Lower bound of the scan. No cursor: `path > :lo` (children only, exclude the
+    // node). With a cursor: `strinc(after)` skips `after`'s whole subtree and the
+    // scan is `cs.path >= :lo`, so a multi-row child isn't re-read and re-emitted
+    // (see the fn doc). `strinc` is `None` only for an all-`0xFF` path, which isn't
+    // well-formed codec bytes (rejected upstream by `validate_path`), so the
+    // fallback is unreachable. `< :hi` is the subtree's own `strinc(path)` bound;
+    // ordered by `path` so children are grouped for dedup and the range streams.
+    let (lo, lo_cmp): (Vec<u8>, &str) = match after {
+        None => (path.clone(), ">"),
+        Some(after) => (strinc(&after).unwrap_or(after), ">="),
+    };
+    let (query, params) = live_paths_scan(
+        "cs.path",
+        lo_cmp,
+        contract_id,
+        lo,
+        &path,
+        Some("cs.path"),
+        None,
     );
     let rows = conn.query(&query, params).await?;
 
@@ -295,18 +372,21 @@ pub async fn path_prefix_filter_contract_state(
 }
 
 /// EXCEPTION to `live_latest` (see module header): enum/option variant resolution
-/// is GLOBAL-newest, not per-path. Returns which of `variants` is current under
-/// `base_path`, or `None` if the field is unset/deleted. Takes the single NEWEST
-/// live row under `base_path` (by height, then rowid) — a stale variant lingering
-/// live at a lower height (an old `none`, or an old enum case) must be outranked
-/// by the newer write, which a per-path pick would surface — and reads its child
-/// element (the variant discriminant, regardless of how deep the newest row is).
+/// is GLOBAL-newest, not per-path. Returns the INDEX of whichever `candidates`
+/// element is current under `base_path`, or `None` if the field is unset/deleted or
+/// the newest discriminant isn't among them. Takes the single NEWEST live row under
+/// `base_path` (by height, then rowid) — a stale variant lingering live at a lower
+/// height (an old `none`, or an old enum case) must be outranked by the newer write,
+/// which a per-path pick would surface — and reads its child element (the variant
+/// discriminant). `candidates` are the already-encoded discriminant elements (a
+/// string element, or an interned dict-ref); the match is pure BYTE equality, so the
+/// host never decodes a name — it works for any encoding the guest chooses.
 pub async fn matching_path(
     conn: &Connection,
     contract_id: u64,
     base_path: &[u8],
-    variants: &[String],
-) -> Result<Option<String>, Error> {
+    candidates: &[Vec<u8>],
+) -> Result<Option<u32>, Error> {
     // Global-newest (no `partition_by`) live row under `base_path`.
     let (range, mut params) = subtree_range(">=", base_path);
     params.push((
@@ -333,30 +413,33 @@ pub async fn matching_path(
     if suffix.is_empty() {
         return Ok(None);
     }
-    // The variant discriminant is the first element after `base_path`.
+    // The discriminant is the first element after `base_path`; match it against the
+    // candidate elements by raw bytes (no decode — encoding-agnostic).
     let (elem, _) = next_element(suffix).map_err(Error::KeyCodec)?;
-    let (variant, _) = String::decode_from(elem).map_err(Error::KeyCodec)?;
-    Ok(variants.contains(&variant).then_some(variant))
+    Ok(candidates
+        .iter()
+        .position(|c| c.as_slice() == elem)
+        .map(|i| i as u32))
 }
 
 /// EXCEPTION to the liveness model (see module header): a HARD delete of rows at
-/// the CURRENT height under any of `variants` — not a tombstone, not a
-/// latest-version read. Used only for intra-block `Option` variant cleanup (drop
-/// a just-written `some`/`none` before writing the other in the same block); it
-/// deliberately does NOT touch earlier-height rows. Each variant is the subtree
-/// `base_path ++ <variant element>`, so this is a per-variant current-height range
-/// delete.
+/// the CURRENT height under any of `candidates` — not a tombstone, not a
+/// latest-version read. Used only for intra-block `Option`/enum variant cleanup
+/// (drop a just-written `some`/`none` before writing the other in the same block);
+/// it deliberately does NOT touch earlier-height rows. Each `candidate` is an
+/// already-encoded discriminant element, so the subtree is `base_path ++ candidate`
+/// — a per-candidate current-height range delete.
 pub async fn delete_matching_paths(
     conn: &Connection,
     contract_id: u64,
     height: u64,
     base_path: &[u8],
-    variants: &[String],
+    candidates: &[Vec<u8>],
 ) -> Result<u64, Error> {
     let mut deleted = 0;
-    for variant in variants {
+    for candidate in candidates {
         let mut prefix = base_path.to_vec();
-        variant.encode_to(&mut prefix); // base_path ++ enc(variant)
+        prefix.extend_from_slice(candidate); // base_path ++ candidate element
         let (range, mut params) = subtree_range(">=", &prefix);
         params.push((
             ":contract_id".to_string(),

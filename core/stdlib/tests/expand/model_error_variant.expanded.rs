@@ -10,11 +10,15 @@ impl ErrorModel {
         ctx: alloc::rc::Rc<crate::context::ViewStorage>,
         base_path: stdlib::KeyPath,
     ) -> Self {
-        stdlib::ReadStorage::__extend_path_with_match(&ctx, &base_path, &["message"])
-            .map(|variant| match variant.as_str() {
-                "message" => {
+        stdlib::ReadStorage::__extend_path_with_match(
+                &ctx,
+                &base_path,
+                &[stdlib::interned_element(0u8)],
+            )
+            .map(|__idx| match __idx {
+                0u32 => {
                     ErrorModel::Message(
-                        stdlib::ReadStorage::__get(&ctx, base_path.push("message"))
+                        stdlib::ReadStorage::__get(&ctx, base_path.push_interned(0u8))
                             .unwrap(),
                     )
                 }
@@ -40,11 +44,15 @@ impl ErrorWriteModel {
         ctx: alloc::rc::Rc<crate::context::ProcStorage>,
         base_path: stdlib::KeyPath,
     ) -> Self {
-        stdlib::ReadStorage::__extend_path_with_match(&ctx, &base_path, &["message"])
-            .map(|variant| match variant.as_str() {
-                "message" => {
+        stdlib::ReadStorage::__extend_path_with_match(
+                &ctx,
+                &base_path,
+                &[stdlib::interned_element(0u8)],
+            )
+            .map(|__idx| match __idx {
+                0u32 => {
                     ErrorWriteModel::Message(
-                        stdlib::ReadStorage::__get(&ctx, base_path.push("message"))
+                        stdlib::ReadStorage::__get(&ctx, base_path.push_interned(0u8))
                             .unwrap(),
                     )
                 }

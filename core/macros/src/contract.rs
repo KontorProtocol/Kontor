@@ -210,15 +210,15 @@ pub fn generate(config: Config) -> TokenStream {
             }
 
             fn __get_keys<T: stdlib::KeyElement + Clone>(self: &alloc::rc::Rc<Self>, path: &[u8]) -> impl Iterator<Item = T> + use<T> {
-                stdlib::make_keys_iterator(self.get_keys(path))
+                stdlib::make_keys_iterator(self.get_keys(path, None))
             }
 
             fn __exists(self: &alloc::rc::Rc<Self>, path: &[u8]) -> bool {
                 self.exists(path)
             }
 
-            fn __extend_path_with_match(self: &alloc::rc::Rc<Self>, path: &[u8], variants: &[&str]) -> Option<String> {
-                self.extend_path_with_match(path, &variants.iter().map(|s| s.to_string()).collect::<Vec<_>>())
+            fn __extend_path_with_match(self: &alloc::rc::Rc<Self>, path: &[u8], candidates: &[alloc::vec::Vec<u8>]) -> Option<u32> {
+                self.extend_path_with_match(path, candidates)
             }
 
             fn __get<T: Retrieve<Self>>(self: &alloc::rc::Rc<Self>, path: KeyPath) -> Option<T> {
@@ -249,15 +249,15 @@ pub fn generate(config: Config) -> TokenStream {
             }
 
             fn __get_keys<T: stdlib::KeyElement + Clone>(self: &alloc::rc::Rc<Self>, path: &[u8]) -> impl Iterator<Item = T> + use<T> {
-                stdlib::make_keys_iterator(self.get_keys(path))
+                stdlib::make_keys_iterator(self.get_keys(path, None))
             }
 
             fn __exists(self: &alloc::rc::Rc<Self>, path: &[u8]) -> bool {
                 self.exists(path)
             }
 
-            fn __extend_path_with_match(self: &alloc::rc::Rc<Self>, path: &[u8], variants: &[&str]) -> Option<String> {
-                self.extend_path_with_match(path, &variants.iter().map(|s| s.to_string()).collect::<Vec<_>>())
+            fn __extend_path_with_match(self: &alloc::rc::Rc<Self>, path: &[u8], candidates: &[alloc::vec::Vec<u8>]) -> Option<u32> {
+                self.extend_path_with_match(path, candidates)
             }
 
             fn __get<T: Retrieve<Self>>(self: &alloc::rc::Rc<Self>, path: KeyPath) -> Option<T> {
@@ -299,8 +299,8 @@ pub fn generate(config: Config) -> TokenStream {
                 self.delete(path)
             }
 
-            fn __delete_matching_paths(self: &alloc::rc::Rc<Self>, base_path: &[u8], variants: &[&str]) -> u64 {
-                self.delete_matching_paths(base_path, &variants.iter().map(|s| s.to_string()).collect::<Vec<_>>())
+            fn __delete_matching_paths(self: &alloc::rc::Rc<Self>, base_path: &[u8], candidates: &[alloc::vec::Vec<u8>]) -> u64 {
+                self.delete_matching_paths(base_path, candidates)
             }
         }
 
@@ -383,6 +383,43 @@ pub fn generate(config: Config) -> TokenStream {
             numbers::Integer,
             numbers::Decimal
         );
+
+        // `numbers::Integer`/`Decimal` are 256-bit sign-magnitude; encode them as
+        // order-preserving codec elements so they can be `Map`/`IndexedMap` KEYS or
+        // index SORT fields (e.g. ordering by a monetary amount). `Decimal` reuses
+        // the integer encoding on its raw scaled limbs (fixed scale ⇒ raw-magnitude
+        // order == value order). Distinct from the `IndexKey` (bucket) impl above.
+        macro_rules! __key_element_num256 {
+            ($($ty:path),*) => {$(
+                impl stdlib::KeyElement for $ty {
+                    fn encode_to(&self, out: &mut alloc::vec::Vec<u8>) {
+                        stdlib::encode_int256(
+                            out,
+                            matches!(self.sign, numbers::Sign::Minus),
+                            [self.r0, self.r1, self.r2, self.r3],
+                        );
+                    }
+                    fn decode_from(bytes: &[u8]) -> Result<(Self, &[u8]), stdlib::CodecError> {
+                        let (negative, limbs, rest) = stdlib::decode_int256(bytes)?;
+                        Ok((
+                            Self {
+                                r0: limbs[0],
+                                r1: limbs[1],
+                                r2: limbs[2],
+                                r3: limbs[3],
+                                sign: if negative {
+                                    numbers::Sign::Minus
+                                } else {
+                                    numbers::Sign::Plus
+                                },
+                            },
+                            rest,
+                        ))
+                    }
+                }
+            )*};
+        }
+        __key_element_num256!(numbers::Integer, numbers::Decimal);
 
         impl Retrieve<crate::context::ViewStorage> for numbers::Integer {
             fn __get(ctx: &alloc::rc::Rc<crate::context::ViewStorage>, path: stdlib::KeyPath) -> Option<Self> {

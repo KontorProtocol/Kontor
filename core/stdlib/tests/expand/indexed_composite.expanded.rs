@@ -22,8 +22,8 @@ impl stdlib::Store<crate::context::ProcStorage> for Agreement {
         base_path: stdlib::KeyPath,
         value: Agreement,
     ) {
-        stdlib::WriteStorage::__set(ctx, base_path.push("active"), value.active);
-        stdlib::WriteStorage::__set(ctx, base_path.push("challenge"), value.challenge);
+        stdlib::WriteStorage::__set(ctx, base_path.push_interned(0u8), value.active);
+        stdlib::WriteStorage::__set(ctx, base_path.push_interned(1u8), value.challenge);
     }
 }
 pub struct AgreementModel {
@@ -46,27 +46,27 @@ impl AgreementModel {
         let mut entries = alloc::vec::Vec::new();
         entries
             .push(stdlib::IndexEntry {
-                name: "active",
+                name_id: 0u8,
                 bucket: (/*ERROR*/),
                 sort: None,
             });
         entries
             .push(stdlib::IndexEntry {
-                name: "eligible",
+                name_id: 1u8,
                 bucket: (/*ERROR*/),
                 sort: None,
             });
         entries
     }
     pub fn active(&self) -> bool {
-        stdlib::ReadStorage::__get(&self.ctx, self.base_path.push("active")).unwrap()
+        stdlib::ReadStorage::__get(&self.ctx, self.base_path.push_interned(0u8)).unwrap()
     }
     pub fn challenge(&self) -> Option<u64> {
-        let base_path = self.base_path.push("challenge");
+        let base_path = self.base_path.push_interned(1u8);
         if stdlib::ReadStorage::__extend_path_with_match(
                 &self.ctx,
                 &base_path,
-                &["none"],
+                &[stdlib::string_element("none")],
             )
             .is_some()
         {
@@ -113,14 +113,14 @@ impl AgreementWriteModel {
         self
     }
     pub fn active(&self) -> bool {
-        stdlib::ReadStorage::__get(&self.ctx, self.base_path.push("active")).unwrap()
+        stdlib::ReadStorage::__get(&self.ctx, self.base_path.push_interned(0u8)).unwrap()
     }
     pub fn challenge(&self) -> Option<u64> {
-        let base_path = self.base_path.push("challenge");
+        let base_path = self.base_path.push_interned(1u8);
         if stdlib::ReadStorage::__extend_path_with_match(
                 &self.ctx,
                 &base_path,
-                &["none"],
+                &[stdlib::string_element("none")],
             )
             .is_some()
         {
@@ -130,7 +130,7 @@ impl AgreementWriteModel {
         }
     }
     pub fn set_active(&self, value: bool) {
-        let path = self.base_path.push("active");
+        let path = self.base_path.push_interned(0u8);
         let old: bool = stdlib::ReadStorage::__get(&self.ctx, path.clone()).unwrap();
         let new = value;
         if let Some((index_root, index_key)) = &self.index_binding {
@@ -141,24 +141,24 @@ impl AgreementWriteModel {
                 index_key,
                 &[
                     stdlib::IndexEntry {
-                        name: "active",
+                        name_id: 0u8,
                         bucket: (/*ERROR*/),
                         sort: None,
                     },
                     stdlib::IndexEntry {
-                        name: "eligible",
+                        name_id: 1u8,
                         bucket: (/*ERROR*/),
                         sort: None,
                     },
                 ],
                 &[
                     stdlib::IndexEntry {
-                        name: "active",
+                        name_id: 0u8,
                         bucket: (/*ERROR*/),
                         sort: None,
                     },
                     stdlib::IndexEntry {
-                        name: "eligible",
+                        name_id: 1u8,
                         bucket: (/*ERROR*/),
                         sort: None,
                     },
@@ -168,7 +168,7 @@ impl AgreementWriteModel {
         stdlib::WriteStorage::__set(&self.ctx, path, new);
     }
     pub fn update_active(&self, f: impl Fn(bool) -> bool) {
-        let path = self.base_path.push("active");
+        let path = self.base_path.push_interned(0u8);
         let old: bool = stdlib::ReadStorage::__get(&self.ctx, path.clone()).unwrap();
         let new = f(old.clone());
         if let Some((index_root, index_key)) = &self.index_binding {
@@ -179,24 +179,24 @@ impl AgreementWriteModel {
                 index_key,
                 &[
                     stdlib::IndexEntry {
-                        name: "active",
+                        name_id: 0u8,
                         bucket: (/*ERROR*/),
                         sort: None,
                     },
                     stdlib::IndexEntry {
-                        name: "eligible",
+                        name_id: 1u8,
                         bucket: (/*ERROR*/),
                         sort: None,
                     },
                 ],
                 &[
                     stdlib::IndexEntry {
-                        name: "active",
+                        name_id: 0u8,
                         bucket: (/*ERROR*/),
                         sort: None,
                     },
                     stdlib::IndexEntry {
-                        name: "eligible",
+                        name_id: 1u8,
                         bucket: (/*ERROR*/),
                         sort: None,
                     },
@@ -209,7 +209,7 @@ impl AgreementWriteModel {
         &self,
         f: impl Fn(bool) -> Result<bool, crate::error::Error>,
     ) -> Result<(), crate::error::Error> {
-        let path = self.base_path.push("active");
+        let path = self.base_path.push_interned(0u8);
         let old: bool = stdlib::ReadStorage::__get(&self.ctx, path.clone()).unwrap();
         let new = f(old.clone())?;
         if let Some((index_root, index_key)) = &self.index_binding {
@@ -220,24 +220,24 @@ impl AgreementWriteModel {
                 index_key,
                 &[
                     stdlib::IndexEntry {
-                        name: "active",
+                        name_id: 0u8,
                         bucket: (/*ERROR*/),
                         sort: None,
                     },
                     stdlib::IndexEntry {
-                        name: "eligible",
+                        name_id: 1u8,
                         bucket: (/*ERROR*/),
                         sort: None,
                     },
                 ],
                 &[
                     stdlib::IndexEntry {
-                        name: "active",
+                        name_id: 0u8,
                         bucket: (/*ERROR*/),
                         sort: None,
                     },
                     stdlib::IndexEntry {
-                        name: "eligible",
+                        name_id: 1u8,
                         bucket: (/*ERROR*/),
                         sort: None,
                     },
@@ -248,7 +248,7 @@ impl AgreementWriteModel {
         Ok(())
     }
     pub fn set_challenge(&self, value: Option<u64>) {
-        let path = self.base_path.push("challenge");
+        let path = self.base_path.push_interned(1u8);
         let old = self.challenge();
         let new = value;
         if let Some((index_root, index_key)) = &self.index_binding {
@@ -259,14 +259,14 @@ impl AgreementWriteModel {
                 index_key,
                 &[
                     stdlib::IndexEntry {
-                        name: "eligible",
+                        name_id: 1u8,
                         bucket: (/*ERROR*/),
                         sort: None,
                     },
                 ],
                 &[
                     stdlib::IndexEntry {
-                        name: "eligible",
+                        name_id: 1u8,
                         bucket: (/*ERROR*/),
                         sort: None,
                     },
@@ -294,13 +294,13 @@ impl stdlib::Indexed for Agreement {
         let mut entries = alloc::vec::Vec::new();
         entries
             .push(stdlib::IndexEntry {
-                name: "active",
+                name_id: 0u8,
                 bucket: (/*ERROR*/),
                 sort: None,
             });
         entries
             .push(stdlib::IndexEntry {
-                name: "eligible",
+                name_id: 1u8,
                 bucket: (/*ERROR*/),
                 sort: None,
             });
@@ -312,13 +312,13 @@ where
     K: stdlib::KeyElement + Clone,
 {
     /// Raw bucket scan — yields the primary keys of an unsorted index
-    /// bucket, identified by its segments `<bucket…>` (one per `by` field).
-    /// The returned iterator owns its source (`use<Self, K>`, no lifetime
-    /// capture), so the typed wrappers can hand it borrows of temporary key
-    /// strings.
+    /// bucket, identified by the index's interned id and its bucket segments
+    /// `<bucket…>` (one per `by` field). The returned iterator owns its
+    /// source (`use<Self, K>`, no lifetime capture), so the typed wrappers
+    /// can hand it borrows of temporary key strings.
     fn by_index(
         &self,
-        index_name: &str,
+        index_id: u8,
         bucket: &[&[u8]],
     ) -> impl Iterator<Item = K> + use<Self, K>;
     /// Ordered bucket scan for a *sorted* index: the bucket's `(sort, pk)`
@@ -327,19 +327,19 @@ where
     /// index's sort field type, so the wrong bound type is a compile error.
     fn by_index_sorted<S: stdlib::KeyElement + Clone + 'static>(
         &self,
-        index_name: &str,
+        index_id: u8,
         bucket: &[&[u8]],
     ) -> stdlib::SortedScan<K, S>;
-    /// O(1) member count of an `(index_name, bucket…)` bucket, the
+    /// O(1) member count of an `(index_id, bucket…)` bucket, the
     /// framework-maintained size of what the scans would walk.
-    fn bucket_count(&self, index_name: &str, bucket: &[&[u8]]) -> u64;
+    fn bucket_count(&self, index_id: u8, bucket: &[&[u8]]) -> u64;
     fn where_active(&self, active: bool) -> impl Iterator<Item = K> {
         let __b0 = stdlib::IndexKey::index_key(&active);
-        self.by_index("active", &[__b0.as_slice()])
+        self.by_index(0u8, &[__b0.as_slice()])
     }
     fn count_active(&self, active: bool) -> u64 {
         let __b0 = stdlib::IndexKey::index_key(&active);
-        self.bucket_count("active", &[__b0.as_slice()])
+        self.bucket_count(0u8, &[__b0.as_slice()])
     }
     fn where_eligible(
         &self,
@@ -351,7 +351,7 @@ where
             let __p: stdlib::Presence = challenge.into();
             stdlib::IndexKey::index_key(&__p)
         };
-        self.by_index("eligible", &[__b0.as_slice(), __b1.as_slice()])
+        self.by_index(1u8, &[__b0.as_slice(), __b1.as_slice()])
     }
     fn count_eligible(
         &self,
@@ -363,7 +363,7 @@ where
             let __p: stdlib::Presence = challenge.into();
             stdlib::IndexKey::index_key(&__p)
         };
-        self.bucket_count("eligible", &[__b0.as_slice(), __b1.as_slice()])
+        self.bucket_count(1u8, &[__b0.as_slice(), __b1.as_slice()])
     }
 }
 struct AgreementStorage {
@@ -385,8 +385,8 @@ impl AgreementStorageModel {
     }
     pub fn agreements(&self) -> AgreementStorageAgreementsModel {
         AgreementStorageAgreementsModel {
-            base_path: self.base_path.push("agreements"),
-            index_path: self.base_path.push("agreements#idx"),
+            base_path: self.base_path.push_interned(0u8),
+            index_path: self.base_path.push_interned(128u8),
             ctx: self.ctx.clone(),
         }
     }
@@ -428,29 +428,23 @@ impl AgreementStorageAgreementsModel {
 impl AgreementIndex<u64> for AgreementStorageAgreementsModel {
     fn by_index(
         &self,
-        index_name: &str,
+        index_id: u8,
         bucket: &[&[u8]],
     ) -> impl Iterator<Item = u64> + use<> {
-        let bucket = bucket
-            .iter()
-            .fold(self.index_path.push(index_name), |p, seg| p.push_raw_element(seg));
+        let bucket = self.index_path.push_interned(index_id).push_raw_elements(bucket);
         stdlib::ReadStorage::__get_keys(&self.ctx, &bucket)
     }
     fn by_index_sorted<S: stdlib::KeyElement + Clone + 'static>(
         &self,
-        index_name: &str,
+        index_id: u8,
         bucket: &[&[u8]],
     ) -> stdlib::SortedScan<u64, S> {
-        let bucket = bucket
-            .iter()
-            .fold(self.index_path.push(index_name), |p, seg| p.push_raw_element(seg));
+        let bucket = self.index_path.push_interned(index_id).push_raw_elements(bucket);
         let members = stdlib::ReadStorage::__get_keys::<(S, u64)>(&self.ctx, &bucket);
         stdlib::SortedScan::new(alloc::boxed::Box::new(members))
     }
-    fn bucket_count(&self, index_name: &str, bucket: &[&[u8]]) -> u64 {
-        let bucket = bucket
-            .iter()
-            .fold(self.index_path.push(index_name), |p, seg| p.push_raw_element(seg));
+    fn bucket_count(&self, index_id: u8, bucket: &[&[u8]]) -> u64 {
+        let bucket = self.index_path.push_interned(index_id).push_raw_elements(bucket);
         stdlib::ReadStorage::__get_u64(&self.ctx, &bucket).unwrap_or(0)
     }
 }
@@ -476,8 +470,8 @@ impl AgreementStorageWriteModel {
     }
     pub fn agreements(&self) -> AgreementStorageAgreementsWriteModel {
         AgreementStorageAgreementsWriteModel {
-            base_path: self.base_path.push("agreements"),
-            index_path: self.base_path.push("agreements#idx"),
+            base_path: self.base_path.push_interned(0u8),
+            index_path: self.base_path.push_interned(128u8),
             ctx: self.ctx.clone(),
         }
     }
@@ -554,29 +548,23 @@ impl AgreementStorageAgreementsWriteModel {
 impl AgreementIndex<u64> for AgreementStorageAgreementsWriteModel {
     fn by_index(
         &self,
-        index_name: &str,
+        index_id: u8,
         bucket: &[&[u8]],
     ) -> impl Iterator<Item = u64> + use<> {
-        let bucket = bucket
-            .iter()
-            .fold(self.index_path.push(index_name), |p, seg| p.push_raw_element(seg));
+        let bucket = self.index_path.push_interned(index_id).push_raw_elements(bucket);
         stdlib::ReadStorage::__get_keys(&self.ctx, &bucket)
     }
     fn by_index_sorted<S: stdlib::KeyElement + Clone + 'static>(
         &self,
-        index_name: &str,
+        index_id: u8,
         bucket: &[&[u8]],
     ) -> stdlib::SortedScan<u64, S> {
-        let bucket = bucket
-            .iter()
-            .fold(self.index_path.push(index_name), |p, seg| p.push_raw_element(seg));
+        let bucket = self.index_path.push_interned(index_id).push_raw_elements(bucket);
         let members = stdlib::ReadStorage::__get_keys::<(S, u64)>(&self.ctx, &bucket);
         stdlib::SortedScan::new(alloc::boxed::Box::new(members))
     }
-    fn bucket_count(&self, index_name: &str, bucket: &[&[u8]]) -> u64 {
-        let bucket = bucket
-            .iter()
-            .fold(self.index_path.push(index_name), |p, seg| p.push_raw_element(seg));
+    fn bucket_count(&self, index_id: u8, bucket: &[&[u8]]) -> u64 {
+        let bucket = self.index_path.push_interned(index_id).push_raw_elements(bucket);
         stdlib::ReadStorage::__get_u64(&self.ctx, &bucket).unwrap_or(0)
     }
 }

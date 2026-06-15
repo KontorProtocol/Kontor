@@ -13,14 +13,14 @@ impl stdlib::Store<crate::context::ProcStorage> for Error {
         stdlib::WriteStorage::__delete_matching_paths(
             ctx,
             &base_path,
-            &["message", "overflow"],
+            &[stdlib::interned_element(0u8), stdlib::interned_element(1u8)],
         );
         match value {
             Error::Message(inner) => {
-                stdlib::WriteStorage::__set(ctx, base_path.push("message"), inner)
+                stdlib::WriteStorage::__set(ctx, base_path.push_interned(0u8), inner)
             }
             Error::Overflow => {
-                stdlib::WriteStorage::__set(ctx, base_path.push("overflow"), ())
+                stdlib::WriteStorage::__set(ctx, base_path.push_interned(1u8), ())
             }
         }
     }

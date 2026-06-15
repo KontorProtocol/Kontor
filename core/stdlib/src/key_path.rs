@@ -43,6 +43,15 @@ impl KeyPath {
         self.push_raw_element(&element.encode())
     }
 
+    /// Append an interned structural-name segment: a [`keycodec`] dict-ref (a
+    /// 1-byte id standing for a compile-time-fixed name — a struct field, map, or
+    /// index name). The contract macro emits this in place of [`push`] for the
+    /// names it interns; the id is per-type, assigned by declaration order. The
+    /// host treats it as an opaque fixed-width element (it never needs the name).
+    pub fn push_interned(&self, id: u8) -> Self {
+        self.push_raw_element(&keycodec::interned_element(id))
+    }
+
     /// Append a segment from its already-encoded element bytes. `elem` MUST be
     /// exactly one complete codec element (e.g. from [`KeyElement::encode`] or
     /// [`keycodec::tuple_from_elements`]) — the byte-offset bookkeeping assumes one
@@ -57,15 +66,48 @@ impl KeyPath {
         KeyPath { bytes, ends }
     }
 
+    /// Append several already-encoded elements in ONE clone — for multi-segment
+    /// builds (an index bucket path) where chaining `push_raw_element` would clone
+    /// the growing buffer once per segment (quadratic). Each `elem` MUST be exactly
+    /// one complete codec element, same contract as [`push_raw_element`].
+    pub fn push_raw_elements<E: AsRef<[u8]>>(&self, elems: &[E]) -> Self {
+        let mut bytes = self.bytes.clone();
+        let mut ends = self.ends.clone();
+        for elem in elems {
+            bytes.extend_from_slice(elem.as_ref());
+            ends.push(bytes.len());
+        }
+        KeyPath { bytes, ends }
+    }
+
+    /// For a path ending in an interned name (a map / indexed-map field), the
+    /// sibling "index root": the same parent with the trailing interned id's high
+    /// bit set (`id | 0x80`). The field model and the generic wholesale
+    /// `IndexedMap` write both derive `<map>#idx` this way, so they agree on its
+    /// location WITHOUT the contract's name dictionary — the rule is purely on the
+    /// interned id. Returns `None` if the last segment isn't an interned name.
+    pub fn interned_index_sibling(&self) -> Option<Self> {
+        let &end = self.ends.last()?;
+        let start = self.ends.len().checked_sub(2).map_or(0, |i| self.ends[i]);
+        let (id, _) = keycodec::decode_dict(&self.bytes[start..end]).ok()?;
+        let parent = KeyPath {
+            bytes: self.bytes[..start].to_vec(),
+            ends: self.ends[..self.ends.len() - 1].to_vec(),
+        };
+        Some(parent.push_interned(id | 0x80))
+    }
+
     /// Drop the last segment, returning the shortened path and the popped segment
-    /// (decoded back to its string form).
+    /// rendered to its debug-string form. The render is lossy for non-string
+    /// segments — an interned name comes back as `#<id>` (its string lives only in
+    /// the contract wasm), a typed key as its debug form — so `pop` is for
+    /// structural bookkeeping/debug, NOT for recovering a name to rebuild a path.
     pub fn pop(&self) -> (Self, Option<String>) {
         let Some(&end) = self.ends.last() else {
             return (self.clone(), None);
         };
         let start = self.ends.len().checked_sub(2).map_or(0, |i| self.ends[i]);
-        let (segment, _) =
-            String::decode_from(&self.bytes[start..end]).expect("a pushed segment decodes back");
+        let segment = keycodec::debug_render(&self.bytes[start..end]);
         let mut ends = self.ends.clone();
         ends.pop();
         (
@@ -175,5 +217,22 @@ mod tests {
     fn deref_exposes_codec_bytes() {
         let path = KeyPath::new().push("k");
         assert_eq!(&*path, "k".to_string().encode().as_slice());
+    }
+
+    #[test]
+    fn interned_segment_is_two_bytes_and_pops_as_id() {
+        // An interned name is a 2-byte dict-ref, distinct from the string form.
+        let interned = KeyPath::new().push_interned(5);
+        let stringy = KeyPath::new().push("balances");
+        assert_eq!(interned.as_bytes().len(), 2);
+        assert_ne!(interned.as_bytes(), stringy.as_bytes());
+
+        // Mixed path bookkeeping: interned name, then a dynamic key under it.
+        let path = KeyPath::new().push_interned(5).push_element(&7u64);
+        assert_eq!(path.num_segments(), 2);
+        let (path, popped) = path.pop();
+        assert_eq!(popped, Some("7".to_string())); // dynamic key renders as its value
+        let (_, popped) = path.pop();
+        assert_eq!(popped, Some("#5".to_string())); // interned name renders by id
     }
 }
