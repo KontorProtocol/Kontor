@@ -200,17 +200,28 @@ impl Runtime {
         }
     }
 
-    pub(crate) async fn _hash<T>(
+    pub(crate) async fn _sha256<T>(
         &self,
         accessor: &Accessor<T, Runtime>,
-        input: String,
-    ) -> Result<(String, Vec<u8>)> {
+        input: Vec<u8>,
+    ) -> Result<Vec<u8>> {
         Fuel::CryptoHash(input.len() as u64)
             .consume(accessor, self.gauge.as_ref())
             .await?;
-        let bs = hash_bytes(input.as_bytes());
-        let s = hex::encode(bs);
-        Ok((s, bs.to_vec()))
+        Ok(hash_bytes(&input).to_vec())
+    }
+
+    /// Recent-window block entropy — see the `crypto.block-entropy` WIT doc. The
+    /// window/lookup lives in [`Storage::block_entropy`]; this meters the call.
+    pub(crate) async fn _block_entropy<T>(
+        &self,
+        accessor: &Accessor<T, Runtime>,
+        height: u64,
+    ) -> Result<Option<Vec<u8>>> {
+        Fuel::BlockEntropy
+            .consume(accessor, self.gauge.as_ref())
+            .await?;
+        self.storage.block_entropy(height).await
     }
 
     pub(crate) async fn _hkdf_derive<T>(
@@ -379,21 +390,10 @@ impl built_in::file_registry::HostProofWithStore for Runtime {
 impl built_in::crypto::Host for Runtime {}
 
 impl built_in::crypto::HostWithStore for Runtime {
-    async fn hash<T>(accessor: &Accessor<T, Self>, input: String) -> Result<(String, Vec<u8>)> {
+    async fn sha256<T>(accessor: &Accessor<T, Self>, input: Vec<u8>) -> Result<Vec<u8>> {
         accessor
             .with(|mut access| access.get().clone())
-            ._hash(accessor, input)
-            .await
-    }
-
-    async fn hash_with_salt<T>(
-        accessor: &Accessor<T, Self>,
-        input: String,
-        salt: String,
-    ) -> Result<(String, Vec<u8>)> {
-        accessor
-            .with(|mut access| access.get().clone())
-            ._hash(accessor, input + salt.as_str())
+            ._sha256(accessor, input)
             .await
     }
 
@@ -406,6 +406,16 @@ impl built_in::crypto::HostWithStore for Runtime {
         accessor
             .with(|mut access| access.get().clone())
             ._hkdf_derive(accessor, ikm, salt, info)
+            .await
+    }
+
+    async fn block_entropy<T>(
+        accessor: &Accessor<T, Self>,
+        height: u64,
+    ) -> Result<Option<Vec<u8>>> {
+        accessor
+            .with(|mut access| access.get().clone())
+            ._block_entropy(accessor, height)
             .await
     }
 }

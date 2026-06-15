@@ -1,5 +1,6 @@
 use anyhow::{Context, Result, anyhow};
 use bitcoin::Txid;
+use bitcoin::hashes::Hash;
 use bon::Builder;
 use futures_util::Stream;
 use libsql::Connection;
@@ -14,13 +15,18 @@ use crate::{
             exists_contract_state, get_contract_address_from_id, get_contract_bytes_by_id,
             get_contract_id_from_address, get_latest_contract_state_value, insert_contract,
             insert_contract_result, insert_contract_state, matching_path,
-            path_prefix_filter_contract_state,
+            path_prefix_filter_contract_state, select_block_at_height,
         },
         types::{ContractResultRow, ContractRow, ContractStateRow},
     },
     runtime::{ContractAddress, counter::Counter, stack::Stack},
     test_utils::new_mock_transaction,
 };
+
+/// `block_entropy` recent-window size: a committed height older than this has
+/// expired (so a stale draw falls out of the window and the contract can refund).
+/// Bounds the lookup and forces prompt resolution. ~1 day on Bitcoin (144 blocks).
+pub const BLOCK_ENTROPY_WINDOW: u64 = 144;
 
 /// Decode the WIT embedded in already-encoded component bytes, unmodified
 /// (`init`/core-context preserved) — for on-chain publish validation, where the
@@ -253,6 +259,19 @@ impl Storage {
         Ok(path_prefix_filter_contract_state(&self.conn, contract_id, path, after).await?)
     }
 
+    /// Canonical per-block entropy (the Bitcoin block hash) at `height`, within the
+    /// recent window. `None` if `height` is beyond the block being executed (no
+    /// entropy yet) or older than [`BLOCK_ENTROPY_WINDOW`] (expired). The canonical
+    /// `blocks` table is the source, so it's reorg-correct without a cache.
+    pub async fn block_entropy(&self, height: u64) -> Result<Option<Vec<u8>>> {
+        if height > self.height || height + BLOCK_ENTROPY_WINDOW < self.height {
+            return Ok(None);
+        }
+        Ok(select_block_at_height(&self.conn, height)
+            .await?
+            .map(|b| b.hash.to_byte_array().to_vec()))
+    }
+
     pub async fn savepoint(&self) -> Result<()> {
         if self.savepoint_stack.is_empty().await {
             self.conn.execute("BEGIN TRANSACTION", ()).await?;
@@ -292,6 +311,43 @@ impl Storage {
             }
             None => 0,
         };
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::database::queries::insert_block;
+    use crate::test_utils::{new_mock_block_hash, new_test_db};
+    use indexer_types::BlockRow;
+
+    // `block_entropy` returns a present block's hash only when the height is in the
+    // recent window `[current - K, current]`: not future, not expired, and a row
+    // exists. (K = BLOCK_ENTROPY_WINDOW = 144.)
+    #[tokio::test]
+    async fn block_entropy_windowing() -> Result<()> {
+        let (_reader, writer, _temp) = new_test_db().await?;
+        let conn = writer.connection();
+        for h in [10u64, 100, 200] {
+            insert_block(
+                &conn,
+                BlockRow::builder()
+                    .height(h)
+                    .hash(new_mock_block_hash(h as u32))
+                    .build(),
+            )
+            .await?;
+        }
+        // Execution height 200 → window is heights 56..=200.
+        let storage = Storage::builder().height(200).conn(conn).build();
+        let bytes = |h: u32| new_mock_block_hash(h).to_byte_array().to_vec();
+
+        assert_eq!(storage.block_entropy(200).await?, Some(bytes(200))); // current block
+        assert_eq!(storage.block_entropy(100).await?, Some(bytes(100))); // in window, present
+        assert_eq!(storage.block_entropy(10).await?, None); // expired (10 < 56)
+        assert_eq!(storage.block_entropy(201).await?, None); // future (> current)
+        assert_eq!(storage.block_entropy(150).await?, None); // in window but no such block
         Ok(())
     }
 }
