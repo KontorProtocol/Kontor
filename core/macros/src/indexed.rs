@@ -61,6 +61,7 @@ pub fn generate_lookup_trait(
         .iter()
         .map(|decl| {
             let name = &decl.name;
+            let index_id = decl.id; // interned `<index>` segment
             let where_method = Ident::new(&format!("where_{name}"), type_name.span());
             let count_method = Ident::new(&format!("count_{name}"), type_name.span());
 
@@ -116,14 +117,14 @@ pub fn generate_lookup_trait(
                     quote! {
                         fn #where_method(&self, #(#params),*) -> stdlib::SortedScan<K, #sort_ty> {
                             #(#bindings)*
-                            self.by_index_sorted::<#sort_ty>(#name, #bucket)
+                            self.by_index_sorted::<#sort_ty>(#index_id, #bucket)
                         }
                     }
                 }
                 None => quote! {
                     fn #where_method(&self, #(#params),*) -> impl Iterator<Item = K> {
                         #(#bindings)*
-                        self.by_index(#name, #bucket)
+                        self.by_index(#index_id, #bucket)
                     }
                 },
             };
@@ -133,7 +134,7 @@ pub fn generate_lookup_trait(
 
                 fn #count_method(&self, #(#params),*) -> u64 {
                     #(#bindings)*
-                    self.bucket_count(#name, #bucket)
+                    self.bucket_count(#index_id, #bucket)
                 }
             }
         })
@@ -145,21 +146,21 @@ pub fn generate_lookup_trait(
             K: stdlib::KeyElement + Clone,
         {
             /// Raw bucket scan — yields the primary keys of an unsorted index
-            /// bucket, identified by its segments `<bucket…>` (one per `by` field).
-            /// The returned iterator owns its source (`use<Self, K>`, no lifetime
-            /// capture), so the typed wrappers can hand it borrows of temporary key
-            /// strings.
-            fn by_index(&self, index_name: &str, bucket: &[&[u8]]) -> impl Iterator<Item = K> + use<Self, K>;
+            /// bucket, identified by the index's interned id and its bucket segments
+            /// `<bucket…>` (one per `by` field). The returned iterator owns its
+            /// source (`use<Self, K>`, no lifetime capture), so the typed wrappers
+            /// can hand it borrows of temporary key strings.
+            fn by_index(&self, index_id: u8, bucket: &[&[u8]]) -> impl Iterator<Item = K> + use<Self, K>;
 
             /// Ordered bucket scan for a *sorted* index: the bucket's `(sort, pk)`
             /// tuple child members, wrapped in a `SortedScan` that yields `K` in sort
             /// order and bounds `up_to`/`range` on the decoded sort value. `S` is the
             /// index's sort field type, so the wrong bound type is a compile error.
-            fn by_index_sorted<S: stdlib::KeyElement + Clone + 'static>(&self, index_name: &str, bucket: &[&[u8]]) -> stdlib::SortedScan<K, S>;
+            fn by_index_sorted<S: stdlib::KeyElement + Clone + 'static>(&self, index_id: u8, bucket: &[&[u8]]) -> stdlib::SortedScan<K, S>;
 
-            /// O(1) member count of an `(index_name, bucket…)` bucket, the
+            /// O(1) member count of an `(index_id, bucket…)` bucket, the
             /// framework-maintained size of what the scans would walk.
-            fn bucket_count(&self, index_name: &str, bucket: &[&[u8]]) -> u64;
+            fn bucket_count(&self, index_id: u8, bucket: &[&[u8]]) -> u64;
 
             #(#methods)*
         }

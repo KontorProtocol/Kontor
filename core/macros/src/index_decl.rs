@@ -16,6 +16,12 @@ pub struct IndexDecl {
     pub name: String,
     pub by: Vec<Ident>,
     pub sort: Option<Ident>,
+    /// Interned id for the index's `<index>` path segment — its declaration order
+    /// within the value type (assigned by [`parse`]). The single source the write
+    /// side ([`index_entry`]) and the read side (the `where_`/`count_` wrappers)
+    /// both use, so the index path can't drift. Its own per-type id space (under
+    /// `#idx`), distinct from the struct's field ids.
+    pub id: u8,
 }
 
 /// The parsed arguments of a struct-level `#[index(...)]`. `name` is the leading
@@ -97,6 +103,7 @@ pub fn parse(struct_attrs: &[Attribute], fields: &FieldsNamed) -> Result<Vec<Ind
                 name: ident.to_string(),
                 by: vec![ident.clone()],
                 sort: None,
+                id: 0, // numbered after all decls are collected
             });
         }
     }
@@ -132,7 +139,20 @@ pub fn parse(struct_attrs: &[Attribute], fields: &FieldsNamed) -> Result<Vec<Ind
             name: args.name.to_string(),
             by,
             sort: args.sort,
+            id: 0, // numbered after all decls are collected
         });
+    }
+
+    // Assign each index its interned id = declaration order. A u8 segment, so a
+    // value type may declare at most 256 indexes (far beyond any real use).
+    if decls.len() > 256 {
+        return Err(Error::new(
+            Span::call_site(),
+            "a value type may not declare more than 256 indexes (interned id space)",
+        ));
+    }
+    for (i, decl) in decls.iter_mut().enumerate() {
+        decl.id = i as u8;
     }
 
     for i in 0..decls.len() {
@@ -190,7 +210,7 @@ pub fn field_type<'a>(fields: &'a FieldsNamed, ident: &Ident) -> &'a Type {
 /// in-place setters. Centralizing the literal keeps every site's bucket/sort
 /// encoding identical, so a write and a later diff can't disagree.
 pub fn index_entry(decl: &IndexDecl, value_for: &impl Fn(&Ident) -> TokenStream) -> TokenStream {
-    let name = &decl.name;
+    let name_id = decl.id;
     // One bucket segment per `by` field, in declared order (a single-field index
     // is just the one-element case).
     let bucket = decl.by.iter().map(|field| {
@@ -208,7 +228,7 @@ pub fn index_entry(decl: &IndexDecl, value_for: &impl Fn(&Ident) -> TokenStream)
     };
     quote! {
         stdlib::IndexEntry {
-            name: #name,
+            name_id: #name_id,
             bucket: alloc::vec![#(#bucket),*],
             sort: #sort,
         }
