@@ -6,9 +6,9 @@ world root {
 
   export init: async func(ctx: borrow<proc-context>) -> contract;
 
-  export hash: async func(ctx: borrow<view-context>, input: string) -> string;
+  export sha256: async func(ctx: borrow<view-context>, input: list<u8>) -> list<u8>;
 
-  export hash-with-salt: async func(ctx: borrow<view-context>, input: string, salt: string) -> string;
+  export block-entropy: async func(ctx: borrow<view-context>, height: u64) -> option<list<u8>>;
 
   export generate-id: async func(ctx: borrow<proc-context>) -> string;
 

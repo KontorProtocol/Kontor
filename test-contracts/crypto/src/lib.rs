@@ -18,20 +18,22 @@ impl Guest for Crypto {
         ctx.contract()
     }
 
-    fn hash(_ctx: &ViewContext, input: String) -> String {
-        crypto::hash(&input).0
+    fn sha256(_ctx: &ViewContext, input: Vec<u8>) -> Vec<u8> {
+        crypto::sha256(&input)
     }
 
-    fn hash_with_salt(_ctx: &ViewContext, input: String, salt: String) -> String {
-        crypto::hash_with_salt(&input, &salt).0
+    fn block_entropy(_ctx: &ViewContext, height: u64) -> Option<Vec<u8>> {
+        crypto::block_entropy(height)
     }
 
     fn generate_id(ctx: &ProcContext) -> String {
         ctx.generate_id()
     }
 
+    // `input` is a string for test-ergonomics (callers invoke `set-hash("foo")`
+    // via string exprs); the crypto built-in itself is bytes-native.
     fn set_hash(ctx: &ProcContext, input: String) -> Vec<u8> {
-        let hash = crypto::hash(&input).1;
+        let hash = crypto::sha256(input.as_bytes());
         ctx.model().set_bytes(Some(hash.clone()));
         hash
     }

@@ -190,14 +190,27 @@ interface foreign {
     call: async func(signer: option<signer>, contract-address: contract-address, expr: string) -> string;
 }
 interface crypto {
-    hash: async func(input: string) -> tuple<string, list<u8>>;
-    hash-with-salt: async func(input: string, salt: string) -> tuple<string, list<u8>>;
+    /// Raw SHA-256 of arbitrary bytes (32-byte digest). For deriving multiple
+    /// INDEPENDENT values from one seed, prefer `hkdf-derive` (domain-separated).
+    sha256: async func(input: list<u8>) -> list<u8>;
 
+    /// HKDF-SHA256 (RFC 5869): derive a strong value from input keying material.
+    /// `info` is a domain-separation label — the same `ikm` with different `info`
+    /// yields INDEPENDENT outputs (e.g. per-draw / per-purpose randomness from one
+    /// block seed). NOT a password KDF (input must already be high-entropy).
     hkdf-derive: async func(
         ikm: list<u8>,
         salt: list<u8>,
         info: list<u8>
     ) -> list<u8>;
+
+    /// Canonical per-block entropy (the Bitcoin block hash) at `height`, or `none`
+    /// if `height` is beyond the block being executed (can't read entropy that
+    /// doesn't exist yet) OR older than the recent window (~144 blocks). Source-
+    /// abstracted: the value is opaque entropy — derive randomness from it via
+    /// `hkdf-derive`. Reading the CURRENT block is grindable by that block's miner;
+    /// for unpredictable draws, COMMIT a future height and resolve from it later.
+    block-entropy: async func(height: u64) -> option<list<u8>>;
 }
 interface error {
     variant error {

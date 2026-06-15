@@ -36,6 +36,7 @@ pub enum Fuel {
     ProcViewContext,
     ProcTransaction,
     ProcStorage,
+    BlockEntropy,
     ViewStorage,
     ViewContract,
     FallSigner,
@@ -127,6 +128,7 @@ impl Fuel {
             Self::ViewContract => 200,
             Self::ProcViewContext => 200,
             Self::ProcStorage => 200,
+            Self::BlockEntropy => 200,
             Self::ViewStorage => 200,
             Self::FallSigner
             | Self::FallPayer
