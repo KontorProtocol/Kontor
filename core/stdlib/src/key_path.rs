@@ -68,6 +68,23 @@ impl KeyPath {
         KeyPath { bytes, ends }
     }
 
+    /// For a path ending in an interned name (a map / indexed-map field), the
+    /// sibling "index root": the same parent with the trailing interned id's high
+    /// bit set (`id | 0x80`). The field model and the generic wholesale
+    /// `IndexedMap` write both derive `<map>#idx` this way, so they agree on its
+    /// location WITHOUT the contract's name dictionary — the rule is purely on the
+    /// interned id. Returns `None` if the last segment isn't an interned name.
+    pub fn interned_index_sibling(&self) -> Option<Self> {
+        let &end = self.ends.last()?;
+        let start = self.ends.len().checked_sub(2).map_or(0, |i| self.ends[i]);
+        let (id, _) = keycodec::decode_dict(&self.bytes[start..end]).ok()?;
+        let parent = KeyPath {
+            bytes: self.bytes[..start].to_vec(),
+            ends: self.ends[..self.ends.len() - 1].to_vec(),
+        };
+        Some(parent.push_interned(id | 0x80))
+    }
+
     /// Drop the last segment, returning the shortened path and the popped segment
     /// rendered to its debug-string form. The render is lossy for non-string
     /// segments — an interned name comes back as `#<id>` (its string lives only in

@@ -6,10 +6,19 @@ use syn::{DataEnum, DataStruct, Error, Fields, Ident, Result};
 pub fn generate_struct_body(data_struct: &DataStruct, type_name: &Ident) -> Result<TokenStream> {
     match &data_struct.fields {
         Fields::Named(fields) => {
+            // Interned path ids MUST match `model.rs`'s scheme (field declaration
+            // index), so the wholesale write lands at the same paths the field
+            // getters read. Same struct, same iteration order ⇒ same ids.
+            if fields.named.len() > 128 {
+                return Err(Error::new(
+                    type_name.span(),
+                    "storage struct may not exceed 128 fields (interned path-id space)",
+                ));
+            }
             let mut field_sets = Vec::new();
-            for field in fields.named.iter() {
+            for (field_idx, field) in fields.named.iter().enumerate() {
                 let field_name = field.ident.as_ref().unwrap();
-                let field_name_str = field_name.to_string();
+                let field_id = field_idx as u8;
                 let field_ty = &field.ty;
 
                 if utils::is_result_type(field_ty) {
@@ -19,7 +28,7 @@ pub fn generate_struct_body(data_struct: &DataStruct, type_name: &Ident) -> Resu
                     ));
                 } else {
                     field_sets.push(quote! {
-                        stdlib::WriteStorage::__set(ctx, base_path.push(#field_name_str), value.#field_name);
+                        stdlib::WriteStorage::__set(ctx, base_path.push_interned(#field_id), value.#field_name);
                     })
                 }
             }

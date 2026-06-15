@@ -23,6 +23,16 @@ pub fn generate_struct(
 ) -> Result<TokenStream> {
     match &data_struct.fields {
         Fields::Named(fields) => {
+            // Interned path ids are the field's declaration index (a `u8`), and an
+            // indexed-map field's `#idx` sibling is `id | 0x80` — so field ids must
+            // stay in `0..128` to never collide with the marker space. 128 fields is
+            // far beyond any real storage struct; reject rather than silently wrap.
+            if fields.named.len() > 128 {
+                return Err(Error::new(
+                    type_name.span(),
+                    "storage struct may not exceed 128 fields (interned path-id space)",
+                ));
+            }
             // The struct's declared secondary indexes (field-level `#[index]` +
             // struct-level `#[index(...)]`). The single source the in-place
             // setters reconcile against and the read model reads back for diffs.
@@ -42,9 +52,14 @@ pub fn generate_struct(
 
             let mut special_models = vec![];
 
-            let getters = fields.named.iter().map(|field| {
+            let getters = fields.named.iter().enumerate().map(|(field_idx, field)| {
                 let field_name = field.ident.as_ref().unwrap();
-                let field_name_str = field_name.to_string();
+                // Per-type interned path id for this field's structural name: its
+                // declaration index. Emitted as a `push_interned` dict-ref instead
+                // of the full field-name string (see `keycodec` TAG_DICT). The id
+                // is private to this type and stable for the life of the contract
+                // (no in-place upgrades), so declaration order is a fine, dense key.
+                let field_id = field_idx as u8;
                 let field_ty = &field.ty;
 
                 if utils::is_map_type(field_ty) {
@@ -100,15 +115,20 @@ pub fn generate_struct(
 
                     Ok(quote! {
                         pub fn #field_name(&self) -> #field_model_name {
-                            #field_model_name { base_path: self.base_path.push(#field_name_str), ctx: self.ctx.clone() }
+                            #field_model_name { base_path: self.base_path.push_interned(#field_id), ctx: self.ctx.clone() }
                         }
                     })
                 } else if utils::is_indexed_map_type(field_ty) {
                     let (k_ty, v_ty) = get_indexed_map_types(field_ty)?;
                     let field_model_name = Ident::new(&format!("{}{}{}Model", type_name, &field_name.to_string().to_pascal_case(), write_prefix), field.span());
-                    // Index rows live in a sibling root so they never show up in
-                    // the primary's `keys()`.
-                    let index_field_name = format!("{}#idx", field_name_str);
+                    // Index rows live in a SIBLING root (not under the map) so they
+                    // never show up in the primary's `keys()`. Its interned id is the
+                    // field's id with the high bit set (`id | 0x80`) — a pure-byte
+                    // rule so the generic wholesale `IndexedMap` write can rebuild it
+                    // from the map's path without the contract's name dictionary (see
+                    // `KeyPath::interned_index_sibling`). Field ids are < 128, so the
+                    // marker space (128..=255) never collides with a field id.
+                    let idx_marker_id: u8 = field_id | 0x80;
 
                     // IndexedMap values are always structs deriving `Indexed` +
                     // `Storage`, so `get` returns the value model (like a nested
@@ -212,15 +232,15 @@ pub fn generate_struct(
                     Ok(quote! {
                         pub fn #field_name(&self) -> #field_model_name {
                             #field_model_name {
-                                base_path: self.base_path.push(#field_name_str),
-                                index_path: self.base_path.push(#index_field_name),
+                                base_path: self.base_path.push_interned(#field_id),
+                                index_path: self.base_path.push_interned(#idx_marker_id),
                                 ctx: self.ctx.clone(),
                             }
                         }
                     })
                 } else if utils::is_option_type(field_ty) {
                     let inner_ty = get_option_inner_type(field_ty)?;
-                    let base_path = quote! { self.base_path.push(#field_name_str) };
+                    let base_path = quote! { self.base_path.push_interned(#field_id) };
                     if utils::is_primitive_type(&inner_ty) {
                         Ok(quote! {
                             pub fn #field_name(&self) -> Option<#inner_ty> {
@@ -249,14 +269,14 @@ pub fn generate_struct(
                 } else if utils::is_primitive_type(field_ty) {
                     Ok(quote! {
                         pub fn #field_name(&self) -> #field_ty {
-                            stdlib::ReadStorage::__get(&self.ctx, self.base_path.push(#field_name_str)).unwrap()
+                            stdlib::ReadStorage::__get(&self.ctx, self.base_path.push_interned(#field_id)).unwrap()
                         }
                     })
                 } else {
                     let field_model_ty = get_model_ident(write, field_ty, field.span())?;
                     Ok(quote! {
                         pub fn #field_name(&self) -> #field_model_ty {
-                            #field_model_ty::new(self.ctx.clone(), self.base_path.push(#field_name_str))
+                            #field_model_ty::new(self.ctx.clone(), self.base_path.push_interned(#field_id))
                         }
                     })
                 }
@@ -283,15 +303,16 @@ pub fn generate_struct(
                 fields
                     .named
                     .iter()
-                    .map(|field| {
+                    .enumerate()
+                    .map(|(field_idx, field)| {
                         let field_name = field.ident.as_ref().unwrap();
-                        let field_name_str = field_name.to_string();
+                        let field_id = field_idx as u8;
                         let field_ty = &field.ty;
                         let set_field_name =
                             Ident::new(&format!("set_{}", field_name), field_name.span());
                         let setter = quote! {
                             pub fn #set_field_name(&self, value: #field_ty) {
-                                stdlib::WriteStorage::__set(&self.ctx, self.base_path.push(#field_name_str), value);
+                                stdlib::WriteStorage::__set(&self.ctx, self.base_path.push_interned(#field_id), value);
                             }
                         };
 
@@ -369,7 +390,7 @@ pub fn generate_struct(
                             let set_fn = if participates {
                                 quote! {
                                     pub fn #set_field_name(&self, value: #field_ty) {
-                                        let path = self.base_path.push(#field_name_str);
+                                        let path = self.base_path.push_interned(#field_id);
                                         let old: #field_ty = stdlib::ReadStorage::__get(&self.ctx, path.clone()).unwrap();
                                         let new = value;
                                         #reconcile
@@ -383,7 +404,7 @@ pub fn generate_struct(
                                 #set_fn
 
                                 pub fn #update_field_name(&self, f: impl Fn(#field_ty) -> #field_ty) {
-                                    let path = self.base_path.push(#field_name_str);
+                                    let path = self.base_path.push_interned(#field_id);
                                     let old: #field_ty = stdlib::ReadStorage::__get(&self.ctx, path.clone()).unwrap();
                                     let new = f(old.clone());
                                     #reconcile
@@ -391,7 +412,7 @@ pub fn generate_struct(
                                 }
 
                                 pub fn #try_update_field_name(&self, f: impl Fn(#field_ty) -> Result<#field_ty, crate::error::Error>) -> Result<(), crate::error::Error> {
-                                    let path = self.base_path.push(#field_name_str);
+                                    let path = self.base_path.push_interned(#field_id);
                                     let old: #field_ty = stdlib::ReadStorage::__get(&self.ctx, path.clone()).unwrap();
                                     let new = f(old.clone())?;
                                     #reconcile
@@ -405,7 +426,7 @@ pub fn generate_struct(
                             // by its none/some discriminant, so no model load is needed.
                             Ok(quote! {
                                 pub fn #set_field_name(&self, value: #field_ty) {
-                                    let path = self.base_path.push(#field_name_str);
+                                    let path = self.base_path.push_interned(#field_id);
                                     let old = self.#field_name();
                                     let new = value;
                                     #reconcile
@@ -421,7 +442,7 @@ pub fn generate_struct(
                             let v_model_ty = get_model_ident(true, field_ty, field.span())?;
                             Ok(quote! {
                                 pub fn #set_field_name(&self, value: #field_ty) {
-                                    let path = self.base_path.push(#field_name_str);
+                                    let path = self.base_path.push_interned(#field_id);
                                     let old = #v_model_ty::new(self.ctx.clone(), path.clone()).load();
                                     let new = value;
                                     #reconcile

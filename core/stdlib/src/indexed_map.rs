@@ -25,7 +25,6 @@
 //! struct set through `Store`) index-consistent — the field model's per-key path
 //! can't catch that.
 
-use alloc::format;
 use alloc::rc::Rc;
 use alloc::string::String;
 use alloc::vec::Vec;
@@ -316,9 +315,11 @@ where
     /// upsert from empty — it adds rows, it doesn't reconcile against existing
     /// ones; per-key updates that must diff go through the field model's `set`.
     fn __set(ctx: &Rc<S>, base_path: KeyPath, value: StorageIndexedMap<K, V, S>) {
-        let (parent, last) = base_path.pop();
-        let Some(last) = last else { return };
-        let index_root = parent.push(format!("{last}#idx"));
+        // The `<map>#idx` sibling, derived from the map's interned id by the shared
+        // byte rule (so it matches the field model's index root without the dict).
+        let Some(index_root) = base_path.interned_index_sibling() else {
+            return;
+        };
         for (k, v) in value.entries.into_iter() {
             let key_bytes = k.encode();
             let new_entries = v.index_entries();
@@ -455,6 +456,12 @@ mod tests {
         path.as_bytes().to_vec()
     }
 
+    // The interned id a real contract's macro would assign an IndexedMap field
+    // (its declaration index). Wholesale `Store` derives the `#idx` sibling from
+    // this via `interned_index_sibling`, so the map-field segment MUST be interned
+    // (not a string) for those tests to mirror production.
+    const IM: u8 = 0;
+
     // A primary key encoded as its codec element (what `apply_index_diff` takes,
     // and the member segment of an unsorted index).
     fn kb(k: impl KeyElement) -> Vec<u8> {
@@ -576,34 +583,37 @@ mod tests {
             (3, Position { status: 5 }),
         ]);
 
-        Store::__set(&ctx, p("positions"), m);
+        let base = KeyPath::new().push_interned(IM); // the interned `positions` field
+        Store::__set(&ctx, base.clone(), m);
 
         // Primary values (stored under the value's own field path; the u64 map key
         // is a native int element, not a stringified segment).
         assert_eq!(
-            ctx.__get_u64(&b(p("positions").push_element(&1u64).push("status"))),
+            ctx.__get_u64(&b(base.push_element(&1u64).push("status"))),
             Some(2)
         );
         assert_eq!(
-            ctx.__get_u64(&b(p("positions").push_element(&3u64).push("status"))),
+            ctx.__get_u64(&b(base.push_element(&3u64).push("status"))),
             Some(5)
         );
 
-        // Index rows, in the `#idx` sibling. The member is the u64 primary key.
-        assert!(ctx.__exists(&b(p("positions#idx.status.2").push_element(&1u64))));
-        assert!(ctx.__exists(&b(p("positions#idx.status.2").push_element(&2u64))));
-        assert!(ctx.__exists(&b(p("positions#idx.status.5").push_element(&3u64))));
+        // Index rows, in the `#idx` sibling (derived the same way production does).
+        // The member is the u64 primary key.
+        let idx = base.interned_index_sibling().unwrap();
+        assert!(ctx.__exists(&b(idx.push("status").push("2").push_element(&1u64))));
+        assert!(ctx.__exists(&b(idx.push("status").push("2").push_element(&2u64))));
+        assert!(ctx.__exists(&b(idx.push("status").push("5").push_element(&3u64))));
 
         // by_index resolves to the primary keys.
-        let bucket = p("positions#idx").push("status").push("2");
+        let bucket = idx.push("status").push("2");
         let mut keys: Vec<u64> = ctx.__get_keys(&bucket).collect();
         keys.sort();
         assert_eq!(keys, vec![1, 2]);
 
         // The bulk path maintains bucket counts too (it funnels through
         // apply_index_diff): status 2 has {1,2}, status 5 has {3}.
-        assert_eq!(ctx.__get_u64(&pb("positions#idx.status.2")), Some(2));
-        assert_eq!(ctx.__get_u64(&pb("positions#idx.status.5")), Some(1));
+        assert_eq!(ctx.__get_u64(&b(idx.push("status").push("2"))), Some(2));
+        assert_eq!(ctx.__get_u64(&b(idx.push("status").push("5"))), Some(1));
         // The count lives AT the bucket path, NOT as a child — so it never leaks
         // into a `by_index` scan of that bucket's members.
         assert_eq!(ctx.__get_keys::<u64>(&bucket).count(), 2);
@@ -619,7 +629,8 @@ mod tests {
 
     impl Store<Mock> for Account {
         fn __set(ctx: &Rc<Mock>, base_path: KeyPath, value: Account) {
-            ctx.__set(base_path.push("positions"), value.positions);
+            // `positions` is an interned field name (as the macro would emit).
+            ctx.__set(base_path.push_interned(IM), value.positions);
         }
     }
 
@@ -638,20 +649,22 @@ mod tests {
 
         Store::__set(&ctx, p("account"), account);
 
+        // The nested `positions` field, interned under `account`.
+        let base = p("account").push_interned(IM);
+
         // Primary values land under the nested path.
         assert_eq!(
-            ctx.__get_u64(&b(p("account.positions")
-                .push_element(&1u64)
-                .push("status"))),
+            ctx.__get_u64(&b(base.push_element(&1u64).push("status"))),
             Some(2)
         );
 
         // Index rows are the `#idx` sibling *at depth* — same path the field
         // model would build (parent `account` + `positions#idx`).
-        assert!(ctx.__exists(&b(p("account.positions#idx.status.2").push_element(&1u64))));
-        assert!(ctx.__exists(&b(p("account.positions#idx.status.5").push_element(&2u64))));
+        let idx = base.interned_index_sibling().unwrap();
+        assert!(ctx.__exists(&b(idx.push("status").push("2").push_element(&1u64))));
+        assert!(ctx.__exists(&b(idx.push("status").push("5").push_element(&2u64))));
 
-        let bucket = p("account.positions#idx").push("status").push("2");
+        let bucket = idx.push("status").push("2");
         assert_eq!(ctx.__get_keys::<u64>(&bucket).collect::<Vec<_>>(), vec![1]);
     }
 
@@ -680,29 +693,28 @@ mod tests {
         Store::__set(&ctx, p("accounts"), accounts);
 
         // Inner index rows land at the nested depth for each map entry (outer and
-        // inner keys are u64 elements; the bucket segments are strings).
+        // inner keys are u64 elements; `positions`/`#idx` are interned, the bucket
+        // name/value segments are strings).
+        let pos7 = p("accounts").push_element(&7u64).push_interned(IM);
+        let pos8 = p("accounts").push_element(&8u64).push_interned(IM);
         assert!(
-            ctx.__exists(&b(p("accounts")
-                .push_element(&7u64)
-                .push("positions#idx")
+            ctx.__exists(&b(pos7
+                .interned_index_sibling()
+                .unwrap()
                 .push("status")
                 .push("2")
                 .push_element(&1u64)))
         );
         assert!(
-            ctx.__exists(&b(p("accounts")
-                .push_element(&8u64)
-                .push("positions#idx")
+            ctx.__exists(&b(pos8
+                .interned_index_sibling()
+                .unwrap()
                 .push("status")
                 .push("5")
                 .push_element(&1u64)))
         );
         assert_eq!(
-            ctx.__get_u64(&b(p("accounts")
-                .push_element(&7u64)
-                .push("positions")
-                .push_element(&1u64)
-                .push("status"))),
+            ctx.__get_u64(&b(pos7.push_element(&1u64).push("status"))),
             Some(2)
         );
     }
@@ -739,20 +751,22 @@ mod tests {
             },
         )]);
 
-        Store::__set(&ctx, p("bags"), bags);
+        let base = KeyPath::new().push_interned(IM); // the interned `bags` field
+        Store::__set(&ctx, base.clone(), bags);
 
         // Outer index maintained by the value's `tag` (member is the u64 key 1).
-        assert!(ctx.__exists(&b(p("bags#idx.tag.9").push_element(&1u64))));
+        let idx = base.interned_index_sibling().unwrap();
+        assert!(ctx.__exists(&b(idx.push("tag").push("9").push_element(&1u64))));
         // Inner map data persisted under the value's path (u64 key + u64 item keys).
         assert_eq!(
-            ctx.__get_u64(&b(p("bags")
+            ctx.__get_u64(&b(base
                 .push_element(&1u64)
                 .push("items")
                 .push_element(&100u64))),
             Some(1)
         );
         assert_eq!(
-            ctx.__get_u64(&b(p("bags")
+            ctx.__get_u64(&b(base
                 .push_element(&1u64)
                 .push("items")
                 .push_element(&200u64))),
