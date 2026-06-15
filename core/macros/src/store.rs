@@ -9,12 +9,7 @@ pub fn generate_struct_body(data_struct: &DataStruct, type_name: &Ident) -> Resu
             // Interned path ids MUST match `model.rs`'s scheme (field declaration
             // index), so the wholesale write lands at the same paths the field
             // getters read. Same struct, same iteration order ⇒ same ids.
-            if fields.named.len() > 128 {
-                return Err(Error::new(
-                    type_name.span(),
-                    "storage struct may not exceed 128 fields (interned path-id space)",
-                ));
-            }
+            utils::check_struct_field_count(fields, type_name.span())?;
             let mut field_sets = Vec::new();
             for (field_idx, field) in fields.named.iter().enumerate() {
                 let field_name = field.ident.as_ref().unwrap();
@@ -43,14 +38,16 @@ pub fn generate_struct_body(data_struct: &DataStruct, type_name: &Ident) -> Resu
 
 pub fn generate_enum_body(data_enum: &DataEnum, type_name: &Ident) -> Result<TokenStream> {
     // The discriminant segment is an interned dict-ref id = the variant's
-    // declaration order (a per-enum dict). MUST match `model::generate_enum`'s
-    // read side (same enum, same order ⇒ same ids), so a write and its later read
-    // resolve to the same variant.
-    let mut variant_candidates = vec![];
-    let arms = data_enum.variants.iter().enumerate().map(|(i, variant)| {
+    // declaration order, numbered via the SAME `numbered_variants` source
+    // `model::generate_enum` reads, so a write and its later read resolve to the
+    // same variant (can't drift).
+    let numbered = utils::numbered_variants(data_enum, type_name.span())?;
+    let variant_candidates = numbered
+        .iter()
+        .map(|&(id, _)| quote! { stdlib::interned_element(#id) })
+        .collect::<Vec<_>>();
+    let arms = numbered.iter().map(|&(variant_id, variant)| {
         let variant_ident = &variant.ident;
-        let variant_id = i as u8;
-        variant_candidates.push(quote! { stdlib::interned_element(#variant_id) });
 
         match &variant.fields {
             Fields::Unit => {

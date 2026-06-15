@@ -49,9 +49,7 @@ impl KeyPath {
     /// names it interns; the id is per-type, assigned by declaration order. The
     /// host treats it as an opaque fixed-width element (it never needs the name).
     pub fn push_interned(&self, id: u8) -> Self {
-        let mut elem = Vec::new();
-        keycodec::encode_dict(&mut elem, id);
-        self.push_raw_element(&elem)
+        self.push_raw_element(&keycodec::interned_element(id))
     }
 
     /// Append a segment from its already-encoded element bytes. `elem` MUST be

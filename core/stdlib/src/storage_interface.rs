@@ -1,7 +1,7 @@
 use alloc::{string::String, vec::Vec};
 
 use crate::KeyPath;
-use crate::keycodec::KeyElement;
+use crate::keycodec::{KeyElement, string_element};
 
 pub trait ReadStorage {
     fn __get_str(self: &alloc::rc::Rc<Self>, path: &[u8]) -> Option<String>;
@@ -182,13 +182,7 @@ impl<S: WriteStorage + ?Sized, T: Store<S>> Store<S> for Option<T> {
         // `none`/`some` stay STRING discriminant segments (Option is generic, with
         // no per-type dict to intern them into); the host byte-compares, so this
         // mixes fine with interned enum variants elsewhere.
-        ctx.__delete_matching_paths(
-            &path,
-            &[
-                crate::keycodec::string_element("none"),
-                crate::keycodec::string_element("some"),
-            ],
-        );
+        ctx.__delete_matching_paths(&path, &[string_element("none"), string_element("some")]);
         match value {
             Some(inner) => ctx.__set(path.push("some"), inner),
             None => ctx.__set(path.push("none"), ()),

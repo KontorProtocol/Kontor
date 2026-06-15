@@ -3,9 +3,44 @@ use heck::ToUpperCamelCase;
 use proc_macro2::{Span, TokenStream};
 use quote::ToTokens;
 use quote::quote;
-use syn::Ident;
 use syn::PathArguments;
+use syn::{DataEnum, Error, FieldsNamed, Ident, Result, Variant};
 use wit_parser::{Handle, Resolve, Type as WitType, TypeDefKind};
+
+/// Reject a storage struct with more fields than the interned path-id space can
+/// hold. A field's id is its declaration index (`u8`) and an indexed-map field's
+/// `#idx` sibling is `id | 0x80`, so field ids must stay in `0..128` to never
+/// collide with the marker space (128..=255). 128 fields is far beyond any real
+/// storage struct. Shared by the `Model` (read) and `Store` (write) derives so the
+/// invariant lives in one place.
+pub fn check_struct_field_count(fields: &FieldsNamed, span: Span) -> Result<()> {
+    if fields.named.len() > 128 {
+        return Err(Error::new(
+            span,
+            "storage struct may not exceed 128 fields (interned path-id space)",
+        ));
+    }
+    Ok(())
+}
+
+/// Number an enum's variants by declaration order — the SINGLE source for each
+/// variant's interned discriminant id (`u8`), so the read (`Model`) and write
+/// (`Store`) derives can't assign different ids to the same variant. Caps at 256
+/// (the `u8` id space) rather than silently wrapping.
+pub fn numbered_variants(data_enum: &DataEnum, span: Span) -> Result<Vec<(u8, &Variant)>> {
+    if data_enum.variants.len() > 256 {
+        return Err(Error::new(
+            span,
+            "storage enum may not exceed 256 variants (interned id space)",
+        ));
+    }
+    Ok(data_enum
+        .variants
+        .iter()
+        .enumerate()
+        .map(|(i, v)| (i as u8, v))
+        .collect())
+}
 
 pub fn is_option_type(ty: &syn::Type) -> bool {
     if let syn::Type::Path(type_path) = ty {

@@ -23,16 +23,7 @@ pub fn generate_struct(
 ) -> Result<TokenStream> {
     match &data_struct.fields {
         Fields::Named(fields) => {
-            // Interned path ids are the field's declaration index (a `u8`), and an
-            // indexed-map field's `#idx` sibling is `id | 0x80` — so field ids must
-            // stay in `0..128` to never collide with the marker space. 128 fields is
-            // far beyond any real storage struct; reject rather than silently wrap.
-            if fields.named.len() > 128 {
-                return Err(Error::new(
-                    type_name.span(),
-                    "storage struct may not exceed 128 fields (interned path-id space)",
-                ));
-            }
+            utils::check_struct_field_count(fields, type_name.span())?;
             // The struct's declared secondary indexes (field-level `#[index]` +
             // struct-level `#[index(...)]`). The single source the in-place
             // setters reconcile against and the read model reads back for diffs.
@@ -677,17 +668,20 @@ pub fn generate_enum(data_enum: &DataEnum, type_name: &Ident, write: bool) -> Re
     let model_variants = model_variants?;
 
     // Each variant's discriminant is an interned dict-ref id = its declaration
-    // order in the enum (a per-enum dict, distinct from struct field ids). The
-    // candidates the host byte-matches are those dict-ref elements, in the same
-    // order, so `extend_path_with_match` returns the variant's index.
-    let variant_candidates = (0..data_enum.variants.len() as u8)
-        .map(|id| quote! { stdlib::interned_element(#id) })
+    // order in the enum (a per-enum dict, distinct from struct field ids), numbered
+    // once via `numbered_variants` so the read side here and the write side in
+    // `store::generate_enum_body` can't drift. The candidates the host byte-matches
+    // are those dict-ref elements, in id order, so `extend_path_with_match` returns
+    // the variant's index.
+    let numbered = utils::numbered_variants(data_enum, type_name.span())?;
+    let variant_candidates = numbered
+        .iter()
+        .map(|&(id, _)| quote! { stdlib::interned_element(#id) })
         .collect::<Vec<_>>();
 
-    let new_arms = data_enum.variants.iter().enumerate().map(|(i, variant)| {
+    let new_arms = numbered.iter().map(|&(variant_id, variant)| {
         let variant_ident = &variant.ident;
-        let variant_id = i as u8;
-        let arm_idx = i as u32;
+        let arm_idx = variant_id as u32;
 
         // `__extend_path_with_match` returns the live variant's INDEX; match on it.
         match &variant.fields {
