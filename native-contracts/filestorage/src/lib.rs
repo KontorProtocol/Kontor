@@ -216,12 +216,16 @@ impl Guest for Filestorage {
             )));
         }
 
-        // Validate the descriptor's field elements up front via a throwaway
-        // single-file root — O(1). This is the check `record_current_root` used to
-        // do for us; keeping it synchronous means a malformed descriptor is rejected
-        // here (never stored), so the per-block recompute — a core op that can't
-        // surface errors to a user — never sees a bad descriptor.
-        file_registry::aggregate_root(&[descriptor.clone()])?;
+        // Validate the descriptor's `root` field element up front via a throwaway
+        // single-file aggregate — O(1). This is the check `record_current_root` used
+        // to do for us; keeping it synchronous means a malformed descriptor is
+        // rejected here (never stored), so the per-block recompute — a core op that
+        // can't surface errors to a user — never sees a bad descriptor.
+        file_registry::aggregate_root(&[(
+            descriptor.file_id.clone(),
+            descriptor.root.clone(),
+            descriptor.padded_len,
+        )])?;
 
         // Create the agreement (starts inactive until nodes join). The file
         // descriptor is folded in — the contract owns this metadata now.
@@ -495,14 +499,17 @@ impl Guest for Filestorage {
             return Ok(());
         }
 
-        // All agreements in primary-key (lexicographic file_id) order = the
-        // ledger's canonical order. `aggregate_root` also sorts internally, so
-        // order here is not load-bearing.
+        // `aggregate_root` needs only (file_id, root, padded_len) per file. So read
+        // just `root` + `padded_len` from each agreement (file_id is the map key,
+        // already in hand) instead of `load()`-ing the whole `AgreementData` — its
+        // other ~8 fields would be that many extra storage reads per agreement, every
+        // block. keys() yields them in lexicographic file_id (canonical) order; the
+        // host also sorts internally, so order here is not load-bearing.
         let file_ids: Vec<String> = model.agreements().keys().collect();
         let mut files = Vec::with_capacity(file_ids.len());
         for fid in file_ids {
             if let Some(a) = model.agreements().get(&fid) {
-                files.push(raw_descriptor(&a.load()));
+                files.push((fid, a.root(), a.padded_len()));
             }
         }
 

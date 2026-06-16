@@ -9,13 +9,17 @@ interface file-registry {
     use error.{error};
     use file-registry-types.{raw-file-descriptor, challenge-input, verify-result};
 
-    // The aggregated ledger root over `files` — the Poseidon-tree root committing
-    // to the whole registered file set. The host sorts by `file-id` internally
-    // (canonical order), so caller order doesn't matter; a descriptor whose `root`
-    // is not a valid field element errors (this doubles as descriptor validation).
-    // The contract recomputes this whenever it registers a file and records the
-    // result as a valid root.
-    aggregate-root: async func(files: list<raw-file-descriptor>) -> result<list<u8>, error>;
+    // The aggregated ledger root over the registered file set — the Poseidon-tree
+    // root committing to every file. Takes only what the root commits to per file:
+    // `(file-id, root, padded-len)`, where `root` is the file's Merkle root and
+    // `padded-len` gives the tree depth. (A full `raw-file-descriptor` is NOT needed
+    // — its object-id/nonce/filename don't enter the root — so the filestorage
+    // contract reads just these two fields per agreement instead of whole structs.)
+    // The host sorts by `file-id` internally (canonical order), so caller order
+    // doesn't matter; a `root` that is not a valid field element errors (this doubles
+    // as validation). The contract recomputes this on each file registration and
+    // records the result as a valid root.
+    aggregate-root: async func(files: list<tuple<string, list<u8>, u64>>) -> result<list<u8>, error>;
 
     // Deterministic challenge id for a file + challenge parameters.
     compute-challenge-id: async func(

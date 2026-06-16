@@ -1,8 +1,8 @@
 use anyhow::Result;
 use hkdf::Hkdf;
-use kontor_crypto::{
-    FieldElement, FileDescriptor as _, KontorPoRError, aggregate_root_from_files, verify_stateless,
-};
+use kontor_crypto::{FieldElement, KontorPoRError, aggregate_root_from_files, verify_stateless};
+
+use crate::database::types::bytes_to_field_element;
 use sha2::Sha256;
 use std::collections::HashSet;
 use wasmtime::component::{Accessor, Resource};
@@ -19,24 +19,41 @@ impl Runtime {
     async fn _aggregate_root<T>(
         &self,
         accessor: &Accessor<T, Self>,
-        files: Vec<RawFileDescriptor>,
+        files: Vec<(String, Vec<u8>, u64)>,
     ) -> Result<Result<Vec<u8>, Error>> {
         Fuel::AggregateRoot(files.len() as u64)
             .consume(accessor, self.gauge.as_ref())
             .await?;
 
-        let mut rows = Vec::with_capacity(files.len());
-        for raw in files {
-            match FileDescriptor::try_from_raw(raw, 0) {
-                Ok(fd) => rows.push(fd.file_metadata_row),
-                Err(e) => return Ok(Err(e)),
-            }
+        // Reduce each (file_id, root, padded_len) to (file_id, root_field, depth).
+        // `root` must be a valid field element (this doubles as validation); depth =
+        // log2(padded_len), matching `FileMetadataRow::depth`.
+        let mut leaves: Vec<(String, FieldElement, usize)> = Vec::with_capacity(files.len());
+        for (file_id, root, padded_len) in files {
+            let Ok(root_bytes) = <[u8; 32]>::try_from(root.as_slice()) else {
+                return Ok(Err(Error::Validation(
+                    "expected 32 bytes for root".to_string(),
+                )));
+            };
+            let Some(root) = bytes_to_field_element(&root_bytes) else {
+                return Ok(Err(Error::Validation(
+                    "root bytes are not a valid field element".to_string(),
+                )));
+            };
+            let depth = if padded_len == 0 {
+                0
+            } else {
+                padded_len.trailing_zeros() as usize
+            };
+            leaves.push((file_id, root, depth));
         }
         // Canonical order = lexicographic file_id (matches kontor-crypto's BTreeMap),
         // so the recomputed root is independent of the order the contract passed.
-        rows.sort_by(|a, b| a.file_id.cmp(&b.file_id));
-        let files_rd: Vec<(FieldElement, usize)> =
-            rows.iter().map(|r| (r.root(), r.depth())).collect();
+        leaves.sort_by(|a, b| a.0.cmp(&b.0));
+        let files_rd: Vec<(FieldElement, usize)> = leaves
+            .iter()
+            .map(|(_, root, depth)| (*root, *depth))
+            .collect();
         match aggregate_root_from_files(&files_rd) {
             Ok(root) => Ok(Ok(root.to_vec())),
             Err(e) => Ok(Err(Error::Validation(format!(
@@ -243,7 +260,7 @@ impl built_in::file_registry::Host for Runtime {}
 impl built_in::file_registry::HostWithStore for Runtime {
     async fn aggregate_root<T>(
         accessor: &Accessor<T, Self>,
-        files: Vec<RawFileDescriptor>,
+        files: Vec<(String, Vec<u8>, u64)>,
     ) -> Result<Result<Vec<u8>, Error>> {
         accessor
             .with(|mut access| access.get().clone())
