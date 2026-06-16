@@ -176,7 +176,16 @@ async fn run_daemon(config: Config) -> Result<()> {
         version = built_info::PKG_VERSION,
         target = built_info::TARGET
     );
-    info!("{:#?}", config);
+    // Log the resolved config. On mainnet, redact the inline consensus key
+    // (`CONSENSUS_PRIVATE_KEY`) so it never hits the logs; on dev networks
+    // (regtest/signet/testnet) it's left in for debugging convenience.
+    if config.network == bitcoin::Network::Bitcoin && config.consensus_private_key.is_some() {
+        let mut redacted = config.clone();
+        redacted.consensus_private_key = Some("<redacted>".to_string());
+        info!("{:#?}", redacted);
+    } else {
+        info!("{:#?}", config);
+    }
     let bitcoin = bitcoin_client::Client::new_from_config(&config)?;
     let cancel_token = CancellationToken::new();
     let panic_token = cancel_token.clone();
