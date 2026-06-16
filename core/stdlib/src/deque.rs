@@ -185,16 +185,31 @@ impl<V, S: ?Sized> Default for StorageDeque<V, S> {
 
 impl<V: Store<S>, S: WriteStorage + ?Sized> Store<S> for StorageDeque<V, S> {
     fn __set(ctx: &Rc<S>, base_path: KeyPath, value: StorageDeque<V, S>) {
-        // Wholesale (re)seed from empty: write each entry at its position and set
-        // the tail; head stays 0 (default). Used by `init`/default. An empty deque
-        // writes nothing.
+        // Wholesale REPLACE, not overlay. A deque may already exist at this path
+        // (e.g. a parent struct re-set via its own `Store::__set`), carrying stale
+        // state: a non-zero `head` from earlier `push_front` (head wraps toward
+        // u64::MAX), a larger prior length, or entries at out-of-window positions.
+        // So: (1) tombstone the whole prior subtree, then (2) seed the new entries at
+        // 0..count and reset BOTH cursors to the canonical `[0, count)` window.
+        // Resetting `head` is the load-bearing part — a leftover `head` makes
+        // `len()`/`get()` read the wrong window. (The explicit cursor writes also
+        // hold the invariant under a backing store whose `delete` isn't subtree-wide.)
+        //
+        // The blanket subtree delete (not a surgical "overwrite 0..count, delete the
+        // leftover tail") is deliberate: after an earlier `push_front` the old entries
+        // sit at wrapped absolute positions (near u64::MAX), which the new `[0, count)`
+        // writes don't overlap — so overwriting in place would leave those wrapped rows
+        // live (unread, since head resets to 0, but storage bloat plus a landmine if
+        // head later wraps back onto them). Deleting the whole subtree needs no
+        // knowledge of where the old entries physically live; the cost is double-writing
+        // only the non-wrapped overlap, and this path is cold (push/pop mutate in place).
+        ctx.__delete(&base_path);
         let count = value.entries.len() as u64;
         for (i, v) in value.entries.into_iter().enumerate() {
             ctx.__set(entry_path(&base_path, i as u64), v);
         }
-        if count > 0 {
-            ctx.__set_u64(&tail_path(&base_path), count);
-        }
+        ctx.__set_u64(&head_path(&base_path), 0);
+        ctx.__set_u64(&tail_path(&base_path), count);
     }
 }
 
@@ -339,6 +354,28 @@ mod tests {
         assert_eq!(len(&ctx, &b), 1);
         assert_eq!(get::<_, u64>(&ctx, &b, 0), Some(7));
         assert_eq!(pop_front::<_, u64>(&ctx, &b), Some(7));
+        assert_eq!(len(&ctx, &b), 0);
+    }
+
+    #[test]
+    fn wholesale_set_resets_cursors_after_push_front() {
+        // Regression: a wholesale `Store::__set` (e.g. a parent struct re-set) over a
+        // deque whose `head` was driven non-zero by `push_front` must reset head to 0,
+        // not inherit the stale cursor — else len()/get() read the wrong window.
+        let ctx = Rc::new(Mock::default());
+        let b = base();
+        push_back(&ctx, &b, 1u64);
+        push_front(&ctx, &b, 0u64); // head now u64::MAX
+        assert_eq!(head(&ctx, &b), u64::MAX);
+
+        WriteStorage::__set(&ctx, b.clone(), StorageDeque::<u64, Mock>::new(&[9, 8, 7]));
+        assert_eq!(head(&ctx, &b), 0);
+        assert_eq!(len(&ctx, &b), 3);
+        assert_eq!(get::<_, u64>(&ctx, &b, 0), Some(9));
+        assert_eq!(get::<_, u64>(&ctx, &b, 2), Some(7));
+
+        WriteStorage::__set(&ctx, b.clone(), StorageDeque::<u64, Mock>::new(&[]));
+        assert_eq!(head(&ctx, &b), 0);
         assert_eq!(len(&ctx, &b), 0);
     }
 }
