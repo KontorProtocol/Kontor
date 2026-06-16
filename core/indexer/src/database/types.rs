@@ -34,6 +34,16 @@ pub fn padded_len_to_depth(padded_len: u64) -> usize {
     }
 }
 
+/// Validate that `root` is exactly 32 bytes encoding a canonical field element,
+/// returning both the byte array (for storage) and the decoded `FieldElement`. The
+/// `Err` is a ready-to-show message; callers wrap it in their error type. This is
+/// the single root-validation gate shared by descriptor parsing and `aggregate_root`.
+pub fn validate_root(root: &[u8]) -> Result<([u8; 32], FieldElement), &'static str> {
+    let bytes: [u8; 32] = root.try_into().map_err(|_| "expected 32 bytes for root")?;
+    let fe = bytes_to_field_element(&bytes).ok_or("root bytes are not a valid field element")?;
+    Ok((bytes, fe))
+}
+
 // ─────────────────────────────────────────────────────────────────
 
 pub trait HasRowId {
@@ -405,11 +415,11 @@ impl std::str::FromStr for OpResultId {
     }
 }
 
-/// Database row for file metadata, matching kontor-crypto's FileMetadata structure.
-#[derive(Debug, Clone, Serialize, Deserialize, Builder, Eq, PartialEq)]
-pub struct FileMetadataRow {
-    #[builder(default = 0)]
-    pub id: u64,
+/// In-memory file metadata carried by the `FileDescriptor` host resource — the
+/// fields the deleted `file_metadata` DB row held, minus the row bookkeeping
+/// (`id`/`height`/`historical_root`). Matches kontor-crypto's `FileMetadata`.
+#[derive(Debug, Clone, Builder)]
+pub struct FileMeta {
     pub file_id: String,
     pub object_id: String,
     pub nonce: Vec<u8>,
@@ -417,11 +427,9 @@ pub struct FileMetadataRow {
     pub padded_len: u64,
     pub original_size: u64,
     pub filename: String,
-    pub height: u64,
-    pub historical_root: Option<[u8; 32]>,
 }
 
-impl FileDescriptor for FileMetadataRow {
+impl FileDescriptor for FileMeta {
     fn file_id(&self) -> &str {
         &self.file_id
     }

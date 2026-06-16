@@ -2,7 +2,7 @@ use anyhow::Result;
 use hkdf::Hkdf;
 use kontor_crypto::{FieldElement, KontorPoRError, aggregate_root_from_files, verify_stateless};
 
-use crate::database::types::{bytes_to_field_element, padded_len_to_depth};
+use crate::database::types::{padded_len_to_depth, validate_root};
 use sha2::Sha256;
 use std::collections::HashSet;
 use wasmtime::component::{Accessor, Resource};
@@ -29,15 +29,9 @@ impl Runtime {
         // `root` must be a valid field element (this doubles as validation).
         let mut leaves: Vec<(String, FieldElement, usize)> = Vec::with_capacity(files.len());
         for (file_id, root, padded_len) in files {
-            let Ok(root_bytes) = <[u8; 32]>::try_from(root.as_slice()) else {
-                return Ok(Err(Error::Validation(
-                    "expected 32 bytes for root".to_string(),
-                )));
-            };
-            let Some(root) = bytes_to_field_element(&root_bytes) else {
-                return Ok(Err(Error::Validation(
-                    "root bytes are not a valid field element".to_string(),
-                )));
+            let root = match validate_root(&root) {
+                Ok((_, fe)) => fe,
+                Err(m) => return Ok(Err(Error::Validation(m.to_string()))),
             };
             leaves.push((file_id, root, padded_len_to_depth(padded_len)));
         }
@@ -70,7 +64,7 @@ impl Runtime {
             .consume(accessor, self.gauge.as_ref())
             .await?;
 
-        let fd = match FileDescriptor::try_from_raw(file, 0) {
+        let fd = match FileDescriptor::try_from_raw(file) {
             Ok(fd) => fd,
             Err(e) => return Ok(Err(e)),
         };
@@ -125,7 +119,7 @@ impl Runtime {
         // `agreement-data`), so we build the challenges directly — no host lookup.
         let mut challenges = Vec::new();
         for input in &challenge_inputs {
-            let fd = match FileDescriptor::try_from_raw(input.file.clone(), 0) {
+            let fd = match FileDescriptor::try_from_raw(input.file.clone()) {
                 Ok(fd) => fd,
                 Err(e) => return Ok(Err(e)),
             };
