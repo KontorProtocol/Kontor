@@ -586,11 +586,9 @@ pub fn generate_struct(
                 .iter()
                 .map(|field| {
                     let field_name = field.ident.as_ref().unwrap();
-                    let _field_name_str = field_name.to_string();
                     let field_ty = &field.ty;
 
                     if utils::is_map_type(field_ty) {
-                        let (_k_ty, _v_ty) = get_map_types(field_ty)?;
                         Ok(quote! {
                             #field_name: self.#field_name().load()
                         })

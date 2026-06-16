@@ -43,20 +43,20 @@ macro_rules! storage_placeholder {
 }
 
 pub mod deque;
-mod indexed_map;
 mod key_path;
 mod keycodec;
+mod map;
 mod storage_interface;
 mod wave_interfaces;
 
 pub use deque::StorageDeque;
-pub use indexed_map::*;
 pub use key_path::*;
 pub use keycodec::*;
 pub use macros::{
     Model, Root, Storage, StorageRoot, Store, Wavey, contract, contract_address, holder_ref, impls,
     import, interface,
 };
+pub use map::*;
 pub use storage_interface::*;
 pub use wasm_wave;
 pub use wave_interfaces::*;

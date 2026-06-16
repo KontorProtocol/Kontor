@@ -466,7 +466,7 @@ mod tests {
         path.as_bytes().to_vec()
     }
 
-    // The interned id a real contract's macro would assign an Map field
+    // The interned id a real contract's macro would assign a Map field
     // (its declaration index). Wholesale `Store` derives the `#idx` sibling from
     // this via `interned_index_sibling`, so the map-field segment MUST be interned
     // (not a string) for those tests to mirror production.
@@ -509,7 +509,7 @@ mod tests {
         }
     }
 
-    // A struct value with one indexed field — the shape an Map holds.
+    // A struct value with one indexed field — the shape a Map holds.
     #[derive(Clone)]
     struct Position {
         status: u64,
@@ -753,7 +753,7 @@ mod tests {
         );
     }
 
-    // A plain `Map` nested inside an Map *value*. The outer index is keyed
+    // A plain `Map` nested inside a Map *value*. The outer index is keyed
     // off the value (`tag`); the inner map is just data. Both must persist.
     #[derive(Clone, Default)]
     struct Bag {

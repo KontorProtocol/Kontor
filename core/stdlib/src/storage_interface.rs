@@ -234,6 +234,6 @@ where
 storage_placeholder!(
     /// The declared `Map<K, V>` field placeholder. The generated field model is the
     /// real accessor; this only holds entries for a wholesale `Store` write. The
-    /// index-aware `Store` impl lives in `indexed_map` (next to `apply_index_diff`).
+    /// index-aware `Store` impl lives in `map` (next to `apply_index_diff`).
     StorageMap
 );

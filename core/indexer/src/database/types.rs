@@ -24,6 +24,16 @@ pub fn field_element_to_bytes(fe: &FieldElement) -> [u8; 32] {
     fe.to_repr().into()
 }
 
+/// Merkle tree depth for a file whose padded leaf count is `padded_len` (a power of
+/// two): `log2(padded_len)`, or 0 for an empty file.
+pub fn padded_len_to_depth(padded_len: u64) -> usize {
+    if padded_len == 0 {
+        0
+    } else {
+        padded_len.trailing_zeros() as usize
+    }
+}
+
 // ─────────────────────────────────────────────────────────────────
 
 pub trait HasRowId {
@@ -421,11 +431,6 @@ impl FileDescriptor for FileMetadataRow {
     }
 
     fn depth(&self) -> usize {
-        let padded_len = self.padded_len;
-        if padded_len == 0 {
-            0
-        } else {
-            padded_len.trailing_zeros() as usize
-        }
+        padded_len_to_depth(self.padded_len)
     }
 }

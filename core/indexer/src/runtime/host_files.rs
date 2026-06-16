@@ -2,7 +2,7 @@ use anyhow::Result;
 use hkdf::Hkdf;
 use kontor_crypto::{FieldElement, KontorPoRError, aggregate_root_from_files, verify_stateless};
 
-use crate::database::types::bytes_to_field_element;
+use crate::database::types::{bytes_to_field_element, padded_len_to_depth};
 use sha2::Sha256;
 use std::collections::HashSet;
 use wasmtime::component::{Accessor, Resource};
@@ -26,8 +26,7 @@ impl Runtime {
             .await?;
 
         // Reduce each (file_id, root, padded_len) to (file_id, root_field, depth).
-        // `root` must be a valid field element (this doubles as validation); depth =
-        // log2(padded_len), matching `FileMetadataRow::depth`.
+        // `root` must be a valid field element (this doubles as validation).
         let mut leaves: Vec<(String, FieldElement, usize)> = Vec::with_capacity(files.len());
         for (file_id, root, padded_len) in files {
             let Ok(root_bytes) = <[u8; 32]>::try_from(root.as_slice()) else {
@@ -40,12 +39,7 @@ impl Runtime {
                     "root bytes are not a valid field element".to_string(),
                 )));
             };
-            let depth = if padded_len == 0 {
-                0
-            } else {
-                padded_len.trailing_zeros() as usize
-            };
-            leaves.push((file_id, root, depth));
+            leaves.push((file_id, root, padded_len_to_depth(padded_len)));
         }
         // Canonical order = lexicographic file_id (matches kontor-crypto's BTreeMap),
         // so the recomputed root is independent of the order the contract passed.

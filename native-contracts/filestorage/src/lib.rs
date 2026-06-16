@@ -217,10 +217,10 @@ impl Guest for Filestorage {
         }
 
         // Validate the descriptor's `root` field element up front via a throwaway
-        // single-file aggregate — O(1). This is the check `record_current_root` used
-        // to do for us; keeping it synchronous means a malformed descriptor is
-        // rejected here (never stored), so the per-block recompute — a core op that
-        // can't surface errors to a user — never sees a bad descriptor.
+        // single-file aggregate — O(1). The per-block `record_block_root` recompute
+        // also validates, but it's a core op that can't surface errors to a user, so
+        // we reject a malformed descriptor here (never stored) before it ever reaches
+        // that hook.
         file_registry::aggregate_root(&[(
             descriptor.file_id.clone(),
             descriptor.root.clone(),
@@ -472,14 +472,7 @@ impl Guest for Filestorage {
             .collect();
 
         for challenge_id in &due {
-            if let Some(challenge) = model.challenges().get(challenge_id) {
-                // In-place; the `status` and `due` indexes follow via the get() binding.
-                challenge.set_status(ChallengeStatus::Expired);
-                // The agreement is free to be challenged again.
-                if let Some(agreement) = model.agreements().get(&challenge.agreement_id()) {
-                    agreement.set_active_challenge(None);
-                }
-            }
+            terminate_challenge(&model, challenge_id, ChallengeStatus::Expired);
         }
         due.len() as u64
     }
@@ -834,16 +827,8 @@ impl Guest for Filestorage {
             file_registry_types::VerifyResult::Invalid => ChallengeStatus::Invalid,
         };
 
-        // In-place; the `status` index follows via the get() binding. The status
-        // is terminal (proven/failed/invalid), so the agreement's challenge slot
-        // is cleared.
         for cid in &challenge_ids {
-            if let Some(c) = model.challenges().get(cid) {
-                c.set_status(new_status);
-                if let Some(agreement) = model.agreements().get(&c.agreement_id()) {
-                    agreement.set_active_challenge(None);
-                }
-            }
+            terminate_challenge(&model, cid, new_status);
         }
 
         Ok(VerifyProofResult {
@@ -899,19 +884,13 @@ pub fn derive_batch_seed(block_hash: &[u8], block_height: u64) -> [u8; 64] {
     ]
     .concat();
     // Spec does not require a salt here; use empty salt for determinism.
-    let derived = crypto::hkdf_derive(block_hash, &[], &full_info);
-    derived
-        .try_into()
-        .expect("hkdf_derive must return 64 bytes")
+    hkdf64(block_hash, &[], &full_info)
 }
 
 /// Derive a deterministic stream seed from σ_batch for a particular purpose.
 pub fn derive_stream_seed(sigma_batch: &[u8; 64], domain: &[u8]) -> [u8; 64] {
-    let full_info = [b"KONTOR-CHAL-STREAM::v1/".as_slice(), domain].concat();
-    let derived = crypto::hkdf_derive(sigma_batch, &[], &full_info);
-    derived
-        .try_into()
-        .expect("hkdf_derive must return 64 bytes")
+    // Identical to the per-file variant with an empty file_id (= empty HKDF salt).
+    derive_stream_seed_for_file(sigma_batch, domain, "")
 }
 
 /// Domain-separated stream seed for a specific file.
@@ -921,16 +900,18 @@ pub fn derive_stream_seed_for_file(
     file_id: &str,
 ) -> [u8; 64] {
     let full_info = [b"KONTOR-CHAL-STREAM::v1/".as_slice(), domain].concat();
-    let derived = crypto::hkdf_derive(sigma_batch, file_id.as_bytes(), &full_info);
-    derived
-        .try_into()
-        .expect("hkdf_derive must return 64 bytes")
+    hkdf64(sigma_batch, file_id.as_bytes(), &full_info)
 }
 
 /// Derive the per-file challenge seed (64 bytes) from σ_batch and file_id.
 pub fn derive_challenge_seed_for_file(sigma_batch: &[u8; 64], file_id: &str) -> [u8; 64] {
-    let derived = crypto::hkdf_derive(sigma_batch, file_id.as_bytes(), b"KONTOR-SEED::v1");
-    derived
+    hkdf64(sigma_batch, file_id.as_bytes(), b"KONTOR-SEED::v1")
+}
+
+/// Host HKDF-SHA256, unwrapped to the fixed 64-byte output every seed derivation
+/// relies on — centralizes the "always 64 bytes" length invariant.
+fn hkdf64(ikm: &[u8], salt: &[u8], info: &[u8]) -> [u8; 64] {
+    crypto::hkdf_derive(ikm, salt, info)
         .try_into()
         .expect("hkdf_derive must return 64 bytes")
 }
@@ -940,7 +921,7 @@ pub fn derive_challenge_seed_for_file(sigma_batch: &[u8; 64], file_id: &str) -> 
 pub fn seeded_u64(seed: &[u8; 64], counter: &mut u64, domain_separator: &[u8]) -> u64 {
     let full_info = [b"KONTOR-RNG::v1/".as_slice(), domain_separator].concat();
     let salt = counter.to_le_bytes();
-    let derived = crypto::hkdf_derive(seed, &salt, &full_info);
+    let derived = hkdf64(seed, &salt, &full_info);
     *counter = counter.wrapping_add(1);
     u64::from_le_bytes(derived[..8].try_into().expect("slice is 8 bytes"))
 }
@@ -976,6 +957,24 @@ pub fn uniform_index_from_u64(n: usize, next_u64: &mut impl FnMut() -> u64) -> u
 /// Validate and register a file descriptor with the file registry host.
 /// Rebuild the `raw-file-descriptor` the host crypto fns consume from a stored
 /// agreement (the file metadata is folded into `agreement-data`).
+/// Move a challenge to a terminal status (proven/failed/invalid/expired) and free
+/// its agreement's challenge slot so the agreement can be challenged again. The two
+/// are a unit — a terminal status must always clear the slot — so every caller goes
+/// through here. No-op if the challenge or its agreement is already gone.
+fn terminate_challenge(
+    model: &ProtocolStateWriteModel,
+    challenge_id: &str,
+    status: ChallengeStatus,
+) {
+    if let Some(challenge) = model.challenges().get(&challenge_id.to_string()) {
+        // In-place; the `status`/`due` indexes follow via the get() binding.
+        challenge.set_status(status);
+        if let Some(agreement) = model.agreements().get(&challenge.agreement_id()) {
+            agreement.set_active_challenge(None);
+        }
+    }
+}
+
 fn raw_descriptor(a: &AgreementData) -> RawFileDescriptor {
     RawFileDescriptor {
         file_id: a.file_id.clone(),
@@ -987,7 +986,6 @@ fn raw_descriptor(a: &AgreementData) -> RawFileDescriptor {
         filename: a.filename.clone(),
     }
 }
-
 
 #[cfg(test)]
 mod tests {
