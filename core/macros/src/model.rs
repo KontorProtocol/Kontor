@@ -55,8 +55,9 @@ pub fn generate_struct(
                 if utils::is_map_type(field_ty) {
                     let (k_ty, v_ty) = get_map_types(field_ty)?;
                     let field_model_name = Ident::new(&format!("{}{}{}Model", type_name, &field_name.to_string().to_pascal_case(), write_prefix), field.span());
+                    let vi = value_item(write, &v_ty, field.span())?;
 
-                    if utils::is_primitive_type(&v_ty) {
+                    if vi.is_primitive {
                         // Plain map over a leaf value — no index machinery.
                         let setter = if write {
                             quote! {
@@ -118,7 +119,9 @@ pub fn generate_struct(
                         // `KeyPath::interned_index_sibling`). Field ids are < 128, so the
                         // marker space (128..=255) never collides with a field id.
                         let idx_marker_id: u8 = field_id | 0x80;
-                        let v_model_ty = get_model_ident(write, &v_ty, field.span())?;
+                        let v_model_ty = vi
+                            .model_ty
+                            .expect("a non-primitive map value has a value model");
                         // `<V>Index` (the typed `where_<field>`/`count_<field>` lookups)
                         // comes from `V`'s own `Storage` derive — this site only sees
                         // `Map<K, V>`, never `V`'s `#[index]` fields — and is empty when
@@ -961,42 +964,40 @@ fn get_model_ident(write: bool, ty: &Type, span: Span) -> Result<Ident> {
     }
 }
 
-fn get_option_inner_type(ty: &Type) -> Result<Type> {
+/// The `arity` angle-bracketed type arguments of a `name<...>` type, matched on the
+/// path's last segment (e.g. `Map<K, V>` → `[K, V]`). Errors if `ty` isn't that shape.
+fn type_args(ty: &Type, name: &str, arity: usize) -> Result<Vec<Type>> {
     if let Type::Path(type_path) = ty
         && let Some(segment) = type_path.path.segments.last()
-        && segment.ident == "Option"
+        && segment.ident == name
         && let PathArguments::AngleBracketed(args) = &segment.arguments
-        && args.args.len() == 1
-        && let GenericArgument::Type(inner_ty) = &args.args[0]
     {
-        return Ok(inner_ty.clone());
+        let tys: Vec<Type> = args
+            .args
+            .iter()
+            .filter_map(|a| match a {
+                GenericArgument::Type(t) => Some(t.clone()),
+                _ => None,
+            })
+            .collect();
+        if tys.len() == arity {
+            return Ok(tys);
+        }
     }
-    Err(Error::new(ty.span(), "Expected Option<T> type"))
+    Err(Error::new(ty.span(), format!("Expected {name}<...> type")))
+}
+
+fn get_option_inner_type(ty: &Type) -> Result<Type> {
+    Ok(type_args(ty, "Option", 1)?.swap_remove(0))
 }
 
 fn get_map_types(ty: &Type) -> Result<(Type, Type)> {
-    if let Type::Path(type_path) = ty
-        && let Some(segment) = type_path.path.segments.last()
-        && segment.ident == "Map"
-        && let PathArguments::AngleBracketed(args) = &segment.arguments
-        && args.args.len() == 2
-        && let (GenericArgument::Type(k_ty), GenericArgument::Type(v_ty)) =
-            (&args.args[0], &args.args[1])
-    {
-        return Ok((k_ty.clone(), v_ty.clone()));
-    }
-    Err(Error::new(ty.span(), "Expected Map<K, V> type"))
+    let mut tys = type_args(ty, "Map", 2)?;
+    let v_ty = tys.swap_remove(1);
+    let k_ty = tys.swap_remove(0);
+    Ok((k_ty, v_ty))
 }
 
 fn get_deque_type(ty: &Type) -> Result<Type> {
-    if let Type::Path(type_path) = ty
-        && let Some(segment) = type_path.path.segments.last()
-        && segment.ident == "Deque"
-        && let PathArguments::AngleBracketed(args) = &segment.arguments
-        && args.args.len() == 1
-        && let GenericArgument::Type(v_ty) = &args.args[0]
-    {
-        return Ok(v_ty.clone());
-    }
-    Err(Error::new(ty.span(), "Expected Deque<V> type"))
+    Ok(type_args(ty, "Deque", 1)?.swap_remove(0))
 }

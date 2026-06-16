@@ -105,30 +105,27 @@ pub fn is_primitive_type(ty: &syn::Type) -> bool {
     }
 }
 
-pub fn is_map_type(ty: &syn::Type) -> bool {
+/// True if `ty`'s path ends in a segment named `name` (e.g. `Map`, `Deque`),
+/// ignoring any generic arguments.
+fn last_segment_named(ty: &syn::Type, name: &str) -> bool {
     if let syn::Type::Path(type_path) = ty {
         type_path
             .path
             .segments
             .last()
-            .map(|segment| segment.ident == "Map")
+            .map(|segment| segment.ident == name)
             .unwrap_or(false)
     } else {
         false
     }
 }
 
+pub fn is_map_type(ty: &syn::Type) -> bool {
+    last_segment_named(ty, "Map")
+}
+
 pub fn is_deque_type(ty: &syn::Type) -> bool {
-    if let syn::Type::Path(type_path) = ty {
-        type_path
-            .path
-            .segments
-            .last()
-            .map(|segment| segment.ident == "Deque")
-            .unwrap_or(false)
-    } else {
-        false
-    }
+    last_segment_named(ty, "Deque")
 }
 
 pub fn wit_type_to_rust_type(
