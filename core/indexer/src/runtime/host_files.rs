@@ -134,17 +134,18 @@ impl Runtime {
             }
         }
 
+        // Validate each accepted root as a canonical field element, not merely 32
+        // bytes (mirrors `_aggregate_root`). `is_valid_root` compares the proof root's
+        // canonical `to_repr()` against this set, so a non-canonical encoding could
+        // never match — it would silently reject an otherwise-valid proof. Insert the
+        // canonical bytes `validate_root` returns and surface a clear error instead.
         let mut roots = HashSet::with_capacity(valid_roots.len());
         for r in &valid_roots {
-            match <[u8; 32]>::try_from(r.as_slice()) {
-                Ok(arr) => {
-                    roots.insert(arr);
+            match validate_root(r) {
+                Ok((bytes, _)) => {
+                    roots.insert(bytes);
                 }
-                Err(_) => {
-                    return Ok(Err(Error::Validation(
-                        "valid-root must be 32 bytes".to_string(),
-                    )));
-                }
+                Err(m) => return Ok(Err(Error::Validation(m.to_string()))),
             }
         }
 
