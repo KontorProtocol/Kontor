@@ -129,6 +129,11 @@ struct ProtocolState {
     // is given this set; a proof's ledger_root must be a member. Bounded by
     // `MAX_VALID_ROOTS` via push_back + pop_front (FIFO eviction of the oldest).
     pub valid_roots: Deque<Vec<u8>>,
+    /// Set true by `create_agreement` when the file set changed; the per-block
+    /// `record_block_root` core hook recomputes the aggregated root only when this
+    /// is set, then clears it. Keeps `create_agreement` O(1) and makes the O(n)
+    /// rebuild unbilled system work, once per block.
+    pub roots_dirty: bool,
 }
 
 // `agreement-data`/`challenge-data` are indexed (agreement by `active`; challenge
@@ -180,6 +185,7 @@ impl Guest for Filestorage {
             memberships: Map::default(),
             challenges: Map::default(),
             valid_roots: Deque::default(),
+            roots_dirty: false,
         }
         .init(ctx);
         ctx.contract()
@@ -210,6 +216,13 @@ impl Guest for Filestorage {
             )));
         }
 
+        // Validate the descriptor's field elements up front via a throwaway
+        // single-file root — O(1). This is the check `record_current_root` used to
+        // do for us; keeping it synchronous means a malformed descriptor is rejected
+        // here (never stored), so the per-block recompute — a core op that can't
+        // surface errors to a user — never sees a bad descriptor.
+        file_registry::aggregate_root(&[descriptor.clone()])?;
+
         // Create the agreement (starts inactive until nodes join). The file
         // descriptor is folded in — the contract owns this metadata now.
         let agreement = AgreementData {
@@ -231,11 +244,10 @@ impl Guest for Filestorage {
         // own map, written by `join` — nothing to initialize here.
         model.agreements().set(&agreement_id, agreement);
 
-        // Recompute the aggregated ledger root over the full file set (incl. this
-        // one) and record it as a valid root. `aggregate_root` validates each
-        // descriptor's `root` field element, so a malformed descriptor aborts the
-        // whole tx here (rolling back the stored agreement).
-        record_current_root(ctx)?;
+        // Flag the file set as changed; the per-block `record_block_root` core hook
+        // does the O(n) root recompute once per block (unbilled system work), so
+        // create_agreement stays O(1) for the caller.
+        model.set_roots_dirty(true);
 
         Ok(CreateAgreementResult { agreement_id })
     }
@@ -466,6 +478,44 @@ impl Guest for Filestorage {
             }
         }
         due.len() as u64
+    }
+
+    /// Recompute and record the aggregated ledger root for the block's file-set
+    /// changes — a per-block CORE op, so `create_agreement` stays O(1) (it only sets
+    /// `roots_dirty`). No-op on blocks that added no files. Runs after the block's
+    /// transactions (in `run_block_lifecycle`), so the recorded root reflects the
+    /// complete block-end set. Safe to defer: the only consumer of `valid_roots` is
+    /// proof verification, and a proof against a root that includes a file first
+    /// added this block cannot exist yet (the prover needs the block-end root first;
+    /// single-file proofs use the file's own root). All descriptors were validated
+    /// at create time, so `aggregate_root` here cannot fail on a bad descriptor.
+    fn record_block_root(ctx: &CoreContext) -> Result<(), Error> {
+        let model = ctx.proc_context().model();
+        if !model.roots_dirty() {
+            return Ok(());
+        }
+
+        // All agreements in primary-key (lexicographic file_id) order = the
+        // ledger's canonical order. `aggregate_root` also sorts internally, so
+        // order here is not load-bearing.
+        let file_ids: Vec<String> = model.agreements().keys().collect();
+        let mut files = Vec::with_capacity(file_ids.len());
+        for fid in file_ids {
+            if let Some(a) = model.agreements().get(&fid) {
+                files.push(raw_descriptor(&a.load()));
+            }
+        }
+
+        let root = file_registry::aggregate_root(&files)?;
+
+        // Append the new root; evict the oldest once over the cap (FIFO window).
+        let roots = model.valid_roots();
+        roots.push_back(root);
+        if roots.len() > MAX_VALID_ROOTS {
+            roots.pop_front();
+        }
+        model.set_roots_dirty(false);
+        Ok(())
     }
 
     // ─────────────────────────────────────────────────────────────────
@@ -931,34 +981,6 @@ fn raw_descriptor(a: &AgreementData) -> RawFileDescriptor {
     }
 }
 
-/// Recompute the aggregated ledger root over the full file set and append it to
-/// the bounded valid-root window. One O(1) row write per file add (plus an O(n)
-/// scan to feed `aggregate_root`); the window is pruned oldest-first past
-/// `MAX_VALID_ROOTS`.
-fn record_current_root(ctx: &ProcContext) -> Result<(), Error> {
-    let model = ctx.model();
-
-    // All agreements, in primary-key (lexicographic `file_id`) order = the
-    // ledger's canonical order. `aggregate_root` also sorts internally, so order
-    // here is not load-bearing.
-    let file_ids: Vec<String> = model.agreements().keys().collect();
-    let mut files = Vec::with_capacity(file_ids.len());
-    for fid in file_ids {
-        if let Some(a) = model.agreements().get(&fid) {
-            files.push(raw_descriptor(&a.load()));
-        }
-    }
-
-    let root = file_registry::aggregate_root(&files)?;
-
-    // Append the new root; evict the oldest once over the cap (FIFO window).
-    let roots = model.valid_roots();
-    roots.push_back(root);
-    if roots.len() > MAX_VALID_ROOTS {
-        roots.pop_front();
-    }
-    Ok(())
-}
 
 #[cfg(test)]
 mod tests {

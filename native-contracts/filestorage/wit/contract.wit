@@ -152,6 +152,13 @@ world root {
     block-hash: list<u8>
   ) -> list<challenge-data>;
 
+  // Per-block core hook: recompute & record the aggregated ledger root for the
+  // block's file-set changes (no-op if none). Keeps create-agreement O(1) and
+  // unbilled; run after the block's transactions.
+  export record-block-root: async func(
+    ctx: borrow<core-context>
+  ) -> result<_, error>;
+
   // Create a challenge for a specific agreement and prover (deterministic, for testing)
   export create-challenge-for-agreement: async func(
     ctx: borrow<proc-context>,
