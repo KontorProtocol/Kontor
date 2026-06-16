@@ -6,6 +6,7 @@ mod bls_publisher_pays;
 mod bls_replay_protection;
 mod bls_user_registry;
 mod compose;
+mod congestion;
 mod counter_contract;
 mod crypto_contract;
 mod error_classification;

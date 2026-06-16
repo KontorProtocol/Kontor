@@ -5,6 +5,8 @@ pub const STAKING: &[u8] = include_bytes!("../../../../native-contracts/binaries
 pub const REGISTRY: &[u8] =
     include_bytes!("../../../../native-contracts/binaries/registry.wasm.br");
 pub const NFT: &[u8] = include_bytes!("../../../../native-contracts/binaries/nft.wasm.br");
+pub const CONGESTION: &[u8] =
+    include_bytes!("../../../../native-contracts/binaries/congestion.wasm.br");
 
 /// Ordered list of native contracts published at genesis. Publish order
 /// determines contract IDs (1-indexed, assigned in iteration order), so
@@ -17,6 +19,7 @@ pub const NATIVE_CONTRACTS: &[(&str, &[u8])] = &[
     ("staking", STAKING),
     ("registry", REGISTRY),
     ("nft", NFT),
+    ("congestion", CONGESTION),
 ];
 
 /// Native contracts get 1-indexed ids in publish order (1..=len). Used by the

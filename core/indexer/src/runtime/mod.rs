@@ -1,6 +1,7 @@
 extern crate alloc;
 
 mod component_cache;
+pub mod congestion;
 pub mod counter;
 pub mod file_ledger;
 pub mod filestorage;
