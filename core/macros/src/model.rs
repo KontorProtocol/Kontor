@@ -990,7 +990,6 @@ fn get_map_types(ty: &Type) -> Result<(Type, Type)> {
     Err(Error::new(ty.span(), "Expected Map<K, V> type"))
 }
 
-
 fn get_deque_type(ty: &Type) -> Result<Type> {
     if let Type::Path(type_path) = ty
         && let Some(segment) = type_path.path.segments.last()

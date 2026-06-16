@@ -101,8 +101,8 @@ wit-bindgen-rust = { git = "https://github.com/wilfreddenton/wit-bindgen", rev =
 # Stateless PoR verification (verify_stateless / aggregate_root) for the in-contract
 # file registry. Pinned to the feat/stateless-verify branch rev pending its merge to
 # Kontor-Crypto main; repoint to a main rev (or a release) once that lands.
-kontor-crypto = { git = "https://github.com/KontorProtocol/Kontor-Crypto", rev = "6dc5456b1601860141f95b9b496af1c70987b00e" }
-kontor-crypto-core = { git = "https://github.com/KontorProtocol/Kontor-Crypto", rev = "6dc5456b1601860141f95b9b496af1c70987b00e" }
+kontor-crypto = { git = "https://github.com/KontorProtocol/Kontor-Crypto", rev = "114bf3e27e6dafdeea4773499e07c98a485019d8" }
+kontor-crypto-core = { git = "https://github.com/KontorProtocol/Kontor-Crypto", rev = "114bf3e27e6dafdeea4773499e07c98a485019d8" }
 wit-bindgen-rust-macro = { git = "https://github.com/wilfreddenton/wit-bindgen", rev = "2a872647adb6adec4dcd7c0504e73d3b26acb241" }
 
 # Optimize the proof-system crates even in dev/test builds. Proof

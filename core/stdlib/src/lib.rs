@@ -54,8 +54,8 @@ pub use indexed_map::*;
 pub use key_path::*;
 pub use keycodec::*;
 pub use macros::{
-    Model, Root, Storage, StorageRoot, Store, Wavey, contract, contract_address, holder_ref,
-    impls, import, interface,
+    Model, Root, Storage, StorageRoot, Store, Wavey, contract, contract_address, holder_ref, impls,
+    import, interface,
 };
 pub use storage_interface::*;
 pub use wasm_wave;

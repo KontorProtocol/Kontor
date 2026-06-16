@@ -118,7 +118,6 @@ pub fn is_map_type(ty: &syn::Type) -> bool {
     }
 }
 
-
 pub fn is_deque_type(ty: &syn::Type) -> bool {
     if let syn::Type::Path(type_path) = ty {
         type_path

@@ -4046,7 +4046,7 @@ dependencies = [
 [[package]]
 name = "kontor-crypto"
 version = "0.2.0"
-source = "git+https://github.com/KontorProtocol/Kontor-Crypto?rev=6dc5456b1601860141f95b9b496af1c70987b00e#6dc5456b1601860141f95b9b496af1c70987b00e"
+source = "git+https://github.com/KontorProtocol/Kontor-Crypto?rev=114bf3e27e6dafdeea4773499e07c98a485019d8#114bf3e27e6dafdeea4773499e07c98a485019d8"
 dependencies = [
  "bincode",
  "blake2b_simd",
@@ -4072,7 +4072,7 @@ dependencies = [
 [[package]]
 name = "kontor-crypto-core"
 version = "0.2.0"
-source = "git+https://github.com/KontorProtocol/Kontor-Crypto?rev=6dc5456b1601860141f95b9b496af1c70987b00e#6dc5456b1601860141f95b9b496af1c70987b00e"
+source = "git+https://github.com/KontorProtocol/Kontor-Crypto?rev=114bf3e27e6dafdeea4773499e07c98a485019d8#114bf3e27e6dafdeea4773499e07c98a485019d8"
 dependencies = [
  "blake2b_simd",
  "constant_time_eq 0.3.1",

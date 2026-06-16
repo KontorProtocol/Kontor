@@ -684,10 +684,7 @@ mod tests {
     fn nested_bulk_store_set_maintains_indexes() {
         let ctx = Rc::new(Mock::default());
         let account = Account {
-            positions: StorageMap::new(&[
-                (1, Position { status: 2 }),
-                (2, Position { status: 5 }),
-            ]),
+            positions: StorageMap::new(&[(1, Position { status: 2 }), (2, Position { status: 5 })]),
         };
 
         Store::__set(&ctx, p("account"), account);

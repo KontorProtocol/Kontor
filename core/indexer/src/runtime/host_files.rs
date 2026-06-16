@@ -39,7 +39,10 @@ impl Runtime {
             rows.iter().map(|r| (r.root(), r.depth())).collect();
         match aggregate_root_from_files(&files_rd) {
             Ok(root) => Ok(Ok(root.to_vec())),
-            Err(e) => Ok(Err(Error::Validation(format!("aggregate-root failed: {}", e)))),
+            Err(e) => Ok(Err(Error::Validation(format!(
+                "aggregate-root failed: {}",
+                e
+            )))),
         }
     }
 
@@ -146,12 +149,12 @@ impl Runtime {
             Err(KontorPoRError::InvalidInput(_))
             | Err(KontorPoRError::InvalidChallengeCount { .. }) => Ok(Ok(VerifyResult::Invalid)),
             Err(KontorPoRError::Snark(_)) => Ok(Ok(VerifyResult::Rejected)),
-            Err(KontorPoRError::InvalidLedgerRoot { proof_root, reason }) => Ok(Err(
-                Error::Validation(format!(
+            Err(KontorPoRError::InvalidLedgerRoot { proof_root, reason }) => {
+                Ok(Err(Error::Validation(format!(
                     "Invalid ledger root in proof: {} - {}",
                     proof_root, reason
-                )),
-            )),
+                ))))
+            }
             Err(other) => Ok(Err(Error::Validation(format!(
                 "Unexpected verification error: {}",
                 other
@@ -258,7 +261,14 @@ impl built_in::file_registry::HostWithStore for Runtime {
     ) -> Result<Result<String, Error>> {
         accessor
             .with(|mut access| access.get().clone())
-            ._compute_challenge_id(accessor, file, block_height, num_challenges, seed, prover_id)
+            ._compute_challenge_id(
+                accessor,
+                file,
+                block_height,
+                num_challenges,
+                seed,
+                prover_id,
+            )
             .await
     }
 }
