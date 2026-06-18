@@ -64,7 +64,7 @@ fastnum = { workspace = true }
 strum = { version = "=0.28.0", features = ["derive"] }
 tracing-stackdriver = "=0.10.0"
 regex = "=1.12.3"
-kontor-crypto = "0.2.0"
+kontor-crypto = "0.3.0"
 ff = "=0.13.1"
 moka = { version = "0.12.15", features = ["future"] }
 blst = { workspace = true }

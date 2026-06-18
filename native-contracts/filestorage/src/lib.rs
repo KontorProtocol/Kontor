@@ -134,6 +134,12 @@ struct ProtocolState {
     /// is set, then clears it. Keeps `create_agreement` O(1) and makes the O(n)
     /// rebuild unbilled system work, once per block.
     pub roots_dirty: bool,
+    /// Monotonic, append-only counter for the next file's stable ledger slot
+    /// (kontor-crypto 0.3.0). Assigned at `create_agreement` and only ever
+    /// incremented — a slot is never reused, even if its file is later removed —
+    /// so a file's leaf position in the aggregated ledger tree is stable for life.
+    /// Replaces the old lexicographic-`file_id` ordering.
+    pub next_ledger_index: u64,
 }
 
 // `agreement-data`/`challenge-data` are indexed (agreement by `active`; challenge
@@ -186,6 +192,7 @@ impl Guest for Filestorage {
             challenges: Map::default(),
             valid_roots: Deque::default(),
             roots_dirty: false,
+            next_ledger_index: 0,
         }
         .init(ctx);
         ctx.contract()
@@ -216,16 +223,26 @@ impl Guest for Filestorage {
             )));
         }
 
+        // Assign this file's stable, append-only ledger slot from the monotonic
+        // counter. Done before the validation call below — but the counter is only
+        // bumped AFTER validation succeeds, so a rejected descriptor never burns a
+        // slot (which would leave a permanent gap and erode the sparsity budget).
+        let ledger_index = model.next_ledger_index();
+
         // Validate the descriptor's `root` field element up front via a throwaway
         // single-file aggregate — O(1). The per-block `record_block_root` recompute
         // also validates, but it's a core op that can't surface errors to a user, so
         // we reject a malformed descriptor here (never stored) before it ever reaches
-        // that hook.
+        // that hook. Aggregate by (root, padded_len, ledger_index) — the file lives
+        // at its assigned slot, not a sort position.
         file_registry::aggregate_root(&[(
-            descriptor.file_id.clone(),
             descriptor.root.clone(),
             descriptor.padded_len,
+            ledger_index,
         )])?;
+
+        // Validation passed — claim the slot by advancing the append-only counter.
+        model.set_next_ledger_index(ledger_index + 1);
 
         // Create the agreement (starts inactive until nodes join). The file
         // descriptor is folded in — the contract owns this metadata now.
@@ -238,6 +255,7 @@ impl Guest for Filestorage {
             padded_len: descriptor.padded_len,
             original_size: descriptor.original_size,
             filename: descriptor.filename.clone(),
+            ledger_index,
             active: false,
             active_challenge: None,
         };
@@ -492,17 +510,17 @@ impl Guest for Filestorage {
             return Ok(());
         }
 
-        // `aggregate_root` needs only (file_id, root, padded_len) per file. So read
-        // just `root` + `padded_len` from each agreement (file_id is the map key,
-        // already in hand) instead of `load()`-ing the whole `AgreementData` — its
-        // other ~8 fields would be that many extra storage reads per agreement, every
-        // block. keys() yields them in lexicographic file_id (canonical) order; the
-        // host also sorts internally, so order here is not load-bearing.
+        // `aggregate_root` needs only (root, padded_len, ledger_index) per file. So
+        // read just those three fields from each agreement instead of `load()`-ing the
+        // whole `AgreementData` — its other ~7 fields would be that many extra storage
+        // reads per agreement, every block. Each file's leaf is placed at its stable
+        // `ledger_index` slot (gaps zero-filled), so iteration order is NOT
+        // load-bearing — the result is independent of the order `keys()` yields.
         let file_ids: Vec<String> = model.agreements().keys().collect();
         let mut files = Vec::with_capacity(file_ids.len());
         for fid in file_ids {
             if let Some(a) = model.agreements().get(&fid) {
-                files.push((fid, a.root(), a.padded_len()));
+                files.push((a.root(), a.padded_len(), a.ledger_index()));
             }
         }
 
@@ -767,20 +785,30 @@ impl Guest for Filestorage {
     // Proof Verification
     // ─────────────────────────────────────────────────────────────────
 
-    fn verify_proof(ctx: &ProcContext, proof_bytes: Vec<u8>) -> Result<VerifyProofResult, Error> {
+    fn verify_proof(
+        ctx: &ProcContext,
+        proof_bytes: Vec<u8>,
+        challenge_ids: Vec<String>,
+    ) -> Result<VerifyProofResult, Error> {
         let model = ctx.model();
 
         // 1. Deserialize proof (single deserialization via host resource)
         let proof = file_registry::Proof::from_bytes(&proof_bytes)?;
 
-        // 2. Get challenge IDs from proof
-        let challenge_ids = proof.challenge_ids();
+        // 2. The kontor-crypto 0.3.0 constant-size proof no longer enumerates the
+        // challenges it answers, so the submitter declares them. The SNARK binds
+        // the challenge set + each file's resolved slot to the proof, so a wrong,
+        // extra, or missing id makes verification fail — no credit is given for
+        // challenges the proof doesn't actually answer.
         if challenge_ids.is_empty() {
-            return Err(Error::Message("Proof contains no challenges".to_string()));
+            return Err(Error::Message("No challenge ids supplied".to_string()));
         }
 
-        // 3. Build challenge inputs from contract storage
+        // 3. Build challenge inputs + the file-registry snapshot (`file_id ->
+        // (root, padded_len, ledger_index)`) the stateless verifier resolves each
+        // challenged file's stable slot and root-commitment from.
         let mut challenge_inputs = Vec::new();
+        let mut files: Vec<(String, Vec<u8>, u64, u64)> = Vec::new();
         for cid in &challenge_ids {
             let challenge = model
                 .challenges()
@@ -805,10 +833,18 @@ impl Guest for Filestorage {
                         "Agreement not found: {}",
                         challenge.agreement_id()
                     )))?;
+            let agreement = agreement.load();
+
+            files.push((
+                agreement.file_id.clone(),
+                agreement.root.clone(),
+                agreement.padded_len,
+                agreement.ledger_index,
+            ));
 
             challenge_inputs.push(file_registry_types::ChallengeInput {
                 challenge_id: cid.clone(),
-                file: raw_descriptor(&agreement.load()),
+                file: raw_descriptor(&agreement),
                 block_height: challenge.block_height(),
                 num_challenges: challenge.num_challenges(),
                 seed: challenge.seed(),
@@ -816,9 +852,10 @@ impl Guest for Filestorage {
             });
         }
 
-        // 4. Verify the proof against the contract's valid-root window.
+        // 4. Verify the proof against the contract's valid-root window + the file
+        // registry snapshot (for stable-slot resolution).
         let valid_roots: Vec<Vec<u8>> = model.valid_roots().iter().collect();
-        let result = proof.verify(&challenge_inputs, &valid_roots)?;
+        let result = proof.verify(&challenge_inputs, &valid_roots, &files)?;
 
         // 5. Update challenge statuses based on result
         let new_status = match result {

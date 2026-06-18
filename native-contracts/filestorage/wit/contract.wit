@@ -28,6 +28,11 @@ world root {
     padded-len: u64,
     original-size: u64,
     filename: string,
+    // Stable, append-only ledger slot assigned at create time from a
+    // monotonic counter (never reused, even after removal). The file's leaf in
+    // the aggregated ledger tree lives at this slot (kontor-crypto 0.3.0
+    // append-only model), replacing the old lexicographic-`file-id` position.
+    ledger-index: u64,
     active: bool,
     // The agreement's currently-open challenge, if any. Co-located so
     // "is this agreement already challenged?" is a point read, not a scan of
@@ -172,9 +177,17 @@ world root {
   // Proof Verification
   // ─────────────────────────────────────────────────────────────────
 
+  // `challenge-ids` are the challenges the submitter claims this proof answers.
+  // kontor-crypto 0.3.0's constant-size proof no longer carries them (nor the
+  // per-file ledger indices), so the submitter declares them and the contract
+  // rebuilds the challenge set + the file-registry snapshot it feeds to verify.
+  // The SNARK binds both, so a wrong/extra/missing challenge id makes
+  // verification fail — the submitter cannot get credit for challenges the
+  // proof doesn't actually answer.
   export verify-proof: async func(
     ctx: borrow<proc-context>,
-    proof-bytes: list<u8>
+    proof-bytes: list<u8>,
+    challenge-ids: list<string>
   ) -> result<verify-proof-result, error>;
 
 }

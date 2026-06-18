@@ -72,7 +72,10 @@ async fn e2e_invalid_proof_rejected(runtime: &mut Runtime) -> Result<()> {
     // rejects it regardless — this exercises the rejection path, not a fixture).
     let s_chal = filestorage::get_s_chal(runtime).await? as usize;
     let proof_bytes = por_invalid_proof_bytes(prover, s_chal)?;
-    let result = filestorage::verify_proof(runtime, &s1, proof_bytes).await?;
+    // No challenge is registered for this proof, so naming a non-existent id makes
+    // the contract reject it ("Challenge not found") before verification — the
+    // rejection path this test exercises.
+    let result = filestorage::verify_proof(runtime, &s1, proof_bytes, vec!["unregistered"]).await?;
     assert!(result.is_err(), "Invalid proof should be rejected");
 
     Ok(())
@@ -174,7 +177,15 @@ async fn e2e_cross_block_aggregation_with_new_agreement(runtime: &mut Runtime) -
     // the network's challenge count), then verify it through the contract.
     let s_chal = filestorage::get_s_chal(runtime).await? as usize;
     let proof_bytes = por_cross_block_proof_bytes(prover, s_chal)?;
-    let result = filestorage::verify_proof(runtime, &s1, proof_bytes).await??;
+    // v3 proofs no longer enumerate their challenges — the submitter declares the
+    // ids the proof answers (A and B here).
+    let result = filestorage::verify_proof(
+        runtime,
+        &s1,
+        proof_bytes,
+        vec![&challenge_a.challenge_id, &challenge_b.challenge_id],
+    )
+    .await??;
 
     assert_eq!(
         result.verified_count, 2,

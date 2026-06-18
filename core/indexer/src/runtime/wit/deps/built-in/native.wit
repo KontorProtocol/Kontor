@@ -11,15 +11,17 @@ interface file-registry {
 
     // The aggregated ledger root over the registered file set — the Poseidon-tree
     // root committing to every file. Takes only what the root commits to per file:
-    // `(file-id, root, padded-len)`, where `root` is the file's Merkle root and
-    // `padded-len` gives the tree depth. (A full `raw-file-descriptor` is NOT needed
-    // — its object-id/nonce/filename don't enter the root — so the filestorage
-    // contract reads just these two fields per agreement instead of whole structs.)
-    // The host sorts by `file-id` internally (canonical order), so caller order
-    // doesn't matter; a `root` that is not a valid field element errors (this doubles
-    // as validation). The contract recomputes this on each file registration and
-    // records the result as a valid root.
-    aggregate-root: async func(files: list<tuple<string, list<u8>, u64>>) -> result<list<u8>, error>;
+    // `(root, padded-len, ledger-index)`, where `root` is the file's Merkle root,
+    // `padded-len` gives the tree depth, and `ledger-index` is the file's stable,
+    // append-only slot. (A full `raw-file-descriptor` is NOT needed — its
+    // object-id/nonce/filename don't enter the root — so the filestorage contract
+    // reads just these fields per agreement instead of whole structs.) Each file's
+    // leaf is placed at its `ledger-index` slot (gaps zero-filled, kontor-crypto
+    // 0.3.0 append-only model), so caller order doesn't matter and the result is
+    // independent of any sort. A `root` that is not a valid field element errors
+    // (this doubles as validation). The contract recomputes this on each file
+    // registration and records the result as a valid root.
+    aggregate-root: async func(files: list<tuple<list<u8>, u64, u64>>) -> result<list<u8>, error>;
 
     // Deterministic challenge id for a file + challenge parameters.
     compute-challenge-id: async func(
@@ -40,12 +42,19 @@ interface file-registry {
 
     resource proof {
         from-bytes: static async func(bytes: list<u8>) -> result<proof, error>;
-        challenge-ids: async func() -> list<string>;
         // `valid-roots` is the contract's accepted aggregated-root set
-        // ({current} ∪ recent history). Stateless — no host ledger.
+        // ({current} ∪ recent history). `files` is the contract's file-registry
+        // snapshot: each `(file-id, root, padded-len, ledger-index)` is the data
+        // the host needs to resolve a file's stable slot and root-commitment.
+        // kontor-crypto 0.3.0's constant-size proof carries neither the challenge
+        // ids nor the per-file ledger indices, so the verifier supplies both the
+        // challenge set (from `challenges`) and the registry (from `files`); the
+        // SNARK binds them, so a prover cannot lie about which files/slots it
+        // proved. Stateless — no host ledger.
         verify: async func(
             challenges: list<challenge-input>,
-            valid-roots: list<list<u8>>
+            valid-roots: list<list<u8>>,
+            files: list<tuple<string, list<u8>, u64, u64>>
         ) -> result<verify-result, error>;
     }
 }

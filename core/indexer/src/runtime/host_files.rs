@@ -1,10 +1,13 @@
 use anyhow::Result;
 use hkdf::Hkdf;
-use kontor_crypto::{FieldElement, KontorPoRError, aggregate_root_from_files, verify_stateless};
+use kontor_crypto::{
+    FieldElement, KontorPoRError, StatelessLedger, aggregate_root_from_files,
+    poseidon::calculate_root_commitment, verify_stateless,
+};
 
 use crate::database::types::{padded_len_to_depth, validate_root};
 use sha2::Sha256;
-use std::collections::HashSet;
+use std::collections::{BTreeMap, HashSet};
 use wasmtime::component::{Accessor, Resource};
 
 use super::{
@@ -19,29 +22,25 @@ impl Runtime {
     async fn _aggregate_root<T>(
         &self,
         accessor: &Accessor<T, Self>,
-        files: Vec<(String, Vec<u8>, u64)>,
+        files: Vec<(Vec<u8>, u64, u64)>,
     ) -> Result<Result<Vec<u8>, Error>> {
         Fuel::AggregateRoot(files.len() as u64)
             .consume(accessor, self.gauge.as_ref())
             .await?;
 
-        // Reduce each (file_id, root, padded_len) to (file_id, root_field, depth).
+        // Reduce each (root, padded_len, ledger_index) to (root_field, depth, slot).
         // `root` must be a valid field element (this doubles as validation).
-        let mut leaves: Vec<(String, FieldElement, usize)> = Vec::with_capacity(files.len());
-        for (file_id, root, padded_len) in files {
+        // kontor-crypto 0.3.0 places each leaf at its stable, append-only `slot`
+        // (gaps zero-filled), so there is NO sort — the tree position is the stored
+        // slot, not the lexicographic `file_id` rank — and caller order is irrelevant.
+        let mut files_rd: Vec<(FieldElement, usize, usize)> = Vec::with_capacity(files.len());
+        for (root, padded_len, ledger_index) in files {
             let root = match validate_root(&root) {
                 Ok((_, fe)) => fe,
                 Err(m) => return Ok(Err(Error::Validation(m.to_string()))),
             };
-            leaves.push((file_id, root, padded_len_to_depth(padded_len)));
+            files_rd.push((root, padded_len_to_depth(padded_len), ledger_index as usize));
         }
-        // Canonical order = lexicographic file_id (matches kontor-crypto's BTreeMap),
-        // so the recomputed root is independent of the order the contract passed.
-        leaves.sort_by(|a, b| a.0.cmp(&b.0));
-        let files_rd: Vec<(FieldElement, usize)> = leaves
-            .iter()
-            .map(|(_, root, depth)| (*root, *depth))
-            .collect();
         match aggregate_root_from_files(&files_rd) {
             Ok(root) => Ok(Ok(root.to_vec())),
             Err(e) => Ok(Err(Error::Validation(format!(
@@ -87,26 +86,13 @@ impl Runtime {
         })
     }
 
-    async fn _proof_challenge_ids<T>(
-        &self,
-        accessor: &Accessor<T, Self>,
-        rep: Resource<wit::Proof>,
-    ) -> Result<Vec<String>> {
-        Fuel::ProofChallengeIds
-            .consume(accessor, self.gauge.as_ref())
-            .await?;
-
-        let table = self.table.lock().await;
-        let proof = table.get(&rep)?;
-        Ok(proof.challenge_ids())
-    }
-
     async fn _proof_verify<T>(
         &self,
         accessor: &Accessor<T, Self>,
         rep: Resource<wit::Proof>,
         challenge_inputs: Vec<ChallengeInput>,
         valid_roots: Vec<Vec<u8>>,
+        files: Vec<(String, Vec<u8>, u64, u64)>,
     ) -> Result<Result<VerifyResult, Error>> {
         Fuel::ProofVerify
             .consume(accessor, self.gauge.as_ref())
@@ -149,7 +135,29 @@ impl Runtime {
             }
         }
 
-        match verify_stateless(&challenges, &proof.inner, &roots) {
+        // Build the file-registry snapshot the stateless verifier resolves ledger
+        // indices from: `file_id -> (stable slot, root-commitment)`. The contract
+        // supplies each file's `(file_id, root, padded_len, ledger_index)`; the host
+        // validates `root` as a canonical field element (same gate as aggregate-root)
+        // and derives `rc = calculate_root_commitment(root, depth)` exactly as the
+        // crypto ledger does, so the verifier's view matches the prover's.
+        let mut file_map: BTreeMap<String, (usize, FieldElement)> = BTreeMap::new();
+        for (file_id, root, padded_len, ledger_index) in &files {
+            let root_fe = match validate_root(root) {
+                Ok((_, fe)) => fe,
+                Err(m) => return Ok(Err(Error::Validation(m.to_string()))),
+            };
+            let depth = padded_len_to_depth(*padded_len);
+            let rc = calculate_root_commitment(root_fe, FieldElement::from(depth as u64));
+            file_map.insert(file_id.clone(), (*ledger_index as usize, rc));
+        }
+
+        let ledger = StatelessLedger {
+            valid_roots: &roots,
+            files: &file_map,
+        };
+
+        match verify_stateless(&challenges, &proof.inner, &ledger) {
             Ok(true) => Ok(Ok(VerifyResult::Verified)),
             Ok(false) => Ok(Ok(VerifyResult::Rejected)),
             Err(KontorPoRError::InvalidInput(_))
@@ -249,7 +257,7 @@ impl built_in::file_registry::Host for Runtime {}
 impl built_in::file_registry::HostWithStore for Runtime {
     async fn aggregate_root<T>(
         accessor: &Accessor<T, Self>,
-        files: Vec<(String, Vec<u8>, u64)>,
+        files: Vec<(Vec<u8>, u64, u64)>,
     ) -> Result<Result<Vec<u8>, Error>> {
         accessor
             .with(|mut access| access.get().clone())
@@ -299,25 +307,16 @@ impl built_in::file_registry::HostProofWithStore for Runtime {
             .await
     }
 
-    async fn challenge_ids<T>(
-        accessor: &Accessor<T, Self>,
-        rep: Resource<wit::Proof>,
-    ) -> Result<Vec<String>> {
-        accessor
-            .with(|mut access| access.get().clone())
-            ._proof_challenge_ids(accessor, rep)
-            .await
-    }
-
     async fn verify<T>(
         accessor: &Accessor<T, Self>,
         rep: Resource<wit::Proof>,
         challenges: Vec<built_in::file_registry_types::ChallengeInput>,
         valid_roots: Vec<Vec<u8>>,
+        files: Vec<(String, Vec<u8>, u64, u64)>,
     ) -> Result<Result<VerifyResult, Error>> {
         accessor
             .with(|mut access| access.get().clone())
-            ._proof_verify(accessor, rep, challenges, valid_roots)
+            ._proof_verify(accessor, rep, challenges, valid_roots, files)
             .await
     }
 }
