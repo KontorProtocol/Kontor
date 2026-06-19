@@ -1,6 +1,13 @@
-use anyhow::Result;
+use anyhow::{Result, anyhow};
 use hkdf::Hkdf;
+use kontor_crypto::{
+    FieldElement, KontorPoRError, StatelessLedger, aggregate_root_from_files,
+    poseidon::calculate_root_commitment, verify_stateless,
+};
+
+use crate::database::types::{validate_padded_len, validate_root};
 use sha2::Sha256;
+use std::collections::{BTreeMap, HashSet};
 use wasmtime::component::{Accessor, Resource};
 
 use super::{
@@ -12,76 +19,45 @@ use super::{
 };
 
 impl Runtime {
-    async fn _add_file<T>(
+    async fn _aggregate_root<T>(
         &self,
         accessor: &Accessor<T, Self>,
-        file_descriptor: Resource<FileDescriptor>,
-    ) -> Result<()> {
-        Fuel::AddFile.consume(accessor, self.gauge.as_ref()).await?;
-        let table = self.table.lock().await;
-        let file_metadata_row = table.get(&file_descriptor)?.file_metadata_row.clone();
-        self.file_ledger
-            .add_file(&self.storage.conn, &file_metadata_row)
-            .await
-    }
-
-    async fn _file_id<T>(
-        &self,
-        accessor: &Accessor<T, Self>,
-        rep: Resource<FileDescriptor>,
-    ) -> Result<String> {
-        Fuel::GetFileId
-            .consume(accessor, self.gauge.as_ref())
-            .await?;
-        let table = self.table.lock().await;
-        let file_id = table.get(&rep)?.file_metadata_row.file_id.clone();
-
-        Ok(file_id)
-    }
-
-    async fn _get_file_descriptor<T>(
-        &self,
-        accessor: &Accessor<T, Self>,
-        file_id: String,
-    ) -> Result<Option<Resource<FileDescriptor>>> {
-        Fuel::GetFileDescriptor
+        files: Vec<(Vec<u8>, u64, u64)>,
+    ) -> Result<Result<Vec<u8>, Error>> {
+        Fuel::AggregateRoot(files.len() as u64)
             .consume(accessor, self.gauge.as_ref())
             .await?;
 
-        let fd = self
-            .file_ledger
-            .get_file_descriptor(&self.storage.conn, &file_id)
-            .await?;
-        let mut table = self.table.lock().await;
-        match fd {
-            Some(file_descriptor) => Ok(Some(table.push(file_descriptor)?)),
-            None => Ok(None),
+        // Reduce each (root, padded_len, ledger_index) to (root_field, depth, slot).
+        // `root` must be a valid field element (this doubles as validation).
+        // kontor-crypto 0.3.0 places each leaf at its stable, append-only `slot`
+        // (gaps zero-filled), so there is NO sort — the tree position is the stored
+        // slot, not the lexicographic `file_id` rank — and caller order is irrelevant.
+        let mut files_rd: Vec<(FieldElement, usize, usize)> = Vec::with_capacity(files.len());
+        for (root, padded_len, ledger_index) in files {
+            let root = match validate_root(&root) {
+                Ok((_, fe)) => fe,
+                Err(m) => return Ok(Err(Error::Validation(m.to_string()))),
+            };
+            let depth = match validate_padded_len(padded_len) {
+                Ok(d) => d,
+                Err(m) => return Ok(Err(Error::Validation(m.to_string()))),
+            };
+            files_rd.push((root, depth, ledger_index as usize));
         }
-    }
-
-    async fn _from_raw<T>(
-        &self,
-        accessor: &Accessor<T, Self>,
-        raw: RawFileDescriptor,
-    ) -> Result<Result<Resource<FileDescriptor>, Error>> {
-        Fuel::FromRawFileDescriptor
-            .consume(accessor, self.gauge.as_ref())
-            .await?;
-
-        let mut table = self.table.lock().await;
-
-        Ok(
-            match FileDescriptor::try_from_raw(raw, self.storage.height) {
-                Ok(fd) => Ok(table.push(fd)?),
-                Err(error) => Err(error),
-            },
-        )
+        match aggregate_root_from_files(&files_rd) {
+            Ok(root) => Ok(Ok(root.to_vec())),
+            Err(e) => Ok(Err(Error::Validation(format!(
+                "aggregate-root failed: {}",
+                e
+            )))),
+        }
     }
 
     async fn _compute_challenge_id<T>(
         &self,
         accessor: &Accessor<T, Self>,
-        rep: Resource<FileDescriptor>,
+        file: RawFileDescriptor,
         block_height: u64,
         num_challenges: u64,
         seed: Vec<u8>,
@@ -91,10 +67,11 @@ impl Runtime {
             .consume(accessor, self.gauge.as_ref())
             .await?;
 
-        let table = self.table.lock().await;
-        let file_descriptor = table.get(&rep)?;
-
-        Ok(file_descriptor.compute_challenge_id(block_height, num_challenges, &seed, prover_id))
+        let fd = match FileDescriptor::try_from_raw(file) {
+            Ok(fd) => fd,
+            Err(e) => return Ok(Err(e)),
+        };
+        Ok(fd.compute_challenge_id(block_height, num_challenges, &seed, prover_id))
     }
 
     async fn _proof_from_bytes<T>(
@@ -113,25 +90,13 @@ impl Runtime {
         })
     }
 
-    async fn _proof_challenge_ids<T>(
-        &self,
-        accessor: &Accessor<T, Self>,
-        rep: Resource<wit::Proof>,
-    ) -> Result<Vec<String>> {
-        Fuel::ProofChallengeIds
-            .consume(accessor, self.gauge.as_ref())
-            .await?;
-
-        let table = self.table.lock().await;
-        let proof = table.get(&rep)?;
-        Ok(proof.challenge_ids())
-    }
-
     async fn _proof_verify<T>(
         &self,
         accessor: &Accessor<T, Self>,
         rep: Resource<wit::Proof>,
         challenge_inputs: Vec<ChallengeInput>,
+        valid_roots: Vec<Vec<u8>>,
+        files: Vec<(String, Vec<u8>, u64, u64)>,
     ) -> Result<Result<VerifyResult, Error>> {
         Fuel::ProofVerify
             .consume(accessor, self.gauge.as_ref())
@@ -140,22 +105,14 @@ impl Runtime {
         let table = self.table.lock().await;
         let proof = table.get(&rep)?;
 
+        // Each input carries the file's full metadata (from the contract's own
+        // `agreement-data`), so we build the challenges directly — no host lookup.
         let mut challenges = Vec::new();
         for input in &challenge_inputs {
-            let fd = match self
-                .file_ledger
-                .get_file_descriptor(&self.storage.conn, &input.file_id)
-                .await?
-            {
-                Some(fd) => fd,
-                None => {
-                    return Ok(Err(Error::Validation(format!(
-                        "File not found: {}",
-                        input.file_id
-                    ))));
-                }
+            let fd = match FileDescriptor::try_from_raw(input.file.clone()) {
+                Ok(fd) => fd,
+                Err(e) => return Ok(Err(e)),
             };
-
             match fd.build_challenge(
                 input.block_height,
                 input.num_challenges,
@@ -167,36 +124,74 @@ impl Runtime {
             }
         }
 
-        let result = self
-            .file_ledger
-            .verify_proof(&proof.inner, &challenges)
-            .await;
+        // Validate each accepted root as a canonical field element, not merely 32
+        // bytes (mirrors `_aggregate_root`). `is_valid_root` compares the proof root's
+        // canonical `to_repr()` against this set, so a non-canonical encoding could
+        // never match — it would silently reject an otherwise-valid proof. Insert the
+        // canonical bytes `validate_root` returns and surface a clear error instead.
+        let mut roots = HashSet::with_capacity(valid_roots.len());
+        for r in &valid_roots {
+            match validate_root(r) {
+                Ok((bytes, _)) => {
+                    roots.insert(bytes);
+                }
+                Err(m) => return Ok(Err(Error::Validation(m.to_string()))),
+            }
+        }
 
-        match result {
+        // Build the file-registry snapshot the stateless verifier resolves ledger
+        // indices from: `file_id -> (stable slot, root-commitment)`. The contract
+        // supplies each file's `(file_id, root, padded_len, ledger_index)`; the host
+        // validates `root` as a canonical field element and `padded_len` as a positive
+        // power of two (same gates as aggregate-root) and derives
+        // `rc = calculate_root_commitment(root, depth)` exactly as the crypto ledger
+        // does, so the verifier's view matches the prover's.
+        let mut file_map: BTreeMap<String, (usize, FieldElement)> = BTreeMap::new();
+        for (file_id, root, padded_len, ledger_index) in &files {
+            let root_fe = match validate_root(root) {
+                Ok((_, fe)) => fe,
+                Err(m) => return Ok(Err(Error::Validation(m.to_string()))),
+            };
+            let depth = match validate_padded_len(*padded_len) {
+                Ok(d) => d,
+                Err(m) => return Ok(Err(Error::Validation(m.to_string()))),
+            };
+            let rc = calculate_root_commitment(root_fe, FieldElement::from(depth as u64));
+            file_map.insert(file_id.clone(), (*ledger_index as usize, rc));
+        }
+
+        let ledger = StatelessLedger {
+            valid_roots: &roots,
+            files: &file_map,
+        };
+
+        match verify_stateless(&challenges, &proof.inner, &ledger) {
             Ok(true) => Ok(Ok(VerifyResult::Verified)),
             Ok(false) => Ok(Ok(VerifyResult::Rejected)),
-            Err(e) => {
-                use kontor_crypto::KontorPoRError;
-                match e {
-                    KontorPoRError::InvalidInput(_)
-                    | KontorPoRError::InvalidChallengeCount { .. }
-                    | KontorPoRError::FileNotInLedger { .. } => Ok(Ok(VerifyResult::Invalid)),
-
-                    KontorPoRError::Snark(_) => Ok(Ok(VerifyResult::Rejected)),
-
-                    KontorPoRError::InvalidLedgerRoot { proof_root, reason } => {
-                        Ok(Err(Error::Validation(format!(
-                            "Invalid ledger root in proof: {} - {}",
-                            proof_root, reason
-                        ))))
-                    }
-
-                    other => Ok(Err(Error::Validation(format!(
-                        "Unexpected verification error: {}",
-                        other
-                    )))),
-                }
+            Err(KontorPoRError::InvalidInput(_))
+            | Err(KontorPoRError::InvalidChallengeCount { .. }) => Ok(Ok(VerifyResult::Invalid)),
+            Err(KontorPoRError::Snark(_)) => Ok(Ok(VerifyResult::Rejected)),
+            Err(KontorPoRError::InvalidLedgerRoot { proof_root, reason }) => {
+                Ok(Err(Error::Validation(format!(
+                    "Invalid ledger root in proof: {} - {}",
+                    proof_root, reason
+                ))))
             }
+            // Invariant violation, NOT a bad proof: `verify_proof` builds `challenges`
+            // and `files` from the same agreements, so every challenged file resolves
+            // and its root-commitment matches by construction. Reaching here means the
+            // host built those two views inconsistently — a node bug, unreachable by any
+            // user input. Return a bare `anyhow` error (no wasmtime trap, no inner WIT
+            // Error) so the runtime classifies it `NonDeterministic` and shuts the node
+            // down, rather than a deterministic reject that would bake a host bug into
+            // consensus (and silently diverge once the bug is fixed).
+            Err(
+                e @ (KontorPoRError::FileNotInLedger { .. } | KontorPoRError::MetadataMismatch),
+            ) => Err(anyhow!("invariant violation in verify_proof: {e}")),
+            Err(other) => Ok(Err(Error::Validation(format!(
+                "Unexpected verification error: {}",
+                other
+            )))),
         }
     }
 
@@ -278,61 +273,20 @@ impl built_in::testing::HostWithStore for Runtime {
 
 impl built_in::file_registry::Host for Runtime {}
 
-impl built_in::file_registry::HostFileDescriptor for Runtime {}
-
 impl built_in::file_registry::HostWithStore for Runtime {
-    async fn add_file<T>(
+    async fn aggregate_root<T>(
         accessor: &Accessor<T, Self>,
-        file_descriptor: Resource<FileDescriptor>,
-    ) -> Result<()> {
+        files: Vec<(Vec<u8>, u64, u64)>,
+    ) -> Result<Result<Vec<u8>, Error>> {
         accessor
             .with(|mut access| access.get().clone())
-            ._add_file(accessor, file_descriptor)
-            .await
-    }
-
-    async fn get_file_descriptor<T>(
-        accessor: &Accessor<T, Self>,
-        file_id: String,
-    ) -> Result<Option<Resource<FileDescriptor>>> {
-        accessor
-            .with(|mut access| access.get().clone())
-            ._get_file_descriptor(accessor, file_id)
-            .await
-    }
-}
-
-impl built_in::file_registry::HostFileDescriptorWithStore for Runtime {
-    async fn drop<T>(accessor: &Accessor<T, Self>, rep: Resource<FileDescriptor>) -> Result<()> {
-        accessor
-            .with(|mut access| access.get().clone())
-            ._drop(rep)
-            .await
-    }
-
-    async fn file_id<T>(
-        accessor: &Accessor<T, Self>,
-        rep: Resource<FileDescriptor>,
-    ) -> Result<String> {
-        accessor
-            .with(|mut access| access.get().clone())
-            ._file_id(accessor, rep)
-            .await
-    }
-
-    async fn from_raw<T>(
-        accessor: &Accessor<T, Self>,
-        raw: RawFileDescriptor,
-    ) -> Result<Result<Resource<FileDescriptor>, Error>> {
-        accessor
-            .with(|mut access| access.get().clone())
-            ._from_raw(accessor, raw)
+            ._aggregate_root(accessor, files)
             .await
     }
 
     async fn compute_challenge_id<T>(
         accessor: &Accessor<T, Self>,
-        rep: Resource<FileDescriptor>,
+        file: RawFileDescriptor,
         block_height: u64,
         num_challenges: u64,
         seed: Vec<u8>,
@@ -340,7 +294,14 @@ impl built_in::file_registry::HostFileDescriptorWithStore for Runtime {
     ) -> Result<Result<String, Error>> {
         accessor
             .with(|mut access| access.get().clone())
-            ._compute_challenge_id(accessor, rep, block_height, num_challenges, seed, prover_id)
+            ._compute_challenge_id(
+                accessor,
+                file,
+                block_height,
+                num_challenges,
+                seed,
+                prover_id,
+            )
             .await
     }
 }
@@ -365,24 +326,16 @@ impl built_in::file_registry::HostProofWithStore for Runtime {
             .await
     }
 
-    async fn challenge_ids<T>(
-        accessor: &Accessor<T, Self>,
-        rep: Resource<wit::Proof>,
-    ) -> Result<Vec<String>> {
-        accessor
-            .with(|mut access| access.get().clone())
-            ._proof_challenge_ids(accessor, rep)
-            .await
-    }
-
     async fn verify<T>(
         accessor: &Accessor<T, Self>,
         rep: Resource<wit::Proof>,
-        challenges: Vec<built_in::file_registry::ChallengeInput>,
+        challenges: Vec<built_in::file_registry_types::ChallengeInput>,
+        valid_roots: Vec<Vec<u8>>,
+        files: Vec<(String, Vec<u8>, u64, u64)>,
     ) -> Result<Result<VerifyResult, Error>> {
         accessor
             .with(|mut access| access.get().clone())
-            ._proof_verify(accessor, rep, challenges)
+            ._proof_verify(accessor, rep, challenges, valid_roots, files)
             .await
     }
 }

@@ -1,4 +1,4 @@
-use stdlib::{Indexed, Model, Storage};
+use stdlib::{Model, Storage};
 #[index(eligible, by = (active, challenge))]
 struct Agreement {
     #[index]
@@ -290,6 +290,7 @@ impl core::ops::Deref for AgreementWriteModel {
 }
 #[automatically_derived]
 impl stdlib::Indexed for Agreement {
+    const HAS_INDEXES: bool = true;
     fn index_entries(&self) -> alloc::vec::Vec<stdlib::IndexEntry> {
         let mut entries = alloc::vec::Vec::new();
         entries
@@ -367,7 +368,7 @@ where
     }
 }
 struct AgreementStorage {
-    agreements: IndexedMap<u64, Agreement>,
+    agreements: Map<u64, Agreement>,
 }
 pub struct AgreementStorageModel {
     pub base_path: stdlib::KeyPath,
@@ -382,6 +383,10 @@ impl AgreementStorageModel {
             base_path: base_path.clone(),
             ctx,
         }
+    }
+    pub fn __index_entries(&self) -> alloc::vec::Vec<stdlib::IndexEntry> {
+        let mut entries = alloc::vec::Vec::new();
+        entries
     }
     pub fn agreements(&self) -> AgreementStorageAgreementsModel {
         AgreementStorageAgreementsModel {
@@ -418,8 +423,8 @@ impl AgreementStorageAgreementsModel {
         stdlib::ReadStorage::__exists(&self.ctx, &base_path)
             .then(|| AgreementModel::new(self.ctx.clone(), base_path))
     }
-    pub fn load(&self) -> IndexedMap<u64, Agreement> {
-        IndexedMap::new(&[])
+    pub fn load(&self) -> Map<u64, Agreement> {
+        Map::new(&[])
     }
     pub fn keys(&self) -> impl Iterator<Item = u64> {
         stdlib::ReadStorage::__get_keys(&self.ctx, &self.base_path)
@@ -451,6 +456,7 @@ impl AgreementIndex<u64> for AgreementStorageAgreementsModel {
 pub struct AgreementStorageWriteModel {
     pub base_path: stdlib::KeyPath,
     ctx: alloc::rc::Rc<crate::context::ProcStorage>,
+    index_binding: Option<(stdlib::KeyPath, alloc::vec::Vec<u8>)>,
     model: AgreementStorageModel,
 }
 impl AgreementStorageWriteModel {
@@ -462,11 +468,20 @@ impl AgreementStorageWriteModel {
         Self {
             base_path: base_path.clone(),
             ctx,
+            index_binding: None,
             model: AgreementStorageModel::new(
                 alloc::rc::Rc::new(view_storage),
                 base_path.clone(),
             ),
         }
+    }
+    pub fn with_index(
+        mut self,
+        index_root: stdlib::KeyPath,
+        index_key: alloc::vec::Vec<u8>,
+    ) -> Self {
+        self.index_binding = Some((index_root, index_key));
+        self
     }
     pub fn agreements(&self) -> AgreementStorageAgreementsWriteModel {
         AgreementStorageAgreementsWriteModel {
@@ -513,33 +528,43 @@ impl AgreementStorageAgreementsWriteModel {
             })
     }
     pub fn set(&self, key: &u64, value: Agreement) {
-        let key_bytes = stdlib::KeyElement::encode(key);
-        let new_entries = stdlib::Indexed::index_entries(&value);
-        let old_entries = self.get(key).map(|m| m.__index_entries()).unwrap_or_default();
-        stdlib::apply_index_diff(
-            &self.ctx,
-            &self.index_path,
-            &key_bytes,
-            &old_entries,
-            &new_entries,
-        );
+        if <Agreement as stdlib::Indexed>::HAS_INDEXES {
+            let key_bytes = stdlib::KeyElement::encode(key);
+            let new_entries = stdlib::Indexed::index_entries(&value);
+            let old_entries = self
+                .get(key)
+                .map(|m| m.__index_entries())
+                .unwrap_or_default();
+            stdlib::apply_index_diff(
+                &self.ctx,
+                &self.index_path,
+                &key_bytes,
+                &old_entries,
+                &new_entries,
+            );
+        }
         stdlib::WriteStorage::__set(&self.ctx, self.base_path.push_element(key), value);
     }
     /// Remove the entry and its index rows. Returns true if a live value existed.
     pub fn remove(&self, key: &u64) -> bool {
-        let key_bytes = stdlib::KeyElement::encode(key);
-        let old_entries = self.get(key).map(|m| m.__index_entries()).unwrap_or_default();
-        stdlib::apply_index_diff(
-            &self.ctx,
-            &self.index_path,
-            &key_bytes,
-            &old_entries,
-            &[],
-        );
+        if <Agreement as stdlib::Indexed>::HAS_INDEXES {
+            let key_bytes = stdlib::KeyElement::encode(key);
+            let old_entries = self
+                .get(key)
+                .map(|m| m.__index_entries())
+                .unwrap_or_default();
+            stdlib::apply_index_diff(
+                &self.ctx,
+                &self.index_path,
+                &key_bytes,
+                &old_entries,
+                &[],
+            );
+        }
         stdlib::WriteStorage::__delete(&self.ctx, &self.base_path.push_element(key))
     }
-    pub fn load(&self) -> IndexedMap<u64, Agreement> {
-        IndexedMap::new(&[])
+    pub fn load(&self) -> Map<u64, Agreement> {
+        Map::new(&[])
     }
     pub fn keys(&self) -> impl Iterator<Item = u64> {
         stdlib::ReadStorage::__get_keys(&self.ctx, &self.base_path)

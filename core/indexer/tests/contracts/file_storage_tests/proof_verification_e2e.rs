@@ -72,7 +72,10 @@ async fn e2e_invalid_proof_rejected(runtime: &mut Runtime) -> Result<()> {
     // rejects it regardless — this exercises the rejection path, not a fixture).
     let s_chal = filestorage::get_s_chal(runtime).await? as usize;
     let proof_bytes = por_invalid_proof_bytes(prover, s_chal)?;
-    let result = filestorage::verify_proof(runtime, &s1, proof_bytes).await?;
+    // No challenge is registered for this proof, so naming a non-existent id makes
+    // the contract reject it ("Challenge not found") before verification — the
+    // rejection path this test exercises.
+    let result = filestorage::verify_proof(runtime, &s1, proof_bytes, vec!["unregistered"]).await?;
     assert!(result.is_err(), "Invalid proof should be rejected");
 
     Ok(())
@@ -154,11 +157,35 @@ async fn e2e_cross_block_aggregation_with_new_agreement(runtime: &mut Runtime) -
     filestorage::join_agreement(runtime, &s2, &created_c.agreement_id).await??;
     filestorage::join_agreement(runtime, &s3, &created_c.agreement_id).await??;
 
+    // Publish the current root over {A, B, C} before verifying. The fixture proves
+    // against the full 3-file ledger, so the proof's ledger_root is this root and it
+    // must be in the window. Per-block batching publishes only block-end roots, so
+    // this must land in a block BEFORE verify_proof (create_agreement used to record
+    // it inline). Local: no reactor — record via the core hook. Regtest: mine a block
+    // so the reactor's run_block_lifecycle records it.
+    match runtime.runtime.reg_tester() {
+        None => {
+            let core_signer = Signer::Core(Box::new(runtime.identity().await?));
+            filestorage::record_block_root(runtime, &core_signer).await??;
+        }
+        Some(rt) => {
+            rt.mine(1).await?;
+        }
+    }
+
     // Step 4: Generate the aggregated proof inline for `prover` over A and B (at
     // the network's challenge count), then verify it through the contract.
     let s_chal = filestorage::get_s_chal(runtime).await? as usize;
     let proof_bytes = por_cross_block_proof_bytes(prover, s_chal)?;
-    let result = filestorage::verify_proof(runtime, &s1, proof_bytes).await??;
+    // v3 proofs no longer enumerate their challenges — the submitter declares the
+    // ids the proof answers (A and B here).
+    let result = filestorage::verify_proof(
+        runtime,
+        &s1,
+        proof_bytes,
+        vec![&challenge_a.challenge_id, &challenge_b.challenge_id],
+    )
+    .await??;
 
     assert_eq!(
         result.verified_count, 2,

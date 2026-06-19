@@ -1,10 +1,10 @@
-use stdlib::Indexed;
+use stdlib::Storage;
 
 // A struct-level sorted index (`due`, bucketed by `status`, ordered by
 // `deadline_height`) alongside a field-level `#[index]` sugar (`status`). The
 // derived lookup trait gets `where_due` → `SortedScan` (with `up_to`/`range`) and
 // `where_status` → a plain iterator.
-#[derive(Indexed)]
+#[derive(Storage)]
 #[index(due, by = status, sort = deadline_height)]
 struct Challenge {
     id: String,

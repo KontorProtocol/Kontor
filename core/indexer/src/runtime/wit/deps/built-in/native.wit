@@ -1,47 +1,61 @@
 package kontor:built-in;
 
+// Stateless Proof-of-Retrievability crypto. The file registry itself is no longer
+// a host table — the filestorage contract owns the file metadata in its own
+// storage (folded into `agreement-data`) and the recent set of valid aggregated
+// roots. These functions are pure crypto over data the contract supplies; there is
+// no in-memory accumulator and no `file_metadata` table.
 interface file-registry {
     use error.{error};
-    use file-registry-types.{raw-file-descriptor};
+    use file-registry-types.{raw-file-descriptor, challenge-input, verify-result};
 
-    resource file-descriptor {
-        file-id: async func() -> string;
-        from-raw: static async func(raw: raw-file-descriptor) -> result<file-descriptor, error>;
-        compute-challenge-id: async func(
-            block-height: u64,
-            num-challenges: u64,
-            seed: list<u8>,
-            prover-id: u64
-        ) -> result<string, error>;
-    }
+    // The aggregated ledger root over the registered file set — the Poseidon-tree
+    // root committing to every file. Takes only what the root commits to per file:
+    // `(root, padded-len, ledger-index)`, where `root` is the file's Merkle root,
+    // `padded-len` gives the tree depth, and `ledger-index` is the file's stable,
+    // append-only slot. (A full `raw-file-descriptor` is NOT needed — its
+    // object-id/nonce/filename don't enter the root — so the filestorage contract
+    // reads just these fields per agreement instead of whole structs.) Each file's
+    // leaf is placed at its `ledger-index` slot (gaps zero-filled, kontor-crypto
+    // 0.3.0 append-only model), so caller order doesn't matter and the result is
+    // independent of any sort. A `root` that is not a valid field element errors
+    // (this doubles as validation). The contract recomputes this on each file
+    // registration and records the result as a valid root.
+    aggregate-root: async func(files: list<tuple<list<u8>, u64, u64>>) -> result<list<u8>, error>;
 
-    add-file: async func(file-descriptor: borrow<file-descriptor>);
-
-    get-file-descriptor: async func(file-id: string) -> option<file-descriptor>;
+    // Deterministic challenge id for a file + challenge parameters.
+    compute-challenge-id: async func(
+        file: raw-file-descriptor,
+        block-height: u64,
+        num-challenges: u64,
+        seed: list<u8>,
+        prover-id: u64
+    ) -> result<string, error>;
 
     // ─────────────────────────────────────────────────────────────────
     // Proof Verification
     // ─────────────────────────────────────────────────────────────────
-
-    record challenge-input {
-        challenge-id: string,
-        file-id: string,
-        block-height: u64,
-        num-challenges: u64,
-        seed: list<u8>,
-        prover-id: u64,
-    }
-
-    enum verify-result {
-        verified,
-        rejected,
-        invalid,
-    }
+    //
+    // `challenge-input` (which carries the file's full metadata, so the host needs
+    // no registry lookup) and `verify-result` live in `file-registry-types`, beside
+    // `raw-file-descriptor`, so the nested-record storage model resolves.
 
     resource proof {
         from-bytes: static async func(bytes: list<u8>) -> result<proof, error>;
-        challenge-ids: async func() -> list<string>;
-        verify: async func(challenges: list<challenge-input>) -> result<verify-result, error>;
+        // `valid-roots` is the contract's accepted aggregated-root set
+        // ({current} ∪ recent history). `files` is the contract's file-registry
+        // snapshot: each `(file-id, root, padded-len, ledger-index)` is the data
+        // the host needs to resolve a file's stable slot and root-commitment.
+        // kontor-crypto 0.3.0's constant-size proof carries neither the challenge
+        // ids nor the per-file ledger indices, so the verifier supplies both the
+        // challenge set (from `challenges`) and the registry (from `files`); the
+        // SNARK binds them, so a prover cannot lie about which files/slots it
+        // proved. Stateless — no host ledger.
+        verify: async func(
+            challenges: list<challenge-input>,
+            valid-roots: list<list<u8>>,
+            files: list<tuple<string, list<u8>, u64, u64>>
+        ) -> result<verify-result, error>;
     }
 }
 interface registry {

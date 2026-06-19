@@ -23,7 +23,7 @@ use tokio::time::{Duration, sleep};
 
 use crate::database::native_contracts::NATIVE_CONTRACTS;
 use crate::database::queries::insert_block;
-use crate::database::types::FileMetadataRow;
+use crate::database::types::FileMeta;
 use crate::database::{Reader, Writer, queries};
 use crate::runtime::wit::prover_challenge_key;
 use crate::runtime::{ComponentCache, GenesisValidator, RawFileDescriptor, Runtime, Storage};
@@ -544,8 +544,8 @@ pub fn valid_seed_field(n: u64) -> ValidSeed {
     ValidSeed { bytes, field }
 }
 
-/// Helper to create a fake FileMetadataRow for testing.
-pub fn create_fake_file_metadata(file_id: &str, filename: &str, height: u64) -> FileMetadataRow {
+/// Helper to create a fake FileMeta for testing.
+pub fn create_fake_file_metadata(file_id: &str, filename: &str) -> FileMeta {
     // Create a simple valid root (32 bytes, small enough to be a valid field element)
     let mut root = [0u8; 32];
     root[0] = 1; // Non-zero but small value
@@ -554,7 +554,7 @@ pub fn create_fake_file_metadata(file_id: &str, filename: &str, height: u64) -> 
     let mut nonce = [0u8; 32];
     nonce[0] = 2;
 
-    FileMetadataRow::builder()
+    FileMeta::builder()
         .file_id(file_id.to_string())
         .object_id(format!("obj_{}", file_id))
         .nonce(nonce.to_vec())
@@ -562,7 +562,6 @@ pub fn create_fake_file_metadata(file_id: &str, filename: &str, height: u64) -> 
         .padded_len(1024)
         .original_size(512)
         .filename(filename.to_string())
-        .height(height)
         .build()
 }
 

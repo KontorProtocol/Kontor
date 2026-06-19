@@ -14,7 +14,7 @@ use crate::database::queries::{
 };
 use crate::metrics::{BLOCK_HEIGHT, ITEMS_INDEXED};
 use crate::runtime::{
-    filestorage::api::{expire_challenges, generate_challenges_for_block},
+    filestorage::api::{expire_challenges, generate_challenges_for_block, record_block_root},
     staking::api::process_pending_validators,
     wit::Signer,
 };
@@ -29,11 +29,6 @@ impl<E: Executor> Reactor<E> {
         rollback_to_height(&self.db_conn(), height)
             .await
             .context("rollback_to_height failed")?;
-        self.runtime
-            .file_ledger
-            .force_resync_from_db(&self.runtime.storage.conn)
-            .await
-            .context("file_ledger resync after rollback failed")?;
         // Cascade-deleted contracts free their ids for reuse by replayed
         // publishes; drop cached components so none is served stale WASM.
         self.runtime.component_cache.clear();
@@ -202,6 +197,14 @@ impl<E: Executor> Reactor<E> {
         self.runtime
             .set_context(block.height, None, None, None)
             .await;
+        // Finalize the registry root for the block's `create_agreement`s (deferred
+        // off the user's gas) before the challenge lifecycle. No-op if no files
+        // were added this block.
+        record_block_root(&mut self.runtime, &core_signer)
+            .await
+            .context("Failed to record block root")?
+            .map_err(|e| anyhow::anyhow!("{e:?}"))
+            .context("record_block_root returned error")?;
         expire_challenges(&mut self.runtime, &core_signer, block.height)
             .await
             .context("Failed to expire challenges")?;

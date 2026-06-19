@@ -96,22 +96,6 @@ CREATE TABLE IF NOT EXISTS contract_results (
   FOREIGN KEY (payer_signer_id) REFERENCES signers (id)
 );
 
-CREATE TABLE IF NOT EXISTS file_metadata (
-  id INTEGER PRIMARY KEY,
-  file_id TEXT NOT NULL UNIQUE,
-  object_id TEXT NOT NULL,
-  nonce BLOB NOT NULL,
-  root BLOB NOT NULL,
-  padded_len INTEGER NOT NULL,
-  original_size INTEGER NOT NULL,
-  filename TEXT NOT NULL,
-  height INTEGER NOT NULL,
-  historical_root BLOB,
-  FOREIGN KEY (height) REFERENCES blocks (height) ON DELETE CASCADE
-);
-
-CREATE INDEX IF NOT EXISTS idx_file_metadata_file_id ON file_metadata (file_id);
-
 CREATE TABLE IF NOT EXISTS signers (
   id INTEGER PRIMARY KEY,
   height INTEGER NOT NULL,

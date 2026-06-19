@@ -4,7 +4,9 @@ use std::str::FromStr;
 use bitcoin::{Txid, XOnlyPublicKey};
 use futures_util::Stream;
 
-use crate::database::types::{CORE_SIGNER_ID, FileMetadataRow, Identity, bytes_to_field_element};
+use crate::database::types::{
+    CORE_SIGNER_ID, FileMeta, Identity, bytes_to_field_element, validate_padded_len, validate_root,
+};
 use crate::runtime::Runtime;
 use crate::runtime::kontor::built_in::context::HolderRef;
 use crate::runtime::kontor::built_in::{error::Error, file_registry_types::RawFileDescriptor};
@@ -232,26 +234,19 @@ impl Holder {
 pub struct Transaction {}
 
 pub struct FileDescriptor {
-    pub file_metadata_row: FileMetadataRow,
+    pub meta: FileMeta,
 }
 
 impl FileDescriptor {
-    pub fn from_row(file_metadata_row: FileMetadataRow) -> Self {
-        Self { file_metadata_row }
+    pub fn from_meta(meta: FileMeta) -> Self {
+        Self { meta }
     }
 
-    pub fn try_from_raw(raw: RawFileDescriptor, height: u64) -> Result<Self, Error> {
-        let root: [u8; 32] = raw
-            .root
-            .try_into()
-            .map_err(|_| Error::Validation("expected 32 bytes for root".to_string()))?;
-        if bytes_to_field_element(&root).is_none() {
-            return Err(Error::Validation(
-                "root bytes are not a valid field element".to_string(),
-            ));
-        }
+    pub fn try_from_raw(raw: RawFileDescriptor) -> Result<Self, Error> {
+        let (root, _) = validate_root(&raw.root).map_err(|m| Error::Validation(m.to_string()))?;
+        validate_padded_len(raw.padded_len).map_err(|m| Error::Validation(m.to_string()))?;
         Ok(Self {
-            file_metadata_row: FileMetadataRow::builder()
+            meta: FileMeta::builder()
                 .file_id(raw.file_id)
                 .object_id(raw.object_id)
                 .nonce(raw.nonce)
@@ -259,7 +254,6 @@ impl FileDescriptor {
                 .padded_len(raw.padded_len)
                 .original_size(raw.original_size)
                 .filename(raw.filename)
-                .height(height)
                 .build(),
         })
     }
@@ -273,7 +267,7 @@ impl FileDescriptor {
         prover_id: u64,
     ) -> Result<Challenge, Error> {
         // Convert root bytes to FieldElement (root is a Poseidon hash output, already valid)
-        let root = bytes_to_field_element(&self.file_metadata_row.root)
+        let root = bytes_to_field_element(&self.meta.root)
             .ok_or_else(|| Error::Validation("Invalid root field element".to_string()))?;
 
         // Convert 64-byte seed to FieldElement using from_uniform_bytes.
@@ -286,13 +280,13 @@ impl FileDescriptor {
         let seed_field = field_from_uniform_bytes(&seed_bytes);
 
         let file_metadata = CryptoFileMetadata {
-            file_id: self.file_metadata_row.file_id.clone(),
-            object_id: self.file_metadata_row.object_id.clone(),
-            nonce: self.file_metadata_row.nonce.clone(),
+            file_id: self.meta.file_id.clone(),
+            object_id: self.meta.object_id.clone(),
+            nonce: self.meta.nonce.clone(),
             root,
-            padded_len: self.file_metadata_row.padded_len as usize,
-            original_size: self.file_metadata_row.original_size as usize,
-            filename: self.file_metadata_row.filename.clone(),
+            padded_len: self.meta.padded_len as usize,
+            original_size: self.meta.original_size as usize,
+            filename: self.meta.filename.clone(),
         };
 
         Ok(Challenge::new(
@@ -337,15 +331,6 @@ impl Proof {
         let inner = CryptoProof::from_bytes(bytes)
             .map_err(|e| Error::Validation(format!("Failed to deserialize proof: {}", e)))?;
         Ok(Self { inner })
-    }
-
-    /// Get the challenge IDs this proof covers (hex-encoded).
-    pub fn challenge_ids(&self) -> Vec<String> {
-        self.inner
-            .challenge_ids
-            .iter()
-            .map(|id| hex::encode(id.0))
-            .collect()
     }
 }
 
@@ -393,8 +378,8 @@ mod tests {
 
     #[test]
     fn test_build_challenge_success() {
-        let metadata = create_fake_file_metadata("file1", "test.txt", 800000);
-        let descriptor = FileDescriptor::from_row(metadata);
+        let metadata = create_fake_file_metadata("file1", "test.txt");
+        let descriptor = FileDescriptor::from_meta(metadata);
         let seed = valid_seed_field(1);
         let result = descriptor.build_challenge(800000, 100, &seed.bytes, 1u64);
         assert!(result.is_ok());
@@ -408,8 +393,8 @@ mod tests {
 
     #[test]
     fn test_build_challenge_invalid_seed_length() {
-        let metadata = create_fake_file_metadata("file1", "test.txt", 800000);
-        let descriptor = FileDescriptor::from_row(metadata);
+        let metadata = create_fake_file_metadata("file1", "test.txt");
+        let descriptor = FileDescriptor::from_meta(metadata);
         let result = descriptor.build_challenge(800000, 100, &[0u8; 16], 1u64);
         assert!(result.is_err());
         assert!(matches!(result.unwrap_err(), Error::Validation(_)));
@@ -417,15 +402,15 @@ mod tests {
 
     #[test]
     fn test_build_challenge_empty_seed() {
-        let metadata = create_fake_file_metadata("file1", "test.txt", 800000);
-        let descriptor = FileDescriptor::from_row(metadata);
+        let metadata = create_fake_file_metadata("file1", "test.txt");
+        let descriptor = FileDescriptor::from_meta(metadata);
         assert!(descriptor.build_challenge(800000, 100, &[], 1u64).is_err());
     }
 
     #[test]
     fn test_compute_challenge_id_success() {
-        let metadata = create_fake_file_metadata("file1", "test.txt", 800000);
-        let descriptor = FileDescriptor::from_row(metadata);
+        let metadata = create_fake_file_metadata("file1", "test.txt");
+        let descriptor = FileDescriptor::from_meta(metadata);
         let seed = valid_seed_field(1);
         let id = descriptor
             .compute_challenge_id(800000, 100, &seed.bytes, 1u64)
@@ -436,12 +421,12 @@ mod tests {
 
     #[test]
     fn test_build_challenge_uses_correct_file_metadata() {
-        let metadata = create_fake_file_metadata("my_file_id", "metadata_test.txt", 800000);
+        let metadata = create_fake_file_metadata("my_file_id", "metadata_test.txt");
         let expected_file_id = metadata.file_id.clone();
         let expected_padded_len = metadata.padded_len;
         let expected_original_size = metadata.original_size;
         let expected_filename = metadata.filename.clone();
-        let descriptor = FileDescriptor::from_row(metadata);
+        let descriptor = FileDescriptor::from_meta(metadata);
         let seed = valid_seed_field(1);
         let c = descriptor
             .build_challenge(800000, 100, &seed.bytes, 1u64)

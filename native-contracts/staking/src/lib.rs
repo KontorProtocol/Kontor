@@ -19,7 +19,7 @@ const MAX_STAKE: u64 = 1_000_000_000; // Cap to fit in u64 voting power
 // a storage enum, so it buckets by its discriminant); `ed25519_pubkey` partitions
 // by consensus key (a bucket holds the ≤1 validators sharing a key — enough to
 // enforce uniqueness without scanning).
-#[derive(Clone, Storage, Indexed)]
+#[derive(Clone, Storage)]
 struct ValidatorEntry {
     pub stake: Decimal,
     #[index]
@@ -33,7 +33,7 @@ struct ValidatorEntry {
 #[derive(Clone, Default, StorageRoot)]
 struct StakingStorage {
     pub min_stake: Decimal,
-    pub validators: IndexedMap<Holder, ValidatorEntry>,
+    pub validators: Map<Holder, ValidatorEntry>,
     pub total_active_stake: Decimal,
 }
 

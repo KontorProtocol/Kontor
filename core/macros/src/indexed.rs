@@ -45,7 +45,7 @@ fn enum_kind_ident(ty: &syn::Type) -> TokenStream {
 /// one returns a plain iterator (today's behavior).
 ///
 /// Generated here (the value derive sees its own index declarations); the `Model`
-/// derive can't, since it only sees the `IndexedMap<K, V>` field, not `V` — so the
+/// derive can't, since it only sees the `Map<K, V>` field, not `V` — so the
 /// field model implements the required primitives (`by_index`, `by_index_sorted`,
 /// `bucket_count`) and inherits the typed wrappers. The wrappers stringify with
 /// the same `IndexKey` the index rows are written with, so a lookup and its stored

@@ -17,6 +17,10 @@ impl VecU8Model {
             ctx,
         }
     }
+    pub fn __index_entries(&self) -> alloc::vec::Vec<stdlib::IndexEntry> {
+        let mut entries = alloc::vec::Vec::new();
+        entries
+    }
     pub fn bytes(&self) -> Vec<u8> {
         stdlib::ReadStorage::__get(&self.ctx, self.base_path.push_interned(0u8)).unwrap()
     }
@@ -33,6 +37,7 @@ impl VecU8Model {
 pub struct VecU8WriteModel {
     pub base_path: stdlib::KeyPath,
     ctx: alloc::rc::Rc<crate::context::ProcStorage>,
+    index_binding: Option<(stdlib::KeyPath, alloc::vec::Vec<u8>)>,
     model: VecU8Model,
 }
 impl VecU8WriteModel {
@@ -44,8 +49,17 @@ impl VecU8WriteModel {
         Self {
             base_path: base_path.clone(),
             ctx,
+            index_binding: None,
             model: VecU8Model::new(alloc::rc::Rc::new(view_storage), base_path.clone()),
         }
+    }
+    pub fn with_index(
+        mut self,
+        index_root: stdlib::KeyPath,
+        index_key: alloc::vec::Vec<u8>,
+    ) -> Self {
+        self.index_binding = Some((index_root, index_key));
+        self
     }
     pub fn bytes(&self) -> Vec<u8> {
         stdlib::ReadStorage::__get(&self.ctx, self.base_path.push_interned(0u8)).unwrap()

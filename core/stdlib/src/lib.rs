@@ -1,12 +1,10 @@
 #![no_std]
 extern crate alloc;
 
-/// The inert placeholder behind a declared `Map`/`IndexedMap` field: holds no
-/// live data (the generated field model is the real accessor), it exists only so
-/// the field has a type and so a wholesale `Store` write can persist entries.
-/// `Map` and `IndexedMap` share this shape and differ only in their `Store`
-/// impl, so the boilerplate lives here once. Defined before the modules that use
-/// it (textual macro scoping).
+/// The inert placeholder behind a declared `Map<K, V>` field: holds no live data
+/// (the generated field model is the real accessor), it exists only so the field
+/// has a type and so a wholesale `Store` write can persist entries. The boilerplate
+/// lives here once. Defined before the modules that use it (textual macro scoping).
 macro_rules! storage_placeholder {
     ($(#[$meta:meta])* $name:ident) => {
         $(#[$meta])*
@@ -44,19 +42,21 @@ macro_rules! storage_placeholder {
     };
 }
 
-mod indexed_map;
+pub mod deque;
 mod key_path;
 mod keycodec;
+mod map;
 mod storage_interface;
 mod wave_interfaces;
 
-pub use indexed_map::*;
+pub use deque::StorageDeque;
 pub use key_path::*;
 pub use keycodec::*;
 pub use macros::{
-    Indexed, Model, Root, Storage, StorageRoot, Store, Wavey, contract, contract_address,
-    holder_ref, impls, import, interface,
+    Model, Root, Storage, StorageRoot, Store, Wavey, contract, contract_address, holder_ref, impls,
+    import, interface,
 };
+pub use map::*;
 pub use storage_interface::*;
 pub use wasm_wave;
 pub use wave_interfaces::*;

@@ -76,6 +76,16 @@ impl ChallengeStatusModel {
             ChallengeStatusModel::Failed(inner) => ChallengeStatus::Failed(inner.clone()),
         }
     }
+    pub fn with_index(
+        self,
+        _index_root: stdlib::KeyPath,
+        _index_key: alloc::vec::Vec<u8>,
+    ) -> Self {
+        self
+    }
+    pub fn __index_entries(&self) -> alloc::vec::Vec<stdlib::IndexEntry> {
+        alloc::vec::Vec::new()
+    }
 }
 pub enum ChallengeStatusWriteModel {
     Active,
@@ -121,6 +131,16 @@ impl ChallengeStatusWriteModel {
                 ChallengeStatus::Failed(inner.clone())
             }
         }
+    }
+    pub fn with_index(
+        self,
+        _index_root: stdlib::KeyPath,
+        _index_key: alloc::vec::Vec<u8>,
+    ) -> Self {
+        self
+    }
+    pub fn __index_entries(&self) -> alloc::vec::Vec<stdlib::IndexEntry> {
+        alloc::vec::Vec::new()
     }
 }
 #[automatically_derived]
@@ -211,4 +231,38 @@ impl stdlib::IndexKey for ChallengeStatus {
     fn index_key(&self) -> alloc::vec::Vec<u8> {
         stdlib::IndexKey::index_key(&ChallengeStatusKind::from(self))
     }
+}
+#[automatically_derived]
+impl stdlib::Indexed for ChallengeStatus {
+    const HAS_INDEXES: bool = false;
+    fn index_entries(&self) -> alloc::vec::Vec<stdlib::IndexEntry> {
+        alloc::vec::Vec::new()
+    }
+}
+pub trait ChallengeStatusIndex<K>
+where
+    K: stdlib::KeyElement + Clone,
+{
+    /// Raw bucket scan — yields the primary keys of an unsorted index
+    /// bucket, identified by the index's interned id and its bucket segments
+    /// `<bucket…>` (one per `by` field). The returned iterator owns its
+    /// source (`use<Self, K>`, no lifetime capture), so the typed wrappers
+    /// can hand it borrows of temporary key strings.
+    fn by_index(
+        &self,
+        index_id: u8,
+        bucket: &[&[u8]],
+    ) -> impl Iterator<Item = K> + use<Self, K>;
+    /// Ordered bucket scan for a *sorted* index: the bucket's `(sort, pk)`
+    /// tuple child members, wrapped in a `SortedScan` that yields `K` in sort
+    /// order and bounds `up_to`/`range` on the decoded sort value. `S` is the
+    /// index's sort field type, so the wrong bound type is a compile error.
+    fn by_index_sorted<S: stdlib::KeyElement + Clone + 'static>(
+        &self,
+        index_id: u8,
+        bucket: &[&[u8]],
+    ) -> stdlib::SortedScan<K, S>;
+    /// O(1) member count of an `(index_id, bucket…)` bucket, the
+    /// framework-maintained size of what the scans would walk.
+    fn bucket_count(&self, index_id: u8, bucket: &[&[u8]]) -> u64;
 }
