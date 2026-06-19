@@ -377,6 +377,16 @@ impl<E: Executor> Reactor<E> {
     /// (`prune.enabled == false`) and until the chain is taller than the retain
     /// window. Runs once per block; the per-block churn is small. Returning freed
     /// pages to the OS (`incremental_vacuum`) is a separate, throttled step.
+    ///
+    /// Deliberately runs AFTER the block's commit, in its own (`Storage::prune`)
+    /// transaction — NOT folded into the block transaction — even though `Storage`
+    /// owns both. Three reasons: (1) it's best-effort, so a GC failure must not be
+    /// able to roll back or fail a validated block; (2) the block is consensus-
+    /// critical and latency-sensitive (durability, peer responses) while the prune is
+    /// opportunistic maintenance, so it stays off the block's critical path; (3) the
+    /// "committed but not yet pruned" window is benign — the prune only removes old,
+    /// finalized, superseded rows and reads only want the latest. Crash between the
+    /// two commits just leaves the watermark un-advanced and the band retries.
     async fn maybe_prune_state(&mut self) {
         if !self.prune.enabled {
             return;
