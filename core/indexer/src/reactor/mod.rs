@@ -237,14 +237,18 @@ impl<E: Executor> Reactor<E> {
             }
             BlockEvent::Rollback { to_height } => {
                 info!(to_height, "Bitcoin rollback — truncating state");
-                // Pruning removes finalized superseded versions below `tip − retain`,
-                // so a reorg deeper than `retain` would land in pruned territory where
-                // the per-height versions needed to reconstruct the as-of-`to_height`
-                // snapshot are gone — a local rollback would silently corrupt state.
-                // This is far below the assumed Bitcoin reorg bound (retain defaults to
-                // ~1 day of blocks), so treat it as unrecoverable-without-resync: bail
-                // loudly rather than corrupt. State is reconstructible from blocks, so
-                // recovery is a fresh replay.
+                // A reorg deeper than `retain` would land in pruned territory (the
+                // per-height versions needed to rebuild the as-of-`to_height` snapshot
+                // are gone), so we BAIL rather than corrupt. This hard exit is the
+                // intended behaviour, not a stopgap: `retain` defaults to ~1 day of
+                // Bitcoin blocks, and a reorg that deep means Bitcoin itself violated
+                // the finality assumption the WHOLE consensus rests on — every node's
+                // anchored "finalized" batches are then invalid, pruned or not. There
+                // is no local recovery (auto-replay would just rebuild onto the same
+                // broken assumption), so halting for operator intervention is correct.
+                // Hence the guard keys off `retain` (the assumption) — not the actual
+                // prune watermark — because what it really detects is "Bitcoin broke
+                // finality", which is catastrophic independent of pruning.
                 if self.prune.enabled {
                     let retain = self.prune.retain_blocks.max(FINALITY_WINDOW);
                     if self.last_height.saturating_sub(to_height) > retain {

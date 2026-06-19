@@ -338,11 +338,6 @@ impl<E: Executor> Reactor<E> {
             checkpoint,
         });
 
-        // GC finalized superseded contract_state versions (separate from the block's
-        // committed transaction — only touches rows below the finality watermark, and
-        // is best-effort so a GC hiccup never fails the block).
-        self.maybe_prune_state().await;
-
         if let Some(tx) = &self.event_tx {
             let txids = block
                 .transactions
@@ -368,6 +363,12 @@ impl<E: Executor> Reactor<E> {
             duration_ms = started_at.elapsed().as_millis() as u64,
             "Block processed"
         );
+
+        // GC finalized superseded contract_state versions LAST — after the block's
+        // own commit and after both BlockProcessed / Processed events — so this
+        // opportunistic, best-effort maintenance (a separate transaction) never
+        // delays block durability or subscriber notification.
+        self.maybe_prune_state().await;
 
         Ok(())
     }
