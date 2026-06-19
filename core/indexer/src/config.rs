@@ -137,6 +137,30 @@ pub struct Config {
         help = "Consensus propose timeout in milliseconds"
     )]
     pub consensus_propose_timeout_ms: u64,
+
+    // --- State pruning ---
+    /// Prune finalized, superseded `contract_state` versions to bound state
+    /// growth. `false` = archive node: full version history retained, no GC.
+    #[clap(
+        long,
+        env = "PRUNE",
+        default_value_t = true,
+        action = clap::ArgAction::Set,
+        help = "Prune finalized superseded contract_state versions to bound state growth (false = archive node)"
+    )]
+    pub prune: bool,
+
+    /// Blocks below the tip to retain before a `contract_state` version becomes
+    /// eligible for pruning. Floored at the consensus finality window at the
+    /// prune call site. Default 144 ≈ one day of Bitcoin blocks — deep enough
+    /// that a reorg crossing the prune horizon is effectively impossible.
+    #[clap(
+        long,
+        env = "PRUNE_RETAIN_BLOCKS",
+        default_value = "144",
+        help = "Blocks below tip to retain before pruning (default 144 ≈ 1 day of Bitcoin blocks)"
+    )]
+    pub prune_retain_blocks: u64,
 }
 
 impl Config {
@@ -159,6 +183,8 @@ impl Config {
             consensus_peers: Vec::new(),
             genesis_file: PathBuf::new(),
             consensus_propose_timeout_ms: 10000,
+            prune: true,
+            prune_retain_blocks: 144,
         }
     }
 }
