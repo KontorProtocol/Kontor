@@ -5,7 +5,7 @@ use kontor_crypto::{
     poseidon::calculate_root_commitment, verify_stateless,
 };
 
-use crate::database::types::{padded_len_to_depth, validate_root};
+use crate::database::types::{validate_padded_len, validate_root};
 use sha2::Sha256;
 use std::collections::{BTreeMap, HashSet};
 use wasmtime::component::{Accessor, Resource};
@@ -39,7 +39,11 @@ impl Runtime {
                 Ok((_, fe)) => fe,
                 Err(m) => return Ok(Err(Error::Validation(m.to_string()))),
             };
-            files_rd.push((root, padded_len_to_depth(padded_len), ledger_index as usize));
+            let depth = match validate_padded_len(padded_len) {
+                Ok(d) => d,
+                Err(m) => return Ok(Err(Error::Validation(m.to_string()))),
+            };
+            files_rd.push((root, depth, ledger_index as usize));
         }
         match aggregate_root_from_files(&files_rd) {
             Ok(root) => Ok(Ok(root.to_vec())),
@@ -138,16 +142,20 @@ impl Runtime {
         // Build the file-registry snapshot the stateless verifier resolves ledger
         // indices from: `file_id -> (stable slot, root-commitment)`. The contract
         // supplies each file's `(file_id, root, padded_len, ledger_index)`; the host
-        // validates `root` as a canonical field element (same gate as aggregate-root)
-        // and derives `rc = calculate_root_commitment(root, depth)` exactly as the
-        // crypto ledger does, so the verifier's view matches the prover's.
+        // validates `root` as a canonical field element and `padded_len` as a positive
+        // power of two (same gates as aggregate-root) and derives
+        // `rc = calculate_root_commitment(root, depth)` exactly as the crypto ledger
+        // does, so the verifier's view matches the prover's.
         let mut file_map: BTreeMap<String, (usize, FieldElement)> = BTreeMap::new();
         for (file_id, root, padded_len, ledger_index) in &files {
             let root_fe = match validate_root(root) {
                 Ok((_, fe)) => fe,
                 Err(m) => return Ok(Err(Error::Validation(m.to_string()))),
             };
-            let depth = padded_len_to_depth(*padded_len);
+            let depth = match validate_padded_len(*padded_len) {
+                Ok(d) => d,
+                Err(m) => return Ok(Err(Error::Validation(m.to_string()))),
+            };
             let rc = calculate_root_commitment(root_fe, FieldElement::from(depth as u64));
             file_map.insert(file_id.clone(), (*ledger_index as usize, rc));
         }

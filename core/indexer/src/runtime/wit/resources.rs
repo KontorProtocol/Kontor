@@ -5,7 +5,7 @@ use bitcoin::{Txid, XOnlyPublicKey};
 use futures_util::Stream;
 
 use crate::database::types::{
-    CORE_SIGNER_ID, FileMeta, Identity, bytes_to_field_element, validate_root,
+    CORE_SIGNER_ID, FileMeta, Identity, bytes_to_field_element, validate_padded_len, validate_root,
 };
 use crate::runtime::Runtime;
 use crate::runtime::kontor::built_in::context::HolderRef;
@@ -244,6 +244,7 @@ impl FileDescriptor {
 
     pub fn try_from_raw(raw: RawFileDescriptor) -> Result<Self, Error> {
         let (root, _) = validate_root(&raw.root).map_err(|m| Error::Validation(m.to_string()))?;
+        validate_padded_len(raw.padded_len).map_err(|m| Error::Validation(m.to_string()))?;
         Ok(Self {
             meta: FileMeta::builder()
                 .file_id(raw.file_id)
