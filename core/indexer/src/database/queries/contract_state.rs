@@ -546,7 +546,9 @@ mod prune_tests {
 
     async fn insert_version(conn: &Connection, height: u64, path: &[u8], deleted: bool) {
         insert_block(conn, height).await;
-        let value = b"v".to_vec();
+        // Height-stamped value so equivalence tests prove the *correct* surviving
+        // version, not just the right path set.
+        let value = format!("v{height}").into_bytes();
         conn.execute(
             "INSERT INTO contract_state (contract_id, height, tx_id, size, path, value, deleted) \
              VALUES (1, ?, NULL, ?, ?, ?, ?)",
@@ -555,6 +557,65 @@ mod prune_tests {
         .await
         .unwrap();
     }
+
+    /// The live set: each path's latest version, kept only if not a tombstone —
+    /// `(path, value)` pairs in path order. Mirrors the `live_paths_scan` rule and
+    /// is the ground truth a pruned node must match an archive node on.
+    async fn live_state(conn: &Connection) -> Vec<(Vec<u8>, Vec<u8>)> {
+        let mut rows = conn
+            .query(
+                "SELECT path, value FROM contract_state AS cs \
+                 WHERE deleted = 0 \
+                   AND NOT EXISTS ( \
+                     SELECT 1 FROM contract_state AS n \
+                     WHERE n.contract_id = cs.contract_id AND n.path = cs.path \
+                       AND n.height > cs.height) \
+                 ORDER BY path",
+                (),
+            )
+            .await
+            .unwrap();
+        let mut out = Vec::new();
+        while let Some(r) = rows.next().await.unwrap() {
+            out.push((r.get::<Vec<u8>>(0).unwrap(), r.get::<Vec<u8>>(1).unwrap()));
+        }
+        out
+    }
+
+    async fn checkpoint_chain(conn: &Connection) -> Vec<(i64, String)> {
+        let mut rows = conn
+            .query("SELECT height, hash FROM checkpoints ORDER BY height", ())
+            .await
+            .unwrap();
+        let mut out = Vec::new();
+        while let Some(r) = rows.next().await.unwrap() {
+            out.push((r.get::<i64>(0).unwrap(), r.get::<String>(1).unwrap()));
+        }
+        out
+    }
+
+    async fn row_count(conn: &Connection) -> i64 {
+        let mut rows = conn
+            .query("SELECT COUNT(*) FROM contract_state", ())
+            .await
+            .unwrap();
+        rows.next().await.unwrap().unwrap().get::<i64>(0).unwrap()
+    }
+
+    // A scripted sequence of (height, path, deleted) block-writes: updates,
+    // deletes, and a recreate — enough to exercise supersede + tombstone paths.
+    const SCRIPT: &[(u64, &[u8], bool)] = &[
+        (1, b"x", false),
+        (2, b"y", false),
+        (3, b"x", false),
+        (4, b"z", false),
+        (5, b"y", true),
+        (6, b"x", false),
+        (7, b"z", false),
+        (8, b"w", false),
+        (9, b"x", true),
+        (10, b"x", false),
+    ];
 
     async fn heights(conn: &Connection, path: &[u8]) -> Vec<u64> {
         let mut rows = conn
@@ -617,6 +678,60 @@ mod prune_tests {
 
         // DELETEs must not perturb the checkpoint chain (trigger is AFTER INSERT).
         assert_eq!(checkpoint_count(&conn).await, before_checkpoints);
+    }
+
+    #[tokio::test]
+    async fn pruned_node_matches_archive_live_state_and_checkpoints() {
+        let dir = TempDir::new().unwrap();
+        let archive = new_connection(dir.path(), "arch.db").await.unwrap();
+        let pruned = new_connection(dir.path(), "pruned.db").await.unwrap();
+        let retain = 3u64;
+
+        for &(h, p, del) in SCRIPT {
+            insert_version(&archive, h, p, del).await;
+            insert_version(&pruned, h, p, del).await;
+            if let Some(wm) = h.checked_sub(retain) {
+                prune_contract_state(&pruned, wm).await.unwrap();
+            }
+        }
+
+        // The consensus commitment is identical — pruning never touches the
+        // checkpoint chain (trigger is AFTER INSERT and reads only NEW + latest).
+        assert_eq!(
+            checkpoint_chain(&archive).await,
+            checkpoint_chain(&pruned).await
+        );
+        // And the derived live state (value + liveness) is byte-identical.
+        assert_eq!(live_state(&archive).await, live_state(&pruned).await);
+        // Pruning actually reclaimed rows.
+        assert!(row_count(&pruned).await < row_count(&archive).await);
+    }
+
+    #[tokio::test]
+    async fn rollback_within_retain_window_matches_archive() {
+        let dir = TempDir::new().unwrap();
+        let archive = new_connection(dir.path(), "arch_r.db").await.unwrap();
+        let pruned = new_connection(dir.path(), "pruned_r.db").await.unwrap();
+        let retain = 3u64;
+
+        for &(h, p, del) in SCRIPT {
+            insert_version(&archive, h, p, del).await;
+            insert_version(&pruned, h, p, del).await;
+            if let Some(wm) = h.checked_sub(retain) {
+                prune_contract_state(&pruned, wm).await.unwrap();
+            }
+        }
+
+        // Reorg both to a height INSIDE the retain window (tip 10, retain 3 →
+        // last watermark 7; 8 > 7 so the pruned node retained everything needed).
+        for c in [&archive, &pruned] {
+            c.execute("DELETE FROM blocks WHERE height > ?", params![8u64])
+                .await
+                .unwrap();
+        }
+
+        // The pruned node rolls back to the same correct live state as the archive.
+        assert_eq!(live_state(&archive).await, live_state(&pruned).await);
     }
 
     #[tokio::test]
