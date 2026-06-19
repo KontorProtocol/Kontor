@@ -1,4 +1,4 @@
-use anyhow::Result;
+use anyhow::{Result, anyhow};
 use hkdf::Hkdf;
 use kontor_crypto::{
     FieldElement, KontorPoRError, StatelessLedger, aggregate_root_from_files,
@@ -177,6 +177,17 @@ impl Runtime {
                     proof_root, reason
                 ))))
             }
+            // Invariant violation, NOT a bad proof: `verify_proof` builds `challenges`
+            // and `files` from the same agreements, so every challenged file resolves
+            // and its root-commitment matches by construction. Reaching here means the
+            // host built those two views inconsistently — a node bug, unreachable by any
+            // user input. Return a bare `anyhow` error (no wasmtime trap, no inner WIT
+            // Error) so the runtime classifies it `NonDeterministic` and shuts the node
+            // down, rather than a deterministic reject that would bake a host bug into
+            // consensus (and silently diverge once the bug is fixed).
+            Err(
+                e @ (KontorPoRError::FileNotInLedger { .. } | KontorPoRError::MetadataMismatch),
+            ) => Err(anyhow!("invariant violation in verify_proof: {e}")),
             Err(other) => Ok(Err(Error::Validation(format!(
                 "Unexpected verification error: {}",
                 other
