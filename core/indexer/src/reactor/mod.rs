@@ -34,7 +34,7 @@ use malachitebft_app_channel::app::types::core::VotingPower;
 use malachitebft_core_types::{LinearTimeouts, Round};
 use tracing::{debug, error, info, warn};
 
-use crate::consensus::finality_types::StateEvent;
+use crate::consensus::finality_types::{FINALITY_WINDOW, StateEvent};
 use crate::consensus::{BatchTx, Ctx};
 use crate::{
     bitcoin_follower::event::{BlockEvent, MempoolEvent},
@@ -59,6 +59,16 @@ pub type Simulation = (
     oneshot::Sender<Result<Vec<OpWithResult>>>,
 );
 
+/// State-pruning settings for the reactor (see `project_state_pruning`).
+#[derive(Clone, Copy, Debug)]
+pub struct PruneConfig {
+    /// `false` = archive node: full version history retained, no GC.
+    pub enabled: bool,
+    /// Blocks below the tip to retain before a version is prunable. Floored at
+    /// `FINALITY_WINDOW` at use so it can never reach into the reorg window.
+    pub retain_blocks: u64,
+}
+
 pub struct Reactor<E: Executor> {
     executor: E,
     runtime: Runtime,
@@ -70,6 +80,7 @@ pub struct Reactor<E: Executor> {
     simulate_rx: Option<Receiver<Simulation>>,
     consensus: consensus_state::ConsensusState,
 
+    prune: PruneConfig,
     last_height: u64,
     last_hash: Option<BlockHash>,
     /// Shared with the API (`Env.consensus_listen_addr`); written on the first
@@ -89,6 +100,7 @@ impl<E: Executor> Reactor<E> {
         event_tx: Option<mpsc::Sender<Event>>,
         simulate_rx: Option<Receiver<Simulation>>,
         consensus: consensus_state::ConsensusState,
+        prune: PruneConfig,
         last_height: u64,
         last_hash: Option<BlockHash>,
         consensus_listen_addr: tokio::sync::watch::Sender<Option<String>>,
@@ -105,6 +117,7 @@ impl<E: Executor> Reactor<E> {
             block_rx,
             mempool_rx,
             simulate_rx,
+            prune,
             last_height,
             last_hash,
             ready_tx,
@@ -217,6 +230,25 @@ impl<E: Executor> Reactor<E> {
             }
             BlockEvent::Rollback { to_height } => {
                 info!(to_height, "Bitcoin rollback — truncating state");
+                // Pruning removes finalized superseded versions below `tip − retain`,
+                // so a reorg deeper than `retain` would land in pruned territory where
+                // the per-height versions needed to reconstruct the as-of-`to_height`
+                // snapshot are gone — a local rollback would silently corrupt state.
+                // This is far below the assumed Bitcoin reorg bound (retain defaults to
+                // ~1 day of blocks), so treat it as unrecoverable-without-resync: bail
+                // loudly rather than corrupt. State is reconstructible from blocks, so
+                // recovery is a fresh replay.
+                if self.prune.enabled {
+                    let retain = self.prune.retain_blocks.max(FINALITY_WINDOW);
+                    if self.last_height.saturating_sub(to_height) > retain {
+                        bail!(
+                            "Bitcoin reorg to height {to_height} is deeper than the prune \
+                             retain window ({retain}) below tip {}; pruned state cannot be \
+                             rolled back locally — re-sync required",
+                            self.last_height
+                        );
+                    }
+                }
                 self.rollback(to_height)
                     .await
                     .context("rollback failed during Bitcoin reorg")?;
@@ -655,6 +687,7 @@ pub fn run(
     fee_tx: Option<tokio::sync::watch::Sender<Fees>>,
     consensus_listen_addr: tokio::sync::watch::Sender<Option<String>>,
     network: bitcoin::Network,
+    prune: PruneConfig,
 ) -> JoinHandle<()> {
     tokio::spawn({
         async move {
@@ -670,6 +703,16 @@ pub fn run(
                 )
                 .await
                 .context("create_runtime_executor failed")?;
+
+                // Convert a pre-existing DB to INCREMENTAL auto_vacuum once, so the
+                // pages freed by pruning can be returned to the OS (fresh DBs are
+                // already born incremental). Gated on `prune` so archive nodes don't
+                // pay the one-time conversion VACUUM.
+                if prune.enabled {
+                    database::init::ensure_incremental_auto_vacuum(&runtime.storage.conn)
+                        .await
+                        .context("ensure_incremental_auto_vacuum failed")?;
+                }
 
                 let timeouts = Some(LinearTimeouts {
                     propose: std::time::Duration::from_millis(consensus_propose_timeout_ms),
@@ -768,6 +811,7 @@ pub fn run(
                     event_tx,
                     simulate_rx,
                     consensus,
+                    prune,
                     last_height,
                     last_hash,
                     consensus_listen_addr,

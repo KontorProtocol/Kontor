@@ -367,6 +367,10 @@ impl ReactorCluster {
                 Some(etx),
                 sim_rx,
                 state,
+                super::PruneConfig {
+                    enabled: false,
+                    retain_blocks: 144,
+                },
                 0,
                 None,
                 // Same path as production: the reactor's `ConsensusReady` handler

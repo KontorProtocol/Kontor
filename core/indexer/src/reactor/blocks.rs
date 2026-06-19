@@ -4,13 +4,13 @@ use anyhow::{Context, Result, bail};
 use bitcoin::hashes::Hash;
 use indexer_types::{Block, BlockRow, Event, OpWithResult};
 use metrics::{counter, gauge};
-use tracing::{info, warn};
+use tracing::{debug, info, warn};
 
 use crate::block;
-use crate::consensus::finality_types::StateEvent;
+use crate::consensus::finality_types::{FINALITY_WINDOW, StateEvent};
 use crate::database::queries::{
     confirm_transaction, get_transaction_by_txid, insert_batch, insert_block, insert_transaction,
-    rollback_to_height, select_block_at_height, select_block_latest,
+    prune_contract_state, rollback_to_height, select_block_at_height, select_block_latest,
 };
 use crate::metrics::{BLOCK_HEIGHT, ITEMS_INDEXED};
 use crate::runtime::{
@@ -329,6 +329,10 @@ impl<E: Executor> Reactor<E> {
             checkpoint,
         });
 
+        // GC finalized superseded contract_state versions (separate from the block's
+        // committed transaction — it only touches rows below the finality watermark).
+        self.maybe_prune_state().await?;
+
         if let Some(tx) = &self.event_tx {
             let txids = block
                 .transactions
@@ -355,6 +359,31 @@ impl<E: Executor> Reactor<E> {
             "Block processed"
         );
 
+        Ok(())
+    }
+
+    /// Prune finalized, superseded `contract_state` versions below the finality
+    /// watermark `tip − max(retain, FINALITY_WINDOW)`. No-op for archive nodes
+    /// (`prune.enabled == false`) and until the chain is taller than the retain
+    /// window. Runs once per block; the per-block churn is small. Returning freed
+    /// pages to the OS (`incremental_vacuum`) is a separate, throttled step.
+    async fn maybe_prune_state(&self) -> Result<()> {
+        if !self.prune.enabled {
+            return Ok(());
+        }
+        let retain = self.prune.retain_blocks.max(FINALITY_WINDOW);
+        let Some(watermark) = self.last_height.checked_sub(retain) else {
+            return Ok(());
+        };
+        let deleted = prune_contract_state(&self.db_conn(), watermark)
+            .await
+            .context("prune_contract_state failed")?;
+        if deleted > 0 {
+            debug!(
+                watermark,
+                deleted, "pruned finalized superseded contract_state versions"
+            );
+        }
         Ok(())
     }
 }
