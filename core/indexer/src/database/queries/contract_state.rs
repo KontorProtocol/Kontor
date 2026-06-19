@@ -474,3 +474,160 @@ pub async fn contract_has_state(conn: &Connection, contract_id: u64) -> Result<b
         .expect("Query must return at least one row")
         > 0)
 }
+
+/// Prune finalized, superseded `contract_state` versions at or below `watermark`
+/// (the finality watermark `tip − retain`). Two passes:
+///   1. **supersede** — drop a version `≤ watermark` that has a newer version of
+///      the same `(contract_id, path)` at height `≤ watermark`, keeping each
+///      path's newest-`≤ watermark` finalized snapshot (and everything above it).
+///   2. **tombstone reclaim** — drop a finalized (`≤ watermark`) `deleted = 1` row
+///      with NO newer version of the path anywhere: the path is permanently gone,
+///      so the tombstone has nothing left to mask and (no newer version existing)
+///      no reorg can resurrect one. This is the only path by which deleted data is
+///      physically reclaimed from the append-only log.
+///
+/// Removes only rows nothing can observe: reads (`live_latest`/`live_paths_scan`)
+/// want latest-per-path; reorg can't reach below the finality-bounded watermark;
+/// and the checkpoint trigger reads only the NEW row + latest checkpoint (and is
+/// `AFTER INSERT`, so these DELETEs don't fire it). Pure-local GC, no consensus
+/// effect. Returns the number of rows deleted. See `project_state_pruning`.
+pub async fn prune_contract_state(conn: &Connection, watermark: u64) -> Result<u64, Error> {
+    let superseded = conn
+        .execute(
+            r#"
+            DELETE FROM contract_state
+            WHERE height <= ?1
+              AND EXISTS (
+                SELECT 1 FROM contract_state AS newer
+                WHERE newer.contract_id = contract_state.contract_id
+                  AND newer.path = contract_state.path
+                  AND newer.height > contract_state.height
+                  AND newer.height <= ?1
+              )
+            "#,
+            params![watermark],
+        )
+        .await?;
+
+    let tombstoned = conn
+        .execute(
+            r#"
+            DELETE FROM contract_state
+            WHERE deleted = 1
+              AND height <= ?1
+              AND NOT EXISTS (
+                SELECT 1 FROM contract_state AS newer
+                WHERE newer.contract_id = contract_state.contract_id
+                  AND newer.path = contract_state.path
+                  AND newer.height > contract_state.height
+              )
+            "#,
+            params![watermark],
+        )
+        .await?;
+
+    Ok(superseded + tombstoned)
+}
+
+#[cfg(test)]
+mod prune_tests {
+    use super::*;
+    use crate::database::connection::new_connection;
+    use tempfile::TempDir;
+
+    async fn insert_block(conn: &Connection, height: u64) {
+        conn.execute(
+            "INSERT OR IGNORE INTO blocks (height, hash, relevant) VALUES (?, ?, 1)",
+            params![height, format!("hash{height}")],
+        )
+        .await
+        .unwrap();
+    }
+
+    async fn insert_version(conn: &Connection, height: u64, path: &[u8], deleted: bool) {
+        insert_block(conn, height).await;
+        let value = b"v".to_vec();
+        conn.execute(
+            "INSERT INTO contract_state (contract_id, height, tx_id, size, path, value, deleted) \
+             VALUES (1, ?, NULL, ?, ?, ?, ?)",
+            params![height, value.len() as i64, path.to_vec(), value, deleted],
+        )
+        .await
+        .unwrap();
+    }
+
+    async fn heights(conn: &Connection, path: &[u8]) -> Vec<u64> {
+        let mut rows = conn
+            .query(
+                "SELECT height FROM contract_state WHERE contract_id = 1 AND path = ? ORDER BY height",
+                params![path.to_vec()],
+            )
+            .await
+            .unwrap();
+        let mut out = Vec::new();
+        while let Some(r) = rows.next().await.unwrap() {
+            out.push(r.get::<i64>(0).unwrap() as u64);
+        }
+        out
+    }
+
+    async fn checkpoint_count(conn: &Connection) -> i64 {
+        let mut rows = conn
+            .query("SELECT COUNT(*) FROM checkpoints", ())
+            .await
+            .unwrap();
+        rows.next().await.unwrap().unwrap().get::<i64>(0).unwrap()
+    }
+
+    #[tokio::test]
+    async fn prune_supersede_tombstone_and_above_watermark() {
+        let dir = TempDir::new().unwrap();
+        let conn = new_connection(dir.path(), "prune.db").await.unwrap();
+
+        // Distinct, ascending heights — the checkpoint trigger is keyed by height
+        // and chains in insert order, mirroring real (monotonic) block processing.
+        // A: all-live history below watermark → keep only the newest ≤ F.
+        insert_version(&conn, 11, b"a", false).await;
+        insert_version(&conn, 12, b"a", false).await;
+        insert_version(&conn, 13, b"a", false).await;
+        // B: spans the watermark → keep newest ≤ F plus everything above F.
+        insert_version(&conn, 14, b"b", false).await;
+        // C: live then tombstoned, all finalized → path fully reclaimed.
+        insert_version(&conn, 15, b"c", false).await;
+        insert_version(&conn, 16, b"c", true).await;
+        // D: tombstone below F but re-created above F → keep both (reorg could
+        // revert the re-creation and the tombstone must remain the latest).
+        insert_version(&conn, 17, b"d", true).await;
+        // E: single finalized version → untouched.
+        insert_version(&conn, 50, b"e", false).await;
+        insert_version(&conn, 90, b"b", false).await;
+        insert_version(&conn, 150, b"d", false).await;
+        insert_version(&conn, 200, b"b", false).await;
+
+        let before_checkpoints = checkpoint_count(&conn).await;
+
+        let deleted = prune_contract_state(&conn, 100).await.unwrap();
+
+        assert_eq!(heights(&conn, b"a").await, vec![13]); // -11, -12
+        assert_eq!(heights(&conn, b"b").await, vec![90, 200]); // -14
+        assert_eq!(heights(&conn, b"c").await, Vec::<u64>::new()); // -15, -16
+        assert_eq!(heights(&conn, b"d").await, vec![17, 150]); // none
+        assert_eq!(heights(&conn, b"e").await, vec![50]); // none
+        assert_eq!(deleted, 5);
+
+        // DELETEs must not perturb the checkpoint chain (trigger is AFTER INSERT).
+        assert_eq!(checkpoint_count(&conn).await, before_checkpoints);
+    }
+
+    #[tokio::test]
+    async fn prune_below_low_watermark_is_noop() {
+        let dir = TempDir::new().unwrap();
+        let conn = new_connection(dir.path(), "prune_noop.db").await.unwrap();
+        insert_version(&conn, 10, b"a", false).await;
+        insert_version(&conn, 20, b"a", false).await;
+        // Watermark below both versions → nothing is finalized-and-superseded yet.
+        let deleted = prune_contract_state(&conn, 5).await.unwrap();
+        assert_eq!(deleted, 0);
+        assert_eq!(heights(&conn, b"a").await, vec![10, 20]);
+    }
+}
