@@ -61,6 +61,11 @@ CREATE INDEX IF NOT EXISTS idx_contract_state_lookup ON contract_state (contract
 
 CREATE INDEX IF NOT EXISTS idx_contract_state_contract_tx ON contract_state (contract_id, height DESC, tx_id DESC);
 
+-- Height-leading index for incremental band pruning (see project_state_pruning):
+-- lets a prune find the newly-finalized band by a height range-seek instead of a
+-- full table scan, and is COVERING for the band-discovery subquery.
+CREATE INDEX IF NOT EXISTS idx_contract_state_height ON contract_state (height, contract_id, path);
+
 CREATE TABLE IF NOT EXISTS contract_results (
   id INTEGER PRIMARY KEY,
   contract_id INTEGER NOT NULL,
@@ -135,3 +140,14 @@ CREATE TABLE IF NOT EXISTS unconfirmed_batch_txs (
   raw_tx BLOB NOT NULL,
   FOREIGN KEY (batch_height) REFERENCES batches (consensus_height)
 );
+
+-- Node-local operational state (NOT consensus state): a singleton key/value store.
+-- Deliberately has NO foreign key to blocks (a reorg must not cascade-delete or roll
+-- back local cursors) and is never touched by the checkpoint trigger (which fires
+-- only on contract_state INSERT). The `value` column has no declared type, so SQLite
+-- stores each value in its native storage class (e.g. the prune watermark as a real
+-- INTEGER). First tenant: the prune watermark `W_prev` (see project_state_pruning).
+CREATE TABLE IF NOT EXISTS node_meta (
+  key TEXT PRIMARY KEY,
+  value
+) WITHOUT ROWID;

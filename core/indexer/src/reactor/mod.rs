@@ -81,6 +81,10 @@ pub struct Reactor<E: Executor> {
     consensus: consensus_state::ConsensusState,
 
     prune: PruneConfig,
+    /// In-memory mirror of the persisted prune watermark `W_prev` (node_meta) —
+    /// the highest height already collapsed to one row per path. Loaded at startup;
+    /// advanced (and re-persisted) by each successful prune. See `project_state_pruning`.
+    prune_watermark: u64,
     last_height: u64,
     last_hash: Option<BlockHash>,
     /// Shared with the API (`Env.consensus_listen_addr`); written on the first
@@ -118,6 +122,9 @@ impl<E: Executor> Reactor<E> {
             mempool_rx,
             simulate_rx,
             prune,
+            // Loaded from node_meta in `run()` when pruning is enabled; 0 here means
+            // "nothing collapsed yet" (safe — the first prune's band (0, W] catches up).
+            prune_watermark: 0,
             last_height,
             last_hash,
             ready_tx,
@@ -816,6 +823,18 @@ pub fn run(
                     last_hash,
                     consensus_listen_addr,
                 );
+
+                // Resume incremental pruning from where we left off (persisted in
+                // node_meta), so a restart doesn't re-scan all finalized history.
+                if prune.enabled {
+                    reactor.prune_watermark = database::queries::get_meta_u64(
+                        &reactor.db_conn(),
+                        database::queries::PRUNE_WATERMARK_KEY,
+                        0,
+                    )
+                    .await
+                    .context("loading prune watermark failed")?;
+                }
 
                 reactor.run().await
             }

@@ -339,8 +339,9 @@ impl<E: Executor> Reactor<E> {
         });
 
         // GC finalized superseded contract_state versions (separate from the block's
-        // committed transaction — it only touches rows below the finality watermark).
-        self.maybe_prune_state().await?;
+        // committed transaction — only touches rows below the finality watermark, and
+        // is best-effort so a GC hiccup never fails the block).
+        self.maybe_prune_state().await;
 
         if let Some(tx) = &self.event_tx {
             let txids = block
@@ -376,25 +377,37 @@ impl<E: Executor> Reactor<E> {
     /// (`prune.enabled == false`) and until the chain is taller than the retain
     /// window. Runs once per block; the per-block churn is small. Returning freed
     /// pages to the OS (`incremental_vacuum`) is a separate, throttled step.
-    async fn maybe_prune_state(&self) -> Result<()> {
+    async fn maybe_prune_state(&mut self) {
         if !self.prune.enabled {
-            return Ok(());
+            return;
         }
         let retain = self.prune.retain_blocks.max(FINALITY_WINDOW);
-        let Some(watermark) = self.last_height.checked_sub(retain) else {
-            return Ok(());
+        // W = how far we COULD prune; `prune_watermark` (W_prev) = how far we HAVE.
+        let Some(w) = self.last_height.checked_sub(retain) else {
+            return;
         };
-        let deleted = prune_contract_state(&self.db_conn(), watermark)
-            .await
-            .context("prune_contract_state failed")?;
-        if deleted > 0 {
-            debug!(
-                watermark,
-                deleted, "pruned finalized superseded contract_state versions"
-            );
+        if w <= self.prune_watermark {
+            return; // nothing newly finalized since the last prune (or post-reorg)
         }
-        self.maybe_vacuum().await?;
-        Ok(())
+        let w_prev = self.prune_watermark;
+        // Best-effort GC: a prune failure must NOT fail the block. On error we leave
+        // `prune_watermark` unadvanced so the same band `(w_prev, w]` retries next
+        // block (the band query is idempotent, so the catch-up is harmless).
+        match prune_contract_state(&self.db_conn(), w_prev, w).await {
+            Ok(deleted) => {
+                self.prune_watermark = w; // persisted in the same txn as the deletes
+                if deleted > 0 {
+                    debug!(w_prev, w, deleted, "pruned contract_state band");
+                }
+            }
+            Err(e) => {
+                warn!(error = %e, w_prev, w, "contract_state prune failed; will retry");
+                return;
+            }
+        }
+        if let Err(e) = self.maybe_vacuum().await {
+            warn!(error = %e, "incremental_vacuum failed");
+        }
     }
 
     /// Return freed pages to the OS via `PRAGMA incremental_vacuum`, throttled on

@@ -475,56 +475,91 @@ pub async fn contract_has_state(conn: &Connection, contract_id: u64) -> Result<b
         > 0)
 }
 
-/// Prune finalized, superseded `contract_state` versions at or below `watermark`
-/// (the finality watermark `tip − retain`). Two passes:
-///   1. **supersede** — drop a version `≤ watermark` that has a newer version of
-///      the same `(contract_id, path)` at height `≤ watermark`, keeping each
-///      path's newest-`≤ watermark` finalized snapshot (and everything above it).
-///   2. **tombstone reclaim** — drop a finalized (`≤ watermark`) `deleted = 1` row
-///      with NO newer version of the path anywhere: the path is permanently gone,
-///      so the tombstone has nothing left to mask and (no newer version existing)
-///      no reorg can resurrect one. This is the only path by which deleted data is
-///      physically reclaimed from the append-only log.
+/// Incrementally prune the newly-finalized band `(w_prev, w]` and persist the new
+/// watermark `w`, all in one transaction (atomic + resumable).
 ///
-/// Removes only rows nothing can observe: reads (`live_latest`/`live_paths_scan`)
-/// want latest-per-path; reorg can't reach below the finality-bounded watermark;
-/// and the checkpoint trigger reads only the NEW row + latest checkpoint (and is
-/// `AFTER INSERT`, so these DELETEs don't fire it). Pure-local GC, no consensus
-/// effect. Returns the number of rows deleted. See `project_state_pruning`.
-pub async fn prune_contract_state(conn: &Connection, watermark: u64) -> Result<u64, Error> {
+/// `w_prev` is the highest height already collapsed to one row per path; `w` is the
+/// current finality watermark. The band is a fixed height *range*, but it only
+/// *discovers* the paths that wrote in that range (via the `(height, …)` index) —
+/// for each such path we then collapse ITS history (which may reach far below the
+/// band). Paths untouched in the band keep their existing single snapshot and are
+/// never examined, so the cost is O(band), not O(table). Two passes:
+///   1. **supersede** — for a band path, drop versions `≤ w` that aren't its newest
+///      `≤ w` (its finalized snapshot is kept, everything `> w` is kept).
+///   2. **tombstone reclaim** — drop a `deleted = 1` row that entered the band and
+///      has NO newer version anywhere: the path is permanently gone, the tombstone
+///      masks nothing, and no reorg can resurrect a newer version. The only way
+///      deleted data is physically reclaimed.
+///
+/// Removes only rows nothing can observe: reads want latest-per-path; reorg can't
+/// reach below the finality-bounded watermark; and the checkpoint trigger reads only
+/// the NEW row + latest checkpoint (and is `AFTER INSERT`, so these DELETEs don't
+/// fire it). Pure-local GC, no consensus effect. Correct from `w_prev = 0` (band
+/// `(0, w]` discovers every path = a full prune). Returns rows deleted. See
+/// `project_state_pruning`.
+pub async fn prune_contract_state(conn: &Connection, w_prev: u64, w: u64) -> Result<u64, Error> {
+    conn.execute("BEGIN TRANSACTION", ()).await?;
+    match prune_band(conn, w_prev, w).await {
+        Ok(deleted) => {
+            conn.execute("COMMIT", ()).await?;
+            Ok(deleted)
+        }
+        Err(e) => {
+            // Roll back so a partial prune never advances the persisted watermark;
+            // the gap is retried next cycle. Best-effort rollback, surface the cause.
+            let _ = conn.execute("ROLLBACK", ()).await;
+            Err(e)
+        }
+    }
+}
+
+async fn prune_band(conn: &Connection, w_prev: u64, w: u64) -> Result<u64, Error> {
+    // Supersede: collapse band paths to their newest version ≤ w. Driven from the
+    // small DISTINCT band set (height range-seek on idx_contract_state_height), so
+    // there is no full table scan.
     let superseded = conn
         .execute(
             r#"
             DELETE FROM contract_state
-            WHERE height <= ?1
-              AND EXISTS (
-                SELECT 1 FROM contract_state AS newer
-                WHERE newer.contract_id = contract_state.contract_id
-                  AND newer.path = contract_state.path
-                  AND newer.height > contract_state.height
-                  AND newer.height <= ?1
-              )
+            WHERE rowid IN (
+              SELECT old.rowid
+              FROM (SELECT DISTINCT contract_id, path FROM contract_state
+                    WHERE height > ?1 AND height <= ?2) AS band
+              JOIN contract_state AS old
+                ON old.contract_id = band.contract_id AND old.path = band.path
+              WHERE old.height <= ?2
+                AND EXISTS (SELECT 1 FROM contract_state n
+                            WHERE n.contract_id = old.contract_id AND n.path = old.path
+                              AND n.height > old.height AND n.height <= ?2)
+            )
             "#,
-            params![watermark],
+            params![w_prev, w],
         )
         .await?;
 
+    // Tombstone reclaim: a tombstone that entered the band with no newer version
+    // anywhere is the path's final state — drop it (also driven by the height range).
     let tombstoned = conn
         .execute(
             r#"
-            DELETE FROM contract_state
-            WHERE deleted = 1
-              AND height <= ?1
-              AND NOT EXISTS (
-                SELECT 1 FROM contract_state AS newer
-                WHERE newer.contract_id = contract_state.contract_id
-                  AND newer.path = contract_state.path
-                  AND newer.height > contract_state.height
-              )
+            DELETE FROM contract_state AS t
+            WHERE t.deleted = 1 AND t.height > ?1 AND t.height <= ?2
+              AND NOT EXISTS (SELECT 1 FROM contract_state n
+                              WHERE n.contract_id = t.contract_id AND n.path = t.path
+                                AND n.height > t.height)
             "#,
-            params![watermark],
+            params![w_prev, w],
         )
         .await?;
+
+    // Persist the advanced watermark in the same transaction as the deletes, so the
+    // prune step is atomic and a restart resumes from exactly here.
+    conn.execute(
+        "INSERT INTO node_meta(key, value) VALUES (?1, ?2) \
+         ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+        params![super::node_meta::PRUNE_WATERMARK_KEY, w],
+    )
+    .await?;
 
     Ok(superseded + tombstoned)
 }
@@ -667,7 +702,8 @@ mod prune_tests {
 
         let before_checkpoints = checkpoint_count(&conn).await;
 
-        let deleted = prune_contract_state(&conn, 100).await.unwrap();
+        // Band (0, 100] discovers every path → equivalent to a full prune at 100.
+        let deleted = prune_contract_state(&conn, 0, 100).await.unwrap();
 
         assert_eq!(heights(&conn, b"a").await, vec![13]); // -11, -12
         assert_eq!(heights(&conn, b"b").await, vec![90, 200]); // -14
@@ -687,11 +723,15 @@ mod prune_tests {
         let pruned = new_connection(dir.path(), "pruned.db").await.unwrap();
         let retain = 3u64;
 
+        let mut w_prev = 0u64;
         for &(h, p, del) in SCRIPT {
             insert_version(&archive, h, p, del).await;
             insert_version(&pruned, h, p, del).await;
-            if let Some(wm) = h.checked_sub(retain) {
-                prune_contract_state(&pruned, wm).await.unwrap();
+            if let Some(wm) = h.checked_sub(retain)
+                && wm > w_prev
+            {
+                prune_contract_state(&pruned, w_prev, wm).await.unwrap();
+                w_prev = wm;
             }
         }
 
@@ -714,11 +754,15 @@ mod prune_tests {
         let pruned = new_connection(dir.path(), "pruned_r.db").await.unwrap();
         let retain = 3u64;
 
+        let mut w_prev = 0u64;
         for &(h, p, del) in SCRIPT {
             insert_version(&archive, h, p, del).await;
             insert_version(&pruned, h, p, del).await;
-            if let Some(wm) = h.checked_sub(retain) {
-                prune_contract_state(&pruned, wm).await.unwrap();
+            if let Some(wm) = h.checked_sub(retain)
+                && wm > w_prev
+            {
+                prune_contract_state(&pruned, w_prev, wm).await.unwrap();
+                w_prev = wm;
             }
         }
 
@@ -740,9 +784,81 @@ mod prune_tests {
         let conn = new_connection(dir.path(), "prune_noop.db").await.unwrap();
         insert_version(&conn, 10, b"a", false).await;
         insert_version(&conn, 20, b"a", false).await;
-        // Watermark below both versions → nothing is finalized-and-superseded yet.
-        let deleted = prune_contract_state(&conn, 5).await.unwrap();
+        // Band (0, 5] is below both versions → nothing finalized-and-superseded yet.
+        let deleted = prune_contract_state(&conn, 0, 5).await.unwrap();
         assert_eq!(deleted, 0);
         assert_eq!(heights(&conn, b"a").await, vec![10, 20]);
+    }
+
+    // ----- Plan regression: the band prune must never full-scan contract_state -----
+
+    async fn explain(conn: &Connection, sql: &str, w_prev: u64, w: u64) -> Vec<String> {
+        let mut rows = conn
+            .query(&format!("EXPLAIN QUERY PLAN {sql}"), params![w_prev, w])
+            .await
+            .unwrap();
+        let mut out = Vec::new();
+        while let Some(r) = rows.next().await.unwrap() {
+            // EXPLAIN QUERY PLAN columns: id, parent, notused, detail
+            out.push(r.get::<String>(3).unwrap());
+        }
+        out
+    }
+
+    /// The supersede DELETE — kept in lockstep with `prune_band`'s SQL; this test
+    /// asserts its plan, so if the production query changes, update this string too.
+    const SUPERSEDE_DEL_SQL: &str = r#"DELETE FROM contract_state
+          WHERE rowid IN (
+            SELECT old.rowid
+            FROM (SELECT DISTINCT contract_id, path FROM contract_state
+                  WHERE height > ?1 AND height <= ?2) AS band
+            JOIN contract_state AS old
+              ON old.contract_id = band.contract_id AND old.path = band.path
+            WHERE old.height <= ?2
+              AND EXISTS (SELECT 1 FROM contract_state n
+                          WHERE n.contract_id = old.contract_id AND n.path = old.path
+                            AND n.height > old.height AND n.height <= ?2))"#;
+
+    #[tokio::test]
+    async fn band_prune_never_full_scans_contract_state() {
+        let dir = TempDir::new().unwrap();
+        let conn = new_connection(dir.path(), "plan.db").await.unwrap();
+
+        // Steady-state-ish table: 40 paths × 12 updates = 480 rows, so "rows ≤ W" is
+        // large but each band is tiny — the case where a full scan would hurt.
+        let mut height = 0u64;
+        for round in 0..12u64 {
+            for p in 0..40u64 {
+                height += 1;
+                let path = format!("k{p:03}").into_bytes();
+                let deleted = round == 11 && p % 7 == 0;
+                insert_version(&conn, height, &path, deleted).await;
+            }
+        }
+        let (w_prev, w) = (height - 4, height - 3); // a one-block band near the tip
+        // NB: intentionally NO ANALYZE — production DBs won't have stats, so the
+        // plan must hold on the planner's default heuristics.
+
+        // Band discovery is a height-index range seek, not a table scan.
+        let band_plan = explain(
+            &conn,
+            "SELECT DISTINCT contract_id, path FROM contract_state WHERE height > ?1 AND height <= ?2",
+            w_prev,
+            w,
+        )
+        .await;
+        assert!(
+            band_plan
+                .iter()
+                .any(|d| d.contains("idx_contract_state_height")),
+            "band lookup should use the height index, got {band_plan:?}"
+        );
+
+        // The full supersede DELETE touches contract_state only via indexes.
+        let del_plan = explain(&conn, SUPERSEDE_DEL_SQL, w_prev, w).await;
+        assert!(
+            !del_plan.iter().any(|d| d == "SCAN contract_state"),
+            "band prune must not full-scan contract_state, got {del_plan:?}"
+        );
     }
 }
