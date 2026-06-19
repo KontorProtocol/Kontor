@@ -476,7 +476,11 @@ pub async fn contract_has_state(conn: &Connection, contract_id: u64) -> Result<b
 }
 
 /// Incrementally prune the newly-finalized band `(w_prev, w]` and persist the new
-/// watermark `w`, all in one transaction (atomic + resumable).
+/// watermark `w`. The three statements (supersede DELETE, tombstone DELETE, watermark
+/// upsert) must run in ONE transaction so the step is atomic and resumable — the
+/// caller provides it (see [`crate::runtime::storage::Storage::prune`], which wraps
+/// this in a savepoint). Not wrapped here so transaction management stays with the
+/// storage layer that owns the connection's savepoint bookkeeping.
 ///
 /// `w_prev` is the highest height already collapsed to one row per path; `w` is the
 /// current finality watermark. The band is a fixed height *range*, but it only
@@ -498,22 +502,6 @@ pub async fn contract_has_state(conn: &Connection, contract_id: u64) -> Result<b
 /// `(0, w]` discovers every path = a full prune). Returns rows deleted. See
 /// `project_state_pruning`.
 pub async fn prune_contract_state(conn: &Connection, w_prev: u64, w: u64) -> Result<u64, Error> {
-    conn.execute("BEGIN TRANSACTION", ()).await?;
-    match prune_band(conn, w_prev, w).await {
-        Ok(deleted) => {
-            conn.execute("COMMIT", ()).await?;
-            Ok(deleted)
-        }
-        Err(e) => {
-            // Roll back so a partial prune never advances the persisted watermark;
-            // the gap is retried next cycle. Best-effort rollback, surface the cause.
-            let _ = conn.execute("ROLLBACK", ()).await;
-            Err(e)
-        }
-    }
-}
-
-async fn prune_band(conn: &Connection, w_prev: u64, w: u64) -> Result<u64, Error> {
     // Supersede: collapse band paths to their newest version ≤ w. Driven from the
     // small DISTINCT band set (height range-seek on idx_contract_state_height), so
     // there is no full table scan.

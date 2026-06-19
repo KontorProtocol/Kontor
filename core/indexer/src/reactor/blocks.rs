@@ -10,7 +10,7 @@ use crate::block;
 use crate::consensus::finality_types::{FINALITY_WINDOW, StateEvent};
 use crate::database::queries::{
     confirm_transaction, get_transaction_by_txid, insert_batch, insert_block, insert_transaction,
-    prune_contract_state, rollback_to_height, select_block_at_height, select_block_latest,
+    rollback_to_height, select_block_at_height, select_block_latest,
 };
 use crate::metrics::{BLOCK_HEIGHT, ITEMS_INDEXED};
 use crate::runtime::{
@@ -393,7 +393,7 @@ impl<E: Executor> Reactor<E> {
         // Best-effort GC: a prune failure must NOT fail the block. On error we leave
         // `prune_watermark` unadvanced so the same band `(w_prev, w]` retries next
         // block (the band query is idempotent, so the catch-up is harmless).
-        match prune_contract_state(&self.db_conn(), w_prev, w).await {
+        match self.runtime.storage.prune(w_prev, w).await {
             Ok(deleted) => {
                 self.prune_watermark = w; // persisted in the same txn as the deletes
                 if deleted > 0 {
@@ -410,7 +410,7 @@ impl<E: Executor> Reactor<E> {
         }
     }
 
-    /// Return freed pages to the OS via `PRAGMA incremental_vacuum`, throttled on
+    /// Return freed pages to the OS via `Storage::incremental_vacuum`, throttled on
     /// `freelist_count`: only act once slack exceeds `PRUNE_VACUUM_HIGH_PAGES`, keep
     /// `PRUNE_VACUUM_LOW_PAGES` as a reuse buffer, and reclaim at most
     /// `PRUNE_VACUUM_MAX_PAGES` per call so the write-lock hold stays bounded. The
@@ -418,17 +418,11 @@ impl<E: Executor> Reactor<E> {
     /// shrinks it back when the live set has shrunk. Cheap when there's nothing to
     /// do (a single `freelist_count` read).
     async fn maybe_vacuum(&self) -> Result<()> {
-        let conn = self.db_conn();
-        let mut rows = conn.query("PRAGMA freelist_count;", ()).await?;
-        let freelist: i64 = match rows.next().await? {
-            Some(r) => r.get(0)?,
-            None => return Ok(()),
-        };
+        let freelist = self.runtime.storage.freelist_count().await?;
         let Some(pages) = vacuum_pages_to_reclaim(freelist) else {
             return Ok(());
         };
-        conn.query(&format!("PRAGMA incremental_vacuum({pages});"), ())
-            .await?;
+        self.runtime.storage.incremental_vacuum(pages).await?;
         debug!(freelist, reclaimed_pages = pages, "incremental_vacuum");
         Ok(())
     }
