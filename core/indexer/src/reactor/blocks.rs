@@ -24,9 +24,11 @@ use super::Reactor;
 use super::consensus_state;
 use super::executor::Executor;
 
-// Incremental-vacuum throttle (pages; default page ≈ 4 KiB). Conservative starting
-// values — tune `MAX` against a real write-lock budget if needed. Reclaim only once
-// the freelist exceeds HIGH, keep LOW as a reuse buffer, cap each call at MAX.
+// Incremental-vacuum throttle. Units are PAGES; the MiB annotations assume the
+// default 4 KiB page_size (Kontor never sets a custom `PRAGMA page_size`, so this
+// holds). Conservative starting values — tune `MAX` against a real write-lock budget
+// if needed. Reclaim only once the freelist exceeds HIGH, keep LOW as a reuse buffer,
+// cap each call at MAX.
 // Kept coherent: HIGH < LOW + MAX, so a freelist just over HIGH reclaims its excess
 // (uncapped) and only a much larger freelist hits the MAX per-call cap.
 const PRUNE_VACUUM_LOW_PAGES: i64 = 128; // ~0.5 MiB kept on the freelist for reuse

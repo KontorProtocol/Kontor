@@ -495,13 +495,29 @@ pub async fn contract_has_state(conn: &Connection, contract_id: u64) -> Result<b
 ///      masks nothing, and no reorg can resurrect a newer version. The only way
 ///      deleted data is physically reclaimed.
 ///
-/// Removes only rows nothing can observe: reads want latest-per-path; reorg can't
-/// reach below the finality-bounded watermark; and the checkpoint trigger reads only
-/// the NEW row + latest checkpoint (and is `AFTER INSERT`, so these DELETEs don't
-/// fire it). Pure-local GC, no consensus effect. Correct from `w_prev = 0` (band
-/// `(0, w]` discovers every path = a full prune). Returns rows deleted. See
+/// PRECISELY what it preserves: each path's **newest version `≤ H` for every
+/// `H ≥ w`** — i.e. CURRENT (latest-per-path) state and any reorg-rollback target
+/// (which can't fall below `w`, the finality-bounded watermark). It deliberately
+/// deletes *intermediate* historical versions `≤ w`, so it does NOT preserve an
+/// as-of-height read for `H < w`. That is correct ONLY because this indexer issues
+/// no historical as-of-height reads — every read computes latest-per-path with no
+/// upper height bound (`live_latest`/`live_paths_scan`/`matching_path`). A future
+/// as-of-`H` reader below `w` would get wrong answers; gate any such feature on
+/// archive mode (`prune = false`).
+///
+/// Removes only rows nothing can observe: the checkpoint trigger reads only the NEW
+/// row + latest checkpoint (and is `AFTER INSERT`, so these DELETEs don't fire it),
+/// so pure-local GC, no consensus effect. Correct from `w_prev = 0` (band `(0, w]`
+/// discovers every path = a full prune). Returns rows deleted. See
 /// `project_state_pruning`.
 pub async fn prune_contract_state(conn: &Connection, w_prev: u64, w: u64) -> Result<u64, Error> {
+    // Defensive: never run an empty/backwards band — it would otherwise still upsert
+    // and could LOWER the persisted watermark below w_prev. The reactor already guards
+    // `w > prune_watermark`; this protects any other caller.
+    if w <= w_prev {
+        return Ok(0);
+    }
+
     // Supersede: collapse band paths to their newest version ≤ w. Driven from the
     // small DISTINCT band set (height range-seek on idx_contract_state_height), so
     // there is no full table scan.
