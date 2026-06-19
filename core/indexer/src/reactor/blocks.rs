@@ -24,6 +24,15 @@ use super::Reactor;
 use super::consensus_state;
 use super::executor::Executor;
 
+// Incremental-vacuum throttle (pages; default page ≈ 4 KiB). Conservative starting
+// values — tune `MAX` against a real write-lock budget if needed. Reclaim only once
+// the freelist exceeds HIGH, keep LOW as a reuse buffer, cap each call at MAX.
+// Kept coherent: HIGH < LOW + MAX, so a freelist just over HIGH reclaims its excess
+// (uncapped) and only a much larger freelist hits the MAX per-call cap.
+const PRUNE_VACUUM_LOW_PAGES: i64 = 128; // ~0.5 MiB kept on the freelist for reuse
+const PRUNE_VACUUM_HIGH_PAGES: i64 = 512; // ~2 MiB slack before we bother reclaiming
+const PRUNE_VACUUM_MAX_PAGES: i64 = 512; // ~2 MiB returned per call (bounds lock hold)
+
 impl<E: Executor> Reactor<E> {
     pub(super) async fn rollback(&mut self, height: u64) -> Result<()> {
         rollback_to_height(&self.db_conn(), height)
@@ -384,6 +393,66 @@ impl<E: Executor> Reactor<E> {
                 deleted, "pruned finalized superseded contract_state versions"
             );
         }
+        self.maybe_vacuum().await?;
         Ok(())
+    }
+
+    /// Return freed pages to the OS via `PRAGMA incremental_vacuum`, throttled on
+    /// `freelist_count`: only act once slack exceeds `PRUNE_VACUUM_HIGH_PAGES`, keep
+    /// `PRUNE_VACUUM_LOW_PAGES` as a reuse buffer, and reclaim at most
+    /// `PRUNE_VACUUM_MAX_PAGES` per call so the write-lock hold stays bounded. The
+    /// `DELETE`s alone already plateau the file (freed pages are reused); this only
+    /// shrinks it back when the live set has shrunk. Cheap when there's nothing to
+    /// do (a single `freelist_count` read).
+    async fn maybe_vacuum(&self) -> Result<()> {
+        let conn = self.db_conn();
+        let mut rows = conn.query("PRAGMA freelist_count;", ()).await?;
+        let freelist: i64 = match rows.next().await? {
+            Some(r) => r.get(0)?,
+            None => return Ok(()),
+        };
+        let Some(pages) = vacuum_pages_to_reclaim(freelist) else {
+            return Ok(());
+        };
+        conn.query(&format!("PRAGMA incremental_vacuum({pages});"), ())
+            .await?;
+        debug!(freelist, reclaimed_pages = pages, "incremental_vacuum");
+        Ok(())
+    }
+}
+
+/// Pages to hand back to the OS given the current `freelist_count`: `None` below
+/// the HIGH threshold (let the freelist absorb churn), else the excess above LOW
+/// capped at MAX. Pure so the throttle is unit-testable without a live DB.
+fn vacuum_pages_to_reclaim(freelist: i64) -> Option<i64> {
+    if freelist <= PRUNE_VACUUM_HIGH_PAGES {
+        None
+    } else {
+        Some((freelist - PRUNE_VACUUM_LOW_PAGES).min(PRUNE_VACUUM_MAX_PAGES))
+    }
+}
+
+#[cfg(test)]
+mod vacuum_throttle_tests {
+    use super::*;
+
+    #[test]
+    fn below_high_threshold_is_noop() {
+        assert_eq!(vacuum_pages_to_reclaim(0), None);
+        assert_eq!(vacuum_pages_to_reclaim(PRUNE_VACUUM_HIGH_PAGES), None);
+    }
+
+    #[test]
+    fn above_high_reclaims_excess_over_low_uncapped() {
+        // 600 > HIGH(512); excess 600 − LOW(128) = 472 < MAX(512) → not capped.
+        assert_eq!(vacuum_pages_to_reclaim(600), Some(472));
+    }
+
+    #[test]
+    fn large_freelist_is_capped_at_max() {
+        assert_eq!(
+            vacuum_pages_to_reclaim(1_000_000),
+            Some(PRUNE_VACUUM_MAX_PAGES)
+        );
     }
 }
