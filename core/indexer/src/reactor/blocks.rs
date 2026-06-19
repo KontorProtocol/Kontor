@@ -4,10 +4,10 @@ use anyhow::{Context, Result, bail};
 use bitcoin::hashes::Hash;
 use indexer_types::{Block, BlockRow, Event, OpWithResult};
 use metrics::{counter, gauge};
-use tracing::{info, warn};
+use tracing::{debug, info, warn};
 
 use crate::block;
-use crate::consensus::finality_types::StateEvent;
+use crate::consensus::finality_types::{FINALITY_WINDOW, StateEvent};
 use crate::database::queries::{
     confirm_transaction, get_transaction_by_txid, insert_batch, insert_block, insert_transaction,
     rollback_to_height, select_block_at_height, select_block_latest,
@@ -23,6 +23,17 @@ use crate::test_utils::new_mock_block_hash;
 use super::Reactor;
 use super::consensus_state;
 use super::executor::Executor;
+
+// Incremental-vacuum throttle. Units are PAGES; the MiB annotations assume the
+// default 4 KiB page_size (Kontor never sets a custom `PRAGMA page_size`, so this
+// holds). Conservative starting values — tune `MAX` against a real write-lock budget
+// if needed. Reclaim only once the freelist exceeds HIGH, keep LOW as a reuse buffer,
+// cap each call at MAX.
+// Kept coherent: HIGH < LOW + MAX, so a freelist just over HIGH reclaims its excess
+// (uncapped) and only a much larger freelist hits the MAX per-call cap.
+const PRUNE_VACUUM_LOW_PAGES: i64 = 128; // ~0.5 MiB kept on the freelist for reuse
+const PRUNE_VACUUM_HIGH_PAGES: i64 = 512; // ~2 MiB slack before we bother reclaiming
+const PRUNE_VACUUM_MAX_PAGES: i64 = 512; // ~2 MiB returned per call (bounds lock hold)
 
 impl<E: Executor> Reactor<E> {
     pub(super) async fn rollback(&mut self, height: u64) -> Result<()> {
@@ -355,6 +366,113 @@ impl<E: Executor> Reactor<E> {
             "Block processed"
         );
 
+        // GC finalized superseded contract_state versions LAST — after the block's
+        // own commit and after both BlockProcessed / Processed events — so this
+        // opportunistic, best-effort maintenance (a separate transaction) never
+        // delays block durability or subscriber notification.
+        self.maybe_prune_state().await;
+
         Ok(())
+    }
+
+    /// Prune finalized, superseded `contract_state` versions below the finality
+    /// watermark `tip − max(retain, FINALITY_WINDOW)`. No-op for archive nodes
+    /// (`prune.enabled == false`) and until the chain is taller than the retain
+    /// window. Runs once per block; the per-block churn is small. Returning freed
+    /// pages to the OS (`incremental_vacuum`) is a separate, throttled step.
+    ///
+    /// Deliberately runs AFTER the block's commit, in its own (`Storage::prune`)
+    /// transaction — NOT folded into the block transaction — even though `Storage`
+    /// owns both. Three reasons: (1) it's best-effort, so a GC failure must not be
+    /// able to roll back or fail a validated block; (2) the block is consensus-
+    /// critical and latency-sensitive (durability, peer responses) while the prune is
+    /// opportunistic maintenance, so it stays off the block's critical path; (3) the
+    /// "committed but not yet pruned" window is benign — the prune only removes old,
+    /// finalized, superseded rows and reads only want the latest. Crash between the
+    /// two commits just leaves the watermark un-advanced and the band retries.
+    async fn maybe_prune_state(&mut self) {
+        if !self.prune.enabled {
+            return;
+        }
+        let retain = self.prune.retain_blocks.max(FINALITY_WINDOW);
+        // W = how far we COULD prune; `prune_watermark` (W_prev) = how far we HAVE.
+        let Some(w) = self.last_height.checked_sub(retain) else {
+            return;
+        };
+        if w <= self.prune_watermark {
+            return; // nothing newly finalized since the last prune (or post-reorg)
+        }
+        let w_prev = self.prune_watermark;
+        // Best-effort GC: a prune failure must NOT fail the block. On error we leave
+        // `prune_watermark` unadvanced so the same band `(w_prev, w]` retries next
+        // block (the band query is idempotent, so the catch-up is harmless).
+        match self.runtime.storage.prune(w_prev, w).await {
+            Ok(deleted) => {
+                self.prune_watermark = w; // persisted in the same txn as the deletes
+                if deleted > 0 {
+                    debug!(w_prev, w, deleted, "pruned contract_state band");
+                }
+            }
+            Err(e) => {
+                warn!(error = %e, w_prev, w, "contract_state prune failed; will retry");
+                return;
+            }
+        }
+        if let Err(e) = self.maybe_vacuum().await {
+            warn!(error = %e, "incremental_vacuum failed");
+        }
+    }
+
+    /// Return freed pages to the OS via `Storage::incremental_vacuum`, throttled on
+    /// `freelist_count`: only act once slack exceeds `PRUNE_VACUUM_HIGH_PAGES`, keep
+    /// `PRUNE_VACUUM_LOW_PAGES` as a reuse buffer, and reclaim at most
+    /// `PRUNE_VACUUM_MAX_PAGES` per call so the write-lock hold stays bounded. The
+    /// `DELETE`s alone already plateau the file (freed pages are reused); this only
+    /// shrinks it back when the live set has shrunk. Cheap when there's nothing to
+    /// do (a single `freelist_count` read).
+    async fn maybe_vacuum(&self) -> Result<()> {
+        let freelist = self.runtime.storage.freelist_count().await?;
+        let Some(pages) = vacuum_pages_to_reclaim(freelist) else {
+            return Ok(());
+        };
+        self.runtime.storage.incremental_vacuum(pages).await?;
+        debug!(freelist, reclaimed_pages = pages, "incremental_vacuum");
+        Ok(())
+    }
+}
+
+/// Pages to hand back to the OS given the current `freelist_count`: `None` below
+/// the HIGH threshold (let the freelist absorb churn), else the excess above LOW
+/// capped at MAX. Pure so the throttle is unit-testable without a live DB.
+fn vacuum_pages_to_reclaim(freelist: i64) -> Option<i64> {
+    if freelist <= PRUNE_VACUUM_HIGH_PAGES {
+        None
+    } else {
+        Some((freelist - PRUNE_VACUUM_LOW_PAGES).min(PRUNE_VACUUM_MAX_PAGES))
+    }
+}
+
+#[cfg(test)]
+mod vacuum_throttle_tests {
+    use super::*;
+
+    #[test]
+    fn below_high_threshold_is_noop() {
+        assert_eq!(vacuum_pages_to_reclaim(0), None);
+        assert_eq!(vacuum_pages_to_reclaim(PRUNE_VACUUM_HIGH_PAGES), None);
+    }
+
+    #[test]
+    fn above_high_reclaims_excess_over_low_uncapped() {
+        // 600 > HIGH(512); excess 600 − LOW(128) = 472 < MAX(512) → not capped.
+        assert_eq!(vacuum_pages_to_reclaim(600), Some(472));
+    }
+
+    #[test]
+    fn large_freelist_is_capped_at_max() {
+        assert_eq!(
+            vacuum_pages_to_reclaim(1_000_000),
+            Some(PRUNE_VACUUM_MAX_PAGES)
+        );
     }
 }

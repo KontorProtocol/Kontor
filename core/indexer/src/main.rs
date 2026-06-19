@@ -304,6 +304,10 @@ async fn run_daemon(config: Config) -> Result<()> {
         Some(fees_tx),
         consensus_listen_addr_tx,
         config.network,
+        reactor::PruneConfig {
+            enabled: config.prune,
+            retain_blocks: config.prune_retain_blocks,
+        },
     ));
     ready_rx.await?;
     reactor_ready.store(true, std::sync::atomic::Ordering::Relaxed);

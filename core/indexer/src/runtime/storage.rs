@@ -15,7 +15,7 @@ use crate::{
             exists_contract_state, get_contract_address_from_id, get_contract_bytes_by_id,
             get_contract_id_from_address, get_latest_contract_state_value, insert_contract,
             insert_contract_result, insert_contract_state, matching_path,
-            path_prefix_filter_contract_state, select_block_at_height,
+            path_prefix_filter_contract_state, prune_contract_state, select_block_at_height,
         },
         types::{ContractResultRow, ContractRow, ContractStateRow},
     },
@@ -272,6 +272,42 @@ impl Storage {
             .map(|b| b.hash.to_byte_array().to_vec()))
     }
 
+    /// Incrementally prune the finalized band `(w_prev, w]` (see
+    /// [`prune_contract_state`]) inside a savepoint, so the two DELETEs and the
+    /// watermark upsert commit (or roll back) atomically through the same
+    /// transaction bookkeeping as every other write. Returns rows deleted.
+    pub async fn prune(&self, w_prev: u64, w: u64) -> Result<u64> {
+        self.savepoint().await?;
+        match prune_contract_state(&self.conn, w_prev, w).await {
+            Ok(deleted) => {
+                self.commit().await?;
+                Ok(deleted)
+            }
+            Err(e) => {
+                self.rollback().await?;
+                Err(e.into())
+            }
+        }
+    }
+
+    /// Free pages currently on the SQLite freelist (the prune-vacuum throttle reads
+    /// this to decide whether returning pages to the OS is worth it).
+    pub async fn freelist_count(&self) -> Result<i64> {
+        let mut rows = self.conn.query("PRAGMA freelist_count;", ()).await?;
+        Ok(match rows.next().await? {
+            Some(row) => row.get(0)?,
+            None => 0,
+        })
+    }
+
+    /// Return up to `pages` freelist pages to the OS via `PRAGMA incremental_vacuum`.
+    pub async fn incremental_vacuum(&self, pages: i64) -> Result<()> {
+        self.conn
+            .query(&format!("PRAGMA incremental_vacuum({pages});"), ())
+            .await?;
+        Ok(())
+    }
+
     pub async fn savepoint(&self) -> Result<()> {
         if self.savepoint_stack.is_empty().await {
             self.conn.execute("BEGIN TRANSACTION", ()).await?;
@@ -348,6 +384,57 @@ mod tests {
         assert_eq!(storage.block_entropy(10).await?, None); // expired (10 < 56)
         assert_eq!(storage.block_entropy(201).await?, None); // future (> current)
         assert_eq!(storage.block_entropy(150).await?, None); // in window but no such block
+        Ok(())
+    }
+
+    // `Storage::prune` collapses the band through a savepoint and persists the
+    // watermark — exercising the transaction-wrapped path the reactor uses.
+    #[tokio::test]
+    async fn prune_collapses_band_and_persists_watermark() -> Result<()> {
+        let (_reader, writer, _temp) = new_test_db().await?;
+        let conn = writer.connection();
+        // One path updated at heights 1, 2, 3.
+        for h in [1u64, 2, 3] {
+            insert_block(
+                &conn,
+                BlockRow::builder()
+                    .height(h)
+                    .hash(new_mock_block_hash(h as u32))
+                    .build(),
+            )
+            .await?;
+            conn.execute(
+                "INSERT INTO contract_state (contract_id, height, tx_id, size, path, value, deleted) \
+                 VALUES (1, ?1, NULL, 1, ?2, ?3, 0)",
+                libsql::params![h, vec![b'x'], vec![b'v']],
+            )
+            .await?;
+        }
+        let storage = Storage::builder().height(3).conn(conn.clone()).build();
+
+        // Band (0, 3] collapses heights 1 and 2, keeping only the newest (3).
+        assert_eq!(storage.prune(0, 3).await?, 2);
+
+        let mut rows = conn
+            .query(
+                "SELECT height FROM contract_state WHERE contract_id = 1 ORDER BY height",
+                (),
+            )
+            .await?;
+        let mut heights = Vec::new();
+        while let Some(r) = rows.next().await? {
+            heights.push(r.get::<i64>(0)?);
+        }
+        assert_eq!(heights, vec![3], "only the newest version survives");
+
+        // The watermark was persisted in the same (committed) transaction.
+        let mut wm = conn
+            .query(
+                "SELECT value FROM node_meta WHERE key = 'prune_watermark'",
+                (),
+            )
+            .await?;
+        assert_eq!(wm.next().await?.unwrap().get::<i64>(0)?, 3);
         Ok(())
     }
 }

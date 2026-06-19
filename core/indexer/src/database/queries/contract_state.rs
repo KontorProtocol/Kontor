@@ -474,3 +474,395 @@ pub async fn contract_has_state(conn: &Connection, contract_id: u64) -> Result<b
         .expect("Query must return at least one row")
         > 0)
 }
+
+/// Incrementally prune the newly-finalized band `(w_prev, w]` and persist the new
+/// watermark `w`. The three statements (supersede DELETE, tombstone DELETE, watermark
+/// upsert) must run in ONE transaction so the step is atomic and resumable — the
+/// caller provides it (see [`crate::runtime::storage::Storage::prune`], which wraps
+/// this in a savepoint). Not wrapped here so transaction management stays with the
+/// storage layer that owns the connection's savepoint bookkeeping.
+///
+/// `w_prev` is the highest height already collapsed to one row per path; `w` is the
+/// current finality watermark. The band is a fixed height *range*, but it only
+/// *discovers* the paths that wrote in that range (via the `(height, …)` index) —
+/// for each such path we then collapse ITS history (which may reach far below the
+/// band). Paths untouched in the band keep their existing single snapshot and are
+/// never examined, so the cost is O(band), not O(table). Two passes:
+///   1. **supersede** — for a band path, drop versions `≤ w` that aren't its newest
+///      `≤ w` (its finalized snapshot is kept, everything `> w` is kept).
+///   2. **tombstone reclaim** — drop a `deleted = 1` row that entered the band and
+///      has NO newer version anywhere: the path is permanently gone, the tombstone
+///      masks nothing, and no reorg can resurrect a newer version. The only way
+///      deleted data is physically reclaimed.
+///
+/// PRECISELY what it preserves: each path's **newest version `≤ H` for every
+/// `H ≥ w`** — i.e. CURRENT (latest-per-path) state and any reorg-rollback target
+/// (which can't fall below `w`, the finality-bounded watermark). It deliberately
+/// deletes *intermediate* historical versions `≤ w`, so it does NOT preserve an
+/// as-of-height read for `H < w`. That is correct ONLY because this indexer issues
+/// no historical as-of-height reads — every read computes latest-per-path with no
+/// upper height bound (`live_latest`/`live_paths_scan`/`matching_path`). A future
+/// as-of-`H` reader below `w` would get wrong answers; gate any such feature on
+/// archive mode (`prune = false`).
+///
+/// Removes only rows nothing can observe: the checkpoint trigger reads only the NEW
+/// row + latest checkpoint (and is `AFTER INSERT`, so these DELETEs don't fire it),
+/// so pure-local GC, no consensus effect. Correct from `w_prev = 0` (band `(0, w]`
+/// discovers every path = a full prune). Returns rows deleted. See
+/// `project_state_pruning`.
+pub async fn prune_contract_state(conn: &Connection, w_prev: u64, w: u64) -> Result<u64, Error> {
+    // Defensive: never run an empty/backwards band — it would otherwise still upsert
+    // and could LOWER the persisted watermark below w_prev. The reactor already guards
+    // `w > prune_watermark`; this protects any other caller.
+    if w <= w_prev {
+        return Ok(0);
+    }
+
+    // Supersede: collapse band paths to their newest version ≤ w. Driven from the
+    // small DISTINCT band set (height range-seek on idx_contract_state_height), so
+    // there is no full table scan.
+    let superseded = conn
+        .execute(
+            r#"
+            DELETE FROM contract_state
+            WHERE rowid IN (
+              SELECT old.rowid
+              FROM (SELECT DISTINCT contract_id, path FROM contract_state
+                    WHERE height > ?1 AND height <= ?2) AS band
+              JOIN contract_state AS old
+                ON old.contract_id = band.contract_id AND old.path = band.path
+              WHERE old.height <= ?2
+                AND EXISTS (SELECT 1 FROM contract_state n
+                            WHERE n.contract_id = old.contract_id AND n.path = old.path
+                              AND n.height > old.height AND n.height <= ?2)
+            )
+            "#,
+            params![w_prev, w],
+        )
+        .await?;
+
+    // Tombstone reclaim: a tombstone that entered the band with no newer version
+    // anywhere is the path's final state — drop it (also driven by the height range).
+    let tombstoned = conn
+        .execute(
+            r#"
+            DELETE FROM contract_state AS t
+            WHERE t.deleted = 1 AND t.height > ?1 AND t.height <= ?2
+              AND NOT EXISTS (SELECT 1 FROM contract_state n
+                              WHERE n.contract_id = t.contract_id AND n.path = t.path
+                                AND n.height > t.height)
+            "#,
+            params![w_prev, w],
+        )
+        .await?;
+
+    // Persist the advanced watermark in the same transaction as the deletes, so the
+    // prune step is atomic and a restart resumes from exactly here.
+    conn.execute(
+        "INSERT INTO node_meta(key, value) VALUES (?1, ?2) \
+         ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+        params![super::node_meta::PRUNE_WATERMARK_KEY, w],
+    )
+    .await?;
+
+    Ok(superseded + tombstoned)
+}
+
+#[cfg(test)]
+mod prune_tests {
+    use super::*;
+    use crate::database::connection::new_connection;
+    use tempfile::TempDir;
+
+    async fn insert_block(conn: &Connection, height: u64) {
+        conn.execute(
+            "INSERT OR IGNORE INTO blocks (height, hash, relevant) VALUES (?, ?, 1)",
+            params![height, format!("hash{height}")],
+        )
+        .await
+        .unwrap();
+    }
+
+    async fn insert_version(conn: &Connection, height: u64, path: &[u8], deleted: bool) {
+        insert_block(conn, height).await;
+        // Height-stamped value so equivalence tests prove the *correct* surviving
+        // version, not just the right path set.
+        let value = format!("v{height}").into_bytes();
+        conn.execute(
+            "INSERT INTO contract_state (contract_id, height, tx_id, size, path, value, deleted) \
+             VALUES (1, ?, NULL, ?, ?, ?, ?)",
+            params![height, value.len() as i64, path.to_vec(), value, deleted],
+        )
+        .await
+        .unwrap();
+    }
+
+    /// The live set: each path's latest version, kept only if not a tombstone —
+    /// `(path, value)` pairs in path order. Mirrors the `live_paths_scan` rule and
+    /// is the ground truth a pruned node must match an archive node on.
+    async fn live_state(conn: &Connection) -> Vec<(Vec<u8>, Vec<u8>)> {
+        let mut rows = conn
+            .query(
+                "SELECT path, value FROM contract_state AS cs \
+                 WHERE deleted = 0 \
+                   AND NOT EXISTS ( \
+                     SELECT 1 FROM contract_state AS n \
+                     WHERE n.contract_id = cs.contract_id AND n.path = cs.path \
+                       AND n.height > cs.height) \
+                 ORDER BY path",
+                (),
+            )
+            .await
+            .unwrap();
+        let mut out = Vec::new();
+        while let Some(r) = rows.next().await.unwrap() {
+            out.push((r.get::<Vec<u8>>(0).unwrap(), r.get::<Vec<u8>>(1).unwrap()));
+        }
+        out
+    }
+
+    async fn checkpoint_chain(conn: &Connection) -> Vec<(i64, String)> {
+        let mut rows = conn
+            .query("SELECT height, hash FROM checkpoints ORDER BY height", ())
+            .await
+            .unwrap();
+        let mut out = Vec::new();
+        while let Some(r) = rows.next().await.unwrap() {
+            out.push((r.get::<i64>(0).unwrap(), r.get::<String>(1).unwrap()));
+        }
+        out
+    }
+
+    async fn row_count(conn: &Connection) -> i64 {
+        let mut rows = conn
+            .query("SELECT COUNT(*) FROM contract_state", ())
+            .await
+            .unwrap();
+        rows.next().await.unwrap().unwrap().get::<i64>(0).unwrap()
+    }
+
+    // A scripted sequence of (height, path, deleted) block-writes: updates,
+    // deletes, and a recreate — enough to exercise supersede + tombstone paths.
+    const SCRIPT: &[(u64, &[u8], bool)] = &[
+        (1, b"x", false),
+        (2, b"y", false),
+        (3, b"x", false),
+        (4, b"z", false),
+        (5, b"y", true),
+        (6, b"x", false),
+        (7, b"z", false),
+        (8, b"w", false),
+        (9, b"x", true),
+        (10, b"x", false),
+    ];
+
+    async fn heights(conn: &Connection, path: &[u8]) -> Vec<u64> {
+        let mut rows = conn
+            .query(
+                "SELECT height FROM contract_state WHERE contract_id = 1 AND path = ? ORDER BY height",
+                params![path.to_vec()],
+            )
+            .await
+            .unwrap();
+        let mut out = Vec::new();
+        while let Some(r) = rows.next().await.unwrap() {
+            out.push(r.get::<i64>(0).unwrap() as u64);
+        }
+        out
+    }
+
+    async fn checkpoint_count(conn: &Connection) -> i64 {
+        let mut rows = conn
+            .query("SELECT COUNT(*) FROM checkpoints", ())
+            .await
+            .unwrap();
+        rows.next().await.unwrap().unwrap().get::<i64>(0).unwrap()
+    }
+
+    #[tokio::test]
+    async fn prune_supersede_tombstone_and_above_watermark() {
+        let dir = TempDir::new().unwrap();
+        let conn = new_connection(dir.path(), "prune.db").await.unwrap();
+
+        // Distinct, ascending heights — the checkpoint trigger is keyed by height
+        // and chains in insert order, mirroring real (monotonic) block processing.
+        // A: all-live history below watermark → keep only the newest ≤ F.
+        insert_version(&conn, 11, b"a", false).await;
+        insert_version(&conn, 12, b"a", false).await;
+        insert_version(&conn, 13, b"a", false).await;
+        // B: spans the watermark → keep newest ≤ F plus everything above F.
+        insert_version(&conn, 14, b"b", false).await;
+        // C: live then tombstoned, all finalized → path fully reclaimed.
+        insert_version(&conn, 15, b"c", false).await;
+        insert_version(&conn, 16, b"c", true).await;
+        // D: tombstone below F but re-created above F → keep both (reorg could
+        // revert the re-creation and the tombstone must remain the latest).
+        insert_version(&conn, 17, b"d", true).await;
+        // E: single finalized version → untouched.
+        insert_version(&conn, 50, b"e", false).await;
+        insert_version(&conn, 90, b"b", false).await;
+        insert_version(&conn, 150, b"d", false).await;
+        insert_version(&conn, 200, b"b", false).await;
+
+        let before_checkpoints = checkpoint_count(&conn).await;
+
+        // Band (0, 100] discovers every path → equivalent to a full prune at 100.
+        let deleted = prune_contract_state(&conn, 0, 100).await.unwrap();
+
+        assert_eq!(heights(&conn, b"a").await, vec![13]); // -11, -12
+        assert_eq!(heights(&conn, b"b").await, vec![90, 200]); // -14
+        assert_eq!(heights(&conn, b"c").await, Vec::<u64>::new()); // -15, -16
+        assert_eq!(heights(&conn, b"d").await, vec![17, 150]); // none
+        assert_eq!(heights(&conn, b"e").await, vec![50]); // none
+        assert_eq!(deleted, 5);
+
+        // DELETEs must not perturb the checkpoint chain (trigger is AFTER INSERT).
+        assert_eq!(checkpoint_count(&conn).await, before_checkpoints);
+    }
+
+    #[tokio::test]
+    async fn pruned_node_matches_archive_live_state_and_checkpoints() {
+        let dir = TempDir::new().unwrap();
+        let archive = new_connection(dir.path(), "arch.db").await.unwrap();
+        let pruned = new_connection(dir.path(), "pruned.db").await.unwrap();
+        let retain = 3u64;
+
+        let mut w_prev = 0u64;
+        for &(h, p, del) in SCRIPT {
+            insert_version(&archive, h, p, del).await;
+            insert_version(&pruned, h, p, del).await;
+            if let Some(wm) = h.checked_sub(retain)
+                && wm > w_prev
+            {
+                prune_contract_state(&pruned, w_prev, wm).await.unwrap();
+                w_prev = wm;
+            }
+        }
+
+        // The consensus commitment is identical — pruning never touches the
+        // checkpoint chain (trigger is AFTER INSERT and reads only NEW + latest).
+        assert_eq!(
+            checkpoint_chain(&archive).await,
+            checkpoint_chain(&pruned).await
+        );
+        // And the derived live state (value + liveness) is byte-identical.
+        assert_eq!(live_state(&archive).await, live_state(&pruned).await);
+        // Pruning actually reclaimed rows.
+        assert!(row_count(&pruned).await < row_count(&archive).await);
+    }
+
+    #[tokio::test]
+    async fn rollback_within_retain_window_matches_archive() {
+        let dir = TempDir::new().unwrap();
+        let archive = new_connection(dir.path(), "arch_r.db").await.unwrap();
+        let pruned = new_connection(dir.path(), "pruned_r.db").await.unwrap();
+        let retain = 3u64;
+
+        let mut w_prev = 0u64;
+        for &(h, p, del) in SCRIPT {
+            insert_version(&archive, h, p, del).await;
+            insert_version(&pruned, h, p, del).await;
+            if let Some(wm) = h.checked_sub(retain)
+                && wm > w_prev
+            {
+                prune_contract_state(&pruned, w_prev, wm).await.unwrap();
+                w_prev = wm;
+            }
+        }
+
+        // Reorg both to a height INSIDE the retain window (tip 10, retain 3 →
+        // last watermark 7; 8 > 7 so the pruned node retained everything needed).
+        for c in [&archive, &pruned] {
+            c.execute("DELETE FROM blocks WHERE height > ?", params![8u64])
+                .await
+                .unwrap();
+        }
+
+        // The pruned node rolls back to the same correct live state as the archive.
+        assert_eq!(live_state(&archive).await, live_state(&pruned).await);
+    }
+
+    #[tokio::test]
+    async fn prune_below_low_watermark_is_noop() {
+        let dir = TempDir::new().unwrap();
+        let conn = new_connection(dir.path(), "prune_noop.db").await.unwrap();
+        insert_version(&conn, 10, b"a", false).await;
+        insert_version(&conn, 20, b"a", false).await;
+        // Band (0, 5] is below both versions → nothing finalized-and-superseded yet.
+        let deleted = prune_contract_state(&conn, 0, 5).await.unwrap();
+        assert_eq!(deleted, 0);
+        assert_eq!(heights(&conn, b"a").await, vec![10, 20]);
+    }
+
+    // ----- Plan regression: the band prune must never full-scan contract_state -----
+
+    async fn explain(conn: &Connection, sql: &str, w_prev: u64, w: u64) -> Vec<String> {
+        let mut rows = conn
+            .query(&format!("EXPLAIN QUERY PLAN {sql}"), params![w_prev, w])
+            .await
+            .unwrap();
+        let mut out = Vec::new();
+        while let Some(r) = rows.next().await.unwrap() {
+            // EXPLAIN QUERY PLAN columns: id, parent, notused, detail
+            out.push(r.get::<String>(3).unwrap());
+        }
+        out
+    }
+
+    /// The supersede DELETE — kept in lockstep with `prune_band`'s SQL; this test
+    /// asserts its plan, so if the production query changes, update this string too.
+    const SUPERSEDE_DEL_SQL: &str = r#"DELETE FROM contract_state
+          WHERE rowid IN (
+            SELECT old.rowid
+            FROM (SELECT DISTINCT contract_id, path FROM contract_state
+                  WHERE height > ?1 AND height <= ?2) AS band
+            JOIN contract_state AS old
+              ON old.contract_id = band.contract_id AND old.path = band.path
+            WHERE old.height <= ?2
+              AND EXISTS (SELECT 1 FROM contract_state n
+                          WHERE n.contract_id = old.contract_id AND n.path = old.path
+                            AND n.height > old.height AND n.height <= ?2))"#;
+
+    #[tokio::test]
+    async fn band_prune_never_full_scans_contract_state() {
+        let dir = TempDir::new().unwrap();
+        let conn = new_connection(dir.path(), "plan.db").await.unwrap();
+
+        // Steady-state-ish table: 40 paths × 12 updates = 480 rows, so "rows ≤ W" is
+        // large but each band is tiny — the case where a full scan would hurt.
+        let mut height = 0u64;
+        for round in 0..12u64 {
+            for p in 0..40u64 {
+                height += 1;
+                let path = format!("k{p:03}").into_bytes();
+                let deleted = round == 11 && p % 7 == 0;
+                insert_version(&conn, height, &path, deleted).await;
+            }
+        }
+        let (w_prev, w) = (height - 4, height - 3); // a one-block band near the tip
+        // NB: intentionally NO ANALYZE — production DBs won't have stats, so the
+        // plan must hold on the planner's default heuristics.
+
+        // Band discovery is a height-index range seek, not a table scan.
+        let band_plan = explain(
+            &conn,
+            "SELECT DISTINCT contract_id, path FROM contract_state WHERE height > ?1 AND height <= ?2",
+            w_prev,
+            w,
+        )
+        .await;
+        assert!(
+            band_plan
+                .iter()
+                .any(|d| d.contains("idx_contract_state_height")),
+            "band lookup should use the height index, got {band_plan:?}"
+        );
+
+        // The full supersede DELETE touches contract_state only via indexes.
+        let del_plan = explain(&conn, SUPERSEDE_DEL_SQL, w_prev, w).await;
+        assert!(
+            !del_plan.iter().any(|d| d == "SCAN contract_state"),
+            "band prune must not full-scan contract_state, got {del_plan:?}"
+        );
+    }
+}
