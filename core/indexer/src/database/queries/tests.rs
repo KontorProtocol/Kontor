@@ -649,6 +649,21 @@ async fn test_delete_tombstones_whole_subtree() -> Result<()> {
     .sum();
     assert_eq!(freed, expected_freed);
 
+    // Tombstones are VALUE-LESS: the deleted row stores an empty value (not the
+    // original 1-byte value), even though `freed` still counts the original size.
+    let mut tomb = conn
+        .query(
+            "SELECT value, deleted FROM contract_state WHERE contract_id = ? AND path = ?",
+            params![cid, libsql::Value::Blob(cs_path(&["m", "k", "field1"]))],
+        )
+        .await?;
+    let row = tomb.next().await?.unwrap();
+    assert!(row.get::<bool>(1)?, "row is a tombstone");
+    assert!(
+        row.get::<Vec<u8>>(0)?.is_empty(),
+        "tombstone value must be empty"
+    );
+
     // Every descendant of `m/k` is gone (not just the exact path).
     assert!(!exists_contract_state(&conn, cid, &cs_path(&["m", "k"])).await?);
     assert!(

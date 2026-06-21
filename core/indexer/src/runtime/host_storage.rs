@@ -158,14 +158,11 @@ impl Runtime {
         validate_path(&path)?;
         let contract_id = self.table.lock().await.get(&self_)?.get_contract_id();
         let rows = self.storage.find_live_subtree(contract_id, &path).await?;
-        let bytes: u64 = rows
-            .iter()
-            .map(|r| (r.path.len() + r.value.len()) as u64)
-            .sum();
+        let bytes: u64 = rows.iter().map(|r| r.path.len() as u64 + r.size).sum();
         Fuel::Delete(rows.len() as u64, bytes)
             .consume(accessor, self.gauge.as_ref())
             .await?;
-        let (removed, freed) = self.storage.tombstone_rows(rows).await?;
+        let (removed, freed) = self.storage.tombstone_rows(contract_id, &rows).await?;
         self.footprint.record_delta(-(freed as i64));
         Ok(removed)
     }

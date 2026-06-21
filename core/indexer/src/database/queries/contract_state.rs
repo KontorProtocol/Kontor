@@ -243,65 +243,74 @@ pub async fn get_latest_contract_state_value(
     Ok(None)
 }
 
-/// Remove an entry by tombstoning its WHOLE subtree: the path itself AND every
-/// live descendant (`path/field`, nested struct/map rows, …). A struct value
-/// persists under child paths, so tombstoning only the exact path would leave
-/// live primary rows behind while the caller (`Map`/`IndexedMap` `remove`) has
-/// already cleared the index — a half-removed entry. Height-versioned (one
-/// `deleted = true` row per live path at the current height), so reorg-safe.
-/// Returns `(removed, freed_bytes)`: whether any live row was tombstoned, and the
-/// total live bytes (path + value, summed over every tombstoned row) the delete
-/// freed — the storage-deposit footprint accumulator subtracts this. The subtree
-/// is the byte range `[path, strinc(path))` (the node + every descendant share
-/// `path` as a prefix).
-/// The live rows of a subtree (the node + every live descendant), MATERIALISED.
-/// Read-only — the read half of a delete, split out so the caller can meter
-/// `Fuel::Delete` by the row count BEFORE committing to the tombstone writes
-/// (and so it can attribute per-row depositors for refunds). `live_latest` skips
-/// an already-tombstoned path (its latest version isn't live).
+/// What tombstoning + footprint accounting need about a live row — its `path` and
+/// the freed value `size`. Deliberately OMITS the value: a large-subtree delete
+/// must not materialise gigabytes of values, and the `size` column gives the byte
+/// length without reading them. (The depositor for refunds is added here later.)
+#[derive(Debug, Clone)]
+pub struct DeletableRow {
+    pub path: Vec<u8>,
+    pub size: u64,
+}
+
+/// The live rows of a subtree (the node + every live descendant) — `(path, size)`
+/// only, NOT values. Read-only: the read half of a delete, split out so the
+/// caller can meter `Fuel::Delete` by the row count BEFORE committing to the
+/// writes. `live_latest` skips an already-tombstoned path. A struct value persists
+/// under child paths, so the subtree (`[path, strinc(path))`) is the whole entry.
 pub async fn find_live_subtree(
     conn: &Connection,
     contract_id: u64,
     path: &[u8],
-) -> Result<Vec<ContractStateRow>, Error> {
+) -> Result<Vec<DeletableRow>, Error> {
     let (range, mut params) = subtree_range(">=", path);
     params.push((
         ":contract_id".to_string(),
         Value::Integer(contract_id as i64),
     ));
     let query = live_latest(
-        "contract_id, height, tx_id, path, value, deleted",
+        "path, size",
         &format!("contract_id = :contract_id AND {range}"),
     );
     let mut result = conn.query(&query, params).await?;
-    let mut live: Vec<ContractStateRow> = Vec::new();
+    let mut rows = Vec::new();
     while let Some(row) = result.next().await? {
-        live.push(from_row(&row)?);
+        rows.push(DeletableRow {
+            path: row.get::<Vec<u8>>(0)?,
+            size: row.get::<u64>(1)?,
+        });
     }
-    Ok(live)
+    Ok(rows)
 }
 
-/// Tombstone the given live rows (the write half of a delete). Re-inserts each as
-/// a `deleted = true` version at `height`. Returns `(removed, freed_bytes)` —
-/// whether anything was tombstoned, and the total live bytes (path + value)
-/// freed, which the footprint accumulator subtracts. Caller must have already
-/// metered these rows (they came from [`find_live_subtree`]).
+/// Tombstone the given (already-metered) live rows: append a `deleted = true`
+/// version at `height` for each path. The tombstone is VALUE-LESS — it stores an
+/// empty value, not the old one (nothing reads a tombstone's value; this keeps
+/// big deletes from duplicating their values). Returns `(removed, freed_bytes)`
+/// = (anything tombstoned, total path + value bytes freed) for the footprint
+/// accumulator.
 pub async fn tombstone_rows(
     conn: &Connection,
+    contract_id: u64,
     height: u64,
     tx_id: Option<u64>,
-    rows: Vec<ContractStateRow>,
+    rows: &[DeletableRow],
 ) -> Result<(bool, u64), Error> {
     let removed = !rows.is_empty();
-    let freed: u64 = rows
-        .iter()
-        .map(|r| (r.path.len() + r.value.len()) as u64)
-        .sum();
-    for mut row in rows {
-        row.deleted = true;
-        row.height = height;
-        row.tx_id = tx_id;
-        insert_contract_state(conn, row).await?;
+    let freed: u64 = rows.iter().map(|r| r.path.len() as u64 + r.size).sum();
+    for row in rows {
+        insert_contract_state(
+            conn,
+            ContractStateRow::builder()
+                .contract_id(contract_id)
+                .maybe_tx_id(tx_id)
+                .height(height)
+                .path(row.path.clone())
+                // value omitted → empty: the value-less tombstone.
+                .deleted(true)
+                .build(),
+        )
+        .await?;
     }
     Ok((removed, freed))
 }
@@ -318,7 +327,7 @@ pub async fn delete_contract_state(
     path: &[u8],
 ) -> Result<(bool, u64), Error> {
     let rows = find_live_subtree(conn, contract_id, path).await?;
-    tombstone_rows(conn, height, tx_id, rows).await
+    tombstone_rows(conn, contract_id, height, tx_id, &rows).await
 }
 
 pub async fn exists_contract_state(

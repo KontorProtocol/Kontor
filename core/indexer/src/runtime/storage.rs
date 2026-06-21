@@ -11,7 +11,7 @@ use wit_component::{ComponentEncoder, WitPrinter};
 use crate::{
     database::{
         queries::{
-            count_matching_paths, create_contract_signer, exists_contract_state,
+            DeletableRow, count_matching_paths, create_contract_signer, exists_contract_state,
             find_live_subtree, get_contract_address_from_id, get_contract_bytes_by_id,
             get_contract_id_from_address, get_latest_contract_state_size,
             get_latest_contract_state_value, hard_delete_matching_paths, insert_contract,
@@ -93,21 +93,26 @@ impl Storage {
     }
 
     /// The read half of a delete: the live rows of `path`'s subtree (node + every
-    /// live descendant), materialised. Split from the tombstone writes so the host
-    /// can meter `Fuel::Delete` by the row count BEFORE committing to the writes.
+    /// live descendant) as `(path, size)` — NOT values. Split from the tombstone
+    /// writes so the host can meter `Fuel::Delete` by the row count BEFORE the
+    /// writes.
     pub async fn find_live_subtree(
         &self,
         contract_id: u64,
         path: &[u8],
-    ) -> Result<Vec<ContractStateRow>> {
+    ) -> Result<Vec<DeletableRow>> {
         Ok(find_live_subtree(&self.conn, contract_id, path).await?)
     }
 
-    /// The write half of a delete: tombstone the given (already-metered) rows.
-    /// Returns `(removed, freed_bytes)` — the footprint accumulator subtracts the
-    /// freed bytes.
-    pub async fn tombstone_rows(&self, rows: Vec<ContractStateRow>) -> Result<(bool, u64)> {
-        Ok(tombstone_rows(&self.conn, self.height, self.effective_tx_id(), rows).await?)
+    /// The write half of a delete: value-less-tombstone the given (already-metered)
+    /// rows. Returns `(removed, freed_bytes)` — the footprint accumulator subtracts
+    /// the freed bytes.
+    pub async fn tombstone_rows(
+        &self,
+        contract_id: u64,
+        rows: &[DeletableRow],
+    ) -> Result<(bool, u64)> {
+        Ok(tombstone_rows(&self.conn, contract_id, self.height, self.effective_tx_id(), rows).await?)
     }
 
     /// The live value's stored byte length for `path`, or `None` if no live
