@@ -1,3 +1,5 @@
+use std::sync::atomic::Ordering;
+
 use anyhow::{Result, anyhow};
 use futures_util::future::OptionFuture;
 use indexer_types::deserialize;
@@ -192,7 +194,13 @@ impl Runtime {
             Some(old_value_len) => bs.len() as i64 - old_value_len as i64,
         };
         self.footprint.record_delta(delta);
-        self.storage.set(contract_id, &path, bs).await
+        // Stamp the op's payer as this row's depositor (the refund target). 0 =
+        // none (Core/system writes).
+        let depositor = match self.op_payer.load(Ordering::Relaxed) {
+            0 => None,
+            id => Some(id),
+        };
+        self.storage.set(contract_id, &path, bs, depositor).await
     }
 }
 

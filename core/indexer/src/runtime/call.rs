@@ -20,6 +20,7 @@ use crate::database::native_contracts::is_native_contract_id;
 use crate::database::types::Identity;
 
 use std::sync::Arc;
+use std::sync::atomic::Ordering;
 use tokio::sync::Mutex;
 use wasmtime::component::ResourceTable;
 
@@ -78,6 +79,14 @@ impl Runtime {
             .ok_or_else(|| {
                 ExecutionError::Deterministic(anyhow!("Contract not found: {}", contract_address))
             })?;
+        // Stamp the depositor for every write in this op = the top-level op's
+        // payer (0 = none for Core/system ops). Only top-level sets it; nested
+        // cross-contract calls inherit it via the shared `op_payer` (so a row
+        // written deep in a nested call still attributes to the op's payer).
+        if is_top_level {
+            self.op_payer
+                .store(payment.map(|p| p.signer_id).unwrap_or(0), Ordering::Relaxed);
+        }
         let component = self
             .load_component(contract_id)
             .await

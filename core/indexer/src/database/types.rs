@@ -161,6 +161,10 @@ pub struct ContractStateRow {
     pub value: Vec<u8>,
     #[builder(default = false)]
     pub deleted: bool,
+    /// The signer who wrote (deposited for) this version — the storage-deposit
+    /// refund target. `None` for tombstones and Core/system writes (Option implies
+    /// a `None` builder default).
+    pub depositor: Option<u64>,
 }
 
 impl ContractStateRow {

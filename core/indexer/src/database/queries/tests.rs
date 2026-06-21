@@ -19,13 +19,16 @@ fn calculate_row_hash(state: &ContractStateRow) -> String {
     let value_part = hex::encode(&state.value).to_uppercase();
     let path_part = hex::encode(&state.path).to_uppercase();
     // Mirrors `checkpoint_trigger.sql`: fields joined by `|` (impossible in any
-    // field's charset) so the digest is unambiguous.
+    // field's charset) so the digest is unambiguous. A NULL depositor renders as
+    // empty (SQLite `concat` treats NULL as '').
+    let depositor_part = state.depositor.map(|d| d.to_string()).unwrap_or_default();
     let input = format!(
-        "{}|{}|{}|{}",
+        "{}|{}|{}|{}|{}",
         state.contract_id,
         path_part,
         value_part,
-        if state.deleted { "1" } else { "0" }
+        if state.deleted { "1" } else { "0" },
+        depositor_part,
     );
     let mut hasher = Sha256::new();
     hasher.update(input.as_bytes());
@@ -578,6 +581,76 @@ async fn test_latest_size_tracks_live_value() -> Result<()> {
     // Tombstone → None (the post-`deleted` liveness rule).
     delete_contract_state(&conn, height, Some(tx), cid, &path).await?;
     assert_eq!(get_latest_contract_state_size(&conn, cid, &path).await?, None);
+    Ok(())
+}
+
+// A row's `depositor` (the storage-deposit refund target) round-trips through
+// insert → `get_latest_contract_state` and is surfaced by `find_live_subtree`
+// (for refunds); a tombstone carries NO depositor.
+#[tokio::test]
+async fn test_depositor_roundtrips_and_tombstone_clears_it() -> Result<()> {
+    let (_reader, writer, _temp_dir) = new_test_db().await?;
+    let conn = writer.connection();
+    let cid = 55;
+    let height = 800000u64;
+    insert_block(
+        &conn,
+        BlockRow::builder()
+            .height(height)
+            .hash(new_mock_block_hash(height as u32))
+            .build(),
+    )
+    .await?;
+    let tx = insert_transaction(
+        &conn,
+        TransactionRow::builder()
+            .height(height)
+            .txid(format!("cccc{:060}", 0))
+            .tx_index(0)
+            .confirmed_height(height)
+            .build(),
+    )
+    .await?;
+    // A real signer to satisfy the depositor FK.
+    let sid = create_contract_signer(&conn, height).await?;
+    let path = cs_path(&["k"]);
+
+    insert_contract_state(
+        &conn,
+        ContractStateRow::builder()
+            .contract_id(cid)
+            .tx_id(tx)
+            .height(height)
+            .path(path.clone())
+            .value(vec![1, 2, 3])
+            .depositor(sid)
+            .build(),
+    )
+    .await?;
+
+    // Round-trips through the latest-state read…
+    let row = get_latest_contract_state(&conn, cid, &path).await?.unwrap();
+    assert_eq!(row.depositor, Some(sid));
+    // …and the delete find surfaces it (refund target).
+    let found = find_live_subtree(&conn, cid, &path).await?;
+    assert_eq!(found.len(), 1);
+    assert_eq!(found[0].depositor, Some(sid));
+
+    // Tombstone (same height → replaces the live row) carries no depositor.
+    delete_contract_state(&conn, height, Some(tx), cid, &path).await?;
+    let mut tomb = conn
+        .query(
+            "SELECT depositor, deleted FROM contract_state WHERE contract_id = ? AND path = ?",
+            params![cid, libsql::Value::Blob(path.clone())],
+        )
+        .await?;
+    let r = tomb.next().await?.unwrap();
+    assert!(r.get::<bool>(1)?, "row is a tombstone");
+    assert_eq!(
+        r.get::<Option<u64>>(0)?,
+        None,
+        "a tombstone has no depositor"
+    );
     Ok(())
 }
 

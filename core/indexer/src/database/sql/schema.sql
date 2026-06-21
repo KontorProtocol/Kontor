@@ -52,9 +52,14 @@ CREATE TABLE IF NOT EXISTS contract_state (
   path BLOB NOT NULL,
   value BLOB NOT NULL,
   deleted BOOLEAN NOT NULL DEFAULT 0,
+  -- The signer who wrote (deposited for) this version — the storage-deposit
+  -- refund target. NULL for tombstones and Core/system writes (no deposit). A
+  -- deterministic rowid like contract_id, so safe in the checkpoint hash.
+  depositor INTEGER,
   UNIQUE (contract_id, height, path),
   FOREIGN KEY (height) REFERENCES blocks (height) ON DELETE CASCADE,
-  FOREIGN KEY (tx_id) REFERENCES transactions (id)
+  FOREIGN KEY (tx_id) REFERENCES transactions (id),
+  FOREIGN KEY (depositor) REFERENCES signers (id)
 );
 
 CREATE INDEX IF NOT EXISTS idx_contract_state_lookup ON contract_state (contract_id, path, height DESC);

@@ -77,7 +77,15 @@ impl Storage {
         Ok(get_latest_contract_state_value(&self.conn, fuel, contract_id, path).await?)
     }
 
-    pub async fn set(&self, contract_id: u64, path: &[u8], value: &[u8]) -> Result<()> {
+    /// Write a live value. `depositor` is the signer who pays for (and is refunded
+    /// for) this row's storage — `None` for Core/system writes.
+    pub async fn set(
+        &self,
+        contract_id: u64,
+        path: &[u8],
+        value: &[u8],
+        depositor: Option<u64>,
+    ) -> Result<()> {
         insert_contract_state(
             &self.conn,
             ContractStateRow::builder()
@@ -86,6 +94,7 @@ impl Storage {
                 .height(self.height)
                 .path(path.to_vec())
                 .value(value.to_vec())
+                .maybe_depositor(depositor)
                 .build(),
         )
         .await?;

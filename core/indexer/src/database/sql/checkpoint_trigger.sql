@@ -22,7 +22,11 @@ VALUES
                   '|',
                   hex(NEW.value),
                   '|',
-                  NEW.deleted
+                  NEW.deleted,
+                  '|',
+                  -- depositor is a deterministic rowid (or NULL → '' here); the
+                  -- refund target is consensus state, so it must be hashed.
+                  NEW.depositor
                 )
               )
             ) AS hash

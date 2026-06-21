@@ -150,8 +150,9 @@ pub async fn insert_contract_state(conn: &Connection, row: ContractStateRow) -> 
                 size,
                 path,
                 value,
-                deleted
-            ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                deleted,
+                depositor
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
         "#,
             params![
                 row.contract_id,
@@ -160,7 +161,8 @@ pub async fn insert_contract_state(conn: &Connection, row: ContractStateRow) -> 
                 row.size(),
                 row.path,
                 row.value,
-                row.deleted
+                row.deleted,
+                row.depositor.map(Value::try_from).transpose()?
             ],
         )
         .await?)
@@ -174,7 +176,7 @@ pub async fn get_latest_contract_state(
     let mut rows = conn
         .query(
             &live_latest(
-                "contract_id, height, tx_id, path, value, deleted",
+                "contract_id, height, tx_id, path, value, deleted, depositor",
                 "contract_id = :contract_id AND path = :path",
             ),
             (
@@ -251,6 +253,9 @@ pub async fn get_latest_contract_state_value(
 pub struct DeletableRow {
     pub path: Vec<u8>,
     pub size: u64,
+    /// Who deposited for this row — the refund target when it's freed. `None` for
+    /// Core/system writes (no deposit to refund).
+    pub depositor: Option<u64>,
 }
 
 /// The live rows of a subtree (the node + every live descendant) — `(path, size)`
@@ -269,7 +274,7 @@ pub async fn find_live_subtree(
         Value::Integer(contract_id as i64),
     ));
     let query = live_latest(
-        "path, size",
+        "path, size, depositor",
         &format!("contract_id = :contract_id AND {range}"),
     );
     let mut result = conn.query(&query, params).await?;
@@ -278,6 +283,7 @@ pub async fn find_live_subtree(
         rows.push(DeletableRow {
             path: row.get::<Vec<u8>>(0)?,
             size: row.get::<u64>(1)?,
+            depositor: row.get::<Option<u64>>(2)?,
         });
     }
     Ok(rows)
