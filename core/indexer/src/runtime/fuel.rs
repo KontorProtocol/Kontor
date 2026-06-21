@@ -27,7 +27,13 @@ pub enum Fuel {
     Exists,
     Get(usize),
     Set(u64),
-    DeleteMatchingPaths(u64),
+    /// Tombstoning a subtree: `(rows, bytes)`. A guest `delete` of a map/struct
+    /// key removes the WHOLE subtree (one tombstone row per live descendant), so
+    /// the cost must scale with the rows tombstoned and the bytes re-written —
+    /// NOT a flat fee, or a cheap call forces unbounded work on every node. The
+    /// per-row term also pre-prices the eventual storage-deposit refund (one per
+    /// row), so adding refunds later doesn't change the fee.
+    Delete(u64, u64),
     ContractAddress,
     ProcSigner,
     ProcPayer,
@@ -80,7 +86,7 @@ pub enum Fuel {
     Result(u64),
     // TODO: recalibrate with the rest of the Fuel table against measured
     // benchmarks. Currently sized to match other non-zk "non-trivial"
-    // operations (DeleteMatchingPaths, ProofFromBytes base cost).
+    // operations (ProofFromBytes base cost).
     RegisterBlsKey,
 }
 
@@ -118,7 +124,9 @@ impl Fuel {
             Self::Exists => 50,
             Self::ExtendPathWithMatch(regexp_len) => 500 + 10 * regexp_len,
             Self::Set(value_len) | Self::Result(value_len) => 200 + 10 * value_len,
-            Self::DeleteMatchingPaths(regexp_len) => 1000 + 10 * regexp_len,
+            // ~one tombstone insert (200 base) + its eventual refund (200) per
+            // row, plus the value bytes re-written into each tombstone (10/byte).
+            Self::Delete(rows, bytes) => 200 + 400 * rows + 10 * bytes,
             Self::ContractAddress => 100,
             Self::ProcSigner | Self::ProcContractSigner | Self::ProcTransaction => 500,
             Self::ProcPayer | Self::ProcContract => 500,
@@ -335,6 +343,18 @@ mod tests {
             let cost = Fuel::Path(bytes.clone()).cost();
             prop_assert!(cost <= 10 * bytes.len() as u64);
         }
+    }
+
+    // A subtree delete must cost proportionally to the rows tombstoned and the
+    // bytes re-written — never the old flat `Set(0)`, which let a cheap call force
+    // unbounded work on every node.
+    #[test]
+    fn delete_cost_scales_with_rows_and_bytes() {
+        assert_eq!(Fuel::Delete(0, 0).cost(), 200);
+        assert_eq!(Fuel::Delete(3, 0).cost(), 200 + 400 * 3);
+        assert_eq!(Fuel::Delete(3, 50).cost(), 200 + 400 * 3 + 10 * 50);
+        // A real (non-empty) delete now costs strictly more than the old flat fee.
+        assert!(Fuel::Delete(2, 10).cost() > Fuel::Set(0).cost());
     }
 
     // A malformed guest path must not panic fuel metering (it used to `expect` a

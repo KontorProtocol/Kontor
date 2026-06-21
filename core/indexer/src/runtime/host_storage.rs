@@ -123,17 +123,29 @@ impl Runtime {
         candidates: Vec<Vec<u8>>,
     ) -> Result<u64> {
         validate_path(&base_path)?;
-        Fuel::DeleteMatchingPaths(candidates.len() as u64)
+        let contract_id = self.table.lock().await.get(&self_)?.get_contract_id();
+        // The rows deleted here are CURRENT-height (this block), bounded by what
+        // was already written-and-metered this op, so we size + delete, then meter
+        // by the actual rows (like `_delete`) and subtract the freed bytes from the
+        // footprint — the intra-block cleanup vanishes rows that were counted on
+        // write, so without this the net delta would be over-counted.
+        let (rows, freed) = self
+            .storage
+            .delete_matching_paths(contract_id, &base_path, &candidates)
+            .await?;
+        Fuel::Delete(rows, freed)
             .consume(accessor, self.gauge.as_ref())
             .await?;
-        let contract_id = self.table.lock().await.get(&self_)?.get_contract_id();
-        self.storage
-            .delete_matching_paths(contract_id, &base_path, &candidates)
-            .await
+        self.footprint.record_delta(-(freed as i64));
+        Ok(rows)
     }
 
-    /// Tombstone a single path. Metered like a write (it appends a deleted
-    /// version row). Returns true if a live value was removed.
+    /// Delete a key by tombstoning its WHOLE subtree (the node + every live
+    /// descendant — a struct/map value persists under child paths). Metered by the
+    /// subtree size: find the live rows first (a read), charge `Fuel::Delete` for
+    /// them, THEN write the tombstones — so an underfunded delete traps after only
+    /// the cheap read, never forcing the O(rows) writes. Returns true if a live
+    /// value was removed.
     pub(crate) async fn _delete<S, T: HasContractId>(
         &self,
         accessor: &Accessor<S, Self>,
@@ -141,9 +153,16 @@ impl Runtime {
         path: Vec<u8>,
     ) -> Result<bool> {
         validate_path(&path)?;
-        Fuel::Set(0).consume(accessor, self.gauge.as_ref()).await?;
         let contract_id = self.table.lock().await.get(&self_)?.get_contract_id();
-        let (removed, freed) = self.storage.delete(contract_id, &path).await?;
+        let rows = self.storage.find_live_subtree(contract_id, &path).await?;
+        let bytes: u64 = rows
+            .iter()
+            .map(|r| (r.path.len() + r.value.len()) as u64)
+            .sum();
+        Fuel::Delete(rows.len() as u64, bytes)
+            .consume(accessor, self.gauge.as_ref())
+            .await?;
+        let (removed, freed) = self.storage.tombstone_rows(rows).await?;
         self.footprint.record_delta(-(freed as i64));
         Ok(removed)
     }

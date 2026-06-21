@@ -11,10 +11,10 @@ use wit_component::{ComponentEncoder, WitPrinter};
 use crate::{
     database::{
         queries::{
-            create_contract_signer, delete_contract_state, delete_matching_paths,
-            exists_contract_state, get_contract_address_from_id, get_contract_bytes_by_id,
+            create_contract_signer, delete_matching_paths, exists_contract_state,
+            find_live_subtree, get_contract_address_from_id, get_contract_bytes_by_id,
             get_contract_id_from_address, get_latest_contract_state_size,
-            get_latest_contract_state_value, insert_contract,
+            get_latest_contract_state_value, insert_contract, tombstone_rows,
             insert_contract_result, insert_contract_state, matching_path,
             path_prefix_filter_contract_state, prune_contract_state, select_block_at_height,
         },
@@ -91,18 +91,22 @@ impl Storage {
         Ok(())
     }
 
-    /// Tombstone `path`'s subtree. Returns `(removed, freed_bytes)` — whether a
-    /// live value was removed, and the live bytes (path + value) freed, which the
-    /// footprint accumulator subtracts.
-    pub async fn delete(&self, contract_id: u64, path: &[u8]) -> Result<(bool, u64)> {
-        Ok(delete_contract_state(
-            &self.conn,
-            self.height,
-            self.effective_tx_id(),
-            contract_id,
-            path,
-        )
-        .await?)
+    /// The read half of a delete: the live rows of `path`'s subtree (node + every
+    /// live descendant), materialised. Split from the tombstone writes so the host
+    /// can meter `Fuel::Delete` by the row count BEFORE committing to the writes.
+    pub async fn find_live_subtree(
+        &self,
+        contract_id: u64,
+        path: &[u8],
+    ) -> Result<Vec<ContractStateRow>> {
+        Ok(find_live_subtree(&self.conn, contract_id, path).await?)
+    }
+
+    /// The write half of a delete: tombstone the given (already-metered) rows.
+    /// Returns `(removed, freed_bytes)` — the footprint accumulator subtracts the
+    /// freed bytes.
+    pub async fn tombstone_rows(&self, rows: Vec<ContractStateRow>) -> Result<(bool, u64)> {
+        Ok(tombstone_rows(&self.conn, self.height, self.effective_tx_id(), rows).await?)
     }
 
     /// The live value's stored byte length for `path`, or `None` if no live
@@ -128,12 +132,15 @@ impl Storage {
         Ok(matching_path(&self.conn, contract_id, base_path, candidates).await?)
     }
 
+    /// Hard-delete intra-block rows under any of `candidates`. Returns
+    /// `(rows_deleted, freed_bytes)` — the footprint accumulator subtracts the
+    /// freed bytes.
     pub async fn delete_matching_paths(
         &self,
         contract_id: u64,
         base_path: &[u8],
         candidates: &[Vec<u8>],
-    ) -> Result<u64> {
+    ) -> Result<(u64, u64)> {
         Ok(
             delete_matching_paths(&self.conn, contract_id, self.height, base_path, candidates)
                 .await?,

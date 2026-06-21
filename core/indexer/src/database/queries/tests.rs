@@ -1193,7 +1193,7 @@ async fn test_map_keys() -> Result<()> {
     assert_eq!(paths[1], cs_path(&["key1"]));
     assert_eq!(paths[2], cs_path(&["key2"]));
 
-    let result = delete_matching_paths(
+    let (rows_deleted, _freed) = delete_matching_paths(
         &conn,
         contract_id,
         height,
@@ -1201,7 +1201,7 @@ async fn test_map_keys() -> Result<()> {
         &cands(&["key0"]),
     )
     .await?;
-    assert_eq!(result, 2);
+    assert_eq!(rows_deleted, 2);
 
     Ok(())
 }
