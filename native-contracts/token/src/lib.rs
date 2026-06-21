@@ -12,17 +12,19 @@ const DEV_MINT_CAP: u64 = 1000;
 #[derive(Clone, Default, StorageRoot)]
 struct TokenStorage {
     pub ledger: Map<Holder, Decimal>,
-    /// Storage-deposit footprint: total live bytes each holder occupies across
-    /// all contracts (the host reports the per-op net delta via `settle`). Backs
-    /// the floor `balance >= footprint * D`. A whole byte count, held as `Decimal`
-    /// so the floor compares in the ledger's numeric domain without conversion.
-    pub footprint: Map<Holder, Decimal>,
     pub total_supply: Decimal,
     /// Whether the public dev/test `mint` is permitted. Set once at `init` from
     /// the chain `network()` — on for signet/testnet/regtest (faucet), off on
     /// mainnet (the only KOR mint path there is protocol emissions via
     /// `issuance`).
     pub dev_mint_enabled: bool,
+    /// Storage-deposit footprint: total live bytes each holder occupies across
+    /// all contracts (the host reports the per-op net delta via `settle`). Backs
+    /// the floor `balance >= footprint * D`. A whole byte count, held as `Decimal`
+    /// so the floor compares in the ledger's numeric domain without conversion.
+    /// Appended LAST so the interned field ids of the existing fields stay fixed
+    /// (positional dict-refs — see `golden_field_names_are_interned_in_contract_state`).
+    pub footprint: Map<Holder, Decimal>,
 }
 
 fn utxo_holder(out_point: context::OutPoint) -> Holder {
@@ -47,7 +49,7 @@ fn storage_deposit_rate() -> Result<Decimal, Error> {
 
 /// Apply a signed byte delta to a holder's footprint, clamping at zero. A correct
 /// net never frees more than exists, but the `delete_matching_paths` gap (see the
-/// host `FootprintMeter`) can transiently over-subtract — never let footprint go
+/// host `FootprintGauge`) can transiently over-subtract — never let footprint go
 /// negative.
 fn apply_footprint_delta(current: Decimal, delta: i64) -> Result<Decimal, Error> {
     if delta >= 0 {

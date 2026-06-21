@@ -112,7 +112,7 @@ use crate::database::native_contracts::{NATIVE_CONTRACTS, is_native_contract_id}
 use crate::database::types::CORE_SIGNER_ID;
 use crate::runtime::{
     counter::Counter,
-    footprint::FootprintMeter,
+    footprint::FootprintGauge,
     fuel::FuelGauge,
     stack::{CallFrame, Stack},
     wit::Signer,
@@ -183,7 +183,7 @@ pub struct Runtime {
     /// Transient per-op accumulator of storage bytes written, attributed to the
     /// op's payer. Observation only (storage-deposit phase 0); reset at the
     /// top-level op start, read at the settle boundary.
-    pub footprint: FootprintMeter,
+    pub footprint: FootprintGauge,
     pub gas_limit_for_non_procs: u64,
     pub gas_to_fuel_multiplier: u64,
     pub gas_to_token_multiplier: Decimal,
@@ -261,7 +261,7 @@ impl Runtime {
             result_id_counter: Counter::new(),
             stack: Stack::new(),
             gauge: Some(FuelGauge::new()),
-            footprint: FootprintMeter::new(),
+            footprint: FootprintGauge::new(),
             gas_limit_for_non_procs: 100_000,
             gas_to_fuel_multiplier: 1_000,
             gas_to_token_multiplier: Decimal::from("1e-9"),

@@ -144,7 +144,7 @@ impl Runtime {
         Fuel::Set(0).consume(accessor, self.gauge.as_ref()).await?;
         let contract_id = self.table.lock().await.get(&self_)?.get_contract_id();
         let (removed, freed) = self.storage.delete(contract_id, &path).await?;
-        self.footprint.record_delta(-(freed as i64)).await;
+        self.footprint.record_delta(-(freed as i64));
         Ok(removed)
     }
 
@@ -172,7 +172,7 @@ impl Runtime {
             None => (path.len() + bs.len()) as i64,
             Some(old_value_len) => bs.len() as i64 - old_value_len as i64,
         };
-        self.footprint.record_delta(delta).await;
+        self.footprint.record_delta(delta);
         self.storage.set(contract_id, &path, bs).await
     }
 }

@@ -316,7 +316,7 @@ impl Runtime {
             // Start this top-level op's footprint accumulator clean — after the
             // hold's own ledger writes, before any of the op's storage writes.
             // Gated to top-level so nested cross-contract calls don't reset it.
-            self.footprint.reset().await;
+            self.footprint.reset();
         }
 
         self.stack
@@ -498,7 +498,7 @@ impl Runtime {
             // release. Observation only for now (storage-deposit phase 0) — no
             // floor is enforced yet; this is the number a later `settle` step
             // will fold into the payer's footprint.
-            let footprint_bytes = self.footprint.net().await;
+            let footprint_bytes = self.footprint.net();
             tracing::info!(
                 node = %self.node_label,
                 footprint_bytes,
