@@ -313,6 +313,10 @@ impl Runtime {
                     e
                 ))
             })?;
+            // Start this top-level op's footprint accumulator clean — after the
+            // hold's own ledger writes, before any of the op's storage writes.
+            // Gated to top-level so nested cross-contract calls don't reset it.
+            self.footprint.reset().await;
         }
 
         self.stack
@@ -490,6 +494,19 @@ impl Runtime {
         if is_op_result && !signer.is_core() {
             let payment = payment.expect("payment required for op-result release");
             let payer = Signer::Id(Identity::new(payment.signer_id));
+            // Settle boundary: read the op's net footprint delta before gas
+            // release. Observation only for now (storage-deposit phase 0) — no
+            // floor is enforced yet; this is the number a later `settle` step
+            // will fold into the payer's footprint.
+            let footprint_bytes = self.footprint.net().await;
+            tracing::info!(
+                node = %self.node_label,
+                footprint_bytes,
+                payer = ?payer,
+                contract = %contract_address,
+                func = func_name,
+                "Footprint observed"
+            );
             let burn_amount = Decimal::try_from(gas)
                 .expect("u64 to decimal")
                 .mul(self.gas_to_token_multiplier)

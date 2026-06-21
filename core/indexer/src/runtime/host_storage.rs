@@ -162,6 +162,10 @@ impl Runtime {
         Fuel::Set(bs.len() as u64)
             .consume(accessor, self.gauge.as_ref())
             .await?;
+        // Observe the bytes this write occupies (path + value) for the op's
+        // footprint accumulator. Gross-on-write for now — the old live size on
+        // an overwrite is a later refinement (see FootprintMeter).
+        self.footprint.record_write(path.len(), bs.len()).await;
         self.storage.set(contract_id, &path, bs).await
     }
 }
