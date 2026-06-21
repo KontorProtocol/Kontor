@@ -31,6 +31,12 @@ world root {
   export issue-to: async func(ctx: borrow<core-context>, dst: holder-ref, amt: decimal) -> result<mint, error>;
   export hold: async func(ctx: borrow<core-context>, amt: decimal) -> result<transfer, error>;
   export release: async func(ctx: borrow<core-context>, burn-amt: decimal) -> result<burn, error>;
+  // Storage-deposit settlement (privileged, core-context only — like hold/release).
+  // Applies the op's net footprint byte-delta to the payer and enforces the floor
+  // `balance + pending-credit >= footprint * D`. `pending-credit` is the gas refund
+  // the payer is about to receive (so the floor sees the post-refund balance). A
+  // floor violation returns Err — the caller reverts the op deterministically.
+  export settle: async func(ctx: borrow<core-context>, footprint-delta: s64, pending-credit: decimal) -> result<_, error>;
 
   export init: async func(ctx: borrow<proc-context>) -> contract;
 
