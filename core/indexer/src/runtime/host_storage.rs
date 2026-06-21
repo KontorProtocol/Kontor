@@ -143,7 +143,9 @@ impl Runtime {
         validate_path(&path)?;
         Fuel::Set(0).consume(accessor, self.gauge.as_ref()).await?;
         let contract_id = self.table.lock().await.get(&self_)?.get_contract_id();
-        self.storage.delete(contract_id, &path).await
+        let (removed, freed) = self.storage.delete(contract_id, &path).await?;
+        self.footprint.record_delta(-(freed as i64)).await;
+        Ok(removed)
     }
 
     pub(crate) async fn _set_primitive<S, T: HasContractId, V: Serialize>(
@@ -162,10 +164,15 @@ impl Runtime {
         Fuel::Set(bs.len() as u64)
             .consume(accessor, self.gauge.as_ref())
             .await?;
-        // Observe the bytes this write occupies (path + value) for the op's
-        // footprint accumulator. Gross-on-write for now — the old live size on
-        // an overwrite is a later refinement (see FootprintMeter).
-        self.footprint.record_write(path.len(), bs.len()).await;
+        // Net footprint delta for the op's accumulator. A new key adds its whole
+        // row (path + value); an overwrite keeps the same path, so only the value
+        // length changes (new − old). One size-only point-read of the live value
+        // (see `latest_size`) distinguishes the two and supplies the old length.
+        let delta = match self.storage.latest_size(contract_id, &path).await? {
+            None => (path.len() + bs.len()) as i64,
+            Some(old_value_len) => bs.len() as i64 - old_value_len as i64,
+        };
+        self.footprint.record_delta(delta).await;
         self.storage.set(contract_id, &path, bs).await
     }
 }

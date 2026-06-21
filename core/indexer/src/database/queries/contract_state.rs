@@ -187,6 +187,32 @@ pub async fn get_latest_contract_state(
     Ok(rows.next().await?.map(|r| from_row(&r)).transpose()?)
 }
 
+/// The live value's stored byte length for one path (the `size` column =
+/// `value.len()`), or `None` if no live version exists. Size-only — used by the
+/// storage-deposit footprint accumulator to net an overwrite (`new − old`)
+/// without deserializing the old value. Same live-latest semantics as
+/// [`get_latest_contract_state_value`], minus the fuel gate (the read is host
+/// bookkeeping, not a metered guest get).
+pub async fn get_latest_contract_state_size(
+    conn: &Connection,
+    contract_id: u64,
+    path: &[u8],
+) -> Result<Option<u64>, Error> {
+    let mut rows = conn
+        .query(
+            &live_latest(
+                "size",
+                "contract_id = :contract_id AND path = :path",
+            ),
+            (
+                (":contract_id", contract_id),
+                (":path", Value::Blob(path.to_vec())),
+            ),
+        )
+        .await?;
+    Ok(rows.next().await?.map(|r| r.get::<u64>(0)).transpose()?)
+}
+
 pub async fn get_latest_contract_state_value(
     conn: &Connection,
     fuel: u64,
@@ -223,15 +249,18 @@ pub async fn get_latest_contract_state_value(
 /// live primary rows behind while the caller (`Map`/`IndexedMap` `remove`) has
 /// already cleared the index — a half-removed entry. Height-versioned (one
 /// `deleted = true` row per live path at the current height), so reorg-safe.
-/// Returns true if any live row was tombstoned. The subtree is the byte range
-/// `[path, strinc(path))` (the node + every descendant share `path` as a prefix).
+/// Returns `(removed, freed_bytes)`: whether any live row was tombstoned, and the
+/// total live bytes (path + value, summed over every tombstoned row) the delete
+/// freed — the storage-deposit footprint accumulator subtracts this. The subtree
+/// is the byte range `[path, strinc(path))` (the node + every descendant share
+/// `path` as a prefix).
 pub async fn delete_contract_state(
     conn: &Connection,
     height: u64,
     tx_id: Option<u64>,
     contract_id: u64,
     path: &[u8],
-) -> Result<bool, Error> {
+) -> Result<(bool, u64), Error> {
     // Every live path at/under `path`, re-inserted as a tombstone below.
     // `live_latest` skips an already-tombstoned path (its latest version isn't
     // live), so it's not re-tombstoned.
@@ -254,13 +283,19 @@ pub async fn delete_contract_state(
     }
 
     let removed = !live.is_empty();
+    // Bytes freed = path + value of every live row being tombstoned (footprint
+    // counts path + value; `size` alone omits the key bytes).
+    let freed: u64 = live
+        .iter()
+        .map(|r| (r.path.len() + r.value.len()) as u64)
+        .sum();
     for mut row in live {
         row.deleted = true;
         row.height = height;
         row.tx_id = tx_id;
         insert_contract_state(conn, row).await?;
     }
-    Ok(removed)
+    Ok((removed, freed))
 }
 
 pub async fn exists_contract_state(

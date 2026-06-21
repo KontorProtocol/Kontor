@@ -492,7 +492,7 @@ async fn test_contract_state_operations() -> Result<()> {
     assert_eq!(latest_value, updated_value);
 
     // Delete the contract state
-    let deleted = delete_contract_state(&conn, height2, Some(tx_id2), contract_id, &path).await?;
+    let (deleted, _) = delete_contract_state(&conn, height2, Some(tx_id2), contract_id, &path).await?;
     assert!(deleted);
 
     let count = conn
@@ -515,6 +515,69 @@ async fn test_contract_state_operations() -> Result<()> {
     let latest_state = get_latest_contract_state(&conn, contract_id, &path).await?;
     assert!(latest_state.is_none());
 
+    Ok(())
+}
+
+// `get_latest_contract_state_size` backs the footprint accumulator's overwrite
+// netting: it must report the LIVE value's byte length (and `None` when absent or
+// tombstoned), tracking the latest version across overwrites.
+#[tokio::test]
+async fn test_latest_size_tracks_live_value() -> Result<()> {
+    let (_reader, writer, _temp_dir) = new_test_db().await?;
+    let conn = writer.connection();
+    let cid = 77;
+    let height = 800000u64;
+    insert_block(
+        &conn,
+        BlockRow::builder()
+            .height(height)
+            .hash(new_mock_block_hash(height as u32))
+            .build(),
+    )
+    .await?;
+    let tx = insert_transaction(
+        &conn,
+        TransactionRow::builder()
+            .height(height)
+            .txid(format!("bbbb{:060}", 0))
+            .tx_index(0)
+            .confirmed_height(height)
+            .build(),
+    )
+    .await?;
+    let path = cs_path(&["m", "k"]);
+    let set = async |value: Vec<u8>| -> Result<()> {
+        insert_contract_state(
+            &conn,
+            ContractStateRow::builder()
+                .contract_id(cid)
+                .tx_id(tx)
+                .height(height)
+                .path(path.clone())
+                .value(value)
+                .build(),
+        )
+        .await?;
+        Ok(())
+    };
+
+    // Absent → None.
+    assert_eq!(get_latest_contract_state_size(&conn, cid, &path).await?, None);
+    // Create a 4-byte value → Some(4).
+    set(vec![1, 2, 3, 4]).await?;
+    assert_eq!(
+        get_latest_contract_state_size(&conn, cid, &path).await?,
+        Some(4)
+    );
+    // Overwrite with a 1-byte value (same height replaces) → Some(1).
+    set(vec![9]).await?;
+    assert_eq!(
+        get_latest_contract_state_size(&conn, cid, &path).await?,
+        Some(1)
+    );
+    // Tombstone → None (the post-`deleted` liveness rule).
+    delete_contract_state(&conn, height, Some(tx), cid, &path).await?;
+    assert_eq!(get_latest_contract_state_size(&conn, cid, &path).await?, None);
     Ok(())
 }
 
@@ -571,9 +634,20 @@ async fn test_delete_tombstones_whole_subtree() -> Result<()> {
     insert(&["m", "k", "nested", "inner"]).await?;
     insert(&["m", "k2", "field1"]).await?;
 
-    let removed =
+    let (removed, freed) =
         delete_contract_state(&conn, height, Some(tx), cid, &cs_path(&["m", "k"])).await?;
     assert!(removed, "the subtree had live rows to tombstone");
+    // Freed bytes = path + value (1 byte each) of every tombstoned row in the
+    // subtree — the three `m/k/*` rows, not the surviving `m/k2` sibling.
+    let expected_freed: u64 = [
+        cs_path(&["m", "k", "field1"]),
+        cs_path(&["m", "k", "field2"]),
+        cs_path(&["m", "k", "nested", "inner"]),
+    ]
+    .iter()
+    .map(|p| (p.len() + 1) as u64)
+    .sum();
+    assert_eq!(freed, expected_freed);
 
     // Every descendant of `m/k` is gone (not just the exact path).
     assert!(!exists_contract_state(&conn, cid, &cs_path(&["m", "k"])).await?);
@@ -597,7 +671,7 @@ async fn test_delete_tombstones_whole_subtree() -> Result<()> {
     );
 
     // A second remove finds nothing live → no-op, returns false.
-    assert!(!delete_contract_state(&conn, height, Some(tx), cid, &cs_path(&["m", "k"])).await?);
+    assert!(!delete_contract_state(&conn, height, Some(tx), cid, &cs_path(&["m", "k"])).await?.0);
 
     Ok(())
 }
@@ -1287,7 +1361,7 @@ async fn test_empty_path_is_whole_keyspace_not_panic() -> Result<()> {
     // `matching_path` at the root must not panic.
     let _ = matching_path(&conn, cid, &[], &cands(&["none", "some"])).await?;
     // Deleting the empty subtree tombstones the whole keyspace.
-    assert!(delete_contract_state(&conn, height + 1, Some(tx), cid, &[]).await?);
+    assert!(delete_contract_state(&conn, height + 1, Some(tx), cid, &[]).await?.0);
     assert!(!exists_contract_state(&conn, cid, &[]).await?);
 
     Ok(())

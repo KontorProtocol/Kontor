@@ -13,7 +13,8 @@ use crate::{
         queries::{
             create_contract_signer, delete_contract_state, delete_matching_paths,
             exists_contract_state, get_contract_address_from_id, get_contract_bytes_by_id,
-            get_contract_id_from_address, get_latest_contract_state_value, insert_contract,
+            get_contract_id_from_address, get_latest_contract_state_size,
+            get_latest_contract_state_value, insert_contract,
             insert_contract_result, insert_contract_state, matching_path,
             path_prefix_filter_contract_state, prune_contract_state, select_block_at_height,
         },
@@ -90,7 +91,10 @@ impl Storage {
         Ok(())
     }
 
-    pub async fn delete(&self, contract_id: u64, path: &[u8]) -> Result<bool> {
+    /// Tombstone `path`'s subtree. Returns `(removed, freed_bytes)` — whether a
+    /// live value was removed, and the live bytes (path + value) freed, which the
+    /// footprint accumulator subtracts.
+    pub async fn delete(&self, contract_id: u64, path: &[u8]) -> Result<(bool, u64)> {
         Ok(delete_contract_state(
             &self.conn,
             self.height,
@@ -99,6 +103,13 @@ impl Storage {
             path,
         )
         .await?)
+    }
+
+    /// The live value's stored byte length for `path`, or `None` if no live
+    /// version exists. Backs the footprint accumulator's net-delta computation on
+    /// overwrite (see `_set_primitive`).
+    pub async fn latest_size(&self, contract_id: u64, path: &[u8]) -> Result<Option<u64>> {
+        Ok(get_latest_contract_state_size(&self.conn, contract_id, path).await?)
     }
 
     pub async fn exists(&self, contract_id: u64, path: &[u8]) -> Result<bool> {
