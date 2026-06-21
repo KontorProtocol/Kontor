@@ -56,6 +56,11 @@ CREATE TABLE IF NOT EXISTS contract_state (
   -- refund target. NULL for tombstones and Core/system writes (no deposit). A
   -- deterministic rowid like contract_id, so safe in the checkpoint hash.
   depositor INTEGER,
+  -- The deposit locked for this row = (path + value bytes) × D, as a decimal
+  -- string (future-proof for fractional D). The exact amount refunded when the
+  -- row is freed. NULL when there's no depositor. At D=1 this equals path+value
+  -- bytes. Consensus state (drives refunds), so hashed in the checkpoint.
+  deposited_amount TEXT,
   UNIQUE (contract_id, height, path),
   FOREIGN KEY (height) REFERENCES blocks (height) ON DELETE CASCADE,
   FOREIGN KEY (tx_id) REFERENCES transactions (id),

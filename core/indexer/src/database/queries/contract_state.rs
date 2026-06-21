@@ -151,8 +151,9 @@ pub async fn insert_contract_state(conn: &Connection, row: ContractStateRow) -> 
                 path,
                 value,
                 deleted,
-                depositor
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                depositor,
+                deposited_amount
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
         "#,
             params![
                 row.contract_id,
@@ -162,7 +163,8 @@ pub async fn insert_contract_state(conn: &Connection, row: ContractStateRow) -> 
                 row.path,
                 row.value,
                 row.deleted,
-                row.depositor.map(Value::try_from).transpose()?
+                row.depositor.map(Value::try_from).transpose()?,
+                row.deposited_amount
             ],
         )
         .await?)
@@ -176,7 +178,7 @@ pub async fn get_latest_contract_state(
     let mut rows = conn
         .query(
             &live_latest(
-                "contract_id, height, tx_id, path, value, deleted, depositor",
+                "contract_id, height, tx_id, path, value, deleted, depositor, deposited_amount",
                 "contract_id = :contract_id AND path = :path",
             ),
             (
@@ -256,6 +258,9 @@ pub struct DeletableRow {
     /// Who deposited for this row — the refund target when it's freed. `None` for
     /// Core/system writes (no deposit to refund).
     pub depositor: Option<u64>,
+    /// The exact amount to refund the depositor (decimal string). `None` when
+    /// there is no depositor.
+    pub deposited_amount: Option<String>,
 }
 
 /// The live rows of a subtree (the node + every live descendant) — `(path, size)`
@@ -274,7 +279,7 @@ pub async fn find_live_subtree(
         Value::Integer(contract_id as i64),
     ));
     let query = live_latest(
-        "path, size, depositor",
+        "path, size, depositor, deposited_amount",
         &format!("contract_id = :contract_id AND {range}"),
     );
     let mut result = conn.query(&query, params).await?;
@@ -284,6 +289,7 @@ pub async fn find_live_subtree(
             path: row.get::<Vec<u8>>(0)?,
             size: row.get::<u64>(1)?,
             depositor: row.get::<Option<u64>>(2)?,
+            deposited_amount: row.get::<Option<String>>(3)?,
         });
     }
     Ok(rows)

@@ -165,6 +165,10 @@ pub struct ContractStateRow {
     /// refund target. `None` for tombstones and Core/system writes (Option implies
     /// a `None` builder default).
     pub depositor: Option<u64>,
+    /// The deposit locked for this row = (path + value bytes) × D, as a decimal
+    /// string; the exact amount refunded when the row is freed. `None` when there
+    /// is no depositor.
+    pub deposited_amount: Option<String>,
 }
 
 impl ContractStateRow {

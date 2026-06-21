@@ -22,13 +22,15 @@ fn calculate_row_hash(state: &ContractStateRow) -> String {
     // field's charset) so the digest is unambiguous. A NULL depositor renders as
     // empty (SQLite `concat` treats NULL as '').
     let depositor_part = state.depositor.map(|d| d.to_string()).unwrap_or_default();
+    let amount_part = state.deposited_amount.clone().unwrap_or_default();
     let input = format!(
-        "{}|{}|{}|{}|{}",
+        "{}|{}|{}|{}|{}|{}",
         state.contract_id,
         path_part,
         value_part,
         if state.deleted { "1" } else { "0" },
         depositor_part,
+        amount_part,
     );
     let mut hasher = Sha256::new();
     hasher.update(input.as_bytes());
@@ -624,6 +626,7 @@ async fn test_depositor_roundtrips_and_tombstone_clears_it() -> Result<()> {
             .path(path.clone())
             .value(vec![1, 2, 3])
             .depositor(sid)
+            .deposited_amount("42".to_string())
             .build(),
     )
     .await?;
@@ -631,10 +634,12 @@ async fn test_depositor_roundtrips_and_tombstone_clears_it() -> Result<()> {
     // Round-trips through the latest-state read…
     let row = get_latest_contract_state(&conn, cid, &path).await?.unwrap();
     assert_eq!(row.depositor, Some(sid));
-    // …and the delete find surfaces it (refund target).
+    assert_eq!(row.deposited_amount.as_deref(), Some("42"));
+    // …and the delete find surfaces both (refund target + amount).
     let found = find_live_subtree(&conn, cid, &path).await?;
     assert_eq!(found.len(), 1);
     assert_eq!(found[0].depositor, Some(sid));
+    assert_eq!(found[0].deposited_amount.as_deref(), Some("42"));
 
     // Tombstone (same height → replaces the live row) carries no depositor.
     delete_contract_state(&conn, height, Some(tx), cid, &path).await?;

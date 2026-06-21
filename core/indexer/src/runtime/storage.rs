@@ -86,6 +86,12 @@ impl Storage {
         value: &[u8],
         depositor: Option<u64>,
     ) -> Result<()> {
+        // The deposit locked for this row = (path + value bytes) × D, the amount
+        // refunded when it's freed. Only rows with a depositor carry one. D is
+        // fixed at 1 today, so amount == path + value bytes; when D goes dynamic
+        // the rate must be plumbed here to scale it.
+        let deposited_amount =
+            depositor.map(|_| (path.len() + value.len()).to_string());
         insert_contract_state(
             &self.conn,
             ContractStateRow::builder()
@@ -95,6 +101,7 @@ impl Storage {
                 .path(path.to_vec())
                 .value(value.to_vec())
                 .maybe_depositor(depositor)
+                .maybe_deposited_amount(deposited_amount)
                 .build(),
         )
         .await?;

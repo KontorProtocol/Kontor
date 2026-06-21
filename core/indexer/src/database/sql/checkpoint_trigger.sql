@@ -26,7 +26,11 @@ VALUES
                   '|',
                   -- depositor is a deterministic rowid (or NULL → '' here); the
                   -- refund target is consensus state, so it must be hashed.
-                  NEW.depositor
+                  NEW.depositor,
+                  '|',
+                  -- the deposit amount (decimal string, no `|` in its charset, or
+                  -- NULL → '') drives the refund, so it's hashed too.
+                  NEW.deposited_amount
                 )
               )
             ) AS hash
