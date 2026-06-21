@@ -1193,7 +1193,8 @@ async fn test_map_keys() -> Result<()> {
     assert_eq!(paths[1], cs_path(&["key1"]));
     assert_eq!(paths[2], cs_path(&["key2"]));
 
-    let (rows_deleted, _freed) = delete_matching_paths(
+    // The read half tallies the rows the delete will remove (for metering)…
+    let (rows, _bytes) = count_matching_paths(
         &conn,
         contract_id,
         height,
@@ -1201,7 +1202,17 @@ async fn test_map_keys() -> Result<()> {
         &cands(&["key0"]),
     )
     .await?;
-    assert_eq!(rows_deleted, 2);
+    assert_eq!(rows, 2);
+    // …and the write half removes exactly those rows.
+    let deleted = hard_delete_matching_paths(
+        &conn,
+        contract_id,
+        height,
+        &cs_path_dotted("test.path"),
+        &cands(&["key0"]),
+    )
+    .await?;
+    assert_eq!(deleted, 2);
 
     Ok(())
 }

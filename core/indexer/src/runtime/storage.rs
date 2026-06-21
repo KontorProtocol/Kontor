@@ -11,10 +11,11 @@ use wit_component::{ComponentEncoder, WitPrinter};
 use crate::{
     database::{
         queries::{
-            create_contract_signer, delete_matching_paths, exists_contract_state,
+            count_matching_paths, create_contract_signer, exists_contract_state,
             find_live_subtree, get_contract_address_from_id, get_contract_bytes_by_id,
             get_contract_id_from_address, get_latest_contract_state_size,
-            get_latest_contract_state_value, insert_contract, tombstone_rows,
+            get_latest_contract_state_value, hard_delete_matching_paths, insert_contract,
+            tombstone_rows,
             insert_contract_result, insert_contract_state, matching_path,
             path_prefix_filter_contract_state, prune_contract_state, select_block_at_height,
         },
@@ -132,17 +133,30 @@ impl Storage {
         Ok(matching_path(&self.conn, contract_id, base_path, candidates).await?)
     }
 
-    /// Hard-delete intra-block rows under any of `candidates`. Returns
-    /// `(rows_deleted, freed_bytes)` — the footprint accumulator subtracts the
-    /// freed bytes.
-    pub async fn delete_matching_paths(
+    /// Read half of the intra-block variant hard-delete: tally `(rows, bytes)` so
+    /// the host can meter before the writes.
+    pub async fn count_matching_paths(
         &self,
         contract_id: u64,
         base_path: &[u8],
         candidates: &[Vec<u8>],
     ) -> Result<(u64, u64)> {
         Ok(
-            delete_matching_paths(&self.conn, contract_id, self.height, base_path, candidates)
+            count_matching_paths(&self.conn, contract_id, self.height, base_path, candidates)
+                .await?,
+        )
+    }
+
+    /// Write half: hard-delete the (already-metered) intra-block rows under any of
+    /// `candidates`. Returns the rows removed.
+    pub async fn hard_delete_matching_paths(
+        &self,
+        contract_id: u64,
+        base_path: &[u8],
+        candidates: &[Vec<u8>],
+    ) -> Result<u64> {
+        Ok(
+            hard_delete_matching_paths(&self.conn, contract_id, self.height, base_path, candidates)
                 .await?,
         )
     }

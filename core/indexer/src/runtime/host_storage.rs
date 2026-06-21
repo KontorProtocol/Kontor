@@ -124,20 +124,23 @@ impl Runtime {
     ) -> Result<u64> {
         validate_path(&base_path)?;
         let contract_id = self.table.lock().await.get(&self_)?.get_contract_id();
-        // The rows deleted here are CURRENT-height (this block), bounded by what
-        // was already written-and-metered this op, so we size + delete, then meter
-        // by the actual rows (like `_delete`) and subtract the freed bytes from the
-        // footprint — the intra-block cleanup vanishes rows that were counted on
-        // write, so without this the net delta would be over-counted.
+        // Meter BEFORE the writes (like `_delete`): tally the matching rows, charge
+        // `Fuel::Delete`, THEN hard-delete. The intra-block cleanup vanishes rows
+        // that were counted on write, so subtract the freed bytes from the footprint
+        // too, or the net delta over-counts.
         let (rows, freed) = self
             .storage
-            .delete_matching_paths(contract_id, &base_path, &candidates)
+            .count_matching_paths(contract_id, &base_path, &candidates)
             .await?;
         Fuel::Delete(rows, freed)
             .consume(accessor, self.gauge.as_ref())
             .await?;
+        let deleted = self
+            .storage
+            .hard_delete_matching_paths(contract_id, &base_path, &candidates)
+            .await?;
         self.footprint.record_delta(-(freed as i64));
-        Ok(rows)
+        Ok(deleted)
     }
 
     /// Delete a key by tombstoning its WHOLE subtree (the node + every live

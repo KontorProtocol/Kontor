@@ -487,57 +487,81 @@ pub async fn matching_path(
 /// it deliberately does NOT touch earlier-height rows. Each `candidate` is an
 /// already-encoded discriminant element, so the subtree is `base_path ++ candidate`
 /// — a per-candidate current-height range delete.
-/// Returns `(rows_deleted, freed_bytes)`. The freed bytes (path + value of every
-/// hard-deleted row) let the footprint accumulator subtract them — without this
-/// the intra-block variant cleanup would leave footprint over-counted (the rows
-/// vanish but were never deducted). Sizing the rows means a read before the
-/// delete (can't read+write `contract_state` in one statement).
-pub async fn delete_matching_paths(
+/// The current-height (`:height`) WHERE fragment + params for the subtree under
+/// `base_path ++ candidate`. Shared by the count (read) and hard-delete (write)
+/// halves so they target identical rows.
+fn matching_paths_clause(
+    contract_id: u64,
+    height: u64,
+    base_path: &[u8],
+    candidate: &[u8],
+) -> (String, Vec<(String, Value)>) {
+    let mut prefix = base_path.to_vec();
+    prefix.extend_from_slice(candidate); // base_path ++ candidate element
+    let (range, mut params) = subtree_range(">=", &prefix);
+    params.push((
+        ":contract_id".to_string(),
+        Value::Integer(contract_id as i64),
+    ));
+    params.push((":height".to_string(), Value::Integer(height as i64)));
+    (
+        format!("contract_id = :contract_id AND height = :height AND {range}"),
+        params,
+    )
+}
+
+/// Read half of the intra-block variant hard-delete: tally the rows it WOULD
+/// remove — `(rows, bytes)` (path + value). Split from the delete so the host can
+/// meter `Fuel::Delete` BEFORE the writes, exactly like [`find_live_subtree`].
+pub async fn count_matching_paths(
     conn: &Connection,
     contract_id: u64,
     height: u64,
     base_path: &[u8],
     candidates: &[Vec<u8>],
 ) -> Result<(u64, u64), Error> {
-    let mut rows_deleted = 0u64;
-    let mut freed = 0u64;
+    let mut rows = 0u64;
+    let mut bytes = 0u64;
     for candidate in candidates {
-        let mut prefix = base_path.to_vec();
-        prefix.extend_from_slice(candidate); // base_path ++ candidate element
-        let (range, base_params) = subtree_range(">=", &prefix);
-        let mut params = base_params;
-        params.push((
-            ":contract_id".to_string(),
-            Value::Integer(contract_id as i64),
-        ));
-        params.push((":height".to_string(), Value::Integer(height as i64)));
-
+        let (where_clause, params) = matching_paths_clause(contract_id, height, base_path, candidate);
         let mut result = conn
             .query(
-                &format!(
-                    "SELECT path, value FROM contract_state \
-                     WHERE contract_id = :contract_id AND height = :height AND {range}"
-                ),
-                params.clone(),
+                &format!("SELECT path, value FROM contract_state WHERE {where_clause}"),
+                params,
             )
             .await?;
         while let Some(row) = result.next().await? {
             let path = row.get::<Vec<u8>>(0)?;
             let value = row.get::<Vec<u8>>(1)?;
-            freed += (path.len() + value.len()) as u64;
-            rows_deleted += 1;
+            bytes += (path.len() + value.len()) as u64;
+            rows += 1;
         }
-
-        conn.execute(
-            &format!(
-                "DELETE FROM contract_state \
-                 WHERE contract_id = :contract_id AND height = :height AND {range}"
-            ),
-            params,
-        )
-        .await?;
     }
-    Ok((rows_deleted, freed))
+    Ok((rows, bytes))
+}
+
+/// Write half: hard-delete the current-height rows under each candidate. Returns
+/// the rows removed. Caller must have already metered them (via
+/// [`count_matching_paths`]) — op execution is single-threaded in one
+/// transaction, so the count matches what this removes.
+pub async fn hard_delete_matching_paths(
+    conn: &Connection,
+    contract_id: u64,
+    height: u64,
+    base_path: &[u8],
+    candidates: &[Vec<u8>],
+) -> Result<u64, Error> {
+    let mut deleted = 0u64;
+    for candidate in candidates {
+        let (where_clause, params) = matching_paths_clause(contract_id, height, base_path, candidate);
+        deleted += conn
+            .execute(
+                &format!("DELETE FROM contract_state WHERE {where_clause}"),
+                params,
+            )
+            .await?;
+    }
+    Ok(deleted)
 }
 
 pub async fn contract_has_state(conn: &Connection, contract_id: u64) -> Result<bool, Error> {
