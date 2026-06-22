@@ -3,10 +3,22 @@ package root:component;
 world root {
 	include kontor:built-in/built-in;
 	use kontor:built-in/context.{view-context, proc-context, contract};
+	use kontor:built-in/error.{error};
 
 	export init: async func(ctx: borrow<proc-context>) -> contract;
 
 	export increment: async func(ctx: borrow<proc-context>);
 
 	export get: async func(ctx: borrow<view-context>) -> u64;
+
+	export get-blob: async func(ctx: borrow<view-context>) -> string;
+
+	// Write an `n`-byte value into one storage row, built internally from a small
+	// arg (so the op expr stays tiny). Deposit scales with the bytes written; a
+	// large enough `n` over-budgets the op's gas.
+	export fill-blob: async func(ctx: borrow<proc-context>, n: u32);
+
+	// Write the value, then deterministically fail — exercises deposit
+	// discard-on-revert (the rolled-back write must lock no deposit).
+	export set-blob-then-fail: async func(ctx: borrow<proc-context>, data: string) -> result<_, error>;
 }
