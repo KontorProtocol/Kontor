@@ -27,10 +27,20 @@ world root {
     amt: decimal,
   }
 
+  // One freed/displaced row's deposit owed back to the setter that paid it.
+  record deposit-refund {
+    setter: u64,
+    amt: decimal,
+  }
+
   export issuance: async func(ctx: borrow<core-context>, amt: decimal) -> result<mint, error>;
   export issue-to: async func(ctx: borrow<core-context>, dst: holder-ref, amt: decimal) -> result<mint, error>;
   export hold: async func(ctx: borrow<core-context>, amt: decimal) -> result<transfer, error>;
   export release: async func(ctx: borrow<core-context>, burn-amt: decimal) -> result<burn, error>;
+  // Storage-deposit settlement (core-only, not part of the common token
+  // interface): lock `charge` of the payer's escrow into the VAULT and refund
+  // freed/displaced rows' deposits to their original setters (by signer-id).
+  export settle: async func(ctx: borrow<core-context>, charge: decimal, refunds: list<deposit-refund>) -> result<_, error>;
 
   export init: async func(ctx: borrow<proc-context>) -> contract;
 

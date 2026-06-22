@@ -118,6 +118,27 @@ impl Guest for Token {
         })
     }
 
+    fn settle(ctx: &CoreContext, charge: Decimal, refunds: Vec<DepositRefund>) -> Result<(), Error> {
+        let proc = ctx.proc_context();
+        let zero = 0u64.try_into()?;
+        // Lock this op's new deposits: payer escrow (held in CORE) → VAULT. An
+        // insufficient escrow makes this transfer fail, which is exactly the
+        // per-op deposit cap — the whole op then reverts.
+        if charge > zero {
+            transfer(&proc, CORE(), VAULT(), charge)?;
+        }
+        // Refund freed/displaced rows to their original setters out of the VAULT,
+        // which by construction already holds these amounts (locked when those
+        // rows were first set).
+        for DepositRefund { setter, amt } in refunds {
+            if amt > zero {
+                let dst = Holder::from_ref(&HolderRef::SignerId(setter))?;
+                transfer(&proc, VAULT(), dst, amt)?;
+            }
+        }
+        Ok(())
+    }
+
     fn mint(ctx: &ProcContext, amt: Decimal) -> Result<Mint, Error> {
         // Public mint is a dev/test affordance only — off on mainnet (the flag is
         // set from `network()` at `init`). Protocol emissions mint via the

@@ -32,6 +32,11 @@ world root {
     amt: decimal,
   }
 
+  record deposit-refund {
+    setter: u64,
+    amt: decimal,
+  }
+
   export mint: async func(ctx: borrow<proc-context>, amt: decimal) -> result<mint, error>;
   export burn: async func(ctx: borrow<proc-context>, amt: decimal) -> result<burn, error>;
   export transfer: async func(ctx: borrow<proc-context>, dst: holder-ref, amt: decimal) -> result<transfer, error>;
