@@ -656,7 +656,7 @@ impl Runtime {
             expr,
             self.tx_context()
         );
-        let (
+        let crate::runtime::call::PreparedCall {
             store,
             contract_id,
             func_name,
@@ -665,8 +665,8 @@ impl Runtime {
             results,
             func,
             is_proc,
-            starting_fuel,
-        ) = self
+            fuel_limit: starting_fuel,
+        } = self
             .prepare_call(contract_address, signer, payment.as_ref(), expr, true, None)
             .await?;
         OptionFuture::from(

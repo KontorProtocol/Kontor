@@ -47,6 +47,21 @@ fn payer_holder(signer: &Signer, payment: Option<&Payment>) -> Holder {
     Holder::for_signer_id(signer_id)
 }
 
+/// Everything `prepare_call` produces for the caller to run + settle a call: the
+/// instantiated store, the resolved function with its lowered params/results, and
+/// the op metadata. A named struct in place of a positional 9-tuple.
+pub(crate) struct PreparedCall {
+    pub store: Store<Runtime>,
+    pub contract_id: u64,
+    pub func_name: String,
+    pub is_fallback: bool,
+    pub params: Vec<Val>,
+    pub results: Vec<Val>,
+    pub func: Func,
+    pub is_proc: bool,
+    pub fuel_limit: u64,
+}
+
 impl Runtime {
     pub(crate) async fn prepare_call(
         &self,
@@ -56,20 +71,7 @@ impl Runtime {
         expr: &str,
         is_top_level: bool,
         fuel_override: Option<u64>,
-    ) -> Result<
-        (
-            Store<Runtime>,
-            u64,
-            String,
-            bool,
-            Vec<Val>,
-            Vec<Val>,
-            Func,
-            bool,
-            u64,
-        ),
-        ExecutionError,
-    > {
+    ) -> Result<PreparedCall, ExecutionError> {
         // Reject an oversized/over-nested call expression BEFORE it reaches the
         // recursive WAVE parser (`parse_raw_func_call` below), which would
         // otherwise overflow the host stack and abort the node — a deterministic
@@ -361,17 +363,17 @@ impl Runtime {
         // with it: committed into the parent, discarded on rollback (handle_call).
         self.deposit.push_frame().await;
 
-        Ok((
+        Ok(PreparedCall {
             store,
             contract_id,
-            func_name.to_string(),
-            func_name == fallback_name,
+            func_name: func_name.to_string(),
+            is_fallback: func_name == fallback_name,
             params,
             results,
             func,
             is_proc,
             fuel_limit,
-        ))
+        })
     }
 
     /// Spawn the WASM call, catch panics, and handle the result.
@@ -633,8 +635,18 @@ impl Runtime {
                 .transpose()
                 .expect("Failed to lock table and get signer");
 
-        let (store, contract_id, func_name, is_fallback, params, results, func, is_proc, _fuel) =
-            self.prepare_call(
+        let PreparedCall {
+            store,
+            contract_id,
+            func_name,
+            is_fallback,
+            params,
+            results,
+            func,
+            is_proc,
+            fuel_limit: _,
+        } = self
+            .prepare_call(
                 contract_address,
                 signer.as_ref(),
                 None,
