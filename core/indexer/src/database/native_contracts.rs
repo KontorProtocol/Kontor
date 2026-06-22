@@ -24,3 +24,16 @@ pub const NATIVE_CONTRACTS: &[(&str, &[u8])] = &[
 pub fn is_native_contract_id(contract_id: u64) -> bool {
     contract_id >= 1 && (contract_id as usize) <= NATIVE_CONTRACTS.len()
 }
+
+/// The native token is published first → contract id 1. Its ledger denominates
+/// the storage deposit, so its own storage must be EXEMPT from deposits — else a
+/// token-ledger write would owe a token deposit, which is itself a token-ledger
+/// write (the recursion that forces the exemption). Bounded instead by gas.
+pub const TOKEN_CONTRACT_ID: u64 = 1;
+
+/// Whether writes to this contract are exempt from storage deposits. Only the
+/// native token (the deposit-denominating ledger) — every other contract, native
+/// or user, pays deposits to bound its growth.
+pub fn is_deposit_exempt(contract_id: u64) -> bool {
+    contract_id == TOKEN_CONTRACT_ID
+}

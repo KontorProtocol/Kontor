@@ -25,6 +25,7 @@ mod simulate_contract;
 mod simulate_errors;
 mod staking_contract;
 mod status_classification;
+mod storage_deposit;
 mod token_contract;
 mod token_gate;
 mod wit_contract;
@@ -69,6 +70,7 @@ testlib::regtest_tests! {
     simulate_contract,
     simulate_errors,
     status_classification,
+    storage_deposit,
     token_contract,
     wit_contract,
 }

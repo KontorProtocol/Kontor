@@ -34,6 +34,12 @@ pub enum Fuel {
     /// per-row term also pre-prices the eventual storage-deposit refund (one per
     /// row), so adding refunds later doesn't change the fee.
     Delete(u64, u64),
+    /// The storage DEPOSIT for a written row, expressed directly in fuel (the
+    /// payload IS the cost). It is a refundable slice of the op's gas budget — not
+    /// host work — so charging it here makes an unaffordable deposit trip the
+    /// same out-of-gas path as any other over-budget op. The caller computes the
+    /// amount from the runtime's gas→fuel rate (which `cost` can't see).
+    Deposit(u64),
     ContractAddress,
     ProcSigner,
     ProcPayer,
@@ -127,6 +133,7 @@ impl Fuel {
             // ~one tombstone insert (200 base) + its eventual refund (200) per
             // row, plus the value bytes re-written into each tombstone (10/byte).
             Self::Delete(rows, bytes) => 200 + 400 * rows + 10 * bytes,
+            Self::Deposit(fuel) => *fuel,
             Self::ContractAddress => 100,
             Self::ProcSigner | Self::ProcContractSigner | Self::ProcTransaction => 500,
             Self::ProcPayer | Self::ProcContract => 500,

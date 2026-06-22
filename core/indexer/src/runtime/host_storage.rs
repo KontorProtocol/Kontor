@@ -4,16 +4,25 @@ use anyhow::{Result, anyhow};
 use futures_util::future::OptionFuture;
 use indexer_types::deserialize;
 use serde::{Deserialize, Serialize};
+use stdlib::CheckedArithmetics;
 use wasmtime::AsContext;
 use wasmtime::component::{Accessor, Resource};
 
+use crate::database::native_contracts::is_deposit_exempt;
 use crate::database::queries::DepositRow;
+use crate::database::types::CORE_SIGNER_ID;
 
 use super::{
     Decimal, ExecutionError, Runtime,
     fuel::Fuel,
     wit::{HasContractId, Keys},
 };
+
+/// Storage-deposit rate, in GAS per stored byte (path + value). Placeholder
+/// (`D`); a slice of the op's gas budget gets LOCKED rather than burned. Small
+/// enough to leave ample headroom under typical op gas limits, priced into the
+/// token via the runtime's `gas_to_token` rate at write time.
+const DEPOSIT_GAS_PER_BYTE: u64 = 1;
 
 /// The storage trust boundary: reject a non-well-formed guest path ONCE, here,
 /// before it reaches any subtree/keys/matching parse or gets persisted. This is
@@ -204,26 +213,46 @@ impl Runtime {
         Fuel::Set(bs.len() as u64)
             .consume(accessor, self.gauge.as_ref())
             .await?;
-        // Stamp the op's payer as this row's depositor (the refund target). 0 =
-        // none (Core/system writes — no deposit).
+        // Stamp the op's payer as this row's depositor (the refund target), iff a
+        // deposit is actually settled for this op. Skipped when:
+        //   - the contract is the deposit-denominating token (recursion exemption);
+        //   - there's no payer (op_payer 0); or
+        //   - the payer is CORE — core-signed ops bypass hold/release/settle
+        //     (`!signer.is_core()`), so a deposit recorded here would never be
+        //     vault-backed and would drain the vault when the row is later freed.
         let depositor = match self.op_payer.load(Ordering::Relaxed) {
-            0 => None,
+            id if id == 0 || id == CORE_SIGNER_ID || is_deposit_exempt(contract_id) => None,
             id => Some(id),
         };
-        // The deposit for this row = (path + value) × D (D=1 ⇒ bytes), present iff
-        // there's a depositor. Computed once here and stored verbatim.
-        let new_amount = (path.len() + bs.len()) as u64;
-        let deposited_amount = depositor.map(|_| new_amount.to_string());
+        // The deposit for this row is a slice of GAS — `(path + value) bytes ×
+        // DEPOSIT_GAS_PER_BYTE` — charged against the op's fuel budget here, so an
+        // unaffordable deposit trips the out-of-gas path and the op deterministically
+        // reverts (the per-op cap = the gas limit). Only non-exempt rows with a
+        // payer carry one. The value stored for refund is that gas slice priced via
+        // `gas_to_token` (refunded verbatim to the setter when the row is freed).
+        let deposited_amount = if depositor.is_some() {
+            let deposit_gas = (path.len() + bs.len()) as u64 * DEPOSIT_GAS_PER_BYTE;
+            Fuel::Deposit(deposit_gas * self.gas_to_fuel_multiplier)
+                .consume(accessor, self.gauge.as_ref())
+                .await
+                .map_err(|_| {
+                    ExecutionError::Deterministic(anyhow!(
+                        "storage deposit exceeds the op's gas budget"
+                    ))
+                })?;
+            self.deposit.record_charge(deposit_gas).await;
+            Some(
+                Decimal::try_from(deposit_gas)?
+                    .mul(self.gas_to_token_multiplier)?
+                    .to_string(),
+            )
+        } else {
+            None
+        };
 
-        // Accumulate the deposit settlement (gross). CHARGE the new row's deposit
-        // to the op payer; on an OVERWRITE, also REFUND the displaced setter their
-        // recorded amount (read the old live row — never the old value).
+        // On an OVERWRITE, REFUND the displaced setter their recorded (token)
+        // amount (read the old live row — never the old value).
         let old = self.storage.latest_deposit_row(contract_id, &path).await?;
-        if depositor.is_some() {
-            self.deposit
-                .record_charge(Decimal::try_from(new_amount)?)
-                .await?;
-        }
         if let Some(old) = &old
             && let (Some(setter), Some(amount)) = (old.depositor, old.deposited_amount.as_deref())
         {

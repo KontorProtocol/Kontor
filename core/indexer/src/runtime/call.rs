@@ -338,6 +338,9 @@ impl Runtime {
             .await
             .map_err(|e| ExecutionError::Deterministic(e.into()))?;
         self.storage.savepoint().await?;
+        // Open a deposit frame alongside the savepoint so charges/refunds unwind
+        // with it: committed into the parent, discarded on rollback (handle_call).
+        self.deposit.push_frame().await;
 
         Ok((
             store,
@@ -466,11 +469,17 @@ impl Runtime {
                 .rollback()
                 .await
                 .map_err(|e| ExecutionError::NonDeterministic(e.context("rollback failed")))?;
+            // Drop this frame's charges/refunds — its writes were just rolled back.
+            self.deposit.discard_frame().await;
         } else {
             self.storage
                 .commit()
                 .await
                 .map_err(|e| ExecutionError::NonDeterministic(e.context("commit failed")))?;
+            self.deposit
+                .commit_frame()
+                .await
+                .map_err(ExecutionError::NonDeterministic)?;
         }
 
         result
@@ -505,37 +514,61 @@ impl Runtime {
         if is_op_result && !signer.is_core() {
             let payment = payment.expect("payment required for op-result release");
             let payer = Signer::Id(Identity::new(payment.signer_id));
-            // Settle boundary: read the op's deposit accumulator before gas
-            // release. Observation only for now — step 4 will hand (charge,
-            // refunds) to the token `settle` to move the deposit into VAULT and
-            // refund displaced setters. Batched per distinct setter.
-            let (charge, refunds) = self.deposit.take().await;
-            tracing::info!(
-                node = %self.node_label,
-                ?charge,
-                refund_setters = refunds.len(),
-                payer = ?payer,
-                contract = %contract_address,
-                func = func_name,
-                "Deposit settlement observed"
-            );
-            let burn_amount = Decimal::try_from(gas)
+            // Settle boundary: the committed op's deposit accumulator. `charge_gas`
+            // is the gas slice to LOCK in the VAULT; `refunds` are the token amounts
+            // owed to setters of freed/displaced rows. On a rolled-back op both are
+            // empty (the frame was discarded), so nothing is locked and the full
+            // consumed gas burns.
+            let (charge_gas, refunds) = self.deposit.take().await;
+            let charge_amount = Decimal::try_from(charge_gas)
+                .expect("u64 to decimal")
+                .mul(self.gas_to_token_multiplier)
+                .expect("Failed to convert deposit gas to token amount");
+            // Burn only the EXECUTION slice — the deposit slice is locked, not
+            // burned. `gas` ≥ `charge_gas` (the deposit fuel is part of consumed).
+            let burn_amount = Decimal::try_from(gas.saturating_sub(charge_gas))
                 .expect("u64 to decimal")
                 .mul(self.gas_to_token_multiplier)
                 .expect("Failed to convert gas consumed to token amount");
             tracing::info!(
                 node = %self.node_label,
                 gas,
-                starting_fuel,
-                remaining_fuel = store.get_fuel().unwrap(),
+                charge_gas,
+                refund_setters = refunds.len(),
+                %charge_amount,
                 %burn_amount,
                 call_succeeded = result.is_ok(),
                 contract = %contract_address,
                 func = func_name,
-                signer = ?signer,
                 payer = ?payer,
-                "Gas release"
+                "Deposit settle + gas release"
             );
+            // Settle the storage deposit BEFORE release: lock `charge` of the payer
+            // escrow (in CORE) into the VAULT and refund displaced setters from the
+            // VAULT. Must precede release, which then refunds the remaining escrow.
+            if charge_gas > 0 || !refunds.is_empty() {
+                let refunds: Vec<token::api::DepositRefund> = refunds
+                    .into_iter()
+                    .map(|(setter, amt)| token::api::DepositRefund { setter, amt })
+                    .collect();
+                let payer = payer.clone();
+                Box::pin({
+                    let mut runtime = self.clone();
+                    runtime.stack = Stack::new();
+                    async move {
+                        token::api::settle(
+                            &mut runtime,
+                            &Signer::Core(Box::new(payer)),
+                            charge_amount,
+                            refunds,
+                        )
+                        .await
+                    }
+                })
+                .await
+                .map_err(ExecutionError::NonDeterministic)?
+                .map_err(|e| ExecutionError::NonDeterministic(anyhow::anyhow!("{e:?}")))?;
+            }
             Box::pin({
                 let mut runtime = self.clone();
                 runtime.stack = Stack::new();
