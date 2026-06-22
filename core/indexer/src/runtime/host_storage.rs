@@ -18,11 +18,17 @@ use super::{
     wit::{HasContractId, Keys},
 };
 
-/// Storage-deposit rate, in GAS per stored byte (path + value). Placeholder
-/// (`D`); a slice of the op's gas budget gets LOCKED rather than burned. Small
-/// enough to leave ample headroom under typical op gas limits, priced into the
-/// token via the runtime's `gas_to_token` rate at write time.
-const DEPOSIT_GAS_PER_BYTE: u64 = 1;
+/// Default storage-deposit rate `D`, in GAS per stored byte (path + value): the
+/// slice of the op's gas budget that gets LOCKED (refundable) rather than burned.
+/// GAS, not token, is the unit because the deposit is metered as fuel; it's priced
+/// into token via `gas_to_token` at write time. Routed through
+/// [`Runtime::deposit_rate`] so it can become per-contract / governance-tunable
+/// without touching the write path. Because the per-row charge is whole gas, the
+/// vault lock (`Σ charge × rate`) equals the sum of the per-row stored amounts
+/// exactly — no per-row rounding, so the vault stays solvent at any integer rate.
+/// (A sub-gas-per-byte `D` isn't expressible as an integer; tune finer via
+/// `gas_to_token` — a fractional-rate model would need a token-denominated meter.)
+const DEFAULT_DEPOSIT_GAS_PER_BYTE: u64 = 1;
 
 /// The storage trust boundary: reject a non-well-formed guest path ONCE, here,
 /// before it reaches any subtree/keys/matching parse or gets persisted. This is
@@ -52,6 +58,13 @@ fn validate_path(path: &[u8]) -> Result<()> {
 }
 
 impl Runtime {
+    /// The storage-deposit rate (GAS per byte) charged to writes of `contract_id`.
+    /// Uniform today; this is the single seam to make `D` per-contract or
+    /// governance-set later — every charge site routes through it.
+    pub(crate) fn deposit_rate(&self, _contract_id: u64) -> u64 {
+        DEFAULT_DEPOSIT_GAS_PER_BYTE
+    }
+
     pub(crate) async fn _get_primitive<S, T: HasContractId, R: for<'de> Deserialize<'de>>(
         &self,
         accessor: &Accessor<S, Self>,
@@ -225,13 +238,13 @@ impl Runtime {
             id => Some(id),
         };
         // The deposit for this row is a slice of GAS — `(path + value) bytes ×
-        // DEPOSIT_GAS_PER_BYTE` — charged against the op's fuel budget here, so an
+        // deposit_rate(contract)` — charged against the op's fuel budget here, so an
         // unaffordable deposit trips the out-of-gas path and the op deterministically
         // reverts (the per-op cap = the gas limit). Only non-exempt rows with a
         // payer carry one. The value stored for refund is that gas slice priced via
         // `gas_to_token` (refunded verbatim to the setter when the row is freed).
         let deposited_amount = if depositor.is_some() {
-            let deposit_gas = (path.len() + bs.len()) as u64 * DEPOSIT_GAS_PER_BYTE;
+            let deposit_gas = (path.len() + bs.len()) as u64 * self.deposit_rate(contract_id);
             Fuel::Deposit(deposit_gas * self.gas_to_fuel_multiplier)
                 .consume(accessor, self.gauge.as_ref())
                 .await
