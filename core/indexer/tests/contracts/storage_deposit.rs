@@ -204,3 +204,30 @@ async fn test_failed_op_locks_no_deposit() -> Result<()> {
 
     Ok(())
 }
+
+/// An oversized call expression is rejected DETERMINISTICALLY before it reaches
+/// the recursive WAVE parser — which would otherwise overflow the host stack and
+/// abort the node. A ~40k-char string arg is well past both the expr-size guard
+/// and the measured parser-overflow threshold, so without the guard this aborts;
+/// with it, it's a normal deterministic failure. Local-only (large arg, no tx).
+#[testlib::test(contracts_dir = "../../test-contracts", local_only = true)]
+async fn test_oversized_expr_rejected_deterministically() -> Result<()> {
+    let admin = runtime.identity().await?;
+    let contract = runtime.publish(&admin, "counter").await?;
+
+    let huge = "a".repeat(40_000);
+    let result = counter::set_blob_then_fail(runtime, &contract, &admin, &huge).await;
+    let err = result.expect_err("oversized expr must be rejected, not parsed");
+    assert!(
+        err.downcast_ref::<ExecutionError>()
+            .is_some_and(|e| matches!(e, ExecutionError::Deterministic(_))),
+        "oversized expr must be a DETERMINISTIC rejection (no node abort), got: {err:#}"
+    );
+
+    // The node is unharmed — a normal op still works.
+    let mut submit = runtime.submit();
+    submit.push(&admin, counter::increment_call(&contract));
+    submit.execute().await?;
+
+    Ok(())
+}

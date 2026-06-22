@@ -71,6 +71,11 @@ impl Runtime {
         ),
         ExecutionError,
     > {
+        // Reject an oversized/over-nested call expression BEFORE it reaches the
+        // recursive WAVE parser (`parse_raw_func_call` below), which would
+        // otherwise overflow the host stack and abort the node — a deterministic
+        // rejection here keeps that a normal failed op instead.
+        validate_expr(expr)?;
         let contract_id = self
             .storage
             .contract_id(contract_address)
@@ -137,6 +142,9 @@ impl Runtime {
         let (call, func) = if let Some(func) = instance.get_func(&mut store, call.name()) {
             (call, func)
         } else if let Some(func) = instance.get_func(&mut store, fallback_name) {
+            // The fallback wraps the whole expr as one string arg (~2× after
+            // escaping), so it too must clear the limit before being parsed.
+            validate_expr(&fallback_expr)?;
             (
                 WaveParser::new(&fallback_expr)
                     .parse_raw_func_call()
@@ -741,5 +749,121 @@ fn classify_result(result: &Result<String, ExecutionError>) -> OpStatus {
             }
         }
         Err(ExecutionError::NonDeterministic(_)) => OpStatus::Other,
+    }
+}
+
+/// Max bytes for a single STRING LITERAL in a call expression. The WAVE parser
+/// (`parse_raw_func_call`) recurses ~per character through a string literal,
+/// overflowing the host stack (~32k chars on the default ~2MB thread stack —
+/// measured). Bound well under that. This is NOT a cap on total expr size: a
+/// long `list<u8>` (binary args, e.g. a filestorage proof) parses *iteratively*
+/// and is safe at any size — only string literals recurse. Total size stays
+/// bounded by the tx/witness limits at consensus.
+const MAX_STRING_LITERAL_BYTES: usize = 16 * 1024;
+
+/// Max structural nesting (`(`/`[`/`{`) of a call expression. The other recursion
+/// axis: a short but deeply nested expr recurses per level (bigger frames) and
+/// overflows at a few thousand levels. 64 is far beyond any real call and far
+/// below the overflow depth.
+const MAX_EXPR_DEPTH: usize = 64;
+
+/// Deterministically reject a call expression that would overflow the recursive
+/// WAVE parser — along its two recursion axes: an over-long string literal, or
+/// over-deep structural nesting. One O(n) non-recursive pass; bracket/quote bytes
+/// inside a string literal are data, not structure. Deterministic (pure function
+/// of the bytes) → a uniform failed op on every node, never a host-stack abort.
+fn validate_expr(expr: &str) -> Result<(), ExecutionError> {
+    let mut depth = 0usize;
+    let mut in_string = false;
+    let mut escaped = false;
+    let mut str_len = 0usize;
+    for &b in expr.as_bytes() {
+        if in_string {
+            if escaped {
+                escaped = false;
+                str_len += 1;
+            } else if b == b'\\' {
+                escaped = true;
+                str_len += 1;
+            } else if b == b'"' {
+                in_string = false; // closing quote
+            } else {
+                str_len += 1;
+            }
+            if in_string && str_len > MAX_STRING_LITERAL_BYTES {
+                return Err(ExecutionError::Deterministic(anyhow!(
+                    "call expression string literal too large (max {MAX_STRING_LITERAL_BYTES} bytes)"
+                )));
+            }
+        } else {
+            match b {
+                b'"' => {
+                    in_string = true;
+                    str_len = 0;
+                }
+                b'(' | b'[' | b'{' => {
+                    depth += 1;
+                    if depth > MAX_EXPR_DEPTH {
+                        return Err(ExecutionError::Deterministic(anyhow!(
+                            "call expression nested too deeply (max {MAX_EXPR_DEPTH})"
+                        )));
+                    }
+                }
+                b')' | b']' | b'}' => depth = depth.saturating_sub(1),
+                _ => {}
+            }
+        }
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod expr_limit_tests {
+    use super::{MAX_EXPR_DEPTH, MAX_STRING_LITERAL_BYTES, validate_expr};
+
+    #[test]
+    fn accepts_normal_expr() {
+        assert!(validate_expr("transfer(signer-id(2), 100)").is_ok());
+        assert!(validate_expr("noop()").is_ok());
+    }
+
+    #[test]
+    fn accepts_long_list_arg() {
+        // A big binary arg (e.g. a filestorage proof) is a `list<u8>` — parsed
+        // iteratively, safe at any size. Must NOT be rejected.
+        let elems = (0..60_000).map(|_| "1").collect::<Vec<_>>().join(", ");
+        assert!(validate_expr(&format!("f([{elems}])")).is_ok());
+    }
+
+    #[test]
+    fn rejects_oversized_string_arg() {
+        // The exact shape that overflows the parser today.
+        let big = format!("f(\"{}\")", "a".repeat(MAX_STRING_LITERAL_BYTES + 1));
+        assert!(validate_expr(&big).is_err());
+    }
+
+    #[test]
+    fn rejects_deep_nesting() {
+        let deep = format!(
+            "f({}{})",
+            "[".repeat(MAX_EXPR_DEPTH + 1),
+            "]".repeat(MAX_EXPR_DEPTH + 1)
+        );
+        assert!(validate_expr(&deep).is_err());
+    }
+
+    #[test]
+    fn brackets_inside_strings_are_data_not_depth() {
+        // A string packed with brackets is content, not structure — must pass.
+        let s = format!("f(\"{}\")", "[".repeat(1000));
+        assert!(validate_expr(&s).is_ok());
+    }
+
+    #[test]
+    fn escaped_quote_does_not_end_string() {
+        // The escaped quote must not be read as the closer (else the trailing
+        // brackets would be miscounted as real nesting).
+        let s = format!("f(\"a\\\"{}\")", "[".repeat(1000));
+        assert!(validate_expr(&s).is_ok());
     }
 }
