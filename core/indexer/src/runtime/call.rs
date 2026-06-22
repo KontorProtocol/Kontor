@@ -84,16 +84,9 @@ impl Runtime {
             .ok_or_else(|| {
                 ExecutionError::Deterministic(anyhow!("Contract not found: {}", contract_address))
             })?;
-        // Stamp the depositor for every write in this op = the top-level op's
-        // payer (0 = none, i.e. no Payment). Only top-level sets it; nested
-        // cross-contract calls inherit it via the shared `op_payer` (so a row
-        // written deep in a nested call still attributes to the op's payer).
-        // NOTE: Core/system ops pass a Payment with `CORE_SIGNER_ID`, so they're
-        // stamped with that today — the step-4 exemption will map them to none.
-        if is_top_level {
-            self.op_payer
-                .store(payment.map(|p| p.signer_id).unwrap_or(0), Ordering::Relaxed);
-        }
+        // (The op's depositor / `op_payer` is stamped *after* the hold call below —
+        // hold is itself a top-level core-signed op that resets `op_payer`, so it
+        // must be set last, just before the op's own writes run.)
         let component = self
             .load_component(contract_id)
             .await
@@ -336,6 +329,24 @@ impl Runtime {
             // hold's own ledger writes, before any of the op's storage writes.
             // Gated to top-level so nested cross-contract calls don't reset it.
             self.deposit.reset().await;
+        }
+
+        // Stamp the depositor for every write in this op = the top-level op's
+        // payer, but ONLY when the op will actually settle: a top-level op with a
+        // NON-core signer — the SAME gate `hold`/`release`/`settle` use. A
+        // core-signed op bypasses settle, so stamping a depositor there records a
+        // deposit that is never vault-backed and drains the vault when the row is
+        // freed (the stamp gate and the settle gate must agree). 0 = no depositor.
+        // MUST be after the hold call above: hold is its own top-level core-signed
+        // op and resets `op_payer` to 0, so this set has to come last. Nested
+        // cross-contract calls inherit it (a row written deep in a nested call
+        // still attributes to the op's payer).
+        if is_top_level {
+            let depositor = match signer {
+                Some(s) if !s.is_core() => payment.map(|p| p.signer_id).unwrap_or(0),
+                _ => 0,
+            };
+            self.op_payer.store(depositor, Ordering::Relaxed);
         }
 
         self.stack
@@ -759,12 +770,16 @@ fn classify_result(result: &Result<String, ExecutionError>) -> OpStatus {
 /// long `list<u8>` (binary args, e.g. a filestorage proof) parses *iteratively*
 /// and is safe at any size — only string literals recurse. Total size stays
 /// bounded by the tx/witness limits at consensus.
+///
+/// CONSENSUS-LOAD-BEARING: this deterministically rejects ops, so changing it is a
+/// consensus change — nodes on different values would disagree on op validity and
+/// fork. Treat like the checkpoint format; only change behind a coordinated upgrade.
 const MAX_STRING_LITERAL_BYTES: usize = 16 * 1024;
 
 /// Max structural nesting (`(`/`[`/`{`) of a call expression. The other recursion
 /// axis: a short but deeply nested expr recurses per level (bigger frames) and
 /// overflows at a few thousand levels. 64 is far beyond any real call and far
-/// below the overflow depth.
+/// below the overflow depth. CONSENSUS-LOAD-BEARING — see `MAX_STRING_LITERAL_BYTES`.
 const MAX_EXPR_DEPTH: usize = 64;
 
 /// Deterministically reject a call expression that would overflow the recursive

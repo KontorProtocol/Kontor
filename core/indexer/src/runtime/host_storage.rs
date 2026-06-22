@@ -240,7 +240,21 @@ impl Runtime {
                         "storage deposit exceeds the op's gas budget"
                     ))
                 })?;
-            self.deposit.record_charge(deposit_gas).await;
+            self.deposit.record_charge(deposit_gas).await?;
+            // On an OVERWRITE, refund the displaced setter their recorded (token)
+            // amount (read the old live row — never the old value). Gated inside
+            // the deposited-write branch: an exempt/core write has no depositor and
+            // never overwrites a deposited row, so it skips this per-write DB read
+            // entirely (that's the common case — the whole token ledger + all core
+            // writes — so the read no longer fires on most writes).
+            if let Some(old) = self.storage.latest_deposit_row(contract_id, &path).await?
+                && let (Some(setter), Some(amount)) =
+                    (old.depositor, old.deposited_amount.as_deref())
+            {
+                self.deposit
+                    .record_refund(setter, Decimal::from(amount))
+                    .await?;
+            }
             Some(
                 Decimal::try_from(deposit_gas)?
                     .mul(self.gas_to_token_multiplier)?
@@ -249,17 +263,6 @@ impl Runtime {
         } else {
             None
         };
-
-        // On an OVERWRITE, REFUND the displaced setter their recorded (token)
-        // amount (read the old live row — never the old value).
-        let old = self.storage.latest_deposit_row(contract_id, &path).await?;
-        if let Some(old) = &old
-            && let (Some(setter), Some(amount)) = (old.depositor, old.deposited_amount.as_deref())
-        {
-            self.deposit
-                .record_refund(setter, Decimal::from(amount))
-                .await?;
-        }
         self.storage
             .set(contract_id, &path, bs, depositor, deposited_amount)
             .await

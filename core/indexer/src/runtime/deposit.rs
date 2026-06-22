@@ -89,22 +89,32 @@ impl DepositMeter {
 
     /// Record the deposit (in GAS) a newly-written row owes its payer — gross
     /// (overwrites included; the displaced row is refunded separately).
-    pub async fn record_charge(&self, gas: u64) {
+    ///
+    /// Errors if there is no open frame: a guest write only happens between a
+    /// `push_frame` (prepare_call) and its `commit/discard` (handle_call), so an
+    /// empty stack means a host write escaped that scope — which would strand an
+    /// UNBACKED deposit (the fuel is consumed and `deposited_amount` stored, but
+    /// the charge never reaches settle, draining the vault when the row is freed).
+    /// Fail loud rather than silently drop it (the old `debug_assert!` was a no-op
+    /// in release builds).
+    pub async fn record_charge(&self, gas: u64) -> anyhow::Result<()> {
         let mut s = self.inner.lock().await;
-        if let Some(frame) = s.frames.last_mut() {
-            frame.charge_gas = frame.charge_gas.saturating_add(gas);
-        } else {
-            debug_assert!(false, "record_charge with no open deposit frame");
-        }
+        let frame = s
+            .frames
+            .last_mut()
+            .ok_or_else(|| anyhow::anyhow!("record_charge with no open deposit frame"))?;
+        frame.charge_gas = frame.charge_gas.saturating_add(gas);
+        Ok(())
     }
 
     /// Record a token refund owed to `setter` for a row this op freed/displaced.
+    /// Errors on a missing frame for the same reason as [`Self::record_charge`].
     pub async fn record_refund(&self, setter: u64, amount: Decimal) -> anyhow::Result<()> {
         let mut s = self.inner.lock().await;
-        let Some(frame) = s.frames.last_mut() else {
-            debug_assert!(false, "record_refund with no open deposit frame");
-            return Ok(());
-        };
+        let frame = s
+            .frames
+            .last_mut()
+            .ok_or_else(|| anyhow::anyhow!("record_refund with no open deposit frame"))?;
         let sum = match frame.refunds.remove(&setter) {
             Some(prev) => prev.add(amount)?,
             None => amount,
@@ -144,11 +154,11 @@ mod tests {
     async fn committed_frames_fold_into_finalized() {
         let m = DepositMeter::new();
         m.push_frame().await; // op frame
-        m.record_charge(10).await;
+        m.record_charge(10).await.unwrap();
         m.record_refund(7, dec(3)).await.unwrap();
 
         m.push_frame().await; // nested call
-        m.record_charge(5).await;
+        m.record_charge(5).await.unwrap();
         m.record_refund(7, dec(4)).await.unwrap(); // same setter → batched on merge
         m.record_refund(9, dec(2)).await.unwrap();
         m.commit_frame().await.unwrap(); // nested commits into op frame
@@ -171,10 +181,10 @@ mod tests {
     async fn discarded_frame_drops_its_charges() {
         let m = DepositMeter::new();
         m.push_frame().await; // op frame
-        m.record_charge(10).await;
+        m.record_charge(10).await.unwrap();
 
         m.push_frame().await; // nested call that will roll back
-        m.record_charge(99).await;
+        m.record_charge(99).await.unwrap();
         m.record_refund(1, dec(50)).await.unwrap();
         m.discard_frame().await; // rolled back → its charges vanish
 
@@ -189,7 +199,7 @@ mod tests {
     async fn reset_clears() {
         let m = DepositMeter::new();
         m.push_frame().await;
-        m.record_charge(10).await;
+        m.record_charge(10).await.unwrap();
         m.reset().await;
         let (charge_gas, refunds) = m.take().await;
         assert_eq!(charge_gas, 0);

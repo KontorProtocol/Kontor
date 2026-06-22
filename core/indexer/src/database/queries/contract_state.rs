@@ -631,7 +631,7 @@ pub async fn find_matching_paths(
 
 /// Write half: hard-delete the current-height rows under each candidate. Returns
 /// the rows removed. Caller must have already metered them (via
-/// [`count_matching_paths`]) — op execution is single-threaded in one
+/// [`find_matching_paths`]) — op execution is single-threaded in one
 /// transaction, so the count matches what this removes.
 pub async fn hard_delete_matching_paths(
     conn: &Connection,

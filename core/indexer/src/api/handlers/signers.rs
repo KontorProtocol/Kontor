@@ -39,9 +39,10 @@ async fn resolve_signer_entry(
         )
         .into());
     };
-    entry
-        .map_err(|e| HttpError::BadRequest(e.to_string()))?
-        .ok_or_else(|| HttpError::NotFound(format!("signer not found for: {identifier}")).into())
+    // A query failure here is a server/data fault → propagate as 500 (the bare
+    // `Error` maps to INTERNAL_SERVER_ERROR); only the identifier-shape rejections
+    // above are client errors (400).
+    entry?.ok_or_else(|| HttpError::NotFound(format!("signer not found for: {identifier}")).into())
 }
 
 pub async fn get_signer(
@@ -72,11 +73,10 @@ pub async fn get_signer_footprint(
     let conn = runtime.get_storage_conn();
     let entry = resolve_signer_entry(&conn, &identifier).await?;
 
-    let rows = find_footprint_by_depositor(&conn, entry.signer_id)
-        .await
-        .map_err(|e| HttpError::BadRequest(e.to_string()))?;
-    let (total_vaulted, total_footprint_bytes, by_contract) =
-        aggregate_footprint(rows).map_err(|e| HttpError::BadRequest(format!("{e:?}")))?;
+    // Query + aggregation failures are server/data faults → 500, not 400.
+    let rows = find_footprint_by_depositor(&conn, entry.signer_id).await?;
+    let (total_vaulted, total_footprint_bytes, by_contract) = aggregate_footprint(rows)
+        .map_err(|e| anyhow::anyhow!("footprint aggregation failed: {e:?}"))?;
 
     Ok(FootprintResponse {
         signer_id: entry.signer_id,

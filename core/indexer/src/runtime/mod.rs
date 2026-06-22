@@ -182,16 +182,16 @@ pub struct Runtime {
     pub stack: Stack<CallFrame>,
     pub gauge: Option<FuelGauge>,
     /// Transient per-op storage-deposit accumulator — the gross charge owed by the
-    /// op payer + per-setter refunds for rows freed/displaced. Reset at the
-    /// top-level op start, read at the settle boundary (observation-only until
-    /// step 4 wires it into `settle`).
+    /// op payer + per-setter refunds for rows freed/displaced. Savepoint-scoped;
+    /// reset at the top-level op start, drained at the settle boundary where the
+    /// token `settle` locks the charge into the VAULT and pays the refunds.
     pub deposit: DepositMeter,
-    /// The current top-level op's payer signer_id (0 = none), stamped as the
-    /// `depositor` on each storage write so a freed row can be refunded to whoever
-    /// paid for it. `Arc`-shared so nested cross-contract writes attribute to the
-    /// TOP-LEVEL payer; set at op start in `prepare_call`. NOTE: today Core/system
-    /// ops pass `signer_id = CORE_SIGNER_ID`, so their writes are stamped with that
-    /// (not 0) — the step-4 deposit exemption will map those to none.
+    /// The current top-level op's payer signer_id (0 = none / non-settling op),
+    /// stamped as the `depositor` on each storage write so a freed row can be
+    /// refunded to whoever paid for it. `Arc`-shared so nested cross-contract writes
+    /// attribute to the TOP-LEVEL payer; set at op start in `prepare_call`, ONLY for
+    /// top-level non-core (settling) ops — core-signed ops set it to 0 so their
+    /// writes carry no depositor (they bypass settle).
     pub op_payer: Arc<AtomicU64>,
     pub gas_limit_for_non_procs: u64,
     pub gas_to_fuel_multiplier: u64,
