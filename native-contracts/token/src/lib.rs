@@ -18,13 +18,6 @@ struct TokenStorage {
     /// mainnet (the only KOR mint path there is protocol emissions via
     /// `issuance`).
     pub dev_mint_enabled: bool,
-    /// Storage-deposit footprint: total live bytes each holder occupies across
-    /// all contracts (the host reports the per-op net delta via `settle`). Backs
-    /// the floor `balance >= footprint * D`. A whole byte count, held as `Decimal`
-    /// so the floor compares in the ledger's numeric domain without conversion.
-    /// Appended LAST so the interned field ids of the existing fields stay fixed
-    /// (positional dict-refs — see `golden_field_names_are_interned_in_contract_state`).
-    pub footprint: Map<Holder, Decimal>,
 }
 
 fn utxo_holder(out_point: context::OutPoint) -> Holder {
@@ -37,31 +30,6 @@ fn assert_gt_zero(n: Decimal) -> Result<(), Error> {
     }
 
     Ok(())
-}
-
-/// The storage-deposit rate `D` — token per live byte. Fixed at 1 for now; the
-/// economics layer will most likely make this dynamic (a function of total
-/// state). Kept as a multiplier so the floor structure (`footprint * D`) is
-/// already in place when `D` changes.
-fn storage_deposit_rate() -> Result<Decimal, Error> {
-    1u64.try_into()
-}
-
-/// Apply a signed byte delta to a holder's footprint, clamping at zero. A correct
-/// net never frees more than exists, but the `delete_matching_paths` gap (see the
-/// host `FootprintGauge`) can transiently over-subtract — never let footprint go
-/// negative.
-fn apply_footprint_delta(current: Decimal, delta: i64) -> Result<Decimal, Error> {
-    if delta >= 0 {
-        current.add((delta as u64).try_into()?)
-    } else {
-        let magnitude: Decimal = delta.unsigned_abs().try_into()?;
-        if current <= magnitude {
-            Ok(0u64.try_into()?)
-        } else {
-            current.sub(magnitude)
-        }
-    }
 }
 
 fn mint(model: &TokenStorageWriteModel, dst: Holder, amt: Decimal) -> Result<Mint, Error> {
@@ -148,31 +116,6 @@ impl Guest for Token {
             src: ctx.signer_proc_context().signer().into(),
             ..burn
         })
-    }
-
-    fn settle(ctx: &CoreContext, footprint_delta: i64, pending_credit: Decimal) -> Result<(), Error> {
-        let proc_context = ctx.proc_context();
-        let model = proc_context.model();
-        // Payer = the op's payer (the host wraps it as the core signer), same as
-        // hold/release. Footprint, gas, and the floor all land on this one holder.
-        let payer: Holder = ctx.signer_proc_context().signer().into();
-
-        let footprint = model.footprint();
-        let new_footprint = apply_footprint_delta(footprint.get(&payer).unwrap_or_default(), footprint_delta)?;
-        footprint.set(&payer, new_footprint);
-
-        // Floor: the payer's balance — plus the gas refund they're about to
-        // receive (`pending_credit`), since this runs before `release` — must
-        // cover the deposit on every live byte they now occupy. On violation the
-        // caller reverts the op (rolling back this footprint write with it).
-        let balance = model.ledger().get(&payer).unwrap_or_default();
-        let floor = new_footprint.mul(storage_deposit_rate()?)?;
-        if balance.add(pending_credit)? < floor {
-            return Err(Error::Message(
-                "storage deposit floor exceeded".to_string(),
-            ));
-        }
-        Ok(())
     }
 
     fn mint(ctx: &ProcContext, amt: Decimal) -> Result<Mint, Error> {
