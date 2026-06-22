@@ -659,6 +659,123 @@ async fn test_depositor_roundtrips_and_tombstone_clears_it() -> Result<()> {
     Ok(())
 }
 
+// The per-signer footprint query: returns a depositor's LIVE rows across all
+// contracts, excluding other depositors' rows and any row superseded by a newer
+// version (overwritten/deleted → their deposit was refunded). Exercises the
+// depositor filter, the cross-contract JOIN, and the NOT EXISTS liveness.
+#[tokio::test]
+async fn test_find_footprint_by_depositor() -> Result<()> {
+    let (_reader, writer, _temp_dir) = new_test_db().await?;
+    let conn = writer.connection();
+    let h1 = 800000u64;
+    let h2 = h1 + 1;
+    for h in [h1, h2] {
+        insert_block(
+            &conn,
+            BlockRow::builder()
+                .height(h)
+                .hash(new_mock_block_hash(h as u32))
+                .build(),
+        )
+        .await?;
+    }
+    let tx1 = insert_transaction(
+        &conn,
+        TransactionRow::builder()
+            .height(h1)
+            .txid(format!("aaaa{:060}", 0))
+            .tx_index(0)
+            .confirmed_height(h1)
+            .build(),
+    )
+    .await?;
+    let tx2 = insert_transaction(
+        &conn,
+        TransactionRow::builder()
+            .height(h2)
+            .txid(format!("bbbb{:060}", 0))
+            .tx_index(0)
+            .confirmed_height(h2)
+            .build(),
+    )
+    .await?;
+
+    // Two contracts → exercise the cross-contract breakdown + name JOIN.
+    let alpha = insert_contract(
+        &conn,
+        ContractRow::builder()
+            .name("alpha".to_string())
+            .height(h1)
+            .tx_index(0)
+            .bytes(vec![])
+            .build(),
+    )
+    .await?;
+    let beta = insert_contract(
+        &conn,
+        ContractRow::builder()
+            .name("beta".to_string())
+            .height(h1)
+            .tx_index(1)
+            .bytes(vec![])
+            .build(),
+    )
+    .await?;
+    let alice = create_contract_signer(&conn, h1).await?;
+    let bob = create_contract_signer(&conn, h1).await?;
+
+    let set = async |cid: u64, seg: &str, who: u64, amt: &str, h: u64, tx: u64| -> Result<()> {
+        insert_contract_state(
+            &conn,
+            ContractStateRow::builder()
+                .contract_id(cid)
+                .tx_id(tx)
+                .height(h)
+                .path(cs_path(&[seg]))
+                .value(vec![1, 2, 3])
+                .depositor(who)
+                .deposited_amount(amt.to_string())
+                .build(),
+        )
+        .await?;
+        Ok(())
+    };
+
+    // alice: two live rows in alpha, one in beta.
+    set(alpha, "a1", alice, "10", h1, tx1).await?;
+    set(alpha, "a2", alice, "5", h1, tx1).await?;
+    set(beta, "b1", alice, "30", h1, tx1).await?;
+    // bob's row → excluded by the depositor filter.
+    set(beta, "b2", bob, "99", h1, tx1).await?;
+    // alice set a3, then it was overwritten by bob at a newer height → alice's a3
+    // is superseded (their deposit refunded) and must NOT appear.
+    set(alpha, "a3", alice, "1000", h1, tx1).await?;
+    set(alpha, "a3", bob, "7", h2, tx2).await?;
+
+    let rows = find_footprint_by_depositor(&conn, alice).await?;
+    assert_eq!(rows.len(), 3, "alice's live rows: a1, a2 (alpha) + b1 (beta)");
+
+    let alpha_total: u64 = rows
+        .iter()
+        .filter(|r| r.contract_id == alpha)
+        .map(|r| r.deposited_amount.parse::<u64>().unwrap())
+        .sum();
+    let beta_total: u64 = rows
+        .iter()
+        .filter(|r| r.contract_id == beta)
+        .map(|r| r.deposited_amount.parse::<u64>().unwrap())
+        .sum();
+    assert_eq!(alpha_total, 15, "10 + 5; a3 superseded, excluded");
+    assert_eq!(beta_total, 30, "b1 only; b2 is bob's");
+    assert!(rows.iter().any(|r| r.contract_name == "alpha"));
+    assert!(rows.iter().any(|r| r.contract_name == "beta"));
+    assert!(rows.iter().all(|r| r.footprint_bytes > 0), "path + value bytes");
+
+    // A signer with no deposits gets an empty footprint.
+    assert!(find_footprint_by_depositor(&conn, bob + 999).await?.is_empty());
+    Ok(())
+}
+
 // `delete_contract_state` must tombstone the WHOLE subtree of an entry, not just
 // the exact path: a struct/map value persists under child paths (`key.field`),
 // so removing it has to clear every live descendant — else `Map`/`IndexedMap`

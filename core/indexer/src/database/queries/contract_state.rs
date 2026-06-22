@@ -276,6 +276,56 @@ pub struct DepositRow {
     pub deposited_amount: Option<String>,
 }
 
+/// One live deposited row attributed to a depositor, for the per-signer footprint
+/// aggregation. `deposited_amount` is non-null here (the `depositor IS NOT NULL ⇔
+/// deposited_amount IS NOT NULL` CHECK), summed into a `Decimal` by the caller.
+pub struct FootprintRow {
+    pub contract_id: u64,
+    pub contract_name: String,
+    pub deposited_amount: String,
+    pub footprint_bytes: u64,
+}
+
+/// Every LIVE row a depositor currently holds a deposit on, across ALL contracts,
+/// for the per-signer footprint. Cross-contract, so it can't reuse `live_latest`
+/// (which ranks by `path` alone for a single contract): liveness is the
+/// `NOT EXISTS` form keyed on `(contract_id, path)`. A row the depositor set but
+/// that was later overwritten/deleted has a newer version (excluded) — exactly
+/// when their deposit was refunded, so it correctly drops out. The `depositor`
+/// filter is the selective entry point (see `idx_contract_state_depositor`).
+pub async fn find_footprint_by_depositor(
+    conn: &Connection,
+    signer_id: u64,
+) -> Result<Vec<FootprintRow>, Error> {
+    let sql = r#"
+        SELECT cs.contract_id, c.name, cs.deposited_amount,
+               length(cs.path) + cs.size AS footprint
+        FROM contract_state cs
+        JOIN contracts c ON c.id = cs.contract_id
+        WHERE cs.depositor = :signer_id
+          AND cs.deleted = 0
+          AND NOT EXISTS (
+              SELECT 1 FROM contract_state n
+              WHERE n.contract_id = cs.contract_id
+                AND n.path = cs.path
+                AND n.height > cs.height
+          )
+    "#;
+    let mut rows = conn
+        .query(sql, libsql::named_params! { ":signer_id": signer_id })
+        .await?;
+    let mut out = Vec::new();
+    while let Some(r) = rows.next().await? {
+        out.push(FootprintRow {
+            contract_id: r.get::<u64>(0)?,
+            contract_name: r.get::<String>(1)?,
+            deposited_amount: r.get::<String>(2)?,
+            footprint_bytes: r.get::<u64>(3)?,
+        });
+    }
+    Ok(out)
+}
+
 /// The live rows of a subtree (the node + every live descendant) — `(path, size)`
 /// only, NOT values. Read-only: the read half of a delete, split out so the
 /// caller can meter `Fuel::Delete` by the row count BEFORE committing to the

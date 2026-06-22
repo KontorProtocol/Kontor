@@ -110,6 +110,20 @@ export type ComposeOutputs = {
  */
 export type ConsensusMode = "validator" | "follower";
 
+export type ContractFootprint = {
+  contract_id: number;
+  contract_name: string;
+  /**
+   * Token locked in this contract's rows (decimal string).
+   */
+  vaulted: string;
+  footprint_bytes: number;
+  /**
+   * Share of the signer's `total_vaulted` held in this contract (0–100).
+   */
+  percent: number;
+};
+
 export type ContractListRow = {
   id: number;
   name: string;
@@ -142,6 +156,25 @@ export type Fees = {
    * Recommended fee rate (sat/vB) to land in roughly the next 6 blocks.
    */
   hour: number;
+};
+
+/**
+ * A signer's storage-deposit footprint: how much token they have locked in the
+ * VAULT and how many live bytes they're responsible for, broken down by contract.
+ * Derived from the per-row `depositor`/`deposited_amount` columns across every
+ * contract's state (so it's host-only — no contract can see other contracts'
+ * storage). `total_vaulted` reconciles with `Σ` of `by_contract` and, globally,
+ * with the token contract's `balance(vault)`.
+ */
+export type FootprintResponse = {
+  signer_id: number;
+  x_only_pubkey: string | null;
+  /**
+   * Total token locked in the vault by this signer (decimal string).
+   */
+  total_vaulted: string;
+  total_footprint_bytes: number;
+  by_contract: Array<ContractFootprint>;
 };
 
 export type HolderRef =

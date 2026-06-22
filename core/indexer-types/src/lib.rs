@@ -1035,3 +1035,36 @@ pub struct SignerResponse {
     #[ts(type = "number | null")]
     pub next_nonce: Option<u64>,
 }
+
+/// A signer's storage-deposit footprint: how much token they have locked in the
+/// VAULT and how many live bytes they're responsible for, broken down by contract.
+/// Derived from the per-row `depositor`/`deposited_amount` columns across every
+/// contract's state (so it's host-only — no contract can see other contracts'
+/// storage). `total_vaulted` reconciles with `Σ` of `by_contract` and, globally,
+/// with the token contract's `balance(vault)`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
+#[ts(export, export_to = "../../../sdk/src/bindings.d.ts")]
+pub struct FootprintResponse {
+    #[ts(type = "number")]
+    pub signer_id: u64,
+    pub x_only_pubkey: Option<String>,
+    /// Total token locked in the vault by this signer (decimal string).
+    pub total_vaulted: String,
+    #[ts(type = "number")]
+    pub total_footprint_bytes: u64,
+    pub by_contract: Vec<ContractFootprint>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
+#[ts(export, export_to = "../../../sdk/src/bindings.d.ts")]
+pub struct ContractFootprint {
+    #[ts(type = "number")]
+    pub contract_id: u64,
+    pub contract_name: String,
+    /// Token locked in this contract's rows (decimal string).
+    pub vaulted: String,
+    #[ts(type = "number")]
+    pub footprint_bytes: u64,
+    /// Share of the signer's `total_vaulted` held in this contract (0–100).
+    pub percent: f64,
+}

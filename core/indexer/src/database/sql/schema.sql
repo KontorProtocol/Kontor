@@ -83,6 +83,13 @@ CREATE INDEX IF NOT EXISTS idx_contract_state_contract_tx ON contract_state (con
 -- full table scan, and is COVERING for the band-discovery subquery.
 CREATE INDEX IF NOT EXISTS idx_contract_state_height ON contract_state (height, contract_id, path);
 
+-- Selective entry point for the per-signer storage-deposit footprint query
+-- (find_footprint_by_depositor): a depositor holds a small fraction of all rows,
+-- so this narrows the outer scan; the NOT EXISTS liveness check is served by
+-- idx_contract_state_lookup. Partial (depositor IS NOT NULL) since most rows have
+-- no depositor (Core/system/token-ledger writes).
+CREATE INDEX IF NOT EXISTS idx_contract_state_depositor ON contract_state (depositor) WHERE depositor IS NOT NULL;
+
 CREATE TABLE IF NOT EXISTS contract_results (
   id INTEGER PRIMARY KEY,
   contract_id INTEGER NOT NULL,
