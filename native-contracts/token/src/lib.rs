@@ -96,48 +96,40 @@ impl Guest for Token {
         )
     }
 
-    fn release(ctx: &CoreContext, burn_amt: Decimal) -> Result<Burn, Error> {
-        let proc_context = ctx.proc_context();
-        let burn = Self::burn(&proc_context, burn_amt)?;
-        let amt = proc_context
-            .model()
-            .ledger()
-            .get(&CORE())
-            .unwrap_or_default();
-        if amt > 0u64.try_into()? {
-            transfer(
-                &proc_context,
-                CORE(),
-                ctx.signer_proc_context().signer().into(),
-                amt,
-            )?;
-        }
-        Ok(Burn {
-            src: ctx.signer_proc_context().signer().into(),
-            ..burn
-        })
-    }
-
-    fn settle(ctx: &CoreContext, charge: Decimal, refunds: Vec<DepositRefund>) -> Result<(), Error> {
+    /// Settle a whole op's gas + storage deposit in ONE core invocation (was a
+    /// separate `settle` + `release`). No return value: every move is a
+    /// `ledger.set`, and the token ledger lives in contract_state — the
+    /// authoritative source consumers rebuild balances from.
+    fn settle(
+        ctx: &CoreContext,
+        burn_amt: Decimal,
+        charge: Decimal,
+        refunds: Vec<DepositRefund>,
+    ) -> Result<(), Error> {
         let proc = ctx.proc_context();
         let zero = 0u64.try_into()?;
-        // No return value needed: every move below is a `ledger.set`, and the
-        // token ledger lives in contract_state — so the balance changes are already
-        // persisted there (the authoritative source consumers rebuild balances
-        // from). Returning the transfers would just duplicate that, at O(refunds).
-        //
-        // Lock this op's new deposits: payer escrow (held in CORE) → VAULT.
+        // 1. Lock this op's new deposits: payer escrow (in CORE) → VAULT. Must
+        //    precede the escrow refund (4), which returns the REMAINING CORE.
         if charge > zero {
             transfer(&proc, CORE(), VAULT(), charge)?;
         }
-        // Refund freed/displaced rows to their original setters out of the VAULT,
-        // which by construction already holds these amounts (locked when those
-        // rows were first set).
+        // 2. Refund freed/displaced rows to their original setters from the VAULT,
+        //    which by construction already holds these amounts.
         for DepositRefund { setter, amt } in refunds {
             if amt > zero {
                 let dst = Holder::from_ref(&HolderRef::SignerId(setter))?;
                 transfer(&proc, VAULT(), dst, amt)?;
             }
+        }
+        // 3. Burn the execution slice (signer → BURNER, supply -=). Skipped when an
+        //    op consumed only deposit gas (burn = 0).
+        if burn_amt > zero {
+            Self::burn(&proc, burn_amt)?;
+        }
+        // 4. Refund the remaining gas escrow (CORE → payer).
+        let remaining = proc.model().ledger().get(&CORE()).unwrap_or_default();
+        if remaining > zero {
+            transfer(&proc, CORE(), ctx.signer_proc_context().signer().into(), remaining)?;
         }
         Ok(())
     }

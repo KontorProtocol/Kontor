@@ -562,42 +562,26 @@ impl Runtime {
                 payer = ?payer,
                 "Deposit settle + gas release"
             );
-            // Settle BEFORE release: lock `charge` of the payer's escrow (in CORE)
-            // into the VAULT and refund displaced setters from the VAULT. Each move
-            // is a `ledger.set` persisted to contract_state (the token ledger), so
-            // balances reconstruct from state — settle returns nothing. Must precede
-            // release, which then refunds the remaining escrow to the payer.
-            if charge_gas > 0 || !refunds.is_empty() {
-                let refunds: Vec<token::api::DepositRefund> = refunds
-                    .into_iter()
-                    .map(|(setter, amt)| token::api::DepositRefund { setter, amt })
-                    .collect();
-                let payer = payer.clone();
-                Box::pin({
-                    let mut runtime = self.clone();
-                    runtime.stack = Stack::new();
-                    async move {
-                        token::api::settle(
-                            &mut runtime,
-                            &Signer::Core(Box::new(payer)),
-                            charge_amount,
-                            refunds,
-                        )
-                        .await
-                    }
-                })
-                .await
-                .map_err(ExecutionError::NonDeterministic)?
-                .map_err(|e| ExecutionError::NonDeterministic(anyhow::anyhow!("{e:?}")))?;
-            }
-            // Release: burn the execution slice (signer → BURNER) and refund the
-            // remaining escrow (CORE → signer).
+            // Settle the whole op in ONE core token invocation: burn the execution
+            // slice + refund the remaining escrow + lock `charge` into the VAULT +
+            // refund displaced setters. Every move is a `ledger.set` persisted to
+            // contract_state (the token ledger), so balances reconstruct from state.
+            let refunds: Vec<token::api::DepositRefund> = refunds
+                .into_iter()
+                .map(|(setter, amt)| token::api::DepositRefund { setter, amt })
+                .collect();
             Box::pin({
                 let mut runtime = self.clone();
                 runtime.stack = Stack::new();
                 async move {
-                    token::api::release(&mut runtime, &Signer::Core(Box::new(payer)), burn_amount)
-                        .await
+                    token::api::settle(
+                        &mut runtime,
+                        &Signer::Core(Box::new(payer)),
+                        burn_amount,
+                        charge_amount,
+                        refunds,
+                    )
+                    .await
                 }
             })
             .await
