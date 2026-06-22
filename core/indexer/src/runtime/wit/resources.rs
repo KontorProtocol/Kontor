@@ -224,7 +224,7 @@ impl Holder {
                 Txid::from_str(&out_point.txid)
                     .map_err(|e| Error::Validation(format!("invalid txid: {e}")))?;
             }
-            HolderRef::Core | HolderRef::Burner => {}
+            HolderRef::Core | HolderRef::Burner | HolderRef::Vault => {}
         }
 
         Ok(Self { holder_ref })

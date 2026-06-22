@@ -184,6 +184,10 @@ pub fn generate(config: Config) -> TokenStream {
             Holder::from_ref(&context::HolderRef::Core).unwrap()
         }
 
+        fn VAULT() -> Holder {
+            Holder::from_ref(&context::HolderRef::Vault).unwrap()
+        }
+
         impl stdlib::HasNext for context::Keys {
             fn next(&self) -> Option<Vec<u8>> {
                 self.next()

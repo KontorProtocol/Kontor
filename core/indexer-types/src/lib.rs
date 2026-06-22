@@ -399,6 +399,7 @@ pub enum HolderRef {
     Core,
     Burner,
     Utxo(OutPoint),
+    Vault,
 }
 
 holder_ref!(HolderRef);

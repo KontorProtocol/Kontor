@@ -188,7 +188,10 @@ impl Guest for Token {
             .keys()
             .filter_map(|acc| {
                 let acc_ref = acc.as_ref();
-                if acc_ref == HolderRef::Burner || acc_ref == HolderRef::Core {
+                if acc_ref == HolderRef::Burner
+                    || acc_ref == HolderRef::Core
+                    || acc_ref == HolderRef::Vault
+                {
                     None
                 } else {
                     Some(Balance {

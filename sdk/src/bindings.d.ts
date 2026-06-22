@@ -149,7 +149,8 @@ export type HolderRef =
   | { "SignerId": number }
   | "Core"
   | "Burner"
-  | { "Utxo": OutPoint };
+  | { "Utxo": OutPoint }
+  | "Vault";
 
 export type Info = {
   version: string;
