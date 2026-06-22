@@ -118,14 +118,22 @@ impl Guest for Token {
         })
     }
 
-    fn settle(ctx: &CoreContext, charge: Decimal, refunds: Vec<DepositRefund>) -> Result<(), Error> {
-        let proc = ctx.proc_context();
+    fn settle(
+        ctx: &CoreContext,
+        charge: Decimal,
+        refunds: Vec<DepositRefund>,
+    ) -> Result<Vec<Transfer>, Error> {
+        let proc = ctx.signer_proc_context();
         let zero = 0u64.try_into()?;
-        // Lock this op's new deposits: payer escrow (held in CORE) → VAULT. An
-        // insufficient escrow makes this transfer fail, which is exactly the
-        // per-op deposit cap — the whole op then reverts.
+        // Every move is returned as a Transfer so consumers can rebuild balances
+        // from result rows as deltas. The deposit is debited from the PAYER, not
+        // CORE: by the time settle runs, release has refunded the full gas escrow
+        // back to the payer, so the payer funds the lock directly and CORE stays a
+        // net-zero, never-surfaced escrow.
+        let mut transfers = Vec::new();
+        // Lock this op's new deposits: payer → VAULT.
         if charge > zero {
-            transfer(&proc, CORE(), VAULT(), charge)?;
+            transfers.push(transfer(&proc, proc.signer().into(), VAULT(), charge)?);
         }
         // Refund freed/displaced rows to their original setters out of the VAULT,
         // which by construction already holds these amounts (locked when those
@@ -133,10 +141,10 @@ impl Guest for Token {
         for DepositRefund { setter, amt } in refunds {
             if amt > zero {
                 let dst = Holder::from_ref(&HolderRef::SignerId(setter))?;
-                transfer(&proc, VAULT(), dst, amt)?;
+                transfers.push(transfer(&proc, VAULT(), dst, amt)?);
             }
         }
-        Ok(())
+        Ok(transfers)
     }
 
     fn mint(ctx: &ProcContext, amt: Decimal) -> Result<Mint, Error> {

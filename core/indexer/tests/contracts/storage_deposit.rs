@@ -16,16 +16,22 @@ import!(
 );
 
 /// End-to-end proof that a user op writing non-exempt contract storage LOCKS a
-/// storage deposit into the VAULT (paid out of the payer's gas escrow), and that
-/// the vault is funded — the invariant the per-row `deposited_amount` columns
-/// reconcile against. NFT mint writes fresh keys (no overwrite-netting), so the
-/// lock is unambiguous.
+/// storage deposit into the VAULT (debited from the payer), and that token flow
+/// is CONSERVED: everything the payer loses lands in either the VAULT (deposit)
+/// or the BURNER (execution burn) — nothing is unaccounted. Conservation is the
+/// foundation of the result-row-as-delta model: a 3rd party summing the token
+/// movements emitted in result rows (settle → list<transfer>, release → burn)
+/// can rebuild every balance. NFT mint writes fresh keys (no overwrite-netting),
+/// so the lock is unambiguous.
 #[testlib::test(contracts_dir = "../../test-contracts")]
 async fn test_storage_deposit_locks_into_vault() -> Result<()> {
     let alice = runtime.identity().await?;
     let alice_ref: HolderRef = (&alice).into();
 
     let vault_before = token::balance(runtime, HolderRef::Vault)
+        .await?
+        .unwrap_or_default();
+    let burner_before = token::balance(runtime, HolderRef::Burner)
         .await?
         .unwrap_or_default();
     let alice_before = token::balance(runtime, alice_ref.clone())
@@ -44,20 +50,29 @@ async fn test_storage_deposit_locks_into_vault() -> Result<()> {
     let vault_after = token::balance(runtime, HolderRef::Vault)
         .await?
         .unwrap_or_default();
+    let burner_after = token::balance(runtime, HolderRef::Burner)
+        .await?
+        .unwrap_or_default();
     let alice_after = token::balance(runtime, alice_ref.clone())
         .await?
         .unwrap_or_default();
 
-    // The deposit moved INTO the vault, funded by alice's escrow (she pays gas +
-    // the locked deposit), so her balance strictly drops and the vault strictly
-    // grows.
+    let vault_gain = vault_after.sub(vault_before)?;
+    let burner_gain = burner_after.sub(burner_before)?;
+    let alice_loss = alice_before.sub(alice_after)?;
+
+    // A deposit was actually locked (fresh storage written).
     assert!(
-        vault_after > vault_before,
+        vault_gain > Decimal::try_from(0u64)?,
         "vault must grow by the locked deposit: {vault_before} -> {vault_after}"
     );
-    assert!(
-        alice_after < alice_before,
-        "payer must fund gas + deposit: {alice_before} -> {alice_after}"
+    // CONSERVATION: every token alice lost went to the vault (deposit) or the
+    // burner (execution burn) — none vanished, none appeared. CORE (the gas
+    // escrow) nets to zero and never surfaces.
+    assert_eq!(
+        alice_loss,
+        vault_gain.add(burner_gain)?,
+        "payer loss ({alice_loss}) must equal vault deposit ({vault_gain}) + burn ({burner_gain})"
     );
 
     Ok(())
