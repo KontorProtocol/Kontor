@@ -78,20 +78,17 @@ impl Storage {
     }
 
     /// Write a live value. `depositor` is the signer who pays for (and is refunded
-    /// for) this row's storage — `None` for Core/system writes.
+    /// for) this row's storage — `None` for Core/system writes; `deposited_amount`
+    /// is the deposit locked for it (paired with `depositor`), both computed by the
+    /// caller (`_set_primitive`).
     pub async fn set(
         &self,
         contract_id: u64,
         path: &[u8],
         value: &[u8],
         depositor: Option<u64>,
+        deposited_amount: Option<String>,
     ) -> Result<()> {
-        // The deposit locked for this row = (path + value bytes) × D, the amount
-        // refunded when it's freed. Only rows with a depositor carry one. D is
-        // fixed at 1 today, so amount == path + value bytes; when D goes dynamic
-        // the rate must be plumbed here to scale it.
-        let deposited_amount =
-            depositor.map(|_| (path.len() + value.len()).to_string());
         insert_contract_state(
             &self.conn,
             ContractStateRow::builder()

@@ -7,8 +7,10 @@ use serde::{Deserialize, Serialize};
 use wasmtime::AsContext;
 use wasmtime::component::{Accessor, Resource};
 
+use crate::database::queries::DepositRow;
+
 use super::{
-    ExecutionError, Runtime,
+    Decimal, ExecutionError, Runtime,
     fuel::Fuel,
     wit::{HasContractId, Keys},
 };
@@ -143,8 +145,23 @@ impl Runtime {
             .storage
             .hard_delete_matching_paths(contract_id, &base_path, &candidates)
             .await?;
-        self.footprint.record_delta(-(freed as i64));
+        self.record_row_refunds(&rows).await?;
         Ok(deleted)
+    }
+
+    /// Record refunds for a set of freed/displaced rows into the op's deposit
+    /// accumulator — each row's recorded `deposited_amount` back to its
+    /// `depositor`, batched per setter. Rows with no depositor (Core/system) are
+    /// skipped.
+    async fn record_row_refunds(&self, rows: &[DepositRow]) -> Result<()> {
+        for r in rows {
+            if let (Some(setter), Some(amount)) = (r.depositor, r.deposited_amount.as_deref()) {
+                self.deposit
+                    .record_refund(setter, Decimal::from(amount))
+                    .await?;
+            }
+        }
+        Ok(())
     }
 
     /// Delete a key by tombstoning its WHOLE subtree (the node + every live
@@ -166,8 +183,8 @@ impl Runtime {
         Fuel::Delete(rows.len() as u64, bytes)
             .consume(accessor, self.gauge.as_ref())
             .await?;
-        let (removed, freed) = self.storage.tombstone_rows(contract_id, &rows).await?;
-        self.footprint.record_delta(-(freed as i64));
+        let (removed, _freed) = self.storage.tombstone_rows(contract_id, &rows).await?;
+        self.record_row_refunds(&rows).await?;
         Ok(removed)
     }
 
@@ -187,23 +204,36 @@ impl Runtime {
         Fuel::Set(bs.len() as u64)
             .consume(accessor, self.gauge.as_ref())
             .await?;
-        // Net footprint delta for the op's accumulator. A new key adds its whole
-        // row (path + value); an overwrite keeps the same path, so only the value
-        // length changes (new − old). One point-read of the live row (see
-        // `latest_deposit_row`) distinguishes the two and supplies the old size.
-        // (3b will also use its depositor/amount to refund the displaced setter.)
-        let delta = match self.storage.latest_deposit_row(contract_id, &path).await? {
-            None => (path.len() + bs.len()) as i64,
-            Some(old) => bs.len() as i64 - old.size as i64,
-        };
-        self.footprint.record_delta(delta);
         // Stamp the op's payer as this row's depositor (the refund target). 0 =
-        // none (Core/system writes).
+        // none (Core/system writes — no deposit).
         let depositor = match self.op_payer.load(Ordering::Relaxed) {
             0 => None,
             id => Some(id),
         };
-        self.storage.set(contract_id, &path, bs, depositor).await
+        // The deposit for this row = (path + value) × D (D=1 ⇒ bytes), present iff
+        // there's a depositor. Computed once here and stored verbatim.
+        let new_amount = (path.len() + bs.len()) as u64;
+        let deposited_amount = depositor.map(|_| new_amount.to_string());
+
+        // Accumulate the deposit settlement (gross). CHARGE the new row's deposit
+        // to the op payer; on an OVERWRITE, also REFUND the displaced setter their
+        // recorded amount (read the old live row — never the old value).
+        let old = self.storage.latest_deposit_row(contract_id, &path).await?;
+        if depositor.is_some() {
+            self.deposit
+                .record_charge(Decimal::try_from(new_amount)?)
+                .await?;
+        }
+        if let Some(old) = &old
+            && let (Some(setter), Some(amount)) = (old.depositor, old.deposited_amount.as_deref())
+        {
+            self.deposit
+                .record_refund(setter, Decimal::from(amount))
+                .await?;
+        }
+        self.storage
+            .set(contract_id, &path, bs, depositor, deposited_amount)
+            .await
     }
 }
 

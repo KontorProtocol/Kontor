@@ -2,8 +2,8 @@ extern crate alloc;
 
 mod component_cache;
 pub mod counter;
+pub mod deposit;
 pub mod filestorage;
-pub mod footprint;
 pub mod fuel;
 pub mod nft;
 pub mod numerics;
@@ -113,7 +113,7 @@ use crate::database::native_contracts::{NATIVE_CONTRACTS, is_native_contract_id}
 use crate::database::types::CORE_SIGNER_ID;
 use crate::runtime::{
     counter::Counter,
-    footprint::FootprintGauge,
+    deposit::DepositMeter,
     fuel::FuelGauge,
     stack::{CallFrame, Stack},
     wit::Signer,
@@ -181,10 +181,11 @@ pub struct Runtime {
     pub result_id_counter: Counter,
     pub stack: Stack<CallFrame>,
     pub gauge: Option<FuelGauge>,
-    /// Transient per-op accumulator of storage bytes written, attributed to the
-    /// op's payer. Observation only (storage-deposit phase 0); reset at the
-    /// top-level op start, read at the settle boundary.
-    pub footprint: FootprintGauge,
+    /// Transient per-op storage-deposit accumulator — the gross charge owed by the
+    /// op payer + per-setter refunds for rows freed/displaced. Reset at the
+    /// top-level op start, read at the settle boundary (observation-only until
+    /// step 4 wires it into `settle`).
+    pub deposit: DepositMeter,
     /// The current top-level op's payer signer_id (0 = none), stamped as the
     /// `depositor` on each storage write so a freed row can be refunded to whoever
     /// paid for it. `Arc`-shared so nested cross-contract writes attribute to the
@@ -269,7 +270,7 @@ impl Runtime {
             result_id_counter: Counter::new(),
             stack: Stack::new(),
             gauge: Some(FuelGauge::new()),
-            footprint: FootprintGauge::new(),
+            deposit: DepositMeter::new(),
             op_payer: Arc::new(AtomicU64::new(0)),
             gas_limit_for_non_procs: 100_000,
             gas_to_fuel_multiplier: 1_000,
