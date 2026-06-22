@@ -126,15 +126,17 @@ impl Runtime {
     ) -> Result<u64> {
         validate_path(&base_path)?;
         let contract_id = self.table.lock().await.get(&self_)?.get_contract_id();
-        // Meter BEFORE the writes (like `_delete`): tally the matching rows, charge
+        // Meter BEFORE the writes (like `_delete`): read the matching rows, charge
         // `Fuel::Delete`, THEN hard-delete. The intra-block cleanup vanishes rows
         // that were counted on write, so subtract the freed bytes from the footprint
-        // too, or the net delta over-counts.
-        let (rows, freed) = self
+        // too, or the net delta over-counts. (3b also refunds each row's setter from
+        // the `depositor`/`deposited_amount` these rows carry.)
+        let rows = self
             .storage
-            .count_matching_paths(contract_id, &base_path, &candidates)
+            .find_matching_paths(contract_id, &base_path, &candidates)
             .await?;
-        Fuel::Delete(rows, freed)
+        let freed: u64 = rows.iter().map(|r| r.path.len() as u64 + r.size).sum();
+        Fuel::Delete(rows.len() as u64, freed)
             .consume(accessor, self.gauge.as_ref())
             .await?;
         let deleted = self
@@ -187,11 +189,12 @@ impl Runtime {
             .await?;
         // Net footprint delta for the op's accumulator. A new key adds its whole
         // row (path + value); an overwrite keeps the same path, so only the value
-        // length changes (new − old). One size-only point-read of the live value
-        // (see `latest_size`) distinguishes the two and supplies the old length.
-        let delta = match self.storage.latest_size(contract_id, &path).await? {
+        // length changes (new − old). One point-read of the live row (see
+        // `latest_deposit_row`) distinguishes the two and supplies the old size.
+        // (3b will also use its depositor/amount to refund the displaced setter.)
+        let delta = match self.storage.latest_deposit_row(contract_id, &path).await? {
             None => (path.len() + bs.len()) as i64,
-            Some(old_value_len) => bs.len() as i64 - old_value_len as i64,
+            Some(old) => bs.len() as i64 - old.size as i64,
         };
         self.footprint.record_delta(delta);
         // Stamp the op's payer as this row's depositor (the refund target). 0 =

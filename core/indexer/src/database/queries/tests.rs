@@ -567,22 +567,22 @@ async fn test_latest_size_tracks_live_value() -> Result<()> {
     };
 
     // Absent → None.
-    assert_eq!(get_latest_contract_state_size(&conn, cid, &path).await?, None);
+    assert_eq!(get_latest_deposit_row(&conn, cid, &path).await?.map(|r| r.size), None);
     // Create a 4-byte value → Some(4).
     set(vec![1, 2, 3, 4]).await?;
     assert_eq!(
-        get_latest_contract_state_size(&conn, cid, &path).await?,
+        get_latest_deposit_row(&conn, cid, &path).await?.map(|r| r.size),
         Some(4)
     );
     // Overwrite with a 1-byte value (same height replaces) → Some(1).
     set(vec![9]).await?;
     assert_eq!(
-        get_latest_contract_state_size(&conn, cid, &path).await?,
+        get_latest_deposit_row(&conn, cid, &path).await?.map(|r| r.size),
         Some(1)
     );
     // Tombstone → None (the post-`deleted` liveness rule).
     delete_contract_state(&conn, height, Some(tx), cid, &path).await?;
-    assert_eq!(get_latest_contract_state_size(&conn, cid, &path).await?, None);
+    assert_eq!(get_latest_deposit_row(&conn, cid, &path).await?.map(|r| r.size), None);
     Ok(())
 }
 
@@ -1286,8 +1286,8 @@ async fn test_map_keys() -> Result<()> {
     assert_eq!(paths[1], cs_path(&["key1"]));
     assert_eq!(paths[2], cs_path(&["key2"]));
 
-    // The read half tallies the rows the delete will remove (for metering)…
-    let (rows, _bytes) = count_matching_paths(
+    // The read half returns the rows the delete will remove (for metering + refunds)…
+    let rows = find_matching_paths(
         &conn,
         contract_id,
         height,
@@ -1295,7 +1295,7 @@ async fn test_map_keys() -> Result<()> {
         &cands(&["key0"]),
     )
     .await?;
-    assert_eq!(rows, 2);
+    assert_eq!(rows.len(), 2);
     // …and the write half removes exactly those rows.
     let deleted = hard_delete_matching_paths(
         &conn,

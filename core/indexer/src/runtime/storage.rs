@@ -11,9 +11,9 @@ use wit_component::{ComponentEncoder, WitPrinter};
 use crate::{
     database::{
         queries::{
-            DeletableRow, count_matching_paths, create_contract_signer, exists_contract_state,
+            DepositRow, create_contract_signer, exists_contract_state, find_matching_paths,
             find_live_subtree, get_contract_address_from_id, get_contract_bytes_by_id,
-            get_contract_id_from_address, get_latest_contract_state_size,
+            get_contract_id_from_address, get_latest_deposit_row,
             get_latest_contract_state_value, hard_delete_matching_paths, insert_contract,
             tombstone_rows,
             insert_contract_result, insert_contract_state, matching_path,
@@ -116,7 +116,7 @@ impl Storage {
         &self,
         contract_id: u64,
         path: &[u8],
-    ) -> Result<Vec<DeletableRow>> {
+    ) -> Result<Vec<DepositRow>> {
         Ok(find_live_subtree(&self.conn, contract_id, path).await?)
     }
 
@@ -126,16 +126,21 @@ impl Storage {
     pub async fn tombstone_rows(
         &self,
         contract_id: u64,
-        rows: &[DeletableRow],
+        rows: &[DepositRow],
     ) -> Result<(bool, u64)> {
         Ok(tombstone_rows(&self.conn, contract_id, self.height, self.effective_tx_id(), rows).await?)
     }
 
-    /// The live value's stored byte length for `path`, or `None` if no live
-    /// version exists. Backs the footprint accumulator's net-delta computation on
-    /// overwrite (see `_set_primitive`).
-    pub async fn latest_size(&self, contract_id: u64, path: &[u8]) -> Result<Option<u64>> {
-        Ok(get_latest_contract_state_size(&self.conn, contract_id, path).await?)
+    /// The deposit projection of `path`'s live row — `(size, depositor,
+    /// deposited_amount)` — or `None` if no live version exists. On an overwrite,
+    /// a `Some` is the row being replaced: its old setter must be refunded its
+    /// `deposited_amount`. Never reads the value.
+    pub async fn latest_deposit_row(
+        &self,
+        contract_id: u64,
+        path: &[u8],
+    ) -> Result<Option<DepositRow>> {
+        Ok(get_latest_deposit_row(&self.conn, contract_id, path).await?)
     }
 
     pub async fn exists(&self, contract_id: u64, path: &[u8]) -> Result<bool> {
@@ -154,16 +159,16 @@ impl Storage {
         Ok(matching_path(&self.conn, contract_id, base_path, candidates).await?)
     }
 
-    /// Read half of the intra-block variant hard-delete: tally `(rows, bytes)` so
-    /// the host can meter before the writes.
-    pub async fn count_matching_paths(
+    /// Read half of the intra-block variant hard-delete: the `DepositRow`s it will
+    /// remove, so the host can meter AND refund their setters before the writes.
+    pub async fn find_matching_paths(
         &self,
         contract_id: u64,
         base_path: &[u8],
         candidates: &[Vec<u8>],
-    ) -> Result<(u64, u64)> {
+    ) -> Result<Vec<DepositRow>> {
         Ok(
-            count_matching_paths(&self.conn, contract_id, self.height, base_path, candidates)
+            find_matching_paths(&self.conn, contract_id, self.height, base_path, candidates)
                 .await?,
         )
     }

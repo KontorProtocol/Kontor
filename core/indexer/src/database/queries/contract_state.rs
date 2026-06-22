@@ -191,21 +191,22 @@ pub async fn get_latest_contract_state(
     Ok(rows.next().await?.map(|r| from_row(&r)).transpose()?)
 }
 
-/// The live value's stored byte length for one path (the `size` column =
-/// `value.len()`), or `None` if no live version exists. Size-only — used by the
-/// storage-deposit footprint accumulator to net an overwrite (`new − old`)
-/// without deserializing the old value. Same live-latest semantics as
-/// [`get_latest_contract_state_value`], minus the fuel gate (the read is host
-/// bookkeeping, not a metered guest get).
-pub async fn get_latest_contract_state_size(
+/// The deposit projection of one path's LIVE row — `(size, depositor,
+/// deposited_amount)` — or `None` if no live version exists. The overwrite read
+/// for the deposit accumulator: a `Some` means this set REPLACES a live row, so
+/// its old setter must be refunded its `deposited_amount`. Size-only-plus — never
+/// deserialises the value. Same live-latest semantics as
+/// [`get_latest_contract_state_value`], minus the fuel gate (host bookkeeping, not
+/// a metered guest get).
+pub async fn get_latest_deposit_row(
     conn: &Connection,
     contract_id: u64,
     path: &[u8],
-) -> Result<Option<u64>, Error> {
+) -> Result<Option<DepositRow>, Error> {
     let mut rows = conn
         .query(
             &live_latest(
-                "size",
+                "path, size, depositor, deposited_amount",
                 "contract_id = :contract_id AND path = :path",
             ),
             (
@@ -214,7 +215,17 @@ pub async fn get_latest_contract_state_size(
             ),
         )
         .await?;
-    Ok(rows.next().await?.map(|r| r.get::<u64>(0)).transpose()?)
+    rows.next()
+        .await?
+        .map(|r| {
+            Ok::<_, Error>(DepositRow {
+                path: r.get::<Vec<u8>>(0)?,
+                size: r.get::<u64>(1)?,
+                depositor: r.get::<Option<u64>>(2)?,
+                deposited_amount: r.get::<Option<String>>(3)?,
+            })
+        })
+        .transpose()
 }
 
 pub async fn get_latest_contract_state_value(
@@ -247,12 +258,14 @@ pub async fn get_latest_contract_state_value(
     Ok(None)
 }
 
-/// What tombstoning + footprint accounting need about a live row — its `path` and
-/// the freed value `size`. Deliberately OMITS the value: a large-subtree delete
-/// must not materialise gigabytes of values, and the `size` column gives the byte
-/// length without reading them. (The depositor for refunds is added here later.)
+/// The storage-deposit projection of a live row — what the deposit accumulator
+/// needs to charge/refund, WITHOUT the value. Used both for a subtree's rows (on
+/// delete) and for a single overwritten row (on set): `size` (the `size` column,
+/// avoids materialising the value), the `depositor` (refund target), and the
+/// `deposited_amount` (exactly what to refund). Omitting the value is what keeps a
+/// large delete from materialising gigabytes.
 #[derive(Debug, Clone)]
-pub struct DeletableRow {
+pub struct DepositRow {
     pub path: Vec<u8>,
     pub size: u64,
     /// Who deposited for this row — the refund target when it's freed. `None` for
@@ -272,7 +285,7 @@ pub async fn find_live_subtree(
     conn: &Connection,
     contract_id: u64,
     path: &[u8],
-) -> Result<Vec<DeletableRow>, Error> {
+) -> Result<Vec<DepositRow>, Error> {
     let (range, mut params) = subtree_range(">=", path);
     params.push((
         ":contract_id".to_string(),
@@ -285,7 +298,7 @@ pub async fn find_live_subtree(
     let mut result = conn.query(&query, params).await?;
     let mut rows = Vec::new();
     while let Some(row) = result.next().await? {
-        rows.push(DeletableRow {
+        rows.push(DepositRow {
             path: row.get::<Vec<u8>>(0)?,
             size: row.get::<u64>(1)?,
             depositor: row.get::<Option<u64>>(2)?,
@@ -306,7 +319,7 @@ pub async fn tombstone_rows(
     contract_id: u64,
     height: u64,
     tx_id: Option<u64>,
-    rows: &[DeletableRow],
+    rows: &[DepositRow],
 ) -> Result<(bool, u64), Error> {
     let removed = !rows.is_empty();
     let freed: u64 = rows.iter().map(|r| r.path.len() as u64 + r.size).sum();
@@ -531,34 +544,39 @@ fn matching_paths_clause(
     )
 }
 
-/// Read half of the intra-block variant hard-delete: tally the rows it WOULD
-/// remove — `(rows, bytes)` (path + value). Split from the delete so the host can
-/// meter `Fuel::Delete` BEFORE the writes, exactly like [`find_live_subtree`].
-pub async fn count_matching_paths(
+/// Read half of the intra-block variant hard-delete: the rows it WOULD remove, as
+/// `DepositRow`s (path + size + depositor + amount). Split from the delete so the
+/// host can meter `Fuel::Delete` AND refund each row's setter BEFORE the writes,
+/// exactly like [`find_live_subtree`].
+pub async fn find_matching_paths(
     conn: &Connection,
     contract_id: u64,
     height: u64,
     base_path: &[u8],
     candidates: &[Vec<u8>],
-) -> Result<(u64, u64), Error> {
-    let mut rows = 0u64;
-    let mut bytes = 0u64;
+) -> Result<Vec<DepositRow>, Error> {
+    let mut rows = Vec::new();
     for candidate in candidates {
         let (where_clause, params) = matching_paths_clause(contract_id, height, base_path, candidate);
         let mut result = conn
             .query(
-                &format!("SELECT path, value FROM contract_state WHERE {where_clause}"),
+                &format!(
+                    "SELECT path, size, depositor, deposited_amount \
+                     FROM contract_state WHERE {where_clause}"
+                ),
                 params,
             )
             .await?;
         while let Some(row) = result.next().await? {
-            let path = row.get::<Vec<u8>>(0)?;
-            let value = row.get::<Vec<u8>>(1)?;
-            bytes += (path.len() + value.len()) as u64;
-            rows += 1;
+            rows.push(DepositRow {
+                path: row.get::<Vec<u8>>(0)?,
+                size: row.get::<u64>(1)?,
+                depositor: row.get::<Option<u64>>(2)?,
+                deposited_amount: row.get::<Option<String>>(3)?,
+            });
         }
     }
-    Ok((rows, bytes))
+    Ok(rows)
 }
 
 /// Write half: hard-delete the current-height rows under each candidate. Returns
