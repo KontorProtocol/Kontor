@@ -25,6 +25,12 @@ pub enum StackError {
 pub struct CallFrame {
     pub contract_id: u64,
     pub is_proc: bool,
+    /// The depositor (signer_id, 0 = none) to stamp on this frame's storage
+    /// writes — the op's payer, set on the outermost frame and INHERITED by nested
+    /// frames. Lives on the frame (not a shared atomic) so it follows the call's
+    /// push/pop discipline: a nested or sub-op (hold/settle) frame can't clobber
+    /// the op's depositor, it just carries its own and pops away.
+    pub depositor: u64,
 }
 
 impl PartialEq for CallFrame {

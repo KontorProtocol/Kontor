@@ -20,7 +20,6 @@ use crate::database::native_contracts::is_native_contract_id;
 use crate::database::types::Identity;
 
 use std::sync::Arc;
-use std::sync::atomic::Ordering;
 use tokio::sync::Mutex;
 use wasmtime::component::ResourceTable;
 
@@ -84,9 +83,6 @@ impl Runtime {
             .ok_or_else(|| {
                 ExecutionError::Deterministic(anyhow!("Contract not found: {}", contract_address))
             })?;
-        // (The op's depositor / `op_payer` is stamped *after* the hold call below —
-        // hold is itself a top-level core-signed op that resets `op_payer`, so it
-        // must be set last, just before the op's own writes run.)
         let component = self
             .load_component(contract_id)
             .await
@@ -333,26 +329,30 @@ impl Runtime {
 
         // Stamp the depositor for every write in this op = the top-level op's
         // payer, but ONLY when the op will actually settle: a top-level op with a
-        // NON-core signer — the SAME gate `hold`/`release`/`settle` use. A
-        // core-signed op bypasses settle, so stamping a depositor there records a
-        // deposit that is never vault-backed and drains the vault when the row is
-        // freed (the stamp gate and the settle gate must agree). 0 = no depositor.
-        // MUST be after the hold call above: hold is its own top-level core-signed
-        // op and resets `op_payer` to 0, so this set has to come last. Nested
-        // cross-contract calls inherit it (a row written deep in a nested call
-        // still attributes to the op's payer).
-        if is_top_level {
-            let depositor = match signer {
+        // The depositor stamped on this frame's storage writes = the op's payer,
+        // but ONLY when the op will actually settle: a top-level op with a NON-core
+        // signer (the SAME gate `hold`/`settle` use). A core-signed op bypasses
+        // settle, so a depositor there would record a deposit that's never
+        // vault-backed and drains the vault when the row is freed (the stamp gate
+        // and the settle gate must agree). 0 = no depositor. Nested frames INHERIT
+        // the op's payer from their parent, so a row written deep in a nested call
+        // still attributes to it. Because this rides the frame (not a shared
+        // atomic), the hold/settle sub-ops can't clobber it — they carry their own
+        // (0) and pop away.
+        let depositor = if is_top_level {
+            match signer {
                 Some(s) if !s.is_core() => payment.map(|p| p.signer_id).unwrap_or(0),
                 _ => 0,
-            };
-            self.op_payer.store(depositor, Ordering::Relaxed);
-        }
+            }
+        } else {
+            self.stack.peek().await.map(|f| f.depositor).unwrap_or(0)
+        };
 
         self.stack
             .push(CallFrame {
                 contract_id,
                 is_proc,
+                depositor,
             })
             .await
             .map_err(|e| ExecutionError::Deterministic(e.into()))?;

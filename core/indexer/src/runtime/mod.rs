@@ -39,7 +39,6 @@ use tokio::sync::Mutex;
 pub use types::default_val_for_type;
 
 use std::collections::{HashMap, HashSet};
-use std::sync::atomic::AtomicU64;
 use std::sync::{Arc, LazyLock};
 
 /// Distinguishes deterministic failures from non-deterministic failures
@@ -186,13 +185,6 @@ pub struct Runtime {
     /// reset at the top-level op start, drained at the settle boundary where the
     /// token `settle` locks the charge into the VAULT and pays the refunds.
     pub deposit: DepositMeter,
-    /// The current top-level op's payer signer_id (0 = none / non-settling op),
-    /// stamped as the `depositor` on each storage write so a freed row can be
-    /// refunded to whoever paid for it. `Arc`-shared so nested cross-contract writes
-    /// attribute to the TOP-LEVEL payer; set at op start in `prepare_call`, ONLY for
-    /// top-level non-core (settling) ops — core-signed ops set it to 0 so their
-    /// writes carry no depositor (they bypass settle).
-    pub op_payer: Arc<AtomicU64>,
     pub gas_limit_for_non_procs: u64,
     pub gas_to_fuel_multiplier: u64,
     pub gas_to_token_multiplier: Decimal,
@@ -271,7 +263,6 @@ impl Runtime {
             stack: Stack::new(),
             gauge: Some(FuelGauge::new()),
             deposit: DepositMeter::new(),
-            op_payer: Arc::new(AtomicU64::new(0)),
             gas_limit_for_non_procs: 100_000,
             gas_to_fuel_multiplier: 1_000,
             gas_to_token_multiplier: Decimal::from("1e-9"),

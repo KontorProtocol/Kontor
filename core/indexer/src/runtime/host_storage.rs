@@ -1,4 +1,3 @@
-use std::sync::atomic::Ordering;
 
 use anyhow::{Result, anyhow};
 use futures_util::future::OptionFuture;
@@ -226,14 +225,15 @@ impl Runtime {
         Fuel::Set(bs.len() as u64)
             .consume(accessor, self.gauge.as_ref())
             .await?;
-        // Stamp the op's payer as this row's depositor (the refund target), iff a
-        // deposit is actually settled for this op. Skipped when:
-        //   - the contract is the deposit-denominating token (recursion exemption);
-        //   - there's no payer (op_payer 0); or
-        //   - the payer is CORE — core-signed ops bypass hold/release/settle
-        //     (`!signer.is_core()`), so a deposit recorded here would never be
-        //     vault-backed and would drain the vault when the row is later freed.
-        let depositor = match self.op_payer.load(Ordering::Relaxed) {
+        // Stamp the op's payer (from the current call frame) as this row's
+        // depositor (the refund target), iff a deposit is actually settled for this
+        // op. The frame's `depositor` is 0 for non-settling ops (core-signed /
+        // no-payer — set at prepare_call's stamp gate, which matches the settle
+        // gate), and the token (deposit-denominating ledger) is exempt by contract
+        // id (recursion). A depositor recorded without a matching settle would
+        // never be vault-backed and would drain the vault when the row is freed.
+        let frame_depositor = self.stack.peek().await.map(|f| f.depositor).unwrap_or(0);
+        let depositor = match frame_depositor {
             id if id == 0 || id == CORE_SIGNER_ID || is_deposit_exempt(contract_id) => None,
             id => Some(id),
         };
