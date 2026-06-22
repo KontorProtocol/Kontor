@@ -53,8 +53,11 @@ CREATE TABLE IF NOT EXISTS contract_state (
   value BLOB NOT NULL,
   deleted BOOLEAN NOT NULL DEFAULT 0,
   -- The signer who wrote (deposited for) this version — the storage-deposit
-  -- refund target. NULL for tombstones and Core/system writes (no deposit). A
-  -- deterministic rowid like contract_id, so safe in the checkpoint hash.
+  -- refund target. NULL for tombstones. (Core/system + core-ledger writes will
+  -- also be NULL once the deposit exemption lands in step 4; today they still
+  -- carry the payer's signer_id — deterministic and harmless, nothing consumes
+  -- it yet.) A deterministic rowid like contract_id, so safe in the checkpoint
+  -- hash.
   depositor INTEGER,
   -- The deposit locked for this row = (path + value bytes) × D, as a decimal
   -- string (future-proof for fractional D). The exact amount refunded when the
@@ -62,6 +65,10 @@ CREATE TABLE IF NOT EXISTS contract_state (
   -- bytes. Consensus state (drives refunds), so hashed in the checkpoint.
   deposited_amount TEXT,
   UNIQUE (contract_id, height, path),
+  -- depositor and deposited_amount are always set together or not at all (a row
+  -- either carries a deposit or it doesn't). Enforced in SQL so a future writer
+  -- can't desync them and corrupt refund accounting.
+  CHECK ((depositor IS NULL) = (deposited_amount IS NULL)),
   FOREIGN KEY (height) REFERENCES blocks (height) ON DELETE CASCADE,
   FOREIGN KEY (tx_id) REFERENCES transactions (id),
   FOREIGN KEY (depositor) REFERENCES signers (id)

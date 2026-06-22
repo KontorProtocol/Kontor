@@ -185,10 +185,12 @@ pub struct Runtime {
     /// op's payer. Observation only (storage-deposit phase 0); reset at the
     /// top-level op start, read at the settle boundary.
     pub footprint: FootprintGauge,
-    /// The current top-level op's payer signer_id (0 = none: Core/system ops),
-    /// stamped as the `depositor` on each storage write so a freed row can be
-    /// refunded to whoever paid for it. `Arc`-shared so nested cross-contract
-    /// writes attribute to the TOP-LEVEL payer; set at op start in `prepare_call`.
+    /// The current top-level op's payer signer_id (0 = none), stamped as the
+    /// `depositor` on each storage write so a freed row can be refunded to whoever
+    /// paid for it. `Arc`-shared so nested cross-contract writes attribute to the
+    /// TOP-LEVEL payer; set at op start in `prepare_call`. NOTE: today Core/system
+    /// ops pass `signer_id = CORE_SIGNER_ID`, so their writes are stamped with that
+    /// (not 0) — the step-4 deposit exemption will map those to none.
     pub op_payer: Arc<AtomicU64>,
     pub gas_limit_for_non_procs: u64,
     pub gas_to_fuel_multiplier: u64,
