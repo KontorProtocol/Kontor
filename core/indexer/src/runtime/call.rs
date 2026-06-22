@@ -543,32 +543,17 @@ impl Runtime {
                 payer = ?payer,
                 "Deposit settle + gas release"
             );
-            // Release FIRST: burn the execution slice (signer → BURNER) and refund
-            // the FULL gas escrow back to the payer (CORE → signer). Every token
-            // movement surfaces as a result-row value so 3rd parties can rebuild
-            // balances from results as deltas; CORE is the only untracked account
-            // and it nets to zero per op (hold's signer→CORE is reversed here).
-            Box::pin({
-                let mut runtime = self.clone();
-                runtime.stack = Stack::new();
-                let payer = payer.clone();
-                async move {
-                    token::api::release(&mut runtime, &Signer::Core(Box::new(payer)), burn_amount)
-                        .await
-                }
-            })
-            .await
-            .map_err(ExecutionError::NonDeterministic)?
-            .map_err(|e| ExecutionError::NonDeterministic(anyhow::anyhow!("{e:?}")))?;
-            // Settle AFTER release: the payer now holds the refunded escrow, so the
-            // deposit lock is debited straight from the payer (payer → VAULT) and
-            // setter refunds paid from the VAULT — both returned as Transfers in
-            // settle's result row.
+            // Settle BEFORE release: lock `charge` of the payer's escrow (in CORE)
+            // into the VAULT and refund displaced setters from the VAULT. Each move
+            // is a `ledger.set` persisted to contract_state (the token ledger), so
+            // balances reconstruct from state — settle returns nothing. Must precede
+            // release, which then refunds the remaining escrow to the payer.
             if charge_gas > 0 || !refunds.is_empty() {
                 let refunds: Vec<token::api::DepositRefund> = refunds
                     .into_iter()
                     .map(|(setter, amt)| token::api::DepositRefund { setter, amt })
                     .collect();
+                let payer = payer.clone();
                 Box::pin({
                     let mut runtime = self.clone();
                     runtime.stack = Stack::new();
@@ -586,6 +571,19 @@ impl Runtime {
                 .map_err(ExecutionError::NonDeterministic)?
                 .map_err(|e| ExecutionError::NonDeterministic(anyhow::anyhow!("{e:?}")))?;
             }
+            // Release: burn the execution slice (signer → BURNER) and refund the
+            // remaining escrow (CORE → signer).
+            Box::pin({
+                let mut runtime = self.clone();
+                runtime.stack = Stack::new();
+                async move {
+                    token::api::release(&mut runtime, &Signer::Core(Box::new(payer)), burn_amount)
+                        .await
+                }
+            })
+            .await
+            .map_err(ExecutionError::NonDeterministic)?
+            .map_err(|e| ExecutionError::NonDeterministic(anyhow::anyhow!("{e:?}")))?;
         }
         if should_skip_result(contract_address, func_name) {
             return result;

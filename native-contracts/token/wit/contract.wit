@@ -40,7 +40,7 @@ world root {
   // Storage-deposit settlement (core-only, not part of the common token
   // interface): lock `charge` of the payer's escrow into the VAULT and refund
   // freed/displaced rows' deposits to their original setters (by signer-id).
-  export settle: async func(ctx: borrow<core-context>, charge: decimal, refunds: list<deposit-refund>) -> result<list<transfer>, error>;
+  export settle: async func(ctx: borrow<core-context>, charge: decimal, refunds: list<deposit-refund>) -> result<_, error>;
 
   export init: async func(ctx: borrow<proc-context>) -> contract;
 

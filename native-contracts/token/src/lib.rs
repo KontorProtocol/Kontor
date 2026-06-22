@@ -118,22 +118,17 @@ impl Guest for Token {
         })
     }
 
-    fn settle(
-        ctx: &CoreContext,
-        charge: Decimal,
-        refunds: Vec<DepositRefund>,
-    ) -> Result<Vec<Transfer>, Error> {
-        let proc = ctx.signer_proc_context();
+    fn settle(ctx: &CoreContext, charge: Decimal, refunds: Vec<DepositRefund>) -> Result<(), Error> {
+        let proc = ctx.proc_context();
         let zero = 0u64.try_into()?;
-        // Every move is returned as a Transfer so consumers can rebuild balances
-        // from result rows as deltas. The deposit is debited from the PAYER, not
-        // CORE: by the time settle runs, release has refunded the full gas escrow
-        // back to the payer, so the payer funds the lock directly and CORE stays a
-        // net-zero, never-surfaced escrow.
-        let mut transfers = Vec::new();
-        // Lock this op's new deposits: payer → VAULT.
+        // No return value needed: every move below is a `ledger.set`, and the
+        // token ledger lives in contract_state — so the balance changes are already
+        // persisted there (the authoritative source consumers rebuild balances
+        // from). Returning the transfers would just duplicate that, at O(refunds).
+        //
+        // Lock this op's new deposits: payer escrow (held in CORE) → VAULT.
         if charge > zero {
-            transfers.push(transfer(&proc, proc.signer().into(), VAULT(), charge)?);
+            transfer(&proc, CORE(), VAULT(), charge)?;
         }
         // Refund freed/displaced rows to their original setters out of the VAULT,
         // which by construction already holds these amounts (locked when those
@@ -141,10 +136,10 @@ impl Guest for Token {
         for DepositRefund { setter, amt } in refunds {
             if amt > zero {
                 let dst = Holder::from_ref(&HolderRef::SignerId(setter))?;
-                transfers.push(transfer(&proc, VAULT(), dst, amt)?);
+                transfer(&proc, VAULT(), dst, amt)?;
             }
         }
-        Ok(transfers)
+        Ok(())
     }
 
     fn mint(ctx: &ProcContext, amt: Decimal) -> Result<Mint, Error> {
