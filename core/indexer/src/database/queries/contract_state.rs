@@ -39,6 +39,7 @@
 
 use futures_util::{Stream, stream};
 use libsql::{Connection, Value, de::from_row, params};
+use serde::Deserialize;
 use stdlib::{next_element, strinc};
 
 use super::Error;
@@ -222,7 +223,7 @@ pub async fn get_latest_contract_state_value(
 /// (`path.len() + size` = bytes freed) before writing any tombstone, so a delete
 /// is charged in proportion to the subtree it removes — not a flat per-call fee
 /// regardless of size.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Deserialize)]
 pub struct DeletableRow {
     pub path: Vec<u8>,
     pub size: u64,
@@ -248,10 +249,7 @@ pub async fn find_live_subtree(
     let mut result = conn.query(&query, params).await?;
     let mut rows = Vec::new();
     while let Some(row) = result.next().await? {
-        rows.push(DeletableRow {
-            path: row.get::<Vec<u8>>(0)?,
-            size: row.get::<u64>(1)?,
-        });
+        rows.push(from_row(&row)?);
     }
     Ok(rows)
 }
@@ -509,10 +507,7 @@ pub async fn find_matching_paths(
             )
             .await?;
         while let Some(row) = result.next().await? {
-            rows.push(DeletableRow {
-                path: row.get::<Vec<u8>>(0)?,
-                size: row.get::<u64>(1)?,
-            });
+            rows.push(from_row(&row)?);
         }
     }
     Ok(rows)
