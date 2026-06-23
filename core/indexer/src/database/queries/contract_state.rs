@@ -34,7 +34,7 @@
 //! Two deliberate EXCEPTIONS, each documented at its call site:
 //!   - [`matching_path`] — enum/option variant resolution. GLOBAL-newest across
 //!     paths (NOT per-path), because it asks "which variant is current?".
-//!   - [`delete_matching_paths`] — a HARD delete at the current height (not a
+//!   - [`hard_delete_matching_paths`] — a HARD delete at the current height (not a
 //!     tombstone, not a liveness read); intra-block `Option` variant cleanup.
 
 use futures_util::{Stream, stream};
@@ -217,14 +217,82 @@ pub async fn get_latest_contract_state_value(
     Ok(None)
 }
 
-/// Remove an entry by tombstoning its WHOLE subtree: the path itself AND every
-/// live descendant (`path/field`, nested struct/map rows, …). A struct value
-/// persists under child paths, so tombstoning only the exact path would leave
-/// live primary rows behind while the caller (`Map`/`IndexedMap` `remove`) has
-/// already cleared the index — a half-removed entry. Height-versioned (one
-/// `deleted = true` row per live path at the current height), so reorg-safe.
-/// Returns true if any live row was tombstoned. The subtree is the byte range
-/// `[path, strinc(path))` (the node + every descendant share `path` as a prefix).
+/// A live row a delete will tombstone: just the `path` and its stored value
+/// `size`. Carries the two quantities the caller needs to METER the delete
+/// (`path.len() + size` = bytes freed) before writing any tombstone, so a delete
+/// is charged in proportion to the subtree it removes — not a flat per-call fee
+/// regardless of size.
+#[derive(Debug, Clone)]
+pub struct DeletableRow {
+    pub path: Vec<u8>,
+    pub size: u64,
+}
+
+/// Every live path at/under `path`: the read half of a subtree delete, split out
+/// so the caller can charge fuel for the rows BEFORE [`tombstone_rows`] writes
+/// them (read → meter → write). `live_latest` skips an already-tombstoned path
+/// (its latest version isn't live), so it isn't re-tombstoned. The subtree is the
+/// byte range `[path, strinc(path))` (the node + every descendant share `path` as
+/// a prefix). `size` is the live row's stored value length.
+pub async fn find_live_subtree(
+    conn: &Connection,
+    contract_id: u64,
+    path: &[u8],
+) -> Result<Vec<DeletableRow>, Error> {
+    let (range, mut params) = subtree_range(">=", path);
+    params.push((
+        ":contract_id".to_string(),
+        Value::Integer(contract_id as i64),
+    ));
+    let query = live_latest("path, size", &format!("contract_id = :contract_id AND {range}"));
+    let mut result = conn.query(&query, params).await?;
+    let mut rows = Vec::new();
+    while let Some(row) = result.next().await? {
+        rows.push(DeletableRow {
+            path: row.get::<Vec<u8>>(0)?,
+            size: row.get::<u64>(1)?,
+        });
+    }
+    Ok(rows)
+}
+
+/// Tombstone a WHOLE subtree: write one `deleted = true` row per live path (from
+/// [`find_live_subtree`]) at the current height. A struct value persists under
+/// child paths, so tombstoning only the exact path would leave live primary rows
+/// behind while the caller (`Map` `remove`) has already cleared the index — a
+/// half-removed entry. Height-versioned, so reorg-safe. Each tombstone is
+/// VALUE-LESS (`value` omitted → empty): nothing reads a tombstone's value
+/// (liveness keys off `deleted = 1`), so a big delete writes N empty marker rows
+/// instead of duplicating N values. Returns `(any row removed, total bytes freed)`
+/// where freed = Σ `path.len() + size` over the live rows.
+pub async fn tombstone_rows(
+    conn: &Connection,
+    contract_id: u64,
+    height: u64,
+    tx_id: Option<u64>,
+    rows: &[DeletableRow],
+) -> Result<(bool, u64), Error> {
+    let removed = !rows.is_empty();
+    let freed: u64 = rows.iter().map(|r| r.path.len() as u64 + r.size).sum();
+    for row in rows {
+        insert_contract_state(
+            conn,
+            ContractStateRow::builder()
+                .contract_id(contract_id)
+                .maybe_tx_id(tx_id)
+                .height(height)
+                .path(row.path.clone())
+                .deleted(true)
+                .build(),
+        )
+        .await?;
+    }
+    Ok((removed, freed))
+}
+
+/// Remove an entry by tombstoning its whole subtree (read → write, no metering).
+/// Returns true if any live row was tombstoned. Callers that meter the delete use
+/// [`find_live_subtree`] + [`tombstone_rows`] directly.
 pub async fn delete_contract_state(
     conn: &Connection,
     height: u64,
@@ -232,34 +300,8 @@ pub async fn delete_contract_state(
     contract_id: u64,
     path: &[u8],
 ) -> Result<bool, Error> {
-    // Every live path at/under `path`, re-inserted as a tombstone below.
-    // `live_latest` skips an already-tombstoned path (its latest version isn't
-    // live), so it's not re-tombstoned.
-    let (range, mut params) = subtree_range(">=", path);
-    params.push((
-        ":contract_id".to_string(),
-        Value::Integer(contract_id as i64),
-    ));
-    let query = live_latest(
-        "contract_id, height, tx_id, path, value, deleted",
-        &format!("contract_id = :contract_id AND {range}"),
-    );
-    let mut result = conn.query(&query, params).await?;
-
-    // Materialise the live rows BEFORE writing tombstones (don't read and write
-    // `contract_state` in the same statement).
-    let mut live: Vec<ContractStateRow> = Vec::new();
-    while let Some(row) = result.next().await? {
-        live.push(from_row(&row)?);
-    }
-
-    let removed = !live.is_empty();
-    for mut row in live {
-        row.deleted = true;
-        row.height = height;
-        row.tx_id = tx_id;
-        insert_contract_state(conn, row).await?;
-    }
+    let rows = find_live_subtree(conn, contract_id, path).await?;
+    let (removed, _freed) = tombstone_rows(conn, contract_id, height, tx_id, &rows).await?;
     Ok(removed)
 }
 
@@ -422,6 +464,60 @@ pub async fn matching_path(
         .map(|i| i as u32))
 }
 
+/// The current-height subtree `WHERE` fragment + params for one `candidate`:
+/// `contract_id = AND height = AND {byte range of base_path ++ candidate}`. Shared
+/// by the read ([`find_matching_paths`]) and the hard delete
+/// ([`hard_delete_matching_paths`]) so the metered read and the write target the
+/// exact same rows.
+fn matching_paths_clause(
+    contract_id: u64,
+    height: u64,
+    base_path: &[u8],
+    candidate: &[u8],
+) -> (String, Vec<(String, Value)>) {
+    let mut prefix = base_path.to_vec();
+    prefix.extend_from_slice(candidate); // base_path ++ candidate element
+    let (range, mut params) = subtree_range(">=", &prefix);
+    params.push((
+        ":contract_id".to_string(),
+        Value::Integer(contract_id as i64),
+    ));
+    params.push((":height".to_string(), Value::Integer(height as i64)));
+    (
+        format!("contract_id = :contract_id AND height = :height AND {range}"),
+        params,
+    )
+}
+
+/// The rows [`hard_delete_matching_paths`] will delete — read first so the caller
+/// can charge fuel in proportion to what's removed (read → meter → write). Same
+/// current-height, per-candidate ranges; `size` is the stored value length.
+pub async fn find_matching_paths(
+    conn: &Connection,
+    contract_id: u64,
+    height: u64,
+    base_path: &[u8],
+    candidates: &[Vec<u8>],
+) -> Result<Vec<DeletableRow>, Error> {
+    let mut rows = Vec::new();
+    for candidate in candidates {
+        let (clause, params) = matching_paths_clause(contract_id, height, base_path, candidate);
+        let mut result = conn
+            .query(
+                &format!("SELECT path, size FROM contract_state WHERE {clause}"),
+                params,
+            )
+            .await?;
+        while let Some(row) = result.next().await? {
+            rows.push(DeletableRow {
+                path: row.get::<Vec<u8>>(0)?,
+                size: row.get::<u64>(1)?,
+            });
+        }
+    }
+    Ok(rows)
+}
+
 /// EXCEPTION to the liveness model (see module header): a HARD delete of rows at
 /// the CURRENT height under any of `candidates` — not a tombstone, not a
 /// latest-version read. Used only for intra-block `Option`/enum variant cleanup
@@ -429,7 +525,7 @@ pub async fn matching_path(
 /// it deliberately does NOT touch earlier-height rows. Each `candidate` is an
 /// already-encoded discriminant element, so the subtree is `base_path ++ candidate`
 /// — a per-candidate current-height range delete.
-pub async fn delete_matching_paths(
+pub async fn hard_delete_matching_paths(
     conn: &Connection,
     contract_id: u64,
     height: u64,
@@ -438,20 +534,10 @@ pub async fn delete_matching_paths(
 ) -> Result<u64, Error> {
     let mut deleted = 0;
     for candidate in candidates {
-        let mut prefix = base_path.to_vec();
-        prefix.extend_from_slice(candidate); // base_path ++ candidate element
-        let (range, mut params) = subtree_range(">=", &prefix);
-        params.push((
-            ":contract_id".to_string(),
-            Value::Integer(contract_id as i64),
-        ));
-        params.push((":height".to_string(), Value::Integer(height as i64)));
+        let (clause, params) = matching_paths_clause(contract_id, height, base_path, candidate);
         deleted += conn
             .execute(
-                &format!(
-                    "DELETE FROM contract_state \
-                     WHERE contract_id = :contract_id AND height = :height AND {range}"
-                ),
+                &format!("DELETE FROM contract_state WHERE {clause}"),
                 params,
             )
             .await?;

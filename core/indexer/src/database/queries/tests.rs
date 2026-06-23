@@ -58,7 +58,7 @@ fn cs_path_dotted(path: &str) -> Vec<u8> {
     cs_path(&path.split('.').collect::<Vec<_>>())
 }
 
-/// Candidate discriminant elements for `matching_path`/`delete_matching_paths`,
+/// Candidate discriminant elements for `matching_path`/`hard_delete_matching_paths`,
 /// from string variant names — these host tests use string-element discriminants
 /// (the byte-compare is encoding-agnostic, so a string element is a fine stand-in).
 fn cands(names: &[&str]) -> Vec<Vec<u8>> {
@@ -1119,7 +1119,7 @@ async fn test_map_keys() -> Result<()> {
     assert_eq!(paths[1], cs_path(&["key1"]));
     assert_eq!(paths[2], cs_path(&["key2"]));
 
-    let result = delete_matching_paths(
+    let result = hard_delete_matching_paths(
         &conn,
         contract_id,
         height,
