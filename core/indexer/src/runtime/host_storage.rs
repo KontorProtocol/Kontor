@@ -123,12 +123,19 @@ impl Runtime {
         candidates: Vec<Vec<u8>>,
     ) -> Result<u64> {
         validate_path(&base_path)?;
-        Fuel::DeleteMatchingPaths(candidates.len() as u64)
+        let contract_id = self.table.lock().await.get(&self_)?.get_contract_id();
+        // Read → meter → write: charge in proportion to the rows actually removed,
+        // not a flat per-candidate fee.
+        let rows = self
+            .storage
+            .find_matching_paths(contract_id, &base_path, &candidates)
+            .await?;
+        let bytes: u64 = rows.iter().map(|r| r.path.len() as u64 + r.size).sum();
+        Fuel::Delete(rows.len() as u64, bytes)
             .consume(accessor, self.gauge.as_ref())
             .await?;
-        let contract_id = self.table.lock().await.get(&self_)?.get_contract_id();
         self.storage
-            .delete_matching_paths(contract_id, &base_path, &candidates)
+            .hard_delete_matching_paths(contract_id, &base_path, &candidates)
             .await
     }
 
@@ -141,9 +148,16 @@ impl Runtime {
         path: Vec<u8>,
     ) -> Result<bool> {
         validate_path(&path)?;
-        Fuel::Set(0).consume(accessor, self.gauge.as_ref()).await?;
         let contract_id = self.table.lock().await.get(&self_)?.get_contract_id();
-        self.storage.delete(contract_id, &path).await
+        // Read → meter → write. A flat `Set(0)` charged the same whether the
+        // subtree held one row or thousands; meter by the rows/bytes tombstoned.
+        let rows = self.storage.find_live_subtree(contract_id, &path).await?;
+        let bytes: u64 = rows.iter().map(|r| r.path.len() as u64 + r.size).sum();
+        Fuel::Delete(rows.len() as u64, bytes)
+            .consume(accessor, self.gauge.as_ref())
+            .await?;
+        let (removed, _freed) = self.storage.tombstone_rows(contract_id, &rows).await?;
+        Ok(removed)
     }
 
     pub(crate) async fn _set_primitive<S, T: HasContractId, V: Serialize>(

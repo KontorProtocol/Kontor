@@ -11,11 +11,12 @@ use wit_component::{ComponentEncoder, WitPrinter};
 use crate::{
     database::{
         queries::{
-            create_contract_signer, delete_contract_state, delete_matching_paths,
-            exists_contract_state, get_contract_address_from_id, get_contract_bytes_by_id,
-            get_contract_id_from_address, get_latest_contract_state_value, insert_contract,
-            insert_contract_result, insert_contract_state, matching_path,
-            path_prefix_filter_contract_state, prune_contract_state, select_block_at_height,
+            DeletableRow, create_contract_signer, exists_contract_state, find_live_subtree,
+            find_matching_paths, get_contract_address_from_id, get_contract_bytes_by_id,
+            get_contract_id_from_address, get_latest_contract_state_value,
+            hard_delete_matching_paths, insert_contract, insert_contract_result,
+            insert_contract_state, matching_path, path_prefix_filter_contract_state,
+            prune_contract_state, select_block_at_height, tombstone_rows,
         },
         types::{ContractResultRow, ContractRow, ContractStateRow},
     },
@@ -90,13 +91,27 @@ impl Storage {
         Ok(())
     }
 
-    pub async fn delete(&self, contract_id: u64, path: &[u8]) -> Result<bool> {
-        Ok(delete_contract_state(
+    /// The live subtree a [`Self::tombstone_rows`] would remove — read first so
+    /// the caller can charge fuel for the rows before writing tombstones.
+    pub async fn find_live_subtree(
+        &self,
+        contract_id: u64,
+        path: &[u8],
+    ) -> Result<Vec<DeletableRow>> {
+        Ok(find_live_subtree(&self.conn, contract_id, path).await?)
+    }
+
+    pub async fn tombstone_rows(
+        &self,
+        contract_id: u64,
+        rows: &[DeletableRow],
+    ) -> Result<(bool, u64)> {
+        Ok(tombstone_rows(
             &self.conn,
+            contract_id,
             self.height,
             self.effective_tx_id(),
-            contract_id,
-            path,
+            rows,
         )
         .await?)
     }
@@ -117,14 +132,28 @@ impl Storage {
         Ok(matching_path(&self.conn, contract_id, base_path, candidates).await?)
     }
 
-    pub async fn delete_matching_paths(
+    /// The current-height rows a [`Self::hard_delete_matching_paths`] would
+    /// remove — read first so the caller can meter the delete.
+    pub async fn find_matching_paths(
+        &self,
+        contract_id: u64,
+        base_path: &[u8],
+        candidates: &[Vec<u8>],
+    ) -> Result<Vec<DeletableRow>> {
+        Ok(
+            find_matching_paths(&self.conn, contract_id, self.height, base_path, candidates)
+                .await?,
+        )
+    }
+
+    pub async fn hard_delete_matching_paths(
         &self,
         contract_id: u64,
         base_path: &[u8],
         candidates: &[Vec<u8>],
     ) -> Result<u64> {
         Ok(
-            delete_matching_paths(&self.conn, contract_id, self.height, base_path, candidates)
+            hard_delete_matching_paths(&self.conn, contract_id, self.height, base_path, candidates)
                 .await?,
         )
     }

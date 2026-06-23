@@ -27,7 +27,11 @@ pub enum Fuel {
     Exists,
     Get(usize),
     Set(u64),
-    DeleteMatchingPaths(u64),
+    /// A subtree delete (tombstone or hard delete), metered by what it removes:
+    /// `(rows, bytes)`. A flat per-call fee would let a cheap call tombstone an
+    /// arbitrarily large subtree on every node, so the cost scales with both the
+    /// row count and the bytes freed (`path.len() + value size`).
+    Delete(u64, u64),
     ContractAddress,
     ProcSigner,
     ProcPayer,
@@ -80,7 +84,7 @@ pub enum Fuel {
     Result(u64),
     // TODO: recalibrate with the rest of the Fuel table against measured
     // benchmarks. Currently sized to match other non-zk "non-trivial"
-    // operations (DeleteMatchingPaths, ProofFromBytes base cost).
+    // operations (Delete, ProofFromBytes base cost).
     RegisterBlsKey,
 }
 
@@ -118,7 +122,7 @@ impl Fuel {
             Self::Exists => 50,
             Self::ExtendPathWithMatch(regexp_len) => 500 + 10 * regexp_len,
             Self::Set(value_len) | Self::Result(value_len) => 200 + 10 * value_len,
-            Self::DeleteMatchingPaths(regexp_len) => 1000 + 10 * regexp_len,
+            Self::Delete(rows, bytes) => 200 + 200 * rows + 10 * bytes,
             Self::ContractAddress => 100,
             Self::ProcSigner | Self::ProcContractSigner | Self::ProcTransaction => 500,
             Self::ProcPayer | Self::ProcContract => 500,
