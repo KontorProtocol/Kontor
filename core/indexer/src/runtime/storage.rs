@@ -140,7 +140,10 @@ impl Storage {
         base_path: &[u8],
         candidates: &[Vec<u8>],
     ) -> Result<Vec<DeletableRow>> {
-        Ok(find_matching_paths(&self.conn, contract_id, self.height, base_path, candidates).await?)
+        Ok(
+            find_matching_paths(&self.conn, contract_id, self.height, base_path, candidates)
+                .await?,
+        )
     }
 
     pub async fn hard_delete_matching_paths(

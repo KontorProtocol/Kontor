@@ -245,7 +245,10 @@ pub async fn find_live_subtree(
         ":contract_id".to_string(),
         Value::Integer(contract_id as i64),
     ));
-    let query = live_latest("path, size", &format!("contract_id = :contract_id AND {range}"));
+    let query = live_latest(
+        "path, size",
+        &format!("contract_id = :contract_id AND {range}"),
+    );
     let mut result = conn.query(&query, params).await?;
     let mut rows = Vec::new();
     while let Some(row) = result.next().await? {
