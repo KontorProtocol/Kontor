@@ -126,6 +126,20 @@ jobs:
         run: cargo binstall cargo-expand --no-confirm
       - name: Install wasm-opt
         run: cargo binstall wasm-opt --no-confirm
+      - name: Reproducible contract build (committed binaries must reproduce)
+        # Reuses this job's kontor build; runs on both matrix legs (ubuntu=x86_64,
+        # macos=arm64), so it covers the arch AND OS axes without dedicated jobs.
+        # native-contracts/rust-toolchain.toml pins rustc for the contract build
+        # (it overrides dtolnay's default), and brotli is pinned via Cargo.lock.
+        run: |
+          ( cd core && cargo build --release --bin kontor )
+          core/target/release/kontor build native-contracts --out-dir native-contracts/binaries
+          if ! git diff --quiet native-contracts/binaries/; then
+            echo "::error::native-contracts/binaries/ did not reproduce on ${{ runner.os }} ${{ runner.arch }} — committed artifacts are stale or the build is non-deterministic"
+            git status --short native-contracts/binaries/
+            exit 1
+          fi
+          echo "native-contracts/binaries/ reproduced bit-for-bit on ${{ runner.os }} ${{ runner.arch }}"
       - name: Run tests
         working-directory: ./core
         run: REGTEST=1 cargo test --release --workspace
