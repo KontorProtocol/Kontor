@@ -6,6 +6,7 @@ pub mod bls;
 pub mod built_info;
 pub mod config;
 pub mod consensus;
+pub mod contract_build;
 pub mod database;
 pub mod event;
 pub mod info;

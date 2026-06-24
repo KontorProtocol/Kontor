@@ -1,0 +1,9 @@
+# Pinned for REPRODUCIBLE contract builds — the wasm output is a function of the
+# exact rustc/LLVM, so this version is part of the build's identity. Bump
+# deliberately and rebuild + recommit binaries/ (CI's cross-arch repro gate enforces it).
+[toolchain]
+channel = "1.96.0"
+targets = ["wasm32-unknown-unknown"]
+# rustfmt + clippy so CI's fmt/clippy steps work when rustup auto-installs this
+# pinned toolchain (otherwise it lands a minimal profile with neither).
+components = ["rustfmt", "clippy"]

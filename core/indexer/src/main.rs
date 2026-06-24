@@ -40,6 +40,9 @@ enum Command {
     /// auto-miner, pre-funded dev account). Intended for local SDK
     /// development and CI; prints `KONTOR_REGTEST_*` markers on stdout.
     Regtest,
+    /// Build a contract workspace to its on-chain `.wasm.br` artifacts
+    /// (cargo build + brotli, pinned for reproducible builds).
+    Build(indexer::contract_build::BuildArgs),
 }
 
 #[tokio::main]
@@ -49,6 +52,7 @@ async fn main() -> Result<()> {
         Command::Run(config) => run_daemon(*config).await,
         Command::Keygen(args) => keygen::run(args),
         Command::Regtest => run_regtest().await,
+        Command::Build(args) => indexer::contract_build::run(args),
     }
 }
 

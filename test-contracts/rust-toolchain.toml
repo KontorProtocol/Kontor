@@ -1,0 +1,9 @@
+# Pinned for REPRODUCIBLE contract builds — keep in lockstep with
+# native-contracts/rust-toolchain.toml. The wasm output depends on the exact
+# rustc/LLVM, so this version is part of the build's identity.
+[toolchain]
+channel = "1.96.0"
+targets = ["wasm32-unknown-unknown"]
+# rustfmt + clippy so CI's fmt/clippy steps work when rustup auto-installs this
+# pinned toolchain (otherwise it lands a minimal profile with neither).
+components = ["rustfmt", "clippy"]
