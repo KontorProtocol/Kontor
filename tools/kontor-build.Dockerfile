@@ -16,10 +16,13 @@
 #     bash tools/build-in-image.sh native-contracts test-contracts
 # Locally, tools/build-contracts.sh builds this image and runs the above for you.
 #
-# Every wasm-affecting input is pinned: rustc by the base tag, wasm-opt by the
-# binaryen version + sha below, brotli by an exact apt version. (Hardening TODO:
-# pin the base image by @sha256 digest.)
-FROM rust:1.96.0-slim-bookworm
+# Every wasm-affecting input is pinned: rustc by the base image digest, wasm-opt
+# by the binaryen version + sha below, brotli by an exact apt version. The base is
+# pinned by @sha256 (the multi-arch manifest-list digest, so it still resolves to
+# the right per-arch image) — CI rebuilds this image every run, so a tag alone
+# would silently drift the toolchain if Docker Hub re-tagged it. The tag is kept
+# alongside the digest for human readability; bump both together.
+FROM rust:1.96.0-slim-bookworm@sha256:4732ca96fd086cb9be682050c3f0176288eebaac2b80aa2bcefccfaf198e1950
 
 # Pinned binaryen release providing wasm-opt. Both the cargo toolchain and the
 # wasm-opt binary are part of the wasm's identity, so the wasm-opt version is
