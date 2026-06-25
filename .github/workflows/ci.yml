@@ -118,17 +118,104 @@ jobs:
           echo "${{ github.workspace }}/bitcoin-bin" >> $GITHUB_PATH
       - name: Test bitcoind
         run: bitcoind --version
-      - name: Install wasm32-unknown-unknown
-        run: rustup target add wasm32-unknown-unknown
       - name: Install cargo-binstall
         uses: cargo-bins/cargo-binstall@v1.17.8
+      # Contracts are committed (test-contracts/binaries/), so the test build
+      # compiles no wasm — no wasm32 target or wasm-opt needed here. cargo-expand
+      # is still required by the stdlib macro-expansion tests.
       - name: Install cargo expand
         run: cargo binstall cargo-expand --no-confirm
-      - name: Install wasm-opt
-        run: cargo binstall wasm-opt --no-confirm
       - name: Run tests
         working-directory: ./core
         run: REGTEST=1 cargo test --release --workspace
+
+  # The committed genesis binaries are self-describing: binaries/build.json
+  # records the platform that produced them. Resolve it to a matching runner so
+  # the gate rebuilds NATIVELY on that arch (no emulation), wherever the binaries
+  # were last built.
+  reproducible-build-setup:
+    name: Reproducible Build (resolve runner)
+    runs-on: ubuntu-latest
+    outputs:
+      runner: ${{ steps.resolve.outputs.runner }}
+      platform: ${{ steps.resolve.outputs.platform }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: resolve
+        run: |
+          platform=$(jq -r .platform native-contracts/binaries/build.json)
+          case "$platform" in
+            linux/amd64) runner=ubuntu-latest ;;
+            linux/arm64) runner=ubuntu-24.04-arm ;;
+            *) echo "unsupported build.json platform: $platform" >&2; exit 1 ;;
+          esac
+          echo "platform=$platform" >> "$GITHUB_OUTPUT"
+          echo "runner=$runner" >> "$GITHUB_OUTPUT"
+
+  reproducible-build:
+    name: Reproducible Contract Build (${{ needs.reproducible-build-setup.outputs.platform }})
+    needs: reproducible-build-setup
+    runs-on: ${{ needs.reproducible-build-setup.outputs.runner }}
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      # The build image pins every input wasm bytes depend on (rustc by base tag,
+      # wasm-opt by binaryen version+sha, brotli by exact apt version) and its
+      # fixed /build WORKDIR pins the build path; on the resolved native runner the
+      # arch matches too, so the output is a pure function of the source.
+      - name: Build the pinned build image
+        # No context (Dockerfile piped on stdin) — it has no COPY, needs no files.
+        run: docker build -t kontor-build:ci - < tools/kontor-build.Dockerfile
+      - name: Rebuild contracts in the image
+        # Both committed sets (native genesis + test fixtures) are gated.
+        run: |
+          docker run --rm -v "$PWD:/build" -w /build \
+            kontor-build:ci bash tools/build-in-image.sh native-contracts test-contracts
+      # Surface the freshly-built artifacts regardless of outcome: on failure to
+      # diff against, on success as the set to commit when regenerating.
+      - name: Upload rebuilt binaries
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: contract-binaries
+          path: |
+            native-contracts/binaries/*.wasm.br
+            test-contracts/binaries/*.wasm.br
+          if-no-files-found: error
+      - name: Assert binaries reproduce bit-for-bit
+        run: git diff --exit-code native-contracts/binaries/ test-contracts/binaries/
+
+  publish-build-image:
+    name: Publish Build Image
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    needs: reproducible-build
+    if: github.ref == 'refs/heads/main'
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      # Built multi-arch so anyone can reproduce whichever platform a binaries/
+      # build.json records (each arch yields different bytes — cargo bakes the
+      # arch into crate metadata). The non-native leg builds under QEMU, but the
+      # image only fetches a prebuilt wasm-opt + apt brotli, so emulation is cheap.
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+      - name: Log in to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+      - name: Build and push multi-arch build image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: tools/kontor-build.Dockerfile
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: kontorprotocol/kontor-build:1.96.0
 
   sdk:
     name: SDK

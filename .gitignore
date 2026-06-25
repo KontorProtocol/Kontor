@@ -1,5 +1,7 @@
 .envrc
 **/target
+# Persisted CARGO_HOME for the pinned contract build image (tools/build-contracts.sh).
+/.build-cache
 **/.DS_Store
 **/cert.pem
 **/key.pem

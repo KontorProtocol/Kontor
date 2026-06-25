@@ -1,0 +1,6 @@
+{
+  "platform": "linux/arm64",
+  "image": "kontorprotocol/kontor-build:1.96.0",
+  "rustc": "1.96.0",
+  "wasm_opt": "binaryen version_130"
+}

@@ -145,7 +145,9 @@ impl ContractReader {
     }
 
     async fn find_contracts(dir: &str) -> Result<Paths> {
-        let pattern = format!("{}/**/target/wasm32-unknown-unknown/release/*.wasm.br", dir);
+        // Committed, container-built artifacts (see test-contracts/binaries/),
+        // not a live target dir — `cargo test` no longer compiles contracts.
+        let pattern = format!("{}/binaries/*.wasm.br", dir);
         Ok(
             task::spawn_blocking(move || glob::glob(&pattern).expect("Invalid glob pattern"))
                 .await?,
