@@ -5,6 +5,7 @@ import type {
   CommitId as WireCommitId,
   Forge as WireForge,
   Platform as WirePlatform,
+  ProvenanceEntry as WireProvenanceEntry,
 } from "./bindings.js";
 
 /**
@@ -78,6 +79,26 @@ export function provenanceToWire(p: BuildProvenance): WireBuildProvenance {
     },
     image: p.image,
     platform: PLATFORM_TO_WIRE[p.platform],
+  };
+}
+
+/** One entry in a contract's provenance log (oldest first; last = current). */
+export interface ProvenanceEntry {
+  height: number;
+  txIndex: number;
+  /** The signer that authored this entry (the publisher). */
+  authorSignerId: number;
+  provenance: BuildProvenance;
+}
+
+export function provenanceEntryFromWire(
+  e: WireProvenanceEntry,
+): ProvenanceEntry {
+  return {
+    height: e.height,
+    txIndex: e.tx_index,
+    authorSignerId: e.author_signer_id,
+    provenance: provenanceFromWire(e.provenance),
   };
 }
 

@@ -29,7 +29,13 @@ export { KontorSession } from "./session";
 export { Result, ResultUnwrapError } from "./result";
 export type { Inst } from "./inst";
 export { ContractBase } from "./contract-base";
-export type { BuildProvenance, Forge, Platform, Source } from "./provenance";
+export type {
+  BuildProvenance,
+  Forge,
+  Platform,
+  ProvenanceEntry,
+  Source,
+} from "./provenance";
 export { Attachment } from "./attach";
 export { Offer, IncomingOffer } from "./offer";
 export type { OfferData, OfferInspection } from "./offer";

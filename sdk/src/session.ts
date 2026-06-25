@@ -32,7 +32,7 @@
  */
 
 import { ContractAddress } from "./canonical/ContractAddress.js";
-import type { BuildProvenance } from "./provenance.js";
+import type { BuildProvenance, ProvenanceEntry } from "./provenance.js";
 import { canSignSchnorr, type Signing } from "./signing.js";
 import type { Identity } from "./identity.js";
 import type { FundingSource } from "./funding.js";
@@ -266,6 +266,14 @@ export class KontorSession {
       () => undefined,
     );
     await inst;
+  }
+
+  /**
+   * Read a contract's append-only build-provenance log (oldest first; the
+   * last entry is the current claim). Empty if the contract has none.
+   */
+  getProvenance(contract: ContractAddress): Promise<ProvenanceEntry[]> {
+    return this.transport.provenance(contract);
   }
 
   /**
