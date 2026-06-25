@@ -195,47 +195,6 @@ jobs:
             exit 1
           fi
 
-  publish-build-image:
-    name: Publish Build Image
-    runs-on: ubuntu-latest
-    timeout-minutes: 30
-    needs: reproducible-build
-    if: github.ref == 'refs/heads/main'
-    permissions:
-      contents: read
-    steps:
-      - uses: actions/checkout@v4
-      # Built multi-arch so anyone can reproduce whichever platform a binaries/
-      # build.json records (each arch yields different bytes — cargo bakes the
-      # arch into crate metadata). The non-native leg builds under QEMU, but the
-      # image only fetches a prebuilt wasm-opt + apt brotli, so emulation is cheap.
-      - name: Set up QEMU
-        uses: docker/setup-qemu-action@v3
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
-      - name: Log in to Docker Hub
-        uses: docker/login-action@v3
-        with:
-          username: ${{ secrets.DOCKERHUB_USERNAME }}
-          password: ${{ secrets.DOCKERHUB_TOKEN }}
-      # Derive the tag from the Dockerfile's rustc version (single source of
-      # truth), matching the image ref recorded in each binaries/build.json — so
-      # bumping the base image can't mislabel the published image.
-      - name: Resolve image tag
-        id: tag
-        run: |
-          v="$(grep -oP 'FROM rust:\K[0-9]+\.[0-9]+\.[0-9]+' tools/kontor-build.Dockerfile)"
-          [ -n "$v" ] || { echo "could not parse rustc version from Dockerfile" >&2; exit 1; }
-          echo "version=$v" >> "$GITHUB_OUTPUT"
-      - name: Build and push multi-arch build image
-        uses: docker/build-push-action@v6
-        with:
-          context: .
-          file: tools/kontor-build.Dockerfile
-          platforms: linux/amd64,linux/arm64
-          push: true
-          tags: kontorprotocol/kontor-build:${{ steps.tag.outputs.version }}
-
   sdk:
     name: SDK
     runs-on: ubuntu-latest
