@@ -3,8 +3,30 @@ use libsql::{Connection, Value, de::from_row, params};
 
 use super::Error;
 use super::pagination::{PageOptions, get_paginated};
-use crate::database::types::{ContractQuery, ContractRow};
+use crate::database::types::{ContractProvenanceRow, ContractQuery, ContractRow};
 use crate::runtime::ContractAddress;
+
+/// Append one entry to a contract's build-provenance log (publish seeds the
+/// first; `UpdateProvenance` appends). Append-only — never updates in place.
+pub async fn insert_contract_provenance(
+    conn: &Connection,
+    row: ContractProvenanceRow,
+) -> Result<u64, Error> {
+    conn.execute(
+        r#"
+            INSERT INTO contract_provenance (
+                contract_id,
+                height,
+                tx_index,
+                provenance
+            ) VALUES (?, ?, ?, ?)
+            "#,
+        params![row.contract_id, row.height, row.tx_index, row.provenance],
+    )
+    .await?;
+
+    Ok(conn.last_insert_rowid() as u64)
+}
 
 pub async fn insert_contract(conn: &Connection, row: ContractRow) -> Result<u64, Error> {
     conn.execute(

@@ -19,6 +19,7 @@ async fn test_get_ops_from_api() -> Result<()> {
                 kind: InstKind::Publish {
                     name: name.to_string(),
                     bytes: bytes.clone(),
+                    provenance: sample_provenance(),
                 },
             },
         )
@@ -50,6 +51,7 @@ async fn test_get_ops_from_api() -> Result<()> {
             kind: OpKind::Publish {
                 name: name.to_string(),
                 bytes,
+                provenance: sample_provenance(),
             },
         }
     );

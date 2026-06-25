@@ -11,7 +11,7 @@ use indexer_types::{
     CommitSource, Inst, InstKind, Insts, Reveal, RevealOutput, RevealOutputInfo, RevealParticipant,
     serialize,
 };
-use testlib::RegTester;
+use testlib::{RegTester, sample_provenance};
 
 pub async fn test_compose(reg_tester: &mut RegTester) -> Result<()> {
     let secp = Secp256k1::new();
@@ -35,6 +35,7 @@ pub async fn test_compose(reg_tester: &mut RegTester) -> Result<()> {
         kind: InstKind::Publish {
             name: "test".to_string(),
             bytes: token_data_bytes.clone(),
+            provenance: sample_provenance(),
         },
     };
 
@@ -168,6 +169,7 @@ pub async fn test_compose_all_fields(reg_tester: &mut RegTester) -> Result<()> {
         kind: InstKind::Publish {
             name: "test".to_string(),
             bytes: token_data_bytes.clone(),
+            provenance: sample_provenance(),
         },
     };
 
@@ -178,6 +180,7 @@ pub async fn test_compose_all_fields(reg_tester: &mut RegTester) -> Result<()> {
         kind: InstKind::Publish {
             name: "chained".to_string(),
             bytes: chained_token_data_bytes.clone(),
+            provenance: sample_provenance(),
         },
     };
 
@@ -263,6 +266,7 @@ pub async fn test_compose_all_fields(reg_tester: &mut RegTester) -> Result<()> {
         kind: InstKind::Publish {
             name: "chained".to_string(),
             bytes: derived_chained_tap_script.clone(),
+            provenance: sample_provenance(),
         },
     };
 
@@ -393,6 +397,7 @@ pub async fn test_compose_duplicate_address_and_duplicate_utxo(
         kind: InstKind::Publish {
             name: "test".to_string(),
             bytes: token_data_bytes.clone(),
+            provenance: sample_provenance(),
         },
     };
 
@@ -461,6 +466,7 @@ pub async fn test_compose_param_bounds_and_fee_rate(reg_tester: &mut RegTester) 
         kind: InstKind::Publish {
             name: "oversized".to_string(),
             bytes: vec![0u8; 387 * 1024 + 1],
+            provenance: sample_provenance(),
         },
     };
     let reveal = Reveal::builder()
@@ -488,6 +494,7 @@ pub async fn test_compose_param_bounds_and_fee_rate(reg_tester: &mut RegTester) 
         kind: InstKind::Publish {
             name: "chain-oversized".to_string(),
             bytes: vec![0u8; 387 * 1024 + 1],
+            provenance: sample_provenance(),
         },
     };
     let small_inst = Inst {
@@ -495,6 +502,7 @@ pub async fn test_compose_param_bounds_and_fee_rate(reg_tester: &mut RegTester) 
         kind: InstKind::Publish {
             name: "chain-oversized".to_string(),
             bytes: b"x".to_vec(),
+            provenance: sample_provenance(),
         },
     };
     let reveal2 = Reveal::builder()
@@ -528,6 +536,7 @@ pub async fn test_compose_param_bounds_and_fee_rate(reg_tester: &mut RegTester) 
         kind: InstKind::Publish {
             name: "fee-rate".to_string(),
             bytes: b"x".to_vec(),
+            provenance: sample_provenance(),
         },
     };
     let reveal3 = Reveal::builder()
@@ -562,6 +571,7 @@ pub async fn test_reveal_with_op_return_mempool_accept(reg_tester: &mut RegTeste
         kind: InstKind::Publish {
             name: "op-return".to_string(),
             bytes: b"Hello, world!".to_vec(),
+            provenance: sample_provenance(),
         },
     };
 
@@ -648,6 +658,7 @@ pub async fn test_compose_nonexistent_utxo(reg_tester: &mut RegTester) -> Result
         kind: InstKind::Publish {
             name: "nonexistent-utxo".to_string(),
             bytes: token_data_bytes,
+            provenance: sample_provenance(),
         },
     };
 
@@ -706,6 +717,7 @@ pub async fn test_compose_invalid_address(reg_tester: &mut RegTester) -> Result<
         kind: InstKind::Publish {
             name: "invalid-address".to_string(),
             bytes: token_data_bytes,
+            provenance: sample_provenance(),
         },
     };
 
@@ -751,6 +763,7 @@ pub async fn test_compose_insufficient_funds(reg_tester: &mut RegTester) -> Resu
         kind: InstKind::Publish {
             name: "insufficient-funds".to_string(),
             bytes: token_data_bytes,
+            provenance: sample_provenance(),
         },
     };
 

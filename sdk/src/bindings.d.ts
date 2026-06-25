@@ -228,7 +228,17 @@ export type Inst = {
 };
 
 export type InstKind =
-  | { "Publish": { name: string; bytes: Array<number> } }
+  | {
+    "Publish": {
+      name: string;
+      bytes: Array<number>;
+      /**
+       * Reproducible-build provenance for the wasm — required so the
+       * published bytes can be verified against their source.
+       */
+      provenance: BuildProvenance;
+    };
+  }
   | { "Call": { contract: string; expr: string } }
   | "Issuance"
   | {
@@ -245,7 +255,17 @@ export type Insts = { ops: Array<Inst>; aggregate: AggregateInfo | null };
 export type Op = { metadata: OpMetadata; kind: OpKind };
 
 export type OpKind =
-  | { "Publish": { name: string; bytes: Array<number> } }
+  | {
+    "Publish": {
+      name: string;
+      bytes: Array<number>;
+      /**
+       * Reproducible-build provenance for the wasm — required so the
+       * published bytes can be verified against their source.
+       */
+      provenance: BuildProvenance;
+    };
+  }
   | { "Call": { contract: string; expr: string } }
   | "Issuance"
   | {

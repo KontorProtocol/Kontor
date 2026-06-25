@@ -102,7 +102,7 @@ use wasmtime::{
     component::{Component, HasData, Linker, ResourceTable},
 };
 
-use indexer_types::Payment;
+use indexer_types::{BuildProvenance, Payment};
 use wit_validator::Validator as WitValidator;
 
 use crate::bls::RegistrationProof;
@@ -350,7 +350,7 @@ impl Runtime {
         let core_signer = Signer::Core(Box::new(Signer::Nobody));
         let payment = self.core_payment();
         for (name, bytes) in NATIVE_CONTRACTS {
-            self.publish(&core_signer, payment.clone(), name, bytes)
+            self.publish(&core_signer, payment.clone(), name, bytes, None)
                 .await?;
         }
         if !genesis_validators.is_empty() {
@@ -371,7 +371,15 @@ impl Runtime {
         payment: Payment,
         name: &str,
         bytes: &[u8],
+        // Reproducible-build provenance for user publishes; `None` for native
+        // (core-signed) contracts, which carry their provenance in-repo instead.
+        provenance: Option<&BuildProvenance>,
     ) -> Result<String, ExecutionError> {
+        // Reject structurally-invalid provenance before touching storage — a
+        // pure function of the op, so identical on every node (Deterministic).
+        if let Some(p) = provenance {
+            p.source.validate().map_err(ExecutionError::Deterministic)?;
+        }
         let address = ContractAddress {
             name: name.to_string(),
             height: self.storage.height,
@@ -399,6 +407,16 @@ impl Runtime {
             .insert_contract(name, bytes)
             .await
             .map_err(ExecutionError::NonDeterministic)?;
+        // Seed the append-only provenance log (inside the savepoint, so it rolls
+        // back with the contract if init fails). UpdateProvenance appends later.
+        if let Some(p) = provenance {
+            let encoded =
+                postcard::to_allocvec(p).map_err(|e| ExecutionError::NonDeterministic(e.into()))?;
+            self.storage
+                .insert_contract_provenance(contract_id, &encoded)
+                .await
+                .map_err(ExecutionError::NonDeterministic)?;
+        }
         // Publish-time link validation: the contract must resolve all of its
         // imports against the built-in surface it will run under. A user
         // contract that imports a native-only interface (`file-registry` /
@@ -866,7 +884,9 @@ mod tests {
         // rejection is by contract id, before `init`.)
         let signer = super::Signer::Core(Box::new(super::Signer::Nobody));
         let payment = runtime.core_payment();
-        let result = runtime.publish(&signer, payment, "evil", FILESTORAGE).await;
+        let result = runtime
+            .publish(&signer, payment, "evil", FILESTORAGE, None)
+            .await;
         assert!(
             result.is_err(),
             "publish of a file-registry-importing user contract must fail"

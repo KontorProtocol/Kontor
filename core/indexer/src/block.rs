@@ -74,7 +74,15 @@ pub fn materialize_op(
                 gas_limit,
             });
             let op_kind = match other {
-                InstKind::Publish { name, bytes } => OpKind::Publish { name, bytes },
+                InstKind::Publish {
+                    name,
+                    bytes,
+                    provenance,
+                } => OpKind::Publish {
+                    name,
+                    bytes,
+                    provenance,
+                },
                 InstKind::Call { contract, expr } => OpKind::Call { contract, expr },
                 InstKind::RegisterBlsKey {
                     bls_pubkey,

@@ -57,6 +57,7 @@ async fn bls_bulk_compose_and_execute_regtest() -> Result<()> {
                 kind: InstKind::Publish {
                     name: "arith".to_string(),
                     bytes: arith_bytes,
+                    provenance: sample_provenance(),
                 },
             },
         )
@@ -203,6 +204,7 @@ async fn bls_bulk_unknown_signer_id_rejects_bundle_regtest() -> Result<()> {
                 kind: InstKind::Publish {
                     name: "arith".to_string(),
                     bytes: arith_bytes,
+                    provenance: sample_provenance(),
                 },
             },
         )
@@ -293,6 +295,7 @@ async fn bls_bulk_requires_registered_signer_id_regtest() -> Result<()> {
                 kind: InstKind::Publish {
                     name: "arith".to_string(),
                     bytes: arith_bytes,
+                    provenance: sample_provenance(),
                 },
             },
         )
@@ -366,6 +369,7 @@ async fn bls_bulk_invalid_aggregate_signature_rejects_bundle_regtest() -> Result
                 kind: InstKind::Publish {
                     name: "arith".to_string(),
                     bytes: arith_bytes,
+                    provenance: sample_provenance(),
                 },
             },
         )

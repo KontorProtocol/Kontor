@@ -57,6 +57,7 @@ async fn bls_bulk_duplicate_nonce_within_bundle_skips_op_regtest() -> Result<()>
                 kind: InstKind::Publish {
                     name: "arith".to_string(),
                     bytes: arith_bytes,
+                    provenance: sample_provenance(),
                 },
             },
         )
@@ -173,6 +174,7 @@ async fn bls_bulk_replay_nonce_across_blocks_rejects_regtest() -> Result<()> {
                 kind: InstKind::Publish {
                     name: "arith".to_string(),
                     bytes: arith_bytes,
+                    provenance: sample_provenance(),
                 },
             },
         )
@@ -311,6 +313,7 @@ async fn bls_bulk_failed_execution_still_consumes_nonce_regtest() -> Result<()> 
                 kind: InstKind::Publish {
                     name: "arith".to_string(),
                     bytes: arith_bytes,
+                    provenance: sample_provenance(),
                 },
             },
         )
@@ -375,6 +378,7 @@ async fn bls_bulk_interleaved_multi_signer_nonces_advance_independently_regtest(
                 kind: InstKind::Publish {
                     name: "arith".to_string(),
                     bytes: arith_bytes,
+                    provenance: sample_provenance(),
                 },
             },
         )
@@ -497,6 +501,7 @@ async fn bls_bulk_out_of_order_nonce_skips_op_regtest() -> Result<()> {
                 kind: InstKind::Publish {
                     name: "arith".to_string(),
                     bytes: arith_bytes,
+                    provenance: sample_provenance(),
                 },
             },
         )
@@ -609,6 +614,7 @@ async fn bls_bulk_exact_bytes_replay_across_blocks_regtest() -> Result<()> {
                 kind: InstKind::Publish {
                     name: "arith".to_string(),
                     bytes: arith_bytes,
+                    provenance: sample_provenance(),
                 },
             },
         )

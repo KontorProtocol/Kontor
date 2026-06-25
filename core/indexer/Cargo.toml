@@ -58,6 +58,7 @@ hkdf = "=0.12.4"
 rand = "=0.10.1"
 rand_chacha = "=0.10.0"
 brotli = "=8.0.3"
+postcard = { workspace = true }
 sha2 = "=0.10.9"
 num = { workspace = true }
 fastnum = { workspace = true }

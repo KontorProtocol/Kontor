@@ -219,6 +219,20 @@ impl ContractRow {
     }
 }
 
+/// One entry in a contract's append-only build-provenance log. The publish
+/// seeds the first row; an `UpdateProvenance` op appends another. Latest =
+/// highest `id` for a `contract_id`. `provenance` is a postcard-encoded
+/// `indexer_types::BuildProvenance`.
+#[derive(Debug, Clone, Serialize, Deserialize, Builder)]
+pub struct ContractProvenanceRow {
+    #[builder(default = 0)]
+    pub id: u64,
+    pub contract_id: u64,
+    pub height: u64,
+    pub tx_index: u32,
+    pub provenance: Vec<u8>,
+}
+
 #[serde_as]
 #[derive(Debug, Clone, Serialize, Deserialize, Builder, Eq, PartialEq)]
 pub struct BlockQuery {

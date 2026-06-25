@@ -44,6 +44,7 @@ async fn cluster_counter_increment_via_consensus() -> Result<()> {
                 kind: InstKind::Publish {
                     name: "counter".to_string(),
                     bytes: contract_bytes,
+                    provenance: sample_provenance(),
                 },
             },
         )
@@ -152,6 +153,7 @@ async fn cluster_multi_batch_convergence() -> Result<()> {
                 kind: InstKind::Publish {
                     name: "counter".to_string(),
                     bytes: contract_bytes,
+                    provenance: sample_provenance(),
                 },
             },
         )
@@ -267,6 +269,7 @@ async fn cluster_node_restart_recovery() -> Result<()> {
                 kind: InstKind::Publish {
                     name: "counter".to_string(),
                     bytes: contract_bytes,
+                    provenance: sample_provenance(),
                 },
             },
         )
@@ -397,6 +400,7 @@ async fn cluster_late_joiner_sync() -> Result<()> {
                 kind: InstKind::Publish {
                     name: "counter".to_string(),
                     bytes: contract_bytes,
+                    provenance: sample_provenance(),
                 },
             },
         )
@@ -507,6 +511,7 @@ async fn cluster_validator_lifecycle() -> Result<()> {
                 kind: InstKind::Publish {
                     name: "counter".to_string(),
                     bytes: contract_bytes,
+                    provenance: sample_provenance(),
                 },
             },
         )

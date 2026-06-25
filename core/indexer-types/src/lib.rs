@@ -562,6 +562,9 @@ pub enum OpKind {
     Publish {
         name: String,
         bytes: Vec<u8>,
+        /// Reproducible-build provenance for the wasm — required so the
+        /// published bytes can be verified against their source.
+        provenance: BuildProvenance,
     },
     Call {
         #[ts(as = "String")]
@@ -1038,6 +1041,9 @@ pub enum InstKind {
     Publish {
         name: String,
         bytes: Vec<u8>,
+        /// Reproducible-build provenance for the wasm — required so the
+        /// published bytes can be verified against their source.
+        provenance: BuildProvenance,
     },
     Call {
         #[ts(type = "string")]

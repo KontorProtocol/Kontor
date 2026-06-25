@@ -3788,6 +3788,7 @@ dependencies = [
  "num",
  "numerics",
  "once_cell",
+ "postcard",
  "priority-queue",
  "proptest",
  "prost 0.13.5",

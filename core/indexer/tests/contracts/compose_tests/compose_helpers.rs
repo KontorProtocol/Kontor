@@ -8,7 +8,7 @@ use indexer::api::compose::{
 };
 use indexer_types::{CommitSource, Inst, InstKind, Insts, Reveal, RevealOutput, RevealParticipant};
 use std::str::FromStr;
-use testlib::RegTester;
+use testlib::{RegTester, sample_provenance};
 use tracing::info;
 
 // // ============================================================================
@@ -541,6 +541,7 @@ pub async fn test_compose_reveal_op_return_size_validation(
                         kind: InstKind::Publish {
                             name: "op-return-size".to_string(),
                             bytes: b"data".to_vec(),
+                            provenance: sample_provenance(),
                         },
                     }))
                     .commit_source(CommitSource::existing(

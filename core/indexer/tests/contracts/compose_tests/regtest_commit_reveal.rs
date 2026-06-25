@@ -9,7 +9,7 @@ use indexer::{test_utils, witness_data::TokenBalance};
 use indexer_types::{
     CommitSource, Inst, InstKind, Insts, Reveal, RevealOutput, RevealParticipant, serialize,
 };
-use testlib::RegTester;
+use testlib::{RegTester, sample_provenance};
 
 pub async fn test_taproot_transaction_regtest(reg_tester: &mut RegTester) -> Result<()> {
     let identity = reg_tester.identity().await?;
@@ -30,6 +30,7 @@ pub async fn test_taproot_transaction_regtest(reg_tester: &mut RegTester) -> Res
         kind: InstKind::Publish {
             name: "regtest-commit-reveal".to_string(),
             bytes: serialized_token_balance,
+            provenance: sample_provenance(),
         },
     };
     let reveal = Reveal::builder()

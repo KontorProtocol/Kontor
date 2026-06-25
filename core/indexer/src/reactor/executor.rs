@@ -526,8 +526,15 @@ async fn execute_op(
     let payment = op.metadata.payment.clone();
 
     match &op.kind {
-        OpKind::Publish { name, bytes } => {
-            match runtime.publish(&signer, payment, name, bytes).await {
+        OpKind::Publish {
+            name,
+            bytes,
+            provenance,
+        } => {
+            match runtime
+                .publish(&signer, payment, name, bytes, Some(provenance))
+                .await
+            {
                 Ok(_) => Ok(None),
                 Err(ExecutionError::Deterministic(e)) => {
                     warn!("Publish operation failed: {e:#}");

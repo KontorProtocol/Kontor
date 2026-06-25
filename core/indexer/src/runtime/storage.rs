@@ -14,11 +14,12 @@ use crate::{
             DeletableRow, create_contract_signer, exists_contract_state, find_live_subtree,
             find_matching_paths, get_contract_address_from_id, get_contract_bytes_by_id,
             get_contract_id_from_address, get_latest_contract_state_value,
-            hard_delete_matching_paths, insert_contract, insert_contract_result,
-            insert_contract_state, matching_path, path_prefix_filter_contract_state,
-            prune_contract_state, select_block_at_height, tombstone_rows,
+            hard_delete_matching_paths, insert_contract, insert_contract_provenance,
+            insert_contract_result, insert_contract_state, matching_path,
+            path_prefix_filter_contract_state, prune_contract_state, select_block_at_height,
+            tombstone_rows,
         },
-        types::{ContractResultRow, ContractRow, ContractStateRow},
+        types::{ContractProvenanceRow, ContractResultRow, ContractRow, ContractStateRow},
     },
     runtime::{ContractAddress, counter::Counter, stack::Stack},
     test_utils::new_mock_transaction,
@@ -218,6 +219,32 @@ impl Storage {
                 .build(),
         )
         .await?)
+    }
+
+    /// Append one postcard-encoded `BuildProvenance` to the contract's
+    /// provenance log (within the current savepoint, so it rolls back with the
+    /// contract on publish failure).
+    pub async fn insert_contract_provenance(
+        &self,
+        contract_id: u64,
+        provenance: &[u8],
+    ) -> Result<()> {
+        insert_contract_provenance(
+            &self.conn,
+            ContractProvenanceRow::builder()
+                .contract_id(contract_id)
+                .height(self.height)
+                .tx_index(
+                    self.tx_context
+                        .as_ref()
+                        .expect("Transaction index is required when inserting provenance")
+                        .tx_index,
+                )
+                .provenance(provenance.to_vec())
+                .build(),
+        )
+        .await?;
+        Ok(())
     }
 
     fn effective_tx_id(&self) -> Option<u64> {

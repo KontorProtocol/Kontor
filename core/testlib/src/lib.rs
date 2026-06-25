@@ -101,6 +101,21 @@ macro_rules! absolute_file {
     };
 }
 
+/// A throwaway `BuildProvenance` for tests that publish contracts. The bytes
+/// it names don't need to actually reproduce — these tests exercise the op
+/// plumbing, not real verification.
+pub fn sample_provenance() -> indexer_types::BuildProvenance {
+    indexer_types::BuildProvenance {
+        source: indexer_types::Source {
+            forge: indexer_types::Forge::GitHub,
+            owner: "kontor".to_string(),
+            repo: "test".to_string(),
+            commit: indexer_types::CommitId::Sha1([0u8; 20]),
+        },
+        image: "kontorprotocol/kontor-build@sha256:test".to_string(),
+    }
+}
+
 #[derive(Clone)]
 pub struct ContractReader {
     dir: String,
@@ -576,6 +591,7 @@ impl RuntimeImpl for RuntimeRegtest {
                     kind: InstKind::Publish {
                         name: name.to_string(),
                         bytes: contract.to_vec(),
+                        provenance: sample_provenance(),
                     },
                 },
             )
