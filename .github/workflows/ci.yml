@@ -183,7 +183,17 @@ jobs:
             test-contracts/binaries/*.wasm.br
           if-no-files-found: error
       - name: Assert binaries reproduce bit-for-bit
-        run: git diff --exit-code native-contracts/binaries/ test-contracts/binaries/
+        # `git diff --exit-code` ignores untracked files, so a newly added
+        # contract's uncommitted .wasm.br would slip through. git status --porcelain
+        # catches additions, modifications, and deletions alike.
+        run: |
+          changed="$(git status --porcelain -- native-contracts/binaries/ test-contracts/binaries/)"
+          if [ -n "$changed" ]; then
+            echo "Committed binaries do not match a fresh build (incl. untracked):"
+            echo "$changed"
+            git diff -- native-contracts/binaries/ test-contracts/binaries/ || true
+            exit 1
+          fi
 
   publish-build-image:
     name: Publish Build Image
@@ -208,6 +218,15 @@ jobs:
         with:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
+      # Derive the tag from the Dockerfile's rustc version (single source of
+      # truth), matching the image ref recorded in each binaries/build.json — so
+      # bumping the base image can't mislabel the published image.
+      - name: Resolve image tag
+        id: tag
+        run: |
+          v="$(grep -oP 'FROM rust:\K[0-9]+\.[0-9]+\.[0-9]+' tools/kontor-build.Dockerfile)"
+          [ -n "$v" ] || { echo "could not parse rustc version from Dockerfile" >&2; exit 1; }
+          echo "version=$v" >> "$GITHUB_OUTPUT"
       - name: Build and push multi-arch build image
         uses: docker/build-push-action@v6
         with:
@@ -215,7 +234,7 @@ jobs:
           file: tools/kontor-build.Dockerfile
           platforms: linux/amd64,linux/arm64
           push: true
-          tags: kontorprotocol/kontor-build:1.96.0
+          tags: kontorprotocol/kontor-build:${{ steps.tag.outputs.version }}
 
   sdk:
     name: SDK

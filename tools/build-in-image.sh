@@ -42,18 +42,25 @@ for ws in "$@"; do
   (
     cd "$ws"
     mkdir -p binaries
-    # Start clean so removed/renamed contracts don't leave stale artifacts: drop
-    # the committed .wasm.br and the previous top-level .wasm (including _opt),
-    # then let cargo regenerate only the current workspace members.
-    for stale in binaries/*.wasm.br target/wasm32-unknown-unknown/release/*.wasm; do
-      rm -f "$stale"
-    done
+    # Clean only the ephemeral target wasm (incl. _opt) up front, so a removed or
+    # renamed contract's stale artifact can't be re-optimized. Committed binaries/
+    # are left untouched until the build succeeds — a failed build must not nuke
+    # the genesis/fixture bytes in the (bind-mounted) working tree.
+    for w in target/wasm32-unknown-unknown/release/*.wasm; do rm -f "$w"; done
     cargo build --release
     for wasm in target/wasm32-unknown-unknown/release/*.wasm; do
       case "$wasm" in *_opt.wasm) continue ;; esac
       opt="${wasm%.wasm}_opt.wasm"
       wasm-opt -Oz --enable-bulk-memory --enable-sign-ext "$wasm" -o "$opt"
       brotli -Zf "$opt" -o "binaries/$(basename "$wasm").br"
+    done
+    # Build succeeded: now prune committed binaries for contracts that no longer
+    # exist (no matching freshly-built wasm), so binaries/ reflects exactly the
+    # current members. Doing it here, not before the build, keeps a failed build
+    # from leaving the tree without its committed artifacts.
+    for br in binaries/*.wasm.br; do
+      base="$(basename "$br" .wasm.br)"
+      [ -f "target/wasm32-unknown-unknown/release/$base.wasm" ] || rm -f "$br"
     done
     cat >binaries/build.json <<EOF
 {
