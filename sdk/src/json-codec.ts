@@ -38,6 +38,7 @@
 import type { Transaction } from "@scure/btc-signer";
 
 import type { ContractAddress } from "./canonical/ContractAddress.js";
+import type { ProvenanceEntry } from "./provenance.js";
 import type { ExtraOutput } from "./outputs.js";
 import type {
   ComposeOutputs,
@@ -127,6 +128,12 @@ export interface KontorTransport {
    * flow to source the contributor's current `next_nonce`.
    */
   signer(identifier: string): Promise<SignerResponse | null>;
+
+  /**
+   * A contract's append-only build-provenance log, oldest first (the last
+   * entry is the current claim). Empty if the contract has no provenance.
+   */
+  provenance(contract: ContractAddress): Promise<ProvenanceEntry[]>;
 
   /**
    * Static analysis on a wire-Insts bundle. Does not execute against

@@ -2,8 +2,7 @@ pub const TOKEN: &[u8] = include_bytes!("../../../../native-contracts/binaries/t
 pub const FILESTORAGE: &[u8] =
     include_bytes!("../../../../native-contracts/binaries/filestorage.wasm.br");
 pub const STAKING: &[u8] = include_bytes!("../../../../native-contracts/binaries/staking.wasm.br");
-pub const REGISTRY: &[u8] =
-    include_bytes!("../../../../native-contracts/binaries/registry.wasm.br");
+pub const SYSTEM: &[u8] = include_bytes!("../../../../native-contracts/binaries/system.wasm.br");
 pub const NFT: &[u8] = include_bytes!("../../../../native-contracts/binaries/nft.wasm.br");
 
 /// Ordered list of native contracts published at genesis. Publish order
@@ -15,7 +14,7 @@ pub const NATIVE_CONTRACTS: &[(&str, &[u8])] = &[
     ("token", TOKEN),
     ("filestorage", FILESTORAGE),
     ("staking", STAKING),
-    ("registry", REGISTRY),
+    ("system", SYSTEM),
     ("nft", NFT),
 ];
 

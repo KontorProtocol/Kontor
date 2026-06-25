@@ -1,6 +1,6 @@
 use anyhow::Result;
 use indexer_types::{CommitSource, Inst, InstKind, Insts, Reveal, RevealParticipant};
-use testlib::RegTester;
+use testlib::{RegTester, sample_provenance};
 use tracing::info;
 
 pub async fn test_compose_commit_psbt_inputs_have_metadata(
@@ -18,6 +18,7 @@ pub async fn test_compose_commit_psbt_inputs_have_metadata(
         kind: InstKind::Publish {
             name: "psbt-metadata".to_string(),
             bytes: b"x".to_vec(),
+            provenance: sample_provenance(),
         },
     };
     let reveal = Reveal::builder()

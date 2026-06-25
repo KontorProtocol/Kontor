@@ -225,7 +225,7 @@ async fn bls_user_registry_register_in_aggregate_sponsored_regtest() -> Result<(
     );
 
     // The publisher paid for the registration (gas attributed via the
-    // registry.registered contract call), not the registrant.
+    // system.registered contract call), not the registrant.
     assert_eq!(
         res.result.payer_signer_id,
         Some(publisher_id),

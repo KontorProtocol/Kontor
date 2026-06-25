@@ -46,7 +46,24 @@ export type BroadcastQuery = { transactions: Array<string> };
  */
 export type BroadcastResult = { txid: string };
 
+/**
+ * Reproducible-build provenance for a published contract: where the source lives
+ * (`source`), the pinned build environment (`image`, an OCI ref with digest,
+ * e.g. `registry/name@sha256:…`), and the `platform` it was built on.
+ */
+export type BuildProvenance = {
+  source: Source;
+  image: string;
+  platform: Platform;
+};
+
 export type CheckpointRow = { height: number; hash: string };
+
+/**
+ * A git commit hash — SHA-1 today, SHA-256 as git migrates. Raw bytes,
+ * rendered as a number array in the TS bindings (like other byte fields).
+ */
+export type CommitId = { "Sha1": Array<number> } | { "Sha256": Array<number> };
 
 /**
  * Response from `compose_commit`: one `CommitTx` per Build participant,
@@ -119,6 +136,12 @@ export type ContractListRow = {
   signer_id: number | null;
 };
 
+/**
+ * A contract's full append-only provenance log, oldest first — the last entry
+ * is the current claim, earlier ones are the audit trail.
+ */
+export type ContractProvenanceResponse = { entries: Array<ProvenanceEntry> };
+
 export type ContractResponse = { wit: string };
 
 export type ErrorResponse = { error: string };
@@ -142,6 +165,15 @@ export type Fees = {
    * Recommended fee rate (sat/vB) to land in roughly the next 6 blocks.
    */
   hour: number;
+};
+
+/**
+ * VCS host a contract's source lives on. Maps onto purl types; `Other`
+ * carries the host string for self-hosted forges (Gitea, self-hosted
+ * GitLab, …) so required provenance never blocks them.
+ */
+export type Forge = "GitHub" | "GitLab" | "Bitbucket" | "Codeberg" | {
+  "Other": string;
 };
 
 export type HolderRef =
@@ -206,8 +238,19 @@ export type Inst = {
 };
 
 export type InstKind =
-  | { "Publish": { name: string; bytes: Array<number> } }
+  | {
+    "Publish": {
+      name: string;
+      bytes: Array<number>;
+      /**
+       * Reproducible-build provenance for the wasm — required so the
+       * published bytes can be verified against their source.
+       */
+      provenance: BuildProvenance;
+    };
+  }
   | { "Call": { contract: string; expr: string } }
+  | { "UpdateProvenance": { contract: string; provenance: BuildProvenance } }
   | "Issuance"
   | {
     "RegisterBlsKey": {
@@ -223,8 +266,19 @@ export type Insts = { ops: Array<Inst>; aggregate: AggregateInfo | null };
 export type Op = { metadata: OpMetadata; kind: OpKind };
 
 export type OpKind =
-  | { "Publish": { name: string; bytes: Array<number> } }
+  | {
+    "Publish": {
+      name: string;
+      bytes: Array<number>;
+      /**
+       * Reproducible-build provenance for the wasm — required so the
+       * published bytes can be verified against their source.
+       */
+      provenance: BuildProvenance;
+    };
+  }
   | { "Call": { contract: string; expr: string } }
+  | { "UpdateProvenance": { contract: string; provenance: BuildProvenance } }
   | "Issuance"
   | {
     "RegisterBlsKey": {
@@ -312,6 +366,26 @@ export type PaginationMeta = {
  * itself.
  */
 export type Payment = { signer_id: number; gas_limit: number };
+
+/**
+ * The build platform (CPU arch + OS). The same source in the same image yields
+ * different wasm per arch (cargo bakes the arch into crate metadata), so this is
+ * part of the build identity — the image tag alone doesn't pin it.
+ */
+export type Platform = "LinuxAmd64" | "LinuxArm64";
+
+/**
+ * One decoded entry from a contract's provenance log, for API responses.
+ */
+export type ProvenanceEntry = {
+  height: number;
+  tx_index: number;
+  /**
+   * The signer that authored this entry (the publisher).
+   */
+  author_signer_id: number;
+  provenance: BuildProvenance;
+};
 
 /**
  * One entry in `Info::recent_blocks` — a `BlockRow` trimmed to the
@@ -452,6 +526,16 @@ export type SignerResponse = {
   x_only_pubkey: string | null;
   bls_pubkey: Array<number> | null;
   next_nonce: number | null;
+};
+
+/**
+ * The source a contract was built from: a specific commit in a repo.
+ */
+export type Source = {
+  forge: Forge;
+  owner: string;
+  repo: string;
+  commit: CommitId;
 };
 
 export type TapLeafScript = {

@@ -42,6 +42,25 @@ CREATE TABLE IF NOT EXISTS contracts (
   FOREIGN KEY (signer_id) REFERENCES signers (id)
 );
 
+-- Append-only build-provenance log per contract. The publish seeds the first
+-- row; an UpdateProvenance op appends another. Latest = highest id per
+-- contract_id. `provenance` is a postcard-encoded indexer_types::BuildProvenance.
+-- `author_signer_id` is the publisher's signer (the op's signer, NOT the
+-- contract's own signer_id). The author of the FIRST row is the publisher and
+-- is the UpdateProvenance authz anchor; every row records its author.
+CREATE TABLE IF NOT EXISTS contract_provenance (
+  id INTEGER PRIMARY KEY,
+  contract_id INTEGER NOT NULL,
+  author_signer_id INTEGER NOT NULL,
+  height INTEGER NOT NULL,
+  tx_index INTEGER NOT NULL,
+  provenance BLOB NOT NULL,
+  FOREIGN KEY (contract_id) REFERENCES contracts (id) ON DELETE CASCADE,
+  FOREIGN KEY (height) REFERENCES blocks (height) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_contract_provenance_contract ON contract_provenance (contract_id, id);
+
 CREATE TABLE IF NOT EXISTS contract_state (
   contract_id INTEGER NOT NULL,
   height INTEGER NOT NULL,

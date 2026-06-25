@@ -74,8 +74,23 @@ pub fn materialize_op(
                 gas_limit,
             });
             let op_kind = match other {
-                InstKind::Publish { name, bytes } => OpKind::Publish { name, bytes },
+                InstKind::Publish {
+                    name,
+                    bytes,
+                    provenance,
+                } => OpKind::Publish {
+                    name,
+                    bytes,
+                    provenance,
+                },
                 InstKind::Call { contract, expr } => OpKind::Call { contract, expr },
+                InstKind::UpdateProvenance {
+                    contract,
+                    provenance,
+                } => OpKind::UpdateProvenance {
+                    contract,
+                    provenance,
+                },
                 InstKind::RegisterBlsKey {
                     bls_pubkey,
                     schnorr_sig,
@@ -239,14 +254,14 @@ impl TxWalker {
 }
 
 pub fn filter_map((tx_index, tx): (usize, bitcoin::Transaction)) -> Option<Transaction> {
-    let inputs = tx
-        .input
-        .iter()
-        .enumerate()
-        .filter_map(|(input_index, input)| {
-            input.witness.taproot_leaf_script().and_then(|leaf| {
-                let mut script_insts = leaf.script.instructions();
-                if let Some(Ok(Instruction::PushBytes(key))) = script_insts.next()
+    let inputs =
+        tx.input
+            .iter()
+            .enumerate()
+            .filter_map(|(input_index, input)| {
+                input.witness.taproot_leaf_script().and_then(|leaf| {
+                    let mut script_insts = leaf.script.instructions();
+                    if let Some(Ok(Instruction::PushBytes(key))) = script_insts.next()
                     && let Some(Ok(Instruction::Op(OP_CHECKSIG))) = script_insts.next()
                     // OP_FALSE
                     && let Some(Ok(Instruction::PushBytes(nullish))) = script_insts.next()
@@ -258,34 +273,43 @@ pub fn filter_map((tx_index, tx): (usize, bitcoin::Transaction)) -> Option<Trans
                     && let Some(Ok(Instruction::PushBytes(nullish))) = script_insts.next()
                     && nullish.is_empty()
                     && let Ok(signer) = XOnlyPublicKey::from_slice(key.as_bytes())
-                {
-                    let mut data = Vec::new();
-                    let mut inst = script_insts.next();
-                    while let Some(Ok(Instruction::PushBytes(bs))) = inst {
-                        data.extend_from_slice(bs.as_bytes());
-                        inst = script_insts.next();
-                    }
+                    {
+                        let mut data = Vec::new();
+                        let mut inst = script_insts.next();
+                        while let Some(Ok(Instruction::PushBytes(bs))) = inst {
+                            data.extend_from_slice(bs.as_bytes());
+                            inst = script_insts.next();
+                        }
 
-                    if inst == Some(Ok(Instruction::Op(OP_ENDIF)))
+                        if inst == Some(Ok(Instruction::Op(OP_ENDIF)))
                         && script_insts.next().is_none()
                         && let Ok(insts) = deserialize::<Insts>(&data)
                         && insts
                             .aggregate
                             .as_ref()
                             .is_none_or(|agg| agg.signers.len() == insts.ops.len())
-                    {
-                        return Some(Input {
-                            previous_output: input.previous_output,
-                            input_index: input_index as u32,
-                            x_only_pubkey: signer,
-                            insts,
-                        });
+                        // Provenance is a pure function of the op (no chain
+                        // state), so reject malformed provenance at decode time
+                        // rather than letting it reach execution.
+                        && insts.ops.iter().all(|inst| match &inst.kind {
+                            InstKind::Publish { provenance, .. }
+                            | InstKind::UpdateProvenance { provenance, .. } => {
+                                provenance.validate().is_ok()
+                            }
+                            _ => true,
+                        }) {
+                            return Some(Input {
+                                previous_output: input.previous_output,
+                                input_index: input_index as u32,
+                                x_only_pubkey: signer,
+                                insts,
+                            });
+                        }
                     }
-                }
-                None
+                    None
+                })
             })
-        })
-        .collect::<Vec<_>>();
+            .collect::<Vec<_>>();
 
     if inputs.is_empty() {
         return None;

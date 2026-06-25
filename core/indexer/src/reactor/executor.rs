@@ -12,7 +12,7 @@ use crate::database;
 use crate::retry::{new_backoff_limited, retry};
 use crate::runtime::ExecutionError;
 use crate::runtime::Runtime;
-use crate::runtime::registry;
+use crate::runtime::system;
 use crate::runtime::wit::Signer;
 
 /// Check if a parsed transaction contains only batchable ops.
@@ -526,8 +526,15 @@ async fn execute_op(
     let payment = op.metadata.payment.clone();
 
     match &op.kind {
-        OpKind::Publish { name, bytes } => {
-            match runtime.publish(&signer, payment, name, bytes).await {
+        OpKind::Publish {
+            name,
+            bytes,
+            provenance,
+        } => {
+            match runtime
+                .publish(&signer, payment, name, bytes, provenance)
+                .await
+            {
                 Ok(_) => Ok(None),
                 Err(ExecutionError::Deterministic(e)) => {
                     warn!("Publish operation failed: {e:#}");
@@ -553,6 +560,46 @@ async fn execute_op(
                 }
             }
         }
+        OpKind::UpdateProvenance {
+            contract,
+            provenance,
+        } => {
+            // Charge + result plumbing through the system contract (a no-op
+            // proc), mirroring RegisterBlsKey; then the host-side owner authz
+            // check and the provenance-log append.
+            match runtime
+                .execute(
+                    Some(&signer),
+                    Some(payment),
+                    &system::address(),
+                    "provenance-updated()",
+                )
+                .await
+            {
+                Ok(_) => {}
+                Err(ExecutionError::Deterministic(e)) => {
+                    warn!("system.provenance-updated failed: {e:#}");
+                    return Ok(Some(e));
+                }
+                Err(ExecutionError::NonDeterministic(e)) => {
+                    return Err(e.context("system.provenance-updated infrastructure failure"));
+                }
+            }
+            let address = crate::runtime::ContractAddress::from(contract);
+            match runtime
+                .update_provenance(op.metadata.signer_id, &address, provenance)
+                .await
+            {
+                Ok(_) => Ok(None),
+                Err(ExecutionError::Deterministic(e)) => {
+                    warn!("UpdateProvenance failed: {e:#}");
+                    Ok(Some(e))
+                }
+                Err(ExecutionError::NonDeterministic(e)) => {
+                    Err(e.context("UpdateProvenance infrastructure failure"))
+                }
+            }
+        }
         OpKind::Issuance => match runtime.issuance(&signer).await {
             Ok(_) => Ok(None),
             Err(ExecutionError::Deterministic(e)) => {
@@ -575,25 +622,25 @@ async fn execute_op(
             schnorr_sig,
             bls_sig,
         } => {
-            // Charge the payer for the registration via the registry contract
+            // Charge the payer for the registration via the system contract
             // first. If the hold fails (insufficient tokens), the host-side
             // register_bls_key DB write below is skipped.
             match runtime
                 .execute(
                     Some(&signer),
                     Some(payment),
-                    &registry::address(),
+                    &system::address(),
                     "registered()",
                 )
                 .await
             {
                 Ok(_) => {}
                 Err(ExecutionError::Deterministic(e)) => {
-                    warn!("registry.registered failed: {e:#}");
+                    warn!("system.registered failed: {e:#}");
                     return Ok(Some(e));
                 }
                 Err(ExecutionError::NonDeterministic(e)) => {
-                    return Err(e.context("registry.registered infrastructure failure"));
+                    return Err(e.context("system.registered infrastructure failure"));
                 }
             }
             match runtime

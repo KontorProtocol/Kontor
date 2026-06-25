@@ -78,7 +78,16 @@ test("SDK capstone: publish, transfer, bulk, marketplace", async () => {
       // its own storage; it doesn't collide with the genesis
       // `token@0.0`.
       const submitted = await session
-        .publish("republished-token", tokenWasmBr)
+        .publish("republished-token", tokenWasmBr, {
+          source: {
+            forge: "GitHub",
+            owner: "kontor",
+            repo: "test",
+            commit: "0".repeat(40),
+          },
+          image: "kontorprotocol/kontor-build@sha256:test",
+          platform: "linux/arm64",
+        })
         .submit();
       await regtest.mine();
       const result = await submitted.wait();
@@ -91,6 +100,12 @@ test("SDK capstone: publish, transfer, bulk, marketplace", async () => {
       }
       expect(address.name).toBe("republished-token");
       expect(address.height).toBeGreaterThan(0n);
+
+      // The publish seeded the provenance log; read it back via the SDK.
+      const log = await session.getProvenance(address);
+      expect(log.length).toBe(1);
+      expect(log[0].provenance.source.owner).toBe("kontor");
+      expect(log[0].provenance.platform).toBe("linux/arm64");
 
       // Confirm init ran by binding `Token` to the new instance and
       // reading a known-empty initial state: a fresh token contract

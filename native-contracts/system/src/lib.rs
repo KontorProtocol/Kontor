@@ -1,14 +1,14 @@
 #![no_std]
-contract!(name = "registry");
+contract!(name = "system");
 
 use stdlib::*;
 
 #[derive(Clone, Default, StorageRoot)]
-struct RegistryStorage {}
+struct SystemStorage {}
 
-impl Guest for Registry {
+impl Guest for System {
     fn init(ctx: &ProcContext) -> Contract {
-        RegistryStorage::default().init(ctx);
+        SystemStorage::default().init(ctx);
         ctx.contract()
     }
 
@@ -19,6 +19,15 @@ impl Guest for Registry {
         // on-chain fuel accounting matches what the operation really
         // costs, even though the work happens outside the contract.
         // Traps on insufficient fuel.
-        registry::register_bls_key();
+        system::register_bls_key();
+    }
+
+    fn provenance_updated(_ctx: &ProcContext) {
+        // The reactor does the owner authz check and the contract_provenance
+        // append in `Runtime::update_provenance`. This call charges the caller
+        // `Fuel::UpdateProvenance` so on-chain fuel accounting reflects the op,
+        // even though the work happens outside the contract. Traps on
+        // insufficient fuel.
+        system::update_provenance();
     }
 }

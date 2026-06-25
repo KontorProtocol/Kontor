@@ -22,10 +22,10 @@ use tower_http::{
 use tracing::{Level, Span, error, field, info, span};
 
 use crate::api::handlers::{
-    get_block_transactions, get_blocks, get_contract, get_contracts, get_fees, get_index,
-    get_metrics, get_result, get_results, get_signer, get_status, get_transaction,
-    get_transaction_inspect, get_transactions, post_compose, post_contract, post_simulate,
-    post_transaction_broadcast, post_transaction_hex_inspect,
+    get_block_transactions, get_blocks, get_contract, get_contract_provenance, get_contracts,
+    get_fees, get_index, get_metrics, get_result, get_results, get_signer, get_status,
+    get_transaction, get_transaction_inspect, get_transactions, post_compose, post_contract,
+    post_simulate, post_transaction_broadcast, post_transaction_hex_inspect,
 };
 
 use super::{
@@ -158,7 +158,8 @@ pub fn new(context: Env, prom_handle: PrometheusHandle) -> Router {
             "/contracts",
             Router::new()
                 .route("/", get(get_contracts))
-                .route("/{address}", get(get_contract).post(post_contract)),
+                .route("/{address}", get(get_contract).post(post_contract))
+                .route("/{address}/provenance", get(get_contract_provenance)),
         )
         .nest(
             "/results",

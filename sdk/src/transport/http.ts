@@ -44,6 +44,7 @@ import type {
 } from "../json-codec.js";
 import type {
   ComposeOutputs,
+  ContractProvenanceResponse,
   ErrorResponse,
   OpWithResult,
   ResultResponse,
@@ -52,6 +53,10 @@ import type {
   ViewExpr,
   ViewResult,
 } from "../bindings.js";
+import {
+  type ProvenanceEntry,
+  provenanceEntryFromWire,
+} from "../provenance.js";
 
 export interface HttpTransportOptions {
   chain: Chain;
@@ -177,6 +182,36 @@ export class HttpTransport implements KontorTransport {
       });
     }
     return (JSON.parse(text) as ResultResponse<SignerResponse>).result;
+  }
+
+  async provenance(contract: ContractAddress): Promise<ProvenanceEntry[]> {
+    const url = `${this.baseUrl}/contracts/${contract.toWire()}/provenance`;
+    let res: Response;
+    try {
+      res = await this.fetchImpl(url);
+    } catch (cause) {
+      throw new TransportError(`GET ${url} failed`, {
+        cause: cause instanceof Error ? cause : undefined,
+        docsPath: "/sdk/transport",
+      });
+    }
+    const text = await res.text();
+    if (!res.ok) {
+      let detail = text;
+      try {
+        detail = (JSON.parse(text) as ErrorResponse).error ?? text;
+      } catch {
+        /* not JSON */
+      }
+      throw new TransportError(`GET ${url} returned HTTP ${res.status}`, {
+        details: detail,
+        docsPath: "/sdk/transport",
+      });
+    }
+    const resp = (
+      JSON.parse(text) as ResultResponse<ContractProvenanceResponse>
+    ).result;
+    return resp.entries.map(provenanceEntryFromWire);
   }
 
   /**

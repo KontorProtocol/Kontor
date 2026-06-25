@@ -17,6 +17,3 @@ async-trait = { workspace = true }
 tracing = { workspace = true }
 tempfile = { workspace = true }
 blst = { workspace = true }
-
-[build-dependencies]
-glob = { workspace = true }

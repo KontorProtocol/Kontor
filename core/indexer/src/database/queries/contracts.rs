@@ -3,8 +3,53 @@ use libsql::{Connection, Value, de::from_row, params};
 
 use super::Error;
 use super::pagination::{PageOptions, get_paginated};
-use crate::database::types::{ContractQuery, ContractRow};
+use crate::database::types::{ContractProvenanceRow, ContractQuery, ContractRow};
 use crate::runtime::ContractAddress;
+
+/// Append one entry to a contract's build-provenance log (publish seeds the
+/// first; `UpdateProvenance` appends). Append-only — never updates in place.
+pub async fn insert_contract_provenance(
+    conn: &Connection,
+    row: ContractProvenanceRow,
+) -> Result<u64, Error> {
+    conn.execute(
+        r#"
+            INSERT INTO contract_provenance (
+                contract_id,
+                author_signer_id,
+                height,
+                tx_index,
+                provenance
+            ) VALUES (?, ?, ?, ?, ?)
+            "#,
+        params![
+            row.contract_id,
+            row.author_signer_id,
+            row.height,
+            row.tx_index,
+            row.provenance
+        ],
+    )
+    .await?;
+
+    Ok(conn.last_insert_rowid() as u64)
+}
+
+/// The publisher of a contract = the author of its first provenance entry.
+/// `None` if the contract has no provenance log (e.g. native contracts).
+pub async fn get_contract_provenance_publisher(
+    conn: &Connection,
+    contract_id: u64,
+) -> Result<Option<u64>, Error> {
+    let mut rows = conn
+        .query(
+            "SELECT author_signer_id FROM contract_provenance
+             WHERE contract_id = ? ORDER BY id LIMIT 1",
+            params![contract_id],
+        )
+        .await?;
+    Ok(rows.next().await?.map(|r| r.get(0)).transpose()?)
+}
 
 pub async fn insert_contract(conn: &Connection, row: ContractRow) -> Result<u64, Error> {
     conn.execute(
@@ -136,4 +181,28 @@ pub async fn get_contract_bytes_by_id(
         .query("SELECT bytes FROM contracts WHERE id = ?", params![id])
         .await?;
     Ok(rows.next().await?.map(|r| r.get(0)).transpose()?)
+}
+
+/// A contract's full provenance log, oldest first (append order). Each row's
+/// `provenance` is a postcard-encoded `indexer_types::BuildProvenance`.
+pub async fn get_contract_provenance_log(
+    conn: &Connection,
+    contract_id: u64,
+) -> Result<Vec<ContractProvenanceRow>, Error> {
+    let mut rows = conn
+        .query(
+            r#"
+            SELECT id, contract_id, author_signer_id, height, tx_index, provenance
+            FROM contract_provenance
+            WHERE contract_id = ?
+            ORDER BY id
+            "#,
+            params![contract_id],
+        )
+        .await?;
+    let mut out = Vec::new();
+    while let Some(row) = rows.next().await? {
+        out.push(from_row::<ContractProvenanceRow>(&row)?);
+    }
+    Ok(out)
 }

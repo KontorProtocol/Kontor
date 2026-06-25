@@ -9,7 +9,7 @@ use indexer::witness_data::TokenBalance;
 use indexer_types::{
     CommitSource, Inst, InstKind, Insts, Reveal, RevealOutput, RevealParticipant, serialize,
 };
-use testlib::RegTester;
+use testlib::{RegTester, sample_provenance};
 use tracing::info;
 
 pub async fn test_commit_reveal(reg_tester: &mut RegTester) -> Result<()> {
@@ -33,6 +33,7 @@ pub async fn test_commit_reveal(reg_tester: &mut RegTester) -> Result<()> {
         kind: InstKind::Publish {
             name: "commit-reveal".to_string(),
             bytes: serialized_token_balance,
+            provenance: sample_provenance(),
         },
     };
     let reveal = Reveal::builder()

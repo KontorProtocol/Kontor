@@ -62,6 +62,7 @@ async fn bls_publisher_pays_all_sponsored_regtest() -> Result<()> {
                 kind: InstKind::Publish {
                     name: "arith".to_string(),
                     bytes: arith_bytes,
+                    provenance: sample_provenance(),
                 },
             },
         )
@@ -190,6 +191,7 @@ async fn bls_publisher_pays_mixed_regtest() -> Result<()> {
                 kind: InstKind::Publish {
                     name: "arith".to_string(),
                     bytes: arith_bytes,
+                    provenance: sample_provenance(),
                 },
             },
         )

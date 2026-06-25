@@ -793,6 +793,19 @@ impl RegTester {
         }
     }
 
+    /// A contract's append-only provenance log, oldest first (last = current).
+    pub async fn get_contract_provenance(
+        &self,
+        address: &ContractAddress,
+    ) -> Result<Vec<indexer_types::ProvenanceEntry>> {
+        Ok(self
+            .kontor_client()
+            .await
+            .provenance(address)
+            .await?
+            .entries)
+    }
+
     pub async fn mempool_accept_result(
         &self,
         raw_txs: &[String],
@@ -1640,7 +1653,7 @@ impl RegTesterCluster {
 
         // Bundle Issuance + RegisterBlsKey into a single tx so the reactor
         // processes them in declaration order. Issuance must come first so
-        // the signer has tokens to pay the gas hold for the registry.registered
+        // the signer has tokens to pay the gas hold for the system.registered
         // contract call. Sibling txs can't guarantee this — Bitcoin block
         // ordering between non-dependent reveal txs is ambiguous.
         let mut txids = Vec::with_capacity(registered);

@@ -21,7 +21,7 @@ fn build_protos() {
 fn main() {
     built::write_built_file().expect("Failed to acquire build-time information");
     build_protos();
-    // Test-contracts compilation moved to testlib's build.rs (dev-only
-    // crate), so production builds of indexer don't carry the wasm32
-    // toolchain or wasm-opt dependency.
+    // Test contracts are committed, container-built artifacts
+    // (test-contracts/binaries/, see tools/build-contracts.sh), so neither
+    // production nor test builds compile wasm — no wasm32 toolchain/wasm-opt.
 }

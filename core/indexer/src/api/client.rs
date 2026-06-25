@@ -1,8 +1,8 @@
 use anyhow::{Result, anyhow};
 use indexer_types::{
-    CheckpointRow, CommitOutputs, ComposeOutputs, ContractResponse, ErrorResponse, Info,
-    OpWithResult, ResultResponse, ResultRow, Reveal, RevealOutputs, SignerResponse, TransactionHex,
-    TransactionRow, ViewExpr, ViewResult,
+    CheckpointRow, CommitOutputs, ComposeOutputs, ContractProvenanceResponse, ContractResponse,
+    ErrorResponse, Info, OpWithResult, ResultResponse, ResultRow, Reveal, RevealOutputs,
+    SignerResponse, TransactionHex, TransactionRow, ViewExpr, ViewResult,
 };
 use reqwest::{Client as HttpClient, ClientBuilder, Response, StatusCode};
 use serde::{Deserialize, Serialize};
@@ -167,6 +167,22 @@ impl Client {
         Self::handle_response(
             self.client
                 .get(format!("{}/contracts/{}", &self.url, contract_address))
+                .send()
+                .await?,
+        )
+        .await
+    }
+
+    pub async fn provenance(
+        &self,
+        contract_address: &ContractAddress,
+    ) -> Result<ContractProvenanceResponse> {
+        Self::handle_response(
+            self.client
+                .get(format!(
+                    "{}/contracts/{}/provenance",
+                    &self.url, contract_address
+                ))
                 .send()
                 .await?,
         )

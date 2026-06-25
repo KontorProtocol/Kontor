@@ -7,10 +7,10 @@ pub mod fuel;
 pub mod nft;
 pub mod numerics;
 pub mod pool;
-pub mod registry;
 mod stack;
 pub mod staking;
 mod storage;
+pub mod system;
 pub mod token;
 mod types;
 pub mod wit;
@@ -19,8 +19,8 @@ mod call;
 mod host_context;
 mod host_files;
 mod host_numbers;
-mod host_registry;
 mod host_storage;
+mod host_system;
 
 use bitcoin::XOnlyPublicKey;
 pub use component_cache::ComponentCache;
@@ -102,7 +102,7 @@ use wasmtime::{
     component::{Component, HasData, Linker, ResourceTable},
 };
 
-use indexer_types::Payment;
+use indexer_types::{BuildProvenance, CommitId, Forge, Payment, Platform, Source};
 use wit_validator::Validator as WitValidator;
 
 use crate::bls::RegistrationProof;
@@ -142,6 +142,43 @@ pub fn hash_bytes(bytes: &[u8]) -> [u8; 32] {
     result.into()
 }
 
+/// Provenance for the native/genesis contracts. `platform` + the pinned `image`
+/// come from the committed native-contracts `build.json`; the source is the
+/// Kontor repo at the node's build commit — which reproduces the committed
+/// binaries (the reproducible-build gate proves that at every commit). A missing
+/// git commit (e.g. a tarball build) → an all-zero "unknown" commit.
+fn native_provenance() -> Result<BuildProvenance> {
+    const BUILD_JSON: &str = include_str!("../../../../native-contracts/binaries/build.json");
+
+    #[derive(serde::Deserialize)]
+    struct BuildMeta {
+        platform: String,
+        image: String,
+    }
+    let meta: BuildMeta = serde_json::from_str(BUILD_JSON)?;
+
+    let commit = crate::built_info::GIT_COMMIT_HASH
+        .and_then(|h| {
+            let mut bytes = [0u8; 20];
+            hex::decode_to_slice(h, &mut bytes).ok().map(|_| bytes)
+        })
+        .map(CommitId::Sha1)
+        .unwrap_or(CommitId::Sha1([0u8; 20]));
+
+    let provenance = BuildProvenance {
+        source: Source {
+            forge: Forge::GitHub,
+            owner: "KontorProtocol".to_string(),
+            repo: "Kontor".to_string(),
+            commit,
+        },
+        image: meta.image,
+        platform: Platform::parse(&meta.platform)?,
+    };
+    provenance.validate()?;
+    Ok(provenance)
+}
+
 impl PartialEq for RawFileDescriptor {
     fn eq(&self, other: &Self) -> bool {
         self.file_id == other.file_id
@@ -158,7 +195,7 @@ impl Eq for RawFileDescriptor {}
 
 /// The two host capability surfaces over a single `Runtime`. `user` registers
 /// only the common built-ins; `native` additionally registers the privileged
-/// registries (`file-registry`, `registry`). Both share the same `Runtime`
+/// registries (`file-registry`, `system`). Both share the same `Runtime`
 /// host state — they differ only in which interfaces a component can import.
 /// `prepare_call` selects one per contract by native contract id.
 #[derive(Clone)]
@@ -220,7 +257,7 @@ impl Runtime {
     /// user contract that imports them fails to instantiate.
     fn register_native(linker: &mut Linker<Self>) -> Result<()> {
         kontor::built_in::file_registry::add_to_linker::<_, Self>(linker, |s| s)?;
-        kontor::built_in::registry::add_to_linker::<_, Self>(linker, |s| s)?;
+        kontor::built_in::system::add_to_linker::<_, Self>(linker, |s| s)?;
         Ok(())
     }
 
@@ -349,8 +386,12 @@ impl Runtime {
         // = appending to the slice; no manual count to maintain.
         let core_signer = Signer::Core(Box::new(Signer::Nobody));
         let payment = self.core_payment();
+        // Native contracts ARE reproducibly built — record their provenance from
+        // the committed build.json (platform + pinned image) plus the source repo
+        // at the node's build commit (CI gates that it reproduces these bytes).
+        let provenance = native_provenance()?;
         for (name, bytes) in NATIVE_CONTRACTS {
-            self.publish(&core_signer, payment.clone(), name, bytes)
+            self.publish(&core_signer, payment.clone(), name, bytes, &provenance)
                 .await?;
         }
         if !genesis_validators.is_empty() {
@@ -371,7 +412,15 @@ impl Runtime {
         payment: Payment,
         name: &str,
         bytes: &[u8],
+        // Required for every publish — user ops carry it on the wire; native
+        // (core-signed) contracts derive it from the committed build.json.
+        provenance: &BuildProvenance,
     ) -> Result<String, ExecutionError> {
+        // Already enforced at decode (block::filter_map); re-checked here before
+        // touching storage as defense-in-depth (Deterministic on every node).
+        provenance
+            .validate()
+            .map_err(ExecutionError::Deterministic)?;
         let address = ContractAddress {
             name: name.to_string(),
             height: self.storage.height,
@@ -390,6 +439,19 @@ impl Runtime {
             return Ok("".to_string());
         }
 
+        // The op's signer is the publisher and becomes the provenance entry's
+        // author — the UpdateProvenance authz anchor. Resolve it before opening
+        // the savepoint so an unsupported signer can't leak an open savepoint.
+        let author = match signer {
+            Signer::Id(id) => id.signer_id(),
+            Signer::Core(_) => CORE_SIGNER_ID,
+            _ => {
+                return Err(ExecutionError::Deterministic(anyhow!(
+                    "publishing requires an Id or Core signer"
+                )));
+            }
+        };
+
         self.storage
             .savepoint()
             .await
@@ -399,10 +461,18 @@ impl Runtime {
             .insert_contract(name, bytes)
             .await
             .map_err(ExecutionError::NonDeterministic)?;
+        // Seed the append-only provenance log inside the savepoint, so it rolls
+        // back with the contract if init fails.
+        let encoded = postcard::to_allocvec(provenance)
+            .map_err(|e| ExecutionError::NonDeterministic(e.into()))?;
+        self.storage
+            .insert_contract_provenance(contract_id, author, &encoded)
+            .await
+            .map_err(ExecutionError::NonDeterministic)?;
         // Publish-time link validation: the contract must resolve all of its
         // imports against the built-in surface it will run under. A user
         // contract that imports a native-only interface (`file-registry` /
-        // `registry`) is rejected here — deterministically, before `init`
+        // `system`) is rejected here — deterministically, before `init`
         // runs and before any state is committed. `instantiate_pre` is a pure
         // function of (component, linker), identical on every node, so its
         // failure is a Deterministic rejection (roll back and continue), never
@@ -435,6 +505,53 @@ impl Runtime {
         }
     }
 
+    /// Append a new claim to a contract's append-only provenance log. Authorized
+    /// by the contract's publisher (`signer_id`). The gas charge + result row
+    /// come from the `system.provenance-updated` call in the executor; this does
+    /// the deterministic authz check and the host-side append. All checks are
+    /// pure functions of the op + committed state, so they reject identically on
+    /// every node (`Deterministic`).
+    pub async fn update_provenance(
+        &mut self,
+        caller_signer_id: u64,
+        contract: &ContractAddress,
+        provenance: &BuildProvenance,
+    ) -> Result<(), ExecutionError> {
+        // Already enforced at decode (block::filter_map); re-checked as
+        // defense-in-depth.
+        provenance
+            .validate()
+            .map_err(ExecutionError::Deterministic)?;
+        let contract_id = self
+            .storage
+            .contract_id(contract)
+            .await
+            .map_err(ExecutionError::NonDeterministic)?
+            .ok_or_else(|| ExecutionError::Deterministic(anyhow!("contract not found")))?;
+        // Authz: only the publisher (author of the first provenance entry) may
+        // append. NOT contracts.signer_id, which is the contract's own signer.
+        let publisher = self
+            .storage
+            .contract_provenance_publisher(contract_id)
+            .await
+            .map_err(ExecutionError::NonDeterministic)?
+            .ok_or_else(|| {
+                ExecutionError::Deterministic(anyhow!("contract has no provenance log"))
+            })?;
+        if publisher != caller_signer_id {
+            return Err(ExecutionError::Deterministic(anyhow!(
+                "only the contract's publisher can update its provenance"
+            )));
+        }
+        let encoded = postcard::to_allocvec(provenance)
+            .map_err(|e| ExecutionError::NonDeterministic(e.into()))?;
+        self.storage
+            .insert_contract_provenance(contract_id, caller_signer_id, &encoded)
+            .await
+            .map_err(ExecutionError::NonDeterministic)?;
+        Ok(())
+    }
+
     /// Deterministic publish-time validation. All checks are pure functions of
     /// the contract bytes (and fixed code), so they reject identically on every
     /// node — `Deterministic`, never a shutdown.
@@ -442,7 +559,7 @@ impl Runtime {
     /// 1. **Link check** (all contracts): the component's imports must resolve
     ///    against the linker it will run under (native for ids
     ///    1..=NATIVE_CONTRACTS.len(), the restricted user linker otherwise).
-    ///    Catches a user contract reaching for `file-registry`/`registry`.
+    ///    Catches a user contract reaching for `file-registry`/`system`.
     /// 2. **WIT rule check** (user contracts only): the extracted WIT must
     ///    satisfy the Kontor rules the linker can't see — `init` exists with the
     ///    right shape, exports are `async`, valid context/return types, no
@@ -614,7 +731,7 @@ impl Runtime {
     }
 
     /// Host-side entry point used by macro-generated native-contract api
-    /// wrappers (`token::api::*`, `registry::api::*`, etc.). Derives a
+    /// wrappers (`token::api::*`, `system::api::*`, etc.). Derives a
     /// `Payment` from the caller's `signer` at the non-procs gas budget.
     ///
     /// For system-internal callers, `signer` is `Signer::Core(...)` and the
@@ -753,7 +870,7 @@ mod tests {
     /// the op and continue) rather than `NonDeterministic` (which shuts the node
     /// down). A misclassification here would let one publish tx halt the network.
     #[tokio::test]
-    async fn user_linker_rejects_native_registry_imports() {
+    async fn user_linker_rejects_native_system_imports() {
         let (runtime, _dir, _name) = test_runtime().await.expect("test runtime");
         // filestorage = native contract id 2; its WIT imports `file-registry`.
         let component = runtime
@@ -866,7 +983,10 @@ mod tests {
         // rejection is by contract id, before `init`.)
         let signer = super::Signer::Core(Box::new(super::Signer::Nobody));
         let payment = runtime.core_payment();
-        let result = runtime.publish(&signer, payment, "evil", FILESTORAGE).await;
+        let provenance = super::native_provenance().unwrap();
+        let result = runtime
+            .publish(&signer, payment, "evil", FILESTORAGE, &provenance)
+            .await;
         assert!(
             result.is_err(),
             "publish of a file-registry-importing user contract must fail"

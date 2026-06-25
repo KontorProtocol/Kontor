@@ -42,6 +42,8 @@ import type {
 } from "./bindings.js";
 import { ContractAddress } from "./canonical/ContractAddress.js";
 import { ContractError, SignerError, TransportError } from "./errors.js";
+import type { BuildProvenance } from "./provenance.js";
+import { provenanceFromWire, provenanceToWire } from "./provenance.js";
 import type { ChainEvent } from "./events.js";
 import type { ExtraOutput } from "./outputs.js";
 import type { BroadcastResult, OpResult, OpResultRaw } from "./json-codec.js";
@@ -62,7 +64,20 @@ export type InstKind =
       /** Encoded WAVE expression — `name(arg1, arg2, ...)`. */
       expr: string;
     }
-  | { kind: "Publish"; name: string; bytes: Uint8Array }
+  | {
+      kind: "Publish";
+      name: string;
+      bytes: Uint8Array;
+      /** Reproducible-build provenance for the wasm (required). */
+      provenance: BuildProvenance;
+    }
+  /** Append a new build-provenance claim to a contract's provenance log.
+   *  Only the contract's publisher may do this. */
+  | {
+      kind: "UpdateProvenance";
+      contract: ContractAddress;
+      provenance: BuildProvenance;
+    }
   | { kind: "Issuance" }
   | {
       kind: "RegisterBlsKey";
@@ -504,6 +519,14 @@ function wireKindToInstKind(k: WireInstKind): InstKind {
       kind: "Publish",
       name: k.Publish.name,
       bytes: Uint8Array.from(k.Publish.bytes),
+      provenance: provenanceFromWire(k.Publish.provenance),
+    };
+  }
+  if ("UpdateProvenance" in k) {
+    return {
+      kind: "UpdateProvenance",
+      contract: ContractAddress.fromWire(k.UpdateProvenance.contract),
+      provenance: provenanceFromWire(k.UpdateProvenance.provenance),
     };
   }
   if ("RegisterBlsKey" in k) {
@@ -524,7 +547,20 @@ function instKindToWire(k: InstKind): WireInstKind {
     case "Issuance":
       return "Issuance";
     case "Publish":
-      return { Publish: { name: k.name, bytes: [...k.bytes] } };
+      return {
+        Publish: {
+          name: k.name,
+          bytes: [...k.bytes],
+          provenance: provenanceToWire(k.provenance),
+        },
+      };
+    case "UpdateProvenance":
+      return {
+        UpdateProvenance: {
+          contract: k.contract.toWire(),
+          provenance: provenanceToWire(k.provenance),
+        },
+      };
     case "RegisterBlsKey":
       return {
         RegisterBlsKey: {

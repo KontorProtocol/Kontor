@@ -10,6 +10,16 @@ test("publish", () => {
           Publish: {
             name: "foo",
             bytes: Array.from(new Uint8Array([1, 2, 3, 4])),
+            provenance: {
+              source: {
+                forge: "GitHub",
+                owner: "kontor",
+                repo: "test",
+                commit: { Sha1: Array.from(new Uint8Array(20)) },
+              },
+              image: "kontorprotocol/kontor-build@sha256:abc123",
+              platform: "LinuxArm64",
+            },
           },
         },
       },
