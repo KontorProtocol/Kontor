@@ -86,6 +86,9 @@ pub enum Fuel {
     // benchmarks. Currently sized to match other non-zk "non-trivial"
     // operations (Delete, ProofFromBytes base cost).
     RegisterBlsKey,
+    // A host-side provenance-log append (one row). Same flat sizing as
+    // RegisterBlsKey — recalibrate with the rest of the table later.
+    UpdateProvenance,
 }
 
 impl Fuel {
@@ -172,6 +175,7 @@ impl Fuel {
             Self::NumbersSqrtInteger => 500,
             Self::NumbersLog10Decimal => 500,
             Self::RegisterBlsKey => 1_000,
+            Self::UpdateProvenance => 1_000,
         }
     }
 

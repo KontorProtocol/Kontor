@@ -560,6 +560,46 @@ async fn execute_op(
                 }
             }
         }
+        OpKind::UpdateProvenance {
+            contract,
+            provenance,
+        } => {
+            // Charge + result plumbing through the system contract (a no-op
+            // proc), mirroring RegisterBlsKey; then the host-side owner authz
+            // check and the provenance-log append.
+            match runtime
+                .execute(
+                    Some(&signer),
+                    Some(payment),
+                    &system::address(),
+                    "provenance-updated()",
+                )
+                .await
+            {
+                Ok(_) => {}
+                Err(ExecutionError::Deterministic(e)) => {
+                    warn!("system.provenance-updated failed: {e:#}");
+                    return Ok(Some(e));
+                }
+                Err(ExecutionError::NonDeterministic(e)) => {
+                    return Err(e.context("system.provenance-updated infrastructure failure"));
+                }
+            }
+            let address = crate::runtime::ContractAddress::from(contract);
+            match runtime
+                .update_provenance(op.metadata.signer_id, &address, provenance)
+                .await
+            {
+                Ok(_) => Ok(None),
+                Err(ExecutionError::Deterministic(e)) => {
+                    warn!("UpdateProvenance failed: {e:#}");
+                    Ok(Some(e))
+                }
+                Err(ExecutionError::NonDeterministic(e)) => {
+                    Err(e.context("UpdateProvenance infrastructure failure"))
+                }
+            }
+        }
         OpKind::Issuance => match runtime.issuance(&signer).await {
             Ok(_) => Ok(None),
             Err(ExecutionError::Deterministic(e)) => {

@@ -453,6 +453,47 @@ impl Runtime {
         }
     }
 
+    /// Append a new claim to a contract's append-only provenance log. Authorized
+    /// by the contract's publisher (`signer_id`). The gas charge + result row
+    /// come from the `system.provenance-updated` call in the executor; this does
+    /// the deterministic authz check and the host-side append. All checks are
+    /// pure functions of the op + committed state, so they reject identically on
+    /// every node (`Deterministic`).
+    pub async fn update_provenance(
+        &mut self,
+        caller_signer_id: u64,
+        contract: &ContractAddress,
+        provenance: &BuildProvenance,
+    ) -> Result<(), ExecutionError> {
+        provenance
+            .source
+            .validate()
+            .map_err(ExecutionError::Deterministic)?;
+        let contract_id = self
+            .storage
+            .contract_id(contract)
+            .await
+            .map_err(ExecutionError::NonDeterministic)?
+            .ok_or_else(|| ExecutionError::Deterministic(anyhow!("contract not found")))?;
+        let owner = self
+            .storage
+            .contract_signer_id(contract_id)
+            .await
+            .map_err(ExecutionError::NonDeterministic)?;
+        if owner != Some(caller_signer_id) {
+            return Err(ExecutionError::Deterministic(anyhow!(
+                "only the contract's publisher can update its provenance"
+            )));
+        }
+        let encoded = postcard::to_allocvec(provenance)
+            .map_err(|e| ExecutionError::NonDeterministic(e.into()))?;
+        self.storage
+            .insert_contract_provenance(contract_id, &encoded)
+            .await
+            .map_err(ExecutionError::NonDeterministic)?;
+        Ok(())
+    }
+
     /// Deterministic publish-time validation. All checks are pure functions of
     /// the contract bytes (and fixed code), so they reject identically on every
     /// node — `Deterministic`, never a shutdown.

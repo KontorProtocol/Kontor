@@ -13,7 +13,7 @@ use crate::{
         queries::{
             DeletableRow, create_contract_signer, exists_contract_state, find_live_subtree,
             find_matching_paths, get_contract_address_from_id, get_contract_bytes_by_id,
-            get_contract_id_from_address, get_latest_contract_state_value,
+            get_contract_id_from_address, get_contract_signer_id, get_latest_contract_state_value,
             hard_delete_matching_paths, insert_contract, insert_contract_provenance,
             insert_contract_result, insert_contract_state, matching_path,
             path_prefix_filter_contract_state, prune_contract_state, select_block_at_height,
@@ -165,6 +165,12 @@ impl Storage {
 
     pub async fn contract_address(&self, contract_id: u64) -> Result<Option<ContractAddress>> {
         Ok(get_contract_address_from_id(&self.conn, contract_id).await?)
+    }
+
+    /// The publisher (`signer_id`) of a contract — the `UpdateProvenance` authz
+    /// anchor. `None` if the contract is absent or core-published.
+    pub async fn contract_signer_id(&self, contract_id: u64) -> Result<Option<u64>> {
+        Ok(get_contract_signer_id(&self.conn, contract_id).await?)
     }
 
     pub async fn contract_bytes(&self, contract_id: u64) -> Result<Option<Vec<u8>>> {

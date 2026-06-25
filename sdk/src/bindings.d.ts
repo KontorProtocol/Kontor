@@ -240,6 +240,7 @@ export type InstKind =
     };
   }
   | { "Call": { contract: string; expr: string } }
+  | { "UpdateProvenance": { contract: string; provenance: BuildProvenance } }
   | "Issuance"
   | {
     "RegisterBlsKey": {
@@ -267,6 +268,7 @@ export type OpKind =
     };
   }
   | { "Call": { contract: string; expr: string } }
+  | { "UpdateProvenance": { contract: string; provenance: BuildProvenance } }
   | "Issuance"
   | {
     "RegisterBlsKey": {

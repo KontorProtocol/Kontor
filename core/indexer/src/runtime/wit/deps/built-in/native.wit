@@ -65,6 +65,12 @@ interface system {
     /// accounting matches reality. Traps on insufficient fuel — aborts
     /// the enclosing contract call.
     register-bls-key: async func();
+
+    /// Consume fuel for an UpdateProvenance operation. The reactor performs
+    /// the owner authz check and appends to the provenance log outside the
+    /// contract's fuel scope; this call meters the caller so fuel accounting
+    /// matches reality. Traps on insufficient fuel.
+    update-provenance: async func();
 }
 
 world built-in-native {

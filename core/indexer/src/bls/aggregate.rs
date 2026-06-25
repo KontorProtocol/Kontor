@@ -132,6 +132,11 @@ pub fn validate_aggregate_shape(insts: &Insts) -> Result<&indexer_types::Aggrega
                     "aggregate path supports Call and RegisterBlsKey (got Publish)"
                 ));
             }
+            InstKind::UpdateProvenance { .. } => {
+                return Err(anyhow!(
+                    "aggregate path supports Call and RegisterBlsKey (got UpdateProvenance)"
+                ));
+            }
             InstKind::Issuance => {
                 return Err(anyhow!(
                     "aggregate path supports Call and RegisterBlsKey (got Issuance)"

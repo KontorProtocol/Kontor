@@ -572,6 +572,12 @@ pub enum OpKind {
         contract: ContractAddress,
         expr: String,
     },
+    UpdateProvenance {
+        #[ts(as = "String")]
+        #[serde_as(as = "DisplayFromStr")]
+        contract: ContractAddress,
+        provenance: BuildProvenance,
+    },
     Issuance,
     RegisterBlsKey {
         bls_pubkey: Vec<u8>,
@@ -1050,6 +1056,14 @@ pub enum InstKind {
         #[serde_as(as = "DisplayFromStr")]
         contract: ContractAddress,
         expr: String,
+    },
+    /// Append a new build-provenance claim to a contract's provenance log.
+    /// Authorized in the reactor by the contract's publisher (`signer_id`).
+    UpdateProvenance {
+        #[ts(type = "string")]
+        #[serde_as(as = "DisplayFromStr")]
+        contract: ContractAddress,
+        provenance: BuildProvenance,
     },
     Issuance,
     RegisterBlsKey {

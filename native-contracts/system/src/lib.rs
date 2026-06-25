@@ -21,4 +21,13 @@ impl Guest for System {
         // Traps on insufficient fuel.
         system::register_bls_key();
     }
+
+    fn provenance_updated(_ctx: &ProcContext) {
+        // The reactor does the owner authz check and the contract_provenance
+        // append in `Runtime::update_provenance`. This call charges the caller
+        // `Fuel::UpdateProvenance` so on-chain fuel accounting reflects the op,
+        // even though the work happens outside the contract. Traps on
+        // insufficient fuel.
+        system::update_provenance();
+    }
 }

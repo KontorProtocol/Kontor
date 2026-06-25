@@ -6,4 +6,5 @@ world root {
 
   export init: async func(ctx: borrow<proc-context>) -> contract;
   export registered: async func(ctx: borrow<proc-context>);
+  export provenance-updated: async func(ctx: borrow<proc-context>);
 }

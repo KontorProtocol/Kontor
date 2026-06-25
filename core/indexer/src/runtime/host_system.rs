@@ -10,6 +10,13 @@ impl Runtime {
             .await?;
         Ok(())
     }
+
+    async fn _update_provenance<T>(&self, accessor: &Accessor<T, Self>) -> Result<()> {
+        Fuel::UpdateProvenance
+            .consume(accessor, self.gauge.as_ref())
+            .await?;
+        Ok(())
+    }
 }
 
 impl built_in::system::Host for Runtime {}
@@ -24,6 +31,18 @@ impl built_in::system::HostWithStore for Runtime {
         accessor
             .with(|mut access| access.get().clone())
             ._register_bls_key(accessor)
+            .await
+    }
+
+    /// Consume fuel for an UpdateProvenance operation. The reactor performs
+    /// the owner authz check and the provenance-log append in
+    /// `Runtime::update_provenance` outside the contract boundary; this host
+    /// call exists so the contract's fuel accounting reflects the op's cost.
+    /// Insufficient fuel traps the caller.
+    async fn update_provenance<T>(accessor: &Accessor<T, Self>) -> Result<()> {
+        accessor
+            .with(|mut access| access.get().clone())
+            ._update_provenance(accessor)
             .await
     }
 }

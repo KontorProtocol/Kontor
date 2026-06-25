@@ -84,6 +84,13 @@ pub fn materialize_op(
                     provenance,
                 },
                 InstKind::Call { contract, expr } => OpKind::Call { contract, expr },
+                InstKind::UpdateProvenance {
+                    contract,
+                    provenance,
+                } => OpKind::UpdateProvenance {
+                    contract,
+                    provenance,
+                },
                 InstKind::RegisterBlsKey {
                     bls_pubkey,
                     schnorr_sig,
