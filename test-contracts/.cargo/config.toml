@@ -2,4 +2,14 @@
 target = "wasm32-unknown-unknown"
 
 [target.wasm32-unknown-unknown]
-rustflags = ["-C", "target-feature=-simd128"]
+# Remap the (pinned) build + CARGO_HOME paths out of the wasm so genesis bytes
+# carry no machine paths in panic-location strings. The `from` prefixes are the
+# fixed WORKDIR (tools/kontor-build.Dockerfile) and CARGO_HOME (build-in-image.sh)
+# — keep in sync. Order matters: rustc applies the last matching remap, so the more
+# specific CARGO_HOME rule comes last. (trim-paths would do this but isn't stable
+# in 1.96.) Reproducibility comes from the pinned env; this only cleans the paths.
+rustflags = [
+  "-C", "target-feature=-simd128",
+  "--remap-path-prefix=/build=/src",
+  "--remap-path-prefix=/build/.build-cache/cargo=/cargo",
+]

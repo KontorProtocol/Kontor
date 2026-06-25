@@ -16,6 +16,16 @@ if [ -z "${KONTOR_BUILD_IMAGE:-}" ]; then
   exit 1
 fi
 
+# Pin CARGO_HOME to a fixed in-repo path. cargo bakes dependency source paths into
+# the wasm as panic locations (<CARGO_HOME>/registry/src/.../foo.rs), so the same
+# source builds DIFFERENT bytes under different CARGO_HOME — e.g. the image default
+# /usr/local/cargo when CI invokes this directly, vs a local cache. Fixing it here
+# makes the build identical however this script runs. (trim-paths, the cargo flag
+# that would remap these away, isn't stabilized in 1.96.) Under /build it also
+# persists across local runs (the repo is mounted there), so rebuilds stay fast.
+export CARGO_HOME=/build/.build-cache/cargo
+mkdir -p "$CARGO_HOME"
+
 case "$(uname -m)" in
   x86_64) platform=linux/amd64 ;;
   aarch64) platform=linux/arm64 ;;

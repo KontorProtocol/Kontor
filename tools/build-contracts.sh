@@ -49,13 +49,11 @@ if ! "$RUNTIME" image inspect "$IMAGE_TAG" >/dev/null 2>&1; then
   "$RUNTIME" build --platform "$PLATFORM" -t "$IMAGE_TAG" - <"$DOCKERFILE"
 fi
 
-# Persist the crate registry across runs (CARGO_HOME) under the mounted repo, so
-# cargo doesn't re-download + recompile every time. The per-workspace target/ dirs
-# already persist (they're under the mounted repo); this is the missing piece.
-mkdir -p "$REPO_ROOT/.build-cache/cargo"
-
+# build-in-image.sh pins CARGO_HOME under the mounted repo (/build/.build-cache),
+# so the crate registry persists across runs here too — cargo doesn't re-download
+# or recompile every time. CARGO_BUILD_JOBS is a local-machine guard (avoids OOM)
+# and doesn't affect output, so it stays here rather than in the reproducible env.
 "$RUNTIME" run --rm --platform "$PLATFORM" "${RUN_OPTS[@]}" \
   -e CARGO_BUILD_JOBS="${CARGO_BUILD_JOBS:-2}" \
-  -e CARGO_HOME=/build/.build-cache/cargo \
   -v "$REPO_ROOT:/build" -w /build \
   "$IMAGE_TAG" bash tools/build-in-image.sh "${WORKSPACES[@]}"
