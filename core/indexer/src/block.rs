@@ -288,6 +288,16 @@ pub fn filter_map((tx_index, tx): (usize, bitcoin::Transaction)) -> Option<Trans
                             .aggregate
                             .as_ref()
                             .is_none_or(|agg| agg.signers.len() == insts.ops.len())
+                        // Provenance is a pure function of the op (no chain
+                        // state), so reject malformed provenance at decode time
+                        // rather than letting it reach execution.
+                        && insts.ops.iter().all(|inst| match &inst.kind {
+                            InstKind::Publish { provenance, .. }
+                            | InstKind::UpdateProvenance { provenance, .. } => {
+                                provenance.validate().is_ok()
+                            }
+                            _ => true,
+                        })
                     {
                         return Some(Input {
                             previous_output: input.previous_output,

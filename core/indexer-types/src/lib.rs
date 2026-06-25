@@ -1025,7 +1025,7 @@ impl core::fmt::Display for Source {
 }
 
 impl Source {
-    /// Reject structurally-invalid provenance at publish time.
+    /// Reject a structurally-valid-but-meaningless source.
     pub fn validate(&self) -> Result<()> {
         if self.owner.is_empty() {
             anyhow::bail!("provenance source owner is empty");
@@ -1035,6 +1035,29 @@ impl Source {
         }
         if matches!(&self.forge, Forge::Other(host) if host.is_empty()) {
             anyhow::bail!("provenance source forge host is empty");
+        }
+        Ok(())
+    }
+}
+
+impl BuildProvenance {
+    /// Reject structurally-valid-but-meaningless provenance. A pure function of
+    /// the op (no chain state), so it runs at transaction-decode time — see
+    /// `block::filter_map` — with a defense-in-depth re-check at execution.
+    pub fn validate(&self) -> Result<()> {
+        self.source.validate()?;
+        if self.image.is_empty() {
+            anyhow::bail!("provenance image is empty");
+        }
+        // Trustless reproducible verification requires a DIGEST-pinned image — a
+        // mutable tag could be repointed after the fact. Require an
+        // `<name>@<algo>:<hex>` digest reference.
+        let digest_pinned = self
+            .image
+            .rsplit_once('@')
+            .is_some_and(|(_, digest)| digest.contains(':'));
+        if !digest_pinned {
+            anyhow::bail!("provenance image must be digest-pinned (e.g. name@sha256:...)");
         }
         Ok(())
     }
@@ -1201,6 +1224,31 @@ mod provenance_tests {
         let mut s = sample().source;
         s.forge = Forge::Other("git.example.com".into());
         assert!(s.validate().is_ok());
+    }
+
+    #[test]
+    fn build_provenance_validate_checks_source_and_image() {
+        assert!(sample().validate().is_ok());
+
+        // empty image rejected
+        let mut p = sample();
+        p.image.clear();
+        assert!(p.validate().is_err());
+
+        // a mutable tag (no digest) is rejected — must be digest-pinned
+        let mut p = sample();
+        p.image = "kontorprotocol/kontor-build:1.96.0".into();
+        assert!(p.validate().is_err());
+
+        // a digest-pinned ref is accepted
+        let mut p = sample();
+        p.image = "kontorprotocol/kontor-build@sha256:deadbeef".into();
+        assert!(p.validate().is_ok());
+
+        // bad source propagates through
+        let mut p = sample();
+        p.source.owner.clear();
+        assert!(p.validate().is_err());
     }
 
     #[test]

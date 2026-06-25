@@ -375,10 +375,10 @@ impl Runtime {
         // (core-signed) contracts, which carry their provenance in-repo instead.
         provenance: Option<&BuildProvenance>,
     ) -> Result<String, ExecutionError> {
-        // Reject structurally-invalid provenance before touching storage — a
-        // pure function of the op, so identical on every node (Deterministic).
+        // Already enforced at decode (block::filter_map); re-checked here before
+        // touching storage as defense-in-depth (Deterministic on every node).
         if let Some(p) = provenance {
-            p.source.validate().map_err(ExecutionError::Deterministic)?;
+            p.validate().map_err(ExecutionError::Deterministic)?;
         }
         let address = ContractAddress {
             name: name.to_string(),
@@ -465,8 +465,9 @@ impl Runtime {
         contract: &ContractAddress,
         provenance: &BuildProvenance,
     ) -> Result<(), ExecutionError> {
+        // Already enforced at decode (block::filter_map); re-checked as
+        // defense-in-depth.
         provenance
-            .source
             .validate()
             .map_err(ExecutionError::Deterministic)?;
         let contract_id = self
