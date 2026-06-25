@@ -32,6 +32,7 @@
  */
 
 import { ContractAddress } from "./canonical/ContractAddress.js";
+import type { BuildProvenance } from "./provenance.js";
 import { canSignSchnorr, type Signing } from "./signing.js";
 import type { Identity } from "./identity.js";
 import type { FundingSource } from "./funding.js";
@@ -235,13 +236,36 @@ export class KontorSession {
    * confirmation (the regtest `mine()` helper short-circuits that
    * latency for tests).
    */
-  publish(name: string, bytes: Uint8Array): Inst<ContractAddress> {
+  publish(
+    name: string,
+    bytes: Uint8Array,
+    provenance: BuildProvenance,
+  ): Inst<ContractAddress> {
     return new Inst<ContractAddress>(
       this,
       this.defaultGasLimit,
-      { kind: "Publish", name, bytes },
+      { kind: "Publish", name, bytes, provenance },
       decodeContractAddressWave,
     );
+  }
+
+  /**
+   * Append a new build-provenance claim to a contract's provenance log.
+   * Only the contract's publisher may do this (the reactor enforces it);
+   * use it when the source moves (repo renamed/migrated) or to correct a
+   * claim. Broadcasts + waits for confirmation. Returns no value.
+   */
+  async updateProvenance(
+    contract: ContractAddress,
+    provenance: BuildProvenance,
+  ): Promise<void> {
+    const inst = new Inst<void>(
+      this,
+      this.defaultGasLimit,
+      { kind: "UpdateProvenance", contract, provenance },
+      () => undefined,
+    );
+    await inst;
   }
 
   /**

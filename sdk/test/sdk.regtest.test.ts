@@ -78,7 +78,16 @@ test("SDK capstone: publish, transfer, bulk, marketplace", async () => {
       // its own storage; it doesn't collide with the genesis
       // `token@0.0`.
       const submitted = await session
-        .publish("republished-token", tokenWasmBr)
+        .publish("republished-token", tokenWasmBr, {
+          source: {
+            forge: "GitHub",
+            owner: "kontor",
+            repo: "test",
+            commit: "0".repeat(40),
+          },
+          image: "kontorprotocol/kontor-build@sha256:test",
+          platform: "linux/arm64",
+        })
         .submit();
       await regtest.mine();
       const result = await submitted.wait();
