@@ -58,7 +58,7 @@ interface file-registry {
         ) -> result<verify-result, error>;
     }
 }
-interface registry {
+interface system {
     /// Consume fuel for a RegisterBlsKey operation. The actual verification
     /// and DB write happen in the reactor (outside the contract's fuel
     /// scope); this call meters the caller for the operation so the fuel
@@ -70,5 +70,5 @@ interface registry {
 world built-in-native {
     include built-in;
     import file-registry;
-    import registry;
+    import system;
 }

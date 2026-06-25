@@ -12,7 +12,7 @@ use crate::database;
 use crate::retry::{new_backoff_limited, retry};
 use crate::runtime::ExecutionError;
 use crate::runtime::Runtime;
-use crate::runtime::registry;
+use crate::runtime::system;
 use crate::runtime::wit::Signer;
 
 /// Check if a parsed transaction contains only batchable ops.
@@ -582,25 +582,25 @@ async fn execute_op(
             schnorr_sig,
             bls_sig,
         } => {
-            // Charge the payer for the registration via the registry contract
+            // Charge the payer for the registration via the system contract
             // first. If the hold fails (insufficient tokens), the host-side
             // register_bls_key DB write below is skipped.
             match runtime
                 .execute(
                     Some(&signer),
                     Some(payment),
-                    &registry::address(),
+                    &system::address(),
                     "registered()",
                 )
                 .await
             {
                 Ok(_) => {}
                 Err(ExecutionError::Deterministic(e)) => {
-                    warn!("registry.registered failed: {e:#}");
+                    warn!("system.registered failed: {e:#}");
                     return Ok(Some(e));
                 }
                 Err(ExecutionError::NonDeterministic(e)) => {
-                    return Err(e.context("registry.registered infrastructure failure"));
+                    return Err(e.context("system.registered infrastructure failure"));
                 }
             }
             match runtime

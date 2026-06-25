@@ -12,9 +12,9 @@ impl Runtime {
     }
 }
 
-impl built_in::registry::Host for Runtime {}
+impl built_in::system::Host for Runtime {}
 
-impl built_in::registry::HostWithStore for Runtime {
+impl built_in::system::HostWithStore for Runtime {
     /// Consume fuel for a RegisterBlsKey operation. The reactor performs
     /// the actual signature verification and DB write in
     /// `Runtime::register_bls_key` outside the contract boundary; this

@@ -7,10 +7,10 @@ pub mod fuel;
 pub mod nft;
 pub mod numerics;
 pub mod pool;
-pub mod registry;
 mod stack;
 pub mod staking;
 mod storage;
+pub mod system;
 pub mod token;
 mod types;
 pub mod wit;
@@ -19,8 +19,8 @@ mod call;
 mod host_context;
 mod host_files;
 mod host_numbers;
-mod host_registry;
 mod host_storage;
+mod host_system;
 
 use bitcoin::XOnlyPublicKey;
 pub use component_cache::ComponentCache;
@@ -158,7 +158,7 @@ impl Eq for RawFileDescriptor {}
 
 /// The two host capability surfaces over a single `Runtime`. `user` registers
 /// only the common built-ins; `native` additionally registers the privileged
-/// registries (`file-registry`, `registry`). Both share the same `Runtime`
+/// registries (`file-registry`, `system`). Both share the same `Runtime`
 /// host state — they differ only in which interfaces a component can import.
 /// `prepare_call` selects one per contract by native contract id.
 #[derive(Clone)]
@@ -220,7 +220,7 @@ impl Runtime {
     /// user contract that imports them fails to instantiate.
     fn register_native(linker: &mut Linker<Self>) -> Result<()> {
         kontor::built_in::file_registry::add_to_linker::<_, Self>(linker, |s| s)?;
-        kontor::built_in::registry::add_to_linker::<_, Self>(linker, |s| s)?;
+        kontor::built_in::system::add_to_linker::<_, Self>(linker, |s| s)?;
         Ok(())
     }
 
@@ -420,7 +420,7 @@ impl Runtime {
         // Publish-time link validation: the contract must resolve all of its
         // imports against the built-in surface it will run under. A user
         // contract that imports a native-only interface (`file-registry` /
-        // `registry`) is rejected here — deterministically, before `init`
+        // `system`) is rejected here — deterministically, before `init`
         // runs and before any state is committed. `instantiate_pre` is a pure
         // function of (component, linker), identical on every node, so its
         // failure is a Deterministic rejection (roll back and continue), never
@@ -460,7 +460,7 @@ impl Runtime {
     /// 1. **Link check** (all contracts): the component's imports must resolve
     ///    against the linker it will run under (native for ids
     ///    1..=NATIVE_CONTRACTS.len(), the restricted user linker otherwise).
-    ///    Catches a user contract reaching for `file-registry`/`registry`.
+    ///    Catches a user contract reaching for `file-registry`/`system`.
     /// 2. **WIT rule check** (user contracts only): the extracted WIT must
     ///    satisfy the Kontor rules the linker can't see — `init` exists with the
     ///    right shape, exports are `async`, valid context/return types, no
@@ -632,7 +632,7 @@ impl Runtime {
     }
 
     /// Host-side entry point used by macro-generated native-contract api
-    /// wrappers (`token::api::*`, `registry::api::*`, etc.). Derives a
+    /// wrappers (`token::api::*`, `system::api::*`, etc.). Derives a
     /// `Payment` from the caller's `signer` at the non-procs gas budget.
     ///
     /// For system-internal callers, `signer` is `Signer::Core(...)` and the
@@ -771,7 +771,7 @@ mod tests {
     /// the op and continue) rather than `NonDeterministic` (which shuts the node
     /// down). A misclassification here would let one publish tx halt the network.
     #[tokio::test]
-    async fn user_linker_rejects_native_registry_imports() {
+    async fn user_linker_rejects_native_system_imports() {
         let (runtime, _dir, _name) = test_runtime().await.expect("test runtime");
         // filestorage = native contract id 2; its WIT imports `file-registry`.
         let component = runtime

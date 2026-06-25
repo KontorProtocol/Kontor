@@ -1640,7 +1640,7 @@ impl RegTesterCluster {
 
         // Bundle Issuance + RegisterBlsKey into a single tx so the reactor
         // processes them in declaration order. Issuance must come first so
-        // the signer has tokens to pay the gas hold for the registry.registered
+        // the signer has tokens to pay the gas hold for the system.registered
         // contract call. Sibling txs can't guarantee this — Bitcoin block
         // ordering between non-dependent reveal txs is ambiguous.
         let mut txids = Vec::with_capacity(registered);
