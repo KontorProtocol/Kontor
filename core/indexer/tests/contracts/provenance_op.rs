@@ -97,7 +97,10 @@ async fn provenance_log_append_and_owner_authz_regtest() -> Result<()> {
     // The log is unchanged — the non-owner attempt appended nothing.
     let log = rt.get_contract_provenance(&address).await?;
     assert_eq!(log.len(), 2, "non-owner update must be rejected");
-    assert_eq!(log[1].provenance, updated, "latest still the owner's update");
+    assert_eq!(
+        log[1].provenance, updated,
+        "latest still the owner's update"
+    );
 
     Ok(())
 }

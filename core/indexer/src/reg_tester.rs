@@ -798,7 +798,12 @@ impl RegTester {
         &self,
         address: &ContractAddress,
     ) -> Result<Vec<indexer_types::ProvenanceEntry>> {
-        Ok(self.kontor_client().await.provenance(address).await?.entries)
+        Ok(self
+            .kontor_client()
+            .await
+            .provenance(address)
+            .await?
+            .entries)
     }
 
     pub async fn mempool_accept_result(
