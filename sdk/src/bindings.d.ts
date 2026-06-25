@@ -127,6 +127,20 @@ export type ComposeOutputs = {
  */
 export type ConsensusMode = "validator" | "follower";
 
+export type ContractFootprint = {
+  contract_id: number;
+  contract_name: string;
+  /**
+   * Token deposit collateralized in this contract's rows (decimal string).
+   */
+  deposit: string;
+  footprint_bytes: number;
+  /**
+   * Share of the signer's `total_deposit` held in this contract (0–100).
+   */
+  percent: number;
+};
+
 export type ContractListRow = {
   id: number;
   name: string;
@@ -165,6 +179,25 @@ export type Fees = {
    * Recommended fee rate (sat/vB) to land in roughly the next 6 blocks.
    */
   hour: number;
+};
+
+/**
+ * A signer's storage-deposit footprint: the token deposit they collateralize
+ * (their storage-deposit FLOOR) and how many live bytes they're responsible for,
+ * broken down by contract. Derived from the per-row `depositor`/`deposited_amount`
+ * columns across every contract's state (so it's host-only — no contract can see
+ * other contracts' storage). `total_deposit` is `Σ` of `by_contract` and equals
+ * the floor the signer's balance must stay above.
+ */
+export type FootprintResponse = {
+  signer_id: number;
+  x_only_pubkey: string | null;
+  /**
+   * Total token deposit this signer collateralizes — their floor (decimal string).
+   */
+  total_deposit: string;
+  total_footprint_bytes: number;
+  by_contract: Array<ContractFootprint>;
 };
 
 /**

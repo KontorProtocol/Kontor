@@ -2,6 +2,7 @@ extern crate alloc;
 
 mod component_cache;
 pub mod counter;
+pub mod deposit;
 pub mod filestorage;
 pub mod fuel;
 pub mod nft;
@@ -110,7 +111,9 @@ use crate::database;
 use crate::database::native_contracts::{NATIVE_CONTRACTS, is_native_contract_id};
 use crate::database::types::CORE_SIGNER_ID;
 use crate::runtime::{
+    call::PreparedCall,
     counter::Counter,
+    deposit::DepositMeter,
     fuel::FuelGauge,
     stack::{CallFrame, Stack},
     wit::Signer,
@@ -215,6 +218,11 @@ pub struct Runtime {
     pub result_id_counter: Counter,
     pub stack: Stack<CallFrame>,
     pub gauge: Option<FuelGauge>,
+    /// Transient per-op accumulator of the storage-deposit GAS reserved this op
+    /// (the returned-at-settle slice that bounds growth). Reset at the top-level op
+    /// start, drained at the settle boundary to compute the execution burn
+    /// (`burn = gas - charge`).
+    pub deposit: DepositMeter,
     pub gas_limit_for_non_procs: u64,
     pub gas_to_fuel_multiplier: u64,
     pub gas_to_token_multiplier: Decimal,
@@ -292,6 +300,7 @@ impl Runtime {
             result_id_counter: Counter::new(),
             stack: Stack::new(),
             gauge: Some(FuelGauge::new()),
+            deposit: DepositMeter::new(),
             gas_limit_for_non_procs: 100_000,
             gas_to_fuel_multiplier: 1_000,
             gas_to_token_multiplier: Decimal::from("1e-9"),
@@ -765,7 +774,7 @@ impl Runtime {
             expr,
             self.tx_context()
         );
-        let (
+        let PreparedCall {
             store,
             contract_id,
             func_name,
@@ -774,8 +783,8 @@ impl Runtime {
             results,
             func,
             is_proc,
-            starting_fuel,
-        ) = self
+            fuel_limit: starting_fuel,
+        } = self
             .prepare_call(contract_address, signer, payment.as_ref(), expr, true, None)
             .await?;
         OptionFuture::from(

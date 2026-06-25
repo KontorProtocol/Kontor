@@ -1247,6 +1247,39 @@ pub struct SignerResponse {
     pub next_nonce: Option<u64>,
 }
 
+/// A signer's storage-deposit footprint: the token deposit they collateralize
+/// (their storage-deposit FLOOR) and how many live bytes they're responsible for,
+/// broken down by contract. Derived from the per-row `depositor`/`deposited_amount`
+/// columns across every contract's state (so it's host-only — no contract can see
+/// other contracts' storage). `total_deposit` is `Σ` of `by_contract` and equals
+/// the floor the signer's balance must stay above.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
+#[ts(export, export_to = "../../../sdk/src/bindings.d.ts")]
+pub struct FootprintResponse {
+    #[ts(type = "number")]
+    pub signer_id: u64,
+    pub x_only_pubkey: Option<String>,
+    /// Total token deposit this signer collateralizes — their floor (decimal string).
+    pub total_deposit: String,
+    #[ts(type = "number")]
+    pub total_footprint_bytes: u64,
+    pub by_contract: Vec<ContractFootprint>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
+#[ts(export, export_to = "../../../sdk/src/bindings.d.ts")]
+pub struct ContractFootprint {
+    #[ts(type = "number")]
+    pub contract_id: u64,
+    pub contract_name: String,
+    /// Token deposit collateralized in this contract's rows (decimal string).
+    pub deposit: String,
+    #[ts(type = "number")]
+    pub footprint_bytes: u64,
+    /// Share of the signer's `total_deposit` held in this contract (0–100).
+    pub percent: f64,
+}
+
 #[cfg(test)]
 mod provenance_tests {
     use super::*;

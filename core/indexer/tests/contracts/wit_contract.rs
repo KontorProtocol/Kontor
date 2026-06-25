@@ -5,8 +5,8 @@ const WIT: &str = r#"package root:component;
 
 world root {
   import kontor:built-in/error;
-  import kontor:built-in/context;
   import kontor:built-in/numbers;
+  import kontor:built-in/context;
   use kontor:built-in/context.{view-context, proc-context, signer, holder-ref, contract};
   use kontor:built-in/error.{error};
   use kontor:built-in/numbers.{decimal};

@@ -11,12 +11,15 @@ use std::collections::{BTreeMap, HashSet};
 use wasmtime::component::{Accessor, Resource};
 
 use super::{
-    ChallengeInput, ContractAddress, Error, RawFileDescriptor, Runtime, VerifyResult,
+    ChallengeInput, ContractAddress, Decimal, Error, RawFileDescriptor, Runtime, VerifyResult,
     fuel::Fuel,
     hash_bytes,
+    numerics::string_to_decimal,
     wit::kontor::built_in,
     wit::{self, FileDescriptor, Signer},
 };
+use built_in::context::HolderRef;
+use stdlib::CheckedArithmetics;
 
 impl Runtime {
     async fn _aggregate_root<T>(
@@ -337,6 +340,29 @@ impl built_in::file_registry::HostProofWithStore for Runtime {
             .with(|mut access| access.get().clone())
             ._proof_verify(accessor, rep, challenges, valid_roots, files)
             .await
+    }
+}
+
+impl built_in::context::HostWithStore for Runtime {
+    /// The storage-deposit floor for `holder` = the sum of their FROZEN per-row
+    /// deposits (`deposited_amount`) live across all contracts. The token consults
+    /// this on every debit to enforce `balance - floor >= amount`. Non-signer
+    /// holders (core/burner/utxo) and unresolved pubkeys own no deposited rows → 0.
+    async fn storage_floor<T>(
+        accessor: &Accessor<T, Self>,
+        holder: HolderRef,
+    ) -> Result<Decimal> {
+        let runtime = accessor.with(|mut access| access.get().clone());
+        let signer_id = match holder {
+            HolderRef::SignerId(id) => id,
+            _ => return Ok(Decimal::try_from(0u64)?),
+        };
+        let amounts = runtime.storage.live_deposit_amounts(signer_id).await?;
+        let mut total = Decimal::try_from(0u64)?;
+        for a in &amounts {
+            total = total.add(string_to_decimal(a)?)?;
+        }
+        Ok(total)
     }
 }
 

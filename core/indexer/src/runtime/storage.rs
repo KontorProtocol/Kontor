@@ -11,13 +11,13 @@ use wit_component::{ComponentEncoder, WitPrinter};
 use crate::{
     database::{
         queries::{
-            DeletableRow, create_contract_signer, exists_contract_state, find_live_subtree,
+            DepositRow, create_contract_signer, exists_contract_state, find_live_subtree,
             find_matching_paths, get_contract_address_from_id, get_contract_bytes_by_id,
             get_contract_id_from_address, get_contract_provenance_publisher,
             get_latest_contract_state_value, hard_delete_matching_paths, insert_contract,
             insert_contract_provenance, insert_contract_result, insert_contract_state,
-            matching_path, path_prefix_filter_contract_state, prune_contract_state,
-            select_block_at_height, tombstone_rows,
+            live_deposit_amounts_by_depositor, matching_path, path_prefix_filter_contract_state,
+            prune_contract_state, select_block_at_height, tombstone_rows,
         },
         types::{ContractProvenanceRow, ContractResultRow, ContractRow, ContractStateRow},
     },
@@ -77,7 +77,18 @@ impl Storage {
         Ok(get_latest_contract_state_value(&self.conn, fuel, contract_id, path).await?)
     }
 
-    pub async fn set(&self, contract_id: u64, path: &[u8], value: &[u8]) -> Result<()> {
+    /// Write a live value. `depositor` is the signer who collateralizes this row via
+    /// the storage-deposit floor — `None` for Core/system writes; `deposited_amount`
+    /// is its token-denominated deposit (paired with `depositor`), both computed by
+    /// the caller (`_set_primitive`).
+    pub async fn set(
+        &self,
+        contract_id: u64,
+        path: &[u8],
+        value: &[u8],
+        depositor: Option<u64>,
+        deposited_amount: Option<String>,
+    ) -> Result<()> {
         insert_contract_state(
             &self.conn,
             ContractStateRow::builder()
@@ -86,35 +97,71 @@ impl Storage {
                 .height(self.height)
                 .path(path.to_vec())
                 .value(value.to_vec())
+                .maybe_depositor(depositor)
+                .maybe_deposited_amount(deposited_amount)
                 .build(),
         )
         .await?;
         Ok(())
     }
 
-    /// The live subtree a [`Self::tombstone_rows`] would remove — read first so
-    /// the caller can charge fuel for the rows before writing tombstones.
+    /// The read half of a delete: the live rows of `path`'s subtree (node + every
+    /// live descendant) as `(path, size)` — NOT values. Split from the tombstone
+    /// writes so the host can meter `Fuel::Delete` by the row count BEFORE the
+    /// writes.
     pub async fn find_live_subtree(
         &self,
         contract_id: u64,
         path: &[u8],
-    ) -> Result<Vec<DeletableRow>> {
+    ) -> Result<Vec<DepositRow>> {
         Ok(find_live_subtree(&self.conn, contract_id, path).await?)
     }
 
+    /// The write half of a delete: value-less-tombstone the given (already-metered)
+    /// rows. Returns `(removed, freed_bytes)` — the footprint accumulator subtracts
+    /// the freed bytes.
     pub async fn tombstone_rows(
         &self,
         contract_id: u64,
-        rows: &[DeletableRow],
+        rows: &[DepositRow],
     ) -> Result<(bool, u64)> {
-        Ok(tombstone_rows(
+        Ok(tombstone_rows(&self.conn, contract_id, self.height, self.effective_tx_id(), rows).await?)
+    }
+
+    /// The frozen per-row deposits (`deposited_amount`) `signer_id` currently holds
+    /// live across all contracts — the storage-deposit floor is their sum. Frozen so
+    /// an evolving `D` never needs a historical lookup (see the query).
+    pub async fn live_deposit_amounts(&self, signer_id: u64) -> Result<Vec<String>> {
+        Ok(live_deposit_amounts_by_depositor(&self.conn, signer_id).await?)
+    }
+
+    pub async fn insert_contract_provenance(
+        &self,
+        contract_id: u64,
+        author_signer_id: u64,
+        provenance: &[u8],
+    ) -> Result<()> {
+        insert_contract_provenance(
             &self.conn,
-            contract_id,
-            self.height,
-            self.effective_tx_id(),
-            rows,
+            ContractProvenanceRow::builder()
+                .contract_id(contract_id)
+                .author_signer_id(author_signer_id)
+                .height(self.height)
+                .tx_index(
+                    self.tx_context
+                        .as_ref()
+                        .expect("Transaction index is required when inserting provenance")
+                        .tx_index,
+                )
+                .provenance(provenance.to_vec())
+                .build(),
         )
-        .await?)
+        .await?;
+        Ok(())
+    }
+
+    pub async fn contract_provenance_publisher(&self, contract_id: u64) -> Result<Option<u64>> {
+        Ok(get_contract_provenance_publisher(&self.conn, contract_id).await?)
     }
 
     pub async fn exists(&self, contract_id: u64, path: &[u8]) -> Result<bool> {
@@ -133,20 +180,22 @@ impl Storage {
         Ok(matching_path(&self.conn, contract_id, base_path, candidates).await?)
     }
 
-    /// The current-height rows a [`Self::hard_delete_matching_paths`] would
-    /// remove — read first so the caller can meter the delete.
+    /// Read half of the intra-block variant hard-delete: the `DepositRow`s it will
+    /// remove, so the host can meter `Fuel::Delete` before the writes.
     pub async fn find_matching_paths(
         &self,
         contract_id: u64,
         base_path: &[u8],
         candidates: &[Vec<u8>],
-    ) -> Result<Vec<DeletableRow>> {
+    ) -> Result<Vec<DepositRow>> {
         Ok(
             find_matching_paths(&self.conn, contract_id, self.height, base_path, candidates)
                 .await?,
         )
     }
 
+    /// Write half: hard-delete the (already-metered) intra-block rows under any of
+    /// `candidates`. Returns the rows removed.
     pub async fn hard_delete_matching_paths(
         &self,
         contract_id: u64,
@@ -219,41 +268,6 @@ impl Storage {
                 .build(),
         )
         .await?)
-    }
-
-    /// Append one postcard-encoded `BuildProvenance` to the contract's
-    /// provenance log (within the current savepoint, so it rolls back with the
-    /// contract on publish failure).
-    pub async fn insert_contract_provenance(
-        &self,
-        contract_id: u64,
-        author_signer_id: u64,
-        provenance: &[u8],
-    ) -> Result<()> {
-        insert_contract_provenance(
-            &self.conn,
-            ContractProvenanceRow::builder()
-                .contract_id(contract_id)
-                .author_signer_id(author_signer_id)
-                .height(self.height)
-                .tx_index(
-                    self.tx_context
-                        .as_ref()
-                        .expect("Transaction index is required when inserting provenance")
-                        .tx_index,
-                )
-                .provenance(provenance.to_vec())
-                .build(),
-        )
-        .await?;
-        Ok(())
-    }
-
-    /// The publisher of a contract — the author of its first provenance entry,
-    /// the `UpdateProvenance` authz anchor (NOT `contracts.signer_id`, which is
-    /// the contract's own signer).
-    pub async fn contract_provenance_publisher(&self, contract_id: u64) -> Result<Option<u64>> {
-        Ok(get_contract_provenance_publisher(&self.conn, contract_id).await?)
     }
 
     fn effective_tx_id(&self) -> Option<u64> {

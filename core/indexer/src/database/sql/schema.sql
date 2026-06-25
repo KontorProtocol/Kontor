@@ -71,9 +71,24 @@ CREATE TABLE IF NOT EXISTS contract_state (
   path BLOB NOT NULL,
   value BLOB NOT NULL,
   deleted BOOLEAN NOT NULL DEFAULT 0,
+  -- The signer who wrote (deposited for) this version — whose storage-deposit
+  -- FLOOR this row counts toward (summed live across contracts). NULL for
+  -- tombstones, and for exempt writes (the token ledger + core-signed/non-settling
+  -- ops), which carry no deposit. A deterministic rowid like contract_id, so safe
+  -- in the checkpoint hash.
+  depositor INTEGER,
+  -- The deposit this row represents = (path + value bytes) × D, as a decimal
+  -- string (future-proof for fractional D). NULL when there's no depositor. At
+  -- D=1 this equals path+value bytes. Consensus state, so hashed in the checkpoint.
+  deposited_amount TEXT,
   UNIQUE (contract_id, height, path),
+  -- depositor and deposited_amount are always set together or not at all (a row
+  -- either carries a deposit or it doesn't). Enforced in SQL so a future writer
+  -- can't desync them and corrupt the footprint accounting.
+  CHECK ((depositor IS NULL) = (deposited_amount IS NULL)),
   FOREIGN KEY (height) REFERENCES blocks (height) ON DELETE CASCADE,
-  FOREIGN KEY (tx_id) REFERENCES transactions (id)
+  FOREIGN KEY (tx_id) REFERENCES transactions (id),
+  FOREIGN KEY (depositor) REFERENCES signers (id)
 );
 
 CREATE INDEX IF NOT EXISTS idx_contract_state_lookup ON contract_state (contract_id, path, height DESC);
@@ -84,6 +99,13 @@ CREATE INDEX IF NOT EXISTS idx_contract_state_contract_tx ON contract_state (con
 -- lets a prune find the newly-finalized band by a height range-seek instead of a
 -- full table scan, and is COVERING for the band-discovery subquery.
 CREATE INDEX IF NOT EXISTS idx_contract_state_height ON contract_state (height, contract_id, path);
+
+-- Selective entry point for the per-signer storage-deposit footprint query
+-- (find_footprint_by_depositor): a depositor holds a small fraction of all rows,
+-- so this narrows the outer scan; the NOT EXISTS liveness check is served by
+-- idx_contract_state_lookup. Partial (depositor IS NOT NULL) since most rows have
+-- no depositor (Core/system/token-ledger writes).
+CREATE INDEX IF NOT EXISTS idx_contract_state_depositor ON contract_state (depositor) WHERE depositor IS NOT NULL;
 
 CREATE TABLE IF NOT EXISTS contract_results (
   id INTEGER PRIMARY KEY,

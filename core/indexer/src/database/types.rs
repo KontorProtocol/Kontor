@@ -161,6 +161,14 @@ pub struct ContractStateRow {
     pub value: Vec<u8>,
     #[builder(default = false)]
     pub deleted: bool,
+    /// The signer who wrote (deposited for) this version — whose storage-deposit
+    /// FLOOR this row counts toward (summed live across contracts). `None` for
+    /// tombstones and Core/system writes (Option implies a `None` builder default).
+    pub depositor: Option<u64>,
+    /// The deposit this row represents = (path + value bytes) × D, as a decimal
+    /// string (the token-denominated footprint reported by the signer endpoint).
+    /// `None` when there is no depositor.
+    pub deposited_amount: Option<String>,
 }
 
 impl ContractStateRow {

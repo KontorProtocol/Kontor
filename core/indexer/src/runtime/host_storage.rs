@@ -1,15 +1,30 @@
+
 use anyhow::{Result, anyhow};
 use futures_util::future::OptionFuture;
 use indexer_types::deserialize;
 use serde::{Deserialize, Serialize};
+use stdlib::CheckedArithmetics;
 use wasmtime::AsContext;
 use wasmtime::component::{Accessor, Resource};
 
+use crate::database::native_contracts::is_deposit_exempt;
+use crate::database::types::CORE_SIGNER_ID;
+
 use super::{
-    ExecutionError, Runtime,
+    Decimal, ExecutionError, Runtime,
     fuel::Fuel,
     wit::{HasContractId, Keys},
 };
+
+/// Default storage-deposit rate `D`, in GAS per stored byte (path + value). It
+/// bounds per-op storage growth (metered as fuel against the gas limit) and sets
+/// the FLOOR a holder must keep (`footprint_bytes × D`, priced to token via
+/// `gas_to_token`). GAS, not token, is the unit because growth is metered as fuel;
+/// the reservation is RETURNED at settle (only execution burns), so `D` is a
+/// collateral rate, not a fee. Routed through [`Runtime::deposit_rate`] so it can
+/// become per-contract / governance-tunable later. (A sub-gas-per-byte `D` isn't
+/// expressible as an integer; tune finer via `gas_to_token`.)
+const DEFAULT_DEPOSIT_GAS_PER_BYTE: u64 = 1;
 
 /// The storage trust boundary: reject a non-well-formed guest path ONCE, here,
 /// before it reaches any subtree/keys/matching parse or gets persisted. This is
@@ -39,6 +54,13 @@ fn validate_path(path: &[u8]) -> Result<()> {
 }
 
 impl Runtime {
+    /// The storage-deposit rate (GAS per byte) charged to writes of `contract_id`.
+    /// Uniform today; this is the single seam to make `D` per-contract or
+    /// governance-set later — every charge site routes through it.
+    pub(crate) fn deposit_rate(&self, _contract_id: u64) -> u64 {
+        DEFAULT_DEPOSIT_GAS_PER_BYTE
+    }
+
     pub(crate) async fn _get_primitive<S, T: HasContractId, R: for<'de> Deserialize<'de>>(
         &self,
         accessor: &Accessor<S, Self>,
@@ -125,7 +147,8 @@ impl Runtime {
         validate_path(&base_path)?;
         let contract_id = self.table.lock().await.get(&self_)?.get_contract_id();
         // Read → meter → write: charge in proportion to the rows actually removed,
-        // not a flat per-candidate fee.
+        // not a flat per-candidate fee. Freeing a row drops it from its setter's
+        // footprint sum automatically (no per-row deposit bookkeeping on delete).
         let rows = self
             .storage
             .find_matching_paths(contract_id, &base_path, &candidates)
@@ -139,8 +162,12 @@ impl Runtime {
             .await
     }
 
-    /// Tombstone a single path. Metered like a write (it appends a deleted
-    /// version row). Returns true if a live value was removed.
+    /// Delete a key by tombstoning its WHOLE subtree (the node + every live
+    /// descendant — a struct/map value persists under child paths). Metered by the
+    /// subtree size: find the live rows first (a read), charge `Fuel::Delete` for
+    /// them, THEN write the tombstones — so an underfunded delete traps after only
+    /// the cheap read, never forcing the O(rows) writes. Returns true if a live
+    /// value was removed.
     pub(crate) async fn _delete<S, T: HasContractId>(
         &self,
         accessor: &Accessor<S, Self>,
@@ -176,7 +203,49 @@ impl Runtime {
         Fuel::Set(bs.len() as u64)
             .consume(accessor, self.gauge.as_ref())
             .await?;
-        self.storage.set(contract_id, &path, bs).await
+        // Stamp the op's payer (from the current call frame) as this row's
+        // depositor — who collateralizes it via the storage-deposit FLOOR. The
+        // frame's `depositor` is `None` for non-settling ops (core-signed / no-payer
+        // — set at prepare_call's stamp gate, which matches the settle gate), and
+        // the token (deposit-denominating ledger) is exempt by contract id
+        // (recursion). The host derives each holder's footprint by summing the live
+        // rows they're the depositor of, so the floor moves with the row: a later
+        // overwrite (new depositor) or delete drops it from the old setter's sum.
+        let frame_depositor = self.stack.peek().await.and_then(|f| f.depositor);
+        let depositor = match frame_depositor {
+            Some(id) if id != CORE_SIGNER_ID && !is_deposit_exempt(contract_id) => Some(id),
+            _ => None,
+        };
+        // The deposit for this row is a slice of GAS — `(path + value) bytes ×
+        // deposit_rate(contract)` — charged against the op's fuel budget here, so an
+        // unaffordable growth trips the out-of-gas path and the op deterministically
+        // reverts (the per-op cap = the gas limit). The reservation is RETURNED at
+        // settle (only execution burns), so it bounds per-op growth without being a
+        // cost — the collateral is the floor, not a moved token. The per-row
+        // `deposited_amount` (gas priced via `gas_to_token`) records the deposit for
+        // the footprint read.
+        let deposited_amount = if depositor.is_some() {
+            let deposit_gas = (path.len() + bs.len()) as u64 * self.deposit_rate(contract_id);
+            Fuel::Deposit(deposit_gas * self.gas_to_fuel_multiplier)
+                .consume(accessor, self.gauge.as_ref())
+                .await
+                .map_err(|_| {
+                    ExecutionError::Deterministic(anyhow!(
+                        "storage deposit exceeds the op's gas budget"
+                    ))
+                })?;
+            self.deposit.record_charge(deposit_gas).await;
+            Some(
+                Decimal::try_from(deposit_gas)?
+                    .mul(self.gas_to_token_multiplier)?
+                    .to_string(),
+            )
+        } else {
+            None
+        };
+        self.storage
+            .set(contract_id, &path, bs, depositor, deposited_amount)
+            .await
     }
 }
 
