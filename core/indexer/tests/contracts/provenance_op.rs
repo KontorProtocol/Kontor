@@ -1,6 +1,6 @@
 use anyhow::Result;
 use indexer::runtime::ContractAddress;
-use indexer_types::{Inst, InstKind, Insts};
+use indexer_types::{Inst, InstKind};
 use testlib::*;
 
 /// Publish seeds the provenance log; the owner can append; a non-owner can't.
@@ -14,25 +14,28 @@ async fn provenance_log_append_and_owner_authz_regtest() -> Result<()> {
         .await?
         .expect("counter contract not found");
 
-    // Owner publishes a contract (Issuance funds gas; Publish seeds row 1).
+    // Owner funds itself, then publishes in a separate instruction so the
+    // Publish is op 0 and `result.contract` is the published contract.
     let mut owner = rt.unregistered_identity().await?;
+    rt.instruction(
+        &mut owner,
+        Inst {
+            gas_limit: 10_000,
+            kind: InstKind::Issuance,
+        },
+    )
+    .await?;
     let published = rt
-        .instruction_insts(
+        .instruction(
             &mut owner,
-            Insts::direct(vec![
-                Inst {
-                    gas_limit: 10_000,
-                    kind: InstKind::Issuance,
+            Inst {
+                gas_limit: 50_000,
+                kind: InstKind::Publish {
+                    name: "counter".to_string(),
+                    bytes: counter_bytes,
+                    provenance: sample_provenance(),
                 },
-                Inst {
-                    gas_limit: 50_000,
-                    kind: InstKind::Publish {
-                        name: "counter".to_string(),
-                        bytes: counter_bytes,
-                        provenance: sample_provenance(),
-                    },
-                },
-            ]),
+            },
         )
         .await?;
     let address: ContractAddress = published
@@ -41,7 +44,7 @@ async fn provenance_log_append_and_owner_authz_regtest() -> Result<()> {
         .parse()
         .map_err(|e: String| anyhow::anyhow!(e))?;
 
-    // Publish seeds exactly one entry.
+    // Publish seeds exactly one entry, authored by the publisher.
     let log = rt.get_contract_provenance(&address).await?;
     assert_eq!(log.len(), 1, "publish should seed one provenance entry");
     assert_eq!(log[0].provenance, sample_provenance());

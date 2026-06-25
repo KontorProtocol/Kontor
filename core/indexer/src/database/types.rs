@@ -228,6 +228,9 @@ pub struct ContractProvenanceRow {
     #[builder(default = 0)]
     pub id: u64,
     pub contract_id: u64,
+    /// The publisher's signer (the op's signer). First row's author = the
+    /// authz anchor for `UpdateProvenance`.
+    pub author_signer_id: u64,
     pub height: u64,
     pub tx_index: u32,
     pub provenance: Vec<u8>,

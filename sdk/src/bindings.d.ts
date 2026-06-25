@@ -369,6 +369,10 @@ export type Payment = { signer_id: number; gas_limit: number };
 export type ProvenanceEntry = {
   height: number;
   tx_index: number;
+  /**
+   * The signer that authored this entry (the publisher).
+   */
+  author_signer_id: number;
   provenance: BuildProvenance;
 };
 

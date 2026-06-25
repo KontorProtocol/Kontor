@@ -16,16 +16,39 @@ pub async fn insert_contract_provenance(
         r#"
             INSERT INTO contract_provenance (
                 contract_id,
+                author_signer_id,
                 height,
                 tx_index,
                 provenance
-            ) VALUES (?, ?, ?, ?)
+            ) VALUES (?, ?, ?, ?, ?)
             "#,
-        params![row.contract_id, row.height, row.tx_index, row.provenance],
+        params![
+            row.contract_id,
+            row.author_signer_id,
+            row.height,
+            row.tx_index,
+            row.provenance
+        ],
     )
     .await?;
 
     Ok(conn.last_insert_rowid() as u64)
+}
+
+/// The publisher of a contract = the author of its first provenance entry.
+/// `None` if the contract has no provenance log (e.g. native contracts).
+pub async fn get_contract_provenance_publisher(
+    conn: &Connection,
+    contract_id: u64,
+) -> Result<Option<u64>, Error> {
+    let mut rows = conn
+        .query(
+            "SELECT author_signer_id FROM contract_provenance
+             WHERE contract_id = ? ORDER BY id LIMIT 1",
+            params![contract_id],
+        )
+        .await?;
+    Ok(rows.next().await?.map(|r| r.get(0)).transpose()?)
 }
 
 pub async fn insert_contract(conn: &Connection, row: ContractRow) -> Result<u64, Error> {
@@ -169,7 +192,7 @@ pub async fn get_contract_provenance_log(
     let mut rows = conn
         .query(
             r#"
-            SELECT id, contract_id, height, tx_index, provenance
+            SELECT id, contract_id, author_signer_id, height, tx_index, provenance
             FROM contract_provenance
             WHERE contract_id = ?
             ORDER BY id

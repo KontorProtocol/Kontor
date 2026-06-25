@@ -408,12 +408,18 @@ impl Runtime {
             .await
             .map_err(ExecutionError::NonDeterministic)?;
         // Seed the append-only provenance log (inside the savepoint, so it rolls
-        // back with the contract if init fails). UpdateProvenance appends later.
+        // back with the contract if init fails). The op's signer is the publisher
+        // and becomes the entry's author — the UpdateProvenance authz anchor.
         if let Some(p) = provenance {
+            let Signer::Id(publisher) = signer else {
+                return Err(ExecutionError::Deterministic(anyhow!(
+                    "publishing with provenance requires an Id signer"
+                )));
+            };
             let encoded =
                 postcard::to_allocvec(p).map_err(|e| ExecutionError::NonDeterministic(e.into()))?;
             self.storage
-                .insert_contract_provenance(contract_id, &encoded)
+                .insert_contract_provenance(contract_id, publisher.signer_id(), &encoded)
                 .await
                 .map_err(ExecutionError::NonDeterministic)?;
         }
@@ -476,12 +482,17 @@ impl Runtime {
             .await
             .map_err(ExecutionError::NonDeterministic)?
             .ok_or_else(|| ExecutionError::Deterministic(anyhow!("contract not found")))?;
-        let owner = self
+        // Authz: only the publisher (author of the first provenance entry) may
+        // append. NOT contracts.signer_id, which is the contract's own signer.
+        let publisher = self
             .storage
-            .contract_signer_id(contract_id)
+            .contract_provenance_publisher(contract_id)
             .await
-            .map_err(ExecutionError::NonDeterministic)?;
-        if owner != Some(caller_signer_id) {
+            .map_err(ExecutionError::NonDeterministic)?
+            .ok_or_else(|| {
+                ExecutionError::Deterministic(anyhow!("contract has no provenance log"))
+            })?;
+        if publisher != caller_signer_id {
             return Err(ExecutionError::Deterministic(anyhow!(
                 "only the contract's publisher can update its provenance"
             )));
@@ -489,7 +500,7 @@ impl Runtime {
         let encoded = postcard::to_allocvec(provenance)
             .map_err(|e| ExecutionError::NonDeterministic(e.into()))?;
         self.storage
-            .insert_contract_provenance(contract_id, &encoded)
+            .insert_contract_provenance(contract_id, caller_signer_id, &encoded)
             .await
             .map_err(ExecutionError::NonDeterministic)?;
         Ok(())

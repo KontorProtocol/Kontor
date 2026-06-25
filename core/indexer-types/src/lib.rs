@@ -989,6 +989,9 @@ pub struct ProvenanceEntry {
     pub height: u64,
     #[ts(type = "number")]
     pub tx_index: u32,
+    /// The signer that authored this entry (the publisher).
+    #[ts(type = "number")]
+    pub author_signer_id: u64,
     pub provenance: BuildProvenance,
 }
 

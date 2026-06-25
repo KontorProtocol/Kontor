@@ -87,6 +87,7 @@ pub async fn get_contract_provenance(
             Ok::<_, anyhow::Error>(ProvenanceEntry {
                 height: row.height,
                 tx_index: row.tx_index,
+                author_signer_id: row.author_signer_id,
                 provenance,
             })
         })
