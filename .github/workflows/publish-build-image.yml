@@ -5,12 +5,10 @@ name: Publish Build Image
 # into binaries/build.json, and automatically on main when the Dockerfile changes.
 on:
   workflow_dispatch:
-  # TEMP (bootstrap): also publish on push to the feature branch so we can capture
-  # the registry digest before merge, and drop the paths filter so it fires even
-  # when this push doesn't touch the Dockerfile.
-  # REVERT before merge → `branches: [main]` + `paths: [tools/kontor-build.Dockerfile]`.
   push:
-    branches: [main, feat/reproducible-build-image]
+    branches: [main]
+    paths:
+      - tools/kontor-build.Dockerfile
 
 permissions:
   contents: read
