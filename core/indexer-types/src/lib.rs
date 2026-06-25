@@ -920,6 +920,117 @@ pub struct Inst {
     pub kind: InstKind,
 }
 
+// ────────────────────────────────────────────────────────────────────
+// Build provenance — rides with publish ops so the on-chain wasm can be
+// reproducibly verified against its source. A verifier rebuilds `source`
+// inside `image` and checks the result equals the published bytes.
+//
+// Modeled on Package URL (purl, `pkg:github/owner/repo@<commit>`) for
+// SBOM/security-tooling interop. The toolchain is pinned by `image` (an
+// OCI ref WITH digest), so individual tool versions aren't enumerated.
+// ────────────────────────────────────────────────────────────────────
+
+/// VCS host a contract's source lives on. Maps onto purl types; `Other`
+/// carries the host string for self-hosted forges (Gitea, self-hosted
+/// GitLab, …) so required provenance never blocks them.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export, export_to = "../../../sdk/src/bindings.d.ts")]
+pub enum Forge {
+    GitHub,
+    GitLab,
+    Bitbucket,
+    Codeberg,
+    Other(String),
+}
+
+/// A git commit hash — SHA-1 today, SHA-256 as git migrates. Raw bytes,
+/// rendered as a number array in the TS bindings (like other byte fields).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export, export_to = "../../../sdk/src/bindings.d.ts")]
+pub enum CommitId {
+    Sha1(#[ts(as = "Vec<u8>")] [u8; 20]),
+    Sha256(#[ts(as = "Vec<u8>")] [u8; 32]),
+}
+
+/// The source a contract was built from: a specific commit in a repo.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export, export_to = "../../../sdk/src/bindings.d.ts")]
+pub struct Source {
+    pub forge: Forge,
+    pub owner: String,
+    pub repo: String,
+    pub commit: CommitId,
+}
+
+/// Reproducible-build provenance for a published contract: where the
+/// source lives (`source`) and the pinned build environment (`image`, an
+/// OCI reference with digest, e.g. `registry/name@sha256:…`).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export, export_to = "../../../sdk/src/bindings.d.ts")]
+pub struct BuildProvenance {
+    pub source: Source,
+    pub image: String,
+}
+
+impl Forge {
+    /// The forge's hostname — used to reconstruct the clone URL. Built-in
+    /// forges resolve to their canonical host; `Other` carries its own.
+    pub fn host(&self) -> &str {
+        match self {
+            Forge::GitHub => "github.com",
+            Forge::GitLab => "gitlab.com",
+            Forge::Bitbucket => "bitbucket.org",
+            Forge::Codeberg => "codeberg.org",
+            Forge::Other(host) => host,
+        }
+    }
+}
+
+impl CommitId {
+    pub fn as_bytes(&self) -> &[u8] {
+        match self {
+            CommitId::Sha1(b) => b,
+            CommitId::Sha256(b) => b,
+        }
+    }
+}
+
+impl core::fmt::Display for CommitId {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        write!(f, "{}", self.as_bytes().as_hex())
+    }
+}
+
+/// Human/explorer rendering: `<host>/<owner>/<repo>@<commit-hex>`.
+impl core::fmt::Display for Source {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        write!(
+            f,
+            "{}/{}/{}@{}",
+            self.forge.host(),
+            self.owner,
+            self.repo,
+            self.commit
+        )
+    }
+}
+
+impl Source {
+    /// Reject structurally-invalid provenance at publish time.
+    pub fn validate(&self) -> Result<()> {
+        if self.owner.is_empty() {
+            anyhow::bail!("provenance source owner is empty");
+        }
+        if self.repo.is_empty() {
+            anyhow::bail!("provenance source repo is empty");
+        }
+        if matches!(&self.forge, Forge::Other(host) if host.is_empty()) {
+            anyhow::bail!("provenance source forge host is empty");
+        }
+        Ok(())
+    }
+}
+
 #[serde_as]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[ts(export, export_to = "../../../sdk/src/bindings.d.ts")]
@@ -1033,4 +1144,63 @@ pub struct SignerResponse {
     pub bls_pubkey: Option<Vec<u8>>,
     #[ts(type = "number | null")]
     pub next_nonce: Option<u64>,
+}
+
+#[cfg(test)]
+mod provenance_tests {
+    use super::*;
+
+    fn sample() -> BuildProvenance {
+        BuildProvenance {
+            source: Source {
+                forge: Forge::GitHub,
+                owner: "kontor".into(),
+                repo: "example".into(),
+                commit: CommitId::Sha1([0x11; 20]),
+            },
+            image: "kontorprotocol/kontor-build@sha256:abc123".into(),
+        }
+    }
+
+    #[test]
+    fn source_validate_accepts_and_rejects() {
+        assert!(sample().source.validate().is_ok());
+
+        let mut s = sample().source;
+        s.owner.clear();
+        assert!(s.validate().is_err());
+
+        let mut s = sample().source;
+        s.repo.clear();
+        assert!(s.validate().is_err());
+
+        let mut s = sample().source;
+        s.forge = Forge::Other(String::new());
+        assert!(s.validate().is_err());
+
+        let mut s = sample().source;
+        s.forge = Forge::Other("git.example.com".into());
+        assert!(s.validate().is_ok());
+    }
+
+    #[test]
+    fn source_display_is_host_owner_repo_commit() {
+        assert_eq!(
+            sample().source.to_string(),
+            "github.com/kontor/example@1111111111111111111111111111111111111111"
+        );
+    }
+
+    #[test]
+    fn postcard_roundtrips() {
+        // Provenance is encoded with postcard on-chain; confirm both commit
+        // widths survive a round-trip.
+        for commit in [CommitId::Sha1([0xab; 20]), CommitId::Sha256([0xcd; 32])] {
+            let mut p = sample();
+            p.source.commit = commit;
+            let bytes = postcard::to_allocvec(&p).unwrap();
+            let back: BuildProvenance = postcard::from_bytes(&bytes).unwrap();
+            assert_eq!(p, back);
+        }
+    }
 }

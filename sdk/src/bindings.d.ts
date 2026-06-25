@@ -46,7 +46,20 @@ export type BroadcastQuery = { transactions: Array<string> };
  */
 export type BroadcastResult = { txid: string };
 
+/**
+ * Reproducible-build provenance for a published contract: where the
+ * source lives (`source`) and the pinned build environment (`image`, an
+ * OCI reference with digest, e.g. `registry/name@sha256:…`).
+ */
+export type BuildProvenance = { source: Source; image: string };
+
 export type CheckpointRow = { height: number; hash: string };
+
+/**
+ * A git commit hash — SHA-1 today, SHA-256 as git migrates. Raw bytes,
+ * rendered as a number array in the TS bindings (like other byte fields).
+ */
+export type CommitId = { "Sha1": Array<number> } | { "Sha256": Array<number> };
 
 /**
  * Response from `compose_commit`: one `CommitTx` per Build participant,
@@ -142,6 +155,15 @@ export type Fees = {
    * Recommended fee rate (sat/vB) to land in roughly the next 6 blocks.
    */
   hour: number;
+};
+
+/**
+ * VCS host a contract's source lives on. Maps onto purl types; `Other`
+ * carries the host string for self-hosted forges (Gitea, self-hosted
+ * GitLab, …) so required provenance never blocks them.
+ */
+export type Forge = "GitHub" | "GitLab" | "Bitbucket" | "Codeberg" | {
+  "Other": string;
 };
 
 export type HolderRef =
@@ -452,6 +474,16 @@ export type SignerResponse = {
   x_only_pubkey: string | null;
   bls_pubkey: Array<number> | null;
   next_nonce: number | null;
+};
+
+/**
+ * The source a contract was built from: a specific commit in a repo.
+ */
+export type Source = {
+  forge: Forge;
+  owner: string;
+  repo: string;
+  commit: CommitId;
 };
 
 export type TapLeafScript = {
