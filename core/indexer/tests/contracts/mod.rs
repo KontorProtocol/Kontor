@@ -18,6 +18,7 @@ mod native_token_contract;
 mod native_token_sponsor_swap;
 mod ops_contract;
 mod pool_contract;
+mod provenance_op;
 mod regtester_cluster;
 mod shared_account_contract;
 mod shared_cluster;
@@ -65,6 +66,7 @@ testlib::regtest_tests! {
     native_token_sponsor_swap,
     ops_contract,
     pool_contract,
+    provenance_op,
     shared_account_contract,
     simulate_contract,
     simulate_errors,

@@ -981,6 +981,25 @@ pub struct BuildProvenance {
     pub image: String,
 }
 
+/// One decoded entry from a contract's provenance log, for API responses.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export, export_to = "../../../sdk/src/bindings.d.ts")]
+pub struct ProvenanceEntry {
+    #[ts(type = "number")]
+    pub height: u64,
+    #[ts(type = "number")]
+    pub tx_index: u32,
+    pub provenance: BuildProvenance,
+}
+
+/// A contract's full append-only provenance log, oldest first — the last entry
+/// is the current claim, earlier ones are the audit trail.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export, export_to = "../../../sdk/src/bindings.d.ts")]
+pub struct ContractProvenanceResponse {
+    pub entries: Vec<ProvenanceEntry>,
+}
+
 impl Forge {
     /// The forge's hostname — used to reconstruct the clone URL. Built-in
     /// forges resolve to their canonical host; `Other` carries its own.

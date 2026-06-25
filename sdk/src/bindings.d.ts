@@ -132,6 +132,12 @@ export type ContractListRow = {
   signer_id: number | null;
 };
 
+/**
+ * A contract's full append-only provenance log, oldest first — the last entry
+ * is the current claim, earlier ones are the audit trail.
+ */
+export type ContractProvenanceResponse = { entries: Array<ProvenanceEntry> };
+
 export type ContractResponse = { wit: string };
 
 export type ErrorResponse = { error: string };
@@ -356,6 +362,15 @@ export type PaginationMeta = {
  * itself.
  */
 export type Payment = { signer_id: number; gas_limit: number };
+
+/**
+ * One decoded entry from a contract's provenance log, for API responses.
+ */
+export type ProvenanceEntry = {
+  height: number;
+  tx_index: number;
+  provenance: BuildProvenance;
+};
 
 /**
  * One entry in `Info::recent_blocks` — a `BlockRow` trimmed to the

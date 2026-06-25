@@ -159,3 +159,27 @@ pub async fn get_contract_bytes_by_id(
         .await?;
     Ok(rows.next().await?.map(|r| r.get(0)).transpose()?)
 }
+
+/// A contract's full provenance log, oldest first (append order). Each row's
+/// `provenance` is a postcard-encoded `indexer_types::BuildProvenance`.
+pub async fn get_contract_provenance_log(
+    conn: &Connection,
+    contract_id: u64,
+) -> Result<Vec<ContractProvenanceRow>, Error> {
+    let mut rows = conn
+        .query(
+            r#"
+            SELECT id, contract_id, height, tx_index, provenance
+            FROM contract_provenance
+            WHERE contract_id = ?
+            ORDER BY id
+            "#,
+            params![contract_id],
+        )
+        .await?;
+    let mut out = Vec::new();
+    while let Some(row) = rows.next().await? {
+        out.push(from_row::<ContractProvenanceRow>(&row)?);
+    }
+    Ok(out)
+}

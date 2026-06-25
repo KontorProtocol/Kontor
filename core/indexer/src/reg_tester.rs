@@ -793,6 +793,14 @@ impl RegTester {
         }
     }
 
+    /// A contract's append-only provenance log, oldest first (last = current).
+    pub async fn get_contract_provenance(
+        &self,
+        address: &ContractAddress,
+    ) -> Result<Vec<indexer_types::ProvenanceEntry>> {
+        Ok(self.kontor_client().await.provenance(address).await?.entries)
+    }
+
     pub async fn mempool_accept_result(
         &self,
         raw_txs: &[String],
