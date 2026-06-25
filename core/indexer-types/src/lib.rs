@@ -971,14 +971,49 @@ pub struct Source {
     pub commit: CommitId,
 }
 
-/// Reproducible-build provenance for a published contract: where the
-/// source lives (`source`) and the pinned build environment (`image`, an
-/// OCI reference with digest, e.g. `registry/name@sha256:…`).
+/// The build platform (CPU arch + OS). The same source in the same image yields
+/// different wasm per arch (cargo bakes the arch into crate metadata), so this is
+/// part of the build identity — the image tag alone doesn't pin it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export, export_to = "../../../sdk/src/bindings.d.ts")]
+pub enum Platform {
+    LinuxAmd64,
+    LinuxArm64,
+}
+
+impl Platform {
+    /// Docker `--platform` form, matching `binaries/build.json`.
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Platform::LinuxAmd64 => "linux/amd64",
+            Platform::LinuxArm64 => "linux/arm64",
+        }
+    }
+
+    pub fn parse(s: &str) -> Result<Self> {
+        match s {
+            "linux/amd64" => Ok(Platform::LinuxAmd64),
+            "linux/arm64" => Ok(Platform::LinuxArm64),
+            other => anyhow::bail!("unsupported provenance platform: {other}"),
+        }
+    }
+}
+
+impl core::fmt::Display for Platform {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+/// Reproducible-build provenance for a published contract: where the source lives
+/// (`source`), the pinned build environment (`image`, an OCI ref with digest,
+/// e.g. `registry/name@sha256:…`), and the `platform` it was built on.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[ts(export, export_to = "../../../sdk/src/bindings.d.ts")]
 pub struct BuildProvenance {
     pub source: Source,
     pub image: String,
+    pub platform: Platform,
 }
 
 /// One decoded entry from a contract's provenance log, for API responses.
@@ -1224,6 +1259,7 @@ mod provenance_tests {
                 commit: CommitId::Sha1([0x11; 20]),
             },
             image: "kontorprotocol/kontor-build@sha256:abc123".into(),
+            platform: Platform::LinuxArm64,
         }
     }
 

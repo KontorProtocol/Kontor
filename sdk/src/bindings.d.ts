@@ -47,11 +47,15 @@ export type BroadcastQuery = { transactions: Array<string> };
 export type BroadcastResult = { txid: string };
 
 /**
- * Reproducible-build provenance for a published contract: where the
- * source lives (`source`) and the pinned build environment (`image`, an
- * OCI reference with digest, e.g. `registry/name@sha256:…`).
+ * Reproducible-build provenance for a published contract: where the source lives
+ * (`source`), the pinned build environment (`image`, an OCI ref with digest,
+ * e.g. `registry/name@sha256:…`), and the `platform` it was built on.
  */
-export type BuildProvenance = { source: Source; image: string };
+export type BuildProvenance = {
+  source: Source;
+  image: string;
+  platform: Platform;
+};
 
 export type CheckpointRow = { height: number; hash: string };
 
@@ -362,6 +366,13 @@ export type PaginationMeta = {
  * itself.
  */
 export type Payment = { signer_id: number; gas_limit: number };
+
+/**
+ * The build platform (CPU arch + OS). The same source in the same image yields
+ * different wasm per arch (cargo bakes the arch into crate metadata), so this is
+ * part of the build identity — the image tag alone doesn't pin it.
+ */
+export type Platform = "LinuxAmd64" | "LinuxArm64";
 
 /**
  * One decoded entry from a contract's provenance log, for API responses.

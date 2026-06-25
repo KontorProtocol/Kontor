@@ -33,9 +33,16 @@ case "$(uname -m)" in
 esac
 
 # Provenance derived from the actual installed tools — truthful, and no lockstep
-# edits when the image bumps. The image tag follows rustc, like the published one.
+# edits when the image bumps.
 rustc_version="$(rustc --version | cut -d' ' -f2)"
 binaryen_version="$(wasm-opt --version | grep -oE 'version_[0-9]+')"
+
+# Pinned PUBLISHED image (multi-arch manifest digest), so build.json references an
+# immutable, pullable image — the platform field disambiguates the arch. Bump this
+# when the image is republished (Dockerfile change); the digest comes from the
+# Publish Build Image workflow. NOTE: the local/CI build runs a Dockerfile-built
+# image of equivalent content, so the committed bytes reproduce under this digest.
+image="kontorprotocol/kontor-build@sha256:4396b2d20c1163e5474fc973fb894c3b4575310676444e47e5d71c78004e9a4e"
 
 for ws in "$@"; do
   echo "==> Building $ws"
@@ -65,7 +72,7 @@ for ws in "$@"; do
     cat >binaries/build.json <<EOF
 {
   "platform": "$platform",
-  "image": "kontorprotocol/kontor-build:$rustc_version",
+  "image": "$image",
   "rustc": "$rustc_version",
   "wasm_opt": "binaryen $binaryen_version"
 }

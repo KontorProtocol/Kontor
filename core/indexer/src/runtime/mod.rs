@@ -102,7 +102,7 @@ use wasmtime::{
     component::{Component, HasData, Linker, ResourceTable},
 };
 
-use indexer_types::{BuildProvenance, Payment};
+use indexer_types::{BuildProvenance, CommitId, Forge, Payment, Platform, Source};
 use wit_validator::Validator as WitValidator;
 
 use crate::bls::RegistrationProof;
@@ -140,6 +140,43 @@ pub fn hash_bytes(bytes: &[u8]) -> [u8; 32] {
     hasher.update(bytes);
     let result = hasher.finalize();
     result.into()
+}
+
+/// Provenance for the native/genesis contracts. `platform` + the pinned `image`
+/// come from the committed native-contracts `build.json`; the source is the
+/// Kontor repo at the node's build commit — which reproduces the committed
+/// binaries (the reproducible-build gate proves that at every commit). A missing
+/// git commit (e.g. a tarball build) → an all-zero "unknown" commit.
+fn native_provenance() -> Result<BuildProvenance> {
+    const BUILD_JSON: &str = include_str!("../../../../native-contracts/binaries/build.json");
+
+    #[derive(serde::Deserialize)]
+    struct BuildMeta {
+        platform: String,
+        image: String,
+    }
+    let meta: BuildMeta = serde_json::from_str(BUILD_JSON)?;
+
+    let commit = crate::built_info::GIT_COMMIT_HASH
+        .and_then(|h| {
+            let mut bytes = [0u8; 20];
+            hex::decode_to_slice(h, &mut bytes).ok().map(|_| bytes)
+        })
+        .map(CommitId::Sha1)
+        .unwrap_or(CommitId::Sha1([0u8; 20]));
+
+    let provenance = BuildProvenance {
+        source: Source {
+            forge: Forge::GitHub,
+            owner: "KontorProtocol".to_string(),
+            repo: "Kontor".to_string(),
+            commit,
+        },
+        image: meta.image,
+        platform: Platform::parse(&meta.platform)?,
+    };
+    provenance.validate()?;
+    Ok(provenance)
 }
 
 impl PartialEq for RawFileDescriptor {
@@ -349,8 +386,12 @@ impl Runtime {
         // = appending to the slice; no manual count to maintain.
         let core_signer = Signer::Core(Box::new(Signer::Nobody));
         let payment = self.core_payment();
+        // Native contracts ARE reproducibly built — record their provenance from
+        // the committed build.json (platform + pinned image) plus the source repo
+        // at the node's build commit (CI gates that it reproduces these bytes).
+        let provenance = native_provenance()?;
         for (name, bytes) in NATIVE_CONTRACTS {
-            self.publish(&core_signer, payment.clone(), name, bytes, None)
+            self.publish(&core_signer, payment.clone(), name, bytes, &provenance)
                 .await?;
         }
         if !genesis_validators.is_empty() {
@@ -371,15 +412,15 @@ impl Runtime {
         payment: Payment,
         name: &str,
         bytes: &[u8],
-        // Reproducible-build provenance for user publishes; `None` for native
-        // (core-signed) contracts, which carry their provenance in-repo instead.
-        provenance: Option<&BuildProvenance>,
+        // Required for every publish — user ops carry it on the wire; native
+        // (core-signed) contracts derive it from the committed build.json.
+        provenance: &BuildProvenance,
     ) -> Result<String, ExecutionError> {
         // Already enforced at decode (block::filter_map); re-checked here before
         // touching storage as defense-in-depth (Deterministic on every node).
-        if let Some(p) = provenance {
-            p.validate().map_err(ExecutionError::Deterministic)?;
-        }
+        provenance
+            .validate()
+            .map_err(ExecutionError::Deterministic)?;
         let address = ContractAddress {
             name: name.to_string(),
             height: self.storage.height,
@@ -410,19 +451,21 @@ impl Runtime {
         // Seed the append-only provenance log (inside the savepoint, so it rolls
         // back with the contract if init fails). The op's signer is the publisher
         // and becomes the entry's author — the UpdateProvenance authz anchor.
-        if let Some(p) = provenance {
-            let Signer::Id(publisher) = signer else {
+        let author = match signer {
+            Signer::Id(id) => id.signer_id(),
+            Signer::Core(_) => CORE_SIGNER_ID,
+            _ => {
                 return Err(ExecutionError::Deterministic(anyhow!(
-                    "publishing with provenance requires an Id signer"
+                    "publishing requires an Id or Core signer"
                 )));
-            };
-            let encoded =
-                postcard::to_allocvec(p).map_err(|e| ExecutionError::NonDeterministic(e.into()))?;
-            self.storage
-                .insert_contract_provenance(contract_id, publisher.signer_id(), &encoded)
-                .await
-                .map_err(ExecutionError::NonDeterministic)?;
-        }
+            }
+        };
+        let encoded = postcard::to_allocvec(provenance)
+            .map_err(|e| ExecutionError::NonDeterministic(e.into()))?;
+        self.storage
+            .insert_contract_provenance(contract_id, author, &encoded)
+            .await
+            .map_err(ExecutionError::NonDeterministic)?;
         // Publish-time link validation: the contract must resolve all of its
         // imports against the built-in surface it will run under. A user
         // contract that imports a native-only interface (`file-registry` /
@@ -937,8 +980,9 @@ mod tests {
         // rejection is by contract id, before `init`.)
         let signer = super::Signer::Core(Box::new(super::Signer::Nobody));
         let payment = runtime.core_payment();
+        let provenance = super::native_provenance().unwrap();
         let result = runtime
-            .publish(&signer, payment, "evil", FILESTORAGE, None)
+            .publish(&signer, payment, "evil", FILESTORAGE, &provenance)
             .await;
         assert!(
             result.is_err(),

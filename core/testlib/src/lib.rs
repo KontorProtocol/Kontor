@@ -113,6 +113,7 @@ pub fn sample_provenance() -> indexer_types::BuildProvenance {
             commit: indexer_types::CommitId::Sha1([0u8; 20]),
         },
         image: "kontorprotocol/kontor-build@sha256:test".to_string(),
+        platform: indexer_types::Platform::LinuxArm64,
     }
 }
 

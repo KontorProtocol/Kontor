@@ -532,7 +532,7 @@ async fn execute_op(
             provenance,
         } => {
             match runtime
-                .publish(&signer, payment, name, bytes, Some(provenance))
+                .publish(&signer, payment, name, bytes, provenance)
                 .await
             {
                 Ok(_) => Ok(None),
