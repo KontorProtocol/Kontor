@@ -439,18 +439,9 @@ impl Runtime {
             return Ok("".to_string());
         }
 
-        self.storage
-            .savepoint()
-            .await
-            .map_err(ExecutionError::NonDeterministic)?;
-        let contract_id = self
-            .storage
-            .insert_contract(name, bytes)
-            .await
-            .map_err(ExecutionError::NonDeterministic)?;
-        // Seed the append-only provenance log (inside the savepoint, so it rolls
-        // back with the contract if init fails). The op's signer is the publisher
-        // and becomes the entry's author — the UpdateProvenance authz anchor.
+        // The op's signer is the publisher and becomes the provenance entry's
+        // author — the UpdateProvenance authz anchor. Resolve it before opening
+        // the savepoint so an unsupported signer can't leak an open savepoint.
         let author = match signer {
             Signer::Id(id) => id.signer_id(),
             Signer::Core(_) => CORE_SIGNER_ID,
@@ -460,6 +451,18 @@ impl Runtime {
                 )));
             }
         };
+
+        self.storage
+            .savepoint()
+            .await
+            .map_err(ExecutionError::NonDeterministic)?;
+        let contract_id = self
+            .storage
+            .insert_contract(name, bytes)
+            .await
+            .map_err(ExecutionError::NonDeterministic)?;
+        // Seed the append-only provenance log inside the savepoint, so it rolls
+        // back with the contract if init fails.
         let encoded = postcard::to_allocvec(provenance)
             .map_err(|e| ExecutionError::NonDeterministic(e.into()))?;
         self.storage

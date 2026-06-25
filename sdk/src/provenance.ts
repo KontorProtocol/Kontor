@@ -104,6 +104,10 @@ export function provenanceEntryFromWire(
 
 /** Wire → friendly, for decoding op/API responses. */
 export function provenanceFromWire(w: WireBuildProvenance): BuildProvenance {
+  const platform = PLATFORM_FROM_WIRE[w.platform as string];
+  if (platform === undefined) {
+    throw new Error(`unknown build platform: ${w.platform as string}`);
+  }
   return {
     source: {
       forge: forgeFromWire(w.source.forge),
@@ -112,6 +116,6 @@ export function provenanceFromWire(w: WireBuildProvenance): BuildProvenance {
       commit: commitFromWire(w.source.commit),
     },
     image: w.image,
-    platform: PLATFORM_FROM_WIRE[w.platform as string],
+    platform,
   };
 }

@@ -14,11 +14,10 @@ use crate::{
             DeletableRow, create_contract_signer, exists_contract_state, find_live_subtree,
             find_matching_paths, get_contract_address_from_id, get_contract_bytes_by_id,
             get_contract_id_from_address, get_contract_provenance_publisher,
-            get_latest_contract_state_value,
-            hard_delete_matching_paths, insert_contract, insert_contract_provenance,
-            insert_contract_result, insert_contract_state, matching_path,
-            path_prefix_filter_contract_state, prune_contract_state, select_block_at_height,
-            tombstone_rows,
+            get_latest_contract_state_value, hard_delete_matching_paths, insert_contract,
+            insert_contract_provenance, insert_contract_result, insert_contract_state,
+            matching_path, path_prefix_filter_contract_state, prune_contract_state,
+            select_block_at_height, tombstone_rows,
         },
         types::{ContractProvenanceRow, ContractResultRow, ContractRow, ContractStateRow},
     },
@@ -167,7 +166,6 @@ impl Storage {
     pub async fn contract_address(&self, contract_id: u64) -> Result<Option<ContractAddress>> {
         Ok(get_contract_address_from_id(&self.conn, contract_id).await?)
     }
-
 
     pub async fn contract_bytes(&self, contract_id: u64) -> Result<Option<Vec<u8>>> {
         Ok(get_contract_bytes_by_id(&self.conn, contract_id).await?)

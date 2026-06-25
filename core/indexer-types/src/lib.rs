@@ -1109,10 +1109,11 @@ impl BuildProvenance {
         // Trustless reproducible verification requires a DIGEST-pinned image — a
         // mutable tag could be repointed after the fact. Require an
         // `<name>@<algo>:<hex>` digest reference.
-        let digest_pinned = self
-            .image
-            .rsplit_once('@')
-            .is_some_and(|(_, digest)| digest.contains(':'));
+        let digest_pinned = self.image.rsplit_once('@').is_some_and(|(_, digest)| {
+            digest
+                .split_once(':')
+                .is_some_and(|(algo, hex)| !algo.is_empty() && !hex.is_empty())
+        });
         if !digest_pinned {
             anyhow::bail!("provenance image must be digest-pinned (e.g. name@sha256:...)");
         }
@@ -1302,6 +1303,13 @@ mod provenance_tests {
         let mut p = sample();
         p.image = "kontorprotocol/kontor-build@sha256:deadbeef".into();
         assert!(p.validate().is_ok());
+
+        // an `@` with an empty algo or hex half is not a real digest
+        for junk in ["name@sha256:", "name@:hex", "name@:", "name@deadbeef"] {
+            let mut p = sample();
+            p.image = junk.into();
+            assert!(p.validate().is_err(), "{junk} should be rejected");
+        }
 
         // bad source propagates through
         let mut p = sample();
