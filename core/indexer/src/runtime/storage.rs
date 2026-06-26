@@ -12,22 +12,18 @@ use crate::{
     database::{
         queries::{
             DepositRow, create_contract_signer, depositors_affected_by_reorg, exists_contract_state,
-            find_live_subtree, find_matching_paths, footprint_cache_get, footprint_cache_set,
-            get_contract_address_from_id, get_contract_bytes_by_id, get_contract_id_from_address,
-            get_contract_provenance_publisher, get_latest_contract_state,
-            get_latest_contract_state_value, hard_delete_matching_paths, insert_contract,
-            insert_contract_provenance, insert_contract_result, insert_contract_state,
-            live_deposit_amounts_by_depositor, live_depositor_amounts, live_depositors, matching_path,
+            find_live_subtree, find_matching_paths, footprint_cache_add, footprint_cache_get,
+            footprint_cache_set, get_contract_address_from_id, get_contract_bytes_by_id,
+            get_contract_id_from_address, get_contract_provenance_publisher,
+            get_latest_contract_state, get_latest_contract_state_value, hard_delete_matching_paths,
+            insert_contract, insert_contract_provenance, insert_contract_result,
+            insert_contract_state, live_deposit_gas_sum, live_depositors, matching_path,
             path_prefix_filter_contract_state, prune_contract_state, select_block_at_height,
             tombstone_rows,
         },
         types::{ContractProvenanceRow, ContractResultRow, ContractRow, ContractStateRow},
     },
-    runtime::{
-        ContractAddress, Decimal, counter::Counter,
-        numerics::{add_decimal, decimal_to_string, eq_decimal, string_to_decimal, sub_decimal, u64_to_decimal},
-        stack::Stack,
-    },
+    runtime::{ContractAddress, counter::Counter, stack::Stack},
     test_utils::new_mock_transaction,
 };
 
@@ -84,16 +80,16 @@ impl Storage {
     }
 
     /// Write a live value. `depositor` is the signer who collateralizes this row via
-    /// the storage-deposit floor — `None` for Core/system writes; `deposited_amount`
-    /// is its token-denominated deposit (paired with `depositor`), both computed by
-    /// the caller (`_set_primitive`).
+    /// the storage-deposit floor — `None` for Core/system writes; `deposited_gas`
+    /// is its integer-gas deposit (paired with `depositor`), both computed by the
+    /// caller (`_set_primitive`).
     pub async fn set(
         &self,
         contract_id: u64,
         path: &[u8],
         value: &[u8],
         depositor: Option<u64>,
-        deposited_amount: Option<String>,
+        deposited_gas: Option<u64>,
     ) -> Result<()> {
         insert_contract_state(
             &self.conn,
@@ -104,7 +100,7 @@ impl Storage {
                 .path(path.to_vec())
                 .value(value.to_vec())
                 .maybe_depositor(depositor)
-                .maybe_deposited_amount(deposited_amount)
+                .maybe_deposited_gas(deposited_gas)
                 .build(),
         )
         .await?;
@@ -134,43 +130,20 @@ impl Storage {
         Ok(tombstone_rows(&self.conn, contract_id, self.height, self.effective_tx_id(), rows).await?)
     }
 
-    /// The frozen per-row deposits (`deposited_amount`) `signer_id` currently holds
-    /// live across all contracts — the storage-deposit floor is their sum. Frozen so
-    /// an evolving `D` never needs a historical lookup (see the query).
-    pub async fn live_deposit_amounts(&self, signer_id: u64) -> Result<Vec<String>> {
-        Ok(live_deposit_amounts_by_depositor(&self.conn, signer_id).await?)
+    /// The cached storage-deposit floor for `depositor`, in integer GAS — an O(1)
+    /// read of the eager `depositor_footprint` sum (NEAR's `storage_usage`, keyed by
+    /// depositor). Absent ⇒ 0. The host converts to the token floor (× gas→token) at
+    /// the `storage_floor` read; the token consults that on every debit.
+    pub async fn footprint_total_gas(&self, depositor: u64) -> Result<u64> {
+        Ok(footprint_cache_get(&self.conn, depositor).await?.unwrap_or(0))
     }
 
-    /// The cached storage-deposit floor for `depositor` — an O(1) read of the eager
-    /// `depositor_footprint` sum (NEAR's `storage_usage`, keyed by depositor). Absent
-    /// ⇒ zero floor. The token's per-debit floor check reads this instead of
-    /// re-summing the depositor's live rows.
-    pub async fn footprint_total(&self, depositor: u64) -> Result<Decimal> {
-        Ok(match footprint_cache_get(&self.conn, depositor).await? {
-            Some(s) => string_to_decimal(&s)?,
-            None => u64_to_decimal(0)?,
-        })
-    }
-
-    /// Apply `delta` to a depositor's cached floor (`add` ⇒ `+`, else `-`) and
-    /// persist it. A total that returns to exactly zero removes the row (absence ⇔
-    /// zero). Runs on `self.conn` inside the op savepoint, so it rolls back with the
-    /// op like every other write.
-    async fn footprint_adjust(&self, depositor: u64, delta: &str, add: bool) -> Result<()> {
-        let cur = self.footprint_total(depositor).await?;
-        let d = string_to_decimal(delta)?;
-        let next = if add {
-            add_decimal(cur, d)?
-        } else {
-            sub_decimal(cur, d)?
-        };
-        let total = if eq_decimal(next, u64_to_decimal(0)?)? {
-            None
-        } else {
-            Some(decimal_to_string(next))
-        };
-        footprint_cache_set(&self.conn, depositor, total.as_deref()).await?;
-        Ok(())
+    /// Add/subtract one row's `gas` from a depositor's cached floor — a single atomic
+    /// `total_gas += delta` (no read-modify-write). Runs on `self.conn` inside the op
+    /// savepoint, so it rolls back with the op like every other write.
+    async fn footprint_adjust(&self, depositor: u64, gas: u64, add: bool) -> Result<()> {
+        let delta = if add { gas as i64 } else { -(gas as i64) };
+        Ok(footprint_cache_add(&self.conn, depositor, delta).await?)
     }
 
     /// Maintain the footprint cache for a `set`: subtract the live row being
@@ -182,15 +155,15 @@ impl Storage {
         contract_id: u64,
         path: &[u8],
         new_depositor: Option<u64>,
-        new_amount: Option<&str>,
+        new_gas: Option<u64>,
     ) -> Result<()> {
         if let Some(old) = get_latest_contract_state(&self.conn, contract_id, path).await? {
-            if let (Some(d), Some(a)) = (old.depositor, old.deposited_amount.as_deref()) {
-                self.footprint_adjust(d, a, false).await?;
+            if let (Some(d), Some(g)) = (old.depositor, old.deposited_gas) {
+                self.footprint_adjust(d, g, false).await?;
             }
         }
-        if let (Some(d), Some(a)) = (new_depositor, new_amount) {
-            self.footprint_adjust(d, a, true).await?;
+        if let (Some(d), Some(g)) = (new_depositor, new_gas) {
+            self.footprint_adjust(d, g, true).await?;
         }
         Ok(())
     }
@@ -200,8 +173,8 @@ impl Storage {
     /// metering, so this adds no query.
     pub async fn footprint_on_free(&self, rows: &[DepositRow]) -> Result<()> {
         for row in rows {
-            if let (Some(d), Some(a)) = (row.depositor, row.deposited_amount.as_deref()) {
-                self.footprint_adjust(d, a, false).await?;
+            if let (Some(d), Some(g)) = (row.depositor, row.deposited_gas) {
+                self.footprint_adjust(d, g, false).await?;
             }
         }
         Ok(())
@@ -209,7 +182,7 @@ impl Storage {
 
     /// Rebuild the entire footprint cache from `contract_state` (startup / migration).
     /// Reconstructible by design — the cache is a pure function of the live
-    /// depositor/deposited_amount rows.
+    /// depositor/deposited_gas rows.
     pub async fn footprint_reconstruct(&self) -> Result<()> {
         self.conn
             .execute("DELETE FROM depositor_footprint", ())
@@ -239,18 +212,12 @@ impl Storage {
         Ok(())
     }
 
-    /// Overwrite one depositor's cached total with a fresh sum of their live rows.
+    /// Overwrite one depositor's cached total with a fresh `SUM(deposited_gas)` of
+    /// their live rows (one query — integer gas). Zero ⇒ delete the row.
     async fn footprint_set_from_live(&self, depositor: u64) -> Result<()> {
-        let mut total = u64_to_decimal(0)?;
-        for a in live_depositor_amounts(&self.conn, depositor).await? {
-            total = add_decimal(total, string_to_decimal(&a)?)?;
-        }
-        let stored = if eq_decimal(total, u64_to_decimal(0)?)? {
-            None
-        } else {
-            Some(decimal_to_string(total))
-        };
-        footprint_cache_set(&self.conn, depositor, stored.as_deref()).await?;
+        let total = live_deposit_gas_sum(&self.conn, depositor).await?;
+        let stored = (total != 0).then_some(total);
+        footprint_cache_set(&self.conn, depositor, stored).await?;
         Ok(())
     }
 

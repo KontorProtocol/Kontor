@@ -3,7 +3,7 @@ use std::collections::BTreeMap;
 use axum::extract::{Path, State};
 use indexer_types::{ContractFootprint, FootprintResponse, SignerResponse};
 use libsql::Connection;
-use numerics::{Decimal, add_decimal, decimal_to_string, string_to_decimal, u64_to_decimal};
+use numerics::{Decimal, add_decimal, decimal_to_string, mul_decimal, string_to_decimal, u64_to_decimal};
 
 use crate::api::{Env, error::Error, error::HttpError, result::Result};
 use crate::database::queries::{
@@ -73,9 +73,12 @@ pub async fn get_signer_footprint(
     let conn = runtime.get_storage_conn();
     let entry = resolve_signer_entry(&conn, &identifier).await?;
 
-    // Query + aggregation failures are server/data faults → 500, not 400.
+    // Query + aggregation failures are server/data faults → 500, not 400. Per-row
+    // deposits are integer gas; price to token with the runtime's gas→token rate.
     let rows = find_footprint_by_depositor(&conn, entry.signer_id).await?;
-    let (total_deposit, total_footprint_bytes, by_contract) = aggregate_footprint(rows)
+    let rate = string_to_decimal(&runtime.gas_to_token_multiplier.to_string())
+        .map_err(|e| anyhow::anyhow!("gas→token rate parse failed: {e:?}"))?;
+    let (total_deposit, total_footprint_bytes, by_contract) = aggregate_footprint(rows, rate)
         .map_err(|e| anyhow::anyhow!("footprint aggregation failed: {e:?}"))?;
 
     Ok(FootprintResponse {
@@ -88,17 +91,19 @@ pub async fn get_signer_footprint(
     .into())
 }
 
-/// Fold per-row deposits into a per-contract breakdown + totals. Decimal strings
-/// are summed via `numerics` (no SQL decimal SUM); `BTreeMap` gives a stable
-/// contract-id order. `percent` is a display-only f64 share of `total_deposit`.
+/// Fold per-row deposits into a per-contract breakdown + totals. Per-row deposits
+/// are integer gas, priced to token by `rate` (gas→token) and summed via `numerics`;
+/// `BTreeMap` gives a stable contract-id order. `percent` is a display-only f64
+/// share of `total_deposit`.
 fn aggregate_footprint(
     rows: Vec<FootprintRow>,
+    rate: Decimal,
 ) -> std::result::Result<(String, u64, Vec<ContractFootprint>), numerics::Error> {
     let mut groups: BTreeMap<u64, (String, Decimal, u64)> = BTreeMap::new();
     let mut total_deposit = u64_to_decimal(0)?;
     let mut total_footprint_bytes: u64 = 0;
     for row in rows {
-        let amt = string_to_decimal(&row.deposited_amount)?;
+        let amt = mul_decimal(u64_to_decimal(row.deposited_gas)?, rate)?;
         total_deposit = add_decimal(total_deposit, amt)?;
         total_footprint_bytes += row.footprint_bytes;
         match groups.get_mut(&row.contract_id) {
@@ -139,23 +144,28 @@ fn aggregate_footprint(
 mod footprint_tests {
     use super::{FootprintRow, aggregate_footprint};
 
-    fn row(contract_id: u64, name: &str, amt: &str, bytes: u64) -> FootprintRow {
+    fn row(contract_id: u64, name: &str, gas: u64, bytes: u64) -> FootprintRow {
         FootprintRow {
             contract_id,
             contract_name: name.to_string(),
-            deposited_amount: amt.to_string(),
+            deposited_gas: gas,
             footprint_bytes: bytes,
         }
+    }
+
+    // 1:1 gas→token rate, so the token figures equal the gas inputs.
+    fn unit_rate() -> super::Decimal {
+        super::u64_to_decimal(1).unwrap()
     }
 
     #[test]
     fn folds_rows_into_per_contract_totals() {
         let rows = vec![
-            row(1, "token", "10", 100),
-            row(2, "nft", "30", 300),
-            row(1, "token", "5", 50), // same contract → folds into contract 1
+            row(1, "token", 10, 100),
+            row(2, "nft", 30, 300),
+            row(1, "token", 5, 50), // same contract → folds into contract 1
         ];
-        let (total, total_bytes, by) = aggregate_footprint(rows).unwrap();
+        let (total, total_bytes, by) = aggregate_footprint(rows, unit_rate()).unwrap();
 
         assert_eq!(total.parse::<f64>().unwrap(), 45.0);
         assert_eq!(total_bytes, 450);
@@ -177,7 +187,7 @@ mod footprint_tests {
 
     #[test]
     fn empty_footprint_is_zero() {
-        let (total, bytes, by) = aggregate_footprint(vec![]).unwrap();
+        let (total, bytes, by) = aggregate_footprint(vec![], unit_rate()).unwrap();
         assert_eq!(total.parse::<f64>().unwrap(), 0.0);
         assert_eq!(bytes, 0);
         assert!(by.is_empty());

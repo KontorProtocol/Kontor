@@ -3,7 +3,6 @@ use anyhow::{Result, anyhow};
 use futures_util::future::OptionFuture;
 use indexer_types::deserialize;
 use serde::{Deserialize, Serialize};
-use stdlib::CheckedArithmetics;
 use wasmtime::AsContext;
 use wasmtime::component::{Accessor, Resource};
 
@@ -11,7 +10,7 @@ use crate::database::native_contracts::is_deposit_exempt;
 use crate::database::types::CORE_SIGNER_ID;
 
 use super::{
-    Decimal, ExecutionError, Runtime,
+    ExecutionError, Runtime,
     fuel::Fuel,
     wit::{HasContractId, Keys},
 };
@@ -224,9 +223,9 @@ impl Runtime {
         // reverts (the per-op cap = the gas limit). The reservation is RETURNED at
         // settle (only execution burns), so it bounds per-op growth without being a
         // cost — the collateral is the floor, not a moved token. The per-row
-        // `deposited_amount` (gas priced via `gas_to_token`) records the deposit for
-        // the footprint read.
-        let deposited_amount = if depositor.is_some() {
+        // `deposited_gas` records the deposit (integer gas) for the footprint cache;
+        // the token value is derived (× gas→token) only at the floor read.
+        let deposited_gas = if depositor.is_some() {
             let deposit_gas = (path.len() + bs.len()) as u64 * self.deposit_rate(contract_id);
             Fuel::Deposit(deposit_gas * self.gas_to_fuel_multiplier)
                 .consume(accessor, self.gauge.as_ref())
@@ -237,23 +236,23 @@ impl Runtime {
                     ))
                 })?;
             self.deposit.record_charge(deposit_gas).await;
-            Some(
-                Decimal::try_from(deposit_gas)?
-                    .mul(self.gas_to_token_multiplier)?
-                    .to_string(),
-            )
+            Some(deposit_gas)
         } else {
             None
         };
         // Maintain the eager footprint cache BEFORE the write: subtract the row this
         // overwrites (read while it's still live) from its setter, add the new row to
         // its depositor. Same connection/savepoint as the write, so it rolls back with
-        // the op.
+        // the op. Skipped for deposit-exempt contracts (the token ledger) — they never
+        // carry a depositor, so neither the new row nor any row they overwrite can
+        // affect a floor, and this avoids a displaced-row read on the hottest write.
+        if !is_deposit_exempt(contract_id) {
+            self.storage
+                .footprint_on_set(contract_id, &path, depositor, deposited_gas)
+                .await?;
+        }
         self.storage
-            .footprint_on_set(contract_id, &path, depositor, deposited_amount.as_deref())
-            .await?;
-        self.storage
-            .set(contract_id, &path, bs, depositor, deposited_amount)
+            .set(contract_id, &path, bs, depositor, deposited_gas)
             .await
     }
 }

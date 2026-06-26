@@ -77,15 +77,16 @@ CREATE TABLE IF NOT EXISTS contract_state (
   -- ops), which carry no deposit. A deterministic rowid like contract_id, so safe
   -- in the checkpoint hash.
   depositor INTEGER,
-  -- The deposit this row represents = (path + value bytes) × D, as a decimal
-  -- string (future-proof for fractional D). NULL when there's no depositor. At
-  -- D=1 this equals path+value bytes. Consensus state, so hashed in the checkpoint.
-  deposited_amount TEXT,
+  -- The deposit this row represents = (path + value bytes) × D, in integer GAS
+  -- (the unit deposits are metered in; D is gas/byte). NULL when there's no
+  -- depositor. At D=1 this equals path+value bytes. The token value is this × the
+  -- gas→token rate, computed at read. Consensus state, so hashed in the checkpoint.
+  deposited_gas INTEGER,
   UNIQUE (contract_id, height, path),
-  -- depositor and deposited_amount are always set together or not at all (a row
+  -- depositor and deposited_gas are always set together or not at all (a row
   -- either carries a deposit or it doesn't). Enforced in SQL so a future writer
   -- can't desync them and corrupt the footprint accounting.
-  CHECK ((depositor IS NULL) = (deposited_amount IS NULL)),
+  CHECK ((depositor IS NULL) = (deposited_gas IS NULL)),
   FOREIGN KEY (height) REFERENCES blocks (height) ON DELETE CASCADE,
   FOREIGN KEY (tx_id) REFERENCES transactions (id),
   FOREIGN KEY (depositor) REFERENCES signers (id)
@@ -108,19 +109,20 @@ CREATE INDEX IF NOT EXISTS idx_contract_state_height ON contract_state (height, 
 CREATE INDEX IF NOT EXISTS idx_contract_state_depositor ON contract_state (depositor) WHERE depositor IS NOT NULL;
 
 -- Eager cache of each depositor's storage-deposit FLOOR = Σ of the live
--- `deposited_amount` they collateralize across all contracts. The token's per-debit
--- floor check (context::storage-floor) reads this as an O(1) point lookup instead of
--- re-scanning contract_state every transfer (NEAR's account.storage_usage, keyed by
--- depositor). Maintained incrementally in the storage write path INSIDE the op
--- savepoint (so it rolls back with the op). DERIVED + reconstructible from the
--- depositor/deposited_amount columns, so it is deliberately NOT in the checkpoint and
--- has NO blocks FK — a reorg recomputes the affected depositors (see
--- Storage::footprint_reverse_reorg), and startup reconstructs it. `total_amount` is a
--- decimal string summed via numerics; a depositor whose floor returns to zero is
--- removed (absence ⇔ zero floor).
+-- `deposited_gas` they collateralize across all contracts (the token value is this
+-- × the gas→token rate, applied at read). The token's per-debit floor check
+-- (context::storage-floor) reads this as an O(1) point lookup instead of re-scanning
+-- contract_state every transfer (NEAR's account.storage_usage, keyed by depositor).
+-- Maintained incrementally in the storage write path INSIDE the op savepoint (so it
+-- rolls back with the op) via an atomic `total_gas = total_gas + :delta` upsert.
+-- DERIVED + reconstructible from the depositor/deposited_gas columns, so it is
+-- deliberately NOT in the checkpoint and has NO blocks FK — a reorg recomputes the
+-- affected depositors (see Storage::footprint_reverse_reorg), and startup
+-- reconstructs it. A depositor whose floor returns to zero is removed (absence ⇔
+-- zero floor).
 CREATE TABLE IF NOT EXISTS depositor_footprint (
   depositor INTEGER PRIMARY KEY,
-  total_amount TEXT NOT NULL
+  total_gas INTEGER NOT NULL
 );
 
 CREATE TABLE IF NOT EXISTS contract_results (

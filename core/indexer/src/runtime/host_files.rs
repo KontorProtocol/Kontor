@@ -18,6 +18,7 @@ use super::{
     wit::{self, FileDescriptor, Signer},
 };
 use built_in::context::HolderRef;
+use stdlib::CheckedArithmetics;
 
 impl Runtime {
     async fn _aggregate_root<T>(
@@ -343,9 +344,10 @@ impl built_in::file_registry::HostProofWithStore for Runtime {
 
 impl built_in::context::HostWithStore for Runtime {
     /// The storage-deposit floor for `holder` = the sum of their FROZEN per-row
-    /// deposits (`deposited_amount`) live across all contracts. The token consults
-    /// this on every debit to enforce `balance - floor >= amount`. Non-signer
-    /// holders (core/burner/utxo) and unresolved pubkeys own no deposited rows → 0.
+    /// deposits (integer `deposited_gas`) live across all contracts, priced to token
+    /// here (× gas→token). The token consults this on every debit to enforce
+    /// `balance - floor >= amount`. Non-signer holders (core/burner/utxo) and
+    /// unresolved pubkeys own no deposited rows → 0.
     async fn storage_floor<T>(
         accessor: &Accessor<T, Self>,
         holder: HolderRef,
@@ -356,8 +358,9 @@ impl built_in::context::HostWithStore for Runtime {
             _ => return Ok(Decimal::try_from(0u64)?),
         };
         // O(1) read of the eager `depositor_footprint` cache (maintained in the write
-        // path), not a fresh cross-contract scan of the depositor's live rows.
-        runtime.storage.footprint_total(signer_id).await
+        // path), not a fresh cross-contract scan; price the integer-gas floor to token.
+        let gas = runtime.storage.footprint_total_gas(signer_id).await?;
+        Ok(Decimal::try_from(gas)?.mul(runtime.gas_to_token_multiplier)?)
     }
 }
 

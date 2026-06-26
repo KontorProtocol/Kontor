@@ -152,7 +152,7 @@ pub async fn insert_contract_state(conn: &Connection, row: ContractStateRow) -> 
                 value,
                 deleted,
                 depositor,
-                deposited_amount
+                deposited_gas
             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
         "#,
             params![
@@ -164,7 +164,7 @@ pub async fn insert_contract_state(conn: &Connection, row: ContractStateRow) -> 
                 row.value,
                 row.deleted,
                 row.depositor.map(Value::try_from).transpose()?,
-                row.deposited_amount
+                row.deposited_gas.map(Value::try_from).transpose()?
             ],
         )
         .await?)
@@ -178,7 +178,7 @@ pub async fn get_latest_contract_state(
     let mut rows = conn
         .query(
             &live_latest(
-                "contract_id, height, tx_id, path, value, deleted, depositor, deposited_amount",
+                "contract_id, height, tx_id, path, value, deleted, depositor, deposited_gas",
                 "contract_id = :contract_id AND path = :path",
             ),
             (
@@ -210,59 +210,56 @@ const LIVE_BY_DEPOSITOR_WHERE: &str = r#"
       )
 "#;
 
-/// Every live row's FROZEN per-row deposit (`deposited_amount`, the token amount
-/// recorded at WRITE time) a depositor currently holds, across ALL contracts — the
-/// FLOOR is their sum. Frozen-per-row, so a `D` that evolves over time only affects
-/// future writes: the floor never needs a historical-`D` lookup (each row carries
-/// the deposit it was charged), and a `D` change does NOT re-price existing rows.
-/// The caller sums the decimal strings (no SQL decimal SUM).
-pub async fn live_deposit_amounts_by_depositor(
-    conn: &Connection,
-    signer_id: u64,
-) -> Result<Vec<String>, Error> {
-    let sql =
-        format!("SELECT cs.deposited_amount FROM contract_state cs WHERE {LIVE_BY_DEPOSITOR_WHERE}");
+/// The FLOOR (in integer GAS) a depositor currently collateralizes: Σ the FROZEN
+/// per-row `deposited_gas` of their live rows across ALL contracts. Frozen-per-row,
+/// so an evolving `D` only affects future writes (no historical-`D` lookup). One
+/// exact SQL `SUM` — the deposit is integer gas. (Token value = this × gas→token,
+/// applied at the read site.)
+pub async fn live_deposit_gas_sum(conn: &Connection, signer_id: u64) -> Result<u64, Error> {
+    let sql = format!(
+        "SELECT COALESCE(SUM(cs.deposited_gas), 0) FROM contract_state cs WHERE {LIVE_BY_DEPOSITOR_WHERE}"
+    );
     let mut rows = conn
         .query(&sql, libsql::named_params! { ":signer_id": signer_id })
         .await?;
-    let mut out = Vec::new();
-    while let Some(r) = rows.next().await? {
-        out.push(r.get::<String>(0)?);
-    }
-    Ok(out)
+    Ok(match rows.next().await? {
+        Some(r) => r.get::<u64>(0)?,
+        None => 0,
+    })
 }
 
-// --- depositor_footprint cache (eager Σ deposited_amount per depositor) ---------
+// --- depositor_footprint cache (eager Σ deposited_gas per depositor) -------------
 // Off-checkpoint, reconstructible. The token's per-debit floor check reads
-// `footprint_cache_get` (O(1)) instead of `live_deposit_amounts_by_depositor`.
+// `footprint_cache_get` (O(1)) instead of `live_deposit_gas_sum`.
 
-/// The cached floor total (decimal string) for a depositor, or `None` if they
+/// The cached floor total (integer gas) for a depositor, or `None` if they
 /// collateralize nothing (absence ⇔ zero).
-pub async fn footprint_cache_get(conn: &Connection, depositor: u64) -> Result<Option<String>, Error> {
+pub async fn footprint_cache_get(conn: &Connection, depositor: u64) -> Result<Option<u64>, Error> {
     let mut rows = conn
         .query(
-            "SELECT total_amount FROM depositor_footprint WHERE depositor = ?",
+            "SELECT total_gas FROM depositor_footprint WHERE depositor = ?",
             [depositor],
         )
         .await?;
     Ok(match rows.next().await? {
-        Some(r) => Some(r.get::<String>(0)?),
+        Some(r) => Some(r.get::<u64>(0)?),
         None => None,
     })
 }
 
-/// Upsert a depositor's cached total, or delete the row when `total` is `None`
-/// (their floor returned to zero — absence ⇔ zero keeps the table sparse).
+/// Set a depositor's cached total to an ABSOLUTE value (reconstruct / reorg
+/// recompute), or delete the row when `total` is `None` (floor returned to zero —
+/// absence ⇔ zero keeps the table sparse).
 pub async fn footprint_cache_set(
     conn: &Connection,
     depositor: u64,
-    total: Option<&str>,
+    total: Option<u64>,
 ) -> Result<(), Error> {
     match total {
         Some(t) => {
             conn.execute(
-                "INSERT INTO depositor_footprint (depositor, total_amount) VALUES (?, ?) \
-                 ON CONFLICT(depositor) DO UPDATE SET total_amount = excluded.total_amount",
+                "INSERT INTO depositor_footprint (depositor, total_gas) VALUES (?, ?) \
+                 ON CONFLICT(depositor) DO UPDATE SET total_gas = excluded.total_gas",
                 (depositor, t),
             )
             .await?;
@@ -275,6 +272,26 @@ pub async fn footprint_cache_set(
             .await?;
         }
     }
+    Ok(())
+}
+
+/// Atomically add `delta` gas to a depositor's cached floor — the incremental
+/// write-path maintenance — and prune the row when it reaches zero (absence ⇔ zero).
+/// One `total_gas = total_gas + :delta` UPDATE, no read-modify-write. A total driven
+/// negative by a (bug) unmatched free surfaces loudly: the `u64` read in
+/// `footprint_cache_get` rejects it rather than silently under-flooring.
+pub async fn footprint_cache_add(conn: &Connection, depositor: u64, delta: i64) -> Result<(), Error> {
+    conn.execute(
+        "INSERT INTO depositor_footprint (depositor, total_gas) VALUES (:d, :delta) \
+         ON CONFLICT(depositor) DO UPDATE SET total_gas = total_gas + :delta",
+        libsql::named_params! { ":d": depositor, ":delta": delta },
+    )
+    .await?;
+    conn.execute(
+        "DELETE FROM depositor_footprint WHERE depositor = :d AND total_gas = 0",
+        libsql::named_params! { ":d": depositor },
+    )
+    .await?;
     Ok(())
 }
 
@@ -320,13 +337,6 @@ pub async fn depositors_affected_by_reorg(
     Ok(out)
 }
 
-/// The live floor total for one depositor, recomputed from scratch (used by
-/// reconstruct + reorg). Sums the same `LIVE_BY_DEPOSITOR_WHERE` rows as the legacy
-/// per-debit path, so the cache is an exact replica of it.
-pub async fn live_depositor_amounts(conn: &Connection, depositor: u64) -> Result<Vec<String>, Error> {
-    live_deposit_amounts_by_depositor(conn, depositor).await
-}
-
 pub async fn get_latest_contract_state_value(
     conn: &Connection,
     fuel: u64,
@@ -367,19 +377,19 @@ pub struct DepositRow {
     pub path: Vec<u8>,
     pub size: u64,
     /// The setter that collateralizes this row (for the eager footprint cache: a
-    /// delete/overwrite subtracts `deposited_amount` from this depositor's total).
+    /// delete/overwrite subtracts `deposited_gas` from this depositor's total).
     /// `None` for Core/exempt rows, which carry no floor.
     pub depositor: Option<u64>,
-    pub deposited_amount: Option<String>,
+    pub deposited_gas: Option<u64>,
 }
 
 /// One live deposited row attributed to a depositor, for the per-signer footprint
-/// aggregation. `deposited_amount` is non-null here (the `depositor IS NOT NULL ⇔
-/// deposited_amount IS NOT NULL` CHECK), summed into a `Decimal` by the caller.
+/// aggregation. `deposited_gas` is non-null here (the `depositor IS NOT NULL ⇔
+/// deposited_gas IS NOT NULL` CHECK), summed by the caller and priced to token.
 pub struct FootprintRow {
     pub contract_id: u64,
     pub contract_name: String,
-    pub deposited_amount: String,
+    pub deposited_gas: u64,
     pub footprint_bytes: u64,
 }
 
@@ -394,7 +404,7 @@ pub async fn find_footprint_by_depositor(
     signer_id: u64,
 ) -> Result<Vec<FootprintRow>, Error> {
     let sql = format!(
-        "SELECT cs.contract_id, c.name, cs.deposited_amount, length(cs.path) + cs.size AS footprint \
+        "SELECT cs.contract_id, c.name, cs.deposited_gas, length(cs.path) + cs.size AS footprint \
          FROM contract_state cs JOIN contracts c ON c.id = cs.contract_id \
          WHERE {LIVE_BY_DEPOSITOR_WHERE}"
     );
@@ -406,7 +416,7 @@ pub async fn find_footprint_by_depositor(
         out.push(FootprintRow {
             contract_id: r.get::<u64>(0)?,
             contract_name: r.get::<String>(1)?,
-            deposited_amount: r.get::<String>(2)?,
+            deposited_gas: r.get::<u64>(2)?,
             footprint_bytes: r.get::<u64>(3)?,
         });
     }
@@ -429,7 +439,7 @@ pub async fn find_live_subtree(
         Value::Integer(contract_id as i64),
     ));
     let query = live_latest(
-        "path, size, depositor, deposited_amount",
+        "path, size, depositor, deposited_gas",
         &format!("contract_id = :contract_id AND {range}"),
     );
     let mut result = conn.query(&query, params).await?;
@@ -440,7 +450,7 @@ pub async fn find_live_subtree(
     Ok(rows)
 }
 
-/// A `DepositRow` from a `(path, size, depositor, deposited_amount)` projection —
+/// A `DepositRow` from a `(path, size, depositor, deposited_gas)` projection —
 /// shared by the two delete read-halves so the footprint cache can subtract a freed
 /// row's deposit from its setter.
 fn deposit_row_from(row: &libsql::Row) -> Result<DepositRow, Error> {
@@ -448,7 +458,7 @@ fn deposit_row_from(row: &libsql::Row) -> Result<DepositRow, Error> {
         path: row.get::<Vec<u8>>(0)?,
         size: row.get::<u64>(1)?,
         depositor: row.get::<Option<u64>>(2)?,
-        deposited_amount: row.get::<Option<String>>(3)?,
+        deposited_gas: row.get::<Option<u64>>(3)?,
     })
 }
 
@@ -706,7 +716,7 @@ pub async fn find_matching_paths(
         let mut result = conn
             .query(
                 &format!(
-                    "SELECT path, size, depositor, deposited_amount \
+                    "SELECT path, size, depositor, deposited_gas \
                      FROM contract_state WHERE {where_clause}"
                 ),
                 params,

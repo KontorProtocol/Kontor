@@ -22,7 +22,7 @@ fn calculate_row_hash(state: &ContractStateRow) -> String {
     // field's charset) so the digest is unambiguous. A NULL depositor renders as
     // empty (SQLite `concat` treats NULL as '').
     let depositor_part = state.depositor.map(|d| d.to_string()).unwrap_or_default();
-    let amount_part = state.deposited_amount.clone().unwrap_or_default();
+    let amount_part = state.deposited_gas.map(|g| g.to_string()).unwrap_or_default();
     let input = format!(
         "{}|{}|{}|{}|{}|{}",
         state.contract_id,
@@ -523,13 +523,12 @@ async fn test_contract_state_operations() -> Result<()> {
     Ok(())
 }
 
-// `live_deposit_amounts_by_depositor` returns the FROZEN per-row deposits a
-// depositor holds live across ALL contracts (the floor = their sum). Each row keeps
-// the amount it was charged (so an evolving D never re-prices it); overwrites
-// replace the row's amount, deletes drop it, and another depositor's rows are
-// excluded. Helper sums them as plain integers for assertion.
+// `live_deposit_gas_sum` returns the FROZEN per-row deposit GAS a depositor holds
+// live across ALL contracts (the floor = their sum). Each row keeps the gas it was
+// charged (so an evolving D never re-prices it); overwrites replace the row's gas,
+// deletes drop it, and another depositor's rows are excluded.
 #[tokio::test]
-async fn test_live_deposit_amounts_by_depositor() -> Result<()> {
+async fn test_live_deposit_gas_sum() -> Result<()> {
     let (_reader, writer, _temp_dir) = new_test_db().await?;
     let conn = writer.connection();
     let height = 800000u64;
@@ -553,7 +552,7 @@ async fn test_live_deposit_amounts_by_depositor() -> Result<()> {
     .await?;
     let alice = create_contract_signer(&conn, height).await?;
     let bob = create_contract_signer(&conn, height).await?;
-    let put = async |cid: u64, key: &str, amount: &str, who: u64| -> Result<()> {
+    let put = async |cid: u64, key: &str, gas: u64, who: u64| -> Result<()> {
         insert_contract_state(
             &conn,
             ContractStateRow::builder()
@@ -563,33 +562,27 @@ async fn test_live_deposit_amounts_by_depositor() -> Result<()> {
                 .path(cs_path(&[key]))
                 .value(vec![1])
                 .depositor(who)
-                .deposited_amount(amount.to_string())
+                .deposited_gas(gas)
                 .build(),
         )
         .await?;
         Ok(())
     };
     let p_bb = cs_path(&["bb"]);
-    let sum = async |who: u64| -> Result<u64> {
-        Ok(live_deposit_amounts_by_depositor(&conn, who)
-            .await?
-            .iter()
-            .map(|a| a.parse::<u64>().unwrap())
-            .sum())
-    };
+    let sum = async |who: u64| -> Result<u64> { Ok(live_deposit_gas_sum(&conn, who).await?) };
 
     // Empty → no rows.
     assert_eq!(sum(alice).await?, 0);
 
     // alice's frozen deposits in two contracts; bob's row is excluded from alice's.
-    put(1, "a", "10", alice).await?;
-    put(2, "bb", "25", alice).await?;
-    put(1, "z", "99", bob).await?;
+    put(1, "a", 10, alice).await?;
+    put(2, "bb", 25, alice).await?;
+    put(1, "z", 99, bob).await?;
     assert_eq!(sum(alice).await?, 35);
 
     // Overwrite alice's contract-1 row (same height replaces) with a new frozen
     // amount → the old amount drops, the new one counts.
-    put(1, "a", "40", alice).await?;
+    put(1, "a", 40, alice).await?;
     assert_eq!(sum(alice).await?, 65);
 
     // Tombstone alice's contract-2 row → its deposit drops from the floor.
@@ -640,7 +633,7 @@ async fn test_depositor_roundtrips_and_tombstone_clears_it() -> Result<()> {
             .path(path.clone())
             .value(vec![1, 2, 3])
             .depositor(sid)
-            .deposited_amount("42".to_string())
+            .deposited_gas(42)
             .build(),
     )
     .await?;
@@ -649,7 +642,7 @@ async fn test_depositor_roundtrips_and_tombstone_clears_it() -> Result<()> {
     // (the columns that back the storage-deposit floor).
     let row = get_latest_contract_state(&conn, cid, &path).await?.unwrap();
     assert_eq!(row.depositor, Some(sid));
-    assert_eq!(row.deposited_amount.as_deref(), Some("42"));
+    assert_eq!(row.deposited_gas, Some(42));
     // …and the delete find surfaces the live row (path + size, value-less).
     let found = find_live_subtree(&conn, cid, &path).await?;
     assert_eq!(found.len(), 1);
@@ -695,7 +688,7 @@ async fn test_footprint_cache_and_reorg_affected() -> Result<()> {
     }
     let sid = create_contract_signer(&conn, 10).await?;
     // sid deposits path `a` at height 10 ("100") and path `b` at height 12 ("50").
-    for (h, key, amt) in [(10u64, "a", "100"), (12u64, "b", "50")] {
+    for (h, key, gas) in [(10u64, "a", 100u64), (12u64, "b", 50u64)] {
         let tx = insert_transaction(
             &conn,
             TransactionRow::builder()
@@ -715,22 +708,24 @@ async fn test_footprint_cache_and_reorg_affected() -> Result<()> {
                 .path(cs_path(&[key]))
                 .value(vec![1])
                 .depositor(sid)
-                .deposited_amount(amt.to_string())
+                .deposited_gas(gas)
                 .build(),
         )
         .await?;
     }
 
-    // set/get/delete round-trip.
+    // set/get/delete round-trip + atomic add.
     assert_eq!(footprint_cache_get(&conn, sid).await?, None);
-    footprint_cache_set(&conn, sid, Some("150")).await?;
-    assert_eq!(footprint_cache_get(&conn, sid).await?.as_deref(), Some("150"));
-    footprint_cache_set(&conn, sid, None).await?;
+    footprint_cache_set(&conn, sid, Some(150)).await?;
+    assert_eq!(footprint_cache_get(&conn, sid).await?, Some(150));
+    footprint_cache_add(&conn, sid, -50).await?;
+    assert_eq!(footprint_cache_get(&conn, sid).await?, Some(100));
+    footprint_cache_add(&conn, sid, -100).await?; // → 0 prunes the row
     assert_eq!(footprint_cache_get(&conn, sid).await?, None);
 
-    // reconstruct source: sid is a live depositor with two live rows.
+    // reconstruct source: sid is a live depositor; their live floor sums to 150.
     assert!(live_depositors(&conn).await?.contains(&sid));
-    assert_eq!(live_depositor_amounts(&conn, sid).await?.len(), 2);
+    assert_eq!(live_deposit_gas_sum(&conn, sid).await?, 150);
 
     // reorg reversal predicate: rollback to 11 drops the height-12 row → sid
     // affected; rollback to 12 leaves nothing above → sid not affected.
@@ -804,7 +799,7 @@ async fn test_find_footprint_by_depositor() -> Result<()> {
     let alice = create_contract_signer(&conn, h1).await?;
     let bob = create_contract_signer(&conn, h1).await?;
 
-    let set = async |cid: u64, seg: &str, who: u64, amt: &str, h: u64, tx: u64| -> Result<()> {
+    let set = async |cid: u64, seg: &str, who: u64, gas: u64, h: u64, tx: u64| -> Result<()> {
         insert_contract_state(
             &conn,
             ContractStateRow::builder()
@@ -814,7 +809,7 @@ async fn test_find_footprint_by_depositor() -> Result<()> {
                 .path(cs_path(&[seg]))
                 .value(vec![1, 2, 3])
                 .depositor(who)
-                .deposited_amount(amt.to_string())
+                .deposited_gas(gas)
                 .build(),
         )
         .await?;
@@ -822,15 +817,15 @@ async fn test_find_footprint_by_depositor() -> Result<()> {
     };
 
     // alice: two live rows in alpha, one in beta.
-    set(alpha, "a1", alice, "10", h1, tx1).await?;
-    set(alpha, "a2", alice, "5", h1, tx1).await?;
-    set(beta, "b1", alice, "30", h1, tx1).await?;
+    set(alpha, "a1", alice, 10, h1, tx1).await?;
+    set(alpha, "a2", alice, 5, h1, tx1).await?;
+    set(beta, "b1", alice, 30, h1, tx1).await?;
     // bob's row → excluded by the depositor filter.
-    set(beta, "b2", bob, "99", h1, tx1).await?;
+    set(beta, "b2", bob, 99, h1, tx1).await?;
     // alice set a3, then it was overwritten by bob at a newer height → alice's a3
     // is superseded (drops from alice's floor, moves to bob's) and must NOT appear.
-    set(alpha, "a3", alice, "1000", h1, tx1).await?;
-    set(alpha, "a3", bob, "7", h2, tx2).await?;
+    set(alpha, "a3", alice, 1000, h1, tx1).await?;
+    set(alpha, "a3", bob, 7, h2, tx2).await?;
 
     let rows = find_footprint_by_depositor(&conn, alice).await?;
     assert_eq!(rows.len(), 3, "alice's live rows: a1, a2 (alpha) + b1 (beta)");
@@ -838,12 +833,12 @@ async fn test_find_footprint_by_depositor() -> Result<()> {
     let alpha_total: u64 = rows
         .iter()
         .filter(|r| r.contract_id == alpha)
-        .map(|r| r.deposited_amount.parse::<u64>().unwrap())
+        .map(|r| r.deposited_gas)
         .sum();
     let beta_total: u64 = rows
         .iter()
         .filter(|r| r.contract_id == beta)
-        .map(|r| r.deposited_amount.parse::<u64>().unwrap())
+        .map(|r| r.deposited_gas)
         .sum();
     assert_eq!(alpha_total, 15, "10 + 5; a3 superseded, excluded");
     assert_eq!(beta_total, 30, "b1 only; b2 is bob's");
