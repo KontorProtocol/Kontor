@@ -359,7 +359,7 @@ impl built_in::context::HostWithStore for Runtime {
         };
         // O(1) read of the eager `depositor_footprint` cache (maintained in the write
         // path), not a fresh cross-contract scan; price the integer-gas floor to token.
-        let gas = runtime.storage.footprint_total_gas(signer_id).await?;
+        let gas = runtime.storage.footprint().total_gas(signer_id).await?;
         Ok(Decimal::try_from(gas)?.mul(runtime.gas_to_token_multiplier)?)
     }
 }

@@ -12,7 +12,7 @@ use wit_component::{ComponentEncoder, WitPrinter};
 use crate::{
     database::{
         queries::{
-            DepositRow, FOOTPRINT_BUILT_KEY, create_contract_signer, depositors_affected_by_reorg,
+            LiveRow, FOOTPRINT_BUILT_KEY, create_contract_signer, depositors_affected_by_reorg,
             exists_contract_state, find_live_subtree, find_matching_paths, footprint_cache_add,
             footprint_cache_get, footprint_cache_set, footprint_rebuild_all,
             get_contract_address_from_id, get_contract_bytes_by_id, get_contract_id_from_address,
@@ -75,6 +75,87 @@ pub struct Storage {
     pub tx_context: Option<TransactionContext>,
 }
 
+/// The eager per-depositor storage-deposit FLOOR cache (`depositor_footprint`),
+/// borrowing a DB connection. Off-checkpoint + reconstructible; maintained
+/// incrementally on the write path (`on_set`/`on_free`) inside the op savepoint, so
+/// it rolls back with the op. Read O(1) (`total_gas`) by the token's per-debit floor
+/// check; built once (`reconstruct`) on first boot/upgrade; recomputed per affected
+/// depositor on reorg (via [`Storage::rollback_with_footprint`]). INVARIANT:
+/// `total_gas` == Σ live `deposited_gas` per depositor on every node — it gates token
+/// debits, so it must stay an exact replica.
+pub struct FootprintCache<'a> {
+    conn: &'a Connection,
+}
+
+impl FootprintCache<'_> {
+    /// The cached floor for `depositor`, in integer GAS — an O(1) read of the eager
+    /// `depositor_footprint` sum (NEAR's `storage_usage`, keyed by depositor). Absent
+    /// ⇒ 0. The host prices it to token (× gas→token) at the `storage_floor` read.
+    pub async fn total_gas(&self, depositor: u64) -> Result<u64> {
+        Ok(footprint_cache_get(self.conn, depositor).await?.unwrap_or(0))
+    }
+
+    /// Maintain the cache for a `set`: subtract the live row being overwritten (read
+    /// BEFORE the new row is written) from its setter, then add the new row to its
+    /// depositor. A fresh create has no prior live row; an exempt/Core write
+    /// (`depositor = None`) contributes nothing. The displaced-row read is a lean
+    /// latest-by-height point lookup, not a window.
+    pub async fn on_set(
+        &self,
+        contract_id: u64,
+        path: &[u8],
+        new_depositor: Option<u64>,
+        new_gas: Option<u64>,
+    ) -> Result<()> {
+        if let Some((Some(d), Some(g))) = latest_live_deposit(self.conn, contract_id, path).await? {
+            footprint_cache_add(self.conn, d, -(g as i64)).await?;
+        }
+        if let (Some(d), Some(g)) = (new_depositor, new_gas) {
+            footprint_cache_add(self.conn, d, g as i64).await?;
+        }
+        Ok(())
+    }
+
+    /// Maintain the cache for freed rows (delete/variant-cleanup): subtract each row's
+    /// deposit from its setter. The rows were already read for metering, so this adds
+    /// no read; deltas are summed PER DEPOSITOR (a K-row delete is almost always one
+    /// depositor) so it issues ~1 statement, not 2·K.
+    pub async fn on_free(&self, rows: &[LiveRow]) -> Result<()> {
+        let mut deltas: HashMap<u64, i64> = HashMap::new();
+        for row in rows {
+            if let (Some(d), Some(g)) = (row.depositor, row.deposited_gas) {
+                *deltas.entry(d).or_default() -= g as i64;
+            }
+        }
+        for (depositor, delta) in deltas {
+            footprint_cache_add(self.conn, depositor, delta).await?;
+        }
+        Ok(())
+    }
+
+    /// Rebuild the cache from live state — ONCE, on first build (DB upgrade or first
+    /// boot). Gated on a `node_meta` marker: block writes and reorgs both maintain the
+    /// cache atomically, so once built it stays coherent and a clean restart skips the
+    /// O(live-rows) rebuild. One grouped `SUM` pass, not a loop.
+    pub async fn reconstruct(&self) -> Result<()> {
+        if get_meta_u64(self.conn, FOOTPRINT_BUILT_KEY, 0).await? == 1 {
+            return Ok(());
+        }
+        footprint_rebuild_all(self.conn).await?;
+        set_meta_u64(self.conn, FOOTPRINT_BUILT_KEY, 1).await?;
+        Ok(())
+    }
+
+    /// Overwrite one depositor's cached total with a fresh `SUM(deposited_gas)` of
+    /// their live rows (one query — integer gas). Zero ⇒ delete the row.
+    async fn set_from_live(&self, depositor: u64) -> Result<()> {
+        let total = live_deposit_gas_sum(self.conn, depositor).await?;
+        let stored = (total != 0).then_some(total);
+        footprint_cache_set(self.conn, depositor, stored).await?;
+        Ok(())
+    }
+}
+
 impl Storage {
     pub async fn get(&self, fuel: u64, contract_id: u64, path: &[u8]) -> Result<Option<Vec<u8>>> {
         Ok(get_latest_contract_state_value(&self.conn, fuel, contract_id, path).await?)
@@ -116,7 +197,7 @@ impl Storage {
         &self,
         contract_id: u64,
         path: &[u8],
-    ) -> Result<Vec<DepositRow>> {
+    ) -> Result<Vec<LiveRow>> {
         Ok(find_live_subtree(&self.conn, contract_id, path).await?)
     }
 
@@ -126,69 +207,14 @@ impl Storage {
     pub async fn tombstone_rows(
         &self,
         contract_id: u64,
-        rows: &[DepositRow],
+        rows: &[LiveRow],
     ) -> Result<(bool, u64)> {
         Ok(tombstone_rows(&self.conn, contract_id, self.height, self.effective_tx_id(), rows).await?)
     }
 
-    /// The cached storage-deposit floor for `depositor`, in integer GAS — an O(1)
-    /// read of the eager `depositor_footprint` sum (NEAR's `storage_usage`, keyed by
-    /// depositor). Absent ⇒ 0. The host converts to the token floor (× gas→token) at
-    /// the `storage_floor` read; the token consults that on every debit.
-    pub async fn footprint_total_gas(&self, depositor: u64) -> Result<u64> {
-        Ok(footprint_cache_get(&self.conn, depositor).await?.unwrap_or(0))
-    }
-
-    /// Maintain the footprint cache for a `set`: subtract the live row being
-    /// overwritten (read BEFORE the new row is written) from its setter, then add the
-    /// new row to its depositor. A fresh create has no prior live row; an exempt/Core
-    /// write (`depositor = None`) contributes nothing. The displaced-row read is a
-    /// lean latest-by-height point lookup, not a window.
-    pub async fn footprint_on_set(
-        &self,
-        contract_id: u64,
-        path: &[u8],
-        new_depositor: Option<u64>,
-        new_gas: Option<u64>,
-    ) -> Result<()> {
-        if let Some((Some(d), Some(g))) = latest_live_deposit(&self.conn, contract_id, path).await? {
-            footprint_cache_add(&self.conn, d, -(g as i64)).await?;
-        }
-        if let (Some(d), Some(g)) = (new_depositor, new_gas) {
-            footprint_cache_add(&self.conn, d, g as i64).await?;
-        }
-        Ok(())
-    }
-
-    /// Maintain the footprint cache for freed rows (delete/variant-cleanup): subtract
-    /// each row's deposit from its setter. The rows were already read for metering, so
-    /// this adds no read; deltas are summed PER DEPOSITOR (a K-row delete is almost
-    /// always one depositor) so it issues ~1 statement, not 2·K.
-    pub async fn footprint_on_free(&self, rows: &[DepositRow]) -> Result<()> {
-        let mut deltas: HashMap<u64, i64> = HashMap::new();
-        for row in rows {
-            if let (Some(d), Some(g)) = (row.depositor, row.deposited_gas) {
-                *deltas.entry(d).or_default() -= g as i64;
-            }
-        }
-        for (depositor, delta) in deltas {
-            footprint_cache_add(&self.conn, depositor, delta).await?;
-        }
-        Ok(())
-    }
-
-    /// Rebuild the footprint cache from live state — ONCE, on first build (DB upgrade
-    /// to the cache, or first boot). Gated on a `node_meta` marker: block writes and
-    /// reorgs both maintain the cache atomically (the reorg via
-    /// [`Self::rollback_with_footprint`]), so once built it stays coherent and a clean
-    /// restart skips the O(live-rows) rebuild. One grouped `SUM` pass, not a loop.
-    pub async fn footprint_reconstruct(&self) -> Result<()> {
-        if get_meta_u64(&self.conn, FOOTPRINT_BUILT_KEY, 0).await? == 1 {
-            return Ok(());
-        }
-        footprint_rebuild_all(&self.conn).await?;
-        set_meta_u64(&self.conn, FOOTPRINT_BUILT_KEY, 1).await?;
-        Ok(())
+    /// The eager per-depositor storage-deposit FLOOR cache (see [`FootprintCache`]).
+    pub fn footprint(&self) -> FootprintCache<'_> {
+        FootprintCache { conn: &self.conn }
     }
 
     /// Reorg rollback that keeps the off-checkpoint footprint cache coherent
@@ -211,17 +237,8 @@ impl Storage {
         let affected = depositors_affected_by_reorg(&self.conn, target_height).await?;
         rollback_to_height(&self.conn, target_height).await?;
         for depositor in affected {
-            self.footprint_set_from_live(depositor).await?;
+            self.footprint().set_from_live(depositor).await?;
         }
-        Ok(())
-    }
-
-    /// Overwrite one depositor's cached total with a fresh `SUM(deposited_gas)` of
-    /// their live rows (one query — integer gas). Zero ⇒ delete the row.
-    async fn footprint_set_from_live(&self, depositor: u64) -> Result<()> {
-        let total = live_deposit_gas_sum(&self.conn, depositor).await?;
-        let stored = (total != 0).then_some(total);
-        footprint_cache_set(&self.conn, depositor, stored).await?;
         Ok(())
     }
 
@@ -270,14 +287,14 @@ impl Storage {
         Ok(matching_path(&self.conn, contract_id, base_path, candidates).await?)
     }
 
-    /// Read half of the intra-block variant hard-delete: the `DepositRow`s it will
+    /// Read half of the intra-block variant hard-delete: the `LiveRow`s it will
     /// remove, so the host can meter `Fuel::Delete` before the writes.
     pub async fn find_matching_paths(
         &self,
         contract_id: u64,
         base_path: &[u8],
         candidates: &[Vec<u8>],
-    ) -> Result<Vec<DepositRow>> {
+    ) -> Result<Vec<LiveRow>> {
         Ok(
             find_matching_paths(&self.conn, contract_id, self.height, base_path, candidates)
                 .await?,

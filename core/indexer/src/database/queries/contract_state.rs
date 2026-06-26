@@ -414,7 +414,7 @@ pub async fn get_latest_contract_state_value(
 /// gigabytes (and freeing a row needs no per-row deposit bookkeeping under the
 /// floor model — it just drops from its setter's footprint sum).
 #[derive(Debug, Clone)]
-pub struct DepositRow {
+pub struct LiveRow {
     pub path: Vec<u8>,
     pub size: u64,
     /// The setter that collateralizes this row (for the eager footprint cache: a
@@ -473,7 +473,7 @@ pub async fn find_live_subtree(
     conn: &Connection,
     contract_id: u64,
     path: &[u8],
-) -> Result<Vec<DepositRow>, Error> {
+) -> Result<Vec<LiveRow>, Error> {
     let (range, mut params) = subtree_range(">=", path);
     params.push((
         ":contract_id".to_string(),
@@ -486,16 +486,16 @@ pub async fn find_live_subtree(
     let mut result = conn.query(&query, params).await?;
     let mut rows = Vec::new();
     while let Some(row) = result.next().await? {
-        rows.push(deposit_row_from(&row)?);
+        rows.push(live_row_from(&row)?);
     }
     Ok(rows)
 }
 
-/// A `DepositRow` from a `(path, size, depositor, deposited_gas)` projection —
+/// A `LiveRow` from a `(path, size, depositor, deposited_gas)` projection —
 /// shared by the two delete read-halves so the footprint cache can subtract a freed
 /// row's deposit from its setter.
-fn deposit_row_from(row: &libsql::Row) -> Result<DepositRow, Error> {
-    Ok(DepositRow {
+fn live_row_from(row: &libsql::Row) -> Result<LiveRow, Error> {
+    Ok(LiveRow {
         path: row.get::<Vec<u8>>(0)?,
         size: row.get::<u64>(1)?,
         depositor: row.get::<Option<u64>>(2)?,
@@ -514,7 +514,7 @@ pub async fn tombstone_rows(
     contract_id: u64,
     height: u64,
     tx_id: Option<u64>,
-    rows: &[DepositRow],
+    rows: &[LiveRow],
 ) -> Result<(bool, u64), Error> {
     let removed = !rows.is_empty();
     let freed: u64 = rows.iter().map(|r| r.path.len() as u64 + r.size).sum();
@@ -740,7 +740,7 @@ fn matching_paths_clause(
 }
 
 /// Read half of the intra-block variant hard-delete: the rows it WOULD remove, as
-/// `DepositRow`s (path + size). Split from the delete so the host can meter
+/// `LiveRow`s (path + size). Split from the delete so the host can meter
 /// `Fuel::Delete` BEFORE the writes, exactly like [`find_live_subtree`]. (Freeing a
 /// row needs no per-row bookkeeping under the floor model — it just drops from its
 /// setter's footprint sum.)
@@ -750,7 +750,7 @@ pub async fn find_matching_paths(
     height: u64,
     base_path: &[u8],
     candidates: &[Vec<u8>],
-) -> Result<Vec<DepositRow>, Error> {
+) -> Result<Vec<LiveRow>, Error> {
     let mut rows = Vec::new();
     for candidate in candidates {
         let (where_clause, params) = matching_paths_clause(contract_id, height, base_path, candidate);
@@ -764,7 +764,7 @@ pub async fn find_matching_paths(
             )
             .await?;
         while let Some(row) = result.next().await? {
-            rows.push(deposit_row_from(&row)?);
+            rows.push(live_row_from(&row)?);
         }
     }
     Ok(rows)

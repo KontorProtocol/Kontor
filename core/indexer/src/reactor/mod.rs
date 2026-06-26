@@ -485,7 +485,7 @@ impl<E: Executor> Reactor<E> {
         // covers a DB upgraded to the cache and the rare crash-mid-reorg staleness
         // window. Bounded by live deposited rows. (Perf follow-up: gate on a
         // node_meta marker so a clean restart skips it.)
-        self.runtime.storage.footprint_reconstruct().await?;
+        self.runtime.storage.footprint().reconstruct().await?;
 
         let result = self.run_event_loop().await;
 

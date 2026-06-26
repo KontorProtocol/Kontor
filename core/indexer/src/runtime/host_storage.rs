@@ -156,7 +156,7 @@ impl Runtime {
         Fuel::Delete(rows.len() as u64, bytes)
             .consume(accessor, self.gauge.as_ref())
             .await?;
-        self.storage.footprint_on_free(&rows).await?;
+        self.storage.footprint().on_free(&rows).await?;
         self.storage
             .hard_delete_matching_paths(contract_id, &base_path, &candidates)
             .await
@@ -183,7 +183,7 @@ impl Runtime {
         Fuel::Delete(rows.len() as u64, bytes)
             .consume(accessor, self.gauge.as_ref())
             .await?;
-        self.storage.footprint_on_free(&rows).await?;
+        self.storage.footprint().on_free(&rows).await?;
         let (removed, _freed) = self.storage.tombstone_rows(contract_id, &rows).await?;
         Ok(removed)
     }
@@ -249,7 +249,8 @@ impl Runtime {
         // affect a floor, and this avoids a displaced-row read on the hottest write.
         if !exempt {
             self.storage
-                .footprint_on_set(contract_id, &path, depositor, deposited_gas)
+                .footprint()
+                .on_set(contract_id, &path, depositor, deposited_gas)
                 .await?;
         }
         self.storage
