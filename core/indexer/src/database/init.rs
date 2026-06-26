@@ -40,6 +40,15 @@ pub async fn initialize_database(data_dir: &Path, conn: &libsql::Connection) -> 
     conn.execute(CREATE_CONTRACT_STATE_TRIGGER, ()).await?;
     conn.query("PRAGMA journal_mode = WAL;", ()).await?;
     conn.query("PRAGMA synchronous = NORMAL;", ()).await?;
+    // Wait-and-retry (up to 5s) on lock contention instead of failing instantly with
+    // "database is locked" (SQLITE_BUSY). WAL keeps readers and the single writer
+    // concurrent, but a WAL checkpoint or a concurrent prune/vacuum write can still take
+    // a transient lock; without a busy_timeout the loser errors immediately, and the
+    // reactor treats a failed block-decision insert as FATAL and exits the node — the
+    // root cause of the flaky cluster-test node deaths (and a crash risk for a loaded
+    // production node). Per-connection (this runs for every `new_connection`). 5s sits
+    // under the consensus propose timeout, so a stalled write can't outlast a round.
+    conn.query("PRAGMA busy_timeout = 5000;", ()).await?;
     conn.load_extension_enable()?;
     for (name, bytes) in [("crypto", CRYPTO_LIB)] {
         let p = data_dir.join(format!("{}.{}", name, LIB_FILE_EXT));
