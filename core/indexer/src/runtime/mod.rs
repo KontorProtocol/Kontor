@@ -198,7 +198,7 @@ impl Eq for RawFileDescriptor {}
 
 /// The two host capability surfaces over a single `Runtime`. `user` registers
 /// only the common built-ins; `native` additionally registers the privileged
-/// registries (`file-registry`, `system`). Both share the same `Runtime`
+/// interfaces (`file-registry`, `system`, `deposit`). Both share the same `Runtime`
 /// host state — they differ only in which interfaces a component can import.
 /// `prepare_call` selects one per contract by native contract id.
 #[derive(Clone)]
@@ -266,6 +266,7 @@ impl Runtime {
     fn register_native(linker: &mut Linker<Self>) -> Result<()> {
         kontor::built_in::file_registry::add_to_linker::<_, Self>(linker, |s| s)?;
         kontor::built_in::system::add_to_linker::<_, Self>(linker, |s| s)?;
+        kontor::built_in::deposit::add_to_linker::<_, Self>(linker, |s| s)?;
         Ok(())
     }
 
@@ -900,6 +901,23 @@ mod tests {
         assert!(
             runtime.linkers.user.instantiate_pre(&component).is_err(),
             "user linker must reject a component importing native-only file-registry"
+        );
+
+        // The token (native id 1) imports the native-only `deposit` interface (for
+        // `storage-floor`), so it too is native-linker-only — a user contract cannot
+        // reach `storage-floor` directly; it must call the token's `floor` view.
+        let token = runtime
+            .load_component(1)
+            .await
+            .expect("load token component");
+        runtime
+            .linkers
+            .native
+            .instantiate_pre(&token)
+            .expect("native linker must satisfy the token's deposit import");
+        assert!(
+            runtime.linkers.user.instantiate_pre(&token).is_err(),
+            "user linker must reject the token: it imports native-only `deposit`"
         );
     }
 

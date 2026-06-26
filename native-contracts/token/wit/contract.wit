@@ -1,7 +1,7 @@
 package root:component;
 
 world root {
-  include kontor:built-in/built-in;
+  include kontor:built-in/built-in-native;
   use kontor:built-in/context.{core-context, view-context, proc-context, signer, holder-ref, contract};
   use kontor:built-in/error.{error};
   use kontor:built-in/numbers.{decimal};
@@ -43,6 +43,11 @@ world root {
   export burn: async func(ctx: borrow<proc-context>, amt: decimal) -> result<burn, error>;
   export transfer: async func(ctx: borrow<proc-context>, dst: holder-ref, amt: decimal) -> result<transfer, error>;
   export balance: async func(ctx: borrow<view-context>, acc: holder-ref) -> option<decimal>;
+  // A holder's storage-deposit FLOOR (footprint × D), token-denominated. Thin view over
+  // the native-only `deposit.storage-floor` host fn, so non-native contracts (which can't
+  // import that host fn) read a floor by calling this view cross-contract. 0 for holders
+  // with no deposited rows.
+  export floor: async func(ctx: borrow<view-context>, acc: holder-ref) -> decimal;
   export balances: async func(ctx: borrow<view-context>) -> list<balance>;
   export total-supply: async func(ctx: borrow<view-context>) -> decimal;
   export dev-mint-enabled: async func(ctx: borrow<view-context>) -> bool;

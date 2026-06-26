@@ -2,15 +2,6 @@ package kontor:built-in;
 
 interface context {
     use error.{error};
-    use numbers.{decimal};
-
-    /// The storage-deposit FLOOR a holder must keep below their token balance: the
-    /// sum of the per-row deposits they currently collateralize across ALL contracts
-    /// (host-only — derived from the per-row `depositor` columns, which no contract
-    /// can scan cross-contract). The token consults this on every debit to enforce
-    /// `balance - floor >= amount` (footprint x D locked as a spendable reserve).
-    /// Returns 0 for non-signer holders (core/burner/utxo).
-    storage-floor: async func(holder: holder-ref) -> decimal;
 
     /// Freely-constructible record naming a contract — used as the
     /// target for cross-contract calls (`foreign.call`). The passive

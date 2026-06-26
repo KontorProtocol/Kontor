@@ -342,12 +342,15 @@ impl built_in::file_registry::HostProofWithStore for Runtime {
     }
 }
 
-impl built_in::context::HostWithStore for Runtime {
+impl built_in::deposit::Host for Runtime {}
+
+impl built_in::deposit::HostWithStore for Runtime {
     /// The storage-deposit floor for `holder` = the sum of their FROZEN per-row
     /// deposits (integer `deposited_gas`) live across all contracts, priced to token
     /// here (× gas→token). The token consults this on every debit to enforce
     /// `balance - floor >= amount`. Non-signer holders (core/burner/utxo) and
-    /// unresolved pubkeys own no deposited rows → 0.
+    /// unresolved pubkeys own no deposited rows → 0. NATIVE-ONLY (registered into the
+    /// native linker): user contracts read a floor via the token's `floor` view.
     async fn storage_floor<T>(accessor: &Accessor<T, Self>, holder: HolderRef) -> Result<Decimal> {
         let runtime = accessor.with(|mut access| access.get().clone());
         let signer_id = match holder {

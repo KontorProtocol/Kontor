@@ -194,3 +194,36 @@ async fn test_floor_blocks_overcommitted_spend() -> Result<()> {
 
     Ok(())
 }
+
+/// The `token.floor` view exposes a holder's storage-deposit floor — the public,
+/// cross-contract-callable surface over the native-only `deposit.storage-floor` host
+/// fn. A holder with no deposited rows reads 0; after a keyed write the floor is
+/// positive (the same value the debit check reads). Proves the native token mediates
+/// floor reads now that the host fn is native-only.
+#[testlib::test(contracts_dir = "../../test-contracts")]
+async fn test_token_floor_view_reports_deposit() -> Result<()> {
+    let admin = runtime.identity().await?;
+    let alice = runtime.identity().await?;
+    let alice_ref: HolderRef = (&alice).into();
+    let contract = runtime.publish(&admin, "counter").await?;
+
+    let zero = Decimal::from("0");
+    assert_eq!(
+        token::floor(runtime, alice_ref.clone()).await?,
+        zero,
+        "a holder with no deposited rows must read floor 0"
+    );
+
+    // alice writes a keyed entry (depositor = alice) → her floor becomes positive.
+    let mut submit = runtime.submit();
+    submit.push(&alice, counter::set_entry_call(&contract, "k", "v"));
+    submit.execute().await?;
+
+    let floor = token::floor(runtime, alice_ref.clone()).await?;
+    assert!(
+        floor > zero,
+        "floor must be positive after a deposited write, got {floor}"
+    );
+
+    Ok(())
+}

@@ -60,7 +60,7 @@ fn transfer(ctx: &ProcContext, src: Holder, dst: Holder, amt: Decimal) -> Result
     // debit too, so this also up-front-authorizes an op's storage growth. The host
     // returns 0 for non-signer/system holders (core/burner/utxo).
     let remaining = src_amt.sub(amt)?;
-    if remaining < context::storage_floor(&src.as_ref()) {
+    if remaining < deposit::storage_floor(&src.as_ref()) {
         return Err(Error::Message("storage deposit floor exceeded".to_string()));
     }
 
@@ -189,6 +189,14 @@ impl Guest for Token {
     fn balance(ctx: &ViewContext, acc: HolderRef) -> Option<Decimal> {
         let holder: Holder = acc.try_into().ok()?;
         ctx.model().ledger().get(&holder)
+    }
+
+    /// A holder's storage-deposit floor (footprint × D), token-denominated. Public,
+    /// cross-contract-callable surface over the native-only `deposit.storage-floor`
+    /// host fn — the same value the debit check enforces. 0 for holders with no
+    /// deposited rows. `ctx` is unused (the floor is host-global, not contract state).
+    fn floor(_ctx: &ViewContext, acc: HolderRef) -> Decimal {
+        deposit::storage_floor(&acc)
     }
 
     fn balances(ctx: &ViewContext) -> Vec<Balance> {

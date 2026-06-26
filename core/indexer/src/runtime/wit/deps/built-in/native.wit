@@ -73,8 +73,25 @@ interface system {
     update-provenance: async func();
 }
 
+interface deposit {
+    use context.{holder-ref};
+    use numbers.{decimal};
+
+    /// The storage-deposit FLOOR a holder must keep below their token balance: the
+    /// sum of the per-row deposits they currently collateralize across ALL contracts
+    /// (host-only — derived from the per-row `depositor` columns, which no contract
+    /// can scan cross-contract). NATIVE-ONLY: it is the one host built-in that reads a
+    /// cross-contract aggregate, so it is confined to the native linker. User contracts
+    /// that need a holder's floor call the native token contract's `floor` view instead.
+    /// The token consults this on every debit to enforce `balance - floor >= amount`
+    /// (footprint x D locked as a spendable reserve). Returns 0 for non-signer holders
+    /// (core/burner/utxo).
+    storage-floor: async func(holder: holder-ref) -> decimal;
+}
+
 world built-in-native {
     include built-in;
     import file-registry;
     import system;
+    import deposit;
 }

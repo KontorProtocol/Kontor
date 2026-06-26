@@ -5,8 +5,9 @@ const WIT: &str = r#"package root:component;
 
 world root {
   import kontor:built-in/error;
-  import kontor:built-in/numbers;
   import kontor:built-in/context;
+  import kontor:built-in/numbers;
+  import kontor:built-in/deposit;
   use kontor:built-in/context.{view-context, proc-context, signer, holder-ref, contract};
   use kontor:built-in/error.{error};
   use kontor:built-in/numbers.{decimal};
@@ -36,6 +37,7 @@ world root {
   export burn: async func(ctx: borrow<proc-context>, amt: decimal) -> result<burn, error>;
   export transfer: async func(ctx: borrow<proc-context>, dst: holder-ref, amt: decimal) -> result<transfer, error>;
   export balance: async func(ctx: borrow<view-context>, acc: holder-ref) -> option<decimal>;
+  export floor: async func(ctx: borrow<view-context>, acc: holder-ref) -> decimal;
   export balances: async func(ctx: borrow<view-context>) -> list<balance>;
   export total-supply: async func(ctx: borrow<view-context>) -> decimal;
   export dev-mint-enabled: async func(ctx: borrow<view-context>) -> bool;
