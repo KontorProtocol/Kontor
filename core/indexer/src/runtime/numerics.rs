@@ -268,16 +268,6 @@ pub fn log10_decimal(a: Decimal) -> Result<Decimal, Error> {
         .map_err(Into::into)
 }
 
-pub fn sqrt_decimal(a: Decimal) -> Result<Decimal, Error> {
-    core_numerics::sqrt_decimal(a.into())
-        .map(Into::into)
-        .map_err(Into::into)
-}
-
-pub fn trunc_decimal(a: Decimal) -> Decimal {
-    core_numerics::trunc_decimal(a.into()).into()
-}
-
 #[cfg(test)]
 mod tests {
     use std::panic::catch_unwind;

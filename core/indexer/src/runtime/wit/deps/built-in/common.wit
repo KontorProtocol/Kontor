@@ -277,8 +277,6 @@ interface numbers {
     mul-decimal: async func(a: decimal, b: decimal) -> result<decimal, error>;
     div-decimal: async func(a: decimal, b: decimal) -> result<decimal, error>;
     log10-decimal: async func(a: decimal) -> result<decimal, error>;
-    sqrt-decimal: async func(a: decimal) -> result<decimal, error>;
-    trunc-decimal: async func(a: decimal) -> decimal;
 }
 interface testing {
     /// Always returns an error. Used to test host function error propagation.
