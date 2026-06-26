@@ -850,4 +850,86 @@ mod tests {
         assert_eq!(storage.footprint().total_gas(alice).await?, 10);
         Ok(())
     }
+
+    // Answers the design doc's explicit open question ("footprint tally cost — the thing
+    // we are choosing to measure"): is the eager `depositor_footprint` cache worth its
+    // complexity vs. summing live rows fresh each debit? The floor is read on EVERY token
+    // debit (every transfer/hold/burn, and the gas `hold` runs on every op), so this is
+    // the consensus hot path. `live_deposit_gas_sum` is O(N) in a depositor's live-row
+    // count (scan + per-row NOT-EXISTS liveness probe); the cache is an O(1) point read.
+    //
+    // Measured (release, in-process; absolute µs vary by host, the SHAPE is the point):
+    //   N        fresh    cache   speedup
+    //   1        7.0µs    2.1µs    3.4x
+    //   10       8.7µs    2.0µs    4.3x
+    //   100      29.6µs   2.0µs    14.5x
+    //   1,000    291µs    2.0µs    142x
+    //   10,000   3,188µs  2.1µs    1,521x
+    //
+    // N (rows a holder is the depositor of) is small for light users but reaches
+    // thousands for heavy users of indexed storage — Kontor's TARGET workload. At those
+    // counts the fresh sum is a per-debit multi-ms scan on every validator, unmetered
+    // relative to N (a transfer's gas doesn't scale with the debited holder's footprint),
+    // i.e. a gas-asymmetric DoS. The O(1) cache closes it. This is why the cache exists.
+    #[tokio::test]
+    #[ignore = "perf benchmark, not a correctness assertion; run explicitly with --nocapture"]
+    async fn bench_floor_read_fresh_vs_cache() -> Result<()> {
+        use std::time::Instant;
+
+        let (_reader, writer, _temp) = new_test_db().await?;
+        let conn = writer.connection();
+        for h in 1..=2u64 {
+            insert_block(
+                &conn,
+                BlockRow::builder()
+                    .height(h)
+                    .hash(new_mock_block_hash(h as u32))
+                    .build(),
+            )
+            .await?;
+        }
+        let alice = create_contract_signer(&conn, 1).await?;
+        let storage = Storage::builder().height(1).conn(conn.clone()).build();
+
+        let iters = 200u32;
+        println!("\nN\tfresh_us\tcache_us\tspeedup");
+        let mut inserted = 0usize;
+        for n in [1usize, 10, 100, 1_000, 10_000] {
+            while inserted < n {
+                let path = format!("k{inserted}").into_bytes();
+                storage
+                    .footprint()
+                    .on_set(1, &path, Some(alice), Some(7))
+                    .await?;
+                storage.set(1, &path, b"v", Some(alice), Some(7)).await?;
+                inserted += 1;
+            }
+            // Cache must equal the fresh truth — keeps the benchmark honest.
+            assert_eq!(
+                live_deposit_gas_sum(&conn, alice).await?,
+                footprint_cache_get(&conn, alice).await?.unwrap_or(0),
+                "cache must equal fresh sum at N={n}"
+            );
+
+            for _ in 0..10 {
+                live_deposit_gas_sum(&conn, alice).await?;
+                footprint_cache_get(&conn, alice).await?;
+            }
+            let t = Instant::now();
+            for _ in 0..iters {
+                live_deposit_gas_sum(&conn, alice).await?;
+            }
+            let fresh_us = t.elapsed().as_secs_f64() * 1e6 / iters as f64;
+            let t = Instant::now();
+            for _ in 0..iters {
+                footprint_cache_get(&conn, alice).await?;
+            }
+            let cache_us = t.elapsed().as_secs_f64() * 1e6 / iters as f64;
+            println!(
+                "{n}\t{fresh_us:.1}\t\t{cache_us:.1}\t\t{:.0}x",
+                fresh_us / cache_us
+            );
+        }
+        Ok(())
+    }
 }
