@@ -69,7 +69,7 @@ impl Guest for SharedAccount {
                 other_tenants: Map::new(&tenant_holders),
             },
         );
-        token::transfer(&token, signer, &ctx.contract_signer(), n.try_into()?)?;
+        token::transfer(&token, signer, ctx.contract_signer(), n.try_into()?)?;
         Ok(account_id)
     }
 
@@ -95,7 +95,7 @@ impl Guest for SharedAccount {
             return Err(unauthorized_error());
         }
         account.update_balance(|b| b + n);
-        token::transfer(&token, signer, &ctx.contract_signer(), n.try_into()?)?;
+        token::transfer(&token, signer, ctx.contract_signer(), n.try_into()?)?;
         Ok(())
     }
 
