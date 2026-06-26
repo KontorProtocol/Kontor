@@ -239,9 +239,10 @@ impl Storage {
     }
 
     async fn rollback_with_footprint_inner(&self, target_height: u64) -> Result<()> {
-        // `self.height` is the current tip (every write is stamped at it), so it bounds
-        // the band's upper end and lets the discovery range-seek `idx_contract_state_height`.
-        let affected = depositors_affected_by_reorg(&self.conn, target_height, self.height).await?;
+        // The band's upper bound (tip) is derived inside the query from the DB's own
+        // MAX(height), NOT `self.height` — the in-memory height is 0 until the first block
+        // executes, so a reorg right after startup would otherwise capture no depositors.
+        let affected = depositors_affected_by_reorg(&self.conn, target_height).await?;
         rollback_to_height(&self.conn, target_height).await?;
         self.footprint().recompute(&affected).await?;
         Ok(())
@@ -708,6 +709,60 @@ mod tests {
         check(&storage).await?;
         assert_eq!(storage.footprint().total_gas(alice).await?, 30); // a(10) + b(20) live again
         assert_eq!(storage.footprint().total_gas(bob).await?, 5); // only (2,"a")
+        Ok(())
+    }
+
+    // Regression: a reorg right after startup, before any block has advanced the
+    // in-memory tip. `Storage.height` is 0 (its builder default) until the first op
+    // runs, so deriving the band's upper bound from it would capture NO depositors and
+    // leave the cache stale. The tip must come from the DB's own MAX(height) instead.
+    #[tokio::test]
+    async fn rollback_recomputes_footprint_with_stale_in_memory_height() -> Result<()> {
+        use crate::database::queries::{create_contract_signer, live_deposit_gas_sum};
+
+        let (_reader, writer, _temp) = new_test_db().await?;
+        let conn = writer.connection();
+        for h in 1..=2u64 {
+            insert_block(
+                &conn,
+                BlockRow::builder()
+                    .height(h)
+                    .hash(new_mock_block_hash(h as u32))
+                    .build(),
+            )
+            .await?;
+        }
+        let alice = create_contract_signer(&conn, 1).await?;
+        let path = |k: &str| k.as_bytes().to_vec();
+        let mut storage = Storage::builder().height(1).conn(conn.clone()).build();
+        storage
+            .footprint()
+            .on_set(1, &path("a"), Some(alice), Some(10))
+            .await?;
+        storage
+            .set(1, &path("a"), b"v", Some(alice), Some(10))
+            .await?;
+        storage.height = 2;
+        storage
+            .footprint()
+            .on_set(1, &path("b"), Some(alice), Some(20))
+            .await?;
+        storage
+            .set(1, &path("b"), b"v", Some(alice), Some(20))
+            .await?;
+        assert_eq!(storage.footprint().total_gas(alice).await?, 30);
+
+        // Simulate a fresh process: the cache is correct (reconstructed) but the
+        // in-memory tip has not been advanced past its 0 default yet.
+        storage.height = 0;
+        storage.rollback_with_footprint(1).await?; // drops (1,"b")@h2
+
+        assert_eq!(
+            storage.footprint().total_gas(alice).await?,
+            live_deposit_gas_sum(&conn, alice).await?,
+            "reorg at stale in-memory height must still recompute the floor from live state"
+        );
+        assert_eq!(storage.footprint().total_gas(alice).await?, 10);
         Ok(())
     }
 }

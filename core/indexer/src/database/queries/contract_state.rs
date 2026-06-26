@@ -334,15 +334,28 @@ pub async fn footprint_rebuild_all(conn: &Connection) -> Result<(), Error> {
 /// Depositors whose floor a rollback to `target_height` could change. Driven from the
 /// ROLLED-BACK BAND — `target < height <= tip`, a CLOSED range so it range-seeks
 /// `idx_contract_state_height` (an open `height > target` makes the planner full-scan).
-/// `tip` is the current max `contract_state.height`; the band's paths are exactly those
-/// touched above the target, and a depositor is affected iff they hold any version of
-/// such a path (the rolled-back rows being deleted, plus the ≤target versions they
-/// displaced that now become live again). Bounded by the (shallow) reorg.
+/// `tip` is derived from the DB itself (`MAX(height)`, an O(1) index lookup), NOT from a
+/// caller-supplied height: an in-memory tip can lag the DB (e.g. `Storage.height` is 0 at
+/// startup, before the first block advances it), and an under-tip would silently drop the
+/// rolled-back depositors from the recompute, leaving the cache stale. The band's paths
+/// are exactly those touched above the target, and a depositor is affected iff they hold
+/// any version of such a path (the rolled-back rows being deleted, plus the ≤target
+/// versions they displaced that now become live again). Bounded by the (shallow) reorg.
 pub async fn depositors_affected_by_reorg(
     conn: &Connection,
     target_height: u64,
-    tip: u64,
 ) -> Result<Vec<u64>, Error> {
+    // MAX(height) over the covering `idx_contract_state_height`; NULL (empty table) → 0,
+    // which makes the band empty and the recompute a no-op.
+    let tip = match conn
+        .query("SELECT MAX(height) FROM contract_state", ())
+        .await?
+        .next()
+        .await?
+    {
+        Some(r) => r.get::<Option<u64>>(0)?.unwrap_or(0),
+        None => 0,
+    };
     let mut rows = conn
         .query(
             "SELECT DISTINCT cs.depositor FROM contract_state cs \
