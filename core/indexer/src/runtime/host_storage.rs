@@ -53,10 +53,15 @@ fn validate_path(path: &[u8]) -> Result<()> {
 }
 
 impl Runtime {
-    /// The storage-deposit rate (GAS per byte) charged to writes of `contract_id`.
-    /// Uniform today; this is the single seam to make `D` per-contract or
-    /// governance-set later — every charge site routes through it.
-    pub(crate) fn deposit_rate(&self, _contract_id: u64) -> u64 {
+    /// The storage-deposit rate (GAS per byte) charged to a write of `path` in
+    /// `contract_id`. Uniform today; this is the single seam every charge site routes
+    /// through, so `D` can become per-contract or governance-set later WITHOUT a
+    /// consensus migration (the rate is read at write time and frozen into the row's
+    /// `deposited_gas`, so an evolving D only affects future writes). The `path` is
+    /// already threaded so a future per-FIELD / per-INDEX rate — e.g. pricing a hot
+    /// covering-index leaf higher than a cold scalar — needs no further signature
+    /// change, just a body that inspects the path's index/field prefix.
+    pub(crate) fn deposit_rate(&self, _contract_id: u64, _path: &[u8]) -> u64 {
         DEFAULT_DEPOSIT_GAS_PER_BYTE
     }
 
@@ -227,7 +232,7 @@ impl Runtime {
         // `deposited_gas` records the deposit (integer gas) for the footprint cache;
         // the token value is derived (× gas→token) only at the floor read.
         let deposited_gas = if depositor.is_some() {
-            let deposit_gas = (path.len() + bs.len()) as u64 * self.deposit_rate(contract_id);
+            let deposit_gas = (path.len() + bs.len()) as u64 * self.deposit_rate(contract_id, &path);
             Fuel::Deposit(deposit_gas * self.gas_to_fuel_multiplier)
                 .consume(accessor, self.gauge.as_ref())
                 .await

@@ -627,4 +627,83 @@ mod tests {
         assert_eq!(wm.next().await?.unwrap().get::<i64>(0)?, 3);
         Ok(())
     }
+
+    // THE cache invariant: `depositor_footprint.total_gas` must exactly equal
+    // `live_deposit_gas_sum` for every depositor after EVERY mutation — the cache is
+    // only correct because every write path calls on_set/on_free. This drives a
+    // sequence of write / overwrite / cross-contract / delete / REORG through those
+    // hooks and asserts the cached floor never drifts from the freshly-summed truth
+    // (the regression guard against a future write path forgetting to maintain it).
+    #[tokio::test]
+    async fn footprint_cache_never_drifts_from_live_sum() -> Result<()> {
+        use crate::database::queries::{create_contract_signer, live_deposit_gas_sum};
+
+        let (_reader, writer, _temp) = new_test_db().await?;
+        let conn = writer.connection();
+        for h in 1..=6u64 {
+            insert_block(
+                &conn,
+                BlockRow::builder()
+                    .height(h)
+                    .hash(new_mock_block_hash(h as u32))
+                    .build(),
+            )
+            .await?;
+        }
+        let alice = create_contract_signer(&conn, 1).await?;
+        let bob = create_contract_signer(&conn, 1).await?;
+        let mut storage = Storage::builder().height(1).conn(conn.clone()).build();
+
+        let path = |k: &str| k.as_bytes().to_vec();
+        // cache == fresh sum for both depositors, asserted after every step.
+        let check = async |storage: &Storage| -> Result<()> {
+            for d in [alice, bob] {
+                let cached = storage.footprint().total_gas(d).await?;
+                let truth = live_deposit_gas_sum(&conn, d).await?;
+                assert_eq!(cached, truth, "cache drifted from live sum for depositor {d}");
+            }
+            Ok(())
+        };
+        // mirror _set_primitive: maintain the cache (on_set reads the displaced row)
+        // BEFORE writing the new version.
+        let write = async |storage: &Storage, cid: u64, k: &str, d: u64, gas: u64| -> Result<()> {
+            storage
+                .footprint()
+                .on_set(cid, &path(k), Some(d), Some(gas))
+                .await?;
+            storage.set(cid, &path(k), b"v", Some(d), Some(gas)).await?;
+            Ok(())
+        };
+
+        // h1: fresh create.
+        write(&storage, 1, "a", alice, 10).await?;
+        check(&storage).await?;
+        // h2: alice grows in the same contract + a second contract.
+        storage.height = 2;
+        write(&storage, 1, "b", alice, 20).await?;
+        write(&storage, 2, "a", bob, 5).await?; // cross-contract, different depositor
+        check(&storage).await?;
+        // h3: bob OVERWRITES alice's (1,"a") — obligation moves alice→bob.
+        storage.height = 3;
+        write(&storage, 1, "a", bob, 8).await?;
+        check(&storage).await?;
+        assert_eq!(storage.footprint().total_gas(alice).await?, 20); // 30 − 10
+        assert_eq!(storage.footprint().total_gas(bob).await?, 13); // 5 + 8
+        // h4: delete alice's (1,"b") — her floor relaxes.
+        storage.height = 4;
+        let rows = storage.find_live_subtree(1, &path("b")).await?;
+        storage.footprint().on_free(&rows).await?;
+        storage.tombstone_rows(1, &rows).await?;
+        check(&storage).await?;
+        assert_eq!(storage.footprint().total_gas(alice).await?, 0);
+
+        // REORG to height 2: the h3 overwrite + h4 delete vanish via the cascade;
+        // alice's (1,"a")@h1 and (1,"b")@h2 become live again. The reorg path must
+        // recompute the affected depositors back to truth — with NO drift.
+        storage.rollback_with_footprint(2).await?;
+        check(&storage).await?;
+        assert_eq!(storage.footprint().total_gas(alice).await?, 30); // a(10) + b(20) live again
+        assert_eq!(storage.footprint().total_gas(bob).await?, 5); // only (2,"a")
+        Ok(())
+    }
 }

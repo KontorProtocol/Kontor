@@ -46,6 +46,7 @@ import type {
   ComposeOutputs,
   ContractProvenanceResponse,
   ErrorResponse,
+  FootprintResponse,
   OpWithResult,
   ResultResponse,
   Reveal,
@@ -182,6 +183,34 @@ export class HttpTransport implements KontorTransport {
       });
     }
     return (JSON.parse(text) as ResultResponse<SignerResponse>).result;
+  }
+
+  async signerFootprint(identifier: string): Promise<FootprintResponse | null> {
+    const url = `${this.baseUrl}/signers/${identifier}/footprint`;
+    let res: Response;
+    try {
+      res = await this.fetchImpl(url);
+    } catch (cause) {
+      throw new TransportError(`GET ${url} failed`, {
+        cause: cause instanceof Error ? cause : undefined,
+        docsPath: "/sdk/transport",
+      });
+    }
+    if (res.status === 404) return null;
+    const text = await res.text();
+    if (!res.ok) {
+      let detail = text;
+      try {
+        detail = (JSON.parse(text) as ErrorResponse).error ?? text;
+      } catch {
+        /* not JSON */
+      }
+      throw new TransportError(`GET ${url} returned HTTP ${res.status}`, {
+        details: detail,
+        docsPath: "/sdk/transport",
+      });
+    }
+    return (JSON.parse(text) as ResultResponse<FootprintResponse>).result;
   }
 
   async provenance(contract: ContractAddress): Promise<ProvenanceEntry[]> {

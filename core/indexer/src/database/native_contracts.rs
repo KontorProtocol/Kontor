@@ -67,3 +67,27 @@ pub const TOKEN_CONTRACT_ID: u64 = native_contract_id(b"token");
 pub fn is_deposit_exempt(contract_id: u64) -> bool {
     contract_id == TOKEN_CONTRACT_ID
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // The deposit exemption is consensus-relevant (exempt rows carry no depositor and
+    // never owe a deposit). Pin it: ONLY the token is exempt, its id is derived from
+    // the slice (not a hardcoded 1), and every other native contract pays deposits.
+    #[test]
+    fn only_the_token_is_deposit_exempt() {
+        assert_eq!(TOKEN_CONTRACT_ID, native_contract_id(b"token"));
+        assert!(is_deposit_exempt(TOKEN_CONTRACT_ID));
+        for (name, _) in NATIVE_CONTRACTS {
+            let id = native_contract_id(name.as_bytes());
+            assert_eq!(
+                is_deposit_exempt(id),
+                *name == "token",
+                "only `token` may be deposit-exempt; `{name}` (id {id}) must not be",
+            );
+        }
+        // A user contract id (above the native range) is never exempt.
+        assert!(!is_deposit_exempt(NATIVE_CONTRACTS.len() as u64 + 1));
+    }
+}

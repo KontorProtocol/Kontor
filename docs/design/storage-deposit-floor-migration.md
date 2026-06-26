@@ -7,6 +7,36 @@ deposit (R2). The body below "(SUPERSEDED) settle-time floor check" describes th
 first cut; R1/R2 are what's actually built and tested (338 lib + integration in
 both local and regtest modes).
 
+## AS-BUILT NOTE (supersedes parts of the body below)
+
+The migration continued past R1/R2 on `feat/storage-deposit-rebased`:
+- **Integer gas, not token decimals.** The per-row deposit is stored as integer
+  `deposited_gas` (column on `contract_state`, in the checkpoint), priced to token
+  (`× gas_to_token`) only at the read. The floor is therefore exact-integer
+  arithmetic end to end.
+- **An O(1) floor read (the "R-cache").** `context::storage-floor` reads an
+  off-checkpoint `depositor_footprint(depositor, total_gas)` cache, maintained
+  incrementally on every write/delete and recomputed per-affected-depositor on
+  reorg — instead of summing the depositor's live rows each debit.
+
+### What "dynamic D" means (and doesn't)
+
+`D` is read at write time via `Runtime::deposit_rate(contract_id, path)` and
+**frozen** into the row's `deposited_gas`. Consequences for future tuning:
+
+- **Prospective, per-contract (and per-field) — no consensus migration.** Changing
+  `D` (e.g. a governance-set or per-contract rate) only affects FUTURE writes; the
+  rate is never re-derived for existing rows. The `path` argument is already on the
+  seam, so a per-FIELD / per-INDEX rate — e.g. pricing a hot covering-index leaf
+  higher than a cold scalar — needs only a `deposit_rate` body that inspects the
+  path prefix, no signature or format change. (This is the seam the covering-index
+  work will use.)
+- **Retroactive re-pricing is NOT a per-contract lever.** Because deposits are
+  frozen per row, you cannot raise `D` and have it bite existing rows. The only
+  retroactive knob is the GLOBAL `gas_to_token_multiplier`, which re-prices every
+  holder's floor at once. Firming up collateral on existing state otherwise
+  requires those rows to be rewritten.
+
 ---
 ## Refinements (R1 + R2 — IMPLEMENTED 2026-06-22 — READ FIRST)
 

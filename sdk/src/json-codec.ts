@@ -42,6 +42,7 @@ import type { ProvenanceEntry } from "./provenance.js";
 import type { ExtraOutput } from "./outputs.js";
 import type {
   ComposeOutputs,
+  FootprintResponse,
   Inst as WireInst,
   Insts as WireInsts,
   OpStatus,
@@ -128,6 +129,14 @@ export interface KontorTransport {
    * flow to source the contributor's current `next_nonce`.
    */
   signer(identifier: string): Promise<SignerResponse | null>;
+
+  /**
+   * A signer's storage-deposit footprint — the token deposit they collateralize
+   * (their floor) and how many live bytes they're responsible for, broken down by
+   * contract. `identifier` is the same shape as `signer()`. `null` if no such
+   * signer; an existing signer with no deposited storage returns zeroed totals.
+   */
+  signerFootprint(identifier: string): Promise<FootprintResponse | null>;
 
   /**
    * A contract's append-only build-provenance log, oldest first (the last
