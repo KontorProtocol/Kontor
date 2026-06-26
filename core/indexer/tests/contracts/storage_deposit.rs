@@ -27,7 +27,7 @@ async fn test_delete_moves_no_token() -> Result<()> {
     let mut submit = runtime.submit();
     submit.push(
         &alice,
-        counter::set_entry_call(&contract, &"k".to_string(), &"v".to_string()),
+        counter::set_entry_call(&contract, "k", "v"),
     );
     submit.execute().await?;
 
