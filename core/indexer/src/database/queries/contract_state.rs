@@ -292,7 +292,11 @@ pub async fn footprint_cache_set(
 /// write-path maintenance. One `total_gas = total_gas + :delta` UPSERT, no
 /// read-modify-write. The zero-pruning `DELETE` runs ONLY on a decrease (a positive
 /// delta can never reach zero), so the common add path stays a single statement.
-pub async fn footprint_cache_add(conn: &Connection, depositor: u64, delta: i64) -> Result<(), Error> {
+pub async fn footprint_cache_add(
+    conn: &Connection,
+    depositor: u64,
+    delta: i64,
+) -> Result<(), Error> {
     conn.execute(
         "INSERT INTO depositor_footprint (depositor, total_gas) VALUES (:d, :delta) \
          ON CONFLICT(depositor) DO UPDATE SET total_gas = total_gas + :delta",
@@ -771,7 +775,8 @@ pub async fn find_matching_paths(
 ) -> Result<Vec<LiveRow>, Error> {
     let mut rows = Vec::new();
     for candidate in candidates {
-        let (where_clause, params) = matching_paths_clause(contract_id, height, base_path, candidate);
+        let (where_clause, params) =
+            matching_paths_clause(contract_id, height, base_path, candidate);
         let mut result = conn
             .query(
                 &format!(
@@ -801,7 +806,8 @@ pub async fn hard_delete_matching_paths(
 ) -> Result<u64, Error> {
     let mut deleted = 0u64;
     for candidate in candidates {
-        let (where_clause, params) = matching_paths_clause(contract_id, height, base_path, candidate);
+        let (where_clause, params) =
+            matching_paths_clause(contract_id, height, base_path, candidate);
         deleted += conn
             .execute(
                 &format!("DELETE FROM contract_state WHERE {where_clause}"),

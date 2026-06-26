@@ -61,9 +61,7 @@ fn transfer(ctx: &ProcContext, src: Holder, dst: Holder, amt: Decimal) -> Result
     // returns 0 for non-signer/system holders (core/burner/utxo).
     let remaining = src_amt.sub(amt)?;
     if remaining < context::storage_floor(&src.as_ref()) {
-        return Err(Error::Message(
-            "storage deposit floor exceeded".to_string(),
-        ));
+        return Err(Error::Message("storage deposit floor exceeded".to_string()));
     }
 
     ledger.set(&src, remaining);

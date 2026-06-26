@@ -22,7 +22,10 @@ fn calculate_row_hash(state: &ContractStateRow) -> String {
     // field's charset) so the digest is unambiguous. A NULL depositor renders as
     // empty (SQLite `concat` treats NULL as '').
     let depositor_part = state.depositor.map(|d| d.to_string()).unwrap_or_default();
-    let amount_part = state.deposited_gas.map(|g| g.to_string()).unwrap_or_default();
+    let amount_part = state
+        .deposited_gas
+        .map(|g| g.to_string())
+        .unwrap_or_default();
     let input = format!(
         "{}|{}|{}|{}|{}|{}",
         state.contract_id,
@@ -497,7 +500,8 @@ async fn test_contract_state_operations() -> Result<()> {
     assert_eq!(latest_value, updated_value);
 
     // Delete the contract state
-    let (deleted, _) = delete_contract_state(&conn, height2, Some(tx_id2), contract_id, &path).await?;
+    let (deleted, _) =
+        delete_contract_state(&conn, height2, Some(tx_id2), contract_id, &path).await?;
     assert!(deleted);
 
     let count = conn
@@ -728,8 +732,16 @@ async fn test_footprint_cache_and_reorg_affected() -> Result<()> {
 
     // reorg reversal predicate (tip = 12, the max height): rollback to 11 drops the
     // height-12 row → sid affected; rollback to 12 leaves nothing above → not affected.
-    assert!(depositors_affected_by_reorg(&conn, 11, 12).await?.contains(&sid));
-    assert!(!depositors_affected_by_reorg(&conn, 12, 12).await?.contains(&sid));
+    assert!(
+        depositors_affected_by_reorg(&conn, 11, 12)
+            .await?
+            .contains(&sid)
+    );
+    assert!(
+        !depositors_affected_by_reorg(&conn, 12, 12)
+            .await?
+            .contains(&sid)
+    );
     Ok(())
 }
 
@@ -827,7 +839,11 @@ async fn test_find_footprint_by_depositor() -> Result<()> {
     set(alpha, "a3", bob, 7, h2, tx2).await?;
 
     let rows = find_footprint_by_depositor(&conn, alice).await?;
-    assert_eq!(rows.len(), 3, "alice's live rows: a1, a2 (alpha) + b1 (beta)");
+    assert_eq!(
+        rows.len(),
+        3,
+        "alice's live rows: a1, a2 (alpha) + b1 (beta)"
+    );
 
     let alpha_total: u64 = rows
         .iter()
@@ -843,10 +859,17 @@ async fn test_find_footprint_by_depositor() -> Result<()> {
     assert_eq!(beta_total, 30, "b1 only; b2 is bob's");
     assert!(rows.iter().any(|r| r.contract_name == "alpha"));
     assert!(rows.iter().any(|r| r.contract_name == "beta"));
-    assert!(rows.iter().all(|r| r.footprint_bytes > 0), "path + value bytes");
+    assert!(
+        rows.iter().all(|r| r.footprint_bytes > 0),
+        "path + value bytes"
+    );
 
     // A signer with no deposits gets an empty footprint.
-    assert!(find_footprint_by_depositor(&conn, bob + 999).await?.is_empty());
+    assert!(
+        find_footprint_by_depositor(&conn, bob + 999)
+            .await?
+            .is_empty()
+    );
     Ok(())
 }
 
@@ -955,7 +978,11 @@ async fn test_delete_tombstones_whole_subtree() -> Result<()> {
     );
 
     // A second remove finds nothing live → no-op, returns false.
-    assert!(!delete_contract_state(&conn, height, Some(tx), cid, &cs_path(&["m", "k"])).await?.0);
+    assert!(
+        !delete_contract_state(&conn, height, Some(tx), cid, &cs_path(&["m", "k"]))
+            .await?
+            .0
+    );
 
     Ok(())
 }
@@ -1656,7 +1683,11 @@ async fn test_empty_path_is_whole_keyspace_not_panic() -> Result<()> {
     // `matching_path` at the root must not panic.
     let _ = matching_path(&conn, cid, &[], &cands(&["none", "some"])).await?;
     // Deleting the empty subtree tombstones the whole keyspace.
-    assert!(delete_contract_state(&conn, height + 1, Some(tx), cid, &[]).await?.0);
+    assert!(
+        delete_contract_state(&conn, height + 1, Some(tx), cid, &[])
+            .await?
+            .0
+    );
     assert!(!exists_contract_state(&conn, cid, &[]).await?);
 
     Ok(())

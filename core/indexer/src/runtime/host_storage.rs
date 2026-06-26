@@ -1,4 +1,3 @@
-
 use anyhow::{Result, anyhow};
 use futures_util::future::OptionFuture;
 use indexer_types::deserialize;
@@ -232,7 +231,8 @@ impl Runtime {
         // `deposited_gas` records the deposit (integer gas) for the footprint cache;
         // the token value is derived (× gas→token) only at the floor read.
         let deposited_gas = if depositor.is_some() {
-            let deposit_gas = (path.len() + bs.len()) as u64 * self.deposit_rate(contract_id, &path);
+            let deposit_gas =
+                (path.len() + bs.len()) as u64 * self.deposit_rate(contract_id, &path);
             Fuel::Deposit(deposit_gas * self.gas_to_fuel_multiplier)
                 .consume(accessor, self.gauge.as_ref())
                 .await

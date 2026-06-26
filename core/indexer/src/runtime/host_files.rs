@@ -348,10 +348,7 @@ impl built_in::context::HostWithStore for Runtime {
     /// here (× gas→token). The token consults this on every debit to enforce
     /// `balance - floor >= amount`. Non-signer holders (core/burner/utxo) and
     /// unresolved pubkeys own no deposited rows → 0.
-    async fn storage_floor<T>(
-        accessor: &Accessor<T, Self>,
-        holder: HolderRef,
-    ) -> Result<Decimal> {
+    async fn storage_floor<T>(accessor: &Accessor<T, Self>, holder: HolderRef) -> Result<Decimal> {
         let runtime = accessor.with(|mut access| access.get().clone());
         let signer_id = match holder {
             HolderRef::SignerId(id) => id,

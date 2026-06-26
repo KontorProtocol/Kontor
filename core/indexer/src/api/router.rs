@@ -169,10 +169,7 @@ pub fn new(context: Env, prom_handle: PrometheusHandle) -> Router {
         )
         .route("/checkpoints/{height}", get(get_checkpoint))
         .route("/signers/{identifier}", get(get_signer))
-        .route(
-            "/signers/{identifier}/footprint",
-            get(get_signer_footprint),
-        )
+        .route("/signers/{identifier}/footprint", get(get_signer_footprint))
         .layer(from_fn_with_state(context.clone(), require_available));
 
     // Endpoints that must answer even before the node is "available" — merged

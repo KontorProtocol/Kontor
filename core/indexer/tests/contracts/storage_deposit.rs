@@ -25,7 +25,10 @@ async fn test_delete_moves_no_token() -> Result<()> {
 
     // alice sets an entry (depositor = alice).
     let mut submit = runtime.submit();
-    submit.push(&alice, counter::set_entry_call(&contract, &"k".to_string(), &"v".to_string()));
+    submit.push(
+        &alice,
+        counter::set_entry_call(&contract, &"k".to_string(), &"v".to_string()),
+    );
     submit.execute().await?;
 
     let alice_before = token::balance(runtime, alice_ref.clone())

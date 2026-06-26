@@ -112,7 +112,10 @@ fn aggregate_footprint(
                 *f += row.footprint_bytes;
             }
             None => {
-                groups.insert(row.contract_id, (row.contract_name, amt, row.footprint_bytes));
+                groups.insert(
+                    row.contract_id,
+                    (row.contract_name, amt, row.footprint_bytes),
+                );
             }
         }
     }
@@ -182,7 +185,10 @@ mod footprint_tests {
         let sum: f64 = by.iter().map(|c| c.deposit.parse::<f64>().unwrap()).sum();
         assert_eq!(sum, 45.0);
         let pct: f64 = by.iter().map(|c| c.percent).sum();
-        assert!((pct - 100.0).abs() < 1e-9, "percents must sum to 100, got {pct}");
+        assert!(
+            (pct - 100.0).abs() < 1e-9,
+            "percents must sum to 100, got {pct}"
+        );
     }
 
     #[test]

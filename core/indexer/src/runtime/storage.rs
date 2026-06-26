@@ -12,15 +12,16 @@ use wit_component::{ComponentEncoder, WitPrinter};
 use crate::{
     database::{
         queries::{
-            LiveRow, FOOTPRINT_BUILT_KEY, create_contract_signer, depositors_affected_by_reorg,
+            FOOTPRINT_BUILT_KEY, LiveRow, create_contract_signer, depositors_affected_by_reorg,
             exists_contract_state, find_live_subtree, find_matching_paths, footprint_cache_add,
             footprint_cache_get, footprint_cache_set, footprint_rebuild_all,
             get_contract_address_from_id, get_contract_bytes_by_id, get_contract_id_from_address,
             get_contract_provenance_publisher, get_latest_contract_state_value, get_meta_u64,
             hard_delete_matching_paths, insert_contract, insert_contract_provenance,
-            insert_contract_result, insert_contract_state, latest_live_deposit, live_deposit_gas_sum,
-            matching_path, path_prefix_filter_contract_state, prune_contract_state,
-            rollback_to_height, select_block_at_height, set_meta_u64, tombstone_rows,
+            insert_contract_result, insert_contract_state, latest_live_deposit,
+            live_deposit_gas_sum, matching_path, path_prefix_filter_contract_state,
+            prune_contract_state, rollback_to_height, select_block_at_height, set_meta_u64,
+            tombstone_rows,
         },
         types::{ContractProvenanceRow, ContractResultRow, ContractRow, ContractStateRow},
     },
@@ -92,7 +93,9 @@ impl FootprintCache<'_> {
     /// `depositor_footprint` sum (NEAR's `storage_usage`, keyed by depositor). Absent
     /// ⇒ 0. The host prices it to token (× gas→token) at the `storage_floor` read.
     pub async fn total_gas(&self, depositor: u64) -> Result<u64> {
-        Ok(footprint_cache_get(self.conn, depositor).await?.unwrap_or(0))
+        Ok(footprint_cache_get(self.conn, depositor)
+            .await?
+            .unwrap_or(0))
     }
 
     /// Maintain the cache for a `set`: subtract the live row being overwritten (read
@@ -196,23 +199,22 @@ impl Storage {
     /// live descendant) as `(path, size)` — NOT values. Split from the tombstone
     /// writes so the host can meter `Fuel::Delete` by the row count BEFORE the
     /// writes.
-    pub async fn find_live_subtree(
-        &self,
-        contract_id: u64,
-        path: &[u8],
-    ) -> Result<Vec<LiveRow>> {
+    pub async fn find_live_subtree(&self, contract_id: u64, path: &[u8]) -> Result<Vec<LiveRow>> {
         Ok(find_live_subtree(&self.conn, contract_id, path).await?)
     }
 
     /// The write half of a delete: value-less-tombstone the given (already-metered)
     /// rows. Returns `(removed, freed_bytes)` — the footprint accumulator subtracts
     /// the freed bytes.
-    pub async fn tombstone_rows(
-        &self,
-        contract_id: u64,
-        rows: &[LiveRow],
-    ) -> Result<(bool, u64)> {
-        Ok(tombstone_rows(&self.conn, contract_id, self.height, self.effective_tx_id(), rows).await?)
+    pub async fn tombstone_rows(&self, contract_id: u64, rows: &[LiveRow]) -> Result<(bool, u64)> {
+        Ok(tombstone_rows(
+            &self.conn,
+            contract_id,
+            self.height,
+            self.effective_tx_id(),
+            rows,
+        )
+        .await?)
     }
 
     /// The eager per-depositor storage-deposit FLOOR cache (see [`FootprintCache`]).
@@ -239,8 +241,7 @@ impl Storage {
     async fn rollback_with_footprint_inner(&self, target_height: u64) -> Result<()> {
         // `self.height` is the current tip (every write is stamped at it), so it bounds
         // the band's upper end and lets the discovery range-seek `idx_contract_state_height`.
-        let affected =
-            depositors_affected_by_reorg(&self.conn, target_height, self.height).await?;
+        let affected = depositors_affected_by_reorg(&self.conn, target_height, self.height).await?;
         rollback_to_height(&self.conn, target_height).await?;
         self.footprint().recompute(&affected).await?;
         Ok(())
@@ -660,7 +661,10 @@ mod tests {
             for d in [alice, bob] {
                 let cached = storage.footprint().total_gas(d).await?;
                 let truth = live_deposit_gas_sum(&conn, d).await?;
-                assert_eq!(cached, truth, "cache drifted from live sum for depositor {d}");
+                assert_eq!(
+                    cached, truth,
+                    "cache drifted from live sum for depositor {d}"
+                );
             }
             Ok(())
         };
