@@ -30,7 +30,7 @@ impl PoolStorage {
         validate_amount(amount_b)?;
 
         let lp_shares = (amount_a * amount_b).sqrt()?;
-        let custodian = ctx.contract_signer().to_string();
+        let custodian: Holder = (&ctx.contract_signer()).into();
         let signer_holder: Holder = (&ctx.signer()).into();
         let pool = PoolStorage {
             token_a: token_a.clone(),
@@ -38,11 +38,11 @@ impl PoolStorage {
             fee_bps,
             lp_total_supply: lp_shares,
             lp_ledger: Map::new(&[(signer_holder, lp_shares)]),
-            custodian: custodian.clone(),
+            custodian: custodian.to_string(),
         };
 
-        token_dyn::transfer(&token_a, ctx.signer(), &custodian, amount_a)?;
-        token_dyn::transfer(&token_b, ctx.signer(), &custodian, amount_b)?;
+        token_dyn::transfer(&token_a, ctx.signer(), &custodian, amount_a.try_into()?)?;
+        token_dyn::transfer(&token_b, ctx.signer(), &custodian, amount_b.try_into()?)?;
 
         Ok(pool)
     }
@@ -92,6 +92,24 @@ fn calc_swap_result(
     Ok((bal_out * new_bal_in - k) / new_bal_in)
 }
 
+// test-token now conforms to the native token's interface (holder-ref keys, decimal
+// amounts). Pool math stays integer; these convert at the token boundary. The stored
+// `custodian` is a holder KEY string (the pool's own contract-signer) — parse it back
+// to a `Holder` (which is `Into<HolderRef>`) for the typed token calls.
+fn custodian_holder(key: &str) -> Result<Holder, Error> {
+    key.parse()
+        .map_err(|_| Error::Message("invalid custodian holder".to_string()))
+}
+
+// A custodian balance, read through the conforming token (decimal) and narrowed back
+// to the integer the pool math uses. Balances are whole, so the conversion is exact.
+fn token_balance_int(token: &ContractAddress, holder: &Holder) -> Result<Integer, Error> {
+    Ok(match token_dyn::balance(token, holder) {
+        Some(d) => d.try_into()?,
+        None => Integer::default(),
+    })
+}
+
 impl Guest for Pool {
     // Dummy implementation for testing purposes.
     fn init(ctx: &ProcContext) -> Contract {
@@ -133,14 +151,21 @@ impl Guest for Pool {
         ctx.model().fee_bps()
     }
 
-    fn balance(ctx: &ViewContext, acc: String) -> Option<Integer> {
-        let holder: Holder = acc.parse().ok()?;
-        ctx.model().lp_ledger().get(&holder)
+    // LP-share balance/transfer conform to the token interface (holder-ref + decimal)
+    // so the pool can be driven as a token. Shares are stored as integers; convert at
+    // the boundary.
+    fn balance(ctx: &ViewContext, acc: HolderRef) -> Option<Decimal> {
+        let holder: Holder = acc.try_into().ok()?;
+        ctx.model()
+            .lp_ledger()
+            .get(&holder)
+            .and_then(|n| n.try_into().ok())
     }
 
-    fn transfer(ctx: &ProcContext, to: String, n: Integer) -> Result<(), Error> {
+    fn transfer(ctx: &ProcContext, dst: HolderRef, amt: Decimal) -> Result<Transfer, Error> {
         let from: Holder = (&ctx.signer()).into();
-        let to: Holder = to.parse().expect("invalid holder");
+        let to: Holder = dst.try_into()?;
+        let n: Integer = amt.try_into()?;
         let ledger = ctx.model().lp_ledger();
 
         let from_balance = ledger.get(&from).unwrap_or_default();
@@ -151,13 +176,18 @@ impl Guest for Pool {
 
         ledger.set(&from, from_balance - n);
         ledger.set(&to, to_balance + n);
-        Ok(())
+        Ok(Transfer {
+            src: from.as_ref(),
+            dst: to.as_ref(),
+            amt,
+        })
     }
 
     fn token_balance(ctx: &ViewContext, token: ContractAddress) -> Result<Integer, Error> {
         let model = ctx.model();
         token_out(&model.token_a(), &model.token_b(), &token)?;
-        Ok(token_dyn::balance(&token, &model.custodian()).unwrap_or_default())
+        let custodian = custodian_holder(&model.custodian())?;
+        token_balance_int(&token, &custodian)
     }
 
     fn quote_deposit(
@@ -173,9 +203,9 @@ impl Guest for Pool {
         let token_b = model.token_b();
         let lp_supply = model.lp_total_supply();
 
-        let custodian = model.custodian();
-        let bal_a = token_dyn::balance(&token_a, &custodian).unwrap_or_default();
-        let bal_b = token_dyn::balance(&token_b, &custodian).unwrap_or_default();
+        let custodian = custodian_holder(&model.custodian())?;
+        let bal_a = token_balance_int(&token_a, &custodian)?;
+        let bal_b = token_balance_int(&token_b, &custodian)?;
 
         let lp_shares = if amount_a * bal_b < amount_b * bal_a {
             amount_a * lp_supply / bal_a
@@ -206,8 +236,19 @@ impl Guest for Pool {
         ledger.set(&user, bal + res.lp_shares);
         model.update_lp_total_supply(|t| t + res.lp_shares);
 
-        token_dyn::transfer(&model.token_a(), ctx.signer(), &custodian, res.deposit_a)?;
-        token_dyn::transfer(&model.token_b(), ctx.signer(), &custodian, res.deposit_b)?;
+        let custodian = custodian_holder(&custodian)?;
+        token_dyn::transfer(
+            &model.token_a(),
+            ctx.signer(),
+            &custodian,
+            res.deposit_a.try_into()?,
+        )?;
+        token_dyn::transfer(
+            &model.token_b(),
+            ctx.signer(),
+            &custodian,
+            res.deposit_b.try_into()?,
+        )?;
 
         Ok(res)
     }
@@ -220,9 +261,9 @@ impl Guest for Pool {
         let token_b = model.token_b();
         let lp_supply = model.lp_total_supply();
 
-        let custodian = model.custodian();
-        let bal_a = token_dyn::balance(&token_a, &custodian).unwrap_or_default();
-        let bal_b = token_dyn::balance(&token_b, &custodian).unwrap_or_default();
+        let custodian = custodian_holder(&model.custodian())?;
+        let bal_a = token_balance_int(&token_a, &custodian)?;
+        let bal_b = token_balance_int(&token_b, &custodian)?;
 
         Ok(WithdrawResult {
             amount_a: shares * bal_a / lp_supply,
@@ -250,18 +291,17 @@ impl Guest for Pool {
         ledger.set(&user, bal - shares);
         model.set_lp_total_supply(total - shares);
 
-        let user_str = user.to_string();
         token_dyn::transfer(
             &model.token_a(),
             ctx.contract_signer(),
-            &user_str,
-            res.amount_a,
+            &user,
+            res.amount_a.try_into()?,
         )?;
         token_dyn::transfer(
             &model.token_b(),
             ctx.contract_signer(),
-            &user_str,
-            res.amount_b,
+            &user,
+            res.amount_b.try_into()?,
         )?;
 
         Ok(res)
@@ -273,13 +313,12 @@ impl Guest for Pool {
         amount_in: Integer,
     ) -> Result<Integer, Error> {
         let model = ctx.model();
-        let custodian = model.custodian();
-        let bal_in = token_dyn::balance(&token_in, &custodian).unwrap_or_default();
-        let bal_out = token_dyn::balance(
+        let custodian = custodian_holder(&model.custodian())?;
+        let bal_in = token_balance_int(&token_in, &custodian)?;
+        let bal_out = token_balance_int(
             &token_out(&model.token_a(), &model.token_b(), &token_in)?,
             &custodian,
-        )
-        .unwrap_or_default();
+        )?;
         calc_swap_result(amount_in, bal_in, bal_out, model.fee_bps())
     }
 
@@ -300,12 +339,14 @@ impl Guest for Pool {
             )));
         }
 
-        token_dyn::transfer(&token_in, ctx.signer(), &model.custodian(), amount_in)?;
+        let custodian = custodian_holder(&model.custodian())?;
+        let recipient: Holder = (&ctx.signer()).into();
+        token_dyn::transfer(&token_in, ctx.signer(), &custodian, amount_in.try_into()?)?;
         token_dyn::transfer(
             &token_out,
             ctx.contract_signer(),
-            &ctx.signer().key(),
-            amount_out,
+            &recipient,
+            amount_out.try_into()?,
         )?;
 
         Ok(amount_out)

@@ -481,6 +481,14 @@ pub fn generate(config: Config) -> TokenStream {
             }
         }
 
+        #[automatically_derived]
+        impl TryFrom<kontor::built_in::numbers::Decimal> for kontor::built_in::numbers::Integer {
+            type Error = kontor::built_in::error::Error;
+            fn try_from(d: kontor::built_in::numbers::Decimal) -> Result<kontor::built_in::numbers::Integer, Self::Error> {
+                #numerics_mod_name::decimal_to_integer(d)
+            }
+        }
+
         impl TryFrom<u64> for kontor::built_in::numbers::Decimal {
             type Error = kontor::built_in::error::Error;
             fn try_from(i: u64) -> Result<Self, Self::Error> {
@@ -502,10 +510,12 @@ pub fn generate(config: Config) -> TokenStream {
             }
         }
 
-        impl TryFrom<i32> for kontor::built_in::numbers::Decimal {
-            type Error = kontor::built_in::error::Error;
-            fn try_from(i: i32) -> Result<Self, Self::Error> {
-                (i as i64).try_into()
+        // Infallible: an `i32` always fits the Decimal range, so this is `From` (not
+        // `TryFrom`). It also lets integer literals (`1000.into()`) resolve to Decimal
+        // by target type — the blanket impl still provides `TryFrom<i32>`.
+        impl From<i32> for kontor::built_in::numbers::Decimal {
+            fn from(i: i32) -> Self {
+                #numerics_mod_name::s64_to_decimal(i as i64).unwrap()
             }
         }
 

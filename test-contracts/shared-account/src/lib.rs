@@ -47,7 +47,12 @@ impl Guest for SharedAccount {
         other_tenants: Vec<String>,
     ) -> Result<String, Error> {
         let signer = ctx.signer();
-        let balance = token::balance(&token, &signer.key()).ok_or(insufficient_balance_error())?;
+        // test-token now conforms to the native token interface (holder-ref keys,
+        // decimal amounts). This contract's balances stay integer; convert at the
+        // boundary — a Signer is `Into<HolderRef>`, balances are whole.
+        let balance: Integer = token::balance(&token, &signer)
+            .ok_or(insufficient_balance_error())?
+            .try_into()?;
         if balance < n {
             return Err(insufficient_balance_error());
         }
@@ -64,7 +69,7 @@ impl Guest for SharedAccount {
                 other_tenants: Map::new(&tenant_holders),
             },
         );
-        token::transfer(&token, signer, &ctx.contract_signer().to_string(), n)?;
+        token::transfer(&token, signer, &ctx.contract_signer(), n.try_into()?)?;
         Ok(account_id)
     }
 
@@ -75,7 +80,9 @@ impl Guest for SharedAccount {
         n: Integer,
     ) -> Result<(), Error> {
         let signer = ctx.signer();
-        let balance = token::balance(&token, &signer.key()).ok_or(insufficient_balance_error())?;
+        let balance: Integer = token::balance(&token, &signer)
+            .ok_or(insufficient_balance_error())?
+            .try_into()?;
         if balance < n {
             return Err(insufficient_balance_error());
         }
@@ -88,7 +95,8 @@ impl Guest for SharedAccount {
             return Err(unauthorized_error());
         }
         account.update_balance(|b| b + n);
-        token::transfer(&token, signer, &ctx.contract_signer().to_string(), n)
+        token::transfer(&token, signer, &ctx.contract_signer(), n.try_into()?)?;
+        Ok(())
     }
 
     fn withdraw(
@@ -111,7 +119,8 @@ impl Guest for SharedAccount {
             return Err(insufficient_balance_error());
         }
         account.set_balance(balance - n);
-        token::transfer(&token, ctx.contract_signer(), &signer.key(), n)
+        token::transfer(&token, ctx.contract_signer(), &signer, n.try_into()?)?;
+        Ok(())
     }
 
     fn balance(ctx: &ViewContext, account_id: String) -> Option<Integer> {
@@ -123,7 +132,8 @@ impl Guest for SharedAccount {
         token: ContractAddress,
         holder: String,
     ) -> Option<Integer> {
-        token::balance(&token, &holder)
+        let holder: Holder = holder.parse().ok()?;
+        token::balance(&token, &holder).and_then(|d| d.try_into().ok())
     }
 
     fn tenants(ctx: &ViewContext, account_id: String) -> Option<Vec<String>> {

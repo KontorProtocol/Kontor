@@ -451,13 +451,16 @@ async fn run_test_amm_limits(runtime: &mut Runtime) -> Result<()> {
     let token_a = addrs[1].clone();
     let token_b = addrs[2].clone();
 
-    let max_int = "115_792_089_237_316_195_423_570_985_008_687_907_853_269_984_665_640_564_039_457";
+    // The AMM domain stays integer (sqrt(MAX_INT)-bounded); the token is decimal now,
+    // whose whole-number ceiling (~1.16e59) is far below Integer's 2^256. Mint a supply
+    // that's huge for the token yet comfortably holds the integer `large_value` swaps.
     let large_value: Integer = "340_282_366_920_938_463_463_374_606_431".into(); // sqrt(MAX_INT) - 1000
     let oversized_value = large_value + 1.into();
+    let mint_supply: Decimal = format!("1{}", "0".repeat(50)).as_str().into(); // 1e50
 
     let mut ops = Ops::new(&minter);
-    ops.push(token::mint_call(&token_a, max_int.into()));
-    ops.push(token::mint_call(&token_b, max_int.into()));
+    ops.push(token::mint_call(&token_a, mint_supply));
+    ops.push(token::mint_call(&token_b, mint_supply));
     ops.push(token::transfer_call(&token_a, &admin, 1000.into()));
     ops.push(token::transfer_call(&token_b, &admin, 1000.into()));
     let mut submit = runtime.submit();

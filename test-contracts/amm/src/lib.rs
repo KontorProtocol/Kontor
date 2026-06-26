@@ -138,9 +138,12 @@ impl Guest for Amm {
             },
         );
 
-        let custodian = ctx.contract_signer().to_string();
-        token_dyn::transfer(&pair.a, ctx.signer(), &custodian, amount_a)?;
-        token_dyn::transfer(&pair.b, ctx.signer(), &custodian, amount_b)?;
+        // test-token now uses the native token's interface (holder-ref dst, decimal
+        // amt). AMM math stays integer; convert at the token boundary. The custodian
+        // is the AMM contract itself (= its contract-signer).
+        let custodian: Holder = (&ctx.contract_signer()).into();
+        token_dyn::transfer(&pair.a, ctx.signer(), &custodian, amount_a.try_into()?)?;
+        token_dyn::transfer(&pair.b, ctx.signer(), &custodian, amount_b.try_into()?)?;
 
         Ok(lp_shares)
     }
@@ -226,7 +229,7 @@ impl Guest for Amm {
         let model = ctx.model();
         let pool = model.pools().get(&pair_id(&pair)).ok_or(pool_not_found())?;
         let ledger = pool.lp_ledger();
-        let addr = model.custodian();
+        let custodian: Holder = (&ctx.contract_signer()).into();
         pool.update_balance_a(|b| b + res.deposit_a);
         pool.update_balance_b(|b| b + res.deposit_b);
 
@@ -235,8 +238,8 @@ impl Guest for Amm {
         ledger.set(&user, bal + res.lp_shares);
         pool.update_lp_total_supply(|t| t + res.lp_shares);
 
-        token_dyn::transfer(&pair.a, ctx.signer(), &addr, res.deposit_a)?;
-        token_dyn::transfer(&pair.b, ctx.signer(), &addr, res.deposit_b)?;
+        token_dyn::transfer(&pair.a, ctx.signer(), &custodian, res.deposit_a.try_into()?)?;
+        token_dyn::transfer(&pair.b, ctx.signer(), &custodian, res.deposit_b.try_into()?)?;
 
         Ok(res)
     }
@@ -289,9 +292,18 @@ impl Guest for Amm {
         pool.update_balance_a(|b| b - res.amount_a);
         pool.update_balance_b(|b| b - res.amount_b);
 
-        let user_str = user.to_string();
-        token_dyn::transfer(&pair.a, ctx.contract_signer(), &user_str, res.amount_a)?;
-        token_dyn::transfer(&pair.b, ctx.contract_signer(), &user_str, res.amount_b)?;
+        token_dyn::transfer(
+            &pair.a,
+            ctx.contract_signer(),
+            &user,
+            res.amount_a.try_into()?,
+        )?;
+        token_dyn::transfer(
+            &pair.b,
+            ctx.contract_signer(),
+            &user,
+            res.amount_b.try_into()?,
+        )?;
 
         Ok(res)
     }
@@ -347,12 +359,14 @@ impl Guest for Amm {
             pool.update_balance_b(|b| b + amount_in);
         }
 
-        token_dyn::transfer(&token_in, ctx.signer(), &model.custodian(), amount_in)?;
+        let custodian: Holder = (&ctx.contract_signer()).into();
+        let recipient: Holder = (&ctx.signer()).into();
+        token_dyn::transfer(&token_in, ctx.signer(), &custodian, amount_in.try_into()?)?;
         token_dyn::transfer(
             &token_out,
             ctx.contract_signer(),
-            &ctx.signer().key(),
-            amount_out,
+            &recipient,
+            amount_out.try_into()?,
         )?;
 
         Ok(amount_out)
