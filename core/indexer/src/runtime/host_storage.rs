@@ -212,9 +212,10 @@ impl Runtime {
         // (recursion). The host derives each holder's footprint by summing the live
         // rows they're the depositor of, so the floor moves with the row: a later
         // overwrite (new depositor) or delete drops it from the old setter's sum.
+        let exempt = is_deposit_exempt(contract_id);
         let frame_depositor = self.stack.peek().await.and_then(|f| f.depositor);
         let depositor = match frame_depositor {
-            Some(id) if id != CORE_SIGNER_ID && !is_deposit_exempt(contract_id) => Some(id),
+            Some(id) if id != CORE_SIGNER_ID && !exempt => Some(id),
             _ => None,
         };
         // The deposit for this row is a slice of GAS — `(path + value) bytes ×
@@ -246,7 +247,7 @@ impl Runtime {
         // the op. Skipped for deposit-exempt contracts (the token ledger) — they never
         // carry a depositor, so neither the new row nor any row they overwrite can
         // affect a floor, and this avoids a displaced-row read on the hottest write.
-        if !is_deposit_exempt(contract_id) {
+        if !exempt {
             self.storage
                 .footprint_on_set(contract_id, &path, depositor, deposited_gas)
                 .await?;

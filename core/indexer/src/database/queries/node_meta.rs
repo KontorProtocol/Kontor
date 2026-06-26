@@ -13,6 +13,11 @@ use super::Error;
 /// instead of re-scanning all finalized history.
 pub const PRUNE_WATERMARK_KEY: &str = "prune_watermark";
 
+/// `node_meta` key marking that the `depositor_footprint` cache has been built from
+/// live state. Set once after the first reconstruct; since block writes and reorgs
+/// both maintain the cache atomically, a clean restart can then skip the rebuild.
+pub const FOOTPRINT_BUILT_KEY: &str = "footprint_cache_built";
+
 /// Read a `u64` node-meta value, or `default` if the key is unset.
 pub async fn get_meta_u64(conn: &Connection, key: &str, default: u64) -> Result<u64, Error> {
     let mut rows = conn
@@ -22,4 +27,15 @@ pub async fn get_meta_u64(conn: &Connection, key: &str, default: u64) -> Result<
         Some(row) => row.get::<i64>(0)? as u64,
         None => default,
     })
+}
+
+/// Upsert a `u64` node-meta value.
+pub async fn set_meta_u64(conn: &Connection, key: &str, value: u64) -> Result<(), Error> {
+    conn.execute(
+        "INSERT INTO node_meta(key, value) VALUES (?1, ?2) \
+         ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+        params![key, value as i64],
+    )
+    .await?;
+    Ok(())
 }

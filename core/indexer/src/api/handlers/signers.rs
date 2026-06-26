@@ -3,7 +3,7 @@ use std::collections::BTreeMap;
 use axum::extract::{Path, State};
 use indexer_types::{ContractFootprint, FootprintResponse, SignerResponse};
 use libsql::Connection;
-use numerics::{Decimal, add_decimal, decimal_to_string, mul_decimal, string_to_decimal, u64_to_decimal};
+use numerics::{Decimal, add_decimal, decimal_to_string, mul_decimal, u64_to_decimal};
 
 use crate::api::{Env, error::Error, error::HttpError, result::Result};
 use crate::database::queries::{
@@ -74,12 +74,12 @@ pub async fn get_signer_footprint(
     let entry = resolve_signer_entry(&conn, &identifier).await?;
 
     // Query + aggregation failures are server/data faults → 500, not 400. Per-row
-    // deposits are integer gas; price to token with the runtime's gas→token rate.
+    // deposits are integer gas; price to token with the runtime's gas→token rate
+    // (the same `Decimal` the consensus floor uses — pass it straight through).
     let rows = find_footprint_by_depositor(&conn, entry.signer_id).await?;
-    let rate = string_to_decimal(&runtime.gas_to_token_multiplier.to_string())
-        .map_err(|e| anyhow::anyhow!("gas→token rate parse failed: {e:?}"))?;
-    let (total_deposit, total_footprint_bytes, by_contract) = aggregate_footprint(rows, rate)
-        .map_err(|e| anyhow::anyhow!("footprint aggregation failed: {e:?}"))?;
+    let (total_deposit, total_footprint_bytes, by_contract) =
+        aggregate_footprint(rows, runtime.gas_to_token_multiplier.into())
+            .map_err(|e| anyhow::anyhow!("footprint aggregation failed: {e:?}"))?;
 
     Ok(FootprintResponse {
         signer_id: entry.signer_id,

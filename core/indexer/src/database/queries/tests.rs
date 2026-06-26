@@ -723,8 +723,7 @@ async fn test_footprint_cache_and_reorg_affected() -> Result<()> {
     footprint_cache_add(&conn, sid, -100).await?; // → 0 prunes the row
     assert_eq!(footprint_cache_get(&conn, sid).await?, None);
 
-    // reconstruct source: sid is a live depositor; their live floor sums to 150.
-    assert!(live_depositors(&conn).await?.contains(&sid));
+    // reconstruct source: sid's live floor sums to 150.
     assert_eq!(live_deposit_gas_sum(&conn, sid).await?, 150);
 
     // reorg reversal predicate: rollback to 11 drops the height-12 row → sid

@@ -241,15 +241,28 @@ pub async fn footprint_cache_get(conn: &Connection, depositor: u64) -> Result<Op
             [depositor],
         )
         .await?;
-    Ok(match rows.next().await? {
-        Some(r) => Some(r.get::<u64>(0)?),
-        None => None,
-    })
+    match rows.next().await? {
+        // `total_gas` is stored as SQLite INTEGER (i64). A NEGATIVE value can only
+        // mean the cache desynced from truth (an accounting bug) — read it as i64 and
+        // FAIL LOUD, never `as u64`, which would wrap a `-1` into ~1.8e19 gas and
+        // silently FREEZE the depositor's balance on every debit (the opposite, and
+        // worse, failure). The invariant is that this never fires.
+        Some(r) => {
+            let t = r.get::<i64>(0)?;
+            if t < 0 {
+                return Err(Error::InvalidData(format!(
+                    "depositor_footprint corrupt: negative total_gas {t} for depositor {depositor}"
+                )));
+            }
+            Ok(Some(t as u64))
+        }
+        None => Ok(None),
+    }
 }
 
-/// Set a depositor's cached total to an ABSOLUTE value (reconstruct / reorg
-/// recompute), or delete the row when `total` is `None` (floor returned to zero —
-/// absence ⇔ zero keeps the table sparse).
+/// Set a depositor's cached total to an ABSOLUTE value (reorg recompute), or delete
+/// the row when `total` is `None` (floor returned to zero — absence ⇔ zero keeps the
+/// table sparse).
 pub async fn footprint_cache_set(
     conn: &Connection,
     depositor: u64,
@@ -260,7 +273,7 @@ pub async fn footprint_cache_set(
             conn.execute(
                 "INSERT INTO depositor_footprint (depositor, total_gas) VALUES (?, ?) \
                  ON CONFLICT(depositor) DO UPDATE SET total_gas = excluded.total_gas",
-                (depositor, t),
+                (depositor, t as i64),
             )
             .await?;
         }
@@ -276,10 +289,9 @@ pub async fn footprint_cache_set(
 }
 
 /// Atomically add `delta` gas to a depositor's cached floor — the incremental
-/// write-path maintenance — and prune the row when it reaches zero (absence ⇔ zero).
-/// One `total_gas = total_gas + :delta` UPDATE, no read-modify-write. A total driven
-/// negative by a (bug) unmatched free surfaces loudly: the `u64` read in
-/// `footprint_cache_get` rejects it rather than silently under-flooring.
+/// write-path maintenance. One `total_gas = total_gas + :delta` UPSERT, no
+/// read-modify-write. The zero-pruning `DELETE` runs ONLY on a decrease (a positive
+/// delta can never reach zero), so the common add path stays a single statement.
 pub async fn footprint_cache_add(conn: &Connection, depositor: u64, delta: i64) -> Result<(), Error> {
     conn.execute(
         "INSERT INTO depositor_footprint (depositor, total_gas) VALUES (:d, :delta) \
@@ -287,35 +299,40 @@ pub async fn footprint_cache_add(conn: &Connection, depositor: u64, delta: i64) 
         libsql::named_params! { ":d": depositor, ":delta": delta },
     )
     .await?;
+    if delta < 0 {
+        conn.execute(
+            "DELETE FROM depositor_footprint WHERE depositor = :d AND total_gas = 0",
+            libsql::named_params! { ":d": depositor },
+        )
+        .await?;
+    }
+    Ok(())
+}
+
+/// Rebuild the WHOLE footprint cache from live state in ONE pass: clear it, then a
+/// single grouped `SUM(deposited_gas)` over live deposited rows. Used by the
+/// (rare) startup reconstruct; far cheaper than a per-depositor query loop.
+pub async fn footprint_rebuild_all(conn: &Connection) -> Result<(), Error> {
+    conn.execute("DELETE FROM depositor_footprint", ()).await?;
     conn.execute(
-        "DELETE FROM depositor_footprint WHERE depositor = :d AND total_gas = 0",
-        libsql::named_params! { ":d": depositor },
+        "INSERT INTO depositor_footprint (depositor, total_gas) \
+         SELECT cs.depositor, SUM(cs.deposited_gas) FROM contract_state cs \
+         WHERE cs.depositor IS NOT NULL AND cs.deleted = 0 \
+           AND NOT EXISTS (SELECT 1 FROM contract_state n \
+               WHERE n.contract_id = cs.contract_id AND n.path = cs.path AND n.height > cs.height) \
+         GROUP BY cs.depositor",
+        (),
     )
     .await?;
     Ok(())
 }
 
-/// Every distinct depositor with at least one live deposited row — the reconstruct
-/// set (recompute each one's total from scratch).
-pub async fn live_depositors(conn: &Connection) -> Result<Vec<u64>, Error> {
-    let mut rows = conn
-        .query(
-            "SELECT DISTINCT depositor FROM contract_state WHERE depositor IS NOT NULL",
-            (),
-        )
-        .await?;
-    let mut out = Vec::new();
-    while let Some(r) = rows.next().await? {
-        out.push(r.get::<u64>(0)?);
-    }
-    Ok(out)
-}
-
-/// Depositors whose floor a rollback to `target_height` could change: any depositor
-/// holding a version of a `(contract_id, path)` that was touched above the target
-/// (the rolled-back rows being deleted, plus the ≤target versions they displaced and
-/// that now become live again). Bounded by the rolled-back rows — recompute just
-/// these from the post-rollback state.
+/// Depositors whose floor a rollback to `target_height` could change. Driven from the
+/// ROLLED-BACK BAND (`height > target`, range-seeking `idx_contract_state_height`),
+/// not all depositor history: the affected paths are exactly those touched above the
+/// target, and a depositor is affected iff they hold any version of such a path (the
+/// rolled-back rows being deleted, plus the ≤target versions they displaced that now
+/// become live again). Bounded by the (shallow) reorg.
 pub async fn depositors_affected_by_reorg(
     conn: &Connection,
     target_height: u64,
@@ -323,10 +340,9 @@ pub async fn depositors_affected_by_reorg(
     let mut rows = conn
         .query(
             "SELECT DISTINCT cs.depositor FROM contract_state cs \
-             WHERE cs.depositor IS NOT NULL AND EXISTS ( \
-                 SELECT 1 FROM contract_state n \
-                 WHERE n.contract_id = cs.contract_id AND n.path = cs.path \
-                   AND n.height > :target)",
+             JOIN (SELECT DISTINCT contract_id, path FROM contract_state WHERE height > :target) band \
+               ON cs.contract_id = band.contract_id AND cs.path = band.path \
+             WHERE cs.depositor IS NOT NULL",
             libsql::named_params! { ":target": target_height },
         )
         .await?;
@@ -335,6 +351,31 @@ pub async fn depositors_affected_by_reorg(
         out.push(r.get::<u64>(0)?);
     }
     Ok(out)
+}
+
+/// The `(depositor, deposited_gas)` of a path's current LIVE row, or `None` if the
+/// path has no live row (never set, or its latest version is a tombstone). A lean
+/// point read (latest-by-height via `idx_contract_state_lookup`, `LIMIT 1`) — the
+/// displaced-row read the footprint cache does before an overwrite, cheaper than the
+/// `ROW_NUMBER` window of `get_latest_contract_state`.
+pub async fn latest_live_deposit(
+    conn: &Connection,
+    contract_id: u64,
+    path: &[u8],
+) -> Result<Option<(Option<u64>, Option<u64>)>, Error> {
+    let mut rows = conn
+        .query(
+            "SELECT depositor, deposited_gas, deleted FROM contract_state \
+             WHERE contract_id = :c AND path = :p ORDER BY height DESC LIMIT 1",
+            libsql::named_params! { ":c": contract_id, ":p": Value::Blob(path.to_vec()) },
+        )
+        .await?;
+    Ok(match rows.next().await? {
+        Some(r) if !r.get::<bool>(2)? => {
+            Some((r.get::<Option<u64>>(0)?, r.get::<Option<u64>>(1)?))
+        }
+        _ => None,
+    })
 }
 
 pub async fn get_latest_contract_state_value(

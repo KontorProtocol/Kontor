@@ -10,7 +10,7 @@ use crate::block;
 use crate::consensus::finality_types::{FINALITY_WINDOW, StateEvent};
 use crate::database::queries::{
     confirm_transaction, get_transaction_by_txid, insert_batch, insert_block, insert_transaction,
-    rollback_to_height, select_block_at_height, select_block_latest,
+    select_block_at_height, select_block_latest,
 };
 use crate::metrics::{BLOCK_HEIGHT, ITEMS_INDEXED};
 use crate::runtime::{
@@ -37,15 +37,14 @@ const PRUNE_VACUUM_MAX_PAGES: i64 = 512; // ~2 MiB returned per call (bounds loc
 
 impl<E: Executor> Reactor<E> {
     pub(super) async fn rollback(&mut self, height: u64) -> Result<()> {
-        // Capture the depositors whose storage-deposit floor the rollback could
-        // change BEFORE the cascade deletes the rolled-back rows (afterwards they're
-        // gone). The footprint cache has no `blocks` FK, so it must be reversed
-        // explicitly — bounded by the (shallow) reorg, not a full rebuild.
-        let affected = self.runtime.storage.footprint_affected_by_reorg(height).await?;
-        rollback_to_height(&self.db_conn(), height)
+        // The `blocks` cascade + the off-checkpoint footprint-cache reversal run
+        // together in one savepoint (capture-before, recompute-after enforced inside),
+        // so a crash can't leave the cache durably stale.
+        self.runtime
+            .storage
+            .rollback_with_footprint(height)
             .await
-            .context("rollback_to_height failed")?;
-        self.runtime.storage.footprint_reverse_reorg(&affected).await?;
+            .context("rollback_with_footprint failed")?;
         // Cascade-deleted contracts free their ids for reuse by replayed
         // publishes; drop cached components so none is served stale WASM.
         self.runtime.component_cache.clear();

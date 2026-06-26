@@ -5,21 +5,22 @@ use bon::Builder;
 use futures_util::Stream;
 use libsql::Connection;
 use regex::bytes::RegexBuilder;
+use std::collections::HashMap;
 use std::io::Read;
 use wit_component::{ComponentEncoder, WitPrinter};
 
 use crate::{
     database::{
         queries::{
-            DepositRow, create_contract_signer, depositors_affected_by_reorg, exists_contract_state,
-            find_live_subtree, find_matching_paths, footprint_cache_add, footprint_cache_get,
-            footprint_cache_set, get_contract_address_from_id, get_contract_bytes_by_id,
-            get_contract_id_from_address, get_contract_provenance_publisher,
-            get_latest_contract_state, get_latest_contract_state_value, hard_delete_matching_paths,
-            insert_contract, insert_contract_provenance, insert_contract_result,
-            insert_contract_state, live_deposit_gas_sum, live_depositors, matching_path,
-            path_prefix_filter_contract_state, prune_contract_state, select_block_at_height,
-            tombstone_rows,
+            DepositRow, FOOTPRINT_BUILT_KEY, create_contract_signer, depositors_affected_by_reorg,
+            exists_contract_state, find_live_subtree, find_matching_paths, footprint_cache_add,
+            footprint_cache_get, footprint_cache_set, footprint_rebuild_all,
+            get_contract_address_from_id, get_contract_bytes_by_id, get_contract_id_from_address,
+            get_contract_provenance_publisher, get_latest_contract_state_value, get_meta_u64,
+            hard_delete_matching_paths, insert_contract, insert_contract_provenance,
+            insert_contract_result, insert_contract_state, latest_live_deposit, live_deposit_gas_sum,
+            matching_path, path_prefix_filter_contract_state, prune_contract_state,
+            rollback_to_height, select_block_at_height, set_meta_u64, tombstone_rows,
         },
         types::{ContractProvenanceRow, ContractResultRow, ContractRow, ContractStateRow},
     },
@@ -138,18 +139,11 @@ impl Storage {
         Ok(footprint_cache_get(&self.conn, depositor).await?.unwrap_or(0))
     }
 
-    /// Add/subtract one row's `gas` from a depositor's cached floor — a single atomic
-    /// `total_gas += delta` (no read-modify-write). Runs on `self.conn` inside the op
-    /// savepoint, so it rolls back with the op like every other write.
-    async fn footprint_adjust(&self, depositor: u64, gas: u64, add: bool) -> Result<()> {
-        let delta = if add { gas as i64 } else { -(gas as i64) };
-        Ok(footprint_cache_add(&self.conn, depositor, delta).await?)
-    }
-
     /// Maintain the footprint cache for a `set`: subtract the live row being
     /// overwritten (read BEFORE the new row is written) from its setter, then add the
     /// new row to its depositor. A fresh create has no prior live row; an exempt/Core
-    /// write (`depositor = None`) contributes nothing.
+    /// write (`depositor = None`) contributes nothing. The displaced-row read is a
+    /// lean latest-by-height point lookup, not a window.
     pub async fn footprint_on_set(
         &self,
         contract_id: u64,
@@ -157,56 +151,66 @@ impl Storage {
         new_depositor: Option<u64>,
         new_gas: Option<u64>,
     ) -> Result<()> {
-        if let Some(old) = get_latest_contract_state(&self.conn, contract_id, path).await? {
-            if let (Some(d), Some(g)) = (old.depositor, old.deposited_gas) {
-                self.footprint_adjust(d, g, false).await?;
-            }
+        if let Some((Some(d), Some(g))) = latest_live_deposit(&self.conn, contract_id, path).await? {
+            footprint_cache_add(&self.conn, d, -(g as i64)).await?;
         }
         if let (Some(d), Some(g)) = (new_depositor, new_gas) {
-            self.footprint_adjust(d, g, true).await?;
+            footprint_cache_add(&self.conn, d, g as i64).await?;
         }
         Ok(())
     }
 
-    /// Maintain the footprint cache for freed rows (delete/variant-cleanup):
-    /// subtract each row's deposit from its setter. The rows were already read for
-    /// metering, so this adds no query.
+    /// Maintain the footprint cache for freed rows (delete/variant-cleanup): subtract
+    /// each row's deposit from its setter. The rows were already read for metering, so
+    /// this adds no read; deltas are summed PER DEPOSITOR (a K-row delete is almost
+    /// always one depositor) so it issues ~1 statement, not 2·K.
     pub async fn footprint_on_free(&self, rows: &[DepositRow]) -> Result<()> {
+        let mut deltas: HashMap<u64, i64> = HashMap::new();
         for row in rows {
             if let (Some(d), Some(g)) = (row.depositor, row.deposited_gas) {
-                self.footprint_adjust(d, g, false).await?;
+                *deltas.entry(d).or_default() -= g as i64;
             }
         }
-        Ok(())
-    }
-
-    /// Rebuild the entire footprint cache from `contract_state` (startup / migration).
-    /// Reconstructible by design — the cache is a pure function of the live
-    /// depositor/deposited_gas rows.
-    pub async fn footprint_reconstruct(&self) -> Result<()> {
-        self.conn
-            .execute("DELETE FROM depositor_footprint", ())
-            .await?;
-        for depositor in live_depositors(&self.conn).await? {
-            self.footprint_set_from_live(depositor).await?;
+        for (depositor, delta) in deltas {
+            footprint_cache_add(&self.conn, depositor, delta).await?;
         }
         Ok(())
     }
 
-    /// The depositors a rollback to `target_height` could affect — CAPTURE THIS
-    /// BEFORE the rollback deletes the rows above the target (afterwards they're
-    /// gone). Pair with [`Self::footprint_reverse_reorg`] run after the rollback.
-    pub async fn footprint_affected_by_reorg(&self, target_height: u64) -> Result<Vec<u64>> {
-        Ok(depositors_affected_by_reorg(&self.conn, target_height).await?)
+    /// Rebuild the footprint cache from live state — ONCE, on first build (DB upgrade
+    /// to the cache, or first boot). Gated on a `node_meta` marker: block writes and
+    /// reorgs both maintain the cache atomically (the reorg via
+    /// [`Self::rollback_with_footprint`]), so once built it stays coherent and a clean
+    /// restart skips the O(live-rows) rebuild. One grouped `SUM` pass, not a loop.
+    pub async fn footprint_reconstruct(&self) -> Result<()> {
+        if get_meta_u64(&self.conn, FOOTPRINT_BUILT_KEY, 0).await? == 1 {
+            return Ok(());
+        }
+        footprint_rebuild_all(&self.conn).await?;
+        set_meta_u64(&self.conn, FOOTPRINT_BUILT_KEY, 1).await?;
+        Ok(())
     }
 
-    /// After a rollback, recompute the floor of each `affected` depositor (captured
-    /// pre-rollback by [`Self::footprint_affected_by_reorg`]) from the post-rollback
-    /// live rows — bounded by the (shallow) reorg, NOT a full rebuild. The cache has
-    /// no `blocks` FK, so the cascade that deletes the rolled-back rows leaves it
-    /// stale until this runs.
-    pub async fn footprint_reverse_reorg(&self, affected: &[u64]) -> Result<()> {
-        for &depositor in affected {
+    /// Reorg rollback that keeps the off-checkpoint footprint cache coherent
+    /// ATOMICALLY: in ONE savepoint, capture the affected depositors (before the
+    /// `blocks` cascade deletes their rows), run the cascade, then recompute just those
+    /// from the post-rollback state. The capture→rollback→recompute ordering is
+    /// enforced here, not by callers, and a crash can't leave a durably-stale cache.
+    pub async fn rollback_with_footprint(&self, target_height: u64) -> Result<()> {
+        self.savepoint().await?;
+        match self.rollback_with_footprint_inner(target_height).await {
+            Ok(()) => self.commit().await,
+            Err(e) => {
+                self.rollback().await?;
+                Err(e)
+            }
+        }
+    }
+
+    async fn rollback_with_footprint_inner(&self, target_height: u64) -> Result<()> {
+        let affected = depositors_affected_by_reorg(&self.conn, target_height).await?;
+        rollback_to_height(&self.conn, target_height).await?;
+        for depositor in affected {
             self.footprint_set_from_live(depositor).await?;
         }
         Ok(())
