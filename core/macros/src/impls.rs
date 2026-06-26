@@ -384,6 +384,16 @@ pub fn generate(config: Config) -> TokenStream {
             pub fn log10(&self) -> Result<kontor::built_in::numbers::Decimal, kontor::built_in::error::Error> {
                 #numerics_mod_name::log10_decimal(*self)
             }
+
+            pub fn sqrt(&self) -> Result<kontor::built_in::numbers::Decimal, kontor::built_in::error::Error> {
+                #numerics_mod_name::sqrt_decimal(*self)
+            }
+
+            /// Truncate toward zero (drop the fractional part) — explicit round-down to an
+            /// integer-valued decimal. Infallible.
+            pub fn trunc(&self) -> kontor::built_in::numbers::Decimal {
+                #numerics_mod_name::trunc_decimal(*self)
+            }
         }
 
 

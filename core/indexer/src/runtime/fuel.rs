@@ -87,6 +87,8 @@ pub enum Fuel {
     NumbersMulDecimal,
     NumbersDivDecimal,
     NumbersLog10Decimal,
+    NumbersSqrtDecimal,
+    NumbersTruncDecimal,
     Result(u64),
     // TODO: recalibrate with the rest of the Fuel table against measured
     // benchmarks. Currently sized to match other non-zk "non-trivial"
@@ -183,6 +185,8 @@ impl Fuel {
             | Self::NumbersDivDecimal => 100,
             Self::NumbersSqrtInteger => 500,
             Self::NumbersLog10Decimal => 500,
+            Self::NumbersSqrtDecimal => 500,
+            Self::NumbersTruncDecimal => 100,
             Self::RegisterBlsKey => 1_000,
             Self::UpdateProvenance => 1_000,
         }

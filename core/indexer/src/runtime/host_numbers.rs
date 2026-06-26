@@ -380,4 +380,31 @@ impl built_in::numbers::HostWithStore for Runtime {
             .await?;
         Ok(numerics::log10_decimal(a))
     }
+
+    async fn sqrt_decimal<T>(
+        accessor: &Accessor<T, Self>,
+        a: Decimal,
+    ) -> Result<Result<Decimal, Error>> {
+        Fuel::NumbersSqrtDecimal
+            .consume(
+                accessor,
+                accessor
+                    .with(|mut access| access.get().gauge.clone())
+                    .as_ref(),
+            )
+            .await?;
+        Ok(numerics::sqrt_decimal(a))
+    }
+
+    async fn trunc_decimal<T>(accessor: &Accessor<T, Self>, a: Decimal) -> Result<Decimal> {
+        Fuel::NumbersTruncDecimal
+            .consume(
+                accessor,
+                accessor
+                    .with(|mut access| access.get().gauge.clone())
+                    .as_ref(),
+            )
+            .await?;
+        Ok(numerics::trunc_decimal(a))
+    }
 }

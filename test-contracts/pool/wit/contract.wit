@@ -5,17 +5,17 @@ world root {
   use kontor:built-in/context.{view-context, proc-context, signer, contract, holder-ref};
   use kontor:built-in/error.{error};
   use kontor:built-in/foreign.{contract-address};
-  use kontor:built-in/numbers.{integer, decimal};
+  use kontor:built-in/numbers.{decimal};
 
   record deposit-result {
-    lp-shares: integer,
-    deposit-a: integer,
-    deposit-b: integer,
+    lp-shares: decimal,
+    deposit-a: decimal,
+    deposit-b: decimal,
   }
 
   record withdraw-result {
-    amount-a: integer,
-    amount-b: integer,
+    amount-a: decimal,
+    amount-b: decimal,
   }
 
   // LP shares are themselves a token: `balance`/`transfer` conform to the native
@@ -29,20 +29,20 @@ world root {
 
   export init: async func(ctx: borrow<proc-context>) -> contract;
 
-  export re-init: async func(ctx: borrow<proc-context>, token-a: contract-address, amount-a: integer, token-b: contract-address, amount-b: integer, fee: integer) -> result<integer, error>;
+  export re-init: async func(ctx: borrow<proc-context>, token-a: contract-address, amount-a: decimal, token-b: contract-address, amount-b: decimal, fee: decimal) -> result<decimal, error>;
 
-  export fee: async func(ctx: borrow<view-context>) -> integer;
+  export fee: async func(ctx: borrow<view-context>) -> decimal;
 
   export balance: async func(ctx: borrow<view-context>, acc: holder-ref) -> option<decimal>;
   export transfer: async func(ctx: borrow<proc-context>, dst: holder-ref, amt: decimal) -> result<transfer, error>;
 
-  export token-balance: async func(ctx: borrow<view-context>, token: contract-address) -> result<integer, error>;
-  export quote-deposit: async func(ctx: borrow<view-context>, amount-a: integer, amount-b: integer) -> result<deposit-result, error>;
-  export deposit: async func(ctx: borrow<proc-context>, amount-a: integer, amount-b: integer) -> result<deposit-result, error>;
-  export quote-withdraw: async func(ctx: borrow<view-context>, shares: integer) -> result<withdraw-result, error>;
-  export withdraw: async func(ctx: borrow<proc-context>, shares: integer) -> result<withdraw-result, error>;
+  export token-balance: async func(ctx: borrow<view-context>, token: contract-address) -> result<decimal, error>;
+  export quote-deposit: async func(ctx: borrow<view-context>, amount-a: decimal, amount-b: decimal) -> result<deposit-result, error>;
+  export deposit: async func(ctx: borrow<proc-context>, amount-a: decimal, amount-b: decimal) -> result<deposit-result, error>;
+  export quote-withdraw: async func(ctx: borrow<view-context>, shares: decimal) -> result<withdraw-result, error>;
+  export withdraw: async func(ctx: borrow<proc-context>, shares: decimal) -> result<withdraw-result, error>;
 
 
-  export swap: async func(ctx: borrow<proc-context>, token-in: contract-address, amount-in: integer, min-out: integer) -> result<integer, error>;
-  export quote-swap: async func(ctx: borrow<view-context>, token-in: contract-address, amount-in: integer) -> result<integer, error>;
+  export swap: async func(ctx: borrow<proc-context>, token-in: contract-address, amount-in: decimal, min-out: decimal) -> result<decimal, error>;
+  export quote-swap: async func(ctx: borrow<view-context>, token-in: contract-address, amount-in: decimal) -> result<decimal, error>;
 }

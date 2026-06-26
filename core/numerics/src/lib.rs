@@ -376,6 +376,22 @@ pub fn sub_decimal(a: Decimal, b: Decimal) -> Result<Decimal, Error> {
     Ok(res.into())
 }
 
+pub fn sqrt_decimal(a: Decimal) -> Result<Decimal, Error> {
+    let dec_a: D256 = a.into();
+    let res = dec_a.sqrt().with_ctx(CTX).quantize(MIN_DECIMAL);
+    if res.is_op_invalid() {
+        return Err(Error::Overflow("invalid decimal sqrt".to_string()));
+    }
+    Ok(res.into())
+}
+
+/// Truncate toward zero (drop the fractional part). Infallible. Contracts use this for
+/// EXPLICIT round-down where they want an integer-valued decimal (e.g. AMM swap output).
+pub fn trunc_decimal(a: Decimal) -> Decimal {
+    let dec_a: D256 = a.into();
+    dec_a.trunc().into()
+}
+
 pub fn mul_decimal(a: Decimal, b: Decimal) -> Result<Decimal, Error> {
     let dec_a: D256 = a.into();
     let dec_b: D256 = b.into();

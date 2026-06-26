@@ -9,15 +9,15 @@ world root {
 
   export init: async func(ctx: borrow<proc-context>) -> contract;
 
-  export open: async func(ctx: borrow<proc-context>, token: contract-address, n: integer, other-tenants: list<string>) -> result<string, error>;
+  export open: async func(ctx: borrow<proc-context>, token: contract-address, n: decimal, other-tenants: list<string>) -> result<string, error>;
 
-  export deposit: async func(ctx: borrow<proc-context>, token: contract-address, account-id: string, n: integer) -> result<_, error>;
+  export deposit: async func(ctx: borrow<proc-context>, token: contract-address, account-id: string, n: decimal) -> result<_, error>;
 
-  export withdraw: async func(ctx: borrow<proc-context>, token: contract-address, account-id: string, n: integer) -> result<_, error>;
+  export withdraw: async func(ctx: borrow<proc-context>, token: contract-address, account-id: string, n: decimal) -> result<_, error>;
 
-  export balance: async func(ctx: borrow<view-context>, account-id: string) -> option<integer>;
+  export balance: async func(ctx: borrow<view-context>, account-id: string) -> option<decimal>;
 
-  export token-balance: async func(ctx: borrow<view-context>, token: contract-address, holder: string) -> option<integer>;
+  export token-balance: async func(ctx: borrow<view-context>, token: contract-address, holder: string) -> option<decimal>;
 
   export tenants: async func(ctx: borrow<view-context>, account-id: string) -> option<list<string>>;
 }
