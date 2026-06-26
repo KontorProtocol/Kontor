@@ -117,7 +117,7 @@ CREATE INDEX IF NOT EXISTS idx_contract_state_depositor ON contract_state (depos
 -- rolls back with the op) via an atomic `total_gas = total_gas + :delta` upsert.
 -- DERIVED + reconstructible from the depositor/deposited_gas columns, so it is
 -- deliberately NOT in the checkpoint and has NO blocks FK — a reorg recomputes the
--- affected depositors (see Storage::footprint_reverse_reorg), and startup
+-- affected depositors (see Storage::rollback_with_footprint), and startup
 -- reconstructs it. A depositor whose floor returns to zero is removed (absence ⇔
 -- zero floor).
 CREATE TABLE IF NOT EXISTS depositor_footprint (

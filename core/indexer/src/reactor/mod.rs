@@ -480,11 +480,10 @@ impl<E: Executor> Reactor<E> {
 
     #[tracing::instrument(skip_all, fields(node = %self.runtime.node_label))]
     pub async fn run(&mut self) -> Result<()> {
-        // Rebuild the storage-deposit footprint cache from live state before
-        // processing blocks: it's reconstructible (not in the checkpoint) and this
-        // covers a DB upgraded to the cache and the rare crash-mid-reorg staleness
-        // window. Bounded by live deposited rows. (Perf follow-up: gate on a
-        // node_meta marker so a clean restart skips it.)
+        // Build the storage-deposit footprint cache from live state before processing
+        // blocks — but only ONCE: `reconstruct` is gated on a node_meta marker, so this
+        // is a no-op after the first build (DB upgrade / first boot). Block writes and
+        // reorgs both maintain the cache atomically, so a clean restart needs no rebuild.
         self.runtime.storage.footprint().reconstruct().await?;
 
         let result = self.run_event_loop().await;

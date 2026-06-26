@@ -328,22 +328,25 @@ pub async fn footprint_rebuild_all(conn: &Connection) -> Result<(), Error> {
 }
 
 /// Depositors whose floor a rollback to `target_height` could change. Driven from the
-/// ROLLED-BACK BAND (`height > target`, range-seeking `idx_contract_state_height`),
-/// not all depositor history: the affected paths are exactly those touched above the
-/// target, and a depositor is affected iff they hold any version of such a path (the
-/// rolled-back rows being deleted, plus the ≤target versions they displaced that now
-/// become live again). Bounded by the (shallow) reorg.
+/// ROLLED-BACK BAND — `target < height <= tip`, a CLOSED range so it range-seeks
+/// `idx_contract_state_height` (an open `height > target` makes the planner full-scan).
+/// `tip` is the current max `contract_state.height`; the band's paths are exactly those
+/// touched above the target, and a depositor is affected iff they hold any version of
+/// such a path (the rolled-back rows being deleted, plus the ≤target versions they
+/// displaced that now become live again). Bounded by the (shallow) reorg.
 pub async fn depositors_affected_by_reorg(
     conn: &Connection,
     target_height: u64,
+    tip: u64,
 ) -> Result<Vec<u64>, Error> {
     let mut rows = conn
         .query(
             "SELECT DISTINCT cs.depositor FROM contract_state cs \
-             JOIN (SELECT DISTINCT contract_id, path FROM contract_state WHERE height > :target) band \
+             JOIN (SELECT DISTINCT contract_id, path FROM contract_state \
+                   WHERE height > :target AND height <= :tip) band \
                ON cs.contract_id = band.contract_id AND cs.path = band.path \
              WHERE cs.depositor IS NOT NULL",
-            libsql::named_params! { ":target": target_height },
+            libsql::named_params! { ":target": target_height, ":tip": tip },
         )
         .await?;
     let mut out = Vec::new();
@@ -353,16 +356,24 @@ pub async fn depositors_affected_by_reorg(
     Ok(out)
 }
 
-/// The `(depositor, deposited_gas)` of a path's current LIVE row, or `None` if the
-/// path has no live row (never set, or its latest version is a tombstone). A lean
-/// point read (latest-by-height via `idx_contract_state_lookup`, `LIMIT 1`) — the
-/// displaced-row read the footprint cache does before an overwrite, cheaper than the
-/// `ROW_NUMBER` window of `get_latest_contract_state`.
+/// A live row's deposit attribution `(depositor, deposited_gas)`. The schema CHECK
+/// ties the two together, so a row either carries a deposit (this) or doesn't (`None`
+/// from [`latest_live_deposit`]) — no impossible "one set, one null" state.
+pub struct RowDeposit {
+    pub depositor: u64,
+    pub deposited_gas: u64,
+}
+
+/// The deposit on a path's current LIVE row, or `None` if the path has no live row
+/// (never set, or its latest version is a tombstone) OR that row carries no deposit
+/// (Core/exempt). A lean point read (latest-by-height via `idx_contract_state_lookup`,
+/// `LIMIT 1`) — the displaced-row read the footprint cache does before an overwrite,
+/// cheaper than the `ROW_NUMBER` window of `get_latest_contract_state`.
 pub async fn latest_live_deposit(
     conn: &Connection,
     contract_id: u64,
     path: &[u8],
-) -> Result<Option<(Option<u64>, Option<u64>)>, Error> {
+) -> Result<Option<RowDeposit>, Error> {
     let mut rows = conn
         .query(
             "SELECT depositor, deposited_gas, deleted FROM contract_state \
@@ -371,8 +382,15 @@ pub async fn latest_live_deposit(
         )
         .await?;
     Ok(match rows.next().await? {
+        // live row (not a tombstone) that carries a deposit
         Some(r) if !r.get::<bool>(2)? => {
-            Some((r.get::<Option<u64>>(0)?, r.get::<Option<u64>>(1)?))
+            match (r.get::<Option<u64>>(0)?, r.get::<Option<u64>>(1)?) {
+                (Some(depositor), Some(deposited_gas)) => Some(RowDeposit {
+                    depositor,
+                    deposited_gas,
+                }),
+                _ => None,
+            }
         }
         _ => None,
     })
@@ -892,13 +910,9 @@ pub async fn prune_contract_state(conn: &Connection, w_prev: u64, w: u64) -> Res
         .await?;
 
     // Persist the advanced watermark in the same transaction as the deletes, so the
-    // prune step is atomic and a restart resumes from exactly here.
-    conn.execute(
-        "INSERT INTO node_meta(key, value) VALUES (?1, ?2) \
-         ON CONFLICT(key) DO UPDATE SET value = excluded.value",
-        params![super::node_meta::PRUNE_WATERMARK_KEY, w],
-    )
-    .await?;
+    // prune step is atomic and a restart resumes from exactly here. (Single node_meta
+    // writer — shared with the footprint cache's marker.)
+    super::node_meta::set_meta_u64(conn, super::node_meta::PRUNE_WATERMARK_KEY, w).await?;
 
     Ok(superseded + tombstoned)
 }

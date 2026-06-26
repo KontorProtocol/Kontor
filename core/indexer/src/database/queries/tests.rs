@@ -726,10 +726,10 @@ async fn test_footprint_cache_and_reorg_affected() -> Result<()> {
     // reconstruct source: sid's live floor sums to 150.
     assert_eq!(live_deposit_gas_sum(&conn, sid).await?, 150);
 
-    // reorg reversal predicate: rollback to 11 drops the height-12 row → sid
-    // affected; rollback to 12 leaves nothing above → sid not affected.
-    assert!(depositors_affected_by_reorg(&conn, 11).await?.contains(&sid));
-    assert!(!depositors_affected_by_reorg(&conn, 12).await?.contains(&sid));
+    // reorg reversal predicate (tip = 12, the max height): rollback to 11 drops the
+    // height-12 row → sid affected; rollback to 12 leaves nothing above → not affected.
+    assert!(depositors_affected_by_reorg(&conn, 11, 12).await?.contains(&sid));
+    assert!(!depositors_affected_by_reorg(&conn, 12, 12).await?.contains(&sid));
     Ok(())
 }
 

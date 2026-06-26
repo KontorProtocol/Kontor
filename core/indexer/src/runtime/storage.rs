@@ -107,8 +107,8 @@ impl FootprintCache<'_> {
         new_depositor: Option<u64>,
         new_gas: Option<u64>,
     ) -> Result<()> {
-        if let Some((Some(d), Some(g))) = latest_live_deposit(self.conn, contract_id, path).await? {
-            footprint_cache_add(self.conn, d, -(g as i64)).await?;
+        if let Some(prev) = latest_live_deposit(self.conn, contract_id, path).await? {
+            footprint_cache_add(self.conn, prev.depositor, -(prev.deposited_gas as i64)).await?;
         }
         if let (Some(d), Some(g)) = (new_depositor, new_gas) {
             footprint_cache_add(self.conn, d, g as i64).await?;
@@ -146,12 +146,15 @@ impl FootprintCache<'_> {
         Ok(())
     }
 
-    /// Overwrite one depositor's cached total with a fresh `SUM(deposited_gas)` of
-    /// their live rows (one query — integer gas). Zero ⇒ delete the row.
-    async fn set_from_live(&self, depositor: u64) -> Result<()> {
-        let total = live_deposit_gas_sum(self.conn, depositor).await?;
-        let stored = (total != 0).then_some(total);
-        footprint_cache_set(self.conn, depositor, stored).await?;
+    /// Recompute each given depositor's cached total from the (post-rollback) live
+    /// rows — the cache-recovery half of a reorg. Each is overwritten with a fresh
+    /// `SUM(deposited_gas)` (zero ⇒ row deleted). Bounded by the affected set.
+    pub(crate) async fn recompute(&self, depositors: &[u64]) -> Result<()> {
+        for &depositor in depositors {
+            let total = live_deposit_gas_sum(self.conn, depositor).await?;
+            let stored = (total != 0).then_some(total);
+            footprint_cache_set(self.conn, depositor, stored).await?;
+        }
         Ok(())
     }
 }
@@ -234,11 +237,12 @@ impl Storage {
     }
 
     async fn rollback_with_footprint_inner(&self, target_height: u64) -> Result<()> {
-        let affected = depositors_affected_by_reorg(&self.conn, target_height).await?;
+        // `self.height` is the current tip (every write is stamped at it), so it bounds
+        // the band's upper end and lets the discovery range-seek `idx_contract_state_height`.
+        let affected =
+            depositors_affected_by_reorg(&self.conn, target_height, self.height).await?;
         rollback_to_height(&self.conn, target_height).await?;
-        for depositor in affected {
-            self.footprint().set_from_live(depositor).await?;
-        }
+        self.footprint().recompute(&affected).await?;
         Ok(())
     }
 
