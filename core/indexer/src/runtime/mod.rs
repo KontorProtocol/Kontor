@@ -318,6 +318,13 @@ impl Runtime {
         component_cache: ComponentCache,
         conn: Connection,
     ) -> Result<Self> {
+        // Make "read-only" a hard SQLite guarantee, not a convention: this runtime
+        // wraps every call in a `BEGIN…COMMIT`, and on a shared WAL DB a view's
+        // deferred read snapshot upgrading to a write at commit races the reactor's
+        // single writer (SQLITE_BUSY_SNAPSHOT, which the reactor treats as fatal).
+        // `query_only` makes the upgrade impossible — a stray write fails locally on
+        // this connection instead of contending.
+        conn.query("PRAGMA query_only = ON;", ()).await?;
         Runtime::new_with(
             engine,
             linkers,

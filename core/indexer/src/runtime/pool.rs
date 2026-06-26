@@ -54,6 +54,9 @@ impl managed::Manager for Manager {
         let conn = new_connection(&self.data_dir, &self.filename)
             .await
             .map_err(|e| RuntimeError::DatabaseConnection(e.to_string()))?;
+        // `new_read_only` pins the connection `query_only` — this pool serves only
+        // reads (the `/contracts` view endpoint and signer lookups), and that keeps a
+        // view from upgrading its snapshot to a write and racing the reactor writer.
         let mut runtime = Runtime::new_read_only(
             self.engine.clone(),
             self.linkers.clone(),
