@@ -11,17 +11,23 @@ use wit_component::{ComponentEncoder, WitPrinter};
 use crate::{
     database::{
         queries::{
-            DepositRow, create_contract_signer, exists_contract_state, find_live_subtree,
-            find_matching_paths, get_contract_address_from_id, get_contract_bytes_by_id,
-            get_contract_id_from_address, get_contract_provenance_publisher,
+            DepositRow, create_contract_signer, depositors_affected_by_reorg, exists_contract_state,
+            find_live_subtree, find_matching_paths, footprint_cache_get, footprint_cache_set,
+            get_contract_address_from_id, get_contract_bytes_by_id, get_contract_id_from_address,
+            get_contract_provenance_publisher, get_latest_contract_state,
             get_latest_contract_state_value, hard_delete_matching_paths, insert_contract,
             insert_contract_provenance, insert_contract_result, insert_contract_state,
-            live_deposit_amounts_by_depositor, matching_path, path_prefix_filter_contract_state,
-            prune_contract_state, select_block_at_height, tombstone_rows,
+            live_deposit_amounts_by_depositor, live_depositor_amounts, live_depositors, matching_path,
+            path_prefix_filter_contract_state, prune_contract_state, select_block_at_height,
+            tombstone_rows,
         },
         types::{ContractProvenanceRow, ContractResultRow, ContractRow, ContractStateRow},
     },
-    runtime::{ContractAddress, counter::Counter, stack::Stack},
+    runtime::{
+        ContractAddress, Decimal, counter::Counter,
+        numerics::{add_decimal, decimal_to_string, eq_decimal, string_to_decimal, sub_decimal, u64_to_decimal},
+        stack::Stack,
+    },
     test_utils::new_mock_transaction,
 };
 
@@ -133,6 +139,119 @@ impl Storage {
     /// an evolving `D` never needs a historical lookup (see the query).
     pub async fn live_deposit_amounts(&self, signer_id: u64) -> Result<Vec<String>> {
         Ok(live_deposit_amounts_by_depositor(&self.conn, signer_id).await?)
+    }
+
+    /// The cached storage-deposit floor for `depositor` — an O(1) read of the eager
+    /// `depositor_footprint` sum (NEAR's `storage_usage`, keyed by depositor). Absent
+    /// ⇒ zero floor. The token's per-debit floor check reads this instead of
+    /// re-summing the depositor's live rows.
+    pub async fn footprint_total(&self, depositor: u64) -> Result<Decimal> {
+        Ok(match footprint_cache_get(&self.conn, depositor).await? {
+            Some(s) => string_to_decimal(&s)?,
+            None => u64_to_decimal(0)?,
+        })
+    }
+
+    /// Apply `delta` to a depositor's cached floor (`add` ⇒ `+`, else `-`) and
+    /// persist it. A total that returns to exactly zero removes the row (absence ⇔
+    /// zero). Runs on `self.conn` inside the op savepoint, so it rolls back with the
+    /// op like every other write.
+    async fn footprint_adjust(&self, depositor: u64, delta: &str, add: bool) -> Result<()> {
+        let cur = self.footprint_total(depositor).await?;
+        let d = string_to_decimal(delta)?;
+        let next = if add {
+            add_decimal(cur, d)?
+        } else {
+            sub_decimal(cur, d)?
+        };
+        let total = if eq_decimal(next, u64_to_decimal(0)?)? {
+            None
+        } else {
+            Some(decimal_to_string(next))
+        };
+        footprint_cache_set(&self.conn, depositor, total.as_deref()).await?;
+        Ok(())
+    }
+
+    /// Maintain the footprint cache for a `set`: subtract the live row being
+    /// overwritten (read BEFORE the new row is written) from its setter, then add the
+    /// new row to its depositor. A fresh create has no prior live row; an exempt/Core
+    /// write (`depositor = None`) contributes nothing.
+    pub async fn footprint_on_set(
+        &self,
+        contract_id: u64,
+        path: &[u8],
+        new_depositor: Option<u64>,
+        new_amount: Option<&str>,
+    ) -> Result<()> {
+        if let Some(old) = get_latest_contract_state(&self.conn, contract_id, path).await? {
+            if let (Some(d), Some(a)) = (old.depositor, old.deposited_amount.as_deref()) {
+                self.footprint_adjust(d, a, false).await?;
+            }
+        }
+        if let (Some(d), Some(a)) = (new_depositor, new_amount) {
+            self.footprint_adjust(d, a, true).await?;
+        }
+        Ok(())
+    }
+
+    /// Maintain the footprint cache for freed rows (delete/variant-cleanup):
+    /// subtract each row's deposit from its setter. The rows were already read for
+    /// metering, so this adds no query.
+    pub async fn footprint_on_free(&self, rows: &[DepositRow]) -> Result<()> {
+        for row in rows {
+            if let (Some(d), Some(a)) = (row.depositor, row.deposited_amount.as_deref()) {
+                self.footprint_adjust(d, a, false).await?;
+            }
+        }
+        Ok(())
+    }
+
+    /// Rebuild the entire footprint cache from `contract_state` (startup / migration).
+    /// Reconstructible by design — the cache is a pure function of the live
+    /// depositor/deposited_amount rows.
+    pub async fn footprint_reconstruct(&self) -> Result<()> {
+        self.conn
+            .execute("DELETE FROM depositor_footprint", ())
+            .await?;
+        for depositor in live_depositors(&self.conn).await? {
+            self.footprint_set_from_live(depositor).await?;
+        }
+        Ok(())
+    }
+
+    /// The depositors a rollback to `target_height` could affect — CAPTURE THIS
+    /// BEFORE the rollback deletes the rows above the target (afterwards they're
+    /// gone). Pair with [`Self::footprint_reverse_reorg`] run after the rollback.
+    pub async fn footprint_affected_by_reorg(&self, target_height: u64) -> Result<Vec<u64>> {
+        Ok(depositors_affected_by_reorg(&self.conn, target_height).await?)
+    }
+
+    /// After a rollback, recompute the floor of each `affected` depositor (captured
+    /// pre-rollback by [`Self::footprint_affected_by_reorg`]) from the post-rollback
+    /// live rows — bounded by the (shallow) reorg, NOT a full rebuild. The cache has
+    /// no `blocks` FK, so the cascade that deletes the rolled-back rows leaves it
+    /// stale until this runs.
+    pub async fn footprint_reverse_reorg(&self, affected: &[u64]) -> Result<()> {
+        for &depositor in affected {
+            self.footprint_set_from_live(depositor).await?;
+        }
+        Ok(())
+    }
+
+    /// Overwrite one depositor's cached total with a fresh sum of their live rows.
+    async fn footprint_set_from_live(&self, depositor: u64) -> Result<()> {
+        let mut total = u64_to_decimal(0)?;
+        for a in live_depositor_amounts(&self.conn, depositor).await? {
+            total = add_decimal(total, string_to_decimal(&a)?)?;
+        }
+        let stored = if eq_decimal(total, u64_to_decimal(0)?)? {
+            None
+        } else {
+            Some(decimal_to_string(total))
+        };
+        footprint_cache_set(&self.conn, depositor, stored.as_deref()).await?;
+        Ok(())
     }
 
     pub async fn insert_contract_provenance(

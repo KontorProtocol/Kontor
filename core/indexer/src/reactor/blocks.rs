@@ -37,9 +37,15 @@ const PRUNE_VACUUM_MAX_PAGES: i64 = 512; // ~2 MiB returned per call (bounds loc
 
 impl<E: Executor> Reactor<E> {
     pub(super) async fn rollback(&mut self, height: u64) -> Result<()> {
+        // Capture the depositors whose storage-deposit floor the rollback could
+        // change BEFORE the cascade deletes the rolled-back rows (afterwards they're
+        // gone). The footprint cache has no `blocks` FK, so it must be reversed
+        // explicitly — bounded by the (shallow) reorg, not a full rebuild.
+        let affected = self.runtime.storage.footprint_affected_by_reorg(height).await?;
         rollback_to_height(&self.db_conn(), height)
             .await
             .context("rollback_to_height failed")?;
+        self.runtime.storage.footprint_reverse_reorg(&affected).await?;
         // Cascade-deleted contracts free their ids for reuse by replayed
         // publishes; drop cached components so none is served stale WASM.
         self.runtime.component_cache.clear();

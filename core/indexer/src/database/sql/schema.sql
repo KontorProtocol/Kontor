@@ -107,6 +107,22 @@ CREATE INDEX IF NOT EXISTS idx_contract_state_height ON contract_state (height, 
 -- no depositor (Core/system/token-ledger writes).
 CREATE INDEX IF NOT EXISTS idx_contract_state_depositor ON contract_state (depositor) WHERE depositor IS NOT NULL;
 
+-- Eager cache of each depositor's storage-deposit FLOOR = Σ of the live
+-- `deposited_amount` they collateralize across all contracts. The token's per-debit
+-- floor check (context::storage-floor) reads this as an O(1) point lookup instead of
+-- re-scanning contract_state every transfer (NEAR's account.storage_usage, keyed by
+-- depositor). Maintained incrementally in the storage write path INSIDE the op
+-- savepoint (so it rolls back with the op). DERIVED + reconstructible from the
+-- depositor/deposited_amount columns, so it is deliberately NOT in the checkpoint and
+-- has NO blocks FK — a reorg recomputes the affected depositors (see
+-- Storage::footprint_reverse_reorg), and startup reconstructs it. `total_amount` is a
+-- decimal string summed via numerics; a depositor whose floor returns to zero is
+-- removed (absence ⇔ zero floor).
+CREATE TABLE IF NOT EXISTS depositor_footprint (
+  depositor INTEGER PRIMARY KEY,
+  total_amount TEXT NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS contract_results (
   id INTEGER PRIMARY KEY,
   contract_id INTEGER NOT NULL,

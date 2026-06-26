@@ -673,6 +673,72 @@ async fn test_depositor_roundtrips_and_tombstone_clears_it() -> Result<()> {
     Ok(())
 }
 
+// The eager `depositor_footprint` cache plumbing: set/get/delete round-trip
+// (absence ⇔ zero), live-depositor discovery (reconstruct source), and the
+// load-bearing `depositors_affected_by_reorg` predicate that bounds the reorg
+// reversal (a rollback past a depositor's row must flag them; one that leaves
+// nothing above the target must not).
+#[tokio::test]
+async fn test_footprint_cache_and_reorg_affected() -> Result<()> {
+    let (_reader, writer, _temp_dir) = new_test_db().await?;
+    let conn = writer.connection();
+    let cid = 77;
+    for h in [10u64, 12u64] {
+        insert_block(
+            &conn,
+            BlockRow::builder()
+                .height(h)
+                .hash(new_mock_block_hash(h as u32))
+                .build(),
+        )
+        .await?;
+    }
+    let sid = create_contract_signer(&conn, 10).await?;
+    // sid deposits path `a` at height 10 ("100") and path `b` at height 12 ("50").
+    for (h, key, amt) in [(10u64, "a", "100"), (12u64, "b", "50")] {
+        let tx = insert_transaction(
+            &conn,
+            TransactionRow::builder()
+                .height(h)
+                .txid(format!("d{:063}", h))
+                .tx_index(0)
+                .confirmed_height(h)
+                .build(),
+        )
+        .await?;
+        insert_contract_state(
+            &conn,
+            ContractStateRow::builder()
+                .contract_id(cid)
+                .tx_id(tx)
+                .height(h)
+                .path(cs_path(&[key]))
+                .value(vec![1])
+                .depositor(sid)
+                .deposited_amount(amt.to_string())
+                .build(),
+        )
+        .await?;
+    }
+
+    // set/get/delete round-trip.
+    assert_eq!(footprint_cache_get(&conn, sid).await?, None);
+    footprint_cache_set(&conn, sid, Some("150")).await?;
+    assert_eq!(footprint_cache_get(&conn, sid).await?.as_deref(), Some("150"));
+    footprint_cache_set(&conn, sid, None).await?;
+    assert_eq!(footprint_cache_get(&conn, sid).await?, None);
+
+    // reconstruct source: sid is a live depositor with two live rows.
+    assert!(live_depositors(&conn).await?.contains(&sid));
+    assert_eq!(live_depositor_amounts(&conn, sid).await?.len(), 2);
+
+    // reorg reversal predicate: rollback to 11 drops the height-12 row → sid
+    // affected; rollback to 12 leaves nothing above → sid not affected.
+    assert!(depositors_affected_by_reorg(&conn, 11).await?.contains(&sid));
+    assert!(!depositors_affected_by_reorg(&conn, 12).await?.contains(&sid));
+    Ok(())
+}
+
 // The per-signer footprint query: returns a depositor's LIVE rows across all
 // contracts, excluding other depositors' rows and any row superseded by a newer
 // version (overwritten/deleted → it drops from their floor). Exercises the

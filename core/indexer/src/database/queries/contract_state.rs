@@ -232,6 +232,101 @@ pub async fn live_deposit_amounts_by_depositor(
     Ok(out)
 }
 
+// --- depositor_footprint cache (eager Σ deposited_amount per depositor) ---------
+// Off-checkpoint, reconstructible. The token's per-debit floor check reads
+// `footprint_cache_get` (O(1)) instead of `live_deposit_amounts_by_depositor`.
+
+/// The cached floor total (decimal string) for a depositor, or `None` if they
+/// collateralize nothing (absence ⇔ zero).
+pub async fn footprint_cache_get(conn: &Connection, depositor: u64) -> Result<Option<String>, Error> {
+    let mut rows = conn
+        .query(
+            "SELECT total_amount FROM depositor_footprint WHERE depositor = ?",
+            [depositor],
+        )
+        .await?;
+    Ok(match rows.next().await? {
+        Some(r) => Some(r.get::<String>(0)?),
+        None => None,
+    })
+}
+
+/// Upsert a depositor's cached total, or delete the row when `total` is `None`
+/// (their floor returned to zero — absence ⇔ zero keeps the table sparse).
+pub async fn footprint_cache_set(
+    conn: &Connection,
+    depositor: u64,
+    total: Option<&str>,
+) -> Result<(), Error> {
+    match total {
+        Some(t) => {
+            conn.execute(
+                "INSERT INTO depositor_footprint (depositor, total_amount) VALUES (?, ?) \
+                 ON CONFLICT(depositor) DO UPDATE SET total_amount = excluded.total_amount",
+                (depositor, t),
+            )
+            .await?;
+        }
+        None => {
+            conn.execute(
+                "DELETE FROM depositor_footprint WHERE depositor = ?",
+                [depositor],
+            )
+            .await?;
+        }
+    }
+    Ok(())
+}
+
+/// Every distinct depositor with at least one live deposited row — the reconstruct
+/// set (recompute each one's total from scratch).
+pub async fn live_depositors(conn: &Connection) -> Result<Vec<u64>, Error> {
+    let mut rows = conn
+        .query(
+            "SELECT DISTINCT depositor FROM contract_state WHERE depositor IS NOT NULL",
+            (),
+        )
+        .await?;
+    let mut out = Vec::new();
+    while let Some(r) = rows.next().await? {
+        out.push(r.get::<u64>(0)?);
+    }
+    Ok(out)
+}
+
+/// Depositors whose floor a rollback to `target_height` could change: any depositor
+/// holding a version of a `(contract_id, path)` that was touched above the target
+/// (the rolled-back rows being deleted, plus the ≤target versions they displaced and
+/// that now become live again). Bounded by the rolled-back rows — recompute just
+/// these from the post-rollback state.
+pub async fn depositors_affected_by_reorg(
+    conn: &Connection,
+    target_height: u64,
+) -> Result<Vec<u64>, Error> {
+    let mut rows = conn
+        .query(
+            "SELECT DISTINCT cs.depositor FROM contract_state cs \
+             WHERE cs.depositor IS NOT NULL AND EXISTS ( \
+                 SELECT 1 FROM contract_state n \
+                 WHERE n.contract_id = cs.contract_id AND n.path = cs.path \
+                   AND n.height > :target)",
+            libsql::named_params! { ":target": target_height },
+        )
+        .await?;
+    let mut out = Vec::new();
+    while let Some(r) = rows.next().await? {
+        out.push(r.get::<u64>(0)?);
+    }
+    Ok(out)
+}
+
+/// The live floor total for one depositor, recomputed from scratch (used by
+/// reconstruct + reorg). Sums the same `LIVE_BY_DEPOSITOR_WHERE` rows as the legacy
+/// per-debit path, so the cache is an exact replica of it.
+pub async fn live_depositor_amounts(conn: &Connection, depositor: u64) -> Result<Vec<String>, Error> {
+    live_deposit_amounts_by_depositor(conn, depositor).await
+}
+
 pub async fn get_latest_contract_state_value(
     conn: &Connection,
     fuel: u64,
@@ -271,6 +366,11 @@ pub async fn get_latest_contract_state_value(
 pub struct DepositRow {
     pub path: Vec<u8>,
     pub size: u64,
+    /// The setter that collateralizes this row (for the eager footprint cache: a
+    /// delete/overwrite subtracts `deposited_amount` from this depositor's total).
+    /// `None` for Core/exempt rows, which carry no floor.
+    pub depositor: Option<u64>,
+    pub deposited_amount: Option<String>,
 }
 
 /// One live deposited row attributed to a depositor, for the per-signer footprint
@@ -329,18 +429,27 @@ pub async fn find_live_subtree(
         Value::Integer(contract_id as i64),
     ));
     let query = live_latest(
-        "path, size",
+        "path, size, depositor, deposited_amount",
         &format!("contract_id = :contract_id AND {range}"),
     );
     let mut result = conn.query(&query, params).await?;
     let mut rows = Vec::new();
     while let Some(row) = result.next().await? {
-        rows.push(DepositRow {
-            path: row.get::<Vec<u8>>(0)?,
-            size: row.get::<u64>(1)?,
-        });
+        rows.push(deposit_row_from(&row)?);
     }
     Ok(rows)
+}
+
+/// A `DepositRow` from a `(path, size, depositor, deposited_amount)` projection —
+/// shared by the two delete read-halves so the footprint cache can subtract a freed
+/// row's deposit from its setter.
+fn deposit_row_from(row: &libsql::Row) -> Result<DepositRow, Error> {
+    Ok(DepositRow {
+        path: row.get::<Vec<u8>>(0)?,
+        size: row.get::<u64>(1)?,
+        depositor: row.get::<Option<u64>>(2)?,
+        deposited_amount: row.get::<Option<String>>(3)?,
+    })
 }
 
 /// Tombstone the given (already-metered) live rows: append a `deleted = true`
@@ -597,17 +706,14 @@ pub async fn find_matching_paths(
         let mut result = conn
             .query(
                 &format!(
-                    "SELECT path, size \
+                    "SELECT path, size, depositor, deposited_amount \
                      FROM contract_state WHERE {where_clause}"
                 ),
                 params,
             )
             .await?;
         while let Some(row) = result.next().await? {
-            rows.push(DepositRow {
-                path: row.get::<Vec<u8>>(0)?,
-                size: row.get::<u64>(1)?,
-            });
+            rows.push(deposit_row_from(&row)?);
         }
     }
     Ok(rows)

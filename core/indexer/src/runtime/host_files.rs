@@ -14,12 +14,10 @@ use super::{
     ChallengeInput, ContractAddress, Decimal, Error, RawFileDescriptor, Runtime, VerifyResult,
     fuel::Fuel,
     hash_bytes,
-    numerics::string_to_decimal,
     wit::kontor::built_in,
     wit::{self, FileDescriptor, Signer},
 };
 use built_in::context::HolderRef;
-use stdlib::CheckedArithmetics;
 
 impl Runtime {
     async fn _aggregate_root<T>(
@@ -357,12 +355,9 @@ impl built_in::context::HostWithStore for Runtime {
             HolderRef::SignerId(id) => id,
             _ => return Ok(Decimal::try_from(0u64)?),
         };
-        let amounts = runtime.storage.live_deposit_amounts(signer_id).await?;
-        let mut total = Decimal::try_from(0u64)?;
-        for a in &amounts {
-            total = total.add(string_to_decimal(a)?)?;
-        }
-        Ok(total)
+        // O(1) read of the eager `depositor_footprint` cache (maintained in the write
+        // path), not a fresh cross-contract scan of the depositor's live rows.
+        runtime.storage.footprint_total(signer_id).await
     }
 }
 

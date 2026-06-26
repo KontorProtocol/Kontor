@@ -147,8 +147,8 @@ impl Runtime {
         validate_path(&base_path)?;
         let contract_id = self.table.lock().await.get(&self_)?.get_contract_id();
         // Read → meter → write: charge in proportion to the rows actually removed,
-        // not a flat per-candidate fee. Freeing a row drops it from its setter's
-        // footprint sum automatically (no per-row deposit bookkeeping on delete).
+        // not a flat per-candidate fee. Freeing a row also subtracts its deposit from
+        // its setter's footprint cache (the rows were already read for metering).
         let rows = self
             .storage
             .find_matching_paths(contract_id, &base_path, &candidates)
@@ -157,6 +157,7 @@ impl Runtime {
         Fuel::Delete(rows.len() as u64, bytes)
             .consume(accessor, self.gauge.as_ref())
             .await?;
+        self.storage.footprint_on_free(&rows).await?;
         self.storage
             .hard_delete_matching_paths(contract_id, &base_path, &candidates)
             .await
@@ -183,6 +184,7 @@ impl Runtime {
         Fuel::Delete(rows.len() as u64, bytes)
             .consume(accessor, self.gauge.as_ref())
             .await?;
+        self.storage.footprint_on_free(&rows).await?;
         let (removed, _freed) = self.storage.tombstone_rows(contract_id, &rows).await?;
         Ok(removed)
     }
@@ -243,6 +245,13 @@ impl Runtime {
         } else {
             None
         };
+        // Maintain the eager footprint cache BEFORE the write: subtract the row this
+        // overwrites (read while it's still live) from its setter, add the new row to
+        // its depositor. Same connection/savepoint as the write, so it rolls back with
+        // the op.
+        self.storage
+            .footprint_on_set(contract_id, &path, depositor, deposited_amount.as_deref())
+            .await?;
         self.storage
             .set(contract_id, &path, bs, depositor, deposited_amount)
             .await

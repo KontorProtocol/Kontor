@@ -480,6 +480,13 @@ impl<E: Executor> Reactor<E> {
 
     #[tracing::instrument(skip_all, fields(node = %self.runtime.node_label))]
     pub async fn run(&mut self) -> Result<()> {
+        // Rebuild the storage-deposit footprint cache from live state before
+        // processing blocks: it's reconstructible (not in the checkpoint) and this
+        // covers a DB upgraded to the cache and the rare crash-mid-reorg staleness
+        // window. Bounded by live deposited rows. (Perf follow-up: gate on a
+        // node_meta marker so a clean restart skips it.)
+        self.runtime.storage.footprint_reconstruct().await?;
+
         let result = self.run_event_loop().await;
 
         // Gracefully stop the Malachite consensus engine and wait for cleanup
