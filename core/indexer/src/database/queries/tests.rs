@@ -727,6 +727,15 @@ async fn test_footprint_cache_and_reorg_affected() -> Result<()> {
     footprint_cache_add(&conn, sid, -100).await?; // → 0 prunes the row
     assert_eq!(footprint_cache_get(&conn, sid).await?, None);
 
+    // Over-subtract (would underflow) clamps to 0 and prunes — never a negative row
+    // (which the zero-prune would miss and the fail-loud read would reject).
+    footprint_cache_set(&conn, sid, Some(30)).await?;
+    footprint_cache_add(&conn, sid, -100).await?; // 30 - 100 → max(0, …) = 0 → pruned
+    assert_eq!(footprint_cache_get(&conn, sid).await?, None);
+    // Subtract against a non-existent row also clamps (inserts max(0, -5) = 0 → pruned).
+    footprint_cache_add(&conn, sid, -5).await?;
+    assert_eq!(footprint_cache_get(&conn, sid).await?, None);
+
     // reconstruct source: sid's live floor sums to 150.
     assert_eq!(live_deposit_gas_sum(&conn, sid).await?, 150);
 

@@ -289,17 +289,23 @@ pub async fn footprint_cache_set(
 }
 
 /// Atomically add `delta` gas to a depositor's cached floor — the incremental
-/// write-path maintenance. One `total_gas = total_gas + :delta` UPSERT, no
-/// read-modify-write. The zero-pruning `DELETE` runs ONLY on a decrease (a positive
-/// delta can never reach zero), so the common add path stays a single statement.
+/// write-path maintenance. One `total_gas = max(0, total_gas + :delta)` UPSERT, no
+/// read-modify-write. `total_gas` is Σ live deposits, so it is non-negative BY
+/// DEFINITION; the `max(0, …)` (and `max(0, :delta)` on a first insert) makes that an
+/// invariant the column can't violate — a subtract can never leave a NEGATIVE row that
+/// the zero-prune below would miss (the row instead clamps to 0 and is pruned). A
+/// clamp only ever fires on a maintenance bug, which the cache-invariant test catches
+/// as cache-vs-live drift; in correct operation deltas always balance. The zero-prune
+/// runs ONLY on a decrease (a positive delta can never reach zero), so the common add
+/// path stays a single statement.
 pub async fn footprint_cache_add(
     conn: &Connection,
     depositor: u64,
     delta: i64,
 ) -> Result<(), Error> {
     conn.execute(
-        "INSERT INTO depositor_footprint (depositor, total_gas) VALUES (:d, :delta) \
-         ON CONFLICT(depositor) DO UPDATE SET total_gas = total_gas + :delta",
+        "INSERT INTO depositor_footprint (depositor, total_gas) VALUES (:d, max(0, :delta)) \
+         ON CONFLICT(depositor) DO UPDATE SET total_gas = max(0, total_gas + :delta)",
         libsql::named_params! { ":d": depositor, ":delta": delta },
     )
     .await?;
