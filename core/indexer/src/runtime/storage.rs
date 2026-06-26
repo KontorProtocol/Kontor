@@ -5,7 +5,7 @@ use bon::Builder;
 use futures_util::Stream;
 use libsql::Connection;
 use regex::bytes::RegexBuilder;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::io::Read;
 use wit_component::{ComponentEncoder, WitPrinter};
 
@@ -132,6 +132,28 @@ impl FootprintCache<'_> {
         }
         for (depositor, delta) in deltas {
             footprint_cache_add(self.conn, depositor, delta).await?;
+        }
+        Ok(())
+    }
+
+    /// Re-add deposits REVIVED by a HARD delete. Hard-deleting a path's current-height
+    /// row (intra-block variant cleanup) can expose an OLDER same-path version that
+    /// becomes live again — its deposit must re-enter the cache, or the floor under-
+    /// counts and the token allows spends it should reject. (A tombstone delete can't
+    /// revive: its tombstone stays the latest row.) Mirrors the reorg resurrection
+    /// handling. Call AFTER the hard delete — the revived row is whatever now remains
+    /// latest-live for the path. `freed` is the just-deleted set; dedup by path since a
+    /// subtree delete frees several rows under one path's siblings.
+    pub async fn on_revive(&self, contract_id: u64, freed: &[LiveRow]) -> Result<()> {
+        let mut seen: HashSet<&[u8]> = HashSet::new();
+        for row in freed {
+            if !seen.insert(row.path.as_slice()) {
+                continue;
+            }
+            if let Some(revived) = latest_live_deposit(self.conn, contract_id, &row.path).await? {
+                footprint_cache_add(self.conn, revived.depositor, revived.deposited_gas as i64)
+                    .await?;
+            }
         }
         Ok(())
     }
@@ -761,6 +783,69 @@ mod tests {
             storage.footprint().total_gas(alice).await?,
             live_deposit_gas_sum(&conn, alice).await?,
             "reorg at stale in-memory height must still recompute the floor from live state"
+        );
+        assert_eq!(storage.footprint().total_gas(alice).await?, 10);
+        Ok(())
+    }
+
+    // Regression: a HARD delete (intra-block variant cleanup) of a path's current-height
+    // row exposes an OLDER same-path version that becomes live again. The cache must
+    // re-add the revived deposit, else the floor under-counts and the token would allow
+    // an over-spend. (Bugbot: "Hard delete drops revived deposits".)
+    #[tokio::test]
+    async fn hard_delete_revives_displaced_deposit() -> Result<()> {
+        use crate::database::queries::{create_contract_signer, live_deposit_gas_sum};
+
+        let (_reader, writer, _temp) = new_test_db().await?;
+        let conn = writer.connection();
+        for h in 1..=2u64 {
+            insert_block(
+                &conn,
+                BlockRow::builder()
+                    .height(h)
+                    .hash(new_mock_block_hash(h as u32))
+                    .build(),
+            )
+            .await?;
+        }
+        let alice = create_contract_signer(&conn, 1).await?;
+        let bob = create_contract_signer(&conn, 1).await?;
+        // The path is `base ++ candidate`, the shape the variant-cleanup delete matches.
+        let base = b"e/".to_vec();
+        let path = b"e/A".to_vec();
+        let candidates = vec![b"A".to_vec()];
+
+        let mut storage = Storage::builder().height(1).conn(conn.clone()).build();
+        // h1: alice writes e/A (deposit 10).
+        storage
+            .footprint()
+            .on_set(1, &path, Some(alice), Some(10))
+            .await?;
+        storage.set(1, &path, b"v", Some(alice), Some(10)).await?;
+        // h2: bob overwrites e/A (deposit 20) — displaces alice in the cache.
+        storage.height = 2;
+        storage
+            .footprint()
+            .on_set(1, &path, Some(bob), Some(20))
+            .await?;
+        storage.set(1, &path, b"v", Some(bob), Some(20)).await?;
+        assert_eq!(storage.footprint().total_gas(alice).await?, 0); // displaced
+        assert_eq!(storage.footprint().total_gas(bob).await?, 20);
+
+        // Intra-block hard-delete of e/A @ h2 — mirrors `_delete_matching_paths`.
+        let rows = storage.find_matching_paths(1, &base, &candidates).await?;
+        storage.footprint().on_free(&rows).await?;
+        storage
+            .hard_delete_matching_paths(1, &base, &candidates)
+            .await?;
+        storage.footprint().on_revive(1, &rows).await?;
+
+        // alice's h1 row is live again → her deposit must be back in the cache.
+        assert_eq!(storage.footprint().total_gas(bob).await?, 0);
+        assert_eq!(
+            storage.footprint().total_gas(alice).await?,
+            live_deposit_gas_sum(&conn, alice).await?,
+            "revived deposit must re-enter the cache (== live sum)"
         );
         assert_eq!(storage.footprint().total_gas(alice).await?, 10);
         Ok(())

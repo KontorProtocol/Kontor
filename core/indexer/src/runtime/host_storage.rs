@@ -161,9 +161,17 @@ impl Runtime {
             .consume(accessor, self.gauge.as_ref())
             .await?;
         self.storage.footprint().on_free(&rows).await?;
-        self.storage
+        let deleted = self
+            .storage
             .hard_delete_matching_paths(contract_id, &base_path, &candidates)
-            .await
+            .await?;
+        // A hard delete (unlike a tombstone) can revive an older same-path version —
+        // re-add its deposit to the footprint cache, else the floor under-counts.
+        self.storage
+            .footprint()
+            .on_revive(contract_id, &rows)
+            .await?;
+        Ok(deleted)
     }
 
     /// Delete a key by tombstoning its WHOLE subtree (the node + every live
