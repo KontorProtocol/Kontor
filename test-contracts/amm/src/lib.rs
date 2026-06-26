@@ -8,18 +8,19 @@ interface!(name = "token_dyn", path = "../test-token/wit");
 #[derive(Clone, Storage)]
 struct Pool {
     pub token_a: ContractAddress,
-    pub balance_a: Decimal,
+    pub balance_a: Integer,
     pub token_b: ContractAddress,
-    pub balance_b: Decimal,
-    pub fee_bps: Decimal,
+    pub balance_b: Integer,
+    pub fee_bps: Integer,
 
-    pub lp_total_supply: Decimal,
-    pub lp_ledger: Map<Holder, Decimal>,
+    pub lp_total_supply: Integer,
+    pub lp_ledger: Map<Holder, Integer>,
 }
 
 #[derive(Clone, StorageRoot)]
 struct AMMStorage {
     pub pools: Map<String, Pool>,
+    pub custodian: String,
 }
 
 fn pair_id(pair: &TokenPair) -> String {
@@ -55,37 +56,34 @@ fn validate_pair(pair: &TokenPair) -> Result<(), Error> {
     Ok(())
 }
 
-fn validate_amount(amount: Decimal) -> Result<(), Error> {
-    // 0 < amount < 1e28. Amounts are whole; the upper bound keeps the constant-product
-    // `bal_in * bal_out` (and `lp_shares * balance`) within Decimal's whole-number range
-    // (~1e58 for the 256-bit significand at scale 1e-18). It is lower than the integer
-    // AMM's old sqrt(2^256) bound because Decimal trades range for fractional precision.
-    if amount <= Decimal::default() || amount > "10_000_000_000_000_000_000_000_000_000".into() {
+fn validate_amount(amount: Integer) -> Result<(), Error> {
+    // 0 < amount < sqrt(MAX_INT)
+    if amount <= Integer::default() || amount > "340_282_366_920_938_463_463_374_607_431".into() {
         return Err(Error::Message("bad amount".to_string()));
     }
     Ok(())
 }
 
 fn calc_swap_result(
-    amount_in: Decimal,
-    bal_in: Decimal,
-    bal_out: Decimal,
-    fee_bps: Decimal,
-) -> Result<Decimal, Error> {
+    amount_in: Integer,
+    bal_in: Integer,
+    bal_out: Integer,
+    fee_bps: Integer,
+) -> Result<Integer, Error> {
     validate_amount(amount_in)?;
     validate_amount(bal_in)?;
     validate_amount(bal_out)?;
 
-    // input amount less fee, round down (explicit trunc — amounts stay whole)
-    let bps_in_100pct: Decimal = 10000.into();
-    let in_less_fee = (amount_in * (bps_in_100pct - fee_bps) / bps_in_100pct).trunc();
+    // input amount less fee, round down
+    let bps_in_100pct = 10000.into();
+    let in_less_fee = amount_in * (bps_in_100pct - fee_bps) / bps_in_100pct;
 
     let new_bal_in = bal_in + in_less_fee;
     validate_amount(new_bal_in)?;
 
     // calculate output amount from delta in output-token balance, round down
     let k = bal_in * bal_out;
-    Ok(((bal_out * new_bal_in - k) / new_bal_in).trunc())
+    Ok((bal_out * new_bal_in - k) / new_bal_in)
 }
 
 fn pool_not_found() -> Error {
@@ -94,8 +92,11 @@ fn pool_not_found() -> Error {
 
 impl Guest for Amm {
     fn init(ctx: &ProcContext) -> Contract {
+        let custodian = ctx.contract_signer().to_string();
+
         AMMStorage {
             pools: Map::default(),
+            custodian,
         }
         .init(ctx);
         ctx.contract()
@@ -104,10 +105,10 @@ impl Guest for Amm {
     fn create(
         ctx: &ProcContext,
         pair: TokenPair,
-        amount_a: Decimal,
-        amount_b: Decimal,
-        fee_bps: Decimal,
-    ) -> Result<Decimal, Error> {
+        amount_a: Integer,
+        amount_b: Integer,
+        fee_bps: Integer,
+    ) -> Result<Integer, Error> {
         validate_pair(&pair)?;
         validate_amount(amount_a)?;
         validate_amount(amount_b)?;
@@ -121,7 +122,7 @@ impl Guest for Amm {
             Err(_) => Ok(()),
         }?;
 
-        let lp_shares = (amount_a * amount_b).sqrt()?.trunc();
+        let lp_shares = (amount_a * amount_b).sqrt()?;
 
         let admin: Holder = (&ctx.signer()).into();
         pools.set(
@@ -137,15 +138,14 @@ impl Guest for Amm {
             },
         );
 
-        // The custodian is the AMM contract itself (= its contract-signer).
-        let custodian: Holder = (&ctx.contract_signer()).into();
+        let custodian = ctx.contract_signer().to_string();
         token_dyn::transfer(&pair.a, ctx.signer(), &custodian, amount_a)?;
         token_dyn::transfer(&pair.b, ctx.signer(), &custodian, amount_b)?;
 
         Ok(lp_shares)
     }
 
-    fn fee(ctx: &ViewContext, pair: TokenPair) -> Result<Decimal, Error> {
+    fn fee(ctx: &ViewContext, pair: TokenPair) -> Result<Integer, Error> {
         Ok(ctx
             .model()
             .pools()
@@ -154,7 +154,7 @@ impl Guest for Amm {
             .fee_bps())
     }
 
-    fn balance(ctx: &ViewContext, pair: TokenPair, acc: String) -> Option<Decimal> {
+    fn balance(ctx: &ViewContext, pair: TokenPair, acc: String) -> Option<Integer> {
         ctx.model()
             .pools()
             .get(&pair_id(&pair))
@@ -170,7 +170,7 @@ impl Guest for Amm {
         ctx: &ViewContext,
         pair: TokenPair,
         token: ContractAddress,
-    ) -> Result<Decimal, Error> {
+    ) -> Result<Integer, Error> {
         pair_other_token(&pair, &token)?;
         let pool = ctx
             .model()
@@ -187,8 +187,8 @@ impl Guest for Amm {
     fn quote_deposit(
         ctx: &ViewContext,
         pair: TokenPair,
-        amount_a: Decimal,
-        amount_b: Decimal,
+        amount_a: Integer,
+        amount_b: Integer,
     ) -> Result<DepositResult, Error> {
         validate_amount(amount_a)?;
         validate_amount(amount_b)?;
@@ -203,16 +203,15 @@ impl Guest for Amm {
         let balance_a = pool.balance_a();
         let balance_b = pool.balance_b();
         let lp_shares = if amount_a * balance_b < amount_b * balance_a {
-            (amount_a * lp_supply / balance_a).trunc()
+            amount_a * lp_supply / balance_a
         } else {
-            (amount_b * lp_supply / balance_b).trunc()
+            amount_b * lp_supply / balance_b
         };
 
         let supply_minus_one = lp_supply - 1.into();
         Ok(DepositResult {
-            // round up via the +(denominator-1) trick, then explicit trunc
-            deposit_a: ((lp_shares * balance_a + supply_minus_one) / lp_supply).trunc(),
-            deposit_b: ((lp_shares * balance_b + supply_minus_one) / lp_supply).trunc(),
+            deposit_a: (lp_shares * balance_a + supply_minus_one) / lp_supply, // round up
+            deposit_b: (lp_shares * balance_b + supply_minus_one) / lp_supply, // round up
             lp_shares,
         })
     }
@@ -220,14 +219,14 @@ impl Guest for Amm {
     fn deposit(
         ctx: &ProcContext,
         pair: TokenPair,
-        amount_a: Decimal,
-        amount_b: Decimal,
+        amount_a: Integer,
+        amount_b: Integer,
     ) -> Result<DepositResult, Error> {
         let res = Self::quote_deposit(&ctx.view_context(), pair.clone(), amount_a, amount_b)?;
         let model = ctx.model();
         let pool = model.pools().get(&pair_id(&pair)).ok_or(pool_not_found())?;
         let ledger = pool.lp_ledger();
-        let custodian: Holder = (&ctx.contract_signer()).into();
+        let addr = model.custodian();
         pool.update_balance_a(|b| b + res.deposit_a);
         pool.update_balance_b(|b| b + res.deposit_b);
 
@@ -236,8 +235,8 @@ impl Guest for Amm {
         ledger.set(&user, bal + res.lp_shares);
         pool.update_lp_total_supply(|t| t + res.lp_shares);
 
-        token_dyn::transfer(&pair.a, ctx.signer(), &custodian, res.deposit_a)?;
-        token_dyn::transfer(&pair.b, ctx.signer(), &custodian, res.deposit_b)?;
+        token_dyn::transfer(&pair.a, ctx.signer(), &addr, res.deposit_a)?;
+        token_dyn::transfer(&pair.b, ctx.signer(), &addr, res.deposit_b)?;
 
         Ok(res)
     }
@@ -245,7 +244,7 @@ impl Guest for Amm {
     fn quote_withdraw(
         ctx: &ViewContext,
         pair: TokenPair,
-        shares: Decimal,
+        shares: Integer,
     ) -> Result<WithdrawResult, Error> {
         validate_amount(shares)?;
         let pool = ctx
@@ -256,15 +255,15 @@ impl Guest for Amm {
 
         let lp_total_supply = pool.lp_total_supply();
         Ok(WithdrawResult {
-            amount_a: (shares * pool.balance_a() / lp_total_supply).trunc(),
-            amount_b: (shares * pool.balance_b() / lp_total_supply).trunc(),
+            amount_a: shares * pool.balance_a() / lp_total_supply,
+            amount_b: shares * pool.balance_b() / lp_total_supply,
         })
     }
 
     fn withdraw(
         ctx: &ProcContext,
         pair: TokenPair,
-        shares: Decimal,
+        shares: Integer,
     ) -> Result<WithdrawResult, Error> {
         let res = Self::quote_withdraw(&ctx.view_context(), pair.clone(), shares)?;
         let pool = ctx
@@ -290,8 +289,9 @@ impl Guest for Amm {
         pool.update_balance_a(|b| b - res.amount_a);
         pool.update_balance_b(|b| b - res.amount_b);
 
-        token_dyn::transfer(&pair.a, ctx.contract_signer(), &user, res.amount_a)?;
-        token_dyn::transfer(&pair.b, ctx.contract_signer(), &user, res.amount_b)?;
+        let user_str = user.to_string();
+        token_dyn::transfer(&pair.a, ctx.contract_signer(), &user_str, res.amount_a)?;
+        token_dyn::transfer(&pair.b, ctx.contract_signer(), &user_str, res.amount_b)?;
 
         Ok(res)
     }
@@ -300,8 +300,8 @@ impl Guest for Amm {
         ctx: &ViewContext,
         pair: TokenPair,
         token_in: ContractAddress,
-        amount_in: Decimal,
-    ) -> Result<Decimal, Error> {
+        amount_in: Integer,
+    ) -> Result<Integer, Error> {
         let pool = ctx
             .model()
             .pools()
@@ -319,9 +319,9 @@ impl Guest for Amm {
         ctx: &ProcContext,
         pair: TokenPair,
         token_in: ContractAddress,
-        amount_in: Decimal,
-        min_out: Decimal,
-    ) -> Result<Decimal, Error> {
+        amount_in: Integer,
+        min_out: Integer,
+    ) -> Result<Integer, Error> {
         let token_out = pair_other_token(&pair, &token_in)?;
         let amount_out = Self::quote_swap(
             &ctx.view_context(),
@@ -347,10 +347,13 @@ impl Guest for Amm {
             pool.update_balance_b(|b| b + amount_in);
         }
 
-        let custodian: Holder = (&ctx.contract_signer()).into();
-        let recipient: Holder = (&ctx.signer()).into();
-        token_dyn::transfer(&token_in, ctx.signer(), &custodian, amount_in)?;
-        token_dyn::transfer(&token_out, ctx.contract_signer(), &recipient, amount_out)?;
+        token_dyn::transfer(&token_in, ctx.signer(), &model.custodian(), amount_in)?;
+        token_dyn::transfer(
+            &token_out,
+            ctx.contract_signer(),
+            &ctx.signer().key(),
+            amount_out,
+        )?;
 
         Ok(amount_out)
     }

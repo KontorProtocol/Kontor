@@ -1,46 +1,22 @@
 package root:component;
 
-// A user-surface fungible token that conforms to the native token's "known"
-// interface (holder-ref keys, decimal amounts, the same method shapes) MINUS the
-// privileged bits: no `deposit` import / `floor` view (native-only) and no
-// core-context emission methods (issuance/issue-to/hold/release). Used by the SDK
-// capstone test as a republishable token now that the native token — which imports
-// the native-only `deposit` interface — can no longer be deployed by a user.
 world root {
-  include kontor:built-in/built-in;
-  use kontor:built-in/context.{view-context, proc-context, holder-ref, contract};
-  use kontor:built-in/error.{error};
-  use kontor:built-in/numbers.{decimal};
+	include kontor:built-in/built-in;
+	use kontor:built-in/context.{core-context, view-context, proc-context, signer, contract};
+	use kontor:built-in/error.{error};
+	use kontor:built-in/numbers.{integer};
 
   record balance {
-    acc: holder-ref,
-    amt: decimal,
-  }
+		key: string,
+		value: integer,
+	}
 
-  record transfer {
-    src: holder-ref,
-    dst: holder-ref,
-    amt: decimal,
-  }
+	export init: async func(ctx: borrow<proc-context>) -> contract;
 
-  record burn {
-    src: holder-ref,
-    amt: decimal,
-  }
-
-  record mint {
-    dst: holder-ref,
-    amt: decimal,
-  }
-
-  export init: async func(ctx: borrow<proc-context>) -> contract;
-
-  export mint: async func(ctx: borrow<proc-context>, amt: decimal) -> result<mint, error>;
-  export burn: async func(ctx: borrow<proc-context>, amt: decimal) -> result<burn, error>;
-  export transfer: async func(ctx: borrow<proc-context>, dst: holder-ref, amt: decimal) -> result<transfer, error>;
-  export balance: async func(ctx: borrow<view-context>, acc: holder-ref) -> option<decimal>;
-  export balances: async func(ctx: borrow<view-context>) -> list<balance>;
-  export total-supply: async func(ctx: borrow<view-context>) -> decimal;
-  export attach: async func(ctx: borrow<proc-context>, vout: u32, amt: decimal) -> result<transfer, error>;
-  export detach: async func(ctx: borrow<proc-context>) -> result<transfer, error>;
+	export mint: async func(ctx: borrow<proc-context>, n: integer) -> result<_, error>;
+	export burn: async func(ctx: borrow<proc-context>, n: integer) -> result<_, error>;
+	export transfer: async func(ctx: borrow<proc-context>, to: string, n: integer) -> result<_, error>;
+	export balance: async func(ctx: borrow<view-context>, acc: string) -> option<integer>;
+	export balances: async func(ctx: borrow<view-context>) -> list<balance>;
+	export total-supply: async func(ctx: borrow<view-context>) -> integer;
 }

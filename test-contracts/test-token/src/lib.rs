@@ -5,53 +5,25 @@ use stdlib::*;
 
 #[derive(Clone, Default, StorageRoot)]
 struct TokenStorage {
-    pub ledger: Map<Holder, Decimal>,
-    pub total_supply: Decimal,
+    pub ledger: Map<Holder, Integer>,
+    pub total_supply: Integer,
 }
 
-fn utxo_holder(out_point: context::OutPoint) -> Holder {
-    Holder::from_ref(&HolderRef::Utxo(out_point)).unwrap()
-}
-
-fn assert_gt_zero(n: Decimal) -> Result<(), Error> {
-    if n <= 0u64.try_into()? {
+fn assert_gt_zero(n: Integer) -> Result<(), Error> {
+    if n <= 0.into() {
         return Err(Error::Message("Amount must be positive".to_string()));
     }
+
     Ok(())
 }
 
-fn mint(model: &TokenStorageWriteModel, dst: Holder, amt: Decimal) -> Result<Mint, Error> {
-    assert_gt_zero(amt)?;
+fn mint(model: &TokenStorageWriteModel, to: Holder, n: Integer) -> Result<(), Error> {
+    assert_gt_zero(n)?;
     let ledger = model.ledger();
-    let new_amt = ledger.get(&dst).unwrap_or_default().add(amt)?;
-    ledger.set(&dst, new_amt);
-    model.try_update_total_supply(|t| t.add(amt))?;
-    Ok(Mint {
-        dst: dst.into(),
-        amt: new_amt,
-    })
-}
-
-fn transfer(ctx: &ProcContext, src: Holder, dst: Holder, amt: Decimal) -> Result<Transfer, Error> {
-    assert_gt_zero(amt)?;
-    let ledger = ctx.model().ledger();
-
-    let src_amt = ledger.get(&src).unwrap_or_default();
-    let dst_amt = ledger.get(&dst).unwrap_or_default();
-
-    if src_amt < amt {
-        return Err(Error::Message("insufficient funds".to_string()));
-    }
-
-    // No storage-deposit floor check: that is the native token's privilege (the
-    // `deposit` host fn is native-only). A user token bounds nothing here.
-    ledger.set(&src, src_amt.sub(amt)?);
-    ledger.set(&dst, dst_amt.add(amt)?);
-    Ok(Transfer {
-        src: src.into(),
-        dst: dst.into(),
-        amt,
-    })
+    let balance = ledger.get(&to).unwrap_or_default();
+    ledger.set(&to, balance.add(n)?);
+    model.try_update_total_supply(|t| t.add(n))?;
+    Ok(())
 }
 
 impl Guest for TestToken {
@@ -60,45 +32,37 @@ impl Guest for TestToken {
         ctx.contract()
     }
 
-    fn mint(ctx: &ProcContext, amt: Decimal) -> Result<Mint, Error> {
-        // Uncapped — test-token is a test fixture; tests mint large amounts and rely on
-        // the total-supply add to surface overflow.
-        mint(&ctx.model(), ctx.signer().into(), amt)
+    fn mint(ctx: &ProcContext, n: Integer) -> Result<(), Error> {
+        let to: Holder = (&ctx.signer()).into();
+        mint(&ctx.model(), to, n)
     }
 
-    fn burn(ctx: &ProcContext, amt: Decimal) -> Result<Burn, Error> {
-        transfer(ctx, ctx.signer().into(), BURNER(), amt)?;
-        ctx.model().try_update_total_supply(|t| t.sub(amt))?;
-        Ok(Burn {
-            src: ctx.signer().into(),
-            amt,
-        })
+    fn burn(ctx: &ProcContext, n: Integer) -> Result<(), Error> {
+        Self::transfer(ctx, BURNER().to_string(), n)?;
+        ctx.model().try_update_total_supply(|t| t.sub(n))?;
+        Ok(())
     }
 
-    fn transfer(ctx: &ProcContext, dst: HolderRef, amt: Decimal) -> Result<Transfer, Error> {
-        transfer(ctx, ctx.signer().into(), dst.try_into()?, amt)
+    fn transfer(ctx: &ProcContext, to: String, n: Integer) -> Result<(), Error> {
+        assert_gt_zero(n)?;
+        let from: Holder = (&ctx.signer()).into();
+        let to: Holder = to.parse().expect("invalid holder");
+        let ledger = ctx.model().ledger();
+
+        let from_balance = ledger.get(&from).unwrap_or_default();
+        let to_balance = ledger.get(&to).unwrap_or_default();
+
+        if from_balance < n {
+            return Err(Error::Message("insufficient funds".to_string()));
+        }
+
+        ledger.set(&from, from_balance.sub(n)?);
+        ledger.set(&to, to_balance.add(n)?);
+        Ok(())
     }
 
-    fn attach(ctx: &ProcContext, vout: u32, amt: Decimal) -> Result<Transfer, Error> {
-        let out_point = context::OutPoint {
-            txid: ctx.transaction().id(),
-            vout,
-        };
-        transfer(ctx, ctx.signer().into(), utxo_holder(out_point), amt)
-    }
-
-    fn detach(ctx: &ProcContext) -> Result<Transfer, Error> {
-        let src = utxo_holder(ctx.transaction().out_point());
-        let amt = ctx
-            .model()
-            .ledger()
-            .get(&src)
-            .ok_or(Error::Message("Source has no balance".to_string()))?;
-        transfer(ctx, src, ctx.payer(), amt)
-    }
-
-    fn balance(ctx: &ViewContext, acc: HolderRef) -> Option<Decimal> {
-        let holder: Holder = acc.try_into().ok()?;
+    fn balance(ctx: &ViewContext, acc: String) -> Option<Integer> {
+        let holder: Holder = acc.parse().ok()?;
         ctx.model().ledger().get(&holder)
     }
 
@@ -106,21 +70,20 @@ impl Guest for TestToken {
         ctx.model()
             .ledger()
             .keys()
-            .filter_map(|acc| {
-                let acc_ref = acc.as_ref();
-                if acc_ref == HolderRef::Burner || acc_ref == HolderRef::Core {
+            .filter_map(|k| {
+                if k == BURNER() {
                     None
                 } else {
                     Some(Balance {
-                        amt: ctx.model().ledger().get(&acc).unwrap_or_default(),
-                        acc: acc_ref,
+                        value: ctx.model().ledger().get(&k).unwrap_or_default(),
+                        key: k.to_string(),
                     })
                 }
             })
             .collect()
     }
 
-    fn total_supply(ctx: &ViewContext) -> Decimal {
+    fn total_supply(ctx: &ViewContext) -> Integer {
         ctx.model().total_supply()
     }
 }

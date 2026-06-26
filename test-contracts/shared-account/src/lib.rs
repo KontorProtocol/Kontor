@@ -8,7 +8,7 @@ interface!(name = "token", path = "../test-token/wit");
 #[derive(Clone, Default, Storage)]
 struct Account {
     pub other_tenants: Map<Holder, bool>,
-    pub balance: Decimal,
+    pub balance: Integer,
     pub owner: String,
 }
 
@@ -43,12 +43,11 @@ impl Guest for SharedAccount {
     fn open(
         ctx: &ProcContext,
         token: ContractAddress,
-        n: Decimal,
+        n: Integer,
         other_tenants: Vec<String>,
     ) -> Result<String, Error> {
         let signer = ctx.signer();
-        // Decimal throughout — a Signer is `Into<HolderRef>` for the token call.
-        let balance = token::balance(&token, &signer).ok_or(insufficient_balance_error())?;
+        let balance = token::balance(&token, &signer.key()).ok_or(insufficient_balance_error())?;
         if balance < n {
             return Err(insufficient_balance_error());
         }
@@ -65,7 +64,7 @@ impl Guest for SharedAccount {
                 other_tenants: Map::new(&tenant_holders),
             },
         );
-        token::transfer(&token, signer, ctx.contract_signer(), n)?;
+        token::transfer(&token, signer, &ctx.contract_signer().to_string(), n)?;
         Ok(account_id)
     }
 
@@ -73,10 +72,10 @@ impl Guest for SharedAccount {
         ctx: &ProcContext,
         token: ContractAddress,
         account_id: String,
-        n: Decimal,
+        n: Integer,
     ) -> Result<(), Error> {
         let signer = ctx.signer();
-        let balance = token::balance(&token, &signer).ok_or(insufficient_balance_error())?;
+        let balance = token::balance(&token, &signer.key()).ok_or(insufficient_balance_error())?;
         if balance < n {
             return Err(insufficient_balance_error());
         }
@@ -89,15 +88,14 @@ impl Guest for SharedAccount {
             return Err(unauthorized_error());
         }
         account.update_balance(|b| b + n);
-        token::transfer(&token, signer, ctx.contract_signer(), n)?;
-        Ok(())
+        token::transfer(&token, signer, &ctx.contract_signer().to_string(), n)
     }
 
     fn withdraw(
         ctx: &ProcContext,
         token: ContractAddress,
         account_id: String,
-        n: Decimal,
+        n: Integer,
     ) -> Result<(), Error> {
         let signer = ctx.signer();
         let account = ctx
@@ -113,11 +111,10 @@ impl Guest for SharedAccount {
             return Err(insufficient_balance_error());
         }
         account.set_balance(balance - n);
-        token::transfer(&token, ctx.contract_signer(), &signer, n)?;
-        Ok(())
+        token::transfer(&token, ctx.contract_signer(), &signer.key(), n)
     }
 
-    fn balance(ctx: &ViewContext, account_id: String) -> Option<Decimal> {
+    fn balance(ctx: &ViewContext, account_id: String) -> Option<Integer> {
         ctx.model().accounts().get(&account_id).map(|a| a.balance())
     }
 
@@ -125,8 +122,7 @@ impl Guest for SharedAccount {
         _ctx: &ViewContext,
         token: ContractAddress,
         holder: String,
-    ) -> Option<Decimal> {
-        let holder: Holder = holder.parse().ok()?;
+    ) -> Option<Integer> {
         token::balance(&token, &holder)
     }
 

@@ -451,19 +451,15 @@ async fn run_test_amm_limits(runtime: &mut Runtime) -> Result<()> {
     let token_a = addrs[1].clone();
     let token_b = addrs[2].clone();
 
-    // The AMM is decimal now; `validate_amount` caps inputs at 1e28 to keep the constant
-    // product within Decimal's whole-number range. Verify the cap is enforced and that a
-    // large in-bound swap drains TOWARD — never past — the pool and never decreases k.
-    // `large_value` (1e18) is large vs the pool yet within Decimal's 18-digit fractional
-    // precision: values near the cap would round and break k — a fixed-point limitation
-    // the old integer AMM didn't have, so the limit test stays under it.
-    let large_value: Decimal = "1_000_000_000_000_000_000".into(); // 1e18
-    let oversized_value: Decimal = "10_000_000_000_000_000_000_000_000_001".into(); // 1e28 + 1
-    let mint_supply: Decimal = format!("1{}", "0".repeat(50)).as_str().into(); // 1e50
+    let max_int = "115_792_089_237_316_195_423_570_985_008_687_907_853_269_984_665_640_564_039_457";
+    let large_value: Integer = "340_282_366_920_938_463_463_374_606_431".into(); // sqrt(MAX_INT) - 1000
+    let oversized_value = large_value + 1.into();
 
     let mut ops = Ops::new(&minter);
-    ops.push(token::mint_call(&token_a, mint_supply));
-    ops.push(token::mint_call(&token_b, mint_supply));
+    ops.push(token::mint_call(&token_a, max_int.into()));
+    ops.push(token::mint_call(&token_b, max_int.into()));
+    ops.push(token::transfer_call(&token_a, &admin, 1000.into()));
+    ops.push(token::transfer_call(&token_b, &admin, 1000.into()));
     let mut submit = runtime.submit();
     submit.add(ops);
     submit.execute().await?;
@@ -472,26 +468,24 @@ async fn run_test_amm_limits(runtime: &mut Runtime) -> Result<()> {
         a: token_a.clone(),
         b: token_b.clone(),
     };
-    amm::create(
+    let res = amm::create(
         runtime,
         &amm,
-        &minter,
+        &admin,
         pair.clone(),
         1000.into(),
         1000.into(),
         0.into(),
     )
-    .await??;
+    .await?;
+    assert_eq!(res, Ok(1000.into()));
 
-    let bal_a = amm::token_balance(runtime, &amm, pair.clone(), token_a.clone())
-        .await?
-        .unwrap();
-    let bal_b = amm::token_balance(runtime, &amm, pair.clone(), token_b.clone())
-        .await?
-        .unwrap();
-    let k1 = bal_a * bal_b;
+    let bal_a = amm::token_balance(runtime, &amm, pair.clone(), token_a.clone()).await?;
+    let bal_b = amm::token_balance(runtime, &amm, pair.clone(), token_b.clone()).await?;
+    let k1 = bal_a.unwrap() * bal_b.unwrap();
 
-    // Over the cap → rejected by `validate_amount`.
+    let res = amm::quote_swap(runtime, &amm, pair.clone(), token_a.clone(), large_value).await?;
+    assert_eq!(res, Ok(999.into()));
     let res = amm::quote_swap(
         runtime,
         &amm,
@@ -502,30 +496,69 @@ async fn run_test_amm_limits(runtime: &mut Runtime) -> Result<()> {
     .await?;
     assert!(res.is_err());
 
-    // A large in-bound swap: positive output, strictly below the pool's out-balance
-    // (can't drain the whole pool), and k never decreases.
-    let out = amm::quote_swap(runtime, &amm, pair.clone(), token_a.clone(), large_value)
-        .await?
-        .unwrap();
-    assert!(out > 0.into() && out < 1000.into());
-    amm::swap(
+    let res = amm::swap(
         runtime,
         &amm,
         &minter,
         pair.clone(),
         token_a.clone(),
         large_value,
+        900.into(),
+    )
+    .await?;
+    assert_eq!(res, Ok(999.into()));
+
+    let res = amm::quote_swap(runtime, &amm, pair.clone(), token_a.clone(), 1.into()).await?;
+    assert!(res.is_err());
+    let res = amm::swap(
+        runtime,
+        &amm,
+        &minter,
+        pair.clone(),
+        token_a.clone(),
+        1.into(),
         0.into(),
     )
-    .await??;
+    .await?;
+    assert!(res.is_err());
 
-    let bal_a = amm::token_balance(runtime, &amm, pair.clone(), token_a.clone())
-        .await?
-        .unwrap();
-    let bal_b = amm::token_balance(runtime, &amm, pair.clone(), token_b.clone())
-        .await?
-        .unwrap();
-    assert!(bal_a * bal_b >= k1);
+    let bal_a = amm::token_balance(runtime, &amm, pair.clone(), token_a.clone()).await?;
+    let bal_b = amm::token_balance(runtime, &amm, pair.clone(), token_b.clone()).await?;
+    let k2 = bal_a.unwrap() * bal_b.unwrap();
+    assert!(k2 >= k1);
+
+    let res = amm::quote_swap(runtime, &amm, pair.clone(), token_b.clone(), large_value).await?;
+    assert_eq!(res, Ok("340_282_366_920_938_463_463_374_607_429".into()));
+    let res = amm::swap(
+        runtime,
+        &amm,
+        &minter,
+        pair.clone(),
+        token_b.clone(),
+        large_value,
+        0.into(),
+    )
+    .await?;
+    assert_eq!(res, Ok("340_282_366_920_938_463_463_374_607_429".into()));
+
+    let res = amm::quote_swap(runtime, &amm, pair.clone(), token_b.clone(), 1000.into()).await?;
+    assert!(res.is_err());
+    let res = amm::swap(
+        runtime,
+        &amm,
+        &minter,
+        pair.clone(),
+        token_b.clone(),
+        1000.into(),
+        0.into(),
+    )
+    .await?;
+    assert!(res.is_err());
+
+    let bal_a = amm::token_balance(runtime, &amm, pair.clone(), token_a.clone()).await?;
+    let bal_b = amm::token_balance(runtime, &amm, pair.clone(), token_b.clone()).await?;
+    let k3 = bal_a.unwrap() * bal_b.unwrap();
+    assert!(k3 >= k2);
 
     Ok(())
 }
