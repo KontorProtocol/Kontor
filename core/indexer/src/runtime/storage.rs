@@ -568,6 +568,7 @@ impl Storage {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::database::connection::new_connection;
     use crate::database::queries::insert_block;
     use crate::test_utils::{new_mock_block_hash, new_test_db};
     use indexer_types::BlockRow;
@@ -930,6 +931,51 @@ mod tests {
                 fresh_us / cache_us
             );
         }
+        Ok(())
+    }
+
+    // Regression for the runtime-pool stale-snapshot bug behind the flaky floor-view
+    // test: a pooled "view" connection that leaks an open read transaction stays pinned
+    // to its old WAL snapshot and serves stale reads forever — unless reset on recycle.
+    // This drives the exact scenario: a leaked BEGIN pins a snapshot, a concurrent
+    // writer commits, the leaked connection reads stale, then `rollback_transaction`
+    // (what the runtime pool's `recycle` now calls) restores a fresh snapshot.
+    #[tokio::test]
+    async fn pool_recycle_clears_stale_snapshot() -> Result<()> {
+        let (_reader, writer, (temp, db_name)) = new_test_db().await?;
+        let writer_conn = writer.connection();
+        // A second physical connection to the SAME WAL db — stands in for a pooled
+        // runtime/view connection handed out by the runtime pool.
+        let view_conn = new_connection(temp.path(), &db_name).await?;
+        let view = Storage::builder().conn(view_conn.clone()).build();
+
+        let key = "stale_snapshot_probe";
+        set_meta_u64(&writer_conn, key, 1).await?;
+
+        // The view opens a transaction and reads — pinning its WAL snapshot at value 1.
+        view.savepoint().await?;
+        assert_eq!(get_meta_u64(&view_conn, key, 0).await?, 1);
+
+        // The writer advances the value and commits (autocommit).
+        set_meta_u64(&writer_conn, key, 2).await?;
+
+        // Still inside its leaked transaction, the view is pinned to the old snapshot —
+        // exactly the stale read a no-op recycle would serve indefinitely.
+        assert_eq!(
+            get_meta_u64(&view_conn, key, 0).await?,
+            1,
+            "an open transaction must still see its pinned (stale) snapshot"
+        );
+
+        // What the pool's `recycle` now does before handing the connection out again.
+        view.rollback_transaction().await?;
+
+        // A fresh read now sees the latest committed value — no stale snapshot.
+        assert_eq!(
+            get_meta_u64(&view_conn, key, 0).await?,
+            2,
+            "after the recycle reset, the connection must read the latest committed state"
+        );
         Ok(())
     }
 }
