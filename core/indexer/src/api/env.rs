@@ -67,6 +67,7 @@ impl Env {
                 db_path.to_path_buf(),
                 db_name,
                 bitcoin::Network::Regtest,
+                crate::config::DEFAULT_VIEW_GAS_LIMIT,
             )
             .await?,
             reader,

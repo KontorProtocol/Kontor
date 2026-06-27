@@ -235,6 +235,7 @@ async fn run_daemon(config: Config) -> Result<()> {
                     config.data_dir.clone(),
                     filename.to_string(),
                     config.network,
+                    config.view_gas_limit,
                 )
                 .await?,
                 simulate_tx,
