@@ -3,7 +3,6 @@ contract!(
     name = "filestorage",
     indexed = "
         agreement-data: active;
-        agreement-data: eligible by active active-challenge;
         challenge-data: status;
         challenge-data: due by status sort deadline-height;
     "
@@ -52,8 +51,6 @@ const MAX_VALID_ROOTS: u64 = 4096;
 // `IndexedMap`. The bookkeeping lives in stdlib (audited once), not hand-rolled here.
 //
 //   agreements            indexed by `active` → where_active(true)
-//   agreements            `eligible`: by (`active`, `active_challenge` presence)
-//                                → where_eligible(true, Presence::Absent) (composite)
 //   challenges            indexed by `status` → where_status(ChallengeStatus::Active)
 //   challenges            `due`: by `status`, sorted by `deadline_height`
 //                                → where_due(Active).up_to(height) (ordered, early-break)
@@ -87,10 +84,13 @@ const MAX_VALID_ROOTS: u64 = 4096;
 // `active` buckets (no hand-kept `agreement_count`) — neither can drift.
 //
 // Deferred: partial/`filter` indexes and covering indexes (avoid the where_*→get
-// N reads). See the upgrade backlog. (The `due` sorted index covers the composite
-// `(status, deadline_height)` sweep `expire` needed; the `eligible` composite
-// index covers `active ∧ unchallenged`; the flat compound-keyed `memberships` map
-// replaced the nested per-agreement node map.)
+// N reads), and order-statistics on indexes (the i-th member in O(log n)). See the
+// upgrade backlog. Challenge selection needs uniform random ordinal access into the
+// eligible set, which a key-ordered index can't give sublinearly — so it uses the
+// dense append-only `active_ids` array instead (see ProtocolState), not an index.
+// (The `due` sorted index covers the composite `(status, deadline_height)` sweep
+// `expire` needed; the flat compound-keyed `memberships` map replaced the nested
+// per-agreement node map.)
 // ─────────────────────────────────────────────────────────────────
 
 // ─────────────────────────────────────────────────────────────────
@@ -135,6 +135,16 @@ struct ProtocolState {
     pub agreements: Map<String, AgreementData>,
     pub memberships: Map<(String, u64), NodeState>,
     pub challenges: Map<String, ChallengeData>,
+    /// Dense, append-only array of ACTIVE agreements' ids (position 0..len). An
+    /// agreement is pushed here exactly when it activates (reaches `min_nodes`);
+    /// `active` is monotonic (never turned off) and agreements never terminate, so
+    /// this only grows — no holes, no removal. It exists for one reason: challenge
+    /// selection needs uniform-random ORDINAL access ("the i-th active agreement"),
+    /// which the key-ordered `active` index can't answer sublinearly (you'd walk the
+    /// bucket, O(n)). `active_ids.get(i)` is O(1), so generate_challenges samples in
+    /// O(challenges-this-block) instead of materializing the whole eligible set.
+    /// Eligibility (not currently challenged) is applied by rejection at sample time.
+    pub active_ids: Deque<String>,
     // The accepted aggregated-root window ({current} ∪ recent history): a new root
     // is one O(1) push per file add (not a rewrite of the whole window). `verify`
     // is given this set; a proof's ledger_root must be a member. Bounded by
@@ -212,6 +222,7 @@ impl Guest for Filestorage {
             agreements: Map::default(),
             memberships: Map::default(),
             challenges: Map::default(),
+            active_ids: Deque::default(),
             valid_roots: Deque::default(),
             pending_appends: Deque::default(),
             frontier_count: 0,
@@ -393,6 +404,9 @@ impl Guest for Filestorage {
             // In-place set: the `active` index is maintained automatically
             // because `agreements().get()` binds the value model to the index.
             agreement.set_active(true);
+            // Append to the dense active array (activation is one-way, so this is the
+            // only place it grows). Gives generate_challenges O(1) ordinal access.
+            model.active_ids().push_back(agreement_id.clone());
         }
 
         Ok(JoinAgreementResult {
@@ -586,16 +600,16 @@ impl Guest for Filestorage {
         // Per-block batch seed: σ_batch = HKDF_SHA256(block_hash, "KONTOR-CHAL::v1" || block_height)
         let sigma_batch = derive_batch_seed(&block_hash, block_height);
 
-        // Eligible agreements: active AND not already challenged. The composite
-        // `eligible` index (bucketed by `active` and the presence of
-        // `active_challenge`) makes this a single prefix scan — no `where_active`
-        // scan + per-agreement point read to filter the challenged ones out.
-        let eligible_agreement_ids: Vec<String> = model
-            .agreements()
-            .where_eligible(true, Presence::Absent)
-            .collect();
-
-        let total_files = eligible_agreement_ids.len();
+        // Eligible agreements = active AND not currently challenged. Both inputs are
+        // O(1): `active_ids` is the dense append-only array of active agreements (its
+        // length is the active count), and the challenged count is the Active-challenge
+        // bucket count (≤1 active challenge per agreement). This replaces the old O(n)
+        // `where_eligible(...).collect()` that materialized the whole eligible set every
+        // block just to index into it.
+        let active_ids = model.active_ids();
+        let active_count = active_ids.len();
+        let challenged = model.challenges().count_status(ChallengeStatus::Active);
+        let total_files = active_count.saturating_sub(challenged) as usize;
         if total_files == 0 {
             return new_challenges;
         }
@@ -622,21 +636,37 @@ impl Guest for Filestorage {
             return new_challenges;
         }
 
-        // Don't try to challenge more agreements than exist
+        // Don't try to challenge more agreements than are eligible
         let num_to_challenge = core::cmp::min(num_to_challenge, total_files);
 
-        // Select random unique agreement indices (rejection sampling avoids modulo bias)
-        let mut selected_indices = BTreeSet::new();
-        let eligible_len = eligible_agreement_ids.len();
-        if num_to_challenge == eligible_len {
-            for i in 0..eligible_len {
-                selected_indices.insert(i);
+        // Select `num_to_challenge` distinct eligible agreements by REJECTION SAMPLING
+        // over the dense active array: draw a random ordinal, skip it if that agreement
+        // is currently challenged (ineligible) or already chosen. Expected draws are
+        // O(num_to_challenge) — the challenged fraction is ≈ c_target·deadline /
+        // blocks_per_year (a protocol constant well below 1, independent of the total
+        // file count), so this stays bounded as state grows rather than degrading to an
+        // O(n) scan. (`num_to_challenge ≤ total_files` guarantees the loop terminates.)
+        let mut selected: BTreeSet<String> = BTreeSet::new();
+        while selected.len() < num_to_challenge {
+            let ordinal =
+                uniform_index(&agreement_seed, &mut rng_counter, b"select", active_count as usize)
+                    as u64;
+            let agreement_id = match active_ids.get(ordinal) {
+                Some(id) => id,
+                None => continue,
+            };
+            if selected.contains(&agreement_id) {
+                continue;
             }
-        } else {
-            while selected_indices.len() < num_to_challenge {
-                let index =
-                    uniform_index(&agreement_seed, &mut rng_counter, b"select", eligible_len);
-                selected_indices.insert(index);
+            // Eligible = not currently under challenge (every `active_ids` entry is
+            // active by construction).
+            if model
+                .agreements()
+                .get(&agreement_id)
+                .map(|a| a.active_challenge().is_none())
+                .unwrap_or(false)
+            {
+                selected.insert(agreement_id);
             }
         }
 
@@ -644,8 +674,7 @@ impl Guest for Filestorage {
         let deadline_height = block_height + model.challenge_deadline_blocks();
 
         // Create challenges for selected agreements
-        for index in selected_indices {
-            let agreement_id = &eligible_agreement_ids[index];
+        for agreement_id in &selected {
             let agreement = match model.agreements().get(agreement_id) {
                 Some(a) => a,
                 None => continue,

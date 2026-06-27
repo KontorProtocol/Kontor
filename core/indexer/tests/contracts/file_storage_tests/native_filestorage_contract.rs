@@ -1,4 +1,4 @@
-use indexer::test_utils::{LUCKY_HASH_50000, lucky_hash, make_descriptor};
+use indexer::test_utils::{LUCKY_HASH_50000, lucky_hash, make_descriptor, valid_seed_field};
 use testlib::*;
 
 import!(
@@ -666,6 +666,63 @@ async fn challenge_gen_with_lucky_hash(runtime: &mut Runtime) -> Result<()> {
     Ok(())
 }
 
+/// Challenge selection must SKIP an agreement that already has an active challenge
+/// (the ≤1-active-challenge-per-agreement invariant) and exclude it from the eligible
+/// count. Two active agreements, one already challenged: a generating block lands its
+/// single challenge on the OTHER, and never gives the challenged one a second. Exercises
+/// the new dense-array rejection sampler + the `active_count - challenged` count path.
+async fn challenge_gen_skips_already_challenged(runtime: &mut Runtime) -> Result<()> {
+    let signer = runtime.identity().await?;
+    let core_signer = Signer::Core(Box::new(runtime.identity().await?));
+
+    let a = filestorage::create_agreement(
+        runtime,
+        &signer,
+        make_descriptor("skip_a".into(), vec![1u8; 32], 16, 100, "a.txt".into()),
+    )
+    .await??;
+    let a_nodes = join_n_distinct(runtime, &a.agreement_id, 3).await?;
+
+    let b = filestorage::create_agreement(
+        runtime,
+        &signer,
+        make_descriptor("skip_b".into(), vec![1u8; 32], 16, 100, "b.txt".into()),
+    )
+    .await??;
+    join_n_distinct(runtime, &b.agreement_id, 3).await?;
+
+    // Challenge A directly → A is now ineligible.
+    filestorage::create_challenge_for_agreement(
+        runtime,
+        &signer,
+        &a.agreement_id,
+        a_nodes[0],
+        1000,
+        valid_seed_field(1).bytes.to_vec(),
+    )
+    .await??;
+    assert_eq!(filestorage::get_active_challenges(runtime).await?.len(), 1);
+
+    // One eligible file (B) + the lucky hash → exactly one challenge, and the sampler
+    // must skip A's ordinal and select B.
+    let challenges = filestorage::generate_challenges_for_block(
+        runtime,
+        &core_signer,
+        50000,
+        lucky_hash(LUCKY_HASH_50000).to_vec(),
+    )
+    .await?;
+    assert_eq!(challenges.len(), 1, "one eligible file → one challenge");
+    assert_eq!(
+        challenges[0].agreement_id, b.agreement_id,
+        "must skip the already-challenged A and select B"
+    );
+
+    // A was never double-challenged; total active challenges is now 2 (A's + B's new one).
+    assert_eq!(filestorage::get_active_challenges(runtime).await?.len(), 2);
+    Ok(())
+}
+
 pub async fn run_regtest(runtime: &mut Runtime) -> Result<()> {
     filestorage_defaults(runtime).await?;
     filestorage_empty_file_id_fails(runtime).await?;
@@ -692,6 +749,10 @@ pub async fn run_regtest(runtime: &mut Runtime) -> Result<()> {
 
 pub async fn run_core_signer_smoke(runtime: &mut Runtime) -> Result<()> {
     challenge_gen_smoke_test(runtime).await
+}
+
+pub async fn run_core_signer_skip_challenged(runtime: &mut Runtime) -> Result<()> {
+    challenge_gen_skips_already_challenged(runtime).await
 }
 
 pub async fn run_core_signer_lucky(runtime: &mut Runtime) -> Result<()> {
