@@ -36,7 +36,7 @@ fn encode_peaks(peaks: &[FieldElement]) -> Vec<u8> {
 /// as a canonical field element. Errors on a non-multiple-of-32 length or a
 /// non-canonical encoding (corrupt persisted state, never valid input).
 fn decode_peaks(bytes: &[u8]) -> Result<Vec<FieldElement>, String> {
-    if bytes.len() % 32 != 0 {
+    if !bytes.len().is_multiple_of(32) {
         return Err(format!(
             "frontier peaks blob length {} is not a multiple of 32",
             bytes.len()
@@ -118,8 +118,7 @@ impl Runtime {
         // slot must be exactly the next one. Asserting it (rather than trusting the
         // contract's ordering) keeps the incremental root in lock-step with what a
         // full `aggregate_root` over the same slots would produce.
-        let mut expected_slot = count;
-        for (root, padded_len, ledger_index) in new_files {
+        for (expected_slot, (root, padded_len, ledger_index)) in (count..).zip(new_files) {
             if ledger_index != expected_slot {
                 return Ok(Err(Error::Validation(format!(
                     "frontier-append expects contiguous slots: got ledger_index {ledger_index}, expected {expected_slot}"
@@ -134,7 +133,6 @@ impl Runtime {
                 Err(m) => return Ok(Err(Error::Validation(m.to_string()))),
             };
             frontier.append(root_fe, depth);
-            expected_slot += 1;
         }
 
         Ok(Ok((

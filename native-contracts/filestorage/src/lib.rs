@@ -571,8 +571,11 @@ impl Guest for Filestorage {
         // Fold them into the persisted frontier; `frontier_append` asserts each slot
         // is contiguous with `frontier_count` and returns the advanced state + the new
         // aggregated root.
-        let (new_count, new_peaks, root) =
-            file_registry::frontier_append(model.frontier_count(), &model.frontier_peaks(), &new_files)?;
+        let (new_count, new_peaks, root) = file_registry::frontier_append(
+            model.frontier_count(),
+            &model.frontier_peaks(),
+            &new_files,
+        )?;
         model.set_frontier_count(new_count);
         model.set_frontier_peaks(new_peaks);
 
@@ -648,9 +651,12 @@ impl Guest for Filestorage {
         // O(n) scan. (`num_to_challenge ≤ total_files` guarantees the loop terminates.)
         let mut selected: BTreeSet<String> = BTreeSet::new();
         while selected.len() < num_to_challenge {
-            let ordinal =
-                uniform_index(&agreement_seed, &mut rng_counter, b"select", active_count as usize)
-                    as u64;
+            let ordinal = uniform_index(
+                &agreement_seed,
+                &mut rng_counter,
+                b"select",
+                active_count as usize,
+            ) as u64;
             let agreement_id = match active_ids.get(ordinal) {
                 Some(id) => id,
                 None => continue,
