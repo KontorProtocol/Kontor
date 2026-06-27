@@ -93,7 +93,10 @@ impl Runtime {
             Some(f) => f,
             None => match payment {
                 Some(p) => p.gas_limit * self.gas_to_fuel_multiplier,
-                None => self.fuel_limit_for_non_procs(),
+                // payment-`None` is a read-only `/view` call → the operator-configurable
+                // view cap, NOT the consensus core-call budget (the Core-context
+                // procedure path keeps `fuel_limit_for_non_procs`).
+                None => self.fuel_limit_for_view(),
             },
         };
         let mut store = self

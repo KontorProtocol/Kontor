@@ -73,11 +73,11 @@ impl managed::Manager for Manager {
         .map_err(|e| RuntimeError::CreationFailed(e.to_string()))?;
         // Chain-identity constant, surfaced to contracts via `network()`.
         runtime.network = self.network;
-        // Operator-set `/view` budget. This is the ONLY place the view cap is applied,
-        // and only to pooled (read-only) runtimes — the reactor's consensus runtime is
-        // built separately and keeps the fixed `gas_limit_for_non_procs` default, so a
-        // view cross-called inside a consensus procedure stays deterministic.
-        runtime.gas_limit_for_non_procs = self.view_gas_limit;
+        // Operator-set `/view` budget. Sets ONLY `view_gas_limit` (the read-only view
+        // path), never `gas_limit_for_non_procs` (the consensus core-call budget) — so
+        // an operator can't starve core calls no matter how low they set this, and it
+        // only ever applies to pooled read-only runtimes anyway.
+        runtime.view_gas_limit = self.view_gas_limit;
         Ok(runtime)
     }
 
@@ -119,12 +119,12 @@ mod tests {
     use deadpool::managed::Manager as _; // brings the `create` trait method into scope
     use tempfile::TempDir;
 
-    // The operator's view gas cap applies to POOLED (read-only) runtimes only; the
-    // consensus runtime (built directly, not via the pool) keeps the fixed non-proc
-    // limit — so a view cross-called inside a procedure stays deterministic no matter
-    // what an operator sets for /view.
+    // The operator's view cap sets ONLY `view_gas_limit`, and only on pooled
+    // (read-only) runtimes. It must NEVER touch `gas_limit_for_non_procs` — the
+    // consensus core-call budget — so a too-low view cap can only break views, never
+    // starve core calls / affect consensus.
     #[tokio::test]
-    async fn view_gas_limit_applies_to_pool_runtime_not_consensus() -> anyhow::Result<()> {
+    async fn view_cap_is_decoupled_from_core_call_budget() -> anyhow::Result<()> {
         let dir = TempDir::new()?;
         let custom = 9_000_000u64;
         assert_ne!(
@@ -139,20 +139,23 @@ mod tests {
             custom,
         )?;
         let pooled = pool.create().await.map_err(|e| anyhow::anyhow!("{e}"))?;
+        // The view cap moved...
         assert_eq!(
-            pooled.gas_limit_for_non_procs, custom,
-            "pooled /view runtime must use the operator-configured cap"
+            pooled.view_gas_limit, custom,
+            "pooled /view runtime must use the operator-configured view cap"
+        );
+        // ...but the consensus core-call budget did NOT, even on the pool runtime.
+        assert_eq!(
+            pooled.gas_limit_for_non_procs, DEFAULT_VIEW_GAS_LIMIT,
+            "the view cap must not touch the core-call budget"
         );
 
-        // Consensus path: a Runtime built directly is untouched by the view cap.
+        // Consensus path: a directly-built Runtime is untouched on both fields.
         let conn = new_connection(dir.path(), "consensus.db").await?;
         let consensus =
             Runtime::new(ComponentCache::new(), Storage::builder().conn(conn).build()).await?;
-        assert_eq!(
-            consensus.gas_limit_for_non_procs, DEFAULT_VIEW_GAS_LIMIT,
-            "consensus runtime must keep the fixed non-proc limit, not the view cap"
-        );
-        assert_ne!(consensus.gas_limit_for_non_procs, custom);
+        assert_eq!(consensus.gas_limit_for_non_procs, DEFAULT_VIEW_GAS_LIMIT);
+        assert_eq!(consensus.view_gas_limit, DEFAULT_VIEW_GAS_LIMIT);
         Ok(())
     }
 }
