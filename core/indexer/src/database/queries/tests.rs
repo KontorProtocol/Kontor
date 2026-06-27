@@ -19,13 +19,21 @@ fn calculate_row_hash(state: &ContractStateRow) -> String {
     let value_part = hex::encode(&state.value).to_uppercase();
     let path_part = hex::encode(&state.path).to_uppercase();
     // Mirrors `checkpoint_trigger.sql`: fields joined by `|` (impossible in any
-    // field's charset) so the digest is unambiguous.
+    // field's charset) so the digest is unambiguous. A NULL depositor renders as
+    // empty (SQLite `concat` treats NULL as '').
+    let depositor_part = state.depositor.map(|d| d.to_string()).unwrap_or_default();
+    let amount_part = state
+        .deposited_gas
+        .map(|g| g.to_string())
+        .unwrap_or_default();
     let input = format!(
-        "{}|{}|{}|{}",
+        "{}|{}|{}|{}|{}|{}",
         state.contract_id,
         path_part,
         value_part,
-        if state.deleted { "1" } else { "0" }
+        if state.deleted { "1" } else { "0" },
+        depositor_part,
+        amount_part,
     );
     let mut hasher = Sha256::new();
     hasher.update(input.as_bytes());
@@ -492,7 +500,8 @@ async fn test_contract_state_operations() -> Result<()> {
     assert_eq!(latest_value, updated_value);
 
     // Delete the contract state
-    let deleted = delete_contract_state(&conn, height2, Some(tx_id2), contract_id, &path).await?;
+    let (deleted, _) =
+        delete_contract_state(&conn, height2, Some(tx_id2), contract_id, &path).await?;
     assert!(deleted);
 
     let count = conn
@@ -515,6 +524,361 @@ async fn test_contract_state_operations() -> Result<()> {
     let latest_state = get_latest_contract_state(&conn, contract_id, &path).await?;
     assert!(latest_state.is_none());
 
+    Ok(())
+}
+
+// `live_deposit_gas_sum` returns the FROZEN per-row deposit GAS a depositor holds
+// live across ALL contracts (the floor = their sum). Each row keeps the gas it was
+// charged (so an evolving D never re-prices it); overwrites replace the row's gas,
+// deletes drop it, and another depositor's rows are excluded.
+#[tokio::test]
+async fn test_live_deposit_gas_sum() -> Result<()> {
+    let (_reader, writer, _temp_dir) = new_test_db().await?;
+    let conn = writer.connection();
+    let height = 800000u64;
+    insert_block(
+        &conn,
+        BlockRow::builder()
+            .height(height)
+            .hash(new_mock_block_hash(height as u32))
+            .build(),
+    )
+    .await?;
+    let tx = insert_transaction(
+        &conn,
+        TransactionRow::builder()
+            .height(height)
+            .txid(format!("bbbb{:060}", 0))
+            .tx_index(0)
+            .confirmed_height(height)
+            .build(),
+    )
+    .await?;
+    let alice = create_contract_signer(&conn, height).await?;
+    let bob = create_contract_signer(&conn, height).await?;
+    let put = async |cid: u64, key: &str, gas: u64, who: u64| -> Result<()> {
+        insert_contract_state(
+            &conn,
+            ContractStateRow::builder()
+                .contract_id(cid)
+                .tx_id(tx)
+                .height(height)
+                .path(cs_path(&[key]))
+                .value(vec![1])
+                .depositor(who)
+                .deposited_gas(gas)
+                .build(),
+        )
+        .await?;
+        Ok(())
+    };
+    let p_bb = cs_path(&["bb"]);
+    let sum = async |who: u64| -> Result<u64> { Ok(live_deposit_gas_sum(&conn, who).await?) };
+
+    // Empty → no rows.
+    assert_eq!(sum(alice).await?, 0);
+
+    // alice's frozen deposits in two contracts; bob's row is excluded from alice's.
+    put(1, "a", 10, alice).await?;
+    put(2, "bb", 25, alice).await?;
+    put(1, "z", 99, bob).await?;
+    assert_eq!(sum(alice).await?, 35);
+
+    // Overwrite alice's contract-1 row (same height replaces) with a new frozen
+    // amount → the old amount drops, the new one counts.
+    put(1, "a", 40, alice).await?;
+    assert_eq!(sum(alice).await?, 65);
+
+    // Tombstone alice's contract-2 row → its deposit drops from the floor.
+    delete_contract_state(&conn, height, Some(tx), 2, &p_bb).await?;
+    assert_eq!(sum(alice).await?, 40);
+
+    // bob's floor is just his own row.
+    assert_eq!(sum(bob).await?, 99);
+    Ok(())
+}
+
+// A row's `depositor` (the storage-deposit floor basis) round-trips through
+// insert → `get_latest_contract_state`; a tombstone carries NO depositor.
+#[tokio::test]
+async fn test_depositor_roundtrips_and_tombstone_clears_it() -> Result<()> {
+    let (_reader, writer, _temp_dir) = new_test_db().await?;
+    let conn = writer.connection();
+    let cid = 55;
+    let height = 800000u64;
+    insert_block(
+        &conn,
+        BlockRow::builder()
+            .height(height)
+            .hash(new_mock_block_hash(height as u32))
+            .build(),
+    )
+    .await?;
+    let tx = insert_transaction(
+        &conn,
+        TransactionRow::builder()
+            .height(height)
+            .txid(format!("cccc{:060}", 0))
+            .tx_index(0)
+            .confirmed_height(height)
+            .build(),
+    )
+    .await?;
+    // A real signer to satisfy the depositor FK.
+    let sid = create_contract_signer(&conn, height).await?;
+    let path = cs_path(&["k"]);
+
+    insert_contract_state(
+        &conn,
+        ContractStateRow::builder()
+            .contract_id(cid)
+            .tx_id(tx)
+            .height(height)
+            .path(path.clone())
+            .value(vec![1, 2, 3])
+            .depositor(sid)
+            .deposited_gas(42)
+            .build(),
+    )
+    .await?;
+
+    // The depositor + deposited_amount round-trip through the latest-state read
+    // (the columns that back the storage-deposit floor).
+    let row = get_latest_contract_state(&conn, cid, &path).await?.unwrap();
+    assert_eq!(row.depositor, Some(sid));
+    assert_eq!(row.deposited_gas, Some(42));
+    // …and the delete find surfaces the live row (path + size, value-less).
+    let found = find_live_subtree(&conn, cid, &path).await?;
+    assert_eq!(found.len(), 1);
+    assert_eq!(found[0].size, 3);
+
+    // Tombstone (same height → replaces the live row) carries no depositor.
+    delete_contract_state(&conn, height, Some(tx), cid, &path).await?;
+    let mut tomb = conn
+        .query(
+            "SELECT depositor, deleted FROM contract_state WHERE contract_id = ? AND path = ?",
+            params![cid, libsql::Value::Blob(path.clone())],
+        )
+        .await?;
+    let r = tomb.next().await?.unwrap();
+    assert!(r.get::<bool>(1)?, "row is a tombstone");
+    assert_eq!(
+        r.get::<Option<u64>>(0)?,
+        None,
+        "a tombstone has no depositor"
+    );
+    Ok(())
+}
+
+// The eager `depositor_footprint` cache plumbing: set/get/delete round-trip
+// (absence ⇔ zero), live-depositor discovery (reconstruct source), and the
+// load-bearing `depositors_affected_by_reorg` predicate that bounds the reorg
+// reversal (a rollback past a depositor's row must flag them; one that leaves
+// nothing above the target must not).
+#[tokio::test]
+async fn test_footprint_cache_and_reorg_affected() -> Result<()> {
+    let (_reader, writer, _temp_dir) = new_test_db().await?;
+    let conn = writer.connection();
+    let cid = 77;
+    for h in [10u64, 12u64] {
+        insert_block(
+            &conn,
+            BlockRow::builder()
+                .height(h)
+                .hash(new_mock_block_hash(h as u32))
+                .build(),
+        )
+        .await?;
+    }
+    let sid = create_contract_signer(&conn, 10).await?;
+    // sid deposits path `a` at height 10 ("100") and path `b` at height 12 ("50").
+    for (h, key, gas) in [(10u64, "a", 100u64), (12u64, "b", 50u64)] {
+        let tx = insert_transaction(
+            &conn,
+            TransactionRow::builder()
+                .height(h)
+                .txid(format!("d{:063}", h))
+                .tx_index(0)
+                .confirmed_height(h)
+                .build(),
+        )
+        .await?;
+        insert_contract_state(
+            &conn,
+            ContractStateRow::builder()
+                .contract_id(cid)
+                .tx_id(tx)
+                .height(h)
+                .path(cs_path(&[key]))
+                .value(vec![1])
+                .depositor(sid)
+                .deposited_gas(gas)
+                .build(),
+        )
+        .await?;
+    }
+
+    // set/get/delete round-trip + atomic add.
+    assert_eq!(footprint_cache_get(&conn, sid).await?, None);
+    footprint_cache_set(&conn, sid, Some(150)).await?;
+    assert_eq!(footprint_cache_get(&conn, sid).await?, Some(150));
+    footprint_cache_add(&conn, sid, -50).await?;
+    assert_eq!(footprint_cache_get(&conn, sid).await?, Some(100));
+    footprint_cache_add(&conn, sid, -100).await?; // → 0 prunes the row
+    assert_eq!(footprint_cache_get(&conn, sid).await?, None);
+
+    // Over-subtract (would underflow) clamps to 0 and prunes — never a negative row
+    // (which the zero-prune would miss and the fail-loud read would reject).
+    footprint_cache_set(&conn, sid, Some(30)).await?;
+    footprint_cache_add(&conn, sid, -100).await?; // 30 - 100 → max(0, …) = 0 → pruned
+    assert_eq!(footprint_cache_get(&conn, sid).await?, None);
+    // Subtract against a non-existent row also clamps (inserts max(0, -5) = 0 → pruned).
+    footprint_cache_add(&conn, sid, -5).await?;
+    assert_eq!(footprint_cache_get(&conn, sid).await?, None);
+
+    // reconstruct source: sid's live floor sums to 150.
+    assert_eq!(live_deposit_gas_sum(&conn, sid).await?, 150);
+
+    // reorg reversal predicate (tip = MAX(height) = 12, derived in-query): rollback to 11
+    // drops the height-12 row → sid affected; rollback to 12 leaves nothing above → not.
+    assert!(
+        depositors_affected_by_reorg(&conn, 11)
+            .await?
+            .contains(&sid)
+    );
+    assert!(
+        !depositors_affected_by_reorg(&conn, 12)
+            .await?
+            .contains(&sid)
+    );
+    Ok(())
+}
+
+// The per-signer footprint query: returns a depositor's LIVE rows across all
+// contracts, excluding other depositors' rows and any row superseded by a newer
+// version (overwritten/deleted → it drops from their floor). Exercises the
+// depositor filter, the cross-contract JOIN, and the NOT EXISTS liveness.
+#[tokio::test]
+async fn test_find_footprint_by_depositor() -> Result<()> {
+    let (_reader, writer, _temp_dir) = new_test_db().await?;
+    let conn = writer.connection();
+    let h1 = 800000u64;
+    let h2 = h1 + 1;
+    for h in [h1, h2] {
+        insert_block(
+            &conn,
+            BlockRow::builder()
+                .height(h)
+                .hash(new_mock_block_hash(h as u32))
+                .build(),
+        )
+        .await?;
+    }
+    let tx1 = insert_transaction(
+        &conn,
+        TransactionRow::builder()
+            .height(h1)
+            .txid(format!("aaaa{:060}", 0))
+            .tx_index(0)
+            .confirmed_height(h1)
+            .build(),
+    )
+    .await?;
+    let tx2 = insert_transaction(
+        &conn,
+        TransactionRow::builder()
+            .height(h2)
+            .txid(format!("bbbb{:060}", 0))
+            .tx_index(0)
+            .confirmed_height(h2)
+            .build(),
+    )
+    .await?;
+
+    // Two contracts → exercise the cross-contract breakdown + name JOIN.
+    let alpha = insert_contract(
+        &conn,
+        ContractRow::builder()
+            .name("alpha".to_string())
+            .height(h1)
+            .tx_index(0)
+            .bytes(vec![])
+            .build(),
+    )
+    .await?;
+    let beta = insert_contract(
+        &conn,
+        ContractRow::builder()
+            .name("beta".to_string())
+            .height(h1)
+            .tx_index(1)
+            .bytes(vec![])
+            .build(),
+    )
+    .await?;
+    let alice = create_contract_signer(&conn, h1).await?;
+    let bob = create_contract_signer(&conn, h1).await?;
+
+    let set = async |cid: u64, seg: &str, who: u64, gas: u64, h: u64, tx: u64| -> Result<()> {
+        insert_contract_state(
+            &conn,
+            ContractStateRow::builder()
+                .contract_id(cid)
+                .tx_id(tx)
+                .height(h)
+                .path(cs_path(&[seg]))
+                .value(vec![1, 2, 3])
+                .depositor(who)
+                .deposited_gas(gas)
+                .build(),
+        )
+        .await?;
+        Ok(())
+    };
+
+    // alice: two live rows in alpha, one in beta.
+    set(alpha, "a1", alice, 10, h1, tx1).await?;
+    set(alpha, "a2", alice, 5, h1, tx1).await?;
+    set(beta, "b1", alice, 30, h1, tx1).await?;
+    // bob's row → excluded by the depositor filter.
+    set(beta, "b2", bob, 99, h1, tx1).await?;
+    // alice set a3, then it was overwritten by bob at a newer height → alice's a3
+    // is superseded (drops from alice's floor, moves to bob's) and must NOT appear.
+    set(alpha, "a3", alice, 1000, h1, tx1).await?;
+    set(alpha, "a3", bob, 7, h2, tx2).await?;
+
+    let rows = find_footprint_by_depositor(&conn, alice).await?;
+    assert_eq!(
+        rows.len(),
+        3,
+        "alice's live rows: a1, a2 (alpha) + b1 (beta)"
+    );
+
+    let alpha_total: u64 = rows
+        .iter()
+        .filter(|r| r.contract_id == alpha)
+        .map(|r| r.deposited_gas)
+        .sum();
+    let beta_total: u64 = rows
+        .iter()
+        .filter(|r| r.contract_id == beta)
+        .map(|r| r.deposited_gas)
+        .sum();
+    assert_eq!(alpha_total, 15, "10 + 5; a3 superseded, excluded");
+    assert_eq!(beta_total, 30, "b1 only; b2 is bob's");
+    assert!(rows.iter().any(|r| r.contract_name == "alpha"));
+    assert!(rows.iter().any(|r| r.contract_name == "beta"));
+    assert!(
+        rows.iter().all(|r| r.footprint_bytes > 0),
+        "path + value bytes"
+    );
+
+    // A signer with no deposits gets an empty footprint.
+    assert!(
+        find_footprint_by_depositor(&conn, bob + 999)
+            .await?
+            .is_empty()
+    );
     Ok(())
 }
 
@@ -571,9 +935,35 @@ async fn test_delete_tombstones_whole_subtree() -> Result<()> {
     insert(&["m", "k", "nested", "inner"]).await?;
     insert(&["m", "k2", "field1"]).await?;
 
-    let removed =
+    let (removed, freed) =
         delete_contract_state(&conn, height, Some(tx), cid, &cs_path(&["m", "k"])).await?;
     assert!(removed, "the subtree had live rows to tombstone");
+    // Freed bytes = path + value (1 byte each) of every tombstoned row in the
+    // subtree — the three `m/k/*` rows, not the surviving `m/k2` sibling.
+    let expected_freed: u64 = [
+        cs_path(&["m", "k", "field1"]),
+        cs_path(&["m", "k", "field2"]),
+        cs_path(&["m", "k", "nested", "inner"]),
+    ]
+    .iter()
+    .map(|p| (p.len() + 1) as u64)
+    .sum();
+    assert_eq!(freed, expected_freed);
+
+    // Tombstones are VALUE-LESS: the deleted row stores an empty value (not the
+    // original 1-byte value), even though `freed` still counts the original size.
+    let mut tomb = conn
+        .query(
+            "SELECT value, deleted FROM contract_state WHERE contract_id = ? AND path = ?",
+            params![cid, libsql::Value::Blob(cs_path(&["m", "k", "field1"]))],
+        )
+        .await?;
+    let row = tomb.next().await?.unwrap();
+    assert!(row.get::<bool>(1)?, "row is a tombstone");
+    assert!(
+        row.get::<Vec<u8>>(0)?.is_empty(),
+        "tombstone value must be empty"
+    );
 
     // Every descendant of `m/k` is gone (not just the exact path).
     assert!(!exists_contract_state(&conn, cid, &cs_path(&["m", "k"])).await?);
@@ -597,7 +987,11 @@ async fn test_delete_tombstones_whole_subtree() -> Result<()> {
     );
 
     // A second remove finds nothing live → no-op, returns false.
-    assert!(!delete_contract_state(&conn, height, Some(tx), cid, &cs_path(&["m", "k"])).await?);
+    assert!(
+        !delete_contract_state(&conn, height, Some(tx), cid, &cs_path(&["m", "k"]))
+            .await?
+            .0
+    );
 
     Ok(())
 }
@@ -1119,7 +1513,8 @@ async fn test_map_keys() -> Result<()> {
     assert_eq!(paths[1], cs_path(&["key1"]));
     assert_eq!(paths[2], cs_path(&["key2"]));
 
-    let result = hard_delete_matching_paths(
+    // The read half returns the rows the delete will remove (for metering)…
+    let rows = find_matching_paths(
         &conn,
         contract_id,
         height,
@@ -1127,7 +1522,17 @@ async fn test_map_keys() -> Result<()> {
         &cands(&["key0"]),
     )
     .await?;
-    assert_eq!(result, 2);
+    assert_eq!(rows.len(), 2);
+    // …and the write half removes exactly those rows.
+    let deleted = hard_delete_matching_paths(
+        &conn,
+        contract_id,
+        height,
+        &cs_path_dotted("test.path"),
+        &cands(&["key0"]),
+    )
+    .await?;
+    assert_eq!(deleted, 2);
 
     Ok(())
 }
@@ -1287,7 +1692,11 @@ async fn test_empty_path_is_whole_keyspace_not_panic() -> Result<()> {
     // `matching_path` at the root must not panic.
     let _ = matching_path(&conn, cid, &[], &cands(&["none", "some"])).await?;
     // Deleting the empty subtree tombstones the whole keyspace.
-    assert!(delete_contract_state(&conn, height + 1, Some(tx), cid, &[]).await?);
+    assert!(
+        delete_contract_state(&conn, height + 1, Some(tx), cid, &[])
+            .await?
+            .0
+    );
     assert!(!exists_contract_state(&conn, cid, &[]).await?);
 
     Ok(())

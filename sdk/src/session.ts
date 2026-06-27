@@ -43,6 +43,7 @@ import { hex } from "@scure/base";
 import type {
   AggregateInfo,
   AggregateSigner,
+  FootprintResponse,
   Inst as WireInst,
 } from "./bindings.js";
 import { blsAggregateSignatures } from "./component/kontor-sdk.js";
@@ -274,6 +275,16 @@ export class KontorSession {
    */
   getProvenance(contract: ContractAddress): Promise<ProvenanceEntry[]> {
     return this.transport.provenance(contract);
+  }
+
+  /**
+   * Read a signer's storage-deposit footprint — the token deposit they
+   * collateralize (their floor) and live bytes held, broken down by contract.
+   * `identifier` is a signer_id, x-only pubkey hex, or BLS pubkey hex. `null`
+   * if no such signer; a signer with no deposited storage returns zeroed totals.
+   */
+  getFootprint(identifier: string): Promise<FootprintResponse | null> {
+    return this.transport.signerFootprint(identifier);
   }
 
   /**

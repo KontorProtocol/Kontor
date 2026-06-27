@@ -47,6 +47,21 @@ fn payer_holder(signer: &Signer, payment: Option<&Payment>) -> Holder {
     Holder::for_signer_id(signer_id)
 }
 
+/// Everything `prepare_call` produces for the caller to run + settle a call: the
+/// instantiated store, the resolved function with its lowered params/results, and
+/// the op metadata. A named struct in place of a positional 9-tuple.
+pub(crate) struct PreparedCall {
+    pub store: Store<Runtime>,
+    pub contract_id: u64,
+    pub func_name: String,
+    pub is_fallback: bool,
+    pub params: Vec<Val>,
+    pub results: Vec<Val>,
+    pub func: Func,
+    pub is_proc: bool,
+    pub fuel_limit: u64,
+}
+
 impl Runtime {
     pub(crate) async fn prepare_call(
         &self,
@@ -56,20 +71,7 @@ impl Runtime {
         expr: &str,
         is_top_level: bool,
         fuel_override: Option<u64>,
-    ) -> Result<
-        (
-            Store<Runtime>,
-            u64,
-            String,
-            bool,
-            Vec<Val>,
-            Vec<Val>,
-            Func,
-            bool,
-            u64,
-        ),
-        ExecutionError,
-    > {
+    ) -> Result<PreparedCall, ExecutionError> {
         // Reject an oversized/over-nested call expression BEFORE it reaches the
         // recursive WAVE parser (`parse_raw_func_call` below), which would
         // otherwise overflow the host stack and abort the node — a deterministic
@@ -321,28 +323,51 @@ impl Runtime {
                     e
                 ))
             })?;
+            // Start this top-level op's deposit accumulator clean — after the
+            // hold's own ledger writes, before any of the op's storage writes.
+            // Gated to top-level so nested cross-contract calls don't reset it.
+            self.deposit.reset().await;
         }
+
+        // The depositor stamped on this frame's storage writes = the op's payer,
+        // but ONLY when the op will actually floor-check at settle: a top-level op
+        // with a NON-core signer (the SAME gate `hold`/`settle` use). A core-signed
+        // op bypasses the floor check, so a depositor there would count toward a
+        // floor nobody enforces (the stamp gate and the settle gate must agree).
+        // `None` = no depositor. Nested frames INHERIT the op's payer from their
+        // parent, so a row written deep in a nested call still attributes to it.
+        // Because this rides the frame (not a shared atomic), the hold/settle
+        // sub-ops can't clobber it — they carry their own (`None`) and pop away.
+        let depositor = if is_top_level {
+            match signer {
+                Some(s) if !s.is_core() => payment.map(|p| p.signer_id),
+                _ => None,
+            }
+        } else {
+            self.stack.peek().await.and_then(|f| f.depositor)
+        };
 
         self.stack
             .push(CallFrame {
                 contract_id,
                 is_proc,
+                depositor,
             })
             .await
             .map_err(|e| ExecutionError::Deterministic(e.into()))?;
         self.storage.savepoint().await?;
 
-        Ok((
+        Ok(PreparedCall {
             store,
             contract_id,
-            func_name.to_string(),
-            func_name == fallback_name,
+            func_name: func_name.to_string(),
+            is_fallback: func_name == fallback_name,
             params,
             results,
             func,
             is_proc,
             fuel_limit,
-        ))
+        })
     }
 
     /// Spawn the WASM call, catch panics, and handle the result.
@@ -495,23 +520,31 @@ impl Runtime {
             )
             .max(1);
 
+        // A top-level non-core op pays its gas here: burn the execution slice and
+        // refund the rest of the escrow (incl. the RETURNED storage-deposit
+        // reservation) to the payer. The storage-deposit FLOOR is enforced up front
+        // on every token debit (`token::transfer`/`hold`/`burn` reject a debit that
+        // would leave the balance below `footprint x D`), so there is no settle-time
+        // floor check and no op-revert to coordinate — `handle_call` already
+        // committed/rolled back this op's savepoint.
         if is_op_result && !signer.is_core() {
             let payment = payment.expect("payment required for op-result release");
             let payer = Signer::Id(Identity::new(payment.signer_id));
-            let burn_amount = Decimal::try_from(gas)
+            // The deposit gas reserved this op is RETURNED, not burned (it only
+            // capped growth); burn = the execution slice = gas - charge.
+            let charge_gas = self.deposit.take().await;
+            let burn_amount = Decimal::try_from(gas.saturating_sub(charge_gas))
                 .expect("u64 to decimal")
                 .mul(self.gas_to_token_multiplier)
-                .expect("Failed to convert gas consumed to token amount");
+                .expect("Failed to convert gas to token amount");
             tracing::info!(
                 node = %self.node_label,
                 gas,
-                starting_fuel,
-                remaining_fuel = store.get_fuel().unwrap(),
+                charge_gas,
                 %burn_amount,
                 call_succeeded = result.is_ok(),
                 contract = %contract_address,
                 func = func_name,
-                signer = ?signer,
                 payer = ?payer,
                 "Gas release"
             );
@@ -572,8 +605,18 @@ impl Runtime {
                 .transpose()
                 .expect("Failed to lock table and get signer");
 
-        let (store, contract_id, func_name, is_fallback, params, results, func, is_proc, _fuel) =
-            self.prepare_call(
+        let PreparedCall {
+            store,
+            contract_id,
+            func_name,
+            is_fallback,
+            params,
+            results,
+            func,
+            is_proc,
+            fuel_limit: _,
+        } = self
+            .prepare_call(
                 contract_address,
                 signer.as_ref(),
                 None,

@@ -15,12 +15,16 @@ import type { ProvidedRegtestInfo } from "@kontor/sdk/regtest";
 declare module "vitest" {
   interface ProvidedContext {
     regtest: ProvidedRegtestInfo & {
-      /** Brotli-compressed token wasm, base64-encoded. The browser
-       *  can't `fetch` the `.br` file directly — Vite/Chrome
-       *  auto-decompresses brotli, which makes the indexer's publish
-       *  step fail with "Invalid Data". So globalSetup reads it Node-
-       *  side and ships the raw compressed bytes through `provide()`. */
-      tokenWasmBrBase64: string;
+      /** Brotli-compressed `decimal-token` wasm, base64-encoded — a
+       *  user-surface token (conforms to the native token's known interface
+       *  minus the native-only deposit/floor) that the capstone REPUBLISHES
+       *  as its publish smoke-test. (The native token itself can no longer
+       *  be user-published: it imports the native-only `deposit` interface.)
+       *  The browser can't `fetch` the `.br` file directly — Vite/Chrome
+       *  auto-decompresses brotli, which makes the indexer's publish step
+       *  fail with "Invalid Data". So globalSetup reads it Node-side and
+       *  ships the raw compressed bytes through `provide()`. */
+      decimalTokenWasmBrBase64: string;
     };
   }
 }

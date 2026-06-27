@@ -27,7 +27,11 @@ pub struct WitResource {
 
 impl WitResource {
     pub fn new(text: String) -> Self {
-        let parsed = match Validator::validate_str(&text) {
+        // Full surface (incl. native-only built-ins): the SDK generates client
+        // bindings for NATIVE contracts too — the token imports `deposit` for its
+        // `floor` view. Codegen is not a publish path, so the wider surface is safe;
+        // the node still gates native imports at the linker.
+        let parsed = match Validator::validate_str_full(&text) {
             Ok((result, resolve)) => {
                 if result.is_valid() {
                     Ok(resolve)

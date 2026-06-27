@@ -59,7 +59,7 @@ test("SDK capstone: publish, transfer, bulk, marketplace", async () => {
   const injected = inject("regtest");
   const regtest = connectRegtest(injected);
   const { chain } = regtest;
-  const tokenWasmBr = base64.decode(injected.tokenWasmBrBase64);
+  const decimalTokenWasmBr = base64.decode(injected.decimalTokenWasmBrBase64);
 
   // ─── Phase 1 — publish ──────────────────────────────────────────
   {
@@ -73,12 +73,13 @@ test("SDK capstone: publish, transfer, bulk, marketplace", async () => {
       await session.ready();
       // Broadcast the publish, force the containing block — Publish's
       // result address depends on block height — then wait for the
-      // result row. Publishing the native token wasm a second time
-      // produces a fresh instance at a runtime-assigned address with
-      // its own storage; it doesn't collide with the genesis
-      // `token@0.0`.
+      // result row. `decimal-token` is a user-surface token that conforms to
+      // the native token's known interface (minus the native-only deposit/floor),
+      // so the native `Token` bindings bind to the published instance and
+      // its `balance` view works. (The native token itself can't be user-
+      // published: it imports the native-only `deposit` interface.)
       const submitted = await session
-        .publish("republished-token", tokenWasmBr, {
+        .publish("republished-token", decimalTokenWasmBr, {
           source: {
             forge: "GitHub",
             owner: "kontor",

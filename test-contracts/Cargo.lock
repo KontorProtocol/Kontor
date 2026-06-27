@@ -83,6 +83,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "decimal-token"
+version = "0.1.0"
+dependencies = [
+ "stdlib",
+]
+
+[[package]]
 name = "equivalent"
 version = "1.0.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"

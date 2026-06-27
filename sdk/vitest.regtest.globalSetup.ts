@@ -33,16 +33,19 @@ export default async function setup({ provide }: GlobalSetupContext) {
     apiUrl: devnet.apiUrl,
   });
 
-  // Brotli-compressed token wasm — Node reads it from disk and ships it
-  // over `provide()` as a base64 string. The browser CAN'T just `fetch`
-  // `token.wasm.br` because Vite (or the browser's HTTP layer) honors
-  // the `.br` extension and auto-decompresses the brotli stream — the
-  // indexer then chokes on raw wasm bytes during `publish` execution
-  // with "Invalid Data". Base64 is the simplest binary-safe channel
-  // through `provide()`'s structured-clone-via-string boundary.
+  // Brotli-compressed `decimal-token` wasm — a USER-surface token that conforms
+  // to the native token's known interface (holder-ref keys, decimal amounts), the
+  // capstone republishes it (the native token can't be user-published any more; it
+  // imports the native-only `deposit` interface). Node reads it from disk and ships
+  // it over `provide()` as a base64 string. The browser CAN'T just `fetch` the
+  // `.br` file because Vite (or the browser's HTTP layer) honors the `.br`
+  // extension and auto-decompresses the brotli stream — the indexer then chokes
+  // on raw wasm bytes during `publish` execution with "Invalid Data". Base64 is
+  // the simplest binary-safe channel through `provide()`'s structured-clone
+  // boundary.
   const here = path.dirname(fileURLToPath(import.meta.url));
-  const tokenWasmBrBase64 = readFileSync(
-    path.resolve(here, "../native-contracts/binaries/token.wasm.br"),
+  const decimalTokenWasmBrBase64 = readFileSync(
+    path.resolve(here, "../test-contracts/binaries/decimal_token.wasm.br"),
   ).toString("base64");
 
   // `provide` values cross into (possibly browser) test workers, so each
@@ -51,7 +54,7 @@ export default async function setup({ provide }: GlobalSetupContext) {
   provide("regtest", {
     apiUrl: rpcProxy.apiUrl,
     bitcoinRpc: rpcProxy.bitcoinRpc,
-    tokenWasmBrBase64,
+    decimalTokenWasmBrBase64,
     devPrivateKey: devnet.devPrivateKey,
     devPublicKey: devnet.devPublicKey,
     devAddress: devnet.devAddress,

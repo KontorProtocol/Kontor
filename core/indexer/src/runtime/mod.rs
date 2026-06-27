@@ -2,6 +2,7 @@ extern crate alloc;
 
 mod component_cache;
 pub mod counter;
+pub mod deposit;
 pub mod filestorage;
 pub mod fuel;
 pub mod nft;
@@ -110,7 +111,9 @@ use crate::database;
 use crate::database::native_contracts::{NATIVE_CONTRACTS, is_native_contract_id};
 use crate::database::types::CORE_SIGNER_ID;
 use crate::runtime::{
+    call::PreparedCall,
     counter::Counter,
+    deposit::DepositMeter,
     fuel::FuelGauge,
     stack::{CallFrame, Stack},
     wit::Signer,
@@ -195,7 +198,7 @@ impl Eq for RawFileDescriptor {}
 
 /// The two host capability surfaces over a single `Runtime`. `user` registers
 /// only the common built-ins; `native` additionally registers the privileged
-/// registries (`file-registry`, `system`). Both share the same `Runtime`
+/// interfaces (`file-registry`, `system`, `deposit`). Both share the same `Runtime`
 /// host state — they differ only in which interfaces a component can import.
 /// `prepare_call` selects one per contract by native contract id.
 #[derive(Clone)]
@@ -215,6 +218,11 @@ pub struct Runtime {
     pub result_id_counter: Counter,
     pub stack: Stack<CallFrame>,
     pub gauge: Option<FuelGauge>,
+    /// Transient per-op accumulator of the storage-deposit GAS reserved this op
+    /// (the returned-at-settle slice that bounds growth). Reset at the top-level op
+    /// start, drained at the settle boundary to compute the execution burn
+    /// (`burn = gas - charge`).
+    pub deposit: DepositMeter,
     pub gas_limit_for_non_procs: u64,
     pub gas_to_fuel_multiplier: u64,
     pub gas_to_token_multiplier: Decimal,
@@ -258,6 +266,7 @@ impl Runtime {
     fn register_native(linker: &mut Linker<Self>) -> Result<()> {
         kontor::built_in::file_registry::add_to_linker::<_, Self>(linker, |s| s)?;
         kontor::built_in::system::add_to_linker::<_, Self>(linker, |s| s)?;
+        kontor::built_in::deposit::add_to_linker::<_, Self>(linker, |s| s)?;
         Ok(())
     }
 
@@ -292,6 +301,7 @@ impl Runtime {
             result_id_counter: Counter::new(),
             stack: Stack::new(),
             gauge: Some(FuelGauge::new()),
+            deposit: DepositMeter::new(),
             gas_limit_for_non_procs: 100_000,
             gas_to_fuel_multiplier: 1_000,
             gas_to_token_multiplier: Decimal::from("1e-9"),
@@ -308,6 +318,13 @@ impl Runtime {
         component_cache: ComponentCache,
         conn: Connection,
     ) -> Result<Self> {
+        // Make "read-only" a hard SQLite guarantee, not a convention: this runtime
+        // wraps every call in a `BEGIN…COMMIT`, and on a shared WAL DB a view's
+        // deferred read snapshot upgrading to a write at commit races the reactor's
+        // single writer (SQLITE_BUSY_SNAPSHOT, which the reactor treats as fatal).
+        // `query_only` makes the upgrade impossible — a stray write fails locally on
+        // this connection instead of contending.
+        conn.query("PRAGMA query_only = ON;", ()).await?;
         Runtime::new_with(
             engine,
             linkers,
@@ -765,7 +782,7 @@ impl Runtime {
             expr,
             self.tx_context()
         );
-        let (
+        let PreparedCall {
             store,
             contract_id,
             func_name,
@@ -774,8 +791,8 @@ impl Runtime {
             results,
             func,
             is_proc,
-            starting_fuel,
-        ) = self
+            fuel_limit: starting_fuel,
+        } = self
             .prepare_call(contract_address, signer, payment.as_ref(), expr, true, None)
             .await?;
         OptionFuture::from(
@@ -891,6 +908,23 @@ mod tests {
         assert!(
             runtime.linkers.user.instantiate_pre(&component).is_err(),
             "user linker must reject a component importing native-only file-registry"
+        );
+
+        // The token (native id 1) imports the native-only `deposit` interface (for
+        // `storage-floor`), so it too is native-linker-only — a user contract cannot
+        // reach `storage-floor` directly; it must call the token's `floor` view.
+        let token = runtime
+            .load_component(1)
+            .await
+            .expect("load token component");
+        runtime
+            .linkers
+            .native
+            .instantiate_pre(&token)
+            .expect("native linker must satisfy the token's deposit import");
+        assert!(
+            runtime.linkers.user.instantiate_pre(&token).is_err(),
+            "user linker must reject the token: it imports native-only `deposit`"
         );
     }
 

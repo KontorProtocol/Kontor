@@ -55,7 +55,16 @@ fn transfer(ctx: &ProcContext, src: Holder, dst: Holder, amt: Decimal) -> Result
         return Err(Error::Message("insufficient funds".to_string()));
     }
 
-    ledger.set(&src, src_amt.sub(amt)?);
+    // Storage-deposit FLOOR: a holder's storage deposit (footprint × D) is a LOCKED
+    // reserve — every debit must leave the balance at or above it. The gas hold is a
+    // debit too, so this also up-front-authorizes an op's storage growth. The host
+    // returns 0 for non-signer/system holders (core/burner/utxo).
+    let remaining = src_amt.sub(amt)?;
+    if remaining < deposit::storage_floor(&src) {
+        return Err(Error::Message("storage deposit floor exceeded".to_string()));
+    }
+
+    ledger.set(&src, remaining);
     ledger.set(&dst, dst_amt.add(amt)?);
     Ok(Transfer {
         src: src.into(),
@@ -96,20 +105,20 @@ impl Guest for Token {
         )
     }
 
+    /// Release the gas escrow: burn the execution slice (CORE → BURNER) and refund
+    /// the rest (CORE → payer). The storage-deposit RESERVATION is part of "the
+    /// rest" — only execution burns — so it rides this refund. Runs OUTSIDE the op
+    /// savepoint (always, even on a reverted op: gas is paid for the attempt).
     fn release(ctx: &CoreContext, burn_amt: Decimal) -> Result<Burn, Error> {
-        let proc_context = ctx.proc_context();
-        let burn = Self::burn(&proc_context, burn_amt)?;
-        let amt = proc_context
-            .model()
-            .ledger()
-            .get(&CORE())
-            .unwrap_or_default();
-        if amt > 0u64.try_into()? {
+        let proc = ctx.proc_context();
+        let burn = Self::burn(&proc, burn_amt)?;
+        let remaining = proc.model().ledger().get(&CORE()).unwrap_or_default();
+        if remaining > 0u64.try_into()? {
             transfer(
-                &proc_context,
+                &proc,
                 CORE(),
                 ctx.signer_proc_context().signer().into(),
-                amt,
+                remaining,
             )?;
         }
         Ok(Burn {
@@ -180,6 +189,19 @@ impl Guest for Token {
     fn balance(ctx: &ViewContext, acc: HolderRef) -> Option<Decimal> {
         let holder: Holder = acc.try_into().ok()?;
         ctx.model().ledger().get(&holder)
+    }
+
+    /// A holder's storage-deposit floor (footprint × D), token-denominated. Public,
+    /// cross-contract-callable surface over the native-only `deposit.storage-floor`
+    /// host fn — the same value the debit check enforces. 0 for holders with no
+    /// deposited rows. `ctx` is unused (the floor is host-global, not contract state).
+    /// Resolve the holder-ref to a `Holder` (the one canonical signer-id resolution,
+    /// same path as `balance`) before reading — `storage_floor` takes a resolved holder.
+    fn floor(_ctx: &ViewContext, acc: HolderRef) -> Decimal {
+        match Holder::try_from(acc) {
+            Ok(holder) => deposit::storage_floor(&holder),
+            Err(_) => Decimal::default(),
+        }
     }
 
     fn balances(ctx: &ViewContext) -> Vec<Balance> {

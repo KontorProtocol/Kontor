@@ -22,7 +22,15 @@ VALUES
                   '|',
                   hex(NEW.value),
                   '|',
-                  NEW.deleted
+                  NEW.deleted,
+                  '|',
+                  -- depositor is a deterministic rowid (or NULL → '' here); it's
+                  -- the floor basis, which is consensus state, so it must be hashed.
+                  NEW.depositor,
+                  '|',
+                  -- the deposit (integer gas, rendered as decimal digits, no `|` in
+                  -- its charset, or NULL → '') is part of the floor, so it's hashed too.
+                  NEW.deposited_gas
                 )
               )
             ) AS hash

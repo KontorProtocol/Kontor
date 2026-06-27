@@ -5,19 +5,23 @@ use bon::Builder;
 use futures_util::Stream;
 use libsql::Connection;
 use regex::bytes::RegexBuilder;
+use std::collections::{HashMap, HashSet};
 use std::io::Read;
 use wit_component::{ComponentEncoder, WitPrinter};
 
 use crate::{
     database::{
         queries::{
-            DeletableRow, create_contract_signer, exists_contract_state, find_live_subtree,
-            find_matching_paths, get_contract_address_from_id, get_contract_bytes_by_id,
-            get_contract_id_from_address, get_contract_provenance_publisher,
-            get_latest_contract_state_value, hard_delete_matching_paths, insert_contract,
-            insert_contract_provenance, insert_contract_result, insert_contract_state,
-            matching_path, path_prefix_filter_contract_state, prune_contract_state,
-            select_block_at_height, tombstone_rows,
+            FOOTPRINT_BUILT_KEY, LiveRow, create_contract_signer, depositors_affected_by_reorg,
+            exists_contract_state, find_live_subtree, find_matching_paths, footprint_cache_add,
+            footprint_cache_get, footprint_cache_set, footprint_rebuild_all,
+            get_contract_address_from_id, get_contract_bytes_by_id, get_contract_id_from_address,
+            get_contract_provenance_publisher, get_latest_contract_state_value, get_meta_u64,
+            hard_delete_matching_paths, insert_contract, insert_contract_provenance,
+            insert_contract_result, insert_contract_state, latest_live_deposit,
+            live_deposit_gas_sum, matching_path, path_prefix_filter_contract_state,
+            prune_contract_state, rollback_to_height, select_block_at_height, set_meta_u64,
+            tombstone_rows,
         },
         types::{ContractProvenanceRow, ContractResultRow, ContractRow, ContractStateRow},
     },
@@ -72,12 +76,131 @@ pub struct Storage {
     pub tx_context: Option<TransactionContext>,
 }
 
+/// The eager per-depositor storage-deposit FLOOR cache (`depositor_footprint`),
+/// borrowing a DB connection. Off-checkpoint + reconstructible; maintained
+/// incrementally on the write path (`on_set`/`on_free`) inside the op savepoint, so
+/// it rolls back with the op. Read O(1) (`total_gas`) by the token's per-debit floor
+/// check; built once (`reconstruct`) on first boot/upgrade; recomputed per affected
+/// depositor on reorg (via [`Storage::rollback_with_footprint`]). INVARIANT:
+/// `total_gas` == Σ live `deposited_gas` per depositor on every node — it gates token
+/// debits, so it must stay an exact replica.
+pub struct FootprintCache<'a> {
+    conn: &'a Connection,
+}
+
+impl FootprintCache<'_> {
+    /// The cached floor for `depositor`, in integer GAS — an O(1) read of the eager
+    /// `depositor_footprint` sum (NEAR's `storage_usage`, keyed by depositor). Absent
+    /// ⇒ 0. The host prices it to token (× gas→token) at the `storage_floor` read.
+    pub async fn total_gas(&self, depositor: u64) -> Result<u64> {
+        Ok(footprint_cache_get(self.conn, depositor)
+            .await?
+            .unwrap_or(0))
+    }
+
+    /// Maintain the cache for a `set`: subtract the live row being overwritten (read
+    /// BEFORE the new row is written) from its setter, then add the new row to its
+    /// depositor. A fresh create has no prior live row; an exempt/Core write
+    /// (`depositor = None`) contributes nothing. The displaced-row read is a lean
+    /// latest-by-height point lookup, not a window.
+    pub async fn on_set(
+        &self,
+        contract_id: u64,
+        path: &[u8],
+        new_depositor: Option<u64>,
+        new_gas: Option<u64>,
+    ) -> Result<()> {
+        if let Some(prev) = latest_live_deposit(self.conn, contract_id, path).await? {
+            footprint_cache_add(self.conn, prev.depositor, -(prev.deposited_gas as i64)).await?;
+        }
+        if let (Some(d), Some(g)) = (new_depositor, new_gas) {
+            footprint_cache_add(self.conn, d, g as i64).await?;
+        }
+        Ok(())
+    }
+
+    /// Maintain the cache for freed rows (delete/variant-cleanup): subtract each row's
+    /// deposit from its setter. The rows were already read for metering, so this adds
+    /// no read; deltas are summed PER DEPOSITOR (a K-row delete is almost always one
+    /// depositor) so it issues ~1 statement, not 2·K.
+    pub async fn on_free(&self, rows: &[LiveRow]) -> Result<()> {
+        let mut deltas: HashMap<u64, i64> = HashMap::new();
+        for row in rows {
+            if let (Some(d), Some(g)) = (row.depositor, row.deposited_gas) {
+                *deltas.entry(d).or_default() -= g as i64;
+            }
+        }
+        for (depositor, delta) in deltas {
+            footprint_cache_add(self.conn, depositor, delta).await?;
+        }
+        Ok(())
+    }
+
+    /// Re-add deposits REVIVED by a HARD delete. Hard-deleting a path's current-height
+    /// row (intra-block variant cleanup) can expose an OLDER same-path version that
+    /// becomes live again — its deposit must re-enter the cache, or the floor under-
+    /// counts and the token allows spends it should reject. (A tombstone delete can't
+    /// revive: its tombstone stays the latest row.) Mirrors the reorg resurrection
+    /// handling. Call AFTER the hard delete — the revived row is whatever now remains
+    /// latest-live for the path. `freed` is the just-deleted set; dedup by path since a
+    /// subtree delete frees several rows under one path's siblings.
+    pub async fn on_revive(&self, contract_id: u64, freed: &[LiveRow]) -> Result<()> {
+        let mut seen: HashSet<&[u8]> = HashSet::new();
+        for row in freed {
+            if !seen.insert(row.path.as_slice()) {
+                continue;
+            }
+            if let Some(revived) = latest_live_deposit(self.conn, contract_id, &row.path).await? {
+                footprint_cache_add(self.conn, revived.depositor, revived.deposited_gas as i64)
+                    .await?;
+            }
+        }
+        Ok(())
+    }
+
+    /// Rebuild the cache from live state — ONCE, on first build (DB upgrade or first
+    /// boot). Gated on a `node_meta` marker: block writes and reorgs both maintain the
+    /// cache atomically, so once built it stays coherent and a clean restart skips the
+    /// O(live-rows) rebuild. One grouped `SUM` pass, not a loop.
+    pub async fn reconstruct(&self) -> Result<()> {
+        if get_meta_u64(self.conn, FOOTPRINT_BUILT_KEY, 0).await? == 1 {
+            return Ok(());
+        }
+        footprint_rebuild_all(self.conn).await?;
+        set_meta_u64(self.conn, FOOTPRINT_BUILT_KEY, 1).await?;
+        Ok(())
+    }
+
+    /// Recompute each given depositor's cached total from the (post-rollback) live
+    /// rows — the cache-recovery half of a reorg. Each is overwritten with a fresh
+    /// `SUM(deposited_gas)` (zero ⇒ row deleted). Bounded by the affected set.
+    pub(crate) async fn recompute(&self, depositors: &[u64]) -> Result<()> {
+        for &depositor in depositors {
+            let total = live_deposit_gas_sum(self.conn, depositor).await?;
+            let stored = (total != 0).then_some(total);
+            footprint_cache_set(self.conn, depositor, stored).await?;
+        }
+        Ok(())
+    }
+}
+
 impl Storage {
     pub async fn get(&self, fuel: u64, contract_id: u64, path: &[u8]) -> Result<Option<Vec<u8>>> {
         Ok(get_latest_contract_state_value(&self.conn, fuel, contract_id, path).await?)
     }
 
-    pub async fn set(&self, contract_id: u64, path: &[u8], value: &[u8]) -> Result<()> {
+    /// Write a live value. `depositor` is the signer who collateralizes this row via
+    /// the storage-deposit floor — `None` for Core/system writes; `deposited_gas`
+    /// is its integer-gas deposit (paired with `depositor`), both computed by the
+    /// caller (`_set_primitive`).
+    pub async fn set(
+        &self,
+        contract_id: u64,
+        path: &[u8],
+        value: &[u8],
+        depositor: Option<u64>,
+        deposited_gas: Option<u64>,
+    ) -> Result<()> {
         insert_contract_state(
             &self.conn,
             ContractStateRow::builder()
@@ -86,27 +209,26 @@ impl Storage {
                 .height(self.height)
                 .path(path.to_vec())
                 .value(value.to_vec())
+                .maybe_depositor(depositor)
+                .maybe_deposited_gas(deposited_gas)
                 .build(),
         )
         .await?;
         Ok(())
     }
 
-    /// The live subtree a [`Self::tombstone_rows`] would remove — read first so
-    /// the caller can charge fuel for the rows before writing tombstones.
-    pub async fn find_live_subtree(
-        &self,
-        contract_id: u64,
-        path: &[u8],
-    ) -> Result<Vec<DeletableRow>> {
+    /// The read half of a delete: the live rows of `path`'s subtree (node + every
+    /// live descendant) as `(path, size)` — NOT values. Split from the tombstone
+    /// writes so the host can meter `Fuel::Delete` by the row count BEFORE the
+    /// writes.
+    pub async fn find_live_subtree(&self, contract_id: u64, path: &[u8]) -> Result<Vec<LiveRow>> {
         Ok(find_live_subtree(&self.conn, contract_id, path).await?)
     }
 
-    pub async fn tombstone_rows(
-        &self,
-        contract_id: u64,
-        rows: &[DeletableRow],
-    ) -> Result<(bool, u64)> {
+    /// The write half of a delete: value-less-tombstone the given (already-metered)
+    /// rows. Returns `(removed, freed_bytes)` — the footprint accumulator subtracts
+    /// the freed bytes.
+    pub async fn tombstone_rows(&self, contract_id: u64, rows: &[LiveRow]) -> Result<(bool, u64)> {
         Ok(tombstone_rows(
             &self.conn,
             contract_id,
@@ -115,6 +237,66 @@ impl Storage {
             rows,
         )
         .await?)
+    }
+
+    /// The eager per-depositor storage-deposit FLOOR cache (see [`FootprintCache`]).
+    pub fn footprint(&self) -> FootprintCache<'_> {
+        FootprintCache { conn: &self.conn }
+    }
+
+    /// Reorg rollback that keeps the off-checkpoint footprint cache coherent
+    /// ATOMICALLY: in ONE savepoint, capture the affected depositors (before the
+    /// `blocks` cascade deletes their rows), run the cascade, then recompute just those
+    /// from the post-rollback state. The capture→rollback→recompute ordering is
+    /// enforced here, not by callers, and a crash can't leave a durably-stale cache.
+    pub async fn rollback_with_footprint(&self, target_height: u64) -> Result<()> {
+        self.savepoint().await?;
+        match self.rollback_with_footprint_inner(target_height).await {
+            Ok(()) => self.commit().await,
+            Err(e) => {
+                self.rollback().await?;
+                Err(e)
+            }
+        }
+    }
+
+    async fn rollback_with_footprint_inner(&self, target_height: u64) -> Result<()> {
+        // The band's upper bound (tip) is derived inside the query from the DB's own
+        // MAX(height), NOT `self.height` — the in-memory height is 0 until the first block
+        // executes, so a reorg right after startup would otherwise capture no depositors.
+        let affected = depositors_affected_by_reorg(&self.conn, target_height).await?;
+        rollback_to_height(&self.conn, target_height).await?;
+        self.footprint().recompute(&affected).await?;
+        Ok(())
+    }
+
+    pub async fn insert_contract_provenance(
+        &self,
+        contract_id: u64,
+        author_signer_id: u64,
+        provenance: &[u8],
+    ) -> Result<()> {
+        insert_contract_provenance(
+            &self.conn,
+            ContractProvenanceRow::builder()
+                .contract_id(contract_id)
+                .author_signer_id(author_signer_id)
+                .height(self.height)
+                .tx_index(
+                    self.tx_context
+                        .as_ref()
+                        .expect("Transaction index is required when inserting provenance")
+                        .tx_index,
+                )
+                .provenance(provenance.to_vec())
+                .build(),
+        )
+        .await?;
+        Ok(())
+    }
+
+    pub async fn contract_provenance_publisher(&self, contract_id: u64) -> Result<Option<u64>> {
+        Ok(get_contract_provenance_publisher(&self.conn, contract_id).await?)
     }
 
     pub async fn exists(&self, contract_id: u64, path: &[u8]) -> Result<bool> {
@@ -133,20 +315,22 @@ impl Storage {
         Ok(matching_path(&self.conn, contract_id, base_path, candidates).await?)
     }
 
-    /// The current-height rows a [`Self::hard_delete_matching_paths`] would
-    /// remove — read first so the caller can meter the delete.
+    /// Read half of the intra-block variant hard-delete: the `LiveRow`s it will
+    /// remove, so the host can meter `Fuel::Delete` before the writes.
     pub async fn find_matching_paths(
         &self,
         contract_id: u64,
         base_path: &[u8],
         candidates: &[Vec<u8>],
-    ) -> Result<Vec<DeletableRow>> {
+    ) -> Result<Vec<LiveRow>> {
         Ok(
             find_matching_paths(&self.conn, contract_id, self.height, base_path, candidates)
                 .await?,
         )
     }
 
+    /// Write half: hard-delete the (already-metered) intra-block rows under any of
+    /// `candidates`. Returns the rows removed.
     pub async fn hard_delete_matching_paths(
         &self,
         contract_id: u64,
@@ -219,41 +403,6 @@ impl Storage {
                 .build(),
         )
         .await?)
-    }
-
-    /// Append one postcard-encoded `BuildProvenance` to the contract's
-    /// provenance log (within the current savepoint, so it rolls back with the
-    /// contract on publish failure).
-    pub async fn insert_contract_provenance(
-        &self,
-        contract_id: u64,
-        author_signer_id: u64,
-        provenance: &[u8],
-    ) -> Result<()> {
-        insert_contract_provenance(
-            &self.conn,
-            ContractProvenanceRow::builder()
-                .contract_id(contract_id)
-                .author_signer_id(author_signer_id)
-                .height(self.height)
-                .tx_index(
-                    self.tx_context
-                        .as_ref()
-                        .expect("Transaction index is required when inserting provenance")
-                        .tx_index,
-                )
-                .provenance(provenance.to_vec())
-                .build(),
-        )
-        .await?;
-        Ok(())
-    }
-
-    /// The publisher of a contract — the author of its first provenance entry,
-    /// the `UpdateProvenance` authz anchor (NOT `contracts.signer_id`, which is
-    /// the contract's own signer).
-    pub async fn contract_provenance_publisher(&self, contract_id: u64) -> Result<Option<u64>> {
-        Ok(get_contract_provenance_publisher(&self.conn, contract_id).await?)
     }
 
     fn effective_tx_id(&self) -> Option<u64> {
@@ -419,6 +568,7 @@ impl Storage {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::database::connection::new_connection;
     use crate::database::queries::insert_block;
     use crate::test_utils::{new_mock_block_hash, new_test_db};
     use indexer_types::BlockRow;
@@ -500,6 +650,332 @@ mod tests {
             )
             .await?;
         assert_eq!(wm.next().await?.unwrap().get::<i64>(0)?, 3);
+        Ok(())
+    }
+
+    // THE cache invariant: `depositor_footprint.total_gas` must exactly equal
+    // `live_deposit_gas_sum` for every depositor after EVERY mutation — the cache is
+    // only correct because every write path calls on_set/on_free. This drives a
+    // sequence of write / overwrite / cross-contract / delete / REORG through those
+    // hooks and asserts the cached floor never drifts from the freshly-summed truth
+    // (the regression guard against a future write path forgetting to maintain it).
+    #[tokio::test]
+    async fn footprint_cache_never_drifts_from_live_sum() -> Result<()> {
+        use crate::database::queries::{create_contract_signer, live_deposit_gas_sum};
+
+        let (_reader, writer, _temp) = new_test_db().await?;
+        let conn = writer.connection();
+        for h in 1..=6u64 {
+            insert_block(
+                &conn,
+                BlockRow::builder()
+                    .height(h)
+                    .hash(new_mock_block_hash(h as u32))
+                    .build(),
+            )
+            .await?;
+        }
+        let alice = create_contract_signer(&conn, 1).await?;
+        let bob = create_contract_signer(&conn, 1).await?;
+        let mut storage = Storage::builder().height(1).conn(conn.clone()).build();
+
+        let path = |k: &str| k.as_bytes().to_vec();
+        // cache == fresh sum for both depositors, asserted after every step.
+        let check = async |storage: &Storage| -> Result<()> {
+            for d in [alice, bob] {
+                let cached = storage.footprint().total_gas(d).await?;
+                let truth = live_deposit_gas_sum(&conn, d).await?;
+                assert_eq!(
+                    cached, truth,
+                    "cache drifted from live sum for depositor {d}"
+                );
+            }
+            Ok(())
+        };
+        // mirror _set_primitive: maintain the cache (on_set reads the displaced row)
+        // BEFORE writing the new version.
+        let write = async |storage: &Storage, cid: u64, k: &str, d: u64, gas: u64| -> Result<()> {
+            storage
+                .footprint()
+                .on_set(cid, &path(k), Some(d), Some(gas))
+                .await?;
+            storage.set(cid, &path(k), b"v", Some(d), Some(gas)).await?;
+            Ok(())
+        };
+
+        // h1: fresh create.
+        write(&storage, 1, "a", alice, 10).await?;
+        check(&storage).await?;
+        // h2: alice grows in the same contract + a second contract.
+        storage.height = 2;
+        write(&storage, 1, "b", alice, 20).await?;
+        write(&storage, 2, "a", bob, 5).await?; // cross-contract, different depositor
+        check(&storage).await?;
+        // h3: bob OVERWRITES alice's (1,"a") — obligation moves alice→bob.
+        storage.height = 3;
+        write(&storage, 1, "a", bob, 8).await?;
+        check(&storage).await?;
+        assert_eq!(storage.footprint().total_gas(alice).await?, 20); // 30 − 10
+        assert_eq!(storage.footprint().total_gas(bob).await?, 13); // 5 + 8
+        // h4: delete alice's (1,"b") — her floor relaxes.
+        storage.height = 4;
+        let rows = storage.find_live_subtree(1, &path("b")).await?;
+        storage.footprint().on_free(&rows).await?;
+        storage.tombstone_rows(1, &rows).await?;
+        check(&storage).await?;
+        assert_eq!(storage.footprint().total_gas(alice).await?, 0);
+
+        // REORG to height 2: the h3 overwrite + h4 delete vanish via the cascade;
+        // alice's (1,"a")@h1 and (1,"b")@h2 become live again. The reorg path must
+        // recompute the affected depositors back to truth — with NO drift.
+        storage.rollback_with_footprint(2).await?;
+        check(&storage).await?;
+        assert_eq!(storage.footprint().total_gas(alice).await?, 30); // a(10) + b(20) live again
+        assert_eq!(storage.footprint().total_gas(bob).await?, 5); // only (2,"a")
+        Ok(())
+    }
+
+    // Regression: a reorg right after startup, before any block has advanced the
+    // in-memory tip. `Storage.height` is 0 (its builder default) until the first op
+    // runs, so deriving the band's upper bound from it would capture NO depositors and
+    // leave the cache stale. The tip must come from the DB's own MAX(height) instead.
+    #[tokio::test]
+    async fn rollback_recomputes_footprint_with_stale_in_memory_height() -> Result<()> {
+        use crate::database::queries::{create_contract_signer, live_deposit_gas_sum};
+
+        let (_reader, writer, _temp) = new_test_db().await?;
+        let conn = writer.connection();
+        for h in 1..=2u64 {
+            insert_block(
+                &conn,
+                BlockRow::builder()
+                    .height(h)
+                    .hash(new_mock_block_hash(h as u32))
+                    .build(),
+            )
+            .await?;
+        }
+        let alice = create_contract_signer(&conn, 1).await?;
+        let path = |k: &str| k.as_bytes().to_vec();
+        let mut storage = Storage::builder().height(1).conn(conn.clone()).build();
+        storage
+            .footprint()
+            .on_set(1, &path("a"), Some(alice), Some(10))
+            .await?;
+        storage
+            .set(1, &path("a"), b"v", Some(alice), Some(10))
+            .await?;
+        storage.height = 2;
+        storage
+            .footprint()
+            .on_set(1, &path("b"), Some(alice), Some(20))
+            .await?;
+        storage
+            .set(1, &path("b"), b"v", Some(alice), Some(20))
+            .await?;
+        assert_eq!(storage.footprint().total_gas(alice).await?, 30);
+
+        // Simulate a fresh process: the cache is correct (reconstructed) but the
+        // in-memory tip has not been advanced past its 0 default yet.
+        storage.height = 0;
+        storage.rollback_with_footprint(1).await?; // drops (1,"b")@h2
+
+        assert_eq!(
+            storage.footprint().total_gas(alice).await?,
+            live_deposit_gas_sum(&conn, alice).await?,
+            "reorg at stale in-memory height must still recompute the floor from live state"
+        );
+        assert_eq!(storage.footprint().total_gas(alice).await?, 10);
+        Ok(())
+    }
+
+    // Regression: a HARD delete (intra-block variant cleanup) of a path's current-height
+    // row exposes an OLDER same-path version that becomes live again. The cache must
+    // re-add the revived deposit, else the floor under-counts and the token would allow
+    // an over-spend. (Bugbot: "Hard delete drops revived deposits".)
+    #[tokio::test]
+    async fn hard_delete_revives_displaced_deposit() -> Result<()> {
+        use crate::database::queries::{create_contract_signer, live_deposit_gas_sum};
+
+        let (_reader, writer, _temp) = new_test_db().await?;
+        let conn = writer.connection();
+        for h in 1..=2u64 {
+            insert_block(
+                &conn,
+                BlockRow::builder()
+                    .height(h)
+                    .hash(new_mock_block_hash(h as u32))
+                    .build(),
+            )
+            .await?;
+        }
+        let alice = create_contract_signer(&conn, 1).await?;
+        let bob = create_contract_signer(&conn, 1).await?;
+        // The path is `base ++ candidate`, the shape the variant-cleanup delete matches.
+        let base = b"e/".to_vec();
+        let path = b"e/A".to_vec();
+        let candidates = vec![b"A".to_vec()];
+
+        let mut storage = Storage::builder().height(1).conn(conn.clone()).build();
+        // h1: alice writes e/A (deposit 10).
+        storage
+            .footprint()
+            .on_set(1, &path, Some(alice), Some(10))
+            .await?;
+        storage.set(1, &path, b"v", Some(alice), Some(10)).await?;
+        // h2: bob overwrites e/A (deposit 20) — displaces alice in the cache.
+        storage.height = 2;
+        storage
+            .footprint()
+            .on_set(1, &path, Some(bob), Some(20))
+            .await?;
+        storage.set(1, &path, b"v", Some(bob), Some(20)).await?;
+        assert_eq!(storage.footprint().total_gas(alice).await?, 0); // displaced
+        assert_eq!(storage.footprint().total_gas(bob).await?, 20);
+
+        // Intra-block hard-delete of e/A @ h2 — mirrors `_delete_matching_paths`.
+        let rows = storage.find_matching_paths(1, &base, &candidates).await?;
+        storage.footprint().on_free(&rows).await?;
+        storage
+            .hard_delete_matching_paths(1, &base, &candidates)
+            .await?;
+        storage.footprint().on_revive(1, &rows).await?;
+
+        // alice's h1 row is live again → her deposit must be back in the cache.
+        assert_eq!(storage.footprint().total_gas(bob).await?, 0);
+        assert_eq!(
+            storage.footprint().total_gas(alice).await?,
+            live_deposit_gas_sum(&conn, alice).await?,
+            "revived deposit must re-enter the cache (== live sum)"
+        );
+        assert_eq!(storage.footprint().total_gas(alice).await?, 10);
+        Ok(())
+    }
+
+    // Answers the design doc's explicit open question ("footprint tally cost — the thing
+    // we are choosing to measure"): is the eager `depositor_footprint` cache worth its
+    // complexity vs. summing live rows fresh each debit? The floor is read on EVERY token
+    // debit (every transfer/hold/burn, and the gas `hold` runs on every op), so this is
+    // the consensus hot path. `live_deposit_gas_sum` is O(N) in a depositor's live-row
+    // count (scan + per-row NOT-EXISTS liveness probe); the cache is an O(1) point read.
+    //
+    // Measured (release, in-process; absolute µs vary by host, the SHAPE is the point):
+    //   N        fresh    cache   speedup
+    //   1        7.0µs    2.1µs    3.4x
+    //   10       8.7µs    2.0µs    4.3x
+    //   100      29.6µs   2.0µs    14.5x
+    //   1,000    291µs    2.0µs    142x
+    //   10,000   3,188µs  2.1µs    1,521x
+    //
+    // N (rows a holder is the depositor of) is small for light users but reaches
+    // thousands for heavy users of indexed storage — Kontor's TARGET workload. At those
+    // counts the fresh sum is a per-debit multi-ms scan on every validator, unmetered
+    // relative to N (a transfer's gas doesn't scale with the debited holder's footprint),
+    // i.e. a gas-asymmetric DoS. The O(1) cache closes it. This is why the cache exists.
+    #[tokio::test]
+    #[ignore = "perf benchmark, not a correctness assertion; run explicitly with --nocapture"]
+    async fn bench_floor_read_fresh_vs_cache() -> Result<()> {
+        use std::time::Instant;
+
+        let (_reader, writer, _temp) = new_test_db().await?;
+        let conn = writer.connection();
+        for h in 1..=2u64 {
+            insert_block(
+                &conn,
+                BlockRow::builder()
+                    .height(h)
+                    .hash(new_mock_block_hash(h as u32))
+                    .build(),
+            )
+            .await?;
+        }
+        let alice = create_contract_signer(&conn, 1).await?;
+        let storage = Storage::builder().height(1).conn(conn.clone()).build();
+
+        let iters = 200u32;
+        println!("\nN\tfresh_us\tcache_us\tspeedup");
+        let mut inserted = 0usize;
+        for n in [1usize, 10, 100, 1_000, 10_000] {
+            while inserted < n {
+                let path = format!("k{inserted}").into_bytes();
+                storage
+                    .footprint()
+                    .on_set(1, &path, Some(alice), Some(7))
+                    .await?;
+                storage.set(1, &path, b"v", Some(alice), Some(7)).await?;
+                inserted += 1;
+            }
+            // Cache must equal the fresh truth — keeps the benchmark honest.
+            assert_eq!(
+                live_deposit_gas_sum(&conn, alice).await?,
+                footprint_cache_get(&conn, alice).await?.unwrap_or(0),
+                "cache must equal fresh sum at N={n}"
+            );
+
+            for _ in 0..10 {
+                live_deposit_gas_sum(&conn, alice).await?;
+                footprint_cache_get(&conn, alice).await?;
+            }
+            let t = Instant::now();
+            for _ in 0..iters {
+                live_deposit_gas_sum(&conn, alice).await?;
+            }
+            let fresh_us = t.elapsed().as_secs_f64() * 1e6 / iters as f64;
+            let t = Instant::now();
+            for _ in 0..iters {
+                footprint_cache_get(&conn, alice).await?;
+            }
+            let cache_us = t.elapsed().as_secs_f64() * 1e6 / iters as f64;
+            println!(
+                "{n}\t{fresh_us:.1}\t\t{cache_us:.1}\t\t{:.0}x",
+                fresh_us / cache_us
+            );
+        }
+        Ok(())
+    }
+
+    // Regression for the runtime-pool stale-snapshot bug behind the flaky floor-view
+    // test: a pooled "view" connection that leaks an open read transaction stays pinned
+    // to its old WAL snapshot and serves stale reads forever — unless reset on recycle.
+    // This drives the exact scenario: a leaked BEGIN pins a snapshot, a concurrent
+    // writer commits, the leaked connection reads stale, then `rollback_transaction`
+    // (what the runtime pool's `recycle` now calls) restores a fresh snapshot.
+    #[tokio::test]
+    async fn pool_recycle_clears_stale_snapshot() -> Result<()> {
+        let (_reader, writer, (temp, db_name)) = new_test_db().await?;
+        let writer_conn = writer.connection();
+        // A second physical connection to the SAME WAL db — stands in for a pooled
+        // runtime/view connection handed out by the runtime pool.
+        let view_conn = new_connection(temp.path(), &db_name).await?;
+        let view = Storage::builder().conn(view_conn.clone()).build();
+
+        let key = "stale_snapshot_probe";
+        set_meta_u64(&writer_conn, key, 1).await?;
+
+        // The view opens a transaction and reads — pinning its WAL snapshot at value 1.
+        view.savepoint().await?;
+        assert_eq!(get_meta_u64(&view_conn, key, 0).await?, 1);
+
+        // The writer advances the value and commits (autocommit).
+        set_meta_u64(&writer_conn, key, 2).await?;
+
+        // Still inside its leaked transaction, the view is pinned to the old snapshot —
+        // exactly the stale read a no-op recycle would serve indefinitely.
+        assert_eq!(
+            get_meta_u64(&view_conn, key, 0).await?,
+            1,
+            "an open transaction must still see its pinned (stale) snapshot"
+        );
+
+        // What the pool's `recycle` now does before handing the connection out again.
+        view.rollback_transaction().await?;
+
+        // A fresh read now sees the latest committed value — no stale snapshot.
+        assert_eq!(
+            get_meta_u64(&view_conn, key, 0).await?,
+            2,
+            "after the recycle reset, the connection must read the latest committed state"
+        );
         Ok(())
     }
 }

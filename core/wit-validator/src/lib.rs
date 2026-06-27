@@ -21,6 +21,15 @@ pub use wit_parser::Resolve;
 // validated against this, so referencing native-only registries fails to resolve.
 const BUILT_IN_WIT: &str = include_str!("../../indexer/src/runtime/wit/deps/built-in/common.wit");
 
+// The native-only built-in interfaces (file-registry, system, deposit) and the
+// `built-in-native` world. NOT part of the user surface — only `validate_str_full`
+// pulls it in, for tools (the SDK codec) that must parse NATIVE contract WITs (e.g.
+// the token, which imports `deposit` for `storage-floor`). Its first line repeats
+// the `package kontor:built-in;` decl; we strip it so the two files concatenate into
+// one package source rather than two conflicting package declarations.
+const BUILT_IN_NATIVE_WIT: &str =
+    include_str!("../../indexer/src/runtime/wit/deps/built-in/native.wit");
+
 /// Validates WIT files against Kontor-specific rules.
 pub struct Validator;
 
@@ -39,15 +48,44 @@ impl core::fmt::Display for ParseError {
 impl core::error::Error for ParseError {}
 
 impl Validator {
-    /// Validate a WIT string against Kontor rules.
-    ///
-    /// This automatically includes the Kontor built-in types (context, foreign, etc.)
-    /// so that contracts importing from `kontor:built-in` can be validated.
+    /// Validate a WIT string against Kontor rules, resolving `kontor:built-in`
+    /// imports against the USER-LAND surface (context, foreign, numbers, …). A
+    /// contract importing a native-only interface fails to resolve here — this is
+    /// the WIT-level half of the publish check for user contracts.
     pub fn validate_str(wit_content: &str) -> Result<(ValidationResult, Resolve), ParseError> {
+        Self::validate_with_surface(wit_content, false)
+    }
+
+    /// Like [`Self::validate_str`] but also resolves the NATIVE-only built-in
+    /// interfaces (`built-in-native` world: file-registry, system, deposit). For
+    /// tools that must parse native contract WITs — the SDK codec generates client
+    /// bindings for the native token, which imports `deposit`. NOT a publish path:
+    /// the node gates native imports at the linker, so the wider surface here only
+    /// affects off-chain codegen, never what a user contract may publish.
+    pub fn validate_str_full(wit_content: &str) -> Result<(ValidationResult, Resolve), ParseError> {
+        Self::validate_with_surface(wit_content, true)
+    }
+
+    fn validate_with_surface(
+        wit_content: &str,
+        include_native: bool,
+    ) -> Result<(ValidationResult, Resolve), ParseError> {
         let mut resolve = Resolve::new();
 
+        let built_in = if include_native {
+            // Concatenate into ONE `kontor:built-in` source: strip native.wit's
+            // repeated package decl so the result is a single package, not two.
+            let native_body = BUILT_IN_NATIVE_WIT
+                .trim_start()
+                .strip_prefix("package kontor:built-in;")
+                .unwrap_or(BUILT_IN_NATIVE_WIT);
+            alloc::format!("{BUILT_IN_WIT}\n{native_body}")
+        } else {
+            alloc::string::String::from(BUILT_IN_WIT)
+        };
+
         resolve
-            .push_str("built-in.wit", BUILT_IN_WIT)
+            .push_str("built-in.wit", &built_in)
             .map_err(|e| ParseError {
                 message: alloc::format!("Failed to parse built-in.wit: {}", e),
             })?;
@@ -102,6 +140,33 @@ world root {{
         let resolve = Resolve::new();
         let result = Validator::validate_resolve(&resolve);
         assert!(result.is_valid());
+    }
+
+    // The surface split: a contract importing the native-only `deposit` interface
+    // (via the `built-in-native` world) is UNRESOLVABLE under the user surface
+    // (`validate_str`) but parses cleanly under the full surface (`validate_str_full`,
+    // used by the SDK codec for native contracts like the token).
+    #[test]
+    fn native_only_surface_split() {
+        let native_contract = r#"package root:component;
+
+world root {
+    include kontor:built-in/built-in-native;
+    use kontor:built-in/context.{proc-context, view-context, holder-ref, contract};
+    use kontor:built-in/numbers.{decimal};
+
+    export init: async func(ctx: borrow<proc-context>) -> contract;
+    export floor: async func(ctx: borrow<view-context>, acc: holder-ref) -> decimal;
+}"#;
+        // User surface can't resolve `built-in-native`/`deposit` → parse error.
+        assert!(Validator::validate_str(native_contract).is_err());
+        // Full surface resolves it and the WIT is valid.
+        let (result, _resolve) =
+            Validator::validate_str_full(native_contract).expect("full surface parses native WIT");
+        assert!(
+            result.is_valid(),
+            "native WIT must validate under full surface"
+        );
     }
 
     #[test]

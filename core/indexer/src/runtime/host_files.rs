@@ -11,12 +11,14 @@ use std::collections::{BTreeMap, HashSet};
 use wasmtime::component::{Accessor, Resource};
 
 use super::{
-    ChallengeInput, ContractAddress, Error, RawFileDescriptor, Runtime, VerifyResult,
+    ChallengeInput, ContractAddress, Decimal, Error, RawFileDescriptor, Runtime, VerifyResult,
     fuel::Fuel,
     hash_bytes,
     wit::kontor::built_in,
-    wit::{self, FileDescriptor, Signer},
+    wit::{self, FileDescriptor, Holder, Signer},
 };
+use built_in::context::HolderRef;
+use stdlib::CheckedArithmetics;
 
 impl Runtime {
     async fn _aggregate_root<T>(
@@ -337,6 +339,40 @@ impl built_in::file_registry::HostProofWithStore for Runtime {
             .with(|mut access| access.get().clone())
             ._proof_verify(accessor, rep, challenges, valid_roots, files)
             .await
+    }
+}
+
+impl built_in::deposit::Host for Runtime {}
+
+impl built_in::deposit::HostWithStore for Runtime {
+    /// The storage-deposit floor for `holder` = the sum of their FROZEN per-row
+    /// deposits (integer `deposited_gas`) live across all contracts, priced to token
+    /// here (× gas→token). The token consults this on every debit to enforce
+    /// `balance - floor >= amount`. NATIVE-ONLY (registered into the native linker):
+    /// user contracts read a floor via the token's `floor` view.
+    ///
+    /// Takes an already-RESOLVED `holder` (not a `holder-ref`): deposits are keyed by
+    /// depositor SIGNER-ID, and a holder obtained via `Holder::from_ref` has already had
+    /// any x-only-pubkey resolved to its signer-id through that ONE canonical path. The
+    /// debit check passes the acting signer's holder; the `floor` view resolves its
+    /// `holder-ref` arg first. Non-signer holders (core/burner/utxo) own no deposits → 0.
+    async fn storage_floor<T>(
+        accessor: &Accessor<T, Self>,
+        holder: Resource<Holder>,
+    ) -> Result<Decimal> {
+        let runtime = accessor.with(|mut access| access.get().clone());
+        let holder_ref = {
+            let table = runtime.table.lock().await;
+            table.get(&holder)?.holder_ref.clone()
+        };
+        let signer_id = match holder_ref {
+            HolderRef::SignerId(id) => id,
+            _ => return Ok(Decimal::try_from(0u64)?),
+        };
+        // O(1) read of the eager `depositor_footprint` cache (maintained in the write
+        // path), not a fresh cross-contract scan; price the integer-gas floor to token.
+        let gas = runtime.storage.footprint().total_gas(signer_id).await?;
+        Ok(Decimal::try_from(gas)?.mul(runtime.gas_to_token_multiplier)?)
     }
 }
 

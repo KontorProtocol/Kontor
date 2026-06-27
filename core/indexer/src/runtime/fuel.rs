@@ -32,6 +32,12 @@ pub enum Fuel {
     /// arbitrarily large subtree on every node, so the cost scales with both the
     /// row count and the bytes freed (`path.len() + value size`).
     Delete(u64, u64),
+    /// The storage DEPOSIT for a written row, expressed directly in fuel (the
+    /// payload IS the cost). It is a refundable slice of the op's gas budget — not
+    /// host work — so charging it here makes an unaffordable deposit trip the
+    /// same out-of-gas path as any other over-budget op. The caller computes the
+    /// amount from the runtime's gas→fuel rate (which `cost` can't see).
+    Deposit(u64),
     ContractAddress,
     ProcSigner,
     ProcPayer,
@@ -125,7 +131,10 @@ impl Fuel {
             Self::Exists => 50,
             Self::ExtendPathWithMatch(regexp_len) => 500 + 10 * regexp_len,
             Self::Set(value_len) | Self::Result(value_len) => 200 + 10 * value_len,
+            // ~one tombstone insert (200 base) per row, plus the value bytes
+            // re-written into each tombstone (10/byte).
             Self::Delete(rows, bytes) => 200 + 200 * rows + 10 * bytes,
+            Self::Deposit(fuel) => *fuel,
             Self::ContractAddress => 100,
             Self::ProcSigner | Self::ProcContractSigner | Self::ProcTransaction => 500,
             Self::ProcPayer | Self::ProcContract => 500,
@@ -343,6 +352,18 @@ mod tests {
             let cost = Fuel::Path(bytes.clone()).cost();
             prop_assert!(cost <= 10 * bytes.len() as u64);
         }
+    }
+
+    // A subtree delete must cost proportionally to the rows tombstoned and the
+    // bytes re-written — never the old flat `Set(0)`, which let a cheap call force
+    // unbounded work on every node.
+    #[test]
+    fn delete_cost_scales_with_rows_and_bytes() {
+        assert_eq!(Fuel::Delete(0, 0).cost(), 200);
+        assert_eq!(Fuel::Delete(3, 0).cost(), 200 + 200 * 3);
+        assert_eq!(Fuel::Delete(3, 50).cost(), 200 + 200 * 3 + 10 * 50);
+        // A real (non-empty) delete now costs strictly more than the old flat fee.
+        assert!(Fuel::Delete(2, 10).cost() > Fuel::Set(0).cost());
     }
 
     // A malformed guest path must not panic fuel metering (it used to `expect` a
