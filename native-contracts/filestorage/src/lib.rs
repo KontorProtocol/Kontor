@@ -164,6 +164,19 @@ struct ProtocolState {
     /// `record_block_root` advances these incrementally each block instead of
     /// rebuilding the whole tree — the resulting root is byte-identical to a full
     /// `aggregate_root` over the same contiguous slots.
+    ///
+    /// INVARIANT: `frontier_count + pending_appends.len() == next_ledger_index`,
+    /// maintained by construction (`create_agreement` bumps `next_ledger_index` AND
+    /// pushes one `pending_appends` entry; `record_block_root` drains those AND
+    /// advances `frontier_count` by the same count) and true from genesis (`init`
+    /// seeds all three at 0). So the first pending slot is always exactly
+    /// `frontier_count` and `frontier-append`'s contiguity check never fires on a
+    /// genesis-initialized chain. The one way to break it is to deploy this code over
+    /// a PRE-EXISTING registry (agreements with `ledger_index > 0` but a fresh
+    /// `frontier_count = 0`) — such a migration MUST first backfill the frontier with
+    /// every existing file before the first `record_block_root`. N/A pre-launch; the
+    /// contiguity check is the intended loud fail-stop that would catch a missed
+    /// backfill rather than silently record a wrong root.
     pub frontier_count: u64,
     pub frontier_peaks: Vec<u8>,
     /// Monotonic, append-only counter for the next file's stable ledger slot
