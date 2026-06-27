@@ -23,6 +23,25 @@ interface file-registry {
     // registration and records the result as a valid root.
     aggregate-root: async func(files: list<tuple<list<u8>, u64, u64>>) -> result<list<u8>, error>;
 
+    // Incrementally fold this block's newly-registered files into the persisted
+    // append-only ledger frontier (kontor-crypto `LedgerFrontier`) and return the
+    // updated frontier plus the new aggregated root. The root is byte-identical to
+    // `aggregate-root` over the full file set, but the cost is O(k) in the files
+    // added this block (an O(log n) fold each) instead of O(n) over every file — so
+    // the per-block `record-block-root` core hook no longer scales with the total
+    // file count. `count`/`peaks` are the persisted frontier state the contract
+    // stores: `count` is the number of files folded so far (== the next free slot)
+    // and `peaks` is the concatenated 32-byte field reprs of its mountain peaks (one
+    // per set bit of `count`). `new-files` are this block's `(root, padded-len,
+    // ledger-index)` in ascending `ledger-index` order, each slot exactly contiguous
+    // with `count`; a gap, a reorder, a wrong peak count, or a `root` that is not a
+    // valid field element errors. Returns `(new-count, new-peaks, new-root)`.
+    frontier-append: async func(
+        count: u64,
+        peaks: list<u8>,
+        new-files: list<tuple<list<u8>, u64, u64>>
+    ) -> result<tuple<u64, list<u8>, list<u8>>, error>;
+
     // Deterministic challenge id for a file + challenge parameters.
     compute-challenge-id: async func(
         file: raw-file-descriptor,

@@ -58,6 +58,7 @@ pub enum Fuel {
     CryptoHash(u64),
     CryptoGenerateId,
     AggregateRoot(u64),
+    FrontierAppend(u64),
     ComputeChallengeId,
     ProofFromBytes(u64),
     ProofChallengeIds,
@@ -154,6 +155,10 @@ impl Fuel {
             // Rebuilds the aggregated Merkle tree over the file set (~Poseidon
             // hashing per file); scales with the number of files.
             Self::AggregateRoot(num_files) => 1000 + 200 * num_files,
+            // Folds this block's new files into the persisted frontier — an O(log n)
+            // peak-merge per file (a handful of Poseidon hashes), plus one root
+            // recompute. Scales with the files added THIS block, not the total set.
+            Self::FrontierAppend(num_files) => 1000 + 200 * num_files,
             Self::ComputeChallengeId => 500,
             Self::ProofFromBytes(bytes_len) => 1000 + 10 * bytes_len,
             Self::ProofChallengeIds => 100,

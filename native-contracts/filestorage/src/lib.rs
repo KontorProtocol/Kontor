@@ -114,6 +114,17 @@ struct NodeState {
     pub active: bool,
 }
 
+/// A file registered this block, queued for the per-block frontier fold. Carries
+/// exactly what `frontier-append` needs per file — `(root, padded_len, ledger_index)`
+/// — drained FIFO (ascending `ledger_index`, the order slots were assigned) by
+/// `record_block_root`.
+#[derive(Clone, Default, Storage)]
+struct PendingFile {
+    pub root: Vec<u8>,
+    pub padded_len: u64,
+    pub ledger_index: u64,
+}
+
 #[derive(Clone, Default, StorageRoot)]
 struct ProtocolState {
     pub min_nodes: u64,
@@ -129,11 +140,22 @@ struct ProtocolState {
     // is given this set; a proof's ledger_root must be a member. Bounded by
     // `MAX_VALID_ROOTS` via push_back + pop_front (FIFO eviction of the oldest).
     pub valid_roots: Deque<Vec<u8>>,
-    /// Set true by `create_agreement` when the file set changed; the per-block
-    /// `record_block_root` core hook recomputes the aggregated root only when this
-    /// is set, then clears it. Keeps `create_agreement` O(1) and makes the O(n)
-    /// rebuild unbilled system work, once per block.
-    pub roots_dirty: bool,
+    /// Files registered this block, not yet folded into the aggregated root.
+    /// `create_agreement` pushes one per new file; the per-block `record_block_root`
+    /// core hook drains them (FIFO) into the incremental frontier and clears the
+    /// queue. A non-empty queue is the "file set changed this block" signal (it
+    /// replaces the old `roots_dirty` flag) — empty ⇒ the hook is a no-op. Keeps
+    /// `create_agreement` O(1) and the per-block fold O(files added this block).
+    pub pending_appends: Deque<PendingFile>,
+    /// Persisted append-only ledger frontier (kontor-crypto `LedgerFrontier`): the
+    /// O(log n) Merkle "mountain peaks" of every file folded so far. `frontier_count`
+    /// is the number folded (== the next slot to fold); `frontier_peaks` is the
+    /// concatenated 32-byte field reprs of the peaks (one per set bit of the count).
+    /// `record_block_root` advances these incrementally each block instead of
+    /// rebuilding the whole tree — the resulting root is byte-identical to a full
+    /// `aggregate_root` over the same contiguous slots.
+    pub frontier_count: u64,
+    pub frontier_peaks: Vec<u8>,
     /// Monotonic, append-only counter for the next file's stable ledger slot
     /// (kontor-crypto 0.3.0). Assigned at `create_agreement` and only ever
     /// incremented — a slot is never reused, even if its file is later removed —
@@ -191,7 +213,9 @@ impl Guest for Filestorage {
             memberships: Map::default(),
             challenges: Map::default(),
             valid_roots: Deque::default(),
-            roots_dirty: false,
+            pending_appends: Deque::default(),
+            frontier_count: 0,
+            frontier_peaks: Vec::new(),
             next_ledger_index: 0,
         }
         .init(ctx);
@@ -266,10 +290,15 @@ impl Guest for Filestorage {
         // own map, written by `join` — nothing to initialize here.
         model.agreements().set(&agreement_id, agreement);
 
-        // Flag the file set as changed; the per-block `record_block_root` core hook
-        // does the O(n) root recompute once per block (unbilled system work), so
-        // create_agreement stays O(1) for the caller.
-        model.set_roots_dirty(true);
+        // Queue this file for the per-block frontier fold; `record_block_root` drains
+        // the queue (unbilled system work) once per block. create_agreement stays
+        // O(1) — one push, not a root recompute — and the per-block fold is O(files
+        // added this block), not O(all files).
+        model.pending_appends().push_back(PendingFile {
+            root: descriptor.root.clone(),
+            padded_len: descriptor.padded_len,
+            ledger_index,
+        });
 
         Ok(CreateAgreementResult { agreement_id })
     }
@@ -495,36 +524,43 @@ impl Guest for Filestorage {
         due.len() as u64
     }
 
-    /// Recompute and record the aggregated ledger root for the block's file-set
-    /// changes — a per-block CORE op, so `create_agreement` stays O(1) (it only sets
-    /// `roots_dirty`). No-op on blocks that added no files. Runs after the block's
-    /// transactions (in `run_block_lifecycle`), so the recorded root reflects the
-    /// complete block-end set. Safe to defer: the only consumer of `valid_roots` is
-    /// proof verification, and a proof against a root that includes a file first
-    /// added this block cannot exist yet (the prover needs the block-end root first;
-    /// single-file proofs use the file's own root). All descriptors were validated
-    /// at create time, so `aggregate_root` here cannot fail on a bad descriptor.
+    /// Fold this block's newly-registered files into the aggregated ledger root — a
+    /// per-block CORE op, so `create_agreement` stays O(1) (it only queues the file).
+    /// No-op on blocks that added no files. Runs after the block's transactions (in
+    /// `run_block_lifecycle`), so the recorded root reflects the complete block-end
+    /// set. Safe to defer: the only consumer of `valid_roots` is proof verification,
+    /// and a proof against a root that includes a file first added this block cannot
+    /// exist yet (the prover needs the block-end root first; single-file proofs use
+    /// the file's own root).
+    ///
+    /// Cost is O(files added this block), not O(all files): `frontier_append`
+    /// advances the persisted append-only `LedgerFrontier` incrementally (O(log n)
+    /// per file) instead of rebuilding the whole Merkle tree. The frontier's root is
+    /// byte-identical to a full `aggregate_root` over the same slots. All descriptors
+    /// were validated at create time, so `frontier_append` here cannot fail on a bad
+    /// descriptor.
     fn record_block_root(ctx: &CoreContext) -> Result<(), Error> {
         let model = ctx.proc_context().model();
-        if !model.roots_dirty() {
+
+        // Drain the per-block queue FIFO (== ascending ledger slot, the order
+        // `create_agreement` assigned them). Empty ⇒ no files added this block ⇒ the
+        // root is unchanged, nothing to do.
+        let pending = model.pending_appends();
+        let mut new_files = Vec::with_capacity(pending.len() as usize);
+        while let Some(p) = pending.pop_front() {
+            new_files.push((p.root, p.padded_len, p.ledger_index));
+        }
+        if new_files.is_empty() {
             return Ok(());
         }
 
-        // `aggregate_root` needs only (root, padded_len, ledger_index) per file. So
-        // read just those three fields from each agreement instead of `load()`-ing the
-        // whole `AgreementData` — its other ~7 fields would be that many extra storage
-        // reads per agreement, every block. Each file's leaf is placed at its stable
-        // `ledger_index` slot (gaps zero-filled), so iteration order is NOT
-        // load-bearing — the result is independent of the order `keys()` yields.
-        let file_ids: Vec<String> = model.agreements().keys().collect();
-        let mut files = Vec::with_capacity(file_ids.len());
-        for fid in file_ids {
-            if let Some(a) = model.agreements().get(&fid) {
-                files.push((a.root(), a.padded_len(), a.ledger_index()));
-            }
-        }
-
-        let root = file_registry::aggregate_root(&files)?;
+        // Fold them into the persisted frontier; `frontier_append` asserts each slot
+        // is contiguous with `frontier_count` and returns the advanced state + the new
+        // aggregated root.
+        let (new_count, new_peaks, root) =
+            file_registry::frontier_append(model.frontier_count(), &model.frontier_peaks(), &new_files)?;
+        model.set_frontier_count(new_count);
+        model.set_frontier_peaks(new_peaks);
 
         // Append the new root; evict the oldest once over the cap (FIFO window).
         let roots = model.valid_roots();
@@ -532,7 +568,6 @@ impl Guest for Filestorage {
         if roots.len() > MAX_VALID_ROOTS {
             roots.pop_front();
         }
-        model.set_roots_dirty(false);
         Ok(())
     }
 

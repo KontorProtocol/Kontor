@@ -1,11 +1,13 @@
 use anyhow::{Result, anyhow};
 use hkdf::Hkdf;
 use kontor_crypto::{
-    FieldElement, KontorPoRError, StatelessLedger, aggregate_root_from_files,
+    FieldElement, KontorPoRError, LedgerFrontier, StatelessLedger, aggregate_root_from_files,
     poseidon::calculate_root_commitment, verify_stateless,
 };
 
-use crate::database::types::{validate_padded_len, validate_root};
+use crate::database::types::{
+    bytes_to_field_element, field_element_to_bytes, validate_padded_len, validate_root,
+};
 use sha2::Sha256;
 use std::collections::{BTreeMap, HashSet};
 use wasmtime::component::{Accessor, Resource};
@@ -19,6 +21,36 @@ use super::{
 };
 use built_in::context::HolderRef;
 use stdlib::CheckedArithmetics;
+
+/// Pack frontier peaks into the flat byte blob the contract persists: each peak's
+/// canonical 32-byte field repr, concatenated low-height-first.
+fn encode_peaks(peaks: &[FieldElement]) -> Vec<u8> {
+    let mut out = Vec::with_capacity(peaks.len() * 32);
+    for p in peaks {
+        out.extend_from_slice(&field_element_to_bytes(p));
+    }
+    out
+}
+
+/// Inverse of [`encode_peaks`]: split the blob into 32-byte chunks and decode each
+/// as a canonical field element. Errors on a non-multiple-of-32 length or a
+/// non-canonical encoding (corrupt persisted state, never valid input).
+fn decode_peaks(bytes: &[u8]) -> Result<Vec<FieldElement>, String> {
+    if bytes.len() % 32 != 0 {
+        return Err(format!(
+            "frontier peaks blob length {} is not a multiple of 32",
+            bytes.len()
+        ));
+    }
+    let mut peaks = Vec::with_capacity(bytes.len() / 32);
+    for chunk in bytes.chunks_exact(32) {
+        let arr: [u8; 32] = chunk.try_into().expect("chunks_exact(32) yields 32 bytes");
+        let fe = bytes_to_field_element(&arr)
+            .ok_or_else(|| "frontier peak is not a valid field element".to_string())?;
+        peaks.push(fe);
+    }
+    Ok(peaks)
+}
 
 impl Runtime {
     async fn _aggregate_root<T>(
@@ -54,6 +86,62 @@ impl Runtime {
                 e
             )))),
         }
+    }
+
+    /// Incremental counterpart to `_aggregate_root`: fold this block's new files
+    /// into the persisted `LedgerFrontier` and return `(count, peaks, root)`. The
+    /// frontier's root is byte-identical to `aggregate_root` over slots `0..count`,
+    /// so the contract gets the same valid root at O(k) instead of O(n) per block.
+    async fn _frontier_append<T>(
+        &self,
+        accessor: &Accessor<T, Self>,
+        count: u64,
+        peaks: Vec<u8>,
+        new_files: Vec<(Vec<u8>, u64, u64)>,
+    ) -> Result<Result<(u64, Vec<u8>, Vec<u8>), Error>> {
+        Fuel::FrontierAppend(new_files.len() as u64)
+            .consume(accessor, self.gauge.as_ref())
+            .await?;
+
+        // Persisted peaks are concatenated 32-byte canonical field reprs, one per set
+        // bit of `count`. `from_parts` re-checks that structural invariant.
+        let peaks_fe = match decode_peaks(&peaks) {
+            Ok(p) => p,
+            Err(m) => return Ok(Err(Error::Validation(m))),
+        };
+        let mut frontier = match LedgerFrontier::from_parts(count, peaks_fe) {
+            Ok(f) => f,
+            Err(e) => return Ok(Err(Error::Validation(format!("frontier from_parts: {e}")))),
+        };
+
+        // The frontier appends contiguously at its current `count`, so each new file's
+        // slot must be exactly the next one. Asserting it (rather than trusting the
+        // contract's ordering) keeps the incremental root in lock-step with what a
+        // full `aggregate_root` over the same slots would produce.
+        let mut expected_slot = count;
+        for (root, padded_len, ledger_index) in new_files {
+            if ledger_index != expected_slot {
+                return Ok(Err(Error::Validation(format!(
+                    "frontier-append expects contiguous slots: got ledger_index {ledger_index}, expected {expected_slot}"
+                ))));
+            }
+            let root_fe = match validate_root(&root) {
+                Ok((_, fe)) => fe,
+                Err(m) => return Ok(Err(Error::Validation(m.to_string()))),
+            };
+            let depth = match validate_padded_len(padded_len) {
+                Ok(d) => d,
+                Err(m) => return Ok(Err(Error::Validation(m.to_string()))),
+            };
+            frontier.append(root_fe, depth);
+            expected_slot += 1;
+        }
+
+        Ok(Ok((
+            frontier.count(),
+            encode_peaks(frontier.peaks()),
+            frontier.root().to_vec(),
+        )))
     }
 
     async fn _compute_challenge_id<T>(
@@ -286,6 +374,18 @@ impl built_in::file_registry::HostWithStore for Runtime {
             .await
     }
 
+    async fn frontier_append<T>(
+        accessor: &Accessor<T, Self>,
+        count: u64,
+        peaks: Vec<u8>,
+        new_files: Vec<(Vec<u8>, u64, u64)>,
+    ) -> Result<Result<(u64, Vec<u8>, Vec<u8>), Error>> {
+        accessor
+            .with(|mut access| access.get().clone())
+            ._frontier_append(accessor, count, peaks, new_files)
+            .await
+    }
+
     async fn compute_challenge_id<T>(
         accessor: &Accessor<T, Self>,
         file: RawFileDescriptor,
@@ -422,5 +522,37 @@ impl built_in::foreign::HostWithStore for Runtime {
             .with(|mut access| access.get().clone())
             ._call(accessor, signer, &contract_address, &expr)
             .await
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{bytes_to_field_element, decode_peaks, encode_peaks};
+    use kontor_crypto::FieldElement;
+
+    fn fe(n: u8) -> FieldElement {
+        let mut b = [0u8; 32];
+        b[0] = n;
+        bytes_to_field_element(&b).expect("small canonical repr is a valid field element")
+    }
+
+    #[test]
+    fn peaks_roundtrip() {
+        let peaks: Vec<FieldElement> = (1..=5u8).map(fe).collect();
+        let encoded = encode_peaks(&peaks);
+        assert_eq!(encoded.len(), peaks.len() * 32);
+        assert_eq!(decode_peaks(&encoded).expect("roundtrip decodes"), peaks);
+    }
+
+    #[test]
+    fn empty_peaks_roundtrip() {
+        assert!(encode_peaks(&[]).is_empty());
+        assert!(decode_peaks(&[]).expect("empty decodes").is_empty());
+    }
+
+    #[test]
+    fn decode_rejects_non_multiple_of_32() {
+        assert!(decode_peaks(&[0u8; 31]).is_err());
+        assert!(decode_peaks(&[0u8; 33]).is_err());
     }
 }
