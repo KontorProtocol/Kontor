@@ -285,22 +285,31 @@ impl Guest for Filestorage {
         }
 
         // Assign this file's stable, append-only ledger slot from the monotonic
-        // counter. Done before the validation call below — but the counter is only
-        // bumped AFTER validation succeeds, so a rejected descriptor never burns a
-        // slot (which would leave a permanent gap and erode the sparsity budget).
+        // counter. Read here but only bumped AFTER validation succeeds (below), so a
+        // rejected descriptor never burns a slot — slots must stay contiguous because
+        // the per-block frontier fold (`frontier_append`) asserts each new file's slot
+        // is exactly the next one; a gap would halt the block.
         let ledger_index = model.next_ledger_index();
 
-        // Validate the descriptor's `root` field element up front via a throwaway
-        // single-file aggregate — O(1). The per-block `record_block_root` recompute
-        // also validates, but it's a core op that can't surface errors to a user, so
-        // we reject a malformed descriptor here (never stored) before it ever reaches
-        // that hook. Aggregate by (root, padded_len, ledger_index) — the file lives
-        // at its assigned slot, not a sort position.
-        file_registry::aggregate_root(&[(
-            descriptor.root.clone(),
-            descriptor.padded_len,
-            ledger_index,
-        )])?;
+        // Validate the descriptor's `root` field element + `padded_len` up front via a
+        // throwaway single-file aggregate — O(1). The per-block `record_block_root`
+        // recompute also validates, but it's a core op that can't surface errors to a
+        // user, so we reject a malformed descriptor here (never stored) before it ever
+        // reaches that hook.
+        //
+        // Validate at slot 0, NOT the real `ledger_index`: this call only checks the
+        // root is a canonical field element and padded_len is a power of two — both
+        // independent of WHERE the file sits. `aggregate_root` also enforces a sparsity
+        // guard (implied leaf_count must not exceed file_count by more than
+        // MAX_LEDGER_INDEX_SPARSITY_GAP=1024), which is meaningful for the full file set
+        // but nonsensical for one file in isolation: passing the absolute `ledger_index`
+        // made a lone file at slot ≥1025 look "maximally sparse" and rejected it — a
+        // hard ~1025-file registry cap (a leftover from the lexicographic→append-only
+        // slot switch, where a single file's position used to be rank 0). Slot 0 keeps
+        // the validation and drops the spurious cap; real placement still happens at the
+        // assigned `ledger_index` in the per-block fold, where contiguous slots never
+        // trip sparsity.
+        file_registry::aggregate_root(&[(descriptor.root.clone(), descriptor.padded_len, 0)])?;
 
         // Validation passed — claim the slot by advancing the append-only counter.
         model.set_next_ledger_index(ledger_index + 1);

@@ -29,6 +29,12 @@ async fn test_file_storage_core_signer_smoke() -> Result<()> {
 }
 
 #[testlib::test(contracts_dir = "../../test-contracts", local_only)]
+async fn test_file_storage_no_file_cap() -> Result<()> {
+    file_storage_tests::native_filestorage_contract::run_no_file_cap(runtime).await?;
+    Ok(())
+}
+
+#[testlib::test(contracts_dir = "../../test-contracts", local_only)]
 async fn test_file_storage_core_signer_skip_challenged() -> Result<()> {
     file_storage_tests::native_filestorage_contract::run_core_signer_skip_challenged(runtime)
         .await?;
