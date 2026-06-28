@@ -7,6 +7,10 @@ use serde::{Deserialize, Serialize};
 use crate::consensus::signing::ConsensusMode;
 use crate::logging;
 
+/// Default per-call gas budget for read-only `/view` queries. Matches the runtime's
+/// fixed non-proc default, so the out-of-the-box pool behaves exactly as before.
+pub const DEFAULT_VIEW_GAS_LIMIT: u64 = 100_000;
+
 #[derive(Debug, Clone, Serialize, Deserialize, Parser)]
 pub struct Config {
     #[clap(
@@ -161,6 +165,22 @@ pub struct Config {
         help = "Blocks below tip to retain before pruning (default 144 ≈ 1 day of Bitcoin blocks)"
     )]
     pub prune_retain_blocks: u64,
+
+    // --- Read serving ---
+    /// Per-call gas budget for read-only `/view` queries served by this node's
+    /// runtime pool. NON-consensus: a `/view` read never enters a block, so nodes
+    /// may set different caps without diverging. Lean validators keep the default;
+    /// a read/archive node serving heavy queries (leaderboards, large scans) raises
+    /// it. Applies ONLY to the read-only pool's runtimes — never to a view
+    /// cross-called inside a consensus procedure, which keeps the fixed consensus
+    /// limit (the pool builds separate `Runtime` instances from the reactor's).
+    #[clap(
+        long,
+        env = "VIEW_GAS_LIMIT",
+        default_value_t = DEFAULT_VIEW_GAS_LIMIT,
+        help = "Per-call gas budget for read-only /view queries (default 100000; raise on read/archive nodes)"
+    )]
+    pub view_gas_limit: u64,
 }
 
 impl Config {
@@ -185,6 +205,7 @@ impl Config {
             consensus_propose_timeout_ms: 10000,
             prune: true,
             prune_retain_blocks: 144,
+            view_gas_limit: DEFAULT_VIEW_GAS_LIMIT,
         }
     }
 }

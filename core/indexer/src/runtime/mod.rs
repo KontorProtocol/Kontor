@@ -223,7 +223,17 @@ pub struct Runtime {
     /// start, drained at the settle boundary to compute the execution burn
     /// (`burn = gas - charge`).
     pub deposit: DepositMeter,
+    /// Fuel budget for non-procedure work that IS consensus-relevant: top-level
+    /// core-signer/system procedures (`call.rs` Core-context path) and native-api
+    /// (`execute_api`/`core_payment`) calls. FIXED — never operator-configurable, so
+    /// all nodes meter core calls identically.
     pub gas_limit_for_non_procs: u64,
+    /// Fuel budget for read-only `/view` calls (the payment-`None` path) ONLY.
+    /// Operator-configurable per node (set from `Config::view_gas_limit` on the
+    /// read-only pool runtime; left at the default on the reactor's consensus runtime,
+    /// where views don't run). DELIBERATELY SEPARATE from `gas_limit_for_non_procs` so
+    /// an operator's view cap can NEVER starve consensus core calls.
+    pub view_gas_limit: u64,
     pub gas_to_fuel_multiplier: u64,
     pub gas_to_token_multiplier: Decimal,
     pub previous_output: Option<bitcoin::OutPoint>,
@@ -303,6 +313,9 @@ impl Runtime {
             gauge: Some(FuelGauge::new()),
             deposit: DepositMeter::new(),
             gas_limit_for_non_procs: 100_000,
+            // Default matches gas_limit_for_non_procs (preserves prior /view behavior);
+            // the pool overrides this from node config, the reactor leaves it as-is.
+            view_gas_limit: 100_000,
             gas_to_fuel_multiplier: 1_000,
             gas_to_token_multiplier: Decimal::from("1e-9"),
             previous_output: None,
@@ -372,6 +385,12 @@ impl Runtime {
 
     pub fn fuel_limit_for_non_procs(&self) -> u64 {
         self.gas_limit_for_non_procs * self.gas_to_fuel_multiplier
+    }
+
+    /// Fuel budget for a read-only `/view` call (the operator-configurable cap),
+    /// distinct from the fixed consensus core-call budget above.
+    pub fn fuel_limit_for_view(&self) -> u64 {
+        self.view_gas_limit * self.gas_to_fuel_multiplier
     }
 
     /// Build a Payment for system (Core-paid) operations.
