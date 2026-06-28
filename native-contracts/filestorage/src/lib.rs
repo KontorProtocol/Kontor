@@ -27,6 +27,19 @@ const DEFAULT_C_TARGET: u64 = 12;
 /// Default Bitcoin blocks per year - ~52560 at 10 min/block
 const DEFAULT_BLOCKS_PER_YEAR: u64 = 52560;
 
+// PoR cadence invariant: challenges must expire faster than they're issued. Each of
+// the `c_target` challenges/file/year occupies the agreement's single
+// `active_challenge` slot for up to `challenge_deadline_blocks`, so the steady-state
+// fraction of agreements under challenge is `c_target·deadline/blocks_per_year`. That
+// fraction MUST stay below 1 — it's what keeps the eligible set a constant fraction of
+// the active set, which bounds `generate_challenges_for_block`'s rejection sampling
+// (otherwise eligible→0 and the sampler thrashes toward the fuel cap). These are
+// compile-time constants with no runtime setters, so assert it at build time.
+const _: () = assert!(
+    DEFAULT_C_TARGET * DEFAULT_CHALLENGE_DEADLINE_BLOCKS < DEFAULT_BLOCKS_PER_YEAR,
+    "PoR cadence would keep agreements perpetually challenged (c_target·deadline >= blocks_per_year)"
+);
+
 /// Number of sectors/symbols sampled per challenge
 const DEFAULT_S_CHAL: u64 = 100;
 
@@ -772,6 +785,21 @@ impl Guest for Filestorage {
         block_height: u64,
         seed: Vec<u8>,
     ) -> Result<ChallengeData, Error> {
+        // Dev/regtest ONLY. This creates a challenge with a CALLER-CHOSEN seed and
+        // prover, which is unsound on a live network: a prover could precompute a chosen
+        // seed (defeating the unpredictable-sampling basis of PoR), or squat the
+        // agreement's single `active_challenge` slot with trivial self-issued challenges
+        // to dodge the protocol's real, block-entropy-seeded audits. It's also the
+        // entry point that would let an attacker mass-challenge to starve the eligible
+        // set. Production challenges come solely from `generate_challenges_for_block`;
+        // this stays as a deterministic test affordance, rejected on live networks
+        // (mirrors the `s_chal` regtest conditioning in `init`).
+        if !ctx.network().is_regtest() {
+            return Err(Error::Message(
+                "create_challenge_for_agreement is only available on regtest".to_string(),
+            ));
+        }
+
         let model = ctx.model();
 
         // Validate agreement exists and is active
