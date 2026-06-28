@@ -3,7 +3,6 @@ contract!(
     name = "filestorage",
     indexed = "
         agreement-data: active;
-        agreement-data: eligible by active active-challenge;
         challenge-data: status;
         challenge-data: due by status sort deadline-height;
     "
@@ -27,6 +26,19 @@ const DEFAULT_C_TARGET: u64 = 12;
 
 /// Default Bitcoin blocks per year - ~52560 at 10 min/block
 const DEFAULT_BLOCKS_PER_YEAR: u64 = 52560;
+
+// PoR cadence invariant: challenges must expire faster than they're issued. Each of
+// the `c_target` challenges/file/year occupies the agreement's single
+// `active_challenge` slot for up to `challenge_deadline_blocks`, so the steady-state
+// fraction of agreements under challenge is `c_target·deadline/blocks_per_year`. That
+// fraction MUST stay below 1 — it's what keeps the eligible set a constant fraction of
+// the active set, which bounds `generate_challenges_for_block`'s rejection sampling
+// (otherwise eligible→0 and the sampler thrashes toward the fuel cap). These are
+// compile-time constants with no runtime setters, so assert it at build time.
+const _: () = assert!(
+    DEFAULT_C_TARGET * DEFAULT_CHALLENGE_DEADLINE_BLOCKS < DEFAULT_BLOCKS_PER_YEAR,
+    "PoR cadence would keep agreements perpetually challenged (c_target·deadline >= blocks_per_year)"
+);
 
 /// Number of sectors/symbols sampled per challenge
 const DEFAULT_S_CHAL: u64 = 100;
@@ -52,8 +64,6 @@ const MAX_VALID_ROOTS: u64 = 4096;
 // `IndexedMap`. The bookkeeping lives in stdlib (audited once), not hand-rolled here.
 //
 //   agreements            indexed by `active` → where_active(true)
-//   agreements            `eligible`: by (`active`, `active_challenge` presence)
-//                                → where_eligible(true, Presence::Absent) (composite)
 //   challenges            indexed by `status` → where_status(ChallengeStatus::Active)
 //   challenges            `due`: by `status`, sorted by `deadline_height`
 //                                → where_due(Active).up_to(height) (ordered, early-break)
@@ -87,10 +97,13 @@ const MAX_VALID_ROOTS: u64 = 4096;
 // `active` buckets (no hand-kept `agreement_count`) — neither can drift.
 //
 // Deferred: partial/`filter` indexes and covering indexes (avoid the where_*→get
-// N reads). See the upgrade backlog. (The `due` sorted index covers the composite
-// `(status, deadline_height)` sweep `expire` needed; the `eligible` composite
-// index covers `active ∧ unchallenged`; the flat compound-keyed `memberships` map
-// replaced the nested per-agreement node map.)
+// N reads), and order-statistics on indexes (the i-th member in O(log n)). See the
+// upgrade backlog. Challenge selection needs uniform random ordinal access into the
+// eligible set, which a key-ordered index can't give sublinearly — so it uses the
+// dense append-only `active_ids` array instead (see ProtocolState), not an index.
+// (The `due` sorted index covers the composite `(status, deadline_height)` sweep
+// `expire` needed; the flat compound-keyed `memberships` map replaced the nested
+// per-agreement node map.)
 // ─────────────────────────────────────────────────────────────────
 
 // ─────────────────────────────────────────────────────────────────
@@ -114,6 +127,17 @@ struct NodeState {
     pub active: bool,
 }
 
+/// A file registered this block, queued for the per-block frontier fold. Carries
+/// exactly what `frontier-append` needs per file — `(root, padded_len, ledger_index)`
+/// — drained FIFO (ascending `ledger_index`, the order slots were assigned) by
+/// `record_block_root`.
+#[derive(Clone, Default, Storage)]
+struct PendingFile {
+    pub root: Vec<u8>,
+    pub padded_len: u64,
+    pub ledger_index: u64,
+}
+
 #[derive(Clone, Default, StorageRoot)]
 struct ProtocolState {
     pub min_nodes: u64,
@@ -124,16 +148,50 @@ struct ProtocolState {
     pub agreements: Map<String, AgreementData>,
     pub memberships: Map<(String, u64), NodeState>,
     pub challenges: Map<String, ChallengeData>,
+    /// Dense, append-only array of ACTIVE agreements' ids (position 0..len). An
+    /// agreement is pushed here exactly when it activates (reaches `min_nodes`);
+    /// `active` is monotonic (never turned off) and agreements never terminate, so
+    /// this only grows — no holes, no removal. It exists for one reason: challenge
+    /// selection needs uniform-random ORDINAL access ("the i-th active agreement"),
+    /// which the key-ordered `active` index can't answer sublinearly (you'd walk the
+    /// bucket, O(n)). `active_ids.get(i)` is O(1), so generate_challenges samples in
+    /// O(challenges-this-block) instead of materializing the whole eligible set.
+    /// Eligibility (not currently challenged) is applied by rejection at sample time.
+    pub active_ids: Deque<String>,
     // The accepted aggregated-root window ({current} ∪ recent history): a new root
     // is one O(1) push per file add (not a rewrite of the whole window). `verify`
     // is given this set; a proof's ledger_root must be a member. Bounded by
     // `MAX_VALID_ROOTS` via push_back + pop_front (FIFO eviction of the oldest).
     pub valid_roots: Deque<Vec<u8>>,
-    /// Set true by `create_agreement` when the file set changed; the per-block
-    /// `record_block_root` core hook recomputes the aggregated root only when this
-    /// is set, then clears it. Keeps `create_agreement` O(1) and makes the O(n)
-    /// rebuild unbilled system work, once per block.
-    pub roots_dirty: bool,
+    /// Files registered this block, not yet folded into the aggregated root.
+    /// `create_agreement` pushes one per new file; the per-block `record_block_root`
+    /// core hook drains them (FIFO) into the incremental frontier and clears the
+    /// queue. A non-empty queue is the "file set changed this block" signal (it
+    /// replaces the old `roots_dirty` flag) — empty ⇒ the hook is a no-op. Keeps
+    /// `create_agreement` O(1) and the per-block fold O(files added this block).
+    pub pending_appends: Deque<PendingFile>,
+    /// Persisted append-only ledger frontier (kontor-crypto `LedgerFrontier`): the
+    /// O(log n) Merkle "mountain peaks" of every file folded so far. `frontier_count`
+    /// is the number folded (== the next slot to fold); `frontier_peaks` is the
+    /// concatenated 32-byte field reprs of the peaks (one per set bit of the count).
+    /// `record_block_root` advances these incrementally each block instead of
+    /// rebuilding the whole tree — the resulting root is byte-identical to a full
+    /// `aggregate_root` over the same contiguous slots.
+    ///
+    /// INVARIANT: `frontier_count + pending_appends.len() == next_ledger_index`,
+    /// maintained by construction (`create_agreement` bumps `next_ledger_index` AND
+    /// pushes one `pending_appends` entry; `record_block_root` drains those AND
+    /// advances `frontier_count` by the same count) and true from genesis (`init`
+    /// seeds all three at 0). So the first pending slot is always exactly
+    /// `frontier_count` and `frontier-append`'s contiguity check never fires on a
+    /// genesis-initialized chain. The one way to break it is to deploy this code over
+    /// a PRE-EXISTING registry (agreements with `ledger_index > 0` but a fresh
+    /// `frontier_count = 0`) — such a migration MUST first backfill the frontier with
+    /// every existing file before the first `record_block_root`. N/A pre-launch; the
+    /// contiguity check is the intended loud fail-stop that would catch a missed
+    /// backfill rather than silently record a wrong root.
+    pub frontier_count: u64,
+    pub frontier_peaks: Vec<u8>,
     /// Monotonic, append-only counter for the next file's stable ledger slot
     /// (kontor-crypto 0.3.0). Assigned at `create_agreement` and only ever
     /// incremented — a slot is never reused, even if its file is later removed —
@@ -190,8 +248,11 @@ impl Guest for Filestorage {
             agreements: Map::default(),
             memberships: Map::default(),
             challenges: Map::default(),
+            active_ids: Deque::default(),
             valid_roots: Deque::default(),
-            roots_dirty: false,
+            pending_appends: Deque::default(),
+            frontier_count: 0,
+            frontier_peaks: Vec::new(),
             next_ledger_index: 0,
         }
         .init(ctx);
@@ -224,22 +285,31 @@ impl Guest for Filestorage {
         }
 
         // Assign this file's stable, append-only ledger slot from the monotonic
-        // counter. Done before the validation call below — but the counter is only
-        // bumped AFTER validation succeeds, so a rejected descriptor never burns a
-        // slot (which would leave a permanent gap and erode the sparsity budget).
+        // counter. Read here but only bumped AFTER validation succeeds (below), so a
+        // rejected descriptor never burns a slot — slots must stay contiguous because
+        // the per-block frontier fold (`frontier_append`) asserts each new file's slot
+        // is exactly the next one; a gap would halt the block.
         let ledger_index = model.next_ledger_index();
 
-        // Validate the descriptor's `root` field element up front via a throwaway
-        // single-file aggregate — O(1). The per-block `record_block_root` recompute
-        // also validates, but it's a core op that can't surface errors to a user, so
-        // we reject a malformed descriptor here (never stored) before it ever reaches
-        // that hook. Aggregate by (root, padded_len, ledger_index) — the file lives
-        // at its assigned slot, not a sort position.
-        file_registry::aggregate_root(&[(
-            descriptor.root.clone(),
-            descriptor.padded_len,
-            ledger_index,
-        )])?;
+        // Validate the descriptor's `root` field element + `padded_len` up front via a
+        // throwaway single-file aggregate — O(1). The per-block `record_block_root`
+        // recompute also validates, but it's a core op that can't surface errors to a
+        // user, so we reject a malformed descriptor here (never stored) before it ever
+        // reaches that hook.
+        //
+        // Validate at slot 0, NOT the real `ledger_index`: this call only checks the
+        // root is a canonical field element and padded_len is a power of two — both
+        // independent of WHERE the file sits. `aggregate_root` also enforces a sparsity
+        // guard (implied leaf_count must not exceed file_count by more than
+        // MAX_LEDGER_INDEX_SPARSITY_GAP=1024), which is meaningful for the full file set
+        // but nonsensical for one file in isolation: passing the absolute `ledger_index`
+        // made a lone file at slot ≥1025 look "maximally sparse" and rejected it — a
+        // hard ~1025-file registry cap (a leftover from the lexicographic→append-only
+        // slot switch, where a single file's position used to be rank 0). Slot 0 keeps
+        // the validation and drops the spurious cap; real placement still happens at the
+        // assigned `ledger_index` in the per-block fold, where contiguous slots never
+        // trip sparsity.
+        file_registry::aggregate_root(&[(descriptor.root.clone(), descriptor.padded_len, 0)])?;
 
         // Validation passed — claim the slot by advancing the append-only counter.
         model.set_next_ledger_index(ledger_index + 1);
@@ -266,10 +336,15 @@ impl Guest for Filestorage {
         // own map, written by `join` — nothing to initialize here.
         model.agreements().set(&agreement_id, agreement);
 
-        // Flag the file set as changed; the per-block `record_block_root` core hook
-        // does the O(n) root recompute once per block (unbilled system work), so
-        // create_agreement stays O(1) for the caller.
-        model.set_roots_dirty(true);
+        // Queue this file for the per-block frontier fold; `record_block_root` drains
+        // the queue (unbilled system work) once per block. create_agreement stays
+        // O(1) — one push, not a root recompute — and the per-block fold is O(files
+        // added this block), not O(all files).
+        model.pending_appends().push_back(PendingFile {
+            root: descriptor.root.clone(),
+            padded_len: descriptor.padded_len,
+            ledger_index,
+        });
 
         Ok(CreateAgreementResult { agreement_id })
     }
@@ -364,6 +439,9 @@ impl Guest for Filestorage {
             // In-place set: the `active` index is maintained automatically
             // because `agreements().get()` binds the value model to the index.
             agreement.set_active(true);
+            // Append to the dense active array (activation is one-way, so this is the
+            // only place it grows). Gives generate_challenges O(1) ordinal access.
+            model.active_ids().push_back(agreement_id.clone());
         }
 
         Ok(JoinAgreementResult {
@@ -495,36 +573,46 @@ impl Guest for Filestorage {
         due.len() as u64
     }
 
-    /// Recompute and record the aggregated ledger root for the block's file-set
-    /// changes — a per-block CORE op, so `create_agreement` stays O(1) (it only sets
-    /// `roots_dirty`). No-op on blocks that added no files. Runs after the block's
-    /// transactions (in `run_block_lifecycle`), so the recorded root reflects the
-    /// complete block-end set. Safe to defer: the only consumer of `valid_roots` is
-    /// proof verification, and a proof against a root that includes a file first
-    /// added this block cannot exist yet (the prover needs the block-end root first;
-    /// single-file proofs use the file's own root). All descriptors were validated
-    /// at create time, so `aggregate_root` here cannot fail on a bad descriptor.
+    /// Fold this block's newly-registered files into the aggregated ledger root — a
+    /// per-block CORE op, so `create_agreement` stays O(1) (it only queues the file).
+    /// No-op on blocks that added no files. Runs after the block's transactions (in
+    /// `run_block_lifecycle`), so the recorded root reflects the complete block-end
+    /// set. Safe to defer: the only consumer of `valid_roots` is proof verification,
+    /// and a proof against a root that includes a file first added this block cannot
+    /// exist yet (the prover needs the block-end root first; single-file proofs use
+    /// the file's own root).
+    ///
+    /// Cost is O(files added this block), not O(all files): `frontier_append`
+    /// advances the persisted append-only `LedgerFrontier` incrementally (O(log n)
+    /// per file) instead of rebuilding the whole Merkle tree. The frontier's root is
+    /// byte-identical to a full `aggregate_root` over the same slots. All descriptors
+    /// were validated at create time, so `frontier_append` here cannot fail on a bad
+    /// descriptor.
     fn record_block_root(ctx: &CoreContext) -> Result<(), Error> {
         let model = ctx.proc_context().model();
-        if !model.roots_dirty() {
+
+        // Drain the per-block queue FIFO (== ascending ledger slot, the order
+        // `create_agreement` assigned them). Empty ⇒ no files added this block ⇒ the
+        // root is unchanged, nothing to do.
+        let pending = model.pending_appends();
+        let mut new_files = Vec::with_capacity(pending.len() as usize);
+        while let Some(p) = pending.pop_front() {
+            new_files.push((p.root, p.padded_len, p.ledger_index));
+        }
+        if new_files.is_empty() {
             return Ok(());
         }
 
-        // `aggregate_root` needs only (root, padded_len, ledger_index) per file. So
-        // read just those three fields from each agreement instead of `load()`-ing the
-        // whole `AgreementData` — its other ~7 fields would be that many extra storage
-        // reads per agreement, every block. Each file's leaf is placed at its stable
-        // `ledger_index` slot (gaps zero-filled), so iteration order is NOT
-        // load-bearing — the result is independent of the order `keys()` yields.
-        let file_ids: Vec<String> = model.agreements().keys().collect();
-        let mut files = Vec::with_capacity(file_ids.len());
-        for fid in file_ids {
-            if let Some(a) = model.agreements().get(&fid) {
-                files.push((a.root(), a.padded_len(), a.ledger_index()));
-            }
-        }
-
-        let root = file_registry::aggregate_root(&files)?;
+        // Fold them into the persisted frontier; `frontier_append` asserts each slot
+        // is contiguous with `frontier_count` and returns the advanced state + the new
+        // aggregated root.
+        let (new_count, new_peaks, root) = file_registry::frontier_append(
+            model.frontier_count(),
+            &model.frontier_peaks(),
+            &new_files,
+        )?;
+        model.set_frontier_count(new_count);
+        model.set_frontier_peaks(new_peaks);
 
         // Append the new root; evict the oldest once over the cap (FIFO window).
         let roots = model.valid_roots();
@@ -532,7 +620,6 @@ impl Guest for Filestorage {
         if roots.len() > MAX_VALID_ROOTS {
             roots.pop_front();
         }
-        model.set_roots_dirty(false);
         Ok(())
     }
 
@@ -551,16 +638,16 @@ impl Guest for Filestorage {
         // Per-block batch seed: σ_batch = HKDF_SHA256(block_hash, "KONTOR-CHAL::v1" || block_height)
         let sigma_batch = derive_batch_seed(&block_hash, block_height);
 
-        // Eligible agreements: active AND not already challenged. The composite
-        // `eligible` index (bucketed by `active` and the presence of
-        // `active_challenge`) makes this a single prefix scan — no `where_active`
-        // scan + per-agreement point read to filter the challenged ones out.
-        let eligible_agreement_ids: Vec<String> = model
-            .agreements()
-            .where_eligible(true, Presence::Absent)
-            .collect();
-
-        let total_files = eligible_agreement_ids.len();
+        // Eligible agreements = active AND not currently challenged. Both inputs are
+        // O(1): `active_ids` is the dense append-only array of active agreements (its
+        // length is the active count), and the challenged count is the Active-challenge
+        // bucket count (≤1 active challenge per agreement). This replaces the old O(n)
+        // `where_eligible(...).collect()` that materialized the whole eligible set every
+        // block just to index into it.
+        let active_ids = model.active_ids();
+        let active_count = active_ids.len();
+        let challenged = model.challenges().count_status(ChallengeStatus::Active);
+        let total_files = active_count.saturating_sub(challenged) as usize;
         if total_files == 0 {
             return new_challenges;
         }
@@ -587,21 +674,40 @@ impl Guest for Filestorage {
             return new_challenges;
         }
 
-        // Don't try to challenge more agreements than exist
+        // Don't try to challenge more agreements than are eligible
         let num_to_challenge = core::cmp::min(num_to_challenge, total_files);
 
-        // Select random unique agreement indices (rejection sampling avoids modulo bias)
-        let mut selected_indices = BTreeSet::new();
-        let eligible_len = eligible_agreement_ids.len();
-        if num_to_challenge == eligible_len {
-            for i in 0..eligible_len {
-                selected_indices.insert(i);
+        // Select `num_to_challenge` distinct eligible agreements by REJECTION SAMPLING
+        // over the dense active array: draw a random ordinal, skip it if that agreement
+        // is currently challenged (ineligible) or already chosen. Expected draws are
+        // O(num_to_challenge) — the challenged fraction is ≈ c_target·deadline /
+        // blocks_per_year (a protocol constant well below 1, independent of the total
+        // file count), so this stays bounded as state grows rather than degrading to an
+        // O(n) scan. (`num_to_challenge ≤ total_files` guarantees the loop terminates.)
+        let mut selected: BTreeSet<String> = BTreeSet::new();
+        while selected.len() < num_to_challenge {
+            let ordinal = uniform_index(
+                &agreement_seed,
+                &mut rng_counter,
+                b"select",
+                active_count as usize,
+            ) as u64;
+            let agreement_id = match active_ids.get(ordinal) {
+                Some(id) => id,
+                None => continue,
+            };
+            if selected.contains(&agreement_id) {
+                continue;
             }
-        } else {
-            while selected_indices.len() < num_to_challenge {
-                let index =
-                    uniform_index(&agreement_seed, &mut rng_counter, b"select", eligible_len);
-                selected_indices.insert(index);
+            // Eligible = not currently under challenge (every `active_ids` entry is
+            // active by construction).
+            if model
+                .agreements()
+                .get(&agreement_id)
+                .map(|a| a.active_challenge().is_none())
+                .unwrap_or(false)
+            {
+                selected.insert(agreement_id);
             }
         }
 
@@ -609,8 +715,7 @@ impl Guest for Filestorage {
         let deadline_height = block_height + model.challenge_deadline_blocks();
 
         // Create challenges for selected agreements
-        for index in selected_indices {
-            let agreement_id = &eligible_agreement_ids[index];
+        for agreement_id in &selected {
             let agreement = match model.agreements().get(agreement_id) {
                 Some(a) => a,
                 None => continue,
@@ -689,6 +794,21 @@ impl Guest for Filestorage {
         block_height: u64,
         seed: Vec<u8>,
     ) -> Result<ChallengeData, Error> {
+        // Dev/regtest ONLY. This creates a challenge with a CALLER-CHOSEN seed and
+        // prover, which is unsound on a live network: a prover could precompute a chosen
+        // seed (defeating the unpredictable-sampling basis of PoR), or squat the
+        // agreement's single `active_challenge` slot with trivial self-issued challenges
+        // to dodge the protocol's real, block-entropy-seeded audits. It's also the
+        // entry point that would let an attacker mass-challenge to starve the eligible
+        // set. Production challenges come solely from `generate_challenges_for_block`;
+        // this stays as a deterministic test affordance, rejected on live networks
+        // (mirrors the `s_chal` regtest conditioning in `init`).
+        if !ctx.network().is_regtest() {
+            return Err(Error::Message(
+                "create_challenge_for_agreement is only available on regtest".to_string(),
+            ));
+        }
+
         let model = ctx.model();
 
         // Validate agreement exists and is active
