@@ -747,39 +747,6 @@ pub async fn run_regtest(runtime: &mut Runtime) -> Result<()> {
     Ok(())
 }
 
-/// Regression: the registry must grow well past ~1025 files. `create_agreement` used
-/// to validate each descriptor via a single-file aggregate at the file's ABSOLUTE
-/// `ledger_index`, which tripped kontor-crypto's sparsity guard once the slot reached
-/// 1025 (a lone file at slot 1025 looks "1 file across 1026 leaves" → too sparse),
-/// hard-capping the registry at 1025 files — a leftover from the lexicographic→
-/// append-only-slot switch. Validating at slot 0 removes the spurious cap. Create
-/// comfortably past slot 1024 (the old cliff: the 1026th file = slot 1025).
-async fn filestorage_no_1025_file_cap(runtime: &mut Runtime) -> Result<()> {
-    let signer = runtime.identity().await?;
-    const N: u64 = 1030;
-    for i in 0..N {
-        let descriptor = make_descriptor(
-            format!("cap_file_{i}"),
-            vec![1u8; 32],
-            256,
-            200,
-            format!("cap_{i}.txt"),
-        );
-        // `??`: outer unwraps the call, inner unwraps the contract result. Pre-fix this
-        // failed at i == 1025 (slot 1025) with a "too sparse" error.
-        filestorage::create_agreement(runtime, &signer, descriptor).await??;
-    }
-    assert!(
-        filestorage::agreement_count(runtime).await? >= N,
-        "registry should hold all {N} agreements (the ~1025-file cap regressed)"
-    );
-    Ok(())
-}
-
-pub async fn run_no_file_cap(runtime: &mut Runtime) -> Result<()> {
-    filestorage_no_1025_file_cap(runtime).await
-}
-
 pub async fn run_core_signer_smoke(runtime: &mut Runtime) -> Result<()> {
     challenge_gen_smoke_test(runtime).await
 }

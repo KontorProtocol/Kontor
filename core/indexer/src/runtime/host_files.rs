@@ -553,4 +553,30 @@ mod tests {
         assert!(decode_peaks(&[0u8; 31]).is_err());
         assert!(decode_peaks(&[0u8; 33]).is_err());
     }
+
+    // Pins the exact mechanism behind `create_agreement` validating a lone descriptor
+    // at slot 0 rather than its real `ledger_index`: `aggregate_root`'s sparsity guard
+    // (implied leaf_count may exceed file_count by at most MAX_LEDGER_INDEX_SPARSITY_GAP
+    // = 1024) is correct for the whole set but, for ONE file in isolation, reads a high
+    // absolute slot as maximal sparsity and rejects it. Passing the absolute slot here
+    // hard-capped the registry at ~1025 files; slot 0 always validates. (The full-set
+    // fold uses contiguous slots, where leaf_count == file_count, so it never trips.)
+    #[test]
+    fn single_file_aggregate_validates_at_slot_0_but_caps_at_absolute_slot() {
+        let root = fe(7); // any canonical field element
+        let depth = 8usize; // padded_len 256
+        assert!(
+            kontor_crypto::aggregate_root_from_files(&[(root, depth, 0)]).is_ok(),
+            "a lone file validates at slot 0 regardless of registry size"
+        );
+        assert!(
+            kontor_crypto::aggregate_root_from_files(&[(root, depth, 1024)]).is_ok(),
+            "slot 1024 still fits (gap == 1024)"
+        );
+        assert!(
+            kontor_crypto::aggregate_root_from_files(&[(root, depth, 1025)]).is_err(),
+            "slot 1025 trips the sparsity guard (gap 1025 > 1024) — the old ~1025-file cap; \
+             create_agreement must validate at slot 0, not the absolute ledger_index"
+        );
+    }
 }
