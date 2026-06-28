@@ -186,7 +186,26 @@ impl Runtime {
                 {
                     is_proc = true;
                     if self.stack.is_empty().await {
-                        fuel_limit = self.fuel_limit_for_non_procs();
+                        // Core calls are trusted, system-paid consensus block-processing
+                        // (per-block hooks, issuance, etc.) — they MUST complete for the
+                        // block to advance and have no revert-and-continue semantics. So
+                        // they are effectively NOT metered: fuel metering is a DoS/economic
+                        // control for UNTRUSTED user ops, a category error for trusted
+                        // system work, and the old fixed 100k cap would eventually
+                        // false-halt a healthy network on legitimate growth. (Safe: a core
+                        // call runs in the block savepoint and commits-or-rolls-back, so an
+                        // over-budget hang can only stall a node a height behind — never
+                        // fork committed state — and core fuel never enters the checkpoint
+                        // hash. `gas_consumed` is a start−end difference, so it still
+                        // records true usage.)
+                        //
+                        // NOT u64::MAX: the remaining fuel is bound into the storage read
+                        // path as a SQL i64 size-budget (`CASE WHEN size <= :fuel`,
+                        // contract_state.rs), so it must fit in i64. CORE_CALL_FUEL_CEILING
+                        // is i64-safe and ~10^7× the old limit — unreachable by any
+                        // legitimate per-block work, so it only ever fires as a clean
+                        // deterministic halt on a genuine non-terminating bug.
+                        fuel_limit = CORE_CALL_FUEL_CEILING;
                         store
                             .set_fuel(fuel_limit)
                             .expect("Failed to set fuel for core context procedure");
@@ -750,6 +769,17 @@ const MAX_STRING_LITERAL_BYTES: usize = 16 * 1024;
 /// overflows at a few thousand levels. 64 is far beyond any real call and far
 /// below the overflow depth. CONSENSUS-LOAD-BEARING — see `MAX_STRING_LITERAL_BYTES`.
 const MAX_EXPR_DEPTH: usize = 64;
+
+/// Effective "unmetered" fuel budget for trusted, must-complete CORE calls (per-block
+/// hooks, issuance, genesis) — see the top-of-stack core branch in `prepare_call`.
+/// ~10^7× the old 100k-gas non-proc cap, so it's unreachable by any legitimate
+/// per-block work (it only ever fires as a clean deterministic halt on a genuine
+/// non-terminating bug). NOT `u64::MAX`: remaining fuel is bound into the storage read
+/// path as a SQL i64 size-budget, so this MUST stay within i64 range (with headroom for
+/// any `× gas_to_fuel_multiplier`). CONSENSUS-LOAD-BEARING — all nodes must share the
+/// value (a node with a lower budget would stall on a block others commit); change only
+/// behind a coordinated upgrade.
+const CORE_CALL_FUEL_CEILING: u64 = 1_000_000_000_000_000; // 1e15 fuel = 1e12 gas
 
 /// Deterministically reject a call expression that would overflow the recursive
 /// WAVE parser — along its two recursion axes: an over-long string literal, or
