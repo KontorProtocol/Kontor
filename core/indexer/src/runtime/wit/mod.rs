@@ -1,4 +1,4 @@
-mod resources;
+pub(crate) mod resources;
 
 pub use resources::{
     Contract, CoreContext, FallContext, FileDescriptor, HasContractId, Holder, Keys, ProcContext,
