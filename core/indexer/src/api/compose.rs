@@ -16,8 +16,8 @@ use bitcoin::{
 use bitcoin::Txid;
 use bitcoin::key::constants::SCHNORR_SIGNATURE_SIZE;
 use indexer_types::{
-    CommitSource, Funding, Reveal, RevealOutput, RevealOutputInfo, RevealOutputs, RevealParticipant,
-    TapLeafScript, serialize,
+    CommitSource, Funding, Reveal, RevealOutput, RevealOutputInfo, RevealOutputs,
+    RevealParticipant, TapLeafScript, serialize,
 };
 use std::{collections::HashSet, str::FromStr};
 
