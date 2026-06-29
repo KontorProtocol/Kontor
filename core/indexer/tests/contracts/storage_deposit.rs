@@ -210,11 +210,14 @@ async fn test_token_floor_view_reports_deposit() -> Result<()> {
     let zero = Decimal::from("0");
 
     // AMPLIFIED (investigation): repeat the 0→positive transition with a FRESH
-    // identity each iteration to provoke the floor-view flake and trip the
-    // FLOOR_ZERO_DIAG warn. Revert to a single iteration once root-caused.
-    for i in 0..40u32 {
+    // identity each iteration to provoke the floor-view flake. Modest count to
+    // avoid the cluster-collapse load failures larger counts trigger. Revert to a
+    // single iteration once root-caused.
+    for i in 0..20u32 {
         let alice = runtime.identity().await?;
         let alice_ref: HolderRef = (&alice).into();
+        // alice's signer-id as resolved at identity() time (via the signers API).
+        let alice_sid = alice.signer_id();
         assert_eq!(
             token::floor(runtime, alice_ref.clone()).await?,
             zero,
@@ -229,26 +232,30 @@ async fn test_token_floor_view_reports_deposit() -> Result<()> {
         submit.execute().await?;
 
         // Retry-discriminator: characterize the flake. If floor is 0 right after the
-        // write, retry and record how long until it flips positive (transient) — the
-        // host FLOOR_ZERO_DIAG logs live_sum/max_height on each 0-read, so we see
-        // whether the write lands late (live_sum/height advance) vs a persistent miss.
+        // write, retry (up to ~20s, matching the original poll that worked) and record
+        // how long until it flips positive — the host FLOOR_ZERO_DIAG logs
+        // live_sum/max_height on each 0-read, so we see whether the write lands late
+        // (live_sum/height advance) vs a persistent miss. On failure we also capture
+        // alice's balance: if balance resolves correctly while floor stays 0, x-only→
+        // signer-id resolution works and only the footprint is missing.
         let mut floor = token::floor(runtime, alice_ref.clone()).await?;
         let mut tries = 0u32;
-        while floor == zero && tries < 30 {
+        while floor == zero && tries < 100 {
             tries += 1;
-            tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+            tokio::time::sleep(std::time::Duration::from_millis(200)).await;
             floor = token::floor(runtime, alice_ref.clone()).await?;
         }
         if tries > 0 {
+            let bal = token::balance(runtime, alice_ref.clone()).await;
             eprintln!(
-                "FLOOR_RETRY_DIAG: iter {i} floor read 0, became {floor} after {tries} retries (~{}ms)",
-                tries * 100
+                "FLOOR_RETRY_DIAG: iter {i} alice_sid={alice_sid:?} balance={bal:?} floor 0→{floor} after {tries} retries (~{}ms)",
+                tries * 200
             );
         }
         assert!(
             floor > zero,
-            "iter {i}: floor still 0 after {tries} retries (~{}ms)",
-            tries * 100
+            "iter {i}: floor still 0 after {tries} retries (~{}ms), alice_sid={alice_sid:?}",
+            tries * 200
         );
     }
 
