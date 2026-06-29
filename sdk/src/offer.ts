@@ -352,7 +352,7 @@ export class IncomingOffer {
             commit_source: {
               Build: {
                 address: identity.address,
-                funding_utxo_ids: buyerUtxos.map((u) => `${u.txid}:${u.vout}`),
+                funding: { Ids: buyerUtxos.map((u) => `${u.txid}:${u.vout}`) },
               },
             },
           },

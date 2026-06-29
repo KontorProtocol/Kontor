@@ -343,10 +343,6 @@ pub fn derive_taproot_keypair_from_seed(seed: &[u8], path: &str) -> Result<Keypa
     Ok(Keypair::from_secret_key(&secp, &child.private_key))
 }
 
-fn outpoint_to_utxo_id(outpoint: &OutPoint) -> String {
-    format!("{}:{}", outpoint.txid, outpoint.vout)
-}
-
 #[derive(Debug, Clone)]
 pub struct Identity {
     pub address: Address,
@@ -539,10 +535,14 @@ impl RegTesterInner {
                 output: Some(indexer_types::RevealOutput::Change {
                     script_pubkey: hex::encode(ident.address.script_pubkey().as_bytes()),
                 }),
-                commit_source: indexer_types::CommitSource::Build {
-                    address: ident.address.to_string(),
-                    funding_utxo_ids: vec![outpoint_to_utxo_id(&ident.next_funding_utxo.0)],
-                },
+                // Supply the funding prevout we already hold (not just the
+                // outpoint) so compose doesn't re-resolve it via bitcoind
+                // `getrawtransaction` — which transiently 404s in the
+                // async-`txindex` window after the auto-miner confirms it.
+                commit_source: indexer_types::CommitSource::build_resolved(
+                    &ident.address,
+                    [ident.next_funding_utxo.clone()],
+                ),
             }],
             extra_inputs: vec![],
             extra_outputs: vec![],

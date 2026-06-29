@@ -16,7 +16,7 @@ use bitcoin::{
 use bitcoin::Txid;
 use bitcoin::key::constants::SCHNORR_SIGNATURE_SIZE;
 use indexer_types::{
-    CommitSource, Reveal, RevealOutput, RevealOutputInfo, RevealOutputs, RevealParticipant,
+    CommitSource, Funding, Reveal, RevealOutput, RevealOutputInfo, RevealOutputs, RevealParticipant,
     TapLeafScript, serialize,
 };
 use std::{collections::HashSet, str::FromStr};
@@ -693,20 +693,17 @@ pub async fn compose_commit(
     // participant's funding list, or across multiple Build participants.
     // Two inputs spending the same outpoint would make the commit tx
     // double-spend its own input.
-    let mut global_funding: HashSet<&String> = HashSet::new();
+    let mut global_funding: HashSet<String> = HashSet::new();
     for &build_idx in &build_indices {
-        if let CommitSource::Build {
-            funding_utxo_ids, ..
-        } = &reveal.participants[build_idx].commit_source
-        {
-            let mut local_funding: HashSet<&String> = HashSet::new();
-            for op in funding_utxo_ids {
-                if !local_funding.insert(op) {
+        if let CommitSource::Build { funding, .. } = &reveal.participants[build_idx].commit_source {
+            let mut local_funding: HashSet<String> = HashSet::new();
+            for key in funding_outpoint_keys(funding) {
+                if !local_funding.insert(key.clone()) {
                     return Err(anyhow!(
                         "duplicate funding outpoint provided for participant"
                     ));
                 }
-                if !global_funding.insert(op) {
+                if !global_funding.insert(key) {
                     return Err(anyhow!(
                         "duplicate funding outpoint provided across participants"
                     ));
@@ -776,11 +773,8 @@ pub async fn compose_commit(
 
     for (build_order, &build_idx) in build_indices.iter().enumerate() {
         let participant = &reveal.participants[build_idx];
-        let (build_addr_str, funding_utxo_ids) = match &participant.commit_source {
-            CommitSource::Build {
-                address,
-                funding_utxo_ids,
-            } => (address, funding_utxo_ids),
+        let (build_addr_str, funding) = match &participant.commit_source {
+            CommitSource::Build { address, funding } => (address, funding),
             _ => unreachable!(),
         };
 
@@ -806,13 +800,13 @@ pub async fn compose_commit(
         // Bound the funding list before the RPC — a malformed request
         // with thousands of outpoints shouldn't trigger a bitcoind
         // round-trip to bounce.
-        if funding_utxo_ids.len() > MAX_UTXOS_PER_PARTICIPANT {
+        if funding.len() > MAX_UTXOS_PER_PARTICIPANT {
             return Err(anyhow!(
                 "too many utxos for Build participant (max {})",
                 MAX_UTXOS_PER_PARTICIPANT
             ));
         }
-        let funding_utxos = get_utxos(bitcoin_client, funding_utxo_ids.join(",")).await?;
+        let funding_utxos = get_utxos(bitcoin_client, funding).await?;
 
         // Build an empty commit tx with just the tap output.
         // `Psbt::from_unsigned_tx` already initializes `psbt.outputs`
@@ -1143,9 +1137,27 @@ pub fn estimate_participant_commit_fees(
     Ok((fee_with_change, fee_no_change))
 }
 
-async fn get_utxos(bitcoin_client: &Client, utxo_ids: String) -> Result<Vec<(OutPoint, TxOut)>> {
+/// Canonical `"txid:vout"` dedup keys for a participant's funding, uniform
+/// across both `Funding` variants (`OutPoint`'s `Display` is `txid:vout`, the
+/// same shape callers use for `Funding::Ids`).
+fn funding_outpoint_keys(funding: &Funding) -> Vec<String> {
+    match funding {
+        Funding::Ids(ids) => ids.clone(),
+        Funding::Resolved(utxos) => utxos.iter().map(|u| u.outpoint.to_string()).collect(),
+    }
+}
+
+async fn get_utxos(bitcoin_client: &Client, funding: &Funding) -> Result<Vec<(OutPoint, TxOut)>> {
+    // Prevouts already supplied by the caller: use them directly, with no
+    // bitcoind round-trip — avoids the async-`txindex` window where a
+    // just-confirmed funding UTXO transiently 404s before the index catches up.
+    let utxo_ids = match funding {
+        Funding::Resolved(utxos) => return Ok(utxos.iter().cloned().map(Into::into).collect()),
+        Funding::Ids(ids) => ids,
+    };
+
     let outpoints: Vec<OutPoint> = utxo_ids
-        .split(',')
+        .iter()
         .filter_map(|s| {
             let parts = s.split(':').collect::<Vec<&str>>();
             if parts.len() == 2 {

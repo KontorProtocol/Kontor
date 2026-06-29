@@ -80,7 +80,7 @@ export type CommitOutputs = { commits: Array<CommitTx>; reveal: Reveal };
  */
 export type CommitSource = {
   "Existing": { outpoint: string; prevout: TxOutSchema };
-} | { "Build": { address: string; funding_utxo_ids: Array<string> } };
+} | { "Build": { address: string; funding: Funding } };
 
 /**
  * One commit transaction built by `compose_commit` / `compose`. There's
@@ -208,6 +208,19 @@ export type FootprintResponse = {
 export type Forge = "GitHub" | "GitLab" | "Bitbucket" | "Codeberg" | {
   "Other": string;
 };
+
+/**
+ * Funding UTXOs for a commit that compose must build.
+ */
+export type Funding = { "Ids": Array<string> } | {
+  "Resolved": Array<FundingUtxo>;
+};
+
+/**
+ * A funding UTXO whose prevout the caller already holds. Mirrors the
+ * `CommitSource::Existing` outpoint+prevout pattern.
+ */
+export type FundingUtxo = { outpoint: string; prevout: TxOutSchema };
 
 export type HolderRef =
   | { "XOnlyPubkey": string }
