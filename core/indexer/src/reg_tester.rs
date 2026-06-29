@@ -776,6 +776,19 @@ impl RegTester {
         }
     }
 
+    /// Resolve the signer id of an identity that is KNOWN to be registered (e.g. one
+    /// popped from the registered pool, whose `RegisterBlsKey` was confirmed at setup),
+    /// polling until it's queryable rather than a single shot. A transient miss — the
+    /// queried node briefly behind on indexing the registration, or a 503 under load
+    /// (`require_available`) — means "ask again," not "not registered." Mirrors
+    /// `wait_for_available`'s use of the extended retry budget; surfaces a real error
+    /// only if it never resolves. (Use `get_signer_id` instead when a `None`/absent
+    /// answer is itself the thing under test.)
+    pub async fn wait_for_signer_id(&self, xonly: &str) -> Result<u64> {
+        let client = self.kontor_client().await;
+        retry_extended(async || Ok::<_, anyhow::Error>(client.signer(xonly).await?.signer_id)).await
+    }
+
     pub async fn get_bls_pubkey(&self, xonly: &str) -> Result<Option<Vec<u8>>> {
         match self.kontor_client().await.signer(xonly).await {
             Ok(entry) => Ok(entry.bls_pubkey),

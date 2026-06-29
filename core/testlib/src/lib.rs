@@ -558,11 +558,14 @@ impl RuntimeRegtest {
 impl RuntimeImpl for RuntimeRegtest {
     async fn identity(&mut self) -> Result<Signer> {
         let identity = self.reg_tester.identity().await?;
+        // The identity comes from the registered pool (its RegisterBlsKey was confirmed
+        // at setup), so poll until the signer is queryable rather than racing a single
+        // query against indexing/availability lag under load — the source of a flaky
+        // "identity must be registered" panic.
         let signer_id = self
             .reg_tester
-            .get_signer_id(&identity.x_only_public_key().to_string())
-            .await?
-            .expect("identity must be registered");
+            .wait_for_signer_id(&identity.x_only_public_key().to_string())
+            .await?;
         let signer = Signer::Id(indexer::database::types::Identity::new(signer_id));
         self.identities.insert(signer.clone(), identity);
         Ok(signer)
