@@ -470,6 +470,20 @@ impl built_in::deposit::HostWithStore for Runtime {
         // O(1) read of the eager `depositor_footprint` cache (maintained in the write
         // path), not a fresh cross-contract scan; price the integer-gas floor to token.
         let gas = runtime.storage.footprint().total_gas(signer_id).await?;
+        // Floor-view flake diagnostic: a cached 0 for a resolved signer is the
+        // failure mode. Capture whether the live deposit sum and max height agree,
+        // to tell a transient reorg/recompute window from a cache desync.
+        if gas == 0
+            && let Ok((live, max_height)) =
+                runtime.storage.footprint_zero_diagnostic(signer_id).await
+        {
+            tracing::warn!(
+                signer_id,
+                live_deposit_sum = live,
+                max_height,
+                "FLOOR_ZERO_DIAG: storage_floor read footprint 0 for a resolved signer"
+            );
+        }
         Ok(Decimal::try_from(gas)?.mul(runtime.gas_to_token_multiplier)?)
     }
 }

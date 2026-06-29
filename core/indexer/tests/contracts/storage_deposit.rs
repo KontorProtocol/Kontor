@@ -206,27 +206,31 @@ async fn test_floor_blocks_overcommitted_spend() -> Result<()> {
 #[testlib::test(contracts_dir = "../../test-contracts")]
 async fn test_token_floor_view_reports_deposit() -> Result<()> {
     let admin = runtime.identity().await?;
-    let alice = runtime.identity().await?;
-    let alice_ref: HolderRef = (&alice).into();
     let contract = runtime.publish(&admin, "counter").await?;
-
     let zero = Decimal::from("0");
-    assert_eq!(
-        token::floor(runtime, alice_ref.clone()).await?,
-        zero,
-        "a holder with no deposited rows must read floor 0"
-    );
 
-    // alice writes a keyed entry (depositor = alice) → her floor becomes positive.
-    let mut submit = runtime.submit();
-    submit.push(&alice, counter::set_entry_call(&contract, "k", "v"));
-    submit.execute().await?;
+    // AMPLIFIED (investigation): repeat the 0→positive transition with a FRESH
+    // identity each iteration to provoke the floor-view flake and trip the
+    // FLOOR_ZERO_DIAG warn. Revert to a single iteration once root-caused.
+    for i in 0..40u32 {
+        let alice = runtime.identity().await?;
+        let alice_ref: HolderRef = (&alice).into();
+        assert_eq!(
+            token::floor(runtime, alice_ref.clone()).await?,
+            zero,
+            "iter {i}: a holder with no deposited rows must read floor 0"
+        );
 
-    let floor = token::floor(runtime, alice_ref.clone()).await?;
-    assert!(
-        floor > zero,
-        "floor must be positive after a deposited write, got {floor}"
-    );
+        let mut submit = runtime.submit();
+        submit.push(&alice, counter::set_entry_call(&contract, &format!("k{i}"), "v"));
+        submit.execute().await?;
+
+        let floor = token::floor(runtime, alice_ref.clone()).await?;
+        assert!(
+            floor > zero,
+            "iter {i}: floor must be positive after a deposited write, got {floor}"
+        );
+    }
 
     Ok(())
 }

@@ -244,6 +244,24 @@ impl Storage {
         FootprintCache { conn: &self.conn }
     }
 
+    /// Diagnostic for the floor-view flake: when `storage_floor` reads a cached
+    /// footprint of 0, compare it against the live deposit sum from `contract_state`
+    /// and this connection's max height. Distinguishes a transient reorg/recompute
+    /// window (live sum also 0, height behind the write) from a cache desync (live
+    /// sum > 0 but cache 0). Returns `(live_deposit_gas_sum, max_contract_state_height)`.
+    pub async fn footprint_zero_diagnostic(&self, depositor: u64) -> Result<(u64, i64)> {
+        let live = live_deposit_gas_sum(&self.conn, depositor).await?;
+        let mut rows = self
+            .conn
+            .query("SELECT COALESCE(MAX(height), -1) FROM contract_state", ())
+            .await?;
+        let max_height: i64 = match rows.next().await? {
+            Some(r) => r.get(0)?,
+            None => -1,
+        };
+        Ok((live, max_height))
+    }
+
     /// Reorg rollback that keeps the off-checkpoint footprint cache coherent
     /// ATOMICALLY: in ONE savepoint, capture the affected depositors (before the
     /// `blocks` cascade deletes their rows), run the cascade, then recompute just those
@@ -976,6 +994,78 @@ mod tests {
             2,
             "after the recycle reset, the connection must read the latest committed state"
         );
+        Ok(())
+    }
+
+    // Floor-view flake probe at the libsql level. Cluster scenario: the reactor
+    // (writer) commits, the reader pool confirms it (what `wait_for_txids` polls),
+    // THEN the runtime pool serves the `/view` floor read. All three are separate
+    // connections on one WAL db. If a fresh autocommit read on the view connection
+    // can lag a commit the reader connection already saw, that IS the floor-view
+    // flake's mechanism. A pass means libsql cross-connection visibility is sound
+    // and the flake lives elsewhere (the cluster/consensus path), not here.
+    #[tokio::test]
+    async fn fresh_view_read_never_lags_reader_pool() -> Result<()> {
+        let (_reader, writer, (temp, db_name)) = new_test_db().await?;
+        let writer_conn = writer.connection();
+        let reader_pool_conn = new_connection(temp.path(), &db_name).await?;
+        let view_conn = new_connection(temp.path(), &db_name).await?;
+
+        let key = "view_freshness_probe";
+        for i in 1..=3000u64 {
+            set_meta_u64(&writer_conn, key, i).await?; // reactor commits i
+            let r = get_meta_u64(&reader_pool_conn, key, 0).await?; // reader pool confirms
+            assert_eq!(r, i, "reader pool must see commit {i}, saw {r}");
+            let v = get_meta_u64(&view_conn, key, 0).await?; // runtime pool /view read
+            assert_eq!(
+                v, i,
+                "view read lagged a commit the reader pool already saw: committed {i}, view saw {v}"
+            );
+        }
+        Ok(())
+    }
+
+    // Faithful version of the above: the writer commits via an EXPLICIT
+    // transaction (like the reactor's batch savepoint), CONCURRENTLY, while the
+    // view reads through the same `savepoint()`→read→`commit()` wrapper the
+    // read-only `/view` runtime uses. Monotonicity invariant: a view read that
+    // STARTS after the reader pool already observed value R must see >= R — it
+    // can never go backwards. A violation reproduces the floor-view flake.
+    #[tokio::test]
+    async fn savepoint_wrapped_view_read_never_goes_backwards_under_concurrent_writes() -> Result<()>
+    {
+        let (_reader, writer, (temp, db_name)) = new_test_db().await?;
+        let writer_conn = writer.connection();
+        let reader_pool_conn = new_connection(temp.path(), &db_name).await?;
+        let view = Storage::builder()
+            .conn(new_connection(temp.path(), &db_name).await?)
+            .build();
+        let key = "view_monotonic_probe";
+        set_meta_u64(&writer_conn, key, 0).await?;
+
+        // Writer task: bump the value as fast as possible, concurrently.
+        let w = writer_conn.clone();
+        let writer_task = tokio::spawn(async move {
+            for i in 1..=5000u64 {
+                set_meta_u64(&w, key, i).await.unwrap();
+            }
+        });
+
+        // Reader confirms a value, then the view (savepoint-wrapped) must not lag it.
+        for _ in 0..20000u64 {
+            let r = get_meta_u64(&reader_pool_conn, key, 0).await?;
+            view.savepoint().await?;
+            let v = get_meta_u64(&view.conn, key, 0).await?;
+            view.commit().await?;
+            assert!(
+                v >= r,
+                "savepoint-wrapped view read went BACKWARDS: reader pool already saw {r}, view saw {v}"
+            );
+            if writer_task.is_finished() {
+                break;
+            }
+        }
+        writer_task.await.unwrap();
         Ok(())
     }
 }
