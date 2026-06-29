@@ -64,6 +64,17 @@ pub struct TransactionContext {
     pub txid: Txid,
 }
 
+/// Cross-table snapshot captured when `storage_floor` reads 0, to locate the
+/// floor-view flake: whether the node's `transactions`/`contract_results` are
+/// ahead of `contract_state` (a non-atomic barrier gap).
+#[derive(Debug, Clone, Copy)]
+pub struct FloorZeroDiag {
+    pub live_sum: u64,
+    pub max_state_height: i64,
+    pub max_tx_height: i64,
+    pub max_result_id: i64,
+}
+
 #[derive(Builder, Clone)]
 pub struct Storage {
     pub conn: Connection,
@@ -249,17 +260,29 @@ impl Storage {
     /// and this connection's max height. Distinguishes a transient reorg/recompute
     /// window (live sum also 0, height behind the write) from a cache desync (live
     /// sum > 0 but cache 0). Returns `(live_deposit_gas_sum, max_contract_state_height)`.
-    pub async fn footprint_zero_diagnostic(&self, depositor: u64) -> Result<(u64, i64)> {
+    pub async fn footprint_zero_diagnostic(&self, depositor: u64) -> Result<FloorZeroDiag> {
         let live = live_deposit_gas_sum(&self.conn, depositor).await?;
-        let mut rows = self
-            .conn
-            .query("SELECT COALESCE(MAX(height), -1) FROM contract_state", ())
-            .await?;
-        let max_height: i64 = match rows.next().await? {
-            Some(r) => r.get(0)?,
-            None => -1,
+        let scalar = |sql: &'static str| {
+            let conn = self.conn.clone();
+            async move {
+                let mut rows = conn.query(sql, ()).await?;
+                Ok::<i64, anyhow::Error>(match rows.next().await? {
+                    Some(r) => r.get(0)?,
+                    None => -1,
+                })
+            }
         };
-        Ok((live, max_height))
+        // Cross-table heights on THIS node: if `transactions`/`contract_results` are
+        // AHEAD of `contract_state` (the deposit), the node made the txid/result that
+        // `wait_for_txids`/Phase-3 poll visible BEFORE committing the op's effects — a
+        // non-atomic gap, i.e. the test barrier returns before the write lands.
+        Ok(FloorZeroDiag {
+            live_sum: live,
+            max_state_height: scalar("SELECT COALESCE(MAX(height), -1) FROM contract_state")
+                .await?,
+            max_tx_height: scalar("SELECT COALESCE(MAX(height), -1) FROM transactions").await?,
+            max_result_id: scalar("SELECT COALESCE(MAX(id), -1) FROM contract_results").await?,
+        })
     }
 
     /// Reorg rollback that keeps the off-checkpoint footprint cache coherent

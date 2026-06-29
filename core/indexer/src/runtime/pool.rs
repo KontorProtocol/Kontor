@@ -216,4 +216,68 @@ mod tests {
         );
         Ok(())
     }
+
+    // Faithful reproduction of the floor-view flake at the pool level: a real runtime
+    // pool (checkout/recycle + read-only-runtime savepoint reads), a reactor-style
+    // writer committing via explicit transactions, and heavy concurrent pool load.
+    // INVARIANT: after the writer's COMMIT returns, a freshly-checked-out pooled view
+    // MUST see >= the just-committed value. A view that lags a committed write IS the
+    // production bug (a `/view` read missing a confirmed write).
+    #[tokio::test]
+    async fn runtime_pool_view_never_lags_committed_write_under_load() -> anyhow::Result<()> {
+        use crate::database::queries::{footprint_cache_get, footprint_cache_set};
+        use std::sync::Arc;
+
+        let dir = TempDir::new()?;
+        let path = dir.path().to_path_buf();
+        let writer = new_connection(&path, "stress.db").await?;
+        let pool = Arc::new(
+            super::new(
+                path.clone(),
+                "stress.db".into(),
+                bitcoin::Network::Regtest,
+                DEFAULT_VIEW_GAS_LIMIT,
+            )
+            .await?,
+        );
+        let signer = 1u64;
+        footprint_cache_set(&writer, signer, Some(1)).await?;
+
+        // Background load: many tasks hammer pool checkout/recycle + savepoint-wrapped
+        // reads, plus a second writer churning the WAL — the concurrency the bug needs.
+        let mut bg = Vec::new();
+        for _ in 0..16 {
+            let p = pool.clone();
+            bg.push(tokio::spawn(async move {
+                loop {
+                    if let Ok(rt) = p.get().await {
+                        let _ = rt.storage.savepoint().await;
+                        let _ = footprint_cache_get(&rt.storage.conn, signer).await;
+                        let _ = rt.storage.commit().await;
+                    }
+                }
+            }));
+        }
+
+        for v in 2..=6000u64 {
+            writer.execute("BEGIN", ()).await?;
+            footprint_cache_set(&writer, signer, Some(v)).await?;
+            writer.execute("COMMIT", ()).await?;
+
+            let rt = pool.get().await.map_err(|e| anyhow::anyhow!("{e:?}"))?;
+            rt.storage.savepoint().await?;
+            let seen = footprint_cache_get(&rt.storage.conn, signer)
+                .await?
+                .unwrap_or(0);
+            rt.storage.commit().await?;
+            assert!(
+                seen >= v,
+                "runtime pool view LAGGED a committed write: committed {v}, pooled view saw {seen}"
+            );
+        }
+        for h in bg {
+            h.abort();
+        }
+        Ok(())
+    }
 }

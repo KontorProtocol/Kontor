@@ -474,13 +474,14 @@ impl built_in::deposit::HostWithStore for Runtime {
         // failure mode. Capture whether the live deposit sum and max height agree,
         // to tell a transient reorg/recompute window from a cache desync.
         if gas == 0
-            && let Ok((live, max_height)) =
-                runtime.storage.footprint_zero_diagnostic(signer_id).await
+            && let Ok(d) = runtime.storage.footprint_zero_diagnostic(signer_id).await
         {
             tracing::warn!(
                 signer_id,
-                live_deposit_sum = live,
-                max_height,
+                live_deposit_sum = d.live_sum,
+                max_state_height = d.max_state_height,
+                max_tx_height = d.max_tx_height,
+                max_result_id = d.max_result_id,
                 "FLOOR_ZERO_DIAG: storage_floor read footprint 0 for a resolved signer"
             );
         }

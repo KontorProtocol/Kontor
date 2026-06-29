@@ -213,7 +213,7 @@ async fn test_token_floor_view_reports_deposit() -> Result<()> {
     // identity each iteration to provoke the floor-view flake. Modest count to
     // avoid the cluster-collapse load failures larger counts trigger. Revert to a
     // single iteration once root-caused.
-    for i in 0..50u32 {
+    for i in 0..30u32 {
         let alice = runtime.identity().await?;
         let alice_ref: HolderRef = (&alice).into();
         // alice's signer-id as resolved at identity() time (via the signers API).
