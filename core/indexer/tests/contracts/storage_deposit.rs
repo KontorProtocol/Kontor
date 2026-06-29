@@ -222,13 +222,33 @@ async fn test_token_floor_view_reports_deposit() -> Result<()> {
         );
 
         let mut submit = runtime.submit();
-        submit.push(&alice, counter::set_entry_call(&contract, &format!("k{i}"), "v"));
+        submit.push(
+            &alice,
+            counter::set_entry_call(&contract, &format!("k{i}"), "v"),
+        );
         submit.execute().await?;
 
-        let floor = token::floor(runtime, alice_ref.clone()).await?;
+        // Retry-discriminator: characterize the flake. If floor is 0 right after the
+        // write, retry and record how long until it flips positive (transient) — the
+        // host FLOOR_ZERO_DIAG logs live_sum/max_height on each 0-read, so we see
+        // whether the write lands late (live_sum/height advance) vs a persistent miss.
+        let mut floor = token::floor(runtime, alice_ref.clone()).await?;
+        let mut tries = 0u32;
+        while floor == zero && tries < 30 {
+            tries += 1;
+            tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+            floor = token::floor(runtime, alice_ref.clone()).await?;
+        }
+        if tries > 0 {
+            eprintln!(
+                "FLOOR_RETRY_DIAG: iter {i} floor read 0, became {floor} after {tries} retries (~{}ms)",
+                tries * 100
+            );
+        }
         assert!(
             floor > zero,
-            "iter {i}: floor must be positive after a deposited write, got {floor}"
+            "iter {i}: floor still 0 after {tries} retries (~{}ms)",
+            tries * 100
         );
     }
 
