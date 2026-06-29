@@ -1,8 +1,9 @@
 use std::path::PathBuf;
 
 use anyhow::Context;
-use deadpool::managed::{self, Pool, RecycleResult};
+use deadpool::managed::{self, Pool, RecycleError, RecycleResult};
 use thiserror::Error;
+use tracing::warn;
 use wasmtime::Engine;
 
 use crate::{
@@ -90,12 +91,26 @@ impl managed::Manager for Manager {
         // A view wraps its call in BEGIN…COMMIT; if `execute` returns early without
         // reaching the commit/rollback in `handle_call` (e.g. the spawned call task
         // fails to join), the connection goes back into the pool with an OPEN read
-        // transaction — pinning it to a stale WAL snapshot so every later view on it
-        // reads pre-commit state forever. Best-effort `ROLLBACK` (+ clearing the
-        // savepoint stack) makes every reused connection start from a fresh snapshot.
-        // Errors when no transaction is open, which is the normal case — ignore them.
+        // transaction — pinning it to a stale WAL snapshot so every later view (and
+        // `/signers` lookup, served from this same pool) on it reads pre-commit state.
+        // `ROLLBACK` (+ clearing the savepoint stack) restores a fresh snapshot; it
+        // errors harmlessly when nothing is open (the normal case), so ignore it here
+        // and verify the outcome below instead.
         let _ = obj.storage.rollback_transaction().await;
-        Ok(())
+        // Only hand the connection back if it is provably out of any transaction. If the
+        // rollback could not clear it (e.g. a statement still in progress), it is still
+        // pinned to a stale snapshot — discard it so deadpool builds a fresh connection
+        // rather than serve stale reads. Returning the connection regardless (the prior
+        // behaviour) let one poisoned connection serve stale `/view` / `/signers` reads
+        // indefinitely — the root cause of the floor-view and signer-id cluster flakes.
+        if obj.storage.conn.is_autocommit() {
+            Ok(())
+        } else {
+            warn!("Discarding pooled view connection still in a transaction after rollback");
+            Err(RecycleError::Message(
+                "pooled view connection could not be reset to a fresh snapshot".into(),
+            ))
+        }
     }
 }
 
@@ -156,6 +171,49 @@ mod tests {
             Runtime::new(ComponentCache::new(), Storage::builder().conn(conn).build()).await?;
         assert_eq!(consensus.gas_limit_for_non_procs, DEFAULT_VIEW_GAS_LIMIT);
         assert_eq!(consensus.view_gas_limit, DEFAULT_VIEW_GAS_LIMIT);
+        Ok(())
+    }
+
+    // A view runtime that leaks an open transaction (its task dropped before commit)
+    // must be rolled back to autocommit on recycle so the next checkout reads a fresh
+    // snapshot — never the leaked connection's pinned (stale) snapshot. The clean case
+    // must NOT be discarded.
+    #[tokio::test]
+    async fn recycle_resets_leaked_transaction_before_reuse() -> anyhow::Result<()> {
+        use deadpool::managed::{Manager as _, Metrics};
+
+        let dir = TempDir::new()?;
+        let manager = Manager::new(
+            dir.path().to_path_buf(),
+            "recycle.db".into(),
+            bitcoin::Network::Regtest,
+            DEFAULT_VIEW_GAS_LIMIT,
+        )?;
+
+        // A freshly created connection is clean — recycle keeps it.
+        let mut runtime = manager.create().await.map_err(|e| anyhow::anyhow!("{e}"))?;
+        assert!(runtime.storage.conn.is_autocommit());
+        manager
+            .recycle(&mut runtime, &Metrics::default())
+            .await
+            .map_err(|e| anyhow::anyhow!("clean connection must not be discarded: {e:?}"))?;
+
+        // Simulate a view that opened its BEGIN but never reached commit/rollback.
+        runtime.storage.savepoint().await?;
+        assert!(
+            !runtime.storage.conn.is_autocommit(),
+            "savepoint opens a transaction"
+        );
+
+        // Recycle must restore autocommit (fresh snapshot on next read) and accept it.
+        manager
+            .recycle(&mut runtime, &Metrics::default())
+            .await
+            .map_err(|e| anyhow::anyhow!("recycle should reset, not discard: {e:?}"))?;
+        assert!(
+            runtime.storage.conn.is_autocommit(),
+            "recycle must roll the leaked transaction back to autocommit"
+        );
         Ok(())
     }
 }
