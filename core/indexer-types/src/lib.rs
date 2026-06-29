@@ -69,19 +69,34 @@ pub struct RevealParticipant {
 }
 
 impl CommitSource {
-    /// Construct a `CommitSource::Build` for a commit to be built by
-    /// this call. Accepts any iterable of `OutPoint` for funding — the
-    /// helper formats them into the wire-string shape internally.
+    /// Construct a `CommitSource::Build` whose funding is outpoints only —
+    /// compose resolves each prevout via bitcoind. Accepts any iterable of
+    /// `OutPoint`; the helper formats them into the wire-string shape.
     pub fn build(
         address: &bitcoin::Address,
         funding: impl IntoIterator<Item = bitcoin::OutPoint>,
     ) -> Self {
         Self::Build {
             address: address.to_string(),
-            funding_utxo_ids: funding
-                .into_iter()
-                .map(|op| format!("{}:{}", op.txid, op.vout))
-                .collect(),
+            funding: Funding::Ids(
+                funding
+                    .into_iter()
+                    .map(|op| format!("{}:{}", op.txid, op.vout))
+                    .collect(),
+            ),
+        }
+    }
+
+    /// Construct a `CommitSource::Build` whose funding prevouts the caller
+    /// already holds — compose uses them directly, skipping the bitcoind
+    /// lookup (and its async-`txindex` 404 window).
+    pub fn build_resolved(
+        address: &bitcoin::Address,
+        funding: impl IntoIterator<Item = (bitcoin::OutPoint, bitcoin::TxOut)>,
+    ) -> Self {
+        Self::Build {
+            address: address.to_string(),
+            funding: Funding::Resolved(funding.into_iter().map(Into::into).collect()),
         }
     }
 
@@ -142,10 +157,57 @@ pub enum CommitSource {
     },
     /// The commit needs to be built (by this call or a later one).
     /// Caller supplies funding for the commit tx.
-    Build {
-        address: String,
-        funding_utxo_ids: Vec<String>,
-    },
+    Build { address: String, funding: Funding },
+}
+
+/// Funding UTXOs for a commit that compose must build.
+#[derive(Serialize, Deserialize, Clone, TS)]
+#[ts(export, export_to = "../../../sdk/src/bindings.d.ts")]
+pub enum Funding {
+    /// Outpoints only (`"txid:vout"`). Compose resolves each prevout via
+    /// bitcoind `getrawtransaction`.
+    Ids(Vec<String>),
+    /// Outpoints with prevouts already known. Compose uses them directly,
+    /// skipping the bitcoind lookup (and its async-`txindex` window where a
+    /// just-confirmed UTXO transiently 404s before the index catches up).
+    Resolved(Vec<FundingUtxo>),
+}
+
+impl Funding {
+    /// Number of funding UTXOs, across either variant.
+    pub fn len(&self) -> usize {
+        match self {
+            Funding::Ids(ids) => ids.len(),
+            Funding::Resolved(utxos) => utxos.len(),
+        }
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+}
+
+/// A funding UTXO whose prevout the caller already holds. Mirrors the
+/// `CommitSource::Existing` outpoint+prevout pattern.
+#[derive(Serialize, Deserialize, Clone, TS)]
+#[ts(export, export_to = "../../../sdk/src/bindings.d.ts")]
+pub struct FundingUtxo {
+    #[ts(as = "String")]
+    pub outpoint: bitcoin::OutPoint,
+    #[ts(as = "TxOutSchema")]
+    pub prevout: bitcoin::TxOut,
+}
+
+impl From<(bitcoin::OutPoint, bitcoin::TxOut)> for FundingUtxo {
+    fn from((outpoint, prevout): (bitcoin::OutPoint, bitcoin::TxOut)) -> Self {
+        Self { outpoint, prevout }
+    }
+}
+
+impl From<FundingUtxo> for (bitcoin::OutPoint, bitcoin::TxOut) {
+    fn from(u: FundingUtxo) -> Self {
+        (u.outpoint, u.prevout)
+    }
 }
 
 /// A non-Kontor input (key-path spend) bringing extra value into the

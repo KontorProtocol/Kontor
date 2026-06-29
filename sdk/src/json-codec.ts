@@ -55,7 +55,7 @@ export type { WireInst, WireInsts, OpStatus };
 /**
  * A funding UTXO a Build participant can spend in its commit tx. Higher-
  * level flows fetch these via `KontorTransport.utxos()` and feed them
- * into `CommitSource.Build.funding_utxo_ids`.
+ * into `CommitSource.Build.funding` as `Funding.Ids`.
  */
 export interface Utxo {
   txid: string;

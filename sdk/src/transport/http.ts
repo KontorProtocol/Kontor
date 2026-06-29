@@ -364,7 +364,7 @@ export class HttpTransport implements KontorTransport {
           commit_source: {
             Build: {
               address: identity.address,
-              funding_utxo_ids: utxos.map((u) => `${u.txid}:${u.vout}`),
+              funding: { Ids: utxos.map((u) => `${u.txid}:${u.vout}`) },
             },
           },
         },
