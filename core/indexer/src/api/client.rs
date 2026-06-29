@@ -222,4 +222,19 @@ impl Client {
         )
         .await
     }
+
+    /// Like `signer`, but `None` on 404 (identity genuinely not registered / not yet
+    /// indexed) — so a caller can distinguish "absent" from a transport/5xx failure,
+    /// which still surfaces as an error rather than masquerading as "not registered".
+    pub async fn signer_opt(&self, identifier: &str) -> Result<Option<SignerResponse>> {
+        let res = self
+            .client
+            .get(format!("{}/signers/{}", &self.url, identifier))
+            .send()
+            .await?;
+        if res.status() == StatusCode::NOT_FOUND {
+            return Ok(None);
+        }
+        Self::handle_response(res).await.map(Some)
+    }
 }

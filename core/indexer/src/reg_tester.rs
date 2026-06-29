@@ -769,11 +769,17 @@ impl RegTester {
         self.inner.lock().await.kontor_client.clone()
     }
 
+    /// `Some` if registered, `None` if genuinely not registered (404). A transport/5xx
+    /// failure SURFACES as an error instead of being swallowed as `None` — so a flaky
+    /// node read can't masquerade as "not registered". (For a known-registered identity
+    /// that may just be lagging, use `wait_for_signer_id`, which polls.)
     pub async fn get_signer_id(&self, xonly: &str) -> Result<Option<u64>> {
-        match self.kontor_client().await.signer(xonly).await {
-            Ok(entry) => Ok(Some(entry.signer_id)),
-            Err(_) => Ok(None),
-        }
+        Ok(self
+            .kontor_client()
+            .await
+            .signer_opt(xonly)
+            .await?
+            .map(|entry| entry.signer_id))
     }
 
     /// Resolve the signer id of an identity that is KNOWN to be registered (e.g. one
