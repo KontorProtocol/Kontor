@@ -978,4 +978,132 @@ mod tests {
         );
         Ok(())
     }
+
+    // Floor-view flake probe at the libsql level. Cluster scenario: the reactor
+    // (writer) commits, the reader pool confirms it (what `wait_for_txids` polls),
+    // THEN the runtime pool serves the `/view` floor read. All three are separate
+    // connections on one WAL db. If a fresh autocommit read on the view connection
+    // can lag a commit the reader connection already saw, that IS the floor-view
+    // flake's mechanism. A pass means libsql cross-connection visibility is sound
+    // and the flake lives elsewhere (the cluster/consensus path), not here.
+    #[tokio::test]
+    async fn fresh_view_read_never_lags_reader_pool() -> Result<()> {
+        let (_reader, writer, (temp, db_name)) = new_test_db().await?;
+        let writer_conn = writer.connection();
+        let reader_pool_conn = new_connection(temp.path(), &db_name).await?;
+        let view_conn = new_connection(temp.path(), &db_name).await?;
+
+        let key = "view_freshness_probe";
+        for i in 1..=3000u64 {
+            set_meta_u64(&writer_conn, key, i).await?; // reactor commits i
+            let r = get_meta_u64(&reader_pool_conn, key, 0).await?; // reader pool confirms
+            assert_eq!(r, i, "reader pool must see commit {i}, saw {r}");
+            let v = get_meta_u64(&view_conn, key, 0).await?; // runtime pool /view read
+            assert_eq!(
+                v, i,
+                "view read lagged a commit the reader pool already saw: committed {i}, view saw {v}"
+            );
+        }
+        Ok(())
+    }
+
+    // Faithful version of the above: the writer commits via an EXPLICIT
+    // transaction (like the reactor's batch savepoint), CONCURRENTLY, while the
+    // view reads through the same `savepoint()`→read→`commit()` wrapper the
+    // read-only `/view` runtime uses. Monotonicity invariant: a view read that
+    // STARTS after the reader pool already observed value R must see >= R — it
+    // can never go backwards. A violation reproduces the floor-view flake.
+    #[tokio::test]
+    async fn savepoint_wrapped_view_read_never_goes_backwards_under_concurrent_writes() -> Result<()>
+    {
+        let (_reader, writer, (temp, db_name)) = new_test_db().await?;
+        let writer_conn = writer.connection();
+        let reader_pool_conn = new_connection(temp.path(), &db_name).await?;
+        let view = Storage::builder()
+            .conn(new_connection(temp.path(), &db_name).await?)
+            .build();
+        let key = "view_monotonic_probe";
+        set_meta_u64(&writer_conn, key, 0).await?;
+
+        // Writer task: bump the value as fast as possible, concurrently.
+        let w = writer_conn.clone();
+        let writer_task = tokio::spawn(async move {
+            for i in 1..=5000u64 {
+                set_meta_u64(&w, key, i).await.unwrap();
+            }
+        });
+
+        // Reader confirms a value, then the view (savepoint-wrapped) must not lag it.
+        for _ in 0..20000u64 {
+            let r = get_meta_u64(&reader_pool_conn, key, 0).await?;
+            view.savepoint().await?;
+            let v = get_meta_u64(&view.conn, key, 0).await?;
+            view.commit().await?;
+            assert!(
+                v >= r,
+                "savepoint-wrapped view read went BACKWARDS: reader pool already saw {r}, view saw {v}"
+            );
+            if writer_task.is_finished() {
+                break;
+            }
+        }
+        writer_task.await.unwrap();
+        Ok(())
+    }
+
+    // THE root cause, proven directly (SQLDelight #2123 / SQLite WAL): a connection
+    // that holds an UNDRAINED cursor cannot advance its read snapshot in WAL mode
+    // ("a reader can't move its end mark while it has active statements"). A FRESH
+    // read on that same connection then returns STALE data even though another
+    // connection already committed — and `is_autocommit()` is still TRUE (it's an
+    // implicit statement lock, not a BEGIN), so the recycle's autocommit check is
+    // blind to it. Dropping the cursor releases the pin. This is the floor-view flake.
+    #[tokio::test]
+    async fn held_cursor_pins_wal_snapshot_until_dropped() -> Result<()> {
+        let (_reader, writer, (temp, db_name)) = new_test_db().await?;
+        let writer_conn = writer.connection();
+        let view_conn = new_connection(temp.path(), &db_name).await?;
+
+        let key = "wal_pin_probe";
+        set_meta_u64(&writer_conn, key, 1).await?;
+        writer_conn
+            .execute("CREATE TABLE probe (x INTEGER)", ())
+            .await?;
+        for i in 0..200i64 {
+            writer_conn
+                .execute("INSERT INTO probe VALUES (?1)", [i])
+                .await?;
+        }
+
+        // The view opens a cursor and reads ONE row, leaving the statement ACTIVE
+        // (the leaked `Keys` stream in production). The connection is still autocommit.
+        let mut held = view_conn.query("SELECT x FROM probe", ()).await?;
+        let _ = held.next().await?;
+        assert!(
+            view_conn.is_autocommit(),
+            "an open cursor does NOT flip autocommit — the recycle check can't see it"
+        );
+        assert_eq!(get_meta_u64(&view_conn, key, 0).await?, 1);
+
+        // Another connection commits a newer value.
+        set_meta_u64(&writer_conn, key, 2).await?;
+
+        // A FRESH read on the view connection while the cursor is held: pinned to the
+        // old snapshot → STALE. This is the bug.
+        let pinned = get_meta_u64(&view_conn, key, 0).await?;
+
+        // Dropping the cursor releases the pin; the next read sees the latest.
+        drop(held);
+        let after_drop = get_meta_u64(&view_conn, key, 0).await?;
+
+        assert_eq!(
+            pinned, 1,
+            "REPRO: a held cursor pinned the WAL snapshot — fresh read saw stale {pinned}"
+        );
+        assert_eq!(
+            after_drop, 2,
+            "FIX: after dropping the cursor the connection advances to the latest commit"
+        );
+        Ok(())
+    }
 }

@@ -87,22 +87,25 @@ impl managed::Manager for Manager {
         obj: &mut Self::Type,
         _metrics: &deadpool::managed::Metrics,
     ) -> RecycleResult<Self::Error> {
-        // Reset any transaction left open on this connection before it is reused.
-        // A view wraps its call in BEGIN…COMMIT; if `execute` returns early without
-        // reaching the commit/rollback in `handle_call` (e.g. the spawned call task
-        // fails to join), the connection goes back into the pool with an OPEN read
-        // transaction — pinning it to a stale WAL snapshot so every later view (and
-        // `/signers` lookup, served from this same pool) on it reads pre-commit state.
-        // `ROLLBACK` (+ clearing the savepoint stack) restores a fresh snapshot; it
-        // errors harmlessly when nothing is open (the normal case), so ignore it here
-        // and verify the outcome below instead.
+        // THE floor-view flake fix. A view can leave a streaming-iterator resource
+        // (e.g. an undrained `Keys` map iterator) in the runtime's resource table; its
+        // backing libsql `Rows` stays an ACTIVE STATEMENT while held. In WAL mode a
+        // connection cannot advance its read snapshot while it has an active statement
+        // (SQLite WAL / SQLDelight #2123), so the NEXT view checked out on this pooled
+        // connection reads a STALE, frozen snapshot — silently missing just-committed
+        // writes (`/view`, `/signers`). Crucially this does NOT flip `is_autocommit`
+        // (it's an implicit statement lock, not a `BEGIN`), so the check below can't
+        // see it. Dropping the resource table finalizes those cursors and releases the
+        // pin, letting the connection advance to the latest commit on the next read.
+        *obj.table.lock().await = wasmtime::component::ResourceTable::new();
+        // Then reset any explicit transaction a cancelled view left open (`BEGIN…COMMIT`
+        // not reached). `ROLLBACK` errors harmlessly when nothing is open (the normal
+        // case), so ignore it and verify the outcome below.
         let _ = obj.storage.rollback_transaction().await;
         // Only hand the connection back if it is provably out of any transaction. If the
         // rollback could not clear it (e.g. a statement still in progress), it is still
-        // pinned to a stale snapshot — discard it so deadpool builds a fresh connection
-        // rather than serve stale reads. Returning the connection regardless (the prior
-        // behaviour) let one poisoned connection serve stale `/view` / `/signers` reads
-        // indefinitely — the root cause of the floor-view and signer-id cluster flakes.
+        // pinned — discard it so deadpool builds a fresh connection rather than serve
+        // stale reads.
         if obj.storage.conn.is_autocommit() {
             Ok(())
         } else {
@@ -214,6 +217,146 @@ mod tests {
             runtime.storage.conn.is_autocommit(),
             "recycle must roll the leaked transaction back to autocommit"
         );
+        Ok(())
+    }
+
+    // End-to-end proof of the floor-view fix: a leaked `Keys` cursor in a pooled
+    // runtime's resource table pins its connection to a stale WAL snapshot (a fresh
+    // read misses a concurrent commit), and `recycle` clearing the table drops the
+    // cursor and releases the pin so the next read sees the latest commit.
+    #[tokio::test]
+    async fn recycle_clears_leaked_cursor_that_pinned_the_snapshot() -> anyhow::Result<()> {
+        use crate::database::queries::{footprint_cache_get, footprint_cache_set, insert_block};
+        use crate::runtime::wit::resources::Keys;
+        use crate::test_utils::new_mock_block_hash;
+        use deadpool::managed::{Manager as _, Metrics};
+        use futures_util::StreamExt;
+        use indexer_types::BlockRow;
+
+        let dir = TempDir::new()?;
+        let manager = Manager::new(
+            dir.path().to_path_buf(),
+            "leak.db".into(),
+            bitcoin::Network::Regtest,
+            DEFAULT_VIEW_GAS_LIMIT,
+        )?;
+        let mut rt = manager.create().await.map_err(|e| anyhow::anyhow!("{e}"))?;
+
+        // Seed via a separate writer connection: a block (FK), contract_state rows for
+        // the cursor to stream, and a footprint row to read back.
+        let writer = new_connection(dir.path(), "leak.db").await?;
+        let signer = 1u64;
+        insert_block(
+            &writer,
+            BlockRow::builder()
+                .height(1)
+                .hash(new_mock_block_hash(1))
+                .build(),
+        )
+        .await?;
+        for i in 0..50i64 {
+            writer
+                .execute(
+                    "INSERT INTO contract_state (contract_id, height, tx_id, size, path, value, deleted) \
+                     VALUES (1, 1, NULL, 1, ?1, ?2, 0)",
+                    libsql::params![vec![i as u8], vec![1u8]],
+                )
+                .await?;
+        }
+        footprint_cache_set(&writer, signer, Some(1)).await?;
+
+        // Leak a Keys cursor into the pooled runtime's table (read one row → ACTIVE
+        // statement, never drained), exactly as a partially-consumed `map.keys()` view.
+        let mut stream = Box::pin(rt.storage.keys(1, vec![], None).await?);
+        let _ = stream.next().await;
+        rt.table.lock().await.push(Keys { stream })?;
+
+        // The writer commits a newer footprint; the pinned pooled connection reads stale.
+        footprint_cache_set(&writer, signer, Some(2)).await?;
+        assert_eq!(
+            footprint_cache_get(&rt.storage.conn, signer).await?,
+            Some(1),
+            "a leaked cursor must pin the pooled connection to the stale snapshot"
+        );
+        assert!(
+            rt.storage.conn.is_autocommit(),
+            "the pin does NOT flip autocommit — the recycle check alone is blind to it"
+        );
+
+        // recycle clears the table → drops the leaked cursor → releases the pin.
+        manager
+            .recycle(&mut rt, &Metrics::default())
+            .await
+            .map_err(|e| anyhow::anyhow!("{e:?}"))?;
+        assert_eq!(
+            footprint_cache_get(&rt.storage.conn, signer).await?,
+            Some(2),
+            "after recycle drops the leaked cursor, the connection reads the latest commit"
+        );
+        Ok(())
+    }
+
+    // Faithful reproduction of the floor-view flake at the pool level: a real runtime
+    // pool (checkout/recycle + read-only-runtime savepoint reads), a reactor-style
+    // writer committing via explicit transactions, and heavy concurrent pool load.
+    // INVARIANT: after the writer's COMMIT returns, a freshly-checked-out pooled view
+    // MUST see >= the just-committed value. A view that lags a committed write IS the
+    // production bug (a `/view` read missing a confirmed write).
+    #[tokio::test]
+    async fn runtime_pool_view_never_lags_committed_write_under_load() -> anyhow::Result<()> {
+        use crate::database::queries::{footprint_cache_get, footprint_cache_set};
+        use std::sync::Arc;
+
+        let dir = TempDir::new()?;
+        let path = dir.path().to_path_buf();
+        let writer = new_connection(&path, "stress.db").await?;
+        let pool = Arc::new(
+            super::new(
+                path.clone(),
+                "stress.db".into(),
+                bitcoin::Network::Regtest,
+                DEFAULT_VIEW_GAS_LIMIT,
+            )
+            .await?,
+        );
+        let signer = 1u64;
+        footprint_cache_set(&writer, signer, Some(1)).await?;
+
+        // Background load: many tasks hammer pool checkout/recycle + savepoint-wrapped
+        // reads, plus a second writer churning the WAL — the concurrency the bug needs.
+        let mut bg = Vec::new();
+        for _ in 0..16 {
+            let p = pool.clone();
+            bg.push(tokio::spawn(async move {
+                loop {
+                    if let Ok(rt) = p.get().await {
+                        let _ = rt.storage.savepoint().await;
+                        let _ = footprint_cache_get(&rt.storage.conn, signer).await;
+                        let _ = rt.storage.commit().await;
+                    }
+                }
+            }));
+        }
+
+        for v in 2..=6000u64 {
+            writer.execute("BEGIN", ()).await?;
+            footprint_cache_set(&writer, signer, Some(v)).await?;
+            writer.execute("COMMIT", ()).await?;
+
+            let rt = pool.get().await.map_err(|e| anyhow::anyhow!("{e:?}"))?;
+            rt.storage.savepoint().await?;
+            let seen = footprint_cache_get(&rt.storage.conn, signer)
+                .await?
+                .unwrap_or(0);
+            rt.storage.commit().await?;
+            assert!(
+                seen >= v,
+                "runtime pool view LAGGED a committed write: committed {v}, pooled view saw {seen}"
+            );
+        }
+        for h in bg {
+            h.abort();
+        }
         Ok(())
     }
 }
