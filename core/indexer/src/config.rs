@@ -7,9 +7,10 @@ use serde::{Deserialize, Serialize};
 use crate::consensus::signing::ConsensusMode;
 use crate::logging;
 
-/// Default per-call gas budget for read-only `/view` queries. Matches the runtime's
-/// fixed non-proc default, so the out-of-the-box pool behaves exactly as before.
-pub const DEFAULT_VIEW_GAS_LIMIT: u64 = 100_000;
+/// Default per-call gas budget for read-only `/view` queries. Generous out of the
+/// box (operators raise it further on read/archive nodes); independent of the fixed
+/// system core-call budget, which is effectively unmetered.
+pub const DEFAULT_VIEW_GAS_LIMIT: u64 = 1_000_000;
 
 #[derive(Debug, Clone, Serialize, Deserialize, Parser)]
 pub struct Config {
@@ -178,7 +179,7 @@ pub struct Config {
         long,
         env = "VIEW_GAS_LIMIT",
         default_value_t = DEFAULT_VIEW_GAS_LIMIT,
-        help = "Per-call gas budget for read-only /view queries (default 100000; raise on read/archive nodes)"
+        help = "Per-call gas budget for read-only /view queries (default 1000000; raise on read/archive nodes)"
     )]
     pub view_gas_limit: u64,
 }

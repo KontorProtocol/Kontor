@@ -107,6 +107,7 @@ use indexer_types::{BuildProvenance, CommitId, Forge, Payment, Platform, Source}
 use wit_validator::Validator as WitValidator;
 
 use crate::bls::RegistrationProof;
+use crate::config::DEFAULT_VIEW_GAS_LIMIT;
 use crate::database;
 use crate::database::native_contracts::{NATIVE_CONTRACTS, is_native_contract_id};
 use crate::database::types::CORE_SIGNER_ID;
@@ -223,10 +224,11 @@ pub struct Runtime {
     /// start, drained at the settle boundary to compute the execution burn
     /// (`burn = gas - charge`).
     pub deposit: DepositMeter,
-    /// Fuel budget for non-procedure work that IS consensus-relevant: top-level
-    /// core-signer/system procedures (`call.rs` Core-context path) and native-api
-    /// (`execute_api`/`core_payment`) calls. FIXED — never operator-configurable, so
-    /// all nodes meter core calls identically.
+    /// Nominal gas limit stamped on system-issued `Payment`s (`core_payment`,
+    /// `execute_api`). FIXED — never operator-configurable. Trusted core calls
+    /// themselves run unmetered at `SYSTEM_FUEL_CEILING` (decided from the signer in
+    /// `prepare_call`), so this is the Payment's nominal cap, not the core fuel
+    /// budget; it still bounds a user-signed `execute_api` call (the test path).
     pub gas_limit_for_non_procs: u64,
     /// Fuel budget for read-only `/view` calls (the payment-`None` path) ONLY.
     /// Operator-configurable per node (set from `Config::view_gas_limit` on the
@@ -313,9 +315,10 @@ impl Runtime {
             gauge: Some(FuelGauge::new()),
             deposit: DepositMeter::new(),
             gas_limit_for_non_procs: 100_000,
-            // Default matches gas_limit_for_non_procs (preserves prior /view behavior);
-            // the pool overrides this from node config, the reactor leaves it as-is.
-            view_gas_limit: 100_000,
+            // The pool overrides this from node config on read-only runtimes; the
+            // reactor's consensus runtime leaves it at the default (views never run
+            // there). Independent of the system core-call budget.
+            view_gas_limit: DEFAULT_VIEW_GAS_LIMIT,
             gas_to_fuel_multiplier: 1_000,
             gas_to_token_multiplier: Decimal::from("1e-9"),
             previous_output: None,

@@ -89,14 +89,23 @@ impl Runtime {
             .load_component(contract_id)
             .await
             .map_err(ExecutionError::NonDeterministic)?;
-        let mut fuel_limit = match fuel_override {
+        // The fuel budget is decided ONCE here, from the signer, so it can't drift
+        // across the per-context arms below.
+        let fuel_limit = match fuel_override {
+            // Nested cross-contract call: inherit the remaining fuel the parent threaded.
             Some(f) => f,
-            None => match payment {
-                Some(p) => p.gas_limit * self.gas_to_fuel_multiplier,
-                // payment-`None` is a read-only `/view` call → the operator-configurable
-                // view cap, NOT the consensus core-call budget (the Core-context
-                // procedure path keeps `fuel_limit_for_non_procs`).
-                None => self.fuel_limit_for_view(),
+            None => match (signer, payment) {
+                // Trusted, system-paid, MUST-COMPLETE consensus work (per-block hooks,
+                // issuance, native publishing) — effectively unmetered, regardless of
+                // which context the procedure takes. Metering is a DoS/economic control
+                // for UNTRUSTED user ops; a finite cap on must-complete system work
+                // would eventually false-halt a healthy network on legitimate growth.
+                // See `SYSTEM_FUEL_CEILING`.
+                (Some(s), _) if s.is_core() => SYSTEM_FUEL_CEILING,
+                // User op: metered by the payer's committed gas limit.
+                (_, Some(p)) => p.gas_limit * self.gas_to_fuel_multiplier,
+                // Read-only `/view`: the operator-configurable view cap.
+                (_, None) => self.fuel_limit_for_view(),
             },
         };
         let mut store = self
@@ -184,34 +193,10 @@ impl Runtime {
                 (t, Some(Signer::Core(signer)))
                     if t.eq(&wasmtime::component::ResourceType::host::<CoreContext>()) =>
                 {
+                    // Fuel was already set above (SYSTEM_FUEL_CEILING for a top-level
+                    // core call, inherited for a nested one) — this arm only wires up
+                    // the trusted CoreContext resource.
                     is_proc = true;
-                    if self.stack.is_empty().await {
-                        // Core calls are trusted, system-paid consensus block-processing
-                        // (per-block hooks, issuance, etc.) — they MUST complete for the
-                        // block to advance and have no revert-and-continue semantics. So
-                        // they are effectively NOT metered: fuel metering is a DoS/economic
-                        // control for UNTRUSTED user ops, a category error for trusted
-                        // system work, and the old fixed 100k cap would eventually
-                        // false-halt a healthy network on legitimate growth. (Safe: a core
-                        // call runs in the block savepoint and commits-or-rolls-back, so an
-                        // over-budget hang can only stall a node a height behind — never
-                        // fork committed state — and core fuel never enters the checkpoint
-                        // hash. `gas_consumed` is a start−end difference, so it still
-                        // records true usage.)
-                        //
-                        // NOT u64::MAX: the remaining fuel is bound into the storage read
-                        // path as a SQL i64 size-budget (`CASE WHEN size <= :fuel`,
-                        // contract_state.rs), so it must fit in i64. CORE_CALL_FUEL_CEILING
-                        // is i64-safe and ~10^7× the old limit — unreachable by any
-                        // legitimate per-block work, so it only ever fires as a clean
-                        // deterministic halt on a genuine non-terminating bug.
-                        fuel_limit = CORE_CALL_FUEL_CEILING;
-                        store
-                            .set_fuel(fuel_limit)
-                            .expect("Failed to set fuel for core context procedure");
-                    } else {
-                        fuel_limit = store.get_fuel().unwrap_or(0);
-                    }
                     params.insert(
                         0,
                         wasmtime::component::Val::Resource(
@@ -779,7 +764,20 @@ const MAX_EXPR_DEPTH: usize = 64;
 /// any `× gas_to_fuel_multiplier`). CONSENSUS-LOAD-BEARING — all nodes must share the
 /// value (a node with a lower budget would stall on a block others commit); change only
 /// behind a coordinated upgrade.
-const CORE_CALL_FUEL_CEILING: u64 = 1_000_000_000_000_000; // 1e15 fuel = 1e12 gas
+/// Fuel budget for trusted, system-paid, MUST-COMPLETE core calls (per-block
+/// hooks, issuance, native publishing) — effectively unmetered.
+///
+/// `i64::MAX as u64`, NOT `u64::MAX`: the remaining fuel is bound into the
+/// storage read path as a SQL i64 size-budget (`CASE WHEN size <= :fuel`,
+/// contract_state.rs), so it must fit in i64 (`u64::MAX as i64 == -1` would make
+/// every core read fail). i64::MAX is the largest i64-safe budget.
+///
+/// Fork-safe: core fuel never enters the checkpoint hash and the call runs inside
+/// the block savepoint, so an over-budget hang can only stall a node a height
+/// behind — never fork committed state. `gas_consumed` is a start−end difference,
+/// so true usage still records. (The cap does not bound wall-clock work; per-block
+/// core work is bounded by design — see the block-lifecycle hooks.)
+const SYSTEM_FUEL_CEILING: u64 = i64::MAX as u64;
 
 /// Deterministically reject a call expression that would overflow the recursive
 /// WAVE parser — along its two recursion axes: an over-long string literal, or
