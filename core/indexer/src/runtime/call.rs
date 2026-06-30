@@ -47,6 +47,13 @@ fn payer_holder(signer: &Signer, payment: Option<&Payment>) -> Holder {
     Holder::for_signer_id(signer_id)
 }
 
+/// The paying account as a `Signer::Id`. Gas hold/release move tokens on its
+/// behalf, wrapping it in a `Signer::Core` at the call site so the move is
+/// system-authorized rather than the payer acting for themselves.
+fn payer_signer(payment: &Payment) -> Signer {
+    Signer::Id(Identity::new(payment.signer_id))
+}
+
 /// Everything `prepare_call` produces for the caller to run + settle a call: the
 /// instantiated store, the resolved function with its lowered params/results, and
 /// the op metadata. A named struct in place of a positional 9-tuple.
@@ -63,13 +70,22 @@ pub(crate) struct PreparedCall {
 }
 
 impl Runtime {
+    /// Token cost of a gas amount (`gas × gas_to_token_multiplier`). Infallible in
+    /// practice — a u64 always converts to Decimal and the arbitrary-precision
+    /// multiply can't overflow — so a failure here is a bug, not a user error.
+    fn gas_to_token(&self, gas: u64) -> Decimal {
+        Decimal::try_from(gas)
+            .expect("u64 to decimal")
+            .mul(self.gas_to_token_multiplier)
+            .expect("gas to token amount")
+    }
+
     pub(crate) async fn prepare_call(
         &self,
         contract_address: &ContractAddress,
         signer: Option<&Signer>,
         payment: Option<&Payment>,
         expr: &str,
-        is_top_level: bool,
         fuel_override: Option<u64>,
     ) -> Result<PreparedCall, ExecutionError> {
         // Reject an oversized/over-nested call expression BEFORE it reaches the
@@ -77,6 +93,10 @@ impl Runtime {
         // otherwise overflow the host stack and abort the node — a deterministic
         // rejection here keeps that a normal failed op instead.
         validate_expr(expr)?;
+        // The outermost frame iff no frame is on the stack yet (we push ours at the
+        // end). This replaces a redundant `is_top_level` parameter that the two
+        // call sites always passed in agreement with the stack state.
+        let is_top_level = self.stack.is_empty().await;
         let contract_id = self
             .storage
             .contract_id(contract_address)
@@ -296,17 +316,11 @@ impl Runtime {
             && !signer.is_core()
         {
             let payment = payment.expect("payment is required for top-level proc calls");
-            let payer = Signer::Id(Identity::new(payment.signer_id));
-            let hold_amount = Decimal::try_from(fuel_limit)
-                .expect("u64 to decimal")
-                .div(
-                    self.gas_to_fuel_multiplier
-                        .try_into()
-                        .expect("u64 to decimal"),
-                )
-                .expect("Failed to convert fuel limit into gas limit")
-                .mul(self.gas_to_token_multiplier)
-                .expect("Failed to convert gas limit into token limit");
+            let payer = payer_signer(payment);
+            // fuel_limit == payment.gas_limit × gas_to_fuel_multiplier for a top-level
+            // user op (see the budget decision above), so the hold is the committed
+            // gas limit's token cost.
+            let hold_amount = self.gas_to_token(payment.gas_limit);
             tracing::info!(
                 node = %self.node_label,
                 %hold_amount,
@@ -536,14 +550,11 @@ impl Runtime {
         // committed/rolled back this op's savepoint.
         if is_op_result && !signer.is_core() {
             let payment = payment.expect("payment required for op-result release");
-            let payer = Signer::Id(Identity::new(payment.signer_id));
+            let payer = payer_signer(payment);
             // The deposit gas reserved this op is RETURNED, not burned (it only
             // capped growth); burn = the execution slice = gas - charge.
             let charge_gas = self.deposit.take().await;
-            let burn_amount = Decimal::try_from(gas.saturating_sub(charge_gas))
-                .expect("u64 to decimal")
-                .mul(self.gas_to_token_multiplier)
-                .expect("Failed to convert gas to token amount");
+            let burn_amount = self.gas_to_token(gas.saturating_sub(charge_gas));
             tracing::info!(
                 node = %self.node_label,
                 gas,
@@ -628,7 +639,6 @@ impl Runtime {
                 signer.as_ref(),
                 None,
                 expr,
-                false,
                 Some(starting_fuel),
             )
             .await?;
@@ -755,28 +765,23 @@ const MAX_STRING_LITERAL_BYTES: usize = 16 * 1024;
 /// below the overflow depth. CONSENSUS-LOAD-BEARING — see `MAX_STRING_LITERAL_BYTES`.
 const MAX_EXPR_DEPTH: usize = 64;
 
-/// Effective "unmetered" fuel budget for trusted, must-complete CORE calls (per-block
-/// hooks, issuance, genesis) — see the top-of-stack core branch in `prepare_call`.
-/// ~10^7× the old 100k-gas non-proc cap, so it's unreachable by any legitimate
-/// per-block work (it only ever fires as a clean deterministic halt on a genuine
-/// non-terminating bug). NOT `u64::MAX`: remaining fuel is bound into the storage read
-/// path as a SQL i64 size-budget, so this MUST stay within i64 range (with headroom for
-/// any `× gas_to_fuel_multiplier`). CONSENSUS-LOAD-BEARING — all nodes must share the
-/// value (a node with a lower budget would stall on a block others commit); change only
-/// behind a coordinated upgrade.
-/// Fuel budget for trusted, system-paid, MUST-COMPLETE core calls (per-block
-/// hooks, issuance, native publishing) — effectively unmetered.
+/// Fuel budget for trusted, system-paid, MUST-COMPLETE core calls (per-block hooks,
+/// issuance, native publishing) — effectively unmetered. Decided from the signer in
+/// `prepare_call`.
 ///
-/// `i64::MAX as u64`, NOT `u64::MAX`: the remaining fuel is bound into the
-/// storage read path as a SQL i64 size-budget (`CASE WHEN size <= :fuel`,
-/// contract_state.rs), so it must fit in i64 (`u64::MAX as i64 == -1` would make
-/// every core read fail). i64::MAX is the largest i64-safe budget.
+/// `i64::MAX as u64`, NOT `u64::MAX`: the remaining fuel is bound into the storage
+/// read path as a SQL i64 size-budget (`CASE WHEN size <= :fuel`, contract_state.rs),
+/// so it must fit in i64 (`u64::MAX as i64 == -1` would make every core read fail).
+/// i64::MAX is the largest i64-safe budget.
 ///
-/// Fork-safe: core fuel never enters the checkpoint hash and the call runs inside
-/// the block savepoint, so an over-budget hang can only stall a node a height
-/// behind — never fork committed state. `gas_consumed` is a start−end difference,
-/// so true usage still records. (The cap does not bound wall-clock work; per-block
-/// core work is bounded by design — see the block-lifecycle hooks.)
+/// Fork-safe: core fuel never enters the checkpoint hash and the call runs inside the
+/// block savepoint, so an over-budget hang can only stall a node a height behind —
+/// never fork committed state. `gas_consumed` is a start−end difference, so true usage
+/// still records. (The cap does not bound wall-clock work; per-block core work is
+/// bounded by design — see the block-lifecycle hooks.)
+///
+/// CONSENSUS-LOAD-BEARING: all nodes must share this value — a node with a lower budget
+/// would stall on a block the others commit. Change only behind a coordinated upgrade.
 const SYSTEM_FUEL_CEILING: u64 = i64::MAX as u64;
 
 /// Deterministically reject a call expression that would overflow the recursive

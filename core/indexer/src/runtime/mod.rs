@@ -815,7 +815,7 @@ impl Runtime {
             is_proc,
             fuel_limit: starting_fuel,
         } = self
-            .prepare_call(contract_address, signer, payment.as_ref(), expr, true, None)
+            .prepare_call(contract_address, signer, payment.as_ref(), expr, None)
             .await?;
         OptionFuture::from(
             self.gauge
