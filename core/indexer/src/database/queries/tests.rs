@@ -1504,7 +1504,7 @@ async fn test_map_keys() -> Result<()> {
     insert_contract_state(&conn, contract_state).await?;
 
     let stream =
-        path_prefix_filter_contract_state(&conn, contract_id, cs_path_dotted("test.path"), None)
+        path_prefix_filter_contract_state(&conn, contract_id, cs_path_dotted("test.path"), None, None)
             .await?;
     let paths = stream.try_collect::<Vec<Vec<u8>>>().await?;
     // Each item is the child key's codec element (one segment), deduped + ordered.
@@ -1610,7 +1610,7 @@ async fn test_keys_with_idx_sibling_after_update() -> Result<()> {
 
     // `keys(m)` — both members are still in the primary map (44's value row was
     // updated, not removed), regardless of index churn.
-    let stream = path_prefix_filter_contract_state(&conn, cid, cs_path_dotted(m), None).await?;
+    let stream = path_prefix_filter_contract_state(&conn, cid, cs_path_dotted(m), None, None).await?;
     let mut keys = stream.try_collect::<Vec<Vec<u8>>>().await?;
     keys.sort();
     assert_eq!(keys, vec![cs_path(&["44"]), cs_path(&["45"])]);
@@ -1623,6 +1623,7 @@ async fn test_keys_with_idx_sibling_after_update() -> Result<()> {
         &conn,
         cid,
         cs_path_dotted(&format!("{m}#idx.active.true")),
+        None,
         None,
     )
     .await?
@@ -1684,7 +1685,7 @@ async fn test_empty_path_is_whole_keyspace_not_panic() -> Result<()> {
     // Empty path = whole keyspace: any live row makes `exists` true.
     assert!(exists_contract_state(&conn, cid, &[]).await?);
     // `keys()` of the root yields the single distinct top-level element ("m").
-    let top: Vec<Vec<u8>> = path_prefix_filter_contract_state(&conn, cid, Vec::new(), None)
+    let top: Vec<Vec<u8>> = path_prefix_filter_contract_state(&conn, cid, Vec::new(), None, None)
         .await?
         .try_collect()
         .await?;
@@ -2081,7 +2082,7 @@ mod proptest_paths {
                 let _ = exists_contract_state(&conn, cid, &path).await;
                 let _ = matching_path(&conn, cid, &path, &cands(&["none", "some"])).await;
                 if let Ok(stream) =
-                    path_prefix_filter_contract_state(&conn, cid, path.clone(), None).await
+                    path_prefix_filter_contract_state(&conn, cid, path.clone(), None, None).await
                 {
                     let _ = stream.collect::<Vec<_>>().await;
                 }
@@ -2135,7 +2136,7 @@ async fn test_path_prefix_filter_after_cursor_resumes() -> Result<()> {
     }
 
     // Full scan, no cursor: every member in path order.
-    let all: Vec<Vec<u8>> = path_prefix_filter_contract_state(&conn, cid, cs_path(&["m"]), None)
+    let all: Vec<Vec<u8>> = path_prefix_filter_contract_state(&conn, cid, cs_path(&["m"]), None, None)
         .await?
         .try_collect()
         .await?;
@@ -2153,7 +2154,13 @@ async fn test_path_prefix_filter_after_cursor_resumes() -> Result<()> {
     // Resume after child `k2` (cursor = its child-node path `m/k2`): the remaining
     // members, no overlap with the first two.
     let rest: Vec<Vec<u8>> =
-        path_prefix_filter_contract_state(&conn, cid, cs_path(&["m"]), Some(cs_path(&["m", "k2"])))
+        path_prefix_filter_contract_state(
+            &conn,
+            cid,
+            cs_path(&["m"]),
+            Some(cs_path(&["m", "k2"])),
+            None,
+        )
             .await?
             .try_collect()
             .await?;
@@ -2162,6 +2169,88 @@ async fn test_path_prefix_filter_after_cursor_resumes() -> Result<()> {
         vec![cs_path(&["k3"]), cs_path(&["k4"]), cs_path(&["k5"])]
     );
 
+    Ok(())
+}
+
+// The `from_key` seek: a sorted-index range query's inclusive lower bound. Members
+// are `(sort, pk)` tuple elements under a bucket; seeking to `sort_lower_bound(lo)`
+// starts the scan at the first `sort >= lo` member host-side (a plain `>=` against
+// `bucket ++ from_key`), so members below `lo` are never emitted — the pull-side
+// `skip_while` the guest would otherwise pay per key is avoided.
+#[tokio::test]
+async fn test_path_prefix_filter_from_key_seeks_lower_bound() -> Result<()> {
+    let (_reader, writer, _temp) = new_test_db().await?;
+    let conn = writer.connection();
+    let h = 600001;
+    insert_block(
+        &conn,
+        BlockRow::builder()
+            .height(h)
+            .hash(new_mock_block_hash(h as u32))
+            .build(),
+    )
+    .await?;
+    let tx = insert_transaction(
+        &conn,
+        TransactionRow::builder()
+            .height(h)
+            .txid(format!("dddd{:060}", 0))
+            .tx_index(0)
+            .confirmed_height(h)
+            .build(),
+    )
+    .await?;
+    let cid = 1;
+    let bucket = cs_path(&["m"]);
+    // A sorted member: the child element is the `(sort_height, pk)` tuple; its full
+    // row path is `bucket ++ that element`. Insert out of order.
+    let member = |sort: u64, pk: &str| -> (Vec<u8>, Vec<u8>) {
+        let elem = stdlib::tuple_from_elements(&[
+            stdlib::KeyElement::encode(&sort).as_slice(),
+            stdlib::KeyElement::encode(&pk.to_string()).as_slice(),
+        ]);
+        let mut path = bucket.clone();
+        path.extend_from_slice(&elem);
+        (path, elem)
+    };
+    let members = [member(30, "c"), member(10, "a"), member(20, "b")];
+    for (path, _) in &members {
+        insert_contract_state(
+            &conn,
+            ContractStateRow::builder()
+                .contract_id(cid)
+                .tx_id(tx)
+                .height(h)
+                .path(path.clone())
+                .value(vec![1])
+                .build(),
+        )
+        .await?;
+    }
+    // Elements in ascending sort order (a=10, b=20, c=30), which is the scan order.
+    let (elem_a, elem_b, elem_c) = (members[1].1.clone(), members[2].1.clone(), members[0].1.clone());
+
+    let scan_from = async |lo: u64| -> Result<Vec<Vec<u8>>> {
+        Ok(path_prefix_filter_contract_state(
+            &conn,
+            cid,
+            bucket.clone(),
+            None,
+            Some(stdlib::sort_lower_bound(&lo)),
+        )
+        .await?
+        .try_collect()
+        .await?)
+    };
+
+    // Seek to an exact member (>= 20): skips a, yields b, c.
+    assert_eq!(scan_from(20).await?, vec![elem_b.clone(), elem_c.clone()]);
+    // Seek between members (>= 25): only c (30) qualifies.
+    assert_eq!(scan_from(25).await?, vec![elem_c.clone()]);
+    // Seek below everything (>= 5): the whole bucket, in order.
+    assert_eq!(scan_from(5).await?, vec![elem_a, elem_b, elem_c]);
+    // Seek above everything (>= 40): empty.
+    assert!(scan_from(40).await?.is_empty());
     Ok(())
 }
 
@@ -2216,7 +2305,7 @@ async fn test_after_cursor_skips_whole_child_subtree() -> Result<()> {
     }
 
     // No cursor: the three distinct child keys, deduped across their subtrees.
-    let all: Vec<Vec<u8>> = path_prefix_filter_contract_state(&conn, cid, cs_path(&["m"]), None)
+    let all: Vec<Vec<u8>> = path_prefix_filter_contract_state(&conn, cid, cs_path(&["m"]), None, None)
         .await?
         .try_collect()
         .await?;
@@ -2225,7 +2314,13 @@ async fn test_after_cursor_skips_whole_child_subtree() -> Result<()> {
     // Resume after child `a` (cursor = its child-node path `m/a`): must skip ALL of
     // a's deeper rows and not re-emit `a`.
     let rest: Vec<Vec<u8>> =
-        path_prefix_filter_contract_state(&conn, cid, cs_path(&["m"]), Some(cs_path(&["m", "a"])))
+        path_prefix_filter_contract_state(
+            &conn,
+            cid,
+            cs_path(&["m"]),
+            Some(cs_path(&["m", "a"])),
+            None,
+        )
             .await?
             .try_collect()
             .await?;

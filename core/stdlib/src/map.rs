@@ -39,6 +39,8 @@
 use alloc::rc::Rc;
 use alloc::string::String;
 use alloc::vec::Vec;
+use core::marker::PhantomData;
+use core::ops::{Bound, RangeBounds};
 
 use crate::keycodec::{self, KeyElement};
 use crate::{KeyPath, ReadStorage, Store, WriteStorage};
@@ -117,64 +119,258 @@ impl IndexKey for Presence {
     }
 }
 
-/// An ordered scan over a *sorted* index bucket. Each member segment is one
-/// `(sort, pk)` nested-tuple element, handed back in ascending path order by
-/// `keys()` — which, because the codec is order-preserving and `sort` leads the
-/// tuple, is ascending by sort value (then primary key). Decoding the tuple yields
-/// `(S, K)`; the scan drops the sort field and keeps `K`. This is what lets a
-/// sortable index scan in value order and early-break, while storage stays the
-/// generic `contract_state` log (sortability lives in the key, never a column).
-///
-/// Iterating it directly walks the whole bucket in sort order. [`up_to`] /
-/// [`range`] bound it on the **decoded** sort value `S` and early-break, so the
-/// contract pays only for the members it keeps (the host still materializes the
-/// bucket; see the module's cost note). The bound is typed `S` — the index's own
-/// sort field type — so the wrong type is a compile error, not a silent
-/// miscompare.
-///
-/// [`up_to`]: SortedScan::up_to
-/// [`range`]: SortedScan::range
-pub struct SortedScan<K, S> {
-    // Boxed so the generated `where_<index>` can name a single return type
-    // (`SortedScan<K, S>`) without threading the concrete `keys()` iterator type
-    // through the lookup trait. One box per scan — negligible next to the bucket
-    // walk it wraps. Yields `(sort, pk)` in ascending order.
-    members: alloc::boxed::Box<dyn Iterator<Item = (S, K)>>,
+/// The storage-scan primitives a field model exposes for its value's secondary
+/// indexes — the low-level surface every typed [`IndexQuery`] / [`SortedIndexQuery`]
+/// finisher backs onto. Declared here so the stdlib query types can bound on it;
+/// implemented by the `#[derive(Model)]` field model, which owns the ctx and index
+/// path. `bucket` is the per-`by`-field encoded segments (one for a single-field
+/// index, several for a composite).
+pub trait IndexScan<K: KeyElement + Clone> {
+    /// Primary keys of an *unsorted* index bucket, in unspecified order. The iterator
+    /// owns its source (`use<Self, K>`, no borrow of `self`/`bucket`), so a finisher
+    /// can hand it back.
+    fn by_index(&self, index_id: u8, bucket: &[&[u8]]) -> impl Iterator<Item = K> + use<Self, K>;
+
+    /// `(sort, pk)` members of a *sorted* index bucket in ascending order (the codec
+    /// is order-preserving and `sort` leads the tuple). `from` is an inclusive
+    /// lower-bound seek — a `(sort)`-prefix element (see [`sort_lower_bound`]) — so
+    /// members below it are skipped host-side, not pulled-and-discarded. Boxed so a
+    /// finisher names one return type across bucket shapes; the box owns its source.
+    fn by_index_sorted<S: KeyElement + Clone + 'static>(
+        &self,
+        index_id: u8,
+        bucket: &[&[u8]],
+        from: Option<&[u8]>,
+    ) -> alloc::boxed::Box<dyn Iterator<Item = (S, K)>>;
+
+    /// O(1) framework-maintained member count of the `(index_id, bucket…)` bucket.
+    fn bucket_count(&self, index_id: u8, bucket: &[&[u8]]) -> u64;
 }
 
-impl<K, S> SortedScan<K, S> {
-    pub fn new(members: alloc::boxed::Box<dyn Iterator<Item = (S, K)>>) -> Self {
-        Self { members }
+/// The inclusive lower-bound seek key for sort value `lo`: the one-field tuple
+/// element `TAG_TUPLE ++ lo.encode() ++ TERM`. Because `TERM (0x00)` sorts below
+/// every element tag, it lands just under every `(lo, pk)` member and above every
+/// `(s < lo, …)` one — so a host `>=` seek to `bucket ++ this` yields exactly
+/// `sort >= lo`.
+pub fn sort_lower_bound<S: KeyElement>(lo: &S) -> Vec<u8> {
+    keycodec::tuple_from_elements(&[lo.encode().as_slice()])
+}
+
+// `Vec<Vec<u8>>` → the `&[&[u8]]` bucket the scan primitives take.
+fn bucket_refs(bucket: &[Vec<u8>]) -> Vec<&[u8]> {
+    bucket.iter().map(Vec::as_slice).collect()
+}
+
+/// A lazy query over one *unsorted* index bucket — what `map.<index>(bucket…)`
+/// returns for a plain `#[index]`. Set-like, mirroring `BTreeSet`: it yields
+/// primary keys `K`, `len`/`is_empty` are O(1) (the framework count), and `count`
+/// is the std [`Iterator`] one. Borrows the field model (`&Src`) like a `BTreeSet`
+/// view borrows its set — a short-lived handle used in place.
+pub struct IndexQuery<'a, K, Src> {
+    src: &'a Src,
+    index_id: u8,
+    bucket: Vec<Vec<u8>>,
+    _k: PhantomData<K>,
+}
+
+impl<'a, K, Src> IndexQuery<'a, K, Src>
+where
+    K: KeyElement + Clone + 'static,
+    Src: IndexScan<K>,
+{
+    pub fn new(src: &'a Src, index_id: u8, bucket: Vec<Vec<u8>>) -> Self {
+        Self { src, index_id, bucket, _k: PhantomData }
+    }
+
+    /// O(1) member count (the framework-maintained bucket count).
+    pub fn len(&self) -> u64 {
+        self.src.bucket_count(self.index_id, &bucket_refs(&self.bucket))
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+
+    /// The bucket's primary keys (`BTreeSet::keys`/`::iter` shape). Boxed so the
+    /// return names one type without leaking the field model's borrow into an
+    /// opaque capture; a `Box<dyn Iterator>` is still a std [`Iterator`].
+    pub fn keys(self) -> alloc::boxed::Box<dyn Iterator<Item = K> + 'a> {
+        alloc::boxed::Box::new(self.src.by_index(self.index_id, &bucket_refs(&self.bucket)))
+    }
+
+    /// Alias of [`keys`](Self::keys) — a set iterates its keys.
+    pub fn iter(self) -> alloc::boxed::Box<dyn Iterator<Item = K> + 'a> {
+        self.keys()
     }
 }
 
-impl<K, S: PartialOrd> SortedScan<K, S> {
-    /// Members whose sort value is `≤ bound`, in ascending order. Early-breaks at
-    /// the first member above the bound — nothing later in a sorted bucket can
-    /// qualify.
-    pub fn up_to(self, bound: S) -> impl Iterator<Item = K> {
-        self.members
-            .take_while(move |(s, _)| *s <= bound)
-            .map(|(_, k)| k)
-    }
-
-    /// Members whose sort value is within `range` (inclusive), in ascending order.
-    /// Skips below `lo`, then early-breaks past `hi`.
-    pub fn range(self, range: core::ops::RangeInclusive<S>) -> impl Iterator<Item = K> {
-        let (lo, hi) = range.into_inner();
-        self.members
-            .skip_while(move |(s, _)| *s < lo)
-            .take_while(move |(s, _)| *s <= hi)
-            .map(|(_, k)| k)
-    }
-}
-
-impl<K, S> Iterator for SortedScan<K, S> {
+impl<'a, K, Src> IntoIterator for IndexQuery<'a, K, Src>
+where
+    K: KeyElement + Clone + 'static,
+    Src: IndexScan<K>,
+{
     type Item = K;
+    type IntoIter = alloc::boxed::Box<dyn Iterator<Item = K> + 'a>;
+    fn into_iter(self) -> Self::IntoIter {
+        self.keys()
+    }
+}
 
-    /// Unbounded walk of the bucket in sort order.
-    fn next(&mut self) -> Option<K> {
-        self.members.next().map(|(_, k)| k)
+/// A lazy query over one *sorted* index bucket — what `map.<index>(bucket…)`
+/// returns for an `#[index(sort = …)]`. Map-like, mirroring `BTreeMap<K, S>`:
+/// [`keys`](Self::keys) yields `K`, [`values`](Self::values) yields the sort value
+/// `S`, [`iter`](Self::iter) yields `(K, S)`, and [`range`](Self::range) bounds the
+/// sort value. `len`/`is_empty` are O(1); the sort value `S` is exposed for free
+/// (it already leads each member tuple). Borrows the field model, used in place.
+pub struct SortedIndexQuery<'a, K, S, Src> {
+    src: &'a Src,
+    index_id: u8,
+    bucket: Vec<Vec<u8>>,
+    _pd: PhantomData<(K, S)>,
+}
+
+impl<'a, K, S, Src> SortedIndexQuery<'a, K, S, Src>
+where
+    K: KeyElement + Clone + 'static,
+    S: KeyElement + Clone + 'static,
+    Src: IndexScan<K>,
+{
+    pub fn new(src: &'a Src, index_id: u8, bucket: Vec<Vec<u8>>) -> Self {
+        Self { src, index_id, bucket, _pd: PhantomData }
+    }
+
+    /// O(1) member count (the framework-maintained bucket count).
+    pub fn len(&self) -> u64 {
+        self.src.bucket_count(self.index_id, &bucket_refs(&self.bucket))
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+
+    // The raw ascending `(sort, pk)` members, optionally seeked; every finisher
+    // maps over this.
+    fn members(&self, from: Option<&[u8]>) -> alloc::boxed::Box<dyn Iterator<Item = (S, K)>> {
+        self.src
+            .by_index_sorted::<S>(self.index_id, &bucket_refs(&self.bucket), from)
+    }
+
+    /// Primary keys in sort order (`BTreeMap::keys`).
+    pub fn keys(self) -> alloc::boxed::Box<dyn Iterator<Item = K> + 'a> {
+        alloc::boxed::Box::new(self.members(None).map(|(_, k)| k))
+    }
+
+    /// Sort values in order (`BTreeMap::values`) — the free `S` projection.
+    pub fn values(self) -> alloc::boxed::Box<dyn Iterator<Item = S> + 'a> {
+        alloc::boxed::Box::new(self.members(None).map(|(s, _)| s))
+    }
+
+    /// `(key, sort)` pairs in sort order (`BTreeMap::iter`; key-first like `(K, V)`).
+    pub fn iter(self) -> alloc::boxed::Box<dyn Iterator<Item = (K, S)> + 'a> {
+        alloc::boxed::Box::new(self.members(None).map(|(s, k)| (k, s)))
+    }
+
+    /// Restrict to members whose sort value lies in `range` (`BTreeMap::range`).
+    /// The lower bound becomes a host-side seek; the upper bound early-breaks.
+    pub fn range(self, range: impl RangeBounds<S>) -> SortedRange<'a, K, S, Src>
+    where
+        S: PartialOrd,
+    {
+        SortedRange::new(self.src, self.index_id, self.bucket, &range)
+    }
+}
+
+impl<'a, K, S, Src> IntoIterator for SortedIndexQuery<'a, K, S, Src>
+where
+    K: KeyElement + Clone + 'static,
+    S: KeyElement + Clone + 'static,
+    Src: IndexScan<K>,
+{
+    type Item = (K, S);
+    type IntoIter = alloc::boxed::Box<dyn Iterator<Item = (K, S)> + 'a>;
+    fn into_iter(self) -> Self::IntoIter {
+        self.iter()
+    }
+}
+
+/// A sort-value-bounded view of a [`SortedIndexQuery`], from [`range`]. Same
+/// `keys`/`values`/`iter` finishers, but no O(1) `len` — a range's size isn't a
+/// stored count, so use `.keys().count()` (std, O(n)) if you need it.
+///
+/// [`range`]: SortedIndexQuery::range
+pub struct SortedRange<'a, K, S, Src> {
+    src: &'a Src,
+    index_id: u8,
+    bucket: Vec<Vec<u8>>,
+    // Inclusive lower-bound seek key (host-side); `None` = from the start.
+    from: Option<Vec<u8>>,
+    // `Some(lo)` for an EXCLUSIVE lower bound: the seek lands inclusively at `lo`, so
+    // drop the handful of `sort == lo` members guest-side.
+    skip_lo: Option<S>,
+    hi: Bound<S>,
+    _k: PhantomData<K>,
+}
+
+impl<'a, K, S, Src> SortedRange<'a, K, S, Src>
+where
+    K: KeyElement + Clone + 'static,
+    S: KeyElement + Clone + PartialOrd + 'static,
+    Src: IndexScan<K>,
+{
+    fn new(src: &'a Src, index_id: u8, bucket: Vec<Vec<u8>>, range: &impl RangeBounds<S>) -> Self {
+        let (from, skip_lo) = match range.start_bound() {
+            Bound::Unbounded => (None, None),
+            Bound::Included(lo) => (Some(sort_lower_bound(lo)), None),
+            Bound::Excluded(lo) => (Some(sort_lower_bound(lo)), Some(lo.clone())),
+        };
+        let hi = match range.end_bound() {
+            Bound::Unbounded => Bound::Unbounded,
+            Bound::Included(h) => Bound::Included(h.clone()),
+            Bound::Excluded(h) => Bound::Excluded(h.clone()),
+        };
+        Self { src, index_id, bucket, from, skip_lo, hi, _k: PhantomData }
+    }
+
+    fn members(self) -> impl Iterator<Item = (S, K)> {
+        let raw = self
+            .src
+            .by_index_sorted::<S>(self.index_id, &bucket_refs(&self.bucket), self.from.as_deref());
+        let skip_lo = self.skip_lo;
+        let hi = self.hi;
+        raw.skip_while(move |(s, _)| skip_lo.as_ref().is_some_and(|lo| s <= lo))
+            .take_while(move |(s, _)| match &hi {
+                Bound::Unbounded => true,
+                Bound::Included(h) => s <= h,
+                Bound::Excluded(h) => s < h,
+            })
+    }
+
+    /// Primary keys within the range, in sort order.
+    pub fn keys(self) -> alloc::boxed::Box<dyn Iterator<Item = K> + 'a> {
+        alloc::boxed::Box::new(self.members().map(|(_, k)| k))
+    }
+
+    /// Sort values within the range, in order.
+    pub fn values(self) -> alloc::boxed::Box<dyn Iterator<Item = S> + 'a> {
+        alloc::boxed::Box::new(self.members().map(|(s, _)| s))
+    }
+
+    /// `(key, sort)` pairs within the range, in sort order.
+    pub fn iter(self) -> alloc::boxed::Box<dyn Iterator<Item = (K, S)> + 'a> {
+        alloc::boxed::Box::new(self.members().map(|(s, k)| (k, s)))
+    }
+}
+
+impl<'a, K, S, Src> IntoIterator for SortedRange<'a, K, S, Src>
+where
+    K: KeyElement + Clone + 'static,
+    S: KeyElement + Clone + PartialOrd + 'static,
+    Src: IndexScan<K>,
+{
+    type Item = (K, S);
+    type IntoIter = alloc::boxed::Box<dyn Iterator<Item = (K, S)> + 'a>;
+    fn into_iter(self) -> Self::IntoIter {
+        self.iter()
     }
 }
 
@@ -383,9 +579,10 @@ mod tests {
                 _ => None,
             }
         }
-        fn __get_keys<T: KeyElement + Clone>(
+        fn __get_keys_from<T: KeyElement + Clone>(
             self: &Rc<Self>,
             path: &[u8],
+            from: Option<&[u8]>,
         ) -> impl Iterator<Item = T> + use<T> {
             // Distinct child elements: byte-prefix the path, take the next element
             // of the suffix (mirrors the host's `next_element` extraction).
@@ -403,10 +600,17 @@ mod tests {
                 .collect();
             elems.sort();
             elems.dedup();
-            elems.into_iter().map(|e| {
-                let (v, _) = T::decode_from(&e).unwrap();
-                v
-            })
+            // Inclusive lower-bound seek: keep child elements `>= from` by raw byte
+            // order — the host does the same `>=` against `path ++ from` (see
+            // `path_prefix_filter_contract_state`).
+            let from = from.map(<[u8]>::to_vec);
+            elems
+                .into_iter()
+                .filter(move |e| from.as_deref().is_none_or(|f| e.as_slice() >= f))
+                .map(|e| {
+                    let (v, _) = T::decode_from(&e).unwrap();
+                    v
+                })
         }
         fn __get<T: crate::Retrieve<Self>>(self: &Rc<Self>, path: KeyPath) -> Option<T> {
             T::__get(self, path)
@@ -970,66 +1174,130 @@ mod tests {
         assert_eq!(Some(7u64).index_key(), String::from("some").encode());
     }
 
-    // SortedScan in isolation: yields K in sort order and bounds on the decoded
-    // sort value `S` (no width/prefix arithmetic — the member is a typed tuple).
-    #[test]
-    fn sorted_scan_bounds_on_decoded_value() {
-        let members = || {
-            alloc::boxed::Box::new(
-                alloc::vec![
-                    (1u16, "a".to_string()),
-                    (3u16, "b".to_string()),
-                    (5u16, "c".to_string()),
-                ]
-                .into_iter(),
-            ) as alloc::boxed::Box<dyn Iterator<Item = (u16, String)>>
-        };
-        let scan = || SortedScan::<String, u16>::new(members());
-
-        assert_eq!(scan().collect::<Vec<_>>(), vec!["a", "b", "c"]);
-        // up_to is inclusive and early-breaks past the bound.
-        assert_eq!(scan().up_to(3u16).collect::<Vec<_>>(), vec!["a", "b"]);
-        assert_eq!(scan().up_to(0u16).collect::<Vec<_>>(), Vec::<String>::new());
-        // range is inclusive on both ends.
-        assert_eq!(
-            scan().range(3u16..=5u16).collect::<Vec<_>>(),
-            vec!["b", "c"]
-        );
-        assert_eq!(
-            scan().range(2u16..=2u16).collect::<Vec<_>>(),
-            Vec::<String>::new()
-        );
+    // A minimal `IndexScan` over the `Mock` so the query types can be exercised
+    // end-to-end: it builds the same bucket path the field model does and delegates
+    // to the mock's `__get_keys_from` / `__get_u64`, so the host-side lower-bound
+    // seek (via `from`) is exercised for real.
+    struct MockIndex {
+        ctx: Rc<Mock>,
+        root: KeyPath,
     }
 
-    // End-to-end: a sorted index entry writes an `(sort, pk)` tuple member, and a
-    // SortedScan over that bucket recovers the keys in value order regardless of
-    // insertion order — the shape `where_<index>` builds.
-    #[test]
-    fn sorted_scan_over_bucket_recovers_keys_in_order() {
+    impl IndexScan<String> for MockIndex {
+        fn by_index(
+            &self,
+            index_id: u8,
+            bucket: &[&[u8]],
+        ) -> impl Iterator<Item = String> + use<> {
+            let path = self.root.push_interned(index_id).push_raw_elements(bucket);
+            self.ctx.__get_keys::<String>(&path)
+        }
+
+        fn by_index_sorted<S: KeyElement + Clone + 'static>(
+            &self,
+            index_id: u8,
+            bucket: &[&[u8]],
+            from: Option<&[u8]>,
+        ) -> alloc::boxed::Box<dyn Iterator<Item = (S, String)>> {
+            let path = self.root.push_interned(index_id).push_raw_elements(bucket);
+            alloc::boxed::Box::new(self.ctx.__get_keys_from::<(S, String)>(&path, from))
+        }
+
+        fn bucket_count(&self, index_id: u8, bucket: &[&[u8]]) -> u64 {
+            let path = self.root.push_interned(index_id).push_raw_elements(bucket);
+            self.ctx.__get_u64(&path).unwrap_or(0)
+        }
+    }
+
+    // Seed the `due`/`active` sorted bucket (sorted by a u64 height) out of order.
+    fn seed_sorted_bucket() -> MockIndex {
         let ctx = Rc::new(Mock::default());
         let index = p("t#idx");
-        // Index "due", bucket "active", sorted by a u64 height (pre-encoded element).
         let entry = |height: u64| IndexEntry {
             name_id: nid("due"),
             bucket: alloc::vec!["active".to_string().encode()],
             sort: Some(height.encode()),
         };
-        // Insert out of order.
         apply_index_diff(&ctx, &index, &kb("c".to_string()), &[], &[entry(30)]);
         apply_index_diff(&ctx, &index, &kb("a".to_string()), &[], &[entry(10)]);
         apply_index_diff(&ctx, &index, &kb("b".to_string()), &[], &[entry(20)]);
+        MockIndex { ctx, root: index }
+    }
 
-        let bucket = ix(&index, "due").push("active");
-        let scan = || {
-            SortedScan::<String, u64>::new(alloc::boxed::Box::new(
-                ctx.__get_keys::<(u64, String)>(&bucket),
-            ))
-        };
-        assert_eq!(scan().collect::<Vec<_>>(), vec!["a", "b", "c"]);
-        assert_eq!(scan().up_to(20u64).collect::<Vec<_>>(), vec!["a", "b"]);
+    // A sorted query walks the bucket in value order and exposes keys/values/(k,s)
+    // regardless of insertion order — the map-like shape the generated method builds.
+    #[test]
+    fn sorted_query_keys_values_iter_in_order() {
+        let idx = seed_sorted_bucket();
+        let q = || SortedIndexQuery::<String, u64, _>::new(&idx, nid("due"), alloc::vec![
+            "active".to_string().encode()
+        ]);
+
+        assert_eq!(q().keys().collect::<Vec<_>>(), vec!["a", "b", "c"]);
+        assert_eq!(q().values().collect::<Vec<_>>(), vec![10u64, 20, 30]);
         assert_eq!(
-            scan().range(20u64..=30u64).collect::<Vec<_>>(),
+            q().iter().collect::<Vec<_>>(),
+            vec![
+                ("a".to_string(), 10u64),
+                ("b".to_string(), 20),
+                ("c".to_string(), 30)
+            ]
+        );
+        // IntoIterator yields (K, S).
+        assert_eq!(q().into_iter().count(), 3);
+        // len is the framework bucket count (O(1)); is_empty follows.
+        assert_eq!(q().len(), 3);
+        assert!(!q().is_empty());
+    }
+
+    // `.range(..)` bounds on the decoded sort value: inclusive/exclusive lo (a
+    // host-side seek) and inclusive/exclusive hi (early-break), all bound kinds.
+    #[test]
+    fn sorted_query_range_bounds() {
+        let idx = seed_sorted_bucket();
+        let q = || SortedIndexQuery::<String, u64, _>::new(&idx, nid("due"), alloc::vec![
+            "active".to_string().encode()
+        ]);
+
+        // Inclusive both ends.
+        assert_eq!(q().range(20u64..=30).keys().collect::<Vec<_>>(), vec!["b", "c"]);
+        // Half-open upper (Excluded hi).
+        assert_eq!(q().range(10u64..30).keys().collect::<Vec<_>>(), vec!["a", "b"]);
+        // Exclusive lower bound drops the `== lo` member (seek then skip `sort == 10`).
+        assert_eq!(
+            q().range((Bound::Excluded(10u64), Bound::Unbounded)).keys().collect::<Vec<_>>(),
             vec!["b", "c"]
         );
+        // Unbounded lower, inclusive upper.
+        assert_eq!(q().range(..=20u64).keys().collect::<Vec<_>>(), vec!["a", "b"]);
+        // Fully unbounded == the whole bucket.
+        assert_eq!(q().range(..).keys().collect::<Vec<_>>(), vec!["a", "b", "c"]);
+        // Empty window.
+        assert_eq!(
+            q().range(21u64..=29).keys().collect::<Vec<_>>(),
+            Vec::<String>::new()
+        );
+        // A range also exposes values / (k, s).
+        assert_eq!(q().range(20u64..=30).values().collect::<Vec<_>>(), vec![20u64, 30]);
+    }
+
+    // The set-like query over an unsorted bucket: keys and the O(1) len/is_empty.
+    #[test]
+    fn plain_query_keys_and_len() {
+        let ctx = Rc::new(Mock::default());
+        let index = p("t#idx");
+        apply_index_diff(&ctx, &index, &kb("k1".to_string()), &[], &[e("status", "active")]);
+        apply_index_diff(&ctx, &index, &kb("k2".to_string()), &[], &[e("status", "active")]);
+        let idx = MockIndex { ctx, root: index };
+
+        let q = || IndexQuery::<String, _>::new(&idx, nid("status"), alloc::vec![
+            "active".to_string().encode()
+        ]);
+        let mut keys = q().keys().collect::<Vec<_>>();
+        keys.sort();
+        assert_eq!(keys, vec!["k1".to_string(), "k2".to_string()]);
+        assert_eq!(q().len(), 2);
+        assert!(!q().is_empty());
+        assert_eq!(q().into_iter().count(), 2);
     }
 }

@@ -1,0 +1,5 @@
+error: index name `keys` is reserved (shadows the map accessor of the same name); rename the index
+ --> tests/ui/indexed_reserved_name.rs:7:9
+  |
+7 | #[index(keys, by = active)]
+  |         ^^^^

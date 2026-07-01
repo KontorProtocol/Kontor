@@ -212,8 +212,8 @@ pub fn generate(config: Config) -> TokenStream {
                 self.get_list_u8(path)
             }
 
-            fn __get_keys<T: stdlib::KeyElement + Clone>(self: &alloc::rc::Rc<Self>, path: &[u8]) -> impl Iterator<Item = T> + use<T> {
-                stdlib::make_keys_iterator(self.get_keys(path, None))
+            fn __get_keys_from<T: stdlib::KeyElement + Clone>(self: &alloc::rc::Rc<Self>, path: &[u8], from: Option<&[u8]>) -> impl Iterator<Item = T> + use<T> {
+                stdlib::make_keys_iterator(self.get_keys(path, None, from))
             }
 
             fn __exists(self: &alloc::rc::Rc<Self>, path: &[u8]) -> bool {
@@ -251,8 +251,8 @@ pub fn generate(config: Config) -> TokenStream {
                 self.get_list_u8(path)
             }
 
-            fn __get_keys<T: stdlib::KeyElement + Clone>(self: &alloc::rc::Rc<Self>, path: &[u8]) -> impl Iterator<Item = T> + use<T> {
-                stdlib::make_keys_iterator(self.get_keys(path, None))
+            fn __get_keys_from<T: stdlib::KeyElement + Clone>(self: &alloc::rc::Rc<Self>, path: &[u8], from: Option<&[u8]>) -> impl Iterator<Item = T> + use<T> {
+                stdlib::make_keys_iterator(self.get_keys(path, None, from))
             }
 
             fn __exists(self: &alloc::rc::Rc<Self>, path: &[u8]) -> bool {

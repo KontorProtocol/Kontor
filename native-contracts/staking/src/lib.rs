@@ -42,8 +42,8 @@ struct StakingStorage {
 /// returns). The framework maintains each status bucket's count, so this is two
 /// O(1) reads of those counts — no hand-maintained `active_count` to keep in sync.
 fn active_set_size<M: ValidatorEntryIndex<Holder>>(validators: &M) -> u64 {
-    validators.count_status(ValidatorStatus::Active)
-        + validators.count_status(ValidatorStatus::PendingExit)
+    validators.status(ValidatorStatus::Active).len()
+        + validators.status(ValidatorStatus::PendingExit).len()
 }
 
 fn make_validator_info(x_only_pubkey: &Holder, entry: &ValidatorEntryModel) -> ValidatorInfo {
@@ -99,7 +99,8 @@ impl Guest for Staking {
         // not every validator.
         let dup = model
             .validators()
-            .where_ed25519_pubkey(ed25519_pubkey.clone())
+            .ed25519_pubkey(ed25519_pubkey.clone())
+            .keys()
             .any(|key| {
                 key != holder
                     && model
@@ -274,11 +275,13 @@ impl Guest for Staking {
         // iterating it live would mutate mid-scan.
         let pending_join: Vec<Holder> = model
             .validators()
-            .where_status(ValidatorStatus::PendingJoin)
+            .status(ValidatorStatus::PendingJoin)
+            .keys()
             .collect();
         let pending_exit: Vec<Holder> = model
             .validators()
-            .where_status(ValidatorStatus::PendingExit)
+            .status(ValidatorStatus::PendingExit)
+            .keys()
             .collect();
 
         // `set_status` reconciles the `status` index in place, so the ACTIVE/
@@ -318,8 +321,9 @@ impl Guest for Staking {
         // validate until their deactivation height) — two index buckets, not a
         // scan-and-filter over every validator.
         let mut set: Vec<ActiveValidatorInfo> = validators
-            .where_status(ValidatorStatus::Active)
-            .chain(validators.where_status(ValidatorStatus::PendingExit))
+            .status(ValidatorStatus::Active)
+            .keys()
+            .chain(validators.status(ValidatorStatus::PendingExit).keys())
             .filter_map(|key| {
                 let entry = validators.get(&key)?;
                 Some(ActiveValidatorInfo {

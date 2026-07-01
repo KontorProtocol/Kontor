@@ -63,26 +63,28 @@ const MAX_VALID_ROOTS: u64 = 4096;
 // zero cost (the index path const-folds out). One `Map` type, no separate
 // `IndexedMap`. The bookkeeping lives in stdlib (audited once), not hand-rolled here.
 //
-//   agreements            indexed by `active` → where_active(true)
-//   challenges            indexed by `status` → where_status(ChallengeStatus::Active)
+//   agreements            indexed by `active` → active(true).keys()
+//   challenges            indexed by `status` → status(ChallengeStatus::Active).keys()
 //   challenges            `due`: by `status`, sorted by `deadline_height`
-//                                → where_due(Active).up_to(height) (ordered, early-break)
+//                                → due(Active).range(..=height).keys() (ordered, early-break)
 //   memberships           keyed by the compound `(agreement_id, node_id)` tuple;
 //                         `by_agreement_active`: by (`agreement_id`, `active`)
-//                                → where_by_agreement_active(aid, true) (flat, no
-//                                  nested map; count_by_agreement_active for size)
+//                                → by_agreement_active(aid, true).keys() (flat, no
+//                                  nested map; .len() for size)
 //
 // This collapses every former scan — expire's full challenge scan, generation's
 // nested challenge×agreement scan, get_active_challenges' full scan, and the
 // per-agreement active-node scan-and-filter — to indexed prefix reads over just
-// the live subset. `where_<index>(bucket…)` lookups are typed: the method name is
-// the index and the arguments are the bucket fields' real types (no stringly-typed
+// the live subset. `<index>(bucket…)` lookups are typed: the method name is the
+// index and the arguments are the bucket fields' real types (no stringly-typed
 // name or key), generated from the value's `#[index]` fields by its `Storage`
-// derive. A *composite* index takes one argument per bucket field — an `Option`
-// field by its presence (`Presence::Absent`/`Present`), so "active ∧ unchallenged"
-// is one prefix scan, not a scan-and-filter. A *sorted* index's `where_` returns a
-// `SortedScan` with `.up_to(bound)` / `.range(lo..=hi)`, so `expire` walks only the
-// due prefix of the active bucket instead of every active challenge. For the WIT
+// derive, and return a lazy query. A *composite* index takes one argument per
+// bucket field — an `Option` field by its presence (`Presence::Absent`/`Present`),
+// so "active ∧ unchallenged" is one prefix scan, not a scan-and-filter. A plain
+// index returns a set-like `IndexQuery` (`keys()`/`len()`); a *sorted* index returns
+// a map-like `SortedIndexQuery` (`keys()`/`values()`/`iter()`/`range(..)`), so
+// `expire`'s `range(..=height)` walks only the due prefix of the active bucket
+// (seeking the lower bound host-side) instead of every active challenge. For the WIT
 // records (`agreement-data`/`challenge-data`) the `#[index(...)]` declarations are
 // injected by the `indexed = "..."` arg on `contract!` (forked wit-bindgen);
 // internal structs (`NodeState`) carry `#[index]` directly.
@@ -92,11 +94,11 @@ const MAX_VALID_ROOTS: u64 = 4096;
 // no load→mutate→set dance. Departed/terminal rows move to the off bucket
 // (`active/false`, `status/expired`…), out of the live scan but kept for history.
 //
-// Bucket sizes are framework-maintained: `count_active(true)` is the live-member
+// Bucket sizes are framework-maintained: `active(true).len()` is the live-member
 // count (no hand-kept `node_count`), and the agreement total is the sum of its
 // `active` buckets (no hand-kept `agreement_count`) — neither can drift.
 //
-// Deferred: partial/`filter` indexes and covering indexes (avoid the where_*→get
+// Deferred: partial/`filter` indexes and covering indexes (avoid the `<index>→get`
 // N reads), and order-statistics on indexes (the i-th member in O(log n)). See the
 // upgrade backlog. Challenge selection needs uniform random ordinal access into the
 // eligible set, which a key-ordered index can't give sublinearly — so it uses the
@@ -114,8 +116,8 @@ const MAX_VALID_ROOTS: u64 = 4096;
 /// keyed by the compound `(agreement_id, node_id)` tuple. The composite
 /// `by_agreement_active` index — bucketed by `(agreement_id, active)` — makes an
 /// agreement's live members a single prefix scan
-/// (`where_by_agreement_active(aid, true)`) and its count framework-maintained
-/// (`count_by_agreement_active(aid, true)`), so there's no nested map and no
+/// (`by_agreement_active(aid, true).keys()`) and its count framework-maintained
+/// (`by_agreement_active(aid, true).len()`), so there's no nested map and no
 /// hand-kept counter. `agreement_id` is co-located in the value (it's the bucket
 /// field; the key also carries it) so the index is computable from the value
 /// alone. Departed nodes keep a row with `active = false`, in the
@@ -209,7 +211,7 @@ struct ProtocolState {
 // `challenge-status` (like every enum the contract defines) automatically gets
 // the `StorageEnum` machinery generated by `contract!` — its `IndexKey` (the
 // discriminant is the index-bucket key), `Display`, and the `ChallengeStatusKind`
-// marker. So the bucket a `where_status(..)` lookup scans and the bucket a write
+// marker. So the bucket a `status(..)` lookup scans and the bucket a write
 // lands in both come from one generated source and can't drift.
 
 // ─────────────────────────────────────────────────────────────────
@@ -361,14 +363,15 @@ impl Guest for Filestorage {
         // nodes join, `false` before that), and agreements are never removed —
         // so the total is the sum of the two framework-maintained bucket counts.
         let agreements = ctx.model().agreements();
-        agreements.count_active(true) + agreements.count_active(false)
+        agreements.active(true).len() + agreements.active(false).len()
     }
 
     fn get_all_active_agreements(ctx: &ViewContext) -> Vec<AgreementData> {
         let model = ctx.model();
         model
             .agreements()
-            .where_active(true)
+            .active(true)
+            .keys()
             .filter_map(|agreement_id: String| {
                 model.agreements().get(&agreement_id).map(|a| a.load())
             })
@@ -429,7 +432,8 @@ impl Guest for Filestorage {
         // from the index, no hand-kept counter.
         let node_count = model
             .memberships()
-            .count_by_agreement_active(agreement_id.clone(), true);
+            .by_agreement_active(agreement_id.clone(), true)
+            .len();
 
         // Check if we should activate (only if not already active)
         let min_nodes = model.min_nodes();
@@ -510,7 +514,8 @@ impl Guest for Filestorage {
             .into_iter()
             .flat_map(|active| {
                 memberships
-                    .where_by_agreement_active(agreement_id.clone(), active)
+                    .by_agreement_active(agreement_id.clone(), active)
+                    .keys()
                     .map(move |key: (String, u64)| NodeInfo {
                         node_id: key.1,
                         active,
@@ -546,7 +551,8 @@ impl Guest for Filestorage {
         let model = ctx.model();
         model
             .challenges()
-            .where_status(ChallengeStatus::Active)
+            .status(ChallengeStatus::Active)
+            .keys()
             .filter_map(|challenge_id: String| {
                 model.challenges().get(&challenge_id).map(|c| c.load())
             })
@@ -556,15 +562,16 @@ impl Guest for Filestorage {
     fn expire_challenges(ctx: &CoreContext, current_height: u64) -> u64 {
         let model = ctx.proc_context().model();
 
-        // Ordered scan of the active bucket by deadline; `up_to` early-breaks at
-        // the first not-yet-due challenge (the bound is the encoded deadline, a
-        // string compare). Snapshot before mutating — `set_status` moves ids out
-        // of the `due` and `status` buckets, and mutating an index mid-scan would
-        // corrupt the lazy iteration.
+        // Ordered scan of the active bucket by deadline; `range(..=h)` early-breaks
+        // at the first not-yet-due challenge and, for the lower bound, would seek
+        // host-side (the bound is the decoded deadline). Snapshot before mutating —
+        // `set_status` moves ids out of the `due` and `status` buckets, and mutating
+        // an index mid-scan would corrupt the lazy iteration.
         let due: Vec<String> = model
             .challenges()
-            .where_due(ChallengeStatus::Active)
-            .up_to(current_height)
+            .due(ChallengeStatus::Active)
+            .range(..=current_height)
+            .keys()
             .collect();
 
         for challenge_id in &due {
@@ -646,7 +653,7 @@ impl Guest for Filestorage {
         // block just to index into it.
         let active_ids = model.active_ids();
         let active_count = active_ids.len();
-        let challenged = model.challenges().count_status(ChallengeStatus::Active);
+        let challenged = model.challenges().status(ChallengeStatus::Active).len();
         let total_files = active_count.saturating_sub(challenged) as usize;
         if total_files == 0 {
             return new_challenges;
@@ -726,7 +733,8 @@ impl Guest for Filestorage {
             // key's second half.
             let active_nodes: Vec<u64> = model
                 .memberships()
-                .where_by_agreement_active(agreement_id.clone(), true)
+                .by_agreement_active(agreement_id.clone(), true)
+                .keys()
                 .map(|key: (String, u64)| key.1)
                 .collect();
 

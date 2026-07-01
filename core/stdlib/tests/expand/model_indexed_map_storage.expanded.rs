@@ -376,47 +376,17 @@ impl stdlib::Indexed for Challenge {
         entries
     }
 }
-pub trait ChallengeIndex<K>
+pub trait ChallengeIndex<K>: stdlib::IndexScan<K> + Sized
 where
-    K: stdlib::KeyElement + Clone,
+    K: stdlib::KeyElement + Clone + 'static,
 {
-    /// Raw bucket scan — yields the primary keys of an unsorted index
-    /// bucket, identified by the index's interned id and its bucket segments
-    /// `<bucket…>` (one per `by` field). The returned iterator owns its
-    /// source (`use<Self, K>`, no lifetime capture), so the typed wrappers
-    /// can hand it borrows of temporary key strings.
-    fn by_index(
-        &self,
-        index_id: u8,
-        bucket: &[&[u8]],
-    ) -> impl Iterator<Item = K> + use<Self, K>;
-    /// Ordered bucket scan for a *sorted* index: the bucket's `(sort, pk)`
-    /// tuple child members, wrapped in a `SortedScan` that yields `K` in sort
-    /// order and bounds `up_to`/`range` on the decoded sort value. `S` is the
-    /// index's sort field type, so the wrong bound type is a compile error.
-    fn by_index_sorted<S: stdlib::KeyElement + Clone + 'static>(
-        &self,
-        index_id: u8,
-        bucket: &[&[u8]],
-    ) -> stdlib::SortedScan<K, S>;
-    /// O(1) member count of an `(index_id, bucket…)` bucket, the
-    /// framework-maintained size of what the scans would walk.
-    fn bucket_count(&self, index_id: u8, bucket: &[&[u8]]) -> u64;
-    fn where_status(&self, status: u64) -> impl Iterator<Item = K> {
+    fn status(&self, status: u64) -> stdlib::IndexQuery<'_, K, Self> {
         let __b0 = stdlib::IndexKey::index_key(&status);
-        self.by_index(0u8, &[__b0.as_slice()])
+        stdlib::IndexQuery::new(self, 0u8, alloc::vec::Vec::from([__b0]))
     }
-    fn count_status(&self, status: u64) -> u64 {
+    fn due(&self, status: u64) -> stdlib::SortedIndexQuery<'_, K, u64, Self> {
         let __b0 = stdlib::IndexKey::index_key(&status);
-        self.bucket_count(0u8, &[__b0.as_slice()])
-    }
-    fn where_due(&self, status: u64) -> stdlib::SortedScan<K, u64> {
-        let __b0 = stdlib::IndexKey::index_key(&status);
-        self.by_index_sorted::<u64>(1u8, &[__b0.as_slice()])
-    }
-    fn count_due(&self, status: u64) -> u64 {
-        let __b0 = stdlib::IndexKey::index_key(&status);
-        self.bucket_count(1u8, &[__b0.as_slice()])
+        stdlib::SortedIndexQuery::new(self, 1u8, alloc::vec::Vec::from([__b0]))
     }
 }
 struct ChallengeStorage {
@@ -482,7 +452,7 @@ impl ChallengeStorageChallengesModel {
         stdlib::ReadStorage::__get_keys(&self.ctx, &self.base_path)
     }
 }
-impl ChallengeIndex<u64> for ChallengeStorageChallengesModel {
+impl stdlib::IndexScan<u64> for ChallengeStorageChallengesModel {
     fn by_index(
         &self,
         index_id: u8,
@@ -495,16 +465,19 @@ impl ChallengeIndex<u64> for ChallengeStorageChallengesModel {
         &self,
         index_id: u8,
         bucket: &[&[u8]],
-    ) -> stdlib::SortedScan<u64, S> {
+        from: Option<&[u8]>,
+    ) -> alloc::boxed::Box<dyn Iterator<Item = (S, u64)>> {
         let bucket = self.index_path.push_interned(index_id).push_raw_elements(bucket);
-        let members = stdlib::ReadStorage::__get_keys::<(S, u64)>(&self.ctx, &bucket);
-        stdlib::SortedScan::new(alloc::boxed::Box::new(members))
+        alloc::boxed::Box::new(
+            stdlib::ReadStorage::__get_keys_from::<(S, u64)>(&self.ctx, &bucket, from),
+        )
     }
     fn bucket_count(&self, index_id: u8, bucket: &[&[u8]]) -> u64 {
         let bucket = self.index_path.push_interned(index_id).push_raw_elements(bucket);
         stdlib::ReadStorage::__get_u64(&self.ctx, &bucket).unwrap_or(0)
     }
 }
+impl ChallengeIndex<u64> for ChallengeStorageChallengesModel {}
 pub struct ChallengeStorageWriteModel {
     pub base_path: stdlib::KeyPath,
     ctx: alloc::rc::Rc<crate::context::ProcStorage>,
@@ -622,7 +595,7 @@ impl ChallengeStorageChallengesWriteModel {
         stdlib::ReadStorage::__get_keys(&self.ctx, &self.base_path)
     }
 }
-impl ChallengeIndex<u64> for ChallengeStorageChallengesWriteModel {
+impl stdlib::IndexScan<u64> for ChallengeStorageChallengesWriteModel {
     fn by_index(
         &self,
         index_id: u8,
@@ -635,13 +608,16 @@ impl ChallengeIndex<u64> for ChallengeStorageChallengesWriteModel {
         &self,
         index_id: u8,
         bucket: &[&[u8]],
-    ) -> stdlib::SortedScan<u64, S> {
+        from: Option<&[u8]>,
+    ) -> alloc::boxed::Box<dyn Iterator<Item = (S, u64)>> {
         let bucket = self.index_path.push_interned(index_id).push_raw_elements(bucket);
-        let members = stdlib::ReadStorage::__get_keys::<(S, u64)>(&self.ctx, &bucket);
-        stdlib::SortedScan::new(alloc::boxed::Box::new(members))
+        alloc::boxed::Box::new(
+            stdlib::ReadStorage::__get_keys_from::<(S, u64)>(&self.ctx, &bucket, from),
+        )
     }
     fn bucket_count(&self, index_id: u8, bucket: &[&[u8]]) -> u64 {
         let bucket = self.index_path.push_interned(index_id).push_raw_elements(bucket);
         stdlib::ReadStorage::__get_u64(&self.ctx, &bucket).unwrap_or(0)
     }
 }
+impl ChallengeIndex<u64> for ChallengeStorageChallengesWriteModel {}

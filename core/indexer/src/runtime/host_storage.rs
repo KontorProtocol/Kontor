@@ -97,15 +97,21 @@ impl Runtime {
         resource: Resource<T>,
         path: Vec<u8>,
         after: Option<Vec<u8>>,
+        from_key: Option<Vec<u8>>,
     ) -> Result<Resource<Keys>> {
         validate_path(&path)?;
         if let Some(after) = &after {
             validate_path(after)?;
         }
+        // `from_key` is a single child element (e.g. a `(sort, pk)`-prefix tuple), a
+        // well-formed standalone element — validate it like any path segment.
+        if let Some(from_key) = &from_key {
+            validate_path(from_key)?;
+        }
         let mut table = self.table.lock().await;
         let contract_id = table.get(&resource)?.get_contract_id();
         Fuel::GetKeys.consume(accessor, self.gauge.as_ref()).await?;
-        let stream = Box::pin(self.storage.keys(contract_id, path, after).await?);
+        let stream = Box::pin(self.storage.keys(contract_id, path, after, from_key).await?);
         Ok(table.push(Keys { stream })?)
     }
 

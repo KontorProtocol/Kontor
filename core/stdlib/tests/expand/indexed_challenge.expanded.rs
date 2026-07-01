@@ -358,46 +358,16 @@ impl stdlib::Indexed for Challenge {
         entries
     }
 }
-pub trait ChallengeIndex<K>
+pub trait ChallengeIndex<K>: stdlib::IndexScan<K> + Sized
 where
-    K: stdlib::KeyElement + Clone,
+    K: stdlib::KeyElement + Clone + 'static,
 {
-    /// Raw bucket scan — yields the primary keys of an unsorted index
-    /// bucket, identified by the index's interned id and its bucket segments
-    /// `<bucket…>` (one per `by` field). The returned iterator owns its
-    /// source (`use<Self, K>`, no lifetime capture), so the typed wrappers
-    /// can hand it borrows of temporary key strings.
-    fn by_index(
-        &self,
-        index_id: u8,
-        bucket: &[&[u8]],
-    ) -> impl Iterator<Item = K> + use<Self, K>;
-    /// Ordered bucket scan for a *sorted* index: the bucket's `(sort, pk)`
-    /// tuple child members, wrapped in a `SortedScan` that yields `K` in sort
-    /// order and bounds `up_to`/`range` on the decoded sort value. `S` is the
-    /// index's sort field type, so the wrong bound type is a compile error.
-    fn by_index_sorted<S: stdlib::KeyElement + Clone + 'static>(
-        &self,
-        index_id: u8,
-        bucket: &[&[u8]],
-    ) -> stdlib::SortedScan<K, S>;
-    /// O(1) member count of an `(index_id, bucket…)` bucket, the
-    /// framework-maintained size of what the scans would walk.
-    fn bucket_count(&self, index_id: u8, bucket: &[&[u8]]) -> u64;
-    fn where_status(&self, status: u64) -> impl Iterator<Item = K> {
+    fn status(&self, status: u64) -> stdlib::IndexQuery<'_, K, Self> {
         let __b0 = stdlib::IndexKey::index_key(&status);
-        self.by_index(0u8, &[__b0.as_slice()])
+        stdlib::IndexQuery::new(self, 0u8, alloc::vec::Vec::from([__b0]))
     }
-    fn count_status(&self, status: u64) -> u64 {
-        let __b0 = stdlib::IndexKey::index_key(&status);
-        self.bucket_count(0u8, &[__b0.as_slice()])
-    }
-    fn where_prover_id(&self, prover_id: u64) -> impl Iterator<Item = K> {
+    fn prover_id(&self, prover_id: u64) -> stdlib::IndexQuery<'_, K, Self> {
         let __b0 = stdlib::IndexKey::index_key(&prover_id);
-        self.by_index(1u8, &[__b0.as_slice()])
-    }
-    fn count_prover_id(&self, prover_id: u64) -> u64 {
-        let __b0 = stdlib::IndexKey::index_key(&prover_id);
-        self.bucket_count(1u8, &[__b0.as_slice()])
+        stdlib::IndexQuery::new(self, 1u8, alloc::vec::Vec::from([__b0]))
     }
 }

@@ -639,6 +639,7 @@ pub async fn path_prefix_filter_contract_state(
     contract_id: u64,
     path: Vec<u8>,
     after: Option<Vec<u8>>,
+    from_key: Option<Vec<u8>>,
 ) -> Result<impl Stream<Item = Result<Vec<u8>, Error>> + Send + 'static, Error> {
     // Lower bound of the scan. No cursor: `path > :lo` (children only, exclude the
     // node). With a cursor: `strinc(after)` skips `after`'s whole subtree and the
@@ -647,9 +648,20 @@ pub async fn path_prefix_filter_contract_state(
     // well-formed codec bytes (rejected upstream by `validate_path`), so the
     // fallback is unreachable. `< :hi` is the subtree's own `strinc(path)` bound;
     // ordered by `path` so children are grouped for dedup and the range streams.
-    let (lo, lo_cmp): (Vec<u8>, &str) = match after {
-        None => (path.clone(), ">"),
-        Some(after) => (strinc(&after).unwrap_or(after), ">="),
+    //
+    // `from_key` is an INCLUSIVE seek to `path ++ from_key` (a plain `>=`, no
+    // strinc): the sorted-index range query's host-side lower bound. It's a single
+    // child element (a `(sort, pk)`-prefix tuple), so any child at or above it is
+    // wanted. It supersedes `after` — the two never co-occur (range scans don't
+    // paginate cross-call) — so a present `from_key` wins.
+    let (lo, lo_cmp): (Vec<u8>, &str) = match (from_key, after) {
+        (Some(from_key), _) => {
+            let mut lo = path.clone();
+            lo.extend_from_slice(&from_key);
+            (lo, ">=")
+        }
+        (None, None) => (path.clone(), ">"),
+        (None, Some(after)) => (strinc(&after).unwrap_or(after), ">="),
     };
     let (query, params) = live_paths_scan(
         "cs.path",

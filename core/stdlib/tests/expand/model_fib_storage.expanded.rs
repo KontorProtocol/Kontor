@@ -152,7 +152,7 @@ impl FibStorageCacheModel {
         stdlib::ReadStorage::__get_keys(&self.ctx, &self.base_path)
     }
 }
-impl FibValueIndex<u64> for FibStorageCacheModel {
+impl stdlib::IndexScan<u64> for FibStorageCacheModel {
     fn by_index(
         &self,
         index_id: u8,
@@ -165,16 +165,19 @@ impl FibValueIndex<u64> for FibStorageCacheModel {
         &self,
         index_id: u8,
         bucket: &[&[u8]],
-    ) -> stdlib::SortedScan<u64, S> {
+        from: Option<&[u8]>,
+    ) -> alloc::boxed::Box<dyn Iterator<Item = (S, u64)>> {
         let bucket = self.index_path.push_interned(index_id).push_raw_elements(bucket);
-        let members = stdlib::ReadStorage::__get_keys::<(S, u64)>(&self.ctx, &bucket);
-        stdlib::SortedScan::new(alloc::boxed::Box::new(members))
+        alloc::boxed::Box::new(
+            stdlib::ReadStorage::__get_keys_from::<(S, u64)>(&self.ctx, &bucket, from),
+        )
     }
     fn bucket_count(&self, index_id: u8, bucket: &[&[u8]]) -> u64 {
         let bucket = self.index_path.push_interned(index_id).push_raw_elements(bucket);
         stdlib::ReadStorage::__get_u64(&self.ctx, &bucket).unwrap_or(0)
     }
 }
+impl FibValueIndex<u64> for FibStorageCacheModel {}
 pub struct FibStorageWriteModel {
     pub base_path: stdlib::KeyPath,
     ctx: alloc::rc::Rc<crate::context::ProcStorage>,
@@ -292,7 +295,7 @@ impl FibStorageCacheWriteModel {
         stdlib::ReadStorage::__get_keys(&self.ctx, &self.base_path)
     }
 }
-impl FibValueIndex<u64> for FibStorageCacheWriteModel {
+impl stdlib::IndexScan<u64> for FibStorageCacheWriteModel {
     fn by_index(
         &self,
         index_id: u8,
@@ -305,13 +308,16 @@ impl FibValueIndex<u64> for FibStorageCacheWriteModel {
         &self,
         index_id: u8,
         bucket: &[&[u8]],
-    ) -> stdlib::SortedScan<u64, S> {
+        from: Option<&[u8]>,
+    ) -> alloc::boxed::Box<dyn Iterator<Item = (S, u64)>> {
         let bucket = self.index_path.push_interned(index_id).push_raw_elements(bucket);
-        let members = stdlib::ReadStorage::__get_keys::<(S, u64)>(&self.ctx, &bucket);
-        stdlib::SortedScan::new(alloc::boxed::Box::new(members))
+        alloc::boxed::Box::new(
+            stdlib::ReadStorage::__get_keys_from::<(S, u64)>(&self.ctx, &bucket, from),
+        )
     }
     fn bucket_count(&self, index_id: u8, bucket: &[&[u8]]) -> u64 {
         let bucket = self.index_path.push_interned(index_id).push_raw_elements(bucket);
         stdlib::ReadStorage::__get_u64(&self.ctx, &bucket).unwrap_or(0)
     }
 }
+impl FibValueIndex<u64> for FibStorageCacheWriteModel {}
