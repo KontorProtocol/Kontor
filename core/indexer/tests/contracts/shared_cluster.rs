@@ -10,6 +10,13 @@ static INIT: tokio::sync::OnceCell<()> = tokio::sync::OnceCell::const_new();
 pub async fn get() -> Arc<RegTesterCluster> {
     INIT.get_or_init(|| async {
         let _ = tracing_subscriber::fmt().with_env_filter("info").try_init();
+        // 300 registered is NOT over-provisioned: measured consumption across the
+        // ~24 sharing tests is ~256 registered (the AMM/pool tests create many
+        // accounts), so this is ~17% headroom over the real peak. Do not shrink it —
+        // `pop_registered` fails loud on exhaustion. Each pre-created registered
+        // identity is a serial BLS RegistrationProof + reveal tx on this OnceCell
+        // setup path that blocks every `regtest_*` test, so raise (not lower) these
+        // if a new batch of tests pushes consumption past the pool.
         let cluster = RegTesterCluster::setup(3, 300, 50)
             .await
             .expect("Failed to setup RegTesterCluster");

@@ -43,7 +43,12 @@ async fn regtest_file_storage() -> anyhow::Result<()> {
     // trajectory. Sharing the cluster with other tests that mutate the file
     // ledger (e.g. `native_nft_contract` via `filestorage::create_agreement`)
     // would invalidate those roots and break the proofs.
-    let cluster = RegTesterCluster::setup(3, 300, 50).await?;
+    //
+    // Its two CI drivers pop only ~45-50 registered / ~1 unregistered, so the pool
+    // is sized to that plus headroom rather than copying the shared cluster's larger
+    // pool — this dedicated chain pays its own full registration tax on a separate
+    // bitcoind + 3 nodes, on every run.
+    let cluster = RegTesterCluster::setup(3, 64, 10).await?;
     let mut runtime = shared_cluster::build_runtime(&cluster).await?;
     file_storage::test_file_storage_regtest_e2e(&mut runtime).await?;
     file_storage::test_file_storage_regtest(&mut runtime).await?;
@@ -82,13 +87,16 @@ async fn regtest_native_nft() -> anyhow::Result<()> {
     if std::env::var("REGTEST").is_err() {
         return Ok(());
     }
-    // Dedicated cluster: `native_nft_contract` asserts on absolute counts
-    // (total_minted, list_nfts ordering) that would be wrong if the attach
-    // test's mint ran first on the shared cluster. Running both tests
-    // sequentially on their own chain gives each test a clean slate.
-    let cluster = RegTesterCluster::setup(3, 300, 50).await?;
+    // Runs on the SHARED cluster (no dedicated chain). `native_nft_contract`
+    // asserts absolute global nft state (`total_minted`, `list_nfts` order +
+    // pagination), which is safe here because nft state is mutated by ONLY these
+    // two tests — nothing else on the shared cluster calls `nft::mint` (token /
+    // shared-account touch `token::mint`, a different contract). They run as one
+    // sequential driver: nft_contract first against an empty nft store (so its
+    // exact-set assertions hold), then attach. Teardown is the cluster's dtor.
+    let cluster = shared_cluster::get().await;
     let mut runtime = shared_cluster::build_runtime(&cluster).await?;
     native_nft_contract::test_native_nft_contract(&mut runtime).await?;
     native_nft_attach_contract::test_native_nft_attach_contract(&mut runtime).await?;
-    cluster.teardown().await
+    Ok(())
 }
