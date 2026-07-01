@@ -23,6 +23,25 @@ pub async fn rollback_to_height(conn: &Connection, height: u64) -> Result<u64, E
     Ok(num_rows)
 }
 
+/// The highest block height VISIBLE to `conn` — `MAX(height) FROM blocks`, an O(1)
+/// index lookup. Unlike [`select_block_latest`] it returns just the height and is
+/// used by the `/view` staleness diagnostic to compare a pooled read connection's
+/// snapshot against the reactor's committed tip. `None` = the connection sees no
+/// blocks (empty table / pre-first-block).
+pub async fn max_block_height(conn: &Connection) -> Result<Option<u64>, Error> {
+    Ok(
+        match conn
+            .query("SELECT MAX(height) FROM blocks", params![])
+            .await?
+            .next()
+            .await?
+        {
+            Some(r) => r.get::<Option<u64>>(0)?,
+            None => None,
+        },
+    )
+}
+
 pub async fn select_block_latest(conn: &Connection) -> Result<Option<BlockRow>, Error> {
     let mut rows = conn
         .query(

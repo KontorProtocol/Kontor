@@ -573,7 +573,7 @@ impl Storage {
 mod tests {
     use super::*;
     use crate::database::connection::new_connection;
-    use crate::database::queries::insert_block;
+    use crate::database::queries::{insert_block, max_block_height};
     use crate::test_utils::{new_mock_block_hash, new_test_db};
     use indexer_types::BlockRow;
 
@@ -979,6 +979,53 @@ mod tests {
             get_meta_u64(&view_conn, key, 0).await?,
             2,
             "after the recycle reset, the connection must read the latest committed state"
+        );
+        Ok(())
+    }
+
+    // The `/view` staleness diagnostic's discriminator: `max_block_height` on a
+    // pooled read connection must report the LOWER tip when that connection is pinned
+    // to an older snapshot — that's the `visible < committed` the WARN fires on — and
+    // must recover to the committed tip once the pin is released. Proves the detector
+    // can actually see a stale `/view` connection (vs. a fresh one that matches).
+    #[tokio::test]
+    async fn max_block_height_reports_stale_view_connection() -> Result<()> {
+        let (_reader, writer, (temp, db_name)) = new_test_db().await?;
+        let writer_conn = writer.connection();
+        // A second physical connection to the same WAL db — a pooled `/view` connection.
+        let view_conn = new_connection(temp.path(), &db_name).await?;
+        let view = Storage::builder().conn(view_conn.clone()).build();
+
+        let block = |h: u64| {
+            BlockRow::builder()
+                .height(h)
+                .hash(new_mock_block_hash(h as u32))
+                .build()
+        };
+        insert_block(&writer_conn, block(1)).await?;
+
+        // The view opens a transaction and reads — pinning its WAL snapshot at tip 1.
+        view.savepoint().await?;
+        assert_eq!(max_block_height(&view_conn).await?, Some(1));
+
+        // The reactor (writer) commits block 2 (autocommit).
+        insert_block(&writer_conn, block(2)).await?;
+
+        // Pinned to its snapshot, the view still sees tip 1 while the committed tip is
+        // 2 — exactly the `visible(1) < committed(2)` the diagnostic WARNs on.
+        assert_eq!(
+            max_block_height(&view_conn).await?,
+            Some(1),
+            "a pinned view connection must report its stale (lower) tip"
+        );
+        assert_eq!(max_block_height(&writer_conn).await?, Some(2));
+
+        // After the recycle reset, a fresh read sees the committed tip — no stale WARN.
+        view.rollback_transaction().await?;
+        assert_eq!(
+            max_block_height(&view_conn).await?,
+            Some(2),
+            "after the reset, the view connection must catch up to the committed tip"
         );
         Ok(())
     }
