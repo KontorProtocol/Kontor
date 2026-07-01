@@ -38,18 +38,19 @@ fn enum_kind_ident(ty: &syn::Type) -> TokenStream {
 }
 
 /// The per-value typed index-lookup trait. For each declared index it adds a
-/// `where_<index>(bucket)` method taking the bucket field's real type, so a
-/// contract queries by value (`where_status(Status::Active)`) instead of a
-/// stringly-typed name + hand-built key. A *sorted* index's `where_` returns a
-/// [`stdlib::SortedScan`], adding `.up_to(bound)` / `.range(lo..=hi)`; an unsorted
-/// one returns a plain iterator (today's behavior).
+/// `<index>(bucket)` method taking the bucket field's real type, so a contract
+/// queries by value (`status(Status::Active)`) instead of a stringly-typed name +
+/// hand-built key. A plain index returns a set-like [`stdlib::IndexQuery`]
+/// (`keys()`/`len()`); a *sorted* index returns a map-like
+/// [`stdlib::SortedIndexQuery`] (`keys()`/`values()`/`iter()`/`range(..)`, plus the
+/// O(1) `len()`).
 ///
 /// Generated here (the value derive sees its own index declarations); the `Model`
-/// derive can't, since it only sees the `Map<K, V>` field, not `V` — so the
-/// field model implements the required primitives (`by_index`, `by_index_sorted`,
-/// `bucket_count`) and inherits the typed wrappers. The wrappers stringify with
-/// the same `IndexKey` the index rows are written with, so a lookup and its stored
-/// bucket can't drift.
+/// derive can't, since it only sees the `Map<K, V>` field, not `V` — so the field
+/// model implements the [`stdlib::IndexScan`] primitives (`by_index`,
+/// `by_index_sorted`, `bucket_count`) those queries back onto, and inherits the
+/// typed methods here. The methods stringify with the same `IndexKey` the index
+/// rows are written with, so a lookup and its stored bucket can't drift.
 pub fn generate_lookup_trait(
     decls: &[IndexDecl],
     fields: &FieldsNamed,
@@ -62,8 +63,9 @@ pub fn generate_lookup_trait(
         .map(|decl| {
             let name = &decl.name;
             let index_id = decl.id; // interned `<index>` segment
-            let where_method = Ident::new(&format!("where_{name}"), type_name.span());
-            let count_method = Ident::new(&format!("count_{name}"), type_name.span());
+            // The name is a method on the field model; `index_decl::parse` has already
+            // rejected any that would shadow the map surface or a query finisher.
+            let method = Ident::new(name, type_name.span());
 
             // One parameter per `by` field (in declared order), each typed for how
             // it buckets: a primitive by value; a storage enum by `impl Into<<E>Kind>`
@@ -100,68 +102,49 @@ pub fn generate_lookup_trait(
                 })
                 .collect();
 
-            let params = parts.iter().map(|(p, _, _)| p);
-            let bindings = parts.iter().map(|(_, b, _)| b).collect::<Vec<_>>();
-            // Each `__b<i>` is a pre-encoded `IndexKey` element (`Vec<u8>`); the
-            // bucket is the slice of their byte-slices.
-            let bucket_refs = parts.iter().map(|(_, _, b)| quote! { #b.as_slice() });
-            let bucket = quote! { &[#(#bucket_refs),*] };
+            let params: Vec<_> = parts.iter().map(|(p, _, _)| p).collect();
+            let bindings = parts.iter().map(|(_, b, _)| b);
+            // Each `__b<i>` is a pre-encoded `IndexKey` element (`Vec<u8>`); the query
+            // owns the bucket as an `alloc::vec!` of those, and reads its member count
+            // / member scan through the `IndexScan` primitives on demand.
+            let bucket_idents = parts.iter().map(|(_, _, b)| b);
+            // `Vec::from([__b0, …])` (not `vec![…]`) so the expansion snapshot renders
+            // cleanly — every index has ≥1 `by` field, so the array is never empty.
+            let bucket = quote! { alloc::vec::Vec::from([#(#bucket_idents),*]) };
 
-            // `params`/`bindings`/`bucket` are each consumed once per use below;
-            // re-collect so `where_` and `count_` can both expand them.
-            let params: Vec<_> = params.collect();
-
-            let where_body = match &decl.sort {
+            // The typed lookup returns a `BTreeSet`-like [`IndexQuery`] (plain) or a
+            // `BTreeMap`-like [`SortedIndexQuery`] (`sort = …`), borrowing the field
+            // model. `count`/`len` and the `keys`/`values`/`iter`/`range` finishers
+            // live on the query, so one method per index replaces `where_`/`count_`.
+            match &decl.sort {
                 Some(sort_field) => {
                     let sort_ty = index_decl::field_type(fields, sort_field);
                     quote! {
-                        fn #where_method(&self, #(#params),*) -> stdlib::SortedScan<K, #sort_ty> {
+                        fn #method(&self, #(#params),*) -> stdlib::SortedIndexQuery<'_, K, #sort_ty, Self> {
                             #(#bindings)*
-                            self.by_index_sorted::<#sort_ty>(#index_id, #bucket)
+                            stdlib::SortedIndexQuery::new(self, #index_id, #bucket)
                         }
                     }
                 }
                 None => quote! {
-                    fn #where_method(&self, #(#params),*) -> impl Iterator<Item = K> {
+                    fn #method(&self, #(#params),*) -> stdlib::IndexQuery<'_, K, Self> {
                         #(#bindings)*
-                        self.by_index(#index_id, #bucket)
+                        stdlib::IndexQuery::new(self, #index_id, #bucket)
                     }
                 },
-            };
-
-            quote! {
-                #where_body
-
-                fn #count_method(&self, #(#params),*) -> u64 {
-                    #(#bindings)*
-                    self.bucket_count(#index_id, #bucket)
-                }
             }
         })
         .collect();
 
     quote! {
-        pub trait #trait_name<K>
+        // Each index adds a typed `<name>(bucket…)` lookup returning a lazy
+        // `IndexQuery` / `SortedIndexQuery`. The `stdlib::IndexScan` supertrait
+        // supplies the `by_index` / `by_index_sorted` / `bucket_count` primitives
+        // (implemented by the field model), which those queries back onto.
+        pub trait #trait_name<K>: stdlib::IndexScan<K> + Sized
         where
-            K: stdlib::KeyElement + Clone,
+            K: stdlib::KeyElement + Clone + 'static,
         {
-            /// Raw bucket scan — yields the primary keys of an unsorted index
-            /// bucket, identified by the index's interned id and its bucket segments
-            /// `<bucket…>` (one per `by` field). The returned iterator owns its
-            /// source (`use<Self, K>`, no lifetime capture), so the typed wrappers
-            /// can hand it borrows of temporary key strings.
-            fn by_index(&self, index_id: u8, bucket: &[&[u8]]) -> impl Iterator<Item = K> + use<Self, K>;
-
-            /// Ordered bucket scan for a *sorted* index: the bucket's `(sort, pk)`
-            /// tuple child members, wrapped in a `SortedScan` that yields `K` in sort
-            /// order and bounds `up_to`/`range` on the decoded sort value. `S` is the
-            /// index's sort field type, so the wrong bound type is a compile error.
-            fn by_index_sorted<S: stdlib::KeyElement + Clone + 'static>(&self, index_id: u8, bucket: &[&[u8]]) -> stdlib::SortedScan<K, S>;
-
-            /// O(1) member count of an `(index_id, bucket…)` bucket, the
-            /// framework-maintained size of what the scans would walk.
-            fn bucket_count(&self, index_id: u8, bucket: &[&[u8]]) -> u64;
-
             #(#methods)*
         }
     }

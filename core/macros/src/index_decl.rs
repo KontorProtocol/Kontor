@@ -99,6 +99,14 @@ pub fn parse(struct_attrs: &[Attribute], fields: &FieldsNamed) -> Result<Vec<Ind
                      `#[index(name, by = …, sort = …)]` form for options",
                 ));
             }
+            if let Some(reason) = reserved_index_name(&ident.to_string()) {
+                return Err(Error::new(
+                    ident.span(),
+                    format!(
+                        "index name `{ident}` is reserved ({reason}); rename the field or use a named struct-level index"
+                    ),
+                ));
+            }
             decls.push(IndexDecl {
                 name: ident.to_string(),
                 by: vec![ident.clone()],
@@ -114,6 +122,15 @@ pub fn parse(struct_attrs: &[Attribute], fields: &FieldsNamed) -> Result<Vec<Ind
             continue;
         }
         let args: IndexArgs = attr.parse_args()?;
+        if let Some(reason) = reserved_index_name(&args.name.to_string()) {
+            return Err(Error::new_spanned(
+                &args.name,
+                format!(
+                    "index name `{}` is reserved ({reason}); rename the index",
+                    args.name
+                ),
+            ));
+        }
         let by = args.by.unwrap_or_else(|| vec![args.name.clone()]);
         if by.is_empty() {
             return Err(Error::new_spanned(
@@ -175,6 +192,26 @@ pub fn parse(struct_attrs: &[Attribute], fields: &FieldsNamed) -> Result<Vec<Ind
 
 fn field_exists(fields: &FieldsNamed, ident: &Ident) -> bool {
     fields.named.iter().any(|f| f.ident.as_ref() == Some(ident))
+}
+
+/// If an index `name` would shadow one of the field model's inherent methods or a
+/// query finisher, return why. The index name becomes a method on the field model,
+/// and an inherent method wins over a trait method by name resolution — so a
+/// colliding index would be silently unreachable. Reject it at parse time (before
+/// any codegen) so the derive fails with just this error.
+fn reserved_index_name(name: &str) -> Option<&'static str> {
+    const MAP_SURFACE: &[&str] = &["get", "set", "keys", "load", "remove", "new"];
+    const QUERY_FINISHERS: &[&str] = &["iter", "values", "range", "len", "is_empty", "count"];
+    const PRIMITIVES: &[&str] = &["by_index", "by_index_sorted", "bucket_count"];
+    if MAP_SURFACE.contains(&name) {
+        Some("shadows the map accessor of the same name")
+    } else if QUERY_FINISHERS.contains(&name) {
+        Some("shadows a query finisher")
+    } else if PRIMITIVES.contains(&name) {
+        Some("shadows an index-scan primitive")
+    } else {
+        None
+    }
 }
 
 /// Distinct fields referenced (bucket + sort) across `decls`, in first-seen

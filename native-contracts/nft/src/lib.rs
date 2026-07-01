@@ -278,7 +278,8 @@ impl Guest for Nft {
         // The `creator` index is append-only (transfers do not move NFTs across
         // creator buckets), so every key in the bucket is a current member and we
         // can paginate directly with skip/take without any extra filtering pass.
-        nfts.where_creator(creator)
+        nfts.creator(creator)
+            .keys()
             .skip(offset)
             .take(limit)
             .filter_map(|nft_id: String| {
@@ -298,7 +299,7 @@ impl Guest for Nft {
         let Ok(creator): Result<Holder, _> = creator.try_into() else {
             return 0;
         };
-        ctx.model().nfts().count_creator(creator)
+        ctx.model().nfts().creator(creator).len()
     }
 
     fn get_attributes(ctx: &ViewContext, nft_id: String) -> Vec<Attribute> {

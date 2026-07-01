@@ -268,7 +268,7 @@ mod tests {
 
         // Leak a Keys cursor into the pooled runtime's table (read one row → ACTIVE
         // statement, never drained), exactly as a partially-consumed `map.keys()` view.
-        let mut stream = Box::pin(rt.storage.keys(1, vec![], None).await?);
+        let mut stream = Box::pin(rt.storage.keys(1, vec![], None, None).await?);
         let _ = stream.next().await;
         rt.table.lock().await.push(Keys { stream })?;
 

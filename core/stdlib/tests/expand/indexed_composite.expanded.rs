@@ -308,63 +308,25 @@ impl stdlib::Indexed for Agreement {
         entries
     }
 }
-pub trait AgreementIndex<K>
+pub trait AgreementIndex<K>: stdlib::IndexScan<K> + Sized
 where
-    K: stdlib::KeyElement + Clone,
+    K: stdlib::KeyElement + Clone + 'static,
 {
-    /// Raw bucket scan — yields the primary keys of an unsorted index
-    /// bucket, identified by the index's interned id and its bucket segments
-    /// `<bucket…>` (one per `by` field). The returned iterator owns its
-    /// source (`use<Self, K>`, no lifetime capture), so the typed wrappers
-    /// can hand it borrows of temporary key strings.
-    fn by_index(
-        &self,
-        index_id: u8,
-        bucket: &[&[u8]],
-    ) -> impl Iterator<Item = K> + use<Self, K>;
-    /// Ordered bucket scan for a *sorted* index: the bucket's `(sort, pk)`
-    /// tuple child members, wrapped in a `SortedScan` that yields `K` in sort
-    /// order and bounds `up_to`/`range` on the decoded sort value. `S` is the
-    /// index's sort field type, so the wrong bound type is a compile error.
-    fn by_index_sorted<S: stdlib::KeyElement + Clone + 'static>(
-        &self,
-        index_id: u8,
-        bucket: &[&[u8]],
-    ) -> stdlib::SortedScan<K, S>;
-    /// O(1) member count of an `(index_id, bucket…)` bucket, the
-    /// framework-maintained size of what the scans would walk.
-    fn bucket_count(&self, index_id: u8, bucket: &[&[u8]]) -> u64;
-    fn where_active(&self, active: bool) -> impl Iterator<Item = K> {
+    fn active(&self, active: bool) -> stdlib::IndexQuery<'_, K, Self> {
         let __b0 = stdlib::IndexKey::index_key(&active);
-        self.by_index(0u8, &[__b0.as_slice()])
+        stdlib::IndexQuery::new(self, 0u8, alloc::vec::Vec::from([__b0]))
     }
-    fn count_active(&self, active: bool) -> u64 {
-        let __b0 = stdlib::IndexKey::index_key(&active);
-        self.bucket_count(0u8, &[__b0.as_slice()])
-    }
-    fn where_eligible(
+    fn eligible(
         &self,
         active: bool,
         challenge: impl core::convert::Into<stdlib::Presence>,
-    ) -> impl Iterator<Item = K> {
+    ) -> stdlib::IndexQuery<'_, K, Self> {
         let __b0 = stdlib::IndexKey::index_key(&active);
         let __b1 = {
             let __p: stdlib::Presence = challenge.into();
             stdlib::IndexKey::index_key(&__p)
         };
-        self.by_index(1u8, &[__b0.as_slice(), __b1.as_slice()])
-    }
-    fn count_eligible(
-        &self,
-        active: bool,
-        challenge: impl core::convert::Into<stdlib::Presence>,
-    ) -> u64 {
-        let __b0 = stdlib::IndexKey::index_key(&active);
-        let __b1 = {
-            let __p: stdlib::Presence = challenge.into();
-            stdlib::IndexKey::index_key(&__p)
-        };
-        self.bucket_count(1u8, &[__b0.as_slice(), __b1.as_slice()])
+        stdlib::IndexQuery::new(self, 1u8, alloc::vec::Vec::from([__b0, __b1]))
     }
 }
 struct AgreementStorage {
@@ -430,7 +392,7 @@ impl AgreementStorageAgreementsModel {
         stdlib::ReadStorage::__get_keys(&self.ctx, &self.base_path)
     }
 }
-impl AgreementIndex<u64> for AgreementStorageAgreementsModel {
+impl stdlib::IndexScan<u64> for AgreementStorageAgreementsModel {
     fn by_index(
         &self,
         index_id: u8,
@@ -443,16 +405,19 @@ impl AgreementIndex<u64> for AgreementStorageAgreementsModel {
         &self,
         index_id: u8,
         bucket: &[&[u8]],
-    ) -> stdlib::SortedScan<u64, S> {
+        from: Option<&[u8]>,
+    ) -> alloc::boxed::Box<dyn Iterator<Item = (S, u64)>> {
         let bucket = self.index_path.push_interned(index_id).push_raw_elements(bucket);
-        let members = stdlib::ReadStorage::__get_keys::<(S, u64)>(&self.ctx, &bucket);
-        stdlib::SortedScan::new(alloc::boxed::Box::new(members))
+        alloc::boxed::Box::new(
+            stdlib::ReadStorage::__get_keys_from::<(S, u64)>(&self.ctx, &bucket, from),
+        )
     }
     fn bucket_count(&self, index_id: u8, bucket: &[&[u8]]) -> u64 {
         let bucket = self.index_path.push_interned(index_id).push_raw_elements(bucket);
         stdlib::ReadStorage::__get_u64(&self.ctx, &bucket).unwrap_or(0)
     }
 }
+impl AgreementIndex<u64> for AgreementStorageAgreementsModel {}
 pub struct AgreementStorageWriteModel {
     pub base_path: stdlib::KeyPath,
     ctx: alloc::rc::Rc<crate::context::ProcStorage>,
@@ -570,7 +535,7 @@ impl AgreementStorageAgreementsWriteModel {
         stdlib::ReadStorage::__get_keys(&self.ctx, &self.base_path)
     }
 }
-impl AgreementIndex<u64> for AgreementStorageAgreementsWriteModel {
+impl stdlib::IndexScan<u64> for AgreementStorageAgreementsWriteModel {
     fn by_index(
         &self,
         index_id: u8,
@@ -583,13 +548,16 @@ impl AgreementIndex<u64> for AgreementStorageAgreementsWriteModel {
         &self,
         index_id: u8,
         bucket: &[&[u8]],
-    ) -> stdlib::SortedScan<u64, S> {
+        from: Option<&[u8]>,
+    ) -> alloc::boxed::Box<dyn Iterator<Item = (S, u64)>> {
         let bucket = self.index_path.push_interned(index_id).push_raw_elements(bucket);
-        let members = stdlib::ReadStorage::__get_keys::<(S, u64)>(&self.ctx, &bucket);
-        stdlib::SortedScan::new(alloc::boxed::Box::new(members))
+        alloc::boxed::Box::new(
+            stdlib::ReadStorage::__get_keys_from::<(S, u64)>(&self.ctx, &bucket, from),
+        )
     }
     fn bucket_count(&self, index_id: u8, bucket: &[&[u8]]) -> u64 {
         let bucket = self.index_path.push_interned(index_id).push_raw_elements(bucket);
         stdlib::ReadStorage::__get_u64(&self.ctx, &bucket).unwrap_or(0)
     }
 }
+impl AgreementIndex<u64> for AgreementStorageAgreementsWriteModel {}

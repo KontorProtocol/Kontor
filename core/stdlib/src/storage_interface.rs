@@ -21,10 +21,25 @@ pub trait ReadStorage {
     // `T` is decoded from each child's codec element (the map key, or an
     // `(sort, pk)` tuple for a sorted-index member), so it sorts and round-trips
     // natively — no stringify/parse.
+    //
+    // `from` is an INCLUSIVE lower-bound seek (host-side): the child-element bytes
+    // to start at, so the scan skips members below it WITHOUT pulling-and-discarding
+    // them (each pulled key is metered). `None` scans the whole subtree. A
+    // sorted-index range query passes `Some((sort, pk)-prefix)` so `sort >= lo` is a
+    // host seek, not a guest `skip_while`.
+    fn __get_keys_from<T: KeyElement + Clone>(
+        self: &alloc::rc::Rc<Self>,
+        path: &[u8],
+        from: Option<&[u8]>,
+    ) -> impl Iterator<Item = T> + use<Self, T>;
+
+    /// Whole-subtree scan — [`__get_keys_from`] with no lower bound.
     fn __get_keys<T: KeyElement + Clone>(
         self: &alloc::rc::Rc<Self>,
         path: &[u8],
-    ) -> impl Iterator<Item = T> + use<Self, T>;
+    ) -> impl Iterator<Item = T> + use<Self, T> {
+        self.__get_keys_from(path, None)
+    }
 
     fn __exists(self: &alloc::rc::Rc<Self>, path: &[u8]) -> bool;
 

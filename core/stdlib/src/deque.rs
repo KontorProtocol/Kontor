@@ -240,9 +240,10 @@ mod tests {
         fn __exists(self: &Rc<Self>, path: &[u8]) -> bool {
             self.map.borrow().contains_key(path)
         }
-        fn __get_keys<T: KeyElement + Clone>(
+        fn __get_keys_from<T: KeyElement + Clone>(
             self: &Rc<Self>,
             _: &[u8],
+            _: Option<&[u8]>,
         ) -> impl Iterator<Item = T> + use<T> {
             core::iter::empty()
         }
