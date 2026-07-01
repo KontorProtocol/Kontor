@@ -18,23 +18,25 @@ fn active_count_is(expected: u64) -> impl Fn(&str) -> bool {
     move |value| staking::wave::get_active_count_parse_return_expr(value) == expected
 }
 
-/// Basic cluster test: start 4 validators, publish a counter contract,
-/// increment via consensus batch, verify all nodes agree on state.
+/// Consensus batch lifecycle on ONE 4-node cluster — consolidated from three
+/// former standalone tests (basic batched increment, multi-batch convergence,
+/// node restart recovery) to cut the number of concurrent clusters CI spins up,
+/// the dominant driver of macOS-runner contention. The three scenarios run in
+/// sequence on a single chain; the PHASE banners mark where a failure occurred.
+/// No coverage is lost — every assertion from the originals is preserved here.
 #[tokio::test]
-
-async fn cluster_counter_increment_via_consensus() -> Result<()> {
+async fn cluster_consensus_lifecycle() -> Result<()> {
     let _ = tracing_subscriber::fmt().with_env_filter("info").try_init();
 
-    let cluster = RegTesterCluster::setup(4, 5, 0).await?;
+    let mut cluster = RegTesterCluster::setup(4, 5, 0).await?;
 
-    // Load counter contract bytes
+    // Publish the counter once; every phase increments this same contract on the
+    // one chain (funded identity: identity + issuance each mine a block).
     let contracts = ContractReader::new("../../test-contracts").await?;
     let contract_bytes = contracts
         .read("counter")
         .await?
         .expect("counter contract not found");
-
-    // Create funded identity (identity + issuance, each mines a block)
     let (mut rt, mut ident) = cluster.identity().await?;
     let result = rt
         .instruction(
@@ -54,137 +56,68 @@ async fn cluster_counter_increment_via_consensus() -> Result<()> {
         .contract
         .parse()
         .map_err(|e: String| anyhow::anyhow!(e))?;
-
-    // Wait for all nodes to see counter at 0
-    cluster
-        .poll_all_nodes_view(
-            &contract,
-            &counter::wave::get_call_expr(),
-            120,
-            counter_is(0),
-        )
-        .await?;
-
-    // Checkpoints should match after publish
-    cluster.assert_checkpoints_match().await?;
-
-    // Send an increment transaction to mempool (don't mine)
     let contract_addr = indexer_types::ContractAddress {
         name: contract.name.clone(),
         height: contract.height,
         tx_index: contract.tx_index,
     };
+    let get = counter::wave::get_call_expr();
+
+    // One running counter shared across phases (the chain is never reset), so each
+    // assertion tracks the accumulated value and phase order stays explicit.
+    let mut expected: u64 = 0;
+    cluster
+        .poll_all_nodes_view(&contract, &get, 120, counter_is(expected))
+        .await?;
+    cluster.assert_checkpoints_match().await?;
+
+    // ===== PHASE 1: single batched increment + block-level dedup =====
+    eprintln!(
+        "===== [cluster_consensus_lifecycle] PHASE 1: single batched increment + dedup ====="
+    );
     rt.send_instruction(
         &mut ident,
         Inst {
             gas_limit: 10_000,
             kind: InstKind::Call {
-                contract: contract_addr,
+                contract: contract_addr.clone(),
                 expr: counter::wave::increment_call_expr(),
             },
         },
     )
     .await?;
-
-    // Poll until all nodes show counter = 1 (batch decided + executed)
+    expected += 1;
+    // Batch decided + executed → every node reads the new value.
     cluster
-        .poll_all_nodes_view(
-            &contract,
-            &counter::wave::get_call_expr(),
-            120,
-            counter_is(1),
-        )
+        .poll_all_nodes_view(&contract, &get, 120, counter_is(expected))
         .await?;
-
-    // Checkpoints should still match after batch execution
     let post_batch_checkpoints = cluster.assert_checkpoints_match().await?;
 
-    // Get current height, then mine a block containing the batched tx
+    // Mine the block confirming the already-batched tx; dedup ⇒ no state change.
     let pre_mine_height = cluster.client(0).index().await?.height;
     cluster.mine(1).await?;
-
-    // Wait for all nodes to process the new block
     cluster
         .poll_all_nodes_height(pre_mine_height + 1, 120)
         .await?;
-
-    // Counter should still be 1 (dedup: tx already executed via batch)
     cluster
-        .poll_all_nodes_view(
-            &contract,
-            &counter::wave::get_call_expr(),
-            120,
-            counter_is(1),
-        )
+        .poll_all_nodes_view(&contract, &get, 120, counter_is(expected))
         .await?;
-
-    // Checkpoints should remain the same (dedup produces identical state)
     let post_mine_checkpoints = cluster.assert_checkpoints_match().await?;
     assert_eq!(
         post_batch_checkpoints, post_mine_checkpoints,
-        "Checkpoints changed after mining block with already-batched tx"
+        "Checkpoints changed after mining a block with an already-batched tx"
     );
 
-    cluster.teardown().await?;
-    Ok(())
-}
-
-/// Multi-batch convergence: submit 5 increments in rapid succession,
-/// verify all nodes converge, then mine to confirm and verify dedup.
-#[tokio::test]
-
-async fn cluster_multi_batch_convergence() -> Result<()> {
-    let _ = tracing_subscriber::fmt().with_env_filter("info").try_init();
-
-    let cluster = RegTesterCluster::setup(4, 5, 0).await?;
-
-    let contracts = ContractReader::new("../../test-contracts").await?;
-    let contract_bytes = contracts
-        .read("counter")
-        .await?
-        .expect("counter contract not found");
-
-    let (mut rt, mut ident) = cluster.identity().await?;
-    let result = rt
-        .instruction(
-            &mut ident,
-            Inst {
-                gas_limit: 10_000,
-                kind: InstKind::Publish {
-                    name: "counter".to_string(),
-                    bytes: contract_bytes,
-                    provenance: sample_provenance(),
-                },
-            },
-        )
-        .await?;
-    let contract: ContractAddress = result
-        .result
-        .contract
-        .parse()
-        .map_err(|e: String| anyhow::anyhow!(e))?;
-
-    cluster
-        .poll_all_nodes_view(
-            &contract,
-            &counter::wave::get_call_expr(),
-            120,
-            counter_is(0),
-        )
-        .await?;
-
-    // Submit 5 increments, waiting for each to be batched by consensus before sending the next
-    let contract_addr = indexer_types::ContractAddress {
-        name: contract.name.clone(),
-        height: contract.height,
-        tx_index: contract.tx_index,
-    };
-    let initial_consensus_height = cluster
+    // ===== PHASE 2: rapid multi-batch convergence + block dedup =====
+    eprintln!("===== [cluster_consensus_lifecycle] PHASE 2: multi-batch convergence + dedup =====");
+    // Recapture the consensus height — phase 1 already advanced it.
+    let phase2_base = cluster
         .client(0)
         .index()
         .await?
         .consensus_height
         .unwrap_or(0);
+    // Five increments in succession, each waiting for its own batch before the next.
     for i in 0..5 {
         rt.send_instruction(
             &mut ident,
@@ -197,105 +130,34 @@ async fn cluster_multi_batch_convergence() -> Result<()> {
             },
         )
         .await?;
-
-        // Wait for all nodes to process this batch
         cluster
-            .poll_all_nodes_consensus_height(initial_consensus_height + i + 1, 120)
+            .poll_all_nodes_consensus_height(phase2_base + i + 1, 120)
             .await?;
     }
-
-    // All nodes should show counter = 5
+    expected += 5;
     cluster
-        .poll_all_nodes_view(
-            &contract,
-            &counter::wave::get_call_expr(),
-            120,
-            counter_is(5),
-        )
+        .poll_all_nodes_view(&contract, &get, 120, counter_is(expected))
         .await?;
+    let post_multibatch_checkpoints = cluster.assert_checkpoints_match().await?;
 
-    // All nodes should agree on checkpoints
-    let post_batch_checkpoints = cluster.assert_checkpoints_match().await?;
-
-    // Mine a block to confirm all batched txs
     let pre_mine_height = cluster.client(0).index().await?.height;
     cluster.mine(1).await?;
     cluster
         .poll_all_nodes_height(pre_mine_height + 1, 120)
         .await?;
-
-    // Counter should still be 5 (dedup)
     cluster
-        .poll_all_nodes_view(
-            &contract,
-            &counter::wave::get_call_expr(),
-            120,
-            counter_is(5),
-        )
+        .poll_all_nodes_view(&contract, &get, 120, counter_is(expected))
         .await?;
-
-    // Checkpoints should be unchanged (dedup produces identical state)
-    let post_mine_checkpoints = cluster.assert_checkpoints_match().await?;
+    let post_multibatch_mine_checkpoints = cluster.assert_checkpoints_match().await?;
     assert_eq!(
-        post_batch_checkpoints, post_mine_checkpoints,
-        "Checkpoints changed after mining block with already-batched txs"
+        post_multibatch_checkpoints, post_multibatch_mine_checkpoints,
+        "Checkpoints changed after mining a block with already-batched txs"
     );
 
-    cluster.teardown().await?;
-    Ok(())
-}
-
-/// Node restart: kill a node, continue batching on remaining 3,
-/// restart the killed node, verify it catches up via sync.
-#[tokio::test]
-
-async fn cluster_node_restart_recovery() -> Result<()> {
-    let _ = tracing_subscriber::fmt().with_env_filter("info").try_init();
-
-    let mut cluster = RegTesterCluster::setup(4, 5, 0).await?;
-
-    let contracts = ContractReader::new("../../test-contracts").await?;
-    let contract_bytes = contracts
-        .read("counter")
-        .await?
-        .expect("counter contract not found");
-
-    let (mut rt, mut ident) = cluster.identity().await?;
-    let result = rt
-        .instruction(
-            &mut ident,
-            Inst {
-                gas_limit: 10_000,
-                kind: InstKind::Publish {
-                    name: "counter".to_string(),
-                    bytes: contract_bytes,
-                    provenance: sample_provenance(),
-                },
-            },
-        )
-        .await?;
-    let contract: ContractAddress = result
-        .result
-        .contract
-        .parse()
-        .map_err(|e: String| anyhow::anyhow!(e))?;
-
-    cluster
-        .poll_all_nodes_view(
-            &contract,
-            &counter::wave::get_call_expr(),
-            120,
-            counter_is(0),
-        )
-        .await?;
-
-    // Batch 2 increments while all 4 nodes are up
-    let contract_addr = indexer_types::ContractAddress {
-        name: contract.name.clone(),
-        height: contract.height,
-        tx_index: contract.tx_index,
-    };
-    let initial_consensus_height = cluster
+    // ===== PHASE 3: node kill / restart catch-up via sync =====
+    eprintln!("===== [cluster_consensus_lifecycle] PHASE 3: node kill / restart catch-up =====");
+    // Two increments with all 4 nodes up.
+    let phase3_base = cluster
         .client(0)
         .index()
         .await?
@@ -314,22 +176,16 @@ async fn cluster_node_restart_recovery() -> Result<()> {
         )
         .await?;
         cluster
-            .poll_all_nodes_consensus_height(initial_consensus_height + i + 1, 120)
+            .poll_all_nodes_consensus_height(phase3_base + i + 1, 120)
             .await?;
     }
+    expected += 2;
     cluster
-        .poll_all_nodes_view(
-            &contract,
-            &counter::wave::get_call_expr(),
-            120,
-            counter_is(2),
-        )
+        .poll_all_nodes_view(&contract, &get, 120, counter_is(expected))
         .await?;
 
-    // Kill node 3
+    // Kill node 3; the remaining 3 keep quorum (3/4 > 2/3) and keep batching.
     cluster.kill_node(3).await?;
-
-    // Batch 2 more increments on remaining 3 nodes (still have quorum: 3/4 > 2/3)
     for _ in 0..2 {
         rt.send_instruction(
             &mut ident,
@@ -343,31 +199,17 @@ async fn cluster_node_restart_recovery() -> Result<()> {
         )
         .await?;
     }
-
-    // Wait for the 3 remaining nodes to show counter = 4 (node 3 is killed)
+    expected += 2;
+    // The 3 live nodes converge (poll_all_nodes_view skips the killed node).
     cluster
-        .poll_all_nodes_view(
-            &contract,
-            &counter::wave::get_call_expr(),
-            120,
-            counter_is(4),
-        )
+        .poll_all_nodes_view(&contract, &get, 120, counter_is(expected))
         .await?;
 
-    // Restart node 3
+    // Restart node 3; it must sync to the current value and re-agree on checkpoints.
     cluster.start_node(3).await?;
-
-    // Wait for ALL nodes (including restarted) to show counter = 4
     cluster
-        .poll_all_nodes_view(
-            &contract,
-            &counter::wave::get_call_expr(),
-            120,
-            counter_is(4),
-        )
+        .poll_all_nodes_view(&contract, &get, 120, counter_is(expected))
         .await?;
-
-    // All nodes (including restarted) should agree on checkpoints
     cluster.assert_checkpoints_match().await?;
 
     cluster.teardown().await?;
