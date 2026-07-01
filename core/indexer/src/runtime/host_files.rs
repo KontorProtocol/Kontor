@@ -465,6 +465,24 @@ impl built_in::deposit::HostWithStore for Runtime {
         };
         let signer_id = match holder_ref {
             HolderRef::SignerId(id) => id,
+            // An x-only pubkey reaching here is UNRESOLVED: the `floor` view resolves
+            // its holder-ref (a signers-table lookup) before calling this, so a
+            // lingering pubkey means the lookup found no signer-id. For a holder that
+            // HAS deposited that's the "unresolved-pubkey floor reads 0" symptom —
+            // typically a stale `/view` snapshot where the signer row committed with the
+            // deposit isn't visible yet. Log it (still return 0) so the otherwise-silent
+            // 0 is greppable alongside the `/view` snapshot-staleness warning.
+            HolderRef::XOnlyPubkey(pk) => {
+                tracing::warn!(
+                    target: "view_snapshot",
+                    pubkey = %pk,
+                    "storage_floor got an UNRESOLVED x-only pubkey -> returning 0; the \
+                     signer-id lookup found nothing (stale /view snapshot?), so a real \
+                     deposit would read as 0"
+                );
+                return Ok(Decimal::try_from(0u64)?);
+            }
+            // Core / burner / utxo holders own no deposits — 0 is correct, no warning.
             _ => return Ok(Decimal::try_from(0u64)?),
         };
         // O(1) read of the eager `depositor_footprint` cache (maintained in the write
