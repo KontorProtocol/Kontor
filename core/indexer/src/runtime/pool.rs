@@ -139,8 +139,8 @@ mod tests {
 
     // The operator's view cap sets ONLY `view_gas_limit`, and only on pooled
     // (read-only) runtimes. It must NEVER touch `gas_limit_for_non_procs` — the
-    // consensus core-call budget — so a too-low view cap can only break views, never
-    // starve core calls / affect consensus.
+    // fixed system budget — so a too-low view cap can only break views, never
+    // affect consensus.
     #[tokio::test]
     async fn view_cap_is_decoupled_from_core_call_budget() -> anyhow::Result<()> {
         let dir = TempDir::new()?;
@@ -157,22 +157,23 @@ mod tests {
             custom,
         )?;
         let pooled = pool.create().await.map_err(|e| anyhow::anyhow!("{e}"))?;
-        // The view cap moved...
+        // A directly-built (consensus) Runtime carries the untouched defaults.
+        let conn = new_connection(dir.path(), "consensus.db").await?;
+        let consensus =
+            Runtime::new(ComponentCache::new(), Storage::builder().conn(conn).build()).await?;
+
+        // The view cap moved on the pooled runtime...
         assert_eq!(
             pooled.view_gas_limit, custom,
             "pooled /view runtime must use the operator-configured view cap"
         );
-        // ...but the consensus core-call budget did NOT, even on the pool runtime.
+        // ...but the fixed system budget did NOT — it matches a directly-built
+        // runtime even on the pool runtime.
         assert_eq!(
-            pooled.gas_limit_for_non_procs, DEFAULT_VIEW_GAS_LIMIT,
-            "the view cap must not touch the core-call budget"
+            pooled.gas_limit_for_non_procs, consensus.gas_limit_for_non_procs,
+            "the view cap must not touch the system core-call budget"
         );
-
-        // Consensus path: a directly-built Runtime is untouched on both fields.
-        let conn = new_connection(dir.path(), "consensus.db").await?;
-        let consensus =
-            Runtime::new(ComponentCache::new(), Storage::builder().conn(conn).build()).await?;
-        assert_eq!(consensus.gas_limit_for_non_procs, DEFAULT_VIEW_GAS_LIMIT);
+        // And the consensus runtime's view field stays at the default.
         assert_eq!(consensus.view_gas_limit, DEFAULT_VIEW_GAS_LIMIT);
         Ok(())
     }

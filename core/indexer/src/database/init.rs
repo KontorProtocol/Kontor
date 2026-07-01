@@ -40,6 +40,16 @@ pub async fn initialize_database(data_dir: &Path, conn: &libsql::Connection) -> 
     conn.execute(CREATE_CONTRACT_STATE_TRIGGER, ()).await?;
     conn.query("PRAGMA journal_mode = WAL;", ()).await?;
     conn.query("PRAGMA synchronous = NORMAL;", ()).await?;
+    // Wait-and-retry on transient lock contention instead of returning
+    // `database is locked` (SQLITE_BUSY) on the first conflict. libsql 0.9.30's
+    // `connect()` never calls `sqlite3_busy_timeout`, so the default is 0 (no
+    // wait) — a prior revert removed this PRAGMA assuming libsql sets 5000 by
+    // default, which is NOT true for this version. Without it, brief WAL/checkpoint
+    // contention makes the reactor's block-write fail immediately and the node
+    // exits (flaky cluster-test node deaths). This does NOT mask SQLITE_BUSY_SNAPSHOT
+    // (a hard error a busy handler can't wait on) — that's handled separately by
+    // pinning the read-only pool `query_only = ON`.
+    conn.query("PRAGMA busy_timeout = 5000;", ()).await?;
     conn.load_extension_enable()?;
     for (name, bytes) in [("crypto", CRYPTO_LIB)] {
         let p = data_dir.join(format!("{}.{}", name, LIB_FILE_EXT));
