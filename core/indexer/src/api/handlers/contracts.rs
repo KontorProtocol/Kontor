@@ -43,39 +43,59 @@ pub async fn post_contract(
 /// on `target: "view_snapshot"` for filtering; carries the height delta + the view
 /// that raced, which is exactly what the on-node logs were missing during the
 /// storage-deposit floor-view flake investigation.
-async fn warn_if_stale_view_snapshot(env: &Env, conn: &Connection, address: &str, expr: &str) {
-    // The reactor's last-published committed tip, copied out so the `watch` borrow is
-    // released before the await. `None` = no block indexed yet → nothing to lag.
-    let Some(committed) = env.info_rx.borrow().height else {
+async fn warn_if_stale_view_snapshot(env: &Env, view_conn: &Connection, address: &str, expr: &str) {
+    // The authoritative committed tip: `MAX(height)` on a FRESH reader-pool connection
+    // — the same read path `/api/transactions` uses (hence the one the test harness's
+    // `wait_for_txids` confirms on). Deliberately NOT `info_rx.height`: that snapshot
+    // is published ASYNCHRONOUSLY after the commit, so right after a write it can still
+    // report the OLD height and mask a genuinely-stale pinned view — the exact window
+    // this diagnostic exists to catch. Comparing the two read pools directly measures
+    // "does /view lag the path that already saw the commit?", which IS the flake.
+    let committed = match env.reader.connection().await {
+        Ok(conn) => match queries::max_block_height(&conn).await {
+            Ok(h) => h,
+            Err(e) => {
+                tracing::debug!(target: "view_snapshot", error = ?e, "could not read committed tip");
+                return;
+            }
+        },
+        Err(e) => {
+            tracing::debug!(target: "view_snapshot", error = ?e, "could not acquire reader connection");
+            return;
+        }
+    };
+    // No block committed yet → nothing for the view to lag.
+    let Some(committed) = committed else {
         return;
     };
-    let visible = match queries::max_block_height(conn).await {
-        Ok(v) => v,
+    let visible = match queries::max_block_height(view_conn).await {
+        Ok(h) => h,
         Err(e) => {
             tracing::debug!(target: "view_snapshot", error = ?e, "could not read view snapshot tip");
             return;
         }
     };
-    // Trim the expr so a large view argument can't bloat the log line.
-    let expr_short: String = expr.chars().take(80).collect();
-    match visible {
-        Some(v) if v < committed => tracing::warn!(
+    // A view that sees NO blocks (`None`) or a lower tip both lag the committed tip.
+    if visible.is_none_or(|v| v < committed) {
+        let expr_short: String = expr.chars().take(80).collect();
+        tracing::warn!(
             target: "view_snapshot",
-            visible = v,
+            visible = ?visible,
             committed,
-            delta = committed - v,
+            delta = committed - visible.unwrap_or(0),
             contract = %address,
             expr = %expr_short,
             "stale /view snapshot: pool connection lags the committed tip; view may read \
              pre-commit state (missing signer/deposit → stale 0)"
-        ),
-        _ => tracing::debug!(
+        );
+    } else {
+        tracing::debug!(
             target: "view_snapshot",
             visible = ?visible,
             committed,
             contract = %address,
             "fresh /view snapshot"
-        ),
+        );
     }
 }
 

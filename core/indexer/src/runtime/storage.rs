@@ -1002,6 +1002,9 @@ mod tests {
                 .hash(new_mock_block_hash(h as u32))
                 .build()
         };
+        // Empty table → `None`; the diagnostic treats a `None` view tip as stale when
+        // the committed tip is `Some` (a view pinned before any block was visible).
+        assert_eq!(max_block_height(&view_conn).await?, None);
         insert_block(&writer_conn, block(1)).await?;
 
         // The view opens a transaction and reads — pinning its WAL snapshot at tip 1.
