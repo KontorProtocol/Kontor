@@ -111,7 +111,11 @@ impl Runtime {
         let mut table = self.table.lock().await;
         let contract_id = table.get(&resource)?.get_contract_id();
         Fuel::GetKeys.consume(accessor, self.gauge.as_ref()).await?;
-        let stream = Box::pin(self.storage.keys(contract_id, path, after, from_key).await?);
+        let stream = Box::pin(
+            self.storage
+                .keys(contract_id, path, after, from_key)
+                .await?,
+        );
         Ok(table.push(Keys { stream })?)
     }
 

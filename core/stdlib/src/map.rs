@@ -179,12 +179,18 @@ where
     Src: IndexScan<K>,
 {
     pub fn new(src: &'a Src, index_id: u8, bucket: Vec<Vec<u8>>) -> Self {
-        Self { src, index_id, bucket, _k: PhantomData }
+        Self {
+            src,
+            index_id,
+            bucket,
+            _k: PhantomData,
+        }
     }
 
     /// O(1) member count (the framework-maintained bucket count).
     pub fn len(&self) -> u64 {
-        self.src.bucket_count(self.index_id, &bucket_refs(&self.bucket))
+        self.src
+            .bucket_count(self.index_id, &bucket_refs(&self.bucket))
     }
 
     pub fn is_empty(&self) -> bool {
@@ -236,12 +242,18 @@ where
     Src: IndexScan<K>,
 {
     pub fn new(src: &'a Src, index_id: u8, bucket: Vec<Vec<u8>>) -> Self {
-        Self { src, index_id, bucket, _pd: PhantomData }
+        Self {
+            src,
+            index_id,
+            bucket,
+            _pd: PhantomData,
+        }
     }
 
     /// O(1) member count (the framework-maintained bucket count).
     pub fn len(&self) -> u64 {
-        self.src.bucket_count(self.index_id, &bucket_refs(&self.bucket))
+        self.src
+            .bucket_count(self.index_id, &bucket_refs(&self.bucket))
     }
 
     pub fn is_empty(&self) -> bool {
@@ -328,13 +340,23 @@ where
             Bound::Included(h) => Bound::Included(h.clone()),
             Bound::Excluded(h) => Bound::Excluded(h.clone()),
         };
-        Self { src, index_id, bucket, from, skip_lo, hi, _k: PhantomData }
+        Self {
+            src,
+            index_id,
+            bucket,
+            from,
+            skip_lo,
+            hi,
+            _k: PhantomData,
+        }
     }
 
     fn members(self) -> impl Iterator<Item = (S, K)> {
-        let raw = self
-            .src
-            .by_index_sorted::<S>(self.index_id, &bucket_refs(&self.bucket), self.from.as_deref());
+        let raw = self.src.by_index_sorted::<S>(
+            self.index_id,
+            &bucket_refs(&self.bucket),
+            self.from.as_deref(),
+        );
         let skip_lo = self.skip_lo;
         let hi = self.hi;
         raw.skip_while(move |(s, _)| skip_lo.as_ref().is_some_and(|lo| s <= lo))
@@ -1184,11 +1206,7 @@ mod tests {
     }
 
     impl IndexScan<String> for MockIndex {
-        fn by_index(
-            &self,
-            index_id: u8,
-            bucket: &[&[u8]],
-        ) -> impl Iterator<Item = String> + use<> {
+        fn by_index(&self, index_id: u8, bucket: &[&[u8]]) -> impl Iterator<Item = String> + use<> {
             let path = self.root.push_interned(index_id).push_raw_elements(bucket);
             self.ctx.__get_keys::<String>(&path)
         }
@@ -1229,9 +1247,13 @@ mod tests {
     #[test]
     fn sorted_query_keys_values_iter_in_order() {
         let idx = seed_sorted_bucket();
-        let q = || SortedIndexQuery::<String, u64, _>::new(&idx, nid("due"), alloc::vec![
-            "active".to_string().encode()
-        ]);
+        let q = || {
+            SortedIndexQuery::<String, u64, _>::new(
+                &idx,
+                nid("due"),
+                alloc::vec!["active".to_string().encode()],
+            )
+        };
 
         assert_eq!(q().keys().collect::<Vec<_>>(), vec!["a", "b", "c"]);
         assert_eq!(q().values().collect::<Vec<_>>(), vec![10u64, 20, 30]);
@@ -1255,30 +1277,51 @@ mod tests {
     #[test]
     fn sorted_query_range_bounds() {
         let idx = seed_sorted_bucket();
-        let q = || SortedIndexQuery::<String, u64, _>::new(&idx, nid("due"), alloc::vec![
-            "active".to_string().encode()
-        ]);
+        let q = || {
+            SortedIndexQuery::<String, u64, _>::new(
+                &idx,
+                nid("due"),
+                alloc::vec!["active".to_string().encode()],
+            )
+        };
 
         // Inclusive both ends.
-        assert_eq!(q().range(20u64..=30).keys().collect::<Vec<_>>(), vec!["b", "c"]);
+        assert_eq!(
+            q().range(20u64..=30).keys().collect::<Vec<_>>(),
+            vec!["b", "c"]
+        );
         // Half-open upper (Excluded hi).
-        assert_eq!(q().range(10u64..30).keys().collect::<Vec<_>>(), vec!["a", "b"]);
+        assert_eq!(
+            q().range(10u64..30).keys().collect::<Vec<_>>(),
+            vec!["a", "b"]
+        );
         // Exclusive lower bound drops the `== lo` member (seek then skip `sort == 10`).
         assert_eq!(
-            q().range((Bound::Excluded(10u64), Bound::Unbounded)).keys().collect::<Vec<_>>(),
+            q().range((Bound::Excluded(10u64), Bound::Unbounded))
+                .keys()
+                .collect::<Vec<_>>(),
             vec!["b", "c"]
         );
         // Unbounded lower, inclusive upper.
-        assert_eq!(q().range(..=20u64).keys().collect::<Vec<_>>(), vec!["a", "b"]);
+        assert_eq!(
+            q().range(..=20u64).keys().collect::<Vec<_>>(),
+            vec!["a", "b"]
+        );
         // Fully unbounded == the whole bucket.
-        assert_eq!(q().range(..).keys().collect::<Vec<_>>(), vec!["a", "b", "c"]);
+        assert_eq!(
+            q().range(..).keys().collect::<Vec<_>>(),
+            vec!["a", "b", "c"]
+        );
         // Empty window.
         assert_eq!(
             q().range(21u64..=29).keys().collect::<Vec<_>>(),
             Vec::<String>::new()
         );
         // A range also exposes values / (k, s).
-        assert_eq!(q().range(20u64..=30).values().collect::<Vec<_>>(), vec![20u64, 30]);
+        assert_eq!(
+            q().range(20u64..=30).values().collect::<Vec<_>>(),
+            vec![20u64, 30]
+        );
     }
 
     // The set-like query over an unsorted bucket: keys and the O(1) len/is_empty.
@@ -1286,13 +1329,29 @@ mod tests {
     fn plain_query_keys_and_len() {
         let ctx = Rc::new(Mock::default());
         let index = p("t#idx");
-        apply_index_diff(&ctx, &index, &kb("k1".to_string()), &[], &[e("status", "active")]);
-        apply_index_diff(&ctx, &index, &kb("k2".to_string()), &[], &[e("status", "active")]);
+        apply_index_diff(
+            &ctx,
+            &index,
+            &kb("k1".to_string()),
+            &[],
+            &[e("status", "active")],
+        );
+        apply_index_diff(
+            &ctx,
+            &index,
+            &kb("k2".to_string()),
+            &[],
+            &[e("status", "active")],
+        );
         let idx = MockIndex { ctx, root: index };
 
-        let q = || IndexQuery::<String, _>::new(&idx, nid("status"), alloc::vec![
-            "active".to_string().encode()
-        ]);
+        let q = || {
+            IndexQuery::<String, _>::new(
+                &idx,
+                nid("status"),
+                alloc::vec!["active".to_string().encode()],
+            )
+        };
         let mut keys = q().keys().collect::<Vec<_>>();
         keys.sort();
         assert_eq!(keys, vec!["k1".to_string(), "k2".to_string()]);

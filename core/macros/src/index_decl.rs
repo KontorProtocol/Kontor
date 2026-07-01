@@ -102,7 +102,9 @@ pub fn parse(struct_attrs: &[Attribute], fields: &FieldsNamed) -> Result<Vec<Ind
             if let Some(reason) = reserved_index_name(&ident.to_string()) {
                 return Err(Error::new(
                     ident.span(),
-                    format!("index name `{ident}` is reserved ({reason}); rename the field or use a named struct-level index"),
+                    format!(
+                        "index name `{ident}` is reserved ({reason}); rename the field or use a named struct-level index"
+                    ),
                 ));
             }
             decls.push(IndexDecl {
@@ -123,7 +125,10 @@ pub fn parse(struct_attrs: &[Attribute], fields: &FieldsNamed) -> Result<Vec<Ind
         if let Some(reason) = reserved_index_name(&args.name.to_string()) {
             return Err(Error::new_spanned(
                 &args.name,
-                format!("index name `{}` is reserved ({reason}); rename the index", args.name),
+                format!(
+                    "index name `{}` is reserved ({reason}); rename the index",
+                    args.name
+                ),
             ));
         }
         let by = args.by.unwrap_or_else(|| vec![args.name.clone()]);

@@ -1503,9 +1503,14 @@ async fn test_map_keys() -> Result<()> {
         .build();
     insert_contract_state(&conn, contract_state).await?;
 
-    let stream =
-        path_prefix_filter_contract_state(&conn, contract_id, cs_path_dotted("test.path"), None, None)
-            .await?;
+    let stream = path_prefix_filter_contract_state(
+        &conn,
+        contract_id,
+        cs_path_dotted("test.path"),
+        None,
+        None,
+    )
+    .await?;
     let paths = stream.try_collect::<Vec<Vec<u8>>>().await?;
     // Each item is the child key's codec element (one segment), deduped + ordered.
     assert_eq!(paths.len(), 3);
@@ -1610,7 +1615,8 @@ async fn test_keys_with_idx_sibling_after_update() -> Result<()> {
 
     // `keys(m)` — both members are still in the primary map (44's value row was
     // updated, not removed), regardless of index churn.
-    let stream = path_prefix_filter_contract_state(&conn, cid, cs_path_dotted(m), None, None).await?;
+    let stream =
+        path_prefix_filter_contract_state(&conn, cid, cs_path_dotted(m), None, None).await?;
     let mut keys = stream.try_collect::<Vec<Vec<u8>>>().await?;
     keys.sort();
     assert_eq!(keys, vec![cs_path(&["44"]), cs_path(&["45"])]);
@@ -2136,10 +2142,11 @@ async fn test_path_prefix_filter_after_cursor_resumes() -> Result<()> {
     }
 
     // Full scan, no cursor: every member in path order.
-    let all: Vec<Vec<u8>> = path_prefix_filter_contract_state(&conn, cid, cs_path(&["m"]), None, None)
-        .await?
-        .try_collect()
-        .await?;
+    let all: Vec<Vec<u8>> =
+        path_prefix_filter_contract_state(&conn, cid, cs_path(&["m"]), None, None)
+            .await?
+            .try_collect()
+            .await?;
     assert_eq!(
         all,
         vec![
@@ -2153,17 +2160,16 @@ async fn test_path_prefix_filter_after_cursor_resumes() -> Result<()> {
 
     // Resume after child `k2` (cursor = its child-node path `m/k2`): the remaining
     // members, no overlap with the first two.
-    let rest: Vec<Vec<u8>> =
-        path_prefix_filter_contract_state(
-            &conn,
-            cid,
-            cs_path(&["m"]),
-            Some(cs_path(&["m", "k2"])),
-            None,
-        )
-            .await?
-            .try_collect()
-            .await?;
+    let rest: Vec<Vec<u8>> = path_prefix_filter_contract_state(
+        &conn,
+        cid,
+        cs_path(&["m"]),
+        Some(cs_path(&["m", "k2"])),
+        None,
+    )
+    .await?
+    .try_collect()
+    .await?;
     assert_eq!(
         rest,
         vec![cs_path(&["k3"]), cs_path(&["k4"]), cs_path(&["k5"])]
@@ -2228,7 +2234,11 @@ async fn test_path_prefix_filter_from_key_seeks_lower_bound() -> Result<()> {
         .await?;
     }
     // Elements in ascending sort order (a=10, b=20, c=30), which is the scan order.
-    let (elem_a, elem_b, elem_c) = (members[1].1.clone(), members[2].1.clone(), members[0].1.clone());
+    let (elem_a, elem_b, elem_c) = (
+        members[1].1.clone(),
+        members[2].1.clone(),
+        members[0].1.clone(),
+    );
 
     let scan_from = async |lo: u64| -> Result<Vec<Vec<u8>>> {
         Ok(path_prefix_filter_contract_state(
@@ -2305,25 +2315,25 @@ async fn test_after_cursor_skips_whole_child_subtree() -> Result<()> {
     }
 
     // No cursor: the three distinct child keys, deduped across their subtrees.
-    let all: Vec<Vec<u8>> = path_prefix_filter_contract_state(&conn, cid, cs_path(&["m"]), None, None)
-        .await?
-        .try_collect()
-        .await?;
+    let all: Vec<Vec<u8>> =
+        path_prefix_filter_contract_state(&conn, cid, cs_path(&["m"]), None, None)
+            .await?
+            .try_collect()
+            .await?;
     assert_eq!(all, vec![cs_path(&["a"]), cs_path(&["b"]), cs_path(&["c"])]);
 
     // Resume after child `a` (cursor = its child-node path `m/a`): must skip ALL of
     // a's deeper rows and not re-emit `a`.
-    let rest: Vec<Vec<u8>> =
-        path_prefix_filter_contract_state(
-            &conn,
-            cid,
-            cs_path(&["m"]),
-            Some(cs_path(&["m", "a"])),
-            None,
-        )
-            .await?
-            .try_collect()
-            .await?;
+    let rest: Vec<Vec<u8>> = path_prefix_filter_contract_state(
+        &conn,
+        cid,
+        cs_path(&["m"]),
+        Some(cs_path(&["m", "a"])),
+        None,
+    )
+    .await?
+    .try_collect()
+    .await?;
     assert_eq!(rest, vec![cs_path(&["b"]), cs_path(&["c"])]);
 
     Ok(())
