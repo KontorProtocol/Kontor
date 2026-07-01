@@ -2258,9 +2258,22 @@ async fn test_path_prefix_filter_from_key_seeks_lower_bound() -> Result<()> {
     // Seek between members (>= 25): only c (30) qualifies.
     assert_eq!(scan_from(25).await?, vec![elem_c.clone()]);
     // Seek below everything (>= 5): the whole bucket, in order.
-    assert_eq!(scan_from(5).await?, vec![elem_a, elem_b, elem_c]);
+    assert_eq!(
+        scan_from(5).await?,
+        vec![elem_a.clone(), elem_b.clone(), elem_c.clone()]
+    );
     // Seek above everything (>= 40): empty.
     assert!(scan_from(40).await?.is_empty());
+
+    // An EMPTY `from_key` (untrusted-boundary edge — the real guest never sends one)
+    // means "no lower bound", NOT `>= path`: it must return the full bucket child-only
+    // and NOT trap on the row at the bucket prefix. Same result as `None`.
+    let empty_seek: Vec<Vec<u8>> =
+        path_prefix_filter_contract_state(&conn, cid, bucket.clone(), None, Some(Vec::new()))
+            .await?
+            .try_collect()
+            .await?;
+    assert_eq!(empty_seek, vec![elem_a, elem_b, elem_c]);
     Ok(())
 }
 

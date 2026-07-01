@@ -654,6 +654,14 @@ pub async fn path_prefix_filter_contract_state(
     // child element (a `(sort, pk)`-prefix tuple), so any child at or above it is
     // wanted. It supersedes `after` — the two never co-occur (range scans don't
     // paginate cross-call) — so a present `from_key` wins.
+    //
+    // An EMPTY `from_key` means "no lower bound" (seek to the start), NOT `>= path`:
+    // the real guest never sends one (a seek key is always a non-empty tuple
+    // element), but the host is an untrusted boundary, and `path ++ "" = path` with
+    // `>=` would wrongly include the row AT the bucket prefix (e.g. the framework
+    // bucket count), whose empty suffix then traps `next_element`. Normalize it away
+    // so the child-only `> path` invariant holds.
+    let from_key = from_key.filter(|f| !f.is_empty());
     let (lo, lo_cmp): (Vec<u8>, &str) = match (from_key, after) {
         (Some(from_key), _) => {
             let mut lo = path.clone();
