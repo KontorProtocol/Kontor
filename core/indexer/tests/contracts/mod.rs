@@ -43,7 +43,12 @@ async fn regtest_file_storage() -> anyhow::Result<()> {
     // trajectory. Sharing the cluster with other tests that mutate the file
     // ledger (e.g. `native_nft_contract` via `filestorage::create_agreement`)
     // would invalidate those roots and break the proofs.
-    let cluster = RegTesterCluster::setup(3, 300, 50).await?;
+    //
+    // Its two CI drivers pop only ~45-50 registered / ~1 unregistered, so the pool
+    // is sized to that plus headroom rather than copying the shared cluster's larger
+    // pool — this dedicated chain pays its own full registration tax on a separate
+    // bitcoind + 3 nodes, on every run.
+    let cluster = RegTesterCluster::setup(3, 64, 10).await?;
     let mut runtime = shared_cluster::build_runtime(&cluster).await?;
     file_storage::test_file_storage_regtest_e2e(&mut runtime).await?;
     file_storage::test_file_storage_regtest(&mut runtime).await?;
