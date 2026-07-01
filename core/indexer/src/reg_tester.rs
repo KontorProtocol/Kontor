@@ -148,7 +148,7 @@ async fn run_bitcoin(data_dir: &Path) -> Result<(Child, bitcoin_client::Client, 
         // error) — that's the one outcome worth retrying with fresh ports. A
         // slow-but-alive bitcoind, a wrong network, or an I/O error propagate
         // straight out: respawning on new ports wouldn't fix any of them.
-        match wait_bitcoind_ready(&mut process, &client).await? {
+        match wait_bitcoind_ready(&mut process, &client, data_dir).await? {
             BitcoindStartup::Ready => {
                 return Ok((process, client, config.bitcoin_rpc_url, zmq_port));
             }
@@ -182,6 +182,7 @@ enum BitcoindStartup {
 async fn wait_bitcoind_ready(
     process: &mut Child,
     client: &bitcoin_client::Client,
+    data_dir: &Path,
 ) -> Result<BitcoindStartup> {
     let deadline = tokio::time::Instant::now() + Duration::from_secs(65);
     loop {
@@ -195,9 +196,33 @@ async fn wait_bitcoind_ready(
             return Ok(BitcoindStartup::Ready);
         }
         if tokio::time::Instant::now() >= deadline {
-            bail!("bitcoind alive but did not answer RPC within 65s (not a port collision)");
+            // Attach bitcoind's own log so an "alive but silent" bail is
+            // diagnosable: it distinguishes a slow-but-progressing daemon (raise
+            // the budget) from a wedged one (a real bug). bitcoind writes this
+            // regardless of the `/dev/null` stdout, so it's the only window in.
+            bail!(
+                "bitcoind alive but did not answer RPC within 65s (not a port collision)\n\
+                 --- last lines of {log} ---\n{tail}",
+                log = data_dir.join("regtest/debug.log").display(),
+                tail = tail_bitcoind_debug_log(data_dir),
+            );
         }
         tokio::time::sleep(Duration::from_millis(200)).await;
+    }
+}
+
+/// Best-effort tail of bitcoind's `regtest/debug.log` for the readiness-timeout
+/// diagnostic. Returns a placeholder (never errors) if the file is missing or
+/// unreadable, so it augments the timeout message rather than replacing it.
+fn tail_bitcoind_debug_log(data_dir: &Path) -> String {
+    let path = data_dir.join("regtest/debug.log");
+    match std::fs::read_to_string(&path) {
+        Ok(contents) => {
+            let lines: Vec<&str> = contents.lines().collect();
+            let start = lines.len().saturating_sub(40);
+            lines[start..].join("\n")
+        }
+        Err(e) => format!("(could not read {}: {e})", path.display()),
     }
 }
 
