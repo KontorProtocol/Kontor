@@ -90,9 +90,8 @@ impl Parse for IndexArgs {
 }
 
 /// Parse every index a struct declares (field-level sugar + struct-level forms),
-/// validating that referenced fields exist and that names are unique. Composite
-/// (`by = (…)`) and covering (`include = …`) parse but are rejected for now —
-/// reserved grammar for later build steps, so adding them is purely additive.
+/// validating that referenced fields exist, names are unique, and any `include`
+/// (covering) fields are real, non-duplicate, and not the sort field.
 pub fn parse(struct_attrs: &[Attribute], fields: &FieldsNamed) -> Result<Vec<IndexDecl>> {
     let mut decls = Vec::new();
 
@@ -292,11 +291,25 @@ pub fn index_entry(decl: &IndexDecl, value_for: &impl Fn(&Ident) -> TokenStream)
         }
         None => quote! { None },
     };
+    // Covering projection: the `include=` fields' codec elements, tuple-packed as the
+    // leaf VALUE (`None` for a non-covering index → a void leaf). `KeyElement` (not
+    // the lossy bucket `IndexKey`) so the row decodes back to the full field values;
+    // a non-`KeyElement` include field is a compile error here.
+    let projection = if decl.include.is_empty() {
+        quote! { None }
+    } else {
+        let parts = decl.include.iter().map(|field| {
+            let val = value_for(field);
+            quote! { stdlib::KeyElement::encode(&#val).as_slice() }
+        });
+        quote! { Some(stdlib::tuple_from_elements(&[#(#parts),*])) }
+    };
     quote! {
         stdlib::IndexEntry {
             name_id: #name_id,
             bucket: alloc::vec![#(#bucket),*],
             sort: #sort,
+            projection: #projection,
         }
     }
 }

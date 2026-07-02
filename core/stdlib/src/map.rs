@@ -415,6 +415,12 @@ pub struct IndexEntry {
     pub name_id: u8,
     pub bucket: Vec<Vec<u8>>,
     pub sort: Option<Vec<u8>>,
+    /// The covering projection stored AS the leaf value: the `include=` fields'
+    /// order-preserving codec elements, tuple-packed (`None` = a plain void leaf).
+    /// It is NOT part of leaf identity (`same_leaf` ignores it) — a member whose
+    /// covered value changed keeps the same leaf path, so the diff rewrites the value
+    /// in place rather than moving the row.
+    pub projection: Option<Vec<u8>>,
 }
 
 impl IndexEntry {
@@ -510,9 +516,36 @@ pub fn apply_index_diff<S: WriteStorage + ReadStorage + ?Sized>(
     for entry in new {
         if !old.iter().any(|o| o.same_leaf(entry)) {
             let bucket = entry.bucket_path(index_root);
-            ctx.__set_void(&bucket.push_raw_element(&entry.member_element(key)));
+            write_leaf(
+                ctx,
+                &bucket.push_raw_element(&entry.member_element(key)),
+                entry,
+            );
             bump_bucket_count(ctx, &bucket, true);
         }
+    }
+    // Covering only: a member whose LEAF (name+bucket+sort) is unchanged but whose
+    // COVERED value changed keeps the same row — rewrite the leaf value in place, no
+    // membership/count change. (`same_leaf` deliberately excludes the projection, so
+    // this case is invisible to the delete/add passes above.)
+    for entry in new {
+        if let Some(prev) = old.iter().find(|o| o.same_leaf(entry))
+            && prev.projection != entry.projection
+        {
+            let leaf = entry
+                .bucket_path(index_root)
+                .push_raw_element(&entry.member_element(key));
+            write_leaf(ctx, &leaf, entry);
+        }
+    }
+}
+
+/// Write an index member's leaf: the covering projection as the value when present,
+/// else a void (unit) leaf — the two shapes an index row can take.
+fn write_leaf<S: WriteStorage + ?Sized>(ctx: &Rc<S>, leaf: &[u8], entry: &IndexEntry) {
+    match &entry.projection {
+        Some(projection) => ctx.__set_list_u8(leaf, projection.clone()),
+        None => ctx.__set_void(leaf),
     }
 }
 
@@ -585,6 +618,7 @@ mod tests {
     enum Cell {
         U64(u64),
         Void,
+        Bytes(Vec<u8>),
     }
 
     #[derive(Default)]
@@ -646,8 +680,11 @@ mod tests {
         fn __get_bool(self: &Rc<Self>, _: &[u8]) -> Option<bool> {
             unimplemented!()
         }
-        fn __get_list_u8(self: &Rc<Self>, _: &[u8]) -> Option<Vec<u8>> {
-            unimplemented!()
+        fn __get_list_u8(self: &Rc<Self>, path: &[u8]) -> Option<Vec<u8>> {
+            match self.map.borrow().get(path) {
+                Some(Cell::Bytes(v)) => Some(v.clone()),
+                _ => None,
+            }
         }
         fn __exists(self: &Rc<Self>, path: &[u8]) -> bool {
             self.map.borrow().contains_key(path)
@@ -683,8 +720,10 @@ mod tests {
         fn __set_bool(self: &Rc<Self>, _: &[u8], _: bool) {
             unimplemented!()
         }
-        fn __set_list_u8(self: &Rc<Self>, _: &[u8], _: Vec<u8>) {
-            unimplemented!()
+        fn __set_list_u8(self: &Rc<Self>, path: &[u8], value: Vec<u8>) {
+            self.map
+                .borrow_mut()
+                .insert(path.to_vec(), Cell::Bytes(value));
         }
         fn __delete_matching_paths(self: &Rc<Self>, _: &[u8], _: &[Vec<u8>]) -> u64 {
             unimplemented!()
@@ -741,6 +780,7 @@ mod tests {
             name_id: nid(name),
             bucket: alloc::vec![key.to_string().encode()],
             sort: None,
+            projection: None,
         }
     }
 
@@ -1061,6 +1101,50 @@ mod tests {
         assert_eq!(ctx.__get_u64(&b(ix(&index, "name").push("x"))), Some(2));
     }
 
+    // A covering index entry stores its projection AS the leaf value (not a void
+    // leaf), and a change to the covered value — same bucket/sort, so the SAME leaf
+    // path — rewrites that value in place: no delete/add, no count change.
+    #[test]
+    fn covering_projection_written_and_rewritten_in_place() {
+        let ctx = Rc::new(Mock::default());
+        let index = p("t#idx");
+        let entry = |proj: &[u8]| IndexEntry {
+            name_id: nid("status"),
+            bucket: alloc::vec!["active".to_string().encode()],
+            sort: None,
+            projection: Some(proj.to_vec()),
+        };
+        let leaf = b(ix(&index, "status").push("active").push("k"));
+
+        // Create: the leaf holds the projection VALUE, and the count bumps.
+        apply_index_diff(&ctx, &index, &kb("k".to_string()), &[], &[entry(b"v1")]);
+        assert_eq!(ctx.__get_list_u8(&leaf), Some(b"v1".to_vec()));
+        assert_eq!(
+            ctx.__get_u64(&b(ix(&index, "status").push("active"))),
+            Some(1)
+        );
+
+        // Same leaf, changed projection → in-place value rewrite (no delete, count 1).
+        *ctx.deletes.borrow_mut() = 0;
+        apply_index_diff(
+            &ctx,
+            &index,
+            &kb("k".to_string()),
+            &[entry(b"v1")],
+            &[entry(b"v2")],
+        );
+        assert_eq!(ctx.__get_list_u8(&leaf), Some(b"v2".to_vec()));
+        assert_eq!(
+            *ctx.deletes.borrow(),
+            0,
+            "a same-leaf projection change must not delete the row"
+        );
+        assert_eq!(
+            ctx.__get_u64(&b(ix(&index, "status").push("active"))),
+            Some(1)
+        );
+    }
+
     // A bucket segment is the field's TYPED codec element (not its decimal string):
     // a `u64` bucket is an int element, so the path is compact and a lookup that
     // encodes the same value finds the members — while the old string form ("5")
@@ -1073,6 +1157,7 @@ mod tests {
             name_id: nid("status"),
             bucket: alloc::vec![status.index_key()], // int element, not "5"
             sort: None,
+            projection: None,
         };
         apply_index_diff(&ctx, &index, &kb("k1".to_string()), &[], &[entry(5)]);
         apply_index_diff(&ctx, &index, &kb("k2".to_string()), &[], &[entry(5)]);
@@ -1098,6 +1183,7 @@ mod tests {
             name_id: nid("eligible"),
             bucket: alloc::vec![active.to_string().encode(), presence.to_string().encode()],
             sort: None,
+            projection: None,
         };
         apply_index_diff(
             &ctx,
@@ -1235,6 +1321,7 @@ mod tests {
             name_id: nid("due"),
             bucket: alloc::vec!["active".to_string().encode()],
             sort: Some(height.encode()),
+            projection: None,
         };
         apply_index_diff(&ctx, &index, &kb("c".to_string()), &[], &[entry(30)]);
         apply_index_diff(&ctx, &index, &kb("a".to_string()), &[], &[entry(10)]);
