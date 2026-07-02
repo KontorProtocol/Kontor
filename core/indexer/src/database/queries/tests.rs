@@ -2277,6 +2277,107 @@ async fn test_path_prefix_filter_from_key_seeks_lower_bound() -> Result<()> {
     Ok(())
 }
 
+// The covering value scan (`path_prefix_filter_index_rows`) — the leaf-VALUE twin of
+// the key scan. Each live member leaf yields `(member_element, projection_value)` in
+// ascending member order; it honors the same `from_key` seek, and excludes the
+// bucket-count row (which lives AT the bucket prefix, not as a child under it).
+#[tokio::test]
+async fn test_path_prefix_filter_index_rows_returns_member_and_value() -> Result<()> {
+    let (_reader, writer, _temp) = new_test_db().await?;
+    let conn = writer.connection();
+    let h = 600002;
+    insert_block(
+        &conn,
+        BlockRow::builder()
+            .height(h)
+            .hash(new_mock_block_hash(h as u32))
+            .build(),
+    )
+    .await?;
+    let tx = insert_transaction(
+        &conn,
+        TransactionRow::builder()
+            .height(h)
+            .txid(format!("dddd{:060}", 0))
+            .tx_index(0)
+            .confirmed_height(h)
+            .build(),
+    )
+    .await?;
+    let cid = 1;
+    let bucket = cs_path(&["m"]);
+    // A sorted covering member: child element is the `(sort, pk)` tuple, and the leaf
+    // VALUE is the covering projection.
+    let member = |sort: u64, pk: &str| -> Vec<u8> {
+        stdlib::tuple_from_elements(&[
+            stdlib::KeyElement::encode(&sort).as_slice(),
+            stdlib::KeyElement::encode(&pk.to_string()).as_slice(),
+        ])
+    };
+    let rows = [
+        (30u64, "c", b"cara".to_vec()),
+        (10, "a", b"ann".to_vec()),
+        (20, "b", b"bob".to_vec()),
+    ];
+    for (sort, pk, val) in &rows {
+        let mut path = bucket.clone();
+        path.extend_from_slice(&member(*sort, pk));
+        insert_contract_state(
+            &conn,
+            ContractStateRow::builder()
+                .contract_id(cid)
+                .tx_id(tx)
+                .height(h)
+                .path(path)
+                .value(val.clone())
+                .build(),
+        )
+        .await?;
+    }
+    // The framework bucket-count row lives AT the bucket prefix — it must never surface
+    // as a member (child-only `> bucket` excludes it).
+    insert_contract_state(
+        &conn,
+        ContractStateRow::builder()
+            .contract_id(cid)
+            .tx_id(tx)
+            .height(h)
+            .path(bucket.clone())
+            .value(vec![3])
+            .build(),
+    )
+    .await?;
+
+    let scan = async |from: Option<Vec<u8>>| -> Result<Vec<(Vec<u8>, Vec<u8>)>> {
+        Ok(
+            path_prefix_filter_index_rows(&conn, cid, bucket.clone(), None, from)
+                .await?
+                .try_collect()
+                .await?,
+        )
+    };
+
+    // Full scan: ascending by sort, each member paired with its covered value; the
+    // count row is excluded.
+    assert_eq!(
+        scan(None).await?,
+        vec![
+            (member(10, "a"), b"ann".to_vec()),
+            (member(20, "b"), b"bob".to_vec()),
+            (member(30, "c"), b"cara".to_vec()),
+        ]
+    );
+    // Seek `>= 20`: skips `a`, keeps `b`, `c` with their values.
+    assert_eq!(
+        scan(Some(stdlib::sort_lower_bound(&20u64))).await?,
+        vec![
+            (member(20, "b"), b"bob".to_vec()),
+            (member(30, "c"), b"cara".to_vec()),
+        ]
+    );
+    Ok(())
+}
+
 // Regression: a cursor resume must skip the last child's ENTIRE subtree, not just
 // the bare child-node path. Here each child owns several deeper rows (a struct/map
 // value), so resuming with `after = m/a` must NOT re-read `m/a/*` and re-emit `a`.
