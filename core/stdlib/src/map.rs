@@ -143,8 +143,38 @@ pub trait IndexScan<K: KeyElement + Clone> {
         from: Option<&[u8]>,
     ) -> alloc::boxed::Box<dyn Iterator<Item = (S, K)>>;
 
+    /// Raw `(member-element, projection-value)` pairs of a *covering* index bucket in
+    /// ascending member order, optionally seeked (`from`, like `by_index_sorted`). The
+    /// value-returning primitive both covering queries back onto: the member bytes
+    /// decode to `K` (unsorted) or `(S, K)` (sorted), the value bytes to the covered
+    /// projection. Left raw here (not decoded) because the projection shape is the
+    /// generated `V`'s business, not this primitive's. Boxed so a finisher names one
+    /// return type across bucket shapes.
+    fn by_index_rows(
+        &self,
+        index_id: u8,
+        bucket: &[&[u8]],
+        from: Option<&[u8]>,
+    ) -> alloc::boxed::Box<dyn Iterator<Item = (Vec<u8>, Vec<u8>)>>;
+
     /// O(1) framework-maintained member count of the `(index_id, bucket…)` bucket.
     fn bucket_count(&self, index_id: u8, bucket: &[&[u8]]) -> u64;
+}
+
+/// Decode a covering member element into its primary key `K` (unsorted member = the
+/// bare key element). The bytes came from the framework's own index write, so a decode
+/// failure is storage corruption — trap loudly.
+fn decode_key<K: KeyElement>(member: &[u8]) -> K {
+    K::decode_from(member)
+        .expect("covering index member decodes into K")
+        .0
+}
+
+/// Decode a *sorted* covering member element into `(S, K)` (the `(sort, pk)` tuple).
+fn decode_sort_key<S: KeyElement, K: KeyElement>(member: &[u8]) -> (S, K) {
+    <(S, K)>::decode_from(member)
+        .expect("sorted covering index member decodes into (S, K)")
+        .0
 }
 
 /// The inclusive lower-bound seek key for sort value `lo`: the one-field tuple
@@ -391,6 +421,303 @@ where
 {
     type Item = (K, S);
     type IntoIter = alloc::boxed::Box<dyn Iterator<Item = (K, S)> + 'a>;
+    fn into_iter(self) -> Self::IntoIter {
+        self.iter()
+    }
+}
+
+/// A lazy query over an *unsorted* COVERING index bucket — `map.<index>(bucket…)` for
+/// `#[index(include = …)]` with no `sort`. Like [`IndexQuery`], but [`values`] and
+/// [`iter`] read the covered projection straight from the index leaf — a Redis
+/// covered-column read, no per-key point lookup. `V` is the generated flat projection
+/// struct; `build` decodes it from a leaf's raw projection bytes.
+///
+/// [`values`]: Self::values
+/// [`iter`]: Self::iter
+pub struct CoveringQuery<'a, K, V, Src> {
+    src: &'a Src,
+    index_id: u8,
+    bucket: Vec<Vec<u8>>,
+    build: fn(&[u8]) -> V,
+    _k: PhantomData<K>,
+}
+
+impl<'a, K, V, Src> CoveringQuery<'a, K, V, Src>
+where
+    K: KeyElement + Clone + 'static,
+    V: 'static,
+    Src: IndexScan<K>,
+{
+    pub fn new(src: &'a Src, index_id: u8, bucket: Vec<Vec<u8>>, build: fn(&[u8]) -> V) -> Self {
+        Self {
+            src,
+            index_id,
+            bucket,
+            build,
+            _k: PhantomData,
+        }
+    }
+
+    /// O(1) member count (the framework-maintained bucket count).
+    pub fn len(&self) -> u64 {
+        self.src
+            .bucket_count(self.index_id, &bucket_refs(&self.bucket))
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+
+    fn rows(&self) -> alloc::boxed::Box<dyn Iterator<Item = (Vec<u8>, Vec<u8>)>> {
+        self.src
+            .by_index_rows(self.index_id, &bucket_refs(&self.bucket), None)
+    }
+
+    /// The bucket's primary keys (`BTreeSet::keys`) — the member without its value.
+    pub fn keys(self) -> alloc::boxed::Box<dyn Iterator<Item = K> + 'a> {
+        alloc::boxed::Box::new(self.rows().map(|(m, _)| decode_key::<K>(&m)))
+    }
+
+    /// The covered projection `V` of each member (`BTreeMap::values`) — read from the
+    /// index leaf, no per-key point lookup.
+    pub fn values(self) -> alloc::boxed::Box<dyn Iterator<Item = V> + 'a> {
+        let build = self.build;
+        alloc::boxed::Box::new(self.rows().map(move |(_, v)| build(&v)))
+    }
+
+    /// `(key, value)` pairs (`BTreeMap::iter`; key-first like `(K, V)`), the value
+    /// covered from the leaf.
+    pub fn iter(self) -> alloc::boxed::Box<dyn Iterator<Item = (K, V)> + 'a> {
+        let build = self.build;
+        alloc::boxed::Box::new(self.rows().map(move |(m, v)| (decode_key::<K>(&m), build(&v))))
+    }
+}
+
+impl<'a, K, V, Src> IntoIterator for CoveringQuery<'a, K, V, Src>
+where
+    K: KeyElement + Clone + 'static,
+    V: 'static,
+    Src: IndexScan<K>,
+{
+    type Item = (K, V);
+    type IntoIter = alloc::boxed::Box<dyn Iterator<Item = (K, V)> + 'a>;
+    fn into_iter(self) -> Self::IntoIter {
+        self.iter()
+    }
+}
+
+/// A lazy query over a *sorted* COVERING index bucket — `map.<index>(bucket…)` for
+/// `#[index(sort = …, include = …)]`. Redis sorted-set + covered columns:
+/// [`keys`](Self::keys) is `ZRANGE`, [`with_scores`](Self::with_scores) is `ZRANGE
+/// WITHSCORES` (the light `(K, S)` view), and [`values`](Self::values)/
+/// [`iter`](Self::iter) read the covered projection `V` from the leaf. `V` is the
+/// generated flat struct (the sort field plus the `include=` fields); `build` assembles
+/// it from the member's sort value and the leaf's raw projection bytes. `len`/`is_empty`
+/// are O(1).
+pub struct SortedCoveringQuery<'a, K, S, V, Src> {
+    src: &'a Src,
+    index_id: u8,
+    bucket: Vec<Vec<u8>>,
+    build: fn(&S, &[u8]) -> V,
+    _pd: PhantomData<(K, S)>,
+}
+
+impl<'a, K, S, V, Src> SortedCoveringQuery<'a, K, S, V, Src>
+where
+    K: KeyElement + Clone + 'static,
+    S: KeyElement + Clone + 'static,
+    V: 'static,
+    Src: IndexScan<K>,
+{
+    pub fn new(
+        src: &'a Src,
+        index_id: u8,
+        bucket: Vec<Vec<u8>>,
+        build: fn(&S, &[u8]) -> V,
+    ) -> Self {
+        Self {
+            src,
+            index_id,
+            bucket,
+            build,
+            _pd: PhantomData,
+        }
+    }
+
+    /// O(1) member count (the framework-maintained bucket count).
+    pub fn len(&self) -> u64 {
+        self.src
+            .bucket_count(self.index_id, &bucket_refs(&self.bucket))
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+
+    fn rows(&self, from: Option<&[u8]>) -> alloc::boxed::Box<dyn Iterator<Item = (Vec<u8>, Vec<u8>)>> {
+        self.src
+            .by_index_rows(self.index_id, &bucket_refs(&self.bucket), from)
+    }
+
+    /// Primary keys in sort order (`ZRANGE`).
+    pub fn keys(self) -> alloc::boxed::Box<dyn Iterator<Item = K> + 'a> {
+        alloc::boxed::Box::new(self.rows(None).map(|(m, _)| decode_sort_key::<S, K>(&m).1))
+    }
+
+    /// `(key, score)` pairs in sort order (`ZRANGE WITHSCORES`) — the light view that
+    /// skips the covered projection.
+    pub fn with_scores(self) -> alloc::boxed::Box<dyn Iterator<Item = (K, S)> + 'a> {
+        alloc::boxed::Box::new(self.rows(None).map(|(m, _)| {
+            let (s, k) = decode_sort_key::<S, K>(&m);
+            (k, s)
+        }))
+    }
+
+    /// The covered projection `V` of each member in sort order (`BTreeMap::values`).
+    pub fn values(self) -> alloc::boxed::Box<dyn Iterator<Item = V> + 'a> {
+        let build = self.build;
+        alloc::boxed::Box::new(self.rows(None).map(move |(m, v)| {
+            let (s, _) = decode_sort_key::<S, K>(&m);
+            build(&s, &v)
+        }))
+    }
+
+    /// `(key, value)` pairs in sort order (`BTreeMap::iter`), the value covered from
+    /// the leaf.
+    pub fn iter(self) -> alloc::boxed::Box<dyn Iterator<Item = (K, V)> + 'a> {
+        let build = self.build;
+        alloc::boxed::Box::new(self.rows(None).map(move |(m, v)| {
+            let (s, k) = decode_sort_key::<S, K>(&m);
+            (k, build(&s, &v))
+        }))
+    }
+
+    /// Restrict to members whose sort value lies in `range` (`BTreeMap::range` /
+    /// `ZRANGEBYSCORE`). The lower bound becomes a host-side seek; the upper early-breaks.
+    pub fn range(self, range: impl RangeBounds<S>) -> SortedCoveringRange<'a, K, S, V, Src>
+    where
+        S: PartialOrd,
+    {
+        SortedCoveringRange::new(self.src, self.index_id, self.bucket, self.build, &range)
+    }
+}
+
+impl<'a, K, S, V, Src> IntoIterator for SortedCoveringQuery<'a, K, S, V, Src>
+where
+    K: KeyElement + Clone + 'static,
+    S: KeyElement + Clone + 'static,
+    V: 'static,
+    Src: IndexScan<K>,
+{
+    type Item = (K, V);
+    type IntoIter = alloc::boxed::Box<dyn Iterator<Item = (K, V)> + 'a>;
+    fn into_iter(self) -> Self::IntoIter {
+        self.iter()
+    }
+}
+
+/// A sort-value-bounded view of a [`SortedCoveringQuery`], from [`range`]. Same
+/// `keys`/`with_scores`/`values`/`iter` finishers, no O(1) `len` (a range's size isn't
+/// a stored count).
+///
+/// [`range`]: SortedCoveringQuery::range
+pub struct SortedCoveringRange<'a, K, S, V, Src> {
+    src: &'a Src,
+    index_id: u8,
+    bucket: Vec<Vec<u8>>,
+    build: fn(&S, &[u8]) -> V,
+    from: Option<Vec<u8>>,
+    skip_lo: Option<S>,
+    hi: Bound<S>,
+    _k: PhantomData<K>,
+}
+
+impl<'a, K, S, V, Src> SortedCoveringRange<'a, K, S, V, Src>
+where
+    K: KeyElement + Clone + 'static,
+    S: KeyElement + Clone + PartialOrd + 'static,
+    V: 'static,
+    Src: IndexScan<K>,
+{
+    fn new(
+        src: &'a Src,
+        index_id: u8,
+        bucket: Vec<Vec<u8>>,
+        build: fn(&S, &[u8]) -> V,
+        range: &impl RangeBounds<S>,
+    ) -> Self {
+        let (from, skip_lo) = match range.start_bound() {
+            Bound::Unbounded => (None, None),
+            Bound::Included(lo) => (Some(sort_lower_bound(lo)), None),
+            Bound::Excluded(lo) => (Some(sort_lower_bound(lo)), Some(lo.clone())),
+        };
+        let hi = match range.end_bound() {
+            Bound::Unbounded => Bound::Unbounded,
+            Bound::Included(h) => Bound::Included(h.clone()),
+            Bound::Excluded(h) => Bound::Excluded(h.clone()),
+        };
+        Self {
+            src,
+            index_id,
+            bucket,
+            build,
+            from,
+            skip_lo,
+            hi,
+            _k: PhantomData,
+        }
+    }
+
+    // The raw `((S, K), value)` members within the seek/bound window; every finisher
+    // maps over this. Decodes the member once (for the sort comparison) and threads the
+    // still-raw value bytes so only the finisher that needs `V` pays to build it.
+    fn members(self) -> impl Iterator<Item = ((S, K), Vec<u8>)> {
+        let raw = self
+            .src
+            .by_index_rows(self.index_id, &bucket_refs(&self.bucket), self.from.as_deref());
+        let skip_lo = self.skip_lo;
+        let hi = self.hi;
+        raw.map(|(m, v)| (decode_sort_key::<S, K>(&m), v))
+            .skip_while(move |((s, _), _)| skip_lo.as_ref().is_some_and(|lo| s <= lo))
+            .take_while(move |((s, _), _)| match &hi {
+                Bound::Unbounded => true,
+                Bound::Included(h) => s <= h,
+                Bound::Excluded(h) => s < h,
+            })
+    }
+
+    /// Primary keys within the range, in sort order.
+    pub fn keys(self) -> alloc::boxed::Box<dyn Iterator<Item = K> + 'a> {
+        alloc::boxed::Box::new(self.members().map(|((_, k), _)| k))
+    }
+
+    /// `(key, score)` pairs within the range, in sort order.
+    pub fn with_scores(self) -> alloc::boxed::Box<dyn Iterator<Item = (K, S)> + 'a> {
+        alloc::boxed::Box::new(self.members().map(|((s, k), _)| (k, s)))
+    }
+
+    /// Covered projections within the range, in sort order.
+    pub fn values(self) -> alloc::boxed::Box<dyn Iterator<Item = V> + 'a> {
+        let build = self.build;
+        alloc::boxed::Box::new(self.members().map(move |((s, _), v)| build(&s, &v)))
+    }
+
+    /// `(key, value)` pairs within the range, in sort order.
+    pub fn iter(self) -> alloc::boxed::Box<dyn Iterator<Item = (K, V)> + 'a> {
+        let build = self.build;
+        alloc::boxed::Box::new(self.members().map(move |((s, k), v)| (k, build(&s, &v))))
+    }
+}
+
+impl<'a, K, S, V, Src> IntoIterator for SortedCoveringRange<'a, K, S, V, Src>
+where
+    K: KeyElement + Clone + 'static,
+    S: KeyElement + Clone + PartialOrd + 'static,
+    V: 'static,
+    Src: IndexScan<K>,
+{
+    type Item = (K, V);
+    type IntoIter = alloc::boxed::Box<dyn Iterator<Item = (K, V)> + 'a>;
     fn into_iter(self) -> Self::IntoIter {
         self.iter()
     }
@@ -667,6 +994,40 @@ mod tests {
                     let (v, _) = T::decode_from(&e).unwrap();
                     v
                 })
+        }
+        fn __get_index_rows(
+            self: &Rc<Self>,
+            path: &[u8],
+            from: Option<&[u8]>,
+        ) -> impl Iterator<Item = (Vec<u8>, Vec<u8>)> + use<> {
+            // Direct-child leaves under `path`, as (member-element, leaf value bytes) —
+            // the covering projection is stored as list_u8 (`Cell::Bytes`). Mirrors the
+            // host's member extraction + inclusive `from` seek; the count row (at
+            // exactly `path`) is excluded by the non-empty-suffix check.
+            let mut rows: Vec<(Vec<u8>, Vec<u8>)> = self
+                .map
+                .borrow()
+                .iter()
+                .filter_map(|(k, cell)| {
+                    let rest = k.as_slice().strip_prefix(path)?;
+                    if rest.is_empty() {
+                        return None;
+                    }
+                    let (elem, tail) = next_element(rest).ok()?;
+                    if !tail.is_empty() {
+                        return None; // not a direct leaf
+                    }
+                    match cell {
+                        Cell::Bytes(v) => Some((elem.to_vec(), v.clone())),
+                        _ => None,
+                    }
+                })
+                .collect();
+            rows.sort();
+            rows.dedup_by(|a, b| a.0 == b.0);
+            let from = from.map(<[u8]>::to_vec);
+            rows.into_iter()
+                .filter(move |(m, _)| from.as_deref().is_none_or(|f| m.as_slice() >= f))
         }
         fn __get<T: crate::Retrieve<Self>>(self: &Rc<Self>, path: KeyPath) -> Option<T> {
             T::__get(self, path)
@@ -1307,6 +1668,16 @@ mod tests {
             alloc::boxed::Box::new(self.ctx.__get_keys_from::<(S, String)>(&path, from))
         }
 
+        fn by_index_rows(
+            &self,
+            index_id: u8,
+            bucket: &[&[u8]],
+            from: Option<&[u8]>,
+        ) -> alloc::boxed::Box<dyn Iterator<Item = (Vec<u8>, Vec<u8>)>> {
+            let path = self.root.push_interned(index_id).push_raw_elements(bucket);
+            alloc::boxed::Box::new(self.ctx.__get_index_rows(&path, from))
+        }
+
         fn bucket_count(&self, index_id: u8, bucket: &[&[u8]]) -> u64 {
             let path = self.root.push_interned(index_id).push_raw_elements(bucket);
             self.ctx.__get_u64(&path).unwrap_or(0)
@@ -1445,5 +1816,164 @@ mod tests {
         assert_eq!(q().len(), 2);
         assert!(!q().is_empty());
         assert_eq!(q().into_iter().count(), 2);
+    }
+
+    // Assemble the covered projection `V` from a leaf's raw bytes — what the generated
+    // per-index `build` fn does. Unsorted: V is just the included field(s). Sorted: the
+    // sort value arrives separately (it's free in the member), plus the includes.
+    fn build_name(proj: &[u8]) -> String {
+        String::decode_from(proj).expect("covering projection decodes").0
+    }
+    fn build_due(sort: &u64, proj: &[u8]) -> (u64, String) {
+        (*sort, String::decode_from(proj).expect("covering projection decodes").0)
+    }
+
+    // Seed an UNSORTED covering bucket (`status` index covering a `name` field): the
+    // leaf holds the name as its projection value.
+    fn seed_covering_bucket() -> MockIndex {
+        let ctx = Rc::new(Mock::default());
+        let index = p("t#idx");
+        let entry = |name: &str| IndexEntry {
+            name_id: nid("status"),
+            bucket: alloc::vec!["active".to_string().encode()],
+            sort: None,
+            projection: Some(name.to_string().encode()),
+        };
+        apply_index_diff(&ctx, &index, &kb("k1".to_string()), &[], &[entry("alice")]);
+        apply_index_diff(&ctx, &index, &kb("k2".to_string()), &[], &[entry("bob")]);
+        MockIndex { ctx, root: index }
+    }
+
+    // The unsorted covering query: keys() is the members, values() the covered
+    // projection read straight from the leaf, iter() the (key, value) pairs.
+    #[test]
+    fn covering_query_keys_values_iter() {
+        let idx = seed_covering_bucket();
+        let q = || {
+            CoveringQuery::<String, String, _>::new(
+                &idx,
+                nid("status"),
+                alloc::vec!["active".to_string().encode()],
+                build_name,
+            )
+        };
+
+        let mut keys = q().keys().collect::<Vec<_>>();
+        keys.sort();
+        assert_eq!(keys, vec!["k1".to_string(), "k2".to_string()]);
+        let mut values = q().values().collect::<Vec<_>>();
+        values.sort();
+        assert_eq!(values, vec!["alice".to_string(), "bob".to_string()]);
+        let mut pairs = q().iter().collect::<Vec<_>>();
+        pairs.sort();
+        assert_eq!(
+            pairs,
+            vec![
+                ("k1".to_string(), "alice".to_string()),
+                ("k2".to_string(), "bob".to_string())
+            ]
+        );
+        assert_eq!(q().len(), 2);
+        assert!(!q().is_empty());
+        assert_eq!(q().into_iter().count(), 2);
+    }
+
+    // Seed a SORTED covering bucket (`due` index sorted by a u64 height, covering
+    // `name`) out of order: member is `(height, pk)`, value is the name.
+    fn seed_sorted_covering_bucket() -> MockIndex {
+        let ctx = Rc::new(Mock::default());
+        let index = p("t#idx");
+        let entry = |height: u64, name: &str| IndexEntry {
+            name_id: nid("due"),
+            bucket: alloc::vec!["active".to_string().encode()],
+            sort: Some(height.encode()),
+            projection: Some(name.to_string().encode()),
+        };
+        apply_index_diff(&ctx, &index, &kb("c".to_string()), &[], &[entry(30, "cara")]);
+        apply_index_diff(&ctx, &index, &kb("a".to_string()), &[], &[entry(10, "ann")]);
+        apply_index_diff(&ctx, &index, &kb("b".to_string()), &[], &[entry(20, "bob")]);
+        MockIndex { ctx, root: index }
+    }
+
+    // The sorted covering query walks in value order and exposes keys (ZRANGE),
+    // with_scores (ZRANGE WITHSCORES), values (covered V), and iter (K, V).
+    #[test]
+    fn sorted_covering_query_finishers_in_order() {
+        let idx = seed_sorted_covering_bucket();
+        let q = || {
+            SortedCoveringQuery::<String, u64, (u64, String), _>::new(
+                &idx,
+                nid("due"),
+                alloc::vec!["active".to_string().encode()],
+                build_due,
+            )
+        };
+
+        assert_eq!(q().keys().collect::<Vec<_>>(), vec!["a", "b", "c"]);
+        assert_eq!(
+            q().with_scores().collect::<Vec<_>>(),
+            vec![
+                ("a".to_string(), 10u64),
+                ("b".to_string(), 20),
+                ("c".to_string(), 30)
+            ]
+        );
+        assert_eq!(
+            q().values().collect::<Vec<_>>(),
+            vec![
+                (10u64, "ann".to_string()),
+                (20, "bob".to_string()),
+                (30, "cara".to_string())
+            ]
+        );
+        assert_eq!(
+            q().iter().collect::<Vec<_>>(),
+            vec![
+                ("a".to_string(), (10u64, "ann".to_string())),
+                ("b".to_string(), (20, "bob".to_string())),
+                ("c".to_string(), (30, "cara".to_string())),
+            ]
+        );
+        assert_eq!(q().len(), 3);
+        assert_eq!(q().into_iter().count(), 3);
+    }
+
+    // The sorted covering range: an inclusive/exclusive lower bound is a host-side
+    // seek, the upper early-breaks — over all four finishers.
+    #[test]
+    fn sorted_covering_query_range_bounds() {
+        let idx = seed_sorted_covering_bucket();
+        let q = || {
+            SortedCoveringQuery::<String, u64, (u64, String), _>::new(
+                &idx,
+                nid("due"),
+                alloc::vec!["active".to_string().encode()],
+                build_due,
+            )
+        };
+
+        assert_eq!(
+            q().range(20u64..=30).keys().collect::<Vec<_>>(),
+            vec!["b", "c"]
+        );
+        assert_eq!(
+            q().range(20u64..=30).values().collect::<Vec<_>>(),
+            vec![(20u64, "bob".to_string()), (30, "cara".to_string())]
+        );
+        // Exclusive lower bound drops the `== lo` member (seek then skip `sort == 10`).
+        assert_eq!(
+            q().range((Bound::Excluded(10u64), Bound::Unbounded))
+                .with_scores()
+                .collect::<Vec<_>>(),
+            vec![("b".to_string(), 20u64), ("c".to_string(), 30)]
+        );
+        // Half-open upper.
+        assert_eq!(
+            q().range(10u64..30).iter().collect::<Vec<_>>(),
+            vec![
+                ("a".to_string(), (10u64, "ann".to_string())),
+                ("b".to_string(), (20, "bob".to_string()))
+            ]
+        );
     }
 }

@@ -198,6 +198,11 @@ pub fn generate_struct(
                                     alloc::boxed::Box::new(stdlib::ReadStorage::__get_keys_from::<(S, #k_ty)>(&self.ctx, &bucket, from))
                                 }
 
+                                fn by_index_rows(&self, index_id: u8, bucket: &[&[u8]], from: Option<&[u8]>) -> alloc::boxed::Box<dyn Iterator<Item = (alloc::vec::Vec<u8>, alloc::vec::Vec<u8>)>> {
+                                    let bucket = self.index_path.push_interned(index_id).push_raw_elements(bucket);
+                                    alloc::boxed::Box::new(stdlib::ReadStorage::__get_index_rows(&self.ctx, &bucket, from))
+                                }
+
                                 fn bucket_count(&self, index_id: u8, bucket: &[&[u8]]) -> u64 {
                                     let bucket = self.index_path.push_interned(index_id).push_raw_elements(bucket);
                                     stdlib::ReadStorage::__get_u64(&self.ctx, &bucket).unwrap_or(0)

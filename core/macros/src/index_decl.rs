@@ -229,7 +229,8 @@ fn field_exists(fields: &FieldsNamed, ident: &Ident) -> bool {
 /// any codegen) so the derive fails with just this error.
 fn reserved_index_name(name: &str) -> Option<&'static str> {
     const MAP_SURFACE: &[&str] = &["get", "set", "keys", "load", "remove", "new"];
-    const QUERY_FINISHERS: &[&str] = &["iter", "values", "range", "len", "is_empty", "count"];
+    const QUERY_FINISHERS: &[&str] =
+        &["iter", "values", "range", "len", "is_empty", "count", "with_scores"];
     const PRIMITIVES: &[&str] = &["by_index", "by_index_sorted", "bucket_count"];
     if MAP_SURFACE.contains(&name) {
         Some("shadows the map accessor of the same name")
@@ -291,18 +292,24 @@ pub fn index_entry(decl: &IndexDecl, value_for: &impl Fn(&Ident) -> TokenStream)
         }
         None => quote! { None },
     };
-    // Covering projection: the `include=` fields' codec elements, tuple-packed as the
-    // leaf VALUE (`None` for a non-covering index → a void leaf). `KeyElement` (not
-    // the lossy bucket `IndexKey`) so the row decodes back to the full field values;
-    // a non-`KeyElement` include field is a compile error here.
+    // Covering projection: the `include=` fields' codec elements CONCATENATED as the
+    // leaf VALUE (`None` for a non-covering index → a void leaf). Each `encode` is a
+    // self-delimiting `KeyElement` (not the lossy bucket `IndexKey`), so the reader
+    // decodes them back field-by-field in order — no tuple wrapper (keycodec has no
+    // 1-tuple decode, and the projection is an opaque VALUE, never a walked path
+    // element). A non-`KeyElement` include field is a compile error here.
     let projection = if decl.include.is_empty() {
         quote! { None }
     } else {
         let parts = decl.include.iter().map(|field| {
             let val = value_for(field);
-            quote! { stdlib::KeyElement::encode(&#val).as_slice() }
+            quote! { __proj.extend_from_slice(&stdlib::KeyElement::encode(&#val)); }
         });
-        quote! { Some(stdlib::tuple_from_elements(&[#(#parts),*])) }
+        quote! {{
+            let mut __proj = alloc::vec::Vec::new();
+            #(#parts)*
+            Some(__proj)
+        }}
     };
     quote! {
         stdlib::IndexEntry {

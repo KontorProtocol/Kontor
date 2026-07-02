@@ -127,6 +127,7 @@ fn indexed_struct_tokens(input: &DeriveInput) -> proc_macro2::TokenStream {
     let has_indexes = !decls.is_empty();
     let body = indexed::generate_index_entries(&decls);
     let lookup_trait = indexed::generate_lookup_trait(&decls, fields, name);
+    let covering_values = indexed::generate_covering_value_structs(&decls, fields, name);
     quote! {
         #[automatically_derived]
         impl stdlib::Indexed for #name {
@@ -135,6 +136,8 @@ fn indexed_struct_tokens(input: &DeriveInput) -> proc_macro2::TokenStream {
                 #body
             }
         }
+
+        #covering_values
 
         #lookup_trait
     }

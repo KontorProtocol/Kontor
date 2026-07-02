@@ -52,12 +52,14 @@ impl ChallengeModel {
                 name_id: 0u8,
                 bucket: (/*ERROR*/),
                 sort: None,
+                projection: None,
             });
         entries
             .push(stdlib::IndexEntry {
                 name_id: 1u8,
                 bucket: (/*ERROR*/),
                 sort: Some(stdlib::KeyElement::encode(&__idx_deadline)),
+                projection: None,
             });
         entries
     }
@@ -151,11 +153,13 @@ impl ChallengeWriteModel {
                         name_id: 0u8,
                         bucket: (/*ERROR*/),
                         sort: None,
+                        projection: None,
                     },
                     stdlib::IndexEntry {
                         name_id: 1u8,
                         bucket: (/*ERROR*/),
                         sort: Some(stdlib::KeyElement::encode(&__idx_deadline)),
+                        projection: None,
                     },
                 ],
                 &[
@@ -163,11 +167,13 @@ impl ChallengeWriteModel {
                         name_id: 0u8,
                         bucket: (/*ERROR*/),
                         sort: None,
+                        projection: None,
                     },
                     stdlib::IndexEntry {
                         name_id: 1u8,
                         bucket: (/*ERROR*/),
                         sort: Some(stdlib::KeyElement::encode(&__idx_deadline)),
+                        projection: None,
                     },
                 ],
             );
@@ -189,11 +195,13 @@ impl ChallengeWriteModel {
                         name_id: 0u8,
                         bucket: (/*ERROR*/),
                         sort: None,
+                        projection: None,
                     },
                     stdlib::IndexEntry {
                         name_id: 1u8,
                         bucket: (/*ERROR*/),
                         sort: Some(stdlib::KeyElement::encode(&__idx_deadline)),
+                        projection: None,
                     },
                 ],
                 &[
@@ -201,11 +209,13 @@ impl ChallengeWriteModel {
                         name_id: 0u8,
                         bucket: (/*ERROR*/),
                         sort: None,
+                        projection: None,
                     },
                     stdlib::IndexEntry {
                         name_id: 1u8,
                         bucket: (/*ERROR*/),
                         sort: Some(stdlib::KeyElement::encode(&__idx_deadline)),
+                        projection: None,
                     },
                 ],
             );
@@ -230,11 +240,13 @@ impl ChallengeWriteModel {
                         name_id: 0u8,
                         bucket: (/*ERROR*/),
                         sort: None,
+                        projection: None,
                     },
                     stdlib::IndexEntry {
                         name_id: 1u8,
                         bucket: (/*ERROR*/),
                         sort: Some(stdlib::KeyElement::encode(&__idx_deadline)),
+                        projection: None,
                     },
                 ],
                 &[
@@ -242,11 +254,13 @@ impl ChallengeWriteModel {
                         name_id: 0u8,
                         bucket: (/*ERROR*/),
                         sort: None,
+                        projection: None,
                     },
                     stdlib::IndexEntry {
                         name_id: 1u8,
                         bucket: (/*ERROR*/),
                         sort: Some(stdlib::KeyElement::encode(&__idx_deadline)),
+                        projection: None,
                     },
                 ],
             );
@@ -269,6 +283,7 @@ impl ChallengeWriteModel {
                         name_id: 1u8,
                         bucket: (/*ERROR*/),
                         sort: Some(stdlib::KeyElement::encode(&old)),
+                        projection: None,
                     },
                 ],
                 &[
@@ -276,6 +291,7 @@ impl ChallengeWriteModel {
                         name_id: 1u8,
                         bucket: (/*ERROR*/),
                         sort: Some(stdlib::KeyElement::encode(&new)),
+                        projection: None,
                     },
                 ],
             );
@@ -297,6 +313,7 @@ impl ChallengeWriteModel {
                         name_id: 1u8,
                         bucket: (/*ERROR*/),
                         sort: Some(stdlib::KeyElement::encode(&old)),
+                        projection: None,
                     },
                 ],
                 &[
@@ -304,6 +321,7 @@ impl ChallengeWriteModel {
                         name_id: 1u8,
                         bucket: (/*ERROR*/),
                         sort: Some(stdlib::KeyElement::encode(&new)),
+                        projection: None,
                     },
                 ],
             );
@@ -328,6 +346,7 @@ impl ChallengeWriteModel {
                         name_id: 1u8,
                         bucket: (/*ERROR*/),
                         sort: Some(stdlib::KeyElement::encode(&old)),
+                        projection: None,
                     },
                 ],
                 &[
@@ -335,6 +354,7 @@ impl ChallengeWriteModel {
                         name_id: 1u8,
                         bucket: (/*ERROR*/),
                         sort: Some(stdlib::KeyElement::encode(&new)),
+                        projection: None,
                     },
                 ],
             );
@@ -366,12 +386,14 @@ impl stdlib::Indexed for Challenge {
                 name_id: 0u8,
                 bucket: (/*ERROR*/),
                 sort: None,
+                projection: None,
             });
         entries
             .push(stdlib::IndexEntry {
                 name_id: 1u8,
                 bucket: (/*ERROR*/),
                 sort: Some(stdlib::KeyElement::encode(&self.deadline)),
+                projection: None,
             });
         entries
     }
@@ -470,6 +492,19 @@ impl stdlib::IndexScan<u64> for ChallengeStorageChallengesModel {
         let bucket = self.index_path.push_interned(index_id).push_raw_elements(bucket);
         alloc::boxed::Box::new(
             stdlib::ReadStorage::__get_keys_from::<(S, u64)>(&self.ctx, &bucket, from),
+        )
+    }
+    fn by_index_rows(
+        &self,
+        index_id: u8,
+        bucket: &[&[u8]],
+        from: Option<&[u8]>,
+    ) -> alloc::boxed::Box<
+        dyn Iterator<Item = (alloc::vec::Vec<u8>, alloc::vec::Vec<u8>)>,
+    > {
+        let bucket = self.index_path.push_interned(index_id).push_raw_elements(bucket);
+        alloc::boxed::Box::new(
+            stdlib::ReadStorage::__get_index_rows(&self.ctx, &bucket, from),
         )
     }
     fn bucket_count(&self, index_id: u8, bucket: &[&[u8]]) -> u64 {
@@ -613,6 +648,19 @@ impl stdlib::IndexScan<u64> for ChallengeStorageChallengesWriteModel {
         let bucket = self.index_path.push_interned(index_id).push_raw_elements(bucket);
         alloc::boxed::Box::new(
             stdlib::ReadStorage::__get_keys_from::<(S, u64)>(&self.ctx, &bucket, from),
+        )
+    }
+    fn by_index_rows(
+        &self,
+        index_id: u8,
+        bucket: &[&[u8]],
+        from: Option<&[u8]>,
+    ) -> alloc::boxed::Box<
+        dyn Iterator<Item = (alloc::vec::Vec<u8>, alloc::vec::Vec<u8>)>,
+    > {
+        let bucket = self.index_path.push_interned(index_id).push_raw_elements(bucket);
+        alloc::boxed::Box::new(
+            stdlib::ReadStorage::__get_index_rows(&self.ctx, &bucket, from),
         )
     }
     fn bucket_count(&self, index_id: u8, bucket: &[&[u8]]) -> u64 {

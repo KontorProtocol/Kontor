@@ -190,6 +190,12 @@ pub fn generate(config: Config) -> TokenStream {
             }
         }
 
+        impl stdlib::HasNextRow for context::IndexRows {
+            fn next(&self) -> Option<(Vec<u8>, Vec<u8>)> {
+                self.next()
+            }
+        }
+
         #[automatically_derived]
         impl stdlib::ReadStorage for context::ViewStorage {
             fn __get_str(self: &alloc::rc::Rc<Self>, path: &[u8]) -> Option<String> {
@@ -214,6 +220,10 @@ pub fn generate(config: Config) -> TokenStream {
 
             fn __get_keys_from<T: stdlib::KeyElement + Clone>(self: &alloc::rc::Rc<Self>, path: &[u8], from: Option<&[u8]>) -> impl Iterator<Item = T> + use<T> {
                 stdlib::make_keys_iterator(self.get_keys(path, None, from))
+            }
+
+            fn __get_index_rows(self: &alloc::rc::Rc<Self>, path: &[u8], from: Option<&[u8]>) -> impl Iterator<Item = (Vec<u8>, Vec<u8>)> + use<> {
+                stdlib::make_index_rows_iterator(self.get_index_rows(path, None, from))
             }
 
             fn __exists(self: &alloc::rc::Rc<Self>, path: &[u8]) -> bool {
@@ -253,6 +263,10 @@ pub fn generate(config: Config) -> TokenStream {
 
             fn __get_keys_from<T: stdlib::KeyElement + Clone>(self: &alloc::rc::Rc<Self>, path: &[u8], from: Option<&[u8]>) -> impl Iterator<Item = T> + use<T> {
                 stdlib::make_keys_iterator(self.get_keys(path, None, from))
+            }
+
+            fn __get_index_rows(self: &alloc::rc::Rc<Self>, path: &[u8], from: Option<&[u8]>) -> impl Iterator<Item = (Vec<u8>, Vec<u8>)> + use<> {
+                stdlib::make_index_rows_iterator(self.get_index_rows(path, None, from))
             }
 
             fn __exists(self: &alloc::rc::Rc<Self>, path: &[u8]) -> bool {
