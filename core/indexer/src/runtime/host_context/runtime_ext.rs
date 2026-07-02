@@ -5,8 +5,8 @@ use wasmtime::component::{Accessor, Resource};
 
 use crate::runtime::wit::kontor::built_in::context::HolderRef;
 use crate::runtime::wit::{
-    Contract, CoreContext, FallContext, HasContractId, Holder, Keys, ProcContext, ProcStorage,
-    Signer, Transaction, ViewContext, ViewStorage,
+    Contract, CoreContext, FallContext, HasContractId, Holder, IndexRows, Keys, ProcContext,
+    ProcStorage, Signer, Transaction, ViewContext, ViewStorage,
 };
 use crate::runtime::{Runtime, fuel::Fuel, hash_bytes};
 
@@ -206,6 +206,30 @@ impl Runtime {
         }
         // The child key's codec element bytes; the guest decodes it.
         Ok(k)
+    }
+
+    pub(super) async fn _next_index_row<T>(
+        &self,
+        accessor: &Accessor<T, Self>,
+        self_: Resource<IndexRows>,
+    ) -> Result<Option<(Vec<u8>, Vec<u8>)>> {
+        let item: Option<(Vec<u8>, Vec<u8>)> = self
+            .table
+            .lock()
+            .await
+            .get_mut(&self_)?
+            .stream
+            .next()
+            .await
+            .transpose()?;
+        // Meter member + value bytes: a covering read pays for the projection it
+        // returns, not just the member (unlike a plain `keys.next`).
+        if let Some((member, value)) = &item {
+            Fuel::KeysNext((member.len() + value.len()) as u64)
+                .consume(accessor, self.gauge.as_ref())
+                .await?;
+        }
+        Ok(item)
     }
 
     pub(super) async fn _fall_signer<T>(

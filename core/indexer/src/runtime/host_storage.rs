@@ -11,7 +11,7 @@ use crate::database::types::CORE_SIGNER_ID;
 use super::{
     ExecutionError, Runtime,
     fuel::Fuel,
-    wit::{HasContractId, Keys},
+    wit::{HasContractId, IndexRows, Keys},
 };
 
 /// Default storage-deposit rate `D`, in GAS per stored byte (path + value). It
@@ -117,6 +117,36 @@ impl Runtime {
                 .await?,
         );
         Ok(table.push(Keys { stream })?)
+    }
+
+    /// The covering-scan analogue of [`Runtime::_get_keys`]: opens an [`IndexRows`]
+    /// cursor over `path`'s live index leaves, each yielding `(member, value)`. Same
+    /// path/cursor validation and open cost (`Fuel::GetKeys`); the per-row value bytes
+    /// are metered on `next` (see `_next_index_row`).
+    pub(crate) async fn _get_index_rows<S, T: HasContractId>(
+        &self,
+        accessor: &Accessor<S, Self>,
+        resource: Resource<T>,
+        path: Vec<u8>,
+        after: Option<Vec<u8>>,
+        from_key: Option<Vec<u8>>,
+    ) -> Result<Resource<IndexRows>> {
+        validate_path(&path)?;
+        if let Some(after) = &after {
+            validate_path(after)?;
+        }
+        if let Some(from_key) = &from_key {
+            validate_path(from_key)?;
+        }
+        let mut table = self.table.lock().await;
+        let contract_id = table.get(&resource)?.get_contract_id();
+        Fuel::GetKeys.consume(accessor, self.gauge.as_ref()).await?;
+        let stream = Box::pin(
+            self.storage
+                .index_rows(contract_id, path, after, from_key)
+                .await?,
+        );
+        Ok(table.push(IndexRows { stream })?)
     }
 
     pub(crate) async fn _exists<S, T: HasContractId>(

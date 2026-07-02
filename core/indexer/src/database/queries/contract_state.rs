@@ -634,6 +634,46 @@ pub async fn exists_contract_state(
 /// unconditionally and pushes no `LIMIT`. The per-row "newer?" probe `NOT EXISTS`
 /// adds is the price of that laziness, and it's charged: each pulled row costs
 /// `Fuel::KeysNext`.
+/// The scan's lower bound `(lo, lo_cmp)` derived from the `path`/`after`/`from_key`
+/// cursor inputs — the ONE place the seek/paginate rules live, shared by the key scan
+/// ([`path_prefix_filter_contract_state`]) and the covering value scan
+/// ([`path_prefix_filter_index_rows`]) so the two can't drift.
+///
+/// No cursor: `path > :lo` (children only, exclude the node itself). With `after`:
+/// `strinc(after)` skips `after`'s whole subtree and the scan is `cs.path >= :lo`, so a
+/// multi-row child isn't re-read and re-emitted. `strinc` is `None` only for an
+/// all-`0xFF` path, which isn't well-formed codec bytes (rejected upstream by
+/// `validate_path`), so that fallback is unreachable.
+///
+/// `from_key` is an INCLUSIVE seek to `path ++ from_key` (a plain `>=`, no strinc): the
+/// sorted-index range query's host-side lower bound. It's a single child element (a
+/// `(sort, pk)`-prefix tuple), so any child at or above it is wanted. It supersedes
+/// `after` — the two never co-occur (range scans don't paginate cross-call) — so a
+/// present `from_key` wins.
+///
+/// An EMPTY `from_key` means "no lower bound" (seek to the start), NOT `>= path`: the
+/// real guest never sends one (a seek key is always a non-empty tuple element), but the
+/// host is an untrusted boundary, and `path ++ "" = path` with `>=` would wrongly
+/// include the row AT the bucket prefix (e.g. the framework bucket count), whose empty
+/// suffix then traps `next_element`. Normalize it away so the child-only `> path`
+/// invariant holds.
+fn scan_lower_bound(
+    path: &[u8],
+    after: Option<Vec<u8>>,
+    from_key: Option<Vec<u8>>,
+) -> (Vec<u8>, &'static str) {
+    let from_key = from_key.filter(|f| !f.is_empty());
+    match (from_key, after) {
+        (Some(from_key), _) => {
+            let mut lo = path.to_vec();
+            lo.extend_from_slice(&from_key);
+            (lo, ">=")
+        }
+        (None, None) => (path.to_vec(), ">"),
+        (None, Some(after)) => (strinc(&after).unwrap_or(after), ">="),
+    }
+}
+
 pub async fn path_prefix_filter_contract_state(
     conn: &Connection,
     contract_id: u64,
@@ -641,36 +681,10 @@ pub async fn path_prefix_filter_contract_state(
     after: Option<Vec<u8>>,
     from_key: Option<Vec<u8>>,
 ) -> Result<impl Stream<Item = Result<Vec<u8>, Error>> + Send + 'static, Error> {
-    // Lower bound of the scan. No cursor: `path > :lo` (children only, exclude the
-    // node). With a cursor: `strinc(after)` skips `after`'s whole subtree and the
-    // scan is `cs.path >= :lo`, so a multi-row child isn't re-read and re-emitted
-    // (see the fn doc). `strinc` is `None` only for an all-`0xFF` path, which isn't
-    // well-formed codec bytes (rejected upstream by `validate_path`), so the
-    // fallback is unreachable. `< :hi` is the subtree's own `strinc(path)` bound;
-    // ordered by `path` so children are grouped for dedup and the range streams.
-    //
-    // `from_key` is an INCLUSIVE seek to `path ++ from_key` (a plain `>=`, no
-    // strinc): the sorted-index range query's host-side lower bound. It's a single
-    // child element (a `(sort, pk)`-prefix tuple), so any child at or above it is
-    // wanted. It supersedes `after` — the two never co-occur (range scans don't
-    // paginate cross-call) — so a present `from_key` wins.
-    //
-    // An EMPTY `from_key` means "no lower bound" (seek to the start), NOT `>= path`:
-    // the real guest never sends one (a seek key is always a non-empty tuple
-    // element), but the host is an untrusted boundary, and `path ++ "" = path` with
-    // `>=` would wrongly include the row AT the bucket prefix (e.g. the framework
-    // bucket count), whose empty suffix then traps `next_element`. Normalize it away
-    // so the child-only `> path` invariant holds.
-    let from_key = from_key.filter(|f| !f.is_empty());
-    let (lo, lo_cmp): (Vec<u8>, &str) = match (from_key, after) {
-        (Some(from_key), _) => {
-            let mut lo = path.clone();
-            lo.extend_from_slice(&from_key);
-            (lo, ">=")
-        }
-        (None, None) => (path.clone(), ">"),
-        (None, Some(after)) => (strinc(&after).unwrap_or(after), ">="),
-    };
+    // Ordered by `path` so children are grouped for dedup and the range streams; the
+    // `< :hi` subtree bound is the path's own `strinc` (see `live_paths_scan`). The
+    // lower bound + its `>`/`>=` comparator come from the shared `scan_lower_bound`.
+    let (lo, lo_cmp) = scan_lower_bound(&path, after, from_key);
     let (query, params) = live_paths_scan(
         "cs.path",
         lo_cmp,
@@ -708,6 +722,73 @@ pub async fn path_prefix_filter_contract_state(
                         let child = elem.to_vec();
                         last = Some(child.clone());
                         return Some((Ok(child), (rows, last)));
+                    }
+                    Ok(None) => return None,
+                    Err(e) => return Some((Err(e.into()), (rows, last))),
+                }
+            }
+        },
+    );
+
+    Ok(stream)
+}
+
+/// The COVERING-index analogue of [`path_prefix_filter_contract_state`]: streams each
+/// live leaf directly under `path` as `(member-element, value)` — the member element
+/// (first codec element after the prefix; the `keys()` scan yields exactly this) paired
+/// with that leaf's stored VALUE (its covering projection). Same lower-bound / seek /
+/// paginate semantics (via [`scan_lower_bound`]); it only additionally selects
+/// `cs.value` and returns it alongside each member.
+///
+/// Dedup is keep-FIRST per member. A covering leaf is a single row at `path ++ member`,
+/// which byte-sorts BEFORE any (nonexistent) deeper row sharing that member prefix, so
+/// the first row seen for a member carries the leaf's value — the dedup is defensive
+/// (a covering member never actually owns a subtree) and never fires in practice. Each
+/// pulled row is metered by the host cursor (member + value bytes).
+pub async fn path_prefix_filter_index_rows(
+    conn: &Connection,
+    contract_id: u64,
+    path: Vec<u8>,
+    after: Option<Vec<u8>>,
+    from_key: Option<Vec<u8>>,
+) -> Result<impl Stream<Item = Result<(Vec<u8>, Vec<u8>), Error>> + Send + 'static, Error> {
+    let (lo, lo_cmp) = scan_lower_bound(&path, after, from_key);
+    let (query, params) = live_paths_scan(
+        "cs.path, cs.value",
+        lo_cmp,
+        contract_id,
+        lo,
+        &path,
+        Some("cs.path"),
+        None,
+    );
+    let rows = conn.query(&query, params).await?;
+
+    let prefix_len = path.len();
+    let stream = stream::unfold(
+        (rows, None::<Vec<u8>>),
+        move |(mut rows, mut last)| async move {
+            loop {
+                match rows.next().await {
+                    Ok(Some(row)) => {
+                        let full: Vec<u8> = match row.get::<Vec<u8>>(0) {
+                            Ok(p) => p,
+                            Err(e) => return Some((Err(e.into()), (rows, last))),
+                        };
+                        let elem = match next_element(&full[prefix_len..]) {
+                            Ok((elem, _)) => elem,
+                            Err(e) => return Some((Err(Error::KeyCodec(e)), (rows, last))),
+                        };
+                        if last.as_deref() == Some(elem) {
+                            continue; // dedup: keep the first (leaf) row per member
+                        }
+                        let member = elem.to_vec();
+                        last = Some(member.clone());
+                        let value: Vec<u8> = match row.get::<Vec<u8>>(1) {
+                            Ok(v) => v,
+                            Err(e) => return Some((Err(e.into()), (rows, last))),
+                        };
+                        return Some((Ok((member, value)), (rows, last)));
                     }
                     Ok(None) => return None,
                     Err(e) => return Some((Err(e.into()), (rows, last))),

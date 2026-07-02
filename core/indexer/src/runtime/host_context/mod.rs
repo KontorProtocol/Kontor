@@ -5,6 +5,7 @@ mod contract;
 mod core_context;
 mod fall_context;
 mod holder;
+mod index_rows;
 mod keys;
 mod proc_context;
 mod proc_storage;
