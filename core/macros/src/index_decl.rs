@@ -4,10 +4,11 @@ use syn::parse::{Parse, ParseStream};
 use syn::punctuated::Punctuated;
 use syn::{Attribute, Error, FieldsNamed, Ident, Meta, Result, Token, Type, token};
 
-/// A declared secondary index: its name, its bucket field(s), and an optional
-/// sort field. Built from both forms a value can declare an index:
+/// A declared secondary index: its name, its bucket field(s), an optional sort
+/// field, and optional covering-projection fields. Built from both forms a value
+/// can declare an index:
 /// - field-level `#[index] f` — sugar for `#[index(f, by = f)]`.
-/// - struct-level `#[index(name, by = field, sort = field)]`.
+/// - struct-level `#[index(name, by = field, sort = field, include = (a, b))]`.
 ///
 /// The single source both the `Storage` derive (which writes the index) and the
 /// `Model` derive (which reconciles it on in-place setters and reads it back for
@@ -16,11 +17,16 @@ pub struct IndexDecl {
     pub name: String,
     pub by: Vec<Ident>,
     pub sort: Option<Ident>,
+    /// Covering-projection fields (`include = (a, b)`) — copied into the index leaf
+    /// value so a `.values()`/`.iter()` read is index-only (no follow-up `get` per
+    /// member). Empty for a non-covering index. Each must be a round-trip scalar
+    /// (`KeyElement`), enforced by the generated projection encode/decode.
+    pub include: Vec<Ident>,
     /// Interned id for the index's `<index>` path segment — its declaration order
     /// within the value type (assigned by [`parse`]). The single source the write
-    /// side ([`index_entry`]) and the read side (the `where_`/`count_` wrappers)
-    /// both use, so the index path can't drift. Its own per-type id space (under
-    /// `#idx`), distinct from the struct's field ids.
+    /// side ([`index_entry`]) and the read side (the typed lookup methods) both use,
+    /// so the index path can't drift. Its own per-type id space (under `#idx`),
+    /// distinct from the struct's field ids.
     pub id: u8,
 }
 
@@ -30,7 +36,21 @@ struct IndexArgs {
     name: Ident,
     by: Option<Vec<Ident>>,
     sort: Option<Ident>,
-    include: Option<Ident>,
+    include: Option<Vec<Ident>>,
+}
+
+/// Parse a `field` or `(a, b, …)` field list — the shape shared by `by` and
+/// `include`.
+fn parse_ident_list(input: ParseStream) -> Result<Vec<Ident>> {
+    if input.peek(token::Paren) {
+        let content;
+        syn::parenthesized!(content in input);
+        let idents: Punctuated<Ident, Token![,]> =
+            content.parse_terminated(Ident::parse, Token![,])?;
+        Ok(idents.into_iter().collect())
+    } else {
+        Ok(vec![input.parse::<Ident>()?])
+    }
 }
 
 impl Parse for IndexArgs {
@@ -50,20 +70,11 @@ impl Parse for IndexArgs {
             let key: Ident = input.parse()?;
             input.parse::<Token![=]>()?;
             match key.to_string().as_str() {
-                "by" => {
-                    // `by = field` or `by = (a, b)` (composite, reserved for step 2).
-                    if input.peek(token::Paren) {
-                        let content;
-                        syn::parenthesized!(content in input);
-                        let idents: Punctuated<Ident, Token![,]> =
-                            content.parse_terminated(Ident::parse, Token![,])?;
-                        args.by = Some(idents.into_iter().collect());
-                    } else {
-                        args.by = Some(vec![input.parse::<Ident>()?]);
-                    }
-                }
+                // `by = field` or `by = (a, b)` (composite).
+                "by" => args.by = Some(parse_ident_list(input)?),
                 "sort" => args.sort = Some(input.parse()?),
-                "include" => args.include = Some(input.parse()?),
+                // `include = field` or `include = (a, b)` (covering projection).
+                "include" => args.include = Some(parse_ident_list(input)?),
                 other => {
                     return Err(Error::new(
                         key.span(),
@@ -111,12 +122,13 @@ pub fn parse(struct_attrs: &[Attribute], fields: &FieldsNamed) -> Result<Vec<Ind
                 name: ident.to_string(),
                 by: vec![ident.clone()],
                 sort: None,
+                include: Vec::new(),
                 id: 0, // numbered after all decls are collected
             });
         }
     }
 
-    // Struct-level `#[index(name, by = …, sort = …)]`.
+    // Struct-level `#[index(name, by = …, sort = …, include = (…))]`.
     for attr in struct_attrs {
         if !attr.path().is_ident("index") {
             continue;
@@ -138,13 +150,29 @@ pub fn parse(struct_attrs: &[Attribute], fields: &FieldsNamed) -> Result<Vec<Ind
                 "index `by` must name at least one field",
             ));
         }
-        if let Some(include) = &args.include {
-            return Err(Error::new_spanned(
-                include,
-                "covering `include = …` indexes are not yet supported (build step 3)",
-            ));
+        let include = args.include.unwrap_or_default();
+        // Covering projection: each `include` field is copied into the index leaf.
+        // Round-trip scalar (`KeyElement`) is enforced by the generated encode/decode;
+        // here we reject name-level mistakes with a clear message. The sort field is
+        // already carried in the leaf value for free (it leads the member key), so
+        // including it is redundant; a duplicate include is a copy-paste slip.
+        for (i, f) in include.iter().enumerate() {
+            if args.sort.as_ref() == Some(f) {
+                return Err(Error::new_spanned(
+                    f,
+                    format!(
+                        "`{f}` is the sort field — it is already covered for free; drop it from `include`"
+                    ),
+                ));
+            }
+            if include[..i].contains(f) {
+                return Err(Error::new_spanned(
+                    f,
+                    format!("`{f}` is listed twice in `include`"),
+                ));
+            }
         }
-        for referenced in by.iter().chain(args.sort.iter()) {
+        for referenced in by.iter().chain(args.sort.iter()).chain(include.iter()) {
             if !field_exists(fields, referenced) {
                 return Err(Error::new_spanned(
                     referenced,
@@ -156,6 +184,7 @@ pub fn parse(struct_attrs: &[Attribute], fields: &FieldsNamed) -> Result<Vec<Ind
             name: args.name.to_string(),
             by,
             sort: args.sort,
+            include,
             id: 0, // numbered after all decls are collected
         });
     }
