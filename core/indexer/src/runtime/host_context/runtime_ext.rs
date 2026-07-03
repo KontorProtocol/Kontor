@@ -1,6 +1,7 @@
 use anyhow::Result;
 use bitcoin::hashes::Hash;
 use futures_util::StreamExt;
+use indexer_types::deserialize;
 use wasmtime::component::{Accessor, Resource};
 
 use crate::runtime::wit::kontor::built_in::context::HolderRef;
@@ -222,14 +223,23 @@ impl Runtime {
             .next()
             .await
             .transpose()?;
-        // Meter member + value bytes: a covering read pays for the projection it
-        // returns, not just the member (unlike a plain `keys.next`).
-        if let Some((member, value)) = &item {
-            Fuel::KeysNext((member.len() + value.len()) as u64)
-                .consume(accessor, self.gauge.as_ref())
-                .await?;
+        match item {
+            Some((member, raw_value)) => {
+                // Meter member + the raw value bytes read from the log (a covering read
+                // pays for the projection it returns, not just the member).
+                Fuel::KeysNext((member.len() + raw_value.len()) as u64)
+                    .consume(accessor, self.gauge.as_ref())
+                    .await?;
+                // The leaf value is a stored list_u8 — i.e. a SERIALIZED `Vec<u8>` (the
+                // covering projection was written via `set-list-u8`, which serializes).
+                // Deserialize it back to the raw projection bytes here, exactly as
+                // `_get_primitive` does for a `get-list-u8`, so the guest decodes the
+                // projection's codec elements, not their serialization frame.
+                let value: Vec<u8> = deserialize(&raw_value)?;
+                Ok(Some((member, value)))
+            }
+            None => Ok(None),
         }
-        Ok(item)
     }
 
     pub(super) async fn _fall_signer<T>(

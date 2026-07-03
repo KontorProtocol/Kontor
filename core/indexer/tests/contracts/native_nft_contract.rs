@@ -359,6 +359,32 @@ async fn test_native_nft_contract() -> Result<()> {
         Vec::<nft::NftInfo>::new()
     );
 
+    // Covering read: `agreement_ids_by_creator` pulls each NFT's agreement id straight
+    // from the creator index's COVERING projection (no per-NFT record fetch). It must
+    // agree, in the same order, with the agreement ids the record-fetching
+    // `list_nfts_by_creator` returns — proving the covering scan (host `get-index-rows`
+    // → guest decode) reconstructs the covered field correctly.
+    assert_eq!(
+        nft::agreement_ids_by_creator(runtime, alice_ref.clone(), 0, 100).await?,
+        alice_minted
+            .iter()
+            .map(|n| n.agreement_id.clone())
+            .collect::<Vec<_>>()
+    );
+    // Pagination + leniency mirror `list_nfts_by_creator`.
+    assert_eq!(
+        nft::agreement_ids_by_creator(runtime, alice_ref.clone(), 1, 1).await?,
+        vec![alice_minted[1].agreement_id.clone()]
+    );
+    assert_eq!(
+        nft::agreement_ids_by_creator(runtime, alice_ref.clone(), 0, 0).await?,
+        Vec::<String>::new()
+    );
+    assert_eq!(
+        nft::agreement_ids_by_creator(runtime, carol_ref.clone(), 0, 100).await?,
+        Vec::<String>::new()
+    );
+
     // The global `list_nfts` view returns every successful mint in the
     // underlying map's lexicographic order on `nft_id`, regardless of
     // creator. With three mints in flight the page is
