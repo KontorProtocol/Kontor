@@ -223,10 +223,25 @@ async fn test_token_floor_view_reports_deposit() -> Result<()> {
     submit.execute().await?;
 
     let floor = token::floor(runtime, alice_ref.clone()).await?;
-    assert!(
-        floor > zero,
-        "floor must be positive after a deposited write, got {floor}"
-    );
+    if floor <= zero {
+        // On-failure discriminator (NOT polling — the assertion has already failed on
+        // this first read; re-reading only enriches the panic so a CI flake finally
+        // names its cause). A regtest `floor` read that comes back 0 right after a
+        // deposited write has two very different explanations:
+        //   * re-read POSITIVE  → a transient read-after-write VISIBILITY lag on the
+        //     `/view` path (pool/snapshot/timing) — the deposit is there, the first
+        //     read just didn't see it.
+        //   * re-read STILL 0    → a PERSISTENT accounting bug (the resolved signer-id
+        //     ≠ the id the deposit was recorded under, or the deposit wasn't recorded),
+        //     NOT a snapshot/timing issue.
+        // Capturing this only on failure keeps prod untouched and doesn't mask the flake.
+        let reread = token::floor(runtime, alice_ref.clone()).await;
+        panic!(
+            "floor must be positive after a deposited write, got {floor}; \
+             re-read = {reread:?} — POSITIVE ⇒ transient /view visibility lag; \
+             still 0 ⇒ persistent accounting bug (signer-id mismatch or deposit not recorded)"
+        );
+    }
 
     Ok(())
 }
