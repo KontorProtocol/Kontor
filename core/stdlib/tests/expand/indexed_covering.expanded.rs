@@ -321,6 +321,16 @@ impl ListingWriteModel {
                             Some(__proj)
                         },
                     },
+                    stdlib::IndexEntry {
+                        name_id: 1u8,
+                        bucket: (/*ERROR*/),
+                        sort: None,
+                        projection: {
+                            let mut __proj = alloc::vec::Vec::new();
+                            __proj.extend_from_slice(&stdlib::KeyElement::encode(&old));
+                            Some(__proj)
+                        },
+                    },
                 ],
                 &[
                     stdlib::IndexEntry {
@@ -337,6 +347,16 @@ impl ListingWriteModel {
                                 .extend_from_slice(
                                     &stdlib::KeyElement::encode(&__idx_seller),
                                 );
+                            Some(__proj)
+                        },
+                    },
+                    stdlib::IndexEntry {
+                        name_id: 1u8,
+                        bucket: (/*ERROR*/),
+                        sort: None,
+                        projection: {
+                            let mut __proj = alloc::vec::Vec::new();
+                            __proj.extend_from_slice(&stdlib::KeyElement::encode(&new));
                             Some(__proj)
                         },
                     },
@@ -375,6 +395,16 @@ impl ListingWriteModel {
                             Some(__proj)
                         },
                     },
+                    stdlib::IndexEntry {
+                        name_id: 1u8,
+                        bucket: (/*ERROR*/),
+                        sort: None,
+                        projection: {
+                            let mut __proj = alloc::vec::Vec::new();
+                            __proj.extend_from_slice(&stdlib::KeyElement::encode(&old));
+                            Some(__proj)
+                        },
+                    },
                 ],
                 &[
                     stdlib::IndexEntry {
@@ -391,6 +421,16 @@ impl ListingWriteModel {
                                 .extend_from_slice(
                                     &stdlib::KeyElement::encode(&__idx_seller),
                                 );
+                            Some(__proj)
+                        },
+                    },
+                    stdlib::IndexEntry {
+                        name_id: 1u8,
+                        bucket: (/*ERROR*/),
+                        sort: None,
+                        projection: {
+                            let mut __proj = alloc::vec::Vec::new();
+                            __proj.extend_from_slice(&stdlib::KeyElement::encode(&new));
                             Some(__proj)
                         },
                     },
@@ -432,6 +472,16 @@ impl ListingWriteModel {
                             Some(__proj)
                         },
                     },
+                    stdlib::IndexEntry {
+                        name_id: 1u8,
+                        bucket: (/*ERROR*/),
+                        sort: None,
+                        projection: {
+                            let mut __proj = alloc::vec::Vec::new();
+                            __proj.extend_from_slice(&stdlib::KeyElement::encode(&old));
+                            Some(__proj)
+                        },
+                    },
                 ],
                 &[
                     stdlib::IndexEntry {
@@ -451,6 +501,16 @@ impl ListingWriteModel {
                             Some(__proj)
                         },
                     },
+                    stdlib::IndexEntry {
+                        name_id: 1u8,
+                        bucket: (/*ERROR*/),
+                        sort: None,
+                        projection: {
+                            let mut __proj = alloc::vec::Vec::new();
+                            __proj.extend_from_slice(&stdlib::KeyElement::encode(&new));
+                            Some(__proj)
+                        },
+                    },
                 ],
             );
         }
@@ -458,12 +518,99 @@ impl ListingWriteModel {
         Ok(())
     }
     pub fn set_title(&self, value: String) {
-        stdlib::WriteStorage::__set(&self.ctx, self.base_path.push_interned(2u8), value);
+        let path = self.base_path.push_interned(2u8);
+        let old: String = stdlib::ReadStorage::__get(&self.ctx, path.clone()).unwrap();
+        let new = value;
+        if let Some((index_root, index_key)) = &self.index_binding {
+            let __idx_active = self.active();
+            let __idx_price = self.price();
+            let __idx_seller = self.seller();
+            stdlib::apply_index_diff(
+                &self.ctx,
+                index_root,
+                index_key,
+                &[
+                    stdlib::IndexEntry {
+                        name_id: 0u8,
+                        bucket: (/*ERROR*/),
+                        sort: Some(stdlib::KeyElement::encode(&__idx_price)),
+                        projection: {
+                            let mut __proj = alloc::vec::Vec::new();
+                            __proj.extend_from_slice(&stdlib::KeyElement::encode(&old));
+                            __proj
+                                .extend_from_slice(
+                                    &stdlib::KeyElement::encode(&__idx_seller),
+                                );
+                            Some(__proj)
+                        },
+                    },
+                ],
+                &[
+                    stdlib::IndexEntry {
+                        name_id: 0u8,
+                        bucket: (/*ERROR*/),
+                        sort: Some(stdlib::KeyElement::encode(&__idx_price)),
+                        projection: {
+                            let mut __proj = alloc::vec::Vec::new();
+                            __proj.extend_from_slice(&stdlib::KeyElement::encode(&new));
+                            __proj
+                                .extend_from_slice(
+                                    &stdlib::KeyElement::encode(&__idx_seller),
+                                );
+                            Some(__proj)
+                        },
+                    },
+                ],
+            );
+        }
+        stdlib::WriteStorage::__set(&self.ctx, path, new);
     }
     pub fn update_title(&self, f: impl Fn(String) -> String) {
         let path = self.base_path.push_interned(2u8);
         let old: String = stdlib::ReadStorage::__get(&self.ctx, path.clone()).unwrap();
         let new = f(old.clone());
+        if let Some((index_root, index_key)) = &self.index_binding {
+            let __idx_active = self.active();
+            let __idx_price = self.price();
+            let __idx_seller = self.seller();
+            stdlib::apply_index_diff(
+                &self.ctx,
+                index_root,
+                index_key,
+                &[
+                    stdlib::IndexEntry {
+                        name_id: 0u8,
+                        bucket: (/*ERROR*/),
+                        sort: Some(stdlib::KeyElement::encode(&__idx_price)),
+                        projection: {
+                            let mut __proj = alloc::vec::Vec::new();
+                            __proj.extend_from_slice(&stdlib::KeyElement::encode(&old));
+                            __proj
+                                .extend_from_slice(
+                                    &stdlib::KeyElement::encode(&__idx_seller),
+                                );
+                            Some(__proj)
+                        },
+                    },
+                ],
+                &[
+                    stdlib::IndexEntry {
+                        name_id: 0u8,
+                        bucket: (/*ERROR*/),
+                        sort: Some(stdlib::KeyElement::encode(&__idx_price)),
+                        projection: {
+                            let mut __proj = alloc::vec::Vec::new();
+                            __proj.extend_from_slice(&stdlib::KeyElement::encode(&new));
+                            __proj
+                                .extend_from_slice(
+                                    &stdlib::KeyElement::encode(&__idx_seller),
+                                );
+                            Some(__proj)
+                        },
+                    },
+                ],
+            );
+        }
         stdlib::WriteStorage::__set(&self.ctx, path, new);
     }
     pub fn try_update_title(
@@ -473,6 +620,48 @@ impl ListingWriteModel {
         let path = self.base_path.push_interned(2u8);
         let old: String = stdlib::ReadStorage::__get(&self.ctx, path.clone()).unwrap();
         let new = f(old.clone())?;
+        if let Some((index_root, index_key)) = &self.index_binding {
+            let __idx_active = self.active();
+            let __idx_price = self.price();
+            let __idx_seller = self.seller();
+            stdlib::apply_index_diff(
+                &self.ctx,
+                index_root,
+                index_key,
+                &[
+                    stdlib::IndexEntry {
+                        name_id: 0u8,
+                        bucket: (/*ERROR*/),
+                        sort: Some(stdlib::KeyElement::encode(&__idx_price)),
+                        projection: {
+                            let mut __proj = alloc::vec::Vec::new();
+                            __proj.extend_from_slice(&stdlib::KeyElement::encode(&old));
+                            __proj
+                                .extend_from_slice(
+                                    &stdlib::KeyElement::encode(&__idx_seller),
+                                );
+                            Some(__proj)
+                        },
+                    },
+                ],
+                &[
+                    stdlib::IndexEntry {
+                        name_id: 0u8,
+                        bucket: (/*ERROR*/),
+                        sort: Some(stdlib::KeyElement::encode(&__idx_price)),
+                        projection: {
+                            let mut __proj = alloc::vec::Vec::new();
+                            __proj.extend_from_slice(&stdlib::KeyElement::encode(&new));
+                            __proj
+                                .extend_from_slice(
+                                    &stdlib::KeyElement::encode(&__idx_seller),
+                                );
+                            Some(__proj)
+                        },
+                    },
+                ],
+            );
+        }
         stdlib::WriteStorage::__set(&self.ctx, path, new);
         Ok(())
     }
@@ -481,12 +670,28 @@ impl ListingWriteModel {
         let old: u64 = stdlib::ReadStorage::__get(&self.ctx, path.clone()).unwrap();
         let new = value;
         if let Some((index_root, index_key)) = &self.index_binding {
+            let __idx_active = self.active();
             let __idx_price = self.price();
+            let __idx_title = self.title();
             stdlib::apply_index_diff(
                 &self.ctx,
                 index_root,
                 index_key,
                 &[
+                    stdlib::IndexEntry {
+                        name_id: 0u8,
+                        bucket: (/*ERROR*/),
+                        sort: Some(stdlib::KeyElement::encode(&__idx_price)),
+                        projection: {
+                            let mut __proj = alloc::vec::Vec::new();
+                            __proj
+                                .extend_from_slice(
+                                    &stdlib::KeyElement::encode(&__idx_title),
+                                );
+                            __proj.extend_from_slice(&stdlib::KeyElement::encode(&old));
+                            Some(__proj)
+                        },
+                    },
                     stdlib::IndexEntry {
                         name_id: 1u8,
                         bucket: (/*ERROR*/),
@@ -502,6 +707,20 @@ impl ListingWriteModel {
                     },
                 ],
                 &[
+                    stdlib::IndexEntry {
+                        name_id: 0u8,
+                        bucket: (/*ERROR*/),
+                        sort: Some(stdlib::KeyElement::encode(&__idx_price)),
+                        projection: {
+                            let mut __proj = alloc::vec::Vec::new();
+                            __proj
+                                .extend_from_slice(
+                                    &stdlib::KeyElement::encode(&__idx_title),
+                                );
+                            __proj.extend_from_slice(&stdlib::KeyElement::encode(&new));
+                            Some(__proj)
+                        },
+                    },
                     stdlib::IndexEntry {
                         name_id: 1u8,
                         bucket: (/*ERROR*/),
@@ -525,12 +744,28 @@ impl ListingWriteModel {
         let old: u64 = stdlib::ReadStorage::__get(&self.ctx, path.clone()).unwrap();
         let new = f(old.clone());
         if let Some((index_root, index_key)) = &self.index_binding {
+            let __idx_active = self.active();
             let __idx_price = self.price();
+            let __idx_title = self.title();
             stdlib::apply_index_diff(
                 &self.ctx,
                 index_root,
                 index_key,
                 &[
+                    stdlib::IndexEntry {
+                        name_id: 0u8,
+                        bucket: (/*ERROR*/),
+                        sort: Some(stdlib::KeyElement::encode(&__idx_price)),
+                        projection: {
+                            let mut __proj = alloc::vec::Vec::new();
+                            __proj
+                                .extend_from_slice(
+                                    &stdlib::KeyElement::encode(&__idx_title),
+                                );
+                            __proj.extend_from_slice(&stdlib::KeyElement::encode(&old));
+                            Some(__proj)
+                        },
+                    },
                     stdlib::IndexEntry {
                         name_id: 1u8,
                         bucket: (/*ERROR*/),
@@ -546,6 +781,20 @@ impl ListingWriteModel {
                     },
                 ],
                 &[
+                    stdlib::IndexEntry {
+                        name_id: 0u8,
+                        bucket: (/*ERROR*/),
+                        sort: Some(stdlib::KeyElement::encode(&__idx_price)),
+                        projection: {
+                            let mut __proj = alloc::vec::Vec::new();
+                            __proj
+                                .extend_from_slice(
+                                    &stdlib::KeyElement::encode(&__idx_title),
+                                );
+                            __proj.extend_from_slice(&stdlib::KeyElement::encode(&new));
+                            Some(__proj)
+                        },
+                    },
                     stdlib::IndexEntry {
                         name_id: 1u8,
                         bucket: (/*ERROR*/),
@@ -572,12 +821,28 @@ impl ListingWriteModel {
         let old: u64 = stdlib::ReadStorage::__get(&self.ctx, path.clone()).unwrap();
         let new = f(old.clone())?;
         if let Some((index_root, index_key)) = &self.index_binding {
+            let __idx_active = self.active();
             let __idx_price = self.price();
+            let __idx_title = self.title();
             stdlib::apply_index_diff(
                 &self.ctx,
                 index_root,
                 index_key,
                 &[
+                    stdlib::IndexEntry {
+                        name_id: 0u8,
+                        bucket: (/*ERROR*/),
+                        sort: Some(stdlib::KeyElement::encode(&__idx_price)),
+                        projection: {
+                            let mut __proj = alloc::vec::Vec::new();
+                            __proj
+                                .extend_from_slice(
+                                    &stdlib::KeyElement::encode(&__idx_title),
+                                );
+                            __proj.extend_from_slice(&stdlib::KeyElement::encode(&old));
+                            Some(__proj)
+                        },
+                    },
                     stdlib::IndexEntry {
                         name_id: 1u8,
                         bucket: (/*ERROR*/),
@@ -593,6 +858,20 @@ impl ListingWriteModel {
                     },
                 ],
                 &[
+                    stdlib::IndexEntry {
+                        name_id: 0u8,
+                        bucket: (/*ERROR*/),
+                        sort: Some(stdlib::KeyElement::encode(&__idx_price)),
+                        projection: {
+                            let mut __proj = alloc::vec::Vec::new();
+                            __proj
+                                .extend_from_slice(
+                                    &stdlib::KeyElement::encode(&__idx_title),
+                                );
+                            __proj.extend_from_slice(&stdlib::KeyElement::encode(&new));
+                            Some(__proj)
+                        },
+                    },
                     stdlib::IndexEntry {
                         name_id: 1u8,
                         bucket: (/*ERROR*/),

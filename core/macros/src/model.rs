@@ -451,16 +451,22 @@ pub fn generate_struct(
                             }
                         };
 
-                        // Every index this field participates in, as a bucket OR a
-                        // sort field. Setting it must move the member across all of
-                        // them: the changed field uses `old`/`new`, every other
-                        // participating field is read at its current value. Empty ⇒
-                        // a plain write, nothing to reconcile.
+                        // Every index this field participates in, as a bucket, a sort
+                        // field, OR a covering `include` field. Setting it must
+                        // reconcile all of them: a `by`/`sort` change MOVES the member
+                        // (delete+add), while an `include`-only change keeps the same
+                        // leaf and rewrites its projection in place (apply_index_diff's
+                        // third pass). Omitting `include` here is the bug where an
+                        // in-place setter on a covered field leaves the leaf projection
+                        // stale, so `.values()` returns pre-update data. The changed
+                        // field uses `old`/`new`; every other participating field is
+                        // read at its current value. Empty ⇒ a plain write.
                         let relevant: Vec<&IndexDecl> = decls
                             .iter()
                             .filter(|d| {
                                 d.by.iter().any(|b| b == field_name)
                                     || d.sort.as_ref() == Some(field_name)
+                                    || d.include.iter().any(|i| i == field_name)
                             })
                             .collect();
                         let participates = !relevant.is_empty();
