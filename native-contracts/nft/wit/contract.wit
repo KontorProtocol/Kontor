@@ -121,6 +121,18 @@ world root {
     creator: holder-ref
   ) -> u64;
 
+  /// Return up to `limit` agreement ids for NFTs minted by `creator` (skipping
+  /// the first `offset`), read straight from the creator index's COVERING
+  /// projection — the agreement id is stored in the index leaf, so this touches
+  /// only the index and does NOT fetch each NFT record. Same clamping/leniency as
+  /// `list-nfts-by-creator`. Demonstrates a covering index (`include = …`).
+  export agreement-ids-by-creator: async func(
+    ctx: borrow<view-context>,
+    creator: holder-ref,
+    offset: u64,
+    limit: u64
+  ) -> list<string>;
+
   export get-attributes: async func(ctx: borrow<view-context>, nft-id: string) -> list<attribute>;
   export get-attribute: async func(ctx: borrow<view-context>, nft-id: string, key: string) -> option<string>;
 }

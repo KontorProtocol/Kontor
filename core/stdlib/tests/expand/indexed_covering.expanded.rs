@@ -37,6 +37,7 @@ impl ListingModel {
     pub fn __index_entries(&self) -> alloc::vec::Vec<stdlib::IndexEntry> {
         let __idx_active = self.active();
         let __idx_price = self.price();
+        let __idx_title = self.title();
         let __idx_seller = self.seller();
         let mut entries = alloc::vec::Vec::new();
         entries
@@ -130,6 +131,8 @@ impl ListingWriteModel {
         let new = value;
         if let Some((index_root, index_key)) = &self.index_binding {
             let __idx_price = self.price();
+            let __idx_title = self.title();
+            let __idx_seller = self.seller();
             stdlib::apply_index_diff(
                 &self.ctx,
                 index_root,
@@ -182,6 +185,8 @@ impl ListingWriteModel {
         let new = f(old.clone());
         if let Some((index_root, index_key)) = &self.index_binding {
             let __idx_price = self.price();
+            let __idx_title = self.title();
+            let __idx_seller = self.seller();
             stdlib::apply_index_diff(
                 &self.ctx,
                 index_root,
@@ -237,6 +242,8 @@ impl ListingWriteModel {
         let new = f(old.clone())?;
         if let Some((index_root, index_key)) = &self.index_binding {
             let __idx_price = self.price();
+            let __idx_title = self.title();
+            let __idx_seller = self.seller();
             stdlib::apply_index_diff(
                 &self.ctx,
                 index_root,
@@ -290,6 +297,8 @@ impl ListingWriteModel {
         let new = value;
         if let Some((index_root, index_key)) = &self.index_binding {
             let __idx_active = self.active();
+            let __idx_title = self.title();
+            let __idx_seller = self.seller();
             stdlib::apply_index_diff(
                 &self.ctx,
                 index_root,
@@ -342,6 +351,8 @@ impl ListingWriteModel {
         let new = f(old.clone());
         if let Some((index_root, index_key)) = &self.index_binding {
             let __idx_active = self.active();
+            let __idx_title = self.title();
+            let __idx_seller = self.seller();
             stdlib::apply_index_diff(
                 &self.ctx,
                 index_root,
@@ -397,6 +408,8 @@ impl ListingWriteModel {
         let new = f(old.clone())?;
         if let Some((index_root, index_key)) = &self.index_binding {
             let __idx_active = self.active();
+            let __idx_title = self.title();
+            let __idx_seller = self.seller();
             stdlib::apply_index_diff(
                 &self.ctx,
                 index_root,
@@ -468,6 +481,7 @@ impl ListingWriteModel {
         let old: u64 = stdlib::ReadStorage::__get(&self.ctx, path.clone()).unwrap();
         let new = value;
         if let Some((index_root, index_key)) = &self.index_binding {
+            let __idx_price = self.price();
             stdlib::apply_index_diff(
                 &self.ctx,
                 index_root,
@@ -511,6 +525,7 @@ impl ListingWriteModel {
         let old: u64 = stdlib::ReadStorage::__get(&self.ctx, path.clone()).unwrap();
         let new = f(old.clone());
         if let Some((index_root, index_key)) = &self.index_binding {
+            let __idx_price = self.price();
             stdlib::apply_index_diff(
                 &self.ctx,
                 index_root,
@@ -557,6 +572,7 @@ impl ListingWriteModel {
         let old: u64 = stdlib::ReadStorage::__get(&self.ctx, path.clone()).unwrap();
         let new = f(old.clone())?;
         if let Some((index_root, index_key)) = &self.index_binding {
+            let __idx_price = self.price();
             stdlib::apply_index_diff(
                 &self.ctx,
                 index_root,

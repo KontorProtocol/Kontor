@@ -243,13 +243,20 @@ fn reserved_index_name(name: &str) -> Option<&'static str> {
     }
 }
 
-/// Distinct fields referenced (bucket + sort) across `decls`, in first-seen
-/// order. Reading each once before building entries avoids re-reading a storage
-/// slot that two indexes share, or that a setter's old and new entry both need.
+/// Distinct fields referenced (bucket + sort + covering `include`) across `decls`, in
+/// first-seen order. Reading each once before building entries avoids re-reading a
+/// storage slot that two indexes share, or that a setter's old and new entry both need.
+/// The `include` fields must be here too: the read model builds each entry's covering
+/// projection from them, so they need the same `__idx_<field>` preload as `by`/`sort`.
 pub fn referenced_fields<'a>(decls: impl IntoIterator<Item = &'a IndexDecl>) -> Vec<&'a Ident> {
     let mut out: Vec<&Ident> = Vec::new();
     for decl in decls {
-        for field in decl.by.iter().chain(decl.sort.iter()) {
+        for field in decl
+            .by
+            .iter()
+            .chain(decl.sort.iter())
+            .chain(decl.include.iter())
+        {
             if !out.contains(&field) {
                 out.push(field);
             }
