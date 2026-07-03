@@ -269,7 +269,9 @@ pub trait HasNextRow {
 /// iterator of raw `(member, value)` byte pairs. The covering query decodes them; this
 /// only bridges the resource to `Iterator` (the value-returning twin of
 /// [`make_keys_iterator`]).
-pub fn make_index_rows_iterator<R: HasNextRow>(rows: R) -> impl Iterator<Item = (Vec<u8>, Vec<u8>)> {
+pub fn make_index_rows_iterator<R: HasNextRow>(
+    rows: R,
+) -> impl Iterator<Item = (Vec<u8>, Vec<u8>)> {
     struct RowsIterator<R: HasNextRow> {
         rows: R,
     }

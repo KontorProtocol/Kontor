@@ -21,8 +21,7 @@ use crate::{
             insert_contract_result, insert_contract_state, latest_live_deposit,
             live_deposit_gas_sum, matching_path, path_prefix_filter_contract_state,
             path_prefix_filter_index_rows, prune_contract_state, rollback_to_height,
-            select_block_at_height, set_meta_u64,
-            tombstone_rows,
+            select_block_at_height, set_meta_u64, tombstone_rows,
         },
         types::{ContractProvenanceRow, ContractResultRow, ContractRow, ContractStateRow},
     },
@@ -488,9 +487,7 @@ impl Storage {
         after: Option<Vec<u8>>,
         from_key: Option<Vec<u8>>,
     ) -> Result<
-        impl Stream<Item = Result<(Vec<u8>, Vec<u8>), crate::database::queries::Error>>
-        + Send
-        + 'static,
+        impl Stream<Item = Result<(Vec<u8>, Vec<u8>), crate::database::queries::Error>> + Send + 'static,
     > {
         Ok(path_prefix_filter_index_rows(&self.conn, contract_id, path, after, from_key).await?)
     }

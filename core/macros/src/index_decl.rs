@@ -229,8 +229,15 @@ fn field_exists(fields: &FieldsNamed, ident: &Ident) -> bool {
 /// any codegen) so the derive fails with just this error.
 fn reserved_index_name(name: &str) -> Option<&'static str> {
     const MAP_SURFACE: &[&str] = &["get", "set", "keys", "load", "remove", "new"];
-    const QUERY_FINISHERS: &[&str] =
-        &["iter", "values", "range", "len", "is_empty", "count", "with_scores"];
+    const QUERY_FINISHERS: &[&str] = &[
+        "iter",
+        "values",
+        "range",
+        "len",
+        "is_empty",
+        "count",
+        "with_scores",
+    ];
     const PRIMITIVES: &[&str] = &["by_index", "by_index_sorted", "bucket_count"];
     if MAP_SURFACE.contains(&name) {
         Some("shadows the map accessor of the same name")

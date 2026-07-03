@@ -504,7 +504,10 @@ where
     /// covered from the leaf.
     pub fn iter(self) -> alloc::boxed::Box<dyn Iterator<Item = (K, V)> + 'a> {
         let build = self.build;
-        alloc::boxed::Box::new(self.rows().map(move |(m, v)| (decode_key::<K>(&m), build(&v))))
+        alloc::boxed::Box::new(
+            self.rows()
+                .map(move |(m, v)| (decode_key::<K>(&m), build(&v))),
+        )
     }
 }
 
@@ -569,7 +572,10 @@ where
         self.len() == 0
     }
 
-    fn rows(&self, from: Option<&[u8]>) -> alloc::boxed::Box<dyn Iterator<Item = (Vec<u8>, Vec<u8>)>> {
+    fn rows(
+        &self,
+        from: Option<&[u8]>,
+    ) -> alloc::boxed::Box<dyn Iterator<Item = (Vec<u8>, Vec<u8>)>> {
         self.src
             .by_index_rows(self.index_id, &bucket_refs(&self.bucket), from)
     }
@@ -687,9 +693,11 @@ where
     // maps over this. Decodes the member once (for the sort comparison) and threads the
     // still-raw value bytes so only the finisher that needs `V` pays to build it.
     fn members(self) -> impl Iterator<Item = ((S, K), Vec<u8>)> {
-        let raw = self
-            .src
-            .by_index_rows(self.index_id, &bucket_refs(&self.bucket), self.from.as_deref());
+        let raw = self.src.by_index_rows(
+            self.index_id,
+            &bucket_refs(&self.bucket),
+            self.from.as_deref(),
+        );
         let skip_lo = self.skip_lo;
         let hi = self.hi;
         raw.map(|(m, v)| (decode_sort_key::<S, K>(&m), v))
@@ -1868,10 +1876,17 @@ mod tests {
     // per-index `build` fn does. Unsorted: V is just the included field(s). Sorted: the
     // sort value arrives separately (it's free in the member), plus the includes.
     fn build_name(proj: &[u8]) -> String {
-        String::decode_from(proj).expect("covering projection decodes").0
+        String::decode_from(proj)
+            .expect("covering projection decodes")
+            .0
     }
     fn build_due(sort: &u64, proj: &[u8]) -> (u64, String) {
-        (*sort, String::decode_from(proj).expect("covering projection decodes").0)
+        (
+            *sort,
+            String::decode_from(proj)
+                .expect("covering projection decodes")
+                .0,
+        )
     }
 
     // Seed an UNSORTED covering bucket (`status` index covering a `name` field): the
@@ -1935,7 +1950,13 @@ mod tests {
             sort: Some(height.encode()),
             projection: Some(name.to_string().encode()),
         };
-        apply_index_diff(&ctx, &index, &kb("c".to_string()), &[], &[entry(30, "cara")]);
+        apply_index_diff(
+            &ctx,
+            &index,
+            &kb("c".to_string()),
+            &[],
+            &[entry(30, "cara")],
+        );
         apply_index_diff(&ctx, &index, &kb("a".to_string()), &[], &[entry(10, "ann")]);
         apply_index_diff(&ctx, &index, &kb("b".to_string()), &[], &[entry(20, "bob")]);
         MockIndex { ctx, root: index }
