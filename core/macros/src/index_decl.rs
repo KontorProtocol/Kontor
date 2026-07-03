@@ -4,10 +4,11 @@ use syn::parse::{Parse, ParseStream};
 use syn::punctuated::Punctuated;
 use syn::{Attribute, Error, FieldsNamed, Ident, Meta, Result, Token, Type, token};
 
-/// A declared secondary index: its name, its bucket field(s), and an optional
-/// sort field. Built from both forms a value can declare an index:
+/// A declared secondary index: its name, its bucket field(s), an optional sort
+/// field, and optional covering-projection fields. Built from both forms a value
+/// can declare an index:
 /// - field-level `#[index] f` — sugar for `#[index(f, by = f)]`.
-/// - struct-level `#[index(name, by = field, sort = field)]`.
+/// - struct-level `#[index(name, by = field, sort = field, include = (a, b))]`.
 ///
 /// The single source both the `Storage` derive (which writes the index) and the
 /// `Model` derive (which reconciles it on in-place setters and reads it back for
@@ -16,11 +17,16 @@ pub struct IndexDecl {
     pub name: String,
     pub by: Vec<Ident>,
     pub sort: Option<Ident>,
+    /// Covering-projection fields (`include = (a, b)`) — copied into the index leaf
+    /// value so a `.values()`/`.iter()` read is index-only (no follow-up `get` per
+    /// member). Empty for a non-covering index. Each must be a round-trip scalar
+    /// (`KeyElement`), enforced by the generated projection encode/decode.
+    pub include: Vec<Ident>,
     /// Interned id for the index's `<index>` path segment — its declaration order
     /// within the value type (assigned by [`parse`]). The single source the write
-    /// side ([`index_entry`]) and the read side (the `where_`/`count_` wrappers)
-    /// both use, so the index path can't drift. Its own per-type id space (under
-    /// `#idx`), distinct from the struct's field ids.
+    /// side ([`index_entry`]) and the read side (the typed lookup methods) both use,
+    /// so the index path can't drift. Its own per-type id space (under `#idx`),
+    /// distinct from the struct's field ids.
     pub id: u8,
 }
 
@@ -30,7 +36,21 @@ struct IndexArgs {
     name: Ident,
     by: Option<Vec<Ident>>,
     sort: Option<Ident>,
-    include: Option<Ident>,
+    include: Option<Vec<Ident>>,
+}
+
+/// Parse a `field` or `(a, b, …)` field list — the shape shared by `by` and
+/// `include`.
+fn parse_ident_list(input: ParseStream) -> Result<Vec<Ident>> {
+    if input.peek(token::Paren) {
+        let content;
+        syn::parenthesized!(content in input);
+        let idents: Punctuated<Ident, Token![,]> =
+            content.parse_terminated(Ident::parse, Token![,])?;
+        Ok(idents.into_iter().collect())
+    } else {
+        Ok(vec![input.parse::<Ident>()?])
+    }
 }
 
 impl Parse for IndexArgs {
@@ -50,20 +70,11 @@ impl Parse for IndexArgs {
             let key: Ident = input.parse()?;
             input.parse::<Token![=]>()?;
             match key.to_string().as_str() {
-                "by" => {
-                    // `by = field` or `by = (a, b)` (composite, reserved for step 2).
-                    if input.peek(token::Paren) {
-                        let content;
-                        syn::parenthesized!(content in input);
-                        let idents: Punctuated<Ident, Token![,]> =
-                            content.parse_terminated(Ident::parse, Token![,])?;
-                        args.by = Some(idents.into_iter().collect());
-                    } else {
-                        args.by = Some(vec![input.parse::<Ident>()?]);
-                    }
-                }
+                // `by = field` or `by = (a, b)` (composite).
+                "by" => args.by = Some(parse_ident_list(input)?),
                 "sort" => args.sort = Some(input.parse()?),
-                "include" => args.include = Some(input.parse()?),
+                // `include = field` or `include = (a, b)` (covering projection).
+                "include" => args.include = Some(parse_ident_list(input)?),
                 other => {
                     return Err(Error::new(
                         key.span(),
@@ -79,9 +90,8 @@ impl Parse for IndexArgs {
 }
 
 /// Parse every index a struct declares (field-level sugar + struct-level forms),
-/// validating that referenced fields exist and that names are unique. Composite
-/// (`by = (…)`) and covering (`include = …`) parse but are rejected for now —
-/// reserved grammar for later build steps, so adding them is purely additive.
+/// validating that referenced fields exist, names are unique, and any `include`
+/// (covering) fields are real, non-duplicate, and not the sort field.
 pub fn parse(struct_attrs: &[Attribute], fields: &FieldsNamed) -> Result<Vec<IndexDecl>> {
     let mut decls = Vec::new();
 
@@ -111,12 +121,13 @@ pub fn parse(struct_attrs: &[Attribute], fields: &FieldsNamed) -> Result<Vec<Ind
                 name: ident.to_string(),
                 by: vec![ident.clone()],
                 sort: None,
+                include: Vec::new(),
                 id: 0, // numbered after all decls are collected
             });
         }
     }
 
-    // Struct-level `#[index(name, by = …, sort = …)]`.
+    // Struct-level `#[index(name, by = …, sort = …, include = (…))]`.
     for attr in struct_attrs {
         if !attr.path().is_ident("index") {
             continue;
@@ -138,13 +149,29 @@ pub fn parse(struct_attrs: &[Attribute], fields: &FieldsNamed) -> Result<Vec<Ind
                 "index `by` must name at least one field",
             ));
         }
-        if let Some(include) = &args.include {
-            return Err(Error::new_spanned(
-                include,
-                "covering `include = …` indexes are not yet supported (build step 3)",
-            ));
+        let include = args.include.unwrap_or_default();
+        // Covering projection: each `include` field is copied into the index leaf.
+        // Round-trip scalar (`KeyElement`) is enforced by the generated encode/decode;
+        // here we reject name-level mistakes with a clear message. The sort field is
+        // already carried in the leaf value for free (it leads the member key), so
+        // including it is redundant; a duplicate include is a copy-paste slip.
+        for (i, f) in include.iter().enumerate() {
+            if args.sort.as_ref() == Some(f) {
+                return Err(Error::new_spanned(
+                    f,
+                    format!(
+                        "`{f}` is the sort field — it is already covered for free; drop it from `include`"
+                    ),
+                ));
+            }
+            if include[..i].contains(f) {
+                return Err(Error::new_spanned(
+                    f,
+                    format!("`{f}` is listed twice in `include`"),
+                ));
+            }
         }
-        for referenced in by.iter().chain(args.sort.iter()) {
+        for referenced in by.iter().chain(args.sort.iter()).chain(include.iter()) {
             if !field_exists(fields, referenced) {
                 return Err(Error::new_spanned(
                     referenced,
@@ -156,6 +183,7 @@ pub fn parse(struct_attrs: &[Attribute], fields: &FieldsNamed) -> Result<Vec<Ind
             name: args.name.to_string(),
             by,
             sort: args.sort,
+            include,
             id: 0, // numbered after all decls are collected
         });
     }
@@ -201,7 +229,15 @@ fn field_exists(fields: &FieldsNamed, ident: &Ident) -> bool {
 /// any codegen) so the derive fails with just this error.
 fn reserved_index_name(name: &str) -> Option<&'static str> {
     const MAP_SURFACE: &[&str] = &["get", "set", "keys", "load", "remove", "new"];
-    const QUERY_FINISHERS: &[&str] = &["iter", "values", "range", "len", "is_empty", "count"];
+    const QUERY_FINISHERS: &[&str] = &[
+        "iter",
+        "values",
+        "range",
+        "len",
+        "is_empty",
+        "count",
+        "with_scores",
+    ];
     const PRIMITIVES: &[&str] = &["by_index", "by_index_sorted", "bucket_count"];
     if MAP_SURFACE.contains(&name) {
         Some("shadows the map accessor of the same name")
@@ -214,13 +250,20 @@ fn reserved_index_name(name: &str) -> Option<&'static str> {
     }
 }
 
-/// Distinct fields referenced (bucket + sort) across `decls`, in first-seen
-/// order. Reading each once before building entries avoids re-reading a storage
-/// slot that two indexes share, or that a setter's old and new entry both need.
+/// Distinct fields referenced (bucket + sort + covering `include`) across `decls`, in
+/// first-seen order. Reading each once before building entries avoids re-reading a
+/// storage slot that two indexes share, or that a setter's old and new entry both need.
+/// The `include` fields must be here too: the read model builds each entry's covering
+/// projection from them, so they need the same `__idx_<field>` preload as `by`/`sort`.
 pub fn referenced_fields<'a>(decls: impl IntoIterator<Item = &'a IndexDecl>) -> Vec<&'a Ident> {
     let mut out: Vec<&Ident> = Vec::new();
     for decl in decls {
-        for field in decl.by.iter().chain(decl.sort.iter()) {
+        for field in decl
+            .by
+            .iter()
+            .chain(decl.sort.iter())
+            .chain(decl.include.iter())
+        {
             if !out.contains(&field) {
                 out.push(field);
             }
@@ -263,11 +306,31 @@ pub fn index_entry(decl: &IndexDecl, value_for: &impl Fn(&Ident) -> TokenStream)
         }
         None => quote! { None },
     };
+    // Covering projection: the `include=` fields' codec elements CONCATENATED as the
+    // leaf VALUE (`None` for a non-covering index → a void leaf). Each `encode` is a
+    // self-delimiting `KeyElement` (not the lossy bucket `IndexKey`), so the reader
+    // decodes them back field-by-field in order — no tuple wrapper (keycodec has no
+    // 1-tuple decode, and the projection is an opaque VALUE, never a walked path
+    // element). A non-`KeyElement` include field is a compile error here.
+    let projection = if decl.include.is_empty() {
+        quote! { None }
+    } else {
+        let parts = decl.include.iter().map(|field| {
+            let val = value_for(field);
+            quote! { __proj.extend_from_slice(&stdlib::KeyElement::encode(&#val)); }
+        });
+        quote! {{
+            let mut __proj = alloc::vec::Vec::new();
+            #(#parts)*
+            Some(__proj)
+        }}
+    };
     quote! {
         stdlib::IndexEntry {
             name_id: #name_id,
             bucket: alloc::vec![#(#bucket),*],
             sort: #sort,
+            projection: #projection,
         }
     }
 }

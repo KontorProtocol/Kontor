@@ -359,6 +359,32 @@ async fn test_native_nft_contract() -> Result<()> {
         Vec::<nft::NftInfo>::new()
     );
 
+    // Covering read: `agreement_ids_by_creator` pulls each NFT's agreement id straight
+    // from the creator index's COVERING projection (no per-NFT record fetch). It must
+    // agree, in the same order, with the agreement ids the record-fetching
+    // `list_nfts_by_creator` returns — proving the covering scan (host `get-index-rows`
+    // → guest decode) reconstructs the covered field correctly.
+    assert_eq!(
+        nft::agreement_ids_by_creator(runtime, alice_ref.clone(), 0, 100).await?,
+        alice_minted
+            .iter()
+            .map(|n| n.agreement_id.clone())
+            .collect::<Vec<_>>()
+    );
+    // Pagination + leniency mirror `list_nfts_by_creator`.
+    assert_eq!(
+        nft::agreement_ids_by_creator(runtime, alice_ref.clone(), 1, 1).await?,
+        vec![alice_minted[1].agreement_id.clone()]
+    );
+    assert_eq!(
+        nft::agreement_ids_by_creator(runtime, alice_ref.clone(), 0, 0).await?,
+        Vec::<String>::new()
+    );
+    assert_eq!(
+        nft::agreement_ids_by_creator(runtime, carol_ref.clone(), 0, 100).await?,
+        Vec::<String>::new()
+    );
+
     // The global `list_nfts` view returns every successful mint in the
     // underlying map's lexicographic order on `nft_id`, regardless of
     // creator. With three mints in flight the page is
@@ -483,6 +509,36 @@ async fn test_native_nft_contract() -> Result<()> {
     assert_eq!(attrs_after_ab, expected);
     // total_minted counts mints, not transfers: still 3 after the alice→bob move.
     assert_eq!(nft::total_minted(runtime).await?, 3);
+
+    // The OWNER index tracks CURRENT holders — the mirror image of the creator index.
+    // After the alice→bob transfer of nft_id_1: bob holds {nft_id_1 (transferred),
+    // nft_id_2 (minted by bob)}, alice holds {nft_id_3}. Note this is the OPPOSITE of
+    // the creator counts (alice 2, bob 1) — precisely the query the owner index exists
+    // for, and impossible without it.
+    assert_eq!(nft::count_nfts_by_owner(runtime, bob_ref.clone()).await?, 2);
+    assert_eq!(
+        nft::count_nfts_by_owner(runtime, alice_ref.clone()).await?,
+        1
+    );
+    assert_eq!(
+        nft::count_nfts_by_owner(runtime, carol_ref.clone()).await?,
+        0
+    );
+    let bob_holds = nft::list_nfts_by_owner(runtime, bob_ref.clone(), 0, 100).await?;
+    let mut bob_ids: Vec<&str> = bob_holds.iter().map(|n| n.nft_id.as_str()).collect();
+    bob_ids.sort();
+    let mut expected_bob = vec![nft_id_1, nft_id_2];
+    expected_bob.sort();
+    assert_eq!(bob_ids, expected_bob);
+    assert!(bob_holds.iter().all(|n| n.owner == bob_ref));
+    assert_eq!(
+        nft::list_nfts_by_owner(runtime, alice_ref.clone(), 0, 100)
+            .await?
+            .iter()
+            .map(|n| n.nft_id.as_str())
+            .collect::<Vec<_>>(),
+        vec![nft_id_3]
+    );
 
     // The creator index is invariant under transfers: alice keeps her
     // two entries, bob keeps his single entry, and the listed NFTs now

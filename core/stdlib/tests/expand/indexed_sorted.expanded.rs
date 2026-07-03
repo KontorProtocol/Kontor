@@ -47,12 +47,14 @@ impl ChallengeModel {
                 name_id: 0u8,
                 bucket: (/*ERROR*/),
                 sort: None,
+                projection: None,
             });
         entries
             .push(stdlib::IndexEntry {
                 name_id: 1u8,
                 bucket: (/*ERROR*/),
                 sort: Some(stdlib::KeyElement::encode(&__idx_deadline_height)),
+                projection: None,
             });
         entries
     }
@@ -153,11 +155,13 @@ impl ChallengeWriteModel {
                         name_id: 0u8,
                         bucket: (/*ERROR*/),
                         sort: None,
+                        projection: None,
                     },
                     stdlib::IndexEntry {
                         name_id: 1u8,
                         bucket: (/*ERROR*/),
                         sort: Some(stdlib::KeyElement::encode(&__idx_deadline_height)),
+                        projection: None,
                     },
                 ],
                 &[
@@ -165,11 +169,13 @@ impl ChallengeWriteModel {
                         name_id: 0u8,
                         bucket: (/*ERROR*/),
                         sort: None,
+                        projection: None,
                     },
                     stdlib::IndexEntry {
                         name_id: 1u8,
                         bucket: (/*ERROR*/),
                         sort: Some(stdlib::KeyElement::encode(&__idx_deadline_height)),
+                        projection: None,
                     },
                 ],
             );
@@ -191,11 +197,13 @@ impl ChallengeWriteModel {
                         name_id: 0u8,
                         bucket: (/*ERROR*/),
                         sort: None,
+                        projection: None,
                     },
                     stdlib::IndexEntry {
                         name_id: 1u8,
                         bucket: (/*ERROR*/),
                         sort: Some(stdlib::KeyElement::encode(&__idx_deadline_height)),
+                        projection: None,
                     },
                 ],
                 &[
@@ -203,11 +211,13 @@ impl ChallengeWriteModel {
                         name_id: 0u8,
                         bucket: (/*ERROR*/),
                         sort: None,
+                        projection: None,
                     },
                     stdlib::IndexEntry {
                         name_id: 1u8,
                         bucket: (/*ERROR*/),
                         sort: Some(stdlib::KeyElement::encode(&__idx_deadline_height)),
+                        projection: None,
                     },
                 ],
             );
@@ -232,11 +242,13 @@ impl ChallengeWriteModel {
                         name_id: 0u8,
                         bucket: (/*ERROR*/),
                         sort: None,
+                        projection: None,
                     },
                     stdlib::IndexEntry {
                         name_id: 1u8,
                         bucket: (/*ERROR*/),
                         sort: Some(stdlib::KeyElement::encode(&__idx_deadline_height)),
+                        projection: None,
                     },
                 ],
                 &[
@@ -244,11 +256,13 @@ impl ChallengeWriteModel {
                         name_id: 0u8,
                         bucket: (/*ERROR*/),
                         sort: None,
+                        projection: None,
                     },
                     stdlib::IndexEntry {
                         name_id: 1u8,
                         bucket: (/*ERROR*/),
                         sort: Some(stdlib::KeyElement::encode(&__idx_deadline_height)),
+                        projection: None,
                     },
                 ],
             );
@@ -271,6 +285,7 @@ impl ChallengeWriteModel {
                         name_id: 1u8,
                         bucket: (/*ERROR*/),
                         sort: Some(stdlib::KeyElement::encode(&old)),
+                        projection: None,
                     },
                 ],
                 &[
@@ -278,6 +293,7 @@ impl ChallengeWriteModel {
                         name_id: 1u8,
                         bucket: (/*ERROR*/),
                         sort: Some(stdlib::KeyElement::encode(&new)),
+                        projection: None,
                     },
                 ],
             );
@@ -299,6 +315,7 @@ impl ChallengeWriteModel {
                         name_id: 1u8,
                         bucket: (/*ERROR*/),
                         sort: Some(stdlib::KeyElement::encode(&old)),
+                        projection: None,
                     },
                 ],
                 &[
@@ -306,6 +323,7 @@ impl ChallengeWriteModel {
                         name_id: 1u8,
                         bucket: (/*ERROR*/),
                         sort: Some(stdlib::KeyElement::encode(&new)),
+                        projection: None,
                     },
                 ],
             );
@@ -330,6 +348,7 @@ impl ChallengeWriteModel {
                         name_id: 1u8,
                         bucket: (/*ERROR*/),
                         sort: Some(stdlib::KeyElement::encode(&old)),
+                        projection: None,
                     },
                 ],
                 &[
@@ -337,6 +356,7 @@ impl ChallengeWriteModel {
                         name_id: 1u8,
                         bucket: (/*ERROR*/),
                         sort: Some(stdlib::KeyElement::encode(&new)),
+                        projection: None,
                     },
                 ],
             );
@@ -388,12 +408,14 @@ impl stdlib::Indexed for Challenge {
                 name_id: 0u8,
                 bucket: (/*ERROR*/),
                 sort: None,
+                projection: None,
             });
         entries
             .push(stdlib::IndexEntry {
                 name_id: 1u8,
                 bucket: (/*ERROR*/),
                 sort: Some(stdlib::KeyElement::encode(&self.deadline_height)),
+                projection: None,
             });
         entries
     }

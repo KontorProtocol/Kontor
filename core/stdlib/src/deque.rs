@@ -247,6 +247,13 @@ mod tests {
         ) -> impl Iterator<Item = T> + use<T> {
             core::iter::empty()
         }
+        fn __get_index_rows(
+            self: &Rc<Self>,
+            _: &[u8],
+            _: Option<&[u8]>,
+        ) -> impl Iterator<Item = (Vec<u8>, Vec<u8>)> + use<> {
+            core::iter::empty()
+        }
         fn __get_str(self: &Rc<Self>, _: &[u8]) -> Option<String> {
             unimplemented!()
         }

@@ -103,6 +103,7 @@ pub fn import(
                 "verify-result",
                 "error",
                 "keys",
+                "index-rows",
                 "integer",
                 "decimal",
             ]

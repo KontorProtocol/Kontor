@@ -33,10 +33,21 @@ fn utxo_holder(out_point: context::OutPoint) -> Holder {
 // the hand-rolled `creator_index` secondary map. `creator` is immutable (set at
 // mint, never updated), so the index is pure-append: a mint adds one member, and
 // `transfer` (which only changes `owner`) never moves it.
+//
+// The index COVERS `agreement_id` (`include = …`): also immutable, so the covered
+// leaf never churns — the recommended shape for covering (cold field, read via the
+// index). `.creator(c).iter()` then yields each NFT's agreement id straight from the
+// index without a per-member `get`.
+// `owner` is indexed so "which NFTs does X hold?" is a bucket scan + O(1) count
+// instead of an impossible full-map scan. It is PLAIN (no `include`): `owner` changes
+// on every transfer/attach/detach, so the framework already relocates the member
+// across buckets on `set_owner` — a covering leaf would be rewritten on every
+// ownership change for zero read benefit (the hot-field anti-pattern for covering).
 #[derive(Clone, Storage)]
+#[index(owner, by = owner)]
+#[index(creator, by = creator, include = (agreement_id))]
 struct NftRecord {
     pub owner: Holder,
-    #[index]
     pub creator: Holder,
     pub agreement_id: String,
     pub attributes: Map<String, String>,
@@ -300,6 +311,75 @@ impl Guest for Nft {
             return 0;
         };
         ctx.model().nfts().creator(creator).len()
+    }
+
+    fn list_nfts_by_owner(
+        ctx: &ViewContext,
+        owner: HolderRef,
+        offset: u64,
+        limit: u64,
+    ) -> Vec<NftInfo> {
+        // Same lenient clamping as `list_nfts_by_creator`. Unlike the creator index
+        // (append-only), the owner index is live-updated on transfer, so this is a
+        // snapshot of the current holders at read time.
+        let limit = limit.min(MAX_LIST_LIMIT) as usize;
+        if limit == 0 {
+            return Vec::new();
+        }
+        let Ok(owner): Result<Holder, _> = owner.try_into() else {
+            return Vec::new();
+        };
+        let offset = usize::try_from(offset).unwrap_or(usize::MAX);
+        let nfts = ctx.model().nfts();
+        nfts.owner(owner)
+            .keys()
+            .skip(offset)
+            .take(limit)
+            .filter_map(|nft_id: String| {
+                nfts.get(&nft_id).map(|nft| NftInfo {
+                    nft_id,
+                    owner: nft.owner().as_ref(),
+                    creator: nft.creator().as_ref(),
+                    agreement_id: nft.agreement_id(),
+                })
+            })
+            .collect()
+    }
+
+    fn count_nfts_by_owner(ctx: &ViewContext, owner: HolderRef) -> u64 {
+        let Ok(owner): Result<Holder, _> = owner.try_into() else {
+            return 0;
+        };
+        ctx.model().nfts().owner(owner).len()
+    }
+
+    fn agreement_ids_by_creator(
+        ctx: &ViewContext,
+        creator: HolderRef,
+        offset: u64,
+        limit: u64,
+    ) -> Vec<String> {
+        // Same lenient clamping as `list_nfts_by_creator`.
+        let limit = limit.min(MAX_LIST_LIMIT) as usize;
+        if limit == 0 {
+            return Vec::new();
+        }
+        let Ok(creator): Result<Holder, _> = creator.try_into() else {
+            return Vec::new();
+        };
+        let offset = usize::try_from(offset).unwrap_or(usize::MAX);
+        // COVERING read: the creator index carries each NFT's (immutable) agreement
+        // id in its leaf, so `.values()` streams them straight from the index — no
+        // per-NFT `nfts.get()`. Contrast `list_nfts_by_creator`, which must still
+        // fetch each record for the mutable `owner`.
+        ctx.model()
+            .nfts()
+            .creator(creator)
+            .values()
+            .skip(offset)
+            .take(limit)
+            .map(|covered| covered.agreement_id)
+            .collect()
     }
 
     fn get_attributes(ctx: &ViewContext, nft_id: String) -> Vec<Attribute> {

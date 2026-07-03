@@ -1,8 +1,9 @@
 pub(crate) mod resources;
 
 pub use resources::{
-    Contract, CoreContext, FallContext, FileDescriptor, HasContractId, Holder, Keys, ProcContext,
-    ProcStorage, Proof, Signer, Transaction, ViewContext, ViewStorage, prover_challenge_key,
+    Contract, CoreContext, FallContext, FileDescriptor, HasContractId, Holder, IndexRows, Keys,
+    ProcContext, ProcStorage, Proof, Signer, Transaction, ViewContext, ViewStorage,
+    prover_challenge_key,
 };
 
 wasmtime::component::bindgen!({
@@ -17,6 +18,7 @@ wasmtime::component::bindgen!({
         "kontor:built-in/context.view-storage": ViewStorage,
         "kontor:built-in/context.proc-storage": ProcStorage,
         "kontor:built-in/context.keys": Keys,
+        "kontor:built-in/context.index-rows": IndexRows,
         "kontor:built-in/context.holder": Holder,
         "kontor:built-in/context.contract": Contract,
         "kontor:built-in/context.transaction": Transaction,

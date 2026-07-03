@@ -70,6 +70,17 @@ interface context {
         next: async func() -> option<list<u8>>;
     }
 
+    // A COVERING-index scan cursor (the value-returning analogue of `keys`). Each
+    // item is one live leaf directly under the scanned bucket, as
+    // `(member-element, projection-value)`: the member is the `(sort, pk)` tuple (or
+    // bare `pk`) codec element — the same bytes `keys.next` yields — and the value is
+    // the covering projection stored AS that leaf's value (`include=` fields, tuple-
+    // packed). The guest decodes the member to `(S, K)`/`K` and the value to the
+    // covered fields, assembling both without a per-member point read. none = end.
+    resource index-rows {
+        next: async func() -> option<tuple<list<u8>, list<u8>>>;
+    }
+
     resource view-storage {
         get-str: async func(path: list<u8>) -> option<string>;
         get-u64: async func(path: list<u8>) -> option<u64>;
@@ -90,6 +101,10 @@ interface context {
         // discarding them (each pulled key is metered), so `from-key` and `after`
         // don't co-occur; `from-key` wins if both are set.
         get-keys: async func(path: list<u8>, after: option<list<u8>>, from-key: option<list<u8>>) -> keys;
+        // The covering-scan analogue of `get-keys`: same `path`/`after`/`from-key`
+        // cursor semantics, but each row also carries its leaf's projection value
+        // (see the `index-rows` resource). For reading `include=` covering indexes.
+        get-index-rows: async func(path: list<u8>, after: option<list<u8>>, from-key: option<list<u8>>) -> index-rows;
         exists: async func(path: list<u8>) -> bool;
         // Resolve which discriminant is current under `path`. `candidates` are the
         // already-encoded child elements (a string element, or an interned dict-ref
@@ -107,6 +122,8 @@ interface context {
         get-list-u8: async func(path: list<u8>) -> option<list<u8>>;
         // See view-storage::get-keys.
         get-keys: async func(path: list<u8>, after: option<list<u8>>, from-key: option<list<u8>>) -> keys;
+        // See view-storage::get-index-rows.
+        get-index-rows: async func(path: list<u8>, after: option<list<u8>>, from-key: option<list<u8>>) -> index-rows;
         exists: async func(path: list<u8>) -> bool;
         // See view-storage::extend-path-with-match.
         extend-path-with-match: async func(path: list<u8>, candidates: list<list<u8>>) -> option<u32>;

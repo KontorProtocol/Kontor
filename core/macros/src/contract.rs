@@ -13,9 +13,10 @@ pub struct Config {
     name: String,
     path: Option<String>,
     /// Secondary-index declarations on WIT records used as `Map` values.
-    /// Semicolon-separated entries, each `record: name [by field] [sort field]`
-    /// (kebab-case, as in the WIT); `record: field` is sugar for a single-field
-    /// index. E.g.
+    /// Semicolon-separated entries, each
+    /// `record: name [by field…] [sort field] [include field…]` (kebab-case, as in the
+    /// WIT); `record: field` is sugar for a single-field index. `include` marks a
+    /// covering index (those fields are projected into the index leaf). E.g.
     /// ```text
     /// indexed = "
     ///   agreement-data: active;
@@ -31,11 +32,14 @@ pub struct Config {
     indexed: Option<String>,
 }
 
-/// Translate one `name [by field…] [sort field]` entry (the part after `record:`)
-/// into the Rust struct-level attribute string `#[index(name, by = …, sort = …)]`.
-/// `by` takes one or more fields (a composite bucket), consuming tokens up to the
-/// next `sort` or the end. kebab names map to the generated snake_case Rust idents.
+/// Translate one `name [by field…] [sort field] [include field…]` entry (the part
+/// after `record:`) into the Rust struct-level attribute string
+/// `#[index(name, by = …, sort = …, include = (…))]`. `by` and `include` each take one
+/// or more fields, consuming tokens up to the next keyword or the end; `include` marks
+/// a covering index (those fields ride the index leaf). kebab names map to the
+/// generated snake_case Rust idents.
 fn index_attr(spec: &str) -> String {
+    const KEYWORDS: &[&str] = &["by", "sort", "include"];
     let mut tokens = spec.split_whitespace().peekable();
     let name = tokens
         .next()
@@ -43,10 +47,11 @@ fn index_attr(spec: &str) -> String {
         .to_snake_case();
     let mut by: Vec<String> = Vec::new();
     let mut sort: Option<String> = None;
+    let mut include: Vec<String> = Vec::new();
     while let Some(keyword) = tokens.next() {
         match keyword {
             "by" => {
-                while let Some(field) = tokens.next_if(|t| *t != "sort") {
+                while let Some(field) = tokens.next_if(|t| !KEYWORDS.contains(t)) {
                     by.push(field.to_snake_case());
                 }
                 if by.is_empty() {
@@ -59,8 +64,18 @@ fn index_attr(spec: &str) -> String {
                     .unwrap_or_else(|| panic!("`sort` needs a field in indexed entry: {spec:?}"));
                 sort = Some(field.to_snake_case());
             }
+            "include" => {
+                while let Some(field) = tokens.next_if(|t| !KEYWORDS.contains(t)) {
+                    include.push(field.to_snake_case());
+                }
+                if include.is_empty() {
+                    panic!("`include` needs at least one field in indexed entry: {spec:?}");
+                }
+            }
             other => {
-                panic!("unexpected `{other}` in indexed entry (expected `by`/`sort`): {spec:?}")
+                panic!(
+                    "unexpected `{other}` in indexed entry (expected `by`/`sort`/`include`): {spec:?}"
+                )
             }
         }
     }
@@ -72,6 +87,9 @@ fn index_attr(spec: &str) -> String {
     }
     if let Some(sort) = sort {
         args.push_str(&format!(", sort = {sort}"));
+    }
+    if !include.is_empty() {
+        args.push_str(&format!(", include = ({})", include.join(", ")));
     }
     format!("#[index({args})]")
 }
@@ -97,7 +115,9 @@ fn index_attr_options(indexed: Option<&str>) -> TokenStream {
             continue;
         }
         let (record, rest) = entry.split_once(':').unwrap_or_else(|| {
-            panic!("`indexed` entry must be `record: name [by field] [sort field]`: {entry:?}")
+            panic!(
+                "`indexed` entry must be `record: name [by field] [sort field] [include field…]`: {entry:?}"
+            )
         });
         by_record
             .entry(record.trim().to_string())
@@ -190,6 +210,12 @@ pub fn generate(config: Config) -> TokenStream {
             }
         }
 
+        impl stdlib::HasNextRow for context::IndexRows {
+            fn next(&self) -> Option<(Vec<u8>, Vec<u8>)> {
+                self.next()
+            }
+        }
+
         #[automatically_derived]
         impl stdlib::ReadStorage for context::ViewStorage {
             fn __get_str(self: &alloc::rc::Rc<Self>, path: &[u8]) -> Option<String> {
@@ -214,6 +240,10 @@ pub fn generate(config: Config) -> TokenStream {
 
             fn __get_keys_from<T: stdlib::KeyElement + Clone>(self: &alloc::rc::Rc<Self>, path: &[u8], from: Option<&[u8]>) -> impl Iterator<Item = T> + use<T> {
                 stdlib::make_keys_iterator(self.get_keys(path, None, from))
+            }
+
+            fn __get_index_rows(self: &alloc::rc::Rc<Self>, path: &[u8], from: Option<&[u8]>) -> impl Iterator<Item = (Vec<u8>, Vec<u8>)> + use<> {
+                stdlib::make_index_rows_iterator(self.get_index_rows(path, None, from))
             }
 
             fn __exists(self: &alloc::rc::Rc<Self>, path: &[u8]) -> bool {
@@ -253,6 +283,10 @@ pub fn generate(config: Config) -> TokenStream {
 
             fn __get_keys_from<T: stdlib::KeyElement + Clone>(self: &alloc::rc::Rc<Self>, path: &[u8], from: Option<&[u8]>) -> impl Iterator<Item = T> + use<T> {
                 stdlib::make_keys_iterator(self.get_keys(path, None, from))
+            }
+
+            fn __get_index_rows(self: &alloc::rc::Rc<Self>, path: &[u8], from: Option<&[u8]>) -> impl Iterator<Item = (Vec<u8>, Vec<u8>)> + use<> {
+                stdlib::make_index_rows_iterator(self.get_index_rows(path, None, from))
             }
 
             fn __exists(self: &alloc::rc::Rc<Self>, path: &[u8]) -> bool {

@@ -43,12 +43,14 @@ impl ChallengeModel {
                 name_id: 0u8,
                 bucket: (/*ERROR*/),
                 sort: None,
+                projection: None,
             });
         entries
             .push(stdlib::IndexEntry {
                 name_id: 1u8,
                 bucket: (/*ERROR*/),
                 sort: None,
+                projection: None,
             });
         entries
     }
@@ -148,6 +150,7 @@ impl ChallengeWriteModel {
                         name_id: 0u8,
                         bucket: (/*ERROR*/),
                         sort: None,
+                        projection: None,
                     },
                 ],
                 &[
@@ -155,6 +158,7 @@ impl ChallengeWriteModel {
                         name_id: 0u8,
                         bucket: (/*ERROR*/),
                         sort: None,
+                        projection: None,
                     },
                 ],
             );
@@ -175,6 +179,7 @@ impl ChallengeWriteModel {
                         name_id: 0u8,
                         bucket: (/*ERROR*/),
                         sort: None,
+                        projection: None,
                     },
                 ],
                 &[
@@ -182,6 +187,7 @@ impl ChallengeWriteModel {
                         name_id: 0u8,
                         bucket: (/*ERROR*/),
                         sort: None,
+                        projection: None,
                     },
                 ],
             );
@@ -205,6 +211,7 @@ impl ChallengeWriteModel {
                         name_id: 0u8,
                         bucket: (/*ERROR*/),
                         sort: None,
+                        projection: None,
                     },
                 ],
                 &[
@@ -212,6 +219,7 @@ impl ChallengeWriteModel {
                         name_id: 0u8,
                         bucket: (/*ERROR*/),
                         sort: None,
+                        projection: None,
                     },
                 ],
             );
@@ -233,6 +241,7 @@ impl ChallengeWriteModel {
                         name_id: 1u8,
                         bucket: (/*ERROR*/),
                         sort: None,
+                        projection: None,
                     },
                 ],
                 &[
@@ -240,6 +249,7 @@ impl ChallengeWriteModel {
                         name_id: 1u8,
                         bucket: (/*ERROR*/),
                         sort: None,
+                        projection: None,
                     },
                 ],
             );
@@ -260,6 +270,7 @@ impl ChallengeWriteModel {
                         name_id: 1u8,
                         bucket: (/*ERROR*/),
                         sort: None,
+                        projection: None,
                     },
                 ],
                 &[
@@ -267,6 +278,7 @@ impl ChallengeWriteModel {
                         name_id: 1u8,
                         bucket: (/*ERROR*/),
                         sort: None,
+                        projection: None,
                     },
                 ],
             );
@@ -290,6 +302,7 @@ impl ChallengeWriteModel {
                         name_id: 1u8,
                         bucket: (/*ERROR*/),
                         sort: None,
+                        projection: None,
                     },
                 ],
                 &[
@@ -297,6 +310,7 @@ impl ChallengeWriteModel {
                         name_id: 1u8,
                         bucket: (/*ERROR*/),
                         sort: None,
+                        projection: None,
                     },
                 ],
             );
@@ -348,12 +362,14 @@ impl stdlib::Indexed for Challenge {
                 name_id: 0u8,
                 bucket: (/*ERROR*/),
                 sort: None,
+                projection: None,
             });
         entries
             .push(stdlib::IndexEntry {
                 name_id: 1u8,
                 bucket: (/*ERROR*/),
                 sort: None,
+                projection: None,
             });
         entries
     }

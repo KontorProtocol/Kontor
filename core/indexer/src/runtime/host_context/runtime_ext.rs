@@ -1,12 +1,13 @@
 use anyhow::Result;
 use bitcoin::hashes::Hash;
 use futures_util::StreamExt;
+use indexer_types::deserialize;
 use wasmtime::component::{Accessor, Resource};
 
 use crate::runtime::wit::kontor::built_in::context::HolderRef;
 use crate::runtime::wit::{
-    Contract, CoreContext, FallContext, HasContractId, Holder, Keys, ProcContext, ProcStorage,
-    Signer, Transaction, ViewContext, ViewStorage,
+    Contract, CoreContext, FallContext, HasContractId, Holder, IndexRows, Keys, ProcContext,
+    ProcStorage, Signer, Transaction, ViewContext, ViewStorage,
 };
 use crate::runtime::{Runtime, fuel::Fuel, hash_bytes};
 
@@ -206,6 +207,39 @@ impl Runtime {
         }
         // The child key's codec element bytes; the guest decodes it.
         Ok(k)
+    }
+
+    pub(super) async fn _next_index_row<T>(
+        &self,
+        accessor: &Accessor<T, Self>,
+        self_: Resource<IndexRows>,
+    ) -> Result<Option<(Vec<u8>, Vec<u8>)>> {
+        let item: Option<(Vec<u8>, Vec<u8>)> = self
+            .table
+            .lock()
+            .await
+            .get_mut(&self_)?
+            .stream
+            .next()
+            .await
+            .transpose()?;
+        match item {
+            Some((member, raw_value)) => {
+                // Meter member + the raw value bytes read from the log (a covering read
+                // pays for the projection it returns, not just the member).
+                Fuel::KeysNext((member.len() + raw_value.len()) as u64)
+                    .consume(accessor, self.gauge.as_ref())
+                    .await?;
+                // The leaf value is a stored list_u8 — i.e. a SERIALIZED `Vec<u8>` (the
+                // covering projection was written via `set-list-u8`, which serializes).
+                // Deserialize it back to the raw projection bytes here, exactly as
+                // `_get_primitive` does for a `get-list-u8`, so the guest decodes the
+                // projection's codec elements, not their serialization frame.
+                let value: Vec<u8> = deserialize(&raw_value)?;
+                Ok(Some((member, value)))
+            }
+            None => Ok(None),
+        }
     }
 
     pub(super) async fn _fall_signer<T>(
