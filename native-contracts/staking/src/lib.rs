@@ -19,14 +19,21 @@ const MAX_STAKE: u64 = 1_000_000_000; // Cap to fit in u64 voting power
 // a storage enum, so it buckets by its discriminant); `ed25519_pubkey` partitions
 // by consensus key (a bucket holds the ≤1 validators sharing a key — enough to
 // enforce uniqueness without scanning).
+//
+// The `status` index COVERS `(stake, ed25519_pubkey)` so `get_active_set` reads the
+// whole consensus set index-only (`.iter()`, no per-validator `get`). TRADE-OFF: `stake`
+// is HOT (rewritten by `add_stake`/`process_pending`/exit), so its covering leaf is
+// re-written on every stake change — a net win only if active-set reads dominate stake
+// mutations. `ed25519_pubkey` is cold. (Both struct-level so the index ids stay
+// status=0, ed25519_pubkey=1.)
 #[derive(Clone, Storage)]
+#[index(status, by = status, include = (stake, ed25519_pubkey))]
+#[index(ed25519_pubkey, by = ed25519_pubkey)]
 struct ValidatorEntry {
     pub stake: Decimal,
-    #[index]
     pub status: ValidatorStatus,
     pub activation_height: u64,
     pub deactivation_height: u64,
-    #[index]
     pub ed25519_pubkey: Vec<u8>,
 }
 
@@ -320,17 +327,17 @@ impl Guest for Staking {
         // The consensus set is ACTIVE ∪ PENDING_EXIT (exiting validators still
         // validate until their deactivation height) — two index buckets, not a
         // scan-and-filter over every validator.
+        // COVERING read: the `status` index carries each validator's `stake` +
+        // `ed25519_pubkey` in its leaf, so `.iter()` yields them directly — no
+        // per-validator `get()`.
         let mut set: Vec<ActiveValidatorInfo> = validators
             .status(ValidatorStatus::Active)
-            .keys()
-            .chain(validators.status(ValidatorStatus::PendingExit).keys())
-            .filter_map(|key| {
-                let entry = validators.get(&key)?;
-                Some(ActiveValidatorInfo {
-                    x_only_pubkey: key.to_string(),
-                    stake: entry.stake(),
-                    ed25519_pubkey: entry.ed25519_pubkey(),
-                })
+            .iter()
+            .chain(validators.status(ValidatorStatus::PendingExit).iter())
+            .map(|(key, v)| ActiveValidatorInfo {
+                x_only_pubkey: key.to_string(),
+                stake: v.stake,
+                ed25519_pubkey: v.ed25519_pubkey,
             })
             .collect();
         // Re-merge the two buckets into one holder-ordered set so the order the

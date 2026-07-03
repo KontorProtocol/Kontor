@@ -510,6 +510,36 @@ async fn test_native_nft_contract() -> Result<()> {
     // total_minted counts mints, not transfers: still 3 after the alice→bob move.
     assert_eq!(nft::total_minted(runtime).await?, 3);
 
+    // The OWNER index tracks CURRENT holders — the mirror image of the creator index.
+    // After the alice→bob transfer of nft_id_1: bob holds {nft_id_1 (transferred),
+    // nft_id_2 (minted by bob)}, alice holds {nft_id_3}. Note this is the OPPOSITE of
+    // the creator counts (alice 2, bob 1) — precisely the query the owner index exists
+    // for, and impossible without it.
+    assert_eq!(nft::count_nfts_by_owner(runtime, bob_ref.clone()).await?, 2);
+    assert_eq!(
+        nft::count_nfts_by_owner(runtime, alice_ref.clone()).await?,
+        1
+    );
+    assert_eq!(
+        nft::count_nfts_by_owner(runtime, carol_ref.clone()).await?,
+        0
+    );
+    let bob_holds = nft::list_nfts_by_owner(runtime, bob_ref.clone(), 0, 100).await?;
+    let mut bob_ids: Vec<&str> = bob_holds.iter().map(|n| n.nft_id.as_str()).collect();
+    bob_ids.sort();
+    let mut expected_bob = vec![nft_id_1, nft_id_2];
+    expected_bob.sort();
+    assert_eq!(bob_ids, expected_bob);
+    assert!(bob_holds.iter().all(|n| n.owner == bob_ref));
+    assert_eq!(
+        nft::list_nfts_by_owner(runtime, alice_ref.clone(), 0, 100)
+            .await?
+            .iter()
+            .map(|n| n.nft_id.as_str())
+            .collect::<Vec<_>>(),
+        vec![nft_id_3]
+    );
+
     // The creator index is invariant under transfers: alice keeps her
     // two entries, bob keeps his single entry, and the listed NFTs now
     // expose the *current* owner (bob for nft_id_1, alice for nft_id_3,

@@ -3,7 +3,7 @@ contract!(
     name = "filestorage",
     indexed = "
         agreement-data: active;
-        challenge-data: status;
+        challenge-data: status include (agreement-id, block-height, num-challenges, seed, prover-id, deadline-height);
         challenge-data: due by status sort deadline-height;
     "
 );
@@ -548,13 +548,23 @@ impl Guest for Filestorage {
     }
 
     fn get_active_challenges(ctx: &ViewContext) -> Vec<ChallengeData> {
-        let model = ctx.model();
-        model
+        // COVERING read: the `status` index covers every non-bucket `ChallengeData`
+        // field (all immutable after creation), so `.iter()` reconstructs the full
+        // record straight from the index leaf — one scan, no per-challenge `get()`.
+        // Only `status` is the bucket (known = Active here); `challenge_id` is the key.
+        ctx.model()
             .challenges()
             .status(ChallengeStatus::Active)
-            .keys()
-            .filter_map(|challenge_id: String| {
-                model.challenges().get(&challenge_id).map(|c| c.load())
+            .iter()
+            .map(|(challenge_id, v)| ChallengeData {
+                challenge_id,
+                agreement_id: v.agreement_id,
+                block_height: v.block_height,
+                num_challenges: v.num_challenges,
+                seed: v.seed,
+                prover_id: v.prover_id,
+                deadline_height: v.deadline_height,
+                status: ChallengeStatus::Active,
             })
             .collect()
     }

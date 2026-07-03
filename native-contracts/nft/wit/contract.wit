@@ -121,6 +121,24 @@ world root {
     creator: holder-ref
   ) -> u64;
 
+  /// Return up to `limit` NFTs CURRENTLY held by `owner`, skipping the first
+  /// `offset`. Backed by a secondary owner→nft-ids index, live-updated on every
+  /// transfer/attach/detach (so this reflects present ownership, unlike
+  /// `list-nfts-by-creator` which is the immutable minter). Same clamping/leniency
+  /// as `list-nfts-by-creator`.
+  export list-nfts-by-owner: async func(
+    ctx: borrow<view-context>,
+    owner: holder-ref,
+    offset: u64,
+    limit: u64
+  ) -> list<nft-info>;
+
+  /// Number of NFTs currently held by `owner` (the O(1) owner-bucket count).
+  export count-nfts-by-owner: async func(
+    ctx: borrow<view-context>,
+    owner: holder-ref
+  ) -> u64;
+
   /// Return up to `limit` agreement ids for NFTs minted by `creator` (skipping
   /// the first `offset`), read straight from the creator index's COVERING
   /// projection — the agreement id is stored in the index leaf, so this touches
