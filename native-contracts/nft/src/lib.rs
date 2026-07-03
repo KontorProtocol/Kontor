@@ -15,7 +15,8 @@ const MAX_NFT_ID_LEN_BYTES: usize = 64;
 const MAX_ATTRIBUTES: usize = 32;
 const MAX_ATTR_KEY_LEN_BYTES: usize = 64;
 const MAX_ATTR_VALUE_LEN_BYTES: usize = 2048;
-// Upper bound on `limit` accepted by `list_nfts` to keep response sizes
+// Upper bound on `limit` accepted by every paginated `list_*` view (`list_nfts`,
+// `list_nfts_by_creator`, `list_nfts_by_holder`) to keep response sizes
 // predictable. Callers paginate by issuing successive calls with `offset`.
 const MAX_LIST_LIMIT: u64 = 100;
 
@@ -28,12 +29,29 @@ fn utxo_holder(out_point: context::OutPoint) -> Holder {
 // keys). Default is dropped from the derive because Holder has no
 // sensible default. `creator` is set at mint and never updated;
 // `owner` changes on every transfer.
-// `creator` is indexed so `list_nfts_by_creator`/`count_nfts_by_creator` are a
-// prefix read + framework-maintained count of that creator's bucket — replacing
-// the hand-rolled `creator_index` secondary map. `creator` is immutable (set at
-// mint, never updated), so the index is pure-append: a mint adds one member, and
-// `transfer` (which only changes `owner`) never moves it.
+//
+// Both holders are framework-indexed so `list_nfts_by_holder`/`list_nfts_by_creator`
+// (and their `count_*` siblings) are a bucket scan + O(1) maintained count — no
+// hand-rolled secondary map.
+//   - `creator` uses a field-level `#[index]` (accessor `nfts.creator(..)`). It is
+//     immutable (set at mint, never updated), so its bucket is pure-append: a mint
+//     adds one member and nothing ever moves it.
+//   - `owner` uses the struct-level `#[index(holder, by = owner)]` (accessor
+//     `nfts.holder(..)`). It is mutable (every `transfer`/`attach`/`detach` calls
+//     `set_owner`); the generated setter reconciles the bucket in place —
+//     `apply_index_diff` tombstones the old holder's member (−count) and writes the
+//     new holder's (+count) — so a holder bucket only ever contains NFTs it
+//     currently owns. No stale ids, no read-time ownership re-check needed.
+//
+// Why the owner index is declared struct-level rather than a field-level `#[index]`
+// on `owner`: index ids are positional (assigned in declaration order) and are part
+// of the bucket path. A field-level `#[index]` on `owner` — declared before the
+// existing `creator` — would take id 0 and shift `creator` to id 1, relocating
+// creator's buckets. Declaring `holder` struct-level collects it AFTER the
+// field-level `creator`, so `creator` keeps id 0 and `holder` takes the new id 1 —
+// the change is purely additive to the on-disk index format.
 #[derive(Clone, Storage)]
+#[index(holder, by = owner)]
 struct NftRecord {
     pub owner: Holder,
     #[index]
@@ -300,6 +318,53 @@ impl Guest for Nft {
             return 0;
         };
         ctx.model().nfts().creator(creator).len()
+    }
+
+    fn list_nfts_by_holder(
+        ctx: &ViewContext,
+        holder: HolderRef,
+        offset: u64,
+        limit: u64,
+    ) -> Vec<NftInfo> {
+        // Same lenient semantics as `list_nfts_by_creator`: clamp `limit` to
+        // `MAX_LIST_LIMIT`, treat `limit == 0`/out-of-range `offset` as an empty
+        // page, and degrade an invalid `HolderRef` to an empty list.
+        let limit = limit.min(MAX_LIST_LIMIT) as usize;
+        if limit == 0 {
+            return Vec::new();
+        }
+        let Ok(holder): Result<Holder, _> = holder.try_into() else {
+            return Vec::new();
+        };
+        // See `list_nfts` for why we saturate instead of casting.
+        let offset = usize::try_from(offset).unwrap_or(usize::MAX);
+        let nfts = ctx.model().nfts();
+        // Unlike a hand-rolled append-only index, the `holder` index is reconciled
+        // in place on every `set_owner` (transfer/attach/detach), so the bucket
+        // holds only NFTs `holder` currently owns — every key is a live member and
+        // we paginate directly with skip/take, no ownership re-check pass.
+        nfts.holder(holder)
+            .keys()
+            .skip(offset)
+            .take(limit)
+            .filter_map(|nft_id: String| {
+                nfts.get(&nft_id).map(|nft| NftInfo {
+                    nft_id,
+                    owner: nft.owner().as_ref(),
+                    creator: nft.creator().as_ref(),
+                    agreement_id: nft.agreement_id(),
+                })
+            })
+            .collect()
+    }
+
+    fn count_nfts_by_holder(ctx: &ViewContext, holder: HolderRef) -> u64 {
+        // Mirrors `count_nfts_by_creator`'s lenient input handling: an unknown or
+        // invalid holder is reported as 0 NFTs. O(1) via the maintained count.
+        let Ok(holder): Result<Holder, _> = holder.try_into() else {
+            return 0;
+        };
+        ctx.model().nfts().holder(holder).len()
     }
 
     fn get_attributes(ctx: &ViewContext, nft_id: String) -> Vec<Attribute> {

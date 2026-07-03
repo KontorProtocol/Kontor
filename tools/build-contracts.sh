@@ -53,7 +53,7 @@ fi
 # so the crate registry persists across runs here too — cargo doesn't re-download
 # or recompile every time. CARGO_BUILD_JOBS is a local-machine guard (avoids OOM)
 # and doesn't affect output, so it stays here rather than in the reproducible env.
-"$RUNTIME" run --rm --platform "$PLATFORM" "${RUN_OPTS[@]}" \
+"$RUNTIME" run --rm --platform "$PLATFORM" "${RUN_OPTS[@]+"${RUN_OPTS[@]}"}" \
   -e CARGO_BUILD_JOBS="${CARGO_BUILD_JOBS:-2}" \
   -v "$REPO_ROOT:/build" -w /build \
   "$IMAGE_TAG" bash tools/build-in-image.sh "${WORKSPACES[@]}"

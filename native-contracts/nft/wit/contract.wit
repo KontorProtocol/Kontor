@@ -121,6 +121,28 @@ world root {
     creator: holder-ref
   ) -> u64;
 
+  /// Return up to `limit` NFTs currently held by `holder`, skipping the first
+  /// `offset` matches. Backed by the framework-maintained `owner` index, which
+  /// is reconciled on every ownership change (`mint`/`transfer`/`attach`/
+  /// `detach`): a transfer moves the NFT from the old holder's bucket to the
+  /// new one, so the result always reflects who owns the NFTs today — no stale
+  /// entries.
+  ///
+  /// The same clamping rules as `list-nfts` apply. An invalid or never-seen
+  /// `holder` yields an empty list rather than an error.
+  export list-nfts-by-holder: async func(
+    ctx: borrow<view-context>,
+    holder: holder-ref,
+    offset: u64,
+    limit: u64
+  ) -> list<nft-info>;
+
+  /// Number of NFTs currently held by `holder`. O(1). Returns 0 for unknown holders.
+  export count-nfts-by-holder: async func(
+    ctx: borrow<view-context>,
+    holder: holder-ref
+  ) -> u64;
+
   export get-attributes: async func(ctx: borrow<view-context>, nft-id: string) -> list<attribute>;
   export get-attribute: async func(ctx: borrow<view-context>, nft-id: string, key: string) -> option<string>;
 }
