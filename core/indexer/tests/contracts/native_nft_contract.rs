@@ -510,21 +510,24 @@ async fn test_native_nft_contract() -> Result<()> {
     // total_minted counts mints, not transfers: still 3 after the alice→bob move.
     assert_eq!(nft::total_minted(runtime).await?, 3);
 
-    // The OWNER index tracks CURRENT holders — the mirror image of the creator index.
+    // The HOLDER index tracks CURRENT holders — the mirror image of the creator index.
     // After the alice→bob transfer of nft_id_1: bob holds {nft_id_1 (transferred),
     // nft_id_2 (minted by bob)}, alice holds {nft_id_3}. Note this is the OPPOSITE of
-    // the creator counts (alice 2, bob 1) — precisely the query the owner index exists
+    // the creator counts (alice 2, bob 1) — precisely the query the holder index exists
     // for, and impossible without it.
-    assert_eq!(nft::count_nfts_by_owner(runtime, bob_ref.clone()).await?, 2);
     assert_eq!(
-        nft::count_nfts_by_owner(runtime, alice_ref.clone()).await?,
+        nft::count_nfts_by_holder(runtime, bob_ref.clone()).await?,
+        2
+    );
+    assert_eq!(
+        nft::count_nfts_by_holder(runtime, alice_ref.clone()).await?,
         1
     );
     assert_eq!(
-        nft::count_nfts_by_owner(runtime, carol_ref.clone()).await?,
+        nft::count_nfts_by_holder(runtime, carol_ref.clone()).await?,
         0
     );
-    let bob_holds = nft::list_nfts_by_owner(runtime, bob_ref.clone(), 0, 100).await?;
+    let bob_holds = nft::list_nfts_by_holder(runtime, bob_ref.clone(), 0, 100).await?;
     let mut bob_ids: Vec<&str> = bob_holds.iter().map(|n| n.nft_id.as_str()).collect();
     bob_ids.sort();
     let mut expected_bob = vec![nft_id_1, nft_id_2];
@@ -532,7 +535,7 @@ async fn test_native_nft_contract() -> Result<()> {
     assert_eq!(bob_ids, expected_bob);
     assert!(bob_holds.iter().all(|n| n.owner == bob_ref));
     assert_eq!(
-        nft::list_nfts_by_owner(runtime, alice_ref.clone(), 0, 100)
+        nft::list_nfts_by_holder(runtime, alice_ref.clone(), 0, 100)
             .await?
             .iter()
             .map(|n| n.nft_id.as_str())
@@ -729,6 +732,93 @@ async fn test_native_nft_contract() -> Result<()> {
         .await?,
         Vec::<nft::NftInfo>::new()
     );
+
+    Ok(())
+}
+
+// Regression: two removals from ONE holder's bucket at the SAME height. After the
+// first transfer alice's bucket carries a same-height tombstone next to its live count
+// and remaining members; the second transfer must still resolve alice's bucket
+// correctly (the maintained count and member set stay exact). Guards the index
+// reconciliation against a same-block multi-diff to a single bucket.
+#[testlib::test(contracts_dir = "../../test-contracts")]
+async fn test_nft_holder_index_same_block_multi_remove() -> Result<()> {
+    let alice = runtime.identity().await?;
+    let bob = runtime.identity().await?;
+    let alice_ref: HolderRef = (&alice).into();
+    let bob_ref: HolderRef = (&bob).into();
+
+    let nft_id_1 = "multi-nft-1";
+    let nft_id_2 = "multi-nft-2";
+    let nft_id_3 = "multi-nft-3";
+
+    // All three minted to alice, then two transferred away — every op lands at
+    // the same height in alice's bucket.
+    nft::mint(
+        runtime,
+        &alice,
+        nft_id_1,
+        vec![],
+        file_descriptor("multi_1", 11),
+    )
+    .await??;
+    nft::mint(
+        runtime,
+        &alice,
+        nft_id_2,
+        vec![],
+        file_descriptor("multi_2", 12),
+    )
+    .await??;
+    nft::mint(
+        runtime,
+        &alice,
+        nft_id_3,
+        vec![],
+        file_descriptor("multi_3", 13),
+    )
+    .await??;
+    assert_eq!(
+        nft::count_nfts_by_holder(runtime, alice_ref.clone()).await?,
+        3
+    );
+
+    nft::transfer(runtime, &alice, nft_id_1, &bob).await??;
+    // After the first remove alice's bucket already carries a same-height
+    // tombstone (multi-nft-1) next to its live count and two live members; the
+    // second remove must still resolve alice's bucket correctly.
+    nft::transfer(runtime, &alice, nft_id_2, &bob).await??;
+
+    // alice keeps exactly the one NFT she never transferred.
+    assert_eq!(
+        nft::count_nfts_by_holder(runtime, alice_ref.clone()).await?,
+        1,
+        "alice's bucket must stay accurate after two same-height removals"
+    );
+    let alice_held = nft::list_nfts_by_holder(runtime, alice_ref.clone(), 0, 100).await?;
+    assert_eq!(
+        alice_held
+            .iter()
+            .map(|n| n.nft_id.as_str())
+            .collect::<Vec<_>>(),
+        vec![nft_id_3]
+    );
+    assert!(alice_held.iter().all(|n| n.owner == alice_ref));
+
+    // bob receives both, in lexicographic id order.
+    assert_eq!(
+        nft::count_nfts_by_holder(runtime, bob_ref.clone()).await?,
+        2
+    );
+    let bob_held = nft::list_nfts_by_holder(runtime, bob_ref.clone(), 0, 100).await?;
+    assert_eq!(
+        bob_held
+            .iter()
+            .map(|n| n.nft_id.as_str())
+            .collect::<Vec<_>>(),
+        vec![nft_id_1, nft_id_2]
+    );
+    assert!(bob_held.iter().all(|n| n.owner == bob_ref));
 
     Ok(())
 }
