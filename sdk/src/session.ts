@@ -46,7 +46,7 @@ import type {
   FootprintResponse,
   Inst as WireInst,
 } from "./bindings.js";
-import { blsAggregateSignatures } from "./component/kontor-sdk.js";
+import { blsAggregateSignatures } from "./backend/index.js";
 import { ContractError, SignerError } from "./errors.js";
 import { Inst, type InstDecoder, wireInstToInst } from "./inst.js";
 import { Insts } from "./insts.js";

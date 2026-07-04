@@ -3,6 +3,8 @@ members = [
     "bls-crypto",
     "indexer",
     "indexer-types",
+    "kontor-core",
+    "kontor-mobile",
     "kontor-sdk",
     "macros",
     "numerics",
@@ -24,6 +26,7 @@ wit-bindgen = "=0.59.0"
 wit-component = "=0.253.0"
 wit-parser = "=0.253.0"
 wasm-wave = { version ="0.253.0", default-features = false }
+uniffi = "0.29"
 
 anyhow = { version = "=1.0.103", default-features = false }
 fastnum = "=0.7.5"

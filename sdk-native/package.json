@@ -1,0 +1,40 @@
+{
+  "name": "@kontor/sdk-native",
+  "version": "0.0.0",
+  "description": "React Native (JSI) backend for @kontor/sdk — native bindings over core/kontor-mobile (uniffi). Provides the same KontorBackend surface as the WASM component, so @kontor/sdk runs on iOS/Android.",
+  "author": "Unspendable Labs <dev@unspendablelabs.com>",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/KontorProtocol/Kontor.git",
+    "directory": "sdk-native"
+  },
+  "main": "./src/index.ts",
+  "types": "./src/index.ts",
+  "files": [
+    "src",
+    "cpp",
+    "ios",
+    "android",
+    "expo-module.config.json",
+    "*.podspec"
+  ],
+  "scripts": {
+    "//": "Native binaries are produced by build-mobile.sh (uniffi-bindgen-react-native + cargo). See README.",
+    "//ubrn-bug": "ubrn's cli.cjs runs `cargo run` (debug), and ubrn 0.29.3-1 + clap 4.6 hits a debug_assert on a `default_value`-on-bool arg. Disabling dev debug-assertions neutralizes it without patching ubrn.",
+    "ubrn:generate": "CARGO_PROFILE_DEV_DEBUG_ASSERTIONS=false uniffi-bindgen-react-native generate all --config ubrn.config.yaml",
+    "ubrn:build:ios": "CARGO_PROFILE_DEV_DEBUG_ASSERTIONS=false uniffi-bindgen-react-native build ios --config ubrn.config.yaml --and-generate",
+    "ubrn:build:android": "CARGO_PROFILE_DEV_DEBUG_ASSERTIONS=false uniffi-bindgen-react-native build android --config ubrn.config.yaml --and-generate",
+    "build:mobile": "bash ./build-mobile.sh",
+    "typecheck": "tsc --noEmit"
+  },
+  "peerDependencies": {
+    "react": "*",
+    "react-native": "*"
+  },
+  "devDependencies": {
+    "@kontor/sdk": "file:../sdk",
+    "typescript": "^6.0.3",
+    "uniffi-bindgen-react-native": "0.29.3-1"
+  }
+}

@@ -19,6 +19,7 @@
   "exports": {
     ".": {
       "types": "./dist/src/index.d.ts",
+      "react-native": "./dist/index.native.js",
       "import": "./dist/index.js"
     },
     "./vite": {
@@ -38,17 +39,22 @@
     "kontor-codegen": "./dist/cli.js"
   },
   "peerDependencies": {
-    "vite": "^8.0.0"
+    "vite": "^8.0.0",
+    "@kontor/sdk-native": "*"
   },
   "peerDependenciesMeta": {
     "vite": {
+      "optional": true
+    },
+    "@kontor/sdk-native": {
       "optional": true
     }
   },
   "scripts": {
     "build:rs": "cd ../core/kontor-sdk && ./build.sh",
     "build:ts": "vite build",
-    "build": "npm run build:ts",
+    "build:native": "KONTOR_TARGET=native vite build",
+    "build": "npm run build:ts && npm run build:native",
     "prepare": "npm run build",
     "test": "vitest",
     "test:browser": "vitest --browser",

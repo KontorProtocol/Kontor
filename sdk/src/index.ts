@@ -1,15 +1,15 @@
 // Public API. We deliberately don't re-export jco's `witCodec` namespace
 // since its only export is the `Wit` resource, which we expose directly.
-import { witCodec } from "./component/kontor-sdk.js";
+// Runtime primitives come from the pluggable backend (`./backend`, WASM
+// on web/Node, a native module on React Native); see backend/index.ts.
+import { witCodec } from "./backend/index.js";
 export const Wit = witCodec.Wit;
 export type Wit = InstanceType<typeof witCodec.Wit>;
 
-export {
-  numerics,
-  serializeInst,
-  deserializeInst,
-  validateWit,
-} from "./component/kontor-sdk.js";
+export { numerics, serializeInst, deserializeInst } from "./backend/index.js";
+// `validateWit` is a dev-time/tooling helper (WIT validation), not part
+// of the on-device runtime backend — keep it bound to the WASM component.
+export { validateWit } from "./component/kontor-sdk.js";
 export type {
   ValidationError,
   ValidationResult,

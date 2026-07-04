@@ -1,0 +1,167 @@
+name: Mobile
+
+# Verifies the React Native target end-to-end — the parts that need mobile
+# toolchains (Xcode, Android NDK, uniffi-bindgen-react-native) absent from
+# the dev machine. Path-filtered + manual so the heavier macOS/NDK runners
+# only fire when the mobile surface changes.
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - "core/kontor-core/**"
+      - "core/kontor-mobile/**"
+      - "sdk-native/**"
+      - "sdk/src/backend/**"
+      - "sdk/vite.config.ts"
+      - ".github/workflows/mobile.yml"
+  pull_request:
+    branches: ["**"]
+    paths:
+      - "core/kontor-core/**"
+      - "core/kontor-mobile/**"
+      - "sdk-native/**"
+      - "sdk/src/backend/**"
+      - "sdk/vite.config.ts"
+      - ".github/workflows/mobile.yml"
+
+env:
+  CARGO_TERM_COLOR: always
+  RUSTC_WRAPPER: sccache
+  SCCACHE_GHA_ENABLED: true
+
+jobs:
+  # ─── Cheap gate (Linux): the SDK emits both bundles and the RN bundle
+  # is WASM-free and wired to @kontor/sdk-native. Mirrors the local check.
+  sdk-bundles:
+    name: SDK bundles (web + react-native)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Install SDK deps
+        run: npm ci
+        working-directory: ./sdk
+      - name: Build web + native bundles
+        run: npm run build
+        working-directory: ./sdk
+      - name: Assert react-native bundle is WASM-free and native-wired
+        working-directory: ./sdk
+        run: |
+          test -f dist/index.native.js || { echo "dist/index.native.js missing"; exit 1; }
+          if grep -q "kontor-sdk.core.wasm\|component/kontor-sdk.js" dist/index.native.js; then
+            echo "FAIL: react-native bundle still references the WASM component"; exit 1
+          fi
+          grep -q "@kontor/sdk-native" dist/index.native.js \
+            || { echo "FAIL: react-native bundle does not import @kontor/sdk-native"; exit 1; }
+          echo "OK: index.native.js is WASM-free and imports @kontor/sdk-native"
+
+  # ─── The consensus-critical Rust compiles for every mobile triple. This
+  # is the strongest early signal (no bindings/app needed yet).
+  rust-mobile:
+    name: kontor-mobile (${{ matrix.name }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: ios
+            os: macos-latest
+            targets: aarch64-apple-ios aarch64-apple-ios-sim x86_64-apple-ios
+          - name: android
+            os: ubuntu-latest
+            targets: aarch64-linux-android armv7-linux-androideabi x86_64-linux-android
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Add Rust targets
+        run: rustup target add ${{ matrix.targets }}
+      - uses: mozilla-actions/sccache-action@v0.0.9
+      - name: Cache Cargo registry
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+          key: cargo-registry-mobile-${{ matrix.name }}-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: cargo-registry-mobile-${{ matrix.name }}-
+      - name: Install cargo-ndk (Android)
+        if: matrix.name == 'android'
+        run: cargo install cargo-ndk --locked
+      - name: Setup Android NDK
+        if: matrix.name == 'android'
+        uses: nttld/setup-ndk@v1
+        id: ndk
+        with:
+          ndk-version: r27
+      - name: Compile kontor-mobile for each target
+        working-directory: ./core
+        env:
+          ANDROID_NDK_HOME: ${{ steps.ndk.outputs.ndk-path }}
+        run: |
+          for t in ${{ matrix.targets }}; do
+            echo "::group::cargo build kontor-mobile --target $t"
+            cargo build -p kontor-mobile --release --target "$t"
+            echo "::endgroup::"
+          done
+
+  # ─── Full binding + binary build. Depends on the sdk-native skeleton
+  # TODOs (ubrn wiring in src/index.ts) being completed — green once the
+  # generated bindings resolve. See sdk-native/README.md.
+  bindings:
+    name: uniffi bindings + ${{ matrix.name }} binaries
+    needs: rust-mobile
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: ios
+            os: macos-latest
+          - name: android
+            os: ubuntu-latest
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: mozilla-actions/sccache-action@v0.0.9
+      # `uniffi-bindgen-react-native` (the `ubrn` CLI) is an npm package, not a
+      # cargo crate — it is pulled by `npm install` in ./sdk-native below and
+      # its version is pinned in lockstep with core/kontor-mobile's `uniffi`.
+      - name: Install cargo-ndk (Android)
+        if: matrix.name == 'android'
+        run: cargo install cargo-ndk --locked
+      - name: Setup Android NDK
+        if: matrix.name == 'android'
+        uses: nttld/setup-ndk@v1
+        id: ndk
+        with:
+          ndk-version: r27
+      - name: Install sdk-native deps
+        run: npm install
+        working-directory: ./sdk-native
+      - name: Generate bindings
+        run: npm run ubrn:generate
+        working-directory: ./sdk-native
+      - name: Type-check @kontor/sdk-native against generated bindings
+        run: npm run typecheck
+        working-directory: ./sdk-native
+      # Verify the native backend adapter conforms to KontorBackend against
+      # the freshly-generated @kontor/sdk-native wrapper (the
+      # `const _conforms: KontorBackend = native` assertion). tsconfig.native
+      # maps @kontor/sdk-native → ../sdk-native/src/index.ts.
+      - name: Type-check SDK native backend (KontorBackend conformance)
+        run: |
+          npm ci
+          npx tsc -p tsconfig.native.json
+        working-directory: ./sdk
+      - name: Build native binaries
+        working-directory: ./sdk-native
+        env:
+          ANDROID_NDK_HOME: ${{ steps.ndk.outputs.ndk-path }}
+        run: ./build-mobile.sh ${{ matrix.name }}

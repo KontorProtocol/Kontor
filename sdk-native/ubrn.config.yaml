@@ -1,0 +1,45 @@
+# uniffi-bindgen-react-native (ubrn) config — the integration point that
+# turns the `core/kontor-mobile` uniffi crate into a JSI Turbo Module +
+# TypeScript bindings for React Native.
+#
+# TODO(verify): the exact schema depends on the installed ubrn version.
+# Reconcile against `uniffi-bindgen-react-native --help` and the docs at
+# https://jhugman.github.io/uniffi-bindgen-react-native/ before first run.
+---
+name: kontor_mobile
+
+rust:
+  # The uniffi crate scaffolded in Phase 2. It re-exports kontor-core's
+  # pure logic (BLS, Inst codec, Wit, numerics) through #[uniffi::export].
+  # `directory` is relative to this config's dir (sdk-native); `manifestPath`
+  # is relative to `directory` (ubrn joins them), so it's just `Cargo.toml`.
+  directory: ../core/kontor-mobile
+  manifestPath: Cargo.toml
+  # cdylib/staticlib are already set in core/kontor-mobile/Cargo.toml.
+
+bindings:
+  # Generated TS bindings land here; `src/index.ts` re-shapes them into the
+  # KontorBackend contract. Generated output is gitignored (see .gitignore).
+  ts: src/generated
+  cpp: cpp
+
+turboModule:
+  # `ts`/`cpp` are output dirs (strings); `spec` is the TurboModule spec
+  # NAME (string), not a map. All have defaults; these are explicit.
+  ts: src/generated/spec
+  cpp: cpp
+  spec: NativeKontorMobile
+
+# iOS / Android target triples to compile. `build-mobile.sh` runs
+# `rustup target add` for these before building.
+ios:
+  targets:
+    - aarch64-apple-ios
+    - aarch64-apple-ios-sim
+    - x86_64-apple-ios
+android:
+  targets:
+    - arm64-v8a
+    - armeabi-v7a
+    - x86_64
+  # Android build goes through cargo-ndk; ANDROID_NDK_HOME must be set.
