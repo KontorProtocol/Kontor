@@ -423,24 +423,36 @@ impl stdlib::IndexScan<u64> for AgreementStorageAgreementsModel {
         &self,
         index_id: u8,
         bucket: &[&[u8]],
-        from: Option<&[u8]>,
+        lo: Option<&[u8]>,
+        hi: Option<&[u8]>,
+        descending: bool,
     ) -> alloc::boxed::Box<dyn Iterator<Item = (S, u64)>> {
         let bucket = self.index_path.push_interned(index_id).push_raw_elements(bucket);
         alloc::boxed::Box::new(
-            stdlib::ReadStorage::__get_keys_from::<(S, u64)>(&self.ctx, &bucket, from),
+            stdlib::ReadStorage::__get_keys_range::<
+                (S, u64),
+            >(&self.ctx, &bucket, lo, hi, descending),
         )
     }
     fn by_index_rows(
         &self,
         index_id: u8,
         bucket: &[&[u8]],
-        from: Option<&[u8]>,
+        lo: Option<&[u8]>,
+        hi: Option<&[u8]>,
+        descending: bool,
     ) -> alloc::boxed::Box<
         dyn Iterator<Item = (alloc::vec::Vec<u8>, alloc::vec::Vec<u8>)>,
     > {
         let bucket = self.index_path.push_interned(index_id).push_raw_elements(bucket);
         alloc::boxed::Box::new(
-            stdlib::ReadStorage::__get_index_rows(&self.ctx, &bucket, from),
+            stdlib::ReadStorage::__get_index_rows_range(
+                &self.ctx,
+                &bucket,
+                lo,
+                hi,
+                descending,
+            ),
         )
     }
     fn bucket_count(&self, index_id: u8, bucket: &[&[u8]]) -> u64 {
@@ -579,24 +591,36 @@ impl stdlib::IndexScan<u64> for AgreementStorageAgreementsWriteModel {
         &self,
         index_id: u8,
         bucket: &[&[u8]],
-        from: Option<&[u8]>,
+        lo: Option<&[u8]>,
+        hi: Option<&[u8]>,
+        descending: bool,
     ) -> alloc::boxed::Box<dyn Iterator<Item = (S, u64)>> {
         let bucket = self.index_path.push_interned(index_id).push_raw_elements(bucket);
         alloc::boxed::Box::new(
-            stdlib::ReadStorage::__get_keys_from::<(S, u64)>(&self.ctx, &bucket, from),
+            stdlib::ReadStorage::__get_keys_range::<
+                (S, u64),
+            >(&self.ctx, &bucket, lo, hi, descending),
         )
     }
     fn by_index_rows(
         &self,
         index_id: u8,
         bucket: &[&[u8]],
-        from: Option<&[u8]>,
+        lo: Option<&[u8]>,
+        hi: Option<&[u8]>,
+        descending: bool,
     ) -> alloc::boxed::Box<
         dyn Iterator<Item = (alloc::vec::Vec<u8>, alloc::vec::Vec<u8>)>,
     > {
         let bucket = self.index_path.push_interned(index_id).push_raw_elements(bucket);
         alloc::boxed::Box::new(
-            stdlib::ReadStorage::__get_index_rows(&self.ctx, &bucket, from),
+            stdlib::ReadStorage::__get_index_rows_range(
+                &self.ctx,
+                &bucket,
+                lo,
+                hi,
+                descending,
+            ),
         )
     }
     fn bucket_count(&self, index_id: u8, bucket: &[&[u8]]) -> u64 {

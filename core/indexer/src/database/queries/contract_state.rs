@@ -100,15 +100,19 @@ fn live_latest(select: &str, filter: &str) -> String {
 /// it's a drop-in for the SET reads (`keys`, `exists`).
 ///
 /// `lo` is the scan-start bind (`:lo`); `lo_cmp` is `>` (children only — `keys`) or
-/// `>=` (include the node — `exists`). `subtree` is the prefix whose `strinc` gives
-/// the exclusive upper bound (`:hi`, omitted when `strinc` is `None` — an empty or
-/// all-`0xFF` prefix runs to the end of the keyspace, bounded only by `contract_id`).
+/// `>=` (include the node — `exists`). `hi` is the pre-computed EXCLUSIVE upper bound
+/// (`:hi`, `cs.path < :hi`); `None` runs to the end of the keyspace, bounded only by
+/// `contract_id` (an empty or all-`0xFF` subtree, whose `strinc` was `None`). The
+/// caller owns the bound math (see [`scan_bounds`]) so the seek/range rules live in
+/// one place. `order` selects the row order — `Some("cs.path")` ascending or
+/// `Some("cs.path DESC")` descending; the byte range in `[lo, hi)` is the SAME either
+/// way (FDB-style: direction flips iteration order, not the bounds).
 fn live_paths_scan(
     select: &str,
     lo_cmp: &str,
     contract_id: u64,
     lo: Vec<u8>,
-    subtree: &[u8],
+    hi: Option<Vec<u8>>,
     order: Option<&str>,
     limit: Option<u64>,
 ) -> (String, Vec<(String, Value)>) {
@@ -119,7 +123,7 @@ fn live_paths_scan(
             Value::Integer(contract_id as i64),
         ),
     ];
-    let hi_clause = match strinc(subtree) {
+    let hi_clause = match hi {
         Some(hi) => {
             params.push((":hi".to_string(), Value::Blob(hi)));
             " AND cs.path < :hi"
@@ -601,8 +605,15 @@ pub async fn exists_contract_state(
     // (each row checks only its own path for a newer version), so a single newest
     // tombstone — e.g. an IndexedMap index `__delete` under `<map>#idx` — can't hide
     // a still-live sibling. `>=` includes the node itself, not just descendants.
-    let (query, params) =
-        live_paths_scan("1", ">=", contract_id, path.to_vec(), path, None, Some(1));
+    let (query, params) = live_paths_scan(
+        "1",
+        ">=",
+        contract_id,
+        path.to_vec(),
+        strinc(path),
+        None,
+        Some(1),
+    );
     let mut rows = conn.query(&query, params).await?;
     Ok(rows.next().await?.is_some())
 }
@@ -634,64 +645,81 @@ pub async fn exists_contract_state(
 /// unconditionally and pushes no `LIMIT`. The per-row "newer?" probe `NOT EXISTS`
 /// adds is the price of that laziness, and it's charged: each pulled row costs
 /// `Fuel::KeysNext`.
-/// The scan's lower bound `(lo, lo_cmp)` derived from the `path`/`after`/`from_key`
-/// cursor inputs — the ONE place the seek/paginate rules live, shared by the key scan
-/// ([`path_prefix_filter_contract_state`]) and the covering value scan
-/// ([`path_prefix_filter_index_rows`]) so the two can't drift.
+/// The scan's byte range `(lo_key, lo_cmp, hi_key)` derived from the `path`/`lo`/`hi`
+/// child-element bounds — the ONE place the seek/range rules live, shared by the key
+/// scan ([`path_prefix_filter_contract_state`]) and the covering value scan
+/// ([`path_prefix_filter_index_rows`]) so the two can't drift. `lo`/`hi` are
+/// child-element codec bytes (relative to `path`); the guest computes them from its
+/// `RangeBounds` via `sort_lower_bound`/`sort_upper_bound` (an FDB-style half-open
+/// `[lo, hi)` byte range, independent of iteration direction).
 ///
-/// No cursor: `path > :lo` (children only, exclude the node itself). With `after`:
-/// `strinc(after)` skips `after`'s whole subtree and the scan is `cs.path >= :lo`, so a
-/// multi-row child isn't re-read and re-emitted. `strinc` is `None` only for an
-/// all-`0xFF` path, which isn't well-formed codec bytes (rejected upstream by
-/// `validate_path`), so that fallback is unreachable.
+/// Lower bound. `lo = None`: `path > :lo` (children only, exclude the node itself).
+/// `lo = Some(x)`: an INCLUSIVE seek to `path ++ x` (`cs.path >= :lo`), so members at
+/// or above `x` are pulled without pulling-and-discarding those below (each pulled key
+/// is metered).
 ///
-/// `from_key` is an INCLUSIVE seek to `path ++ from_key` (a plain `>=`, no strinc): the
-/// sorted-index range query's host-side lower bound. It's a single child element (a
-/// `(sort, pk)`-prefix tuple), so any child at or above it is wanted. It supersedes
-/// `after` — the two never co-occur (range scans don't paginate cross-call) — so a
-/// present `from_key` wins.
+/// Upper bound. `hi = None`: the whole subtree — `strinc(path)` (the first path past
+/// all of `path`'s descendants), or open-ended when `strinc` is `None` (an all-`0xFF`
+/// path, which isn't well-formed codec bytes — rejected upstream by `validate_path` —
+/// so unreachable). `hi = Some(y)`: an EXCLUSIVE `path ++ y` (`cs.path < :hi`).
 ///
-/// An EMPTY `from_key` means "no lower bound" (seek to the start), NOT `>= path`: the
+/// An EMPTY `lo`/`hi` element means "no bound on that side", NOT `path` itself: the
 /// real guest never sends one (a seek key is always a non-empty tuple element), but the
 /// host is an untrusted boundary, and `path ++ "" = path` with `>=` would wrongly
 /// include the row AT the bucket prefix (e.g. the framework bucket count), whose empty
 /// suffix then traps `next_element`. Normalize it away so the child-only `> path`
 /// invariant holds.
-fn scan_lower_bound(
+fn scan_bounds(
     path: &[u8],
-    after: Option<Vec<u8>>,
-    from_key: Option<Vec<u8>>,
-) -> (Vec<u8>, &'static str) {
-    let from_key = from_key.filter(|f| !f.is_empty());
-    match (from_key, after) {
-        (Some(from_key), _) => {
-            let mut lo = path.to_vec();
-            lo.extend_from_slice(&from_key);
-            (lo, ">=")
+    lo: Option<Vec<u8>>,
+    hi: Option<Vec<u8>>,
+) -> (Vec<u8>, &'static str, Option<Vec<u8>>) {
+    let lo = lo.filter(|f| !f.is_empty());
+    let hi = hi.filter(|f| !f.is_empty());
+    let (lo_key, lo_cmp) = match lo {
+        Some(lo) => {
+            let mut key = path.to_vec();
+            key.extend_from_slice(&lo);
+            (key, ">=")
         }
-        (None, None) => (path.to_vec(), ">"),
-        (None, Some(after)) => (strinc(&after).unwrap_or(after), ">="),
-    }
+        None => (path.to_vec(), ">"),
+    };
+    let hi_key = match hi {
+        Some(hi) => {
+            let mut key = path.to_vec();
+            key.extend_from_slice(&hi);
+            Some(key)
+        }
+        None => strinc(path),
+    };
+    (lo_key, lo_cmp, hi_key)
 }
 
 pub async fn path_prefix_filter_contract_state(
     conn: &Connection,
     contract_id: u64,
     path: Vec<u8>,
-    after: Option<Vec<u8>>,
-    from_key: Option<Vec<u8>>,
+    lo: Option<Vec<u8>>,
+    hi: Option<Vec<u8>>,
+    descending: bool,
 ) -> Result<impl Stream<Item = Result<Vec<u8>, Error>> + Send + 'static, Error> {
-    // Ordered by `path` so children are grouped for dedup and the range streams; the
-    // `< :hi` subtree bound is the path's own `strinc` (see `live_paths_scan`). The
-    // lower bound + its `>`/`>=` comparator come from the shared `scan_lower_bound`.
-    let (lo, lo_cmp) = scan_lower_bound(&path, after, from_key);
+    // Ordered by `path` (ASC, or DESC for a `.rev()` scan) so children are grouped for
+    // dedup and the range streams. The `[lo, hi)` byte range comes from the shared
+    // `scan_bounds` and is the SAME regardless of direction (FDB-style: `descending`
+    // flips only iteration order).
+    let (lo_key, lo_cmp, hi_key) = scan_bounds(&path, lo, hi);
+    let order = if descending {
+        "cs.path DESC"
+    } else {
+        "cs.path"
+    };
     let (query, params) = live_paths_scan(
         "cs.path",
         lo_cmp,
         contract_id,
-        lo,
-        &path,
-        Some("cs.path"),
+        lo_key,
+        hi_key,
+        Some(order),
         None,
     );
     let rows = conn.query(&query, params).await?;
@@ -737,7 +765,7 @@ pub async fn path_prefix_filter_contract_state(
 /// live leaf directly under `path` as `(member-element, value)` — the member element
 /// (first codec element after the prefix; the `keys()` scan yields exactly this) paired
 /// with that leaf's stored VALUE (its covering projection). Same lower-bound / seek /
-/// paginate semantics (via [`scan_lower_bound`]); it only additionally selects
+/// range semantics (via [`scan_bounds`]); it only additionally selects
 /// `cs.value` and returns it alongside each member.
 ///
 /// Dedup is keep-FIRST per member. A covering leaf is a single row at `path ++ member`,
@@ -749,17 +777,23 @@ pub async fn path_prefix_filter_index_rows(
     conn: &Connection,
     contract_id: u64,
     path: Vec<u8>,
-    after: Option<Vec<u8>>,
-    from_key: Option<Vec<u8>>,
+    lo: Option<Vec<u8>>,
+    hi: Option<Vec<u8>>,
+    descending: bool,
 ) -> Result<impl Stream<Item = Result<(Vec<u8>, Vec<u8>), Error>> + Send + 'static, Error> {
-    let (lo, lo_cmp) = scan_lower_bound(&path, after, from_key);
+    let (lo_key, lo_cmp, hi_key) = scan_bounds(&path, lo, hi);
+    let order = if descending {
+        "cs.path DESC"
+    } else {
+        "cs.path"
+    };
     let (query, params) = live_paths_scan(
         "cs.path, cs.value",
         lo_cmp,
         contract_id,
-        lo,
-        &path,
-        Some("cs.path"),
+        lo_key,
+        hi_key,
+        Some(order),
         None,
     );
     let rows = conn.query(&query, params).await?;

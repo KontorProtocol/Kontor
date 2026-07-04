@@ -238,12 +238,12 @@ pub fn generate(config: Config) -> TokenStream {
                 self.get_list_u8(path)
             }
 
-            fn __get_keys_from<T: stdlib::KeyElement + Clone>(self: &alloc::rc::Rc<Self>, path: &[u8], from: Option<&[u8]>) -> impl Iterator<Item = T> + use<T> {
-                stdlib::make_keys_iterator(self.get_keys(path, None, from))
+            fn __get_keys_range<T: stdlib::KeyElement + Clone>(self: &alloc::rc::Rc<Self>, path: &[u8], lo: Option<&[u8]>, hi: Option<&[u8]>, descending: bool) -> impl Iterator<Item = T> + use<T> {
+                stdlib::make_keys_iterator(self.get_keys(path, lo, hi, descending))
             }
 
-            fn __get_index_rows(self: &alloc::rc::Rc<Self>, path: &[u8], from: Option<&[u8]>) -> impl Iterator<Item = (Vec<u8>, Vec<u8>)> + use<> {
-                stdlib::make_index_rows_iterator(self.get_index_rows(path, None, from))
+            fn __get_index_rows_range(self: &alloc::rc::Rc<Self>, path: &[u8], lo: Option<&[u8]>, hi: Option<&[u8]>, descending: bool) -> impl Iterator<Item = (Vec<u8>, Vec<u8>)> + use<> {
+                stdlib::make_index_rows_iterator(self.get_index_rows(path, lo, hi, descending))
             }
 
             fn __exists(self: &alloc::rc::Rc<Self>, path: &[u8]) -> bool {
@@ -281,12 +281,12 @@ pub fn generate(config: Config) -> TokenStream {
                 self.get_list_u8(path)
             }
 
-            fn __get_keys_from<T: stdlib::KeyElement + Clone>(self: &alloc::rc::Rc<Self>, path: &[u8], from: Option<&[u8]>) -> impl Iterator<Item = T> + use<T> {
-                stdlib::make_keys_iterator(self.get_keys(path, None, from))
+            fn __get_keys_range<T: stdlib::KeyElement + Clone>(self: &alloc::rc::Rc<Self>, path: &[u8], lo: Option<&[u8]>, hi: Option<&[u8]>, descending: bool) -> impl Iterator<Item = T> + use<T> {
+                stdlib::make_keys_iterator(self.get_keys(path, lo, hi, descending))
             }
 
-            fn __get_index_rows(self: &alloc::rc::Rc<Self>, path: &[u8], from: Option<&[u8]>) -> impl Iterator<Item = (Vec<u8>, Vec<u8>)> + use<> {
-                stdlib::make_index_rows_iterator(self.get_index_rows(path, None, from))
+            fn __get_index_rows_range(self: &alloc::rc::Rc<Self>, path: &[u8], lo: Option<&[u8]>, hi: Option<&[u8]>, descending: bool) -> impl Iterator<Item = (Vec<u8>, Vec<u8>)> + use<> {
+                stdlib::make_index_rows_iterator(self.get_index_rows(path, lo, hi, descending))
             }
 
             fn __exists(self: &alloc::rc::Rc<Self>, path: &[u8]) -> bool {

@@ -415,6 +415,27 @@ pub fn tuple_from_elements(parts: &[&[u8]]) -> Vec<u8> {
     out
 }
 
+/// The EXCLUSIVE upper bound of the range covering every nested tuple whose FIRST
+/// element is `lead`: the smallest key strictly greater than every `(lead, …)` member,
+/// for ANY trailing elements. `strinc` of the tuple-OPEN prefix `TAG_TUPLE ++ lead`
+/// (the tuple tag + `lead`, WITHOUT the terminator).
+///
+/// This is the correct partner to [`tuple_from_elements`]`(&[lead])` (which sorts just
+/// BELOW every `(lead, …)`, since its trailing `TERM` (0x00) is below every element
+/// tag). Bounding the upper side is the asymmetric case: you must `strinc` WITHIN
+/// `lead`, NOT `strinc` the terminated 1-tuple — `strinc(tuple_from_elements(&[lead]))`
+/// increments the `TERM` to 0x01 and then wrongly EXCLUDES members whose second element
+/// begins with tag 0x01 (bytes), because the bound becomes a proper byte-prefix of them.
+///
+/// Never `None`: the leading `TAG_TUPLE` (0x05) guarantees a non-`0xFF` byte, so `strinc`
+/// always finds a byte to increment.
+pub fn tuple_lead_upper_bound(lead: &[u8]) -> Vec<u8> {
+    let mut prefix = Vec::with_capacity(1 + lead.len());
+    prefix.push(TAG_TUPLE);
+    prefix.extend_from_slice(lead);
+    strinc(&prefix).expect("tuple-open prefix begins with TAG_TUPLE (0x05), never all-0xFF")
+}
+
 /// Derive [`KeyElement`] for a domain type that is keyed by its canonical string
 /// form: it encodes as a string element via `Display` and decodes via `FromStr`.
 /// For types (e.g. the built-in `Holder`) whose distinct/ordered string identity
@@ -989,6 +1010,75 @@ mod tests {
         assert_eq!(strinc(&[0x01, 0xFF]), Some(vec![0x02]));
         assert_eq!(strinc(&[0xFF, 0xFF]), None); // unbounded above
         assert_eq!(strinc(&[]), None);
+    }
+
+    // A sorted-index member `(sort, pk)` packed as one nested-tuple element.
+    fn member<S: KeyElement, K: KeyElement>(sort: &S, pk: &K) -> Vec<u8> {
+        tuple_from_elements(&[sort.encode().as_slice(), pk.encode().as_slice()])
+    }
+
+    // THE Phase-3 range invariant: `tuple_from_elements([lo])` (lower) and
+    // `tuple_lead_upper_bound(lo)` (upper) sandwich every member of lead `lo`, for ANY
+    // pk, and don't overlap the next lead — so `[lower(a), upper(a))` is exactly lead
+    // `a`'s members, and the four RangeBounds map to these two keys host-side.
+    #[test]
+    fn tuple_lead_bounds_partition_members_by_lead() {
+        let mut rng = Lcg(0x5eed_c0de);
+        let pks: [Vec<u8>; 4] = [
+            vec![],           // empty bytes (encodes with TAG_BYTES=0x01 — the trap tag)
+            vec![0x01],       // bytes starting 0x01
+            vec![0xFF, 0xFF], // bytes of all-0xFF
+            b"z".to_vec(),    // ordinary bytes
+        ];
+        for _ in 0..3000 {
+            let (mut a, mut b) = (rng.next(), rng.next());
+            if a == b {
+                continue;
+            }
+            if a > b {
+                core::mem::swap(&mut a, &mut b);
+            } // a < b
+            let lower_a = tuple_from_elements(&[a.encode().as_slice()]);
+            let upper_a = tuple_lead_upper_bound(&a.encode());
+            let lower_b = tuple_from_elements(&[b.encode().as_slice()]);
+            for pk in &pks {
+                let m = member(&a, pk);
+                assert!(
+                    lower_a.as_slice() <= m.as_slice(),
+                    "member below its lead's lower"
+                );
+                assert!(
+                    m.as_slice() < upper_a.as_slice(),
+                    "member NOT under its lead's upper — the tag-0x01 pk trap"
+                );
+            }
+            // Non-overlap: nothing of lead `a` reaches lead `b`.
+            assert!(
+                upper_a.as_slice() <= lower_b.as_slice(),
+                "upper(a) must not exceed lower(b) for a<b"
+            );
+        }
+    }
+
+    // Documents the exact bug `tuple_lead_upper_bound` avoids: a pk encoded with the
+    // bytes tag (0x01) must stay UNDER the lead's upper bound. The naive
+    // `strinc(tuple_from_elements([lead]))` bumps the terminator to 0x01 and becomes a
+    // byte-prefix of such members, wrongly excluding them.
+    #[test]
+    fn tuple_lead_upper_bound_includes_tag01_pk_that_naive_strinc_drops() {
+        let lead = 42u64;
+        let pk = vec![0xAB_u8, 0xCD]; // Vec<u8> → leads with TAG_BYTES (0x01)
+        let m = member(&lead, &pk);
+        let correct = tuple_lead_upper_bound(&lead.encode());
+        let naive = strinc(&tuple_from_elements(&[lead.encode().as_slice()])).unwrap();
+        assert!(
+            m.as_slice() < correct.as_slice(),
+            "correct upper bound must include a 0x01-tagged pk"
+        );
+        assert!(
+            m.as_slice() >= naive.as_slice(),
+            "the NAIVE bound wrongly excludes it — this is why we strinc the prefix, not the 1-tuple"
+        );
     }
 
     #[test]

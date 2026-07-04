@@ -467,12 +467,13 @@ impl Storage {
         &self,
         contract_id: u64,
         path: Vec<u8>,
-        after: Option<Vec<u8>>,
-        from_key: Option<Vec<u8>>,
+        lo: Option<Vec<u8>>,
+        hi: Option<Vec<u8>>,
+        descending: bool,
     ) -> Result<impl Stream<Item = Result<Vec<u8>, crate::database::queries::Error>> + Send + 'static>
     {
         Ok(
-            path_prefix_filter_contract_state(&self.conn, contract_id, path, after, from_key)
+            path_prefix_filter_contract_state(&self.conn, contract_id, path, lo, hi, descending)
                 .await?,
         )
     }
@@ -484,12 +485,16 @@ impl Storage {
         &self,
         contract_id: u64,
         path: Vec<u8>,
-        after: Option<Vec<u8>>,
-        from_key: Option<Vec<u8>>,
+        lo: Option<Vec<u8>>,
+        hi: Option<Vec<u8>>,
+        descending: bool,
     ) -> Result<
         impl Stream<Item = Result<(Vec<u8>, Vec<u8>), crate::database::queries::Error>> + Send + 'static,
     > {
-        Ok(path_prefix_filter_index_rows(&self.conn, contract_id, path, after, from_key).await?)
+        Ok(
+            path_prefix_filter_index_rows(&self.conn, contract_id, path, lo, hi, descending)
+                .await?,
+        )
     }
 
     /// Canonical per-block entropy (the Bitcoin block hash) at `height`, within the

@@ -87,24 +87,22 @@ interface context {
         get-s64: async func(path: list<u8>) -> option<s64>;
         get-bool: async func(path: list<u8>) -> option<bool>;
         get-list-u8: async func(path: list<u8>) -> option<list<u8>>;
-        // Distinct child keys under `path`, as a lazy cursor. `after` is a CROSS-CALL
-        // resume cursor: the full path of the last child node already returned (the
-        // last key re-encoded as `path ++ key`); the scan resumes past that child's
-        // WHOLE subtree, so a multi-row child is not re-emitted. none = start of
-        // subtree. The guest bounds the UPPER end by how far it iterates
-        // (`take(n)`/early-break, or for procs running out of gas).
-        //
-        // `from-key` is an intra-call INCLUSIVE lower bound: the child-element bytes
-        // to seek to, so the scan starts at the first child `>= path ++ from-key` (a
-        // plain `>=`, NOT `after`'s strinc-subtree-skip). It lets a sorted-index range
-        // query seek past members below `lo` host-side instead of pulling-and-
-        // discarding them (each pulled key is metered), so `from-key` and `after`
-        // don't co-occur; `from-key` wins if both are set.
-        get-keys: async func(path: list<u8>, after: option<list<u8>>, from-key: option<list<u8>>) -> keys;
-        // The covering-scan analogue of `get-keys`: same `path`/`after`/`from-key`
-        // cursor semantics, but each row also carries its leaf's projection value
-        // (see the `index-rows` resource). For reading `include=` covering indexes.
-        get-index-rows: async func(path: list<u8>, after: option<list<u8>>, from-key: option<list<u8>>) -> index-rows;
+        // Distinct child keys under `path`, as a lazy cursor over the half-open byte
+        // range `[lo, hi)` (FDB-style `get-range`). `lo`/`hi` are child-element bytes
+        // (relative to `path`); the guest computes them from its `RangeBounds` via
+        // `sort_lower_bound`/`sort_upper_bound`. `lo = none` starts at the first child
+        // (children only, not `path` itself); `hi = none` runs to the end of `path`'s
+        // subtree. An INCLUSIVE lower / EXCLUSIVE upper seek lets a sorted-index range
+        // query skip out-of-range members host-side rather than pulling-and-discarding
+        // them (each pulled key is metered). `descending` reverses only the iteration
+        // ORDER — the `[lo, hi)` range is identical either way — so a `.rev()` scan
+        // yields highest-first. The guest bounds how far it iterates (`take(n)`/early-
+        // break, or for procs running out of gas).
+        get-keys: async func(path: list<u8>, lo: option<list<u8>>, hi: option<list<u8>>, descending: bool) -> keys;
+        // The covering-scan analogue of `get-keys`: same `[lo, hi)`/`descending`
+        // semantics, but each row also carries its leaf's projection value (see the
+        // `index-rows` resource). For reading `include=` covering indexes.
+        get-index-rows: async func(path: list<u8>, lo: option<list<u8>>, hi: option<list<u8>>, descending: bool) -> index-rows;
         exists: async func(path: list<u8>) -> bool;
         // Resolve which discriminant is current under `path`. `candidates` are the
         // already-encoded child elements (a string element, or an interned dict-ref
@@ -121,9 +119,9 @@ interface context {
         get-bool: async func(path: list<u8>) -> option<bool>;
         get-list-u8: async func(path: list<u8>) -> option<list<u8>>;
         // See view-storage::get-keys.
-        get-keys: async func(path: list<u8>, after: option<list<u8>>, from-key: option<list<u8>>) -> keys;
+        get-keys: async func(path: list<u8>, lo: option<list<u8>>, hi: option<list<u8>>, descending: bool) -> keys;
         // See view-storage::get-index-rows.
-        get-index-rows: async func(path: list<u8>, after: option<list<u8>>, from-key: option<list<u8>>) -> index-rows;
+        get-index-rows: async func(path: list<u8>, lo: option<list<u8>>, hi: option<list<u8>>, descending: bool) -> index-rows;
         exists: async func(path: list<u8>) -> bool;
         // See view-storage::extend-path-with-match.
         extend-path-with-match: async func(path: list<u8>, candidates: list<list<u8>>) -> option<u32>;

@@ -74,12 +74,13 @@ impl built_in::context::HostViewStorageWithStore for Runtime {
         accessor: &Accessor<T, Self>,
         self_: Resource<ViewStorage>,
         path: Vec<u8>,
-        after: Option<Vec<u8>>,
-        from: Option<Vec<u8>>,
+        lo: Option<Vec<u8>>,
+        hi: Option<Vec<u8>>,
+        descending: bool,
     ) -> Result<Resource<Keys>> {
         accessor
             .with(|mut access| access.get().clone())
-            ._get_keys(accessor, self_, path, after, from)
+            ._get_keys(accessor, self_, path, lo, hi, descending)
             .await
     }
 
@@ -87,12 +88,13 @@ impl built_in::context::HostViewStorageWithStore for Runtime {
         accessor: &Accessor<T, Self>,
         self_: Resource<ViewStorage>,
         path: Vec<u8>,
-        after: Option<Vec<u8>>,
-        from: Option<Vec<u8>>,
+        lo: Option<Vec<u8>>,
+        hi: Option<Vec<u8>>,
+        descending: bool,
     ) -> Result<Resource<IndexRows>> {
         accessor
             .with(|mut access| access.get().clone())
-            ._get_index_rows(accessor, self_, path, after, from)
+            ._get_index_rows(accessor, self_, path, lo, hi, descending)
             .await
     }
 
