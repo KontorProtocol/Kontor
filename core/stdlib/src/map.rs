@@ -146,30 +146,36 @@ pub trait IndexScan<K: KeyElement + Clone> {
     /// can hand it back.
     fn by_index(&self, index_id: u8, bucket: &[&[u8]]) -> impl Iterator<Item = K> + use<Self, K>;
 
-    /// `(sort, pk)` members of a *sorted* index bucket in ascending order (the codec
-    /// is order-preserving and `sort` leads the tuple). `from` is an inclusive
-    /// lower-bound seek — a `(sort)`-prefix element (see [`sort_lower_bound`]) — so
-    /// members below it are skipped host-side, not pulled-and-discarded. Boxed so a
-    /// finisher names one return type across bucket shapes; the box owns its source.
+    /// `(sort, pk)` members of a *sorted* index bucket over the half-open `[lo, hi)`
+    /// sort-range (the codec is order-preserving and `sort` leads the tuple). `lo`/`hi`
+    /// are `(sort)`-prefix seek elements (see [`sort_lower_bound`]/[`sort_upper_bound`]),
+    /// so BOTH bounds are host seeks — members outside the range are never pulled-and-
+    /// discarded. `descending` yields members highest-first (the range is identical
+    /// either way). Boxed so a finisher names one return type across bucket shapes; the
+    /// box owns its source.
     fn by_index_sorted<S: KeyElement + Clone + 'static>(
         &self,
         index_id: u8,
         bucket: &[&[u8]],
-        from: Option<&[u8]>,
+        lo: Option<&[u8]>,
+        hi: Option<&[u8]>,
+        descending: bool,
     ) -> alloc::boxed::Box<dyn Iterator<Item = (S, K)>>;
 
-    /// Raw `(member-element, projection-value)` pairs of a *covering* index bucket in
-    /// ascending member order, optionally seeked (`from`, like `by_index_sorted`). The
-    /// value-returning primitive both covering queries back onto: the member bytes
-    /// decode to `K` (unsorted) or `(S, K)` (sorted), the value bytes to the covered
-    /// projection. Left raw here (not decoded) because the projection shape is the
-    /// generated `V`'s business, not this primitive's. Boxed so a finisher names one
-    /// return type across bucket shapes.
+    /// Raw `(member-element, projection-value)` pairs of a *covering* index bucket over
+    /// the `[lo, hi)` range (same `lo`/`hi`/`descending` seek semantics as
+    /// [`by_index_sorted`]). The value-returning primitive both covering queries back
+    /// onto: the member bytes decode to `K` (unsorted) or `(S, K)` (sorted), the value
+    /// bytes to the covered projection. Left raw here (not decoded) because the
+    /// projection shape is the generated `V`'s business, not this primitive's. Boxed so a
+    /// finisher names one return type across bucket shapes.
     fn by_index_rows(
         &self,
         index_id: u8,
         bucket: &[&[u8]],
-        from: Option<&[u8]>,
+        lo: Option<&[u8]>,
+        hi: Option<&[u8]>,
+        descending: bool,
     ) -> alloc::boxed::Box<dyn Iterator<Item = (Vec<u8>, Vec<u8>)>>;
 
     /// O(1) framework-maintained member count of the `(index_id, bucket…)` bucket.
@@ -289,6 +295,7 @@ pub struct SortedIndexQuery<'a, K, S, Src> {
     src: &'a Src,
     index_id: u8,
     bucket: Vec<Vec<u8>>,
+    descending: bool,
     _pd: PhantomData<(K, S)>,
 }
 
@@ -303,6 +310,7 @@ where
             src,
             index_id,
             bucket,
+            descending: false,
             _pd: PhantomData,
         }
     }
@@ -317,35 +325,39 @@ where
         self.len() == 0
     }
 
-    // The raw ascending `(sort, pk)` members, optionally seeked; every finisher
-    // maps over this.
-    fn members(&self, from: Option<&[u8]>) -> alloc::boxed::Box<dyn Iterator<Item = (S, K)>> {
+    /// Iterate the bucket highest-sort-value first (descending). Reverses only the
+    /// order, not membership; composes with [`range`](Self::range) either way round.
+    pub fn rev(mut self) -> Self {
+        self.descending = !self.descending;
+        self
+    }
+
+    // The raw `(sort, pk)` members in the query's direction; every finisher maps over
+    // this. The whole bucket (no `[lo, hi)` bound), so both seeks are `None`.
+    fn members(&self) -> alloc::boxed::Box<dyn Iterator<Item = (S, K)>> {
         self.src
-            .by_index_sorted::<S>(self.index_id, &bucket_refs(&self.bucket), from)
+            .by_index_sorted::<S>(self.index_id, &bucket_refs(&self.bucket), None, None, self.descending)
     }
 
     /// Primary keys in sort order (`BTreeMap::keys`).
     pub fn keys(self) -> alloc::boxed::Box<dyn Iterator<Item = K> + 'a> {
-        alloc::boxed::Box::new(self.members(None).map(|(_, k)| k))
+        alloc::boxed::Box::new(self.members().map(|(_, k)| k))
     }
 
     /// Sort values in order (`BTreeMap::values`) — the free `S` projection.
     pub fn values(self) -> alloc::boxed::Box<dyn Iterator<Item = S> + 'a> {
-        alloc::boxed::Box::new(self.members(None).map(|(s, _)| s))
+        alloc::boxed::Box::new(self.members().map(|(s, _)| s))
     }
 
     /// `(key, sort)` pairs in sort order (`BTreeMap::iter`; key-first like `(K, V)`).
     pub fn iter(self) -> alloc::boxed::Box<dyn Iterator<Item = (K, S)> + 'a> {
-        alloc::boxed::Box::new(self.members(None).map(|(s, k)| (k, s)))
+        alloc::boxed::Box::new(self.members().map(|(s, k)| (k, s)))
     }
 
-    /// Restrict to members whose sort value lies in `range` (`BTreeMap::range`).
-    /// The lower bound becomes a host-side seek; the upper bound early-breaks.
-    pub fn range(self, range: impl RangeBounds<S>) -> SortedRange<'a, K, S, Src>
-    where
-        S: PartialOrd,
-    {
-        SortedRange::new(self.src, self.index_id, self.bucket, &range)
+    /// Restrict to members whose sort value lies in `range` (`BTreeMap::range`). Both
+    /// bounds become host-side seeks; the current direction carries into the range.
+    pub fn range(self, range: impl RangeBounds<S>) -> SortedRange<'a, K, S, Src> {
+        SortedRange::new(self.src, self.index_id, self.bucket, self.descending, &range)
     }
 }
 
@@ -371,57 +383,65 @@ pub struct SortedRange<'a, K, S, Src> {
     src: &'a Src,
     index_id: u8,
     bucket: Vec<Vec<u8>>,
-    // Inclusive lower-bound seek key (host-side); `None` = from the start.
-    from: Option<Vec<u8>>,
-    // `Some(lo)` for an EXCLUSIVE lower bound: the seek lands inclusively at `lo`, so
-    // drop the handful of `sort == lo` members guest-side.
-    skip_lo: Option<S>,
-    hi: Bound<S>,
-    _k: PhantomData<K>,
+    // The half-open `[lo, hi)` sort-range as host-side seek keys (each an appended-to-
+    // bucket child element); `None` = unbounded on that side. Both `RangeBounds` ends map
+    // to a seek — see [`sort_lower_bound`]/[`sort_upper_bound`] — so there is no guest-side
+    // `skip_while`/`take_while` (which would also break a descending scan by cutting off
+    // the wrong end).
+    lo: Option<Vec<u8>>,
+    hi: Option<Vec<u8>>,
+    descending: bool,
+    _sk: PhantomData<(S, K)>,
 }
 
 impl<'a, K, S, Src> SortedRange<'a, K, S, Src>
 where
     K: KeyElement + Clone + 'static,
-    S: KeyElement + Clone + PartialOrd + 'static,
+    S: KeyElement + Clone + 'static,
     Src: IndexScan<K>,
 {
-    fn new(src: &'a Src, index_id: u8, bucket: Vec<Vec<u8>>, range: &impl RangeBounds<S>) -> Self {
-        let (from, skip_lo) = match range.start_bound() {
-            Bound::Unbounded => (None, None),
-            Bound::Included(lo) => (Some(sort_lower_bound(lo)), None),
-            Bound::Excluded(lo) => (Some(sort_lower_bound(lo)), Some(lo.clone())),
+    fn new(
+        src: &'a Src,
+        index_id: u8,
+        bucket: Vec<Vec<u8>>,
+        descending: bool,
+        range: &impl RangeBounds<S>,
+    ) -> Self {
+        let lo = match range.start_bound() {
+            Bound::Unbounded => None,
+            Bound::Included(lo) => Some(sort_lower_bound(lo)),
+            Bound::Excluded(lo) => Some(sort_upper_bound(lo)),
         };
         let hi = match range.end_bound() {
-            Bound::Unbounded => Bound::Unbounded,
-            Bound::Included(h) => Bound::Included(h.clone()),
-            Bound::Excluded(h) => Bound::Excluded(h.clone()),
+            Bound::Unbounded => None,
+            Bound::Included(h) => Some(sort_upper_bound(h)),
+            Bound::Excluded(h) => Some(sort_lower_bound(h)),
         };
         Self {
             src,
             index_id,
             bucket,
-            from,
-            skip_lo,
+            lo,
             hi,
-            _k: PhantomData,
+            descending,
+            _sk: PhantomData,
         }
     }
 
+    /// Iterate the range highest-sort-value first (descending).
+    pub fn rev(mut self) -> Self {
+        self.descending = !self.descending;
+        self
+    }
+
     fn members(self) -> impl Iterator<Item = (S, K)> {
-        let raw = self.src.by_index_sorted::<S>(
+        self.src.by_index_sorted::<S>(
             self.index_id,
             &bucket_refs(&self.bucket),
-            self.from.as_deref(),
-        );
-        let skip_lo = self.skip_lo;
-        let hi = self.hi;
-        raw.skip_while(move |(s, _)| skip_lo.as_ref().is_some_and(|lo| s <= lo))
-            .take_while(move |(s, _)| match &hi {
-                Bound::Unbounded => true,
-                Bound::Included(h) => s <= h,
-                Bound::Excluded(h) => s < h,
-            })
+            self.lo.as_deref(),
+            self.hi.as_deref(),
+            self.descending,
+        )
     }
 
     /// Primary keys within the range, in sort order.
@@ -443,7 +463,7 @@ where
 impl<'a, K, S, Src> IntoIterator for SortedRange<'a, K, S, Src>
 where
     K: KeyElement + Clone + 'static,
-    S: KeyElement + Clone + PartialOrd + 'static,
+    S: KeyElement + Clone + 'static,
     Src: IndexScan<K>,
 {
     type Item = (K, S);
@@ -497,7 +517,7 @@ where
 
     fn rows(&self) -> alloc::boxed::Box<dyn Iterator<Item = (Vec<u8>, Vec<u8>)>> {
         self.src
-            .by_index_rows(self.index_id, &bucket_refs(&self.bucket), None)
+            .by_index_rows(self.index_id, &bucket_refs(&self.bucket), None, None, false)
     }
 
     /// The bucket's primary keys (`BTreeSet::keys`) — the member without its value.
@@ -549,6 +569,7 @@ pub struct SortedCoveringQuery<'a, K, S, V, Src> {
     index_id: u8,
     bucket: Vec<Vec<u8>>,
     build: fn(&S, &[u8]) -> V,
+    descending: bool,
     _pd: PhantomData<(K, S)>,
 }
 
@@ -570,6 +591,7 @@ where
             index_id,
             bucket,
             build,
+            descending: false,
             _pd: PhantomData,
         }
     }
@@ -584,23 +606,34 @@ where
         self.len() == 0
     }
 
-    fn rows(
-        &self,
-        from: Option<&[u8]>,
-    ) -> alloc::boxed::Box<dyn Iterator<Item = (Vec<u8>, Vec<u8>)>> {
-        self.src
-            .by_index_rows(self.index_id, &bucket_refs(&self.bucket), from)
+    /// Iterate the bucket highest-sort-value first (descending). Composes with
+    /// [`range`](Self::range) either way round.
+    pub fn rev(mut self) -> Self {
+        self.descending = !self.descending;
+        self
+    }
+
+    // The whole bucket's raw `(member, value)` rows in the query's direction (no
+    // `[lo, hi)` bound), each finisher maps over this.
+    fn rows(&self) -> alloc::boxed::Box<dyn Iterator<Item = (Vec<u8>, Vec<u8>)>> {
+        self.src.by_index_rows(
+            self.index_id,
+            &bucket_refs(&self.bucket),
+            None,
+            None,
+            self.descending,
+        )
     }
 
     /// Primary keys in sort order (`ZRANGE`).
     pub fn keys(self) -> alloc::boxed::Box<dyn Iterator<Item = K> + 'a> {
-        alloc::boxed::Box::new(self.rows(None).map(|(m, _)| decode_sort_key::<S, K>(&m).1))
+        alloc::boxed::Box::new(self.rows().map(|(m, _)| decode_sort_key::<S, K>(&m).1))
     }
 
     /// `(key, score)` pairs in sort order (`ZRANGE WITHSCORES`) — the light view that
     /// skips the covered projection.
     pub fn with_scores(self) -> alloc::boxed::Box<dyn Iterator<Item = (K, S)> + 'a> {
-        alloc::boxed::Box::new(self.rows(None).map(|(m, _)| {
+        alloc::boxed::Box::new(self.rows().map(|(m, _)| {
             let (s, k) = decode_sort_key::<S, K>(&m);
             (k, s)
         }))
@@ -609,7 +642,7 @@ where
     /// The covered projection `V` of each member in sort order (`BTreeMap::values`).
     pub fn values(self) -> alloc::boxed::Box<dyn Iterator<Item = V> + 'a> {
         let build = self.build;
-        alloc::boxed::Box::new(self.rows(None).map(move |(m, v)| {
+        alloc::boxed::Box::new(self.rows().map(move |(m, v)| {
             let (s, _) = decode_sort_key::<S, K>(&m);
             build(&s, &v)
         }))
@@ -619,19 +652,24 @@ where
     /// the leaf.
     pub fn iter(self) -> alloc::boxed::Box<dyn Iterator<Item = (K, V)> + 'a> {
         let build = self.build;
-        alloc::boxed::Box::new(self.rows(None).map(move |(m, v)| {
+        alloc::boxed::Box::new(self.rows().map(move |(m, v)| {
             let (s, k) = decode_sort_key::<S, K>(&m);
             (k, build(&s, &v))
         }))
     }
 
     /// Restrict to members whose sort value lies in `range` (`BTreeMap::range` /
-    /// `ZRANGEBYSCORE`). The lower bound becomes a host-side seek; the upper early-breaks.
-    pub fn range(self, range: impl RangeBounds<S>) -> SortedCoveringRange<'a, K, S, V, Src>
-    where
-        S: PartialOrd,
-    {
-        SortedCoveringRange::new(self.src, self.index_id, self.bucket, self.build, &range)
+    /// `ZRANGEBYSCORE`). Both bounds become host-side seeks; the current direction
+    /// carries into the range.
+    pub fn range(self, range: impl RangeBounds<S>) -> SortedCoveringRange<'a, K, S, V, Src> {
+        SortedCoveringRange::new(
+            self.src,
+            self.index_id,
+            self.bucket,
+            self.build,
+            self.descending,
+            &range,
+        )
     }
 }
 
@@ -659,16 +697,16 @@ pub struct SortedCoveringRange<'a, K, S, V, Src> {
     index_id: u8,
     bucket: Vec<Vec<u8>>,
     build: fn(&S, &[u8]) -> V,
-    from: Option<Vec<u8>>,
-    skip_lo: Option<S>,
-    hi: Bound<S>,
-    _k: PhantomData<K>,
+    lo: Option<Vec<u8>>,
+    hi: Option<Vec<u8>>,
+    descending: bool,
+    _sk: PhantomData<(S, K)>,
 }
 
 impl<'a, K, S, V, Src> SortedCoveringRange<'a, K, S, V, Src>
 where
     K: KeyElement + Clone + 'static,
-    S: KeyElement + Clone + PartialOrd + 'static,
+    S: KeyElement + Clone + 'static,
     V: 'static,
     Src: IndexScan<K>,
 {
@@ -677,48 +715,50 @@ where
         index_id: u8,
         bucket: Vec<Vec<u8>>,
         build: fn(&S, &[u8]) -> V,
+        descending: bool,
         range: &impl RangeBounds<S>,
     ) -> Self {
-        let (from, skip_lo) = match range.start_bound() {
-            Bound::Unbounded => (None, None),
-            Bound::Included(lo) => (Some(sort_lower_bound(lo)), None),
-            Bound::Excluded(lo) => (Some(sort_lower_bound(lo)), Some(lo.clone())),
+        let lo = match range.start_bound() {
+            Bound::Unbounded => None,
+            Bound::Included(lo) => Some(sort_lower_bound(lo)),
+            Bound::Excluded(lo) => Some(sort_upper_bound(lo)),
         };
         let hi = match range.end_bound() {
-            Bound::Unbounded => Bound::Unbounded,
-            Bound::Included(h) => Bound::Included(h.clone()),
-            Bound::Excluded(h) => Bound::Excluded(h.clone()),
+            Bound::Unbounded => None,
+            Bound::Included(h) => Some(sort_upper_bound(h)),
+            Bound::Excluded(h) => Some(sort_lower_bound(h)),
         };
         Self {
             src,
             index_id,
             bucket,
             build,
-            from,
-            skip_lo,
+            lo,
             hi,
-            _k: PhantomData,
+            descending,
+            _sk: PhantomData,
         }
     }
 
-    // The raw `((S, K), value)` members within the seek/bound window; every finisher
-    // maps over this. Decodes the member once (for the sort comparison) and threads the
+    /// Iterate the range highest-sort-value first (descending).
+    pub fn rev(mut self) -> Self {
+        self.descending = !self.descending;
+        self
+    }
+
+    // The raw `((S, K), value)` members within the `[lo, hi)` window (both bounds are
+    // host seeks); every finisher maps over this. Decodes the member once and threads the
     // still-raw value bytes so only the finisher that needs `V` pays to build it.
     fn members(self) -> impl Iterator<Item = ((S, K), Vec<u8>)> {
-        let raw = self.src.by_index_rows(
-            self.index_id,
-            &bucket_refs(&self.bucket),
-            self.from.as_deref(),
-        );
-        let skip_lo = self.skip_lo;
-        let hi = self.hi;
-        raw.map(|(m, v)| (decode_sort_key::<S, K>(&m), v))
-            .skip_while(move |((s, _), _)| skip_lo.as_ref().is_some_and(|lo| s <= lo))
-            .take_while(move |((s, _), _)| match &hi {
-                Bound::Unbounded => true,
-                Bound::Included(h) => s <= h,
-                Bound::Excluded(h) => s < h,
-            })
+        self.src
+            .by_index_rows(
+                self.index_id,
+                &bucket_refs(&self.bucket),
+                self.lo.as_deref(),
+                self.hi.as_deref(),
+                self.descending,
+            )
+            .map(|(m, v)| (decode_sort_key::<S, K>(&m), v))
     }
 
     /// Primary keys within the range, in sort order.
@@ -747,7 +787,7 @@ where
 impl<'a, K, S, V, Src> IntoIterator for SortedCoveringRange<'a, K, S, V, Src>
 where
     K: KeyElement + Clone + 'static,
-    S: KeyElement + Clone + PartialOrd + 'static,
+    S: KeyElement + Clone + 'static,
     V: 'static,
     Src: IndexScan<K>,
 {
@@ -997,10 +1037,12 @@ mod tests {
                 _ => None,
             }
         }
-        fn __get_keys_from<T: KeyElement + Clone>(
+        fn __get_keys_range<T: KeyElement + Clone>(
             self: &Rc<Self>,
             path: &[u8],
-            from: Option<&[u8]>,
+            lo: Option<&[u8]>,
+            hi: Option<&[u8]>,
+            descending: bool,
         ) -> impl Iterator<Item = T> + use<T> {
             // Distinct child elements: byte-prefix the path, take the next element
             // of the suffix (mirrors the host's `next_element` extraction).
@@ -1018,27 +1060,36 @@ mod tests {
                 .collect();
             elems.sort();
             elems.dedup();
-            // Inclusive lower-bound seek: keep child elements `>= from` by raw byte
-            // order — the host does the same `>=` against `path ++ from` (see
-            // `path_prefix_filter_contract_state`).
-            let from = from.map(<[u8]>::to_vec);
-            elems
-                .into_iter()
-                .filter(move |e| from.as_deref().is_none_or(|f| e.as_slice() >= f))
-                .map(|e| {
-                    let (v, _) = T::decode_from(&e).unwrap();
-                    v
-                })
+            // Host-side `[lo, hi)` seek by raw byte order — inclusive `>= path ++ lo`,
+            // exclusive `< path ++ hi` (see `path_prefix_filter_contract_state` /
+            // `scan_bounds`). `descending` reverses only the iteration order.
+            let lo = lo.map(<[u8]>::to_vec);
+            let hi = hi.map(<[u8]>::to_vec);
+            if descending {
+                elems.reverse();
+            }
+            elems.into_iter().filter_map(move |e| {
+                if lo.as_deref().is_some_and(|l| e.as_slice() < l) {
+                    return None;
+                }
+                if hi.as_deref().is_some_and(|h| e.as_slice() >= h) {
+                    return None;
+                }
+                let (v, _) = T::decode_from(&e).unwrap();
+                Some(v)
+            })
         }
-        fn __get_index_rows(
+        fn __get_index_rows_range(
             self: &Rc<Self>,
             path: &[u8],
-            from: Option<&[u8]>,
+            lo: Option<&[u8]>,
+            hi: Option<&[u8]>,
+            descending: bool,
         ) -> impl Iterator<Item = (Vec<u8>, Vec<u8>)> + use<> {
             // Direct-child leaves under `path`, as (member-element, leaf value bytes) —
             // the covering projection is stored as list_u8 (`Cell::Bytes`). Mirrors the
-            // host's member extraction + inclusive `from` seek; the count row (at
-            // exactly `path`) is excluded by the non-empty-suffix check.
+            // host's member extraction + `[lo, hi)` seek; the count row (at exactly
+            // `path`) is excluded by the non-empty-suffix check.
             let mut rows: Vec<(Vec<u8>, Vec<u8>)> = self
                 .map
                 .borrow()
@@ -1060,9 +1111,15 @@ mod tests {
                 .collect();
             rows.sort();
             rows.dedup_by(|a, b| a.0 == b.0);
-            let from = from.map(<[u8]>::to_vec);
-            rows.into_iter()
-                .filter(move |(m, _)| from.as_deref().is_none_or(|f| m.as_slice() >= f))
+            let lo = lo.map(<[u8]>::to_vec);
+            let hi = hi.map(<[u8]>::to_vec);
+            if descending {
+                rows.reverse();
+            }
+            rows.into_iter().filter(move |(m, _)| {
+                !lo.as_deref().is_some_and(|l| m.as_slice() < l)
+                    && !hi.as_deref().is_some_and(|h| m.as_slice() >= h)
+            })
         }
         fn __get<T: crate::Retrieve<Self>>(self: &Rc<Self>, path: KeyPath) -> Option<T> {
             T::__get(self, path)
@@ -1711,8 +1768,8 @@ mod tests {
 
     // A minimal `IndexScan` over the `Mock` so the query types can be exercised
     // end-to-end: it builds the same bucket path the field model does and delegates
-    // to the mock's `__get_keys_from` / `__get_u64`, so the host-side lower-bound
-    // seek (via `from`) is exercised for real.
+    // to the mock's `__get_keys_range` / `__get_u64`, so the host-side `[lo, hi)`
+    // seek and `descending` order are exercised for real.
     struct MockIndex {
         ctx: Rc<Mock>,
         root: KeyPath,
@@ -1728,20 +1785,24 @@ mod tests {
             &self,
             index_id: u8,
             bucket: &[&[u8]],
-            from: Option<&[u8]>,
+            lo: Option<&[u8]>,
+            hi: Option<&[u8]>,
+            descending: bool,
         ) -> alloc::boxed::Box<dyn Iterator<Item = (S, String)>> {
             let path = self.root.push_interned(index_id).push_raw_elements(bucket);
-            alloc::boxed::Box::new(self.ctx.__get_keys_from::<(S, String)>(&path, from))
+            alloc::boxed::Box::new(self.ctx.__get_keys_range::<(S, String)>(&path, lo, hi, descending))
         }
 
         fn by_index_rows(
             &self,
             index_id: u8,
             bucket: &[&[u8]],
-            from: Option<&[u8]>,
+            lo: Option<&[u8]>,
+            hi: Option<&[u8]>,
+            descending: bool,
         ) -> alloc::boxed::Box<dyn Iterator<Item = (Vec<u8>, Vec<u8>)>> {
             let path = self.root.push_interned(index_id).push_raw_elements(bucket);
-            alloc::boxed::Box::new(self.ctx.__get_index_rows(&path, from))
+            alloc::boxed::Box::new(self.ctx.__get_index_rows_range(&path, lo, hi, descending))
         }
 
         fn bucket_count(&self, index_id: u8, bucket: &[&[u8]]) -> u64 {
@@ -1845,6 +1906,44 @@ mod tests {
         assert_eq!(
             q().range(20u64..=30).values().collect::<Vec<_>>(),
             vec![20u64, 30]
+        );
+    }
+
+    // `.rev()` flips the iteration order without changing membership, and composes
+    // with `.range(..)` in either order (the range is direction-independent).
+    #[test]
+    fn sorted_query_rev_descending() {
+        let idx = seed_sorted_bucket();
+        let q = || {
+            SortedIndexQuery::<String, u64, _>::new(
+                &idx,
+                nid("due"),
+                alloc::vec!["active".to_string().encode()],
+            )
+        };
+
+        // Whole bucket, highest-first.
+        assert_eq!(q().rev().keys().collect::<Vec<_>>(), vec!["c", "b", "a"]);
+        assert_eq!(q().rev().values().collect::<Vec<_>>(), vec![30u64, 20, 10]);
+        // Double `.rev()` is ascending again.
+        assert_eq!(
+            q().rev().rev().keys().collect::<Vec<_>>(),
+            vec!["a", "b", "c"]
+        );
+        // `.range(..).rev()` — bound first, then reverse.
+        assert_eq!(
+            q().range(10u64..=20).rev().keys().collect::<Vec<_>>(),
+            vec!["b", "a"]
+        );
+        // `.rev().range(..)` — direction set first, carried into the range: same result.
+        assert_eq!(
+            q().rev().range(10u64..=20).keys().collect::<Vec<_>>(),
+            vec!["b", "a"]
+        );
+        // Half-open upper still excludes `hi` under reversal.
+        assert_eq!(
+            q().range(10u64..30).rev().keys().collect::<Vec<_>>(),
+            vec!["b", "a"]
         );
     }
 
@@ -2053,6 +2152,41 @@ mod tests {
                 ("a".to_string(), (10u64, "ann".to_string())),
                 ("b".to_string(), (20, "bob".to_string()))
             ]
+        );
+    }
+
+    // `.rev()` on the sorted covering query: descending over the covered finishers, and
+    // composing with `.range(..)` either order round.
+    #[test]
+    fn sorted_covering_query_rev_descending() {
+        let idx = seed_sorted_covering_bucket();
+        let q = || {
+            SortedCoveringQuery::<String, u64, (u64, String), _>::new(
+                &idx,
+                nid("due"),
+                alloc::vec!["active".to_string().encode()],
+                build_due,
+            )
+        };
+
+        // Whole bucket, highest-first — covered values still assemble correctly.
+        assert_eq!(q().rev().keys().collect::<Vec<_>>(), vec!["c", "b", "a"]);
+        assert_eq!(
+            q().rev().values().collect::<Vec<_>>(),
+            vec![
+                (30u64, "cara".to_string()),
+                (20, "bob".to_string()),
+                (10, "ann".to_string())
+            ]
+        );
+        // `.range(..).rev()` and `.rev().range(..)` agree.
+        assert_eq!(
+            q().range(20u64..=30).rev().keys().collect::<Vec<_>>(),
+            vec!["c", "b"]
+        );
+        assert_eq!(
+            q().rev().range(20u64..=30).with_scores().collect::<Vec<_>>(),
+            vec![("c".to_string(), 30u64), ("b".to_string(), 20)]
         );
     }
 }

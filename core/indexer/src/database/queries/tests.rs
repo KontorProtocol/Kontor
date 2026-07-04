@@ -1509,6 +1509,7 @@ async fn test_map_keys() -> Result<()> {
         cs_path_dotted("test.path"),
         None,
         None,
+        false,
     )
     .await?;
     let paths = stream.try_collect::<Vec<Vec<u8>>>().await?;
@@ -1616,7 +1617,7 @@ async fn test_keys_with_idx_sibling_after_update() -> Result<()> {
     // `keys(m)` — both members are still in the primary map (44's value row was
     // updated, not removed), regardless of index churn.
     let stream =
-        path_prefix_filter_contract_state(&conn, cid, cs_path_dotted(m), None, None).await?;
+        path_prefix_filter_contract_state(&conn, cid, cs_path_dotted(m), None, None, false).await?;
     let mut keys = stream.try_collect::<Vec<Vec<u8>>>().await?;
     keys.sort();
     assert_eq!(keys, vec![cs_path(&["44"]), cs_path(&["45"])]);
@@ -1631,6 +1632,7 @@ async fn test_keys_with_idx_sibling_after_update() -> Result<()> {
         cs_path_dotted(&format!("{m}#idx.active.true")),
         None,
         None,
+        false,
     )
     .await?
     .try_collect::<Vec<Vec<u8>>>()
@@ -1691,10 +1693,11 @@ async fn test_empty_path_is_whole_keyspace_not_panic() -> Result<()> {
     // Empty path = whole keyspace: any live row makes `exists` true.
     assert!(exists_contract_state(&conn, cid, &[]).await?);
     // `keys()` of the root yields the single distinct top-level element ("m").
-    let top: Vec<Vec<u8>> = path_prefix_filter_contract_state(&conn, cid, Vec::new(), None, None)
-        .await?
-        .try_collect()
-        .await?;
+    let top: Vec<Vec<u8>> =
+        path_prefix_filter_contract_state(&conn, cid, Vec::new(), None, None, false)
+            .await?
+            .try_collect()
+            .await?;
     assert_eq!(top, vec![cs_path(&["m"])]);
     // `matching_path` at the root must not panic.
     let _ = matching_path(&conn, cid, &[], &cands(&["none", "some"])).await?;
@@ -2088,7 +2091,8 @@ mod proptest_paths {
                 let _ = exists_contract_state(&conn, cid, &path).await;
                 let _ = matching_path(&conn, cid, &path, &cands(&["none", "some"])).await;
                 if let Ok(stream) =
-                    path_prefix_filter_contract_state(&conn, cid, path.clone(), None, None).await
+                    path_prefix_filter_contract_state(&conn, cid, path.clone(), None, None, false)
+                        .await
                 {
                     let _ = stream.collect::<Vec<_>>().await;
                 }
@@ -2098,12 +2102,11 @@ mod proptest_paths {
     }
 }
 
-// Cross-call pagination via the `after` cursor: a caller resumes a keys scan
-// strictly past the last full path it saw. Within a call the lazy stream is what
-// bounds work (the guest stops iterating); across calls `after` is the resume
-// point, so two cursor-resumed reads reconstruct the full scan with no overlap.
+// A `descending` keys scan yields the same members highest-first (`ORDER BY cs.path
+// DESC`). Direction flips only the iteration order, not the `[lo, hi)` range — so a
+// full descending scan is the ascending scan reversed.
 #[tokio::test]
-async fn test_path_prefix_filter_after_cursor_resumes() -> Result<()> {
+async fn test_path_prefix_filter_descending_reverses_order() -> Result<()> {
     let (_reader, writer, _temp) = new_test_db().await?;
     let conn = writer.connection();
     let h = 600000;
@@ -2141,9 +2144,9 @@ async fn test_path_prefix_filter_after_cursor_resumes() -> Result<()> {
         .await?;
     }
 
-    // Full scan, no cursor: every member in path order.
+    // Ascending scan: every member in path order.
     let all: Vec<Vec<u8>> =
-        path_prefix_filter_contract_state(&conn, cid, cs_path(&["m"]), None, None)
+        path_prefix_filter_contract_state(&conn, cid, cs_path(&["m"]), None, None, false)
             .await?
             .try_collect()
             .await?;
@@ -2158,21 +2161,21 @@ async fn test_path_prefix_filter_after_cursor_resumes() -> Result<()> {
         ]
     );
 
-    // Resume after child `k2` (cursor = its child-node path `m/k2`): the remaining
-    // members, no overlap with the first two.
-    let rest: Vec<Vec<u8>> = path_prefix_filter_contract_state(
-        &conn,
-        cid,
-        cs_path(&["m"]),
-        Some(cs_path(&["m", "k2"])),
-        None,
-    )
-    .await?
-    .try_collect()
-    .await?;
+    // Descending scan: the same members, highest-first.
+    let desc: Vec<Vec<u8>> =
+        path_prefix_filter_contract_state(&conn, cid, cs_path(&["m"]), None, None, true)
+            .await?
+            .try_collect()
+            .await?;
     assert_eq!(
-        rest,
-        vec![cs_path(&["k3"]), cs_path(&["k4"]), cs_path(&["k5"])]
+        desc,
+        vec![
+            cs_path(&["k5"]),
+            cs_path(&["k4"]),
+            cs_path(&["k3"]),
+            cs_path(&["k2"]),
+            cs_path(&["k1"]),
+        ]
     );
 
     Ok(())
@@ -2245,8 +2248,9 @@ async fn test_path_prefix_filter_from_key_seeks_lower_bound() -> Result<()> {
             &conn,
             cid,
             bucket.clone(),
-            None,
             Some(stdlib::sort_lower_bound(&lo)),
+            None,
+            false,
         )
         .await?
         .try_collect()
@@ -2265,11 +2269,49 @@ async fn test_path_prefix_filter_from_key_seeks_lower_bound() -> Result<()> {
     // Seek above everything (>= 40): empty.
     assert!(scan_from(40).await?.is_empty());
 
-    // An EMPTY `from_key` (untrusted-boundary edge — the real guest never sends one)
-    // means "no lower bound", NOT `>= path`: it must return the full bucket child-only
-    // and NOT trap on the row at the bucket prefix. Same result as `None`.
+    // The `hi` bound is the EXCLUSIVE upper seek — `< bucket ++ sort_upper_bound(h)`
+    // includes all `(h, pk)` members, `< sort_lower_bound(h)` excludes them. A half-open
+    // `[10, 20)` (lower incl, upper excl) yields only a; `[10, 20]` (upper incl via
+    // `sort_upper_bound`) yields a, b.
+    let scan_range = async |lo: Vec<u8>, hi: Vec<u8>| -> Result<Vec<Vec<u8>>> {
+        Ok(
+            path_prefix_filter_contract_state(&conn, cid, bucket.clone(), Some(lo), Some(hi), false)
+                .await?
+                .try_collect()
+                .await?,
+        )
+    };
+    assert_eq!(
+        scan_range(
+            stdlib::sort_lower_bound(&10u64),
+            stdlib::sort_lower_bound(&20u64)
+        )
+        .await?,
+        vec![elem_a.clone()]
+    );
+    assert_eq!(
+        scan_range(
+            stdlib::sort_lower_bound(&10u64),
+            stdlib::sort_upper_bound(&20u64)
+        )
+        .await?,
+        vec![elem_a.clone(), elem_b.clone()]
+    );
+
+    // Descending: the same bucket highest-first (`ORDER BY cs.path DESC`), range
+    // independent of direction.
+    let desc: Vec<Vec<u8>> =
+        path_prefix_filter_contract_state(&conn, cid, bucket.clone(), None, None, true)
+            .await?
+            .try_collect()
+            .await?;
+    assert_eq!(desc, vec![elem_c.clone(), elem_b.clone(), elem_a.clone()]);
+
+    // An EMPTY `lo` (untrusted-boundary edge — the real guest never sends one) means
+    // "no lower bound", NOT `>= path`: it must return the full bucket child-only and NOT
+    // trap on the row at the bucket prefix. Same result as `None`.
     let empty_seek: Vec<Vec<u8>> =
-        path_prefix_filter_contract_state(&conn, cid, bucket.clone(), None, Some(Vec::new()))
+        path_prefix_filter_contract_state(&conn, cid, bucket.clone(), Some(Vec::new()), None, false)
             .await?
             .try_collect()
             .await?;
@@ -2350,7 +2392,7 @@ async fn test_path_prefix_filter_index_rows_returns_member_and_value() -> Result
 
     let scan = async |from: Option<Vec<u8>>| -> Result<Vec<(Vec<u8>, Vec<u8>)>> {
         Ok(
-            path_prefix_filter_index_rows(&conn, cid, bucket.clone(), None, from)
+            path_prefix_filter_index_rows(&conn, cid, bucket.clone(), from, None, false)
                 .await?
                 .try_collect()
                 .await?,
@@ -2375,16 +2417,29 @@ async fn test_path_prefix_filter_index_rows_returns_member_and_value() -> Result
             (member(30, "c"), b"cara".to_vec()),
         ]
     );
+    // Descending: same `(member, value)` pairs, highest-sort-first.
+    let desc: Vec<(Vec<u8>, Vec<u8>)> =
+        path_prefix_filter_index_rows(&conn, cid, bucket.clone(), None, None, true)
+            .await?
+            .try_collect()
+            .await?;
+    assert_eq!(
+        desc,
+        vec![
+            (member(30, "c"), b"cara".to_vec()),
+            (member(20, "b"), b"bob".to_vec()),
+            (member(10, "a"), b"ann".to_vec()),
+        ]
+    );
     Ok(())
 }
 
-// Regression: a cursor resume must skip the last child's ENTIRE subtree, not just
-// the bare child-node path. Here each child owns several deeper rows (a struct/map
-// value), so resuming with `after = m/a` must NOT re-read `m/a/*` and re-emit `a`.
-// The old `cs.path > after` bound did exactly that (`m/a` sorts before `m/a/f1`);
-// `cs.path >= strinc(after)` fixes it.
+// Multi-row children (struct/map values owning several deeper rows) must dedup to one
+// key each, and a `lo` seek to a child element must land at that child's subtree — the
+// scan is `cs.path >= bucket ++ lo`, so seeking the `b` element yields `b`, `c` and
+// never re-emits `a`.
 #[tokio::test]
-async fn test_after_cursor_skips_whole_child_subtree() -> Result<()> {
+async fn test_lo_seek_lands_on_multirow_child() -> Result<()> {
     let (_reader, writer, _temp) = new_test_db().await?;
     let conn = writer.connection();
     let h = 600000;
@@ -2428,22 +2483,23 @@ async fn test_after_cursor_skips_whole_child_subtree() -> Result<()> {
         .await?;
     }
 
-    // No cursor: the three distinct child keys, deduped across their subtrees.
+    // No seek: the three distinct child keys, deduped across their subtrees.
     let all: Vec<Vec<u8>> =
-        path_prefix_filter_contract_state(&conn, cid, cs_path(&["m"]), None, None)
+        path_prefix_filter_contract_state(&conn, cid, cs_path(&["m"]), None, None, false)
             .await?
             .try_collect()
             .await?;
     assert_eq!(all, vec![cs_path(&["a"]), cs_path(&["b"]), cs_path(&["c"])]);
 
-    // Resume after child `a` (cursor = its child-node path `m/a`): must skip ALL of
-    // a's deeper rows and not re-emit `a`.
+    // Seek to the `b` element (`lo`): `cs.path >= m/b` starts at `m/b/f1`, so the
+    // remaining children `b`, `c` are yielded (deduped) and `a` is not re-emitted.
     let rest: Vec<Vec<u8>> = path_prefix_filter_contract_state(
         &conn,
         cid,
         cs_path(&["m"]),
-        Some(cs_path(&["m", "a"])),
+        Some(cs_path(&["b"])),
         None,
+        false,
     )
     .await?
     .try_collect()

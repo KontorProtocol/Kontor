@@ -193,14 +193,14 @@ pub fn generate_struct(
                                     stdlib::ReadStorage::__get_keys(&self.ctx, &bucket)
                                 }
 
-                                fn by_index_sorted<S: stdlib::KeyElement + Clone + 'static>(&self, index_id: u8, bucket: &[&[u8]], from: Option<&[u8]>) -> alloc::boxed::Box<dyn Iterator<Item = (S, #k_ty)>> {
+                                fn by_index_sorted<S: stdlib::KeyElement + Clone + 'static>(&self, index_id: u8, bucket: &[&[u8]], lo: Option<&[u8]>, hi: Option<&[u8]>, descending: bool) -> alloc::boxed::Box<dyn Iterator<Item = (S, #k_ty)>> {
                                     let bucket = self.index_path.push_interned(index_id).push_raw_elements(bucket);
-                                    alloc::boxed::Box::new(stdlib::ReadStorage::__get_keys_from::<(S, #k_ty)>(&self.ctx, &bucket, from))
+                                    alloc::boxed::Box::new(stdlib::ReadStorage::__get_keys_range::<(S, #k_ty)>(&self.ctx, &bucket, lo, hi, descending))
                                 }
 
-                                fn by_index_rows(&self, index_id: u8, bucket: &[&[u8]], from: Option<&[u8]>) -> alloc::boxed::Box<dyn Iterator<Item = (alloc::vec::Vec<u8>, alloc::vec::Vec<u8>)>> {
+                                fn by_index_rows(&self, index_id: u8, bucket: &[&[u8]], lo: Option<&[u8]>, hi: Option<&[u8]>, descending: bool) -> alloc::boxed::Box<dyn Iterator<Item = (alloc::vec::Vec<u8>, alloc::vec::Vec<u8>)>> {
                                     let bucket = self.index_path.push_interned(index_id).push_raw_elements(bucket);
-                                    alloc::boxed::Box::new(stdlib::ReadStorage::__get_index_rows(&self.ctx, &bucket, from))
+                                    alloc::boxed::Box::new(stdlib::ReadStorage::__get_index_rows_range(&self.ctx, &bucket, lo, hi, descending))
                                 }
 
                                 fn bucket_count(&self, index_id: u8, bucket: &[&[u8]]) -> u64 {

@@ -22,37 +22,44 @@ pub trait ReadStorage {
     // `(sort, pk)` tuple for a sorted-index member), so it sorts and round-trips
     // natively — no stringify/parse.
     //
-    // `from` is an INCLUSIVE lower-bound seek (host-side): the child-element bytes
-    // to start at, so the scan skips members below it WITHOUT pulling-and-discarding
-    // them (each pulled key is metered). `None` scans the whole subtree. A
-    // sorted-index range query passes `Some((sort, pk)-prefix)` so `sort >= lo` is a
-    // host seek, not a guest `skip_while`.
-    fn __get_keys_from<T: KeyElement + Clone>(
+    // `lo`/`hi` are the half-open `[lo, hi)` byte range (child-element bytes relative
+    // to `path`; FDB-style `get-range`). `lo` is an INCLUSIVE lower-bound seek and `hi`
+    // an EXCLUSIVE upper bound, both applied host-side so out-of-range members are
+    // skipped WITHOUT pulling-and-discarding them (each pulled key is metered). `None`
+    // on either side is open (whole subtree). A sorted-index range query passes
+    // `Some((sort, pk)-prefix)` bounds so `sort` filtering is a host seek, not a guest
+    // `skip_while`/`take_while`. `descending` reverses only the iteration ORDER — the
+    // range is identical either way — so a `.rev()` scan yields highest-first.
+    fn __get_keys_range<T: KeyElement + Clone>(
         self: &alloc::rc::Rc<Self>,
         path: &[u8],
-        from: Option<&[u8]>,
+        lo: Option<&[u8]>,
+        hi: Option<&[u8]>,
+        descending: bool,
     ) -> impl Iterator<Item = T> + use<Self, T>;
 
-    /// Whole-subtree scan — [`__get_keys_from`] with no lower bound.
+    /// Whole-subtree ascending scan — [`__get_keys_range`] with no bounds.
     fn __get_keys<T: KeyElement + Clone>(
         self: &alloc::rc::Rc<Self>,
         path: &[u8],
     ) -> impl Iterator<Item = T> + use<Self, T> {
-        self.__get_keys_from(path, None)
+        self.__get_keys_range(path, None, None, false)
     }
 
-    /// The COVERING-scan analogue of [`__get_keys_from`]: each live leaf directly
+    /// The COVERING-scan analogue of [`__get_keys_range`]: each live leaf directly
     /// under `path` as `(member-element, projection-value)` raw bytes. The member is
-    /// the same element `__get_keys_from` yields (a map key, or a `(sort, pk)` tuple);
+    /// the same element `__get_keys_range` yields (a map key, or a `(sort, pk)` tuple);
     /// the value is the leaf's covering projection (the `include=` fields'
     /// concatenated codec elements). The covering query decodes both — the member to
     /// `K`/`(S, K)`, the value field-by-field into the projection struct — so a
-    /// `.values()`/`.iter()` read needs no per-member point lookup. `from` is the same
-    /// inclusive lower-bound seek.
-    fn __get_index_rows(
+    /// `.values()`/`.iter()` read needs no per-member point lookup. `lo`/`hi`/
+    /// `descending` are the same `[lo, hi)` range and direction as `__get_keys_range`.
+    fn __get_index_rows_range(
         self: &alloc::rc::Rc<Self>,
         path: &[u8],
-        from: Option<&[u8]>,
+        lo: Option<&[u8]>,
+        hi: Option<&[u8]>,
+        descending: bool,
     ) -> impl Iterator<Item = (Vec<u8>, Vec<u8>)> + use<Self>;
 
     fn __exists(self: &alloc::rc::Rc<Self>, path: &[u8]) -> bool;
