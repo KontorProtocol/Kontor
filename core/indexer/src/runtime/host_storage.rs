@@ -101,14 +101,13 @@ impl Runtime {
         descending: bool,
     ) -> Result<Resource<Keys>> {
         validate_path(&path)?;
-        // `lo`/`hi` are single child elements (e.g. a `(sort, pk)`-prefix tuple), each a
-        // well-formed standalone element — validate them like any path segment.
-        if let Some(lo) = &lo {
-            validate_path(lo)?;
-        }
-        if let Some(hi) = &hi {
-            validate_path(hi)?;
-        }
+        // `lo`/`hi` are NOT validated as paths: they are synthetic byte-comparison
+        // bounds (`cs.path >= path ++ lo`, `cs.path < path ++ hi`), never decoded. An
+        // EXCLUSIVE bound is `sort_upper_bound` = `strinc(...)`, which deliberately is
+        // NOT well-formed codec bytes, so `validate_path` would reject a legitimate
+        // `range(..=hi)`. Only real stored rows (always well-formed) are decoded, so a
+        // malformed bound is harmless (an empty bound is normalized to unbounded in
+        // `scan_bounds`, keeping the child-only `> path` invariant).
         let mut table = self.table.lock().await;
         let contract_id = table.get(&resource)?.get_contract_id();
         Fuel::GetKeys.consume(accessor, self.gauge.as_ref()).await?;
@@ -134,12 +133,9 @@ impl Runtime {
         descending: bool,
     ) -> Result<Resource<IndexRows>> {
         validate_path(&path)?;
-        if let Some(lo) = &lo {
-            validate_path(lo)?;
-        }
-        if let Some(hi) = &hi {
-            validate_path(hi)?;
-        }
+        // `lo`/`hi` are byte-comparison bounds, not paths — see `_get_keys` for why they
+        // are not `validate_path`'d (a `sort_upper_bound` exclusive bound is `strinc(...)`,
+        // intentionally not well-formed).
         let mut table = self.table.lock().await;
         let contract_id = table.get(&resource)?.get_contract_id();
         Fuel::GetKeys.consume(accessor, self.gauge.as_ref()).await?;
