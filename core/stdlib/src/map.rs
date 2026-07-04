@@ -1128,8 +1128,8 @@ mod tests {
                 rows.reverse();
             }
             rows.into_iter().filter(move |(m, _)| {
-                !lo.as_deref().is_some_and(|l| m.as_slice() < l)
-                    && !hi.as_deref().is_some_and(|h| m.as_slice() >= h)
+                lo.as_deref().is_none_or(|l| m.as_slice() >= l)
+                    && hi.as_deref().is_none_or(|h| m.as_slice() < h)
             })
         }
         fn __get<T: crate::Retrieve<Self>>(self: &Rc<Self>, path: KeyPath) -> Option<T> {
