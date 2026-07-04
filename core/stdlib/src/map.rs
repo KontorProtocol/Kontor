@@ -201,6 +201,18 @@ pub fn sort_lower_bound<S: KeyElement>(lo: &S) -> Vec<u8> {
     keycodec::tuple_from_elements(&[lo.encode().as_slice()])
 }
 
+/// The EXCLUSIVE upper-bound key for sort value `hi`: the smallest key strictly above
+/// EVERY `(hi, pk)` member (`strinc` of the tuple-open prefix `TAG_TUPLE ++ hi.encode()`,
+/// see [`keycodec::tuple_lead_upper_bound`]). The high-side partner of
+/// [`sort_lower_bound`]; together they express all four `RangeBounds` as host-side
+/// `path >= bucket ++ lo` / `path < bucket ++ hi` seeks (Included(lo)→lower_bound(lo),
+/// Excluded(lo)→upper_bound(lo), Included(hi)→upper_bound(hi), Excluded(hi)→lower_bound(hi)),
+/// so a range needs no guest-side `skip_while`/`take_while` and reverses by flipping the
+/// host `ORDER BY` alone.
+pub fn sort_upper_bound<S: KeyElement>(hi: &S) -> Vec<u8> {
+    keycodec::tuple_lead_upper_bound(&hi.encode())
+}
+
 // `Vec<Vec<u8>>` → the `&[&[u8]]` bucket the scan primitives take.
 fn bucket_refs(bucket: &[Vec<u8>]) -> Vec<&[u8]> {
     bucket.iter().map(Vec::as_slice).collect()
