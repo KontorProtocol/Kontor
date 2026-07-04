@@ -491,7 +491,10 @@ impl Storage {
     ) -> Result<
         impl Stream<Item = Result<(Vec<u8>, Vec<u8>), crate::database::queries::Error>> + Send + 'static,
     > {
-        Ok(path_prefix_filter_index_rows(&self.conn, contract_id, path, lo, hi, descending).await?)
+        Ok(
+            path_prefix_filter_index_rows(&self.conn, contract_id, path, lo, hi, descending)
+                .await?,
+        )
     }
 
     /// Canonical per-block entropy (the Bitcoin block hash) at `height`, within the

@@ -708,7 +708,11 @@ pub async fn path_prefix_filter_contract_state(
     // `scan_bounds` and is the SAME regardless of direction (FDB-style: `descending`
     // flips only iteration order).
     let (lo_key, lo_cmp, hi_key) = scan_bounds(&path, lo, hi);
-    let order = if descending { "cs.path DESC" } else { "cs.path" };
+    let order = if descending {
+        "cs.path DESC"
+    } else {
+        "cs.path"
+    };
     let (query, params) = live_paths_scan(
         "cs.path",
         lo_cmp,
@@ -778,7 +782,11 @@ pub async fn path_prefix_filter_index_rows(
     descending: bool,
 ) -> Result<impl Stream<Item = Result<(Vec<u8>, Vec<u8>), Error>> + Send + 'static, Error> {
     let (lo_key, lo_cmp, hi_key) = scan_bounds(&path, lo, hi);
-    let order = if descending { "cs.path DESC" } else { "cs.path" };
+    let order = if descending {
+        "cs.path DESC"
+    } else {
+        "cs.path"
+    };
     let (query, params) = live_paths_scan(
         "cs.path, cs.value",
         lo_cmp,

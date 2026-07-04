@@ -2273,14 +2273,20 @@ async fn test_path_prefix_filter_from_key_seeks_lower_bound() -> Result<()> {
     // includes all `(h, pk)` members, `< sort_lower_bound(h)` excludes them. A half-open
     // `[10, 20)` (lower incl, upper excl) yields only a; `[10, 20]` (upper incl via
     // `sort_upper_bound`) yields a, b.
-    let scan_range = async |lo: Vec<u8>, hi: Vec<u8>| -> Result<Vec<Vec<u8>>> {
-        Ok(
-            path_prefix_filter_contract_state(&conn, cid, bucket.clone(), Some(lo), Some(hi), false)
-                .await?
-                .try_collect()
-                .await?,
-        )
-    };
+    let scan_range =
+        async |lo: Vec<u8>, hi: Vec<u8>| -> Result<Vec<Vec<u8>>> {
+            Ok(path_prefix_filter_contract_state(
+                &conn,
+                cid,
+                bucket.clone(),
+                Some(lo),
+                Some(hi),
+                false,
+            )
+            .await?
+            .try_collect()
+            .await?)
+        };
     assert_eq!(
         scan_range(
             stdlib::sort_lower_bound(&10u64),
@@ -2310,11 +2316,17 @@ async fn test_path_prefix_filter_from_key_seeks_lower_bound() -> Result<()> {
     // An EMPTY `lo` (untrusted-boundary edge — the real guest never sends one) means
     // "no lower bound", NOT `>= path`: it must return the full bucket child-only and NOT
     // trap on the row at the bucket prefix. Same result as `None`.
-    let empty_seek: Vec<Vec<u8>> =
-        path_prefix_filter_contract_state(&conn, cid, bucket.clone(), Some(Vec::new()), None, false)
-            .await?
-            .try_collect()
-            .await?;
+    let empty_seek: Vec<Vec<u8>> = path_prefix_filter_contract_state(
+        &conn,
+        cid,
+        bucket.clone(),
+        Some(Vec::new()),
+        None,
+        false,
+    )
+    .await?
+    .try_collect()
+    .await?;
     assert_eq!(empty_seek, vec![elem_a, elem_b, elem_c]);
     Ok(())
 }

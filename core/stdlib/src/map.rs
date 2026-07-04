@@ -335,8 +335,13 @@ where
     // The raw `(sort, pk)` members in the query's direction; every finisher maps over
     // this. The whole bucket (no `[lo, hi)` bound), so both seeks are `None`.
     fn members(&self) -> alloc::boxed::Box<dyn Iterator<Item = (S, K)>> {
-        self.src
-            .by_index_sorted::<S>(self.index_id, &bucket_refs(&self.bucket), None, None, self.descending)
+        self.src.by_index_sorted::<S>(
+            self.index_id,
+            &bucket_refs(&self.bucket),
+            None,
+            None,
+            self.descending,
+        )
     }
 
     /// Primary keys in sort order (`BTreeMap::keys`).
@@ -357,7 +362,13 @@ where
     /// Restrict to members whose sort value lies in `range` (`BTreeMap::range`). Both
     /// bounds become host-side seeks; the current direction carries into the range.
     pub fn range(self, range: impl RangeBounds<S>) -> SortedRange<'a, K, S, Src> {
-        SortedRange::new(self.src, self.index_id, self.bucket, self.descending, &range)
+        SortedRange::new(
+            self.src,
+            self.index_id,
+            self.bucket,
+            self.descending,
+            &range,
+        )
     }
 }
 
@@ -1790,7 +1801,10 @@ mod tests {
             descending: bool,
         ) -> alloc::boxed::Box<dyn Iterator<Item = (S, String)>> {
             let path = self.root.push_interned(index_id).push_raw_elements(bucket);
-            alloc::boxed::Box::new(self.ctx.__get_keys_range::<(S, String)>(&path, lo, hi, descending))
+            alloc::boxed::Box::new(
+                self.ctx
+                    .__get_keys_range::<(S, String)>(&path, lo, hi, descending),
+            )
         }
 
         fn by_index_rows(
@@ -2185,7 +2199,10 @@ mod tests {
             vec!["c", "b"]
         );
         assert_eq!(
-            q().rev().range(20u64..=30).with_scores().collect::<Vec<_>>(),
+            q().rev()
+                .range(20u64..=30)
+                .with_scores()
+                .collect::<Vec<_>>(),
             vec![("c".to_string(), 30u64), ("b".to_string(), 20)]
         );
     }
