@@ -35,7 +35,6 @@
     "react-native": "*"
   },
   "devDependencies": {
-    "@kontor/sdk": "file:../sdk",
     "typescript": "^6.0.3",
     "uniffi-bindgen-react-native": "0.29.3-1"
   }
