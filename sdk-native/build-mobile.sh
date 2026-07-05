@@ -182,5 +182,8 @@ case "$TARGET" in
 esac
 
 echo "Done. Generated bindings in src/generated/; native artifacts:"
-[ -d "$XCFRAMEWORK" ] && du -sh "$XCFRAMEWORK"
-[ -d android/src/main/jniLibs ] && du -sh android/src/main/jniLibs
+# Informational summary — never let a missing per-platform artifact (e.g. no
+# jniLibs on an iOS-only build) set a non-zero exit for the whole script.
+{ [ -d "$XCFRAMEWORK" ] && du -sh "$XCFRAMEWORK"; } || true
+{ [ -d android/src/main/jniLibs ] && du -sh android/src/main/jniLibs; } || true
+exit 0
