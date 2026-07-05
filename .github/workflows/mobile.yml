@@ -187,7 +187,11 @@ jobs:
         with:
           ndk-version: r27
       - name: Install sdk-native deps
-        run: npm ci
+        # --ignore-scripts: the `file:../sdk` devDependency's `prepare`
+        # would otherwise run the SDK's vite build inside this install
+        # (without sdk/node_modules → "vite: command not found"). Nothing
+        # here needs @kontor/sdk built, and ubrn has no install scripts.
+        run: npm ci --ignore-scripts
         working-directory: ./sdk-native
       - name: Generate bindings
         run: npm run ubrn:generate

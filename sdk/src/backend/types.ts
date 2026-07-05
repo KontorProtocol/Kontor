@@ -49,19 +49,18 @@ type Component = typeof import("../component/kontor-sdk.js");
  * aggregation. `witCodec`/`numerics` are namespaces, narrowed above to
  * their runtime slices.
  */
-export interface KontorBackend
-  extends Pick<
-    Component,
-    | "serializeInst"
-    | "deserializeInst"
-    | "blsSecretKeyGen"
-    | "blsSecretFromSeedEip2333"
-    | "blsPubkeyFromSecret"
-    | "blsSign"
-    | "blsVerify"
-    | "aggregateSigningMessage"
-    | "blsAggregateSignatures"
-  > {
+export interface KontorBackend extends Pick<
+  Component,
+  | "serializeInst"
+  | "deserializeInst"
+  | "blsSecretKeyGen"
+  | "blsSecretFromSeedEip2333"
+  | "blsPubkeyFromSecret"
+  | "blsSign"
+  | "blsVerify"
+  | "aggregateSigningMessage"
+  | "blsAggregateSignatures"
+> {
   /** Per-WIT WAVE codec constructor (`new Wit(witText)`). */
   witCodec: { Wit: WitConstructor };
 
