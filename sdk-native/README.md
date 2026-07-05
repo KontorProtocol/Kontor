@@ -33,19 +33,36 @@ The calls are **synchronous** (JSI), matching the web API — `Decimal.add`,
 ## Status
 
 The Rust crates (`kontor-core` + `kontor-mobile`), the SDK-side
-`react-native` wiring, and this package's binding layer are done:
-`src/index.ts` installs the Rust crate into the JS runtime
-(`installRustCrate()` + uniffi `initialize()`) and re-shapes the generated
-bindings into the `KontorBackend` surface. The generated bindings are
-committed (the published package ships them) and CI fails if they drift
-from what `npm run ubrn:generate` emits.
+`react-native` wiring, this package's binding layer, and the Expo
+integration are done: `src/index.ts` installs the Rust crate into the JS
+runtime (`installRustCrate()` + uniffi `initialize()`) and re-shapes the
+generated bindings into the `KontorBackend` surface. The generated
+bindings are committed (the published package ships them) and CI fails if
+they drift from what `npm run ubrn:generate` emits. Both native targets
+build under `--profile mobile`: the Android `.so`s and the iOS
+`KontorSdkNativeFramework.xcframework` (device `arm64` + simulator
+`arm64`/`x86_64`).
 
 Still to do, in a mobile dev environment:
 
-1. **Expo module glue** — `expo-module.config.json` (scaffold with
-   `create-expo-module` + ubrn's generated Turbo Module spec).
-2. **On-device smoke test** — an example app exercising sign/verify and
+1. **On-device smoke test** — an example app exercising sign/verify and
    the numerics round-trip on Hermes.
+
+### Expo integration
+
+Consumer Expo apps get zero-config linking: `@kontor/sdk-native` ships an
+`expo-module.config.json` (so Expo autolinking sees it) and an
+`app.plugin.js` config plugin. Add the plugin to the app config —
+
+```json
+{ "expo": { "plugins": ["@kontor/sdk-native"] } }
+```
+
+— and `expo prebuild` raises the two floors the prebuilt binaries require:
+iOS deployment target ≥ 15.1 and Android `minSdkVersion` ≥ 24 (it only ever
+raises them, never lowers a higher app target). Bare React Native apps link
+via the podspec / `build.gradle` through the usual community-CLI
+autolinking; there the deployment target / minSdk are set by hand.
 
 ## Building
 
@@ -90,6 +107,8 @@ optimized and size-tuned. The published npm package must contain them —
   works around it: it prebuilds the three ABIs with `cargo ndk` directly and
   runs ubrn with `--no-cargo` so ubrn only assembles the jniLibs.
 
-The Android path is verified working (`cargo ndk -t arm64-v8a build -p
-kontor-mobile` produces `libkontor_mobile.so`). Full verification runs in CI —
-see `.github/workflows/mobile.yml`.
+Both paths are verified locally: `cargo ndk -t arm64-v8a build -p
+kontor-mobile` produces `libkontor_mobile.so`, and `./build-mobile.sh ios`
+produces `KontorSdkNativeFramework.xcframework` (device `arm64` + simulator
+`arm64`/`x86_64`, 133 uniffi FFI symbols exported). Full verification runs in
+CI — see `.github/workflows/mobile.yml`.

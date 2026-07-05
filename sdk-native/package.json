@@ -19,6 +19,7 @@
     "android/src/main/jniLibs",
     "KontorSdkNativeFramework.xcframework",
     "expo-module.config.json",
+    "app.plugin.js",
     "*.podspec"
   ],
   "scripts": {
