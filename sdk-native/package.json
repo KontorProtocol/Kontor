@@ -22,9 +22,11 @@
   "scripts": {
     "//": "Native binaries are produced by build-mobile.sh (uniffi-bindgen-react-native + cargo). See README.",
     "//ubrn-bug": "ubrn's cli.cjs runs `cargo run` (debug), and ubrn 0.29.3-1 + clap 4.6 hits a debug_assert on a `default_value`-on-bool arg. Disabling dev debug-assertions neutralizes it without patching ubrn.",
-    "ubrn:generate": "CARGO_PROFILE_DEV_DEBUG_ASSERTIONS=false uniffi-bindgen-react-native generate all --config ubrn.config.yaml",
-    "ubrn:build:ios": "CARGO_PROFILE_DEV_DEBUG_ASSERTIONS=false uniffi-bindgen-react-native build ios --config ubrn.config.yaml --and-generate",
-    "ubrn:build:android": "CARGO_PROFILE_DEV_DEBUG_ASSERTIONS=false uniffi-bindgen-react-native build android --config ubrn.config.yaml --and-generate",
+    "//ubrn-generate": "`ubrn generate all` needs a compiled host library to read the uniffi metadata from — the script builds it, locates it, then generates.",
+    "ubrn:generate": "bash ./generate-bindings.sh",
+    "//ubrn-build": "No --and-generate: bindings are generated once by ubrn:generate (build-mobile.sh and CI both run it explicitly) instead of once per platform build.",
+    "ubrn:build:ios": "CARGO_PROFILE_DEV_DEBUG_ASSERTIONS=false uniffi-bindgen-react-native build ios --config ubrn.config.yaml",
+    "ubrn:build:android": "CARGO_PROFILE_DEV_DEBUG_ASSERTIONS=false uniffi-bindgen-react-native build android --config ubrn.config.yaml",
     "build:mobile": "bash ./build-mobile.sh",
     "typecheck": "tsc --noEmit"
   },

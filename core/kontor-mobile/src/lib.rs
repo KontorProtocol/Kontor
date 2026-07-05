@@ -16,8 +16,11 @@ uniffi::setup_scaffolding!();
 // ─── error types ─────────────────────────────────────────────────────
 
 /// Wraps the plain `String` errors the core returns so they cross the
-/// uniffi FFI as a proper error type.
+/// uniffi FFI as a proper error type. `flat_error` sends the `Display`
+/// output across the FFI, so the JS error `.message` carries the
+/// descriptive text — same surface the WASM backend exposes.
 #[derive(Debug, uniffi::Error)]
+#[uniffi(flat_error)]
 pub enum CoreError {
     Message(String),
 }
@@ -32,8 +35,11 @@ impl std::fmt::Display for CoreError {
 
 impl std::error::Error for CoreError {}
 
-/// Mirror of `kontor_core::numerics::Error` as a uniffi error.
+/// Mirror of `kontor_core::numerics::Error` as a uniffi error. Also
+/// `flat_error`: JS still gets one class per variant to branch on, but
+/// `.message` is the underlying description instead of "NumericsError.X".
 #[derive(Debug, uniffi::Error)]
+#[uniffi(flat_error)]
 pub enum NumericsError {
     Message(String),
     Overflow(String),
@@ -219,65 +225,99 @@ impl From<core_numerics::Ordering> for Ordering {
     }
 }
 
-impl From<Integer> for core_numerics::Integer {
-    fn from(i: Integer) -> Self {
-        core_numerics::Integer {
-            r0: i.r0,
-            r1: i.r1,
-            r2: i.r2,
-            r3: i.r3,
-            sign: i.sign.into(),
+/// Bridges a mobile record to/from its field-identical `core_numerics`
+/// counterpart (`{r0..r3, sign}`).
+macro_rules! bridge_record {
+    ($t:ident) => {
+        impl From<$t> for core_numerics::$t {
+            fn from(v: $t) -> Self {
+                core_numerics::$t {
+                    r0: v.r0,
+                    r1: v.r1,
+                    r2: v.r2,
+                    r3: v.r3,
+                    sign: v.sign.into(),
+                }
+            }
         }
-    }
-}
 
-impl From<core_numerics::Integer> for Integer {
-    fn from(i: core_numerics::Integer) -> Self {
-        Integer {
-            r0: i.r0,
-            r1: i.r1,
-            r2: i.r2,
-            r3: i.r3,
-            sign: i.sign.into(),
+        impl From<core_numerics::$t> for $t {
+            fn from(v: core_numerics::$t) -> Self {
+                $t {
+                    r0: v.r0,
+                    r1: v.r1,
+                    r2: v.r2,
+                    r3: v.r3,
+                    sign: v.sign.into(),
+                }
+            }
         }
-    }
+    };
 }
 
-impl From<Decimal> for core_numerics::Decimal {
-    fn from(d: Decimal) -> Self {
-        core_numerics::Decimal {
-            r0: d.r0,
-            r1: d.r1,
-            r2: d.r2,
-            r3: d.r3,
-            sign: d.sign.into(),
+bridge_record!(Integer);
+bridge_record!(Decimal);
+
+// ── op tables ──
+//
+// Every op is `core_numerics::<same name>` with args and result bridged
+// through the `From` impls above, so one declaration per op is enough.
+// Adding an op = one line here (uniffi picks the export up from the
+// macro expansion; the generated TS bindings are drift-gated in CI).
+
+/// Infallible ops: `core_numerics::$name(args…).into()`.
+macro_rules! numerics_fns {
+    ($($name:ident($($arg:ident: $ty:ty),*) -> $ret:ty;)*) => {$(
+        #[uniffi::export]
+        pub fn $name($($arg: $ty),*) -> $ret {
+            core_numerics::$name($($arg.into()),*).into()
         }
-    }
+    )*};
 }
 
-impl From<core_numerics::Decimal> for Decimal {
-    fn from(d: core_numerics::Decimal) -> Self {
-        Decimal {
-            r0: d.r0,
-            r1: d.r1,
-            r2: d.r2,
-            r3: d.r3,
-            sign: d.sign.into(),
+/// Fallible ops: same, with `Result` ok/err both bridged.
+macro_rules! numerics_try_fns {
+    ($($name:ident($($arg:ident: $ty:ty),*) -> $ok:ty;)*) => {$(
+        #[uniffi::export]
+        pub fn $name($($arg: $ty),*) -> Result<$ok, NumericsError> {
+            core_numerics::$name($($arg.into()),*)
+                .map(Into::into)
+                .map_err(Into::into)
         }
-    }
+    )*};
 }
 
-// ── Integer ops ──
-
-#[uniffi::export]
-pub fn u64_to_integer(i: u64) -> Integer {
-    core_numerics::u64_to_integer(i).into()
+numerics_fns! {
+    u64_to_integer(i: u64) -> Integer;
+    s64_to_integer(i: i64) -> Integer;
+    integer_to_string(i: Integer) -> String;
+    eq_integer(a: Integer, b: Integer) -> bool;
+    cmp_integer(a: Integer, b: Integer) -> Ordering;
+    decimal_to_string(d: Decimal) -> String;
+    cmp_decimal(a: Decimal, b: Decimal) -> Ordering;
 }
 
-#[uniffi::export]
-pub fn s64_to_integer(i: i64) -> Integer {
-    core_numerics::s64_to_integer(i).into()
+numerics_try_fns! {
+    add_integer(a: Integer, b: Integer) -> Integer;
+    sub_integer(a: Integer, b: Integer) -> Integer;
+    mul_integer(a: Integer, b: Integer) -> Integer;
+    div_integer(a: Integer, b: Integer) -> Integer;
+    sqrt_integer(i: Integer) -> Integer;
+    integer_to_decimal(i: Integer) -> Decimal;
+    decimal_to_integer(d: Decimal) -> Integer;
+    u64_to_decimal(i: u64) -> Decimal;
+    s64_to_decimal(i: i64) -> Decimal;
+    f64_to_decimal(f: f64) -> Decimal;
+    eq_decimal(a: Decimal, b: Decimal) -> bool;
+    add_decimal(a: Decimal, b: Decimal) -> Decimal;
+    sub_decimal(a: Decimal, b: Decimal) -> Decimal;
+    mul_decimal(a: Decimal, b: Decimal) -> Decimal;
+    div_decimal(a: Decimal, b: Decimal) -> Decimal;
+    log10_decimal(a: Decimal) -> Decimal;
 }
+
+// The two `&str`-taking core fns don't fit the `.into()` bridging above
+// (String → &str isn't `Into`), so they stay hand-written.
 
 #[uniffi::export]
 pub fn string_to_integer(s: String) -> Result<Integer, NumericsError> {
@@ -287,147 +327,8 @@ pub fn string_to_integer(s: String) -> Result<Integer, NumericsError> {
 }
 
 #[uniffi::export]
-pub fn integer_to_string(i: Integer) -> String {
-    core_numerics::integer_to_string(i.into())
-}
-
-#[uniffi::export]
-pub fn eq_integer(a: Integer, b: Integer) -> bool {
-    core_numerics::eq_integer(a.into(), b.into())
-}
-
-#[uniffi::export]
-pub fn cmp_integer(a: Integer, b: Integer) -> Ordering {
-    core_numerics::cmp_integer(a.into(), b.into()).into()
-}
-
-#[uniffi::export]
-pub fn add_integer(a: Integer, b: Integer) -> Result<Integer, NumericsError> {
-    core_numerics::add_integer(a.into(), b.into())
-        .map(Into::into)
-        .map_err(Into::into)
-}
-
-#[uniffi::export]
-pub fn sub_integer(a: Integer, b: Integer) -> Result<Integer, NumericsError> {
-    core_numerics::sub_integer(a.into(), b.into())
-        .map(Into::into)
-        .map_err(Into::into)
-}
-
-#[uniffi::export]
-pub fn mul_integer(a: Integer, b: Integer) -> Result<Integer, NumericsError> {
-    core_numerics::mul_integer(a.into(), b.into())
-        .map(Into::into)
-        .map_err(Into::into)
-}
-
-#[uniffi::export]
-pub fn div_integer(a: Integer, b: Integer) -> Result<Integer, NumericsError> {
-    core_numerics::div_integer(a.into(), b.into())
-        .map(Into::into)
-        .map_err(Into::into)
-}
-
-#[uniffi::export]
-pub fn sqrt_integer(i: Integer) -> Result<Integer, NumericsError> {
-    core_numerics::sqrt_integer(i.into())
-        .map(Into::into)
-        .map_err(Into::into)
-}
-
-// ── Integer ↔ Decimal conversions ──
-
-#[uniffi::export]
-pub fn integer_to_decimal(i: Integer) -> Result<Decimal, NumericsError> {
-    core_numerics::integer_to_decimal(i.into())
-        .map(Into::into)
-        .map_err(Into::into)
-}
-
-#[uniffi::export]
-pub fn decimal_to_integer(d: Decimal) -> Result<Integer, NumericsError> {
-    core_numerics::decimal_to_integer(d.into())
-        .map(Into::into)
-        .map_err(Into::into)
-}
-
-// ── Decimal ops ──
-
-#[uniffi::export]
-pub fn u64_to_decimal(i: u64) -> Result<Decimal, NumericsError> {
-    core_numerics::u64_to_decimal(i)
-        .map(Into::into)
-        .map_err(Into::into)
-}
-
-#[uniffi::export]
-pub fn s64_to_decimal(i: i64) -> Result<Decimal, NumericsError> {
-    core_numerics::s64_to_decimal(i)
-        .map(Into::into)
-        .map_err(Into::into)
-}
-
-#[uniffi::export]
-pub fn f64_to_decimal(f: f64) -> Result<Decimal, NumericsError> {
-    core_numerics::f64_to_decimal(f)
-        .map(Into::into)
-        .map_err(Into::into)
-}
-
-#[uniffi::export]
 pub fn string_to_decimal(s: String) -> Result<Decimal, NumericsError> {
     core_numerics::string_to_decimal(&s)
-        .map(Into::into)
-        .map_err(Into::into)
-}
-
-#[uniffi::export]
-pub fn decimal_to_string(d: Decimal) -> String {
-    core_numerics::decimal_to_string(d.into())
-}
-
-#[uniffi::export]
-pub fn eq_decimal(a: Decimal, b: Decimal) -> Result<bool, NumericsError> {
-    core_numerics::eq_decimal(a.into(), b.into()).map_err(Into::into)
-}
-
-#[uniffi::export]
-pub fn cmp_decimal(a: Decimal, b: Decimal) -> Ordering {
-    core_numerics::cmp_decimal(a.into(), b.into()).into()
-}
-
-#[uniffi::export]
-pub fn add_decimal(a: Decimal, b: Decimal) -> Result<Decimal, NumericsError> {
-    core_numerics::add_decimal(a.into(), b.into())
-        .map(Into::into)
-        .map_err(Into::into)
-}
-
-#[uniffi::export]
-pub fn sub_decimal(a: Decimal, b: Decimal) -> Result<Decimal, NumericsError> {
-    core_numerics::sub_decimal(a.into(), b.into())
-        .map(Into::into)
-        .map_err(Into::into)
-}
-
-#[uniffi::export]
-pub fn mul_decimal(a: Decimal, b: Decimal) -> Result<Decimal, NumericsError> {
-    core_numerics::mul_decimal(a.into(), b.into())
-        .map(Into::into)
-        .map_err(Into::into)
-}
-
-#[uniffi::export]
-pub fn div_decimal(a: Decimal, b: Decimal) -> Result<Decimal, NumericsError> {
-    core_numerics::div_decimal(a.into(), b.into())
-        .map(Into::into)
-        .map_err(Into::into)
-}
-
-#[uniffi::export]
-pub fn log10_decimal(a: Decimal) -> Result<Decimal, NumericsError> {
-    core_numerics::log10_decimal(a.into())
         .map(Into::into)
         .map_err(Into::into)
 }

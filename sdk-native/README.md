@@ -30,18 +30,22 @@ package). Consumers just `import { KontorSession, Decimal } from "@kontor/sdk"`.
 The calls are **synchronous** (JSI), matching the web API — `Decimal.add`,
 `wit.encodeCall`, `blsSign` do not become Promises on mobile.
 
-## Status: SKELETON
+## Status
 
-Phases 1–2 (Rust `kontor-core` + `kontor-mobile`) and Phase 4 (the SDK-side
-`react-native` wiring) are done. This package still needs, in a mobile dev
-environment / CI:
+The Rust crates (`kontor-core` + `kontor-mobile`), the SDK-side
+`react-native` wiring, and this package's binding layer are done:
+`src/index.ts` installs the Rust crate into the JS runtime
+(`installRustCrate()` + uniffi `initialize()`) and re-shapes the generated
+bindings into the `KontorBackend` surface. The generated bindings are
+committed (the published package ships them) and CI fails if they drift
+from what `npm run ubrn:generate` emits.
 
-1. **Generate bindings** — reconcile `src/index.ts` (marked `TODO(ubrn)`)
-   against the real output of `npm run ubrn:generate`.
-2. **Build binaries** — `npm run build:mobile` (see below).
-3. **Expo module glue** — `expo-module.config.json`, `ios/*.podspec`,
-   `android/build.gradle` (scaffold with `create-expo-module` + ubrn's
-   generated Turbo Module spec).
+Still to do, in a mobile dev environment:
+
+1. **Expo module glue** — `expo-module.config.json` (scaffold with
+   `create-expo-module` + ubrn's generated Turbo Module spec).
+2. **On-device smoke test** — an example app exercising sign/verify and
+   the numerics round-trip on Hermes.
 
 ## Building
 

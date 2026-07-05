@@ -11,8 +11,13 @@ on:
     paths:
       - "core/kontor-core/**"
       - "core/kontor-mobile/**"
+      # kontor-sdk (the wit world) and the jco component types are what
+      # KontorBackend is derived from — contract drift starts there, so
+      # those changes must trigger the native conformance check too.
+      - "core/kontor-sdk/**"
       - "sdk-native/**"
       - "sdk/src/backend/**"
+      - "sdk/src/component/**"
       - "sdk/vite.config.ts"
       - ".github/workflows/mobile.yml"
   pull_request:
@@ -20,8 +25,10 @@ on:
     paths:
       - "core/kontor-core/**"
       - "core/kontor-mobile/**"
+      - "core/kontor-sdk/**"
       - "sdk-native/**"
       - "sdk/src/backend/**"
+      - "sdk/src/component/**"
       - "sdk/vite.config.ts"
       - ".github/workflows/mobile.yml"
 
@@ -29,6 +36,12 @@ env:
   CARGO_TERM_COLOR: always
   RUSTC_WRAPPER: sccache
   SCCACHE_GHA_ENABLED: true
+  # blst's C objects are compiled against the runner's (recent) iOS SDK;
+  # rustc's default iOS deployment target is 10.0, where symbols like
+  # ___chkstk_darwin don't exist — the cdylib link then fails. Pin the
+  # deployment target to the podspec's min (React Native's
+  # min_ios_version_supported) so C objects and the link agree.
+  IPHONEOS_DEPLOYMENT_TARGET: "15.1"
 
 jobs:
   # ─── Cheap gate (Linux): the SDK emits both bundles and the RN bundle
@@ -42,7 +55,9 @@ jobs:
         with:
           node-version: "22"
       - name: Install SDK deps
-        run: npm ci
+        # --ignore-scripts: `prepare` would run the full web+native build,
+        # which the next step does explicitly.
+        run: npm ci --ignore-scripts
         working-directory: ./sdk
       - name: Build web + native bundles
         run: npm run build
@@ -90,30 +105,48 @@ jobs:
           restore-keys: cargo-registry-mobile-${{ matrix.name }}-
       - name: Install cargo-ndk (Android)
         if: matrix.name == 'android'
-        run: cargo install cargo-ndk --locked
+        # Prebuilt binary — `cargo install` would compile it from source
+        # (several minutes) on every run.
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-ndk
       - name: Setup Android NDK
         if: matrix.name == 'android'
         uses: nttld/setup-ndk@v1
         id: ndk
         with:
           ndk-version: r27
-      - name: Compile kontor-mobile for each target
+      - name: Compile kontor-mobile for each target (iOS)
+        if: matrix.name == 'ios'
         working-directory: ./core
-        env:
-          ANDROID_NDK_HOME: ${{ steps.ndk.outputs.ndk-path }}
         run: |
           for t in ${{ matrix.targets }}; do
             echo "::group::cargo build kontor-mobile --target $t"
             cargo build -p kontor-mobile --release --target "$t"
             echo "::endgroup::"
           done
+      - name: Compile kontor-mobile for each target (Android)
+        if: matrix.name == 'android'
+        working-directory: ./core
+        env:
+          ANDROID_NDK_HOME: ${{ steps.ndk.outputs.ndk-path }}
+        # Plain `cargo build` can't cross-compile for Android: neither cargo
+        # nor cc-rs read ANDROID_NDK_HOME, so blst/psm's C sources have no
+        # compiler and the link has no NDK linker. cargo-ndk wires the NDK
+        # toolchain (CC/AR/linker per target) before delegating to cargo.
+        run: |
+          for t in ${{ matrix.targets }}; do
+            echo "::group::cargo ndk build kontor-mobile --target $t"
+            cargo ndk -t "$t" build -p kontor-mobile --release
+            echo "::endgroup::"
+          done
 
-  # ─── Full binding + binary build. Depends on the sdk-native skeleton
-  # TODOs (ubrn wiring in src/index.ts) being completed — green once the
-  # generated bindings resolve. See sdk-native/README.md.
+  # ─── Full binding + binary build: ubrn generate → typecheck the wrapper
+  # and the SDK's KontorBackend conformance → compile/link the binaries.
+  # Independent of rust-mobile (compilation is shared via sccache), so the
+  # two run in parallel instead of doubling the critical path.
   bindings:
     name: uniffi bindings + ${{ matrix.name }} binaries
-    needs: rust-mobile
     strategy:
       fail-fast: false
       matrix:
@@ -130,12 +163,23 @@ jobs:
           node-version: "22"
       - uses: dtolnay/rust-toolchain@stable
       - uses: mozilla-actions/sccache-action@v0.0.9
+      - name: Cache Cargo registry
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+          key: cargo-registry-mobile-${{ matrix.name }}-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: cargo-registry-mobile-${{ matrix.name }}-
       # `uniffi-bindgen-react-native` (the `ubrn` CLI) is an npm package, not a
-      # cargo crate — it is pulled by `npm install` in ./sdk-native below and
+      # cargo crate — it is pulled by `npm ci` in ./sdk-native below and
       # its version is pinned in lockstep with core/kontor-mobile's `uniffi`.
       - name: Install cargo-ndk (Android)
         if: matrix.name == 'android'
-        run: cargo install cargo-ndk --locked
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-ndk
       - name: Setup Android NDK
         if: matrix.name == 'android'
         uses: nttld/setup-ndk@v1
@@ -143,11 +187,16 @@ jobs:
         with:
           ndk-version: r27
       - name: Install sdk-native deps
-        run: npm install
+        run: npm ci
         working-directory: ./sdk-native
       - name: Generate bindings
         run: npm run ubrn:generate
         working-directory: ./sdk-native
+      # The generated bindings are committed (the published package ships
+      # them); fail if the checked-in copies drifted from the generator's
+      # output for the current Rust surface.
+      - name: Assert committed bindings match the generator output
+        run: git diff --exit-code -- sdk-native/src/generated sdk-native/cpp
       - name: Type-check @kontor/sdk-native against generated bindings
         run: npm run typecheck
         working-directory: ./sdk-native
@@ -157,7 +206,7 @@ jobs:
       # maps @kontor/sdk-native → ../sdk-native/src/index.ts.
       - name: Type-check SDK native backend (KontorBackend conformance)
         run: |
-          npm ci
+          npm ci --ignore-scripts
           npx tsc -p tsconfig.native.json
         working-directory: ./sdk
       - name: Build native binaries

@@ -24,16 +24,7 @@ import type { KontorBackend } from "./types.js";
 const _conforms: KontorBackend = native;
 void _conforms;
 
-export const {
-  witCodec,
-  numerics,
-  serializeInst,
-  deserializeInst,
-  blsSecretKeyGen,
-  blsSecretFromSeedEip2333,
-  blsPubkeyFromSecret,
-  blsSign,
-  blsVerify,
-  aggregateSigningMessage,
-  blsAggregateSignatures,
-} = native;
+// `@kontor/sdk-native`'s public surface IS the backend contract (pinned by
+// the assertion above), so re-export it wholesale instead of hand-keeping
+// the symbol list in sync here as well.
+export * from "@kontor/sdk-native";

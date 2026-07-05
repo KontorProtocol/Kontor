@@ -12,6 +12,7 @@
   },
   "type": "module",
   "main": "./dist/index.js",
+  "react-native": "./dist/index.native.js",
   "types": "./dist/src/index.d.ts",
   "files": [
     "dist"

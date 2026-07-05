@@ -647,127 +647,93 @@ const FfiConverterString = uniffiCreateFfiConverterString(stringConverter);
 
 
 
-// Error type: CoreError
 
-// Enum: CoreError
+// Flat error type: CoreError
 export enum CoreError_Tags {
     Message = "Message"
 }
 /**
  * Wraps the plain `String` errors the core returns so they cross the
- * uniffi FFI as a proper error type.
+ * uniffi FFI as a proper error type. `flat_error` sends the `Display`
+ * output across the FFI, so the JS error `.message` carries the
+ * descriptive text — same surface the WASM backend exposes.
  */
 export const CoreError = (() => {
-    
-
-    type Message__interface = {
-        tag: CoreError_Tags.Message;
-        inner: Readonly<
-[string
-]>
-    };
-
-    
-    class Message_ extends UniffiError implements Message__interface {
+    class Message extends UniffiError {
         /**
          * @private
-         * This field is private and should not be used, use `tag` instead.
+         * This field is private and should not be used.
          */
-        readonly [uniffiTypeNameSymbol] = "CoreError";
-        readonly tag = CoreError_Tags.Message;
-        readonly inner: Readonly<
-[string
-]>;
-        constructor(v0: string) {
-            super("CoreError", "Message");
-            this.inner = Object.freeze([v0]);
+        readonly [uniffiTypeNameSymbol]: string = "CoreError";
+        /**
+         * @private
+         * This field is private and should not be used.
+         */
+        readonly [variantOrdinalSymbol] = 1;
+
+        public readonly tag = CoreError_Tags.Message;
+
+        constructor(message: string) {
+            super("CoreError", "Message", message);
         }
 
-        static new(v0: string): Message_ {
-            return new Message_(v0);
+        static instanceOf(e: any): e is Message {
+            return (
+                instanceOf(e) && (e as any)[variantOrdinalSymbol] === 1
+            );
         }
-
-        static instanceOf(obj: any): obj is Message_ {
-            return obj.tag === CoreError_Tags.Message;
-        }
-
-        
-        static hasInner(obj: any): obj is Message_ {
-            return Message_.instanceOf(obj);
-        }
-
-        static getInner(obj: Message_): Readonly<
-[string
-]> {
-            return obj.inner;
-        }
-
     }
 
-    function instanceOf(obj: any): obj is CoreError {
-        return obj[uniffiTypeNameSymbol] === "CoreError";
+    // Utility function which does not rely on instanceof.
+    function instanceOf(e: any): e is CoreError {
+        return (e as any)[uniffiTypeNameSymbol] === "CoreError";
     }
-
-    return Object.freeze({
+    return {
+        Message,
         instanceOf,
-  Message: Message_
-    });
-
+    };
 })();
 
+// Union type for CoreError error type.
 
 /**
  * Wraps the plain `String` errors the core returns so they cross the
- * uniffi FFI as a proper error type.
+ * uniffi FFI as a proper error type. `flat_error` sends the `Display`
+ * output across the FFI, so the JS error `.message` carries the
+ * descriptive text — same surface the WASM backend exposes.
  */
 
 export type CoreError = InstanceType<
     typeof CoreError[keyof Omit<typeof CoreError, 'instanceOf'>]
 >;
 
-// FfiConverter for enum CoreError
 const FfiConverterTypeCoreError = (() => {
-    const ordinalConverter = FfiConverterInt32;
+    const intConverter = FfiConverterInt32;
     type TypeName = CoreError;
-    class FFIConverter extends AbstractFfiConverterByteArray<TypeName> {
+    class FfiConverter extends AbstractFfiConverterByteArray<TypeName> {
         read(from: RustBuffer): TypeName {
-            switch (ordinalConverter.read(from)) {
-                case 1: return new CoreError.Message(FfiConverterString.read(from));
+            switch (intConverter.read(from)) {
+                case 1: return new CoreError.Message(FfiConverterString.read(from)
+                );
+            
                 default: throw new UniffiInternalError.UnexpectedEnumCase();
             }
         }
         write(value: TypeName, into: RustBuffer): void {
-            switch (value.tag) {
-                case CoreError_Tags.Message: {
-                    ordinalConverter.write(1, into);
-                    const inner = value.inner;
-                    FfiConverterString.write(inner[0], into);
-                    return;
-                }
-                default:
-                    // Throwing from here means that CoreError_Tags hasn't matched an ordinal.
-                    throw new UniffiInternalError.UnexpectedEnumCase();
-            }
+            const obj = value as any;
+            const index = obj[variantOrdinalSymbol] as number;
+            intConverter.write(index, into);
         }
         allocationSize(value: TypeName): number {
-            switch (value.tag) {
-                case CoreError_Tags.Message: {
-                    const inner = value.inner;
-                    let size = ordinalConverter.allocationSize(1);
-                    size += FfiConverterString.allocationSize(inner[0]);
-                    return size;
-                }
-                default: throw new UniffiInternalError.UnexpectedEnumCase();
-            }
+            return intConverter.allocationSize(0);
         }
     }
-    return new FFIConverter();
+    return new FfiConverter();
 })();
 
 
-// Error type: NumericsError
 
-// Enum: NumericsError
+// Flat error type: NumericsError
 export enum NumericsError_Tags {
     Message = "Message",
     Overflow = "Overflow",
@@ -776,348 +742,192 @@ export enum NumericsError_Tags {
     Validation = "Validation"
 }
 /**
- * Mirror of `kontor_core::numerics::Error` as a uniffi error.
+ * Mirror of `kontor_core::numerics::Error` as a uniffi error. Also
+ * `flat_error`: JS still gets one class per variant to branch on, but
+ * `.message` is the underlying description instead of "NumericsError.X".
  */
 export const NumericsError = (() => {
-    
-
-    type Message__interface = {
-        tag: NumericsError_Tags.Message;
-        inner: Readonly<
-[string
-]>
-    };
-
-    
-    class Message_ extends UniffiError implements Message__interface {
+    class Message extends UniffiError {
         /**
          * @private
-         * This field is private and should not be used, use `tag` instead.
+         * This field is private and should not be used.
          */
-        readonly [uniffiTypeNameSymbol] = "NumericsError";
-        readonly tag = NumericsError_Tags.Message;
-        readonly inner: Readonly<
-[string
-]>;
-        constructor(v0: string) {
-            super("NumericsError", "Message");
-            this.inner = Object.freeze([v0]);
-        }
-
-        static new(v0: string): Message_ {
-            return new Message_(v0);
-        }
-
-        static instanceOf(obj: any): obj is Message_ {
-            return obj.tag === NumericsError_Tags.Message;
-        }
-
-        
-        static hasInner(obj: any): obj is Message_ {
-            return Message_.instanceOf(obj);
-        }
-
-        static getInner(obj: Message_): Readonly<
-[string
-]> {
-            return obj.inner;
-        }
-
-    }
-    
-
-    type Overflow__interface = {
-        tag: NumericsError_Tags.Overflow;
-        inner: Readonly<
-[string
-]>
-    };
-
-    
-    class Overflow_ extends UniffiError implements Overflow__interface {
+        readonly [uniffiTypeNameSymbol]: string = "NumericsError";
         /**
          * @private
-         * This field is private and should not be used, use `tag` instead.
+         * This field is private and should not be used.
          */
-        readonly [uniffiTypeNameSymbol] = "NumericsError";
-        readonly tag = NumericsError_Tags.Overflow;
-        readonly inner: Readonly<
-[string
-]>;
-        constructor(v0: string) {
-            super("NumericsError", "Overflow");
-            this.inner = Object.freeze([v0]);
+        readonly [variantOrdinalSymbol] = 1;
+
+        public readonly tag = NumericsError_Tags.Message;
+
+        constructor(message: string) {
+            super("NumericsError", "Message", message);
         }
 
-        static new(v0: string): Overflow_ {
-            return new Overflow_(v0);
+        static instanceOf(e: any): e is Message {
+            return (
+                instanceOf(e) && (e as any)[variantOrdinalSymbol] === 1
+            );
         }
-
-        static instanceOf(obj: any): obj is Overflow_ {
-            return obj.tag === NumericsError_Tags.Overflow;
-        }
-
-        
-        static hasInner(obj: any): obj is Overflow_ {
-            return Overflow_.instanceOf(obj);
-        }
-
-        static getInner(obj: Overflow_): Readonly<
-[string
-]> {
-            return obj.inner;
-        }
-
     }
-    
-
-    type DivByZero__interface = {
-        tag: NumericsError_Tags.DivByZero;
-        inner: Readonly<
-[string
-]>
-    };
-
-    
-    class DivByZero_ extends UniffiError implements DivByZero__interface {
+    class Overflow extends UniffiError {
         /**
          * @private
-         * This field is private and should not be used, use `tag` instead.
+         * This field is private and should not be used.
          */
-        readonly [uniffiTypeNameSymbol] = "NumericsError";
-        readonly tag = NumericsError_Tags.DivByZero;
-        readonly inner: Readonly<
-[string
-]>;
-        constructor(v0: string) {
-            super("NumericsError", "DivByZero");
-            this.inner = Object.freeze([v0]);
-        }
-
-        static new(v0: string): DivByZero_ {
-            return new DivByZero_(v0);
-        }
-
-        static instanceOf(obj: any): obj is DivByZero_ {
-            return obj.tag === NumericsError_Tags.DivByZero;
-        }
-
-        
-        static hasInner(obj: any): obj is DivByZero_ {
-            return DivByZero_.instanceOf(obj);
-        }
-
-        static getInner(obj: DivByZero_): Readonly<
-[string
-]> {
-            return obj.inner;
-        }
-
-    }
-    
-
-    type Syntax__interface = {
-        tag: NumericsError_Tags.Syntax;
-        inner: Readonly<
-[string
-]>
-    };
-
-    
-    class Syntax_ extends UniffiError implements Syntax__interface {
+        readonly [uniffiTypeNameSymbol]: string = "NumericsError";
         /**
          * @private
-         * This field is private and should not be used, use `tag` instead.
+         * This field is private and should not be used.
          */
-        readonly [uniffiTypeNameSymbol] = "NumericsError";
-        readonly tag = NumericsError_Tags.Syntax;
-        readonly inner: Readonly<
-[string
-]>;
-        constructor(v0: string) {
-            super("NumericsError", "Syntax");
-            this.inner = Object.freeze([v0]);
+        readonly [variantOrdinalSymbol] = 2;
+
+        public readonly tag = NumericsError_Tags.Overflow;
+
+        constructor(message: string) {
+            super("NumericsError", "Overflow", message);
         }
 
-        static new(v0: string): Syntax_ {
-            return new Syntax_(v0);
+        static instanceOf(e: any): e is Overflow {
+            return (
+                instanceOf(e) && (e as any)[variantOrdinalSymbol] === 2
+            );
         }
-
-        static instanceOf(obj: any): obj is Syntax_ {
-            return obj.tag === NumericsError_Tags.Syntax;
-        }
-
-        
-        static hasInner(obj: any): obj is Syntax_ {
-            return Syntax_.instanceOf(obj);
-        }
-
-        static getInner(obj: Syntax_): Readonly<
-[string
-]> {
-            return obj.inner;
-        }
-
     }
-    
-
-    type Validation__interface = {
-        tag: NumericsError_Tags.Validation;
-        inner: Readonly<
-[string
-]>
-    };
-
-    
-    class Validation_ extends UniffiError implements Validation__interface {
+    class DivByZero extends UniffiError {
         /**
          * @private
-         * This field is private and should not be used, use `tag` instead.
+         * This field is private and should not be used.
          */
-        readonly [uniffiTypeNameSymbol] = "NumericsError";
-        readonly tag = NumericsError_Tags.Validation;
-        readonly inner: Readonly<
-[string
-]>;
-        constructor(v0: string) {
-            super("NumericsError", "Validation");
-            this.inner = Object.freeze([v0]);
+        readonly [uniffiTypeNameSymbol]: string = "NumericsError";
+        /**
+         * @private
+         * This field is private and should not be used.
+         */
+        readonly [variantOrdinalSymbol] = 3;
+
+        public readonly tag = NumericsError_Tags.DivByZero;
+
+        constructor(message: string) {
+            super("NumericsError", "DivByZero", message);
         }
 
-        static new(v0: string): Validation_ {
-            return new Validation_(v0);
+        static instanceOf(e: any): e is DivByZero {
+            return (
+                instanceOf(e) && (e as any)[variantOrdinalSymbol] === 3
+            );
+        }
+    }
+    class Syntax extends UniffiError {
+        /**
+         * @private
+         * This field is private and should not be used.
+         */
+        readonly [uniffiTypeNameSymbol]: string = "NumericsError";
+        /**
+         * @private
+         * This field is private and should not be used.
+         */
+        readonly [variantOrdinalSymbol] = 4;
+
+        public readonly tag = NumericsError_Tags.Syntax;
+
+        constructor(message: string) {
+            super("NumericsError", "Syntax", message);
         }
 
-        static instanceOf(obj: any): obj is Validation_ {
-            return obj.tag === NumericsError_Tags.Validation;
+        static instanceOf(e: any): e is Syntax {
+            return (
+                instanceOf(e) && (e as any)[variantOrdinalSymbol] === 4
+            );
+        }
+    }
+    class Validation extends UniffiError {
+        /**
+         * @private
+         * This field is private and should not be used.
+         */
+        readonly [uniffiTypeNameSymbol]: string = "NumericsError";
+        /**
+         * @private
+         * This field is private and should not be used.
+         */
+        readonly [variantOrdinalSymbol] = 5;
+
+        public readonly tag = NumericsError_Tags.Validation;
+
+        constructor(message: string) {
+            super("NumericsError", "Validation", message);
         }
 
-        
-        static hasInner(obj: any): obj is Validation_ {
-            return Validation_.instanceOf(obj);
+        static instanceOf(e: any): e is Validation {
+            return (
+                instanceOf(e) && (e as any)[variantOrdinalSymbol] === 5
+            );
         }
-
-        static getInner(obj: Validation_): Readonly<
-[string
-]> {
-            return obj.inner;
-        }
-
     }
 
-    function instanceOf(obj: any): obj is NumericsError {
-        return obj[uniffiTypeNameSymbol] === "NumericsError";
+    // Utility function which does not rely on instanceof.
+    function instanceOf(e: any): e is NumericsError {
+        return (e as any)[uniffiTypeNameSymbol] === "NumericsError";
     }
-
-    return Object.freeze({
+    return {
+        Message,
+        Overflow,
+        DivByZero,
+        Syntax,
+        Validation,
         instanceOf,
-  Message: Message_, 
-  Overflow: Overflow_, 
-  DivByZero: DivByZero_, 
-  Syntax: Syntax_, 
-  Validation: Validation_
-    });
-
+    };
 })();
 
+// Union type for NumericsError error type.
 
 /**
- * Mirror of `kontor_core::numerics::Error` as a uniffi error.
+ * Mirror of `kontor_core::numerics::Error` as a uniffi error. Also
+ * `flat_error`: JS still gets one class per variant to branch on, but
+ * `.message` is the underlying description instead of "NumericsError.X".
  */
 
 export type NumericsError = InstanceType<
     typeof NumericsError[keyof Omit<typeof NumericsError, 'instanceOf'>]
 >;
 
-// FfiConverter for enum NumericsError
 const FfiConverterTypeNumericsError = (() => {
-    const ordinalConverter = FfiConverterInt32;
+    const intConverter = FfiConverterInt32;
     type TypeName = NumericsError;
-    class FFIConverter extends AbstractFfiConverterByteArray<TypeName> {
+    class FfiConverter extends AbstractFfiConverterByteArray<TypeName> {
         read(from: RustBuffer): TypeName {
-            switch (ordinalConverter.read(from)) {
-                case 1: return new NumericsError.Message(FfiConverterString.read(from));
-                case 2: return new NumericsError.Overflow(FfiConverterString.read(from));
-                case 3: return new NumericsError.DivByZero(FfiConverterString.read(from));
-                case 4: return new NumericsError.Syntax(FfiConverterString.read(from));
-                case 5: return new NumericsError.Validation(FfiConverterString.read(from));
+            switch (intConverter.read(from)) {
+                case 1: return new NumericsError.Message(FfiConverterString.read(from)
+                );
+            
+                case 2: return new NumericsError.Overflow(FfiConverterString.read(from)
+                );
+            
+                case 3: return new NumericsError.DivByZero(FfiConverterString.read(from)
+                );
+            
+                case 4: return new NumericsError.Syntax(FfiConverterString.read(from)
+                );
+            
+                case 5: return new NumericsError.Validation(FfiConverterString.read(from)
+                );
+            
                 default: throw new UniffiInternalError.UnexpectedEnumCase();
             }
         }
         write(value: TypeName, into: RustBuffer): void {
-            switch (value.tag) {
-                case NumericsError_Tags.Message: {
-                    ordinalConverter.write(1, into);
-                    const inner = value.inner;
-                    FfiConverterString.write(inner[0], into);
-                    return;
-                }
-                case NumericsError_Tags.Overflow: {
-                    ordinalConverter.write(2, into);
-                    const inner = value.inner;
-                    FfiConverterString.write(inner[0], into);
-                    return;
-                }
-                case NumericsError_Tags.DivByZero: {
-                    ordinalConverter.write(3, into);
-                    const inner = value.inner;
-                    FfiConverterString.write(inner[0], into);
-                    return;
-                }
-                case NumericsError_Tags.Syntax: {
-                    ordinalConverter.write(4, into);
-                    const inner = value.inner;
-                    FfiConverterString.write(inner[0], into);
-                    return;
-                }
-                case NumericsError_Tags.Validation: {
-                    ordinalConverter.write(5, into);
-                    const inner = value.inner;
-                    FfiConverterString.write(inner[0], into);
-                    return;
-                }
-                default:
-                    // Throwing from here means that NumericsError_Tags hasn't matched an ordinal.
-                    throw new UniffiInternalError.UnexpectedEnumCase();
-            }
+            const obj = value as any;
+            const index = obj[variantOrdinalSymbol] as number;
+            intConverter.write(index, into);
         }
         allocationSize(value: TypeName): number {
-            switch (value.tag) {
-                case NumericsError_Tags.Message: {
-                    const inner = value.inner;
-                    let size = ordinalConverter.allocationSize(1);
-                    size += FfiConverterString.allocationSize(inner[0]);
-                    return size;
-                }
-                case NumericsError_Tags.Overflow: {
-                    const inner = value.inner;
-                    let size = ordinalConverter.allocationSize(2);
-                    size += FfiConverterString.allocationSize(inner[0]);
-                    return size;
-                }
-                case NumericsError_Tags.DivByZero: {
-                    const inner = value.inner;
-                    let size = ordinalConverter.allocationSize(3);
-                    size += FfiConverterString.allocationSize(inner[0]);
-                    return size;
-                }
-                case NumericsError_Tags.Syntax: {
-                    const inner = value.inner;
-                    let size = ordinalConverter.allocationSize(4);
-                    size += FfiConverterString.allocationSize(inner[0]);
-                    return size;
-                }
-                case NumericsError_Tags.Validation: {
-                    const inner = value.inner;
-                    let size = ordinalConverter.allocationSize(5);
-                    size += FfiConverterString.allocationSize(inner[0]);
-                    return size;
-                }
-                default: throw new UniffiInternalError.UnexpectedEnumCase();
-            }
+            return intConverter.allocationSize(0);
         }
     }
-    return new FFIConverter();
+    return new FfiConverter();
 })();
 
 

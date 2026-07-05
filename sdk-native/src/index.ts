@@ -17,14 +17,31 @@
  * (`backend.native.ts`: `const _conforms: KontorBackend = native`) and is
  * verified by the mobile CI.
  */
+import installer from "./generated/spec/NativeKontorMobile";
 import * as gen from "./generated/kontor_mobile";
+
+// Install the Rust crate into the JS runtime (registers the JSI host
+// functions the generated FFI reads from `globalThis.NativeKontorMobile`),
+// then run the binding self-checks (uniffi contract-version + per-fn
+// checksums). Both are idempotent, so re-evaluating this module (e.g. a
+// metro reload) is safe. Without this, every `gen.*` call would throw.
+installer.installRustCrate();
+gen.default.initialize();
 
 // ─── byte conversions (ArrayBuffer ↔ Uint8Array) ─────────────────────
 const toU8 = (ab: ArrayBuffer): Uint8Array => new Uint8Array(ab);
-// Copy into a fresh, plain ArrayBuffer: `u8.buffer` is `ArrayBufferLike`
-// (could be a SharedArrayBuffer or a view into a larger buffer); the native
-// bindings want an exact, standalone `ArrayBuffer`.
+// The native bindings want an exact, standalone `ArrayBuffer`. A `Uint8Array`
+// that exactly owns a plain ArrayBuffer can hand it over as-is (the FFI only
+// reads from it); a view into a larger buffer or a SharedArrayBuffer gets
+// copied into a fresh one.
 const toAB = (u8: Uint8Array): ArrayBuffer => {
+  if (
+    u8.byteOffset === 0 &&
+    u8.byteLength === u8.buffer.byteLength &&
+    u8.buffer instanceof ArrayBuffer
+  ) {
+    return u8.buffer;
+  }
   const ab = new ArrayBuffer(u8.byteLength);
   new Uint8Array(ab).set(u8);
   return ab;

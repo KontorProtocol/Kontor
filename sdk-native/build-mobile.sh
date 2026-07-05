@@ -1,11 +1,13 @@
 #!/usr/bin/env bash
 # Build the native mobile binaries for @kontor/sdk-native from the
-# `core/kontor-mobile` uniffi crate, and generate the JSI Turbo Module +
-# TypeScript bindings via uniffi-bindgen-react-native (ubrn).
+# `core/kontor-mobile` uniffi crate. The JSI Turbo Module + TypeScript
+# bindings are generated once up front by uniffi-bindgen-react-native
+# (ubrn); the per-platform build steps only compile and link.
 #
 # Prerequisites (see README.md):
 #   - Rust + `rustup target add` the iOS/Android triples (done below)
-#   - uniffi-bindgen-react-native: `cargo install uniffi-bindgen-react-native`
+#   - `npm install` here — it pulls the `ubrn` CLI (an npm package,
+#     NOT a cargo crate)
 #   - iOS:     Xcode (macOS runner)
 #   - Android: Android NDK (ANDROID_NDK_HOME) + `cargo install cargo-ndk`
 #
@@ -22,23 +24,33 @@ add_android_targets() {
   rustup target add aarch64-linux-android armv7-linux-androideabi x86_64-linux-android
 }
 
+build_ios() {
+  add_ios_targets
+  npm run ubrn:build:ios
+}
+build_android() {
+  : "${ANDROID_NDK_HOME:?set ANDROID_NDK_HOME to your Android NDK path}"
+  add_android_targets
+  npm run ubrn:build:android
+}
+
 case "$TARGET" in
-  ios)
-    add_ios_targets
-    npm run ubrn:build:ios
-    ;;
-  android)
-    : "${ANDROID_NDK_HOME:?set ANDROID_NDK_HOME to your Android NDK path}"
-    add_android_targets
-    npm run ubrn:build:android
-    ;;
-  all)
-    "$0" ios
-    "$0" android
-    ;;
+  ios | android | all) ;;
   *)
     echo "usage: $0 [ios|android|all]" >&2
     exit 1
+    ;;
+esac
+
+# Generate the bindings once; the builds below don't regenerate them.
+npm run ubrn:generate
+
+case "$TARGET" in
+  ios) build_ios ;;
+  android) build_android ;;
+  all)
+    build_ios
+    build_android
     ;;
 esac
 

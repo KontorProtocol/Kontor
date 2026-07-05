@@ -36,40 +36,35 @@ export type WitCodec = Pick<ComponentWit, "encodeCall" | "decodeResult">;
 /** Constructs a per-contract WAVE codec from a WIT source string. */
 export type WitConstructor = new (text: string) => WitCodec;
 
-export interface KontorBackend {
+/** The full jco component module — the reference implementation's shape. */
+type Component = typeof import("../component/kontor-sdk.js");
+
+/**
+ * The backend contract. Free-function signatures are lifted straight off
+ * the jco component (so they can never drift from the Rust world; only
+ * the *name list* below is hand-kept): `Inst` JSON ↔ canonical bytes,
+ * HKDF BLS KeyGen (≥32-byte IKM), EIP-2333 derivation, min_sig
+ * pubkey/sign/verify under `KONTOR_BLS_DST`, the per-op contributor
+ * signing message (`"KONTOR-OP-V1" ++ postcard(...)`) and signature
+ * aggregation. `witCodec`/`numerics` are namespaces, narrowed above to
+ * their runtime slices.
+ */
+export interface KontorBackend
+  extends Pick<
+    Component,
+    | "serializeInst"
+    | "deserializeInst"
+    | "blsSecretKeyGen"
+    | "blsSecretFromSeedEip2333"
+    | "blsPubkeyFromSecret"
+    | "blsSign"
+    | "blsVerify"
+    | "aggregateSigningMessage"
+    | "blsAggregateSignatures"
+  > {
   /** Per-WIT WAVE codec constructor (`new Wit(witText)`). */
   witCodec: { Wit: WitConstructor };
 
   /** Canonical 256-bit Integer / Decimal arithmetic. */
   numerics: NumericsApi;
-
-  /** Canonical `Inst` JSON → bytes. */
-  serializeInst(jsonStr: string): Uint8Array;
-  /** Canonical `Inst` bytes → JSON. */
-  deserializeInst(bytes: Uint8Array): string;
-
-  /** HKDF-based BLS KeyGen from ≥32 bytes of IKM. */
-  blsSecretKeyGen(ikm: Uint8Array): Uint8Array;
-  /** Deterministic EIP-2333 derivation along `path`. */
-  blsSecretFromSeedEip2333(seed: Uint8Array, path: Uint32Array): Uint8Array;
-  /** 96-byte compressed G2 pubkey (min_sig). */
-  blsPubkeyFromSecret(secret: Uint8Array): Uint8Array;
-  /** 48-byte compressed G1 signature under `KONTOR_BLS_DST`. */
-  blsSign(secret: Uint8Array, message: Uint8Array): Uint8Array;
-  /** Single-signature verify; `false` on well-formed non-verifying sig. */
-  blsVerify(
-    pubkey: Uint8Array,
-    message: Uint8Array,
-    signature: Uint8Array,
-  ): boolean;
-
-  /** Per-op contributor signing message (`"KONTOR-OP-V1" ++ postcard(...)`). */
-  aggregateSigningMessage(
-    claimJson: string,
-    nonce: bigint,
-    sponsored: boolean,
-    instJson: string,
-  ): Uint8Array;
-  /** Combine per-op signatures into one 48-byte aggregate signature. */
-  blsAggregateSignatures(signatures: Array<Uint8Array>): Uint8Array;
 }
