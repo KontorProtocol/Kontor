@@ -37,6 +37,11 @@ class KontorMobileModule(reactContext: ReactApplicationContext) :
     const val NAME = "KontorMobile"
 
     init {
+      // The Rust core ships as a standalone shared library that the JSI
+      // adapter (libkontor-mobile.so) links against dynamically. Load it
+      // into the process first so the adapter's dependency is already
+      // resolved when we load it next.
+      System.loadLibrary("kontor_mobile")
       System.loadLibrary("kontor-mobile")
     }
   }

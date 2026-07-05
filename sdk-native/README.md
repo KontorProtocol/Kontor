@@ -79,9 +79,16 @@ npm run build:mobile            # or: ./build-mobile.sh ios | android
 ```
 
 Binaries are built with `--profile mobile` (defined in `core/Cargo.toml`):
-release + thin LTO + stripped symbols, so the shipped `.so`/xcframework are
-optimized and size-tuned. The published npm package must contain them —
-`prepack` refuses to pack if they are missing.
+release + thin LTO + `codegen-units=1` + stripped symbols. We ship the
+**pre-linked `cdylib`** — a dynamic `.so` (Android) / dynamic-framework
+xcframework (iOS) — not the `staticlib` `.a`. A static archive carries
+every object of the crate and all its deps (blst, serde_json, wit-parser,
+and a whole TypeScript compiler pulled in transitively) with no dead-code
+elimination until the consumer's link (~80 MB per iOS slice, ~1.2 GB
+unpacked across all ABIs); the linked cdylib is DCE'd and stripped down to
+~3 MB per slice, keeping the published package around ~20 MB. The published
+npm package must contain the binaries — `prepack` refuses to pack if they
+are missing.
 
 ### Gotchas learned during setup
 
@@ -102,13 +109,16 @@ optimized and size-tuned. The published npm package must contain them —
 - **Android NDK** was found at `~/Library/Android/sdk/ndk/<version>`; set
   `ANDROID_NDK_HOME` to it. **iOS** needs full **Xcode** (Command Line Tools
   alone lack the iphoneos SDK).
-- **cargo-ndk >= 4 removed `--no-strip`**, which ubrn 0.29.x still passes —
-  `ubrn build android` fails with "unexpected argument". `build-mobile.sh`
-  works around it: it prebuilds the three ABIs with `cargo ndk` directly and
-  runs ubrn with `--no-cargo` so ubrn only assembles the jniLibs.
+- **`build-mobile.sh` bypasses `ubrn build`.** ubrn's platform build
+  assembles the *static* archive (and on cargo-ndk ≥ 4 also trips over the
+  `--no-strip` flag ubrn 0.29.x passes). The script instead compiles the
+  cdylib per target with `cargo` / `cargo ndk` directly and assembles the
+  shared artifacts itself: the `.so`s into `jniLibs/`, and the iOS dylibs
+  into dynamic `.framework` bundles wrapped in the xcframework.
 
-Both paths are verified locally: `cargo ndk -t arm64-v8a build -p
-kontor-mobile` produces `libkontor_mobile.so`, and `./build-mobile.sh ios`
-produces `KontorSdkNativeFramework.xcframework` (device `arm64` + simulator
-`arm64`/`x86_64`, 133 uniffi FFI symbols exported). Full verification runs in
-CI — see `.github/workflows/mobile.yml`.
+`./build-mobile.sh ios` is verified locally: it produces
+`KontorSdkNativeFramework.xcframework` (8.6 MB — device `arm64` + simulator
+`arm64`/`x86_64`, `@rpath` install name, 133 uniffi FFI symbols exported).
+The Android `.so` build and the full on-device link/load run in CI (which
+also reports the shipped artifact sizes) — see
+`.github/workflows/mobile.yml`.

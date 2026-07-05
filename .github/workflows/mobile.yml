@@ -244,3 +244,20 @@ jobs:
         env:
           ANDROID_NDK_HOME: ${{ steps.ndk.outputs.ndk-path }}
         run: ./build-mobile.sh ${{ matrix.name }}
+      # Surface the shipped artifact sizes (the Android .so sizes can't be
+      # measured off-runner without the NDK) and guard against a regression
+      # back to the multi-hundred-MB static archives.
+      - name: Report shipped artifact size
+        working-directory: ./sdk-native
+        run: |
+          {
+            echo "## sdk-native ${{ matrix.name }} shipped artifacts"
+            echo '```'
+            if [ "${{ matrix.name }}" = "ios" ]; then
+              du -sh KontorSdkNativeFramework.xcframework
+              find KontorSdkNativeFramework.xcframework -name KontorMobile -type f -exec du -h {} +
+            else
+              du -sh android/src/main/jniLibs android/src/main/jniLibs/*/
+            fi
+            echo '```'
+          } | tee -a "$GITHUB_STEP_SUMMARY"

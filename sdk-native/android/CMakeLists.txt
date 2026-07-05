@@ -37,12 +37,17 @@ set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -fstack-protector-all")
 set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wall")
 set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Werror")
 
+# The Rust core ships as a pre-linked shared library (libkontor_mobile.so in
+# jniLibs), not a static archive — see build-mobile.sh for why. Link it as a
+# SHARED import: Gradle packages the .so into the APK's lib/<abi>/, and the
+# dynamic linker resolves it at load time (KontorMobileModule.kt loads it
+# explicitly before this JSI adapter, so it is already in the process).
 cmake_path(
   SET MY_RUST_LIB
-  ${CMAKE_SOURCE_DIR}/src/main/jniLibs/${ANDROID_ABI}/libkontor_mobile.a
+  ${CMAKE_SOURCE_DIR}/src/main/jniLibs/${ANDROID_ABI}/libkontor_mobile.so
   NORMALIZE
 )
-add_library(my_rust_lib STATIC IMPORTED)
+add_library(my_rust_lib SHARED IMPORTED)
 set_target_properties(my_rust_lib PROPERTIES IMPORTED_LOCATION ${MY_RUST_LIB})
 
 # Add ReactAndroid libraries, being careful to account for different versions.
