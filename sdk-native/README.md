@@ -61,6 +61,11 @@ npm run ubrn:generate
 npm run build:mobile            # or: ./build-mobile.sh ios | android
 ```
 
+Binaries are built with `--profile mobile` (defined in `core/Cargo.toml`):
+release + thin LTO + stripped symbols, so the shipped `.so`/xcframework are
+optimized and size-tuned. The published npm package must contain them —
+`prepack` refuses to pack if they are missing.
+
 ### Gotchas learned during setup
 
 - **`uniffi-bindgen-react-native` is an npm package, not a cargo crate.** It ships

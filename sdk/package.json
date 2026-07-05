@@ -56,7 +56,7 @@
     "build:ts": "vite build",
     "build:native": "KONTOR_TARGET=native vite build",
     "build": "npm run build:ts && npm run build:native",
-    "prepare": "npm run build",
+    "prepublishOnly": "npm run build",
     "test": "vitest",
     "test:browser": "vitest --browser",
     "test:regtest": "npm run build && vitest --config vitest.regtest.config.ts",

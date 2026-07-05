@@ -1,10 +1,6 @@
 # uniffi-bindgen-react-native (ubrn) config — the integration point that
 # turns the `core/kontor-mobile` uniffi crate into a JSI Turbo Module +
 # TypeScript bindings for React Native.
-#
-# TODO(verify): the exact schema depends on the installed ubrn version.
-# Reconcile against `uniffi-bindgen-react-native --help` and the docs at
-# https://jhugman.github.io/uniffi-bindgen-react-native/ before first run.
 ---
 name: kontor_mobile
 
@@ -19,7 +15,9 @@ rust:
 
 bindings:
   # Generated TS bindings land here; `src/index.ts` re-shapes them into the
-  # KontorBackend contract. Generated output is gitignored (see .gitignore).
+  # KontorBackend contract. Generated output is COMMITTED (the published
+  # package ships it); the mobile CI regenerates and fails on drift — see
+  # the note in .gitignore.
   ts: src/generated
   cpp: cpp
 
@@ -31,7 +29,8 @@ turboModule:
   spec: NativeKontorMobile
 
 # iOS / Android target triples to compile. `build-mobile.sh` runs
-# `rustup target add` for these before building.
+# `rustup target add` for these before building and asserts the produced
+# xcframework/jniLibs cover them — keep in sync with its target lists.
 ios:
   targets:
     - aarch64-apple-ios

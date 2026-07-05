@@ -26,7 +26,11 @@ wit-bindgen = "=0.59.0"
 wit-component = "=0.253.0"
 wit-parser = "=0.253.0"
 wasm-wave = { version ="0.253.0", default-features = false }
-uniffi = "0.29"
+# =-pinned like the rest of the workspace: the JS side pins the
+# uniffi-bindgen-react-native generator/runtime in lockstep (sdk-native
+# pins ubrn 0.29.3-1) and a silent `cargo update` bump could desync the
+# generated bindings' checksums from the runtime.
+uniffi = "=0.29.5"
 
 anyhow = { version = "=1.0.103", default-features = false }
 fastnum = "=0.7.5"
@@ -125,3 +129,13 @@ opt-level = 3
 opt-level = 3
 [profile.dev.package.generic-array]
 opt-level = 3
+
+# Profile for the mobile binaries shipped inside apps (@kontor/sdk-native:
+# build-mobile.sh, ubrn, .github/workflows/mobile.yml). A dedicated profile
+# (not [profile.release]) so tuning for on-device size never perturbs other
+# release artifacts — notably the reproducible contract builds.
+[profile.mobile]
+inherits = "release"
+lto = "thin"
+codegen-units = 1
+strip = "symbols"

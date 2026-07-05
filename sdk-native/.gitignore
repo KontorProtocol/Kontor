@@ -1,5 +1,7 @@
-# Native build artifacts (produced by build-mobile.sh / cargo)
-ios/*.xcframework
+# Native build artifacts (produced by build-mobile.sh / cargo).
+# ubrn writes the xcframework to the package root (the podspec's
+# vendored_frameworks path), not under ios/.
+*.xcframework
 android/src/main/jniLibs/
 **/build/
 **/Pods/

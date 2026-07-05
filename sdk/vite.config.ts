@@ -39,7 +39,6 @@ function nativeBackendPlugin() {
     name: "kontor-native-backend",
     enforce: "pre" as const,
     resolveId(source: string) {
-      if (!isNative) return null;
       if (source.endsWith("/backend/index.js"))
         return resolve(__dirname, "src/backend/backend.native.ts");
       if (source.endsWith("/component/kontor-sdk.js"))

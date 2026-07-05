@@ -15,6 +15,16 @@ on:
       # KontorBackend is derived from — contract drift starts there, so
       # those changes must trigger the native conformance check too.
       - "core/kontor-sdk/**"
+      # kontor-core is a facade: the bodies live in these crates, so a
+      # change there is exactly what shifts the uniffi surface or breaks
+      # the mobile cross-compile. Dependency bumps (Cargo.{toml,lock})
+      # can do the same.
+      - "core/numerics/**"
+      - "core/indexer-types/**"
+      - "core/bls-crypto/**"
+      - "core/wit-validator/**"
+      - "core/Cargo.toml"
+      - "core/Cargo.lock"
       - "sdk-native/**"
       - "sdk/src/backend/**"
       - "sdk/src/component/**"
@@ -26,6 +36,12 @@ on:
       - "core/kontor-core/**"
       - "core/kontor-mobile/**"
       - "core/kontor-sdk/**"
+      - "core/numerics/**"
+      - "core/indexer-types/**"
+      - "core/bls-crypto/**"
+      - "core/wit-validator/**"
+      - "core/Cargo.toml"
+      - "core/Cargo.lock"
       - "sdk-native/**"
       - "sdk/src/backend/**"
       - "sdk/src/component/**"
@@ -49,15 +65,14 @@ jobs:
   sdk-bundles:
     name: SDK bundles (web + react-native)
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
           node-version: "22"
       - name: Install SDK deps
-        # --ignore-scripts: `prepare` would run the full web+native build,
-        # which the next step does explicitly.
-        run: npm ci --ignore-scripts
+        run: npm ci
         working-directory: ./sdk
       - name: Build web + native bundles
         run: npm run build
@@ -75,6 +90,7 @@ jobs:
 
   # ─── The consensus-critical Rust compiles for every mobile triple. This
   # is the strongest early signal (no bindings/app needed yet).
+  # Target lists mirror build-mobile.sh / ubrn.config.yaml.
   rust-mobile:
     name: kontor-mobile (${{ matrix.name }})
     strategy:
@@ -88,6 +104,7 @@ jobs:
             os: ubuntu-latest
             targets: aarch64-linux-android armv7-linux-androideabi x86_64-linux-android
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -106,23 +123,29 @@ jobs:
       - name: Install cargo-ndk (Android)
         if: matrix.name == 'android'
         # Prebuilt binary — `cargo install` would compile it from source
-        # (several minutes) on every run.
+        # (several minutes) on every run. Pinned to a major: an unpinned
+        # cargo-ndk major already broke this pipeline once (v4 dropping
+        # --no-strip, see build-mobile.sh).
         uses: taiki-e/install-action@v2
         with:
-          tool: cargo-ndk
+          tool: cargo-ndk@4
       - name: Setup Android NDK
         if: matrix.name == 'android'
         uses: nttld/setup-ndk@v1
         id: ndk
         with:
           ndk-version: r27
+      # `--profile mobile` everywhere below: the profile the shipped
+      # binaries use (core/Cargo.toml), so this job verifies the artifact
+      # that ships and its compilation is sccache-shareable with the
+      # bindings job's build-mobile.sh run.
       - name: Compile kontor-mobile for each target (iOS)
         if: matrix.name == 'ios'
         working-directory: ./core
         run: |
           for t in ${{ matrix.targets }}; do
             echo "::group::cargo build kontor-mobile --target $t"
-            cargo build -p kontor-mobile --release --target "$t"
+            cargo build -p kontor-mobile --profile mobile --target "$t"
             echo "::endgroup::"
           done
       - name: Compile kontor-mobile for each target (Android)
@@ -137,14 +160,15 @@ jobs:
         run: |
           for t in ${{ matrix.targets }}; do
             echo "::group::cargo ndk build kontor-mobile --target $t"
-            cargo ndk -t "$t" build -p kontor-mobile --release
+            cargo ndk --platform 24 -t "$t" build -p kontor-mobile --profile mobile
             echo "::endgroup::"
           done
 
   # ─── Full binding + binary build: ubrn generate → typecheck the wrapper
   # and the SDK's KontorBackend conformance → compile/link the binaries.
-  # Independent of rust-mobile (compilation is shared via sccache), so the
-  # two run in parallel instead of doubling the critical path.
+  # Independent of rust-mobile so the two run in parallel instead of
+  # doubling the critical path; both build `--profile mobile`, so sccache
+  # shares compilation across runs (and across the jobs when timing allows).
   bindings:
     name: uniffi bindings + ${{ matrix.name }} binaries
     strategy:
@@ -156,6 +180,7 @@ jobs:
           - name: android
             os: ubuntu-latest
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -177,9 +202,10 @@ jobs:
       # its version is pinned in lockstep with core/kontor-mobile's `uniffi`.
       - name: Install cargo-ndk (Android)
         if: matrix.name == 'android'
+        # Pinned to a major — see the rust-mobile job.
         uses: taiki-e/install-action@v2
         with:
-          tool: cargo-ndk
+          tool: cargo-ndk@4
       - name: Setup Android NDK
         if: matrix.name == 'android'
         uses: nttld/setup-ndk@v1
@@ -187,20 +213,20 @@ jobs:
         with:
           ndk-version: r27
       - name: Install sdk-native deps
-        # --ignore-scripts: the `file:../sdk` devDependency's `prepare`
-        # would otherwise run the SDK's vite build inside this install
-        # (without sdk/node_modules → "vite: command not found"). Nothing
-        # here needs @kontor/sdk built, and ubrn has no install scripts.
-        run: npm ci --ignore-scripts
+        run: npm ci
         working-directory: ./sdk-native
       - name: Generate bindings
         run: npm run ubrn:generate
         working-directory: ./sdk-native
       # The generated bindings are committed (the published package ships
       # them); fail if the checked-in copies drifted from the generator's
-      # output for the current Rust surface.
+      # output for the current Rust surface. `git add -N` first so files
+      # the generator newly emits (untracked, hence invisible to plain
+      # `git diff`) also fail the gate.
       - name: Assert committed bindings match the generator output
-        run: git diff --exit-code -- sdk-native/src/generated sdk-native/cpp
+        run: |
+          git add -N sdk-native/src/generated sdk-native/cpp
+          git diff --exit-code -- sdk-native/src/generated sdk-native/cpp
       - name: Type-check @kontor/sdk-native against generated bindings
         run: npm run typecheck
         working-directory: ./sdk-native
@@ -210,7 +236,7 @@ jobs:
       # maps @kontor/sdk-native → ../sdk-native/src/index.ts.
       - name: Type-check SDK native backend (KontorBackend conformance)
         run: |
-          npm ci --ignore-scripts
+          npm ci
           npx tsc -p tsconfig.native.json
         working-directory: ./sdk
       - name: Build native binaries
