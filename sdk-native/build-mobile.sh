@@ -31,7 +31,14 @@ build_ios() {
 build_android() {
   : "${ANDROID_NDK_HOME:?set ANDROID_NDK_HOME to your Android NDK path}"
   add_android_targets
-  npm run ubrn:build:android
+  # ubrn 0.29.x drives cargo-ndk with `--no-strip`, an option cargo-ndk
+  # >= 4 removed. Build the three ABIs ourselves (same invocation works
+  # on cargo-ndk 3 and 4; ABI list mirrors ubrn.config.yaml) and let
+  # ubrn only assemble the jniLibs from the prebuilt libraries.
+  (cd ../core && cargo ndk --platform 23 \
+    -t arm64-v8a -t armeabi-v7a -t x86_64 \
+    build -p kontor-mobile)
+  npm run ubrn:build:android -- --no-cargo
 }
 
 case "$TARGET" in

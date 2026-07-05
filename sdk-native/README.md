@@ -80,6 +80,10 @@ npm run build:mobile            # or: ./build-mobile.sh ios | android
 - **Android NDK** was found at `~/Library/Android/sdk/ndk/<version>`; set
   `ANDROID_NDK_HOME` to it. **iOS** needs full **Xcode** (Command Line Tools
   alone lack the iphoneos SDK).
+- **cargo-ndk >= 4 removed `--no-strip`**, which ubrn 0.29.x still passes —
+  `ubrn build android` fails with "unexpected argument". `build-mobile.sh`
+  works around it: it prebuilds the three ABIs with `cargo ndk` directly and
+  runs ubrn with `--no-cargo` so ubrn only assembles the jniLibs.
 
 The Android path is verified working (`cargo ndk -t arm64-v8a build -p
 kontor-mobile` produces `libkontor_mobile.so`). Full verification runs in CI —
