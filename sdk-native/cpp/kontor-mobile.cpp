@@ -14,6 +14,7 @@ namespace kontormobile {
 	}
 
 	uint8_t cleanupRustCrate(jsi::Runtime &runtime) {
-		return false;
+		NativeKontorMobile::unregisterModule(runtime);
+		return true;
 	}
 }
