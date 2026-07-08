@@ -131,10 +131,10 @@ fn index_attr_options(indexed: Option<&str>) -> TokenStream {
     for (record, attrs) in by_record {
         // The index machinery is folded into `#[derive(Storage)]` (applied to every
         // record via the contract's `additional_derives`), so we inject only the
-        // `#[index(...)]` attributes here.
-        for attr in attrs {
-            type_pairs.push(quote! { #record: #attr, });
-        }
+        // `#[index(...)]` attributes here. The generator takes one bracketed list of
+        // attribute strings per selector (records-only; non-derive attrs are emitted
+        // verbatim so `#[index(...)]` passes through untouched).
+        type_pairs.push(quote! { #record: [ #(#attrs),* ], });
     }
     quote! { additional_type_attributes: { #(#type_pairs)* }, }
 }
