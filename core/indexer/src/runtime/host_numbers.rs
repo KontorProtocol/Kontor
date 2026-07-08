@@ -7,8 +7,8 @@ use super::{
 
 impl built_in::numbers::Host for Runtime {}
 
-impl built_in::numbers::HostWithStore for Runtime {
-    async fn u64_to_integer<T>(accessor: &Accessor<T, Self>, i: u64) -> Result<Integer> {
+impl<T> built_in::numbers::HostWithStore<T> for Runtime {
+    async fn u64_to_integer(accessor: &Accessor<T, Self>, i: u64) -> Result<Integer> {
         Fuel::NumbersU64ToInteger
             .consume(
                 accessor,
@@ -20,7 +20,7 @@ impl built_in::numbers::HostWithStore for Runtime {
         Ok(numerics::u64_to_integer(i))
     }
 
-    async fn s64_to_integer<T>(accessor: &Accessor<T, Self>, i: i64) -> Result<Integer> {
+    async fn s64_to_integer(accessor: &Accessor<T, Self>, i: i64) -> Result<Integer> {
         Fuel::NumbersS64ToInteger
             .consume(
                 accessor,
@@ -32,7 +32,7 @@ impl built_in::numbers::HostWithStore for Runtime {
         Ok(numerics::s64_to_integer(i))
     }
 
-    async fn string_to_integer<T>(
+    async fn string_to_integer(
         accessor: &Accessor<T, Self>,
         s: String,
     ) -> Result<Result<Integer, Error>> {
@@ -47,7 +47,7 @@ impl built_in::numbers::HostWithStore for Runtime {
         Ok(numerics::string_to_integer(&s))
     }
 
-    async fn integer_to_string<T>(accessor: &Accessor<T, Self>, i: Integer) -> Result<String> {
+    async fn integer_to_string(accessor: &Accessor<T, Self>, i: Integer) -> Result<String> {
         let s = numerics::integer_to_string(i);
         Fuel::NumbersIntegerToString(s.len() as u64)
             .consume(
@@ -60,7 +60,7 @@ impl built_in::numbers::HostWithStore for Runtime {
         Ok(s)
     }
 
-    async fn eq_integer<T>(accessor: &Accessor<T, Self>, a: Integer, b: Integer) -> Result<bool> {
+    async fn eq_integer(accessor: &Accessor<T, Self>, a: Integer, b: Integer) -> Result<bool> {
         Fuel::NumbersEqInteger
             .consume(
                 accessor,
@@ -72,7 +72,7 @@ impl built_in::numbers::HostWithStore for Runtime {
         Ok(numerics::eq_integer(a, b))
     }
 
-    async fn cmp_integer<T>(
+    async fn cmp_integer(
         accessor: &Accessor<T, Self>,
         a: Integer,
         b: Integer,
@@ -88,7 +88,7 @@ impl built_in::numbers::HostWithStore for Runtime {
         Ok(numerics::cmp_integer(a, b))
     }
 
-    async fn add_integer<T>(
+    async fn add_integer(
         accessor: &Accessor<T, Self>,
         a: Integer,
         b: Integer,
@@ -104,7 +104,7 @@ impl built_in::numbers::HostWithStore for Runtime {
         Ok(numerics::add_integer(a, b))
     }
 
-    async fn sub_integer<T>(
+    async fn sub_integer(
         accessor: &Accessor<T, Self>,
         a: Integer,
         b: Integer,
@@ -120,7 +120,7 @@ impl built_in::numbers::HostWithStore for Runtime {
         Ok(numerics::sub_integer(a, b))
     }
 
-    async fn mul_integer<T>(
+    async fn mul_integer(
         accessor: &Accessor<T, Self>,
         a: Integer,
         b: Integer,
@@ -136,7 +136,7 @@ impl built_in::numbers::HostWithStore for Runtime {
         Ok(numerics::mul_integer(a, b))
     }
 
-    async fn div_integer<T>(
+    async fn div_integer(
         accessor: &Accessor<T, Self>,
         a: Integer,
         b: Integer,
@@ -152,7 +152,7 @@ impl built_in::numbers::HostWithStore for Runtime {
         Ok(numerics::div_integer(a, b))
     }
 
-    async fn sqrt_integer<T>(
+    async fn sqrt_integer(
         accessor: &Accessor<T, Self>,
         i: Integer,
     ) -> Result<Result<Integer, Error>> {
@@ -167,7 +167,7 @@ impl built_in::numbers::HostWithStore for Runtime {
         Ok(numerics::sqrt_integer(i))
     }
 
-    async fn integer_to_decimal<T>(
+    async fn integer_to_decimal(
         accessor: &Accessor<T, Self>,
         i: Integer,
     ) -> Result<Result<Decimal, Error>> {
@@ -182,7 +182,7 @@ impl built_in::numbers::HostWithStore for Runtime {
         Ok(numerics::integer_to_decimal(i))
     }
 
-    async fn decimal_to_integer<T>(
+    async fn decimal_to_integer(
         accessor: &Accessor<T, Self>,
         d: Decimal,
     ) -> Result<Result<Integer, Error>> {
@@ -197,7 +197,7 @@ impl built_in::numbers::HostWithStore for Runtime {
         Ok(numerics::decimal_to_integer(d))
     }
 
-    async fn u64_to_decimal<T>(
+    async fn u64_to_decimal(
         accessor: &Accessor<T, Self>,
         i: u64,
     ) -> Result<Result<Decimal, Error>> {
@@ -212,7 +212,7 @@ impl built_in::numbers::HostWithStore for Runtime {
         Ok(numerics::u64_to_decimal(i))
     }
 
-    async fn s64_to_decimal<T>(
+    async fn s64_to_decimal(
         accessor: &Accessor<T, Self>,
         i: i64,
     ) -> Result<Result<Decimal, Error>> {
@@ -227,7 +227,7 @@ impl built_in::numbers::HostWithStore for Runtime {
         Ok(numerics::s64_to_decimal(i))
     }
 
-    async fn f64_to_decimal<T>(
+    async fn f64_to_decimal(
         accessor: &Accessor<T, Self>,
         f: f64,
     ) -> Result<Result<Decimal, Error>> {
@@ -242,7 +242,7 @@ impl built_in::numbers::HostWithStore for Runtime {
         Ok(numerics::f64_to_decimal(f))
     }
 
-    async fn string_to_decimal<T>(
+    async fn string_to_decimal(
         accessor: &Accessor<T, Self>,
         s: String,
     ) -> Result<Result<Decimal, Error>> {
@@ -257,7 +257,7 @@ impl built_in::numbers::HostWithStore for Runtime {
         Ok(numerics::string_to_decimal(&s))
     }
 
-    async fn decimal_to_string<T>(accessor: &Accessor<T, Self>, d: Decimal) -> Result<String> {
+    async fn decimal_to_string(accessor: &Accessor<T, Self>, d: Decimal) -> Result<String> {
         let s = numerics::decimal_to_string(d);
         Fuel::NumbersDecimalToString(s.len() as u64)
             .consume(
@@ -270,7 +270,7 @@ impl built_in::numbers::HostWithStore for Runtime {
         Ok(s)
     }
 
-    async fn eq_decimal<T>(
+    async fn eq_decimal(
         accessor: &Accessor<T, Self>,
         a: Decimal,
         b: Decimal,
@@ -286,7 +286,7 @@ impl built_in::numbers::HostWithStore for Runtime {
         Ok(numerics::eq_decimal(a, b))
     }
 
-    async fn cmp_decimal<T>(
+    async fn cmp_decimal(
         accessor: &Accessor<T, Self>,
         a: Decimal,
         b: Decimal,
@@ -302,7 +302,7 @@ impl built_in::numbers::HostWithStore for Runtime {
         Ok(numerics::cmp_decimal(a, b))
     }
 
-    async fn add_decimal<T>(
+    async fn add_decimal(
         accessor: &Accessor<T, Self>,
         a: Decimal,
         b: Decimal,
@@ -318,7 +318,7 @@ impl built_in::numbers::HostWithStore for Runtime {
         Ok(numerics::add_decimal(a, b))
     }
 
-    async fn sub_decimal<T>(
+    async fn sub_decimal(
         accessor: &Accessor<T, Self>,
         a: Decimal,
         b: Decimal,
@@ -334,7 +334,7 @@ impl built_in::numbers::HostWithStore for Runtime {
         Ok(numerics::sub_decimal(a, b))
     }
 
-    async fn mul_decimal<T>(
+    async fn mul_decimal(
         accessor: &Accessor<T, Self>,
         a: Decimal,
         b: Decimal,
@@ -350,7 +350,7 @@ impl built_in::numbers::HostWithStore for Runtime {
         Ok(numerics::mul_decimal(a, b))
     }
 
-    async fn div_decimal<T>(
+    async fn div_decimal(
         accessor: &Accessor<T, Self>,
         a: Decimal,
         b: Decimal,
@@ -366,7 +366,7 @@ impl built_in::numbers::HostWithStore for Runtime {
         Ok(numerics::div_decimal(a, b))
     }
 
-    async fn log10_decimal<T>(
+    async fn log10_decimal(
         accessor: &Accessor<T, Self>,
         a: Decimal,
     ) -> Result<Result<Decimal, Error>> {

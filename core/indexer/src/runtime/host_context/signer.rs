@@ -9,22 +9,22 @@ use crate::runtime::wit::{Holder, Signer};
 
 impl built_in::context::HostSigner for Runtime {}
 
-impl built_in::context::HostSignerWithStore for Runtime {
-    async fn drop<T>(accessor: &Accessor<T, Self>, rep: Resource<Signer>) -> Result<()> {
+impl<T> built_in::context::HostSignerWithStore<T> for Runtime {
+    async fn drop(accessor: &Accessor<T, Self>, rep: Resource<Signer>) -> Result<()> {
         accessor
             .with(|mut access| access.get().clone())
             ._drop(rep)
             .await
     }
 
-    async fn key<T>(accessor: &Accessor<T, Self>, self_: Resource<Signer>) -> Result<String> {
+    async fn key(accessor: &Accessor<T, Self>, self_: Resource<Signer>) -> Result<String> {
         accessor
             .with(|mut access| access.get().clone())
             ._signer_to_string(accessor, self_)
             .await
     }
 
-    async fn as_holder<T>(
+    async fn as_holder(
         accessor: &Accessor<T, Self>,
         self_: Resource<Signer>,
     ) -> Result<Resource<Holder>> {
@@ -34,7 +34,7 @@ impl built_in::context::HostSignerWithStore for Runtime {
             .await
     }
 
-    async fn as_ref<T>(accessor: &Accessor<T, Self>, self_: Resource<Signer>) -> Result<HolderRef> {
+    async fn as_ref(accessor: &Accessor<T, Self>, self_: Resource<Signer>) -> Result<HolderRef> {
         let runtime = accessor.with(|mut access| access.get().clone());
         Fuel::HolderAsRef
             .consume(accessor, runtime.gauge.as_ref())

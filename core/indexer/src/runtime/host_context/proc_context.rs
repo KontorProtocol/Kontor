@@ -10,15 +10,15 @@ use crate::runtime::wit::{
 
 impl built_in::context::HostProcContext for Runtime {}
 
-impl built_in::context::HostProcContextWithStore for Runtime {
-    async fn drop<T>(accessor: &Accessor<T, Self>, rep: Resource<ProcContext>) -> Result<()> {
+impl<T> built_in::context::HostProcContextWithStore<T> for Runtime {
+    async fn drop(accessor: &Accessor<T, Self>, rep: Resource<ProcContext>) -> Result<()> {
         accessor
             .with(|mut access| access.get().clone())
             ._drop(rep)
             .await
     }
 
-    async fn signer<T>(
+    async fn signer(
         accessor: &Accessor<T, Self>,
         self_: Resource<ProcContext>,
     ) -> Result<Resource<Signer>> {
@@ -28,7 +28,7 @@ impl built_in::context::HostProcContextWithStore for Runtime {
             .await
     }
 
-    async fn payer<T>(
+    async fn payer(
         accessor: &Accessor<T, Self>,
         self_: Resource<ProcContext>,
     ) -> Result<Resource<Holder>> {
@@ -38,7 +38,7 @@ impl built_in::context::HostProcContextWithStore for Runtime {
             .await
     }
 
-    async fn contract_signer<T>(
+    async fn contract_signer(
         accessor: &Accessor<T, Self>,
         self_: Resource<ProcContext>,
     ) -> Result<Resource<Signer>> {
@@ -48,7 +48,7 @@ impl built_in::context::HostProcContextWithStore for Runtime {
             .await
     }
 
-    async fn transaction<T>(
+    async fn transaction(
         accessor: &Accessor<T, Self>,
         self_: Resource<ProcContext>,
     ) -> Result<Resource<Transaction>> {
@@ -58,7 +58,7 @@ impl built_in::context::HostProcContextWithStore for Runtime {
             .await
     }
 
-    async fn view_context<T>(
+    async fn view_context(
         accessor: &Accessor<T, Self>,
         self_: Resource<ProcContext>,
     ) -> Result<Resource<ViewContext>> {
@@ -68,7 +68,7 @@ impl built_in::context::HostProcContextWithStore for Runtime {
             .await
     }
 
-    async fn generate_id<T>(
+    async fn generate_id(
         accessor: &Accessor<T, Self>,
         _self: Resource<ProcContext>,
     ) -> Result<String> {
@@ -78,7 +78,7 @@ impl built_in::context::HostProcContextWithStore for Runtime {
             .await
     }
 
-    async fn storage<T>(
+    async fn storage(
         accessor: &Accessor<T, Self>,
         self_: Resource<ProcContext>,
     ) -> Result<Resource<ProcStorage>> {
@@ -88,7 +88,7 @@ impl built_in::context::HostProcContextWithStore for Runtime {
             .await
     }
 
-    async fn block_height<T>(
+    async fn block_height(
         accessor: &Accessor<T, Self>,
         _self: Resource<ProcContext>,
     ) -> Result<u64> {
@@ -96,7 +96,7 @@ impl built_in::context::HostProcContextWithStore for Runtime {
         Ok(runtime.storage.height)
     }
 
-    async fn network<T>(
+    async fn network(
         accessor: &Accessor<T, Self>,
         _self: Resource<ProcContext>,
     ) -> Result<built_in::context::Network> {
@@ -111,7 +111,7 @@ impl built_in::context::HostProcContextWithStore for Runtime {
         })
     }
 
-    async fn contract<T>(
+    async fn contract(
         accessor: &Accessor<T, Self>,
         self_: Resource<ProcContext>,
     ) -> Result<Resource<Contract>> {

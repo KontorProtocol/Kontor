@@ -8,15 +8,15 @@ use crate::runtime::wit::{Contract, CoreContext, ProcContext, Signer};
 
 impl built_in::context::HostCoreContext for Runtime {}
 
-impl built_in::context::HostCoreContextWithStore for Runtime {
-    async fn drop<T>(accessor: &Accessor<T, Self>, rep: Resource<CoreContext>) -> Result<()> {
+impl<T> built_in::context::HostCoreContextWithStore<T> for Runtime {
+    async fn drop(accessor: &Accessor<T, Self>, rep: Resource<CoreContext>) -> Result<()> {
         accessor
             .with(|mut access| access.get().clone())
             ._drop(rep)
             .await
     }
 
-    async fn proc_context<T>(
+    async fn proc_context(
         accessor: &Accessor<T, Self>,
         self_: Resource<CoreContext>,
     ) -> Result<Resource<ProcContext>> {
@@ -26,7 +26,7 @@ impl built_in::context::HostCoreContextWithStore for Runtime {
             .await
     }
 
-    async fn signer_proc_context<T>(
+    async fn signer_proc_context(
         accessor: &Accessor<T, Self>,
         self_: Resource<CoreContext>,
     ) -> Result<Resource<ProcContext>> {
@@ -36,7 +36,7 @@ impl built_in::context::HostCoreContextWithStore for Runtime {
             .await
     }
 
-    async fn core_signer<T>(
+    async fn core_signer(
         accessor: &Accessor<T, Self>,
         self_: Resource<CoreContext>,
     ) -> Result<Resource<Signer>> {
@@ -46,7 +46,7 @@ impl built_in::context::HostCoreContextWithStore for Runtime {
             .await
     }
 
-    async fn contract<T>(
+    async fn contract(
         accessor: &Accessor<T, Self>,
         self_: Resource<CoreContext>,
     ) -> Result<Resource<Contract>> {

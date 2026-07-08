@@ -19,40 +19,43 @@ too_many_arguments = "allow"
 
 [workspace.dependencies]
 # IMPORTANT
-wasmtime = { version = "=45.0.0", features = ["wave", "component-model-async"] }
+wasmtime = { version = "=46.0.1", features = ["wave", "component-model-async"] }
 wit-bindgen = "=0.59.0"
-wit-component = "=0.251.0"
-wit-parser = "=0.251.0"
-wasm-wave = { version ="0.251.0", default-features = false }
+wit-component = "=0.253.0"
+wit-parser = "=0.253.0"
+wasm-wave = { version ="0.253.0", default-features = false }
 
-anyhow = { version = "=1.0.102", default-features = false }
-fastnum = "=0.7.4"
+anyhow = { version = "=1.0.103", default-features = false }
+fastnum = "=0.7.5"
 num = "=0.4.3"
 async-trait = "=0.1.89"
 axum = { version = "=0.8.9", features = ["http2"] }
 # Version is workspace-pinned; each crate selects its own features (bls-crypto
 # and indexer-types stay default-features = false for the wasm build).
-bitcoin = { version = "=0.32.100", default-features = false }
+bitcoin = { version = "=0.32.101", default-features = false }
 # Version is workspace-pinned; bls-crypto adds the `portable` feature for wasm.
 blst = "=0.3.16"
-bon = { version = "=3.9.1", default-features = false, features = ["alloc"] }
-bytes = "=1.11.1"
+bon = { version = "=3.9.3", default-features = false, features = ["alloc"] }
+bytes = "=1.12.1"
 clap = { version = "=4.6.1", features = ["derive"] }
 eyre = "=0.6.12"
 glob = "=0.3.3"
 indexmap = { version = "=2.14.0", features = ["serde"] }
 libsql = "=0.9.30"
 postcard = { version = "1.1.3", default-features = false, features = ["alloc"] }
+# Held at 0.13: the malachite consensus crates (arc-malachitebft-proto) are on
+# prost 0.13, and the codec boundary requires our proto types to implement the
+# same prost major's Name trait. Bump in lockstep with malachite.
 prost = "=0.13.5"
 serde = { version = "=1.0.228", default-features = false, features = ["alloc", "derive"] }
 serde_json = { version = "=1.0.150", default-features = false, features = ["alloc"] }
-serde_with = { version = "=3.20.0", default-features = false, features = ["alloc", "macros"] }
-sha3 = "=0.11.0"
+serde_with = { version = "=3.21.0", default-features = false, features = ["alloc", "macros"] }
+sha3 = "=0.12.0"
 tempfile = "=3.27.0"
 tokio = { version = "=1.52.3", features = ["full"] }
 tokio-util = "=0.7.18"
 tower = "=0.5.3"
-tower-http = { version = "=0.6.11", features = [
+tower-http = { version = "=0.7.0", features = [
   "fs",
   "trace",
   "compression-full",

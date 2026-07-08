@@ -15,7 +15,7 @@ wit-validator = { path = "../wit-validator" }
 anyhow = { workspace = true }
 
 syn = {version = "=2.0.117", features = ["full"]}
-quote = "=1.0.45"
+quote = "=1.0.46"
 proc-macro2 = "=1.0.106"
 darling = "=0.23.0"
 heck = "=0.5.0"

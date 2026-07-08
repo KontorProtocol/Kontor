@@ -339,8 +339,8 @@ impl built_in::file_registry_types::Host for Runtime {}
 
 impl built_in::testing::Host for Runtime {}
 
-impl built_in::testing::HostWithStore for Runtime {
-    async fn host_error<T>(
+impl<T> built_in::testing::HostWithStore<T> for Runtime {
+    async fn host_error(
         _accessor: &wasmtime::component::Accessor<T, Self>,
     ) -> anyhow::Result<String> {
         #[cfg(feature = "testing")]
@@ -349,7 +349,7 @@ impl built_in::testing::HostWithStore for Runtime {
         Ok(String::new())
     }
 
-    async fn host_panic<T>(
+    async fn host_panic(
         _accessor: &wasmtime::component::Accessor<T, Self>,
     ) -> anyhow::Result<String> {
         #[cfg(feature = "testing")]
@@ -361,8 +361,8 @@ impl built_in::testing::HostWithStore for Runtime {
 
 impl built_in::file_registry::Host for Runtime {}
 
-impl built_in::file_registry::HostWithStore for Runtime {
-    async fn aggregate_root<T>(
+impl<T> built_in::file_registry::HostWithStore<T> for Runtime {
+    async fn aggregate_root(
         accessor: &Accessor<T, Self>,
         files: Vec<(Vec<u8>, u64, u64)>,
     ) -> Result<Result<Vec<u8>, Error>> {
@@ -372,7 +372,7 @@ impl built_in::file_registry::HostWithStore for Runtime {
             .await
     }
 
-    async fn frontier_append<T>(
+    async fn frontier_append(
         accessor: &Accessor<T, Self>,
         count: u64,
         peaks: Vec<u8>,
@@ -384,7 +384,7 @@ impl built_in::file_registry::HostWithStore for Runtime {
             .await
     }
 
-    async fn compute_challenge_id<T>(
+    async fn compute_challenge_id(
         accessor: &Accessor<T, Self>,
         file: RawFileDescriptor,
         block_height: u64,
@@ -408,15 +408,15 @@ impl built_in::file_registry::HostWithStore for Runtime {
 
 impl built_in::file_registry::HostProof for Runtime {}
 
-impl built_in::file_registry::HostProofWithStore for Runtime {
-    async fn drop<T>(accessor: &Accessor<T, Self>, rep: Resource<wit::Proof>) -> Result<()> {
+impl<T> built_in::file_registry::HostProofWithStore<T> for Runtime {
+    async fn drop(accessor: &Accessor<T, Self>, rep: Resource<wit::Proof>) -> Result<()> {
         accessor
             .with(|mut access| access.get().clone())
             ._drop(rep)
             .await
     }
 
-    async fn from_bytes<T>(
+    async fn from_bytes(
         accessor: &Accessor<T, Self>,
         bytes: Vec<u8>,
     ) -> Result<Result<Resource<wit::Proof>, Error>> {
@@ -426,7 +426,7 @@ impl built_in::file_registry::HostProofWithStore for Runtime {
             .await
     }
 
-    async fn verify<T>(
+    async fn verify(
         accessor: &Accessor<T, Self>,
         rep: Resource<wit::Proof>,
         challenges: Vec<built_in::file_registry_types::ChallengeInput>,
@@ -442,7 +442,7 @@ impl built_in::file_registry::HostProofWithStore for Runtime {
 
 impl built_in::deposit::Host for Runtime {}
 
-impl built_in::deposit::HostWithStore for Runtime {
+impl<T> built_in::deposit::HostWithStore<T> for Runtime {
     /// The storage-deposit floor for `holder` = the sum of their FROZEN per-row
     /// deposits (integer `deposited_gas`) live across all contracts, priced to token
     /// here (× gas→token). The token consults this on every debit to enforce
@@ -454,7 +454,7 @@ impl built_in::deposit::HostWithStore for Runtime {
     /// any x-only-pubkey resolved to its signer-id through that ONE canonical path. The
     /// debit check passes the acting signer's holder; the `floor` view resolves its
     /// `holder-ref` arg first. Non-signer holders (core/burner/utxo) own no deposits → 0.
-    async fn storage_floor<T>(
+    async fn storage_floor(
         accessor: &Accessor<T, Self>,
         holder: Resource<Holder>,
     ) -> Result<Decimal> {
@@ -494,15 +494,15 @@ impl built_in::deposit::HostWithStore for Runtime {
 
 impl built_in::crypto::Host for Runtime {}
 
-impl built_in::crypto::HostWithStore for Runtime {
-    async fn sha256<T>(accessor: &Accessor<T, Self>, input: Vec<u8>) -> Result<Vec<u8>> {
+impl<T> built_in::crypto::HostWithStore<T> for Runtime {
+    async fn sha256(accessor: &Accessor<T, Self>, input: Vec<u8>) -> Result<Vec<u8>> {
         accessor
             .with(|mut access| access.get().clone())
             ._sha256(accessor, input)
             .await
     }
 
-    async fn hkdf_derive<T>(
+    async fn hkdf_derive(
         accessor: &Accessor<T, Self>,
         ikm: Vec<u8>,
         salt: Vec<u8>,
@@ -514,10 +514,7 @@ impl built_in::crypto::HostWithStore for Runtime {
             .await
     }
 
-    async fn block_entropy<T>(
-        accessor: &Accessor<T, Self>,
-        height: u64,
-    ) -> Result<Option<Vec<u8>>> {
+    async fn block_entropy(accessor: &Accessor<T, Self>, height: u64) -> Result<Option<Vec<u8>>> {
         accessor
             .with(|mut access| access.get().clone())
             ._block_entropy(accessor, height)
@@ -527,8 +524,8 @@ impl built_in::crypto::HostWithStore for Runtime {
 
 impl built_in::foreign::Host for Runtime {}
 
-impl built_in::foreign::HostWithStore for Runtime {
-    async fn call<T>(
+impl<T> built_in::foreign::HostWithStore<T> for Runtime {
+    async fn call(
         accessor: &Accessor<T, Self>,
         signer: Option<Resource<Signer>>,
         contract_address: ContractAddress,

@@ -7,15 +7,15 @@ use crate::runtime::wit::kontor::built_in;
 
 impl built_in::context::HostIndexRows for Runtime {}
 
-impl built_in::context::HostIndexRowsWithStore for Runtime {
-    async fn drop<T>(accessor: &Accessor<T, Self>, rep: Resource<IndexRows>) -> Result<()> {
+impl<T> built_in::context::HostIndexRowsWithStore<T> for Runtime {
+    async fn drop(accessor: &Accessor<T, Self>, rep: Resource<IndexRows>) -> Result<()> {
         accessor
             .with(|mut access| access.get().clone())
             ._drop(rep)
             .await
     }
 
-    async fn next<T>(
+    async fn next(
         accessor: &Accessor<T, Self>,
         self_: Resource<IndexRows>,
     ) -> Result<Option<(Vec<u8>, Vec<u8>)>> {

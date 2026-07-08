@@ -7,15 +7,15 @@ use crate::runtime::wit::{FallContext, Holder, ProcContext, Signer, ViewContext}
 
 impl built_in::context::HostFallContext for Runtime {}
 
-impl built_in::context::HostFallContextWithStore for Runtime {
-    async fn drop<T>(accessor: &Accessor<T, Self>, rep: Resource<FallContext>) -> Result<()> {
+impl<T> built_in::context::HostFallContextWithStore<T> for Runtime {
+    async fn drop(accessor: &Accessor<T, Self>, rep: Resource<FallContext>) -> Result<()> {
         accessor
             .with(|mut access| access.get().clone())
             ._drop(rep)
             .await
     }
 
-    async fn signer<T>(
+    async fn signer(
         accessor: &Accessor<T, Self>,
         self_: Resource<FallContext>,
     ) -> Result<Option<Resource<Signer>>> {
@@ -25,7 +25,7 @@ impl built_in::context::HostFallContextWithStore for Runtime {
             .await
     }
 
-    async fn payer<T>(
+    async fn payer(
         accessor: &Accessor<T, Self>,
         self_: Resource<FallContext>,
     ) -> Result<Option<Resource<Holder>>> {
@@ -35,7 +35,7 @@ impl built_in::context::HostFallContextWithStore for Runtime {
             .await
     }
 
-    async fn proc_context<T>(
+    async fn proc_context(
         accessor: &Accessor<T, Self>,
         self_: Resource<FallContext>,
     ) -> Result<Option<Resource<ProcContext>>> {
@@ -45,7 +45,7 @@ impl built_in::context::HostFallContextWithStore for Runtime {
             .await
     }
 
-    async fn view_context<T>(
+    async fn view_context(
         accessor: &Accessor<T, Self>,
         self_: Resource<FallContext>,
     ) -> Result<Resource<ViewContext>> {
