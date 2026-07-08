@@ -25,7 +25,7 @@ import {
   blsSecretFromSeedEip2333,
   blsSecretKeyGen,
   blsSign,
-} from "./component/kontor-sdk.js";
+} from "./backend/index.js";
 import type { Chain } from "./chains.js";
 import { SignerError } from "./errors.js";
 

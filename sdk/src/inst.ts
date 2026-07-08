@@ -34,7 +34,7 @@ import { hex } from "@scure/base";
 
 import { AggregateFragment } from "./aggregate.js";
 import type { BlsKey } from "./bls.js";
-import { aggregateSigningMessage } from "./component/kontor-sdk.js";
+import { aggregateSigningMessage } from "./backend/index.js";
 import type {
   Inst as WireInst,
   InstKind as WireInstKind,

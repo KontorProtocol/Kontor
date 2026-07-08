@@ -1,0 +1,15 @@
+{
+  "//": "Type-checks the React Native backend (backend.native.ts + its dev-time component stub) against the real @kontor/sdk-native wrapper. These files are excluded from the web build (they import a mobile-only peer), so this is where their `const _conforms: KontorBackend = native` assertion is verified — locally and in the mobile CI. Run: `npx tsc -p tsconfig.native.json`.",
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "noEmit": true,
+    "lib": ["ES2022", "DOM"],
+    "paths": {
+      "@kontor/sdk-native": ["../sdk-native/src/index.ts"]
+    }
+  },
+  "include": [
+    "src/backend/backend.native.ts",
+    "src/backend/component-stub.native.ts"
+  ]
+}

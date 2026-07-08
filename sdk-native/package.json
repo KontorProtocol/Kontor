@@ -1,0 +1,46 @@
+{
+  "name": "@kontor/sdk-native",
+  "version": "0.0.0",
+  "description": "React Native (JSI) backend for @kontor/sdk — native bindings over core/kontor-sdk-native (uniffi). Provides the same KontorBackend surface as the WASM component, so @kontor/sdk runs on iOS/Android.",
+  "author": "Unspendable Labs <dev@unspendablelabs.com>",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/KontorProtocol/Kontor.git",
+    "directory": "sdk-native"
+  },
+  "main": "./src/index.ts",
+  "types": "./src/index.ts",
+  "files": [
+    "src",
+    "cpp",
+    "ios",
+    "android",
+    "android/src/main/jniLibs",
+    "KontorSdkNativeFramework.xcframework",
+    "expo-module.config.json",
+    "app.plugin.js",
+    "*.podspec"
+  ],
+  "scripts": {
+    "//": "Native binaries are produced by build-mobile.sh (uniffi-bindgen-react-native + cargo). See README.",
+    "//ubrn-bug": "ubrn's cli.cjs runs `cargo run` (debug), and ubrn 0.29.3-1 + clap 4.6 hits a debug_assert on a `default_value`-on-bool arg. Disabling dev debug-assertions neutralizes it without patching ubrn.",
+    "//ubrn-generate": "`ubrn generate all` needs a compiled host library to read the uniffi metadata from — the script builds it, locates it, then generates.",
+    "ubrn:generate": "bash ./generate-bindings.sh",
+    "//ubrn-build": "build-mobile.sh compiles the cdylib and assembles the SHARED artifacts itself (dynamic-framework xcframework / jniLibs .so); it does not call `ubrn build`, whose assembly emits the oversized static archive.",
+    "build:mobile": "bash ./build-mobile.sh",
+    "//prepack": "The published tarball must carry the prebuilt binaries (consumers cannot build them: core/ is outside the package). Refuse to pack without an assembled xcframework and at least one jniLibs .so.",
+    "prepack": "test -f KontorSdkNativeFramework.xcframework/Info.plist && ls android/src/main/jniLibs/*/libkontor_sdk_native.so >/dev/null 2>&1 || { echo 'ERROR: native binaries missing/incomplete — run ./build-mobile.sh before packing/publishing.' >&2; exit 1; }",
+    "typecheck": "tsc --noEmit"
+  },
+  "peerDependencies": {
+    "react": "*",
+    "react-native": "*"
+  },
+  "dependencies": {
+    "uniffi-bindgen-react-native": "0.29.3-1"
+  },
+  "devDependencies": {
+    "typescript": "^6.0.3"
+  }
+}

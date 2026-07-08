@@ -1,0 +1,17 @@
+# Native build artifacts (produced by build-mobile.sh / cargo).
+# ubrn writes the xcframework to the package root (the podspec's
+# vendored_frameworks path), not under ios/.
+*.xcframework
+android/src/main/jniLibs/
+**/build/
+**/Pods/
+*.a
+*.so
+*.dylib
+
+node_modules/
+
+# NOTE: the uniffi-bindgen output (src/generated/, cpp/, the iOS/Android
+# glue) IS committed: the published package ships it, so consumers build
+# without running ubrn. The mobile CI regenerates it and fails on drift
+# (`git diff --exit-code` after `npm run ubrn:generate` in mobile.yml).
