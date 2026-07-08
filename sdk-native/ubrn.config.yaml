@@ -1,17 +1,17 @@
 # uniffi-bindgen-react-native (ubrn) config — the integration point that
-# turns the `core/kontor-mobile` uniffi crate into a JSI Turbo Module +
+# turns the `core/kontor-sdk-native` uniffi crate into a JSI Turbo Module +
 # TypeScript bindings for React Native.
 ---
-name: kontor_mobile
+name: kontor_sdk_native
 
 rust:
   # The uniffi crate scaffolded in Phase 2. It re-exports kontor-core's
   # pure logic (BLS, Inst codec, Wit, numerics) through #[uniffi::export].
   # `directory` is relative to this config's dir (sdk-native); `manifestPath`
   # is relative to `directory` (ubrn joins them), so it's just `Cargo.toml`.
-  directory: ../core/kontor-mobile
+  directory: ../core/kontor-sdk-native
   manifestPath: Cargo.toml
-  # cdylib/staticlib are already set in core/kontor-mobile/Cargo.toml.
+  # cdylib/staticlib are already set in core/kontor-sdk-native/Cargo.toml.
 
 bindings:
   # Generated TS bindings land here; `src/index.ts` re-shapes them into the
@@ -26,7 +26,7 @@ turboModule:
   # NAME (string), not a map. All have defaults; these are explicit.
   ts: src/generated/spec
   cpp: cpp
-  spec: NativeKontorMobile
+  spec: NativeKontorSdkNative
 
 # iOS / Android target triples to compile. `build-mobile.sh` runs
 # `rustup target add` for these before building and asserts the produced

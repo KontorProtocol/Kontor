@@ -1,10 +1,10 @@
 [package]
-name = "kontor-mobile"
+name = "kontor-sdk-native"
 version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-kontor-core = { path = "../kontor-core" }
+kontor-sdk = { path = "../kontor-sdk" }
 uniffi = { workspace = true }
 
 [build-dependencies]

@@ -52,7 +52,7 @@
     }
   },
   "scripts": {
-    "build:rs": "cd ../core/kontor-sdk && ./build.sh",
+    "build:rs": "cd ../core/kontor-sdk-wasm && ./build.sh",
     "build:ts": "vite build",
     "build:native": "KONTOR_TARGET=native vite build",
     "build": "npm run build:ts && npm run build:native",

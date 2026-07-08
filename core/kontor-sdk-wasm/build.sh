@@ -19,11 +19,11 @@ wasm-opt -Oz \
   --enable-sign-ext \
   --enable-reference-types \
   --enable-multivalue \
-  "${TARGET_DIR}/wasm32-unknown-unknown/release/kontor_sdk.wasm" \
-  -o "${TARGET_DIR}/wasm32-unknown-unknown/release/kontor_sdk.wasm"
+  "${TARGET_DIR}/wasm32-unknown-unknown/release/kontor_sdk_wasm.wasm" \
+  -o "${TARGET_DIR}/wasm32-unknown-unknown/release/kontor_sdk_wasm.wasm"
 
 wasm-tools component new \
-  "${TARGET_DIR}/wasm32-unknown-unknown/release/kontor_sdk.wasm" \
+  "${TARGET_DIR}/wasm32-unknown-unknown/release/kontor_sdk_wasm.wasm" \
   -o "${TARGET_DIR}/wasm32-unknown-unknown/release/kontor_sdk_component.wasm"
 
 # jco lives in sdk/node_modules; invoke it from there so `npx` resolves

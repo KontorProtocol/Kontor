@@ -1,7 +1,7 @@
 {
   "name": "@kontor/sdk-native",
   "version": "0.0.0",
-  "description": "React Native (JSI) backend for @kontor/sdk — native bindings over core/kontor-mobile (uniffi). Provides the same KontorBackend surface as the WASM component, so @kontor/sdk runs on iOS/Android.",
+  "description": "React Native (JSI) backend for @kontor/sdk — native bindings over core/kontor-sdk-native (uniffi). Provides the same KontorBackend surface as the WASM component, so @kontor/sdk runs on iOS/Android.",
   "author": "Unspendable Labs <dev@unspendablelabs.com>",
   "license": "MIT",
   "repository": {
@@ -30,7 +30,7 @@
     "//ubrn-build": "build-mobile.sh compiles the cdylib and assembles the SHARED artifacts itself (dynamic-framework xcframework / jniLibs .so); it does not call `ubrn build`, whose assembly emits the oversized static archive.",
     "build:mobile": "bash ./build-mobile.sh",
     "//prepack": "The published tarball must carry the prebuilt binaries (consumers cannot build them: core/ is outside the package). Refuse to pack without an assembled xcframework and at least one jniLibs .so.",
-    "prepack": "test -f KontorSdkNativeFramework.xcframework/Info.plist && ls android/src/main/jniLibs/*/libkontor_mobile.so >/dev/null 2>&1 || { echo 'ERROR: native binaries missing/incomplete — run ./build-mobile.sh before packing/publishing.' >&2; exit 1; }",
+    "prepack": "test -f KontorSdkNativeFramework.xcframework/Info.plist && ls android/src/main/jniLibs/*/libkontor_sdk_native.so >/dev/null 2>&1 || { echo 'ERROR: native binaries missing/incomplete — run ./build-mobile.sh before packing/publishing.' >&2; exit 1; }",
     "typecheck": "tsc --noEmit"
   },
   "peerDependencies": {

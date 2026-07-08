@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Build the native mobile binaries for @kontor/sdk-native from the
-# `core/kontor-mobile` uniffi crate. The JSI Turbo Module + TypeScript
+# `core/kontor-sdk-native` uniffi crate. The JSI Turbo Module + TypeScript
 # bindings are generated once up front by uniffi-bindgen-react-native
 # (ubrn); the per-platform steps here only compile and assemble.
 #
@@ -50,10 +50,10 @@ ANDROID_PLATFORM=24
 # cdylib link fails unless we pin it here.
 IOS_MIN=15.1
 
-# The uniffi cdylib basename produced by cargo for kontor-mobile.
-LIB=libkontor_mobile
+# The uniffi cdylib basename produced by cargo for kontor-sdk-native.
+LIB=libkontor_sdk_native
 # The dynamic-framework name embedded in the xcframework.
-FRAMEWORK=KontorMobile
+FRAMEWORK=KontorSdkNative
 XCFRAMEWORK=KontorSdkNativeFramework.xcframework
 
 # Locate the cdylib cargo emitted for a target (it lives at the profile
@@ -92,7 +92,7 @@ build_ios() {
   local t
   for t in "${IOS_TARGETS[@]}"; do
     (cd ../core && IPHONEOS_DEPLOYMENT_TARGET="$IOS_MIN" \
-      cargo build -p kontor-mobile --profile mobile --target "$t")
+      cargo build -p kontor-sdk-native --profile mobile --target "$t")
   done
 
   # Assemble a dynamic-framework xcframework: one framework for the device
@@ -134,11 +134,11 @@ build_android() {
   for abi in "${ANDROID_ABIS[@]}"; do ndk_targets+=(-t "$abi"); done
   (cd ../core && cargo ndk --platform "$ANDROID_PLATFORM" \
     "${ndk_targets[@]}" \
-    build -p kontor-mobile --profile mobile)
+    build -p kontor-sdk-native --profile mobile)
 
   # Place each cdylib .so into jniLibs. The app's CMake links it as
   # SHARED IMPORTED and Gradle packages it into the APK's lib/<abi>/;
-  # System.loadLibrary pulls it in at runtime (see KontorMobileModule.kt).
+  # System.loadLibrary pulls it in at runtime (see KontorSdkNativeModule.kt).
   local i triple
   for i in "${!ANDROID_TARGETS[@]}"; do
     triple="${ANDROID_TARGETS[$i]}"

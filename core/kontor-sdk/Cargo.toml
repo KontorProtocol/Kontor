@@ -4,12 +4,18 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-# All function bodies (BLS, Inst codec, Wit/WAVE, validation) live in
-# kontor-core; this crate is only the wit-bindgen shim around them.
-kontor-core = { path = "../kontor-core" }
-# For the re-exported `wit_bindgen` (the `generate!` macro's runtime).
 indexer-types = { path = "../indexer-types" }
+wit-validator = { path = "../wit-validator" }
 numerics = { path = "../numerics" }
+# wasm-wave's `wit` feature (bridge wit-parser's Resolve → wasm-wave's Type)
+# requires std; the workspace pin disables defaults so we re-enable here.
+wasm-wave = { workspace = true, features = ["std", "wit"] }
+wit-parser = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+# Shared protocol crypto — same source the indexer compiles, so BLS keygen /
+# sign produces byte-identical output to the verification path.
+bls-crypto = { path = "../bls-crypto" }
 
 [lib]
-crate-type = ["cdylib"]
+crate-type = ["rlib"]

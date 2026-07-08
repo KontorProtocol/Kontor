@@ -1,24 +1,24 @@
 #!/usr/bin/env bash
 # Generate the TS/C++ JSI bindings for @kontor/sdk-native from the
-# `core/kontor-mobile` uniffi crate.
+# `core/kontor-sdk-native` uniffi crate.
 #
 # `ubrn generate all` reads the uniffi metadata out of a *compiled*
-# library, so build kontor-mobile for the host first — a plain debug
+# library, so build kontor-sdk-native for the host first — a plain debug
 # build; the metadata doesn't depend on target or profile.
 set -euo pipefail
 cd "$(dirname "$0")"
 
-(cd ../core && cargo build -p kontor-mobile)
+(cd ../core && cargo build -p kontor-sdk-native)
 
 # Workspace member: cargo writes to the workspace target/ (core/target/).
 TARGET_DIR="$(cd ../core && cargo metadata --format-version=1 --no-deps \
   | python3 -c 'import json,sys; print(json.load(sys.stdin)["target_directory"])')"
-LIB="$TARGET_DIR/debug/libkontor_mobile.dylib"
-[ -f "$LIB" ] || LIB="$TARGET_DIR/debug/libkontor_mobile.so"
+LIB="$TARGET_DIR/debug/libkontor_sdk_native.dylib"
+[ -f "$LIB" ] || LIB="$TARGET_DIR/debug/libkontor_sdk_native.so"
 
 # `generate jsi bindings` (not `generate all`): only the TS/C++ bindings
 # are generator-owned and drift-gated in CI. The TurboModule scaffold
-# (src/index.ts, cpp/kontor-mobile.*, android/, ios/, the podspec) was
+# (src/index.ts, cpp/kontor-sdk-native.*, android/, ios/, the podspec) was
 # scaffolded once by `generate all` and is hand-maintained since — `all`
 # would clobber local fixes (e.g. build.gradle's kotlinVersion fallback)
 # with the upstream templates.
@@ -30,7 +30,7 @@ LIB="$TARGET_DIR/debug/libkontor_mobile.dylib"
 # formatting would make the output non-deterministic — the CI drift gate
 # (`git diff --exit-code` after regenerating) needs byte-identical output.
 PKG_DIR="$(pwd)"
-(cd ../core/kontor-mobile && CARGO_PROFILE_DEV_DEBUG_ASSERTIONS=false \
+(cd ../core/kontor-sdk-native && CARGO_PROFILE_DEV_DEBUG_ASSERTIONS=false \
   "$PKG_DIR/node_modules/.bin/uniffi-bindgen-react-native" generate jsi bindings \
   --library "$LIB" --ts-dir "$PKG_DIR/src/generated" --cpp-dir "$PKG_DIR/cpp" \
   --no-format)

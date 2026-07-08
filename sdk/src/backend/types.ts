@@ -40,30 +40,28 @@ export type WitConstructor = new (text: string) => WitCodec;
 type Component = typeof import("../component/kontor-sdk.js");
 
 /**
- * The backend contract. Free-function signatures are lifted straight off
- * the jco component (so they can never drift from the Rust world; only
- * the *name list* below is hand-kept): `Inst` JSON ↔ canonical bytes,
- * HKDF BLS KeyGen (≥32-byte IKM), EIP-2333 derivation, min_sig
- * pubkey/sign/verify under `KONTOR_BLS_DST`, the per-op contributor
- * signing message (`"KONTOR-OP-V1" ++ postcard(...)`) and signature
- * aggregation. `witCodec`/`numerics` are namespaces, narrowed above to
- * their runtime slices.
+ * Component value exports that are NOT part of the on-device runtime
+ * contract. `validateWit` is dev-time-only (WIT validation on a build
+ * machine); `witCodec` is subtracted here so it can be re-added below
+ * narrowed to its runtime methods (dropping the codegen-only `Wit.parse`).
+ * This is the ONLY hand-kept list — and it shrinks, not grows, as the world
+ * evolves.
  */
-export interface KontorBackend extends Pick<
-  Component,
-  | "serializeInst"
-  | "deserializeInst"
-  | "blsSecretKeyGen"
-  | "blsSecretFromSeedEip2333"
-  | "blsPubkeyFromSecret"
-  | "blsSign"
-  | "blsVerify"
-  | "aggregateSigningMessage"
-  | "blsAggregateSignatures"
-> {
-  /** Per-WIT WAVE codec constructor (`new Wit(witText)`). */
-  witCodec: { Wit: WitConstructor };
+type DevOnly = "validateWit" | "witCodec";
 
-  /** Canonical 256-bit Integer / Decimal arithmetic. */
-  numerics: NumericsApi;
-}
+/**
+ * The on-device runtime surface every backend must satisfy — derived by
+ * SUBTRACTION from the jco component (`Omit`), not a hand-kept allow-list.
+ * `typeof import(...)` yields only the component's value exports (the BLS
+ * suite, `Inst` (de)serialization, `numerics`, the codecs), so every new
+ * runtime export the Rust world (`core/kontor-sdk/wit/root.wit`) gains
+ * AUTOMATICALLY joins this contract. The payoff: the moment the component
+ * grows a function, `const _conforms: KontorBackend = native` in
+ * `backend.native.ts` stops compiling until `kontor-sdk-native` exposes it
+ * too — you can't silently ship a native module that's missing something.
+ * Only `DevOnly` (small, stable) is maintained by hand.
+ */
+export type KontorBackend = Omit<Component, DevOnly> & {
+  /** Per-WIT WAVE codec constructor (`new Wit(witText)`), runtime methods only. */
+  witCodec: { Wit: WitConstructor };
+};

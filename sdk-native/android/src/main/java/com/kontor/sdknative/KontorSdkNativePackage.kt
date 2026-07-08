@@ -8,10 +8,10 @@ import com.facebook.react.module.model.ReactModuleInfo
 import com.facebook.react.module.model.ReactModuleInfoProvider
 import java.util.HashMap
 
-class KontorMobilePackage : TurboReactPackage() {
+class KontorSdkNativePackage : TurboReactPackage() {
   override fun getModule(name: String, reactContext: ReactApplicationContext): NativeModule? {
-    return if (name == KontorMobileModule.NAME) {
-      KontorMobileModule(reactContext)
+    return if (name == KontorSdkNativeModule.NAME) {
+      KontorSdkNativeModule(reactContext)
     } else {
       null
     }
@@ -20,9 +20,9 @@ class KontorMobilePackage : TurboReactPackage() {
   override fun getReactModuleInfoProvider(): ReactModuleInfoProvider {
     return ReactModuleInfoProvider {
       val moduleInfos: MutableMap<String, ReactModuleInfo> = HashMap()
-      moduleInfos[KontorMobileModule.NAME] = ReactModuleInfo(
-        KontorMobileModule.NAME,
-        KontorMobileModule.NAME,
+      moduleInfos[KontorSdkNativeModule.NAME] = ReactModuleInfo(
+        KontorSdkNativeModule.NAME,
+        KontorSdkNativeModule.NAME,
         false,  // canOverrideExistingModule
         false,  // needsEagerInit
         false,  // isCxxModule

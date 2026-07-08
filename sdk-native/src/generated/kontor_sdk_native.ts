@@ -29,7 +29,7 @@ import nativeModule, {
   type UniffiForeignFutureCompleteRustBuffer,
   type UniffiForeignFutureStructVoid,
   type UniffiForeignFutureCompleteVoid,
-} from "./kontor_mobile-ffi";
+} from "./kontor_sdk_native-ffi";
 import {
   type FfiConverter, 
   type UniffiByteArray, 
@@ -74,7 +74,7 @@ export function addDecimal(a: Decimal, b: Decimal): Decimal /*throws*/ {
         uniffiCaller.rustCallWithError(
             /*liftError:*/ FfiConverterTypeNumericsError.lift.bind(FfiConverterTypeNumericsError),
             /*caller:*/ (callStatus) => {
-                return nativeModule().ubrn_uniffi_kontor_mobile_fn_func_add_decimal(
+                return nativeModule().ubrn_uniffi_kontor_sdk_native_fn_func_add_decimal(
         FfiConverterTypeDecimal.lower(a),
         FfiConverterTypeDecimal.lower(b),
                 callStatus);
@@ -87,7 +87,7 @@ export function addInteger(a: Integer, b: Integer): Integer /*throws*/ {
         uniffiCaller.rustCallWithError(
             /*liftError:*/ FfiConverterTypeNumericsError.lift.bind(FfiConverterTypeNumericsError),
             /*caller:*/ (callStatus) => {
-                return nativeModule().ubrn_uniffi_kontor_mobile_fn_func_add_integer(
+                return nativeModule().ubrn_uniffi_kontor_sdk_native_fn_func_add_integer(
         FfiConverterTypeInteger.lower(a),
         FfiConverterTypeInteger.lower(b),
                 callStatus);
@@ -100,7 +100,7 @@ export function aggregateSigningMessage(claimJson: string, nonce: /*u64*/bigint,
         uniffiCaller.rustCallWithError(
             /*liftError:*/ FfiConverterTypeCoreError.lift.bind(FfiConverterTypeCoreError),
             /*caller:*/ (callStatus) => {
-                return nativeModule().ubrn_uniffi_kontor_mobile_fn_func_aggregate_signing_message(
+                return nativeModule().ubrn_uniffi_kontor_sdk_native_fn_func_aggregate_signing_message(
         FfiConverterString.lower(claimJson),
         FfiConverterUInt64.lower(nonce),
         FfiConverterBool.lower(sponsored),
@@ -115,7 +115,7 @@ export function blsAggregateSignatures(signatures: Array<ArrayBuffer>): ArrayBuf
         uniffiCaller.rustCallWithError(
             /*liftError:*/ FfiConverterTypeCoreError.lift.bind(FfiConverterTypeCoreError),
             /*caller:*/ (callStatus) => {
-                return nativeModule().ubrn_uniffi_kontor_mobile_fn_func_bls_aggregate_signatures(
+                return nativeModule().ubrn_uniffi_kontor_sdk_native_fn_func_bls_aggregate_signatures(
         FfiConverterArrayArrayBuffer.lower(signatures),
                 callStatus);
             },
@@ -127,7 +127,7 @@ export function blsPubkeyFromSecret(secret: ArrayBuffer): ArrayBuffer /*throws*/
         uniffiCaller.rustCallWithError(
             /*liftError:*/ FfiConverterTypeCoreError.lift.bind(FfiConverterTypeCoreError),
             /*caller:*/ (callStatus) => {
-                return nativeModule().ubrn_uniffi_kontor_mobile_fn_func_bls_pubkey_from_secret(
+                return nativeModule().ubrn_uniffi_kontor_sdk_native_fn_func_bls_pubkey_from_secret(
         FfiConverterArrayBuffer.lower(secret),
                 callStatus);
             },
@@ -139,7 +139,7 @@ export function blsSecretFromSeedEip2333(seed: ArrayBuffer, path: Array</*u32*/n
         uniffiCaller.rustCallWithError(
             /*liftError:*/ FfiConverterTypeCoreError.lift.bind(FfiConverterTypeCoreError),
             /*caller:*/ (callStatus) => {
-                return nativeModule().ubrn_uniffi_kontor_mobile_fn_func_bls_secret_from_seed_eip2333(
+                return nativeModule().ubrn_uniffi_kontor_sdk_native_fn_func_bls_secret_from_seed_eip2333(
         FfiConverterArrayBuffer.lower(seed),
         FfiConverterArrayUInt32.lower(path),
                 callStatus);
@@ -152,7 +152,7 @@ export function blsSecretKeyGen(ikm: ArrayBuffer): ArrayBuffer /*throws*/ {
         uniffiCaller.rustCallWithError(
             /*liftError:*/ FfiConverterTypeCoreError.lift.bind(FfiConverterTypeCoreError),
             /*caller:*/ (callStatus) => {
-                return nativeModule().ubrn_uniffi_kontor_mobile_fn_func_bls_secret_key_gen(
+                return nativeModule().ubrn_uniffi_kontor_sdk_native_fn_func_bls_secret_key_gen(
         FfiConverterArrayBuffer.lower(ikm),
                 callStatus);
             },
@@ -164,7 +164,7 @@ export function blsSign(secret: ArrayBuffer, message: ArrayBuffer): ArrayBuffer 
         uniffiCaller.rustCallWithError(
             /*liftError:*/ FfiConverterTypeCoreError.lift.bind(FfiConverterTypeCoreError),
             /*caller:*/ (callStatus) => {
-                return nativeModule().ubrn_uniffi_kontor_mobile_fn_func_bls_sign(
+                return nativeModule().ubrn_uniffi_kontor_sdk_native_fn_func_bls_sign(
         FfiConverterArrayBuffer.lower(secret),
         FfiConverterArrayBuffer.lower(message),
                 callStatus);
@@ -177,7 +177,7 @@ export function blsVerify(pubkey: ArrayBuffer, message: ArrayBuffer, signature: 
         uniffiCaller.rustCallWithError(
             /*liftError:*/ FfiConverterTypeCoreError.lift.bind(FfiConverterTypeCoreError),
             /*caller:*/ (callStatus) => {
-                return nativeModule().ubrn_uniffi_kontor_mobile_fn_func_bls_verify(
+                return nativeModule().ubrn_uniffi_kontor_sdk_native_fn_func_bls_verify(
         FfiConverterArrayBuffer.lower(pubkey),
         FfiConverterArrayBuffer.lower(message),
         FfiConverterArrayBuffer.lower(signature),
@@ -189,7 +189,7 @@ export function blsVerify(pubkey: ArrayBuffer, message: ArrayBuffer, signature: 
 export function cmpDecimal(a: Decimal, b: Decimal): Ordering {
     return FfiConverterTypeOrdering.lift(uniffiCaller.rustCall(
             /*caller:*/ (callStatus) => {
-                return nativeModule().ubrn_uniffi_kontor_mobile_fn_func_cmp_decimal(
+                return nativeModule().ubrn_uniffi_kontor_sdk_native_fn_func_cmp_decimal(
         FfiConverterTypeDecimal.lower(a),
         FfiConverterTypeDecimal.lower(b),
                 callStatus);
@@ -200,7 +200,7 @@ export function cmpDecimal(a: Decimal, b: Decimal): Ordering {
 export function cmpInteger(a: Integer, b: Integer): Ordering {
     return FfiConverterTypeOrdering.lift(uniffiCaller.rustCall(
             /*caller:*/ (callStatus) => {
-                return nativeModule().ubrn_uniffi_kontor_mobile_fn_func_cmp_integer(
+                return nativeModule().ubrn_uniffi_kontor_sdk_native_fn_func_cmp_integer(
         FfiConverterTypeInteger.lower(a),
         FfiConverterTypeInteger.lower(b),
                 callStatus);
@@ -213,7 +213,7 @@ export function decimalToInteger(d: Decimal): Integer /*throws*/ {
         uniffiCaller.rustCallWithError(
             /*liftError:*/ FfiConverterTypeNumericsError.lift.bind(FfiConverterTypeNumericsError),
             /*caller:*/ (callStatus) => {
-                return nativeModule().ubrn_uniffi_kontor_mobile_fn_func_decimal_to_integer(
+                return nativeModule().ubrn_uniffi_kontor_sdk_native_fn_func_decimal_to_integer(
         FfiConverterTypeDecimal.lower(d),
                 callStatus);
             },
@@ -223,7 +223,7 @@ export function decimalToInteger(d: Decimal): Integer /*throws*/ {
 export function decimalToString(d: Decimal): string {
     return FfiConverterString.lift(uniffiCaller.rustCall(
             /*caller:*/ (callStatus) => {
-                return nativeModule().ubrn_uniffi_kontor_mobile_fn_func_decimal_to_string(
+                return nativeModule().ubrn_uniffi_kontor_sdk_native_fn_func_decimal_to_string(
         FfiConverterTypeDecimal.lower(d),
                 callStatus);
             },
@@ -235,7 +235,7 @@ export function deserializeInst(bytes: ArrayBuffer): string /*throws*/ {
         uniffiCaller.rustCallWithError(
             /*liftError:*/ FfiConverterTypeCoreError.lift.bind(FfiConverterTypeCoreError),
             /*caller:*/ (callStatus) => {
-                return nativeModule().ubrn_uniffi_kontor_mobile_fn_func_deserialize_inst(
+                return nativeModule().ubrn_uniffi_kontor_sdk_native_fn_func_deserialize_inst(
         FfiConverterArrayBuffer.lower(bytes),
                 callStatus);
             },
@@ -247,7 +247,7 @@ export function divDecimal(a: Decimal, b: Decimal): Decimal /*throws*/ {
         uniffiCaller.rustCallWithError(
             /*liftError:*/ FfiConverterTypeNumericsError.lift.bind(FfiConverterTypeNumericsError),
             /*caller:*/ (callStatus) => {
-                return nativeModule().ubrn_uniffi_kontor_mobile_fn_func_div_decimal(
+                return nativeModule().ubrn_uniffi_kontor_sdk_native_fn_func_div_decimal(
         FfiConverterTypeDecimal.lower(a),
         FfiConverterTypeDecimal.lower(b),
                 callStatus);
@@ -260,7 +260,7 @@ export function divInteger(a: Integer, b: Integer): Integer /*throws*/ {
         uniffiCaller.rustCallWithError(
             /*liftError:*/ FfiConverterTypeNumericsError.lift.bind(FfiConverterTypeNumericsError),
             /*caller:*/ (callStatus) => {
-                return nativeModule().ubrn_uniffi_kontor_mobile_fn_func_div_integer(
+                return nativeModule().ubrn_uniffi_kontor_sdk_native_fn_func_div_integer(
         FfiConverterTypeInteger.lower(a),
         FfiConverterTypeInteger.lower(b),
                 callStatus);
@@ -273,7 +273,7 @@ export function eqDecimal(a: Decimal, b: Decimal): boolean /*throws*/ {
         uniffiCaller.rustCallWithError(
             /*liftError:*/ FfiConverterTypeNumericsError.lift.bind(FfiConverterTypeNumericsError),
             /*caller:*/ (callStatus) => {
-                return nativeModule().ubrn_uniffi_kontor_mobile_fn_func_eq_decimal(
+                return nativeModule().ubrn_uniffi_kontor_sdk_native_fn_func_eq_decimal(
         FfiConverterTypeDecimal.lower(a),
         FfiConverterTypeDecimal.lower(b),
                 callStatus);
@@ -284,7 +284,7 @@ export function eqDecimal(a: Decimal, b: Decimal): boolean /*throws*/ {
 export function eqInteger(a: Integer, b: Integer): boolean {
     return FfiConverterBool.lift(uniffiCaller.rustCall(
             /*caller:*/ (callStatus) => {
-                return nativeModule().ubrn_uniffi_kontor_mobile_fn_func_eq_integer(
+                return nativeModule().ubrn_uniffi_kontor_sdk_native_fn_func_eq_integer(
         FfiConverterTypeInteger.lower(a),
         FfiConverterTypeInteger.lower(b),
                 callStatus);
@@ -297,7 +297,7 @@ export function f64ToDecimal(f: /*f64*/number): Decimal /*throws*/ {
         uniffiCaller.rustCallWithError(
             /*liftError:*/ FfiConverterTypeNumericsError.lift.bind(FfiConverterTypeNumericsError),
             /*caller:*/ (callStatus) => {
-                return nativeModule().ubrn_uniffi_kontor_mobile_fn_func_f64_to_decimal(
+                return nativeModule().ubrn_uniffi_kontor_sdk_native_fn_func_f64_to_decimal(
         FfiConverterFloat64.lower(f),
                 callStatus);
             },
@@ -309,7 +309,7 @@ export function integerToDecimal(i: Integer): Decimal /*throws*/ {
         uniffiCaller.rustCallWithError(
             /*liftError:*/ FfiConverterTypeNumericsError.lift.bind(FfiConverterTypeNumericsError),
             /*caller:*/ (callStatus) => {
-                return nativeModule().ubrn_uniffi_kontor_mobile_fn_func_integer_to_decimal(
+                return nativeModule().ubrn_uniffi_kontor_sdk_native_fn_func_integer_to_decimal(
         FfiConverterTypeInteger.lower(i),
                 callStatus);
             },
@@ -319,7 +319,7 @@ export function integerToDecimal(i: Integer): Decimal /*throws*/ {
 export function integerToString(i: Integer): string {
     return FfiConverterString.lift(uniffiCaller.rustCall(
             /*caller:*/ (callStatus) => {
-                return nativeModule().ubrn_uniffi_kontor_mobile_fn_func_integer_to_string(
+                return nativeModule().ubrn_uniffi_kontor_sdk_native_fn_func_integer_to_string(
         FfiConverterTypeInteger.lower(i),
                 callStatus);
             },
@@ -331,7 +331,7 @@ export function log10Decimal(a: Decimal): Decimal /*throws*/ {
         uniffiCaller.rustCallWithError(
             /*liftError:*/ FfiConverterTypeNumericsError.lift.bind(FfiConverterTypeNumericsError),
             /*caller:*/ (callStatus) => {
-                return nativeModule().ubrn_uniffi_kontor_mobile_fn_func_log10_decimal(
+                return nativeModule().ubrn_uniffi_kontor_sdk_native_fn_func_log10_decimal(
         FfiConverterTypeDecimal.lower(a),
                 callStatus);
             },
@@ -343,7 +343,7 @@ export function mulDecimal(a: Decimal, b: Decimal): Decimal /*throws*/ {
         uniffiCaller.rustCallWithError(
             /*liftError:*/ FfiConverterTypeNumericsError.lift.bind(FfiConverterTypeNumericsError),
             /*caller:*/ (callStatus) => {
-                return nativeModule().ubrn_uniffi_kontor_mobile_fn_func_mul_decimal(
+                return nativeModule().ubrn_uniffi_kontor_sdk_native_fn_func_mul_decimal(
         FfiConverterTypeDecimal.lower(a),
         FfiConverterTypeDecimal.lower(b),
                 callStatus);
@@ -356,7 +356,7 @@ export function mulInteger(a: Integer, b: Integer): Integer /*throws*/ {
         uniffiCaller.rustCallWithError(
             /*liftError:*/ FfiConverterTypeNumericsError.lift.bind(FfiConverterTypeNumericsError),
             /*caller:*/ (callStatus) => {
-                return nativeModule().ubrn_uniffi_kontor_mobile_fn_func_mul_integer(
+                return nativeModule().ubrn_uniffi_kontor_sdk_native_fn_func_mul_integer(
         FfiConverterTypeInteger.lower(a),
         FfiConverterTypeInteger.lower(b),
                 callStatus);
@@ -369,7 +369,7 @@ export function s64ToDecimal(i: /*i64*/bigint): Decimal /*throws*/ {
         uniffiCaller.rustCallWithError(
             /*liftError:*/ FfiConverterTypeNumericsError.lift.bind(FfiConverterTypeNumericsError),
             /*caller:*/ (callStatus) => {
-                return nativeModule().ubrn_uniffi_kontor_mobile_fn_func_s64_to_decimal(
+                return nativeModule().ubrn_uniffi_kontor_sdk_native_fn_func_s64_to_decimal(
         FfiConverterInt64.lower(i),
                 callStatus);
             },
@@ -379,7 +379,7 @@ export function s64ToDecimal(i: /*i64*/bigint): Decimal /*throws*/ {
 export function s64ToInteger(i: /*i64*/bigint): Integer {
     return FfiConverterTypeInteger.lift(uniffiCaller.rustCall(
             /*caller:*/ (callStatus) => {
-                return nativeModule().ubrn_uniffi_kontor_mobile_fn_func_s64_to_integer(
+                return nativeModule().ubrn_uniffi_kontor_sdk_native_fn_func_s64_to_integer(
         FfiConverterInt64.lower(i),
                 callStatus);
             },
@@ -391,7 +391,7 @@ export function serializeInst(jsonStr: string): ArrayBuffer /*throws*/ {
         uniffiCaller.rustCallWithError(
             /*liftError:*/ FfiConverterTypeCoreError.lift.bind(FfiConverterTypeCoreError),
             /*caller:*/ (callStatus) => {
-                return nativeModule().ubrn_uniffi_kontor_mobile_fn_func_serialize_inst(
+                return nativeModule().ubrn_uniffi_kontor_sdk_native_fn_func_serialize_inst(
         FfiConverterString.lower(jsonStr),
                 callStatus);
             },
@@ -403,7 +403,7 @@ export function sqrtInteger(i: Integer): Integer /*throws*/ {
         uniffiCaller.rustCallWithError(
             /*liftError:*/ FfiConverterTypeNumericsError.lift.bind(FfiConverterTypeNumericsError),
             /*caller:*/ (callStatus) => {
-                return nativeModule().ubrn_uniffi_kontor_mobile_fn_func_sqrt_integer(
+                return nativeModule().ubrn_uniffi_kontor_sdk_native_fn_func_sqrt_integer(
         FfiConverterTypeInteger.lower(i),
                 callStatus);
             },
@@ -415,7 +415,7 @@ export function stringToDecimal(s: string): Decimal /*throws*/ {
         uniffiCaller.rustCallWithError(
             /*liftError:*/ FfiConverterTypeNumericsError.lift.bind(FfiConverterTypeNumericsError),
             /*caller:*/ (callStatus) => {
-                return nativeModule().ubrn_uniffi_kontor_mobile_fn_func_string_to_decimal(
+                return nativeModule().ubrn_uniffi_kontor_sdk_native_fn_func_string_to_decimal(
         FfiConverterString.lower(s),
                 callStatus);
             },
@@ -427,7 +427,7 @@ export function stringToInteger(s: string): Integer /*throws*/ {
         uniffiCaller.rustCallWithError(
             /*liftError:*/ FfiConverterTypeNumericsError.lift.bind(FfiConverterTypeNumericsError),
             /*caller:*/ (callStatus) => {
-                return nativeModule().ubrn_uniffi_kontor_mobile_fn_func_string_to_integer(
+                return nativeModule().ubrn_uniffi_kontor_sdk_native_fn_func_string_to_integer(
         FfiConverterString.lower(s),
                 callStatus);
             },
@@ -439,7 +439,7 @@ export function subDecimal(a: Decimal, b: Decimal): Decimal /*throws*/ {
         uniffiCaller.rustCallWithError(
             /*liftError:*/ FfiConverterTypeNumericsError.lift.bind(FfiConverterTypeNumericsError),
             /*caller:*/ (callStatus) => {
-                return nativeModule().ubrn_uniffi_kontor_mobile_fn_func_sub_decimal(
+                return nativeModule().ubrn_uniffi_kontor_sdk_native_fn_func_sub_decimal(
         FfiConverterTypeDecimal.lower(a),
         FfiConverterTypeDecimal.lower(b),
                 callStatus);
@@ -452,7 +452,7 @@ export function subInteger(a: Integer, b: Integer): Integer /*throws*/ {
         uniffiCaller.rustCallWithError(
             /*liftError:*/ FfiConverterTypeNumericsError.lift.bind(FfiConverterTypeNumericsError),
             /*caller:*/ (callStatus) => {
-                return nativeModule().ubrn_uniffi_kontor_mobile_fn_func_sub_integer(
+                return nativeModule().ubrn_uniffi_kontor_sdk_native_fn_func_sub_integer(
         FfiConverterTypeInteger.lower(a),
         FfiConverterTypeInteger.lower(b),
                 callStatus);
@@ -465,7 +465,7 @@ export function u64ToDecimal(i: /*u64*/bigint): Decimal /*throws*/ {
         uniffiCaller.rustCallWithError(
             /*liftError:*/ FfiConverterTypeNumericsError.lift.bind(FfiConverterTypeNumericsError),
             /*caller:*/ (callStatus) => {
-                return nativeModule().ubrn_uniffi_kontor_mobile_fn_func_u64_to_decimal(
+                return nativeModule().ubrn_uniffi_kontor_sdk_native_fn_func_u64_to_decimal(
         FfiConverterUInt64.lower(i),
                 callStatus);
             },
@@ -475,7 +475,7 @@ export function u64ToDecimal(i: /*u64*/bigint): Decimal /*throws*/ {
 export function u64ToInteger(i: /*u64*/bigint): Integer {
     return FfiConverterTypeInteger.lift(uniffiCaller.rustCall(
             /*caller:*/ (callStatus) => {
-                return nativeModule().ubrn_uniffi_kontor_mobile_fn_func_u64_to_integer(
+                return nativeModule().ubrn_uniffi_kontor_sdk_native_fn_func_u64_to_integer(
         FfiConverterUInt64.lower(i),
                 callStatus);
             },
@@ -514,18 +514,18 @@ export const Decimal = (() => {
     return Object.freeze({
         /**
          * Create a frozen instance of {@link Decimal}, with defaults specified
-         * in Rust, in the {@link kontor_mobile} crate.
+         * in Rust, in the {@link kontor_sdk_native} crate.
          */
         create,
 
         /**
          * Create a frozen instance of {@link Decimal}, with defaults specified
-         * in Rust, in the {@link kontor_mobile} crate.
+         * in Rust, in the {@link kontor_sdk_native} crate.
          */
         new: create,
 
         /**
-         * Defaults specified in the {@link kontor_mobile} crate.
+         * Defaults specified in the {@link kontor_sdk_native} crate.
          */
         defaults: () => Object.freeze(defaults()) as Partial<Decimal>,
     });
@@ -583,18 +583,18 @@ export const Integer = (() => {
     return Object.freeze({
         /**
          * Create a frozen instance of {@link Integer}, with defaults specified
-         * in Rust, in the {@link kontor_mobile} crate.
+         * in Rust, in the {@link kontor_sdk_native} crate.
          */
         create,
 
         /**
          * Create a frozen instance of {@link Integer}, with defaults specified
-         * in Rust, in the {@link kontor_mobile} crate.
+         * in Rust, in the {@link kontor_sdk_native} crate.
          */
         new: create,
 
         /**
-         * Defaults specified in the {@link kontor_mobile} crate.
+         * Defaults specified in the {@link kontor_sdk_native} crate.
          */
         defaults: () => Object.freeze(defaults()) as Partial<Integer>,
     });
@@ -742,7 +742,7 @@ export enum NumericsError_Tags {
     Validation = "Validation"
 }
 /**
- * Mirror of `kontor_core::numerics::Error` as a uniffi error. Also
+ * Mirror of `kontor_sdk::numerics::Error` as a uniffi error. Also
  * `flat_error`: JS still gets one class per variant to branch on, but
  * `.message` is the underlying description instead of "NumericsError.X".
  */
@@ -885,7 +885,7 @@ export const NumericsError = (() => {
 // Union type for NumericsError error type.
 
 /**
- * Mirror of `kontor_core::numerics::Error` as a uniffi error. Also
+ * Mirror of `kontor_sdk::numerics::Error` as a uniffi error. Also
  * `flat_error`: JS still gets one class per variant to branch on, but
  * `.message` is the underlying description instead of "NumericsError.X".
  */
@@ -1001,7 +1001,7 @@ const FfiConverterTypeSign = (() => {
 
 
 /**
- * One instance per WIT document. Wraps the pure `kontor_core::WitResource`.
+ * One instance per WIT document. Wraps the pure `kontor_sdk::WitResource`.
  */
 export interface WitInterface {
     
@@ -1011,7 +1011,7 @@ export interface WitInterface {
 
 
 /**
- * One instance per WIT document. Wraps the pure `kontor_core::WitResource`.
+ * One instance per WIT document. Wraps the pure `kontor_sdk::WitResource`.
  */
 export class Wit extends UniffiAbstractObject implements WitInterface {
 
@@ -1023,7 +1023,7 @@ export class Wit extends UniffiAbstractObject implements WitInterface {
         const pointer =
             uniffiCaller.rustCall(
             /*caller:*/ (callStatus) => {
-                return nativeModule().ubrn_uniffi_kontor_mobile_fn_constructor_wit_new(
+                return nativeModule().ubrn_uniffi_kontor_sdk_native_fn_constructor_wit_new(
         FfiConverterString.lower(text),
                 callStatus);
             },
@@ -1041,7 +1041,7 @@ public decodeResult(fnName: string, wave: string): string /*throws*/ {
         uniffiCaller.rustCallWithError(
             /*liftError:*/ FfiConverterTypeCoreError.lift.bind(FfiConverterTypeCoreError),
             /*caller:*/ (callStatus) => {
-                return nativeModule().ubrn_uniffi_kontor_mobile_fn_method_wit_decode_result(uniffiTypeWitObjectFactory.clonePointer(this), 
+                return nativeModule().ubrn_uniffi_kontor_sdk_native_fn_method_wit_decode_result(uniffiTypeWitObjectFactory.clonePointer(this), 
         FfiConverterString.lower(fnName),
         FfiConverterString.lower(wave),
                 callStatus);
@@ -1055,7 +1055,7 @@ public encodeCall(fnName: string, argsJson: string): string /*throws*/ {
         uniffiCaller.rustCallWithError(
             /*liftError:*/ FfiConverterTypeCoreError.lift.bind(FfiConverterTypeCoreError),
             /*caller:*/ (callStatus) => {
-                return nativeModule().ubrn_uniffi_kontor_mobile_fn_method_wit_encode_call(uniffiTypeWitObjectFactory.clonePointer(this), 
+                return nativeModule().ubrn_uniffi_kontor_sdk_native_fn_method_wit_encode_call(uniffiTypeWitObjectFactory.clonePointer(this), 
         FfiConverterString.lower(fnName),
         FfiConverterString.lower(argsJson),
                 callStatus);
@@ -1119,14 +1119,14 @@ const uniffiTypeWitObjectFactory: UniffiObjectFactory<WitInterface> = (() => {
     clonePointer(obj: WitInterface): UnsafeMutableRawPointer {
         const pointer = this.pointer(obj);
         return uniffiCaller.rustCall(
-            /*caller:*/ (callStatus) => nativeModule().ubrn_uniffi_kontor_mobile_fn_clone_wit(pointer, callStatus),
+            /*caller:*/ (callStatus) => nativeModule().ubrn_uniffi_kontor_sdk_native_fn_clone_wit(pointer, callStatus),
             /*liftString:*/ FfiConverterString.lift
         );
     },
 
     freePointer(pointer: UnsafeMutableRawPointer): void {
         uniffiCaller.rustCall(
-            /*caller:*/ (callStatus) => nativeModule().ubrn_uniffi_kontor_mobile_fn_free_wit(pointer, callStatus),
+            /*caller:*/ (callStatus) => nativeModule().ubrn_uniffi_kontor_sdk_native_fn_free_wit(pointer, callStatus),
             /*liftString:*/ FfiConverterString.lift
         );
     },
@@ -1160,120 +1160,120 @@ function uniffiEnsureInitialized() {
     // Get the bindings contract version from our ComponentInterface
     const bindingsContractVersion = 29;
     // Get the scaffolding contract version by calling the into the dylib
-    const scaffoldingContractVersion = nativeModule().ubrn_ffi_kontor_mobile_uniffi_contract_version();
+    const scaffoldingContractVersion = nativeModule().ubrn_ffi_kontor_sdk_native_uniffi_contract_version();
     if (bindingsContractVersion !== scaffoldingContractVersion) {
         throw new UniffiInternalError.ContractVersionMismatch(scaffoldingContractVersion, bindingsContractVersion);
     }
-    if (nativeModule().ubrn_uniffi_kontor_mobile_checksum_func_add_decimal() !== 31912) {
-        throw new UniffiInternalError.ApiChecksumMismatch("uniffi_kontor_mobile_checksum_func_add_decimal");
+    if (nativeModule().ubrn_uniffi_kontor_sdk_native_checksum_func_add_decimal() !== 40754) {
+        throw new UniffiInternalError.ApiChecksumMismatch("uniffi_kontor_sdk_native_checksum_func_add_decimal");
     }
-    if (nativeModule().ubrn_uniffi_kontor_mobile_checksum_func_add_integer() !== 61205) {
-        throw new UniffiInternalError.ApiChecksumMismatch("uniffi_kontor_mobile_checksum_func_add_integer");
+    if (nativeModule().ubrn_uniffi_kontor_sdk_native_checksum_func_add_integer() !== 62254) {
+        throw new UniffiInternalError.ApiChecksumMismatch("uniffi_kontor_sdk_native_checksum_func_add_integer");
     }
-    if (nativeModule().ubrn_uniffi_kontor_mobile_checksum_func_aggregate_signing_message() !== 36987) {
-        throw new UniffiInternalError.ApiChecksumMismatch("uniffi_kontor_mobile_checksum_func_aggregate_signing_message");
+    if (nativeModule().ubrn_uniffi_kontor_sdk_native_checksum_func_aggregate_signing_message() !== 19160) {
+        throw new UniffiInternalError.ApiChecksumMismatch("uniffi_kontor_sdk_native_checksum_func_aggregate_signing_message");
     }
-    if (nativeModule().ubrn_uniffi_kontor_mobile_checksum_func_bls_aggregate_signatures() !== 62737) {
-        throw new UniffiInternalError.ApiChecksumMismatch("uniffi_kontor_mobile_checksum_func_bls_aggregate_signatures");
+    if (nativeModule().ubrn_uniffi_kontor_sdk_native_checksum_func_bls_aggregate_signatures() !== 50427) {
+        throw new UniffiInternalError.ApiChecksumMismatch("uniffi_kontor_sdk_native_checksum_func_bls_aggregate_signatures");
     }
-    if (nativeModule().ubrn_uniffi_kontor_mobile_checksum_func_bls_pubkey_from_secret() !== 13277) {
-        throw new UniffiInternalError.ApiChecksumMismatch("uniffi_kontor_mobile_checksum_func_bls_pubkey_from_secret");
+    if (nativeModule().ubrn_uniffi_kontor_sdk_native_checksum_func_bls_pubkey_from_secret() !== 29934) {
+        throw new UniffiInternalError.ApiChecksumMismatch("uniffi_kontor_sdk_native_checksum_func_bls_pubkey_from_secret");
     }
-    if (nativeModule().ubrn_uniffi_kontor_mobile_checksum_func_bls_secret_from_seed_eip2333() !== 47544) {
-        throw new UniffiInternalError.ApiChecksumMismatch("uniffi_kontor_mobile_checksum_func_bls_secret_from_seed_eip2333");
+    if (nativeModule().ubrn_uniffi_kontor_sdk_native_checksum_func_bls_secret_from_seed_eip2333() !== 43798) {
+        throw new UniffiInternalError.ApiChecksumMismatch("uniffi_kontor_sdk_native_checksum_func_bls_secret_from_seed_eip2333");
     }
-    if (nativeModule().ubrn_uniffi_kontor_mobile_checksum_func_bls_secret_key_gen() !== 17011) {
-        throw new UniffiInternalError.ApiChecksumMismatch("uniffi_kontor_mobile_checksum_func_bls_secret_key_gen");
+    if (nativeModule().ubrn_uniffi_kontor_sdk_native_checksum_func_bls_secret_key_gen() !== 31207) {
+        throw new UniffiInternalError.ApiChecksumMismatch("uniffi_kontor_sdk_native_checksum_func_bls_secret_key_gen");
     }
-    if (nativeModule().ubrn_uniffi_kontor_mobile_checksum_func_bls_sign() !== 55942) {
-        throw new UniffiInternalError.ApiChecksumMismatch("uniffi_kontor_mobile_checksum_func_bls_sign");
+    if (nativeModule().ubrn_uniffi_kontor_sdk_native_checksum_func_bls_sign() !== 38632) {
+        throw new UniffiInternalError.ApiChecksumMismatch("uniffi_kontor_sdk_native_checksum_func_bls_sign");
     }
-    if (nativeModule().ubrn_uniffi_kontor_mobile_checksum_func_bls_verify() !== 47755) {
-        throw new UniffiInternalError.ApiChecksumMismatch("uniffi_kontor_mobile_checksum_func_bls_verify");
+    if (nativeModule().ubrn_uniffi_kontor_sdk_native_checksum_func_bls_verify() !== 14323) {
+        throw new UniffiInternalError.ApiChecksumMismatch("uniffi_kontor_sdk_native_checksum_func_bls_verify");
     }
-    if (nativeModule().ubrn_uniffi_kontor_mobile_checksum_func_cmp_decimal() !== 63873) {
-        throw new UniffiInternalError.ApiChecksumMismatch("uniffi_kontor_mobile_checksum_func_cmp_decimal");
+    if (nativeModule().ubrn_uniffi_kontor_sdk_native_checksum_func_cmp_decimal() !== 54498) {
+        throw new UniffiInternalError.ApiChecksumMismatch("uniffi_kontor_sdk_native_checksum_func_cmp_decimal");
     }
-    if (nativeModule().ubrn_uniffi_kontor_mobile_checksum_func_cmp_integer() !== 51079) {
-        throw new UniffiInternalError.ApiChecksumMismatch("uniffi_kontor_mobile_checksum_func_cmp_integer");
+    if (nativeModule().ubrn_uniffi_kontor_sdk_native_checksum_func_cmp_integer() !== 10676) {
+        throw new UniffiInternalError.ApiChecksumMismatch("uniffi_kontor_sdk_native_checksum_func_cmp_integer");
     }
-    if (nativeModule().ubrn_uniffi_kontor_mobile_checksum_func_decimal_to_integer() !== 48375) {
-        throw new UniffiInternalError.ApiChecksumMismatch("uniffi_kontor_mobile_checksum_func_decimal_to_integer");
+    if (nativeModule().ubrn_uniffi_kontor_sdk_native_checksum_func_decimal_to_integer() !== 42452) {
+        throw new UniffiInternalError.ApiChecksumMismatch("uniffi_kontor_sdk_native_checksum_func_decimal_to_integer");
     }
-    if (nativeModule().ubrn_uniffi_kontor_mobile_checksum_func_decimal_to_string() !== 3359) {
-        throw new UniffiInternalError.ApiChecksumMismatch("uniffi_kontor_mobile_checksum_func_decimal_to_string");
+    if (nativeModule().ubrn_uniffi_kontor_sdk_native_checksum_func_decimal_to_string() !== 10282) {
+        throw new UniffiInternalError.ApiChecksumMismatch("uniffi_kontor_sdk_native_checksum_func_decimal_to_string");
     }
-    if (nativeModule().ubrn_uniffi_kontor_mobile_checksum_func_deserialize_inst() !== 65423) {
-        throw new UniffiInternalError.ApiChecksumMismatch("uniffi_kontor_mobile_checksum_func_deserialize_inst");
+    if (nativeModule().ubrn_uniffi_kontor_sdk_native_checksum_func_deserialize_inst() !== 37585) {
+        throw new UniffiInternalError.ApiChecksumMismatch("uniffi_kontor_sdk_native_checksum_func_deserialize_inst");
     }
-    if (nativeModule().ubrn_uniffi_kontor_mobile_checksum_func_div_decimal() !== 31686) {
-        throw new UniffiInternalError.ApiChecksumMismatch("uniffi_kontor_mobile_checksum_func_div_decimal");
+    if (nativeModule().ubrn_uniffi_kontor_sdk_native_checksum_func_div_decimal() !== 492) {
+        throw new UniffiInternalError.ApiChecksumMismatch("uniffi_kontor_sdk_native_checksum_func_div_decimal");
     }
-    if (nativeModule().ubrn_uniffi_kontor_mobile_checksum_func_div_integer() !== 25821) {
-        throw new UniffiInternalError.ApiChecksumMismatch("uniffi_kontor_mobile_checksum_func_div_integer");
+    if (nativeModule().ubrn_uniffi_kontor_sdk_native_checksum_func_div_integer() !== 15504) {
+        throw new UniffiInternalError.ApiChecksumMismatch("uniffi_kontor_sdk_native_checksum_func_div_integer");
     }
-    if (nativeModule().ubrn_uniffi_kontor_mobile_checksum_func_eq_decimal() !== 17139) {
-        throw new UniffiInternalError.ApiChecksumMismatch("uniffi_kontor_mobile_checksum_func_eq_decimal");
+    if (nativeModule().ubrn_uniffi_kontor_sdk_native_checksum_func_eq_decimal() !== 44141) {
+        throw new UniffiInternalError.ApiChecksumMismatch("uniffi_kontor_sdk_native_checksum_func_eq_decimal");
     }
-    if (nativeModule().ubrn_uniffi_kontor_mobile_checksum_func_eq_integer() !== 41975) {
-        throw new UniffiInternalError.ApiChecksumMismatch("uniffi_kontor_mobile_checksum_func_eq_integer");
+    if (nativeModule().ubrn_uniffi_kontor_sdk_native_checksum_func_eq_integer() !== 25715) {
+        throw new UniffiInternalError.ApiChecksumMismatch("uniffi_kontor_sdk_native_checksum_func_eq_integer");
     }
-    if (nativeModule().ubrn_uniffi_kontor_mobile_checksum_func_f64_to_decimal() !== 55240) {
-        throw new UniffiInternalError.ApiChecksumMismatch("uniffi_kontor_mobile_checksum_func_f64_to_decimal");
+    if (nativeModule().ubrn_uniffi_kontor_sdk_native_checksum_func_f64_to_decimal() !== 11080) {
+        throw new UniffiInternalError.ApiChecksumMismatch("uniffi_kontor_sdk_native_checksum_func_f64_to_decimal");
     }
-    if (nativeModule().ubrn_uniffi_kontor_mobile_checksum_func_integer_to_decimal() !== 32477) {
-        throw new UniffiInternalError.ApiChecksumMismatch("uniffi_kontor_mobile_checksum_func_integer_to_decimal");
+    if (nativeModule().ubrn_uniffi_kontor_sdk_native_checksum_func_integer_to_decimal() !== 27084) {
+        throw new UniffiInternalError.ApiChecksumMismatch("uniffi_kontor_sdk_native_checksum_func_integer_to_decimal");
     }
-    if (nativeModule().ubrn_uniffi_kontor_mobile_checksum_func_integer_to_string() !== 45356) {
-        throw new UniffiInternalError.ApiChecksumMismatch("uniffi_kontor_mobile_checksum_func_integer_to_string");
+    if (nativeModule().ubrn_uniffi_kontor_sdk_native_checksum_func_integer_to_string() !== 44224) {
+        throw new UniffiInternalError.ApiChecksumMismatch("uniffi_kontor_sdk_native_checksum_func_integer_to_string");
     }
-    if (nativeModule().ubrn_uniffi_kontor_mobile_checksum_func_log10_decimal() !== 54991) {
-        throw new UniffiInternalError.ApiChecksumMismatch("uniffi_kontor_mobile_checksum_func_log10_decimal");
+    if (nativeModule().ubrn_uniffi_kontor_sdk_native_checksum_func_log10_decimal() !== 4908) {
+        throw new UniffiInternalError.ApiChecksumMismatch("uniffi_kontor_sdk_native_checksum_func_log10_decimal");
     }
-    if (nativeModule().ubrn_uniffi_kontor_mobile_checksum_func_mul_decimal() !== 57404) {
-        throw new UniffiInternalError.ApiChecksumMismatch("uniffi_kontor_mobile_checksum_func_mul_decimal");
+    if (nativeModule().ubrn_uniffi_kontor_sdk_native_checksum_func_mul_decimal() !== 51293) {
+        throw new UniffiInternalError.ApiChecksumMismatch("uniffi_kontor_sdk_native_checksum_func_mul_decimal");
     }
-    if (nativeModule().ubrn_uniffi_kontor_mobile_checksum_func_mul_integer() !== 425) {
-        throw new UniffiInternalError.ApiChecksumMismatch("uniffi_kontor_mobile_checksum_func_mul_integer");
+    if (nativeModule().ubrn_uniffi_kontor_sdk_native_checksum_func_mul_integer() !== 34106) {
+        throw new UniffiInternalError.ApiChecksumMismatch("uniffi_kontor_sdk_native_checksum_func_mul_integer");
     }
-    if (nativeModule().ubrn_uniffi_kontor_mobile_checksum_func_s64_to_decimal() !== 15868) {
-        throw new UniffiInternalError.ApiChecksumMismatch("uniffi_kontor_mobile_checksum_func_s64_to_decimal");
+    if (nativeModule().ubrn_uniffi_kontor_sdk_native_checksum_func_s64_to_decimal() !== 50168) {
+        throw new UniffiInternalError.ApiChecksumMismatch("uniffi_kontor_sdk_native_checksum_func_s64_to_decimal");
     }
-    if (nativeModule().ubrn_uniffi_kontor_mobile_checksum_func_s64_to_integer() !== 43572) {
-        throw new UniffiInternalError.ApiChecksumMismatch("uniffi_kontor_mobile_checksum_func_s64_to_integer");
+    if (nativeModule().ubrn_uniffi_kontor_sdk_native_checksum_func_s64_to_integer() !== 4155) {
+        throw new UniffiInternalError.ApiChecksumMismatch("uniffi_kontor_sdk_native_checksum_func_s64_to_integer");
     }
-    if (nativeModule().ubrn_uniffi_kontor_mobile_checksum_func_serialize_inst() !== 28308) {
-        throw new UniffiInternalError.ApiChecksumMismatch("uniffi_kontor_mobile_checksum_func_serialize_inst");
+    if (nativeModule().ubrn_uniffi_kontor_sdk_native_checksum_func_serialize_inst() !== 48497) {
+        throw new UniffiInternalError.ApiChecksumMismatch("uniffi_kontor_sdk_native_checksum_func_serialize_inst");
     }
-    if (nativeModule().ubrn_uniffi_kontor_mobile_checksum_func_sqrt_integer() !== 38173) {
-        throw new UniffiInternalError.ApiChecksumMismatch("uniffi_kontor_mobile_checksum_func_sqrt_integer");
+    if (nativeModule().ubrn_uniffi_kontor_sdk_native_checksum_func_sqrt_integer() !== 27634) {
+        throw new UniffiInternalError.ApiChecksumMismatch("uniffi_kontor_sdk_native_checksum_func_sqrt_integer");
     }
-    if (nativeModule().ubrn_uniffi_kontor_mobile_checksum_func_string_to_decimal() !== 56081) {
-        throw new UniffiInternalError.ApiChecksumMismatch("uniffi_kontor_mobile_checksum_func_string_to_decimal");
+    if (nativeModule().ubrn_uniffi_kontor_sdk_native_checksum_func_string_to_decimal() !== 53862) {
+        throw new UniffiInternalError.ApiChecksumMismatch("uniffi_kontor_sdk_native_checksum_func_string_to_decimal");
     }
-    if (nativeModule().ubrn_uniffi_kontor_mobile_checksum_func_string_to_integer() !== 12681) {
-        throw new UniffiInternalError.ApiChecksumMismatch("uniffi_kontor_mobile_checksum_func_string_to_integer");
+    if (nativeModule().ubrn_uniffi_kontor_sdk_native_checksum_func_string_to_integer() !== 8415) {
+        throw new UniffiInternalError.ApiChecksumMismatch("uniffi_kontor_sdk_native_checksum_func_string_to_integer");
     }
-    if (nativeModule().ubrn_uniffi_kontor_mobile_checksum_func_sub_decimal() !== 36159) {
-        throw new UniffiInternalError.ApiChecksumMismatch("uniffi_kontor_mobile_checksum_func_sub_decimal");
+    if (nativeModule().ubrn_uniffi_kontor_sdk_native_checksum_func_sub_decimal() !== 54610) {
+        throw new UniffiInternalError.ApiChecksumMismatch("uniffi_kontor_sdk_native_checksum_func_sub_decimal");
     }
-    if (nativeModule().ubrn_uniffi_kontor_mobile_checksum_func_sub_integer() !== 3064) {
-        throw new UniffiInternalError.ApiChecksumMismatch("uniffi_kontor_mobile_checksum_func_sub_integer");
+    if (nativeModule().ubrn_uniffi_kontor_sdk_native_checksum_func_sub_integer() !== 51783) {
+        throw new UniffiInternalError.ApiChecksumMismatch("uniffi_kontor_sdk_native_checksum_func_sub_integer");
     }
-    if (nativeModule().ubrn_uniffi_kontor_mobile_checksum_func_u64_to_decimal() !== 64489) {
-        throw new UniffiInternalError.ApiChecksumMismatch("uniffi_kontor_mobile_checksum_func_u64_to_decimal");
+    if (nativeModule().ubrn_uniffi_kontor_sdk_native_checksum_func_u64_to_decimal() !== 23375) {
+        throw new UniffiInternalError.ApiChecksumMismatch("uniffi_kontor_sdk_native_checksum_func_u64_to_decimal");
     }
-    if (nativeModule().ubrn_uniffi_kontor_mobile_checksum_func_u64_to_integer() !== 20809) {
-        throw new UniffiInternalError.ApiChecksumMismatch("uniffi_kontor_mobile_checksum_func_u64_to_integer");
+    if (nativeModule().ubrn_uniffi_kontor_sdk_native_checksum_func_u64_to_integer() !== 8684) {
+        throw new UniffiInternalError.ApiChecksumMismatch("uniffi_kontor_sdk_native_checksum_func_u64_to_integer");
     }
-    if (nativeModule().ubrn_uniffi_kontor_mobile_checksum_method_wit_decode_result() !== 32400) {
-        throw new UniffiInternalError.ApiChecksumMismatch("uniffi_kontor_mobile_checksum_method_wit_decode_result");
+    if (nativeModule().ubrn_uniffi_kontor_sdk_native_checksum_method_wit_decode_result() !== 44839) {
+        throw new UniffiInternalError.ApiChecksumMismatch("uniffi_kontor_sdk_native_checksum_method_wit_decode_result");
     }
-    if (nativeModule().ubrn_uniffi_kontor_mobile_checksum_method_wit_encode_call() !== 46486) {
-        throw new UniffiInternalError.ApiChecksumMismatch("uniffi_kontor_mobile_checksum_method_wit_encode_call");
+    if (nativeModule().ubrn_uniffi_kontor_sdk_native_checksum_method_wit_encode_call() !== 39186) {
+        throw new UniffiInternalError.ApiChecksumMismatch("uniffi_kontor_sdk_native_checksum_method_wit_encode_call");
     }
-    if (nativeModule().ubrn_uniffi_kontor_mobile_checksum_constructor_wit_new() !== 19854) {
-        throw new UniffiInternalError.ApiChecksumMismatch("uniffi_kontor_mobile_checksum_constructor_wit_new");
+    if (nativeModule().ubrn_uniffi_kontor_sdk_native_checksum_constructor_wit_new() !== 22892) {
+        throw new UniffiInternalError.ApiChecksumMismatch("uniffi_kontor_sdk_native_checksum_constructor_wit_new");
     }
 
     }

@@ -1,8 +1,8 @@
 /**
  * `@kontor/sdk-native` — the React Native (JSI) backend for `@kontor/sdk`.
  *
- * Re-shapes the uniffi-generated bindings for `core/kontor-mobile`
- * (`./generated/kontor_mobile`, produced by `uniffi-bindgen-react-native`
+ * Re-shapes the uniffi-generated bindings for `core/kontor-sdk-native`
+ * (`./generated/kontor_sdk_native`, produced by `uniffi-bindgen-react-native`
  * — see `ubrn.config.yaml`) into the exact `KontorBackend` surface the SDK
  * expects, so `sdk/src/backend/backend.native.ts` can `export * from` here.
  *
@@ -21,11 +21,11 @@
  * (`backend.native.ts`: `const _conforms: KontorBackend = native`) and is
  * verified by the mobile CI.
  */
-import installer from "./generated/spec/NativeKontorMobile";
-import * as gen from "./generated/kontor_mobile";
+import installer from "./generated/spec/NativeKontorSdkNative";
+import * as gen from "./generated/kontor_sdk_native";
 
 // Install the Rust crate into the JS runtime (registers the JSI host
-// functions the generated FFI reads from `globalThis.NativeKontorMobile`),
+// functions the generated FFI reads from `globalThis.NativeKontorSdkNative`),
 // then run the binding self-checks (uniffi contract-version + per-fn
 // checksums). Both are idempotent, so re-evaluating this module (e.g. a
 // metro reload) is safe. Without this, every `gen.*` call would throw.

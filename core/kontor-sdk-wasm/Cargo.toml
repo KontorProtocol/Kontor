@@ -1,0 +1,15 @@
+[package]
+name = "kontor-sdk-wasm"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+# All function bodies (BLS, Inst codec, Wit/WAVE, validation) live in
+# kontor-sdk; this crate is only the wit-bindgen shim around them.
+kontor-sdk = { path = "../kontor-sdk" }
+# For the re-exported `wit_bindgen` (the `generate!` macro's runtime).
+indexer-types = { path = "../indexer-types" }
+numerics = { path = "../numerics" }
+
+[lib]
+crate-type = ["cdylib"]

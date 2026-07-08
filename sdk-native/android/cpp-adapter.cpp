@@ -2,23 +2,23 @@
 #include <jni.h>
 #include <jsi/jsi.h>
 #include <ReactCommon/CallInvokerHolder.h>
-#include "kontor-mobile.h"
+#include "kontor-sdk-native.h"
 
 namespace jsi = facebook::jsi;
 namespace react = facebook::react;
 
-// Automated testing checks Java_com_kontor_sdknative_KontorMobileModule and kontormobile
+// Automated testing checks Java_com_kontor_sdknative_KontorSdkNativeModule and kontormobile
 // by comparing the whole line here.
 /*
-Java_com_kontor_sdknative_KontorMobileModule_nativeMultiply(JNIEnv *env, jclass type, jdouble a, jdouble b) {
+Java_com_kontor_sdknative_KontorSdkNativeModule_nativeMultiply(JNIEnv *env, jclass type, jdouble a, jdouble b) {
     return kontormobile::multiply(a, b);
 }
 */
 
-// Installer coming from KontorMobileModule
+// Installer coming from KontorSdkNativeModule
 extern "C"
 JNIEXPORT jboolean JNICALL
-Java_com_kontor_sdknative_KontorMobileModule_nativeInstallRustCrate(
+Java_com_kontor_sdknative_KontorSdkNativeModule_nativeInstallRustCrate(
     JNIEnv *env,
     jclass type,
     jlong rtPtr,
@@ -57,7 +57,7 @@ Java_com_kontor_sdknative_KontorMobileModule_nativeInstallRustCrate(
 
 extern "C"
 JNIEXPORT jboolean JNICALL
-Java_com_kontor_sdknative_KontorMobileModule_nativeCleanupRustCrate(JNIEnv *env, jclass type, jlong rtPtr) {
+Java_com_kontor_sdknative_KontorSdkNativeModule_nativeCleanupRustCrate(JNIEnv *env, jclass type, jlong rtPtr) {
     auto runtime = reinterpret_cast<jsi::Runtime *>(rtPtr);
     return kontormobile::cleanupRustCrate(*runtime);
 }

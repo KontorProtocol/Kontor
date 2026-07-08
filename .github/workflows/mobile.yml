@@ -9,13 +9,13 @@ on:
   push:
     branches: [main]
     paths:
-      - "core/kontor-core/**"
-      - "core/kontor-mobile/**"
-      # kontor-sdk (the wit world) and the jco component types are what
+      - "core/kontor-sdk/**"
+      - "core/kontor-sdk-native/**"
+      # kontor-sdk-wasm (the wit world) and the jco component types are what
       # KontorBackend is derived from — contract drift starts there, so
       # those changes must trigger the native conformance check too.
-      - "core/kontor-sdk/**"
-      # kontor-core is a facade: the bodies live in these crates, so a
+      - "core/kontor-sdk-wasm/**"
+      # kontor-sdk is a facade: the bodies live in these crates, so a
       # change there is exactly what shifts the uniffi surface or breaks
       # the mobile cross-compile. Dependency bumps (Cargo.{toml,lock})
       # can do the same.
@@ -33,9 +33,9 @@ on:
   pull_request:
     branches: ["**"]
     paths:
-      - "core/kontor-core/**"
-      - "core/kontor-mobile/**"
       - "core/kontor-sdk/**"
+      - "core/kontor-sdk-native/**"
+      - "core/kontor-sdk-wasm/**"
       - "core/numerics/**"
       - "core/indexer-types/**"
       - "core/bls-crypto/**"
@@ -92,7 +92,7 @@ jobs:
   # is the strongest early signal (no bindings/app needed yet).
   # Target lists mirror build-mobile.sh / ubrn.config.yaml.
   rust-mobile:
-    name: kontor-mobile (${{ matrix.name }})
+    name: kontor-sdk-native (${{ matrix.name }})
     strategy:
       fail-fast: false
       matrix:
@@ -139,16 +139,16 @@ jobs:
       # binaries use (core/Cargo.toml), so this job verifies the artifact
       # that ships and its compilation is sccache-shareable with the
       # bindings job's build-mobile.sh run.
-      - name: Compile kontor-mobile for each target (iOS)
+      - name: Compile kontor-sdk-native for each target (iOS)
         if: matrix.name == 'ios'
         working-directory: ./core
         run: |
           for t in ${{ matrix.targets }}; do
-            echo "::group::cargo build kontor-mobile --target $t"
-            cargo build -p kontor-mobile --profile mobile --target "$t"
+            echo "::group::cargo build kontor-sdk-native --target $t"
+            cargo build -p kontor-sdk-native --profile mobile --target "$t"
             echo "::endgroup::"
           done
-      - name: Compile kontor-mobile for each target (Android)
+      - name: Compile kontor-sdk-native for each target (Android)
         if: matrix.name == 'android'
         working-directory: ./core
         env:
@@ -159,8 +159,8 @@ jobs:
         # toolchain (CC/AR/linker per target) before delegating to cargo.
         run: |
           for t in ${{ matrix.targets }}; do
-            echo "::group::cargo ndk build kontor-mobile --target $t"
-            cargo ndk --platform 24 -t "$t" build -p kontor-mobile --profile mobile
+            echo "::group::cargo ndk build kontor-sdk-native --target $t"
+            cargo ndk --platform 24 -t "$t" build -p kontor-sdk-native --profile mobile
             echo "::endgroup::"
           done
 
@@ -199,7 +199,7 @@ jobs:
           restore-keys: cargo-registry-mobile-${{ matrix.name }}-
       # `uniffi-bindgen-react-native` (the `ubrn` CLI) is an npm package, not a
       # cargo crate — it is pulled by `npm ci` in ./sdk-native below and
-      # its version is pinned in lockstep with core/kontor-mobile's `uniffi`.
+      # its version is pinned in lockstep with core/kontor-sdk-native's `uniffi`.
       - name: Install cargo-ndk (Android)
         if: matrix.name == 'android'
         # Pinned to a major — see the rust-mobile job.

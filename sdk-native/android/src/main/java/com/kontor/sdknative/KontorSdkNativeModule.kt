@@ -5,16 +5,16 @@ import com.facebook.react.bridge.ReactApplicationContext
 import com.facebook.react.module.annotations.ReactModule
 import com.facebook.react.turbomodule.core.interfaces.CallInvokerHolder
 
-@ReactModule(name = KontorMobileModule.NAME)
-class KontorMobileModule(reactContext: ReactApplicationContext) :
-  NativeKontorMobileSpec(reactContext) {
+@ReactModule(name = KontorSdkNativeModule.NAME)
+class KontorSdkNativeModule(reactContext: ReactApplicationContext) :
+  NativeKontorSdkNativeSpec(reactContext) {
 
   override fun getName(): String {
     return NAME
   }
 
   // Two native methods implemented in cpp-adapter.cpp, and ultimately
-  // kontor-mobile.cpp
+  // kontor-sdk-native.cpp
 
   external fun nativeInstallRustCrate(runtimePointer: Long, callInvoker: CallInvokerHolder): Boolean
   external fun nativeCleanupRustCrate(runtimePointer: Long): Boolean
@@ -34,15 +34,15 @@ class KontorMobileModule(reactContext: ReactApplicationContext) :
   }
 
   companion object {
-    const val NAME = "KontorMobile"
+    const val NAME = "KontorSdkNative"
 
     init {
       // The Rust core ships as a standalone shared library that the JSI
-      // adapter (libkontor-mobile.so) links against dynamically. Load it
+      // adapter (libkontor-sdk-native.so) links against dynamically. Load it
       // into the process first so the adapter's dependency is already
       // resolved when we load it next.
-      System.loadLibrary("kontor_mobile")
-      System.loadLibrary("kontor-mobile")
+      System.loadLibrary("kontor_sdk_native")
+      System.loadLibrary("kontor-sdk-native")
     }
   }
 }
