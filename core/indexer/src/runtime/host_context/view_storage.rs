@@ -7,15 +7,15 @@ use crate::runtime::wit::{IndexRows, Keys, ViewStorage};
 
 impl built_in::context::HostViewStorage for Runtime {}
 
-impl built_in::context::HostViewStorageWithStore for Runtime {
-    async fn drop<T>(accessor: &Accessor<T, Self>, rep: Resource<ViewStorage>) -> Result<()> {
+impl<T> built_in::context::HostViewStorageWithStore<T> for Runtime {
+    async fn drop(accessor: &Accessor<T, Self>, rep: Resource<ViewStorage>) -> Result<()> {
         accessor
             .with(|mut access| access.get().clone())
             ._drop(rep)
             .await
     }
 
-    async fn get_str<T>(
+    async fn get_str(
         accessor: &Accessor<T, Self>,
         self_: Resource<ViewStorage>,
         path: Vec<u8>,
@@ -26,7 +26,7 @@ impl built_in::context::HostViewStorageWithStore for Runtime {
             .await
     }
 
-    async fn get_u64<T>(
+    async fn get_u64(
         accessor: &Accessor<T, Self>,
         self_: Resource<ViewStorage>,
         path: Vec<u8>,
@@ -37,7 +37,7 @@ impl built_in::context::HostViewStorageWithStore for Runtime {
             .await
     }
 
-    async fn get_s64<T>(
+    async fn get_s64(
         accessor: &Accessor<T, Self>,
         self_: Resource<ViewStorage>,
         path: Vec<u8>,
@@ -48,7 +48,7 @@ impl built_in::context::HostViewStorageWithStore for Runtime {
             .await
     }
 
-    async fn get_bool<T>(
+    async fn get_bool(
         accessor: &Accessor<T, Self>,
         self_: Resource<ViewStorage>,
         path: Vec<u8>,
@@ -59,7 +59,7 @@ impl built_in::context::HostViewStorageWithStore for Runtime {
             .await
     }
 
-    async fn get_list_u8<T>(
+    async fn get_list_u8(
         accessor: &Accessor<T, Self>,
         self_: Resource<ViewStorage>,
         path: Vec<u8>,
@@ -70,7 +70,7 @@ impl built_in::context::HostViewStorageWithStore for Runtime {
             .await
     }
 
-    async fn get_keys<T>(
+    async fn get_keys(
         accessor: &Accessor<T, Self>,
         self_: Resource<ViewStorage>,
         path: Vec<u8>,
@@ -84,7 +84,7 @@ impl built_in::context::HostViewStorageWithStore for Runtime {
             .await
     }
 
-    async fn get_index_rows<T>(
+    async fn get_index_rows(
         accessor: &Accessor<T, Self>,
         self_: Resource<ViewStorage>,
         path: Vec<u8>,
@@ -98,7 +98,7 @@ impl built_in::context::HostViewStorageWithStore for Runtime {
             .await
     }
 
-    async fn exists<T>(
+    async fn exists(
         accessor: &Accessor<T, Self>,
         self_: Resource<ViewStorage>,
         path: Vec<u8>,
@@ -109,7 +109,7 @@ impl built_in::context::HostViewStorageWithStore for Runtime {
             .await
     }
 
-    async fn extend_path_with_match<T>(
+    async fn extend_path_with_match(
         accessor: &Accessor<T, Self>,
         self_: Resource<ViewStorage>,
         path: Vec<u8>,

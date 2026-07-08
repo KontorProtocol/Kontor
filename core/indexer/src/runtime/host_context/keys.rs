@@ -7,18 +7,15 @@ use crate::runtime::wit::kontor::built_in;
 
 impl built_in::context::HostKeys for Runtime {}
 
-impl built_in::context::HostKeysWithStore for Runtime {
-    async fn drop<T>(accessor: &Accessor<T, Self>, rep: Resource<Keys>) -> Result<()> {
+impl<T> built_in::context::HostKeysWithStore<T> for Runtime {
+    async fn drop(accessor: &Accessor<T, Self>, rep: Resource<Keys>) -> Result<()> {
         accessor
             .with(|mut access| access.get().clone())
             ._drop(rep)
             .await
     }
 
-    async fn next<T>(
-        accessor: &Accessor<T, Self>,
-        self_: Resource<Keys>,
-    ) -> Result<Option<Vec<u8>>> {
+    async fn next(accessor: &Accessor<T, Self>, self_: Resource<Keys>) -> Result<Option<Vec<u8>>> {
         accessor
             .with(|mut access| access.get().clone())
             ._next(accessor, self_)

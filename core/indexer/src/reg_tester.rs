@@ -13,7 +13,7 @@ use std::{
 use backon::BackoffBuilder;
 
 use crate::{
-    api::client::Client as KontorClient,
+    api::client::{Client as KontorClient, RetryClient},
     bitcoin_client::{
         self, Client as BitcoinClient, client::RegtestRpc, types::TestMempoolAcceptResult,
     },
@@ -454,7 +454,7 @@ impl IdentityPool {
 
 pub struct RegTesterInner {
     pub bitcoin_client: BitcoinClient,
-    kontor_client: KontorClient,
+    kontor_client: RetryClient,
     /// Address to mine blocks to (cluster admin identity's address).
     mine_address: String,
     /// Shared identity pool for popping pre-created identities.
@@ -489,7 +489,7 @@ impl RegTesterInner {
     ) -> Result<Self> {
         Ok(Self {
             bitcoin_client,
-            kontor_client,
+            kontor_client: RetryClient::new(kontor_client),
             mine_address,
             pool,
         })
@@ -790,7 +790,7 @@ impl RegTester {
         self.inner.lock().await.bitcoin_client.clone()
     }
 
-    pub async fn kontor_client(&self) -> KontorClient {
+    pub async fn kontor_client(&self) -> RetryClient {
         self.inner.lock().await.kontor_client.clone()
     }
 

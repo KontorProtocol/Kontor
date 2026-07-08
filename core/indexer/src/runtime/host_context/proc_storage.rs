@@ -7,15 +7,15 @@ use crate::runtime::wit::{IndexRows, Keys, ProcStorage, ViewStorage};
 
 impl built_in::context::HostProcStorage for Runtime {}
 
-impl built_in::context::HostProcStorageWithStore for Runtime {
-    async fn drop<T>(accessor: &Accessor<T, Self>, rep: Resource<ProcStorage>) -> Result<()> {
+impl<T> built_in::context::HostProcStorageWithStore<T> for Runtime {
+    async fn drop(accessor: &Accessor<T, Self>, rep: Resource<ProcStorage>) -> Result<()> {
         accessor
             .with(|mut access| access.get().clone())
             ._drop(rep)
             .await
     }
 
-    async fn get_str<T>(
+    async fn get_str(
         accessor: &Accessor<T, Self>,
         self_: Resource<ProcStorage>,
         path: Vec<u8>,
@@ -26,7 +26,7 @@ impl built_in::context::HostProcStorageWithStore for Runtime {
             .await
     }
 
-    async fn get_u64<T>(
+    async fn get_u64(
         accessor: &Accessor<T, Self>,
         self_: Resource<ProcStorage>,
         path: Vec<u8>,
@@ -37,7 +37,7 @@ impl built_in::context::HostProcStorageWithStore for Runtime {
             .await
     }
 
-    async fn get_s64<T>(
+    async fn get_s64(
         accessor: &Accessor<T, Self>,
         self_: Resource<ProcStorage>,
         path: Vec<u8>,
@@ -48,7 +48,7 @@ impl built_in::context::HostProcStorageWithStore for Runtime {
             .await
     }
 
-    async fn get_bool<T>(
+    async fn get_bool(
         accessor: &Accessor<T, Self>,
         self_: Resource<ProcStorage>,
         path: Vec<u8>,
@@ -59,7 +59,7 @@ impl built_in::context::HostProcStorageWithStore for Runtime {
             .await
     }
 
-    async fn get_list_u8<T>(
+    async fn get_list_u8(
         accessor: &Accessor<T, Self>,
         self_: Resource<ProcStorage>,
         path: Vec<u8>,
@@ -70,7 +70,7 @@ impl built_in::context::HostProcStorageWithStore for Runtime {
             .await
     }
 
-    async fn get_keys<T>(
+    async fn get_keys(
         accessor: &Accessor<T, Self>,
         self_: Resource<ProcStorage>,
         path: Vec<u8>,
@@ -84,7 +84,7 @@ impl built_in::context::HostProcStorageWithStore for Runtime {
             .await
     }
 
-    async fn get_index_rows<T>(
+    async fn get_index_rows(
         accessor: &Accessor<T, Self>,
         self_: Resource<ProcStorage>,
         path: Vec<u8>,
@@ -98,7 +98,7 @@ impl built_in::context::HostProcStorageWithStore for Runtime {
             .await
     }
 
-    async fn exists<T>(
+    async fn exists(
         accessor: &Accessor<T, Self>,
         self_: Resource<ProcStorage>,
         path: Vec<u8>,
@@ -109,7 +109,7 @@ impl built_in::context::HostProcStorageWithStore for Runtime {
             .await
     }
 
-    async fn extend_path_with_match<T>(
+    async fn extend_path_with_match(
         accessor: &Accessor<T, Self>,
         self_: Resource<ProcStorage>,
         path: Vec<u8>,
@@ -121,7 +121,7 @@ impl built_in::context::HostProcStorageWithStore for Runtime {
             .await
     }
 
-    async fn set_str<T>(
+    async fn set_str(
         accessor: &Accessor<T, Self>,
         self_: Resource<ProcStorage>,
         path: Vec<u8>,
@@ -133,7 +133,7 @@ impl built_in::context::HostProcStorageWithStore for Runtime {
             .await
     }
 
-    async fn set_u64<T>(
+    async fn set_u64(
         accessor: &Accessor<T, Self>,
         self_: Resource<ProcStorage>,
         path: Vec<u8>,
@@ -145,7 +145,7 @@ impl built_in::context::HostProcStorageWithStore for Runtime {
             .await
     }
 
-    async fn set_s64<T>(
+    async fn set_s64(
         accessor: &Accessor<T, Self>,
         self_: Resource<ProcStorage>,
         path: Vec<u8>,
@@ -157,7 +157,7 @@ impl built_in::context::HostProcStorageWithStore for Runtime {
             .await
     }
 
-    async fn set_bool<T>(
+    async fn set_bool(
         accessor: &Accessor<T, Self>,
         self_: Resource<ProcStorage>,
         path: Vec<u8>,
@@ -169,7 +169,7 @@ impl built_in::context::HostProcStorageWithStore for Runtime {
             .await
     }
 
-    async fn set_list_u8<T>(
+    async fn set_list_u8(
         accessor: &Accessor<T, Self>,
         self_: Resource<ProcStorage>,
         path: Vec<u8>,
@@ -181,7 +181,7 @@ impl built_in::context::HostProcStorageWithStore for Runtime {
             .await
     }
 
-    async fn set_void<T>(
+    async fn set_void(
         accessor: &Accessor<T, Self>,
         self_: Resource<ProcStorage>,
         path: Vec<u8>,
@@ -192,7 +192,7 @@ impl built_in::context::HostProcStorageWithStore for Runtime {
             .await
     }
 
-    async fn delete<T>(
+    async fn delete(
         accessor: &Accessor<T, Self>,
         self_: Resource<ProcStorage>,
         path: Vec<u8>,
@@ -203,7 +203,7 @@ impl built_in::context::HostProcStorageWithStore for Runtime {
             .await
     }
 
-    async fn delete_matching_paths<T>(
+    async fn delete_matching_paths(
         accessor: &Accessor<T, Self>,
         self_: Resource<ProcStorage>,
         base_path: Vec<u8>,
@@ -215,7 +215,7 @@ impl built_in::context::HostProcStorageWithStore for Runtime {
             .await
     }
 
-    async fn view_storage<T>(
+    async fn view_storage(
         accessor: &Accessor<T, Self>,
         self_: Resource<ProcStorage>,
     ) -> Result<Resource<ViewStorage>> {

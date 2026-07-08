@@ -8,7 +8,7 @@ use wasmtime::{
     component::{
         Accessor, Func, Resource, Val,
         wasm_wave::{
-            parser::Parser as WaveParser, to_string as to_wave_string, value::Value as WaveValue,
+            to_string as to_wave_string, untyped::UntypedFuncCall, value::Value as WaveValue,
         },
     },
 };
@@ -159,9 +159,8 @@ impl Runtime {
                 .map_err(|e| ExecutionError::Deterministic(e.into()))?
         );
 
-        let call = WaveParser::new(expr)
-            .parse_raw_func_call()
-            .map_err(|e| ExecutionError::Deterministic(e.into()))?;
+        let call =
+            UntypedFuncCall::parse(expr).map_err(|e| ExecutionError::Deterministic(e.into()))?;
         let (call, func) = if let Some(func) = instance.get_func(&mut store, call.name()) {
             (call, func)
         } else if let Some(func) = instance.get_func(&mut store, fallback_name) {
@@ -169,8 +168,7 @@ impl Runtime {
             // escaping), so it too must clear the limit before being parsed.
             validate_expr(&fallback_expr)?;
             (
-                WaveParser::new(&fallback_expr)
-                    .parse_raw_func_call()
+                UntypedFuncCall::parse(&fallback_expr)
                     .map_err(|e| ExecutionError::Deterministic(e.into()))?,
                 func,
             )

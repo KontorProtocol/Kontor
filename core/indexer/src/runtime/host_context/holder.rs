@@ -10,15 +10,15 @@ use crate::runtime::wit::kontor::built_in::error::Error as WitError;
 
 impl built_in::context::HostHolder for Runtime {}
 
-impl built_in::context::HostHolderWithStore for Runtime {
-    async fn drop<T>(accessor: &Accessor<T, Self>, rep: Resource<Holder>) -> Result<()> {
+impl<T> built_in::context::HostHolderWithStore<T> for Runtime {
+    async fn drop(accessor: &Accessor<T, Self>, rep: Resource<Holder>) -> Result<()> {
         accessor
             .with(|mut access| access.get().clone())
             ._drop(rep)
             .await
     }
 
-    async fn key<T>(accessor: &Accessor<T, Self>, self_: Resource<Holder>) -> Result<String> {
+    async fn key(accessor: &Accessor<T, Self>, self_: Resource<Holder>) -> Result<String> {
         let runtime = accessor.with(|mut access| access.get().clone());
         Fuel::HolderKey
             .consume(accessor, runtime.gauge.as_ref())
@@ -28,7 +28,7 @@ impl built_in::context::HostHolderWithStore for Runtime {
         Ok(holder.holder_ref.to_string())
     }
 
-    async fn from_ref<T>(
+    async fn from_ref(
         accessor: &Accessor<T, Self>,
         ref_: HolderRef,
     ) -> Result<Result<Resource<Holder>, WitError>> {
@@ -52,7 +52,7 @@ impl built_in::context::HostHolderWithStore for Runtime {
         Ok(Ok(table.push(holder)?))
     }
 
-    async fn as_ref<T>(accessor: &Accessor<T, Self>, self_: Resource<Holder>) -> Result<HolderRef> {
+    async fn as_ref(accessor: &Accessor<T, Self>, self_: Resource<Holder>) -> Result<HolderRef> {
         let runtime = accessor.with(|mut access| access.get().clone());
         Fuel::HolderAsRef
             .consume(accessor, runtime.gauge.as_ref())

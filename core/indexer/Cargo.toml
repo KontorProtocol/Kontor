@@ -55,16 +55,16 @@ axum-server = "=0.8.0"
 futures-util = "=0.3.32"
 hex = "=0.4.3"
 hkdf = "=0.12.4"
-rand = "=0.10.1"
+rand = "=0.10.2"
 rand_chacha = "=0.10.0"
-brotli = "=8.0.3"
+brotli = "=8.0.4"
 postcard = { workspace = true }
 sha2 = "=0.10.9"
 num = { workspace = true }
 fastnum = { workspace = true }
 strum = { version = "=0.28.0", features = ["derive"] }
 tracing-stackdriver = "=0.10.0"
-regex = "=1.12.3"
+regex = "=1.12.4"
 kontor-crypto = "0.3.0"
 ff = "=0.13.1"
 moka = { version = "0.12.15", features = ["future"] }
@@ -93,13 +93,13 @@ sha3 = { workspace = true }
 
 [dev-dependencies]
 testlib = { path = "../testlib" }
-dtor = "=0.13.1"
+dtor = "=1.0.5"
 
 once_cell = "=1.21.4"
-axum-test = "=20.0.0"
+axum-test = "=21.0.0"
 proptest = "=1.11.0"
 
 [build-dependencies]
-built = { version = "=0.8.0", features = ["git2"] }
+built = { version = "=0.8.1", features = ["git2"] }
 prost-build = "0.13.5"
 protox = "0.8.0"

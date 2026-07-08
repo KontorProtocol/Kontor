@@ -8,15 +8,15 @@ use crate::runtime::wit::{Contract, ViewContext, ViewStorage};
 
 impl built_in::context::HostViewContext for Runtime {}
 
-impl built_in::context::HostViewContextWithStore for Runtime {
-    async fn drop<T>(accessor: &Accessor<T, Self>, rep: Resource<ViewContext>) -> Result<()> {
+impl<T> built_in::context::HostViewContextWithStore<T> for Runtime {
+    async fn drop(accessor: &Accessor<T, Self>, rep: Resource<ViewContext>) -> Result<()> {
         accessor
             .with(|mut access| access.get().clone())
             ._drop(rep)
             .await
     }
 
-    async fn storage<T>(
+    async fn storage(
         accessor: &Accessor<T, Self>,
         self_: Resource<ViewContext>,
     ) -> Result<Resource<ViewStorage>> {
@@ -26,7 +26,7 @@ impl built_in::context::HostViewContextWithStore for Runtime {
             .await
     }
 
-    async fn contract<T>(
+    async fn contract(
         accessor: &Accessor<T, Self>,
         self_: Resource<ViewContext>,
     ) -> Result<Resource<Contract>> {

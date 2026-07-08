@@ -21,13 +21,13 @@ impl Runtime {
 
 impl built_in::system::Host for Runtime {}
 
-impl built_in::system::HostWithStore for Runtime {
+impl<T> built_in::system::HostWithStore<T> for Runtime {
     /// Consume fuel for a RegisterBlsKey operation. The reactor performs
     /// the actual signature verification and DB write in
     /// `Runtime::register_bls_key` outside the contract boundary; this
     /// host call exists so the contract's fuel accounting reflects the
     /// real cost of the op. Insufficient fuel traps the caller.
-    async fn register_bls_key<T>(accessor: &Accessor<T, Self>) -> Result<()> {
+    async fn register_bls_key(accessor: &Accessor<T, Self>) -> Result<()> {
         accessor
             .with(|mut access| access.get().clone())
             ._register_bls_key(accessor)
@@ -39,7 +39,7 @@ impl built_in::system::HostWithStore for Runtime {
     /// `Runtime::update_provenance` outside the contract boundary; this host
     /// call exists so the contract's fuel accounting reflects the op's cost.
     /// Insufficient fuel traps the caller.
-    async fn update_provenance<T>(accessor: &Accessor<T, Self>) -> Result<()> {
+    async fn update_provenance(accessor: &Accessor<T, Self>) -> Result<()> {
         accessor
             .with(|mut access| access.get().clone())
             ._update_provenance(accessor)
