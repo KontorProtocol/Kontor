@@ -3,7 +3,7 @@
 React Native (JSI) backend for [`@kontor/sdk`](../sdk). Provides the exact
 same `KontorBackend` surface as the WASM component — BLS signing, `Inst`
 (de)serialization, the `Wit` WAVE codec, and `numerics` — but backed by a
-**native library** built from the same Rust source (`core/kontor-mobile`,
+**native library** built from the same Rust source (`core/kontor-sdk-native`,
 a uniffi wrapper over `core/kontor-core`), because Hermes/JSC has no
 `WebAssembly`.
 
@@ -15,7 +15,7 @@ identical to the chain's verification path.
 ```
 core/kontor-core   (pure Rust: BLS, Inst codec, Wit, numerics)
      ├── core/kontor-sdk     → WASM component  → @kontor/sdk (web/Node)
-     └── core/kontor-mobile  → uniffi          → @kontor/sdk-native (RN)
+     └── core/kontor-sdk-native  → uniffi          → @kontor/sdk-native (RN)
                                    │
                         uniffi-bindgen-react-native
                                    ↓
@@ -32,7 +32,7 @@ The calls are **synchronous** (JSI), matching the web API — `Decimal.add`,
 
 ## Status
 
-The Rust crates (`kontor-core` + `kontor-mobile`), the SDK-side
+The Rust crates (`kontor-core` + `kontor-sdk-native`), the SDK-side
 `react-native` wiring, this package's binding layer, and the Expo
 integration are done: `src/index.ts` installs the Rust crate into the JS
 runtime (`installRustCrate()` + uniffi `initialize()`) and re-shapes the
@@ -71,7 +71,7 @@ autolinking; there the deployment target / minSdk are set by hand.
 cargo install cargo-ndk                 # Android cross-linking
 npm install                             # pulls the `ubrn` CLI (see version note)
 
-# Generate TS/C++ bindings from core/kontor-mobile
+# Generate TS/C++ bindings from core/kontor-sdk-native
 npm run ubrn:generate
 
 # Compile native libs (needs Xcode for iOS, ANDROID_NDK_HOME for Android)
@@ -94,7 +94,7 @@ are missing.
 
 - **`uniffi-bindgen-react-native` is an npm package, not a cargo crate.** It ships
   the `ubrn` CLI. `cargo install uniffi-bindgen-react-native` does NOT work.
-- **Version must match the `uniffi` crate.** `core/kontor-mobile` pins
+- **Version must match the `uniffi` crate.** `core/kontor-sdk-native` pins
   `uniffi = "0.29"`, so this package pins `ubrn` `0.29.3-1`. If you bump one,
   bump the other in lockstep (all published `ubrn` versions are `-N` prereleases).
 - **Run `ubrn` from an interactive terminal.** In a headless / non-TTY context

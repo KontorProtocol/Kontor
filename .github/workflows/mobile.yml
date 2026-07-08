@@ -255,7 +255,7 @@ jobs:
             echo '```'
             if [ "${{ matrix.name }}" = "ios" ]; then
               du -sh KontorSdkNativeFramework.xcframework
-              find KontorSdkNativeFramework.xcframework -name KontorMobile -type f -exec du -h {} +
+              find KontorSdkNativeFramework.xcframework -name KontorSdkNative -type f -exec du -h {} +
             else
               du -sh android/src/main/jniLibs android/src/main/jniLibs/*/
             fi

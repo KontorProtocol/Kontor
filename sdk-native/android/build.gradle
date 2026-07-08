@@ -18,7 +18,9 @@ buildscript {
 
 def reactNativeArchitectures() {
   def value = rootProject.getProperties().get("reactNativeArchitectures")
-  return value ? value.split(",") : ["armeabi-v7a", "x86", "x86_64", "arm64-v8a"]
+  // Match the ABIs build-mobile.sh actually ships a Rust cdylib for
+  // (arm64-v8a, armeabi-v7a, x86_64); 32-bit x86 has no shipped .so.
+  return value ? value.split(",") : ["armeabi-v7a", "x86_64", "arm64-v8a"]
 }
 
 def isNewArchitectureEnabled() {
