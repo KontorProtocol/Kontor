@@ -8,7 +8,10 @@ use reqwest::{Client as HttpClient, ClientBuilder, Response, StatusCode};
 use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 
+use std::ops::Deref;
+
 use crate::api::handlers::NodeStatus;
+use crate::retry::retry_extended;
 use crate::{config::Config, database::types::OpResultId, runtime::ContractAddress};
 
 #[derive(Clone, Debug)]
@@ -236,5 +239,54 @@ impl Client {
             return Ok(None);
         }
         Self::handle_response(res).await.map(Some)
+    }
+}
+
+/// Test-harness wrapper around [`Client`] that retries transient transport
+/// failures (connection refused/reset/timeout, transient 5xx) on the
+/// steady-state reads the regtest harness makes under heavy parallel CI load.
+/// Only `Err` results retry: a 404 (`Ok(None)` from `transaction`/`result`) or a
+/// contract-level `ViewResult::Err` is a valid answer and passes through, so the
+/// `wait_for_txids` polling loop is unaffected. Reads not listed here (e.g.
+/// `signer`, where absence is under test) and all writes (`compose*`, broadcast)
+/// fall through to the inner `Client` unchanged via `Deref`.
+#[derive(Clone)]
+pub struct RetryClient(Client);
+
+impl RetryClient {
+    pub fn new(inner: Client) -> Self {
+        Self(inner)
+    }
+
+    pub async fn index(&self) -> Result<Info> {
+        retry_extended(|| self.0.index()).await
+    }
+
+    pub async fn index_wait(&self, since: &str, wait_ms: u64) -> Result<Info> {
+        retry_extended(|| self.0.index_wait(since, wait_ms)).await
+    }
+
+    pub async fn transaction(&self, txid: &str) -> Result<Option<TransactionRow>> {
+        retry_extended(|| self.0.transaction(txid)).await
+    }
+
+    pub async fn view(&self, contract_address: &ContractAddress, expr: &str) -> Result<ViewResult> {
+        retry_extended(|| self.0.view(contract_address, expr)).await
+    }
+
+    pub async fn result(&self, id: &OpResultId) -> Result<Option<ResultRow>> {
+        retry_extended(|| self.0.result(id)).await
+    }
+
+    pub async fn wit(&self, contract_address: &ContractAddress) -> Result<ContractResponse> {
+        retry_extended(|| self.0.wit(contract_address)).await
+    }
+}
+
+impl Deref for RetryClient {
+    type Target = Client;
+
+    fn deref(&self) -> &Client {
+        &self.0
     }
 }
