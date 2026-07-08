@@ -6,6 +6,9 @@ interface!(name = "counter", path = "../../test-contracts/counter/wit");
 async fn test_counter_batching() -> Result<()> {
     let admin = runtime.identity().await?;
     let user = runtime.identity().await?;
+    // This test OWNS the `value` slot on the shared "counter" instance (the
+    // exact-sum asserts below break under concurrent increments) — other tests
+    // use their own map keys; see the shared-instance rule in storage_deposit.rs.
     let contract = runtime.publish(&admin, "counter").await?;
 
     let before = counter::get(runtime, &contract).await?;

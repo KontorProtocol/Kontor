@@ -14,8 +14,12 @@ interface!(name = "counter", path = "../../test-contracts/counter/wit");
 /// vault model, deleting a row refunded its setter's deposit; under the floor model
 /// the setter's collateral was never moved out of their balance in the first place
 /// — the deletion just shrinks their footprint, so their balance is untouched. alice
-/// sets a map entry; admin clears it; alice (who didn't sign the clear) is neither
-/// charged nor refunded.
+/// sets a map entry; admin removes it; alice (who didn't sign the removal) is
+/// neither charged nor refunded.
+///
+/// SHARED-INSTANCE RULE: regtest tests share ONE published "counter" (a publish
+/// costs a block confirmation), so each test owns its keys/slots and never runs
+/// whole-map ops — another test's row freed mid-flight was the floor-view flake.
 #[testlib::test(contracts_dir = "../../test-contracts")]
 async fn test_delete_moves_no_token() -> Result<()> {
     let admin = runtime.identity().await?;
@@ -23,18 +27,18 @@ async fn test_delete_moves_no_token() -> Result<()> {
     let alice_ref: HolderRef = (&alice).into();
     let contract = runtime.publish(&admin, "counter").await?;
 
-    // alice sets an entry (depositor = alice).
+    // alice sets an entry under this test's own key (depositor = alice).
     let mut submit = runtime.submit();
-    submit.push(&alice, counter::set_entry_call(&contract, "k", "v"));
+    submit.push(&alice, counter::set_entry_call(&contract, "delete-k", "v"));
     submit.execute().await?;
 
     let alice_before = token::balance(runtime, alice_ref.clone())
         .await?
         .unwrap_or_default();
 
-    // admin clears the map → alice's row is freed. No refund, no charge to alice.
+    // admin removes the entry → alice's row is freed. No refund, no charge to alice.
     let mut submit = runtime.submit();
-    submit.push(&admin, counter::clear_all_call(&contract));
+    submit.push(&admin, counter::remove_entry_call(&contract, "delete-k"));
     submit.execute().await?;
 
     let alice_after = token::balance(runtime, alice_ref.clone())
@@ -48,10 +52,12 @@ async fn test_delete_moves_no_token() -> Result<()> {
     Ok(())
 }
 
-/// An overwrite also moves no token. counter's `value` is a single shared slot;
-/// alice sets it, then bob overwrites it. Under the vault model alice would be
-/// refunded her displaced deposit; under the floor model nothing moves — alice's
-/// footprint just transfers to bob (the new depositor), and her balance is untouched.
+/// An overwrite also moves no token. alice writes a key, then bob overwrites the
+/// same key. Under the vault model alice would be refunded her displaced deposit;
+/// under the floor model nothing moves — alice's footprint just transfers to bob
+/// (the new depositor), and her balance is untouched. Uses this test's own key
+/// (not the `value` slot: `test_counter_batching` owns that on the shared
+/// instance — see the shared-instance rule on `test_delete_moves_no_token`).
 #[testlib::test(contracts_dir = "../../test-contracts")]
 async fn test_overwrite_moves_no_token() -> Result<()> {
     let admin = runtime.identity().await?;
@@ -60,18 +66,21 @@ async fn test_overwrite_moves_no_token() -> Result<()> {
     let alice_ref: HolderRef = (&alice).into();
     let contract = runtime.publish(&admin, "counter").await?;
 
-    // alice writes the shared slot (depositor = alice).
+    // alice writes the row (depositor = alice).
     let mut submit = runtime.submit();
-    submit.push(&alice, counter::increment_call(&contract));
+    submit.push(
+        &alice,
+        counter::set_entry_call(&contract, "overwrite-k", "a"),
+    );
     submit.execute().await?;
 
     let alice_before = token::balance(runtime, alice_ref.clone())
         .await?
         .unwrap_or_default();
 
-    // bob overwrites the same slot (depositor → bob). alice gets nothing.
+    // bob overwrites the same row (depositor → bob). alice gets nothing.
     let mut submit = runtime.submit();
-    submit.push(&bob, counter::increment_call(&contract));
+    submit.push(&bob, counter::set_entry_call(&contract, "overwrite-k", "b"));
     submit.execute().await?;
 
     let alice_after = token::balance(runtime, alice_ref.clone())
@@ -218,8 +227,11 @@ async fn test_token_floor_view_reports_deposit() -> Result<()> {
     );
 
     // alice writes a keyed entry (depositor = alice) → her floor becomes positive.
+    // Own key, per the shared-instance rule (see `test_delete_moves_no_token`):
+    // the assertion requires alice to still be the depositor of this row at read
+    // time, so no other test may overwrite or remove it.
     let mut submit = runtime.submit();
-    submit.push(&alice, counter::set_entry_call(&contract, "k", "v"));
+    submit.push(&alice, counter::set_entry_call(&contract, "floor-k", "v"));
     submit.execute().await?;
 
     let floor = token::floor(runtime, alice_ref.clone()).await?;
@@ -233,13 +245,21 @@ async fn test_token_floor_view_reports_deposit() -> Result<()> {
         //     read just didn't see it.
         //   * re-read STILL 0    → a PERSISTENT accounting bug (the resolved signer-id
         //     ≠ the id the deposit was recorded under, or the deposit wasn't recorded),
-        //     NOT a snapshot/timing issue.
+        //     NOT a snapshot/timing issue. (The historical cause of this branch —
+        //     another test overwriting/clearing this row on the shared counter —
+        //     is designed out by the per-test key + no-whole-map-ops rule.)
         // Capturing this only on failure keeps prod untouched and doesn't mask the flake.
         let reread = token::floor(runtime, alice_ref.clone()).await;
+        // Forensics resolve alice (and admin, in case the deposit landed under the
+        // wrong signer) from both the pubkey and the captured id, with footprints —
+        // naming which id actually holds the deposit, or that none does.
+        let alice_forensics = runtime.signer_forensics(&alice).await;
+        let admin_forensics = runtime.signer_forensics(&admin).await;
         panic!(
             "floor must be positive after a deposited write, got {floor}; \
              re-read = {reread:?} — POSITIVE ⇒ transient /view visibility lag; \
-             still 0 ⇒ persistent accounting bug (signer-id mismatch or deposit not recorded)"
+             still 0 ⇒ persistent accounting bug (signer-id mismatch or deposit not recorded)\n\
+             alice {alice_forensics}\nadmin {admin_forensics}"
         );
     }
 

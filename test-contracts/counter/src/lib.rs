@@ -53,13 +53,11 @@ impl Guest for Counter {
         ctx.model().entries().set(&key, "a".repeat(n as usize));
     }
 
-    // Delete every entry in one op — frees each key's row, dropping it from each
-    // setter's footprint (the floor relaxes; no token moves).
-    fn clear_all(ctx: &ProcContext) {
-        let entries = ctx.model().entries();
-        let keys: Vec<String> = entries.keys().collect();
-        for k in keys {
-            entries.remove(&k);
-        }
+    // Delete one entry — frees that key's row, dropping it from its setter's
+    // footprint (the floor relaxes; no token moves). Targeted rather than a
+    // whole-map clear: regtest tests share one published instance, each owning
+    // its own keys.
+    fn remove_entry(ctx: &ProcContext, key: String) {
+        ctx.model().entries().remove(&key);
     }
 }

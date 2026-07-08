@@ -28,6 +28,9 @@ world root {
 	// Write an `n`-byte value under `key` (built guest-side); accumulates footprint.
 	export fill-entry: async func(ctx: borrow<proc-context>, key: string, n: u32);
 
-	// Delete every map entry in one op — drops each key from its setter's footprint.
-	export clear-all: async func(ctx: borrow<proc-context>);
+	// Delete one map entry — drops that key from its setter's footprint. Targeted
+	// on purpose: regtest tests share one published instance (each publish costs a
+	// block confirmation), each owning its own keys — a whole-map clear would free
+	// other tests' rows mid-flight.
+	export remove-entry: async func(ctx: borrow<proc-context>, key: string);
 }
