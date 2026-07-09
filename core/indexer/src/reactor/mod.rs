@@ -54,6 +54,27 @@ use crate::{
 
 use executor::Executor;
 
+/// High-water mark on `consensus_state::pending_blocks`: the reactor stops
+/// draining `block_rx` once this many blocks are buffered ahead of consensus,
+/// letting the bounded poller→reactor channel fill and backpressure the Bitcoin
+/// poller. Without it, initial catch-up (or any consensus stall) buffers every
+/// block up to the chain tip — an unbounded `BTreeMap` of full blocks that
+/// OOM-kills the pod, which restarts, stalls consensus further, and grows the
+/// buffer again. Consensus always drains from the lowest buffered height, so
+/// gating the tail never starves it. At full mainnet blocks 128 caps the buffer
+/// near a few hundred MB; on signet it is negligible.
+///
+/// The gate also delays `BlockEvent::Rollback`: a rollback queued behind a full
+/// buffer is processed only after the buffered (possibly orphaned) blocks are
+/// decided, so `last_height` can advance up to this cap plus the block channel
+/// capacity past a reorg fork before the rollback lands. That self-heals — the
+/// rollback truncates and the poller re-sends from the fork — PROVIDED the
+/// pruned-state retain window still covers the fork: `prune_retain_blocks` must
+/// exceed `MAX_PENDING_BLOCKS` + channel capacity + real reorg headroom, or the
+/// deep-reorg bail in `process_block_event` fires on an ordinary shallow reorg.
+/// Keep this constant and that config default in lockstep.
+const MAX_PENDING_BLOCKS: usize = 128;
+
 pub type Simulation = (
     indexer_types::Transaction,
     oneshot::Sender<Result<Vec<OpWithResult>>>,
@@ -293,11 +314,17 @@ impl<E: Executor> Reactor<E> {
         fee_publish_ticker.tick().await; // consume the immediate first tick
 
         loop {
-            // Drain pending block events before entering select
-            while let Ok(event) = self.block_rx.try_recv() {
-                self.process_block_event(event)
-                    .await
-                    .context("process_block_event failed (try_recv drain)")?;
+            // Drain pending block events before entering select, but stop at the
+            // high-water mark so the bounded channel backpressures the poller
+            // instead of buffering to the chain tip.
+            while self.consensus.pending_blocks.len() < MAX_PENDING_BLOCKS {
+                match self.block_rx.try_recv() {
+                    Ok(event) => self
+                        .process_block_event(event)
+                        .await
+                        .context("process_block_event failed (try_recv drain)")?,
+                    Err(_) => break,
+                }
             }
 
             let hard_deadline_instant = self.consensus.pending_proposal.as_ref().map(|p| {
@@ -335,7 +362,8 @@ impl<E: Executor> Reactor<E> {
                     info!("Cancelled");
                     break;
                 }
-                Some(event) = self.block_rx.recv() => {
+                Some(event) = self.block_rx.recv(),
+                    if self.consensus.pending_blocks.len() < MAX_PENDING_BLOCKS => {
                     self.process_block_event(event)
                         .await
                         .context("process_block_event failed")?;

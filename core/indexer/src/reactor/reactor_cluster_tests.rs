@@ -1319,3 +1319,54 @@ async fn prod_reactor_simulate_transaction() -> Result<()> {
     cluster.shutdown().await;
     Ok(())
 }
+
+/// A node that can't finalize (here: consensus lacks quorum) must bound
+/// `pending_blocks` and backpressure the block producer rather than buffer every
+/// block up to the chain tip in memory — the unbounded-growth OOM that took down
+/// the signet validator set. See `MAX_PENDING_BLOCKS`.
+#[tokio::test]
+async fn prod_reactor_pending_blocks_bounded_under_stalled_consensus() -> Result<()> {
+    // 4-validator genesis, boot only 2 → 200/400 voting power, below the >2/3
+    // BFT threshold, so no `Value::Block` is ever decided and `pending_blocks`
+    // never drains. Without the high-water gate the reactor would drain its block
+    // channel into the map without limit.
+    let cluster = ReactorCluster::start_with(4, 2).await?;
+
+    // Flood one node with far more blocks than the buffer + channel can hold. Each
+    // send has a generous timeout; the first send that blocks past it is the
+    // backpressure point — the reactor has stopped draining at the high-water mark.
+    let producer = cluster.block_txs[0].clone();
+    let flood = 1200u64;
+    let mut accepted = 0u64;
+    for height in 1..=flood {
+        let event = BlockEvent::BlockInsert {
+            target_height: height,
+            block: indexer_types::Block {
+                height,
+                hash: crate::test_utils::new_mock_block_hash(height as u32),
+                prev_hash: crate::test_utils::new_mock_block_hash(height.saturating_sub(1) as u32),
+                transactions: Vec::new(),
+            },
+        };
+        match tokio::time::timeout(Duration::from_secs(5), producer.send(event)).await {
+            Ok(Ok(())) => accepted += 1,
+            _ => break,
+        }
+    }
+
+    // With the gate, accepted saturates near MAX_PENDING_BLOCKS (held in the map)
+    // plus the 256-slot test channel — far below the flood. Without it, all 1200
+    // would be accepted into the unbounded map.
+    let ceiling = super::MAX_PENDING_BLOCKS as u64 + 256 + 16;
+    assert!(
+        accepted >= super::MAX_PENDING_BLOCKS as u64,
+        "reactor did not drain up to the high-water mark: accepted {accepted}"
+    );
+    assert!(
+        accepted <= ceiling,
+        "pending_blocks is unbounded: accepted {accepted}/{flood} exceeds {ceiling} — high-water gate not applied"
+    );
+
+    cluster.shutdown().await;
+    Ok(())
+}

@@ -157,13 +157,19 @@ pub struct Config {
 
     /// Blocks below the tip to retain before a `contract_state` version becomes
     /// eligible for pruning. Floored at the consensus finality window at the
-    /// prune call site. Default 144 ≈ one day of Bitcoin blocks — deep enough
-    /// that a reorg crossing the prune horizon is effectively impossible.
+    /// prune call site. Must stay ABOVE the reactor's maximum in-flight block
+    /// buffer (`MAX_PENDING_BLOCKS` + the block channel capacity) plus real
+    /// reorg headroom: a rollback queued behind a full buffer is processed only
+    /// after the buffered blocks are decided, so `last_height` can sprint that
+    /// far past the fork before the rollback lands — the retained history is
+    /// what lets that self-heal instead of tripping the deep-reorg bail.
+    /// Default 288 ≈ two days of Bitcoin blocks: 160 of buffer sprint + 128 of
+    /// genuine reorg headroom.
     #[clap(
         long,
         env = "PRUNE_RETAIN_BLOCKS",
-        default_value = "144",
-        help = "Blocks below tip to retain before pruning (default 144 ≈ 1 day of Bitcoin blocks)"
+        default_value = "288",
+        help = "Blocks below tip to retain before pruning (default 288 ≈ 2 days of Bitcoin blocks)"
     )]
     pub prune_retain_blocks: u64,
 
@@ -205,7 +211,7 @@ impl Config {
             genesis_file: PathBuf::new(),
             consensus_propose_timeout_ms: 10000,
             prune: true,
-            prune_retain_blocks: 144,
+            prune_retain_blocks: 288,
             view_gas_limit: DEFAULT_VIEW_GAS_LIMIT,
         }
     }

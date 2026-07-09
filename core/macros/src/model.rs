@@ -54,7 +54,7 @@ pub fn generate_struct(
 
                 if utils::is_map_type(field_ty) {
                     let (k_ty, v_ty) = get_map_types(field_ty)?;
-                    let field_model_name = Ident::new(&format!("{}{}{}Model", type_name, &field_name.to_string().to_pascal_case(), write_prefix), field.span());
+                    let field_model_name = Ident::new(&format!("{}{}{}Model", type_name, field_name.to_string().to_pascal_case(), write_prefix), field.span());
                     let vi = value_item(write, &v_ty, field.span())?;
 
                     if vi.is_primitive {
@@ -227,7 +227,7 @@ pub fn generate_struct(
                     }
                 } else if utils::is_deque_type(field_ty) {
                     let v_ty = get_deque_type(field_ty)?;
-                    let field_model_name = Ident::new(&format!("{}{}{}Model", type_name, &field_name.to_string().to_pascal_case(), write_prefix), field.span());
+                    let field_model_name = Ident::new(&format!("{}{}{}Model", type_name, field_name.to_string().to_pascal_case(), write_prefix), field.span());
                     let vi = value_item(write, &v_ty, field.span())?;
                     let item_ty = &vi.item_ty;
 
