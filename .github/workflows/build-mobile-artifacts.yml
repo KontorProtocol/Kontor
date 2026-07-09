@@ -1,0 +1,128 @@
+name: Build Mobile Artifacts
+
+# On-demand build of the @kontor/sdk-native native binaries — the iOS
+# xcframework (needs macOS/Xcode, so it can't be built on the dev machine)
+# and the Android jniLibs — packaged as ONE downloadable tarball to drop into
+# sdk-native/ before `npm publish`.
+#
+# This job deliberately does NOT publish to npm (no token in CI); it only
+# produces the artifact. Download it, extract into sdk-native/, then publish
+# locally. Mirrors the build-mobile.sh recipe from mobile.yml's `bindings`
+# job. Manual trigger only.
+on:
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+  RUSTC_WRAPPER: sccache
+  SCCACHE_GHA_ENABLED: true
+  # See mobile.yml: pin the iOS deployment target so blst's C objects and the
+  # cdylib link agree (rustc's default 10.0 lacks symbols the recent iOS SDK's
+  # C objects reference).
+  IPHONEOS_DEPLOYMENT_TARGET: "15.1"
+
+jobs:
+  build:
+    name: build ${{ matrix.name }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: ios
+            os: macos-latest
+            targets: aarch64-apple-ios aarch64-apple-ios-sim x86_64-apple-ios
+          - name: android
+            os: ubuntu-latest
+            targets: aarch64-linux-android armv7-linux-androideabi x86_64-linux-android
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Add Rust targets
+        run: rustup target add ${{ matrix.targets }}
+      - uses: mozilla-actions/sccache-action@v0.0.9
+      - name: Cache Cargo registry
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+          key: cargo-registry-mobile-${{ matrix.name }}-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: cargo-registry-mobile-${{ matrix.name }}-
+      - name: Install cargo-ndk (Android)
+        if: matrix.name == 'android'
+        # Pinned to a major — an unpinned cargo-ndk major already broke this
+        # pipeline once (v4 dropping --no-strip; see build-mobile.sh).
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-ndk@4
+      - name: Setup Android NDK
+        if: matrix.name == 'android'
+        uses: nttld/setup-ndk@v1
+        id: ndk
+        with:
+          ndk-version: r27
+      - name: Install sdk-native deps
+        run: npm ci
+        working-directory: ./sdk-native
+      # build-mobile.sh runs `ubrn:generate` itself, then compiles + assembles
+      # the SHARED-library artifacts (dynamic-framework xcframework / jniLibs .so).
+      - name: Build native artifacts
+        working-directory: ./sdk-native
+        env:
+          ANDROID_NDK_HOME: ${{ steps.ndk.outputs.ndk-path }}
+        run: ./build-mobile.sh ${{ matrix.name }}
+      # Tar on the native runner so framework structure / perms / any symlinks
+      # survive the artifact round-trip (GitHub artifacts are zips). Paths are
+      # relative to sdk-native/ so the combined tarball extracts straight in.
+      - name: Package iOS piece
+        if: matrix.name == 'ios'
+        working-directory: ./sdk-native
+        run: tar -czf sdk-native-ios.tgz KontorSdkNativeFramework.xcframework
+      - name: Package Android piece
+        if: matrix.name == 'android'
+        working-directory: ./sdk-native
+        run: tar -czf sdk-native-android.tgz android/src/main/jniLibs
+      - name: Upload ${{ matrix.name }} piece
+        uses: actions/upload-artifact@v6
+        with:
+          name: sdk-native-${{ matrix.name }}
+          path: sdk-native/sdk-native-${{ matrix.name }}.tgz
+          if-no-files-found: error
+
+  package:
+    name: combine into one downloadable tarball
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v6
+        with:
+          name: sdk-native-ios
+          path: pieces
+      - uses: actions/download-artifact@v6
+        with:
+          name: sdk-native-android
+          path: pieces
+      # Extract both pieces into one tree laid out relative to sdk-native/,
+      # then re-tar as the single deliverable: `tar xzf sdk-native-binaries.tgz
+      # -C sdk-native/` puts the xcframework + jniLibs exactly where prepack
+      # expects them.
+      - name: Assemble combined tarball
+        run: |
+          mkdir -p payload
+          tar -xzf pieces/sdk-native-ios.tgz -C payload
+          tar -xzf pieces/sdk-native-android.tgz -C payload
+          echo "=== payload layout ==="
+          find payload -maxdepth 4 | sort
+          tar -czf sdk-native-binaries.tgz -C payload .
+      - name: Upload combined artifact
+        uses: actions/upload-artifact@v6
+        with:
+          name: sdk-native-binaries
+          path: sdk-native-binaries.tgz
+          if-no-files-found: error
