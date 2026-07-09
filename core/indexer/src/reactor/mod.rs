@@ -63,6 +63,16 @@ use executor::Executor;
 /// buffer again. Consensus always drains from the lowest buffered height, so
 /// gating the tail never starves it. At full mainnet blocks 128 caps the buffer
 /// near a few hundred MB; on signet it is negligible.
+///
+/// The gate also delays `BlockEvent::Rollback`: a rollback queued behind a full
+/// buffer is processed only after the buffered (possibly orphaned) blocks are
+/// decided, so `last_height` can advance up to this cap plus the block channel
+/// capacity past a reorg fork before the rollback lands. That self-heals — the
+/// rollback truncates and the poller re-sends from the fork — PROVIDED the
+/// pruned-state retain window still covers the fork: `prune_retain_blocks` must
+/// exceed `MAX_PENDING_BLOCKS` + channel capacity + real reorg headroom, or the
+/// deep-reorg bail in `process_block_event` fires on an ordinary shallow reorg.
+/// Keep this constant and that config default in lockstep.
 const MAX_PENDING_BLOCKS: usize = 128;
 
 pub type Simulation = (
