@@ -4,6 +4,9 @@
   "description": "React Native (JSI) backend for @kontor/sdk — native bindings over core/kontor-sdk-native (uniffi). Provides the same KontorBackend surface as the WASM component, so @kontor/sdk runs on iOS/Android.",
   "author": "Unspendable Labs <dev@unspendablelabs.com>",
   "license": "MIT",
+  "publishConfig": {
+    "access": "public"
+  },
   "repository": {
     "type": "git",
     "url": "git+https://github.com/KontorProtocol/Kontor.git",
