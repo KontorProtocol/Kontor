@@ -57,7 +57,7 @@ impl Client {
     pub async fn status(&self) -> Result<NodeStatus> {
         Ok(self
             .client
-            .get(format!("{}/status", &self.url))
+            .get(format!("{}/status", self.url))
             .send()
             .await?
             .json::<NodeStatus>()
@@ -69,7 +69,7 @@ impl Client {
     /// elapse. Backs the regtest harness's `wait_for_txids`.
     pub async fn index_wait(&self, since: &str, wait_ms: u64) -> Result<Info> {
         // `since` is a sha256 hex digest — URL-safe, no escaping needed.
-        let url = format!("{}?wait={}&since={}", &self.url, wait_ms, since);
+        let url = format!("{}?wait={}&since={}", self.url, wait_ms, since);
         Self::handle_response(self.client.get(url).send().await?).await
     }
 
@@ -77,7 +77,7 @@ impl Client {
     pub async fn checkpoint_at(&self, height: u64) -> Result<CheckpointRow> {
         Self::handle_response(
             self.client
-                .get(format!("{}/checkpoints/{height}", &self.url))
+                .get(format!("{}/checkpoints/{height}", self.url))
                 .send()
                 .await?,
         )
@@ -87,7 +87,7 @@ impl Client {
     pub async fn compose(&self, reveal: Reveal) -> Result<ComposeOutputs> {
         Self::handle_response(
             self.client
-                .post(format!("{}/transactions/compose", &self.url))
+                .post(format!("{}/transactions/compose", self.url))
                 .json(&reveal)
                 .send()
                 .await?,
@@ -98,7 +98,7 @@ impl Client {
     pub async fn compose_commit(&self, reveal: Reveal) -> Result<CommitOutputs> {
         Self::handle_response(
             self.client
-                .post(format!("{}/transactions/compose/commit", &self.url))
+                .post(format!("{}/transactions/compose/commit", self.url))
                 .json(&reveal)
                 .send()
                 .await?,
@@ -109,7 +109,7 @@ impl Client {
     pub async fn compose_reveal(&self, reveal: Reveal) -> Result<RevealOutputs> {
         Self::handle_response(
             self.client
-                .post(format!("{}/transactions/compose/reveal", &self.url))
+                .post(format!("{}/transactions/compose/reveal", self.url))
                 .json(&reveal)
                 .send()
                 .await?,
@@ -123,7 +123,7 @@ impl Client {
     ) -> Result<Vec<OpWithResult>> {
         Self::handle_response(
             self.client
-                .post(format!("{}/transactions/inspect", &self.url))
+                .post(format!("{}/transactions/inspect", self.url))
                 .json(&tx_hex)
                 .send()
                 .await?,
@@ -134,7 +134,7 @@ impl Client {
     pub async fn transaction_simulate(&self, tx_hex: TransactionHex) -> Result<Vec<OpWithResult>> {
         Self::handle_response(
             self.client
-                .post(format!("{}/transactions/simulate", &self.url))
+                .post(format!("{}/transactions/simulate", self.url))
                 .json(&tx_hex)
                 .send()
                 .await?,
@@ -145,7 +145,7 @@ impl Client {
     pub async fn transaction_inspect(&self, txid: &bitcoin::Txid) -> Result<Vec<OpWithResult>> {
         Self::handle_response(
             self.client
-                .get(format!("{}/transactions/{}/inspect", &self.url, txid))
+                .get(format!("{}/transactions/{}/inspect", self.url, txid))
                 .send()
                 .await?,
         )
@@ -158,7 +158,7 @@ impl Client {
         };
         Self::handle_response(
             self.client
-                .post(format!("{}/contracts/{}", &self.url, contract_address))
+                .post(format!("{}/contracts/{}", self.url, contract_address))
                 .json(&view_expr)
                 .send()
                 .await?,
@@ -169,7 +169,7 @@ impl Client {
     pub async fn wit(&self, contract_address: &ContractAddress) -> Result<ContractResponse> {
         Self::handle_response(
             self.client
-                .get(format!("{}/contracts/{}", &self.url, contract_address))
+                .get(format!("{}/contracts/{}", self.url, contract_address))
                 .send()
                 .await?,
         )
@@ -184,7 +184,7 @@ impl Client {
             self.client
                 .get(format!(
                     "{}/contracts/{}/provenance",
-                    &self.url, contract_address
+                    self.url, contract_address
                 ))
                 .send()
                 .await?,
@@ -195,7 +195,7 @@ impl Client {
     pub async fn result(&self, id: &OpResultId) -> Result<Option<ResultRow>> {
         Self::handle_response(
             self.client
-                .get(format!("{}/results/{}", &self.url, id))
+                .get(format!("{}/results/{}", self.url, id))
                 .send()
                 .await?,
         )
@@ -207,7 +207,7 @@ impl Client {
     pub async fn transaction(&self, txid: &str) -> Result<Option<TransactionRow>> {
         let res = self
             .client
-            .get(format!("{}/transactions/{}", &self.url, txid))
+            .get(format!("{}/transactions/{}", self.url, txid))
             .send()
             .await?;
         if res.status() == StatusCode::NOT_FOUND {
@@ -219,7 +219,7 @@ impl Client {
     pub async fn signer(&self, identifier: &str) -> Result<SignerResponse> {
         Self::handle_response(
             self.client
-                .get(format!("{}/signers/{}", &self.url, identifier))
+                .get(format!("{}/signers/{}", self.url, identifier))
                 .send()
                 .await?,
         )
@@ -231,7 +231,7 @@ impl Client {
     pub async fn signer_footprint(&self, identifier: &str) -> Result<Option<FootprintResponse>> {
         let res = self
             .client
-            .get(format!("{}/signers/{}/footprint", &self.url, identifier))
+            .get(format!("{}/signers/{}/footprint", self.url, identifier))
             .send()
             .await?;
         if res.status() == StatusCode::NOT_FOUND {
@@ -246,7 +246,7 @@ impl Client {
     pub async fn signer_opt(&self, identifier: &str) -> Result<Option<SignerResponse>> {
         let res = self
             .client
-            .get(format!("{}/signers/{}", &self.url, identifier))
+            .get(format!("{}/signers/{}", self.url, identifier))
             .send()
             .await?;
         if res.status() == StatusCode::NOT_FOUND {
