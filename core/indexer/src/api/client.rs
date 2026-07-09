@@ -1,8 +1,8 @@
 use anyhow::{Result, anyhow};
 use indexer_types::{
     CheckpointRow, CommitOutputs, ComposeOutputs, ContractProvenanceResponse, ContractResponse,
-    ErrorResponse, Info, OpWithResult, ResultResponse, ResultRow, Reveal, RevealOutputs,
-    SignerResponse, TransactionHex, TransactionRow, ViewExpr, ViewResult,
+    ErrorResponse, FootprintResponse, Info, OpWithResult, ResultResponse, ResultRow, Reveal,
+    RevealOutputs, SignerResponse, TransactionHex, TransactionRow, ViewExpr, ViewResult,
 };
 use reqwest::{Client as HttpClient, ClientBuilder, Response, StatusCode};
 use serde::{Deserialize, Serialize};
@@ -224,6 +224,20 @@ impl Client {
                 .await?,
         )
         .await
+    }
+
+    /// The signer's storage-deposit footprint (`/signers/{identifier}/footprint`).
+    /// `None` on 404 (signer not found), like `signer_opt`.
+    pub async fn signer_footprint(&self, identifier: &str) -> Result<Option<FootprintResponse>> {
+        let res = self
+            .client
+            .get(format!("{}/signers/{}/footprint", &self.url, identifier))
+            .send()
+            .await?;
+        if res.status() == StatusCode::NOT_FOUND {
+            return Ok(None);
+        }
+        Self::handle_response(res).await.map(Some)
     }
 
     /// Like `signer`, but `None` on 404 (identity genuinely not registered / not yet

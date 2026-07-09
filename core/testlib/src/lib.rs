@@ -217,6 +217,15 @@ pub trait RuntimeImpl: Send {
     async fn issuance(&mut self, signer: &Signer) -> Result<()>;
     async fn checkpoint(&mut self) -> Result<Option<String>>;
 
+    /// On-failure forensic snapshot of a harness signer against the live node:
+    /// pubkey→id and captured-id→entry resolutions plus storage footprints from
+    /// both directions. Diagnostic-only — call it from a test's failure branch
+    /// (never on the happy path) and include the string in the panic message.
+    /// Must not panic itself; resolution problems become part of the report.
+    async fn signer_forensics(&mut self, signer: &Signer) -> String {
+        format!("signer forensics: n/a for this runtime (signer {signer})")
+    }
+
     /// Get a clone of the underlying RegTester, if running against a regtest cluster.
     fn reg_tester(&self) -> Option<RegTester> {
         None
@@ -558,14 +567,70 @@ impl RuntimeRegtest {
 impl RuntimeImpl for RuntimeRegtest {
     async fn identity(&mut self) -> Result<Signer> {
         let identity = self.reg_tester.identity().await?;
-        let signer_id = self
-            .reg_tester
-            .get_signer_id(&identity.x_only_public_key().to_string())
-            .await?
-            .expect("identity must be registered");
+        let signer_id = self.reg_tester.resolve_signer_id(&identity).await?;
         let signer = Signer::Id(indexer::database::types::Identity::new(signer_id));
-        self.identities.insert(signer.clone(), identity);
+        // Distinct pool identities must never share an id — a silent overwrite
+        // here would misattribute every later op signed via this map.
+        if self.identities.insert(signer.clone(), identity).is_some() {
+            bail!("signer id {signer_id} resolved for two distinct pool identities");
+        }
         Ok(signer)
+    }
+
+    async fn signer_forensics(&mut self, signer: &Signer) -> String {
+        let captured_id = signer.to_string();
+        let Some(identity) = self.identities.get(signer) else {
+            return format!("signer forensics: captured_id={captured_id} has no harness identity");
+        };
+        let xonly = identity.x_only_public_key().to_string();
+        let client = self.reg_tester.kontor_client().await;
+        let mut out = format!("signer forensics: captured_id={captured_id} pubkey={xonly}");
+        match client.index().await {
+            Ok(i) => {
+                out += &format!(
+                    "\n  node: height={} consensus_height={:?}",
+                    i.height, i.consensus_height
+                );
+            }
+            Err(e) => out += &format!("\n  node: /api error: {e}"),
+        }
+        // Resolve from both directions: the pubkey (collision-free anchor) and the
+        // id the harness captured at pop time — plus each one's deposit footprint,
+        // so a misattributed deposit names the id it actually landed under.
+        for ident in [xonly.as_str(), captured_id.as_str()] {
+            match client.signer_opt(ident).await {
+                Ok(Some(e)) => {
+                    out += &format!(
+                        "\n  signer[{ident}]: id={} xonly={:?} next_nonce={:?}",
+                        e.signer_id, e.x_only_pubkey, e.next_nonce
+                    );
+                }
+                Ok(None) => out += &format!("\n  signer[{ident}]: NOT FOUND"),
+                Err(e) => out += &format!("\n  signer[{ident}]: error {e}"),
+            }
+            match client.signer_footprint(ident).await {
+                Ok(Some(f)) => {
+                    let contracts: Vec<(String, String, u64)> = f
+                        .by_contract
+                        .iter()
+                        .map(|c| {
+                            (
+                                c.contract_name.clone(),
+                                c.deposit.clone(),
+                                c.footprint_bytes,
+                            )
+                        })
+                        .collect();
+                    out += &format!(
+                        "\n  footprint[{ident}]: id={} total_deposit={} bytes={} by_contract={contracts:?}",
+                        f.signer_id, f.total_deposit, f.total_footprint_bytes
+                    );
+                }
+                Ok(None) => out += &format!("\n  footprint[{ident}]: NOT FOUND"),
+                Err(e) => out += &format!("\n  footprint[{ident}]: error {e}"),
+            }
+        }
+        out
     }
 
     async fn publish(
@@ -845,6 +910,11 @@ impl Runtime {
 
     pub async fn identity(&mut self) -> Result<Signer> {
         self.runtime.identity().await
+    }
+
+    /// See [`RuntimeImpl::signer_forensics`] — failure-branch diagnostics only.
+    pub async fn signer_forensics(&mut self, signer: &Signer) -> String {
+        self.runtime.signer_forensics(signer).await
     }
 
     pub async fn publish(&mut self, signer: &Signer, name: &str) -> Result<ContractAddress> {

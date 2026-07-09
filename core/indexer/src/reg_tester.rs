@@ -806,6 +806,43 @@ impl RegTester {
             .map(|entry| entry.signer_id))
     }
 
+    /// Resolve a popped pool identity's `signer_id`, polling instead of a
+    /// single-shot read (cluster reads under parallel CI load must poll — a
+    /// transient transport failure or indexing lag would otherwise panic the
+    /// test). Also verifies the row is fully registered and self-consistent
+    /// before capture: the pubkey→id→entry round-trip carries this identity's
+    /// x-only AND BLS pubkeys and a forward re-read returns the same id — so a
+    /// registry inconsistency fails loudly here rather than surfacing later as
+    /// misattributed ops.
+    pub async fn resolve_signer_id(&self, identity: &Identity) -> Result<u64> {
+        let xonly = identity.x_only_public_key().to_string();
+        retry_extended(async || {
+            let id = self
+                .get_signer_id(&xonly)
+                .await?
+                .ok_or_else(|| anyhow!("signer row not yet visible for {xonly}"))?;
+            let entry = self
+                .get_signer_entry(&id.to_string())
+                .await?
+                .ok_or_else(|| anyhow!("signer id {id} not resolvable back to an entry"))?;
+            if entry.x_only_pubkey.as_deref() != Some(xonly.as_str()) {
+                bail!(
+                    "signer id {id} maps to pubkey {:?}, not {xonly}",
+                    entry.x_only_pubkey
+                );
+            }
+            if entry.bls_pubkey.as_deref() != Some(identity.bls_pubkey.as_slice()) {
+                bail!("signer id {id} carries a different BLS pubkey than identity {xonly}");
+            }
+            let reread = self.get_signer_id(&xonly).await?;
+            if reread != Some(id) {
+                bail!("signer id for {xonly} unstable during resolution: {id} then {reread:?}");
+            }
+            Ok(id)
+        })
+        .await
+    }
+
     pub async fn get_bls_pubkey(&self, xonly: &str) -> Result<Option<Vec<u8>>> {
         match self.kontor_client().await.signer(xonly).await {
             Ok(entry) => Ok(entry.bls_pubkey),
