@@ -38,17 +38,27 @@ set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wall")
 set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Werror")
 
 # The Rust core ships as a pre-linked shared library (libkontor_sdk_native.so in
-# jniLibs), not a static archive — see build-mobile.sh for why. Link it as a
-# SHARED import: Gradle packages the .so into the APK's lib/<abi>/, and the
-# dynamic linker resolves it at load time (KontorSdkNativeModule.kt loads it
-# explicitly before this JSI adapter, so it is already in the process).
+# jniLibs), not a static archive — see build-mobile.sh for why. Gradle packages
+# the .so into the APK's lib/<abi>/, and KontorSdkNativeModule.kt loads it
+# explicitly (System.loadLibrary("kontor_sdk_native")) before this JSI adapter,
+# so it is already resolved in the process by the time the adapter is loaded.
+#
+# Link it via a library search directory + -l, NOT by absolute path. The core
+# cdylib carries no DT_SONAME (uniffi's cdylib is emitted without one), so linking
+# it by full path makes the linker bake that build-time path in verbatim as this
+# adapter's DT_NEEDED — e.g.
+#   ../../../../src/main/jniLibs/arm64-v8a/libkontor_sdk_native.so
+# On device every .so is flattened into lib/<abi>/, so that path cannot be
+# resolved and the process aborts (UnsatisfiedLinkError) the first time the
+# adapter loads. Resolved through -l instead, the linker records the bare basename
+# "libkontor_sdk_native.so", which the loader matches against the core already
+# loaded above.
 cmake_path(
-  SET MY_RUST_LIB
-  ${CMAKE_SOURCE_DIR}/src/main/jniLibs/${ANDROID_ABI}/libkontor_sdk_native.so
+  SET MY_RUST_LIB_DIR
+  ${CMAKE_SOURCE_DIR}/src/main/jniLibs/${ANDROID_ABI}
   NORMALIZE
 )
-add_library(my_rust_lib SHARED IMPORTED)
-set_target_properties(my_rust_lib PROPERTIES IMPORTED_LOCATION ${MY_RUST_LIB})
+target_link_directories(kontor-sdk-native PRIVATE ${MY_RUST_LIB_DIR})
 
 # Add ReactAndroid libraries, being careful to account for different versions.
 find_package(ReactAndroid REQUIRED CONFIG)
@@ -77,5 +87,5 @@ target_link_libraries(
   fbjni::fbjni
   ReactAndroid::jsi
   ${LOGCAT}
-  my_rust_lib
+  kontor_sdk_native
 )
