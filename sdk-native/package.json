@@ -1,6 +1,6 @@
 {
   "name": "@kontor/sdk-native",
-  "version": "0.3.0-rc.4",
+  "version": "0.3.0-rc.5",
   "description": "React Native (JSI) backend for @kontor/sdk — native bindings over core/kontor-sdk-native (uniffi). Provides the same KontorBackend surface as the WASM component, so @kontor/sdk runs on iOS/Android.",
   "author": "Unspendable Labs <dev@unspendablelabs.com>",
   "license": "MIT",
