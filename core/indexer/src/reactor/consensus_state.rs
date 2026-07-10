@@ -29,10 +29,10 @@ use crate::consensus::{
     ValidatorSet, Value,
 };
 use crate::database::queries::{
-    delete_batches_above_anchor, get_checkpoint_latest, get_transaction_by_txid,
-    select_batches_from_anchor, select_batches_in_range, select_block_at_height,
-    select_block_latest, select_existing_txids, select_latest_consensus_height,
-    select_min_batch_height, select_unconfirmed_batch_txs,
+    delete_batches_above_anchor, delete_unconfirmed_batch_txs_above_anchor, get_checkpoint_latest,
+    get_transaction_by_txid, select_batches_from_anchor, select_batches_in_range,
+    select_block_at_height, select_block_latest, select_existing_txids,
+    select_latest_consensus_height, select_min_batch_height, select_unconfirmed_batch_txs,
 };
 
 /// Result from processing a consensus message.
@@ -133,18 +133,30 @@ impl ConsensusState {
         engine_handle: malachitebft_app_channel::EngineHandle,
         validator_index: Option<usize>,
         mempool_fee_index: MempoolFeeIndex,
-    ) -> Self {
+    ) -> Result<Self> {
         let current_validator_set = genesis.validator_set;
 
         // Delete batch decisions that reference anchor heights above what we've
-        // actually processed. These were committed to the batches table but never
-        // executed before the node shut down.
-        if let Ok(deleted) = delete_batches_above_anchor(&conn, last_block_height).await
-            && deleted > 0
-        {
+        // actually processed — committed to the batches table but never executed
+        // before the node shut down (the node forgets them and re-syncs those
+        // consensus heights from peers). Their `unconfirmed_batch_txs` children
+        // must go first: the FK carries no cascade (deliberately — see
+        // schema.sql), so a crash mid-rollback-replay leaves children that would
+        // make the parent delete fail. That failure used to be swallowed by an
+        // `if let Ok`, silently resuming consensus above decisions this node
+        // never executed (#424) — it now propagates.
+        let deleted_txs = delete_unconfirmed_batch_txs_above_anchor(&conn, last_block_height)
+            .await
+            .context("Failed to delete unconfirmed txs of unprocessed batches")?;
+        let deleted = delete_batches_above_anchor(&conn, last_block_height)
+            .await
+            .context("Failed to delete unprocessed batches above last block height")?;
+        if deleted > 0 || deleted_txs > 0 {
             info!(
                 deleted,
-                last_block_height, "Deleted unprocessed batches above last block height"
+                deleted_txs,
+                last_block_height,
+                "Deleted unprocessed batches above last block height"
             );
         }
 
@@ -156,7 +168,7 @@ impl ConsensusState {
             }
             _ => Height::new(1),
         };
-        Self {
+        Ok(Self {
             signing_provider,
             address,
             pending_transactions: std::collections::HashMap::new(),
@@ -174,7 +186,7 @@ impl ConsensusState {
             channels,
             engine_handle,
             validator_index,
-        }
+        })
     }
 
     /// Clear consensus state that is invalidated by a reorg rollback.
@@ -293,7 +305,7 @@ impl ConsensusState {
 
         at_deadline.sort_by_key(|b| (b.anchor_height, b.consensus_height));
 
-        for batch in &at_deadline {
+        for (i, batch) in at_deadline.iter().enumerate() {
             let mut missing = Vec::new();
             for txid in &batch.txids {
                 let confirmed = match get_transaction_by_txid(conn, &txid.to_string()).await {
@@ -318,6 +330,14 @@ impl ConsensusState {
             } else {
                 let from_anchor = batch.anchor_height;
                 let mut invalidated = vec![batch.consensus_height];
+
+                // Every remaining at-deadline batch shares this fate: the sort
+                // above orders by (anchor_height, consensus_height), so all of
+                // them have anchor_height >= from_anchor and are replayed by
+                // this same rollback. Fold them into the invalidated set
+                // explicitly — silently dropping them from tracking left
+                // convergence to an implicit replay invariant (#426).
+                invalidated.extend(at_deadline[i + 1..].iter().map(|b| b.consensus_height));
 
                 let mut surviving = Vec::new();
                 for pending in still_pending.drain(..) {

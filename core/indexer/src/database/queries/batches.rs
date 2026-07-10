@@ -36,6 +36,25 @@ pub async fn delete_batches_above_anchor(conn: &Connection, max_anchor: u64) -> 
     Ok(rows)
 }
 
+/// Delete the `unconfirmed_batch_txs` children of every batch above
+/// `max_anchor`. Must run before `delete_batches_above_anchor`: the FK carries
+/// no cascade (deliberately — see schema.sql), so surviving children would
+/// make the parent delete fail.
+pub async fn delete_unconfirmed_batch_txs_above_anchor(
+    conn: &Connection,
+    max_anchor: u64,
+) -> Result<u64, Error> {
+    let rows = conn
+        .execute(
+            "DELETE FROM unconfirmed_batch_txs WHERE batch_height IN \
+             (SELECT consensus_height FROM batches WHERE anchor_height > ?)",
+            params![max_anchor],
+        )
+        .await?;
+
+    Ok(rows)
+}
+
 pub async fn select_latest_consensus_height(conn: &Connection) -> Result<Option<u64>, Error> {
     // `SELECT MAX(...)` always yields a row (NULL on empty table). Read the
     // column directly as `Option<u64>` so NULL surfaces as `None` and any

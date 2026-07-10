@@ -18,6 +18,13 @@ CREATE TABLE IF NOT EXISTS batches (
   is_block BOOLEAN NOT NULL DEFAULT 0
 );
 
+-- The batch_height FK (here and on unconfirmed_batch_txs) deliberately has NO
+-- cascade: batches are the decided consensus record and are never deleted while
+-- children exist. Rollbacks delete transactions via the height->blocks cascade;
+-- the one path that deletes batches (startup cleanup of decided-but-unexecuted
+-- rows, ConsensusState::new) deletes children explicitly first, and FK
+-- enforcement failing LOUD there is the guard against any future deletion path
+-- forgetting to.
 CREATE TABLE IF NOT EXISTS transactions (
   id INTEGER PRIMARY KEY,
   txid TEXT NOT NULL UNIQUE,

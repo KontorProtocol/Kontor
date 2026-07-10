@@ -103,6 +103,38 @@ fn dependency_sort(txs: &[bitcoin::Transaction]) -> Vec<usize> {
     ordered
 }
 
+/// Expand a set of excluded txids to every batch tx that (transitively) spends
+/// an excluded tx's output. Rollback replay filters excluded txids out of
+/// replayed batches; dropping a parent while keeping its child would execute
+/// the child against missing UTXOs and commit its deterministic failure —
+/// silent state divergence (#427). Operates over the ordered replay sequence,
+/// since a child may sit in a later batch than its parent. One forward pass
+/// reaches the fixed point because parents always precede children: within a
+/// batch by the dependency-order consensus rule, across batches because a
+/// child can only be decided after its parent's batch existed.
+fn transitive_exclusion(
+    batches: &[Vec<bitcoin::Transaction>],
+    excluded: &HashSet<Txid>,
+) -> HashSet<Txid> {
+    let mut excluded = excluded.clone();
+    for txs in batches {
+        for tx in txs {
+            let txid = tx.compute_txid();
+            if excluded.contains(&txid) {
+                continue;
+            }
+            if tx
+                .input
+                .iter()
+                .any(|i| excluded.contains(&i.previous_output.txid))
+            {
+                excluded.insert(txid);
+            }
+        }
+    }
+    excluded
+}
+
 /// Check that a batch's transactions are in a valid dependency order:
 /// every tx that spends another batch tx's output appears *after* that
 /// producer.
@@ -186,6 +218,39 @@ impl<E: Executor> Reactor<E> {
                 duration_ms = started_at.elapsed().as_millis() as u64,
                 "Empty batch recorded"
             );
+            return Ok(());
+        }
+
+        // A decided batch may only EXECUTE against the exact chain state it was
+        // anchored to: the local tip must sit at `anchor_height` with
+        // `anchor_hash`. Anything else — a deferred drain whose anchor fell
+        // behind, or a replay whose anchor block was reorged away — is recorded
+        // for sync/bookkeeping but NOT executed: executing against a different
+        // tip writes state (and a checkpoint) at a height the chain disagrees
+        // about, i.e. silent divergence. A skipped batch's txids then simply
+        // never confirm here and the finality window resolves it.
+        // `None` ⇔ all-zeros is the pre-genesis convention `make_value` and
+        // proposal validation anchor with.
+        let local_hash = self.last_hash.unwrap_or(BlockHash::all_zeros());
+        if anchor_height != self.last_height || anchor_hash != local_hash {
+            warn!(
+                anchor_height,
+                %anchor_hash,
+                last_height = self.last_height,
+                %local_hash,
+                consensus_height = %consensus_height,
+                "Skipping decided batch — anchor does not match local tip; recording only"
+            );
+            insert_batch(
+                &conn,
+                consensus_height.as_u64(),
+                anchor_height,
+                &anchor_hash.to_string(),
+                certificate,
+                false,
+            )
+            .await
+            .context("Failed to record anchor-mismatched batch for sync")?;
             return Ok(());
         }
 
@@ -546,10 +611,41 @@ impl<E: Executor> Reactor<E> {
         let mut deferred: std::collections::VecDeque<consensus_state::DeferredDecision> =
             replay_batches.into();
         if !excluded_txids.is_empty() {
-            for decision in &mut deferred {
-                if let Value::Batch { ref mut txs, .. } = decision.value {
-                    txs.retain(|tx| !excluded_txids.contains(&tx.txid()));
+            // Resolve every replay batch to raw transactions first: exclusion
+            // must see tx INPUTS to also drop descendants of excluded txs — the
+            // DB-loaded decisions carry only txids, and filtering a parent out
+            // while keeping its child would break the dependency order the
+            // batch was decided under (#427). Resolution pulls from the same
+            // sources the deferred drain would use later.
+            let mut resolved: Vec<Vec<bitcoin::Transaction>> = Vec::with_capacity(deferred.len());
+            for decision in &deferred {
+                match &decision.value {
+                    Value::Batch { txs, .. } => resolved.push(self.resolve_batch_txs(txs).await?),
+                    Value::Block { .. } => resolved.push(Vec::new()),
                 }
+            }
+            let excluded = transitive_exclusion(&resolved, &excluded_txids);
+            for (decision, txs) in deferred.iter_mut().zip(resolved) {
+                if let Value::Batch {
+                    anchor_height,
+                    anchor_hash,
+                    ..
+                } = &decision.value
+                {
+                    let (anchor_height, anchor_hash) = (*anchor_height, *anchor_hash);
+                    let kept: Vec<bitcoin::Transaction> = txs
+                        .into_iter()
+                        .filter(|tx| !excluded.contains(&tx.compute_txid()))
+                        .collect();
+                    decision.value = Value::new_batch_raw(anchor_height, anchor_hash, kept);
+                }
+            }
+            // The excluded txids must also leave the proposal pool, or the next
+            // make_value re-proposes the very txs whose missing confirmations
+            // caused this rollback — repeating the same finality failure in a
+            // loop with no forward progress.
+            for txid in &excluded {
+                self.consensus.pending_transactions.remove(txid);
             }
         }
         self.consensus.deferred_decisions = deferred;
@@ -572,13 +668,34 @@ impl<E: Executor> Reactor<E> {
             };
 
             match &decision.value {
-                Value::Block { height: bh, .. } => {
+                Value::Block {
+                    height: bh,
+                    hash: decided_hash,
+                } => {
                     let bh = *bh;
+                    let decided_hash = *decided_hash;
                     let block = {
                         let cs = &mut self.consensus;
                         cs.pending_blocks.remove(&bh)
                     };
                     if let Some(block) = block {
+                        // A rollback can leave a decision whose block was
+                        // reorged away; the block now pending at this height
+                        // belongs to the NEW chain. Executing it under the old
+                        // decision would bind the wrong block to that consensus
+                        // record — drop the stale decision instead and leave
+                        // the block pending for a fresh proposal.
+                        if block.hash != decided_hash {
+                            warn!(
+                                block_height = bh,
+                                decided = %decided_hash,
+                                local = %block.hash,
+                                consensus_height = %decision.consensus_height,
+                                "Dropping stale deferred block decision — hash mismatch after rollback"
+                            );
+                            self.consensus.pending_blocks.insert(bh, block);
+                            continue;
+                        }
                         info!(
                             block_height = bh,
                             consensus_height = %decision.consensus_height,
@@ -881,10 +998,11 @@ impl<E: Executor> Reactor<E> {
 
 #[cfg(test)]
 mod tests {
-    use super::{batch_is_ordered, dependency_sort};
+    use super::{batch_is_ordered, dependency_sort, transitive_exclusion};
     use bitcoin::absolute::LockTime;
     use bitcoin::transaction::Version;
-    use bitcoin::{Amount, OutPoint, ScriptBuf, Sequence, Transaction, TxIn, TxOut, Witness};
+    use bitcoin::{Amount, OutPoint, ScriptBuf, Sequence, Transaction, TxIn, TxOut, Txid, Witness};
+    use std::collections::HashSet;
 
     /// A tx spending each outpoint in `parents`, with one output. `nonce`
     /// perturbs the output value so distinct txs get distinct txids.
@@ -962,5 +1080,51 @@ mod tests {
         let b = tx(&[OutPoint::null()], 2);
         let c = tx(&[OutPoint::null()], 3);
         assert_eq!(dependency_sort(&[a, b, c]), vec![0, 1, 2]);
+    }
+
+    #[test]
+    fn transitive_exclusion_drops_descendants_within_a_batch() {
+        let parent = tx(&[OutPoint::null()], 1);
+        let child = tx(&[spend(&parent)], 2);
+        let grandchild = tx(&[spend(&child)], 3);
+        let independent = tx(&[OutPoint::null()], 4);
+
+        let excluded: HashSet<Txid> = [parent.compute_txid()].into();
+        let batch = vec![
+            parent.clone(),
+            child.clone(),
+            grandchild.clone(),
+            independent.clone(),
+        ];
+        let result = transitive_exclusion(&[batch], &excluded);
+
+        assert!(result.contains(&parent.compute_txid()));
+        assert!(result.contains(&child.compute_txid()));
+        assert!(result.contains(&grandchild.compute_txid()));
+        assert!(!result.contains(&independent.compute_txid()));
+    }
+
+    #[test]
+    fn transitive_exclusion_crosses_batch_boundaries() {
+        let parent = tx(&[OutPoint::null()], 1);
+        let child = tx(&[spend(&parent)], 2);
+        let excluded: HashSet<Txid> = [parent.compute_txid()].into();
+
+        // Parent in batch 0, child in batch 1 — the closure must follow the
+        // dependency across the replay sequence.
+        let result = transitive_exclusion(&[vec![parent.clone()], vec![child.clone()]], &excluded);
+        assert!(result.contains(&child.compute_txid()));
+    }
+
+    #[test]
+    fn transitive_exclusion_leaves_unrelated_batches_untouched() {
+        let a = tx(&[OutPoint::null()], 1);
+        let b = tx(&[OutPoint::null()], 2);
+        let excluded: HashSet<Txid> = [tx(&[OutPoint::null()], 9).compute_txid()].into();
+
+        let result = transitive_exclusion(&[vec![a.clone()], vec![b.clone()]], &excluded);
+        assert!(!result.contains(&a.compute_txid()));
+        assert!(!result.contains(&b.compute_txid()));
+        assert_eq!(result.len(), 1);
     }
 }

@@ -350,7 +350,8 @@ impl ReactorCluster {
                 validator_index,
                 crate::reactor::mempool_fee_index::MempoolFeeIndex::new(None),
             )
-            .await;
+            .await
+            .expect("ConsensusState::new failed");
             state.observation = Some(ObservationChannels {
                 decided_tx: dtx,
                 finality_tx: ftx,
@@ -618,6 +619,42 @@ impl ReactorCluster {
         BlockResult {
             state_events,
             events,
+        }
+    }
+
+    /// Like `wait_for_block`, but for a block REPLAYED after a rollback: the
+    /// reactor re-executes it under its original consensus decision (reloaded
+    /// from the batches table), so no fresh decide is observed — only
+    /// per-node processing and events.
+    async fn wait_for_block_replayed(&mut self, height: u64, timeout: Duration) {
+        let n = self.node_count;
+        let mut state_count = 0;
+        let mut event_count = 0;
+        let deadline = tokio::time::sleep(timeout);
+        tokio::pin!(deadline);
+
+        loop {
+            if state_count >= n && event_count >= n {
+                break;
+            }
+            tokio::select! {
+                _ = &mut deadline => {
+                    panic!(
+                        "wait_for_block_replayed(height={height}) timed out: state={state_count}/{n} event={event_count}/{n}"
+                    );
+                }
+                Some(_) = self.decided_rx.recv() => {}
+                Some(se) = self.state_rx.recv() => {
+                    if matches!(&se, StateEvent::BlockProcessed { height: h, .. } if *h == height) {
+                        state_count += 1;
+                    }
+                }
+                Some(ev) = self.event_rx.recv() => {
+                    if matches!(&ev, Event::Processed { block, .. } if block.height == height) {
+                        event_count += 1;
+                    }
+                }
+            }
         }
     }
 
@@ -1213,11 +1250,21 @@ async fn prod_reactor_bitcoin_rollback_reverts_state() -> Result<()> {
     cluster.send_block_event(BlockEvent::Rollback { to_height: 1 });
     cluster.wait_for_rollback(1, Duration::from_secs(60)).await;
 
+    // The mock chain re-delivers IDENTICAL blocks after the rollback, so the
+    // reactor replays them under their original consensus decisions (reloaded
+    // from the batches table) — re-executed and events emitted, but no fresh
+    // decide. Re-deciding the same block at a new consensus height (the old
+    // behavior) would leave two decided records for one block, which wedges a
+    // syncing node's replay.
     cluster.mine_empty_and_send();
-    cluster.wait_for_block(2, Duration::from_secs(60)).await;
+    cluster
+        .wait_for_block_replayed(2, Duration::from_secs(60))
+        .await;
 
     cluster.mine_empty_and_send();
-    cluster.wait_for_block(3, Duration::from_secs(60)).await;
+    cluster
+        .wait_for_block_replayed(3, Duration::from_secs(60))
+        .await;
 
     cluster.shutdown().await;
     Ok(())

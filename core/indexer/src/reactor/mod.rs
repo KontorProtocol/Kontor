@@ -285,6 +285,20 @@ impl<E: Executor> Reactor<E> {
                     .await
                     .context("rollback failed during Bitcoin reorg")?;
                 self.consensus.clear_on_rollback();
+                // Decided-but-unexecuted values above the fork must not be
+                // forgotten along with the in-memory queue: reload them from the
+                // batches table so every decided value drains to a deterministic
+                // outcome. Post-reorg, entries whose anchor/block no longer
+                // matches the new chain resolve as record-only skips
+                // (`process_decided_batch`'s anchor gate, the drain's block-hash
+                // check) rather than lingering as a silent divergence between
+                // the consensus record and executed state.
+                let replays = self
+                    .consensus
+                    .get_decided_from_anchor(&self.db_conn(), to_height + 1)
+                    .await
+                    .context("Failed to reload decided values after Bitcoin reorg")?;
+                self.consensus.deferred_decisions = replays.into();
                 let checkpoint = self.consensus.get_checkpoint(&self.db_conn()).await;
                 self.consensus
                     .emit_state_event(StateEvent::RollbackExecuted {
@@ -476,7 +490,15 @@ impl<E: Executor> Reactor<E> {
                                     checkpoint,
                                 });
 
-                                // Process deferred decisions using already-cached blocks
+                                // Process deferred decisions using already-cached blocks.
+                                // `pending_blocks` is deliberately NOT cleared here (#430):
+                                // a finality rollback re-executes against the SAME Bitcoin
+                                // chain, so cached blocks are still the right data and make
+                                // this drain immediate — `replay_blocks_from` re-delivery is
+                                // only the fallback. The Bitcoin-reorg path (`BlockEvent::
+                                // Rollback`) clears them instead because there the blocks
+                                // themselves changed; the drain's block-hash check guards
+                                // any stale remainder in both paths.
                                 self.drain_deferred_decisions()
                                     .await
                                     .context("drain_deferred_decisions failed after finality rollback")?;
@@ -704,7 +726,8 @@ pub async fn start_consensus(
         validator_index,
         mempool_fee_index,
     )
-    .await;
+    .await
+    .context("Failed to build consensus state")?;
     state.observation = observation_channels;
     if let Some(t) = timeouts {
         state.timeouts = t;
