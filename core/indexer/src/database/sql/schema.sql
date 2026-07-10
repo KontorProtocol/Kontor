@@ -36,6 +36,14 @@ CREATE TABLE IF NOT EXISTS transactions (
   FOREIGN KEY (batch_height) REFERENCES batches (consensus_height)
 );
 
+-- Rollback replay reloads decided values by anchor (`WHERE anchor_height >= ?`
+-- joined to transactions on batch_height). `batches` grows one row per
+-- consensus height for the life of the chain and runs this on every Bitcoin
+-- reorg — without these two indexes it's a full scan on both sides of the join.
+CREATE INDEX IF NOT EXISTS idx_batches_anchor_height ON batches (anchor_height);
+CREATE INDEX IF NOT EXISTS idx_transactions_batch_height ON transactions (batch_height)
+  WHERE batch_height IS NOT NULL;
+
 CREATE TABLE IF NOT EXISTS contracts (
   id INTEGER PRIMARY KEY,
   name TEXT NOT NULL,
