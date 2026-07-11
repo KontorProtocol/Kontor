@@ -622,42 +622,6 @@ impl ReactorCluster {
         }
     }
 
-    /// Like `wait_for_block`, but for a block REPLAYED after a rollback: the
-    /// reactor re-executes it under its original consensus decision (reloaded
-    /// from the batches table), so no fresh decide is observed — only
-    /// per-node processing and events.
-    async fn wait_for_block_replayed(&mut self, height: u64, timeout: Duration) {
-        let n = self.node_count;
-        let mut state_count = 0;
-        let mut event_count = 0;
-        let deadline = tokio::time::sleep(timeout);
-        tokio::pin!(deadline);
-
-        loop {
-            if state_count >= n && event_count >= n {
-                break;
-            }
-            tokio::select! {
-                _ = &mut deadline => {
-                    panic!(
-                        "wait_for_block_replayed(height={height}) timed out: state={state_count}/{n} event={event_count}/{n}"
-                    );
-                }
-                Some(_) = self.decided_rx.recv() => {}
-                Some(se) = self.state_rx.recv() => {
-                    if matches!(&se, StateEvent::BlockProcessed { height: h, .. } if *h == height) {
-                        state_count += 1;
-                    }
-                }
-                Some(ev) = self.event_rx.recv() => {
-                    if matches!(&ev, Event::Processed { block, .. } if block.height == height) {
-                        event_count += 1;
-                    }
-                }
-            }
-        }
-    }
-
     /// Wait until a rollback is executed and events emitted.
     /// Cross-checks: state_rx (RollbackExecuted), event_rx (Event::Rolledback).
     async fn wait_for_rollback(&mut self, to_height: u64, timeout: Duration) -> RollbackResult {
@@ -1250,21 +1214,67 @@ async fn prod_reactor_bitcoin_rollback_reverts_state() -> Result<()> {
     cluster.send_block_event(BlockEvent::Rollback { to_height: 1 });
     cluster.wait_for_rollback(1, Duration::from_secs(60)).await;
 
-    // The mock chain re-delivers IDENTICAL blocks after the rollback, so the
-    // reactor replays them under their original consensus decisions (reloaded
-    // from the batches table) — re-executed and events emitted, but no fresh
-    // decide. Re-deciding the same block at a new consensus height (the old
-    // behavior) would leave two decided records for one block, which wedges a
-    // syncing node's replay.
+    // Post-rollback, the decisions above the fork are forgotten and the
+    // re-delivered blocks are proposed and decided FRESH; the duplicate
+    // decided rows this leaves for identical blocks are drained safely on
+    // sync by the drain's already-executed/stale checks.
     cluster.mine_empty_and_send();
-    cluster
-        .wait_for_block_replayed(2, Duration::from_secs(60))
-        .await;
+    cluster.wait_for_block(2, Duration::from_secs(60)).await;
 
     cluster.mine_empty_and_send();
-    cluster
-        .wait_for_block_replayed(3, Duration::from_secs(60))
-        .await;
+    cluster.wait_for_block(3, Duration::from_secs(60)).await;
+
+    cluster.shutdown().await;
+    Ok(())
+}
+
+/// A Bitcoin rollback across a NON-empty decided batch: the batch's effects
+/// roll back with the blocks, the forgotten decision is not ghost-replayed
+/// (the audit regression: a decided-value reload placed after the truncation
+/// replayed batches with zero txids), the drain does not wedge on stale
+/// decisions, and the txs re-execute via a fresh mempool→batch decision on
+/// the re-delivered chain.
+#[tokio::test]
+async fn prod_reactor_bitcoin_rollback_across_decided_batch() -> Result<()> {
+    crate::logging::setup();
+
+    let mut cluster = ReactorCluster::start(3).await?;
+    cluster.wait_for_ready().await;
+
+    cluster.mine_empty_and_send();
+    cluster.wait_for_block(1, Duration::from_secs(60)).await;
+    cluster.mine_empty_and_send();
+    cluster.wait_for_block(2, Duration::from_secs(60)).await;
+
+    let mempool_events = cluster.mock_bitcoin().generate_mempool_txs(2);
+    for event in mempool_events.clone() {
+        cluster.send_mempool_event(event);
+    }
+    let first = cluster.wait_for_batch(2, Duration::from_secs(60)).await;
+    assert_eq!(first.txids.len(), 2, "setup batch must carry both txs");
+
+    // Reorg below the batch anchor — its effects are wiped with the blocks
+    // and its decision is forgotten (rows stay as consensus history).
+    cluster.mock_bitcoin().reset_to(1);
+    cluster.send_block_event(BlockEvent::Rollback { to_height: 1 });
+    cluster.wait_for_rollback(1, Duration::from_secs(60)).await;
+
+    // The re-delivered chain decides block 2 fresh; the rolled-back txs
+    // return via the mempool and re-execute in a NEW batch at the same
+    // anchor. This times out if a ghost replay consumed the txids
+    // (empty-batch record with txid_count=0) or if a stale reloaded
+    // decision wedged the drain.
+    cluster.mine_empty_and_send();
+    cluster.wait_for_block(2, Duration::from_secs(60)).await;
+    for event in mempool_events {
+        cluster.send_mempool_event(event);
+    }
+    let replayed = cluster.wait_for_batch(2, Duration::from_secs(60)).await;
+    assert_eq!(
+        replayed.txids.len(),
+        2,
+        "rolled-back batch txs must re-execute in a fresh batch"
+    );
 
     cluster.shutdown().await;
     Ok(())

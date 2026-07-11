@@ -29,10 +29,10 @@ use crate::consensus::{
     ValidatorSet, Value,
 };
 use crate::database::queries::{
-    delete_batches_above_anchor, delete_unconfirmed_batch_txs_above_anchor, get_checkpoint_latest,
-    get_transaction_by_txid, select_batches_from_anchor, select_batches_in_range,
-    select_block_at_height, select_block_latest, select_existing_txids,
-    select_latest_consensus_height, select_min_batch_height, select_unconfirmed_batch_txs,
+    delete_unexecuted_batch_suffix, get_checkpoint_latest, get_transaction_by_txid,
+    select_batches_from_anchor, select_batches_in_range, select_block_at_height,
+    select_block_latest, select_existing_txids, select_latest_consensus_height,
+    select_min_batch_height, select_unconfirmed_batch_txs,
 };
 
 /// Result from processing a consensus message.
@@ -136,27 +136,20 @@ impl ConsensusState {
     ) -> Result<Self> {
         let current_validator_set = genesis.validator_set;
 
-        // Delete batch decisions that reference anchor heights above what we've
-        // actually processed — committed to the batches table but never executed
-        // before the node shut down (the node forgets them and re-syncs those
-        // consensus heights from peers). Their `unconfirmed_batch_txs` children
-        // must go first: the FK carries no cascade (deliberately — see
-        // schema.sql), so a crash mid-rollback-replay leaves children that would
-        // make the parent delete fail. That failure used to be swallowed by an
-        // `if let Ok`, silently resuming consensus above decisions this node
-        // never executed (#424) — it now propagates.
-        let deleted_txs = delete_unconfirmed_batch_txs_above_anchor(&conn, last_block_height)
+        // Forget the decided-but-unexecuted SUFFIX of consensus history —
+        // committed to the batches table but never executed before the node
+        // shut down; those consensus heights re-sync from peers. Children are
+        // deleted first (the FKs carry no cascade — deliberately, see
+        // schema.sql). A failure here must be LOUD: the old `if let Ok`
+        // silently resumed consensus above decisions this node never executed
+        // (#424).
+        let (deleted, resume_floor) = delete_unexecuted_batch_suffix(&conn, last_block_height)
             .await
-            .context("Failed to delete unconfirmed txs of unprocessed batches")?;
-        let deleted = delete_batches_above_anchor(&conn, last_block_height)
-            .await
-            .context("Failed to delete unprocessed batches above last block height")?;
-        if deleted > 0 || deleted_txs > 0 {
+            .context("Failed to delete unexecuted batch suffix")?;
+        if deleted > 0 {
             info!(
                 deleted,
-                deleted_txs,
-                last_block_height,
-                "Deleted unprocessed batches above last block height"
+                resume_floor, last_block_height, "Deleted unexecuted batch suffix"
             );
         }
 
