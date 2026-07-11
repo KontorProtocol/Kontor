@@ -254,8 +254,8 @@ jobs:
             echo "## sdk-native ${{ matrix.name }} shipped artifacts"
             echo '```'
             if [ "${{ matrix.name }}" = "ios" ]; then
-              du -sh KontorSdkNativeFramework.xcframework
-              find KontorSdkNativeFramework.xcframework -name KontorSdkNative -type f -exec du -h {} +
+              du -sh KontorSdkNative.xcframework
+              find KontorSdkNative.xcframework -name KontorSdkNative -type f -exec du -h {} +
             else
               du -sh android/src/main/jniLibs android/src/main/jniLibs/*/
             fi

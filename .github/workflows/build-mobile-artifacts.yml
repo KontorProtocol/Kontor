@@ -83,7 +83,7 @@ jobs:
       - name: Package iOS piece
         if: matrix.name == 'ios'
         working-directory: ./sdk-native
-        run: tar -czf sdk-native-ios.tgz KontorSdkNativeFramework.xcframework
+        run: tar -czf sdk-native-ios.tgz KontorSdkNative.xcframework
       - name: Package Android piece
         if: matrix.name == 'android'
         working-directory: ./sdk-native

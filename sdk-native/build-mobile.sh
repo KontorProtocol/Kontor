@@ -52,9 +52,12 @@ IOS_MIN=15.1
 
 # The uniffi cdylib basename produced by cargo for kontor-sdk-native.
 LIB=libkontor_sdk_native
-# The dynamic-framework name embedded in the xcframework.
+# The dynamic-framework name embedded in the xcframework. The xcframework
+# bundle basename MUST equal the wrapped .framework name: CocoaPods derives
+# both the `-framework <name>` linker flag and the copy-target name from the
+# bundle basename, not from Info.plist, so a mismatch fails the app link.
 FRAMEWORK=KontorSdkNative
-XCFRAMEWORK=KontorSdkNativeFramework.xcframework
+XCFRAMEWORK=$FRAMEWORK.xcframework
 
 # Locate the cdylib cargo emitted for a target (it lives at the profile
 # root, or under deps/ depending on cargo version).
