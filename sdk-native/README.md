@@ -40,7 +40,7 @@ generated bindings into the `KontorBackend` surface. The generated
 bindings are committed (the published package ships them) and CI fails if
 they drift from what `npm run ubrn:generate` emits. Both native targets
 build under `--profile mobile`: the Android `.so`s and the iOS
-`KontorSdkNativeFramework.xcframework` (device `arm64` + simulator
+`KontorSdkNative.xcframework` (device `arm64` + simulator
 `arm64`/`x86_64`).
 
 Still to do, in a mobile dev environment:
@@ -50,9 +50,15 @@ Still to do, in a mobile dev environment:
 
 ### Expo integration
 
-Consumer Expo apps get zero-config linking: `@kontor/sdk-native` ships an
-`expo-module.config.json` (so Expo autolinking sees it) and an
-`app.plugin.js` config plugin. Add the plugin to the app config —
+`@kontor/sdk-native` is a standard React Native TurboModule: linking is
+handled by React Native autolinking through the podspec (iOS) and
+`build.gradle` (Android) on both bare and Expo apps — it does **not** ship
+an `expo-module.config.json` (that would make Expo autolinking claim the
+package without registering its plain `TurboReactPackage`, so the module
+would be absent from the binary at runtime).
+
+For Expo apps it additionally ships an `app.plugin.js` config plugin. Add
+it to the app config —
 
 ```json
 { "expo": { "plugins": ["@kontor/sdk-native"] } }
@@ -60,9 +66,8 @@ Consumer Expo apps get zero-config linking: `@kontor/sdk-native` ships an
 
 — and `expo prebuild` raises the two floors the prebuilt binaries require:
 iOS deployment target ≥ 15.1 and Android `minSdkVersion` ≥ 24 (it only ever
-raises them, never lowers a higher app target). Bare React Native apps link
-via the podspec / `build.gradle` through the usual community-CLI
-autolinking; there the deployment target / minSdk are set by hand.
+raises them, never lowers a higher app target). Bare React Native apps set
+the deployment target / minSdk by hand.
 
 ## Building
 
@@ -117,7 +122,7 @@ are missing.
   into dynamic `.framework` bundles wrapped in the xcframework.
 
 `./build-mobile.sh ios` is verified locally: it produces
-`KontorSdkNativeFramework.xcframework` (8.6 MB — device `arm64` + simulator
+`KontorSdkNative.xcframework` (8.6 MB — device `arm64` + simulator
 `arm64`/`x86_64`, `@rpath` install name, 133 uniffi FFI symbols exported).
 The Android `.so` build and the full on-device link/load run in CI (which
 also reports the shipped artifact sizes) — see
