@@ -67,6 +67,21 @@ pub(crate) struct PreparedCall {
     pub func: Func,
     pub is_proc: bool,
     pub fuel_limit: u64,
+    pub ctx: CtxResource,
+}
+
+/// Handle of the context resource `prepare_call` pushed into the shared
+/// `ResourceTable` as the call's first argument. The table outlives the
+/// per-call `Store` (it lives as long as the `Runtime`), so this entry must
+/// be drained when the call settles — otherwise every op leaks one entry
+/// until pool recycle, and the reactor's runtime is never recycled (#434).
+/// Carries the raw rep because `try_into_resource_any` consumes the typed
+/// `Resource<T>`; `new_own(rep)` reconstructs it for deletion.
+pub(crate) enum CtxResource {
+    Core(u32),
+    View(u32),
+    Proc(u32),
+    Fall(u32),
 }
 
 impl Runtime {
@@ -205,7 +220,7 @@ impl Runtime {
         }
 
         let mut is_proc = false;
-        {
+        let ctx = {
             let mut table = self.table.lock().await;
             match (resource_type, signer) {
                 (t, Some(Signer::Core(signer)))
@@ -215,31 +230,36 @@ impl Runtime {
                     // core call, inherited for a nested one) — this arm only wires up
                     // the trusted CoreContext resource.
                     is_proc = true;
+                    let res = table
+                        .push(CoreContext {
+                            signer: *signer.clone(),
+                            contract_id,
+                        })
+                        .map_err(anyhow::Error::from)?;
+                    let rep = res.rep();
                     params.insert(
                         0,
                         wasmtime::component::Val::Resource(
-                            table
-                                .push(CoreContext {
-                                    signer: *signer.clone(),
-                                    contract_id,
-                                })
-                                .map_err(anyhow::Error::from)?
-                                .try_into_resource_any(&mut store)
+                            res.try_into_resource_any(&mut store)
                                 .map_err(anyhow::Error::from)?,
                         ),
-                    )
+                    );
+                    CtxResource::Core(rep)
                 }
-                (t, _) if t.eq(&wasmtime::component::ResourceType::host::<ViewContext>()) => params
-                    .insert(
+                (t, _) if t.eq(&wasmtime::component::ResourceType::host::<ViewContext>()) => {
+                    let res = table
+                        .push(ViewContext { contract_id })
+                        .map_err(anyhow::Error::from)?;
+                    let rep = res.rep();
+                    params.insert(
                         0,
                         wasmtime::component::Val::Resource(
-                            table
-                                .push(ViewContext { contract_id })
-                                .map_err(anyhow::Error::from)?
-                                .try_into_resource_any(&mut store)
+                            res.try_into_resource_any(&mut store)
                                 .map_err(anyhow::Error::from)?,
                         ),
-                    ),
+                    );
+                    CtxResource::View(rep)
+                }
                 (t, Some(signer))
                     if t.eq(&wasmtime::component::ResourceType::host::<ProcContext>()) =>
                 {
@@ -251,20 +271,22 @@ impl Runtime {
                     // the override rules (cross-input Sponsor or aggregate-
                     // publisher).
                     let payer = payer_holder(signer, payment);
+                    let res = table
+                        .push(ProcContext {
+                            signer: signer.clone(),
+                            payer,
+                            contract_id,
+                        })
+                        .map_err(anyhow::Error::from)?;
+                    let rep = res.rep();
                     params.insert(
                         0,
                         wasmtime::component::Val::Resource(
-                            table
-                                .push(ProcContext {
-                                    signer: signer.clone(),
-                                    payer,
-                                    contract_id,
-                                })
-                                .map_err(anyhow::Error::from)?
-                                .try_into_resource_any(&mut store)
+                            res.try_into_resource_any(&mut store)
                                 .map_err(anyhow::Error::from)?,
                         ),
-                    )
+                    );
+                    CtxResource::Proc(rep)
                 }
 
                 (t, signer) if t.eq(&wasmtime::component::ResourceType::host::<FallContext>()) => {
@@ -272,20 +294,22 @@ impl Runtime {
                     // FallContext has a payer iff it has a signer — a fall
                     // context with no acting signer has no payer either.
                     let payer = signer.map(|s| payer_holder(s, payment));
+                    let res = table
+                        .push(FallContext {
+                            signer: signer.cloned(),
+                            payer,
+                            contract_id,
+                        })
+                        .map_err(anyhow::Error::from)?;
+                    let rep = res.rep();
                     params.insert(
                         0,
                         wasmtime::component::Val::Resource(
-                            table
-                                .push(FallContext {
-                                    signer: signer.cloned(),
-                                    payer,
-                                    contract_id,
-                                })
-                                .map_err(anyhow::Error::from)?
-                                .try_into_resource_any(&mut store)
+                            res.try_into_resource_any(&mut store)
                                 .map_err(anyhow::Error::from)?,
                         ),
-                    )
+                    );
+                    CtxResource::Fall(rep)
                 }
                 (t, signer) => {
                     return Err(ExecutionError::Deterministic(anyhow!(
@@ -295,7 +319,7 @@ impl Runtime {
                     )));
                 }
             }
-        }
+        };
 
         if is_proc && payment.is_none() && fuel_override.is_none() {
             return Err(ExecutionError::Deterministic(anyhow!(
@@ -386,7 +410,29 @@ impl Runtime {
             func,
             is_proc,
             fuel_limit,
+            ctx,
         })
+    }
+
+    /// Drain the call's context resource from the shared table once the call
+    /// has settled. Best-effort: the entry not being there (already drained)
+    /// must never fail the call path.
+    async fn drain_ctx_resource(&self, ctx: CtxResource) {
+        let mut table = self.table.lock().await;
+        let _ = match ctx {
+            CtxResource::Core(rep) => table
+                .delete(Resource::<CoreContext>::new_own(rep))
+                .map(|_| ()),
+            CtxResource::View(rep) => table
+                .delete(Resource::<ViewContext>::new_own(rep))
+                .map(|_| ()),
+            CtxResource::Proc(rep) => table
+                .delete(Resource::<ProcContext>::new_own(rep))
+                .map(|_| ()),
+            CtxResource::Fall(rep) => table
+                .delete(Resource::<FallContext>::new_own(rep))
+                .map(|_| ()),
+        };
     }
 
     /// Spawn the WASM call, catch panics, and handle the result.
@@ -398,6 +444,7 @@ impl Runtime {
         params: Vec<Val>,
         mut results: Vec<Val>,
         is_fallback: bool,
+        ctx: CtxResource,
     ) -> Result<(Result<String, ExecutionError>, Store<Runtime>)> {
         let (result, results, mut store) = tokio::spawn(async move {
             match std::panic::AssertUnwindSafe(func.call_async(&mut store, &params, &mut results))
@@ -423,6 +470,10 @@ impl Runtime {
         let call_result = self
             .handle_call(is_fallback, result, results, &mut store)
             .await;
+
+        // The call has settled (committed or rolled back) — drain its context
+        // resource from the shared table, success and failure alike.
+        self.drain_ctx_resource(ctx).await;
 
         Ok((call_result, store))
     }
@@ -631,6 +682,7 @@ impl Runtime {
             func,
             is_proc,
             fuel_limit: _,
+            ctx,
         } = self
             .prepare_call(
                 contract_address,
@@ -641,7 +693,7 @@ impl Runtime {
             )
             .await?;
         let (mut result, mut store) = self
-            .call_and_handle(store, func, params, results, is_fallback)
+            .call_and_handle(store, func, params, results, is_fallback, ctx)
             .await?;
         let fuel = store.get_fuel().unwrap();
         accessor
