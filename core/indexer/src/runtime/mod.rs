@@ -814,6 +814,7 @@ impl Runtime {
             func,
             is_proc,
             fuel_limit: starting_fuel,
+            ctx,
         } = self
             .prepare_call(contract_address, signer, payment.as_ref(), expr, None)
             .await?;
@@ -824,7 +825,7 @@ impl Runtime {
         )
         .await;
         let (mut result, mut store) = self
-            .call_and_handle(store, func, params, results, is_fallback)
+            .call_and_handle(store, func, params, results, is_fallback, ctx)
             .await?;
         OptionFuture::from(
             self.gauge
@@ -860,7 +861,7 @@ impl Runtime {
         let bytes = self.storage.component_bytes(contract_id).await?;
         let component = Component::from_binary(&self.engine, &bytes)?;
         self.component_cache
-            .put(contract_id, component.clone())
+            .put(contract_id, component.clone(), bytes.len())
             .await;
         Ok((bytes, component))
     }
@@ -895,8 +896,50 @@ impl HasData for Runtime {
 #[cfg(test)]
 mod tests {
     use crate::database::queries::exists_contract_state;
+    use crate::runtime::token;
+    use crate::runtime::wit::resources::ViewContext;
     use crate::test_utils::test_runtime;
     use stdlib::KeyElement;
+
+    /// Context resources are drained from the shared `ResourceTable` when a
+    /// call settles (#434): the table outlives the per-call stores, so a leak
+    /// here accumulates for the runtime's whole life — and the reactor's
+    /// runtime is never recycled. Freed table slots are reused, so probes
+    /// pushed before and after a burst of calls must land on the same rep;
+    /// before the drain, every call leaked one context entry and the second
+    /// probe's rep grew by the call count.
+    #[tokio::test]
+    async fn call_context_resources_are_drained() {
+        let (mut runtime, _dir, _name) = test_runtime().await.expect("test runtime");
+
+        let probe = {
+            let mut table = runtime.table.lock().await;
+            let res = table.push(ViewContext { contract_id: 1 }).expect("push");
+            let rep = res.rep();
+            table.delete(res).expect("delete probe");
+            rep
+        };
+
+        for _ in 0..5 {
+            runtime
+                .execute(None, None, &token::address(), "total-supply()")
+                .await
+                .expect("view call");
+        }
+
+        let probe_after = {
+            let mut table = runtime.table.lock().await;
+            let res = table.push(ViewContext { contract_id: 1 }).expect("push");
+            let rep = res.rep();
+            table.delete(res).expect("delete probe");
+            rep
+        };
+
+        assert_eq!(
+            probe_after, probe,
+            "call context resources must be drained — a growing rep means the table leaks one entry per call"
+        );
+    }
 
     /// The structural security boundary: filestorage's component imports the
     /// native-only `file-registry` interface, so it links against the native

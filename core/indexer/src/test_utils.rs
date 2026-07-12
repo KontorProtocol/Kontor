@@ -331,13 +331,15 @@ pub async fn new_test_db() -> Result<(Reader, Writer, (TempDir, String))> {
     Ok((reader, writer, (temp_dir, db_name)))
 }
 
+/// A prewarmed native contract: id, compiled component, and its cache weight
+/// (encoded binary size).
+type PrewarmedComponent = (u64, wasmtime::component::Component, u32);
+
 /// Shared engine + pre-compiled native contract components.
 /// First caller compiles all native contracts; subsequent callers get cached results.
-async fn shared_test_engine() -> (wasmtime::Engine, Vec<(u64, wasmtime::component::Component)>) {
-    static ONCE: tokio::sync::OnceCell<(
-        wasmtime::Engine,
-        Vec<(u64, wasmtime::component::Component)>,
-    )> = tokio::sync::OnceCell::const_new();
+async fn shared_test_engine() -> (wasmtime::Engine, Vec<PrewarmedComponent>) {
+    static ONCE: tokio::sync::OnceCell<(wasmtime::Engine, Vec<PrewarmedComponent>)> =
+        tokio::sync::OnceCell::const_new();
 
     ONCE.get_or_init(|| async {
         let engine = Runtime::new_engine().expect("Failed to create engine");
@@ -371,8 +373,8 @@ async fn shared_test_engine() -> (wasmtime::Engine, Vec<(u64, wasmtime::componen
         // `Runtime::publish_native_contracts`.
         let mut components = Vec::new();
         for id in 1..=NATIVE_CONTRACTS.len() as u64 {
-            if let Some(component) = cache.get(&id).await {
-                components.push((id, component));
+            if let Some((component, size)) = cache.get_weighted(&id).await {
+                components.push((id, component, size));
             }
         }
 
@@ -430,8 +432,8 @@ async fn test_runtime_inner(
     let storage = Storage::builder().height(1).conn(conn).build();
     let (engine, prewarmed) = shared_test_engine().await;
     let cache = ComponentCache::new();
-    for (id, component) in &prewarmed {
-        cache.put(*id, component.clone()).await;
+    for (id, component, size) in &prewarmed {
+        cache.put(*id, component.clone(), *size as usize).await;
     }
     let linkers = Runtime::new_linkers(&engine)?;
     let mut runtime = Runtime::new_with(engine, linkers, cache, storage).await?;
