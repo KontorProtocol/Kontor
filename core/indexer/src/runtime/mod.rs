@@ -668,6 +668,16 @@ impl Runtime {
     }
 
     pub async fn issuance(&mut self, signer: &Signer) -> Result<(), ExecutionError> {
+        // `Issuance` is a gas-free faucet mint — a dev/test bootstrap
+        // convenience. It must never mint on mainnet, where the only intended
+        // mint path is protocol emissions; an ungated faucet falsifies the
+        // supply schedule. Reject deterministically (same `network()` gate the
+        // token's dev-mint uses), so every node agrees and no supply is created.
+        if self.network == bitcoin::Network::Bitcoin {
+            return Err(ExecutionError::Deterministic(anyhow!(
+                "Issuance faucet is disabled on mainnet"
+            )));
+        }
         let result = token::api::issuance(
             self,
             &Signer::Core(Box::new(signer.clone())),
@@ -912,8 +922,34 @@ mod tests {
     use crate::database::queries::exists_contract_state;
     use crate::runtime::token;
     use crate::runtime::wit::resources::ViewContext;
-    use crate::test_utils::test_runtime;
+    use crate::test_utils::{test_runtime, test_runtime_with_network};
     use stdlib::KeyElement;
+
+    /// The `Issuance` faucet mint is a dev/test convenience — it must be
+    /// rejected deterministically on mainnet, where the only intended mint is
+    /// protocol emissions; an ungated faucet falsifies the supply schedule.
+    #[tokio::test]
+    async fn issuance_faucet_rejected_on_mainnet() {
+        let (mut runtime, _dir, _name) = test_runtime_with_network(bitcoin::Network::Bitcoin)
+            .await
+            .expect("mainnet test runtime");
+        let signer = super::Signer::Core(Box::new(super::Signer::Nobody));
+        let err = runtime
+            .issuance(&signer)
+            .await
+            .expect_err("issuance must be rejected on mainnet");
+        assert!(
+            matches!(err, super::ExecutionError::Deterministic(_)),
+            "mainnet issuance must reject deterministically, got: {err:?}"
+        );
+
+        // Same call succeeds on a dev network (regtest) — the gate is
+        // network-conditioned, not a blanket disable.
+        let (mut dev, _dir2, _name2) = test_runtime().await.expect("regtest test runtime");
+        dev.issuance(&signer)
+            .await
+            .expect("issuance must succeed on a dev network");
+    }
 
     /// `_` is the ContractAddress wire separator — a name containing it mints
     /// an ambiguously-parseable address, permanent once published (#308). The
