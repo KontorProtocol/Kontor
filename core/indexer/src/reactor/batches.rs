@@ -30,9 +30,12 @@ use super::executor::Executor;
 use super::mempool_fee_index::MempoolFeeIndex;
 
 /// Multiplier applied to `MempoolFeeIndex::fastest_fee()` to derive the
-/// per-batch acceptance threshold. 0.9 means we accept txs at or above
-/// 90% of the median fee rate in projected block 0.
-const FEE_THRESHOLD_MULTIPLIER: f64 = 0.9;
+/// per-batch acceptance threshold, as an integer ratio: 9/10 means we accept
+/// txs at or above 90% of the median fee rate in projected block 0. Integer
+/// math because this feeds proposal validation — a consensus-adjacent path
+/// where float rounding is a determinism hazard (#429).
+const FEE_THRESHOLD_NUM: u64 = 9;
+const FEE_THRESHOLD_DEN: u64 = 10;
 
 /// Compute the per-batch fee acceptance threshold (sat/vB). Hoisted out
 /// of `validate_transaction` so callers compute it once per validation
@@ -44,7 +47,7 @@ const FEE_THRESHOLD_MULTIPLIER: f64 = 0.9;
 /// reconnect's Sync). Defense in depth against effectively disabling
 /// fee validation.
 fn compute_fee_threshold(fee_index: &MempoolFeeIndex) -> u64 {
-    let raw = (fee_index.fastest_fee() as f64 * FEE_THRESHOLD_MULTIPLIER) as u64;
+    let raw = fee_index.fastest_fee().saturating_mul(FEE_THRESHOLD_NUM) / FEE_THRESHOLD_DEN;
     raw.max(fee_index.min_fee())
 }
 

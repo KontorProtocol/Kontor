@@ -3,6 +3,7 @@ use std::time::Duration;
 
 use axum::Json;
 use axum::extract::{Query, State};
+use axum::http::StatusCode;
 use indexer_types::{ConsensusMode, Info};
 use serde::{Deserialize, Serialize};
 use tokio::time::timeout;
@@ -101,4 +102,44 @@ pub async fn get_status(State(env): State<Env>) -> Json<NodeStatus> {
         reactor_ready: env.reactor_ready.load(Ordering::Relaxed),
         consensus_listen_addr: env.consensus_listen_addr.borrow().clone(),
     })
+}
+
+/// Body for `GET /healthz/ready` — context for an operator reading probe
+/// output; orchestrators only look at the status code.
+#[derive(Serialize)]
+pub struct Healthz {
+    pub ready: bool,
+    pub reactor_ready: bool,
+    /// Highest indexed block, `null` until the first block lands.
+    pub height: Option<u64>,
+}
+
+/// `GET /healthz/live` — process liveness. Answers 200 whenever the API task
+/// is serving; a hung or deadlocked process fails the probe by not answering
+/// at all (#214).
+pub async fn get_healthz_live() -> &'static str {
+    "ok"
+}
+
+/// `GET /healthz/ready` — readiness for traffic: the exact predicate the
+/// `require_available` middleware gates on (reactor started AND chain state
+/// exists), so a pod reads ready precisely when its chain endpoints stop
+/// answering 503 (#214).
+pub async fn get_healthz_ready(State(env): State<Env>) -> (StatusCode, Json<Healthz>) {
+    let reactor_ready = env.reactor_ready.load(Ordering::Relaxed);
+    let height = env.info_rx.borrow().height;
+    let ready = reactor_ready && height.is_some();
+    let code = if ready {
+        StatusCode::OK
+    } else {
+        StatusCode::SERVICE_UNAVAILABLE
+    };
+    (
+        code,
+        Json(Healthz {
+            ready,
+            reactor_ready,
+            height,
+        }),
+    )
 }

@@ -460,6 +460,20 @@ impl Runtime {
         provenance
             .validate()
             .map_err(ExecutionError::Deterministic)?;
+        // Contract names are embedded in the wire address format
+        // `name_height_txindex` — `_` is the separator, so a name containing
+        // it mints an ambiguously-parseable address, permanent once published
+        // (#308). Enforce kebab-case (lowercase alphanumerics and hyphens)
+        // deterministically on every node.
+        if name.is_empty()
+            || !name
+                .chars()
+                .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-')
+        {
+            return Err(ExecutionError::Deterministic(anyhow!(
+                "invalid contract name {name:?}: must be non-empty kebab-case ([a-z0-9-])"
+            )));
+        }
         let address = ContractAddress {
             name: name.to_string(),
             height: self.storage.height,
@@ -900,6 +914,45 @@ mod tests {
     use crate::runtime::wit::resources::ViewContext;
     use crate::test_utils::test_runtime;
     use stdlib::KeyElement;
+
+    /// `_` is the ContractAddress wire separator — a name containing it mints
+    /// an ambiguously-parseable address, permanent once published (#308). The
+    /// gate must reject deterministically, before any storage is touched.
+    #[tokio::test]
+    async fn publish_rejects_non_kebab_contract_names() {
+        let (mut runtime, _dir, _name) = test_runtime().await.expect("test runtime");
+        runtime
+            .set_context(
+                1,
+                Some(super::TransactionContext::builder().build()),
+                None,
+                None,
+            )
+            .await;
+        let signer = super::Signer::Core(Box::new(super::Signer::Nobody));
+        let payment = runtime.core_payment();
+        let provenance = super::native_provenance().expect("provenance");
+        for bad in ["counter_v2", "Counter", "has space", ""] {
+            let err = runtime
+                .publish(&signer, payment.clone(), bad, b"", &provenance)
+                .await
+                .expect_err("bad name must be rejected");
+            assert!(
+                matches!(err, super::ExecutionError::Deterministic(_)),
+                "{bad:?} must reject deterministically, got: {err:?}"
+            );
+        }
+        // The gate must not over-reject legitimate kebab names: this one only
+        // fails later, at wasm decode — proving it passed the name check.
+        let err = runtime
+            .publish(&signer, payment, "valid-name-0", b"", &provenance)
+            .await
+            .expect_err("empty bytes cannot compile");
+        assert!(
+            !format!("{err:?}").contains("invalid contract name"),
+            "kebab name must pass the gate: {err:?}"
+        );
+    }
 
     /// Context resources are drained from the shared `ResourceTable` when a
     /// call settles (#434): the table outlives the per-call stores, so a leak

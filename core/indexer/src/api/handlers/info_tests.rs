@@ -185,3 +185,46 @@ async fn info_publisher_republishes_on_event() -> Result<()> {
     handle.await?;
     Ok(())
 }
+
+/// `/healthz/ready` mirrors the `require_available` predicate exactly — 503
+/// until the reactor latch is set AND chain state exists, 200 after — while
+/// `/healthz/live` answers 200 whenever the API serves at all (#214).
+#[tokio::test]
+async fn healthz_ready_tracks_availability() -> Result<()> {
+    use super::{get_healthz_live, get_healthz_ready};
+    use std::sync::atomic::Ordering;
+
+    let (mut env, _conn, _dir) = new_test_env().await?;
+    let (info_tx, info_rx) = watch::channel(InfoCore::default());
+    env.info_rx = info_rx;
+    let reactor_ready = env.reactor_ready.clone();
+    reactor_ready.store(false, Ordering::Relaxed);
+    let app = Router::new()
+        .route("/healthz/live", get(get_healthz_live))
+        .route("/healthz/ready", get(get_healthz_ready))
+        .with_state(env);
+    let server = TestServer::new(app);
+
+    // Liveness is unconditional.
+    let res = server.get("/healthz/live").await;
+    res.assert_status(StatusCode::OK);
+
+    // Not ready: latch unset and no chain state.
+    let res = server.get("/healthz/ready").await;
+    res.assert_status(StatusCode::SERVICE_UNAVAILABLE);
+
+    // Latch set but still no chain state — half the predicate is not enough.
+    reactor_ready.store(true, Ordering::Relaxed);
+    let res = server.get("/healthz/ready").await;
+    res.assert_status(StatusCode::SERVICE_UNAVAILABLE);
+
+    // Chain state lands: ready.
+    info_tx.send(InfoCore {
+        height: Some(1),
+        ..Default::default()
+    })?;
+    let res = server.get("/healthz/ready").await;
+    res.assert_status(StatusCode::OK);
+
+    Ok(())
+}

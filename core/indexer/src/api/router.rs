@@ -23,9 +23,10 @@ use tracing::{Level, Span, error, field, info, span};
 
 use crate::api::handlers::{
     get_block_transactions, get_blocks, get_contract, get_contract_provenance, get_contracts,
-    get_fees, get_index, get_metrics, get_result, get_results, get_signer, get_signer_footprint,
-    get_status, get_transaction, get_transaction_inspect, get_transactions, post_compose,
-    post_contract, post_simulate, post_transaction_broadcast, post_transaction_hex_inspect,
+    get_fees, get_healthz_live, get_healthz_ready, get_index, get_metrics, get_result, get_results,
+    get_signer, get_signer_footprint, get_status, get_transaction, get_transaction_inspect,
+    get_transactions, post_compose, post_contract, post_simulate, post_transaction_broadcast,
+    post_transaction_hex_inspect,
 };
 
 use super::{
@@ -180,6 +181,11 @@ pub fn new(context: Env, prom_handle: PrometheusHandle) -> Router {
 
     Router::new()
         .nest("/api", chain_routes.merge(always_available))
+        // Probe endpoints at the root, where orchestrators look (#214):
+        // liveness answers whenever the API task is serving; readiness
+        // mirrors the `require_available` predicate exactly.
+        .route("/healthz/live", get(get_healthz_live))
+        .route("/healthz/ready", get(get_healthz_ready))
         .layer(
             ServiceBuilder::new()
                 .layer(SetRequestIdLayer::new(
