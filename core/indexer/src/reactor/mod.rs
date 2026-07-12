@@ -284,6 +284,14 @@ impl<E: Executor> Reactor<E> {
                 self.rollback(to_height)
                     .await
                     .context("rollback failed during Bitcoin reorg")?;
+                // Decided values above the fork are anchored to blocks that no
+                // longer exist — they are deliberately forgotten here (their
+                // rows stay in the batches table as consensus history) and the
+                // network re-decides against the new chain; their txs return
+                // via the mempool. Do NOT reload them into deferred_decisions:
+                // old-chain entries would order ahead of new-chain decisions in
+                // the drain queue and wedge it (a batch waiting on an anchor
+                // whose only block decision is queued behind it).
                 self.consensus.clear_on_rollback();
                 let checkpoint = self.consensus.get_checkpoint(&self.db_conn()).await;
                 self.consensus
@@ -456,17 +464,24 @@ impl<E: Executor> Reactor<E> {
                             .any(|b| b.deadline <= self.last_height)
                             && let Some((rollback_anchor, excluded)) = self.consensus.run_finality_checks(&conn, self.last_height).await {
                                 // Read replay decisions from DB before deleting state
-                                self.initiate_rollback(
-                                    rollback_anchor,
-                                    excluded,
-                                ).await
-                                .context("initiate_rollback failed")?;
+                                // (the txid join is cascade-deleted with the blocks).
+                                let replay = self
+                                    .load_replay_decisions(rollback_anchor)
+                                    .await
+                                    .context("load_replay_decisions failed")?;
 
                                 // Rollback to before the invalid anchor so all state at the
                                 // anchor height (including invalid tx effects) is wiped cleanly.
                                 self.rollback(rollback_anchor.saturating_sub(1))
                                     .await
                                     .context("rollback failed during finality rollback")?;
+
+                                // Fallible raw-tx resolution/filtering only after the
+                                // truncation is durable — a failure here must not
+                                // cancel the rollback finality demanded.
+                                self.prepare_replay(rollback_anchor, replay, excluded)
+                                    .await
+                                    .context("prepare_replay failed")?;
 
                                 // Emit rollback event
                                 let checkpoint = self.consensus.get_checkpoint(&conn).await;
@@ -476,7 +491,15 @@ impl<E: Executor> Reactor<E> {
                                     checkpoint,
                                 });
 
-                                // Process deferred decisions using already-cached blocks
+                                // Process deferred decisions using already-cached blocks.
+                                // `pending_blocks` is deliberately NOT cleared here (#430):
+                                // a finality rollback re-executes against the SAME Bitcoin
+                                // chain, so cached blocks are still the right data and make
+                                // this drain immediate — `replay_blocks_from` re-delivery is
+                                // only the fallback. The Bitcoin-reorg path (`BlockEvent::
+                                // Rollback`) clears them instead because there the blocks
+                                // themselves changed; the drain's block-hash check guards
+                                // any stale remainder in both paths.
                                 self.drain_deferred_decisions()
                                     .await
                                     .context("drain_deferred_decisions failed after finality rollback")?;
@@ -704,7 +727,8 @@ pub async fn start_consensus(
         validator_index,
         mempool_fee_index,
     )
-    .await;
+    .await
+    .context("Failed to build consensus state")?;
     state.observation = observation_channels;
     if let Some(t) = timeouts {
         state.timeouts = t;

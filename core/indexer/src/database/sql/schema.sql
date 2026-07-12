@@ -18,6 +18,13 @@ CREATE TABLE IF NOT EXISTS batches (
   is_block BOOLEAN NOT NULL DEFAULT 0
 );
 
+-- The batch_height FK (here and on unconfirmed_batch_txs) deliberately has NO
+-- cascade: batches are the decided consensus record and are never deleted while
+-- children exist. Rollbacks delete transactions via the height->blocks cascade;
+-- the one path that deletes batches (startup cleanup of decided-but-unexecuted
+-- rows, ConsensusState::new) deletes children explicitly first, and FK
+-- enforcement failing LOUD there is the guard against any future deletion path
+-- forgetting to.
 CREATE TABLE IF NOT EXISTS transactions (
   id INTEGER PRIMARY KEY,
   txid TEXT NOT NULL UNIQUE,
@@ -26,6 +33,32 @@ CREATE TABLE IF NOT EXISTS transactions (
   tx_index INTEGER,
   batch_height INTEGER,
   FOREIGN KEY (height) REFERENCES blocks (height) ON DELETE CASCADE,
+  FOREIGN KEY (batch_height) REFERENCES batches (consensus_height)
+);
+
+-- Rollback replay reloads decided values by anchor (`WHERE anchor_height >= ?`).
+-- `batches` grows one row per consensus height for the life of the chain —
+-- without these indexes the reload and the legacy txid fallback are full scans.
+-- NB: production DBs never run ANALYZE, so the planner won't pick
+-- idx_batches_anchor_height on its own — `select_batches_from_anchor` names it
+-- via INDEXED BY.
+CREATE INDEX IF NOT EXISTS idx_batches_anchor_height ON batches (anchor_height);
+CREATE INDEX IF NOT EXISTS idx_transactions_batch_height ON transactions (batch_height)
+  WHERE batch_height IS NOT NULL;
+
+-- The immutable decided txid list of each batch, written at decide time and
+-- kept for as long as the batch row exists. Sync must serve the CERTIFIED
+-- value for a consensus height regardless of whether this node executed the
+-- batch (anchor-gate record-only skips insert no `transactions` rows) or
+-- rolled its effects back (the blocks cascade deletes the `transactions`
+-- rows) — deriving served txids from `transactions` made the served value
+-- diverge from the certificate in both cases. `position` preserves decided
+-- order. Same no-cascade FK policy as the other batch children (see above).
+CREATE TABLE IF NOT EXISTS batch_txids (
+  batch_height INTEGER NOT NULL,
+  position INTEGER NOT NULL,
+  txid TEXT NOT NULL,
+  PRIMARY KEY (batch_height, position),
   FOREIGN KEY (batch_height) REFERENCES batches (consensus_height)
 );
 

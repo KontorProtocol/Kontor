@@ -19,8 +19,8 @@ use crate::consensus::finality_types::{
 };
 use crate::consensus::{CommitCertificate, Ctx, Height, ProposalData, Value};
 use crate::database::queries::{
-    insert_batch, insert_transaction, insert_unconfirmed_batch_tx, select_block_at_height,
-    select_existing_txids,
+    insert_batch, insert_batch_txids, insert_transaction, insert_unconfirmed_batch_tx,
+    select_block_at_height, select_existing_txids,
 };
 use crate::metrics::{CONSENSUS_HEIGHT, ITEMS_INDEXED};
 
@@ -103,6 +103,44 @@ fn dependency_sort(txs: &[bitcoin::Transaction]) -> Vec<usize> {
     ordered
 }
 
+/// Expand a set of excluded txids to every batch tx that (transitively) spends
+/// an excluded tx's output. Rollback replay filters excluded txids out of
+/// replayed batches; dropping a parent while keeping its child would execute
+/// the child against missing UTXOs and commit its deterministic failure —
+/// silent state divergence (#427). Operates over the ordered replay sequence,
+/// since a child may sit in a later batch than its parent. Iterates the
+/// forward pass to a true fixed point rather than assuming parents always
+/// precede children across batches — decided order makes that overwhelmingly
+/// likely, but no consensus rule ENFORCES the cross-batch direction, and the
+/// loop costs one extra no-growth pass in the normal case.
+fn transitive_exclusion(
+    batches: &[Vec<bitcoin::Transaction>],
+    excluded: &HashSet<Txid>,
+) -> HashSet<Txid> {
+    let mut excluded = excluded.clone();
+    loop {
+        let before = excluded.len();
+        for txs in batches {
+            for tx in txs {
+                let txid = tx.compute_txid();
+                if excluded.contains(&txid) {
+                    continue;
+                }
+                if tx
+                    .input
+                    .iter()
+                    .any(|i| excluded.contains(&i.previous_output.txid))
+                {
+                    excluded.insert(txid);
+                }
+            }
+        }
+        if excluded.len() == before {
+            return excluded;
+        }
+    }
+}
+
 /// Check that a batch's transactions are in a valid dependency order:
 /// every tx that spends another batch tx's output appears *after* that
 /// producer.
@@ -138,7 +176,51 @@ pub(super) fn batch_is_ordered(txs: &[bitcoin::Transaction]) -> bool {
     true
 }
 
+/// What `process_decided_batch` did with a decided batch. Callers must not
+/// announce `RecordedOnly` batches as processed — their transactions were
+/// never executed here.
+#[derive(Debug, PartialEq, Eq)]
+pub(super) enum BatchOutcome {
+    /// Executed and committed at its anchor.
+    Executed,
+    /// Recorded for sync/bookkeeping only (empty batch, or anchor mismatch).
+    RecordedOnly,
+}
+
 impl<E: Executor> Reactor<E> {
+    /// Persist a decided batch's certified content, idempotently: the
+    /// immutable txid list (`batch_txids`, what sync serves for this
+    /// consensus height) and the raw txs (`unconfirmed_batch_txs`, what
+    /// replay and unfinalized-batch sync resolve from). Written for executed
+    /// AND record-only batches — the certificate covers both.
+    async fn record_batch_txs(
+        &self,
+        conn: &libsql::Connection,
+        consensus_height: Height,
+        batch_txs: &[bitcoin::Transaction],
+    ) -> Result<()> {
+        let txids: Vec<String> = batch_txs
+            .iter()
+            .map(|tx| tx.compute_txid().to_string())
+            .collect();
+        insert_batch_txids(conn, consensus_height.as_u64(), &txids)
+            .await
+            .context("Failed to insert batch txids")?;
+        for raw_tx in batch_txs {
+            let txid = raw_tx.compute_txid();
+            let serialized = bitcoin::consensus::serialize(raw_tx);
+            insert_unconfirmed_batch_tx(
+                conn,
+                &txid.to_string(),
+                consensus_height.as_u64(),
+                &serialized,
+            )
+            .await
+            .context("Failed to insert unconfirmed batch tx")?;
+        }
+        Ok(())
+    }
+
     pub(super) async fn process_decided_batch(
         &mut self,
         anchor_height: u64,
@@ -146,7 +228,7 @@ impl<E: Executor> Reactor<E> {
         consensus_height: Height,
         certificate: &[u8],
         batch_txs: &[bitcoin::Transaction],
-    ) -> Result<()> {
+    ) -> Result<BatchOutcome> {
         let started_at = Instant::now();
         let conn = self.db_conn();
 
@@ -186,7 +268,45 @@ impl<E: Executor> Reactor<E> {
                 duration_ms = started_at.elapsed().as_millis() as u64,
                 "Empty batch recorded"
             );
-            return Ok(());
+            return Ok(BatchOutcome::RecordedOnly);
+        }
+
+        // A decided batch may only EXECUTE against the exact chain state it was
+        // anchored to: the local tip must sit at `anchor_height` with
+        // `anchor_hash`. Anything else — a deferred drain whose anchor fell
+        // behind, or a replay whose anchor block was reorged away — is recorded
+        // for sync/bookkeeping but NOT executed: executing against a different
+        // tip writes state (and a checkpoint) at a height the chain disagrees
+        // about, i.e. silent divergence. A skipped batch's txids then simply
+        // never confirm here and the finality window resolves it.
+        // `None` ⇔ all-zeros is the pre-genesis convention `make_value` and
+        // proposal validation anchor with.
+        let local_hash = self.last_hash.unwrap_or(BlockHash::all_zeros());
+        if anchor_height != self.last_height || anchor_hash != local_hash {
+            warn!(
+                anchor_height,
+                %anchor_hash,
+                last_height = self.last_height,
+                %local_hash,
+                consensus_height = %consensus_height,
+                "Skipping decided batch — anchor does not match local tip; recording only"
+            );
+            insert_batch(
+                &conn,
+                consensus_height.as_u64(),
+                anchor_height,
+                &anchor_hash.to_string(),
+                certificate,
+                false,
+            )
+            .await
+            .context("Failed to record anchor-mismatched batch for sync")?;
+            // Persist the certified content too (idempotent): a skipped batch
+            // must still be servable to syncing peers with its real txs, and
+            // the batch_txids/unconfirmed rows are what the sync path reads.
+            self.record_batch_txs(&conn, consensus_height, batch_txs)
+                .await?;
+            return Ok(BatchOutcome::RecordedOnly);
         }
 
         // Execute in decided order. `validate_batch` enforces dependency
@@ -231,19 +351,9 @@ impl<E: Executor> Reactor<E> {
         .await
         .context("Failed to insert batch")?;
 
-        // Store raw txs for replay/sync recovery
-        for raw_tx in batch_txs {
-            let txid = raw_tx.compute_txid();
-            let serialized = bitcoin::consensus::serialize(raw_tx);
-            insert_unconfirmed_batch_tx(
-                &conn,
-                &txid.to_string(),
-                consensus_height.as_u64(),
-                &serialized,
-            )
-            .await
-            .context("Failed to insert unconfirmed batch tx")?;
-        }
+        // Store the certified txid list + raw txs for replay/sync recovery
+        self.record_batch_txs(&conn, consensus_height, batch_txs)
+            .await?;
 
         for t in &parsed_txs {
             let tx_id = insert_transaction(
@@ -300,7 +410,7 @@ impl<E: Executor> Reactor<E> {
             "Batch processing complete"
         );
 
-        Ok(())
+        Ok(BatchOutcome::Executed)
     }
 
     pub(super) async fn make_value(&mut self) -> Result<Option<Value>> {
@@ -524,32 +634,79 @@ impl<E: Executor> Reactor<E> {
         Ok(true)
     }
 
-    pub(super) async fn initiate_rollback(
+    /// Load the decided values to replay for a rollback from `from_anchor`.
+    /// MUST run BEFORE the DB truncation: the query joins the `transactions`
+    /// rows for each batch's txids, and those are cascade-deleted with their
+    /// blocks by the rollback.
+    pub(super) async fn load_replay_decisions(
         &mut self,
         from_anchor: u64,
-        excluded_txids: HashSet<Txid>,
-    ) -> Result<()> {
+    ) -> Result<Vec<consensus_state::DeferredDecision>> {
         let conn = self.db_conn();
-        let replay_batches = self
-            .consensus
+        self.consensus
             .get_decided_from_anchor(&conn, from_anchor)
             .await
-            .context("Failed to load replay batches for rollback")?;
+            .context("Failed to load replay batches for rollback")
+    }
 
+    /// Install the replay decisions loaded by `load_replay_decisions` and kick
+    /// off block redelivery. Runs AFTER the DB truncation: the raw-tx
+    /// resolution below can touch bitcoind, and a transient failure here is
+    /// fatal-but-recoverable (the rollback already happened; on restart the
+    /// startup cleanup forgets the unexecuted suffix and the node re-syncs).
+    /// Before the truncation it would instead CANCEL a rollback that finality
+    /// already demanded.
+    pub(super) async fn prepare_replay(
+        &mut self,
+        from_anchor: u64,
+        replay_batches: Vec<consensus_state::DeferredDecision>,
+        excluded_txids: HashSet<Txid>,
+    ) -> Result<()> {
         info!(
             from_anchor,
             replay_batches = replay_batches.len(),
             excluded = excluded_txids.len(),
-            "Initiating rollback"
+            "Initiating rollback replay"
         );
 
         let mut deferred: std::collections::VecDeque<consensus_state::DeferredDecision> =
             replay_batches.into();
         if !excluded_txids.is_empty() {
-            for decision in &mut deferred {
-                if let Value::Batch { ref mut txs, .. } = decision.value {
-                    txs.retain(|tx| !excluded_txids.contains(&tx.txid()));
+            // Resolve every replay batch to raw transactions first: exclusion
+            // must see tx INPUTS to also drop descendants of excluded txs — the
+            // DB-loaded decisions carry only txids, and filtering a parent out
+            // while keeping its child would break the dependency order the
+            // batch was decided under (#427). Resolution pulls from the same
+            // sources the deferred drain would use later.
+            let mut resolved: Vec<Vec<bitcoin::Transaction>> = Vec::with_capacity(deferred.len());
+            for decision in &deferred {
+                match &decision.value {
+                    Value::Batch { txs, .. } => resolved.push(self.resolve_batch_txs(txs).await?),
+                    Value::Block { .. } => resolved.push(Vec::new()),
                 }
+            }
+            let excluded = transitive_exclusion(&resolved, &excluded_txids);
+            for (decision, txs) in deferred.iter_mut().zip(resolved) {
+                if let Value::Batch {
+                    anchor_height,
+                    anchor_hash,
+                    ..
+                } = &decision.value
+                {
+                    let (anchor_height, anchor_hash) = (*anchor_height, *anchor_hash);
+                    let kept: Vec<bitcoin::Transaction> = txs
+                        .into_iter()
+                        .filter(|tx| !excluded.contains(&tx.compute_txid()))
+                        .collect();
+                    decision.value = Value::new_batch_raw(anchor_height, anchor_hash, kept);
+                }
+            }
+            // The excluded txids must also leave the proposal pool, or the next
+            // make_value re-proposes the very txs whose missing confirmations
+            // caused this rollback — repeating the same finality failure in a
+            // loop with no forward progress.
+            for txid in &excluded {
+                self.consensus.pending_transactions.remove(txid);
             }
         }
         self.consensus.deferred_decisions = deferred;
@@ -572,13 +729,34 @@ impl<E: Executor> Reactor<E> {
             };
 
             match &decision.value {
-                Value::Block { height: bh, .. } => {
+                Value::Block {
+                    height: bh,
+                    hash: decided_hash,
+                } => {
                     let bh = *bh;
+                    let decided_hash = *decided_hash;
                     let block = {
                         let cs = &mut self.consensus;
                         cs.pending_blocks.remove(&bh)
                     };
                     if let Some(block) = block {
+                        // A rollback can leave a decision whose block was
+                        // reorged away; the block now pending at this height
+                        // belongs to the NEW chain. Executing it under the old
+                        // decision would bind the wrong block to that consensus
+                        // record — drop the stale decision instead and leave
+                        // the block pending for a fresh proposal.
+                        if block.hash != decided_hash {
+                            warn!(
+                                block_height = bh,
+                                decided = %decided_hash,
+                                local = %block.hash,
+                                consensus_height = %decision.consensus_height,
+                                "Dropping stale deferred block decision — hash mismatch after rollback"
+                            );
+                            self.consensus.pending_blocks.insert(bh, block);
+                            continue;
+                        }
                         info!(
                             block_height = bh,
                             consensus_height = %decision.consensus_height,
@@ -588,6 +766,31 @@ impl<E: Executor> Reactor<E> {
                             .await
                             .context("handle_block_with_decision failed in deferred drain")?;
                     } else {
+                        // No pending block at this height. Before parking the
+                        // queue on it, check whether the height was already
+                        // executed: a block row with the SAME hash means this
+                        // decision is a duplicate record (a re-decide after a
+                        // rollback, or a sync replaying both) — already
+                        // satisfied; a DIFFERENT hash means the decided block
+                        // was reorged away. Either way the decision is
+                        // terminal — parking it would wedge the drain forever
+                        // on a delivery that can never come.
+                        match select_block_at_height(&self.db_conn(), bh).await {
+                            Ok(Some(row)) => {
+                                warn!(
+                                    block_height = bh,
+                                    decided = %decided_hash,
+                                    executed = %row.hash,
+                                    consensus_height = %decision.consensus_height,
+                                    "Dropping deferred block decision — height already executed"
+                                );
+                                continue;
+                            }
+                            Ok(None) => {}
+                            Err(e) => {
+                                warn!(error = %e, block_height = bh, "Block lookup failed during drain; parking decision");
+                            }
+                        }
                         info!(
                             block_height = bh,
                             consensus_height = %decision.consensus_height,
@@ -614,20 +817,35 @@ impl<E: Executor> Reactor<E> {
                         let anchor_height = *anchor_height;
                         let anchor_hash = *anchor_hash;
                         let resolved_txs = self.resolve_batch_txs(txs).await?;
-                        self.process_decided_batch(
-                            anchor_height,
-                            anchor_hash,
-                            decision.consensus_height,
-                            &decision.certificate,
-                            &resolved_txs,
-                        )
-                        .await
-                        .context("process_decided_batch failed in deferred drain")?;
-                        if let Some(tx) = &self.event_tx {
-                            let txids: Vec<String> = resolved_txs
-                                .iter()
-                                .map(|tx| tx.compute_txid().to_string())
-                                .collect();
+                        let outcome = self
+                            .process_decided_batch(
+                                anchor_height,
+                                anchor_hash,
+                                decision.consensus_height,
+                                &decision.certificate,
+                                &resolved_txs,
+                            )
+                            .await
+                            .context("process_decided_batch failed in deferred drain")?;
+                        // Executed batches announce their txids; EMPTY batches
+                        // announce with no txids — BatchProcessed is the
+                        // "chain moved" heartbeat the info publisher (and so
+                        // API availability) is driven by, and empty deadline
+                        // batches are the only events a quiet chain produces.
+                        // Only a non-empty record-only skip stays silent:
+                        // nothing executed, and claiming its txids were
+                        // processed is exactly the audit bug.
+                        if (outcome == BatchOutcome::Executed || resolved_txs.is_empty())
+                            && let Some(tx) = &self.event_tx
+                        {
+                            let txids: Vec<String> = if outcome == BatchOutcome::Executed {
+                                resolved_txs
+                                    .iter()
+                                    .map(|tx| tx.compute_txid().to_string())
+                                    .collect()
+                            } else {
+                                Vec::new()
+                            };
                             if tx.send(Event::BatchProcessed { txids }).await.is_err() {
                                 warn!("Event receiver dropped, cannot send BatchProcessed event");
                             }
@@ -751,24 +969,7 @@ impl<E: Executor> Reactor<E> {
                         .context("Failed to encode commit certificate")?
                         .encode_to_vec();
 
-                    if *anchor_height < last_height {
-                        warn!(
-                            anchor = anchor_height,
-                            last_height,
-                            consensus_height = %certificate.height,
-                            "Skipping stale batch — anchor below current height"
-                        );
-                        insert_batch(
-                            &conn,
-                            certificate.height.as_u64(),
-                            *anchor_height,
-                            &anchor_hash.to_string(),
-                            &cert_bytes,
-                            false,
-                        )
-                        .await
-                        .context("Failed to record stale batch for sync")?;
-                    } else if *anchor_height > last_height {
+                    if *anchor_height > last_height {
                         info!(
                             anchor = anchor_height,
                             last_height,
@@ -783,21 +984,38 @@ impl<E: Executor> Reactor<E> {
                             },
                         );
                     } else {
-                        self.process_decided_batch(
-                            *anchor_height,
-                            *anchor_hash,
-                            certificate.height,
-                            &cert_bytes,
-                            &full_txs,
-                        )
-                        .await
-                        .context("process_decided_batch failed in Finalized handler")?;
-                        result = consensus_state::ConsensusResult::BatchProcessed {
-                            txids: full_txs
-                                .iter()
-                                .map(|tx| tx.compute_txid().to_string())
-                                .collect(),
-                        };
+                        // anchor_height <= last_height: process_decided_batch's
+                        // anchor gate executes at an exact tip match and
+                        // records-only (with certified content) for anything
+                        // stale — one gate for both callers.
+                        let outcome = self
+                            .process_decided_batch(
+                                *anchor_height,
+                                *anchor_hash,
+                                certificate.height,
+                                &cert_bytes,
+                                &full_txs,
+                            )
+                            .await
+                            .context("process_decided_batch failed in Finalized handler")?;
+                        // Executed batches announce their txids; EMPTY batches
+                        // announce with no txids — BatchProcessed is the "chain
+                        // moved" heartbeat driving the info publisher and
+                        // therefore API availability, and empty deadline
+                        // batches are the only events a quiet chain produces.
+                        // Only a non-empty record-only skip stays silent.
+                        if outcome == BatchOutcome::Executed || full_txs.is_empty() {
+                            result = consensus_state::ConsensusResult::BatchProcessed {
+                                txids: if outcome == BatchOutcome::Executed {
+                                    full_txs
+                                        .iter()
+                                        .map(|tx| tx.compute_txid().to_string())
+                                        .collect()
+                                } else {
+                                    Vec::new()
+                                },
+                            };
+                        }
                     }
                 }
                 Value::Block { height, hash } => {
@@ -881,10 +1099,11 @@ impl<E: Executor> Reactor<E> {
 
 #[cfg(test)]
 mod tests {
-    use super::{batch_is_ordered, dependency_sort};
+    use super::{batch_is_ordered, dependency_sort, transitive_exclusion};
     use bitcoin::absolute::LockTime;
     use bitcoin::transaction::Version;
-    use bitcoin::{Amount, OutPoint, ScriptBuf, Sequence, Transaction, TxIn, TxOut, Witness};
+    use bitcoin::{Amount, OutPoint, ScriptBuf, Sequence, Transaction, TxIn, TxOut, Txid, Witness};
+    use std::collections::HashSet;
 
     /// A tx spending each outpoint in `parents`, with one output. `nonce`
     /// perturbs the output value so distinct txs get distinct txids.
@@ -962,5 +1181,51 @@ mod tests {
         let b = tx(&[OutPoint::null()], 2);
         let c = tx(&[OutPoint::null()], 3);
         assert_eq!(dependency_sort(&[a, b, c]), vec![0, 1, 2]);
+    }
+
+    #[test]
+    fn transitive_exclusion_drops_descendants_within_a_batch() {
+        let parent = tx(&[OutPoint::null()], 1);
+        let child = tx(&[spend(&parent)], 2);
+        let grandchild = tx(&[spend(&child)], 3);
+        let independent = tx(&[OutPoint::null()], 4);
+
+        let excluded: HashSet<Txid> = [parent.compute_txid()].into();
+        let batch = vec![
+            parent.clone(),
+            child.clone(),
+            grandchild.clone(),
+            independent.clone(),
+        ];
+        let result = transitive_exclusion(&[batch], &excluded);
+
+        assert!(result.contains(&parent.compute_txid()));
+        assert!(result.contains(&child.compute_txid()));
+        assert!(result.contains(&grandchild.compute_txid()));
+        assert!(!result.contains(&independent.compute_txid()));
+    }
+
+    #[test]
+    fn transitive_exclusion_crosses_batch_boundaries() {
+        let parent = tx(&[OutPoint::null()], 1);
+        let child = tx(&[spend(&parent)], 2);
+        let excluded: HashSet<Txid> = [parent.compute_txid()].into();
+
+        // Parent in batch 0, child in batch 1 — the closure must follow the
+        // dependency across the replay sequence.
+        let result = transitive_exclusion(&[vec![parent.clone()], vec![child.clone()]], &excluded);
+        assert!(result.contains(&child.compute_txid()));
+    }
+
+    #[test]
+    fn transitive_exclusion_leaves_unrelated_batches_untouched() {
+        let a = tx(&[OutPoint::null()], 1);
+        let b = tx(&[OutPoint::null()], 2);
+        let excluded: HashSet<Txid> = [tx(&[OutPoint::null()], 9).compute_txid()].into();
+
+        let result = transitive_exclusion(&[vec![a.clone()], vec![b.clone()]], &excluded);
+        assert!(!result.contains(&a.compute_txid()));
+        assert!(!result.contains(&b.compute_txid()));
+        assert_eq!(result.len(), 1);
     }
 }
