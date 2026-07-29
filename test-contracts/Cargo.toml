@@ -18,8 +18,8 @@ unit_arg = "allow"
 [workspace.dependencies]
 stdlib = { path = "../core/stdlib" }
 
-# Match core's forked wit-bindgen (adds per-type/per-field attribute injection
-# for contract!'s `indexed = {...}`). Drop once upstreamed.
+# Match core's wit-bindgen pin (targeted attribute injection for contract!'s
+# `indexed = {...}`). Drop once a release after 0.60.0 carries it.
 [patch.crates-io]
-wit-bindgen-rust = { git = "https://github.com/wilfreddenton/wit-bindgen", rev = "bca574259a6c87911da2045c0a5efde17927e694" }
-wit-bindgen-rust-macro = { git = "https://github.com/wilfreddenton/wit-bindgen", rev = "bca574259a6c87911da2045c0a5efde17927e694" }
+wit-bindgen-rust = { git = "https://github.com/bytecodealliance/wit-bindgen", rev = "7687beb996d633d817756f434af2526d442a61d6" }
+wit-bindgen-rust-macro = { git = "https://github.com/bytecodealliance/wit-bindgen", rev = "7687beb996d633d817756f434af2526d442a61d6" }
