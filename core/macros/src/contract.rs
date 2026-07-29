@@ -8,6 +8,10 @@ use syn::Ident;
 use wit_parser::Resolve;
 use wit_validator::Validator;
 
+/// The world every contract's WIT declares. Also the prefix of a fully-qualified
+/// wit-bindgen selector for a type declared directly in that world.
+const WORLD: &str = "root";
+
 #[derive(FromMeta)]
 pub struct Config {
     name: String,
@@ -95,12 +99,11 @@ fn index_attr(spec: &str) -> String {
 }
 
 /// Build the `additional_type_attributes` option tokens for the wit-bindgen
-/// `generate!` from the `indexed` spec: one `#[index(...)]` per declared index. The
-/// fork emits each as its own attribute line on the (owned) record, and the
+/// `generate!` from the `indexed` spec: one `#[index(...)]` per declared index.
+/// wit-bindgen emits each as its own attribute line on the (owned) record, and the
 /// `Storage` derive (applied to every record, where the index machinery now lives)
 /// parses them via the shared index-declaration grammar. (Storage enums are NOT
-/// injected here — the fork applies type attributes only to records, not
-/// enums/variants — they're generated directly from the WIT, see
+/// injected here — they're generated directly from the WIT, see
 /// [`storage_enum_impls`].)
 fn index_attr_options(indexed: Option<&str>) -> TokenStream {
     let Some(spec) = indexed else {
@@ -131,10 +134,17 @@ fn index_attr_options(indexed: Option<&str>) -> TokenStream {
     for (record, attrs) in by_record {
         // The index machinery is folded into `#[derive(Storage)]` (applied to every
         // record via the contract's `additional_derives`), so we inject only the
-        // `#[index(...)]` attributes here. The generator takes one bracketed list of
-        // attribute strings per selector (records-only; non-derive attrs are emitted
-        // verbatim so `#[index(...)]` passes through untouched).
-        type_pairs.push(quote! { #record: [ #(#attrs),* ], });
+        // `#[index(...)]` attributes here; non-derive attributes are emitted verbatim
+        // so `#[index(...)]` passes through untouched. Selectors are fully qualified,
+        // and these records are declared directly in the world below, so the qualified
+        // name is the world name and then the record's kebab wit name. A record that
+        // isn't there trips wit-bindgen's unused-selector error.
+        let selector = format!("{WORLD}/{record}");
+        let attrs = attrs.iter().map(|attr| {
+            attr.parse::<TokenStream>()
+                .unwrap_or_else(|e| panic!("generated a malformed index attribute {attr:?}: {e}"))
+        });
+        type_pairs.push(quote! { #selector: [ #(#attrs)* ], });
     }
     quote! { additional_type_attributes: { #(#type_pairs)* }, }
 }
@@ -177,7 +187,7 @@ pub fn generate(config: Config) -> TokenStream {
         };
 
         wit_bindgen::generate!({
-            world: "root",
+            world: #WORLD,
             path: #path,
             generate_all,
             generate_unused_types: true,

@@ -22,7 +22,7 @@ too_many_arguments = "allow"
 [workspace.dependencies]
 # IMPORTANT
 wasmtime = { version = "=46.0.1", features = ["wave", "component-model-async"] }
-wit-bindgen = "=0.59.0"
+wit-bindgen = "=0.60.0"
 wit-component = "=0.253.0"
 wit-parser = "=0.253.0"
 wasm-wave = { version ="0.253.0", default-features = false }
@@ -103,13 +103,13 @@ arc-malachitebft-signing-ed25519 = { git = "https://github.com/KontorProtocol/ma
 arc-malachitebft-sync = { git = "https://github.com/KontorProtocol/malachite", rev = "0bf0365bf4f14afae716efd0da8f22879fa8dd52" }
 arc-malachitebft-wal = { git = "https://github.com/KontorProtocol/malachite", rev = "0bf0365bf4f14afae716efd0da8f22879fa8dd52" }
 
-# Fork adds `additional_type_attributes` / `additional_member_attributes` to
-# wit-bindgen's generate!, so `contract!` can inject `#[index]` / `#[derive(Indexed)]`
-# onto specific WIT record types. Tracks the upstream PR branch
-# (bytecodealliance/wit-bindgen feat/targeted-attributes); drop once merged.
+# `additional_type_attributes` / `additional_member_attributes` on wit-bindgen's
+# generate!, so `contract!` can inject `#[index]` onto specific WIT record types.
+# Upstreamed in bytecodealliance/wit-bindgen#1656 but not yet in a release; drop
+# this patch once a version after 0.60.0 is published.
 [patch.crates-io]
-wit-bindgen-rust = { git = "https://github.com/wilfreddenton/wit-bindgen", rev = "bca574259a6c87911da2045c0a5efde17927e694" }
-wit-bindgen-rust-macro = { git = "https://github.com/wilfreddenton/wit-bindgen", rev = "bca574259a6c87911da2045c0a5efde17927e694" }
+wit-bindgen-rust = { git = "https://github.com/bytecodealliance/wit-bindgen", rev = "7687beb996d633d817756f434af2526d442a61d6" }
+wit-bindgen-rust-macro = { git = "https://github.com/bytecodealliance/wit-bindgen", rev = "7687beb996d633d817756f434af2526d442a61d6" }
 
 # Optimize the proof-system crates even in dev/test builds. Proof
 # generation (kontor-crypto's Nova prover) is exercised only in tests and
