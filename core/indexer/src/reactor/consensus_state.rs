@@ -122,6 +122,121 @@ pub struct ObservationChannels {
     pub state_tx: mpsc::Sender<StateEvent>,
 }
 
+// --- Finality tracking ---
+
+/// The batch's txids that did NOT confirm on Bitcoin by its deadline.
+///
+/// Deliberately takes no tip: the verdict must be a function of the batch and the
+/// `blocks`/`transactions` tables alone. Testing only that `confirmed_height` is
+/// SET would make it a function of WHEN a node evaluates instead — `confirmed_height
+/// <= last_height` always holds (a block sets `last_height` before it executes), so
+/// a tx confirmed one block past the deadline reads missing to a node evaluating at
+/// the deadline and confirmed to one evaluating later. Two honest nodes then
+/// disagree about the same batch and one rolls back while the other finalizes it.
+async fn missing_txids(conn: &libsql::Connection, batch: &UnfinalizedBatch) -> Vec<Txid> {
+    let mut missing = Vec::new();
+    for txid in &batch.txids {
+        let confirmed = match get_transaction_by_txid(conn, &txid.to_string()).await {
+            Ok(Some(row)) => row.confirmed_height.is_some_and(|h| h <= batch.deadline),
+            _ => false,
+        };
+        if !confirmed {
+            missing.push(*txid);
+        }
+    }
+    missing
+}
+
+/// Decide what an at-deadline set means, given each batch's unconfirmed txids.
+/// Returns the events to emit and the batches that stay tracked.
+///
+/// `at_deadline` must be sorted by `(anchor_height, consensus_height)` and
+/// `missing_per_batch` index-aligned with it. Split out as a pure function so the
+/// partition — the part that decides whether nodes converge — is testable without
+/// a database or a live `ConsensusState`.
+fn build_finality_events(
+    at_deadline: &[UnfinalizedBatch],
+    missing_per_batch: &[Vec<Txid>],
+    still_pending: Vec<UnfinalizedBatch>,
+) -> (Vec<FinalityEvent>, Vec<UnfinalizedBatch>) {
+    debug_assert_eq!(at_deadline.len(), missing_per_batch.len());
+    let mut events = Vec::new();
+
+    let Some(first_fail) = missing_per_batch.iter().position(|m| !m.is_empty()) else {
+        for batch in at_deadline {
+            info!(
+                consensus_height = %batch.consensus_height,
+                anchor = batch.anchor_height,
+                "Batch finalized"
+            );
+            events.push(FinalityEvent::BatchFinalized {
+                consensus_height: batch.consensus_height,
+                anchor_height: batch.anchor_height,
+            });
+        }
+        return (events, still_pending);
+    };
+
+    // Only batches strictly ahead of the first failure finalize. Everything from it
+    // onward is replayed by this same rollback — the sort guarantees they all have
+    // anchor_height >= from_anchor — so they are invalidated whether or not their
+    // own txids confirmed. Finalizing one of them would announce a batch that is
+    // about to be torn out, and dropping it from tracking silently left convergence
+    // to an implicit replay invariant (#426).
+    for batch in &at_deadline[..first_fail] {
+        info!(
+            consensus_height = %batch.consensus_height,
+            anchor = batch.anchor_height,
+            "Batch finalized"
+        );
+        events.push(FinalityEvent::BatchFinalized {
+            consensus_height: batch.consensus_height,
+            anchor_height: batch.anchor_height,
+        });
+    }
+
+    let from_anchor = at_deadline[first_fail].anchor_height;
+    let mut invalidated: Vec<Height> = at_deadline[first_fail..]
+        .iter()
+        .map(|b| b.consensus_height)
+        .collect();
+
+    // The exclusion set must cover every batch the rollback replays, not just the
+    // first to fail: the replay reloads each one with its FULL certified content
+    // (`batch_txids` is append-only and the exclusion filter is in-memory), so a
+    // batch left out re-executes, re-arms the identical deadline, and rolls back
+    // again with the complementary set — a cycle that never converges.
+    let missing: Vec<Txid> = missing_per_batch[first_fail..]
+        .iter()
+        .flatten()
+        .copied()
+        .collect();
+
+    let mut surviving = Vec::new();
+    for pending in still_pending {
+        if pending.anchor_height >= from_anchor {
+            invalidated.push(pending.consensus_height);
+        } else {
+            surviving.push(pending);
+        }
+    }
+
+    warn!(
+        from_anchor,
+        invalidated = ?invalidated,
+        missing = missing.len(),
+        "Cascade invalidation triggered"
+    );
+
+    events.push(FinalityEvent::Rollback {
+        from_anchor,
+        invalidated_batches: invalidated,
+        missing_txids: missing,
+    });
+
+    (events, surviving)
+}
+
 impl ConsensusState {
     pub async fn new(
         conn: libsql::Connection,
@@ -275,8 +390,6 @@ impl ConsensusState {
         msgs
     }
 
-    // --- Finality tracking ---
-
     pub async fn check_finality(
         &mut self,
         conn: &libsql::Connection,
@@ -296,70 +409,23 @@ impl ConsensusState {
             }
         }
 
+        // `from_anchor` below is taken from the FIRST failing batch, which is the
+        // minimal failing anchor only because `anchor_height` is the PRIMARY sort
+        // key here. Re-sorting by `consensus_height` alone would silently break it.
         at_deadline.sort_by_key(|b| (b.anchor_height, b.consensus_height));
 
-        for (i, batch) in at_deadline.iter().enumerate() {
-            let mut missing = Vec::new();
-            for txid in &batch.txids {
-                let confirmed = match get_transaction_by_txid(conn, &txid.to_string()).await {
-                    Ok(Some(row)) => row.confirmed_height.is_some(),
-                    _ => false,
-                };
-                if !confirmed {
-                    missing.push(*txid);
-                }
-            }
-
-            if missing.is_empty() {
-                info!(
-                    consensus_height = %batch.consensus_height,
-                    anchor = batch.anchor_height,
-                    "Batch finalized"
-                );
-                events.push(FinalityEvent::BatchFinalized {
-                    consensus_height: batch.consensus_height,
-                    anchor_height: batch.anchor_height,
-                });
-            } else {
-                let from_anchor = batch.anchor_height;
-                let mut invalidated = vec![batch.consensus_height];
-
-                // Every remaining at-deadline batch shares this fate: the sort
-                // above orders by (anchor_height, consensus_height), so all of
-                // them have anchor_height >= from_anchor and are replayed by
-                // this same rollback. Fold them into the invalidated set
-                // explicitly — silently dropping them from tracking left
-                // convergence to an implicit replay invariant (#426).
-                invalidated.extend(at_deadline[i + 1..].iter().map(|b| b.consensus_height));
-
-                let mut surviving = Vec::new();
-                for pending in still_pending.drain(..) {
-                    if pending.anchor_height >= from_anchor {
-                        invalidated.push(pending.consensus_height);
-                    } else {
-                        surviving.push(pending);
-                    }
-                }
-                still_pending = surviving;
-
-                warn!(
-                    from_anchor,
-                    invalidated = ?invalidated,
-                    missing = missing.len(),
-                    "Cascade invalidation triggered"
-                );
-
-                events.push(FinalityEvent::Rollback {
-                    from_anchor,
-                    invalidated_batches: invalidated,
-                    missing_txids: missing,
-                });
-
-                break;
-            }
+        let mut missing_per_batch = Vec::with_capacity(at_deadline.len());
+        for batch in &at_deadline {
+            missing_per_batch.push(missing_txids(conn, batch).await);
         }
 
-        self.unfinalized_batches = still_pending;
+        let (built, surviving) = build_finality_events(
+            &at_deadline,
+            &missing_per_batch,
+            std::mem::take(&mut still_pending),
+        );
+        events.extend(built);
+        self.unfinalized_batches = surviving;
         events
     }
 
@@ -545,18 +611,29 @@ impl ConsensusState {
         last_height: u64,
     ) -> Option<(u64, HashSet<Txid>)> {
         let finality_events = self.check_finality(conn, last_height).await;
-        let mut result = None;
-        for event in &finality_events {
-            if let FinalityEvent::Rollback {
+        // At most one Rollback per pass — `check_finality` folds every failing
+        // at-deadline batch into a single event. Taking the FIRST rather than the
+        // last matters if that ever regresses: last-wins would keep the highest
+        // `from_anchor` and silently discard the lower ones' exclusions.
+        debug_assert!(
+            finality_events
+                .iter()
+                .filter(|e| matches!(e, FinalityEvent::Rollback { .. }))
+                .count()
+                <= 1,
+            "check_finality must emit at most one Rollback"
+        );
+        let result = finality_events.iter().find_map(|event| match event {
+            FinalityEvent::Rollback {
                 from_anchor,
                 missing_txids,
                 ..
-            } = event
-            {
+            } => {
                 let excluded: HashSet<Txid> = missing_txids.iter().copied().collect();
-                result = Some((*from_anchor, excluded));
+                Some((*from_anchor, excluded))
             }
-        }
+            _ => None,
+        });
         self.emit_finality_events(&finality_events);
         result
     }
@@ -605,5 +682,227 @@ impl ConsensusState {
             return Ok(Some("contains already-processed transactions"));
         }
         Ok(None)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{UnfinalizedBatch, build_finality_events, missing_txids};
+    use crate::consensus::Height;
+    use crate::consensus::finality_types::FinalityEvent;
+    use crate::database::queries::{confirm_transaction, insert_block, insert_transaction};
+    use crate::test_utils::{new_mock_block_hash, new_test_db};
+    use bitcoin::hashes::Hash;
+    use bitcoin::{BlockHash, Txid};
+
+    fn txid(n: u8) -> Txid {
+        Txid::from_byte_array([n; 32])
+    }
+
+    /// A tracked batch at `anchor`, deadline `anchor + 6`, carrying `txids`.
+    fn batch(consensus_height: u64, anchor: u64, txids: &[u8]) -> UnfinalizedBatch {
+        UnfinalizedBatch {
+            consensus_height: Height::new(consensus_height),
+            anchor_height: anchor,
+            anchor_hash: BlockHash::all_zeros(),
+            txids: txids.iter().copied().map(txid).collect(),
+            deadline: anchor + 6,
+        }
+    }
+
+    fn rollback_of(events: &[FinalityEvent]) -> (u64, Vec<Height>, Vec<Txid>) {
+        let mut found = events.iter().filter_map(|e| match e {
+            FinalityEvent::Rollback {
+                from_anchor,
+                invalidated_batches,
+                missing_txids,
+            } => Some((
+                *from_anchor,
+                invalidated_batches.clone(),
+                missing_txids.clone(),
+            )),
+            _ => None,
+        });
+        let first = found.next().expect("expected a Rollback event");
+        assert!(found.next().is_none(), "expected exactly one Rollback");
+        first
+    }
+
+    fn finalized_heights(events: &[FinalityEvent]) -> Vec<Height> {
+        events
+            .iter()
+            .filter_map(|e| match e {
+                FinalityEvent::BatchFinalized {
+                    consensus_height, ..
+                } => Some(*consensus_height),
+                _ => None,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn all_confirmed_finalizes_every_batch_and_rolls_back_nothing() {
+        let at_deadline = vec![batch(1, 100, &[1]), batch(2, 100, &[2])];
+        let missing = vec![vec![], vec![]];
+        let pending = vec![batch(3, 105, &[3])];
+
+        let (events, surviving) = build_finality_events(&at_deadline, &missing, pending);
+
+        assert_eq!(
+            finalized_heights(&events),
+            vec![Height::new(1), Height::new(2)]
+        );
+        assert!(
+            !events
+                .iter()
+                .any(|e| matches!(e, FinalityEvent::Rollback { .. }))
+        );
+        assert_eq!(surviving.len(), 1, "pending batch must stay tracked");
+    }
+
+    /// The #515 shape: two non-empty batches sharing one anchor, both failing.
+    /// A per-batch exclusion set would empty one and leave the other full, so the
+    /// replay re-arms the same deadline and the rollback never converges.
+    #[test]
+    fn exclusion_set_unions_every_failing_batch_in_the_band() {
+        let at_deadline = vec![batch(557, 312469, &[1, 2, 3]), batch(628, 312469, &[4, 5])];
+        let missing = vec![vec![txid(1), txid(2), txid(3)], vec![txid(4), txid(5)]];
+
+        let (events, _) = build_finality_events(&at_deadline, &missing, Vec::new());
+        let (from_anchor, invalidated, excluded) = rollback_of(&events);
+
+        assert_eq!(from_anchor, 312469);
+        assert_eq!(invalidated, vec![Height::new(557), Height::new(628)]);
+        assert_eq!(
+            excluded,
+            vec![txid(1), txid(2), txid(3), txid(4), txid(5)],
+            "both failing batches' txids must be excluded"
+        );
+    }
+
+    /// A batch that PASSES but sorts at or after the first failure is still torn
+    /// out by the rollback, so it must be invalidated rather than finalized —
+    /// announcing it as final would contradict the rollback in the same pass.
+    #[test]
+    fn passing_batch_after_the_first_failure_is_invalidated_not_finalized() {
+        let at_deadline = vec![
+            batch(10, 100, &[1]), // passes, before the failure
+            batch(11, 101, &[2]), // fails
+            batch(12, 102, &[3]), // passes, but after
+        ];
+        let missing = vec![vec![], vec![txid(2)], vec![]];
+
+        let (events, _) = build_finality_events(&at_deadline, &missing, Vec::new());
+        let (from_anchor, invalidated, _) = rollback_of(&events);
+        let finalized = finalized_heights(&events);
+
+        assert_eq!(from_anchor, 101);
+        assert_eq!(finalized, vec![Height::new(10)]);
+        assert_eq!(invalidated, vec![Height::new(11), Height::new(12)]);
+        for h in &finalized {
+            assert!(
+                !invalidated.contains(h),
+                "{h} was both finalized and invalidated"
+            );
+        }
+    }
+
+    /// `from_anchor` comes from the first FAILING batch, which is minimal among
+    /// failures only because `anchor_height` is the primary sort key.
+    #[test]
+    fn from_anchor_skips_passing_batches_at_lower_anchors() {
+        let at_deadline = vec![batch(20, 100, &[1]), batch(21, 101, &[2])];
+        let missing = vec![vec![], vec![txid(2)]];
+
+        let (events, _) = build_finality_events(&at_deadline, &missing, Vec::new());
+        let (from_anchor, _, _) = rollback_of(&events);
+
+        assert_eq!(from_anchor, 101, "the passing batch at 100 must survive");
+    }
+
+    #[test]
+    fn pending_batches_at_or_above_the_anchor_are_invalidated() {
+        let at_deadline = vec![batch(30, 200, &[1])];
+        let missing = vec![vec![txid(1)]];
+        let pending = vec![
+            batch(31, 199, &[2]),
+            batch(32, 200, &[3]),
+            batch(33, 201, &[4]),
+        ];
+
+        let (events, surviving) = build_finality_events(&at_deadline, &missing, pending);
+        let (_, invalidated, _) = rollback_of(&events);
+
+        assert_eq!(
+            surviving
+                .iter()
+                .map(|b| b.consensus_height)
+                .collect::<Vec<_>>(),
+            vec![Height::new(31)],
+            "only the batch anchored below from_anchor survives"
+        );
+        assert_eq!(
+            invalidated,
+            vec![Height::new(30), Height::new(32), Height::new(33)]
+        );
+    }
+
+    /// The determinism property: a tx confirmed AFTER the deadline must read as
+    /// missing no matter how far the tip has since advanced. Testing only that
+    /// `confirmed_height` is set would make the verdict depend on when a node
+    /// happens to evaluate, and two honest nodes would diverge.
+    #[tokio::test]
+    async fn confirmation_is_bounded_by_the_deadline() {
+        let (_reader, writer, _dir) = new_test_db().await.unwrap();
+        let conn = writer.connection();
+
+        // Batch anchored at 10 → deadline 16. One tx confirms at 16 (in time),
+        // the other at 17 (one block late).
+        for height in [10, 16, 17] {
+            insert_block(
+                &conn,
+                indexer_types::BlockRow::builder()
+                    .height(height)
+                    .hash(new_mock_block_hash(height as u32))
+                    .relevant(true)
+                    .build(),
+            )
+            .await
+            .unwrap();
+        }
+        for (n, confirmed_at) in [(1u8, 16u64), (2u8, 17u64)] {
+            insert_transaction(
+                &conn,
+                indexer_types::TransactionRow::builder()
+                    .height(10)
+                    .txid(txid(n).to_string())
+                    .build(),
+            )
+            .await
+            .unwrap();
+            confirm_transaction(&conn, &txid(n).to_string(), confirmed_at, 0)
+                .await
+                .unwrap();
+        }
+
+        let b = batch(500, 10, &[1, 2]);
+        assert_eq!(b.deadline, 16);
+        assert_eq!(
+            missing_txids(&conn, &b).await,
+            vec![txid(2)],
+            "the tx confirmed at deadline+1 must count as missing"
+        );
+
+        // The same batch against the same tables gives the same answer regardless
+        // of how far the chain has moved on — there is no tip input at all.
+        assert_eq!(missing_txids(&conn, &b).await, vec![txid(2)]);
+    }
+
+    #[tokio::test]
+    async fn a_txid_with_no_row_counts_as_missing() {
+        let (_reader, writer, _dir) = new_test_db().await.unwrap();
+        let conn = writer.connection();
+        let b = batch(500, 10, &[9]);
+        assert_eq!(missing_txids(&conn, &b).await, vec![txid(9)]);
     }
 }
