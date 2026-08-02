@@ -11,7 +11,7 @@ use malachitebft_core_types::{Round, Validity};
 use malachitebft_engine::host::Next;
 use metrics::{counter, gauge};
 use prost::Message;
-use tracing::{info, warn};
+use tracing::{debug, info, warn};
 
 use crate::consensus::codec::encode_commit_certificate;
 use crate::consensus::finality_types::{DecidedBatch, StateEvent, UnfinalizedBatch, deadline_for};
@@ -199,12 +199,11 @@ fn restore_waiting(
 /// is unrefillable locally or by sync.
 ///
 /// The replay set goes FIRST and survivors keep their relative order behind it —
-/// deliberately NOT sorted by consensus height. `drain_deferred_decisions` is
-/// strictly ordered and parks on the first entry whose anchor exceeds the tip, so
-/// anything unready at the front stalls everything behind it. The replay set is
-/// precisely what raises the tip back up after a rollback; putting a survivor ahead
-/// of it wedges the drain permanently, since the block decisions that would advance
-/// the tip are themselves queued behind the parked entry.
+/// deliberately NOT sorted by consensus height. A survivor BLOCK decision whose
+/// block has not arrived still parks the drain and stops it (batches merely step
+/// aside; blocks cannot, since they must apply in sequence). The replay set is
+/// precisely what raises the tip back up after a rollback, so a survivor ordered
+/// ahead of it can stall the decisions that would make that survivor ready.
 ///
 /// Anchor order makes this correct as well as safe: a survivor was deferred because
 /// its anchor was above the pre-rollback tip, while every replayed batch is at or
@@ -993,7 +992,10 @@ impl<E: Executor> Reactor<E> {
                     ..
                 } => {
                     if *anchor_height > self.last_height {
-                        info!(
+                        // debug!, not info!: every held batch is re-tested after every
+                        // block execution, so a lagging node catching up would emit
+                        // this once per (held batch x block) from inside the loop.
+                        debug!(
                             anchor_height = *anchor_height,
                             last_height = self.last_height,
                             consensus_height = %decision.consensus_height,

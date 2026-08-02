@@ -294,7 +294,8 @@ impl<E: Executor> Reactor<E> {
                 // whose only block decision is queued behind it).
                 self.consensus
                     .clear_on_rollback(&self.db_conn(), to_height)
-                    .await;
+                    .await
+                    .context("clear_on_rollback failed during Bitcoin reorg")?;
                 let checkpoint = self.consensus.get_checkpoint(&self.db_conn()).await;
                 self.consensus
                     .emit_state_event(StateEvent::RollbackExecuted {

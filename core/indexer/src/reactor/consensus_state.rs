@@ -370,7 +370,11 @@ impl ConsensusState {
 
     /// Clear consensus state that is invalidated by a reorg rollback.
     /// Pending blocks, cached blocks, and in-flight batch data are all stale.
-    pub async fn clear_on_rollback(&mut self, conn: &libsql::Connection, to_height: u64) {
+    pub async fn clear_on_rollback(
+        &mut self,
+        conn: &libsql::Connection,
+        to_height: u64,
+    ) -> Result<()> {
         self.pending_blocks.clear();
         self.deferred_decisions.clear();
         self.pending_proposal = None;
@@ -380,15 +384,15 @@ impl ConsensusState {
         // deadlines reopens exactly the #515 hole on the reorg path. Re-deriving
         // rather than filtering in memory also drops the batches whose anchor block
         // was replaced: the query joins the block CURRENTLY at that height by hash.
-        match load_unfinalized_batches(conn, to_height).await {
-            Ok(batches) => self.unfinalized_batches = batches,
-            Err(e) => {
-                // Losing tracking here is the #515 divergence, so make it loud
-                // rather than silently continuing with a stale set.
-                warn!(error = %e, to_height, "Failed to re-derive finality tracking after rollback");
-                self.unfinalized_batches.clear();
-            }
-        }
+        // Propagate rather than clear on failure: an empty tracking set is exactly
+        // the #515 divergence condition, and reaching it from a transient error
+        // (SQLITE_BUSY, a WAL hiccup) would be silent. The sole caller sits in
+        // `process_block_event`, which already returns `Result`, and the startup
+        // path treats the same failure as fatal.
+        self.unfinalized_batches = load_unfinalized_batches(conn, to_height)
+            .await
+            .context("Failed to re-derive finality tracking after rollback")?;
+        Ok(())
     }
 
     fn validator_set(&self) -> ValidatorSet {

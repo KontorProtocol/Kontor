@@ -258,6 +258,13 @@ CREATE TABLE IF NOT EXISTS unconfirmed_batch_txs (
   FOREIGN KEY (batch_height) REFERENCES batches (consensus_height)
 );
 
+-- Sync resolves raw txs per batch (`select_unconfirmed_batch_txs`). The table is
+-- keyed by txid, so without this that lookup is a full scan — and the rows are
+-- long-lived: they are removed only on confirmation or by the startup suffix
+-- cleanup, so a record-only or finality-excluded tx leaves one indefinitely.
+CREATE INDEX IF NOT EXISTS idx_unconfirmed_batch_txs_batch_height
+  ON unconfirmed_batch_txs (batch_height);
+
 -- Node-local operational state (NOT consensus state): a singleton key/value store.
 -- Deliberately has NO foreign key to blocks (a reorg must not cascade-delete or roll
 -- back local cursors) and is never touched by the checkpoint trigger (which fires
