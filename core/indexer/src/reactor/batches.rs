@@ -187,10 +187,19 @@ pub(super) fn batch_is_ordered(txs: &[bitcoin::Transaction]) -> bool {
 /// past it and `delete_unexecuted_batch_suffix` can only trim a SUFFIX, so the gap
 /// is unrefillable locally or by sync.
 ///
-/// Ordered by height rather than appended, because a queued decision can sit BELOW
-/// a replayed one: anchors go non-monotone across a rollback, so height H can defer
-/// on a high anchor while H+1 executes on a lower one and gets recorded. Appending
-/// survivors after the replay set would drop H for the same unrefillable reason.
+/// The replay set goes FIRST and survivors keep their relative order behind it —
+/// deliberately NOT sorted by consensus height. `drain_deferred_decisions` is
+/// strictly ordered and parks on the first entry whose anchor exceeds the tip, so
+/// anything unready at the front stalls everything behind it. The replay set is
+/// precisely what raises the tip back up after a rollback; putting a survivor ahead
+/// of it wedges the drain permanently, since the block decisions that would advance
+/// the tip are themselves queued behind the parked entry.
+///
+/// Anchor order makes this correct as well as safe: a survivor was deferred because
+/// its anchor was above the pre-rollback tip, while every replayed batch is at or
+/// below it. So survivors are never ready earlier than the replay set, whatever
+/// their consensus heights — and consensus heights alone are not a reliable guide,
+/// because anchors go non-monotone across a rollback.
 ///
 /// The two inputs should be disjoint by height; where they are not, the replayed
 /// copy wins because it has been resolved and exclusion-filtered.
@@ -198,13 +207,14 @@ fn merge_replay_queue(
     replayed: VecDeque<consensus_state::DeferredDecision>,
     queued: VecDeque<consensus_state::DeferredDecision>,
 ) -> VecDeque<consensus_state::DeferredDecision> {
-    let mut merged: Vec<consensus_state::DeferredDecision> = replayed.into();
-    merged.extend(queued);
-    // Stable sort + dedup keeps the replayed copy of any shared height, since it
-    // was pushed first.
-    merged.sort_by_key(|d| d.consensus_height);
-    merged.dedup_by_key(|d| d.consensus_height);
-    merged.into()
+    let replayed_heights: Vec<Height> = replayed.iter().map(|d| d.consensus_height).collect();
+    let mut merged = replayed;
+    merged.extend(
+        queued
+            .into_iter()
+            .filter(|d| !replayed_heights.contains(&d.consensus_height)),
+    );
+    merged
 }
 
 /// What `process_decided_batch` did with a decided batch. Callers must not
@@ -1345,7 +1355,7 @@ mod tests {
         q.iter().map(|d| d.consensus_height.as_u64()).collect()
     }
 
-    /// A queued decision BELOW the replay set's max must survive. Anchors go
+    /// A queued decision BELOW the replay set's max must SURVIVE. Anchors go
     /// non-monotone across a rollback, so height H can defer on a high anchor while
     /// H+1 executes on a lower one and gets a `batches` row — putting H below the
     /// replay set. H has no row, so dropping it leaves a permanent, unrefillable
@@ -1354,19 +1364,35 @@ mod tests {
     fn merge_replay_queue_keeps_a_queued_decision_below_the_replay_set() {
         let replayed: VecDeque<_> = [decision(11), decision(12)].into();
         let queued: VecDeque<_> = [decision(10), decision(13)].into();
+        let merged = merge_replay_queue(replayed, queued);
+        let mut present = heights(&merged);
+        present.sort_unstable();
+        assert_eq!(present, vec![10, 11, 12, 13], "nothing may be dropped");
+    }
+
+    /// …but it must survive BEHIND the replay set, not ahead of it.
+    /// `drain_deferred_decisions` parks on the first entry whose anchor exceeds the
+    /// tip and stops. A survivor was deferred precisely because its anchor was above
+    /// the pre-rollback tip, so putting it first parks the queue on an anchor that
+    /// only the replay set — now stuck behind it — could ever reach.
+    #[test]
+    fn merge_replay_queue_never_orders_a_survivor_ahead_of_the_replay_set() {
+        let replayed: VecDeque<_> = [decision(11), decision(12)].into();
+        let queued: VecDeque<_> = [decision(10), decision(13)].into();
         assert_eq!(
             heights(&merge_replay_queue(replayed, queued)),
-            vec![10, 11, 12, 13]
+            vec![11, 12, 10, 13],
+            "replay set first, survivors after in their original order"
         );
     }
 
     #[test]
-    fn merge_replay_queue_orders_by_consensus_height() {
+    fn merge_replay_queue_preserves_relative_order_within_each_side() {
         let replayed: VecDeque<_> = [decision(5), decision(9)].into();
         let queued: VecDeque<_> = [decision(6), decision(7)].into();
         assert_eq!(
             heights(&merge_replay_queue(replayed, queued)),
-            vec![5, 6, 7, 9]
+            vec![5, 9, 6, 7]
         );
     }
 
