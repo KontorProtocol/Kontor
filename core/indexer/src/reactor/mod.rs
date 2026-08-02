@@ -246,9 +246,9 @@ impl<E: Executor> Reactor<E> {
                 self.consensus
                     .pending_blocks
                     .insert(block.height, block.clone());
-                self.drain_deferred_decisions()
+                self.advance()
                     .await
-                    .context("drain_deferred_decisions failed after block insert")?;
+                    .context("advance failed after block insert")?;
                 // A pending block may be what we're waiting to propose
                 if self.consensus.pending_proposal.is_some() {
                     self.try_fulfill_pending_proposal()
@@ -292,7 +292,9 @@ impl<E: Executor> Reactor<E> {
                 // old-chain entries would order ahead of new-chain decisions in
                 // the drain queue and wedge it (a batch waiting on an anchor
                 // whose only block decision is queued behind it).
-                self.consensus.clear_on_rollback();
+                self.consensus
+                    .clear_on_rollback(&self.db_conn(), to_height)
+                    .await;
                 let checkpoint = self.consensus.get_checkpoint(&self.db_conn()).await;
                 self.consensus
                     .emit_state_event(StateEvent::RollbackExecuted {
@@ -453,57 +455,9 @@ impl<E: Executor> Reactor<E> {
                         self.handle_block_with_decision(block, &decision)
                             .await
                             .context("handle_block_with_decision failed after consensus block")?;
-                        self.drain_deferred_decisions()
+                        self.advance()
                             .await
-                            .context("drain_deferred_decisions failed after consensus block")?;
-                        // Check finality after block execution — batch txids may now be confirmed
-                        let conn = self.db_conn();
-                        if self.consensus
-                            .unfinalized_batches
-                            .iter()
-                            .any(|b| b.deadline <= self.last_height)
-                            && let Some((rollback_anchor, excluded)) = self.consensus.run_finality_checks(&conn, self.last_height).await {
-                                // Read replay decisions from DB before deleting state
-                                // (the txid join is cascade-deleted with the blocks).
-                                let replay = self
-                                    .load_replay_decisions(rollback_anchor)
-                                    .await
-                                    .context("load_replay_decisions failed")?;
-
-                                // Rollback to before the invalid anchor so all state at the
-                                // anchor height (including invalid tx effects) is wiped cleanly.
-                                self.rollback(rollback_anchor.saturating_sub(1))
-                                    .await
-                                    .context("rollback failed during finality rollback")?;
-
-                                // Fallible raw-tx resolution/filtering only after the
-                                // truncation is durable — a failure here must not
-                                // cancel the rollback finality demanded.
-                                self.prepare_replay(rollback_anchor, replay, excluded)
-                                    .await
-                                    .context("prepare_replay failed")?;
-
-                                // Emit rollback event
-                                let checkpoint = self.consensus.get_checkpoint(&conn).await;
-                                self.consensus.emit_state_event(StateEvent::RollbackExecuted {
-                                    to_anchor: rollback_anchor,
-                                    entries_removed: 0,
-                                    checkpoint,
-                                });
-
-                                // Process deferred decisions using already-cached blocks.
-                                // `pending_blocks` is deliberately NOT cleared here (#430):
-                                // a finality rollback re-executes against the SAME Bitcoin
-                                // chain, so cached blocks are still the right data and make
-                                // this drain immediate — `replay_blocks_after` re-delivery is
-                                // only the fallback. The Bitcoin-reorg path (`BlockEvent::
-                                // Rollback`) clears them instead because there the blocks
-                                // themselves changed; the drain's block-hash check guards
-                                // any stale remainder in both paths.
-                                self.drain_deferred_decisions()
-                                    .await
-                                    .context("drain_deferred_decisions failed after finality rollback")?;
-                            }
+                            .context("advance failed after consensus block")?;
                     }
                     // Yield to allow other channels (block_rx, mempool_rx) to be polled
                     tokio::task::yield_now().await;

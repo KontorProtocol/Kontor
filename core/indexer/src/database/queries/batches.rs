@@ -279,3 +279,58 @@ pub async fn select_unconfirmed_batch_tx(
         .map(|row| row.get::<Vec<u8>>(0))
         .transpose()?)
 }
+
+/// Executed, still-unfinalized batches anchored at or above `from_anchor`, with the
+/// txids this node ACTUALLY executed for each — for rebuilding finality tracking
+/// after a restart.
+///
+/// Sourced from `transactions`, deliberately NOT from `batch_txids`. The certified
+/// list is append-only (`INSERT OR IGNORE` on `(batch_height, position)`, no cascade),
+/// so once a replay has dropped excluded transactions from a batch the stored list
+/// still holds them, permanently. Rehydrating from it would re-arm a deadline on
+/// txids this node deliberately dropped and trigger a rollback no peer performs.
+/// The join also subsumes an "did we execute this batch" existence check: record-only
+/// batches write no `transactions` rows and rolled-back ones have theirs cascade-deleted.
+///
+/// The `blocks` join is load-bearing, not a filter refinement: it pins each batch to
+/// the anchor block CURRENTLY at that height, so a Bitcoin reorg cannot resurrect
+/// tracking for batches anchored to a block that no longer exists.
+///
+/// INDEXED BY: the planner picks a full scan of `batches` for this predicate even
+/// after ANALYZE, and production databases never run it.
+pub async fn select_unfinalized_batches(
+    conn: &Connection,
+    from_anchor: u64,
+) -> Result<Vec<BatchQueryResult>, Error> {
+    let sql = format!(
+        "SELECT b.consensus_height, b.anchor_height, b.anchor_hash, b.certificate, t.txid \
+         FROM batches b INDEXED BY idx_batches_anchor_height \
+         JOIN blocks bl ON bl.height = b.anchor_height AND bl.hash = b.anchor_hash \
+         JOIN transactions t ON t.batch_height = b.consensus_height \
+         WHERE b.anchor_height >= {from_anchor} AND b.is_block = 0 \
+         ORDER BY b.consensus_height, t.id"
+    );
+    let mut rows = conn.query(&sql, ()).await?;
+
+    let mut results: Vec<BatchQueryResult> = Vec::new();
+    while let Some(row) = rows.next().await? {
+        let consensus_height: u64 = row.get(0)?;
+        let txid: String = row.get(4)?;
+        if results
+            .last()
+            .is_some_and(|r| r.consensus_height == consensus_height)
+        {
+            results.last_mut().unwrap().txids.push(txid);
+        } else {
+            results.push(BatchQueryResult {
+                consensus_height,
+                anchor_height: row.get(1)?,
+                anchor_hash: row.get(2)?,
+                certificate: row.get(3)?,
+                is_block: false,
+                txids: vec![txid],
+            });
+        }
+    }
+    Ok(results)
+}

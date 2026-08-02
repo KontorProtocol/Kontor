@@ -30,9 +30,9 @@ use crate::consensus::{
 };
 use crate::database::queries::{
     delete_unexecuted_batch_suffix, get_checkpoint_latest, get_transaction_by_txid,
-    select_batches_from_anchor, select_batches_in_range, select_block_at_height,
-    select_block_latest, select_existing_txids, select_latest_consensus_height,
-    select_min_batch_height, select_unconfirmed_batch_txs,
+    min_unconfirmed_batch_tx_height, select_batches_from_anchor, select_batches_in_range,
+    select_block_at_height, select_existing_txids, select_latest_consensus_height,
+    select_min_batch_height, select_unconfirmed_batch_txs, select_unfinalized_batches,
 };
 
 /// Result from processing a consensus message.
@@ -145,6 +145,40 @@ async fn missing_txids(conn: &libsql::Connection, batch: &UnfinalizedBatch) -> V
         }
     }
     missing
+}
+
+/// Rebuild the in-memory finality-tracking set from disk at startup.
+///
+/// A batch is still tracked iff its anchor sits in the window ending at `tip`, so
+/// this reconstructs exactly what a node that never restarted would be holding.
+async fn load_unfinalized_batches(
+    conn: &libsql::Connection,
+    tip: u64,
+) -> Result<Vec<UnfinalizedBatch>> {
+    let rows = select_unfinalized_batches(conn, tracking_floor(tip))
+        .await
+        .context("Failed to query unfinalized batches")?;
+    let mut batches = Vec::with_capacity(rows.len());
+    for row in rows {
+        let anchor_hash = row
+            .anchor_hash
+            .parse::<bitcoin::BlockHash>()
+            .with_context(|| format!("Bad anchor hash for batch {}", row.consensus_height))?;
+        let txids = row
+            .txids
+            .iter()
+            .map(|t| t.parse::<Txid>())
+            .collect::<std::result::Result<Vec<_>, _>>()
+            .with_context(|| format!("Bad txid for batch {}", row.consensus_height))?;
+        batches.push(UnfinalizedBatch {
+            consensus_height: Height::new(row.consensus_height),
+            anchor_height: row.anchor_height,
+            anchor_hash,
+            txids,
+            deadline: deadline_for(row.anchor_height),
+        });
+    }
+    Ok(batches)
 }
 
 /// Decide what an at-deadline set means, given each batch's unconfirmed txids.
@@ -276,6 +310,43 @@ impl ConsensusState {
             }
             _ => Height::new(1),
         };
+
+        // Rebuild finality tracking. Without this a restart inside the window drops
+        // every pending deadline, so the node never performs a rollback its peers do
+        // and its `transactions` table keeps rows theirs no longer have — the
+        // divergence behind #515. Runs AFTER the suffix cleanup above, both so we
+        // never re-track a batch it just deleted and because that cleanup is what
+        // bounds the band on a lagging node (the anchor-mismatch record-only branch
+        // writes rows at the PROPOSED higher anchor).
+        let unfinalized_batches = load_unfinalized_batches(&conn, last_block_height)
+            .await
+            .context("Failed to rehydrate finality tracking")?;
+        if !unfinalized_batches.is_empty() {
+            info!(
+                count = unfinalized_batches.len(),
+                tip = last_block_height,
+                "Rehydrated finality tracking"
+            );
+        }
+
+        // Divergence probe, diagnostic only. A batch-executed transaction still
+        // unconfirmed below the finality window is past the point where a rollback
+        // can act on it, and if it later confirms this node dedups where a peer
+        // executes — same ops, different heights, forked checkpoints. Deliberately a
+        // WARNING rather than a startup refusal: the predicate has legitimate
+        // transient hits (a node stopped between a deadline passing and its check),
+        // and bricking a healthy validator is worse than the fork it screens for.
+        match min_unconfirmed_batch_tx_height(&conn).await {
+            Ok(Some(height)) if height < tracking_floor(last_block_height) => warn!(
+                height,
+                floor = tracking_floor(last_block_height),
+                "Unconfirmed batch transaction below the finality window — this node may have \
+                 diverged from its peers; compare checkpoints and re-sync if they differ"
+            ),
+            Ok(_) => {}
+            Err(e) => warn!(error = %e, "Divergence probe failed"),
+        }
+
         Ok(Self {
             signing_provider,
             address,
@@ -284,7 +355,7 @@ impl ConsensusState {
             current_height,
             current_round: Round::new(0),
             undecided: BTreeMap::new(),
-            unfinalized_batches: Vec::new(),
+            unfinalized_batches,
             deferred_decisions: VecDeque::new(),
             pending_blocks: BTreeMap::new(),
             current_validator_set,
@@ -299,11 +370,25 @@ impl ConsensusState {
 
     /// Clear consensus state that is invalidated by a reorg rollback.
     /// Pending blocks, cached blocks, and in-flight batch data are all stale.
-    pub fn clear_on_rollback(&mut self) {
+    pub async fn clear_on_rollback(&mut self, conn: &libsql::Connection, to_height: u64) {
         self.pending_blocks.clear();
         self.deferred_decisions.clear();
-        self.unfinalized_batches.clear();
         self.pending_proposal = None;
+        // Finality tracking is RE-DERIVED, not cleared. Batches anchored at or below
+        // the fork are untouched by the rollback — their `transactions` rows carry
+        // `height = anchor_height` and survive the cascade — so discarding their
+        // deadlines reopens exactly the #515 hole on the reorg path. Re-deriving
+        // rather than filtering in memory also drops the batches whose anchor block
+        // was replaced: the query joins the block CURRENTLY at that height by hash.
+        match load_unfinalized_batches(conn, to_height).await {
+            Ok(batches) => self.unfinalized_batches = batches,
+            Err(e) => {
+                // Losing tracking here is the #515 divergence, so make it loud
+                // rather than silently continuing with a stale set.
+                warn!(error = %e, to_height, "Failed to re-derive finality tracking after rollback");
+                self.unfinalized_batches.clear();
+            }
+        }
     }
 
     fn validator_set(&self) -> ValidatorSet {
@@ -505,22 +590,24 @@ impl ConsensusState {
         }
     }
 
+    /// Raw transactions we still hold for a decided batch, for sync to attach.
+    ///
+    /// Deliberately unbounded by the finality window. Gating on it made every
+    /// historical batch sync as txids only, and a peer that has to resolve a txid
+    /// tries its mempool, then its DB, then bitcoind — none of which can produce a
+    /// transaction that never confirmed and was excluded by a finality rollback.
+    /// `resolve_batch_txs` then bails and the reactor exits, so a chain that had
+    /// ever performed an exclusion was not reliably re-syncable from genesis.
+    ///
+    /// Serving whatever remains is self-limiting: `unconfirmed_batch_txs` rows are
+    /// deleted on confirmation and by the startup suffix cleanup, so a batch whose
+    /// transactions all confirmed has none and the only rows ever served are the
+    /// otherwise-unresolvable ones.
     async fn load_raw_txs_if_unfinalized(
         &self,
         conn: &libsql::Connection,
-        anchor_height: u64,
         consensus_height: u64,
     ) -> Result<Option<Vec<bitcoin::Transaction>>> {
-        let tip = match select_block_latest(conn)
-            .await
-            .context("Failed to query latest block for finality check")?
-        {
-            Some(tip) => tip,
-            None => return Ok(None),
-        };
-        if anchor_height + FINALITY_WINDOW <= tip.height {
-            return Ok(None);
-        }
         let raw_bytes = select_unconfirmed_batch_txs(conn, consensus_height)
             .await
             .context("Failed to query unconfirmed batch txs")?;
@@ -582,7 +669,7 @@ impl ConsensusState {
 
             if !b.is_block
                 && let Some(raw_txs) = self
-                    .load_raw_txs_if_unfinalized(conn, b.anchor_height, b.consensus_height)
+                    .load_raw_txs_if_unfinalized(conn, b.consensus_height)
                     .await?
             {
                 value.set_raw_txs(raw_txs);

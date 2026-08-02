@@ -14,9 +14,7 @@ use prost::Message;
 use tracing::{info, warn};
 
 use crate::consensus::codec::encode_commit_certificate;
-use crate::consensus::finality_types::{
-    DecidedBatch, FINALITY_WINDOW, StateEvent, UnfinalizedBatch,
-};
+use crate::consensus::finality_types::{DecidedBatch, StateEvent, UnfinalizedBatch, deadline_for};
 use crate::consensus::{CommitCertificate, Ctx, Height, ProposalData, Value};
 use crate::database::queries::{
     insert_batch, insert_batch_txids, insert_transaction, insert_unconfirmed_batch_tx,
@@ -190,6 +188,31 @@ pub(super) enum BatchOutcome {
     RecordedOnly,
 }
 
+impl BatchOutcome {
+    /// The txids to announce as processed for this outcome.
+    ///
+    /// An exhaustive match rather than `== Executed` at each call site: a future
+    /// variant added without revisiting them would silently take the "nothing
+    /// happened" branch, dropping the `BatchProcessed` heartbeat that drives the
+    /// info publisher and therefore API availability.
+    fn announced_txids(&self, batch_txs: &[bitcoin::Transaction]) -> Option<Vec<String>> {
+        match self {
+            BatchOutcome::Executed => Some(
+                batch_txs
+                    .iter()
+                    .map(|tx| tx.compute_txid().to_string())
+                    .collect(),
+            ),
+            // Empty batches still announce (with no txids): BatchProcessed is the
+            // "chain moved" heartbeat, and on a quiet chain empty deadline batches
+            // are the only events produced. A non-empty record-only skip stays
+            // silent — nothing executed, and claiming otherwise is the audit bug.
+            BatchOutcome::RecordedOnly if batch_txs.is_empty() => Some(Vec::new()),
+            BatchOutcome::RecordedOnly => None,
+        }
+    }
+}
+
 impl<E: Executor> Reactor<E> {
     /// Persist a decided batch's certified content, idempotently: the
     /// immutable txid list (`batch_txids`, what sync serves for this
@@ -334,7 +357,7 @@ impl<E: Executor> Reactor<E> {
             anchor_height,
             anchor_hash,
             txids,
-            deadline: anchor_height + FINALITY_WINDOW,
+            deadline: deadline_for(anchor_height),
         });
 
         self.runtime
@@ -712,6 +735,20 @@ impl<E: Executor> Reactor<E> {
                 self.consensus.pending_transactions.remove(txid);
             }
         }
+        // SPLICE, don't assign. The replay set comes from `select_batches_from_anchor`,
+        // which only returns heights that already have a `batches` row — but a queued
+        // decision is queued precisely BECAUSE its anchor was unprocessed, so it has
+        // no row yet. Overwriting the queue drops it permanently: `current_height` has
+        // already advanced past it and `delete_unexecuted_batch_suffix` can only trim
+        // a suffix, so the gap is unrefillable locally or by sync. Survivors keep
+        // their order and follow the replayed set, which is strictly below them.
+        let last_replayed = deferred.back().map(|d| d.consensus_height);
+        let survivors: Vec<consensus_state::DeferredDecision> =
+            std::mem::take(&mut self.consensus.deferred_decisions)
+                .into_iter()
+                .filter(|d| last_replayed.is_none_or(|last| d.consensus_height > last))
+                .collect();
+        deferred.extend(survivors);
         self.consensus.deferred_decisions = deferred;
         self.consensus
             .unfinalized_batches
@@ -726,6 +763,86 @@ impl<E: Executor> Reactor<E> {
             .await
             .context("Failed to send replay request")?;
         Ok(())
+    }
+
+    /// Apply everything the current tip makes possible: drain decisions that were
+    /// waiting on it, then settle any finality deadline it crossed, repeating while
+    /// a rollback keeps changing the tip.
+    ///
+    /// The single funnel for a RISING `last_height`. Previously the finality check
+    /// hung off one arm of the consensus-message handler, so a node whose tip
+    /// advanced any other way — notably a lagging node receiving blocks via
+    /// `BlockEvent::BlockInsert` — walked past deadlines without ever evaluating
+    /// them, and diverged from peers that did. Routing both call sites through here
+    /// makes "the tip never moves without a finality check" structural rather than
+    /// something each call site has to remember.
+    ///
+    /// Terminates: a rollback moves `last_height` strictly BELOW every deadline it
+    /// just settled, so the next pass has strictly fewer at-deadline batches.
+    pub(super) async fn advance(&mut self) -> Result<()> {
+        loop {
+            self.drain_deferred_decisions()
+                .await
+                .context("drain_deferred_decisions failed")?;
+            if !self.settle_finality().await? {
+                return Ok(());
+            }
+        }
+    }
+
+    /// Whether any tracked batch has reached its deadline at the current tip.
+    /// In-memory, bounded by the batches decided inside one finality window — no
+    /// database work on the per-block path.
+    fn finality_due(&self) -> bool {
+        self.consensus
+            .unfinalized_batches
+            .iter()
+            .any(|b| b.deadline <= self.last_height)
+    }
+
+    /// Run finality checks if any deadline has passed, performing the rollback and
+    /// replay they demand. Returns whether a rollback happened (so `advance` knows
+    /// the tip moved and it must drain again).
+    async fn settle_finality(&mut self) -> Result<bool> {
+        if !self.finality_due() {
+            return Ok(false);
+        }
+        let conn = self.db_conn();
+        let Some((rollback_anchor, excluded)) = self
+            .consensus
+            .run_finality_checks(&conn, self.last_height)
+            .await
+        else {
+            return Ok(false);
+        };
+
+        // Read replay decisions BEFORE the truncation — the query joins rows that
+        // are cascade-deleted with their blocks.
+        let replay = self
+            .load_replay_decisions(rollback_anchor)
+            .await
+            .context("load_replay_decisions failed")?;
+
+        // Roll back to before the invalid anchor so all state at the anchor height
+        // (including the invalid txs' effects) is wiped cleanly.
+        self.rollback(rollback_anchor.saturating_sub(1))
+            .await
+            .context("rollback failed during finality rollback")?;
+
+        // Fallible raw-tx resolution/filtering only after the truncation is durable:
+        // a failure here must not cancel a rollback finality already demanded.
+        self.prepare_replay(rollback_anchor, replay, excluded)
+            .await
+            .context("prepare_replay failed")?;
+
+        let checkpoint = self.consensus.get_checkpoint(&conn).await;
+        self.consensus
+            .emit_state_event(StateEvent::RollbackExecuted {
+                to_anchor: rollback_anchor,
+                entries_removed: 0,
+                checkpoint,
+            });
+        Ok(true)
     }
 
     pub(super) async fn drain_deferred_decisions(&mut self) -> Result<()> {
@@ -834,28 +951,11 @@ impl<E: Executor> Reactor<E> {
                             )
                             .await
                             .context("process_decided_batch failed in deferred drain")?;
-                        // Executed batches announce their txids; EMPTY batches
-                        // announce with no txids — BatchProcessed is the
-                        // "chain moved" heartbeat the info publisher (and so
-                        // API availability) is driven by, and empty deadline
-                        // batches are the only events a quiet chain produces.
-                        // Only a non-empty record-only skip stays silent:
-                        // nothing executed, and claiming its txids were
-                        // processed is exactly the audit bug.
-                        if (outcome == BatchOutcome::Executed || resolved_txs.is_empty())
+                        if let Some(txids) = outcome.announced_txids(&resolved_txs)
                             && let Some(tx) = &self.event_tx
+                            && tx.send(Event::BatchProcessed { txids }).await.is_err()
                         {
-                            let txids: Vec<String> = if outcome == BatchOutcome::Executed {
-                                resolved_txs
-                                    .iter()
-                                    .map(|tx| tx.compute_txid().to_string())
-                                    .collect()
-                            } else {
-                                Vec::new()
-                            };
-                            if tx.send(Event::BatchProcessed { txids }).await.is_err() {
-                                warn!("Event receiver dropped, cannot send BatchProcessed event");
-                            }
+                            warn!("Event receiver dropped, cannot send BatchProcessed event");
                         }
                     } else {
                         info!(
@@ -1005,23 +1105,8 @@ impl<E: Executor> Reactor<E> {
                             )
                             .await
                             .context("process_decided_batch failed in Finalized handler")?;
-                        // Executed batches announce their txids; EMPTY batches
-                        // announce with no txids — BatchProcessed is the "chain
-                        // moved" heartbeat driving the info publisher and
-                        // therefore API availability, and empty deadline
-                        // batches are the only events a quiet chain produces.
-                        // Only a non-empty record-only skip stays silent.
-                        if outcome == BatchOutcome::Executed || full_txs.is_empty() {
-                            result = consensus_state::ConsensusResult::BatchProcessed {
-                                txids: if outcome == BatchOutcome::Executed {
-                                    full_txs
-                                        .iter()
-                                        .map(|tx| tx.compute_txid().to_string())
-                                        .collect()
-                                } else {
-                                    Vec::new()
-                                },
-                            };
+                        if let Some(txids) = outcome.announced_txids(&full_txs) {
+                            result = consensus_state::ConsensusResult::BatchProcessed { txids };
                         }
                     }
                 }

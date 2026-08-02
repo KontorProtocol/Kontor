@@ -16,6 +16,24 @@ pub async fn insert_block(conn: &Connection, block: BlockRow) -> Result<i64, Err
 }
 
 pub async fn rollback_to_height(conn: &Connection, height: u64) -> Result<u64, Error> {
+    // Clear confirmations by blocks that are about to disappear. The cascade below
+    // keys on `height`, not `confirmed_height`, so a BATCH-executed row (whose
+    // `height` is its anchor, potentially at or below the target) survives while
+    // still pointing at a deleted block — and `confirmed_height` is exactly the
+    // predicate the finality verdict reads. Block-path rows cannot be affected:
+    // `insert_transaction` sets `height == confirmed_height`, so if one survives the
+    // cascade its confirmation is at or below the target too.
+    //
+    // Restricted to batch rows so the existing partial index on `batch_height` bounds
+    // the scan; there is deliberately no index on `confirmed_height`, which would
+    // churn on every confirmation to serve only this path.
+    conn.execute(
+        "UPDATE transactions SET confirmed_height = NULL, tx_index = NULL \
+         WHERE batch_height IS NOT NULL AND confirmed_height > ?",
+        [height],
+    )
+    .await?;
+
     let num_rows = conn
         .execute("DELETE FROM blocks WHERE height > ?", [height])
         .await?;

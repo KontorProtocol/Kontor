@@ -127,30 +127,74 @@ pub async fn get_transactions_paginated(
     .await
 }
 
+/// Bound placeholders per `txid IN (?…)` statement. SQLite's compile-time
+/// `SQLITE_MAX_VARIABLE_NUMBER` is 32766 and exceeding it fails at PREPARE, so an
+/// unchunked list is a crash, not a slow query. The largest caller is `make_value`,
+/// which passes the entire mempool pool — bounded by bitcoind, not by anything
+/// Kontor controls — so the chunking has to live here rather than at a call site.
+const TXID_PROBE_CHUNK: usize = 900;
+
+/// Rows in the transactions table for any of `txids`, keyed by txid.
+///
+/// One statement per chunk; absent txids are simply absent from the map.
+pub async fn select_transactions_by_txids(
+    conn: &Connection,
+    txids: &[String],
+) -> Result<std::collections::HashMap<String, TransactionRow>, Error> {
+    let mut result = std::collections::HashMap::new();
+    for chunk in txids.chunks(TXID_PROBE_CHUNK) {
+        let placeholders: Vec<&str> = chunk.iter().map(|_| "?").collect();
+        let sql = format!(
+            "SELECT id, txid, height, confirmed_height, tx_index, batch_height \
+             FROM transactions WHERE txid IN ({})",
+            placeholders.join(", ")
+        );
+        let params: Vec<Value> = chunk.iter().map(|t| Value::from(t.clone())).collect();
+        let mut rows = conn
+            .query(&sql, libsql::params::Params::Positional(params))
+            .await?;
+        while let Some(row) = rows.next().await? {
+            let parsed: TransactionRow = from_row(&row)?;
+            result.insert(parsed.txid.clone(), parsed);
+        }
+    }
+    Ok(result)
+}
+
 /// Return the subset of `txids` that already exist in the transactions table.
 pub async fn select_existing_txids(
     conn: &Connection,
     txids: &[String],
 ) -> Result<std::collections::HashSet<String>, Error> {
-    if txids.is_empty() {
-        return Ok(std::collections::HashSet::new());
-    }
-    let placeholders: Vec<&str> = txids.iter().map(|_| "?").collect();
-    let sql = format!(
-        "SELECT txid FROM transactions WHERE txid IN ({})",
-        placeholders.join(", ")
-    );
-    let params: Vec<libsql::Value> = txids
-        .iter()
-        .map(|t| libsql::Value::from(t.clone()))
-        .collect();
-    let mut rows = conn
-        .query(&sql, libsql::params::Params::Positional(params))
-        .await?;
-    let mut result = std::collections::HashSet::new();
-    while let Some(row) = rows.next().await? {
-        let txid: String = row.get(0)?;
-        result.insert(txid);
-    }
-    Ok(result)
+    Ok(select_transactions_by_txids(conn, txids)
+        .await?
+        .into_keys()
+        .collect())
+}
+
+/// Lowest anchor height of a batch-executed transaction that has never confirmed.
+///
+/// A startup divergence probe. Below the finality window this is a transaction the
+/// rollback machinery can no longer act on: if it later confirms, this node takes
+/// `execute_block`'s dedup branch (confirm only) while a peer holding no row takes
+/// insert-and-execute at the confirming height, so the same operations land at
+/// different heights and the checkpoint chains fork permanently. Nothing else can
+/// detect that — a confirmed txid is never re-proposed, so it never reaches a
+/// consensus-level check.
+pub async fn min_unconfirmed_batch_tx_height(conn: &Connection) -> Result<Option<u64>, Error> {
+    Ok(
+        match conn
+            .query(
+                "SELECT MIN(height) FROM transactions \
+                 WHERE confirmed_height IS NULL AND batch_height IS NOT NULL",
+                params![],
+            )
+            .await?
+            .next()
+            .await?
+        {
+            Some(row) => row.get::<Option<u64>>(0)?,
+            None => None,
+        },
+    )
 }

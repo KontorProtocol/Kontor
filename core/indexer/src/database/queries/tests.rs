@@ -4241,3 +4241,208 @@ async fn test_ensure_identity_idempotent() -> Result<()> {
 
     Ok(())
 }
+
+/// The `IN (?…)` list must be chunked: SQLite's SQLITE_MAX_VARIABLE_NUMBER is 32766
+/// and exceeding it fails at PREPARE, not at runtime. `make_value` passes the whole
+/// mempool pool, which nothing bounds, so an unchunked probe is a reachable crash.
+#[tokio::test]
+async fn test_select_transactions_by_txids_chunks_large_input() -> Result<()> {
+    use crate::database::queries::{select_existing_txids, select_transactions_by_txids};
+
+    let (_reader, writer, _temp_dir) = new_test_db().await?;
+    let conn = writer.connection();
+    insert_block(
+        &conn,
+        BlockRow::builder()
+            .height(10)
+            .hash(new_mock_block_hash(10))
+            .build(),
+    )
+    .await?;
+
+    // Three real rows, probed alongside 40k absent ones.
+    let present: Vec<String> = (0u32..3).map(|i| format!("{i:064x}")).collect();
+    for txid in &present {
+        insert_transaction(
+            &conn,
+            TransactionRow::builder()
+                .height(10)
+                .txid(txid.clone())
+                .build(),
+        )
+        .await?;
+    }
+    let mut probe = present.clone();
+    probe.extend((1000u32..41000).map(|i| format!("{i:064x}")));
+
+    let rows = select_transactions_by_txids(&conn, &probe).await?;
+    assert_eq!(rows.len(), 3);
+    for txid in &present {
+        assert_eq!(rows.get(txid).map(|r| r.height), Some(10));
+    }
+
+    // The set-returning wrapper stays consistent with the row-returning primitive.
+    let existing = select_existing_txids(&conn, &probe).await?;
+    assert_eq!(existing.len(), 3);
+
+    assert!(select_transactions_by_txids(&conn, &[]).await?.is_empty());
+    Ok(())
+}
+
+/// A rollback must clear confirmations by blocks it deletes. The cascade keys on
+/// `height`, so a batch row anchored at or below the target survives while still
+/// pointing at a deleted block — and `confirmed_height` is what the finality
+/// verdict reads.
+#[tokio::test]
+async fn test_rollback_clears_confirmations_by_deleted_blocks() -> Result<()> {
+    use crate::database::queries::{confirm_transaction, rollback_to_height};
+
+    let (_reader, writer, _temp_dir) = new_test_db().await?;
+    let conn = writer.connection();
+    for height in [10u64, 11, 12] {
+        insert_block(
+            &conn,
+            BlockRow::builder()
+                .height(height)
+                .hash(new_mock_block_hash(height as u32))
+                .build(),
+        )
+        .await?;
+    }
+    insert_batch(
+        &conn,
+        1,
+        10,
+        &new_mock_block_hash(10).to_string(),
+        b"c",
+        false,
+    )
+    .await?;
+
+    // Batch-executed row: height = anchor 10, later confirmed in block 12.
+    let batched = "aa".repeat(32);
+    insert_transaction(
+        &conn,
+        TransactionRow::builder()
+            .height(10)
+            .batch_height(1)
+            .txid(batched.clone())
+            .build(),
+    )
+    .await?;
+    confirm_transaction(&conn, &batched, 12, 0).await?;
+
+    // Block-path row at height 10 — survives, and its confirmation is at 10.
+    let onchain = "bb".repeat(32);
+    insert_transaction(
+        &conn,
+        TransactionRow::builder()
+            .height(10)
+            .confirmed_height(10)
+            .tx_index(0)
+            .txid(onchain.clone())
+            .build(),
+    )
+    .await?;
+
+    rollback_to_height(&conn, 11).await?;
+
+    let batched_row = get_transaction_by_txid(&conn, &batched).await?.unwrap();
+    assert_eq!(
+        batched_row.confirmed_height, None,
+        "confirmation by deleted block 12 must be cleared"
+    );
+    assert_eq!(batched_row.tx_index, None);
+
+    let onchain_row = get_transaction_by_txid(&conn, &onchain).await?.unwrap();
+    assert_eq!(
+        onchain_row.confirmed_height,
+        Some(10),
+        "a confirmation by a surviving block must be left alone"
+    );
+    Ok(())
+}
+
+/// Rehydration must reflect what this node EXECUTED, and only for batches still
+/// anchored to the chain it currently holds.
+#[tokio::test]
+async fn test_select_unfinalized_batches_sources_execution_not_certificate() -> Result<()> {
+    use crate::database::queries::{insert_batch_txids, select_unfinalized_batches};
+
+    let (_reader, writer, _temp_dir) = new_test_db().await?;
+    let conn = writer.connection();
+    for height in [10u64, 11, 12] {
+        insert_block(
+            &conn,
+            BlockRow::builder()
+                .height(height)
+                .hash(new_mock_block_hash(height as u32))
+                .build(),
+        )
+        .await?;
+    }
+    let hash10 = new_mock_block_hash(10).to_string();
+    let hash11 = new_mock_block_hash(11).to_string();
+
+    // Batch 1: certified with two txids, but a filtered replay executed only one.
+    // `batch_txids` is append-only so it still holds both — rehydrating from it
+    // would re-arm a deadline on a txid this node deliberately dropped.
+    insert_batch(&conn, 1, 10, &hash10, b"c1", false).await?;
+    let kept = "aa".repeat(32);
+    let excluded = "bb".repeat(32);
+    insert_batch_txids(&conn, 1, &[kept.clone(), excluded.clone()]).await?;
+    insert_transaction(
+        &conn,
+        TransactionRow::builder()
+            .height(10)
+            .batch_height(1)
+            .txid(kept.clone())
+            .build(),
+    )
+    .await?;
+
+    // Batch 2: record-only (certified, never executed here) — no transactions rows.
+    insert_batch(&conn, 2, 11, &hash11, b"c2", false).await?;
+    insert_batch_txids(&conn, 2, &["cc".repeat(32)]).await?;
+
+    // Batch 3: a block decision, not a batch.
+    insert_batch(&conn, 3, 11, &hash11, b"c3", true).await?;
+
+    // Batch 4: anchored to a hash that is NOT the block now at height 12 — the
+    // shape a Bitcoin reorg leaves behind.
+    insert_batch(
+        &conn,
+        4,
+        12,
+        &new_mock_block_hash(99).to_string(),
+        b"c4",
+        false,
+    )
+    .await?;
+    let reorged = "dd".repeat(32);
+    insert_transaction(
+        &conn,
+        TransactionRow::builder()
+            .height(12)
+            .batch_height(4)
+            .txid(reorged)
+            .build(),
+    )
+    .await?;
+
+    let rows = select_unfinalized_batches(&conn, 10).await?;
+    assert_eq!(
+        rows.iter().map(|r| r.consensus_height).collect::<Vec<_>>(),
+        vec![1],
+        "only the executed, still-anchored batch is tracked"
+    );
+    assert_eq!(
+        rows[0].txids,
+        vec![kept],
+        "txids come from the execution rows, not the immortal certified list"
+    );
+
+    // Below the band.
+    assert!(select_unfinalized_batches(&conn, 11).await?.is_empty());
+    Ok(())
+}
