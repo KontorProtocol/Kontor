@@ -177,6 +177,17 @@ pub(super) fn batch_is_ordered(txs: &[bitcoin::Transaction]) -> bool {
     true
 }
 
+/// Put batches held during a drain pass back at the FRONT of the queue, in their
+/// original order, so nothing is reordered relative to what follows them.
+fn restore_waiting(
+    queue: &mut VecDeque<consensus_state::DeferredDecision>,
+    waiting: &mut VecDeque<consensus_state::DeferredDecision>,
+) {
+    while let Some(decision) = waiting.pop_back() {
+        queue.push_front(decision);
+    }
+}
+
 /// Merge a rollback's replay set with the decisions already queued, ordered by
 /// consensus height.
 ///
@@ -875,6 +886,19 @@ impl<E: Executor> Reactor<E> {
     }
 
     pub(super) async fn drain_deferred_decisions(&mut self) -> Result<()> {
+        // Batches whose anchor block has not arrived yet. Held ASIDE rather than
+        // stopping the drain: a waiting batch can only ever be unblocked by a
+        // block, and the block decisions that would deliver it sit behind it in
+        // this same queue — so parking on one could stall the very thing it waits
+        // for. Restored to the front, in order, whenever a block executes and at
+        // exit, so a batch is re-evaluated the moment its anchor lands.
+        //
+        // Batches are never reordered relative to each other: once one is held,
+        // later ones are held unevaluated. And the tip can never overshoot a held
+        // anchor, because blocks apply strictly sequentially — the only block that
+        // can execute is `tip + 1`, while a held batch waits for `anchor > tip`.
+        let mut waiting: VecDeque<consensus_state::DeferredDecision> = VecDeque::new();
+
         loop {
             let cs = &mut self.consensus;
             let Some(decision) = cs.deferred_decisions.pop_front() else {
@@ -918,6 +942,8 @@ impl<E: Executor> Reactor<E> {
                         self.handle_block_with_decision(block, &decision)
                             .await
                             .context("handle_block_with_decision failed in deferred drain")?;
+                        // The tip moved — anything held may now be ready.
+                        restore_waiting(&mut self.consensus.deferred_decisions, &mut waiting);
                     } else {
                         // No pending block at this height. Before parking the
                         // queue on it, check whether the height was already
@@ -960,46 +986,45 @@ impl<E: Executor> Reactor<E> {
                     txs,
                     ..
                 } => {
-                    if *anchor_height <= self.last_height {
-                        info!(
-                            anchor_height = *anchor_height,
-                            consensus_height = %decision.consensus_height,
-                            num_txs = txs.len(),
-                            "Draining deferred batch decision"
-                        );
-                        let anchor_height = *anchor_height;
-                        let anchor_hash = *anchor_hash;
-                        let resolved_txs = self.resolve_batch_txs(txs).await?;
-                        let outcome = self
-                            .process_decided_batch(
-                                anchor_height,
-                                anchor_hash,
-                                decision.consensus_height,
-                                &decision.certificate,
-                                &resolved_txs,
-                            )
-                            .await
-                            .context("process_decided_batch failed in deferred drain")?;
-                        if let Some(txids) = outcome.announced_txids(&resolved_txs)
-                            && let Some(tx) = &self.event_tx
-                            && tx.send(Event::BatchProcessed { txids }).await.is_err()
-                        {
-                            warn!("Event receiver dropped, cannot send BatchProcessed event");
-                        }
-                    } else {
+                    if !waiting.is_empty() || *anchor_height > self.last_height {
                         info!(
                             anchor_height = *anchor_height,
                             last_height = self.last_height,
                             consensus_height = %decision.consensus_height,
-                            "Deferred batch still waiting for anchor"
+                            "Deferred batch still waiting for anchor — holding aside"
                         );
-                        let cs = &mut self.consensus;
-                        cs.deferred_decisions.push_front(decision);
-                        break;
+                        waiting.push_back(decision);
+                        continue;
+                    }
+                    info!(
+                        anchor_height = *anchor_height,
+                        consensus_height = %decision.consensus_height,
+                        num_txs = txs.len(),
+                        "Draining deferred batch decision"
+                    );
+                    let anchor_height = *anchor_height;
+                    let anchor_hash = *anchor_hash;
+                    let resolved_txs = self.resolve_batch_txs(txs).await?;
+                    let outcome = self
+                        .process_decided_batch(
+                            anchor_height,
+                            anchor_hash,
+                            decision.consensus_height,
+                            &decision.certificate,
+                            &resolved_txs,
+                        )
+                        .await
+                        .context("process_decided_batch failed in deferred drain")?;
+                    if let Some(txids) = outcome.announced_txids(&resolved_txs)
+                        && let Some(tx) = &self.event_tx
+                        && tx.send(Event::BatchProcessed { txids }).await.is_err()
+                    {
+                        warn!("Event receiver dropped, cannot send BatchProcessed event");
                     }
                 }
             }
         }
+        restore_waiting(&mut self.consensus.deferred_decisions, &mut waiting);
         Ok(())
     }
 
@@ -1220,7 +1245,10 @@ impl<E: Executor> Reactor<E> {
 
 #[cfg(test)]
 mod tests {
-    use super::{batch_is_ordered, dependency_sort, merge_replay_queue, transitive_exclusion};
+    use super::{
+        batch_is_ordered, dependency_sort, merge_replay_queue, restore_waiting,
+        transitive_exclusion,
+    };
     use crate::consensus::{Height, Value};
     use crate::reactor::consensus_state::DeferredDecision;
     use bitcoin::absolute::LockTime;
@@ -1421,6 +1449,29 @@ mod tests {
             vec![3]
         );
         assert!(merge_replay_queue(VecDeque::new(), VecDeque::new()).is_empty());
+    }
+
+    /// Batches held during a drain pass go back at the FRONT, in their original
+    /// order. Anything still queued behind them was already ordered after them, so
+    /// restoring out of order — or after the queue instead of before it — would
+    /// reorder decisions relative to each other.
+    #[test]
+    fn restore_waiting_puts_held_batches_back_in_front_in_order() {
+        let mut queue: VecDeque<_> = [decision(30), decision(31)].into();
+        let mut waiting: VecDeque<_> = [decision(10), decision(11), decision(12)].into();
+
+        restore_waiting(&mut queue, &mut waiting);
+
+        assert_eq!(heights(&queue), vec![10, 11, 12, 30, 31]);
+        assert!(waiting.is_empty(), "held set must be drained");
+    }
+
+    #[test]
+    fn restore_waiting_is_a_noop_when_nothing_was_held() {
+        let mut queue: VecDeque<_> = [decision(7)].into();
+        let mut waiting: VecDeque<_> = VecDeque::new();
+        restore_waiting(&mut queue, &mut waiting);
+        assert_eq!(heights(&queue), vec![7]);
     }
 
     #[test]
