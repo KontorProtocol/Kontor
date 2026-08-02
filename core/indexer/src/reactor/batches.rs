@@ -188,8 +188,10 @@ fn restore_waiting(
     }
 }
 
-/// Merge a rollback's replay set with the decisions already queued, ordered by
-/// consensus height.
+/// Assemble the post-rollback replay queue: merge the replay set with the decisions
+/// already queued, and drop excluded transactions — plus anything descending from
+/// them — from the batches in the result. Returns the queue and the full transitive
+/// exclusion set, which the caller also purges from the proposal pool.
 ///
 /// MERGE, not overwrite: the replay set comes from `select_batches_from_anchor`,
 /// which returns only heights that already have a `batches` row, while a queued
@@ -205,26 +207,54 @@ fn restore_waiting(
 /// precisely what raises the tip back up after a rollback, so a survivor ordered
 /// ahead of it can stall the decisions that would make that survivor ready.
 ///
-/// Anchor order makes this correct as well as safe: a survivor was deferred because
-/// its anchor was above the pre-rollback tip, while every replayed batch is at or
-/// below it. So survivors are never ready earlier than the replay set, whatever
-/// their consensus heights — and consensus heights alone are not a reliable guide,
-/// because anchors go non-monotone across a rollback.
-///
 /// The two inputs should be disjoint by height; where they are not, the replayed
-/// copy wins because it has been resolved and exclusion-filtered.
-fn merge_replay_queue(
-    replayed: VecDeque<consensus_state::DeferredDecision>,
-    queued: VecDeque<consensus_state::DeferredDecision>,
-) -> VecDeque<consensus_state::DeferredDecision> {
-    let replayed_heights: Vec<Height> = replayed.iter().map(|d| d.consensus_height).collect();
-    let mut merged = replayed;
-    merged.extend(
-        queued
-            .into_iter()
-            .filter(|d| !replayed_heights.contains(&d.consensus_height)),
-    );
-    merged
+/// copy wins because it was loaded from the decided record.
+fn build_replay_queue(
+    replayed: Vec<(consensus_state::DeferredDecision, Vec<bitcoin::Transaction>)>,
+    survivors: Vec<(consensus_state::DeferredDecision, Vec<bitcoin::Transaction>)>,
+    excluded_txids: &HashSet<Txid>,
+) -> (VecDeque<consensus_state::DeferredDecision>, HashSet<Txid>) {
+    let replayed_heights: Vec<Height> = replayed.iter().map(|(d, _)| d.consensus_height).collect();
+    let survivors: Vec<_> = survivors
+        .into_iter()
+        .filter(|(d, _)| !replayed_heights.contains(&d.consensus_height))
+        .collect();
+
+    // MERGE FIRST, then exclude. The closure has to run over the whole sequence that
+    // will actually execute: a descendant of an excluded tx can sit in a survivor,
+    // since a survivor is queued precisely because its anchor is HIGHER — which is
+    // where a child of an earlier transaction lives.
+    let merged: Vec<_> = replayed.into_iter().chain(survivors).collect();
+
+    if excluded_txids.is_empty() {
+        return (merged.into_iter().map(|(d, _)| d).collect(), HashSet::new());
+    }
+
+    let batches: Vec<Vec<bitcoin::Transaction>> =
+        merged.iter().map(|(_, txs)| txs.clone()).collect();
+    let excluded = transitive_exclusion(&batches, excluded_txids);
+
+    let queue = merged
+        .into_iter()
+        .map(|(mut decision, txs)| {
+            if let Value::Batch {
+                anchor_height,
+                anchor_hash,
+                ..
+            } = &decision.value
+            {
+                let (anchor_height, anchor_hash) = (*anchor_height, *anchor_hash);
+                let kept: Vec<bitcoin::Transaction> = txs
+                    .into_iter()
+                    .filter(|tx| !excluded.contains(&tx.compute_txid()))
+                    .collect();
+                decision.value = Value::new_batch_raw(anchor_height, anchor_hash, kept);
+            }
+            decision
+        })
+        .collect();
+
+    (queue, excluded)
 }
 
 /// What `process_decided_batch` did with a decided batch. Callers must not
@@ -745,50 +775,42 @@ impl<E: Executor> Reactor<E> {
             "Initiating rollback replay"
         );
 
-        let mut deferred: std::collections::VecDeque<consensus_state::DeferredDecision> =
-            replay_batches.into();
-        if !excluded_txids.is_empty() {
-            // Resolve every replay batch to raw transactions first: exclusion
-            // must see tx INPUTS to also drop descendants of excluded txs — the
-            // DB-loaded decisions carry only txids, and filtering a parent out
-            // while keeping its child would break the dependency order the
-            // batch was decided under (#427). Resolution pulls from the same
-            // sources the deferred drain would use later.
-            let mut resolved: Vec<Vec<bitcoin::Transaction>> = Vec::with_capacity(deferred.len());
-            for decision in &deferred {
-                match &decision.value {
-                    Value::Batch { txs, .. } => resolved.push(self.resolve_batch_txs(txs).await?),
-                    Value::Block { .. } => resolved.push(Vec::new()),
-                }
-            }
-            let excluded = transitive_exclusion(&resolved, &excluded_txids);
-            for (decision, txs) in deferred.iter_mut().zip(resolved) {
-                if let Value::Batch {
-                    anchor_height,
-                    anchor_hash,
-                    ..
-                } = &decision.value
-                {
-                    let (anchor_height, anchor_hash) = (*anchor_height, *anchor_hash);
-                    let kept: Vec<bitcoin::Transaction> = txs
-                        .into_iter()
-                        .filter(|tx| !excluded.contains(&tx.compute_txid()))
-                        .collect();
-                    decision.value = Value::new_batch_raw(anchor_height, anchor_hash, kept);
-                }
-            }
-            // The excluded txids must also leave the proposal pool, or the next
-            // make_value re-proposes the very txs whose missing confirmations
-            // caused this rollback — repeating the same finality failure in a
-            // loop with no forward progress.
-            for txid in &excluded {
-                self.consensus.pending_transactions.remove(txid);
-            }
+        // Resolve BOTH the replay set and whatever was already queued before
+        // excluding anything: the exclusion closure must see tx INPUTS to drop
+        // descendants of an excluded tx, and a descendant can perfectly well sit in
+        // a queued decision — it is queued because its anchor is HIGHER, which is
+        // exactly where a child of an earlier tx lives. Resolving only the replay
+        // set let such a child through to execute against state the rollback wiped
+        // (#427 in a second form). Resolution pulls from the same sources the drain
+        // would use later.
+        let mut replayed = Vec::with_capacity(replay_batches.len());
+        for decision in replay_batches {
+            let txs = match &decision.value {
+                Value::Batch { txs, .. } => self.resolve_batch_txs(txs).await?,
+                Value::Block { .. } => Vec::new(),
+            };
+            replayed.push((decision, txs));
         }
-        self.consensus.deferred_decisions = merge_replay_queue(
-            deferred,
-            std::mem::take(&mut self.consensus.deferred_decisions),
-        );
+        let queued = std::mem::take(&mut self.consensus.deferred_decisions);
+        let mut survivors = Vec::with_capacity(queued.len());
+        for decision in queued {
+            let txs = match &decision.value {
+                Value::Batch { txs, .. } => self.resolve_batch_txs(txs).await?,
+                Value::Block { .. } => Vec::new(),
+            };
+            survivors.push((decision, txs));
+        }
+
+        let (queue, excluded) = build_replay_queue(replayed, survivors, &excluded_txids);
+        self.consensus.deferred_decisions = queue;
+
+        // The excluded txids must also leave the proposal pool, or the next
+        // make_value re-proposes the very txs whose missing confirmations caused
+        // this rollback — repeating the same finality failure with no progress.
+        for txid in &excluded {
+            self.consensus.pending_transactions.remove(txid);
+        }
+
         self.consensus
             .unfinalized_batches
             .retain(|b| b.anchor_height < from_anchor);
@@ -1254,7 +1276,7 @@ impl<E: Executor> Reactor<E> {
 #[cfg(test)]
 mod tests {
     use super::{
-        batch_is_ordered, dependency_sort, merge_replay_queue, restore_waiting,
+        batch_is_ordered, build_replay_queue, dependency_sort, restore_waiting,
         transitive_exclusion,
     };
     use crate::consensus::{Height, Value};
@@ -1391,72 +1413,113 @@ mod tests {
         q.iter().map(|d| d.consensus_height.as_u64()).collect()
     }
 
+    /// Pair a decision with the transactions it carries, as `prepare_replay` does
+    /// after resolving them.
+    fn carrying(
+        consensus_height: u64,
+        txs: Vec<Transaction>,
+    ) -> (DeferredDecision, Vec<Transaction>) {
+        let mut d = decision(consensus_height);
+        d.value = Value::new_batch_raw(0, bitcoin::BlockHash::all_zeros(), txs.clone());
+        (d, txs)
+    }
+
+    fn empty(consensus_height: u64) -> (DeferredDecision, Vec<Transaction>) {
+        (decision(consensus_height), Vec::new())
+    }
+
+    fn queue_of(
+        replayed: Vec<(DeferredDecision, Vec<Transaction>)>,
+        survivors: Vec<(DeferredDecision, Vec<Transaction>)>,
+    ) -> VecDeque<DeferredDecision> {
+        build_replay_queue(replayed, survivors, &HashSet::new()).0
+    }
+
+    /// THE regression this function exists for. A rollback excludes transaction X
+    /// because it never confirmed. A batch that was QUEUED (not yet executed, so it
+    /// has no `batches` row and is not in the replay set) carries Y, which spends
+    /// X's output. If the exclusion pass only sees the replay set, Y survives and
+    /// later executes against state the rollback wiped — while a peer that had
+    /// already executed that batch does drop Y, because for that peer it IS in the
+    /// replay set. Same consensus height, different transactions executed.
+    #[test]
+    fn build_replay_queue_excludes_descendants_carried_by_survivors() {
+        let parent = tx(&[OutPoint::null()], 1);
+        let child = tx(&[spend(&parent)], 2);
+        let unrelated = tx(&[OutPoint::null()], 3);
+
+        let excluded: HashSet<Txid> = [parent.compute_txid()].into();
+        let (queue, closure) = build_replay_queue(
+            vec![carrying(10, vec![parent.clone()])],
+            vec![carrying(14, vec![child.clone(), unrelated.clone()])],
+            &excluded,
+        );
+
+        assert!(
+            closure.contains(&child.compute_txid()),
+            "the closure must reach a descendant carried by a survivor"
+        );
+        let survivor_txs = queue[1].value.batch_raw_txs();
+        assert_eq!(
+            survivor_txs.len(),
+            1,
+            "survivor must keep only the unrelated tx, got {survivor_txs:?}"
+        );
+        assert_eq!(survivor_txs[0].compute_txid(), unrelated.compute_txid());
+    }
+
     /// A queued decision BELOW the replay set's max must SURVIVE. Anchors go
     /// non-monotone across a rollback, so height H can defer on a high anchor while
     /// H+1 executes on a lower one and gets a `batches` row — putting H below the
     /// replay set. H has no row, so dropping it leaves a permanent, unrefillable
     /// gap in the consensus-height sequence.
     #[test]
-    fn merge_replay_queue_keeps_a_queued_decision_below_the_replay_set() {
-        let replayed: VecDeque<_> = [decision(11), decision(12)].into();
-        let queued: VecDeque<_> = [decision(10), decision(13)].into();
-        let merged = merge_replay_queue(replayed, queued);
-        let mut present = heights(&merged);
+    fn build_replay_queue_keeps_a_queued_decision_below_the_replay_set() {
+        let queue = queue_of(vec![empty(11), empty(12)], vec![empty(10), empty(13)]);
+        let mut present = heights(&queue);
         present.sort_unstable();
         assert_eq!(present, vec![10, 11, 12, 13], "nothing may be dropped");
     }
 
-    /// …but it must survive BEHIND the replay set, not ahead of it.
-    /// `drain_deferred_decisions` parks on the first entry whose anchor exceeds the
-    /// tip and stops. A survivor was deferred precisely because its anchor was above
-    /// the pre-rollback tip, so putting it first parks the queue on an anchor that
-    /// only the replay set — now stuck behind it — could ever reach.
+    /// …but behind the replay set, not ahead of it. A survivor BLOCK decision whose
+    /// block has not arrived parks the drain, and the replay set — stuck behind it —
+    /// is what would have delivered that block.
     #[test]
-    fn merge_replay_queue_never_orders_a_survivor_ahead_of_the_replay_set() {
-        let replayed: VecDeque<_> = [decision(11), decision(12)].into();
-        let queued: VecDeque<_> = [decision(10), decision(13)].into();
+    fn build_replay_queue_never_orders_a_survivor_ahead_of_the_replay_set() {
         assert_eq!(
-            heights(&merge_replay_queue(replayed, queued)),
+            heights(&queue_of(
+                vec![empty(11), empty(12)],
+                vec![empty(10), empty(13)]
+            )),
             vec![11, 12, 10, 13],
-            "replay set first, survivors after in their original order"
         );
     }
 
     #[test]
-    fn merge_replay_queue_preserves_relative_order_within_each_side() {
-        let replayed: VecDeque<_> = [decision(5), decision(9)].into();
-        let queued: VecDeque<_> = [decision(6), decision(7)].into();
+    fn build_replay_queue_preserves_relative_order_within_each_side() {
         assert_eq!(
-            heights(&merge_replay_queue(replayed, queued)),
+            heights(&queue_of(
+                vec![empty(5), empty(9)],
+                vec![empty(6), empty(7)]
+            )),
             vec![5, 9, 6, 7]
         );
     }
 
     #[test]
-    fn merge_replay_queue_prefers_the_replayed_copy_of_a_shared_height() {
-        // Distinguishable by certificate: the replayed copy has been resolved and
-        // exclusion-filtered, so it must win.
+    fn build_replay_queue_prefers_the_replayed_copy_of_a_shared_height() {
         let mut replayed_copy = decision(4);
         replayed_copy.certificate = vec![0xAA];
-        let replayed: VecDeque<_> = [replayed_copy].into();
-        let queued: VecDeque<_> = [decision(4)].into();
-
-        let merged = merge_replay_queue(replayed, queued);
-        assert_eq!(heights(&merged), vec![4]);
-        assert_eq!(merged[0].certificate, vec![0xAA]);
+        let queue = queue_of(vec![(replayed_copy, Vec::new())], vec![empty(4)]);
+        assert_eq!(heights(&queue), vec![4]);
+        assert_eq!(queue[0].certificate, vec![0xAA]);
     }
 
     #[test]
-    fn merge_replay_queue_handles_either_side_empty() {
-        assert_eq!(
-            heights(&merge_replay_queue(VecDeque::new(), [decision(3)].into())),
-            vec![3]
-        );
-        assert_eq!(
-            heights(&merge_replay_queue([decision(3)].into(), VecDeque::new())),
-            vec![3]
-        );
-        assert!(merge_replay_queue(VecDeque::new(), VecDeque::new()).is_empty());
+    fn build_replay_queue_handles_either_side_empty() {
+        assert_eq!(heights(&queue_of(Vec::new(), vec![empty(3)])), vec![3]);
+        assert_eq!(heights(&queue_of(vec![empty(3)], Vec::new())), vec![3]);
+        assert!(queue_of(Vec::new(), Vec::new()).is_empty());
     }
 
     /// Batches held during a drain pass go back at the FRONT, in their original
