@@ -717,8 +717,12 @@ impl<E: Executor> Reactor<E> {
             .unfinalized_batches
             .retain(|b| b.anchor_height < from_anchor);
 
+        // The reactor truncated to `from_anchor - 1`, deleting the anchor block
+        // itself, so redelivery must START at `from_anchor` — i.e. strictly after
+        // `from_anchor - 1`. Asking for `from_anchor` under the exclusive convention
+        // resumes one block too late and the anchor never comes back.
         self.executor
-            .replay_blocks_from(from_anchor)
+            .replay_blocks_after(from_anchor.saturating_sub(1))
             .await
             .context("Failed to send replay request")?;
         Ok(())

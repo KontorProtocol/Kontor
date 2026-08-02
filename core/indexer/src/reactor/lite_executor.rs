@@ -217,11 +217,11 @@ impl Executor for LiteExecutor {
         }
     }
 
-    async fn replay_blocks_from(&mut self, height: u64) -> anyhow::Result<()> {
+    async fn replay_blocks_after(&mut self, after_height: u64) -> anyhow::Result<()> {
         let events = self.mock_bitcoin.lock().unwrap().get_all_block_events();
         for event in events {
             if let crate::bitcoin_follower::event::BlockEvent::BlockInsert { block, .. } = &event
-                && block.height >= height
+                && block.height > after_height
             {
                 let _ = self.block_tx.send(event).await;
             }

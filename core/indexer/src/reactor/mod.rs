@@ -495,7 +495,7 @@ impl<E: Executor> Reactor<E> {
                                 // `pending_blocks` is deliberately NOT cleared here (#430):
                                 // a finality rollback re-executes against the SAME Bitcoin
                                 // chain, so cached blocks are still the right data and make
-                                // this drain immediate — `replay_blocks_from` re-delivery is
+                                // this drain immediate — `replay_blocks_after` re-delivery is
                                 // only the fallback. The Bitcoin-reorg path (`BlockEvent::
                                 // Rollback`) clears them instead because there the blocks
                                 // themselves changed; the drain's block-hash check guards

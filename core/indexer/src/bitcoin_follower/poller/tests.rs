@@ -783,6 +783,35 @@ async fn run_cancellation_stops_cleanly() {
     assert!(result.is_ok());
 }
 
+/// A replay request means "resume strictly after this height", matching the
+/// rollback convention. Assignment would let a stale request that predates a
+/// poller-side reorg move the poller FORWARD and silently skip blocks, so it
+/// may only ever rewind.
+#[test]
+fn apply_replay_rewinds_to_just_after_the_requested_height() {
+    let mut cache = BlockHashCache::new(10);
+    let mut next_height = 10;
+    apply_replay(&mut cache, &mut next_height, 3);
+    assert_eq!(next_height, 4);
+}
+
+#[test]
+fn apply_replay_ignores_a_request_that_would_move_the_poller_forward() {
+    let mut cache = BlockHashCache::new(10);
+    let mut next_height = 4;
+    // A stale request from before a reorg rollback already rewound us further.
+    apply_replay(&mut cache, &mut next_height, 8);
+    assert_eq!(next_height, 4, "must not skip blocks 4..=8");
+}
+
+#[test]
+fn apply_replay_is_a_noop_at_the_current_position() {
+    let mut cache = BlockHashCache::new(10);
+    let mut next_height = 5;
+    apply_replay(&mut cache, &mut next_height, 4);
+    assert_eq!(next_height, 5);
+}
+
 #[tokio::test]
 async fn run_replay_redelivers_blocks() {
     let blocks = new_numbered_blockchain(5);

@@ -195,6 +195,22 @@ fn deliver_blocks(
     }
 }
 
+/// Apply a replay request: rewind so redelivery resumes strictly after `height`.
+///
+/// Only ever rewinds. Plain assignment would let a stale request that predates a
+/// poller-side reorg rollback (`apply_rollback`, which sets its own `next_height`
+/// and does not drain the replay channel) move the poller FORWARD and silently
+/// skip blocks — so both consumers of the channel take the minimum instead.
+fn apply_replay(cache: &mut BlockHashCache, next_height: &mut u64, height: u64) {
+    let resume = height + 1;
+    if resume >= *next_height {
+        return;
+    }
+    info!(height, "Replay request received — resetting poller");
+    cache.truncate_above(height);
+    *next_height = resume;
+}
+
 /// Apply a rollback: truncate the cache, update next_height, and send
 /// the Rollback event. Returns `true` if the channel is still open.
 async fn apply_rollback(
@@ -283,6 +299,16 @@ pub async fn run<C: BitcoinRpc>(
             return Ok(());
         }
 
+        // Replay requests must be observed even while catching up. The only other
+        // consumer is `wait_for_poll` below, which is reachable only when idle at
+        // the tip — so a node genuinely behind on Bitcoin (exactly the one a
+        // rollback replay targets) would never read the channel, and the reactor
+        // can block on the bounded send. One try_recv per iteration is free next
+        // to the tip RPC that follows.
+        while let Ok(height) = replay_rx.try_recv() {
+            apply_replay(&mut cache, &mut next_height, height);
+        }
+
         // 1. Discover tip
         let tip = match retry(
             || bitcoin.get_blockchain_info(),
@@ -325,9 +351,7 @@ pub async fn run<C: BitcoinRpc>(
             {
                 PollResult::Continue => continue,
                 PollResult::Replay(height) => {
-                    info!(height, "Replay request received — resetting poller");
-                    cache.truncate_above(height);
-                    next_height = height + 1;
+                    apply_replay(&mut cache, &mut next_height, height);
                     continue;
                 }
                 PollResult::Cancelled => return Ok(()),
