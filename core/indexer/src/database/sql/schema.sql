@@ -25,6 +25,18 @@ CREATE TABLE IF NOT EXISTS batches (
 -- rows, ConsensusState::new) deletes children explicitly first, and FK
 -- enforcement failing LOUD there is the guard against any future deletion path
 -- forgetting to.
+--
+-- `height` MEANS TWO DIFFERENT THINGS depending on how the row was created, and
+-- several bugs have come from conflating them:
+--   * batch-executed row (`batch_height` set): the ANCHOR height the batch was
+--     decided against. `confirmed_height` is NULL until the tx lands on Bitcoin,
+--     and can end up ABOVE `height`.
+--   * block-indexed row (`batch_height` NULL): the block that contained the tx.
+--     `height == confirmed_height` always.
+-- Only `height` cascades. So a batch row can outlive the block named by its
+-- `confirmed_height` (the anchor is at or below a rollback target while the
+-- confirmation is above it) — `rollback_to_height` clears those explicitly. A
+-- block-indexed row cannot: if it survives the cascade, its confirmation did too.
 CREATE TABLE IF NOT EXISTS transactions (
   id INTEGER PRIMARY KEY,
   txid TEXT NOT NULL UNIQUE,
@@ -61,6 +73,19 @@ CREATE TABLE IF NOT EXISTS batch_txids (
   PRIMARY KEY (batch_height, position),
   FOREIGN KEY (batch_height) REFERENCES batches (consensus_height)
 );
+
+-- What this node ACTUALLY EXECUTED for a batch — the counterpart to the CERTIFIED
+-- list in `batch_txids` above, and NOT the same thing.
+--
+-- The two diverge permanently after a filtered replay: `batch_txids` is append-only
+-- (INSERT OR IGNORE on its PK, no cascade), so re-recording a reduced list cannot
+-- shrink it, while the `transactions` rows for excluded txs are gone. Ask
+-- `batch_txids` "what was decided?" and ask this "what did we run?". Reaching for
+-- the wrong one is silent — it returns a plausible answer — and has been the source
+-- of several bugs, which is the only reason this view exists rather than the join
+-- being written out each time.
+CREATE VIEW IF NOT EXISTS executed_batch_txids AS
+  SELECT batch_height, txid, id FROM transactions WHERE batch_height IS NOT NULL;
 
 CREATE TABLE IF NOT EXISTS contracts (
   id INTEGER PRIMARY KEY,

@@ -306,7 +306,7 @@ pub async fn select_unfinalized_batches(
         "SELECT b.consensus_height, b.anchor_height, b.anchor_hash, b.certificate, t.txid \
          FROM batches b INDEXED BY idx_batches_anchor_height \
          JOIN blocks bl ON bl.height = b.anchor_height AND bl.hash = b.anchor_hash \
-         JOIN transactions t ON t.batch_height = b.consensus_height \
+         JOIN executed_batch_txids t ON t.batch_height = b.consensus_height \
          WHERE b.anchor_height >= {from_anchor} AND b.is_block = 0 \
          ORDER BY b.consensus_height, t.id"
     );
