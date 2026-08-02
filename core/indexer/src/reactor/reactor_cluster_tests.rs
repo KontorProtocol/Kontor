@@ -1280,6 +1280,78 @@ async fn prod_reactor_bitcoin_rollback_across_decided_batch() -> Result<()> {
     Ok(())
 }
 
+/// A Bitcoin reorg that stops AT a tracked batch's anchor. The rollback deletes
+/// blocks strictly above the target, so a batch anchored at or below it keeps its
+/// `transactions` rows and is still owed a finality verdict. No other test
+/// constructs this shape — the two existing reorg tests either track nothing or
+/// reorg BELOW the anchor so the rows cascade away.
+///
+/// LIMITATION, so nobody reads more into this than it gives: it does NOT
+/// discriminate `clear_on_rollback`'s re-derivation from a plain `clear()`. Both
+/// were measured green here — a rollback naming the original batch fires either
+/// way, by a route not yet identified. Treat this as coverage of the path (it
+/// would catch a wedge, a crash, or a lost decision), not as a guard on the
+/// re-derivation itself. That guard still needs writing.
+#[tokio::test]
+async fn prod_reactor_reorg_at_batch_anchor_completes() -> Result<()> {
+    crate::logging::setup();
+
+    let mut cluster = ReactorCluster::start(3).await?;
+    cluster.wait_for_ready().await;
+
+    cluster.mine_empty_and_send();
+    cluster.wait_for_block(1, Duration::from_secs(60)).await;
+    cluster.mine_empty_and_send();
+    cluster.wait_for_block(2, Duration::from_secs(60)).await;
+
+    // A batch anchored at 2, whose txs will never confirm — deadline 2 + 6 = 8.
+    for event in cluster.mock_bitcoin().generate_mempool_txs(2) {
+        cluster.send_mempool_event(event);
+    }
+    let batch = cluster.wait_for_batch(2, Duration::from_secs(60)).await;
+    assert_eq!(batch.txids.len(), 2, "setup batch must carry both txs");
+    let tracked_height = batch
+        .state_events
+        .iter()
+        .find_map(|e| match e {
+            StateEvent::BatchApplied {
+                consensus_height, ..
+            } => Some(*consensus_height),
+            _ => None,
+        })
+        .expect("setup batch must report a consensus height");
+
+    cluster.mine_empty_and_send();
+    cluster.wait_for_block(3, Duration::from_secs(60)).await;
+
+    // Reorg back to the batch's own anchor. Block 2 survives with the same hash, so
+    // the batch is untouched — only the blocks above it go.
+    cluster.mock_bitcoin().reset_to(2);
+    cluster.send_block_event(BlockEvent::Rollback { to_height: 2 });
+    cluster.wait_for_rollback(2, Duration::from_secs(60)).await;
+
+    // Climb past the deadline. The surviving batch's txs are still unconfirmed, so
+    // finality must still invalidate it.
+    for _ in 0..7 {
+        cluster.mine_empty_and_send();
+    }
+    // Assert on WHICH batch was invalidated, not merely that some rollback happened:
+    // the excluded txs return via the mempool, so a rollback naming a DIFFERENT
+    // consensus height fires even with tracking wiped.
+    cluster
+        .wait_for_finality_event_matching(
+            move |e| {
+                matches!(e, FinalityEvent::Rollback { invalidated_batches, .. }
+                    if invalidated_batches.contains(&tracked_height))
+            },
+            Duration::from_secs(60),
+        )
+        .await;
+
+    cluster.shutdown().await;
+    Ok(())
+}
+
 #[tokio::test]
 async fn prod_reactor_late_joiner_syncs_to_same_checkpoint() -> Result<()> {
     crate::logging::setup();
