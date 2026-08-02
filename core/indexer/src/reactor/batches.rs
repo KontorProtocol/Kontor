@@ -1,5 +1,5 @@
 use std::cmp::Reverse;
-use std::collections::{BinaryHeap, HashMap, HashSet};
+use std::collections::{BinaryHeap, HashMap, HashSet, VecDeque};
 use std::time::Instant;
 
 use anyhow::{Context, Result};
@@ -175,6 +175,36 @@ pub(super) fn batch_is_ordered(txs: &[bitcoin::Transaction]) -> bool {
         }
     }
     true
+}
+
+/// Merge a rollback's replay set with the decisions already queued, ordered by
+/// consensus height.
+///
+/// MERGE, not overwrite: the replay set comes from `select_batches_from_anchor`,
+/// which returns only heights that already have a `batches` row, while a queued
+/// decision is queued precisely BECAUSE its anchor was unprocessed and so has no
+/// row. Overwriting drops it permanently — `current_height` has already advanced
+/// past it and `delete_unexecuted_batch_suffix` can only trim a SUFFIX, so the gap
+/// is unrefillable locally or by sync.
+///
+/// Ordered by height rather than appended, because a queued decision can sit BELOW
+/// a replayed one: anchors go non-monotone across a rollback, so height H can defer
+/// on a high anchor while H+1 executes on a lower one and gets recorded. Appending
+/// survivors after the replay set would drop H for the same unrefillable reason.
+///
+/// The two inputs should be disjoint by height; where they are not, the replayed
+/// copy wins because it has been resolved and exclusion-filtered.
+fn merge_replay_queue(
+    replayed: VecDeque<consensus_state::DeferredDecision>,
+    queued: VecDeque<consensus_state::DeferredDecision>,
+) -> VecDeque<consensus_state::DeferredDecision> {
+    let mut merged: Vec<consensus_state::DeferredDecision> = replayed.into();
+    merged.extend(queued);
+    // Stable sort + dedup keeps the replayed copy of any shared height, since it
+    // was pushed first.
+    merged.sort_by_key(|d| d.consensus_height);
+    merged.dedup_by_key(|d| d.consensus_height);
+    merged.into()
 }
 
 /// What `process_decided_batch` did with a decided batch. Callers must not
@@ -735,21 +765,10 @@ impl<E: Executor> Reactor<E> {
                 self.consensus.pending_transactions.remove(txid);
             }
         }
-        // SPLICE, don't assign. The replay set comes from `select_batches_from_anchor`,
-        // which only returns heights that already have a `batches` row — but a queued
-        // decision is queued precisely BECAUSE its anchor was unprocessed, so it has
-        // no row yet. Overwriting the queue drops it permanently: `current_height` has
-        // already advanced past it and `delete_unexecuted_batch_suffix` can only trim
-        // a suffix, so the gap is unrefillable locally or by sync. Survivors keep
-        // their order and follow the replayed set, which is strictly below them.
-        let last_replayed = deferred.back().map(|d| d.consensus_height);
-        let survivors: Vec<consensus_state::DeferredDecision> =
-            std::mem::take(&mut self.consensus.deferred_decisions)
-                .into_iter()
-                .filter(|d| last_replayed.is_none_or(|last| d.consensus_height > last))
-                .collect();
-        deferred.extend(survivors);
-        self.consensus.deferred_decisions = deferred;
+        self.consensus.deferred_decisions = merge_replay_queue(
+            deferred,
+            std::mem::take(&mut self.consensus.deferred_decisions),
+        );
         self.consensus
             .unfinalized_batches
             .retain(|b| b.anchor_height < from_anchor);
@@ -1191,11 +1210,15 @@ impl<E: Executor> Reactor<E> {
 
 #[cfg(test)]
 mod tests {
-    use super::{batch_is_ordered, dependency_sort, transitive_exclusion};
+    use super::{batch_is_ordered, dependency_sort, merge_replay_queue, transitive_exclusion};
+    use crate::consensus::{Height, Value};
+    use crate::reactor::consensus_state::DeferredDecision;
     use bitcoin::absolute::LockTime;
+    use bitcoin::hashes::Hash;
     use bitcoin::transaction::Version;
     use bitcoin::{Amount, OutPoint, ScriptBuf, Sequence, Transaction, TxIn, TxOut, Txid, Witness};
     use std::collections::HashSet;
+    use std::collections::VecDeque;
 
     /// A tx spending each outpoint in `parents`, with one output. `nonce`
     /// perturbs the output value so distinct txs get distinct txids.
@@ -1307,6 +1330,71 @@ mod tests {
         // dependency across the replay sequence.
         let result = transitive_exclusion(&[vec![parent.clone()], vec![child.clone()]], &excluded);
         assert!(result.contains(&child.compute_txid()));
+    }
+
+    /// Decisions are identified by consensus height, not by position.
+    fn decision(consensus_height: u64) -> DeferredDecision {
+        DeferredDecision {
+            consensus_height: Height::new(consensus_height),
+            value: Value::new_batch_raw(0, bitcoin::BlockHash::all_zeros(), vec![]),
+            certificate: Vec::new(),
+        }
+    }
+
+    fn heights(q: &VecDeque<DeferredDecision>) -> Vec<u64> {
+        q.iter().map(|d| d.consensus_height.as_u64()).collect()
+    }
+
+    /// A queued decision BELOW the replay set's max must survive. Anchors go
+    /// non-monotone across a rollback, so height H can defer on a high anchor while
+    /// H+1 executes on a lower one and gets a `batches` row — putting H below the
+    /// replay set. H has no row, so dropping it leaves a permanent, unrefillable
+    /// gap in the consensus-height sequence.
+    #[test]
+    fn merge_replay_queue_keeps_a_queued_decision_below_the_replay_set() {
+        let replayed: VecDeque<_> = [decision(11), decision(12)].into();
+        let queued: VecDeque<_> = [decision(10), decision(13)].into();
+        assert_eq!(
+            heights(&merge_replay_queue(replayed, queued)),
+            vec![10, 11, 12, 13]
+        );
+    }
+
+    #[test]
+    fn merge_replay_queue_orders_by_consensus_height() {
+        let replayed: VecDeque<_> = [decision(5), decision(9)].into();
+        let queued: VecDeque<_> = [decision(6), decision(7)].into();
+        assert_eq!(
+            heights(&merge_replay_queue(replayed, queued)),
+            vec![5, 6, 7, 9]
+        );
+    }
+
+    #[test]
+    fn merge_replay_queue_prefers_the_replayed_copy_of_a_shared_height() {
+        // Distinguishable by certificate: the replayed copy has been resolved and
+        // exclusion-filtered, so it must win.
+        let mut replayed_copy = decision(4);
+        replayed_copy.certificate = vec![0xAA];
+        let replayed: VecDeque<_> = [replayed_copy].into();
+        let queued: VecDeque<_> = [decision(4)].into();
+
+        let merged = merge_replay_queue(replayed, queued);
+        assert_eq!(heights(&merged), vec![4]);
+        assert_eq!(merged[0].certificate, vec![0xAA]);
+    }
+
+    #[test]
+    fn merge_replay_queue_handles_either_side_empty() {
+        assert_eq!(
+            heights(&merge_replay_queue(VecDeque::new(), [decision(3)].into())),
+            vec![3]
+        );
+        assert_eq!(
+            heights(&merge_replay_queue([decision(3)].into(), VecDeque::new())),
+            vec![3]
+        );
+        assert!(merge_replay_queue(VecDeque::new(), VecDeque::new()).is_empty());
     }
 
     #[test]
