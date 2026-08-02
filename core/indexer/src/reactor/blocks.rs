@@ -154,6 +154,15 @@ impl<E: Executor> Reactor<E> {
         &mut self,
         tx: indexer_types::Transaction,
     ) -> Result<Vec<OpWithResult>> {
+        // Simulation runs against a FABRICATED block one past the tip and then
+        // rolls it away. `execute_block` sets `storage.height` to that block as it
+        // goes, so without restoring it here the runtime is left pointing at a
+        // height whose `blocks` row no longer exists. The next identity created
+        // outside a `set_context` — a decided batch executing at the real tip, say —
+        // then inserts `signers(height = <discarded height>)` and trips the
+        // `signers.height -> blocks.height` foreign key, which is classified
+        // non-deterministic and kills the reactor.
+        let restore_height = self.runtime.storage.height;
         self.runtime
             .storage
             .savepoint()
@@ -203,6 +212,7 @@ impl<E: Executor> Reactor<E> {
             .rollback()
             .await
             .context("Failed to rollback simulation")?;
+        self.runtime.storage.height = restore_height;
         Ok(results)
     }
 

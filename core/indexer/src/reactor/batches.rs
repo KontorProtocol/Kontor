@@ -893,10 +893,16 @@ impl<E: Executor> Reactor<E> {
         // for. Restored to the front, in order, whenever a block executes and at
         // exit, so a batch is re-evaluated the moment its anchor lands.
         //
-        // Batches are never reordered relative to each other: once one is held,
-        // later ones are held unevaluated. And the tip can never overshoot a held
-        // anchor, because blocks apply strictly sequentially — the only block that
-        // can execute is `tip + 1`, while a held batch waits for `anchor > tip`.
+        // Every batch is judged ONLY on its own anchor — never held because an
+        // earlier one is waiting. Holding a ready batch for queue order strands it:
+        // the tip keeps climbing past its anchor while it sits here, and the
+        // execution gate demands an exact `anchor == tip` match, so it would come
+        // back as record-only and its transactions would never run even though
+        // peers ran them.
+        //
+        // That costs no ordering guarantee, because a batch can only ever execute
+        // at exactly its own anchor. Anchor order therefore fixes execution order
+        // on every node, whatever position a decision happens to occupy here.
         let mut waiting: VecDeque<consensus_state::DeferredDecision> = VecDeque::new();
 
         loop {
@@ -986,7 +992,7 @@ impl<E: Executor> Reactor<E> {
                     txs,
                     ..
                 } => {
-                    if !waiting.is_empty() || *anchor_height > self.last_height {
+                    if *anchor_height > self.last_height {
                         info!(
                             anchor_height = *anchor_height,
                             last_height = self.last_height,

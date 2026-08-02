@@ -352,6 +352,12 @@ async fn process_direct_input(
     txid: bitcoin::Txid,
     op_return_data: Option<&[u8]>,
 ) -> Result<Vec<Option<anyhow::Error>>> {
+    // Pin the execution height BEFORE resolving the signer. `get_or_create_identity`
+    // inserts `signers(height = storage.height)`, which has a foreign key to
+    // `blocks` — reading that ambiently means the row lands at whatever height the
+    // previous caller happened to leave behind (a rolled-back simulation block, for
+    // instance) rather than the one we are executing at.
+    runtime.storage.height = height;
     let identity = runtime
         .get_or_create_identity(&input.x_only_pubkey.to_string())
         .await?;
