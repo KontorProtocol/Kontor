@@ -4367,7 +4367,9 @@ async fn test_rollback_clears_confirmations_by_deleted_blocks() -> Result<()> {
 /// anchored to the chain it currently holds.
 #[tokio::test]
 async fn test_select_unfinalized_batches_sources_execution_not_certificate() -> Result<()> {
-    use crate::database::queries::{insert_batch_txids, select_unfinalized_batches};
+    use crate::database::queries::{
+        insert_batch_txids, min_unconfirmed_batch_tx_height, select_unfinalized_batches,
+    };
 
     let (_reader, writer, _temp_dir) = new_test_db().await?;
     let conn = writer.connection();
@@ -4444,5 +4446,70 @@ async fn test_select_unfinalized_batches_sources_execution_not_certificate() -> 
 
     // Below the band.
     assert!(select_unfinalized_batches(&conn, 11).await?.is_empty());
+
+    // The floor is what the caller extends when a deadline may still be unsettled —
+    // `min_unconfirmed_batch_tx_height` is how it finds how far down to reach.
+    assert_eq!(
+        min_unconfirmed_batch_tx_height(&conn).await?,
+        Some(10),
+        "the probe must reach the oldest unconfirmed batch tx, however old"
+    );
+    Ok(())
+}
+
+/// A batch whose deadline has already passed can still be owed a verdict: `advance`
+/// executes several blocks inside one drain before settling, so a crash in that
+/// window leaves the tip past a deadline no verdict was rendered on. The startup
+/// floor is extended down to the oldest unconfirmed batch transaction for exactly
+/// this case, so the batch must still be reachable from well below the window.
+#[tokio::test]
+async fn test_unfinalized_batches_reachable_far_below_the_window() -> Result<()> {
+    use crate::database::queries::{
+        insert_batch_txids, min_unconfirmed_batch_tx_height, select_unfinalized_batches,
+    };
+
+    let (_reader, writer, _temp_dir) = new_test_db().await?;
+    let conn = writer.connection();
+    for height in [10u64, 40] {
+        insert_block(
+            &conn,
+            BlockRow::builder()
+                .height(height)
+                .hash(new_mock_block_hash(height as u32))
+                .build(),
+        )
+        .await?;
+    }
+    let hash10 = new_mock_block_hash(10).to_string();
+    insert_batch(&conn, 1, 10, &hash10, b"c1", false).await?;
+    let stale = "ee".repeat(32);
+    insert_batch_txids(&conn, 1, std::slice::from_ref(&stale)).await?;
+    insert_transaction(
+        &conn,
+        TransactionRow::builder()
+            .height(10)
+            .batch_height(1)
+            .txid(stale.clone())
+            .build(),
+    )
+    .await?;
+
+    // Tip 40: the fixed window floor (40 - 6 = 34) misses it entirely.
+    assert!(
+        select_unfinalized_batches(&conn, 34).await?.is_empty(),
+        "the window floor alone loses a batch whose deadline already passed"
+    );
+
+    // The probe finds how far down to reach, and the batch comes back.
+    let floor = min_unconfirmed_batch_tx_height(&conn)
+        .await?
+        .expect("an unconfirmed batch tx exists");
+    assert_eq!(floor, 10);
+    let rows = select_unfinalized_batches(&conn, floor).await?;
+    assert_eq!(
+        rows.iter().map(|r| r.consensus_height).collect::<Vec<_>>(),
+        vec![1],
+        "extending the floor must recover the unsettled batch"
+    );
     Ok(())
 }

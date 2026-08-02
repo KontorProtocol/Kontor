@@ -155,7 +155,23 @@ async fn load_unfinalized_batches(
     conn: &libsql::Connection,
     tip: u64,
 ) -> Result<Vec<UnfinalizedBatch>> {
-    let rows = select_unfinalized_batches(conn, tracking_floor(tip))
+    // The window floor assumes every deadline below it was already settled. A crash
+    // between a tip advance and the settle that should have followed breaks that:
+    // `advance` can execute several blocks inside one drain before `settle_finality`
+    // runs, so the tip can pass a deadline that no verdict was ever rendered on, and
+    // a fixed floor would then drop that batch from tracking permanently. Extend the
+    // floor down to the oldest batch transaction still unconfirmed — the exact set
+    // that can still be owed a verdict — so the range stays indexed rather than
+    // becoming a full scan of `batches`.
+    let floor = match min_unconfirmed_batch_tx_height(conn).await {
+        Ok(Some(oldest)) => oldest.min(tracking_floor(tip)),
+        Ok(None) => tracking_floor(tip),
+        Err(e) => {
+            warn!(error = %e, "Unconfirmed-height probe failed; using the window floor");
+            tracking_floor(tip)
+        }
+    };
+    let rows = select_unfinalized_batches(conn, floor)
         .await
         .context("Failed to query unfinalized batches")?;
     let mut batches = Vec::with_capacity(rows.len());

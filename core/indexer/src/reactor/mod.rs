@@ -492,6 +492,18 @@ impl<E: Executor> Reactor<E> {
         // reorgs both maintain the cache atomically, so a clean restart needs no rebuild.
         self.runtime.storage.footprint().reconstruct().await?;
 
+        // Settle any deadline that was ALREADY due when we started. Rehydration
+        // restores the tracking set, but nothing evaluates it until a tip advance —
+        // and a node that restarted at or past a deadline resumes consensus
+        // immediately, so without this it keeps executing batches on state its peers
+        // have already rolled back until the next Bitcoin block arrives (up to an
+        // hour on mainnet, indefinitely on a stalled chain). That is #515 again by a
+        // third route. The queues are empty here, so the drain inside is a no-op and
+        // only the finality check does work.
+        self.advance()
+            .await
+            .context("advance failed during startup finality settle")?;
+
         let result = self.run_event_loop().await;
 
         // Gracefully stop the Malachite consensus engine and wait for cleanup
