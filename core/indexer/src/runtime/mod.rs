@@ -623,10 +623,18 @@ impl Runtime {
         // Compile + cache the component once here; `init` and every later call
         // reuse the cached artifact. We keep the encoded `bytes` so the WIT check
         // below decodes from them instead of recomputing them.
+        // DETERMINISTIC, not NonDeterministic: decoding is a pure function of the
+        // submitted bytes, so every node fails identically — and a NonDeterministic
+        // error propagates out of `execute_block` rather than being recorded, which
+        // means the whole network exits at the same height. `filter_map` does not
+        // inspect Publish bytes, so this is reachable from any Bitcoin transaction.
+        // Same reasoning as the `instantiate_pre` check just below.
         let (bytes, component) = self
             .component_bytes_and_compiled(contract_id)
             .await
-            .map_err(ExecutionError::NonDeterministic)?;
+            .map_err(|e| {
+                ExecutionError::Deterministic(e.context("contract bytes are not a valid component"))
+            })?;
         let linker = if is_native_contract_id(contract_id) {
             &self.linkers.native
         } else {
@@ -639,7 +647,11 @@ impl Runtime {
         })?;
 
         if !is_native_contract_id(contract_id) {
-            let wit = print_component_wit(&bytes).map_err(ExecutionError::NonDeterministic)?;
+            // Deterministic for the same reason: a pure function of bytes that already
+            // decoded, so a failure here is a property of the contract, not of this node.
+            let wit = print_component_wit(&bytes).map_err(|e| {
+                ExecutionError::Deterministic(e.context("contract WIT could not be read"))
+            })?;
             Self::validate_user_wit(&wit)?;
         }
         Ok(())
@@ -1119,6 +1131,42 @@ mod tests {
         assert!(
             matches!(err, super::ExecutionError::Deterministic(_)),
             "rejection must be Deterministic (graceful reject), not NonDeterministic (shutdown): {err}"
+        );
+    }
+
+    /// Bytes that are not a decodable component must be rejected DETERMINISTICALLY.
+    ///
+    /// This one is a chain-halt guard, not a nicety. `filter_map` does not inspect
+    /// Publish bytes, so a malformed payload reaches execution from an ordinary
+    /// Bitcoin transaction — no API access needed. Classified NonDeterministic it
+    /// propagates out of `execute_block` instead of being recorded as an op failure,
+    /// and because the payload is deterministic content EVERY node reaches the same
+    /// conclusion at the same height and exits together.
+    #[tokio::test]
+    async fn publish_rejects_undecodable_bytes_deterministically() {
+        let (mut runtime, _dir, _name) = test_runtime().await.expect("test runtime");
+        runtime
+            .set_context(
+                0,
+                Some(super::TransactionContext::builder().build()),
+                None,
+                None,
+            )
+            .await;
+        let contract_id = runtime
+            .storage
+            .insert_contract("garbage", &[0xFFu8; 64])
+            .await
+            .expect("insert contract");
+
+        let err = runtime
+            .validate_publishable(contract_id)
+            .await
+            .expect_err("undecodable bytes must be rejected");
+        assert!(
+            matches!(err, super::ExecutionError::Deterministic(_)),
+            "rejection must be Deterministic (recorded op failure), not NonDeterministic \
+             (every node exits at this height): {err}"
         );
     }
 
