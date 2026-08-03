@@ -33,7 +33,7 @@ pub use stdlib::{
     wave_type,
 };
 use stdlib::{contract_address, holder_ref, impls};
-use storage::print_component_wit;
+use storage::{ComponentDecodeError, print_component_wit};
 pub use storage::{Storage, TransactionContext};
 use tokio::sync::Mutex;
 pub use types::default_val_for_type;
@@ -623,18 +623,34 @@ impl Runtime {
         // Compile + cache the component once here; `init` and every later call
         // reuse the cached artifact. We keep the encoded `bytes` so the WIT check
         // below decodes from them instead of recomputing them.
-        // DETERMINISTIC, not NonDeterministic: decoding is a pure function of the
+        // Content failures are DETERMINISTIC: decoding is a pure function of the
         // submitted bytes, so every node fails identically — and a NonDeterministic
         // error propagates out of `execute_block` rather than being recorded, which
         // means the whole network exits at the same height. `filter_map` does not
-        // inspect Publish bytes, so this is reachable from any Bitcoin transaction.
+        // inspect Publish bytes, so that is reachable from any Bitcoin transaction.
         // Same reasoning as the `instantiate_pre` check just below.
-        let (bytes, component) = self
-            .component_bytes_and_compiled(contract_id)
+        //
+        // But only the CONTENT half. The read and the task join are this node's own
+        // machinery; calling those deterministic would make one node reject a publish
+        // its peers accept — the same divergence, silently and in the other direction.
+        let bytes = self
+            .storage
+            .decode_component_bytes(contract_id)
             .await
-            .map_err(|e| {
-                ExecutionError::Deterministic(e.context("contract bytes are not a valid component"))
+            .map_err(|e| match e {
+                ComponentDecodeError::Content(e) => ExecutionError::Deterministic(
+                    e.context("contract bytes are not a valid component"),
+                ),
+                ComponentDecodeError::Infrastructure(e) => ExecutionError::NonDeterministic(e),
             })?;
+        let component = Component::from_binary(&self.engine, &bytes).map_err(|e| {
+            ExecutionError::Deterministic(
+                anyhow!(e).context("contract is not a valid wasm component"),
+            )
+        })?;
+        self.component_cache
+            .put(contract_id, component.clone(), bytes.len())
+            .await;
         let linker = if is_native_contract_id(contract_id) {
             &self.linkers.native
         } else {
@@ -648,7 +664,7 @@ impl Runtime {
 
         if !is_native_contract_id(contract_id) {
             // Deterministic for the same reason: a pure function of bytes that already
-            // decoded, so a failure here is a property of the contract, not of this node.
+            // decoded, so a failure here is a property of the contract, not this node.
             let wit = print_component_wit(&bytes).map_err(|e| {
                 ExecutionError::Deterministic(e.context("contract WIT could not be read"))
             })?;
@@ -1167,6 +1183,34 @@ mod tests {
             matches!(err, super::ExecutionError::Deterministic(_)),
             "rejection must be Deterministic (recorded op failure), not NonDeterministic \
              (every node exits at this height): {err}"
+        );
+    }
+
+    /// The other half of the same classification: this node failing to READ the bytes
+    /// is NOT the contract's fault, and must stay NonDeterministic. Recording it as a
+    /// rejection would make one node refuse a publish its peers accept — the same
+    /// divergence as the halt, silently and in the other direction.
+    #[tokio::test]
+    async fn publish_read_failure_stays_non_deterministic() {
+        let (mut runtime, _dir, _name) = test_runtime().await.expect("test runtime");
+        runtime
+            .set_context(
+                0,
+                Some(super::TransactionContext::builder().build()),
+                None,
+                None,
+            )
+            .await;
+
+        // No contract row at this id — stands in for any failure to obtain the bytes.
+        let err = runtime
+            .validate_publishable(9_999_999)
+            .await
+            .expect_err("a missing contract must not validate");
+        assert!(
+            matches!(err, super::ExecutionError::NonDeterministic(_)),
+            "failing to read the bytes is this node's problem, so it must propagate \
+             rather than be recorded as a deterministic rejection: {err}"
         );
     }
 

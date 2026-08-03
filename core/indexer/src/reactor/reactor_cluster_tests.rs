@@ -1286,14 +1286,11 @@ async fn prod_reactor_bitcoin_rollback_across_decided_batch() -> Result<()> {
 /// constructs this shape — the two existing reorg tests either track nothing or
 /// reorg BELOW the anchor so the rows cascade away.
 ///
-/// LIMITATION, so nobody reads more into this than it gives: it does NOT
-/// discriminate `clear_on_rollback`'s re-derivation from a plain `clear()`. Both
-/// were measured green here — a rollback naming the original batch fires either
-/// way, by a route not yet identified. Treat this as coverage of the path (it
-/// would catch a wedge, a crash, or a lost decision), not as a guard on the
-/// re-derivation itself. That guard still needs writing.
+/// Asserts on WHICH batch was invalidated, not merely that some rollback happened:
+/// the excluded transactions return via the mempool, so a rollback naming a
+/// different consensus height fires even when tracking was wiped.
 #[tokio::test]
-async fn prod_reactor_reorg_at_batch_anchor_completes() -> Result<()> {
+async fn prod_reactor_reorg_at_batch_anchor_keeps_batch_tracked() -> Result<()> {
     crate::logging::setup();
 
     let mut cluster = ReactorCluster::start(3).await?;
@@ -1338,7 +1335,7 @@ async fn prod_reactor_reorg_at_batch_anchor_completes() -> Result<()> {
     // Assert on WHICH batch was invalidated, not merely that some rollback happened:
     // the excluded txs return via the mempool, so a rollback naming a DIFFERENT
     // consensus height fires even with tracking wiped.
-    cluster
+    let events = cluster
         .wait_for_finality_event_matching(
             move |e| {
                 matches!(e, FinalityEvent::Rollback { invalidated_batches, .. }
@@ -1347,6 +1344,14 @@ async fn prod_reactor_reorg_at_batch_anchor_completes() -> Result<()> {
             Duration::from_secs(60),
         )
         .await;
+    assert!(
+        events.iter().any(|e| matches!(
+            e,
+            FinalityEvent::Rollback { invalidated_batches, .. }
+                if invalidated_batches.contains(&tracked_height)
+        )),
+        "expected a Rollback invalidating the tracked batch {tracked_height}, got: {events:?}"
+    );
 
     cluster.shutdown().await;
     Ok(())

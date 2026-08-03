@@ -36,6 +36,30 @@ const PRUNE_VACUUM_HIGH_PAGES: i64 = 512; // ~2 MiB slack before we bother recla
 const PRUNE_VACUUM_MAX_PAGES: i64 = 512; // ~2 MiB returned per call (bounds lock hold)
 
 impl<E: Executor> Reactor<E> {
+    /// Refuse a rollback that reaches below what pruning retains.
+    ///
+    /// Reconstructing state as of `to_height` needs the superseded `contract_state`
+    /// versions, and the GC removes those below the retain window — so truncating
+    /// past it does not roll state back, it corrupts it silently. Both rollback
+    /// paths must check: the Bitcoin-reorg path has always been able to go deep, and
+    /// the finality path can now too, because tracking is rehydrated from disk and a
+    /// node that missed a verdict may carry a batch anchored far below its tip.
+    pub(super) fn check_rollback_depth(&self, to_height: u64) -> Result<()> {
+        if !self.prune.enabled {
+            return Ok(());
+        }
+        let retain = self.prune.retain_blocks.max(FINALITY_WINDOW);
+        if self.last_height.saturating_sub(to_height) > retain {
+            bail!(
+                "rollback to height {to_height} is deeper than the prune retain window \
+                 ({retain}) below tip {}; pruned state cannot be rolled back locally — \
+                 re-sync required",
+                self.last_height
+            );
+        }
+        Ok(())
+    }
+
     pub(super) async fn rollback(&mut self, height: u64) -> Result<()> {
         // The `blocks` cascade + the off-checkpoint footprint-cache reversal run
         // together in one savepoint (capture-before, recompute-after enforced inside),

@@ -34,6 +34,18 @@ use crate::{
 /// Bounds the lookup and forces prompt resolution. ~1 day on Bitcoin (144 blocks).
 pub const BLOCK_ENTROPY_WINDOW: u64 = 144;
 
+/// Why decoding stored contract bytes failed.
+///
+/// The split is load-bearing, not cosmetic: `Content` is a pure function of the
+/// bytes, so every node reaches it identically and a publish carrying such bytes must
+/// be REJECTED deterministically. `Infrastructure` is this node failing to do the
+/// work, so it must propagate — recording it as a rejection would make one node
+/// refuse a publish its peers accept, which is the silent mirror of a chain halt.
+pub enum ComponentDecodeError {
+    Content(anyhow::Error),
+    Infrastructure(anyhow::Error),
+}
+
 /// Decode the WIT embedded in already-encoded component bytes, unmodified
 /// (`init`/core-context preserved) — for on-chain publish validation, where the
 /// validator must see the real surface. `component_wit` strips `init`/core-context
@@ -385,6 +397,48 @@ impl Storage {
             .module(&module_bytes)?
             .validate(true)
             .encode()
+    }
+
+    /// Decode stored contract bytes, keeping content failures distinguishable from
+    /// this node's own failures. See [`ComponentDecodeError`].
+    pub async fn decode_component_bytes(
+        &self,
+        contract_id: u64,
+    ) -> std::result::Result<Vec<u8>, ComponentDecodeError> {
+        let compressed_bytes = self
+            .contract_bytes(contract_id)
+            .await
+            .map_err(ComponentDecodeError::Infrastructure)?
+            .ok_or_else(|| {
+                ComponentDecodeError::Infrastructure(anyhow!(
+                    "Contract not found when trying to load component"
+                ))
+            })?;
+        // Split the join from the work: a JoinError is this node's task machinery
+        // failing, everything inside is a property of the bytes.
+        let decompressed = tokio::task::spawn_blocking(move || {
+            const MAX_DECOMPRESSED: u64 = 64 * 1024 * 1024;
+            let decompressor = brotli::Decompressor::new(&compressed_bytes[..], 4096);
+            let mut module_bytes = Vec::new();
+            decompressor
+                .take(MAX_DECOMPRESSED + 1)
+                .read_to_end(&mut module_bytes)?;
+            if module_bytes.len() as u64 > MAX_DECOMPRESSED {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    "decompressed contract component exceeds maximum size",
+                ));
+            }
+            Ok::<_, std::io::Error>(module_bytes)
+        })
+        .await
+        .map_err(|e| ComponentDecodeError::Infrastructure(e.into()))?
+        .map_err(|e| ComponentDecodeError::Content(e.into()))?;
+
+        ComponentEncoder::default()
+            .module(&decompressed)
+            .and_then(|m| m.validate(true).encode())
+            .map_err(ComponentDecodeError::Content)
     }
 
     pub async fn component_wit(&self, contract_id: u64) -> Result<String> {

@@ -34,7 +34,7 @@ use malachitebft_app_channel::app::types::core::VotingPower;
 use malachitebft_core_types::{LinearTimeouts, Round};
 use tracing::{debug, error, info, warn};
 
-use crate::consensus::finality_types::{FINALITY_WINDOW, StateEvent};
+use crate::consensus::finality_types::StateEvent;
 use crate::consensus::{BatchTx, Ctx};
 use crate::{
     bitcoin_follower::event::{BlockEvent, MempoolEvent},
@@ -270,17 +270,8 @@ impl<E: Executor> Reactor<E> {
                 // Hence the guard keys off `retain` (the assumption) — not the actual
                 // prune watermark — because what it really detects is "Bitcoin broke
                 // finality", which is catastrophic independent of pruning.
-                if self.prune.enabled {
-                    let retain = self.prune.retain_blocks.max(FINALITY_WINDOW);
-                    if self.last_height.saturating_sub(to_height) > retain {
-                        bail!(
-                            "Bitcoin reorg to height {to_height} is deeper than the prune \
-                             retain window ({retain}) below tip {}; pruned state cannot be \
-                             rolled back locally — re-sync required",
-                            self.last_height
-                        );
-                    }
-                }
+                self.check_rollback_depth(to_height)
+                    .context("Bitcoin reorg too deep")?;
                 self.rollback(to_height)
                     .await
                     .context("rollback failed during Bitcoin reorg")?;
