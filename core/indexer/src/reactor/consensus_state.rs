@@ -30,7 +30,7 @@ use crate::consensus::{
 };
 use crate::database::queries::{
     delete_unexecuted_batch_suffix, get_checkpoint_latest, get_transaction_by_txid,
-    min_unconfirmed_batch_tx_height, select_batches_from_anchor, select_batches_in_range,
+    min_unsettled_batch_tx_height, select_batches_from_anchor, select_batches_in_range,
     select_block_at_height, select_existing_txids, select_latest_consensus_height,
     select_min_batch_height, select_unconfirmed_batch_txs, select_unfinalized_batches,
 };
@@ -163,7 +163,7 @@ async fn load_unfinalized_batches(
     // floor down to the oldest batch transaction still unconfirmed — the exact set
     // that can still be owed a verdict — so the range stays indexed rather than
     // becoming a full scan of `batches`.
-    let floor = match min_unconfirmed_batch_tx_height(conn).await {
+    let floor = match min_unsettled_batch_tx_height(conn, FINALITY_WINDOW).await {
         Ok(Some(oldest)) => oldest.min(tracking_floor(tip)),
         Ok(None) => tracking_floor(tip),
         Err(e) => {
@@ -352,7 +352,7 @@ impl ConsensusState {
         // WARNING rather than a startup refusal: the predicate has legitimate
         // transient hits (a node stopped between a deadline passing and its check),
         // and bricking a healthy validator is worse than the fork it screens for.
-        match min_unconfirmed_batch_tx_height(&conn).await {
+        match min_unsettled_batch_tx_height(&conn, FINALITY_WINDOW).await {
             Ok(Some(height)) if height < tracking_floor(last_block_height) => warn!(
                 height,
                 floor = tracking_floor(last_block_height),

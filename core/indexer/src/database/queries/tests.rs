@@ -4368,7 +4368,7 @@ async fn test_rollback_clears_confirmations_by_deleted_blocks() -> Result<()> {
 #[tokio::test]
 async fn test_select_unfinalized_batches_sources_execution_not_certificate() -> Result<()> {
     use crate::database::queries::{
-        insert_batch_txids, min_unconfirmed_batch_tx_height, select_unfinalized_batches,
+        insert_batch_txids, min_unsettled_batch_tx_height, select_unfinalized_batches,
     };
 
     let (_reader, writer, _temp_dir) = new_test_db().await?;
@@ -4448,12 +4448,68 @@ async fn test_select_unfinalized_batches_sources_execution_not_certificate() -> 
     assert!(select_unfinalized_batches(&conn, 11).await?.is_empty());
 
     // The floor is what the caller extends when a deadline may still be unsettled —
-    // `min_unconfirmed_batch_tx_height` is how it finds how far down to reach.
+    // `min_unsettled_batch_tx_height` is how it finds how far down to reach.
     assert_eq!(
-        min_unconfirmed_batch_tx_height(&conn).await?,
+        min_unsettled_batch_tx_height(&conn, 6).await?,
         Some(10),
         "the probe must reach the oldest unconfirmed batch tx, however old"
     );
+    Ok(())
+}
+
+/// The floor probe must use the SAME notion of "settled" the finality verdict does:
+/// confirmed BY THE DEADLINE, not merely confirmed. A transaction that lands one
+/// block late is still missing as far as finality is concerned, so a batch carrying
+/// one is still owed a rollback — and if the probe treats it as settled, that batch
+/// falls below the window on restart and is never tracked again.
+#[tokio::test]
+async fn test_min_unsettled_counts_a_late_confirmation_as_unsettled() -> Result<()> {
+    use crate::database::queries::{confirm_transaction, min_unsettled_batch_tx_height};
+
+    let (_reader, writer, _temp_dir) = new_test_db().await?;
+    let conn = writer.connection();
+    for height in [10u64, 16, 17] {
+        insert_block(
+            &conn,
+            BlockRow::builder()
+                .height(height)
+                .hash(new_mock_block_hash(height as u32))
+                .build(),
+        )
+        .await?;
+    }
+    insert_batch(
+        &conn,
+        1,
+        10,
+        &new_mock_block_hash(10).to_string(),
+        b"c",
+        false,
+    )
+    .await?;
+
+    // Anchored at 10, so the deadline is 16. This one confirms at 17 — one late.
+    let late = "ff".repeat(32);
+    insert_transaction(
+        &conn,
+        TransactionRow::builder()
+            .height(10)
+            .batch_height(1)
+            .txid(late.clone())
+            .build(),
+    )
+    .await?;
+    confirm_transaction(&conn, &late, 17, 0).await?;
+
+    assert_eq!(
+        min_unsettled_batch_tx_height(&conn, 6).await?,
+        Some(10),
+        "a confirmation past the deadline must still count as unsettled"
+    );
+
+    // In time is genuinely settled.
+    confirm_transaction(&conn, &late, 16, 0).await?;
+    assert_eq!(min_unsettled_batch_tx_height(&conn, 6).await?, None);
     Ok(())
 }
 
@@ -4465,7 +4521,7 @@ async fn test_select_unfinalized_batches_sources_execution_not_certificate() -> 
 #[tokio::test]
 async fn test_unfinalized_batches_reachable_far_below_the_window() -> Result<()> {
     use crate::database::queries::{
-        insert_batch_txids, min_unconfirmed_batch_tx_height, select_unfinalized_batches,
+        insert_batch_txids, min_unsettled_batch_tx_height, select_unfinalized_batches,
     };
 
     let (_reader, writer, _temp_dir) = new_test_db().await?;
@@ -4501,7 +4557,7 @@ async fn test_unfinalized_batches_reachable_far_below_the_window() -> Result<()>
     );
 
     // The probe finds how far down to reach, and the batch comes back.
-    let floor = min_unconfirmed_batch_tx_height(&conn)
+    let floor = min_unsettled_batch_tx_height(&conn, 6)
         .await?
         .expect("an unconfirmed batch tx exists");
     assert_eq!(floor, 10);

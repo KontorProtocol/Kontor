@@ -172,22 +172,29 @@ pub async fn select_existing_txids(
         .collect())
 }
 
-/// Lowest anchor height of a batch-executed transaction that has never confirmed.
+/// Lowest anchor height of a batch-executed transaction that is not SETTLED —
+/// meaning it did not confirm on Bitcoin by its batch's deadline.
 ///
-/// A startup divergence probe. Below the finality window this is a transaction the
-/// rollback machinery can no longer act on: if it later confirms, this node takes
-/// `execute_block`'s dedup branch (confirm only) while a peer holding no row takes
-/// insert-and-execute at the confirming height, so the same operations land at
-/// different heights and the checkpoint chains fork permanently. Nothing else can
-/// detect that — a confirmed txid is never re-proposed, so it never reaches a
-/// consensus-level check.
-pub async fn min_unconfirmed_batch_tx_height(conn: &Connection) -> Result<Option<u64>, Error> {
+/// "Settled" must mean exactly what the finality verdict means. Testing only for
+/// `confirmed_height IS NULL` would treat a LATE confirmation as settled, when
+/// finality still counts it missing and still owes that batch a rollback. A batch
+/// row's `height` IS its anchor, so its deadline is `height + finality_window` and
+/// no join is needed.
+///
+/// Two callers, both of which need the finality notion: the startup floor extension
+/// (how far below the window rehydration must reach to pick up a batch whose verdict
+/// was never rendered) and the divergence probe.
+pub async fn min_unsettled_batch_tx_height(
+    conn: &Connection,
+    finality_window: u64,
+) -> Result<Option<u64>, Error> {
     Ok(
         match conn
             .query(
                 "SELECT MIN(height) FROM transactions \
-                 WHERE confirmed_height IS NULL AND batch_height IS NOT NULL",
-                params![],
+                 WHERE batch_height IS NOT NULL \
+                   AND (confirmed_height IS NULL OR confirmed_height > height + ?)",
+                params![finality_window],
             )
             .await?
             .next()
