@@ -869,13 +869,23 @@ impl<E: Executor> Reactor<E> {
             return Ok(false);
         }
         let conn = self.db_conn();
-        let Some((rollback_anchor, excluded)) = self
+        let (events, rollback) = self
             .consensus
             .run_finality_checks(&conn, self.last_height)
-            .await
-        else {
+            .await;
+        let Some((rollback_anchor, excluded)) = rollback else {
+            self.consensus.emit_finality_events(&events);
             return Ok(false);
         };
+
+        // Depth-check BEFORE announcing anything. Rehydration can re-arm a deadline
+        // whose anchor sits far below the tip — that is exactly the #515 residue this
+        // PR picks up — and truncating below the prune watermark would destroy state
+        // rather than restore it. Halting for a re-sync is the intended outcome, and
+        // an observer must not be told a rollback happened when it did not.
+        self.check_rollback_depth(rollback_anchor.saturating_sub(1))
+            .context("finality rollback too deep")?;
+        self.consensus.emit_finality_events(&events);
 
         // Read replay decisions BEFORE the truncation — the query joins rows that
         // are cascade-deleted with their blocks.
@@ -886,13 +896,6 @@ impl<E: Executor> Reactor<E> {
 
         // Roll back to before the invalid anchor so all state at the anchor height
         // (including the invalid txs' effects) is wiped cleanly.
-        //
-        // Depth-checked like the reorg path. Rehydration can re-arm a deadline whose
-        // anchor sits far below the tip — that is exactly the #515 residue this PR
-        // exists to pick up — and truncating below the prune watermark would destroy
-        // state rather than restore it. Halting for a re-sync is the intended outcome.
-        self.check_rollback_depth(rollback_anchor.saturating_sub(1))
-            .context("finality rollback too deep")?;
         self.rollback(rollback_anchor.saturating_sub(1))
             .await
             .context("rollback failed during finality rollback")?;

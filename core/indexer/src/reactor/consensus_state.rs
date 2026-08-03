@@ -534,7 +534,7 @@ impl ConsensusState {
         events
     }
 
-    fn emit_finality_events(&self, events: &[FinalityEvent]) {
+    pub(super) fn emit_finality_events(&self, events: &[FinalityEvent]) {
         if let Some(obs) = &self.observation {
             for event in events {
                 let _ = obs.finality_tx.try_send(event.clone());
@@ -710,13 +710,17 @@ impl ConsensusState {
             .map(Height::new))
     }
 
-    /// Run finality checks. Returns (rollback_anchor, excluded_txids) if a rollback is needed.
-    /// The reactor is responsible for DB truncation and calling `initiate_rollback`.
+    /// Run finality checks. Returns the events produced and, if a rollback is needed,
+    /// `(rollback_anchor, excluded_txids)`.
+    ///
+    /// Does NOT emit the events — the caller does, after deciding it can actually
+    /// perform the rollback. The tracking set IS drained here either way; a caller
+    /// that declines the rollback is expected to halt, which this node does.
     pub async fn run_finality_checks(
         &mut self,
         conn: &libsql::Connection,
         last_height: u64,
-    ) -> Option<(u64, HashSet<Txid>)> {
+    ) -> (Vec<FinalityEvent>, Option<(u64, HashSet<Txid>)>) {
         let finality_events = self.check_finality(conn, last_height).await;
         // At most one Rollback per pass — `check_finality` folds every failing
         // at-deadline batch into a single event. Taking the FIRST rather than the
@@ -741,8 +745,10 @@ impl ConsensusState {
             }
             _ => None,
         });
-        self.emit_finality_events(&finality_events);
-        result
+        // Deliberately NOT emitted here. A rollback the caller then refuses — because
+        // it would reach below the prune watermark — must not be announced as though
+        // it happened. The caller emits once it has committed to acting.
+        (finality_events, result)
     }
 
     /// Validate batch-level rules. Returns a rejection reason if any rule
