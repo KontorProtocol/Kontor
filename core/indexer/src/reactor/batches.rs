@@ -916,6 +916,51 @@ impl<E: Executor> Reactor<E> {
         Ok(true)
     }
 
+    /// Record a decided block this node will NOT execute.
+    ///
+    /// `batches` is the decided sequence and the only copy of it — Malachite asks
+    /// US for decided values (`GetDecidedValues`), it does not keep them. So a
+    /// consensus height left without a row is a hole in the record, and one that
+    /// cannot be repaired: the startup cleanup trims an unexecuted SUFFIX, never a
+    /// gap in the middle.
+    ///
+    /// Batches have always done this — the anchor gate records a batch it cannot
+    /// apply and returns `RecordedOnly`. Block decisions did not, and the asymmetry
+    /// was an oversight rather than a decision: the row costs nothing to write
+    /// (`batches` has no foreign keys, so naming a block we do not hold is legal,
+    /// and nothing references a block decision's row), while the batch case that
+    /// DID get built also has to write `batch_txids` and `unconfirmed_batch_txs`.
+    ///
+    /// Declining to execute stays correct — the block was reorged away and running
+    /// it would bind the wrong block to this consensus height. We just write down
+    /// that we declined.
+    async fn record_declined_block(
+        &self,
+        decision: &consensus_state::DeferredDecision,
+        block_height: u64,
+        decided_hash: BlockHash,
+    ) {
+        if let Err(e) = insert_batch(
+            &self.db_conn(),
+            decision.consensus_height.as_u64(),
+            block_height,
+            &decided_hash.to_string(),
+            &decision.certificate,
+            true,
+        )
+        .await
+        {
+            // Best-effort: failing to record must not take the node down, but it
+            // does leave the hole this exists to prevent, so say so loudly.
+            warn!(
+                error = %e,
+                consensus_height = %decision.consensus_height,
+                block_height,
+                "Failed to record declined block decision — consensus history now has a gap"
+            );
+        }
+    }
+
     pub(super) async fn drain_deferred_decisions(&mut self) -> Result<()> {
         // Batches whose anchor block has not arrived yet. Held ASIDE rather than
         // stopping the drain: a waiting batch can only ever be unblocked by a
@@ -968,6 +1013,8 @@ impl<E: Executor> Reactor<E> {
                                 consensus_height = %decision.consensus_height,
                                 "Dropping stale deferred block decision — hash mismatch after rollback"
                             );
+                            self.record_declined_block(&decision, bh, decided_hash)
+                                .await;
                             self.consensus.pending_blocks.insert(bh, block);
                             continue;
                         }
@@ -1000,6 +1047,8 @@ impl<E: Executor> Reactor<E> {
                                     consensus_height = %decision.consensus_height,
                                     "Dropping deferred block decision — height already executed"
                                 );
+                                self.record_declined_block(&decision, bh, decided_hash)
+                                    .await;
                                 continue;
                             }
                             Ok(None) => {}
@@ -1247,8 +1296,19 @@ impl<E: Executor> Reactor<E> {
                             warn!(
                                 block_height = height,
                                 block_hash = %hash,
+                                consensus_height = %certificate.height,
                                 "Ignoring stale block decision (post-rollback)"
                             );
+                            self.record_declined_block(
+                                &consensus_state::DeferredDecision {
+                                    consensus_height: certificate.height,
+                                    value: proposal.value.clone(),
+                                    certificate: cert_bytes.clone(),
+                                },
+                                *height,
+                                *hash,
+                            )
+                            .await;
                         }
                     }
                 }
