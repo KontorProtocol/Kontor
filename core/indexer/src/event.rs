@@ -1,3 +1,4 @@
+use anyhow::Result;
 use indexer_types::Event;
 use tokio::{
     sync::{
@@ -28,7 +29,7 @@ impl EventSubscriber {
         &self,
         cancel_token: CancellationToken,
         mut rx: mpsc::Receiver<Event>,
-    ) -> JoinHandle<()> {
+    ) -> JoinHandle<Result<()>> {
         let sender = self.sender.clone();
         tokio::spawn(async move {
             loop {
@@ -41,6 +42,7 @@ impl EventSubscriber {
                     }
                 }
             }
+            Ok(())
         })
     }
 }

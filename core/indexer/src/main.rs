@@ -6,6 +6,7 @@ use std::thread::available_parallelism;
 use crate::api::Env;
 use anyhow::Result;
 use clap::{Parser, Subcommand};
+use futures_util::future;
 use indexer::database::queries::select_recent_blocks;
 use indexer::event::EventSubscriber;
 use indexer::info::{compute_info_core, run_info_publisher};
@@ -15,8 +16,9 @@ use indexer::{bitcoin_client, bitcoin_follower, config::Config, database, loggin
 use indexer_types::{Inst, InstKind};
 use tokio::signal::unix::{SignalKind, signal};
 use tokio::sync::{mpsc, oneshot};
+use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
-use tracing::{error, info};
+use tracing::{error, info, warn};
 
 #[derive(Parser)]
 #[command(
@@ -188,7 +190,12 @@ async fn run_daemon(config: Config) -> Result<()> {
     }
     let bitcoin = bitcoin_client::Client::new_from_config(&config)?;
     let cancel_token = CancellationToken::new();
-    let panic_token = cancel_token.clone();
+    // A panic anywhere is fatal, including in tasks nobody joins, so the
+    // supervisor below has to hear about it. The hook can't be async and can't
+    // return a value, so it reports down a channel; the first message is the
+    // cause. It deliberately does *not* cancel — cancelling behind the
+    // supervisor's back is what made a crash indistinguishable from a stop.
+    let (panic_tx, mut panic_rx) = mpsc::unbounded_channel();
     panic::set_hook(Box::new(move |info| {
         let message = info
             .payload()
@@ -201,10 +208,11 @@ async fn run_daemon(config: Config) -> Result<()> {
             .map(|l| format!("{}:{}:{}", l.file(), l.line(), l.column()))
             .unwrap_or_else(|| "unknown location".to_string());
         error!(target: "panic", "Panic at {}: {}", location, message);
-        panic_token.cancel();
+        let _ = panic_tx.send(format!("panic at {location}: {message}"));
     }));
-    let mut handles = vec![];
-    handles.push(stopper::run(cancel_token.clone())?);
+    // The long-lived subsystems, named for the exit message. None of them is
+    // optional: the first one to exit takes the node with it.
+    let mut subsystems: Vec<(&'static str, JoinHandle<Result<()>>)> = Vec::new();
     let filename = "state.db";
     let reader = database::Reader::new(&config.data_dir, filename).await?;
     let writer = database::Writer::new(&config.data_dir, filename).await?;
@@ -221,16 +229,23 @@ async fn run_daemon(config: Config) -> Result<()> {
     let (info_tx, info_rx) = tokio::sync::watch::channel(initial_info);
     // Recomputes `InfoCore` off the `Event` broadcast and republishes it
     // for long-poll `GET /api/` readers — no reactor involvement.
-    handles.push(run_info_publisher(
-        cancel_token.clone(),
-        event_subscriber.subscribe(),
-        reader.clone(),
-        info_tx,
+    subsystems.push((
+        "info publisher",
+        run_info_publisher(
+            cancel_token.clone(),
+            event_subscriber.subscribe(),
+            reader.clone(),
+            info_tx,
+        ),
     ));
     let (simulate_tx, simulate_rx) = mpsc::channel(available_parallelism()?.into());
     let (fees_tx, fees_rx) = tokio::sync::watch::channel(indexer_types::Fees::floor(1));
-    handles.push(event_subscriber.run(cancel_token.clone(), event_rx));
-    handles.push(
+    subsystems.push((
+        "event subscriber",
+        event_subscriber.run(cancel_token.clone(), event_rx),
+    ));
+    subsystems.push((
+        "api",
         api::run(
             Env {
                 config: config.clone(),
@@ -254,7 +269,7 @@ async fn run_daemon(config: Config) -> Result<()> {
             prom_handle.clone(),
         )
         .await?,
-    );
+    ));
 
     let known_hashes = {
         let conn = reader.connection().await?;
@@ -274,7 +289,7 @@ async fn run_daemon(config: Config) -> Result<()> {
         config.zmq_address.clone(),
     )
     .await;
-    handles.push(follower_handle);
+    subsystems.push(("bitcoin follower", follower_handle));
 
     let private_key = indexer::consensus::signing::resolve_consensus_private_key(
         config.consensus_mode,
@@ -296,37 +311,110 @@ async fn run_daemon(config: Config) -> Result<()> {
     };
 
     let (ready_tx, ready_rx) = oneshot::channel();
-    handles.push(reactor::run(
-        config.starting_block_height,
-        cancel_token.clone(),
-        writer,
-        block_rx,
-        mempool_rx,
-        Some(ready_tx),
-        Some(event_tx),
-        Some(simulate_rx),
-        engine_config,
-        bitcoin.clone(),
-        Some(replay_tx),
-        load_genesis_validators(&config)?,
-        None,
-        config.consensus_propose_timeout_ms,
-        Some(fees_tx),
-        consensus_listen_addr_tx,
-        config.network,
-        reactor::PruneConfig {
-            enabled: config.prune,
-            retain_blocks: config.prune_retain_blocks,
-        },
+    subsystems.push((
+        "reactor",
+        reactor::run(
+            config.starting_block_height,
+            cancel_token.clone(),
+            writer,
+            block_rx,
+            mempool_rx,
+            Some(ready_tx),
+            Some(event_tx),
+            Some(simulate_rx),
+            engine_config,
+            bitcoin.clone(),
+            Some(replay_tx),
+            load_genesis_validators(&config)?,
+            None,
+            config.consensus_propose_timeout_ms,
+            Some(fees_tx),
+            consensus_listen_addr_tx,
+            config.network,
+            reactor::PruneConfig {
+                enabled: config.prune,
+                retain_blocks: config.prune_retain_blocks,
+            },
+        ),
     ));
-    ready_rx.await?;
-    reactor_ready.store(true, std::sync::atomic::Ordering::Relaxed);
-    info!("Initialized");
-    for handle in handles {
-        let _ = handle.await;
+
+    // Arm readiness off the critical path. Waiting on `ready_rx` here instead
+    // would mean a reactor that dies during startup reports "channel closed" —
+    // the sender dropping — while its actual error sits unread in a task nobody
+    // joined. Left to the supervisor, the reactor's own error is what surfaces.
+    tokio::spawn({
+        let reactor_ready = reactor_ready.clone();
+        async move {
+            if ready_rx.await.is_ok() {
+                reactor_ready.store(true, std::sync::atomic::Ordering::Relaxed);
+                info!("Initialized");
+            }
+        }
+    });
+
+    // Why we stopped is decided by which of these arrives first — nothing else
+    // in the process cancels, so the first subsystem to exit before a stop was
+    // asked for is, by construction, the cause.
+    let stop = tokio::select! {
+        () = stopper::signal_received() => Stop::Signal,
+        Some(cause) = panic_rx.recv() => Stop::Fatal(anyhow::anyhow!("{cause}")),
+        fatal = first_exit(&mut subsystems) => fatal,
+    };
+
+    info!("Initiating shutdown");
+    cancel_token.cancel();
+    // Anything that fails from here on is the wake of the decision above, not
+    // its cause: worth logging, never worth reporting as the reason we stopped.
+    for (name, handle) in subsystems {
+        match handle.await {
+            Ok(Ok(())) => {}
+            Ok(Err(e)) => warn!("{name} failed while shutting down: {e:#}"),
+            Err(e) => warn!("{name} did not shut down cleanly: {e}"),
+        }
     }
-    info!("Exited");
-    Ok(())
+
+    exit_status(stop)
+}
+
+/// Turn "why we stopped" into a process exit status.
+///
+/// A signal exits 0; a subsystem that died exits non-zero, so an orchestrator
+/// sees a failure instead of `Completed` and backs off rather than restarting
+/// into the same fault forever.
+fn exit_status(stop: Stop) -> Result<()> {
+    match stop {
+        Stop::Signal => {
+            info!("Exited");
+            Ok(())
+        }
+        Stop::Fatal(cause) => {
+            error!("Exited: {cause:#}");
+            Err(cause)
+        }
+    }
+}
+
+/// Why the node stopped. `Signal` exits 0 and `Fatal` exits non-zero, which is
+/// the only thing a deployment has to tell "asked to stop" from "died".
+enum Stop {
+    Signal,
+    Fatal(anyhow::Error),
+}
+
+/// Resolves when the first subsystem exits, removing it from `subsystems` so
+/// the caller can still drain the rest.
+///
+/// Every exit here is fatal, clean or not: this only runs before anything has
+/// asked the node to stop, and a subsystem that returns `Ok(())` unbidden has
+/// stopped doing its job just as surely as one that returned an error.
+async fn first_exit(subsystems: &mut Vec<(&'static str, JoinHandle<Result<()>>)>) -> Stop {
+    let (result, index, _) = future::select_all(subsystems.iter_mut().map(|(_, h)| h)).await;
+    let (name, _) = subsystems.remove(index);
+    Stop::Fatal(match result {
+        Ok(Err(e)) => e.context(format!("{name} failed")),
+        Err(e) => anyhow::anyhow!("{name} task panicked: {e}"),
+        Ok(Ok(())) => anyhow::anyhow!("{name} exited without a shutdown request"),
+    })
 }
 
 fn load_genesis_validators(config: &Config) -> Result<Vec<runtime::GenesisValidator>> {
@@ -345,4 +433,92 @@ fn load_genesis_validators(config: &Config) -> Result<Vec<runtime::GenesisValida
             })
         })
         .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn subsystem(result: Result<()>) -> JoinHandle<Result<()>> {
+        tokio::spawn(async move { result })
+    }
+
+    /// A signal-driven stop has nothing to report, so the daemon exits 0 and the
+    /// orchestrator treats it as intentional. Reporting failure on every
+    /// shutdown would make the signal as useless as reporting success on every
+    /// one.
+    #[test]
+    fn signal_exits_zero() {
+        assert!(exit_status(Stop::Signal).is_ok());
+    }
+
+    /// A dead subsystem exits non-zero, with its own error intact — an exit
+    /// status alone tells an operator to look, the cause tells them where.
+    #[tokio::test]
+    async fn subsystem_failure_carries_the_cause() {
+        let mut subsystems = vec![(
+            "reactor",
+            subsystem(Err(anyhow::anyhow!(
+                "Unexpected block height 316333, expected 316206"
+            ))),
+        )];
+        let err = exit_status(first_exit(&mut subsystems).await)
+            .expect_err("a dead subsystem must fail the process");
+        let msg = format!("{err:#}");
+        assert!(msg.contains("reactor failed"), "{msg}");
+        assert!(msg.contains("316333"), "the cause must reach the operator");
+    }
+
+    /// A subsystem that returns `Ok(())` unbidden has stopped doing its job just
+    /// as surely as one that errored. Discarding task results is what let this
+    /// pass for a clean shutdown.
+    #[tokio::test]
+    async fn clean_exit_without_a_stop_request_is_fatal() {
+        let mut subsystems = vec![("bitcoin follower", subsystem(Ok(())))];
+        let err = exit_status(first_exit(&mut subsystems).await)
+            .expect_err("an unbidden exit must fail the process");
+        assert!(
+            format!("{err:#}").contains("bitcoin follower exited without a shutdown request"),
+            "{err:#}"
+        );
+    }
+
+    /// A panicking subsystem arrives as a `JoinError`, so the supervisor sees it
+    /// without the panic hook having to double as an error channel.
+    #[tokio::test]
+    async fn panicking_subsystem_is_fatal() {
+        let handle: JoinHandle<Result<()>> = tokio::spawn(async { panic!("boom") });
+        let mut subsystems = vec![("api", handle)];
+        let err = exit_status(first_exit(&mut subsystems).await)
+            .expect_err("a panicking subsystem must fail the process");
+        assert!(format!("{err:#}").contains("api task panicked"), "{err:#}");
+    }
+
+    /// Only the subsystem that exited is removed, so the drain that follows can
+    /// await the survivors — polling an already-finished handle panics.
+    #[tokio::test]
+    async fn only_the_exited_subsystem_is_removed() {
+        let (tx, rx) = oneshot::channel::<()>();
+        let mut subsystems = vec![
+            ("reactor", subsystem(Err(anyhow::anyhow!("boom")))),
+            (
+                "api",
+                tokio::spawn(async move {
+                    let _ = rx.await;
+                    Ok(())
+                }),
+            ),
+        ];
+        let _ = first_exit(&mut subsystems).await;
+        assert_eq!(subsystems.len(), 1);
+        assert_eq!(subsystems[0].0, "api");
+
+        tx.send(()).expect("the survivor is still listening");
+        subsystems
+            .remove(0)
+            .1
+            .await
+            .expect("joins")
+            .expect("exits cleanly");
+    }
 }

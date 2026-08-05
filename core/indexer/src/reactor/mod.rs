@@ -32,7 +32,7 @@ use malachitebft_app_channel::NetworkMsg;
 use malachitebft_app_channel::app::types::LocallyProposedValue;
 use malachitebft_app_channel::app::types::core::VotingPower;
 use malachitebft_core_types::{LinearTimeouts, Round};
-use tracing::{debug, error, info, warn};
+use tracing::{debug, info, warn};
 
 use crate::consensus::finality_types::{FINALITY_WINDOW, StateEvent};
 use crate::consensus::{BatchTx, Ctx};
@@ -757,7 +757,7 @@ pub fn run(
     consensus_listen_addr: tokio::sync::watch::Sender<Option<String>>,
     network: bitcoin::Network,
     prune: PruneConfig,
-) -> JoinHandle<()> {
+) -> JoinHandle<Result<()>> {
     tokio::spawn({
         async move {
             let result: Result<()> = async {
@@ -902,12 +902,12 @@ pub fn run(
             }
             .await;
 
-            if let Err(e) = result {
-                error!("Reactor error: {e:#}, exiting");
-                cancel_token.cancel();
-            }
-
+            // Neither logged nor cancelled here: the reactor reports by
+            // returning, and the supervisor in `main` owns what that means for
+            // the process. Cancelling from inside a subsystem is what made a
+            // fatal error indistinguishable from a requested stop.
             info!("Exited");
+            result
         }
     })
 }

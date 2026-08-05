@@ -1,11 +1,5 @@
-use anyhow::Result;
-use tokio::{
-    select,
-    signal::ctrl_c,
-    task::{self, JoinHandle},
-};
-use tokio_util::sync::CancellationToken;
-use tracing::{info, warn};
+use tokio::{select, signal::ctrl_c};
+use tracing::warn;
 
 #[cfg(not(windows))]
 use tokio::signal::unix::{SignalKind, signal};
@@ -22,15 +16,16 @@ async fn sigterm_listener() {
     std::future::pending::<()>().await;
 }
 
-pub fn run(cancel_token: CancellationToken) -> Result<JoinHandle<()>> {
-    Ok(task::spawn(async move {
-        select! {
-            _ = cancel_token.cancelled() => warn!("Cancelled"),
-            _ = ctrl_c() => warn!("Ctrl+C received"),
-            _ = sigterm_listener() => warn!("SIGTERM received"),
-        };
-        info!("Initiating shutdown");
-        cancel_token.cancel();
-        info!("Exited");
-    }))
+/// Resolves when the process is asked to stop from outside — Ctrl-C or SIGTERM.
+///
+/// Deliberately just a future, not a task that cancels: whoever awaits it learns
+/// that the stop was *asked for*, and that is the whole basis for telling an
+/// operator-initiated shutdown from a subsystem that died. A task that cancelled
+/// on our behalf would erase the distinction the moment it fired, which is how a
+/// crashed node comes to exit 0.
+pub async fn signal_received() {
+    select! {
+        _ = ctrl_c() => warn!("Ctrl+C received"),
+        _ = sigterm_listener() => warn!("SIGTERM received"),
+    }
 }

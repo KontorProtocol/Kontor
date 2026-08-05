@@ -1482,6 +1482,43 @@ impl RegTesterCluster {
             .client
     }
 
+    /// Stop a node the way an orchestrator does — SIGTERM — and hand back its
+    /// exit status.
+    ///
+    /// [`Self::kill_node`] sends SIGKILL to simulate a crash; this is the
+    /// graceful path, and its exit status is the only thing a deployment has to
+    /// tell "asked to stop" from "died on its own".
+    ///
+    /// Shells out to `kill(1)` because tokio's `Child` can only SIGKILL, and the
+    /// raw syscall would mean a `libc` dependency and an `unsafe` block in the
+    /// shipped crate for one harness call.
+    pub async fn stop_node_gracefully(&mut self, index: usize) -> Result<std::process::ExitStatus> {
+        let nc = &mut self.node_configs[index];
+        let node = nc
+            .running
+            .as_mut()
+            .ok_or(anyhow!("Node {index} not running"))?;
+        let pid = node
+            .child
+            .id()
+            .ok_or(anyhow!("Node {index} already reaped"))?;
+        let signaled = Command::new("kill")
+            .args(["-TERM", &pid.to_string()])
+            .status()
+            .await?;
+        if !signaled.success() {
+            bail!("SIGTERM to node {index} (pid {pid}) failed: {signaled}");
+        }
+        // Bounded: a node that wedges on shutdown is the failure this test is
+        // here to catch, and an unbounded wait would report it as a hung suite
+        // instead of a failing assertion.
+        let status = tokio::time::timeout(Duration::from_secs(30), node.child.wait())
+            .await
+            .map_err(|_| anyhow!("Node {index} did not exit within 30s of SIGTERM"))??;
+        nc.running = None;
+        Ok(status)
+    }
+
     /// Kill a node's process.
     pub async fn kill_node(&mut self, index: usize) -> Result<()> {
         let nc = &mut self.node_configs[index];

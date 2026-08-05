@@ -1,12 +1,12 @@
+use anyhow::{Context, Result, anyhow};
 use bitcoin::BlockHash;
 use std::sync::Arc;
 use tokio::{
     select,
     sync::{Notify, mpsc},
-    task::JoinHandle,
+    task::{JoinError, JoinHandle},
 };
 use tokio_util::sync::CancellationToken;
-use tracing::error;
 
 use crate::{bitcoin_client::client::BitcoinRpc, block::TransactionFilterMap};
 
@@ -32,7 +32,7 @@ pub async fn run<C: BitcoinRpc>(
     mpsc::Receiver<BlockEvent>,
     mpsc::Receiver<MempoolEvent>,
     mpsc::Sender<u64>,
-    JoinHandle<()>,
+    JoinHandle<Result<()>>,
 ) {
     let (block_tx, block_rx) = mpsc::channel(32);
     let (mempool_tx, mempool_rx) = mpsc::channel(32);
@@ -68,25 +68,34 @@ pub async fn run<C: BitcoinRpc>(
             ListenerConfig::new(zmq_address),
         ));
 
+        // Whichever task exits first takes the follower with it — neither is
+        // optional, and a task that stops feeding the reactor is as fatal as one
+        // that errors. `Ok(Ok(()))` is only legitimate as a response to
+        // cancellation; reached any other way it used to be silent, because the
+        // old catch-all arm logged nothing at all.
+        //
+        // No `cancel()` here either: returning the error *is* the report, and
+        // the supervisor that owns the token decides what it means.
         select! {
-            r = poller_handle => {
-                match r {
-                    Ok(Err(e)) => error!("Poller error: {:#}", e),
-                    Err(e) => error!("Poller task panicked: {}", e),
-                    _ => {}
-                }
-                cancel_token.cancel();
-            }
-            r = listener_handle => {
-                match r {
-                    Ok(Err(e)) => error!("Listener error: {:#}", e),
-                    Err(e) => error!("Listener task panicked: {}", e),
-                    _ => {}
-                }
-                cancel_token.cancel();
-            }
+            r = poller_handle => subsystem_exit("bitcoin poller", r, &cancel_token),
+            r = listener_handle => subsystem_exit("bitcoin listener", r, &cancel_token),
         }
     });
 
     (block_rx, mempool_rx, replay_tx, handle)
+}
+
+/// Turn a finished poller/listener task into the follower's own result.
+fn subsystem_exit(
+    name: &str,
+    result: std::result::Result<Result<()>, JoinError>,
+    cancel_token: &CancellationToken,
+) -> Result<()> {
+    match result {
+        Ok(Err(e)) => Err(e).with_context(|| format!("{name} failed")),
+        Err(e) => Err(anyhow!("{name} task panicked: {e}")),
+        // Cancelled is the one way out that isn't a failure.
+        Ok(Ok(())) if cancel_token.is_cancelled() => Ok(()),
+        Ok(Ok(())) => Err(anyhow!("{name} exited without being cancelled")),
+    }
 }

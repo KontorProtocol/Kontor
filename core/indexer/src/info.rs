@@ -100,7 +100,7 @@ pub fn run_info_publisher(
     mut events: broadcast::Receiver<Event>,
     reader: database::Reader,
     info_tx: watch::Sender<InfoCore>,
-) -> JoinHandle<()> {
+) -> JoinHandle<Result<()>> {
     tokio::spawn(async move {
         loop {
             tokio::select! {
@@ -124,5 +124,6 @@ pub fn run_info_publisher(
                 _ = cancel.cancelled() => break,
             }
         }
+        Ok(())
     })
 }

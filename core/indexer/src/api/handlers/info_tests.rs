@@ -182,7 +182,7 @@ async fn info_publisher_republishes_on_event() -> Result<()> {
     assert_eq!(core.recent_blocks.len(), 2);
 
     cancel.cancel();
-    handle.await?;
+    handle.await??;
     Ok(())
 }
 
