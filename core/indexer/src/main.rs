@@ -363,8 +363,17 @@ async fn run_daemon(config: Config) -> Result<()> {
 
     info!("Initiating shutdown");
     cancel_token.cancel();
-    // Anything that fails from here on is the wake of the decision above, not
-    // its cause: worth logging, never worth reporting as the reason we stopped.
+    drain(subsystems).await;
+    exit_status(stop)
+}
+
+/// Wait out the remaining subsystems after the stop decision has been made.
+///
+/// Whatever they report here is the wake of that decision, not its cause — one
+/// real failure closes channels and unwinds tasks behind it, and a cancelled
+/// `retry` hands back the error it was retrying. Worth logging, never worth
+/// reporting as the reason the process stopped.
+async fn drain(subsystems: Vec<(&'static str, JoinHandle<Result<()>>)>) {
     for (name, handle) in subsystems {
         match handle.await {
             Ok(Ok(())) => {}
@@ -372,8 +381,6 @@ async fn run_daemon(config: Config) -> Result<()> {
             Err(e) => warn!("{name} did not shut down cleanly: {e}"),
         }
     }
-
-    exit_status(stop)
 }
 
 /// Turn "why we stopped" into a process exit status.
@@ -492,6 +499,25 @@ mod tests {
         let err = exit_status(first_exit(&mut subsystems).await)
             .expect_err("a panicking subsystem must fail the process");
         assert!(format!("{err:#}").contains("api task panicked"), "{err:#}");
+    }
+
+    /// A failure that surfaces *after* the stop decision must not become the
+    /// reason we stopped. This is the SIGTERM-during-a-reorg case: cancelling
+    /// makes `retry` give up and hand back the error it was retrying, so the
+    /// poller reports a failure on a perfectly ordinary shutdown. Reporting that
+    /// would fail the process on every rollout.
+    #[tokio::test]
+    async fn a_failure_while_shutting_down_is_not_the_cause() {
+        let stop = Stop::Signal;
+        drain(vec![(
+            "bitcoin poller",
+            subsystem(Err(anyhow::anyhow!("get block hash for reorg: cancelled"))),
+        )])
+        .await;
+        assert!(
+            exit_status(stop).is_ok(),
+            "a subsystem erroring on the way out must not turn a clean stop into a crash"
+        );
     }
 
     /// Only the subsystem that exited is removed, so the drain that follows can
