@@ -63,21 +63,22 @@ where
 /// [`retry`] for work that cannot be drop-cancelled, so something has to cut the
 /// retrying short from outside.
 ///
-/// The case this exists for is block execution: it runs in the *body* of the
-/// reactor's `select!`, and a chosen branch's body runs to completion — that is
-/// the point, since a half-executed block is not something to leave behind. So
-/// nothing drops these retries, and a node retrying an unreachable bitcoind
-/// would otherwise keep going until the backoff ran out, spending the shutdown
-/// budget on work that is about to be discarded.
+/// The callers are `validate_transaction`'s two RPCs — mempool acceptance and
+/// broadcast — reached from `make_value` and `validate_and_accept_proposal`,
+/// i.e. while building or checking a batch proposal. They cannot be dropped
+/// simply because they run in the *body* of a branch of the reactor's `select!`,
+/// and a chosen branch's body runs to completion; nothing above them is in a
+/// position to race them. Without a way in, a node retrying an unreachable
+/// bitcoind keeps going until the backoff runs out, spending the shutdown budget
+/// on a proposal that will never be used.
 ///
 /// Races the signal against the whole retry rather than checking a flag between
 /// attempts. backon consults its `when` predicate only when an error *arrives*,
 /// so a flag would first sit out the remaining backoff — up to 10s — and then
 /// make one more RPC attempt, complete with its connect timeout, before noticing.
-/// Racing abandons the in-flight request the instant the decision is made.
-/// Dropping it is safe: both call sites are RPCs whose failure the caller
-/// already handles, the block's transaction rolls back either way, and it
-/// re-executes from scratch on the next start.
+/// Racing abandons the in-flight request the instant the decision is made, which
+/// costs nothing here: proposal validation writes no state, and the caller
+/// already treats an RPC failure as "this transaction does not go in the batch".
 pub async fn retry_until_cancelled<T, E, F, Fut>(
     operation: F,
     action: &str,
