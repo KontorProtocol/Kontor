@@ -29,6 +29,12 @@ pub struct Env {
     /// exists from disk before the reactor has populated `fees_rx`) still
     /// 503s until the reactor catches up.
     pub reactor_ready: Arc<AtomicBool>,
+    /// Set by `main` when the node is stopping because a subsystem died, before
+    /// it cancels. `cancel_token` says only *that* we are stopping — a rollout
+    /// and a dead reactor look identical there — and the two call for opposite
+    /// treatment of in-flight traffic: drain the first, refuse the second. This
+    /// is the only thing that tells them apart inside a handler.
+    pub failed: Arc<AtomicBool>,
     /// This node's resolved consensus listen address, sent by the reactor on
     /// the first `Listening` (before consensus is available) and surfaced by the
     /// ungated `GET /api/status`. A watch so in-process cluster tests can await
@@ -61,6 +67,7 @@ impl Env {
             // Unit-test env skips the reactor; flip ready so handlers that
             // get mounted directly into a test router aren't perma-503'd.
             reactor_ready: Arc::new(AtomicBool::new(true)),
+            failed: Arc::new(AtomicBool::new(false)),
             consensus_listen_addr: watch::channel(None).1,
             event_subscriber: EventSubscriber::new(),
             runtime_pool: runtime::pool::new(

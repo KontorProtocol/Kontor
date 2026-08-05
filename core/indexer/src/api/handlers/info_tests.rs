@@ -199,6 +199,7 @@ async fn healthz_ready_tracks_availability() -> Result<()> {
     env.info_rx = info_rx;
     let reactor_ready = env.reactor_ready.clone();
     reactor_ready.store(false, Ordering::Relaxed);
+    let cancel = env.cancel_token.clone();
     let app = Router::new()
         .route("/healthz/live", get(get_healthz_live))
         .route("/healthz/ready", get(get_healthz_ready))
@@ -225,6 +226,113 @@ async fn healthz_ready_tracks_availability() -> Result<()> {
     })?;
     let res = server.get("/healthz/ready").await;
     res.assert_status(StatusCode::OK);
+
+    // The node starts stopping: readiness must withdraw. The reactor latch stays
+    // set (it never un-sets) and the info snapshot keeps its last height, so
+    // without the shutdown term this node would keep reporting 200 while
+    // indexing nothing — which is how a 20 h signet halt hid behind a green
+    // probe.
+    cancel.cancel();
+    let res = server.get("/healthz/ready").await;
+    res.assert_status(StatusCode::SERVICE_UNAVAILABLE);
+    assert_eq!(
+        res.json::<serde_json::Value>()["shutting_down"],
+        serde_json::json!(true),
+        "the body must say why, not just fail"
+    );
+    assert_eq!(
+        res.json::<serde_json::Value>()["reactor_ready"],
+        serde_json::json!(true),
+        "the latch is still set — the shutdown term is what withdrew readiness"
+    );
+
+    // Liveness still answers: the process is up, it is just not taking new
+    // traffic. Only a hung process should fail this probe.
+    server
+        .get("/healthz/live")
+        .await
+        .assert_status(StatusCode::OK);
+
+    Ok(())
+}
+
+/// The traffic gate is deliberately *not* the readiness predicate: a node that
+/// was asked to stop keeps serving while it drains, because endpoint removal is
+/// asynchronous and the requests already in flight are the ones a graceful
+/// shutdown exists to finish.
+#[tokio::test]
+async fn require_available_serves_through_a_requested_shutdown() -> Result<()> {
+    use std::sync::atomic::Ordering;
+
+    let (mut env, _conn, _dir) = new_test_env().await?;
+    let (info_tx, info_rx) = watch::channel(InfoCore::default());
+    env.info_rx = info_rx;
+    env.reactor_ready.store(true, Ordering::Relaxed);
+    let cancel = env.cancel_token.clone();
+    info_tx.send(InfoCore {
+        height: Some(1),
+        ..Default::default()
+    })?;
+
+    let server = TestServer::new(crate::api::router::new(
+        env,
+        metrics_exporter_prometheus::PrometheusBuilder::new()
+            .build_recorder()
+            .handle(),
+    ));
+
+    server
+        .get("/api/blocks")
+        .await
+        .assert_status(StatusCode::OK);
+
+    cancel.cancel();
+    server
+        .get("/api/blocks")
+        .await
+        .assert_status(StatusCode::OK);
+
+    Ok(())
+}
+
+/// A node stopping because a subsystem died must refuse traffic immediately —
+/// this is the desynced-validator case, where the reactor is gone but the API
+/// would happily keep serving a frozen height to anyone who asks.
+#[tokio::test]
+async fn require_available_withdraws_when_a_subsystem_died() -> Result<()> {
+    use std::sync::atomic::Ordering;
+
+    let (mut env, _conn, _dir) = new_test_env().await?;
+    let (info_tx, info_rx) = watch::channel(InfoCore::default());
+    env.info_rx = info_rx;
+    env.reactor_ready.store(true, Ordering::Relaxed);
+    let failed = env.failed.clone();
+    let cancel = env.cancel_token.clone();
+    info_tx.send(InfoCore {
+        height: Some(1),
+        ..Default::default()
+    })?;
+
+    let server = TestServer::new(crate::api::router::new(
+        env,
+        metrics_exporter_prometheus::PrometheusBuilder::new()
+            .build_recorder()
+            .handle(),
+    ));
+
+    server
+        .get("/api/blocks")
+        .await
+        .assert_status(StatusCode::OK);
+
+    // `main` sets this before it cancels, so no request can see the shutdown
+    // without also being able to see that it was a failure.
+    failed.store(true, Ordering::Relaxed);
+    cancel.cancel();
+    server
+        .get("/api/blocks")
+        .await
+        .assert_status(StatusCode::SERVICE_UNAVAILABLE);
 
     Ok(())
 }

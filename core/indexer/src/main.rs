@@ -217,6 +217,8 @@ async fn run_daemon(config: Config) -> Result<()> {
     let reader = database::Reader::new(&config.data_dir, filename).await?;
     let writer = database::Writer::new(&config.data_dir, filename).await?;
     let reactor_ready = Arc::new(AtomicBool::new(false));
+    // Whether we are stopping because something died — see `Env::failed`.
+    let failed = Arc::new(AtomicBool::new(false));
     let (consensus_listen_addr_tx, consensus_listen_addr_rx) = tokio::sync::watch::channel(None);
     let (event_tx, event_rx) = mpsc::channel(10);
     let event_subscriber = EventSubscriber::new();
@@ -251,6 +253,7 @@ async fn run_daemon(config: Config) -> Result<()> {
                 config: config.clone(),
                 cancel_token: cancel_token.clone(),
                 reactor_ready: reactor_ready.clone(),
+                failed: failed.clone(),
                 consensus_listen_addr: consensus_listen_addr_rx.clone(),
                 reader: reader.clone(),
                 event_subscriber: event_subscriber.clone(),
@@ -361,6 +364,12 @@ async fn run_daemon(config: Config) -> Result<()> {
         fatal = first_exit(&mut subsystems) => fatal,
     };
 
+    // Ordered before the cancel so no request can observe a shutdown in progress
+    // without also being able to see why: the API keeps serving through a drain,
+    // and must not do that for a node whose reactor is gone.
+    if matches!(stop, Stop::Fatal(_)) {
+        failed.store(true, std::sync::atomic::Ordering::Relaxed);
+    }
     info!("Initiating shutdown");
     cancel_token.cancel();
     drain(subsystems).await;
