@@ -72,6 +72,9 @@ blst = { workspace = true }
 bls-crypto = { path = "../bls-crypto" }
 metrics = "=0.24.6"
 metrics-exporter-prometheus = "=0.18.3"
+# Only for sending SIGTERM to a child node in the regtest harness — tokio's
+# `Child` can only SIGKILL, which cannot exercise the graceful-shutdown path.
+libc = "=0.2.186"
 
 # Malachite BFT consensus
 malachitebft-app-channel = { workspace = true }

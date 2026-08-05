@@ -212,6 +212,19 @@ async fn cluster_consensus_lifecycle() -> Result<()> {
         .await?;
     cluster.assert_checkpoints_match().await?;
 
+    // A healthy node asked to stop must exit 0 — the other half of "fatal errors
+    // exit non-zero". Reporting failure on every shutdown would be as useless as
+    // reporting success on every one: an orchestrator that sees a restart loop
+    // on ordinary rollouts learns to ignore the signal. This is the regression a
+    // careless fatal-slot wiring introduces, and the cluster is already up here,
+    // so it costs one signal.
+    let status = cluster.stop_node_gracefully(3).await?;
+    assert_eq!(
+        status.code(),
+        Some(0),
+        "SIGTERM on a healthy node must exit 0, got {status:?}"
+    );
+
     cluster.teardown().await?;
     Ok(())
 }

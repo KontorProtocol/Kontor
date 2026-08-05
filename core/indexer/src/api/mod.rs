@@ -22,7 +22,11 @@ use tracing::{error, info};
 /// router and the handler both read this constant.
 pub const API_REQUEST_TIMEOUT_MS: u64 = 30_000;
 
-pub async fn run(env: Env, prom_handle: PrometheusHandle) -> Result<JoinHandle<()>> {
+pub async fn run(
+    env: Env,
+    prom_handle: PrometheusHandle,
+    fatal: crate::fatal::FatalSlot,
+) -> Result<JoinHandle<()>> {
     let addr = SocketAddr::from(([0, 0, 0, 0], env.config.api_port));
     let handle = Handle::new();
 
@@ -48,16 +52,23 @@ pub async fn run(env: Env, prom_handle: PrometheusHandle) -> Result<JoinHandle<(
         }
     });
 
+    let cancel_token = env.cancel_token.clone();
     let router = router::new(env, prom_handle);
 
     Ok(tokio::spawn(async move {
-        if axum_server::bind(addr)
+        // This resolves on a bind failure (port already taken) as well as on a
+        // serve error, and until now both only logged — leaving the node running
+        // headless, with no API and no probe endpoint answering, while `main`
+        // waited on tasks that would never finish. The probes are the only way an
+        // orchestrator sees inside this process, so losing them is fatal.
+        if let Err(e) = axum_server::bind(addr)
             .handle(handle)
             .serve(router.into_make_service_with_connect_info::<SocketAddr>())
             .await
-            .is_err()
         {
-            error!("HTTP server panicked on join");
+            error!("HTTP server failed on {addr}: {e}");
+            fatal.record_msg("http server", format!("failed on {addr}: {e}"));
+            cancel_token.cancel();
         }
         info!("HTTP server exited");
     }))

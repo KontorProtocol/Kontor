@@ -199,6 +199,7 @@ async fn healthz_ready_tracks_availability() -> Result<()> {
     env.info_rx = info_rx;
     let reactor_ready = env.reactor_ready.clone();
     reactor_ready.store(false, Ordering::Relaxed);
+    let cancel = env.cancel_token.clone();
     let app = Router::new()
         .route("/healthz/live", get(get_healthz_live))
         .route("/healthz/ready", get(get_healthz_ready))
@@ -225,6 +226,68 @@ async fn healthz_ready_tracks_availability() -> Result<()> {
     })?;
     let res = server.get("/healthz/ready").await;
     res.assert_status(StatusCode::OK);
+
+    // A subsystem dies and cancels the token: readiness must withdraw. The
+    // reactor latch stays set (it never un-sets) and the info snapshot keeps its
+    // last height, so without the shutdown term this node would keep reporting
+    // 200 while indexing nothing — which is exactly how a 20 h signet halt went
+    // unnoticed behind a green probe.
+    cancel.cancel();
+    let res = server.get("/healthz/ready").await;
+    res.assert_status(StatusCode::SERVICE_UNAVAILABLE);
+    assert_eq!(
+        res.json::<serde_json::Value>()["shutting_down"],
+        serde_json::json!(true),
+        "the body must say why, not just fail"
+    );
+    assert_eq!(
+        res.json::<serde_json::Value>()["reactor_ready"],
+        serde_json::json!(true),
+        "the latch is still set — the shutdown term is what withdrew readiness"
+    );
+
+    // Liveness still answers: the process is up, it is just not serving traffic.
+    // Only a hung process should fail this probe.
+    server
+        .get("/healthz/live")
+        .await
+        .assert_status(StatusCode::OK);
+
+    Ok(())
+}
+
+/// `require_available` must withdraw availability on the same signal as
+/// `/healthz/ready`. The probe's only job is to predict this gate; if the two
+/// drift, orchestration routes traffic to a node that 503s everything.
+#[tokio::test]
+async fn require_available_mirrors_readiness_on_shutdown() -> Result<()> {
+    use std::sync::atomic::Ordering;
+
+    let (mut env, _conn, _dir) = new_test_env().await?;
+    let (info_tx, info_rx) = watch::channel(InfoCore::default());
+    env.info_rx = info_rx;
+    env.reactor_ready.store(true, Ordering::Relaxed);
+    let cancel = env.cancel_token.clone();
+    info_tx.send(InfoCore {
+        height: Some(1),
+        ..Default::default()
+    })?;
+
+    let server = TestServer::new(crate::api::router::new(
+        env,
+        metrics_exporter_prometheus::PrometheusBuilder::new()
+            .build_recorder()
+            .handle(),
+    ));
+
+    // Available while healthy.
+    server.get("/api/blocks").await.assert_status(StatusCode::OK);
+
+    cancel.cancel();
+    server
+        .get("/api/blocks")
+        .await
+        .assert_status(StatusCode::SERVICE_UNAVAILABLE);
 
     Ok(())
 }

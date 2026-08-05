@@ -77,21 +77,28 @@ impl<B> OnFailure<B> for NoOpOnFailure {
 }
 
 /// Tower middleware that 503s every `/api/*` request until the indexer
-/// is both (a) reactor-ready — `ready_rx` signaled, mempool sync done,
-/// `fees_rx` carrying a real estimate — and (b) holding chain state
-/// (`InfoCore.height.is_some()`). A warm-DB restart can pass (b) on
-/// startup (height seeded from disk by `compute_info_core`) before
-/// passing (a), so both must be checked; checking both *here* keeps
+/// is (a) reactor-ready — `ready_rx` signaled, mempool sync done,
+/// `fees_rx` carrying a real estimate — (b) holding chain state
+/// (`InfoCore.height.is_some()`), and (c) not shutting down. A warm-DB
+/// restart can pass (b) on startup (height seeded from disk by
+/// `compute_info_core`) before passing (a), so both must be checked;
+/// (a) is a latch that never un-sets, so only (c) can withdraw
+/// availability once a subsystem dies. Checking all three *here* keeps
 /// the decision single-point — handlers downstream of the gate can
 /// trust the snapshot and don't re-decide.
+///
+/// Must stay identical to `get_healthz_ready`: the probe's whole purpose
+/// is to predict this gate, and a node whose readiness probe disagrees
+/// with its own 503s is worse than one with no probe at all.
 async fn require_available(
     State(env): State<Env>,
     req: AxumRequest,
     next: Next,
 ) -> std::result::Result<axum::response::Response, super::error::Error> {
     let reactor_ready = env.reactor_ready.load(std::sync::atomic::Ordering::Relaxed);
+    let shutting_down = env.cancel_token.is_cancelled();
     let has_chain_state = env.info_rx.borrow().height.is_some();
-    if !reactor_ready || !has_chain_state {
+    if !reactor_ready || shutting_down || !has_chain_state {
         return Err(HttpError::ServiceUnavailable("Indexer is not available".to_string()).into());
     }
     Ok(next.run(req).await)

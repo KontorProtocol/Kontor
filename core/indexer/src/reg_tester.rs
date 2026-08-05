@@ -1482,6 +1482,35 @@ impl RegTesterCluster {
             .client
     }
 
+    /// Stop a node the way an orchestrator does — SIGTERM — and hand back its
+    /// exit status.
+    ///
+    /// [`Self::kill_node`] sends SIGKILL to simulate a crash; this is the
+    /// graceful path, and its exit status is the only thing a deployment has to
+    /// tell "asked to stop" from "died on its own". A node that exits 0 either
+    /// way is a node whose failures are invisible to Kubernetes, which reads
+    /// status 0 as `Completed`, restarts the pod, and never raises
+    /// `CrashLoopBackOff`.
+    pub async fn stop_node_gracefully(&mut self, index: usize) -> Result<std::process::ExitStatus> {
+        let nc = &mut self.node_configs[index];
+        let node = nc
+            .running
+            .as_mut()
+            .ok_or(anyhow!("Node {index} not running"))?;
+        let pid = node.child.id().ok_or(anyhow!("Node {index} already reaped"))?;
+        // SAFETY: `kill(2)` with a pid this process owns and has not yet reaped
+        // (the `id()` above is `None` after reaping) and a valid signal number.
+        if unsafe { libc::kill(pid as i32, libc::SIGTERM) } != 0 {
+            bail!(
+                "SIGTERM to node {index} (pid {pid}) failed: {}",
+                std::io::Error::last_os_error()
+            );
+        }
+        let status = node.child.wait().await?;
+        nc.running = None;
+        Ok(status)
+    }
+
     /// Kill a node's process.
     pub async fn kill_node(&mut self, index: usize) -> Result<()> {
         let nc = &mut self.node_configs[index];

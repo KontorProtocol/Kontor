@@ -32,9 +32,11 @@ use malachitebft_app_channel::NetworkMsg;
 use malachitebft_app_channel::app::types::LocallyProposedValue;
 use malachitebft_app_channel::app::types::core::VotingPower;
 use malachitebft_core_types::{LinearTimeouts, Round};
+use metrics::gauge;
 use tracing::{debug, error, info, warn};
 
 use crate::consensus::finality_types::{FINALITY_WINDOW, StateEvent};
+use crate::metrics::{DEFERRED_DECISIONS, PENDING_BLOCKS};
 use crate::consensus::{BatchTx, Ctx};
 use crate::{
     bitcoin_follower::event::{BlockEvent, MempoolEvent},
@@ -334,6 +336,14 @@ impl<E: Executor> Reactor<E> {
                     Err(_) => break,
                 }
             }
+
+            // Publish the backlog gauges from the one point every state change
+            // passes through, rather than from each mutation site. Both queues
+            // matter most exactly when nothing is happening — a wedged node
+            // executes no blocks and decides no batches, so a gauge hung off
+            // either of those paths would go stale precisely when it is needed.
+            gauge!(PENDING_BLOCKS).set(self.consensus.pending_blocks.len() as f64);
+            gauge!(DEFERRED_DECISIONS).set(self.consensus.deferred_decisions.len() as f64);
 
             let hard_deadline_instant = self.consensus.pending_proposal.as_ref().map(|p| {
                 let deadline = p.hard_deadline();
@@ -757,6 +767,7 @@ pub fn run(
     consensus_listen_addr: tokio::sync::watch::Sender<Option<String>>,
     network: bitcoin::Network,
     prune: PruneConfig,
+    fatal: crate::fatal::FatalSlot,
 ) -> JoinHandle<()> {
     tokio::spawn({
         async move {
@@ -904,6 +915,10 @@ pub fn run(
 
             if let Err(e) = result {
                 error!("Reactor error: {e:#}, exiting");
+                // Record BEFORE cancelling: cancellation is what tears the other
+                // subsystems down, and whatever they report afterwards is a
+                // consequence of this error, not a separate failure.
+                fatal.record("reactor", &e);
                 cancel_token.cancel();
             }
 

@@ -8,6 +8,7 @@ use anyhow::Result;
 use clap::{Parser, Subcommand};
 use indexer::database::queries::select_recent_blocks;
 use indexer::event::EventSubscriber;
+use indexer::fatal::FatalSlot;
 use indexer::info::{compute_info_core, run_info_publisher};
 use indexer::keygen::{self, KeygenArgs};
 use indexer::{api, block, built_info, reactor, reg_tester, runtime};
@@ -188,7 +189,10 @@ async fn run_daemon(config: Config) -> Result<()> {
     }
     let bitcoin = bitcoin_client::Client::new_from_config(&config)?;
     let cancel_token = CancellationToken::new();
+    // Why we are stopping. Cancellation alone cannot say — see `fatal`.
+    let fatal = FatalSlot::new();
     let panic_token = cancel_token.clone();
+    let panic_fatal = fatal.clone();
     panic::set_hook(Box::new(move |info| {
         let message = info
             .payload()
@@ -201,6 +205,7 @@ async fn run_daemon(config: Config) -> Result<()> {
             .map(|l| format!("{}:{}:{}", l.file(), l.line(), l.column()))
             .unwrap_or_else(|| "unknown location".to_string());
         error!(target: "panic", "Panic at {}: {}", location, message);
+        panic_fatal.record_msg("panic", format!("at {location}: {message}"));
         panic_token.cancel();
     }));
     let mut handles = vec![];
@@ -252,6 +257,7 @@ async fn run_daemon(config: Config) -> Result<()> {
                 info_rx,
             },
             prom_handle.clone(),
+            fatal.clone(),
         )
         .await?,
     );
@@ -272,6 +278,7 @@ async fn run_daemon(config: Config) -> Result<()> {
         config.starting_block_height,
         known_hashes,
         config.zmq_address.clone(),
+        fatal.clone(),
     )
     .await;
     handles.push(follower_handle);
@@ -318,6 +325,7 @@ async fn run_daemon(config: Config) -> Result<()> {
             enabled: config.prune,
             retain_blocks: config.prune_retain_blocks,
         },
+        fatal.clone(),
     ));
     ready_rx.await?;
     reactor_ready.store(true, std::sync::atomic::Ordering::Relaxed);
@@ -325,8 +333,25 @@ async fn run_daemon(config: Config) -> Result<()> {
     for handle in handles {
         let _ = handle.await;
     }
-    info!("Exited");
-    Ok(())
+    exit_result(&fatal)
+}
+
+/// Turn "why did we stop" into a process exit status.
+///
+/// A signal-driven shutdown records nothing and exits 0; a subsystem that died
+/// exits non-zero, so an orchestrator sees a failure instead of `Completed` and
+/// backs off instead of restarting into the same fault forever.
+fn exit_result(fatal: &FatalSlot) -> Result<()> {
+    match fatal.take() {
+        Some(cause) => {
+            error!("Exited: {cause}");
+            anyhow::bail!("fatal: {cause}")
+        }
+        None => {
+            info!("Exited");
+            Ok(())
+        }
+    }
 }
 
 fn load_genesis_validators(config: &Config) -> Result<Vec<runtime::GenesisValidator>> {
@@ -345,4 +370,29 @@ fn load_genesis_validators(config: &Config) -> Result<Vec<runtime::GenesisValida
             })
         })
         .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A signal-driven shutdown records nothing, so the daemon exits 0 and the
+    /// orchestrator treats the stop as intentional.
+    #[test]
+    fn clean_shutdown_exits_zero() {
+        assert!(exit_result(&FatalSlot::new()).is_ok());
+    }
+
+    /// A recorded fatal error must surface as an `Err`, which `#[tokio::main]`
+    /// turns into a non-zero exit status. Without this the reactor could die and
+    /// the process would still report `Completed`.
+    #[test]
+    fn fatal_error_exits_non_zero() {
+        let fatal = FatalSlot::new();
+        fatal.record_msg("reactor", "Unexpected block height 316333, expected 316206");
+        let err = exit_result(&fatal).expect_err("a recorded fatal must fail the process");
+        let msg = format!("{err:#}");
+        assert!(msg.contains("reactor"), "{msg}");
+        assert!(msg.contains("316333"), "the cause must reach the operator: {msg}");
+    }
 }

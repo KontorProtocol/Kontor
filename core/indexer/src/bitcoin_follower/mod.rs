@@ -8,7 +8,9 @@ use tokio::{
 use tokio_util::sync::CancellationToken;
 use tracing::error;
 
-use crate::{bitcoin_client::client::BitcoinRpc, block::TransactionFilterMap};
+use crate::{
+    bitcoin_client::client::BitcoinRpc, block::TransactionFilterMap, fatal::FatalSlot,
+};
 
 use self::{
     event::{BlockEvent, MempoolEvent},
@@ -28,6 +30,7 @@ pub async fn run<C: BitcoinRpc>(
     starting_block_height: u64,
     known_hashes: Vec<(u64, BlockHash)>,
     zmq_address: String,
+    fatal: FatalSlot,
 ) -> (
     mpsc::Receiver<BlockEvent>,
     mpsc::Receiver<MempoolEvent>,
@@ -68,23 +71,36 @@ pub async fn run<C: BitcoinRpc>(
             ListenerConfig::new(zmq_address),
         ));
 
+        // Whichever task exits first takes the whole node down with it — neither
+        // is optional. `Ok(Ok(()))` is only legitimate as a response to
+        // cancellation; reached any other way it means a task quietly stopped
+        // feeding the reactor, which used to be silent (the old catch-all arm
+        // logged nothing at all) and is just as fatal as an error.
+        macro_rules! subsystem_exit {
+            ($name:literal, $result:expr) => {{
+                match $result {
+                    Ok(Err(e)) => {
+                        error!("{} error: {:#}", $name, e);
+                        fatal.record($name, &e);
+                    }
+                    Err(e) => {
+                        error!("{} task panicked: {}", $name, e);
+                        fatal.record_msg($name, format!("task panicked: {e}"));
+                    }
+                    Ok(Ok(())) => {
+                        if !cancel_token.is_cancelled() {
+                            error!("{} exited without being cancelled", $name);
+                            fatal.record_msg($name, "exited without being cancelled");
+                        }
+                    }
+                }
+                cancel_token.cancel();
+            }};
+        }
+
         select! {
-            r = poller_handle => {
-                match r {
-                    Ok(Err(e)) => error!("Poller error: {:#}", e),
-                    Err(e) => error!("Poller task panicked: {}", e),
-                    _ => {}
-                }
-                cancel_token.cancel();
-            }
-            r = listener_handle => {
-                match r {
-                    Ok(Err(e)) => error!("Listener error: {:#}", e),
-                    Err(e) => error!("Listener task panicked: {}", e),
-                    _ => {}
-                }
-                cancel_token.cancel();
-            }
+            r = poller_handle => subsystem_exit!("bitcoin poller", r),
+            r = listener_handle => subsystem_exit!("bitcoin listener", r),
         }
     });
 

@@ -87,6 +87,11 @@ pub struct NodeStatus {
     pub network: String,
     pub consensus_mode: ConsensusMode,
     pub reactor_ready: bool,
+    /// Whether the node is tearing down. `reactor_ready` alone cannot say —
+    /// it never un-sets — and this is the ungated endpoint an operator reaches
+    /// for first, so it must not read healthy on a dying node.
+    #[serde(default)]
+    pub shutting_down: bool,
     /// Resolved consensus listen multiaddr, or `null` until bound / for
     /// non-consensus nodes.
     pub consensus_listen_addr: Option<String>,
@@ -100,6 +105,7 @@ pub async fn get_status(State(env): State<Env>) -> Json<NodeStatus> {
         network: env.config.network.to_string(),
         consensus_mode: env.config.consensus_mode,
         reactor_ready: env.reactor_ready.load(Ordering::Relaxed),
+        shutting_down: env.cancel_token.is_cancelled(),
         consensus_listen_addr: env.consensus_listen_addr.borrow().clone(),
     })
 }
@@ -110,6 +116,8 @@ pub async fn get_status(State(env): State<Env>) -> Json<NodeStatus> {
 pub struct Healthz {
     pub ready: bool,
     pub reactor_ready: bool,
+    /// Set once the node is tearing down — see [`get_healthz_ready`].
+    pub shutting_down: bool,
     /// Highest indexed block, `null` until the first block lands.
     pub height: Option<u64>,
 }
@@ -123,12 +131,20 @@ pub async fn get_healthz_live() -> &'static str {
 
 /// `GET /healthz/ready` — readiness for traffic: the exact predicate the
 /// `require_available` middleware gates on (reactor started AND chain state
-/// exists), so a pod reads ready precisely when its chain endpoints stop
-/// answering 503 (#214).
+/// exists AND not shutting down), so a pod reads ready precisely when its chain
+/// endpoints stop answering 503 (#214).
+///
+/// `reactor_ready` is a latch: it is armed once at startup and never disarmed,
+/// so on its own it keeps reporting a node healthy long after its reactor has
+/// died. The cancellation token supplies what it cannot — the reactor's fatal
+/// path cancels it, and the event loop only ever exits on cancellation, so a
+/// cancelled token means the reactor is stopping or already stopped. Without
+/// this term a desynced node answers 200 and keeps taking traffic.
 pub async fn get_healthz_ready(State(env): State<Env>) -> (StatusCode, Json<Healthz>) {
     let reactor_ready = env.reactor_ready.load(Ordering::Relaxed);
+    let shutting_down = env.cancel_token.is_cancelled();
     let height = env.info_rx.borrow().height;
-    let ready = reactor_ready && height.is_some();
+    let ready = reactor_ready && !shutting_down && height.is_some();
     let code = if ready {
         StatusCode::OK
     } else {
@@ -139,6 +155,7 @@ pub async fn get_healthz_ready(State(env): State<Env>) -> (StatusCode, Json<Heal
         Json(Healthz {
             ready,
             reactor_ready,
+            shutting_down,
             height,
         }),
     )

@@ -3951,6 +3951,7 @@ dependencies = [
  "indexer-types",
  "indexmap 2.14.0",
  "kontor-crypto",
+ "libc",
  "libsql",
  "macros",
  "metrics",
