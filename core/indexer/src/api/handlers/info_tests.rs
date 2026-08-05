@@ -281,7 +281,10 @@ async fn require_available_mirrors_readiness_on_shutdown() -> Result<()> {
     ));
 
     // Available while healthy.
-    server.get("/api/blocks").await.assert_status(StatusCode::OK);
+    server
+        .get("/api/blocks")
+        .await
+        .assert_status(StatusCode::OK);
 
     cancel.cancel();
     server

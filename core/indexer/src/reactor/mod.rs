@@ -36,8 +36,8 @@ use metrics::gauge;
 use tracing::{debug, error, info, warn};
 
 use crate::consensus::finality_types::{FINALITY_WINDOW, StateEvent};
-use crate::metrics::{DEFERRED_DECISIONS, PENDING_BLOCKS};
 use crate::consensus::{BatchTx, Ctx};
+use crate::metrics::{DEFERRED_DECISIONS, PENDING_BLOCKS};
 use crate::{
     bitcoin_follower::event::{BlockEvent, MempoolEvent},
     consensus::{Genesis, Validator, ValidatorSet, signing::PublicKey},

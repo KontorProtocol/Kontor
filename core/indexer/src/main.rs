@@ -393,6 +393,9 @@ mod tests {
         let err = exit_result(&fatal).expect_err("a recorded fatal must fail the process");
         let msg = format!("{err:#}");
         assert!(msg.contains("reactor"), "{msg}");
-        assert!(msg.contains("316333"), "the cause must reach the operator: {msg}");
+        assert!(
+            msg.contains("316333"),
+            "the cause must reach the operator: {msg}"
+        );
     }
 }

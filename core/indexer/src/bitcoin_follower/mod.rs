@@ -8,9 +8,7 @@ use tokio::{
 use tokio_util::sync::CancellationToken;
 use tracing::error;
 
-use crate::{
-    bitcoin_client::client::BitcoinRpc, block::TransactionFilterMap, fatal::FatalSlot,
-};
+use crate::{bitcoin_client::client::BitcoinRpc, block::TransactionFilterMap, fatal::FatalSlot};
 
 use self::{
     event::{BlockEvent, MempoolEvent},

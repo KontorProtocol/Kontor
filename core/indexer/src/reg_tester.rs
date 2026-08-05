@@ -1497,7 +1497,10 @@ impl RegTesterCluster {
             .running
             .as_mut()
             .ok_or(anyhow!("Node {index} not running"))?;
-        let pid = node.child.id().ok_or(anyhow!("Node {index} already reaped"))?;
+        let pid = node
+            .child
+            .id()
+            .ok_or(anyhow!("Node {index} already reaped"))?;
         // SAFETY: `kill(2)` with a pid this process owns and has not yet reaped
         // (the `id()` above is `None` after reaping) and a valid signal number.
         if unsafe { libc::kill(pid as i32, libc::SIGTERM) } != 0 {

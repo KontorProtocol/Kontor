@@ -63,10 +63,7 @@ mod tests {
         let fatal = FatalSlot::new();
         fatal.record_msg("reactor", "the cause");
         fatal.record_msg("bitcoin poller", "a consequence");
-        fatal.record(
-            "http server",
-            &anyhow::anyhow!("another consequence"),
-        );
+        fatal.record("http server", &anyhow::anyhow!("another consequence"));
         assert_eq!(fatal.take().as_deref(), Some("reactor: the cause"));
     }
 
