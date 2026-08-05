@@ -2,6 +2,7 @@ use std::panic;
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 use std::thread::available_parallelism;
+use std::time::Duration;
 
 use crate::api::Env;
 use anyhow::Result;
@@ -372,33 +373,60 @@ async fn run_daemon(config: Config) -> Result<()> {
     }
     info!("Initiating shutdown");
     cancel_token.cancel();
-    drain(subsystems).await;
-    exit_status(stop)
+    let wedged = drain(subsystems, SHUTDOWN_BUDGET).await;
+    exit_status(stop, &wedged)
 }
 
-/// Wait out the remaining subsystems after the stop decision has been made.
+/// How long the subsystems get to stop once cancelled. Comfortably covers the
+/// API's 10s graceful window and a reactor finishing an in-flight block; a
+/// correct shutdown takes a fraction of it. Exceeding it means something is not
+/// listening to cancellation, and waiting longer has never once fixed that —
+/// without a bound the process hangs instead of exiting, which tells an
+/// orchestrator even less than exiting 0 did.
+const SHUTDOWN_BUDGET: Duration = Duration::from_secs(30);
+
+/// Wait out the remaining subsystems after the stop decision has been made, and
+/// report any that were still running when the budget ran out.
 ///
 /// Whatever they report here is the wake of that decision, not its cause — one
 /// real failure closes channels and unwinds tasks behind it, and a cancelled
 /// `retry` hands back the error it was retrying. Worth logging, never worth
 /// reporting as the reason the process stopped.
-async fn drain(subsystems: Vec<(&'static str, JoinHandle<Result<()>>)>) {
+///
+/// The budget is a deadline shared across the whole drain, so once it passes
+/// every subsystem still running is named, not just the first one to hold us up.
+async fn drain(
+    subsystems: Vec<(&'static str, JoinHandle<Result<()>>)>,
+    budget: Duration,
+) -> Vec<&'static str> {
+    let deadline = tokio::time::Instant::now() + budget;
+    let mut wedged = Vec::new();
     for (name, handle) in subsystems {
-        match handle.await {
-            Ok(Ok(())) => {}
-            Ok(Err(e)) => warn!("{name} failed while shutting down: {e:#}"),
-            Err(e) => warn!("{name} did not shut down cleanly: {e}"),
+        match tokio::time::timeout_at(deadline, handle).await {
+            Ok(Ok(Ok(()))) => {}
+            Ok(Ok(Err(e))) => warn!("{name} failed while shutting down: {e:#}"),
+            Ok(Err(e)) => warn!("{name} did not shut down cleanly: {e}"),
+            Err(_) => {
+                error!("{name} ignored cancellation for {budget:?}, abandoning it");
+                wedged.push(name);
+            }
         }
     }
+    wedged
 }
 
 /// Turn "why we stopped" into a process exit status.
 ///
 /// A signal exits 0; a subsystem that died exits non-zero, so an orchestrator
 /// sees a failure instead of `Completed` and backs off rather than restarting
-/// into the same fault forever.
-fn exit_status(stop: Stop) -> Result<()> {
+/// into the same fault forever. A stop that had to abandon a subsystem is not a
+/// clean stop either, however it started — a node that cannot shut down is a bug
+/// worth paging for, and reporting 0 would bury it.
+fn exit_status(stop: Stop, wedged: &[&str]) -> Result<()> {
     match stop {
+        Stop::Signal if !wedged.is_empty() => {
+            anyhow::bail!("stopped on signal, but {} never stopped", wedged.join(", "))
+        }
         Stop::Signal => {
             info!("Exited");
             Ok(())
@@ -424,6 +452,12 @@ enum Stop {
 /// asked the node to stop, and a subsystem that returns `Ok(())` unbidden has
 /// stopped doing its job just as surely as one that returned an error.
 async fn first_exit(subsystems: &mut Vec<(&'static str, JoinHandle<Result<()>>)>) -> Stop {
+    // `select_all` panics on an empty iterator, and a panic in the shutdown path
+    // is the last thing this code should contribute. Unreachable while `main`
+    // pushes all five, but "nothing is running" is a fatal answer either way.
+    if subsystems.is_empty() {
+        return Stop::Fatal(anyhow::anyhow!("no subsystems left running"));
+    }
     let (result, index, _) = future::select_all(subsystems.iter_mut().map(|(_, h)| h)).await;
     let (name, _) = subsystems.remove(index);
     Stop::Fatal(match result {
@@ -465,7 +499,7 @@ mod tests {
     /// one.
     #[test]
     fn signal_exits_zero() {
-        assert!(exit_status(Stop::Signal).is_ok());
+        assert!(exit_status(Stop::Signal, &[]).is_ok());
     }
 
     /// A dead subsystem exits non-zero, with its own error intact — an exit
@@ -478,7 +512,7 @@ mod tests {
                 "Unexpected block height 316333, expected 316206"
             ))),
         )];
-        let err = exit_status(first_exit(&mut subsystems).await)
+        let err = exit_status(first_exit(&mut subsystems).await, &[])
             .expect_err("a dead subsystem must fail the process");
         let msg = format!("{err:#}");
         assert!(msg.contains("reactor failed"), "{msg}");
@@ -491,7 +525,7 @@ mod tests {
     #[tokio::test]
     async fn clean_exit_without_a_stop_request_is_fatal() {
         let mut subsystems = vec![("bitcoin follower", subsystem(Ok(())))];
-        let err = exit_status(first_exit(&mut subsystems).await)
+        let err = exit_status(first_exit(&mut subsystems).await, &[])
             .expect_err("an unbidden exit must fail the process");
         assert!(
             format!("{err:#}").contains("bitcoin follower exited without a shutdown request"),
@@ -505,7 +539,7 @@ mod tests {
     async fn panicking_subsystem_is_fatal() {
         let handle: JoinHandle<Result<()>> = tokio::spawn(async { panic!("boom") });
         let mut subsystems = vec![("api", handle)];
-        let err = exit_status(first_exit(&mut subsystems).await)
+        let err = exit_status(first_exit(&mut subsystems).await, &[])
             .expect_err("a panicking subsystem must fail the process");
         assert!(format!("{err:#}").contains("api task panicked"), "{err:#}");
     }
@@ -518,15 +552,51 @@ mod tests {
     #[tokio::test]
     async fn a_failure_while_shutting_down_is_not_the_cause() {
         let stop = Stop::Signal;
-        drain(vec![(
-            "bitcoin poller",
-            subsystem(Err(anyhow::anyhow!("get block hash for reorg: cancelled"))),
-        )])
+        let wedged = drain(
+            vec![(
+                "bitcoin poller",
+                subsystem(Err(anyhow::anyhow!("get block hash for reorg: cancelled"))),
+            )],
+            SHUTDOWN_BUDGET,
+        )
         .await;
+        assert!(wedged.is_empty(), "it stopped, it just stopped badly");
         assert!(
-            exit_status(stop).is_ok(),
+            exit_status(stop, &wedged).is_ok(),
             "a subsystem erroring on the way out must not turn a clean stop into a crash"
         );
+    }
+
+    /// A subsystem that ignores cancellation is abandoned rather than waited on
+    /// forever, and the process says so. Hanging here is strictly worse than the
+    /// bug this whole change is about: a stuck process exits with nothing at all,
+    /// and an orchestrator can only wait out its grace period and SIGKILL it.
+    #[tokio::test]
+    async fn a_subsystem_that_never_stops_is_abandoned_and_reported() {
+        let deaf: JoinHandle<Result<()>> = tokio::spawn(async {
+            std::future::pending::<()>().await;
+            Ok(())
+        });
+        let wedged = drain(
+            vec![("reactor", deaf), ("api", subsystem(Ok(())))],
+            Duration::from_millis(50),
+        )
+        .await;
+        assert_eq!(wedged, vec!["reactor"]);
+
+        let err = exit_status(Stop::Signal, &wedged)
+            .expect_err("a node that cannot shut down must not report success");
+        assert!(format!("{err:#}").contains("reactor"), "{err:#}");
+    }
+
+    /// Defensive: `select_all` panics on an empty iterator, and the shutdown path
+    /// is the worst place to learn that.
+    #[tokio::test]
+    async fn no_subsystems_is_fatal_not_a_panic() {
+        let mut subsystems = Vec::new();
+        let err = exit_status(first_exit(&mut subsystems).await, &[])
+            .expect_err("nothing running is not a healthy node");
+        assert!(format!("{err:#}").contains("no subsystems"), "{err:#}");
     }
 
     /// Only the subsystem that exited is removed, so the drain that follows can
