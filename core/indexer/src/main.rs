@@ -12,13 +12,13 @@ use indexer::database::queries::select_recent_blocks;
 use indexer::event::EventSubscriber;
 use indexer::info::{compute_info_core, run_info_publisher};
 use indexer::keygen::{self, KeygenArgs};
+use indexer::stopper::{self, Shutdown};
 use indexer::{api, block, built_info, reactor, reg_tester, runtime};
-use indexer::{bitcoin_client, bitcoin_follower, config::Config, database, logging, stopper};
+use indexer::{bitcoin_client, bitcoin_follower, config::Config, database, logging};
 use indexer_types::{Inst, InstKind};
 use tokio::signal::unix::{SignalKind, signal};
 use tokio::sync::{mpsc, oneshot};
 use tokio::task::JoinHandle;
-use tokio_util::sync::CancellationToken;
 use tracing::{error, info, warn};
 
 #[derive(Parser)]
@@ -190,7 +190,7 @@ async fn run_daemon(config: Config) -> Result<()> {
         info!("{:#?}", config);
     }
     let bitcoin = bitcoin_client::Client::new_from_config(&config)?;
-    let cancel_token = CancellationToken::new();
+    let shutdown = Shutdown::new();
     // A panic anywhere is fatal, including in tasks nobody joins, so the
     // supervisor below has to hear about it. The hook can't be async and can't
     // return a value, so it reports down a channel; the first message is the
@@ -235,7 +235,7 @@ async fn run_daemon(config: Config) -> Result<()> {
     subsystems.push((
         "info publisher",
         run_info_publisher(
-            cancel_token.clone(),
+            shutdown.signal(),
             event_subscriber.subscribe(),
             reader.clone(),
             info_tx,
@@ -245,14 +245,14 @@ async fn run_daemon(config: Config) -> Result<()> {
     let (fees_tx, fees_rx) = tokio::sync::watch::channel(indexer_types::Fees::floor(1));
     subsystems.push((
         "event subscriber",
-        event_subscriber.run(cancel_token.clone(), event_rx),
+        event_subscriber.run(shutdown.signal(), event_rx),
     ));
     subsystems.push((
         "api",
         api::run(
             Env {
                 config: config.clone(),
-                cancel_token: cancel_token.clone(),
+                shutdown: shutdown.signal(),
                 reactor_ready: reactor_ready.clone(),
                 failed: failed.clone(),
                 consensus_listen_addr: consensus_listen_addr_rx.clone(),
@@ -287,7 +287,7 @@ async fn run_daemon(config: Config) -> Result<()> {
     let (block_rx, mempool_rx, replay_tx, follower_handle) = bitcoin_follower::run(
         bitcoin.clone(),
         block::filter_map,
-        cancel_token.clone(),
+        shutdown.signal(),
         config.starting_block_height,
         known_hashes,
         config.zmq_address.clone(),
@@ -319,7 +319,7 @@ async fn run_daemon(config: Config) -> Result<()> {
         "reactor",
         reactor::run(
             config.starting_block_height,
-            cancel_token.clone(),
+            shutdown.signal(),
             writer,
             block_rx,
             mempool_rx,
@@ -372,7 +372,7 @@ async fn run_daemon(config: Config) -> Result<()> {
         failed.store(true, std::sync::atomic::Ordering::Relaxed);
     }
     info!("Initiating shutdown");
-    cancel_token.cancel();
+    shutdown.cancel();
     let wedged = drain(subsystems, SHUTDOWN_BUDGET).await;
     exit_status(stop, &wedged)
 }

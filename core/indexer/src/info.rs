@@ -10,13 +10,13 @@
 //! wake costs no DB queries, the compute happens once (not once per
 //! blocked request), and it stays off the reactor's consensus hot path.
 
+use crate::stopper::ShutdownSignal;
 use anyhow::Result;
 use bitcoin::hashes::{Hash, sha256};
 use indexer_types::{Event, RecentBlock};
 use libsql::Connection;
 use tokio::sync::{broadcast, watch};
 use tokio::task::JoinHandle;
-use tokio_util::sync::CancellationToken;
 use tracing::warn;
 
 use crate::database;
@@ -96,7 +96,7 @@ fn info_signature(last_result_id: u64, recent_blocks: &[RecentBlock]) -> String 
 /// needs no reactor changes. Bursts are coalesced into a single recompute,
 /// done on the pooled reader (off the consensus hot path).
 pub fn run_info_publisher(
-    cancel: CancellationToken,
+    shutdown: ShutdownSignal,
     mut events: broadcast::Receiver<Event>,
     reader: database::Reader,
     info_tx: watch::Sender<InfoCore>,
@@ -121,7 +121,7 @@ pub fn run_info_publisher(
                     }
                     Err(broadcast::error::RecvError::Closed) => break,
                 },
-                _ = cancel.cancelled() => break,
+                _ = shutdown.cancelled() => break,
             }
         }
         Ok(())

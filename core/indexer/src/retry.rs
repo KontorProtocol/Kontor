@@ -1,8 +1,9 @@
 use anyhow::{Error, Result};
 use backon::{ExponentialBuilder, Retryable};
 use std::time::Duration;
-use tokio_util::sync::CancellationToken;
 use tracing::warn;
+
+use crate::stopper::ShutdownSignal;
 
 pub fn new_backoff() -> ExponentialBuilder {
     ExponentialBuilder::new()
@@ -33,15 +34,19 @@ pub fn notify<E: std::fmt::Debug>(action: &str) -> impl FnMut(&E, Duration) {
     }
 }
 
-pub fn retryable<E>(cancel_token: CancellationToken) -> impl FnMut(&E) -> bool {
-    move |_| !cancel_token.is_cancelled()
-}
-
+/// Retry `operation` per `backoff`, giving up only when the backoff does.
+///
+/// Takes no shutdown signal, and does not need one: a dropped future stops, and
+/// dropping propagates to everything it owns — the in-flight RPC, the backoff
+/// sleep, this loop. Callers that live inside a task whose root races
+/// `ShutdownSignal::cancelled()` are cancelled for free the moment that task is
+/// asked to stop.
+///
+/// Use [`retry_until_cancelled`] instead from anywhere that *cannot* be dropped.
 pub async fn retry<T, E, F, Fut>(
     operation: F,
     action: &str,
     backoff: ExponentialBuilder,
-    cancel_token: CancellationToken,
 ) -> Result<T>
 where
     E: std::fmt::Debug + Into<Error>,
@@ -51,9 +56,36 @@ where
     operation
         .retry(&backoff)
         .notify(notify(action))
-        .when(retryable(cancel_token))
         .await
         .map_err(Into::into) // Convert backon::RetryError<E> to anyhow::Error
+}
+
+/// [`retry`] for work that cannot be drop-cancelled, so the loop has to watch
+/// for shutdown itself.
+///
+/// The case this exists for is block execution: it runs in the *body* of the
+/// reactor's `select!`, and a chosen branch's body runs to completion — that is
+/// the point, since a half-executed block is not something to leave behind. So
+/// nothing drops these retries, and without a check a node stuck retrying an
+/// unreachable bitcoind would keep going until the backoff ran out, eating most
+/// of the shutdown budget for work that is about to be thrown away.
+pub async fn retry_until_cancelled<T, E, F, Fut>(
+    operation: F,
+    action: &str,
+    backoff: ExponentialBuilder,
+    shutdown: ShutdownSignal,
+) -> Result<T>
+where
+    E: std::fmt::Debug + Into<Error>,
+    Fut: Future<Output = Result<T, E>>,
+    F: FnMut() -> Fut,
+{
+    operation
+        .retry(&backoff)
+        .notify(notify(action))
+        .when(move |_| !shutdown.is_cancelled())
+        .await
+        .map_err(Into::into)
 }
 
 pub async fn retry_simple<T, E, F, Fut>(operation: F) -> Result<T>
@@ -62,9 +94,7 @@ where
     Fut: Future<Output = Result<T, E>>,
     F: FnMut() -> Fut,
 {
-    let cancel_token = CancellationToken::new();
-    let backoff = new_backoff_limited();
-    retry(operation, "test_operation", backoff, cancel_token).await
+    retry(operation, "test_operation", new_backoff_limited()).await
 }
 
 /// `retry_simple` with the extended backoff — use for slow subprocess
@@ -75,7 +105,5 @@ where
     Fut: Future<Output = Result<T, E>>,
     F: FnMut() -> Fut,
 {
-    let cancel_token = CancellationToken::new();
-    let backoff = new_backoff_extended();
-    retry(operation, "test_operation", backoff, cancel_token).await
+    retry(operation, "test_operation", new_backoff_extended()).await
 }

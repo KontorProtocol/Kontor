@@ -6,9 +6,10 @@ use tokio::{
     sync::{Notify, mpsc},
     task::{JoinError, JoinHandle},
 };
-use tokio_util::sync::CancellationToken;
 
-use crate::{bitcoin_client::client::BitcoinRpc, block::TransactionFilterMap};
+use crate::{
+    bitcoin_client::client::BitcoinRpc, block::TransactionFilterMap, stopper::ShutdownSignal,
+};
 
 use self::{
     event::{BlockEvent, MempoolEvent},
@@ -24,7 +25,7 @@ pub mod poller;
 pub async fn run<C: BitcoinRpc>(
     bitcoin: C,
     f: TransactionFilterMap,
-    cancel_token: CancellationToken,
+    shutdown: ShutdownSignal,
     starting_block_height: u64,
     known_hashes: Vec<(u64, BlockHash)>,
     zmq_address: String,
@@ -51,7 +52,7 @@ pub async fn run<C: BitcoinRpc>(
             bitcoin.clone(),
             f,
             block_tx,
-            cancel_token.clone(),
+            shutdown.clone(),
             start_height,
             known_hashes,
             poll_notify.clone(),
@@ -63,7 +64,7 @@ pub async fn run<C: BitcoinRpc>(
             bitcoin,
             f,
             mempool_tx,
-            cancel_token.clone(),
+            shutdown.clone(),
             poll_notify,
             ListenerConfig::new(zmq_address),
         ));
@@ -77,8 +78,8 @@ pub async fn run<C: BitcoinRpc>(
         // No `cancel()` here either: returning the error *is* the report, and
         // the supervisor that owns the token decides what it means.
         select! {
-            r = poller_handle => subsystem_exit("bitcoin poller", r, &cancel_token),
-            r = listener_handle => subsystem_exit("bitcoin listener", r, &cancel_token),
+            r = poller_handle => subsystem_exit("bitcoin poller", r, &shutdown),
+            r = listener_handle => subsystem_exit("bitcoin listener", r, &shutdown),
         }
     });
 
@@ -89,13 +90,13 @@ pub async fn run<C: BitcoinRpc>(
 fn subsystem_exit(
     name: &str,
     result: std::result::Result<Result<()>, JoinError>,
-    cancel_token: &CancellationToken,
+    shutdown: &ShutdownSignal,
 ) -> Result<()> {
     match result {
         Ok(Err(e)) => Err(e).with_context(|| format!("{name} failed")),
         Err(e) => Err(anyhow!("{name} task panicked: {e}")),
         // Cancelled is the one way out that isn't a failure.
-        Ok(Ok(())) if cancel_token.is_cancelled() => Ok(()),
+        Ok(Ok(())) if shutdown.is_cancelled() => Ok(()),
         Ok(Ok(())) => Err(anyhow!("{name} exited without being cancelled")),
     }
 }

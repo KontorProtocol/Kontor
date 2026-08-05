@@ -65,9 +65,8 @@ fn reject_all(_: (usize, bitcoin::Transaction)) -> Option<indexer_types::Transac
 #[tokio::test]
 async fn fetch_mempool_empty() {
     let mock = MockBitcoinRpc::new(vec![make_block(1)]);
-    let cancel = CancellationToken::new();
 
-    let snapshot = fetch_mempool(&mock, reject_all, &cancel).await.unwrap();
+    let snapshot = fetch_mempool(&mock, reject_all).await.unwrap();
     assert!(snapshot.kontor_txs.is_empty());
     assert_eq!(snapshot.mempool_sequence, 0);
 }
@@ -78,8 +77,7 @@ async fn fetch_mempool_returns_sequence() {
     mock.set_mempool(vec![make_tx(1)]);
     mock.set_mempool_sequence(42);
 
-    let cancel = CancellationToken::new();
-    let snapshot = fetch_mempool(&mock, accept_all, &cancel).await.unwrap();
+    let snapshot = fetch_mempool(&mock, accept_all).await.unwrap();
     assert_eq!(snapshot.kontor_txs.len(), 1);
     assert_eq!(snapshot.mempool_sequence, 42);
 }
@@ -93,8 +91,6 @@ async fn fetch_mempool_returns_filtered_transactions() {
     let txid1 = tx1.compute_txid();
     let txid3 = tx3.compute_txid();
     mock.set_mempool(vec![tx1, tx2, tx3]);
-
-    let cancel = CancellationToken::new();
 
     // Filter that only accepts odd nonces (tx1 and tx3)
     let f: TransactionFilterMap = |pair| {
@@ -111,7 +107,7 @@ async fn fetch_mempool_returns_filtered_transactions() {
         }
     };
 
-    let snapshot = fetch_mempool(&mock, f, &cancel).await.unwrap();
+    let snapshot = fetch_mempool(&mock, f).await.unwrap();
     assert_eq!(snapshot.kontor_txs.len(), 2);
     let txids: Vec<_> = snapshot.kontor_txs.iter().map(|(t, _)| *t).collect();
     assert!(txids.contains(&txid1));
@@ -125,8 +121,7 @@ async fn fetch_mempool_all_accepted() {
     let expected_txids: Vec<_> = txs.iter().map(|tx| tx.compute_txid()).collect();
     mock.set_mempool(txs);
 
-    let cancel = CancellationToken::new();
-    let snapshot = fetch_mempool(&mock, accept_all, &cancel).await.unwrap();
+    let snapshot = fetch_mempool(&mock, accept_all).await.unwrap();
 
     assert_eq!(snapshot.kontor_txs.len(), 5);
     for txid in &expected_txids {
@@ -139,8 +134,7 @@ async fn fetch_mempool_all_rejected() {
     let mock = MockBitcoinRpc::new(vec![make_block(1)]);
     mock.set_mempool(vec![make_tx(1), make_tx(2)]);
 
-    let cancel = CancellationToken::new();
-    let snapshot = fetch_mempool(&mock, reject_all, &cancel).await.unwrap();
+    let snapshot = fetch_mempool(&mock, reject_all).await.unwrap();
     assert!(snapshot.kontor_txs.is_empty());
 }
 
@@ -151,8 +145,7 @@ async fn fetch_mempool_batches_large_mempool() {
     let txs: Vec<_> = (0..250).map(make_tx).collect();
     mock.set_mempool(txs);
 
-    let cancel = CancellationToken::new();
-    let snapshot = fetch_mempool(&mock, accept_all, &cancel).await.unwrap();
+    let snapshot = fetch_mempool(&mock, accept_all).await.unwrap();
     assert_eq!(snapshot.kontor_txs.len(), 250);
 }
 
@@ -194,7 +187,6 @@ async fn process_delta_transaction_added() {
     mock.set_mempool_entry(txid, stub_entry());
 
     let (event_tx, mut event_rx) = mpsc::channel(10);
-    let cancel = CancellationToken::new();
 
     let msg = DataMessage::TransactionAdded {
         txid,
@@ -202,7 +194,7 @@ async fn process_delta_transaction_added() {
     };
 
     let notify = Notify::new();
-    let open = process_delta(msg, &mock, accept_all, &event_tx, &cancel, &notify)
+    let open = process_delta(msg, &mock, accept_all, &event_tx, &notify)
         .await
         .unwrap();
     assert!(open);
@@ -219,7 +211,6 @@ async fn process_delta_transaction_removed() {
     let txid = bitcoin::Txid::from_byte_array([0xcc; 32]);
 
     let (event_tx, mut event_rx) = mpsc::channel(10);
-    let cancel = CancellationToken::new();
 
     let msg = DataMessage::TransactionRemoved {
         txid,
@@ -227,7 +218,7 @@ async fn process_delta_transaction_removed() {
     };
 
     let notify = Notify::new();
-    let open = process_delta(msg, &mock, accept_all, &event_tx, &cancel, &notify)
+    let open = process_delta(msg, &mock, accept_all, &event_tx, &notify)
         .await
         .unwrap();
     assert!(open);
@@ -244,7 +235,6 @@ async fn process_delta_block_events_ignored() {
     let hash = bitcoin::BlockHash::from_byte_array([0xdd; 32]);
 
     let (event_tx, mut event_rx) = mpsc::channel(10);
-    let cancel = CancellationToken::new();
 
     let notify = Notify::new();
     let open = process_delta(
@@ -252,7 +242,6 @@ async fn process_delta_block_events_ignored() {
         &mock,
         accept_all,
         &event_tx,
-        &cancel,
         &notify,
     )
     .await
@@ -409,7 +398,6 @@ async fn event_loop_snapshot_then_live_deltas() {
     mock.set_mempool_sequence(10);
 
     let (event_tx, mut event_rx) = mpsc::channel(100);
-    let cancel = CancellationToken::new();
 
     let (socket_tx, socket_rx) = mpsc::unbounded_channel();
     let (monitor_tx, monitor_rx) = mpsc::unbounded_channel();
@@ -438,7 +426,6 @@ async fn event_loop_snapshot_then_live_deltas() {
         &mock,
         accept_all,
         &event_tx,
-        cancel,
         socket_rx,
         monitor_rx,
         Arc::new(Notify::new()),
@@ -464,7 +451,6 @@ async fn event_loop_filters_buffered_stale_replays_fresh() {
     mock.set_mempool_sequence(10);
 
     let (event_tx, mut event_rx) = mpsc::channel(100);
-    let cancel = CancellationToken::new();
 
     let (socket_tx, socket_rx) = mpsc::unbounded_channel();
     let (monitor_tx, monitor_rx) = mpsc::unbounded_channel();
@@ -511,7 +497,6 @@ async fn event_loop_filters_buffered_stale_replays_fresh() {
         &mock,
         accept_all,
         &event_tx,
-        cancel,
         socket_rx,
         monitor_rx,
         Arc::new(Notify::new()),
@@ -534,7 +519,6 @@ async fn event_loop_pre_handshake_messages_not_emitted_as_deltas() {
     mock.set_mempool_sequence(5);
 
     let (event_tx, mut event_rx) = mpsc::channel(100);
-    let cancel = CancellationToken::new();
 
     let (socket_tx, socket_rx) = mpsc::unbounded_channel();
     let (monitor_tx, monitor_rx) = mpsc::unbounded_channel();
@@ -561,7 +545,6 @@ async fn event_loop_pre_handshake_messages_not_emitted_as_deltas() {
         &mock,
         accept_all,
         &event_tx,
-        cancel,
         socket_rx,
         monitor_rx,
         Arc::new(Notify::new()),
@@ -579,7 +562,6 @@ async fn event_loop_monitor_failure_returns_error() {
     let mock = MockBitcoinRpc::new(vec![make_block(1)]);
 
     let (event_tx, _event_rx) = mpsc::channel(100);
-    let cancel = CancellationToken::new();
 
     let (_socket_tx, socket_rx) = mpsc::unbounded_channel();
     let (monitor_tx, monitor_rx) = mpsc::unbounded_channel();
@@ -591,7 +573,6 @@ async fn event_loop_monitor_failure_returns_error() {
         &mock,
         accept_all,
         &event_tx,
-        cancel,
         socket_rx,
         monitor_rx,
         Arc::new(Notify::new()),
@@ -608,7 +589,6 @@ async fn event_loop_live_remove_emits_mempool_remove() {
     mock.set_mempool_sequence(10);
 
     let (event_tx, mut event_rx) = mpsc::channel(100);
-    let cancel = CancellationToken::new();
 
     let (socket_tx, socket_rx) = mpsc::unbounded_channel();
     let (monitor_tx, monitor_rx) = mpsc::unbounded_channel();
@@ -635,7 +615,6 @@ async fn event_loop_live_remove_emits_mempool_remove() {
         &mock,
         accept_all,
         &event_tx,
-        cancel,
         socket_rx,
         monitor_rx,
         Arc::new(Notify::new()),
@@ -655,7 +634,6 @@ async fn event_loop_sequence_gap_returns_error() {
     mock.set_mempool_sequence(0);
 
     let (event_tx, _event_rx) = mpsc::channel(100);
-    let cancel = CancellationToken::new();
 
     let (socket_tx, socket_rx) = mpsc::unbounded_channel();
     let (monitor_tx, monitor_rx) = mpsc::unbounded_channel();
@@ -691,7 +669,6 @@ async fn event_loop_sequence_gap_returns_error() {
         &mock,
         accept_all,
         &event_tx,
-        cancel,
         socket_rx,
         monitor_rx,
         Arc::new(Notify::new()),

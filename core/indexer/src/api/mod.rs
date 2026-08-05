@@ -28,9 +28,9 @@ pub async fn run(env: Env, prom_handle: PrometheusHandle) -> Result<JoinHandle<R
 
     tokio::spawn({
         let handle = handle.clone();
-        let cancel_token = env.cancel_token.clone();
+        let shutdown = env.shutdown.clone();
         async move {
-            cancel_token.cancelled().await;
+            shutdown.cancelled().await;
             handle.graceful_shutdown(Some(Duration::from_secs(10)));
         }
     });

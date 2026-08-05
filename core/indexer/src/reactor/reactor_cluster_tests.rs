@@ -2,10 +2,10 @@ use std::collections::HashSet;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+use crate::stopper::{Shutdown, ShutdownSignal};
 use anyhow::Result;
 use tokio::sync::{broadcast, mpsc, watch};
 use tokio::task::JoinSet;
-use tokio_util::sync::CancellationToken;
 use tracing::info;
 
 use crate::bitcoin_follower::event::{BlockEvent, MempoolEvent};
@@ -57,7 +57,7 @@ struct ReactorCluster {
     decided_rx: mpsc::Receiver<DecidedBatch>,
     finality_rx: mpsc::Receiver<FinalityEvent>,
     state_rx: mpsc::Receiver<StateEvent>,
-    cancel: CancellationToken,
+    cancel: Shutdown,
     join_set: JoinSet<()>,
     node_count: usize,
     ready_rx: mpsc::Receiver<usize>,
@@ -135,7 +135,7 @@ impl ReactorCluster {
         let genesis = Genesis { validator_set };
 
         let (mempool_tx, _) = broadcast::channel::<MempoolEvent>(256);
-        let cancel = CancellationToken::new();
+        let cancel = Shutdown::new();
         let mut block_txs = Vec::new();
         let mock_bitcoin = Arc::new(Mutex::new(MockBitcoin::new(0)));
         let shared_pubkey = random_x_only_pubkey();
@@ -159,7 +159,7 @@ impl ReactorCluster {
             let (node_block_tx, node_block_rx) = mpsc::channel(256);
             block_txs.push(node_block_tx.clone());
 
-            let node_mempool_rx = Self::bridge_mempool(&mempool_tx, &cancel);
+            let node_mempool_rx = Self::bridge_mempool(&mempool_tx, &cancel.signal());
             let (sim_tx, sim_rx) = mpsc::channel(1);
             simulate_txs.push(sim_tx);
 
@@ -184,7 +184,7 @@ impl ReactorCluster {
                 node_block_tx,
                 node_block_rx,
                 node_mempool_rx,
-                cancel.clone(),
+                cancel.signal(),
                 decided_tx.clone(),
                 finality_tx.clone(),
                 state_tx.clone(),
@@ -239,7 +239,7 @@ impl ReactorCluster {
 
     fn bridge_mempool(
         mempool_tx: &broadcast::Sender<MempoolEvent>,
-        cancel: &CancellationToken,
+        cancel: &ShutdownSignal,
     ) -> mpsc::Receiver<MempoolEvent> {
         let (tx, rx) = mpsc::channel(256);
         let mut brx = mempool_tx.subscribe();
@@ -282,7 +282,7 @@ impl ReactorCluster {
         node_block_tx: mpsc::Sender<BlockEvent>,
         node_block_rx: mpsc::Receiver<BlockEvent>,
         node_mempool_rx: mpsc::Receiver<MempoolEvent>,
-        cancel: CancellationToken,
+        cancel: ShutdownSignal,
         dtx: mpsc::Sender<DecidedBatch>,
         ftx: mpsc::Sender<FinalityEvent>,
         stx: mpsc::Sender<StateEvent>,
@@ -398,7 +398,7 @@ impl ReactorCluster {
         let (node_block_tx, node_block_rx) = mpsc::channel(256);
         self.block_txs.push(node_block_tx.clone());
 
-        let node_mempool_rx = Self::bridge_mempool(&self.mempool_tx, &self.cancel);
+        let node_mempool_rx = Self::bridge_mempool(&self.mempool_tx, &self.cancel.signal());
         let (sim_tx, sim_rx) = mpsc::channel(1);
         self.simulate_txs.push(sim_tx);
 
@@ -415,7 +415,7 @@ impl ReactorCluster {
             node_block_tx,
             node_block_rx,
             node_mempool_rx,
-            self.cancel.clone(),
+            self.cancel.signal(),
             self.decided_tx.clone(),
             self.finality_tx.clone(),
             self.state_tx.clone(),

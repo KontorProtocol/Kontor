@@ -1,5 +1,6 @@
 use super::*;
 use crate::bitcoin_client::mock::MockBitcoinRpc;
+use crate::stopper::Shutdown;
 use crate::test_utils::new_numbered_blockchain;
 use bitcoin::hashes::Hash;
 
@@ -79,8 +80,7 @@ async fn fork_point_all_match() {
         cache.insert(b.height, b.hash);
     }
 
-    let cancel = CancellationToken::new();
-    let fp = find_fork_point(&rpc, &cache, 5, &cancel).await.unwrap();
+    let fp = find_fork_point(&rpc, &cache, 5).await.unwrap();
     assert_eq!(fp, 5);
 }
 
@@ -104,8 +104,7 @@ async fn fork_point_diverges_at_tip() {
     blocks[4] = alt_block_5;
     let rpc = MockBitcoinRpc::new(blocks);
 
-    let cancel = CancellationToken::new();
-    let fp = find_fork_point(&rpc, &cache, 5, &cancel).await.unwrap();
+    let fp = find_fork_point(&rpc, &cache, 5).await.unwrap();
     assert_eq!(fp, 4);
 }
 
@@ -131,8 +130,7 @@ async fn fork_point_deep_reorg() {
     }
     let rpc = MockBitcoinRpc::new(alt_blocks);
 
-    let cancel = CancellationToken::new();
-    let fp = find_fork_point(&rpc, &cache, 5, &cancel).await.unwrap();
+    let fp = find_fork_point(&rpc, &cache, 5).await.unwrap();
     assert_eq!(fp, 2);
 }
 
@@ -156,8 +154,7 @@ async fn fork_point_beyond_cache_errors() {
     }
     let rpc = MockBitcoinRpc::new(alt_blocks);
 
-    let cancel = CancellationToken::new();
-    let result = find_fork_point(&rpc, &cache, 5, &cancel).await;
+    let result = find_fork_point(&rpc, &cache, 5).await;
     assert!(result.is_err());
 }
 
@@ -299,10 +296,10 @@ const TEST_TIMEOUT: Duration = Duration::from_secs(5);
 async fn run_delivers_blocks_in_order() {
     let blocks = new_numbered_blockchain(5);
     let rpc = MockBitcoinRpc::new(blocks.clone());
-    let cancel = CancellationToken::new();
+    let cancel = Shutdown::new();
     let (tx, mut rx) = mpsc::channel(16);
 
-    let cancel2 = cancel.clone();
+    let cancel2 = cancel.signal();
     let handle = tokio::spawn(async move {
         run(
             rpc,
@@ -337,11 +334,11 @@ async fn run_delivers_blocks_in_order() {
 async fn run_delivers_new_blocks_at_tip() {
     let blocks = new_numbered_blockchain(3);
     let rpc = MockBitcoinRpc::new(blocks.clone());
-    let cancel = CancellationToken::new();
+    let cancel = Shutdown::new();
     let (tx, mut rx) = mpsc::channel(16);
 
     let rpc2 = rpc.clone();
-    let cancel2 = cancel.clone();
+    let cancel2 = cancel.signal();
     let handle = tokio::spawn(async move {
         run(
             rpc2,
@@ -390,11 +387,11 @@ async fn run_delivers_new_blocks_at_tip() {
 async fn run_detects_reorg() {
     let blocks = new_numbered_blockchain(5);
     let rpc = MockBitcoinRpc::new(blocks.clone());
-    let cancel = CancellationToken::new();
+    let cancel = Shutdown::new();
     let (tx, mut rx) = mpsc::channel(16);
 
     let rpc2 = rpc.clone();
-    let cancel2 = cancel.clone();
+    let cancel2 = cancel.signal();
     let handle = tokio::spawn(async move {
         run(
             rpc2,
@@ -459,11 +456,11 @@ async fn run_detects_reorg() {
 async fn run_rollback_on_chain_shrink() {
     let blocks = new_numbered_blockchain(5);
     let rpc = MockBitcoinRpc::new(blocks.clone());
-    let cancel = CancellationToken::new();
+    let cancel = Shutdown::new();
     let (tx, mut rx) = mpsc::channel(16);
 
     let rpc2 = rpc.clone();
-    let cancel2 = cancel.clone();
+    let cancel2 = cancel.signal();
     let handle = tokio::spawn(async move {
         run(
             rpc2,
@@ -516,13 +513,13 @@ async fn run_detects_offline_reorg() {
         });
     }
     let rpc = MockBitcoinRpc::new(alt_chain.clone());
-    let cancel = CancellationToken::new();
+    let cancel = Shutdown::new();
     let (tx, mut rx) = mpsc::channel(16);
 
     // Consumer provides its full hash history
     let known: Vec<(u64, BlockHash)> = original.iter().map(|b| (b.height, b.hash)).collect();
 
-    let cancel2 = cancel.clone();
+    let cancel2 = cancel.signal();
     let handle = tokio::spawn(async move {
         run(
             rpc,
@@ -566,13 +563,13 @@ async fn run_no_offline_reorg_when_hashes_match() {
     // Consumer's known hashes match the chain — no rollback on startup.
     let blocks = new_numbered_blockchain(5);
     let rpc = MockBitcoinRpc::new(blocks.clone());
-    let cancel = CancellationToken::new();
+    let cancel = Shutdown::new();
     let (tx, mut rx) = mpsc::channel(16);
 
     // Consumer processed blocks 1-3, resuming from 4
     let known: Vec<(u64, BlockHash)> = blocks[..3].iter().map(|b| (b.height, b.hash)).collect();
 
-    let cancel2 = cancel.clone();
+    let cancel2 = cancel.signal();
     let handle = tokio::spawn(async move {
         run(
             rpc,
@@ -624,14 +621,14 @@ async fn run_offline_reorg_deeper_than_cache_errors() {
     // Consumer only knows blocks 4-5 — not deep enough
     let known: Vec<(u64, BlockHash)> = original[3..5].iter().map(|b| (b.height, b.hash)).collect();
 
-    let cancel = CancellationToken::new();
+    let cancel = Shutdown::new();
     let (tx, _rx) = mpsc::channel(16);
 
     let result = run(
         rpc,
         noop_filter,
         tx,
-        cancel,
+        cancel.signal(),
         6,
         known,
         Arc::new(Notify::new()),
@@ -649,10 +646,10 @@ async fn run_start_height_1_skips_offline_check() {
     // and just start delivering blocks.
     let blocks = new_numbered_blockchain(3);
     let rpc = MockBitcoinRpc::new(blocks.clone());
-    let cancel = CancellationToken::new();
+    let cancel = Shutdown::new();
     let (tx, mut rx) = mpsc::channel(16);
 
-    let cancel2 = cancel.clone();
+    let cancel2 = cancel.signal();
     let handle = tokio::spawn(async move {
         run(
             rpc,
@@ -690,11 +687,11 @@ async fn run_reorg_during_catchup() {
     // runs find_fork_point which walks back to the real fork at 5.
     let blocks = new_numbered_blockchain(10);
     let rpc = MockBitcoinRpc::new(blocks.clone());
-    let cancel = CancellationToken::new();
+    let cancel = Shutdown::new();
     let (tx, mut rx) = mpsc::channel(32);
 
     let rpc2 = rpc.clone();
-    let cancel2 = cancel.clone();
+    let cancel2 = cancel.signal();
     let handle = tokio::spawn(async move {
         run(
             rpc2,
@@ -763,7 +760,7 @@ async fn run_reorg_during_catchup() {
 async fn run_cancellation_stops_cleanly() {
     let blocks = new_numbered_blockchain(3);
     let rpc = MockBitcoinRpc::new(blocks);
-    let cancel = CancellationToken::new();
+    let cancel = Shutdown::new();
     let (tx, _rx) = mpsc::channel(16);
 
     cancel.cancel();
@@ -772,7 +769,7 @@ async fn run_cancellation_stops_cleanly() {
         rpc,
         noop_filter,
         tx,
-        cancel,
+        cancel.signal(),
         1,
         vec![],
         Arc::new(Notify::new()),
@@ -816,11 +813,11 @@ fn apply_replay_is_a_noop_at_the_current_position() {
 async fn run_replay_redelivers_blocks() {
     let blocks = new_numbered_blockchain(5);
     let rpc = MockBitcoinRpc::new(blocks.clone());
-    let cancel = CancellationToken::new();
+    let cancel = Shutdown::new();
     let (tx, mut rx) = mpsc::channel(32);
     let (replay_tx, replay_rx) = mpsc::channel(4);
 
-    let cancel2 = cancel.clone();
+    let cancel2 = cancel.signal();
     let handle = tokio::spawn(async move {
         run(
             rpc,

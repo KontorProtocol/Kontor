@@ -6,17 +6,16 @@ use anyhow::Result;
 use deadpool::managed::Pool;
 use indexer_types::Fees;
 use tokio::sync::{mpsc::Sender, watch};
-use tokio_util::sync::CancellationToken;
 
 use crate::{
     bitcoin_client::Client, config::Config, database, event::EventSubscriber, info::InfoCore,
-    reactor::Simulation, runtime,
+    reactor::Simulation, runtime, stopper::ShutdownSignal,
 };
 
 #[derive(Clone)]
 pub struct Env {
     pub config: Config,
-    pub cancel_token: CancellationToken,
+    pub shutdown: ShutdownSignal,
     pub reader: database::Reader,
     pub event_subscriber: EventSubscriber,
     pub bitcoin: Client,
@@ -63,7 +62,7 @@ impl Env {
         Ok(Self {
             bitcoin: Client::new("".to_string(), "".to_string(), "".to_string())?,
             config: Config::new_na(),
-            cancel_token: CancellationToken::new(),
+            shutdown: ShutdownSignal::never(),
             // Unit-test env skips the reactor; flip ready so handlers that
             // get mounted directly into a test router aren't perma-503'd.
             reactor_ready: Arc::new(AtomicBool::new(true)),

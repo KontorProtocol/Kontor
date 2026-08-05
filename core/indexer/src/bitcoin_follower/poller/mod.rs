@@ -18,13 +18,13 @@ use tokio::{
     task::JoinSet,
     time::sleep,
 };
-use tokio_util::sync::CancellationToken;
 use tracing::{error, info, warn};
 
 use crate::{
     bitcoin_client::client::BitcoinRpc,
     block::TransactionFilterMap,
     retry::{new_backoff_unlimited, retry},
+    stopper::ShutdownSignal,
 };
 
 use super::event::BlockEvent;
@@ -101,13 +101,11 @@ async fn fetch_and_process<C: BitcoinRpc>(
     bitcoin: C,
     height: u64,
     f: TransactionFilterMap,
-    cancel_token: CancellationToken,
 ) -> Result<Block> {
     let block_hash = retry(
         || bitcoin.get_block_hash(height),
         "get block hash",
         new_backoff_unlimited(),
-        cancel_token.clone(),
     )
     .await?;
 
@@ -115,7 +113,6 @@ async fn fetch_and_process<C: BitcoinRpc>(
         || bitcoin.get_block(&block_hash),
         "get block",
         new_backoff_unlimited(),
-        cancel_token.clone(),
     )
     .await?;
 
@@ -232,31 +229,68 @@ async fn apply_rollback(
 enum PollResult {
     Continue,
     Replay(u64),
-    Cancelled,
 }
 
-/// Wait for the next poll trigger: timer, ZMQ wake, replay request, or cancellation.
+/// Wait for the next poll trigger: timer, ZMQ wake, or replay request.
 async fn wait_for_poll(
     poll_interval: Duration,
     poll_notify: &Notify,
     replay_rx: &mut Receiver<u64>,
-    cancel_token: &CancellationToken,
 ) -> PollResult {
     select! {
         _ = sleep(poll_interval) => PollResult::Continue,
         _ = poll_notify.notified() => PollResult::Continue,
         Some(height) = replay_rx.recv() => PollResult::Replay(height),
-        _ = cancel_token.cancelled() => PollResult::Cancelled,
     }
 }
 
 // -- Main poller loop --
 
+/// Run the poller until it fails or the node is asked to stop.
+///
+/// Shutdown is handled here and nowhere below. Dropping `poll` stops the
+/// in-flight RPC, the backoff sleep and the loop in one go, which is why none of
+/// the functions underneath take a shutdown signal any more. The `cache` and
+/// `next_height` that go with it are rebuilt from the database at startup, so
+/// there is nothing to lose by stopping mid-stride.
+///
+/// This is safe *because* the select exits the task. The same shape wrapped
+/// around a loop body would throw that state away and then keep running, which
+/// is the cancel-safety bug everyone eventually writes once.
 pub async fn run<C: BitcoinRpc>(
     bitcoin: C,
     f: TransactionFilterMap,
     event_tx: Sender<BlockEvent>,
-    cancel_token: CancellationToken,
+    shutdown: ShutdownSignal,
+    start_height: u64,
+    known_hashes: Vec<(u64, BlockHash)>,
+    poll_notify: Arc<Notify>,
+    config: PollerConfig,
+    replay_rx: Receiver<u64>,
+) -> Result<()> {
+    select! {
+        _ = shutdown.cancelled() => {
+            info!("Poller cancelled");
+            Ok(())
+        }
+        result = poll(
+            bitcoin,
+            f,
+            event_tx,
+            start_height,
+            known_hashes,
+            poll_notify,
+            config,
+            replay_rx,
+        ) => result,
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn poll<C: BitcoinRpc>(
+    bitcoin: C,
+    f: TransactionFilterMap,
+    event_tx: Sender<BlockEvent>,
     start_height: u64,
     known_hashes: Vec<(u64, BlockHash)>,
     poll_notify: Arc<Notify>,
@@ -278,7 +312,7 @@ pub async fn run<C: BitcoinRpc>(
     // against the node. If they differ, walk back through the
     // consumer-seeded cache to find the fork point.
     if start_height > 0 && cache.get(start_height - 1).is_some() {
-        let fork_height = find_fork_point(&bitcoin, &cache, start_height - 1, &cancel_token).await;
+        let fork_height = find_fork_point(&bitcoin, &cache, start_height - 1).await;
 
         match fork_height {
             Ok(fork_height) if fork_height < start_height - 1 => {
@@ -294,11 +328,6 @@ pub async fn run<C: BitcoinRpc>(
     }
 
     loop {
-        if cancel_token.is_cancelled() {
-            info!("Poller cancelled");
-            return Ok(());
-        }
-
         // Replay requests must be observed even while catching up. The only other
         // consumer is `wait_for_poll` below, which is reachable only when idle at
         // the tip — so a node genuinely behind on Bitcoin (exactly the one a
@@ -310,18 +339,13 @@ pub async fn run<C: BitcoinRpc>(
         }
 
         // 1. Discover tip
-        let tip = match retry(
+        let tip = retry(
             || bitcoin.get_blockchain_info(),
             "get blockchain info",
             new_backoff_unlimited(),
-            cancel_token.clone(),
         )
-        .await
-        {
-            Ok(info) => info.blocks,
-            Err(_) if cancel_token.is_cancelled() => return Ok(()),
-            Err(e) => return Err(e),
-        };
+        .await?
+        .blocks;
 
         if tip < next_height - 1 {
             warn!(
@@ -330,7 +354,7 @@ pub async fn run<C: BitcoinRpc>(
             );
             // Chain shrunk — find how deep the reorg actually goes
             cache.truncate_above(tip);
-            let fork_height = find_fork_point(&bitcoin, &cache, tip, &cancel_token).await?;
+            let fork_height = find_fork_point(&bitcoin, &cache, tip).await?;
 
             if !apply_rollback(&mut cache, &mut next_height, fork_height, &event_tx).await {
                 info!("Event channel closed, exiting");
@@ -341,20 +365,12 @@ pub async fn run<C: BitcoinRpc>(
         }
 
         if tip < next_height {
-            match wait_for_poll(
-                config.poll_interval,
-                &poll_notify,
-                &mut replay_rx,
-                &cancel_token,
-            )
-            .await
-            {
+            match wait_for_poll(config.poll_interval, &poll_notify, &mut replay_rx).await {
                 PollResult::Continue => continue,
                 PollResult::Replay(height) => {
                     apply_replay(&mut cache, &mut next_height, height);
                     continue;
                 }
-                PollResult::Cancelled => return Ok(()),
             }
         }
 
@@ -364,9 +380,8 @@ pub async fn run<C: BitcoinRpc>(
 
         for height in next_height..batch_end {
             let bitcoin = bitcoin.clone();
-            let cancel_token = cancel_token.clone();
             join_set.spawn(async move {
-                let block = fetch_and_process(bitcoin, height, f, cancel_token).await;
+                let block = fetch_and_process(bitcoin, height, f).await;
                 (height, block)
             });
         }
@@ -379,9 +394,6 @@ pub async fn run<C: BitcoinRpc>(
                     pending.insert(height, block);
                 }
                 Ok((height, Err(e))) => {
-                    if cancel_token.is_cancelled() {
-                        return Ok(());
-                    }
                     error!("Failed to fetch block at height {}: {}", height, e);
                     return Err(e);
                 }
@@ -408,8 +420,7 @@ pub async fn run<C: BitcoinRpc>(
                 }
             }
             DeliveryResult::Reorg { mismatch_height } => {
-                let fork_height =
-                    find_fork_point(&bitcoin, &cache, mismatch_height - 1, &cancel_token).await?;
+                let fork_height = find_fork_point(&bitcoin, &cache, mismatch_height - 1).await?;
 
                 if !apply_rollback(&mut cache, &mut next_height, fork_height, &event_tx).await {
                     info!("Event channel closed, exiting");
@@ -426,7 +437,6 @@ async fn find_fork_point<C: BitcoinRpc>(
     bitcoin: &C,
     cache: &BlockHashCache,
     from_height: u64,
-    cancel_token: &CancellationToken,
 ) -> Result<u64> {
     let mut height = from_height;
     loop {
@@ -438,7 +448,6 @@ async fn find_fork_point<C: BitcoinRpc>(
             || bitcoin.get_block_hash(height),
             "get block hash for reorg",
             new_backoff_unlimited(),
-            cancel_token.clone(),
         )
         .await?;
 

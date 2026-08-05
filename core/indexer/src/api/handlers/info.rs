@@ -110,7 +110,7 @@ pub async fn get_status(State(env): State<Env>) -> Json<NodeStatus> {
         network: env.config.network.to_string(),
         consensus_mode: env.config.consensus_mode,
         reactor_ready: env.reactor_ready.load(Ordering::Relaxed),
-        shutting_down: env.cancel_token.is_cancelled(),
+        shutting_down: env.shutdown.is_cancelled(),
         failed: env.failed.load(Ordering::Relaxed),
         consensus_listen_addr: env.consensus_listen_addr.borrow().clone(),
     })
@@ -154,7 +154,7 @@ pub async fn get_healthz_live() -> &'static str {
 /// different question, answered by `failed` alone.
 pub async fn get_healthz_ready(State(env): State<Env>) -> (StatusCode, Json<Healthz>) {
     let reactor_ready = env.reactor_ready.load(Ordering::Relaxed);
-    let shutting_down = env.cancel_token.is_cancelled();
+    let shutting_down = env.shutdown.is_cancelled();
     let failed = env.failed.load(Ordering::Relaxed);
     let height = env.info_rx.borrow().height;
     let ready = reactor_ready && !shutting_down && height.is_some();
