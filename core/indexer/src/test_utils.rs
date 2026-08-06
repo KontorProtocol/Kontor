@@ -318,6 +318,26 @@ pub fn new_mock_transaction(txid_num: u32) -> Transaction {
     }
 }
 
+/// A fresh directory and database name for a node, owned by the caller so the
+/// database can outlive the process that used it — which is what a restart needs.
+pub fn new_test_db_dir() -> Result<(TempDir, String)> {
+    let temp_dir = TempDir::new()?;
+    let timestamp = SystemTime::now()
+        .duration_since(UNIX_EPOCH)?
+        .as_nanos()
+        .to_string();
+    Ok((temp_dir, format!("test_db_{timestamp}.db")))
+}
+
+/// Reopen an EXISTING test database, as a restart would. `new_test_db` always
+/// creates a fresh directory, so it cannot express a node coming back up on the
+/// state it left behind — which is the whole shape of issue #515.
+pub async fn open_test_db(data_dir: &std::path::Path, db_name: &str) -> Result<(Reader, Writer)> {
+    let writer = Writer::new(data_dir, db_name).await?;
+    let reader = Reader::new(data_dir, db_name).await?;
+    Ok((reader, writer))
+}
+
 pub async fn new_test_db() -> Result<(Reader, Writer, (TempDir, String))> {
     let temp_dir = TempDir::new()?;
     let timestamp = SystemTime::now()

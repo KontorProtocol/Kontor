@@ -56,6 +56,12 @@ struct ReactorCluster {
     /// A node that has not been started yet has neither.
     conns: Vec<Option<libsql::Connection>>,
     conn_rxs: Vec<Option<oneshot::Receiver<libsql::Connection>>>,
+    /// Each node's data directory, owned HERE so it survives the node's task and a
+    /// restart can reopen it.
+    node_dirs: Vec<(tempfile::TempDir, String)>,
+    /// Child of the cluster token, so cancelling the cluster still stops everyone
+    /// while a single node can also be stopped on its own.
+    node_cancels: Vec<CancellationToken>,
     block_txs: Vec<mpsc::Sender<BlockEvent>>,
     mempool_tx: broadcast::Sender<MempoolEvent>,
     decided_rx: mpsc::Receiver<DecidedBatch>,
@@ -143,6 +149,11 @@ impl ReactorCluster {
         let mut block_txs = Vec::new();
         let mut conn_rxs: Vec<Option<oneshot::Receiver<libsql::Connection>>> =
             (0..total).map(|_| None).collect();
+        let node_dirs: Vec<(tempfile::TempDir, String)> = (0..total)
+            .map(|_| crate::test_utils::new_test_db_dir().expect("node data dir"))
+            .collect();
+        let node_cancels: Vec<CancellationToken> =
+            (0..total).map(|_| cancel.child_token()).collect();
         let mock_bitcoin = Arc::new(Mutex::new(MockBitcoin::new(0)));
         let shared_pubkey = random_x_only_pubkey();
         let (engine, component_cache) = shared_engine_and_cache().await;
@@ -192,7 +203,7 @@ impl ReactorCluster {
                 node_block_tx,
                 node_block_rx,
                 node_mempool_rx,
-                cancel.clone(),
+                node_cancels[i].clone(),
                 decided_tx.clone(),
                 finality_tx.clone(),
                 state_tx.clone(),
@@ -204,6 +215,9 @@ impl ReactorCluster {
                 engine.clone(),
                 component_cache.clone(),
                 node_conn_tx,
+                node_dirs[i].0.path().to_path_buf(),
+                node_dirs[i].1.clone(),
+                true,
                 &mut join_set,
             );
             started_nodes[i] = true;
@@ -216,6 +230,8 @@ impl ReactorCluster {
         Ok(Self {
             conns: (0..total).map(|_| None).collect(),
             conn_rxs,
+            node_dirs,
+            node_cancels,
             block_txs,
             mempool_tx,
             decided_rx,
@@ -261,6 +277,65 @@ impl ReactorCluster {
             self.conns[i] = Some(conn);
         }
         self.conns[i].as_ref().unwrap()
+    }
+
+    /// Stop one node, leaving the rest of the cluster running. Its data directory
+    /// is owned by the cluster, so the database survives for a restart.
+    async fn stop_node(&mut self, i: usize) {
+        self.node_cancels[i].cancel();
+        // Its connection belongs to a runtime that is going away.
+        self.conns[i] = None;
+    }
+
+    /// Stop a node and bring it back up on the state it left behind — the shape of
+    /// issue #515, where a restart inside the finality window lost tracking that
+    /// lived only in memory.
+    async fn restart_node(&mut self, i: usize) {
+        self.stop_node(i).await;
+        // Give the task a moment to unwind and release the database.
+        tokio::time::sleep(Duration::from_millis(500)).await;
+
+        self.node_cancels[i] = self.cancel.child_token();
+        let (node_block_tx, node_block_rx) = mpsc::channel(256);
+        self.block_txs[i] = node_block_tx.clone();
+        let node_mempool_rx = Self::bridge_mempool(&self.mempool_tx, &self.cancel);
+        let (sim_tx, sim_rx) = mpsc::channel(1);
+        self.simulate_txs[i] = sim_tx;
+        let (addr_tx, _addr_rx) = watch::channel(None);
+        let (node_conn_tx, node_conn_rx) = oneshot::channel();
+        self.conn_rxs[i] = Some(node_conn_rx);
+
+        Self::spawn_node(
+            i,
+            self.private_keys[i].clone(),
+            &self.genesis,
+            &self.genesis_validators,
+            vec![self.seed_addr.clone()],
+            addr_tx,
+            node_block_tx,
+            node_block_rx,
+            node_mempool_rx,
+            self.node_cancels[i].clone(),
+            self.decided_tx.clone(),
+            self.finality_tx.clone(),
+            self.state_tx.clone(),
+            self.ready_tx.clone(),
+            self.event_tx.clone(),
+            Some(sim_rx),
+            self.mock_bitcoin.clone(),
+            self.shared_pubkey.clone(),
+            self.engine.clone(),
+            self.component_cache.clone(),
+            node_conn_tx,
+            self.node_dirs[i].0.path().to_path_buf(),
+            self.node_dirs[i].1.clone(),
+            false,
+            &mut self.join_set,
+        );
+
+        // Only this node reports ready — `wait_for_ready` would block forever
+        // waiting on the peers that never went down.
+        let _ = self.ready_rx.recv().await;
     }
 
     async fn start(n: usize) -> Result<Self> {
@@ -328,21 +403,43 @@ impl ReactorCluster {
         // at what a particular node actually wrote — which is most of what there is
         // to assert about a consensus bug.
         conn_tx: oneshot::Sender<libsql::Connection>,
+        data_dir: std::path::PathBuf,
+        db_name: String,
+        // A restart must come back up on the state it left behind, so genesis
+        // seeding runs only on the first boot. That distinction is the whole point
+        // of the restart path — a node that re-seeds has not really restarted.
+        first_boot: bool,
         join_set: &mut JoinSet<()>,
     ) {
         let genesis = genesis.clone();
         let genesis_vals = genesis_validators.to_vec();
         join_set.spawn(async move {
-            let (executor, runtime) = LiteExecutor::new(
-                mock_btc,
-                pubkey,
-                &genesis_vals,
-                engine,
-                component_cache,
-                node_block_tx,
-            )
-            .await
-            .expect("LiteExecutor setup failed");
+            let (executor, runtime) = if first_boot {
+                LiteExecutor::new(
+                    &data_dir,
+                    &db_name,
+                    mock_btc,
+                    pubkey,
+                    &genesis_vals,
+                    engine,
+                    component_cache,
+                    node_block_tx,
+                )
+                .await
+                .expect("LiteExecutor setup failed")
+            } else {
+                LiteExecutor::reopen(
+                    &data_dir,
+                    &db_name,
+                    mock_btc,
+                    pubkey,
+                    engine,
+                    component_cache,
+                    node_block_tx,
+                )
+                .await
+                .expect("LiteExecutor reopen failed")
+            };
 
             let engine_config = EngineConfig {
                 private_key,
@@ -377,12 +474,24 @@ impl ReactorCluster {
                 .iter()
                 .position(|v| v.address == engine_output.address);
 
+            // A restarted node must resume from what it persisted. Hard-coding 0
+            // would make it believe the chain is fresh, and the restart test would
+            // then pass for entirely the wrong reason.
+            let (resume_height, resume_hash) = if first_boot {
+                (0, None)
+            } else {
+                match crate::database::queries::select_block_latest(&conn).await {
+                    Ok(Some(row)) => (row.height, Some(row.hash)),
+                    _ => (0, None),
+                }
+            };
+
             let mut state = ConsensusState::new(
                 conn.clone(),
                 engine_output.signing_provider,
                 genesis,
                 engine_output.address,
-                0,
+                resume_height,
                 engine_output.channels,
                 engine_output._handle,
                 validator_index,
@@ -410,8 +519,8 @@ impl ReactorCluster {
                     enabled: false,
                     retain_blocks: 144,
                 },
-                0,
-                None,
+                resume_height,
+                resume_hash,
                 // Same path as production: the reactor's `ConsensusReady` handler
                 // reads the resolved address and publishes it here. `start_with`
                 // awaits the seed's receiver to bootstrap the followers.
@@ -455,7 +564,7 @@ impl ReactorCluster {
             node_block_tx,
             node_block_rx,
             node_mempool_rx,
-            self.cancel.clone(),
+            self.node_cancels[i].clone(),
             self.decided_tx.clone(),
             self.finality_tx.clone(),
             self.state_tx.clone(),
@@ -467,6 +576,9 @@ impl ReactorCluster {
             self.engine.clone(),
             self.component_cache.clone(),
             node_conn_tx,
+            self.node_dirs[i].0.path().to_path_buf(),
+            self.node_dirs[i].1.clone(),
+            true,
             &mut self.join_set,
         );
 
@@ -1315,6 +1427,89 @@ async fn prod_reactor_bitcoin_rollback_across_decided_batch() -> Result<()> {
         replayed.txids.len(),
         2,
         "rolled-back batch txs must re-execute in a fresh batch"
+    );
+
+    cluster.shutdown().await;
+    Ok(())
+}
+
+/// THE #515 REGRESSION.
+///
+/// A validator executes a batch, restarts while that batch is still inside its
+/// finality window, and its transactions never confirm. Finality tracking used to
+/// live only in memory, so the restarted node came back owing a verdict it no
+/// longer knew about: its peers rolled the batch back, it did not, and it kept
+/// transaction rows they had deleted. Days later the network re-batched those same
+/// transactions, the node hit `transactions.txid UNIQUE`, and crash-looped.
+///
+/// Four validators so the remaining three still hold a supermajority while one is
+/// down. The assertion is on the restarted node's own database: after the deadline
+/// passes, the batch's rows must be gone — meaning it rendered the verdict and
+/// performed the rollback, which is only possible if tracking survived the restart.
+#[tokio::test]
+async fn prod_reactor_restart_inside_finality_window_still_rolls_back() -> Result<()> {
+    crate::logging::setup();
+
+    let mut cluster = ReactorCluster::start(4).await?;
+    cluster.wait_for_ready().await;
+
+    cluster.mine_empty_and_send();
+    cluster.wait_for_block(1, Duration::from_secs(60)).await;
+
+    // A batch anchored at 1 whose transactions are never mined — deadline 1 + 6 = 7.
+    for event in cluster.mock_bitcoin().generate_mempool_txs(2) {
+        cluster.send_mempool_event(event);
+    }
+    let batch = cluster.wait_for_batch(1, Duration::from_secs(60)).await;
+    assert_eq!(batch.txids.len(), 2, "setup batch must carry both txs");
+
+    // The node under test executed it, so the rows are there before the restart.
+    {
+        let conn = cluster.node_conn(3).await;
+        let mut rows = conn
+            .query(
+                "SELECT COUNT(*) FROM transactions WHERE batch_height IS NOT NULL",
+                (),
+            )
+            .await?;
+        let before: u64 = rows.next().await?.expect("row").get(0)?;
+        assert!(
+            before > 0,
+            "node 3 must have executed the batch before restart"
+        );
+    }
+
+    // Restart INSIDE the finality window — the #515 trigger.
+    cluster.restart_node(3).await;
+
+    // Climb past the deadline. The transactions never confirmed, so every node owes
+    // a rollback — including the one that restarted.
+    for _ in 0..8 {
+        cluster.mine_empty_and_send();
+    }
+    // Poll the restarted node's OWN database. Waiting on the shared finality
+    // channel would prove nothing — any of the three peers that never went down
+    // satisfies it. The restarted node has to sync the decisions it missed before
+    // it can render the verdict, so the wait belongs here.
+    let conn = cluster.node_conn(3).await.clone();
+    let mut after = u64::MAX;
+    for _ in 0..240 {
+        let mut rows = conn
+            .query(
+                "SELECT COUNT(*) FROM transactions WHERE batch_height IS NOT NULL",
+                (),
+            )
+            .await?;
+        after = rows.next().await?.expect("row").get(0)?;
+        if after == 0 {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(500)).await;
+    }
+    assert_eq!(
+        after, 0,
+        "restarted node still holds batch rows its peers rolled back — finality \
+         tracking did not survive the restart (#515)"
     );
 
     cluster.shutdown().await;

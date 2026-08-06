@@ -1,3 +1,4 @@
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
 use anyhow::Result;
@@ -11,7 +12,7 @@ use crate::reactor::executor::Executor;
 use crate::reactor::mock_bitcoin::MockBitcoin;
 use crate::runtime::wit::Signer;
 use crate::runtime::{ComponentCache, ContractAddress, Runtime, Storage, TransactionContext};
-use crate::test_utils::{new_mock_block_hash, new_mock_transaction, new_test_db};
+use crate::test_utils::{new_mock_block_hash, new_mock_transaction, new_test_db_dir, open_test_db};
 use indexer_types::{BlockRow, TransactionRow};
 use testlib::ContractReader;
 
@@ -23,7 +24,10 @@ pub async fn shared_engine_and_cache() -> (wasmtime::Engine, ComponentCache) {
         let cache = ComponentCache::new();
         let mock_btc = Arc::new(Mutex::new(MockBitcoin::new(0)));
         let (dummy_tx, _dummy_rx) = tokio::sync::mpsc::channel(1);
+        let (dir, db_name) = new_test_db_dir().expect("prewarm dir");
         let (_executor, runtime) = LiteExecutor::new(
+            dir.path(),
+            &db_name,
             mock_btc,
             "prewarm".to_string(),
             &[],
@@ -41,7 +45,9 @@ pub async fn shared_engine_and_cache() -> (wasmtime::Engine, ComponentCache) {
 }
 
 pub struct LiteExecutor {
-    _db_dir: tempfile::TempDir,
+    /// The directory is owned by the CLUSTER, not by us: a node that stops must
+    /// leave its database behind so it can be restarted onto it.
+    data_dir: PathBuf,
     counter_address: ContractAddress,
     signer: Signer,
     mock_bitcoin: Arc<Mutex<MockBitcoin>>,
@@ -49,11 +55,52 @@ pub struct LiteExecutor {
 }
 
 impl LiteExecutor {
-    pub fn data_dir(&self) -> std::path::PathBuf {
-        self._db_dir.path().to_path_buf()
+    pub fn data_dir(&self) -> PathBuf {
+        self.data_dir.clone()
+    }
+
+    /// Bring a node back up on a database it already has — no genesis seeding.
+    /// The counterpart to `new`, and what makes a restart mean anything: the node
+    /// must recover from durable state rather than starting fresh.
+    pub async fn reopen(
+        data_dir: &Path,
+        db_name: &str,
+        mock_bitcoin: Arc<Mutex<MockBitcoin>>,
+        shared_pubkey: String,
+        engine: wasmtime::Engine,
+        component_cache: ComponentCache,
+        block_tx: tokio::sync::mpsc::Sender<crate::bitcoin_follower::event::BlockEvent>,
+    ) -> Result<(Self, Runtime)> {
+        let (_reader, writer) = open_test_db(data_dir, db_name).await?;
+        let storage = Storage::builder()
+            .height(0)
+            .conn(writer.connection())
+            .build();
+        let linkers = Runtime::new_linkers(&engine)?;
+        let runtime = Runtime::new_with(engine, linkers, component_cache, storage).await?;
+
+        // Already persisted by the first boot — this resolves the existing row.
+        let identity = runtime.get_or_create_identity(&shared_pubkey).await?;
+
+        Ok((
+            Self {
+                data_dir: data_dir.to_path_buf(),
+                counter_address: ContractAddress {
+                    name: "counter".to_string(),
+                    height: 0,
+                    tx_index: 0,
+                },
+                signer: Signer::Id(identity),
+                mock_bitcoin,
+                block_tx,
+            },
+            runtime,
+        ))
     }
 
     pub async fn new(
+        data_dir: &Path,
+        db_name: &str,
         mock_bitcoin: Arc<Mutex<MockBitcoin>>,
         shared_pubkey: String,
         genesis_validators: &[crate::runtime::GenesisValidator],
@@ -61,7 +108,7 @@ impl LiteExecutor {
         component_cache: ComponentCache,
         block_tx: tokio::sync::mpsc::Sender<crate::bitcoin_follower::event::BlockEvent>,
     ) -> Result<(Self, Runtime)> {
-        let (_reader, writer, (db_dir, _db_name)) = new_test_db().await?;
+        let (_reader, writer) = open_test_db(data_dir, db_name).await?;
         let conn = writer.connection();
 
         insert_block(
@@ -148,7 +195,7 @@ impl LiteExecutor {
 
         Ok((
             Self {
-                _db_dir: db_dir,
+                data_dir: data_dir.to_path_buf(),
                 counter_address,
                 signer,
                 mock_bitcoin,
