@@ -251,8 +251,14 @@ fn build_replay_queue(
                     .collect();
                 // Narrowing what we execute must not narrow what we record as
                 // decided — see `DeferredDecision::certified_txids`.
+                //
+                // `get_or_insert`, not assignment: a batch can be narrowed by more
+                // than one rollback, and on the second pass `txs` is already the
+                // first pass's survivors. Recomputing from them would quietly drop
+                // whatever the first pass excluded. The earliest list is the decided
+                // one; later passes only ever remove more.
                 if kept.len() != decided.len() {
-                    decision.certified_txids = Some(decided);
+                    decision.certified_txids.get_or_insert(decided);
                 }
                 decision.value = Value::new_batch_raw(anchor_height, anchor_hash, kept);
             }
@@ -1601,6 +1607,47 @@ mod tests {
             survivor.certified_txids.as_deref(),
             Some(&[child.compute_txid(), kept.compute_txid()][..]),
             "the DECIDED list must be preserved in full for the record"
+        );
+    }
+
+    /// A batch can be narrowed by MORE THAN ONE rollback. On the second pass the
+    /// carried transactions are already the first pass's survivors, so recomputing
+    /// the decided list from them would silently drop whatever the first pass
+    /// excluded — and `batch_txids` would stop matching the certificate. The first
+    /// decided list is the true one and must win.
+    #[test]
+    fn build_replay_queue_keeps_the_first_decided_list_across_repeated_filtering() {
+        let first = tx(&[OutPoint::null()], 1);
+        let second = tx(&[OutPoint::null()], 2);
+        let survivor_tx = tx(&[OutPoint::null()], 3);
+        let decided_all = vec![
+            first.compute_txid(),
+            second.compute_txid(),
+            survivor_tx.compute_txid(),
+        ];
+
+        // Pass one already ran: `first` was excluded, and the decision carries the
+        // full decided list alongside the narrowed transactions.
+        let (mut decision, _) = carrying(14, vec![second.clone(), survivor_tx.clone()]);
+        decision.certified_txids = Some(decided_all.clone());
+
+        // Pass two excludes `second`.
+        let excluded: HashSet<Txid> = [second.compute_txid()].into();
+        let (queue, _) = build_replay_queue(
+            Vec::new(),
+            vec![(decision, vec![second.clone(), survivor_tx.clone()])],
+            &excluded,
+        );
+
+        assert_eq!(
+            queue[0].value.batch_raw_txs().len(),
+            1,
+            "only the untouched tx should remain executable"
+        );
+        assert_eq!(
+            queue[0].certified_txids.as_deref(),
+            Some(&decided_all[..]),
+            "the ORIGINAL decided list must survive a second narrowing"
         );
     }
 
