@@ -1214,6 +1214,47 @@ mod tests {
         );
     }
 
+    /// The same guard through the door an ordinary Bitcoin transaction actually
+    /// comes in by. The two tests above pin `validate_publishable` in isolation,
+    /// which leaves the classification free to be re-wrapped anywhere between
+    /// `publish` and it — and `publish` does not simply forward: it validates
+    /// provenance and the name, inserts the contract row, and on failure rolls
+    /// that row back and evicts the cache. Any of those could reclassify.
+    ///
+    /// `execute_op` records a `Deterministic` publish failure and continues, but
+    /// returns `Err` for `NonDeterministic`, which propagates out of
+    /// `execute_block` and exits the node. Since the payload is deterministic
+    /// content every node reaches that point together, so the wrong class here is
+    /// a whole-network halt costing one Bitcoin fee to trigger.
+    #[tokio::test]
+    async fn malformed_publish_is_recorded_not_fatal() {
+        let (mut runtime, _dir, _name) = test_runtime().await.expect("test runtime");
+        runtime
+            .set_context(
+                1,
+                Some(super::TransactionContext::builder().build()),
+                None,
+                None,
+            )
+            .await;
+        let signer = super::Signer::Core(Box::new(super::Signer::Nobody));
+        let payment = runtime.core_payment();
+        let provenance = super::native_provenance().expect("provenance");
+
+        // Well-formed op, garbage payload: valid kebab name and valid provenance,
+        // so nothing rejects it before the bytes are decoded. `filter_map` never
+        // inspects Publish bytes, so this is exactly what reaches execution.
+        let err = runtime
+            .publish(&signer, payment, "halt-probe", &[0xFFu8; 64], &provenance)
+            .await
+            .expect_err("garbage bytes cannot publish");
+        assert!(
+            matches!(err, super::ExecutionError::Deterministic(_)),
+            "a malformed publish must be a RECORDED op failure; NonDeterministic \
+             propagates out of execute_block and every node exits at this height: {err:?}"
+        );
+    }
+
     /// A user contract that *links* fine but violates a Kontor WIT rule (here,
     /// no `init`) must still be rejected at publish — and DETERMINISTICALLY. This
     /// exercises the WIT-rule branch of `validate_publishable`, which the link
