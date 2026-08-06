@@ -63,6 +63,13 @@ struct ReactorCluster {
     /// while a single node can also be stopped on its own.
     node_cancels: Vec<CancellationToken>,
     block_txs: Vec<mpsc::Sender<BlockEvent>>,
+    /// Fatal errors that killed a node's reactor task.
+    ///
+    /// `spawn_node` used to log these and move on, which made "the reactor
+    /// died" unassertable: a test whose node crashed showed up as a timeout on
+    /// whatever it was waiting for, indistinguishable from consensus simply
+    /// being slow. Tests that expect every node to survive assert this is empty.
+    reactor_errors: Arc<Mutex<Vec<(usize, String)>>>,
     mempool_tx: broadcast::Sender<MempoolEvent>,
     decided_rx: mpsc::Receiver<DecidedBatch>,
     finality_rx: mpsc::Receiver<FinalityEvent>,
@@ -165,6 +172,7 @@ impl ReactorCluster {
         let (event_tx, event_rx) = mpsc::channel(1024);
 
         let mut join_set = JoinSet::new();
+        let reactor_errors: Arc<Mutex<Vec<(usize, String)>>> = Arc::new(Mutex::new(Vec::new()));
         let mut started_nodes = vec![false; total];
         let mut simulate_txs = Vec::new();
 
@@ -218,6 +226,7 @@ impl ReactorCluster {
                 node_dirs[i].0.path().to_path_buf(),
                 node_dirs[i].1.clone(),
                 true,
+                reactor_errors.clone(),
                 &mut join_set,
             );
             started_nodes[i] = true;
@@ -233,6 +242,7 @@ impl ReactorCluster {
             node_dirs,
             node_cancels,
             block_txs,
+            reactor_errors,
             mempool_tx,
             decided_rx,
             finality_rx,
@@ -330,6 +340,7 @@ impl ReactorCluster {
             self.node_dirs[i].0.path().to_path_buf(),
             self.node_dirs[i].1.clone(),
             false,
+            self.reactor_errors.clone(),
             &mut self.join_set,
         );
 
@@ -409,6 +420,7 @@ impl ReactorCluster {
         // seeding runs only on the first boot. That distinction is the whole point
         // of the restart path — a node that re-seeds has not really restarted.
         first_boot: bool,
+        reactor_errors: Arc<Mutex<Vec<(usize, String)>>>,
         join_set: &mut JoinSet<()>,
     ) {
         let genesis = genesis.clone();
@@ -530,7 +542,9 @@ impl ReactorCluster {
             let _ = rtx.send(i).await;
 
             if let Err(e) = reactor.run().await {
-                tracing::error!(node = i, e = format!("{e:#}"), "Reactor error");
+                let msg = format!("{e:#}");
+                tracing::error!(node = i, e = %msg, "Reactor error");
+                reactor_errors.lock().unwrap().push((i, msg));
             }
         });
     }
@@ -579,6 +593,7 @@ impl ReactorCluster {
             self.node_dirs[i].0.path().to_path_buf(),
             self.node_dirs[i].1.clone(),
             true,
+            self.reactor_errors.clone(),
             &mut self.join_set,
         );
 
@@ -724,6 +739,40 @@ impl ReactorCluster {
             txids,
             state_events,
             events,
+        }
+    }
+
+    /// Assert no node's reactor died during the test.
+    ///
+    /// Worth calling explicitly wherever survival is the property under test: a
+    /// dead reactor otherwise surfaces only as a timeout somewhere downstream,
+    /// which reads as "consensus was slow" and hides the actual failure.
+    fn assert_no_reactor_errors(&self) {
+        let errors = self.reactor_errors.lock().unwrap();
+        assert!(errors.is_empty(), "reactor(s) died: {errors:?}");
+    }
+
+    /// Wait until `height` is DECIDED by consensus, without requiring every node
+    /// to have executed it.
+    ///
+    /// `wait_for_block` demands `BlockProcessed` from all `node_count` nodes,
+    /// which is the right check when everyone is healthy but cannot express
+    /// "the chain advanced even though one node could not follow" — the exact
+    /// property at stake when a node is deliberately left behind.
+    async fn wait_for_block_decided(&mut self, height: u64, timeout: Duration) {
+        let deadline = tokio::time::sleep(timeout);
+        tokio::pin!(deadline);
+        loop {
+            tokio::select! {
+                _ = &mut deadline => {
+                    panic!("wait_for_block_decided(height={height}) timed out");
+                }
+                Some(d) = self.decided_rx.recv() => {
+                    if d.value.is_block() && d.value.block_height() == height {
+                        return;
+                    }
+                }
+            }
         }
     }
 
@@ -1788,6 +1837,80 @@ async fn prod_reactor_pending_blocks_bounded_under_stalled_consensus() -> Result
         "pending_blocks is unbounded: accepted {accepted}/{flood} exceeds {ceiling} — high-water gate not applied"
     );
 
+    cluster.shutdown().await;
+    Ok(())
+}
+
+/// A node whose execution has fallen behind heights the network already decided
+/// must PARK the out-of-order decision, not die on it.
+///
+/// This is the signet halt of 2026-08. One validator's executor was 128 blocks
+/// behind while its buffer held the whole window, so a decision for the network's
+/// tip found that block cached and went straight to the executor — whose height
+/// guard is a `bail!`, taken *after* the `batches` row was already committed.
+/// The reactor exited, the pod restarted, and because that validator held the
+/// third of three usable votes in a 3/4 quorum, each restart bought exactly one
+/// decided height before dying again: 121 restarts, 20 h, chain stopped.
+///
+/// The property is asymmetric on purpose. The lagging node stays stuck — the
+/// heights it missed will not be re-decided, and value-sync will not backfill a
+/// node whose *consensus* height is current — but it stays UP, keeps voting, and
+/// the chain keeps moving. A stuck node is an operator problem; a crash-looping
+/// one takes the network down with it.
+#[tokio::test]
+async fn prod_reactor_out_of_order_block_decision_parks_instead_of_dying() -> Result<()> {
+    crate::logging::setup();
+
+    let mut cluster = ReactorCluster::start(4).await?;
+    cluster.wait_for_ready().await;
+
+    // Blocks 1 and 2 reach only nodes 0-2. Node 3 has no block at all, so it
+    // rejects both proposals and votes nil; 3 of 4 still clears the 2/3
+    // threshold, so consensus decides and executes them without it. Node 3's
+    // consensus height advances with every decision — which is precisely why it
+    // will never be re-sent these heights.
+    let lagging = 3;
+    for height in 1..=2u64 {
+        let (blk_events, _) = cluster.mock_bitcoin().mine_empty_block();
+        for event in blk_events {
+            for (i, tx) in cluster.block_txs.iter().enumerate() {
+                if i != lagging {
+                    let _ = tx.try_send(event.clone());
+                }
+            }
+        }
+        cluster
+            .wait_for_block_decided(height, Duration::from_secs(60))
+            .await;
+    }
+
+    // Block 3 goes to everyone. Node 3 now holds a block for height 3 with a tip
+    // of 0 — buffered, but 2 heights out of reach. It accepts the proposal (the
+    // block IS the canonical one at that height, which is all a `Value::Block`
+    // asserts) and votes for it, so the decision lands on a node that cannot
+    // execute it. Before the ordering gate, this is the line that killed the
+    // reactor: "Unexpected block height 3, expected 1".
+    let (blk_events, _) = cluster.mock_bitcoin().mine_empty_block();
+    for event in blk_events {
+        cluster.send_block_event(event);
+    }
+    cluster
+        .wait_for_block_decided(3, Duration::from_secs(60))
+        .await;
+
+    // The chain keeps advancing afterwards — the lagging node still votes, so
+    // quorum survives. Two more heights prove it is not a one-off.
+    for height in 4..=5u64 {
+        let (blk_events, _) = cluster.mock_bitcoin().mine_empty_block();
+        for event in blk_events {
+            cluster.send_block_event(event);
+        }
+        cluster
+            .wait_for_block_decided(height, Duration::from_secs(60))
+            .await;
+    }
+
+    cluster.assert_no_reactor_errors();
     cluster.shutdown().await;
     Ok(())
 }

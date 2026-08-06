@@ -75,6 +75,18 @@ use executor::Executor;
 /// Keep this constant and that config default in lockstep.
 const MAX_PENDING_BLOCKS: usize = 128;
 
+/// Ceiling on `consensus_state::deferred_decisions` — decided values parked
+/// because their data has not arrived or their turn has not come.
+///
+/// Unlike [`MAX_PENDING_BLOCKS`] this is not backpressure: there is nothing to
+/// slow down, since the queue is fed by consensus itself. It is an OOM backstop
+/// for the one state that cannot resolve itself — a node whose execution has
+/// fallen behind heights the network already decided, which parks one entry per
+/// decided value from then on. Set far above any legitimate backlog: a healthy
+/// node idles near zero and drains within a block, and a tight bound would turn
+/// a transient stall into the crash loop this bound exists to avoid.
+const MAX_DEFERRED_DECISIONS: usize = 4096;
+
 pub type Simulation = (
     indexer_types::Transaction,
     oneshot::Sender<Result<Vec<OpWithResult>>>,

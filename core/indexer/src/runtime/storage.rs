@@ -664,6 +664,39 @@ mod tests {
     use crate::test_utils::{new_mock_block_hash, new_test_db};
     use indexer_types::BlockRow;
 
+    // The savepoint must cover plain `conn.execute` writes issued through a
+    // CLONE of the connection, not just those made through `Storage`.
+    //
+    // The reactor relies on this: `db_conn()` hands out a clone, and
+    // `handle_block` writes the decided-batch record through it inside the
+    // block's savepoint so a failed execution cannot leave a consensus record
+    // behind. That is a property of libsql's `BEGIN TRANSACTION` on a shared
+    // connection, invisible at the call site — pinned here so it fails loudly
+    // if the connection sharing ever changes.
+    #[tokio::test]
+    async fn savepoint_covers_writes_through_a_cloned_connection() -> Result<()> {
+        use crate::database::queries::{insert_batch, select_batch};
+
+        let (_reader, writer, _temp) = new_test_db().await?;
+        let conn = writer.connection();
+        let storage = Storage::builder().conn(conn.clone()).build();
+
+        storage.savepoint().await?;
+        insert_batch(&conn.clone(), 7, 100, "deadbeef", b"cert", true).await?;
+        assert!(
+            select_batch(&conn, 7).await?.is_some(),
+            "the write must be visible inside its own transaction"
+        );
+        storage.rollback().await?;
+
+        assert!(
+            select_batch(&conn, 7).await?.is_none(),
+            "rolling back the block transaction must discard the decision record too — \
+             otherwise a node keeps a consensus record for a height it never executed"
+        );
+        Ok(())
+    }
+
     // `block_entropy` returns a present block's hash only when the height is in the
     // recent window `[current - K, current]`: not future, not expired, and a row
     // exists. (K = BLOCK_ENTROPY_WINDOW = 144.)

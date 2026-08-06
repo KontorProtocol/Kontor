@@ -108,6 +108,37 @@ impl<E: Executor> Reactor<E> {
     ///
     /// The reactor's canonical block-processing path discards this; the
     /// simulate handler consumes it.
+    /// The fallible body of `handle_block`'s transaction: the decision record
+    /// (when the block arrives decided) plus the block's own writes. Split out
+    /// so `handle_block` has a single place to roll back from.
+    async fn block_txn(
+        &mut self,
+        block: &Block,
+        decision: Option<&consensus_state::DeferredDecision>,
+    ) -> Result<(usize, u64)> {
+        if let Some(decision) = decision {
+            insert_batch(
+                &self.db_conn(),
+                decision.consensus_height.as_u64(),
+                block.height,
+                &block.hash.to_string(),
+                &decision.certificate,
+                true,
+            )
+            .await
+            .context("Failed to insert block batch decision")?;
+        }
+
+        let (unbatched_count, executed_ops, _failures) = self
+            .execute_block(block)
+            .await
+            .context("execute_block failed")?;
+        self.run_block_lifecycle(block)
+            .await
+            .context("run_block_lifecycle failed")?;
+        Ok((unbatched_count, executed_ops))
+    }
+
     pub(super) async fn execute_block(
         &mut self,
         block: &Block,
@@ -311,23 +342,26 @@ impl<E: Executor> Reactor<E> {
         block: Block,
         decision: &consensus_state::DeferredDecision,
     ) -> Result<()> {
-        insert_batch(
-            &self.db_conn(),
-            decision.consensus_height.as_u64(),
-            block.height,
-            &block.hash.to_string(),
-            &decision.certificate,
-            true,
-        )
-        .await
-        .context("Failed to insert block batch decision")?;
-        self.handle_block(block)
+        self.handle_block(block, Some(decision))
             .await
-            .context("handle_block failed after block batch decision")?;
-        Ok(())
+            .context("handle_block failed after block batch decision")
     }
 
-    pub(super) async fn handle_block(&mut self, block: Block) -> Result<()> {
+    /// Execute `block` and, when it arrives decided, record that decision in the
+    /// SAME transaction as the block's own writes.
+    ///
+    /// A consensus record and the execution it certifies must commit or fail
+    /// together. Writing the `batches` row first — as this did — let a node keep
+    /// a row claiming a height it never executed: the row survived, the
+    /// execution did not, and every restart then resumed consensus above state
+    /// the node did not hold. `delete_unexecuted_batch_suffix` cleans that up at
+    /// startup, but the window should not exist at all; `process_decided_batch`
+    /// has always taken the savepoint first, and the block path was the outlier.
+    pub(super) async fn handle_block(
+        &mut self,
+        block: Block,
+        decision: Option<&consensus_state::DeferredDecision>,
+    ) -> Result<()> {
         let started_at = Instant::now();
         let height = block.height;
         let hash = block.hash;
@@ -356,28 +390,40 @@ impl<E: Executor> Reactor<E> {
             );
         }
 
-        self.last_height = height;
-        self.last_hash = Some(hash);
-
         self.runtime
             .storage
             .savepoint()
             .await
             .context("Failed to begin block transaction")?;
 
-        let (unbatched_count, executed_ops, _failures) = self
-            .execute_block(&block)
-            .await
-            .context("execute_block failed")?;
-        self.run_block_lifecycle(&block)
-            .await
-            .context("run_block_lifecycle failed")?;
+        // Everything up to the commit is one transaction, rolled back explicitly
+        // on any error rather than left open for process teardown to discard.
+        // `last_height`/`last_hash` advance only after the commit, so a failed
+        // block leaves no trace in memory either.
+        let txn = self.block_txn(&block, decision).await;
+        let (unbatched_count, executed_ops) = match txn {
+            Ok(counts) => counts,
+            Err(e) => {
+                if let Err(rollback_err) = self.runtime.storage.rollback().await {
+                    warn!(error = %rollback_err, height, "Failed to roll back block transaction");
+                }
+                return Err(e);
+            }
+        };
 
         self.runtime
             .storage
             .commit()
             .await
             .context("Failed to commit block transaction")?;
+
+        self.last_height = height;
+        self.last_hash = Some(hash);
+        // Blocks at or below the tip can no longer be proposed or decided.
+        // Dropping them keeps `make_value` proposing only heights still ahead,
+        // and keeps `validate_batch`'s "a block is pending" gate honest.
+        self.consensus.pending_blocks.retain(|&h, _| h > height);
+
         // Reflect what's actually persisted, not what we're mid-processing.
         // Op counter increments only after commit so the simulation path
         // (rolls back instead of committing) doesn't inflate it.

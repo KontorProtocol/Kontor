@@ -2,7 +2,7 @@ use std::cmp::Reverse;
 use std::collections::{BinaryHeap, HashMap, HashSet, VecDeque};
 use std::time::Instant;
 
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, bail};
 use bitcoin::hashes::Hash;
 use bitcoin::{BlockHash, Txid};
 use indexer_types::Event;
@@ -11,7 +11,7 @@ use malachitebft_core_types::{Round, Validity};
 use malachitebft_engine::host::Next;
 use metrics::{counter, gauge};
 use prost::Message;
-use tracing::{debug, info, warn};
+use tracing::{debug, error, info, warn};
 
 use crate::consensus::codec::encode_commit_certificate;
 use crate::consensus::finality_types::{DecidedBatch, StateEvent, UnfinalizedBatch, deadline_for};
@@ -22,10 +22,10 @@ use crate::database::queries::{
 };
 use crate::metrics::{CONSENSUS_HEIGHT, ITEMS_INDEXED};
 
-use super::Reactor;
 use super::consensus_state;
 use super::executor::Executor;
 use super::mempool_fee_index::MempoolFeeIndex;
+use super::{MAX_DEFERRED_DECISIONS, Reactor};
 
 /// Multiplier applied to `MempoolFeeIndex::fastest_fee()` to derive the
 /// per-batch acceptance threshold, as an integer ratio: 9/10 means we accept
@@ -644,6 +644,19 @@ impl<E: Executor> Reactor<E> {
         let value = match data {
             ProposalData::Block { height: bh, hash } => {
                 if let Some(block) = self.consensus.pending_blocks.get(bh) {
+                    // Deliberately NOT gated on `bh == last_height + 1`.
+                    //
+                    // Tempting, since a node behind on execution votes here for a
+                    // block it cannot yet apply. But a `Value::Block` asserts only
+                    // "this is the canonical Bitcoin block at this height", which
+                    // this node can confirm from its own buffer; when to run it is
+                    // a local ordering matter, settled by `handle_finalized` and
+                    // the deferred queue. Withholding the vote would trade a stuck
+                    // node for a stalled chain: at 3-of-4 quorum with one
+                    // validator already down, one nil vote is the difference
+                    // between the network advancing and halting — which is the
+                    // failure this whole change exists to prevent, reintroduced
+                    // from the other side.
                     if block.hash != *hash {
                         warn!(
                             block_height = bh,
@@ -654,10 +667,34 @@ impl<E: Executor> Reactor<E> {
                         return Ok(None);
                     }
                 } else {
-                    warn!(
-                        block_height = bh,
-                        "Rejecting block proposal: block not yet received"
-                    );
+                    // "Not yet received" and "already processed" are opposite
+                    // conditions with opposite remedies — one resolves itself
+                    // when the poller catches up, the other never does — and
+                    // they were indistinguishable in the logs. Naming them costs
+                    // one lookup on a path that is already rejecting.
+                    match select_block_at_height(&conn, *bh).await {
+                        Ok(Some(row)) if row.hash == *hash => warn!(
+                            block_height = bh,
+                            %hash,
+                            last_height,
+                            "Rejecting block proposal: height already processed"
+                        ),
+                        Ok(Some(row)) => warn!(
+                            block_height = bh,
+                            proposed = %hash,
+                            executed = %row.hash,
+                            "Rejecting block proposal: height processed with a different hash (reorg)"
+                        ),
+                        Ok(None) => warn!(
+                            block_height = bh,
+                            last_height, "Rejecting block proposal: block not yet received"
+                        ),
+                        Err(e) => warn!(
+                            error = %e,
+                            block_height = bh,
+                            "Rejecting block proposal: block lookup failed"
+                        ),
+                    }
                     return Ok(None);
                 }
                 Value::new_block(*bh, *hash)
@@ -1025,6 +1062,67 @@ impl<E: Executor> Reactor<E> {
                 } => {
                     let bh = *bh;
                     let decided_hash = *decided_hash;
+
+                    // Gate on the tip BEFORE touching `pending_blocks`. A block
+                    // can only execute at exactly `last_height + 1`; handing
+                    // `handle_block` anything else trips its height guard, which
+                    // is fatal to the reactor. Holding the block buffered is not
+                    // permission to run it — a node whose execution has fallen
+                    // behind caches the whole window from its tip to the
+                    // network's, so the buffer hit says nothing about ordering.
+                    if bh <= self.last_height {
+                        // Terminal, never parked: the height is already executed
+                        // (a re-decide after a rollback, or a sync replaying
+                        // both) or was reorged away. Parking a decision that
+                        // nothing can ever satisfy wedges the drain forever.
+                        // Reachable with the block still buffered, too — the
+                        // finality path deliberately keeps `pending_blocks`
+                        // across a rollback and re-execution.
+                        match select_block_at_height(&self.db_conn(), bh).await {
+                            Ok(row) => {
+                                warn!(
+                                    block_height = bh,
+                                    decided = %decided_hash,
+                                    executed = ?row.map(|r| r.hash),
+                                    last_height = self.last_height,
+                                    consensus_height = %decision.consensus_height,
+                                    "Dropping deferred block decision — at or below tip"
+                                );
+                                // Dropped is not unrecorded. `batches` is the only
+                                // copy of the decided sequence — Malachite asks us
+                                // for decided values rather than keeping them — and
+                                // the startup cleanup trims an unexecuted SUFFIX,
+                                // never a hole in the middle. A height that leaves
+                                // no row can never be served to a syncing peer.
+                                self.record_declined_block(&decision, bh, decided_hash)
+                                    .await;
+                                continue;
+                            }
+                            Err(e) => {
+                                warn!(error = %e, block_height = bh, "Block lookup failed during drain; parking decision");
+                                self.consensus.deferred_decisions.push_front(decision);
+                                break;
+                            }
+                        }
+                    }
+                    if bh > self.last_height + 1 {
+                        // The predecessors were decided by the network but never
+                        // reached this node's executor. Nothing here can close
+                        // that gap — the missed heights will not be re-decided —
+                        // so park and stay loud: this node needs a re-sync, and
+                        // the alternative (executing out of order) is fatal.
+                        error!(
+                            block_height = bh,
+                            last_height = self.last_height,
+                            gap = bh - self.last_height,
+                            consensus_height = %decision.consensus_height,
+                            "Deferred block decision is ahead of the tip — this node cannot \
+                             catch up on its own and needs a re-sync"
+                        );
+                        self.consensus.deferred_decisions.push_front(decision);
+                        break;
+                    }
+
                     let block = {
                         let cs = &mut self.consensus;
                         cs.pending_blocks.remove(&bh)
@@ -1060,33 +1158,11 @@ impl<E: Executor> Reactor<E> {
                         // The tip moved — anything held may now be ready.
                         restore_waiting(&mut self.consensus.deferred_decisions, &mut waiting);
                     } else {
-                        // No pending block at this height. Before parking the
-                        // queue on it, check whether the height was already
-                        // executed: a block row with the SAME hash means this
-                        // decision is a duplicate record (a re-decide after a
-                        // rollback, or a sync replaying both) — already
-                        // satisfied; a DIFFERENT hash means the decided block
-                        // was reorged away. Either way the decision is
-                        // terminal — parking it would wedge the drain forever
-                        // on a delivery that can never come.
-                        match select_block_at_height(&self.db_conn(), bh).await {
-                            Ok(Some(row)) => {
-                                warn!(
-                                    block_height = bh,
-                                    decided = %decided_hash,
-                                    executed = %row.hash,
-                                    consensus_height = %decision.consensus_height,
-                                    "Dropping deferred block decision — height already executed"
-                                );
-                                self.record_declined_block(&decision, bh, decided_hash)
-                                    .await;
-                                continue;
-                            }
-                            Ok(None) => {}
-                            Err(e) => {
-                                warn!(error = %e, block_height = bh, "Block lookup failed during drain; parking decision");
-                            }
-                        }
+                        // `bh == last_height + 1` and the poller has not
+                        // delivered it yet. The already-executed and reorged
+                        // cases were both settled by the tip gate above, so this
+                        // is the one genuinely transient case: park and wait for
+                        // `BlockInsert` to drive the drain again.
                         info!(
                             block_height = bh,
                             consensus_height = %decision.consensus_height,
@@ -1293,7 +1369,37 @@ impl<E: Executor> Reactor<E> {
                         .context("Failed to encode commit certificate")?
                         .encode_to_vec();
 
-                    if let Some(block) = self.consensus.pending_blocks.remove(height) {
+                    // Take the block only when it can execute immediately: the
+                    // exact next height, with no earlier block decision still
+                    // queued ahead of it. Everything else goes through the
+                    // deferred queue, the single ordered execution path.
+                    //
+                    // Without this, a buffered-but-not-next block was handed
+                    // straight to the executor, whose height guard is a `bail!`
+                    // — and the `batches` row had already been written. That is
+                    // how a signet validator spent 20 h restarting: each boot it
+                    // took one decision for a height 128 ahead of its tip, wrote
+                    // the record, died on the guard, and came back one consensus
+                    // height further from the state it actually held.
+                    //
+                    // The queue check is `is_block`, not `is_empty`: a deferred
+                    // BATCH must not hold a block back. Batches are only ever
+                    // gated on their own anchor (see `drain_deferred_decisions`),
+                    // and a batch waiting on this very block would deadlock
+                    // against it.
+                    let in_order = *height == self.last_height + 1
+                        && !self
+                            .consensus
+                            .deferred_decisions
+                            .iter()
+                            .any(|d| d.value.is_block());
+                    let ready = if in_order {
+                        self.consensus.pending_blocks.remove(height)
+                    } else {
+                        None
+                    };
+
+                    if let Some(block) = ready {
                         info!(
                             block_height = height,
                             block_hash = %hash,
@@ -1318,8 +1424,9 @@ impl<E: Executor> Reactor<E> {
                             info!(
                                 block_height = height,
                                 block_hash = %hash,
+                                last_height = self.last_height,
                                 consensus_height = %certificate.height,
-                                "Block decided but not yet received — deferring"
+                                "Block decided but not ready to execute — deferring"
                             );
                             self.consensus.deferred_decisions.push_back(
                                 consensus_state::DeferredDecision {
@@ -1361,6 +1468,23 @@ impl<E: Executor> Reactor<E> {
                 height = %certificate.height,
                 value = %certificate.value_id,
                 "Finalized a value not held among our undecided proposals for this height"
+            );
+        }
+
+        // An OOM backstop, not a policy knob. A node that genuinely cannot catch
+        // up accumulates one deferred decision per decided value, each carrying a
+        // certificate and possibly raw txs, forever. Failing here turns an
+        // eventual OOM-kill into an explicit, diagnosable exit that names the
+        // gap. Deliberately far above any real backlog: a tight bound would
+        // recreate the crash loop this whole change exists to remove, and on a
+        // bare-quorum network a crash loop takes the chain down with it.
+        if self.consensus.deferred_decisions.len() > MAX_DEFERRED_DECISIONS {
+            bail!(
+                "deferred decision queue exceeded {MAX_DEFERRED_DECISIONS} entries at block \
+                 height {} (consensus height {}) — this node is not executing what consensus \
+                 decides and cannot recover on its own; re-sync required",
+                self.last_height,
+                certificate.height
             );
         }
 
