@@ -246,6 +246,21 @@ pub struct Runtime {
     /// lite executor); production paths (reactor, runtime pool) set it from
     /// `config.network`.
     pub network: bitcoin::Network,
+    /// Set while `simulate` runs a fabricated block it is going to throw away.
+    ///
+    /// The savepoint undoes everything in the DATABASE, but the component cache
+    /// lives outside it and is keyed by `contracts.id` — a rowid the rollback
+    /// frees for reuse (`INTEGER PRIMARY KEY`, no `AUTOINCREMENT`). A `Publish`
+    /// inside a simulation would otherwise leave its compiled WASM cached under
+    /// an id a later real publish can be assigned, and `load_component` would
+    /// serve the simulated contract's code — on this node only, so it diverges
+    /// from the network.
+    ///
+    /// A flag rather than a compensating invalidate: the cache has one write
+    /// site, so not writing is one check that cannot be forgotten, where cleanup
+    /// is a fourth thing to remember in a function whose first two (`height`,
+    /// then this) were both missed.
+    pub simulating: bool,
 }
 
 impl Runtime {
@@ -325,6 +340,7 @@ impl Runtime {
             op_return_data: None,
             node_label: String::new(),
             network: bitcoin::Network::Regtest,
+            simulating: false,
         })
     }
 
@@ -912,9 +928,15 @@ impl Runtime {
     async fn component_bytes_and_compiled(&self, contract_id: u64) -> Result<(Vec<u8>, Component)> {
         let bytes = self.storage.component_bytes(contract_id).await?;
         let component = Component::from_binary(&self.engine, &bytes)?;
-        self.component_cache
-            .put(contract_id, component.clone(), bytes.len())
-            .await;
+        // The one write site, so the one place the simulation guard has to hold.
+        // See `Runtime::simulating`: caching a speculative contract's code under an
+        // id the rollback frees would let a later real publish be served the wrong
+        // WASM on this node alone.
+        if !self.simulating {
+            self.component_cache
+                .put(contract_id, component.clone(), bytes.len())
+                .await;
+        }
         Ok((bytes, component))
     }
 
@@ -947,6 +969,7 @@ impl HasData for Runtime {
 
 #[cfg(test)]
 mod tests {
+    use crate::database::native_contracts::FILESTORAGE;
     use crate::database::queries::exists_contract_state;
     use crate::runtime::token;
     use crate::runtime::wit::resources::ViewContext;
@@ -1316,6 +1339,61 @@ mod tests {
         assert!(
             runtime.component_cache.get(&reused_id).await.is_none(),
             "failed publish must evict the cached component for its rolled-back id"
+        );
+    }
+
+    /// A simulation must leave NOTHING in the component cache. The savepoint undoes
+    /// the database, but the cache lives outside it and is keyed by `contracts.id` —
+    /// a rowid the rollback frees for reuse. A component compiled while simulating
+    /// would then be served to whatever contract is later assigned that id, on this
+    /// node alone, which is a silent divergence from the rest of the network.
+    ///
+    /// SCOPE: this pins the guard at the cache's single write site, which both
+    /// routes into it funnel through — `load_component` for calls, and
+    /// `validate_publishable` for publishes. It does not drive a publish through the
+    /// reactor's `simulate`: the lite executor's transactions carry no ops, so the
+    /// cluster harness cannot express one.
+    #[tokio::test]
+    async fn simulation_does_not_populate_the_component_cache() {
+        let (mut runtime, _dir, _name) = test_runtime().await.expect("test runtime");
+        runtime
+            .set_context(
+                0,
+                Some(super::TransactionContext::builder().build()),
+                None,
+                None,
+            )
+            .await;
+
+        // A fresh id — the natives are prewarmed into the cache, so reusing one of
+        // theirs would make the first assertion pass without the guard.
+        let contract_id = runtime
+            .storage
+            .insert_contract("cache-probe", FILESTORAGE)
+            .await
+            .expect("insert contract");
+
+        runtime.simulating = true;
+        runtime
+            .load_component(contract_id)
+            .await
+            .expect("component still compiles while simulating");
+        assert!(
+            runtime.component_cache.get(&contract_id).await.is_none(),
+            "a component compiled during simulation must not be cached — the id it \
+             is keyed by is freed by the rollback and can be handed to a real publish"
+        );
+
+        // The guard must be scoped to simulation, not a blanket disable: caching is
+        // what keeps every later call off the compiler.
+        runtime.simulating = false;
+        runtime
+            .load_component(contract_id)
+            .await
+            .expect("component compiles normally");
+        assert!(
+            runtime.component_cache.get(&contract_id).await.is_some(),
+            "outside simulation the cache must still be populated"
         );
     }
 

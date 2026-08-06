@@ -174,19 +174,38 @@ impl<E: Executor> Reactor<E> {
     /// then rollback. Unlike `/inspect`, this carries live error strings —
     /// they're not persisted to chain state, only available here while the
     /// virtual block is still in scope.
+    /// Runs the simulation with its out-of-transaction state restored on EVERY
+    /// exit, not just the successful one.
+    ///
+    /// The savepoint covers the database; these two are outside it. The inner
+    /// function is full of `?`, so restoring at the end of it would silently skip
+    /// on error — which is how the height restore was written, and it survives only
+    /// because the caller kills the node on a simulate error. That makes a `bail!`
+    /// load-bearing for correctness, which it should not be.
     pub(super) async fn simulate(
+        &mut self,
+        tx: indexer_types::Transaction,
+    ) -> Result<Vec<OpWithResult>> {
+        let restore_height = self.runtime.storage.height;
+        self.runtime.simulating = true;
+        let result = self.simulate_inner(tx).await;
+        self.runtime.simulating = false;
+        self.runtime.storage.height = restore_height;
+        result
+    }
+
+    async fn simulate_inner(
         &mut self,
         tx: indexer_types::Transaction,
     ) -> Result<Vec<OpWithResult>> {
         // Simulation runs against a FABRICATED block one past the tip and then
         // rolls it away. `execute_block` sets `storage.height` to that block as it
-        // goes, so without restoring it here the runtime is left pointing at a
-        // height whose `blocks` row no longer exists. The next identity created
+        // goes, so without the restore in `simulate` the runtime is left pointing at
+        // a height whose `blocks` row no longer exists. The next identity created
         // outside a `set_context` — a decided batch executing at the real tip, say —
         // then inserts `signers(height = <discarded height>)` and trips the
         // `signers.height -> blocks.height` foreign key, which is classified
         // non-deterministic and kills the reactor.
-        let restore_height = self.runtime.storage.height;
         self.runtime
             .storage
             .savepoint()
@@ -236,7 +255,6 @@ impl<E: Executor> Reactor<E> {
             .rollback()
             .await
             .context("Failed to rollback simulation")?;
-        self.runtime.storage.height = restore_height;
         Ok(results)
     }
 
