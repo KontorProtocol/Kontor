@@ -3,7 +3,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use anyhow::Result;
-use tokio::sync::{broadcast, mpsc, watch};
+use tokio::sync::{broadcast, mpsc, oneshot, watch};
 use tokio::task::JoinSet;
 use tokio_util::sync::CancellationToken;
 use tracing::info;
@@ -52,6 +52,10 @@ async fn wait_matching<T>(
 
 #[allow(dead_code)]
 struct ReactorCluster {
+    /// Per-node storage connections, resolved lazily from `conn_rxs` on first use.
+    /// A node that has not been started yet has neither.
+    conns: Vec<Option<libsql::Connection>>,
+    conn_rxs: Vec<Option<oneshot::Receiver<libsql::Connection>>>,
     block_txs: Vec<mpsc::Sender<BlockEvent>>,
     mempool_tx: broadcast::Sender<MempoolEvent>,
     decided_rx: mpsc::Receiver<DecidedBatch>,
@@ -137,6 +141,8 @@ impl ReactorCluster {
         let (mempool_tx, _) = broadcast::channel::<MempoolEvent>(256);
         let cancel = CancellationToken::new();
         let mut block_txs = Vec::new();
+        let mut conn_rxs: Vec<Option<oneshot::Receiver<libsql::Connection>>> =
+            (0..total).map(|_| None).collect();
         let mock_bitcoin = Arc::new(Mutex::new(MockBitcoin::new(0)));
         let shared_pubkey = random_x_only_pubkey();
         let (engine, component_cache) = shared_engine_and_cache().await;
@@ -173,6 +179,8 @@ impl ReactorCluster {
             // here on bind. Only the seed's receiver is read back (to bootstrap
             // the followers); the rest are dropped after spawn.
             let (addr_tx, addr_rx) = watch::channel(None);
+            let (node_conn_tx, node_conn_rx) = oneshot::channel();
+            conn_rxs[i] = Some(node_conn_rx);
 
             Self::spawn_node(
                 i,
@@ -195,6 +203,7 @@ impl ReactorCluster {
                 shared_pubkey.clone(),
                 engine.clone(),
                 component_cache.clone(),
+                node_conn_tx,
                 &mut join_set,
             );
             started_nodes[i] = true;
@@ -205,6 +214,8 @@ impl ReactorCluster {
         }
 
         Ok(Self {
+            conns: (0..total).map(|_| None).collect(),
+            conn_rxs,
             block_txs,
             mempool_tx,
             decided_rx,
@@ -231,6 +242,25 @@ impl ReactorCluster {
             simulate_txs,
             started_nodes,
         })
+    }
+
+    /// This node's storage connection, so a test can assert on what it actually
+    /// wrote rather than only on the events it emitted.
+    ///
+    /// Resolved on first use — the connection only exists once the node's runtime
+    /// has been built inside its task, so call this after `wait_for_ready`.
+    async fn node_conn(&mut self, i: usize) -> &libsql::Connection {
+        if self.conns[i].is_none() {
+            let rx = self.conn_rxs[i]
+                .take()
+                .unwrap_or_else(|| panic!("node {i} was never started"));
+            let conn = tokio::time::timeout(Duration::from_secs(30), rx)
+                .await
+                .unwrap_or_else(|_| panic!("node {i} never reported its connection"))
+                .unwrap_or_else(|_| panic!("node {i} died before reporting its connection"));
+            self.conns[i] = Some(conn);
+        }
+        self.conns[i].as_ref().unwrap()
     }
 
     async fn start(n: usize) -> Result<Self> {
@@ -293,6 +323,11 @@ impl ReactorCluster {
         pubkey: String,
         engine: wasmtime::Engine,
         component_cache: crate::runtime::ComponentCache,
+        // Hands this node's storage connection back to the test. The runtime is
+        // built inside the spawned task, so without this a test has no way to look
+        // at what a particular node actually wrote — which is most of what there is
+        // to assert about a consensus bug.
+        conn_tx: oneshot::Sender<libsql::Connection>,
         join_set: &mut JoinSet<()>,
     ) {
         let genesis = genesis.clone();
@@ -322,6 +357,9 @@ impl ReactorCluster {
             };
 
             let conn = runtime.get_storage_conn();
+            // Ignore the error: a test that never asks for the connection drops the
+            // receiver, which is fine.
+            let _ = conn_tx.send(conn.clone());
 
             let engine_output = match engine::start(engine_config).await {
                 Ok(o) => o,
@@ -404,6 +442,8 @@ impl ReactorCluster {
 
         // Late joiner bootstraps from the seed; its own address isn't read back.
         let (addr_tx, _addr_rx) = watch::channel(None);
+        let (node_conn_tx, node_conn_rx) = oneshot::channel();
+        self.conn_rxs[i] = Some(node_conn_rx);
 
         Self::spawn_node(
             i,
@@ -426,6 +466,7 @@ impl ReactorCluster {
             self.shared_pubkey.clone(),
             self.engine.clone(),
             self.component_cache.clone(),
+            node_conn_tx,
             &mut self.join_set,
         );
 
@@ -1274,6 +1315,57 @@ async fn prod_reactor_bitcoin_rollback_across_decided_batch() -> Result<()> {
         replayed.txids.len(),
         2,
         "rolled-back batch txs must re-execute in a fresh batch"
+    );
+
+    cluster.shutdown().await;
+    Ok(())
+}
+
+/// Every consensus height must leave a row in `batches` — that table is the decided
+/// sequence and the ONLY copy of it, since Malachite asks us for decided values
+/// rather than keeping them. A height with no row is a hole that cannot be refilled:
+/// the startup cleanup trims an unexecuted SUFFIX, never a gap in the middle.
+///
+/// SCOPE, so this is not mistaken for more than it is: measured green both with and
+/// without `record_declined_block`, so it does NOT cover that fix. Every decision in
+/// this scenario is executed before the reorg lands, so nothing is ever declined —
+/// reaching those paths needs a reorg to arrive between decide and execute, which
+/// the harness cannot schedule. What this does cover is the invariant itself, on a
+/// real reorg: it would catch a future change that starts dropping decisions.
+#[tokio::test]
+async fn prod_reactor_reorg_leaves_no_gap_in_the_decided_sequence() -> Result<()> {
+    crate::logging::setup();
+
+    let mut cluster = ReactorCluster::start(3).await?;
+    cluster.wait_for_ready().await;
+
+    for h in 1..=3 {
+        cluster.mine_empty_and_send();
+        cluster.wait_for_block(h, Duration::from_secs(60)).await;
+    }
+
+    // Reorg away the top two blocks, then let the new chain be decided.
+    cluster.mock_bitcoin().reset_to(1);
+    cluster.send_block_event(BlockEvent::Rollback { to_height: 1 });
+    cluster.wait_for_rollback(1, Duration::from_secs(60)).await;
+    for h in 2..=4 {
+        cluster.mine_empty_and_send();
+        cluster.wait_for_block(h, Duration::from_secs(60)).await;
+    }
+
+    let conn = cluster.node_conn(0).await;
+    let mut rows = conn
+        .query(
+            "SELECT MIN(consensus_height), MAX(consensus_height), COUNT(*) FROM batches",
+            (),
+        )
+        .await?;
+    let row = rows.next().await?.expect("batches must not be empty");
+    let (min, max, count): (u64, u64, u64) = (row.get(0)?, row.get(1)?, row.get(2)?);
+    assert_eq!(
+        count,
+        max - min + 1,
+        "decided sequence has a gap: heights {min}..={max} but only {count} rows"
     );
 
     cluster.shutdown().await;
