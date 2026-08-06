@@ -49,6 +49,16 @@ pub struct DeferredDecision {
     pub consensus_height: Height,
     pub value: Value,
     pub certificate: Vec<u8>,
+    /// The txid list as DECIDED, retained when a rollback exclusion has narrowed
+    /// `value` to the subset this node will actually execute.
+    ///
+    /// `batch_txids` must record what CONSENSUS decided, not what we ran: a peer
+    /// syncing this height re-derives the exclusions itself by applying the same
+    /// deadline rules, so it needs the full decided content. Recording the narrowed
+    /// list would serve a value that no longer matches its own certificate.
+    ///
+    /// `None` when nothing was excluded, i.e. the two are the same list.
+    pub certified_txids: Option<Vec<Txid>>,
 }
 
 /// A GetValue reply that we're holding until transactions arrive.
@@ -594,6 +604,9 @@ impl ConsensusState {
                     consensus_height: Height::new(b.consensus_height),
                     value,
                     certificate: b.certificate,
+                    // Loaded straight from the decided record, so `value` already
+                    // holds the certified content — nothing to preserve separately.
+                    certified_txids: None,
                 })
             })
             .collect()

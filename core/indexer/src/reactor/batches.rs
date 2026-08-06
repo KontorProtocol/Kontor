@@ -244,10 +244,16 @@ fn build_replay_queue(
             } = &decision.value
             {
                 let (anchor_height, anchor_hash) = (*anchor_height, *anchor_hash);
+                let decided: Vec<Txid> = txs.iter().map(|tx| tx.compute_txid()).collect();
                 let kept: Vec<bitcoin::Transaction> = txs
                     .into_iter()
                     .filter(|tx| !excluded.contains(&tx.compute_txid()))
                     .collect();
+                // Narrowing what we execute must not narrow what we record as
+                // decided — see `DeferredDecision::certified_txids`.
+                if kept.len() != decided.len() {
+                    decision.certified_txids = Some(decided);
+                }
                 decision.value = Value::new_batch_raw(anchor_height, anchor_hash, kept);
             }
             decision
@@ -299,16 +305,32 @@ impl<E: Executor> Reactor<E> {
     /// consensus height) and the raw txs (`unconfirmed_batch_txs`, what
     /// replay and unfinalized-batch sync resolve from). Written for executed
     /// AND record-only batches — the certificate covers both.
+    ///
+    /// The two tables take DIFFERENT lists when a rollback has narrowed this
+    /// batch. `batch_txids` records what consensus DECIDED (`certified`, when the
+    /// caller has it), because a syncing peer re-derives the exclusions itself and
+    /// needs the full list to match the certificate. `unconfirmed_batch_txs` records
+    /// only what we still HOLD — an excluded transaction was dropped precisely
+    /// because it never confirmed, so there is no raw transaction to serve.
+    ///
+    /// Note `insert_batch_txids` is `INSERT OR IGNORE` on `(batch_height, position)`,
+    /// which protects an already-complete list from being overwritten — but only
+    /// where rows already exist. A node where this batch was never executed has
+    /// none, so what we pass here is what becomes the record.
     async fn record_batch_txs(
         &self,
         conn: &libsql::Connection,
         consensus_height: Height,
         batch_txs: &[bitcoin::Transaction],
+        certified: Option<&[Txid]>,
     ) -> Result<()> {
-        let txids: Vec<String> = batch_txs
-            .iter()
-            .map(|tx| tx.compute_txid().to_string())
-            .collect();
+        let txids: Vec<String> = match certified {
+            Some(decided) => decided.iter().map(|t| t.to_string()).collect(),
+            None => batch_txs
+                .iter()
+                .map(|tx| tx.compute_txid().to_string())
+                .collect(),
+        };
         insert_batch_txids(conn, consensus_height.as_u64(), &txids)
             .await
             .context("Failed to insert batch txids")?;
@@ -334,6 +356,9 @@ impl<E: Executor> Reactor<E> {
         consensus_height: Height,
         certificate: &[u8],
         batch_txs: &[bitcoin::Transaction],
+        // The DECIDED txid list, when a rollback exclusion has narrowed
+        // `batch_txs`. Recorded instead of the executed set — see `record_batch_txs`.
+        certified: Option<&[Txid]>,
     ) -> Result<BatchOutcome> {
         let started_at = Instant::now();
         let conn = self.db_conn();
@@ -410,7 +435,7 @@ impl<E: Executor> Reactor<E> {
             // Persist the certified content too (idempotent): a skipped batch
             // must still be servable to syncing peers with its real txs, and
             // the batch_txids/unconfirmed rows are what the sync path reads.
-            self.record_batch_txs(&conn, consensus_height, batch_txs)
+            self.record_batch_txs(&conn, consensus_height, batch_txs, certified)
                 .await?;
             return Ok(BatchOutcome::RecordedOnly);
         }
@@ -458,7 +483,7 @@ impl<E: Executor> Reactor<E> {
         .context("Failed to insert batch")?;
 
         // Store the certified txid list + raw txs for replay/sync recovery
-        self.record_batch_txs(&conn, consensus_height, batch_txs)
+        self.record_batch_txs(&conn, consensus_height, batch_txs, certified)
             .await?;
 
         for t in &parsed_txs {
@@ -1101,6 +1126,7 @@ impl<E: Executor> Reactor<E> {
                             decision.consensus_height,
                             &decision.certificate,
                             &resolved_txs,
+                            decision.certified_txids.as_deref(),
                         )
                         .await
                         .context("process_decided_batch failed in deferred drain")?;
@@ -1231,6 +1257,7 @@ impl<E: Executor> Reactor<E> {
                                 consensus_height: certificate.height,
                                 value: proposal.value.clone(),
                                 certificate: cert_bytes,
+                                certified_txids: None,
                             },
                         );
                     } else {
@@ -1245,6 +1272,8 @@ impl<E: Executor> Reactor<E> {
                                 certificate.height,
                                 &cert_bytes,
                                 &full_txs,
+                                // Freshly decided — never narrowed by a replay.
+                                None,
                             )
                             .await
                             .context("process_decided_batch failed in Finalized handler")?;
@@ -1271,6 +1300,7 @@ impl<E: Executor> Reactor<E> {
                                 consensus_height: certificate.height,
                                 value: proposal.value.clone(),
                                 certificate: cert_bytes.clone(),
+                                certified_txids: None,
                             },
                         );
                     } else {
@@ -1290,6 +1320,7 @@ impl<E: Executor> Reactor<E> {
                                     consensus_height: certificate.height,
                                     value: proposal.value.clone(),
                                     certificate: cert_bytes.clone(),
+                                    certified_txids: None,
                                 },
                             );
                         } else {
@@ -1304,6 +1335,7 @@ impl<E: Executor> Reactor<E> {
                                     consensus_height: certificate.height,
                                     value: proposal.value.clone(),
                                     certificate: cert_bytes.clone(),
+                                    certified_txids: None,
                                 },
                                 *height,
                                 *hash,
@@ -1476,6 +1508,7 @@ mod tests {
             consensus_height: Height::new(consensus_height),
             value: Value::new_batch_raw(0, bitcoin::BlockHash::all_zeros(), vec![]),
             certificate: Vec::new(),
+            certified_txids: None,
         }
     }
 
@@ -1536,6 +1569,52 @@ mod tests {
             "survivor must keep only the unrelated tx, got {survivor_txs:?}"
         );
         assert_eq!(survivor_txs[0].compute_txid(), unrelated.compute_txid());
+    }
+
+    /// Filtering must narrow what we EXECUTE without losing what was DECIDED.
+    ///
+    /// `batch_txids` records consensus's decision, and a peer syncing that height
+    /// re-derives the exclusions itself by applying the same deadline rules — so it
+    /// needs the full list. A node where this batch was a survivor has no rows yet,
+    /// so whatever it records lands as if certified; recording the narrowed list
+    /// would leave it serving a value that no longer matches its own certificate.
+    #[test]
+    fn build_replay_queue_preserves_the_decided_txids_when_it_filters() {
+        let parent = tx(&[OutPoint::null()], 1);
+        let child = tx(&[spend(&parent)], 2);
+        let kept = tx(&[OutPoint::null()], 3);
+
+        let excluded: HashSet<Txid> = [parent.compute_txid()].into();
+        let (queue, _) = build_replay_queue(
+            vec![carrying(10, vec![parent.clone()])],
+            vec![carrying(14, vec![child.clone(), kept.clone()])],
+            &excluded,
+        );
+
+        let survivor = &queue[1];
+        assert_eq!(
+            survivor.value.batch_raw_txs().len(),
+            1,
+            "the descendant must not execute"
+        );
+        assert_eq!(
+            survivor.certified_txids.as_deref(),
+            Some(&[child.compute_txid(), kept.compute_txid()][..]),
+            "the DECIDED list must be preserved in full for the record"
+        );
+    }
+
+    /// Nothing excluded means nothing to preserve — the value is already the
+    /// decided content and a redundant copy would just be a second answer.
+    #[test]
+    fn build_replay_queue_leaves_certified_txids_unset_when_nothing_is_filtered() {
+        let a = tx(&[OutPoint::null()], 1);
+        let (queue, _) = build_replay_queue(
+            vec![carrying(10, vec![a.clone()])],
+            Vec::new(),
+            &HashSet::new(),
+        );
+        assert!(queue[0].certified_txids.is_none());
     }
 
     /// A queued decision BELOW the replay set's max must SURVIVE. Anchors go
