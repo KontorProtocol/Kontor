@@ -4621,54 +4621,50 @@ async fn indexing_a_transaction_on_chain_drops_its_unconfirmed_raw_copy() -> Res
     Ok(())
 }
 
-/// The difference between what a batch CERTIFIED and what this node EXECUTED is
-/// exactly what an earlier finality pass excluded, and it has to be re-derivable:
-/// `batch_txids` is append-only, so a replay reloads the full certified list and
-/// would otherwise put an excluded transaction back. Two passes then alternate
-/// between complementary halves and the tip oscillates forever — deterministically
-/// on every node, so a liveness halt rather than a divergence.
+/// Exclusions must be RECORDED, never inferred from "certified but not executed".
+///
+/// That predicate is equally true of a record-only batch — anchor-mismatched, so this
+/// node skipped it while its peers ran it — and of a batch narrowed to nothing by an
+/// exclusion. The two are indistinguishable in the database: both have `batch_txids`
+/// and no `transactions` rows. Inferring would strip a record-only batch's
+/// transactions from the replay, so this node would never execute what the rest of
+/// the network did. That is a state divergence, strictly worse than the replay
+/// non-convergence the carry-forward exists to prevent.
 #[tokio::test]
-async fn previously_excluded_txids_are_the_certified_minus_executed_difference() -> Result<()> {
+async fn only_recorded_exclusions_carry_forward() -> Result<()> {
     let (_reader, writer, _temp_dir) = new_test_db().await?;
     let conn = writer.connection();
 
     let height: u64 = 100;
     let hash = new_mock_block_hash(height as u32);
     insert_block(&conn, BlockRow::builder().height(height).hash(hash).build()).await?;
+
+    // A record-only batch: certified, never executed here, NOTHING excluded.
+    let record_only = "aa".repeat(32);
     insert_batch(&conn, 9, height, &hash.to_string(), b"cert9", false).await?;
+    insert_batch_txids(&conn, 9, std::slice::from_ref(&record_only)).await?;
 
-    let kept = "aa".repeat(32);
+    assert!(
+        select_excluded_batch_txids(&conn).await?.is_empty(),
+        "a record-only batch excluded nothing — inferring otherwise would strip \
+         transactions this node's peers executed"
+    );
+
+    // An actual exclusion, recorded by the path that made it.
     let excluded = "bb".repeat(32);
-    // Certified BOTH — that is what consensus decided.
-    insert_batch_txids(&conn, 9, &[kept.clone(), excluded.clone()]).await?;
-    // Executed only one: the other was dropped by a finality exclusion.
-    insert_transaction(
-        &conn,
-        TransactionRow::builder()
-            .height(height)
-            .batch_height(9)
-            .txid(kept.clone())
-            .build(),
-    )
-    .await?;
-
-    let previous = select_previously_excluded_txids(&conn, 0).await?;
+    insert_excluded_batch_txids(&conn, std::slice::from_ref(&excluded)).await?;
+    let carried = select_excluded_batch_txids(&conn).await?;
     assert!(
-        previous.contains(&excluded),
-        "a certified-but-unexecuted txid is a previous exclusion and must carry forward"
+        carried.contains(&excluded),
+        "a recorded exclusion must carry forward"
     );
     assert!(
-        !previous.contains(&kept),
-        "an executed txid was never excluded and must NOT be carried forward — \
-         doing so would drop a transaction that is executing fine"
+        !carried.contains(&record_only),
+        "and it must not drag the record-only batch along with it"
     );
 
-    // A batch below the replay band is not this rollback's business.
-    assert!(
-        select_previously_excluded_txids(&conn, height + 1)
-            .await?
-            .is_empty(),
-        "the band must be respected"
-    );
+    // Idempotent: the same batch can be narrowed by more than one pass.
+    insert_excluded_batch_txids(&conn, std::slice::from_ref(&excluded)).await?;
+    assert_eq!(select_excluded_batch_txids(&conn).await?.len(), 1);
     Ok(())
 }

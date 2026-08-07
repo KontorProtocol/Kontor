@@ -292,31 +292,19 @@ pub async fn select_unconfirmed_batch_tx(
 /// The join also subsumes an "did we execute this batch" existence check: record-only
 /// batches write no `transactions` rows and rolled-back ones have theirs cascade-deleted.
 ///
-/// Txids a batch CERTIFIED but this node never EXECUTED, for every batch at or above
-/// `from_anchor`.
+/// Every txid a finality exclusion has ever dropped on this node.
 ///
-/// The difference is exactly what an earlier finality pass excluded. It has to be
-/// re-derived rather than remembered: `batch_txids` is append-only and a replay
-/// reloads the FULL certified list from it, so without carrying the difference
-/// forward each pass starts from a clean slate and can put back a transaction an
-/// earlier pass already proved never confirms. Two passes then alternate between the
-/// complementary halves and the tip oscillates forever.
-///
-/// Must be read BEFORE the rollback truncation — the `transactions` rows this
-/// depends on are cascade-deleted with their blocks.
-pub async fn select_previously_excluded_txids(
+/// Read at the start of a rollback and unioned into the pass's own exclusions, which
+/// makes the set MONOTONE across passes. Without that, a replay reloads each batch
+/// from the append-only `batch_txids` and can put back a transaction an earlier pass
+/// already proved never confirms; two passes then alternate between complementary
+/// halves and the tip oscillates forever.
+pub async fn select_excluded_batch_txids(
     conn: &Connection,
-    from_anchor: u64,
 ) -> Result<std::collections::HashSet<String>, Error> {
-    let sql = format!(
-        "SELECT bt.txid \
-         FROM batches b INDEXED BY idx_batches_anchor_height \
-         JOIN batch_txids bt ON bt.batch_height = b.consensus_height \
-         LEFT JOIN executed_batch_txids e \
-           ON e.batch_height = b.consensus_height AND e.txid = bt.txid \
-         WHERE b.anchor_height >= {from_anchor} AND b.is_block = 0 AND e.txid IS NULL"
-    );
-    let mut rows = conn.query(&sql, ()).await?;
+    let mut rows = conn
+        .query("SELECT txid FROM excluded_batch_txids", ())
+        .await?;
     let mut out = std::collections::HashSet::new();
     while let Some(row) = rows.next().await? {
         out.insert(row.get::<String>(0)?);
@@ -324,12 +312,19 @@ pub async fn select_previously_excluded_txids(
     Ok(out)
 }
 
-/// The `blocks` join is load-bearing, not a filter refinement: it pins each batch to
-/// the anchor block CURRENTLY at that height, so a Bitcoin reorg cannot resurrect
-/// tracking for batches anchored to a block that no longer exists.
-///
-/// INDEXED BY: the planner picks a full scan of `batches` for this predicate even
-/// after ANALYZE, and production databases never run it.
+/// Record txids dropped by a finality exclusion. Idempotent — the same tx can be
+/// excluded again by a later pass over the same batch.
+pub async fn insert_excluded_batch_txids(conn: &Connection, txids: &[String]) -> Result<(), Error> {
+    for txid in txids {
+        conn.execute(
+            "INSERT OR IGNORE INTO excluded_batch_txids (txid) VALUES (?)",
+            params![txid.clone()],
+        )
+        .await?;
+    }
+    Ok(())
+}
+
 pub async fn select_unfinalized_batches(
     conn: &Connection,
     from_anchor: u64,

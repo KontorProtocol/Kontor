@@ -17,8 +17,9 @@ use crate::consensus::codec::encode_commit_certificate;
 use crate::consensus::finality_types::{DecidedBatch, StateEvent, UnfinalizedBatch, deadline_for};
 use crate::consensus::{CommitCertificate, Ctx, Height, ProposalData, Value};
 use crate::database::queries::{
-    insert_batch, insert_batch_txids, insert_transaction, insert_unconfirmed_batch_tx,
-    select_block_at_height, select_existing_txids, select_previously_excluded_txids,
+    insert_batch, insert_batch_txids, insert_excluded_batch_txids, insert_transaction,
+    insert_unconfirmed_batch_tx, select_block_at_height, select_excluded_batch_txids,
+    select_existing_txids,
 };
 use crate::metrics::{CONSENSUS_HEIGHT, ITEMS_INDEXED};
 
@@ -912,6 +913,17 @@ impl<E: Executor> Reactor<E> {
         let (queue, excluded) = build_replay_queue(replayed, survivors, &excluded_txids);
         self.consensus.deferred_decisions = queue;
 
+        // Record what this pass dropped, so a later pass cannot reload it from the
+        // append-only certified list and execute it again.
+        let dropped: Vec<String> = excluded.iter().map(|t| t.to_string()).collect();
+        if let Err(e) = insert_excluded_batch_txids(&self.db_conn(), &dropped).await {
+            warn!(
+                error = %e,
+                count = dropped.len(),
+                "Failed to record this pass's exclusions; a later replay may re-include them"
+            );
+        }
+
         // The excluded txids must also leave the proposal pool, or the next
         // make_value re-proposes the very txs whose missing confirmations caused
         // this rollback — repeating the same finality failure with no progress.
@@ -1002,17 +1014,20 @@ impl<E: Executor> Reactor<E> {
             .await
             .context("load_replay_decisions failed")?;
 
-        // Carry forward what earlier passes already excluded, for the same reason and
-        // from the same rows (also pre-truncation). The replay reloads each batch from
-        // the append-only `batch_txids`, so without this the exclusion set is rebuilt
-        // from scratch every pass: pass one drops Y and keeps X, a later reorg
-        // un-confirms X, pass two drops X and puts Y BACK — the transaction pass one
-        // already proved never confirms. The two passes then alternate forever and the
-        // tip oscillates with no progress, deterministically on every node, which is a
-        // network-wide liveness halt rather than a divergence. Unioning makes the set
-        // monotone, so a batch can only ever shrink and the replay terminates.
+        // Carry forward what earlier passes already excluded (pre-truncation, like the
+        // load above). The replay reloads each batch from the append-only
+        // `batch_txids`, so without this the exclusion set is rebuilt from scratch
+        // every pass: pass one drops Y and keeps X, a later reorg un-confirms X, pass
+        // two drops X and puts Y BACK — the transaction pass one already proved never
+        // confirms. The two alternate forever and the tip oscillates with no progress,
+        // deterministically on every node. Unioning makes the set monotone.
+        //
+        // Read from the RECORD of what we excluded, never re-derived as "certified but
+        // not executed": that predicate is also true of a record-only batch, whose txs
+        // its peers DID run, and excluding those would diverge this node's state from
+        // the network — a worse failure than the one being fixed.
         let mut excluded = excluded;
-        match select_previously_excluded_txids(&conn, rollback_anchor).await {
+        match select_excluded_batch_txids(&conn).await {
             Ok(previous) => {
                 for txid in previous {
                     if let Ok(parsed) = txid.parse::<Txid>() {
@@ -1024,7 +1039,6 @@ impl<E: Executor> Reactor<E> {
                 // Not fatal, but it removes the termination guarantee — say so.
                 warn!(
                     error = %e,
-                    from_anchor = rollback_anchor,
                     "Could not load previously excluded txids; replay may re-include a \
                      transaction an earlier pass dropped"
                 );

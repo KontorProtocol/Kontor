@@ -275,6 +275,22 @@ CREATE TABLE IF NOT EXISTS unconfirmed_batch_txs (
 CREATE INDEX IF NOT EXISTS idx_unconfirmed_batch_txs_batch_height
   ON unconfirmed_batch_txs (batch_height);
 
+-- Txids dropped by a finality exclusion, so a later replay cannot put them back.
+--
+-- Must be RECORDED, not re-derived. "Certified but not executed" looks identical for
+-- a tx we excluded and for one in a record-only batch (anchor mismatch — never
+-- executed here, but its peers ran it), and treating the latter as excluded would
+-- strip it from the replay and diverge this node's state from the network. Only the
+-- exclusion path knows which is which, so only it writes here.
+--
+-- Node-local: no FK, because a survivor decision has no `batches` row yet. Grows only
+-- on finality exclusions, which are rare, and an entry is permanent by design — the
+-- tx never confirmed by its deadline, and that verdict does not change. If it later
+-- confirms on chain it is executed through the BLOCK path, which never reads this.
+CREATE TABLE IF NOT EXISTS excluded_batch_txids (
+  txid TEXT NOT NULL PRIMARY KEY
+);
+
 -- Node-local operational state (NOT consensus state): a singleton key/value store.
 -- Deliberately has NO foreign key to blocks (a reorg must not cascade-delete or roll
 -- back local cursors) and is never touched by the checkpoint trigger (which fires
