@@ -151,9 +151,10 @@ pub struct ObservationChannels {
 /// deletes the transaction's row and the replay drops it from the batch, so it is
 /// later re-executed as an unbatched block transaction at a different height than
 /// every peer used, and nothing detects the divergence because the decided value
-/// carries no state root. Propagating instead costs a retry on the next tip move:
-/// `unfinalized_batches` is left untouched, and a fault that does not clear
-/// exits the node, which is recoverable since tracking is rehydrated from disk.
+/// carries no state root. Propagating instead costs a retry on the next tip move —
+/// but ONLY because `probe_at_deadline` runs this against a borrow before
+/// `check_finality` drains anything. Probing mid-drain would lose the whole tracking
+/// set to a transient read error, which is #515 again from a new direction.
 /// This matches `execute_block`'s handling of the same query and the reasoning
 /// already written down in `clear_on_rollback`.
 async fn missing_txids(conn: &libsql::Connection, batch: &UnfinalizedBatch) -> Result<Vec<Txid>> {
@@ -169,6 +170,28 @@ async fn missing_txids(conn: &libsql::Connection, batch: &UnfinalizedBatch) -> R
         }
     }
     Ok(missing)
+}
+
+/// Probe every batch whose deadline has passed, in the order `check_finality` will
+/// evaluate them: `anchor_height` primary, so the first failure is the minimal
+/// failing anchor.
+///
+/// Borrows rather than consuming ON PURPOSE. This is the only fallible step in the
+/// verdict, and doing it against a borrow is what lets `check_finality` fail without
+/// having already dismantled its own tracking set.
+async fn probe_at_deadline(
+    conn: &libsql::Connection,
+    batches: &[UnfinalizedBatch],
+    tip: u64,
+) -> Result<Vec<Vec<Txid>>> {
+    let mut order: Vec<&UnfinalizedBatch> = batches.iter().filter(|b| b.deadline <= tip).collect();
+    order.sort_by_key(|b| (b.anchor_height, b.consensus_height));
+
+    let mut missing_per_batch = Vec::with_capacity(order.len());
+    for batch in order {
+        missing_per_batch.push(missing_txids(conn, batch).await?);
+    }
+    Ok(missing_per_batch)
 }
 
 /// Rebuild the in-memory finality-tracking set from disk at startup.
@@ -527,9 +550,17 @@ impl ConsensusState {
         let mut events = Vec::new();
         let tip = last_height;
 
+        // PROBE BEFORE TAKING THE SET APART. `missing_txids` is fallible, and
+        // draining first would mean an unreadable table costs us the whole tracking
+        // set — every pending deadline gone from memory, which is the #515 hole
+        // reopened by the very code meant to close it. Borrowing for the probe makes
+        // the early return leave `unfinalized_batches` exactly as it was, so the next
+        // tip move simply retries.
+        let missing_per_batch = probe_at_deadline(conn, &self.unfinalized_batches, tip).await?;
+
+        // Every probe succeeded, so it is now safe to consume the set.
         let mut still_pending = Vec::new();
         let mut at_deadline = Vec::new();
-
         for batch in self.unfinalized_batches.drain(..) {
             if batch.deadline <= tip {
                 at_deadline.push(batch);
@@ -541,12 +572,17 @@ impl ConsensusState {
         // `from_anchor` below is taken from the FIRST failing batch, which is the
         // minimal failing anchor only because `anchor_height` is the PRIMARY sort
         // key here. Re-sorting by `consensus_height` alone would silently break it.
+        //
+        // This must reproduce `probe_at_deadline`'s order exactly, or the verdicts
+        // line up against the wrong batches. It does: both collect the at-deadline
+        // batches in ascending original-index order and then stable-sort on the same
+        // key, so ties resolve identically.
         at_deadline.sort_by_key(|b| (b.anchor_height, b.consensus_height));
-
-        let mut missing_per_batch = Vec::with_capacity(at_deadline.len());
-        for batch in &at_deadline {
-            missing_per_batch.push(missing_txids(conn, batch).await?);
-        }
+        debug_assert_eq!(
+            at_deadline.len(),
+            missing_per_batch.len(),
+            "probe and partition disagree about which batches are at deadline"
+        );
 
         let (built, surviving) = build_finality_events(
             &at_deadline,
@@ -827,7 +863,7 @@ impl ConsensusState {
 
 #[cfg(test)]
 mod tests {
-    use super::{UnfinalizedBatch, build_finality_events, missing_txids};
+    use super::{UnfinalizedBatch, build_finality_events, missing_txids, probe_at_deadline};
     use crate::consensus::Height;
     use crate::consensus::finality_types::FinalityEvent;
     use crate::database::queries::{confirm_transaction, insert_block, insert_transaction};
@@ -1074,6 +1110,36 @@ mod tests {
             missing_txids(&conn, &b).await.is_err(),
             "a failed read must propagate — reporting the txid as missing would \
              render a consensus verdict on a table this node could not read"
+        );
+    }
+
+    /// The probe and the partition must agree on ORDER, or verdicts land against the
+    /// wrong batches — and `from_anchor` is taken from the first failure, so a
+    /// mismatch silently rolls back to the wrong anchor. They are two separate sorts
+    /// over two separate collections; this pins that they agree, including on ties.
+    #[tokio::test]
+    async fn probe_order_matches_the_partition_order() {
+        let (_reader, writer, _dir) = new_test_db().await.unwrap();
+        let conn = writer.connection();
+
+        // Deliberately out of order, with an anchor tie broken by consensus height.
+        let tracked = vec![
+            batch(502, 30, &[3]),
+            batch(500, 20, &[1]),
+            batch(500, 10, &[2]),
+        ];
+        let probed = probe_at_deadline(&conn, &tracked, 999)
+            .await
+            .expect("probe must read");
+
+        let mut partitioned: Vec<_> = tracked.iter().filter(|b| b.deadline <= 999).collect();
+        partitioned.sort_by_key(|b| (b.anchor_height, b.consensus_height));
+
+        let probed_txids: Vec<_> = probed.into_iter().map(|m| m[0]).collect();
+        let expected: Vec<_> = partitioned.iter().map(|b| b.txids[0]).collect();
+        assert_eq!(
+            probed_txids, expected,
+            "probe results must line up with the partition, ties included"
         );
     }
 }
