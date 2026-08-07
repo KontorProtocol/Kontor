@@ -30,10 +30,10 @@ use crate::consensus::{
 };
 use crate::database::queries::{
     delete_unexecuted_batch_suffix, get_checkpoint_latest, get_transaction_by_txid, insert_batch,
-    insert_batch_txids, min_unsettled_batch_tx_height, select_batches_from_anchor,
-    select_batches_in_range, select_block_at_height, select_existing_txids,
-    select_latest_consensus_height, select_min_batch_height, select_unconfirmed_batch_txs,
-    select_unfinalized_batches,
+    insert_batch_txids, insert_unconfirmed_batch_tx, min_unsettled_batch_tx_height,
+    select_batches_from_anchor, select_batches_in_range, select_block_at_height,
+    select_existing_txids, select_latest_consensus_height, select_min_batch_height,
+    select_unconfirmed_batch_txs, select_unfinalized_batches,
 };
 
 /// Result from processing a consensus message.
@@ -179,8 +179,14 @@ async fn missing_txids(conn: &libsql::Connection, batch: &UnfinalizedBatch) -> R
 /// Best-effort, matching `record_declined_block`. Propagating would take the node
 /// down on a reorg for a transient DB error, and since the queue lives only in memory
 /// the decisions would be lost on restart anyway — strictly worse than a loud warning.
-/// The `batches` row is what a syncing peer needs; the batch's decided txid list goes
-/// with it (I4), but no `unconfirmed_batch_txs` rows, because this node held nothing.
+///
+/// Writes all three: the `batches` row, the DECIDED txid list (I4), and the raw
+/// bodies the value was carrying. That last one is easy to talk yourself out of —
+/// the batch was never executed, so it is tempting to say this node "held nothing" —
+/// but a queued batch is normally `BatchTx::Raw`, and for a transaction that never
+/// confirms this node's copy is the only one a syncing peer can obtain: not its
+/// mempool, not bitcoind. Dropping them reopens the sync hole this change closes
+/// elsewhere by removing the finality-window gate on serving raw txs.
 async fn record_undrained_decisions(
     conn: &libsql::Connection,
     decisions: &VecDeque<DeferredDecision>,
@@ -227,6 +233,25 @@ async fn record_undrained_decisions(
                 consensus_height,
                 "Failed to record an undrained batch's decided txids"
             );
+        }
+
+        for raw in decision.value.batch_raw_txs() {
+            let serialized = bitcoin::consensus::serialize(&raw);
+            if let Err(e) = insert_unconfirmed_batch_tx(
+                conn,
+                &raw.compute_txid().to_string(),
+                consensus_height,
+                &serialized,
+            )
+            .await
+            {
+                warn!(
+                    error = %e,
+                    consensus_height,
+                    "Failed to record an undrained batch's raw transaction — a peer may \
+                     be unable to resolve it"
+                );
+            }
         }
     }
 }
@@ -946,7 +971,9 @@ mod tests {
     use crate::consensus::Height;
     use crate::consensus::Value;
     use crate::consensus::finality_types::FinalityEvent;
+    use crate::database::queries::select_unconfirmed_batch_txs;
     use crate::database::queries::{confirm_transaction, insert_block, insert_transaction};
+    use crate::reactor::mock_bitcoin::make_tx;
     use crate::test_utils::{new_mock_block_hash, new_test_db};
     use bitcoin::hashes::Hash;
     use bitcoin::{BlockHash, Txid};
@@ -1214,14 +1241,25 @@ mod tests {
         });
         queued.push_back(DeferredDecision {
             consensus_height: Height::new(42),
-            value: Value::new_batch_raw(301, BlockHash::all_zeros(), vec![]),
+            value: Value::new_batch_raw(301, BlockHash::all_zeros(), vec![make_tx(1), make_tx(2)]),
             certificate: vec![4, 5, 6],
             // A replay had already narrowed this one — the DECIDED list is what a
             // syncing peer needs, not the empty set we would have executed.
-            certified_txids: Some(vec![txid(7), txid(8)]),
+            certified_txids: Some(vec![make_tx(1).compute_txid(), make_tx(2).compute_txid()]),
         });
 
         record_undrained_decisions(&conn, &queued).await;
+
+        // The raw bodies the value was carrying must survive too. A queued batch is
+        // usually `BatchTx::Raw` (the proposer builds it that way, and `upgrade`
+        // promotes what it can), and for a tx that never confirms this node's copy is
+        // the ONLY one a syncing peer can get — not its mempool, not bitcoind.
+        // Recording txids alone reopens the sync hole this PR closes elsewhere.
+        assert_eq!(
+            select_unconfirmed_batch_txs(&conn, 42).await.unwrap().len(),
+            2,
+            "the raw transactions the decision carried must be recorded, not dropped"
+        );
 
         for h in [41u64, 42] {
             let mut rows = conn
