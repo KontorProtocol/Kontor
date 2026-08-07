@@ -244,13 +244,16 @@ fn build_replay_queue(
             } = &decision.value
             {
                 let (anchor_height, anchor_hash) = (*anchor_height, *anchor_hash);
-                let decided: Vec<Txid> = txs.iter().map(|tx| tx.compute_txid()).collect();
                 let kept: Vec<bitcoin::Transaction> = txs
-                    .into_iter()
+                    .iter()
                     .filter(|tx| !excluded.contains(&tx.compute_txid()))
+                    .cloned()
                     .collect();
+                let decided = txs;
                 // Narrowing what we execute must not narrow what we record as
-                // decided — see `DeferredDecision::certified_txids`.
+                // decided — see `DeferredDecision::certified_txs`. The BODIES are
+                // retained, not just the txids: an excluded tx never confirmed, so
+                // this is the only copy left and a peer can get it nowhere else.
                 //
                 // `get_or_insert`, not assignment: a batch can be narrowed by more
                 // than one rollback, and on the second pass `txs` is already the
@@ -258,7 +261,7 @@ fn build_replay_queue(
                 // whatever the first pass excluded. The earliest list is the decided
                 // one; later passes only ever remove more.
                 if kept.len() != decided.len() {
-                    decision.certified_txids.get_or_insert(decided);
+                    decision.certified_txs.get_or_insert(decided);
                 }
                 decision.value = Value::new_batch_raw(anchor_height, anchor_hash, kept);
             }
@@ -328,19 +331,22 @@ impl<E: Executor> Reactor<E> {
         conn: &libsql::Connection,
         consensus_height: Height,
         batch_txs: &[bitcoin::Transaction],
-        certified: Option<&[Txid]>,
+        certified: Option<&[bitcoin::Transaction]>,
     ) -> Result<()> {
-        let txids: Vec<String> = match certified {
-            Some(decided) => decided.iter().map(|t| t.to_string()).collect(),
-            None => batch_txs
-                .iter()
-                .map(|tx| tx.compute_txid().to_string())
-                .collect(),
-        };
+        // Both lists come from the DECIDED set when a replay has narrowed this batch:
+        // `batch_txids` because that is what consensus agreed (I4), and the raw
+        // bodies because an EXCLUDED transaction never confirmed, so this node's copy
+        // is the only one a syncing peer can ever obtain. Recording only what we
+        // executed leaves that height permanently unresolvable.
+        let decided: &[bitcoin::Transaction] = certified.unwrap_or(batch_txs);
+        let txids: Vec<String> = decided
+            .iter()
+            .map(|tx| tx.compute_txid().to_string())
+            .collect();
         insert_batch_txids(conn, consensus_height.as_u64(), &txids)
             .await
             .context("Failed to insert batch txids")?;
-        for raw_tx in batch_txs {
+        for raw_tx in decided {
             let txid = raw_tx.compute_txid();
             let serialized = bitcoin::consensus::serialize(raw_tx);
             insert_unconfirmed_batch_tx(
@@ -362,9 +368,9 @@ impl<E: Executor> Reactor<E> {
         consensus_height: Height,
         certificate: &[u8],
         batch_txs: &[bitcoin::Transaction],
-        // The DECIDED txid list, when a rollback exclusion has narrowed
+        // The DECIDED transactions, when a rollback exclusion has narrowed
         // `batch_txs`. Recorded instead of the executed set — see `record_batch_txs`.
-        certified: Option<&[Txid]>,
+        certified: Option<&[bitcoin::Transaction]>,
     ) -> Result<BatchOutcome> {
         let started_at = Instant::now();
         let conn = self.db_conn();
@@ -1231,7 +1237,7 @@ impl<E: Executor> Reactor<E> {
                             decision.consensus_height,
                             &decision.certificate,
                             &resolved_txs,
-                            decision.certified_txids.as_deref(),
+                            decision.certified_txs.as_deref(),
                         )
                         .await
                         .context("process_decided_batch failed in deferred drain")?;
@@ -1362,7 +1368,7 @@ impl<E: Executor> Reactor<E> {
                                 consensus_height: certificate.height,
                                 value: proposal.value.clone(),
                                 certificate: cert_bytes,
-                                certified_txids: None,
+                                certified_txs: None,
                             },
                         );
                     } else {
@@ -1441,7 +1447,7 @@ impl<E: Executor> Reactor<E> {
                         consensus_height: certificate.height,
                         value: proposal.value.clone(),
                         certificate: cert_bytes,
-                        certified_txids: None,
+                        certified_txs: None,
                     };
 
                     let mut declined_stale = false;
@@ -1678,7 +1684,7 @@ mod tests {
             consensus_height: Height::new(consensus_height),
             value: Value::new_batch_raw(0, bitcoin::BlockHash::all_zeros(), vec![]),
             certificate: Vec::new(),
-            certified_txids: None,
+            certified_txs: None,
         }
     }
 
@@ -1768,8 +1774,8 @@ mod tests {
             "the descendant must not execute"
         );
         assert_eq!(
-            survivor.certified_txids.as_deref(),
-            Some(&[child.compute_txid(), kept.compute_txid()][..]),
+            survivor.decided_txids(),
+            vec![child.compute_txid(), kept.compute_txid()],
             "the DECIDED list must be preserved in full for the record"
         );
     }
@@ -1800,9 +1806,51 @@ mod tests {
             "every tx descends from the excluded parent, so nothing may execute"
         );
         assert_eq!(
-            survivor.certified_txids.as_deref(),
-            Some(&[child_a.compute_txid(), child_b.compute_txid()][..]),
+            survivor.decided_txids(),
+            vec![child_a.compute_txid(), child_b.compute_txid()],
             "an emptied batch still has a decided list, and it must survive"
+        );
+    }
+
+    /// Narrowing must not destroy the EXCLUDED transactions' bodies.
+    ///
+    /// A batch in the replay set already persisted its bodies when it first
+    /// executed. A SURVIVOR — queued, never executed, so with no rows at all — has
+    /// persisted nothing, and `build_replay_queue` is holding the fully-resolved
+    /// bodies at the exact moment it drops them. Recording the excluded txids in
+    /// `batch_txids` while discarding their bodies leaves that consensus height
+    /// unresolvable: a syncing peer gets `BatchTx::Id`, cannot resolve it from pool,
+    /// DB or bitcoind (it never confirmed), and `resolve_batch_txs` bails — killing
+    /// the peer's reactor.
+    #[test]
+    fn build_replay_queue_keeps_the_excluded_transactions_bodies() {
+        let parent = tx(&[OutPoint::null()], 1);
+        let child = tx(&[spend(&parent)], 2);
+        let kept = tx(&[OutPoint::null()], 3);
+
+        let excluded: HashSet<Txid> = [parent.compute_txid()].into();
+        let (queue, _) = build_replay_queue(
+            vec![carrying(10, vec![parent.clone()])],
+            vec![carrying(14, vec![child.clone(), kept.clone()])],
+            &excluded,
+        );
+
+        let survivor = &queue[1];
+        assert_eq!(
+            survivor.value.batch_raw_txs().len(),
+            1,
+            "only the kept tx may EXECUTE"
+        );
+        let servable: HashSet<Txid> = survivor
+            .decided_txs()
+            .iter()
+            .map(|t| t.compute_txid())
+            .collect();
+        assert_eq!(
+            servable,
+            [child.compute_txid(), kept.compute_txid()].into(),
+            "but the body of the EXCLUDED tx must still be servable — it is the one \
+             a peer can obtain from nowhere else"
         );
     }
 
@@ -1816,16 +1864,13 @@ mod tests {
         let first = tx(&[OutPoint::null()], 1);
         let second = tx(&[OutPoint::null()], 2);
         let survivor_tx = tx(&[OutPoint::null()], 3);
-        let decided_all = vec![
-            first.compute_txid(),
-            second.compute_txid(),
-            survivor_tx.compute_txid(),
-        ];
+        let decided_all = vec![first.clone(), second.clone(), survivor_tx.clone()];
+        let decided_ids: Vec<Txid> = decided_all.iter().map(|t| t.compute_txid()).collect();
 
         // Pass one already ran: `first` was excluded, and the decision carries the
         // full decided list alongside the narrowed transactions.
         let (mut decision, _) = carrying(14, vec![second.clone(), survivor_tx.clone()]);
-        decision.certified_txids = Some(decided_all.clone());
+        decision.certified_txs = Some(decided_all.clone());
 
         // Pass two excludes `second`.
         let excluded: HashSet<Txid> = [second.compute_txid()].into();
@@ -1841,8 +1886,8 @@ mod tests {
             "only the untouched tx should remain executable"
         );
         assert_eq!(
-            queue[0].certified_txids.as_deref(),
-            Some(&decided_all[..]),
+            queue[0].decided_txids(),
+            decided_ids,
             "the ORIGINAL decided list must survive a second narrowing"
         );
     }
@@ -1850,14 +1895,14 @@ mod tests {
     /// Nothing excluded means nothing to preserve — the value is already the
     /// decided content and a redundant copy would just be a second answer.
     #[test]
-    fn build_replay_queue_leaves_certified_txids_unset_when_nothing_is_filtered() {
+    fn build_replay_queue_leaves_certified_txs_unset_when_nothing_is_filtered() {
         let a = tx(&[OutPoint::null()], 1);
         let (queue, _) = build_replay_queue(
             vec![carrying(10, vec![a.clone()])],
             Vec::new(),
             &HashSet::new(),
         );
-        assert!(queue[0].certified_txids.is_none());
+        assert!(queue[0].certified_txs.is_none());
     }
 
     /// A queued decision BELOW the replay set's max must SURVIVE. Anchors go

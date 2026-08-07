@@ -251,10 +251,19 @@ CREATE TABLE IF NOT EXISTS nonces (
   FOREIGN KEY (height) REFERENCES blocks (height) ON DELETE CASCADE
 );
 
+-- Keyed by (txid, batch_height), NOT txid alone. The same transaction genuinely
+-- belongs to more than one decided height: a batch this node recorded but never
+-- executed (record-only, or undrained at a reorg) keeps its body, and the same tx
+-- can then be re-batched at a later height. Under a txid-only key the writers'
+-- `INSERT OR IGNORE` bound the body to whichever height wrote FIRST — typically the
+-- abandoned one — and silently ignored the real batch, so sync served the later
+-- height a txid it had no body for. `delete_unconfirmed_batch_tx` deletes by txid,
+-- so confirmation still clears every binding at once.
 CREATE TABLE IF NOT EXISTS unconfirmed_batch_txs (
-  txid TEXT NOT NULL PRIMARY KEY,
+  txid TEXT NOT NULL,
   batch_height INTEGER NOT NULL,
   raw_tx BLOB NOT NULL,
+  PRIMARY KEY (txid, batch_height),
   FOREIGN KEY (batch_height) REFERENCES batches (consensus_height)
 );
 

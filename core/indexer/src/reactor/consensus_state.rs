@@ -59,7 +59,34 @@ pub struct DeferredDecision {
     /// list would serve a value that no longer matches its own certificate.
     ///
     /// `None` when nothing was excluded, i.e. the two are the same list.
-    pub certified_txids: Option<Vec<Txid>>,
+    ///
+    /// Holds the BODIES, not just the txids. An excluded transaction never
+    /// confirmed, so it exists in no mempool and no block — this decision is the
+    /// only place its body still exists, and dropping it makes the height
+    /// unresolvable for every syncing peer.
+    pub certified_txs: Option<Vec<bitcoin::Transaction>>,
+}
+
+impl DeferredDecision {
+    /// The bodies this decision can still serve to a syncing peer.
+    ///
+    /// An EXCLUDED transaction is the one a peer cannot obtain any other way — it
+    /// never confirmed, so it is in nobody's mempool and bitcoind has never heard of
+    /// it — which makes this the set that has to be persisted, not the executed one.
+    pub fn decided_txs(&self) -> Vec<bitcoin::Transaction> {
+        match &self.certified_txs {
+            Some(decided) => decided.clone(),
+            None => self.value.batch_raw_txs(),
+        }
+    }
+
+    /// The txid list as DECIDED — what `batch_txids` must record (I4).
+    pub fn decided_txids(&self) -> Vec<Txid> {
+        match &self.certified_txs {
+            Some(decided) => decided.iter().map(|t| t.compute_txid()).collect(),
+            None => self.value.batch_txids(),
+        }
+    }
 }
 
 /// A GetValue reply that we're holding until transactions arrive.
@@ -216,15 +243,11 @@ async fn record_undrained_decisions(
         }
         // The DECIDED list, which is the full one even if a replay had narrowed what
         // this node would have executed.
-        let txids: Vec<String> = match &decision.certified_txids {
-            Some(decided) => decided.iter().map(|t| t.to_string()).collect(),
-            None => decision
-                .value
-                .batch_txids()
-                .iter()
-                .map(|t| t.to_string())
-                .collect(),
-        };
+        let txids: Vec<String> = decision
+            .decided_txids()
+            .iter()
+            .map(|t| t.to_string())
+            .collect();
         if !txids.is_empty()
             && let Err(e) = insert_batch_txids(conn, consensus_height, &txids).await
         {
@@ -235,7 +258,7 @@ async fn record_undrained_decisions(
             );
         }
 
-        for raw in decision.value.batch_raw_txs() {
+        for raw in decision.decided_txs() {
             let serialized = bitcoin::consensus::serialize(&raw);
             if let Err(e) = insert_unconfirmed_batch_tx(
                 conn,
@@ -749,7 +772,7 @@ impl ConsensusState {
                     certificate: b.certificate,
                     // Loaded straight from the decided record, so `value` already
                     // holds the certified content — nothing to preserve separately.
-                    certified_txids: None,
+                    certified_txs: None,
                 })
             })
             .collect()
@@ -1237,7 +1260,7 @@ mod tests {
             consensus_height: Height::new(41),
             value: Value::new_block(300, BlockHash::all_zeros()),
             certificate: vec![1, 2, 3],
-            certified_txids: None,
+            certified_txs: None,
         });
         queued.push_back(DeferredDecision {
             consensus_height: Height::new(42),
@@ -1245,7 +1268,7 @@ mod tests {
             certificate: vec![4, 5, 6],
             // A replay had already narrowed this one — the DECIDED list is what a
             // syncing peer needs, not the empty set we would have executed.
-            certified_txids: Some(vec![make_tx(1).compute_txid(), make_tx(2).compute_txid()]),
+            certified_txs: Some(vec![make_tx(1), make_tx(2)]),
         });
 
         record_undrained_decisions(&conn, &queued).await;
