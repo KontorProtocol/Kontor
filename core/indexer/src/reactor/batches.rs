@@ -1028,12 +1028,11 @@ impl<E: Executor> Reactor<E> {
     /// Declining to execute stays correct — the block was reorged away and running
     /// it would bind the wrong block to this consensus height. We just write down
     /// that we declined.
-    async fn record_declined_block(
-        &self,
-        decision: &consensus_state::DeferredDecision,
-        block_height: u64,
-        decided_hash: BlockHash,
-    ) {
+    async fn record_declined_block(&self, decision: &consensus_state::DeferredDecision) {
+        // Height and hash come from the decision itself — passing them alongside
+        // invited a caller to record one block's decision under another's identity.
+        let block_height = decision.value.block_height();
+        let decided_hash = decision.value.block_hash();
         if let Err(e) = insert_batch(
             &self.db_conn(),
             decision.consensus_height.as_u64(),
@@ -1120,8 +1119,7 @@ impl<E: Executor> Reactor<E> {
                                 // the startup cleanup trims an unexecuted SUFFIX,
                                 // never a hole in the middle. A height that leaves
                                 // no row can never be served to a syncing peer.
-                                self.record_declined_block(&decision, bh, decided_hash)
-                                    .await;
+                                self.record_declined_block(&decision).await;
                                 continue;
                             }
                             Err(e) => {
@@ -1168,8 +1166,7 @@ impl<E: Executor> Reactor<E> {
                                 consensus_height = %decision.consensus_height,
                                 "Dropping stale deferred block decision — hash mismatch after rollback"
                             );
-                            self.record_declined_block(&decision, bh, decided_hash)
-                                .await;
+                            self.record_declined_block(&decision).await;
                             self.consensus.pending_blocks.insert(bh, block);
                             continue;
                         }
@@ -1178,9 +1175,9 @@ impl<E: Executor> Reactor<E> {
                             consensus_height = %decision.consensus_height,
                             "Draining deferred block decision"
                         );
-                        self.handle_block_with_decision(block, &decision)
+                        self.handle_block(block, &decision)
                             .await
-                            .context("handle_block_with_decision failed in deferred drain")?;
+                            .context("handle_block failed in deferred drain")?;
                         // The tip moved — anything held may now be ready.
                         restore_waiting(&mut self.consensus.deferred_decisions, &mut waiting);
                     } else {
@@ -1437,6 +1434,16 @@ impl<E: Executor> Reactor<E> {
                     // asks the DB whether an EXECUTED block differs, and at
                     // `last_height + 1` nothing is executed yet, so it would read
                     // "not stale" and defer a decision we just declined.
+                    // Built ONCE. Every arm below needs the same four fields, and
+                    // `certificate` is the full validator-set commit certificate —
+                    // cloning it per arm is pure waste.
+                    let decision = consensus_state::DeferredDecision {
+                        consensus_height: certificate.height,
+                        value: proposal.value.clone(),
+                        certificate: cert_bytes,
+                        certified_txids: None,
+                    };
+
                     let mut declined_stale = false;
                     let ready = match ready {
                         Some(block) if block.hash != *hash => {
@@ -1447,13 +1454,7 @@ impl<E: Executor> Reactor<E> {
                                 consensus_height = %certificate.height,
                                 "Dropping stale block decision — hash mismatch after rollback"
                             );
-                            let declined = consensus_state::DeferredDecision {
-                                consensus_height: certificate.height,
-                                value: proposal.value.clone(),
-                                certificate: cert_bytes.clone(),
-                                certified_txids: None,
-                            };
-                            self.record_declined_block(&declined, *height, *hash).await;
+                            self.record_declined_block(&decision).await;
                             // Back in the buffer: it is the canonical block for this
                             // height on the new chain and still needs a fresh decision.
                             self.consensus.pending_blocks.insert(*height, block);
@@ -1470,15 +1471,7 @@ impl<E: Executor> Reactor<E> {
                             consensus_height = %certificate.height,
                             "Block decided and ready to process"
                         );
-                        result = consensus_state::ConsensusResult::Block(
-                            block,
-                            consensus_state::DeferredDecision {
-                                consensus_height: certificate.height,
-                                value: proposal.value.clone(),
-                                certificate: cert_bytes.clone(),
-                                certified_txids: None,
-                            },
-                        );
+                        result = consensus_state::ConsensusResult::Block(block, decision);
                     } else if !declined_stale {
                         let is_stale = match select_block_at_height(&conn, *height).await {
                             Ok(Some(row)) => row.hash != *hash,
@@ -1492,14 +1485,7 @@ impl<E: Executor> Reactor<E> {
                                 consensus_height = %certificate.height,
                                 "Block decided but not ready to execute — deferring"
                             );
-                            self.consensus.deferred_decisions.push_back(
-                                consensus_state::DeferredDecision {
-                                    consensus_height: certificate.height,
-                                    value: proposal.value.clone(),
-                                    certificate: cert_bytes.clone(),
-                                    certified_txids: None,
-                                },
-                            );
+                            self.consensus.deferred_decisions.push_back(decision);
                         } else {
                             warn!(
                                 block_height = height,
@@ -1507,17 +1493,7 @@ impl<E: Executor> Reactor<E> {
                                 consensus_height = %certificate.height,
                                 "Ignoring stale block decision (post-rollback)"
                             );
-                            self.record_declined_block(
-                                &consensus_state::DeferredDecision {
-                                    consensus_height: certificate.height,
-                                    value: proposal.value.clone(),
-                                    certificate: cert_bytes.clone(),
-                                    certified_txids: None,
-                                },
-                                *height,
-                                *hash,
-                            )
-                            .await;
+                            self.record_declined_block(&decision).await;
                         }
                     }
                 }

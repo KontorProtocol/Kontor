@@ -367,36 +367,15 @@ impl Storage {
         Ok(get_contract_bytes_by_id(&self.conn, contract_id).await?)
     }
 
+    /// Plain accessor for callers that do not need the failure CLASS — the
+    /// classification lives in [`decode_component_bytes`], which this delegates to
+    /// so the decompression-bomb cap has exactly one definition.
     pub async fn component_bytes(&self, contract_id: u64) -> Result<Vec<u8>> {
-        let compressed_bytes = self
-            .contract_bytes(contract_id)
-            .await?
-            .ok_or(anyhow!("Contract not found when trying to load component"))?;
-        let module_bytes = tokio::task::spawn_blocking(move || {
-            // Cap decompressed size: a tiny on-chain brotli blob can otherwise
-            // inflate without bound in memory on every node that loads the
-            // contract (decompression bomb). 64 MiB is far above any legitimate
-            // WASM component.
-            const MAX_DECOMPRESSED: u64 = 64 * 1024 * 1024;
-            let decompressor = brotli::Decompressor::new(&compressed_bytes[..], 4096);
-            let mut module_bytes = Vec::new();
-            decompressor
-                .take(MAX_DECOMPRESSED + 1)
-                .read_to_end(&mut module_bytes)?;
-            if module_bytes.len() as u64 > MAX_DECOMPRESSED {
-                return Err(std::io::Error::new(
-                    std::io::ErrorKind::InvalidData,
-                    "decompressed contract component exceeds maximum size",
-                ));
-            }
-            Ok::<_, std::io::Error>(module_bytes)
-        })
-        .await??;
-
-        ComponentEncoder::default()
-            .module(&module_bytes)?
-            .validate(true)
-            .encode()
+        self.decode_component_bytes(contract_id)
+            .await
+            .map_err(|e| match e {
+                ComponentDecodeError::Content(e) | ComponentDecodeError::Infrastructure(e) => e,
+            })
     }
 
     /// Decode stored contract bytes, keeping content failures distinguishable from
@@ -417,6 +396,10 @@ impl Storage {
         // Split the join from the work: a JoinError is this node's task machinery
         // failing, everything inside is a property of the bytes.
         let decompressed = tokio::task::spawn_blocking(move || {
+            // Cap decompressed size: a tiny on-chain brotli blob can otherwise
+            // inflate without bound in memory on every node that loads the
+            // contract (decompression bomb). 64 MiB is far above any legitimate
+            // WASM component.
             const MAX_DECOMPRESSED: u64 = 64 * 1024 * 1024;
             let decompressor = brotli::Decompressor::new(&compressed_bytes[..], 4096);
             let mut module_bytes = Vec::new();

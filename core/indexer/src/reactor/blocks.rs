@@ -94,6 +94,35 @@ impl<E: Executor> Reactor<E> {
         Ok(())
     }
 
+    /// The fallible body of `handle_block`'s transaction: the decision record
+    /// (when the block arrives decided) plus the block's own writes. Split out
+    /// so `handle_block` has a single place to roll back from.
+    async fn block_txn(
+        &mut self,
+        block: &Block,
+        decision: &consensus_state::DeferredDecision,
+    ) -> Result<(usize, u64)> {
+        insert_batch(
+            &self.db_conn(),
+            decision.consensus_height.as_u64(),
+            block.height,
+            &block.hash.to_string(),
+            &decision.certificate,
+            true,
+        )
+        .await
+        .context("Failed to insert block batch decision")?;
+
+        let (unbatched_count, executed_ops, _failures) = self
+            .execute_block(block)
+            .await
+            .context("execute_block failed")?;
+        self.run_block_lifecycle(block)
+            .await
+            .context("run_block_lifecycle failed")?;
+        Ok((unbatched_count, executed_ops))
+    }
+
     /// Execute a block: insert block row, process transactions.
     /// Returns the number of unbatched (non-deduped) transactions, the count
     /// of ops actually executed (only ops in non-deduped txs — deduped txs
@@ -108,37 +137,6 @@ impl<E: Executor> Reactor<E> {
     ///
     /// The reactor's canonical block-processing path discards this; the
     /// simulate handler consumes it.
-    /// The fallible body of `handle_block`'s transaction: the decision record
-    /// (when the block arrives decided) plus the block's own writes. Split out
-    /// so `handle_block` has a single place to roll back from.
-    async fn block_txn(
-        &mut self,
-        block: &Block,
-        decision: Option<&consensus_state::DeferredDecision>,
-    ) -> Result<(usize, u64)> {
-        if let Some(decision) = decision {
-            insert_batch(
-                &self.db_conn(),
-                decision.consensus_height.as_u64(),
-                block.height,
-                &block.hash.to_string(),
-                &decision.certificate,
-                true,
-            )
-            .await
-            .context("Failed to insert block batch decision")?;
-        }
-
-        let (unbatched_count, executed_ops, _failures) = self
-            .execute_block(block)
-            .await
-            .context("execute_block failed")?;
-        self.run_block_lifecycle(block)
-            .await
-            .context("run_block_lifecycle failed")?;
-        Ok((unbatched_count, executed_ops))
-    }
-
     pub(super) async fn execute_block(
         &mut self,
         block: &Block,
@@ -337,18 +335,13 @@ impl<E: Executor> Reactor<E> {
         Ok(())
     }
 
-    pub(super) async fn handle_block_with_decision(
-        &mut self,
-        block: Block,
-        decision: &consensus_state::DeferredDecision,
-    ) -> Result<()> {
-        self.handle_block(block, Some(decision))
-            .await
-            .context("handle_block failed after block batch decision")
-    }
-
-    /// Execute `block` and, when it arrives decided, record that decision in the
-    /// SAME transaction as the block's own writes.
+    /// Execute `block` and record the decision that certifies it in the SAME
+    /// transaction as the block's own writes.
+    ///
+    /// The decision is NOT optional: a block is only ever executed because
+    /// consensus decided it, and taking it by value rather than `Option` makes
+    /// "no block executes without a consensus record" a type-level fact instead
+    /// of a convention a future caller could opt out of.
     ///
     /// A consensus record and the execution it certifies must commit or fail
     /// together. Writing the `batches` row first — as this did — let a node keep
@@ -360,7 +353,7 @@ impl<E: Executor> Reactor<E> {
     pub(super) async fn handle_block(
         &mut self,
         block: Block,
-        decision: Option<&consensus_state::DeferredDecision>,
+        decision: &consensus_state::DeferredDecision,
     ) -> Result<()> {
         let started_at = Instant::now();
         let height = block.height;

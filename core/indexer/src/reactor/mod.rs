@@ -480,9 +480,9 @@ impl<E: Executor> Reactor<E> {
                         warn!("Event receiver dropped, cannot send BatchProcessed event");
                     }
                     if let consensus_state::ConsensusResult::Block(block, decision) = consensus_result {
-                        self.handle_block_with_decision(block, &decision)
+                        self.handle_block(block, &decision)
                             .await
-                            .context("handle_block_with_decision failed after consensus block")?;
+                            .context("handle_block failed after consensus block")?;
                         self.advance()
                             .await
                             .context("advance failed after consensus block")?;

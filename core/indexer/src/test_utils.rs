@@ -339,15 +339,8 @@ pub async fn open_test_db(data_dir: &std::path::Path, db_name: &str) -> Result<(
 }
 
 pub async fn new_test_db() -> Result<(Reader, Writer, (TempDir, String))> {
-    let temp_dir = TempDir::new()?;
-    let timestamp = SystemTime::now()
-        .duration_since(UNIX_EPOCH)?
-        .as_nanos()
-        .to_string();
-    let db_name = format!("test_db_{}.db", timestamp);
-    let data_dir = temp_dir.path();
-    let writer = Writer::new(data_dir, &db_name).await?;
-    let reader = Reader::new(data_dir, &db_name).await?; // Assuming Reader::new exists
+    let (temp_dir, db_name) = new_test_db_dir()?;
+    let (reader, writer) = open_test_db(temp_dir.path(), &db_name).await?;
     Ok((reader, writer, (temp_dir, db_name)))
 }
 
