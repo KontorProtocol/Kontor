@@ -664,9 +664,14 @@ impl Runtime {
                 anyhow!(e).context("contract is not a valid wasm component"),
             )
         })?;
-        self.component_cache
-            .put(contract_id, component.clone(), bytes.len())
-            .await;
+        // Guarded for the same reason as the write in `component_bytes_and_compiled`,
+        // and this is the site that actually matters: a `Publish` inside a simulation
+        // reaches the cache HERE, under a `contracts.id` the rollback frees for reuse.
+        if !self.simulating {
+            self.component_cache
+                .put(contract_id, component.clone(), bytes.len())
+                .await;
+        }
         let linker = if is_native_contract_id(contract_id) {
             &self.linkers.native
         } else {
@@ -1348,11 +1353,13 @@ mod tests {
     /// would then be served to whatever contract is later assigned that id, on this
     /// node alone, which is a silent divergence from the rest of the network.
     ///
-    /// SCOPE: this pins the guard at the cache's single write site, which both
-    /// routes into it funnel through — `load_component` for calls, and
-    /// `validate_publishable` for publishes. It does not drive a publish through the
-    /// reactor's `simulate`: the lite executor's transactions carry no ops, so the
-    /// cluster harness cannot express one.
+    /// SCOPE: the cache has TWO write sites, and both are covered here —
+    /// `component_bytes_and_compiled` (reached by `load_component`, i.e. calls) and
+    /// `validate_publishable` (reached by `publish`). The publish one is the site the
+    /// hazard is actually about, so it is asserted directly rather than assumed to
+    /// share a path with the other. It does not drive a publish through the reactor's
+    /// `simulate`: the lite executor's transactions carry no ops, so the cluster
+    /// harness cannot express one.
     #[tokio::test]
     async fn simulation_does_not_populate_the_component_cache() {
         let (mut runtime, _dir, _name) = test_runtime().await.expect("test runtime");
@@ -1382,6 +1389,23 @@ mod tests {
             runtime.component_cache.get(&contract_id).await.is_none(),
             "a component compiled during simulation must not be cached — the id it \
              is keyed by is freed by the rollback and can be handed to a real publish"
+        );
+
+        // The publish path caches at its OWN site inside `validate_publishable`, so
+        // it has to be asserted separately — a guard on the call path says nothing
+        // about it. This publish fails (filestorage imports `file-registry`, which a
+        // user contract may not), but only AFTER the component is compiled and would
+        // have been cached, which is exactly the window under test.
+        let publish_id = runtime
+            .storage
+            .insert_contract("publish-probe", FILESTORAGE)
+            .await
+            .expect("insert contract");
+        let _ = runtime.validate_publishable(publish_id).await;
+        assert!(
+            runtime.component_cache.get(&publish_id).await.is_none(),
+            "a publish compiled during simulation must not be cached — this is the \
+             site the id-reuse hazard actually runs through"
         );
 
         // The guard must be scoped to simulation, not a blanket disable: caching is
