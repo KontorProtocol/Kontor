@@ -389,6 +389,20 @@ impl<E: Executor> Reactor<E> {
             )
             .await
             .context("Failed to insert empty batch")?;
+
+            // Empty to EXECUTE is not empty as DECIDED. A rollback can narrow a batch
+            // until nothing is left to run while its certificate still certifies the
+            // original txids, and `batch_txids` records what consensus decided (I4) —
+            // a peer syncing this height re-derives the exclusions itself, so it needs
+            // that list. `certified` is None for a genuinely empty decided batch, which
+            // has nothing to record. `batch_txs` is empty either way, so this writes no
+            // `unconfirmed_batch_txs` rows.
+            if certified.is_some() {
+                self.record_batch_txs(&conn, consensus_height, batch_txs, certified)
+                    .await
+                    .context("Failed to record the decided txids of an emptied batch")?;
+            }
+
             gauge!(CONSENSUS_HEIGHT).set(consensus_height.as_u64() as f64);
 
             let checkpoint = self.consensus.get_checkpoint(&conn).await;
@@ -952,7 +966,7 @@ impl<E: Executor> Reactor<E> {
         let (events, rollback) = self
             .consensus
             .run_finality_checks(&conn, self.last_height)
-            .await;
+            .await?;
         let Some((rollback_anchor, excluded)) = rollback else {
             self.consensus.emit_finality_events(&events);
             return Ok(false);
@@ -1781,6 +1795,38 @@ mod tests {
             survivor.certified_txids.as_deref(),
             Some(&[child.compute_txid(), kept.compute_txid()][..]),
             "the DECIDED list must be preserved in full for the record"
+        );
+    }
+
+    /// The narrowing can take a batch all the way to EMPTY — every transaction it
+    /// carried descends from an excluded one. That combination (no txs to execute,
+    /// but a decided list to record) is the input `process_decided_batch` must not
+    /// mistake for an ordinary empty batch: the certificate still certifies those
+    /// txids, and a peer syncing this height re-derives the exclusions itself, so it
+    /// needs the decided content. Pinning it here because it is the only place the
+    /// combination is produced.
+    #[test]
+    fn build_replay_queue_narrows_a_batch_to_empty_but_keeps_its_decided_list() {
+        let parent = tx(&[OutPoint::null()], 1);
+        let child_a = tx(&[spend(&parent)], 2);
+        let child_b = tx(&[spend(&parent)], 3);
+
+        let excluded: HashSet<Txid> = [parent.compute_txid()].into();
+        let (queue, _) = build_replay_queue(
+            vec![carrying(10, vec![parent.clone()])],
+            vec![carrying(14, vec![child_a.clone(), child_b.clone()])],
+            &excluded,
+        );
+
+        let survivor = &queue[1];
+        assert!(
+            survivor.value.batch_raw_txs().is_empty(),
+            "every tx descends from the excluded parent, so nothing may execute"
+        );
+        assert_eq!(
+            survivor.certified_txids.as_deref(),
+            Some(&[child_a.compute_txid(), child_b.compute_txid()][..]),
+            "an emptied batch still has a decided list, and it must survive"
         );
     }
 

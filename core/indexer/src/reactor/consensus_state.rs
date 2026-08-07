@@ -143,18 +143,32 @@ pub struct ObservationChannels {
 /// a tx confirmed one block past the deadline reads missing to a node evaluating at
 /// the deadline and confirmed to one evaluating later. Two honest nodes then
 /// disagree about the same batch and one rolls back while the other finalizes it.
-async fn missing_txids(conn: &libsql::Connection, batch: &UnfinalizedBatch) -> Vec<Txid> {
+///
+/// Fallible on purpose. "No row" and "could not read the table" are different
+/// facts: the first is a verdict, the second is this node's own I/O failing, and
+/// folding them together turns a transient SQLITE_BUSY or WAL hiccup into a
+/// consensus decision. The damage is not transient — the resulting rollback
+/// deletes the transaction's row and the replay drops it from the batch, so it is
+/// later re-executed as an unbatched block transaction at a different height than
+/// every peer used, and nothing detects the divergence because the decided value
+/// carries no state root. Propagating instead costs a retry on the next tip move:
+/// `unfinalized_batches` is left untouched, and a fault that does not clear
+/// exits the node, which is recoverable since tracking is rehydrated from disk.
+/// This matches `execute_block`'s handling of the same query and the reasoning
+/// already written down in `clear_on_rollback`.
+async fn missing_txids(conn: &libsql::Connection, batch: &UnfinalizedBatch) -> Result<Vec<Txid>> {
     let mut missing = Vec::new();
     for txid in &batch.txids {
-        let confirmed = match get_transaction_by_txid(conn, &txid.to_string()).await {
-            Ok(Some(row)) => row.confirmed_height.is_some_and(|h| h <= batch.deadline),
-            _ => false,
-        };
+        let row = get_transaction_by_txid(conn, &txid.to_string())
+            .await
+            .with_context(|| format!("Failed to read transaction {txid} for a finality verdict"))?;
+        let confirmed =
+            row.is_some_and(|r| r.confirmed_height.is_some_and(|h| h <= batch.deadline));
         if !confirmed {
             missing.push(*txid);
         }
     }
-    missing
+    Ok(missing)
 }
 
 /// Rebuild the in-memory finality-tracking set from disk at startup.
@@ -509,7 +523,7 @@ impl ConsensusState {
         &mut self,
         conn: &libsql::Connection,
         last_height: u64,
-    ) -> Vec<FinalityEvent> {
+    ) -> Result<Vec<FinalityEvent>> {
         let mut events = Vec::new();
         let tip = last_height;
 
@@ -531,7 +545,7 @@ impl ConsensusState {
 
         let mut missing_per_batch = Vec::with_capacity(at_deadline.len());
         for batch in &at_deadline {
-            missing_per_batch.push(missing_txids(conn, batch).await);
+            missing_per_batch.push(missing_txids(conn, batch).await?);
         }
 
         let (built, surviving) = build_finality_events(
@@ -541,7 +555,7 @@ impl ConsensusState {
         );
         events.extend(built);
         self.unfinalized_batches = surviving;
-        events
+        Ok(events)
     }
 
     pub(super) fn emit_finality_events(&self, events: &[FinalityEvent]) {
@@ -733,8 +747,8 @@ impl ConsensusState {
         &mut self,
         conn: &libsql::Connection,
         last_height: u64,
-    ) -> (Vec<FinalityEvent>, Option<(u64, HashSet<Txid>)>) {
-        let finality_events = self.check_finality(conn, last_height).await;
+    ) -> Result<(Vec<FinalityEvent>, Option<(u64, HashSet<Txid>)>)> {
+        let finality_events = self.check_finality(conn, last_height).await?;
         // At most one Rollback per pass — `check_finality` folds every failing
         // at-deadline batch into a single event. Taking the FIRST rather than the
         // last matters if that ever regresses: last-wins would keep the highest
@@ -761,7 +775,7 @@ impl ConsensusState {
         // Deliberately NOT emitted here. A rollback the caller then refuses — because
         // it would reach below the prune watermark — must not be announced as though
         // it happened. The caller emits once it has committed to acting.
-        (finality_events, result)
+        Ok((finality_events, result))
     }
 
     /// Validate batch-level rules. Returns a rejection reason if any rule
@@ -1014,14 +1028,17 @@ mod tests {
         let b = batch(500, 10, &[1, 2]);
         assert_eq!(b.deadline, 16);
         assert_eq!(
-            missing_txids(&conn, &b).await,
+            missing_txids(&conn, &b).await.expect("probe must read"),
             vec![txid(2)],
             "the tx confirmed at deadline+1 must count as missing"
         );
 
         // The same batch against the same tables gives the same answer regardless
         // of how far the chain has moved on — there is no tip input at all.
-        assert_eq!(missing_txids(&conn, &b).await, vec![txid(2)]);
+        assert_eq!(
+            missing_txids(&conn, &b).await.expect("probe must read"),
+            vec![txid(2)]
+        );
     }
 
     #[tokio::test]
@@ -1029,6 +1046,34 @@ mod tests {
         let (_reader, writer, _dir) = new_test_db().await.unwrap();
         let conn = writer.connection();
         let b = batch(500, 10, &[9]);
-        assert_eq!(missing_txids(&conn, &b).await, vec![txid(9)]);
+        assert_eq!(
+            missing_txids(&conn, &b).await.expect("probe must read"),
+            vec![txid(9)]
+        );
+    }
+
+    /// "No row" is a verdict; "could not read the table" is this node's own I/O
+    /// failing. Folding the second into the first turns a transient DB fault into a
+    /// consensus rollback that excludes a transaction which DID confirm — and the
+    /// damage outlives the fault, because the replay drops that tx and it is later
+    /// re-executed as an unbatched block transaction at a height no peer used.
+    /// Nothing detects the divergence: the decided value carries no state root.
+    #[tokio::test]
+    async fn an_unreadable_table_yields_an_error_not_a_verdict() {
+        let (_reader, writer, _dir) = new_test_db().await.unwrap();
+        let conn = writer.connection();
+
+        // Stand-in for any read failure: with the table gone, the query errors
+        // rather than returning "no such transaction".
+        conn.execute("DROP TABLE transactions", ())
+            .await
+            .expect("drop transactions");
+
+        let b = batch(500, 10, &[1]);
+        assert!(
+            missing_txids(&conn, &b).await.is_err(),
+            "a failed read must propagate — reporting the txid as missing would \
+             render a consensus verdict on a table this node could not read"
+        );
     }
 }
