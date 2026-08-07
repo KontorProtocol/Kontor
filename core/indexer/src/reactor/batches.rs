@@ -555,8 +555,20 @@ impl<E: Executor> Reactor<E> {
         let last_height = self.last_height;
         let last_hash = self.last_hash.unwrap_or(BlockHash::all_zeros());
 
-        // If blocks are pending, always propose the next one first
-        if let Some((&height, block)) = self.consensus.pending_blocks.first_key_value() {
+        // If blocks are pending, always propose the next one first.
+        //
+        // Range-bounded, not `first_key_value`: an entry at or below the tip is
+        // already applied, and proposing it stops the chain — peers vote it valid
+        // (they still hold the block), it is decided, the finalize gate rejects it
+        // as out of order, and it stays the minimum forever so no newer block is
+        // ever proposed. The insert side refuses to buffer those now; this makes
+        // the proposer independently unable to emit one.
+        if let Some((&height, block)) = self
+            .consensus
+            .pending_blocks
+            .range(last_height + 1..)
+            .next()
+        {
             return Ok(Some(Value::new_block(height, block.hash)));
         }
 

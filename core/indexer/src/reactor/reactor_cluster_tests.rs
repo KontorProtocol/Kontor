@@ -1914,3 +1914,54 @@ async fn prod_reactor_out_of_order_block_decision_parks_instead_of_dying() -> Re
     cluster.shutdown().await;
     Ok(())
 }
+
+/// A block re-delivered AFTER the node already executed it must not stop the
+/// chain.
+///
+/// This is not a synthetic poke: `replay_blocks_after` re-sends every stored
+/// block event above a height, and the finality path deliberately keeps
+/// `pending_blocks` across a rollback. A replayed `BlockInsert` can therefore
+/// land after the deferred decisions have already drained and carried the tip
+/// past that height — the poller redelivering a block the node has since
+/// applied.
+///
+/// `process_block_event` buffers it with no tip check, and `make_value`
+/// proposes `pending_blocks.first_key_value()` with no tip check either, so the
+/// proposer offers an already-applied height. Nothing consumes it: the finalize
+/// gate only removes from `pending_blocks` when the decision is in order, and
+/// the drain's tip gate drops the decision without touching the buffer. If that
+/// is a closed loop, the stale entry stays the minimum forever, newer blocks
+/// are never proposed, and the chain stops.
+#[tokio::test]
+async fn prod_reactor_replayed_block_below_tip_does_not_stall_the_chain() -> Result<()> {
+    crate::logging::setup();
+
+    let mut cluster = ReactorCluster::start(3).await?;
+    cluster.wait_for_ready().await;
+
+    for height in 1..=3u64 {
+        cluster.mine_empty_and_send();
+        cluster
+            .wait_for_block(height, Duration::from_secs(60))
+            .await;
+    }
+
+    // Re-deliver block 2, now two heights below the tip — exactly what a late
+    // replay looks like.
+    let replayed = cluster
+        .mock_bitcoin()
+        .get_all_block_events()
+        .into_iter()
+        .find(|e| matches!(e, BlockEvent::BlockInsert { block, .. } if block.height == 2))
+        .expect("block 2 must have been mined");
+    cluster.send_block_event(replayed);
+
+    // The chain must still make progress. If the stale entry pins `make_value`,
+    // height 4 is never proposed and this times out.
+    cluster.mine_empty_and_send();
+    cluster.wait_for_block(4, Duration::from_secs(60)).await;
+
+    cluster.assert_no_reactor_errors();
+    cluster.shutdown().await;
+    Ok(())
+}

@@ -249,6 +249,30 @@ impl<E: Executor> Reactor<E> {
                 }
                 info!("Block {}/{} {}", block.height, target_height, block.hash);
 
+                // A block at or below the tip is already applied and can never be
+                // proposed or executed again — buffering it is not merely useless,
+                // it HALTS THE CHAIN. `make_value` proposes the minimum pending
+                // height, peers still hold the block so they vote it valid, and it
+                // is decided; the finalize gate then refuses it as out of order and
+                // nothing removes it from the buffer. It stays the minimum forever,
+                // newer blocks are never proposed, and the only thing that would
+                // clear it — a successful block execution — is exactly what the loop
+                // prevents.
+                //
+                // Reachable from the poller: `replay_blocks_after` re-sends stored
+                // block events, and the finality path deliberately keeps
+                // `pending_blocks` across a rollback, so a replayed block can land
+                // after the deferred drain has already carried the tip past it.
+                if block.height <= self.last_height {
+                    debug!(
+                        block_height = block.height,
+                        %block.hash,
+                        last_height = self.last_height,
+                        "Ignoring block at or below the tip — already applied"
+                    );
+                    return Ok(());
+                }
+
                 info!(
                     block_height = block.height,
                     %block.hash,
