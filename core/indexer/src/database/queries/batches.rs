@@ -292,33 +292,60 @@ pub async fn select_unconfirmed_batch_tx(
 /// The join also subsumes an "did we execute this batch" existence check: record-only
 /// batches write no `transactions` rows and rolled-back ones have theirs cascade-deleted.
 ///
-/// Every txid a finality exclusion has ever dropped on this node.
+/// Recorded exclusions that STILL HOLD, keyed by the consensus height they apply to.
 ///
-/// Read at the start of a rollback and unioned into the pass's own exclusions, which
-/// makes the set MONOTONE across passes. Without that, a replay reloads each batch
-/// from the append-only `batch_txids` and can put back a transaction an earlier pass
-/// already proved never confirms; two passes then alternate between complementary
-/// halves and the tip oscillates forever.
-pub async fn select_excluded_batch_txids(
+/// The stored row is a node-local fact: "we found T missing at H's deadline". The
+/// `NOT EXISTS` is the shared, node-independent half — the same predicate
+/// `missing_txids` renders (I2) — and it is baked into the READ so that no caller can
+/// apply a row without re-verifying it. There is deliberately no DELETE: a replay can
+/// never manufacture a Bitcoin confirmation, so suppression can only ever come from
+/// the chain, and keeping the row lets a later reorg re-suppress or re-apply it.
+///
+/// The `batch_height` qualifier on the confirmation is load-bearing. Without it: T is
+/// excluded at H, re-batched and executed at H3, and confirms at or below H's
+/// deadline; a deep rollback replays both; the row is suppressed; H and H3 BOTH
+/// execute T, and `insert_transaction` is a plain INSERT against
+/// `transactions.txid UNIQUE` — the #515 collision from a new direction. A
+/// confirmation attributable to another batch's execution must not un-exclude here. A
+/// confirmation via the BLOCK path (`batch_height IS NULL`) must, and does: that is
+/// the reorg-healing case, and a peer syncing from genesis reaches the same answer.
+pub async fn select_applicable_exclusions(
     conn: &Connection,
-) -> Result<std::collections::HashSet<String>, Error> {
+) -> Result<std::collections::HashMap<u64, std::collections::HashSet<String>>, Error> {
     let mut rows = conn
-        .query("SELECT txid FROM excluded_batch_txids", ())
+        .query(
+            "SELECT e.batch_height, e.txid \
+             FROM excluded_batch_txids e \
+             WHERE NOT EXISTS ( \
+               SELECT 1 FROM transactions t \
+                WHERE t.txid = e.txid \
+                  AND t.confirmed_height IS NOT NULL \
+                  AND t.confirmed_height <= e.deadline \
+                  AND (t.batch_height IS NULL OR t.batch_height = e.batch_height))",
+            (),
+        )
         .await?;
-    let mut out = std::collections::HashSet::new();
+    let mut out: std::collections::HashMap<u64, std::collections::HashSet<String>> =
+        std::collections::HashMap::new();
     while let Some(row) = rows.next().await? {
-        out.insert(row.get::<String>(0)?);
+        out.entry(row.get::<u64>(0)?)
+            .or_default()
+            .insert(row.get::<String>(1)?);
     }
     Ok(out)
 }
 
-/// Record txids dropped by a finality exclusion. Idempotent — the same tx can be
-/// excluded again by a later pass over the same batch.
-pub async fn insert_excluded_batch_txids(conn: &Connection, txids: &[String]) -> Result<(), Error> {
-    for txid in txids {
+/// Record what a finality pass dropped, as `(consensus_height, txid, deadline)`.
+/// Idempotent — the same batch can be narrowed by more than one pass.
+pub async fn insert_excluded_batch_txids(
+    conn: &Connection,
+    rows: &[(u64, String, u64)],
+) -> Result<(), Error> {
+    for (batch_height, txid, deadline) in rows {
         conn.execute(
-            "INSERT OR IGNORE INTO excluded_batch_txids (txid) VALUES (?)",
-            params![txid.clone()],
+            "INSERT OR IGNORE INTO excluded_batch_txids (batch_height, txid, deadline) \
+             VALUES (?, ?, ?)",
+            params![*batch_height, txid.clone(), *deadline],
         )
         .await?;
     }

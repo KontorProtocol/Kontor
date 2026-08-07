@@ -1,4 +1,4 @@
-use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
+use std::collections::{BTreeMap, HashMap, VecDeque};
 use std::time::Instant;
 
 use std::time::Duration;
@@ -408,10 +408,18 @@ fn build_finality_events(
     // (`batch_txids` is append-only and the exclusion filter is in-memory), so a
     // batch left out re-executes, re-arms the identical deadline, and rolls back
     // again with the complementary set — a cycle that never converges.
-    let missing: Vec<Txid> = missing_per_batch[first_fail..]
+    // Per DECISION, not flattened. Flattening loses which batch each txid failed in,
+    // and that attribution is exactly what keeps the recorded exclusion scoped to the
+    // height it belongs to instead of becoming a global ban on the txid.
+    let missing: Vec<BatchExclusion> = at_deadline[first_fail..]
         .iter()
-        .flatten()
-        .copied()
+        .zip(&missing_per_batch[first_fail..])
+        .filter(|(_, txids)| !txids.is_empty())
+        .map(|(batch, txids)| BatchExclusion {
+            consensus_height: batch.consensus_height,
+            anchor_height: batch.anchor_height,
+            txids: txids.clone(),
+        })
         .collect();
 
     let mut surviving = Vec::new();
@@ -426,14 +434,14 @@ fn build_finality_events(
     warn!(
         from_anchor,
         invalidated = ?invalidated,
-        missing = missing.len(),
+        missing = missing.iter().map(|m| m.txids.len()).sum::<usize>(),
         "Cascade invalidation triggered"
     );
 
     events.push(FinalityEvent::Rollback {
         from_anchor,
         invalidated_batches: invalidated,
-        missing_txids: missing,
+        missing,
     });
 
     (events, surviving)
@@ -900,7 +908,7 @@ impl ConsensusState {
         &mut self,
         conn: &libsql::Connection,
         last_height: u64,
-    ) -> Result<(Vec<FinalityEvent>, Option<(u64, HashSet<Txid>)>)> {
+    ) -> Result<(Vec<FinalityEvent>, Option<(u64, Vec<BatchExclusion>)>)> {
         let finality_events = self.check_finality(conn, last_height).await?;
         // At most one Rollback per pass — `check_finality` folds every failing
         // at-deadline batch into a single event. Taking the FIRST rather than the
@@ -917,12 +925,9 @@ impl ConsensusState {
         let result = finality_events.iter().find_map(|event| match event {
             FinalityEvent::Rollback {
                 from_anchor,
-                missing_txids,
+                missing,
                 ..
-            } => {
-                let excluded: HashSet<Txid> = missing_txids.iter().copied().collect();
-                Some((*from_anchor, excluded))
-            }
+            } => Some((*from_anchor, missing.clone())),
             _ => None,
         });
         // Deliberately NOT emitted here. A rollback the caller then refuses — because
@@ -1009,16 +1014,19 @@ mod tests {
         }
     }
 
+    /// Flattens `missing` for the assertions that only care about the union. The
+    /// per-batch attribution itself is asserted by
+    /// `every_missing_txid_is_attributed_to_its_own_batch`.
     fn rollback_of(events: &[FinalityEvent]) -> (u64, Vec<Height>, Vec<Txid>) {
         let mut found = events.iter().filter_map(|e| match e {
             FinalityEvent::Rollback {
                 from_anchor,
                 invalidated_batches,
-                missing_txids,
+                missing,
             } => Some((
                 *from_anchor,
                 invalidated_batches.clone(),
-                missing_txids.clone(),
+                missing.iter().flat_map(|m| m.txids.clone()).collect(),
             )),
             _ => None,
         });

@@ -18,7 +18,7 @@ use crate::consensus::finality_types::{DecidedBatch, StateEvent, UnfinalizedBatc
 use crate::consensus::{CommitCertificate, Ctx, Height, ProposalData, Value};
 use crate::database::queries::{
     insert_batch, insert_batch_txids, insert_excluded_batch_txids, insert_transaction,
-    insert_unconfirmed_batch_tx, select_block_at_height, select_excluded_batch_txids,
+    insert_unconfirmed_batch_tx, select_applicable_exclusions, select_block_at_height,
     select_existing_txids,
 };
 use crate::metrics::{CONSENSUS_HEIGHT, ITEMS_INDEXED};
@@ -210,11 +210,20 @@ fn restore_waiting(
 ///
 /// The two inputs should be disjoint by height; where they are not, the replayed
 /// copy wins because it was loaded from the decided record.
+/// The replay queue, every txid dropped this pass (for pool eviction), and the
+/// DESCENDANT exclusions to record against the decisions they were removed from.
+type ReplayPlan = (
+    VecDeque<consensus_state::DeferredDecision>,
+    HashSet<Txid>,
+    Vec<(u64, String, u64)>,
+);
+
 fn build_replay_queue(
     replayed: Vec<(consensus_state::DeferredDecision, Vec<bitcoin::Transaction>)>,
     survivors: Vec<(consensus_state::DeferredDecision, Vec<bitcoin::Transaction>)>,
-    excluded_txids: &HashSet<Txid>,
-) -> (VecDeque<consensus_state::DeferredDecision>, HashSet<Txid>) {
+    // Exclusions PER consensus height, already re-verified against the chain.
+    applicable: &HashMap<u64, HashSet<String>>,
+) -> ReplayPlan {
     let replayed_heights: Vec<Height> = replayed.iter().map(|(d, _)| d.consensus_height).collect();
     let survivors: Vec<_> = survivors
         .into_iter()
@@ -227,50 +236,86 @@ fn build_replay_queue(
     // where a child of an earlier transaction lives.
     let merged: Vec<_> = replayed.into_iter().chain(survivors).collect();
 
-    if excluded_txids.is_empty() {
-        return (merged.into_iter().map(|(d, _)| d).collect(), HashSet::new());
-    }
+    let dropped_at = |decision: &consensus_state::DeferredDecision, txid: &Txid| -> bool {
+        applicable
+            .get(&decision.consensus_height.as_u64())
+            .is_some_and(|s| s.contains(&txid.to_string()))
+    };
 
-    let batches: Vec<Vec<bitcoin::Transaction>> =
-        merged.iter().map(|(_, txs)| txs.clone()).collect();
-    let excluded = transitive_exclusion(&batches, excluded_txids);
-
-    let queue = merged
-        .into_iter()
-        .map(|(mut decision, txs)| {
-            if let Value::Batch {
-                anchor_height,
-                anchor_hash,
-                ..
-            } = &decision.value
-            {
-                let (anchor_height, anchor_hash) = (*anchor_height, *anchor_hash);
-                let kept: Vec<bitcoin::Transaction> = txs
-                    .iter()
-                    .filter(|tx| !excluded.contains(&tx.compute_txid()))
-                    .cloned()
-                    .collect();
-                let decided = txs;
-                // Narrowing what we execute must not narrow what we record as
-                // decided — see `DeferredDecision::certified_txs`. The BODIES are
-                // retained, not just the txids: an excluded tx never confirmed, so
-                // this is the only copy left and a peer can get it nowhere else.
-                //
-                // `get_or_insert`, not assignment: a batch can be narrowed by more
-                // than one rollback, and on the second pass `txs` is already the
-                // first pass's survivors. Recomputing from them would quietly drop
-                // whatever the first pass excluded. The earliest list is the decided
-                // one; later passes only ever remove more.
-                if kept.len() != decided.len() {
-                    decision.certified_txs.get_or_insert(decided);
-                }
-                decision.value = Value::new_batch_raw(anchor_height, anchor_hash, kept);
-            }
-            decision
+    // A txid KEPT by any decision in this queue must not seed the descendant closure.
+    // It is executing legitimately somewhere — excluded from one height but re-decided
+    // at another against a fresh deadline — so treating it as excluded would strip its
+    // children from batches that should run them.
+    let kept_anywhere: HashSet<Txid> = merged
+        .iter()
+        .flat_map(|(d, txs)| {
+            txs.iter()
+                .filter(move |t| !dropped_at(d, &t.compute_txid()))
         })
+        .map(|t| t.compute_txid())
         .collect();
 
-    (queue, excluded)
+    let seed: HashSet<Txid> = applicable
+        .values()
+        .flatten()
+        .filter_map(|t| t.parse::<Txid>().ok())
+        .filter(|t| !kept_anywhere.contains(t))
+        .collect();
+
+    // Descendants only — the seed itself is already handled per decision above, and
+    // folding it back in would re-globalise exactly what the per-height scope fixes.
+    let batches: Vec<Vec<bitcoin::Transaction>> =
+        merged.iter().map(|(_, txs)| txs.clone()).collect();
+    let descendants: HashSet<Txid> = transitive_exclusion(&batches, &seed)
+        .difference(&seed)
+        .copied()
+        .collect();
+
+    let mut all_excluded: HashSet<Txid> = HashSet::new();
+    let mut closure_rows: Vec<(u64, String, u64)> = Vec::new();
+    let mut queue = VecDeque::with_capacity(merged.len());
+
+    for (mut decision, txs) in merged {
+        if let Value::Batch {
+            anchor_height,
+            anchor_hash,
+            ..
+        } = &decision.value
+        {
+            let (anchor_height, anchor_hash) = (*anchor_height, *anchor_hash);
+            let height = decision.consensus_height.as_u64();
+            let mut kept = Vec::with_capacity(txs.len());
+            for tx in &txs {
+                let txid = tx.compute_txid();
+                if dropped_at(&decision, &txid) {
+                    all_excluded.insert(txid);
+                } else if descendants.contains(&txid) {
+                    // Newly discovered this pass — record it so a later replay does
+                    // not have to rediscover it (and cannot skip it if it does not).
+                    all_excluded.insert(txid);
+                    closure_rows.push((height, txid.to_string(), deadline_for(anchor_height)));
+                } else {
+                    kept.push(tx.clone());
+                }
+            }
+            // Narrowing what we execute must not narrow what we record as decided —
+            // see `DeferredDecision::certified_txs`. The BODIES are retained, not just
+            // the txids: an excluded tx never confirmed, so this is the only copy left
+            // and a peer can get it nowhere else.
+            //
+            // `get_or_insert`, not assignment: a batch can be narrowed by more than
+            // one rollback, and on the second pass `txs` is already the first pass's
+            // survivors for a SURVIVOR decision (a replayed one is reloaded from the
+            // certified list each pass). The earliest list is the decided one.
+            if kept.len() != txs.len() {
+                decision.certified_txs.get_or_insert(txs);
+            }
+            decision.value = Value::new_batch_raw(anchor_height, anchor_hash, kept);
+        }
+        queue.push_back(decision);
+    }
+
+    (queue, all_excluded, closure_rows)
 }
 
 /// What `process_decided_batch` did with a decided batch. Callers must not
@@ -889,12 +934,13 @@ impl<E: Executor> Reactor<E> {
         &mut self,
         from_anchor: u64,
         replay_batches: Vec<consensus_state::DeferredDecision>,
-        excluded_txids: HashSet<Txid>,
+        // Per consensus height — see `select_applicable_exclusions`.
+        applicable: HashMap<u64, HashSet<String>>,
     ) -> Result<()> {
         info!(
             from_anchor,
             replay_batches = replay_batches.len(),
-            excluded = excluded_txids.len(),
+            excluded = applicable.values().map(|s| s.len()).sum::<usize>(),
             "Initiating rollback replay"
         );
 
@@ -910,17 +956,20 @@ impl<E: Executor> Reactor<E> {
         let queued = std::mem::take(&mut self.consensus.deferred_decisions);
         let survivors = self.resolve_decisions(queued).await?;
 
-        let (queue, excluded) = build_replay_queue(replayed, survivors, &excluded_txids);
+        let (queue, excluded, closure_rows) = build_replay_queue(replayed, survivors, &applicable);
         self.consensus.deferred_decisions = queue;
 
-        // Record what this pass dropped, so a later pass cannot reload it from the
-        // append-only certified list and execute it again.
-        let dropped: Vec<String> = excluded.iter().map(|t| t.to_string()).collect();
-        if let Err(e) = insert_excluded_batch_txids(&self.db_conn(), &dropped).await {
+        // The DESCENDANT closure, attributed to the decisions it actually removed
+        // from. Best-effort and post-truncation, unlike the base set written before
+        // the rollback: losing these degrades to one extra rollback pass (the base
+        // rows survive, so the next pass re-derives the same closure), never to a
+        // wrong execution.
+        if let Err(e) = insert_excluded_batch_txids(&self.db_conn(), &closure_rows).await {
             warn!(
                 error = %e,
-                count = dropped.len(),
-                "Failed to record this pass's exclusions; a later replay may re-include them"
+                count = closure_rows.len(),
+                "Failed to record this pass's descendant exclusions; the next pass will \
+                 re-derive them"
             );
         }
 
@@ -993,7 +1042,7 @@ impl<E: Executor> Reactor<E> {
             .consensus
             .run_finality_checks(&conn, self.last_height)
             .await?;
-        let Some((rollback_anchor, excluded)) = rollback else {
+        let Some((rollback_anchor, missing)) = rollback else {
             self.consensus.emit_finality_events(&events);
             return Ok(false);
         };
@@ -1014,36 +1063,38 @@ impl<E: Executor> Reactor<E> {
             .await
             .context("load_replay_decisions failed")?;
 
-        // Carry forward what earlier passes already excluded (pre-truncation, like the
-        // load above). The replay reloads each batch from the append-only
-        // `batch_txids`, so without this the exclusion set is rebuilt from scratch
-        // every pass: pass one drops Y and keeps X, a later reorg un-confirms X, pass
-        // two drops X and puts Y BACK — the transaction pass one already proved never
-        // confirms. The two alternate forever and the tip oscillates with no progress,
-        // deterministically on every node. Unioning makes the set monotone.
+        // Record this pass's exclusions BEFORE the truncation. The base set (which
+        // txids went missing, and from which decision) is already known here — only
+        // the descendant closure needs the resolved raw txs, and that part is
+        // re-derivable. Writing after the rollback, as an earlier attempt did, leaves
+        // a window where the truncation is durable and the reason for it is not: the
+        // replay then reloads the full certified list and the oscillation returns.
         //
-        // Read from the RECORD of what we excluded, never re-derived as "certified but
-        // not executed": that predicate is also true of a record-only batch, whose txs
-        // its peers DID run, and excluding those would diverge this node's state from
-        // the network — a worse failure than the one being fixed.
-        let mut excluded = excluded;
-        match select_excluded_batch_txids(&conn).await {
-            Ok(previous) => {
-                for txid in previous {
-                    if let Ok(parsed) = txid.parse::<Txid>() {
-                        excluded.insert(parsed);
-                    }
-                }
-            }
-            Err(e) => {
-                // Not fatal, but it removes the termination guarantee — say so.
-                warn!(
-                    error = %e,
-                    "Could not load previously excluded txids; replay may re-include a \
-                     transaction an earlier pass dropped"
-                );
-            }
-        }
+        // FATAL on failure, unlike the best-effort records elsewhere. Without this row
+        // the pass is simply the original bug, and doing the rollback anyway would
+        // commit to a truncation we can no longer justify on the next pass.
+        let base_rows: Vec<(u64, String, u64)> = missing
+            .iter()
+            .flat_map(|m| {
+                let (height, deadline) =
+                    (m.consensus_height.as_u64(), deadline_for(m.anchor_height));
+                m.txids
+                    .iter()
+                    .map(move |t| (height, t.to_string(), deadline))
+            })
+            .collect();
+        insert_excluded_batch_txids(&conn, &base_rows)
+            .await
+            .context("Failed to record this pass's finality exclusions")?;
+
+        // Everything still applicable, this pass's rows included. Per DECISION: a row
+        // for height H filters H and nothing else, so a txid re-decided in a later
+        // batch against a fresh deadline still executes there. Applying exclusions
+        // globally would skip a transaction the network ran — a divergence, and worse
+        // than the stall this prevents.
+        let applicable = select_applicable_exclusions(&conn)
+            .await
+            .context("Failed to load applicable finality exclusions")?;
 
         // Roll back to before the invalid anchor so all state at the anchor height
         // (including the invalid txs' effects) is wiped cleanly.
@@ -1053,7 +1104,7 @@ impl<E: Executor> Reactor<E> {
 
         // Fallible raw-tx resolution/filtering only after the truncation is durable:
         // a failure here must not cancel a rollback finality already demanded.
-        self.prepare_replay(rollback_anchor, replay, excluded)
+        self.prepare_replay(rollback_anchor, replay, applicable)
             .await
             .context("prepare_replay failed")?;
 
@@ -1613,6 +1664,7 @@ mod tests {
     use bitcoin::hashes::Hash;
     use bitcoin::transaction::Version;
     use bitcoin::{Amount, OutPoint, ScriptBuf, Sequence, Transaction, TxIn, TxOut, Txid, Witness};
+    use std::collections::HashMap;
     use std::collections::HashSet;
     use std::collections::VecDeque;
 
@@ -1757,11 +1809,20 @@ mod tests {
         (decision(consensus_height), Vec::new())
     }
 
+    /// Exclusions attributed to the decision they were dropped from.
+    fn excl(pairs: &[(u64, Txid)]) -> HashMap<u64, HashSet<String>> {
+        let mut m: HashMap<u64, HashSet<String>> = HashMap::new();
+        for (height, txid) in pairs {
+            m.entry(*height).or_default().insert(txid.to_string());
+        }
+        m
+    }
+
     fn queue_of(
         replayed: Vec<(DeferredDecision, Vec<Transaction>)>,
         survivors: Vec<(DeferredDecision, Vec<Transaction>)>,
     ) -> VecDeque<DeferredDecision> {
-        build_replay_queue(replayed, survivors, &HashSet::new()).0
+        build_replay_queue(replayed, survivors, &HashMap::new()).0
     }
 
     /// THE regression this function exists for. A rollback excludes transaction X
@@ -1777,8 +1838,8 @@ mod tests {
         let child = tx(&[spend(&parent)], 2);
         let unrelated = tx(&[OutPoint::null()], 3);
 
-        let excluded: HashSet<Txid> = [parent.compute_txid()].into();
-        let (queue, closure) = build_replay_queue(
+        let excluded = excl(&[(10, parent.compute_txid())]);
+        let (queue, closure, _) = build_replay_queue(
             vec![carrying(10, vec![parent.clone()])],
             vec![carrying(14, vec![child.clone(), unrelated.clone()])],
             &excluded,
@@ -1810,8 +1871,8 @@ mod tests {
         let child = tx(&[spend(&parent)], 2);
         let kept = tx(&[OutPoint::null()], 3);
 
-        let excluded: HashSet<Txid> = [parent.compute_txid()].into();
-        let (queue, _) = build_replay_queue(
+        let excluded = excl(&[(10, parent.compute_txid())]);
+        let (queue, _, _) = build_replay_queue(
             vec![carrying(10, vec![parent.clone()])],
             vec![carrying(14, vec![child.clone(), kept.clone()])],
             &excluded,
@@ -1843,8 +1904,8 @@ mod tests {
         let child_a = tx(&[spend(&parent)], 2);
         let child_b = tx(&[spend(&parent)], 3);
 
-        let excluded: HashSet<Txid> = [parent.compute_txid()].into();
-        let (queue, _) = build_replay_queue(
+        let excluded = excl(&[(10, parent.compute_txid())]);
+        let (queue, _, _) = build_replay_queue(
             vec![carrying(10, vec![parent.clone()])],
             vec![carrying(14, vec![child_a.clone(), child_b.clone()])],
             &excluded,
@@ -1860,6 +1921,105 @@ mod tests {
             vec![child_a.compute_txid(), child_b.compute_txid()],
             "an emptied batch still has a decided list, and it must survive"
         );
+    }
+
+    /// THE regression for attempt 2. An exclusion belongs to the DECISION it was made
+    /// in, not to the transaction. A tx dropped at one height can re-enter the
+    /// mempool, be decided in a LATER batch against a fresh deadline, and execute
+    /// there legitimately — a global ban strips it from that batch too, so this node
+    /// skips a transaction the network ran. That is a state divergence, worse than the
+    /// oscillation the carry-forward exists to prevent.
+    #[test]
+    fn build_replay_queue_does_not_exclude_a_txid_at_a_different_height() {
+        let t = tx(&[OutPoint::null()], 1);
+        let other = tx(&[OutPoint::null()], 2);
+
+        let (queue, _, _) = build_replay_queue(
+            vec![carrying(10, vec![t.clone()])],
+            vec![carrying(14, vec![t.clone(), other.clone()])],
+            &excl(&[(10, t.compute_txid())]),
+        );
+
+        assert!(
+            queue[0].value.batch_raw_txs().is_empty(),
+            "the decision it was excluded from must drop it"
+        );
+        let later: Vec<Txid> = queue[1]
+            .value
+            .batch_raw_txs()
+            .iter()
+            .map(|x| x.compute_txid())
+            .collect();
+        assert!(
+            later.contains(&t.compute_txid()),
+            "a DIFFERENT decision carrying the same txid must still execute it"
+        );
+    }
+
+    /// The descendant closure must not be seeded by a tx that is executing fine
+    /// somewhere. If P is excluded at one height but kept at another, its child C is
+    /// not orphaned — stripping C would skip a transaction whose parent the network
+    /// executed.
+    #[test]
+    fn build_replay_queue_keeps_a_child_whose_parent_is_kept_elsewhere() {
+        let parent = tx(&[OutPoint::null()], 1);
+        let child = tx(&[spend(&parent)], 2);
+
+        let (queue, _, _) = build_replay_queue(
+            vec![carrying(10, vec![parent.clone()])],
+            vec![
+                carrying(14, vec![parent.clone()]),
+                carrying(15, vec![child.clone()]),
+            ],
+            &excl(&[(10, parent.compute_txid())]),
+        );
+
+        assert!(
+            !queue[2].value.batch_raw_txs().is_empty(),
+            "the child must survive — its parent executes at another height"
+        );
+    }
+
+    /// But a child whose parent is excluded and appears NOWHERE else must still drop:
+    /// it would execute against state the rollback wiped (#427). The `kept_anywhere`
+    /// guard must not be widened into "never seed the closure".
+    #[test]
+    fn build_replay_queue_still_drops_a_child_of_an_absent_parent() {
+        let parent = tx(&[OutPoint::null()], 1);
+        let child = tx(&[spend(&parent)], 2);
+
+        let (queue, _, closure_rows) = build_replay_queue(
+            vec![carrying(10, vec![parent.clone()])],
+            vec![carrying(14, vec![child.clone()])],
+            &excl(&[(10, parent.compute_txid())]),
+        );
+
+        assert!(
+            queue[1].value.batch_raw_txs().is_empty(),
+            "a descendant of an excluded, otherwise-absent parent must not execute"
+        );
+        assert!(
+            closure_rows
+                .iter()
+                .any(|(h, t, _)| *h == 14 && t == &child.compute_txid().to_string()),
+            "and the closure must be RECORDED against the height it was removed from, \
+             so a later pass does not have to rediscover it"
+        );
+    }
+
+    /// An unmarked decision is untouched — the record-only case, which has certified
+    /// txids and no execution and must NOT be mistaken for an exclusion.
+    #[test]
+    fn build_replay_queue_leaves_an_unmarked_decision_intact() {
+        let a = tx(&[OutPoint::null()], 1);
+        let b = tx(&[OutPoint::null()], 2);
+        let (queue, excluded, rows) = build_replay_queue(
+            vec![carrying(10, vec![a.clone(), b.clone()])],
+            Vec::new(),
+            &HashMap::new(),
+        );
+        assert_eq!(queue[0].value.batch_raw_txs().len(), 2);
+        assert!(excluded.is_empty() && rows.is_empty());
     }
 
     /// Narrowing must not destroy the EXCLUDED transactions' bodies.
@@ -1878,8 +2038,8 @@ mod tests {
         let child = tx(&[spend(&parent)], 2);
         let kept = tx(&[OutPoint::null()], 3);
 
-        let excluded: HashSet<Txid> = [parent.compute_txid()].into();
-        let (queue, _) = build_replay_queue(
+        let excluded = excl(&[(10, parent.compute_txid())]);
+        let (queue, _, _) = build_replay_queue(
             vec![carrying(10, vec![parent.clone()])],
             vec![carrying(14, vec![child.clone(), kept.clone()])],
             &excluded,
@@ -1923,8 +2083,8 @@ mod tests {
         decision.certified_txs = Some(decided_all.clone());
 
         // Pass two excludes `second`.
-        let excluded: HashSet<Txid> = [second.compute_txid()].into();
-        let (queue, _) = build_replay_queue(
+        let excluded = excl(&[(14, second.compute_txid())]);
+        let (queue, _, _) = build_replay_queue(
             Vec::new(),
             vec![(decision, vec![second.clone(), survivor_tx.clone()])],
             &excluded,
@@ -1947,10 +2107,10 @@ mod tests {
     #[test]
     fn build_replay_queue_leaves_certified_txs_unset_when_nothing_is_filtered() {
         let a = tx(&[OutPoint::null()], 1);
-        let (queue, _) = build_replay_queue(
+        let (queue, _, _) = build_replay_queue(
             vec![carrying(10, vec![a.clone()])],
             Vec::new(),
-            &HashSet::new(),
+            &HashMap::new(),
         );
         assert!(queue[0].certified_txs.is_none());
     }

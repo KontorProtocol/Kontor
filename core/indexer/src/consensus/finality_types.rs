@@ -40,8 +40,19 @@ pub enum FinalityEvent {
     Rollback {
         from_anchor: u64,
         invalidated_batches: Vec<Height>,
-        missing_txids: Vec<Txid>,
+        /// Per DECISION, not flattened. Which batch a txid went missing from is what
+        /// lets the exclusion be recorded against that height alone — flattening it
+        /// is how a global ban gets built by accident.
+        missing: Vec<BatchExclusion>,
     },
+}
+
+/// The txids one decided batch failed to confirm by its own deadline.
+#[derive(Debug, Clone, PartialEq)]
+pub struct BatchExclusion {
+    pub consensus_height: Height,
+    pub anchor_height: u64,
+    pub txids: Vec<Txid>,
 }
 
 #[derive(Debug, Clone, PartialEq)]

@@ -275,21 +275,34 @@ CREATE TABLE IF NOT EXISTS unconfirmed_batch_txs (
 CREATE INDEX IF NOT EXISTS idx_unconfirmed_batch_txs_batch_height
   ON unconfirmed_batch_txs (batch_height);
 
--- Txids dropped by a finality exclusion, so a later replay cannot put them back.
+-- Txids a finality exclusion dropped, PER DECISION, so a later replay cannot put
+-- them back and oscillate forever.
 --
--- Must be RECORDED, not re-derived. "Certified but not executed" looks identical for
--- a tx we excluded and for one in a record-only batch (anchor mismatch — never
--- executed here, but its peers ran it), and treating the latter as excluded would
--- strip it from the replay and diverge this node's state from the network. Only the
--- exclusion path knows which is which, so only it writes here.
+-- Keyed by `batch_height` FIRST. The row answers "when executing consensus height H,
+-- which certified txids must not run?" — never "is this txid banned". A txid-only key
+-- is a global ban: the same tx can re-enter the mempool, be decided in a LATER batch
+-- against a fresh deadline, and execute legitimately, and a global ban would strip it
+-- there too. That is a state divergence, which is worse than the liveness stall this
+-- table exists to prevent.
 --
--- Node-local: no FK, because a survivor decision has no `batches` row yet. Grows only
--- on finality exclusions, which are rare, and an entry is permanent by design — the
--- tx never confirmed by its deadline, and that verdict does not change. If it later
--- confirms on chain it is executed through the BLOCK path, which never reads this.
+-- RECORDED, never derived. "Certified but not executed" is equally true of a
+-- record-only batch (anchor mismatch — skipped here, executed by peers), and the two
+-- are indistinguishable in the database. Only the exclusion path knows which is which.
+--
+-- `deadline` is denormalised rather than joined: a SURVIVOR decision has no `batches`
+-- row when its exclusion is written, so a join would be unevaluable for exactly those
+-- rows. It makes the re-verification predicate a self-contained single-table check.
+--
+-- NO foreign key, and DELIBERATELY NOT trimmed by `delete_unexecuted_batch_suffix`.
+-- That cleanup forgets decided-but-unexecuted heights so they re-sync; the exclusion
+-- for such a height must SURVIVE, or the crash window between the truncation and the
+-- replay reopens the oscillation. Do not "tidy" this into the cleanup.
 CREATE TABLE IF NOT EXISTS excluded_batch_txids (
-  txid TEXT NOT NULL PRIMARY KEY
-);
+  batch_height INTEGER NOT NULL,
+  txid TEXT NOT NULL,
+  deadline INTEGER NOT NULL,
+  PRIMARY KEY (batch_height, txid)
+) WITHOUT ROWID;
 
 -- Node-local operational state (NOT consensus state): a singleton key/value store.
 -- Deliberately has NO foreign key to blocks (a reorg must not cascade-delete or roll

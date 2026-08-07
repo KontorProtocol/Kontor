@@ -1079,13 +1079,13 @@ async fn prod_reactor_missing_tx_invalidation() -> Result<()> {
 
     let finality_events = cluster
         .wait_for_finality_event_matching(
-            |e| matches!(e, FinalityEvent::Rollback { missing_txids, .. } if missing_txids.contains(&missing_txid)),
+            |e| matches!(e, FinalityEvent::Rollback { missing, .. } if missing.iter().any(|m| m.txids.contains(&missing_txid))),
             Duration::from_secs(60),
         )
         .await;
     assert!(
         finality_events.iter().any(
-            |e| matches!(e, FinalityEvent::Rollback { missing_txids, .. } if missing_txids.contains(&missing_txid))
+            |e| matches!(e, FinalityEvent::Rollback { missing, .. } if missing.iter().any(|m| m.txids.contains(&missing_txid)))
         ),
         "Expected Rollback with missing txid {missing_txid}, got: {finality_events:?}"
     );

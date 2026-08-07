@@ -4624,14 +4624,18 @@ async fn indexing_a_transaction_on_chain_drops_its_unconfirmed_raw_copy() -> Res
 /// Exclusions must be RECORDED, never inferred from "certified but not executed".
 ///
 /// That predicate is equally true of a record-only batch — anchor-mismatched, so this
-/// node skipped it while its peers ran it — and of a batch narrowed to nothing by an
-/// exclusion. The two are indistinguishable in the database: both have `batch_txids`
-/// and no `transactions` rows. Inferring would strip a record-only batch's
-/// transactions from the replay, so this node would never execute what the rest of
-/// the network did. That is a state divergence, strictly worse than the replay
-/// non-convergence the carry-forward exists to prevent.
+/// node skipped it while its peers ran it — and of a batch narrowed by an exclusion.
+/// The two are indistinguishable in the database. Inferring strips a record-only
+/// batch's transactions from the replay, so this node never executes what the network
+/// did: a state divergence, strictly worse than the replay non-convergence the
+/// carry-forward exists to prevent.
+///
+/// Also pins the SCOPE. A row is keyed by the consensus height it applies to, so the
+/// same txid excluded at one height and re-decided at another is remembered
+/// separately — a txid-only key is a global ban, which is the same divergence by a
+/// different route.
 #[tokio::test]
-async fn only_recorded_exclusions_carry_forward() -> Result<()> {
+async fn exclusions_are_recorded_per_decision_and_never_inferred() -> Result<()> {
     let (_reader, writer, _temp_dir) = new_test_db().await?;
     let conn = writer.connection();
 
@@ -4643,28 +4647,89 @@ async fn only_recorded_exclusions_carry_forward() -> Result<()> {
     let record_only = "aa".repeat(32);
     insert_batch(&conn, 9, height, &hash.to_string(), b"cert9", false).await?;
     insert_batch_txids(&conn, 9, std::slice::from_ref(&record_only)).await?;
-
     assert!(
-        select_excluded_batch_txids(&conn).await?.is_empty(),
+        select_applicable_exclusions(&conn).await?.is_empty(),
         "a record-only batch excluded nothing — inferring otherwise would strip \
          transactions this node's peers executed"
     );
 
-    // An actual exclusion, recorded by the path that made it.
-    let excluded = "bb".repeat(32);
-    insert_excluded_batch_txids(&conn, std::slice::from_ref(&excluded)).await?;
-    let carried = select_excluded_batch_txids(&conn).await?;
+    // The same txid excluded at TWO different decisions, and one that is not.
+    let t = "bb".repeat(32);
+    insert_excluded_batch_txids(&conn, &[(10, t.clone(), 106), (12, t.clone(), 120)]).await?;
+    let applicable = select_applicable_exclusions(&conn).await?;
+    assert!(applicable[&10].contains(&t) && applicable[&12].contains(&t));
     assert!(
-        carried.contains(&excluded),
-        "a recorded exclusion must carry forward"
-    );
-    assert!(
-        !carried.contains(&record_only),
-        "and it must not drag the record-only batch along with it"
+        !applicable.contains_key(&9),
+        "the record-only height must have no exclusions"
     );
 
-    // Idempotent: the same batch can be narrowed by more than one pass.
-    insert_excluded_batch_txids(&conn, std::slice::from_ref(&excluded)).await?;
-    assert_eq!(select_excluded_batch_txids(&conn).await?.len(), 1);
+    // Idempotent — the same batch can be narrowed by more than one pass.
+    insert_excluded_batch_txids(&conn, &[(10, t.clone(), 106)]).await?;
+    assert_eq!(select_applicable_exclusions(&conn).await?[&10].len(), 1);
+    Ok(())
+}
+
+/// The read re-verifies every recorded row against the chain, so a stale exclusion
+/// cannot outlive the fact that produced it. The `batch_height` qualifier is the
+/// load-bearing part: a confirmation attributable to ANOTHER batch's execution must
+/// not un-exclude here, or both heights execute the tx and the plain INSERT in
+/// `insert_transaction` hits `transactions.txid UNIQUE` — #515's collision by a new
+/// route. A confirmation via the BLOCK path (`batch_height IS NULL`) must un-exclude:
+/// that is the reorg-healing case, and a peer syncing from genesis agrees.
+#[tokio::test]
+async fn a_recorded_exclusion_is_reverified_against_the_chain() -> Result<()> {
+    let (_reader, writer, _temp_dir) = new_test_db().await?;
+    let conn = writer.connection();
+    let hash = new_mock_block_hash(100);
+    insert_block(&conn, BlockRow::builder().height(100).hash(hash).build()).await?;
+    insert_batch(&conn, 10, 100, &hash.to_string(), b"c", false).await?;
+    // A second decided batch, so the "confirmed via another batch's execution" case
+    // below can set a real `batch_height` (transactions.batch_height is FK'd).
+    insert_batch(&conn, 12, 100, &hash.to_string(), b"c2", false).await?;
+
+    let t = "cc".repeat(32);
+    let applies = |conn: libsql::Connection| async move {
+        select_applicable_exclusions(&conn)
+            .await
+            .unwrap()
+            .get(&10)
+            .is_some_and(|s| s.contains(&"cc".repeat(32)))
+    };
+
+    insert_excluded_batch_txids(&conn, &[(10, t.clone(), 106)]).await?;
+    assert!(applies(conn.clone()).await, "no transactions row at all");
+
+    // Confirmed ABOVE the deadline: still missing as far as that verdict goes.
+    insert_transaction(
+        &conn,
+        TransactionRow::builder()
+            .height(100)
+            .tx_index(0)
+            .confirmed_height(107u64)
+            .txid(t.clone())
+            .build(),
+    )
+    .await?;
+    assert!(applies(conn.clone()).await, "confirmed past the deadline");
+
+    // Confirmed at or below it, via the BLOCK path — the exclusion no longer holds.
+    conn.execute(
+        "UPDATE transactions SET confirmed_height = 105 WHERE txid = ?",
+        libsql::params![t.clone()],
+    )
+    .await?;
+    assert!(!applies(conn.clone()).await, "confirmed by the deadline");
+
+    // Same confirmation, but attributable to a DIFFERENT batch's execution: the
+    // exclusion must stand, or this txid executes at both heights.
+    conn.execute(
+        "UPDATE transactions SET batch_height = 12 WHERE txid = ?",
+        libsql::params![t.clone()],
+    )
+    .await?;
+    assert!(
+        applies(conn.clone()).await,
+        "another batch's execution must not un-exclude this one"
+    );
     Ok(())
 }
