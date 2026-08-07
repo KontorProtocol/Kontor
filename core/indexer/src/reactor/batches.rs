@@ -862,6 +862,28 @@ impl<E: Executor> Reactor<E> {
     /// startup cleanup forgets the unexecuted suffix and the node re-syncs).
     /// Before the truncation it would instead CANCEL a rollback that finality
     /// already demanded.
+    /// Pair each decision with the transactions it carries.
+    ///
+    /// Both sides of the replay merge must resolve the SAME way: the exclusion
+    /// closure needs tx INPUTS from the queued survivors too, and resolving only the
+    /// replay set let a descendant of an excluded tx through to execute against state
+    /// the rollback had wiped (#427 in a second form).
+    async fn resolve_decisions(
+        &mut self,
+        decisions: impl IntoIterator<Item = consensus_state::DeferredDecision>,
+    ) -> Result<Vec<(consensus_state::DeferredDecision, Vec<bitcoin::Transaction>)>> {
+        let decisions = decisions.into_iter();
+        let mut out = Vec::with_capacity(decisions.size_hint().0);
+        for decision in decisions {
+            let txs = match &decision.value {
+                Value::Batch { txs, .. } => self.resolve_batch_txs(txs).await?,
+                Value::Block { .. } => Vec::new(),
+            };
+            out.push((decision, txs));
+        }
+        Ok(out)
+    }
+
     pub(super) async fn prepare_replay(
         &mut self,
         from_anchor: u64,
@@ -883,23 +905,9 @@ impl<E: Executor> Reactor<E> {
         // set let such a child through to execute against state the rollback wiped
         // (#427 in a second form). Resolution pulls from the same sources the drain
         // would use later.
-        let mut replayed = Vec::with_capacity(replay_batches.len());
-        for decision in replay_batches {
-            let txs = match &decision.value {
-                Value::Batch { txs, .. } => self.resolve_batch_txs(txs).await?,
-                Value::Block { .. } => Vec::new(),
-            };
-            replayed.push((decision, txs));
-        }
+        let replayed = self.resolve_decisions(replay_batches).await?;
         let queued = std::mem::take(&mut self.consensus.deferred_decisions);
-        let mut survivors = Vec::with_capacity(queued.len());
-        for decision in queued {
-            let txs = match &decision.value {
-                Value::Batch { txs, .. } => self.resolve_batch_txs(txs).await?,
-                Value::Block { .. } => Vec::new(),
-            };
-            survivors.push((decision, txs));
-        }
+        let survivors = self.resolve_decisions(queued).await?;
 
         let (queue, excluded) = build_replay_queue(replayed, survivors, &excluded_txids);
         self.consensus.deferred_decisions = queue;
@@ -1457,19 +1465,7 @@ impl<E: Executor> Reactor<E> {
                         None
                     };
 
-                    // Being buffered at the right height is not the same as being the
-                    // DECIDED block. A rollback can leave a decision whose block was
-                    // reorged away, and the block now pending at that height belongs
-                    // to the new chain — executing it under the old decision binds the
-                    // wrong block to that consensus record. The deferred drain has
-                    // always checked this; this path did not, so the guard held only
-                    // when the decision happened to arrive late.
-                    // Set when the mismatch branch below has already settled this
-                    // decision. The `else` arm cannot detect this case on its own — it
-                    // asks the DB whether an EXECUTED block differs, and at
-                    // `last_height + 1` nothing is executed yet, so it would read
-                    // "not stale" and defer a decision we just declined.
-                    // Built ONCE. Every arm below needs the same four fields, and
+                    // Built ONCE. Every arm needs the same four fields, and
                     // `certificate` is the full validator-set commit certificate —
                     // cloning it per arm is pure waste.
                     let decision = consensus_state::DeferredDecision {
@@ -1479,9 +1475,30 @@ impl<E: Executor> Reactor<E> {
                         certified_txs: None,
                     };
 
-                    let mut declined_stale = false;
-                    let ready = match ready {
-                        Some(block) if block.hash != *hash => {
+                    // Being buffered at the right height is not the same as being the
+                    // DECIDED block. A rollback can leave a decision whose block was
+                    // reorged away, and the block now pending at that height belongs
+                    // to the new chain — executing it under the old decision binds the
+                    // wrong block to that consensus record. The deferred drain has
+                    // always checked this; this path did not, so the guard held only
+                    // when the decision happened to arrive late.
+                    match ready {
+                        // Buffered, and it IS the decided block.
+                        Some(block) if block.hash == *hash => {
+                            info!(
+                                block_height = height,
+                                block_hash = %hash,
+                                consensus_height = %certificate.height,
+                                "Block decided and ready to process"
+                            );
+                            result = consensus_state::ConsensusResult::Block(block, decision);
+                        }
+                        // Buffered, but a DIFFERENT block — the decision is stale.
+                        // Settled here rather than falling through: the arm below asks
+                        // the DB whether an EXECUTED block differs, and at
+                        // `last_height + 1` nothing is executed yet, so it would read
+                        // "not stale" and defer a decision we just declined.
+                        Some(block) => {
                             warn!(
                                 block_height = height,
                                 decided = %hash,
@@ -1493,42 +1510,32 @@ impl<E: Executor> Reactor<E> {
                             // Back in the buffer: it is the canonical block for this
                             // height on the new chain and still needs a fresh decision.
                             self.consensus.pending_blocks.insert(*height, block);
-                            declined_stale = true;
-                            None
                         }
-                        other => other,
-                    };
-
-                    if let Some(block) = ready {
-                        info!(
-                            block_height = height,
-                            block_hash = %hash,
-                            consensus_height = %certificate.height,
-                            "Block decided and ready to process"
-                        );
-                        result = consensus_state::ConsensusResult::Block(block, decision);
-                    } else if !declined_stale {
-                        let is_stale = match select_block_at_height(&conn, *height).await {
-                            Ok(Some(row)) => row.hash != *hash,
-                            _ => false,
-                        };
-                        if !is_stale {
-                            info!(
-                                block_height = height,
-                                block_hash = %hash,
-                                last_height = self.last_height,
-                                consensus_height = %certificate.height,
-                                "Block decided but not ready to execute — deferring"
+                        // Not buffered: either the poller has not delivered it yet, or
+                        // the height was executed with a different block (reorged).
+                        None => {
+                            let is_stale = matches!(
+                                select_block_at_height(&conn, *height).await,
+                                Ok(Some(row)) if row.hash != *hash
                             );
-                            self.consensus.deferred_decisions.push_back(decision);
-                        } else {
-                            warn!(
-                                block_height = height,
-                                block_hash = %hash,
-                                consensus_height = %certificate.height,
-                                "Ignoring stale block decision (post-rollback)"
-                            );
-                            self.record_declined_block(&decision).await;
+                            if is_stale {
+                                warn!(
+                                    block_height = height,
+                                    block_hash = %hash,
+                                    consensus_height = %certificate.height,
+                                    "Ignoring stale block decision (post-rollback)"
+                                );
+                                self.record_declined_block(&decision).await;
+                            } else {
+                                info!(
+                                    block_height = height,
+                                    block_hash = %hash,
+                                    last_height = self.last_height,
+                                    consensus_height = %certificate.height,
+                                    "Block decided but not ready to execute — deferring"
+                                );
+                                self.consensus.deferred_decisions.push_back(decision);
+                            }
                         }
                     }
                 }

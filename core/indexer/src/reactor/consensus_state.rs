@@ -279,9 +279,7 @@ async fn record_undrained_decisions(
     }
 }
 
-/// Probe every batch whose deadline has passed, in the order `check_finality` will
-/// evaluate them: `anchor_height` primary, so the first failure is the minimal
-/// failing anchor.
+/// Probe every batch whose deadline has passed, in the caller's evaluation order.
 ///
 /// Borrows rather than consuming ON PURPOSE. This is the only fallible step in the
 /// verdict, and doing it against a borrow is what lets `check_finality` fail without
@@ -291,11 +289,11 @@ async fn probe_at_deadline(
     batches: &[UnfinalizedBatch],
     tip: u64,
 ) -> Result<Vec<Vec<Txid>>> {
-    let mut order: Vec<&UnfinalizedBatch> = batches.iter().filter(|b| b.deadline <= tip).collect();
-    order.sort_by_key(|b| (b.anchor_height, b.consensus_height));
-
-    let mut missing_per_batch = Vec::with_capacity(order.len());
-    for batch in order {
+    // Takes `batches` ALREADY in evaluation order (`check_finality` sorts in place
+    // before calling) and filters stably, so the results line up with the caller's
+    // partition by construction rather than by a second sort that has to agree.
+    let mut missing_per_batch = Vec::new();
+    for batch in batches.iter().filter(|b| b.deadline <= tip) {
         missing_per_batch.push(missing_txids(conn, batch).await?);
     }
     Ok(missing_per_batch)
@@ -666,6 +664,15 @@ impl ConsensusState {
         let mut events = Vec::new();
         let tip = last_height;
 
+        // ONE definition of the evaluation order, established before anything reads
+        // the set. `from_anchor` is taken from the FIRST failing batch, which is the
+        // minimal failing anchor only because `anchor_height` is the PRIMARY key
+        // here; sorting by `consensus_height` alone would silently break it. Sorting
+        // in place means the probe and the partition below cannot disagree, rather
+        // than sorting twice and asserting afterwards that they matched.
+        self.unfinalized_batches
+            .sort_by_key(|b| (b.anchor_height, b.consensus_height));
+
         // PROBE BEFORE TAKING THE SET APART. `missing_txids` is fallible, and
         // draining first would mean an unreadable table costs us the whole tracking
         // set — every pending deadline gone from memory, which is the #515 hole
@@ -674,7 +681,8 @@ impl ConsensusState {
         // tip move simply retries.
         let missing_per_batch = probe_at_deadline(conn, &self.unfinalized_batches, tip).await?;
 
-        // Every probe succeeded, so it is now safe to consume the set.
+        // Every probe succeeded, so it is now safe to consume the set. The partition
+        // is stable, so `at_deadline` inherits the sort above.
         let mut still_pending = Vec::new();
         let mut at_deadline = Vec::new();
         for batch in self.unfinalized_batches.drain(..) {
@@ -684,21 +692,6 @@ impl ConsensusState {
                 still_pending.push(batch);
             }
         }
-
-        // `from_anchor` below is taken from the FIRST failing batch, which is the
-        // minimal failing anchor only because `anchor_height` is the PRIMARY sort
-        // key here. Re-sorting by `consensus_height` alone would silently break it.
-        //
-        // This must reproduce `probe_at_deadline`'s order exactly, or the verdicts
-        // line up against the wrong batches. It does: both collect the at-deadline
-        // batches in ascending original-index order and then stable-sort on the same
-        // key, so ties resolve identically.
-        at_deadline.sort_by_key(|b| (b.anchor_height, b.consensus_height));
-        debug_assert_eq!(
-            at_deadline.len(),
-            missing_per_batch.len(),
-            "probe and partition disagree about which batches are at deadline"
-        );
 
         let (built, surviving) = build_finality_events(
             &at_deadline,
@@ -1310,33 +1303,46 @@ mod tests {
         );
     }
 
-    /// The probe and the partition must agree on ORDER, or verdicts land against the
-    /// wrong batches — and `from_anchor` is taken from the first failure, so a
-    /// mismatch silently rolls back to the wrong anchor. They are two separate sorts
-    /// over two separate collections; this pins that they agree, including on ties.
+    /// `check_finality` sorts the tracking set IN PLACE once and both the probe and
+    /// the partition then walk that same order — so they agree by construction rather
+    /// than by a second sort that has to match. This pins the two properties that
+    /// makes rest on: the probe filters by deadline, and it preserves input order.
+    ///
+    /// It matters because `from_anchor` is taken from the first failure. If the probe
+    /// reordered relative to the partition, verdicts would land against the wrong
+    /// batches and the rollback would target the wrong anchor.
     #[tokio::test]
-    async fn probe_order_matches_the_partition_order() {
+    async fn the_probe_filters_by_deadline_and_preserves_input_order() {
         let (_reader, writer, _dir) = new_test_db().await.unwrap();
         let conn = writer.connection();
 
-        // Deliberately out of order, with an anchor tie broken by consensus height.
-        let tracked = vec![
+        // As `check_finality` hands it over: already in evaluation order.
+        let mut tracked = vec![
             batch(502, 30, &[3]),
             batch(500, 20, &[1]),
             batch(500, 10, &[2]),
         ];
+        tracked.sort_by_key(|b| (b.anchor_height, b.consensus_height));
+
         let probed = probe_at_deadline(&conn, &tracked, 999)
             .await
             .expect("probe must read");
-
-        let mut partitioned: Vec<_> = tracked.iter().filter(|b| b.deadline <= 999).collect();
-        partitioned.sort_by_key(|b| (b.anchor_height, b.consensus_height));
-
         let probed_txids: Vec<_> = probed.into_iter().map(|m| m[0]).collect();
-        let expected: Vec<_> = partitioned.iter().map(|b| b.txids[0]).collect();
+        let expected: Vec<_> = tracked.iter().map(|b| b.txids[0]).collect();
         assert_eq!(
             probed_txids, expected,
-            "probe results must line up with the partition, ties included"
+            "the probe must return results in the caller's order, ties included"
+        );
+
+        // Only the batches whose deadline has passed. `batch(_, anchor, _)` sets
+        // deadline = anchor + 6, so a tip of 26 covers anchor 20 but not 30.
+        let due = probe_at_deadline(&conn, &tracked, 26)
+            .await
+            .expect("probe must read");
+        assert_eq!(
+            due.len(),
+            2,
+            "only the two at-deadline batches may be probed"
         );
     }
 }
