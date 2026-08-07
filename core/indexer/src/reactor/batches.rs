@@ -18,7 +18,7 @@ use crate::consensus::finality_types::{DecidedBatch, StateEvent, UnfinalizedBatc
 use crate::consensus::{CommitCertificate, Ctx, Height, ProposalData, Value};
 use crate::database::queries::{
     insert_batch, insert_batch_txids, insert_transaction, insert_unconfirmed_batch_tx,
-    select_block_at_height, select_existing_txids,
+    select_block_at_height, select_existing_txids, select_previously_excluded_txids,
 };
 use crate::metrics::{CONSENSUS_HEIGHT, ITEMS_INDEXED};
 
@@ -993,6 +993,35 @@ impl<E: Executor> Reactor<E> {
             .load_replay_decisions(rollback_anchor)
             .await
             .context("load_replay_decisions failed")?;
+
+        // Carry forward what earlier passes already excluded, for the same reason and
+        // from the same rows (also pre-truncation). The replay reloads each batch from
+        // the append-only `batch_txids`, so without this the exclusion set is rebuilt
+        // from scratch every pass: pass one drops Y and keeps X, a later reorg
+        // un-confirms X, pass two drops X and puts Y BACK — the transaction pass one
+        // already proved never confirms. The two passes then alternate forever and the
+        // tip oscillates with no progress, deterministically on every node, which is a
+        // network-wide liveness halt rather than a divergence. Unioning makes the set
+        // monotone, so a batch can only ever shrink and the replay terminates.
+        let mut excluded = excluded;
+        match select_previously_excluded_txids(&conn, rollback_anchor).await {
+            Ok(previous) => {
+                for txid in previous {
+                    if let Ok(parsed) = txid.parse::<Txid>() {
+                        excluded.insert(parsed);
+                    }
+                }
+            }
+            Err(e) => {
+                // Not fatal, but it removes the termination guarantee — say so.
+                warn!(
+                    error = %e,
+                    from_anchor = rollback_anchor,
+                    "Could not load previously excluded txids; replay may re-include a \
+                     transaction an earlier pass dropped"
+                );
+            }
+        }
 
         // Roll back to before the invalid anchor so all state at the anchor height
         // (including the invalid txs' effects) is wiped cleanly.

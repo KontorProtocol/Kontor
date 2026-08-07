@@ -4620,3 +4620,55 @@ async fn indexing_a_transaction_on_chain_drops_its_unconfirmed_raw_copy() -> Res
     );
     Ok(())
 }
+
+/// The difference between what a batch CERTIFIED and what this node EXECUTED is
+/// exactly what an earlier finality pass excluded, and it has to be re-derivable:
+/// `batch_txids` is append-only, so a replay reloads the full certified list and
+/// would otherwise put an excluded transaction back. Two passes then alternate
+/// between complementary halves and the tip oscillates forever — deterministically
+/// on every node, so a liveness halt rather than a divergence.
+#[tokio::test]
+async fn previously_excluded_txids_are_the_certified_minus_executed_difference() -> Result<()> {
+    let (_reader, writer, _temp_dir) = new_test_db().await?;
+    let conn = writer.connection();
+
+    let height: u64 = 100;
+    let hash = new_mock_block_hash(height as u32);
+    insert_block(&conn, BlockRow::builder().height(height).hash(hash).build()).await?;
+    insert_batch(&conn, 9, height, &hash.to_string(), b"cert9", false).await?;
+
+    let kept = "aa".repeat(32);
+    let excluded = "bb".repeat(32);
+    // Certified BOTH — that is what consensus decided.
+    insert_batch_txids(&conn, 9, &[kept.clone(), excluded.clone()]).await?;
+    // Executed only one: the other was dropped by a finality exclusion.
+    insert_transaction(
+        &conn,
+        TransactionRow::builder()
+            .height(height)
+            .batch_height(9)
+            .txid(kept.clone())
+            .build(),
+    )
+    .await?;
+
+    let previous = select_previously_excluded_txids(&conn, 0).await?;
+    assert!(
+        previous.contains(&excluded),
+        "a certified-but-unexecuted txid is a previous exclusion and must carry forward"
+    );
+    assert!(
+        !previous.contains(&kept),
+        "an executed txid was never excluded and must NOT be carried forward — \
+         doing so would drop a transaction that is executing fine"
+    );
+
+    // A batch below the replay band is not this rollback's business.
+    assert!(
+        select_previously_excluded_txids(&conn, height + 1)
+            .await?
+            .is_empty(),
+        "the band must be respected"
+    );
+    Ok(())
+}
