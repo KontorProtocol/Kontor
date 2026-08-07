@@ -1411,6 +1411,44 @@ impl<E: Executor> Reactor<E> {
                         None
                     };
 
+                    // Being buffered at the right height is not the same as being the
+                    // DECIDED block. A rollback can leave a decision whose block was
+                    // reorged away, and the block now pending at that height belongs
+                    // to the new chain — executing it under the old decision binds the
+                    // wrong block to that consensus record. The deferred drain has
+                    // always checked this; this path did not, so the guard held only
+                    // when the decision happened to arrive late.
+                    // Set when the mismatch branch below has already settled this
+                    // decision. The `else` arm cannot detect this case on its own — it
+                    // asks the DB whether an EXECUTED block differs, and at
+                    // `last_height + 1` nothing is executed yet, so it would read
+                    // "not stale" and defer a decision we just declined.
+                    let mut declined_stale = false;
+                    let ready = match ready {
+                        Some(block) if block.hash != *hash => {
+                            warn!(
+                                block_height = height,
+                                decided = %hash,
+                                local = %block.hash,
+                                consensus_height = %certificate.height,
+                                "Dropping stale block decision — hash mismatch after rollback"
+                            );
+                            let declined = consensus_state::DeferredDecision {
+                                consensus_height: certificate.height,
+                                value: proposal.value.clone(),
+                                certificate: cert_bytes.clone(),
+                                certified_txids: None,
+                            };
+                            self.record_declined_block(&declined, *height, *hash).await;
+                            // Back in the buffer: it is the canonical block for this
+                            // height on the new chain and still needs a fresh decision.
+                            self.consensus.pending_blocks.insert(*height, block);
+                            declined_stale = true;
+                            None
+                        }
+                        other => other,
+                    };
+
                     if let Some(block) = ready {
                         info!(
                             block_height = height,
@@ -1427,7 +1465,7 @@ impl<E: Executor> Reactor<E> {
                                 certified_txids: None,
                             },
                         );
-                    } else {
+                    } else if !declined_stale {
                         let is_stale = match select_block_at_height(&conn, *height).await {
                             Ok(Some(row)) => row.hash != *hash,
                             _ => false,
