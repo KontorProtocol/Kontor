@@ -8,6 +8,8 @@ use super::pagination::{PageOptions, get_paginated};
 use crate::database::types::TransactionQuery;
 
 pub async fn insert_transaction(conn: &Connection, row: TransactionRow) -> Result<u64, Error> {
+    let txid = row.txid.clone();
+    let confirmed = row.confirmed_height.is_some();
     conn.execute(
         "INSERT INTO transactions (height, txid, confirmed_height, tx_index, batch_height) VALUES (?, ?, ?, ?, ?)",
         params![
@@ -19,7 +21,24 @@ pub async fn insert_transaction(conn: &Connection, row: TransactionRow) -> Resul
         ],
     )
     .await?;
-    Ok(conn.last_insert_rowid() as u64)
+    // Captured before the delete below. `last_insert_rowid` tracks INSERTs only, so a
+    // DELETE would not disturb it — but reading it first means that never has to be
+    // re-derived by whoever edits this next.
+    let tx_id = conn.last_insert_rowid() as u64;
+    // Inserted ALREADY CONFIRMED means the transaction is on chain and indexed, so
+    // the raw copy kept for sync is redundant — same rule `confirm_transaction`
+    // applies when it moves an existing row to confirmed. Without it a record-only
+    // batch (which stores raw txs but writes no `transactions` row) leaks one full
+    // transaction body per txid forever: the confirming block takes this branch, not
+    // `confirm_transaction`, so nothing ever deleted it.
+    //
+    // Gated on `confirmed_height`, not unconditional: the batch-execution path
+    // inserts with `confirmed_height = None`, and its raw copy is exactly what a
+    // replay or a syncing peer still needs.
+    if confirmed {
+        delete_unconfirmed_batch_tx(conn, &txid).await?;
+    }
+    Ok(tx_id)
 }
 
 pub async fn confirm_transaction(

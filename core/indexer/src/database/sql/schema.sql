@@ -259,9 +259,10 @@ CREATE TABLE IF NOT EXISTS unconfirmed_batch_txs (
 );
 
 -- Sync resolves raw txs per batch (`select_unconfirmed_batch_txs`). The table is
--- keyed by txid, so without this that lookup is a full scan — and the rows are
--- long-lived: they are removed only on confirmation or by the startup suffix
--- cleanup, so a record-only or finality-excluded tx leaves one indefinitely.
+-- keyed by txid, so without this that lookup is a full scan. A row is removed once
+-- its transaction is indexed on chain (both the confirm and the insert path drop it)
+-- or by the startup suffix cleanup — so what remains is the finality-excluded txs,
+-- which never confirm and are exactly what sync cannot resolve any other way.
 CREATE INDEX IF NOT EXISTS idx_unconfirmed_batch_txs_batch_height
   ON unconfirmed_batch_txs (batch_height);
 

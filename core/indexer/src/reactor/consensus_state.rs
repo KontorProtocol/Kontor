@@ -750,10 +750,18 @@ impl ConsensusState {
     /// `resolve_batch_txs` then bails and the reactor exits, so a chain that had
     /// ever performed an exclusion was not reliably re-syncable from genesis.
     ///
-    /// Serving whatever remains is self-limiting: `unconfirmed_batch_txs` rows are
-    /// deleted on confirmation and by the startup suffix cleanup, so a batch whose
-    /// transactions all confirmed has none and the only rows ever served are the
-    /// otherwise-unresolvable ones.
+    /// Serving whatever remains is self-limiting: a row goes away as soon as its
+    /// transaction is indexed on chain — `confirm_transaction` when a row already
+    /// existed, `insert_transaction` when it did not — plus the startup suffix
+    /// cleanup. So a batch whose transactions all confirmed has none, and the only
+    /// rows ever served are the otherwise-unresolvable ones.
+    ///
+    /// That second deletion site is load-bearing and was missing: a RECORD-ONLY batch
+    /// stores raw txs but writes no `transactions` row, so the confirming block takes
+    /// the insert path, never `confirm_transaction`. Without it every record-only
+    /// batch — i.e. every batch decided while this node lags, the case this whole
+    /// change exists for — kept a full transaction body forever AND attached it to
+    /// that consensus height on every sync.
     async fn load_raw_txs_if_unfinalized(
         &self,
         conn: &libsql::Connection,

@@ -4569,3 +4569,54 @@ async fn test_unfinalized_batches_reachable_far_below_the_window() -> Result<()>
     );
     Ok(())
 }
+
+/// A record-only batch stores raw transactions but writes NO `transactions` row —
+/// it was never executed here. When those transactions later confirm on Bitcoin,
+/// `execute_block` finds no existing row and so takes its `insert_transaction`
+/// branch, never `confirm_transaction`. Only the latter dropped the raw copy, so
+/// the row survived its own transaction being indexed on-chain, forever.
+///
+/// That matters beyond disk: `load_raw_txs_if_unfinalized` no longer refuses
+/// anchors older than the finality window, so every surviving row is attached to
+/// the consensus height it belongs to on every sync — this node ships raw batch
+/// bodies to peers instead of txid lists, indefinitely. A node that lags (exactly
+/// what this PR hardens against) record-onlys every batch in that stretch.
+#[tokio::test]
+async fn indexing_a_transaction_on_chain_drops_its_unconfirmed_raw_copy() -> Result<()> {
+    let (_reader, writer, _temp_dir) = new_test_db().await?;
+    let conn = writer.connection();
+
+    let height: u64 = 100;
+    let hash = new_mock_block_hash(height as u32);
+    insert_block(&conn, BlockRow::builder().height(height).hash(hash).build()).await?;
+
+    // A record-only batch: the raw tx is kept for sync, with no `transactions` row.
+    let txid = "cc".repeat(32);
+    insert_batch(&conn, 7, height, &hash.to_string(), b"cert7", false).await?;
+    insert_unconfirmed_batch_tx(&conn, &txid, 7, b"raw-bytes").await?;
+    assert_eq!(
+        select_unconfirmed_batch_txs(&conn, 7).await?.len(),
+        1,
+        "setup: the record-only batch must have stored its raw tx"
+    );
+
+    // The transaction now confirms on Bitcoin and is indexed as a block tx —
+    // `execute_block`'s branch for a txid it has never seen before.
+    insert_transaction(
+        &conn,
+        TransactionRow::builder()
+            .height(height)
+            .tx_index(0)
+            .confirmed_height(height)
+            .txid(txid.clone())
+            .build(),
+    )
+    .await?;
+
+    assert!(
+        select_unconfirmed_batch_txs(&conn, 7).await?.is_empty(),
+        "the raw copy is redundant once the transaction is indexed on-chain — \
+         keeping it leaks a full transaction body per record-only batch forever"
+    );
+    Ok(())
+}
