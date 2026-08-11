@@ -105,44 +105,6 @@ fn dependency_sort(txs: &[bitcoin::Transaction]) -> Vec<usize> {
     ordered
 }
 
-/// Expand a set of excluded txids to every batch tx that (transitively) spends
-/// an excluded tx's output. Rollback replay filters excluded txids out of
-/// replayed batches; dropping a parent while keeping its child would execute
-/// the child against missing UTXOs and commit its deterministic failure —
-/// silent state divergence (#427). Operates over the ordered replay sequence,
-/// since a child may sit in a later batch than its parent. Iterates the
-/// forward pass to a true fixed point rather than assuming parents always
-/// precede children across batches — decided order makes that overwhelmingly
-/// likely, but no consensus rule ENFORCES the cross-batch direction, and the
-/// loop costs one extra no-growth pass in the normal case.
-fn transitive_exclusion(
-    batches: &[Vec<bitcoin::Transaction>],
-    excluded: &HashSet<Txid>,
-) -> HashSet<Txid> {
-    let mut excluded = excluded.clone();
-    loop {
-        let before = excluded.len();
-        for txs in batches {
-            for tx in txs {
-                let txid = tx.compute_txid();
-                if excluded.contains(&txid) {
-                    continue;
-                }
-                if tx
-                    .input
-                    .iter()
-                    .any(|i| excluded.contains(&i.previous_output.txid))
-                {
-                    excluded.insert(txid);
-                }
-            }
-        }
-        if excluded.len() == before {
-            return excluded;
-        }
-    }
-}
-
 /// Check that a batch's transactions are in a valid dependency order:
 /// every tx that spends another batch tx's output appears *after* that
 /// producer.
@@ -242,33 +204,31 @@ fn build_replay_queue(
             .is_some_and(|s| s.contains(&txid.to_string()))
     };
 
-    // A txid KEPT by any decision in this queue must not seed the descendant closure.
-    // It is executing legitimately somewhere — excluded from one height but re-decided
-    // at another against a fresh deadline — so treating it as excluded would strip its
-    // children from batches that should run them.
-    let kept_anywhere: HashSet<Txid> = merged
+    // Outputs the ORIGINAL execution had produced by each queue position that this
+    // replay will NOT have: every excluded tx, from the position it was dropped at,
+    // until (if ever) a later decision re-decides and keeps it. The queue order IS
+    // the execution order, so availability is a positional fact, not a global one:
+    //
+    // - A keep re-creates the parent's outputs only from its own position onward.
+    //   A child sitting BETWEEN an excluded parent and its re-decided copy executes
+    //   before the parent is rebuilt, so it drops — an order-blind "kept anywhere"
+    //   guard let exactly that child through (#427 through the re-decide door).
+    // - Conversely, a child ordered BEFORE its parent's position never saw the
+    //   parent's effects in the original execution either, so it keeps; the replay
+    //   reproduces the original sequence position by position.
+    //
+    // Exclusions recorded at heights not in this queue happened below `from_anchor`
+    // — before every position here — so they are unavailable from the start: the
+    // rollback wiped the parent's effects and nothing in the queue rebuilds them
+    // (#427's original shape).
+    let queued_heights: HashSet<u64> = merged
         .iter()
-        .flat_map(|(d, txs)| {
-            txs.iter()
-                .filter(move |t| !dropped_at(d, &t.compute_txid()))
-        })
-        .map(|t| t.compute_txid())
+        .map(|(d, _)| d.consensus_height.as_u64())
         .collect();
-
-    let seed: HashSet<Txid> = applicable
-        .values()
-        .flatten()
-        .filter_map(|t| t.parse::<Txid>().ok())
-        .filter(|t| !kept_anywhere.contains(t))
-        .collect();
-
-    // Descendants only — the seed itself is already handled per decision above, and
-    // folding it back in would re-globalise exactly what the per-height scope fixes.
-    let batches: Vec<Vec<bitcoin::Transaction>> =
-        merged.iter().map(|(_, txs)| txs.clone()).collect();
-    let descendants: HashSet<Txid> = transitive_exclusion(&batches, &seed)
-        .difference(&seed)
-        .copied()
+    let mut unavailable: HashSet<Txid> = applicable
+        .iter()
+        .filter(|(height, _)| !queued_heights.contains(height))
+        .flat_map(|(_, txids)| txids.iter().filter_map(|t| t.parse::<Txid>().ok()))
         .collect();
 
     let mut all_excluded: HashSet<Txid> = HashSet::new();
@@ -289,13 +249,23 @@ fn build_replay_queue(
                 let txid = tx.compute_txid();
                 if dropped_at(&decision, &txid) {
                     all_excluded.insert(txid);
-                } else if descendants.contains(&txid) {
-                    // Newly discovered this pass — record it so a later replay does
-                    // not have to rediscover it (and cannot skip it if it does not).
+                    unavailable.insert(txid);
+                } else if tx
+                    .input
+                    .iter()
+                    .any(|i| unavailable.contains(&i.previous_output.txid))
+                {
+                    // A descendant of a tx that is missing AT THIS POSITION — newly
+                    // discovered this pass, so record it: a later replay must not
+                    // have to rediscover it (and cannot skip it if it does not).
                     all_excluded.insert(txid);
                     closure_rows.push((height, txid.to_string(), deadline_for(anchor_height)));
+                    unavailable.insert(txid);
                 } else {
                     kept.push(tx.clone());
+                    // A re-decided copy of a previously excluded tx: from here on
+                    // its outputs exist again, so later children survive.
+                    unavailable.remove(&txid);
                 }
             }
             // Narrowing what we execute must not narrow what we record as decided —
@@ -1654,10 +1624,7 @@ impl<E: Executor> Reactor<E> {
 
 #[cfg(test)]
 mod tests {
-    use super::{
-        batch_is_ordered, build_replay_queue, dependency_sort, restore_waiting,
-        transitive_exclusion,
-    };
+    use super::{batch_is_ordered, build_replay_queue, dependency_sort, restore_waiting};
     use crate::consensus::{Height, Value};
     use crate::reactor::consensus_state::DeferredDecision;
     use bitcoin::absolute::LockTime;
@@ -1744,40 +1711,6 @@ mod tests {
         let b = tx(&[OutPoint::null()], 2);
         let c = tx(&[OutPoint::null()], 3);
         assert_eq!(dependency_sort(&[a, b, c]), vec![0, 1, 2]);
-    }
-
-    #[test]
-    fn transitive_exclusion_drops_descendants_within_a_batch() {
-        let parent = tx(&[OutPoint::null()], 1);
-        let child = tx(&[spend(&parent)], 2);
-        let grandchild = tx(&[spend(&child)], 3);
-        let independent = tx(&[OutPoint::null()], 4);
-
-        let excluded: HashSet<Txid> = [parent.compute_txid()].into();
-        let batch = vec![
-            parent.clone(),
-            child.clone(),
-            grandchild.clone(),
-            independent.clone(),
-        ];
-        let result = transitive_exclusion(&[batch], &excluded);
-
-        assert!(result.contains(&parent.compute_txid()));
-        assert!(result.contains(&child.compute_txid()));
-        assert!(result.contains(&grandchild.compute_txid()));
-        assert!(!result.contains(&independent.compute_txid()));
-    }
-
-    #[test]
-    fn transitive_exclusion_crosses_batch_boundaries() {
-        let parent = tx(&[OutPoint::null()], 1);
-        let child = tx(&[spend(&parent)], 2);
-        let excluded: HashSet<Txid> = [parent.compute_txid()].into();
-
-        // Parent in batch 0, child in batch 1 — the closure must follow the
-        // dependency across the replay sequence.
-        let result = transitive_exclusion(&[vec![parent.clone()], vec![child.clone()]], &excluded);
-        assert!(result.contains(&child.compute_txid()));
     }
 
     /// Decisions are identified by consensus height, not by position.
@@ -1980,9 +1913,141 @@ mod tests {
         );
     }
 
+    /// The keep guard is POSITIONAL. A parent excluded at one height and re-decided
+    /// at a LATER queue position only re-creates its outputs from that position
+    /// onward — a child sitting BETWEEN the exclusion and the re-decide executes
+    /// before the parent is rebuilt, so it must still drop (#427). An order-blind
+    /// "kept anywhere" guard let exactly this child through.
+    #[test]
+    fn build_replay_queue_drops_a_child_ordered_before_its_parents_re_decide() {
+        let parent = tx(&[OutPoint::null()], 1);
+        let child = tx(&[spend(&parent)], 2);
+
+        let (queue, _, closure_rows) = build_replay_queue(
+            vec![carrying(10, vec![parent.clone()])],
+            vec![
+                carrying(14, vec![child.clone()]),
+                carrying(20, vec![parent.clone()]),
+            ],
+            &excl(&[(10, parent.compute_txid())]),
+        );
+
+        assert!(
+            queue[1].value.batch_raw_txs().is_empty(),
+            "the child executes before the parent's re-decide rebuilds its output, \
+             so it must drop"
+        );
+        assert!(
+            closure_rows
+                .iter()
+                .any(|(h, t, _)| *h == 14 && t == &child.compute_txid().to_string()),
+            "and the drop must be recorded against the child's own decision"
+        );
+        assert_eq!(
+            queue[2].value.batch_raw_txs().len(),
+            1,
+            "the re-decided parent itself still executes at its own height"
+        );
+    }
+
+    /// The positional rule cuts the other way too: a child ordered BEFORE its
+    /// parent's position never saw the parent's effects in the ORIGINAL execution
+    /// either (the parent had not run yet), so the replay must reproduce that and
+    /// keep it. Dropping it would diverge from every node that executed the
+    /// original sequence.
+    #[test]
+    fn build_replay_queue_keeps_a_child_ordered_before_its_parents_exclusion() {
+        let parent = tx(&[OutPoint::null()], 1);
+        let child = tx(&[spend(&parent)], 2);
+
+        let (queue, _, closure_rows) = build_replay_queue(
+            vec![
+                carrying(5, vec![child.clone()]),
+                carrying(10, vec![parent.clone()]),
+            ],
+            Vec::new(),
+            &excl(&[(10, parent.compute_txid())]),
+        );
+
+        assert_eq!(
+            queue[0].value.batch_raw_txs().len(),
+            1,
+            "the child ran before the parent in the original sequence, so the \
+             parent's exclusion cannot retroactively orphan it"
+        );
+        assert!(closure_rows.is_empty());
+    }
+
+    /// A parent excluded at a height that is NOT in the queue was excluded below
+    /// `from_anchor` — before every queue position — so its outputs are missing
+    /// from the start and its in-queue children must drop (#427). Pins the
+    /// out-of-queue seeding the positional walk must not lose.
+    #[test]
+    fn build_replay_queue_drops_a_child_of_a_parent_excluded_outside_the_queue() {
+        let parent = tx(&[OutPoint::null()], 1);
+        let child = tx(&[spend(&parent)], 2);
+
+        let (queue, _, closure_rows) = build_replay_queue(
+            vec![carrying(10, vec![child.clone()])],
+            Vec::new(),
+            &excl(&[(3, parent.compute_txid())]),
+        );
+
+        assert!(
+            queue[0].value.batch_raw_txs().is_empty(),
+            "the parent's exclusion below the replay window still orphans the child"
+        );
+        assert!(
+            closure_rows
+                .iter()
+                .any(|(h, t, _)| *h == 10 && t == &child.compute_txid().to_string()),
+        );
+    }
+
+    /// A within-batch dependency chain collapses transitively from the excluded
+    /// parent down, while an independent tx in the same batch survives.
+    #[test]
+    fn build_replay_queue_drops_a_whole_chain_within_one_batch() {
+        let parent = tx(&[OutPoint::null()], 1);
+        let child = tx(&[spend(&parent)], 2);
+        let grandchild = tx(&[spend(&child)], 3);
+        let independent = tx(&[OutPoint::null()], 4);
+
+        let (queue, excluded, _) = build_replay_queue(
+            vec![carrying(
+                10,
+                vec![
+                    parent.clone(),
+                    child.clone(),
+                    grandchild.clone(),
+                    independent.clone(),
+                ],
+            )],
+            Vec::new(),
+            &excl(&[(10, parent.compute_txid())]),
+        );
+
+        let kept: Vec<Txid> = queue[0]
+            .value
+            .batch_raw_txs()
+            .iter()
+            .map(|t| t.compute_txid())
+            .collect();
+        assert_eq!(kept, vec![independent.compute_txid()]);
+        assert_eq!(
+            excluded,
+            [
+                parent.compute_txid(),
+                child.compute_txid(),
+                grandchild.compute_txid()
+            ]
+            .into()
+        );
+    }
+
     /// But a child whose parent is excluded and appears NOWHERE else must still drop:
-    /// it would execute against state the rollback wiped (#427). The `kept_anywhere`
-    /// guard must not be widened into "never seed the closure".
+    /// it would execute against state the rollback wiped (#427). The re-decide keep
+    /// must not be widened into "never treat an excluded parent as missing".
     #[test]
     fn build_replay_queue_still_drops_a_child_of_an_absent_parent() {
         let parent = tx(&[OutPoint::null()], 1);
@@ -2192,15 +2257,4 @@ mod tests {
         assert_eq!(heights(&queue), vec![7]);
     }
 
-    #[test]
-    fn transitive_exclusion_leaves_unrelated_batches_untouched() {
-        let a = tx(&[OutPoint::null()], 1);
-        let b = tx(&[OutPoint::null()], 2);
-        let excluded: HashSet<Txid> = [tx(&[OutPoint::null()], 9).compute_txid()].into();
-
-        let result = transitive_exclusion(&[vec![a.clone()], vec![b.clone()]], &excluded);
-        assert!(!result.contains(&a.compute_txid()));
-        assert!(!result.contains(&b.compute_txid()));
-        assert_eq!(result.len(), 1);
-    }
 }
