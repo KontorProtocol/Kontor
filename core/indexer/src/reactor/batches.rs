@@ -327,12 +327,12 @@ impl<E: Executor> Reactor<E> {
     /// replay and unfinalized-batch sync resolve from). Written for executed
     /// AND record-only batches — the certificate covers both.
     ///
-    /// The two tables take DIFFERENT lists when a rollback has narrowed this
-    /// batch. `batch_txids` records what consensus DECIDED (`certified`, when the
-    /// caller has it), because a syncing peer re-derives the exclusions itself and
-    /// needs the full list to match the certificate. `unconfirmed_batch_txs` records
-    /// only what we still HOLD — an excluded transaction was dropped precisely
-    /// because it never confirmed, so there is no raw transaction to serve.
+    /// BOTH tables record the DECIDED list when a rollback has narrowed this
+    /// batch (`certified`, when the caller has it): `batch_txids` because that is
+    /// what the certificate covers and a syncing peer re-derives the exclusions
+    /// itself, and `unconfirmed_batch_txs` because an excluded transaction never
+    /// confirmed — this node's copy of its body is the only one a peer can ever
+    /// obtain, so dropping it leaves the height unresolvable.
     ///
     /// Note `insert_batch_txids` is `INSERT OR IGNORE` on `(batch_height, position)`,
     /// which protects an already-complete list from being overwritten — but only
@@ -413,8 +413,9 @@ impl<E: Executor> Reactor<E> {
             // original txids, and `batch_txids` records what consensus decided (I4) —
             // a peer syncing this height re-derives the exclusions itself, so it needs
             // that list. `certified` is None for a genuinely empty decided batch, which
-            // has nothing to record. `batch_txs` is empty either way, so this writes no
-            // `unconfirmed_batch_txs` rows.
+            // has nothing to record. `record_batch_txs` writes the DECIDED list to
+            // both tables, so an emptied batch still records its certified txids AND
+            // their raw bodies — the bodies of all-excluded txs exist nowhere else.
             if certified.is_some() {
                 self.record_batch_txs(&conn, consensus_height, batch_txs, certified)
                     .await
@@ -867,13 +868,6 @@ impl<E: Executor> Reactor<E> {
             .context("Failed to load replay batches for rollback")
     }
 
-    /// Install the replay decisions loaded by `load_replay_decisions` and kick
-    /// off block redelivery. Runs AFTER the DB truncation: the raw-tx
-    /// resolution below can touch bitcoind, and a transient failure here is
-    /// fatal-but-recoverable (the rollback already happened; on restart the
-    /// startup cleanup forgets the unexecuted suffix and the node re-syncs).
-    /// Before the truncation it would instead CANCEL a rollback that finality
-    /// already demanded.
     /// Pair each decision with the transactions it carries.
     ///
     /// Both sides of the replay merge must resolve the SAME way: the exclusion
@@ -896,6 +890,13 @@ impl<E: Executor> Reactor<E> {
         Ok(out)
     }
 
+    /// Install the replay decisions loaded by `load_replay_decisions` and kick
+    /// off block redelivery. Runs AFTER the DB truncation: the raw-tx
+    /// resolution can touch bitcoind, and a transient failure here is
+    /// fatal-but-recoverable (the rollback already happened; on restart the
+    /// startup cleanup forgets the unexecuted suffix and the node re-syncs).
+    /// Before the truncation it would instead CANCEL a rollback that finality
+    /// already demanded.
     pub(super) async fn prepare_replay(
         &mut self,
         from_anchor: u64,
@@ -910,14 +911,7 @@ impl<E: Executor> Reactor<E> {
             "Initiating rollback replay"
         );
 
-        // Resolve BOTH the replay set and whatever was already queued before
-        // excluding anything: the exclusion closure must see tx INPUTS to drop
-        // descendants of an excluded tx, and a descendant can perfectly well sit in
-        // a queued decision — it is queued because its anchor is HIGHER, which is
-        // exactly where a child of an earlier tx lives. Resolving only the replay
-        // set let such a child through to execute against state the rollback wiped
-        // (#427 in a second form). Resolution pulls from the same sources the drain
-        // would use later.
+        // BOTH sides resolve, not just the replay set — see `resolve_decisions`.
         let replayed = self.resolve_decisions(replay_batches).await?;
         let queued = std::mem::take(&mut self.consensus.deferred_decisions);
         let survivors = self.resolve_decisions(queued).await?;

@@ -908,7 +908,9 @@ impl ConsensusState {
     }
 
     /// Run finality checks. Returns the events produced and, if a rollback is needed,
-    /// `(rollback_anchor, excluded_txids)`.
+    /// `(rollback_anchor, missing)` — the missing txids attributed to the decided
+    /// batch each failed in (`Vec<BatchExclusion>`), deliberately never flattened:
+    /// a flat set is how a global txid ban gets built by accident.
     ///
     /// Does NOT emit the events — the caller does, after deciding it can actually
     /// perform the rollback. The tracking set IS drained here either way; a caller

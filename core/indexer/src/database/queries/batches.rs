@@ -280,18 +280,6 @@ pub async fn select_unconfirmed_batch_tx(
         .transpose()?)
 }
 
-/// Executed, still-unfinalized batches anchored at or above `from_anchor`, with the
-/// txids this node ACTUALLY executed for each — for rebuilding finality tracking
-/// after a restart.
-///
-/// Sourced from `transactions`, deliberately NOT from `batch_txids`. The certified
-/// list is append-only (`INSERT OR IGNORE` on `(batch_height, position)`, no cascade),
-/// so once a replay has dropped excluded transactions from a batch the stored list
-/// still holds them, permanently. Rehydrating from it would re-arm a deadline on
-/// txids this node deliberately dropped and trigger a rollback no peer performs.
-/// The join also subsumes an "did we execute this batch" existence check: record-only
-/// batches write no `transactions` rows and rolled-back ones have theirs cascade-deleted.
-///
 /// Recorded exclusions that STILL HOLD, keyed by the consensus height they apply to.
 ///
 /// The stored row is a node-local fact: "we found T missing at H's deadline". The
@@ -352,6 +340,17 @@ pub async fn insert_excluded_batch_txids(
     Ok(())
 }
 
+/// Executed, still-unfinalized batches anchored at or above `from_anchor`, with the
+/// txids this node ACTUALLY executed for each — for rebuilding finality tracking
+/// after a restart.
+///
+/// Sourced from `transactions`, deliberately NOT from `batch_txids`. The certified
+/// list is append-only (`INSERT OR IGNORE` on `(batch_height, position)`, no cascade),
+/// so once a replay has dropped excluded transactions from a batch the stored list
+/// still holds them, permanently. Rehydrating from it would re-arm a deadline on
+/// txids this node deliberately dropped and trigger a rollback no peer performs.
+/// The join also subsumes an "did we execute this batch" existence check: record-only
+/// batches write no `transactions` rows and rolled-back ones have theirs cascade-deleted.
 pub async fn select_unfinalized_batches(
     conn: &Connection,
     from_anchor: u64,

@@ -256,10 +256,11 @@ pub struct Runtime {
     /// serve the simulated contract's code — on this node only, so it diverges
     /// from the network.
     ///
-    /// A flag rather than a compensating invalidate: the cache has one write
-    /// site, so not writing is one check that cannot be forgotten, where cleanup
-    /// is a fourth thing to remember in a function whose first two (`height`,
-    /// then this) were both missed.
+    /// A flag rather than a compensating invalidate: the cache has TWO write
+    /// sites (`component_bytes_and_compiled` and `validate_publishable`), each
+    /// carrying its own `!simulating` guard, so not writing is one check per
+    /// site rather than a cleanup to remember in a function whose first two
+    /// hazards (`height`, then this) were both missed.
     pub simulating: bool,
 }
 
@@ -933,7 +934,8 @@ impl Runtime {
     async fn component_bytes_and_compiled(&self, contract_id: u64) -> Result<(Vec<u8>, Component)> {
         let bytes = self.storage.component_bytes(contract_id).await?;
         let component = Component::from_binary(&self.engine, &bytes)?;
-        // The one write site, so the one place the simulation guard has to hold.
+        // One of the cache's TWO write sites — `validate_publishable` guards the
+        // other, and its guard is the one the publish path depends on.
         // See `Runtime::simulating`: caching a speculative contract's code under an
         // id the rollback frees would let a later real publish be served the wrong
         // WASM on this node alone.
