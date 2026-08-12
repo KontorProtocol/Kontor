@@ -153,8 +153,8 @@ fn restore_waiting(
 
 /// Assemble the post-rollback replay queue: merge the replay set with the decisions
 /// already queued, and drop excluded transactions — plus anything descending from
-/// them — from the batches in the result. Returns the queue and the full transitive
-/// exclusion set, which the caller also purges from the proposal pool.
+/// them — from the batches in the result. Returns the queue and every txid dropped
+/// this pass, which the caller also purges from the proposal pool.
 ///
 /// MERGE, not overwrite: the replay set comes from `select_batches_from_anchor`,
 /// which returns only heights that already have a `batches` row, while a queued
@@ -172,20 +172,12 @@ fn restore_waiting(
 ///
 /// The two inputs should be disjoint by height; where they are not, the replayed
 /// copy wins because it was loaded from the decided record.
-/// The replay queue, every txid dropped this pass (for pool eviction), and the
-/// DESCENDANT exclusions to record against the decisions they were removed from.
-type ReplayPlan = (
-    VecDeque<consensus_state::DeferredDecision>,
-    HashSet<Txid>,
-    Vec<(u64, String, u64)>,
-);
-
 fn build_replay_queue(
     replayed: Vec<(consensus_state::DeferredDecision, Vec<bitcoin::Transaction>)>,
     survivors: Vec<(consensus_state::DeferredDecision, Vec<bitcoin::Transaction>)>,
     // Exclusions PER consensus height, already re-verified against the chain.
     applicable: &HashMap<u64, HashSet<String>>,
-) -> ReplayPlan {
+) -> (VecDeque<consensus_state::DeferredDecision>, HashSet<Txid>) {
     let replayed_heights: Vec<Height> = replayed.iter().map(|(d, _)| d.consensus_height).collect();
     let survivors: Vec<_> = survivors
         .into_iter()
@@ -232,7 +224,6 @@ fn build_replay_queue(
         .collect();
 
     let mut all_excluded: HashSet<Txid> = HashSet::new();
-    let mut closure_rows: Vec<(u64, String, u64)> = Vec::new();
     let mut queue = VecDeque::with_capacity(merged.len());
 
     for (mut decision, txs) in merged {
@@ -243,7 +234,6 @@ fn build_replay_queue(
         } = &decision.value
         {
             let (anchor_height, anchor_hash) = (*anchor_height, *anchor_hash);
-            let height = decision.consensus_height.as_u64();
             let mut kept = Vec::with_capacity(txs.len());
             for tx in &txs {
                 let txid = tx.compute_txid();
@@ -255,11 +245,17 @@ fn build_replay_queue(
                     .iter()
                     .any(|i| unavailable.contains(&i.previous_output.txid))
                 {
-                    // A descendant of a tx that is missing AT THIS POSITION — newly
-                    // discovered this pass, so record it: a later replay must not
-                    // have to rediscover it (and cannot skip it if it does not).
+                    // A descendant of a tx that is missing AT THIS POSITION. Dropped
+                    // in memory, deliberately NOT recorded in `excluded_batch_txids`:
+                    // a descendant's drop is only justified while its parent stays
+                    // excluded, and a durable row outlives that justification — the
+                    // read predicate re-checks the CHILD's confirmation, never the
+                    // parent's recovery, so a recorded child would stay dropped after
+                    // a reorg heals the parent while every fresh syncer executes it.
+                    // Re-deriving from the durable base rows each pass costs at most
+                    // one extra rollback (a leaked child re-arms its own deadline and
+                    // becomes a base row); a wrong durable drop is a divergence.
                     all_excluded.insert(txid);
-                    closure_rows.push((height, txid.to_string(), deadline_for(anchor_height)));
                     unavailable.insert(txid);
                 } else {
                     kept.push(tx.clone());
@@ -285,7 +281,7 @@ fn build_replay_queue(
         queue.push_back(decision);
     }
 
-    (queue, all_excluded, closure_rows)
+    (queue, all_excluded)
 }
 
 /// What `process_decided_batch` did with a decided batch. Callers must not
@@ -926,22 +922,8 @@ impl<E: Executor> Reactor<E> {
         let queued = std::mem::take(&mut self.consensus.deferred_decisions);
         let survivors = self.resolve_decisions(queued).await?;
 
-        let (queue, excluded, closure_rows) = build_replay_queue(replayed, survivors, &applicable);
+        let (queue, excluded) = build_replay_queue(replayed, survivors, &applicable);
         self.consensus.deferred_decisions = queue;
-
-        // The DESCENDANT closure, attributed to the decisions it actually removed
-        // from. Best-effort and post-truncation, unlike the base set written before
-        // the rollback: losing these degrades to one extra rollback pass (the base
-        // rows survive, so the next pass re-derives the same closure), never to a
-        // wrong execution.
-        if let Err(e) = insert_excluded_batch_txids(&self.db_conn(), &closure_rows).await {
-            warn!(
-                error = %e,
-                count = closure_rows.len(),
-                "Failed to record this pass's descendant exclusions; the next pass will \
-                 re-derive them"
-            );
-        }
 
         // The excluded txids must also leave the proposal pool, or the next
         // make_value re-proposes the very txs whose missing confirmations caused
@@ -1772,7 +1754,7 @@ mod tests {
         let unrelated = tx(&[OutPoint::null()], 3);
 
         let excluded = excl(&[(10, parent.compute_txid())]);
-        let (queue, closure, _) = build_replay_queue(
+        let (queue, closure) = build_replay_queue(
             vec![carrying(10, vec![parent.clone()])],
             vec![carrying(14, vec![child.clone(), unrelated.clone()])],
             &excluded,
@@ -1805,7 +1787,7 @@ mod tests {
         let kept = tx(&[OutPoint::null()], 3);
 
         let excluded = excl(&[(10, parent.compute_txid())]);
-        let (queue, _, _) = build_replay_queue(
+        let (queue, _) = build_replay_queue(
             vec![carrying(10, vec![parent.clone()])],
             vec![carrying(14, vec![child.clone(), kept.clone()])],
             &excluded,
@@ -1838,7 +1820,7 @@ mod tests {
         let child_b = tx(&[spend(&parent)], 3);
 
         let excluded = excl(&[(10, parent.compute_txid())]);
-        let (queue, _, _) = build_replay_queue(
+        let (queue, _) = build_replay_queue(
             vec![carrying(10, vec![parent.clone()])],
             vec![carrying(14, vec![child_a.clone(), child_b.clone()])],
             &excluded,
@@ -1867,7 +1849,7 @@ mod tests {
         let t = tx(&[OutPoint::null()], 1);
         let other = tx(&[OutPoint::null()], 2);
 
-        let (queue, _, _) = build_replay_queue(
+        let (queue, _) = build_replay_queue(
             vec![carrying(10, vec![t.clone()])],
             vec![carrying(14, vec![t.clone(), other.clone()])],
             &excl(&[(10, t.compute_txid())]),
@@ -1898,7 +1880,7 @@ mod tests {
         let parent = tx(&[OutPoint::null()], 1);
         let child = tx(&[spend(&parent)], 2);
 
-        let (queue, _, _) = build_replay_queue(
+        let (queue, _) = build_replay_queue(
             vec![carrying(10, vec![parent.clone()])],
             vec![
                 carrying(14, vec![parent.clone()]),
@@ -1923,7 +1905,7 @@ mod tests {
         let parent = tx(&[OutPoint::null()], 1);
         let child = tx(&[spend(&parent)], 2);
 
-        let (queue, _, closure_rows) = build_replay_queue(
+        let (queue, dropped) = build_replay_queue(
             vec![carrying(10, vec![parent.clone()])],
             vec![
                 carrying(14, vec![child.clone()]),
@@ -1937,12 +1919,7 @@ mod tests {
             "the child executes before the parent's re-decide rebuilds its output, \
              so it must drop"
         );
-        assert!(
-            closure_rows
-                .iter()
-                .any(|(h, t, _)| *h == 14 && t == &child.compute_txid().to_string()),
-            "and the drop must be recorded against the child's own decision"
-        );
+        assert!(dropped.contains(&child.compute_txid()));
         assert_eq!(
             queue[2].value.batch_raw_txs().len(),
             1,
@@ -1960,7 +1937,7 @@ mod tests {
         let parent = tx(&[OutPoint::null()], 1);
         let child = tx(&[spend(&parent)], 2);
 
-        let (queue, _, closure_rows) = build_replay_queue(
+        let (queue, dropped) = build_replay_queue(
             vec![
                 carrying(5, vec![child.clone()]),
                 carrying(10, vec![parent.clone()]),
@@ -1975,7 +1952,7 @@ mod tests {
             "the child ran before the parent in the original sequence, so the \
              parent's exclusion cannot retroactively orphan it"
         );
-        assert!(closure_rows.is_empty());
+        assert!(!dropped.contains(&child.compute_txid()));
     }
 
     /// A parent excluded at a height that is NOT in the queue was excluded below
@@ -1987,7 +1964,7 @@ mod tests {
         let parent = tx(&[OutPoint::null()], 1);
         let child = tx(&[spend(&parent)], 2);
 
-        let (queue, _, closure_rows) = build_replay_queue(
+        let (queue, dropped) = build_replay_queue(
             vec![carrying(10, vec![child.clone()])],
             Vec::new(),
             &excl(&[(3, parent.compute_txid())]),
@@ -1997,11 +1974,7 @@ mod tests {
             queue[0].value.batch_raw_txs().is_empty(),
             "the parent's exclusion below the replay window still orphans the child"
         );
-        assert!(
-            closure_rows
-                .iter()
-                .any(|(h, t, _)| *h == 10 && t == &child.compute_txid().to_string()),
-        );
+        assert!(dropped.contains(&child.compute_txid()));
     }
 
     /// A within-batch dependency chain collapses transitively from the excluded
@@ -2013,7 +1986,7 @@ mod tests {
         let grandchild = tx(&[spend(&child)], 3);
         let independent = tx(&[OutPoint::null()], 4);
 
-        let (queue, excluded, _) = build_replay_queue(
+        let (queue, excluded) = build_replay_queue(
             vec![carrying(
                 10,
                 vec![
@@ -2053,7 +2026,7 @@ mod tests {
         let parent = tx(&[OutPoint::null()], 1);
         let child = tx(&[spend(&parent)], 2);
 
-        let (queue, _, closure_rows) = build_replay_queue(
+        let (queue, dropped) = build_replay_queue(
             vec![carrying(10, vec![parent.clone()])],
             vec![carrying(14, vec![child.clone()])],
             &excl(&[(10, parent.compute_txid())]),
@@ -2063,13 +2036,7 @@ mod tests {
             queue[1].value.batch_raw_txs().is_empty(),
             "a descendant of an excluded, otherwise-absent parent must not execute"
         );
-        assert!(
-            closure_rows
-                .iter()
-                .any(|(h, t, _)| *h == 14 && t == &child.compute_txid().to_string()),
-            "and the closure must be RECORDED against the height it was removed from, \
-             so a later pass does not have to rediscover it"
-        );
+        assert!(dropped.contains(&child.compute_txid()));
     }
 
     /// An unmarked decision is untouched — the record-only case, which has certified
@@ -2078,13 +2045,13 @@ mod tests {
     fn build_replay_queue_leaves_an_unmarked_decision_intact() {
         let a = tx(&[OutPoint::null()], 1);
         let b = tx(&[OutPoint::null()], 2);
-        let (queue, excluded, rows) = build_replay_queue(
+        let (queue, excluded) = build_replay_queue(
             vec![carrying(10, vec![a.clone(), b.clone()])],
             Vec::new(),
             &HashMap::new(),
         );
         assert_eq!(queue[0].value.batch_raw_txs().len(), 2);
-        assert!(excluded.is_empty() && rows.is_empty());
+        assert!(excluded.is_empty());
     }
 
     /// Narrowing must not destroy the EXCLUDED transactions' bodies.
@@ -2104,7 +2071,7 @@ mod tests {
         let kept = tx(&[OutPoint::null()], 3);
 
         let excluded = excl(&[(10, parent.compute_txid())]);
-        let (queue, _, _) = build_replay_queue(
+        let (queue, _) = build_replay_queue(
             vec![carrying(10, vec![parent.clone()])],
             vec![carrying(14, vec![child.clone(), kept.clone()])],
             &excluded,
@@ -2149,7 +2116,7 @@ mod tests {
 
         // Pass two excludes `second`.
         let excluded = excl(&[(14, second.compute_txid())]);
-        let (queue, _, _) = build_replay_queue(
+        let (queue, _) = build_replay_queue(
             Vec::new(),
             vec![(decision, vec![second.clone(), survivor_tx.clone()])],
             &excluded,
@@ -2172,7 +2139,7 @@ mod tests {
     #[test]
     fn build_replay_queue_leaves_certified_txs_unset_when_nothing_is_filtered() {
         let a = tx(&[OutPoint::null()], 1);
-        let (queue, _, _) = build_replay_queue(
+        let (queue, _) = build_replay_queue(
             vec![carrying(10, vec![a.clone()])],
             Vec::new(),
             &HashMap::new(),
