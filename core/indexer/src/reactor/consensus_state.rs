@@ -315,14 +315,17 @@ async fn load_unfinalized_batches(
     // floor down to the oldest batch transaction still unconfirmed — the exact set
     // that can still be owed a verdict — so the range stays indexed rather than
     // becoming a full scan of `batches`.
-    let floor = match min_unsettled_batch_tx_height(conn, FINALITY_WINDOW).await {
-        Ok(Some(oldest)) => oldest.min(tracking_floor(tip)),
-        Ok(None) => tracking_floor(tip),
-        Err(e) => {
-            warn!(error = %e, "Unconfirmed-height probe failed; using the window floor");
-            tracking_floor(tip)
-        }
-    };
+    // A failed probe PROPAGATES rather than falling back to the window floor:
+    // the fallback silently narrows the band, dropping exactly the crash-window
+    // batches the extension exists to re-arm — permanently, since every later
+    // reload repeats the same fold. Failing here is recoverable (restart,
+    // re-probe); a batch dropped from tracking is not.
+    let floor = min_unsettled_batch_tx_height(conn, FINALITY_WINDOW)
+        .await
+        .context("Failed to probe the unsettled-batch floor")?
+        .map_or(tracking_floor(tip), |oldest| {
+            oldest.min(tracking_floor(tip))
+        });
     let rows = select_unfinalized_batches(conn, floor)
         .await
         .context("Failed to query unfinalized batches")?;
@@ -992,8 +995,8 @@ impl ConsensusState {
 #[cfg(test)]
 mod tests {
     use super::{
-        DeferredDecision, UnfinalizedBatch, VecDeque, build_finality_events, missing_txids,
-        probe_at_deadline, record_undrained_decisions,
+        DeferredDecision, UnfinalizedBatch, VecDeque, build_finality_events,
+        load_unfinalized_batches, missing_txids, probe_at_deadline, record_undrained_decisions,
     };
     use crate::consensus::Height;
     use crate::consensus::Value;
@@ -1277,6 +1280,34 @@ mod tests {
             missing_txids(&conn, &b).await.is_err(),
             "a failed read must propagate — reporting the txid as missing would \
              render a consensus verdict on a table this node could not read"
+        );
+    }
+
+    /// The rehydration floor extension exists to re-arm batches whose deadline
+    /// passed with no verdict rendered (a crash inside one drain). Folding a
+    /// failed probe into "use the plain window floor" silently narrows the
+    /// tracking band — dropping exactly those crash-window batches from tracking,
+    /// permanently, since every later reload repeats the same fold. A failed read
+    /// is recoverable by restart; a silently narrowed band is not.
+    #[tokio::test]
+    async fn a_failed_floor_probe_is_an_error_not_a_narrower_band() {
+        let (_reader, writer, _dir) = new_test_db().await.unwrap();
+        let conn = writer.connection();
+
+        // Break ONLY the probe's query: it reads `height`, which nothing else on
+        // the rehydration path touches (the `executed_batch_txids` view carries
+        // batch_height/txid/id).
+        conn.execute(
+            "ALTER TABLE transactions RENAME COLUMN height TO height_hidden",
+            (),
+        )
+        .await
+        .expect("rename column");
+
+        assert!(
+            load_unfinalized_batches(&conn, 100).await.is_err(),
+            "a failed floor probe must propagate — rehydrating from a silently \
+             narrowed band drops crash-window batches from tracking permanently"
         );
     }
 
