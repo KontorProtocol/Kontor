@@ -201,9 +201,7 @@ impl MockBitcoin {
             .mined_blocks
             .iter()
             .find_map(|e| match e {
-                BlockEvent::BlockInsert { block, .. } if block.height == height => {
-                    Some(block.hash)
-                }
+                BlockEvent::BlockInsert { block, .. } if block.height == height => Some(block.hash),
                 _ => None,
             })
             .unwrap_or_else(|| new_mock_block_hash(height as u32));

@@ -1592,9 +1592,9 @@ impl<E: Executor> Reactor<E> {
                                 // range receives no further block events to trigger
                                 // the drain: without this it parks forever with the
                                 // re-decided chain queued behind it.
-                                self.advance().await.context(
-                                    "advance failed after deferring a block decision",
-                                )?;
+                                self.advance()
+                                    .await
+                                    .context("advance failed after deferring a block decision")?;
                             }
                         }
                     }
@@ -2266,5 +2266,4 @@ mod tests {
         restore_waiting(&mut queue, &mut waiting);
         assert_eq!(heights(&queue), vec![7]);
     }
-
 }

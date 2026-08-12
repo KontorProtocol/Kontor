@@ -393,8 +393,7 @@ fn build_finality_events(
     // at a lower consensus height, sorting ahead of it while being torn out all
     // the same. It replays in full — no missing txids, so no exclusion rows.
     let from_anchor = at_deadline[first_fail].anchor_height;
-    let finalize_end =
-        at_deadline[..first_fail].partition_point(|b| b.anchor_height < from_anchor);
+    let finalize_end = at_deadline[..first_fail].partition_point(|b| b.anchor_height < from_anchor);
     for batch in &at_deadline[..finalize_end] {
         info!(
             consensus_height = %batch.consensus_height,
