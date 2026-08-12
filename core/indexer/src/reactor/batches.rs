@@ -1006,14 +1006,6 @@ impl<E: Executor> Reactor<E> {
         // an observer must not be told a rollback happened when it did not.
         self.check_rollback_depth(rollback_anchor.saturating_sub(1))
             .context("finality rollback too deep")?;
-        self.consensus.emit_finality_events(&events);
-
-        // Read replay decisions BEFORE the truncation — the query joins rows that
-        // are cascade-deleted with their blocks.
-        let replay = self
-            .load_replay_decisions(rollback_anchor)
-            .await
-            .context("load_replay_decisions failed")?;
 
         // Record this pass's exclusions BEFORE the truncation. The base set (which
         // txids went missing, and from which decision) is already known here — only
@@ -1039,6 +1031,13 @@ impl<E: Executor> Reactor<E> {
             .await
             .context("Failed to record this pass's finality exclusions")?;
 
+        // Read replay decisions BEFORE the truncation — the query joins rows that
+        // are cascade-deleted with their blocks.
+        let replay = self
+            .load_replay_decisions(rollback_anchor)
+            .await
+            .context("load_replay_decisions failed")?;
+
         // Everything still applicable, this pass's rows included. Per DECISION: a row
         // for height H filters H and nothing else, so a txid re-decided in a later
         // batch against a fresh deadline still executes there. Applying exclusions
@@ -1047,6 +1046,13 @@ impl<E: Executor> Reactor<E> {
         let applicable = select_applicable_exclusions(&conn)
             .await
             .context("Failed to load applicable finality exclusions")?;
+
+        // Announce ONLY now, after every step that can still abort the pass: each
+        // read/write above is fallible and `?`-propagates, and an observer told
+        // about a rollback that then never happens is wrong about reality (I6) —
+        // on restart a reorg can even re-render the verdict clean, making the
+        // announcement permanently false. The truncation below is the commit point.
+        self.consensus.emit_finality_events(&events);
 
         // Roll back to before the invalid anchor so all state at the anchor height
         // (including the invalid txs' effects) is wiped cleanly.
