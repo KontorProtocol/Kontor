@@ -58,6 +58,23 @@ CREATE INDEX IF NOT EXISTS idx_batches_anchor_height ON batches (anchor_height);
 CREATE INDEX IF NOT EXISTS idx_transactions_batch_height ON transactions (batch_height)
   WHERE batch_height IS NOT NULL;
 
+-- Two history-wide predicates run against batch rows on hot-ish paths: the
+-- startup/reorg rehydration floor (`min_unsettled_batch_tx_height`, twice at
+-- every boot and once per Bitcoin reorg) and the rollback confirmation-clear in
+-- `rollback_to_height` (inside every rollback savepoint). Without these they
+-- walk every batch-executed transaction ever written — `transactions` is never
+-- pruned. Partial on batch rows so block-path rows (the bulk of the table)
+-- never touch them; both are named via INDEXED BY (no ANALYZE, see above).
+--   * unconfirmed arm: MIN(height) over currently-unconfirmed batch txs, a set
+--     roughly the size of the finality band — O(1) seek.
+--   * confirmed arm: range scan on confirmed_height bounds the rollback clear
+--     by depth; `height` makes the late-confirmation probe index-only.
+CREATE INDEX IF NOT EXISTS idx_transactions_unconfirmed_batch ON transactions (height)
+  WHERE batch_height IS NOT NULL AND confirmed_height IS NULL;
+CREATE INDEX IF NOT EXISTS idx_transactions_batch_confirmed
+  ON transactions (confirmed_height, height)
+  WHERE batch_height IS NOT NULL AND confirmed_height IS NOT NULL;
+
 -- The immutable decided txid list of each batch, written at decide time and
 -- kept for as long as the batch row exists. Sync must serve the CERTIFIED
 -- value for a consensus height regardless of whether this node executed the

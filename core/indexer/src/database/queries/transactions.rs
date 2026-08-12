@@ -207,20 +207,41 @@ pub async fn min_unsettled_batch_tx_height(
     conn: &Connection,
     finality_window: u64,
 ) -> Result<Option<u64>, Error> {
-    Ok(
-        match conn
-            .query(
-                "SELECT MIN(height) FROM transactions \
-                 WHERE batch_height IS NOT NULL \
-                   AND (confirmed_height IS NULL OR confirmed_height > height + ?)",
-                params![finality_window],
-            )
-            .await?
-            .next()
-            .await?
-        {
-            Some(row) => row.get::<Option<u64>>(0)?,
-            None => None,
-        },
-    )
+    // Two arms instead of one OR so each can name its partial index: the OR form
+    // has no usable index and walks every batch-executed row in history. The
+    // unconfirmed arm is an O(1) seek on a band-sized index; the late-confirmation
+    // arm is an index-only scan of confirmed batch rows.
+    let unconfirmed = match conn
+        .query(
+            "SELECT MIN(height) FROM transactions \
+             INDEXED BY idx_transactions_unconfirmed_batch \
+             WHERE batch_height IS NOT NULL AND confirmed_height IS NULL",
+            (),
+        )
+        .await?
+        .next()
+        .await?
+    {
+        Some(row) => row.get::<Option<u64>>(0)?,
+        None => None,
+    };
+    let late_confirmed = match conn
+        .query(
+            "SELECT MIN(height) FROM transactions \
+             INDEXED BY idx_transactions_batch_confirmed \
+             WHERE batch_height IS NOT NULL AND confirmed_height IS NOT NULL \
+               AND confirmed_height > height + ?",
+            params![finality_window],
+        )
+        .await?
+        .next()
+        .await?
+    {
+        Some(row) => row.get::<Option<u64>>(0)?,
+        None => None,
+    };
+    Ok(match (unconfirmed, late_confirmed) {
+        (Some(a), Some(b)) => Some(a.min(b)),
+        (a, b) => a.or(b),
+    })
 }

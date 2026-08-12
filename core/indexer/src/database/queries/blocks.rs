@@ -24,13 +24,15 @@ pub async fn rollback_to_height(conn: &Connection, height: u64) -> Result<u64, E
     // `insert_transaction` sets `height == confirmed_height`, so if one survives the
     // cascade its confirmation is at or below the target too.
     //
-    // Restricted to batch rows because they are the only ones affected. Note this
-    // does NOT bound the work by rollback depth: with no index on `confirmed_height`
-    // it walks every batch-executed transaction in history. Acceptable because
-    // rollbacks are rare and correctness here gates the finality verdict; an index
-    // on `confirmed_height` would churn on every confirmation to serve only this.
+    // Restricted to batch rows because they are the only ones affected. The named
+    // partial index bounds the work by rollback depth (a range seek over
+    // confirmations above the target) instead of a walk of every batch-executed
+    // transaction in history; the same index serves the late-confirmation arm of
+    // `min_unsettled_batch_tx_height`, which is what tipped the churn-vs-scan
+    // trade in its favour.
     conn.execute(
-        "UPDATE transactions SET confirmed_height = NULL, tx_index = NULL \
+        "UPDATE transactions INDEXED BY idx_transactions_batch_confirmed \
+         SET confirmed_height = NULL, tx_index = NULL \
          WHERE batch_height IS NOT NULL AND confirmed_height > ?",
         [height],
     )
