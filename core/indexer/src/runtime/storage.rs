@@ -34,6 +34,18 @@ use crate::{
 /// Bounds the lookup and forces prompt resolution. ~1 day on Bitcoin (144 blocks).
 pub const BLOCK_ENTROPY_WINDOW: u64 = 144;
 
+/// Why decoding stored contract bytes failed.
+///
+/// The split is load-bearing, not cosmetic: `Content` is a pure function of the
+/// bytes, so every node reaches it identically and a publish carrying such bytes must
+/// be REJECTED deterministically. `Infrastructure` is this node failing to do the
+/// work, so it must propagate — recording it as a rejection would make one node
+/// refuse a publish its peers accept, which is the silent mirror of a chain halt.
+pub enum ComponentDecodeError {
+    Content(anyhow::Error),
+    Infrastructure(anyhow::Error),
+}
+
 /// Decode the WIT embedded in already-encoded component bytes, unmodified
 /// (`init`/core-context preserved) — for on-chain publish validation, where the
 /// validator must see the real surface. `component_wit` strips `init`/core-context
@@ -355,12 +367,35 @@ impl Storage {
         Ok(get_contract_bytes_by_id(&self.conn, contract_id).await?)
     }
 
+    /// Plain accessor for callers that do not need the failure CLASS — the
+    /// classification lives in [`decode_component_bytes`], which this delegates to
+    /// so the decompression-bomb cap has exactly one definition.
     pub async fn component_bytes(&self, contract_id: u64) -> Result<Vec<u8>> {
+        self.decode_component_bytes(contract_id)
+            .await
+            .map_err(|e| match e {
+                ComponentDecodeError::Content(e) | ComponentDecodeError::Infrastructure(e) => e,
+            })
+    }
+
+    /// Decode stored contract bytes, keeping content failures distinguishable from
+    /// this node's own failures. See [`ComponentDecodeError`].
+    pub async fn decode_component_bytes(
+        &self,
+        contract_id: u64,
+    ) -> std::result::Result<Vec<u8>, ComponentDecodeError> {
         let compressed_bytes = self
             .contract_bytes(contract_id)
-            .await?
-            .ok_or(anyhow!("Contract not found when trying to load component"))?;
-        let module_bytes = tokio::task::spawn_blocking(move || {
+            .await
+            .map_err(ComponentDecodeError::Infrastructure)?
+            .ok_or_else(|| {
+                ComponentDecodeError::Infrastructure(anyhow!(
+                    "Contract not found when trying to load component"
+                ))
+            })?;
+        // Split the join from the work: a JoinError is this node's task machinery
+        // failing, everything inside is a property of the bytes.
+        let decompressed = tokio::task::spawn_blocking(move || {
             // Cap decompressed size: a tiny on-chain brotli blob can otherwise
             // inflate without bound in memory on every node that loads the
             // contract (decompression bomb). 64 MiB is far above any legitimate
@@ -379,12 +414,14 @@ impl Storage {
             }
             Ok::<_, std::io::Error>(module_bytes)
         })
-        .await??;
+        .await
+        .map_err(|e| ComponentDecodeError::Infrastructure(e.into()))?
+        .map_err(|e| ComponentDecodeError::Content(e.into()))?;
 
         ComponentEncoder::default()
-            .module(&module_bytes)?
-            .validate(true)
-            .encode()
+            .module(&decompressed)
+            .and_then(|m| m.validate(true).encode())
+            .map_err(ComponentDecodeError::Content)
     }
 
     pub async fn component_wit(&self, contract_id: u64) -> Result<String> {
@@ -609,6 +646,39 @@ mod tests {
     use crate::database::queries::{insert_block, max_block_height};
     use crate::test_utils::{new_mock_block_hash, new_test_db};
     use indexer_types::BlockRow;
+
+    // The savepoint must cover plain `conn.execute` writes issued through a
+    // CLONE of the connection, not just those made through `Storage`.
+    //
+    // The reactor relies on this: `db_conn()` hands out a clone, and
+    // `handle_block` writes the decided-batch record through it inside the
+    // block's savepoint so a failed execution cannot leave a consensus record
+    // behind. That is a property of libsql's `BEGIN TRANSACTION` on a shared
+    // connection, invisible at the call site — pinned here so it fails loudly
+    // if the connection sharing ever changes.
+    #[tokio::test]
+    async fn savepoint_covers_writes_through_a_cloned_connection() -> Result<()> {
+        use crate::database::queries::{insert_batch, select_batch};
+
+        let (_reader, writer, _temp) = new_test_db().await?;
+        let conn = writer.connection();
+        let storage = Storage::builder().conn(conn.clone()).build();
+
+        storage.savepoint().await?;
+        insert_batch(&conn.clone(), 7, 100, "deadbeef", b"cert", true).await?;
+        assert!(
+            select_batch(&conn, 7).await?.is_some(),
+            "the write must be visible inside its own transaction"
+        );
+        storage.rollback().await?;
+
+        assert!(
+            select_batch(&conn, 7).await?.is_none(),
+            "rolling back the block transaction must discard the decision record too — \
+             otherwise a node keeps a consensus record for a height it never executed"
+        );
+        Ok(())
+    }
 
     // `block_entropy` returns a present block's hash only when the height is in the
     // recent window `[current - K, current]`: not future, not expired, and a row

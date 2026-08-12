@@ -313,6 +313,15 @@ pub async fn process_input(
     txid: bitcoin::Txid,
     op_return_data: Option<&[u8]>,
 ) -> Result<Vec<Option<anyhow::Error>>> {
+    // Pin the execution height BEFORE anything resolves a signer — both branches do,
+    // ahead of the first `set_context`. `get_or_create_identity` inserts
+    // `signers(height = storage.height)`, and that column has a foreign key to
+    // `blocks`; reading it ambiently lands the row at whatever height the previous
+    // caller left behind. After a rollback (or a rolled-back simulation block) that
+    // height has no `blocks` row, so the insert trips the FK, which is classified
+    // non-deterministic and kills the reactor.
+    runtime.storage.height = height;
+
     let errors = if input.insts.is_aggregate() {
         process_aggregate_input(
             runtime,

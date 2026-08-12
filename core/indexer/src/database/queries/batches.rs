@@ -279,3 +279,111 @@ pub async fn select_unconfirmed_batch_tx(
         .map(|row| row.get::<Vec<u8>>(0))
         .transpose()?)
 }
+
+/// Recorded exclusions that STILL HOLD, keyed by the consensus height they apply to.
+///
+/// The stored row is a node-local fact: "we found T missing at H's deadline". The
+/// `NOT EXISTS` is the shared, node-independent half — the same predicate
+/// `missing_txids` renders (I2) — and it is baked into the READ so that no caller can
+/// apply a row without re-verifying it. There is deliberately no DELETE: a replay can
+/// never manufacture a Bitcoin confirmation, so suppression can only ever come from
+/// the chain, and keeping the row lets a later reorg re-suppress or re-apply it.
+///
+/// The `batch_height` qualifier on the confirmation is load-bearing. Without it: T is
+/// excluded at H, re-batched and executed at H3, and confirms at or below H's
+/// deadline; a deep rollback replays both; the row is suppressed; H and H3 BOTH
+/// execute T, and `insert_transaction` is a plain INSERT against
+/// `transactions.txid UNIQUE` — the #515 collision from a new direction. A
+/// confirmation attributable to another batch's execution must not un-exclude here. A
+/// confirmation via the BLOCK path (`batch_height IS NULL`) must, and does: that is
+/// the reorg-healing case, and a peer syncing from genesis reaches the same answer.
+pub async fn select_applicable_exclusions(
+    conn: &Connection,
+) -> Result<std::collections::HashMap<u64, std::collections::HashSet<String>>, Error> {
+    let mut rows = conn
+        .query(
+            "SELECT e.batch_height, e.txid \
+             FROM excluded_batch_txids e \
+             WHERE NOT EXISTS ( \
+               SELECT 1 FROM transactions t \
+                WHERE t.txid = e.txid \
+                  AND t.confirmed_height IS NOT NULL \
+                  AND t.confirmed_height <= e.deadline \
+                  AND (t.batch_height IS NULL OR t.batch_height = e.batch_height))",
+            (),
+        )
+        .await?;
+    let mut out: std::collections::HashMap<u64, std::collections::HashSet<String>> =
+        std::collections::HashMap::new();
+    while let Some(row) = rows.next().await? {
+        out.entry(row.get::<u64>(0)?)
+            .or_default()
+            .insert(row.get::<String>(1)?);
+    }
+    Ok(out)
+}
+
+/// Record what a finality pass dropped, as `(consensus_height, txid, deadline)`.
+/// Idempotent — the same batch can be narrowed by more than one pass.
+pub async fn insert_excluded_batch_txids(
+    conn: &Connection,
+    rows: &[(u64, String, u64)],
+) -> Result<(), Error> {
+    for (batch_height, txid, deadline) in rows {
+        conn.execute(
+            "INSERT OR IGNORE INTO excluded_batch_txids (batch_height, txid, deadline) \
+             VALUES (?, ?, ?)",
+            params![*batch_height, txid.clone(), *deadline],
+        )
+        .await?;
+    }
+    Ok(())
+}
+
+/// Executed, still-unfinalized batches anchored at or above `from_anchor`, with the
+/// txids this node ACTUALLY executed for each — for rebuilding finality tracking
+/// after a restart.
+///
+/// Sourced from `transactions`, deliberately NOT from `batch_txids`. The certified
+/// list is append-only (`INSERT OR IGNORE` on `(batch_height, position)`, no cascade),
+/// so once a replay has dropped excluded transactions from a batch the stored list
+/// still holds them, permanently. Rehydrating from it would re-arm a deadline on
+/// txids this node deliberately dropped and trigger a rollback no peer performs.
+/// The join also subsumes an "did we execute this batch" existence check: record-only
+/// batches write no `transactions` rows and rolled-back ones have theirs cascade-deleted.
+pub async fn select_unfinalized_batches(
+    conn: &Connection,
+    from_anchor: u64,
+) -> Result<Vec<BatchQueryResult>, Error> {
+    let sql = format!(
+        "SELECT b.consensus_height, b.anchor_height, b.anchor_hash, b.certificate, t.txid \
+         FROM batches b INDEXED BY idx_batches_anchor_height \
+         JOIN blocks bl ON bl.height = b.anchor_height AND bl.hash = b.anchor_hash \
+         JOIN executed_batch_txids t ON t.batch_height = b.consensus_height \
+         WHERE b.anchor_height >= {from_anchor} AND b.is_block = 0 \
+         ORDER BY b.consensus_height, t.id"
+    );
+    let mut rows = conn.query(&sql, ()).await?;
+
+    let mut results: Vec<BatchQueryResult> = Vec::new();
+    while let Some(row) = rows.next().await? {
+        let consensus_height: u64 = row.get(0)?;
+        let txid: String = row.get(4)?;
+        if results
+            .last()
+            .is_some_and(|r| r.consensus_height == consensus_height)
+        {
+            results.last_mut().unwrap().txids.push(txid);
+        } else {
+            results.push(BatchQueryResult {
+                consensus_height,
+                anchor_height: row.get(1)?,
+                anchor_hash: row.get(2)?,
+                certificate: row.get(3)?,
+                is_block: false,
+                txids: vec![txid],
+            });
+        }
+    }
+    Ok(results)
+}

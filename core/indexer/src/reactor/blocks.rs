@@ -36,6 +36,30 @@ const PRUNE_VACUUM_HIGH_PAGES: i64 = 512; // ~2 MiB slack before we bother recla
 const PRUNE_VACUUM_MAX_PAGES: i64 = 512; // ~2 MiB returned per call (bounds lock hold)
 
 impl<E: Executor> Reactor<E> {
+    /// Refuse a rollback that reaches below what pruning retains.
+    ///
+    /// Reconstructing state as of `to_height` needs the superseded `contract_state`
+    /// versions, and the GC removes those below the retain window — so truncating
+    /// past it does not roll state back, it corrupts it silently. Both rollback
+    /// paths must check: the Bitcoin-reorg path has always been able to go deep, and
+    /// the finality path can now too, because tracking is rehydrated from disk and a
+    /// node that missed a verdict may carry a batch anchored far below its tip.
+    pub(super) fn check_rollback_depth(&self, to_height: u64) -> Result<()> {
+        if !self.prune.enabled {
+            return Ok(());
+        }
+        let retain = self.prune.retain_blocks.max(FINALITY_WINDOW);
+        if self.last_height.saturating_sub(to_height) > retain {
+            bail!(
+                "rollback to height {to_height} is deeper than the prune retain window \
+                 ({retain}) below tip {}; pruned state cannot be rolled back locally — \
+                 re-sync required",
+                self.last_height
+            );
+        }
+        Ok(())
+    }
+
     pub(super) async fn rollback(&mut self, height: u64) -> Result<()> {
         // The `blocks` cascade + the off-checkpoint footprint-cache reversal run
         // together in one savepoint (capture-before, recompute-after enforced inside),
@@ -68,6 +92,35 @@ impl<E: Executor> Reactor<E> {
         }
 
         Ok(())
+    }
+
+    /// The fallible body of `handle_block`'s transaction: the decision record
+    /// (when the block arrives decided) plus the block's own writes. Split out
+    /// so `handle_block` has a single place to roll back from.
+    async fn block_txn(
+        &mut self,
+        block: &Block,
+        decision: &consensus_state::DeferredDecision,
+    ) -> Result<(usize, u64)> {
+        insert_batch(
+            &self.db_conn(),
+            decision.consensus_height.as_u64(),
+            block.height,
+            &block.hash.to_string(),
+            &decision.certificate,
+            true,
+        )
+        .await
+        .context("Failed to insert block batch decision")?;
+
+        let (unbatched_count, executed_ops, _failures) = self
+            .execute_block(block)
+            .await
+            .context("execute_block failed")?;
+        self.run_block_lifecycle(block)
+            .await
+            .context("run_block_lifecycle failed")?;
+        Ok((unbatched_count, executed_ops))
     }
 
     /// Execute a block: insert block row, process transactions.
@@ -150,10 +203,38 @@ impl<E: Executor> Reactor<E> {
     /// then rollback. Unlike `/inspect`, this carries live error strings —
     /// they're not persisted to chain state, only available here while the
     /// virtual block is still in scope.
+    /// Runs the simulation with its out-of-transaction state restored on EVERY
+    /// exit, not just the successful one.
+    ///
+    /// The savepoint covers the database; these two are outside it. The inner
+    /// function is full of `?`, so restoring at the end of it would silently skip
+    /// on error — which is how the height restore was written, and it survives only
+    /// because the caller kills the node on a simulate error. That makes a `bail!`
+    /// load-bearing for correctness, which it should not be.
     pub(super) async fn simulate(
         &mut self,
         tx: indexer_types::Transaction,
     ) -> Result<Vec<OpWithResult>> {
+        let restore_height = self.runtime.storage.height;
+        self.runtime.simulating = true;
+        let result = self.simulate_inner(tx).await;
+        self.runtime.simulating = false;
+        self.runtime.storage.height = restore_height;
+        result
+    }
+
+    async fn simulate_inner(
+        &mut self,
+        tx: indexer_types::Transaction,
+    ) -> Result<Vec<OpWithResult>> {
+        // Simulation runs against a FABRICATED block one past the tip and then
+        // rolls it away. `execute_block` sets `storage.height` to that block as it
+        // goes, so without the restore in `simulate` the runtime is left pointing at
+        // a height whose `blocks` row no longer exists. The next identity created
+        // outside a `set_context` — a decided batch executing at the real tip, say —
+        // then inserts `signers(height = <discarded height>)` and trips the
+        // `signers.height -> blocks.height` foreign key, which is classified
+        // non-deterministic and kills the reactor.
         self.runtime
             .storage
             .savepoint()
@@ -254,28 +335,26 @@ impl<E: Executor> Reactor<E> {
         Ok(())
     }
 
-    pub(super) async fn handle_block_with_decision(
+    /// Execute `block` and record the decision that certifies it in the SAME
+    /// transaction as the block's own writes.
+    ///
+    /// The decision is NOT optional: a block is only ever executed because
+    /// consensus decided it, and taking it by value rather than `Option` makes
+    /// "no block executes without a consensus record" a type-level fact instead
+    /// of a convention a future caller could opt out of.
+    ///
+    /// A consensus record and the execution it certifies must commit or fail
+    /// together. Writing the `batches` row first — as this did — let a node keep
+    /// a row claiming a height it never executed: the row survived, the
+    /// execution did not, and every restart then resumed consensus above state
+    /// the node did not hold. `delete_unexecuted_batch_suffix` cleans that up at
+    /// startup, but the window should not exist at all; `process_decided_batch`
+    /// has always taken the savepoint first, and the block path was the outlier.
+    pub(super) async fn handle_block(
         &mut self,
         block: Block,
         decision: &consensus_state::DeferredDecision,
     ) -> Result<()> {
-        insert_batch(
-            &self.db_conn(),
-            decision.consensus_height.as_u64(),
-            block.height,
-            &block.hash.to_string(),
-            &decision.certificate,
-            true,
-        )
-        .await
-        .context("Failed to insert block batch decision")?;
-        self.handle_block(block)
-            .await
-            .context("handle_block failed after block batch decision")?;
-        Ok(())
-    }
-
-    pub(super) async fn handle_block(&mut self, block: Block) -> Result<()> {
         let started_at = Instant::now();
         let height = block.height;
         let hash = block.hash;
@@ -304,28 +383,40 @@ impl<E: Executor> Reactor<E> {
             );
         }
 
-        self.last_height = height;
-        self.last_hash = Some(hash);
-
         self.runtime
             .storage
             .savepoint()
             .await
             .context("Failed to begin block transaction")?;
 
-        let (unbatched_count, executed_ops, _failures) = self
-            .execute_block(&block)
-            .await
-            .context("execute_block failed")?;
-        self.run_block_lifecycle(&block)
-            .await
-            .context("run_block_lifecycle failed")?;
+        // Everything up to the commit is one transaction, rolled back explicitly
+        // on any error rather than left open for process teardown to discard.
+        // `last_height`/`last_hash` advance only after the commit, so a failed
+        // block leaves no trace in memory either.
+        let txn = self.block_txn(&block, decision).await;
+        let (unbatched_count, executed_ops) = match txn {
+            Ok(counts) => counts,
+            Err(e) => {
+                if let Err(rollback_err) = self.runtime.storage.rollback().await {
+                    warn!(error = %rollback_err, height, "Failed to roll back block transaction");
+                }
+                return Err(e);
+            }
+        };
 
         self.runtime
             .storage
             .commit()
             .await
             .context("Failed to commit block transaction")?;
+
+        self.last_height = height;
+        self.last_hash = Some(hash);
+        // Blocks at or below the tip can no longer be proposed or decided.
+        // Dropping them keeps `make_value` proposing only heights still ahead,
+        // and keeps `validate_batch`'s "a block is pending" gate honest.
+        self.consensus.pending_blocks.retain(|&h, _| h > height);
+
         // Reflect what's actually persisted, not what we're mid-processing.
         // Op counter increments only after commit so the simulation path
         // (rolls back instead of committing) doesn't inflate it.

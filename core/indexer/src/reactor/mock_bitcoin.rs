@@ -38,6 +38,17 @@ pub struct MockBitcoin {
     block_txids: HashMap<u64, Vec<Txid>>,
     /// History of mined blocks for late joiners.
     mined_blocks: Vec<BlockEvent>,
+    /// Bumped by every `reset_to`, and mixed into new block hashes, so a block
+    /// mined after a reorg differs from the one it replaces — as on the real
+    /// chain. Without this, a re-mined block at the same height is bit-identical
+    /// and no test can produce the stale-decision paths a real reorg produces.
+    fork: u32,
+}
+
+/// Distinct hashes per (height, fork). The stride keeps the two inputs from
+/// colliding for any test-sized height.
+fn fork_block_hash(height: u64, fork: u32) -> BlockHash {
+    new_mock_block_hash(fork * 1_000_000 + height as u32)
 }
 
 impl MockBitcoin {
@@ -50,6 +61,7 @@ impl MockBitcoin {
             mined_txs: HashMap::new(),
             block_txids: HashMap::new(),
             mined_blocks: Vec::new(),
+            fork: 0,
         }
     }
 
@@ -105,7 +117,7 @@ impl MockBitcoin {
         self.tip_height += 1;
         let height = self.tip_height;
 
-        let hash = new_mock_block_hash(height as u32);
+        let hash = fork_block_hash(height, self.fork);
         let prev_hash = self.prev_hash;
         self.prev_hash = hash;
 
@@ -178,11 +190,22 @@ impl MockBitcoin {
             }
         }
         self.tip_height = height;
-        self.prev_hash = new_mock_block_hash(height as u32);
         self.mined_blocks.retain(|e| match e {
             BlockEvent::BlockInsert { target_height, .. } => *target_height <= height,
             _ => true,
         });
+        // The next block builds on the SURVIVING block at the fork height, which
+        // may itself have been mined under an earlier fork value — take its real
+        // hash rather than recomputing one.
+        self.prev_hash = self
+            .mined_blocks
+            .iter()
+            .find_map(|e| match e {
+                BlockEvent::BlockInsert { block, .. } if block.height == height => Some(block.hash),
+                _ => None,
+            })
+            .unwrap_or_else(|| new_mock_block_hash(height as u32));
+        self.fork += 1;
     }
 
     /// Get all block events for late joiners that missed earlier blocks.

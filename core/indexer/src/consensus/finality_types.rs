@@ -4,6 +4,24 @@ use super::{Height, Value};
 
 pub const FINALITY_WINDOW: u64 = 6;
 
+/// Bitcoin height by which a batch anchored at `anchor_height` must have its
+/// transactions confirmed, or the batch is void and its anchor rolls back.
+pub const fn deadline_for(anchor_height: u64) -> u64 {
+    anchor_height + FINALITY_WINDOW
+}
+
+/// Lowest anchor height whose batches can still be awaiting a deadline at `tip`.
+/// Startup rehydration reloads exactly this band, so it introduces no new window —
+/// it reconstructs the set the running node already tracks.
+///
+/// Inclusive of the at-deadline anchor (`anchor >= floor`, not `>`): a batch whose
+/// deadline is exactly `tip` still needs its verdict, and dropping it on restart
+/// would silently skip the rollback a peer performs. The first `check_finality`
+/// after startup settles it.
+pub const fn tracking_floor(tip: u64) -> u64 {
+    tip.saturating_sub(FINALITY_WINDOW)
+}
+
 #[derive(Debug, Clone)]
 pub struct UnfinalizedBatch {
     pub consensus_height: Height,
@@ -22,8 +40,19 @@ pub enum FinalityEvent {
     Rollback {
         from_anchor: u64,
         invalidated_batches: Vec<Height>,
-        missing_txids: Vec<Txid>,
+        /// Per DECISION, not flattened. Which batch a txid went missing from is what
+        /// lets the exclusion be recorded against that height alone — flattening it
+        /// is how a global ban gets built by accident.
+        missing: Vec<BatchExclusion>,
     },
+}
+
+/// The txids one decided batch failed to confirm by its own deadline.
+#[derive(Debug, Clone, PartialEq)]
+pub struct BatchExclusion {
+    pub consensus_height: Height,
+    pub anchor_height: u64,
+    pub txids: Vec<Txid>,
 }
 
 #[derive(Debug, Clone, PartialEq)]

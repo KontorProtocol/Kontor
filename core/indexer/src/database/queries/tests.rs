@@ -4241,3 +4241,495 @@ async fn test_ensure_identity_idempotent() -> Result<()> {
 
     Ok(())
 }
+
+/// The `IN (?…)` list must be chunked: SQLite's SQLITE_MAX_VARIABLE_NUMBER is 32766
+/// and exceeding it fails at PREPARE, not at runtime. `make_value` passes the whole
+/// mempool pool, which nothing bounds, so an unchunked probe is a reachable crash.
+#[tokio::test]
+async fn test_select_transactions_by_txids_chunks_large_input() -> Result<()> {
+    use crate::database::queries::{select_existing_txids, select_transactions_by_txids};
+
+    let (_reader, writer, _temp_dir) = new_test_db().await?;
+    let conn = writer.connection();
+    insert_block(
+        &conn,
+        BlockRow::builder()
+            .height(10)
+            .hash(new_mock_block_hash(10))
+            .build(),
+    )
+    .await?;
+
+    // Three real rows, probed alongside 40k absent ones.
+    let present: Vec<String> = (0u32..3).map(|i| format!("{i:064x}")).collect();
+    for txid in &present {
+        insert_transaction(
+            &conn,
+            TransactionRow::builder()
+                .height(10)
+                .txid(txid.clone())
+                .build(),
+        )
+        .await?;
+    }
+    let mut probe = present.clone();
+    probe.extend((1000u32..41000).map(|i| format!("{i:064x}")));
+
+    let rows = select_transactions_by_txids(&conn, &probe).await?;
+    assert_eq!(rows.len(), 3);
+    for txid in &present {
+        assert_eq!(rows.get(txid).map(|r| r.height), Some(10));
+    }
+
+    // The set-returning wrapper stays consistent with the row-returning primitive.
+    let existing = select_existing_txids(&conn, &probe).await?;
+    assert_eq!(existing.len(), 3);
+
+    assert!(select_transactions_by_txids(&conn, &[]).await?.is_empty());
+    Ok(())
+}
+
+/// A rollback must clear confirmations by blocks it deletes. The cascade keys on
+/// `height`, so a batch row anchored at or below the target survives while still
+/// pointing at a deleted block — and `confirmed_height` is what the finality
+/// verdict reads.
+#[tokio::test]
+async fn test_rollback_clears_confirmations_by_deleted_blocks() -> Result<()> {
+    use crate::database::queries::{confirm_transaction, rollback_to_height};
+
+    let (_reader, writer, _temp_dir) = new_test_db().await?;
+    let conn = writer.connection();
+    for height in [10u64, 11, 12] {
+        insert_block(
+            &conn,
+            BlockRow::builder()
+                .height(height)
+                .hash(new_mock_block_hash(height as u32))
+                .build(),
+        )
+        .await?;
+    }
+    insert_batch(
+        &conn,
+        1,
+        10,
+        &new_mock_block_hash(10).to_string(),
+        b"c",
+        false,
+    )
+    .await?;
+
+    // Batch-executed row: height = anchor 10, later confirmed in block 12.
+    let batched = "aa".repeat(32);
+    insert_transaction(
+        &conn,
+        TransactionRow::builder()
+            .height(10)
+            .batch_height(1)
+            .txid(batched.clone())
+            .build(),
+    )
+    .await?;
+    confirm_transaction(&conn, &batched, 12, 0).await?;
+
+    // Block-path row at height 10 — survives, and its confirmation is at 10.
+    let onchain = "bb".repeat(32);
+    insert_transaction(
+        &conn,
+        TransactionRow::builder()
+            .height(10)
+            .confirmed_height(10)
+            .tx_index(0)
+            .txid(onchain.clone())
+            .build(),
+    )
+    .await?;
+
+    rollback_to_height(&conn, 11).await?;
+
+    let batched_row = get_transaction_by_txid(&conn, &batched).await?.unwrap();
+    assert_eq!(
+        batched_row.confirmed_height, None,
+        "confirmation by deleted block 12 must be cleared"
+    );
+    assert_eq!(batched_row.tx_index, None);
+
+    let onchain_row = get_transaction_by_txid(&conn, &onchain).await?.unwrap();
+    assert_eq!(
+        onchain_row.confirmed_height,
+        Some(10),
+        "a confirmation by a surviving block must be left alone"
+    );
+    Ok(())
+}
+
+/// Rehydration must reflect what this node EXECUTED, and only for batches still
+/// anchored to the chain it currently holds.
+#[tokio::test]
+async fn test_select_unfinalized_batches_sources_execution_not_certificate() -> Result<()> {
+    use crate::database::queries::{
+        insert_batch_txids, min_unsettled_batch_tx_height, select_unfinalized_batches,
+    };
+
+    let (_reader, writer, _temp_dir) = new_test_db().await?;
+    let conn = writer.connection();
+    for height in [10u64, 11, 12] {
+        insert_block(
+            &conn,
+            BlockRow::builder()
+                .height(height)
+                .hash(new_mock_block_hash(height as u32))
+                .build(),
+        )
+        .await?;
+    }
+    let hash10 = new_mock_block_hash(10).to_string();
+    let hash11 = new_mock_block_hash(11).to_string();
+
+    // Batch 1: certified with two txids, but a filtered replay executed only one.
+    // `batch_txids` is append-only so it still holds both — rehydrating from it
+    // would re-arm a deadline on a txid this node deliberately dropped.
+    insert_batch(&conn, 1, 10, &hash10, b"c1", false).await?;
+    let kept = "aa".repeat(32);
+    let excluded = "bb".repeat(32);
+    insert_batch_txids(&conn, 1, &[kept.clone(), excluded.clone()]).await?;
+    insert_transaction(
+        &conn,
+        TransactionRow::builder()
+            .height(10)
+            .batch_height(1)
+            .txid(kept.clone())
+            .build(),
+    )
+    .await?;
+
+    // Batch 2: record-only (certified, never executed here) — no transactions rows.
+    insert_batch(&conn, 2, 11, &hash11, b"c2", false).await?;
+    insert_batch_txids(&conn, 2, &["cc".repeat(32)]).await?;
+
+    // Batch 3: a block decision, not a batch.
+    insert_batch(&conn, 3, 11, &hash11, b"c3", true).await?;
+
+    // Batch 4: anchored to a hash that is NOT the block now at height 12 — the
+    // shape a Bitcoin reorg leaves behind.
+    insert_batch(
+        &conn,
+        4,
+        12,
+        &new_mock_block_hash(99).to_string(),
+        b"c4",
+        false,
+    )
+    .await?;
+    let reorged = "dd".repeat(32);
+    insert_transaction(
+        &conn,
+        TransactionRow::builder()
+            .height(12)
+            .batch_height(4)
+            .txid(reorged)
+            .build(),
+    )
+    .await?;
+
+    let rows = select_unfinalized_batches(&conn, 10).await?;
+    assert_eq!(
+        rows.iter().map(|r| r.consensus_height).collect::<Vec<_>>(),
+        vec![1],
+        "only the executed, still-anchored batch is tracked"
+    );
+    assert_eq!(
+        rows[0].txids,
+        vec![kept],
+        "txids come from the execution rows, not the immortal certified list"
+    );
+
+    // Below the band.
+    assert!(select_unfinalized_batches(&conn, 11).await?.is_empty());
+
+    // The floor is what the caller extends when a deadline may still be unsettled —
+    // `min_unsettled_batch_tx_height` is how it finds how far down to reach.
+    assert_eq!(
+        min_unsettled_batch_tx_height(&conn, 6).await?,
+        Some(10),
+        "the probe must reach the oldest unconfirmed batch tx, however old"
+    );
+    Ok(())
+}
+
+/// The floor probe must use the SAME notion of "settled" the finality verdict does:
+/// confirmed BY THE DEADLINE, not merely confirmed. A transaction that lands one
+/// block late is still missing as far as finality is concerned, so a batch carrying
+/// one is still owed a rollback — and if the probe treats it as settled, that batch
+/// falls below the window on restart and is never tracked again.
+#[tokio::test]
+async fn test_min_unsettled_counts_a_late_confirmation_as_unsettled() -> Result<()> {
+    use crate::database::queries::{confirm_transaction, min_unsettled_batch_tx_height};
+
+    let (_reader, writer, _temp_dir) = new_test_db().await?;
+    let conn = writer.connection();
+    for height in [10u64, 16, 17] {
+        insert_block(
+            &conn,
+            BlockRow::builder()
+                .height(height)
+                .hash(new_mock_block_hash(height as u32))
+                .build(),
+        )
+        .await?;
+    }
+    insert_batch(
+        &conn,
+        1,
+        10,
+        &new_mock_block_hash(10).to_string(),
+        b"c",
+        false,
+    )
+    .await?;
+
+    // Anchored at 10, so the deadline is 16. This one confirms at 17 — one late.
+    let late = "ff".repeat(32);
+    insert_transaction(
+        &conn,
+        TransactionRow::builder()
+            .height(10)
+            .batch_height(1)
+            .txid(late.clone())
+            .build(),
+    )
+    .await?;
+    confirm_transaction(&conn, &late, 17, 0).await?;
+
+    assert_eq!(
+        min_unsettled_batch_tx_height(&conn, 6).await?,
+        Some(10),
+        "a confirmation past the deadline must still count as unsettled"
+    );
+
+    // In time is genuinely settled.
+    confirm_transaction(&conn, &late, 16, 0).await?;
+    assert_eq!(min_unsettled_batch_tx_height(&conn, 6).await?, None);
+    Ok(())
+}
+
+/// A batch whose deadline has already passed can still be owed a verdict: `advance`
+/// executes several blocks inside one drain before settling, so a crash in that
+/// window leaves the tip past a deadline no verdict was rendered on. The startup
+/// floor is extended down to the oldest unconfirmed batch transaction for exactly
+/// this case, so the batch must still be reachable from well below the window.
+#[tokio::test]
+async fn test_unfinalized_batches_reachable_far_below_the_window() -> Result<()> {
+    use crate::database::queries::{
+        insert_batch_txids, min_unsettled_batch_tx_height, select_unfinalized_batches,
+    };
+
+    let (_reader, writer, _temp_dir) = new_test_db().await?;
+    let conn = writer.connection();
+    for height in [10u64, 40] {
+        insert_block(
+            &conn,
+            BlockRow::builder()
+                .height(height)
+                .hash(new_mock_block_hash(height as u32))
+                .build(),
+        )
+        .await?;
+    }
+    let hash10 = new_mock_block_hash(10).to_string();
+    insert_batch(&conn, 1, 10, &hash10, b"c1", false).await?;
+    let stale = "ee".repeat(32);
+    insert_batch_txids(&conn, 1, std::slice::from_ref(&stale)).await?;
+    insert_transaction(
+        &conn,
+        TransactionRow::builder()
+            .height(10)
+            .batch_height(1)
+            .txid(stale.clone())
+            .build(),
+    )
+    .await?;
+
+    // Tip 40: the fixed window floor (40 - 6 = 34) misses it entirely.
+    assert!(
+        select_unfinalized_batches(&conn, 34).await?.is_empty(),
+        "the window floor alone loses a batch whose deadline already passed"
+    );
+
+    // The probe finds how far down to reach, and the batch comes back.
+    let floor = min_unsettled_batch_tx_height(&conn, 6)
+        .await?
+        .expect("an unconfirmed batch tx exists");
+    assert_eq!(floor, 10);
+    let rows = select_unfinalized_batches(&conn, floor).await?;
+    assert_eq!(
+        rows.iter().map(|r| r.consensus_height).collect::<Vec<_>>(),
+        vec![1],
+        "extending the floor must recover the unsettled batch"
+    );
+    Ok(())
+}
+
+/// A record-only batch stores raw transactions but writes NO `transactions` row —
+/// it was never executed here. When those transactions later confirm on Bitcoin,
+/// `execute_block` finds no existing row and so takes its `insert_transaction`
+/// branch, never `confirm_transaction`. Only the latter dropped the raw copy, so
+/// the row survived its own transaction being indexed on-chain, forever.
+///
+/// That matters beyond disk: `load_raw_txs_if_unfinalized` no longer refuses
+/// anchors older than the finality window, so every surviving row is attached to
+/// the consensus height it belongs to on every sync — this node ships raw batch
+/// bodies to peers instead of txid lists, indefinitely. A node that lags (exactly
+/// what this PR hardens against) record-onlys every batch in that stretch.
+#[tokio::test]
+async fn indexing_a_transaction_on_chain_drops_its_unconfirmed_raw_copy() -> Result<()> {
+    let (_reader, writer, _temp_dir) = new_test_db().await?;
+    let conn = writer.connection();
+
+    let height: u64 = 100;
+    let hash = new_mock_block_hash(height as u32);
+    insert_block(&conn, BlockRow::builder().height(height).hash(hash).build()).await?;
+
+    // A record-only batch: the raw tx is kept for sync, with no `transactions` row.
+    let txid = "cc".repeat(32);
+    insert_batch(&conn, 7, height, &hash.to_string(), b"cert7", false).await?;
+    insert_unconfirmed_batch_tx(&conn, &txid, 7, b"raw-bytes").await?;
+    assert_eq!(
+        select_unconfirmed_batch_txs(&conn, 7).await?.len(),
+        1,
+        "setup: the record-only batch must have stored its raw tx"
+    );
+
+    // The transaction now confirms on Bitcoin and is indexed as a block tx —
+    // `execute_block`'s branch for a txid it has never seen before.
+    insert_transaction(
+        &conn,
+        TransactionRow::builder()
+            .height(height)
+            .tx_index(0)
+            .confirmed_height(height)
+            .txid(txid.clone())
+            .build(),
+    )
+    .await?;
+
+    assert!(
+        select_unconfirmed_batch_txs(&conn, 7).await?.is_empty(),
+        "the raw copy is redundant once the transaction is indexed on-chain — \
+         keeping it leaks a full transaction body per record-only batch forever"
+    );
+    Ok(())
+}
+
+/// Exclusions must be RECORDED, never inferred from "certified but not executed".
+///
+/// That predicate is equally true of a record-only batch — anchor-mismatched, so this
+/// node skipped it while its peers ran it — and of a batch narrowed by an exclusion.
+/// The two are indistinguishable in the database. Inferring strips a record-only
+/// batch's transactions from the replay, so this node never executes what the network
+/// did: a state divergence, strictly worse than the replay non-convergence the
+/// carry-forward exists to prevent.
+///
+/// Also pins the SCOPE. A row is keyed by the consensus height it applies to, so the
+/// same txid excluded at one height and re-decided at another is remembered
+/// separately — a txid-only key is a global ban, which is the same divergence by a
+/// different route.
+#[tokio::test]
+async fn exclusions_are_recorded_per_decision_and_never_inferred() -> Result<()> {
+    let (_reader, writer, _temp_dir) = new_test_db().await?;
+    let conn = writer.connection();
+
+    let height: u64 = 100;
+    let hash = new_mock_block_hash(height as u32);
+    insert_block(&conn, BlockRow::builder().height(height).hash(hash).build()).await?;
+
+    // A record-only batch: certified, never executed here, NOTHING excluded.
+    let record_only = "aa".repeat(32);
+    insert_batch(&conn, 9, height, &hash.to_string(), b"cert9", false).await?;
+    insert_batch_txids(&conn, 9, std::slice::from_ref(&record_only)).await?;
+    assert!(
+        select_applicable_exclusions(&conn).await?.is_empty(),
+        "a record-only batch excluded nothing — inferring otherwise would strip \
+         transactions this node's peers executed"
+    );
+
+    // The same txid excluded at TWO different decisions, and one that is not.
+    let t = "bb".repeat(32);
+    insert_excluded_batch_txids(&conn, &[(10, t.clone(), 106), (12, t.clone(), 120)]).await?;
+    let applicable = select_applicable_exclusions(&conn).await?;
+    assert!(applicable[&10].contains(&t) && applicable[&12].contains(&t));
+    assert!(
+        !applicable.contains_key(&9),
+        "the record-only height must have no exclusions"
+    );
+
+    // Idempotent — the same batch can be narrowed by more than one pass.
+    insert_excluded_batch_txids(&conn, &[(10, t.clone(), 106)]).await?;
+    assert_eq!(select_applicable_exclusions(&conn).await?[&10].len(), 1);
+    Ok(())
+}
+
+/// The read re-verifies every recorded row against the chain, so a stale exclusion
+/// cannot outlive the fact that produced it. The `batch_height` qualifier is the
+/// load-bearing part: a confirmation attributable to ANOTHER batch's execution must
+/// not un-exclude here, or both heights execute the tx and the plain INSERT in
+/// `insert_transaction` hits `transactions.txid UNIQUE` — #515's collision by a new
+/// route. A confirmation via the BLOCK path (`batch_height IS NULL`) must un-exclude:
+/// that is the reorg-healing case, and a peer syncing from genesis agrees.
+#[tokio::test]
+async fn a_recorded_exclusion_is_reverified_against_the_chain() -> Result<()> {
+    let (_reader, writer, _temp_dir) = new_test_db().await?;
+    let conn = writer.connection();
+    let hash = new_mock_block_hash(100);
+    insert_block(&conn, BlockRow::builder().height(100).hash(hash).build()).await?;
+    insert_batch(&conn, 10, 100, &hash.to_string(), b"c", false).await?;
+    // A second decided batch, so the "confirmed via another batch's execution" case
+    // below can set a real `batch_height` (transactions.batch_height is FK'd).
+    insert_batch(&conn, 12, 100, &hash.to_string(), b"c2", false).await?;
+
+    let t = "cc".repeat(32);
+    let applies = |conn: libsql::Connection| async move {
+        select_applicable_exclusions(&conn)
+            .await
+            .unwrap()
+            .get(&10)
+            .is_some_and(|s| s.contains(&"cc".repeat(32)))
+    };
+
+    insert_excluded_batch_txids(&conn, &[(10, t.clone(), 106)]).await?;
+    assert!(applies(conn.clone()).await, "no transactions row at all");
+
+    // Confirmed ABOVE the deadline: still missing as far as that verdict goes.
+    insert_transaction(
+        &conn,
+        TransactionRow::builder()
+            .height(100)
+            .tx_index(0)
+            .confirmed_height(107u64)
+            .txid(t.clone())
+            .build(),
+    )
+    .await?;
+    assert!(applies(conn.clone()).await, "confirmed past the deadline");
+
+    // Confirmed at or below it, via the BLOCK path — the exclusion no longer holds.
+    conn.execute(
+        "UPDATE transactions SET confirmed_height = 105 WHERE txid = ?",
+        libsql::params![t.clone()],
+    )
+    .await?;
+    assert!(!applies(conn.clone()).await, "confirmed by the deadline");
+
+    // Same confirmation, but attributable to a DIFFERENT batch's execution: the
+    // exclusion must stand, or this txid executes at both heights.
+    conn.execute(
+        "UPDATE transactions SET batch_height = 12 WHERE txid = ?",
+        libsql::params![t.clone()],
+    )
+    .await?;
+    assert!(
+        applies(conn.clone()).await,
+        "another batch's execution must not un-exclude this one"
+    );
+    Ok(())
+}

@@ -1,4 +1,4 @@
-use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
+use std::collections::{BTreeMap, HashMap, VecDeque};
 use std::time::Instant;
 
 use std::time::Duration;
@@ -29,10 +29,11 @@ use crate::consensus::{
     ValidatorSet, Value,
 };
 use crate::database::queries::{
-    delete_unexecuted_batch_suffix, get_checkpoint_latest, get_transaction_by_txid,
+    delete_unexecuted_batch_suffix, get_checkpoint_latest, get_transaction_by_txid, insert_batch,
+    insert_batch_txids, insert_unconfirmed_batch_tx, min_unsettled_batch_tx_height,
     select_batches_from_anchor, select_batches_in_range, select_block_at_height,
-    select_block_latest, select_existing_txids, select_latest_consensus_height,
-    select_min_batch_height, select_unconfirmed_batch_txs,
+    select_existing_txids, select_latest_consensus_height, select_min_batch_height,
+    select_unconfirmed_batch_txs, select_unfinalized_batches,
 };
 
 /// Result from processing a consensus message.
@@ -49,6 +50,43 @@ pub struct DeferredDecision {
     pub consensus_height: Height,
     pub value: Value,
     pub certificate: Vec<u8>,
+    /// The txid list as DECIDED, retained when a rollback exclusion has narrowed
+    /// `value` to the subset this node will actually execute.
+    ///
+    /// `batch_txids` must record what CONSENSUS decided, not what we ran: a peer
+    /// syncing this height re-derives the exclusions itself by applying the same
+    /// deadline rules, so it needs the full decided content. Recording the narrowed
+    /// list would serve a value that no longer matches its own certificate.
+    ///
+    /// `None` when nothing was excluded, i.e. the two are the same list.
+    ///
+    /// Holds the BODIES, not just the txids. An excluded transaction never
+    /// confirmed, so it exists in no mempool and no block — this decision is the
+    /// only place its body still exists, and dropping it makes the height
+    /// unresolvable for every syncing peer.
+    pub certified_txs: Option<Vec<bitcoin::Transaction>>,
+}
+
+impl DeferredDecision {
+    /// The bodies this decision can still serve to a syncing peer.
+    ///
+    /// An EXCLUDED transaction is the one a peer cannot obtain any other way — it
+    /// never confirmed, so it is in nobody's mempool and bitcoind has never heard of
+    /// it — which makes this the set that has to be persisted, not the executed one.
+    pub fn decided_txs(&self) -> Vec<bitcoin::Transaction> {
+        match &self.certified_txs {
+            Some(decided) => decided.clone(),
+            None => self.value.batch_raw_txs(),
+        }
+    }
+
+    /// The txid list as DECIDED — what `batch_txids` must record (I4).
+    pub fn decided_txids(&self) -> Vec<Txid> {
+        match &self.certified_txs {
+            Some(decided) => decided.iter().map(|t| t.compute_txid()).collect(),
+            None => self.value.batch_txids(),
+        }
+    }
 }
 
 /// A GetValue reply that we're holding until transactions arrive.
@@ -133,18 +171,185 @@ pub struct ObservationChannels {
 /// a tx confirmed one block past the deadline reads missing to a node evaluating at
 /// the deadline and confirmed to one evaluating later. Two honest nodes then
 /// disagree about the same batch and one rolls back while the other finalizes it.
-async fn missing_txids(conn: &libsql::Connection, batch: &UnfinalizedBatch) -> Vec<Txid> {
+///
+/// Fallible on purpose. "No row" and "could not read the table" are different
+/// facts: the first is a verdict, the second is this node's own I/O failing, and
+/// folding them together turns a transient SQLITE_BUSY or WAL hiccup into a
+/// consensus decision. The damage is not transient — the resulting rollback
+/// deletes the transaction's row and the replay drops it from the batch, so it is
+/// later re-executed as an unbatched block transaction at a different height than
+/// every peer used, and nothing detects the divergence because the decided value
+/// carries no state root. Propagating instead costs a retry on the next tip move —
+/// but ONLY because `probe_at_deadline` runs this against a borrow before
+/// `check_finality` drains anything. Probing mid-drain would lose the whole tracking
+/// set to a transient read error, which is #515 again from a new direction.
+/// This matches `execute_block`'s handling of the same query and the reasoning
+/// already written down in `clear_on_rollback`.
+async fn missing_txids(conn: &libsql::Connection, batch: &UnfinalizedBatch) -> Result<Vec<Txid>> {
     let mut missing = Vec::new();
     for txid in &batch.txids {
-        let confirmed = match get_transaction_by_txid(conn, &txid.to_string()).await {
-            Ok(Some(row)) => row.confirmed_height.is_some_and(|h| h <= batch.deadline),
-            _ => false,
-        };
+        let row = get_transaction_by_txid(conn, &txid.to_string())
+            .await
+            .with_context(|| format!("Failed to read transaction {txid} for a finality verdict"))?;
+        let confirmed =
+            row.is_some_and(|r| r.confirmed_height.is_some_and(|h| h <= batch.deadline));
         if !confirmed {
             missing.push(*txid);
         }
     }
-    missing
+    Ok(missing)
+}
+
+/// Write the decided record for every decision still sitting in the queue, so
+/// discarding the queue does not discard consensus history.
+///
+/// Best-effort, matching `record_declined_block`. Propagating would take the node
+/// down on a reorg for a transient DB error, and since the queue lives only in memory
+/// the decisions would be lost on restart anyway — strictly worse than a loud warning.
+///
+/// Writes all three: the `batches` row, the DECIDED txid list (I4), and the raw
+/// bodies the value was carrying. That last one is easy to talk yourself out of —
+/// the batch was never executed, so it is tempting to say this node "held nothing" —
+/// but a queued batch is normally `BatchTx::Raw`, and for a transaction that never
+/// confirms this node's copy is the only one a syncing peer can obtain: not its
+/// mempool, not bitcoind. Dropping them reopens the sync hole this change closes
+/// elsewhere by removing the finality-window gate on serving raw txs.
+async fn record_undrained_decisions(
+    conn: &libsql::Connection,
+    decisions: &VecDeque<DeferredDecision>,
+) {
+    for decision in decisions {
+        let consensus_height = decision.consensus_height.as_u64();
+        if let Err(e) = insert_batch(
+            conn,
+            consensus_height,
+            decision.value.block_height(),
+            &decision.value.block_hash().to_string(),
+            &decision.certificate,
+            decision.value.is_block(),
+        )
+        .await
+        {
+            warn!(
+                error = %e,
+                consensus_height,
+                "Failed to record an undrained decision — consensus history now has a gap"
+            );
+            continue;
+        }
+
+        if decision.value.is_block() {
+            continue;
+        }
+        // The DECIDED list, which is the full one even if a replay had narrowed what
+        // this node would have executed.
+        let txids: Vec<String> = decision
+            .decided_txids()
+            .iter()
+            .map(|t| t.to_string())
+            .collect();
+        if !txids.is_empty()
+            && let Err(e) = insert_batch_txids(conn, consensus_height, &txids).await
+        {
+            warn!(
+                error = %e,
+                consensus_height,
+                "Failed to record an undrained batch's decided txids"
+            );
+        }
+
+        for raw in decision.decided_txs() {
+            let serialized = bitcoin::consensus::serialize(&raw);
+            if let Err(e) = insert_unconfirmed_batch_tx(
+                conn,
+                &raw.compute_txid().to_string(),
+                consensus_height,
+                &serialized,
+            )
+            .await
+            {
+                warn!(
+                    error = %e,
+                    consensus_height,
+                    "Failed to record an undrained batch's raw transaction — a peer may \
+                     be unable to resolve it"
+                );
+            }
+        }
+    }
+}
+
+/// Probe every batch whose deadline has passed, in the caller's evaluation order.
+///
+/// Borrows rather than consuming ON PURPOSE. This is the only fallible step in the
+/// verdict, and doing it against a borrow is what lets `check_finality` fail without
+/// having already dismantled its own tracking set.
+async fn probe_at_deadline(
+    conn: &libsql::Connection,
+    batches: &[UnfinalizedBatch],
+    tip: u64,
+) -> Result<Vec<Vec<Txid>>> {
+    // Takes `batches` ALREADY in evaluation order (`check_finality` sorts in place
+    // before calling) and filters stably, so the results line up with the caller's
+    // partition by construction rather than by a second sort that has to agree.
+    let mut missing_per_batch = Vec::new();
+    for batch in batches.iter().filter(|b| b.deadline <= tip) {
+        missing_per_batch.push(missing_txids(conn, batch).await?);
+    }
+    Ok(missing_per_batch)
+}
+
+/// Rebuild the in-memory finality-tracking set from disk at startup.
+///
+/// A batch is still tracked iff its anchor sits in the window ending at `tip`, so
+/// this reconstructs exactly what a node that never restarted would be holding.
+async fn load_unfinalized_batches(
+    conn: &libsql::Connection,
+    tip: u64,
+) -> Result<Vec<UnfinalizedBatch>> {
+    // The window floor assumes every deadline below it was already settled. A crash
+    // between a tip advance and the settle that should have followed breaks that:
+    // `advance` can execute several blocks inside one drain before `settle_finality`
+    // runs, so the tip can pass a deadline that no verdict was ever rendered on, and
+    // a fixed floor would then drop that batch from tracking permanently. Extend the
+    // floor down to the oldest batch transaction still unconfirmed — the exact set
+    // that can still be owed a verdict — so the range stays indexed rather than
+    // becoming a full scan of `batches`.
+    // A failed probe PROPAGATES rather than falling back to the window floor:
+    // the fallback silently narrows the band, dropping exactly the crash-window
+    // batches the extension exists to re-arm — permanently, since every later
+    // reload repeats the same fold. Failing here is recoverable (restart,
+    // re-probe); a batch dropped from tracking is not.
+    let floor = min_unsettled_batch_tx_height(conn, FINALITY_WINDOW)
+        .await
+        .context("Failed to probe the unsettled-batch floor")?
+        .map_or(tracking_floor(tip), |oldest| {
+            oldest.min(tracking_floor(tip))
+        });
+    let rows = select_unfinalized_batches(conn, floor)
+        .await
+        .context("Failed to query unfinalized batches")?;
+    let mut batches = Vec::with_capacity(rows.len());
+    for row in rows {
+        let anchor_hash = row
+            .anchor_hash
+            .parse::<bitcoin::BlockHash>()
+            .with_context(|| format!("Bad anchor hash for batch {}", row.consensus_height))?;
+        let txids = row
+            .txids
+            .iter()
+            .map(|t| t.parse::<Txid>())
+            .collect::<std::result::Result<Vec<_>, _>>()
+            .with_context(|| format!("Bad txid for batch {}", row.consensus_height))?;
+        batches.push(UnfinalizedBatch {
+            consensus_height: Height::new(row.consensus_height),
+            anchor_height: row.anchor_height,
+            anchor_hash,
+            txids,
+            deadline: deadline_for(row.anchor_height),
+        });
+    }
+    Ok(batches)
 }
 
 /// Decide what an at-deadline set means, given each batch's unconfirmed txids.
@@ -177,13 +382,19 @@ fn build_finality_events(
         return (events, still_pending);
     };
 
-    // Only batches strictly ahead of the first failure finalize. Everything from it
-    // onward is replayed by this same rollback — the sort guarantees they all have
-    // anchor_height >= from_anchor — so they are invalidated whether or not their
-    // own txids confirmed. Finalizing one of them would announce a batch that is
-    // about to be torn out, and dropping it from tracking silently left convergence
-    // to an implicit replay invariant (#426).
-    for batch in &at_deadline[..first_fail] {
+    // Only batches anchored strictly BELOW the first failure's anchor finalize.
+    // Everything anchored at or above it is replayed by this same rollback — the
+    // truncation goes to `from_anchor - 1` and the replay reloads every batch
+    // anchored at or above `from_anchor` — so they are invalidated whether or not
+    // their own txids confirmed. Finalizing one would announce a batch that is
+    // about to be torn out, and dropping it from tracking silently left
+    // convergence to an implicit replay invariant (#426). The boundary is the
+    // ANCHOR, not the index: a passing batch can share the failing batch's anchor
+    // at a lower consensus height, sorting ahead of it while being torn out all
+    // the same. It replays in full — no missing txids, so no exclusion rows.
+    let from_anchor = at_deadline[first_fail].anchor_height;
+    let finalize_end = at_deadline[..first_fail].partition_point(|b| b.anchor_height < from_anchor);
+    for batch in &at_deadline[..finalize_end] {
         info!(
             consensus_height = %batch.consensus_height,
             anchor = batch.anchor_height,
@@ -195,8 +406,7 @@ fn build_finality_events(
         });
     }
 
-    let from_anchor = at_deadline[first_fail].anchor_height;
-    let mut invalidated: Vec<Height> = at_deadline[first_fail..]
+    let mut invalidated: Vec<Height> = at_deadline[finalize_end..]
         .iter()
         .map(|b| b.consensus_height)
         .collect();
@@ -206,10 +416,18 @@ fn build_finality_events(
     // (`batch_txids` is append-only and the exclusion filter is in-memory), so a
     // batch left out re-executes, re-arms the identical deadline, and rolls back
     // again with the complementary set — a cycle that never converges.
-    let missing: Vec<Txid> = missing_per_batch[first_fail..]
+    // Per DECISION, not flattened. Flattening loses which batch each txid failed in,
+    // and that attribution is exactly what keeps the recorded exclusion scoped to the
+    // height it belongs to instead of becoming a global ban on the txid.
+    let missing: Vec<BatchExclusion> = at_deadline[first_fail..]
         .iter()
-        .flatten()
-        .copied()
+        .zip(&missing_per_batch[first_fail..])
+        .filter(|(_, txids)| !txids.is_empty())
+        .map(|(batch, txids)| BatchExclusion {
+            consensus_height: batch.consensus_height,
+            anchor_height: batch.anchor_height,
+            txids: txids.clone(),
+        })
         .collect();
 
     let mut surviving = Vec::new();
@@ -224,14 +442,14 @@ fn build_finality_events(
     warn!(
         from_anchor,
         invalidated = ?invalidated,
-        missing = missing.len(),
+        missing = missing.iter().map(|m| m.txids.len()).sum::<usize>(),
         "Cascade invalidation triggered"
     );
 
     events.push(FinalityEvent::Rollback {
         from_anchor,
         invalidated_batches: invalidated,
-        missing_txids: missing,
+        missing,
     });
 
     (events, surviving)
@@ -276,6 +494,43 @@ impl ConsensusState {
             }
             _ => Height::new(1),
         };
+
+        // Rebuild finality tracking. Without this a restart inside the window drops
+        // every pending deadline, so the node never performs a rollback its peers do
+        // and its `transactions` table keeps rows theirs no longer have — the
+        // divergence behind #515. Runs AFTER the suffix cleanup above, both so we
+        // never re-track a batch it just deleted and because that cleanup is what
+        // bounds the band on a lagging node (the anchor-mismatch record-only branch
+        // writes rows at the PROPOSED higher anchor).
+        let unfinalized_batches = load_unfinalized_batches(&conn, last_block_height)
+            .await
+            .context("Failed to rehydrate finality tracking")?;
+        if !unfinalized_batches.is_empty() {
+            info!(
+                count = unfinalized_batches.len(),
+                tip = last_block_height,
+                "Rehydrated finality tracking"
+            );
+        }
+
+        // Divergence probe, diagnostic only. A batch-executed transaction still
+        // unconfirmed below the finality window is past the point where a rollback
+        // can act on it, and if it later confirms this node dedups where a peer
+        // executes — same ops, different heights, forked checkpoints. Deliberately a
+        // WARNING rather than a startup refusal: the predicate has legitimate
+        // transient hits (a node stopped between a deadline passing and its check),
+        // and bricking a healthy validator is worse than the fork it screens for.
+        match min_unsettled_batch_tx_height(&conn, FINALITY_WINDOW).await {
+            Ok(Some(height)) if height < tracking_floor(last_block_height) => warn!(
+                height,
+                floor = tracking_floor(last_block_height),
+                "Unconfirmed batch transaction below the finality window — this node may have \
+                 diverged from its peers; compare checkpoints and re-sync if they differ"
+            ),
+            Ok(_) => {}
+            Err(e) => warn!(error = %e, "Divergence probe failed"),
+        }
+
         Ok(Self {
             signing_provider,
             address,
@@ -284,7 +539,7 @@ impl ConsensusState {
             current_height,
             current_round: Round::new(0),
             undecided: BTreeMap::new(),
-            unfinalized_batches: Vec::new(),
+            unfinalized_batches,
             deferred_decisions: VecDeque::new(),
             pending_blocks: BTreeMap::new(),
             current_validator_set,
@@ -299,11 +554,38 @@ impl ConsensusState {
 
     /// Clear consensus state that is invalidated by a reorg rollback.
     /// Pending blocks, cached blocks, and in-flight batch data are all stale.
-    pub fn clear_on_rollback(&mut self) {
+    pub async fn clear_on_rollback(
+        &mut self,
+        conn: &libsql::Connection,
+        to_height: u64,
+    ) -> Result<()> {
         self.pending_blocks.clear();
+        // Record before discarding. A queued decision is queued precisely BECAUSE it
+        // could not be applied, so unlike the executed and record-only ones it has
+        // written NO `batches` row — clearing it erases the only copy of that
+        // consensus height (I3). `current_height` is already past it so it is never
+        // re-decided, and `delete_unexecuted_batch_suffix` trims a SUFFIX, so the hole
+        // is permanent and this node becomes a defective sync source for any range
+        // covering it. The drain's two discard paths already record; this was the
+        // third and only unrecorded one.
+        record_undrained_decisions(conn, &self.deferred_decisions).await;
         self.deferred_decisions.clear();
-        self.unfinalized_batches.clear();
         self.pending_proposal = None;
+        // Finality tracking is RE-DERIVED, not cleared. Batches anchored at or below
+        // the fork are untouched by the rollback — their `transactions` rows carry
+        // `height = anchor_height` and survive the cascade — so discarding their
+        // deadlines reopens exactly the #515 hole on the reorg path. Re-deriving
+        // rather than filtering in memory also drops the batches whose anchor block
+        // was replaced: the query joins the block CURRENTLY at that height by hash.
+        // Propagate rather than clear on failure: an empty tracking set is exactly
+        // the #515 divergence condition, and reaching it from a transient error
+        // (SQLITE_BUSY, a WAL hiccup) would be silent. The sole caller sits in
+        // `process_block_event`, which already returns `Result`, and the startup
+        // path treats the same failure as fatal.
+        self.unfinalized_batches = load_unfinalized_batches(conn, to_height)
+            .await
+            .context("Failed to re-derive finality tracking after rollback")?;
+        Ok(())
     }
 
     fn validator_set(&self) -> ValidatorSet {
@@ -394,29 +676,37 @@ impl ConsensusState {
         &mut self,
         conn: &libsql::Connection,
         last_height: u64,
-    ) -> Vec<FinalityEvent> {
+    ) -> Result<Vec<FinalityEvent>> {
         let mut events = Vec::new();
         let tip = last_height;
 
+        // ONE definition of the evaluation order, established before anything reads
+        // the set. `from_anchor` is taken from the FIRST failing batch, which is the
+        // minimal failing anchor only because `anchor_height` is the PRIMARY key
+        // here; sorting by `consensus_height` alone would silently break it. Sorting
+        // in place means the probe and the partition below cannot disagree, rather
+        // than sorting twice and asserting afterwards that they matched.
+        self.unfinalized_batches
+            .sort_by_key(|b| (b.anchor_height, b.consensus_height));
+
+        // PROBE BEFORE TAKING THE SET APART. `missing_txids` is fallible, and
+        // draining first would mean an unreadable table costs us the whole tracking
+        // set — every pending deadline gone from memory, which is the #515 hole
+        // reopened by the very code meant to close it. Borrowing for the probe makes
+        // the early return leave `unfinalized_batches` exactly as it was, so the next
+        // tip move simply retries.
+        let missing_per_batch = probe_at_deadline(conn, &self.unfinalized_batches, tip).await?;
+
+        // Every probe succeeded, so it is now safe to consume the set. The partition
+        // is stable, so `at_deadline` inherits the sort above.
         let mut still_pending = Vec::new();
         let mut at_deadline = Vec::new();
-
         for batch in self.unfinalized_batches.drain(..) {
             if batch.deadline <= tip {
                 at_deadline.push(batch);
             } else {
                 still_pending.push(batch);
             }
-        }
-
-        // `from_anchor` below is taken from the FIRST failing batch, which is the
-        // minimal failing anchor only because `anchor_height` is the PRIMARY sort
-        // key here. Re-sorting by `consensus_height` alone would silently break it.
-        at_deadline.sort_by_key(|b| (b.anchor_height, b.consensus_height));
-
-        let mut missing_per_batch = Vec::with_capacity(at_deadline.len());
-        for batch in &at_deadline {
-            missing_per_batch.push(missing_txids(conn, batch).await);
         }
 
         let (built, surviving) = build_finality_events(
@@ -426,10 +716,10 @@ impl ConsensusState {
         );
         events.extend(built);
         self.unfinalized_batches = surviving;
-        events
+        Ok(events)
     }
 
-    fn emit_finality_events(&self, events: &[FinalityEvent]) {
+    pub(super) fn emit_finality_events(&self, events: &[FinalityEvent]) {
         if let Some(obs) = &self.observation {
             for event in events {
                 let _ = obs.finality_tx.try_send(event.clone());
@@ -489,6 +779,9 @@ impl ConsensusState {
                     consensus_height: Height::new(b.consensus_height),
                     value,
                     certificate: b.certificate,
+                    // Loaded straight from the decided record, so `value` already
+                    // holds the certified content — nothing to preserve separately.
+                    certified_txs: None,
                 })
             })
             .collect()
@@ -505,22 +798,32 @@ impl ConsensusState {
         }
     }
 
+    /// Raw transactions we still hold for a decided batch, for sync to attach.
+    ///
+    /// Deliberately unbounded by the finality window. Gating on it made every
+    /// historical batch sync as txids only, and a peer that has to resolve a txid
+    /// tries its mempool, then its DB, then bitcoind — none of which can produce a
+    /// transaction that never confirmed and was excluded by a finality rollback.
+    /// `resolve_batch_txs` then bails and the reactor exits, so a chain that had
+    /// ever performed an exclusion was not reliably re-syncable from genesis.
+    ///
+    /// Serving whatever remains is self-limiting: a row goes away as soon as its
+    /// transaction is indexed on chain — `confirm_transaction` when a row already
+    /// existed, `insert_transaction` when it did not — plus the startup suffix
+    /// cleanup. So a batch whose transactions all confirmed has none, and the only
+    /// rows ever served are the otherwise-unresolvable ones.
+    ///
+    /// That second deletion site is load-bearing and was missing: a RECORD-ONLY batch
+    /// stores raw txs but writes no `transactions` row, so the confirming block takes
+    /// the insert path, never `confirm_transaction`. Without it every record-only
+    /// batch — i.e. every batch decided while this node lags, the case this whole
+    /// change exists for — kept a full transaction body forever AND attached it to
+    /// that consensus height on every sync.
     async fn load_raw_txs_if_unfinalized(
         &self,
         conn: &libsql::Connection,
-        anchor_height: u64,
         consensus_height: u64,
     ) -> Result<Option<Vec<bitcoin::Transaction>>> {
-        let tip = match select_block_latest(conn)
-            .await
-            .context("Failed to query latest block for finality check")?
-        {
-            Some(tip) => tip,
-            None => return Ok(None),
-        };
-        if anchor_height + FINALITY_WINDOW <= tip.height {
-            return Ok(None);
-        }
         let raw_bytes = select_unconfirmed_batch_txs(conn, consensus_height)
             .await
             .context("Failed to query unconfirmed batch txs")?;
@@ -582,7 +885,7 @@ impl ConsensusState {
 
             if !b.is_block
                 && let Some(raw_txs) = self
-                    .load_raw_txs_if_unfinalized(conn, b.anchor_height, b.consensus_height)
+                    .load_raw_txs_if_unfinalized(conn, b.consensus_height)
                     .await?
             {
                 value.set_raw_txs(raw_txs);
@@ -603,14 +906,20 @@ impl ConsensusState {
             .map(Height::new))
     }
 
-    /// Run finality checks. Returns (rollback_anchor, excluded_txids) if a rollback is needed.
-    /// The reactor is responsible for DB truncation and calling `initiate_rollback`.
+    /// Run finality checks. Returns the events produced and, if a rollback is needed,
+    /// `(rollback_anchor, missing)` — the missing txids attributed to the decided
+    /// batch each failed in (`Vec<BatchExclusion>`), deliberately never flattened:
+    /// a flat set is how a global txid ban gets built by accident.
+    ///
+    /// Does NOT emit the events — the caller does, after deciding it can actually
+    /// perform the rollback. The tracking set IS drained here either way; a caller
+    /// that declines the rollback is expected to halt, which this node does.
     pub async fn run_finality_checks(
         &mut self,
         conn: &libsql::Connection,
         last_height: u64,
-    ) -> Option<(u64, HashSet<Txid>)> {
-        let finality_events = self.check_finality(conn, last_height).await;
+    ) -> Result<(Vec<FinalityEvent>, Option<(u64, Vec<BatchExclusion>)>)> {
+        let finality_events = self.check_finality(conn, last_height).await?;
         // At most one Rollback per pass — `check_finality` folds every failing
         // at-deadline batch into a single event. Taking the FIRST rather than the
         // last matters if that ever regresses: last-wins would keep the highest
@@ -626,16 +935,15 @@ impl ConsensusState {
         let result = finality_events.iter().find_map(|event| match event {
             FinalityEvent::Rollback {
                 from_anchor,
-                missing_txids,
+                missing,
                 ..
-            } => {
-                let excluded: HashSet<Txid> = missing_txids.iter().copied().collect();
-                Some((*from_anchor, excluded))
-            }
+            } => Some((*from_anchor, missing.clone())),
             _ => None,
         });
-        self.emit_finality_events(&finality_events);
-        result
+        // Deliberately NOT emitted here. A rollback the caller then refuses — because
+        // it would reach below the prune watermark — must not be announced as though
+        // it happened. The caller emits once it has committed to acting.
+        Ok((finality_events, result))
     }
 
     /// Validate batch-level rules. Returns a rejection reason if any rule
@@ -687,10 +995,16 @@ impl ConsensusState {
 
 #[cfg(test)]
 mod tests {
-    use super::{UnfinalizedBatch, build_finality_events, missing_txids};
+    use super::{
+        DeferredDecision, UnfinalizedBatch, VecDeque, build_finality_events,
+        load_unfinalized_batches, missing_txids, probe_at_deadline, record_undrained_decisions,
+    };
     use crate::consensus::Height;
+    use crate::consensus::Value;
     use crate::consensus::finality_types::FinalityEvent;
+    use crate::database::queries::select_unconfirmed_batch_txs;
     use crate::database::queries::{confirm_transaction, insert_block, insert_transaction};
+    use crate::reactor::mock_bitcoin::make_tx;
     use crate::test_utils::{new_mock_block_hash, new_test_db};
     use bitcoin::hashes::Hash;
     use bitcoin::{BlockHash, Txid};
@@ -710,16 +1024,19 @@ mod tests {
         }
     }
 
+    /// Flattens `missing` for the assertions that only care about the union. The
+    /// per-batch attribution itself is asserted by
+    /// `every_missing_txid_is_attributed_to_its_own_batch`.
     fn rollback_of(events: &[FinalityEvent]) -> (u64, Vec<Height>, Vec<Txid>) {
         let mut found = events.iter().filter_map(|e| match e {
             FinalityEvent::Rollback {
                 from_anchor,
                 invalidated_batches,
-                missing_txids,
+                missing,
             } => Some((
                 *from_anchor,
                 invalidated_batches.clone(),
-                missing_txids.clone(),
+                missing.iter().flat_map(|m| m.txids.clone()).collect(),
             )),
             _ => None,
         });
@@ -807,6 +1124,36 @@ mod tests {
         }
     }
 
+    /// A PASSING batch that shares the failing batch's ANCHOR is torn out by the
+    /// same rollback: the truncation goes to `from_anchor - 1`, deleting its
+    /// anchor block, and the replay reloads everything anchored at or above
+    /// `from_anchor`. Sorting puts it before the failure (lower consensus
+    /// height), but index order is not the finalize boundary — anchor order is.
+    /// Finalizing it would announce permanence for state the same pass deletes.
+    #[test]
+    fn passing_batch_sharing_the_failing_anchor_is_invalidated_not_finalized() {
+        let at_deadline = vec![
+            batch(10, 100, &[1]), // passes, same anchor as the failure
+            batch(11, 100, &[2]), // fails
+        ];
+        let missing = vec![vec![], vec![txid(2)]];
+
+        let (events, _) = build_finality_events(&at_deadline, &missing, Vec::new());
+        let (from_anchor, invalidated, excluded) = rollback_of(&events);
+
+        assert_eq!(from_anchor, 100);
+        assert!(
+            finalized_heights(&events).is_empty(),
+            "a batch the rollback is about to tear out must not be finalized"
+        );
+        assert_eq!(invalidated, vec![Height::new(10), Height::new(11)]);
+        assert_eq!(
+            excluded,
+            vec![txid(2)],
+            "the passing batch replays in full — no exclusions for it"
+        );
+    }
+
     /// `from_anchor` comes from the first FAILING batch, which is minimal among
     /// failures only because `anchor_height` is the primary sort key.
     #[test]
@@ -888,14 +1235,17 @@ mod tests {
         let b = batch(500, 10, &[1, 2]);
         assert_eq!(b.deadline, 16);
         assert_eq!(
-            missing_txids(&conn, &b).await,
+            missing_txids(&conn, &b).await.expect("probe must read"),
             vec![txid(2)],
             "the tx confirmed at deadline+1 must count as missing"
         );
 
         // The same batch against the same tables gives the same answer regardless
         // of how far the chain has moved on — there is no tip input at all.
-        assert_eq!(missing_txids(&conn, &b).await, vec![txid(2)]);
+        assert_eq!(
+            missing_txids(&conn, &b).await.expect("probe must read"),
+            vec![txid(2)]
+        );
     }
 
     #[tokio::test]
@@ -903,6 +1253,172 @@ mod tests {
         let (_reader, writer, _dir) = new_test_db().await.unwrap();
         let conn = writer.connection();
         let b = batch(500, 10, &[9]);
-        assert_eq!(missing_txids(&conn, &b).await, vec![txid(9)]);
+        assert_eq!(
+            missing_txids(&conn, &b).await.expect("probe must read"),
+            vec![txid(9)]
+        );
+    }
+
+    /// "No row" is a verdict; "could not read the table" is this node's own I/O
+    /// failing. Folding the second into the first turns a transient DB fault into a
+    /// consensus rollback that excludes a transaction which DID confirm — and the
+    /// damage outlives the fault, because the replay drops that tx and it is later
+    /// re-executed as an unbatched block transaction at a height no peer used.
+    /// Nothing detects the divergence: the decided value carries no state root.
+    #[tokio::test]
+    async fn an_unreadable_table_yields_an_error_not_a_verdict() {
+        let (_reader, writer, _dir) = new_test_db().await.unwrap();
+        let conn = writer.connection();
+
+        // Stand-in for any read failure: with the table gone, the query errors
+        // rather than returning "no such transaction".
+        conn.execute("DROP TABLE transactions", ())
+            .await
+            .expect("drop transactions");
+
+        let b = batch(500, 10, &[1]);
+        assert!(
+            missing_txids(&conn, &b).await.is_err(),
+            "a failed read must propagate — reporting the txid as missing would \
+             render a consensus verdict on a table this node could not read"
+        );
+    }
+
+    /// The rehydration floor extension exists to re-arm batches whose deadline
+    /// passed with no verdict rendered (a crash inside one drain). Folding a
+    /// failed probe into "use the plain window floor" silently narrows the
+    /// tracking band — dropping exactly those crash-window batches from tracking,
+    /// permanently, since every later reload repeats the same fold. A failed read
+    /// is recoverable by restart; a silently narrowed band is not.
+    #[tokio::test]
+    async fn a_failed_floor_probe_is_an_error_not_a_narrower_band() {
+        let (_reader, writer, _dir) = new_test_db().await.unwrap();
+        let conn = writer.connection();
+
+        // Break ONLY the probe's query: it reads `height`, which nothing else on
+        // the rehydration path touches (the `executed_batch_txids` view carries
+        // batch_height/txid/id).
+        conn.execute(
+            "ALTER TABLE transactions RENAME COLUMN height TO height_hidden",
+            (),
+        )
+        .await
+        .expect("rename column");
+
+        assert!(
+            load_unfinalized_batches(&conn, 100).await.is_err(),
+            "a failed floor probe must propagate — rehydrating from a silently \
+             narrowed band drops crash-window batches from tracking permanently"
+        );
+    }
+
+    /// A reorg discards the deferred queue, and every entry in it is there precisely
+    /// BECAUSE it could not be applied — so none of them has a `batches` row yet.
+    /// Dropping them silently erases those consensus heights: nothing re-decides them
+    /// (`current_height` is already past), and the startup cleanup only trims a
+    /// SUFFIX, so a middle hole is permanent and this node can never serve those
+    /// heights to a syncing peer. That is I3, violated on the one discard path the
+    /// rest of this PR did not cover.
+    #[tokio::test]
+    async fn undrained_decisions_are_recorded_before_the_queue_is_discarded() {
+        let (_reader, writer, _dir) = new_test_db().await.unwrap();
+        let conn = writer.connection();
+
+        let mut queued: VecDeque<DeferredDecision> = VecDeque::new();
+        queued.push_back(DeferredDecision {
+            consensus_height: Height::new(41),
+            value: Value::new_block(300, BlockHash::all_zeros()),
+            certificate: vec![1, 2, 3],
+            certified_txs: None,
+        });
+        queued.push_back(DeferredDecision {
+            consensus_height: Height::new(42),
+            value: Value::new_batch_raw(301, BlockHash::all_zeros(), vec![make_tx(1), make_tx(2)]),
+            certificate: vec![4, 5, 6],
+            // A replay had already narrowed this one — the DECIDED list is what a
+            // syncing peer needs, not the empty set we would have executed.
+            certified_txs: Some(vec![make_tx(1), make_tx(2)]),
+        });
+
+        record_undrained_decisions(&conn, &queued).await;
+
+        // The raw bodies the value was carrying must survive too. A queued batch is
+        // usually `BatchTx::Raw` (the proposer builds it that way, and `upgrade`
+        // promotes what it can), and for a tx that never confirms this node's copy is
+        // the ONLY one a syncing peer can get — not its mempool, not bitcoind.
+        // Recording txids alone reopens the sync hole this PR closes elsewhere.
+        assert_eq!(
+            select_unconfirmed_batch_txs(&conn, 42).await.unwrap().len(),
+            2,
+            "the raw transactions the decision carried must be recorded, not dropped"
+        );
+
+        for h in [41u64, 42] {
+            let mut rows = conn
+                .query(
+                    "SELECT COUNT(*) FROM batches WHERE consensus_height = ?",
+                    [h],
+                )
+                .await
+                .unwrap();
+            let n: u64 = rows.next().await.unwrap().unwrap().get(0).unwrap();
+            assert_eq!(n, 1, "consensus height {h} must leave a row in `batches`");
+        }
+
+        let mut rows = conn
+            .query(
+                "SELECT COUNT(*) FROM batch_txids WHERE batch_height = ?",
+                [42u64],
+            )
+            .await
+            .unwrap();
+        let n: u64 = rows.next().await.unwrap().unwrap().get(0).unwrap();
+        assert_eq!(
+            n, 2,
+            "the batch's DECIDED txid list must be recorded, not the narrowed one"
+        );
+    }
+
+    /// `check_finality` sorts the tracking set IN PLACE once and both the probe and
+    /// the partition then walk that same order — so they agree by construction rather
+    /// than by a second sort that has to match. This pins the two properties that
+    /// makes rest on: the probe filters by deadline, and it preserves input order.
+    ///
+    /// It matters because `from_anchor` is taken from the first failure. If the probe
+    /// reordered relative to the partition, verdicts would land against the wrong
+    /// batches and the rollback would target the wrong anchor.
+    #[tokio::test]
+    async fn the_probe_filters_by_deadline_and_preserves_input_order() {
+        let (_reader, writer, _dir) = new_test_db().await.unwrap();
+        let conn = writer.connection();
+
+        // As `check_finality` hands it over: already in evaluation order.
+        let mut tracked = vec![
+            batch(502, 30, &[3]),
+            batch(500, 20, &[1]),
+            batch(500, 10, &[2]),
+        ];
+        tracked.sort_by_key(|b| (b.anchor_height, b.consensus_height));
+
+        let probed = probe_at_deadline(&conn, &tracked, 999)
+            .await
+            .expect("probe must read");
+        let probed_txids: Vec<_> = probed.into_iter().map(|m| m[0]).collect();
+        let expected: Vec<_> = tracked.iter().map(|b| b.txids[0]).collect();
+        assert_eq!(
+            probed_txids, expected,
+            "the probe must return results in the caller's order, ties included"
+        );
+
+        // Only the batches whose deadline has passed. `batch(_, anchor, _)` sets
+        // deadline = anchor + 6, so a tip of 26 covers anchor 20 but not 30.
+        let due = probe_at_deadline(&conn, &tracked, 26)
+            .await
+            .expect("probe must read");
+        assert_eq!(
+            due.len(),
+            2,
+            "only the two at-deadline batches may be probed"
+        );
     }
 }

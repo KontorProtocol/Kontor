@@ -25,6 +25,18 @@ CREATE TABLE IF NOT EXISTS batches (
 -- rows, ConsensusState::new) deletes children explicitly first, and FK
 -- enforcement failing LOUD there is the guard against any future deletion path
 -- forgetting to.
+--
+-- `height` MEANS TWO DIFFERENT THINGS depending on how the row was created, and
+-- several bugs have come from conflating them:
+--   * batch-executed row (`batch_height` set): the ANCHOR height the batch was
+--     decided against. `confirmed_height` is NULL until the tx lands on Bitcoin,
+--     and can end up ABOVE `height`.
+--   * block-indexed row (`batch_height` NULL): the block that contained the tx.
+--     `height == confirmed_height` always.
+-- Only `height` cascades. So a batch row can outlive the block named by its
+-- `confirmed_height` (the anchor is at or below a rollback target while the
+-- confirmation is above it) — `rollback_to_height` clears those explicitly. A
+-- block-indexed row cannot: if it survives the cascade, its confirmation did too.
 CREATE TABLE IF NOT EXISTS transactions (
   id INTEGER PRIMARY KEY,
   txid TEXT NOT NULL UNIQUE,
@@ -46,6 +58,23 @@ CREATE INDEX IF NOT EXISTS idx_batches_anchor_height ON batches (anchor_height);
 CREATE INDEX IF NOT EXISTS idx_transactions_batch_height ON transactions (batch_height)
   WHERE batch_height IS NOT NULL;
 
+-- Two history-wide predicates run against batch rows on hot-ish paths: the
+-- startup/reorg rehydration floor (`min_unsettled_batch_tx_height`, twice at
+-- every boot and once per Bitcoin reorg) and the rollback confirmation-clear in
+-- `rollback_to_height` (inside every rollback savepoint). Without these they
+-- walk every batch-executed transaction ever written — `transactions` is never
+-- pruned. Partial on batch rows so block-path rows (the bulk of the table)
+-- never touch them; both are named via INDEXED BY (no ANALYZE, see above).
+--   * unconfirmed arm: MIN(height) over currently-unconfirmed batch txs, a set
+--     roughly the size of the finality band — O(1) seek.
+--   * confirmed arm: range scan on confirmed_height bounds the rollback clear
+--     by depth; `height` makes the late-confirmation probe index-only.
+CREATE INDEX IF NOT EXISTS idx_transactions_unconfirmed_batch ON transactions (height)
+  WHERE batch_height IS NOT NULL AND confirmed_height IS NULL;
+CREATE INDEX IF NOT EXISTS idx_transactions_batch_confirmed
+  ON transactions (confirmed_height, height)
+  WHERE batch_height IS NOT NULL AND confirmed_height IS NOT NULL;
+
 -- The immutable decided txid list of each batch, written at decide time and
 -- kept for as long as the batch row exists. Sync must serve the CERTIFIED
 -- value for a consensus height regardless of whether this node executed the
@@ -61,6 +90,19 @@ CREATE TABLE IF NOT EXISTS batch_txids (
   PRIMARY KEY (batch_height, position),
   FOREIGN KEY (batch_height) REFERENCES batches (consensus_height)
 );
+
+-- What this node ACTUALLY EXECUTED for a batch — the counterpart to the CERTIFIED
+-- list in `batch_txids` above, and NOT the same thing.
+--
+-- The two diverge permanently after a filtered replay: `batch_txids` is append-only
+-- (INSERT OR IGNORE on its PK, no cascade), so re-recording a reduced list cannot
+-- shrink it, while the `transactions` rows for excluded txs are gone. Ask
+-- `batch_txids` "what was decided?" and ask this "what did we run?". Reaching for
+-- the wrong one is silent — it returns a plausible answer — and has been the source
+-- of several bugs, which is the only reason this view exists rather than the join
+-- being written out each time.
+CREATE VIEW IF NOT EXISTS executed_batch_txids AS
+  SELECT batch_height, txid, id FROM transactions WHERE batch_height IS NOT NULL;
 
 CREATE TABLE IF NOT EXISTS contracts (
   id INTEGER PRIMARY KEY,
@@ -226,12 +268,58 @@ CREATE TABLE IF NOT EXISTS nonces (
   FOREIGN KEY (height) REFERENCES blocks (height) ON DELETE CASCADE
 );
 
+-- Keyed by (txid, batch_height), NOT txid alone. The same transaction genuinely
+-- belongs to more than one decided height: a batch this node recorded but never
+-- executed (record-only, or undrained at a reorg) keeps its body, and the same tx
+-- can then be re-batched at a later height. Under a txid-only key the writers'
+-- `INSERT OR IGNORE` bound the body to whichever height wrote FIRST — typically the
+-- abandoned one — and silently ignored the real batch, so sync served the later
+-- height a txid it had no body for. `delete_unconfirmed_batch_tx` deletes by txid,
+-- so confirmation still clears every binding at once.
 CREATE TABLE IF NOT EXISTS unconfirmed_batch_txs (
-  txid TEXT NOT NULL PRIMARY KEY,
+  txid TEXT NOT NULL,
   batch_height INTEGER NOT NULL,
   raw_tx BLOB NOT NULL,
+  PRIMARY KEY (txid, batch_height),
   FOREIGN KEY (batch_height) REFERENCES batches (consensus_height)
 );
+
+-- Sync resolves raw txs per batch (`select_unconfirmed_batch_txs`). The table is
+-- keyed by txid, so without this that lookup is a full scan. A row is removed once
+-- its transaction is indexed on chain (both the confirm and the insert path drop it)
+-- or by the startup suffix cleanup — so what remains is the finality-excluded txs,
+-- which never confirm and are exactly what sync cannot resolve any other way.
+CREATE INDEX IF NOT EXISTS idx_unconfirmed_batch_txs_batch_height
+  ON unconfirmed_batch_txs (batch_height);
+
+-- Txids a finality exclusion dropped, PER DECISION, so a later replay cannot put
+-- them back and oscillate forever.
+--
+-- Keyed by `batch_height` FIRST. The row answers "when executing consensus height H,
+-- which certified txids must not run?" — never "is this txid banned". A txid-only key
+-- is a global ban: the same tx can re-enter the mempool, be decided in a LATER batch
+-- against a fresh deadline, and execute legitimately, and a global ban would strip it
+-- there too. That is a state divergence, which is worse than the liveness stall this
+-- table exists to prevent.
+--
+-- RECORDED, never derived. "Certified but not executed" is equally true of a
+-- record-only batch (anchor mismatch — skipped here, executed by peers), and the two
+-- are indistinguishable in the database. Only the exclusion path knows which is which.
+--
+-- `deadline` is denormalised rather than joined: a SURVIVOR decision has no `batches`
+-- row when its exclusion is written, so a join would be unevaluable for exactly those
+-- rows. It makes the re-verification predicate a self-contained single-table check.
+--
+-- NO foreign key, and DELIBERATELY NOT trimmed by `delete_unexecuted_batch_suffix`.
+-- That cleanup forgets decided-but-unexecuted heights so they re-sync; the exclusion
+-- for such a height must SURVIVE, or the crash window between the truncation and the
+-- replay reopens the oscillation. Do not "tidy" this into the cleanup.
+CREATE TABLE IF NOT EXISTS excluded_batch_txids (
+  batch_height INTEGER NOT NULL,
+  txid TEXT NOT NULL,
+  deadline INTEGER NOT NULL,
+  PRIMARY KEY (batch_height, txid)
+) WITHOUT ROWID;
 
 -- Node-local operational state (NOT consensus state): a singleton key/value store.
 -- Deliberately has NO foreign key to blocks (a reorg must not cascade-delete or roll

@@ -33,7 +33,7 @@ pub use stdlib::{
     wave_type,
 };
 use stdlib::{contract_address, holder_ref, impls};
-use storage::print_component_wit;
+use storage::{ComponentDecodeError, print_component_wit};
 pub use storage::{Storage, TransactionContext};
 use tokio::sync::Mutex;
 pub use types::default_val_for_type;
@@ -246,6 +246,22 @@ pub struct Runtime {
     /// lite executor); production paths (reactor, runtime pool) set it from
     /// `config.network`.
     pub network: bitcoin::Network,
+    /// Set while `simulate` runs a fabricated block it is going to throw away.
+    ///
+    /// The savepoint undoes everything in the DATABASE, but the component cache
+    /// lives outside it and is keyed by `contracts.id` — a rowid the rollback
+    /// frees for reuse (`INTEGER PRIMARY KEY`, no `AUTOINCREMENT`). A `Publish`
+    /// inside a simulation would otherwise leave its compiled WASM cached under
+    /// an id a later real publish can be assigned, and `load_component` would
+    /// serve the simulated contract's code — on this node only, so it diverges
+    /// from the network.
+    ///
+    /// A flag rather than a compensating invalidate: the cache has TWO write
+    /// sites (`component_bytes_and_compiled` and `validate_publishable`), each
+    /// carrying its own `!simulating` guard, so not writing is one check per
+    /// site rather than a cleanup to remember in a function whose first two
+    /// hazards (`height`, then this) were both missed.
+    pub simulating: bool,
 }
 
 impl Runtime {
@@ -325,6 +341,7 @@ impl Runtime {
             op_return_data: None,
             node_label: String::new(),
             network: bitcoin::Network::Regtest,
+            simulating: false,
         })
     }
 
@@ -623,10 +640,39 @@ impl Runtime {
         // Compile + cache the component once here; `init` and every later call
         // reuse the cached artifact. We keep the encoded `bytes` so the WIT check
         // below decodes from them instead of recomputing them.
-        let (bytes, component) = self
-            .component_bytes_and_compiled(contract_id)
+        // Content failures are DETERMINISTIC: decoding is a pure function of the
+        // submitted bytes, so every node fails identically — and a NonDeterministic
+        // error propagates out of `execute_block` rather than being recorded, which
+        // means the whole network exits at the same height. `filter_map` does not
+        // inspect Publish bytes, so that is reachable from any Bitcoin transaction.
+        // Same reasoning as the `instantiate_pre` check just below.
+        //
+        // But only the CONTENT half. The read and the task join are this node's own
+        // machinery; calling those deterministic would make one node reject a publish
+        // its peers accept — the same divergence, silently and in the other direction.
+        let bytes = self
+            .storage
+            .decode_component_bytes(contract_id)
             .await
-            .map_err(ExecutionError::NonDeterministic)?;
+            .map_err(|e| match e {
+                ComponentDecodeError::Content(e) => ExecutionError::Deterministic(
+                    e.context("contract bytes are not a valid component"),
+                ),
+                ComponentDecodeError::Infrastructure(e) => ExecutionError::NonDeterministic(e),
+            })?;
+        let component = Component::from_binary(&self.engine, &bytes).map_err(|e| {
+            ExecutionError::Deterministic(
+                anyhow!(e).context("contract is not a valid wasm component"),
+            )
+        })?;
+        // Guarded for the same reason as the write in `component_bytes_and_compiled`,
+        // and this is the site that actually matters: a `Publish` inside a simulation
+        // reaches the cache HERE, under a `contracts.id` the rollback frees for reuse.
+        if !self.simulating {
+            self.component_cache
+                .put(contract_id, component.clone(), bytes.len())
+                .await;
+        }
         let linker = if is_native_contract_id(contract_id) {
             &self.linkers.native
         } else {
@@ -639,7 +685,11 @@ impl Runtime {
         })?;
 
         if !is_native_contract_id(contract_id) {
-            let wit = print_component_wit(&bytes).map_err(ExecutionError::NonDeterministic)?;
+            // Deterministic for the same reason: a pure function of bytes that already
+            // decoded, so a failure here is a property of the contract, not this node.
+            let wit = print_component_wit(&bytes).map_err(|e| {
+                ExecutionError::Deterministic(e.context("contract WIT could not be read"))
+            })?;
             Self::validate_user_wit(&wit)?;
         }
         Ok(())
@@ -884,9 +934,16 @@ impl Runtime {
     async fn component_bytes_and_compiled(&self, contract_id: u64) -> Result<(Vec<u8>, Component)> {
         let bytes = self.storage.component_bytes(contract_id).await?;
         let component = Component::from_binary(&self.engine, &bytes)?;
-        self.component_cache
-            .put(contract_id, component.clone(), bytes.len())
-            .await;
+        // One of the cache's TWO write sites — `validate_publishable` guards the
+        // other, and its guard is the one the publish path depends on.
+        // See `Runtime::simulating`: caching a speculative contract's code under an
+        // id the rollback frees would let a later real publish be served the wrong
+        // WASM on this node alone.
+        if !self.simulating {
+            self.component_cache
+                .put(contract_id, component.clone(), bytes.len())
+                .await;
+        }
         Ok((bytes, component))
     }
 
@@ -919,6 +976,7 @@ impl HasData for Runtime {
 
 #[cfg(test)]
 mod tests {
+    use crate::database::native_contracts::FILESTORAGE;
     use crate::database::queries::exists_contract_state;
     use crate::runtime::token;
     use crate::runtime::wit::resources::ViewContext;
@@ -1122,6 +1180,111 @@ mod tests {
         );
     }
 
+    /// Bytes that are not a decodable component must be rejected DETERMINISTICALLY.
+    ///
+    /// This one is a chain-halt guard, not a nicety. `filter_map` does not inspect
+    /// Publish bytes, so a malformed payload reaches execution from an ordinary
+    /// Bitcoin transaction — no API access needed. Classified NonDeterministic it
+    /// propagates out of `execute_block` instead of being recorded as an op failure,
+    /// and because the payload is deterministic content EVERY node reaches the same
+    /// conclusion at the same height and exits together.
+    #[tokio::test]
+    async fn publish_rejects_undecodable_bytes_deterministically() {
+        let (mut runtime, _dir, _name) = test_runtime().await.expect("test runtime");
+        runtime
+            .set_context(
+                0,
+                Some(super::TransactionContext::builder().build()),
+                None,
+                None,
+            )
+            .await;
+        let contract_id = runtime
+            .storage
+            .insert_contract("garbage", &[0xFFu8; 64])
+            .await
+            .expect("insert contract");
+
+        let err = runtime
+            .validate_publishable(contract_id)
+            .await
+            .expect_err("undecodable bytes must be rejected");
+        assert!(
+            matches!(err, super::ExecutionError::Deterministic(_)),
+            "rejection must be Deterministic (recorded op failure), not NonDeterministic \
+             (every node exits at this height): {err}"
+        );
+    }
+
+    /// The other half of the same classification: this node failing to READ the bytes
+    /// is NOT the contract's fault, and must stay NonDeterministic. Recording it as a
+    /// rejection would make one node refuse a publish its peers accept — the same
+    /// divergence as the halt, silently and in the other direction.
+    #[tokio::test]
+    async fn publish_read_failure_stays_non_deterministic() {
+        let (mut runtime, _dir, _name) = test_runtime().await.expect("test runtime");
+        runtime
+            .set_context(
+                0,
+                Some(super::TransactionContext::builder().build()),
+                None,
+                None,
+            )
+            .await;
+
+        // No contract row at this id — stands in for any failure to obtain the bytes.
+        let err = runtime
+            .validate_publishable(9_999_999)
+            .await
+            .expect_err("a missing contract must not validate");
+        assert!(
+            matches!(err, super::ExecutionError::NonDeterministic(_)),
+            "failing to read the bytes is this node's problem, so it must propagate \
+             rather than be recorded as a deterministic rejection: {err}"
+        );
+    }
+
+    /// The same guard through the door an ordinary Bitcoin transaction actually
+    /// comes in by. The two tests above pin `validate_publishable` in isolation,
+    /// which leaves the classification free to be re-wrapped anywhere between
+    /// `publish` and it — and `publish` does not simply forward: it validates
+    /// provenance and the name, inserts the contract row, and on failure rolls
+    /// that row back and evicts the cache. Any of those could reclassify.
+    ///
+    /// `execute_op` records a `Deterministic` publish failure and continues, but
+    /// returns `Err` for `NonDeterministic`, which propagates out of
+    /// `execute_block` and exits the node. Since the payload is deterministic
+    /// content every node reaches that point together, so the wrong class here is
+    /// a whole-network halt costing one Bitcoin fee to trigger.
+    #[tokio::test]
+    async fn malformed_publish_is_recorded_not_fatal() {
+        let (mut runtime, _dir, _name) = test_runtime().await.expect("test runtime");
+        runtime
+            .set_context(
+                1,
+                Some(super::TransactionContext::builder().build()),
+                None,
+                None,
+            )
+            .await;
+        let signer = super::Signer::Core(Box::new(super::Signer::Nobody));
+        let payment = runtime.core_payment();
+        let provenance = super::native_provenance().expect("provenance");
+
+        // Well-formed op, garbage payload: valid kebab name and valid provenance,
+        // so nothing rejects it before the bytes are decoded. `filter_map` never
+        // inspects Publish bytes, so this is exactly what reaches execution.
+        let err = runtime
+            .publish(&signer, payment, "halt-probe", &[0xFFu8; 64], &provenance)
+            .await
+            .expect_err("garbage bytes cannot publish");
+        assert!(
+            matches!(err, super::ExecutionError::Deterministic(_)),
+            "a malformed publish must be a RECORDED op failure; NonDeterministic \
+             propagates out of execute_block and every node exits at this height: {err:?}"
+        );
+    }
+
     /// A user contract that *links* fine but violates a Kontor WIT rule (here,
     /// no `init`) must still be rejected at publish — and DETERMINISTICALLY. This
     /// exercises the WIT-rule branch of `validate_publishable`, which the link
@@ -1183,6 +1346,80 @@ mod tests {
         assert!(
             runtime.component_cache.get(&reused_id).await.is_none(),
             "failed publish must evict the cached component for its rolled-back id"
+        );
+    }
+
+    /// A simulation must leave NOTHING in the component cache. The savepoint undoes
+    /// the database, but the cache lives outside it and is keyed by `contracts.id` —
+    /// a rowid the rollback frees for reuse. A component compiled while simulating
+    /// would then be served to whatever contract is later assigned that id, on this
+    /// node alone, which is a silent divergence from the rest of the network.
+    ///
+    /// SCOPE: the cache has TWO write sites, and both are covered here —
+    /// `component_bytes_and_compiled` (reached by `load_component`, i.e. calls) and
+    /// `validate_publishable` (reached by `publish`). The publish one is the site the
+    /// hazard is actually about, so it is asserted directly rather than assumed to
+    /// share a path with the other. It does not drive a publish through the reactor's
+    /// `simulate`: the lite executor's transactions carry no ops, so the cluster
+    /// harness cannot express one.
+    #[tokio::test]
+    async fn simulation_does_not_populate_the_component_cache() {
+        let (mut runtime, _dir, _name) = test_runtime().await.expect("test runtime");
+        runtime
+            .set_context(
+                0,
+                Some(super::TransactionContext::builder().build()),
+                None,
+                None,
+            )
+            .await;
+
+        // A fresh id — the natives are prewarmed into the cache, so reusing one of
+        // theirs would make the first assertion pass without the guard.
+        let contract_id = runtime
+            .storage
+            .insert_contract("cache-probe", FILESTORAGE)
+            .await
+            .expect("insert contract");
+
+        runtime.simulating = true;
+        runtime
+            .load_component(contract_id)
+            .await
+            .expect("component still compiles while simulating");
+        assert!(
+            runtime.component_cache.get(&contract_id).await.is_none(),
+            "a component compiled during simulation must not be cached — the id it \
+             is keyed by is freed by the rollback and can be handed to a real publish"
+        );
+
+        // The publish path caches at its OWN site inside `validate_publishable`, so
+        // it has to be asserted separately — a guard on the call path says nothing
+        // about it. This publish fails (filestorage imports `file-registry`, which a
+        // user contract may not), but only AFTER the component is compiled and would
+        // have been cached, which is exactly the window under test.
+        let publish_id = runtime
+            .storage
+            .insert_contract("publish-probe", FILESTORAGE)
+            .await
+            .expect("insert contract");
+        let _ = runtime.validate_publishable(publish_id).await;
+        assert!(
+            runtime.component_cache.get(&publish_id).await.is_none(),
+            "a publish compiled during simulation must not be cached — this is the \
+             site the id-reuse hazard actually runs through"
+        );
+
+        // The guard must be scoped to simulation, not a blanket disable: caching is
+        // what keeps every later call off the compiler.
+        runtime.simulating = false;
+        runtime
+            .load_component(contract_id)
+            .await
+            .expect("component compiles normally");
+        assert!(
+            runtime.component_cache.get(&contract_id).await.is_some(),
+            "outside simulation the cache must still be populated"
         );
     }
 

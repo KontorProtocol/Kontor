@@ -34,7 +34,7 @@ use malachitebft_app_channel::app::types::core::VotingPower;
 use malachitebft_core_types::{LinearTimeouts, Round};
 use tracing::{debug, error, info, warn};
 
-use crate::consensus::finality_types::{FINALITY_WINDOW, StateEvent};
+use crate::consensus::finality_types::StateEvent;
 use crate::consensus::{BatchTx, Ctx};
 use crate::{
     bitcoin_follower::event::{BlockEvent, MempoolEvent},
@@ -74,6 +74,18 @@ use executor::Executor;
 /// deep-reorg bail in `process_block_event` fires on an ordinary shallow reorg.
 /// Keep this constant and that config default in lockstep.
 const MAX_PENDING_BLOCKS: usize = 128;
+
+/// Ceiling on `consensus_state::deferred_decisions` — decided values parked
+/// because their data has not arrived or their turn has not come.
+///
+/// Unlike [`MAX_PENDING_BLOCKS`] this is not backpressure: there is nothing to
+/// slow down, since the queue is fed by consensus itself. It is an OOM backstop
+/// for the one state that cannot resolve itself — a node whose execution has
+/// fallen behind heights the network already decided, which parks one entry per
+/// decided value from then on. Set far above any legitimate backlog: a healthy
+/// node idles near zero and drains within a block, and a tight bound would turn
+/// a transient stall into the crash loop this bound exists to avoid.
+const MAX_DEFERRED_DECISIONS: usize = 4096;
 
 pub type Simulation = (
     indexer_types::Transaction,
@@ -237,6 +249,30 @@ impl<E: Executor> Reactor<E> {
                 }
                 info!("Block {}/{} {}", block.height, target_height, block.hash);
 
+                // A block at or below the tip is already applied and can never be
+                // proposed or executed again — buffering it is not merely useless,
+                // it HALTS THE CHAIN. `make_value` proposes the minimum pending
+                // height, peers still hold the block so they vote it valid, and it
+                // is decided; the finalize gate then refuses it as out of order and
+                // nothing removes it from the buffer. It stays the minimum forever,
+                // newer blocks are never proposed, and the only thing that would
+                // clear it — a successful block execution — is exactly what the loop
+                // prevents.
+                //
+                // Reachable from the poller: `replay_blocks_after` re-sends stored
+                // block events, and the finality path deliberately keeps
+                // `pending_blocks` across a rollback, so a replayed block can land
+                // after the deferred drain has already carried the tip past it.
+                if block.height <= self.last_height {
+                    debug!(
+                        block_height = block.height,
+                        %block.hash,
+                        last_height = self.last_height,
+                        "Ignoring block at or below the tip — already applied"
+                    );
+                    return Ok(());
+                }
+
                 info!(
                     block_height = block.height,
                     %block.hash,
@@ -246,9 +282,9 @@ impl<E: Executor> Reactor<E> {
                 self.consensus
                     .pending_blocks
                     .insert(block.height, block.clone());
-                self.drain_deferred_decisions()
+                self.advance()
                     .await
-                    .context("drain_deferred_decisions failed after block insert")?;
+                    .context("advance failed after block insert")?;
                 // A pending block may be what we're waiting to propose
                 if self.consensus.pending_proposal.is_some() {
                     self.try_fulfill_pending_proposal()
@@ -270,17 +306,8 @@ impl<E: Executor> Reactor<E> {
                 // Hence the guard keys off `retain` (the assumption) — not the actual
                 // prune watermark — because what it really detects is "Bitcoin broke
                 // finality", which is catastrophic independent of pruning.
-                if self.prune.enabled {
-                    let retain = self.prune.retain_blocks.max(FINALITY_WINDOW);
-                    if self.last_height.saturating_sub(to_height) > retain {
-                        bail!(
-                            "Bitcoin reorg to height {to_height} is deeper than the prune \
-                             retain window ({retain}) below tip {}; pruned state cannot be \
-                             rolled back locally — re-sync required",
-                            self.last_height
-                        );
-                    }
-                }
+                self.check_rollback_depth(to_height)
+                    .context("Bitcoin reorg too deep")?;
                 self.rollback(to_height)
                     .await
                     .context("rollback failed during Bitcoin reorg")?;
@@ -292,7 +319,10 @@ impl<E: Executor> Reactor<E> {
                 // old-chain entries would order ahead of new-chain decisions in
                 // the drain queue and wedge it (a batch waiting on an anchor
                 // whose only block decision is queued behind it).
-                self.consensus.clear_on_rollback();
+                self.consensus
+                    .clear_on_rollback(&self.db_conn(), to_height)
+                    .await
+                    .context("clear_on_rollback failed during Bitcoin reorg")?;
                 let checkpoint = self.consensus.get_checkpoint(&self.db_conn()).await;
                 self.consensus
                     .emit_state_event(StateEvent::RollbackExecuted {
@@ -450,60 +480,12 @@ impl<E: Executor> Reactor<E> {
                         warn!("Event receiver dropped, cannot send BatchProcessed event");
                     }
                     if let consensus_state::ConsensusResult::Block(block, decision) = consensus_result {
-                        self.handle_block_with_decision(block, &decision)
+                        self.handle_block(block, &decision)
                             .await
-                            .context("handle_block_with_decision failed after consensus block")?;
-                        self.drain_deferred_decisions()
+                            .context("handle_block failed after consensus block")?;
+                        self.advance()
                             .await
-                            .context("drain_deferred_decisions failed after consensus block")?;
-                        // Check finality after block execution — batch txids may now be confirmed
-                        let conn = self.db_conn();
-                        if self.consensus
-                            .unfinalized_batches
-                            .iter()
-                            .any(|b| b.deadline <= self.last_height)
-                            && let Some((rollback_anchor, excluded)) = self.consensus.run_finality_checks(&conn, self.last_height).await {
-                                // Read replay decisions from DB before deleting state
-                                // (the txid join is cascade-deleted with the blocks).
-                                let replay = self
-                                    .load_replay_decisions(rollback_anchor)
-                                    .await
-                                    .context("load_replay_decisions failed")?;
-
-                                // Rollback to before the invalid anchor so all state at the
-                                // anchor height (including invalid tx effects) is wiped cleanly.
-                                self.rollback(rollback_anchor.saturating_sub(1))
-                                    .await
-                                    .context("rollback failed during finality rollback")?;
-
-                                // Fallible raw-tx resolution/filtering only after the
-                                // truncation is durable — a failure here must not
-                                // cancel the rollback finality demanded.
-                                self.prepare_replay(rollback_anchor, replay, excluded)
-                                    .await
-                                    .context("prepare_replay failed")?;
-
-                                // Emit rollback event
-                                let checkpoint = self.consensus.get_checkpoint(&conn).await;
-                                self.consensus.emit_state_event(StateEvent::RollbackExecuted {
-                                    to_anchor: rollback_anchor,
-                                    entries_removed: 0,
-                                    checkpoint,
-                                });
-
-                                // Process deferred decisions using already-cached blocks.
-                                // `pending_blocks` is deliberately NOT cleared here (#430):
-                                // a finality rollback re-executes against the SAME Bitcoin
-                                // chain, so cached blocks are still the right data and make
-                                // this drain immediate — `replay_blocks_after` re-delivery is
-                                // only the fallback. The Bitcoin-reorg path (`BlockEvent::
-                                // Rollback`) clears them instead because there the blocks
-                                // themselves changed; the drain's block-hash check guards
-                                // any stale remainder in both paths.
-                                self.drain_deferred_decisions()
-                                    .await
-                                    .context("drain_deferred_decisions failed after finality rollback")?;
-                            }
+                            .context("advance failed after consensus block")?;
                     }
                     // Yield to allow other channels (block_rx, mempool_rx) to be polled
                     tokio::task::yield_now().await;
@@ -536,6 +518,18 @@ impl<E: Executor> Reactor<E> {
         // is a no-op after the first build (DB upgrade / first boot). Block writes and
         // reorgs both maintain the cache atomically, so a clean restart needs no rebuild.
         self.runtime.storage.footprint().reconstruct().await?;
+
+        // Settle any deadline that was ALREADY due when we started. Rehydration
+        // restores the tracking set, but nothing evaluates it until a tip advance —
+        // and a node that restarted at or past a deadline resumes consensus
+        // immediately, so without this it keeps executing batches on state its peers
+        // have already rolled back until the next Bitcoin block arrives (up to an
+        // hour on mainnet, indefinitely on a stalled chain). That is #515 again by a
+        // third route. The queues are empty here, so the drain inside is a no-op and
+        // only the finality check does work.
+        self.advance()
+            .await
+            .context("advance failed during startup finality settle")?;
 
         let result = self.run_event_loop().await;
 
