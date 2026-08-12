@@ -1094,12 +1094,21 @@ impl<E: Executor> Reactor<E> {
     /// Declining to execute stays correct — the block was reorged away and running
     /// it would bind the wrong block to this consensus height. We just write down
     /// that we declined.
-    async fn record_declined_block(&self, decision: &consensus_state::DeferredDecision) {
+    async fn record_declined_block(
+        &self,
+        decision: &consensus_state::DeferredDecision,
+    ) -> Result<()> {
         // Height and hash come from the decision itself — passing them alongside
         // invited a caller to record one block's decision under another's identity.
         let block_height = decision.value.block_height();
         let decided_hash = decision.value.block_hash();
-        if let Err(e) = insert_batch(
+        // FATAL on failure, deliberately. A declined decision that leaves no row is
+        // the unrefillable middle gap this function exists to prevent: once
+        // `current_height` moves past it, nothing re-decides the height and the
+        // startup cleanup trims only a suffix. Failing is recoverable — restart
+        // resumes consensus at this height, value sync re-delivers the decision,
+        // and it is re-declined and recorded. Swallowing the error is not.
+        insert_batch(
             &self.db_conn(),
             decision.consensus_height.as_u64(),
             block_height,
@@ -1108,16 +1117,13 @@ impl<E: Executor> Reactor<E> {
             true,
         )
         .await
-        {
-            // Best-effort: failing to record must not take the node down, but it
-            // does leave the hole this exists to prevent, so say so loudly.
-            warn!(
-                error = %e,
-                consensus_height = %decision.consensus_height,
-                block_height,
-                "Failed to record declined block decision — consensus history now has a gap"
-            );
-        }
+        .with_context(|| {
+            format!(
+                "Failed to record declined block decision at consensus height {} \
+                 (block {block_height})",
+                decision.consensus_height
+            )
+        })
     }
 
     pub(super) async fn drain_deferred_decisions(&mut self) -> Result<()> {
@@ -1185,7 +1191,7 @@ impl<E: Executor> Reactor<E> {
                                 // the startup cleanup trims an unexecuted SUFFIX,
                                 // never a hole in the middle. A height that leaves
                                 // no row can never be served to a syncing peer.
-                                self.record_declined_block(&decision).await;
+                                self.record_declined_block(&decision).await?;
                                 continue;
                             }
                             Err(e) => {
@@ -1218,7 +1224,7 @@ impl<E: Executor> Reactor<E> {
                                 "Dropping stale deferred block decision ahead of the tip — \
                                  the canonical chain has replaced it"
                             );
-                            self.record_declined_block(&decision).await;
+                            self.record_declined_block(&decision).await?;
                             continue;
                         }
                         // No buffered block, or the hashes match: the
@@ -1258,7 +1264,7 @@ impl<E: Executor> Reactor<E> {
                                 consensus_height = %decision.consensus_height,
                                 "Dropping stale deferred block decision — hash mismatch after rollback"
                             );
-                            self.record_declined_block(&decision).await;
+                            self.record_declined_block(&decision).await?;
                             self.consensus.pending_blocks.insert(bh, block);
                             continue;
                         }
@@ -1555,7 +1561,7 @@ impl<E: Executor> Reactor<E> {
                                 consensus_height = %certificate.height,
                                 "Dropping stale block decision — hash mismatch after rollback"
                             );
-                            self.record_declined_block(&decision).await;
+                            self.record_declined_block(&decision).await?;
                             // Back in the buffer: it is the canonical block for this
                             // height on the new chain and still needs a fresh decision.
                             self.consensus.pending_blocks.insert(*height, block);
@@ -1574,7 +1580,7 @@ impl<E: Executor> Reactor<E> {
                                     consensus_height = %certificate.height,
                                     "Ignoring stale block decision (post-rollback)"
                                 );
-                                self.record_declined_block(&decision).await;
+                                self.record_declined_block(&decision).await?;
                             } else {
                                 info!(
                                     block_height = height,
