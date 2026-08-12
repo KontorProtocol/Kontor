@@ -1190,11 +1190,37 @@ impl<E: Executor> Reactor<E> {
                         }
                     }
                     if bh > self.last_height + 1 {
-                        // The predecessors were decided by the network but never
-                        // reached this node's executor. Nothing here can close
-                        // that gap — the missed heights will not be re-decided —
-                        // so park and stay loud: this node needs a re-sync, and
-                        // the alternative (executing out of order) is fatal.
+                        // A decision ahead of the tip is one of two things, told
+                        // apart by the buffered block at its height. After a
+                        // reorg DEEPER than one block, the stale decisions for
+                        // the orphaned heights land here (only `tip + 1` can be
+                        // declined by the hash check below), while the re-decided
+                        // chain-B blocks queue up BEHIND them — parking would
+                        // wedge the drain forever, on every node that ever syncs
+                        // across the reorg. The poller's canonical block at this
+                        // height carrying a different hash is exactly the
+                        // evidence the `tip + 1` decline acts on: decline and
+                        // record, and let the re-decisions behind it through.
+                        if let Some(block) = self.consensus.pending_blocks.get(&bh)
+                            && block.hash != decided_hash
+                        {
+                            warn!(
+                                block_height = bh,
+                                decided = %decided_hash,
+                                local = %block.hash,
+                                consensus_height = %decision.consensus_height,
+                                "Dropping stale deferred block decision ahead of the tip — \
+                                 the canonical chain has replaced it"
+                            );
+                            self.record_declined_block(&decision).await;
+                            continue;
+                        }
+                        // No buffered block, or the hashes match: the
+                        // predecessors were decided by the network but never
+                        // reached this node's executor, and nothing here can
+                        // close that gap — the missed heights will not be
+                        // re-decided — so park and stay loud: this node needs a
+                        // re-sync, and executing out of order is fatal.
                         error!(
                             block_height = bh,
                             last_height = self.last_height,
@@ -1552,6 +1578,17 @@ impl<E: Executor> Reactor<E> {
                                     "Block decided but not ready to execute — deferring"
                                 );
                                 self.consensus.deferred_decisions.push_back(decision);
+                                // Run the drain NOW rather than waiting for the next
+                                // block event. The decision just queued may already be
+                                // settleable — after a ≥2-deep reorg, the stale
+                                // pre-reorg decision lands here with its replacement
+                                // block already buffered, and a node syncing that
+                                // range receives no further block events to trigger
+                                // the drain: without this it parks forever with the
+                                // re-decided chain queued behind it.
+                                self.advance().await.context(
+                                    "advance failed after deferring a block decision",
+                                )?;
                             }
                         }
                     }

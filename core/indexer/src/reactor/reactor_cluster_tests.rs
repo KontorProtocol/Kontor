@@ -1693,6 +1693,67 @@ async fn prod_reactor_reorg_at_batch_anchor_keeps_batch_tracked() -> Result<()> 
     Ok(())
 }
 
+/// A late joiner syncing across a ≥2-deep reorg episode. The decided sequence
+/// legitimately contains the stale chain-A block decisions followed by the
+/// chain-B re-decisions — every live node serves that history forever. The
+/// joiner declines the first stale decision at `tip + 1` by the buffered-hash
+/// check, but the DEEPER stale decisions sit ahead of its tip, where the drain
+/// used to park unconditionally — wedging on chain-A decisions with the
+/// chain-B re-decisions queued right behind them, permanently. This times out
+/// without the ahead-of-tip decline.
+#[tokio::test]
+async fn prod_reactor_late_joiner_syncs_across_a_deep_reorg() -> Result<()> {
+    crate::logging::setup();
+
+    let mut cluster = ReactorCluster::start_with(4, 3).await?;
+    cluster.wait_for_ready().await;
+
+    for h in 1..=3 {
+        cluster.mine_empty_and_send();
+        cluster.wait_for_block(h, Duration::from_secs(60)).await;
+    }
+
+    // Reorg the top two blocks away and decide a longer replacement chain. The
+    // decided sequence now reads ... 2A, 3A, 2B, 3B, 4B ... — with fork-salted
+    // mock hashes, 2A/3A name blocks that no longer exist anywhere.
+    cluster.mock_bitcoin().reset_to(1);
+    cluster.send_block_event(BlockEvent::Rollback { to_height: 1 });
+    cluster.wait_for_rollback(1, Duration::from_secs(60)).await;
+    for h in 2..=4 {
+        cluster.mine_empty_and_send();
+        cluster.wait_for_block(h, Duration::from_secs(60)).await;
+    }
+
+    // The joiner's poller serves only the surviving chain.
+    let node_idx = cluster.add_node().await?;
+    for event in cluster.mock_bitcoin().get_all_block_events() {
+        let _ = cluster.block_txs[node_idx].try_send(event);
+    }
+
+    // Poll the joiner's OWN database: it must execute the post-reorg chain to
+    // height 4. The shared event channel would be satisfied by the live nodes.
+    let conn = cluster.node_conn(node_idx).await.clone();
+    let mut tip = 0u64;
+    for _ in 0..240 {
+        let mut rows = conn
+            .query("SELECT COALESCE(MAX(height), 0) FROM blocks", ())
+            .await?;
+        tip = rows.next().await?.expect("row").get(0)?;
+        if tip >= 4 {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(500)).await;
+    }
+    assert!(
+        tip >= 4,
+        "late joiner stuck at tip {tip} — the drain wedged on a stale pre-reorg \
+         block decision instead of declining it"
+    );
+
+    cluster.shutdown().await;
+    Ok(())
+}
+
 #[tokio::test]
 async fn prod_reactor_late_joiner_syncs_to_same_checkpoint() -> Result<()> {
     crate::logging::setup();
