@@ -379,13 +379,20 @@ fn build_finality_events(
         return (events, still_pending);
     };
 
-    // Only batches strictly ahead of the first failure finalize. Everything from it
-    // onward is replayed by this same rollback — the sort guarantees they all have
-    // anchor_height >= from_anchor — so they are invalidated whether or not their
-    // own txids confirmed. Finalizing one of them would announce a batch that is
-    // about to be torn out, and dropping it from tracking silently left convergence
-    // to an implicit replay invariant (#426).
-    for batch in &at_deadline[..first_fail] {
+    // Only batches anchored strictly BELOW the first failure's anchor finalize.
+    // Everything anchored at or above it is replayed by this same rollback — the
+    // truncation goes to `from_anchor - 1` and the replay reloads every batch
+    // anchored at or above `from_anchor` — so they are invalidated whether or not
+    // their own txids confirmed. Finalizing one would announce a batch that is
+    // about to be torn out, and dropping it from tracking silently left
+    // convergence to an implicit replay invariant (#426). The boundary is the
+    // ANCHOR, not the index: a passing batch can share the failing batch's anchor
+    // at a lower consensus height, sorting ahead of it while being torn out all
+    // the same. It replays in full — no missing txids, so no exclusion rows.
+    let from_anchor = at_deadline[first_fail].anchor_height;
+    let finalize_end =
+        at_deadline[..first_fail].partition_point(|b| b.anchor_height < from_anchor);
+    for batch in &at_deadline[..finalize_end] {
         info!(
             consensus_height = %batch.consensus_height,
             anchor = batch.anchor_height,
@@ -397,8 +404,7 @@ fn build_finality_events(
         });
     }
 
-    let from_anchor = at_deadline[first_fail].anchor_height;
-    let mut invalidated: Vec<Height> = at_deadline[first_fail..]
+    let mut invalidated: Vec<Height> = at_deadline[finalize_end..]
         .iter()
         .map(|b| b.consensus_height)
         .collect();
@@ -1112,6 +1118,36 @@ mod tests {
                 "{h} was both finalized and invalidated"
             );
         }
+    }
+
+    /// A PASSING batch that shares the failing batch's ANCHOR is torn out by the
+    /// same rollback: the truncation goes to `from_anchor - 1`, deleting its
+    /// anchor block, and the replay reloads everything anchored at or above
+    /// `from_anchor`. Sorting puts it before the failure (lower consensus
+    /// height), but index order is not the finalize boundary — anchor order is.
+    /// Finalizing it would announce permanence for state the same pass deletes.
+    #[test]
+    fn passing_batch_sharing_the_failing_anchor_is_invalidated_not_finalized() {
+        let at_deadline = vec![
+            batch(10, 100, &[1]), // passes, same anchor as the failure
+            batch(11, 100, &[2]), // fails
+        ];
+        let missing = vec![vec![], vec![txid(2)]];
+
+        let (events, _) = build_finality_events(&at_deadline, &missing, Vec::new());
+        let (from_anchor, invalidated, excluded) = rollback_of(&events);
+
+        assert_eq!(from_anchor, 100);
+        assert!(
+            finalized_heights(&events).is_empty(),
+            "a batch the rollback is about to tear out must not be finalized"
+        );
+        assert_eq!(invalidated, vec![Height::new(10), Height::new(11)]);
+        assert_eq!(
+            excluded,
+            vec![txid(2)],
+            "the passing batch replays in full — no exclusions for it"
+        );
     }
 
     /// `from_anchor` comes from the first FAILING batch, which is minimal among
