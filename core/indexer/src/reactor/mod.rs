@@ -16,7 +16,7 @@ use std::collections::VecDeque;
 use std::time::Instant;
 
 use anyhow::{Context, Result, bail};
-use futures_util::future::pending;
+use futures_util::future::{self, pending};
 use indexer_types::{BlockRow, Event, Fees, OpWithResult};
 use tokio::{
     select,
@@ -403,13 +403,18 @@ impl<E: Executor> Reactor<E> {
 
             let consensus_rx = self.consensus.channels.consensus.recv();
 
-            // The front I/O job's verdict future, or never. Polling through
-            // `&mut` retains its progress when another arm wins the select;
-            // dropping the loop (shutdown) drops the in-flight RPC with it.
+            // EVERY in-flight I/O job's verdict future, raced — or never.
+            // All of them, not just the front: a stalled BuildProposal against
+            // a slow bitcoind must not park a ValidateProposal whose oneshot
+            // reply the consensus engine is waiting on, or the node stops
+            // voting for the front job's whole retry budget. Polling through
+            // `&mut` retains each future's progress when another arm wins the
+            // select; dropping the loop (shutdown) drops the in-flight RPCs.
             let io_verdicts = async {
-                match self.io_jobs.front_mut() {
-                    Some(job) => (&mut job.verdicts).await,
-                    None => pending().await,
+                if self.io_jobs.is_empty() {
+                    pending().await
+                } else {
+                    future::select_all(self.io_jobs.iter_mut().map(|j| &mut j.verdicts)).await
                 }
             };
 
@@ -557,11 +562,11 @@ impl<E: Executor> Reactor<E> {
                         }
                     }
                 }
-                verdicts = io_verdicts => {
+                (verdicts, index, _) = io_verdicts => {
                     let job = self
                         .io_jobs
-                        .pop_front()
-                        .expect("io arm fired, so a job is queued");
+                        .remove(index)
+                        .expect("io arm fired with this job's index");
                     self.apply_io_verdicts(job.apply, verdicts)
                         .await
                         .context("apply_io_verdicts failed")?;
