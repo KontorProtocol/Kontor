@@ -202,42 +202,12 @@ impl Executor for RuntimeExecutor {
             return Ok(false);
         }
 
-        // 3. send_raw_transaction: broadcast to the network. Redundant
-        //    with testmempoolaccept but catches races and ensures the tx
-        //    is relayed to our bitcoind if we were the proposer.
-        //    RPC failure after retries is fatal (same reasoning as above).
-        let result = retry_until_cancelled(
-            || async {
-                match self.bitcoin_client.send_raw_transaction(&raw_hex).await {
-                    Ok(_) => Ok(true),
-                    Err(crate::bitcoin_client::error::Error::BitcoinRpc { code: -27, .. }) => {
-                        Ok(true)
-                    }
-                    Err(crate::bitcoin_client::error::Error::BitcoinRpc {
-                        code: -25 | -26,
-                        ..
-                    }) => Ok(false),
-                    Err(e) => Err(e),
-                }
-            },
-            "send_raw_transaction",
-            new_backoff_limited(),
-            self.shutdown.clone(),
-        )
-        .await
-        .with_context(|| {
-            format!(
-                "send_raw_transaction failed after retries for {txid}; \
-                 bitcoind may be unreachable"
-            )
-        })?;
-        match result {
-            true => Ok(true),
-            false => {
-                warn!(%txid, "Transaction rejected by bitcoind");
-                Ok(false)
-            }
-        }
+        // Relay is NOT part of the verdict. It used to be step 3 here, gating
+        // the vote on `send_raw_transaction` — but confirmation is only ever
+        // judged at the finality deadline, so relay success buys the vote
+        // nothing the deadline machinery does not already guarantee. The
+        // reactor hands accepted txs to the broadcaster subsystem instead.
+        Ok(true)
     }
     async fn resolve_transaction(&self, txid: &Txid) -> Option<bitcoin::Transaction> {
         // Fall back to Bitcoin RPC (via tx cache)

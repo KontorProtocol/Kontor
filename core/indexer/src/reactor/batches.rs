@@ -583,6 +583,20 @@ impl<E: Executor> Reactor<E> {
         Ok(BatchOutcome::Executed)
     }
 
+    /// Hand accepted batch txs to the broadcaster. Best-effort by design —
+    /// relay failure is absorbed by the finality deadline — and `try_send` so
+    /// the event loop never blocks on it; the broadcaster's own death reaches
+    /// the supervisor without our help.
+    fn broadcast(&self, txs: &[bitcoin::Transaction]) {
+        if let Some(ch) = &self.broadcast_tx {
+            for tx in txs {
+                if let Err(e) = ch.try_send(tx.clone()) {
+                    warn!(error = %e, "Broadcast queue refused a transaction; relying on mempool relay");
+                }
+            }
+        }
+    }
+
     pub(super) async fn make_value(&mut self) -> Result<Option<Value>> {
         let conn = self.db_conn();
         let last_height = self.last_height;
@@ -672,6 +686,7 @@ impl<E: Executor> Reactor<E> {
             return Ok(None);
         }
 
+        self.broadcast(&txs);
         let value = Value::new_batch_raw(last_height, last_hash, txs);
         Ok(Some(value))
     }
@@ -789,6 +804,7 @@ impl<E: Executor> Reactor<E> {
                         .entry(txid)
                         .or_insert_with(|| (tx.clone(), parsed));
                 }
+                self.broadcast(transactions);
                 Value::new_batch_raw(*anchor_height, *anchor_hash, transactions.clone())
             }
         };

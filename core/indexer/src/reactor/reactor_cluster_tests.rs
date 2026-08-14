@@ -536,6 +536,8 @@ impl ReactorCluster {
                 // reads the resolved address and publishes it here. `start_with`
                 // awaits the seed's receiver to bootstrap the followers.
                 consensus_listen_addr,
+                // No broadcaster: MockBitcoin has no mempool to relay to.
+                None,
             );
 
             let _ = rtx.send(i).await;

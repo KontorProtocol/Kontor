@@ -125,6 +125,10 @@ pub struct Reactor<E: Executor> {
     /// Shared with the API (`Env.consensus_listen_addr`); written on the first
     /// `Listening` (see `handle_consensus_msg`'s `ConsensusReady` arm).
     consensus_listen_addr: tokio::sync::watch::Sender<Option<String>>,
+    /// Accepted batch txs go here for relay by the broadcaster subsystem.
+    /// `None` in the in-process cluster harness, whose MockBitcoin has no
+    /// mempool to relay to.
+    broadcast_tx: Option<mpsc::Sender<bitcoin::Transaction>>,
 }
 
 impl<E: Executor> Reactor<E> {
@@ -143,6 +147,7 @@ impl<E: Executor> Reactor<E> {
         last_height: u64,
         last_hash: Option<BlockHash>,
         consensus_listen_addr: tokio::sync::watch::Sender<Option<String>>,
+        broadcast_tx: Option<mpsc::Sender<bitcoin::Transaction>>,
     ) -> Self {
         let mut runtime = runtime;
         runtime.node_label = consensus
@@ -166,6 +171,7 @@ impl<E: Executor> Reactor<E> {
             event_tx,
             consensus,
             consensus_listen_addr,
+            broadcast_tx,
         }
     }
 
@@ -816,6 +822,7 @@ pub fn run(
     consensus_listen_addr: tokio::sync::watch::Sender<Option<String>>,
     network: bitcoin::Network,
     prune: PruneConfig,
+    broadcast_tx: Option<mpsc::Sender<bitcoin::Transaction>>,
 ) -> JoinHandle<Result<()>> {
     tokio::spawn({
         async move {
@@ -955,6 +962,7 @@ pub fn run(
                     last_height,
                     last_hash,
                     consensus_listen_addr,
+                    broadcast_tx,
                 );
 
                 // Resume incremental pruning from where we left off (persisted in
