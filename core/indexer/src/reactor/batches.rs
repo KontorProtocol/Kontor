@@ -77,6 +77,20 @@ pub(super) enum IoApply {
     },
 }
 
+/// A candidate set whose bitcoind verdicts came back after the proposal they
+/// were meant for was already answered (the deadline proposed empty, or the
+/// engine moved on). Banked for the NEXT proposal instead of burned: with the
+/// verdicts discarded, a validation latency persistently above the proposal
+/// deadline re-validates the same pool every round and proposes empty forever
+/// while user transactions sit pooled. Anchor-tagged, judged at USE: consumed
+/// only if the anchor still matches, and membership in the pool is re-checked
+/// then (see `try_fulfill_pending_proposal`).
+pub(super) struct ValidatedCandidates {
+    pub(super) anchor_height: u64,
+    pub(super) anchor_hash: BlockHash,
+    pub(super) txs: Vec<bitcoin::Transaction>,
+}
+
 /// What the batch-candidate snapshot found.
 enum ProposalSnapshot {
     /// Batch candidates that need the bitcoind I/O phase.
@@ -880,6 +894,42 @@ impl<E: Executor> Reactor<E> {
             return Ok(true);
         }
 
+        // A candidate set already validated for THIS anchor — banked when the
+        // deadline consumed the proposal it was meant for. Judged at use:
+        // anchor must still match, membership is re-checked against the pool,
+        // and `validate_batch` re-runs; anything stale falls through to a
+        // fresh snapshot.
+        if let Some(banked) = self.validated_candidates.take() {
+            if banked.anchor_height == last_height && banked.anchor_hash == last_hash {
+                let mut kept = banked.txs;
+                kept.retain(|tx| {
+                    self.consensus
+                        .pending_transactions
+                        .contains_key(&tx.compute_txid())
+                });
+                if !kept.is_empty() {
+                    let order = dependency_sort(&kept);
+                    let txs: Vec<bitcoin::Transaction> =
+                        order.into_iter().map(|i| kept[i].clone()).collect();
+                    let conn = self.db_conn();
+                    if self
+                        .consensus
+                        .validate_batch(&conn, last_height, last_hash, &txs, last_height, last_hash)
+                        .await?
+                        .is_none()
+                    {
+                        self.fulfill_pending_with(Value::new_batch_raw(
+                            last_height,
+                            last_hash,
+                            txs,
+                        ))
+                        .await?;
+                        return Ok(true);
+                    }
+                }
+            }
+        }
+
         // One build job at a time — a second snapshot while one is in flight
         // would validate the same pool twice and race it on apply.
         let build_in_flight = self
@@ -979,11 +1029,34 @@ impl<E: Executor> Reactor<E> {
                         }
                     }
                 }
+                // The pool may have moved on while the I/O ran: an RBF
+                // replacement or eviction arrived through the mempool arm —
+                // which now runs freely during validation — and a superseded tx
+                // draws nil votes (txn-mempool-conflict) or, decided, a batch
+                // that can never confirm. Membership at APPLY time is the truth.
+                kept.retain(|tx| {
+                    self.consensus
+                        .pending_transactions
+                        .contains_key(&tx.compute_txid())
+                });
                 if self.consensus.pending_proposal.is_none() {
                     // The deadline already answered with an empty batch, or the
-                    // engine moved on. The candidates stay pooled for the next
-                    // GetValue.
-                    debug!("No proposal left to fulfill; keeping validated candidates pooled");
+                    // engine moved on. BANK the verdicts for the next GetValue
+                    // rather than burning them — see `ValidatedCandidates`.
+                    if !kept.is_empty()
+                        && anchor_height == self.last_height
+                        && anchor_hash == self.last_hash.unwrap_or(BlockHash::all_zeros())
+                    {
+                        debug!(
+                            count = kept.len(),
+                            "Banking validated candidates for the next proposal"
+                        );
+                        self.validated_candidates = Some(ValidatedCandidates {
+                            anchor_height,
+                            anchor_hash,
+                            txs: kept,
+                        });
+                    }
                     return Ok(());
                 }
                 if anchor_height != self.last_height

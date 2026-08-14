@@ -215,9 +215,7 @@ impl Executor for RuntimeExecutor {
                         let submitted = retry(
                             || async {
                                 match client.send_raw_transaction(&raw_hex).await {
-                                    Ok(_) | Err(RpcError::BitcoinRpc { code: -27, .. }) => {
-                                        Ok(true)
-                                    }
+                                    Ok(_) | Err(RpcError::BitcoinRpc { code: -27, .. }) => Ok(true),
                                     Err(RpcError::BitcoinRpc {
                                         code: -25 | -26, ..
                                     }) => Ok(false),

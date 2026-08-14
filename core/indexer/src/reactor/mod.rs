@@ -132,6 +132,9 @@ pub struct Reactor<E: Executor> {
     /// `pending_proposal` is single and the engine awaits each proposal reply
     /// before sending the next part). See `batches::IoJob`.
     io_jobs: VecDeque<batches::IoJob>,
+    /// Verdicts that outlived their proposal, banked for the next one — see
+    /// `batches::ValidatedCandidates`.
+    validated_candidates: Option<batches::ValidatedCandidates>,
 }
 
 impl<E: Executor> Reactor<E> {
@@ -174,6 +177,7 @@ impl<E: Executor> Reactor<E> {
             consensus,
             consensus_listen_addr,
             io_jobs: VecDeque::new(),
+            validated_candidates: None,
         }
     }
 

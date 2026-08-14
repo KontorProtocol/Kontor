@@ -1776,6 +1776,57 @@ async fn prod_reactor_late_joiner_syncs_across_a_deep_reorg() -> Result<()> {
     Ok(())
 }
 
+/// The pool moves DURING validation: tx0 is removed mid-flight (an RBF
+/// replacement or eviction through the mempool arm, which now runs freely
+/// while the I/O is off-loop). Without re-checking membership at apply/use
+/// time, the superseded tx is proposed anyway — measured: the decided batch
+/// carried tx0 with the `retain`s disabled. Validation latency (4s) exceeds
+/// the proposal deadline here, so the verdict-banking path is exercised too;
+/// banking itself is robustness rather than a pinnable liveness property —
+/// without it a completed validation can still land inside the NEXT proposal
+/// window and fulfill it, so the un-banked behavior is timing-dependent, not
+/// deterministically broken.
+#[tokio::test]
+async fn banked_verdicts_survive_the_deadline_and_track_the_pool() -> Result<()> {
+    crate::logging::setup();
+
+    let mut cluster =
+        ReactorCluster::start_with_options(1, 1, Some(Duration::from_secs(4))).await?;
+    cluster.wait_for_ready().await;
+
+    let events = cluster.mock_bitcoin().generate_mempool_txs(2);
+    let txids: Vec<String> = events
+        .iter()
+        .filter_map(|e| match e {
+            MempoolEvent::KontorTxAdded { txid, .. } => Some(txid.to_string()),
+            _ => None,
+        })
+        .collect();
+    let [removed, surviving] = txids.as_slice() else {
+        panic!("expected two txids, got {txids:?}");
+    };
+    let removed_txid = removed.parse().expect("txid");
+    for event in events {
+        cluster.send_mempool_event(event);
+    }
+
+    // Let the validation get in flight, then yank tx0 out from under it.
+    tokio::time::sleep(Duration::from_secs(1)).await;
+    cluster.send_mempool_event(MempoolEvent::Remove(removed_txid));
+
+    // The first non-empty decided batch must hold exactly the survivor.
+    let batch = cluster.wait_for_batch(0, Duration::from_secs(60)).await;
+    assert_eq!(
+        batch.txids,
+        vec![surviving.clone()],
+        "the batch must carry the surviving tx and only it (removed: {removed})"
+    );
+
+    cluster.assert_no_reactor_errors();
+    cluster.shutdown().await;
+    Ok(())
+}
+
 /// THE liveness property PR B exists for: the reactor keeps deciding and
 /// executing BLOCKS while batch validation is stuck on a slow bitcoind.
 ///
