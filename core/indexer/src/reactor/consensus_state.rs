@@ -748,9 +748,7 @@ impl ConsensusState {
     /// executed block, per decided batch, and per rollback — a wasted SQL round
     /// trip each time otherwise.
     pub async fn get_checkpoint(&self, conn: &libsql::Connection) -> Option<[u8; 32]> {
-        if self.observation.is_none() {
-            return None;
-        }
+        self.observation.as_ref()?;
         match get_checkpoint_latest(conn).await {
             Ok(Some(row)) => {
                 if let Ok(decoded) = hex::decode(&row.hash)
