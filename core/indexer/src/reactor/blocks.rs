@@ -425,7 +425,7 @@ impl<E: Executor> Reactor<E> {
         self.last_height = height;
         self.last_hash = Some(hash);
         // Blocks at or below the tip can no longer be proposed or decided.
-        // Dropping them keeps `make_value` proposing only heights still ahead,
+        // Dropping them keeps `pending_block_value` proposing only heights still ahead,
         // and keeps `validate_batch`'s "a block is pending" gate honest.
         self.consensus.pending_blocks.retain(|&h, _| h > height);
 

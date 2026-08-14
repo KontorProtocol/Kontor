@@ -956,7 +956,7 @@ impl ConsensusState {
 
     /// Validate batch-level rules. Returns a rejection reason if any rule
     /// fails — the single gate every batch passes, at both propose time
-    /// (`make_value`) and proposal-acceptance time
+    /// (`make_value_snapshot`) and proposal-acceptance time
     /// (`validate_and_accept_proposal`).
     pub(super) async fn validate_batch(
         &self,

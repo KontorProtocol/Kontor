@@ -39,11 +39,12 @@ const FEE_THRESHOLD_NUM: u64 = 9;
 const FEE_THRESHOLD_DEN: u64 = 10;
 
 /// A consensus I/O job: bitcoind validation running OFF the event loop as an
-/// owned future, paired with what to do with its verdicts. The loop polls the
-/// front job as an arm of its root `select!`, so the reactor keeps executing
-/// blocks, draining mempool events, and settling finality while bitcoind is
-/// slow — and dropping the loop drops the in-flight RPC, so shutdown costs
-/// nothing (see `Executor::validate_txs`).
+/// owned future, paired with what to do with its verdicts. The loop races EVERY
+/// in-flight job (`select_all`) as one arm of its root `select!`, so the reactor
+/// keeps executing blocks, draining mempool events, and settling finality while
+/// bitcoind is slow — and a stalled job never parks another whose reply the
+/// engine is waiting on. Dropping the loop drops the in-flight RPCs, so shutdown
+/// costs nothing (see `Executor::validate_txs`).
 ///
 /// State is read twice, never held across the I/O: a SNAPSHOT phase collects
 /// candidates and cheap-rejects on the loop, and the APPLY phase re-checks
@@ -1064,11 +1065,6 @@ impl<E: Executor> Reactor<E> {
         Ok(())
     }
 
-    /// The APPLY phase of a finished [`IoJob`]: act on the verdicts, but only
-    /// after re-judging every state predicate against wherever the chain moved
-    /// while the I/O ran. `Err` from the I/O is infrastructure (bitcoind
-    /// unreachable after retries) and fatal — I5, same as it was when the RPCs
-    /// ran inline.
     /// The APPLY phase of a finished [`IoJob`]: act on the verdicts, but only
     /// after re-judging every state predicate against wherever the chain moved
     /// while the I/O ran. `Err` from the I/O is infrastructure (bitcoind
