@@ -523,23 +523,38 @@ impl<E: Executor> Reactor<E> {
 
     #[tracing::instrument(skip_all, fields(node = %self.runtime.node_label))]
     pub async fn run(&mut self) -> Result<()> {
-        // Build the storage-deposit footprint cache from live state before processing
-        // blocks — but only ONCE: `reconstruct` is gated on a node_meta marker, so this
-        // is a no-op after the first build (DB upgrade / first boot). Block writes and
-        // reorgs both maintain the cache atomically, so a clean restart needs no rebuild.
-        self.runtime.storage.footprint().reconstruct().await?;
+        // Startup is CANCELLABLE. A first-boot footprint reconstruct or a wide
+        // startup finality settle can be slow, and a SIGTERM that lands inside
+        // one must be a clean stop, not a blown shutdown budget and a false
+        // page on a routine rollout. Dropping either mid-flight is safe: both
+        // write transactionally, so the abandonment is a crash the restart
+        // already handles.
+        let shutdown = self.shutdown.clone();
+        let startup = async {
+            // Build the storage-deposit footprint cache from live state before
+            // processing blocks — but only ONCE: `reconstruct` is gated on a
+            // node_meta marker, so this is a no-op after the first build (DB
+            // upgrade / first boot). Block writes and reorgs both maintain the
+            // cache atomically, so a clean restart needs no rebuild.
+            self.runtime.storage.footprint().reconstruct().await?;
 
-        // Settle any deadline that was ALREADY due when we started. Rehydration
-        // restores the tracking set, but nothing evaluates it until a tip advance —
-        // and a node that restarted at or past a deadline resumes consensus
-        // immediately, so without this it keeps executing batches on state its peers
-        // have already rolled back until the next Bitcoin block arrives (up to an
-        // hour on mainnet, indefinitely on a stalled chain). That is #515 again by a
-        // third route. The queues are empty here, so the drain inside is a no-op and
-        // only the finality check does work.
-        self.advance()
-            .await
-            .context("advance failed during startup finality settle")?;
+            // Settle any deadline that was ALREADY due when we started.
+            // Rehydration restores the tracking set, but nothing evaluates it
+            // until a tip advance — and a node that restarted at or past a
+            // deadline resumes consensus immediately, so without this it keeps
+            // executing batches on state its peers have already rolled back
+            // until the next Bitcoin block arrives (up to an hour on mainnet,
+            // indefinitely on a stalled chain). That is #515 again by a third
+            // route. The queues are empty here, so the drain inside is a no-op
+            // and only the finality check does work.
+            self.advance()
+                .await
+                .context("advance failed during startup finality settle")
+        };
+        select! {
+            _ = shutdown.cancelled() => return Ok(()),
+            r = startup => r?,
+        }
 
         let result = self.run_event_loop().await;
 
@@ -776,27 +791,39 @@ pub fn run(
     tokio::spawn({
         async move {
             let result: Result<()> = async {
-                let (exec, mut runtime, last_height, last_hash) = create_runtime_executor(
-                    starting_block_height,
-                    &writer,
-                    shutdown.clone(),
-                    bitcoin_client,
-                    replay_tx,
-                    &genesis_validators,
-                    network,
-                )
-                .await
-                .context("create_runtime_executor failed")?;
+                // Cancellable, like every other startup phase: genesis loading
+                // and the one-time auto-vacuum conversion are the slowest part
+                // of first boot, and a SIGTERM inside them must be a clean
+                // stop. Both are transactional; dropping them is a crash the
+                // restart already handles.
+                let setup = async {
+                    let setup = create_runtime_executor(
+                        starting_block_height,
+                        &writer,
+                        shutdown.clone(),
+                        bitcoin_client,
+                        replay_tx,
+                        &genesis_validators,
+                        network,
+                    )
+                    .await
+                    .context("create_runtime_executor failed")?;
 
-                // Convert a pre-existing DB to INCREMENTAL auto_vacuum once, so the
-                // pages freed by pruning can be returned to the OS (fresh DBs are
-                // already born incremental). Gated on `prune` so archive nodes don't
-                // pay the one-time conversion VACUUM.
-                if prune.enabled {
-                    database::init::ensure_incremental_auto_vacuum(&runtime.storage.conn)
-                        .await
-                        .context("ensure_incremental_auto_vacuum failed")?;
-                }
+                    // Convert a pre-existing DB to INCREMENTAL auto_vacuum once, so the
+                    // pages freed by pruning can be returned to the OS (fresh DBs are
+                    // already born incremental). Gated on `prune` so archive nodes don't
+                    // pay the one-time conversion VACUUM.
+                    if prune.enabled {
+                        database::init::ensure_incremental_auto_vacuum(&setup.1.storage.conn)
+                            .await
+                            .context("ensure_incremental_auto_vacuum failed")?;
+                    }
+                    Ok::<_, anyhow::Error>(setup)
+                };
+                let (exec, mut runtime, last_height, last_hash) = select! {
+                    _ = shutdown.cancelled() => return Ok(()),
+                    r = setup => r?,
+                };
 
                 let timeouts = Some(LinearTimeouts {
                     propose: std::time::Duration::from_millis(consensus_propose_timeout_ms),
