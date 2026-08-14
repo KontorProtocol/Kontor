@@ -741,7 +741,16 @@ impl ConsensusState {
         }
     }
 
+    /// The latest checkpoint hash — used ONLY to populate observation
+    /// `StateEvent`s, so it short-circuits when nothing is observing. Every
+    /// production node runs without observation channels (they are test-only
+    /// wiring), and this is called on the consensus write connection per
+    /// executed block, per decided batch, and per rollback — a wasted SQL round
+    /// trip each time otherwise.
     pub async fn get_checkpoint(&self, conn: &libsql::Connection) -> Option<[u8; 32]> {
+        if self.observation.is_none() {
+            return None;
+        }
         match get_checkpoint_latest(conn).await {
             Ok(Some(row)) => {
                 if let Ok(decoded) = hex::decode(&row.hash)

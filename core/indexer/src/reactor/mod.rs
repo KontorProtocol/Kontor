@@ -298,9 +298,12 @@ impl<E: Executor> Reactor<E> {
                     pending_count = self.consensus.pending_blocks.len() + 1,
                     "Adding block to pending_blocks"
                 );
-                self.consensus
-                    .pending_blocks
-                    .insert(block.height, block.clone());
+                // Move, not clone: `block` is owned here and unused afterward.
+                // The catch-up stream can hold up to MAX_PENDING_BLOCKS full
+                // blocks, so a per-block deep copy of every transaction, witness,
+                // and op_return is pure waste.
+                let height = block.height;
+                self.consensus.pending_blocks.insert(height, block);
                 self.advance()
                     .await
                     .context("advance failed after block insert")?;
