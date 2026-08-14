@@ -62,29 +62,25 @@ impl<E: Executor> Reactor<E> {
         let height = self.consensus.current_height;
         let round = self.consensus.current_round;
 
-        let proposed = if round == Round::Nil {
-            None
-        } else {
-            match &part.content {
-                StreamContent::Data(ProposalPart::Data(data)) => {
-                    if !self
-                        .consensus
-                        .undecided
-                        .get(&height)
-                        .is_some_and(|rounds| rounds.contains_key(&round))
-                    {
-                        self.validate_and_accept_proposal(data, height, round)
-                            .await?
-                    } else {
-                        None
-                    }
-                }
-                _ => None,
-            }
-        };
+        if round != Round::Nil
+            && let StreamContent::Data(ProposalPart::Data(data)) = &part.content
+            && !self
+                .consensus
+                .undecided
+                .get(&height)
+                .is_some_and(|rounds| rounds.contains_key(&round))
+        {
+            // May defer the reply behind the bitcoind I/O phase. The engine
+            // waits on the oneshot exactly as it used to wait on this handler
+            // running the RPCs inline; the reactor's loop no longer waits
+            // with it.
+            return self
+                .validate_and_accept_proposal(data, height, round, reply)
+                .await;
+        }
 
         reply
-            .send(proposed)
+            .send(None)
             .map_err(|_| anyhow::anyhow!("Failed to send ReceivedProposalPart reply"))?;
         Ok(())
     }

@@ -282,7 +282,8 @@ async fn run_daemon(config: Config) -> Result<()> {
     // Relay channel: the reactor hands accepted batch txs to the broadcaster
     // instead of gating votes on `send_raw_transaction`.
     let (relay_tx, relay_rx) = mpsc::channel(indexer::broadcaster::CHANNEL_CAPACITY);
-    let broadcaster_handle = indexer::broadcaster::run(bitcoin.clone(), relay_rx, shutdown.signal());
+    let broadcaster_handle =
+        indexer::broadcaster::run(bitcoin.clone(), relay_rx, shutdown.signal());
 
     let (block_rx, mempool_rx, replay_tx, follower_handle) = bitcoin_follower::run(
         bitcoin.clone(),

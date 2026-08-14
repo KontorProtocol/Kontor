@@ -52,6 +52,9 @@ pub struct LiteExecutor {
     signer: Signer,
     mock_bitcoin: Arc<Mutex<MockBitcoin>>,
     block_tx: tokio::sync::mpsc::Sender<crate::bitcoin_follower::event::BlockEvent>,
+    /// Artificial latency for `validate_txs`, so tests can hold a validation
+    /// in flight and assert the event loop keeps serving its other arms.
+    validation_delay: Option<std::time::Duration>,
 }
 
 impl LiteExecutor {
@@ -93,6 +96,7 @@ impl LiteExecutor {
                 signer: Signer::Id(identity),
                 mock_bitcoin,
                 block_tx,
+                validation_delay: None,
             },
             runtime,
         ))
@@ -200,6 +204,7 @@ impl LiteExecutor {
                 signer,
                 mock_bitcoin,
                 block_tx,
+                validation_delay: None,
             },
             runtime,
         ))
@@ -207,13 +212,22 @@ impl LiteExecutor {
 }
 
 impl Executor for LiteExecutor {
-    async fn validate_transaction(
+    fn validate_txs(
         &self,
-        _raw: &bitcoin::Transaction,
-        _parsed: &indexer_types::Transaction,
+        txs: Vec<bitcoin::Transaction>,
         _threshold_sat_per_vb: u64,
-    ) -> anyhow::Result<bool> {
-        Ok(true)
+    ) -> futures_util::future::BoxFuture<'static, anyhow::Result<Vec<super::executor::TxPolicy>>>
+    {
+        let delay = self.validation_delay;
+        Box::pin(async move {
+            if let Some(delay) = delay {
+                tokio::time::sleep(delay).await;
+            }
+            Ok(txs
+                .iter()
+                .map(|_| super::executor::TxPolicy::Accepted)
+                .collect())
+        })
     }
 
     async fn resolve_transaction(&self, txid: &Txid) -> Option<bitcoin::Transaction> {

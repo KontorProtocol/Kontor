@@ -12,6 +12,7 @@ pub mod mock_bitcoin;
 mod reactor_cluster_tests;
 pub mod types;
 
+use std::collections::VecDeque;
 use std::time::Instant;
 
 use anyhow::{Context, Result, bail};
@@ -129,6 +130,12 @@ pub struct Reactor<E: Executor> {
     /// `None` in the in-process cluster harness, whose MockBitcoin has no
     /// mempool to relay to.
     broadcast_tx: Option<mpsc::Sender<bitcoin::Transaction>>,
+    /// Consensus I/O in flight — bitcoind validation running off the loop,
+    /// polled as an arm of the root `select!`. FIFO; bounded by construction
+    /// (at most one build job and one proposal validation can be outstanding:
+    /// `pending_proposal` is single and the engine awaits each proposal reply
+    /// before sending the next part). See `batches::IoJob`.
+    io_jobs: VecDeque<batches::IoJob>,
 }
 
 impl<E: Executor> Reactor<E> {
@@ -172,6 +179,7 @@ impl<E: Executor> Reactor<E> {
             consensus,
             consensus_listen_addr,
             broadcast_tx,
+            io_jobs: VecDeque::new(),
         }
     }
 
@@ -401,6 +409,16 @@ impl<E: Executor> Reactor<E> {
 
             let consensus_rx = self.consensus.channels.consensus.recv();
 
+            // The front I/O job's verdict future, or never. Polling through
+            // `&mut` retains its progress when another arm wins the select;
+            // dropping the loop (shutdown) drops the in-flight RPC with it.
+            let io_verdicts = async {
+                match self.io_jobs.front_mut() {
+                    Some(job) => (&mut job.verdicts).await,
+                    None => pending().await,
+                }
+            };
+
             let debounce_sleep = async {
                 match debounce_deadline {
                     Some(deadline) => tokio::time::sleep_until(deadline).await,
@@ -545,6 +563,15 @@ impl<E: Executor> Reactor<E> {
                         }
                     }
                 }
+                verdicts = io_verdicts => {
+                    let job = self
+                        .io_jobs
+                        .pop_front()
+                        .expect("io arm fired, so a job is queued");
+                    self.apply_io_verdicts(job.apply, verdicts)
+                        .await
+                        .context("apply_io_verdicts failed")?;
+                }
                 _ = fee_publish_ticker.tick() => {
                     if self.consensus.mempool_fee_index.take_dirty() {
                         // recompute() publishes to fee_tx internally.
@@ -667,7 +694,6 @@ async fn build_genesis_from_staking(runtime: &mut Runtime) -> Result<Genesis> {
 pub async fn create_runtime_executor(
     starting_block_height: u64,
     writer: &database::Writer,
-    shutdown: ShutdownSignal,
     bitcoin_client: crate::bitcoin_client::Client,
     replay_tx: Option<mpsc::Sender<u64>>,
     genesis_validators: &[crate::runtime::GenesisValidator],
@@ -750,7 +776,7 @@ pub async fn create_runtime_executor(
         .await
         .context("Failed to publish native contracts")?;
 
-    let mut exec = executor::RuntimeExecutor::new(shutdown, bitcoin_client);
+    let mut exec = executor::RuntimeExecutor::new(bitcoin_client);
     if let Some(tx) = replay_tx {
         exec = exec.with_replay_tx(tx);
     }
@@ -836,7 +862,6 @@ pub fn run(
                     let setup = create_runtime_executor(
                         starting_block_height,
                         &writer,
-                        shutdown.clone(),
                         bitcoin_client,
                         replay_tx,
                         &genesis_validators,

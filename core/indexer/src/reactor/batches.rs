@@ -23,8 +23,10 @@ use crate::database::queries::{
 };
 use crate::metrics::{CONSENSUS_HEIGHT, ITEMS_INDEXED};
 
+use futures_util::future::BoxFuture;
+
 use super::consensus_state;
-use super::executor::Executor;
+use super::executor::{Executor, TxPolicy, is_batchable};
 use super::mempool_fee_index::MempoolFeeIndex;
 use super::{MAX_DEFERRED_DECISIONS, Reactor};
 
@@ -35,6 +37,55 @@ use super::{MAX_DEFERRED_DECISIONS, Reactor};
 /// where float rounding is a determinism hazard (#429).
 const FEE_THRESHOLD_NUM: u64 = 9;
 const FEE_THRESHOLD_DEN: u64 = 10;
+
+/// A consensus I/O job: bitcoind validation running OFF the event loop as an
+/// owned future, paired with what to do with its verdicts. The loop polls the
+/// front job as an arm of its root `select!`, so the reactor keeps executing
+/// blocks, draining mempool events, and settling finality while bitcoind is
+/// slow — and dropping the loop drops the in-flight RPC, so shutdown costs
+/// nothing (see `Executor::validate_txs`).
+///
+/// State is read twice, never held across the I/O: a SNAPSHOT phase collects
+/// candidates and cheap-rejects on the loop, and the APPLY phase re-checks
+/// every state predicate before acting on the verdicts — an answer is judged
+/// when it is USED, not when the I/O started.
+pub(super) struct IoJob {
+    pub(super) verdicts: BoxFuture<'static, Result<Vec<TxPolicy>>>,
+    pub(super) apply: IoApply,
+}
+
+pub(super) enum IoApply {
+    /// `make_value_snapshot`'s candidate set: on apply, fulfill the held
+    /// GetValue reply (if it still stands) with the surviving transactions.
+    BuildProposal {
+        anchor_height: u64,
+        anchor_hash: BlockHash,
+        txs: Vec<bitcoin::Transaction>,
+    },
+    /// An incoming batch proposal: on apply, accept (file under `undecided`,
+    /// release the engine's reply with `Some`) or reject (`None`).
+    ValidateProposal {
+        height: Height,
+        round: Round,
+        anchor_height: u64,
+        anchor_hash: BlockHash,
+        transactions: Vec<bitcoin::Transaction>,
+        parsed: Vec<indexer_types::Transaction>,
+        reply: tokio::sync::oneshot::Sender<Option<ProposedValue<Ctx>>>,
+    },
+}
+
+/// What the proposal snapshot found to propose.
+enum ProposalSnapshot {
+    /// A pending block — proposed immediately, no I/O involved.
+    Block(Value),
+    /// Batch candidates that need the bitcoind I/O phase.
+    Batch {
+        txs: Vec<bitcoin::Transaction>,
+        threshold: u64,
+    },
+    Nothing,
+}
 
 /// Compute the per-batch fee acceptance threshold (sat/vB). Hoisted out
 /// of `validate_transaction` so callers compute it once per validation
@@ -339,7 +390,7 @@ impl<E: Executor> Reactor<E> {
     /// where rows already exist. A node where this batch was never executed has
     /// none, so what we pass here is what becomes the record.
     async fn record_batch_txs(
-        &self,
+        &mut self,
         conn: &libsql::Connection,
         consensus_height: Height,
         batch_txs: &[bitcoin::Transaction],
@@ -597,10 +648,12 @@ impl<E: Executor> Reactor<E> {
         }
     }
 
-    pub(super) async fn make_value(&mut self) -> Result<Option<Value>> {
+    /// The state-only half of building a proposal: what COULD we propose,
+    /// judged entirely on the loop (pool, DB, fee index) with no bitcoind
+    /// round-trips. Batch candidates then go through the I/O phase as an
+    /// [`IoJob`]; a pending block needs no I/O and is proposed immediately.
+    async fn make_value_snapshot(&mut self) -> Result<ProposalSnapshot> {
         let conn = self.db_conn();
-        let last_height = self.last_height;
-        let last_hash = self.last_hash.unwrap_or(BlockHash::all_zeros());
 
         // If blocks are pending, always propose the next one first.
         //
@@ -613,10 +666,12 @@ impl<E: Executor> Reactor<E> {
         if let Some((&height, block)) = self
             .consensus
             .pending_blocks
-            .range(last_height + 1..)
+            .range(self.last_height + 1..)
             .next()
         {
-            return Ok(Some(Value::new_block(height, block.hash)));
+            return Ok(ProposalSnapshot::Block(Value::new_block(
+                height, block.hash,
+            )));
         }
 
         // Pre-filter already-processed txids to avoid unnecessary validation
@@ -642,10 +697,8 @@ impl<E: Executor> Reactor<E> {
             }
         }
 
-        // Per-tx validation — remove invalid txs from the pool. Compute
-        // the fee threshold once for this batch (it's the same for every
-        // tx, since the index is a snapshot during this loop).
-        let threshold = compute_fee_threshold(&self.consensus.mempool_fee_index);
+        // Candidate filter: state predicates only. Everything that needs
+        // bitcoind happens in the I/O phase, off this loop.
         let mut txs = Vec::new();
         let mut invalid_txids = Vec::new();
         for (raw_tx, parsed) in self.consensus.pending_transactions.values() {
@@ -653,11 +706,7 @@ impl<E: Executor> Reactor<E> {
             if !unbatched_set.contains(&txid) {
                 continue;
             }
-            if self
-                .executor
-                .validate_transaction(raw_tx, parsed, threshold)
-                .await?
-            {
+            if is_batchable(&parsed.inputs) {
                 txs.push(raw_tx.clone());
             } else {
                 invalid_txids.push(txid);
@@ -667,36 +716,27 @@ impl<E: Executor> Reactor<E> {
             self.consensus.pending_transactions.remove(txid);
         }
         if txs.is_empty() {
-            return Ok(None);
+            return Ok(ProposalSnapshot::Nothing);
         }
-
-        // Propose in dependency order — `pending_transactions` enumerates
-        // in arbitrary order, but `validate_batch` rejects a batch with a
-        // child ahead of its parent, so sort before validating.
-        let order = dependency_sort(&txs);
-        let txs: Vec<bitcoin::Transaction> = order.into_iter().map(|i| txs[i].clone()).collect();
-
-        // Batch-level validation (already-processed check will pass since we pre-filtered)
-        if let Some(reason) = self
-            .consensus
-            .validate_batch(&conn, last_height, last_hash, &txs, last_height, last_hash)
-            .await?
-        {
-            info!("Not proposing batch: {reason}");
-            return Ok(None);
-        }
-
-        self.broadcast(&txs);
-        let value = Value::new_batch_raw(last_height, last_hash, txs);
-        Ok(Some(value))
+        // Compute the fee threshold once for this candidate set (the index is
+        // a snapshot during this pass) and carry it into the I/O phase.
+        let threshold = compute_fee_threshold(&self.consensus.mempool_fee_index);
+        Ok(ProposalSnapshot::Batch { txs, threshold })
     }
 
+    /// Judge an incoming proposal, answering the engine through `reply` —
+    /// immediately for block proposals and cheap rejections, or after the
+    /// bitcoind I/O phase for a batch that passes the state predicates. The
+    /// engine waits on the oneshot either way, exactly as it used to wait on
+    /// this method running the RPCs inline; what changed is that THIS loop no
+    /// longer waits with it.
     pub(super) async fn validate_and_accept_proposal(
         &mut self,
         data: &ProposalData,
         height: Height,
         round: Round,
-    ) -> Result<Option<ProposedValue<Ctx>>> {
+        reply: tokio::sync::oneshot::Sender<Option<ProposedValue<Ctx>>>,
+    ) -> Result<()> {
         let conn = self.db_conn();
         let last_height = self.last_height;
         let last_hash = self.last_hash.unwrap_or(BlockHash::all_zeros());
@@ -724,7 +764,8 @@ impl<E: Executor> Reactor<E> {
                             local = %block.hash,
                             "Rejecting block proposal: hash mismatch"
                         );
-                        return Ok(None);
+                        let _ = reply.send(None);
+                        return Ok(());
                     }
                 } else {
                     // "Not yet received" and "already processed" are opposite
@@ -755,7 +796,8 @@ impl<E: Executor> Reactor<E> {
                             "Rejecting block proposal: block lookup failed"
                         ),
                     }
-                    return Ok(None);
+                    let _ = reply.send(None);
+                    return Ok(());
                 }
                 Value::new_block(*bh, *hash)
             }
@@ -764,6 +806,8 @@ impl<E: Executor> Reactor<E> {
                 anchor_hash,
                 transactions,
             } => {
+                // SNAPSHOT phase: every state predicate, judged now for the
+                // fast reject. Re-judged at apply time — see `IoJob`.
                 if let Some(reason) = self
                     .consensus
                     .validate_batch(
@@ -777,9 +821,10 @@ impl<E: Executor> Reactor<E> {
                     .await?
                 {
                     warn!("Rejecting batch proposal: {reason}");
-                    return Ok(None);
+                    let _ = reply.send(None);
+                    return Ok(());
                 }
-                let threshold = compute_fee_threshold(&self.consensus.mempool_fee_index);
+                let mut parsed_txs = Vec::with_capacity(transactions.len());
                 for tx in transactions {
                     let txid = tx.compute_txid();
                     let parsed =
@@ -789,23 +834,31 @@ impl<E: Executor> Reactor<E> {
                             p
                         } else {
                             warn!(%txid, "Rejecting proposal: transaction failed to parse");
-                            return Ok(None);
+                            let _ = reply.send(None);
+                            return Ok(());
                         };
-                    if !self
-                        .executor
-                        .validate_transaction(tx, &parsed, threshold)
-                        .await?
-                    {
-                        warn!(%txid, "Rejecting proposal: transaction failed validation");
-                        return Ok(None);
+                    if !is_batchable(&parsed.inputs) {
+                        warn!(%txid, "Rejecting proposal: transaction not batchable");
+                        let _ = reply.send(None);
+                        return Ok(());
                     }
-                    self.consensus
-                        .pending_transactions
-                        .entry(txid)
-                        .or_insert_with(|| (tx.clone(), parsed));
+                    parsed_txs.push(parsed);
                 }
-                self.broadcast(transactions);
-                Value::new_batch_raw(*anchor_height, *anchor_hash, transactions.clone())
+                let threshold = compute_fee_threshold(&self.consensus.mempool_fee_index);
+                let verdicts = self.executor.validate_txs(transactions.clone(), threshold);
+                self.io_jobs.push_back(IoJob {
+                    verdicts,
+                    apply: IoApply::ValidateProposal {
+                        height,
+                        round,
+                        anchor_height: *anchor_height,
+                        anchor_hash: *anchor_hash,
+                        transactions: transactions.clone(),
+                        parsed: parsed_txs,
+                        reply,
+                    },
+                });
+                return Ok(());
             }
         };
 
@@ -822,33 +875,67 @@ impl<E: Executor> Reactor<E> {
             .entry(height)
             .or_default()
             .insert(round, proposed.clone());
-        Ok(Some(proposed))
+        let _ = reply.send(Some(proposed));
+        Ok(())
     }
 
     pub(super) async fn try_fulfill_pending_proposal(&mut self) -> Result<bool> {
         let last_height = self.last_height;
         let last_hash = self.last_hash.unwrap_or(BlockHash::all_zeros());
 
-        let (past_deadline, pending_height, pending_round) = match &self.consensus.pending_proposal
-        {
-            Some(p) => (Instant::now() >= p.hard_deadline(), p.height, p.round),
+        let past_deadline = match &self.consensus.pending_proposal {
+            Some(p) => Instant::now() >= p.hard_deadline(),
             None => return Ok(false),
         };
 
-        let value = if let Some(value) = self.make_value().await? {
-            value
-        } else if past_deadline {
-            info!(
-                height = %pending_height,
-                round = %pending_round,
-                "Proposing empty batch at hard deadline"
-            );
-            Value::new_batch_raw(last_height, last_hash, vec![])
-        } else {
-            return Ok(false);
-        };
+        // One build job at a time — a second snapshot while one is in flight
+        // would validate the same pool twice and race it on apply.
+        let build_in_flight = self
+            .io_jobs
+            .iter()
+            .any(|j| matches!(j.apply, IoApply::BuildProposal { .. }));
+        if !build_in_flight {
+            match self.make_value_snapshot().await? {
+                ProposalSnapshot::Block(value) => {
+                    self.fulfill_pending_with(value).await?;
+                    return Ok(true);
+                }
+                ProposalSnapshot::Batch { txs, threshold } => {
+                    let verdicts = self.executor.validate_txs(txs.clone(), threshold);
+                    self.io_jobs.push_back(IoJob {
+                        verdicts,
+                        apply: IoApply::BuildProposal {
+                            anchor_height: last_height,
+                            anchor_hash: last_hash,
+                            txs,
+                        },
+                    });
+                }
+                ProposalSnapshot::Nothing => {}
+            }
+        }
+        if past_deadline {
+            // The deadline outranks a validation still in flight. The old code
+            // could not honor it — it was inside the RPCs when the deadline
+            // passed — so "empty at the deadline" only fired when there was
+            // nothing to validate. Now it always fires on time; a candidate
+            // set still validating answers a LATER round, and its apply keeps
+            // only the pool hygiene.
+            info!("Proposing empty batch at hard deadline");
+            self.fulfill_pending_with(Value::new_batch_raw(last_height, last_hash, vec![]))
+                .await?;
+            return Ok(true);
+        }
+        Ok(false)
+    }
 
-        let pending = self.consensus.pending_proposal.take().unwrap();
+    /// Answer the held GetValue with `value`: file it under `undecided`,
+    /// stream the parts, release the engine's reply. No-op if nothing is held
+    /// (the deadline or a competing path already answered).
+    async fn fulfill_pending_with(&mut self, value: Value) -> Result<()> {
+        let Some(pending) = self.consensus.pending_proposal.take() else {
+            return Ok(());
+        };
         let proposed = ProposedValue {
             height: pending.height,
             round: pending.round,
@@ -865,8 +952,150 @@ impl<E: Executor> Reactor<E> {
         let proposal = LocallyProposedValue::new(pending.height, pending.round, value);
         self.send_proposal_parts(&proposal, Round::Nil).await?;
         let _ = pending.reply.send(proposal);
+        Ok(())
+    }
 
-        Ok(true)
+    /// The APPLY phase of a finished [`IoJob`]: act on the verdicts, but only
+    /// after re-judging every state predicate against wherever the chain moved
+    /// while the I/O ran. `Err` from the I/O is infrastructure (bitcoind
+    /// unreachable after retries) and fatal — I5, same as it was when the RPCs
+    /// ran inline.
+    pub(super) async fn apply_io_verdicts(
+        &mut self,
+        apply: IoApply,
+        verdicts: Result<Vec<TxPolicy>>,
+    ) -> Result<()> {
+        let verdicts = verdicts?;
+        match apply {
+            IoApply::BuildProposal {
+                anchor_height,
+                anchor_hash,
+                txs,
+            } => {
+                debug_assert_eq!(txs.len(), verdicts.len());
+                // Pool hygiene counts even when the proposal below is stale.
+                let mut kept = Vec::with_capacity(txs.len());
+                for (tx, verdict) in txs.into_iter().zip(&verdicts) {
+                    match verdict {
+                        TxPolicy::Accepted => kept.push(tx),
+                        TxPolicy::Rejected(reason) => {
+                            let txid = tx.compute_txid();
+                            warn!(%txid, %reason, "Dropping candidate transaction");
+                            self.consensus.pending_transactions.remove(&txid);
+                        }
+                    }
+                }
+                if self.consensus.pending_proposal.is_none() {
+                    // The deadline already answered with an empty batch, or the
+                    // engine moved on. The candidates stay pooled for the next
+                    // GetValue.
+                    debug!("No proposal left to fulfill; keeping validated candidates pooled");
+                    return Ok(());
+                }
+                if anchor_height != self.last_height
+                    || anchor_hash != self.last_hash.unwrap_or(BlockHash::all_zeros())
+                {
+                    // The tip moved mid-validation: this snapshot answers a
+                    // question nobody is asking anymore. Re-snapshot against
+                    // the new tip; the deadline machinery still bounds us.
+                    debug!("Anchor moved during validation; re-snapshotting");
+                    return self.try_fulfill_pending_proposal().await.map(|_| ());
+                }
+                if kept.is_empty() {
+                    return Ok(());
+                }
+                // Propose in dependency order — the pool enumerates in
+                // arbitrary order, but `validate_batch` rejects a batch with a
+                // child ahead of its parent.
+                let order = dependency_sort(&kept);
+                let txs: Vec<bitcoin::Transaction> =
+                    order.into_iter().map(|i| kept[i].clone()).collect();
+                let conn = self.db_conn();
+                if let Some(reason) = self
+                    .consensus
+                    .validate_batch(
+                        &conn,
+                        anchor_height,
+                        anchor_hash,
+                        &txs,
+                        self.last_height,
+                        self.last_hash.unwrap_or(BlockHash::all_zeros()),
+                    )
+                    .await?
+                {
+                    info!("Not proposing batch: {reason}");
+                    return Ok(());
+                }
+                self.broadcast(&txs);
+                self.fulfill_pending_with(Value::new_batch_raw(anchor_height, anchor_hash, txs))
+                    .await
+            }
+            IoApply::ValidateProposal {
+                height,
+                round,
+                anchor_height,
+                anchor_hash,
+                transactions,
+                parsed,
+                reply,
+            } => {
+                debug_assert_eq!(transactions.len(), verdicts.len());
+                for (tx, verdict) in transactions.iter().zip(&verdicts) {
+                    if let TxPolicy::Rejected(reason) = verdict {
+                        warn!(
+                            txid = %tx.compute_txid(),
+                            %reason,
+                            "Rejecting proposal: transaction failed validation"
+                        );
+                        let _ = reply.send(None);
+                        return Ok(());
+                    }
+                }
+                // Freshness: the snapshot's state predicates, re-judged. The
+                // anchor gate in `validate_batch` is what turns "the tip moved
+                // while we validated" into a plain rejection instead of a vote
+                // for a stale anchor.
+                let conn = self.db_conn();
+                if let Some(reason) = self
+                    .consensus
+                    .validate_batch(
+                        &conn,
+                        anchor_height,
+                        anchor_hash,
+                        &transactions,
+                        self.last_height,
+                        self.last_hash.unwrap_or(BlockHash::all_zeros()),
+                    )
+                    .await?
+                {
+                    warn!("Rejecting batch proposal: {reason}");
+                    let _ = reply.send(None);
+                    return Ok(());
+                }
+                for (tx, parsed) in transactions.iter().zip(parsed) {
+                    self.consensus
+                        .pending_transactions
+                        .entry(tx.compute_txid())
+                        .or_insert_with(|| (tx.clone(), parsed));
+                }
+                self.broadcast(&transactions);
+                let proposed = ProposedValue {
+                    height,
+                    round,
+                    valid_round: Round::Nil,
+                    proposer: self.consensus.address,
+                    value: Value::new_batch_raw(anchor_height, anchor_hash, transactions),
+                    validity: Validity::Valid,
+                };
+                self.consensus
+                    .undecided
+                    .entry(height)
+                    .or_default()
+                    .insert(round, proposed.clone());
+                let _ = reply.send(Some(proposed));
+                Ok(())
+            }
+        }
     }
 
     /// Load the decided values to replay for a rollback from `from_anchor`.
@@ -1105,7 +1334,7 @@ impl<E: Executor> Reactor<E> {
     /// it would bind the wrong block to this consensus height. We just write down
     /// that we declined.
     async fn record_declined_block(
-        &self,
+        &mut self,
         decision: &consensus_state::DeferredDecision,
     ) -> Result<()> {
         // Height and hash come from the decision itself — passing them alongside
@@ -1377,27 +1606,10 @@ impl<E: Executor> Reactor<E> {
             reply
                 .send(proposal)
                 .map_err(|_| anyhow::anyhow!("Failed to send GetValue reply"))?;
-        } else if let Some(value) = self.make_value().await? {
-            let proposed = ProposedValue {
-                height,
-                round,
-                valid_round: Round::Nil,
-                proposer: self.consensus.address,
-                value: value.clone(),
-                validity: Validity::Valid,
-            };
-            self.consensus
-                .undecided
-                .entry(height)
-                .or_default()
-                .insert(round, proposed);
-            let proposal = LocallyProposedValue::new(height, round, value);
-            self.send_proposal_parts(&proposal, Round::Nil).await?;
-            reply
-                .send(proposal)
-                .map_err(|_| anyhow::anyhow!("Failed to send GetValue reply"))?;
         } else {
-            info!(%height, %round, "Nothing to propose, holding reply for pending transactions");
+            // Hold the reply first: every path below answers through it —
+            // immediately for a block, via the I/O job's apply for a batch, or
+            // via the debounce/deadline machinery when there is nothing yet.
             self.consensus.pending_proposal = Some(consensus_state::PendingProposal {
                 height,
                 round,
@@ -1405,6 +1617,37 @@ impl<E: Executor> Reactor<E> {
                 timeout,
                 created_at: Instant::now(),
             });
+            let build_in_flight = self
+                .io_jobs
+                .iter()
+                .any(|j| matches!(j.apply, IoApply::BuildProposal { .. }));
+            if !build_in_flight {
+                match self.make_value_snapshot().await? {
+                    ProposalSnapshot::Block(value) => {
+                        self.fulfill_pending_with(value).await?;
+                    }
+                    ProposalSnapshot::Batch { txs, threshold } => {
+                        info!(%height, %round, candidates = txs.len(),
+                            "Validating candidate batch off-loop; reply deferred");
+                        let verdicts = self.executor.validate_txs(txs.clone(), threshold);
+                        let (anchor_height, anchor_hash) = (
+                            self.last_height,
+                            self.last_hash.unwrap_or(BlockHash::all_zeros()),
+                        );
+                        self.io_jobs.push_back(IoJob {
+                            verdicts,
+                            apply: IoApply::BuildProposal {
+                                anchor_height,
+                                anchor_hash,
+                                txs,
+                            },
+                        });
+                    }
+                    ProposalSnapshot::Nothing => {
+                        info!(%height, %round, "Nothing to propose, holding reply for pending transactions");
+                    }
+                }
+            }
         }
         Ok(())
     }

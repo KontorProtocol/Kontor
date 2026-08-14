@@ -526,7 +526,7 @@ impl<E: Executor> Reactor<E> {
     /// `DELETE`s alone already plateau the file (freed pages are reused); this only
     /// shrinks it back when the live set has shrunk. Cheap when there's nothing to
     /// do (a single `freelist_count` read).
-    async fn maybe_vacuum(&self) -> Result<()> {
+    async fn maybe_vacuum(&mut self) -> Result<()> {
         let freelist = self.runtime.storage.freelist_count().await?;
         let Some(pages) = vacuum_pages_to_reclaim(freelist) else {
             return Ok(());
