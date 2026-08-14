@@ -130,23 +130,34 @@ impl MempoolFeeIndex {
     /// snapshot. Always clears `dirty` — the next periodic tick will
     /// skip until a new mutation arrives.
     pub fn recompute(&mut self) -> Fees {
-        let blocks = block_projection::project_blocks(&self.entries, 4);
-        let min = self.mempool_min_fee_sat_per_vb;
-        let fastest = optimize_median_fee(blocks.first(), blocks.get(1), None, min);
-        let half_hour = optimize_median_fee(blocks.get(1), blocks.get(2), Some(fastest), min);
-        let hour = optimize_median_fee(blocks.get(2), blocks.get(3), Some(half_hour), min);
-        self.fees = Fees {
-            fastest,
-            half_hour,
-            hour,
-        };
+        let fees = project_fees(&self.entries, self.mempool_min_fee_sat_per_vb);
         self.dirty = false;
+        self.store_recomputed(fees);
+        fees
+    }
+
+    /// The inputs a `recompute` needs, cloned so the projection can run on a
+    /// blocking thread off the reactor's event loop. The clone is an O(entries)
+    /// memcpy; the projection it enables — a topological sort with a per-tx
+    /// ancestor-set union — is the expensive part (tens to hundreds of ms at
+    /// mainnet scale) and is what must not run inline on the consensus thread.
+    /// The caller clears `dirty` (via `take_dirty`) when it decides to start the
+    /// off-loop compute, so a mutation arriving DURING it re-sets the flag and
+    /// the next tick re-runs.
+    pub fn snapshot(&self) -> (HashMap<Txid, MempoolEntry>, u64) {
+        (self.entries.clone(), self.mempool_min_fee_sat_per_vb)
+    }
+
+    /// Cache and publish fees computed off-loop from `snapshot`, exactly as
+    /// `recompute` would — but leaving `dirty` alone (the caller already
+    /// cleared it when it started the off-loop job).
+    pub fn store_recomputed(&mut self, fees: Fees) {
+        self.fees = fees;
         if let Some(tx) = &self.fee_tx {
             // Errors only when all receivers are dropped — fine, the
             // reactor keeps running.
             let _ = tx.send(self.fees);
         }
-        self.fees
     }
 
     /// Run the block projection bypassing the cached `fees`. Exposed for
@@ -182,6 +193,21 @@ impl ProjectedBlock {
         }
         // Shouldn't happen unless entries is empty.
         self.entries.last().map(|(r, _)| *r).unwrap_or(0)
+    }
+}
+
+/// Project the three fee tiers from a mempool snapshot. Pure — no `self`, no
+/// I/O — so it can run on a blocking thread. This is the expensive body of
+/// `recompute`, lifted out for [`MempoolFeeIndex::snapshot_for_recompute`].
+pub fn project_fees(entries: &HashMap<Txid, MempoolEntry>, min: u64) -> Fees {
+    let blocks = block_projection::project_blocks(entries, 4);
+    let fastest = optimize_median_fee(blocks.first(), blocks.get(1), None, min);
+    let half_hour = optimize_median_fee(blocks.get(1), blocks.get(2), Some(fastest), min);
+    let hour = optimize_median_fee(blocks.get(2), blocks.get(3), Some(half_hour), min);
+    Fees {
+        fastest,
+        half_hour,
+        hour,
     }
 }
 

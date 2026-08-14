@@ -140,6 +140,11 @@ pub struct Reactor<E: Executor> {
     /// Verdicts that outlived their proposal, banked for the next one — see
     /// `batches::ValidatedCandidates`.
     validated_candidates: Option<batches::ValidatedCandidates>,
+    /// An in-flight off-loop mempool fee projection (`spawn_blocking`). The
+    /// periodic tick starts one from a snapshot rather than projecting inline;
+    /// its result is applied when this completes. `None` when idle — one at a
+    /// time, so a slow projection never queues behind itself.
+    fee_recompute: Option<tokio::task::JoinHandle<Fees>>,
 }
 
 impl<E: Executor> Reactor<E> {
@@ -183,6 +188,7 @@ impl<E: Executor> Reactor<E> {
             consensus_listen_addr,
             io_jobs: VecDeque::new(),
             validated_candidates: None,
+            fee_recompute: None,
         }
     }
 
@@ -430,6 +436,16 @@ impl<E: Executor> Reactor<E> {
                 }
             };
 
+            // The off-loop fee projection's result, or never. Same shape as
+            // `io_verdicts`: polled through `&mut` so it survives losing the
+            // select, dropped with the loop at shutdown.
+            let fee_recompute = async {
+                match self.fee_recompute.as_mut() {
+                    Some(handle) => handle.await,
+                    None => pending().await,
+                }
+            };
+
             let debounce_sleep = async {
                 match debounce_deadline {
                     Some(deadline) => tokio::time::sleep_until(deadline).await,
@@ -584,9 +600,31 @@ impl<E: Executor> Reactor<E> {
                         .context("apply_io_verdicts failed")?;
                 }
                 _ = fee_publish_ticker.tick() => {
-                    if self.consensus.mempool_fee_index.take_dirty() {
-                        // recompute() publishes to fee_tx internally.
-                        self.consensus.mempool_fee_index.recompute();
+                    // Project OFF the loop: at mainnet mempool sizes the
+                    // projection is tens to hundreds of ms, and running it inline
+                    // here stalls every Malachite reply, block, and finality check
+                    // for that long every 2s. One job at a time — a mutation
+                    // arriving mid-projection re-sets `dirty` and the next tick
+                    // re-runs. The Sync arm and startup still recompute inline:
+                    // they are infrequent and must establish the fresh threshold
+                    // synchronously before the node reports available.
+                    if self.fee_recompute.is_none()
+                        && self.consensus.mempool_fee_index.take_dirty()
+                    {
+                        let (entries, min) = self.consensus.mempool_fee_index.snapshot();
+                        self.fee_recompute = Some(tokio::task::spawn_blocking(move || {
+                            mempool_fee_index::project_fees(&entries, min)
+                        }));
+                    }
+                }
+                result = fee_recompute => {
+                    self.fee_recompute = None;
+                    match result {
+                        Ok(fees) => self.consensus.mempool_fee_index.store_recomputed(fees),
+                        // The blocking task panicked or was cancelled. It carries
+                        // no state — the cached fees simply stay put and the next
+                        // tick re-projects — so log and move on rather than exit.
+                        Err(e) => warn!(error = %e, "Fee projection task failed; keeping the last fees"),
                     }
                 }
             }
