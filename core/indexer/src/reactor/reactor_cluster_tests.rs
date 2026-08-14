@@ -62,6 +62,8 @@ struct ReactorCluster {
     /// Child of the cluster token, so cancelling the cluster still stops everyone
     /// while a single node can also be stopped on its own.
     node_cancels: Vec<Shutdown>,
+    /// Per-node `validate_txs` latency, passed to every spawned/restarted node.
+    validation_delay: Option<Duration>,
     block_txs: Vec<mpsc::Sender<BlockEvent>>,
     /// Fatal errors that killed a node's reactor task.
     ///
@@ -122,6 +124,17 @@ struct RollbackResult {
 #[allow(dead_code)]
 impl ReactorCluster {
     async fn start_with(total: usize, initial: usize) -> Result<Self> {
+        Self::start_with_options(total, initial, None).await
+    }
+
+    /// [`Self::start_with`], with every node's `LiteExecutor` holding each
+    /// `validate_txs` open for `validation_delay` — for asserting the event
+    /// loop stays live while consensus I/O is in flight.
+    async fn start_with_options(
+        total: usize,
+        initial: usize,
+        validation_delay: Option<Duration>,
+    ) -> Result<Self> {
         // Same derivation path operators run in production via `kontor keygen`
         // — fixed master seed gives reproducible test runs.
         const TEST_MASTER_SEED: [u8; 32] = [0x42u8; 32];
@@ -225,6 +238,7 @@ impl ReactorCluster {
                 node_dirs[i].0.path().to_path_buf(),
                 node_dirs[i].1.clone(),
                 true,
+                validation_delay,
                 reactor_errors.clone(),
                 &mut join_set,
             );
@@ -240,6 +254,7 @@ impl ReactorCluster {
             conn_rxs,
             node_dirs,
             node_cancels,
+            validation_delay,
             block_txs,
             reactor_errors,
             mempool_tx,
@@ -339,6 +354,7 @@ impl ReactorCluster {
             self.node_dirs[i].0.path().to_path_buf(),
             self.node_dirs[i].1.clone(),
             false,
+            self.validation_delay,
             self.reactor_errors.clone(),
             &mut self.join_set,
         );
@@ -419,13 +435,16 @@ impl ReactorCluster {
         // seeding runs only on the first boot. That distinction is the whole point
         // of the restart path — a node that re-seeds has not really restarted.
         first_boot: bool,
+        // Artificial `validate_txs` latency — see `validation_delay` on the
+        // cluster.
+        validation_delay: Option<Duration>,
         reactor_errors: Arc<Mutex<Vec<(usize, String)>>>,
         join_set: &mut JoinSet<()>,
     ) {
         let genesis = genesis.clone();
         let genesis_vals = genesis_validators.to_vec();
         join_set.spawn(async move {
-            let (executor, runtime) = if first_boot {
+            let (mut executor, runtime) = if first_boot {
                 LiteExecutor::new(
                     &data_dir,
                     &db_name,
@@ -451,6 +470,9 @@ impl ReactorCluster {
                 .await
                 .expect("LiteExecutor reopen failed")
             };
+            if let Some(delay) = validation_delay {
+                executor.set_validation_delay(delay);
+            }
 
             let engine_config = EngineConfig {
                 private_key,
@@ -594,6 +616,7 @@ impl ReactorCluster {
             self.node_dirs[i].0.path().to_path_buf(),
             self.node_dirs[i].1.clone(),
             true,
+            self.validation_delay,
             self.reactor_errors.clone(),
             &mut self.join_set,
         );
@@ -1751,6 +1774,48 @@ async fn prod_reactor_late_joiner_syncs_across_a_deep_reorg() -> Result<()> {
          block decision instead of declining it"
     );
 
+    cluster.shutdown().await;
+    Ok(())
+}
+
+/// THE liveness property PR B exists for: the reactor keeps deciding and
+/// executing BLOCKS while batch validation is stuck on a slow bitcoind.
+///
+/// Before the io-job split, `validate_txs` ran inline in the select body
+/// holding `&mut` on the whole reactor — an unreachable bitcoind froze the
+/// event loop (blocks, mempool, finality) for backoff × candidate txs, on
+/// every node at once. Here every node's validation hangs for minutes, far
+/// past the test budget; blocks must flow anyway, which also pins the rule
+/// that a pending block outranks an in-flight batch job in the proposer.
+#[tokio::test]
+async fn prod_reactor_blocks_flow_while_validation_is_stuck() -> Result<()> {
+    crate::logging::setup();
+
+    // ONE node: the only proposer holds the stuck job, so nothing can route a
+    // block proposal around it — a 3-node cluster hides the bug behind
+    // proposer rotation.
+    let mut cluster =
+        ReactorCluster::start_with_options(1, 1, Some(Duration::from_secs(600))).await?;
+    cluster.wait_for_ready().await;
+
+    // Park a candidate batch in the proposer: the mempool txs trigger a build
+    // job whose validation outlives the test. The sleep guarantees the job is
+    // in flight before any block exists: the mempool debounce (500ms) or at
+    // latest the next held GetValue (~3s propose timeout) snapshots the
+    // candidates and starts the 600s validation, which cannot finish. The
+    // proof this ordering catches the regression: gating block proposals on
+    // the in-flight job makes this test time out on `wait_for_block(1)`.
+    for event in cluster.mock_bitcoin().generate_mempool_txs(2) {
+        cluster.send_mempool_event(event);
+    }
+    tokio::time::sleep(Duration::from_secs(5)).await;
+
+    for h in 1..=3 {
+        cluster.mine_empty_and_send();
+        cluster.wait_for_block(h, Duration::from_secs(60)).await;
+    }
+
+    cluster.assert_no_reactor_errors();
     cluster.shutdown().await;
     Ok(())
 }

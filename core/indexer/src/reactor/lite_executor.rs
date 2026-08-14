@@ -211,6 +211,15 @@ impl LiteExecutor {
     }
 }
 
+impl LiteExecutor {
+    /// Hold every `validate_txs` open for `delay` (non-empty candidate sets
+    /// only, like production: zero txs means zero RPCs). Lets a test pin the
+    /// event loop live while consensus I/O is in flight.
+    pub fn set_validation_delay(&mut self, delay: std::time::Duration) {
+        self.validation_delay = Some(delay);
+    }
+}
+
 impl Executor for LiteExecutor {
     fn validate_txs(
         &self,
@@ -220,7 +229,9 @@ impl Executor for LiteExecutor {
     {
         let delay = self.validation_delay;
         Box::pin(async move {
-            if let Some(delay) = delay {
+            if let Some(delay) = delay
+                && !txs.is_empty()
+            {
                 tokio::time::sleep(delay).await;
             }
             Ok(txs

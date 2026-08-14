@@ -75,10 +75,8 @@ pub(super) enum IoApply {
     },
 }
 
-/// What the proposal snapshot found to propose.
+/// What the batch-candidate snapshot found.
 enum ProposalSnapshot {
-    /// A pending block — proposed immediately, no I/O involved.
-    Block(Value),
     /// Batch candidates that need the bitcoind I/O phase.
     Batch {
         txs: Vec<bitcoin::Transaction>,
@@ -648,31 +646,30 @@ impl<E: Executor> Reactor<E> {
         }
     }
 
-    /// The state-only half of building a proposal: what COULD we propose,
-    /// judged entirely on the loop (pool, DB, fee index) with no bitcoind
-    /// round-trips. Batch candidates then go through the I/O phase as an
-    /// [`IoJob`]; a pending block needs no I/O and is proposed immediately.
-    async fn make_value_snapshot(&mut self) -> Result<ProposalSnapshot> {
-        let conn = self.db_conn();
-
-        // If blocks are pending, always propose the next one first.
-        //
-        // Range-bounded, not `first_key_value`: an entry at or below the tip is
-        // already applied, and proposing it stops the chain — peers vote it valid
-        // (they still hold the block), it is decided, the finalize gate rejects it
-        // as out of order, and it stays the minimum forever so no newer block is
-        // ever proposed. The insert side refuses to buffer those now; this makes
-        // the proposer independently unable to emit one.
-        if let Some((&height, block)) = self
-            .consensus
+    /// The next pending Bitcoin block as a proposal value, if any. Blocks
+    /// outrank batches and need no I/O, so this fast path runs UNCONDITIONALLY
+    /// — a batch validation in flight must never starve block proposals, or a
+    /// slow bitcoind would stall the chain through the proposer.
+    ///
+    /// Range-bounded, not `first_key_value`: an entry at or below the tip is
+    /// already applied, and proposing it stops the chain — peers vote it valid
+    /// (they still hold the block), it is decided, the finalize gate rejects it
+    /// as out of order, and it stays the minimum forever so no newer block is
+    /// ever proposed. The insert side refuses to buffer those now; this makes
+    /// the proposer independently unable to emit one.
+    fn pending_block_value(&self) -> Option<Value> {
+        self.consensus
             .pending_blocks
             .range(self.last_height + 1..)
             .next()
-        {
-            return Ok(ProposalSnapshot::Block(Value::new_block(
-                height, block.hash,
-            )));
-        }
+            .map(|(&height, block)| Value::new_block(height, block.hash))
+    }
+
+    /// The state-only half of building a BATCH proposal: candidates judged
+    /// entirely on the loop (pool, DB, fee index) with no bitcoind
+    /// round-trips. They then go through the I/O phase as an [`IoJob`].
+    async fn make_value_snapshot(&mut self) -> Result<ProposalSnapshot> {
+        let conn = self.db_conn();
 
         // Pre-filter already-processed txids to avoid unnecessary validation
         let pending_txids: Vec<Txid> = self
@@ -888,6 +885,14 @@ impl<E: Executor> Reactor<E> {
             None => return Ok(false),
         };
 
+        // Blocks first, always — even with a batch validation in flight. They
+        // need no I/O, and a chain whose block proposals queue behind a slow
+        // bitcoind is the head-of-line blocking this design removes.
+        if let Some(value) = self.pending_block_value() {
+            self.fulfill_pending_with(value).await?;
+            return Ok(true);
+        }
+
         // One build job at a time — a second snapshot while one is in flight
         // would validate the same pool twice and race it on apply.
         let build_in_flight = self
@@ -896,10 +901,6 @@ impl<E: Executor> Reactor<E> {
             .any(|j| matches!(j.apply, IoApply::BuildProposal { .. }));
         if !build_in_flight {
             match self.make_value_snapshot().await? {
-                ProposalSnapshot::Block(value) => {
-                    self.fulfill_pending_with(value).await?;
-                    return Ok(true);
-                }
                 ProposalSnapshot::Batch { txs, threshold } => {
                     let verdicts = self.executor.validate_txs(txs.clone(), threshold);
                     self.io_jobs.push_back(IoJob {
@@ -1617,15 +1618,16 @@ impl<E: Executor> Reactor<E> {
                 timeout,
                 created_at: Instant::now(),
             });
+            if let Some(value) = self.pending_block_value() {
+                self.fulfill_pending_with(value).await?;
+                return Ok(());
+            }
             let build_in_flight = self
                 .io_jobs
                 .iter()
                 .any(|j| matches!(j.apply, IoApply::BuildProposal { .. }));
             if !build_in_flight {
                 match self.make_value_snapshot().await? {
-                    ProposalSnapshot::Block(value) => {
-                        self.fulfill_pending_with(value).await?;
-                    }
                     ProposalSnapshot::Batch { txs, threshold } => {
                         info!(%height, %round, candidates = txs.len(),
                             "Validating candidate batch off-loop; reply deferred");
