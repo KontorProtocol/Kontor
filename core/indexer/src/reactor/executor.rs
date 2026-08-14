@@ -4,6 +4,7 @@ use tracing::warn;
 
 use indexer_types::{InstKind, OpKind};
 
+use crate::bitcoin_client::error::Error as RpcError;
 use crate::bitcoin_client::types::Acceptance;
 use crate::bitcoin_client::{Client, check_mempool_acceptance};
 use crate::block::{TxWalker, filter_map};
@@ -200,6 +201,46 @@ impl Executor for RuntimeExecutor {
                     Acceptance::Rejected { reason } => {
                         TxPolicy::Rejected(format!("mempool policy: {reason}"))
                     }
+                };
+                // Relay each accepted tx IMMEDIATELY, before validating the
+                // next. Load-bearing for parent/child batches, not redundancy:
+                // a child spending an unconfirmed parent's output only passes
+                // `testmempoolaccept` on a bitcoind that already HOLDS the
+                // parent, and on a validator whose node has not seen it via
+                // P2P yet, this in-order relay is what puts it there — the
+                // pre-io-job code did exactly this, per tx, for this reason.
+                // (`-27` = already known; `-25`/`-26` = rejected on submit.)
+                let policy = match policy {
+                    TxPolicy::Accepted => {
+                        let submitted = retry(
+                            || async {
+                                match client.send_raw_transaction(&raw_hex).await {
+                                    Ok(_) | Err(RpcError::BitcoinRpc { code: -27, .. }) => {
+                                        Ok(true)
+                                    }
+                                    Err(RpcError::BitcoinRpc {
+                                        code: -25 | -26, ..
+                                    }) => Ok(false),
+                                    Err(e) => Err(e),
+                                }
+                            },
+                            "send_raw_transaction",
+                            new_backoff_limited(),
+                        )
+                        .await
+                        .with_context(|| {
+                            format!(
+                                "send_raw_transaction failed after retries for {txid}; \
+                                 bitcoind may be unreachable"
+                            )
+                        })?;
+                        if submitted {
+                            TxPolicy::Accepted
+                        } else {
+                            TxPolicy::Rejected("rejected by bitcoind on relay".to_string())
+                        }
+                    }
+                    rejected => rejected,
                 };
                 verdicts.push((tx, policy));
             }

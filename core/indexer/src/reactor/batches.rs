@@ -634,20 +634,6 @@ impl<E: Executor> Reactor<E> {
         Ok(BatchOutcome::Executed)
     }
 
-    /// Hand accepted batch txs to the broadcaster. Best-effort by design —
-    /// relay failure is absorbed by the finality deadline — and `try_send` so
-    /// the event loop never blocks on it; the broadcaster's own death reaches
-    /// the supervisor without our help.
-    fn broadcast(&self, txs: &[bitcoin::Transaction]) {
-        if let Some(ch) = &self.broadcast_tx {
-            for tx in txs {
-                if let Err(e) = ch.try_send(tx.clone()) {
-                    warn!(error = %e, "Broadcast queue refused a transaction; relying on mempool relay");
-                }
-            }
-        }
-    }
-
     /// The next pending Bitcoin block as a proposal value, if any. Blocks
     /// outrank batches and need no I/O, so this fast path runs UNCONDITIONALLY
     /// — a batch validation in flight must never starve block proposals, or a
@@ -1030,7 +1016,6 @@ impl<E: Executor> Reactor<E> {
                     info!("Not proposing batch: {reason}");
                     return Ok(());
                 }
-                self.broadcast(&txs);
                 self.fulfill_pending_with(Value::new_batch_raw(anchor_height, anchor_hash, txs))
                     .await
             }
@@ -1082,7 +1067,6 @@ impl<E: Executor> Reactor<E> {
                         .entry(tx.compute_txid())
                         .or_insert_with(|| (tx.clone(), parsed));
                 }
-                self.broadcast(&transactions);
                 let proposed = ProposedValue {
                     height,
                     round,

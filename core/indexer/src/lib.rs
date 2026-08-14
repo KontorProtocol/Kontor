@@ -3,7 +3,6 @@ pub mod bitcoin_client;
 pub mod bitcoin_follower;
 pub mod block;
 pub mod bls;
-pub mod broadcaster;
 pub mod built_info;
 pub mod config;
 pub mod consensus;

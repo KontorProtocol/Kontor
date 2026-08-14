@@ -279,12 +279,6 @@ async fn run_daemon(config: Config) -> Result<()> {
             .collect::<Vec<_>>()
     };
 
-    // Relay channel: the reactor hands accepted batch txs to the broadcaster
-    // instead of gating votes on `send_raw_transaction`.
-    let (relay_tx, relay_rx) = mpsc::channel(indexer::broadcaster::CHANNEL_CAPACITY);
-    let broadcaster_handle =
-        indexer::broadcaster::run(bitcoin.clone(), relay_rx, shutdown.signal());
-
     let (block_rx, mempool_rx, replay_tx, follower_handle) = bitcoin_follower::run(
         bitcoin.clone(),
         block::filter_map,
@@ -337,7 +331,6 @@ async fn run_daemon(config: Config) -> Result<()> {
             enabled: config.prune,
             retain_blocks: config.prune_retain_blocks,
         },
-        Some(relay_tx),
     );
 
     // The long-lived subsystems, named for the exit message. None of them is
@@ -352,9 +345,6 @@ async fn run_daemon(config: Config) -> Result<()> {
     let mut subsystems: Vec<(&'static str, JoinHandle<Result<()>>)> = vec![
         ("reactor", reactor_handle),
         ("bitcoin follower", follower_handle),
-        // Behind the reactor on purpose: its channel sender lives there, so
-        // its clean death is only ever a cascade of the reactor's.
-        ("broadcaster", broadcaster_handle),
         ("api", api_handle),
         ("event subscriber", event_subscriber_handle),
         ("info publisher", info_publisher_handle),
