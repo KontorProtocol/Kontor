@@ -889,6 +889,10 @@ impl<E: Executor> Reactor<E> {
         if !build_in_flight {
             match self.make_value_snapshot().await? {
                 ProposalSnapshot::Batch { txs, threshold } => {
+                    info!(
+                        candidates = txs.len(),
+                        "Validating candidate batch off-loop; reply deferred"
+                    );
                     let verdicts = self.executor.validate_txs(txs, threshold);
                     self.io_jobs.push_back(IoJob {
                         verdicts,
@@ -1595,9 +1599,12 @@ impl<E: Executor> Reactor<E> {
                 .send(proposal)
                 .map_err(|_| anyhow::anyhow!("Failed to send GetValue reply"))?;
         } else {
-            // Hold the reply first: every path below answers through it —
-            // immediately for a block, via the I/O job's apply for a batch, or
-            // via the debounce/deadline machinery when there is nothing yet.
+            // Hold the reply; `try_fulfill_pending_proposal` owns every way of
+            // answering it — the block fast path, banked or freshly-validated
+            // candidates, and the deadline machinery. `past_deadline` is false
+            // by construction for a proposal created this instant, so this
+            // cannot propose a premature empty batch. (This used to duplicate
+            // that function's body, and the copies had already drifted.)
             self.consensus.pending_proposal = Some(consensus_state::PendingProposal {
                 height,
                 round,
@@ -1605,36 +1612,8 @@ impl<E: Executor> Reactor<E> {
                 timeout,
                 created_at: Instant::now(),
             });
-            if let Some(value) = self.pending_block_value() {
-                self.fulfill_pending_with(value).await?;
-                return Ok(());
-            }
-            let build_in_flight = self
-                .io_jobs
-                .iter()
-                .any(|j| matches!(j.apply, IoApply::BuildProposal { .. }));
-            if !build_in_flight {
-                match self.make_value_snapshot().await? {
-                    ProposalSnapshot::Batch { txs, threshold } => {
-                        info!(%height, %round, candidates = txs.len(),
-                            "Validating candidate batch off-loop; reply deferred");
-                        let verdicts = self.executor.validate_txs(txs, threshold);
-                        let (anchor_height, anchor_hash) = (
-                            self.last_height,
-                            self.last_hash.unwrap_or(BlockHash::all_zeros()),
-                        );
-                        self.io_jobs.push_back(IoJob {
-                            verdicts,
-                            apply: IoApply::BuildProposal {
-                                anchor_height,
-                                anchor_hash,
-                            },
-                        });
-                    }
-                    ProposalSnapshot::Nothing => {
-                        info!(%height, %round, "Nothing to propose, holding reply for pending transactions");
-                    }
-                }
+            if !self.try_fulfill_pending_proposal().await? {
+                info!(%height, %round, "Nothing to propose yet, holding the reply");
             }
         }
         Ok(())
