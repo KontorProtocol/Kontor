@@ -363,13 +363,32 @@ async fn run_daemon(config: Config) -> Result<()> {
         }
     });
 
-    // Why we stopped is decided by which of these arrives first — nothing else
-    // in the process cancels, so the first subsystem to exit before a stop was
-    // asked for is, by construction, the cause.
+    // Why we stopped is decided by which of these arms wins — nothing else in
+    // the process cancels, so an arm that fires before a stop was asked for is
+    // the cause (modulo scheduler tie-breaks, which `biased` pins down).
+    //
+    // The order is a policy, not a style choice. Before anything has asked the
+    // node to stop, a panic or a subsystem exit is never a CONSEQUENCE of
+    // shutdown — so when one is ready in the same poll as a signal, preferring
+    // it can only upgrade a would-be-silent failure into a named one, never
+    // turn a clean rollout into a false page. Panics outrank handle exits so a
+    // panic that also unwound its task is attributed to its file:line, not to
+    // a generic "task panicked".
     let stop = tokio::select! {
-        () = &mut signal_received => Stop::Signal,
+        biased;
         Some(cause) = panic_rx.recv() => Stop::Fatal(anyhow::anyhow!("{cause}")),
-        fatal = first_exit(&mut subsystems) => fatal,
+        fatal = first_exit(&mut subsystems) => match fatal {
+            // A panicking subsystem races its hook's report against its
+            // `JoinError`: the send happens first, so `biased` normally routes
+            // it to the arm above — but if the message landed after this poll
+            // began, fold it in rather than reporting the bare join error.
+            Stop::Fatal(e) => match panic_rx.try_recv() {
+                Ok(cause) => Stop::Fatal(e.context(cause)),
+                Err(_) => Stop::Fatal(e),
+            },
+            stop => stop,
+        },
+        () = &mut signal_received => Stop::Signal,
     };
 
     // Ordered before the cancel so no request can observe a shutdown in progress
