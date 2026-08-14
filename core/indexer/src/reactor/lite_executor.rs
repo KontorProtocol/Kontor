@@ -1,5 +1,6 @@
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 use anyhow::Result;
 use bitcoin::Txid;
@@ -8,11 +9,12 @@ use crate::database::queries::{
     contract_has_state, get_transaction_by_txid, insert_block, insert_contract, insert_transaction,
 };
 use crate::database::types::ContractRow;
-use crate::reactor::executor::Executor;
+use crate::reactor::executor::{Executor, TxPolicy};
 use crate::reactor::mock_bitcoin::MockBitcoin;
 use crate::runtime::wit::Signer;
 use crate::runtime::{ComponentCache, ContractAddress, Runtime, Storage, TransactionContext};
 use crate::test_utils::{new_mock_block_hash, new_mock_transaction, new_test_db_dir, open_test_db};
+use futures_util::future::BoxFuture;
 use indexer_types::{BlockRow, TransactionRow};
 use testlib::ContractReader;
 
@@ -52,6 +54,9 @@ pub struct LiteExecutor {
     signer: Signer,
     mock_bitcoin: Arc<Mutex<MockBitcoin>>,
     block_tx: tokio::sync::mpsc::Sender<crate::bitcoin_follower::event::BlockEvent>,
+    /// Artificial latency for `validate_txs`, so tests can hold a validation
+    /// in flight and assert the event loop keeps serving its other arms.
+    validation_delay: Option<Duration>,
 }
 
 impl LiteExecutor {
@@ -93,6 +98,7 @@ impl LiteExecutor {
                 signer: Signer::Id(identity),
                 mock_bitcoin,
                 block_tx,
+                validation_delay: None,
             },
             runtime,
         ))
@@ -200,20 +206,37 @@ impl LiteExecutor {
                 signer,
                 mock_bitcoin,
                 block_tx,
+                validation_delay: None,
             },
             runtime,
         ))
     }
 }
 
+impl LiteExecutor {
+    /// Hold every `validate_txs` open for `delay` (non-empty candidate sets
+    /// only, like production: zero txs means zero RPCs). Lets a test pin the
+    /// event loop live while consensus I/O is in flight.
+    pub fn set_validation_delay(&mut self, delay: Duration) {
+        self.validation_delay = Some(delay);
+    }
+}
+
 impl Executor for LiteExecutor {
-    async fn validate_transaction(
+    fn validate_txs(
         &self,
-        _raw: &bitcoin::Transaction,
-        _parsed: &indexer_types::Transaction,
+        txs: Vec<bitcoin::Transaction>,
         _threshold_sat_per_vb: u64,
-    ) -> anyhow::Result<bool> {
-        Ok(true)
+    ) -> BoxFuture<'static, anyhow::Result<Vec<(bitcoin::Transaction, TxPolicy)>>> {
+        let delay = self.validation_delay;
+        Box::pin(async move {
+            if let Some(delay) = delay
+                && !txs.is_empty()
+            {
+                tokio::time::sleep(delay).await;
+            }
+            Ok(txs.into_iter().map(|tx| (tx, TxPolicy::Accepted)).collect())
+        })
     }
 
     async fn resolve_transaction(&self, txid: &Txid) -> Option<bitcoin::Transaction> {

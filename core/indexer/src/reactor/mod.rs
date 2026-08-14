@@ -12,10 +12,11 @@ pub mod mock_bitcoin;
 mod reactor_cluster_tests;
 pub mod types;
 
+use std::collections::VecDeque;
 use std::time::Instant;
 
 use anyhow::{Context, Result, bail};
-use futures_util::future::pending;
+use futures_util::future::{self, pending};
 use indexer_types::{BlockRow, Event, Fees, OpWithResult};
 use tokio::{
     select,
@@ -125,6 +126,15 @@ pub struct Reactor<E: Executor> {
     /// Shared with the API (`Env.consensus_listen_addr`); written on the first
     /// `Listening` (see `handle_consensus_msg`'s `ConsensusReady` arm).
     consensus_listen_addr: tokio::sync::watch::Sender<Option<String>>,
+    /// Consensus I/O in flight — bitcoind validation running off the loop,
+    /// polled as an arm of the root `select!`. FIFO; bounded by construction
+    /// (at most one build job and one proposal validation can be outstanding:
+    /// `pending_proposal` is single and the engine awaits each proposal reply
+    /// before sending the next part). See `batches::IoJob`.
+    io_jobs: VecDeque<batches::IoJob>,
+    /// Verdicts that outlived their proposal, banked for the next one — see
+    /// `batches::ValidatedCandidates`.
+    validated_candidates: Option<batches::ValidatedCandidates>,
 }
 
 impl<E: Executor> Reactor<E> {
@@ -166,6 +176,8 @@ impl<E: Executor> Reactor<E> {
             event_tx,
             consensus,
             consensus_listen_addr,
+            io_jobs: VecDeque::new(),
+            validated_candidates: None,
         }
     }
 
@@ -395,6 +407,21 @@ impl<E: Executor> Reactor<E> {
 
             let consensus_rx = self.consensus.channels.consensus.recv();
 
+            // EVERY in-flight I/O job's verdict future, raced — or never.
+            // All of them, not just the front: a stalled BuildProposal against
+            // a slow bitcoind must not park a ValidateProposal whose oneshot
+            // reply the consensus engine is waiting on, or the node stops
+            // voting for the front job's whole retry budget. Polling through
+            // `&mut` retains each future's progress when another arm wins the
+            // select; dropping the loop (shutdown) drops the in-flight RPCs.
+            let io_verdicts = async {
+                if self.io_jobs.is_empty() {
+                    pending().await
+                } else {
+                    future::select_all(self.io_jobs.iter_mut().map(|j| &mut j.verdicts)).await
+                }
+            };
+
             let debounce_sleep = async {
                 match debounce_deadline {
                     Some(deadline) => tokio::time::sleep_until(deadline).await,
@@ -539,6 +566,15 @@ impl<E: Executor> Reactor<E> {
                         }
                     }
                 }
+                (verdicts, index, _) = io_verdicts => {
+                    let job = self
+                        .io_jobs
+                        .remove(index)
+                        .expect("io arm fired with this job's index");
+                    self.apply_io_verdicts(job.apply, verdicts)
+                        .await
+                        .context("apply_io_verdicts failed")?;
+                }
                 _ = fee_publish_ticker.tick() => {
                     if self.consensus.mempool_fee_index.take_dirty() {
                         // recompute() publishes to fee_tx internally.
@@ -661,7 +697,6 @@ async fn build_genesis_from_staking(runtime: &mut Runtime) -> Result<Genesis> {
 pub async fn create_runtime_executor(
     starting_block_height: u64,
     writer: &database::Writer,
-    shutdown: ShutdownSignal,
     bitcoin_client: crate::bitcoin_client::Client,
     replay_tx: Option<mpsc::Sender<u64>>,
     genesis_validators: &[crate::runtime::GenesisValidator],
@@ -744,7 +779,7 @@ pub async fn create_runtime_executor(
         .await
         .context("Failed to publish native contracts")?;
 
-    let mut exec = executor::RuntimeExecutor::new(shutdown, bitcoin_client);
+    let mut exec = executor::RuntimeExecutor::new(bitcoin_client);
     if let Some(tx) = replay_tx {
         exec = exec.with_replay_tx(tx);
     }
@@ -829,7 +864,6 @@ pub fn run(
                     let setup = create_runtime_executor(
                         starting_block_height,
                         &writer,
-                        shutdown.clone(),
                         bitcoin_client,
                         replay_tx,
                         &genesis_validators,

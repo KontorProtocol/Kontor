@@ -4,16 +4,17 @@ use tracing::warn;
 
 use indexer_types::{InstKind, OpKind};
 
+use crate::bitcoin_client::error::Error as RpcError;
 use crate::bitcoin_client::types::Acceptance;
 use crate::bitcoin_client::{Client, check_mempool_acceptance};
 use crate::block::{TxWalker, filter_map};
 use crate::database;
-use crate::retry::{new_backoff_limited, retry_until_cancelled};
+use crate::retry::{new_backoff_limited, retry};
 use crate::runtime::ExecutionError;
 use crate::runtime::Runtime;
 use crate::runtime::system;
 use crate::runtime::wit::Signer;
-use crate::stopper::ShutdownSignal;
+use futures_util::future::BoxFuture;
 
 /// Check if a parsed transaction contains only batchable ops.
 /// Publish must only execute via Value::Block decisions (contract address
@@ -32,31 +33,44 @@ pub fn is_batchable(inputs: &[indexer_types::Input]) -> bool {
     })
 }
 
+/// The I/O phase's per-transaction verdict. The reason is for logs only —
+/// every rejection has the same effect (drop from the candidate set / reject
+/// the proposal).
+#[derive(Debug)]
+pub enum TxPolicy {
+    Accepted,
+    Rejected(String),
+}
+
 /// Abstraction over transaction execution and state rollback.
 ///
 /// The consensus orchestration logic (`ConsensusState.process_decided_batch` and
 /// `run_finality_checks`) calls these methods instead of directly manipulating state.
 #[allow(async_fn_in_trait)]
 pub trait Executor {
-    /// Validate a pre-parsed transaction for batching.
-    /// Checks batchability and may propagate the tx to the local bitcoind mempool.
+    /// Start the I/O phase of validating `txs` against bitcoind: mempool
+    /// policy acceptance plus the fee-threshold check, verdicts in input
+    /// order.
     ///
-    /// `threshold_sat_per_vb` is the precomputed acceptance floor for this
-    /// validation pass — typically `fee_index.fastest_fee() * 0.9`.
-    /// Hoisting it to the caller avoids recomputing per tx in a batch.
+    /// Returns an OWNED, `'static` future. The reactor polls it as an arm of
+    /// its root `select!`, so the in-flight RPC is drop-cancelled at shutdown
+    /// for free and the event loop keeps serving every other arm while it
+    /// runs — this is what took bitcoind off the consensus hot path.
+    /// Everything the future needs rides in; it must not touch reactor state
+    /// (state predicates run at snapshot and again at apply, on the loop).
     ///
-    /// Returns `Ok(true)` if the tx is valid for inclusion, `Ok(false)` if
-    /// it failed a policy check (batchability, mempool rejection, fee
-    /// threshold). Returns `Err` only for infrastructure failures that
-    /// indicate the validator can't safely continue (e.g. bitcoind RPC
-    /// unreachable after retries) — the reactor propagates this and shuts
-    /// down via the cancellation token.
-    async fn validate_transaction(
+    /// `Err` is infrastructure only — bitcoind unreachable after retries —
+    /// and the reactor treats it as fatal (I5).
+    ///
+    /// Returns each transaction PAIRED with its verdict, `txs` moving through
+    /// the future and back. Structural, not stylistic: a separate verdict
+    /// vector invites a `zip` at the apply site, and `zip` silently truncates —
+    /// a short vector would let trailing transactions through unchecked.
+    fn validate_txs(
         &self,
-        raw: &bitcoin::Transaction,
-        parsed: &indexer_types::Transaction,
+        txs: Vec<bitcoin::Transaction>,
         threshold_sat_per_vb: u64,
-    ) -> Result<bool>;
+    ) -> BoxFuture<'static, Result<Vec<(bitcoin::Transaction, TxPolicy)>>>;
 
     /// Resolve a txid to a full bitcoin::Transaction. Used to fetch transaction
     /// data for batch execution — batches carry only txids.
@@ -93,13 +107,17 @@ pub trait Executor {
 pub struct NoopExecutor;
 
 impl Executor for NoopExecutor {
-    async fn validate_transaction(
+    fn validate_txs(
         &self,
-        _raw: &bitcoin::Transaction,
-        _parsed: &indexer_types::Transaction,
+        txs: Vec<bitcoin::Transaction>,
         _threshold_sat_per_vb: u64,
-    ) -> Result<bool> {
-        Ok(false)
+    ) -> BoxFuture<'static, Result<Vec<(bitcoin::Transaction, TxPolicy)>>> {
+        Box::pin(async move {
+            Ok(txs
+                .into_iter()
+                .map(|tx| (tx, TxPolicy::Rejected("noop executor".to_string())))
+                .collect())
+        })
     }
     async fn resolve_transaction(&self, _txid: &Txid) -> Option<bitcoin::Transaction> {
         None
@@ -126,21 +144,13 @@ impl Executor for NoopExecutor {
 pub struct RuntimeExecutor {
     bitcoin_client: Client,
     replay_tx: Option<tokio::sync::mpsc::Sender<u64>>,
-    // The second of two sanctioned homes for a signal BELOW a task root (the
-    // listener's ZMQ threads are the first): `validate_transaction` runs in the
-    // body of an already-chosen select branch, where nothing above it can drop
-    // it, so `retry_until_cancelled` must race the signal itself. PR B (see
-    // BRIEF.md, daemon-lifecycle) removes this by moving the RPCs off the hot
-    // loop; do not add a third.
-    shutdown: ShutdownSignal,
 }
 
 impl RuntimeExecutor {
-    pub fn new(shutdown: ShutdownSignal, bitcoin_client: Client) -> Self {
+    pub fn new(bitcoin_client: Client) -> Self {
         Self {
             bitcoin_client,
             replay_tx: None,
-            shutdown,
         }
     }
 
@@ -151,94 +161,91 @@ impl RuntimeExecutor {
 }
 
 impl Executor for RuntimeExecutor {
-    async fn validate_transaction(
+    fn validate_txs(
         &self,
-        raw: &bitcoin::Transaction,
-        parsed: &indexer_types::Transaction,
+        txs: Vec<bitcoin::Transaction>,
         threshold_sat_per_vb: u64,
-    ) -> Result<bool> {
-        if !is_batchable(&parsed.inputs) {
-            return Ok(false);
-        }
-
-        let raw_hex = bitcoin::consensus::encode::serialize_hex(raw);
-        let txid = raw.compute_txid();
-
-        // 1. Check Bitcoin's mempool policy + obtain the package fee rate.
-        //    `check_mempool_acceptance` handles the idempotency and
-        //    already-known-fallback inside the client layer. RPC failure
-        //    after retries is fatal — bitcoind is unreachable.
-        let acceptance = retry_until_cancelled(
-            || check_mempool_acceptance(&self.bitcoin_client, &raw_hex, &txid),
-            "check_mempool_acceptance",
-            new_backoff_limited(),
-            self.shutdown.clone(),
-        )
-        .await
-        .with_context(|| {
-            format!(
-                "check_mempool_acceptance failed after retries for {txid}; \
-                 bitcoind may be unreachable"
-            )
-        })?;
-        let tx_fee_rate = match acceptance {
-            Acceptance::Accepted {
-                fee_rate_sat_per_vb,
-            } => fee_rate_sat_per_vb,
-            Acceptance::Rejected { reason } => {
-                warn!(%txid, %reason, "Rejected by mempool policy");
-                return Ok(false);
-            }
-        };
-
-        // 2. Fee-rate threshold check.
-        if tx_fee_rate < threshold_sat_per_vb {
-            warn!(
-                %txid,
-                tx_fee_rate,
-                threshold = threshold_sat_per_vb,
-                "Rejected: fee rate below threshold"
-            );
-            return Ok(false);
-        }
-
-        // 3. send_raw_transaction: broadcast to the network. Redundant
-        //    with testmempoolaccept but catches races and ensures the tx
-        //    is relayed to our bitcoind if we were the proposer.
-        //    RPC failure after retries is fatal (same reasoning as above).
-        let result = retry_until_cancelled(
-            || async {
-                match self.bitcoin_client.send_raw_transaction(&raw_hex).await {
-                    Ok(_) => Ok(true),
-                    Err(crate::bitcoin_client::error::Error::BitcoinRpc { code: -27, .. }) => {
-                        Ok(true)
+    ) -> BoxFuture<'static, Result<Vec<(bitcoin::Transaction, TxPolicy)>>> {
+        // Owned clone: the future must borrow nothing, so the reactor can hold
+        // it across loop iterations and drop it at shutdown.
+        let client = self.bitcoin_client.clone();
+        Box::pin(async move {
+            let mut verdicts = Vec::with_capacity(txs.len());
+            for tx in txs {
+                let raw_hex = bitcoin::consensus::encode::serialize_hex(&tx);
+                let txid = tx.compute_txid();
+                // `check_mempool_acceptance` handles idempotency and the
+                // already-known fallback inside the client layer. RPC failure
+                // after retries is infrastructure — bitcoind unreachable — and
+                // propagates as fatal (I5). Plain `retry`: this future is
+                // dropped at shutdown, backoff and in-flight request included.
+                let acceptance = retry(
+                    || check_mempool_acceptance(&client, &raw_hex, &txid),
+                    "check_mempool_acceptance",
+                    new_backoff_limited(),
+                )
+                .await
+                .with_context(|| {
+                    format!(
+                        "check_mempool_acceptance failed after retries for {txid}; \
+                         bitcoind may be unreachable"
+                    )
+                })?;
+                let policy = match acceptance {
+                    Acceptance::Accepted {
+                        fee_rate_sat_per_vb,
+                    } if fee_rate_sat_per_vb < threshold_sat_per_vb => TxPolicy::Rejected(format!(
+                        "fee rate {fee_rate_sat_per_vb} below threshold {threshold_sat_per_vb}"
+                    )),
+                    Acceptance::Accepted { .. } => TxPolicy::Accepted,
+                    Acceptance::Rejected { reason } => {
+                        TxPolicy::Rejected(format!("mempool policy: {reason}"))
                     }
-                    Err(crate::bitcoin_client::error::Error::BitcoinRpc {
-                        code: -25 | -26,
-                        ..
-                    }) => Ok(false),
-                    Err(e) => Err(e),
-                }
-            },
-            "send_raw_transaction",
-            new_backoff_limited(),
-            self.shutdown.clone(),
-        )
-        .await
-        .with_context(|| {
-            format!(
-                "send_raw_transaction failed after retries for {txid}; \
-                 bitcoind may be unreachable"
-            )
-        })?;
-        match result {
-            true => Ok(true),
-            false => {
-                warn!(%txid, "Transaction rejected by bitcoind");
-                Ok(false)
+                };
+                // Relay each accepted tx IMMEDIATELY, before validating the
+                // next. Load-bearing for parent/child batches, not redundancy:
+                // a child spending an unconfirmed parent's output only passes
+                // `testmempoolaccept` on a bitcoind that already HOLDS the
+                // parent, and on a validator whose node has not seen it via
+                // P2P yet, this in-order relay is what puts it there — the
+                // pre-io-job code did exactly this, per tx, for this reason.
+                // (`-27` = already known; `-25`/`-26` = rejected on submit.)
+                let policy = match policy {
+                    TxPolicy::Accepted => {
+                        let submitted = retry(
+                            || async {
+                                match client.send_raw_transaction(&raw_hex).await {
+                                    Ok(_) | Err(RpcError::BitcoinRpc { code: -27, .. }) => Ok(true),
+                                    Err(RpcError::BitcoinRpc {
+                                        code: -25 | -26, ..
+                                    }) => Ok(false),
+                                    Err(e) => Err(e),
+                                }
+                            },
+                            "send_raw_transaction",
+                            new_backoff_limited(),
+                        )
+                        .await
+                        .with_context(|| {
+                            format!(
+                                "send_raw_transaction failed after retries for {txid}; \
+                                 bitcoind may be unreachable"
+                            )
+                        })?;
+                        if submitted {
+                            TxPolicy::Accepted
+                        } else {
+                            TxPolicy::Rejected("rejected by bitcoind on relay".to_string())
+                        }
+                    }
+                    rejected => rejected,
+                };
+                verdicts.push((tx, policy));
             }
-        }
+            Ok(verdicts)
+        })
     }
+
     async fn resolve_transaction(&self, txid: &Txid) -> Option<bitcoin::Transaction> {
         // Fall back to Bitcoin RPC (via tx cache)
         match self.bitcoin_client.get_raw_transaction(txid).await {
