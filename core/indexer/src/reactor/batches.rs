@@ -899,37 +899,33 @@ impl<E: Executor> Reactor<E> {
         // anchor must still match, membership is re-checked against the pool,
         // and `validate_batch` re-runs; anything stale falls through to a
         // fresh snapshot.
-        if let Some(banked) = self.validated_candidates.take() {
-            if banked.anchor_height == last_height && banked.anchor_hash == last_hash {
-                let mut kept = banked.txs;
-                kept.retain(|tx| {
-                    self.consensus
-                        .pending_transactions
-                        .contains_key(&tx.compute_txid())
-                });
-                if !kept.is_empty() {
-                    let order = dependency_sort(&kept);
-                    let txs: Vec<bitcoin::Transaction> =
-                        order.into_iter().map(|i| kept[i].clone()).collect();
-                    let conn = self.db_conn();
-                    if self
-                        .consensus
-                        .validate_batch(&conn, last_height, last_hash, &txs, last_height, last_hash)
-                        .await?
-                        .is_none()
-                    {
-                        self.fulfill_pending_with(Value::new_batch_raw(
-                            last_height,
-                            last_hash,
-                            txs,
-                        ))
+        if let Some(banked) = self.validated_candidates.take()
+            && banked.anchor_height == last_height
+            && banked.anchor_hash == last_hash
+        {
+            let mut kept = banked.txs;
+            kept.retain(|tx| {
+                self.consensus
+                    .pending_transactions
+                    .contains_key(&tx.compute_txid())
+            });
+            if !kept.is_empty() {
+                let order = dependency_sort(&kept);
+                let txs: Vec<bitcoin::Transaction> =
+                    order.into_iter().map(|i| kept[i].clone()).collect();
+                let conn = self.db_conn();
+                if self
+                    .consensus
+                    .validate_batch(&conn, last_height, last_hash, &txs, last_height, last_hash)
+                    .await?
+                    .is_none()
+                {
+                    self.fulfill_pending_with(Value::new_batch_raw(last_height, last_hash, txs))
                         .await?;
-                        return Ok(true);
-                    }
+                    return Ok(true);
                 }
             }
         }
-
         // One build job at a time — a second snapshot while one is in flight
         // would validate the same pool twice and race it on apply.
         let build_in_flight = self
