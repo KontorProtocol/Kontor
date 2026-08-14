@@ -473,7 +473,26 @@ impl<E: Executor> Reactor<E> {
                     self.try_fulfill_pending_proposal().await
                         .context("try_fulfill_pending_proposal failed (hard deadline)")?;
                 }
-                Some(msg) = consensus_rx => {
+                msg = consensus_rx => {
+                    // A closed engine channel is the consensus engine DYING —
+                    // for a validator that is the third route to the silent
+                    // desync of 2026-08-04, and it must be fatal. Unless we are
+                    // being stopped: teardown races this arm against the cancel
+                    // arm above, so consult the signal instead of guessing.
+                    //
+                    // The asymmetry with `block_rx`/`mempool_rx` is deliberate:
+                    // their `Some(...)` patterns can stay, because their
+                    // producers are SUPERVISED subsystems — a dead follower
+                    // surfaces through the supervisor's `first_exit`, while the
+                    // in-process Malachite actor has no handle of its own and
+                    // this channel is the only way its death reaches anyone.
+                    let Some(msg) = msg else {
+                        return if self.shutdown.is_cancelled() {
+                            Ok(())
+                        } else {
+                            Err(anyhow::anyhow!("consensus engine channel closed"))
+                        };
+                    };
                     debug!("REACTOR: processing consensus msg");
                     let consensus_result = self.handle_consensus_msg(msg)
                         .await
@@ -506,6 +525,12 @@ impl<E: Executor> Reactor<E> {
                         let err_msg = result.as_ref().err().map(|e| format!("{e:#}"));
                         let _ = ret_tx.send(result);
                         if let Some(msg) = err_msg {
+                            // Fatal on purpose, and NOT user-triggerable: an
+                            // `Err` out of `simulate` is infrastructure-only by
+                            // construction (savepoint, DB, executor plumbing) —
+                            // user-level op failures ride inside `Ok(results)`
+                            // as per-op error fields. I5: this node's own I/O
+                            // failing must stop this node.
                             bail!("simulation failed: {msg}");
                         }
                     }
