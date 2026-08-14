@@ -7,7 +7,7 @@ use std::time::Duration;
 use crate::api::Env;
 use anyhow::Result;
 use clap::{Parser, Subcommand};
-use futures_util::future;
+use futures_util::{FutureExt, future};
 use indexer::database::queries::select_recent_blocks;
 use indexer::event::EventSubscriber;
 use indexer::info::{compute_info_core, run_info_publisher};
@@ -218,9 +218,6 @@ async fn run_daemon(config: Config) -> Result<()> {
         error!(target: "panic", "Panic at {}: {}", location, message);
         let _ = panic_tx.send(format!("panic at {location}: {message}"));
     }));
-    // The long-lived subsystems, named for the exit message. None of them is
-    // optional: the first one to exit takes the node with it.
-    let mut subsystems: Vec<(&'static str, JoinHandle<Result<()>>)> = Vec::new();
     let filename = "state.db";
     let reader = database::Reader::new(&config.data_dir, filename).await?;
     let writer = database::Writer::new(&config.data_dir, filename).await?;
@@ -239,24 +236,16 @@ async fn run_daemon(config: Config) -> Result<()> {
     let (info_tx, info_rx) = tokio::sync::watch::channel(initial_info);
     // Recomputes `InfoCore` off the `Event` broadcast and republishes it
     // for long-poll `GET /api/` readers — no reactor involvement.
-    subsystems.push((
-        "info publisher",
-        run_info_publisher(
-            shutdown.signal(),
-            event_subscriber.subscribe(),
-            reader.clone(),
-            info_tx,
-        ),
-    ));
+    let info_publisher_handle = run_info_publisher(
+        shutdown.signal(),
+        event_subscriber.subscribe(),
+        reader.clone(),
+        info_tx,
+    );
     let (simulate_tx, simulate_rx) = mpsc::channel(available_parallelism()?.into());
     let (fees_tx, fees_rx) = tokio::sync::watch::channel(indexer_types::Fees::floor(1));
-    subsystems.push((
-        "event subscriber",
-        event_subscriber.run(shutdown.signal(), event_rx),
-    ));
-    subsystems.push((
-        "api",
-        api::run(
+    let event_subscriber_handle = event_subscriber.run(shutdown.signal(), event_rx);
+    let api_handle = api::run(
             Env {
                 config: config.clone(),
                 shutdown: shutdown.signal(),
@@ -279,8 +268,7 @@ async fn run_daemon(config: Config) -> Result<()> {
             },
             prom_handle.clone(),
         )
-        .await?,
-    ));
+        .await?;
 
     let known_hashes = {
         let conn = reader.connection().await?;
@@ -300,7 +288,6 @@ async fn run_daemon(config: Config) -> Result<()> {
         config.zmq_address.clone(),
     )
     .await;
-    subsystems.push(("bitcoin follower", follower_handle));
 
     let private_key = indexer::consensus::signing::resolve_consensus_private_key(
         config.consensus_mode,
@@ -322,9 +309,7 @@ async fn run_daemon(config: Config) -> Result<()> {
     };
 
     let (ready_tx, ready_rx) = oneshot::channel();
-    subsystems.push((
-        "reactor",
-        reactor::run(
+    let reactor_handle = reactor::run(
             config.starting_block_height,
             shutdown.signal(),
             writer,
@@ -346,8 +331,24 @@ async fn run_daemon(config: Config) -> Result<()> {
                 enabled: config.prune,
                 retain_blocks: config.prune_retain_blocks,
             },
-        ),
-    ));
+        );
+
+    // The long-lived subsystems, named for the exit message. None of them is
+    // optional: the first one to exit takes the node with it.
+    //
+    // The ORDER is attribution policy, not bookkeeping: when one failure
+    // cascades, its victims can finish in the same poll, and `select_all`
+    // breaks same-poll ties by lowest index — so cascade SOURCES go first.
+    // The reactor feeds on everything and everything feeds on the follower's
+    // bitcoind view; the api and the two broadcast consumers only ever die
+    // downstream of those.
+    let mut subsystems: Vec<(&'static str, JoinHandle<Result<()>>)> = vec![
+        ("reactor", reactor_handle),
+        ("bitcoin follower", follower_handle),
+        ("api", api_handle),
+        ("event subscriber", event_subscriber_handle),
+        ("info publisher", info_publisher_handle),
+    ];
 
     // Arm readiness off the critical path. Waiting on `ready_rx` here instead
     // would mean a reactor that dies during startup reports "channel closed" —
@@ -471,12 +472,20 @@ enum Stop {
     Fatal(anyhow::Error),
 }
 
-/// Resolves when the first subsystem exits, removing it from `subsystems` so
-/// the caller can still drain the rest.
+/// Resolves when the first subsystem exits, removing every already-finished
+/// subsystem from `subsystems` so the caller can still drain the rest.
 ///
 /// Every exit here is fatal, clean or not: this only runs before anything has
 /// asked the node to stop, and a subsystem that returns `Ok(())` unbidden has
 /// stopped doing its job just as surely as one that returned an error.
+///
+/// One real failure cascades: channels close behind the dying subsystem, and
+/// its dependents can finish in the same poll — some of them CLEANLY, since a
+/// task whose input channel closed has, from its own point of view, simply run
+/// out of work. Two layers keep the cause honest: the vec is ordered with
+/// cascade sources first (`select_all` breaks same-poll ties by lowest index),
+/// and when the winner is only a clean-exit sentinel, a sweep of the other
+/// already-finished handles prefers any real error or panic over it.
 async fn first_exit(subsystems: &mut Vec<(&'static str, JoinHandle<Result<()>>)>) -> Stop {
     // `select_all` panics on an empty iterator, and a panic in the shutdown path
     // is the last thing this code should contribute. Unreachable while `main`
@@ -486,11 +495,47 @@ async fn first_exit(subsystems: &mut Vec<(&'static str, JoinHandle<Result<()>>)>
     }
     let (result, index, _) = future::select_all(subsystems.iter_mut().map(|(_, h)| h)).await;
     let (name, _) = subsystems.remove(index);
-    Stop::Fatal(match result {
+    let mut cause = exit_error(name, result);
+
+    if cause.downcast_ref::<stopper::UnexpectedExit>().is_some() {
+        // Every handle that is ALREADY finished must leave the vec here — the
+        // drain will await the survivors, and polling a completed JoinHandle
+        // again panics — so the sweep collects them all, keeping the first
+        // real error it finds as the cause and logging the rest as cascade.
+        let mut i = 0;
+        while i < subsystems.len() {
+            match (&mut subsystems[i].1).now_or_never() {
+                Some(result) => {
+                    let (name, _) = subsystems.remove(i);
+                    let e = exit_error(name, result);
+                    if cause.downcast_ref::<stopper::UnexpectedExit>().is_some()
+                        && e.downcast_ref::<stopper::UnexpectedExit>().is_none()
+                    {
+                        warn!("{cause:#} (a cascade of the failure reported instead)");
+                        cause = e;
+                    } else {
+                        warn!("{e:#} (finished in the same poll as the reported failure)");
+                    }
+                }
+                None => i += 1,
+            }
+        }
+    }
+    Stop::Fatal(cause)
+}
+
+/// One finished subsystem handle, as the error the supervisor would report. A
+/// clean-but-unbidden exit becomes a typed [`stopper::UnexpectedExit`] so cause
+/// attribution can rank real errors above manufactured ones.
+fn exit_error(
+    name: &'static str,
+    result: std::result::Result<Result<()>, tokio::task::JoinError>,
+) -> anyhow::Error {
+    match result {
         Ok(Err(e)) => e.context(format!("{name} failed")),
         Err(e) => anyhow::anyhow!("{name} task panicked: {e}"),
-        Ok(Ok(())) => anyhow::anyhow!("{name} exited without a shutdown request"),
-    })
+        Ok(Ok(())) => anyhow::Error::new(stopper::UnexpectedExit(name)),
+    }
 }
 
 fn load_genesis_validators(config: &Config) -> Result<Vec<runtime::GenesisValidator>> {
@@ -543,6 +588,34 @@ mod tests {
         let msg = format!("{err:#}");
         assert!(msg.contains("reactor failed"), "{msg}");
         assert!(msg.contains("316333"), "the cause must reach the operator");
+    }
+
+    /// A dying subsystem often takes an innocent neighbour with it IN THE SAME
+    /// POLL: the neighbour's input channel closes and it exits cleanly — from
+    /// its own point of view it just ran out of work. Whatever the vec order
+    /// says, the clean exit must never outrank the real error as the cause.
+    #[tokio::test]
+    async fn a_real_error_outranks_a_simultaneous_clean_exit() {
+        // Sentinel FIRST, so `select_all`'s index tie-break alone would pick
+        // it; the sweep must still surface the real error behind it.
+        let clean = subsystem(Ok(()));
+        let failed = subsystem(Err(anyhow::anyhow!("database disk image is malformed")));
+        while !(clean.is_finished() && failed.is_finished()) {
+            tokio::task::yield_now().await;
+        }
+        let mut subsystems = vec![("event subscriber", clean), ("reactor", failed)];
+
+        let err = exit_status(first_exit(&mut subsystems).await, &[])
+            .expect_err("a real error was present and must fail the process");
+        let msg = format!("{err:#}");
+        assert!(
+            msg.contains("reactor failed") && msg.contains("malformed"),
+            "the real error must be the cause, not the clean-exit sentinel: {msg}"
+        );
+        assert!(
+            subsystems.is_empty(),
+            "every finished handle must leave the vec — the drain polls the rest"
+        );
     }
 
     /// A subsystem that returns `Ok(())` unbidden has stopped doing its job just

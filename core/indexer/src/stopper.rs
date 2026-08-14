@@ -42,6 +42,25 @@ pub fn signal_received() -> impl Future<Output = ()> {
     }
 }
 
+/// A subsystem finished CLEANLY while nobody had asked the node to stop.
+///
+/// Typed, so cause-attribution can tell a manufactured error from a real one:
+/// one failure cascades — channels close behind the dying subsystem and its
+/// dependents can finish in the same poll, often `Ok` (from their own point of
+/// view they simply ran out of work). When a sentinel and a real error are
+/// ready together, the real error is the cause; position alone cannot always
+/// know that.
+#[derive(Debug)]
+pub struct UnexpectedExit(pub &'static str);
+
+impl std::fmt::Display for UnexpectedExit {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{} exited without a shutdown request", self.0)
+    }
+}
+
+impl std::error::Error for UnexpectedExit {}
+
 /// The authority to stop the node. `main` holds the only one.
 ///
 /// Subsystems get a [`ShutdownSignal`], which can observe the decision but not

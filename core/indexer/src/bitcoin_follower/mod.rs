@@ -8,7 +8,9 @@ use tokio::{
 };
 
 use crate::{
-    bitcoin_client::client::BitcoinRpc, block::TransactionFilterMap, stopper::ShutdownSignal,
+    bitcoin_client::client::BitcoinRpc,
+    block::TransactionFilterMap,
+    stopper::{ShutdownSignal, UnexpectedExit},
 };
 
 use self::{
@@ -88,7 +90,7 @@ pub async fn run<C: BitcoinRpc>(
 
 /// Turn a finished poller/listener task into the follower's own result.
 fn subsystem_exit(
-    name: &str,
+    name: &'static str,
     result: std::result::Result<Result<()>, JoinError>,
     shutdown: &ShutdownSignal,
 ) -> Result<()> {
@@ -97,6 +99,9 @@ fn subsystem_exit(
         Err(e) => Err(anyhow!("{name} task panicked: {e}")),
         // Cancelled is the one way out that isn't a failure.
         Ok(Ok(())) if shutdown.is_cancelled() => Ok(()),
-        Ok(Ok(())) => Err(anyhow!("{name} exited without being cancelled")),
+        // Typed, not a bare message: this error is MANUFACTURED from a clean
+        // exit, and the supervisor must be able to rank a real error above it
+        // when both surface in the same poll.
+        Ok(Ok(())) => Err(anyhow::Error::new(UnexpectedExit(name))),
     }
 }
