@@ -1,3 +1,5 @@
+use crate::stopper::ShutdownSignal;
+use anyhow::Result;
 use indexer_types::Event;
 use tokio::{
     sync::{
@@ -6,7 +8,6 @@ use tokio::{
     },
     task::JoinHandle,
 };
-use tokio_util::sync::CancellationToken;
 
 #[derive(Debug, Clone)]
 pub struct EventSubscriber {
@@ -26,9 +27,9 @@ impl EventSubscriber {
 
     pub fn run(
         &self,
-        cancel_token: CancellationToken,
+        shutdown: ShutdownSignal,
         mut rx: mpsc::Receiver<Event>,
-    ) -> JoinHandle<()> {
+    ) -> JoinHandle<Result<()>> {
         let sender = self.sender.clone();
         tokio::spawn(async move {
             loop {
@@ -36,11 +37,12 @@ impl EventSubscriber {
                     Some(event) = rx.recv() => {
                         let _ = sender.send(event);
                     }
-                    _ = cancel_token.cancelled() => {
+                    _ = shutdown.cancelled() => {
                         break;
                     }
                 }
             }
+            Ok(())
         })
     }
 }

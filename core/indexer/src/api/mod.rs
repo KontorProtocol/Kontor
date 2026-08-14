@@ -8,12 +8,12 @@ pub mod router;
 
 use std::{net::SocketAddr, time::Duration};
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use axum_server::Handle;
 pub use env::Env;
 use metrics_exporter_prometheus::PrometheusHandle;
 use tokio::task::JoinHandle;
-use tracing::{error, info};
+use tracing::info;
 
 /// Wall-clock budget the router's `TimeoutLayer` allows any `/api`
 /// request. The long-poll `GET /api/` handler derives its `?wait=` cap
@@ -22,15 +22,15 @@ use tracing::{error, info};
 /// router and the handler both read this constant.
 pub const API_REQUEST_TIMEOUT_MS: u64 = 30_000;
 
-pub async fn run(env: Env, prom_handle: PrometheusHandle) -> Result<JoinHandle<()>> {
+pub async fn run(env: Env, prom_handle: PrometheusHandle) -> Result<JoinHandle<Result<()>>> {
     let addr = SocketAddr::from(([0, 0, 0, 0], env.config.api_port));
     let handle = Handle::new();
 
     tokio::spawn({
         let handle = handle.clone();
-        let cancel_token = env.cancel_token.clone();
+        let shutdown = env.shutdown.clone();
         async move {
-            cancel_token.cancelled().await;
+            shutdown.cancelled().await;
             handle.graceful_shutdown(Some(Duration::from_secs(10)));
         }
     });
@@ -51,14 +51,17 @@ pub async fn run(env: Env, prom_handle: PrometheusHandle) -> Result<JoinHandle<(
     let router = router::new(env, prom_handle);
 
     Ok(tokio::spawn(async move {
-        if axum_server::bind(addr)
+        // Resolves on a bind failure (port already taken) as well as on a serve
+        // error, and both are fatal: the probes are the only way an orchestrator
+        // sees inside this process, so a node that keeps running without them is
+        // worse than one that stops. Returning the error is all the reporting
+        // this needs — the supervisor in `main` decides what it means.
+        axum_server::bind(addr)
             .handle(handle)
             .serve(router.into_make_service_with_connect_info::<SocketAddr>())
             .await
-            .is_err()
-        {
-            error!("HTTP server panicked on join");
-        }
+            .with_context(|| format!("HTTP server failed on {addr}"))?;
         info!("HTTP server exited");
+        Ok(())
     }))
 }

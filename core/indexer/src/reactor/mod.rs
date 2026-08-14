@@ -25,17 +25,19 @@ use tokio::{
     },
     task::JoinHandle,
 };
-use tokio_util::sync::CancellationToken;
 
 use bitcoin::{BlockHash, Txid};
 use malachitebft_app_channel::NetworkMsg;
 use malachitebft_app_channel::app::types::LocallyProposedValue;
 use malachitebft_app_channel::app::types::core::VotingPower;
 use malachitebft_core_types::{LinearTimeouts, Round};
-use tracing::{debug, error, info, warn};
+use metrics::gauge;
+use tracing::{debug, info, warn};
 
 use crate::consensus::finality_types::StateEvent;
 use crate::consensus::{BatchTx, Ctx};
+use crate::metrics::{DEFERRED_DECISIONS, PENDING_BLOCKS};
+use crate::stopper::ShutdownSignal;
 use crate::{
     bitcoin_follower::event::{BlockEvent, MempoolEvent},
     consensus::{Genesis, Validator, ValidatorSet, signing::PublicKey},
@@ -105,7 +107,7 @@ pub struct PruneConfig {
 pub struct Reactor<E: Executor> {
     executor: E,
     runtime: Runtime,
-    cancel_token: CancellationToken,
+    shutdown: ShutdownSignal,
     block_rx: Receiver<BlockEvent>,
     mempool_rx: Receiver<MempoolEvent>,
     ready_tx: Option<oneshot::Sender<bool>>,
@@ -132,7 +134,7 @@ impl<E: Executor> Reactor<E> {
         runtime: Runtime,
         block_rx: Receiver<BlockEvent>,
         mempool_rx: Receiver<MempoolEvent>,
-        cancel_token: CancellationToken,
+        shutdown: ShutdownSignal,
         ready_tx: Option<oneshot::Sender<bool>>,
         event_tx: Option<mpsc::Sender<Event>>,
         simulate_rx: Option<Receiver<Simulation>>,
@@ -150,7 +152,7 @@ impl<E: Executor> Reactor<E> {
         Self {
             executor,
             runtime,
-            cancel_token,
+            shutdown,
             block_rx,
             mempool_rx,
             simulate_rx,
@@ -365,6 +367,14 @@ impl<E: Executor> Reactor<E> {
                 }
             }
 
+            // Publish the backlog gauges from the one point every state change
+            // passes through, rather than from each mutation site. Both queues
+            // matter most exactly when nothing is happening — a wedged node
+            // executes no blocks and decides no batches, so a gauge hung off
+            // either of those paths would go stale precisely when it is needed.
+            gauge!(PENDING_BLOCKS).set(self.consensus.pending_blocks.len() as f64);
+            gauge!(DEFERRED_DECISIONS).set(self.consensus.deferred_decisions.len() as f64);
+
             let hard_deadline_instant = self.consensus.pending_proposal.as_ref().map(|p| {
                 let deadline = p.hard_deadline();
                 let remaining = deadline.saturating_duration_since(Instant::now());
@@ -396,7 +406,7 @@ impl<E: Executor> Reactor<E> {
             };
 
             select! {
-                _ = self.cancel_token.cancelled() => {
+                _ = self.shutdown.cancelled() => {
                     info!("Cancelled");
                     break;
                 }
@@ -596,7 +606,7 @@ async fn build_genesis_from_staking(runtime: &mut Runtime) -> Result<Genesis> {
 pub async fn create_runtime_executor(
     starting_block_height: u64,
     writer: &database::Writer,
-    cancel_token: CancellationToken,
+    shutdown: ShutdownSignal,
     bitcoin_client: crate::bitcoin_client::Client,
     replay_tx: Option<mpsc::Sender<u64>>,
     genesis_validators: &[crate::runtime::GenesisValidator],
@@ -679,7 +689,7 @@ pub async fn create_runtime_executor(
         .await
         .context("Failed to publish native contracts")?;
 
-    let mut exec = executor::RuntimeExecutor::new(cancel_token, bitcoin_client);
+    let mut exec = executor::RuntimeExecutor::new(shutdown, bitcoin_client);
     if let Some(tx) = replay_tx {
         exec = exec.with_replay_tx(tx);
     }
@@ -734,7 +744,7 @@ pub async fn start_consensus(
 #[allow(clippy::too_many_arguments)]
 pub fn run(
     starting_block_height: u64,
-    cancel_token: CancellationToken,
+    shutdown: ShutdownSignal,
     writer: database::Writer,
     block_rx: Receiver<BlockEvent>,
     mempool_rx: Receiver<MempoolEvent>,
@@ -751,14 +761,14 @@ pub fn run(
     consensus_listen_addr: tokio::sync::watch::Sender<Option<String>>,
     network: bitcoin::Network,
     prune: PruneConfig,
-) -> JoinHandle<()> {
+) -> JoinHandle<Result<()>> {
     tokio::spawn({
         async move {
             let result: Result<()> = async {
                 let (exec, mut runtime, last_height, last_hash) = create_runtime_executor(
                     starting_block_height,
                     &writer,
-                    cancel_token.clone(),
+                    shutdown.clone(),
                     bitcoin_client,
                     replay_tx,
                     &genesis_validators,
@@ -829,7 +839,7 @@ pub fn run(
                         _ = log_ticker.tick() => {
                             warn!("Still waiting for initial mempool sync — bitcoind/listener not ready");
                         }
-                        _ = cancel_token.cancelled() => {
+                        _ = shutdown.cancelled() => {
                             return Ok(());
                         }
                     }
@@ -869,7 +879,7 @@ pub fn run(
                     runtime,
                     block_rx,
                     mempool_rx,
-                    cancel_token.clone(),
+                    shutdown.clone(),
                     ready_tx,
                     event_tx,
                     simulate_rx,
@@ -896,12 +906,12 @@ pub fn run(
             }
             .await;
 
-            if let Err(e) = result {
-                error!("Reactor error: {e:#}, exiting");
-                cancel_token.cancel();
-            }
-
+            // Neither logged nor cancelled here: the reactor reports by
+            // returning, and the supervisor in `main` owns what that means for
+            // the process. Cancelling from inside a subsystem is what made a
+            // fatal error indistinguishable from a requested stop.
             info!("Exited");
+            result
         }
     })
 }
