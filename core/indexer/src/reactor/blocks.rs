@@ -74,12 +74,24 @@ impl<E: Executor> Reactor<E> {
         self.runtime.component_cache.clear();
         self.last_height = height;
 
-        if let Ok(Some(row)) = select_block_at_height(&self.db_conn(), height).await {
-            self.last_hash = Some(row.hash);
-            info!("Rollback to height {} ({})", height, row.hash);
-        } else {
-            self.last_hash = None;
-            warn!("Rollback to height {}, no previous block found", height);
+        // Err is NOT "no previous block": folding a transient read failure into
+        // `last_hash = None` makes the next batch anchored at this height fail its
+        // hash gate and record-only while every peer executes it — an over-skip
+        // that forks the checkpoint (I5, and the exact Err-vs-None distinction
+        // `missing_txids` argues for). Only a genuine absent row (pre-genesis
+        // truncation) clears the hash; a read error stops the node.
+        match select_block_at_height(&self.db_conn(), height)
+            .await
+            .context("Failed to read the post-rollback tip block")?
+        {
+            Some(row) => {
+                info!("Rollback to height {} ({})", height, row.hash);
+                self.last_hash = Some(row.hash);
+            }
+            None => {
+                warn!("Rollback to height {}, no previous block found", height);
+                self.last_hash = None;
+            }
         }
 
         // Refresh cached validator set — rolled-back state may have different active set

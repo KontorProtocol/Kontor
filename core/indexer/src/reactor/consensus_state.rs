@@ -486,13 +486,20 @@ impl ConsensusState {
             );
         }
 
-        let current_height = match select_latest_consensus_height(&conn).await {
-            Ok(Some(h)) => {
+        // `Err` must be loud, like the suffix delete three lines up (#424): folding
+        // a transient read failure into "fresh start" resumes a node with thousands
+        // of decided heights at height 1, re-deciding history. Only a genuinely
+        // empty table is a fresh start.
+        let current_height = match select_latest_consensus_height(&conn)
+            .await
+            .context("Failed to read the latest consensus height")?
+        {
+            Some(h) => {
                 let resume = Height::new(h + 1);
                 info!(%resume, "Resuming consensus from DB");
                 resume
             }
-            _ => Height::new(1),
+            None => Height::new(1),
         };
 
         // Rebuild finality tracking. Without this a restart inside the window drops
