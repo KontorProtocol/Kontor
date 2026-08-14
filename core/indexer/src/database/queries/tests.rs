@@ -2638,6 +2638,38 @@ async fn test_insert_and_select_batch() -> Result<()> {
     Ok(())
 }
 
+/// The suffix cleanup must cap its cutoff below the FIRST gap in the recorded
+/// sequence, even when a later out-of-order low-anchor row would otherwise drag
+/// the `MAX(anchor <= tip)` cutoff above the gap. Here height 900 is rowless
+/// (deferred, never recorded) while a declined block at height 901 carries a low
+/// anchor <= tip — the exact race that made 900 a permanent hole.
+#[tokio::test]
+async fn suffix_cleanup_caps_the_cutoff_below_the_first_gap() -> Result<()> {
+    let (_reader, writer, _temp_dir) = new_test_db().await?;
+    let conn = writer.connection();
+
+    let tip: u64 = 205;
+    let h = new_mock_block_hash(tip as u32);
+    insert_block(&conn, BlockRow::builder().height(tip).hash(h).build()).await?;
+
+    // Contiguous, executed history up to 899, all anchored at/below the tip.
+    for ch in 1..=899u64 {
+        insert_batch(&conn, ch, tip, &h.to_string(), b"c", false).await?;
+    }
+    // Height 900 is NEVER recorded (a rowless deferred survivor). Height 901 is a
+    // declined block recording its own low anchor (<= tip) at a high height.
+    insert_batch(&conn, 901, 203, &h.to_string(), b"c", true).await?;
+
+    let (_deleted, x) = delete_unexecuted_batch_suffix(&conn, tip).await?;
+    assert_eq!(
+        x, 899,
+        "cutoff must stop at the last contiguous height, not jump to 901 over the 900 gap"
+    );
+    assert!(select_batch(&conn, 901).await?.is_none(), "901 trimmed");
+    assert!(select_batch(&conn, 899).await?.is_some(), "899 kept");
+    Ok(())
+}
+
 #[tokio::test]
 async fn test_select_min_batch_height() -> Result<()> {
     let (_reader, writer, _temp_dir) = new_test_db().await?;

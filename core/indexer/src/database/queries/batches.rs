@@ -49,6 +49,15 @@ pub async fn insert_batch_txids(
 /// NOT an anchor band: deleting by `anchor_height > ?` punches holes in the
 /// consensus-height sequence when anchors are non-monotone across a rollback,
 /// and a gap can never be refilled locally. Returns (deleted batches, X).
+///
+/// X is additionally capped at the FIRST GAP in the recorded sequence. The bare
+/// `MAX(consensus_height WHERE anchor <= tip)` heuristic is defeated by rows
+/// written out of decision order — a declined/stale block records its own low
+/// anchor at a high consensus height (see `record_declined_block`), dragging X
+/// above a lower, still-rowless height. Resuming above such a gap makes it a
+/// permanent unrefillable hole (Malachite never re-delivers it, sync never
+/// backfills below the resume point). Trimming too much is safe — every trimmed
+/// height re-syncs and re-processes idempotently — so cap X below any gap.
 pub async fn delete_unexecuted_batch_suffix(
     conn: &Connection,
     last_block_height: u64,
@@ -59,10 +68,26 @@ pub async fn delete_unexecuted_batch_suffix(
             params![last_block_height],
         )
         .await?;
-    let x: u64 = match rows.next().await? {
+    let anchor_x: u64 = match rows.next().await? {
         Some(row) => row.get(0)?,
         None => 0,
     };
+    // The smallest recorded height with no immediate successor — i.e. the last
+    // height of the first contiguous run. Everything above it may straddle a gap
+    // and must be re-synced, so X cannot exceed it.
+    let mut rows = conn
+        .query(
+            "SELECT MIN(consensus_height) FROM batches b \
+             WHERE NOT EXISTS ( \
+               SELECT 1 FROM batches n WHERE n.consensus_height = b.consensus_height + 1)",
+            (),
+        )
+        .await?;
+    let first_run_end: u64 = match rows.next().await? {
+        Some(row) => row.get::<Option<u64>>(0)?.unwrap_or(anchor_x),
+        None => anchor_x,
+    };
+    let x = anchor_x.min(first_run_end);
     conn.execute(
         "DELETE FROM unconfirmed_batch_txs WHERE batch_height > ?",
         params![x],

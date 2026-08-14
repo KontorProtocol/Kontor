@@ -126,11 +126,16 @@ pub struct Reactor<E: Executor> {
     /// Shared with the API (`Env.consensus_listen_addr`); written on the first
     /// `Listening` (see `handle_consensus_msg`'s `ConsensusReady` arm).
     consensus_listen_addr: tokio::sync::watch::Sender<Option<String>>,
-    /// Consensus I/O in flight — bitcoind validation running off the loop,
-    /// polled as an arm of the root `select!`. FIFO; bounded by construction
-    /// (at most one build job and one proposal validation can be outstanding:
-    /// `pending_proposal` is single and the engine awaits each proposal reply
-    /// before sending the next part). See `batches::IoJob`.
+    /// Consensus I/O in flight — bitcoind validation running off the loop, ALL
+    /// raced together as one arm of the root `select!` (`select_all`), so a
+    /// stalled job cannot park another. Small, not a fixed size: at most one
+    /// BUILD job (the `pending_proposal` is single, and `try_fulfill` refuses a
+    /// second build while one is in flight), plus one VALIDATE job per in-flight
+    /// proposal round — the `undecided` guard admits one per (height, round), and
+    /// a fresh round at the same height can arrive before the previous round's
+    /// job has applied. Bounded in practice by concurrent rounds, which the
+    /// round-timeout machinery keeps to a handful. A `VecDeque` for cheap
+    /// removal-by-index after `select_all`. See `batches::IoJob`.
     io_jobs: VecDeque<batches::IoJob>,
     /// Verdicts that outlived their proposal, banked for the next one — see
     /// `batches::ValidatedCandidates`.
@@ -265,7 +270,7 @@ impl<E: Executor> Reactor<E> {
 
                 // A block at or below the tip is already applied and can never be
                 // proposed or executed again — buffering it is not merely useless,
-                // it HALTS THE CHAIN. `make_value` proposes the minimum pending
+                // it HALTS THE CHAIN. `pending_block_value` proposes the minimum pending
                 // height, peers still hold the block so they vote it valid, and it
                 // is decided; the finalize gate then refuses it as out of order and
                 // nothing removes it from the buffer. It stays the minimum forever,

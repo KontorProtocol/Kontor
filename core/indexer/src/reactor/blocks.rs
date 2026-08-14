@@ -74,12 +74,32 @@ impl<E: Executor> Reactor<E> {
         self.runtime.component_cache.clear();
         self.last_height = height;
 
-        if let Ok(Some(row)) = select_block_at_height(&self.db_conn(), height).await {
-            self.last_hash = Some(row.hash);
-            info!("Rollback to height {} ({})", height, row.hash);
-        } else {
-            self.last_hash = None;
-            warn!("Rollback to height {}, no previous block found", height);
+        // Drop candidates validated against the old tip. An in-flight `IoJob` is
+        // still safe — its apply re-checks the anchor and re-runs `validate_batch`
+        // against the new tip before doing anything — but the banked set is
+        // consumed on a LATER `try_fulfill` with only an anchor-equality guard, so
+        // clearing it here is the belt to that suspenders and keeps a stale bank
+        // from ever reaching the proposer.
+        self.validated_candidates = None;
+
+        // Err is NOT "no previous block": folding a transient read failure into
+        // `last_hash = None` makes the next batch anchored at this height fail its
+        // hash gate and record-only while every peer executes it — an over-skip
+        // that forks the checkpoint (I5, and the exact Err-vs-None distinction
+        // `missing_txids` argues for). Only a genuine absent row (pre-genesis
+        // truncation) clears the hash; a read error stops the node.
+        match select_block_at_height(&self.db_conn(), height)
+            .await
+            .context("Failed to read the post-rollback tip block")?
+        {
+            Some(row) => {
+                info!("Rollback to height {} ({})", height, row.hash);
+                self.last_hash = Some(row.hash);
+            }
+            None => {
+                warn!("Rollback to height {}, no previous block found", height);
+                self.last_hash = None;
+            }
         }
 
         // Refresh cached validator set — rolled-back state may have different active set
@@ -413,7 +433,7 @@ impl<E: Executor> Reactor<E> {
         self.last_height = height;
         self.last_hash = Some(hash);
         // Blocks at or below the tip can no longer be proposed or decided.
-        // Dropping them keeps `make_value` proposing only heights still ahead,
+        // Dropping them keeps `pending_block_value` proposing only heights still ahead,
         // and keeps `validate_batch`'s "a block is pending" gate honest.
         self.consensus.pending_blocks.retain(|&h, _| h > height);
 

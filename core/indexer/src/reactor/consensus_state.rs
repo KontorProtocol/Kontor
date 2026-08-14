@@ -46,6 +46,7 @@ pub enum ConsensusResult {
     BatchProcessed { txids: Vec<String> },
 }
 
+#[derive(Clone)]
 pub struct DeferredDecision {
     pub consensus_height: Height,
     pub value: Value,
@@ -486,13 +487,20 @@ impl ConsensusState {
             );
         }
 
-        let current_height = match select_latest_consensus_height(&conn).await {
-            Ok(Some(h)) => {
+        // `Err` must be loud, like the suffix delete three lines up (#424): folding
+        // a transient read failure into "fresh start" resumes a node with thousands
+        // of decided heights at height 1, re-deciding history. Only a genuinely
+        // empty table is a fresh start.
+        let current_height = match select_latest_consensus_height(&conn)
+            .await
+            .context("Failed to read the latest consensus height")?
+        {
+            Some(h) => {
                 let resume = Height::new(h + 1);
                 info!(%resume, "Resuming consensus from DB");
                 resume
             }
-            _ => Height::new(1),
+            None => Height::new(1),
         };
 
         // Rebuild finality tracking. Without this a restart inside the window drops
@@ -948,7 +956,7 @@ impl ConsensusState {
 
     /// Validate batch-level rules. Returns a rejection reason if any rule
     /// fails — the single gate every batch passes, at both propose time
-    /// (`make_value`) and proposal-acceptance time
+    /// (`make_value_snapshot`) and proposal-acceptance time
     /// (`validate_and_accept_proposal`).
     pub(super) async fn validate_batch(
         &self,
