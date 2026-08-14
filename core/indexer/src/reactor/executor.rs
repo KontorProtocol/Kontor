@@ -76,6 +76,13 @@ pub trait Executor {
     /// data for batch execution — batches carry only txids.
     async fn resolve_transaction(&self, txid: &Txid) -> Option<bitcoin::Transaction>;
 
+    /// Batched [`resolve_transaction`]: resolve many txids in ONE round trip
+    /// where the backend supports it (bitcoind's JSON-RPC batch + tx cache),
+    /// returning `None` per still-unresolved txid, in input order. The reactor's
+    /// replay/sync path resolves whole decided batches at once, so a per-txid
+    /// RPC there is one round trip per historical transaction.
+    async fn resolve_transactions(&self, txids: &[Txid]) -> Vec<Option<bitcoin::Transaction>>;
+
     /// Execute a single transaction's operations at the given height.
     /// Called by the reactor after DB row insertion. Sets context and runs ops.
     /// Returns Err only for non-deterministic infrastructure failures.
@@ -121,6 +128,9 @@ impl Executor for NoopExecutor {
     }
     async fn resolve_transaction(&self, _txid: &Txid) -> Option<bitcoin::Transaction> {
         None
+    }
+    async fn resolve_transactions(&self, txids: &[Txid]) -> Vec<Option<bitcoin::Transaction>> {
+        txids.iter().map(|_| None).collect()
     }
     async fn execute_transaction(
         &self,
@@ -256,6 +266,26 @@ impl Executor for RuntimeExecutor {
             Err(e) => {
                 warn!(%txid, %e, "Failed to resolve transaction via RPC");
                 None
+            }
+        }
+    }
+    async fn resolve_transactions(&self, txids: &[Txid]) -> Vec<Option<bitcoin::Transaction>> {
+        // One JSON-RPC batch (cache-checked) instead of a round trip per txid.
+        match self.bitcoin_client.get_raw_transactions(txids).await {
+            Ok(results) => results
+                .into_iter()
+                .zip(txids)
+                .map(|(r, txid)| match r {
+                    Ok(tx) => Some(tx),
+                    Err(e) => {
+                        warn!(%txid, %e, "Failed to resolve transaction via RPC");
+                        None
+                    }
+                })
+                .collect(),
+            Err(e) => {
+                warn!(%e, "Batched transaction resolution failed");
+                txids.iter().map(|_| None).collect()
             }
         }
     }

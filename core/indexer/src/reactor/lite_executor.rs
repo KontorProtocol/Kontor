@@ -242,6 +242,10 @@ impl Executor for LiteExecutor {
     async fn resolve_transaction(&self, txid: &Txid) -> Option<bitcoin::Transaction> {
         self.mock_bitcoin.lock().unwrap().get_raw_transaction(txid)
     }
+    async fn resolve_transactions(&self, txids: &[Txid]) -> Vec<Option<bitcoin::Transaction>> {
+        let mock = self.mock_bitcoin.lock().unwrap();
+        txids.iter().map(|t| mock.get_raw_transaction(t)).collect()
+    }
 
     async fn execute_transaction(
         &self,

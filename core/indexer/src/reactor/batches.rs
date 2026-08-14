@@ -770,18 +770,20 @@ impl<E: Executor> Reactor<E> {
         }
 
         // Candidate filter: state predicates only. Everything that needs
-        // bitcoind happens in the I/O phase, off this loop.
+        // bitcoind happens in the I/O phase, off this loop. Iterate by key —
+        // the pool is keyed by txid, so `compute_txid()` per entry (a
+        // double-SHA256 over the serialized tx) would recompute what we already
+        // hold.
         let mut txs = Vec::new();
         let mut invalid_txids = Vec::new();
-        for (raw_tx, parsed) in self.consensus.pending_transactions.values() {
-            let txid = raw_tx.compute_txid();
-            if !unbatched_set.contains(&txid) {
+        for (txid, (raw_tx, parsed)) in &self.consensus.pending_transactions {
+            if !unbatched_set.contains(txid) {
                 continue;
             }
             if is_batchable(&parsed.inputs) {
                 txs.push(raw_tx.clone());
             } else {
-                invalid_txids.push(txid);
+                invalid_txids.push(*txid);
             }
         }
         for txid in &invalid_txids {
