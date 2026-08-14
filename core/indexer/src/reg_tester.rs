@@ -1511,10 +1511,12 @@ impl RegTesterCluster {
         }
         // Bounded: a node that wedges on shutdown is the failure this test is
         // here to catch, and an unbounded wait would report it as a hung suite
-        // instead of a failing assertion.
-        let status = tokio::time::timeout(Duration::from_secs(30), node.child.wait())
+        // instead of a failing assertion. Above the daemon's own 25s
+        // SHUTDOWN_BUDGET with margin, so a node that spends the full budget
+        // and then exits non-zero is observed as an EXIT, not a harness timeout.
+        let status = tokio::time::timeout(Duration::from_secs(45), node.child.wait())
             .await
-            .map_err(|_| anyhow!("Node {index} did not exit within 30s of SIGTERM"))??;
+            .map_err(|_| anyhow!("Node {index} did not exit within 45s of SIGTERM"))??;
         nc.running = None;
         Ok(status)
     }

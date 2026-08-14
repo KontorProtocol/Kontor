@@ -401,6 +401,21 @@ async fn run_daemon(config: Config) -> Result<()> {
     info!("Initiating shutdown");
     shutdown.cancel();
     let wedged = drain(subsystems, SHUTDOWN_BUDGET).await;
+    if !wedged.is_empty() {
+        // A subsystem that ignored its budget may be wedged SYNCHRONOUSLY, and
+        // a synchronously-wedged task can hang the runtime's own teardown —
+        // returning through `#[tokio::main]` would then spin forever with the
+        // budget already spent, liveness green, and nothing left to log. Exit
+        // here instead: abrupt, but the alternative is the hung green-probed
+        // process this whole change exists to kill.
+        if let Err(e) = exit_status(stop, &wedged) {
+            error!("Exited: {e:#}");
+        }
+        use std::io::Write;
+        let _ = std::io::stdout().flush();
+        let _ = std::io::stderr().flush();
+        std::process::exit(1);
+    }
     exit_status(stop, &wedged)
 }
 
@@ -410,7 +425,12 @@ async fn run_daemon(config: Config) -> Result<()> {
 /// listening to cancellation, and waiting longer has never once fixed that —
 /// without a bound the process hangs instead of exiting, which tells an
 /// orchestrator even less than exiting 0 did.
-const SHUTDOWN_BUDGET: Duration = Duration::from_secs(30);
+///
+/// Deliberately UNDER Kubernetes' default `terminationGracePeriodSeconds` (30s):
+/// the wedged-drain exit must beat the orchestrator's SIGKILL or the diagnostic
+/// is lost as a bare 137. The kontor-network helm charts should set the grace
+/// period above this with margin (45s) — see the infra repo.
+const SHUTDOWN_BUDGET: Duration = Duration::from_secs(25);
 
 /// Wait out the remaining subsystems after the stop decision has been made, and
 /// report any that were still running when the budget ran out.
@@ -458,6 +478,12 @@ fn exit_status(stop: Stop, wedged: &[&str]) -> Result<()> {
             info!("Exited");
             Ok(())
         }
+        // The wedged names ride ON the cause rather than replacing it — the
+        // operator needs both what killed the node and what then refused to die.
+        Stop::Fatal(cause) if !wedged.is_empty() => Err(cause.context(format!(
+            "additionally, {} never stopped within the shutdown budget",
+            wedged.join(", ")
+        ))),
         Stop::Fatal(cause) => {
             error!("Exited: {cause:#}");
             Err(cause)
@@ -686,6 +712,21 @@ mod tests {
         let err = exit_status(Stop::Signal, &wedged)
             .expect_err("a node that cannot shut down must not report success");
         assert!(format!("{err:#}").contains("reactor"), "{err:#}");
+    }
+
+    /// A fatal stop that ALSO had to abandon a subsystem reports both: the
+    /// cause is what the operator pages on, the wedged name is what they then
+    /// go find in the drain log.
+    #[test]
+    fn wedged_names_ride_on_the_fatal_cause() {
+        let err = exit_status(
+            Stop::Fatal(anyhow::anyhow!("reactor failed: db corrupt")),
+            &["api"],
+        )
+        .expect_err("fatal remains fatal with a wedged drain");
+        let msg = format!("{err:#}");
+        assert!(msg.contains("db corrupt"), "{msg}");
+        assert!(msg.contains("api") && msg.contains("never stopped"), "{msg}");
     }
 
     /// Defensive: `select_all` panics on an empty iterator, and the shutdown path
