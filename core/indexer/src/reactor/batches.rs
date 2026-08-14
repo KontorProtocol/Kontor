@@ -587,17 +587,49 @@ impl<E: Executor> Reactor<E> {
         // Execute in decided order. `validate_batch` enforces dependency
         // order at propose/accept time, so a decided batch — carrying 2/3+
         // signatures — is already ordered; no re-sort or re-check here.
-        let parsed_txs: Vec<indexer_types::Transaction> = batch_txs
-            .iter()
-            .map(|btx| {
-                self.executor.parse_transaction(btx).ok_or_else(|| {
-                    anyhow::anyhow!(
-                        "Failed to parse decided batch transaction {}",
-                        btx.compute_txid()
-                    )
-                })
-            })
-            .collect::<Result<Vec<_>>>()?;
+        //
+        // A parse failure here is a DETERMINISTIC content fact — parsing decided
+        // bytes reads no chain state, so every node fails identically — which per
+        // I5 must be handled the same everywhere and must NOT be node-fatal: a
+        // `?` here halts the whole chain (each node exits, re-syncs the same value,
+        // exits again). Proposal validation normally rejects unparseable txs before
+        // they are decided; if one is decided anyway, record the batch for sync and
+        // skip execution uniformly, rather than crash-looping the network.
+        let parsed_txs: Vec<indexer_types::Transaction> = {
+            let mut parsed = Vec::with_capacity(batch_txs.len());
+            let mut bad: Option<Txid> = None;
+            for btx in batch_txs {
+                match self.executor.parse_transaction(btx) {
+                    Some(p) => parsed.push(p),
+                    None => {
+                        bad = Some(btx.compute_txid());
+                        break;
+                    }
+                }
+            }
+            if let Some(txid) = bad {
+                error!(
+                    %txid,
+                    consensus_height = %consensus_height,
+                    "Decided batch contains an unparseable transaction — recording for sync \
+                     and skipping execution (deterministic; every node does the same)"
+                );
+                insert_batch(
+                    &conn,
+                    consensus_height.as_u64(),
+                    anchor_height,
+                    &anchor_hash.to_string(),
+                    certificate,
+                    false,
+                )
+                .await
+                .context("Failed to record unparseable batch for sync")?;
+                self.record_batch_txs(&conn, consensus_height, batch_txs, certified)
+                    .await?;
+                return Ok(BatchOutcome::RecordedOnly);
+            }
+            parsed
+        };
 
         // Track for finality — must happen once per batch execution
         let txids: Vec<Txid> = batch_txs.iter().map(|tx| tx.compute_txid()).collect();
