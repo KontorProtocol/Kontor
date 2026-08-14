@@ -310,20 +310,22 @@ fn build_replay_queue(
         }
     });
 
+    // Dropped positions per merged index, so the emit below filters by index and
+    // never re-hashes a tx the walk already hashed here.
     let mut all_excluded: HashSet<Txid> = HashSet::new();
-    let mut dropped_per_height: HashMap<u64, HashSet<Txid>> = HashMap::new();
+    let mut dropped_positions: HashMap<usize, HashSet<usize>> = HashMap::new();
     for &i in &execution_order {
         let (decision, txs) = &merged[i];
         if !matches!(decision.value, Value::Batch { .. }) {
             continue;
         }
         let mut dropped = HashSet::new();
-        for tx in txs {
+        for (pos, tx) in txs.iter().enumerate() {
             let txid = tx.compute_txid();
             if dropped_at(decision, &txid) {
                 all_excluded.insert(txid);
                 unavailable.insert(txid);
-                dropped.insert(txid);
+                dropped.insert(pos);
             } else if tx
                 .input
                 .iter()
@@ -341,7 +343,7 @@ fn build_replay_queue(
                 // divergence.
                 all_excluded.insert(txid);
                 unavailable.insert(txid);
-                dropped.insert(txid);
+                dropped.insert(pos);
             } else {
                 // A re-decided copy of a previously excluded tx: from here on its
                 // outputs exist again, so later children survive.
@@ -349,14 +351,21 @@ fn build_replay_queue(
             }
         }
         if !dropped.is_empty() {
-            dropped_per_height.insert(decision.consensus_height.as_u64(), dropped);
+            dropped_positions.insert(i, dropped);
         }
     }
 
-    // Emit the queue in its original (replay-first) order, applying the per-height
-    // drops computed above.
+    // Emit the queue in its original (replay-first) order — deliberately NOT the
+    // execution order above. Replay-first is the drain's LIVENESS order (a survivor
+    // BLOCK decision ahead of the replay set would stall the tip); the drain
+    // executes each batch only when the tip reaches its anchor, and among batches
+    // sharing an anchor it cannot reverse a cross-batch dependency: the dependent
+    // batch can only be a survivor while its dependency is one (both wait for the
+    // same tip in decided order), never replayed-ahead of a survivor dependency,
+    // because the tip passing an anchor drains every deferred batch at it. So the
+    // deterministic per-position drop set is safe under the node-local queue order.
     let mut queue = VecDeque::with_capacity(merged.len());
-    for (mut decision, txs) in merged {
+    for (idx, (mut decision, txs)) in merged.into_iter().enumerate() {
         if let Value::Batch {
             anchor_height,
             anchor_hash,
@@ -364,11 +373,12 @@ fn build_replay_queue(
         } = &decision.value
         {
             let (anchor_height, anchor_hash) = (*anchor_height, *anchor_hash);
-            let dropped = dropped_per_height.get(&decision.consensus_height.as_u64());
+            let dropped = dropped_positions.get(&idx);
             let kept: Vec<bitcoin::Transaction> = txs
                 .iter()
-                .filter(|tx| !dropped.is_some_and(|d| d.contains(&tx.compute_txid())))
-                .cloned()
+                .enumerate()
+                .filter(|(pos, _)| !dropped.is_some_and(|d| d.contains(pos)))
+                .map(|(_, tx)| tx.clone())
                 .collect();
             // Narrowing what we execute must not narrow what we record as decided —
             // see `DeferredDecision::certified_txs`. The BODIES are retained, not just
@@ -479,6 +489,35 @@ impl<E: Executor> Reactor<E> {
         Ok(())
     }
 
+    /// Record a decided batch WITHOUT executing it: the `batches` row plus its
+    /// certified content, so a syncing peer can still fetch what consensus
+    /// decided. The single "recorded, not run" path — both the anchor-mismatch
+    /// skip and the unparseable-tx skip funnel through here so they cannot drift.
+    async fn record_batch_for_sync(
+        &mut self,
+        conn: &libsql::Connection,
+        consensus_height: Height,
+        anchor_height: u64,
+        anchor_hash: BlockHash,
+        certificate: &[u8],
+        batch_txs: &[bitcoin::Transaction],
+        certified: Option<&[bitcoin::Transaction]>,
+    ) -> Result<BatchOutcome> {
+        insert_batch(
+            conn,
+            consensus_height.as_u64(),
+            anchor_height,
+            &anchor_hash.to_string(),
+            certificate,
+            false,
+        )
+        .await
+        .context("Failed to record batch for sync")?;
+        self.record_batch_txs(conn, consensus_height, batch_txs, certified)
+            .await?;
+        Ok(BatchOutcome::RecordedOnly)
+    }
+
     pub(super) async fn process_decided_batch(
         &mut self,
         anchor_height: u64,
@@ -567,22 +606,17 @@ impl<E: Executor> Reactor<E> {
                 consensus_height = %consensus_height,
                 "Skipping decided batch — anchor does not match local tip; recording only"
             );
-            insert_batch(
-                &conn,
-                consensus_height.as_u64(),
-                anchor_height,
-                &anchor_hash.to_string(),
-                certificate,
-                false,
-            )
-            .await
-            .context("Failed to record anchor-mismatched batch for sync")?;
-            // Persist the certified content too (idempotent): a skipped batch
-            // must still be servable to syncing peers with its real txs, and
-            // the batch_txids/unconfirmed rows are what the sync path reads.
-            self.record_batch_txs(&conn, consensus_height, batch_txs, certified)
-                .await?;
-            return Ok(BatchOutcome::RecordedOnly);
+            return self
+                .record_batch_for_sync(
+                    &conn,
+                    consensus_height,
+                    anchor_height,
+                    anchor_hash,
+                    certificate,
+                    batch_txs,
+                    certified,
+                )
+                .await;
         }
 
         // Execute in decided order. `validate_batch` enforces dependency
@@ -615,19 +649,17 @@ impl<E: Executor> Reactor<E> {
                     "Decided batch contains an unparseable transaction — recording for sync \
                      and skipping execution (deterministic; every node does the same)"
                 );
-                insert_batch(
-                    &conn,
-                    consensus_height.as_u64(),
-                    anchor_height,
-                    &anchor_hash.to_string(),
-                    certificate,
-                    false,
-                )
-                .await
-                .context("Failed to record unparseable batch for sync")?;
-                self.record_batch_txs(&conn, consensus_height, batch_txs, certified)
-                    .await?;
-                return Ok(BatchOutcome::RecordedOnly);
+                return self
+                    .record_batch_for_sync(
+                        &conn,
+                        consensus_height,
+                        anchor_height,
+                        anchor_hash,
+                        certificate,
+                        batch_txs,
+                        certified,
+                    )
+                    .await;
             }
             parsed
         };
@@ -770,18 +802,20 @@ impl<E: Executor> Reactor<E> {
         }
 
         // Candidate filter: state predicates only. Everything that needs
-        // bitcoind happens in the I/O phase, off this loop.
+        // bitcoind happens in the I/O phase, off this loop. Iterate by key —
+        // the pool is keyed by txid, so `compute_txid()` per entry (a
+        // double-SHA256 over the serialized tx) would recompute what we already
+        // hold.
         let mut txs = Vec::new();
         let mut invalid_txids = Vec::new();
-        for (raw_tx, parsed) in self.consensus.pending_transactions.values() {
-            let txid = raw_tx.compute_txid();
-            if !unbatched_set.contains(&txid) {
+        for (txid, (raw_tx, parsed)) in &self.consensus.pending_transactions {
+            if !unbatched_set.contains(txid) {
                 continue;
             }
             if is_batchable(&parsed.inputs) {
                 txs.push(raw_tx.clone());
             } else {
-                invalid_txids.push(txid);
+                invalid_txids.push(*txid);
             }
         }
         for txid in &invalid_txids {

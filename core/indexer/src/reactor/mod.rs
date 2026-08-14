@@ -140,6 +140,11 @@ pub struct Reactor<E: Executor> {
     /// Verdicts that outlived their proposal, banked for the next one — see
     /// `batches::ValidatedCandidates`.
     validated_candidates: Option<batches::ValidatedCandidates>,
+    /// An in-flight off-loop mempool fee projection (`spawn_blocking`). The
+    /// periodic tick starts one from a snapshot rather than projecting inline;
+    /// its result is applied when this completes. `None` when idle — one at a
+    /// time, so a slow projection never queues behind itself.
+    fee_recompute: Option<tokio::task::JoinHandle<Fees>>,
 }
 
 impl<E: Executor> Reactor<E> {
@@ -183,6 +188,7 @@ impl<E: Executor> Reactor<E> {
             consensus_listen_addr,
             io_jobs: VecDeque::new(),
             validated_candidates: None,
+            fee_recompute: None,
         }
     }
 
@@ -236,24 +242,42 @@ impl<E: Executor> Reactor<E> {
 
     async fn resolve_batch_txs(&mut self, txs: &[BatchTx]) -> Result<Vec<bitcoin::Transaction>> {
         let conn = self.db_conn();
-        let mut resolved = Vec::with_capacity(txs.len());
+        // First pass: everything the pool and DB can answer, in order. Slots that
+        // still need bitcoind are left `None` and their txids collected, so the
+        // RPC misses go out as ONE batch instead of a round trip per txid — the
+        // replay/sync path resolves whole decided histories here.
+        let mut resolved: Vec<Option<bitcoin::Transaction>> = Vec::with_capacity(txs.len());
+        let mut rpc_slots: Vec<usize> = Vec::new();
+        let mut rpc_txids: Vec<Txid> = Vec::new();
         for entry in txs {
             match entry {
-                BatchTx::Raw(tx) => resolved.push(tx.clone()),
+                BatchTx::Raw(tx) => resolved.push(Some(tx.clone())),
                 BatchTx::Id(txid) => {
                     if let Some((raw, _)) = self.consensus.pending_transactions.get(txid) {
-                        resolved.push(raw.clone());
+                        resolved.push(Some(raw.clone()));
                     } else if let Some(tx) = Self::resolve_tx_from_db(&conn, txid).await {
-                        resolved.push(tx);
-                    } else if let Some(tx) = self.executor.resolve_transaction(txid).await {
-                        resolved.push(tx);
+                        resolved.push(Some(tx));
                     } else {
-                        anyhow::bail!("Could not resolve decided batch transaction {txid}");
+                        rpc_slots.push(resolved.len());
+                        rpc_txids.push(*txid);
+                        resolved.push(None);
                     }
                 }
             }
         }
-        Ok(resolved)
+        if !rpc_txids.is_empty() {
+            let fetched = self.executor.resolve_transactions(&rpc_txids).await;
+            for ((slot, txid), tx) in rpc_slots.iter().zip(&rpc_txids).zip(fetched) {
+                match tx {
+                    Some(tx) => resolved[*slot] = Some(tx),
+                    None => anyhow::bail!("Could not resolve decided batch transaction {txid}"),
+                }
+            }
+        }
+        Ok(resolved
+            .into_iter()
+            .map(|t| t.expect("all slots filled"))
+            .collect())
     }
 
     async fn process_block_event(&mut self, event: BlockEvent) -> Result<()> {
@@ -298,9 +322,12 @@ impl<E: Executor> Reactor<E> {
                     pending_count = self.consensus.pending_blocks.len() + 1,
                     "Adding block to pending_blocks"
                 );
-                self.consensus
-                    .pending_blocks
-                    .insert(block.height, block.clone());
+                // Move, not clone: `block` is owned here and unused afterward.
+                // The catch-up stream can hold up to MAX_PENDING_BLOCKS full
+                // blocks, so a per-block deep copy of every transaction, witness,
+                // and op_return is pure waste.
+                let height = block.height;
+                self.consensus.pending_blocks.insert(height, block);
                 self.advance()
                     .await
                     .context("advance failed after block insert")?;
@@ -424,6 +451,16 @@ impl<E: Executor> Reactor<E> {
                     pending().await
                 } else {
                     future::select_all(self.io_jobs.iter_mut().map(|j| &mut j.verdicts)).await
+                }
+            };
+
+            // The off-loop fee projection's result, or never. Same shape as
+            // `io_verdicts`: polled through `&mut` so it survives losing the
+            // select, dropped with the loop at shutdown.
+            let fee_recompute = async {
+                match self.fee_recompute.as_mut() {
+                    Some(handle) => handle.await,
+                    None => pending().await,
                 }
             };
 
@@ -581,9 +618,31 @@ impl<E: Executor> Reactor<E> {
                         .context("apply_io_verdicts failed")?;
                 }
                 _ = fee_publish_ticker.tick() => {
-                    if self.consensus.mempool_fee_index.take_dirty() {
-                        // recompute() publishes to fee_tx internally.
-                        self.consensus.mempool_fee_index.recompute();
+                    // Project OFF the loop: at mainnet mempool sizes the
+                    // projection is tens to hundreds of ms, and running it inline
+                    // here stalls every Malachite reply, block, and finality check
+                    // for that long every 2s. One job at a time — a mutation
+                    // arriving mid-projection re-sets `dirty` and the next tick
+                    // re-runs. The Sync arm and startup still recompute inline:
+                    // they are infrequent and must establish the fresh threshold
+                    // synchronously before the node reports available.
+                    if self.fee_recompute.is_none()
+                        && self.consensus.mempool_fee_index.take_dirty()
+                    {
+                        let (entries, min) = self.consensus.mempool_fee_index.snapshot();
+                        self.fee_recompute = Some(tokio::task::spawn_blocking(move || {
+                            mempool_fee_index::project_fees(&entries, min)
+                        }));
+                    }
+                }
+                result = fee_recompute => {
+                    self.fee_recompute = None;
+                    match result {
+                        Ok(fees) => self.consensus.mempool_fee_index.store_recomputed(fees),
+                        // The blocking task panicked or was cancelled. It carries
+                        // no state — the cached fees simply stay put and the next
+                        // tick re-projects — so log and move on rather than exit.
+                        Err(e) => warn!(error = %e, "Fee projection task failed; keeping the last fees"),
                     }
                 }
             }
