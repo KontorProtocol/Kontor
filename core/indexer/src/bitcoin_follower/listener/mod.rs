@@ -17,6 +17,7 @@ use crate::bitcoin_client::client::BitcoinRpc;
 use crate::bitcoin_client::types::MempoolEntry;
 use crate::block::TransactionFilterMap;
 use crate::retry::{new_backoff_limited, retry};
+use crate::stopper::ShutdownSignal;
 
 use super::event::{KontorTx, MempoolEvent};
 use super::messages::{DataMessage, MonitorMessage};
@@ -36,11 +37,33 @@ impl ListenerConfig {
 }
 
 /// Top-level mempool listener with auto-reconnect.
+///
+/// As in the poller, shutdown is handled at this boundary and nowhere below:
+/// dropping `listen` tears down the reconnect loop, the current session and its
+/// in-flight RPCs together. The ZMQ sockets are the exception — they are blocking
+/// threads, not futures, so they keep their own local token, cancelled by the
+/// session guard's `Drop`.
 pub async fn run<C: BitcoinRpc>(
     bitcoin: C,
     f: TransactionFilterMap,
     event_tx: Sender<MempoolEvent>,
-    cancel_token: CancellationToken,
+    shutdown: ShutdownSignal,
+    poll_notify: Arc<Notify>,
+    config: ListenerConfig,
+) -> Result<()> {
+    select! {
+        _ = shutdown.cancelled() => {
+            info!("Listener cancelled");
+            Ok(())
+        }
+        result = listen(bitcoin, f, event_tx, poll_notify, config) => result,
+    }
+}
+
+async fn listen<C: BitcoinRpc>(
+    bitcoin: C,
+    f: TransactionFilterMap,
+    event_tx: Sender<MempoolEvent>,
     poll_notify: Arc<Notify>,
     config: ListenerConfig,
 ) -> Result<()> {
@@ -49,7 +72,6 @@ pub async fn run<C: BitcoinRpc>(
             &bitcoin,
             f,
             &event_tx,
-            cancel_token.clone(),
             &config.zmq_address,
             poll_notify.clone(),
         )
@@ -61,25 +83,17 @@ pub async fn run<C: BitcoinRpc>(
             }
         }
 
-        select! {
-            _ = sleep(config.reconnect_delay) => {
-                info!("Reconnecting ZMQ listener");
-            }
-            _ = cancel_token.cancelled() => {
-                info!("Cancelled during reconnect delay");
-                return Ok(());
-            }
-        }
+        sleep(config.reconnect_delay).await;
+        info!("Reconnecting ZMQ listener");
     }
 }
 
-/// A single ZMQ connection session. Returns Ok on clean cancellation,
-/// Err on any failure (triggers reconnect in the outer loop).
+/// A single ZMQ connection session. Returns Err on any failure, which triggers a
+/// reconnect in the outer loop.
 async fn run_session<C: BitcoinRpc>(
     bitcoin: &C,
     f: TransactionFilterMap,
     event_tx: &Sender<MempoolEvent>,
-    cancel_token: CancellationToken,
     zmq_address: &str,
     poll_notify: Arc<Notify>,
 ) -> Result<()> {
@@ -125,16 +139,7 @@ async fn run_session<C: BitcoinRpc>(
         handles: vec![socket_handle, monitor_handle],
     };
 
-    run_event_loop(
-        bitcoin,
-        f,
-        event_tx,
-        cancel_token,
-        socket_rx,
-        monitor_rx,
-        poll_notify,
-    )
-    .await
+    run_event_loop(bitcoin, f, event_tx, socket_rx, monitor_rx, poll_notify).await
 }
 
 /// Core event loop: processes monitor events and data messages.
@@ -143,7 +148,6 @@ async fn run_event_loop<C: BitcoinRpc>(
     bitcoin: &C,
     f: TransactionFilterMap,
     event_tx: &Sender<MempoolEvent>,
-    cancel_token: CancellationToken,
     mut socket_rx: mpsc::UnboundedReceiver<Result<(u32, DataMessage)>>,
     mut monitor_rx: mpsc::UnboundedReceiver<Result<MonitorMessage>>,
     poll_notify: Arc<Notify>,
@@ -151,14 +155,14 @@ async fn run_event_loop<C: BitcoinRpc>(
     let mut last_sequence_number: Option<u32> = None;
     let mut synced = false;
 
+    // No cancellation arm: `run` races this whole stack against the shutdown
+    // signal, so being asked to stop drops it here rather than routing through
+    // it. Both arms bind unconditionally — a closed channel arrives as `None`
+    // and is handled — so the select can never end up with every branch
+    // disabled.
     loop {
         select! {
             biased;
-
-            _ = cancel_token.cancelled() => {
-                info!("ZMQ session cancelled");
-                return Ok(());
-            }
 
             event = monitor_rx.recv() => {
                 match event {
@@ -169,7 +173,7 @@ async fn run_event_loop<C: BitcoinRpc>(
                         if let MonitorMessage::HandshakeSucceeded = msg {
                             info!("ZMQ connected, fetching mempool snapshot");
 
-                            let snapshot = fetch_mempool(bitcoin, f, &cancel_token).await?;
+                            let snapshot = fetch_mempool(bitcoin, f).await?;
                             let snapshot_seq = snapshot.mempool_sequence;
                             if event_tx
                                 .send(MempoolEvent::Sync {
@@ -196,7 +200,7 @@ async fn run_event_loop<C: BitcoinRpc>(
                             last_sequence_number = new_seq;
 
                             for data_message in to_replay {
-                                if !process_delta(data_message, bitcoin, f, event_tx, &cancel_token, &poll_notify)
+                                if !process_delta(data_message, bitcoin, f, event_tx, &poll_notify)
                                     .await?
                                 {
                                     return Ok(());
@@ -235,7 +239,7 @@ async fn run_event_loop<C: BitcoinRpc>(
                             continue;
                         }
 
-                        if !process_delta(data_message, bitcoin, f, event_tx, &cancel_token, &poll_notify)
+                        if !process_delta(data_message, bitcoin, f, event_tx, &poll_notify)
                             .await?
                         {
                             return Ok(());
@@ -317,7 +321,6 @@ struct MempoolSnapshot {
 async fn fetch_mempool<C: BitcoinRpc>(
     bitcoin: &C,
     f: TransactionFilterMap,
-    cancel_token: &CancellationToken,
 ) -> Result<MempoolSnapshot> {
     // Fetch sequence + txid list first (authoritative for ZMQ replay gap
     // detection). `getrawmempool verbose=true` returns the fees but no
@@ -326,7 +329,6 @@ async fn fetch_mempool<C: BitcoinRpc>(
         || bitcoin.get_raw_mempool_sequence(),
         "get raw mempool",
         new_backoff_limited(),
-        cancel_token.clone(),
     )
     .await?;
     let mempool_sequence = seq_snapshot.mempool_sequence;
@@ -336,7 +338,6 @@ async fn fetch_mempool<C: BitcoinRpc>(
         || bitcoin.get_raw_mempool_verbose(),
         "get raw mempool verbose",
         new_backoff_limited(),
-        cancel_token.clone(),
     )
     .await?;
 
@@ -344,7 +345,6 @@ async fn fetch_mempool<C: BitcoinRpc>(
         || bitcoin.get_mempool_info(),
         "get mempool info",
         new_backoff_limited(),
-        cancel_token.clone(),
     )
     .await?;
     let mempool_min_fee_sat_per_vb =
@@ -361,15 +361,10 @@ async fn fetch_mempool<C: BitcoinRpc>(
     // Only Kontor-relevant txs need their raw bytes. Fetch in chunks.
     let mut txs: Vec<bitcoin::Transaction> = vec![];
     for chunk in mempool_txids.chunks(100) {
-        if cancel_token.is_cancelled() {
-            break;
-        }
-
         let results = retry(
             || bitcoin.get_raw_transactions(chunk),
             "get raw transactions",
             new_backoff_limited(),
-            cancel_token.clone(),
         )
         .await?;
 
@@ -405,18 +400,15 @@ async fn process_delta<C: BitcoinRpc>(
     bitcoin: &C,
     f: TransactionFilterMap,
     event_tx: &Sender<MempoolEvent>,
-    cancel_token: &CancellationToken,
     poll_notify: &Notify,
 ) -> Result<bool> {
     match data_message {
         DataMessage::TransactionAdded { txid, .. } => {
             let bitcoin_c = bitcoin.clone();
-            let cancel_c = cancel_token.clone();
             let entry = match retry(
                 || bitcoin_c.get_mempool_entry(&txid),
                 "get mempool entry",
                 new_backoff_limited(),
-                cancel_c,
             )
             .await
             {
@@ -435,12 +427,10 @@ async fn process_delta<C: BitcoinRpc>(
 
             // Fetch the raw tx to see if it's Kontor-relevant.
             let bitcoin_c = bitcoin.clone();
-            let cancel_c = cancel_token.clone();
             let kontor = match retry(
                 || bitcoin_c.get_raw_transaction(&txid),
                 "get raw transaction",
                 new_backoff_limited(),
-                cancel_c,
             )
             .await
             {
@@ -540,6 +530,9 @@ struct CleanupGuard {
     handles: Vec<thread::JoinHandle<()>>,
 }
 
+#[allow(clippy::disallowed_methods)] // scoped resource-cleanup token for the
+// blocking ZMQ threads, which cannot be drop-cancelled; it never leaves this
+// file and stops sockets, not the node.
 impl Drop for CleanupGuard {
     fn drop(&mut self) {
         self.cancel_token.cancel();

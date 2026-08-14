@@ -76,22 +76,33 @@ impl<B> OnFailure<B> for NoOpOnFailure {
     fn on_failure(&mut self, _res: B, _latency: Duration, _span: &Span) {}
 }
 
-/// Tower middleware that 503s every `/api/*` request until the indexer
-/// is both (a) reactor-ready — `ready_rx` signaled, mempool sync done,
-/// `fees_rx` carrying a real estimate — and (b) holding chain state
-/// (`InfoCore.height.is_some()`). A warm-DB restart can pass (b) on
-/// startup (height seeded from disk by `compute_info_core`) before
-/// passing (a), so both must be checked; checking both *here* keeps
+/// Tower middleware that 503s every `/api/*` request unless the indexer
+/// is (a) reactor-ready — `ready_rx` signaled, mempool sync done,
+/// `fees_rx` carrying a real estimate — (b) holding chain state
+/// (`InfoCore.height.is_some()`), and (c) not stopping because something
+/// died. A warm-DB restart can pass (b) on startup (height seeded from
+/// disk by `compute_info_core`) before passing (a), so both must be
+/// checked; (a) is a latch that never un-sets, so only (c) can withdraw
+/// availability once the reactor is gone. Checking all three *here* keeps
 /// the decision single-point — handlers downstream of the gate can
 /// trust the snapshot and don't re-decide.
+///
+/// Narrower than `get_healthz_ready` on purpose, and this is the one place
+/// the difference matters. The probe withdraws for *any* shutdown, which is
+/// how an orchestrator learns to stop routing here. This gate withdraws only
+/// for a failure: endpoint removal is asynchronous, so a pod keeps receiving
+/// requests for a moment after SIGTERM, and answering them is the whole point
+/// of a graceful drain. Gating both on the same signal would turn every
+/// ordinary rollout into a burst of 503s.
 async fn require_available(
     State(env): State<Env>,
     req: AxumRequest,
     next: Next,
 ) -> std::result::Result<axum::response::Response, super::error::Error> {
     let reactor_ready = env.reactor_ready.load(std::sync::atomic::Ordering::Relaxed);
+    let failed = env.failed.load(std::sync::atomic::Ordering::Relaxed);
     let has_chain_state = env.info_rx.borrow().height.is_some();
-    if !reactor_ready || !has_chain_state {
+    if !reactor_ready || failed || !has_chain_state {
         return Err(HttpError::ServiceUnavailable("Indexer is not available".to_string()).into());
     }
     Ok(next.run(req).await)

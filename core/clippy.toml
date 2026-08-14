@@ -1,0 +1,4 @@
+disallowed-methods = [
+    { path = "tokio_util::sync::CancellationToken::cancel", reason = "the stop decision belongs to main's Shutdown alone — a subsystem that cancels on its own turns the real failure into a drain-log line and reports an innocent as the cause. Observe stopper::ShutdownSignal instead; the two sanctioned raw-token sites carry #[allow]s." },
+    { path = "tokio_util::sync::CancellationToken::drop_guard", reason = "a drop guard cancels implicitly on unwind, which is a hidden stop decision — same rule as CancellationToken::cancel" },
+]

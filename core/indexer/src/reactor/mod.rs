@@ -25,17 +25,19 @@ use tokio::{
     },
     task::JoinHandle,
 };
-use tokio_util::sync::CancellationToken;
 
 use bitcoin::{BlockHash, Txid};
 use malachitebft_app_channel::NetworkMsg;
 use malachitebft_app_channel::app::types::LocallyProposedValue;
 use malachitebft_app_channel::app::types::core::VotingPower;
 use malachitebft_core_types::{LinearTimeouts, Round};
-use tracing::{debug, error, info, warn};
+use metrics::gauge;
+use tracing::{debug, info, warn};
 
 use crate::consensus::finality_types::StateEvent;
 use crate::consensus::{BatchTx, Ctx};
+use crate::metrics::{DEFERRED_DECISIONS, PENDING_BLOCKS};
+use crate::stopper::ShutdownSignal;
 use crate::{
     bitcoin_follower::event::{BlockEvent, MempoolEvent},
     consensus::{Genesis, Validator, ValidatorSet, signing::PublicKey},
@@ -105,7 +107,7 @@ pub struct PruneConfig {
 pub struct Reactor<E: Executor> {
     executor: E,
     runtime: Runtime,
-    cancel_token: CancellationToken,
+    shutdown: ShutdownSignal,
     block_rx: Receiver<BlockEvent>,
     mempool_rx: Receiver<MempoolEvent>,
     ready_tx: Option<oneshot::Sender<bool>>,
@@ -132,7 +134,7 @@ impl<E: Executor> Reactor<E> {
         runtime: Runtime,
         block_rx: Receiver<BlockEvent>,
         mempool_rx: Receiver<MempoolEvent>,
-        cancel_token: CancellationToken,
+        shutdown: ShutdownSignal,
         ready_tx: Option<oneshot::Sender<bool>>,
         event_tx: Option<mpsc::Sender<Event>>,
         simulate_rx: Option<Receiver<Simulation>>,
@@ -150,7 +152,7 @@ impl<E: Executor> Reactor<E> {
         Self {
             executor,
             runtime,
-            cancel_token,
+            shutdown,
             block_rx,
             mempool_rx,
             simulate_rx,
@@ -365,12 +367,24 @@ impl<E: Executor> Reactor<E> {
                 }
             }
 
+            // Publish the backlog gauges from the one point every state change
+            // passes through, rather than from each mutation site. Both queues
+            // matter most exactly when nothing is happening — a wedged node
+            // executes no blocks and decides no batches, so a gauge hung off
+            // either of those paths would go stale precisely when it is needed.
+            gauge!(PENDING_BLOCKS).set(self.consensus.pending_blocks.len() as f64);
+            gauge!(DEFERRED_DECISIONS).set(self.consensus.deferred_decisions.len() as f64);
+
             let hard_deadline_instant = self.consensus.pending_proposal.as_ref().map(|p| {
                 let deadline = p.hard_deadline();
                 let remaining = deadline.saturating_duration_since(Instant::now());
                 tokio::time::Instant::now() + remaining
             });
 
+            // Pre-existing quirk, noted rather than fixed here: if the API
+            // side of this channel closes, `recv()` returns `None` and the arm
+            // fires on every loop iteration. The API is a supervised subsystem,
+            // so its death stops the node through `first_exit` anyway.
             let simulate_rx = async {
                 if let Some(rx) = self.simulate_rx.as_mut() {
                     rx.recv().await
@@ -396,7 +410,7 @@ impl<E: Executor> Reactor<E> {
             };
 
             select! {
-                _ = self.cancel_token.cancelled() => {
+                _ = self.shutdown.cancelled() => {
                     info!("Cancelled");
                     break;
                 }
@@ -463,7 +477,26 @@ impl<E: Executor> Reactor<E> {
                     self.try_fulfill_pending_proposal().await
                         .context("try_fulfill_pending_proposal failed (hard deadline)")?;
                 }
-                Some(msg) = consensus_rx => {
+                msg = consensus_rx => {
+                    // A closed engine channel is the consensus engine DYING —
+                    // for a validator that is the third route to the silent
+                    // desync of 2026-08-04, and it must be fatal. Unless we are
+                    // being stopped: teardown races this arm against the cancel
+                    // arm above, so consult the signal instead of guessing.
+                    //
+                    // The asymmetry with `block_rx`/`mempool_rx` is deliberate:
+                    // their `Some(...)` patterns can stay, because their
+                    // producers are SUPERVISED subsystems — a dead follower
+                    // surfaces through the supervisor's `first_exit`, while the
+                    // in-process Malachite actor has no handle of its own and
+                    // this channel is the only way its death reaches anyone.
+                    let Some(msg) = msg else {
+                        return if self.shutdown.is_cancelled() {
+                            Ok(())
+                        } else {
+                            Err(anyhow::anyhow!("consensus engine channel closed"))
+                        };
+                    };
                     debug!("REACTOR: processing consensus msg");
                     let consensus_result = self.handle_consensus_msg(msg)
                         .await
@@ -496,6 +529,12 @@ impl<E: Executor> Reactor<E> {
                         let err_msg = result.as_ref().err().map(|e| format!("{e:#}"));
                         let _ = ret_tx.send(result);
                         if let Some(msg) = err_msg {
+                            // Fatal on purpose, and NOT user-triggerable: an
+                            // `Err` out of `simulate` is infrastructure-only by
+                            // construction (savepoint, DB, executor plumbing) —
+                            // user-level op failures ride inside `Ok(results)`
+                            // as per-op error fields. I5: this node's own I/O
+                            // failing must stop this node.
                             bail!("simulation failed: {msg}");
                         }
                     }
@@ -513,34 +552,60 @@ impl<E: Executor> Reactor<E> {
 
     #[tracing::instrument(skip_all, fields(node = %self.runtime.node_label))]
     pub async fn run(&mut self) -> Result<()> {
-        // Build the storage-deposit footprint cache from live state before processing
-        // blocks — but only ONCE: `reconstruct` is gated on a node_meta marker, so this
-        // is a no-op after the first build (DB upgrade / first boot). Block writes and
-        // reorgs both maintain the cache atomically, so a clean restart needs no rebuild.
-        self.runtime.storage.footprint().reconstruct().await?;
+        // Startup is CANCELLABLE. A first-boot footprint reconstruct or a wide
+        // startup finality settle can be slow, and a SIGTERM that lands inside
+        // one must be a clean stop, not a blown shutdown budget and a false
+        // page on a routine rollout. Dropping either mid-flight is safe: both
+        // write transactionally, so the abandonment is a crash the restart
+        // already handles.
+        let shutdown = self.shutdown.clone();
+        let startup = async {
+            // Build the storage-deposit footprint cache from live state before
+            // processing blocks — but only ONCE: `reconstruct` is gated on a
+            // node_meta marker, so this is a no-op after the first build (DB
+            // upgrade / first boot). Block writes and reorgs both maintain the
+            // cache atomically, so a clean restart needs no rebuild.
+            self.runtime.storage.footprint().reconstruct().await?;
 
-        // Settle any deadline that was ALREADY due when we started. Rehydration
-        // restores the tracking set, but nothing evaluates it until a tip advance —
-        // and a node that restarted at or past a deadline resumes consensus
-        // immediately, so without this it keeps executing batches on state its peers
-        // have already rolled back until the next Bitcoin block arrives (up to an
-        // hour on mainnet, indefinitely on a stalled chain). That is #515 again by a
-        // third route. The queues are empty here, so the drain inside is a no-op and
-        // only the finality check does work.
-        self.advance()
-            .await
-            .context("advance failed during startup finality settle")?;
+            // Settle any deadline that was ALREADY due when we started.
+            // Rehydration restores the tracking set, but nothing evaluates it
+            // until a tip advance — and a node that restarted at or past a
+            // deadline resumes consensus immediately, so without this it keeps
+            // executing batches on state its peers have already rolled back
+            // until the next Bitcoin block arrives (up to an hour on mainnet,
+            // indefinitely on a stalled chain). That is #515 again by a third
+            // route. The queues are empty here, so the drain inside is a no-op
+            // and only the finality check does work.
+            self.advance()
+                .await
+                .context("advance failed during startup finality settle")
+        };
+        select! {
+            _ = shutdown.cancelled() => return Ok(()),
+            r = startup => r?,
+        }
 
         let result = self.run_event_loop().await;
 
-        // Gracefully stop the Malachite consensus engine and wait for cleanup
-        let _ = self
+        // Gracefully stop the Malachite consensus engine — BOUNDED. This wait
+        // sits between a reactor fatal and the exit status that reports it, so
+        // an engine that never acknowledges the stop must not stand there
+        // indefinitely: that is the immortal green-probed node again, one layer
+        // down. On timeout, say so and go — the process is exiting either way,
+        // and the loop result, not the engine's teardown, is the story.
+        if let Err(e) = self
             .consensus
             .engine_handle
             .actor
             .get_cell()
-            .stop_and_wait(Some("Reactor shutting down".to_string()), None)
-            .await;
+            .stop_and_wait(
+                Some("Reactor shutting down".to_string()),
+                Some(std::time::Duration::from_secs(5)),
+            )
+            .await
+        {
+            warn!(error = %e, "Malachite engine did not stop cleanly within 5s; exiting without it");
+        }
 
         result
     }
@@ -596,7 +661,7 @@ async fn build_genesis_from_staking(runtime: &mut Runtime) -> Result<Genesis> {
 pub async fn create_runtime_executor(
     starting_block_height: u64,
     writer: &database::Writer,
-    cancel_token: CancellationToken,
+    shutdown: ShutdownSignal,
     bitcoin_client: crate::bitcoin_client::Client,
     replay_tx: Option<mpsc::Sender<u64>>,
     genesis_validators: &[crate::runtime::GenesisValidator],
@@ -679,7 +744,7 @@ pub async fn create_runtime_executor(
         .await
         .context("Failed to publish native contracts")?;
 
-    let mut exec = executor::RuntimeExecutor::new(cancel_token, bitcoin_client);
+    let mut exec = executor::RuntimeExecutor::new(shutdown, bitcoin_client);
     if let Some(tx) = replay_tx {
         exec = exec.with_replay_tx(tx);
     }
@@ -734,7 +799,7 @@ pub async fn start_consensus(
 #[allow(clippy::too_many_arguments)]
 pub fn run(
     starting_block_height: u64,
-    cancel_token: CancellationToken,
+    shutdown: ShutdownSignal,
     writer: database::Writer,
     block_rx: Receiver<BlockEvent>,
     mempool_rx: Receiver<MempoolEvent>,
@@ -751,31 +816,43 @@ pub fn run(
     consensus_listen_addr: tokio::sync::watch::Sender<Option<String>>,
     network: bitcoin::Network,
     prune: PruneConfig,
-) -> JoinHandle<()> {
+) -> JoinHandle<Result<()>> {
     tokio::spawn({
         async move {
             let result: Result<()> = async {
-                let (exec, mut runtime, last_height, last_hash) = create_runtime_executor(
-                    starting_block_height,
-                    &writer,
-                    cancel_token.clone(),
-                    bitcoin_client,
-                    replay_tx,
-                    &genesis_validators,
-                    network,
-                )
-                .await
-                .context("create_runtime_executor failed")?;
+                // Cancellable, like every other startup phase: genesis loading
+                // and the one-time auto-vacuum conversion are the slowest part
+                // of first boot, and a SIGTERM inside them must be a clean
+                // stop. Both are transactional; dropping them is a crash the
+                // restart already handles.
+                let setup = async {
+                    let setup = create_runtime_executor(
+                        starting_block_height,
+                        &writer,
+                        shutdown.clone(),
+                        bitcoin_client,
+                        replay_tx,
+                        &genesis_validators,
+                        network,
+                    )
+                    .await
+                    .context("create_runtime_executor failed")?;
 
-                // Convert a pre-existing DB to INCREMENTAL auto_vacuum once, so the
-                // pages freed by pruning can be returned to the OS (fresh DBs are
-                // already born incremental). Gated on `prune` so archive nodes don't
-                // pay the one-time conversion VACUUM.
-                if prune.enabled {
-                    database::init::ensure_incremental_auto_vacuum(&runtime.storage.conn)
-                        .await
-                        .context("ensure_incremental_auto_vacuum failed")?;
-                }
+                    // Convert a pre-existing DB to INCREMENTAL auto_vacuum once, so the
+                    // pages freed by pruning can be returned to the OS (fresh DBs are
+                    // already born incremental). Gated on `prune` so archive nodes don't
+                    // pay the one-time conversion VACUUM.
+                    if prune.enabled {
+                        database::init::ensure_incremental_auto_vacuum(&setup.1.storage.conn)
+                            .await
+                            .context("ensure_incremental_auto_vacuum failed")?;
+                    }
+                    Ok::<_, anyhow::Error>(setup)
+                };
+                let (exec, mut runtime, last_height, last_hash) = select! {
+                    _ = shutdown.cancelled() => return Ok(()),
+                    r = setup => r?,
+                };
 
                 let timeouts = Some(LinearTimeouts {
                     propose: std::time::Duration::from_millis(consensus_propose_timeout_ms),
@@ -829,7 +906,7 @@ pub fn run(
                         _ = log_ticker.tick() => {
                             warn!("Still waiting for initial mempool sync — bitcoind/listener not ready");
                         }
-                        _ = cancel_token.cancelled() => {
+                        _ = shutdown.cancelled() => {
                             return Ok(());
                         }
                     }
@@ -869,7 +946,7 @@ pub fn run(
                     runtime,
                     block_rx,
                     mempool_rx,
-                    cancel_token.clone(),
+                    shutdown.clone(),
                     ready_tx,
                     event_tx,
                     simulate_rx,
@@ -896,12 +973,12 @@ pub fn run(
             }
             .await;
 
-            if let Err(e) = result {
-                error!("Reactor error: {e:#}, exiting");
-                cancel_token.cancel();
-            }
-
+            // Neither logged nor cancelled here: the reactor reports by
+            // returning, and the supervisor in `main` owns what that means for
+            // the process. Cancelling from inside a subsystem is what made a
+            // fatal error indistinguishable from a requested stop.
             info!("Exited");
+            result
         }
     })
 }

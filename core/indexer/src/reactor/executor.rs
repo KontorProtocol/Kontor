@@ -1,6 +1,5 @@
 use anyhow::{Context, Result};
 use bitcoin::Txid;
-use tokio_util::sync::CancellationToken;
 use tracing::warn;
 
 use indexer_types::{InstKind, OpKind};
@@ -9,11 +8,12 @@ use crate::bitcoin_client::types::Acceptance;
 use crate::bitcoin_client::{Client, check_mempool_acceptance};
 use crate::block::{TxWalker, filter_map};
 use crate::database;
-use crate::retry::{new_backoff_limited, retry};
+use crate::retry::{new_backoff_limited, retry_until_cancelled};
 use crate::runtime::ExecutionError;
 use crate::runtime::Runtime;
 use crate::runtime::system;
 use crate::runtime::wit::Signer;
+use crate::stopper::ShutdownSignal;
 
 /// Check if a parsed transaction contains only batchable ops.
 /// Publish must only execute via Value::Block decisions (contract address
@@ -126,15 +126,21 @@ impl Executor for NoopExecutor {
 pub struct RuntimeExecutor {
     bitcoin_client: Client,
     replay_tx: Option<tokio::sync::mpsc::Sender<u64>>,
-    cancel_token: CancellationToken,
+    // The second of two sanctioned homes for a signal BELOW a task root (the
+    // listener's ZMQ threads are the first): `validate_transaction` runs in the
+    // body of an already-chosen select branch, where nothing above it can drop
+    // it, so `retry_until_cancelled` must race the signal itself. PR B (see
+    // BRIEF.md, daemon-lifecycle) removes this by moving the RPCs off the hot
+    // loop; do not add a third.
+    shutdown: ShutdownSignal,
 }
 
 impl RuntimeExecutor {
-    pub fn new(cancel_token: CancellationToken, bitcoin_client: Client) -> Self {
+    pub fn new(shutdown: ShutdownSignal, bitcoin_client: Client) -> Self {
         Self {
             bitcoin_client,
             replay_tx: None,
-            cancel_token,
+            shutdown,
         }
     }
 
@@ -162,11 +168,11 @@ impl Executor for RuntimeExecutor {
         //    `check_mempool_acceptance` handles the idempotency and
         //    already-known-fallback inside the client layer. RPC failure
         //    after retries is fatal — bitcoind is unreachable.
-        let acceptance = retry(
+        let acceptance = retry_until_cancelled(
             || check_mempool_acceptance(&self.bitcoin_client, &raw_hex, &txid),
             "check_mempool_acceptance",
             new_backoff_limited(),
-            self.cancel_token.clone(),
+            self.shutdown.clone(),
         )
         .await
         .with_context(|| {
@@ -200,7 +206,7 @@ impl Executor for RuntimeExecutor {
         //    with testmempoolaccept but catches races and ensures the tx
         //    is relayed to our bitcoind if we were the proposer.
         //    RPC failure after retries is fatal (same reasoning as above).
-        let result = retry(
+        let result = retry_until_cancelled(
             || async {
                 match self.bitcoin_client.send_raw_transaction(&raw_hex).await {
                     Ok(_) => Ok(true),
@@ -216,7 +222,7 @@ impl Executor for RuntimeExecutor {
             },
             "send_raw_transaction",
             new_backoff_limited(),
-            self.cancel_token.clone(),
+            self.shutdown.clone(),
         )
         .await
         .with_context(|| {
