@@ -207,9 +207,12 @@ impl Executor for RuntimeExecutor {
                 // a child spending an unconfirmed parent's output only passes
                 // `testmempoolaccept` on a bitcoind that already HOLDS the
                 // parent, and on a validator whose node has not seen it via
-                // P2P yet, this in-order relay is what puts it there — the
-                // pre-io-job code did exactly this, per tx, for this reason.
-                // (`-27` = already known; `-25`/`-26` = rejected on submit.)
+                // P2P yet, this in-order relay is what puts it there. It works
+                // only because the caller hands `txs` in dependency order — an
+                // incoming proposal is validated for that order (`batch_is_ordered`)
+                // and a locally-built candidate set is `dependency_sort`ed before
+                // this phase (`make_value_snapshot`), so a parent always precedes
+                // its child here. (`-27` = already known; `-25`/`-26` = rejected.)
                 let policy = match policy {
                     TxPolicy::Accepted => {
                         let submitted = retry(

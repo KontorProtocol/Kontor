@@ -790,6 +790,15 @@ impl<E: Executor> Reactor<E> {
         if txs.is_empty() {
             return Ok(ProposalSnapshot::Nothing);
         }
+        // Dependency-order the candidates BEFORE the I/O phase, not after. The
+        // I/O phase relays each accepted tx before validating the next
+        // (`validate_txs`), and a child's mempool-acceptance check only passes on
+        // a bitcoind that already holds its parent — so the parent must be relayed
+        // first, which requires it to come first HERE. The pool enumerates in
+        // arbitrary order; sorting at apply (as an earlier version did) is too
+        // late, a child ahead of its parent is already rejected on relay.
+        let order = dependency_sort(&txs);
+        let txs: Vec<bitcoin::Transaction> = order.into_iter().map(|i| txs[i].clone()).collect();
         // Compute the fee threshold once for this candidate set (the index is
         // a snapshot during this pass) and carry it into the I/O phase.
         let threshold = compute_fee_threshold(&self.consensus.mempool_fee_index);

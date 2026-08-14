@@ -128,11 +128,14 @@ pub struct Reactor<E: Executor> {
     consensus_listen_addr: tokio::sync::watch::Sender<Option<String>>,
     /// Consensus I/O in flight — bitcoind validation running off the loop, ALL
     /// raced together as one arm of the root `select!` (`select_all`), so a
-    /// stalled job cannot park another. Bounded by construction (at most one
-    /// build job and one proposal validation outstanding: `pending_proposal` is
-    /// single and the engine awaits each proposal reply before the next part).
-    /// A `VecDeque` for cheap removal-by-index after `select_all`. See
-    /// `batches::IoJob`.
+    /// stalled job cannot park another. Small, not a fixed size: at most one
+    /// BUILD job (the `pending_proposal` is single, and `try_fulfill` refuses a
+    /// second build while one is in flight), plus one VALIDATE job per in-flight
+    /// proposal round — the `undecided` guard admits one per (height, round), and
+    /// a fresh round at the same height can arrive before the previous round's
+    /// job has applied. Bounded in practice by concurrent rounds, which the
+    /// round-timeout machinery keeps to a handful. A `VecDeque` for cheap
+    /// removal-by-index after `select_all`. See `batches::IoJob`.
     io_jobs: VecDeque<batches::IoJob>,
     /// Verdicts that outlived their proposal, banked for the next one — see
     /// `batches::ValidatedCandidates`.

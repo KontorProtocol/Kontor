@@ -74,6 +74,14 @@ impl<E: Executor> Reactor<E> {
         self.runtime.component_cache.clear();
         self.last_height = height;
 
+        // Drop candidates validated against the old tip. An in-flight `IoJob` is
+        // still safe — its apply re-checks the anchor and re-runs `validate_batch`
+        // against the new tip before doing anything — but the banked set is
+        // consumed on a LATER `try_fulfill` with only an anchor-equality guard, so
+        // clearing it here is the belt to that suspenders and keeps a stale bank
+        // from ever reaching the proposer.
+        self.validated_candidates = None;
+
         // Err is NOT "no previous block": folding a transient read failure into
         // `last_hash = None` makes the next batch anchored at this height fail its
         // hash gate and record-only while every peer executes it — an over-skip
