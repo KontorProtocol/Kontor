@@ -60,11 +60,16 @@ pub trait Executor {
     ///
     /// `Err` is infrastructure only — bitcoind unreachable after retries —
     /// and the reactor treats it as fatal (I5).
+    ///
+    /// Returns each transaction PAIRED with its verdict, `txs` moving through
+    /// the future and back. Structural, not stylistic: a separate verdict
+    /// vector invites a `zip` at the apply site, and `zip` silently truncates —
+    /// a short vector would let trailing transactions through unchecked.
     fn validate_txs(
         &self,
         txs: Vec<bitcoin::Transaction>,
         threshold_sat_per_vb: u64,
-    ) -> BoxFuture<'static, Result<Vec<TxPolicy>>>;
+    ) -> BoxFuture<'static, Result<Vec<(bitcoin::Transaction, TxPolicy)>>>;
 
     /// Resolve a txid to a full bitcoin::Transaction. Used to fetch transaction
     /// data for batch execution — batches carry only txids.
@@ -105,11 +110,11 @@ impl Executor for NoopExecutor {
         &self,
         txs: Vec<bitcoin::Transaction>,
         _threshold_sat_per_vb: u64,
-    ) -> BoxFuture<'static, Result<Vec<TxPolicy>>> {
+    ) -> BoxFuture<'static, Result<Vec<(bitcoin::Transaction, TxPolicy)>>> {
         Box::pin(async move {
             Ok(txs
-                .iter()
-                .map(|_| TxPolicy::Rejected("noop executor".to_string()))
+                .into_iter()
+                .map(|tx| (tx, TxPolicy::Rejected("noop executor".to_string())))
                 .collect())
         })
     }
@@ -159,14 +164,14 @@ impl Executor for RuntimeExecutor {
         &self,
         txs: Vec<bitcoin::Transaction>,
         threshold_sat_per_vb: u64,
-    ) -> BoxFuture<'static, Result<Vec<TxPolicy>>> {
+    ) -> BoxFuture<'static, Result<Vec<(bitcoin::Transaction, TxPolicy)>>> {
         // Owned clone: the future must borrow nothing, so the reactor can hold
         // it across loop iterations and drop it at shutdown.
         let client = self.bitcoin_client.clone();
         Box::pin(async move {
             let mut verdicts = Vec::with_capacity(txs.len());
-            for tx in &txs {
-                let raw_hex = bitcoin::consensus::encode::serialize_hex(tx);
+            for tx in txs {
+                let raw_hex = bitcoin::consensus::encode::serialize_hex(&tx);
                 let txid = tx.compute_txid();
                 // `check_mempool_acceptance` handles idempotency and the
                 // already-known fallback inside the client layer. RPC failure
@@ -185,7 +190,7 @@ impl Executor for RuntimeExecutor {
                          bitcoind may be unreachable"
                     )
                 })?;
-                verdicts.push(match acceptance {
+                let policy = match acceptance {
                     Acceptance::Accepted {
                         fee_rate_sat_per_vb,
                     } if fee_rate_sat_per_vb < threshold_sat_per_vb => TxPolicy::Rejected(format!(
@@ -195,7 +200,8 @@ impl Executor for RuntimeExecutor {
                     Acceptance::Rejected { reason } => {
                         TxPolicy::Rejected(format!("mempool policy: {reason}"))
                     }
-                });
+                };
+                verdicts.push((tx, policy));
             }
             Ok(verdicts)
         })

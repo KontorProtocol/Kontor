@@ -225,8 +225,10 @@ impl Executor for LiteExecutor {
         &self,
         txs: Vec<bitcoin::Transaction>,
         _threshold_sat_per_vb: u64,
-    ) -> futures_util::future::BoxFuture<'static, anyhow::Result<Vec<super::executor::TxPolicy>>>
-    {
+    ) -> futures_util::future::BoxFuture<
+        'static,
+        anyhow::Result<Vec<(bitcoin::Transaction, super::executor::TxPolicy)>>,
+    > {
         let delay = self.validation_delay;
         Box::pin(async move {
             if let Some(delay) = delay
@@ -235,8 +237,8 @@ impl Executor for LiteExecutor {
                 tokio::time::sleep(delay).await;
             }
             Ok(txs
-                .iter()
-                .map(|_| super::executor::TxPolicy::Accepted)
+                .into_iter()
+                .map(|tx| (tx, super::executor::TxPolicy::Accepted))
                 .collect())
         })
     }

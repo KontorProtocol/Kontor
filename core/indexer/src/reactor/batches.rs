@@ -50,7 +50,10 @@ const FEE_THRESHOLD_DEN: u64 = 10;
 /// every state predicate before acting on the verdicts — an answer is judged
 /// when it is USED, not when the I/O started.
 pub(super) struct IoJob {
-    pub(super) verdicts: BoxFuture<'static, Result<Vec<TxPolicy>>>,
+    /// The transactions ride THROUGH the future and come back paired with
+    /// their verdicts — the apply site never zips two vectors (a short one
+    /// would silently truncate) and never re-clones the candidate set.
+    pub(super) verdicts: BoxFuture<'static, Result<Vec<(bitcoin::Transaction, TxPolicy)>>>,
     pub(super) apply: IoApply,
 }
 
@@ -60,7 +63,6 @@ pub(super) enum IoApply {
     BuildProposal {
         anchor_height: u64,
         anchor_hash: BlockHash,
-        txs: Vec<bitcoin::Transaction>,
     },
     /// An incoming batch proposal: on apply, accept (file under `undecided`,
     /// release the engine's reply with `Some`) or reject (`None`).
@@ -69,7 +71,7 @@ pub(super) enum IoApply {
         round: Round,
         anchor_height: u64,
         anchor_hash: BlockHash,
-        transactions: Vec<bitcoin::Transaction>,
+        /// Parses aligned with the future's pairs — same source order.
         parsed: Vec<indexer_types::Transaction>,
         reply: tokio::sync::oneshot::Sender<Option<ProposedValue<Ctx>>>,
     },
@@ -850,7 +852,6 @@ impl<E: Executor> Reactor<E> {
                         round,
                         anchor_height: *anchor_height,
                         anchor_hash: *anchor_hash,
-                        transactions: transactions.clone(),
                         parsed: parsed_txs,
                         reply,
                     },
@@ -902,13 +903,12 @@ impl<E: Executor> Reactor<E> {
         if !build_in_flight {
             match self.make_value_snapshot().await? {
                 ProposalSnapshot::Batch { txs, threshold } => {
-                    let verdicts = self.executor.validate_txs(txs.clone(), threshold);
+                    let verdicts = self.executor.validate_txs(txs, threshold);
                     self.io_jobs.push_back(IoJob {
                         verdicts,
                         apply: IoApply::BuildProposal {
                             anchor_height: last_height,
                             anchor_hash: last_hash,
-                            txs,
                         },
                     });
                 }
@@ -961,22 +961,25 @@ impl<E: Executor> Reactor<E> {
     /// while the I/O ran. `Err` from the I/O is infrastructure (bitcoind
     /// unreachable after retries) and fatal — I5, same as it was when the RPCs
     /// ran inline.
+    /// The APPLY phase of a finished [`IoJob`]: act on the verdicts, but only
+    /// after re-judging every state predicate against wherever the chain moved
+    /// while the I/O ran. `Err` from the I/O is infrastructure (bitcoind
+    /// unreachable after retries) and fatal — I5, same as it was when the RPCs
+    /// ran inline.
     pub(super) async fn apply_io_verdicts(
         &mut self,
         apply: IoApply,
-        verdicts: Result<Vec<TxPolicy>>,
+        verdicts: Result<Vec<(bitcoin::Transaction, TxPolicy)>>,
     ) -> Result<()> {
         let verdicts = verdicts?;
         match apply {
             IoApply::BuildProposal {
                 anchor_height,
                 anchor_hash,
-                txs,
             } => {
-                debug_assert_eq!(txs.len(), verdicts.len());
                 // Pool hygiene counts even when the proposal below is stale.
-                let mut kept = Vec::with_capacity(txs.len());
-                for (tx, verdict) in txs.into_iter().zip(&verdicts) {
+                let mut kept = Vec::with_capacity(verdicts.len());
+                for (tx, verdict) in verdicts {
                     match verdict {
                         TxPolicy::Accepted => kept.push(tx),
                         TxPolicy::Rejected(reason) => {
@@ -1036,12 +1039,10 @@ impl<E: Executor> Reactor<E> {
                 round,
                 anchor_height,
                 anchor_hash,
-                transactions,
                 parsed,
                 reply,
             } => {
-                debug_assert_eq!(transactions.len(), verdicts.len());
-                for (tx, verdict) in transactions.iter().zip(&verdicts) {
+                for (tx, verdict) in &verdicts {
                     if let TxPolicy::Rejected(reason) = verdict {
                         warn!(
                             txid = %tx.compute_txid(),
@@ -1052,6 +1053,8 @@ impl<E: Executor> Reactor<E> {
                         return Ok(());
                     }
                 }
+                let transactions: Vec<bitcoin::Transaction> =
+                    verdicts.into_iter().map(|(tx, _)| tx).collect();
                 // Freshness: the snapshot's state predicates, re-judged. The
                 // anchor gate in `validate_batch` is what turns "the tip moved
                 // while we validated" into a plain rejection instead of a vote
@@ -1631,7 +1634,7 @@ impl<E: Executor> Reactor<E> {
                     ProposalSnapshot::Batch { txs, threshold } => {
                         info!(%height, %round, candidates = txs.len(),
                             "Validating candidate batch off-loop; reply deferred");
-                        let verdicts = self.executor.validate_txs(txs.clone(), threshold);
+                        let verdicts = self.executor.validate_txs(txs, threshold);
                         let (anchor_height, anchor_hash) = (
                             self.last_height,
                             self.last_hash.unwrap_or(BlockHash::all_zeros()),
@@ -1641,7 +1644,6 @@ impl<E: Executor> Reactor<E> {
                             apply: IoApply::BuildProposal {
                                 anchor_height,
                                 anchor_hash,
-                                txs,
                             },
                         });
                     }
