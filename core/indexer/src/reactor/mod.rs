@@ -381,6 +381,10 @@ impl<E: Executor> Reactor<E> {
                 tokio::time::Instant::now() + remaining
             });
 
+            // Pre-existing quirk, noted rather than fixed here: if the API
+            // side of this channel closes, `recv()` returns `None` and the arm
+            // fires on every loop iteration. The API is a supervised subsystem,
+            // so its death stops the node through `first_exit` anyway.
             let simulate_rx = async {
                 if let Some(rx) = self.simulate_rx.as_mut() {
                     rx.recv().await

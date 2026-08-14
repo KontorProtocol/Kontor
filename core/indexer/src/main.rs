@@ -394,7 +394,10 @@ async fn run_daemon(config: Config) -> Result<()> {
 
     // Ordered before the cancel so no request can observe a shutdown in progress
     // without also being able to see why: the API keeps serving through a drain,
-    // and must not do that for a node whose reactor is gone.
+    // and must not do that for a node whose reactor is gone. `Relaxed` is
+    // enough BECAUSE of that ordering — `cancel()` is a release store and every
+    // reader that acts on the token's cancellation acquires it, so this store
+    // is visible to anything that saw the cancel. Not a coincidence to tidy.
     if matches!(stop, Stop::Fatal(_)) {
         failed.store(true, std::sync::atomic::Ordering::Relaxed);
     }
@@ -439,6 +442,11 @@ const SHUTDOWN_BUDGET: Duration = Duration::from_secs(25);
 /// real failure closes channels and unwinds tasks behind it, and a cancelled
 /// `retry` hands back the error it was retrying. Worth logging, never worth
 /// reporting as the reason the process stopped.
+///
+/// Abandoning a wedged subsystem is safe for the same reason a crash is: every
+/// state write on the reactor's paths commits transactionally (the #518
+/// hardening), so whatever the abandoned task was mid-way through is a
+/// savepoint the restart rolls back or a transaction it never sees half of.
 ///
 /// The budget is a deadline shared across the whole drain, so once it passes
 /// every subsystem still running is named, not just the first one to hold us up.

@@ -79,6 +79,12 @@ pub async fn run<C: BitcoinRpc>(
         //
         // No `cancel()` here either: returning the error *is* the report, and
         // the supervisor that owns the token decides what it means.
+        //
+        // The LOSING branch's task is deliberately left running and its result
+        // deliberately unobserved: it hears the same process-level cancel that
+        // follows this return and exits on its own, and the error that matters
+        // is the one returned here — joining the loser too could only replace
+        // it with a consequential one.
         select! {
             r = poller_handle => subsystem_exit("bitcoin poller", r, &shutdown),
             r = listener_handle => subsystem_exit("bitcoin listener", r, &shutdown),

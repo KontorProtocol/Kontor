@@ -126,6 +126,12 @@ impl Executor for NoopExecutor {
 pub struct RuntimeExecutor {
     bitcoin_client: Client,
     replay_tx: Option<tokio::sync::mpsc::Sender<u64>>,
+    // The second of two sanctioned homes for a signal BELOW a task root (the
+    // listener's ZMQ threads are the first): `validate_transaction` runs in the
+    // body of an already-chosen select branch, where nothing above it can drop
+    // it, so `retry_until_cancelled` must race the signal itself. PR B (see
+    // BRIEF.md, daemon-lifecycle) removes this by moving the RPCs off the hot
+    // loop; do not add a third.
     shutdown: ShutdownSignal,
 }
 
