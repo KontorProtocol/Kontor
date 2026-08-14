@@ -530,6 +530,9 @@ struct CleanupGuard {
     handles: Vec<thread::JoinHandle<()>>,
 }
 
+#[allow(clippy::disallowed_methods)] // scoped resource-cleanup token for the
+// blocking ZMQ threads, which cannot be drop-cancelled; it never leaves this
+// file and stops sockets, not the node.
 impl Drop for CleanupGuard {
     fn drop(&mut self) {
         self.cancel_token.cancel();
