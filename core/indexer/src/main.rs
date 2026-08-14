@@ -157,6 +157,13 @@ async fn run_regtest() -> Result<()> {
 async fn run_daemon(config: Config) -> Result<()> {
     logging::setup_with_format(config.log_format);
 
+    // First, before any startup work: `signal_received()` REGISTERS the
+    // handlers, and until they exist a SIGTERM kills the process with the
+    // default disposition (exit 143) — so a rollout catching a node during a
+    // slow DB open would page as a crash. Polled at the root select below.
+    let signal_received = stopper::signal_received();
+    tokio::pin!(signal_received);
+
     // Install the Prometheus recorder before any worker spawns. `metrics::*`
     // macro calls before this silently no-op. Spawn the upkeep tick so
     // histogram buckets don't accumulate stale data.
@@ -360,7 +367,7 @@ async fn run_daemon(config: Config) -> Result<()> {
     // in the process cancels, so the first subsystem to exit before a stop was
     // asked for is, by construction, the cause.
     let stop = tokio::select! {
-        () = stopper::signal_received() => Stop::Signal,
+        () = &mut signal_received => Stop::Signal,
         Some(cause) = panic_rx.recv() => Stop::Fatal(anyhow::anyhow!("{cause}")),
         fatal = first_exit(&mut subsystems) => fatal,
     };
