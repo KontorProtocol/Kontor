@@ -23,8 +23,7 @@ use tokio::signal::unix::{SignalKind, signal};
 /// which is how a crashed node comes to exit 0.
 #[cfg(not(windows))]
 pub fn signal_received() -> impl Future<Output = ()> {
-    let mut sigterm =
-        signal(SignalKind::terminate()).expect("Failed to install SIGTERM handler");
+    let mut sigterm = signal(SignalKind::terminate()).expect("Failed to install SIGTERM handler");
     let mut sigint = signal(SignalKind::interrupt()).expect("Failed to install SIGINT handler");
     async move {
         select! {
@@ -103,6 +102,8 @@ impl Shutdown {
         }
     }
 
+    // The ONE sanctioned stop decision — see clippy.toml's disallowed-methods.
+    #[allow(clippy::disallowed_methods)]
     pub fn cancel(&self) {
         self.token.cancel();
     }

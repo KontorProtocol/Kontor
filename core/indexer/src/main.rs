@@ -246,29 +246,29 @@ async fn run_daemon(config: Config) -> Result<()> {
     let (fees_tx, fees_rx) = tokio::sync::watch::channel(indexer_types::Fees::floor(1));
     let event_subscriber_handle = event_subscriber.run(shutdown.signal(), event_rx);
     let api_handle = api::run(
-            Env {
-                config: config.clone(),
-                shutdown: shutdown.signal(),
-                reactor_ready: reactor_ready.clone(),
-                failed: failed.clone(),
-                consensus_listen_addr: consensus_listen_addr_rx.clone(),
-                reader: reader.clone(),
-                event_subscriber: event_subscriber.clone(),
-                bitcoin: bitcoin.clone(),
-                runtime_pool: runtime::pool::new(
-                    config.data_dir.clone(),
-                    filename.to_string(),
-                    config.network,
-                    config.view_gas_limit,
-                )
-                .await?,
-                simulate_tx,
-                fees_rx,
-                info_rx,
-            },
-            prom_handle.clone(),
-        )
-        .await?;
+        Env {
+            config: config.clone(),
+            shutdown: shutdown.signal(),
+            reactor_ready: reactor_ready.clone(),
+            failed: failed.clone(),
+            consensus_listen_addr: consensus_listen_addr_rx.clone(),
+            reader: reader.clone(),
+            event_subscriber: event_subscriber.clone(),
+            bitcoin: bitcoin.clone(),
+            runtime_pool: runtime::pool::new(
+                config.data_dir.clone(),
+                filename.to_string(),
+                config.network,
+                config.view_gas_limit,
+            )
+            .await?,
+            simulate_tx,
+            fees_rx,
+            info_rx,
+        },
+        prom_handle.clone(),
+    )
+    .await?;
 
     let known_hashes = {
         let conn = reader.connection().await?;
@@ -310,28 +310,28 @@ async fn run_daemon(config: Config) -> Result<()> {
 
     let (ready_tx, ready_rx) = oneshot::channel();
     let reactor_handle = reactor::run(
-            config.starting_block_height,
-            shutdown.signal(),
-            writer,
-            block_rx,
-            mempool_rx,
-            Some(ready_tx),
-            Some(event_tx),
-            Some(simulate_rx),
-            engine_config,
-            bitcoin.clone(),
-            Some(replay_tx),
-            load_genesis_validators(&config)?,
-            None,
-            config.consensus_propose_timeout_ms,
-            Some(fees_tx),
-            consensus_listen_addr_tx,
-            config.network,
-            reactor::PruneConfig {
-                enabled: config.prune,
-                retain_blocks: config.prune_retain_blocks,
-            },
-        );
+        config.starting_block_height,
+        shutdown.signal(),
+        writer,
+        block_rx,
+        mempool_rx,
+        Some(ready_tx),
+        Some(event_tx),
+        Some(simulate_rx),
+        engine_config,
+        bitcoin.clone(),
+        Some(replay_tx),
+        load_genesis_validators(&config)?,
+        None,
+        config.consensus_propose_timeout_ms,
+        Some(fees_tx),
+        consensus_listen_addr_tx,
+        config.network,
+        reactor::PruneConfig {
+            enabled: config.prune,
+            retain_blocks: config.prune_retain_blocks,
+        },
+    );
 
     // The long-lived subsystems, named for the exit message. None of them is
     // optional: the first one to exit takes the node with it.
@@ -734,7 +734,10 @@ mod tests {
         .expect_err("fatal remains fatal with a wedged drain");
         let msg = format!("{err:#}");
         assert!(msg.contains("db corrupt"), "{msg}");
-        assert!(msg.contains("api") && msg.contains("never stopped"), "{msg}");
+        assert!(
+            msg.contains("api") && msg.contains("never stopped"),
+            "{msg}"
+        );
     }
 
     /// Defensive: `select_all` panics on an empty iterator, and the shutdown path
