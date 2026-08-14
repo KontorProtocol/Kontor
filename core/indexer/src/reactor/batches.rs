@@ -261,23 +261,33 @@ fn build_replay_queue(
             .is_some_and(|s| s.contains(&txid.to_string()))
     };
 
-    // Outputs the ORIGINAL execution had produced by each queue position that this
-    // replay will NOT have: every excluded tx, from the position it was dropped at,
-    // until (if ever) a later decision re-decides and keeps it. The queue order IS
-    // the execution order, so availability is a positional fact, not a global one:
+    // Which txids each decision must drop, computed in EXECUTION order and then
+    // applied in queue order. Two orders, because they answer different questions:
     //
-    // - A keep re-creates the parent's outputs only from its own position onward.
-    //   A child sitting BETWEEN an excluded parent and its re-decided copy executes
-    //   before the parent is rebuilt, so it drops — an order-blind "kept anywhere"
-    //   guard let exactly that child through (#427 through the re-decide door).
-    // - Conversely, a child ordered BEFORE its parent's position never saw the
-    //   parent's effects in the original execution either, so it keeps; the replay
-    //   reproduces the original sequence position by position.
+    //   * availability — whether a tx's parent output exists when the tx runs — is
+    //     a function of the order transactions EXECUTE, which is anchor order: the
+    //     drain holds every batch aside until the tip reaches its anchor, so a batch
+    //     at a lower anchor runs first regardless of consensus height. That order is
+    //     a shared input `(anchor_height, consensus_height)` — the same one
+    //     `check_finality` renders its verdict in — so every node computes the same
+    //     drops. Walking in QUEUE order instead (replay-set-first, survivors behind)
+    //     was node-local: a lagging node orders a survivor differently from a node
+    //     that already executed the height, so the two kept different tx sets from
+    //     one rollback with identical exclusion rows — silent state divergence.
     //
-    // Exclusions recorded at heights not in this queue happened below `from_anchor`
-    // — before every position here — so they are unavailable from the start: the
-    // rollback wiped the parent's effects and nothing in the queue rebuilds them
-    // (#427's original shape).
+    //   * the QUEUE order is replay-set-first for drain LIVENESS (a survivor block
+    //     decision ordered ahead of the replay set would stall the very decisions
+    //     that raise the tip back up), and is unrelated to availability.
+    //
+    // The walk tracks outputs the original execution produced that this replay will
+    // not: every excluded tx, from the anchor position it was dropped at, until (if
+    // ever) a later position re-decides and keeps it. A keep re-creates its parent's
+    // outputs only from its own position onward, so a child ordered between an
+    // excluded parent and its re-decide drops (#427 through the re-decide door),
+    // while a child ordered before the parent keeps — it never saw those effects in
+    // the original execution either. Exclusions recorded at heights not in this
+    // queue happened below `from_anchor`, before every position here, so they are
+    // unavailable from the start (#427's original shape).
     let queued_heights: HashSet<u64> = merged
         .iter()
         .map(|(d, _)| d.consensus_height.as_u64())
@@ -288,9 +298,63 @@ fn build_replay_queue(
         .flat_map(|(_, txids)| txids.iter().filter_map(|t| t.parse::<Txid>().ok()))
         .collect();
 
-    let mut all_excluded: HashSet<Txid> = HashSet::new();
-    let mut queue = VecDeque::with_capacity(merged.len());
+    let mut execution_order: Vec<usize> = (0..merged.len()).collect();
+    execution_order.sort_by_key(|&i| {
+        let (d, _) = &merged[i];
+        match &d.value {
+            Value::Batch { anchor_height, .. } => (*anchor_height, d.consensus_height.as_u64()),
+            // Blocks carry no batch txs; the walk ignores them, so their key only
+            // needs to be stable. Their own height orders them among batches.
+            Value::Block { height, .. } => (*height, d.consensus_height.as_u64()),
+        }
+    });
 
+    let mut all_excluded: HashSet<Txid> = HashSet::new();
+    let mut dropped_per_height: HashMap<u64, HashSet<Txid>> = HashMap::new();
+    for &i in &execution_order {
+        let (decision, txs) = &merged[i];
+        if !matches!(decision.value, Value::Batch { .. }) {
+            continue;
+        }
+        let mut dropped = HashSet::new();
+        for tx in txs {
+            let txid = tx.compute_txid();
+            if dropped_at(decision, &txid) {
+                all_excluded.insert(txid);
+                unavailable.insert(txid);
+                dropped.insert(txid);
+            } else if tx
+                .input
+                .iter()
+                .any(|i| unavailable.contains(&i.previous_output.txid))
+            {
+                // A descendant of a tx missing AT THIS EXECUTION POSITION. Dropped in
+                // memory, deliberately NOT recorded in `excluded_batch_txids`: a
+                // descendant's drop is only justified while its parent stays excluded,
+                // and a durable row outlives that justification — the read predicate
+                // re-checks the CHILD's confirmation, never the parent's recovery, so a
+                // recorded child would stay dropped after a reorg heals the parent while
+                // every fresh syncer executes it. Re-deriving from the durable base rows
+                // each pass costs at most one extra rollback (a leaked child re-arms its
+                // own deadline and becomes a base row); a wrong durable drop is a
+                // divergence.
+                all_excluded.insert(txid);
+                unavailable.insert(txid);
+                dropped.insert(txid);
+            } else {
+                // A re-decided copy of a previously excluded tx: from here on its
+                // outputs exist again, so later children survive.
+                unavailable.remove(&txid);
+            }
+        }
+        if !dropped.is_empty() {
+            dropped_per_height.insert(decision.consensus_height.as_u64(), dropped);
+        }
+    }
+
+    // Emit the queue in its original (replay-first) order, applying the per-height
+    // drops computed above.
+    let mut queue = VecDeque::with_capacity(merged.len());
     for (mut decision, txs) in merged {
         if let Value::Batch {
             anchor_height,
@@ -299,36 +363,12 @@ fn build_replay_queue(
         } = &decision.value
         {
             let (anchor_height, anchor_hash) = (*anchor_height, *anchor_hash);
-            let mut kept = Vec::with_capacity(txs.len());
-            for tx in &txs {
-                let txid = tx.compute_txid();
-                if dropped_at(&decision, &txid) {
-                    all_excluded.insert(txid);
-                    unavailable.insert(txid);
-                } else if tx
-                    .input
-                    .iter()
-                    .any(|i| unavailable.contains(&i.previous_output.txid))
-                {
-                    // A descendant of a tx that is missing AT THIS POSITION. Dropped
-                    // in memory, deliberately NOT recorded in `excluded_batch_txids`:
-                    // a descendant's drop is only justified while its parent stays
-                    // excluded, and a durable row outlives that justification — the
-                    // read predicate re-checks the CHILD's confirmation, never the
-                    // parent's recovery, so a recorded child would stay dropped after
-                    // a reorg heals the parent while every fresh syncer executes it.
-                    // Re-deriving from the durable base rows each pass costs at most
-                    // one extra rollback (a leaked child re-arms its own deadline and
-                    // becomes a base row); a wrong durable drop is a divergence.
-                    all_excluded.insert(txid);
-                    unavailable.insert(txid);
-                } else {
-                    kept.push(tx.clone());
-                    // A re-decided copy of a previously excluded tx: from here on
-                    // its outputs exist again, so later children survive.
-                    unavailable.remove(&txid);
-                }
-            }
+            let dropped = dropped_per_height.get(&decision.consensus_height.as_u64());
+            let kept: Vec<bitcoin::Transaction> = txs
+                .iter()
+                .filter(|tx| !dropped.is_some_and(|d| d.contains(&tx.compute_txid())))
+                .cloned()
+                .collect();
             // Narrowing what we execute must not narrow what we record as decided —
             // see `DeferredDecision::certified_txs`. The BODIES are retained, not just
             // the txids: an excluded tx never confirmed, so this is the only copy left
@@ -2062,6 +2102,18 @@ mod tests {
         (decision(consensus_height), Vec::new())
     }
 
+    /// `carrying` with an explicit anchor height, so a test can pin the
+    /// EXECUTION order (which is anchor order) independently of the queue order.
+    fn carrying_at(
+        consensus_height: u64,
+        anchor_height: u64,
+        txs: Vec<Transaction>,
+    ) -> (DeferredDecision, Vec<Transaction>) {
+        let mut d = decision(consensus_height);
+        d.value = Value::new_batch_raw(anchor_height, bitcoin::BlockHash::all_zeros(), txs.clone());
+        (d, txs)
+    }
+
     /// Exclusions attributed to the decision they were dropped from.
     fn excl(pairs: &[(u64, Txid)]) -> HashMap<u64, HashSet<String>> {
         let mut m: HashMap<u64, HashSet<String>> = HashMap::new();
@@ -2375,6 +2427,63 @@ mod tests {
             "a descendant of an excluded, otherwise-absent parent must not execute"
         );
         assert!(dropped.contains(&child.compute_txid()));
+    }
+
+    /// The availability walk must give the SAME answer on two nodes that split the
+    /// same decisions differently between the replay set and the survivors — because
+    /// that split is node-local (a lagging node holds as a survivor what a caught-up
+    /// node already executed), while the drop set must be a shared input or two
+    /// honest nodes diverge from one rollback.
+    ///
+    /// Parent P is excluded below `from_anchor` (out of queue), then re-decided by D
+    /// at a HIGHER anchor than child C's batch — so in execution (anchor) order C
+    /// runs before P is rebuilt and must drop, whichever side of the queue split D
+    /// and C land on. The pre-fix queue-order walk kept C whenever D happened to sit
+    /// ahead of it in the queue.
+    #[test]
+    fn build_replay_queue_availability_is_anchor_order_not_queue_order() {
+        let parent = tx(&[OutPoint::null()], 1);
+        let child = tx(&[spend(&parent)], 2);
+        // P excluded at height 3, which is NOT in either queue → seeds the walk.
+        let rows = || excl(&[(3, parent.compute_txid())]);
+        // C's batch anchors at 100; D re-decides P at 105 (executes AFTER C).
+        let child_batch = || carrying_at(10, 100, vec![child.clone()]);
+        let redecide = || carrying_at(20, 105, vec![parent.clone()]);
+
+        // Node A: C is in the replay set, D is a survivor behind it.
+        let (_, dropped_a) = build_replay_queue(vec![child_batch()], vec![redecide()], &rows());
+        // Node B: D is in the replay set, C is a survivor behind it.
+        let (_, dropped_b) = build_replay_queue(vec![redecide()], vec![child_batch()], &rows());
+
+        assert!(
+            dropped_a.contains(&child.compute_txid()),
+            "C executes before P is rebuilt, so it must drop"
+        );
+        assert_eq!(
+            dropped_a, dropped_b,
+            "the drop set must not depend on the node-local replay/survivor split"
+        );
+    }
+
+    /// The mirror: a child ordered BEFORE its parent's re-decide in EXECUTION order
+    /// keeps, again independent of the queue split. C's batch anchors ABOVE D here,
+    /// so P is rebuilt first and C's input exists.
+    #[test]
+    fn build_replay_queue_keeps_a_child_executed_after_its_parents_redecide() {
+        let parent = tx(&[OutPoint::null()], 1);
+        let child = tx(&[spend(&parent)], 2);
+        let rows = || excl(&[(3, parent.compute_txid())]);
+        let child_batch = || carrying_at(10, 110, vec![child.clone()]);
+        let redecide = || carrying_at(20, 105, vec![parent.clone()]);
+
+        let (_, dropped_a) = build_replay_queue(vec![child_batch()], vec![redecide()], &rows());
+        let (_, dropped_b) = build_replay_queue(vec![redecide()], vec![child_batch()], &rows());
+
+        assert!(
+            !dropped_a.contains(&child.compute_txid()),
+            "P is rebuilt at anchor 105 before C runs at 110, so C keeps"
+        );
+        assert_eq!(dropped_a, dropped_b, "and the answer is split-independent");
     }
 
     /// An unmarked decision is untouched — the record-only case, which has certified
