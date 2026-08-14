@@ -46,6 +46,7 @@ pub enum ConsensusResult {
     BatchProcessed { txids: Vec<String> },
 }
 
+#[derive(Clone)]
 pub struct DeferredDecision {
     pub consensus_height: Height,
     pub value: Value,

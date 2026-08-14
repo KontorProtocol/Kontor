@@ -1290,9 +1290,15 @@ impl<E: Executor> Reactor<E> {
         );
 
         // BOTH sides resolve, not just the replay set — see `resolve_decisions`.
+        // Resolve from a CLONE of the queued survivors and clear the originals only
+        // once resolution has succeeded, rather than `mem::take`-ing first: a
+        // resolve failure (bitcoind unreachable for a `BatchTx::Id`) then leaves
+        // `deferred_decisions` intact instead of destroying the only in-memory copy
+        // of its rowless entries before propagating.
         let replayed = self.resolve_decisions(replay_batches).await?;
-        let queued = std::mem::take(&mut self.consensus.deferred_decisions);
+        let queued: Vec<_> = self.consensus.deferred_decisions.iter().cloned().collect();
         let survivors = self.resolve_decisions(queued).await?;
+        self.consensus.deferred_decisions.clear();
 
         let (queue, excluded) = build_replay_queue(replayed, survivors, &applicable);
         self.consensus.deferred_decisions = queue;
@@ -1968,15 +1974,22 @@ impl<E: Executor> Reactor<E> {
                 }
             }
         } else {
-            // We decided a value we never assembled locally. For blocks this can't
-            // happen (every node rebuilds the same block reference when proposing);
-            // it would mean a batch decided at a round whose proposal we never saw
-            // and whose txs aren't in our pool. Surface it rather than dropping it
-            // silently, which would leave a hole in the decided sequence.
-            warn!(
-                height = %certificate.height,
-                value = %certificate.value_id,
-                "Finalized a value not held among our undecided proposals for this height"
+            // We finalized a value we never assembled locally — a batch decided at
+            // a round whose proposal we never saw, whose txs are not in our pool.
+            // We have the certificate but not the content, so there is no row to
+            // write. Falling through to advance `current_height` past this height
+            // would make it a PERMANENT hole (I3): Malachite never re-delivers a
+            // height it considers decided, and the startup cleanup only trims a
+            // suffix. Fail-stop instead (I5) — restart resumes at this height and
+            // value-sync re-delivers the decided value into `undecided`, where the
+            // arm above records it. A node that keeps hitting this is persistently
+            // unable to follow consensus, which is exactly the loud stop an
+            // operator needs, not a quiet divergence.
+            bail!(
+                "Finalized value {} at height {} is not among our undecided proposals — \
+                 cannot record it; stopping so a restart re-syncs the decided value",
+                certificate.value_id,
+                certificate.height,
             );
         }
 
