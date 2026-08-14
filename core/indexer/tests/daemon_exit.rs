@@ -14,8 +14,12 @@ use std::time::{Duration, Instant};
 /// pre-bound port makes the failure deterministic and immediate.
 #[test]
 fn a_fatal_startup_error_exits_nonzero_with_the_cause() {
-    // Hold the port for the duration so the node's bind loses the race.
-    let taken = TcpListener::bind("127.0.0.1:0").expect("pre-bind a port");
+    // Hold the port for the duration so the node's bind loses the race. The
+    // SAME wildcard address the node binds, not 127.0.0.1: on macOS,
+    // SO_REUSEADDR lets a wildcard bind coexist with a specific-address one,
+    // so a loopback pre-bind does not conflict there and the node starts
+    // happily. Two identical wildcard binds conflict on every platform.
+    let taken = TcpListener::bind("0.0.0.0:0").expect("pre-bind a port");
     let port = taken.local_addr().expect("local addr").port();
     let data_dir = tempfile::tempdir().expect("tempdir");
     // Clap requires it; the bind failure fires before it is ever read, so an
