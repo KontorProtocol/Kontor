@@ -543,14 +543,25 @@ impl<E: Executor> Reactor<E> {
 
         let result = self.run_event_loop().await;
 
-        // Gracefully stop the Malachite consensus engine and wait for cleanup
-        let _ = self
+        // Gracefully stop the Malachite consensus engine — BOUNDED. This wait
+        // sits between a reactor fatal and the exit status that reports it, so
+        // an engine that never acknowledges the stop must not stand there
+        // indefinitely: that is the immortal green-probed node again, one layer
+        // down. On timeout, say so and go — the process is exiting either way,
+        // and the loop result, not the engine's teardown, is the story.
+        if let Err(e) = self
             .consensus
             .engine_handle
             .actor
             .get_cell()
-            .stop_and_wait(Some("Reactor shutting down".to_string()), None)
-            .await;
+            .stop_and_wait(
+                Some("Reactor shutting down".to_string()),
+                Some(std::time::Duration::from_secs(5)),
+            )
+            .await
+        {
+            warn!(error = %e, "Malachite engine did not stop cleanly within 5s; exiting without it");
+        }
 
         result
     }
