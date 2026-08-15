@@ -34,6 +34,10 @@ impl<E: Executor> Reactor<E> {
         info!(%height, %round, %proposer, ?role, "Started round");
         self.consensus.current_height = height;
         self.consensus.current_round = round;
+        // Authoritative proposer for this round, straight from the engine. Proposal
+        // parts are authenticated against THIS, never a `select_proposer`
+        // recomputation (the validator set is refreshed per block and unordered).
+        self.consensus.current_proposer = Some(proposer);
 
         if let Some(pending) = &self.consensus.pending_proposal
             && (pending.height != height || pending.round != round)
@@ -74,26 +78,13 @@ impl<E: Executor> Reactor<E> {
             return reply_none(reply);
         };
 
-        // Authenticate before trusting any of it: the proposer must be the
-        // round's scheduled proposer and the Fin signature must verify. A forged
-        // stream cannot pass this — only the proposer's key signs a matching Fin.
-        if let Err(reason) = self.consensus.verify_proposal_parts(&parts) {
-            warn!(
-                proposer = %parts.proposer,
-                height = %parts.height,
-                round = %parts.round,
-                %reason,
-                "Rejecting proposal: authentication failed"
-            );
-            return reply_none(reply);
-        }
-
         let height = self.consensus.current_height;
         let round = self.consensus.current_round;
 
-        // Only the current round is actionable. A verified proposal for another
-        // height/round is dropped (Kontor does not buffer future proposals), and
-        // one whose slot is already filled needs no re-validation.
+        // Only the current round is actionable. A proposal for another height/round
+        // is dropped (Kontor does not buffer future proposals), and one whose slot
+        // is already filled needs no re-validation. Gate BEFORE authenticating so
+        // the proposer is checked against THIS round's engine-chosen proposer.
         if round == Round::Nil
             || parts.height != height
             || parts.round != round
@@ -103,6 +94,26 @@ impl<E: Executor> Reactor<E> {
                 .get(&height)
                 .is_some_and(|rounds| rounds.contains_key(&round))
         {
+            return reply_none(reply);
+        }
+
+        // Authenticate against the engine's proposer for this round (from
+        // StartedRound) and the Fin signature. A forged stream cannot pass — only
+        // the proposer's key signs a matching Fin.
+        let Some(expected_proposer) = self.consensus.current_proposer else {
+            return reply_none(reply);
+        };
+        if let Err(reason) = self
+            .consensus
+            .verify_proposal_parts(expected_proposer, &parts)
+        {
+            warn!(
+                proposer = %parts.proposer,
+                height = %parts.height,
+                round = %parts.round,
+                %reason,
+                "Rejecting proposal: authentication failed"
+            );
             return reply_none(reply);
         }
 
