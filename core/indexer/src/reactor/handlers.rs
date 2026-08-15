@@ -1,8 +1,8 @@
 use anyhow::{Context, Result};
-use malachitebft_app_channel::app::streaming::{StreamContent, StreamMessage};
+use malachitebft_app_channel::app::streaming::StreamMessage;
 use malachitebft_app_channel::app::types::codec::Codec;
 use malachitebft_app_channel::app::types::sync::RawDecidedValue;
-use malachitebft_app_channel::app::types::{LocallyProposedValue, ProposedValue};
+use malachitebft_app_channel::app::types::{LocallyProposedValue, PeerId, ProposedValue};
 use malachitebft_app_channel::{AppMsg, NetworkRequest};
 use malachitebft_core_consensus::Role;
 use malachitebft_core_types::{Round, Validity};
@@ -14,6 +14,13 @@ use crate::consensus::{Address, Ctx, Height, ProposalPart, ValueId};
 use super::Reactor;
 use super::consensus_state;
 use super::executor::Executor;
+
+/// Answer a `ReceivedProposalPart` with "not a complete, accepted proposal".
+fn reply_none(reply: tokio::sync::oneshot::Sender<Option<ProposedValue<Ctx>>>) -> Result<()> {
+    reply
+        .send(None)
+        .map_err(|_| anyhow::anyhow!("Failed to send ReceivedProposalPart reply"))
+}
 
 impl<E: Executor> Reactor<E> {
     fn handle_started_round(
@@ -56,33 +63,58 @@ impl<E: Executor> Reactor<E> {
 
     async fn handle_received_proposal_part(
         &mut self,
+        from: PeerId,
         part: StreamMessage<ProposalPart>,
         reply: tokio::sync::oneshot::Sender<Option<ProposedValue<Ctx>>>,
     ) -> Result<()> {
+        // Buffer the part; act only once the full stream (Init + Data + Fin) is
+        // reassembled. A lone Data part — the shortcut the old code trusted —
+        // can no longer claim the round.
+        let Some(parts) = self.consensus.part_streams.insert(from, part) else {
+            return reply_none(reply);
+        };
+
+        // Authenticate before trusting any of it: the proposer must be the
+        // round's scheduled proposer and the Fin signature must verify. A forged
+        // stream cannot pass this — only the proposer's key signs a matching Fin.
+        if let Err(reason) = self.consensus.verify_proposal_parts(&parts) {
+            warn!(
+                proposer = %parts.proposer,
+                height = %parts.height,
+                round = %parts.round,
+                %reason,
+                "Rejecting proposal: authentication failed"
+            );
+            return reply_none(reply);
+        }
+
         let height = self.consensus.current_height;
         let round = self.consensus.current_round;
 
-        if round != Round::Nil
-            && let StreamContent::Data(ProposalPart::Data(data)) = &part.content
-            && !self
+        // Only the current round is actionable. A verified proposal for another
+        // height/round is dropped (Kontor does not buffer future proposals), and
+        // one whose slot is already filled needs no re-validation.
+        if round == Round::Nil
+            || parts.height != height
+            || parts.round != round
+            || self
                 .consensus
                 .undecided
                 .get(&height)
                 .is_some_and(|rounds| rounds.contains_key(&round))
         {
-            // May defer the reply behind the bitcoind I/O phase. The engine
-            // waits on the oneshot exactly as it used to wait on this handler
-            // running the RPCs inline; the reactor's loop no longer waits
-            // with it.
-            return self
-                .validate_and_accept_proposal(data, height, round, reply)
-                .await;
+            return reply_none(reply);
         }
 
-        reply
-            .send(None)
-            .map_err(|_| anyhow::anyhow!("Failed to send ReceivedProposalPart reply"))?;
-        Ok(())
+        let Some(data) = parts.data().cloned() else {
+            return reply_none(reply);
+        };
+
+        // May defer the reply behind the bitcoind I/O phase. The engine waits on
+        // the oneshot exactly as it used to wait on this handler running the RPCs
+        // inline; the reactor's loop no longer waits with it.
+        self.validate_and_accept_proposal(&data, parts.proposer, height, round, reply)
+            .await
     }
 
     async fn handle_get_decided_values(
@@ -231,12 +263,9 @@ impl<E: Executor> Reactor<E> {
                 self.handle_get_value(height, round, timeout, reply).await?;
             }
 
-            AppMsg::ReceivedProposalPart {
-                from: _,
-                part,
-                reply,
-            } => {
-                self.handle_received_proposal_part(part, reply).await?;
+            AppMsg::ReceivedProposalPart { from, part, reply } => {
+                self.handle_received_proposal_part(from, part, reply)
+                    .await?;
             }
 
             AppMsg::ExtendVote { reply, .. } => {

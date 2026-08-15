@@ -16,7 +16,7 @@ use malachitebft_app_channel::Channels;
 use malachitebft_app_channel::app::streaming::{StreamContent, StreamId, StreamMessage};
 use malachitebft_app_channel::app::types::core::Round;
 use malachitebft_app_channel::app::types::{LocallyProposedValue, ProposedValue};
-use malachitebft_core_types::{HeightParams, LinearTimeouts};
+use malachitebft_core_types::{Context as _, HeightParams, LinearTimeouts};
 
 use prost::Message;
 use sha3::Digest;
@@ -25,8 +25,8 @@ use crate::consensus::codec::decode_commit_certificate;
 use crate::consensus::finality_types::*;
 use crate::consensus::signing::Ed25519Provider;
 use crate::consensus::{
-    Address, Ctx, Genesis, Height, ProposalData, ProposalFin, ProposalInit, ProposalPart,
-    ValidatorSet, Value,
+    Address, Ctx, Genesis, Height, PartStreamsMap, ProposalData, ProposalFin, ProposalInit,
+    ProposalPart, ProposalParts, ValidatorSet, Value,
 };
 use crate::database::queries::{
     delete_unexecuted_batch_suffix, get_checkpoint_latest, get_transaction_by_txid, insert_batch,
@@ -118,6 +118,9 @@ pub struct ConsensusState {
     pub mempool_fee_index: MempoolFeeIndex,
     pub current_height: Height,
     pub current_round: Round,
+    // Reassembles received proposal-part streams so the whole proposal can be
+    // authenticated (proposer + Fin signature) before any of it is trusted.
+    pub part_streams: PartStreamsMap,
     // Proposed values not yet decided, grouped by height then round. Grouping by
     // height lets `handle_finalized` find the decided value by value_id within the
     // height (the decided round can differ from the round we filed it under) and
@@ -186,6 +189,70 @@ pub struct ObservationChannels {
 /// set to a transient read error, which is #515 again from a new direction.
 /// This matches `execute_block`'s handling of the same query and the reasoning
 /// already written down in `clear_on_rollback`.
+/// Authenticate a reassembled proposal against the validator set: the `Init`
+/// proposer must be the round's scheduled proposer, and the `Fin` signature must
+/// cover `(height, round, data)` under that proposer's key. Free function so the
+/// check is unit-testable without a live `ConsensusState`.
+pub(super) fn authenticate_proposal(
+    validator_set: &ValidatorSet,
+    parts: &ProposalParts,
+) -> Result<(), String> {
+    let height = parts.height;
+    let round = parts.round;
+    if round == Round::Nil {
+        return Err("proposal round is nil".to_string());
+    }
+
+    let expected = Ctx.select_proposer(validator_set, height, round).address;
+    if parts.proposer != expected {
+        return Err(format!(
+            "wrong proposer: got {}, expected {expected}",
+            parts.proposer
+        ));
+    }
+
+    let fin = parts.fin().ok_or_else(|| "missing Fin part".to_string())?;
+    let data = parts
+        .data()
+        .ok_or_else(|| "missing Data part".to_string())?;
+    let proposer = validator_set
+        .get_by_address(&parts.proposer)
+        .ok_or_else(|| "proposer not in validator set".to_string())?;
+
+    let hash = proposal_sign_hash(height, round, data);
+    if proposer.public_key.verify(&hash, &fin.signature).is_err() {
+        return Err("invalid proposal signature".to_string());
+    }
+    Ok(())
+}
+
+/// The signed preimage over a proposal: `Keccak256(height ‖ round ‖ data)`. The
+/// single definition used by both `stream_proposal` (to sign) and
+/// `verify_proposal_parts` (to verify) so the two cannot diverge.
+pub(super) fn proposal_sign_hash(height: Height, round: Round, data: &ProposalData) -> [u8; 32] {
+    let mut hasher = sha3::Keccak256::new();
+    hasher.update(height.as_u64().to_be_bytes());
+    hasher.update(round.as_i64().to_be_bytes());
+    match data {
+        ProposalData::Batch {
+            anchor_height,
+            anchor_hash,
+            transactions,
+        } => {
+            hasher.update(anchor_height.to_be_bytes());
+            hasher.update(anchor_hash.to_byte_array());
+            for tx in transactions {
+                hasher.update(tx.compute_txid().to_byte_array());
+            }
+        }
+        ProposalData::Block { height, hash } => {
+            hasher.update(height.to_be_bytes());
+            hasher.update(hash.to_byte_array());
+        }
+    }
+    hasher.finalize().into()
+}
+
 async fn missing_txids(conn: &libsql::Connection, batch: &UnfinalizedBatch) -> Result<Vec<Txid>> {
     let mut missing = Vec::new();
     for txid in &batch.txids {
@@ -546,6 +613,7 @@ impl ConsensusState {
             mempool_fee_index,
             current_height,
             current_round: Round::new(0),
+            part_streams: PartStreamsMap::new(),
             undecided: BTreeMap::new(),
             unfinalized_batches,
             deferred_decisions: VecDeque::new(),
@@ -622,32 +690,19 @@ impl ConsensusState {
         value: &LocallyProposedValue<Ctx>,
         pol_round: Round,
     ) -> Vec<StreamMessage<ProposalPart>> {
-        let mut hasher = sha3::Keccak256::new();
-        hasher.update(value.height.as_u64().to_be_bytes());
-        hasher.update(value.round.as_i64().to_be_bytes());
-
         let data_part = match &value.value {
             Value::Batch {
                 anchor_height,
                 anchor_hash,
-                txs,
                 ..
-            } => {
-                hasher.update(anchor_height.to_be_bytes());
-                hasher.update(anchor_hash.to_byte_array());
-                for tx in txs {
-                    hasher.update(tx.txid().to_byte_array());
-                }
-                ProposalData::new_batch(*anchor_height, *anchor_hash, value.value.batch_raw_txs())
-            }
-            Value::Block { height, hash } => {
-                hasher.update(height.to_be_bytes());
-                hasher.update(hash.to_byte_array());
-                ProposalData::new_block(*height, *hash)
-            }
+            } => ProposalData::new_batch(*anchor_height, *anchor_hash, value.value.batch_raw_txs()),
+            Value::Block { height, hash } => ProposalData::new_block(*height, *hash),
         };
 
-        let hash = hasher.finalize();
+        // The Fin signature covers Init(height,round) + Data. `verify_proposal_parts`
+        // recomputes the same preimage — keep both on `proposal_sign_hash` so they
+        // cannot drift.
+        let hash = proposal_sign_hash(value.height, value.round, &data_part);
         let signature = self.signing_provider.sign(&hash);
 
         let parts = vec![
@@ -678,6 +733,19 @@ impl ConsensusState {
         ));
 
         msgs
+    }
+
+    /// Authenticate a reassembled proposal before any of it is trusted:
+    ///
+    /// 1. the `Init` proposer must be the round's scheduled proposer, and
+    /// 2. the `Fin` signature must cover `(height, round, data)` under that
+    ///    proposer's public key.
+    ///
+    /// Returns the rejection reason on failure so the caller can log and reply
+    /// `None`. This is what a bare `Data` part (the old shortcut) could never
+    /// satisfy: only the scheduled proposer's key produces a matching `Fin`.
+    pub(super) fn verify_proposal_parts(&self, parts: &ProposalParts) -> Result<(), String> {
+        authenticate_proposal(&self.current_validator_set, parts)
     }
 
     pub async fn check_finality(
@@ -1435,5 +1503,123 @@ mod tests {
             2,
             "only the two at-deadline batches may be probed"
         );
+    }
+
+    // C1: proposal-part authentication. A reassembled proposal is trusted only
+    // if its Init proposer is the round's scheduled proposer AND the Fin
+    // signature verifies under that proposer's key — the property a lone forged
+    // Data part could never satisfy.
+    mod proposal_auth {
+        use super::super::{authenticate_proposal, proposal_sign_hash};
+        use crate::consensus::signing::PrivateKey;
+        use crate::consensus::{
+            Address, Height, ProposalData, ProposalFin, ProposalInit, ProposalPart, ProposalParts,
+            Validator, ValidatorSet,
+        };
+        use bitcoin::BlockHash;
+        use bitcoin::hashes::Hash;
+        use malachitebft_core_types::Round;
+
+        fn key(seed: u8) -> PrivateKey {
+            PrivateKey::from([seed; 32])
+        }
+
+        /// A 4-validator set in a fixed order, so `select_proposer` is
+        /// deterministic: proposer index = `(height - 1 + round) % 4`.
+        fn four_validators() -> (ValidatorSet, Vec<PrivateKey>) {
+            let keys = vec![key(1), key(2), key(3), key(4)];
+            let vs = ValidatorSet::new(keys.iter().map(|k| Validator::new(k.public_key(), 1)));
+            (vs, keys)
+        }
+
+        fn data() -> ProposalData {
+            ProposalData::new_batch(5, BlockHash::all_zeros(), vec![])
+        }
+
+        fn parts(
+            height: Height,
+            round: Round,
+            init_proposer: Address,
+            signer: &PrivateKey,
+            data: ProposalData,
+        ) -> ProposalParts {
+            let hash = proposal_sign_hash(height, round, &data);
+            let signature = signer.sign(&hash);
+            ProposalParts {
+                height,
+                round,
+                proposer: init_proposer,
+                parts: vec![
+                    ProposalPart::Init(ProposalInit::new(height, round, Round::Nil, init_proposer)),
+                    ProposalPart::Data(data),
+                    ProposalPart::Fin(ProposalFin::new(signature)),
+                ],
+            }
+        }
+
+        #[test]
+        fn accepts_scheduled_proposer_with_valid_signature() {
+            let (vs, keys) = four_validators();
+            let (height, round) = (Height::new(1), Round::new(0)); // proposer index 0
+            let addr = Address::from_public_key(&keys[0].public_key());
+            let parts = parts(height, round, addr, &keys[0], data());
+            assert!(authenticate_proposal(&vs, &parts).is_ok());
+        }
+
+        #[test]
+        fn rejects_a_non_scheduled_proposer() {
+            let (vs, keys) = four_validators();
+            let (height, round) = (Height::new(1), Round::new(0)); // scheduled = index 0
+            // A different validator forges a fully self-consistent, self-signed
+            // stream — Init.proposer and the Fin signature both key[1] — but it is
+            // not the scheduled proposer.
+            let addr = Address::from_public_key(&keys[1].public_key());
+            let parts = parts(height, round, addr, &keys[1], data());
+            let err = authenticate_proposal(&vs, &parts).unwrap_err();
+            assert!(err.contains("wrong proposer"), "{err}");
+        }
+
+        #[test]
+        fn rejects_a_signature_from_another_key() {
+            let (vs, keys) = four_validators();
+            let (height, round) = (Height::new(1), Round::new(0));
+            // Init claims the scheduled proposer (index 0) but the Fin is signed by
+            // someone else — the squatter cannot produce the proposer's signature.
+            let addr = Address::from_public_key(&keys[0].public_key());
+            let parts = parts(height, round, addr, &keys[1], data());
+            let err = authenticate_proposal(&vs, &parts).unwrap_err();
+            assert!(err.contains("invalid proposal signature"), "{err}");
+        }
+
+        #[test]
+        fn rejects_data_mutated_after_signing() {
+            let (vs, keys) = four_validators();
+            let (height, round) = (Height::new(1), Round::new(0));
+            let addr = Address::from_public_key(&keys[0].public_key());
+            // Sign over the honest data, then swap the Data part for a different
+            // anchor — the witness-carrying batch a malleator would substitute.
+            let mut p = parts(height, round, addr, &keys[0], data());
+            p.parts[1] =
+                ProposalPart::Data(ProposalData::new_batch(99, BlockHash::all_zeros(), vec![]));
+            let err = authenticate_proposal(&vs, &p).unwrap_err();
+            assert!(err.contains("invalid proposal signature"), "{err}");
+        }
+
+        #[test]
+        fn round_one_shifts_the_scheduled_proposer() {
+            let (vs, keys) = four_validators();
+            // (height 1, round 1) => index (1 - 1 + 1) % 4 = 1.
+            let (height, round) = (Height::new(1), Round::new(1));
+            let scheduled = Address::from_public_key(&keys[1].public_key());
+            assert!(
+                authenticate_proposal(&vs, &parts(height, round, scheduled, &keys[1], data()))
+                    .is_ok()
+            );
+            // Index 0, correct for round 0, is now the wrong proposer.
+            let addr0 = Address::from_public_key(&keys[0].public_key());
+            assert!(
+                authenticate_proposal(&vs, &parts(height, round, addr0, &keys[0], data())).is_err()
+            );
+        }
     }
 }

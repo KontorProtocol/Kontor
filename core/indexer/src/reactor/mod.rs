@@ -253,10 +253,17 @@ impl<E: Executor> Reactor<E> {
             match entry {
                 BatchTx::Raw(tx) => resolved.push(Some(tx.clone())),
                 BatchTx::Id(txid) => {
-                    if let Some((raw, _)) = self.consensus.pending_transactions.get(txid) {
-                        resolved.push(Some(raw.clone()));
-                    } else if let Some(tx) = Self::resolve_tx_from_db(&conn, txid).await {
+                    // Durable recorded body FIRST — the exact bytes this node
+                    // executed, retained until finality. It outranks the mempool
+                    // copy, which could be a same-txid witness variant. On a DB
+                    // miss the height is past finality (body pruned), where the tx
+                    // has confirmed and bitcoind holds the single canonical
+                    // variant; the pool (drained of confirmed txs) is only a
+                    // liveness fallback for a not-yet-recorded local decision.
+                    if let Some(tx) = Self::resolve_tx_from_db(&conn, txid).await {
                         resolved.push(Some(tx));
+                    } else if let Some((raw, _)) = self.consensus.pending_transactions.get(txid) {
+                        resolved.push(Some(raw.clone()));
                     } else {
                         rpc_slots.push(resolved.len());
                         rpc_txids.push(*txid);

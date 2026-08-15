@@ -270,6 +270,25 @@ pub async fn delete_unconfirmed_batch_tx(conn: &Connection, txid: &str) -> Resul
     Ok(())
 }
 
+/// Drop the retained bodies of every batch strictly below `height_floor` — the
+/// lowest consensus height still within the finality window. Bodies are kept
+/// until their decision is final (not merely until the tx confirms) so sync and
+/// replay always reproduce the exact executed witness within the window; past
+/// finality the tx has long confirmed and bitcoind holds the single canonical
+/// variant, so the body is redundant. Covers executed AND record-only batches.
+pub async fn delete_unconfirmed_batch_txs_below(
+    conn: &Connection,
+    height_floor: u64,
+) -> Result<u64, Error> {
+    let deleted = conn
+        .execute(
+            "DELETE FROM unconfirmed_batch_txs WHERE batch_height < ?",
+            params![height_floor],
+        )
+        .await?;
+    Ok(deleted)
+}
+
 pub async fn select_unconfirmed_batch_txs(
     conn: &Connection,
     batch_height: u64,
