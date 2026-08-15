@@ -261,15 +261,6 @@ pub async fn insert_unconfirmed_batch_tx(
     Ok(())
 }
 
-pub async fn delete_unconfirmed_batch_tx(conn: &Connection, txid: &str) -> Result<(), Error> {
-    conn.execute(
-        "DELETE FROM unconfirmed_batch_txs WHERE txid = ?",
-        params![txid],
-    )
-    .await?;
-    Ok(())
-}
-
 /// Drop the retained bodies of every batch strictly below `height_floor` — the
 /// lowest consensus height still within the finality window. Bodies are kept
 /// until their decision is final (not merely until the tx confirms) so sync and

@@ -128,6 +128,14 @@ impl ProposalParts {
     }
 }
 
+/// Cap on concurrently buffered (incomplete) streams. A healthy node buffers a
+/// tiny handful — one per proposer per live round, each removed the instant it
+/// completes. The cap only bites under a peer flooding never-finished partial
+/// streams under fresh stream ids, and when it does it refuses NEW streams rather
+/// than evicting in-progress ones — so a flood cannot displace the genuine
+/// proposal already being assembled, only fail to add more junk.
+const MAX_BUFFERED_STREAMS: usize = 1024;
+
 #[derive(Default)]
 pub struct PartStreamsMap {
     streams: BTreeMap<(PeerId, StreamId), StreamState>,
@@ -147,11 +155,16 @@ impl PartStreamsMap {
         msg: StreamMessage<ProposalPart>,
     ) -> Option<ProposalParts> {
         let stream_id = msg.stream_id.clone();
+        let key = (peer_id, stream_id);
 
-        let state = self
-            .streams
-            .entry((peer_id, stream_id.clone()))
-            .or_default();
+        // Bound the map: refuse a NEW stream once full, but always accept further
+        // parts for a stream already being assembled (so a flood cannot starve an
+        // in-progress genuine proposal).
+        if self.streams.len() >= MAX_BUFFERED_STREAMS && !self.streams.contains_key(&key) {
+            return None;
+        }
+
+        let state = self.streams.entry(key.clone()).or_default();
 
         if !state.seen_sequences.insert(msg.sequence) {
             return None;
@@ -159,11 +172,20 @@ impl PartStreamsMap {
 
         let result = state.insert(msg);
 
-        if state.is_done() {
-            self.streams.remove(&(peer_id, stream_id));
+        // Remove on the RESULT, not a re-check of `is_done()`: completing the
+        // stream `take`s `init_info` and drains the buffer, so `is_done()` is
+        // false again here — re-checking it would leak the spent `StreamState`
+        // forever (one per proposer/height/round on a healthy chain).
+        if result.is_some() {
+            self.streams.remove(&key);
         }
 
         result
+    }
+
+    #[cfg(test)]
+    fn len(&self) -> usize {
+        self.streams.len()
     }
 }
 
@@ -267,5 +289,79 @@ mod tests {
         assert!(map.insert(b, msgs[1].clone()).is_none());
         assert!(map.insert(a, msgs[2].clone()).is_none());
         assert!(map.insert(b, msgs[3].clone()).is_none());
+    }
+
+    #[test]
+    fn a_completed_stream_leaves_no_state_behind() {
+        let mut map = PartStreamsMap::new();
+        let p = peer(1);
+        let msgs = messages();
+        for m in &msgs[..3] {
+            assert!(map.insert(p, m.clone()).is_none());
+        }
+        assert_eq!(map.len(), 1, "the in-progress stream is buffered");
+        assert!(
+            map.insert(p, msgs[3].clone()).is_some(),
+            "the Fin marker completes the stream"
+        );
+        assert_eq!(
+            map.len(),
+            0,
+            "a completed stream must be removed, not linger forever"
+        );
+    }
+
+    /// An `Init`-only message under a distinct stream id — a partial stream that
+    /// never completes, the shape a flood would use.
+    fn init_only(stream_seed: u32) -> StreamMessage<ProposalPart> {
+        let init = ProposalPart::Init(ProposalInit::new(
+            Height::new(4),
+            Round::new(1),
+            Round::Nil,
+            crate::consensus::Address::from_public_key(&PrivateKey::from([1u8; 32]).public_key()),
+        ));
+        StreamMessage::new(
+            StreamId::new(stream_seed.to_be_bytes().to_vec().into()),
+            0,
+            StreamContent::Data(init),
+        )
+    }
+
+    #[test]
+    fn caps_buffered_streams_without_starving_an_in_progress_one() {
+        let mut map = PartStreamsMap::new();
+        let p = peer(1);
+
+        // Fill the map to the cap with distinct never-completing partial streams.
+        for i in 0..super::MAX_BUFFERED_STREAMS as u32 {
+            assert!(map.insert(p, init_only(i)).is_none());
+        }
+        assert_eq!(map.len(), super::MAX_BUFFERED_STREAMS);
+
+        // A brand-new stream is refused while full — memory is bounded.
+        assert!(map.insert(p, init_only(u32::MAX)).is_none());
+        assert_eq!(
+            map.len(),
+            super::MAX_BUFFERED_STREAMS,
+            "cap must refuse NEW streams once full"
+        );
+
+        // An already-buffered stream still accepts more parts: a flood cannot
+        // starve a genuine proposal that is already being assembled.
+        let data = ProposalPart::Data(ProposalData::new_block(
+            7,
+            bitcoin::BlockHash::from_raw_hash(bitcoin::hashes::Hash::all_zeros()),
+        ));
+        let more = StreamMessage::new(
+            StreamId::new(0u32.to_be_bytes().to_vec().into()),
+            1,
+            StreamContent::Data(data),
+        );
+        assert!(map.insert(p, more).is_none());
+        assert_eq!(
+            map.len(),
+            super::MAX_BUFFERED_STREAMS,
+            "adding a part to an existing stream must not grow the map"
+        );
     }
 }
