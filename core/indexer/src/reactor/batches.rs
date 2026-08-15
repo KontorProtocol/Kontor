@@ -14,11 +14,14 @@ use prost::Message;
 use tracing::{debug, error, info, warn};
 
 use crate::consensus::codec::encode_commit_certificate;
-use crate::consensus::finality_types::{DecidedBatch, StateEvent, UnfinalizedBatch, deadline_for};
-use crate::consensus::{CommitCertificate, Ctx, Height, ProposalData, Value};
+use crate::consensus::finality_types::{
+    DecidedBatch, FINALITY_WINDOW, StateEvent, UnfinalizedBatch, deadline_for,
+};
+use crate::consensus::{Address, CommitCertificate, Ctx, Height, ProposalData, Value};
 use crate::database::queries::{
-    insert_batch, insert_batch_txids, insert_excluded_batch_txids, insert_transaction,
-    insert_unconfirmed_batch_tx, select_applicable_exclusions, select_block_at_height,
+    delete_unconfirmed_batch_txs_below, insert_batch, insert_batch_txids,
+    insert_excluded_batch_txids, insert_transaction, insert_unconfirmed_batch_tx,
+    min_unfinalized_batch_height, select_applicable_exclusions, select_block_at_height,
     select_existing_txids,
 };
 use crate::metrics::{CONSENSUS_HEIGHT, ITEMS_INDEXED};
@@ -70,6 +73,9 @@ pub(super) enum IoApply {
     ValidateProposal {
         height: Height,
         round: Round,
+        /// The authenticated proposer, carried through so the stored
+        /// `ProposedValue` is attributed to it rather than to this node.
+        proposer: Address,
         anchor_height: u64,
         anchor_hash: BlockHash,
         /// Parses aligned with the future's pairs — same source order.
@@ -848,6 +854,7 @@ impl<E: Executor> Reactor<E> {
     pub(super) async fn validate_and_accept_proposal(
         &mut self,
         data: &ProposalData,
+        proposer: Address,
         height: Height,
         round: Round,
         reply: tokio::sync::oneshot::Sender<Option<ProposedValue<Ctx>>>,
@@ -942,16 +949,18 @@ impl<E: Executor> Reactor<E> {
                 let mut parsed_txs = Vec::with_capacity(transactions.len());
                 for tx in transactions {
                     let txid = tx.compute_txid();
-                    let parsed =
-                        if let Some((_, cached)) = self.consensus.pending_transactions.get(&txid) {
-                            cached.clone()
-                        } else if let Some(p) = self.executor.parse_transaction(tx) {
-                            p
-                        } else {
-                            warn!(%txid, "Rejecting proposal: transaction failed to parse");
-                            let _ = reply.send(None);
-                            return Ok(());
-                        };
+                    // Parse the PROPOSAL'S OWN bytes, never the pool's cached copy.
+                    // Kontor ops live in the taproot witness, which the txid does
+                    // not commit to, so a same-txid variant sitting in this node's
+                    // mempool would otherwise be judged (and later voted on) in
+                    // place of the witness the proposer actually streamed.
+                    let parsed = if let Some(p) = self.executor.parse_transaction(tx) {
+                        p
+                    } else {
+                        warn!(%txid, "Rejecting proposal: transaction failed to parse");
+                        let _ = reply.send(None);
+                        return Ok(());
+                    };
                     if !is_batchable(&parsed.inputs) {
                         warn!(%txid, "Rejecting proposal: transaction not batchable");
                         let _ = reply.send(None);
@@ -966,6 +975,7 @@ impl<E: Executor> Reactor<E> {
                     apply: IoApply::ValidateProposal {
                         height,
                         round,
+                        proposer,
                         anchor_height: *anchor_height,
                         anchor_hash: *anchor_hash,
                         parsed: parsed_txs,
@@ -980,7 +990,7 @@ impl<E: Executor> Reactor<E> {
             height,
             round,
             valid_round: Round::Nil,
-            proposer: self.consensus.address,
+            proposer,
             value,
             validity: Validity::Valid,
         };
@@ -1206,6 +1216,7 @@ impl<E: Executor> Reactor<E> {
             IoApply::ValidateProposal {
                 height,
                 round,
+                proposer,
                 anchor_height,
                 anchor_hash,
                 parsed,
@@ -1255,7 +1266,7 @@ impl<E: Executor> Reactor<E> {
                     height,
                     round,
                     valid_round: Round::Nil,
-                    proposer: self.consensus.address,
+                    proposer,
                     value: Value::new_batch_raw(anchor_height, anchor_hash, transactions),
                     validity: Validity::Valid,
                 };
@@ -1402,6 +1413,33 @@ impl<E: Executor> Reactor<E> {
     /// Run finality checks if any deadline has passed, performing the rollback and
     /// replay they demand. Returns whether a rollback happened (so `advance` knows
     /// the tip moved and it must drain again).
+    /// Best-effort GC of retained batch bodies below the finality window.
+    ///
+    /// The floor is DB-sourced (`min_unfinalized_batch_height`), NOT the in-memory
+    /// unfinalized set: that set holds only EXECUTED batches, so a record-only
+    /// batch (anchor-mismatch / unparseable) sitting between two executed heights
+    /// could otherwise be GC'd while still non-final — reopening the very
+    /// witness-variant hazard this retention closes. `None` means nothing is within
+    /// the window, so everything is final and reclaimable. A failure must not fail
+    /// the finality pass; it retries next settle.
+    async fn prune_finalized_bodies(&mut self, conn: &libsql::Connection) {
+        let floor =
+            match min_unfinalized_batch_height(conn, FINALITY_WINDOW, self.last_height).await {
+                Ok(Some(h)) => h,
+                // All batches are final — reclaim every body (consensus_height <= current).
+                Ok(None) => self.consensus.current_height.as_u64() + 1,
+                Err(e) => {
+                    warn!(error = %e, "failed to read the finalized-body floor; skipping prune");
+                    return;
+                }
+            };
+        match delete_unconfirmed_batch_txs_below(conn, floor).await {
+            Ok(n) if n > 0 => debug!(floor, deleted = n, "pruned finalized batch bodies"),
+            Ok(_) => {}
+            Err(e) => warn!(error = %e, floor, "failed to prune finalized batch bodies"),
+        }
+    }
+
     async fn settle_finality(&mut self) -> Result<bool> {
         if !self.finality_due() {
             return Ok(false);
@@ -1413,6 +1451,10 @@ impl<E: Executor> Reactor<E> {
             .await?;
         let Some((rollback_anchor, missing)) = rollback else {
             self.consensus.emit_finality_events(&events);
+            // Finality advanced cleanly this pass — GC the retained bodies now
+            // below the window. Skipped on the rollback branch, where the
+            // unfinalized set is mid-flux; it catches up next settle.
+            self.prune_finalized_bodies(&conn).await;
             return Ok(false);
         };
 

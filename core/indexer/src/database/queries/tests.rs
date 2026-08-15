@@ -201,6 +201,103 @@ async fn count_checkpoints(conn: &Connection) -> i64 {
         .unwrap_or(0)
 }
 
+// residual-3: batch bodies are retained until FINALITY, not confirmation, so a
+// confirming block no longer drops them and a syncing peer/replay can still
+// reproduce the exact executed witness within the window. The finality-floor GC
+// is what reclaims them, on all nodes.
+#[tokio::test]
+async fn batch_bodies_survive_confirmation_and_drop_below_the_finality_floor() {
+    let (_reader, writer, _temp) = new_test_db().await.unwrap();
+    let conn = writer.connection();
+
+    let heights = [10u64, 11, 12];
+    for h in heights {
+        // FK: unconfirmed_batch_txs.batch_height references batches.consensus_height.
+        insert_batch(
+            &conn,
+            h,
+            h,
+            &new_mock_block_hash(h as u32).to_string(),
+            &[],
+            false,
+        )
+        .await
+        .unwrap();
+        let txid = format!("{:064x}", h);
+        insert_unconfirmed_batch_tx(&conn, &txid, h, &[h as u8; 8])
+            .await
+            .unwrap();
+    }
+
+    // Confirming a tx must NOT drop its retained body — the old confirm-time
+    // delete is exactly the race that let a peer resolve a witness variant.
+    confirm_transaction(&conn, &format!("{:064x}", 10u64), 100, 0)
+        .await
+        .unwrap();
+    assert_eq!(
+        select_unconfirmed_batch_txs(&conn, 10).await.unwrap().len(),
+        1,
+        "confirmation must not delete the retained body"
+    );
+
+    // Finality floor at 12: heights strictly below are final and reclaimed; the
+    // floor height itself is still within the window and kept.
+    let deleted = delete_unconfirmed_batch_txs_below(&conn, 12).await.unwrap();
+    assert_eq!(deleted, 2);
+    assert!(
+        select_unconfirmed_batch_txs(&conn, 10)
+            .await
+            .unwrap()
+            .is_empty()
+    );
+    assert!(
+        select_unconfirmed_batch_txs(&conn, 11)
+            .await
+            .unwrap()
+            .is_empty()
+    );
+    assert_eq!(
+        select_unconfirmed_batch_txs(&conn, 12).await.unwrap().len(),
+        1,
+        "the floor height itself must be retained"
+    );
+}
+
+// The finality-floor GC must retain the body of a RECORD-ONLY batch that is still
+// within the window. Record-only batches never enter the in-memory unfinalized
+// set, so a floor derived from that set would delete their bodies early — this
+// DB-sourced floor covers them.
+#[tokio::test]
+async fn min_unfinalized_batch_height_covers_record_only_batches() {
+    let (_reader, writer, _temp) = new_test_db().await.unwrap();
+    let conn = writer.connection();
+
+    // consensus_height 10 anchored at 1 (deadline 7 — final once tip passes 7),
+    // 11 anchored at 20 (a record-only batch, still non-final), 12 anchored at 20.
+    for (h, anchor) in [(10u64, 1u64), (11, 20), (12, 20)] {
+        insert_batch(
+            &conn,
+            h,
+            anchor,
+            &new_mock_block_hash(anchor as u32).to_string(),
+            b"",
+            false,
+        )
+        .await
+        .unwrap();
+    }
+
+    // FINALITY_WINDOW = 6, tip = 10: batch 10 is final (1 + 6 < 10), 11 and 12 are
+    // not (20 + 6 >= 10). The floor is 11 — NOT 12, which an executed-only floor
+    // would give, deleting the non-final record-only body at 11.
+    let floor = min_unfinalized_batch_height(&conn, 6, 10).await.unwrap();
+    assert_eq!(floor, Some(11));
+
+    // Past every deadline, nothing is within the window: floor is None (reclaim all).
+    let floor = min_unfinalized_batch_height(&conn, 6, 100).await.unwrap();
+    assert_eq!(floor, None);
+}
+
 #[tokio::test]
 async fn test_checkpoint_trigger() {
     let (_reader, writer, _temp) = new_test_db().await.unwrap();
@@ -4604,17 +4701,18 @@ async fn test_unfinalized_batches_reachable_far_below_the_window() -> Result<()>
 
 /// A record-only batch stores raw transactions but writes NO `transactions` row —
 /// it was never executed here. When those transactions later confirm on Bitcoin,
-/// `execute_block` finds no existing row and so takes its `insert_transaction`
-/// branch, never `confirm_transaction`. Only the latter dropped the raw copy, so
-/// the row survived its own transaction being indexed on-chain, forever.
+/// `execute_block` finds no existing row and takes its `insert_transaction`
+/// branch (already-confirmed), never `confirm_transaction`.
 ///
-/// That matters beyond disk: `load_raw_txs_if_unfinalized` no longer refuses
-/// anchors older than the finality window, so every surviving row is attached to
-/// the consensus height it belongs to on every sync — this node ships raw batch
-/// bodies to peers instead of txid lists, indefinitely. A node that lags (exactly
-/// what this PR hardens against) record-onlys every batch in that stretch.
+/// The body must SURVIVE that indexing. Confirmation on THIS node does not mean a
+/// lagging peer has seen the confirmation — and until it has, the txid (which does
+/// not commit to the witness) is not enough to reproduce the exact executed op
+/// content: the peer could resolve a same-txid witness variant. So the body is
+/// retained until the batch height passes the finality window, where
+/// `delete_unconfirmed_batch_txs_below` (driven from the finality settle) reclaims
+/// it — the bound that keeps this from leaking forever.
 #[tokio::test]
-async fn indexing_a_transaction_on_chain_drops_its_unconfirmed_raw_copy() -> Result<()> {
+async fn a_record_only_body_survives_on_chain_indexing_until_finality() -> Result<()> {
     let (_reader, writer, _temp_dir) = new_test_db().await?;
     let conn = writer.connection();
 
@@ -4645,10 +4743,18 @@ async fn indexing_a_transaction_on_chain_drops_its_unconfirmed_raw_copy() -> Res
     )
     .await?;
 
+    assert_eq!(
+        select_unconfirmed_batch_txs(&conn, 7).await?.len(),
+        1,
+        "on-chain indexing must NOT drop the body: a lagging peer may not have \
+         the confirmation yet and needs the exact witness, not just the txid"
+    );
+
+    // Only crossing the finality window reclaims it.
+    delete_unconfirmed_batch_txs_below(&conn, 8).await?;
     assert!(
         select_unconfirmed_batch_txs(&conn, 7).await?.is_empty(),
-        "the raw copy is redundant once the transaction is indexed on-chain — \
-         keeping it leaks a full transaction body per record-only batch forever"
+        "the finality-floor GC reclaims the body once the height is final"
     );
     Ok(())
 }

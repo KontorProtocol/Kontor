@@ -261,13 +261,49 @@ pub async fn insert_unconfirmed_batch_tx(
     Ok(())
 }
 
-pub async fn delete_unconfirmed_batch_tx(conn: &Connection, txid: &str) -> Result<(), Error> {
-    conn.execute(
-        "DELETE FROM unconfirmed_batch_txs WHERE txid = ?",
-        params![txid],
-    )
-    .await?;
-    Ok(())
+/// Drop the retained bodies of every batch strictly below `height_floor` — the
+/// lowest consensus height still within the finality window. Bodies are kept
+/// until their decision is final (not merely until the tx confirms) so sync and
+/// replay always reproduce the exact executed witness within the window; past
+/// finality the tx has long confirmed and bitcoind holds the single canonical
+/// variant, so the body is redundant. Covers executed AND record-only batches.
+pub async fn delete_unconfirmed_batch_txs_below(
+    conn: &Connection,
+    height_floor: u64,
+) -> Result<u64, Error> {
+    let deleted = conn
+        .execute(
+            "DELETE FROM unconfirmed_batch_txs WHERE batch_height < ?",
+            params![height_floor],
+        )
+        .await?;
+    Ok(deleted)
+}
+
+/// The lowest `consensus_height` whose batch is still within the finality window
+/// at `tip` (its anchor deadline `anchor_height + finality_window` has not passed).
+/// Bodies strictly below this are final and may be reclaimed. Sourced from the
+/// `batches` table, so it covers EXECUTED and RECORD-ONLY batches alike — unlike
+/// the in-memory unfinalized set, which tracks only executed batches and would let
+/// a non-final record-only body be GC'd early. `None` means no batch is within the
+/// window (all final), so the caller may reclaim everything. Blocks carry no body
+/// and are excluded.
+pub async fn min_unfinalized_batch_height(
+    conn: &Connection,
+    finality_window: u64,
+    tip: u64,
+) -> Result<Option<u64>, Error> {
+    let mut rows = conn
+        .query(
+            "SELECT MIN(consensus_height) FROM batches \
+             WHERE is_block = 0 AND anchor_height + ? >= ?",
+            params![finality_window, tip],
+        )
+        .await?;
+    match rows.next().await? {
+        Some(row) => Ok(row.get::<Option<u64>>(0)?),
+        None => Ok(None),
+    }
 }
 
 pub async fn select_unconfirmed_batch_txs(

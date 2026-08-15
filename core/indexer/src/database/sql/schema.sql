@@ -274,8 +274,7 @@ CREATE TABLE IF NOT EXISTS nonces (
 -- can then be re-batched at a later height. Under a txid-only key the writers'
 -- `INSERT OR IGNORE` bound the body to whichever height wrote FIRST — typically the
 -- abandoned one — and silently ignored the real batch, so sync served the later
--- height a txid it had no body for. `delete_unconfirmed_batch_tx` deletes by txid,
--- so confirmation still clears every binding at once.
+-- height a txid it had no body for.
 CREATE TABLE IF NOT EXISTS unconfirmed_batch_txs (
   txid TEXT NOT NULL,
   batch_height INTEGER NOT NULL,
@@ -285,10 +284,11 @@ CREATE TABLE IF NOT EXISTS unconfirmed_batch_txs (
 );
 
 -- Sync resolves raw txs per batch (`select_unconfirmed_batch_txs`). The table is
--- keyed by txid, so without this that lookup is a full scan. A row is removed once
--- its transaction is indexed on chain (both the confirm and the insert path drop it)
--- or by the startup suffix cleanup — so what remains is the finality-excluded txs,
--- which never confirm and are exactly what sync cannot resolve any other way.
+-- keyed by txid, so without this that lookup is a full scan. Bodies are retained
+-- until their batch height passes the finality window and are then reclaimed by
+-- `delete_unconfirmed_batch_txs_below` (a range delete on this index), plus the
+-- rollback suffix cleanup — so a body exists for every non-final height, which is
+-- exactly what sync and replay need to reproduce the executed witness.
 CREATE INDEX IF NOT EXISTS idx_unconfirmed_batch_txs_batch_height
   ON unconfirmed_batch_txs (batch_height);
 
