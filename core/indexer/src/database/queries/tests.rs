@@ -263,6 +263,41 @@ async fn batch_bodies_survive_confirmation_and_drop_below_the_finality_floor() {
     );
 }
 
+// The finality-floor GC must retain the body of a RECORD-ONLY batch that is still
+// within the window. Record-only batches never enter the in-memory unfinalized
+// set, so a floor derived from that set would delete their bodies early — this
+// DB-sourced floor covers them.
+#[tokio::test]
+async fn min_unfinalized_batch_height_covers_record_only_batches() {
+    let (_reader, writer, _temp) = new_test_db().await.unwrap();
+    let conn = writer.connection();
+
+    // consensus_height 10 anchored at 1 (deadline 7 — final once tip passes 7),
+    // 11 anchored at 20 (a record-only batch, still non-final), 12 anchored at 20.
+    for (h, anchor) in [(10u64, 1u64), (11, 20), (12, 20)] {
+        insert_batch(
+            &conn,
+            h,
+            anchor,
+            &new_mock_block_hash(anchor as u32).to_string(),
+            b"",
+            false,
+        )
+        .await
+        .unwrap();
+    }
+
+    // FINALITY_WINDOW = 6, tip = 10: batch 10 is final (1 + 6 < 10), 11 and 12 are
+    // not (20 + 6 >= 10). The floor is 11 — NOT 12, which an executed-only floor
+    // would give, deleting the non-final record-only body at 11.
+    let floor = min_unfinalized_batch_height(&conn, 6, 10).await.unwrap();
+    assert_eq!(floor, Some(11));
+
+    // Past every deadline, nothing is within the window: floor is None (reclaim all).
+    let floor = min_unfinalized_batch_height(&conn, 6, 100).await.unwrap();
+    assert_eq!(floor, None);
+}
+
 #[tokio::test]
 async fn test_checkpoint_trigger() {
     let (_reader, writer, _temp) = new_test_db().await.unwrap();

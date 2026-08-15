@@ -198,7 +198,7 @@ impl ProjectedBlock {
 
 /// Project the three fee tiers from a mempool snapshot. Pure — no `self`, no
 /// I/O — so it can run on a blocking thread. This is the expensive body of
-/// `recompute`, lifted out for [`MempoolFeeIndex::snapshot_for_recompute`].
+/// `recompute`, lifted out for [`MempoolFeeIndex::snapshot`].
 pub fn project_fees(entries: &HashMap<Txid, MempoolEntry>, min: u64) -> Fees {
     let blocks = block_projection::project_blocks(entries, 4);
     let fastest = optimize_median_fee(blocks.first(), blocks.get(1), None, min);

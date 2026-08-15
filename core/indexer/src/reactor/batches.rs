@@ -14,12 +14,15 @@ use prost::Message;
 use tracing::{debug, error, info, warn};
 
 use crate::consensus::codec::encode_commit_certificate;
-use crate::consensus::finality_types::{DecidedBatch, StateEvent, UnfinalizedBatch, deadline_for};
+use crate::consensus::finality_types::{
+    DecidedBatch, FINALITY_WINDOW, StateEvent, UnfinalizedBatch, deadline_for,
+};
 use crate::consensus::{Address, CommitCertificate, Ctx, Height, ProposalData, Value};
 use crate::database::queries::{
     delete_unconfirmed_batch_txs_below, insert_batch, insert_batch_txids,
     insert_excluded_batch_txids, insert_transaction, insert_unconfirmed_batch_tx,
-    select_applicable_exclusions, select_block_at_height, select_existing_txids,
+    min_unfinalized_batch_height, select_applicable_exclusions, select_block_at_height,
+    select_existing_txids,
 };
 use crate::metrics::{CONSENSUS_HEIGHT, ITEMS_INDEXED};
 
@@ -1410,21 +1413,26 @@ impl<E: Executor> Reactor<E> {
     /// Run finality checks if any deadline has passed, performing the rollback and
     /// replay they demand. Returns whether a rollback happened (so `advance` knows
     /// the tip moved and it must drain again).
-    /// Best-effort GC of retained batch bodies below the finality window. The
-    /// floor is the lowest still-unfinalized consensus height (or `current_height`
-    /// when nothing is pending); everything strictly below it is final, so its
-    /// body — kept only to reproduce the exact executed witness on sync/replay
-    /// while non-final — is now redundant (the tx has confirmed; bitcoind holds
-    /// the single canonical variant). A failure must not fail the finality pass;
-    /// it retries next settle.
+    /// Best-effort GC of retained batch bodies below the finality window.
+    ///
+    /// The floor is DB-sourced (`min_unfinalized_batch_height`), NOT the in-memory
+    /// unfinalized set: that set holds only EXECUTED batches, so a record-only
+    /// batch (anchor-mismatch / unparseable) sitting between two executed heights
+    /// could otherwise be GC'd while still non-final — reopening the very
+    /// witness-variant hazard this retention closes. `None` means nothing is within
+    /// the window, so everything is final and reclaimable. A failure must not fail
+    /// the finality pass; it retries next settle.
     async fn prune_finalized_bodies(&mut self, conn: &libsql::Connection) {
-        let floor = self
-            .consensus
-            .unfinalized_batches
-            .iter()
-            .map(|b| b.consensus_height.as_u64())
-            .min()
-            .unwrap_or_else(|| self.consensus.current_height.as_u64());
+        let floor =
+            match min_unfinalized_batch_height(conn, FINALITY_WINDOW, self.last_height).await {
+                Ok(Some(h)) => h,
+                // All batches are final — reclaim every body (consensus_height <= current).
+                Ok(None) => self.consensus.current_height.as_u64() + 1,
+                Err(e) => {
+                    warn!(error = %e, "failed to read the finalized-body floor; skipping prune");
+                    return;
+                }
+            };
         match delete_unconfirmed_batch_txs_below(conn, floor).await {
             Ok(n) if n > 0 => debug!(floor, deleted = n, "pruned finalized batch bodies"),
             Ok(_) => {}

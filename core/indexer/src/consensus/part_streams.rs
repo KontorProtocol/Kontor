@@ -128,13 +128,27 @@ impl ProposalParts {
     }
 }
 
-/// Cap on concurrently buffered (incomplete) streams. A healthy node buffers a
-/// tiny handful — one per proposer per live round, each removed the instant it
-/// completes. The cap only bites under a peer flooding never-finished partial
-/// streams under fresh stream ids, and when it does it refuses NEW streams rather
-/// than evicting in-progress ones — so a flood cannot displace the genuine
-/// proposal already being assembled, only fail to add more junk.
-const MAX_BUFFERED_STREAMS: usize = 1024;
+// Two bounds so the reassembly buffer cannot be driven to OOM. A healthy node
+// holds a tiny handful of streams, each with four parts, every one removed the
+// instant it completes — so these only bite under a flood of never-finished
+// partials:
+//
+// - MAX_PARTS_PER_STREAM caps a SINGLE stream: without it one (peer, stream_id)
+//   could buffer unbounded distinct-sequence parts (a `Fin` whose sequence never
+//   arrives) and grow without limit. A genuine stream needs four.
+// - MAX_BUFFERED_STREAMS caps the whole map. When full it refuses NEW streams
+//   rather than evicting, so a flood cannot displace a stream already being
+//   assembled — including the genuine proposal.
+//
+// Note: a tighter PER-PEER cap (so one flooder cannot occupy the whole map) needs
+// eviction of stale partials to be safe — a plain per-peer ceiling with no
+// eviction lets an honest peer's own stuck partials (a proposer that crashed
+// mid-stream) ratchet up and eventually block its proposals. Safe eviction keyed
+// to round/height is a separate change (an earlier "clear on StartedRound" attempt
+// dropped live parts and stalled consensus). Left as a follow-up; the global cap
+// already bounds memory.
+const MAX_PARTS_PER_STREAM: usize = 16;
+const MAX_BUFFERED_STREAMS: usize = 4096;
 
 #[derive(Default)]
 pub struct PartStreamsMap {
@@ -154,17 +168,24 @@ impl PartStreamsMap {
         peer_id: PeerId,
         msg: StreamMessage<ProposalPart>,
     ) -> Option<ProposalParts> {
-        let stream_id = msg.stream_id.clone();
-        let key = (peer_id, stream_id);
+        let key = (peer_id, msg.stream_id.clone());
 
-        // Bound the map: refuse a NEW stream once full, but always accept further
-        // parts for a stream already being assembled (so a flood cannot starve an
-        // in-progress genuine proposal).
+        // Refuse a NEW stream once the map is full, but always accept further parts
+        // for a stream already being assembled — a flood cannot starve one already
+        // in progress.
         if self.streams.len() >= MAX_BUFFERED_STREAMS && !self.streams.contains_key(&key) {
             return None;
         }
 
         let state = self.streams.entry(key.clone()).or_default();
+
+        // Per-stream bound: a genuine stream buffers four parts; refuse to grow one
+        // past the cap so a single never-completing stream cannot exhaust memory.
+        if !state.seen_sequences.contains(&msg.sequence)
+            && state.seen_sequences.len() >= MAX_PARTS_PER_STREAM
+        {
+            return None;
+        }
 
         if !state.seen_sequences.insert(msg.sequence) {
             return None;
@@ -327,12 +348,26 @@ mod tests {
         )
     }
 
+    /// A part with an arbitrary sequence under stream id `stream_seed`, so a
+    /// single stream can be fed many distinct sequences.
+    fn part_at(stream_seed: u32, sequence: u64) -> StreamMessage<ProposalPart> {
+        let data = ProposalPart::Data(ProposalData::new_block(
+            7,
+            bitcoin::BlockHash::from_raw_hash(bitcoin::hashes::Hash::all_zeros()),
+        ));
+        StreamMessage::new(
+            StreamId::new(stream_seed.to_be_bytes().to_vec().into()),
+            sequence,
+            StreamContent::Data(data),
+        )
+    }
+
     #[test]
-    fn caps_buffered_streams_without_starving_an_in_progress_one() {
+    fn global_cap_refuses_new_streams_without_starving_an_in_progress_one() {
         let mut map = PartStreamsMap::new();
         let p = peer(1);
 
-        // Fill the map to the cap with distinct never-completing partial streams.
+        // Fill the map with distinct never-completing partial streams.
         for i in 0..super::MAX_BUFFERED_STREAMS as u32 {
             assert!(map.insert(p, init_only(i)).is_none());
         }
@@ -340,28 +375,34 @@ mod tests {
 
         // A brand-new stream is refused while full — memory is bounded.
         assert!(map.insert(p, init_only(u32::MAX)).is_none());
-        assert_eq!(
-            map.len(),
-            super::MAX_BUFFERED_STREAMS,
-            "cap must refuse NEW streams once full"
-        );
+        assert_eq!(map.len(), super::MAX_BUFFERED_STREAMS);
 
-        // An already-buffered stream still accepts more parts: a flood cannot
-        // starve a genuine proposal that is already being assembled.
-        let data = ProposalPart::Data(ProposalData::new_block(
-            7,
-            bitcoin::BlockHash::from_raw_hash(bitcoin::hashes::Hash::all_zeros()),
-        ));
-        let more = StreamMessage::new(
-            StreamId::new(0u32.to_be_bytes().to_vec().into()),
-            1,
-            StreamContent::Data(data),
-        );
-        assert!(map.insert(p, more).is_none());
+        // ...but a stream already buffered still accepts more parts, so a flood
+        // cannot starve a proposal already being assembled.
+        assert!(map.insert(p, part_at(0, 1)).is_none());
         assert_eq!(
             map.len(),
             super::MAX_BUFFERED_STREAMS,
             "adding a part to an existing stream must not grow the map"
         );
+    }
+
+    #[test]
+    fn per_stream_part_cap_bounds_a_single_stream() {
+        let mut map = PartStreamsMap::new();
+        let p = peer(1);
+
+        // One stream, many distinct sequences — the never-completing shape.
+        for seq in 0..super::MAX_PARTS_PER_STREAM as u64 {
+            assert!(map.insert(p, part_at(42, seq)).is_none());
+        }
+        // The map holds exactly one stream, but it will not grow past the cap.
+        assert_eq!(map.len(), 1);
+        assert!(
+            map.insert(p, part_at(42, 9999)).is_none(),
+            "a single stream must not buffer unbounded parts"
+        );
+        // A duplicate of a sequence already seen is still just ignored, not an error.
+        assert!(map.insert(p, part_at(42, 0)).is_none());
     }
 }
