@@ -10,7 +10,7 @@ This repo contains the indexer for the [Kontor Protocol](https://docs.kontor.net
 - **Bitcoin follower**: Reconciles streams of block data from Bitcoin's ZMQ socket and RPC API.
 - **Bitcoin block parser**: Extracts Kontor `Inst`ructions from Bitcoin transactions and converts them into `Op`erations.
 - **Reactor (event loop)**: Synchronizes `Op`erations and handles them.
-- **WASM Component Model-based Runtime**: Determinstically runs `Call` `Op`erations on smart-contract WASM components.
+- **WASM Component Model-based Runtime**: Deterministically runs `Call` `Op`erations on smart-contract WASM components.
 - **HTTP API**: Exposes indexer data, supports "view" (read-only contract call) functionality, and provides endpoints for the composition of Bitcoin transactions with embedded Kontor `Inst`ructions.
 - **WebSocket API**: Emits contract call results enabling applications to build and maintain their own derived state by reacting to incremental updates and deliver a real-time experience to end-users.
 
