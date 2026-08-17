@@ -156,6 +156,7 @@ pub struct PartStreamsMap {
 }
 
 impl PartStreamsMap {
+    /// An empty map with no buffered streams.
     pub fn new() -> Self {
         Self::default()
     }
