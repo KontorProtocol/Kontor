@@ -38,4 +38,15 @@ ignore = [
     # malachite fork rev — tracked against that upstream bump.
     "RUSTSEC-2026-0119", # O(n²) name compression → CPU exhaustion on encode
     "RUSTSEC-2026-0118", # NSEC3 closest-encloser proof → unbounded loop
+
+    # ── h2 0.3.27 ────────────────────────────────────────────────────────────
+    # DoS via unbounded empty DATA frames. The tree carries TWO h2 copies: the
+    # modern 0.4.x (hyper 1 / axum 0.8 / reqwest 0.13) was bumped to 0.4.17 in
+    # the lockfile, which carries the fix. This 0.3.27 copy is pulled ONLY by
+    # libsql 0.9.30 → hyper 0.14 → tonic 0.11, libsql's *remote* HTTP/2 client
+    # path, which Kontor (embedded/local mode) never exercises. The advisory has
+    # NO patched 0.3.x release (fix is ≥0.4.16 only), so this copy cannot be
+    # bumped without moving libsql off hyper 0.14. Cleared by a libsql 0.10 major
+    # bump (or the parked Turso migration); tracked against that.
+    "RUSTSEC-2026-0258", # h2 0.3.x unbounded empty DATA frames (libsql remote path)
 ]
