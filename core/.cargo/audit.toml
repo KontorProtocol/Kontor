@@ -1,33 +1,27 @@
 # cargo-audit configuration for the `core` workspace.
 #
-# The advisories ignored below are all in TRANSITIVE dependencies that cannot
+# The advisories ignored below are in TRANSITIVE dependencies that cannot
 # currently be patched at the lockfile level — each is pinned by a major
-# dependency (libsql, or the circlefin/malachite consensus fork via libp2p)
-# whose fixed release would require a breaking upgrade out of scope for a
-# routine audit pass. Each entry documents why it is not reachable on Kontor's
-# critical path and what upstream bump would clear it. Re-audit and prune this
-# list whenever those upstreams move.
+# dependency whose fixed release would require a breaking upgrade out of scope
+# for a routine audit pass. Each entry documents why it is not reachable on
+# Kontor's critical path and what upstream bump would clear it. Re-audit and
+# prune this list whenever those upstreams move.
 #
 # Run `cargo audit` after any dependency change to confirm no NEW advisory is
 # silently swept under these ignores — the list is intentionally explicit (no
 # wildcards) so a fresh advisory still fails the build.
+#
+# NOTE: the entire libsql-transitive advisory cluster (rustls-webpki 0.102.8 ×4
+# and h2 0.3.27 ×1) was ELIMINATED — not ignored — by building libsql with
+# `default-features = false, features = ["core", "serde"]` (see core/Cargo.toml).
+# Kontor uses libsql in embedded/local mode only (`Builder::new_local`), so the
+# `remote`/`replication`/`sync`/`tls` default features — which dragged in
+# hyper 0.14 / tonic / hyper-rustls 0.25 / rustls 0.22 / rustls-webpki 0.102 and
+# the old h2 0.3.x — are unused and now not compiled. This sidesteps the stalled
+# libsql 0.10 release entirely (upstream tracking: tursodatabase/libsql#2266).
 
 [advisories]
 ignore = [
-    # ── rustls-webpki 0.102.8 ────────────────────────────────────────────────
-    # Pulled in only by libsql 0.9.30 → hyper-rustls 0.25 → rustls 0.22, i.e.
-    # libsql's *remote* (Turso/sqld over HTTPS) client path. Kontor uses libsql
-    # in embedded/local mode; the outbound-TLS code these advisories live in is
-    # not exercised, and all are reachable only when validating certificates
-    # from an attacker-controlled TLS endpoint. The fixed line (rustls-webpki
-    # 0.103.x) is already present elsewhere in the tree — only libsql's rustls
-    # 0.22 pin holds 0.102 here. Cleared by libsql 0.10 (rustls 0.23 / webpki
-    # 0.103); tracked for a deliberate libsql major bump.
-    "RUSTSEC-2026-0104", # reachable panic parsing a certificate revocation list
-    "RUSTSEC-2026-0098", # URI-name name-constraints incorrectly accepted
-    "RUSTSEC-2026-0099", # wildcard-name name-constraints incorrectly accepted
-    "RUSTSEC-2026-0049", # CRL distribution-point authority matching logic
-
     # ── hickory-proto 0.25.2 ─────────────────────────────────────────────────
     # Pulled in only by libp2p 0.56 (mDNS / DNS peer discovery), itself pinned
     # by the circlefin/malachite fork (git rev in core/Cargo.toml). Both advisories
@@ -38,15 +32,4 @@ ignore = [
     # malachite fork rev — tracked against that upstream bump.
     "RUSTSEC-2026-0119", # O(n²) name compression → CPU exhaustion on encode
     "RUSTSEC-2026-0118", # NSEC3 closest-encloser proof → unbounded loop
-
-    # ── h2 0.3.27 ────────────────────────────────────────────────────────────
-    # DoS via unbounded empty DATA frames. The tree carries TWO h2 copies: the
-    # modern 0.4.x (hyper 1 / axum 0.8 / reqwest 0.13) was bumped to 0.4.17 in
-    # the lockfile, which carries the fix. This 0.3.27 copy is pulled ONLY by
-    # libsql 0.9.30 → hyper 0.14 → tonic 0.11, libsql's *remote* HTTP/2 client
-    # path, which Kontor (embedded/local mode) never exercises. The advisory has
-    # NO patched 0.3.x release (fix is ≥0.4.16 only), so this copy cannot be
-    # bumped without moving libsql off hyper 0.14. Cleared by a libsql 0.10 major
-    # bump (or the parked Turso migration); tracked against that.
-    "RUSTSEC-2026-0258", # h2 0.3.x unbounded empty DATA frames (libsql remote path)
 ]
