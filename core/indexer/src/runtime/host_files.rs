@@ -43,9 +43,8 @@ fn decode_peaks(bytes: &[u8]) -> Result<Vec<FieldElement>, String> {
         ));
     }
     let mut peaks = Vec::with_capacity(bytes.len() / 32);
-    for chunk in bytes.chunks_exact(32) {
-        let arr: [u8; 32] = chunk.try_into().expect("chunks_exact(32) yields 32 bytes");
-        let fe = bytes_to_field_element(&arr)
+    for arr in bytes.as_chunks::<32>().0 {
+        let fe = bytes_to_field_element(arr)
             .ok_or_else(|| "frontier peak is not a valid field element".to_string())?;
         peaks.push(fe);
     }

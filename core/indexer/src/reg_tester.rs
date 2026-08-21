@@ -1841,7 +1841,7 @@ impl RegTesterCluster {
         timeout_secs: u64,
         check: impl Fn(&str) -> bool,
     ) -> Result<()> {
-        poll_nodes!(self, timeout_secs, format!("{expr}"), |node| {
+        poll_nodes!(self, timeout_secs, expr.to_string(), |node| {
             matches!(
                 node.view(contract, expr).await?,
                 indexer_types::ViewResult::Ok { value } if check(&value)
