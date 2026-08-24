@@ -98,8 +98,8 @@ holders, not depositor balances; the storage-deposit floor logic never counts th
 
 | Clock | Trigger | Reactor site | v1 settles |
 |---|---|---|---|
-| **Per Bitcoin block** | block executed | `run_block_lifecycle`, inside the block savepoint (`execute_block` opens it; commit closes it) | mint, ordering payout, storage slash, validator/epoch transitions |
-| **Per batch event** | `FinalityEvent::BatchFinalized` / `FinalityEvent::Rollback` from `check_finality`/`settle_finality` | finality path (`batches.rs`) | **nothing in v1** — the seam Phase 2 bonds/fees attach to |
+| **Per Bitcoin block** | block executed | `run_block_lifecycle`, inside the block savepoint (`handle_block` opens it around `execute_block` + `run_block_lifecycle`; commit closes it) | mint, ordering payout, storage slash, validator/epoch transitions |
+| **Per batch event** | `FinalityEvent::BatchFinalized` / `FinalityEvent::Rollback` from `check_finality`/`settle_finality` | finality path (`check_finality` in `consensus_state.rs` → `settle_finality` in `batches.rs`) | **nothing in v1** — the seam Phase 2 bonds/fees attach to |
 
 Two corrections to the previous draft:
 
@@ -357,6 +357,10 @@ contract, ordering-fee escrow, `slash_equivocation` wiring, congestion consumers
   the §5.4/§10 properties; its reindex-equivalence oracle is the Phase-2 gate.
 
 ## 14. Contradictions ledger (audit §8 — resolved here)
+
+*(Numbering key: inline "finding N" citations throughout this spec refer to the audit's
+**8 major findings**; the rows below are the audit's **§8 contradictions list** — a
+different, longer list of 12. Row numbers ≠ finding numbers.)*
 
 | # | Contradiction | Resolution | Where |
 |---|---|---|---|

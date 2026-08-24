@@ -33,7 +33,7 @@ These follow the pattern already established by the storage/staking economic pri
 
 2. **Bond amounts are frozen at sign time and stored in the batch.** `B_tx(t,h)` and `B_exp(t,h)` are computed once by the proposing staker using the deterministic fee signal `r_fee`, written into `batch.tx_bonds[i]`, and thereafter **read, never recomputed** (spec §user-griefing-bonds: "verifiers read the `tx_bonds[i]` value frozen in the batch"). Per-position records, not scalar totals — so a later parameter change can't retroactively alter an in-flight reservation. This is the determinism linchpin; every indexer replays the same amounts from the canonical batch log.
 
-3. **Two settlement clocks.** Storage settles per Bitcoin block (Phase 1, in `run_block_lifecycle`). Ordering settles per **batch-confirmation / expiry / rollback**, in the finality path (`check_finality`/`settle_finality` emitting `FinalityEvent`s in `reactor/batches.rs`). These are different code paths with different atomicity boundaries — call it out explicitly (see §6).
+3. **Two settlement clocks.** Storage settles per Bitcoin block (Phase 1, in `run_block_lifecycle`). Ordering settles per **batch-confirmation / expiry / rollback**, in the finality path (`consensus_state.rs::check_finality` computes the `FinalityEvent`s; `batches.rs::settle_finality` applies them). These are different code paths with different atomicity boundaries — call it out explicitly (see §6).
 
 4. **`r_fee` derives only from Bitcoin-confirmed data.** The fee-insufficiency signal that sizes bonds must be a deterministic function of confirmed Bitcoin fee state (percentiles), never of the optimistic mempool — otherwise two stakers compute different bonds. It's computed at sign and frozen anyway (principle 2), but the *source* must still be canonical so independent re-derivation (e.g. for an audit) agrees.
 
@@ -48,7 +48,7 @@ These follow the pattern already established by the storage/staking economic pri
 | **User griefing bonds** (`B_min`/`B_tx`) | **new `bonds` contract** | Deposits of *spendable* KOR with per-position reservations + withdrawal delay. Self-contained, not tied to stake. |
 | **Publisher bonds** | **same `bonds` contract** | Identical lifecycle to user bonds, keyed by publisher (BIP-340) key instead of user. Share the code. |
 | **Expiry bonds** (`B_exp`) | **staking contract extension** | Reservations against *ordering stake* (`σ_avail = σ_s − A_s`); the penalty burns stake. Must live with the stake it encumbers. |
-| **Ordering fees** (`f_ord`, `τ_ord`) | **token escrow + staking payout** | Escrow `f_ord` at batch inclusion; on confirm burn `τ_ord` and pay signers via the existing stake-weighted `distribute_ordering_reward`. |
+| **Ordering fees** (`f_ord`, `τ_ord`) | **token escrow + staking payout** | Escrow `f_ord` at batch inclusion; on confirm burn `τ_ord` and pay signers via the per-batch signer-set `distribute_ordering_reward` (to be built — §4). |
 | **Frozen amounts** `tx_bonds[i]`, per-batch `B_exp` | **batch structure (reactor)** | The canonical, replay-stable record of what was reserved. |
 | **`r_fee` signal** | **reactor (computed), frozen into batch** | Derived from confirmed Bitcoin fee state. |
 
@@ -67,14 +67,42 @@ BondsStorage {
 }
 ```
 
-`A_u = Σ reservations.amount`; `σ_avail = amount − A_u`; `HasCapacity ⟺ σ_avail ≥ B_tx`. These predicates are pure functions of contract state — checked at sign by the proposer (using its view) and re-derived deterministically at accounting time from the frozen `tx_bonds`.
+`A_u = Σ reservations.amount`; `B_avail = amount − A_u`; `HasCapacity ⟺ B_avail ≥ B_tx`. (`B_avail`
+deliberately does not reuse `σ_avail` — σ is stake notation, reserved for §3.2.) These predicates are pure functions of contract state — checked at sign by the proposer (using its view) and re-derived deterministically at accounting time from the frozen `tx_bonds`.
 
 ### 3.2 staking extension (expiry bonds)
 
 ```
 ValidatorEntry += { expiry_reservations: Map<ResId, Decimal> }   // A_s = Σ
-// σ_avail(s) = stake − A_s ; HasExpiryBondCapacity ⟺ Σ batch B_exp · (σ_s/Quorum) ≤ σ_avail
+// σ_avail(s) = σ_s − A_s
 ```
+
+**The per-signer share (pinned — earlier drafts used two denominators interchangeably; they
+are different objects).** A decided batch carries one frozen `B_exp`. At **decide** time —
+when the signer set is canonical in the batch certificate — each signer reserves its
+stake-share of the batch's bond:
+
+```
+share_s = B_exp · σ_s / Σ_{s'∈signers} σ_{s'}
+```
+
+Shares sum to **exactly `B_exp`** (last-recipient-absorbs-remainder for `Decimal` exactness,
+the established `distribute_*` rule), so the amount burned on expiry equals the frozen batch
+amount — conservation-exact.
+
+**The sign-time capacity pre-check uses the quorum denominator by design.** When a signer
+signs, the final signer set is not yet known — but any batch that decides has signer stake
+`Σ_{s'∈signers} σ_{s'} ≥ Q_σ` (the quorum stake threshold), so `B_exp·(σ_s/Q_σ)` is a
+deterministic **upper bound** on the eventual share. The predicate is conservative:
+
+```
+HasExpiryBondCapacity ⟺ Σ_{signed, unsettled batches} B_exp·(σ_s/Q_σ) ≤ σ_avail(s)
+                         and, per batch:  B_exp·(σ_s/Q_σ) ≤ ε_batch·σ_s
+```
+
+`ε_batch` is a **fraction** (default 10%); the per-batch per-signer cap is `ε_batch·σ_s`.
+Because `share_s ≤ B_exp·(σ_s/Q_σ)`, a reservation admitted by the pre-check cannot fail at
+decide. The *bound* is what a signer checks; the *share* is what is reserved and burned.
 
 ---
 
@@ -107,7 +135,7 @@ All amount-bearing methods are **core-context** (reactor-only); the reactor supp
 ## 5. The five flows (end to end)
 
 1. **Ordering fee** — user attaches `f_ord`; escrowed at batch inclusion; on Batch-Confirmed, `τ_ord` (50%) burned, remainder paid stake-weighted to the batch's signers; on expiry/rollback, fully burned.
-2. **Expiry bond** — at sign, each signer reserves `B_exp·(σ_s/Σsigners)` against `σ_avail` (per-batch cap `ε_batch=10%·σ_s`); released on Batch-Confirmed/rollback; **burned on expiry** (applied once at `b.expiry`, even if later late-confirmed).
+2. **Expiry bond** — at decide, each signer reserves its stake-share `B_exp·(σ_s/Σ_{signers}σ_{s'})` against `σ_avail` (sign-time pre-check via the conservative `σ_s/Q_σ` bound; per-batch cap `ε_batch·σ_s` — §3.2); released on Batch-Confirmed/rollback; **burned on expiry** (applied once at `b.expiry`, even if later late-confirmed).
 3. **User griefing bond** — user maintains `≥ B_min` deposited; each ordered tx reserves frozen `B_tx`; released on Bitcoin-finalization/expiry/cascading-rollback; **entire bond burned** on attributable conflict.
 4. **Publisher bond** — identical to (3), keyed by the bundler's publisher key; the *only* burn path for bundled txs (rolled-back users' `B_tx` released, not burned).
 5. **Equivocation** — reactor detects conflicting signed batches at the same `batch_id`, verifies evidence, calls `slash_equivocation(offender, publisher)` (100% slash + eject; 5% bounty to publisher *iff* publisher ∉ signers, else full burn).
@@ -140,7 +168,7 @@ B_exp(t,h) = min(B_exp,max, B_exp,base · (1 + k_exp · r_fee(t,h)))
 B_tx(t,h)  = min(B_tx,max,  B_tx,base  · (1 + k_tx  · r_fee(t,h)))
 ```
 
-Defaults (params.typ): `B_exp,base=1000`, `B_exp,max=100000`, `k_exp=4`; `B_tx,base=1`, `B_tx,max=10`, `k_tx=4`. Because the amount is frozen and replayed from `tx_bonds`, a later change to any of these constants never alters an in-flight reservation.
+Defaults (modeling repo `params.typ`): `B_exp,base=1000`, `B_exp,max=100000`, `k_exp=4`; `B_tx,base=1`, `B_tx,max=10`, `k_tx=4`. Because the amount is frozen and replayed from `tx_bonds`, a later change to any of these constants never alters an in-flight reservation.
 
 ---
 
@@ -148,13 +176,13 @@ Defaults (params.typ): `B_exp,base=1000`, `B_exp,max=100000`, `k_exp=4`; `B_tx,b
 
 Layered, cheapest-first; each layer targets a specific failure mode.
 
-**L0 — Property tests (economic invariants).** `proptest` is already a dependency but only used for BLS no-panic. Add, on the pure/contract logic:
+**L0 — Property tests (economic invariants).** `proptest` is already in use (BLS no-panic, fuel accounting, storage ops, query pagination). Add, on the pure/contract logic:
 - *Conservation:* for any random sequence of deposit/reserve/release/forfeit, `bond.amount == σ_avail + A_u`; total KOR is conserved (escrow in == paid + burned + refunded); supply only ever decreases on burn.
 - *Reservation integrity:* a reservation always releases/burns exactly the amount it consumed (the frozen-amount invariant), across interleaved parameter changes.
-- *Bounds:* `B_tx ∈ [B_tx,base, B_tx,max]`, `B_exp ∈ [B_exp,base, B_exp,max]`, `σ_avail ≥ 0` always, `Σ B_exp per batch ≤ ε_batch·σ_s`.
-- *Settlement conservation:* ordering-fee split `τ_ord·F` burned + `(1−τ_ord)·F` paid == `F` exactly (mirror of the existing distribute conservation tests).
+- *Bounds:* `B_tx ∈ [B_tx,base, B_tx,max]`, `B_exp ∈ [B_exp,base, B_exp,max]`, `σ_avail ≥ 0` and `B_avail ≥ 0` always, per batch `share_s ≤ B_exp·(σ_s/Q_σ) ≤ ε_batch·σ_s`, and `Σ_s share_s == B_exp` exactly (§3.2).
+- *Settlement conservation:* ordering-fee split `τ_ord·F` burned + `(1−τ_ord)·F` paid == `F` exactly (mirror of the distribute conservation tests mined from the closed #440/#441 — they are not on main).
 
-**L1 — Lite contract tests.** Per-method, in the `test_runtime_with_genesis` harness (fast, funded identities): deposit/withdraw delays, capacity rejection, reserve→release vs reserve→forfeit, expiry burn reduces stake, self-publication already covered. One adversarial test per flow (the audit caught a real bug this way — make it routine).
+**L1 — Lite contract tests.** Per-method, in the `test_runtime_with_genesis` harness (fast, funded identities): deposit/withdraw delays, capacity rejection, reserve→release vs reserve→forfeit, expiry burn reduces stake, the self-publication guard (its test is re-derived from the closed #440, not on main). One adversarial test per flow (the audit caught a real bug this way — make it routine).
 
 **L2 — Consensus determinism (the ready oracle).** Extend `reactor_cluster_tests` (in-process BFT + MockBitcoin) and `RegTesterCluster` with scenarios that drive bonds through the full lifecycle — order→confirm→pay, order→expire→burn, order→conflict→forfeit→cascade — and assert `assert_checkpoints_match` across all nodes per height. Because all bond state flows through `insert_contract_state`, the checkpoint chain already fingerprints it; a single diverging bond balance fails the test. This is the strongest existing tool — lean on it hard.
 
@@ -166,11 +194,12 @@ Layered, cheapest-first; each layer targets a specific failure mode.
 
 ## 8. Validation infrastructure — what exists, what's missing
 
-**The economic model already exists** — `Documentation/modeling/` (the `kontor_v1` Python package): closed-form equilibrium + congestion simulator + Monte-Carlo tail-risk harness, with a pytest/Hypothesis suite and a reproducibility test that re-derives the v1-Parameter-Report numbers. It already pins ~80% of parameters, **including the bond/ordering economics** (`analyses/05_slashing_deterrence`, `06_ordering_bonds`, `07_griefing_bond_calibration`). So Phase 2's economic *parameters* are largely calibrated already; bond sizes (`B_exp,base=1000`, `B_min=100`, `B_tx∈[1,10]`, `ε_batch=10%`, `r_evid=5%`, `λ_slash=30`) come from it. **Do not rebuild this** — extend it.
+**The economic model already exists** — the external `kontor_v1` modeling repo (**not in this
+repo** — see `economic-layer-overview.md` §8): closed-form equilibrium + congestion simulator + Monte-Carlo tail-risk harness, with a pytest/Hypothesis suite and a reproducibility test that re-derives the v1-Parameter-Report numbers. It already pins ~80% of parameters, **including the bond/ordering economics** (`analyses/05_slashing_deterrence`, `06_ordering_bonds`, `07_griefing_bond_calibration`). So Phase 2's economic *parameters* are largely calibrated already; bond sizes (`B_exp,base=1000`, `B_min=100`, `B_tx∈[1,10]`, `ε_batch=10%`, `r_evid=5%`, `λ_slash=30`) come from it. **Do not rebuild this** — extend it.
 
 What's genuinely missing, in priority order:
 
-1. **The model↔implementation conformance bridge — the real gap.** The Python model is tested against `specs/params.typ` (`test_spec_consistency.py`), but **nothing checks that the Rust contract defaults match the spec/model values.** The deployed `staking`/`token`/`filestorage`/`bonds` defaults could silently drift from the recommended numbers. Close the loop: a single source of truth (`specs/params.typ`) and a check, per layer, that the model, the spec, and the Rust contract defaults agree. This is the conformance guardrail (project task #4) and it's what makes "calibrated" mean something at deploy time.
+1. **The model↔implementation conformance bridge — the real gap.** The Python model is tested against the modeling repo's `specs/params.typ` (`test_spec_consistency.py`), but **nothing checks that the Rust contract defaults match the spec/model values.** The deployed `staking`/`token`/`filestorage`/`bonds` defaults could silently drift from the recommended numbers. Close the loop: a single source of truth (the modeling repo's `specs/params.typ`) and a check, per layer, that the model, the spec, and the Rust contract defaults agree. This is the conformance guardrail (project task #4) and it's what makes "calibrated" mean something at deploy time.
 2. **The four un-pinned anchor parameters** (`c_stake`, `F_scale`, `φ_base`, `σ_min`) — the model deliberately leaves these to launch-time anchoring. Extend `modeling/` with analyses that recommend them given the reference assumptions (KOR/USD, target `|F|`, target USD-per-gas, decentralization preference). See the calibration note.
 3. **Rust-side property tests** for the bond/settlement conservation invariants (L0) — `proptest` is already a Kontor dependency but used only for BLS no-panic. Cheap; adopt as standard.
 4. **Differential / replay determinism oracle** — today only *cross-node agreement* is tested (the checkpoint chain); there's no *reindex-equivalence* (one indexer twice over the same history → identical checkpoint) or golden-checkpoint fixtures. A two-settlement-clock bond economy with frozen-amount replay is exactly where a reindex bug hides. (Fuzzing also absent; lower priority.)
@@ -179,9 +208,9 @@ What's genuinely missing, in priority order:
 
 ## 9. Suggested implementation milestones
 
-1. **Validate on the existing model first** — the bond/ordering economics are already in `Documentation/modeling/` (analyses 05–07); extend it for any new mechanism shape before writing contract code, rather than building from scratch.
+1. **Validate on the existing model first** — the bond/ordering economics are already in the external `kontor_v1` modeling repo (analyses 05–07); extend it for any new mechanism shape before writing contract code, rather than building from scratch.
 2. **`bonds` contract** + property tests (user + publisher griefing bonds, deposit/withdraw/reserve/release/forfeit).
-3. **staking expiry-bond extension** + ordering-fee escrow/settle (reuse `distribute_ordering_reward`).
+3. **staking expiry-bond extension** + ordering-fee escrow/settle (extend the v1 `distribute_ordering_reward` to the signer-set form, §4).
 4. **Reactor wiring** — the six hooks in §6, behind the existing finality path; equivocation evidence consumption.
 5. **L2/L3 cluster + adversarial tests**; differential replay oracle.
 6. **Calibration pass** with the simulator; freeze parameter defaults.
