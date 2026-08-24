@@ -1,6 +1,12 @@
 # Phase 2 — Ordering & Bond Economy: Implementation Design
 
-**Status:** proposal (design only; not yet scheduled for implementation)
+**Status:** proposal — **DEFERRED (Phase 2).** Design only; explicitly *not* part of the
+minimal v1 (`reactor-economic-integration.md` §12). Gated on: the batch clock becoming a
+pure function of consensus state (batch **expiry** introduced as a first-class
+`FinalityEvent` that survives rollback — no such event exists today) and a
+reindex-equivalence determinism harness. Revised 2026-08-24: stale "already built" claims
+corrected (the referenced primitives lived in the since-closed econ PRs, not on main) and
+the reactor hook table re-anchored by symbol (the old file:line anchors rotted).
 **Scope:** the optimistic-consensus economic layer — ordering fees, the three bond systems (expiry, user-griefing, publisher), expiry penalties, and equivocation settlement — and how to realize them across the Kontor contracts and reactor.
 **Out of scope here:** storage economy (Phase 1), governance/admin authority, parameter *values* (see the separate calibration note).
 
@@ -27,7 +33,7 @@ These follow the pattern already established by the storage/staking economic pri
 
 2. **Bond amounts are frozen at sign time and stored in the batch.** `B_tx(t,h)` and `B_exp(t,h)` are computed once by the proposing staker using the deterministic fee signal `r_fee`, written into `batch.tx_bonds[i]`, and thereafter **read, never recomputed** (spec §user-griefing-bonds: "verifiers read the `tx_bonds[i]` value frozen in the batch"). Per-position records, not scalar totals — so a later parameter change can't retroactively alter an in-flight reservation. This is the determinism linchpin; every indexer replays the same amounts from the canonical batch log.
 
-3. **Two settlement clocks.** Storage settles per Bitcoin block (Phase 1, in `run_block_lifecycle`). Ordering settles per **batch-confirmation / expiry / rollback**, in the finality path (`reactor/consensus_state.rs:check_finality` → `mod.rs:377`). These are different code paths with different atomicity boundaries — call it out explicitly (see §6).
+3. **Two settlement clocks.** Storage settles per Bitcoin block (Phase 1, in `run_block_lifecycle`). Ordering settles per **batch-confirmation / expiry / rollback**, in the finality path (`check_finality`/`settle_finality` emitting `FinalityEvent`s in `reactor/batches.rs`). These are different code paths with different atomicity boundaries — call it out explicitly (see §6).
 
 4. **`r_fee` derives only from Bitcoin-confirmed data.** The fee-insufficiency signal that sizes bonds must be a deterministic function of confirmed Bitcoin fee state (percentiles), never of the optimistic mempool — otherwise two stakers compute different bonds. It's computed at sign and frozen anyway (principle 2), but the *source* must still be canonical so independent re-derivation (e.g. for an audit) agrees.
 
@@ -91,10 +97,10 @@ All amount-bearing methods are **core-context** (reactor-only); the reactor supp
 
 **token / staking (ordering fees)** — reuse where possible
 - `escrow_ordering_fee(ctx, payer, amount)` *(core)* — hold `f_ord` into escrow at batch inclusion.
-- on confirm: `token::burn(escrow, τ_ord·Σf_ord)` + `staking::distribute_ordering_reward((1−τ_ord)·Σf_ord)` (already built, stake-weighted, exact-conservation).
+- on confirm: `token::burn(escrow, τ_ord·Σf_ord)` + `staking::distribute_ordering_reward((1−τ_ord)·Σf_ord)` — **to be built**: the v1 re-derivation ships this method in per-block active-set form (`reactor-economic-integration.md` §5.3); Phase 2 extends it to a per-batch signer-set signature (stake-weighted, exact-conservation, atomic pool transfer inside).
 - on expire/rollback: `token::burn(escrow, Σf_ord)` (100%).
 
-**equivocation** — already built (`staking::slash_equivocation`, now with the self-publication guard); Phase 2 only adds the **reactor wiring** (consume the `AppMsg::Finalized { evidence }` that is currently logged and discarded at `reactor/handlers.rs:234`) and the broader "publisher ∉ signers" check (reactor has the signer sets).
+**equivocation** — **to be built** (the `slash_equivocation` with self-publication guard lived in the closed #440 and is not on main; re-derive it with the burn/bounty split reserved for this path). Phase 2 adds the method *and* the reactor wiring: consume the `AppMsg::Finalized { evidence }` that is currently logged and discarded (reactor `handlers.rs`), verify, and pass the signer sets in for the "publisher ∉ signers" check.
 
 ---
 
@@ -110,18 +116,20 @@ All amount-bearing methods are **core-context** (reactor-only); the reactor supp
 
 ## 6. Batch-lifecycle integration (reactor hooks)
 
-Mapping to the real reactor (file:line from the lifecycle survey):
+Mapping to the reactor **by symbol** (the previous file:line anchors rotted; two of the
+symbols — `initiate_rollback`, `ResolveExpiry` — were deleted outright in the #510–#525
+reworks, which is why this table anchors on names and events only):
 
-| Lifecycle event | Reactor site | Economic action |
+| Lifecycle event | Reactor site (current symbols) | Economic action |
 |---|---|---|
-| **Sign** (proposer) | `batches.rs:make_value` (306) / sign in `consensus_state.rs:stream_proposal` (206) | compute `B_tx`/`B_exp` from `r_fee`, freeze into `tx_bonds`; check `EligibleForOrdering` / `HasExpiryBondCapacity` |
-| **Publish / decide** | `batches.rs:process_decided_batch` (142) | `bonds::reserve` per tx; `staking::reserve_expiry` per signer; `escrow_ordering_fee` |
-| **Confirm** | `consensus_state.rs:check_finality` (271) → `BatchFinalized` | pay ordering emission+fee to signers; `release` user/publisher reservations; `release_expiry` |
-| **Expire** | `batches.rs:ResolveExpiry` (1127 in spec mapping) / finality deadline | `burn_expiry` (signer penalty); `release` user `B_tx` (plain expiry) |
-| **Conflict / rollback** | `batches.rs:initiate_rollback` (523); `ResolveExpiry` conflict branch | `forfeit` responsible user/publisher bond; `release` downstream others; ordering fee burned |
-| **Equivocation evidence** | `reactor/handlers.rs:234` (`AppMsg::Finalized { evidence }`) | `slash_equivocation` |
+| **Sign** (proposer) | `batches.rs::make_value_snapshot` / `consensus_state.rs::stream_proposal` | compute `B_tx`/`B_exp` from `r_fee`, freeze into `tx_bonds`; check `EligibleForOrdering` / `HasExpiryBondCapacity` |
+| **Publish / decide** | `batches.rs::process_decided_batch` | `bonds::reserve` per tx; `staking::reserve_expiry` per signer; `escrow_ordering_fee` |
+| **Confirm** | `check_finality`/`settle_finality` → `FinalityEvent::BatchFinalized` | pay ordering emission+fee to signers; `release` user/publisher reservations; `release_expiry` |
+| **Expire** | **does not exist yet** — must be introduced as a first-class `FinalityEvent` variant that survives rollback/rehydration (a hard prerequisite of this phase, not a rediscovery of the deleted `ResolveExpiry`) | `burn_expiry` (signer penalty); `release` user `B_tx` (plain expiry) |
+| **Conflict / rollback** | `settle_finality` → `FinalityEvent::Rollback { from_anchor, invalidated_batches, missing }` | `forfeit` responsible user/publisher bond; `release` downstream others; ordering fee burned |
+| **Equivocation evidence** | `handlers.rs` `AppMsg::Finalized { evidence }` (currently logged and discarded) | `slash_equivocation` |
 
-**Settlement savepoint discipline.** Confirm/expire/rollback run in the consensus result branch (`mod.rs:377`), outside the per-block savepoint that wraps storage settlement — so each settlement **event** opens its own savepoint and commits atomically. For one batch-confirmation that means paying every signer (emission + fee), releasing every `B_tx`/`B_exp` reservation, and burning the `τ_ord` share **all commit or all roll back** — never a partial payout (e.g. reservations released but fees unpaid). Group the savepoint by *event* (a confirmed batch, an expired batch, a rollback), not per-tx, and process events in canonical order (batch_id, then position). The checkpoint oracle (§7) catches any divergence if the discipline is violated.
+**Settlement savepoint discipline.** Confirm/expire/rollback run in the finality path, outside the per-block savepoint that wraps storage settlement — so each settlement **event** opens its own savepoint and commits atomically. For one batch-confirmation that means paying every signer (emission + fee), releasing every `B_tx`/`B_exp` reservation, and burning the `τ_ord` share **all commit or all roll back** — never a partial payout (e.g. reservations released but fees unpaid). Group the savepoint by *event* (a confirmed batch, an expired batch, a rollback), not per-tx, and process events in canonical order (batch_id, then position). The checkpoint oracle (§7) catches any divergence if the discipline is violated.
 
 ### 6.1 Bond amount schedules (frozen at sign)
 
