@@ -4,9 +4,9 @@
 minimal v1 (`reactor-economic-integration.md` §12). Gated on: the batch clock becoming a
 pure function of consensus state (batch **expiry** introduced as a first-class
 `FinalityEvent` that survives rollback — no such event exists today) and a
-reindex-equivalence determinism harness. Revised 2026-08-24: stale "already built" claims
-corrected (the referenced primitives lived in the since-closed econ PRs, not on main) and
-the reactor hook table re-anchored by symbol (the old file:line anchors rotted).
+reindex-equivalence determinism harness. Method references to the closed econ PRs
+(#439–#453) are formula/test **mines**, not merged code — nothing cited from them exists on
+main unless explicitly stated.
 **Scope:** the optimistic-consensus economic layer — ordering fees, the three bond systems (expiry, user-griefing, publisher), expiry penalties, and equivocation settlement — and how to realize them across the Kontor contracts and reactor.
 **Out of scope here:** storage economy (Phase 1), governance/admin authority, parameter *values* (see the separate calibration note).
 
@@ -19,7 +19,7 @@ The optimistic pre-confirmation guarantee is only worth what's bonded behind it.
 - a staker can sign a batch and walk away if it doesn't confirm (no liveness pressure),
 - equivocation has no teeth.
 
-So Phase 2 is *core security*, not polish. It is also the largest unbuilt subsystem (~30 mechanisms) and the one most exposed to two failure modes: **non-determinism** (any disagreement on a bond amount or settlement forks the chain) and **incentive bugs** (a mechanism that's deterministic but economically exploitable — exactly the `slash_equivocation` self-publication leak the audit just caught).
+So Phase 2 is *core security*, not polish. It is also the largest unbuilt subsystem (~30 mechanisms) and the one most exposed to two failure modes: **non-determinism** (any disagreement on a bond amount or settlement forks the chain) and **incentive bugs** (a mechanism that's deterministic but economically exploitable — exactly the class of the `slash_equivocation` self-publication leak: a sound-looking bounty that pays the offender for publishing evidence against itself; the publisher-∉-signers guard in §5 flow 5 exists because of it).
 
 The design below is organized to make both failure modes *testable up front* (§7–8).
 
@@ -77,8 +77,8 @@ ValidatorEntry += { expiry_reservations: Map<ResId, Decimal> }   // A_s = Σ
 // σ_avail(s) = σ_s − A_s
 ```
 
-**The per-signer share (pinned — earlier drafts used two denominators interchangeably; they
-are different objects).** A decided batch carries one frozen `B_exp`. At **decide** time —
+**The per-signer share (pinned).** Two denominators appear below — they are different
+objects and must not be conflated. A decided batch carries one frozen `B_exp`. At **decide** time —
 when the signer set is canonical in the batch certificate — each signer reserves its
 stake-share of the batch's bond:
 
@@ -182,7 +182,7 @@ Layered, cheapest-first; each layer targets a specific failure mode.
 - *Bounds:* `B_tx ∈ [B_tx,base, B_tx,max]`, `B_exp ∈ [B_exp,base, B_exp,max]`, `σ_avail ≥ 0` and `B_avail ≥ 0` always, per batch `share_s ≤ B_exp·(σ_s/Q_σ) ≤ ε_batch·σ_s`, and `Σ_s share_s == B_exp` exactly (§3.2).
 - *Settlement conservation:* ordering-fee split `τ_ord·F` burned + `(1−τ_ord)·F` paid == `F` exactly (mirror of the distribute conservation tests mined from the closed #440/#441 — they are not on main).
 
-**L1 — Lite contract tests.** Per-method, in the `test_runtime_with_genesis` harness (fast, funded identities): deposit/withdraw delays, capacity rejection, reserve→release vs reserve→forfeit, expiry burn reduces stake, the self-publication guard (its test is re-derived from the closed #440, not on main). One adversarial test per flow (the audit caught a real bug this way — make it routine).
+**L1 — Lite contract tests.** Per-method, in the `test_runtime_with_genesis` harness (fast, funded identities): deposit/withdraw delays, capacity rejection, reserve→release vs reserve→forfeit, expiry burn reduces stake, the self-publication guard (its test is re-derived from the closed #440, not on main). One adversarial test per flow (the self-publication leak was caught exactly this way — make it routine).
 
 **L2 — Consensus determinism (the ready oracle).** Extend `reactor_cluster_tests` (in-process BFT + MockBitcoin) and `RegTesterCluster` with scenarios that drive bonds through the full lifecycle — order→confirm→pay, order→expire→burn, order→conflict→forfeit→cascade — and assert `assert_checkpoints_match` across all nodes per height. Because all bond state flows through `insert_contract_state`, the checkpoint chain already fingerprints it; a single diverging bond balance fails the test. This is the strongest existing tool — lean on it hard.
 
@@ -225,4 +225,4 @@ Milestones 2–3 are contract work (this track); 4 is reactor work (coordination
 - **Bonds contract vs. staking for expiry bonds** — confirmed split here (griefing→bonds, expiry→staking); revisit if the reservation code wants to be shared.
 - **Distribute-Equally remainder rule** — reconcile the spec's `H(seed‖id)` ranking with the implementation's sorted-last-absorbs-remainder (carries into ordering-fee payout); pick one canonical rule.
 
-Resolved in this revision: the `B_tx` schedule (§6.1) and the settlement savepoint discipline (§6).
+Resolved here (no longer open): the `B_tx` schedule (§6.1), the settlement savepoint discipline (§6), and the expiry-bond share/bound split (§3.2).

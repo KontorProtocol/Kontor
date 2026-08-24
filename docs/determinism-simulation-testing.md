@@ -40,7 +40,7 @@ A run must be a pure function of `(seed, scenario)`. Every nondeterminism source
 - Inputs: transaction submission order / mempool contents.
 - Randomness: all of it seeded (challenge seeds are already HKDF-deterministic; assert nothing else draws entropy).
 
-Residual sources that must be **zero** in consensus paths — and which the simulator + reindex relation systematically flush out: wall-clock reads, `HashMap`/`Map::keys()` iteration order (the class of bug just fixed in challenge selection), and `f64` (the audit-flagged `reactor/batches.rs` instance was since fixed with integer math; the surviving reactor example is the fee-rate scoring in `mempool_fee_index/`). A **determinism-hardening audit** is part of this work, not separate from it.
+Residual sources that must be **zero** in consensus paths — and which the simulator + reindex relation systematically flush out: wall-clock reads, `HashMap`/`Map::keys()` iteration order (a class of bug previously found in challenge selection), and `f64` (a former `reactor/batches.rs` instance was fixed with integer math; the surviving reactor example is the fee-rate scoring in `mempool_fee_index/`). A **determinism-hardening audit** is part of this work, not separate from it.
 
 ### 3.2 The simulation driver
 

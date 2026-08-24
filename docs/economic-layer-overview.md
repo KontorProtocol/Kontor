@@ -1,9 +1,9 @@
 # Kontor Economic Layer — High-Level Overview
 
 **Status:** overview / map + **decision record**. A reading guide over the economic-layer
-work — the high-level picture the per-mechanism specs assume but don't restate. Revised
-against the 2026-07-12 design audit (model sound; wiring re-derived — see
-`reactor-economic-integration.md`) and the four design decisions recorded 2026-08-24 (§0).
+work — the high-level picture the per-mechanism specs assume but don't restate. Includes
+the decision record (§0) that the wiring spec (`reactor-economic-integration.md`) is
+written against.
 **Scope:** the *goals* of the economic layer and the *algorithms* that achieve them, plus
 where each piece currently lives (main vs. open PR vs. external modeling repo).
 **Not scope:** per-mechanism specification (see the linked PRs/docs) or parameter
@@ -16,9 +16,8 @@ where each piece currently lives (main vs. open PR vs. external modeling repo).
 
 ## 0. Decisions (2026-08-24) — the four questions that gated the spec rewrite
 
-The 2026-07-12 audit found the economic *model* sound and the *wiring spec* broken, and
-named four decisions that had to precede the re-derivation. All four are decided (full
-option analysis preserved in the "Kontor Econ v1 — Four Open Decisions" memo):
+Four design questions gated the wiring spec — the economic *model* was sound, but the
+wiring could not be finalized until these were decided. All four are decided:
 
 | # | Question | Decision |
 |---|---|---|
@@ -79,7 +78,7 @@ issue, the **Phase 2 design**, and an **external calibration** model.
 | token: mint hardening + `Issuance` mainnet gate | **on `main`** (#437; gate merged) | done |
 | Signer-keyed storage memberships (identity decision, §7) | **on `main`** | done — obsoletes #452's node_id |
 | Creation-fee burn e2e | **on `main`** (#460) | done |
-| The six econ contract PRs (#439/#440/#441/#445/#452/#453) | **being closed** per the audit | formula & test mines for the re-derivation — do **not** rebase (they encode the broken spec's conservation bugs) |
+| The six econ contract PRs (#439/#440/#441/#445/#452/#453) | **being closed** | formula & test mines for the re-derivation — do **not** rebase (they encode the broken spec's conservation bugs) |
 | **Reactor wiring — minimal v1** | `reactor-economic-integration.md` (re-derived) + #442 (to be rescoped) | **the build target** |
 | Phase 2 ordering/bond economy (design) | `phase2-ordering-economy.md` (annotated: deferred) | design-only |
 | Determinism-simulation test suite (design) | `determinism-simulation-testing.md` | design-only |

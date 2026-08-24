@@ -1,20 +1,19 @@
 # Reactor ⇄ Economic-Contract Integration Spec (v1)
 
-**Status:** re-derived wiring spec — supersedes the previous draft of this document.
-Written against the 2026-07-12 economic design audit (all 8 major findings independently
-re-verified 16/16) and the four design decisions recorded 2026-08-24 in
-`economic-layer-overview.md` §Decisions. The audit's verdict: the economic *model* is sound;
-the previous *wiring* was not conserving. This revision is the conserving version.
+**Status:** wiring spec for the minimal v1, grounded in the design decisions recorded in
+`economic-layer-overview.md` §0. The governing constraint: the economic *model* is sound,
+and the wiring must be **conserving** — every flow either transfers KOR out of a named
+holder or burns it; nothing mints outside `mint_emission`.
 **Audience:** the reactor (indexer-proper) owner, and the economic-layer track re-deriving
 the closed PRs (#439/#440/#441/#445/#452/#453) against it.
 **Scope:** the **minimal v1** — the smallest coherent economic layer that closes issue
 #461's acceptance gate — plus the architectural rules every later phase must obey. Phase-2
 bonds/ordering-fees are out of scope (see §12) but the seams they will attach to are named.
 
-**Anchor style:** symbols, not line numbers. The previous draft cited `blocks.rs:196`,
-`mod.rs:377`, `initiate_rollback`, `ResolveExpiry` — all of which rotted or were deleted
-within weeks (#510/#521/#522/#525 reworked the reactor). Anchor by function and event names;
-they are stable.
+**Anchor style:** symbols, not line numbers. File:line anchors rot within weeks
+(#510/#521/#522/#525 each reworked the reactor), and deleted symbols (`initiate_rollback`,
+`ResolveExpiry`) still circulate in older branches and closed PRs. Anchor by function and
+event names; they are stable.
 
 ---
 
@@ -47,8 +46,8 @@ slashing, not from emission targeting.
 
 ## 3. Money architecture (the conservation core)
 
-This section exists because the previous draft's flow violated conservation twice
-(audit findings 1–2). The rules are structural, not advisory.
+The rules here are structural, not advisory — each one makes a class of conservation bug
+unrepresentable rather than merely discouraged.
 
 ### 3.1 Holders
 
@@ -70,20 +69,20 @@ holders, not depositor balances; the storage-deposit floor logic never counts th
    STORAGE_POOL). It never credits CORE, never a user, never a contract holder.
    **Why CORE is banned:** CORE is the gas escrow; `token::release()` sweeps the *entire*
    CORE balance to payees every op, by design. A pool parked in CORE is stolen by the next
-   gas refund (audit finding 1). With pools in dedicated holders, `release()`'s
+   gas refund. With pools in dedicated holders, `release()`'s
    full-CORE-sweep stays correct by construction — do **not** "fix" this with a runtime
    guard on the gas hot path instead of the dedicated holders. (If a belt-and-suspenders
    guard is ever added, it lives with the emission code and classifies a non-empty CORE at
    `hold` as `NonDeterministic`/fail-stop — a broken invariant, not a user error.)
 2. **Every payout is a transfer out of a pool.** `token::issue_to` is a **fresh mint**
    (`token/src/lib.rs`, core-context) and is **banned from every per-block flow** — using it
-   for payouts double-mints (finding 1). It remains only for genesis/bootstrap paths.
+   for payouts double-mints. It remains only for genesis/bootstrap paths.
 3. **Pool-move and stake-credit are one atomic seam.** `distribute_ordering_reward` itself
    performs `token::transfer(ORDERING_POOL → staking holder)` for the exact amount it
    credits to stakes (the staking contract already imports token). The reactor cannot call
    a credit without the matching transfer having happened in the same contract call —
-   finding 2 ("stake credited with no token behind it") becomes unrepresentable rather than
-   merely discouraged.
+   "stake credited with no token behind it" becomes unrepresentable rather than merely
+   discouraged.
 
 ### 3.3 Standing invariants (checked, not assumed)
 
@@ -101,12 +100,13 @@ holders, not depositor balances; the storage-deposit floor logic never counts th
 | **Per Bitcoin block** | block executed | `run_block_lifecycle`, inside the block savepoint (`handle_block` opens it around `execute_block` + `run_block_lifecycle`; commit closes it) | mint, ordering payout, storage slash, validator/epoch transitions |
 | **Per batch event** | `FinalityEvent::BatchFinalized` / `FinalityEvent::Rollback` from `check_finality`/`settle_finality` | finality path (`check_finality` in `consensus_state.rs` → `settle_finality` in `batches.rs`) | **nothing in v1** — the seam Phase 2 bonds/fees attach to |
 
-Two corrections to the previous draft:
+Two points that must not be gotten wrong:
 
 - The batch clock's v1 economic payload is **empty**. Ordering emission pays per *block* to
   the active set (§5.3, Decision recorded), not per batch-confirm to signers — the
   per-batch signer payout returns only with Phase 2's fee/bond economy.
-- The old anchors `initiate_rollback` and `ResolveExpiry` **no longer exist**. Batch expiry
+- `initiate_rollback` and `ResolveExpiry` **no longer exist** (deleted in the reactor
+  reworks; they still appear in older branches and closed PRs). Batch expiry
   is not a named reactor event today; the finality pass renders a deadline verdict and
   emits `BatchFinalized` or `Rollback { from_anchor, invalidated_batches, missing }`. When
   Phase 2 needs an expiry hook, it must be introduced as a first-class `FinalityEvent`
@@ -140,7 +140,7 @@ run_block_lifecycle(block):                          [inside the block savepoint
   ── Phase 2 · Storage slash settlement ────────────────────────────
   for (signer_id, k_f) in filestorage::collect_failed_challenges():   ← affordance §11.1
       staking::slash(signer_id, λ_slash · k_f)       → 100 % to BURNER
-      // no distribute_slash on this path — deleted (Decision: burn-all, finding 5)
+      // no distribute_slash on this path — burn-all (§5.2)
 
   ── Phase 3 · Ordering payout ─────────────────────────────────────
   staking::distribute_ordering_reward(χ·e)
@@ -168,8 +168,8 @@ run_block_lifecycle(block):                          [inside the block savepoint
 ### 5.2 Phase 2 — storage slash
 
 - **Input:** `collect_failed_challenges()` returns challenges that FAILED verification and
-  challenges that EXPIRED unanswered (both are proof failures; audit finding: expired must
-  slash or liveness-failure is free).
+  challenges that EXPIRED unanswered (both are proof failures; expired must slash too, or
+  liveness-failure is free).
 - **Resolution:** memberships are signer-keyed on main (`(agreement_id, signer_id)`), so the
   prover *is* the staking identity — no side-table (the #452 node_id label is obsolete).
 - **Amount:** `λ_slash · k_f`, saturating at the offender's remaining stake. λ_slash is
@@ -178,7 +178,7 @@ run_block_lifecycle(block):                          [inside the block savepoint
   same call shape.
 - **Destination: 100 % BURNER.** `distribute_slash` (co-node redistribution) is deleted
   from this path — it paid nodes when a *peer* failed, a direct sabotage incentive
-  (finding 5), and its two conservation bugs (stranded escrow on INACTIVE recipients;
+  (§14 row 6), and its two conservation bugs (stranded escrow on INACTIVE recipients;
   aggregate-skip for PENDING_EXIT) die with it. The τ/bounty split machinery is reserved
   for the *equivocation* path, where a bounty is the correct incentive — and that whole
   path is deferred (§6, §12).
@@ -186,7 +186,7 @@ run_block_lifecycle(block):                          [inside the block savepoint
 
 ### 5.3 Phase 3 — ordering payout (v1 interim, recorded)
 
-**Decision (audit finding 4, recorded here):** v1 pays the ordering emission **per block,
+**Decision (recorded here):** v1 pays the ordering emission **per block,
 to the ACTIVE validator set, stake-weighted** — not to batch signers.
 
 - This is an explicitly documented interim: it admits free-riding (a validator earns
@@ -214,7 +214,7 @@ to the ACTIVE validator set, stake-weighted** — not to batch signers.
 
 ## 6. Slashing prerequisites — same-changeset requirements
 
-Slashing that can be exited is theater (audit finding 6: 12-block unbond vs 2016-block
+Slashing that can be exited is theater (a 12-block unbond against a 2016-block
 challenge deadline means a faulty staker leaves before evidence lands). Therefore the
 storage-slash wiring (§5.2) **must land in the same changeset as**:
 
@@ -273,7 +273,7 @@ formula; price-coupled → admin window; identity → genesis-fixed):
 | μ₀ (emission rate) | ≈ 5 %/yr | **genesis-fixed** | the monetary promise |
 | χ (ordering split) | 10 % | **genesis-fixed** | identity |
 | B (blocks/yr) | 52,560 | **genesis-fixed** | Bitcoin timing |
-| τ_slash (storage) | **= 1 (burn-all)** | **genesis-fixed** | decided (finding 5); not a knob |
+| τ_slash (storage) | **= 1 (burn-all)** | **genesis-fixed** | decided (§14 row 6); not a knob |
 | λ_slash | ≈ 30 | **genesis-fixed*** | *uncalibrated — model before locking* |
 | λ_stake | **deleted** | — | Decision 4: solvency check is plain Σk_f; revisit trigger = Step-5 correlated-failure modeling; if it returns it is genesis-class or a formula, never admin |
 | σ_min | 5,000,000 KOR | **admin window** | price-coupled (Decision 3) |
@@ -290,7 +290,7 @@ timelock + **irrevocable sunset** ≈ genesis + 52,560. The *decision* is record
 
 ## 10. Determinism requirements (non-negotiable)
 
-Unchanged in substance from the previous draft; restated as the complete v1 set:
+The complete v1 set:
 
 1. No `f64`, no `HashMap` iteration order, no wall-clock in any consensus-affecting path.
    All amounts fixed-point `Decimal`; integer arithmetic where division order matters.
@@ -327,7 +327,7 @@ mainnet gate (merged); creation-fee burn e2e (#460 merged — port its assertion
 - **§11.6** σ_min in `register_validator` (§8).
 - **§11.7** terminal-state unwinding (§7).
 
-**Explicitly not prerequisites for v1** (previous draft's items now deferred): the `bonds`
+**Explicitly not prerequisites for v1:** the `bonds`
 contract, ordering-fee escrow, `slash_equivocation` wiring, congestion consumers.
 
 ## 12. Explicitly deferred (with their triggers)
@@ -356,11 +356,10 @@ contract, ordering-fee escrow, `slash_equivocation` wiring, congestion consumers
 - The determinism-simulation suite (`determinism-simulation-testing.md`) targets exactly
   the §5.4/§10 properties; its reindex-equivalence oracle is the Phase-2 gate.
 
-## 14. Contradictions ledger (audit §8 — resolved here)
+## 14. Contradictions ledger (resolved here)
 
-*(Numbering key: inline "finding N" citations throughout this spec refer to the audit's
-**8 major findings**; the rows below are the audit's **§8 contradictions list** — a
-different, longer list of 12. Row numbers ≠ finding numbers.)*
+*(Contradictions that existed between the protocol spec, the modeling repo, the closed econ
+PRs, and main — each row records the resolution this document commits to.)*
 
 | # | Contradiction | Resolution | Where |
 |---|---|---|---|
@@ -388,8 +387,7 @@ different, longer list of 12. Row numbers ≠ finding numbers.)*
 | §9 parameter table upkeep + admin build | protocol owner (pre-genesis) |
 | Phase-2 seams (§4, §12) | blocked on batch-clock determinism; do not build early |
 
-References: 2026-07-12 design audit (findings 1–8, §5–§8) and its 18-agent verification;
-decision record 2026-08-24 (`economic-layer-overview.md` §Decisions); issues #442
+References: the decision record (`economic-layer-overview.md` §0); issues #442
 (rescope target), #461, #462, #463; closed PRs #439/#440/#441/#445/#452/#453 (formula and
 test mines); `reactor/{blocks,batches,consensus_state,handlers}.rs`;
 `native-contracts/{token,staking,filestorage}`.
