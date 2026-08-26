@@ -8,6 +8,7 @@ workspace = true
 
 [dependencies]
 stdlib = { workspace = true }
+built-in-types = { workspace = true }
 
 [lib]
 crate-type = ["cdylib"]

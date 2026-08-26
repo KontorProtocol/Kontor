@@ -28,14 +28,17 @@ wit_bindgen::generate!({
     additional_derives: [stdlib::Wavey],
     additional_type_attributes: {
         "kontor:built-in/file-registry-types/raw-file-descriptor": [
+            #[derive(stdlib::Storage)]
             #[cfg_attr(feature = "host", derive(wasmtime::component::ComponentType, wasmtime::component::Lift, wasmtime::component::Lower, serde::Deserialize))]
             #[cfg_attr(feature = "host", component(record))]
         ],
         "kontor:built-in/file-registry-types/challenge-input": [
+            #[derive(stdlib::Storage)]
             #[cfg_attr(feature = "host", derive(wasmtime::component::ComponentType, wasmtime::component::Lift, wasmtime::component::Lower, serde::Deserialize))]
             #[cfg_attr(feature = "host", component(record))]
         ],
         "kontor:built-in/file-registry-types/verify-result": [
+            #[derive(stdlib::Storage)]
             #[cfg_attr(feature = "host", derive(wasmtime::component::ComponentType, wasmtime::component::Lift, wasmtime::component::Lower, serde::Deserialize))]
             #[cfg_attr(feature = "host", component(enum))]
         ],
@@ -63,6 +66,8 @@ wit_bindgen::generate!({
 });
 
 pub use kontor::built_in::file_registry_types;
+// The generated models' `try_update_*` path names `crate::error::Error`.
+pub use kontor::built_in::error;
 
 // Owned behavior on the shared types — written once here, where the types
 // live, instead of expanded per bindgen family (the old impls.rs pattern).

@@ -8,4 +8,8 @@ package kontor:built-in-types;
 
 world shared {
     import kontor:built-in/file-registry-types;
+    // The generated storage models' `try_update_*` setters reference
+    // `crate::error::Error`; importing the error interface (aliased to
+    // `crate::error` in lib.rs) is what resolves it here.
+    import kontor:built-in/error;
 }

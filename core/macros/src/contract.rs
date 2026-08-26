@@ -335,6 +335,14 @@ pub fn generate(config: Config) -> TokenStream {
             path: #path,
             generate_all,
             generate_unused_types: true,
+            // Types-only built-in interfaces come from the shared
+            // `built-in-types` crate — generated once there (with Storage/Wavey
+            // and their hand impls), aliased here instead of regenerated. The
+            // host bindgen remaps the same interfaces onto the same types, so
+            // guest and host share one type family for them.
+            with: {
+                "kontor:built-in/file-registry-types": built_in_types::file_registry_types,
+            },
             additional_derives: [stdlib::Storage, stdlib::Wavey],
             #type_attrs
             export_macro_name: "__export__",
@@ -343,6 +351,11 @@ pub fn generate(config: Config) -> TokenStream {
         });
 
         use kontor::built_in::*;
+        // The remapped types-only interface generates no module here — surface
+        // the shared crate's module under the same name the un-remapped
+        // generation used (bare `file_registry_types::…` in contract code and
+        // `super::file_registry_types::…` in `import!` expansions).
+        use built_in_types::file_registry_types;
         use kontor::built_in::context::{Holder, OutPoint};
         use kontor::built_in::context::{ContractAddressModel, ContractAddressWriteModel};
         use kontor::built_in::numbers::{IntegerModel, IntegerWriteModel, DecimalModel, DecimalWriteModel};

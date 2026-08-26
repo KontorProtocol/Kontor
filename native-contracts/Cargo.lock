@@ -21,6 +21,14 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b4388bee8683e3d04af747c73422af53102d2bd24d9eadb6cbc100baef4b43f8"
 
 [[package]]
+name = "built-in-types"
+version = "0.1.0"
+dependencies = [
+ "stdlib",
+ "wit-bindgen",
+]
+
+[[package]]
 name = "darling"
 version = "0.23.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -64,6 +72,7 @@ checksum = "877a4ace8713b0bcf2a4e7eec82529c029f1d0619886d18145fea96c3ffe5c0f"
 name = "filestorage"
 version = "0.1.0"
 dependencies = [
+ "built-in-types",
  "stdlib",
 ]
 
@@ -210,6 +219,7 @@ checksum = "cf8baf1c55e62ffcace7a9f06f4bd9cd3f0c4beb022d3b367256b91b87513d98"
 name = "nft"
 version = "0.1.0"
 dependencies = [
+ "built-in-types",
  "stdlib",
 ]
 
@@ -299,6 +309,7 @@ dependencies = [
 name = "staking"
 version = "0.1.0"
 dependencies = [
+ "built-in-types",
  "stdlib",
 ]
 
@@ -332,6 +343,7 @@ dependencies = [
 name = "system"
 version = "0.1.0"
 dependencies = [
+ "built-in-types",
  "stdlib",
 ]
 
@@ -359,6 +371,7 @@ dependencies = [
 name = "token"
 version = "0.1.0"
 dependencies = [
+ "built-in-types",
  "stdlib",
 ]
 
