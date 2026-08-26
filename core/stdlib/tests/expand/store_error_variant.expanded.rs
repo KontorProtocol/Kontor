@@ -4,12 +4,9 @@ enum Error {
     Overflow,
 }
 #[automatically_derived]
-impl stdlib::Store<crate::context::ProcStorage> for Error {
-    fn __set(
-        ctx: &alloc::rc::Rc<crate::context::ProcStorage>,
-        base_path: stdlib::KeyPath,
-        value: Error,
-    ) {
+impl<__S: stdlib::WriteStorage + stdlib::ReadStorage + ?Sized> stdlib::Store<__S>
+for Error {
+    fn __set(ctx: &alloc::rc::Rc<__S>, base_path: stdlib::KeyPath, value: Error) {
         stdlib::WriteStorage::__delete_matching_paths(
             ctx,
             &base_path,

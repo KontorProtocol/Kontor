@@ -8,27 +8,23 @@ struct Listing {
     seller: u64,
 }
 #[automatically_derived]
-impl stdlib::Store<crate::context::ProcStorage> for Listing {
-    fn __set(
-        ctx: &alloc::rc::Rc<crate::context::ProcStorage>,
-        base_path: stdlib::KeyPath,
-        value: Listing,
-    ) {
+impl<__S: stdlib::WriteStorage + stdlib::ReadStorage + ?Sized> stdlib::Store<__S>
+for Listing {
+    fn __set(ctx: &alloc::rc::Rc<__S>, base_path: stdlib::KeyPath, value: Listing) {
         stdlib::WriteStorage::__set(ctx, base_path.push_interned(0u8), value.active);
         stdlib::WriteStorage::__set(ctx, base_path.push_interned(1u8), value.price);
         stdlib::WriteStorage::__set(ctx, base_path.push_interned(2u8), value.title);
         stdlib::WriteStorage::__set(ctx, base_path.push_interned(3u8), value.seller);
     }
 }
-pub struct ListingModel {
+pub struct ListingModel<__S> {
     pub base_path: stdlib::KeyPath,
-    ctx: alloc::rc::Rc<crate::context::ViewStorage>,
+    ctx: alloc::rc::Rc<__S>,
 }
-impl ListingModel {
-    pub fn new(
-        ctx: alloc::rc::Rc<crate::context::ViewStorage>,
-        base_path: stdlib::KeyPath,
-    ) -> Self {
+#[doc(hidden)]
+pub type __ListingModelFor<__S> = ListingModel<__S>;
+impl<__S: stdlib::ReadStorage + 'static> ListingModel<__S> {
+    pub fn new(ctx: alloc::rc::Rc<__S>, base_path: stdlib::KeyPath) -> Self {
         Self {
             base_path: base_path.clone(),
             ctx,
@@ -86,18 +82,19 @@ impl ListingModel {
         }
     }
 }
-pub struct ListingWriteModel {
+pub struct ListingWriteModel<__S: stdlib::HasViewStorage> {
     pub base_path: stdlib::KeyPath,
-    ctx: alloc::rc::Rc<crate::context::ProcStorage>,
+    ctx: alloc::rc::Rc<__S>,
     index_binding: Option<(stdlib::KeyPath, alloc::vec::Vec<u8>)>,
-    model: ListingModel,
+    model: ListingModel<__S::View>,
 }
-impl ListingWriteModel {
-    pub fn new(
-        ctx: alloc::rc::Rc<crate::context::ProcStorage>,
-        base_path: stdlib::KeyPath,
-    ) -> Self {
-        let view_storage = ctx.view_storage();
+#[doc(hidden)]
+pub type __ListingWriteModelFor<__S> = ListingWriteModel<__S>;
+impl<
+    __S: stdlib::ReadStorage + stdlib::WriteStorage + stdlib::HasViewStorage + 'static,
+> ListingWriteModel<__S> {
+    pub fn new(ctx: alloc::rc::Rc<__S>, base_path: stdlib::KeyPath) -> Self {
+        let view_storage = stdlib::HasViewStorage::view_storage(&*ctx);
         Self {
             base_path: base_path.clone(),
             ctx,
@@ -900,8 +897,8 @@ impl ListingWriteModel {
         }
     }
 }
-impl core::ops::Deref for ListingWriteModel {
-    type Target = ListingModel;
+impl<__S: stdlib::HasViewStorage> core::ops::Deref for ListingWriteModel<__S> {
+    type Target = ListingModel<__S::View>;
     fn deref(&self) -> &Self::Target {
         &self.model
     }

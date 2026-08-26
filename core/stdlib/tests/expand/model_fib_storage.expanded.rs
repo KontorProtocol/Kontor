@@ -2,15 +2,14 @@ use stdlib::Model;
 struct FibValue {
     pub value: u64,
 }
-pub struct FibValueModel {
+pub struct FibValueModel<__S> {
     pub base_path: stdlib::KeyPath,
-    ctx: alloc::rc::Rc<crate::context::ViewStorage>,
+    ctx: alloc::rc::Rc<__S>,
 }
-impl FibValueModel {
-    pub fn new(
-        ctx: alloc::rc::Rc<crate::context::ViewStorage>,
-        base_path: stdlib::KeyPath,
-    ) -> Self {
+#[doc(hidden)]
+pub type __FibValueModelFor<__S> = FibValueModel<__S>;
+impl<__S: stdlib::ReadStorage + 'static> FibValueModel<__S> {
+    pub fn new(ctx: alloc::rc::Rc<__S>, base_path: stdlib::KeyPath) -> Self {
         Self {
             base_path: base_path.clone(),
             ctx,
@@ -27,18 +26,19 @@ impl FibValueModel {
         FibValue { value: self.value() }
     }
 }
-pub struct FibValueWriteModel {
+pub struct FibValueWriteModel<__S: stdlib::HasViewStorage> {
     pub base_path: stdlib::KeyPath,
-    ctx: alloc::rc::Rc<crate::context::ProcStorage>,
+    ctx: alloc::rc::Rc<__S>,
     index_binding: Option<(stdlib::KeyPath, alloc::vec::Vec<u8>)>,
-    model: FibValueModel,
+    model: FibValueModel<__S::View>,
 }
-impl FibValueWriteModel {
-    pub fn new(
-        ctx: alloc::rc::Rc<crate::context::ProcStorage>,
-        base_path: stdlib::KeyPath,
-    ) -> Self {
-        let view_storage = ctx.view_storage();
+#[doc(hidden)]
+pub type __FibValueWriteModelFor<__S> = FibValueWriteModel<__S>;
+impl<
+    __S: stdlib::ReadStorage + stdlib::WriteStorage + stdlib::HasViewStorage + 'static,
+> FibValueWriteModel<__S> {
+    pub fn new(ctx: alloc::rc::Rc<__S>, base_path: stdlib::KeyPath) -> Self {
+        let view_storage = stdlib::HasViewStorage::view_storage(&*ctx);
         Self {
             base_path: base_path.clone(),
             ctx,
@@ -83,8 +83,8 @@ impl FibValueWriteModel {
         FibValue { value: self.value() }
     }
 }
-impl core::ops::Deref for FibValueWriteModel {
-    type Target = FibValueModel;
+impl<__S: stdlib::HasViewStorage> core::ops::Deref for FibValueWriteModel<__S> {
+    type Target = FibValueModel<__S::View>;
     fn deref(&self) -> &Self::Target {
         &self.model
     }
@@ -92,15 +92,14 @@ impl core::ops::Deref for FibValueWriteModel {
 struct FibStorage {
     pub cache: Map<u64, FibValue>,
 }
-pub struct FibStorageModel {
+pub struct FibStorageModel<__S> {
     pub base_path: stdlib::KeyPath,
-    ctx: alloc::rc::Rc<crate::context::ViewStorage>,
+    ctx: alloc::rc::Rc<__S>,
 }
-impl FibStorageModel {
-    pub fn new(
-        ctx: alloc::rc::Rc<crate::context::ViewStorage>,
-        base_path: stdlib::KeyPath,
-    ) -> Self {
+#[doc(hidden)]
+pub type __FibStorageModelFor<__S> = FibStorageModel<__S>;
+impl<__S: stdlib::ReadStorage + 'static> FibStorageModel<__S> {
+    pub fn new(ctx: alloc::rc::Rc<__S>, base_path: stdlib::KeyPath) -> Self {
         Self {
             base_path: base_path.clone(),
             ctx,
@@ -110,7 +109,7 @@ impl FibStorageModel {
         let mut entries = alloc::vec::Vec::new();
         entries
     }
-    pub fn cache(&self) -> FibStorageCacheModel {
+    pub fn cache(&self) -> FibStorageCacheModel<__S> {
         FibStorageCacheModel {
             base_path: self.base_path.push_interned(0u8),
             index_path: self.base_path.push_interned(128u8),
@@ -123,27 +122,25 @@ impl FibStorageModel {
         }
     }
 }
-pub struct FibStorageCacheModel {
+pub struct FibStorageCacheModel<__S> {
     pub base_path: stdlib::KeyPath,
     index_path: stdlib::KeyPath,
-    ctx: alloc::rc::Rc<crate::context::ViewStorage>,
+    ctx: alloc::rc::Rc<__S>,
 }
-#[automatically_derived]
-impl ::core::clone::Clone for FibStorageCacheModel {
-    #[inline]
-    fn clone(&self) -> FibStorageCacheModel {
-        FibStorageCacheModel {
-            base_path: ::core::clone::Clone::clone(&self.base_path),
-            index_path: ::core::clone::Clone::clone(&self.index_path),
-            ctx: ::core::clone::Clone::clone(&self.ctx),
+impl<__S> Clone for FibStorageCacheModel<__S> {
+    fn clone(&self) -> Self {
+        Self {
+            base_path: self.base_path.clone(),
+            index_path: self.index_path.clone(),
+            ctx: self.ctx.clone(),
         }
     }
 }
-impl FibStorageCacheModel {
-    pub fn get(&self, key: &u64) -> Option<FibValueModel> {
+impl<__S: stdlib::ReadStorage + 'static> FibStorageCacheModel<__S> {
+    pub fn get(&self, key: &u64) -> Option<__FibValueModelFor<__S>> {
         let base_path = self.base_path.push_element(key);
         stdlib::ReadStorage::__exists(&self.ctx, &base_path)
-            .then(|| FibValueModel::new(self.ctx.clone(), base_path))
+            .then(|| __FibValueModelFor::<__S>::new(self.ctx.clone(), base_path))
     }
     pub fn load(&self) -> Map<u64, FibValue> {
         Map::new(&[])
@@ -152,12 +149,13 @@ impl FibStorageCacheModel {
         stdlib::ReadStorage::__get_keys(&self.ctx, &self.base_path)
     }
 }
-impl stdlib::IndexScan<u64> for FibStorageCacheModel {
+impl<__S: stdlib::ReadStorage + 'static> stdlib::IndexScan<u64>
+for FibStorageCacheModel<__S> {
     fn by_index(
         &self,
         index_id: u8,
         bucket: &[&[u8]],
-    ) -> impl Iterator<Item = u64> + use<> {
+    ) -> impl Iterator<Item = u64> + use<__S> {
         let bucket = self.index_path.push_interned(index_id).push_raw_elements(bucket);
         stdlib::ReadStorage::__get_keys(&self.ctx, &bucket)
     }
@@ -202,19 +200,21 @@ impl stdlib::IndexScan<u64> for FibStorageCacheModel {
         stdlib::ReadStorage::__get_u64(&self.ctx, &bucket).unwrap_or(0)
     }
 }
-impl FibValueIndex<u64> for FibStorageCacheModel {}
-pub struct FibStorageWriteModel {
+impl<__S: stdlib::ReadStorage + 'static> FibValueIndex<u64>
+for FibStorageCacheModel<__S> {}
+pub struct FibStorageWriteModel<__S: stdlib::HasViewStorage> {
     pub base_path: stdlib::KeyPath,
-    ctx: alloc::rc::Rc<crate::context::ProcStorage>,
+    ctx: alloc::rc::Rc<__S>,
     index_binding: Option<(stdlib::KeyPath, alloc::vec::Vec<u8>)>,
-    model: FibStorageModel,
+    model: FibStorageModel<__S::View>,
 }
-impl FibStorageWriteModel {
-    pub fn new(
-        ctx: alloc::rc::Rc<crate::context::ProcStorage>,
-        base_path: stdlib::KeyPath,
-    ) -> Self {
-        let view_storage = ctx.view_storage();
+#[doc(hidden)]
+pub type __FibStorageWriteModelFor<__S> = FibStorageWriteModel<__S>;
+impl<
+    __S: stdlib::ReadStorage + stdlib::WriteStorage + stdlib::HasViewStorage + 'static,
+> FibStorageWriteModel<__S> {
+    pub fn new(ctx: alloc::rc::Rc<__S>, base_path: stdlib::KeyPath) -> Self {
+        let view_storage = stdlib::HasViewStorage::view_storage(&*ctx);
         Self {
             base_path: base_path.clone(),
             ctx,
@@ -233,7 +233,7 @@ impl FibStorageWriteModel {
         self.index_binding = Some((index_root, index_key));
         self
     }
-    pub fn cache(&self) -> FibStorageCacheWriteModel {
+    pub fn cache(&self) -> FibStorageCacheWriteModel<__S> {
         FibStorageCacheWriteModel {
             base_path: self.base_path.push_interned(0u8),
             index_path: self.base_path.push_interned(128u8),
@@ -246,34 +246,34 @@ impl FibStorageWriteModel {
         }
     }
 }
-impl core::ops::Deref for FibStorageWriteModel {
-    type Target = FibStorageModel;
+impl<__S: stdlib::HasViewStorage> core::ops::Deref for FibStorageWriteModel<__S> {
+    type Target = FibStorageModel<__S::View>;
     fn deref(&self) -> &Self::Target {
         &self.model
     }
 }
-pub struct FibStorageCacheWriteModel {
+pub struct FibStorageCacheWriteModel<__S> {
     pub base_path: stdlib::KeyPath,
     index_path: stdlib::KeyPath,
-    ctx: alloc::rc::Rc<crate::context::ProcStorage>,
+    ctx: alloc::rc::Rc<__S>,
 }
-#[automatically_derived]
-impl ::core::clone::Clone for FibStorageCacheWriteModel {
-    #[inline]
-    fn clone(&self) -> FibStorageCacheWriteModel {
-        FibStorageCacheWriteModel {
-            base_path: ::core::clone::Clone::clone(&self.base_path),
-            index_path: ::core::clone::Clone::clone(&self.index_path),
-            ctx: ::core::clone::Clone::clone(&self.ctx),
+impl<__S> Clone for FibStorageCacheWriteModel<__S> {
+    fn clone(&self) -> Self {
+        Self {
+            base_path: self.base_path.clone(),
+            index_path: self.index_path.clone(),
+            ctx: self.ctx.clone(),
         }
     }
 }
-impl FibStorageCacheWriteModel {
-    pub fn get(&self, key: &u64) -> Option<FibValueWriteModel> {
+impl<
+    __S: stdlib::ReadStorage + stdlib::WriteStorage + stdlib::HasViewStorage + 'static,
+> FibStorageCacheWriteModel<__S> {
+    pub fn get(&self, key: &u64) -> Option<__FibValueWriteModelFor<__S>> {
         let base_path = self.base_path.push_element(key);
         stdlib::ReadStorage::__exists(&self.ctx, &base_path)
             .then(|| {
-                FibValueWriteModel::new(self.ctx.clone(), base_path)
+                __FibValueWriteModelFor::<__S>::new(self.ctx.clone(), base_path)
                     .with_index(self.index_path.clone(), stdlib::KeyElement::encode(key))
             })
     }
@@ -320,12 +320,14 @@ impl FibStorageCacheWriteModel {
         stdlib::ReadStorage::__get_keys(&self.ctx, &self.base_path)
     }
 }
-impl stdlib::IndexScan<u64> for FibStorageCacheWriteModel {
+impl<
+    __S: stdlib::ReadStorage + stdlib::WriteStorage + stdlib::HasViewStorage + 'static,
+> stdlib::IndexScan<u64> for FibStorageCacheWriteModel<__S> {
     fn by_index(
         &self,
         index_id: u8,
         bucket: &[&[u8]],
-    ) -> impl Iterator<Item = u64> + use<> {
+    ) -> impl Iterator<Item = u64> + use<__S> {
         let bucket = self.index_path.push_interned(index_id).push_raw_elements(bucket);
         stdlib::ReadStorage::__get_keys(&self.ctx, &bucket)
     }
@@ -370,4 +372,6 @@ impl stdlib::IndexScan<u64> for FibStorageCacheWriteModel {
         stdlib::ReadStorage::__get_u64(&self.ctx, &bucket).unwrap_or(0)
     }
 }
-impl FibValueIndex<u64> for FibStorageCacheWriteModel {}
+impl<
+    __S: stdlib::ReadStorage + stdlib::WriteStorage + stdlib::HasViewStorage + 'static,
+> FibValueIndex<u64> for FibStorageCacheWriteModel<__S> {}

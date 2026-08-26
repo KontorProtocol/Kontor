@@ -34,10 +34,25 @@ pub fn generate_struct(
                 &format!("{}{}Model", type_name, write_prefix),
                 type_name.span(),
             );
-            let context_param = if write {
-                quote! { crate::context::ProcStorage }
+            let alias_name = Ident::new(
+                &format!("__{}{}ModelFor", type_name, write_prefix),
+                type_name.span(),
+            );
+            // Models are GENERIC over the storage handle (`__S`), bounded per
+            // side — nothing below names `crate::context::*`, which is what
+            // lets the derive expand in crates with no context of their own
+            // (the shared `built-in-types`). The write model embeds a read
+            // model over `__S::View`, so its struct def carries the
+            // `HasViewStorage` bound (the field type projects through it).
+            let struct_generics = if write {
+                quote! { <__S: stdlib::HasViewStorage> }
             } else {
-                quote! { crate::context::ViewStorage }
+                quote! { <__S> }
+            };
+            let impl_generics = if write {
+                quote! { <__S: stdlib::ReadStorage + stdlib::WriteStorage + stdlib::HasViewStorage + 'static> }
+            } else {
+                quote! { <__S: stdlib::ReadStorage + 'static> }
             };
 
             let mut special_models = vec![];
@@ -75,13 +90,21 @@ pub fn generate_struct(
                         };
 
                         special_models.push(quote! {
-                            #[derive(Clone)]
-                            pub struct #field_model_name {
+                            pub struct #field_model_name<__S> {
                                 pub base_path: stdlib::KeyPath,
-                                ctx: alloc::rc::Rc<#context_param>,
+                                ctx: alloc::rc::Rc<__S>,
                             }
 
-                            impl #field_model_name {
+                            // Manual Clone: a derive would demand `__S: Clone`,
+                            // which the storage handles don't (and needn't) satisfy —
+                            // only the `Rc` is cloned.
+                            impl<__S> Clone for #field_model_name<__S> {
+                                fn clone(&self) -> Self {
+                                    Self { base_path: self.base_path.clone(), ctx: self.ctx.clone() }
+                                }
+                            }
+
+                            impl #impl_generics #field_model_name<__S> {
                                 pub fn get(&self, key: &#k_ty) -> Option<#v_ty> {
                                     stdlib::ReadStorage::__get(&self.ctx, self.base_path.push_element(key))
                                 }
@@ -99,7 +122,7 @@ pub fn generate_struct(
                         });
 
                         Ok(quote! {
-                            pub fn #field_name(&self) -> #field_model_name {
+                            pub fn #field_name(&self) -> #field_model_name<__S> {
                                 #field_model_name { base_path: self.base_path.push_interned(#field_id), ctx: self.ctx.clone() }
                             }
                         })
@@ -163,17 +186,28 @@ pub fn generate_struct(
                         };
 
                         special_models.push(quote! {
-                            #[derive(Clone)]
-                            pub struct #field_model_name {
+                            pub struct #field_model_name<__S> {
                                 pub base_path: stdlib::KeyPath,
                                 index_path: stdlib::KeyPath,
-                                ctx: alloc::rc::Rc<#context_param>,
+                                ctx: alloc::rc::Rc<__S>,
                             }
 
-                            impl #field_model_name {
-                                pub fn get(&self, key: &#k_ty) -> Option<#v_model_ty> {
+                            // Manual Clone: a derive would demand `__S: Clone` for
+                            // the `Rc<__S>` field, which the handles needn't satisfy.
+                            impl<__S> Clone for #field_model_name<__S> {
+                                fn clone(&self) -> Self {
+                                    Self {
+                                        base_path: self.base_path.clone(),
+                                        index_path: self.index_path.clone(),
+                                        ctx: self.ctx.clone(),
+                                    }
+                                }
+                            }
+
+                            impl #impl_generics #field_model_name<__S> {
+                                pub fn get(&self, key: &#k_ty) -> Option<#v_model_ty<__S>> {
                                     let base_path = self.base_path.push_element(key);
-                                    stdlib::ReadStorage::__exists(&self.ctx, &base_path).then(|| #v_model_ty::new(self.ctx.clone(), base_path)#with_index_call)
+                                    stdlib::ReadStorage::__exists(&self.ctx, &base_path).then(|| #v_model_ty::<__S>::new(self.ctx.clone(), base_path)#with_index_call)
                                 }
 
                                 #mutators
@@ -187,8 +221,8 @@ pub fn generate_struct(
                                 }
                             }
 
-                            impl stdlib::IndexScan<#k_ty> for #field_model_name {
-                                fn by_index(&self, index_id: u8, bucket: &[&[u8]]) -> impl Iterator<Item = #k_ty> + use<> {
+                            impl #impl_generics stdlib::IndexScan<#k_ty> for #field_model_name<__S> {
+                                fn by_index(&self, index_id: u8, bucket: &[&[u8]]) -> impl Iterator<Item = #k_ty> + use<__S> {
                                     let bucket = self.index_path.push_interned(index_id).push_raw_elements(bucket);
                                     stdlib::ReadStorage::__get_keys(&self.ctx, &bucket)
                                 }
@@ -212,11 +246,11 @@ pub fn generate_struct(
                             // The typed per-index lookup methods are default methods on the
                             // value's `#index_trait` (generated by its `Indexed` derive); the
                             // field model inherits them by implementing the primitives above.
-                            impl #index_trait<#k_ty> for #field_model_name {}
+                            impl #impl_generics #index_trait<#k_ty> for #field_model_name<__S> {}
                         });
 
                         Ok(quote! {
-                            pub fn #field_name(&self) -> #field_model_name {
+                            pub fn #field_name(&self) -> #field_model_name<__S> {
                                 #field_model_name {
                                     base_path: self.base_path.push_interned(#field_id),
                                     index_path: self.base_path.push_interned(#idx_marker_id),
@@ -253,7 +287,7 @@ pub fn generate_struct(
                                 if pos >= stdlib::deque::tail(&self.ctx, &self.base_path).wrapping_sub(h) {
                                     None
                                 } else {
-                                    Some(#vm::new(self.ctx.clone(), stdlib::deque::entry_path(&self.base_path, h.wrapping_add(pos))))
+                                    Some(#vm::<__S>::new(self.ctx.clone(), stdlib::deque::entry_path(&self.base_path, h.wrapping_add(pos))))
                                 }
                             },
                             quote! {
@@ -261,7 +295,7 @@ pub fn generate_struct(
                                 let base = self.base_path.clone();
                                 let h = stdlib::deque::head(&ctx, &base);
                                 let n = stdlib::deque::len(&ctx, &base);
-                                (0..n).map(move |i| #vm::new(ctx.clone(), stdlib::deque::entry_path(&base, h.wrapping_add(i))))
+                                (0..n).map(move |i| #vm::<__S>::new(ctx.clone(), stdlib::deque::entry_path(&base, h.wrapping_add(i))))
                             },
                         )
                     };
@@ -281,7 +315,7 @@ pub fn generate_struct(
                                         return None;
                                     }
                                     let entry = stdlib::deque::entry_path(&self.base_path, h);
-                                    let value = #vm::new(self.ctx.clone(), entry.clone()).load();
+                                    let value = #vm::<__S>::new(self.ctx.clone(), entry.clone()).load();
                                     stdlib::WriteStorage::__delete(&self.ctx, &entry);
                                     stdlib::deque::set_head(&self.ctx, &self.base_path, h.wrapping_add(1));
                                     Some(value)
@@ -293,7 +327,7 @@ pub fn generate_struct(
                                     }
                                     let pos = t.wrapping_sub(1);
                                     let entry = stdlib::deque::entry_path(&self.base_path, pos);
-                                    let value = #vm::new(self.ctx.clone(), entry.clone()).load();
+                                    let value = #vm::<__S>::new(self.ctx.clone(), entry.clone()).load();
                                     stdlib::WriteStorage::__delete(&self.ctx, &entry);
                                     stdlib::deque::set_tail(&self.ctx, &self.base_path, pos);
                                     Some(value)
@@ -327,13 +361,20 @@ pub fn generate_struct(
                     };
 
                     special_models.push(quote! {
-                        #[derive(Clone)]
-                        pub struct #field_model_name {
+                        pub struct #field_model_name<__S> {
                             pub base_path: stdlib::KeyPath,
-                            ctx: alloc::rc::Rc<#context_param>,
+                            ctx: alloc::rc::Rc<__S>,
                         }
 
-                        impl #field_model_name {
+                        // Manual Clone: a derive would demand `__S: Clone` for the
+                        // `Rc<__S>` field, which the handles needn't satisfy.
+                        impl<__S> Clone for #field_model_name<__S> {
+                            fn clone(&self) -> Self {
+                                Self { base_path: self.base_path.clone(), ctx: self.ctx.clone() }
+                            }
+                        }
+
+                        impl #impl_generics #field_model_name<__S> {
                             pub fn len(&self) -> u64 {
                                 stdlib::deque::len(&self.ctx, &self.base_path)
                             }
@@ -369,7 +410,7 @@ pub fn generate_struct(
                     });
 
                     Ok(quote! {
-                        pub fn #field_name(&self) -> #field_model_name {
+                        pub fn #field_name(&self) -> #field_model_name<__S> {
                             #field_model_name { base_path: self.base_path.push_interned(#field_id), ctx: self.ctx.clone() }
                         }
                     })
@@ -389,14 +430,14 @@ pub fn generate_struct(
                         })
                     } else {
                         let inner_model_ty = get_model_ident(write, &inner_ty, field.span())?;
-                        let (load, ret_ty) = (quote! {}, quote! { #inner_model_ty });
+                        let (load, ret_ty) = (quote! {}, quote! { #inner_model_ty<__S> });
                         Ok(quote! {
                             pub fn #field_name(&self) -> Option<#ret_ty> {
                                 let base_path = #base_path;
                                 if stdlib::ReadStorage::__extend_path_with_match(&self.ctx, &base_path, &[stdlib::string_element("none")]).is_some() {
                                     None
                                 } else {
-                                    Some(#inner_model_ty::new(self.ctx.clone(), base_path.push("some"))#load)
+                                    Some(#inner_model_ty::<__S>::new(self.ctx.clone(), base_path.push("some"))#load)
                                 }
                             }
                         })
@@ -410,8 +451,8 @@ pub fn generate_struct(
                 } else {
                     let field_model_ty = get_model_ident(write, field_ty, field.span())?;
                     Ok(quote! {
-                        pub fn #field_name(&self) -> #field_model_ty {
-                            #field_model_ty::new(self.ctx.clone(), self.base_path.push_interned(#field_id))
+                        pub fn #field_name(&self) -> #field_model_ty<__S> {
+                            #field_model_ty::<__S>::new(self.ctx.clone(), self.base_path.push_interned(#field_id))
                         }
                     })
                 }
@@ -584,7 +625,7 @@ pub fn generate_struct(
                             Ok(quote! {
                                 pub fn #set_field_name(&self, value: #field_ty) {
                                     let path = self.base_path.push_interned(#field_id);
-                                    let old = #v_model_ty::new(self.ctx.clone(), path.clone()).load();
+                                    let old = #v_model_ty::<__S>::new(self.ctx.clone(), path.clone()).load();
                                     let new = value;
                                     #reconcile
                                     stdlib::WriteStorage::__set(&self.ctx, path, new);
@@ -692,7 +733,7 @@ pub fn generate_struct(
 
             let proc_props = if write {
                 quote! {
-                    model: #read_only_model_name,
+                    model: #read_only_model_name<__S::View>,
                 }
             } else {
                 quote! {}
@@ -700,7 +741,7 @@ pub fn generate_struct(
 
             let proc_prelude = if write {
                 quote! {
-                    let view_storage = ctx.view_storage();
+                    let view_storage = stdlib::HasViewStorage::view_storage(&*ctx);
                 }
             } else {
                 quote! {}
@@ -716,8 +757,8 @@ pub fn generate_struct(
 
             let proc_impls = if write {
                 quote! {
-                    impl core::ops::Deref for #model_name {
-                        type Target = #read_only_model_name;
+                    impl<__S: stdlib::HasViewStorage> core::ops::Deref for #model_name<__S> {
+                        type Target = #read_only_model_name<__S::View>;
 
                         fn deref(&self) -> &Self::Target {
                             &self.model
@@ -729,15 +770,22 @@ pub fn generate_struct(
             };
 
             let result = quote! {
-                pub struct #model_name {
+                pub struct #model_name #struct_generics {
                     pub base_path: stdlib::KeyPath,
-                    ctx: alloc::rc::Rc<#context_param>,
+                    ctx: alloc::rc::Rc<__S>,
                     #binding_field
                     #proc_props
                 }
 
-                impl #model_name {
-                    pub fn new(ctx: alloc::rc::Rc<#context_param>, base_path: stdlib::KeyPath) -> Self {
+                // Cross-type references (a value model naming another type's
+                // model in type or constructor position) go through this alias,
+                // so the referrer never needs to know the target's shape — an
+                // enum model may drop the parameter (see `generate_enum`).
+                #[doc(hidden)]
+                pub type #alias_name<__S> = #model_name<__S>;
+
+                impl #impl_generics #model_name<__S> {
+                    pub fn new(ctx: alloc::rc::Rc<__S>, base_path: stdlib::KeyPath) -> Self {
                         #proc_prelude
                         Self {
                             base_path: base_path.clone(),
@@ -782,11 +830,32 @@ pub fn generate_enum(data_enum: &DataEnum, type_name: &Ident, write: bool) -> Re
         &format!("{}{}Model", type_name, write_prefix),
         type_name.span(),
     );
-    let context_param = if write {
-        quote! { crate::context::ProcStorage }
+    let alias_name = Ident::new(
+        &format!("__{}{}ModelFor", type_name, write_prefix),
+        type_name.span(),
+    );
+
+    // Enum models are UNIFORMLY generic over the storage handle: payload
+    // models hold the handle, and the hidden `__Phantom` variant —
+    // uninstantiable via `Infallible` — keeps `__S` used even for unit-only
+    // enums (an unused parameter is E0392; a parameter-dropping alias is
+    // E0091, so conditional genericity would force every cross-type referrer
+    // to know each enum's shape).
+    let enum_generics = if write {
+        quote! { <__S: stdlib::HasViewStorage> }
     } else {
-        quote! { crate::context::ViewStorage }
+        quote! { <__S> }
     };
+    let impl_generics = if write {
+        quote! { <__S: stdlib::ReadStorage + stdlib::WriteStorage + stdlib::HasViewStorage + 'static> }
+    } else {
+        quote! { <__S: stdlib::ReadStorage + 'static> }
+    };
+    let phantom_variant = quote! {
+        #[doc(hidden)]
+        __Phantom(core::marker::PhantomData<__S>, core::convert::Infallible),
+    };
+    let phantom_load_arm = quote! { Self::__Phantom(_, i) => match *i {}, };
 
     let model_variants: Result<Vec<_>> = data_enum
         .variants
@@ -802,7 +871,7 @@ pub fn generate_enum(data_enum: &DataEnum, type_name: &Ident, write: bool) -> Re
                     } else {
                         let inner_model_ty =
                             get_model_ident(write, inner_ty, variant.ident.span())?;
-                        Ok(quote! { #variant_ident(#inner_model_ty) })
+                        Ok(quote! { #variant_ident(#inner_model_ty<__S>) })
                     }
                 }
                 _ => Err(Error::new(
@@ -845,7 +914,7 @@ pub fn generate_enum(data_enum: &DataEnum, type_name: &Ident, write: bool) -> Re
                 } else {
                     let inner_model_ty = get_model_ident(write, inner_ty, variant.ident.span())?;
                     Ok(quote! {
-                        #arm_idx => #model_name::#variant_ident(#inner_model_ty::new(ctx.clone(), base_path.push_interned(#variant_id)))
+                        #arm_idx => #model_name::#variant_ident(#inner_model_ty::<__S>::new(ctx.clone(), base_path.push_interned(#variant_id)))
                     })
                 }
             }
@@ -876,12 +945,16 @@ pub fn generate_enum(data_enum: &DataEnum, type_name: &Ident, write: bool) -> Re
     }).collect::<Vec<_>>();
 
     Ok(quote! {
-        pub enum #model_name {
+        pub enum #model_name #enum_generics {
             #(#model_variants,)*
+            #phantom_variant
         }
 
-        impl #model_name {
-            pub fn new(ctx: alloc::rc::Rc<#context_param>, base_path: stdlib::KeyPath) -> Self {
+        #[doc(hidden)]
+        pub type #alias_name<__S> = #model_name<__S>;
+
+        impl #impl_generics #model_name<__S> {
+            pub fn new(ctx: alloc::rc::Rc<__S>, base_path: stdlib::KeyPath) -> Self {
                 stdlib::ReadStorage::__extend_path_with_match(&ctx, &base_path, &[#(#variant_candidates),*])
                     .map(|__idx| match __idx {
                         #(#new_arms,)*
@@ -895,6 +968,7 @@ pub fn generate_enum(data_enum: &DataEnum, type_name: &Ident, write: bool) -> Re
             pub fn load(&self) -> #type_name {
                 match self {
                     #(#load_arms,)*
+                    #phantom_load_arm
                 }
             }
 
@@ -955,12 +1029,17 @@ fn value_item(write: bool, v_ty: &Type, span: Span) -> Result<ValueItem> {
         let model = get_model_ident(write, v_ty, span)?;
         Ok(ValueItem {
             is_primitive: false,
-            item_ty: quote! { #model },
+            item_ty: quote! { #model<__S> },
             model_ty: Some(model),
         })
     }
 }
 
+/// The ALIAS ident (`__<T><Write>ModelFor`) for a referenced type's model, not
+/// the model name itself: the alias always takes one storage parameter — the
+/// target's derive drops it there when its model is non-generic (unit-only
+/// enums) — so referring code can write `#ident<__S>` (type position) and
+/// `#ident::<__S>::new(...)` (expression) without knowing the target's shape.
 fn get_model_ident(write: bool, ty: &Type, span: Span) -> Result<Ident> {
     if let Type::Path(type_path) = ty {
         type_path
@@ -969,7 +1048,11 @@ fn get_model_ident(write: bool, ty: &Type, span: Span) -> Result<Ident> {
             .last()
             .map(|segment| {
                 Ident::new(
-                    &format!("{}{}Model", segment.ident, if write { "Write" } else { "" }),
+                    &format!(
+                        "__{}{}ModelFor",
+                        segment.ident,
+                        if write { "Write" } else { "" }
+                    ),
                     span,
                 )
             })

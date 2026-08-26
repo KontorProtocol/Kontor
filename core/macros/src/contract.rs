@@ -495,27 +495,29 @@ pub fn generate(config: Config) -> TokenStream {
             }
         }
 
-        impl Retrieve<crate::context::ViewStorage> for context::ContractAddress {
-            fn __get(ctx: &alloc::rc::Rc<crate::context::ViewStorage>, path: stdlib::KeyPath) -> Option<Self> {
+        // The write-model side of every generated model reads through the
+        // proc storage's derived VIEW handle; this trait link (the only
+        // context-specific piece of the model machinery) is what keeps the
+        // generated models generic over the storage handle.
+        impl stdlib::HasViewStorage for context::ProcStorage {
+            type View = context::ViewStorage;
+            fn view_storage(&self) -> Self::View {
+                context::ProcStorage::view_storage(self)
+            }
+        }
+
+        // Retrieval is a READ; with the models generic over the handle, one
+        // impl per type serves both storages (the read model instantiates at
+        // whichever handle the caller holds) — the old per-context pairs
+        // collapse.
+        impl<__S: stdlib::ReadStorage + 'static> Retrieve<__S> for context::ContractAddress {
+            fn __get(ctx: &alloc::rc::Rc<__S>, path: stdlib::KeyPath) -> Option<Self> {
                 stdlib::ReadStorage::__exists(ctx, &path).then(|| context::ContractAddressModel::new(ctx.clone(), path).load())
             }
         }
 
-        impl Retrieve<crate::context::ProcStorage> for context::ContractAddress {
-            fn __get(ctx: &alloc::rc::Rc<crate::context::ProcStorage>, path: stdlib::KeyPath) -> Option<Self> {
-                stdlib::ReadStorage::__exists(ctx, &path).then(|| context::ContractAddressWriteModel::new(ctx.clone(), path).load())
-            }
-        }
-
-        impl Retrieve<crate::context::ViewStorage> for context::HolderRef {
-            fn __get(ctx: &alloc::rc::Rc<crate::context::ViewStorage>, path: stdlib::KeyPath) -> Option<Self> {
-                let s: String = stdlib::ReadStorage::__get(ctx, path)?;
-                s.parse().ok()
-            }
-        }
-
-        impl Retrieve<crate::context::ProcStorage> for context::HolderRef {
-            fn __get(ctx: &alloc::rc::Rc<crate::context::ProcStorage>, path: stdlib::KeyPath) -> Option<Self> {
+        impl<__S: stdlib::ReadStorage> Retrieve<__S> for context::HolderRef {
+            fn __get(ctx: &alloc::rc::Rc<__S>, path: stdlib::KeyPath) -> Option<Self> {
                 let s: String = stdlib::ReadStorage::__get(ctx, path)?;
                 s.parse().ok()
             }
@@ -529,22 +531,15 @@ pub fn generate(config: Config) -> TokenStream {
         // resource, so wit-bindgen doesn't auto-apply `#[derive(Storage)]`
         // the way it does for HolderRef — we define Retrieve/Store
         // directly here.
-        impl Retrieve<crate::context::ViewStorage> for context::Holder {
-            fn __get(ctx: &alloc::rc::Rc<crate::context::ViewStorage>, path: stdlib::KeyPath) -> Option<Self> {
+        impl<__S: stdlib::ReadStorage> Retrieve<__S> for context::Holder {
+            fn __get(ctx: &alloc::rc::Rc<__S>, path: stdlib::KeyPath) -> Option<Self> {
                 let s: String = stdlib::ReadStorage::__get(ctx, path)?;
                 s.parse().ok()
             }
         }
 
-        impl Retrieve<crate::context::ProcStorage> for context::Holder {
-            fn __get(ctx: &alloc::rc::Rc<crate::context::ProcStorage>, path: stdlib::KeyPath) -> Option<Self> {
-                let s: String = stdlib::ReadStorage::__get(ctx, path)?;
-                s.parse().ok()
-            }
-        }
-
-        impl stdlib::Store<crate::context::ProcStorage> for context::Holder {
-            fn __set(ctx: &alloc::rc::Rc<crate::context::ProcStorage>, path: stdlib::KeyPath, value: Self) {
+        impl<__S: stdlib::WriteStorage + ?Sized> stdlib::Store<__S> for context::Holder {
+            fn __set(ctx: &alloc::rc::Rc<__S>, path: stdlib::KeyPath, value: Self) {
                 stdlib::WriteStorage::__set_str(ctx, &path, &value.to_string());
             }
         }
@@ -612,27 +607,15 @@ pub fn generate(config: Config) -> TokenStream {
         }
         __key_element_num256!(numbers::Integer, numbers::Decimal);
 
-        impl Retrieve<crate::context::ViewStorage> for numbers::Integer {
-            fn __get(ctx: &alloc::rc::Rc<crate::context::ViewStorage>, path: stdlib::KeyPath) -> Option<Self> {
+        impl<__S: stdlib::ReadStorage + 'static> Retrieve<__S> for numbers::Integer {
+            fn __get(ctx: &alloc::rc::Rc<__S>, path: stdlib::KeyPath) -> Option<Self> {
                 stdlib::ReadStorage::__exists(ctx, &path).then(|| numbers::IntegerModel::new(ctx.clone(), path).load())
             }
         }
 
-        impl Retrieve<crate::context::ProcStorage> for numbers::Integer {
-            fn __get(ctx: &alloc::rc::Rc<crate::context::ProcStorage>, path: stdlib::KeyPath) -> Option<Self> {
-                stdlib::ReadStorage::__exists(ctx, &path).then(|| numbers::IntegerWriteModel::new(ctx.clone(), path).load())
-            }
-        }
-
-        impl Retrieve<crate::context::ViewStorage> for numbers::Decimal {
-            fn __get(ctx: &alloc::rc::Rc<crate::context::ViewStorage>, path: stdlib::KeyPath) -> Option<Self> {
+        impl<__S: stdlib::ReadStorage + 'static> Retrieve<__S> for numbers::Decimal {
+            fn __get(ctx: &alloc::rc::Rc<__S>, path: stdlib::KeyPath) -> Option<Self> {
                 stdlib::ReadStorage::__exists(ctx, &path).then(|| numbers::DecimalModel::new(ctx.clone(), path).load())
-            }
-        }
-
-        impl Retrieve<crate::context::ProcStorage> for numbers::Decimal {
-            fn __get(ctx: &alloc::rc::Rc<crate::context::ProcStorage>, path: stdlib::KeyPath) -> Option<Self> {
-                stdlib::ReadStorage::__exists(ctx, &path).then(|| numbers::DecimalWriteModel::new(ctx.clone(), path).load())
             }
         }
 

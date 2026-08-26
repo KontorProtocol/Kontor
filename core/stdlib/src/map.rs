@@ -990,11 +990,15 @@ fn bump_bucket_count<S: WriteStorage + ReadStorage + ?Sized>(
     ctx.__set_u64(bucket, next);
 }
 
-impl<K, V, S> Store<S> for crate::StorageMap<K, V, S>
+// The write TARGET (`S2`) is decoupled from the map's phantom context
+// parameter (`S1`): a `Map` field is declared with the contract-local alias
+// (fixing `S1`), but the containing struct's `Store` derive is generic over
+// the handle it writes through.
+impl<K, V, S1, S2> Store<S2> for crate::StorageMap<K, V, S1>
 where
     K: KeyElement + Clone,
-    V: Store<S> + Clone + Indexed,
-    S: WriteStorage + ReadStorage + ?Sized,
+    V: Store<S2> + Clone + Indexed,
+    S2: WriteStorage + ReadStorage + ?Sized,
 {
     /// Wholesale write: persist every entry's value, plus its index rows when the
     /// value type declares indexes, so a map populated before `init` (at the root
@@ -1004,7 +1008,7 @@ where
     /// diff go through the field model's `set`). For a non-indexed value
     /// `HAS_INDEXES` is `false`, so the index block const-folds out and this is the
     /// plain entry write.
-    fn __set(ctx: &Rc<S>, base_path: KeyPath, value: crate::StorageMap<K, V, S>) {
+    fn __set(ctx: &Rc<S2>, base_path: KeyPath, value: crate::StorageMap<K, V, S1>) {
         for (k, v) in value.entries.into_iter() {
             if V::HAS_INDEXES
                 && let Some(index_root) = base_path.interned_index_sibling()

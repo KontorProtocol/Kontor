@@ -5,17 +5,18 @@ pub enum Op {
     Mul(Operand),
     Div(Operand),
 }
-pub enum OpModel {
+pub enum OpModel<__S> {
     Id,
-    Sum(OperandModel),
-    Mul(OperandModel),
-    Div(OperandModel),
+    Sum(__OperandModelFor<__S>),
+    Mul(__OperandModelFor<__S>),
+    Div(__OperandModelFor<__S>),
+    #[doc(hidden)]
+    __Phantom(core::marker::PhantomData<__S>, core::convert::Infallible),
 }
-impl OpModel {
-    pub fn new(
-        ctx: alloc::rc::Rc<crate::context::ViewStorage>,
-        base_path: stdlib::KeyPath,
-    ) -> Self {
+#[doc(hidden)]
+pub type __OpModelFor<__S> = OpModel<__S>;
+impl<__S: stdlib::ReadStorage + 'static> OpModel<__S> {
+    pub fn new(ctx: alloc::rc::Rc<__S>, base_path: stdlib::KeyPath) -> Self {
         stdlib::ReadStorage::__extend_path_with_match(
                 &ctx,
                 &base_path,
@@ -30,17 +31,23 @@ impl OpModel {
                 0u32 => OpModel::Id,
                 1u32 => {
                     OpModel::Sum(
-                        OperandModel::new(ctx.clone(), base_path.push_interned(1u8)),
+                        __OperandModelFor::<
+                            __S,
+                        >::new(ctx.clone(), base_path.push_interned(1u8)),
                     )
                 }
                 2u32 => {
                     OpModel::Mul(
-                        OperandModel::new(ctx.clone(), base_path.push_interned(2u8)),
+                        __OperandModelFor::<
+                            __S,
+                        >::new(ctx.clone(), base_path.push_interned(2u8)),
                     )
                 }
                 3u32 => {
                     OpModel::Div(
-                        OperandModel::new(ctx.clone(), base_path.push_interned(3u8)),
+                        __OperandModelFor::<
+                            __S,
+                        >::new(ctx.clone(), base_path.push_interned(3u8)),
                     )
                 }
                 _ => {
@@ -57,6 +64,7 @@ impl OpModel {
             OpModel::Sum(inner) => Op::Sum(inner.load()),
             OpModel::Mul(inner) => Op::Mul(inner.load()),
             OpModel::Div(inner) => Op::Div(inner.load()),
+            Self::__Phantom(_, i) => match *i {}
         }
     }
     pub fn with_index(
@@ -70,17 +78,20 @@ impl OpModel {
         alloc::vec::Vec::new()
     }
 }
-pub enum OpWriteModel {
+pub enum OpWriteModel<__S: stdlib::HasViewStorage> {
     Id,
-    Sum(OperandWriteModel),
-    Mul(OperandWriteModel),
-    Div(OperandWriteModel),
+    Sum(__OperandWriteModelFor<__S>),
+    Mul(__OperandWriteModelFor<__S>),
+    Div(__OperandWriteModelFor<__S>),
+    #[doc(hidden)]
+    __Phantom(core::marker::PhantomData<__S>, core::convert::Infallible),
 }
-impl OpWriteModel {
-    pub fn new(
-        ctx: alloc::rc::Rc<crate::context::ProcStorage>,
-        base_path: stdlib::KeyPath,
-    ) -> Self {
+#[doc(hidden)]
+pub type __OpWriteModelFor<__S> = OpWriteModel<__S>;
+impl<
+    __S: stdlib::ReadStorage + stdlib::WriteStorage + stdlib::HasViewStorage + 'static,
+> OpWriteModel<__S> {
+    pub fn new(ctx: alloc::rc::Rc<__S>, base_path: stdlib::KeyPath) -> Self {
         stdlib::ReadStorage::__extend_path_with_match(
                 &ctx,
                 &base_path,
@@ -95,17 +106,23 @@ impl OpWriteModel {
                 0u32 => OpWriteModel::Id,
                 1u32 => {
                     OpWriteModel::Sum(
-                        OperandWriteModel::new(ctx.clone(), base_path.push_interned(1u8)),
+                        __OperandWriteModelFor::<
+                            __S,
+                        >::new(ctx.clone(), base_path.push_interned(1u8)),
                     )
                 }
                 2u32 => {
                     OpWriteModel::Mul(
-                        OperandWriteModel::new(ctx.clone(), base_path.push_interned(2u8)),
+                        __OperandWriteModelFor::<
+                            __S,
+                        >::new(ctx.clone(), base_path.push_interned(2u8)),
                     )
                 }
                 3u32 => {
                     OpWriteModel::Div(
-                        OperandWriteModel::new(ctx.clone(), base_path.push_interned(3u8)),
+                        __OperandWriteModelFor::<
+                            __S,
+                        >::new(ctx.clone(), base_path.push_interned(3u8)),
                     )
                 }
                 _ => {
@@ -122,6 +139,7 @@ impl OpWriteModel {
             OpWriteModel::Sum(inner) => Op::Sum(inner.load()),
             OpWriteModel::Mul(inner) => Op::Mul(inner.load()),
             OpWriteModel::Div(inner) => Op::Div(inner.load()),
+            Self::__Phantom(_, i) => match *i {}
         }
     }
     pub fn with_index(

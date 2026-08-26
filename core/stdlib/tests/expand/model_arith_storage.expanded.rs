@@ -2,15 +2,14 @@ use stdlib::Model;
 struct ArithStorage {
     pub last_op: Option<Op>,
 }
-pub struct ArithStorageModel {
+pub struct ArithStorageModel<__S> {
     pub base_path: stdlib::KeyPath,
-    ctx: alloc::rc::Rc<crate::context::ViewStorage>,
+    ctx: alloc::rc::Rc<__S>,
 }
-impl ArithStorageModel {
-    pub fn new(
-        ctx: alloc::rc::Rc<crate::context::ViewStorage>,
-        base_path: stdlib::KeyPath,
-    ) -> Self {
+#[doc(hidden)]
+pub type __ArithStorageModelFor<__S> = ArithStorageModel<__S>;
+impl<__S: stdlib::ReadStorage + 'static> ArithStorageModel<__S> {
+    pub fn new(ctx: alloc::rc::Rc<__S>, base_path: stdlib::KeyPath) -> Self {
         Self {
             base_path: base_path.clone(),
             ctx,
@@ -20,7 +19,7 @@ impl ArithStorageModel {
         let mut entries = alloc::vec::Vec::new();
         entries
     }
-    pub fn last_op(&self) -> Option<OpModel> {
+    pub fn last_op(&self) -> Option<__OpModelFor<__S>> {
         let base_path = self.base_path.push_interned(0u8);
         if stdlib::ReadStorage::__extend_path_with_match(
                 &self.ctx,
@@ -31,7 +30,7 @@ impl ArithStorageModel {
         {
             None
         } else {
-            Some(OpModel::new(self.ctx.clone(), base_path.push("some")))
+            Some(__OpModelFor::<__S>::new(self.ctx.clone(), base_path.push("some")))
         }
     }
     pub fn load(&self) -> ArithStorage {
@@ -40,18 +39,19 @@ impl ArithStorageModel {
         }
     }
 }
-pub struct ArithStorageWriteModel {
+pub struct ArithStorageWriteModel<__S: stdlib::HasViewStorage> {
     pub base_path: stdlib::KeyPath,
-    ctx: alloc::rc::Rc<crate::context::ProcStorage>,
+    ctx: alloc::rc::Rc<__S>,
     index_binding: Option<(stdlib::KeyPath, alloc::vec::Vec<u8>)>,
-    model: ArithStorageModel,
+    model: ArithStorageModel<__S::View>,
 }
-impl ArithStorageWriteModel {
-    pub fn new(
-        ctx: alloc::rc::Rc<crate::context::ProcStorage>,
-        base_path: stdlib::KeyPath,
-    ) -> Self {
-        let view_storage = ctx.view_storage();
+#[doc(hidden)]
+pub type __ArithStorageWriteModelFor<__S> = ArithStorageWriteModel<__S>;
+impl<
+    __S: stdlib::ReadStorage + stdlib::WriteStorage + stdlib::HasViewStorage + 'static,
+> ArithStorageWriteModel<__S> {
+    pub fn new(ctx: alloc::rc::Rc<__S>, base_path: stdlib::KeyPath) -> Self {
+        let view_storage = stdlib::HasViewStorage::view_storage(&*ctx);
         Self {
             base_path: base_path.clone(),
             ctx,
@@ -70,7 +70,7 @@ impl ArithStorageWriteModel {
         self.index_binding = Some((index_root, index_key));
         self
     }
-    pub fn last_op(&self) -> Option<OpWriteModel> {
+    pub fn last_op(&self) -> Option<__OpWriteModelFor<__S>> {
         let base_path = self.base_path.push_interned(0u8);
         if stdlib::ReadStorage::__extend_path_with_match(
                 &self.ctx,
@@ -81,7 +81,7 @@ impl ArithStorageWriteModel {
         {
             None
         } else {
-            Some(OpWriteModel::new(self.ctx.clone(), base_path.push("some")))
+            Some(__OpWriteModelFor::<__S>::new(self.ctx.clone(), base_path.push("some")))
         }
     }
     pub fn set_last_op(&self, value: Option<Op>) {
@@ -93,8 +93,8 @@ impl ArithStorageWriteModel {
         }
     }
 }
-impl core::ops::Deref for ArithStorageWriteModel {
-    type Target = ArithStorageModel;
+impl<__S: stdlib::HasViewStorage> core::ops::Deref for ArithStorageWriteModel<__S> {
+    type Target = ArithStorageModel<__S::View>;
     fn deref(&self) -> &Self::Target {
         &self.model
     }

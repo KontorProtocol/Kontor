@@ -12,12 +12,12 @@ impl ProxyStorage {
     }
 }
 impl crate::ProcContext {
-    pub fn model(&self) -> ProxyStorageWriteModel {
+    pub fn model(&self) -> ProxyStorageWriteModel<crate::context::ProcStorage> {
         ProxyStorageWriteModel::new(alloc::rc::Rc::new(self.storage()), KeyPath::new())
     }
 }
 impl crate::ViewContext {
-    pub fn model(&self) -> ProxyStorageModel {
+    pub fn model(&self) -> ProxyStorageModel<crate::context::ViewStorage> {
         ProxyStorageModel::new(alloc::rc::Rc::new(self.storage()), KeyPath::new())
     }
 }

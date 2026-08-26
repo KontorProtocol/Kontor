@@ -16,25 +16,21 @@ impl ::core::clone::Clone for Agreement {
     }
 }
 #[automatically_derived]
-impl stdlib::Store<crate::context::ProcStorage> for Agreement {
-    fn __set(
-        ctx: &alloc::rc::Rc<crate::context::ProcStorage>,
-        base_path: stdlib::KeyPath,
-        value: Agreement,
-    ) {
+impl<__S: stdlib::WriteStorage + stdlib::ReadStorage + ?Sized> stdlib::Store<__S>
+for Agreement {
+    fn __set(ctx: &alloc::rc::Rc<__S>, base_path: stdlib::KeyPath, value: Agreement) {
         stdlib::WriteStorage::__set(ctx, base_path.push_interned(0u8), value.active);
         stdlib::WriteStorage::__set(ctx, base_path.push_interned(1u8), value.challenge);
     }
 }
-pub struct AgreementModel {
+pub struct AgreementModel<__S> {
     pub base_path: stdlib::KeyPath,
-    ctx: alloc::rc::Rc<crate::context::ViewStorage>,
+    ctx: alloc::rc::Rc<__S>,
 }
-impl AgreementModel {
-    pub fn new(
-        ctx: alloc::rc::Rc<crate::context::ViewStorage>,
-        base_path: stdlib::KeyPath,
-    ) -> Self {
+#[doc(hidden)]
+pub type __AgreementModelFor<__S> = AgreementModel<__S>;
+impl<__S: stdlib::ReadStorage + 'static> AgreementModel<__S> {
+    pub fn new(ctx: alloc::rc::Rc<__S>, base_path: stdlib::KeyPath) -> Self {
         Self {
             base_path: base_path.clone(),
             ctx,
@@ -84,18 +80,19 @@ impl AgreementModel {
         }
     }
 }
-pub struct AgreementWriteModel {
+pub struct AgreementWriteModel<__S: stdlib::HasViewStorage> {
     pub base_path: stdlib::KeyPath,
-    ctx: alloc::rc::Rc<crate::context::ProcStorage>,
+    ctx: alloc::rc::Rc<__S>,
     index_binding: Option<(stdlib::KeyPath, alloc::vec::Vec<u8>)>,
-    model: AgreementModel,
+    model: AgreementModel<__S::View>,
 }
-impl AgreementWriteModel {
-    pub fn new(
-        ctx: alloc::rc::Rc<crate::context::ProcStorage>,
-        base_path: stdlib::KeyPath,
-    ) -> Self {
-        let view_storage = ctx.view_storage();
+#[doc(hidden)]
+pub type __AgreementWriteModelFor<__S> = AgreementWriteModel<__S>;
+impl<
+    __S: stdlib::ReadStorage + stdlib::WriteStorage + stdlib::HasViewStorage + 'static,
+> AgreementWriteModel<__S> {
+    pub fn new(ctx: alloc::rc::Rc<__S>, base_path: stdlib::KeyPath) -> Self {
+        let view_storage = stdlib::HasViewStorage::view_storage(&*ctx);
         Self {
             base_path: base_path.clone(),
             ctx,
@@ -298,8 +295,8 @@ impl AgreementWriteModel {
         }
     }
 }
-impl core::ops::Deref for AgreementWriteModel {
-    type Target = AgreementModel;
+impl<__S: stdlib::HasViewStorage> core::ops::Deref for AgreementWriteModel<__S> {
+    type Target = AgreementModel<__S::View>;
     fn deref(&self) -> &Self::Target {
         &self.model
     }
@@ -350,15 +347,14 @@ where
 struct AgreementStorage {
     agreements: Map<u64, Agreement>,
 }
-pub struct AgreementStorageModel {
+pub struct AgreementStorageModel<__S> {
     pub base_path: stdlib::KeyPath,
-    ctx: alloc::rc::Rc<crate::context::ViewStorage>,
+    ctx: alloc::rc::Rc<__S>,
 }
-impl AgreementStorageModel {
-    pub fn new(
-        ctx: alloc::rc::Rc<crate::context::ViewStorage>,
-        base_path: stdlib::KeyPath,
-    ) -> Self {
+#[doc(hidden)]
+pub type __AgreementStorageModelFor<__S> = AgreementStorageModel<__S>;
+impl<__S: stdlib::ReadStorage + 'static> AgreementStorageModel<__S> {
+    pub fn new(ctx: alloc::rc::Rc<__S>, base_path: stdlib::KeyPath) -> Self {
         Self {
             base_path: base_path.clone(),
             ctx,
@@ -368,7 +364,7 @@ impl AgreementStorageModel {
         let mut entries = alloc::vec::Vec::new();
         entries
     }
-    pub fn agreements(&self) -> AgreementStorageAgreementsModel {
+    pub fn agreements(&self) -> AgreementStorageAgreementsModel<__S> {
         AgreementStorageAgreementsModel {
             base_path: self.base_path.push_interned(0u8),
             index_path: self.base_path.push_interned(128u8),
@@ -381,27 +377,25 @@ impl AgreementStorageModel {
         }
     }
 }
-pub struct AgreementStorageAgreementsModel {
+pub struct AgreementStorageAgreementsModel<__S> {
     pub base_path: stdlib::KeyPath,
     index_path: stdlib::KeyPath,
-    ctx: alloc::rc::Rc<crate::context::ViewStorage>,
+    ctx: alloc::rc::Rc<__S>,
 }
-#[automatically_derived]
-impl ::core::clone::Clone for AgreementStorageAgreementsModel {
-    #[inline]
-    fn clone(&self) -> AgreementStorageAgreementsModel {
-        AgreementStorageAgreementsModel {
-            base_path: ::core::clone::Clone::clone(&self.base_path),
-            index_path: ::core::clone::Clone::clone(&self.index_path),
-            ctx: ::core::clone::Clone::clone(&self.ctx),
+impl<__S> Clone for AgreementStorageAgreementsModel<__S> {
+    fn clone(&self) -> Self {
+        Self {
+            base_path: self.base_path.clone(),
+            index_path: self.index_path.clone(),
+            ctx: self.ctx.clone(),
         }
     }
 }
-impl AgreementStorageAgreementsModel {
-    pub fn get(&self, key: &u64) -> Option<AgreementModel> {
+impl<__S: stdlib::ReadStorage + 'static> AgreementStorageAgreementsModel<__S> {
+    pub fn get(&self, key: &u64) -> Option<__AgreementModelFor<__S>> {
         let base_path = self.base_path.push_element(key);
         stdlib::ReadStorage::__exists(&self.ctx, &base_path)
-            .then(|| AgreementModel::new(self.ctx.clone(), base_path))
+            .then(|| __AgreementModelFor::<__S>::new(self.ctx.clone(), base_path))
     }
     pub fn load(&self) -> Map<u64, Agreement> {
         Map::new(&[])
@@ -410,12 +404,13 @@ impl AgreementStorageAgreementsModel {
         stdlib::ReadStorage::__get_keys(&self.ctx, &self.base_path)
     }
 }
-impl stdlib::IndexScan<u64> for AgreementStorageAgreementsModel {
+impl<__S: stdlib::ReadStorage + 'static> stdlib::IndexScan<u64>
+for AgreementStorageAgreementsModel<__S> {
     fn by_index(
         &self,
         index_id: u8,
         bucket: &[&[u8]],
-    ) -> impl Iterator<Item = u64> + use<> {
+    ) -> impl Iterator<Item = u64> + use<__S> {
         let bucket = self.index_path.push_interned(index_id).push_raw_elements(bucket);
         stdlib::ReadStorage::__get_keys(&self.ctx, &bucket)
     }
@@ -460,19 +455,21 @@ impl stdlib::IndexScan<u64> for AgreementStorageAgreementsModel {
         stdlib::ReadStorage::__get_u64(&self.ctx, &bucket).unwrap_or(0)
     }
 }
-impl AgreementIndex<u64> for AgreementStorageAgreementsModel {}
-pub struct AgreementStorageWriteModel {
+impl<__S: stdlib::ReadStorage + 'static> AgreementIndex<u64>
+for AgreementStorageAgreementsModel<__S> {}
+pub struct AgreementStorageWriteModel<__S: stdlib::HasViewStorage> {
     pub base_path: stdlib::KeyPath,
-    ctx: alloc::rc::Rc<crate::context::ProcStorage>,
+    ctx: alloc::rc::Rc<__S>,
     index_binding: Option<(stdlib::KeyPath, alloc::vec::Vec<u8>)>,
-    model: AgreementStorageModel,
+    model: AgreementStorageModel<__S::View>,
 }
-impl AgreementStorageWriteModel {
-    pub fn new(
-        ctx: alloc::rc::Rc<crate::context::ProcStorage>,
-        base_path: stdlib::KeyPath,
-    ) -> Self {
-        let view_storage = ctx.view_storage();
+#[doc(hidden)]
+pub type __AgreementStorageWriteModelFor<__S> = AgreementStorageWriteModel<__S>;
+impl<
+    __S: stdlib::ReadStorage + stdlib::WriteStorage + stdlib::HasViewStorage + 'static,
+> AgreementStorageWriteModel<__S> {
+    pub fn new(ctx: alloc::rc::Rc<__S>, base_path: stdlib::KeyPath) -> Self {
+        let view_storage = stdlib::HasViewStorage::view_storage(&*ctx);
         Self {
             base_path: base_path.clone(),
             ctx,
@@ -491,7 +488,7 @@ impl AgreementStorageWriteModel {
         self.index_binding = Some((index_root, index_key));
         self
     }
-    pub fn agreements(&self) -> AgreementStorageAgreementsWriteModel {
+    pub fn agreements(&self) -> AgreementStorageAgreementsWriteModel<__S> {
         AgreementStorageAgreementsWriteModel {
             base_path: self.base_path.push_interned(0u8),
             index_path: self.base_path.push_interned(128u8),
@@ -504,34 +501,34 @@ impl AgreementStorageWriteModel {
         }
     }
 }
-impl core::ops::Deref for AgreementStorageWriteModel {
-    type Target = AgreementStorageModel;
+impl<__S: stdlib::HasViewStorage> core::ops::Deref for AgreementStorageWriteModel<__S> {
+    type Target = AgreementStorageModel<__S::View>;
     fn deref(&self) -> &Self::Target {
         &self.model
     }
 }
-pub struct AgreementStorageAgreementsWriteModel {
+pub struct AgreementStorageAgreementsWriteModel<__S> {
     pub base_path: stdlib::KeyPath,
     index_path: stdlib::KeyPath,
-    ctx: alloc::rc::Rc<crate::context::ProcStorage>,
+    ctx: alloc::rc::Rc<__S>,
 }
-#[automatically_derived]
-impl ::core::clone::Clone for AgreementStorageAgreementsWriteModel {
-    #[inline]
-    fn clone(&self) -> AgreementStorageAgreementsWriteModel {
-        AgreementStorageAgreementsWriteModel {
-            base_path: ::core::clone::Clone::clone(&self.base_path),
-            index_path: ::core::clone::Clone::clone(&self.index_path),
-            ctx: ::core::clone::Clone::clone(&self.ctx),
+impl<__S> Clone for AgreementStorageAgreementsWriteModel<__S> {
+    fn clone(&self) -> Self {
+        Self {
+            base_path: self.base_path.clone(),
+            index_path: self.index_path.clone(),
+            ctx: self.ctx.clone(),
         }
     }
 }
-impl AgreementStorageAgreementsWriteModel {
-    pub fn get(&self, key: &u64) -> Option<AgreementWriteModel> {
+impl<
+    __S: stdlib::ReadStorage + stdlib::WriteStorage + stdlib::HasViewStorage + 'static,
+> AgreementStorageAgreementsWriteModel<__S> {
+    pub fn get(&self, key: &u64) -> Option<__AgreementWriteModelFor<__S>> {
         let base_path = self.base_path.push_element(key);
         stdlib::ReadStorage::__exists(&self.ctx, &base_path)
             .then(|| {
-                AgreementWriteModel::new(self.ctx.clone(), base_path)
+                __AgreementWriteModelFor::<__S>::new(self.ctx.clone(), base_path)
                     .with_index(self.index_path.clone(), stdlib::KeyElement::encode(key))
             })
     }
@@ -578,12 +575,14 @@ impl AgreementStorageAgreementsWriteModel {
         stdlib::ReadStorage::__get_keys(&self.ctx, &self.base_path)
     }
 }
-impl stdlib::IndexScan<u64> for AgreementStorageAgreementsWriteModel {
+impl<
+    __S: stdlib::ReadStorage + stdlib::WriteStorage + stdlib::HasViewStorage + 'static,
+> stdlib::IndexScan<u64> for AgreementStorageAgreementsWriteModel<__S> {
     fn by_index(
         &self,
         index_id: u8,
         bucket: &[&[u8]],
-    ) -> impl Iterator<Item = u64> + use<> {
+    ) -> impl Iterator<Item = u64> + use<__S> {
         let bucket = self.index_path.push_interned(index_id).push_raw_elements(bucket);
         stdlib::ReadStorage::__get_keys(&self.ctx, &bucket)
     }
@@ -628,4 +627,6 @@ impl stdlib::IndexScan<u64> for AgreementStorageAgreementsWriteModel {
         stdlib::ReadStorage::__get_u64(&self.ctx, &bucket).unwrap_or(0)
     }
 }
-impl AgreementIndex<u64> for AgreementStorageAgreementsWriteModel {}
+impl<
+    __S: stdlib::ReadStorage + stdlib::WriteStorage + stdlib::HasViewStorage + 'static,
+> AgreementIndex<u64> for AgreementStorageAgreementsWriteModel<__S> {}

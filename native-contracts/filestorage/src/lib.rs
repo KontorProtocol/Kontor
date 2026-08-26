@@ -1138,7 +1138,7 @@ pub fn uniform_index_from_u64(n: usize, next_u64: &mut impl FnMut() -> u64) -> u
 /// are a unit — a terminal status must always clear the slot — so every caller goes
 /// through here. No-op if the challenge or its agreement is already gone.
 fn terminate_challenge(
-    model: &ProtocolStateWriteModel,
+    model: &ProtocolStateWriteModel<context::ProcStorage>,
     challenge_id: &str,
     status: ChallengeStatus,
 ) {

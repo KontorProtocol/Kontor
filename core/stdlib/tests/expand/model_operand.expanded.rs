@@ -2,15 +2,14 @@ use stdlib::Model;
 pub struct Operand {
     pub y: u64,
 }
-pub struct OperandModel {
+pub struct OperandModel<__S> {
     pub base_path: stdlib::KeyPath,
-    ctx: alloc::rc::Rc<crate::context::ViewStorage>,
+    ctx: alloc::rc::Rc<__S>,
 }
-impl OperandModel {
-    pub fn new(
-        ctx: alloc::rc::Rc<crate::context::ViewStorage>,
-        base_path: stdlib::KeyPath,
-    ) -> Self {
+#[doc(hidden)]
+pub type __OperandModelFor<__S> = OperandModel<__S>;
+impl<__S: stdlib::ReadStorage + 'static> OperandModel<__S> {
+    pub fn new(ctx: alloc::rc::Rc<__S>, base_path: stdlib::KeyPath) -> Self {
         Self {
             base_path: base_path.clone(),
             ctx,
@@ -27,18 +26,19 @@ impl OperandModel {
         Operand { y: self.y() }
     }
 }
-pub struct OperandWriteModel {
+pub struct OperandWriteModel<__S: stdlib::HasViewStorage> {
     pub base_path: stdlib::KeyPath,
-    ctx: alloc::rc::Rc<crate::context::ProcStorage>,
+    ctx: alloc::rc::Rc<__S>,
     index_binding: Option<(stdlib::KeyPath, alloc::vec::Vec<u8>)>,
-    model: OperandModel,
+    model: OperandModel<__S::View>,
 }
-impl OperandWriteModel {
-    pub fn new(
-        ctx: alloc::rc::Rc<crate::context::ProcStorage>,
-        base_path: stdlib::KeyPath,
-    ) -> Self {
-        let view_storage = ctx.view_storage();
+#[doc(hidden)]
+pub type __OperandWriteModelFor<__S> = OperandWriteModel<__S>;
+impl<
+    __S: stdlib::ReadStorage + stdlib::WriteStorage + stdlib::HasViewStorage + 'static,
+> OperandWriteModel<__S> {
+    pub fn new(ctx: alloc::rc::Rc<__S>, base_path: stdlib::KeyPath) -> Self {
+        let view_storage = stdlib::HasViewStorage::view_storage(&*ctx);
         Self {
             base_path: base_path.clone(),
             ctx,
@@ -80,8 +80,8 @@ impl OperandWriteModel {
         Operand { y: self.y() }
     }
 }
-impl core::ops::Deref for OperandWriteModel {
-    type Target = OperandModel;
+impl<__S: stdlib::HasViewStorage> core::ops::Deref for OperandWriteModel<__S> {
+    type Target = OperandModel<__S::View>;
     fn deref(&self) -> &Self::Target {
         &self.model
     }

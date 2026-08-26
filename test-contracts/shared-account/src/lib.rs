@@ -17,7 +17,7 @@ struct SharedAccountStorage {
     pub accounts: Map<String, Account>,
 }
 
-fn authorized(signer: &Signer, account: &AccountModel) -> bool {
+fn authorized(signer: &Signer, account: &AccountModel<context::ViewStorage>) -> bool {
     let holder: Holder = signer.as_holder();
     account.owner() == signer.key() || account.other_tenants().get(&holder).is_some_and(|b| b)
 }
