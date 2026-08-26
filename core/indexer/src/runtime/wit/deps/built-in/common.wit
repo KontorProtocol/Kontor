@@ -242,9 +242,13 @@ interface error {
         validation(string),
     }
 }
-interface numbers {
-    use error.{error};
-
+// The numerics DATA types, split from the function-bearing `numbers` interface
+// so the types can be `with:`-remapped onto the shared `built-in-types` crate on
+// BOTH sides (wasmtime's `with:` can remap a types-only interface via a small
+// facade, but not individual records inside a function-bearing one). `numbers`
+// keeps its name and all its functions, so function import strings are
+// unchanged.
+interface numbers-types {
     enum sign {
         plus,
         minus
@@ -271,6 +275,11 @@ interface numbers {
         equal,
         greater
     }
+}
+
+interface numbers {
+    use error.{error};
+    use numbers-types.{sign, integer, decimal, ordering};
 
     u64-to-integer: async func(i: u64) -> integer;
     s64-to-integer: async func(i: s64) -> integer;
@@ -344,6 +353,7 @@ interface file-registry-types {
 
 world built-in {
     import context;
+    import numbers-types;
     import foreign;
     import crypto;
     import error;

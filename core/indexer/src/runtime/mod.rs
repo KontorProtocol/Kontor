@@ -92,7 +92,7 @@ pub use wit::kontor::built_in::error::Error;
 pub use wit::kontor::built_in::file_registry_types::{
     ChallengeInput, RawFileDescriptor, VerifyResult,
 };
-pub use wit::kontor::built_in::numbers::{
+pub use wit::kontor::built_in::numbers_types::{
     Decimal, Integer, Ordering as NumericOrdering, Sign as NumericSign,
 };
 

@@ -28,6 +28,8 @@ wasmtime::component::bindgen!({
         // contracts) instead of regenerated. The facade provides the
         // Host/add_to_linker module shape wasmtime expects of an interface.
         "kontor:built-in/file-registry-types": built_in_types::host_facade,
+        "kontor:built-in/numbers-types": built_in_types::host_facade_numbers_types,
+        "kontor:built-in/error": built_in_types::host_facade_error,
     },
     additional_derives: [stdlib::Wavey, serde::Deserialize],
     imports: {

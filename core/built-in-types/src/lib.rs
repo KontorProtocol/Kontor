@@ -27,9 +27,29 @@ wit_bindgen::generate!({
     generate_unused_types: true,
     additional_derives: [stdlib::Wavey],
     additional_type_attributes: {
-        "kontor:built-in/numbers/integer": [ #[derive(stdlib::Storage)] ],
-        "kontor:built-in/numbers/decimal": [ #[derive(stdlib::Storage)] ],
-        "kontor:built-in/numbers/sign": [ #[derive(stdlib::Storage)] ],
+        "kontor:built-in/numbers-types/integer": [
+            #[derive(stdlib::Storage)]
+            #[cfg_attr(feature = "host", derive(wasmtime::component::ComponentType, wasmtime::component::Lift, wasmtime::component::Lower, serde::Deserialize))]
+            #[cfg_attr(feature = "host", component(record))]
+        ],
+        "kontor:built-in/numbers-types/decimal": [
+            #[derive(stdlib::Storage)]
+            #[cfg_attr(feature = "host", derive(wasmtime::component::ComponentType, wasmtime::component::Lift, wasmtime::component::Lower, serde::Deserialize))]
+            #[cfg_attr(feature = "host", component(record))]
+        ],
+        "kontor:built-in/numbers-types/sign": [
+            #[derive(stdlib::Storage)]
+            #[cfg_attr(feature = "host", derive(wasmtime::component::ComponentType, wasmtime::component::Lift, wasmtime::component::Lower, serde::Deserialize))]
+            #[cfg_attr(feature = "host", component(enum))]
+        ],
+        "kontor:built-in/numbers-types/ordering": [
+            #[cfg_attr(feature = "host", derive(wasmtime::component::ComponentType, wasmtime::component::Lift, wasmtime::component::Lower, serde::Deserialize))]
+            #[cfg_attr(feature = "host", component(enum))]
+        ],
+        "kontor:built-in/error/error": [
+            #[cfg_attr(feature = "host", derive(wasmtime::component::ComponentType, wasmtime::component::Lift, wasmtime::component::Lower, serde::Deserialize))]
+            #[cfg_attr(feature = "host", component(variant))]
+        ],
         "kontor:built-in/file-registry-types/raw-file-descriptor": [
             #[derive(stdlib::Storage)]
             #[cfg_attr(feature = "host", derive(wasmtime::component::ComponentType, wasmtime::component::Lift, wasmtime::component::Lower, serde::Deserialize))]
@@ -47,6 +67,26 @@ wit_bindgen::generate!({
         ],
     },
     additional_member_attributes: {
+        "kontor:built-in/numbers-types/integer.r0": [ #[cfg_attr(feature = "host", component(name = "r0"))] ],
+        "kontor:built-in/numbers-types/integer.r1": [ #[cfg_attr(feature = "host", component(name = "r1"))] ],
+        "kontor:built-in/numbers-types/integer.r2": [ #[cfg_attr(feature = "host", component(name = "r2"))] ],
+        "kontor:built-in/numbers-types/integer.r3": [ #[cfg_attr(feature = "host", component(name = "r3"))] ],
+        "kontor:built-in/numbers-types/integer.sign": [ #[cfg_attr(feature = "host", component(name = "sign"))] ],
+        "kontor:built-in/numbers-types/decimal.r0": [ #[cfg_attr(feature = "host", component(name = "r0"))] ],
+        "kontor:built-in/numbers-types/decimal.r1": [ #[cfg_attr(feature = "host", component(name = "r1"))] ],
+        "kontor:built-in/numbers-types/decimal.r2": [ #[cfg_attr(feature = "host", component(name = "r2"))] ],
+        "kontor:built-in/numbers-types/decimal.r3": [ #[cfg_attr(feature = "host", component(name = "r3"))] ],
+        "kontor:built-in/numbers-types/decimal.sign": [ #[cfg_attr(feature = "host", component(name = "sign"))] ],
+        "kontor:built-in/numbers-types/sign.plus": [ #[cfg_attr(feature = "host", component(name = "plus"))] ],
+        "kontor:built-in/numbers-types/sign.minus": [ #[cfg_attr(feature = "host", component(name = "minus"))] ],
+        "kontor:built-in/numbers-types/ordering.less": [ #[cfg_attr(feature = "host", component(name = "less"))] ],
+        "kontor:built-in/numbers-types/ordering.equal": [ #[cfg_attr(feature = "host", component(name = "equal"))] ],
+        "kontor:built-in/numbers-types/ordering.greater": [ #[cfg_attr(feature = "host", component(name = "greater"))] ],
+        "kontor:built-in/error/error.message": [ #[cfg_attr(feature = "host", component(name = "message"))] ],
+        "kontor:built-in/error/error.overflow": [ #[cfg_attr(feature = "host", component(name = "overflow"))] ],
+        "kontor:built-in/error/error.div-by-zero": [ #[cfg_attr(feature = "host", component(name = "div-by-zero"))] ],
+        "kontor:built-in/error/error.syntax": [ #[cfg_attr(feature = "host", component(name = "syntax"))] ],
+        "kontor:built-in/error/error.validation": [ #[cfg_attr(feature = "host", component(name = "validation"))] ],
         "kontor:built-in/file-registry-types/raw-file-descriptor.file-id": [ #[cfg_attr(feature = "host", component(name = "file-id"))] ],
         "kontor:built-in/file-registry-types/raw-file-descriptor.object-id": [ #[cfg_attr(feature = "host", component(name = "object-id"))] ],
         "kontor:built-in/file-registry-types/raw-file-descriptor.nonce": [ #[cfg_attr(feature = "host", component(name = "nonce"))] ],
@@ -72,6 +112,7 @@ pub use kontor::built_in::file_registry_types;
 // The generated models' `try_update_*` path names `crate::error::Error`.
 pub use kontor::built_in::error;
 pub use kontor::built_in::numbers;
+pub use kontor::built_in::numbers_types;
 
 mod impls;
 
@@ -91,46 +132,69 @@ impl PartialEq for file_registry_types::RawFileDescriptor {
 
 impl Eq for file_registry_types::RawFileDescriptor {}
 
-/// The module the host `bindgen!`'s interface-level `with:` points at. wasmtime
-/// expects the module shape of a previously generated interface — for a
-/// types-only interface that is the types plus an empty `Host`, a
-/// `HostWithStore<T>`, and an `add_to_linker` that registers the instance name
-/// and links nothing. The trait/function shapes are copied from wasmtime 48's
-/// own generated output for this interface (verified identical under the
+/// The modules the host `bindgen!`'s interface-level `with:` points at, one per
+/// types-only interface. wasmtime expects the module shape of a previously
+/// generated interface — for a types-only interface that is the types plus an
+/// empty `Host`, a `HostWithStore<T>`, and an `add_to_linker` that registers
+/// the instance name and links nothing. The trait/function shapes are copied
+/// from wasmtime 48's own generated output (verified identical under the
 /// `async | store | trappable` import options the runtime uses); any drift in
 /// a future wasmtime is a compile error at the world's `add_to_linker` call
 /// site, not a runtime surprise.
 #[cfg(feature = "host")]
-pub mod host_facade {
-    pub use super::file_registry_types::{ChallengeInput, RawFileDescriptor, VerifyResult};
+macro_rules! types_only_host_facade {
+    ($name:ident, $instance:literal, { $($reexport:tt)* }) => {
+        pub mod $name {
+            $($reexport)*
 
-    pub trait HostWithStore<T>: wasmtime::component::HasData {}
-    impl<H: ?Sized, T> HostWithStore<T> for H where H: wasmtime::component::HasData {}
-    pub trait Host {}
-    impl<_T: Host + ?Sized> Host for &mut _T {}
+            pub trait HostWithStore<T>: wasmtime::component::HasData {}
+            impl<H: ?Sized, T> HostWithStore<T> for H where H: wasmtime::component::HasData {}
+            pub trait Host {}
+            impl<_T: Host + ?Sized> Host for &mut _T {}
 
-    pub fn add_to_linker_instance<T, D>(
-        _inst: &mut wasmtime::component::LinkerInstance<'_, T>,
-        _host_getter: fn(&mut T) -> D::Data<'_>,
-    ) -> wasmtime::Result<()>
-    where
-        D: HostWithStore<T>,
-        for<'a> D::Data<'a>: Host,
-        T: 'static,
-    {
-        Ok(())
-    }
+            pub fn add_to_linker_instance<T, D>(
+                _inst: &mut wasmtime::component::LinkerInstance<'_, T>,
+                _host_getter: fn(&mut T) -> D::Data<'_>,
+            ) -> wasmtime::Result<()>
+            where
+                D: HostWithStore<T>,
+                for<'a> D::Data<'a>: Host,
+                T: 'static,
+            {
+                Ok(())
+            }
 
-    pub fn add_to_linker<T, D>(
-        linker: &mut wasmtime::component::Linker<T>,
-        host_getter: fn(&mut T) -> D::Data<'_>,
-    ) -> wasmtime::Result<()>
-    where
-        D: HostWithStore<T>,
-        for<'a> D::Data<'a>: Host,
-        T: 'static,
-    {
-        let mut inst = linker.instance("kontor:built-in/file-registry-types")?;
-        add_to_linker_instance::<T, D>(&mut inst, host_getter)
-    }
+            pub fn add_to_linker<T, D>(
+                linker: &mut wasmtime::component::Linker<T>,
+                host_getter: fn(&mut T) -> D::Data<'_>,
+            ) -> wasmtime::Result<()>
+            where
+                D: HostWithStore<T>,
+                for<'a> D::Data<'a>: Host,
+                T: 'static,
+            {
+                let mut inst = linker.instance($instance)?;
+                add_to_linker_instance::<T, D>(&mut inst, host_getter)
+            }
+        }
+    };
 }
+
+#[cfg(feature = "host")]
+types_only_host_facade!(host_facade, "kontor:built-in/file-registry-types", {
+    pub use crate::file_registry_types::{ChallengeInput, RawFileDescriptor, VerifyResult};
+});
+
+#[cfg(feature = "host")]
+types_only_host_facade!(
+    host_facade_numbers_types,
+    "kontor:built-in/numbers-types",
+    {
+        pub use crate::numbers_types::{Decimal, Integer, Ordering, Sign};
+    }
+);
+
+#[cfg(feature = "host")]
+types_only_host_facade!(host_facade_error, "kontor:built-in/error", {
+    pub use crate::error::Error;
+});

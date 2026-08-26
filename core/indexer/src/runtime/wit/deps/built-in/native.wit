@@ -94,7 +94,7 @@ interface system {
 
 interface deposit {
     use context.{holder};
-    use numbers.{decimal};
+    use numbers-types.{decimal};
 
     /// The storage-deposit FLOOR a holder must keep below their token balance: the
     /// sum of the per-row deposits they currently collateralize across ALL contracts

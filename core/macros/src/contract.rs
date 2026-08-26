@@ -344,6 +344,7 @@ pub fn generate(config: Config) -> TokenStream {
                 "kontor:built-in/file-registry-types": built_in_types::file_registry_types,
                 "kontor:built-in/error": built_in_types::error,
                 "kontor:built-in/numbers": built_in_types::numbers,
+                "kontor:built-in/numbers-types": built_in_types::numbers_types,
             },
             additional_derives: [stdlib::Storage, stdlib::Wavey],
             #type_attrs
@@ -360,9 +361,10 @@ pub fn generate(config: Config) -> TokenStream {
         use built_in_types::error;
         use built_in_types::file_registry_types;
         use built_in_types::numbers;
+        use built_in_types::numbers_types;
         use kontor::built_in::context::{Holder, OutPoint};
         use kontor::built_in::context::{ContractAddressModel, ContractAddressWriteModel};
-        use built_in_types::numbers::{IntegerModel, IntegerWriteModel, DecimalModel, DecimalWriteModel};
+        use built_in_types::numbers_types::{IntegerModel, IntegerWriteModel, DecimalModel, DecimalWriteModel};
 
         type Map<K, V> = stdlib::StorageMap<K, V, context::ProcStorage>;
         type Deque<V> = stdlib::StorageDeque<V, context::ProcStorage>;

@@ -5,7 +5,7 @@ edition = "2024"
 
 [features]
 # Host embedding: wasmtime component derives on the generated types (injected
-# via targeted attributes in lib.rs) plus the `host_facade` module the host
+# via targeted attributes in lib.rs) plus the `host_facade*` modules the host
 # `bindgen!`'s interface-level `with:` points at.
 host = ["dep:wasmtime", "dep:serde"]
 
@@ -14,6 +14,12 @@ stdlib = { path = "../stdlib" }
 wit-bindgen = { workspace = true }
 wasmtime = { workspace = true, optional = true }
 serde = { workspace = true, optional = true }
+
+# The native arithmetic backend (the same pure-math crate the host functions
+# run): impls compiled for non-wasm targets delegate here instead of calling
+# the wasm import stubs.
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+numerics = { path = "../numerics" }
 
 [lints]
 workspace = true
