@@ -153,12 +153,16 @@ pub fn generate(config: Config) -> TokenStream {
         }
     };
 
-    quote! {
-        contract_address!(kontor::built_in::context::ContractAddress);
-        holder_ref!(kontor::built_in::context::HolderRef);
-
-        #signer_and_holder_impls
-
+    // Error + numerics impls are emitted for the HOST only: the guest gets them
+    // as owned impls from `built-in-types` (its `impls` module), where the
+    // error/numbers interfaces are generated once and remapped into contracts.
+    // The host still generates its own family for these interfaces (until the
+    // context-split rework of the host bindgen), so it keeps this expansion,
+    // with the arithmetic delegating to the pure `numerics` crate.
+    let host_only_impls = if !host {
+        quote! {}
+    } else {
+        quote! {
         #[automatically_derived]
         impl PartialEq for kontor::built_in::error::Error {
             fn eq(&self, other: &Self) -> bool {
@@ -534,6 +538,15 @@ pub fn generate(config: Config) -> TokenStream {
                 s.as_str().into()
             }
         }
+        }
+    };
 
+    quote! {
+        contract_address!(kontor::built_in::context::ContractAddress);
+        holder_ref!(kontor::built_in::context::HolderRef);
+
+        #signer_and_holder_impls
+
+        #host_only_impls
     }
 }

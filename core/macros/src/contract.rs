@@ -342,6 +342,8 @@ pub fn generate(config: Config) -> TokenStream {
             // guest and host share one type family for them.
             with: {
                 "kontor:built-in/file-registry-types": built_in_types::file_registry_types,
+                "kontor:built-in/error": built_in_types::error,
+                "kontor:built-in/numbers": built_in_types::numbers,
             },
             additional_derives: [stdlib::Storage, stdlib::Wavey],
             #type_attrs
@@ -355,10 +357,12 @@ pub fn generate(config: Config) -> TokenStream {
         // the shared crate's module under the same name the un-remapped
         // generation used (bare `file_registry_types::…` in contract code and
         // `super::file_registry_types::…` in `import!` expansions).
+        use built_in_types::error;
         use built_in_types::file_registry_types;
+        use built_in_types::numbers;
         use kontor::built_in::context::{Holder, OutPoint};
         use kontor::built_in::context::{ContractAddressModel, ContractAddressWriteModel};
-        use kontor::built_in::numbers::{IntegerModel, IntegerWriteModel, DecimalModel, DecimalWriteModel};
+        use built_in_types::numbers::{IntegerModel, IntegerWriteModel, DecimalModel, DecimalWriteModel};
 
         type Map<K, V> = stdlib::StorageMap<K, V, context::ProcStorage>;
         type Deque<V> = stdlib::StorageDeque<V, context::ProcStorage>;
@@ -575,62 +579,10 @@ pub fn generate(config: Config) -> TokenStream {
                 }
             )*};
         }
-        // (HolderRef is a storage enum and already gets a discriminant `IndexKey`.)
-        __index_key_via_display!(
-            context::Holder,
-            context::ContractAddress,
-            numbers::Integer,
-            numbers::Decimal
-        );
-
-        // `numbers::Integer`/`Decimal` are 256-bit sign-magnitude; encode them as
-        // order-preserving codec elements so they can be `Map` KEYS or
-        // index SORT fields (e.g. ordering by a monetary amount). `Decimal` reuses
-        // the integer encoding on its raw scaled limbs (fixed scale ⇒ raw-magnitude
-        // order == value order). Distinct from the `IndexKey` (bucket) impl above.
-        macro_rules! __key_element_num256 {
-            ($($ty:path),*) => {$(
-                impl stdlib::KeyElement for $ty {
-                    fn encode_to(&self, out: &mut alloc::vec::Vec<u8>) {
-                        stdlib::encode_int256(
-                            out,
-                            matches!(self.sign, numbers::Sign::Minus),
-                            [self.r0, self.r1, self.r2, self.r3],
-                        );
-                    }
-                    fn decode_from(bytes: &[u8]) -> Result<(Self, &[u8]), stdlib::CodecError> {
-                        let (negative, limbs, rest) = stdlib::decode_int256(bytes)?;
-                        Ok((
-                            Self {
-                                r0: limbs[0],
-                                r1: limbs[1],
-                                r2: limbs[2],
-                                r3: limbs[3],
-                                sign: if negative {
-                                    numbers::Sign::Minus
-                                } else {
-                                    numbers::Sign::Plus
-                                },
-                            },
-                            rest,
-                        ))
-                    }
-                }
-            )*};
-        }
-        __key_element_num256!(numbers::Integer, numbers::Decimal);
-
-        impl<__S: stdlib::ReadStorage + 'static> Retrieve<__S> for numbers::Integer {
-            fn __get(ctx: &alloc::rc::Rc<__S>, path: stdlib::KeyPath) -> Option<Self> {
-                stdlib::ReadStorage::__exists(ctx, &path).then(|| numbers::IntegerModel::new(ctx.clone(), path).load())
-            }
-        }
-
-        impl<__S: stdlib::ReadStorage + 'static> Retrieve<__S> for numbers::Decimal {
-            fn __get(ctx: &alloc::rc::Rc<__S>, path: stdlib::KeyPath) -> Option<Self> {
-                stdlib::ReadStorage::__exists(ctx, &path).then(|| numbers::DecimalModel::new(ctx.clone(), path).load())
-            }
-        }
+        // (HolderRef is a storage enum and already gets a discriminant `IndexKey`;
+        // Integer/Decimal carry their IndexKey/KeyElement/Retrieve impls in
+        // `built-in-types`, which owns them.)
+        __index_key_via_display!(context::Holder, context::ContractAddress);
 
         impls!();
 

@@ -27,6 +27,9 @@ wit_bindgen::generate!({
     generate_unused_types: true,
     additional_derives: [stdlib::Wavey],
     additional_type_attributes: {
+        "kontor:built-in/numbers/integer": [ #[derive(stdlib::Storage)] ],
+        "kontor:built-in/numbers/decimal": [ #[derive(stdlib::Storage)] ],
+        "kontor:built-in/numbers/sign": [ #[derive(stdlib::Storage)] ],
         "kontor:built-in/file-registry-types/raw-file-descriptor": [
             #[derive(stdlib::Storage)]
             #[cfg_attr(feature = "host", derive(wasmtime::component::ComponentType, wasmtime::component::Lift, wasmtime::component::Lower, serde::Deserialize))]
@@ -68,6 +71,9 @@ wit_bindgen::generate!({
 pub use kontor::built_in::file_registry_types;
 // The generated models' `try_update_*` path names `crate::error::Error`.
 pub use kontor::built_in::error;
+pub use kontor::built_in::numbers;
+
+mod impls;
 
 // Owned behavior on the shared types — written once here, where the types
 // live, instead of expanded per bindgen family (the old impls.rs pattern).
