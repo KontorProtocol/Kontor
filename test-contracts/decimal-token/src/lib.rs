@@ -20,7 +20,11 @@ fn assert_gt_zero(n: Decimal) -> Result<(), Error> {
     Ok(())
 }
 
-fn mint(model: &TokenStorageWriteModel<context::ProcStorage>, dst: Holder, amt: Decimal) -> Result<Mint, Error> {
+fn mint(
+    model: &TokenStorageWriteModel<context::ProcStorage>,
+    dst: Holder,
+    amt: Decimal,
+) -> Result<Mint, Error> {
     assert_gt_zero(amt)?;
     let ledger = model.ledger();
     let new_amt = ledger.get(&dst).unwrap_or_default().add(amt)?;

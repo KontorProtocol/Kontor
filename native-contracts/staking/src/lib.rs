@@ -53,7 +53,10 @@ fn active_set_size<M: ValidatorEntryIndex<Holder>>(validators: &M) -> u64 {
         + validators.status(ValidatorStatus::PendingExit).len()
 }
 
-fn make_validator_info(x_only_pubkey: &Holder, entry: &ValidatorEntryModel<context::ViewStorage>) -> ValidatorInfo {
+fn make_validator_info(
+    x_only_pubkey: &Holder,
+    entry: &ValidatorEntryModel<context::ViewStorage>,
+) -> ValidatorInfo {
     ValidatorInfo {
         x_only_pubkey: x_only_pubkey.to_string(),
         stake: entry.stake(),
