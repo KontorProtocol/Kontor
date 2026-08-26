@@ -17,3 +17,4 @@ unit_arg = "allow"
 
 [workspace.dependencies]
 stdlib = { path = "../core/stdlib" }
+built-in-types = { path = "../core/built-in-types" }
