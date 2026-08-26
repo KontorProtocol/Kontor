@@ -16,6 +16,7 @@ workspace = true
 
 [dependencies]
 stdlib = { path = "../stdlib" }
+built-in-types = { path = "../built-in-types", features = ["host"] }
 macros = { path = "../macros" }
 numerics = { path = "../numerics" }
 indexer-types = { path = "../indexer-types" }

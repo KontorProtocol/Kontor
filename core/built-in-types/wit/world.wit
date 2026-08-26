@@ -1,0 +1,11 @@
+// This world is a generator directive, not a component description: wit-bindgen's
+// `generate!` only accepts a world as its entry point, and `import` is the only
+// way a world can reference an interface — so this is how the data interfaces
+// enter the generator's field of view. No wasm is ever built from this world,
+// and a types-only interface would contribute nothing to an import section
+// anyway (imports are functions).
+package kontor:built-in-types;
+
+world shared {
+    import kontor:built-in/file-registry-types;
+}

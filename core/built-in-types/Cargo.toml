@@ -1,0 +1,19 @@
+[package]
+name = "built-in-types"
+version = "0.1.0"
+edition = "2024"
+
+[features]
+# Host embedding: wasmtime component derives on the generated types (injected
+# via targeted attributes in lib.rs) plus the `host_facade` module the host
+# `bindgen!`'s interface-level `with:` points at.
+host = ["dep:wasmtime", "dep:serde"]
+
+[dependencies]
+stdlib = { path = "../stdlib" }
+wit-bindgen = { workspace = true }
+wasmtime = { workspace = true, optional = true }
+serde = { workspace = true, optional = true }
+
+[lints]
+workspace = true

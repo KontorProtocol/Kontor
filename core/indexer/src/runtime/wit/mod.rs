@@ -23,6 +23,11 @@ wasmtime::component::bindgen!({
         "kontor:built-in/context.contract": Contract,
         "kontor:built-in/context.transaction": Transaction,
         "kontor:built-in/file-registry.proof": Proof,
+        // Types-only interfaces come from the shared `built-in-types` crate —
+        // generated once there, aliased here (and, in a later stage, in the
+        // contracts) instead of regenerated. The facade provides the
+        // Host/add_to_linker module shape wasmtime expects of an interface.
+        "kontor:built-in/file-registry-types": built_in_types::host_facade,
     },
     additional_derives: [stdlib::Wavey, serde::Deserialize],
     imports: {

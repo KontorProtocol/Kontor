@@ -1,6 +1,7 @@
 [workspace]
 members = [
     "bls-crypto",
+    "built-in-types",
     "indexer",
     "indexer-types",
     "kontor-sdk",
