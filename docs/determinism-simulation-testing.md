@@ -12,8 +12,8 @@ For a metaprotocol, *any* nondeterminism in a consensus-affecting path is a perm
 Kontor is well-positioned because determinism is already the *design goal*, and the scaffolding exists:
 - **`lite_executor`** — the whole multi-node Malachite BFT reactor runs in-process.
 - **`MockBitcoin`** — Bitcoin is already an injectable abstraction (blocks, confirmations, rollbacks).
-- **The checkpoint hash-chain** (`database/sql/checkpoint_trigger.sql`) — a SHA256 state-root over every `contract_state` row; all economic state is fingerprinted for free.
-- **`replay_blocks_from`** — state can already be re-derived.
+- **The checkpoint hash-chain** (`core/indexer/src/database/sql/checkpoint_trigger.sql`) — a SHA256 state-root over every `contract_state` row; all economic state is fingerprinted for free.
+- **`replay_blocks_after`** (`reactor/executor.rs`) — state can already be re-derived. Note the **exclusive** lower bound: it replays blocks strictly *after* the given height (callers wanting inclusive-from pass `from − 1`).
 - **The `Deterministic` / `NonDeterministic` `ExecutionError` taxonomy** — the runtime already classifies divergence risk at the source.
 
 What's missing is the *driver* that turns these into a seeded simulator, the *faults*, and the *checkers*.
@@ -40,7 +40,7 @@ A run must be a pure function of `(seed, scenario)`. Every nondeterminism source
 - Inputs: transaction submission order / mempool contents.
 - Randomness: all of it seeded (challenge seeds are already HKDF-deterministic; assert nothing else draws entropy).
 
-Residual sources that must be **zero** in consensus paths — and which the simulator + reindex relation systematically flush out: wall-clock reads, `HashMap`/`Map::keys()` iteration order (the class of bug just fixed in challenge selection), and `f64` (the audit flagged a `reactor/batches.rs` instance). A **determinism-hardening audit** is part of this work, not separate from it.
+Residual sources that must be **zero** in consensus paths — and which the simulator + reindex relation systematically flush out: wall-clock reads, `HashMap`/`Map::keys()` iteration order (a class of bug previously found in challenge selection), and `f64` (a former `reactor/batches.rs` instance was fixed with integer math; the surviving reactor example is the fee-rate scoring in `mempool_fee_index/`). A **determinism-hardening audit** is part of this work, not separate from it.
 
 ### 3.2 The simulation driver
 
@@ -84,7 +84,7 @@ Asserted continuously (after each step) and at quiescence:
 
 Same logical history, different path, **identical consensus state**:
 1. **Reindex-equivalence** — index a history from genesis twice (fresh DB) → same checkpoint. The base case.
-2. **Crash-restart-equivalence** — a run with a crash + `replay_blocks_from` at block *N* vs. one without → same final checkpoint.
+2. **Crash-restart-equivalence** — a run with a crash + `replay_blocks_after` at block *N* vs. one without → same final checkpoint.
 3. **Batch-vs-block-end-equivalence** — a non-conflicting tx that gets *batched* vs. the same tx confirmed *without* batching (block-end append) → same final ordering/state (the spec says these converge).
 4. **Knob-invariance** — randomize non-consensus knobs (component-cache size, batch interval within bounds, fuel cache) → identical checkpoint. Consensus state must not depend on them. (CockroachDB's "metamorphic constant" idea.)
 
@@ -95,11 +95,11 @@ Same logical history, different path, **identical consensus state**:
 
 ## 4. Build path & sequencing
 
-Reuse: `lite_executor`, `MockBitcoin`, the checkpoint chain, `replay_blocks_from`, the error taxonomy. Build: the seeded scheduler/driver, the feature-gated Buggify hooks, the invariant checkers, the metamorphic harness, seed-repro + golden fixtures, the CI swarm job, and the determinism-hardening audit.
+Reuse: `lite_executor`, `MockBitcoin`, the checkpoint chain, `replay_blocks_after`, the error taxonomy. Build: the seeded scheduler/driver, the feature-gated Buggify hooks, the invariant checkers, the metamorphic harness, seed-repro + golden fixtures, the CI swarm job, and the determinism-hardening audit.
 
 **Sequencing — it is a companion to the reactor wiring, not blocked on it:**
 1. **Now**: driver + checkpoint/reindex/crash-restart relations + the consensus-safety and ordering invariants, against *existing* paths (challenges, validators, batches, rollback). This alone is high-value — it hardens the current reactor and catches the residual `keys()`/`f64`/time nondeterminism systematically.
-2. **With Phase 2 wiring**: the economic-conservation invariants and the economic-targeted faults (bonds, slashing, rewards, reorg-mid-settlement) become live. The frozen-bond-replay rule (reactor spec §6.1) and two-clock atomicity (§5) are precisely what only this suite catches.
+2. **With Phase 2 wiring**: the economic-conservation invariants and the economic-targeted faults (bonds, slashing, rewards, reorg-mid-settlement) become live. The frozen-bond-replay rule (reactor spec §10 rule 5; detailed in `phase2-ordering-economy.md` §6.1) and two-clock atomicity (reactor spec §4) are precisely what only this suite catches.
 3. **Ongoing**: grow the golden fixtures; widen the fault catalog; track simulated-block-years in CI as a coverage metric (FDB's headline number).
 
 ## 5. The honest hard part
@@ -108,4 +108,4 @@ The leverage is entirely in step 1's *first half*: making the whole system a pur
 
 ## References
 
-FoundationDB simulation & `BUGGIFY` (the canonical writeup: "Testing Distributed Systems w/ Deterministic Simulation", Will Wilson); TigerBeetle VOPR (Viewstamped Operation Replicator) & the deterministic state-machine model; CockroachDB `kvnemesis` and metamorphic testing; Jepsen (history generation + consistency checkers); Antithesis (autonomous deterministic-hypervisor testing). Kontor scaffolding: `core/indexer/src/reactor/{lite_executor,mock_bitcoin,consensus_state}.rs`, `database/sql/checkpoint_trigger.sql`, `reg_tester.rs:1586` / `reactor_cluster_tests.rs:667` (`assert_checkpoints_match`).
+FoundationDB simulation & `BUGGIFY` (the canonical writeup: "Testing Distributed Systems w/ Deterministic Simulation", Will Wilson); TigerBeetle VOPR (Viewstamped Operation Replicator) & the deterministic state-machine model; CockroachDB `kvnemesis` and metamorphic testing; Jepsen (history generation + consistency checkers); Antithesis (autonomous deterministic-hypervisor testing). Kontor scaffolding: `core/indexer/src/reactor/{lite_executor,mock_bitcoin,consensus_state}.rs`, `core/indexer/src/database/sql/checkpoint_trigger.sql`, and the two `assert_checkpoints_match` helpers (the per-block assertion in `reg_tester.rs`; the cluster-wide DB comparison in `reactor_cluster_tests.rs`).
