@@ -182,6 +182,57 @@ world root {
     }
 
     #[test]
+    fn test_invalid_reserved_type_name_record() {
+        // A user record named like a built-in would be silently misrouted by the
+        // macro layer's bare-identifier matching (`is_primitive_type`, the
+        // `import!` skip list) — must be rejected here instead.
+        let result = validate(
+            r#"
+    record integer {
+        value: u64,
+    }
+
+    export init: async func(ctx: borrow<proc-context>) -> contract;
+    export get-data: async func(ctx: borrow<view-context>) -> integer;
+"#,
+        );
+        assert!(result.has_errors());
+        assert!(
+            result
+                .errors
+                .iter()
+                .any(|e| e.message.contains("'integer' shadows the Kontor built-in")),
+            "expected reserved-name error, got: {}",
+            result
+        );
+    }
+
+    #[test]
+    fn test_invalid_reserved_type_name_shadowing_alias() {
+        // An alias with a reserved name pointing at a NON-built-in target is
+        // shadowing too; only aliases that resolve to the built-in itself (what
+        // `use kontor:built-in/...` creates — exercised by every test here via
+        // `wrap`) keep the name legitimately.
+        let result = validate(
+            r#"
+    type decimal = u64;
+
+    export init: async func(ctx: borrow<proc-context>) -> contract;
+    export get-data: async func(ctx: borrow<view-context>) -> decimal;
+"#,
+        );
+        assert!(result.has_errors());
+        assert!(
+            result
+                .errors
+                .iter()
+                .any(|e| e.message.contains("'decimal' shadows the Kontor built-in")),
+            "expected reserved-name error, got: {}",
+            result
+        );
+    }
+
+    #[test]
     fn test_valid_list_u8_in_record() {
         let result = validate(
             r#"

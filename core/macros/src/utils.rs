@@ -74,6 +74,10 @@ pub fn is_result_type(ty: &syn::Type) -> bool {
     }
 }
 
+// Matches by LAST path segment only, so the Kontor entries (ContractAddress,
+// Holder, Integer, …) would collide with a same-named user WIT type. Sound only
+// because wit-validator's reserved-type-names rule bans user WIT from defining
+// types with these names — keep the two lists in sync (RESERVED_TYPE_NAMES).
 pub fn is_primitive_type(ty: &syn::Type) -> bool {
     if let syn::Type::Path(type_path) = ty {
         let segment = type_path.path.segments.last().map(|s| s.ident.to_string());

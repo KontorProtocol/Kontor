@@ -194,6 +194,37 @@ record b { a-field: a }
 
 ---
 
+## 7. Reserved Type Names
+
+User WIT **cannot define a type whose name is reserved for a Kontor built-in**
+(`types::RESERVED_TYPE_NAMES`): `transaction`, `contract`, `contract-address`,
+`view-context`, `view-storage`, `fall-context`, `proc-context`, `proc-storage`,
+`core-context`, `signer`, `holder`, `holder-ref`, `file-descriptor`,
+`raw-file-descriptor`, `proof`, `challenge-input`, `verify-result`, `error`, `keys`,
+`index-rows`, `integer`, `decimal`.
+
+Rationale: the macro layer (`is_primitive_type`, the `import!` skip list) recognizes
+built-in types by their bare Rust identifier in generated code, so a same-named user
+type would be silently misrouted down the built-in path — a latent miscompile. This
+rule rejects the collision at validation time instead.
+
+Aliases that resolve to the built-in itself — what `use kontor:built-in/...` creates
+in the world — legitimately carry the name and are allowed. An alias with a reserved
+name pointing anywhere else (`type integer = u64`) is shadowing and rejected.
+
+```wit
+// Invalid - defines a record named like a built-in
+record integer { value: u64 }
+
+// Invalid - reserved name aliased to a non-built-in target
+type decimal = u64;
+
+// Valid - the alias `use` creates resolves to the built-in itself
+use kontor:built-in/context.{proc-context};
+```
+
+---
+
 ## 8. Context-Specific Type Restrictions
 
 Some types have restrictions on where they can be used.

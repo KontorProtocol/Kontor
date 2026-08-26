@@ -11,7 +11,9 @@ use alloc::vec::Vec;
 
 use crate::error::ValidationError;
 use crate::types::{self, BUILTIN_TYPES, ERROR_TYPE_NAME};
-use wit_parser::{Handle, Resolve, Span, Type, TypeDefKind, TypeId, WorldItem, WorldKey};
+use wit_parser::{
+    Handle, Resolve, Span, Type, TypeDef, TypeDefKind, TypeId, TypeOwner, WorldItem, WorldKey,
+};
 
 /// Run all validation rules and collect errors.
 pub fn validate_all(resolve: &Resolve) -> Vec<ValidationError> {
@@ -19,8 +21,68 @@ pub fn validate_all(resolve: &Resolve) -> Vec<ValidationError> {
 
     errors.extend(validate_function_signatures(resolve));
     errors.extend(validate_required_exports(resolve));
+    errors.extend(validate_reserved_type_names(resolve));
     errors.extend(validate_type_definitions(resolve));
     errors.extend(validate_cycles(resolve));
+
+    errors
+}
+
+/// True when the type is owned (directly) by the `kontor:built-in` package —
+/// the runtime's own WIT, as opposed to the contract under validation.
+fn is_builtin_owned(resolve: &Resolve, type_def: &TypeDef) -> bool {
+    let package = match type_def.owner {
+        TypeOwner::Interface(id) => resolve.interfaces[id].package,
+        TypeOwner::World(id) => resolve.worlds[id].package,
+        TypeOwner::None => None,
+    };
+    package.is_some_and(|id| {
+        let name = &resolve.packages[id].name;
+        name.namespace == "kontor" && name.name == "built-in"
+    })
+}
+
+/// Follow alias links (`type a = b`, including the aliases `use` creates in the
+/// world) to see whether a type ultimately IS a built-in definition. Bounded by
+/// the type count so a degenerate alias chain can't loop.
+fn resolves_to_builtin(resolve: &Resolve, type_def: &TypeDef) -> bool {
+    let mut current = type_def;
+    for _ in 0..=resolve.types.len() {
+        if is_builtin_owned(resolve, current) {
+            return true;
+        }
+        match &current.kind {
+            TypeDefKind::Type(Type::Id(next)) => current = &resolve.types[*next],
+            _ => return false,
+        }
+    }
+    false
+}
+
+/// User WIT may not DEFINE a type whose name is reserved for a built-in
+/// (`types::RESERVED_TYPE_NAMES`). The macro layer matches generated types by
+/// bare Rust identifier (`is_primitive_type`, the `import!` skip list), so a
+/// same-named user type would be silently misrouted down the built-in path —
+/// this rule turns that latent miscompile into a validation error. Aliases that
+/// resolve to the built-in itself (what `use kontor:built-in/...` creates) keep
+/// the name legitimately and are allowed.
+fn validate_reserved_type_names(resolve: &Resolve) -> Vec<ValidationError> {
+    let mut errors = Vec::new();
+
+    for (_id, type_def) in resolve.types.iter() {
+        if let Some(name) = &type_def.name
+            && types::is_reserved_type_name(name)
+            && !resolves_to_builtin(resolve, type_def)
+        {
+            errors.push(ValidationError::new(
+                format!(
+                    "type name '{name}' shadows the Kontor built-in type of the same name; \
+                     rename it"
+                ),
+                type_def.span,
+            ));
+        }
+    }
 
     errors
 }

@@ -86,7 +86,8 @@ const MAX_VALID_ROOTS: u64 = 4096;
 // `expire`'s `range(..=height)` walks only the due prefix of the active bucket
 // (seeking the lower bound host-side) instead of every active challenge. For the WIT
 // records (`agreement-data`/`challenge-data`) the `#[index(...)]` declarations are
-// injected by the `indexed = "..."` arg on `contract!` (forked wit-bindgen);
+// injected by the `indexed = "..."` arg on `contract!` (wit-bindgen's
+// `additional_type_attributes`);
 // internal structs (`NodeState`) carry `#[index]` directly.
 //
 // `set`/`remove` maintain the index, AND an in-place indexed-field setter does
@@ -205,7 +206,7 @@ struct ProtocolState {
 // `agreement-data`/`challenge-data` are indexed (agreement by `active`; challenge
 // by `status` and by the sorted `due` index) via the `indexed = "..."` arg on
 // `contract!`, which injects the struct-level `#[index(...)]` declarations onto the
-// WIT records (forked wit-bindgen). The index machinery itself is folded into
+// WIT records (wit-bindgen's `additional_type_attributes`). The index machinery itself is folded into
 // `#[derive(Storage)]` (applied to every record), so their `Indexed` impls and
 // index-aware setters are generated, not hand-written.
 // `challenge-status` (like every enum the contract defines) automatically gets
