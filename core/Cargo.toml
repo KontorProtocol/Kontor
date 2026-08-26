@@ -21,32 +21,32 @@ too_many_arguments = "allow"
 
 [workspace.dependencies]
 # IMPORTANT
-wasmtime = { version = "=46.0.2", features = ["wave", "component-model-async"] }
-wit-bindgen = "=0.60.0"
-wit-component = "=0.253.0"
-wit-parser = "=0.253.0"
-wasm-wave = { version ="0.253.0", default-features = false }
+wasmtime = { version = "=48.0.1", features = ["wave", "component-model-async"] }
+wit-bindgen = "=0.61.1"
+wit-component = "=0.254.0"
+wit-parser = "=0.254.0"
+wasm-wave = { version ="0.254.0", default-features = false }
 # =-pinned like the rest of the workspace: the JS side pins the
 # uniffi-bindgen-react-native generator/runtime in lockstep (sdk-native
 # pins ubrn 0.29.3-1) and a silent `cargo update` bump could desync the
 # generated bindings' checksums from the runtime.
 uniffi = "=0.29.5"
 
-anyhow = { version = "=1.0.103", default-features = false }
+anyhow = { version = "=1.0.104", default-features = false }
 fastnum = "=0.7.5"
 num = "=0.4.3"
-async-trait = "=0.1.89"
+async-trait = "=0.1.92"
 axum = { version = "=0.8.9", features = ["http2"] }
 # Version is workspace-pinned; each crate selects its own features (bls-crypto
 # and indexer-types stay default-features = false for the wasm build).
-bitcoin = { version = "=0.32.101", default-features = false }
+bitcoin = { version = "=0.32.102", default-features = false }
 # Version is workspace-pinned; bls-crypto adds the `portable` feature for wasm.
-blst = "=0.3.16"
-bon = { version = "=3.9.3", default-features = false, features = ["alloc"] }
+blst = "=0.3.17"
+bon = { version = "=3.10.0", default-features = false, features = ["alloc"] }
 bytes = "=1.12.1"
-clap = { version = "=4.6.1", features = ["derive"] }
-eyre = "=0.6.12"
-glob = "=0.3.3"
+clap = { version = "=4.6.6", features = ["derive"] }
+eyre = "=0.6.14"
+glob = "=0.3.4"
 indexmap = { version = "=2.14.0", features = ["serde"] }
 libsql = { version = "=0.9.30", default-features = false, features = ["core", "serde", "stream"] }
 postcard = { version = "1.1.3", default-features = false, features = ["alloc"] }
@@ -54,13 +54,13 @@ postcard = { version = "1.1.3", default-features = false, features = ["alloc"] }
 # prost 0.13, and the codec boundary requires our proto types to implement the
 # same prost major's Name trait. Bump in lockstep with malachite.
 prost = "=0.13.5"
-serde = { version = "=1.0.228", default-features = false, features = ["alloc", "derive"] }
-serde_json = { version = "=1.0.150", default-features = false, features = ["alloc"] }
-serde_with = { version = "=3.21.0", default-features = false, features = ["alloc", "macros"] }
+serde = { version = "=1.0.229", default-features = false, features = ["alloc", "derive"] }
+serde_json = { version = "=1.0.151", default-features = false, features = ["alloc"] }
+serde_with = { version = "=3.22.0", default-features = false, features = ["alloc", "macros"] }
 sha3 = "=0.12.0"
 tempfile = "=3.27.0"
-tokio = { version = "=1.52.3", features = ["full"] }
-tokio-util = "=0.7.18"
+tokio = { version = "=1.53.1", features = ["full"] }
+tokio-util = "=0.7.19"
 tower = "=0.5.3"
 tower-http = { version = "=0.7.0", features = [
   "fs",
@@ -76,7 +76,7 @@ tracing-subscriber = { version = "=0.3.23", features = ["env-filter"] }
 ts-rs = { version = "=12.0.1", features = ["format"] }
 
 # Malachite BFT consensus
-malachitebft-app-channel = { git = "https://github.com/circlefin/malachite", rev = "8ee5d998545087e73710c37e457cc03cb56b1463", package = "arc-malachitebft-app-channel" }
+malachitebft-app-channel = { git = "https://github.com/circlefin/malachite", rev = "5cd137fb99e04c47ed378561708a3d1720ec21a2", package = "arc-malachitebft-app-channel" }
 
 # Pin malachite to the KontorProtocol fork (branch listen-addr-event): stores the
 # resolved consensus listen address in network state so it's readable via
@@ -102,14 +102,6 @@ arc-malachitebft-signing = { git = "https://github.com/KontorProtocol/malachite"
 arc-malachitebft-signing-ed25519 = { git = "https://github.com/KontorProtocol/malachite", rev = "0bf0365bf4f14afae716efd0da8f22879fa8dd52" }
 arc-malachitebft-sync = { git = "https://github.com/KontorProtocol/malachite", rev = "0bf0365bf4f14afae716efd0da8f22879fa8dd52" }
 arc-malachitebft-wal = { git = "https://github.com/KontorProtocol/malachite", rev = "0bf0365bf4f14afae716efd0da8f22879fa8dd52" }
-
-# `additional_type_attributes` / `additional_member_attributes` on wit-bindgen's
-# generate!, so `contract!` can inject `#[index]` onto specific WIT record types.
-# Upstreamed in bytecodealliance/wit-bindgen#1656 but not yet in a release; drop
-# this patch once a version after 0.60.0 is published.
-[patch.crates-io]
-wit-bindgen-rust = { git = "https://github.com/bytecodealliance/wit-bindgen", rev = "7687beb996d633d817756f434af2526d442a61d6" }
-wit-bindgen-rust-macro = { git = "https://github.com/bytecodealliance/wit-bindgen", rev = "7687beb996d633d817756f434af2526d442a61d6" }
 
 # Optimize the proof-system crates even in dev/test builds. Proof
 # generation (kontor-crypto's Nova prover) is exercised only in tests and
