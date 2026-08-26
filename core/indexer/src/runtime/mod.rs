@@ -183,19 +183,8 @@ fn native_provenance() -> Result<BuildProvenance> {
     Ok(provenance)
 }
 
-impl PartialEq for RawFileDescriptor {
-    fn eq(&self, other: &Self) -> bool {
-        self.file_id == other.file_id
-            && self.object_id == other.object_id
-            && self.nonce == other.nonce
-            && self.root == other.root
-            && self.padded_len == other.padded_len
-            && self.original_size == other.original_size
-            && self.filename == other.filename
-    }
-}
-
-impl Eq for RawFileDescriptor {}
+// RawFileDescriptor's PartialEq/Eq moved to `built-in-types` (the crate that
+// owns the type) — the exact relocation this consolidation exists for.
 
 /// The two host capability surfaces over a single `Runtime`. `user` registers
 /// only the common built-ins; `native` additionally registers the privileged

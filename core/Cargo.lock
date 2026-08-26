@@ -1249,6 +1249,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "built-in-types"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "stdlib",
+ "wasmtime",
+ "wit-bindgen 0.61.1",
+]
+
+[[package]]
 name = "bumpalo"
 version = "3.20.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3805,6 +3815,7 @@ dependencies = [
  "bon 3.10.0",
  "brotli",
  "built",
+ "built-in-types",
  "bytes",
  "clap",
  "deadpool",
