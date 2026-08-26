@@ -29,7 +29,7 @@ pub struct Config {
     /// "
     /// ```
     /// `contract!` injects the matching struct-level `#[index(...)]` on each record
-    /// (via the forked wit-bindgen); the index machinery itself is folded into
+    /// (via wit-bindgen's `additional_type_attributes`); the index machinery itself is folded into
     /// `#[derive(Storage)]` (applied to every record), so the generated model
     /// maintains the index. `by`/`sort` fields are mapped to the generated
     /// snake_case Rust field names.

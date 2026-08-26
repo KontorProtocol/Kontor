@@ -1,4 +1,4 @@
-error: Wrapper derive is not supported for unions
+error: Model derive is not supported for unions
  --> tests/ui/model_invalid_union.rs:4:7
   |
 4 | union Invalid {

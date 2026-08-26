@@ -172,14 +172,13 @@ fn indexed_enum_tokens(name: &syn::Ident) -> proc_macro2::TokenStream {
 pub fn derive_model(input: TokenStream) -> TokenStream {
     let input = parse_macro_input!(input as DeriveInput);
     let name = &input.ident;
-    let generics = &input.generics;
 
     let body = match &input.data {
         Data::Struct(data_struct) => model::generate_struct(data_struct, &input.attrs, name, false),
         Data::Enum(data_enum) => model::generate_enum(data_enum, name, false),
         Data::Union(_) => Err(Error::new(
             name.span(),
-            "Wrapper derive is not supported for unions",
+            "Model derive is not supported for unions",
         )),
     };
     let mut body = match body {
@@ -192,7 +191,7 @@ pub fn derive_model(input: TokenStream) -> TokenStream {
         Data::Enum(data_enum) => model::generate_enum(data_enum, name, true),
         Data::Union(_) => Err(Error::new(
             name.span(),
-            "Wrapper derive is not supported for unions",
+            "Model derive is not supported for unions",
         )),
     };
     let body_cont = match body_cont {
@@ -202,7 +201,6 @@ pub fn derive_model(input: TokenStream) -> TokenStream {
 
     body.extend(body_cont);
 
-    let (_impl_generics, _ty_generics, _where_clause) = generics.split_for_impl();
     quote! {
         #body
     }
@@ -213,26 +211,39 @@ pub fn derive_model(input: TokenStream) -> TokenStream {
 pub fn derive_storage(input: TokenStream) -> TokenStream {
     let mut tokens = derive_store(input.clone());
     tokens.extend(derive_model(input.clone()));
-    if let Ok(parsed) = syn::parse::<DeriveInput>(input) {
-        match &parsed.data {
-            // Structs fold in the index machinery (`Indexed` impl + `<T>Index`
-            // lookup trait), empty when no `#[index]` — so every struct value is
-            // `Indexed` and one `Map<K, V>` serves plain and indexed values.
-            Data::Struct(_) => tokens.extend(TokenStream::from(indexed_struct_tokens(&parsed))),
-            // Every storage enum gains its index machinery: the `<E>Kind` marker,
-            // discriminant `From`, and `IndexKey`. All new names, so it's safe even
-            // on built-ins like `HolderRef` whose `Display`/`FromStr` already exist.
-            // It also gets the empty `Indexed` + `<E>Index` (so it can be a `Map`
-            // value).
-            Data::Enum(data_enum) => {
-                match storage_enum::generate(data_enum, &parsed.ident) {
-                    Ok(body) => tokens.extend(TokenStream::from(body)),
-                    Err(err) => tokens.extend(TokenStream::from(err.to_compile_error())),
-                }
-                tokens.extend(TokenStream::from(indexed_enum_tokens(&parsed.ident)));
-            }
-            Data::Union(_) => {}
+    let parsed = match syn::parse::<DeriveInput>(input) {
+        Ok(parsed) => parsed,
+        // Store/Model above already emitted their own errors for this input;
+        // add ours rather than silently dropping the index machinery.
+        Err(err) => {
+            tokens.extend(TokenStream::from(err.to_compile_error()));
+            return tokens;
         }
+    };
+    match &parsed.data {
+        // Structs fold in the index machinery (`Indexed` impl + `<T>Index`
+        // lookup trait), empty when no `#[index]` — so every struct value is
+        // `Indexed` and one `Map<K, V>` serves plain and indexed values.
+        Data::Struct(_) => tokens.extend(TokenStream::from(indexed_struct_tokens(&parsed))),
+        // Every storage enum gains its index machinery: the `<E>Kind` marker,
+        // discriminant `From`, and `IndexKey`. All new names, so it's safe even
+        // on built-ins like `HolderRef` whose `Display`/`FromStr` already exist.
+        // It also gets the empty `Indexed` + `<E>Index` (so it can be a `Map`
+        // value).
+        Data::Enum(data_enum) => {
+            match storage_enum::generate(data_enum, &parsed.ident) {
+                Ok(body) => tokens.extend(TokenStream::from(body)),
+                Err(err) => tokens.extend(TokenStream::from(err.to_compile_error())),
+            }
+            tokens.extend(TokenStream::from(indexed_enum_tokens(&parsed.ident)));
+        }
+        Data::Union(_) => tokens.extend(TokenStream::from(
+            Error::new(
+                parsed.ident.span(),
+                "Storage derive is not supported for unions",
+            )
+            .to_compile_error(),
+        )),
     }
     tokens
 }
@@ -241,7 +252,6 @@ pub fn derive_storage(input: TokenStream) -> TokenStream {
 pub fn derive_root(input: TokenStream) -> TokenStream {
     let input = parse_macro_input!(input as DeriveInput);
     let name = &input.ident;
-    let generics = &input.generics;
 
     let body = match &input.data {
         Data::Struct(data_struct) => root::generate_root_struct(data_struct, name),
@@ -256,7 +266,6 @@ pub fn derive_root(input: TokenStream) -> TokenStream {
         Err(err) => return err.to_compile_error().into(),
     };
 
-    let (_impl_generics, _ty_generics, _where_clause) = generics.split_for_impl();
     quote! {
         #body
     }
