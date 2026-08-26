@@ -4,9 +4,10 @@ struct ContractAddress {
     tx_index: i64,
 }
 #[automatically_derived]
-impl stdlib::Store<crate::context::ProcStorage> for ContractAddress {
+impl<__S: stdlib::WriteStorage + stdlib::ReadStorage + ?Sized> stdlib::Store<__S>
+for ContractAddress {
     fn __set(
-        ctx: &alloc::rc::Rc<crate::context::ProcStorage>,
+        ctx: &alloc::rc::Rc<__S>,
         base_path: stdlib::KeyPath,
         value: ContractAddress,
     ) {

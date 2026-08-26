@@ -3,15 +3,14 @@ struct VecU8 {
     pub bytes: Vec<u8>,
     pub bytes_other: Vec<u8>,
 }
-pub struct VecU8Model {
+pub struct VecU8Model<__S> {
     pub base_path: stdlib::KeyPath,
-    ctx: alloc::rc::Rc<crate::context::ViewStorage>,
+    ctx: alloc::rc::Rc<__S>,
 }
-impl VecU8Model {
-    pub fn new(
-        ctx: alloc::rc::Rc<crate::context::ViewStorage>,
-        base_path: stdlib::KeyPath,
-    ) -> Self {
+#[doc(hidden)]
+pub type __VecU8ModelFor<__S> = VecU8Model<__S>;
+impl<__S: stdlib::ReadStorage + 'static> VecU8Model<__S> {
+    pub fn new(ctx: alloc::rc::Rc<__S>, base_path: stdlib::KeyPath) -> Self {
         Self {
             base_path: base_path.clone(),
             ctx,
@@ -34,18 +33,19 @@ impl VecU8Model {
         }
     }
 }
-pub struct VecU8WriteModel {
+pub struct VecU8WriteModel<__S: stdlib::HasViewStorage> {
     pub base_path: stdlib::KeyPath,
-    ctx: alloc::rc::Rc<crate::context::ProcStorage>,
+    ctx: alloc::rc::Rc<__S>,
     index_binding: Option<(stdlib::KeyPath, alloc::vec::Vec<u8>)>,
-    model: VecU8Model,
+    model: VecU8Model<__S::View>,
 }
-impl VecU8WriteModel {
-    pub fn new(
-        ctx: alloc::rc::Rc<crate::context::ProcStorage>,
-        base_path: stdlib::KeyPath,
-    ) -> Self {
-        let view_storage = ctx.view_storage();
+#[doc(hidden)]
+pub type __VecU8WriteModelFor<__S> = VecU8WriteModel<__S>;
+impl<
+    __S: stdlib::ReadStorage + stdlib::WriteStorage + stdlib::HasViewStorage + 'static,
+> VecU8WriteModel<__S> {
+    pub fn new(ctx: alloc::rc::Rc<__S>, base_path: stdlib::KeyPath) -> Self {
+        let view_storage = stdlib::HasViewStorage::view_storage(&*ctx);
         Self {
             base_path: base_path.clone(),
             ctx,
@@ -112,8 +112,8 @@ impl VecU8WriteModel {
         }
     }
 }
-impl core::ops::Deref for VecU8WriteModel {
-    type Target = VecU8Model;
+impl<__S: stdlib::HasViewStorage> core::ops::Deref for VecU8WriteModel<__S> {
+    type Target = VecU8Model<__S::View>;
     fn deref(&self) -> &Self::Target {
         &self.model
     }

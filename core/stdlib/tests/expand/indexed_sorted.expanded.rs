@@ -8,12 +8,9 @@ struct Challenge {
     seed: u64,
 }
 #[automatically_derived]
-impl stdlib::Store<crate::context::ProcStorage> for Challenge {
-    fn __set(
-        ctx: &alloc::rc::Rc<crate::context::ProcStorage>,
-        base_path: stdlib::KeyPath,
-        value: Challenge,
-    ) {
+impl<__S: stdlib::WriteStorage + stdlib::ReadStorage + ?Sized> stdlib::Store<__S>
+for Challenge {
+    fn __set(ctx: &alloc::rc::Rc<__S>, base_path: stdlib::KeyPath, value: Challenge) {
         stdlib::WriteStorage::__set(ctx, base_path.push_interned(0u8), value.id);
         stdlib::WriteStorage::__set(ctx, base_path.push_interned(1u8), value.status);
         stdlib::WriteStorage::__set(
@@ -24,15 +21,14 @@ impl stdlib::Store<crate::context::ProcStorage> for Challenge {
         stdlib::WriteStorage::__set(ctx, base_path.push_interned(3u8), value.seed);
     }
 }
-pub struct ChallengeModel {
+pub struct ChallengeModel<__S> {
     pub base_path: stdlib::KeyPath,
-    ctx: alloc::rc::Rc<crate::context::ViewStorage>,
+    ctx: alloc::rc::Rc<__S>,
 }
-impl ChallengeModel {
-    pub fn new(
-        ctx: alloc::rc::Rc<crate::context::ViewStorage>,
-        base_path: stdlib::KeyPath,
-    ) -> Self {
+#[doc(hidden)]
+pub type __ChallengeModelFor<__S> = ChallengeModel<__S>;
+impl<__S: stdlib::ReadStorage + 'static> ChallengeModel<__S> {
+    pub fn new(ctx: alloc::rc::Rc<__S>, base_path: stdlib::KeyPath) -> Self {
         Self {
             base_path: base_path.clone(),
             ctx,
@@ -79,18 +75,19 @@ impl ChallengeModel {
         }
     }
 }
-pub struct ChallengeWriteModel {
+pub struct ChallengeWriteModel<__S: stdlib::HasViewStorage> {
     pub base_path: stdlib::KeyPath,
-    ctx: alloc::rc::Rc<crate::context::ProcStorage>,
+    ctx: alloc::rc::Rc<__S>,
     index_binding: Option<(stdlib::KeyPath, alloc::vec::Vec<u8>)>,
-    model: ChallengeModel,
+    model: ChallengeModel<__S::View>,
 }
-impl ChallengeWriteModel {
-    pub fn new(
-        ctx: alloc::rc::Rc<crate::context::ProcStorage>,
-        base_path: stdlib::KeyPath,
-    ) -> Self {
-        let view_storage = ctx.view_storage();
+#[doc(hidden)]
+pub type __ChallengeWriteModelFor<__S> = ChallengeWriteModel<__S>;
+impl<
+    __S: stdlib::ReadStorage + stdlib::WriteStorage + stdlib::HasViewStorage + 'static,
+> ChallengeWriteModel<__S> {
+    pub fn new(ctx: alloc::rc::Rc<__S>, base_path: stdlib::KeyPath) -> Self {
+        let view_storage = stdlib::HasViewStorage::view_storage(&*ctx);
         Self {
             base_path: base_path.clone(),
             ctx,
@@ -392,8 +389,8 @@ impl ChallengeWriteModel {
         }
     }
 }
-impl core::ops::Deref for ChallengeWriteModel {
-    type Target = ChallengeModel;
+impl<__S: stdlib::HasViewStorage> core::ops::Deref for ChallengeWriteModel<__S> {
+    type Target = ChallengeModel<__S::View>;
     fn deref(&self) -> &Self::Target {
         &self.model
     }

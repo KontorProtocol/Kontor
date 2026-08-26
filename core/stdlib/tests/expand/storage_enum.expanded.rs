@@ -5,9 +5,10 @@ enum ChallengeStatus {
     Failed(u64),
 }
 #[automatically_derived]
-impl stdlib::Store<crate::context::ProcStorage> for ChallengeStatus {
+impl<__S: stdlib::WriteStorage + stdlib::ReadStorage + ?Sized> stdlib::Store<__S>
+for ChallengeStatus {
     fn __set(
-        ctx: &alloc::rc::Rc<crate::context::ProcStorage>,
+        ctx: &alloc::rc::Rc<__S>,
         base_path: stdlib::KeyPath,
         value: ChallengeStatus,
     ) {
@@ -33,16 +34,17 @@ impl stdlib::Store<crate::context::ProcStorage> for ChallengeStatus {
         }
     }
 }
-pub enum ChallengeStatusModel {
+pub enum ChallengeStatusModel<__S> {
     Active,
     Proven,
     Failed(u64),
+    #[doc(hidden)]
+    __Phantom(core::marker::PhantomData<__S>, core::convert::Infallible),
 }
-impl ChallengeStatusModel {
-    pub fn new(
-        ctx: alloc::rc::Rc<crate::context::ViewStorage>,
-        base_path: stdlib::KeyPath,
-    ) -> Self {
+#[doc(hidden)]
+pub type __ChallengeStatusModelFor<__S> = ChallengeStatusModel<__S>;
+impl<__S: stdlib::ReadStorage + 'static> ChallengeStatusModel<__S> {
+    pub fn new(ctx: alloc::rc::Rc<__S>, base_path: stdlib::KeyPath) -> Self {
         stdlib::ReadStorage::__extend_path_with_match(
                 &ctx,
                 &base_path,
@@ -74,6 +76,7 @@ impl ChallengeStatusModel {
             ChallengeStatusModel::Active => ChallengeStatus::Active,
             ChallengeStatusModel::Proven => ChallengeStatus::Proven,
             ChallengeStatusModel::Failed(inner) => ChallengeStatus::Failed(inner.clone()),
+            Self::__Phantom(_, i) => match *i {}
         }
     }
     pub fn with_index(
@@ -87,16 +90,19 @@ impl ChallengeStatusModel {
         alloc::vec::Vec::new()
     }
 }
-pub enum ChallengeStatusWriteModel {
+pub enum ChallengeStatusWriteModel<__S: stdlib::HasViewStorage> {
     Active,
     Proven,
     Failed(u64),
+    #[doc(hidden)]
+    __Phantom(core::marker::PhantomData<__S>, core::convert::Infallible),
 }
-impl ChallengeStatusWriteModel {
-    pub fn new(
-        ctx: alloc::rc::Rc<crate::context::ProcStorage>,
-        base_path: stdlib::KeyPath,
-    ) -> Self {
+#[doc(hidden)]
+pub type __ChallengeStatusWriteModelFor<__S> = ChallengeStatusWriteModel<__S>;
+impl<
+    __S: stdlib::ReadStorage + stdlib::WriteStorage + stdlib::HasViewStorage + 'static,
+> ChallengeStatusWriteModel<__S> {
+    pub fn new(ctx: alloc::rc::Rc<__S>, base_path: stdlib::KeyPath) -> Self {
         stdlib::ReadStorage::__extend_path_with_match(
                 &ctx,
                 &base_path,
@@ -130,6 +136,7 @@ impl ChallengeStatusWriteModel {
             ChallengeStatusWriteModel::Failed(inner) => {
                 ChallengeStatus::Failed(inner.clone())
             }
+            Self::__Phantom(_, i) => match *i {}
         }
     }
     pub fn with_index(

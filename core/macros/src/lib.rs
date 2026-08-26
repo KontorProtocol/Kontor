@@ -93,11 +93,16 @@ pub fn derive_store(input: TokenStream) -> TokenStream {
         Err(err) => return err.to_compile_error().into(),
     };
 
-    let (impl_generics, ty_generics, where_clause) = generics.split_for_impl();
+    let (_impl_generics, ty_generics, where_clause) = generics.split_for_impl();
+    // Generic over the storage handle (`derive_store` rejects generics on the
+    // input type above, so `__S` is the impl's only parameter). This is what
+    // lets the derive expand outside contract crates — nothing here names
+    // `crate::context::*`. ReadStorage rides along because collection fields
+    // (`StorageMap`) read back index state during their wholesale write.
     let expanded = quote! {
         #[automatically_derived]
-        impl #impl_generics stdlib::Store<crate::context::ProcStorage> for #name #ty_generics #where_clause {
-            fn __set(ctx: &alloc::rc::Rc<crate::context::ProcStorage>, base_path: stdlib::KeyPath, value: #name #ty_generics) {
+        impl<__S: stdlib::WriteStorage + stdlib::ReadStorage + ?Sized> stdlib::Store<__S> for #name #ty_generics #where_clause {
+            fn __set(ctx: &alloc::rc::Rc<__S>, base_path: stdlib::KeyPath, value: #name #ty_generics) {
                 #body
             }
         }

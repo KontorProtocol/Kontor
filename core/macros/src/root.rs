@@ -16,13 +16,13 @@ pub fn generate_root_struct(data_struct: &DataStruct, type_name: &Ident) -> Resu
                 }
 
                 impl crate::ProcContext {
-                    pub fn model(&self) -> #write_model_name {
+                    pub fn model(&self) -> #write_model_name<crate::context::ProcStorage> {
                         #write_model_name::new(alloc::rc::Rc::new(self.storage()), KeyPath::new())
                     }
                 }
 
                 impl crate::ViewContext {
-                    pub fn model(&self) -> #model_name {
+                    pub fn model(&self) -> #model_name<crate::context::ViewStorage> {
                         #model_name::new(alloc::rc::Rc::new(self.storage()), KeyPath::new())
                     }
                 }

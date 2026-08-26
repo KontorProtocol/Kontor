@@ -183,8 +183,8 @@ impl<V, S: ?Sized> Default for StorageDeque<V, S> {
     }
 }
 
-impl<V: Store<S>, S: WriteStorage + ?Sized> Store<S> for StorageDeque<V, S> {
-    fn __set(ctx: &Rc<S>, base_path: KeyPath, value: StorageDeque<V, S>) {
+impl<V: Store<S2>, S1, S2: WriteStorage + ?Sized> Store<S2> for StorageDeque<V, S1> {
+    fn __set(ctx: &Rc<S2>, base_path: KeyPath, value: StorageDeque<V, S1>) {
         // Wholesale REPLACE, not overlay. A deque may already exist at this path
         // (e.g. a parent struct re-set via its own `Store::__set`), carrying stale
         // state: a non-zero `head` from earlier `push_front` (head wraps toward

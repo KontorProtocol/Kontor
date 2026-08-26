@@ -18,26 +18,22 @@ impl ::core::clone::Clone for Challenge {
     }
 }
 #[automatically_derived]
-impl stdlib::Store<crate::context::ProcStorage> for Challenge {
-    fn __set(
-        ctx: &alloc::rc::Rc<crate::context::ProcStorage>,
-        base_path: stdlib::KeyPath,
-        value: Challenge,
-    ) {
+impl<__S: stdlib::WriteStorage + stdlib::ReadStorage + ?Sized> stdlib::Store<__S>
+for Challenge {
+    fn __set(ctx: &alloc::rc::Rc<__S>, base_path: stdlib::KeyPath, value: Challenge) {
         stdlib::WriteStorage::__set(ctx, base_path.push_interned(0u8), value.prover);
         stdlib::WriteStorage::__set(ctx, base_path.push_interned(1u8), value.status);
         stdlib::WriteStorage::__set(ctx, base_path.push_interned(2u8), value.deadline);
     }
 }
-pub struct ChallengeModel {
+pub struct ChallengeModel<__S> {
     pub base_path: stdlib::KeyPath,
-    ctx: alloc::rc::Rc<crate::context::ViewStorage>,
+    ctx: alloc::rc::Rc<__S>,
 }
-impl ChallengeModel {
-    pub fn new(
-        ctx: alloc::rc::Rc<crate::context::ViewStorage>,
-        base_path: stdlib::KeyPath,
-    ) -> Self {
+#[doc(hidden)]
+pub type __ChallengeModelFor<__S> = ChallengeModel<__S>;
+impl<__S: stdlib::ReadStorage + 'static> ChallengeModel<__S> {
+    pub fn new(ctx: alloc::rc::Rc<__S>, base_path: stdlib::KeyPath) -> Self {
         Self {
             base_path: base_path.clone(),
             ctx,
@@ -80,18 +76,19 @@ impl ChallengeModel {
         }
     }
 }
-pub struct ChallengeWriteModel {
+pub struct ChallengeWriteModel<__S: stdlib::HasViewStorage> {
     pub base_path: stdlib::KeyPath,
-    ctx: alloc::rc::Rc<crate::context::ProcStorage>,
+    ctx: alloc::rc::Rc<__S>,
     index_binding: Option<(stdlib::KeyPath, alloc::vec::Vec<u8>)>,
-    model: ChallengeModel,
+    model: ChallengeModel<__S::View>,
 }
-impl ChallengeWriteModel {
-    pub fn new(
-        ctx: alloc::rc::Rc<crate::context::ProcStorage>,
-        base_path: stdlib::KeyPath,
-    ) -> Self {
-        let view_storage = ctx.view_storage();
+#[doc(hidden)]
+pub type __ChallengeWriteModelFor<__S> = ChallengeWriteModel<__S>;
+impl<
+    __S: stdlib::ReadStorage + stdlib::WriteStorage + stdlib::HasViewStorage + 'static,
+> ChallengeWriteModel<__S> {
+    pub fn new(ctx: alloc::rc::Rc<__S>, base_path: stdlib::KeyPath) -> Self {
+        let view_storage = stdlib::HasViewStorage::view_storage(&*ctx);
         Self {
             base_path: base_path.clone(),
             ctx,
@@ -370,8 +367,8 @@ impl ChallengeWriteModel {
         }
     }
 }
-impl core::ops::Deref for ChallengeWriteModel {
-    type Target = ChallengeModel;
+impl<__S: stdlib::HasViewStorage> core::ops::Deref for ChallengeWriteModel<__S> {
+    type Target = ChallengeModel<__S::View>;
     fn deref(&self) -> &Self::Target {
         &self.model
     }
@@ -414,15 +411,14 @@ where
 struct ChallengeStorage {
     pub challenges: Map<u64, Challenge>,
 }
-pub struct ChallengeStorageModel {
+pub struct ChallengeStorageModel<__S> {
     pub base_path: stdlib::KeyPath,
-    ctx: alloc::rc::Rc<crate::context::ViewStorage>,
+    ctx: alloc::rc::Rc<__S>,
 }
-impl ChallengeStorageModel {
-    pub fn new(
-        ctx: alloc::rc::Rc<crate::context::ViewStorage>,
-        base_path: stdlib::KeyPath,
-    ) -> Self {
+#[doc(hidden)]
+pub type __ChallengeStorageModelFor<__S> = ChallengeStorageModel<__S>;
+impl<__S: stdlib::ReadStorage + 'static> ChallengeStorageModel<__S> {
+    pub fn new(ctx: alloc::rc::Rc<__S>, base_path: stdlib::KeyPath) -> Self {
         Self {
             base_path: base_path.clone(),
             ctx,
@@ -432,7 +428,7 @@ impl ChallengeStorageModel {
         let mut entries = alloc::vec::Vec::new();
         entries
     }
-    pub fn challenges(&self) -> ChallengeStorageChallengesModel {
+    pub fn challenges(&self) -> ChallengeStorageChallengesModel<__S> {
         ChallengeStorageChallengesModel {
             base_path: self.base_path.push_interned(0u8),
             index_path: self.base_path.push_interned(128u8),
@@ -445,27 +441,25 @@ impl ChallengeStorageModel {
         }
     }
 }
-pub struct ChallengeStorageChallengesModel {
+pub struct ChallengeStorageChallengesModel<__S> {
     pub base_path: stdlib::KeyPath,
     index_path: stdlib::KeyPath,
-    ctx: alloc::rc::Rc<crate::context::ViewStorage>,
+    ctx: alloc::rc::Rc<__S>,
 }
-#[automatically_derived]
-impl ::core::clone::Clone for ChallengeStorageChallengesModel {
-    #[inline]
-    fn clone(&self) -> ChallengeStorageChallengesModel {
-        ChallengeStorageChallengesModel {
-            base_path: ::core::clone::Clone::clone(&self.base_path),
-            index_path: ::core::clone::Clone::clone(&self.index_path),
-            ctx: ::core::clone::Clone::clone(&self.ctx),
+impl<__S> Clone for ChallengeStorageChallengesModel<__S> {
+    fn clone(&self) -> Self {
+        Self {
+            base_path: self.base_path.clone(),
+            index_path: self.index_path.clone(),
+            ctx: self.ctx.clone(),
         }
     }
 }
-impl ChallengeStorageChallengesModel {
-    pub fn get(&self, key: &u64) -> Option<ChallengeModel> {
+impl<__S: stdlib::ReadStorage + 'static> ChallengeStorageChallengesModel<__S> {
+    pub fn get(&self, key: &u64) -> Option<__ChallengeModelFor<__S>> {
         let base_path = self.base_path.push_element(key);
         stdlib::ReadStorage::__exists(&self.ctx, &base_path)
-            .then(|| ChallengeModel::new(self.ctx.clone(), base_path))
+            .then(|| __ChallengeModelFor::<__S>::new(self.ctx.clone(), base_path))
     }
     pub fn load(&self) -> Map<u64, Challenge> {
         Map::new(&[])
@@ -474,12 +468,13 @@ impl ChallengeStorageChallengesModel {
         stdlib::ReadStorage::__get_keys(&self.ctx, &self.base_path)
     }
 }
-impl stdlib::IndexScan<u64> for ChallengeStorageChallengesModel {
+impl<__S: stdlib::ReadStorage + 'static> stdlib::IndexScan<u64>
+for ChallengeStorageChallengesModel<__S> {
     fn by_index(
         &self,
         index_id: u8,
         bucket: &[&[u8]],
-    ) -> impl Iterator<Item = u64> + use<> {
+    ) -> impl Iterator<Item = u64> + use<__S> {
         let bucket = self.index_path.push_interned(index_id).push_raw_elements(bucket);
         stdlib::ReadStorage::__get_keys(&self.ctx, &bucket)
     }
@@ -524,19 +519,21 @@ impl stdlib::IndexScan<u64> for ChallengeStorageChallengesModel {
         stdlib::ReadStorage::__get_u64(&self.ctx, &bucket).unwrap_or(0)
     }
 }
-impl ChallengeIndex<u64> for ChallengeStorageChallengesModel {}
-pub struct ChallengeStorageWriteModel {
+impl<__S: stdlib::ReadStorage + 'static> ChallengeIndex<u64>
+for ChallengeStorageChallengesModel<__S> {}
+pub struct ChallengeStorageWriteModel<__S: stdlib::HasViewStorage> {
     pub base_path: stdlib::KeyPath,
-    ctx: alloc::rc::Rc<crate::context::ProcStorage>,
+    ctx: alloc::rc::Rc<__S>,
     index_binding: Option<(stdlib::KeyPath, alloc::vec::Vec<u8>)>,
-    model: ChallengeStorageModel,
+    model: ChallengeStorageModel<__S::View>,
 }
-impl ChallengeStorageWriteModel {
-    pub fn new(
-        ctx: alloc::rc::Rc<crate::context::ProcStorage>,
-        base_path: stdlib::KeyPath,
-    ) -> Self {
-        let view_storage = ctx.view_storage();
+#[doc(hidden)]
+pub type __ChallengeStorageWriteModelFor<__S> = ChallengeStorageWriteModel<__S>;
+impl<
+    __S: stdlib::ReadStorage + stdlib::WriteStorage + stdlib::HasViewStorage + 'static,
+> ChallengeStorageWriteModel<__S> {
+    pub fn new(ctx: alloc::rc::Rc<__S>, base_path: stdlib::KeyPath) -> Self {
+        let view_storage = stdlib::HasViewStorage::view_storage(&*ctx);
         Self {
             base_path: base_path.clone(),
             ctx,
@@ -555,7 +552,7 @@ impl ChallengeStorageWriteModel {
         self.index_binding = Some((index_root, index_key));
         self
     }
-    pub fn challenges(&self) -> ChallengeStorageChallengesWriteModel {
+    pub fn challenges(&self) -> ChallengeStorageChallengesWriteModel<__S> {
         ChallengeStorageChallengesWriteModel {
             base_path: self.base_path.push_interned(0u8),
             index_path: self.base_path.push_interned(128u8),
@@ -568,34 +565,34 @@ impl ChallengeStorageWriteModel {
         }
     }
 }
-impl core::ops::Deref for ChallengeStorageWriteModel {
-    type Target = ChallengeStorageModel;
+impl<__S: stdlib::HasViewStorage> core::ops::Deref for ChallengeStorageWriteModel<__S> {
+    type Target = ChallengeStorageModel<__S::View>;
     fn deref(&self) -> &Self::Target {
         &self.model
     }
 }
-pub struct ChallengeStorageChallengesWriteModel {
+pub struct ChallengeStorageChallengesWriteModel<__S> {
     pub base_path: stdlib::KeyPath,
     index_path: stdlib::KeyPath,
-    ctx: alloc::rc::Rc<crate::context::ProcStorage>,
+    ctx: alloc::rc::Rc<__S>,
 }
-#[automatically_derived]
-impl ::core::clone::Clone for ChallengeStorageChallengesWriteModel {
-    #[inline]
-    fn clone(&self) -> ChallengeStorageChallengesWriteModel {
-        ChallengeStorageChallengesWriteModel {
-            base_path: ::core::clone::Clone::clone(&self.base_path),
-            index_path: ::core::clone::Clone::clone(&self.index_path),
-            ctx: ::core::clone::Clone::clone(&self.ctx),
+impl<__S> Clone for ChallengeStorageChallengesWriteModel<__S> {
+    fn clone(&self) -> Self {
+        Self {
+            base_path: self.base_path.clone(),
+            index_path: self.index_path.clone(),
+            ctx: self.ctx.clone(),
         }
     }
 }
-impl ChallengeStorageChallengesWriteModel {
-    pub fn get(&self, key: &u64) -> Option<ChallengeWriteModel> {
+impl<
+    __S: stdlib::ReadStorage + stdlib::WriteStorage + stdlib::HasViewStorage + 'static,
+> ChallengeStorageChallengesWriteModel<__S> {
+    pub fn get(&self, key: &u64) -> Option<__ChallengeWriteModelFor<__S>> {
         let base_path = self.base_path.push_element(key);
         stdlib::ReadStorage::__exists(&self.ctx, &base_path)
             .then(|| {
-                ChallengeWriteModel::new(self.ctx.clone(), base_path)
+                __ChallengeWriteModelFor::<__S>::new(self.ctx.clone(), base_path)
                     .with_index(self.index_path.clone(), stdlib::KeyElement::encode(key))
             })
     }
@@ -642,12 +639,14 @@ impl ChallengeStorageChallengesWriteModel {
         stdlib::ReadStorage::__get_keys(&self.ctx, &self.base_path)
     }
 }
-impl stdlib::IndexScan<u64> for ChallengeStorageChallengesWriteModel {
+impl<
+    __S: stdlib::ReadStorage + stdlib::WriteStorage + stdlib::HasViewStorage + 'static,
+> stdlib::IndexScan<u64> for ChallengeStorageChallengesWriteModel<__S> {
     fn by_index(
         &self,
         index_id: u8,
         bucket: &[&[u8]],
-    ) -> impl Iterator<Item = u64> + use<> {
+    ) -> impl Iterator<Item = u64> + use<__S> {
         let bucket = self.index_path.push_interned(index_id).push_raw_elements(bucket);
         stdlib::ReadStorage::__get_keys(&self.ctx, &bucket)
     }
@@ -692,4 +691,6 @@ impl stdlib::IndexScan<u64> for ChallengeStorageChallengesWriteModel {
         stdlib::ReadStorage::__get_u64(&self.ctx, &bucket).unwrap_or(0)
     }
 }
-impl ChallengeIndex<u64> for ChallengeStorageChallengesWriteModel {}
+impl<
+    __S: stdlib::ReadStorage + stdlib::WriteStorage + stdlib::HasViewStorage + 'static,
+> ChallengeIndex<u64> for ChallengeStorageChallengesWriteModel<__S> {}

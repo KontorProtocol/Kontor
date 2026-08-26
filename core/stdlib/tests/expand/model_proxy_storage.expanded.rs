@@ -2,15 +2,14 @@ use stdlib::Model;
 struct ProxyStorage {
     contract_address: ContractAddress,
 }
-pub struct ProxyStorageModel {
+pub struct ProxyStorageModel<__S> {
     pub base_path: stdlib::KeyPath,
-    ctx: alloc::rc::Rc<crate::context::ViewStorage>,
+    ctx: alloc::rc::Rc<__S>,
 }
-impl ProxyStorageModel {
-    pub fn new(
-        ctx: alloc::rc::Rc<crate::context::ViewStorage>,
-        base_path: stdlib::KeyPath,
-    ) -> Self {
+#[doc(hidden)]
+pub type __ProxyStorageModelFor<__S> = ProxyStorageModel<__S>;
+impl<__S: stdlib::ReadStorage + 'static> ProxyStorageModel<__S> {
+    pub fn new(ctx: alloc::rc::Rc<__S>, base_path: stdlib::KeyPath) -> Self {
         Self {
             base_path: base_path.clone(),
             ctx,
@@ -29,18 +28,19 @@ impl ProxyStorageModel {
         }
     }
 }
-pub struct ProxyStorageWriteModel {
+pub struct ProxyStorageWriteModel<__S: stdlib::HasViewStorage> {
     pub base_path: stdlib::KeyPath,
-    ctx: alloc::rc::Rc<crate::context::ProcStorage>,
+    ctx: alloc::rc::Rc<__S>,
     index_binding: Option<(stdlib::KeyPath, alloc::vec::Vec<u8>)>,
-    model: ProxyStorageModel,
+    model: ProxyStorageModel<__S::View>,
 }
-impl ProxyStorageWriteModel {
-    pub fn new(
-        ctx: alloc::rc::Rc<crate::context::ProcStorage>,
-        base_path: stdlib::KeyPath,
-    ) -> Self {
-        let view_storage = ctx.view_storage();
+#[doc(hidden)]
+pub type __ProxyStorageWriteModelFor<__S> = ProxyStorageWriteModel<__S>;
+impl<
+    __S: stdlib::ReadStorage + stdlib::WriteStorage + stdlib::HasViewStorage + 'static,
+> ProxyStorageWriteModel<__S> {
+    pub fn new(ctx: alloc::rc::Rc<__S>, base_path: stdlib::KeyPath) -> Self {
+        let view_storage = stdlib::HasViewStorage::view_storage(&*ctx);
         Self {
             base_path: base_path.clone(),
             ctx,
@@ -92,8 +92,8 @@ impl ProxyStorageWriteModel {
         }
     }
 }
-impl core::ops::Deref for ProxyStorageWriteModel {
-    type Target = ProxyStorageModel;
+impl<__S: stdlib::HasViewStorage> core::ops::Deref for ProxyStorageWriteModel<__S> {
+    type Target = ProxyStorageModel<__S::View>;
     fn deref(&self) -> &Self::Target {
         &self.model
     }

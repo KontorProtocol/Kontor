@@ -17,7 +17,11 @@ fn assert_gt_zero(n: Integer) -> Result<(), Error> {
     Ok(())
 }
 
-fn mint(model: &TokenStorageWriteModel, to: Holder, n: Integer) -> Result<(), Error> {
+fn mint(
+    model: &TokenStorageWriteModel<context::ProcStorage>,
+    to: Holder,
+    n: Integer,
+) -> Result<(), Error> {
     assert_gt_zero(n)?;
     let ledger = model.ledger();
     let balance = ledger.get(&to).unwrap_or_default();

@@ -4,15 +4,14 @@ pub struct ContractAddress {
     pub height: i64,
     pub tx_index: i64,
 }
-pub struct ContractAddressModel {
+pub struct ContractAddressModel<__S> {
     pub base_path: stdlib::KeyPath,
-    ctx: alloc::rc::Rc<crate::context::ViewStorage>,
+    ctx: alloc::rc::Rc<__S>,
 }
-impl ContractAddressModel {
-    pub fn new(
-        ctx: alloc::rc::Rc<crate::context::ViewStorage>,
-        base_path: stdlib::KeyPath,
-    ) -> Self {
+#[doc(hidden)]
+pub type __ContractAddressModelFor<__S> = ContractAddressModel<__S>;
+impl<__S: stdlib::ReadStorage + 'static> ContractAddressModel<__S> {
+    pub fn new(ctx: alloc::rc::Rc<__S>, base_path: stdlib::KeyPath) -> Self {
         Self {
             base_path: base_path.clone(),
             ctx,
@@ -39,18 +38,19 @@ impl ContractAddressModel {
         }
     }
 }
-pub struct ContractAddressWriteModel {
+pub struct ContractAddressWriteModel<__S: stdlib::HasViewStorage> {
     pub base_path: stdlib::KeyPath,
-    ctx: alloc::rc::Rc<crate::context::ProcStorage>,
+    ctx: alloc::rc::Rc<__S>,
     index_binding: Option<(stdlib::KeyPath, alloc::vec::Vec<u8>)>,
-    model: ContractAddressModel,
+    model: ContractAddressModel<__S::View>,
 }
-impl ContractAddressWriteModel {
-    pub fn new(
-        ctx: alloc::rc::Rc<crate::context::ProcStorage>,
-        base_path: stdlib::KeyPath,
-    ) -> Self {
-        let view_storage = ctx.view_storage();
+#[doc(hidden)]
+pub type __ContractAddressWriteModelFor<__S> = ContractAddressWriteModel<__S>;
+impl<
+    __S: stdlib::ReadStorage + stdlib::WriteStorage + stdlib::HasViewStorage + 'static,
+> ContractAddressWriteModel<__S> {
+    pub fn new(ctx: alloc::rc::Rc<__S>, base_path: stdlib::KeyPath) -> Self {
+        let view_storage = stdlib::HasViewStorage::view_storage(&*ctx);
         Self {
             base_path: base_path.clone(),
             ctx,
@@ -143,8 +143,8 @@ impl ContractAddressWriteModel {
         }
     }
 }
-impl core::ops::Deref for ContractAddressWriteModel {
-    type Target = ContractAddressModel;
+impl<__S: stdlib::HasViewStorage> core::ops::Deref for ContractAddressWriteModel<__S> {
+    type Target = ContractAddressModel<__S::View>;
     fn deref(&self) -> &Self::Target {
         &self.model
     }

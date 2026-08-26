@@ -159,6 +159,18 @@ pub trait Store<T: WriteStorage + ?Sized> {
     fn __set(ctx: &alloc::rc::Rc<T>, base_path: KeyPath, value: Self);
 }
 
+/// A writable storage handle that can derive its read-side view — what a
+/// generated write model builds its embedded read model from (mirrors the
+/// `proc-storage.view-storage` resource method). Implemented for each
+/// contract's `ProcStorage` by the `contract!` glue; keeping it as a trait is
+/// what lets the model codegen stay generic over the storage handle instead of
+/// naming `crate::context::*` (so the `Storage` derive can expand in crates
+/// with no context of their own, e.g. `built-in-types`).
+pub trait HasViewStorage {
+    type View: ReadStorage;
+    fn view_storage(&self) -> Self::View;
+}
+
 impl<T: WriteStorage + ?Sized> Store<T> for u64 {
     fn __set(ctx: &alloc::rc::Rc<T>, path: KeyPath, value: u64) {
         ctx.__set_u64(&path, value);

@@ -64,7 +64,7 @@ struct NftStorage {
 }
 
 fn validate(
-    model: &NftStorageWriteModel,
+    model: &NftStorageWriteModel<context::ProcStorage>,
     nft_id: &str,
     attributes: &[Attribute],
 ) -> Result<(), Error> {
