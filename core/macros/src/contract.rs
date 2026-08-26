@@ -5,7 +5,7 @@ use quote::quote;
 use std::collections::BTreeMap;
 use std::path::Path;
 use syn::Ident;
-use wit_parser::Resolve;
+use wit_parser::{Resolve, Type, TypeDefKind, TypeId, TypeOwner, WorldId};
 use wit_validator::Validator;
 
 /// The world every contract's WIT declares. Also the prefix of a fully-qualified
@@ -29,20 +29,53 @@ pub struct Config {
     /// "
     /// ```
     /// `contract!` injects the matching struct-level `#[index(...)]` on each record
-    /// (via wit-bindgen's `additional_type_attributes`); the index machinery itself is folded into
-    /// `#[derive(Storage)]` (applied to every record), so the generated model
-    /// maintains the index. `by`/`sort` fields are mapped to the generated
-    /// snake_case Rust field names.
+    /// (via wit-bindgen's `additional_type_attributes`); the index machinery is folded
+    /// into `#[derive(Storage)]`, which every indexed record receives (indexed ⊂
+    /// storage). `by`/`sort` fields are mapped to the generated snake_case Rust
+    /// field names.
     indexed: Option<String>,
 }
 
 /// Translate one `name [by field…] [sort field] [include field…]` entry (the part
-/// after `record:`) into the Rust struct-level attribute string
-/// `#[index(name, by = …, sort = …, include = (…))]`. `by` and `include` each take one
-/// or more fields, consuming tokens up to the next keyword or the end; `include` marks
-/// a covering index (those fields ride the index leaf). kebab names map to the
-/// generated snake_case Rust idents.
-fn index_attr(spec: &str) -> String {
+/// after `record:`), parsed with each field's role preserved (validation treats
+/// them differently: `by`/`sort` must be scalar; `include` only needs a
+/// projectable `KeyElement`, so e.g. `list<u8>` is fine there). Field names are
+/// held snake_case, as the generated Rust idents the rendered attribute uses.
+struct IndexDeclSpec {
+    /// The index name; for the single-token sugar (`record: field`) this IS the
+    /// bucket field.
+    name: String,
+    by: Vec<String>,
+    sort: Option<String>,
+    include: Vec<String>,
+}
+
+impl IndexDeclSpec {
+    /// True when the sugar form was used and `name` doubles as the bucket field.
+    fn name_is_field(&self) -> bool {
+        self.by.is_empty() && self.sort.is_none() && self.include.is_empty()
+    }
+
+    /// Render as the Rust struct-level attribute string
+    /// `#[index(name, by = …, sort = …, include = (…))]`.
+    fn render(&self) -> String {
+        let mut args = self.name.clone();
+        match self.by.as_slice() {
+            [] => {}
+            [one] => args.push_str(&format!(", by = {one}")),
+            many => args.push_str(&format!(", by = ({})", many.join(", "))),
+        }
+        if let Some(sort) = &self.sort {
+            args.push_str(&format!(", sort = {sort}"));
+        }
+        if !self.include.is_empty() {
+            args.push_str(&format!(", include = ({})", self.include.join(", ")));
+        }
+        format!("#[index({args})]")
+    }
+}
+
+fn index_attr(spec: &str) -> IndexDeclSpec {
     const KEYWORDS: &[&str] = &["by", "sort", "include"];
     let mut tokens = spec.split_whitespace().peekable();
     let name = tokens
@@ -83,36 +116,20 @@ fn index_attr(spec: &str) -> String {
             }
         }
     }
-    let mut args = name;
-    match by.as_slice() {
-        [] => {}
-        [one] => args.push_str(&format!(", by = {one}")),
-        many => args.push_str(&format!(", by = ({})", many.join(", "))),
+    IndexDeclSpec {
+        name,
+        by,
+        sort,
+        include,
     }
-    if let Some(sort) = sort {
-        args.push_str(&format!(", sort = {sort}"));
-    }
-    if !include.is_empty() {
-        args.push_str(&format!(", include = ({})", include.join(", ")));
-    }
-    format!("#[index({args})]")
 }
 
-/// Build the `additional_type_attributes` option tokens for the wit-bindgen
-/// `generate!` from the `indexed` spec: one `#[index(...)]` per declared index.
-/// wit-bindgen emits each as its own attribute line on the (owned) record, and the
-/// `Storage` derive (applied to every record, where the index machinery now lives)
-/// parses them via the shared index-declaration grammar. (Storage enums are NOT
-/// injected here — they're generated directly from the WIT, see
-/// [`storage_enum_impls`].)
-fn index_attr_options(indexed: Option<&str>) -> TokenStream {
-    let Some(spec) = indexed else {
-        return quote! {};
-    };
-    // record (kebab wit name) -> its `#[index(...)]` lines, in declared order.
-    // BTreeMap keeps the emitted output deterministic across runs.
-    let mut by_record: BTreeMap<String, Vec<String>> = BTreeMap::new();
-    for entry in spec.split(';') {
+/// Parse the `indexed` spec into record (kebab wit name) -> its parsed index
+/// declarations, in declared order. BTreeMap keeps everything downstream
+/// deterministic across runs.
+fn parse_indexed(indexed: Option<&str>) -> BTreeMap<String, Vec<IndexDeclSpec>> {
+    let mut by_record: BTreeMap<String, Vec<IndexDeclSpec>> = BTreeMap::new();
+    for entry in indexed.unwrap_or_default().split(';') {
         let entry = entry.trim();
         if entry.is_empty() {
             continue;
@@ -127,19 +144,146 @@ fn index_attr_options(indexed: Option<&str>) -> TokenStream {
             .or_default()
             .push(index_attr(rest.trim()));
     }
+    by_record
+}
+
+/// The contract's own world in the resolve.
+fn root_world(resolve: &Resolve) -> WorldId {
+    resolve
+        .worlds
+        .iter()
+        .find(|(_, w)| w.name == WORLD)
+        .map(|(id, _)| id)
+        .unwrap_or_else(|| panic!("WIT does not declare a `{WORLD}` world"))
+}
+
+/// Named types declared directly in the contract's world (aliases created by
+/// `use` included — callers discriminate on kind).
+fn world_types(resolve: &Resolve, world: WorldId) -> BTreeMap<String, TypeId> {
+    resolve
+        .types
+        .iter()
+        .filter(|(_, td)| td.owner == TypeOwner::World(world))
+        .filter_map(|(id, td)| td.name.clone().map(|n| (n, id)))
+        .collect()
+}
+
+/// The kebab name of the definition a field/payload type resolves to (through
+/// alias links), for validation messages; None for unnamed shapes.
+fn resolved_kind<'a>(resolve: &'a Resolve, ty: &Type) -> Option<&'a TypeDefKind> {
+    let mut ty = *ty;
+    loop {
+        match ty {
+            Type::Id(id) => match &resolve.types[id].kind {
+                TypeDefKind::Type(inner) => ty = *inner,
+                other => return Some(other),
+            },
+            _ => return None,
+        }
+    }
+}
+
+/// Validate one `indexed` record's declarations against the WIT: the record
+/// exists in the world, is a record, and every referenced field exists with a
+/// shape its role supports — `by`/`sort` (and the single-token sugar's name)
+/// must be scalar; `include` fields only need to be projectable (`KeyElement`),
+/// so lists like `list<u8>` are fine there. This is what turns the old "cryptic
+/// trait error"/unresolvable-`<ty>Kind` failures into real messages.
+fn validate_indexed_record(
+    resolve: &Resolve,
+    world: &BTreeMap<String, TypeId>,
+    record: &str,
+    specs: &[IndexDeclSpec],
+) {
+    let id = *world.get(record).unwrap_or_else(|| {
+        panic!("`indexed` names `{record}`, but the world declares no type with that name")
+    });
+    let TypeDefKind::Record(rec) = &resolve.types[id].kind else {
+        panic!("`indexed` target `{record}` is not a record")
+    };
+    // Fields in WIT are kebab; the parsed specs hold the generated snake names —
+    // compare through the same conversion the DSL applied.
+    let fields: BTreeMap<String, &Type> = rec
+        .fields
+        .iter()
+        .map(|f| (f.name.to_snake_case(), &f.ty))
+        .collect();
+
+    let lookup = |field: &str| -> &Type {
+        fields.get(field).unwrap_or_else(|| {
+            panic!(
+                "`indexed` on `{record}` references field `{field}`, but the record's \
+                 fields are: {:?}",
+                fields.keys().collect::<Vec<_>>()
+            )
+        })
+    };
+    // Composite/container shapes can't be index keys — reject with the
+    // record/field named instead of letting the derive produce an opaque trait
+    // error. `include` permits lists (projected as `KeyElement` bytes).
+    let check = |field: &str, allow_list: bool| {
+        if let Some(kind) = resolved_kind(resolve, lookup(field)) {
+            let bad = match kind {
+                TypeDefKind::Record(_) => Some("a record"),
+                TypeDefKind::List(_) if !allow_list => Some("a list"),
+                TypeDefKind::Tuple(_) => Some("a tuple"),
+                TypeDefKind::Option(_) => Some("an option"),
+                TypeDefKind::Result(_) => Some("a result"),
+                TypeDefKind::Flags(_) => Some("flags"),
+                _ => None,
+            };
+            if let Some(shape) = bad {
+                panic!(
+                    "`indexed` on `{record}` uses field `{field}`, which is {shape} — \
+                     index key fields must be scalar (numbers, strings, bools, enums, or \
+                     built-in identity types)"
+                );
+            }
+        }
+    };
+
+    for spec in specs {
+        if spec.name_is_field() {
+            check(&spec.name, false);
+        }
+        for field in &spec.by {
+            check(field, false);
+        }
+        if let Some(sort) = &spec.sort {
+            check(sort, false);
+        }
+        for field in &spec.include {
+            check(field, true);
+        }
+    }
+}
+
+/// Build the `additional_type_attributes` option tokens for the wit-bindgen
+/// `generate!` from the `indexed` spec, validated against the parsed WIT: one
+/// `#[index(...)]` per declared index. wit-bindgen emits each as its own
+/// attribute line on the (owned) record, and the `Storage` derive (applied to
+/// every record via `additional_derives`, where the index machinery lives)
+/// parses them via the shared index-declaration grammar.
+fn type_attr_options(resolve: &Resolve, indexed: Option<&str>) -> TokenStream {
+    let by_record = parse_indexed(indexed);
     if by_record.is_empty() {
         return quote! {};
     }
+    let world_named = world_types(resolve, root_world(resolve));
+    for (record, specs) in &by_record {
+        validate_indexed_record(resolve, &world_named, record, specs);
+    }
+
+    // The index machinery is folded into `#[derive(Storage)]` (applied to every
+    // record via the contract's `additional_derives`), so we inject only the
+    // `#[index(...)]` attributes here; non-derive attributes are emitted
+    // verbatim so `#[index(...)]` passes through untouched. Selectors are fully
+    // qualified, and these records are declared directly in the world, so the
+    // qualified name is the world name and then the record's kebab wit name.
     let mut type_pairs = Vec::new();
-    for (record, attrs) in by_record {
-        // The index machinery is folded into `#[derive(Storage)]` (applied to every
-        // record via the contract's `additional_derives`), so we inject only the
-        // `#[index(...)]` attributes here; non-derive attributes are emitted verbatim
-        // so `#[index(...)]` passes through untouched. Selectors are fully qualified,
-        // and these records are declared directly in the world below, so the qualified
-        // name is the world name and then the record's kebab wit name. A record that
-        // isn't there trips wit-bindgen's unused-selector error.
+    for (record, decls) in by_record {
         let selector = format!("{WORLD}/{record}");
+        let attrs = decls.iter().map(IndexDeclSpec::render).collect::<Vec<_>>();
         let attrs = attrs.iter().map(|attr| {
             attr.parse::<TokenStream>()
                 .unwrap_or_else(|e| panic!("generated a malformed index attribute {attr:?}: {e}"))
@@ -176,7 +320,7 @@ pub fn generate(config: Config) -> TokenStream {
     }
 
     let path = abs_path.to_string_lossy().to_string();
-    let type_attrs = index_attr_options(config.indexed.as_deref());
+    let type_attrs = type_attr_options(&resolve, config.indexed.as_deref());
     quote! {
         extern crate alloc;
 
