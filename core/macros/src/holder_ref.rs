@@ -4,6 +4,15 @@ use syn::{Path, parse_macro_input};
 
 pub fn generate(input: TokenStream) -> TokenStream {
     let ty = parse_macro_input!(input as Path);
+    // OutPoint lives beside the target type; derive its path from the parent
+    // so the expansion needs nothing in scope.
+    let parent = ty.segments.iter().take(ty.segments.len() - 1);
+    let out_point = if ty.segments.len() > 1 {
+        let parent = parent.collect::<Vec<_>>();
+        quote! { #(#parent)::*::OutPoint }
+    } else {
+        quote! { OutPoint }
+    };
 
     let expanded = quote! {
         #[automatically_derived]
@@ -33,9 +42,9 @@ pub fn generate(input: TokenStream) -> TokenStream {
                 } else if let Some((txid, vout)) = s.rsplit_once(':') {
                     let vout = vout.parse::<u32>()
                         .map_err(|e| alloc::format!("invalid vout: {e}"))?;
-                    Self::Utxo(OutPoint { txid: txid.to_string(), vout })
+                    Self::Utxo(#out_point { txid: alloc::string::ToString::to_string(txid), vout })
                 } else {
-                    Self::XOnlyPubkey(s.to_string())
+                    Self::XOnlyPubkey(alloc::string::ToString::to_string(s))
                 })
             }
         }

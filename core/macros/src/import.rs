@@ -9,18 +9,8 @@ use syn::Ident;
 
 use wit_parser::{Function, Resolve, Type, TypeDefKind, TypeOwner, WorldItem, WorldKey};
 
+use crate::remap::REMAPPED_BUILT_INS;
 use crate::utils;
-
-/// The interfaces `contract!` remaps onto `built-in-types`; imported worlds
-/// must alias the same family.
-const REMAPPED_BUILT_INS: &[(&str, &str)] = &[
-    ("file-registry-types", "built_in_types::file_registry_types"),
-    ("error", "built_in_types::error"),
-    ("numbers", "built_in_types::numbers"),
-    ("numbers-types", "built_in_types::numbers_types"),
-    ("context-types", "built_in_types::context_types"),
-    ("context", "built_in_types::context"),
-];
 
 #[derive(FromMeta)]
 pub struct Config {

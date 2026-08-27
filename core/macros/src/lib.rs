@@ -14,6 +14,7 @@ mod indexed;
 mod interface;
 mod model;
 mod regtest;
+mod remap;
 mod root;
 mod storage_enum;
 mod store;

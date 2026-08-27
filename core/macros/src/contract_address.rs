@@ -15,14 +15,14 @@ pub fn generate(input: TokenStream) -> TokenStream {
 
         #[automatically_derived]
         impl core::str::FromStr for #ty {
-            type Err = String;
+            type Err = alloc::string::String;
 
             fn from_str(s: &str) -> Result<Self, Self::Err> {
-                let parts: Vec<&str> = s.split('_').collect();
+                let parts: alloc::vec::Vec<&str> = s.split('_').collect();
                 if parts.len() != 3 {
                     return Err(alloc::format!("expected 3 parts separated by '_', got: {s}"));
                 }
-                let name = parts[0].to_string();
+                let name = alloc::string::ToString::to_string(parts[0]);
                 let height = parts[1].parse::<u64>()
                     .map_err(|e| alloc::format!("invalid height: {e}"))?;
                 let tx_index = parts[2].parse::<u32>()
