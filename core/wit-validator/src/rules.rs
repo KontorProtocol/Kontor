@@ -592,9 +592,16 @@ fn validate_type_in_context(
                     errors.extend(validate_type_in_context(resolve, inner, ctx, span));
                 }
 
-                TypeDefKind::Handle(Handle::Own(_)) => {
+                // Cross-contract calls carry wave-encoded data only, so
+                // resources can never appear in signatures or stored types;
+                // the context parameter and init's `contract` return are
+                // validated separately, before this function is reached.
+                TypeDefKind::Handle(_) | TypeDefKind::Resource => {
                     errors.push(ValidationError::new(
-                        "own<T> handles are not supported; use borrow<T>",
+                        "resource types cannot appear in contract function signatures or \
+                         data types (cross-contract calls carry wave-encoded data only); \
+                         pass a data representation instead (e.g. holder-ref rather than \
+                         holder)",
                         span,
                     ));
                 }

@@ -22,4 +22,8 @@ world shared {
     // once instead of expanded into every contract crate. The HOST does not
     // remap this one — its context resources are Runtime-backed host objects.
     import kontor:built-in/context;
+    // INVARIANT: only interfaces EVERY contract world imports may appear
+    // here — this world's embedded component-type section merges into every
+    // contract's component type, so a native-only import (file-registry)
+    // would leak into every user contract's chain-visible WIT.
 }

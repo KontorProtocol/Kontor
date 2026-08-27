@@ -2,15 +2,25 @@ use std::{panic, path::Path};
 
 use anyhow::Result;
 use darling::FromMeta;
-use heck::{ToKebabCase, ToSnakeCase, ToUpperCamelCase};
+use heck::{ToKebabCase, ToSnakeCase};
 use proc_macro2::{Span, TokenStream};
 use quote::{format_ident, quote};
 use syn::Ident;
-use wit_parser::{
-    Enum, Function, Record, Resolve, Type, TypeDefKind, Variant, WorldItem, WorldKey,
-};
+
+use wit_parser::{Function, Resolve, Type, TypeDefKind, TypeOwner, WorldItem, WorldKey};
 
 use crate::utils;
+
+/// The interfaces `contract!` remaps onto `built-in-types`; imported worlds
+/// must alias the same family.
+const REMAPPED_BUILT_INS: &[(&str, &str)] = &[
+    ("file-registry-types", "built_in_types::file_registry_types"),
+    ("error", "built_in_types::error"),
+    ("numbers", "built_in_types::numbers"),
+    ("numbers-types", "built_in_types::numbers_types"),
+    ("context-types", "built_in_types::context_types"),
+    ("context", "built_in_types::context"),
+];
 
 #[derive(FromMeta)]
 pub struct Config {
@@ -67,6 +77,22 @@ pub fn import(
         .find(|(_, w)| w.name == world_name)
         .unwrap();
 
+    // Same validation as contract! — the no-resources-in-signatures rule is
+    // what lets the shims below treat every signature type as plain data.
+    let validation = wit_validator::Validator::validate_resolve(&resolve);
+    if validation.has_errors() {
+        let messages: Vec<String> = validation
+            .errors
+            .iter()
+            .map(|e| format!("  - {e}"))
+            .collect();
+        panic!(
+            "WIT validation failed for imported contract at {}:\n{}",
+            abs_path.display(),
+            messages.join("\n")
+        );
+    }
+
     let exports = world
         .exports
         .iter()
@@ -80,54 +106,112 @@ pub fn import(
         })
         .collect::<Vec<_>>();
 
-    let mut type_streams = Vec::new();
-    for (_id, def) in resolve.types.iter().filter(|(_, def)| {
-        // Aliases (`use other-iface.{t}` / `type a = b`) are references to
-        // definitions emitted elsewhere — never re-print them (the referenced
-        // definition is either a skipped built-in or printed on its own).
-        if matches!(def.kind, TypeDefKind::Type(_)) {
-            return false;
+    let mut with_entries = Vec::new();
+    for (_key, item) in world.imports.iter() {
+        let WorldItem::Interface { id, .. } = item else {
+            continue;
+        };
+        let iface = &resolve.interfaces[*id];
+        let Some(pkg_id) = iface.package else {
+            continue;
+        };
+        let pkg_name = &resolve.packages[pkg_id].name;
+        if pkg_name.namespace != "kontor" || pkg_name.name != "built-in" {
+            continue;
         }
-        if let Some(name) = def.name.as_deref() {
-            ![
-                "transaction",
-                "contract",
-                "contract-address",
-                "view-context",
-                "view-storage",
-                "fall-context",
-                "proc-context",
-                "proc-storage",
-                "core-context",
-                "signer",
-                "holder",
-                "holder-ref",
-                "file-descriptor",
-                "raw-file-descriptor",
-                "proof",
-                "challenge-input",
-                "verify-result",
-                "error",
-                "keys",
-                "index-rows",
-                "integer",
-                "decimal",
-            ]
-            .contains(&name)
+        let Some(iface_name) = iface.name.as_deref() else {
+            continue;
+        };
+        if let Some((_, module)) = REMAPPED_BUILT_INS.iter().find(|(n, _)| *n == iface_name) {
+            with_entries.push((
+                format!("kontor:built-in/{iface_name}"),
+                wit_bindgen_rust::WithOption::Path(module.to_string()),
+            ));
         } else {
-            false
+            // Un-remapped built-ins regenerate as dead stubs. Their resources
+            // can't reach the shims (validator rule above); a plain data type
+            // here would generate as a twin family, so reject it.
+            let owns_data_types = resolve.types.iter().any(|(_, td)| {
+                td.name.is_some()
+                    && td.owner == TypeOwner::Interface(*id)
+                    && !matches!(td.kind, TypeDefKind::Type(_) | TypeDefKind::Resource)
+            });
+            if owns_data_types {
+                panic!(
+                    "built-in interface `{iface_name}` owns data type definitions but \
+                     has no `with:` remap in macros/src/import.rs REMAPPED_BUILT_INS — \
+                     add it (generated once in built-in-types) or its types will be \
+                     generated twice"
+                );
+            }
         }
-    }) {
-        let name = def.name.as_deref().expect("Filtered types have names");
-        let stream = match &def.kind {
-            TypeDefKind::Record(record) => print_typedef_record(&resolve, name, record),
-            TypeDefKind::Enum(enum_) => print_typedef_enum(name, enum_),
-            TypeDefKind::Variant(variant) => print_typedef_variant(&resolve, name, variant),
-            _ => panic!("Unsupported type definition kind: {:?}", def.kind),
-        }
-        .expect("Failed to generate type");
-        type_streams.push(stream);
     }
+
+    // wit-bindgen's library backend, driven directly (its parser is a
+    // different version than `resolve`'s, hence the second parse) so the
+    // output can be doctored: exports cleared (we call this world, we don't
+    // implement it) and the component-type section static filtered below (it
+    // would merge this world into the contract's chain-visible WIT).
+    let mut gen_resolve = wit_bindgen_core::wit_parser::Resolve::new();
+    gen_resolve
+        .push_dir(abs_path.to_string_lossy().to_string())
+        .expect("imported wit dir parses under wit-bindgen's parser");
+    let gen_world_id = gen_resolve
+        .worlds
+        .iter()
+        .find(|(_, w)| w.name == world_name)
+        .map(|(id, _)| id)
+        .expect("imported world exists under wit-bindgen's parser");
+    gen_resolve.worlds[gen_world_id].exports = Default::default();
+
+    let opts = wit_bindgen_rust::Opts {
+        generate_all: true,
+        generate_unused_types: true,
+        additional_derive_attributes: vec![
+            "stdlib::Wavey".to_string(),
+            "PartialEq".to_string(),
+            "Eq".to_string(),
+        ],
+        with: with_entries,
+        runtime_path: Some("stdlib::wit_bindgen::rt".to_string()),
+        disable_custom_section_link_helpers: true,
+        ..Default::default()
+    };
+    let mut generator = opts.build();
+    let mut files = wit_bindgen_core::Files::default();
+    wit_bindgen_core::WorldGenerator::generate(
+        &mut generator,
+        &mut gen_resolve,
+        gen_world_id,
+        &mut files,
+    )
+    .expect("wit-bindgen generation for the imported world");
+    let (_name, contents) = files.iter().next().expect("one generated bindings file");
+    let generated =
+        syn::parse_file(std::str::from_utf8(contents).expect("generated bindings are utf-8"))
+            .expect("generated bindings parse");
+    let items_before = generated.items.len();
+    let bindings_items: Vec<syn::Item> = generated
+        .items
+        .into_iter()
+        .filter(|item| match item {
+            syn::Item::Static(item_static) => !item_static.attrs.iter().any(|attr| {
+                quote!(#attr)
+                    .to_string()
+                    .contains("component-type:wit-bindgen")
+            }),
+            _ => true,
+        })
+        .collect();
+    // If a wit-bindgen bump renames the section, filtering nothing would be a
+    // silent regression — fail instead.
+    assert_eq!(
+        items_before - bindings_items.len(),
+        1,
+        "expected to filter exactly one component-type custom-section static \
+         from wit-bindgen's output — its section naming has changed; update \
+         the filter in macros/src/import.rs"
+    );
 
     let mut func_streams = Vec::new();
     for export in exports.iter() {
@@ -186,6 +270,9 @@ pub fn import(
     };
 
     quote! {
+        // Generated glue may reference the guest context wrappers the
+        // disallowed-types fence targets.
+        #[allow(clippy::disallowed_types)]
         #mod_keywords #module_name {
             extern crate alloc;
 
@@ -195,6 +282,13 @@ pub fn import(
                 vec::Vec,
             };
 
+            mod __bindings {
+                #(#bindings_items)*
+            }
+            // Explicit `use super::…` names below shadow same-named aliases
+            // from this glob (same underlying types).
+            pub use __bindings::*;
+
             #wave_mod_keywords wave {
                 use super::*;
 
@@ -203,7 +297,6 @@ pub fn import(
 
             #supers
 
-            #(#type_streams)*
             #(#func_streams)*
         }
     }
@@ -520,69 +613,5 @@ pub fn generate_functions(
         }
 
         #call_constructor
-    })
-}
-
-pub fn print_typedef_record(resolve: &Resolve, name: &str, record: &Record) -> Result<TokenStream> {
-    let struct_name = Ident::new(&name.to_upper_camel_case(), Span::call_site());
-    let fields = record
-        .fields
-        .iter()
-        .map(|field| {
-            let field_name = Ident::new(&field.name.to_snake_case(), Span::call_site());
-            let field_ty = utils::wit_type_to_rust_type(resolve, &field.ty, false)?;
-            Ok(quote! { pub #field_name: #field_ty })
-        })
-        .collect::<Result<Vec<_>>>()?;
-
-    Ok(quote! {
-        #[derive(Debug, Clone, stdlib::Wavey, PartialEq, Eq)]
-        pub struct #struct_name {
-            #(#fields),*
-        }
-    })
-}
-
-pub fn print_typedef_enum(name: &str, enum_: &Enum) -> Result<TokenStream> {
-    let enum_name = Ident::new(&name.to_upper_camel_case(), Span::call_site());
-    let variants = enum_.cases.iter().map(|case| {
-        let variant_name = Ident::new(&case.name.to_upper_camel_case(), Span::call_site());
-        quote! { #variant_name }
-    });
-
-    Ok(quote! {
-        #[derive(Debug, Clone, Copy, PartialEq, Eq, stdlib::Wavey)]
-        pub enum #enum_name {
-            #(#variants),*
-        }
-    })
-}
-
-pub fn print_typedef_variant(
-    resolve: &Resolve,
-    name: &str,
-    variant: &Variant,
-) -> Result<TokenStream> {
-    let enum_name = Ident::new(&name.to_upper_camel_case(), Span::call_site());
-    let variants = variant
-        .cases
-        .iter()
-        .map(|case| {
-            let variant_name = Ident::new(&case.name.to_upper_camel_case(), Span::call_site());
-            match &case.ty {
-                Some(ty) => {
-                    let ty_name = utils::wit_type_to_rust_type(resolve, ty, false)?;
-                    Ok(quote! { #variant_name(#ty_name) })
-                }
-                None => Ok(quote! { #variant_name }),
-            }
-        })
-        .collect::<Result<Vec<_>>>()?;
-
-    Ok(quote! {
-        #[derive(Debug, Clone, stdlib::Wavey, PartialEq, Eq)]
-        pub enum #enum_name {
-            #(#variants),*
-        }
     })
 }
