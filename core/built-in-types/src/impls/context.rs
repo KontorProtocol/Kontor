@@ -10,24 +10,8 @@ use crate::kontor::built_in::context;
 // --- context data types (moved from the retired `impls!` macro and the
 // per-contract glue; stdlib traits + grammars on types this crate owns) ---
 
-// The grammar macros expand bare identifiers (`Vec`, `OutPoint`, `format!`,
-// `ToString`) — the same scope `contract!`'s preamble provided is recreated in
-// this module (the trait impls they emit are globally visible regardless).
-mod grammar {
-    #[allow(unused_imports)]
-    use alloc::{
-        format,
-        string::{String, ToString},
-        vec::Vec,
-    };
-
-    use crate::kontor;
-    #[allow(unused_imports)]
-    use crate::kontor::built_in::context_types::OutPoint;
-
-    stdlib::contract_address!(kontor::built_in::context_types::ContractAddress);
-    stdlib::holder_ref!(kontor::built_in::context_types::HolderRef);
-}
+stdlib::contract_address!(kontor::built_in::context_types::ContractAddress);
+stdlib::holder_ref!(kontor::built_in::context_types::HolderRef);
 
 impl kontor::built_in::context_types::Network {
     /// True on the production Bitcoin mainnet chain.

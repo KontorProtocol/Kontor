@@ -8,6 +8,8 @@ use syn::Ident;
 use wit_parser::{Resolve, Type, TypeDefKind, TypeId, TypeOwner, WorldId};
 use wit_validator::Validator;
 
+use crate::remap::REMAPPED_BUILT_INS;
+
 /// The world every contract's WIT declares. Also the prefix of a fully-qualified
 /// wit-bindgen selector for a type declared directly in that world.
 const WORLD: &str = "root";
@@ -328,14 +330,6 @@ pub fn generate(config: Config) -> TokenStream {
     // Same twin-family guard as import!: a built-in interface missing from the
     // with: block below regenerates per-crate; data types there would silently
     // twin the shared family (resources can't reach signatures — validator).
-    const REMAPPED: &[&str] = &[
-        "file-registry-types",
-        "error",
-        "numbers",
-        "numbers-types",
-        "context-types",
-        "context",
-    ];
     for (_, td) in resolve.types.iter() {
         let TypeOwner::Interface(iface_id) = td.owner else {
             continue;
@@ -348,7 +342,10 @@ pub fn generate(config: Config) -> TokenStream {
         if in_built_in
             && td.name.is_some()
             && !matches!(td.kind, TypeDefKind::Type(_) | TypeDefKind::Resource)
-            && !iface.name.as_deref().is_some_and(|n| REMAPPED.contains(&n))
+            && !iface
+                .name
+                .as_deref()
+                .is_some_and(|n| REMAPPED_BUILT_INS.iter().any(|(r, _)| *r == n))
         {
             panic!(
                 "built-in interface `{}` owns data type `{}` but is not in contract!'s \
@@ -359,6 +356,16 @@ pub fn generate(config: Config) -> TokenStream {
             );
         }
     }
+
+    let with_entries = REMAPPED_BUILT_INS.iter().map(|(name, module)| {
+        let key = format!("kontor:built-in/{name}");
+        let module: TokenStream = module.parse().expect("static module path parses");
+        quote! { #key: #module, }
+    });
+    let module_aliases = REMAPPED_BUILT_INS.iter().map(|(_, module)| {
+        let module: TokenStream = module.parse().expect("static module path parses");
+        quote! { use #module; }
+    });
 
     quote! {
         extern crate alloc;
@@ -374,25 +381,10 @@ pub fn generate(config: Config) -> TokenStream {
             path: #path,
             generate_all,
             generate_unused_types: true,
-            // Types-only built-in interfaces come from the shared
-            // `built-in-types` crate — generated once there (with Storage/Wavey
-            // and their hand impls), aliased here instead of regenerated. The
-            // host bindgen remaps the same interfaces onto the same types, so
-            // guest and host share one type family for them.
-            with: {
-                "kontor:built-in/file-registry-types": built_in_types::file_registry_types,
-                "kontor:built-in/error": built_in_types::error,
-                "kontor:built-in/numbers": built_in_types::numbers,
-                "kontor:built-in/numbers-types": built_in_types::numbers_types,
-                "kontor:built-in/context-types": built_in_types::context_types,
-                // The resource-bearing context interface remaps too: the
-                // handle-wrapper types (signer, holder, storages, contexts)
-                // and all hand impls + storage trait plumbing on them live in
-                // `built-in-types` — the wasm import strings (including the
-                // resource-drop intrinsics) don't depend on which crate
-                // compiles them.
-                "kontor:built-in/context": built_in_types::context,
-            },
+            // Built-in interfaces come from the shared `built-in-types` crate
+            // (generated once, with hand impls); the host bindgen remaps the
+            // same interfaces onto the same types.
+            with: { #(#with_entries)* },
             additional_derives: [stdlib::Storage, stdlib::Wavey],
             #type_attrs
             export_macro_name: "__export__",
@@ -401,17 +393,10 @@ pub fn generate(config: Config) -> TokenStream {
         });
 
         use kontor::built_in::*;
-        // The remapped types-only interface generates no module here — surface
-        // the shared crate's module under the same name the un-remapped
-        // generation used (bare `file_registry_types::…` in contract code and
-        // `super::file_registry_types::…` in `import!` expansions).
-        use built_in_types::context;
+        // Remapped interfaces generate no module here — surface the shared
+        // crate's modules under the names the un-remapped generation used.
+        #(#module_aliases)*
         use built_in_types::context::{Holder, OutPoint};
-        use built_in_types::context_types;
-        use built_in_types::error;
-        use built_in_types::file_registry_types;
-        use built_in_types::numbers;
-        use built_in_types::numbers_types;
         // `ctx.model()` resolves through this trait (implemented by the
         // Root/StorageRoot derive); the anonymous import guarantees it is in
         // scope even in contracts that don't glob-import stdlib.

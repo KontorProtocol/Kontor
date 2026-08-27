@@ -3,7 +3,7 @@
 //! The `kontor:built-in` data interfaces are generated into Rust exactly ONCE,
 //! here; every other consumer aliases this family instead of generating its
 //! own — the host (wasmtime `bindgen!`) via an interface-level `with:` onto
-//! [`host_facade`], and (in a later stage) contracts via wit-bindgen's `with:`.
+//! [`host_facade`], and contracts via wit-bindgen's `with:` in `contract!`.
 //! Hand-written behavior on these types lives HERE as ordinary owned impls —
 //! the replacement for the write-once-expand-twice `impls!()` pattern, which
 //! existed only because two bindgens produced twin type families that no crate
