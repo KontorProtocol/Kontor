@@ -345,6 +345,7 @@ pub fn generate(config: Config) -> TokenStream {
                 "kontor:built-in/error": built_in_types::error,
                 "kontor:built-in/numbers": built_in_types::numbers,
                 "kontor:built-in/numbers-types": built_in_types::numbers_types,
+                "kontor:built-in/context-types": built_in_types::context_types,
             },
             additional_derives: [stdlib::Storage, stdlib::Wavey],
             #type_attrs
@@ -358,13 +359,14 @@ pub fn generate(config: Config) -> TokenStream {
         // the shared crate's module under the same name the un-remapped
         // generation used (bare `file_registry_types::…` in contract code and
         // `super::file_registry_types::…` in `import!` expansions).
+        use built_in_types::context_types;
         use built_in_types::error;
         use built_in_types::file_registry_types;
         use built_in_types::numbers;
         use built_in_types::numbers_types;
         use kontor::built_in::context::{Holder, OutPoint};
-        use kontor::built_in::context::{ContractAddressModel, ContractAddressWriteModel};
         use built_in_types::numbers_types::{IntegerModel, IntegerWriteModel, DecimalModel, DecimalWriteModel};
+        use built_in_types::context_types::{ContractAddressModel, ContractAddressWriteModel};
 
         type Map<K, V> = stdlib::StorageMap<K, V, context::ProcStorage>;
         type Deque<V> = stdlib::StorageDeque<V, context::ProcStorage>;
@@ -525,23 +527,6 @@ pub fn generate(config: Config) -> TokenStream {
             }
         }
 
-        // Retrieval is a READ; with the models generic over the handle, one
-        // impl per type serves both storages (the read model instantiates at
-        // whichever handle the caller holds) — the old per-context pairs
-        // collapse.
-        impl<__S: stdlib::ReadStorage + 'static> Retrieve<__S> for context::ContractAddress {
-            fn __get(ctx: &alloc::rc::Rc<__S>, path: stdlib::KeyPath) -> Option<Self> {
-                stdlib::ReadStorage::__exists(ctx, &path).then(|| context::ContractAddressModel::new(ctx.clone(), path).load())
-            }
-        }
-
-        impl<__S: stdlib::ReadStorage> Retrieve<__S> for context::HolderRef {
-            fn __get(ctx: &alloc::rc::Rc<__S>, path: stdlib::KeyPath) -> Option<Self> {
-                let s: String = stdlib::ReadStorage::__get(ctx, path)?;
-                s.parse().ok()
-            }
-        }
-
         // Holder is serialized via its canonical key string (same as the
         // `Map<Holder, _>` key pattern). Reads parse via `FromStr` and
         // return `None` on a missing entry; the macro-generated getter's
@@ -581,12 +566,102 @@ pub fn generate(config: Config) -> TokenStream {
                 }
             )*};
         }
-        // (HolderRef is a storage enum and already gets a discriminant `IndexKey`;
-        // Integer/Decimal carry their IndexKey/KeyElement/Retrieve impls in
-        // `built-in-types`, which owns them.)
-        __index_key_via_display!(context::Holder, context::ContractAddress);
+        // (HolderRef is a storage enum with a discriminant `IndexKey`;
+        // ContractAddress/Integer/Decimal carry their IndexKey/KeyElement/
+        // Retrieve impls in `built-in-types`, which owns them. Holder is a
+        // RESOURCE — per-contract by nature, its impls live right here.)
+        __index_key_via_display!(context::Holder);
 
-        impls!();
+        // The per-side RESOURCE impls (the permanent remnant of the retired
+        // `impls!` macro): Holder/Signer are host-issued handles, generated
+        // per contract, so behavior on them cannot live in `built-in-types` —
+        // everything data-typed moved there; this is what legitimately stays.
+        impl core::fmt::Display for context::Signer {
+            fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+                write!(f, "{}", self.key())
+            }
+        }
+
+        impl core::fmt::Display for context::Holder {
+            fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+                write!(f, "{}", self.key())
+            }
+        }
+
+        impl Clone for context::Holder {
+            fn clone(&self) -> Self {
+                context::Holder::from_ref(&self.as_ref()).expect("clone of valid Holder failed")
+            }
+        }
+
+        impl PartialEq for context::Holder {
+            fn eq(&self, other: &Self) -> bool {
+                self.key() == other.key()
+            }
+        }
+
+        impl Eq for context::Holder {}
+
+        impl core::str::FromStr for context::Holder {
+            type Err = alloc::string::String;
+
+            fn from_str(s: &str) -> Result<Self, Self::Err> {
+                let holder_ref: built_in_types::context_types::HolderRef = s.parse()?;
+                context::Holder::from_ref(&holder_ref).map_err(|e| alloc::format!("{:?}", e))
+            }
+        }
+
+        impl TryFrom<built_in_types::context_types::HolderRef> for context::Holder {
+            type Error = built_in_types::error::Error;
+
+            fn try_from(holder_ref: built_in_types::context_types::HolderRef) -> Result<Self, Self::Error> {
+                context::Holder::from_ref(&holder_ref)
+            }
+        }
+
+        impl TryFrom<&built_in_types::context_types::HolderRef> for context::Holder {
+            type Error = built_in_types::error::Error;
+
+            fn try_from(holder_ref: &built_in_types::context_types::HolderRef) -> Result<Self, Self::Error> {
+                context::Holder::from_ref(holder_ref)
+            }
+        }
+
+        impl From<&context::Signer> for context::Holder {
+            fn from(signer: &context::Signer) -> Self {
+                signer.as_holder()
+            }
+        }
+
+        impl From<context::Signer> for context::Holder {
+            fn from(signer: context::Signer) -> Self {
+                signer.as_holder()
+            }
+        }
+
+        impl From<&context::Signer> for built_in_types::context_types::HolderRef {
+            fn from(signer: &context::Signer) -> Self {
+                signer.as_ref()
+            }
+        }
+
+        impl From<context::Signer> for built_in_types::context_types::HolderRef {
+            fn from(signer: context::Signer) -> Self {
+                signer.as_ref()
+            }
+        }
+
+        impl From<&context::Holder> for built_in_types::context_types::HolderRef {
+            fn from(holder: &context::Holder) -> Self {
+                holder.as_ref()
+            }
+        }
+
+        impl From<context::Holder> for built_in_types::context_types::HolderRef {
+            fn from(holder: context::Holder) -> Self {
+                holder.as_ref()
+            }
+        }
 
         struct #name;
 

@@ -669,3 +669,76 @@ impl<__S: stdlib::ReadStorage + 'static> stdlib::Retrieve<__S>
             .then(|| kontor::built_in::numbers_types::DecimalModel::new(ctx.clone(), path).load())
     }
 }
+
+// --- context data types (moved from the retired `impls!` macro and the
+// per-contract glue; stdlib traits + grammars on types this crate owns) ---
+
+// The grammar macros expand bare identifiers (`Vec`, `OutPoint`, `format!`,
+// `ToString`) — the same scope `contract!`'s preamble provided is recreated in
+// this module (the trait impls they emit are globally visible regardless).
+mod grammar {
+    #[allow(unused_imports)]
+    use alloc::{
+        format,
+        string::{String, ToString},
+        vec::Vec,
+    };
+
+    use crate::kontor;
+    #[allow(unused_imports)]
+    use crate::kontor::built_in::context_types::OutPoint;
+
+    stdlib::contract_address!(kontor::built_in::context_types::ContractAddress);
+    stdlib::holder_ref!(kontor::built_in::context_types::HolderRef);
+}
+
+impl kontor::built_in::context_types::Network {
+    /// True on the production Bitcoin mainnet chain.
+    pub fn is_mainnet(&self) -> bool {
+        matches!(self, kontor::built_in::context_types::Network::Mainnet)
+    }
+    /// True on the local regtest chain (dev/test).
+    pub fn is_regtest(&self) -> bool {
+        matches!(self, kontor::built_in::context_types::Network::Regtest)
+    }
+}
+
+// `SignerRef` is the two real-account arms of `HolderRef`; widening it is
+// total. Lets `detach` turn an op-return recipient into a `HolderRef` (then a
+// `Holder`) directly.
+impl From<kontor::built_in::context_types::SignerRef>
+    for kontor::built_in::context_types::HolderRef
+{
+    fn from(signer_ref: kontor::built_in::context_types::SignerRef) -> Self {
+        match signer_ref {
+            kontor::built_in::context_types::SignerRef::SignerId(id) => Self::SignerId(id),
+            kontor::built_in::context_types::SignerRef::XOnlyPubkey(pk) => Self::XOnlyPubkey(pk),
+        }
+    }
+}
+
+/// `#[index]` on a ContractAddress field buckets by its canonical string.
+impl stdlib::IndexKey for kontor::built_in::context_types::ContractAddress {
+    fn index_key(&self) -> alloc::vec::Vec<u8> {
+        stdlib::KeyElement::encode(&alloc::string::ToString::to_string(self))
+    }
+}
+
+impl<__S: stdlib::ReadStorage + 'static> stdlib::Retrieve<__S>
+    for kontor::built_in::context_types::ContractAddress
+{
+    fn __get(ctx: &alloc::rc::Rc<__S>, path: stdlib::KeyPath) -> Option<Self> {
+        stdlib::ReadStorage::__exists(ctx, &path).then(|| {
+            kontor::built_in::context_types::ContractAddressModel::new(ctx.clone(), path).load()
+        })
+    }
+}
+
+impl<__S: stdlib::ReadStorage> stdlib::Retrieve<__S>
+    for kontor::built_in::context_types::HolderRef
+{
+    fn __get(ctx: &alloc::rc::Rc<__S>, path: stdlib::KeyPath) -> Option<Self> {
+        let s: String = stdlib::ReadStorage::__get(ctx, path)?;
+        s.parse().ok()
+    }
+}

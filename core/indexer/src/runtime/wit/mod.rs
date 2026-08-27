@@ -30,6 +30,7 @@ wasmtime::component::bindgen!({
         "kontor:built-in/file-registry-types": built_in_types::host_facade,
         "kontor:built-in/numbers-types": built_in_types::host_facade_numbers_types,
         "kontor:built-in/error": built_in_types::host_facade_error,
+        "kontor:built-in/context-types": built_in_types::host_facade_context_types,
     },
     additional_derives: [stdlib::Wavey, serde::Deserialize],
     imports: {

@@ -22,7 +22,7 @@ async fn simulate_success_has_no_error_message() -> Result<()> {
             Inst {
                 gas_limit: 10_000,
                 kind: InstKind::Call {
-                    contract: crypto.clone().into(),
+                    contract: crypto.clone(),
                     expr: "set-hash(\"foo\")".to_string(),
                 },
             },
@@ -64,7 +64,7 @@ async fn simulate_parse_error_surfaces_message() -> Result<()> {
             Inst {
                 gas_limit: 10_000,
                 kind: InstKind::Call {
-                    contract: crypto.clone().into(),
+                    contract: crypto.clone(),
                     expr: "this-is-not-valid-wave-syntax(((".to_string(),
                 },
             },
@@ -151,21 +151,21 @@ async fn simulate_mixed_outcomes_align_positionally() -> Result<()> {
                 Inst {
                     gas_limit: 10_000,
                     kind: InstKind::Call {
-                        contract: crypto.clone().into(),
+                        contract: crypto.clone(),
                         expr: "set-hash(\"a\")".to_string(),
                     },
                 },
                 Inst {
                     gas_limit: 10_000,
                     kind: InstKind::Call {
-                        contract: crypto.clone().into(),
+                        contract: crypto.clone(),
                         expr: "garbage)))".to_string(),
                     },
                 },
                 Inst {
                     gas_limit: 10_000,
                     kind: InstKind::Call {
-                        contract: crypto.clone().into(),
+                        contract: crypto.clone(),
                         expr: "set-hash(\"c\")".to_string(),
                     },
                 },
@@ -219,7 +219,7 @@ async fn inspect_never_populates_error_message() -> Result<()> {
             Inst {
                 gas_limit: 10_000,
                 kind: InstKind::Call {
-                    contract: crypto.clone().into(),
+                    contract: crypto.clone(),
                     expr: "definitely-bad-wave)))".to_string(),
                 },
             },
@@ -243,7 +243,7 @@ async fn inspect_never_populates_error_message() -> Result<()> {
     let happy_inst = Inst {
         gas_limit: 10_000,
         kind: InstKind::Call {
-            contract: crypto.clone().into(),
+            contract: crypto.clone(),
             expr: "set-hash(\"inspect-check\")".to_string(),
         },
     };

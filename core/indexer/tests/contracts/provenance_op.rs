@@ -57,7 +57,7 @@ async fn provenance_log_append_and_owner_authz_regtest() -> Result<()> {
         Inst {
             gas_limit: 50_000,
             kind: InstKind::UpdateProvenance {
-                contract: address.clone().into(),
+                contract: address.clone(),
                 provenance: updated.clone(),
             },
         },
@@ -87,7 +87,7 @@ async fn provenance_log_append_and_owner_authz_regtest() -> Result<()> {
             Inst {
                 gas_limit: 50_000,
                 kind: InstKind::UpdateProvenance {
-                    contract: address.clone().into(),
+                    contract: address.clone(),
                     provenance: malicious,
                 },
             },

@@ -40,7 +40,7 @@ async fn test_native_token_attach_contract() -> Result<()> {
     let attach_inst = Inst {
         gas_limit: 50_000,
         kind: InstKind::Call {
-            contract: runtime::token::address().into(),
+            contract: runtime::token::address(),
             expr: token::wave::attach_call_expr(0, 2u64.try_into().unwrap()),
         },
     };
@@ -48,7 +48,7 @@ async fn test_native_token_attach_contract() -> Result<()> {
     let detach_inst = Inst {
         gas_limit: 50_000,
         kind: InstKind::Call {
-            contract: runtime::token::address().into(),
+            contract: runtime::token::address(),
             expr: token::wave::detach_call_expr(),
         },
     };

@@ -53,13 +53,7 @@ async fn status_classification_ok() -> Result<()> {
     let mut rt = runtime.reg_tester().unwrap();
     let mut ident = rt.identity().await?;
 
-    let results = simulate_call(
-        &mut rt,
-        &mut ident,
-        crypto.into(),
-        "set-hash(\"status-test\")",
-    )
-    .await?;
+    let results = simulate_call(&mut rt, &mut ident, crypto, "set-hash(\"status-test\")").await?;
     assert_eq!(results.len(), 1);
     let row = results[0]
         .result()
@@ -80,7 +74,7 @@ async fn status_classification_trap() -> Result<()> {
     let mut rt = runtime.reg_tester().unwrap();
     let mut ident = rt.identity().await?;
 
-    let results = simulate_call(&mut rt, &mut ident, contract.into(), "trap-div-zero()").await?;
+    let results = simulate_call(&mut rt, &mut ident, contract, "trap-div-zero()").await?;
     assert_eq!(results.len(), 1);
     let row = results[0]
         .result()
@@ -106,7 +100,7 @@ async fn status_classification_out_of_fuel() -> Result<()> {
     let mut rt = runtime.reg_tester().unwrap();
     let mut ident = rt.identity().await?;
 
-    let results = simulate_call(&mut rt, &mut ident, contract.into(), "trap-out-of-fuel()").await?;
+    let results = simulate_call(&mut rt, &mut ident, contract, "trap-out-of-fuel()").await?;
     assert_eq!(results.len(), 1);
     let row = results[0]
         .result()

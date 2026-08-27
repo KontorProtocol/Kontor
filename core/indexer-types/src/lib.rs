@@ -4,7 +4,7 @@ use anyhow::Result;
 use bitcoin::hex::DisplayHex;
 use bitcoin::{BlockHash, ScriptBuf, Txid, XOnlyPublicKey, taproot::LeafVersion};
 use bon::Builder;
-use macros::{contract_address, holder_ref};
+use macros::holder_ref;
 use serde::{Deserialize, Serialize};
 use serde_with::{DisplayFromStr, serde_as};
 use ts_rs::TS;
@@ -471,14 +471,9 @@ impl core::fmt::Display for OutPoint {
     }
 }
 
-#[derive(Debug, Clone)]
-pub struct ContractAddress {
-    pub name: String,
-    pub height: u64,
-    pub tx_index: u32,
-}
-
-contract_address!(ContractAddress);
+// The shared `built-in-types` ContractAddress (Display/FromStr grammar and
+// Eq included) — the hand mirror this crate used to carry is gone.
+pub use built_in_types::context_types::ContractAddress;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[ts(export, export_to = "../../../sdk/src/bindings.d.ts")]

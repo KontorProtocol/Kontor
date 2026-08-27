@@ -604,7 +604,7 @@ async fn execute_op(
         }
         OpKind::Call { contract, expr, .. } => {
             match runtime
-                .execute(Some(&signer), Some(payment), &(contract.into()), expr)
+                .execute(Some(&signer), Some(payment), contract, expr)
                 .await
             {
                 Ok(_) => Ok(None),
@@ -642,7 +642,7 @@ async fn execute_op(
                     return Err(e.context("system.provenance-updated infrastructure failure"));
                 }
             }
-            let address = crate::runtime::ContractAddress::from(contract);
+            let address = contract.clone();
             match runtime
                 .update_provenance(op.metadata.signer_id, &address, provenance)
                 .await

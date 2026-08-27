@@ -5,11 +5,13 @@ const WIT: &str = r#"package root:component;
 
 world root {
   import kontor:built-in/error;
+  import kontor:built-in/context-types;
   import kontor:built-in/context;
   import kontor:built-in/numbers-types;
   import kontor:built-in/deposit;
   import kontor:built-in/numbers;
-  use kontor:built-in/context.{view-context, proc-context, signer, holder-ref, contract};
+  use kontor:built-in/context.{view-context, proc-context, signer, contract};
+  use kontor:built-in/context-types.{holder-ref};
   use kontor:built-in/error.{error};
   use kontor:built-in/numbers-types.{decimal};
 

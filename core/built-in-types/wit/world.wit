@@ -11,6 +11,7 @@ world shared {
     // `crate::error` in lib.rs) is what resolves it here.
     import kontor:built-in/error;
     import kontor:built-in/numbers-types;
+    import kontor:built-in/context-types;
     // The function-bearing numbers interface is generated here ONCE too — the
     // extern import wrappers live in this crate and guests remap onto them
     // (the wasm import strings don't depend on which crate compiles them).
