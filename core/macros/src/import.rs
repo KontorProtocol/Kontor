@@ -137,6 +137,17 @@ pub fn import(
             // Alias nodes (`use other-iface.{t}`) don't count: they are
             // references to definitions owned elsewhere (possibly remapped),
             // not definitions this interface would re-mint.
+            //
+            // Why not remap file-registry into built-in-types and make the
+            // simple "un-remapped built-ins own no types" rule total? Because
+            // built-in-types' own embedded component-type section merges its
+            // `shared` world into EVERY contract's component type at
+            // componentization — invisible only while the shared world's
+            // imports are a SUBSET of every contract world's imports.
+            // file-registry is native-only: adding it to the shared world
+            // stamps `import kontor:built-in/file-registry` into every user
+            // contract's chain-visible WIT (verified empirically). This
+            // reachability guard is the price of that boundary.
             if export_reachable.iter().any(|tid| {
                 resolve.types[*tid].owner == TypeOwner::Interface(*id)
                     && !matches!(resolve.types[*tid].kind, TypeDefKind::Type(_))
