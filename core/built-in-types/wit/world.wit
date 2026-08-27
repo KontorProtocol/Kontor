@@ -22,12 +22,8 @@ world shared {
     // once instead of expanded into every contract crate. The HOST does not
     // remap this one — its context resources are Runtime-backed host objects.
     import kontor:built-in/context;
-    // INVARIANT: this world may only import interfaces that EVERY contract
-    // world imports. The generate! below embeds a component-type section that
-    // rides into every contract binary and merges into its component type at
-    // componentization — invisible exactly while these imports are a subset of
-    // the contract's own. That is why native-only interfaces (file-registry)
-    // must NOT be added here: doing so stamps their import into every user
-    // contract's chain-visible WIT (verified empirically; import.rs's
-    // reachability guard polices the resulting exception instead).
+    // INVARIANT: only interfaces EVERY contract world imports may appear
+    // here — this world's embedded component-type section merges into every
+    // contract's component type, so a native-only import (file-registry)
+    // would leak into every user contract's chain-visible WIT.
 }
