@@ -12,9 +12,8 @@ use ::numerics as core_numerics;
 
 use super::{Decimal, Error, Integer, NumericOrdering};
 
-// The wit-shape ↔ numerics-crate conversions and the BigInt round-trip live
-// in `built-in-types` now (which owns the shared types); the wrappers below
-// use them via `.into()` like before.
+// The wit-shape ↔ numerics-crate conversions live in `built-in-types` (which
+// owns the shared types); the wrappers below use them via `.into()`.
 
 // ─── wrapper functions: same signatures as before, delegating ───────
 

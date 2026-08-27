@@ -144,7 +144,7 @@ const CANONICAL_TYPES: Record<string, string> = {
   "kontor:built-in/numbers-types.decimal": "Decimal",
   "kontor:built-in/numbers-types.integer": "Integer",
   "kontor:built-in/context-types.holder-ref": "HolderRef",
-  "kontor:built-in/foreign.contract-address": "ContractAddress",
+  "kontor:built-in/context-types.contract-address": "ContractAddress",
 };
 
 // ─── Shared utilities ──────────────────────────────────────────

@@ -51,11 +51,6 @@ struct IndexDeclSpec {
 }
 
 impl IndexDeclSpec {
-    /// True when the sugar form was used and `name` doubles as the bucket field.
-    fn name_is_field(&self) -> bool {
-        self.by.is_empty() && self.sort.is_none() && self.include.is_empty()
-    }
-
     /// Render as the Rust struct-level attribute string
     /// `#[index(name, by = …, sort = …, include = (…))]`.
     fn render(&self) -> String {
@@ -222,12 +217,18 @@ fn validate_indexed_record(
     // record/field named instead of letting the derive produce an opaque trait
     // error. `include` permits lists (projected as `KeyElement` bytes).
     let check = |field: &str, allow_list: bool| {
-        if let Some(kind) = resolved_kind(resolve, lookup(field)) {
+        // Option participates in indexes (none/some discriminant bucketing,
+        // Option<KeyElement> sort keys) — validate the inner shape instead.
+        let mut ty = lookup(field);
+        if let Some(TypeDefKind::Option(inner)) = resolved_kind(resolve, ty) {
+            ty = inner;
+        }
+        if let Some(kind) = resolved_kind(resolve, ty) {
             let bad = match kind {
                 TypeDefKind::Record(_) => Some("a record"),
                 TypeDefKind::List(_) if !allow_list => Some("a list"),
                 TypeDefKind::Tuple(_) => Some("a tuple"),
-                TypeDefKind::Option(_) => Some("an option"),
+                TypeDefKind::Option(_) => Some("a nested option"),
                 TypeDefKind::Result(_) => Some("a result"),
                 TypeDefKind::Flags(_) => Some("flags"),
                 _ => None,
@@ -243,7 +244,9 @@ fn validate_indexed_record(
     };
 
     for spec in specs {
-        if spec.name_is_field() {
+        // The derive defaults the bucket to `name` whenever `by` is absent —
+        // even with `sort`/`include` present — so validate it in that case too.
+        if spec.by.is_empty() {
             check(&spec.name, false);
         }
         for field in &spec.by {
@@ -321,6 +324,42 @@ pub fn generate(config: Config) -> TokenStream {
 
     let path = abs_path.to_string_lossy().to_string();
     let type_attrs = type_attr_options(&resolve, config.indexed.as_deref());
+
+    // Same twin-family guard as import!: a built-in interface missing from the
+    // with: block below regenerates per-crate; data types there would silently
+    // twin the shared family (resources can't reach signatures — validator).
+    const REMAPPED: &[&str] = &[
+        "file-registry-types",
+        "error",
+        "numbers",
+        "numbers-types",
+        "context-types",
+        "context",
+    ];
+    for (_, td) in resolve.types.iter() {
+        let TypeOwner::Interface(iface_id) = td.owner else {
+            continue;
+        };
+        let iface = &resolve.interfaces[iface_id];
+        let in_built_in = iface.package.is_some_and(|p| {
+            let name = &resolve.packages[p].name;
+            name.namespace == "kontor" && name.name == "built-in"
+        });
+        if in_built_in
+            && td.name.is_some()
+            && !matches!(td.kind, TypeDefKind::Type(_) | TypeDefKind::Resource)
+            && !iface.name.as_deref().is_some_and(|n| REMAPPED.contains(&n))
+        {
+            panic!(
+                "built-in interface `{}` owns data type `{}` but is not in contract!'s \
+                 with: block — add it (generated once in built-in-types) or its types \
+                 will be generated twice",
+                iface.name.as_deref().unwrap_or("?"),
+                td.name.as_deref().unwrap_or("?"),
+            );
+        }
+    }
+
     quote! {
         extern crate alloc;
 

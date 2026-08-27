@@ -68,10 +68,12 @@ wit_bindgen::generate!({
             #[cfg_attr(feature = "host", component(enum))]
         ],
         "kontor:built-in/numbers-types/ordering": [
+            #[derive(stdlib::Storage)]
             #[cfg_attr(feature = "host", derive(wasmtime::component::ComponentType, wasmtime::component::Lift, wasmtime::component::Lower, serde::Deserialize))]
             #[cfg_attr(feature = "host", component(enum))]
         ],
         "kontor:built-in/error/error": [
+            #[derive(stdlib::Storage)]
             #[cfg_attr(feature = "host", derive(wasmtime::component::ComponentType, wasmtime::component::Lift, wasmtime::component::Lower, serde::Deserialize))]
             #[cfg_attr(feature = "host", component(variant))]
         ],
