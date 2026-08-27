@@ -592,9 +592,20 @@ fn validate_type_in_context(
                     errors.extend(validate_type_in_context(resolve, inner, ctx, span));
                 }
 
-                TypeDefKind::Handle(Handle::Own(_)) => {
+                // Resources never cross a contract call: cross-contract calls
+                // carry wave-encoded DATA only, so a resource handle in a
+                // signature (or nested in a record/variant) could never be
+                // encoded — and import!'s call shims rely on this rule to
+                // treat every signature type as shareable data. The only
+                // sanctioned resource positions are the first (context)
+                // parameter and init's `contract` return, both validated
+                // separately before this function is reached.
+                TypeDefKind::Handle(_) | TypeDefKind::Resource => {
                     errors.push(ValidationError::new(
-                        "own<T> handles are not supported; use borrow<T>",
+                        "resource types cannot appear in contract function signatures or \
+                         data types (cross-contract calls carry wave-encoded data only); \
+                         pass a data representation instead (e.g. holder-ref rather than \
+                         holder)",
                         span,
                     ));
                 }

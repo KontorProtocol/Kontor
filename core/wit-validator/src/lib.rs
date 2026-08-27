@@ -284,6 +284,44 @@ world root {
     }
 
     #[test]
+    fn test_invalid_resource_param() {
+        let result = validate(
+            r#"
+    export init: async func(ctx: borrow<proc-context>) -> contract;
+    resource gadget {}
+
+    export bad-func: async func(ctx: borrow<proc-context>, s: borrow<gadget>) -> string;
+"#,
+        );
+        assert!(result.has_errors());
+        assert!(
+            result
+                .errors
+                .iter()
+                .any(|e| e.message.contains("resource types cannot appear"))
+        );
+    }
+
+    #[test]
+    fn test_invalid_resource_return() {
+        let result = validate(
+            r#"
+    export init: async func(ctx: borrow<proc-context>) -> contract;
+    resource widget {}
+
+    export bad-func: async func(ctx: borrow<view-context>) -> widget;
+"#,
+        );
+        assert!(result.has_errors());
+        assert!(
+            result
+                .errors
+                .iter()
+                .any(|e| e.message.contains("resource types cannot appear"))
+        );
+    }
+
+    #[test]
     fn test_invalid_empty_record() {
         let result = validate(
             r#"

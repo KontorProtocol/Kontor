@@ -5,12 +5,9 @@ use darling::FromMeta;
 use heck::{ToKebabCase, ToSnakeCase};
 use proc_macro2::{Span, TokenStream};
 use quote::{format_ident, quote};
-use std::collections::HashSet;
 use syn::Ident;
 
-use wit_parser::{
-    Function, Handle, Resolve, Type, TypeDefKind, TypeId, TypeOwner, WorldItem, WorldKey,
-};
+use wit_parser::{Function, Resolve, Type, TypeDefKind, TypeOwner, WorldItem, WorldKey};
 
 use crate::utils;
 
@@ -81,6 +78,24 @@ pub fn import(
         .find(|(_, w)| w.name == world_name)
         .unwrap();
 
+    // The imported WIT is held to the same language rules as the contract's
+    // own (contract! runs this identically). Load-bearing here: the
+    // no-resources-in-signatures rule is what guarantees the call shims below
+    // only ever meet shareable DATA types.
+    let validation = wit_validator::Validator::validate_resolve(&resolve);
+    if validation.has_errors() {
+        let messages: Vec<String> = validation
+            .errors
+            .iter()
+            .map(|e| format!("  - {e}"))
+            .collect();
+        panic!(
+            "WIT validation failed for imported contract at {}:\n{}",
+            abs_path.display(),
+            messages.join("\n")
+        );
+    }
+
     let exports = world
         .exports
         .iter()
@@ -93,18 +108,6 @@ pub fn import(
             _ => None,
         })
         .collect::<Vec<_>>();
-
-    // Every type id reachable from the export signatures — the set that flows
-    // into the call shims (params, returns, and everything nested in them).
-    let mut export_reachable: HashSet<TypeId> = HashSet::new();
-    for export in exports.iter() {
-        for param in export.params.iter() {
-            collect_reachable(&resolve, &param.ty, &mut export_reachable);
-        }
-        if let Some(ty) = &export.result {
-            collect_reachable(&resolve, ty, &mut export_reachable);
-        }
-    }
 
     let mut with_entries = Vec::new();
     for (_key, item) in world.imports.iter() {
@@ -129,34 +132,24 @@ pub fn import(
             ));
         } else {
             // Un-remapped built-in interfaces (deposit, crypto, file-registry, …)
-            // regenerate as unused dead stubs — harmless UNLESS one of their
-            // types is reachable from an export signature, because those types
-            // flow into the call shims and a regenerated copy would be a twin
-            // family. (file-registry's resources, for example, never appear in
-            // contract exports — only in the imported world's own imports.)
-            // Alias nodes (`use other-iface.{t}`) don't count: they are
-            // references to definitions owned elsewhere (possibly remapped),
-            // not definitions this interface would re-mint.
-            //
-            // Why not remap file-registry into built-in-types and make the
-            // simple "un-remapped built-ins own no types" rule total? Because
-            // built-in-types' own embedded component-type section merges its
-            // `shared` world into EVERY contract's component type at
-            // componentization — invisible only while the shared world's
-            // imports are a SUBSET of every contract world's imports.
-            // file-registry is native-only: adding it to the shared world
-            // stamps `import kontor:built-in/file-registry` into every user
-            // contract's chain-visible WIT (verified empirically). This
-            // reachability guard is the price of that boundary.
-            if export_reachable.iter().any(|tid| {
-                resolve.types[*tid].owner == TypeOwner::Interface(*id)
-                    && !matches!(resolve.types[*tid].kind, TypeDefKind::Type(_))
-            }) {
+            // regenerate as unused dead stubs. RESOURCES they own (file-registry's
+            // proof) are harmless: the validator run above guarantees resources
+            // never appear in contract signatures, so nothing the call shims
+            // touch can reference them. Plain DATA types would be a twin-family
+            // hazard — no such interface exists, and this assertion keeps it
+            // that way (aliases don't count: they reference definitions owned
+            // elsewhere, possibly remapped).
+            let owns_data_types = resolve.types.iter().any(|(_, td)| {
+                td.name.is_some()
+                    && td.owner == TypeOwner::Interface(*id)
+                    && !matches!(td.kind, TypeDefKind::Type(_) | TypeDefKind::Resource)
+            });
+            if owns_data_types {
                 panic!(
-                    "built-in interface `{iface_name}` has types reachable from the \
-                     imported world's export signatures but no `with:` remap in \
-                     macros/src/import.rs REMAPPED_BUILT_INS — add it (backed by \
-                     built-in-types) or its types will be generated twice"
+                    "built-in interface `{iface_name}` owns data type definitions but \
+                     has no `with:` remap in macros/src/import.rs REMAPPED_BUILT_INS — \
+                     add it (generated once in built-in-types) or its types will be \
+                     generated twice"
                 );
             }
         }
@@ -328,51 +321,6 @@ pub fn import(
 
             #(#func_streams)*
         }
-    }
-}
-
-/// Walk a WIT type's full graph (fields, cases, payloads, alias targets,
-/// resource handles) collecting every named-definition id it touches.
-fn collect_reachable(resolve: &Resolve, ty: &Type, set: &mut HashSet<TypeId>) {
-    let Type::Id(id) = ty else { return };
-    if !set.insert(*id) {
-        return;
-    }
-    match &resolve.types[*id].kind {
-        TypeDefKind::Record(record) => {
-            for field in &record.fields {
-                collect_reachable(resolve, &field.ty, set);
-            }
-        }
-        TypeDefKind::Variant(variant) => {
-            for case in &variant.cases {
-                if let Some(ty) = &case.ty {
-                    collect_reachable(resolve, ty, set);
-                }
-            }
-        }
-        TypeDefKind::Option(inner) | TypeDefKind::List(inner) => {
-            collect_reachable(resolve, inner, set);
-        }
-        TypeDefKind::Result(result) => {
-            if let Some(ok) = &result.ok {
-                collect_reachable(resolve, ok, set);
-            }
-            if let Some(err) = &result.err {
-                collect_reachable(resolve, err, set);
-            }
-        }
-        TypeDefKind::Tuple(tuple) => {
-            for ty in &tuple.types {
-                collect_reachable(resolve, ty, set);
-            }
-        }
-        TypeDefKind::Type(target) => collect_reachable(resolve, target, set),
-        TypeDefKind::Handle(handle) => {
-            let (Handle::Own(res) | Handle::Borrow(res)) = handle;
-            set.insert(*res);
-        }
-        _ => {}
     }
 }
 
