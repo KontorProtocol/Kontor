@@ -25,70 +25,57 @@ wit_bindgen::generate!({
     path: "wit",
     generate_all,
     generate_unused_types: true,
-    additional_derives: [stdlib::Wavey],
+    additional_derives: [stdlib::Wavey, stdlib::Storage],
     additional_type_attributes: {
         "kontor:built-in/context-types/out-point": [
-            #[derive(stdlib::Storage)]
             #[cfg_attr(feature = "host", derive(wasmtime::component::ComponentType, wasmtime::component::Lift, wasmtime::component::Lower, serde::Deserialize))]
             #[cfg_attr(feature = "host", component(record))]
         ],
         "kontor:built-in/context-types/contract-address": [
-            #[derive(stdlib::Storage)]
             #[cfg_attr(feature = "host", derive(wasmtime::component::ComponentType, wasmtime::component::Lift, wasmtime::component::Lower, serde::Deserialize))]
             #[cfg_attr(feature = "host", component(record))]
         ],
         "kontor:built-in/context-types/holder-ref": [
-            #[derive(stdlib::Storage)]
             #[cfg_attr(feature = "host", derive(wasmtime::component::ComponentType, wasmtime::component::Lift, wasmtime::component::Lower, serde::Deserialize))]
             #[cfg_attr(feature = "host", component(variant))]
         ],
         "kontor:built-in/context-types/signer-ref": [
-            #[derive(stdlib::Storage)]
             #[cfg_attr(feature = "host", derive(wasmtime::component::ComponentType, wasmtime::component::Lift, wasmtime::component::Lower, serde::Deserialize))]
             #[cfg_attr(feature = "host", component(variant))]
         ],
         "kontor:built-in/context-types/network": [
-            #[derive(stdlib::Storage)]
             #[cfg_attr(feature = "host", derive(wasmtime::component::ComponentType, wasmtime::component::Lift, wasmtime::component::Lower, serde::Deserialize))]
             #[cfg_attr(feature = "host", component(enum))]
         ],
         "kontor:built-in/numbers-types/integer": [
-            #[derive(stdlib::Storage)]
             #[cfg_attr(feature = "host", derive(wasmtime::component::ComponentType, wasmtime::component::Lift, wasmtime::component::Lower, serde::Deserialize))]
             #[cfg_attr(feature = "host", component(record))]
         ],
         "kontor:built-in/numbers-types/decimal": [
-            #[derive(stdlib::Storage)]
             #[cfg_attr(feature = "host", derive(wasmtime::component::ComponentType, wasmtime::component::Lift, wasmtime::component::Lower, serde::Deserialize))]
             #[cfg_attr(feature = "host", component(record))]
         ],
         "kontor:built-in/numbers-types/sign": [
-            #[derive(stdlib::Storage)]
             #[cfg_attr(feature = "host", derive(wasmtime::component::ComponentType, wasmtime::component::Lift, wasmtime::component::Lower, serde::Deserialize))]
             #[cfg_attr(feature = "host", component(enum))]
         ],
         "kontor:built-in/numbers-types/ordering": [
-            #[derive(stdlib::Storage)]
             #[cfg_attr(feature = "host", derive(wasmtime::component::ComponentType, wasmtime::component::Lift, wasmtime::component::Lower, serde::Deserialize))]
             #[cfg_attr(feature = "host", component(enum))]
         ],
         "kontor:built-in/error/error": [
-            #[derive(stdlib::Storage)]
             #[cfg_attr(feature = "host", derive(wasmtime::component::ComponentType, wasmtime::component::Lift, wasmtime::component::Lower, serde::Deserialize))]
             #[cfg_attr(feature = "host", component(variant))]
         ],
         "kontor:built-in/file-registry-types/raw-file-descriptor": [
-            #[derive(stdlib::Storage)]
             #[cfg_attr(feature = "host", derive(wasmtime::component::ComponentType, wasmtime::component::Lift, wasmtime::component::Lower, serde::Deserialize))]
             #[cfg_attr(feature = "host", component(record))]
         ],
         "kontor:built-in/file-registry-types/challenge-input": [
-            #[derive(stdlib::Storage)]
             #[cfg_attr(feature = "host", derive(wasmtime::component::ComponentType, wasmtime::component::Lift, wasmtime::component::Lower, serde::Deserialize))]
             #[cfg_attr(feature = "host", component(record))]
         ],
         "kontor:built-in/file-registry-types/verify-result": [
-            #[derive(stdlib::Storage)]
             #[cfg_attr(feature = "host", derive(wasmtime::component::ComponentType, wasmtime::component::Lift, wasmtime::component::Lower, serde::Deserialize))]
             #[cfg_attr(feature = "host", component(enum))]
         ],
