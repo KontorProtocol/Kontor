@@ -82,6 +82,12 @@ pub fn import(
 
     let mut type_streams = Vec::new();
     for (_id, def) in resolve.types.iter().filter(|(_, def)| {
+        // Aliases (`use other-iface.{t}` / `type a = b`) are references to
+        // definitions emitted elsewhere — never re-print them (the referenced
+        // definition is either a skipped built-in or printed on its own).
+        if matches!(def.kind, TypeDefKind::Type(_)) {
+            return false;
+        }
         if let Some(name) = def.name.as_deref() {
             ![
                 "transaction",

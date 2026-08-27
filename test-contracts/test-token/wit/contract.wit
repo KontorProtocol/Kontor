@@ -4,7 +4,7 @@ world root {
 	include kontor:built-in/built-in;
 	use kontor:built-in/context.{core-context, view-context, proc-context, signer, contract};
 	use kontor:built-in/error.{error};
-	use kontor:built-in/numbers.{integer};
+	use kontor:built-in/numbers-types.{integer};
 
   record balance {
 		key: string,

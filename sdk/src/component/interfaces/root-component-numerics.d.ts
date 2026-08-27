@@ -24,10 +24,10 @@ export function subDecimal(a: Decimal, b: Decimal): Decimal;
 export function mulDecimal(a: Decimal, b: Decimal): Decimal;
 export function divDecimal(a: Decimal, b: Decimal): Decimal;
 export function log10Decimal(a: Decimal): Decimal;
-export type Sign = import('./kontor-built-in-numbers.js').Sign;
-export type Ordering = import('./kontor-built-in-numbers.js').Ordering;
-export type Integer = import('./kontor-built-in-numbers.js').Integer;
-export type Decimal = import('./kontor-built-in-numbers.js').Decimal;
+export type Sign = import('./kontor-built-in-numbers-types.js').Sign;
+export type Ordering = import('./kontor-built-in-numbers-types.js').Ordering;
+export type Integer = import('./kontor-built-in-numbers-types.js').Integer;
+export type Decimal = import('./kontor-built-in-numbers-types.js').Decimal;
 export type NumericsError = NumericsErrorMessage | NumericsErrorOverflow | NumericsErrorDivByZero | NumericsErrorSyntax | NumericsErrorValidation;
 export interface NumericsErrorMessage {
   tag: 'message',

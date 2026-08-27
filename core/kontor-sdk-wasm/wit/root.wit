@@ -24,7 +24,7 @@ interface numerics {
   // borrowed from `kontor:built-in/numbers` (resolved via the symlinked
   // `wit/deps/built-in/common.wit`). Only the SDK-specific error + ops below
   // are declared here.
-  use kontor:built-in/numbers.{sign, ordering, integer, decimal};
+  use kontor:built-in/numbers-types.{sign, ordering, integer, decimal};
 
   variant numerics-error {
     message(string),

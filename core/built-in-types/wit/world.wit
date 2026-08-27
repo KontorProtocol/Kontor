@@ -1,9 +1,7 @@
 // This world is a generator directive, not a component description: wit-bindgen's
 // `generate!` only accepts a world as its entry point, and `import` is the only
 // way a world can reference an interface — so this is how the data interfaces
-// enter the generator's field of view. No wasm is ever built from this world,
-// and a types-only interface would contribute nothing to an import section
-// anyway (imports are functions).
+// enter the generator's field of view. No wasm is ever built from this world.
 package kontor:built-in-types;
 
 world shared {
@@ -12,4 +10,9 @@ world shared {
     // `crate::error::Error`; importing the error interface (aliased to
     // `crate::error` in lib.rs) is what resolves it here.
     import kontor:built-in/error;
+    import kontor:built-in/numbers-types;
+    // The function-bearing numbers interface is generated here ONCE too — the
+    // extern import wrappers live in this crate and guests remap onto them
+    // (the wasm import strings don't depend on which crate compiles them).
+    import kontor:built-in/numbers;
 }
