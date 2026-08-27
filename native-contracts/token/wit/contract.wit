@@ -2,7 +2,8 @@ package root:component;
 
 world root {
   include kontor:built-in/built-in-native;
-  use kontor:built-in/context.{core-context, view-context, proc-context, signer, holder-ref, contract};
+  use kontor:built-in/context.{core-context, view-context, proc-context, signer, contract};
+  use kontor:built-in/context-types.{holder-ref};
   use kontor:built-in/error.{error};
   use kontor:built-in/numbers-types.{decimal};
 

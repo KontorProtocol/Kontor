@@ -32,7 +32,6 @@ pub use stdlib::{
     CheckedArithmetics, FromWaveValue, WaveType, from_wave_expr, from_wave_value, to_wave_expr,
     wave_type,
 };
-use stdlib::{contract_address, holder_ref, impls};
 use storage::{ComponentDecodeError, print_component_wit};
 pub use storage::{Storage, TransactionContext};
 use tokio::sync::Mutex;
@@ -86,8 +85,8 @@ impl From<anyhow::Error> for ExecutionError {
 }
 
 pub use wit::kontor;
-pub use wit::kontor::built_in::context::ContractAddress;
-pub use wit::kontor::built_in::context::OutPoint;
+pub use wit::kontor::built_in::context_types::ContractAddress;
+pub use wit::kontor::built_in::context_types::OutPoint;
 pub use wit::kontor::built_in::error::Error;
 pub use wit::kontor::built_in::file_registry_types::{
     ChallengeInput, RawFileDescriptor, VerifyResult,
@@ -136,8 +135,6 @@ impl From<GenesisValidator> for staking::api::ActiveValidatorInfo {
         }
     }
 }
-
-impls!(host = true);
 
 pub fn hash_bytes(bytes: &[u8]) -> [u8; 32] {
     let mut hasher = Sha256::new();

@@ -27,6 +27,31 @@ wit_bindgen::generate!({
     generate_unused_types: true,
     additional_derives: [stdlib::Wavey],
     additional_type_attributes: {
+        "kontor:built-in/context-types/out-point": [
+            #[derive(stdlib::Storage)]
+            #[cfg_attr(feature = "host", derive(wasmtime::component::ComponentType, wasmtime::component::Lift, wasmtime::component::Lower, serde::Deserialize))]
+            #[cfg_attr(feature = "host", component(record))]
+        ],
+        "kontor:built-in/context-types/contract-address": [
+            #[derive(stdlib::Storage)]
+            #[cfg_attr(feature = "host", derive(wasmtime::component::ComponentType, wasmtime::component::Lift, wasmtime::component::Lower, serde::Deserialize))]
+            #[cfg_attr(feature = "host", component(record))]
+        ],
+        "kontor:built-in/context-types/holder-ref": [
+            #[derive(stdlib::Storage)]
+            #[cfg_attr(feature = "host", derive(wasmtime::component::ComponentType, wasmtime::component::Lift, wasmtime::component::Lower, serde::Deserialize))]
+            #[cfg_attr(feature = "host", component(variant))]
+        ],
+        "kontor:built-in/context-types/signer-ref": [
+            #[derive(stdlib::Storage)]
+            #[cfg_attr(feature = "host", derive(wasmtime::component::ComponentType, wasmtime::component::Lift, wasmtime::component::Lower, serde::Deserialize))]
+            #[cfg_attr(feature = "host", component(variant))]
+        ],
+        "kontor:built-in/context-types/network": [
+            #[derive(stdlib::Storage)]
+            #[cfg_attr(feature = "host", derive(wasmtime::component::ComponentType, wasmtime::component::Lift, wasmtime::component::Lower, serde::Deserialize))]
+            #[cfg_attr(feature = "host", component(enum))]
+        ],
         "kontor:built-in/numbers-types/integer": [
             #[derive(stdlib::Storage)]
             #[cfg_attr(feature = "host", derive(wasmtime::component::ComponentType, wasmtime::component::Lift, wasmtime::component::Lower, serde::Deserialize))]
@@ -67,6 +92,22 @@ wit_bindgen::generate!({
         ],
     },
     additional_member_attributes: {
+        "kontor:built-in/context-types/out-point.txid": [ #[cfg_attr(feature = "host", component(name = "txid"))] ],
+        "kontor:built-in/context-types/out-point.vout": [ #[cfg_attr(feature = "host", component(name = "vout"))] ],
+        "kontor:built-in/context-types/contract-address.name": [ #[cfg_attr(feature = "host", component(name = "name"))] ],
+        "kontor:built-in/context-types/contract-address.height": [ #[cfg_attr(feature = "host", component(name = "height"))] ],
+        "kontor:built-in/context-types/contract-address.tx-index": [ #[cfg_attr(feature = "host", component(name = "tx-index"))] ],
+        "kontor:built-in/context-types/holder-ref.x-only-pubkey": [ #[cfg_attr(feature = "host", component(name = "x-only-pubkey"))] ],
+        "kontor:built-in/context-types/holder-ref.signer-id": [ #[cfg_attr(feature = "host", component(name = "signer-id"))] ],
+        "kontor:built-in/context-types/holder-ref.core": [ #[cfg_attr(feature = "host", component(name = "core"))] ],
+        "kontor:built-in/context-types/holder-ref.burner": [ #[cfg_attr(feature = "host", component(name = "burner"))] ],
+        "kontor:built-in/context-types/holder-ref.utxo": [ #[cfg_attr(feature = "host", component(name = "utxo"))] ],
+        "kontor:built-in/context-types/signer-ref.signer-id": [ #[cfg_attr(feature = "host", component(name = "signer-id"))] ],
+        "kontor:built-in/context-types/signer-ref.x-only-pubkey": [ #[cfg_attr(feature = "host", component(name = "x-only-pubkey"))] ],
+        "kontor:built-in/context-types/network.mainnet": [ #[cfg_attr(feature = "host", component(name = "mainnet"))] ],
+        "kontor:built-in/context-types/network.signet": [ #[cfg_attr(feature = "host", component(name = "signet"))] ],
+        "kontor:built-in/context-types/network.testnet": [ #[cfg_attr(feature = "host", component(name = "testnet"))] ],
+        "kontor:built-in/context-types/network.regtest": [ #[cfg_attr(feature = "host", component(name = "regtest"))] ],
         "kontor:built-in/numbers-types/integer.r0": [ #[cfg_attr(feature = "host", component(name = "r0"))] ],
         "kontor:built-in/numbers-types/integer.r1": [ #[cfg_attr(feature = "host", component(name = "r1"))] ],
         "kontor:built-in/numbers-types/integer.r2": [ #[cfg_attr(feature = "host", component(name = "r2"))] ],
@@ -110,10 +151,16 @@ wit_bindgen::generate!({
 
 pub use kontor::built_in::file_registry_types;
 // The generated models' `try_update_*` path names `crate::error::Error`.
+pub use kontor::built_in::context;
+pub use kontor::built_in::context_types;
 pub use kontor::built_in::error;
 pub use kontor::built_in::numbers;
 pub use kontor::built_in::numbers_types;
 
+// This crate OWNS the guest context wrappers, so it is exempt from the
+// workspace `disallowed-types` fence that keeps host code (which reaches these
+// types transitively, but for which they are unreachable-stub decoys) off them.
+#[allow(clippy::disallowed_types)]
 mod impls;
 
 // Owned behavior on the shared types — written once here, where the types
@@ -198,3 +245,12 @@ types_only_host_facade!(
 types_only_host_facade!(host_facade_error, "kontor:built-in/error", {
     pub use crate::error::Error;
 });
+
+#[cfg(feature = "host")]
+types_only_host_facade!(
+    host_facade_context_types,
+    "kontor:built-in/context-types",
+    {
+        pub use crate::context_types::{ContractAddress, HolderRef, Network, OutPoint, SignerRef};
+    }
+);

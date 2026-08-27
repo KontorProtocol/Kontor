@@ -64,7 +64,7 @@ async fn test_native_nft_attach_contract() -> Result<()> {
     let mint_inst = Inst {
         gas_limit: 50_000,
         kind: InstKind::Call {
-            contract: runtime::nft::address().into(),
+            contract: runtime::nft::address(),
             expr: nft::wave::mint_call_expr(&nft_id, attributes, file_descriptor),
         },
     };
@@ -93,7 +93,7 @@ async fn test_native_nft_attach_contract() -> Result<()> {
     let attach_inst = Inst {
         gas_limit: 50_000,
         kind: InstKind::Call {
-            contract: runtime::nft::address().into(),
+            contract: runtime::nft::address(),
             expr: nft::wave::attach_call_expr(&nft_id, 0),
         },
     };
@@ -101,7 +101,7 @@ async fn test_native_nft_attach_contract() -> Result<()> {
     let detach_inst = Inst {
         gas_limit: 50_000,
         kind: InstKind::Call {
-            contract: runtime::nft::address().into(),
+            contract: runtime::nft::address(),
             expr: nft::wave::detach_call_expr(&nft_id),
         },
     };

@@ -8,7 +8,6 @@ use syn::{Data, DeriveInput, Error, ItemFn, parse_macro_input, spanned::Spanned}
 mod contract;
 mod contract_address;
 mod holder_ref;
-mod impls;
 mod import;
 mod index_decl;
 mod indexed;
@@ -27,13 +26,6 @@ pub fn contract(input: TokenStream) -> TokenStream {
     let attr_args = NestedMeta::parse_meta_list(input.into()).unwrap();
     let config = contract::Config::from_list(&attr_args).unwrap();
     contract::generate(config).into()
-}
-
-#[proc_macro]
-pub fn impls(input: TokenStream) -> TokenStream {
-    let attr_args = NestedMeta::parse_meta_list(input.into()).unwrap();
-    let config = impls::Config::from_list(&attr_args).unwrap();
-    impls::generate(config).into()
 }
 
 #[proc_macro]

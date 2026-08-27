@@ -3881,6 +3881,7 @@ dependencies = [
  "anyhow",
  "bitcoin",
  "bon 3.10.0",
+ "built-in-types",
  "clap",
  "indexmap",
  "macros",

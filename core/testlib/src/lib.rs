@@ -521,7 +521,7 @@ impl RuntimeRegtest {
             ops.push(Inst {
                 gas_limit: 10_000,
                 kind: InstKind::Call {
-                    contract: (*contract).clone().into(),
+                    contract: (*contract).clone(),
                     expr: expr.to_string(),
                 },
             });
@@ -708,7 +708,7 @@ impl RuntimeImpl for RuntimeRegtest {
                     Inst {
                         gas_limit: 10_000,
                         kind: InstKind::Call {
-                            contract: contract_address.clone().into(),
+                            contract: contract_address.clone(),
                             expr: expr.to_string(),
                         },
                     },
@@ -788,7 +788,7 @@ impl RuntimeImpl for RuntimeRegtest {
                             Inst {
                                 gas_limit: 10_000,
                                 kind: InstKind::Call {
-                                    contract: (*contract).clone().into(),
+                                    contract: (*contract).clone(),
                                     expr: expr.to_string(),
                                 },
                             },
@@ -805,7 +805,7 @@ impl RuntimeImpl for RuntimeRegtest {
                         .map(|(contract, expr)| Inst {
                             gas_limit: 10_000,
                             kind: InstKind::Call {
-                                contract: (*contract).clone().into(),
+                                contract: (*contract).clone(),
                                 expr: expr.to_string(),
                             },
                         })

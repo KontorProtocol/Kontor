@@ -345,6 +345,14 @@ pub fn generate(config: Config) -> TokenStream {
                 "kontor:built-in/error": built_in_types::error,
                 "kontor:built-in/numbers": built_in_types::numbers,
                 "kontor:built-in/numbers-types": built_in_types::numbers_types,
+                "kontor:built-in/context-types": built_in_types::context_types,
+                // The resource-bearing context interface remaps too: the
+                // handle-wrapper types (signer, holder, storages, contexts)
+                // and all hand impls + storage trait plumbing on them live in
+                // `built-in-types` — the wasm import strings (including the
+                // resource-drop intrinsics) don't depend on which crate
+                // compiles them.
+                "kontor:built-in/context": built_in_types::context,
             },
             additional_derives: [stdlib::Storage, stdlib::Wavey],
             #type_attrs
@@ -358,13 +366,20 @@ pub fn generate(config: Config) -> TokenStream {
         // the shared crate's module under the same name the un-remapped
         // generation used (bare `file_registry_types::…` in contract code and
         // `super::file_registry_types::…` in `import!` expansions).
+        use built_in_types::context;
+        use built_in_types::context::{Holder, OutPoint};
+        use built_in_types::context_types;
         use built_in_types::error;
         use built_in_types::file_registry_types;
         use built_in_types::numbers;
         use built_in_types::numbers_types;
-        use kontor::built_in::context::{Holder, OutPoint};
-        use kontor::built_in::context::{ContractAddressModel, ContractAddressWriteModel};
+        // `ctx.model()` resolves through this trait (implemented by the
+        // Root/StorageRoot derive); the anonymous import guarantees it is in
+        // scope even in contracts that don't glob-import stdlib.
+        #[allow(unused_imports)]
+        use stdlib::HasRootModel as _;
         use built_in_types::numbers_types::{IntegerModel, IntegerWriteModel, DecimalModel, DecimalWriteModel};
+        use built_in_types::context_types::{ContractAddressModel, ContractAddressWriteModel};
 
         type Map<K, V> = stdlib::StorageMap<K, V, context::ProcStorage>;
         type Deque<V> = stdlib::StorageDeque<V, context::ProcStorage>;
@@ -377,216 +392,10 @@ pub fn generate(config: Config) -> TokenStream {
             Holder::from_ref(&context::HolderRef::Core).unwrap()
         }
 
-        impl stdlib::HasNext for context::Keys {
-            fn next(&self) -> Option<Vec<u8>> {
-                self.next()
-            }
-        }
-
-        impl stdlib::HasNextRow for context::IndexRows {
-            fn next(&self) -> Option<(Vec<u8>, Vec<u8>)> {
-                self.next()
-            }
-        }
-
-        #[automatically_derived]
-        impl stdlib::ReadStorage for context::ViewStorage {
-            fn __get_str(self: &alloc::rc::Rc<Self>, path: &[u8]) -> Option<String> {
-                self.get_str(path)
-            }
-
-            fn __get_u64(self: &alloc::rc::Rc<Self>, path: &[u8]) -> Option<u64> {
-                self.get_u64(path)
-            }
-
-            fn __get_s64(self: &alloc::rc::Rc<Self>, path: &[u8]) -> Option<i64> {
-                self.get_s64(path)
-            }
-
-            fn __get_bool(self: &alloc::rc::Rc<Self>, path: &[u8]) -> Option<bool> {
-                self.get_bool(path)
-            }
-
-            fn __get_list_u8(self: &alloc::rc::Rc<Self>, path: &[u8]) -> Option<Vec<u8>> {
-                self.get_list_u8(path)
-            }
-
-            fn __get_keys_range<T: stdlib::KeyElement + Clone>(self: &alloc::rc::Rc<Self>, path: &[u8], lo: Option<&[u8]>, hi: Option<&[u8]>, descending: bool) -> impl Iterator<Item = T> + use<T> {
-                stdlib::make_keys_iterator(self.get_keys(path, lo, hi, descending))
-            }
-
-            fn __get_index_rows_range(self: &alloc::rc::Rc<Self>, path: &[u8], lo: Option<&[u8]>, hi: Option<&[u8]>, descending: bool) -> impl Iterator<Item = (Vec<u8>, Vec<u8>)> + use<> {
-                stdlib::make_index_rows_iterator(self.get_index_rows(path, lo, hi, descending))
-            }
-
-            fn __exists(self: &alloc::rc::Rc<Self>, path: &[u8]) -> bool {
-                self.exists(path)
-            }
-
-            fn __extend_path_with_match(self: &alloc::rc::Rc<Self>, path: &[u8], candidates: &[alloc::vec::Vec<u8>]) -> Option<u32> {
-                self.extend_path_with_match(path, candidates)
-            }
-
-            fn __get<T: Retrieve<Self>>(self: &alloc::rc::Rc<Self>, path: KeyPath) -> Option<T> {
-                T::__get(self, path)
-            }
-        }
-
-        #[automatically_derived]
-        impl stdlib::ReadStorage for context::ProcStorage {
-            fn __get_str(self: &alloc::rc::Rc<Self>, path: &[u8]) -> Option<String> {
-                self.get_str(path)
-            }
-
-            fn __get_u64(self: &alloc::rc::Rc<Self>, path: &[u8]) -> Option<u64> {
-                self.get_u64(path)
-            }
-
-            fn __get_s64(self: &alloc::rc::Rc<Self>, path: &[u8]) -> Option<i64> {
-                self.get_s64(path)
-            }
-
-            fn __get_bool(self: &alloc::rc::Rc<Self>, path: &[u8]) -> Option<bool> {
-                self.get_bool(path)
-            }
-
-            fn __get_list_u8(self: &alloc::rc::Rc<Self>, path: &[u8]) -> Option<Vec<u8>> {
-                self.get_list_u8(path)
-            }
-
-            fn __get_keys_range<T: stdlib::KeyElement + Clone>(self: &alloc::rc::Rc<Self>, path: &[u8], lo: Option<&[u8]>, hi: Option<&[u8]>, descending: bool) -> impl Iterator<Item = T> + use<T> {
-                stdlib::make_keys_iterator(self.get_keys(path, lo, hi, descending))
-            }
-
-            fn __get_index_rows_range(self: &alloc::rc::Rc<Self>, path: &[u8], lo: Option<&[u8]>, hi: Option<&[u8]>, descending: bool) -> impl Iterator<Item = (Vec<u8>, Vec<u8>)> + use<> {
-                stdlib::make_index_rows_iterator(self.get_index_rows(path, lo, hi, descending))
-            }
-
-            fn __exists(self: &alloc::rc::Rc<Self>, path: &[u8]) -> bool {
-                self.exists(path)
-            }
-
-            fn __extend_path_with_match(self: &alloc::rc::Rc<Self>, path: &[u8], candidates: &[alloc::vec::Vec<u8>]) -> Option<u32> {
-                self.extend_path_with_match(path, candidates)
-            }
-
-            fn __get<T: Retrieve<Self>>(self: &alloc::rc::Rc<Self>, path: KeyPath) -> Option<T> {
-                T::__get(self, path)
-            }
-        }
-
-        #[automatically_derived]
-        impl stdlib::WriteStorage for context::ProcStorage {
-            fn __set_str(self: &alloc::rc::Rc<Self>, path: &[u8], value: &str) {
-                self.set_str(path, value)
-            }
-
-            fn __set_u64(self: &alloc::rc::Rc<Self>, path: &[u8], value: u64) {
-                self.set_u64(path, value)
-            }
-
-            fn __set_s64(self: &alloc::rc::Rc<Self>, path: &[u8], value: i64) {
-                self.set_s64(path, value)
-            }
-
-            fn __set_bool(self: &alloc::rc::Rc<Self>, path: &[u8], value: bool) {
-                self.set_bool(path, value)
-            }
-
-            fn __set_list_u8(self: &alloc::rc::Rc<Self>, path: &[u8], value: Vec<u8>) {
-                self.set_list_u8(path, &value)
-            }
-
-            fn __set_void(self: &alloc::rc::Rc<Self>, path: &[u8]) {
-                self.set_void(path)
-            }
-
-            fn __set<T: stdlib::Store<Self>>(self: &alloc::rc::Rc<Self>, path: KeyPath, value: T) {
-                T::__set(self, path, value)
-            }
-
-            fn __delete(self: &alloc::rc::Rc<Self>, path: &[u8]) -> bool {
-                self.delete(path)
-            }
-
-            fn __delete_matching_paths(self: &alloc::rc::Rc<Self>, base_path: &[u8], candidates: &[alloc::vec::Vec<u8>]) -> u64 {
-                self.delete_matching_paths(base_path, candidates)
-            }
-        }
-
-        // The write-model side of every generated model reads through the
-        // proc storage's derived VIEW handle; this trait link (the only
-        // context-specific piece of the model machinery) is what keeps the
-        // generated models generic over the storage handle.
-        impl stdlib::HasViewStorage for context::ProcStorage {
-            type View = context::ViewStorage;
-            fn view_storage(&self) -> Self::View {
-                context::ProcStorage::view_storage(self)
-            }
-        }
-
-        // Retrieval is a READ; with the models generic over the handle, one
-        // impl per type serves both storages (the read model instantiates at
-        // whichever handle the caller holds) — the old per-context pairs
-        // collapse.
-        impl<__S: stdlib::ReadStorage + 'static> Retrieve<__S> for context::ContractAddress {
-            fn __get(ctx: &alloc::rc::Rc<__S>, path: stdlib::KeyPath) -> Option<Self> {
-                stdlib::ReadStorage::__exists(ctx, &path).then(|| context::ContractAddressModel::new(ctx.clone(), path).load())
-            }
-        }
-
-        impl<__S: stdlib::ReadStorage> Retrieve<__S> for context::HolderRef {
-            fn __get(ctx: &alloc::rc::Rc<__S>, path: stdlib::KeyPath) -> Option<Self> {
-                let s: String = stdlib::ReadStorage::__get(ctx, path)?;
-                s.parse().ok()
-            }
-        }
-
-        // Holder is serialized via its canonical key string (same as the
-        // `Map<Holder, _>` key pattern). Reads parse via `FromStr` and
-        // return `None` on a missing entry; the macro-generated getter's
-        // `.unwrap()` surfaces storage corruption as a panic — same
-        // behavior as every other primitive field. Holder is a WIT
-        // resource, so wit-bindgen doesn't auto-apply `#[derive(Storage)]`
-        // the way it does for HolderRef — we define Retrieve/Store
-        // directly here.
-        impl<__S: stdlib::ReadStorage> Retrieve<__S> for context::Holder {
-            fn __get(ctx: &alloc::rc::Rc<__S>, path: stdlib::KeyPath) -> Option<Self> {
-                let s: String = stdlib::ReadStorage::__get(ctx, path)?;
-                s.parse().ok()
-            }
-        }
-
-        impl<__S: stdlib::WriteStorage + ?Sized> stdlib::Store<__S> for context::Holder {
-            fn __set(ctx: &alloc::rc::Rc<__S>, path: stdlib::KeyPath, value: Self) {
-                stdlib::WriteStorage::__set_str(ctx, &path, &value.to_string());
-            }
-        }
-
-        // A `Map<Holder, _>` keys on the Holder's canonical string identity: it
-        // encodes as a string element (`Display`) and decodes via `FromStr`.
-        stdlib::key_element_via_display!(context::Holder);
-
-        // `#[index]` on an identity/number field buckets by its canonical string,
-        // encoded as a string codec element (equality partition — order irrelevant).
-        // `is_primitive_type` routes all of these through the by-value `IndexKey`
-        // path, so providing the impls here is what lets them be `#[index]`ed at all
-        // (otherwise `#[index]` on, say, a `Decimal` field is a cryptic trait error).
-        macro_rules! __index_key_via_display {
-            ($($ty:ty),*) => {$(
-                impl stdlib::IndexKey for $ty {
-                    fn index_key(&self) -> alloc::vec::Vec<u8> {
-                        stdlib::KeyElement::encode(&alloc::string::ToString::to_string(self))
-                    }
-                }
-            )*};
-        }
-        // (HolderRef is a storage enum and already gets a discriminant `IndexKey`;
-        // Integer/Decimal carry their IndexKey/KeyElement/Retrieve impls in
-        // `built-in-types`, which owns them.)
-        __index_key_via_display!(context::Holder, context::ContractAddress);
-
-        impls!();
+        // The context storage/identity plumbing (ReadStorage/WriteStorage,
+        // HasViewStorage, Holder/Signer identity impls, …) that used to be
+        // expanded here now lives ONCE in `built-in-types`, which owns the
+        // remapped context wrapper types.
 
         struct #name;
 

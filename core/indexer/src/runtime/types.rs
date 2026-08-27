@@ -75,11 +75,11 @@ pub fn default_val_for_type(ty: Type) -> Val {
     }
 }
 
-impl From<bitcoin::OutPoint> for OutPoint {
-    fn from(value: bitcoin::OutPoint) -> Self {
-        Self {
-            txid: value.txid.to_string(),
-            vout: value.vout,
-        }
+/// `bitcoin::OutPoint` → wit shape (a free fn: both types are foreign here now
+/// that `OutPoint` comes from the shared `built-in-types`).
+pub fn outpoint_from_bitcoin(value: bitcoin::OutPoint) -> OutPoint {
+    OutPoint {
+        txid: value.txid.to_string(),
+        vout: value.vout,
     }
 }

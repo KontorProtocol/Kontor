@@ -53,7 +53,7 @@ pub use deque::StorageDeque;
 pub use key_path::*;
 pub use keycodec::*;
 pub use macros::{
-    Model, Root, Storage, StorageRoot, Store, Wavey, contract, contract_address, holder_ref, impls,
+    Model, Root, Storage, StorageRoot, Store, Wavey, contract, contract_address, holder_ref,
     import, interface,
 };
 pub use map::*;

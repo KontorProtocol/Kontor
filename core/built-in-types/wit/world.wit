@@ -11,8 +11,15 @@ world shared {
     // `crate::error` in lib.rs) is what resolves it here.
     import kontor:built-in/error;
     import kontor:built-in/numbers-types;
+    import kontor:built-in/context-types;
     // The function-bearing numbers interface is generated here ONCE too — the
     // extern import wrappers live in this crate and guests remap onto them
     // (the wasm import strings don't depend on which crate compiles them).
     import kontor:built-in/numbers;
+    // The resource-bearing context interface, same mechanism: the guest-side
+    // handle wrappers (signer, holder, storages, contexts, …) are generated
+    // once here so their hand impls and the storage trait plumbing are written
+    // once instead of expanded into every contract crate. The HOST does not
+    // remap this one — its context resources are Runtime-backed host objects.
+    import kontor:built-in/context;
 }

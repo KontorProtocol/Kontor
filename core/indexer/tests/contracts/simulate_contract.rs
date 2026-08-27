@@ -18,7 +18,7 @@ async fn test_crypto_contract_simulate() -> Result<()> {
             Inst {
                 gas_limit: 10_000,
                 kind: InstKind::Call {
-                    contract: crypto.clone().into(),
+                    contract: crypto.clone(),
                     expr: "set-hash(\"foo\")".to_string(),
                 },
             },

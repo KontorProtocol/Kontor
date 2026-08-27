@@ -2,3 +2,24 @@ disallowed-methods = [
     { path = "tokio_util::sync::CancellationToken::cancel", reason = "the stop decision belongs to main's Shutdown alone — a subsystem that cancels on its own turns the real failure into a drain-log line and reports an innocent as the cause. Observe stopper::ShutdownSignal instead; the two sanctioned raw-token sites carry #[allow]s." },
     { path = "tokio_util::sync::CancellationToken::drop_guard", reason = "a drop guard cancels implicitly on unwind, which is a hidden stop decision — same rule as CancellationToken::cancel" },
 ]
+
+disallowed-types = [
+    # The guest-side context handle wrappers generated in `built-in-types` are
+    # reachable from host code because the indexer depends on that crate for
+    # the shared DATA types — but on native targets their methods are
+    # wit-bindgen unreachable stubs (there is no host to call). Host code must
+    # use the indexer's own Runtime-backed resource types from
+    # `crate::runtime::wit` instead.
+    { path = "built_in_types::kontor::built_in::context::Contract", reason = "guest-side handle wrapper; use the Runtime-backed type from crate::runtime::wit" },
+    { path = "built_in_types::kontor::built_in::context::Holder", reason = "guest-side handle wrapper; use the Runtime-backed type from crate::runtime::wit" },
+    { path = "built_in_types::kontor::built_in::context::Signer", reason = "guest-side handle wrapper; use the Runtime-backed type from crate::runtime::wit" },
+    { path = "built_in_types::kontor::built_in::context::Transaction", reason = "guest-side handle wrapper; use the Runtime-backed type from crate::runtime::wit" },
+    { path = "built_in_types::kontor::built_in::context::Keys", reason = "guest-side handle wrapper; use the Runtime-backed type from crate::runtime::wit" },
+    { path = "built_in_types::kontor::built_in::context::IndexRows", reason = "guest-side handle wrapper; use the Runtime-backed type from crate::runtime::wit" },
+    { path = "built_in_types::kontor::built_in::context::ViewStorage", reason = "guest-side handle wrapper; use the Runtime-backed type from crate::runtime::wit" },
+    { path = "built_in_types::kontor::built_in::context::ProcStorage", reason = "guest-side handle wrapper; use the Runtime-backed type from crate::runtime::wit" },
+    { path = "built_in_types::kontor::built_in::context::ViewContext", reason = "guest-side handle wrapper; use the Runtime-backed type from crate::runtime::wit" },
+    { path = "built_in_types::kontor::built_in::context::ProcContext", reason = "guest-side handle wrapper; use the Runtime-backed type from crate::runtime::wit" },
+    { path = "built_in_types::kontor::built_in::context::FallContext", reason = "guest-side handle wrapper; use the Runtime-backed type from crate::runtime::wit" },
+    { path = "built_in_types::kontor::built_in::context::CoreContext", reason = "guest-side handle wrapper; use the Runtime-backed type from crate::runtime::wit" },
+]

@@ -1,7 +1,14 @@
 package kontor:built-in;
 
-interface context {
-    use error.{error};
+// The context DATA types, split from the resource/function-bearing `context`
+// interface so they can be `with:`-remapped onto the shared `built-in-types`
+// crate on both sides (same maneuver as `numbers-types`). `context` keeps its
+// name, its resources, and its functions.
+interface context-types {
+    record out-point {
+        txid: string,
+        vout: u32,
+    }
 
     /// Freely-constructible record naming a contract — used as the
     /// target for cross-contract calls (`foreign.call`). The passive
@@ -11,6 +18,34 @@ interface context {
         height: u64,
         tx-index: u32,
     }
+
+    variant holder-ref {
+        x-only-pubkey(string),
+        signer-id(u64),
+        core,
+        burner,
+        utxo(out-point),
+    }
+
+    variant signer-ref {
+        signer-id(u64),
+        x-only-pubkey(string),
+    }
+
+    /// The Bitcoin network this chain runs on — a chain-identity constant,
+    /// fixed at genesis. `Testnet4` is folded into `testnet`.
+    enum network {
+        mainnet,
+        signet,
+        testnet,
+        regtest,
+    }
+}
+
+interface context {
+    use error.{error};
+    use context-types.{contract-address, holder-ref, signer-ref, out-point, network};
+
 
     /// Active proof of "I am the contract at this address." Same
     /// HolderRef/Holder split: `contract-address` is the freely-
@@ -28,13 +63,6 @@ interface context {
         address: async func() -> contract-address;
     }
 
-    variant holder-ref {
-        x-only-pubkey(string),
-        signer-id(u64),
-        core,
-        burner,
-        utxo(out-point),
-    }
 
     resource holder {
         key: async func() -> string;
@@ -48,15 +76,7 @@ interface context {
         as-ref: async func() -> holder-ref;
     }
 
-    variant signer-ref {
-        signer-id(u64),
-        x-only-pubkey(string),
-    }
 
-    record out-point {
-        txid: string,
-        vout: u32,
-    }
 
     resource transaction {
         id: async func() -> string;
@@ -152,14 +172,6 @@ interface context {
         contract: async func() -> contract;
     }
 
-    /// The Bitcoin network this chain runs on — a chain-identity constant,
-    /// fixed at genesis. `Testnet4` is folded into `testnet`.
-    enum network {
-        mainnet,
-        signet,
-        testnet,
-        regtest,
-    }
 
     resource proc-context {
         signer: async func() -> signer;
@@ -206,7 +218,8 @@ interface context {
     }
 }
 interface foreign {
-    use context.{signer, contract-address};
+    use context.{signer};
+    use context-types.{contract-address};
 
     call: async func(signer: option<signer>, contract-address: contract-address, expr: string) -> string;
 }
@@ -352,6 +365,7 @@ interface file-registry-types {
 }
 
 world built-in {
+    import context-types;
     import context;
     import numbers-types;
     import foreign;

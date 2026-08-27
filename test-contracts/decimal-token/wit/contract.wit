@@ -8,7 +8,8 @@ package root:component;
 // the native-only `deposit` interface — can no longer be deployed by a user.
 world root {
   include kontor:built-in/built-in;
-  use kontor:built-in/context.{view-context, proc-context, holder-ref, contract};
+  use kontor:built-in/context.{view-context, proc-context, contract};
+  use kontor:built-in/context-types.{holder-ref};
   use kontor:built-in/error.{error};
   use kontor:built-in/numbers-types.{decimal};
 

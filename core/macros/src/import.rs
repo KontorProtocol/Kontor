@@ -164,9 +164,9 @@ pub fn import(
     } else {
         quote! {
             use super::context;
-            use super::context::HolderRef;
+            use super::context_types::HolderRef;
             use super::foreign;
-            use super::context::ContractAddress;
+            use super::context_types::ContractAddress;
             use super::file_registry_types::RawFileDescriptor;
             use super::error::Error;
             use super::numbers::{ Decimal, Integer };

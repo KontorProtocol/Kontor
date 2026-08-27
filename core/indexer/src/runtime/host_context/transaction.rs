@@ -24,10 +24,11 @@ impl<T> built_in::context::HostTransactionWithStore<T> for Runtime {
     }
 
     async fn out_point(accessor: &Accessor<T, Self>, _: Resource<Transaction>) -> Result<OutPoint> {
-        Ok(accessor
-            .with(|mut access| access.get().previous_output)
-            .expect("utxo_id called without previous_output present")
-            .into())
+        Ok(crate::runtime::types::outpoint_from_bitcoin(
+            accessor
+                .with(|mut access| access.get().previous_output)
+                .expect("utxo_id called without previous_output present"),
+        ))
     }
 
     async fn op_return_data(

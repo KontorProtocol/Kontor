@@ -2,7 +2,8 @@ package root:component;
 
 world root {
   include kontor:built-in/built-in;
-  use kontor:built-in/context.{holder-ref, view-context, proc-context, contract};
+  use kontor:built-in/context.{view-context, proc-context, contract};
+  use kontor:built-in/context-types.{holder-ref};
   use kontor:built-in/error.{error};
   use kontor:built-in/file-registry-types.{raw-file-descriptor};
 
