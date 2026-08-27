@@ -10,6 +10,14 @@ workspace = true
 proc-macro = true
 
 [dependencies]
+# The library backend behind wit-bindgen's `generate!`, driven directly by
+# `import!`/`interface!` so the emitted items can be filtered (the embedded
+# component-type custom section must NOT ride into contract binaries for an
+# imported world). Its wit-parser (re-exported via wit-bindgen-core) is a
+# different major than the workspace pin — import.rs parses the WIT once per
+# version; the two Resolves never mix.
+wit-bindgen-core = "=0.61.1"
+wit-bindgen-rust = "=0.61.1"
 wit-parser = { workspace = true }
 wit-validator = { path = "../wit-validator" }
 anyhow = { workspace = true }

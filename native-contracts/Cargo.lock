@@ -229,6 +229,8 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn",
+ "wit-bindgen-core",
+ "wit-bindgen-rust",
  "wit-parser 0.254.0",
  "wit-validator",
 ]

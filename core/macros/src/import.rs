@@ -2,15 +2,29 @@ use std::{panic, path::Path};
 
 use anyhow::Result;
 use darling::FromMeta;
-use heck::{ToKebabCase, ToSnakeCase, ToUpperCamelCase};
+use heck::{ToKebabCase, ToSnakeCase};
 use proc_macro2::{Span, TokenStream};
 use quote::{format_ident, quote};
+use std::collections::HashSet;
 use syn::Ident;
+
 use wit_parser::{
-    Enum, Function, Record, Resolve, Type, TypeDefKind, Variant, WorldItem, WorldKey,
+    Function, Handle, Resolve, Type, TypeDefKind, TypeId, TypeOwner, WorldItem, WorldKey,
 };
 
 use crate::utils;
+
+/// The built-in interfaces whose Rust family lives in `built-in-types` — the
+/// same set `contract!` remaps. An imported world's references to them must
+/// alias the shared family (via `with:`), never mint a second one.
+const REMAPPED_BUILT_INS: &[(&str, &str)] = &[
+    ("file-registry-types", "built_in_types::file_registry_types"),
+    ("error", "built_in_types::error"),
+    ("numbers", "built_in_types::numbers"),
+    ("numbers-types", "built_in_types::numbers_types"),
+    ("context-types", "built_in_types::context_types"),
+    ("context", "built_in_types::context"),
+];
 
 #[derive(FromMeta)]
 pub struct Config {
@@ -80,54 +94,140 @@ pub fn import(
         })
         .collect::<Vec<_>>();
 
-    let mut type_streams = Vec::new();
-    for (_id, def) in resolve.types.iter().filter(|(_, def)| {
-        // Aliases (`use other-iface.{t}` / `type a = b`) are references to
-        // definitions emitted elsewhere — never re-print them (the referenced
-        // definition is either a skipped built-in or printed on its own).
-        if matches!(def.kind, TypeDefKind::Type(_)) {
-            return false;
+    // Every type id reachable from the export signatures — the set that flows
+    // into the call shims (params, returns, and everything nested in them).
+    let mut export_reachable: HashSet<TypeId> = HashSet::new();
+    for export in exports.iter() {
+        for param in export.params.iter() {
+            collect_reachable(&resolve, &param.ty, &mut export_reachable);
         }
-        if let Some(name) = def.name.as_deref() {
-            ![
-                "transaction",
-                "contract",
-                "contract-address",
-                "view-context",
-                "view-storage",
-                "fall-context",
-                "proc-context",
-                "proc-storage",
-                "core-context",
-                "signer",
-                "holder",
-                "holder-ref",
-                "file-descriptor",
-                "raw-file-descriptor",
-                "proof",
-                "challenge-input",
-                "verify-result",
-                "error",
-                "keys",
-                "index-rows",
-                "integer",
-                "decimal",
-            ]
-            .contains(&name)
-        } else {
-            false
+        if let Some(ty) = &export.result {
+            collect_reachable(&resolve, ty, &mut export_reachable);
         }
-    }) {
-        let name = def.name.as_deref().expect("Filtered types have names");
-        let stream = match &def.kind {
-            TypeDefKind::Record(record) => print_typedef_record(&resolve, name, record),
-            TypeDefKind::Enum(enum_) => print_typedef_enum(name, enum_),
-            TypeDefKind::Variant(variant) => print_typedef_variant(&resolve, name, variant),
-            _ => panic!("Unsupported type definition kind: {:?}", def.kind),
-        }
-        .expect("Failed to generate type");
-        type_streams.push(stream);
     }
+
+    let mut with_entries = Vec::new();
+    for (_key, item) in world.imports.iter() {
+        let WorldItem::Interface { id, .. } = item else {
+            continue;
+        };
+        let iface = &resolve.interfaces[*id];
+        let Some(pkg_id) = iface.package else {
+            continue;
+        };
+        let pkg_name = &resolve.packages[pkg_id].name;
+        if pkg_name.namespace != "kontor" || pkg_name.name != "built-in" {
+            continue;
+        }
+        let Some(iface_name) = iface.name.as_deref() else {
+            continue;
+        };
+        if let Some((_, module)) = REMAPPED_BUILT_INS.iter().find(|(n, _)| *n == iface_name) {
+            with_entries.push((
+                format!("kontor:built-in/{iface_name}"),
+                wit_bindgen_rust::WithOption::Path(module.to_string()),
+            ));
+        } else {
+            // Un-remapped built-in interfaces (deposit, crypto, file-registry, …)
+            // regenerate as unused dead stubs — harmless UNLESS one of their
+            // types is reachable from an export signature, because those types
+            // flow into the call shims and a regenerated copy would be a twin
+            // family. (file-registry's resources, for example, never appear in
+            // contract exports — only in the imported world's own imports.)
+            // Alias nodes (`use other-iface.{t}`) don't count: they are
+            // references to definitions owned elsewhere (possibly remapped),
+            // not definitions this interface would re-mint.
+            if export_reachable.iter().any(|tid| {
+                resolve.types[*tid].owner == TypeOwner::Interface(*id)
+                    && !matches!(resolve.types[*tid].kind, TypeDefKind::Type(_))
+            }) {
+                panic!(
+                    "built-in interface `{iface_name}` has types reachable from the \
+                     imported world's export signatures but no `with:` remap in \
+                     macros/src/import.rs REMAPPED_BUILT_INS — add it (backed by \
+                     built-in-types) or its types will be generated twice"
+                );
+            }
+        }
+    }
+
+    // The imported world's types are generated by wit-bindgen's LIBRARY
+    // backend (the same code behind `generate!`), driven directly so the
+    // output can be doctored in two ways `generate!` cannot express:
+    //  - the world's EXPORTS are cleared first — we are a caller, not an
+    //    implementer, so no Guest trait / export glue / crate-root
+    //    `#[macro_export]` helpers exist to collide between invocations;
+    //  - the embedded component-type custom section (a static describing this
+    //    world) is FILTERED OUT of the generated items — if it rode into the
+    //    contract binary, componentization would merge this world into the
+    //    contract's own, polluting its chain-visible WIT with the imported
+    //    world's types.
+    // wit-bindgen-core re-exports its own wit-parser (a different major than
+    // the workspace pin `resolve` uses), so the WIT is parsed a second time
+    // with that version; the two Resolves never mix.
+    let mut gen_resolve = wit_bindgen_core::wit_parser::Resolve::new();
+    gen_resolve
+        .push_dir(abs_path.to_string_lossy().to_string())
+        .expect("imported wit dir parses under wit-bindgen's parser");
+    let gen_world_id = gen_resolve
+        .worlds
+        .iter()
+        .find(|(_, w)| w.name == world_name)
+        .map(|(id, _)| id)
+        .expect("imported world exists under wit-bindgen's parser");
+    gen_resolve.worlds[gen_world_id].exports = Default::default();
+
+    let opts = wit_bindgen_rust::Opts {
+        generate_all: true,
+        generate_unused_types: true,
+        additional_derive_attributes: vec![
+            "stdlib::Wavey".to_string(),
+            "PartialEq".to_string(),
+            "Eq".to_string(),
+        ],
+        with: with_entries,
+        runtime_path: Some("stdlib::wit_bindgen::rt".to_string()),
+        disable_custom_section_link_helpers: true,
+        ..Default::default()
+    };
+    let mut generator = opts.build();
+    let mut files = wit_bindgen_core::Files::default();
+    wit_bindgen_core::WorldGenerator::generate(
+        &mut generator,
+        &mut gen_resolve,
+        gen_world_id,
+        &mut files,
+    )
+    .expect("wit-bindgen generation for the imported world");
+    let (_name, contents) = files.iter().next().expect("one generated bindings file");
+    let generated =
+        syn::parse_file(std::str::from_utf8(contents).expect("generated bindings are utf-8"))
+            .expect("generated bindings parse");
+    let items_before = generated.items.len();
+    let bindings_items: Vec<syn::Item> = generated
+        .items
+        .into_iter()
+        .filter(|item| match item {
+            syn::Item::Static(item_static) => !item_static.attrs.iter().any(|attr| {
+                quote!(#attr)
+                    .to_string()
+                    .contains("component-type:wit-bindgen")
+            }),
+            _ => true,
+        })
+        .collect();
+    // The filter matching on wit-bindgen's section-name convention is the one
+    // piece coupled to its output shape: if a version bump renames the section
+    // and nothing gets filtered, the world's metadata would silently ride into
+    // contract binaries again (merging this world into the contract's
+    // chain-visible WIT) — fail the build instead.
+    assert_eq!(
+        items_before - bindings_items.len(),
+        1,
+        "expected to filter exactly one component-type custom-section static \
+         from wit-bindgen's output — its section naming has changed; update \
+         the filter in macros/src/import.rs"
+    );
 
     let mut func_streams = Vec::new();
     for export in exports.iter() {
@@ -186,6 +286,10 @@ pub fn import(
     };
 
     quote! {
+        // Generated glue may reference the shared guest context wrappers (e.g.
+        // world-level aliases in the imported WIT) — exempt from the workspace
+        // `disallowed-types` fence, which targets hand-written host code.
+        #[allow(clippy::disallowed_types)]
         #mod_keywords #module_name {
             extern crate alloc;
 
@@ -195,6 +299,14 @@ pub fn import(
                 vec::Vec,
             };
 
+            mod __bindings {
+                #(#bindings_items)*
+            }
+            // The world's own types surface here; the explicit `use super::…`
+            // names below SHADOW any same-named world-level aliases from this
+            // glob (post-consolidation they are the same underlying types).
+            pub use __bindings::*;
+
             #wave_mod_keywords wave {
                 use super::*;
 
@@ -203,9 +315,53 @@ pub fn import(
 
             #supers
 
-            #(#type_streams)*
             #(#func_streams)*
         }
+    }
+}
+
+/// Walk a WIT type's full graph (fields, cases, payloads, alias targets,
+/// resource handles) collecting every named-definition id it touches.
+fn collect_reachable(resolve: &Resolve, ty: &Type, set: &mut HashSet<TypeId>) {
+    let Type::Id(id) = ty else { return };
+    if !set.insert(*id) {
+        return;
+    }
+    match &resolve.types[*id].kind {
+        TypeDefKind::Record(record) => {
+            for field in &record.fields {
+                collect_reachable(resolve, &field.ty, set);
+            }
+        }
+        TypeDefKind::Variant(variant) => {
+            for case in &variant.cases {
+                if let Some(ty) = &case.ty {
+                    collect_reachable(resolve, ty, set);
+                }
+            }
+        }
+        TypeDefKind::Option(inner) | TypeDefKind::List(inner) => {
+            collect_reachable(resolve, inner, set);
+        }
+        TypeDefKind::Result(result) => {
+            if let Some(ok) = &result.ok {
+                collect_reachable(resolve, ok, set);
+            }
+            if let Some(err) = &result.err {
+                collect_reachable(resolve, err, set);
+            }
+        }
+        TypeDefKind::Tuple(tuple) => {
+            for ty in &tuple.types {
+                collect_reachable(resolve, ty, set);
+            }
+        }
+        TypeDefKind::Type(target) => collect_reachable(resolve, target, set),
+        TypeDefKind::Handle(handle) => {
+            let (Handle::Own(res) | Handle::Borrow(res)) = handle;
+            set.insert(*res);
+        }
+        _ => {}
     }
 }
 
@@ -520,69 +676,5 @@ pub fn generate_functions(
         }
 
         #call_constructor
-    })
-}
-
-pub fn print_typedef_record(resolve: &Resolve, name: &str, record: &Record) -> Result<TokenStream> {
-    let struct_name = Ident::new(&name.to_upper_camel_case(), Span::call_site());
-    let fields = record
-        .fields
-        .iter()
-        .map(|field| {
-            let field_name = Ident::new(&field.name.to_snake_case(), Span::call_site());
-            let field_ty = utils::wit_type_to_rust_type(resolve, &field.ty, false)?;
-            Ok(quote! { pub #field_name: #field_ty })
-        })
-        .collect::<Result<Vec<_>>>()?;
-
-    Ok(quote! {
-        #[derive(Debug, Clone, stdlib::Wavey, PartialEq, Eq)]
-        pub struct #struct_name {
-            #(#fields),*
-        }
-    })
-}
-
-pub fn print_typedef_enum(name: &str, enum_: &Enum) -> Result<TokenStream> {
-    let enum_name = Ident::new(&name.to_upper_camel_case(), Span::call_site());
-    let variants = enum_.cases.iter().map(|case| {
-        let variant_name = Ident::new(&case.name.to_upper_camel_case(), Span::call_site());
-        quote! { #variant_name }
-    });
-
-    Ok(quote! {
-        #[derive(Debug, Clone, Copy, PartialEq, Eq, stdlib::Wavey)]
-        pub enum #enum_name {
-            #(#variants),*
-        }
-    })
-}
-
-pub fn print_typedef_variant(
-    resolve: &Resolve,
-    name: &str,
-    variant: &Variant,
-) -> Result<TokenStream> {
-    let enum_name = Ident::new(&name.to_upper_camel_case(), Span::call_site());
-    let variants = variant
-        .cases
-        .iter()
-        .map(|case| {
-            let variant_name = Ident::new(&case.name.to_upper_camel_case(), Span::call_site());
-            match &case.ty {
-                Some(ty) => {
-                    let ty_name = utils::wit_type_to_rust_type(resolve, ty, false)?;
-                    Ok(quote! { #variant_name(#ty_name) })
-                }
-                None => Ok(quote! { #variant_name }),
-            }
-        })
-        .collect::<Result<Vec<_>>>()?;
-
-    Ok(quote! {
-        #[derive(Debug, Clone, stdlib::Wavey, PartialEq, Eq)]
-        pub enum #enum_name {
-            #(#variants),*
-        }
     })
 }
