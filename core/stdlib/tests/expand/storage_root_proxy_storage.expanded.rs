@@ -130,13 +130,15 @@ impl ProxyStorage {
         )
     }
 }
-impl crate::ProcContext {
-    pub fn model(&self) -> ProxyStorageWriteModel<crate::context::ProcStorage> {
+impl stdlib::HasRootModel<ProxyStorage> for crate::ProcContext {
+    type Model = ProxyStorageWriteModel<crate::context::ProcStorage>;
+    fn model(&self) -> Self::Model {
         ProxyStorageWriteModel::new(alloc::rc::Rc::new(self.storage()), KeyPath::new())
     }
 }
-impl crate::ViewContext {
-    pub fn model(&self) -> ProxyStorageModel<crate::context::ViewStorage> {
+impl stdlib::HasRootModel<ProxyStorage> for crate::ViewContext {
+    type Model = ProxyStorageModel<crate::context::ViewStorage>;
+    fn model(&self) -> Self::Model {
         ProxyStorageModel::new(alloc::rc::Rc::new(self.storage()), KeyPath::new())
     }
 }

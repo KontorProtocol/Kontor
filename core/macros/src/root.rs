@@ -15,14 +15,21 @@ pub fn generate_root_struct(data_struct: &DataStruct, type_name: &Ident) -> Resu
                     }
                 }
 
-                impl crate::ProcContext {
-                    pub fn model(&self) -> #write_model_name<crate::context::ProcStorage> {
+                // The context types are the shared `built-in-types` wrappers
+                // (foreign here), so `model()` rides on `stdlib::HasRootModel`
+                // instead of an inherent impl — call syntax unchanged; the
+                // local root type as the trait parameter is what passes the
+                // orphan rule.
+                impl stdlib::HasRootModel<#type_name> for crate::ProcContext {
+                    type Model = #write_model_name<crate::context::ProcStorage>;
+                    fn model(&self) -> Self::Model {
                         #write_model_name::new(alloc::rc::Rc::new(self.storage()), KeyPath::new())
                     }
                 }
 
-                impl crate::ViewContext {
-                    pub fn model(&self) -> #model_name<crate::context::ViewStorage> {
+                impl stdlib::HasRootModel<#type_name> for crate::ViewContext {
+                    type Model = #model_name<crate::context::ViewStorage>;
+                    fn model(&self) -> Self::Model {
                         #model_name::new(alloc::rc::Rc::new(self.storage()), KeyPath::new())
                     }
                 }

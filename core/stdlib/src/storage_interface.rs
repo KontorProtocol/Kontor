@@ -171,6 +171,16 @@ pub trait HasViewStorage {
     fn view_storage(&self) -> Self::View;
 }
 
+/// `ctx.model()` — access to a contract's root storage model from its
+/// Proc/View contexts. Implemented by the `Root`/`StorageRoot` derive in the
+/// contract crate; generic over the root type `R` because the context types
+/// are foreign there (the shared `built-in-types` wrappers), so the local root
+/// appearing as a trait parameter is what satisfies the orphan rule.
+pub trait HasRootModel<R> {
+    type Model;
+    fn model(&self) -> Self::Model;
+}
+
 impl<T: WriteStorage + ?Sized> Store<T> for u64 {
     fn __set(ctx: &alloc::rc::Rc<T>, path: KeyPath, value: u64) {
         ctx.__set_u64(&path, value);

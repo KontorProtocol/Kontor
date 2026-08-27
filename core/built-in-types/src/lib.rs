@@ -151,11 +151,16 @@ wit_bindgen::generate!({
 
 pub use kontor::built_in::file_registry_types;
 // The generated models' `try_update_*` path names `crate::error::Error`.
+pub use kontor::built_in::context;
 pub use kontor::built_in::context_types;
 pub use kontor::built_in::error;
 pub use kontor::built_in::numbers;
 pub use kontor::built_in::numbers_types;
 
+// This crate OWNS the guest context wrappers, so it is exempt from the
+// workspace `disallowed-types` fence that keeps host code (which reaches these
+// types transitively, but for which they are unreachable-stub decoys) off them.
+#[allow(clippy::disallowed_types)]
 mod impls;
 
 // Owned behavior on the shared types — written once here, where the types
