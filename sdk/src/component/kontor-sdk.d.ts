@@ -15,7 +15,7 @@ export interface ValidationResultValidationErrors {
   tag: 'validation-errors',
   val: Array<ValidationError>,
 }
-export type * as KontorBuiltInNumbers from './interfaces/kontor-built-in-numbers.js'; // import kontor:built-in/numbers
+export type * as KontorBuiltInNumbersTypes from './interfaces/kontor-built-in-numbers-types.js'; // import kontor:built-in/numbers-types
 export * as witCodec from './interfaces/root-component-wit-codec.js'; // export root:component/wit-codec
 export * as numerics from './interfaces/root-component-numerics.js'; // export root:component/numerics
 export function serializeInst(jsonStr: string): Uint8Array;

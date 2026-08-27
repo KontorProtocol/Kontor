@@ -141,8 +141,8 @@ function normalizeKind(raw: unknown): Kind {
  * helper.
  */
 const CANONICAL_TYPES: Record<string, string> = {
-  "kontor:built-in/numbers.decimal": "Decimal",
-  "kontor:built-in/numbers.integer": "Integer",
+  "kontor:built-in/numbers-types.decimal": "Decimal",
+  "kontor:built-in/numbers-types.integer": "Integer",
   "kontor:built-in/context.holder-ref": "HolderRef",
   "kontor:built-in/foreign.contract-address": "ContractAddress",
 };
