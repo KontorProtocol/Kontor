@@ -1,11 +1,15 @@
 use core::slice;
 use std::sync::Arc;
 
+use anyhow::{Result, anyhow, ensure};
 use malachitebft_core_types::VotingPower;
 use serde::{Deserialize, Serialize};
 
 use crate::consensus::signing::PublicKey;
 use crate::consensus::{Address, Ctx};
+
+// Both default Malachite thresholds multiply observed voting power by three.
+const MAX_TOTAL_VOTING_POWER: VotingPower = VotingPower::MAX / 3;
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Validator {
@@ -57,11 +61,16 @@ pub struct ValidatorSet {
 
 impl ValidatorSet {
     pub fn new(validators: impl IntoIterator<Item = Validator>) -> Self {
-        let validators: Vec<_> = validators.into_iter().collect();
-        assert!(!validators.is_empty());
-        Self {
-            validators: Arc::new(validators),
-        }
+        Self::try_new(validators).expect("invalid validator set")
+    }
+
+    pub fn try_new(validators: impl IntoIterator<Item = Validator>) -> Result<Self> {
+        let set = Self {
+            validators: Arc::new(validators.into_iter().collect()),
+        };
+        ensure!(!set.is_empty(), "validator set is empty");
+        set.checked_total_voting_power()?;
+        Ok(set)
     }
 
     pub fn len(&self) -> usize {
@@ -77,7 +86,21 @@ impl ValidatorSet {
     }
 
     pub fn total_voting_power(&self) -> VotingPower {
-        self.validators.iter().map(|v| v.voting_power).sum()
+        self.checked_total_voting_power()
+            .expect("invalid total voting power")
+    }
+
+    fn checked_total_voting_power(&self) -> Result<VotingPower> {
+        let total = self.validators.iter().try_fold(0u64, |total, validator| {
+            total
+                .checked_add(validator.voting_power)
+                .ok_or_else(|| anyhow!("total voting power overflow"))
+        })?;
+        ensure!(
+            total <= MAX_TOTAL_VOTING_POWER,
+            "total voting power exceeds quorum arithmetic limit"
+        );
+        Ok(total)
     }
 
     pub fn get_by_index(&self, index: usize) -> Option<&Validator> {
@@ -104,5 +127,49 @@ impl malachitebft_core_types::ValidatorSet<Ctx> for ValidatorSet {
 
     fn get_by_index(&self, index: usize) -> Option<&Validator> {
         self.validators.get(index)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use malachitebft_core_types::ThresholdParams;
+
+    use super::{MAX_TOTAL_VOTING_POWER, Validator, ValidatorSet};
+    use crate::consensus::signing::PrivateKey;
+
+    fn validator(seed: u8, power: u64) -> Validator {
+        Validator::new(PrivateKey::from([seed; 32]).public_key(), power)
+    }
+
+    #[test]
+    fn aggregate_limit_is_safe_for_default_thresholds() {
+        let set =
+            ValidatorSet::try_new([validator(1, MAX_TOTAL_VOTING_POWER - 1), validator(2, 1)])
+                .unwrap();
+        let total = set.total_voting_power();
+        let thresholds = ThresholdParams::default();
+        for threshold in [thresholds.honest, thresholds.quorum] {
+            assert!(threshold.is_met(total, total));
+            let minimum = threshold.min_expected(total);
+            assert!(threshold.is_met(minimum, total));
+            assert!(!threshold.is_met(minimum - 1, total));
+        }
+    }
+
+    #[test]
+    fn rejects_unsafe_aggregate_and_overflow() {
+        for powers in [[MAX_TOTAL_VOTING_POWER, 1], [u64::MAX, 1]] {
+            assert!(
+                ValidatorSet::try_new([validator(1, powers[0]), validator(2, powers[1]),]).is_err()
+            );
+        }
+    }
+
+    #[test]
+    #[should_panic(expected = "invalid total voting power")]
+    fn deserialized_total_cannot_wrap() {
+        let encoded = serde_json::json!({"validators": [validator(1, u64::MAX), validator(2, 1)]});
+        let set: ValidatorSet = serde_json::from_value(encoded).unwrap();
+        set.total_voting_power();
     }
 }
