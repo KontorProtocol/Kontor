@@ -744,7 +744,7 @@ async fn build_validator_set(runtime: &mut Runtime) -> Result<ValidatorSet> {
         })
         .collect::<Result<Vec<_>>>()?;
 
-    Ok(ValidatorSet::new(validators))
+    ValidatorSet::try_new(validators)
 }
 
 fn stake_to_voting_power(stake: Decimal) -> Result<VotingPower> {

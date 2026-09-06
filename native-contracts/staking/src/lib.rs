@@ -11,7 +11,9 @@ import!(
 );
 
 const ACTIVATION_DELAY: u64 = 12; // 2 * FINALITY_WINDOW (6)
-const MAX_STAKE: u64 = 1_000_000_000; // Cap to fit in u64 voting power
+const MAX_STAKE: u64 = 1_000_000_000;
+// Malachite's default thresholds multiply observed voting power by three.
+const MAX_TOTAL_STAKE: u64 = u64::MAX / 3;
 
 // `status` and `ed25519_pubkey` are indexed so the per-block status sweep and the
 // register-time duplicate-key check are prefix reads of a bucket, not full scans of
@@ -51,6 +53,31 @@ struct StakingStorage {
 fn active_set_size<M: ValidatorEntryIndex<Holder>>(validators: &M) -> u64 {
     validators.status(ValidatorStatus::Active).len()
         + validators.status(ValidatorStatus::PendingExit).len()
+}
+
+fn checked_total_stake(total: Decimal, additional: Decimal) -> Result<Decimal, Error> {
+    let total = total.add(additional)?;
+    if total > MAX_TOTAL_STAKE.try_into()? {
+        return Err(Error::Message(
+            "total stake exceeds voting power limit".to_string(),
+        ));
+    }
+    Ok(total)
+}
+
+fn ensure_stake_capacity(ctx: &ProcContext, additional: Decimal) -> Result<(), Error> {
+    let model = ctx.model();
+    let mut total = checked_total_stake(model.total_active_stake(), additional)?;
+    // Reserve pending joins now, so activation cannot halt a later block.
+    // Full Decimal stakes conservatively bound the sum of truncated voting powers.
+    for (_, entry) in model
+        .validators()
+        .status(ValidatorStatus::PendingJoin)
+        .iter()
+    {
+        total = checked_total_stake(total, entry.stake)?;
+    }
+    Ok(())
 }
 
 fn make_validator_info(
@@ -102,6 +129,7 @@ impl Guest for Staking {
         if stake_amount > MAX_STAKE.try_into().unwrap() {
             return Err(Error::Message("stake exceeds maximum".to_string()));
         }
+        ensure_stake_capacity(ctx, stake_amount)?;
 
         // Reject duplicate ed25519 keys — two validators with the same
         // consensus key would cause conflicts in Malachite. The `ed25519_pubkey`
@@ -179,11 +207,12 @@ impl Guest for Staking {
                 "total stake would exceed maximum".to_string(),
             ));
         }
+        ensure_stake_capacity(ctx, amount)?;
 
         // Effects before interactions (CEI pattern)
         entry.set_stake(new_stake);
         if status == ValidatorStatus::Active {
-            model.try_update_total_active_stake(|s| s.add(amount))?;
+            model.try_update_total_active_stake(|s| checked_total_stake(s, amount))?;
         }
 
         token::transfer(
@@ -228,12 +257,21 @@ impl Guest for Staking {
         if active_set_size(&model.validators()) > 0 {
             return;
         }
+        let mut genesis_stake = 0u64.try_into().unwrap();
         for v in &validators {
             assert!(
                 v.ed25519_pubkey.len() == 32,
                 "expected 32-byte ed25519 pubkey in genesis set"
             );
+            assert!(
+                v.stake > 0u64.try_into().unwrap(),
+                "genesis stake must be positive"
+            );
+            genesis_stake = checked_total_stake(genesis_stake, v.stake)
+                .expect("genesis stake exceeds voting power limit");
         }
+        ensure_stake_capacity(&ctx.proc_context(), genesis_stake)
+            .expect("genesis stake exceeds voting power limit");
         // Reject duplicate ed25519 keys in genesis set
         assert!(
             validators
@@ -263,7 +301,7 @@ impl Guest for Staking {
                 },
             );
             model
-                .try_update_total_active_stake(|s| s.add(v.stake))
+                .try_update_total_active_stake(|s| checked_total_stake(s, v.stake))
                 .expect("Failed to update total active stake");
         }
         // No `active_count` to set — the `status` index's ACTIVE bucket count is
@@ -301,8 +339,8 @@ impl Guest for Staking {
             if let Some(entry) = model.validators().get(&key)
                 && block_height >= entry.activation_height()
             {
+                model.try_update_total_active_stake(|s| checked_total_stake(s, entry.stake()))?;
                 entry.set_status(ValidatorStatus::Active);
-                model.try_update_total_active_stake(|s| s.add(entry.stake()))?;
                 activated += 1;
             }
         }

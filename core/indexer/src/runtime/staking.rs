@@ -1,6 +1,9 @@
 use crate::runtime::Runtime;
 use crate::testlib_exports::*;
 
+#[cfg(test)]
+mod tests;
+
 import!(
     name = "staking",
     mod_name = "api",

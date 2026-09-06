@@ -91,6 +91,7 @@ holders, not depositor balances; the storage-deposit floor logic never counts th
 | **Supply** | per block: Δtotal_supply == ε_minted − Σburns | invariant harness (§13) |
 | **Staking escrow** | staking holder balance ≥ Σ all validators' stake | invariant harness + debug assert in `distribute_ordering_reward` |
 | **Aggregate stake** | `total_active_stake` == Σ stakes of ACTIVE ∪ PENDING_EXIT, across every slash/exit transition | staking contract + harness |
+| **Voting-power arithmetic** | total consensus voting power ≤ `u64::MAX / 3`; admission conservatively bounds full Decimal stake, including PENDING_JOIN reservations | staking capacity checks + checked host validator-set construction |
 | **Pool solvency** | ORDERING_POOL/STORAGE_POOL balances never negative; drained only by their named flows | token contract (transfer semantics) |
 
 ## 4. Two settlement clocks
@@ -198,6 +199,9 @@ to the ACTIVE validator set, stake-weighted** — not to batch signers.
   PENDING_EXIT share in the pool).
 - Exact conservation: last-recipient-absorbs-remainder (the established `distribute_*`
   rule); amount transferred == amount credited, enforced inside the call (§3.2 rule 3).
+- Reward credits must pass the same aggregate stake-capacity check as voluntary additions,
+  including reserved PENDING_JOIN stake. The 1B voluntary-deposit cap is separate from this
+  arithmetic bound; rejecting an unsafe total must happen before committing the block.
 
 ### 5.4 Loop discipline (post-#489, non-negotiable)
 
