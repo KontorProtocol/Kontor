@@ -2,7 +2,7 @@
  * Typed wrapper over Kontor's `holder-ref` variant. A HolderRef
  * identifies anything that can hold a balance or own storage entries:
  * a signer's x-only public key, a resolved signer-id, the core
- * identity, the burner sink, or a UTXO.
+ * identity, protocol reward pools, the burner sink, or a UTXO.
  *
  * Construct via the static factories — they spell out which case
  * you're producing and what payload it carries. Decode wire values
@@ -21,6 +21,8 @@ type Variant =
   | { kind: "signer-id"; value: bigint }
   | { kind: "core" }
   | { kind: "burner" }
+  | { kind: "ordering-pool" }
+  | { kind: "storage-pool" }
   | { kind: "utxo"; value: OutPoint };
 
 type RawOutPoint = { txid: string; vout: number };
@@ -30,6 +32,8 @@ type Raw =
   | { kind: "signer-id"; value: string }
   | { kind: "core" }
   | { kind: "burner" }
+  | { kind: "ordering-pool" }
+  | { kind: "storage-pool" }
   | { kind: "utxo"; value: RawOutPoint };
 
 export class HolderRef {
@@ -51,6 +55,14 @@ export class HolderRef {
     return new HolderRef({ kind: "burner" });
   }
 
+  static orderingPool(): HolderRef {
+    return new HolderRef({ kind: "ordering-pool" });
+  }
+
+  static storagePool(): HolderRef {
+    return new HolderRef({ kind: "storage-pool" });
+  }
+
   static utxo(out: OutPoint): HolderRef {
     return new HolderRef({ kind: "utxo", value: out });
   }
@@ -65,6 +77,10 @@ export class HolderRef {
         return HolderRef.core();
       case "burner":
         return HolderRef.burner();
+      case "ordering-pool":
+        return HolderRef.orderingPool();
+      case "storage-pool":
+        return HolderRef.storagePool();
       case "utxo":
         return HolderRef.utxo({
           txid: raw.value.txid,
@@ -84,6 +100,10 @@ export class HolderRef {
         return { kind: "core" };
       case "burner":
         return { kind: "burner" };
+      case "ordering-pool":
+        return { kind: "ordering-pool" };
+      case "storage-pool":
+        return { kind: "storage-pool" };
       case "utxo":
         return {
           kind: "utxo",

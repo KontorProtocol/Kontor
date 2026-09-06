@@ -51,6 +51,10 @@ world root {
   // --- Per-block validator processing (CoreContext — called by block handler) ---
   export process-pending-validators: async func(ctx: borrow<core-context>, block-height: u64) -> result<validator-set-change, error>;
 
+  export distribute-ordering-reward: async func(ctx: borrow<core-context>, amount: decimal) -> result<decimal, error>;
+  export has-reward-recipients: async func(ctx: borrow<view-context>) -> bool;
+  export last-reward-height: async func(ctx: borrow<view-context>) -> option<u64>;
+
   // --- Queries (ViewContext) ---
   export get-active-set: async func(ctx: borrow<view-context>) -> list<active-validator-info>;
   export get-validator: async func(ctx: borrow<view-context>, x-only-pubkey: string) -> option<validator-info>;

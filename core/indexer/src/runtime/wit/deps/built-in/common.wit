@@ -25,6 +25,8 @@ interface context-types {
         core,
         burner,
         utxo(out-point),
+        ordering-pool,
+        storage-pool,
     }
 
     variant signer-ref {

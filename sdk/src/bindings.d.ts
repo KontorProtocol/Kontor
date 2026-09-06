@@ -227,7 +227,9 @@ export type HolderRef =
   | { "SignerId": number }
   | "Core"
   | "Burner"
-  | { "Utxo": OutPoint };
+  | { "Utxo": OutPoint }
+  | "OrderingPool"
+  | "StoragePool";
 
 export type Info = {
   version: string;

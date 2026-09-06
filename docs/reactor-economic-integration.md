@@ -60,6 +60,11 @@ The token contract's named system holders today are `CORE()` (the per-op gas esc
   receives nothing (the storage share is computed for supply accounting and not minted —
   see §5.1). Declaring it now fixes the holder namespace so Step 5 is additive.
 
+The implemented identities are `HolderRef::OrderingPool` and `HolderRef::StoragePool`,
+with storage keys `ordering_pool` and `storage_pool`. They have no signer variants.
+The core-only `token::transfer_ordering_reward` debits the fixed ordering-pool source;
+staking supplies its own escrow holder as the destination.
+
 Both pool holders are **floor-exempt** in the same sense CORE/BURNER are: they are system
 holders, not depositor balances; the storage-deposit floor logic never counts them.
 
@@ -119,18 +124,19 @@ signer ever reaches these paths.
 
 ## 5. Per-block sequence (extends `run_block_lifecycle`)
 
-Current `run_block_lifecycle` (main): `set_context` → `record_block_root` →
-`expire_challenges` → `generate_challenges_for_block` → `process_pending_validators`,
-inside the block savepoint. v1 extends it as follows:
+The ordering slice implements mint and payout around the existing audit hooks, before
+validator processing, inside the block savepoint. The full v1 sequence below also
+includes storage slashing and epoch work that remain unimplemented.
 
 ```
 run_block_lifecycle(block):                          [inside the block savepoint]
   set_context(height)                                [existing]
 
   ── Phase 0 · Mint ────────────────────────────────────────────────
-  e = token::mint_emission()
-      → mints χ·e into ORDERING_POOL                 [new; §3 rules apply]
-      → returns {total: e, ordering: χ·e, storage: (1−χ)·e}
+  eligible = staking::has_reward_recipients()
+  e = token::mint_emission(eligible)
+      → mints the ordering share into ORDERING_POOL only if eligible
+      → returns {scheduled_total, ordering_minted, storage_unminted}
         storage share is COMPUTED (supply schedule accounting) but NOT minted in v1
 
   ── Phase 1 · Storage audit ───────────────────────────────────────
@@ -144,9 +150,9 @@ run_block_lifecycle(block):                          [inside the block savepoint
       // no distribute_slash on this path — burn-all (§5.2)
 
   ── Phase 3 · Ordering payout ─────────────────────────────────────
-  staking::distribute_ordering_reward(χ·e)
-      // internally: transfer(ORDERING_POOL → staking holder, amount actually credited),
-      // then credit stakes — one atomic contract call (§3.2 rule 3)
+  staking::distribute_ordering_reward(e.ordering_minted)
+      // credits stakes and transfers ORDERING_POOL → staking holder
+      // in one atomic contract call (§3.2 rule 3)
 
   ── Phase 4 · Validators & epoch ──────────────────────────────────
   process_pending_validators(height)                 [existing]
@@ -161,7 +167,7 @@ run_block_lifecycle(block):                          [inside the block savepoint
   Decision 2 accepted stake-proportional yield, and the storage payout needs the Step-5
   accumulator (§12) — minting into a pool nothing drains would only build an unbounded
   balance and complicate the supply invariant. The emission *schedule* is unchanged; v1's
-  realized inflation is χ·ε per block, documented as such.
+  realized inflation is χ·ε per eligible block, and zero without ACTIVE recipients.
 - `mint_emission` is idempotence-guarded per height (calling twice for one block must be
   impossible or a no-op — it runs inside the block savepoint, so replay-after-rollback
   re-mints correctly with the block itself).
@@ -202,6 +208,28 @@ to the ACTIVE validator set, stake-weighted** — not to batch signers.
 - Reward credits must pass the same aggregate stake-capacity check as voluntary additions,
   including reserved PENDING_JOIN stake. The 1B voluntary-deposit cap is separate from this
   arithmetic bound; rejecting an unsafe total must happen before committing the block.
+
+### Ordering implementation decisions (2026-09-06)
+
+- Direct payouts use one staking call per Bitcoin block, with one pool-to-escrow
+  transfer and a snapshot of ACTIVE stakes in canonical holder-string order.
+- There is no validator-count cap. The owner accepts O(ACTIVE + PENDING_JOIN)
+  scans during development, plus canonical recipient sorting. Aggregate-capacity
+  validation includes the pending joins. This is
+  an explicit exception to §5.4, not a claim that the loop has a fixed work bound.
+  Measure the real lifecycle and optimize contract/storage plumbing as needed;
+  population scale and replay cost remain production-readiness gates.
+- With no ACTIVE recipients, mint nothing and mark the height processed. Zero
+  emissions also mark the height. Duplicate or older mint/payout heights fail;
+  their guards are versioned state and roll back with the block.
+- Supply is sampled after block transactions, at lifecycle entry. Compute
+  `scheduled_total = ((supply * 5) / 100) / 52560`, then ordering = total / 10.
+  Only the eligible ordering share is minted; storage issuance remains deferred.
+- Every payout respects the aggregate arithmetic bound, including pending joins.
+  An invariant failure propagates and rolls back the entire block.
+- All pre-production history is disposable. Deploy these consensus-visible changes
+  with a coordinated fresh genesis; this patch does not reset a deployed network.
+  Production upgrade/activation machinery is separate work before history matters.
 
 ### 5.4 Loop discipline (post-#489, non-negotiable)
 

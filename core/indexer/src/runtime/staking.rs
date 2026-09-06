@@ -2,6 +2,8 @@ use crate::runtime::Runtime;
 use crate::testlib_exports::*;
 
 #[cfg(test)]
+mod reward_tests;
+#[cfg(test)]
 mod tests;
 
 import!(

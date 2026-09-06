@@ -28,6 +28,16 @@ world root {
     amt: decimal,
   }
 
+  record emission {
+    scheduled-total: decimal,
+    ordering-minted: decimal,
+    storage-unminted: decimal,
+  }
+
+  export mint-emission: async func(ctx: borrow<core-context>, eligible: bool) -> result<emission, error>;
+  export transfer-ordering-reward: async func(ctx: borrow<core-context>, dst: holder-ref, amt: decimal) -> result<transfer, error>;
+  export last-emission-height: async func(ctx: borrow<view-context>) -> option<u64>;
+
   export issuance: async func(ctx: borrow<core-context>, amt: decimal) -> result<mint, error>;
   export issue-to: async func(ctx: borrow<core-context>, dst: holder-ref, amt: decimal) -> result<mint, error>;
   export hold: async func(ctx: borrow<core-context>, amt: decimal) -> result<transfer, error>;

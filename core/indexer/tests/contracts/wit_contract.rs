@@ -36,6 +36,13 @@ world root {
     amt: decimal,
   }
 
+  record emission {
+    scheduled-total: decimal,
+    ordering-minted: decimal,
+    storage-unminted: decimal,
+  }
+
+  export last-emission-height: async func(ctx: borrow<view-context>) -> option<u64>;
   export mint: async func(ctx: borrow<proc-context>, amt: decimal) -> result<mint, error>;
   export burn: async func(ctx: borrow<proc-context>, amt: decimal) -> result<burn, error>;
   export transfer: async func(ctx: borrow<proc-context>, dst: holder-ref, amt: decimal) -> result<transfer, error>;

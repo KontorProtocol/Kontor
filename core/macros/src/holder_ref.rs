@@ -23,6 +23,8 @@ pub fn generate(input: TokenStream) -> TokenStream {
                     Self::SignerId(id) => write!(f, "{id}"),
                     Self::Core => write!(f, "core"),
                     Self::Burner => write!(f, "burn"),
+                    Self::OrderingPool => write!(f, "ordering_pool"),
+                    Self::StoragePool => write!(f, "storage_pool"),
                     Self::Utxo(out_point) => write!(f, "{}:{}", out_point.txid, out_point.vout),
                 }
             }
@@ -37,6 +39,10 @@ pub fn generate(input: TokenStream) -> TokenStream {
                     Self::Core
                 } else if s == "burn" {
                     Self::Burner
+                } else if s == "ordering_pool" {
+                    Self::OrderingPool
+                } else if s == "storage_pool" {
+                    Self::StoragePool
                 } else if let Ok(id) = s.parse::<u64>() {
                     Self::SignerId(id)
                 } else if let Some((txid, vout)) = s.rsplit_once(':') {
@@ -57,6 +63,8 @@ pub fn generate(input: TokenStream) -> TokenStream {
                     (Self::SignerId(a), Self::SignerId(b)) => a == b,
                     (Self::Core, Self::Core) => true,
                     (Self::Burner, Self::Burner) => true,
+                    (Self::OrderingPool, Self::OrderingPool) => true,
+                    (Self::StoragePool, Self::StoragePool) => true,
                     (Self::Utxo(a), Self::Utxo(b)) => a.txid == b.txid && a.vout == b.vout,
                     _ => false,
                 }
