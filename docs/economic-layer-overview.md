@@ -28,6 +28,12 @@ wiring could not be finalized until these were decided. All four are decided:
 
 ---
 
+The 2026-09-06 ordering implementation decision adds **no validator-count cap**.
+The approximately 200 participants above is a supply/floor estimate, not a permanent
+count bound. This slice leaves the existing admission floor unchanged and implements
+direct payouts; scale and replay cost remain production-readiness checks. See the
+ordering implementation decisions in `reactor-economic-integration.md`.
+
 ## 1. The economy in one frame
 
 Kontor is a metaprotocol that provides **optimistic ordering over Bitcoin**: transactions
@@ -58,10 +64,10 @@ The work splits into two phases on two settlement clocks:
 | Secures | storage, consensus security, blockspace | the optimistic pre-confirmation promise |
 | Status | contracts in open PRs; reactor wiring pending (#442) | design-only (#443) |
 
-**The architectural spine of both phases:** native contracts only *compute* allocations
-(pure, deterministic, fixed-point `Decimal`); the **reactor moves the KOR** (via the core
-signer) at the right lifecycle moment. A contract never reads wall-clock, mempool, or
-optimistic state — the reactor passes everything in.
+**The architectural spine of Phase 1:** the reactor invokes settlement at the
+block lifecycle boundary. Native contracts compute deterministic Decimal allocations
+and move the corresponding KOR atomically: staking pulls the ordering pool transfer
+inside the same call that credits stakes. Phase 2 remains deferred.
 
 ---
 
@@ -73,6 +79,7 @@ issue, the **Phase 2 design**, and an **external calibration** model.
 
 | Piece | Where | State |
 |---|---|---|
+| Ordering emissions + ACTIVE stake compounding | `run_block_lifecycle`, token and staking | implemented; no validator-count cap; storage rewards/slashing remain separate |
 | Storage audit (challenges) + validator processing | **on `main`** (`run_block_lifecycle`) | done |
 | Storage-deposit FLOOR model + gas escrow | **on `main`** | done — the live economic mechanism |
 | token: mint hardening + `Issuance` mainnet gate | **on `main`** (#437; gate merged) | done |

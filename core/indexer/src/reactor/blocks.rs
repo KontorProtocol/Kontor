@@ -15,7 +15,8 @@ use crate::database::queries::{
 use crate::metrics::{BLOCK_HEIGHT, ITEMS_INDEXED};
 use crate::runtime::{
     filestorage::api::{expire_challenges, generate_challenges_for_block, record_block_root},
-    staking::api::process_pending_validators,
+    staking::api::{distribute_ordering_reward, has_reward_recipients, process_pending_validators},
+    token::api::mint_emission,
     wit::Signer,
 };
 use crate::test_utils::new_mock_block_hash;
@@ -314,6 +315,8 @@ impl<E: Executor> Reactor<E> {
         self.runtime
             .set_context(block.height, None, None, None)
             .await;
+        let eligible = has_reward_recipients(&mut self.runtime).await?;
+        let emission = mint_emission(&mut self.runtime, &core_signer, eligible).await??;
         // Finalize the registry root for the block's `create_agreement`s (deferred
         // off the user's gas) before the challenge lifecycle. No-op if no files
         // were added this block.
@@ -340,6 +343,9 @@ impl<E: Executor> Reactor<E> {
                 block.height
             );
         }
+
+        distribute_ordering_reward(&mut self.runtime, &core_signer, emission.ordering_minted)
+            .await??;
 
         let change = process_pending_validators(&mut self.runtime, &core_signer, block.height)
             .await

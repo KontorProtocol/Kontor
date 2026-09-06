@@ -3,10 +3,7 @@ contract!(name = "token");
 
 use stdlib::*;
 
-/// Per-call cap on the *public, unprivileged* `mint` — a dev/test affordance
-/// (signet/testnet/regtest funding). It does NOT apply to the privileged
-/// core-context `issuance`/`issue_to` path that protocol emissions (and genesis
-/// stake issuance) use.
+// The dev faucet cap does not apply to genesis issuance or scheduled emissions.
 const DEV_MINT_CAP: u64 = 1000;
 
 #[derive(Clone, Default, StorageRoot)]
@@ -15,9 +12,9 @@ struct TokenStorage {
     pub total_supply: Decimal,
     /// Whether the public dev/test `mint` is permitted. Set once at `init` from
     /// the chain `network()` — on for signet/testnet/regtest (faucet), off on
-    /// mainnet (the only KOR mint path there is protocol emissions via
-    /// `issuance`).
+    /// mainnet (issuance there is restricted to privileged protocol paths).
     pub dev_mint_enabled: bool,
+    pub last_emission_height: Option<u64>,
 }
 
 fn utxo_holder(out_point: context::OutPoint) -> Holder {
@@ -81,11 +78,66 @@ impl Guest for Token {
     fn init(ctx: &ProcContext) -> Contract {
         TokenStorage::default().init(ctx);
         // Public dev mint is a dev/test affordance — enabled on every network
-        // except mainnet, where the only KOR mint path is protocol emissions.
+        // except mainnet, where minting requires a privileged protocol path.
         // Self-conditioning via the `network()` built-in; no genesis wiring.
         ctx.model()
             .set_dev_mint_enabled(!ctx.network().is_mainnet());
         ctx.contract()
+    }
+
+    fn mint_emission(ctx: &CoreContext, eligible: bool) -> Result<Emission, Error> {
+        let proc = ctx.proc_context();
+        let model = proc.model();
+        let height = proc.block_height();
+        if model
+            .last_emission_height()
+            .is_some_and(|last| height <= last)
+        {
+            return Err(Error::Message(
+                "emission height already processed".to_string(),
+            ));
+        }
+        let zero: Decimal = 0u64.try_into()?;
+        // Operation order is consensus-visible: supply * 5% / 52,560, then * 10%.
+        let scheduled_total = model
+            .total_supply()
+            .mul(5u64.try_into()?)?
+            .div(100u64.try_into()?)?
+            .div(52_560u64.try_into()?)?;
+        let ordering = scheduled_total.div(10u64.try_into()?)?;
+        let ordering_minted = if eligible { ordering } else { zero };
+        if ordering_minted > zero {
+            mint(&model, HolderRef::OrderingPool.try_into()?, ordering_minted)?;
+        }
+        model.set_last_emission_height(Some(height));
+        Ok(Emission {
+            scheduled_total,
+            ordering_minted,
+            storage_unminted: scheduled_total.sub(ordering)?,
+        })
+    }
+
+    fn transfer_ordering_reward(
+        ctx: &CoreContext,
+        dst: HolderRef,
+        amt: Decimal,
+    ) -> Result<Transfer, Error> {
+        let dst: Holder = dst.try_into()?;
+        if dst.as_ref() == HolderRef::OrderingPool {
+            return Err(Error::Message(
+                "reward destination is the ordering pool".to_string(),
+            ));
+        }
+        transfer(
+            &ctx.proc_context(),
+            HolderRef::OrderingPool.try_into()?,
+            dst,
+            amt,
+        )
+    }
+
+    fn last_emission_height(ctx: &ViewContext) -> Option<u64> {
+        ctx.model().last_emission_height()
     }
 
     fn issuance(ctx: &CoreContext, amt: Decimal) -> Result<Mint, Error> {
@@ -133,8 +185,8 @@ impl Guest for Token {
 
     fn mint(ctx: &ProcContext, amt: Decimal) -> Result<Mint, Error> {
         // Public mint is a dev/test affordance only — off on mainnet (the flag is
-        // set from `network()` at `init`). Protocol emissions mint via the
-        // privileged `issuance`/`issue_to` core path, uncapped and always on.
+        // set from `network()` at `init`). Scheduled emissions have a separate
+        // core-only entry point.
         if !ctx.model().dev_mint_enabled() {
             return Err(Error::Message(
                 "public mint is disabled on this network".to_string(),

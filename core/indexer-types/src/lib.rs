@@ -461,6 +461,8 @@ pub enum HolderRef {
     Core,
     Burner,
     Utxo(OutPoint),
+    OrderingPool,
+    StoragePool,
 }
 
 holder_ref!(HolderRef);

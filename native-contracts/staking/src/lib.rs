@@ -44,6 +44,7 @@ struct StakingStorage {
     pub min_stake: Decimal,
     pub validators: Map<Holder, ValidatorEntry>,
     pub total_active_stake: Decimal,
+    pub last_reward_height: Option<u64>,
 }
 
 /// The consensus-set size = ACTIVE ∪ PENDING_EXIT (an exiting validator still
@@ -95,6 +96,85 @@ fn make_validator_info(
 }
 
 impl Guest for Staking {
+    fn has_reward_recipients(ctx: &ViewContext) -> bool {
+        !ctx.model()
+            .validators()
+            .status(ValidatorStatus::Active)
+            .is_empty()
+    }
+
+    fn last_reward_height(ctx: &ViewContext) -> Option<u64> {
+        ctx.model().last_reward_height()
+    }
+
+    fn distribute_ordering_reward(ctx: &CoreContext, amount: Decimal) -> Result<Decimal, Error> {
+        let proc = ctx.proc_context();
+        let model = proc.model();
+        let height = proc.block_height();
+        if model
+            .last_reward_height()
+            .is_some_and(|last| height <= last)
+        {
+            return Err(Error::Message(
+                "reward height already processed".to_string(),
+            ));
+        }
+        let zero: Decimal = 0u64.try_into()?;
+        if amount < zero {
+            return Err(Error::Message("negative ordering reward".to_string()));
+        }
+        if amount == zero {
+            model.set_last_reward_height(Some(height));
+            return Ok(zero);
+        }
+        ensure_stake_capacity(&proc, amount)?;
+        // Snapshot before stake writes change the covering index. Holder-string order
+        // pins which recipient absorbs the rounding remainder.
+        let mut recipients: Vec<_> = model
+            .validators()
+            .status(ValidatorStatus::Active)
+            .iter()
+            .map(|(holder, entry)| (holder.to_string(), holder, entry.stake))
+            .collect();
+        recipients.sort_by(|a, b| a.0.cmp(&b.0));
+        let mut total = zero;
+        for (_, _, stake) in &recipients {
+            if *stake <= zero {
+                return Err(Error::Message("nonpositive reward stake".to_string()));
+            }
+            total = total.add(*stake)?;
+        }
+        if total == zero {
+            return Err(Error::Message(
+                "ordering reward has no recipients".to_string(),
+            ));
+        }
+        let mut credited = zero;
+        for (index, (_, holder, stake)) in recipients.iter().enumerate() {
+            let remaining = amount.sub(credited)?;
+            let share = if index + 1 == recipients.len() {
+                remaining
+            } else {
+                // Decimal division can round up; never allocate more than remains.
+                amount.mul(*stake)?.div(total)?.min(remaining)
+            };
+            let entry = model
+                .validators()
+                .get(holder)
+                .ok_or(Error::Message("missing reward recipient".to_string()))?;
+            entry.set_stake(stake.add(share)?);
+            credited = credited.add(share)?;
+        }
+        model.try_update_total_active_stake(|stake| checked_total_stake(stake, credited))?;
+        model.set_last_reward_height(Some(height));
+        token::transfer_ordering_reward(
+            ctx.core_signer(),
+            proc.contract_signer().as_holder().as_ref(),
+            credited,
+        )?;
+        Ok(credited)
+    }
+
     fn init(ctx: &ProcContext) -> Contract {
         let storage = StakingStorage::default();
         storage.init(ctx);

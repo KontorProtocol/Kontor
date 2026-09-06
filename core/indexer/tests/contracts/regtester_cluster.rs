@@ -93,7 +93,7 @@ async fn cluster_consensus_lifecycle() -> Result<()> {
         .await?;
     let post_batch_checkpoints = cluster.assert_checkpoints_match().await?;
 
-    // Mine the block confirming the already-batched tx; dedup ⇒ no state change.
+    // Dedup keeps the counter unchanged; per-block rewards still advance the checkpoint.
     let pre_mine_height = cluster.client(0).index().await?.height;
     cluster.mine(1).await?;
     cluster
@@ -103,9 +103,9 @@ async fn cluster_consensus_lifecycle() -> Result<()> {
         .poll_all_nodes_view(&contract, &get, 120, counter_is(expected))
         .await?;
     let post_mine_checkpoints = cluster.assert_checkpoints_match().await?;
-    assert_eq!(
+    assert_ne!(
         post_batch_checkpoints, post_mine_checkpoints,
-        "Checkpoints changed after mining a block with an already-batched tx"
+        "Ordering rewards did not advance the checkpoint after mining"
     );
 
     // ===== PHASE 2: rapid multi-batch convergence + block dedup =====
@@ -149,9 +149,9 @@ async fn cluster_consensus_lifecycle() -> Result<()> {
         .poll_all_nodes_view(&contract, &get, 120, counter_is(expected))
         .await?;
     let post_multibatch_mine_checkpoints = cluster.assert_checkpoints_match().await?;
-    assert_eq!(
+    assert_ne!(
         post_multibatch_checkpoints, post_multibatch_mine_checkpoints,
-        "Checkpoints changed after mining a block with already-batched txs"
+        "Ordering rewards did not advance the checkpoint after mining"
     );
 
     // ===== PHASE 3: node kill / restart catch-up via sync =====

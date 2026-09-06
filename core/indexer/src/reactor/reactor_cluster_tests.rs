@@ -1,3 +1,6 @@
+#[path = "ordering_reward_tests.rs"]
+mod ordering_reward_tests;
+
 use std::collections::HashSet;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;

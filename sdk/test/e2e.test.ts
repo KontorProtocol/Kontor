@@ -141,6 +141,16 @@ test("e2e: view balance() round-trips HolderRef.utxo", async () => {
   expect(calls[0]).toBe('balance(utxo({txid: "deadbeef", vout: 7}))');
 });
 
+test("e2e: view balance() encodes protocol reward pools", async () => {
+  const { session, calls } = mockSession({ balance: "none" });
+  const c = session.bind(Contract, "token@0.0");
+  for (const holder of [HolderRef.orderingPool(), HolderRef.storagePool()]) {
+    await c.balance(holder);
+    expect(HolderRef.fromRaw(holder.toRaw()).kind).toBe(holder.kind);
+  }
+  expect(calls).toEqual(["balance(ordering-pool)", "balance(storage-pool)"]);
+});
+
 test("e2e: proc transfer() builds a Call Inst carrying the encoded WAVE", () => {
   const { session } = mockSession({});
   const c = session.bind(Contract, "token@0.0");

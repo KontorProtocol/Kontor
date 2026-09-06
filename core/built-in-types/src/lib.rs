@@ -91,6 +91,8 @@ wit_bindgen::generate!({
         "kontor:built-in/context-types/holder-ref.core": [ #[cfg_attr(feature = "host", component(name = "core"))] ],
         "kontor:built-in/context-types/holder-ref.burner": [ #[cfg_attr(feature = "host", component(name = "burner"))] ],
         "kontor:built-in/context-types/holder-ref.utxo": [ #[cfg_attr(feature = "host", component(name = "utxo"))] ],
+        "kontor:built-in/context-types/holder-ref.ordering-pool": [ #[cfg_attr(feature = "host", component(name = "ordering-pool"))] ],
+        "kontor:built-in/context-types/holder-ref.storage-pool": [ #[cfg_attr(feature = "host", component(name = "storage-pool"))] ],
         "kontor:built-in/context-types/signer-ref.signer-id": [ #[cfg_attr(feature = "host", component(name = "signer-id"))] ],
         "kontor:built-in/context-types/signer-ref.x-only-pubkey": [ #[cfg_attr(feature = "host", component(name = "x-only-pubkey"))] ],
         "kontor:built-in/context-types/network.mainnet": [ #[cfg_attr(feature = "host", component(name = "mainnet"))] ],
