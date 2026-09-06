@@ -996,15 +996,18 @@ impl Guest for Filestorage {
         let valid_roots: Vec<Vec<u8>> = model.valid_roots().iter().collect();
         let result = proof.verify(&challenge_inputs, &valid_roots, &files)?;
 
-        // 5. Update challenge statuses based on result
-        let new_status = match result {
-            file_registry_types::VerifyResult::Verified => ChallengeStatus::Proven,
-            file_registry_types::VerifyResult::Rejected => ChallengeStatus::Failed,
-            file_registry_types::VerifyResult::Invalid => ChallengeStatus::Invalid,
-        };
+        // Anyone may relay a proof; a bad submission cannot terminate someone
+        // else's challenge. Keep it open for a valid proof or deadline expiry.
+        match result {
+            file_registry_types::VerifyResult::Verified => {}
+            file_registry_types::VerifyResult::Rejected
+            | file_registry_types::VerifyResult::Invalid => {
+                return Err(Error::Message("Proof verification failed".to_string()));
+            }
+        }
 
         for cid in &challenge_ids {
-            terminate_challenge(&model, cid, new_status);
+            terminate_challenge(&model, cid, ChallengeStatus::Proven);
         }
 
         Ok(VerifyProofResult {

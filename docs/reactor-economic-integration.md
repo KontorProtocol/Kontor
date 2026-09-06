@@ -174,9 +174,14 @@ run_block_lifecycle(block):                          [inside the block savepoint
 
 ### 5.2 Phase 2 — storage slash
 
-- **Input:** `collect_failed_challenges()` returns challenges that FAILED verification and
-  challenges that EXPIRED unanswered (both are proof failures; expired must slash too, or
-  liveness-failure is free).
+- **Input:** `collect_failed_challenges()` will return challenges that EXPIRED without a
+  valid proof. Unsuccessful proof submissions return an error and leave the challenge
+  ACTIVE with its original deadline. A bad submission is not attributable evidence of
+  storage failure: anyone may relay a proof, and an invalid aggregate does not identify
+  which challenged file was unavailable. Only successful verification marks challenges
+  PROVEN; unanswered challenges expire even if rejected submissions were attempted.
+  Transactions execute before expiry in the deadline block, so a valid proof included
+  in that block is still accepted. Slashing settlement remains unimplemented.
 - **Resolution:** memberships are signer-keyed on main (`(agreement_id, signer_id)`), so the
   prover *is* the staking identity — no side-table (the #452 node_id label is obsolete).
 - **Amount:** `λ_slash · k_f`, saturating at the offender's remaining stake. λ_slash is
@@ -347,8 +352,8 @@ What exists vs. what the v1 build must add:
 mainnet gate (merged); creation-fee burn e2e (#460 merged — port its assertions).
 
 **To build (v1):**
-- **§11.1** `filestorage::collect_failed_challenges() → [(signer_id, k_f)]` — failed AND
-  expired, sorted, bounded per block.
+- **§11.1** `filestorage::collect_failed_challenges() → [(signer_id, k_f)]` — expired
+  without a valid proof, consumed once in sorted order, bounded per block.
 - **§11.2** `token::mint_emission()` per §5.1 (pool-holder destination, idempotent per
   height) + the two pool holders (§3.1).
 - **§11.3** `staking::slash(signer_id, amount)` — burn-all, saturating, aggregate-correct
