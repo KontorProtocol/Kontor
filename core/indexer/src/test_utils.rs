@@ -676,11 +676,8 @@ fn prepare_por_file(content: &[u8], filename: &str) -> (api::PreparedFile, api::
     api::prepare_file(content, filename, &nonce).expect("prepare_file")
 }
 
-/// A well-formed but invalid PoR proof: a valid single-file proof with one byte
-/// flipped. `prover_id`/`num_challenges` must match the challenge the contract
-/// would store. Generated inline (not from a fixture) so it tracks the
-/// contract's signer-derived `prover_id` and per-network `s_chal`.
-pub fn por_invalid_proof_bytes(prover_id: u64, num_challenges: usize) -> Result<Vec<u8>> {
+/// A single-file proof for file2.txt at height 20,000 with seed 99.
+pub fn por_single_file_proof_bytes(prover_id: u64, num_challenges: usize) -> Result<Vec<u8>> {
     let (prepared, metadata) = prepare_por_file(b"Second file with different content", "file2.txt");
     let mut ledger = FileLedger::new();
     ledger.add_file(&metadata)?;
@@ -694,14 +691,10 @@ pub fn por_invalid_proof_bytes(prover_id: u64, num_challenges: usize) -> Result<
     let system = PorSystem::new(&ledger);
     let proof = system
         .prove(vec![&prepared], std::slice::from_ref(&challenge))
-        .map_err(|e| anyhow!("prove (invalid): {e}"))?;
-    let mut bytes = proof
+        .map_err(|e| anyhow!("prove (single file): {e}"))?;
+    proof
         .to_bytes()
-        .map_err(|e| anyhow!("serialize proof: {e}"))?;
-    if let Some(last) = bytes.last_mut() {
-        *last ^= 0x01;
-    }
-    Ok(bytes)
+        .map_err(|e| anyhow!("serialize proof: {e}"))
 }
 
 /// A valid aggregated PoR proof over files A and B for a single `prover_id` —

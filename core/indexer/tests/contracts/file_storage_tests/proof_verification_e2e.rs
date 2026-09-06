@@ -4,13 +4,15 @@
 //! 1. Prepare files using kontor-crypto
 //! 2. Create agreements in the filestorage contract
 //! 3. Generate challenges through the contract
-//! 4. Load precomputed proofs from fixtures
+//! 4. Generate proofs and exercise rejected submissions
 //! 5. Verify proofs through the contract
 //!
 //! This mirrors the flow in kontor-crypto's main.rs but uses the contract layer.
 
 use indexer::database::types::field_element_to_bytes;
-use indexer::test_utils::{por_cross_block_proof_bytes, por_invalid_proof_bytes, valid_seed_field};
+use indexer::test_utils::{
+    por_cross_block_proof_bytes, por_single_file_proof_bytes, valid_seed_field,
+};
 use kontor_crypto::api::{self};
 use testlib::*;
 
@@ -67,17 +69,100 @@ async fn e2e_invalid_proof_rejected(runtime: &mut Runtime) -> Result<()> {
     filestorage::join_agreement(runtime, &s2, &created2.agreement_id).await??;
     filestorage::join_agreement(runtime, &s3, &created2.agreement_id).await??;
 
-    // A well-formed but invalid proof, generated inline for this prover and the
-    // network's challenge count (no challenge is registered, so verify_proof
-    // rejects it regardless — this exercises the rejection path, not a fixture).
+    let challenge = filestorage::create_challenge_for_agreement(
+        runtime,
+        &s1,
+        &created2.agreement_id,
+        prover,
+        20000,
+        valid_seed_field(99).bytes.to_vec(),
+    )
+    .await??;
     let s_chal = filestorage::get_s_chal(runtime).await? as usize;
-    let proof_bytes = por_invalid_proof_bytes(prover, s_chal)?;
-    // No challenge is registered for this proof, so naming a non-existent id makes
-    // the contract reject it ("Challenge not found") before verification — the
-    // rejection path this test exercises.
-    let result = filestorage::verify_proof(runtime, &s1, proof_bytes, vec!["unregistered"]).await?;
-    assert!(result.is_err(), "Invalid proof should be rejected");
+    let proof_bytes = por_single_file_proof_bytes(prover, s_chal)?;
+    let mut invalid_shape = api::Proof::from_bytes(&proof_bytes)?;
+    invalid_shape.aggregated_tree_depth = 1;
+    let mut rejected = api::Proof::from_bytes(&proof_bytes)?;
+    // Single-file proofs bypass the historical-root check. Changing this public
+    // input preserves the proof's shape but fails SNARK verification.
+    rejected.ledger_root += api::FieldElement::from(1);
+    for bytes in [invalid_shape.to_bytes()?, rejected.to_bytes()?] {
+        let result =
+            filestorage::verify_proof(runtime, &s2, bytes, vec![&challenge.challenge_id]).await?;
+        let Err(Error::Message(message)) = result else {
+            panic!("expected proof verification error");
+        };
+        assert_eq!(message, "Proof verification failed");
+        assert_challenges_open(runtime, &[&challenge]).await?;
+    }
 
+    let malformed =
+        filestorage::verify_proof(runtime, &s2, vec![0; 10], vec![&challenge.challenge_id]).await?;
+    assert!(malformed.is_err());
+    assert_challenges_open(runtime, &[&challenge]).await?;
+
+    // Exercise the expiry hook locally without mining 2,016 regtest blocks.
+    if runtime.runtime.reg_tester().is_none() {
+        let core_signer = Signer::Core(Box::new(s1));
+        let deadline = challenge.deadline_height;
+        assert_eq!(
+            filestorage::expire_challenges(runtime, &core_signer, deadline - 1).await?,
+            0
+        );
+        assert_challenges_open(runtime, &[&challenge]).await?;
+        assert_eq!(
+            filestorage::expire_challenges(runtime, &core_signer, deadline).await?,
+            1
+        );
+        assert_eq!(
+            filestorage::expire_challenges(runtime, &core_signer, deadline).await?,
+            0
+        );
+        let expired = filestorage::get_challenge(runtime, &challenge.challenge_id)
+            .await?
+            .unwrap();
+        assert_eq!(expired.status, filestorage::ChallengeStatus::Expired);
+        assert!(
+            filestorage::get_agreement(runtime, &created2.agreement_id)
+                .await?
+                .unwrap()
+                .active_challenge
+                .is_none()
+        );
+        assert!(
+            filestorage::verify_proof(runtime, &s2, proof_bytes, vec![&challenge.challenge_id])
+                .await?
+                .is_err()
+        );
+    }
+
+    Ok(())
+}
+
+async fn assert_challenges_open(
+    runtime: &mut Runtime,
+    challenges: &[&filestorage::ChallengeData],
+) -> Result<()> {
+    let active = filestorage::get_active_challenges(runtime).await?;
+    for challenge in challenges {
+        let actual = filestorage::get_challenge(runtime, &challenge.challenge_id)
+            .await?
+            .unwrap();
+        assert_eq!(actual.status, filestorage::ChallengeStatus::Active);
+        assert_eq!(actual.deadline_height, challenge.deadline_height);
+        assert!(
+            active
+                .iter()
+                .any(|c| c.challenge_id == challenge.challenge_id)
+        );
+        let agreement = filestorage::get_agreement(runtime, &challenge.agreement_id)
+            .await?
+            .unwrap();
+        assert_eq!(
+            agreement.active_challenge.as_deref(),
+            Some(challenge.challenge_id.as_str())
+        );
+    }
     Ok(())
 }
 
@@ -177,11 +262,21 @@ async fn e2e_cross_block_aggregation_with_new_agreement(runtime: &mut Runtime) -
     // the network's challenge count), then verify it through the contract.
     let s_chal = filestorage::get_s_chal(runtime).await? as usize;
     let proof_bytes = por_cross_block_proof_bytes(prover, s_chal)?;
+    let a = challenge_a.challenge_id.as_str();
+    let b = challenge_b.challenge_id.as_str();
+    for ids in [vec![], vec![a], vec![a, a, b], vec![a, "unregistered"]] {
+        assert!(
+            filestorage::verify_proof(runtime, &s2, proof_bytes.clone(), ids)
+                .await?
+                .is_err()
+        );
+        assert_challenges_open(runtime, &[&challenge_a, &challenge_b]).await?;
+    }
     // v3 proofs no longer enumerate their challenges — the submitter declares the
     // ids the proof answers (A and B here).
     let result = filestorage::verify_proof(
         runtime,
-        &s1,
+        &s2,
         proof_bytes,
         vec![&challenge_a.challenge_id, &challenge_b.challenge_id],
     )
