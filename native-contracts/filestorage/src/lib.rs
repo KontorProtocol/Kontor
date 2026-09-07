@@ -5,6 +5,7 @@ contract!(
         agreement-data: active;
         challenge-data: status include (agreement-id, block-height, num-challenges, seed, prover-id, deadline-height);
         challenge-data: due by status sort deadline-height;
+        challenge-data: by-prover-status by prover-id status;
     "
 );
 
@@ -125,8 +126,10 @@ const MAX_VALID_ROOTS: u64 = 4096;
 /// `(aid, false)` bucket, out of the live scan but still listable.
 #[derive(Clone, Default, Storage)]
 #[index(by_agreement_active, by = (agreement_id, active))]
+#[index(by_node_active, by = (node_id, active))]
 struct NodeState {
     pub agreement_id: String,
+    pub node_id: u64,
     pub active: bool,
 }
 
@@ -425,6 +428,7 @@ impl Guest for Filestorage {
             &membership_key,
             NodeState {
                 agreement_id: agreement_id.clone(),
+                node_id,
                 active: true,
             },
         );
@@ -540,6 +544,28 @@ impl Guest for Filestorage {
     // ─────────────────────────────────────────────────────────────────
     // Challenge Management
     // ─────────────────────────────────────────────────────────────────
+
+    fn has_storage_obligations(ctx: &ViewContext, node_id: u64) -> bool {
+        let model = ctx.model();
+        if !model.memberships().by_node_active(node_id, true).is_empty() {
+            return true;
+        }
+        // Expiration does not settle a penalty. Until settlement is implemented,
+        // only a proven challenge can release its hold after membership ends.
+        [
+            ChallengeStatus::Active,
+            ChallengeStatus::Expired,
+            ChallengeStatus::Failed,
+            ChallengeStatus::Invalid,
+        ]
+        .into_iter()
+        .any(|status| {
+            !model
+                .challenges()
+                .by_prover_status(node_id, status)
+                .is_empty()
+        })
+    }
 
     fn get_challenge(ctx: &ViewContext, challenge_id: String) -> Option<ChallengeData> {
         ctx.model()

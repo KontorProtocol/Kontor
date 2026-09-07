@@ -36,7 +36,7 @@ async fn balance(runtime: &mut Runtime, holder: HolderRef) -> Result<Decimal> {
     Ok(token::balance(runtime, holder).await?.unwrap_or_default())
 }
 
-async fn escrow(runtime: &mut Runtime) -> Result<Decimal> {
+pub(super) async fn escrow(runtime: &mut Runtime) -> Result<Decimal> {
     let conn = runtime.get_storage_conn();
     let id = get_contract_id_from_address(&conn, &address())
         .await?
@@ -246,7 +246,7 @@ async fn rewards_respect_pending_exit_eligibility_and_capacity() -> Result<()> {
         Decimal::from("1000"),
     )
     .await??;
-    api::begin_unstake(&mut runtime, &signer).await??;
+    api::leave_validation(&mut runtime, &signer).await??;
     assert!(!api::has_reward_recipients(&mut runtime).await?);
     assert_eq!(api::get_active_set(&mut runtime).await?.len(), 1);
     assert_eq!(settle(&mut runtime).await?, Decimal::default());
@@ -313,7 +313,7 @@ async fn joins_earn_after_activation_and_exits_stop_immediately() -> Result<()> 
         Decimal::from("1000"),
     )
     .await??;
-    api::begin_unstake(&mut runtime, &bob).await??;
+    api::leave_validation(&mut runtime, &bob).await??;
     token::issue_to(
         &mut runtime,
         &core(),

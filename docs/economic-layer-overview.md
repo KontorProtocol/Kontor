@@ -23,10 +23,14 @@ wiring could not be finalized until these were decided. All four are decided:
 |---|---|---|
 | **1** | Parameter governance (#463) — can constants change after genesis? | **Class-scoped (Option C).** Consensus-computable values are formulas (never governed); the three price-coupled constants (σ_min, gas calibration, c_stake) get a bounded + timelocked + **irrevocably sunsetted** admin window; everything identity-shaped (μ₀, χ, τ_slash, …) is genesis-fixed. λ_slash is genesis-class but must be modeled before locking. |
 | **2** | Storage self-dealing — junk earns exactly what value earns (ω_f cancels) | **Honest acceptance (Option A, per Adam).** The storage pool pays stake-proportional yield to whoever stakes and stores; ω-weighting is not anti-spam and is no longer described as such. The storage *guarantee* (permanence + PoR + slashing keeps files replicated) is unchanged. An NPV-of-fees gate remains a designed but undecided Phase-1.5 option. |
-| **3** | σ_min — 5M KOR entry floor (~200-participant ceiling) | **Keep 5M, classified tunable (Option A).** The ceiling is an explicit accepted v1 constraint: storage operation is validator-gated; *users never stake* (balance + deposit floor only). Delegation is the designed add-on if operator breadth is needed. |
+| **3** | σ_min — 5M KOR entry floor (~200-participant ceiling) | **Keep 5M, classified tunable (Option A).** The ceiling is an explicit accepted v1 constraint: this floor concerns consensus participation only. Storage hosts bond collateral independently and need not validate; ordinary storage customers need no operator bond. |
 | **4** | λ_stake — spec says `Σk_f·λ_stake`, code says `Σk_f` | **Delete the symbol (Option A).** The security bound is the whole-pool saturating slash, not the join-time hold; the hold rations capacity. Consequence: the zero-stake **terminal-state machine** is a mandatory v1 item. Revisit trigger: Step-5 correlated-failure modeling (returns as genesis-class constant or formula, never admin — it is not price-coupled). |
 
 ---
+
+The 2026-09-07 role clarification supersedes the earlier assumption that storage
+providers must be validators. Admission will require collateral, not participation
+in consensus; withdrawing collateral and leaving validation are separate actions.
 
 The 2026-09-06 ordering implementation decision adds **no validator-count cap**.
 The approximately 200 participants above is a supply/floor estimate, not a permanent
@@ -48,9 +52,11 @@ jobs:
 3. **Stay perfectly deterministic** — any disagreement on an amount or a settlement is a
    permanent chain fork.
 
-The **supply side** runs on **one unified stake pool**: a validator's stake is simultaneously
-its consensus voting power *and* its storage collateral (there is no separate storage bond) —
-storage providers *are* validators. The **demand side** — ordinary users who just want a
+The **supply side** uses one bonded balance per operator. Storage hosts can bond
+collateral without registering a validator or supplying a consensus key. Operators
+that also validate use that same balance for voting power. Leaving consensus preserves
+the bond and storage memberships; withdrawing collateral checks obligations from both
+roles. The **demand side** — ordinary users who just want a
 transaction ordered — are **not** staked and **not** validators; they keep a plain identity
 and post a separate, refundable **griefing bond** per use (§4). Everything shares one identity
 namespace (the signer's x-only / BIP-340 pubkey, `Holder`); a validator is that same identity

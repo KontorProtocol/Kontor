@@ -1,6 +1,7 @@
 #![no_std]
 contract!(name = "staking");
 
+use context::HolderRef;
 use stdlib::*;
 
 import!(
@@ -10,7 +11,17 @@ import!(
     path = "../token/wit"
 );
 
+import!(
+    name = "filestorage",
+    height = 0,
+    tx_index = 0,
+    path = "../filestorage/wit"
+);
+
 const ACTIVATION_DELAY: u64 = 12; // 2 * FINALITY_WINDOW (6)
+// One challenge window plus the existing two-finality-window lifecycle margin.
+// Outstanding storage obligations can extend this minimum indefinitely.
+const WITHDRAWAL_DELAY: u64 = 2016 + ACTIVATION_DELAY;
 const MAX_STAKE: u64 = 1_000_000_000;
 // Malachite's default thresholds multiply observed voting power by three.
 const MAX_TOTAL_STAKE: u64 = u64::MAX / 3;
@@ -31,18 +42,26 @@ const MAX_TOTAL_STAKE: u64 = u64::MAX / 3;
 #[derive(Clone, Storage)]
 #[index(status, by = status, include = (stake, ed25519_pubkey))]
 #[index(ed25519_pubkey, by = ed25519_pubkey)]
-struct ValidatorEntry {
+struct StakeAccount {
     pub stake: Decimal,
     pub status: ValidatorStatus,
     pub activation_height: u64,
     pub deactivation_height: u64,
+    pub withdrawal_height: Option<u64>,
     pub ed25519_pubkey: Vec<u8>,
+}
+
+fn make_stake_info(entry: &StakeAccountModel<context::ViewStorage>) -> StakeInfo {
+    StakeInfo {
+        stake: entry.stake(),
+        withdrawal_height: entry.withdrawal_height(),
+    }
 }
 
 #[derive(Clone, Default, StorageRoot)]
 struct StakingStorage {
     pub min_stake: Decimal,
-    pub validators: Map<Holder, ValidatorEntry>,
+    pub accounts: Map<Holder, StakeAccount>,
     pub total_active_stake: Decimal,
     pub last_reward_height: Option<u64>,
     pub genesis_initialized: bool,
@@ -52,7 +71,7 @@ struct StakingStorage {
 /// validates until its deactivation height — the same union `get_active_set`
 /// returns). The framework maintains each status bucket's count, so this is two
 /// O(1) reads of those counts — no hand-maintained `active_count` to keep in sync.
-fn active_set_size<M: ValidatorEntryIndex<Holder>>(validators: &M) -> u64 {
+fn active_set_size<M: StakeAccountIndex<Holder>>(validators: &M) -> u64 {
     validators.status(ValidatorStatus::Active).len()
         + validators.status(ValidatorStatus::PendingExit).len()
 }
@@ -72,11 +91,7 @@ fn ensure_stake_capacity(ctx: &ProcContext, additional: Decimal) -> Result<(), E
     let mut total = checked_total_stake(model.total_active_stake(), additional)?;
     // Reserve pending joins now, so activation cannot halt a later block.
     // Full Decimal stakes conservatively bound the sum of truncated voting powers.
-    for (_, entry) in model
-        .validators()
-        .status(ValidatorStatus::PendingJoin)
-        .iter()
-    {
+    for (_, entry) in model.accounts().status(ValidatorStatus::PendingJoin).iter() {
         total = checked_total_stake(total, entry.stake)?;
     }
     Ok(())
@@ -84,7 +99,7 @@ fn ensure_stake_capacity(ctx: &ProcContext, additional: Decimal) -> Result<(), E
 
 fn make_validator_info(
     x_only_pubkey: &Holder,
-    entry: &ValidatorEntryModel<context::ViewStorage>,
+    entry: &StakeAccountModel<context::ViewStorage>,
 ) -> ValidatorInfo {
     ValidatorInfo {
         x_only_pubkey: x_only_pubkey.to_string(),
@@ -96,10 +111,20 @@ fn make_validator_info(
     }
 }
 
+fn ensure_no_storage_obligations(signer: &context::Signer) -> Result<(), Error> {
+    let HolderRef::SignerId(id) = signer.into() else {
+        return Err(Error::Message("expected signer identity".to_string()));
+    };
+    if filestorage::has_storage_obligations(id) {
+        return Err(Error::Message("unresolved storage obligations".to_string()));
+    }
+    Ok(())
+}
+
 impl Guest for Staking {
     fn has_reward_recipients(ctx: &ViewContext) -> bool {
         !ctx.model()
-            .validators()
+            .accounts()
             .status(ValidatorStatus::Active)
             .is_empty()
     }
@@ -132,7 +157,7 @@ impl Guest for Staking {
         // Snapshot before stake writes change the covering index. Holder-string order
         // pins which recipient absorbs the rounding remainder.
         let mut recipients: Vec<_> = model
-            .validators()
+            .accounts()
             .status(ValidatorStatus::Active)
             .iter()
             .map(|(holder, entry)| (holder.to_string(), holder, entry.stake))
@@ -160,7 +185,7 @@ impl Guest for Staking {
                 amount.mul(*stake)?.div(total)?.min(remaining)
             };
             let entry = model
-                .validators()
+                .accounts()
                 .get(holder)
                 .ok_or(Error::Message("missing reward recipient".to_string()))?;
             entry.set_stake(stake.add(share)?);
@@ -198,32 +223,47 @@ impl Guest for Staking {
         let model = ctx.model();
         let holder: Holder = (&ctx.signer()).into();
 
-        if let Some(existing) = model.validators().get(&holder)
+        if let Some(existing) = model.accounts().get(&holder)
             && existing.status().load() != ValidatorStatus::Inactive
         {
             return Err(Error::Message("already registered".to_string()));
         }
 
-        if stake_amount < model.min_stake() {
+        let existing = model.accounts().get(&holder);
+        if existing
+            .as_ref()
+            .is_some_and(|entry| entry.withdrawal_height().is_some())
+        {
+            return Err(Error::Message("withdrawal already requested".to_string()));
+        }
+        let zero = 0u64.try_into().unwrap();
+        if stake_amount < zero {
+            return Err(Error::Message("negative stake amount".to_string()));
+        }
+        let stake = existing
+            .map(|entry| entry.stake())
+            .unwrap_or(zero)
+            .add(stake_amount)?;
+        if stake < model.min_stake() {
             return Err(Error::Message("stake below minimum".to_string()));
         }
-        if stake_amount > MAX_STAKE.try_into().unwrap() {
+        if stake > MAX_STAKE.try_into().unwrap() {
             return Err(Error::Message("stake exceeds maximum".to_string()));
         }
-        ensure_stake_capacity(ctx, stake_amount)?;
+        ensure_stake_capacity(ctx, stake)?;
 
         // Reject duplicate ed25519 keys — two validators with the same
         // consensus key would cause conflicts in Malachite. The `ed25519_pubkey`
         // index scopes this to the (≤1) holders already in that key's bucket,
         // not every validator.
         let dup = model
-            .validators()
+            .accounts()
             .ed25519_pubkey(ed25519_pubkey.clone())
             .keys()
             .any(|key| {
                 key != holder
                     && model
-                        .validators()
+                        .accounts()
                         .get(&key)
                         .is_some_and(|entry| entry.status().load() != ValidatorStatus::Inactive)
             });
@@ -235,26 +275,29 @@ impl Guest for Staking {
 
         // Effects before interactions (CEI pattern)
         let activation_height = ctx.block_height() + ACTIVATION_DELAY;
-        model.validators().set(
+        model.accounts().set(
             &holder,
-            ValidatorEntry {
-                stake: stake_amount,
+            StakeAccount {
+                stake,
                 status: ValidatorStatus::PendingJoin,
                 activation_height,
                 deactivation_height: 0,
+                withdrawal_height: None,
                 ed25519_pubkey: ed25519_pubkey.clone(),
             },
         );
 
-        token::transfer(
-            ctx.signer(),
-            ctx.contract_signer().as_holder().as_ref(),
-            stake_amount,
-        )?;
+        if stake_amount > zero {
+            token::transfer(
+                ctx.signer(),
+                ctx.contract_signer().as_holder().as_ref(),
+                stake_amount,
+            )?;
+        }
 
         Ok(ValidatorInfo {
             x_only_pubkey: holder.to_string(),
-            stake: stake_amount,
+            stake,
             status: ValidatorStatus::PendingJoin,
             activation_height,
             deactivation_height: 0,
@@ -262,75 +305,148 @@ impl Guest for Staking {
         })
     }
 
-    fn add_stake(ctx: &ProcContext, amount: Decimal) -> Result<ValidatorInfo, Error> {
-        let model = ctx.model();
-        let holder: Holder = (&ctx.signer()).into();
-
-        let entry = model
-            .validators()
-            .get(&holder)
-            .ok_or(Error::Message("not registered".to_string()))?;
-
+    fn add_stake(ctx: &ProcContext, amount: Decimal) -> Result<StakeInfo, Error> {
         if amount <= 0u64.try_into().unwrap() {
             return Err(Error::Message("amount must be positive".to_string()));
         }
-
-        let status = entry.status().load();
-        if status == ValidatorStatus::Inactive || status == ValidatorStatus::PendingExit {
-            return Err(Error::Message(
-                "cannot add stake while inactive or pending exit".to_string(),
-            ));
+        let model = ctx.model();
+        let holder: Holder = (&ctx.signer()).into();
+        let entry = model.accounts().get(&holder);
+        let status = entry
+            .as_ref()
+            .map(|entry| entry.status().load())
+            .unwrap_or(ValidatorStatus::Inactive);
+        if entry
+            .as_ref()
+            .is_some_and(|entry| entry.withdrawal_height().is_some())
+        {
+            return Err(Error::Message("withdrawal already requested".to_string()));
         }
-
-        let new_stake = entry.stake().add(amount)?;
-        if new_stake > MAX_STAKE.try_into().unwrap() {
-            return Err(Error::Message(
-                "total stake would exceed maximum".to_string(),
-            ));
+        let stake = entry
+            .as_ref()
+            .map(|entry| entry.stake())
+            .unwrap_or(0u64.try_into().unwrap())
+            .add(amount)?;
+        // Consensus arithmetic limits apply only when the bond backs voting power.
+        if status != ValidatorStatus::Inactive {
+            if stake > MAX_STAKE.try_into().unwrap() {
+                return Err(Error::Message(
+                    "total stake would exceed maximum".to_string(),
+                ));
+            }
+            ensure_stake_capacity(ctx, amount)?;
         }
-        ensure_stake_capacity(ctx, amount)?;
-
-        // Effects before interactions (CEI pattern)
-        entry.set_stake(new_stake);
-        if status == ValidatorStatus::Active {
-            model.try_update_total_active_stake(|s| checked_total_stake(s, amount))?;
+        if let Some(entry) = entry {
+            entry.set_stake(stake);
+        } else {
+            model.accounts().set(
+                &holder,
+                StakeAccount {
+                    stake,
+                    status: ValidatorStatus::Inactive,
+                    activation_height: 0,
+                    deactivation_height: 0,
+                    withdrawal_height: None,
+                    ed25519_pubkey: Vec::new(),
+                },
+            );
         }
-
+        if matches!(
+            status,
+            ValidatorStatus::Active | ValidatorStatus::PendingExit
+        ) {
+            model.try_update_total_active_stake(|total| checked_total_stake(total, amount))?;
+        }
         token::transfer(
             ctx.signer(),
             ctx.contract_signer().as_holder().as_ref(),
             amount,
         )?;
+        Ok(StakeInfo {
+            stake,
+            withdrawal_height: None,
+        })
+    }
 
+    fn leave_validation(ctx: &ProcContext) -> Result<ValidatorInfo, Error> {
+        let holder: Holder = (&ctx.signer()).into();
+        let entry = ctx
+            .model()
+            .accounts()
+            .get(&holder)
+            .ok_or(Error::Message("not registered".to_string()))?;
+        match entry.status().load() {
+            ValidatorStatus::Active => {
+                let height = ctx
+                    .block_height()
+                    .checked_add(ACTIVATION_DELAY)
+                    .ok_or(Error::Message("deactivation height overflow".to_string()))?;
+                entry.set_status(ValidatorStatus::PendingExit);
+                entry.set_deactivation_height(height);
+            }
+            ValidatorStatus::PendingJoin => entry.set_status(ValidatorStatus::Inactive),
+            _ => {
+                return Err(Error::Message(
+                    "invalid status for validator exit".to_string(),
+                ));
+            }
+        }
         Ok(make_validator_info(&holder, &entry))
     }
 
-    fn begin_unstake(ctx: &ProcContext) -> Result<ValidatorInfo, Error> {
-        let model = ctx.model();
+    fn begin_unstake(ctx: &ProcContext) -> Result<StakeInfo, Error> {
         let holder: Holder = (&ctx.signer()).into();
-
-        let entry = model
-            .validators()
+        let entry = ctx
+            .model()
+            .accounts()
             .get(&holder)
-            .ok_or(Error::Message("not registered".to_string()))?;
-
-        match entry.status().load() {
-            ValidatorStatus::Active => {
-                entry.set_status(ValidatorStatus::PendingExit);
-                let deactivation_height = ctx.block_height() + ACTIVATION_DELAY;
-                entry.set_deactivation_height(deactivation_height);
-            }
-            // Not yet activated — go straight to inactive and return tokens
-            ValidatorStatus::PendingJoin => {
-                let stake = entry.stake();
-                entry.set_stake(0u64.try_into().unwrap());
-                entry.set_status(ValidatorStatus::Inactive);
-                token::transfer(ctx.contract_signer(), holder.as_ref(), stake)?;
-            }
-            _ => return Err(Error::Message("invalid status for unstaking".to_string())),
+            .ok_or(Error::Message("no bonded stake".to_string()))?;
+        if entry.status().load() != ValidatorStatus::Inactive {
+            return Err(Error::Message(
+                "leave validation before unstaking".to_string(),
+            ));
         }
+        if entry.withdrawal_height().is_some() {
+            return Err(Error::Message("withdrawal already requested".to_string()));
+        }
+        if entry.stake() <= 0u64.try_into().unwrap() {
+            return Err(Error::Message("no bonded stake".to_string()));
+        }
+        let height = ctx
+            .block_height()
+            .checked_add(WITHDRAWAL_DELAY)
+            .ok_or(Error::Message("withdrawal height overflow".to_string()))?;
+        entry.set_withdrawal_height(Some(height));
+        Ok(make_stake_info(&entry))
+    }
 
-        Ok(make_validator_info(&holder, &entry))
+    fn withdraw_stake(ctx: &ProcContext) -> Result<StakeInfo, Error> {
+        let holder: Holder = (&ctx.signer()).into();
+        let entry = ctx
+            .model()
+            .accounts()
+            .get(&holder)
+            .ok_or(Error::Message("no bonded stake".to_string()))?;
+        let height = entry
+            .withdrawal_height()
+            .ok_or(Error::Message("withdrawal not requested".to_string()))?;
+        if ctx.block_height() < height {
+            return Err(Error::Message(
+                "withdrawal delay has not elapsed".to_string(),
+            ));
+        }
+        ensure_no_storage_obligations(&ctx.signer())?;
+        let stake = entry.stake();
+        entry.set_stake(0u64.try_into().unwrap());
+        entry.set_withdrawal_height(None);
+        token::transfer(ctx.contract_signer(), holder.as_ref(), stake)?;
+        Ok(make_stake_info(&entry))
+    }
+
+    fn get_stake(ctx: &ViewContext, holder: String) -> Option<StakeInfo> {
+        let holder: Holder = holder.parse().ok()?;
+        let entry = ctx.model().accounts().get(&holder)?;
+        Some(make_stake_info(&entry))
     }
 
     fn set_genesis_set(ctx: &CoreContext, validators: Vec<ActiveValidatorInfo>) {
@@ -371,13 +487,14 @@ impl Guest for Staking {
                 .x_only_pubkey
                 .parse()
                 .expect("invalid holder in genesis set");
-            model.validators().set(
+            model.accounts().set(
                 &holder,
-                ValidatorEntry {
+                StakeAccount {
                     stake: v.stake,
                     status: ValidatorStatus::Active,
                     activation_height: 0,
                     deactivation_height: 0,
+                    withdrawal_height: None,
                     ed25519_pubkey: v.ed25519_pubkey.clone(),
                 },
             );
@@ -404,12 +521,12 @@ impl Guest for Staking {
         // first: activating/deactivating moves the member out of the bucket, so
         // iterating it live would mutate mid-scan.
         let pending_join: Vec<Holder> = model
-            .validators()
+            .accounts()
             .status(ValidatorStatus::PendingJoin)
             .keys()
             .collect();
         let pending_exit: Vec<Holder> = model
-            .validators()
+            .accounts()
             .status(ValidatorStatus::PendingExit)
             .keys()
             .collect();
@@ -418,7 +535,7 @@ impl Guest for Staking {
         // PENDING_EXIT bucket counts `active_set_size` reads stay correct with no
         // manual counter update here.
         for key in pending_join {
-            if let Some(entry) = model.validators().get(&key)
+            if let Some(entry) = model.accounts().get(&key)
                 && block_height >= entry.activation_height()
             {
                 model.try_update_total_active_stake(|s| checked_total_stake(s, entry.stake()))?;
@@ -427,14 +544,12 @@ impl Guest for Staking {
             }
         }
         for key in pending_exit {
-            if let Some(entry) = model.validators().get(&key)
+            if let Some(entry) = model.accounts().get(&key)
                 && block_height >= entry.deactivation_height()
             {
                 let stake = entry.stake();
-                entry.set_stake(0u64.try_into().unwrap());
                 entry.set_status(ValidatorStatus::Inactive);
                 model.try_update_total_active_stake(|s| s.sub(stake))?;
-                token::transfer(ctx.proc_context().contract_signer(), key, stake)?;
                 deactivated += 1;
             }
         }
@@ -446,7 +561,7 @@ impl Guest for Staking {
     }
 
     fn get_active_set(ctx: &ViewContext) -> Vec<ActiveValidatorInfo> {
-        let validators = ctx.model().validators();
+        let validators = ctx.model().accounts();
         // The consensus set is ACTIVE ∪ PENDING_EXIT (exiting validators still
         // validate until their deactivation height) — two index buckets, not a
         // scan-and-filter over every validator.
@@ -472,19 +587,22 @@ impl Guest for Staking {
 
     fn get_validator(ctx: &ViewContext, x_only_pubkey: String) -> Option<ValidatorInfo> {
         let holder: Holder = x_only_pubkey.parse().ok()?;
-        let entry = ctx.model().validators().get(&holder)?;
+        let entry = ctx.model().accounts().get(&holder)?;
+        if entry.ed25519_pubkey().is_empty() {
+            return None;
+        }
         Some(make_validator_info(&holder, &entry))
     }
 
     fn get_staking_info(ctx: &ViewContext) -> StakingInfo {
         let model = ctx.model();
         StakingInfo {
-            active_count: active_set_size(&model.validators()),
+            active_count: active_set_size(&model.accounts()),
             total_stake: model.total_active_stake(),
         }
     }
 
     fn get_active_count(ctx: &ViewContext) -> u64 {
-        active_set_size(&ctx.model().validators())
+        active_set_size(&ctx.model().accounts())
     }
 }

@@ -180,7 +180,7 @@ async fn assert_challenges_open(
 /// 4. Verification succeeds because proof's ledger_root (before C) is a valid historical root
 ///    (also exercises multi-file aggregated proof in a single run)
 async fn e2e_cross_block_aggregation_with_new_agreement(runtime: &mut Runtime) -> Result<()> {
-    // Three distinct signers activate every agreement; `s1` is the common
+    // Three distinct signers activate A and B; `s1` is the common
     // member that proves both files, so its signer_id is the aggregated proof's
     // prover_id.
     let s1 = runtime.identity().await?;
@@ -238,7 +238,10 @@ async fn e2e_cross_block_aggregation_with_new_agreement(runtime: &mut Runtime) -
 
     let created_c =
         filestorage::create_agreement(runtime, &s1, metadata_to_descriptor(&metadata_c)).await??;
-    filestorage::join_agreement(runtime, &s1, &created_c.agreement_id).await??;
+    // Keep the A/B prover out of C: mining can generate a challenge for C that
+    // this proof will not settle, so it must not hold this prover's collateral.
+    let s4 = runtime.identity().await?;
+    filestorage::join_agreement(runtime, &s4, &created_c.agreement_id).await??;
     filestorage::join_agreement(runtime, &s2, &created_c.agreement_id).await??;
     filestorage::join_agreement(runtime, &s3, &created_c.agreement_id).await??;
 
@@ -262,6 +265,10 @@ async fn e2e_cross_block_aggregation_with_new_agreement(runtime: &mut Runtime) -
     // the network's challenge count), then verify it through the contract.
     let s_chal = filestorage::get_s_chal(runtime).await? as usize;
     let proof_bytes = por_cross_block_proof_bytes(prover, s_chal)?;
+    for agreement in [&created_a, &created_b] {
+        filestorage::leave_agreement(runtime, &s1, &agreement.agreement_id).await??;
+    }
+    assert!(filestorage::has_storage_obligations(runtime, prover).await?);
     let a = challenge_a.challenge_id.as_str();
     let b = challenge_b.challenge_id.as_str();
     for ids in [vec![], vec![a], vec![a, a, b], vec![a, "unregistered"]] {
@@ -271,6 +278,7 @@ async fn e2e_cross_block_aggregation_with_new_agreement(runtime: &mut Runtime) -
                 .is_err()
         );
         assert_challenges_open(runtime, &[&challenge_a, &challenge_b]).await?;
+        assert!(filestorage::has_storage_obligations(runtime, prover).await?);
     }
     // v3 proofs no longer enumerate their challenges — the submitter declares the
     // ids the proof answers (A and B here).
@@ -305,6 +313,7 @@ async fn e2e_cross_block_aggregation_with_new_agreement(runtime: &mut Runtime) -
         filestorage::ChallengeStatus::Proven,
         "Challenge B should be Proven"
     );
+    assert!(!filestorage::has_storage_obligations(runtime, prover).await?);
 
     Ok(())
 }
