@@ -1395,9 +1395,31 @@ impl<E: Executor> Reactor<E> {
                 .await
                 .context("drain_deferred_decisions failed")?;
             if !self.settle_finality().await? {
+                self.resume_next_height()?;
                 return Ok(());
             }
         }
+    }
+
+    fn resume_next_height(&mut self) -> Result<()> {
+        let Some((height, _)) = &self.consensus.pending_next_height else {
+            return Ok(());
+        };
+        if self
+            .consensus
+            .deferred_decisions
+            .iter()
+            .any(|decision| decision.consensus_height == *height && decision.value.is_block())
+        {
+            return Ok(());
+        }
+        let (_, reply) = self.consensus.pending_next_height.take().unwrap();
+        reply
+            .send(Next::Start(
+                self.consensus.current_height,
+                self.consensus.height_params(),
+            ))
+            .map_err(|_| anyhow::anyhow!("Failed to send Finalized reply"))
     }
 
     /// Whether any tracked batch has reached its deadline at the current tip.
@@ -1994,7 +2016,9 @@ impl<E: Executor> Reactor<E> {
                                 consensus_height = %certificate.height,
                                 "Block decided and ready to process"
                             );
-                            result = consensus_state::ConsensusResult::Block(block, decision);
+                            self.handle_block(block, &decision)
+                                .await
+                                .context("handle_block failed after consensus block")?;
                         }
                         // Buffered, but a DIFFERENT block — the decision is stale.
                         // Settled here rather than falling through: the arm below asks
@@ -2095,14 +2119,11 @@ impl<E: Executor> Reactor<E> {
         self.consensus.current_round = Round::Nil;
         self.consensus.pending_proposal = None;
 
-        let next = Next::Start(
-            self.consensus.current_height,
-            self.consensus.height_params(),
+        anyhow::ensure!(
+            self.consensus.pending_next_height.is_none(),
+            "previous finalized decision is still awaiting execution"
         );
-
-        reply
-            .send(next)
-            .map_err(|_| anyhow::anyhow!("Failed to send Finalized reply"))?;
+        self.consensus.pending_next_height = Some((certificate.height, reply));
 
         Ok(result)
     }

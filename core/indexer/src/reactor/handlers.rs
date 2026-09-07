@@ -9,11 +9,14 @@ use malachitebft_core_types::{Round, Validity};
 use tracing::{info, warn};
 
 use crate::consensus::codec::ProtobufCodec;
-use crate::consensus::{Address, Ctx, Height, ProposalPart, ValueId};
+use crate::consensus::{Address, Ctx, Height, ProposalPart, ProposalParts, ValueId};
 
 use super::Reactor;
 use super::consensus_state;
 use super::executor::Executor;
+
+const MAX_EARLY_PROPOSALS: usize = 16;
+const MAX_EARLY_PROPOSAL_BYTES: usize = 8 * 1024 * 1024;
 
 /// Answer a `ReceivedProposalPart` with "not a complete, accepted proposal".
 fn reply_none(reply: tokio::sync::oneshot::Sender<Option<ProposedValue<Ctx>>>) -> Result<()> {
@@ -23,7 +26,7 @@ fn reply_none(reply: tokio::sync::oneshot::Sender<Option<ProposedValue<Ctx>>>) -
 }
 
 impl<E: Executor> Reactor<E> {
-    fn handle_started_round(
+    async fn handle_started_round(
         &mut self,
         height: Height,
         round: Round,
@@ -59,9 +62,29 @@ impl<E: Executor> Reactor<E> {
             .into_iter()
             .collect();
 
-        reply_value
-            .send(proposals)
-            .map_err(|_| anyhow::anyhow!("Failed to send StartedRound reply"))?;
+        let early = std::mem::take(&mut self.consensus.early_proposals)
+            .into_iter()
+            .map(|(parts, _)| parts)
+            .find(|parts| {
+                parts.height == height && parts.round == round && parts.proposer == proposer
+            });
+        if let Some(parts) = early {
+            let (reply, received) = tokio::sync::oneshot::channel();
+            self.accept_proposal_parts(parts, reply).await?;
+            // Batch validation may finish through the reactor's I/O queue. Holding
+            // the StartedRound reply here would stop that queue from being polled.
+            tokio::spawn(async move {
+                let mut proposals = proposals;
+                if let Ok(Some(proposal)) = received.await {
+                    proposals.push(proposal);
+                }
+                let _ = reply_value.send(proposals);
+            });
+        } else {
+            reply_value
+                .send(proposals)
+                .map_err(|_| anyhow::anyhow!("Failed to send StartedRound reply"))?;
+        }
         Ok(())
     }
 
@@ -78,8 +101,44 @@ impl<E: Executor> Reactor<E> {
             return reply_none(reply);
         };
 
+        self.accept_proposal_parts(parts, reply).await
+    }
+
+    pub(super) async fn accept_proposal_parts(
+        &mut self,
+        parts: ProposalParts,
+        reply: tokio::sync::oneshot::Sender<Option<ProposedValue<Ctx>>>,
+    ) -> Result<()> {
         let height = self.consensus.current_height;
         let round = self.consensus.current_round;
+
+        // A fast peer can publish after executing the previous block while our
+        // StartedRound notification is still queued. Authenticate now, then wait
+        // for the engine to identify the actual proposer before accepting it.
+        if parts.height == height
+            && parts.round == Round::new(0)
+            && (round == Round::Nil || self.consensus.current_proposer.is_none())
+            && self
+                .consensus
+                .verify_proposal_parts(parts.proposer, &parts)
+                .is_ok()
+        {
+            let bytes = parts.parts.iter().fold(0usize, |total, part| {
+                total.saturating_add(part.to_sign_bytes().len())
+            });
+            let buffered: usize = self
+                .consensus
+                .early_proposals
+                .iter()
+                .map(|(_, bytes)| bytes)
+                .sum();
+            if self.consensus.early_proposals.len() < MAX_EARLY_PROPOSALS
+                && bytes <= MAX_EARLY_PROPOSAL_BYTES.saturating_sub(buffered)
+            {
+                self.consensus.early_proposals.push((parts, bytes));
+            }
+            return reply_none(reply);
+        }
 
         // Only the current round is actionable. A proposal for another height/round
         // is dropped (Kontor does not buffer future proposals), and one whose slot
@@ -262,7 +321,8 @@ impl<E: Executor> Reactor<E> {
                 role,
                 reply_value,
             } => {
-                self.handle_started_round(height, round, proposer, role, reply_value)?;
+                self.handle_started_round(height, round, proposer, role, reply_value)
+                    .await?;
             }
 
             AppMsg::GetValue {
