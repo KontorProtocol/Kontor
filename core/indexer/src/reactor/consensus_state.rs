@@ -7,7 +7,7 @@ use anyhow::{Context, Result};
 use bitcoin::Txid;
 use bitcoin::hashes::Hash;
 use tokio::sync::mpsc;
-use tracing::{info, warn};
+use tracing::{debug, info, warn};
 
 use super::batches::batch_is_ordered;
 use super::mempool_fee_index::MempoolFeeIndex;
@@ -36,6 +36,10 @@ use crate::database::queries::{
     select_existing_txids, select_latest_consensus_height, select_min_batch_height,
     select_unconfirmed_batch_txs, select_unfinalized_batches,
 };
+
+const MAX_EARLY_PROPOSALS: usize = 16;
+const MAX_UNVERIFIED_EARLY_PROPOSALS: usize = 4;
+const MAX_EARLY_PROPOSAL_BYTES: usize = 8 * 1024 * 1024;
 
 /// Result from processing a consensus message.
 pub enum ConsensusResult {
@@ -770,6 +774,99 @@ impl ConsensusState {
         parts: &ProposalParts,
     ) -> Result<(), String> {
         authenticate_proposal(&self.current_validator_set, expected_proposer, parts)
+    }
+
+    pub(super) fn buffer_early_proposal(&mut self, parts: ProposalParts) {
+        let height = self.current_height;
+        let round = self.current_round;
+        let same_height = parts.height == height;
+        let next_height = height.as_u64().checked_add(1) == Some(parts.height.as_u64());
+        let early_round = if round == Round::Nil {
+            parts.round == Round::new(0)
+        } else {
+            parts.round.as_i64() == round.as_i64() + 1
+                || (parts.round == round && self.current_proposer.is_none())
+        };
+        if parts.round == Round::Nil
+            || !(same_height && early_round || next_height && parts.round == Round::new(0))
+        {
+            return;
+        }
+
+        // A next-height signer may join during execution of the previous block.
+        // Reserve only a small part of the buffer for keys we cannot check yet;
+        // every entry is authenticated again with the engine's eventual set.
+        let known = self
+            .current_validator_set
+            .get_by_address(&parts.proposer)
+            .is_some();
+        if known {
+            if self.verify_proposal_parts(parts.proposer, &parts).is_err() {
+                return;
+            }
+        } else if same_height && round != Round::Nil {
+            return;
+        }
+
+        if self.early_proposals.iter().any(|(p, _)| {
+            p.height == parts.height
+                && p.round == parts.round
+                && p.proposer == parts.proposer
+                && p.parts == parts.parts
+        }) {
+            return;
+        }
+        let bytes = parts.parts.iter().fold(0usize, |total, part| {
+            total.saturating_add(part.to_sign_bytes().len())
+        });
+        if !known {
+            let (count, unverified_bytes) = self
+                .early_proposals
+                .iter()
+                .filter(|(p, _)| {
+                    self.current_validator_set
+                        .get_by_address(&p.proposer)
+                        .is_none()
+                })
+                .fold((0, 0usize), |(count, total), (_, bytes)| {
+                    (count + 1, total + bytes)
+                });
+            if count >= MAX_UNVERIFIED_EARLY_PROPOSALS
+                || bytes > (MAX_EARLY_PROPOSAL_BYTES / 8).saturating_sub(unverified_bytes)
+            {
+                return;
+            }
+        }
+        let buffered: usize = self.early_proposals.iter().map(|(_, bytes)| bytes).sum();
+        if self.early_proposals.len() < MAX_EARLY_PROPOSALS
+            && bytes <= MAX_EARLY_PROPOSAL_BYTES.saturating_sub(buffered)
+        {
+            debug!(%height, %round, proposal_height = %parts.height, proposal_round = %parts.round,
+                "Buffering early proposal");
+            self.early_proposals.push((parts, bytes));
+        }
+    }
+
+    pub(super) fn take_early_proposal(
+        &mut self,
+        height: Height,
+        round: Round,
+        proposer: Address,
+    ) -> Option<ProposalParts> {
+        let mut accepted = None;
+        self.early_proposals.retain(|(parts, _)| {
+            if parts.height == height
+                && parts.round == round
+                && accepted.is_none()
+                && authenticate_proposal(&self.current_validator_set, proposer, parts).is_ok()
+            {
+                debug!(%height, %round, %proposer, "Replaying early proposal");
+                accepted = Some(parts.clone());
+            }
+            // Intermediate StartedRound messages must not erase later slots.
+            (parts.height, parts.round) > (height, round)
+        });
+        accepted
     }
 
     pub async fn check_finality(

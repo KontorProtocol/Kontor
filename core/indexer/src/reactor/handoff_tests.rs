@@ -1,6 +1,9 @@
 use std::time::Duration;
 
 use anyhow::Result;
+use bitcoin::absolute::LockTime;
+use bitcoin::transaction::Version;
+use bitcoin::{Amount, ScriptBuf, Transaction, TxOut};
 use indexer_types::Block;
 use malachitebft_app_channel::AppMsg;
 use malachitebft_app_channel::app::types::ProposedValue;
@@ -19,7 +22,7 @@ use crate::bitcoin_follower::event::BlockEvent;
 use crate::consensus::signing::PrivateKey;
 use crate::consensus::{
     CommitCertificate, Height, ProposalData, ProposalFin, ProposalInit, ProposalPart,
-    ProposalParts, Value,
+    ProposalParts, Validator, ValidatorSet, Value,
 };
 use crate::database::queries::select_block_latest;
 use crate::reg_tester::random_x_only_pubkey;
@@ -34,7 +37,9 @@ use crate::test_utils::{new_mock_block_hash, test_runtime_with_genesis};
 #[tokio::test]
 async fn next_height_uses_executed_stake_and_preserves_early_proposals() -> Result<()> {
     for deferred in [false, true] {
-        check_handoff(deferred, false).await?;
+        for before_finalized in [false, true] {
+            check_handoff(deferred, false, before_finalized).await?;
+        }
     }
     Ok(())
 }
@@ -42,12 +47,12 @@ async fn next_height_uses_executed_stake_and_preserves_early_proposals() -> Resu
 #[tokio::test]
 async fn last_validator_exit_halts_before_releasing_the_next_height() -> Result<()> {
     for deferred in [false, true] {
-        check_handoff(deferred, true).await?;
+        check_handoff(deferred, true, false).await?;
     }
     Ok(())
 }
 
-async fn check_handoff(deferred: bool, exiting: bool) -> Result<()> {
+async fn check_handoff(deferred: bool, exiting: bool, before_finalized: bool) -> Result<()> {
     let key = PrivateKey::from([17; 32]);
     let pubkey = random_x_only_pubkey();
     let (mut runtime, dir, _name) = test_runtime_with_genesis(&[GenesisValidator {
@@ -139,6 +144,15 @@ async fn check_handoff(deferred: bool, exiting: bool) -> Result<()> {
                 .pending_blocks
                 .insert(block.height, block.clone());
         }
+        if before_finalized {
+            reactor.consensus.current_round = round;
+            reactor.consensus.current_proposer = Some(reactor.consensus.address);
+            let parts = signed_block_proposal(&PrivateKey::from([17; 32]), 2, 0, 3);
+            let (reply, received) = oneshot::channel();
+            reactor.accept_proposal_parts(parts, reply).await?;
+            assert!(received.await?.is_none());
+            assert_eq!(reactor.consensus.early_proposals.len(), 1);
+        }
         let (reply, mut next) = oneshot::channel();
         // Certificate verification precedes this callback; this fixture exercises
         // native lifecycle execution and the reply that authorizes the next height.
@@ -197,7 +211,9 @@ async fn check_handoff(deferred: bool, exiting: bool) -> Result<()> {
         );
     }
     if !exiting {
-        check_early_proposal(&mut reactor).await?;
+        check_early_proposal(&mut reactor, 0).await?;
+        check_early_proposal(&mut reactor, 1).await?;
+        check_buffer_authentication_and_limits(&mut reactor).await?;
     }
     reactor
         .consensus
@@ -209,26 +225,15 @@ async fn check_handoff(deferred: bool, exiting: bool) -> Result<()> {
     Ok(())
 }
 
-async fn check_early_proposal(reactor: &mut Reactor<NoopExecutor>) -> Result<()> {
+async fn check_early_proposal(
+    reactor: &mut Reactor<NoopExecutor>,
+    target_round: u32,
+) -> Result<()> {
     let height = Height::new(2);
-    let round = Round::new(0);
+    let round = Round::new(target_round);
     let proposer = reactor.consensus.address;
     let hash = new_mock_block_hash(3);
-    let data = ProposalData::new_block(3, hash);
-    let signature = reactor
-        .consensus
-        .signing_provider
-        .sign(&proposal_sign_hash(height, round, &data));
-    let parts = ProposalParts {
-        height,
-        round,
-        proposer,
-        parts: vec![
-            ProposalPart::Init(ProposalInit::new(height, round, Round::Nil, proposer)),
-            ProposalPart::Data(data),
-            ProposalPart::Fin(ProposalFin::new(signature)),
-        ],
-    };
+    let parts = signed_block_proposal(&PrivateKey::from([17; 32]), 2, target_round, 3);
     reactor.consensus.pending_blocks.insert(
         3,
         Block {
@@ -238,21 +243,35 @@ async fn check_early_proposal(reactor: &mut Reactor<NoopExecutor>) -> Result<()>
             transactions: Vec::new(),
         },
     );
-    assert_eq!(reactor.consensus.current_round, Round::Nil);
+    assert_eq!(
+        reactor.consensus.current_round,
+        if target_round == 0 {
+            Round::Nil
+        } else {
+            Round::new(target_round - 1)
+        }
+    );
+    let already_buffered = reactor.consensus.early_proposals.len();
     let mut forged = parts.clone();
     forged.parts[2] =
         ProposalPart::Fin(ProposalFin::new(PrivateKey::from([99; 32]).sign(b"forged")));
     let (reply, received) = oneshot::channel();
     reactor.accept_proposal_parts(forged, reply).await?;
     assert!(received.await?.is_none());
-    assert!(reactor.consensus.early_proposals.is_empty());
+    assert_eq!(reactor.consensus.early_proposals.len(), already_buffered);
     for _ in 0..32 {
         let (reply, received) = oneshot::channel();
         reactor.accept_proposal_parts(parts.clone(), reply).await?;
         assert!(received.await?.is_none());
     }
-    assert_eq!(reactor.consensus.early_proposals.len(), 16);
-    assert!(!reactor.consensus.undecided.contains_key(&height));
+    assert_eq!(reactor.consensus.early_proposals.len(), 1);
+    assert!(
+        !reactor
+            .consensus
+            .undecided
+            .get(&height)
+            .is_some_and(|rounds| rounds.contains_key(&round))
+    );
     let (reply_value, received) = oneshot::channel();
     reactor
         .handle_consensus_msg(AppMsg::StartedRound {
@@ -269,4 +288,149 @@ async fn check_early_proposal(reactor: &mut Reactor<NoopExecutor>) -> Result<()>
     assert_eq!(proposals[0].validity, Validity::Valid);
     assert!(reactor.consensus.early_proposals.is_empty());
     Ok(())
+}
+
+fn signed_block_proposal(key: &PrivateKey, height: u64, round: u32, block: u64) -> ProposalParts {
+    let height = Height::new(height);
+    let round = Round::new(round);
+    let proposer = Validator::new(key.public_key(), 1).address;
+    let data = ProposalData::new_block(block, new_mock_block_hash(block as u32));
+    let signature = key.sign(&proposal_sign_hash(height, round, &data));
+    ProposalParts {
+        height,
+        round,
+        proposer,
+        parts: vec![
+            ProposalPart::Init(ProposalInit::new(height, round, Round::Nil, proposer)),
+            ProposalPart::Data(data),
+            ProposalPart::Fin(ProposalFin::new(signature)),
+        ],
+    }
+}
+
+async fn check_buffer_authentication_and_limits(reactor: &mut Reactor<NoopExecutor>) -> Result<()> {
+    let conn = reactor.db_conn();
+    let state = &mut reactor.consensus;
+    let key = PrivateKey::from([17; 32]);
+    let newcomer = PrivateKey::from([18; 32]);
+    let proposer = state.address;
+    let height = Height::new(2);
+    let next_height = Height::new(3);
+    let round = Round::new(0);
+    let old_set = state.current_validator_set.clone();
+    state.current_round = round;
+
+    // A forged copy arriving first cannot hide a later valid newcomer proposal.
+    let genuine = signed_block_proposal(&newcomer, 3, 0, 4);
+    let mut forged = genuine.clone();
+    forged.parts[2] = ProposalPart::Fin(ProposalFin::new(key.sign(b"forged")));
+    state.buffer_early_proposal(forged);
+    state.buffer_early_proposal(genuine.clone());
+    state.buffer_early_proposal(signed_block_proposal(&key, 2, 1, 3));
+    assert_eq!(state.early_proposals.len(), 3);
+    assert!(state.take_early_proposal(height, round, proposer).is_none());
+    assert_eq!(state.early_proposals.len(), 3);
+    assert!(
+        state
+            .take_early_proposal(height, Round::new(1), proposer)
+            .is_some()
+    );
+    assert_eq!(state.early_proposals.len(), 2);
+    state.current_validator_set = ValidatorSet::new([Validator::new(newcomer.public_key(), 1)]);
+    let accepted = state
+        .take_early_proposal(next_height, round, genuine.proposer)
+        .unwrap();
+    assert_eq!(accepted.parts, genuine.parts);
+    assert!(state.early_proposals.is_empty());
+
+    // Recheck membership after a set change, even for previously verified entries.
+    state.current_validator_set = old_set.clone();
+    state.buffer_early_proposal(signed_block_proposal(&key, 3, 0, 4));
+    state.current_validator_set = ValidatorSet::new([Validator::new(newcomer.public_key(), 1)]);
+    assert!(
+        state
+            .take_early_proposal(next_height, round, proposer)
+            .is_none()
+    );
+    state.current_validator_set = old_set;
+    state.buffer_early_proposal(signed_block_proposal(&key, 2, 1, 3));
+    assert!(
+        state
+            .take_early_proposal(height, Round::new(1), genuine.proposer)
+            .is_none()
+    );
+    assert!(state.early_proposals.is_empty());
+
+    for (h, r) in [(1, 0), (2, 0), (2, 2), (3, 1), (4, 0)] {
+        state.buffer_early_proposal(signed_block_proposal(&key, h, r, 4));
+    }
+    let mut nil = genuine.clone();
+    nil.round = Round::Nil;
+    state.buffer_early_proposal(nil);
+    assert!(state.early_proposals.is_empty());
+    state.current_height = Height::new(u64::MAX);
+    state.current_round = Round::new(u32::MAX);
+    state.buffer_early_proposal(signed_block_proposal(&key, 0, 0, 4));
+    state.buffer_early_proposal(signed_block_proposal(&key, u64::MAX, 0, 4));
+    assert!(state.early_proposals.is_empty());
+    state.current_height = height;
+    state.current_round = round;
+    for block in 4..24 {
+        state.buffer_early_proposal(signed_block_proposal(&newcomer, 3, 0, block));
+    }
+    assert_eq!(state.early_proposals.len(), 4);
+    for block in 4..24 {
+        state.buffer_early_proposal(signed_block_proposal(&key, 3, 0, block));
+    }
+    assert_eq!(state.early_proposals.len(), 16);
+    assert!(
+        state
+            .take_early_proposal(Height::new(4), round, proposer)
+            .is_none()
+    );
+    assert!(state.early_proposals.is_empty());
+
+    let oversized_unknown = signed_large_proposal(&newcomer, 1024 * 1024, 4);
+    state.buffer_early_proposal(oversized_unknown);
+    assert!(state.early_proposals.is_empty());
+    state.buffer_early_proposal(signed_large_proposal(&key, 8 * 1024 * 1024, 4));
+    assert!(state.early_proposals.is_empty());
+    for block in 4..7 {
+        state.buffer_early_proposal(signed_large_proposal(&key, 4 * 1024 * 1024 - 1024, block));
+    }
+    assert_eq!(state.early_proposals.len(), 2);
+    assert!(
+        state
+            .early_proposals
+            .iter()
+            .map(|(_, bytes)| bytes)
+            .sum::<usize>()
+            <= 8 * 1024 * 1024
+    );
+
+    state.buffer_early_proposal(genuine);
+    state.clear_on_rollback(&conn, 2).await?;
+    assert!(state.early_proposals.is_empty());
+    Ok(())
+}
+
+fn signed_large_proposal(key: &PrivateKey, bytes: usize, block: u64) -> ProposalParts {
+    let mut parts = signed_block_proposal(key, 3, 0, block);
+    let data = ProposalData::new_batch(
+        block,
+        new_mock_block_hash(block as u32),
+        vec![Transaction {
+            version: Version::TWO,
+            lock_time: LockTime::ZERO,
+            input: Vec::new(),
+            output: vec![TxOut {
+                value: Amount::ZERO,
+                script_pubkey: ScriptBuf::from_bytes(vec![0; bytes]),
+            }],
+        }],
+    );
+    let signature = key.sign(&proposal_sign_hash(parts.height, parts.round, &data));
+    parts.parts[1] = ProposalPart::Data(data);
+    parts.parts[2] = ProposalPart::Fin(ProposalFin::new(signature));
+    parts
 }
