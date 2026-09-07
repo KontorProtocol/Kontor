@@ -16,6 +16,8 @@ use indexer::test_utils::{
 use kontor_crypto::api::{self};
 use testlib::*;
 
+use super::{bonded_identity, staking};
+
 import!(
     name = "filestorage",
     height = 0,
@@ -59,9 +61,9 @@ async fn e2e_invalid_proof_rejected(runtime: &mut Runtime) -> Result<()> {
     let (_prepared_file2, metadata2) = prepare_test_file(file2_content, "file2.txt");
     let descriptor2 = metadata_to_descriptor(&metadata2);
 
-    let s1 = runtime.identity().await?;
-    let s2 = runtime.identity().await?;
-    let s3 = runtime.identity().await?;
+    let s1 = bonded_identity(runtime).await?;
+    let s2 = bonded_identity(runtime).await?;
+    let s3 = bonded_identity(runtime).await?;
     let created2 = filestorage::create_agreement(runtime, &s1, descriptor2).await??;
     let prover = filestorage::join_agreement(runtime, &s1, &created2.agreement_id)
         .await??
@@ -183,9 +185,9 @@ async fn e2e_cross_block_aggregation_with_new_agreement(runtime: &mut Runtime) -
     // Three distinct signers activate A and B; `s1` is the common
     // member that proves both files, so its signer_id is the aggregated proof's
     // prover_id.
-    let s1 = runtime.identity().await?;
-    let s2 = runtime.identity().await?;
-    let s3 = runtime.identity().await?;
+    let s1 = bonded_identity(runtime).await?;
+    let s2 = bonded_identity(runtime).await?;
+    let s3 = bonded_identity(runtime).await?;
 
     // Step 1: Create files A and B (existing before the "middle" agreement)
     let (_prepared_a, metadata_a) =
@@ -240,7 +242,7 @@ async fn e2e_cross_block_aggregation_with_new_agreement(runtime: &mut Runtime) -
         filestorage::create_agreement(runtime, &s1, metadata_to_descriptor(&metadata_c)).await??;
     // Keep the A/B prover out of C: mining can generate a challenge for C that
     // this proof will not settle, so it must not hold this prover's collateral.
-    let s4 = runtime.identity().await?;
+    let s4 = bonded_identity(runtime).await?;
     filestorage::join_agreement(runtime, &s4, &created_c.agreement_id).await??;
     filestorage::join_agreement(runtime, &s2, &created_c.agreement_id).await??;
     filestorage::join_agreement(runtime, &s3, &created_c.agreement_id).await??;
@@ -265,6 +267,7 @@ async fn e2e_cross_block_aggregation_with_new_agreement(runtime: &mut Runtime) -
     // the network's challenge count), then verify it through the contract.
     let s_chal = filestorage::get_s_chal(runtime).await? as usize;
     let proof_bytes = por_cross_block_proof_bytes(prover, s_chal)?;
+    staking::begin_unstake(runtime, &s1).await??;
     for agreement in [&created_a, &created_b] {
         filestorage::leave_agreement(runtime, &s1, &agreement.agreement_id).await??;
     }

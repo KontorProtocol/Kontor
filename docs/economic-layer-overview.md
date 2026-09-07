@@ -259,10 +259,12 @@ behind *N* distinct signer keys is still undetectable — and that is *expected 
 under the economic model, not a hole B fails to close. **C is rejected** precisely because it
 would re-admit the same-identity-many-slots case B is meant to remove.
 
-**Orthogonal:** the solvency check (`stake ≥ Σ k_f`) and slash firing stay **reactor-side**
-regardless (the no-native→native-view-call limitation, not an identity issue). B just makes
-the reactor's resolution trivial — `prover_id == signer_id`, so it calls
-`staking::slash(signer_id, …)` directly.
+**Orthogonal:** native-contract view calls now support checking the independent
+bond directly in `join_agreement`. The initial gate requires a positive bond and no
+pending withdrawal; per-file `k_f` and the full solvency check (`stake ≥ Σ k_f`) remain
+unimplemented. Storage admission does not require validator participation. Slash
+settlement still belongs at the block lifecycle boundary; signer-keyed memberships
+make resolution direct — `prover_id == signer_id`.
 
 ---
 
