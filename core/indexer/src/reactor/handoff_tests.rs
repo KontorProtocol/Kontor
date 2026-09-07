@@ -66,7 +66,7 @@ async fn check_handoff(deferred: bool, exiting: bool) -> Result<()> {
             Decimal::from("1000"),
         )
         .await??;
-        staking::begin_unstake(&mut runtime, &signer).await??;
+        staking::leave_validation(&mut runtime, &signer).await??;
     }
     let consensus = start_consensus(
         EngineConfig {

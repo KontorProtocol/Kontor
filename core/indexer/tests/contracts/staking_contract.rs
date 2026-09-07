@@ -86,13 +86,13 @@ async fn test_register_validator_errors() -> Result<()> {
         Err(Error::Message("already registered".to_string()))
     );
 
-    // Go inactive from PENDING_JOIN — tokens returned automatically, can re-register directly
-    staking::begin_unstake(runtime, &validator).await??;
+    // Cancel participation, then reuse the existing bond with an additional deposit.
+    staking::leave_validation(runtime, &validator).await??;
     let result =
         staking::register_validator(runtime, &validator, vec![3u8; 32], 2u64.try_into().unwrap())
             .await??;
     assert_eq!(result.status, staking::ValidatorStatus::PendingJoin);
-    assert_eq!(result.stake, 2u64.try_into().unwrap());
+    assert_eq!(result.stake, 7u64.try_into().unwrap());
 
     Ok(())
 }
@@ -106,7 +106,7 @@ async fn test_add_stake() -> Result<()> {
 
     let result = staking::add_stake(runtime, &validator, 2u64.try_into().unwrap()).await??;
     assert_eq!(result.stake, 5u64.try_into().unwrap());
-    assert_eq!(result.status, staking::ValidatorStatus::PendingJoin);
+    assert_eq!(result.withdrawal_height, None);
 
     let info = staking::get_validator(runtime, &validator).await?.unwrap();
     assert_eq!(info.stake, 5u64.try_into().unwrap());
@@ -137,76 +137,41 @@ async fn test_add_stake() -> Result<()> {
 }
 
 #[testlib::test(contracts_dir = "../../test-contracts", local_only)]
-async fn test_add_stake_rejected_during_pending_exit() -> Result<()> {
-    let validator = runtime.identity().await?;
-
-    staking::register_validator(runtime, &validator, vec![1u8; 32], 3u64.try_into().unwrap())
-        .await??;
-
-    // add_stake while pending_join is fine
-    staking::add_stake(runtime, &validator, 1u64.try_into().unwrap()).await??;
-
-    // (local mode cannot trigger activation)
-    // (use begin_unstake from pending_join which goes straight to inactive,
-    //  then re-register and go through regtest activation path isn't needed —
-    //  just test the error directly via local mode workaround)
-    // In local mode we can't reach PENDING_EXIT without epoch transitions,
-    // so test that add_stake is rejected for inactive validators instead
-    staking::begin_unstake(runtime, &validator).await??;
-    let result = staking::add_stake(runtime, &validator, 1u64.try_into().unwrap()).await?;
+async fn test_add_stake_rejected_after_withdrawal_request() -> Result<()> {
+    let signer = runtime.identity().await?;
+    staking::add_stake(runtime, &signer, 3u64.try_into().unwrap()).await??;
+    staking::begin_unstake(runtime, &signer).await??;
     assert_eq!(
-        result,
-        Err(Error::Message(
-            "cannot add stake unless active or pending join".to_string()
-        ))
+        staking::add_stake(runtime, &signer, 1u64.try_into().unwrap()).await?,
+        Err(Error::Message("withdrawal already requested".into()))
     );
-
     Ok(())
 }
 
 #[testlib::test(contracts_dir = "../../test-contracts", local_only)]
-async fn test_begin_unstake_from_pending() -> Result<()> {
-    let validator = runtime.identity().await?;
-
-    let balance_before = token::balance(runtime, &validator).await?.unwrap();
-    staking::register_validator(runtime, &validator, vec![1u8; 32], 5u64.try_into().unwrap())
-        .await??;
-
-    let result = staking::begin_unstake(runtime, &validator).await??;
-    assert_eq!(result.status, staking::ValidatorStatus::Inactive);
-
-    let info = staking::get_validator(runtime, &validator).await?.unwrap();
-    assert_eq!(info.status, staking::ValidatorStatus::Inactive);
-    assert_eq!(info.stake, 0u64.try_into().unwrap());
-
-    // Tokens returned automatically when unstaking from PENDING_JOIN
-    let balance_after_unstake = token::balance(runtime, &validator).await?.unwrap();
-    assert!(balance_before - balance_after_unstake < 1u64.try_into().unwrap()); // only gas cost
-
+async fn test_cancel_validator_join_keeps_bond() -> Result<()> {
+    let signer = runtime.identity().await?;
+    staking::register_validator(runtime, &signer, vec![1; 32], 5u64.try_into().unwrap()).await??;
+    assert!(staking::begin_unstake(runtime, &signer).await?.is_err());
+    let canceled = staking::leave_validation(runtime, &signer).await??;
+    assert_eq!(canceled.status, staking::ValidatorStatus::Inactive);
+    assert_eq!(canceled.stake, 5u64.try_into().unwrap());
+    let bond = staking::get_stake(runtime, &signer).await?.unwrap();
+    assert_eq!(bond.stake, canceled.stake);
+    assert_eq!(bond.withdrawal_height, None);
     Ok(())
 }
 
 #[testlib::test(contracts_dir = "../../test-contracts", local_only)]
-async fn test_unstake_returns_tokens() -> Result<()> {
-    let validator = runtime.identity().await?;
-
-    let balance_before = token::balance(runtime, &validator).await?.unwrap();
-    staking::register_validator(runtime, &validator, vec![1u8; 32], 5u64.try_into().unwrap())
-        .await??;
-
-    // Unstake from PENDING_JOIN — tokens returned automatically
-    staking::begin_unstake(runtime, &validator).await??;
-
-    // Token balance should have mostly recovered (minus gas)
-    let balance = token::balance(runtime, &validator).await?.unwrap();
-    assert!(balance_before - balance < 1u64.try_into().unwrap());
-
-    // Validator entry still exists with ed25519_pubkey retained
-    let info = staking::get_validator(runtime, &validator).await?.unwrap();
-    assert_eq!(info.ed25519_pubkey, vec![1u8; 32]);
-    assert_eq!(info.stake, 0u64.try_into().unwrap());
-    assert_eq!(info.status, staking::ValidatorStatus::Inactive);
-
+async fn test_storage_only_bond_needs_no_consensus_key() -> Result<()> {
+    let signer = runtime.identity().await?;
+    let bond = staking::add_stake(runtime, &signer, 5u64.try_into().unwrap()).await??;
+    assert_eq!(bond.stake, 5u64.try_into().unwrap());
+    assert!(staking::get_validator(runtime, &signer).await?.is_none());
+    assert!(staking::get_active_set(runtime).await?.is_empty());
+    let withdrawal = staking::begin_unstake(runtime, &signer).await??;
+    assert!(withdrawal.withdrawal_height.is_some());
+    assert!(staking::withdraw_stake(runtime, &signer).await?.is_err());
     Ok(())
 }
 
@@ -253,9 +218,9 @@ async fn test_duplicate_ed25519_key_allowed_after_inactive() -> Result<()> {
     let v2 = runtime.identity().await?;
     let same_key = vec![1u8; 32];
 
-    // v1 registers and then goes inactive (tokens returned automatically from PENDING_JOIN)
+    // v1 cancels consensus participation while retaining its bond.
     staking::register_validator(runtime, &v1, same_key.clone(), 5u64.try_into().unwrap()).await??;
-    staking::begin_unstake(runtime, &v1).await??;
+    staking::leave_validation(runtime, &v1).await??;
 
     // v2 can now use the same key since v1 is inactive
     let result =

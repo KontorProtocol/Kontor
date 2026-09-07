@@ -529,7 +529,7 @@ async fn cluster_validator_lifecycle() -> Result<()> {
             gas_limit: 10_000,
             kind: InstKind::Call {
                 contract: staking_addr.clone(),
-                expr: staking::wave::begin_unstake_call_expr(),
+                expr: staking::wave::leave_validation_call_expr(),
             },
         },
     )

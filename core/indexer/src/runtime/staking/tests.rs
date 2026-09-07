@@ -1,7 +1,7 @@
 use anyhow::Result;
 use indexer_types::BlockRow;
 
-use super::api::{self, ActiveValidatorInfo, ValidatorInfo, ValidatorStatus};
+use super::api::{self, ActiveValidatorInfo, ValidatorStatus};
 use super::reward_tests::escrow;
 use crate::consensus::signing::PrivateKey;
 use crate::database::queries::{get_checkpoint_by_height, insert_block};
@@ -18,7 +18,7 @@ use crate::test_utils::{
 
 const LIMIT: u64 = u64::MAX / 3;
 
-fn assert_capacity_error(result: Result<ValidatorInfo, Error>) {
+fn assert_capacity_error<T>(result: Result<T, Error>) {
     let Err(Error::Message(message)) = result else {
         panic!("expected stake capacity error");
     };
@@ -72,52 +72,31 @@ async fn advance(runtime: &mut Runtime, height: u64) -> Result<()> {
 }
 
 #[tokio::test]
-async fn withdrawal_retains_stake_until_maturity_and_rolls_back() -> Result<()> {
+async fn storage_only_withdrawal_preserves_escrow_and_rolls_back() -> Result<()> {
     let (mut runtime, _dir, _name) = test_runtime().await?;
     runtime.set_context(1, None, None, None).await;
     let signer = funded_signer(&mut runtime).await?;
     let amount = Decimal::from("100");
-    api::set_genesis_set(
-        &mut runtime,
-        &core(),
-        vec![validator(signer.to_string(), 1, amount)],
-    )
-    .await?;
-    let exit = api::begin_unstake(&mut runtime, &signer).await??;
-    assert_eq!(exit.deactivation_height, 13);
-    assert_eq!(exit.withdrawal_height, 2041);
-    assert_eq!(api::get_active_set(&mut runtime).await?.len(), 1);
-    assert!(api::withdraw_stake(&mut runtime, &signer).await?.is_err());
-    let balance = token::balance(&mut runtime, HolderRef::from(&signer)).await?;
-
-    advance(&mut runtime, exit.deactivation_height).await?;
-    let info = api::get_validator(&mut runtime, &signer).await?.unwrap();
-    assert_eq!(info.status, ValidatorStatus::Unbonding);
-    assert_eq!(info.stake, amount);
-    assert_eq!(escrow(&mut runtime).await?, amount);
+    api::add_stake(&mut runtime, &signer, amount).await??;
+    assert!(api::get_validator(&mut runtime, &signer).await?.is_none());
     assert!(api::get_active_set(&mut runtime).await?.is_empty());
     assert!(!api::has_reward_recipients(&mut runtime).await?);
-    assert_eq!(
-        api::get_staking_info(&mut runtime).await?.total_stake,
-        Decimal::default()
-    );
-    assert_eq!(
-        token::balance(&mut runtime, HolderRef::from(&signer)).await?,
-        balance
-    );
+    assert_eq!(escrow(&mut runtime).await?, amount);
+    let withdrawal = api::begin_unstake(&mut runtime, &signer).await??;
+    let height = withdrawal.withdrawal_height.unwrap();
+    assert_eq!(height, 2029);
     assert!(
         api::add_stake(&mut runtime, &signer, Decimal::from("1"))
             .await?
             .is_err()
     );
     assert!(
-        api::register_validator(&mut runtime, &signer, vec![2; 32], amount)
+        api::register_validator(&mut runtime, &signer, vec![2; 32], Decimal::default())
             .await?
             .is_err()
     );
     assert!(api::begin_unstake(&mut runtime, &signer).await?.is_err());
-
-    advance(&mut runtime, exit.withdrawal_height - 1).await?;
+    advance(&mut runtime, height - 1).await?;
     assert_eq!(
         api::withdraw_stake(&mut runtime, &signer)
             .await?
@@ -126,10 +105,10 @@ async fn withdrawal_retains_stake_until_maturity_and_rolls_back() -> Result<()> 
     );
     let balance = token::balance(&mut runtime, HolderRef::from(&signer)).await?;
     for replay in 0..2 {
-        advance(&mut runtime, exit.withdrawal_height).await?;
+        advance(&mut runtime, height).await?;
         let supply = token::total_supply(&mut runtime).await?;
         let withdrawn = api::withdraw_stake(&mut runtime, &signer).await??;
-        assert_eq!(withdrawn.status, ValidatorStatus::Inactive);
+        assert_eq!(withdrawn.withdrawal_height, None);
         assert_eq!(withdrawn.stake, Decimal::default());
         assert_eq!(escrow(&mut runtime).await?, Decimal::default());
         // User calls burn execution fees even through the direct runtime API.
@@ -141,15 +120,10 @@ async fn withdrawal_retains_stake_until_maturity_and_rolls_back() -> Result<()> 
         );
         assert!(api::withdraw_stake(&mut runtime, &signer).await?.is_err());
         if replay == 0 {
-            runtime
-                .storage
-                .rollback_with_footprint(exit.withdrawal_height - 1)
-                .await?;
-            runtime
-                .set_context(exit.withdrawal_height - 1, None, None, None)
-                .await;
-            let restored = api::get_validator(&mut runtime, &signer).await?.unwrap();
-            assert_eq!(restored.status, ValidatorStatus::Unbonding);
+            runtime.storage.rollback_with_footprint(height - 1).await?;
+            runtime.set_context(height - 1, None, None, None).await;
+            let restored = api::get_stake(&mut runtime, &signer).await?.unwrap();
+            assert_eq!(restored.withdrawal_height, Some(height));
             assert_eq!(restored.stake, amount);
             assert_eq!(escrow(&mut runtime).await?, amount);
             assert_eq!(
@@ -158,7 +132,8 @@ async fn withdrawal_retains_stake_until_maturity_and_rolls_back() -> Result<()> 
             );
         }
     }
-    api::register_validator(&mut runtime, &signer, vec![2; 32], amount).await??;
+    assert!(api::get_validator(&mut runtime, &signer).await?.is_none());
+    api::add_stake(&mut runtime, &signer, amount).await??;
     Ok(())
 }
 
@@ -170,15 +145,9 @@ async fn withdrawal_checks_storage_after_maturity_including_expired_challenges()
     let bob = funded_signer(&mut runtime).await?;
     let carol = funded_signer(&mut runtime).await?;
     let amount = Decimal::from("100");
-    api::set_genesis_set(
-        &mut runtime,
-        &core(),
-        vec![
-            validator(alice.to_string(), 1, amount),
-            validator(bob.to_string(), 2, amount),
-        ],
-    )
-    .await?;
+    for signer in [&alice, &bob] {
+        api::add_stake(&mut runtime, signer, amount).await??;
+    }
     let agreement = filestorage::create_agreement(
         &mut runtime,
         &alice,
@@ -203,8 +172,7 @@ async fn withdrawal_checks_storage_after_maturity_including_expired_challenges()
     .await??;
     let exit = api::begin_unstake(&mut runtime, &alice).await??;
     api::begin_unstake(&mut runtime, &bob).await??;
-    advance(&mut runtime, exit.deactivation_height).await?;
-    advance(&mut runtime, exit.withdrawal_height).await?;
+    advance(&mut runtime, exit.withdrawal_height.unwrap()).await?;
     for signer in [&alice, &bob] {
         assert_eq!(
             api::withdraw_stake(&mut runtime, signer)
@@ -227,47 +195,114 @@ async fn withdrawal_checks_storage_after_maturity_including_expired_challenges()
         Error::Message("unresolved storage obligations".into())
     );
     assert_eq!(
-        api::get_validator(&mut runtime, &alice)
-            .await?
-            .unwrap()
-            .stake,
+        api::get_stake(&mut runtime, &alice).await?.unwrap().stake,
         amount
     );
     Ok(())
 }
 
 #[tokio::test]
-async fn pending_join_cancellation_cannot_refund_storage_collateral() -> Result<()> {
+async fn storage_bond_survives_entering_and_leaving_validation() -> Result<()> {
     let (mut runtime, _dir, _name) = test_runtime().await?;
     runtime.set_context(1, None, None, None).await;
     let signer = funded_signer(&mut runtime).await?;
-    let amount = Decimal::from("100");
-    api::register_validator(&mut runtime, &signer, vec![1; 32], amount).await??;
+    api::add_stake(&mut runtime, &signer, Decimal::from("100")).await??;
     let agreement = filestorage::create_agreement(
         &mut runtime,
         &signer,
-        make_descriptor("pending".into(), vec![1; 32], 16, 100, "file.txt".into()),
+        make_descriptor(
+            "independent".into(),
+            vec![1; 32],
+            16,
+            100,
+            "file.txt".into(),
+        ),
     )
     .await??
     .agreement_id;
-    filestorage::join_agreement(&mut runtime, &signer, &agreement).await??;
-    assert_eq!(
-        api::begin_unstake(&mut runtime, &signer)
+    let node = filestorage::join_agreement(&mut runtime, &signer, &agreement)
+        .await??
+        .node_id;
+    assert!(api::get_validator(&mut runtime, &signer).await?.is_none());
+    assert!(
+        api::register_validator(&mut runtime, &signer, vec![1; 32], Decimal::from("-1"))
             .await?
-            .unwrap_err(),
-        Error::Message("unresolved storage obligations".into())
+            .is_err()
     );
+    let joined =
+        api::register_validator(&mut runtime, &signer, vec![1; 32], Decimal::default()).await??;
+    assert_eq!(joined.stake, Decimal::from("100"));
+    assert_eq!(escrow(&mut runtime).await?, joined.stake);
+    assert!(api::begin_unstake(&mut runtime, &signer).await?.is_err());
+    advance(&mut runtime, joined.activation_height).await?;
+    assert_eq!(api::get_active_count(&mut runtime).await?, 1);
+    assert!(api::begin_unstake(&mut runtime, &signer).await?.is_err());
+    let exit = api::leave_validation(&mut runtime, &signer).await??;
+    api::add_stake(&mut runtime, &signer, Decimal::from("1")).await??;
+    assert_eq!(
+        api::get_staking_info(&mut runtime).await?.total_stake,
+        Decimal::from("101")
+    );
+    assert!(api::begin_unstake(&mut runtime, &signer).await?.is_err());
+    advance(&mut runtime, exit.deactivation_height).await?;
+    assert_eq!(api::get_active_count(&mut runtime).await?, 0);
+    assert_eq!(
+        api::get_staking_info(&mut runtime).await?.total_stake,
+        Decimal::default()
+    );
+    assert!(filestorage::is_node_in_agreement(&mut runtime, &agreement, node).await?);
+    runtime
+        .storage
+        .rollback_with_footprint(joined.activation_height)
+        .await?;
+    runtime
+        .set_context(joined.activation_height, None, None, None)
+        .await;
     assert_eq!(
         api::get_validator(&mut runtime, &signer)
             .await?
             .unwrap()
-            .stake,
-        amount
+            .status,
+        ValidatorStatus::PendingExit
     );
-    filestorage::leave_agreement(&mut runtime, &signer, &agreement).await??;
-    let canceled = api::begin_unstake(&mut runtime, &signer).await??;
+    assert_eq!(
+        api::get_staking_info(&mut runtime).await?.total_stake,
+        Decimal::from("101")
+    );
+    assert!(filestorage::is_node_in_agreement(&mut runtime, &agreement, node).await?);
+    advance(&mut runtime, exit.deactivation_height).await?;
+    let bond = api::add_stake(&mut runtime, &signer, Decimal::from("1")).await??;
+    assert_eq!(bond.withdrawal_height, None);
+    assert_eq!(bond.stake, Decimal::from("102"));
+    api::register_validator(&mut runtime, &signer, vec![2; 32], Decimal::default()).await??;
+    let canceled = api::leave_validation(&mut runtime, &signer).await??;
     assert_eq!(canceled.status, ValidatorStatus::Inactive);
-    assert_eq!(canceled.stake, Decimal::default());
+    assert_eq!(canceled.stake, bond.stake);
+    assert_eq!(escrow(&mut runtime).await?, bond.stake);
+    assert!(filestorage::has_storage_obligations(&mut runtime, node).await?);
+    Ok(())
+}
+
+#[tokio::test]
+async fn storage_bonds_do_not_reserve_consensus_capacity() -> Result<()> {
+    let (mut runtime, _dir, _name) = test_runtime().await?;
+    runtime.set_context(1, None, None, None).await;
+    let signer = funded_signer(&mut runtime).await?;
+    api::set_genesis_set(
+        &mut runtime,
+        &core(),
+        vec![validator("10000".into(), 1, Decimal::try_from(LIMIT)?)],
+    )
+    .await?;
+    api::add_stake(&mut runtime, &signer, Decimal::from("1")).await??;
+    assert_capacity_error(
+        api::register_validator(&mut runtime, &signer, vec![2; 32], Decimal::default()).await?,
+    );
+    assert!(api::get_validator(&mut runtime, &signer).await?.is_none());
+    assert_eq!(
+        api::get_stake(&mut runtime, &signer).await?.unwrap().stake,
+        Decimal::from("1")
+    );
     Ok(())
 }
 
@@ -335,7 +370,7 @@ async fn genesis_is_not_reissued_after_the_last_validator_exits() -> Result<()> 
         Decimal::from("1000"),
     )
     .await??;
-    api::begin_unstake(&mut runtime, &signer).await??;
+    api::leave_validation(&mut runtime, &signer).await??;
     advance(&mut runtime, 13).await?;
     assert!(api::get_active_set(&mut runtime).await?.is_empty());
     let supply = token::total_supply(&mut runtime).await?;
@@ -398,7 +433,7 @@ async fn pending_joins_and_exits_reserve_aggregate_capacity() -> Result<()> {
         api::get_validator(&mut runtime, &bob).await?.unwrap().stake,
         Decimal::from("6")
     );
-    api::begin_unstake(&mut runtime, &carol).await??;
+    api::leave_validation(&mut runtime, &carol).await??;
     api::add_stake(&mut runtime, &alice, Decimal::from("2")).await??;
     api::add_stake(&mut runtime, &bob, Decimal::from("2")).await??;
     advance(&mut runtime, 13).await?;
@@ -413,7 +448,7 @@ async fn pending_joins_and_exits_reserve_aggregate_capacity() -> Result<()> {
             .status,
         ValidatorStatus::Active
     );
-    api::begin_unstake(&mut runtime, &bob).await??;
+    api::leave_validation(&mut runtime, &bob).await??;
     assert_capacity_error(api::add_stake(&mut runtime, &alice, Decimal::from("1")).await?);
     advance(&mut runtime, 25).await?;
     api::add_stake(&mut runtime, &alice, Decimal::from("1")).await??;

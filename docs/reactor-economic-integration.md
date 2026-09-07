@@ -251,32 +251,49 @@ to the ACTIVE validator set, stake-weighted** — not to batch signers.
 
 ## 6. Slashing prerequisites — same-changeset requirements
 
-Consensus deactivation and returning collateral are separate transitions. An active
-validator can request exit while it still owes storage proofs; its funds remain
-available for later penalties. Storage-slash wiring (§5.2) requires all of:
+Storage hosting and consensus validation are independent roles backed by the same
+bonded balance. A storage host does not have to register a validator or supply a
+consensus key. One native account record holds the balance, optional validator metadata,
+and an independent withdrawal request; there is no second collateral ledger.
 
-1. **`T_unbond ≥ challenge_deadline (2016) + evidence margin`, after deactivation.**
-   `begin_unstake` schedules consensus deactivation after `ACTIVATION_DELAY = 12`.
-   At that height, the validator enters `Unbonding` and its stake leaves the voting
-   aggregate, but remains in staking escrow. `withdraw_stake` is a separate call.
-   The initial implementation uses 2,028 blocks (2016 + 12) after deactivation;
-   this is an initial parameter choice, not completed production calibration.
-2. **Withdrawal refused while storage obligations remain.** Live memberships,
+- `add_stake` creates or tops up a bond without joining consensus. Voting-power
+  limits apply when the account participates in validation, not to storage-only bonds.
+  `get_stake` reads the bond; `get_validator` returns no record for a storage-only
+  account. `get_staking_info.total_stake` continues to report consensus stake only.
+- `register_validator` opts into consensus using the existing bond plus any additional
+  deposit supplied in that call. A zero additional deposit reuses a sufficient bond.
+- `leave_validation` schedules the existing 12-block exit (or cancels a pending
+  join). Deactivation removes voting power but leaves the bond and storage memberships
+  intact. The host can continue storing, topping up, and later rejoining consensus.
+- `begin_unstake` is a separate collateral-withdrawal request. Consensus participation
+  must have ended first if that account was also validating. A storage-only host can
+  request withdrawal directly. Additional deposits and validator registration are
+  blocked while that withdrawal request is pending.
+
+Storage-slash wiring (§5.2) still requires:
+
+1. **`T_unbond ≥ challenge_deadline (2016) + evidence margin`.** The initial
+   implementation uses 2,028 blocks (2016 + 12) from the collateral-withdrawal request;
+   this remains an initial parameter choice, not completed production calibration.
+2. **`withdraw_stake` refused while storage obligations remain.** Live memberships,
    active challenges, and expired-but-unsettled penalties all retain the hold.
-   Expiration alone never releases collateral. Re-registration and stake additions
-   are disallowed while unbonding. Pending joins still cancel immediately only
-   when they have no storage obligations. The check uses ordinary versioned native
-   indexes and participates in the existing block rollback.
-3. **Epoch stake snapshot** (Phase 4) so a slash attributes against the stake that stood
-   when the offense was committed, not the post-flight remainder.
+   Expiration alone never releases collateral. These checks and both account states
+   use ordinary versioned native records/indexes and follow block rollback.
+3. **Stake attribution** so penalties apply to the collateral that backed an obligation,
+   including after role changes; the epoch snapshot design remains unfinished.
 
-For example, an exit requested at Bitcoin height 100 deactivates at 112. Its
-earliest withdrawal height is 2140, and unresolved obligations can extend the wait.
-The withdrawal call does not change voting power again or mint tokens. The current
-withdrawal implementation does not settle penalties or automatically remove storage
-memberships: those, admission eligibility, and stake attribution remain prerequisites
-before enabling storage slashing. Until settlement exists, expired challenges keep
-their holds. The native state/API change assumes a fresh preproduction chain.
+For example, a validator requests to leave consensus at height 100 and deactivates
+at 112. It can keep hosting indefinitely. If it requests its collateral back at 200,
+its earliest withdrawal is 2228, subject to outstanding obligations. A storage-only
+host making the same withdrawal request at 200 has the same minimum height.
+
+The current withdrawal implementation does not settle penalties or automatically
+remove storage memberships. Before enabling storage slashing, admission must require
+sufficient bonded collateral, without requiring validator participation; pending
+withdrawals must prevent fresh storage commitments. Cleanup must follow storage exit
+or collateral exhaustion, never merely consensus deactivation. Until settlement
+exists, expired challenges keep their holds. Native state/API changes assume a fresh
+preproduction chain.
 
 **Deferred, deliberately:** equivocation slashing. The evidence arrives at
 `AppMsg::Finalized { evidence }` (reactor handlers) and is currently logged and discarded;
@@ -290,10 +307,12 @@ Deleting λ_stake (Decision 4) makes the whole-pool saturating slash the securit
 which is only sound if a node cannot keep operating with zero stake. These rules are v1
 spec, same milestone as slashing:
 
-- A validator whose stake reaches **zero** (slash-exhaustion) enters `Inactive` via the
-  standard status machinery: removed from the consensus set at the next
-  `process_pending_validators`, earns nothing further (it is not in the ACTIVE payout set).
-- Its **storage memberships are unwound**: marked defunct in deterministic order (bounded
+- **Bond exhaustion applies to every operator**, including storage-only accounts.
+  If the operator also validates, zero stake removes that role through the standard
+  status machinery and ends ordering rewards. `Inactive` describes consensus
+  participation only: an inactive account can still have bonded, slashable collateral.
+- An exhausted account's **storage memberships are unwound**, even if it never
+  registered a validator: marked defunct in deterministic order (bounded
   per block — an unwind queue processed N-per-block if needed, not a scan), so its
   agreements' replication counts reflect reality and its pending challenges resolve as
   failures *without* further slash attempts (skip-and-alert; there is nothing left to
@@ -333,7 +352,7 @@ formula; price-coupled → admin window; identity → genesis-fixed):
 | gas calibration (`gas_to_token_multiplier`) | currently 1e-9 on main; spec φ_base = 2.5e-7 (~250× apart — issue #462 pt. 1) | **admin window** | price-coupled; the known-miscalibrated one |
 | c_stake | 1,000,000 | **admin window** | price-coupled (absolute KOR collateral scale) |
 | υ_f (creation fee) | 30 bps · k_f | **genesis-fixed** | ratio of on-chain quantities |
-| T_unbond | initially 2028 after consensus deactivation; obligations can extend | **genesis-fixed** | security window (§6); production calibration pending |
+| T_unbond | initially 2028 after collateral-withdrawal request; obligations can extend | **genesis-fixed** | security window (§6); production calibration pending |
 | n_min, F_scale, EPOCH | per model | **genesis-fixed** | shape constants |
 | ε, ω_f, Ω, k_f, storage floor | — | **already formulas** | never governable; O(1)-per-block rule applies |
 
