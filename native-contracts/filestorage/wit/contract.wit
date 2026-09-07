@@ -117,6 +117,12 @@ world root {
   ) -> result<leave-agreement-result, error>;
 
   // Node queries
+  // Includes live memberships and unresolved challenges after a node leaves.
+  export has-storage-obligations: async func(
+    ctx: borrow<view-context>,
+    node-id: u64
+  ) -> bool;
+
   export get-agreement-nodes: async func(
     ctx: borrow<view-context>,
     agreement-id: string

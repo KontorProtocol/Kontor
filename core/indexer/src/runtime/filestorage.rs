@@ -1,6 +1,9 @@
 use crate::runtime::Runtime;
 use crate::testlib_exports::*;
 
+#[cfg(test)]
+mod tests;
+
 import!(
     name = "filestorage",
     mod_name = "api",
