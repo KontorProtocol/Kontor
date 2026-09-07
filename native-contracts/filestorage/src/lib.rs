@@ -6,6 +6,7 @@ contract!(
         challenge-data: status include (agreement-id, block-height, num-challenges, seed, prover-id, deadline-height);
         challenge-data: due by status sort deadline-height;
         challenge-data: by-prover-status by prover-id status;
+        challenge-data: by-membership-status by agreement-id prover-id status;
     "
 );
 
@@ -61,6 +62,14 @@ const REGTEST_S_CHAL: u64 = 8;
 /// `DEFAULT_MAX_HISTORICAL_ROOTS`). A submitted proof's `ledger_root` must fall
 /// within this many recent roots, else verification rejects it.
 const MAX_VALID_ROOTS: u64 = 4096;
+
+// Initial preproduction calibration from the storage-economics design. Governance
+// and production calibration are separate; callers cannot retune existing holds.
+const OMEGA_GENESIS: u64 = 1000;
+const RANK_OFFSET: u64 = 1000;
+const FILE_SCALE: u64 = 1000;
+const COLLATERAL_SCALE: u64 = 1_000_000;
+const LN_10: &str = "2.302585092994045684";
 
 // ─────────────────────────────────────────────────────────────────
 // STORAGE INDEX MODEL
@@ -138,6 +147,7 @@ struct NodeState {
     pub agreement_id: String,
     pub node_id: u64,
     pub active: bool,
+    pub collateral_reserved: bool,
 }
 
 /// A file registered this block, queued for the per-block frontier fold. Carries
@@ -161,6 +171,8 @@ struct ProtocolState {
     pub agreements: Map<String, AgreementData>,
     pub memberships: Map<(String, u64), NodeState>,
     pub challenges: Map<String, ChallengeData>,
+    pub reservations: Map<u64, Decimal>,
+    pub total_storage_weight: Decimal,
     /// Dense, append-only array of ACTIVE agreements' ids (position 0..len). An
     /// agreement is pushed here exactly when it activates (reaches `min_nodes`);
     /// `active` is monotonic (never turned off) and agreements never terminate, so
@@ -261,6 +273,8 @@ impl Guest for Filestorage {
             agreements: Map::default(),
             memberships: Map::default(),
             challenges: Map::default(),
+            reservations: Map::default(),
+            total_storage_weight: OMEGA_GENESIS.try_into().expect("genesis weight fits"),
             active_ids: Deque::default(),
             valid_roots: Deque::default(),
             pending_appends: Deque::default(),
@@ -324,6 +338,13 @@ impl Guest for Filestorage {
         // trip sparsity.
         file_registry::aggregate_root(&[(descriptor.root.clone(), descriptor.padded_len, 0)])?;
 
+        let (storage_weight, required_collateral) = compute_collateral(
+            descriptor.padded_len,
+            ledger_index,
+            model.agreements().active(true).len(),
+            model.total_storage_weight(),
+        )?;
+
         // Validation passed — claim the slot by advancing the append-only counter.
         model.set_next_ledger_index(ledger_index + 1);
 
@@ -341,6 +362,8 @@ impl Guest for Filestorage {
             ledger_index,
             active: false,
             active_challenge: None,
+            storage_weight,
+            required_collateral,
         };
 
         // Store the agreement, `active: false`, so it lands in the `active/false`
@@ -438,6 +461,42 @@ impl Guest for Filestorage {
             return Err(Error::Message("withdrawal already requested".to_string()));
         }
 
+        let required = agreement.required_collateral();
+        if required <= Decimal::default() {
+            return Err(Error::Message(
+                "agreement has no collateral requirement".to_string(),
+            ));
+        }
+        let reserved = model.reservations().get(&node_id).unwrap_or_default();
+        let retained = model
+            .memberships()
+            .get(&membership_key)
+            .is_some_and(|m| m.collateral_reserved());
+        let next_reserved = if retained {
+            reserved
+        } else {
+            reserved.add(required)?
+        };
+        if next_reserved > bond.stake {
+            return Err(Error::Message(
+                "insufficient unreserved collateral".to_string(),
+            ));
+        }
+        let activated = !agreement.active()
+            && model
+                .memberships()
+                .by_agreement_active(agreement_id.clone(), true)
+                .len()
+                >= model.min_nodes().saturating_sub(1);
+        let next_weight = if activated {
+            model
+                .total_storage_weight()
+                .add(agreement.storage_weight())?
+        } else {
+            model.total_storage_weight()
+        };
+        model.reservations().set(&node_id, next_reserved);
+
         // Add (or reactivate) the node — `set` lands it in the `(agreement, true)`
         // bucket and bumps that bucket's framework-maintained count. No nested
         // node-set to lazily create.
@@ -447,24 +506,15 @@ impl Guest for Filestorage {
                 agreement_id: agreement_id.clone(),
                 node_id,
                 active: true,
+                collateral_reserved: true,
             },
         );
-
-        // Active-node count is the `(agreement, true)` bucket size — read straight
-        // from the index, no hand-kept counter.
-        let node_count = model
-            .memberships()
-            .by_agreement_active(agreement_id.clone(), true)
-            .len();
-
-        // Check if we should activate (only if not already active)
-        let min_nodes = model.min_nodes();
-        let activated = !agreement.active() && node_count >= min_nodes;
 
         if activated {
             // In-place set: the `active` index is maintained automatically
             // because `agreements().get()` binds the value model to the index.
             agreement.set_active(true);
+            model.set_total_storage_weight(next_weight);
             // Append to the dense active array (activation is one-way, so this is the
             // only place it grows). Gives generate_challenges O(1) ordinal access.
             model.active_ids().push_back(agreement_id.clone());
@@ -520,6 +570,7 @@ impl Guest for Filestorage {
         // the `(agreement, false)` bucket, out of the live-member scan, and
         // decrements the `(agreement, true)` count automatically).
         membership.set_active(false);
+        release_unused_reservation(&model, &agreement_id, node_id)?;
 
         Ok(LeaveAgreementResult {
             agreement_id,
@@ -561,6 +612,10 @@ impl Guest for Filestorage {
     // ─────────────────────────────────────────────────────────────────
     // Challenge Management
     // ─────────────────────────────────────────────────────────────────
+
+    fn get_node_reservation(ctx: &ViewContext, node_id: u64) -> Decimal {
+        ctx.model().reservations().get(&node_id).unwrap_or_default()
+    }
 
     fn has_storage_obligations(ctx: &ViewContext, node_id: u64) -> bool {
         let model = ctx.model();
@@ -1051,6 +1106,11 @@ impl Guest for Filestorage {
 
         for cid in &challenge_ids {
             terminate_challenge(&model, cid, ChallengeStatus::Proven);
+            let challenge = model
+                .challenges()
+                .get(cid)
+                .expect("validated challenge exists");
+            release_unused_reservation(&model, &challenge.agreement_id(), challenge.prover_id())?;
         }
 
         Ok(VerifyProofResult {
@@ -1176,9 +1236,94 @@ pub fn uniform_index_from_u64(n: usize, next_u64: &mut impl FnMut() -> u64) -> u
     }
 }
 
-/// Validate and register a file descriptor with the file registry host.
-/// Rebuild the `raw-file-descriptor` the host crypto fns consume from a stored
-/// agreement (the file metadata is folded into `agreement-data`).
+// Snapshot at creation: later activations change only the price of new agreements.
+// Charge the committed field-element payload (32 bytes per padded leaf), not the
+// caller's original-size label, which can be zero or understate the committed tree.
+fn compute_collateral(
+    padded_len: u64,
+    ledger_index: u64,
+    activated_files: u64,
+    total_weight: Decimal,
+) -> Result<(Decimal, Decimal), Error> {
+    let denominator = ledger_index
+        .checked_add(RANK_OFFSET + 2)
+        .ok_or(Error::Message("file rank overflow".to_string()))?;
+    let rank: Decimal = denominator.try_into()?;
+    let leaves: Decimal = padded_len.try_into()?;
+    let encoded_bytes = leaves.mul(32u64.try_into()?)?;
+    let weight = encoded_bytes.log10()?.div(rank.log10()?)?;
+    let active: Decimal = activated_files.try_into()?;
+    let one: Decimal = 1u64.try_into()?;
+    let growth = one
+        .add(active.add(one)?.div(FILE_SCALE.try_into()?)?)?
+        .log10()?
+        .mul(LN_10.into())?;
+    // Divide last so a small weight/network ratio is not rounded to zero before
+    // applying the collateral scale. A zero rounded requirement must never admit.
+    let required = weight
+        .mul(COLLATERAL_SCALE.try_into()?)?
+        .mul(growth)?
+        .div(total_weight)?;
+    if required <= Decimal::default() {
+        return Err(Error::Message(
+            "collateral requirement must be positive".to_string(),
+        ));
+    }
+    Ok((weight, required))
+}
+
+fn release_unused_reservation(
+    model: &ProtocolStateWriteModel<context::ProcStorage>,
+    agreement_id: &str,
+    node_id: u64,
+) -> Result<(), Error> {
+    let Some(membership) = model
+        .memberships()
+        .get(&(agreement_id.to_string(), node_id))
+    else {
+        return Ok(());
+    };
+    if membership.active() || !membership.collateral_reserved() {
+        return Ok(());
+    }
+    // Expired challenges still carry an unsettled penalty. A rejoin reuses this
+    // hold, and another departure cannot release it or count it a second time.
+    if [
+        ChallengeStatus::Active,
+        ChallengeStatus::Expired,
+        ChallengeStatus::Failed,
+        ChallengeStatus::Invalid,
+    ]
+    .into_iter()
+    .any(|status| {
+        !model
+            .challenges()
+            .by_membership_status(agreement_id.to_string(), node_id, status)
+            .is_empty()
+    }) {
+        return Ok(());
+    }
+    let amount = model
+        .agreements()
+        .get(&agreement_id.to_string())
+        .expect("membership agreement exists")
+        .required_collateral();
+    let reserved = model.reservations().get(&node_id).unwrap_or_default();
+    if reserved < amount {
+        return Err(Error::Message(
+            "inconsistent collateral reservation".to_string(),
+        ));
+    }
+    let remaining = reserved.sub(amount)?;
+    if remaining == Decimal::default() {
+        model.reservations().remove(&node_id);
+    } else {
+        model.reservations().set(&node_id, remaining);
+    }
+    membership.set_collateral_reserved(false);
+    Ok(())
+}
+
 /// Move a challenge to a terminal status (proven/failed/invalid/expired) and free
 /// its agreement's challenge slot so the agreement can be challenged again. The two
 /// are a unit — a terminal status must always clear the slot — so every caller goes

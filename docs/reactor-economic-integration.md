@@ -293,13 +293,40 @@ on both first join and rejoin. Requesting withdrawal preserves existing membersh
 leaving agreements and answering their challenges remain available. Ordinary storage
 customers can still create agreements without bonding.
 
-Per-file collateral amounts (`k_f`) and reservation accounting remain unimplemented,
-so this gate does not yet enforce storage capacity. Before enabling storage
-slashing, admission must also enforce sufficient collateral for all commitments.
-The current implementation does not settle penalties or automatically remove storage
-memberships. Cleanup must follow storage exit or collateral exhaustion, never merely
-consensus deactivation. Until settlement exists, expired challenges keep their holds.
-Native state/API changes assume a fresh preproduction chain.
+Storage admission also checks `reserved + k_f <= bond` before membership or
+activation writes. Each agreement stores its weight and positive `k_f` at creation;
+future files and activations do not reprice existing commitments. The weight uses
+`32 * padded_len` bytes of committed field-element payload, rather than the
+caller's `original_size` label (which otherwise permits zero-cost tiny files or
+understating a large tree). The deterministic Decimal calculation is:
+
+```
+rank = ledger_index + 1000 + 1
+weight = log10(32 * padded_len) / log10(1 + rank)
+k_f = weight * 1_000_000 * ln(1 + (activated_files + 1) / 1000) / total_weight
+```
+
+`total_weight` starts at 1000 and adds the frozen weight once per activation.
+`activated_files` is the existing `active(true)` bucket count. Activation remains
+one-way on main; future deactivation/cleanup must update both that status and the
+weight accumulator. These are the earlier design's initial preproduction scales,
+not completed production calibration or an implemented governance window.
+
+One reservation per `(agreement, signer)` is included in the signer's aggregate
+`get_node_reservation`. Leaving retains it while any Active, Expired, Failed, or
+Invalid challenge for that membership remains. Rejoining reuses the retained hold;
+it does not add another copy or forgive an old penalty. A valid proof releases a
+departed host's hold only when all its challenges for that agreement are resolved.
+Failed and duplicate operations leave the total unchanged. Membership flags, totals,
+and the membership/status challenge index use ordinary versioned contract storage.
+
+Reservations account for capacity in the existing bond; they neither move tokens
+nor reserve the eventual `lambda_slash * k_f` penalty separately. Storage slashing,
+penalty settlement, and automatic membership cleanup are still unimplemented.
+Those paths must handle collateral depletion/shortfalls and invoke reservation
+release only after settlement. Until then, expired challenges keep their holds.
+Native state/API changes assume a fresh preproduction chain; old agreements without
+a positive stored requirement cannot accept joins.
 
 **Deferred, deliberately:** equivocation slashing. The evidence arrives at
 `AppMsg::Finalized { evidence }` (reactor handlers) and is currently logged and discarded;

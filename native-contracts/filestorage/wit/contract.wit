@@ -5,6 +5,7 @@ world root {
   use kontor:built-in/context.{view-context, proc-context, core-context, contract};
   use kontor:built-in/context-types.{holder-ref};
   use kontor:built-in/error.{error};
+  use kontor:built-in/numbers-types.{decimal};
   use kontor:built-in/file-registry-types.{raw-file-descriptor};
 
   // ─────────────────────────────────────────────────────────────────
@@ -39,6 +40,8 @@ world root {
     // "is this agreement already challenged?" is a point read, not a scan of
     // the active-challenge set. Maintained on challenge create/terminate.
     active-challenge: option<string>,
+    storage-weight: decimal,
+    required-collateral: decimal,
   }
 
   record create-agreement-result {
@@ -122,6 +125,11 @@ world root {
     ctx: borrow<view-context>,
     node-id: u64
   ) -> bool;
+
+  export get-node-reservation: async func(
+    ctx: borrow<view-context>,
+    node-id: u64
+  ) -> decimal;
 
   export get-agreement-nodes: async func(
     ctx: borrow<view-context>,

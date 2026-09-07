@@ -1,7 +1,7 @@
 use indexer::test_utils::{LUCKY_HASH_50000, lucky_hash, make_descriptor, valid_seed_field};
 use testlib::*;
 
-use super::{bonded_identity, staking};
+use super::{bonded_identity, staking, token};
 
 import!(
     name = "filestorage",
@@ -304,10 +304,35 @@ async fn filestorage_admission_checks_bond(runtime: &mut Runtime) -> Result<()> 
             .await?
             .is_empty()
     );
-    staking::add_stake(runtime, &signer, 1u64.try_into()?).await??;
+    let required = filestorage::get_agreement(runtime, a)
+        .await?
+        .unwrap()
+        .required_collateral;
+    token::mint(runtime, &signer, required).await??;
+    staking::add_stake(runtime, &signer, required).await??;
     assert!(staking::get_validator(runtime, &signer).await?.is_none());
     let joined = filestorage::join_agreement(runtime, &signer, a).await??;
     join_n_distinct(runtime, b, 2).await?;
+    assert_eq!(
+        filestorage::get_node_reservation(runtime, joined.node_id).await?,
+        required
+    );
+    assert_eq!(
+        filestorage::join_agreement(runtime, &signer, b).await?,
+        Err(Error::Message("insufficient unreserved collateral".into()))
+    );
+    assert_eq!(filestorage::get_agreement_nodes(runtime, b).await?.len(), 2);
+    assert!(
+        !filestorage::get_agreement(runtime, b)
+            .await?
+            .unwrap()
+            .active
+    );
+    assert_eq!(
+        filestorage::get_node_reservation(runtime, joined.node_id).await?,
+        required
+    );
+
     staking::begin_unstake(runtime, &signer).await??;
     assert!(filestorage::is_node_in_agreement(runtime, a, joined.node_id).await?);
     assert_eq!(
@@ -323,6 +348,10 @@ async fn filestorage_admission_checks_bond(runtime: &mut Runtime) -> Result<()> 
     );
     filestorage::leave_agreement(runtime, &signer, a).await??;
     assert_eq!(
+        filestorage::get_node_reservation(runtime, joined.node_id).await?,
+        0u64.try_into()?
+    );
+    assert_eq!(
         filestorage::join_agreement(runtime, &signer, a).await?,
         Err(Error::Message("withdrawal already requested".into()))
     );
@@ -331,7 +360,7 @@ async fn filestorage_admission_checks_bond(runtime: &mut Runtime) -> Result<()> 
     assert!(has_node(&nodes, joined.node_id, false));
     assert_eq!(
         staking::get_stake(runtime, &signer).await?.unwrap().stake,
-        1u64.try_into()?
+        required
     );
     Ok(())
 }
