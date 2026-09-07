@@ -15,9 +15,6 @@ use super::Reactor;
 use super::consensus_state;
 use super::executor::Executor;
 
-const MAX_EARLY_PROPOSALS: usize = 16;
-const MAX_EARLY_PROPOSAL_BYTES: usize = 8 * 1024 * 1024;
-
 /// Answer a `ReceivedProposalPart` with "not a complete, accepted proposal".
 fn reply_none(reply: tokio::sync::oneshot::Sender<Option<ProposedValue<Ctx>>>) -> Result<()> {
     reply
@@ -62,12 +59,7 @@ impl<E: Executor> Reactor<E> {
             .into_iter()
             .collect();
 
-        let early = std::mem::take(&mut self.consensus.early_proposals)
-            .into_iter()
-            .map(|(parts, _)| parts)
-            .find(|parts| {
-                parts.height == height && parts.round == round && parts.proposer == proposer
-            });
+        let early = self.consensus.take_early_proposal(height, round, proposer);
         if let Some(parts) = early {
             let (reply, received) = tokio::sync::oneshot::channel();
             self.accept_proposal_parts(parts, reply).await?;
@@ -112,41 +104,15 @@ impl<E: Executor> Reactor<E> {
         let height = self.consensus.current_height;
         let round = self.consensus.current_round;
 
-        // A fast peer can publish after executing the previous block while our
-        // StartedRound notification is still queued. Authenticate now, then wait
-        // for the engine to identify the actual proposer before accepting it.
-        if parts.height == height
-            && parts.round == Round::new(0)
-            && (round == Round::Nil || self.consensus.current_proposer.is_none())
-            && self
-                .consensus
-                .verify_proposal_parts(parts.proposer, &parts)
-                .is_ok()
+        if parts.height != height
+            || parts.round != round
+            || self.consensus.current_proposer.is_none()
         {
-            let bytes = parts.parts.iter().fold(0usize, |total, part| {
-                total.saturating_add(part.to_sign_bytes().len())
-            });
-            let buffered: usize = self
-                .consensus
-                .early_proposals
-                .iter()
-                .map(|(_, bytes)| bytes)
-                .sum();
-            if self.consensus.early_proposals.len() < MAX_EARLY_PROPOSALS
-                && bytes <= MAX_EARLY_PROPOSAL_BYTES.saturating_sub(buffered)
-            {
-                self.consensus.early_proposals.push((parts, bytes));
-            }
+            self.consensus.buffer_early_proposal(parts);
             return reply_none(reply);
         }
 
-        // Only the current round is actionable. A proposal for another height/round
-        // is dropped (Kontor does not buffer future proposals), and one whose slot
-        // is already filled needs no re-validation. Gate BEFORE authenticating so
-        // the proposer is checked against THIS round's engine-chosen proposer.
         if round == Round::Nil
-            || parts.height != height
-            || parts.round != round
             || self
                 .consensus
                 .undecided
