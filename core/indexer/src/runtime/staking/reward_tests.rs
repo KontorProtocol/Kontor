@@ -36,7 +36,7 @@ async fn balance(runtime: &mut Runtime, holder: HolderRef) -> Result<Decimal> {
     Ok(token::balance(runtime, holder).await?.unwrap_or_default())
 }
 
-async fn escrow(runtime: &mut Runtime) -> Result<Decimal> {
+pub(super) async fn escrow(runtime: &mut Runtime) -> Result<Decimal> {
     let conn = runtime.get_storage_conn();
     let id = get_contract_id_from_address(&conn, &address())
         .await?

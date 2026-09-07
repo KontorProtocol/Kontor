@@ -1,6 +1,7 @@
 #![no_std]
 contract!(name = "staking");
 
+use context::HolderRef;
 use stdlib::*;
 
 import!(
@@ -10,7 +11,17 @@ import!(
     path = "../token/wit"
 );
 
+import!(
+    name = "filestorage",
+    height = 0,
+    tx_index = 0,
+    path = "../filestorage/wit"
+);
+
 const ACTIVATION_DELAY: u64 = 12; // 2 * FINALITY_WINDOW (6)
+// One challenge window plus the existing two-finality-window lifecycle margin.
+// Outstanding storage obligations can extend this minimum indefinitely.
+const WITHDRAWAL_DELAY: u64 = 2016 + ACTIVATION_DELAY;
 const MAX_STAKE: u64 = 1_000_000_000;
 // Malachite's default thresholds multiply observed voting power by three.
 const MAX_TOTAL_STAKE: u64 = u64::MAX / 3;
@@ -36,6 +47,7 @@ struct ValidatorEntry {
     pub status: ValidatorStatus,
     pub activation_height: u64,
     pub deactivation_height: u64,
+    pub withdrawal_height: u64,
     pub ed25519_pubkey: Vec<u8>,
 }
 
@@ -92,8 +104,19 @@ fn make_validator_info(
         status: entry.status().load(),
         activation_height: entry.activation_height(),
         deactivation_height: entry.deactivation_height(),
+        withdrawal_height: entry.withdrawal_height(),
         ed25519_pubkey: entry.ed25519_pubkey(),
     }
+}
+
+fn ensure_no_storage_obligations(signer: &context::Signer) -> Result<(), Error> {
+    let HolderRef::SignerId(id) = signer.into() else {
+        return Err(Error::Message("expected signer identity".to_string()));
+    };
+    if filestorage::has_storage_obligations(id) {
+        return Err(Error::Message("unresolved storage obligations".to_string()));
+    }
+    Ok(())
 }
 
 impl Guest for Staking {
@@ -242,6 +265,7 @@ impl Guest for Staking {
                 status: ValidatorStatus::PendingJoin,
                 activation_height,
                 deactivation_height: 0,
+                withdrawal_height: 0,
                 ed25519_pubkey: ed25519_pubkey.clone(),
             },
         );
@@ -258,6 +282,7 @@ impl Guest for Staking {
             status: ValidatorStatus::PendingJoin,
             activation_height,
             deactivation_height: 0,
+            withdrawal_height: 0,
             ed25519_pubkey,
         })
     }
@@ -276,9 +301,12 @@ impl Guest for Staking {
         }
 
         let status = entry.status().load();
-        if status == ValidatorStatus::Inactive || status == ValidatorStatus::PendingExit {
+        if !matches!(
+            status,
+            ValidatorStatus::Active | ValidatorStatus::PendingJoin
+        ) {
             return Err(Error::Message(
-                "cannot add stake while inactive or pending exit".to_string(),
+                "cannot add stake unless active or pending join".to_string(),
             ));
         }
 
@@ -316,12 +344,20 @@ impl Guest for Staking {
 
         match entry.status().load() {
             ValidatorStatus::Active => {
+                let deactivation_height = ctx
+                    .block_height()
+                    .checked_add(ACTIVATION_DELAY)
+                    .ok_or(Error::Message("deactivation height overflow".to_string()))?;
+                let withdrawal_height = deactivation_height
+                    .checked_add(WITHDRAWAL_DELAY)
+                    .ok_or(Error::Message("withdrawal height overflow".to_string()))?;
                 entry.set_status(ValidatorStatus::PendingExit);
-                let deactivation_height = ctx.block_height() + ACTIVATION_DELAY;
                 entry.set_deactivation_height(deactivation_height);
+                entry.set_withdrawal_height(withdrawal_height);
             }
             // Not yet activated — go straight to inactive and return tokens
             ValidatorStatus::PendingJoin => {
+                ensure_no_storage_obligations(&ctx.signer())?;
                 let stake = entry.stake();
                 entry.set_stake(0u64.try_into().unwrap());
                 entry.set_status(ValidatorStatus::Inactive);
@@ -330,6 +366,29 @@ impl Guest for Staking {
             _ => return Err(Error::Message("invalid status for unstaking".to_string())),
         }
 
+        Ok(make_validator_info(&holder, &entry))
+    }
+
+    fn withdraw_stake(ctx: &ProcContext) -> Result<ValidatorInfo, Error> {
+        let holder: Holder = (&ctx.signer()).into();
+        let entry = ctx
+            .model()
+            .validators()
+            .get(&holder)
+            .ok_or(Error::Message("not registered".to_string()))?;
+        if entry.status().load() != ValidatorStatus::Unbonding {
+            return Err(Error::Message("validator is not unbonding".to_string()));
+        }
+        if ctx.block_height() < entry.withdrawal_height() {
+            return Err(Error::Message(
+                "withdrawal delay has not elapsed".to_string(),
+            ));
+        }
+        ensure_no_storage_obligations(&ctx.signer())?;
+        let stake = entry.stake();
+        entry.set_stake(0u64.try_into().unwrap());
+        entry.set_status(ValidatorStatus::Inactive);
+        token::transfer(ctx.contract_signer(), holder.as_ref(), stake)?;
         Ok(make_validator_info(&holder, &entry))
     }
 
@@ -378,6 +437,7 @@ impl Guest for Staking {
                     status: ValidatorStatus::Active,
                     activation_height: 0,
                     deactivation_height: 0,
+                    withdrawal_height: 0,
                     ed25519_pubkey: v.ed25519_pubkey.clone(),
                 },
             );
@@ -431,10 +491,8 @@ impl Guest for Staking {
                 && block_height >= entry.deactivation_height()
             {
                 let stake = entry.stake();
-                entry.set_stake(0u64.try_into().unwrap());
-                entry.set_status(ValidatorStatus::Inactive);
+                entry.set_status(ValidatorStatus::Unbonding);
                 model.try_update_total_active_stake(|s| s.sub(stake))?;
-                token::transfer(ctx.proc_context().contract_signer(), key, stake)?;
                 deactivated += 1;
             }
         }

@@ -251,16 +251,32 @@ to the ACTIVE validator set, stake-weighted** — not to batch signers.
 
 ## 6. Slashing prerequisites — same-changeset requirements
 
-Slashing that can be exited is theater (a 12-block unbond against a 2016-block
-challenge deadline means a faulty staker leaves before evidence lands). Therefore the
-storage-slash wiring (§5.2) **must land in the same changeset as**:
+Consensus deactivation and returning collateral are separate transitions. An active
+validator can request exit while it still owes storage proofs; its funds remain
+available for later penalties. Storage-slash wiring (§5.2) requires all of:
 
-1. **`T_unbond ≥ challenge_deadline (2016) + evidence margin.`** The current
-   `ACTIVATION_DELAY = 12` covers *set-membership* transitions and may remain for joins;
-   exits must be governed by the new T_unbond.
-2. **`begin_unstake` refused while the signer has any pending challenge.**
+1. **`T_unbond ≥ challenge_deadline (2016) + evidence margin`, after deactivation.**
+   `begin_unstake` schedules consensus deactivation after `ACTIVATION_DELAY = 12`.
+   At that height, the validator enters `Unbonding` and its stake leaves the voting
+   aggregate, but remains in staking escrow. `withdraw_stake` is a separate call.
+   The initial implementation uses 2,028 blocks (2016 + 12) after deactivation;
+   this is an initial parameter choice, not completed production calibration.
+2. **Withdrawal refused while storage obligations remain.** Live memberships,
+   active challenges, and expired-but-unsettled penalties all retain the hold.
+   Expiration alone never releases collateral. Re-registration and stake additions
+   are disallowed while unbonding. Pending joins still cancel immediately only
+   when they have no storage obligations. The check uses ordinary versioned native
+   indexes and participates in the existing block rollback.
 3. **Epoch stake snapshot** (Phase 4) so a slash attributes against the stake that stood
    when the offense was committed, not the post-flight remainder.
+
+For example, an exit requested at Bitcoin height 100 deactivates at 112. Its
+earliest withdrawal height is 2140, and unresolved obligations can extend the wait.
+The withdrawal call does not change voting power again or mint tokens. The current
+withdrawal implementation does not settle penalties or automatically remove storage
+memberships: those, admission eligibility, and stake attribution remain prerequisites
+before enabling storage slashing. Until settlement exists, expired challenges keep
+their holds. The native state/API change assumes a fresh preproduction chain.
 
 **Deferred, deliberately:** equivocation slashing. The evidence arrives at
 `AppMsg::Finalized { evidence }` (reactor handlers) and is currently logged and discarded;
@@ -317,7 +333,7 @@ formula; price-coupled → admin window; identity → genesis-fixed):
 | gas calibration (`gas_to_token_multiplier`) | currently 1e-9 on main; spec φ_base = 2.5e-7 (~250× apart — issue #462 pt. 1) | **admin window** | price-coupled; the known-miscalibrated one |
 | c_stake | 1,000,000 | **admin window** | price-coupled (absolute KOR collateral scale) |
 | υ_f (creation fee) | 30 bps · k_f | **genesis-fixed** | ratio of on-chain quantities |
-| T_unbond | ≥ 2016 + margin | **genesis-fixed** | security window (§6) |
+| T_unbond | initially 2028 after consensus deactivation; obligations can extend | **genesis-fixed** | security window (§6); production calibration pending |
 | n_min, F_scale, EPOCH | per model | **genesis-fixed** | shape constants |
 | ε, ω_f, Ω, k_f, storage floor | — | **already formulas** | never governable; O(1)-per-block rule applies |
 
@@ -360,7 +376,7 @@ mainnet gate (merged); creation-fee burn e2e (#460 merged — port its assertion
   across every `ValidatorStatus`, zero-trigger → §7.
 - **§11.4** `staking::distribute_ordering_reward(amount)` — internal pool transfer + credit
   (§3.2 rule 3), active-set stake-weighted (§5.3).
-- **§11.5** T_unbond + pending-challenge unstake block + epoch snapshot (§6).
+- **§11.5** withdrawal delay and obligation hold implemented; penalty settlement and epoch snapshot remain (§6).
 - **§11.6** σ_min in `register_validator` (§8).
 - **§11.7** terminal-state unwinding (§7).
 
@@ -406,7 +422,7 @@ PRs, and main — each row records the resolution this document commits to.)*
 | 4 | #452 free-form node_id vs signer identity | signer-keyed on main; node_id obsolete | §5.2, overview §7 |
 | 5 | `Σk_f·λ_stake` (spec) vs `Σk_f` (code) | λ_stake deleted (Decision 4) | §9 |
 | 6 | slash redistribution: stake-weighted vs equal | moot — storage slashes burn 100 % | §5.2 |
-| 7 | 12-block unbond vs 2016-block deadline | T_unbond ≥ 2016 + margin, same changeset | §6 |
+| 7 | 12-block refund vs 2016-block deadline | separate deactivation and withdrawal; minimum delay plus unresolved-obligation hold | §6 |
 | 8 | governance immutability vs launch calibration | class-scoped window with sunset | §9 |
 | 9 | two demand-side fee channels (gas vs f_ord) never reconciled | deferred with Phase 2; reconciliation note is a Step-6 gate | §12 |
 | 10 | `r_fee` source of truth unpinned | Phase-2 open question, carried in the annotated phase2 doc | §10.5 |

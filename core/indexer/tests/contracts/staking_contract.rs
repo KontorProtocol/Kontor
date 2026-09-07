@@ -157,7 +157,7 @@ async fn test_add_stake_rejected_during_pending_exit() -> Result<()> {
     assert_eq!(
         result,
         Err(Error::Message(
-            "cannot add stake while inactive or pending exit".to_string()
+            "cannot add stake unless active or pending join".to_string()
         ))
     );
 
