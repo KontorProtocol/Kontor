@@ -267,11 +267,17 @@ async fn e2e_cross_block_aggregation_with_new_agreement(runtime: &mut Runtime) -
     // the network's challenge count), then verify it through the contract.
     let s_chal = filestorage::get_s_chal(runtime).await? as usize;
     let proof_bytes = por_cross_block_proof_bytes(prover, s_chal)?;
+    let reserved = filestorage::get_node_reservation(runtime, prover).await?;
+    assert!(reserved > 0u64.try_into()?);
     staking::begin_unstake(runtime, &s1).await??;
     for agreement in [&created_a, &created_b] {
         filestorage::leave_agreement(runtime, &s1, &agreement.agreement_id).await??;
     }
     assert!(filestorage::has_storage_obligations(runtime, prover).await?);
+    assert_eq!(
+        filestorage::get_node_reservation(runtime, prover).await?,
+        reserved
+    );
     let a = challenge_a.challenge_id.as_str();
     let b = challenge_b.challenge_id.as_str();
     for ids in [vec![], vec![a], vec![a, a, b], vec![a, "unregistered"]] {
@@ -282,6 +288,10 @@ async fn e2e_cross_block_aggregation_with_new_agreement(runtime: &mut Runtime) -
         );
         assert_challenges_open(runtime, &[&challenge_a, &challenge_b]).await?;
         assert!(filestorage::has_storage_obligations(runtime, prover).await?);
+        assert_eq!(
+            filestorage::get_node_reservation(runtime, prover).await?,
+            reserved
+        );
     }
     // v3 proofs no longer enumerate their challenges — the submitter declares the
     // ids the proof answers (A and B here).
@@ -317,6 +327,10 @@ async fn e2e_cross_block_aggregation_with_new_agreement(runtime: &mut Runtime) -
         "Challenge B should be Proven"
     );
     assert!(!filestorage::has_storage_obligations(runtime, prover).await?);
+    assert_eq!(
+        filestorage::get_node_reservation(runtime, prover).await?,
+        0u64.try_into()?
+    );
 
     Ok(())
 }

@@ -29,7 +29,7 @@ wiring could not be finalized until these were decided. All four are decided:
 ---
 
 The 2026-09-07 role clarification supersedes the earlier assumption that storage
-providers must be validators. Admission will require collateral, not participation
+providers must be validators. Admission requires collateral, not participation
 in consensus; withdrawing collateral and leaving validation are separate actions.
 
 The 2026-09-06 ordering implementation decision adds **no validator-count cap**.
@@ -111,9 +111,9 @@ incentive-aligned, settled every Bitcoin block.
 | Mechanism | Goal | Algorithm | PR |
 |---|---|---|---|
 | **Emissions** | Predictable inflation funds the system | Per block mint `ε = total_supply · μ₀ / B` (μ₀ ≈ 5%/yr, B = 52,560 blocks/yr). Split `storage = ε·(1−χ)`, `ordering = ε·χ` (χ ≈ 10%). Minted into **dedicated pool holders** (ORDERING_POOL; STORAGE_POOL from Step 5) — never CORE (the gas escrow `release()` sweeps), never via `issue_to` (a fresh mint). All payouts are transfers out of a pool. In v1 only χ·ε is minted (storage share computed, unminted, until the accumulator lands). | re-derive (was #439) |
-| **Storage rewards** | Pay nodes to replicate *valuable* data; resist spam/whale capture | Per file: `rank_f = files_ever + r_offset + 1`; weight `ω_f = log(size)/log(1+rank_f)`; collateral weight `k_f = (ω_f/Ω)·c_stake·ln(1 + (|F|+1)/F_scale)`. Global `Ω` accumulates `ω_f` as files activate; `|F|` tracks active files. `distribute_storage_rewards`: split by `ω_f/Ω`, then equally among a file's active nodes; exact conservation via last-absorbs-remainder. **Per Decision 2 the yield is stake-proportional** (reward and collateral both scale with ω_f, so ROI is content-blind — accepted, stated honestly). **Deferred to Step 5 behind the O(1) accumulator** (`acc += pool/Ω` per block; snapshot at join/leave; lazy claims) — the naive per-block loop is O(files×nodes), the #489 chain-halt shape. | re-derive (was #441) |
+| **Storage rewards** | Pay nodes to replicate *valuable* data; resist spam/whale capture | Per file: `rank_f = files_ever + r_offset + 1`; weight `ω_f = log(size)/log(1+rank_f)`; collateral weight `k_f = (ω_f/Ω)·c_stake·ln(1 + (|F|+1)/F_scale)`. Current collateral uses the committed encoded size (`32·padded_len`) and freezes the weight/requirement at creation. Global `Ω` accumulates `ω_f` as files activate; `|F|` tracks active files. `distribute_storage_rewards`: split by `ω_f/Ω`, then equally among a file's active nodes; exact conservation via last-absorbs-remainder. **Per Decision 2 the yield is stake-proportional** (reward and collateral both scale with ω_f, so ROI is content-blind — accepted, stated honestly). **Deferred to Step 5 behind the O(1) accumulator** (`acc += pool/Ω` per block; snapshot at join/leave; lazy claims) — the naive per-block loop is O(files×nodes), the #489 chain-halt shape. | re-derive (was #441) |
 | **Storage slashing** | Bond storage commitments; punish proof failure | Per block the reactor will collect challenges that **expired without a valid proof** → prover is the signer (memberships are signer-keyed) → `slash(signer, λ_slash·k_f)`, saturating. Bad proof submissions return an error and leave challenges open; anyone may relay a valid proof. **100 % of the penalty is burned** — `distribute_slash` is deleted from this path (paying co-nodes for a peer's failure was a sabotage incentive, and its escrow paths had two conservation bugs). τ/bounty machinery is reserved for the deferred equivocation path. Zero-stake ⇒ terminal-state unwinding (Decision 4). | re-derive (was #440 + #452) |
-| **Node↔stake coupling** | Make slashing *resolvable* (a failed challenge must hit a real bond) | Memberships are **signer-keyed on main** (`(agreement_id, signer_id)`) — identity is structural (§7). Solvency at join is plain `Σ k_f ≤ stake` (λ_stake deleted, Decision 4). | on main + re-derive solvency check (was #452) |
+| **Node↔stake coupling** | Make slashing *resolvable* (a failed challenge must hit a real bond) | Memberships are **signer-keyed on main** (`(agreement_id, signer_id)`) — identity is structural (§7). Solvency at join is plain `Σ k_f ≤ stake` (λ_stake deleted, Decision 4). | on main: identity, bond admission, and retained collateral reservations (replaces #452) |
 | **Equivocation slashing** | Make double-signing irrational; pay for policing | `slash_equivocation(offender, publisher)`: **100% slash + eject**; `r_evid` (≈ 5%) paid to the evidence publisher's spendable balance **iff publisher ∉ signers** (else fully burned); remaining ≈ 95% burned. | re-derive (was #440) |
 | **σ_min floor** | Keep the validator set from collapsing to dust/Sybil | `register_validator` requires `stake ≥ σ_min` (5,000,000 KOR, ~0.5 % of genesis; admin-window class, Decision 3; ~200-participant ceiling accepted explicitly). Genesis set exempt. | re-derive (was #453) |
 | **Congestion pricing** | Demand-responsive, deterministic blockspace pricing (EIP-1559-style) | Multiplier `β(t)` by utilization `u`: `u < u_low` → decay `β·λ_decay`; `u_low ≤ u < u_high` → smoothstep ramp (floored by the decay term); `u ≥ u_high` → compound `max(β,1)·(1 + κ·(u − u_high))`. Fee `= φ_base · β`. (u_low ≈ 20%, u_high ≈ 80%, λ_decay ≈ 0.95, κ ≈ 2.0.) | re-derive (was #445) |
@@ -260,10 +260,11 @@ under the economic model, not a hole B fails to close. **C is rejected** precise
 would re-admit the same-identity-many-slots case B is meant to remove.
 
 **Orthogonal:** native-contract view calls now support checking the independent
-bond directly in `join_agreement`. The initial gate requires a positive bond and no
-pending withdrawal; per-file `k_f` and the full solvency check (`stake ≥ Σ k_f`) remain
-unimplemented. Storage admission does not require validator participation. Slash
-settlement still belongs at the block lifecycle boundary; signer-keyed memberships
+bond directly in `join_agreement`. The admission gate requires a positive bond and no
+pending withdrawal, and enforces `stake ≥ Σ k_f` across memberships and retained
+obligations. Per-agreement requirements are frozen at creation; reservations release
+only after departure and resolution of outstanding challenges. Storage admission
+does not require validator participation. Slash settlement still belongs at the block lifecycle boundary; signer-keyed memberships
 make resolution direct — `prover_id == signer_id`.
 
 ---
