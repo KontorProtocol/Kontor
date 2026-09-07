@@ -17,6 +17,7 @@ use malachitebft_app_channel::app::streaming::{StreamContent, StreamId, StreamMe
 use malachitebft_app_channel::app::types::core::Round;
 use malachitebft_app_channel::app::types::{LocallyProposedValue, ProposedValue};
 use malachitebft_core_types::{HeightParams, LinearTimeouts};
+use malachitebft_engine::host::Next;
 
 use prost::Message;
 use sha3::Digest;
@@ -40,8 +41,6 @@ use crate::database::queries::{
 pub enum ConsensusResult {
     /// No action needed by the reactor.
     None,
-    /// A block was decided — the reactor should execute it.
-    Block(indexer_types::Block, DeferredDecision),
     /// A batch was decided and executed — the reactor should emit a websocket event.
     BatchProcessed { txids: Vec<String> },
 }
@@ -158,6 +157,11 @@ pub struct ConsensusState {
 
     // Held GetValue reply — waiting for pending_transactions to arrive.
     pub pending_proposal: Option<PendingProposal>,
+
+    // A decided block may arrive after its certificate; finish its lifecycle
+    // before choosing the next height's validator set.
+    pub pending_next_height: Option<(Height, tokio::sync::oneshot::Sender<Next<Ctx>>)>,
+    pub early_proposals: Vec<(ProposalParts, usize)>,
 
     // Malachite engine channels and handle.
     pub channels: Channels<Ctx>,
@@ -634,6 +638,8 @@ impl ConsensusState {
             observation: None,
             timeouts: LinearTimeouts::default(),
             pending_proposal: None,
+            pending_next_height: None,
+            early_proposals: Vec::new(),
             channels,
             engine_handle,
             validator_index,
@@ -648,6 +654,7 @@ impl ConsensusState {
         to_height: u64,
     ) -> Result<()> {
         self.pending_blocks.clear();
+        self.early_proposals.clear();
         // Record before discarding. A queued decision is queued precisely BECAUSE it
         // could not be applied, so unlike the executed and record-only ones it has
         // written NO `batches` row — clearing it erases the only copy of that

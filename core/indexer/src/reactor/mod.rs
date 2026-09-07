@@ -5,6 +5,8 @@ pub mod engine;
 pub mod executor;
 mod handlers;
 #[cfg(test)]
+mod handoff_tests;
+#[cfg(test)]
 pub(crate) mod lite_executor;
 pub mod mempool_fee_index;
 pub mod mock_bitcoin;
@@ -588,14 +590,9 @@ impl<E: Executor> Reactor<E> {
                     {
                         warn!("Event receiver dropped, cannot send BatchProcessed event");
                     }
-                    if let consensus_state::ConsensusResult::Block(block, decision) = consensus_result {
-                        self.handle_block(block, &decision)
-                            .await
-                            .context("handle_block failed after consensus block")?;
-                        self.advance()
-                            .await
-                            .context("advance failed after consensus block")?;
-                    }
+                    self.advance()
+                        .await
+                        .context("advance failed after consensus message")?;
                     // Yield to allow other channels (block_rx, mempool_rx) to be polled
                     tokio::task::yield_now().await;
                 }

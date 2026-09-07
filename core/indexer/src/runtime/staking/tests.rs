@@ -3,14 +3,14 @@ use indexer_types::BlockRow;
 
 use super::api::{self, ActiveValidatorInfo, ValidatorInfo, ValidatorStatus};
 use crate::consensus::signing::PrivateKey;
-use crate::database::queries::insert_block;
+use crate::database::queries::{get_checkpoint_by_height, insert_block};
 use crate::reg_tester::random_x_only_pubkey;
 use crate::runtime::numerics::{add_decimal, sub_decimal};
 use crate::runtime::token::api as token;
 use crate::runtime::wit::Signer;
 use crate::runtime::wit::kontor::built_in::context::HolderRef;
-use crate::runtime::{Decimal, Error, Runtime};
-use crate::test_utils::{new_mock_block_hash, test_runtime};
+use crate::runtime::{Decimal, Error, GenesisValidator, Runtime};
+use crate::test_utils::{new_mock_block_hash, test_runtime, test_runtime_with_genesis};
 
 const LIMIT: u64 = u64::MAX / 3;
 
@@ -105,6 +105,55 @@ async fn genesis_rejects_unsafe_stake_without_minting() -> Result<()> {
     assert_eq!(
         token::total_supply(&mut runtime).await?,
         add_decimal(supply, Decimal::try_from(LIMIT)?)?
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn genesis_is_not_reissued_after_the_last_validator_exits() -> Result<()> {
+    let pubkey = random_x_only_pubkey();
+    let validators = [GenesisValidator {
+        x_only_pubkey: pubkey,
+        ed25519_pubkey: PrivateKey::from([1; 32]).public_key().as_bytes().to_vec(),
+        stake: Decimal::from("100"),
+    }];
+    let (mut runtime, _dir, _name) = test_runtime_with_genesis(&validators).await?;
+    runtime.set_context(1, None, None, None).await;
+    let signer = Signer::Id(
+        runtime
+            .get_or_create_identity(&validators[0].x_only_pubkey)
+            .await?,
+    );
+    token::issue_to(
+        &mut runtime,
+        &core(),
+        HolderRef::from(&signer),
+        Decimal::from("1000"),
+    )
+    .await??;
+    api::begin_unstake(&mut runtime, &signer).await??;
+    advance(&mut runtime, 13).await?;
+    assert!(api::get_active_set(&mut runtime).await?.is_empty());
+    let supply = token::total_supply(&mut runtime).await?;
+    let balance = token::balance(&mut runtime, HolderRef::from(&signer)).await?;
+    let genesis_checkpoint = get_checkpoint_by_height(&runtime.get_storage_conn(), 0)
+        .await?
+        .unwrap();
+    // Startup republishes native contracts at height zero, even on an existing database.
+    runtime.publish_native_contracts(&validators).await?;
+    assert_eq!(
+        get_checkpoint_by_height(&runtime.get_storage_conn(), 0).await?,
+        Some(genesis_checkpoint)
+    );
+    assert!(api::get_active_set(&mut runtime).await?.is_empty());
+    assert_eq!(
+        api::get_staking_info(&mut runtime).await?.total_stake,
+        Decimal::default()
+    );
+    assert_eq!(token::total_supply(&mut runtime).await?, supply);
+    assert_eq!(
+        token::balance(&mut runtime, HolderRef::from(&signer)).await?,
+        balance
     );
     Ok(())
 }

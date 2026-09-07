@@ -45,6 +45,7 @@ struct StakingStorage {
     pub validators: Map<Holder, ValidatorEntry>,
     pub total_active_stake: Decimal,
     pub last_reward_height: Option<u64>,
+    pub genesis_initialized: bool,
 }
 
 /// The consensus-set size = ACTIVE ∪ PENDING_EXIT (an exiting validator still
@@ -334,7 +335,7 @@ impl Guest for Staking {
 
     fn set_genesis_set(ctx: &CoreContext, validators: Vec<ActiveValidatorInfo>) {
         let model = ctx.proc_context().model();
-        if active_set_size(&model.validators()) > 0 {
+        if model.genesis_initialized() {
             return;
         }
         let mut genesis_stake = 0u64.try_into().unwrap();
@@ -386,6 +387,7 @@ impl Guest for Staking {
         }
         // No `active_count` to set — the `status` index's ACTIVE bucket count is
         // maintained by these `set`s and read back via `active_set_size`.
+        model.set_genesis_initialized(true);
     }
 
     fn process_pending_validators(
