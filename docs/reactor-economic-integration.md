@@ -287,13 +287,19 @@ at 112. It can keep hosting indefinitely. If it requests its collateral back at 
 its earliest withdrawal is 2228, subject to outstanding obligations. A storage-only
 host making the same withdrawal request at 200 has the same minimum height.
 
-The current withdrawal implementation does not settle penalties or automatically
-remove storage memberships. Before enabling storage slashing, admission must require
-sufficient bonded collateral, without requiring validator participation; pending
-withdrawals must prevent fresh storage commitments. Cleanup must follow storage exit
-or collateral exhaustion, never merely consensus deactivation. Until settlement
-exists, expired challenges keep their holds. Native state/API changes assume a fresh
-preproduction chain.
+Storage admission now requires a positive bond and no pending withdrawal request,
+without checking validator participation. The check runs before membership writes
+on both first join and rejoin. Requesting withdrawal preserves existing memberships;
+leaving agreements and answering their challenges remain available. Ordinary storage
+customers can still create agreements without bonding.
+
+Per-file collateral amounts (`k_f`) and reservation accounting remain unimplemented,
+so this gate does not yet enforce storage capacity. Before enabling storage
+slashing, admission must also enforce sufficient collateral for all commitments.
+The current implementation does not settle penalties or automatically remove storage
+memberships. Cleanup must follow storage exit or collateral exhaustion, never merely
+consensus deactivation. Until settlement exists, expired challenges keep their holds.
+Native state/API changes assume a fresh preproduction chain.
 
 **Deferred, deliberately:** equivocation slashing. The evidence arrives at
 `AppMsg::Finalized { evidence }` (reactor handlers) and is currently logged and discarded;
@@ -330,10 +336,10 @@ spec, same milestone as slashing:
   not).
 - σ_min is **admin-window class** (Decision 1): price-coupled, tunable during the sunsetted
   calibration window, immutable after sunset.
-- The consequence is recorded as an explicit accepted constraint: with unified stake,
-  5M KOR is also the entry price to *operate storage* — at genesis supply that caps
-  independent participants at ~200. Users never stake (balance + deposit floor only);
-  delegation is the designed future add-on if operator breadth is needed.
+- This proposed floor concerns validator registration only. Storage-only hosts do
+  not need a validator registration or its minimum stake; their collateral requirement
+  will come from storage commitments. Ordinary storage customers do not bond. The
+  current validator admission floor remains unchanged pending the separate σ_min work.
 
 ## 9. Parameter table (Decision 1 — class-scoped governance)
 

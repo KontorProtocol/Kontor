@@ -1,6 +1,8 @@
 use indexer::test_utils::{LUCKY_HASH_50000, lucky_hash, make_descriptor, valid_seed_field};
 use testlib::*;
 
+use super::{bonded_identity, staking};
+
 import!(
     name = "filestorage",
     height = 0,
@@ -19,7 +21,7 @@ fn has_node(nodes: &[filestorage::NodeInfo], node_id: u64, active: bool) -> bool
 async fn join_n_distinct(runtime: &mut Runtime, agreement_id: &str, n: usize) -> Result<Vec<u64>> {
     let mut ids = Vec::new();
     for _ in 0..n {
-        let s = runtime.identity().await?;
+        let s = bonded_identity(runtime).await?;
         let r = filestorage::join_agreement(runtime, &s, agreement_id).await??;
         ids.push(r.node_id);
     }
@@ -247,7 +249,7 @@ async fn filestorage_invalid_padded_len_fails(runtime: &mut Runtime) -> Result<(
 // ─────────────────────────────────────────────────────────────────
 
 async fn filestorage_join_agreement(runtime: &mut Runtime) -> Result<()> {
-    let signer = runtime.identity().await?;
+    let signer = bonded_identity(runtime).await?;
     let descriptor = make_descriptor(
         "join_test".to_string(),
         vec![2u8; 32],
@@ -277,10 +279,67 @@ async fn filestorage_join_agreement(runtime: &mut Runtime) -> Result<()> {
     Ok(())
 }
 
+async fn filestorage_admission_checks_bond(runtime: &mut Runtime) -> Result<()> {
+    let signer = runtime.identity().await?;
+    let mut agreements = Vec::new();
+    for name in ["bond_admission_a", "bond_admission_b"] {
+        agreements.push(
+            filestorage::create_agreement(
+                runtime,
+                &signer,
+                make_descriptor(name.into(), vec![1; 32], 16, 100, "file.txt".into()),
+            )
+            .await??
+            .agreement_id,
+        );
+    }
+    let a = &agreements[0];
+    let b = &agreements[1];
+    assert_eq!(
+        filestorage::join_agreement(runtime, &signer, a).await?,
+        Err(Error::Message("no bonded stake".into()))
+    );
+    assert!(
+        filestorage::get_agreement_nodes(runtime, a)
+            .await?
+            .is_empty()
+    );
+    staking::add_stake(runtime, &signer, 1u64.try_into()?).await??;
+    assert!(staking::get_validator(runtime, &signer).await?.is_none());
+    let joined = filestorage::join_agreement(runtime, &signer, a).await??;
+    join_n_distinct(runtime, b, 2).await?;
+    staking::begin_unstake(runtime, &signer).await??;
+    assert!(filestorage::is_node_in_agreement(runtime, a, joined.node_id).await?);
+    assert_eq!(
+        filestorage::join_agreement(runtime, &signer, b).await?,
+        Err(Error::Message("withdrawal already requested".into()))
+    );
+    assert_eq!(filestorage::get_agreement_nodes(runtime, b).await?.len(), 2);
+    assert!(
+        !filestorage::get_agreement(runtime, b)
+            .await?
+            .unwrap()
+            .active
+    );
+    filestorage::leave_agreement(runtime, &signer, a).await??;
+    assert_eq!(
+        filestorage::join_agreement(runtime, &signer, a).await?,
+        Err(Error::Message("withdrawal already requested".into()))
+    );
+    let nodes = filestorage::get_agreement_nodes(runtime, a).await?;
+    assert_eq!(nodes.len(), 1);
+    assert!(has_node(&nodes, joined.node_id, false));
+    assert_eq!(
+        staking::get_stake(runtime, &signer).await?.unwrap().stake,
+        1u64.try_into()?
+    );
+    Ok(())
+}
+
 async fn filestorage_join_activates_at_min_nodes(runtime: &mut Runtime) -> Result<()> {
-    let s1 = runtime.identity().await?;
-    let s2 = runtime.identity().await?;
-    let s3 = runtime.identity().await?;
+    let s1 = bonded_identity(runtime).await?;
+    let s2 = bonded_identity(runtime).await?;
+    let s3 = bonded_identity(runtime).await?;
     let descriptor = make_descriptor(
         "activate_test".to_string(),
         vec![3u8; 32],
@@ -324,7 +383,7 @@ async fn filestorage_join_activates_at_min_nodes(runtime: &mut Runtime) -> Resul
 }
 
 async fn filestorage_double_join_fails(runtime: &mut Runtime) -> Result<()> {
-    let signer = runtime.identity().await?;
+    let signer = bonded_identity(runtime).await?;
     let descriptor = make_descriptor(
         "double_join_test".to_string(),
         vec![4u8; 32],
@@ -355,8 +414,8 @@ async fn filestorage_join_nonexistent_agreement_fails(runtime: &mut Runtime) -> 
 }
 
 async fn filestorage_leave_agreement(runtime: &mut Runtime) -> Result<()> {
-    let s1 = runtime.identity().await?;
-    let s2 = runtime.identity().await?;
+    let s1 = bonded_identity(runtime).await?;
+    let s2 = bonded_identity(runtime).await?;
     let descriptor = make_descriptor(
         "leave_test".to_string(),
         vec![5u8; 32],
@@ -414,9 +473,9 @@ async fn filestorage_leave_nonexistent_agreement_fails(runtime: &mut Runtime) ->
 }
 
 async fn filestorage_leave_does_not_deactivate(runtime: &mut Runtime) -> Result<()> {
-    let s1 = runtime.identity().await?;
-    let s2 = runtime.identity().await?;
-    let s3 = runtime.identity().await?;
+    let s1 = bonded_identity(runtime).await?;
+    let s2 = bonded_identity(runtime).await?;
+    let s3 = bonded_identity(runtime).await?;
     let descriptor = make_descriptor(
         "no_deactivate_test".to_string(),
         vec![7u8; 32],
@@ -454,7 +513,7 @@ async fn filestorage_leave_does_not_deactivate(runtime: &mut Runtime) -> Result<
 }
 
 async fn filestorage_is_node_in_agreement(runtime: &mut Runtime) -> Result<()> {
-    let signer = runtime.identity().await?;
+    let signer = bonded_identity(runtime).await?;
     let descriptor = make_descriptor(
         "is_node_test".to_string(),
         vec![8u8; 32],
@@ -493,7 +552,7 @@ async fn filestorage_is_node_in_nonexistent_agreement(runtime: &mut Runtime) -> 
 }
 
 async fn filestorage_rejoin_after_leave(runtime: &mut Runtime) -> Result<()> {
-    let signer = runtime.identity().await?;
+    let signer = bonded_identity(runtime).await?;
     let descriptor = make_descriptor(
         "rejoin_test".to_string(),
         vec![9u8; 32],
@@ -533,10 +592,10 @@ async fn filestorage_rejoin_after_leave(runtime: &mut Runtime) -> Result<()> {
 }
 
 async fn filestorage_join_after_activation_not_reactivated(runtime: &mut Runtime) -> Result<()> {
-    let s1 = runtime.identity().await?;
-    let s2 = runtime.identity().await?;
-    let s3 = runtime.identity().await?;
-    let s4 = runtime.identity().await?;
+    let s1 = bonded_identity(runtime).await?;
+    let s2 = bonded_identity(runtime).await?;
+    let s3 = bonded_identity(runtime).await?;
+    let s4 = bonded_identity(runtime).await?;
     let descriptor = make_descriptor(
         "no_reactivate_test".to_string(),
         vec![10u8; 32],
@@ -733,6 +792,7 @@ pub async fn run_regtest(runtime: &mut Runtime) -> Result<()> {
     filestorage_invalid_root_fails(runtime).await?;
     filestorage_invalid_padded_len_fails(runtime).await?;
     filestorage_join_agreement(runtime).await?;
+    filestorage_admission_checks_bond(runtime).await?;
     filestorage_join_activates_at_min_nodes(runtime).await?;
     filestorage_double_join_fails(runtime).await?;
     filestorage_join_nonexistent_agreement_fails(runtime).await?;

@@ -1,6 +1,8 @@
 use indexer::test_utils::make_descriptor;
 use testlib::*;
 
+use super::bonded_identity;
+
 import!(
     name = "filestorage",
     height = 0,
@@ -30,7 +32,7 @@ async fn setup_active_agreement_with_challenge(
 
     // Activate it with 3 distinct signers (one membership slot per signer)
     for _ in 0..3 {
-        let s = runtime.identity().await?;
+        let s = bonded_identity(runtime).await?;
         filestorage::join_agreement(runtime, &s, &created.agreement_id).await??;
     }
 

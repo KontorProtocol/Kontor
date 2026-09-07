@@ -145,7 +145,7 @@ async fn withdrawal_checks_storage_after_maturity_including_expired_challenges()
     let bob = funded_signer(&mut runtime).await?;
     let carol = funded_signer(&mut runtime).await?;
     let amount = Decimal::from("100");
-    for signer in [&alice, &bob] {
+    for signer in [&alice, &bob, &carol] {
         api::add_stake(&mut runtime, signer, amount).await??;
     }
     let agreement = filestorage::create_agreement(
@@ -238,6 +238,8 @@ async fn storage_bond_survives_entering_and_leaving_validation() -> Result<()> {
     assert_eq!(api::get_active_count(&mut runtime).await?, 1);
     assert!(api::begin_unstake(&mut runtime, &signer).await?.is_err());
     let exit = api::leave_validation(&mut runtime, &signer).await??;
+    filestorage::leave_agreement(&mut runtime, &signer, &agreement).await??;
+    filestorage::join_agreement(&mut runtime, &signer, &agreement).await??;
     api::add_stake(&mut runtime, &signer, Decimal::from("1")).await??;
     assert_eq!(
         api::get_staking_info(&mut runtime).await?.total_stake,
@@ -272,6 +274,8 @@ async fn storage_bond_survives_entering_and_leaving_validation() -> Result<()> {
     assert!(filestorage::is_node_in_agreement(&mut runtime, &agreement, node).await?);
     advance(&mut runtime, exit.deactivation_height).await?;
     let bond = api::add_stake(&mut runtime, &signer, Decimal::from("1")).await??;
+    filestorage::leave_agreement(&mut runtime, &signer, &agreement).await??;
+    filestorage::join_agreement(&mut runtime, &signer, &agreement).await??;
     assert_eq!(bond.withdrawal_height, None);
     assert_eq!(bond.stake, Decimal::from("102"));
     api::register_validator(&mut runtime, &signer, vec![2; 32], Decimal::default()).await??;

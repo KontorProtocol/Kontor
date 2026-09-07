@@ -12,6 +12,13 @@ contract!(
 use alloc::collections::BTreeSet;
 use stdlib::*;
 
+import!(
+    name = "staking",
+    height = 0,
+    tx_index = 0,
+    path = "../staking/wit"
+);
+
 // ─────────────────────────────────────────────────────────────────
 // Protocol Constants
 // ─────────────────────────────────────────────────────────────────
@@ -419,6 +426,16 @@ impl Guest for Filestorage {
                 "node {} already in agreement {}",
                 node_id, agreement_id
             )));
+        }
+
+        let holder: Holder = (&ctx.signer()).into();
+        let bond = staking::get_stake(&holder.to_string())
+            .ok_or(Error::Message("no bonded stake".to_string()))?;
+        if bond.stake <= 0u64.try_into()? {
+            return Err(Error::Message("no bonded stake".to_string()));
+        }
+        if bond.withdrawal_height.is_some() {
+            return Err(Error::Message("withdrawal already requested".to_string()));
         }
 
         // Add (or reactivate) the node — `set` lands it in the `(agreement, true)`
