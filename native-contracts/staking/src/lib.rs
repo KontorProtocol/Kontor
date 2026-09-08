@@ -1,7 +1,7 @@
 #![no_std]
 contract!(name = "staking");
 
-use context::HolderRef;
+use context::{HolderRef, Signer};
 use stdlib::*;
 
 import!(
@@ -23,6 +23,8 @@ const ACTIVATION_DELAY: u64 = 12; // 2 * FINALITY_WINDOW (6)
 // Outstanding storage obligations can extend this minimum indefinitely.
 const WITHDRAWAL_DELAY: u64 = 2016 + ACTIVATION_DELAY;
 const MAX_STAKE: u64 = 1_000_000_000;
+// Consensus voting power truncates to whole KOR; smaller bonds can only back storage.
+const MIN_VOTING_STAKE: u64 = 1;
 // Malachite's default thresholds multiply observed voting power by three.
 const MAX_TOTAL_STAKE: u64 = u64::MAX / 3;
 
@@ -111,7 +113,7 @@ fn make_validator_info(
     }
 }
 
-fn ensure_no_storage_obligations(signer: &context::Signer) -> Result<(), Error> {
+fn ensure_no_storage_obligations(signer: &Signer) -> Result<(), Error> {
     let HolderRef::SignerId(id) = signer.into() else {
         return Err(Error::Message("expected signer identity".to_string()));
     };
@@ -121,7 +123,55 @@ fn ensure_no_storage_obligations(signer: &context::Signer) -> Result<(), Error> 
     Ok(())
 }
 
+fn ensure_no_bond_cleanup(signer: &Signer) -> Result<(), Error> {
+    if let HolderRef::SignerId(id) = signer.into()
+        && filestorage::is_bond_cleanup_pending(id)
+    {
+        return Err(Error::Message("bond cleanup pending".to_string()));
+    }
+    Ok(())
+}
+
 impl Guest for Staking {
+    fn slash(ctx: &CoreContext, node_id: u64, amount: Decimal) -> Result<SlashResult, Error> {
+        if amount < Decimal::default() {
+            return Err(Error::Message("negative penalty".to_string()));
+        }
+        let proc = ctx.proc_context();
+        let model = proc.model();
+        let holder: Holder = HolderRef::SignerId(node_id).try_into()?;
+        let entry = model
+            .accounts()
+            .get(&holder)
+            .ok_or(Error::Message("missing bonded account".to_string()))?;
+        let burned = amount.min(entry.stake());
+        let remaining = entry.stake().sub(burned)?;
+        let below_voting_unit = remaining < MIN_VOTING_STAKE.try_into()?;
+        if matches!(
+            entry.status().load(),
+            ValidatorStatus::Active | ValidatorStatus::PendingExit
+        ) {
+            let removed = if below_voting_unit {
+                entry.stake()
+            } else {
+                burned
+            };
+            model.try_update_total_active_stake(|total| total.sub(removed))?;
+        }
+        entry.set_stake(remaining);
+        if below_voting_unit {
+            entry.set_status(ValidatorStatus::Inactive);
+            entry.set_deactivation_height(proc.block_height());
+        }
+        if remaining == Decimal::default() {
+            entry.set_withdrawal_height(None);
+        }
+        if burned > Decimal::default() {
+            token::burn(proc.contract_signer(), burned)?;
+        }
+        Ok(SlashResult { burned, remaining })
+    }
+
     fn has_reward_recipients(ctx: &ViewContext) -> bool {
         !ctx.model()
             .accounts()
@@ -205,7 +255,7 @@ impl Guest for Staking {
         let storage = StakingStorage::default();
         storage.init(ctx);
         let model = ctx.model();
-        model.set_min_stake(1u64.try_into().unwrap());
+        model.set_min_stake(MIN_VOTING_STAKE.try_into().unwrap());
         ctx.contract()
     }
 
@@ -214,6 +264,7 @@ impl Guest for Staking {
         ed25519_pubkey: Vec<u8>,
         stake_amount: Decimal,
     ) -> Result<ValidatorInfo, Error> {
+        ensure_no_bond_cleanup(&ctx.signer())?;
         if ed25519_pubkey.len() != 32 {
             return Err(Error::Message(
                 "expected 32-byte ed25519 pubkey".to_string(),
@@ -306,6 +357,7 @@ impl Guest for Staking {
     }
 
     fn add_stake(ctx: &ProcContext, amount: Decimal) -> Result<StakeInfo, Error> {
+        ensure_no_bond_cleanup(&ctx.signer())?;
         if amount <= 0u64.try_into().unwrap() {
             return Err(Error::Message("amount must be positive".to_string()));
         }
@@ -461,8 +513,8 @@ impl Guest for Staking {
                 "expected 32-byte ed25519 pubkey in genesis set"
             );
             assert!(
-                v.stake > 0u64.try_into().unwrap(),
-                "genesis stake must be positive"
+                v.stake >= MIN_VOTING_STAKE.try_into().unwrap(),
+                "genesis stake must provide positive voting power"
             );
             genesis_stake = checked_total_stake(genesis_stake, v.stake)
                 .expect("genesis stake exceeds voting power limit");

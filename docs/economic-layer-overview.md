@@ -38,6 +38,32 @@ count bound. This slice leaves the existing admission floor unchanged and implem
 direct payouts; scale and replay cost remain production-readiness checks. See the
 ordering implementation decisions in `reactor-economic-integration.md`.
 
+### Shared-bond shortfalls (2026-09-08)
+
+**Decision:** Adam confirmed options **1A, 2A, and no debt** in response to the
+reservation/shortfall questions relayed in this session. He noted that an earlier
+design used cascading agreement evictions but was very complicated.
+
+- **Reservations protect admission and withdrawals.** They ration capacity in a
+  shared bond; they do not isolate funds against penalties arising from other
+  commitments or roles.
+- **A positive bond below total reservations does not evict existing memberships.**
+  Existing service and proof obligations continue. New commitments remain blocked
+  until the bond covers existing reservations plus the new requirement. Top-ups can
+  restore capacity; this decision introduces no top-up deadline or cascading eviction.
+- **Penalties collect at most the remaining bond, with no debt.** Any uncollected
+  remainder is written off, not charged against future deposits. Zero-bond cleanup
+  remains the separate terminal case specified in §7 of the integration design.
+
+For example, a bond of 100 with reservations of 80 can fall to 70 after a penalty
+of 30. Existing commitments continue, but the operator cannot take on a new
+commitment until it can cover the resulting reservation total. The reservations
+are not reduced simply to match the smaller bond.
+
+This branch implements storage penalties and bounded terminal cleanup under this
+policy; it is not yet a merged implementation. See the
+[integration design](reactor-economic-integration.md#shared-bond-shortfall-policy-2026-09-08).
+
 ## 1. The economy in one frame
 
 Kontor is a metaprotocol that provides **optimistic ordering over Bitcoin**: transactions

@@ -12,6 +12,8 @@ pub mod mempool_fee_index;
 pub mod mock_bitcoin;
 #[cfg(test)]
 mod reactor_cluster_tests;
+#[cfg(test)]
+mod storage_penalty_tests;
 pub mod types;
 
 use std::collections::VecDeque;
@@ -753,6 +755,7 @@ fn stake_to_voting_power(stake: Decimal) -> Result<VotingPower> {
     let power = integer_part
         .parse::<u64>()
         .context("stake integer part is not a valid u64")?;
+    anyhow::ensure!(power > 0, "stake is below one voting power unit");
     Ok(power)
 }
 

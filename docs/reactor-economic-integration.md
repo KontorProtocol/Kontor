@@ -19,8 +19,8 @@ event names; they are stable.
 
 ## 1. The model in one paragraph
 
-The native contracts hold balances and expose deterministic primitives that *move KOR given
-an amount*; the reactor owns the lifecycle and supplies the amounts, under the core signer.
+The native contracts hold balances and compute deterministic allocations and penalties;
+the reactor invokes their settlement hooks at the block lifecycle boundary under the core signer.
 Nothing in a contract reads wall-clock, mempool, or optimistic state. Emission is minted
 into **dedicated pool holders** and every payout is a **transfer out of a pool** — nothing
 in the per-block flow ever mints to a recipient directly, so total supply moves only at
@@ -124,42 +124,29 @@ signer ever reaches these paths.
 
 ## 5. Per-block sequence (extends `run_block_lifecycle`)
 
-The ordering slice implements mint and payout around the existing audit hooks, before
-validator processing, inside the block savepoint. The full v1 sequence below also
-includes storage slashing and epoch work that remain unimplemented.
+The ordering slice is on main. The storage-penalty implementation in this branch adds
+bounded settlement and zero-bond cleanup inside the same block savepoint. The runtime
+sequence is:
 
 ```
-run_block_lifecycle(block):                          [inside the block savepoint]
-  set_context(height)                                [existing]
-
-  ── Phase 0 · Mint ────────────────────────────────────────────────
+run_block_lifecycle(block):
+  set_context(height)
   eligible = staking::has_reward_recipients()
   e = token::mint_emission(eligible)
-      → mints the ordering share into ORDERING_POOL only if eligible
-      → returns {scheduled_total, ordering_minted, storage_unminted}
-        storage share is COMPUTED (supply schedule accounting) but NOT minted in v1
-
-  ── Phase 1 · Storage audit ───────────────────────────────────────
-  record_block_root()                                [existing]
-  expire_challenges(height)                          [existing]
-  generate_challenges_for_block(height, hash)        [existing]
-
-  ── Phase 2 · Storage slash settlement ────────────────────────────
-  for (signer_id, k_f) in filestorage::collect_failed_challenges():   ← affordance §11.1
-      staking::slash(signer_id, λ_slash · k_f)       → 100 % to BURNER
-      // no distribute_slash on this path — burn-all (§5.2)
-
-  ── Phase 3 · Ordering payout ─────────────────────────────────────
   staking::distribute_ordering_reward(e.ordering_minted)
-      // credits stakes and transfers ORDERING_POOL → staking holder
-      // in one atomic contract call (§3.2 rule 3)
-
-  ── Phase 4 · Validators & epoch ──────────────────────────────────
-  process_pending_validators(height)                 [existing]
-  if height % EPOCH == 0: snapshot staker set        [new; supports T_unbond, §6]
-
-  commit()                                           [existing — closes the block savepoint]
+  record_block_root()
+  expire_challenges(height)                 // at most 32 due challenges
+  filestorage::settle_expired_challenges()   // at most 32 penalties + 32 cleanup steps
+  generate_challenges_for_block(height, hash)
+  process_pending_validators(height)
+  commit()
 ```
+
+Ordering rewards use the active set at lifecycle entry and are credited before a
+penalty can exhaust its last member. Otherwise a reward minted for that set could be
+stranded when payout finds no recipients. A same-block penalty can burn the newly
+credited reward. Mint, payout, penalty, obligation settlement, and cleanup all roll
+back if block execution fails. Epoch snapshot work remains deferred/unimplemented.
 
 ### 5.1 Phase 0 — mint
 
@@ -174,17 +161,22 @@ run_block_lifecycle(block):                          [inside the block savepoint
 
 ### 5.2 Phase 2 — storage slash
 
-- **Input:** `collect_failed_challenges()` will return challenges that EXPIRED without a
+- **Input:** the settlement hook reads the indexed due prefix of challenges that EXPIRED without a
   valid proof. Unsuccessful proof submissions return an error and leave the challenge
   ACTIVE with its original deadline. A bad submission is not attributable evidence of
   storage failure: anyone may relay a proof, and an invalid aggregate does not identify
   which challenged file was unavailable. Only successful verification marks challenges
   PROVEN; unanswered challenges expire even if rejected submissions were attempted.
   Transactions execute before expiry in the deadline block, so a valid proof included
-  in that block is still accepted. Slashing settlement remains unimplemented.
+  in that block is still accepted. The branch implementation settles expired challenges
+  through `filestorage::settle_expired_challenges`, calling the staking burn primitive.
+  Proof acceptance checks the execution height against the deadline independently of
+  status: a challenge still marked Active because expiry is backlogged cannot accept a
+  proof in a later block.
 - **Resolution:** memberships are signer-keyed on main (`(agreement_id, signer_id)`), so the
   prover *is* the staking identity — no side-table (the #452 node_id label is obsolete).
-- **Amount:** `λ_slash · k_f`, saturating at the offender's remaining stake. λ_slash is
+- **Amount:** `λ_slash · k_f`, saturating at the offender's remaining stake, with no
+  debt for the uncollected remainder (2026-09-08 decision below). λ_slash is
   genesis-class but uncalibrated — model before locking (Decision 1 note). If calibration
   is not ready when this wires, a flat interim constant is acceptable *only* behind the
   same call shape.
@@ -242,12 +234,17 @@ to the ACTIVE validator set, stake-weighted** — not to batch signers.
   may scan a population that grows with chain age (files, agreements, historical
   challenges). The #489 chain halt was exactly an O(N) core hook; the Step-5 storage payout
   is deferred *because* its naive form is O(files × nodes) and needs the accumulator.
-- **Per-item error semantics: skip-and-alert, never abort.** A failed slash for one
-  challenge (e.g. an already-emptied stake) skips that item with a loud log/metric and
-  continues; it must NOT error out of `run_block_lifecycle`, which would roll back the
-  whole block and halt every node identically (deterministic content failure ≠ node
-  fault — the same discipline the consensus layer applies). Items must be processed in
-  sorted, canonical order so every node skips identically.
+- **Expected exhaustion is a successful settlement.** Collect only the remaining bond;
+  settle the unpaid remainder without debt. Pending zero-bond cleanup resolves the
+  account's other obligations without another slash. This is explicit state-machine
+  behavior, not an exception swallowed by the reactor.
+- **Unexpected failures propagate.** Missing bonded accounts, inconsistent reservations,
+  arithmetic errors, or failed token burns must not be converted into a silent skip.
+  The block savepoint rolls back all partial effects. The older blanket skip-and-alert
+  proposal is superseded by these distinctions.
+- Expiry, penalty settlement, and cleanup each have a 32-item budget. Penalties and
+  cleanup have separate budgets so a large exhausted account cannot starve unrelated
+  penalties. Indexed deadline/key order and the FIFO cleanup queue are deterministic.
 
 ## 6. Slashing prerequisites — same-changeset requirements
 
@@ -321,12 +318,39 @@ Failed and duplicate operations leave the total unchanged. Membership flags, tot
 and the membership/status challenge index use ordinary versioned contract storage.
 
 Reservations account for capacity in the existing bond; they neither move tokens
-nor reserve the eventual `lambda_slash * k_f` penalty separately. Storage slashing,
-penalty settlement, and automatic membership cleanup are still unimplemented.
-Those paths must handle collateral depletion/shortfalls and invoke reservation
-release only after settlement. Until then, expired challenges keep their holds.
+nor reserve the eventual `lambda_slash * k_f` penalty separately. This branch adds
+storage slashing, penalty settlement, and bounded membership cleanup. An expired
+challenge retains its hold until settlement; a settled failure uses the `Settled`
+challenge status. A departed membership releases its reservation only once all of
+its obligations are resolved. Settling an older challenge preserves any newer
+challenge that now owns the agreement's active slot.
 Native state/API changes assume a fresh preproduction chain; old agreements without
 a positive stored requirement cannot accept joins.
+
+### Shared-bond shortfall policy (2026-09-08)
+
+Adam confirmed shared-risk reservations, continued service during a positive-bond
+shortfall, and no debt. The [economic decision record](economic-layer-overview.md#shared-bond-shortfalls-2026-09-08)
+records the rationale and provenance. Implementation must preserve these rules:
+
+- A slash may reduce the bond below aggregate reservations. Reservations remain
+  attached to their commitments; do not clamp them to the remaining bond or use
+  them to shield funds from the slash.
+- While the bond remains positive, a reservation shortfall alone does not remove
+  memberships or cancel proof obligations. Admission still requires coverage of
+  all reservations plus the proposed new commitment; top-ups can restore that
+  capacity. No mandatory top-up period or cascading eviction is introduced.
+- Collect `min(requested_penalty, remaining_bond)`. Final settlement must not retain
+  the unpaid remainder as an obligation or retry it against a later top-up. This
+  does not forgive separate unsettled challenges.
+- A zero bond follows §7. The positive-bond continuation rule does not override
+  terminal cleanup or ordinary voluntary departure and obligation settlement.
+- Consensus voting power is truncated to whole KOR. A slash leaving less than one
+  KOR makes the validator inactive and removes its entire remaining contribution from
+  the active-stake aggregate, while preserving the fractional bond and its storage
+  commitments. This is not zero-bond cleanup. A top-up permits fresh registration;
+  consensus never accepts a zero-power validator, including at genesis. If this removes
+  the last eligible validator, the node follows the existing explicit halt behavior.
 
 **Deferred, deliberately:** equivocation slashing. The evidence arrives at
 `AppMsg::Finalized { evidence }` (reactor handlers) and is currently logged and discarded;
@@ -348,10 +372,17 @@ spec, same milestone as slashing:
   registered a validator: marked defunct in deterministic order (bounded
   per block — an unwind queue processed N-per-block if needed, not a scan), so its
   agreements' replication counts reflect reality and its pending challenges resolve as
-  failures *without* further slash attempts (skip-and-alert; there is nothing left to
-  slash).
-- **Re-entry** is a fresh `register_validator` (σ_min applies); no resurrection of the old
-  memberships.
+  settled failures *without* further slash attempts: the exhausted bond has nothing
+  left to collect.
+- **Re-entry waits for cleanup.** A versioned pending flag blocks deposits, validator
+  registration, and storage joins until the account's old obligations and memberships
+  have been drained. Challenge generation excludes pending accounts. This prevents a
+  top-up from paying old failures or resurrecting memberships midway through cleanup.
+  Afterwards, storage-only operators can bond and join again without validation;
+  validators register again under the ordinary admission rules.
+- Cleanup removes memberships using their existing active index. Agreement activation
+  retains its existing one-way meaning; this slice does not add agreement deactivation
+  or alter the activation-weight accumulator.
 - The `balance ≥ Σ stakes` invariant (§3.3) holds throughout — a slash burns from both the
   holder balance and the stake record in the same call.
 
@@ -419,18 +450,18 @@ What exists vs. what the v1 build must add:
 `min_stake` placeholder gate in `register_validator`; FLOOR deposit model; `Issuance`
 mainnet gate (merged); creation-fee burn e2e (#460 merged — port its assertions).
 
-**To build (v1):**
-- **§11.1** `filestorage::collect_failed_challenges() → [(signer_id, k_f)]` — expired
-  without a valid proof, consumed once in sorted order, bounded per block.
-- **§11.2** `token::mint_emission()` per §5.1 (pool-holder destination, idempotent per
+**Implementation checklist (v1):**
+- **§11.1** implemented in this branch: `filestorage::settle_expired_challenges()` —
+  indexed expired obligations, saturating penalties, and bounded zero-bond cleanup.
+- **§11.2** on main: `token::mint_emission()` per §5.1 (pool-holder destination, idempotent per
   height) + the two pool holders (§3.1).
-- **§11.3** `staking::slash(signer_id, amount)` — burn-all, saturating, aggregate-correct
+- **§11.3** implemented in this branch: `staking::slash(signer_id, amount)` — burn-all, saturating, aggregate-correct
   across every `ValidatorStatus`, zero-trigger → §7.
-- **§11.4** `staking::distribute_ordering_reward(amount)` — internal pool transfer + credit
+- **§11.4** on main: `staking::distribute_ordering_reward(amount)` — internal pool transfer + credit
   (§3.2 rule 3), active-set stake-weighted (§5.3).
-- **§11.5** withdrawal delay and obligation hold implemented; penalty settlement and epoch snapshot remain (§6).
+- **§11.5** withdrawal delay and obligation hold on main; this branch adds penalty settlement; epoch snapshot remains (§6).
 - **§11.6** σ_min in `register_validator` (§8).
-- **§11.7** terminal-state unwinding (§7).
+- **§11.7** bounded terminal-state unwinding implemented in this branch (§7).
 
 **Explicitly not prerequisites for v1:** the `bonds`
 contract, ordering-fee escrow, `slash_equivocation` wiring, congestion consumers.
@@ -458,6 +489,12 @@ contract, ordering-fee escrow, `slash_equivocation` wiring, congestion consumers
 - **Cross-node agreement:** the checkpoint hash-chain covers all economic state for free
   (§10.3); cluster tests assert `assert_checkpoints_match` through slash and payout
   scenarios, including a zero-stake unwinding (§7).
+- **Shared-bond shortfalls:** cover a positive bond falling below reservations without
+  eviction or cancellation of obligations; rejected admission until sufficient top-up;
+  penalties exceeding the remaining bond; no collection of a settled penalty's unpaid
+  remainder after a top-up; and rollback restoring balances, reservations, and settlement
+  status together. The branch tests exercise these transitions, including bounded
+  cleanup, unrelated-penalty progress, and a departed host's reservation release.
 - The determinism-simulation suite (`determinism-simulation-testing.md`) targets exactly
   the §5.4/§10 properties; its reindex-equivalence oracle is the Phase-2 gate.
 

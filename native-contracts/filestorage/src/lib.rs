@@ -70,6 +70,9 @@ const RANK_OFFSET: u64 = 1000;
 const FILE_SCALE: u64 = 1000;
 const COLLATERAL_SCALE: u64 = 1_000_000;
 const LN_10: &str = "2.302585092994045684";
+// Preproduction value; production calibration remains a separate release gate.
+const LAMBDA_SLASH: u64 = 30;
+const SETTLEMENT_WORK_LIMIT: usize = 32;
 
 // ─────────────────────────────────────────────────────────────────
 // STORAGE INDEX MODEL
@@ -172,6 +175,8 @@ struct ProtocolState {
     pub memberships: Map<(String, u64), NodeState>,
     pub challenges: Map<String, ChallengeData>,
     pub reservations: Map<u64, Decimal>,
+    pub bond_cleanup_pending: Map<u64, bool>,
+    pub bond_cleanup_queue: Deque<u64>,
     pub total_storage_weight: Decimal,
     /// Dense, append-only array of ACTIVE agreements' ids (position 0..len). An
     /// agreement is pushed here exactly when it activates (reaches `min_nodes`);
@@ -274,6 +279,8 @@ impl Guest for Filestorage {
             memberships: Map::default(),
             challenges: Map::default(),
             reservations: Map::default(),
+            bond_cleanup_pending: Map::default(),
+            bond_cleanup_queue: Deque::default(),
             total_storage_weight: OMEGA_GENESIS.try_into().expect("genesis weight fits"),
             active_ids: Deque::default(),
             valid_roots: Deque::default(),
@@ -425,6 +432,10 @@ impl Guest for Filestorage {
         // undetectable by design. Keying on the signer also makes a failed
         // challenge's `prover_id` resolve to a slashable stake.
         let node_id = require_signer_id(&ctx.signer())?;
+
+        if model.bond_cleanup_pending().get(&node_id).unwrap_or(false) {
+            return Err(Error::Message("bond cleanup pending".to_string()));
+        }
 
         // Validate agreement exists
         let agreement = model
@@ -617,13 +628,19 @@ impl Guest for Filestorage {
         ctx.model().reservations().get(&node_id).unwrap_or_default()
     }
 
+    fn is_bond_cleanup_pending(ctx: &ViewContext, node_id: u64) -> bool {
+        ctx.model()
+            .bond_cleanup_pending()
+            .get(&node_id)
+            .unwrap_or(false)
+    }
+
     fn has_storage_obligations(ctx: &ViewContext, node_id: u64) -> bool {
         let model = ctx.model();
         if !model.memberships().by_node_active(node_id, true).is_empty() {
             return true;
         }
-        // Expiration does not settle a penalty. Until settlement is implemented,
-        // only a proven challenge can release its hold after membership ends.
+        // Expiration alone does not settle a penalty or release its hold.
         [
             ChallengeStatus::Active,
             ChallengeStatus::Expired,
@@ -681,12 +698,109 @@ impl Guest for Filestorage {
             .due(ChallengeStatus::Active)
             .range(..=current_height)
             .keys()
+            .take(SETTLEMENT_WORK_LIMIT)
             .collect();
 
         for challenge_id in &due {
             terminate_challenge(&model, challenge_id, ChallengeStatus::Expired);
         }
         due.len() as u64
+    }
+
+    fn settle_expired_challenges(ctx: &CoreContext) -> Result<u64, Error> {
+        let proc = ctx.proc_context();
+        let model = proc.model();
+        let mut processed = 0;
+        // Separate budgets keep a large exhausted account from starving unrelated penalties.
+        for _ in 0..SETTLEMENT_WORK_LIMIT {
+            let challenge_id = [
+                ChallengeStatus::Expired,
+                ChallengeStatus::Failed,
+                ChallengeStatus::Invalid,
+            ]
+            .into_iter()
+            .find_map(|status| {
+                model
+                    .challenges()
+                    .due(status)
+                    .range(..=proc.block_height())
+                    .keys()
+                    .next()
+            });
+            let Some(id) = challenge_id else { break };
+            let challenge = model
+                .challenges()
+                .get(&id)
+                .expect("indexed challenge exists");
+            let agreement_id = challenge.agreement_id();
+            let node_id = challenge.prover_id();
+            if !model.bond_cleanup_pending().get(&node_id).unwrap_or(false) {
+                let required = model
+                    .agreements()
+                    .get(&agreement_id)
+                    .expect("challenge agreement exists")
+                    .required_collateral();
+                let result = staking::slash(
+                    ctx.core_signer(),
+                    node_id,
+                    required.mul(LAMBDA_SLASH.try_into()?)?,
+                )?;
+                if result.remaining == Decimal::default() {
+                    model.bond_cleanup_pending().set(&node_id, true);
+                    model.bond_cleanup_queue().push_back(node_id);
+                }
+            }
+            terminate_challenge(&model, &id, ChallengeStatus::Settled);
+            release_unused_reservation(&model, &agreement_id, node_id)?;
+            processed += 1;
+        }
+        for _ in 0..SETTLEMENT_WORK_LIMIT {
+            let Some(node_id) = model.bond_cleanup_queue().get(0) else {
+                break;
+            };
+            // Drain obligations before allowing another deposit. Otherwise a
+            // later top-up could pay old failures or resurrect old memberships.
+            let challenge_id = [
+                ChallengeStatus::Active,
+                ChallengeStatus::Expired,
+                ChallengeStatus::Failed,
+                ChallengeStatus::Invalid,
+            ]
+            .into_iter()
+            .find_map(|status| {
+                model
+                    .challenges()
+                    .by_prover_status(node_id, status)
+                    .keys()
+                    .next()
+            });
+            if let Some(id) = challenge_id {
+                let challenge = model
+                    .challenges()
+                    .get(&id)
+                    .expect("indexed challenge exists");
+                let agreement_id = challenge.agreement_id();
+                terminate_challenge(&model, &id, ChallengeStatus::Settled);
+                release_unused_reservation(&model, &agreement_id, node_id)?;
+            } else if let Some(key) = model
+                .memberships()
+                .by_node_active(node_id, true)
+                .keys()
+                .next()
+            {
+                model
+                    .memberships()
+                    .get(&key)
+                    .expect("indexed membership exists")
+                    .set_active(false);
+                release_unused_reservation(&model, &key.0, node_id)?;
+            } else {
+                model.bond_cleanup_queue().pop_front();
+                model.bond_cleanup_pending().remove(&node_id);
+            }
+            processed += 1;
+        }
+        Ok(processed)
     }
 
     /// Fold this block's newly-registered files into the aggregated ledger root — a
@@ -845,6 +959,7 @@ impl Guest for Filestorage {
                 .by_agreement_active(agreement_id.clone(), true)
                 .keys()
                 .map(|key: (String, u64)| key.1)
+                .filter(|node_id| !model.bond_cleanup_pending().get(node_id).unwrap_or(false))
                 .collect();
 
             if active_nodes.is_empty() {
@@ -929,6 +1044,13 @@ impl Guest for Filestorage {
         let model = ctx.model();
 
         // Validate agreement exists and is active
+        if model
+            .bond_cleanup_pending()
+            .get(&prover_id)
+            .unwrap_or(false)
+        {
+            return Err(Error::Message("bond cleanup pending".to_string()));
+        }
         let agreement = model
             .agreements()
             .get(&agreement_id)
@@ -1058,6 +1180,15 @@ impl Guest for Filestorage {
                     "Challenge {} is not active (status: {:?})",
                     cid,
                     challenge.status().load()
+                )));
+            }
+
+            // The bounded expiry hook may not have reached this still-active row.
+            // Transactions in the deadline block execute before that hook.
+            if ctx.block_height() > challenge.deadline_height() {
+                return Err(Error::Message(format!(
+                    "Challenge {} deadline has passed",
+                    cid
                 )));
             }
 
@@ -1336,7 +1467,9 @@ fn terminate_challenge(
     if let Some(challenge) = model.challenges().get(&challenge_id.to_string()) {
         // In-place; the `status`/`due` indexes follow via the get() binding.
         challenge.set_status(status);
-        if let Some(agreement) = model.agreements().get(&challenge.agreement_id()) {
+        if let Some(agreement) = model.agreements().get(&challenge.agreement_id())
+            && agreement.active_challenge().as_deref() == Some(challenge_id)
+        {
             agreement.set_active_challenge(None);
         }
     }

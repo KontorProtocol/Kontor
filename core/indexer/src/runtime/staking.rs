@@ -4,6 +4,8 @@ use crate::testlib_exports::*;
 #[cfg(test)]
 mod reward_tests;
 #[cfg(test)]
+mod slash_tests;
+#[cfg(test)]
 mod tests;
 
 import!(
