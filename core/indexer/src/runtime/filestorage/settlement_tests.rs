@@ -1,16 +1,21 @@
 use anyhow::Result;
 use indexer_types::BlockRow;
+use kontor_crypto::api::prepare_file;
 
 use super::api::{self, ChallengeStatus};
 use crate::database::queries::insert_block;
+use crate::database::types::field_element_to_bytes;
 use crate::reg_tester::random_x_only_pubkey;
 use crate::runtime::numerics::{add_decimal, div_decimal, mul_decimal, sub_decimal};
 use crate::runtime::staking::api as staking;
 use crate::runtime::token::api as token;
 use crate::runtime::wit::Signer;
 use crate::runtime::wit::kontor::built_in::context::HolderRef;
-use crate::runtime::{Decimal, Error, Runtime};
-use crate::test_utils::{make_descriptor, new_mock_block_hash, test_runtime, valid_seed_field};
+use crate::runtime::{Decimal, Error, RawFileDescriptor, Runtime};
+use crate::test_utils::{
+    make_descriptor, new_mock_block_hash, por_single_file_proof_bytes, test_runtime,
+    valid_seed_field,
+};
 
 pub(crate) async fn at_height(runtime: &mut Runtime, height: u64) -> Result<()> {
     insert_block(
@@ -30,6 +35,152 @@ pub(crate) struct StorageFixture {
     pub hosts: Vec<(u64, Signer)>,
     pub agreements: Vec<String>,
     pub requirements: Vec<Decimal>,
+}
+
+#[tokio::test]
+async fn proof_deadline_is_enforced_while_bounded_expiry_leaves_the_challenge_active() -> Result<()>
+{
+    let (mut runtime, _dir, _name) = test_runtime().await?;
+    let pubkeys: Vec<_> = (0..3).map(|_| random_x_only_pubkey()).collect();
+    let mut fixture = StorageFixture::new(&mut runtime, 0, &pubkeys).await?;
+    let mut nonce = [0u8; 32];
+    nonce[..9].copy_from_slice(b"file2.txt");
+    let (_, metadata) = prepare_file(b"Second file with different content", "file2.txt", &nonce)?;
+    let descriptor = RawFileDescriptor {
+        file_id: metadata.file_id,
+        object_id: metadata.object_id,
+        nonce: metadata.nonce,
+        root: field_element_to_bytes(&metadata.root).to_vec(),
+        padded_len: metadata.padded_len as u64,
+        original_size: metadata.original_size as u64,
+        filename: metadata.filename,
+    };
+    let target = api::create_agreement(&mut runtime, &fixture.hosts[0].1, descriptor)
+        .await??
+        .agreement_id;
+    fixture.agreements.push(target.clone());
+    for i in 0..32 {
+        let id = api::create_agreement(
+            &mut runtime,
+            &fixture.hosts[0].1,
+            make_descriptor(
+                format!("backlog-{i}"),
+                vec![1; 32],
+                16,
+                100,
+                "backlog.txt".into(),
+            ),
+        )
+        .await??
+        .agreement_id;
+        fixture.agreements.push(id);
+    }
+    fixture.join(&mut runtime, Decimal::from("1000")).await?;
+    let (node, signer) = &fixture.hosts[0];
+    let challenge = api::create_challenge_for_agreement(
+        &mut runtime,
+        signer,
+        &target,
+        *node,
+        20000,
+        valid_seed_field(99).bytes.to_vec(),
+    )
+    .await??;
+    for agreement in &fixture.agreements[1..] {
+        api::create_challenge_for_agreement(
+            &mut runtime,
+            &fixture.hosts[1].1,
+            agreement,
+            fixture.hosts[1].0,
+            19999,
+            valid_seed_field(1).bytes.to_vec(),
+        )
+        .await??;
+    }
+    let count = api::get_s_chal(&mut runtime).await? as usize;
+    let proof = por_single_file_proof_bytes(*node, count)?;
+    let core = Signer::Core(Box::new(Signer::Nobody));
+    for height in [challenge.deadline_height - 1, challenge.deadline_height] {
+        at_height(&mut runtime, height).await?;
+        runtime.storage.savepoint().await?;
+        assert_eq!(
+            api::verify_proof(
+                &mut runtime,
+                signer,
+                proof.clone(),
+                vec![challenge.challenge_id.as_str()]
+            )
+            .await??
+            .verified_count,
+            1
+        );
+        runtime.storage.rollback().await?;
+    }
+    assert_eq!(
+        api::expire_challenges(&mut runtime, &core, challenge.deadline_height).await?,
+        32
+    );
+    assert_eq!(
+        api::get_challenge(&mut runtime, &challenge.challenge_id)
+            .await?
+            .unwrap()
+            .status,
+        ChallengeStatus::Active
+    );
+    at_height(&mut runtime, challenge.deadline_height + 1).await?;
+    let reservation = api::get_node_reservation(&mut runtime, *node).await?;
+    assert_eq!(
+        api::verify_proof(
+            &mut runtime,
+            signer,
+            proof,
+            vec![challenge.challenge_id.as_str()]
+        )
+        .await?,
+        Err(Error::Message(format!(
+            "Challenge {} deadline has passed",
+            challenge.challenge_id
+        )))
+    );
+    assert_eq!(
+        api::get_challenge(&mut runtime, &challenge.challenge_id)
+            .await?
+            .unwrap()
+            .status,
+        ChallengeStatus::Active
+    );
+    assert_eq!(
+        api::get_node_reservation(&mut runtime, *node).await?,
+        reservation
+    );
+    assert_eq!(
+        api::expire_challenges(&mut runtime, &core, challenge.deadline_height + 1).await?,
+        1
+    );
+    api::settle_expired_challenges(&mut runtime, &core).await??;
+    api::settle_expired_challenges(&mut runtime, &core).await??;
+    assert_eq!(
+        api::get_challenge(&mut runtime, &challenge.challenge_id)
+            .await?
+            .unwrap()
+            .status,
+        ChallengeStatus::Settled
+    );
+    let requirement = api::get_agreement(&mut runtime, &target)
+        .await?
+        .unwrap()
+        .required_collateral;
+    assert_eq!(
+        staking::get_stake(&mut runtime, &node.to_string())
+            .await?
+            .unwrap()
+            .stake,
+        sub_decimal(
+            Decimal::from("1000"),
+            mul_decimal(requirement, Decimal::from("30"))?
+        )?
+    );
+    Ok(())
 }
 
 impl StorageFixture {

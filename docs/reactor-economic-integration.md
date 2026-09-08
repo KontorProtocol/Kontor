@@ -170,6 +170,9 @@ back if block execution fails. Epoch snapshot work remains deferred/unimplemente
   Transactions execute before expiry in the deadline block, so a valid proof included
   in that block is still accepted. The branch implementation settles expired challenges
   through `filestorage::settle_expired_challenges`, calling the staking burn primitive.
+  Proof acceptance checks the execution height against the deadline independently of
+  status: a challenge still marked Active because expiry is backlogged cannot accept a
+  proof in a later block.
 - **Resolution:** memberships are signer-keyed on main (`(agreement_id, signer_id)`), so the
   prover *is* the staking identity — no side-table (the #452 node_id label is obsolete).
 - **Amount:** `λ_slash · k_f`, saturating at the offender's remaining stake, with no
@@ -342,6 +345,12 @@ records the rationale and provenance. Implementation must preserve these rules:
   does not forgive separate unsettled challenges.
 - A zero bond follows §7. The positive-bond continuation rule does not override
   terminal cleanup or ordinary voluntary departure and obligation settlement.
+- Consensus voting power is truncated to whole KOR. A slash leaving less than one
+  KOR makes the validator inactive and removes its entire remaining contribution from
+  the active-stake aggregate, while preserving the fractional bond and its storage
+  commitments. This is not zero-bond cleanup. A top-up permits fresh registration;
+  consensus never accepts a zero-power validator, including at genesis. If this removes
+  the last eligible validator, the node follows the existing explicit halt behavior.
 
 **Deferred, deliberately:** equivocation slashing. The evidence arrives at
 `AppMsg::Finalized { evidence }` (reactor handlers) and is currently logged and discarded;

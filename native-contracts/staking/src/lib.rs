@@ -23,6 +23,8 @@ const ACTIVATION_DELAY: u64 = 12; // 2 * FINALITY_WINDOW (6)
 // Outstanding storage obligations can extend this minimum indefinitely.
 const WITHDRAWAL_DELAY: u64 = 2016 + ACTIVATION_DELAY;
 const MAX_STAKE: u64 = 1_000_000_000;
+// Consensus voting power truncates to whole KOR; smaller bonds can only back storage.
+const MIN_VOTING_STAKE: u64 = 1;
 // Malachite's default thresholds multiply observed voting power by three.
 const MAX_TOTAL_STAKE: u64 = u64::MAX / 3;
 
@@ -144,16 +146,24 @@ impl Guest for Staking {
             .ok_or(Error::Message("missing bonded account".to_string()))?;
         let burned = amount.min(entry.stake());
         let remaining = entry.stake().sub(burned)?;
+        let below_voting_unit = remaining < MIN_VOTING_STAKE.try_into()?;
         if matches!(
             entry.status().load(),
             ValidatorStatus::Active | ValidatorStatus::PendingExit
         ) {
-            model.try_update_total_active_stake(|total| total.sub(burned))?;
+            let removed = if below_voting_unit {
+                entry.stake()
+            } else {
+                burned
+            };
+            model.try_update_total_active_stake(|total| total.sub(removed))?;
         }
         entry.set_stake(remaining);
-        if remaining == Decimal::default() {
+        if below_voting_unit {
             entry.set_status(ValidatorStatus::Inactive);
             entry.set_deactivation_height(proc.block_height());
+        }
+        if remaining == Decimal::default() {
             entry.set_withdrawal_height(None);
         }
         if burned > Decimal::default() {
@@ -245,7 +255,7 @@ impl Guest for Staking {
         let storage = StakingStorage::default();
         storage.init(ctx);
         let model = ctx.model();
-        model.set_min_stake(1u64.try_into().unwrap());
+        model.set_min_stake(MIN_VOTING_STAKE.try_into().unwrap());
         ctx.contract()
     }
 
@@ -503,8 +513,8 @@ impl Guest for Staking {
                 "expected 32-byte ed25519 pubkey in genesis set"
             );
             assert!(
-                v.stake > 0u64.try_into().unwrap(),
-                "genesis stake must be positive"
+                v.stake >= MIN_VOTING_STAKE.try_into().unwrap(),
+                "genesis stake must provide positive voting power"
             );
             genesis_stake = checked_total_stake(genesis_stake, v.stake)
                 .expect("genesis stake exceeds voting power limit");

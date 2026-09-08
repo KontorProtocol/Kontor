@@ -755,6 +755,7 @@ fn stake_to_voting_power(stake: Decimal) -> Result<VotingPower> {
     let power = integer_part
         .parse::<u64>()
         .context("stake integer part is not a valid u64")?;
+    anyhow::ensure!(power > 0, "stake is below one voting power unit");
     Ok(power)
 }
 

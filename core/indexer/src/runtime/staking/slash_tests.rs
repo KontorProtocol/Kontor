@@ -2,6 +2,7 @@ use anyhow::Result;
 
 use super::api::{self, ValidatorStatus};
 use super::reward_tests::escrow;
+use crate::consensus::signing::PrivateKey;
 use crate::reg_tester::random_x_only_pubkey;
 use crate::runtime::numerics::sub_decimal;
 use crate::runtime::token::api as token;
@@ -122,6 +123,93 @@ async fn slash_burns_shared_bond_and_preserves_each_validator_status_aggregate()
             escrow(&mut runtime).await?,
             sub_decimal(balance, Decimal::from("3"))?
         );
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn slash_below_one_voting_unit_deactivates_without_burning_the_fraction() -> Result<()> {
+    for status in [
+        ValidatorStatus::Active,
+        ValidatorStatus::PendingExit,
+        ValidatorStatus::PendingJoin,
+    ] {
+        let (mut runtime, _dir, _name) = test_runtime().await?;
+        let core = Signer::Core(Box::new(Signer::Nobody));
+        let identity = runtime
+            .get_or_create_identity(&random_x_only_pubkey())
+            .await?;
+        let id = identity.signer_id();
+        let signer = Signer::Id(identity);
+        token::issue_to(
+            &mut runtime,
+            &core,
+            HolderRef::from(&signer),
+            Decimal::from("100"),
+        )
+        .await??;
+        let key = PrivateKey::from([3; 32]).public_key().as_bytes().to_vec();
+        api::register_validator(&mut runtime, &signer, key.clone(), Decimal::from("2")).await??;
+        if status != ValidatorStatus::PendingJoin {
+            api::process_pending_validators(&mut runtime, &core, 13).await??;
+        }
+        if status == ValidatorStatus::PendingExit {
+            api::leave_validation(&mut runtime, &signer).await??;
+        }
+        for remaining in [
+            Decimal::from("1"),
+            Decimal::from("0.999999999999999999"),
+            Decimal::from("0.5"),
+        ] {
+            runtime.storage.savepoint().await?;
+            let penalty = sub_decimal(Decimal::from("2"), remaining)?;
+            let result = api::slash(&mut runtime, &core, id, penalty).await??;
+            assert_eq!(result.remaining, remaining);
+            assert_eq!(result.burned, penalty);
+            assert_eq!(escrow(&mut runtime).await?, remaining);
+            let inactive = remaining < Decimal::from("1");
+            assert_eq!(
+                api::get_validator(&mut runtime, &id.to_string())
+                    .await?
+                    .unwrap()
+                    .status,
+                if inactive {
+                    ValidatorStatus::Inactive
+                } else {
+                    status
+                }
+            );
+            let counted = !inactive && status != ValidatorStatus::PendingJoin;
+            let info = api::get_staking_info(&mut runtime).await?;
+            assert_eq!(info.active_count, u64::from(counted));
+            assert_eq!(
+                info.total_stake,
+                if counted {
+                    remaining
+                } else {
+                    Decimal::default()
+                }
+            );
+            if inactive {
+                api::add_stake(&mut runtime, &signer, penalty).await??;
+                api::register_validator(&mut runtime, &signer, key.clone(), Decimal::default())
+                    .await??;
+                api::process_pending_validators(&mut runtime, &core, 13).await??;
+                assert_eq!(
+                    api::get_staking_info(&mut runtime).await?.total_stake,
+                    Decimal::from("2")
+                );
+            }
+            runtime.storage.rollback().await?;
+            assert_eq!(
+                api::get_validator(&mut runtime, &id.to_string())
+                    .await?
+                    .unwrap()
+                    .status,
+                status
+            );
+            assert_eq!(escrow(&mut runtime).await?, Decimal::from("2"));
+        }
     }
     Ok(())
 }

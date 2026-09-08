@@ -1183,6 +1183,15 @@ impl Guest for Filestorage {
                 )));
             }
 
+            // The bounded expiry hook may not have reached this still-active row.
+            // Transactions in the deadline block execute before that hook.
+            if ctx.block_height() > challenge.deadline_height() {
+                return Err(Error::Message(format!(
+                    "Challenge {} deadline has passed",
+                    cid
+                )));
+            }
+
             // Get file_id from agreement
             let agreement =
                 model

@@ -318,6 +318,8 @@ async fn genesis_rejects_unsafe_stake_without_minting() -> Result<()> {
         vec![Decimal::try_from(LIMIT)?, Decimal::from("1")],
         vec![Decimal::from("18446744073709551616")],
         vec![Decimal::from("-1")],
+        vec![Decimal::from("0")],
+        vec![Decimal::from("0.999999999999999999")],
     ] {
         let validators = stakes
             .into_iter()

@@ -92,6 +92,10 @@ impl ValidatorSet {
 
     fn checked_total_voting_power(&self) -> Result<VotingPower> {
         let total = self.validators.iter().try_fold(0u64, |total, validator| {
+            ensure!(
+                validator.voting_power > 0,
+                "validator has zero voting power"
+            );
             total
                 .checked_add(validator.voting_power)
                 .ok_or_else(|| anyhow!("total voting power overflow"))
@@ -161,6 +165,21 @@ mod tests {
         for powers in [[MAX_TOTAL_VOTING_POWER, 1], [u64::MAX, 1]] {
             assert!(
                 ValidatorSet::try_new([validator(1, powers[0]), validator(2, powers[1]),]).is_err()
+            );
+        }
+    }
+
+    #[test]
+    fn rejects_zero_power_even_in_a_nonempty_set() {
+        for powers in [vec![0], vec![0, 0], vec![1, 0]] {
+            assert!(
+                ValidatorSet::try_new(
+                    powers
+                        .into_iter()
+                        .enumerate()
+                        .map(|(i, power)| validator(i as u8 + 1, power))
+                )
+                .is_err()
             );
         }
     }
