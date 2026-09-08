@@ -14,7 +14,10 @@ use crate::database::queries::{
 };
 use crate::metrics::{BLOCK_HEIGHT, ITEMS_INDEXED};
 use crate::runtime::{
-    filestorage::api::{expire_challenges, generate_challenges_for_block, record_block_root},
+    filestorage::api::{
+        expire_challenges, generate_challenges_for_block, record_block_root,
+        settle_expired_challenges,
+    },
     staking::api::{distribute_ordering_reward, has_reward_recipients, process_pending_validators},
     token::api::mint_emission,
     wit::Signer,
@@ -317,6 +320,10 @@ impl<E: Executor> Reactor<E> {
             .await;
         let eligible = has_reward_recipients(&mut self.runtime).await?;
         let emission = mint_emission(&mut self.runtime, &core_signer, eligible).await??;
+        // Credit the block-start active set before penalties can exhaust its last
+        // member. A minted reward must not be stranded behind an empty recipient set.
+        distribute_ordering_reward(&mut self.runtime, &core_signer, emission.ordering_minted)
+            .await??;
         // Finalize the registry root for the block's `create_agreement`s (deferred
         // off the user's gas) before the challenge lifecycle. No-op if no files
         // were added this block.
@@ -328,6 +335,7 @@ impl<E: Executor> Reactor<E> {
         expire_challenges(&mut self.runtime, &core_signer, block.height)
             .await
             .context("Failed to expire challenges")?;
+        settle_expired_challenges(&mut self.runtime, &core_signer).await??;
         let challenges = generate_challenges_for_block(
             &mut self.runtime,
             &core_signer,
@@ -343,9 +351,6 @@ impl<E: Executor> Reactor<E> {
                 block.height
             );
         }
-
-        distribute_ordering_reward(&mut self.runtime, &core_signer, emission.ordering_minted)
-            .await??;
 
         let change = process_pending_validators(&mut self.runtime, &core_signer, block.height)
             .await

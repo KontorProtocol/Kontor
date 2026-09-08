@@ -39,6 +39,11 @@ world root {
     withdrawal-height: option<u64>,
   }
 
+  record slash-result {
+    burned: decimal,
+    remaining: decimal,
+  }
+
   record validator-set-change {
     activated: u64,
     deactivated: u64,
@@ -65,6 +70,9 @@ world root {
   export distribute-ordering-reward: async func(ctx: borrow<core-context>, amount: decimal) -> result<decimal, error>;
   export has-reward-recipients: async func(ctx: borrow<view-context>) -> bool;
   export last-reward-height: async func(ctx: borrow<view-context>) -> option<u64>;
+
+  // The settlement caller owns obligation completion and zero-bond storage cleanup.
+  export slash: async func(ctx: borrow<core-context>, node-id: u64, amount: decimal) -> result<slash-result, error>;
 
   // --- Queries (ViewContext) ---
   export get-active-set: async func(ctx: borrow<view-context>) -> list<active-validator-info>;

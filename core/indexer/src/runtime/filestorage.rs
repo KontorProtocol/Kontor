@@ -2,6 +2,8 @@ use crate::runtime::Runtime;
 use crate::testlib_exports::*;
 
 #[cfg(test)]
+pub(crate) mod settlement_tests;
+#[cfg(test)]
 mod tests;
 
 import!(
