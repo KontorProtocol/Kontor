@@ -5,7 +5,10 @@
 and the wiring must be **conserving** — every flow either transfers KOR out of a named
 holder or burns it; nothing mints outside `mint_emission`.
 **Audience:** the reactor (indexer-proper) owner, and the economic-layer track re-deriving
-the closed PRs (#439/#440/#441/#445/#452/#453) against it.
+the historical PR proposals (#439/#440/#441/#445/#452/#453) against it. As of
+2026-09-08, #439/#440/#452 are closed; #441/#445/#453 remain open. The completed
+storage-reward replacement should supersede #441, with unresolved fee/deactivation
+proposals retained in #442. The arithmetic prerequisite alone does not close it.
 **Scope:** the **minimal v1** — the smallest coherent economic layer that closes issue
 #461's acceptance gate — plus the architectural rules every later phase must obey. Phase-2
 bonds/ordering-fees are out of scope (see §12) but the seams they will attach to are named.
@@ -33,14 +36,14 @@ slashing, not from emission targeting.
 
 | Flow | Source → Sink | Clock | v1? |
 |---|---|---|---|
-| Emission mint `ε = supply·μ₀/B` | fresh supply → **ORDERING_POOL** (χ·ε); storage share computed, **not minted** | per block | ✅ |
+| Emission mint `ε = supply·μ₀/B` | fresh supply → **ORDERING_POOL** (χ·ε); allocated storage share → **STORAGE_POOL** → filestorage escrow | per block | ordering on main; storage implemented on this branch |
 | Ordering emission payout | ORDERING_POOL → staking holder → stake credits | per block | ✅ |
 | Storage proof-failure slash `λ_slash·k_f` | offender stake → **BURNER (100 %)** | per block | ✅ |
 | Execution gas (burned slice) | user balance → BURNER | per op | already on main |
 | Storage-deposit floor | locked as balance floor, never moves | per op | already on main |
 | Storage creation fee `υ_f = 30 bps·k_f` | creator balance → BURNER | on create | ✅ (re-derive from #441) |
 | σ_min entry floor (gate, not a flow) | — | on register | ✅ (re-derive from #453) |
-| Storage-share payout (accumulator) | STORAGE_POOL → nodes | per block | ❌ Step 5 (§12) |
+| Storage reward claims | filestorage escrow → host spendable balance | on claim, including while serving | implemented on this branch |
 | Ordering fees `f_ord`, bonds `B_tx`/`B_exp` | — | per batch | ❌ Phase 2 (§12) |
 | Equivocation slash + bounty | — | on evidence | ❌ deferred (§6, §12) |
 
@@ -56,9 +59,9 @@ The token contract's named system holders today are `CORE()` (the per-op gas esc
 
 - **`ORDERING_POOL()`** — receives the χ·ε ordering share at mint; drained only by the
   per-block ordering payout (§5.3).
-- **`STORAGE_POOL()`** — reserved for the Step-5 accumulator payout. In v1 it exists but
-  receives nothing (the storage share is computed for supply accounting and not minted —
-  see §5.1). Declaring it now fixes the holder namespace so Step 5 is additive.
+- **`STORAGE_POOL()`** — receives only allocated storage emission, then transfers it
+  atomically into filestorage's signer escrow. Public claims debit that escrow using
+  the contract's signer, without acquiring permission to spend pool balances.
 
 The implemented identities are `HolderRef::OrderingPool` and `HolderRef::StoragePool`,
 with storage keys `ordering_pool` and `storage_pool`. They have no signer variants.
@@ -70,8 +73,9 @@ holders, not depositor balances; the storage-deposit floor logic never counts th
 
 ### 3.2 The three structural rules
 
-1. **Mint lands only in pools.** `mint_emission` credits ORDERING_POOL (and, from Step 5,
-   STORAGE_POOL). It never credits CORE, never a user, never a contract holder.
+1. **Mint lands only in pools.** `mint_emission` credits ORDERING_POOL;
+   `allocate_storage_emission` credits STORAGE_POOL before transferring to escrow.
+   Neither mints directly into CORE, a user, or a contract holder.
    **Why CORE is banned:** CORE is the gas escrow; `token::release()` sweeps the *entire*
    CORE balance to payees every op, by design. A pool parked in CORE is stolen by the next
    gas refund. With pools in dedicated holders, `release()`'s
@@ -79,7 +83,7 @@ holders, not depositor balances; the storage-deposit floor logic never counts th
    guard on the gas hot path instead of the dedicated holders. (If a belt-and-suspenders
    guard is ever added, it lives with the emission code and classifies a non-empty CORE at
    `hold` as `NonDeterministic`/fail-stop — a broken invariant, not a user error.)
-2. **Every payout is a transfer out of a pool.** `token::issue_to` is a **fresh mint**
+2. **Every payout transfers previously minted funds from its pool or funded escrow.** `token::issue_to` is a **fresh mint**
    (`token/src/lib.rs`, core-context) and is **banned from every per-block flow** — using it
    for payouts double-mints. It remains only for genesis/bootstrap paths.
 3. **Pool-move and stake-credit are one atomic seam.** `distribute_ordering_reward` itself
@@ -97,6 +101,7 @@ holders, not depositor balances; the storage-deposit floor logic never counts th
 | **Staking escrow** | staking holder balance ≥ Σ all validators' stake | invariant harness + debug assert in `distribute_ordering_reward` |
 | **Aggregate stake** | `total_active_stake` == Σ stakes of ACTIVE ∪ PENDING_EXIT, across every slash/exit transition | staking contract + harness |
 | **Voting-power arithmetic** | total consensus voting power ≤ `u64::MAX / 3`; admission conservatively bounds full Decimal stake, including PENDING_JOIN reservations | staking capacity checks + checked host validator-set construction |
+| **Storage escrow** | balance covers all whole-atom claims; excess above exact cumulative liability is below one atom | accumulator oracle and lifecycle/rollback tests |
 | **Pool solvency** | ORDERING_POOL/STORAGE_POOL balances never negative; drained only by their named flows | token contract (transfer semantics) |
 
 ## 4. Two settlement clocks
@@ -124,9 +129,9 @@ signer ever reaches these paths.
 
 ## 5. Per-block sequence (extends `run_block_lifecycle`)
 
-The ordering slice is on main. The storage-penalty implementation in this branch adds
-bounded settlement and zero-bond cleanup inside the same block savepoint. The runtime
-sequence is:
+Ordering rewards and storage penalties are on main through #552. This branch adds
+storage reward accrual and extends bounded cleanup with reward reweighting, inside
+the same block savepoint. The runtime sequence is:
 
 ```
 run_block_lifecycle(block):
@@ -134,6 +139,7 @@ run_block_lifecycle(block):
   eligible = staking::has_reward_recipients()
   e = token::mint_emission(eligible)
   staking::distribute_ordering_reward(e.ordering_minted)
+  filestorage::accrue_storage_rewards()      // allocate, mint, and escrow eligible share
   record_block_root()
   expire_challenges(height)                 // at most 32 due challenges
   filestorage::settle_expired_challenges()   // at most 32 penalties + 32 cleanup steps
@@ -150,11 +156,12 @@ back if block execution fails. Epoch snapshot work remains deferred/unimplemente
 
 ### 5.1 Phase 0 — mint
 
-- Only the χ·ε ordering share is minted. The (1−χ)·ε storage share is **not minted in v1**:
-  Decision 2 accepted stake-proportional yield, and the storage payout needs the Step-5
-  accumulator (§12) — minting into a pool nothing drains would only build an unbounded
-  balance and complicate the supply invariant. The emission *schedule* is unchanged; v1's
-  realized inflation is χ·ε per eligible block, and zero without ACTIVE recipients.
+- `mint_emission` mints the χ·ε ordering share when recipients exist and records
+  the nominal (1−χ)·ε storage budget from the same supply snapshot. Storage accrual
+  then mints only its allocated entitlement and funds filestorage escrow. Genesis
+  dilution, empty memberships, and exhausted slots stay unminted. Claims transfer
+  the escrowed income without new issuance. See the exact rounding rules in the
+  [accounting design](design/storage-reward-accounting.md).
 - `mint_emission` is idempotence-guarded per height (calling twice for one block must be
   impossible or a no-op — it runs inside the block savepoint, so replay-after-rollback
   re-mints correctly with the block itself).
@@ -389,7 +396,7 @@ spec, same milestone as slashing:
 ## 8. σ_min gate (Decision 3, recorded)
 
 - `register_validator` requires `stake ≥ σ_min = 5,000,000 KOR`; the genesis set is exempt.
-  Re-derivation is ~30 lines against the current staking contract (the closed #453 is the
+  Re-derivation is ~30 lines against the current staking contract (the obsolete-base #453 is the
   pattern; its `feat/ordering-rewards` base and 5M constant carry over, its σ/τ symbols do
   not).
 - σ_min is **admin-window class** (Decision 1): price-coupled, tunable during the sunsetted
@@ -451,17 +458,18 @@ What exists vs. what the v1 build must add:
 mainnet gate (merged); creation-fee burn e2e (#460 merged — port its assertions).
 
 **Implementation checklist (v1):**
-- **§11.1** implemented in this branch: `filestorage::settle_expired_challenges()` —
+- **§11.1** on main (#552): `filestorage::settle_expired_challenges()` —
   indexed expired obligations, saturating penalties, and bounded zero-bond cleanup.
 - **§11.2** on main: `token::mint_emission()` per §5.1 (pool-holder destination, idempotent per
   height) + the two pool holders (§3.1).
-- **§11.3** implemented in this branch: `staking::slash(signer_id, amount)` — burn-all, saturating, aggregate-correct
+- **§11.3** on main (#552): `staking::slash(signer_id, amount)` — burn-all, saturating, aggregate-correct
   across every `ValidatorStatus`, zero-trigger → §7.
 - **§11.4** on main: `staking::distribute_ordering_reward(amount)` — internal pool transfer + credit
   (§3.2 rule 3), active-set stake-weighted (§5.3).
-- **§11.5** withdrawal delay and obligation hold on main; this branch adds penalty settlement; epoch snapshot remains (§6).
+- **§11.5** withdrawal delay and obligation hold on main; penalty settlement on main (#552); epoch snapshot remains (§6).
 - **§11.6** σ_min in `register_validator` (§8).
-- **§11.7** bounded terminal-state unwinding implemented in this branch (§7).
+- **§11.7** bounded terminal-state unwinding on main (#552); this branch adds reward cutoff and bounded reweighting (§7).
+- **§11.8** storage accrual, funded escrow and claims implemented on this branch ([design](design/storage-reward-accounting.md)).
 
 **Explicitly not prerequisites for v1:** the `bonds`
 contract, ordering-fee escrow, `slash_equivocation` wiring, congestion consumers.
@@ -470,12 +478,40 @@ contract, ordering-fee escrow, `slash_equivocation` wiring, congestion consumers
 
 | Deferred | Returns when | Shape already decided |
 |---|---|---|
-| Storage-share payout | Step 5 | reward-per-share accumulator: one global `acc += pool_credit/Ω` per block (O(1)); membership snapshots `acc` at join/leave; nodes claim `(ω_f/\|N_f\|)·Δacc` lazily. Mint (1−χ)·ε into STORAGE_POOL starts then. Self-dealing: **accepted** (Decision 2) — no NPV gate; revisit as Phase-1.5 only if explicitly reopened |
 | Congestion β(t) | after a per-block utilization signal + a KOR-per-gas fee path exist (#462 pt. 2) | mine #445's `beta_step` + params + proptests |
 | Bonds / f_ord / per-batch settlement | Phase 2, after batch-clock determinism (`Expired` as first-class FinalityEvent) + reindex-equivalence harness | `phase2-ordering-economy.md` (annotated) |
 | Equivocation pipeline | Phase 2 | evidence at `AppMsg::Finalized`; τ/bounty machinery reserved for it |
 | Admin-SetParameter build | before genesis; not v1 | §9 |
 | λ_stake reintroduction | only if Step-5 correlated-failure modeling demands | genesis-class constant or formula, never admin |
+
+### Storage reward accounting and issuance decision (2026-09-08)
+
+The accepted implementation direction is lazy accounting with claims available
+while a host remains in its file agreements. Joining or leaving changes future
+allocation; it is not required to receive payment. This concerns storage hosts,
+not the automatic validator ordering-reward credits already on main.
+
+Mint only the storage reward allocated to eligible recipients into STORAGE_POOL.
+The nominal share attributable to genesis dilution or other structurally
+unallocated shares stays unminted. This supersedes descriptions of minting the
+entire storage share when Step 5 activates. It retains the adoption ramp and
+changes realized inflation relative to full-share minting; the initial weight
+1000 remains subject to preproduction calibration. Claims transfer previously
+funded rewards and do not mint again.
+
+The user also accepted an immediate on-chain cutoff: when a penalty reduces a
+storer's bond to zero, future storage rewards stop. Earlier earned rewards remain
+claimable; bounded membership cleanup may finish later without extending reward
+eligibility. This does not add debt or forfeiture of unclaimed income. Fresh entry
+continues to require completion of cleanup.
+
+Implemented on `feat/storage-reward-accounting`: cached earning weights, exact
+allocated-only funding into filestorage escrow, signer-bound claims, immediate
+exhaustion cutoff, and bounded membership reweighting. See the
+[accounting design](design/storage-reward-accounting.md) for formulas and lifecycle
+checks, and the [investigation](design/storage-rewards-investigation.md) for sources.
+Genesis dilution and stopped slots stay unminted; survivors receive increased
+shares when cleanup removes a slot. Claims preserve fractions across re-entry.
 
 ## 13. Validation
 
@@ -525,11 +561,12 @@ PRs, and main — each row records the resolution this document commits to.)*
 | Piece | Owner |
 |---|---|
 | §5 reactor wiring + §13 harness | reactor / indexer-proper |
-| §11 contract affordances | economic-layer track (re-derivation of the closed PRs) |
+| §11 contract affordances | economic-layer track (re-derivation of historical proposals) |
 | §9 parameter table upkeep + admin build | protocol owner (pre-genesis) |
 | Phase-2 seams (§4, §12) | blocked on batch-clock determinism; do not build early |
 
 References: the decision record (`economic-layer-overview.md` §0); issues #442
-(rescope target), #461, #462, #463; closed PRs #439/#440/#441/#445/#452/#453 (formula and
-test mines); `reactor/{blocks,batches,consensus_state,handlers}.rs`;
+(economic umbrella), #461 (closed by #552), #462, #463; historical PR proposals
+#439/#440/#441/#445/#452/#453 (formula and test references; current status above);
+`reactor/{blocks,batches,consensus_state,handlers}.rs`;
 `native-contracts/{token,staking,filestorage}`.

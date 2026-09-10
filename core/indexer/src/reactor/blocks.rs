@@ -15,8 +15,8 @@ use crate::database::queries::{
 use crate::metrics::{BLOCK_HEIGHT, ITEMS_INDEXED};
 use crate::runtime::{
     filestorage::api::{
-        expire_challenges, generate_challenges_for_block, record_block_root,
-        settle_expired_challenges,
+        accrue_storage_rewards, expire_challenges, generate_challenges_for_block,
+        record_block_root, settle_expired_challenges,
     },
     staking::api::{distribute_ordering_reward, has_reward_recipients, process_pending_validators},
     token::api::mint_emission,
@@ -324,6 +324,7 @@ impl<E: Executor> Reactor<E> {
         // member. A minted reward must not be stranded behind an empty recipient set.
         distribute_ordering_reward(&mut self.runtime, &core_signer, emission.ordering_minted)
             .await??;
+        accrue_storage_rewards(&mut self.runtime, &core_signer).await??;
         // Finalize the registry root for the block's `create_agreement`s (deferred
         // off the user's gas) before the challenge lifecycle. No-op if no files
         // were added this block.

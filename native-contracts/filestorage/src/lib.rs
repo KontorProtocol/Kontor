@@ -11,13 +11,24 @@ contract!(
 );
 
 use alloc::collections::BTreeSet;
+use built_in_types::numbers_types::Integer;
 use stdlib::*;
+
+mod cleanup;
+mod rewards;
 
 import!(
     name = "staking",
     height = 0,
     tx_index = 0,
     path = "../staking/wit"
+);
+
+import!(
+    name = "token",
+    height = 0,
+    tx_index = 0,
+    path = "../token/wit"
 );
 
 // ─────────────────────────────────────────────────────────────────
@@ -146,11 +157,58 @@ const SETTLEMENT_WORK_LIMIT: usize = 32;
 #[derive(Clone, Default, Storage)]
 #[index(by_agreement_active, by = (agreement_id, active))]
 #[index(by_node_active, by = (node_id, active))]
+#[index(reward_members, by = (agreement_id, active), sort = node_id)]
 struct NodeState {
     pub agreement_id: String,
     pub node_id: u64,
     pub active: bool,
     pub collateral_reserved: bool,
+}
+
+#[derive(Clone, Default, Storage)]
+struct RewardAccount {
+    pub share_weight: Integer,
+    pub settled_index: Integer,
+    pub claimable_units: Integer,
+    // Numerator carried across settlements, in fractions of one token atom
+    // with the reward index scale as its fixed denominator.
+    pub fractional_remainder: Integer,
+}
+
+#[derive(Clone, Default, Storage)]
+struct RewardReweight {
+    pub agreement_id: String,
+    pub node_id: u64,
+    pub per_host: Integer,
+    pub increase: Integer,
+    pub phase: RewardReweightPhase,
+}
+
+#[derive(Clone, Default, Storage)]
+struct RewardReweightPreparation {
+    pub cursor: Option<u64>,
+    pub eligible_increase: Integer,
+}
+
+#[derive(Clone, Storage)]
+enum RewardReweightPhase {
+    Preparing(RewardReweightPreparation),
+    Applied(Integer),
+}
+
+impl Default for RewardReweightPhase {
+    fn default() -> Self {
+        Self::Preparing(RewardReweightPreparation::default())
+    }
+}
+
+impl RewardReweightPhase {
+    fn applied_at(&self) -> Option<Integer> {
+        match self {
+            Self::Preparing(_) => None,
+            Self::Applied(index) => Some(*index),
+        }
+    }
 }
 
 /// A file registered this block, queued for the per-block frontier fold. Carries
@@ -178,6 +236,14 @@ struct ProtocolState {
     pub bond_cleanup_pending: Map<u64, bool>,
     pub bond_cleanup_queue: Deque<u64>,
     pub total_storage_weight: Decimal,
+    pub reward_accounts: Map<u64, RewardAccount>,
+    pub reward_weights: Map<String, Integer>,
+    pub reward_index: Integer,
+    pub reward_weight: Integer,
+    pub reward_remainder: Integer,
+    pub last_reward_height: Option<u64>,
+    pub reward_reweight: Option<RewardReweight>,
+    pub reward_reweight_deltas: Map<u64, Integer>,
     /// Dense, append-only array of ACTIVE agreements' ids (position 0..len). An
     /// agreement is pushed here exactly when it activates (reaches `min_nodes`);
     /// `active` is monotonic (never turned off) and agreements never terminate, so
@@ -288,6 +354,7 @@ impl Guest for Filestorage {
             frontier_count: 0,
             frontier_peaks: Vec::new(),
             next_ledger_index: 0,
+            ..ProtocolState::default()
         }
         .init(ctx);
         ctx.contract()
@@ -424,6 +491,7 @@ impl Guest for Filestorage {
         agreement_id: String,
     ) -> Result<JoinAgreementResult, Error> {
         let model = ctx.model();
+        cleanup::ensure_unlocked(&model, &agreement_id)?;
 
         // Membership is keyed on the joining signer's u64 signer_id, so one
         // signer holds at most one slot per agreement (enforced by the dup-check
@@ -531,6 +599,7 @@ impl Guest for Filestorage {
             model.active_ids().push_back(agreement_id.clone());
         }
 
+        rewards::membership_changed(&model, &agreement_id, Some(node_id), None)?;
         Ok(JoinAgreementResult {
             agreement_id,
             node_id,
@@ -543,6 +612,7 @@ impl Guest for Filestorage {
         agreement_id: String,
     ) -> Result<LeaveAgreementResult, Error> {
         let model = ctx.model();
+        cleanup::ensure_unlocked(&model, &agreement_id)?;
 
         // Only the signer that joined can leave its own membership — auth is
         // structural now that the key is the signer's identity.
@@ -581,6 +651,7 @@ impl Guest for Filestorage {
         // the `(agreement, false)` bucket, out of the live-member scan, and
         // decrements the `(agreement, true)` count automatically).
         membership.set_active(false);
+        rewards::membership_changed(&model, &agreement_id, None, Some(node_id))?;
         release_unused_reservation(&model, &agreement_id, node_id)?;
 
         Ok(LeaveAgreementResult {
@@ -746,6 +817,7 @@ impl Guest for Filestorage {
                     required.mul(LAMBDA_SLASH.try_into()?)?,
                 )?;
                 if result.remaining == Decimal::default() {
+                    rewards::stop(&model, node_id)?;
                     model.bond_cleanup_pending().set(&node_id, true);
                     model.bond_cleanup_queue().push_back(node_id);
                 }
@@ -755,6 +827,10 @@ impl Guest for Filestorage {
             processed += 1;
         }
         for _ in 0..SETTLEMENT_WORK_LIMIT {
+            if cleanup::step(&model)? {
+                processed += 1;
+                continue;
+            }
             let Some(node_id) = model.bond_cleanup_queue().get(0) else {
                 break;
             };
@@ -788,12 +864,7 @@ impl Guest for Filestorage {
                 .keys()
                 .next()
             {
-                model
-                    .memberships()
-                    .get(&key)
-                    .expect("indexed membership exists")
-                    .set_active(false);
-                release_unused_reservation(&model, &key.0, node_id)?;
+                cleanup::begin_removal(&model, &key.0, node_id)?;
             } else {
                 model.bond_cleanup_queue().pop_front();
                 model.bond_cleanup_pending().remove(&node_id);
@@ -801,6 +872,24 @@ impl Guest for Filestorage {
             processed += 1;
         }
         Ok(processed)
+    }
+
+    fn accrue_storage_rewards(ctx: &CoreContext) -> Result<Decimal, Error> {
+        rewards::accrue(ctx)
+    }
+
+    fn claim_rewards(ctx: &ProcContext) -> Result<Decimal, Error> {
+        let node_id = require_signer_id(&ctx.signer())?;
+        let model = ctx.model();
+        let amount = rewards::take_claimable(&model, node_id)?;
+        if amount > Decimal::default() {
+            token::transfer(ctx.contract_signer(), ctx.signer().as_ref(), amount)?;
+        }
+        Ok(amount)
+    }
+
+    fn reward_balance(ctx: &ViewContext, node_id: u64) -> Result<Decimal, Error> {
+        rewards::balance(ctx, node_id)
     }
 
     /// Fold this block's newly-registered files into the aggregated ledger root — a

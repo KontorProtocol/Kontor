@@ -16,6 +16,7 @@ use crate::database::queries::{
     get_checkpoint_latest, get_contract_id_from_address, get_contract_signer_id,
 };
 use crate::reg_tester::random_x_only_pubkey;
+use crate::runtime::filestorage::address as filestorage_address;
 use crate::runtime::filestorage::api::{self as filestorage, ChallengeStatus};
 use crate::runtime::filestorage::settlement_tests::{StorageFixture, at_height};
 use crate::runtime::numerics::{add_decimal, mul_decimal, sub_decimal};
@@ -95,6 +96,17 @@ async fn escrow(runtime: &mut Runtime) -> Result<Decimal> {
         .unwrap())
 }
 
+async fn storage_escrow(runtime: &mut Runtime) -> Result<Decimal> {
+    let conn = runtime.get_storage_conn();
+    let id = get_contract_id_from_address(&conn, &filestorage_address())
+        .await?
+        .unwrap();
+    let signer = get_contract_signer_id(&conn, id).await?.unwrap();
+    Ok(token::balance(runtime, HolderRef::SignerId(signer))
+        .await?
+        .unwrap_or_default())
+}
+
 #[tokio::test]
 async fn block_penalties_converge_and_survive_rollback_and_runtime_reopen() -> Result<()> {
     let pubkeys: Vec<_> = (0..3).map(|_| random_x_only_pubkey()).collect();
@@ -122,9 +134,12 @@ async fn block_penalties_converge_and_survive_rollback_and_runtime_reopen() -> R
             staking::get_staking_info(rt).await?.total_stake,
             validator.stake,
         )?;
+        let storage_paid = storage_escrow(rt).await?;
+        let earned_before_exhaustion = filestorage::reward_balance(rt, id).await??;
+        assert!(earned_before_exhaustion > Decimal::default());
         assert_eq!(
             token::total_supply(rt).await?,
-            sub_decimal(add_decimal(supply, paid)?, bond)?
+            sub_decimal(add_decimal(add_decimal(supply, paid)?, storage_paid)?, bond)?
         );
         assert_eq!(
             escrow(rt).await?,
@@ -175,6 +190,11 @@ async fn block_penalties_converge_and_survive_rollback_and_runtime_reopen() -> R
             ChallengeStatus::Active
         );
         assert_eq!(token::total_supply(rt).await?, supply);
+        assert_eq!(storage_escrow(rt).await?, Decimal::default());
+        assert_eq!(
+            filestorage::reward_balance(rt, id).await??,
+            Decimal::default()
+        );
         block(&mut reactor, 2016).await?;
         assert_eq!(
             get_checkpoint_latest(&reactor.db_conn())
@@ -196,6 +216,24 @@ async fn block_penalties_converge_and_survive_rollback_and_runtime_reopen() -> R
                 .build(),
         )
         .await?;
+        let supply_before_claim = token::total_supply(&mut reactor.runtime).await?;
+        let burner_before_claim = token::balance(&mut reactor.runtime, HolderRef::Burner)
+            .await?
+            .unwrap_or_default();
+        assert_eq!(
+            filestorage::claim_rewards(&mut reactor.runtime, &fixture.hosts[0].1).await??,
+            earned_before_exhaustion
+        );
+        let fees = sub_decimal(
+            token::balance(&mut reactor.runtime, HolderRef::Burner)
+                .await?
+                .unwrap_or_default(),
+            burner_before_claim,
+        )?;
+        assert_eq!(
+            token::total_supply(&mut reactor.runtime).await?,
+            sub_decimal(supply_before_claim, fees)?
+        );
         let topup = Decimal::from("10");
         staking::add_stake(&mut reactor.runtime, &fixture.hosts[0].1, topup).await??;
         block(&mut reactor, 2017).await?;
@@ -235,7 +273,12 @@ async fn exhausting_last_validator_commits_the_penalty_before_halting() -> Resul
     let rt = &mut reactor.runtime;
     assert!(staking::get_active_set(rt).await?.is_empty());
     // This block's ordering reward was credited and then burned with the bond.
-    assert_eq!(token::total_supply(rt).await?, sub_decimal(supply, bonded)?);
+    let storage_paid = storage_escrow(rt).await?;
+    assert_eq!(
+        token::total_supply(rt).await?,
+        sub_decimal(add_decimal(supply, storage_paid)?, bonded)?
+    );
+    assert!(filestorage::reward_balance(rt, fixture.hosts[0].0).await?? > Decimal::default());
     assert_eq!(escrow(rt).await?, sub_decimal(before_escrow, bonded)?);
     assert_eq!(
         token::balance(rt, HolderRef::OrderingPool)

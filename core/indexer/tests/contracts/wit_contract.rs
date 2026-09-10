@@ -42,6 +42,7 @@ world root {
     storage-unminted: decimal,
   }
 
+  export storage-emission-budget: async func(ctx: borrow<view-context>) -> option<decimal>;
   export last-emission-height: async func(ctx: borrow<view-context>) -> option<u64>;
   export mint: async func(ctx: borrow<proc-context>, amt: decimal) -> result<mint, error>;
   export burn: async func(ctx: borrow<proc-context>, amt: decimal) -> result<burn, error>;

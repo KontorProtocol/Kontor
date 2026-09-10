@@ -14,7 +14,7 @@ use tracing::{Instrument, info, info_span};
 use crate::bitcoin_follower::event::{BlockEvent, MempoolEvent};
 use crate::consensus::finality_types::{DecidedBatch, FinalityEvent, StateEvent};
 use crate::consensus::signing::PrivateKey;
-use crate::consensus::{Genesis, Validator, ValidatorSet};
+use crate::consensus::{Genesis, Height, Validator, ValidatorSet};
 use crate::keygen;
 use crate::logging;
 use crate::reactor::consensus_state::{ConsensusState, ObservationChannels};
@@ -108,6 +108,7 @@ struct ReactorCluster {
 
 #[allow(dead_code)]
 struct BatchResult {
+    consensus_height: Height,
     txids: Vec<String>,
     state_events: Vec<StateEvent>,
     events: Vec<Event>,
@@ -714,6 +715,7 @@ impl ReactorCluster {
     async fn wait_for_batch(&mut self, anchor_height: u64, timeout: Duration) -> BatchResult {
         let n = self.node_count;
         let mut decided = false;
+        let mut consensus_height = None;
         let mut state_count = 0;
         let mut event_count = 0;
         let mut txids = Vec::new();
@@ -733,15 +735,25 @@ impl ReactorCluster {
                     );
                 }
                 Some(d) = self.decided_rx.recv() => {
-                    if !d.value.is_block() && d.value.block_height() == anchor_height && !d.value.batch_txids().is_empty() {
+                    if !d.value.is_block()
+                        && d.value.block_height() == anchor_height
+                        && !d.value.batch_txids().is_empty()
+                        && consensus_height.is_none_or(|height| d.consensus_height > height)
+                    {
+                        consensus_height = Some(d.consensus_height);
                         txids = d.value.batch_txids().iter().map(|t| t.to_string()).collect();
                         decided = true;
-                        // Recount events that arrived before we knew the txids
+                        // An anchor can have several batches, including empty ones.
+                        // Only observations of this decision establish its application.
+                        state_count = state_events
+                            .iter()
+                            .filter(|se| matches!(se, StateEvent::BatchApplied { consensus_height: h, .. } if Some(*h) == consensus_height))
+                            .count();
                         event_count = events
                             .iter()
                             .filter(|ev| match ev {
                                 Event::BatchProcessed { txids: et } => {
-                                    et.iter().any(|t| txids.contains(t))
+                                    et == &txids
                                 }
                                 _ => false,
                             })
@@ -749,7 +761,7 @@ impl ReactorCluster {
                     }
                 }
                 Some(se) = self.state_rx.recv() => {
-                    if matches!(&se, StateEvent::BatchApplied { anchor_height: ah, .. } if *ah == anchor_height) {
+                    if matches!(&se, StateEvent::BatchApplied { consensus_height: h, .. } if Some(*h) == consensus_height) {
                         state_count += 1;
                     }
                     state_events.push(se);
@@ -757,7 +769,7 @@ impl ReactorCluster {
                 Some(ev) = self.event_rx.recv() => {
                     if let Event::BatchProcessed { txids: ref ev_txids } = ev
                         && !txids.is_empty()
-                        && ev_txids.iter().any(|t| txids.contains(t))
+                        && ev_txids == &txids
                     {
                         event_count += 1;
                     }
@@ -766,6 +778,7 @@ impl ReactorCluster {
             }
         }
         BatchResult {
+            consensus_height: consensus_height.expect("batch decision observed"),
             txids,
             state_events,
             events,
@@ -1070,6 +1083,15 @@ async fn prod_reactor_happy_path_finalization() -> Result<()> {
 
 #[tokio::test]
 async fn prod_reactor_missing_tx_invalidation() -> Result<()> {
+    assert_missing_tx_invalidation(3).await
+}
+
+#[tokio::test]
+async fn prod_reactor_missing_tx_invalidation_with_partial_submission() -> Result<()> {
+    assert_missing_tx_invalidation(1).await
+}
+
+async fn assert_missing_tx_invalidation(submitted: usize) -> Result<()> {
     crate::logging::setup();
 
     let mut cluster = ReactorCluster::start(3).await?;
@@ -1086,14 +1108,18 @@ async fn prod_reactor_missing_tx_invalidation() -> Result<()> {
             _ => None,
         })
         .collect();
-    for event in mempool_events {
+    for event in mempool_events.into_iter().take(submitted) {
         cluster.send_mempool_event(event);
     }
 
-    cluster.wait_for_batch(1, Duration::from_secs(60)).await;
+    let batch = cluster.wait_for_batch(1, Duration::from_secs(60)).await;
 
-    let confirm_txids: Vec<bitcoin::Txid> = all_txids[..2].to_vec();
-    let missing_txid = all_txids[2];
+    // Submission can straddle proposals; withhold a tx that was actually ordered.
+    let missing_txid = batch.txids.last().unwrap().parse::<bitcoin::Txid>()?;
+    let confirm_txids: Vec<bitcoin::Txid> = all_txids
+        .into_iter()
+        .filter(|txid| *txid != missing_txid)
+        .collect();
 
     cluster.mine_and_send(&confirm_txids);
     cluster.wait_for_block(2, Duration::from_secs(60)).await;
@@ -1120,18 +1146,19 @@ async fn prod_reactor_missing_tx_invalidation() -> Result<()> {
         "Expected Rollback with missing txid {missing_txid}, got: {finality_events:?}"
     );
 
-    // After rollback, expect replayed batch with 2 txids (missing one excluded)
+    let replayed_txid_count = batch.txids.len() - 1;
     let replayed = cluster
         .wait_for_state_event_matching(
-            |e| matches!(e, StateEvent::BatchApplied { txid_count, .. } if *txid_count == 2),
+            |e| matches!(e, StateEvent::BatchApplied { consensus_height, txid_count, .. } if *consensus_height == batch.consensus_height && *txid_count == replayed_txid_count),
             Duration::from_secs(60),
         )
         .await;
     assert!(
         replayed
             .iter()
-            .any(|e| matches!(e, StateEvent::BatchApplied { txid_count, .. } if *txid_count == 2)),
-        "Expected replayed batch with 2 txids (excluding missing), got: {replayed:?}"
+            .any(|e| matches!(e, StateEvent::BatchApplied { consensus_height, txid_count, .. } if *consensus_height == batch.consensus_height && *txid_count == replayed_txid_count)),
+        "Expected replayed batch {} with {replayed_txid_count} txids (excluding missing), got: {replayed:?}",
+        batch.consensus_height
     );
 
     cluster.shutdown().await;

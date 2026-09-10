@@ -15,6 +15,7 @@ struct TokenStorage {
     /// mainnet (issuance there is restricted to privileged protocol paths).
     pub dev_mint_enabled: bool,
     pub last_emission_height: Option<u64>,
+    pub storage_emission_budget: Option<Decimal>,
 }
 
 fn utxo_holder(out_point: context::OutPoint) -> Holder {
@@ -110,11 +111,52 @@ impl Guest for Token {
             mint(&model, HolderRef::OrderingPool.try_into()?, ordering_minted)?;
         }
         model.set_last_emission_height(Some(height));
+        model.set_storage_emission_budget(Some(scheduled_total.sub(ordering)?));
         Ok(Emission {
             scheduled_total,
             ordering_minted,
             storage_unminted: scheduled_total.sub(ordering)?,
         })
+    }
+
+    fn storage_emission_budget(ctx: &ViewContext) -> Option<Decimal> {
+        ctx.model().storage_emission_budget()
+    }
+
+    fn allocate_storage_emission(
+        ctx: &CoreContext,
+        dst: HolderRef,
+        amt: Decimal,
+    ) -> Result<Decimal, Error> {
+        let proc = ctx.proc_context();
+        let model = proc.model();
+        if model.last_emission_height() != Some(proc.block_height()) {
+            return Err(Error::Message(
+                "storage emission height mismatch".to_string(),
+            ));
+        }
+        let budget = model.storage_emission_budget().ok_or(Error::Message(
+            "storage emission already allocated".to_string(),
+        ))?;
+        if amt < Decimal::default() || amt > budget {
+            return Err(Error::Message(
+                "storage emission exceeds budget".to_string(),
+            ));
+        }
+        let dst: Holder = dst.try_into()?;
+        if !matches!(dst.as_ref(), HolderRef::SignerId(_)) {
+            return Err(Error::Message(
+                "storage escrow must be a signer".to_string(),
+            ));
+        }
+        if amt > Decimal::default() {
+            mint(&model, HolderRef::StoragePool.try_into()?, amt)?;
+            // Fund the storage contract's escrow. Public claims spend its own
+            // balance with its contract signer; they need no pool-debit privilege.
+            transfer(&proc, HolderRef::StoragePool.try_into()?, dst, amt)?;
+        }
+        model.set_storage_emission_budget(None);
+        Ok(amt)
     }
 
     fn transfer_ordering_reward(
