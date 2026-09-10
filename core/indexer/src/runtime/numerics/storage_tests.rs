@@ -1,6 +1,6 @@
 use anyhow::Result;
 use indexer_types::{BlockRow, deserialize, serialize};
-use stdlib::KeyPath;
+use stdlib::{IndexKey, KeyElement, KeyPath};
 
 use crate::database::queries::insert_block;
 use crate::reg_tester::random_x_only_pubkey;
@@ -115,7 +115,9 @@ async fn scalar_numbers_preserve_indexes_deposits_and_rollback() -> Result<()> {
         .await?
         .unwrap();
     let bytes: Vec<u8> = deserialize(&payload)?;
-    assert_eq!(bytes, [vec![0], vec![255; 32]].concat());
+    assert_eq!(bytes, [vec![0x1d], vec![255; 32]].concat());
+    assert_eq!(bytes, Integer::from(max).encode());
+    assert_eq!(bytes, Integer::from(max).index_key());
     assert_eq!(leaves[0].size, serialize(&bytes)?.len() as u64);
     assert_eq!(leaves[0].depositor, Some(signer_id));
     assert_eq!(
@@ -133,6 +135,55 @@ async fn scalar_numbers_preserve_indexes_deposits_and_rollback() -> Result<()> {
         3 * Fuel::Get(payload.len()).cost()
     );
     assert!(!stats.contains_key(&FuelDiscriminants::ExtendPathWithMatch));
+
+    let zero_path = KeyPath::new().push_interned(2).push_element(&0u64);
+    let positive_zero = runtime
+        .storage
+        .get(i64::MAX as u64, contract_id, &zero_path)
+        .await?
+        .unwrap();
+    runtime
+        .execute_api(Some(&signer), &address, "put-numbers(0, \"-0\", \"-0\")")
+        .await?;
+    assert_eq!(
+        runtime
+            .storage
+            .get(i64::MAX as u64, contract_id, &zero_path)
+            .await?
+            .unwrap(),
+        positive_zero
+    );
+    assert_eq!(
+        stored(&mut runtime, &address, 0).await?,
+        Some(vec!["0".into(); 3])
+    );
+    assert_eq!(index(&mut runtime, &address, "0").await?, ["0:0"]);
+    assert_eq!(index(&mut runtime, &address, "-0").await?, ["0:0"]);
+    for zero in ["0", "-0"] {
+        assert_eq!(
+            from_wave_expr::<Vec<u64>>(
+                &runtime
+                    .execute(None, None, &address, &format!("decimal-index(\"{zero}\")"))
+                    .await?
+            ),
+            [0]
+        );
+    }
+    runtime.storage.savepoint().await?;
+    runtime
+        .execute_api(Some(&signer), &address, "remove-numbers(0)")
+        .await?;
+    assert!(index(&mut runtime, &address, "0").await?.is_empty());
+    assert!(
+        from_wave_expr::<Vec<u64>>(
+            &runtime
+                .execute(None, None, &address, "decimal-index(\"0\")")
+                .await?
+        )
+        .is_empty()
+    );
+    runtime.storage.rollback().await?;
+    assert_eq!(index(&mut runtime, &address, "0").await?, ["0:0"]);
 
     for (key, decimal) in [(5, "3"), (6, "-2")] {
         runtime

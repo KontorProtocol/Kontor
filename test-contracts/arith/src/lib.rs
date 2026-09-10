@@ -2,7 +2,7 @@
 contract!(name = "arith");
 
 use alloc::vec;
-use built_in_types::numbers_types::{Decimal, Integer};
+use built_in_types::numbers_types::{Decimal, Integer, Sign};
 use stdlib::*;
 
 interface!(name = "fib", path = "../fib/wit");
@@ -17,6 +17,7 @@ struct ArithStorage {
 
 #[derive(Clone, Storage)]
 #[index(by_integer, by = integer, sort = decimal, include = (integer))]
+#[index(by_decimal, by = decimal)]
 struct NumericRecord {
     integer: Integer,
     decimal: Decimal,
@@ -49,8 +50,24 @@ impl Guest for Arith {
     }
 
     fn put_numbers(ctx: &ProcContext, key: u64, integer: String, decimal: String) {
-        let integer = Integer::from(integer.as_str());
-        let decimal = Decimal::from(decimal.as_str());
+        // Construct raw negative zero so storage/index tests exercise the sign
+        // bit even when a parser would already canonicalize it.
+        let integer = if integer == "-0" {
+            Integer {
+                sign: Sign::Minus,
+                ..Integer::default()
+            }
+        } else {
+            Integer::from(integer.as_str())
+        };
+        let decimal = if decimal == "-0" {
+            Decimal {
+                sign: Sign::Minus,
+                ..Decimal::default()
+            }
+        } else {
+            Decimal::from(decimal.as_str())
+        };
         let model = ctx.model();
         model.set_optional_integer(Some(integer));
         model.decimals().set(&key, decimal);
@@ -101,6 +118,14 @@ impl Guest for Arith {
             .by_integer(Integer::from(integer.as_str()))
             .values()
             .map(|value| format!("{}:{}", value.integer, value.decimal))
+            .collect()
+    }
+
+    fn decimal_index(ctx: &ViewContext, decimal: String) -> Vec<u64> {
+        ctx.model()
+            .numbers()
+            .by_decimal(Decimal::from(decimal.as_str()))
+            .keys()
             .collect()
     }
 

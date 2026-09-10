@@ -34,6 +34,7 @@ world root {
   export optional-integer: async func(ctx: borrow<view-context>) -> option<string>;
   export number-keys: async func(ctx: borrow<view-context>) -> list<u64>;
   export number-index: async func(ctx: borrow<view-context>, integer: string) -> list<string>;
+  export decimal-index: async func(ctx: borrow<view-context>, decimal: string) -> list<u64>;
 
   export checked-sub: async func(ctx: borrow<view-context>, x: string, y: string) -> result<u64, error>;
 

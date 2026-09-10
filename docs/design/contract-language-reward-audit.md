@@ -68,8 +68,9 @@ native types performed this representation work.
 
 The separate [scalar-storage change](scalar-numeric-storage.md) replaces that with
 one value at one ordinary versioned path, implemented by shared Store/Retrieve
-support. Token balances, staking and rewards all benefit. Numeric map keys and
-indexes keep their existing encodings. Tests cover full-range values, indexed
+support. Token balances, staking and rewards all benefit. All numeric persistence delegates to the same ordered codec, with canonical zero.
+Equality-index buckets adopt that codec in place of string conversion; map keys
+and sort/covering encodings keep their existing format. Tests cover full-range values, indexed
 setters and covering projections, deposits/metering, deletion, savepoints and
 block-height rollback. The layout change requires fresh state/replay with rebuilt
 contracts; it is not an in-place migration.

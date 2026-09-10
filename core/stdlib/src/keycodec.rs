@@ -65,6 +65,8 @@ pub enum CodecError {
     Truncated,
     /// A decoded integer doesn't fit the target type.
     Overflow,
+    /// The bytes represent a value using an encoding the writer never emits.
+    NonCanonical,
     /// A string element wasn't valid UTF-8.
     Utf8,
     /// A stringly-encoded element decoded as valid UTF-8 but didn't parse back
@@ -396,7 +398,11 @@ pub fn decode_int256(bytes: &[u8]) -> Result<(bool, [u64; 4], &[u8]), CodecError
             *b = !*b;
         }
     }
-    Ok((negative, be_to_limbs(&be), &bytes[1 + NUM_LEN..]))
+    let limbs = be_to_limbs(&be);
+    if negative && limbs == [0; 4] {
+        return Err(CodecError::NonCanonical);
+    }
+    Ok((negative, limbs, &bytes[1 + NUM_LEN..]))
 }
 
 /// Pack several already-encoded elements into one nested-tuple element, ordered
@@ -669,6 +675,8 @@ pub fn strinc(prefix: &[u8]) -> Option<Vec<u8>> {
 
 #[cfg(test)]
 mod tests {
+    use core::cmp::Ordering;
+
     use super::*;
     use alloc::vec;
 
@@ -864,8 +872,6 @@ mod tests {
 
     #[test]
     fn int256_roundtrip_and_order() {
-        use core::cmp::Ordering;
-
         // Numeric order of two 256-bit sign-magnitude values (the reference the
         // encoded byte order must match). limbs[3] is most significant; zero is
         // canonical (sign ignored).
@@ -917,6 +923,9 @@ mod tests {
         }
         // +0 and -0 encode identically (canonical zero).
         assert_eq!(enc(false, [0, 0, 0, 0]), enc(true, [0, 0, 0, 0]));
+        let mut negative_zero = vec![TAG_NUM_NEG];
+        negative_zero.extend_from_slice(&[255; 32]);
+        assert_eq!(decode_int256(&negative_zero), Err(CodecError::NonCanonical));
 
         // Ordering fuzz: encoded bytewise order must equal numeric order.
         let mut rng = Lcg(99);

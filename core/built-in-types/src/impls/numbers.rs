@@ -651,28 +651,11 @@ impl From<String> for kontor::built_in::numbers_types::Decimal {
     }
 }
 
-// --- storage-integration impls (moved from the per-contract `contract!` glue;
-// stdlib traits on types this crate owns) ---
-
-/// `#[index]` on an Integer/Decimal field buckets by its canonical string
-/// (equality partition — order irrelevant).
-impl stdlib::IndexKey for kontor::built_in::numbers_types::Integer {
-    fn index_key(&self) -> alloc::vec::Vec<u8> {
-        stdlib::KeyElement::encode(&alloc::string::ToString::to_string(self))
-    }
-}
-
-impl stdlib::IndexKey for kontor::built_in::numbers_types::Decimal {
-    fn index_key(&self) -> alloc::vec::Vec<u8> {
-        stdlib::KeyElement::encode(&alloc::string::ToString::to_string(self))
-    }
-}
-
 /// 256-bit sign-magnitude encoded as order-preserving codec elements so they
 /// can be `Map` KEYS or index SORT fields (e.g. ordering by a monetary
 /// amount). `Decimal` reuses the integer encoding on its raw scaled limbs
-/// (fixed scale ⇒ raw-magnitude order == value order). Distinct from the
-/// `IndexKey` (bucket) impls above.
+/// (fixed scale ⇒ raw-magnitude order == value order). Numeric storage and
+/// equality-index buckets also delegate to this codec.
 macro_rules! __key_element_num256 {
     ($($ty:path),*) => {$(
         impl stdlib::KeyElement for $ty {

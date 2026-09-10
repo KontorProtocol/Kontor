@@ -8,17 +8,24 @@ storage format or runtime policy is introduced.
 
 ## Representation and compatibility
 
-The numeric payload is exactly 33 bytes: one sign byte (0 = plus, 1 = minus),
-followed by four little-endian u64 magnitude limbs, least significant first.
-Decimal stores its raw 18-place coefficient. Every limb and the sign are
-preserved, including signed zero. Invalid payload lengths or sign tags fail
-instead of becoming a zero balance. The host wraps this payload with its existing
-byte-list serialization.
+All four uses share the existing numeric `KeyElement` codec: map keys, sorted
+index keys/covering projections, equality-index buckets, and stored values. The
+payload is 33 bytes: an existing positive/negative numeric type tag followed by a
+big-endian magnitude (inverted for negatives so byte order matches numeric order).
+Decimal uses its raw 18-place coefficient. Storage wraps those bytes in the host's
+existing byte-list serialization. There is no second numeric value encoder.
 
-Map keys and index buckets/sort/covering values retain their existing encodings.
-Those ordered encodings intentionally coalesce equivalent zeros. Numeric value
-storage is independent of key ordering and does not reinterpret or round amounts.
-WIT shapes, arithmetic, numeric APIs and parent field ordinals are unchanged.
+Zero has one canonical representation: a positive tag with zero magnitude.
+Writing raw negative zero stores positive zero, and equivalent zeros use the same
+index bucket. This canonicalizes persistence; it does not remove the public sign
+field or change the arithmetic/conversion APIs. The shared decoder rejects a
+negative-zero encoding that the encoder never emits, and storage rejects trailing
+bytes as well as malformed or truncated elements.
+
+Map keys and index sort/covering encodings retain their existing canonical format.
+Numeric equality-index buckets now use that same encoding instead of converting
+numbers to strings. Their on-disk paths therefore change too. WIT shapes, numeric
+precision, arithmetic APIs and parent field ordinals are unchanged.
 
 This replaces the old four-limb-plus-sign child layout everywhere these built-in
 types are stored. It requires fresh state/replay with the rebuilt contract set;
@@ -48,13 +55,15 @@ range, numeric map values, an optional Integer, indexed records, numeric sort an
 covering projections, in-place setters, replacement, deletion, savepoint rollback
 and block-height cascade rollback. It inspects the single stored leaf and its
 metering/deposit metadata, and checks the footprint cache after rollback.
-Codec unit tests also pin signed-zero preservation and rejection of malformed
-payloads. The reward benchmark provides an end-to-end comparison on the combined
-reward and scalar-storage branches.
+Codec tests pin canonical zero, shared key/bucket encodings and rejection of
+malformed payloads. The Wasm regression also rewrites positive zero with raw
+negative zero and verifies stable stored bytes, equality buckets and deletion.
+The reward benchmark compares the combined reward and scalar-storage changes.
 
-On 2026-09-10 the full release workspace suite with `REGTEST=1` passed 770 tests
-with three ignored, including 482 indexer library and 121 integration tests.
-The separate opt-in reward benchmark passed all six scenarios in 19.86 seconds;
+On 2026-09-10 the full release workspace suite with
+`REGTEST=1` passed 771 tests with three ignored, including 482 indexer library and
+121 integration tests.
+The separate opt-in reward benchmark passed all six scenarios in 22.87 seconds;
 its [comparison](storage-reward-costs.md#scalar-numeric-storage-comparison) records
 operation counts and timing limits. Both contract sets were rebuilt with the
 repository's pinned image.
