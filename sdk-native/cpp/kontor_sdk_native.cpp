@@ -260,6 +260,13 @@ extern "C" {
         RustBuffer a, 
         RustCallStatus *uniffi_out_err
     );
+    RustBuffer uniffi_kontor_sdk_native_fn_func_mul_add_div_rem_integer(
+        RustBuffer a, 
+        RustBuffer b, 
+        RustBuffer carry, 
+        RustBuffer divisor, 
+        RustCallStatus *uniffi_out_err
+    );
     RustBuffer uniffi_kontor_sdk_native_fn_func_mul_decimal(
         RustBuffer a, 
         RustBuffer b, 
@@ -567,6 +574,8 @@ extern "C" {
     uint16_t uniffi_kontor_sdk_native_checksum_func_integer_to_string(
     );
     uint16_t uniffi_kontor_sdk_native_checksum_func_log10_decimal(
+    );
+    uint16_t uniffi_kontor_sdk_native_checksum_func_mul_add_div_rem_integer(
     );
     uint16_t uniffi_kontor_sdk_native_checksum_func_mul_decimal(
     );
@@ -2358,6 +2367,14 @@ NativeKontorSdkNative::NativeKontorSdkNative(
             return this->cpp_uniffi_kontor_sdk_native_fn_func_log10_decimal(rt, thisVal, args, count);
         }
     );
+    props["ubrn_uniffi_kontor_sdk_native_fn_func_mul_add_div_rem_integer"] = jsi::Function::createFromHostFunction(
+        rt,
+        jsi::PropNameID::forAscii(rt, "ubrn_uniffi_kontor_sdk_native_fn_func_mul_add_div_rem_integer"),
+        4,
+        [this](jsi::Runtime &rt, const jsi::Value &thisVal, const jsi::Value *args, size_t count) -> jsi::Value {
+            return this->cpp_uniffi_kontor_sdk_native_fn_func_mul_add_div_rem_integer(rt, thisVal, args, count);
+        }
+    );
     props["ubrn_uniffi_kontor_sdk_native_fn_func_mul_decimal"] = jsi::Function::createFromHostFunction(
         rt,
         jsi::PropNameID::forAscii(rt, "ubrn_uniffi_kontor_sdk_native_fn_func_mul_decimal"),
@@ -2628,6 +2645,14 @@ NativeKontorSdkNative::NativeKontorSdkNative(
         0,
         [this](jsi::Runtime &rt, const jsi::Value &thisVal, const jsi::Value *args, size_t count) -> jsi::Value {
             return this->cpp_uniffi_kontor_sdk_native_checksum_func_log10_decimal(rt, thisVal, args, count);
+        }
+    );
+    props["ubrn_uniffi_kontor_sdk_native_checksum_func_mul_add_div_rem_integer"] = jsi::Function::createFromHostFunction(
+        rt,
+        jsi::PropNameID::forAscii(rt, "ubrn_uniffi_kontor_sdk_native_checksum_func_mul_add_div_rem_integer"),
+        0,
+        [this](jsi::Runtime &rt, const jsi::Value &thisVal, const jsi::Value *args, size_t count) -> jsi::Value {
+            return this->cpp_uniffi_kontor_sdk_native_checksum_func_mul_add_div_rem_integer(rt, thisVal, args, count);
         }
     );
     props["ubrn_uniffi_kontor_sdk_native_checksum_func_mul_decimal"] = jsi::Function::createFromHostFunction(
@@ -3101,6 +3126,16 @@ jsi::Value NativeKontorSdkNative::cpp_uniffi_kontor_sdk_native_fn_func_log10_dec
         
         return uniffi::kontor_sdk_native::Bridging<RustBuffer>::toJs(rt, callInvoker, value);
 }
+jsi::Value NativeKontorSdkNative::cpp_uniffi_kontor_sdk_native_fn_func_mul_add_div_rem_integer(jsi::Runtime& rt, const jsi::Value& thisVal, const jsi::Value* args, size_t count) {
+        RustCallStatus status = uniffi::kontor_sdk_native::Bridging<RustCallStatus>::rustSuccess(rt);
+        auto value = uniffi_kontor_sdk_native_fn_func_mul_add_div_rem_integer(uniffi::kontor_sdk_native::Bridging<RustBuffer>::fromJs(rt, callInvoker, args[0]), uniffi::kontor_sdk_native::Bridging<RustBuffer>::fromJs(rt, callInvoker, args[1]), uniffi::kontor_sdk_native::Bridging<RustBuffer>::fromJs(rt, callInvoker, args[2]), uniffi::kontor_sdk_native::Bridging<RustBuffer>::fromJs(rt, callInvoker, args[3]), 
+            &status
+        );
+        uniffi::kontor_sdk_native::Bridging<RustCallStatus>::copyIntoJs(rt, callInvoker, status, args[count - 1]);
+
+        
+        return uniffi::kontor_sdk_native::Bridging<RustBuffer>::toJs(rt, callInvoker, value);
+}
 jsi::Value NativeKontorSdkNative::cpp_uniffi_kontor_sdk_native_fn_func_mul_decimal(jsi::Runtime& rt, const jsi::Value& thisVal, const jsi::Value* args, size_t count) {
         RustCallStatus status = uniffi::kontor_sdk_native::Bridging<RustCallStatus>::rustSuccess(rt);
         auto value = uniffi_kontor_sdk_native_fn_func_mul_decimal(uniffi::kontor_sdk_native::Bridging<RustBuffer>::fromJs(rt, callInvoker, args[0]), uniffi::kontor_sdk_native::Bridging<RustBuffer>::fromJs(rt, callInvoker, args[1]), 
@@ -3370,6 +3405,13 @@ jsi::Value NativeKontorSdkNative::cpp_uniffi_kontor_sdk_native_checksum_func_int
 }
 jsi::Value NativeKontorSdkNative::cpp_uniffi_kontor_sdk_native_checksum_func_log10_decimal(jsi::Runtime& rt, const jsi::Value& thisVal, const jsi::Value* args, size_t count) {
         auto value = uniffi_kontor_sdk_native_checksum_func_log10_decimal(
+        );
+
+        
+        return uniffi_jsi::Bridging<uint16_t>::toJs(rt, callInvoker, value);
+}
+jsi::Value NativeKontorSdkNative::cpp_uniffi_kontor_sdk_native_checksum_func_mul_add_div_rem_integer(jsi::Runtime& rt, const jsi::Value& thisVal, const jsi::Value* args, size_t count) {
+        auto value = uniffi_kontor_sdk_native_checksum_func_mul_add_div_rem_integer(
         );
 
         

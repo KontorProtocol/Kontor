@@ -306,6 +306,9 @@ interface numbers {
     sub-integer: async func(a: integer, b: integer) -> result<integer, error>;
     mul-integer: async func(a: integer, b: integer) -> result<integer, error>;
     div-integer: async func(a: integer, b: integer) -> result<integer, error>;
+    /// Floor and remainder of (a * b + carry) / divisor, with a wide intermediate.
+    /// All inputs must be nonnegative; divisor must be positive.
+    mul-add-div-rem-integer: async func(a: integer, b: integer, carry: integer, divisor: integer) -> result<tuple<integer, integer>, error>;
     sqrt-integer: async func(i: integer) -> result<integer, error>;
 
     integer-to-decimal: async func(i: integer) -> result<decimal, error>;

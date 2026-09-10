@@ -848,7 +848,7 @@ test("numerics: integer string round-trip with big values", () => {
 
 test("numerics: integer overflow surfaces as error", () => {
   const oversized =
-    "115792089237316195423570985008687907853269984665640564039458";
+    "115792089237316195423570985008687907853269984665640564039457584007913129639936";
   try {
     numerics.stringToInteger(oversized);
     throw new Error("expected stringToInteger to throw");
@@ -1038,4 +1038,90 @@ test("ContractAddress: fromRaw decodes string-quoted bigints", () => {
 
 test("ContractAddress: toString gives a human-readable form", () => {
   expect(new ContractAddress("foo", 100n, 3n).toString()).toBe("foo@100.3");
+});
+
+test("Integer: full magnitude range is independent of Decimal scale", () => {
+  const max = (1n << 256n) - 1n;
+  for (const sign of [1n, -1n]) {
+    const value = Integer.from(sign * max);
+    expect(value.toString()).toBe((sign * max).toString());
+    expect(
+      value.sub(Integer.from(sign)).add(Integer.from(sign)).eq(value),
+    ).toBe(true);
+    expect(value.mul(Integer.from(1)).eq(value)).toBe(true);
+    expect(() => value.add(Integer.from(sign))).toThrow();
+    expect(() => value.mul(Integer.from(2))).toThrow();
+    expect(() =>
+      numerics.integerToDecimal(numerics.stringToInteger(value.toString())),
+    ).toThrow();
+  }
+});
+
+test("Decimal: exact raw units preserve signs, fractions, and full magnitude", () => {
+  for (const units of [
+    0n,
+    1n,
+    -1n,
+    1250000000000000000n,
+    (1n << 256n) - 1n,
+    -((1n << 256n) - 1n),
+  ]) {
+    const integer = Integer.from(units);
+    expect(Decimal.fromRawUnits(integer).toRawUnits().eq(integer)).toBe(true);
+  }
+  expect(Decimal.from("-1.25").toRawUnits().toString()).toBe(
+    "-1250000000000000000",
+  );
+  expect(
+    Decimal.fromRawUnits(Integer.from(1)).eq(
+      Decimal.from("0.000000000000000001"),
+    ),
+  ).toBe(true);
+});
+
+test("Integer: wide division preserves exact quotient and remainder", () => {
+  const max = (1n << 256n) - 1n;
+  for (const [a, b, carry, divisor] of [
+    [10n, 2n, 1n, 3n],
+    [max, max, 1n, max],
+    [0n, 0n, max, 2n],
+    [1n, 1n, 0n, max],
+  ]) {
+    const { quotient, remainder } = Integer.from(a).checkedMulAddDivRem(
+      Integer.from(b),
+      Integer.from(carry),
+      Integer.from(divisor),
+    );
+    const numerator = a * b + carry;
+    expect(quotient.toString()).toBe((numerator / divisor).toString());
+    expect(remainder.toString()).toBe((numerator % divisor).toString());
+  }
+  for (const [a, b, carry, divisor] of [
+    [1n, 1n, 0n, 0n],
+    [-1n, 1n, 0n, 1n],
+    [1n, -1n, 0n, 1n],
+    [1n, 1n, -1n, 1n],
+    [1n, 1n, 0n, -1n],
+    [max, max, 0n, 1n],
+  ]) {
+    expect(() =>
+      Integer.from(a).checkedMulAddDivRem(
+        Integer.from(b),
+        Integer.from(carry),
+        Integer.from(divisor),
+      ),
+    ).toThrow();
+  }
+});
+
+test("Decimal: whole conversion truncates signed fractions toward zero", () => {
+  const max = (1n << 256n) - 1n;
+  const scale = 10n ** 18n;
+  for (const units of [0n, 1n, -1n, scale - 1n, 2n * scale - 1n, max, -max]) {
+    const value = Decimal.fromRawUnits(Integer.from(units));
+    const whole = numerics.decimalToInteger(
+      numerics.stringToDecimal(value.toString()),
+    );
+    expect(numerics.integerToString(whole)).toBe((units / scale).toString());
+  }
 });

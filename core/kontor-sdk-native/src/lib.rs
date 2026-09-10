@@ -316,6 +316,27 @@ numerics_try_fns! {
     log10_decimal(a: Decimal) -> Decimal;
 }
 
+#[derive(uniffi::Record)]
+pub struct DivisionResult {
+    pub quotient: Integer,
+    pub remainder: Integer,
+}
+
+#[uniffi::export]
+pub fn mul_add_div_rem_integer(
+    a: Integer,
+    b: Integer,
+    carry: Integer,
+    divisor: Integer,
+) -> Result<DivisionResult, NumericsError> {
+    core_numerics::mul_add_div_rem_integer(a.into(), b.into(), carry.into(), divisor.into())
+        .map(|(quotient, remainder)| DivisionResult {
+            quotient: quotient.into(),
+            remainder: remainder.into(),
+        })
+        .map_err(Into::into)
+}
+
 // The two `&str`-taking core fns don't fit the `.into()` bridging above
 // (String → &str isn't `Into`), so they stay hand-written.
 
@@ -331,4 +352,32 @@ pub fn string_to_decimal(s: String) -> Result<Decimal, NumericsError> {
     core_numerics::string_to_decimal(&s)
         .map(Into::into)
         .map_err(Into::into)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{NumericsError, integer_to_string, mul_add_div_rem_integer, string_to_integer};
+
+    #[test]
+    fn wide_division_bridge_preserves_both_results_and_errors() {
+        let max = "115792089237316195423570985008687907853269984665640564039457584007913129639935";
+        let value = string_to_integer(max.into()).unwrap();
+        let one = string_to_integer("1".into()).unwrap();
+        let zero = string_to_integer("0".into()).unwrap();
+        let result = mul_add_div_rem_integer(value, value, one, value).unwrap();
+        assert_eq!(integer_to_string(result.quotient), max);
+        assert_eq!(integer_to_string(result.remainder), "1");
+        assert!(matches!(
+            mul_add_div_rem_integer(value, value, zero, one),
+            Err(NumericsError::Overflow(_))
+        ));
+        assert!(matches!(
+            mul_add_div_rem_integer(one, one, zero, zero),
+            Err(NumericsError::DivByZero(_))
+        ));
+        assert!(matches!(
+            mul_add_div_rem_integer(string_to_integer("-1".into()).unwrap(), one, zero, one),
+            Err(NumericsError::Validation(_))
+        ));
+    }
 }

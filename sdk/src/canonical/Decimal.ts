@@ -9,6 +9,7 @@
  * but lossy for values that don't round-trip through f64.
  */
 import { numerics } from "../backend/index.js";
+import { Integer } from "./Integer.js";
 
 type Sign = "plus" | "minus";
 
@@ -63,6 +64,16 @@ export class Decimal {
       r3: this.inner.r3.toString(),
       sign: this.inner.sign,
     };
+  }
+
+  /** Exact signed count of 10^-18 units, preserving all fractional digits. */
+  toRawUnits(): Integer {
+    return Integer.fromRaw(this.toRaw());
+  }
+
+  /** Inverse of toRawUnits, with no arithmetic or rounding. */
+  static fromRawUnits(units: Integer): Decimal {
+    return Decimal.fromRaw(units.toRaw());
   }
 
   toString(): string {

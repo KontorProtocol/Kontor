@@ -134,7 +134,7 @@ const fromNativeNum = (r: gen.Integer): Num => ({
   sign: signToStr(r.sign),
 });
 
-// ─── numerics namespace (jco-shaped, all 25 ops) ─────────────────────
+// ─── numerics namespace (jco-shaped) ─────────────────────────────────
 const rawNumerics = {
   u64ToInteger: (i: bigint): Num => fromNativeNum(gen.u64ToInteger(i)),
   s64ToInteger: (i: bigint): Num => fromNativeNum(gen.s64ToInteger(i)),
@@ -152,6 +152,20 @@ const rawNumerics = {
     fromNativeNum(gen.mulInteger(toNativeNum(a), toNativeNum(b))),
   divInteger: (a: Num, b: Num): Num =>
     fromNativeNum(gen.divInteger(toNativeNum(a), toNativeNum(b))),
+  mulAddDivRemInteger: (
+    a: Num,
+    b: Num,
+    carry: Num,
+    divisor: Num,
+  ): [Num, Num] => {
+    const result = gen.mulAddDivRemInteger(
+      toNativeNum(a),
+      toNativeNum(b),
+      toNativeNum(carry),
+      toNativeNum(divisor),
+    );
+    return [fromNativeNum(result.quotient), fromNativeNum(result.remainder)];
+  },
   sqrtInteger: (i: Num): Num => fromNativeNum(gen.sqrtInteger(toNativeNum(i))),
   integerToDecimal: (i: Num): Num =>
     fromNativeNum(gen.integerToDecimal(toNativeNum(i))),

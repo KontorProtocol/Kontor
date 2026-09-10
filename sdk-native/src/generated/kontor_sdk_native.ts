@@ -338,6 +338,21 @@ export function log10Decimal(a: Decimal): Decimal /*throws*/ {
             /*liftString:*/ FfiConverterString.lift,
     ));
     }
+export function mulAddDivRemInteger(a: Integer, b: Integer, carry: Integer, divisor: Integer): DivisionResult /*throws*/ {
+    return FfiConverterTypeDivisionResult.lift(
+        uniffiCaller.rustCallWithError(
+            /*liftError:*/ FfiConverterTypeNumericsError.lift.bind(FfiConverterTypeNumericsError),
+            /*caller:*/ (callStatus) => {
+                return nativeModule().ubrn_uniffi_kontor_sdk_native_fn_func_mul_add_div_rem_integer(
+        FfiConverterTypeInteger.lower(a),
+        FfiConverterTypeInteger.lower(b),
+        FfiConverterTypeInteger.lower(carry),
+        FfiConverterTypeInteger.lower(divisor),
+                callStatus);
+            },
+            /*liftString:*/ FfiConverterString.lift,
+    ));
+    }
 export function mulDecimal(a: Decimal, b: Decimal): Decimal /*throws*/ {
     return FfiConverterTypeDecimal.lift(
         uniffiCaller.rustCallWithError(
@@ -556,6 +571,63 @@ const FfiConverterTypeDecimal = (() => {
             FfiConverterUInt64.allocationSize(value.r2) + 
             FfiConverterUInt64.allocationSize(value.r3) + 
             FfiConverterTypeSign.allocationSize(value.sign);
+            
+        }
+    };
+    return new FFIConverter();
+})();
+
+
+export type DivisionResult = {
+    quotient: Integer,
+    remainder: Integer
+}
+
+/**
+ * Generated factory for {@link DivisionResult} record objects.
+ */
+export const DivisionResult = (() => {
+    const defaults = () => ({
+    });
+    const create = (() => {
+        return uniffiCreateRecord<DivisionResult, ReturnType<typeof defaults>>(defaults);
+    })();
+    return Object.freeze({
+        /**
+         * Create a frozen instance of {@link DivisionResult}, with defaults specified
+         * in Rust, in the {@link kontor_sdk_native} crate.
+         */
+        create,
+
+        /**
+         * Create a frozen instance of {@link DivisionResult}, with defaults specified
+         * in Rust, in the {@link kontor_sdk_native} crate.
+         */
+        new: create,
+
+        /**
+         * Defaults specified in the {@link kontor_sdk_native} crate.
+         */
+        defaults: () => Object.freeze(defaults()) as Partial<DivisionResult>,
+    });
+})();
+
+const FfiConverterTypeDivisionResult = (() => {
+    type TypeName = DivisionResult;
+    class FFIConverter extends AbstractFfiConverterByteArray<TypeName> {
+        read(from: RustBuffer): TypeName {
+            return {
+                quotient: FfiConverterTypeInteger.read(from), 
+                remainder: FfiConverterTypeInteger.read(from)
+            };
+        }
+        write(value: TypeName, into: RustBuffer): void {
+            FfiConverterTypeInteger.write(value.quotient, into);
+            FfiConverterTypeInteger.write(value.remainder, into);
+        }
+        allocationSize(value: TypeName): number {
+            return FfiConverterTypeInteger.allocationSize(value.quotient) + 
+            FfiConverterTypeInteger.allocationSize(value.remainder);
             
         }
     };
@@ -1230,6 +1302,9 @@ function uniffiEnsureInitialized() {
     if (nativeModule().ubrn_uniffi_kontor_sdk_native_checksum_func_log10_decimal() !== 4908) {
         throw new UniffiInternalError.ApiChecksumMismatch("uniffi_kontor_sdk_native_checksum_func_log10_decimal");
     }
+    if (nativeModule().ubrn_uniffi_kontor_sdk_native_checksum_func_mul_add_div_rem_integer() !== 16154) {
+        throw new UniffiInternalError.ApiChecksumMismatch("uniffi_kontor_sdk_native_checksum_func_mul_add_div_rem_integer");
+    }
     if (nativeModule().ubrn_uniffi_kontor_sdk_native_checksum_func_mul_decimal() !== 51293) {
         throw new UniffiInternalError.ApiChecksumMismatch("uniffi_kontor_sdk_native_checksum_func_mul_decimal");
     }
@@ -1283,6 +1358,7 @@ export default Object.freeze({
   converters: {
     FfiConverterTypeCoreError,
     FfiConverterTypeDecimal,
+    FfiConverterTypeDivisionResult,
     FfiConverterTypeInteger,
     FfiConverterTypeNumericsError,
     FfiConverterTypeOrdering,
