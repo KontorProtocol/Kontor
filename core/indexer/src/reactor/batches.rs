@@ -1008,7 +1008,7 @@ impl<E: Executor> Reactor<E> {
         let last_hash = self.last_hash.unwrap_or(BlockHash::all_zeros());
 
         let past_deadline = match &self.consensus.pending_proposal {
-            Some(p) => Instant::now() >= p.hard_deadline(),
+            Some(p) => Instant::now() >= p.hard_deadline,
             None => return Ok(false),
         };
 
@@ -1849,18 +1849,14 @@ impl<E: Executor> Reactor<E> {
                 .send(proposal)
                 .map_err(|_| anyhow::anyhow!("Failed to send GetValue reply"))?;
         } else {
-            // Hold the reply; `try_fulfill_pending_proposal` owns every way of
-            // answering it — the block fast path, banked or freshly-validated
-            // candidates, and the deadline machinery. `past_deadline` is false
-            // by construction for a proposal created this instant, so this
-            // cannot propose a premature empty batch. (This used to duplicate
-            // that function's body, and the copies had already drifted.)
+            // Malachite's timer is already running when GetValue reaches us.
+            // Count from StartedRound so queueing cannot extend our wait past
+            // the engine's deadline; reserve the last 20% for dissemination.
             self.consensus.pending_proposal = Some(consensus_state::PendingProposal {
                 height,
                 round,
                 reply,
-                timeout,
-                created_at: Instant::now(),
+                hard_deadline: self.consensus.round_started_at + timeout * 4 / 5,
             });
             if !self.try_fulfill_pending_proposal().await? {
                 info!(%height, %round, "Nothing to propose yet, holding the reply");
