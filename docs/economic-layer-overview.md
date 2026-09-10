@@ -60,9 +60,38 @@ of 30. Existing commitments continue, but the operator cannot take on a new
 commitment until it can cover the resulting reservation total. The reservations
 are not reduced simply to match the smaller bond.
 
-This branch implements storage penalties and bounded terminal cleanup under this
-policy; it is not yet a merged implementation. See the
+Storage penalties and bounded terminal cleanup under this policy are on main
+through #552. See the
 [integration design](reactor-economic-integration.md#shared-bond-shortfall-policy-2026-09-08).
+
+### Storage reward accounting and issuance decision (2026-09-08)
+
+The accepted implementation direction is lazy accounting with claims available
+while a host remains in its file agreements. Joining or leaving changes future
+allocation; it is not required to receive payment. This concerns storage hosts,
+not the automatic validator ordering-reward credits already on main.
+
+Mint only the storage reward allocated to eligible recipients into STORAGE_POOL.
+The nominal share attributable to genesis dilution or other structurally
+unallocated shares stays unminted. This supersedes descriptions of minting the
+entire storage share when Step 5 activates. It retains the adoption ramp and
+changes realized inflation relative to full-share minting; the initial weight
+1000 remains subject to preproduction calibration. Claims transfer previously
+funded rewards and do not mint again.
+
+The user also accepted an immediate on-chain cutoff: when a penalty reduces a
+storer's bond to zero, future storage rewards stop. Earlier earned rewards remain
+claimable; bounded membership cleanup may finish later without extending reward
+eligibility. This does not add debt or forfeiture of unclaimed income. Fresh entry
+continues to require completion of cleanup.
+
+Implemented on `feat/storage-reward-accounting`: cached earning weights, exact
+allocated-only funding into filestorage escrow, signer-bound claims, immediate
+exhaustion cutoff, and bounded membership reweighting. See the
+[accounting design](design/storage-reward-accounting.md) for formulas and lifecycle
+checks, and the [investigation](design/storage-rewards-investigation.md) for sources.
+Genesis dilution and stopped slots stay unminted; survivors receive increased
+shares when cleanup removes a slot. Claims preserve fractions across re-entry.
 
 ## 1. The economy in one frame
 
@@ -94,7 +123,7 @@ The work splits into two phases on two settlement clocks:
 |---|---|---|
 | Settles | per Bitcoin block (`run_block_lifecycle`) | per batch event (confirm/expire/rollback, finality path) |
 | Secures | storage, consensus security, blockspace | the optimistic pre-confirmation promise |
-| Status | contracts in open PRs; reactor wiring pending (#442) | design-only (#443) |
+| Status | ordering rewards and storage penalties on main; storage rewards implemented on this branch; remaining integration in #442 | design-only (#443) |
 
 **The architectural spine of Phase 1:** the reactor invokes settlement at the
 block lifecycle boundary. Native contracts compute deterministic Decimal allocations
@@ -105,19 +134,22 @@ inside the same call that credits stakes. Phase 2 remains deferred.
 
 ## 2. Program structure & status (the map)
 
-The economic layer is a stacked series of **contract-only** PRs (each ships methods + lite
-tests, with reactor wiring deliberately deferred), an open **reactor-wiring** tracking
-issue, the **Phase 2 design**, and an **external calibration** model.
+The economic layer now has merged ordering rewards and storage penalties, this
+storage-reward replacement, an open integration umbrella (#442), the Phase 2
+design, and external calibration work. The older contract PR stack is being
+superseded as its behavior and reactor integration land together.
 
 | Piece | Where | State |
 |---|---|---|
 | Ordering emissions + ACTIVE stake compounding | `run_block_lifecycle`, token and staking | implemented; no validator-count cap; storage rewards/slashing remain separate |
+| Storage rewards + claims | `feat/storage-reward-accounting` | implemented; allocated-only issuance, immediate cutoff, bounded reweighting ([design](design/storage-reward-accounting.md)) |
+| Storage penalties + zero-bond cleanup | **on `main`** (#552) | done |
 | Storage audit (challenges) + validator processing | **on `main`** (`run_block_lifecycle`) | done |
 | Storage-deposit FLOOR model + gas escrow | **on `main`** | done — the live economic mechanism |
 | token: mint hardening + `Issuance` mainnet gate | **on `main`** (#437; gate merged) | done |
 | Signer-keyed storage memberships (identity decision, §7) | **on `main`** | done — obsoletes #452's node_id |
 | Creation-fee burn e2e | **on `main`** (#460) | done |
-| The six econ contract PRs (#439/#440/#441/#445/#452/#453) | **being closed** | formula & test mines for the re-derivation — do **not** rebase (they encode the broken spec's conservation bugs) |
+| Historical economic contract PRs | #439/#440/#452 closed; #441/#445/#453 open (2026-09-08) | Complete the storage-reward replacement before closing #441 as superseded; retain unresolved fees/deactivation in #442. #445 remains with congestion work; #453 must be re-derived against main. |
 | **Reactor wiring — minimal v1** | `reactor-economic-integration.md` (re-derived) + #442 (to be rescoped) | **the build target** |
 | Phase 2 ordering/bond economy (design) | `phase2-ordering-economy.md` (annotated: deferred) | design-only |
 | Determinism-simulation test suite (design) | `determinism-simulation-testing.md` | design-only |
@@ -136,8 +168,8 @@ incentive-aligned, settled every Bitcoin block.
 
 | Mechanism | Goal | Algorithm | PR |
 |---|---|---|---|
-| **Emissions** | Predictable inflation funds the system | Per block mint `ε = total_supply · μ₀ / B` (μ₀ ≈ 5%/yr, B = 52,560 blocks/yr). Split `storage = ε·(1−χ)`, `ordering = ε·χ` (χ ≈ 10%). Minted into **dedicated pool holders** (ORDERING_POOL; STORAGE_POOL from Step 5) — never CORE (the gas escrow `release()` sweeps), never via `issue_to` (a fresh mint). All payouts are transfers out of a pool. In v1 only χ·ε is minted (storage share computed, unminted, until the accumulator lands). | re-derive (was #439) |
-| **Storage rewards** | Pay nodes to replicate *valuable* data; resist spam/whale capture | Per file: `rank_f = files_ever + r_offset + 1`; weight `ω_f = log(size)/log(1+rank_f)`; collateral weight `k_f = (ω_f/Ω)·c_stake·ln(1 + (|F|+1)/F_scale)`. Current collateral uses the committed encoded size (`32·padded_len`) and freezes the weight/requirement at creation. Global `Ω` accumulates `ω_f` as files activate; `|F|` tracks active files. `distribute_storage_rewards`: split by `ω_f/Ω`, then equally among a file's active nodes; exact conservation via last-absorbs-remainder. **Per Decision 2 the yield is stake-proportional** (reward and collateral both scale with ω_f, so ROI is content-blind — accepted, stated honestly). **Deferred to Step 5 behind the O(1) accumulator** (`acc += pool/Ω` per block; snapshot at join/leave; lazy claims) — the naive per-block loop is O(files×nodes), the #489 chain-halt shape. | re-derive (was #441) |
+| **Emissions** | Predictable inflation funds the system | Schedule `ε = total_supply · μ₀ / B` and its ordering/storage shares from one supply snapshot. Mint ordering when recipients exist and only allocated storage entitlement, through dedicated pools into funded escrows. Claims transfer existing funds; structurally unallocated storage stays unminted. | ordering on main; storage implemented on this branch |
+| **Storage rewards** | Pay for replication, with the content-blind yield accepted in Decision 2 | Frozen per-file weight divided equally among membership slots, with genesis dilution. Cached per-host weights and one global accumulator permit lazy claims while serving. Exact fractions remain owned; bond exhaustion stops future earnings immediately. User joins/leaves settle that file; forced reweighting is bounded. See the [accounting design](design/storage-reward-accounting.md). | implemented on this branch; replaces #441 reward scanning |
 | **Storage slashing** | Bond storage commitments; punish proof failure | Per block the reactor will collect challenges that **expired without a valid proof** → prover is the signer (memberships are signer-keyed) → `slash(signer, λ_slash·k_f)`, saturating. Bad proof submissions return an error and leave challenges open; anyone may relay a valid proof. **100 % of the penalty is burned** — `distribute_slash` is deleted from this path (paying co-nodes for a peer's failure was a sabotage incentive, and its escrow paths had two conservation bugs). τ/bounty machinery is reserved for the deferred equivocation path. Zero-stake ⇒ terminal-state unwinding (Decision 4). | re-derive (was #440 + #452) |
 | **Node↔stake coupling** | Make slashing *resolvable* (a failed challenge must hit a real bond) | Memberships are **signer-keyed on main** (`(agreement_id, signer_id)`) — identity is structural (§7). Solvency at join is plain `Σ k_f ≤ stake` (λ_stake deleted, Decision 4). | on main: identity, bond admission, and retained collateral reservations (replaces #452) |
 | **Equivocation slashing** | Make double-signing irrational; pay for policing | `slash_equivocation(offender, publisher)`: **100% slash + eject**; `r_evid` (≈ 5%) paid to the evidence publisher's spendable balance **iff publisher ∉ signers** (else fully burned); remaining ≈ 95% burned. | re-derive (was #440) |

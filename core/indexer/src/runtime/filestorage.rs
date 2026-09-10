@@ -2,6 +2,10 @@ use crate::runtime::Runtime;
 use crate::testlib_exports::*;
 
 #[cfg(test)]
+mod reward_costs;
+#[cfg(test)]
+mod reward_tests;
+#[cfg(test)]
 pub(crate) mod settlement_tests;
 #[cfg(test)]
 mod tests;

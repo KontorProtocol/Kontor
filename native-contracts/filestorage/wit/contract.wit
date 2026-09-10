@@ -12,6 +12,10 @@ world root {
   // Output/Storage Types
   // ─────────────────────────────────────────────────────────────────
 
+  export accrue-storage-rewards: async func(ctx: borrow<core-context>) -> result<decimal, error>;
+  export claim-rewards: async func(ctx: borrow<proc-context>) -> result<decimal, error>;
+  export reward-balance: async func(ctx: borrow<view-context>, node-id: u64) -> result<decimal, error>;
+
   record node-info {
     node-id: u64,
     active: bool,

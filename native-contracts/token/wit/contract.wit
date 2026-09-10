@@ -35,6 +35,8 @@ world root {
   }
 
   export mint-emission: async func(ctx: borrow<core-context>, eligible: bool) -> result<emission, error>;
+  export storage-emission-budget: async func(ctx: borrow<view-context>) -> option<decimal>;
+  export allocate-storage-emission: async func(ctx: borrow<core-context>, dst: holder-ref, amt: decimal) -> result<decimal, error>;
   export transfer-ordering-reward: async func(ctx: borrow<core-context>, dst: holder-ref, amt: decimal) -> result<transfer, error>;
   export last-emission-height: async func(ctx: borrow<view-context>) -> option<u64>;
 
