@@ -57,43 +57,37 @@ Existing sorted indexes and resumable range cursors already provide deterministi
 bounded traversal. Existing nested-call savepoints already provide atomic credit
 and payout rollback. Neither needs a reward-specific replacement.
 
-## General storage features worth investigating next
+## Scalar numeric storage
 
-Tracing the generated models reveals a more fundamental issue than whole-record
-access: **Integer and Decimal are themselves stored as composite records**. Their
-`Retrieve` implementations in `core/built-in-types/src/impls/numbers.rs` check
-existence and load a generated model. That model reads four u64 limbs and locates
-the sign variant. Their derived `Store` writes four limbs and replaces the sign
-variant using a matching-path deletion plus a void write.
+The original #554 layout stored Integer and Decimal as composite records. A read
+checked existence, loaded four limbs and located a sign variant; a write stored
+four limbs and replaced the sign variant. That meant six storage host operations
+in each direction for one number, and 24 for a four-number reward account, before
+parent-container bookkeeping. Contracts saw ordinary numeric fields while their
+native types performed this representation work.
 
-For a populated numeric value, that is six storage host operations to read and
-six to write. Materializing/replacing the four-Integer reward account therefore
-expands to 24 such operations in each direction, before container bookkeeping.
-Backing database queries can differ because of caching. The contract sees four
-ordinary fields; the extra representation work is hidden inside its native types.
+The separate [scalar-storage change](scalar-numeric-storage.md) replaces that with
+one value at one ordinary versioned path, implemented by shared Store/Retrieve
+support. Token balances, staking and rewards all benefit. All numeric persistence delegates to the same ordered codec, with canonical zero.
+Equality-index buckets adopt that codec in place of string conversion; map keys
+and sort/covering encodings keep their existing format. Tests cover full-range values, indexed
+setters and covering projections, deposits/metering, deletion, savepoints and
+block-height rollback. The layout change requires fresh state/replay with rebuilt
+contracts; it is not an in-place migration.
 
-The most concrete next language improvement is **native scalar storage for
-Integer and Decimal**: one encoded value at one versioned path, handled by shared
-type/storage support. Contracts should not pack numbers into byte arrays themselves.
-This could benefit token balances, staking and other contracts as well as rewards.
-It needs a separate storage change with tests for numeric round trips, generated
-indexes, deposits/metering, deletion, and rollback/replay. It changes all stored
-numeric layouts, not just this PR's new account records.
+The opt-in `reward_costs_across_membership_and_file_counts` test measures host
+calls, host fuel and elapsed time for claims, joins/leaves and complete cleanup.
+See [measurements](storage-reward-costs.md) for the comparison and its limits.
 
-After that, bulk-record reads/writes or opt-in packed records could reduce
-crossings further when fields are always accessed together. Current generated
-`load()` and `Store` visit every field individually. Field setters already avoid
-rewriting unrelated fields; complete account transitions instead write their final
-state once.
+## Further storage possibilities
 
-This reward PR retains the existing numeric storage layout. The opt-in
-`reward_costs_across_membership_and_file_counts` test measures host calls, host fuel,
-and elapsed time for claims, file joins/leaves, and complete cleanup at increasing
-membership and file counts. See [measurements](storage-reward-costs.md). Storage
-payload/deposit measurements belong with the separate scalar-storage change. A packed record also makes individual field access less
-convenient; bulk operations may better support mixed access patterns. Neither
-should bypass generated index maintenance, storage deposits, metering, nested-call
-rollback, or versioned deletion/replay with opaque contract blobs or native SQL.
+Bulk-record reads/writes or opt-in packed records could reduce crossings further
+when fields are always accessed together. Generated `load()` and `Store` still
+visit fields individually. Field setters avoid rewriting unrelated fields;
+complete account transitions instead write final state once. A packed record
+also makes individual field access less convenient, so further work should follow
+measurements rather than adding a new framework speculatively. None of these
+facilities should bypass generated indexes, deposits, metering or rollback.
 
 The reward reweighting algorithm remains an independent design tradeoff: one job
 serializes forced cleanup, and normal joins/leaves update the affected file's

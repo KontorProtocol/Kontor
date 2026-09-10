@@ -402,7 +402,6 @@ pub fn generate(config: Config) -> TokenStream {
         // scope even in contracts that don't glob-import stdlib.
         #[allow(unused_imports)]
         use stdlib::HasRootModel as _;
-        use built_in_types::numbers_types::{IntegerModel, IntegerWriteModel, DecimalModel, DecimalWriteModel};
         use built_in_types::context_types::{ContractAddressModel, ContractAddressWriteModel};
 
         type Map<K, V> = stdlib::StorageMap<K, V, context::ProcStorage>;

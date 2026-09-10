@@ -25,25 +25,31 @@ wit_bindgen::generate!({
     path: "wit",
     generate_all,
     generate_unused_types: true,
-    additional_derives: [stdlib::Wavey, stdlib::Storage],
+    // Numeric records are scalar storage values; only compound types derive models.
+    additional_derives: [stdlib::Wavey],
     additional_type_attributes: {
         "kontor:built-in/context-types/out-point": [
+            #[derive(stdlib::Storage)]
             #[cfg_attr(feature = "host", derive(wasmtime::component::ComponentType, wasmtime::component::Lift, wasmtime::component::Lower, serde::Deserialize))]
             #[cfg_attr(feature = "host", component(record))]
         ],
         "kontor:built-in/context-types/contract-address": [
+            #[derive(stdlib::Storage)]
             #[cfg_attr(feature = "host", derive(wasmtime::component::ComponentType, wasmtime::component::Lift, wasmtime::component::Lower, serde::Deserialize))]
             #[cfg_attr(feature = "host", component(record))]
         ],
         "kontor:built-in/context-types/holder-ref": [
+            #[derive(stdlib::Storage)]
             #[cfg_attr(feature = "host", derive(wasmtime::component::ComponentType, wasmtime::component::Lift, wasmtime::component::Lower, serde::Deserialize))]
             #[cfg_attr(feature = "host", component(variant))]
         ],
         "kontor:built-in/context-types/signer-ref": [
+            #[derive(stdlib::Storage)]
             #[cfg_attr(feature = "host", derive(wasmtime::component::ComponentType, wasmtime::component::Lift, wasmtime::component::Lower, serde::Deserialize))]
             #[cfg_attr(feature = "host", component(variant))]
         ],
         "kontor:built-in/context-types/network": [
+            #[derive(stdlib::Storage)]
             #[cfg_attr(feature = "host", derive(wasmtime::component::ComponentType, wasmtime::component::Lift, wasmtime::component::Lower, serde::Deserialize))]
             #[cfg_attr(feature = "host", component(enum))]
         ],
@@ -56,26 +62,32 @@ wit_bindgen::generate!({
             #[cfg_attr(feature = "host", component(record))]
         ],
         "kontor:built-in/numbers-types/sign": [
+            #[derive(stdlib::Storage)]
             #[cfg_attr(feature = "host", derive(wasmtime::component::ComponentType, wasmtime::component::Lift, wasmtime::component::Lower, serde::Deserialize))]
             #[cfg_attr(feature = "host", component(enum))]
         ],
         "kontor:built-in/numbers-types/ordering": [
+            #[derive(stdlib::Storage)]
             #[cfg_attr(feature = "host", derive(wasmtime::component::ComponentType, wasmtime::component::Lift, wasmtime::component::Lower, serde::Deserialize))]
             #[cfg_attr(feature = "host", component(enum))]
         ],
         "kontor:built-in/error/error": [
+            #[derive(stdlib::Storage)]
             #[cfg_attr(feature = "host", derive(wasmtime::component::ComponentType, wasmtime::component::Lift, wasmtime::component::Lower, serde::Deserialize))]
             #[cfg_attr(feature = "host", component(variant))]
         ],
         "kontor:built-in/file-registry-types/raw-file-descriptor": [
+            #[derive(stdlib::Storage)]
             #[cfg_attr(feature = "host", derive(wasmtime::component::ComponentType, wasmtime::component::Lift, wasmtime::component::Lower, serde::Deserialize))]
             #[cfg_attr(feature = "host", component(record))]
         ],
         "kontor:built-in/file-registry-types/challenge-input": [
+            #[derive(stdlib::Storage)]
             #[cfg_attr(feature = "host", derive(wasmtime::component::ComponentType, wasmtime::component::Lift, wasmtime::component::Lower, serde::Deserialize))]
             #[cfg_attr(feature = "host", component(record))]
         ],
         "kontor:built-in/file-registry-types/verify-result": [
+            #[derive(stdlib::Storage)]
             #[cfg_attr(feature = "host", derive(wasmtime::component::ComponentType, wasmtime::component::Lift, wasmtime::component::Lower, serde::Deserialize))]
             #[cfg_attr(feature = "host", component(enum))]
         ],

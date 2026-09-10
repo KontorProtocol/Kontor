@@ -72,11 +72,42 @@ Computing the final state first reduced claim Set calls from 70 to 65 and a
 leave fell about 45%. Those operation counts substantiate the improvement without
 relying on timing noise. In these runs, that leave fell from 934 ms to 643 ms.
 
-## Next boundary
+## Scalar numeric storage comparison
 
-Scalar Integer/Decimal storage remains a separate, reusable change. Each number
-currently reads/writes limbs and a sign through several host operations. Replacing
-that representation with one ordinary versioned storage value should reduce the
-cost of every numeric contract field. It must preserve index maintenance,
-rollback, deletion, metering and deposits. This is preferable to packing reward
-accounts in contract code or moving economic policy into the runtime.
+The separate [scalar-storage change](scalar-numeric-storage.md) was measured with
+the same six scenarios and harness, after the full workspace test run completed.
+The scalar results below use the final shared numeric codec for values and indexes.
+These remain single instrumented local runs; the counts are more robust evidence
+than wall-clock comparisons. Host fuel includes deposits and the procedure's
+ordinary fee-handling calls, and does not mean total operation fuel.
+
+| Members | Files | Operation | Before (ms) | Scalar (ms) | Before Set/Get | Scalar Set/Get | Host fuel before → scalar |
+| ---: | ---: | --- | ---: | ---: | --- | --- | --- |
+| 3 | 1 | accrue | 8.78 | 6.91 | 32/33 | 8/9 | 26,175 → 16,635 |
+| 3 | 1 | claim | 16.48 | 12.73 | 65/60 | 13/15 | 269,765 → 190,025 |
+| 3 | 1 | leave | 29.32 | 20.29 | 126/131 | 34/41 | 1,179,810 → 896,980 |
+| 3 | 1 | join | 31.91 | 19.89 | 133/138 | 37/45 | 1,293,940 → 986,790 |
+| 128 | 1 | accrue | 8.61 | 3.98 | 32/33 | 8/9 | 26,295 → 16,655 |
+| 128 | 1 | claim | 16.54 | 7.28 | 65/60 | 13/15 | 268,855 → 190,025 |
+| 128 | 1 | leave | 642.51 | 149.49 | 3251/3131 | 659/791 | 36,386,215 → 26,278,885 |
+| 128 | 1 | join | 659.94 | 157.61 | 3258/3138 | 662/795 | 36,688,385 → 26,370,705 |
+| 3 | 64 | accrue | 8.63 | 4.07 | 32/33 | 8/9 | 26,255 → 16,675 |
+| 3 | 64 | claim | 16.31 | 7.21 | 65/60 | 13/15 | 270,875 → 190,065 |
+| 3 | 64 | leave | 29.34 | 11.71 | 131/131 | 35/41 | 1,241,930 → 934,760 |
+| 3 | 64 | join | 31.04 | 12.58 | 133/142 | 37/46 | 1,300,840 → 987,130 |
+
+| Members | Files | Cleanup calls | Total before (ms) | Total scalar (ms) | Slowest scalar call (ms) |
+| ---: | ---: | ---: | ---: | ---: | ---: |
+| 3 | 1 | 1 | 39.81 | 39.02 | 39.02 |
+| 9 | 1 | 1 | 111.64 | 45.07 | 45.07 |
+| 32 | 1 | 3 | 326.12 | 139.62 | 67.57 |
+| 128 | 1 | 9 | 1192.62 | 396.73 | 58.06 |
+| 3 | 16 | 1 | 352.45 | 136.25 | 136.25 |
+| 3 | 64 | 3 | 1343.47 | 508.35 | 259.01 |
+
+The storage facility lowers the cost while preserving the reward algorithm:
+accrual/claims retain constant operation counts, membership changes still visit
+the file's members, and cleanup uses the same number of bounded calls. No
+membership cap, per-block host payout scan, packed reward record or
+reward-specific runtime path was added. Further bulk-record facilities should be
+justified by profiling rather than assumed necessary.
