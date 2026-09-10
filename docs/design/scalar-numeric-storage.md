@@ -51,3 +51,10 @@ metering/deposit metadata, and checks the footprint cache after rollback.
 Codec unit tests also pin signed-zero preservation and rejection of malformed
 payloads. The reward benchmark provides an end-to-end comparison on the combined
 reward and scalar-storage branches.
+
+On 2026-09-10 the full release workspace suite with `REGTEST=1` passed 770 tests
+with three ignored, including 482 indexer library and 121 integration tests.
+The separate opt-in reward benchmark passed all six scenarios in 19.86 seconds;
+its [comparison](storage-reward-costs.md#scalar-numeric-storage-comparison) records
+operation counts and timing limits. Both contract sets were rebuilt with the
+repository's pinned image.
