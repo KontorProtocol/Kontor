@@ -1,3 +1,5 @@
+use std::time::Instant;
+
 use anyhow::{Context, Result};
 use malachitebft_app_channel::app::streaming::StreamMessage;
 use malachitebft_app_channel::app::types::codec::Codec;
@@ -34,6 +36,7 @@ impl<E: Executor> Reactor<E> {
         info!(%height, %round, %proposer, ?role, "Started round");
         self.consensus.current_height = height;
         self.consensus.current_round = round;
+        self.consensus.round_started_at = Instant::now();
         // Authoritative proposer for this round, straight from the engine. Proposal
         // parts are authenticated against THIS, never a `select_proposer`
         // recomputation (the validator set is refreshed per block and unordered).

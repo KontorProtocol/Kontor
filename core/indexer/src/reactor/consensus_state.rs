@@ -1,8 +1,6 @@
 use std::collections::{BTreeMap, HashMap, VecDeque};
 use std::time::Instant;
 
-use std::time::Duration;
-
 use anyhow::{Context, Result};
 use bitcoin::Txid;
 use bitcoin::hashes::Hash;
@@ -98,16 +96,7 @@ pub struct PendingProposal {
     pub height: Height,
     pub round: Round,
     pub reply: tokio::sync::oneshot::Sender<LocallyProposedValue<Ctx>>,
-    pub timeout: Duration,
-    pub created_at: Instant,
-}
-
-impl PendingProposal {
-    /// Deadline at which we must propose (even an empty batch) before
-    /// Malachite's propose timeout fires. Uses 80% of the propose timeout.
-    pub fn hard_deadline(&self) -> Instant {
-        self.created_at + self.timeout * 4 / 5
-    }
+    pub hard_deadline: Instant,
 }
 
 /// All consensus-related state for the reactor.
@@ -121,6 +110,7 @@ pub struct ConsensusState {
     pub mempool_fee_index: MempoolFeeIndex,
     pub current_height: Height,
     pub current_round: Round,
+    pub round_started_at: Instant,
     // The round's proposer, exactly as the engine chose it in StartedRound. Used
     // to authenticate proposal parts. It MUST come from the engine, not be
     // recomputed via `select_proposer`: the validator set is refreshed on every
@@ -632,6 +622,7 @@ impl ConsensusState {
             mempool_fee_index,
             current_height,
             current_round: Round::new(0),
+            round_started_at: Instant::now(),
             current_proposer: None,
             part_streams: PartStreamsMap::new(),
             undecided: BTreeMap::new(),

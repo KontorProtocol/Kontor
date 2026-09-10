@@ -13,6 +13,8 @@ pub mod mock_bitcoin;
 #[cfg(test)]
 mod reactor_cluster_tests;
 #[cfg(test)]
+mod startup_tests;
+#[cfg(test)]
 mod storage_penalty_tests;
 pub mod types;
 
@@ -431,7 +433,7 @@ impl<E: Executor> Reactor<E> {
             gauge!(DEFERRED_DECISIONS).set(self.consensus.deferred_decisions.len() as f64);
 
             let hard_deadline_instant = self.consensus.pending_proposal.as_ref().map(|p| {
-                let deadline = p.hard_deadline();
+                let deadline = p.hard_deadline;
                 let remaining = deadline.saturating_duration_since(Instant::now());
                 tokio::time::Instant::now() + remaining
             });

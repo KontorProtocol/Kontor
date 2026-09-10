@@ -9,13 +9,14 @@ use crate::stopper::{Shutdown, ShutdownSignal};
 use anyhow::Result;
 use tokio::sync::{broadcast, mpsc, oneshot, watch};
 use tokio::task::JoinSet;
-use tracing::info;
+use tracing::{Instrument, info, info_span};
 
 use crate::bitcoin_follower::event::{BlockEvent, MempoolEvent};
 use crate::consensus::finality_types::{DecidedBatch, FinalityEvent, StateEvent};
 use crate::consensus::signing::PrivateKey;
 use crate::consensus::{Genesis, Validator, ValidatorSet};
 use crate::keygen;
+use crate::logging;
 use crate::reactor::consensus_state::{ConsensusState, ObservationChannels};
 use crate::reactor::engine::{self, EngineConfig};
 use crate::reactor::lite_executor::{LiteExecutor, shared_engine_and_cache};
@@ -138,6 +139,7 @@ impl ReactorCluster {
         initial: usize,
         validation_delay: Option<Duration>,
     ) -> Result<Self> {
+        logging::setup();
         // Same derivation path operators run in production via `kontor keygen`
         // — fixed master seed gives reproducible test runs.
         const TEST_MASTER_SEED: [u8; 32] = [0x42u8; 32];
@@ -446,7 +448,8 @@ impl ReactorCluster {
     ) {
         let genesis = genesis.clone();
         let genesis_vals = genesis_validators.to_vec();
-        join_set.spawn(async move {
+        let span = info_span!("cluster", id = %pubkey, node = i);
+        let node = async move {
             let (mut executor, runtime) = if first_boot {
                 LiteExecutor::new(
                     &data_dir,
@@ -570,7 +573,8 @@ impl ReactorCluster {
                 tracing::error!(node = i, e = %msg, "Reactor error");
                 reactor_errors.lock().unwrap().push((i, msg));
             }
-        });
+        };
+        join_set.spawn(node.instrument(span));
     }
 
     async fn add_node(&mut self) -> Result<usize> {
@@ -660,8 +664,9 @@ impl ReactorCluster {
         .await;
         assert!(
             barrier.is_ok(),
-            "consensus readiness barrier timed out: only {}/{target} nodes decided height 1",
-            decided.len()
+            "consensus readiness barrier timed out: only {}/{target} nodes decided height 1 (cluster {})",
+            decided.len(),
+            self.shared_pubkey
         );
     }
 
