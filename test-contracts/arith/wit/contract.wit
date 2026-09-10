@@ -29,5 +29,10 @@ world root {
 
   export checked-sub: async func(ctx: borrow<view-context>, x: string, y: string) -> result<u64, error>;
 
+  export mul-add-div-rem: async func(ctx: borrow<view-context>, a: string, b: string, carry: string, divisor: string) -> result<list<string>, error>;
+
+  export integer-ops: async func(ctx: borrow<view-context>, a: string, b: string) -> result<list<string>, error>;
+  export decimal-units: async func(ctx: borrow<view-context>, value: string) -> list<string>;
+
   export fib: async func(ctx: borrow<proc-context>, contract-address: contract-address, n: u64) -> u64;
 }

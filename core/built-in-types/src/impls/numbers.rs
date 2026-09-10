@@ -6,7 +6,9 @@
 
 use alloc::string::String;
 
+use crate::error::Error;
 use crate::kontor;
+use crate::numbers_types::{Decimal, Integer, Sign};
 
 /// The arithmetic backend: identical signatures on both targets.
 mod backend {
@@ -135,6 +137,17 @@ mod backend {
         bin!(mul_decimal, Decimal, mul_decimal);
         bin!(div_decimal, Decimal, div_decimal);
 
+        pub fn mul_add_div_rem_integer(
+            a: Integer,
+            b: Integer,
+            carry: Integer,
+            divisor: Integer,
+        ) -> Result<(Integer, Integer), Error> {
+            core_numerics::mul_add_div_rem_integer(a.into(), b.into(), carry.into(), divisor.into())
+                .map(|(quotient, remainder)| (quotient.into(), remainder.into()))
+                .map_err(Into::into)
+        }
+
         pub fn sqrt_integer(i: Integer) -> Result<Integer, Error> {
             core_numerics::sqrt_integer(i.into())
                 .map(Into::into)
@@ -145,14 +158,6 @@ mod backend {
             core_numerics::log10_decimal(d.into())
                 .map(Into::into)
                 .map_err(Into::into)
-        }
-
-        pub fn u64_to_integer(i: u64) -> Integer {
-            core_numerics::u64_to_integer(i).into()
-        }
-
-        pub fn s64_to_integer(i: i64) -> Integer {
-            core_numerics::s64_to_integer(i).into()
         }
 
         pub fn string_to_integer(s: &str) -> Result<Integer, Error> {
@@ -290,11 +295,61 @@ impl From<core::char::ParseCharError> for kontor::built_in::error::Error {
     }
 }
 
-impl kontor::built_in::numbers_types::Integer {
+impl Integer {
+    /// Builds an exact constant without parsing or calling the arithmetic host.
+    pub const fn from_u128(value: u128) -> Self {
+        Self {
+            r0: value as u64,
+            r1: (value >> 64) as u64,
+            r2: 0,
+            r3: 0,
+            sign: Sign::Plus,
+        }
+    }
+
+    /// Floor and remainder of `(self * multiplier + carry) / divisor` without
+    /// overflowing the intermediate product. Inputs must be nonnegative and the
+    /// divisor positive. The quotient must fit Integer; the remainder is less
+    /// than the divisor and retains the exact fractional part of the division.
+    pub fn checked_mul_add_div_rem(
+        self,
+        multiplier: Self,
+        carry: Self,
+        divisor: Self,
+    ) -> Result<(Self, Self), Error> {
+        backend::mul_add_div_rem_integer(self, multiplier, carry, divisor)
+    }
+
     pub fn sqrt(
         &self,
     ) -> Result<kontor::built_in::numbers_types::Integer, kontor::built_in::error::Error> {
         backend::sqrt_integer(*self)
+    }
+}
+
+impl Decimal {
+    /// Exact signed count of 10^-18 units; unlike conversion to Integer, this
+    /// preserves the fractional digits (1.25 becomes 1_250_000_000_000_000_000).
+    pub const fn to_raw_units(self) -> Integer {
+        Integer {
+            r0: self.r0,
+            r1: self.r1,
+            r2: self.r2,
+            r3: self.r3,
+            sign: self.sign,
+        }
+    }
+
+    /// Inverse of `to_raw_units`; no scaling, rounding, or arithmetic host call.
+    /// Every Integer magnitude fits the Decimal coefficient representation.
+    pub const fn from_raw_units(units: Integer) -> Self {
+        Self {
+            r0: units.r0,
+            r1: units.r1,
+            r2: units.r2,
+            r3: units.r3,
+            sign: units.sign,
+        }
     }
 }
 
@@ -411,7 +466,7 @@ impl Eq for kontor::built_in::numbers_types::Integer {}
 
 impl From<u64> for kontor::built_in::numbers_types::Integer {
     fn from(i: u64) -> Self {
-        backend::u64_to_integer(i)
+        Self::from_u128(i.into())
     }
 }
 
@@ -423,7 +478,10 @@ impl From<u32> for kontor::built_in::numbers_types::Integer {
 
 impl From<i64> for kontor::built_in::numbers_types::Integer {
     fn from(i: i64) -> Self {
-        backend::s64_to_integer(i)
+        Self {
+            sign: if i < 0 { Sign::Minus } else { Sign::Plus },
+            ..Self::from_u128(i.unsigned_abs().into())
+        }
     }
 }
 

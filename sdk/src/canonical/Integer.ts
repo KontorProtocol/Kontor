@@ -1,5 +1,5 @@
 /**
- * 256-bit signed arbitrary-precision integer. Same semantics as
+ * Integer with a 256-bit magnitude and a separate sign. Same semantics as
  * Kontor's on-chain `integer` type — every operation delegates to the
  * shared `numerics` crate via the WASM Component, so SDK arithmetic
  * and chain arithmetic are byte-for-byte identical.
@@ -82,6 +82,26 @@ export class Integer {
 
   div(other: Integer): Integer {
     return new Integer(numerics.divInteger(this.inner, other.inner));
+  }
+
+  /** Exact (this × multiplier + carry) ÷ divisor, allowing a wide intermediate.
+   * Inputs must be nonnegative, the divisor positive, and the quotient fit Integer.
+   */
+  checkedMulAddDivRem(
+    multiplier: Integer,
+    carry: Integer,
+    divisor: Integer,
+  ): { quotient: Integer; remainder: Integer } {
+    const [quotient, remainder] = numerics.mulAddDivRemInteger(
+      this.inner,
+      multiplier.inner,
+      carry.inner,
+      divisor.inner,
+    );
+    return {
+      quotient: new Integer(quotient),
+      remainder: new Integer(remainder),
+    };
   }
 
   sqrt(): Integer {

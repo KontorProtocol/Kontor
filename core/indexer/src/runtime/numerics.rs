@@ -73,6 +73,17 @@ pub fn sqrt_integer(i: Integer) -> Result<Integer, Error> {
         .map_err(Into::into)
 }
 
+pub fn mul_add_div_rem_integer(
+    a: Integer,
+    b: Integer,
+    carry: Integer,
+    divisor: Integer,
+) -> Result<(Integer, Integer), Error> {
+    core_numerics::mul_add_div_rem_integer(a.into(), b.into(), carry.into(), divisor.into())
+        .map(|(quotient, remainder)| (quotient.into(), remainder.into()))
+        .map_err(Into::into)
+}
+
 pub fn integer_to_decimal(i: Integer) -> Result<Decimal, Error> {
     core_numerics::integer_to_decimal(i.into())
         .map(Into::into)
@@ -155,8 +166,111 @@ pub fn log10_decimal(a: Decimal) -> Result<Decimal, Error> {
 mod tests {
     use std::panic::catch_unwind;
 
+    use anyhow::Result as TestResult;
+
     use super::*;
-    use crate::runtime::CheckedArithmetics;
+    use crate::runtime::{CheckedArithmetics, ContractAddress, TransactionContext, from_wave_expr};
+    use crate::test_utils::test_runtime;
+
+    #[tokio::test]
+    async fn reward_arithmetic_through_contract_host() -> TestResult<()> {
+        let (mut runtime, _dir, _name) = test_runtime().await?;
+        runtime
+            .set_context(1, Some(TransactionContext::builder().build()), None, None)
+            .await;
+        runtime
+            .storage
+            .insert_contract(
+                "arith",
+                include_bytes!("../../../../test-contracts/binaries/arith.wasm.br"),
+            )
+            .await?;
+        let address = ContractAddress {
+            name: "arith".into(),
+            height: 1,
+            tx_index: 0,
+        };
+        let max = "115792089237316195423570985008687907853269984665640564039457584007913129639935";
+        for (a, b, carry, divisor, expected) in [
+            ("10", "2", "1", "3", ("7", "0")),
+            ("1", "1", "0", "3", ("0", "1")),
+            (max, max, "1", max, (max, "1")),
+        ] {
+            let value = runtime
+                .execute(
+                    None,
+                    None,
+                    &address,
+                    &format!("mul-add-div-rem(\"{a}\", \"{b}\", \"{carry}\", \"{divisor}\")"),
+                )
+                .await?;
+            let actual = from_wave_expr::<Result<Vec<String>, Error>>(&value)?;
+            assert_eq!(actual, vec![expected.0.to_string(), expected.1.to_string()]);
+            let native = Integer::from(a).checked_mul_add_div_rem(
+                Integer::from(b),
+                Integer::from(carry),
+                Integer::from(divisor),
+            )?;
+            assert_eq!(actual, vec![native.0.to_string(), native.1.to_string()]);
+        }
+        for a in [max.to_string(), format!("-{max}")] {
+            let value = runtime
+                .execute(
+                    None,
+                    None,
+                    &address,
+                    &format!("integer-ops(\"{a}\", \"0\")"),
+                )
+                .await?;
+            assert_eq!(
+                from_wave_expr::<Result<Vec<String>, Error>>(&value)?,
+                vec![a.clone(), a, "0".into()]
+            );
+        }
+        let value = runtime
+            .execute(None, None, &address, "decimal-units(\"-1.25\")")
+            .await?;
+        assert_eq!(
+            from_wave_expr::<Vec<String>>(&value),
+            vec!["-1250000000000000000", "-1.25", "1"]
+        );
+        let value = runtime
+            .execute(
+                None,
+                None,
+                &address,
+                &format!("integer-ops(\"{max}\", \"1\")"),
+            )
+            .await?;
+        assert!(matches!(
+            from_wave_expr::<Result<Vec<String>, Error>>(&value),
+            Err(Error::Overflow(_))
+        ));
+        for (expr, expected) in [
+            (
+                "mul-add-div-rem(\"1\", \"1\", \"0\", \"0\")".to_string(),
+                "zero",
+            ),
+            (
+                "mul-add-div-rem(\"-1\", \"1\", \"0\", \"1\")".to_string(),
+                "negative",
+            ),
+            (
+                format!("mul-add-div-rem(\"{max}\", \"{max}\", \"0\", \"1\")"),
+                "overflow",
+            ),
+        ] {
+            let value = runtime.execute(None, None, &address, &expr).await?;
+            let error = from_wave_expr::<Result<Vec<String>, Error>>(&value).unwrap_err();
+            assert!(matches!(
+                (expected, error),
+                ("zero", Error::DivByZero(_))
+                    | ("negative", Error::Validation(_))
+                    | ("overflow", Error::Overflow(_))
+            ));
+        }
+        Ok(())
+    }
 
     #[test]
     fn test_numerics() {
@@ -267,44 +381,37 @@ mod tests {
 
     #[test]
     fn test_numerics_limits() {
+        let decimal_whole_limit = "115792089237316195423570985008687907853269984665640564039457";
         let max_int =
-            "115_792_089_237_316_195_423_570_985_008_687_907_853_269_984_665_640_564_039_457";
-        let min_int =
-            "-115_792_089_237_316_195_423_570_985_008_687_907_853_269_984_665_640_564_039_457";
+            "115792089237316195423570985008687907853269984665640564039457584007913129639935";
         let oversized_int =
-            "115_792_089_237_316_195_423_570_985_008_687_907_853_269_984_665_640_564_039_458";
-        let oversized_dec =
-            "115_792_089_237_316_195_423_570_985_008_687_907_853_269_984_665_640_564_039_457.585";
-
+            "115792089237316195423570985008687907853269984665640564039457584007913129639936";
         assert_eq!(
-            Decimal::try_from(Integer::from(max_int)).unwrap(),
-            Decimal::from(max_int)
+            Decimal::try_from(Integer::from(decimal_whole_limit)).unwrap(),
+            Decimal::from(decimal_whole_limit)
         );
-        assert_eq!(
-            Decimal::try_from(Integer::from(min_int)).unwrap(),
-            Decimal::from(min_int)
-        );
+        assert!(Decimal::try_from(Integer::from(decimal_whole_limit) + Integer::from(1)).is_err());
+        let max = Integer::from(max_int);
+        assert!(Decimal::try_from(max).is_err());
         assert!(catch_unwind(|| Integer::from(oversized_int)).is_err());
-        assert!(catch_unwind(|| Decimal::from(oversized_dec)).is_err());
-        assert!(add_integer(Integer::from(max_int), Integer::from(1)).is_err());
-        assert_eq!(
-            add_integer(Integer::from(max_int), Integer::from(-1)).unwrap(),
-            Integer::from(
-                "115_792_089_237_316_195_423_570_985_008_687_907_853_269_984_665_640_564_039_456"
-            ),
+        assert!(
+            catch_unwind(|| Decimal::from(
+                "115792089237316195423570985008687907853269984665640564039457.585"
+            ))
+            .is_err()
         );
-        assert!(sub_integer(Integer::from(max_int), Integer::from(-1)).is_err());
+        assert!(add_integer(max, Integer::from(1)).is_err());
+        assert!(sub_integer(max, Integer::from(-1)).is_err());
+        assert!(mul_integer(max, Integer::from(2)).is_err());
         assert_eq!(
-            sub_integer(Integer::from(max_int), Integer::from(1)).unwrap(),
-            Integer::from(
-                "115_792_089_237_316_195_423_570_985_008_687_907_853_269_984_665_640_564_039_456"
-            ),
+            add_integer(
+                sub_integer(max, Integer::from(1)).unwrap(),
+                Integer::from(1)
+            )
+            .unwrap(),
+            max
         );
-        assert!(mul_integer(Integer::from(max_int), Integer::from(2)).is_err());
-        assert_eq!(
-            mul_integer(Integer::from(max_int), Integer::from(1)).unwrap(),
-            Integer::from(max_int)
-        );
+        assert_eq!(mul_integer(max, Integer::from(1)).unwrap(), max);
     }
 
     #[test]

@@ -3,14 +3,13 @@
 //! and `@kontor/sdk` (which re-exports these through its WASM Component
 //! for use by TS dapps).
 //!
-//! Both Integer and Decimal are 256-bit signed values represented as
+//! Both Integer and Decimal have a 256-bit magnitude and a separate sign, represented as
 //! four `u64` limbs plus a sign. Decimal carries 18 fractional digits
 //! (scale = 10^18). The implementation delegates to `fastnum::D256`
 //! for decimal arithmetic and `num::BigInt` for unbounded-integer
 //! arithmetic; the limb-based shape exists for the WIT wire format.
 
 use core::cmp::Ordering as CoreOrdering;
-use std::sync::LazyLock;
 
 use fastnum::{
     D256, U256,
@@ -18,19 +17,12 @@ use fastnum::{
     dec256,
     decimal::{self, Context, SignalsTraps},
 };
-use num::{BigInt, bigint::Sign as BigSign};
+use num::{BigInt, Integer as NumInteger, bigint::Sign as BigSign};
 
 /// Decimal scale (18 fractional digits, i.e. 10^18).
 const DECIMAL_18_DECS: D256 = dec256!(1_000_000_000_000_000_000);
 const MIN_DECIMAL: D256 = dec256!(0.000_000_000_000_000_001);
 const MAX_UINT64: D256 = dec256!(18446744073709551615);
-
-/// Largest representable Integer/Decimal magnitude: 2^256 - 1.
-static MAX_INT: LazyLock<BigInt> = LazyLock::new(|| {
-    "115_792_089_237_316_195_423_570_985_008_687_907_853_269_984_665_640_564_039_457"
-        .parse::<BigInt>()
-        .unwrap()
-});
 
 const CTX: Context = Context::default().with_signal_traps(SignalsTraps::empty());
 
@@ -193,10 +185,6 @@ pub fn string_to_integer(s: &str) -> Result<Integer, Error> {
         Ok(i) => i,
         Err(e) => return Err(Error::Syntax(e.to_string())),
     };
-    let max_int = MAX_INT.clone();
-    if i > max_int || i < -max_int {
-        return Err(Error::Overflow("result overflows Integer".to_string()));
-    }
     i.try_into()
 }
 
@@ -222,35 +210,23 @@ pub fn cmp_integer(a: Integer, b: Integer) -> Ordering {
 }
 
 pub fn add_integer(a: Integer, b: Integer) -> Result<Integer, Error> {
-    let max_int = MAX_INT.clone();
     let big_a: BigInt = a.into();
     let big_b: BigInt = b.into();
     let res = big_a + big_b;
-    if res > max_int || res < -max_int {
-        return Err(Error::Overflow("result overflows Integer".to_string()));
-    }
     res.try_into()
 }
 
 pub fn sub_integer(a: Integer, b: Integer) -> Result<Integer, Error> {
-    let max_int = MAX_INT.clone();
     let big_a: BigInt = a.into();
     let big_b: BigInt = b.into();
     let res = big_a - big_b;
-    if res > max_int || res < -max_int {
-        return Err(Error::Overflow("result overflows Integer".to_string()));
-    }
     res.try_into()
 }
 
 pub fn mul_integer(a: Integer, b: Integer) -> Result<Integer, Error> {
-    let max_int = MAX_INT.clone();
     let big_a: BigInt = a.into();
     let big_b: BigInt = b.into();
     let res = big_a * big_b;
-    if res > max_int || res < -max_int {
-        return Err(Error::Overflow("result overflows Integer".to_string()));
-    }
     res.try_into()
 }
 
@@ -263,6 +239,36 @@ pub fn div_integer(a: Integer, b: Integer) -> Result<Integer, Error> {
     (big_a / big_b).try_into()
 }
 
+/// Computes `(a * b + carry) / divisor`, returning the floor and remainder.
+/// Inputs must be nonnegative and the divisor positive. Only the final quotient
+/// must fit the 256-bit wire format. The remainder is less than the divisor,
+/// and `quotient * divisor + remainder` equals the exact numerator.
+pub fn mul_add_div_rem_integer(
+    a: Integer,
+    b: Integer,
+    carry: Integer,
+    divisor: Integer,
+) -> Result<(Integer, Integer), Error> {
+    let a = BigInt::from(a);
+    let b = BigInt::from(b);
+    let carry = BigInt::from(carry);
+    let divisor = BigInt::from(divisor);
+    if divisor == BigInt::ZERO {
+        return Err(Error::DivByZero("integer divide by zero".to_string()));
+    }
+    if [&a, &b, &carry, &divisor]
+        .iter()
+        .any(|value| value.sign() == BigSign::Minus)
+    {
+        return Err(Error::Validation(
+            "mul-add-div-rem requires nonnegative inputs".to_string(),
+        ));
+    }
+    // Four 256-bit inputs bound the numerator to 512 bits, even with carry.
+    let (quotient, remainder) = (a * b + carry).div_rem(&divisor);
+    Ok((quotient.try_into()?, remainder.try_into()?))
+}
+
 pub fn sqrt_integer(i: Integer) -> Result<Integer, Error> {
     let big_i: BigInt = i.into();
     big_i.sqrt().try_into()
@@ -271,26 +277,29 @@ pub fn sqrt_integer(i: Integer) -> Result<Integer, Error> {
 // ─── Decimal ops ─────────────────────────────────────────────────────
 
 pub fn integer_to_decimal(i: Integer) -> Result<Decimal, Error> {
-    let big: BigInt = i.into();
-    let dec_ = big
-        .to_string()
-        .parse::<D256>()
-        .map_err(|e| Error::Syntax(e.to_string()))?;
-    let dec = dec_.with_ctx(CTX).quantize(MIN_DECIMAL);
-    if dec.is_op_invalid() {
-        return Err(Error::Overflow("invalid decimal number".to_string()));
-    }
-    Ok(dec.into())
+    // Integer has 256 magnitude bits independently of Decimal's scale. Check
+    // the scaled coefficient exactly, before any decimal rounding can occur.
+    let coefficient: Integer = (BigInt::from(i) * BigInt::from(10u64).pow(18)).try_into()?;
+    Ok(Decimal {
+        r0: coefficient.r0,
+        r1: coefficient.r1,
+        r2: coefficient.r2,
+        r3: coefficient.r3,
+        sign: coefficient.sign,
+    })
 }
 
 pub fn decimal_to_integer(d: Decimal) -> Result<Integer, Error> {
-    let dec: D256 = d.into();
-    let big = dec
-        .trunc()
-        .to_string()
-        .parse::<BigInt>()
-        .map_err(|e| Error::Syntax(e.to_string()))?;
-    big.try_into()
+    let coefficient = Integer {
+        r0: d.r0,
+        r1: d.r1,
+        r2: d.r2,
+        r3: d.r3,
+        sign: d.sign,
+    };
+    // Signed integer division preserves truncation toward zero, including for
+    // negative fractions, without converting through decimal text.
+    (BigInt::from(coefficient) / BigInt::from(10u64).pow(18)).try_into()
 }
 
 fn num_to_decimal(n: impl Into<D256>) -> Result<Decimal, Error> {

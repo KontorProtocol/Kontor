@@ -80,7 +80,7 @@ async fn test_token_contract_large_numbers() -> Result<()> {
     );
 
     // Overflow mint (expected error, keep separate)
-    let max_int = "115_792_089_237_316_195_423_570_985_008_687_907_853_269_984_665_640_564_039_457";
+    let max_int = "115792089237316195423570985008687907853269984665640564039457584007913129639935";
     assert!(
         token::mint(runtime, &token, &minter, max_int.into())
             .await?

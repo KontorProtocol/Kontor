@@ -73,6 +73,7 @@ pub enum Fuel {
     NumbersSubInteger,
     NumbersMulInteger,
     NumbersDivInteger,
+    NumbersMulAddDivRemInteger,
     NumbersSqrtInteger,
     NumbersIntegerToDecimal,
     NumbersDecimalToInteger,
@@ -187,6 +188,7 @@ impl Fuel {
             | Self::NumbersMulDecimal
             | Self::NumbersDivDecimal => 100,
             Self::NumbersSqrtInteger => 500,
+            Self::NumbersMulAddDivRemInteger => 500,
             Self::NumbersLog10Decimal => 500,
             Self::RegisterBlsKey => 1_000,
             Self::UpdateProvenance => 1_000,

@@ -5802,6 +5802,293 @@ function divInteger(arg0, arg1) {
   return retCopy.val;
   
 }
+let numericsMulAddDivRemInteger;
+
+function mulAddDivRemInteger(arg0, arg1, arg2, arg3) {
+  var ptr0 = realloc0(0, 0, 8, 160);
+  var {r0: v1_0, r1: v1_1, r2: v1_2, r3: v1_3, sign: v1_4 } = arg0;
+  dataView(memory0).setBigInt64(ptr0 + 0, toUint64(v1_0), true);
+  dataView(memory0).setBigInt64(ptr0 + 8, toUint64(v1_1), true);
+  dataView(memory0).setBigInt64(ptr0 + 16, toUint64(v1_2), true);
+  dataView(memory0).setBigInt64(ptr0 + 24, toUint64(v1_3), true);
+  var val2 = v1_4;
+  let enum2;
+  switch (val2) {
+    case 'plus': {
+      enum2 = 0;
+      break;
+    }
+    case 'minus': {
+      enum2 = 1;
+      break;
+    }
+    default: {
+      if ((v1_4) instanceof Error) {
+        console.error(v1_4);
+      }
+      
+      throw new TypeError(`"${val2}" is not one of the cases of sign`);
+    }
+  }
+  dataView(memory0).setInt8(ptr0 + 32, enum2, true);
+  var {r0: v3_0, r1: v3_1, r2: v3_2, r3: v3_3, sign: v3_4 } = arg1;
+  dataView(memory0).setBigInt64(ptr0 + 40, toUint64(v3_0), true);
+  dataView(memory0).setBigInt64(ptr0 + 48, toUint64(v3_1), true);
+  dataView(memory0).setBigInt64(ptr0 + 56, toUint64(v3_2), true);
+  dataView(memory0).setBigInt64(ptr0 + 64, toUint64(v3_3), true);
+  var val4 = v3_4;
+  let enum4;
+  switch (val4) {
+    case 'plus': {
+      enum4 = 0;
+      break;
+    }
+    case 'minus': {
+      enum4 = 1;
+      break;
+    }
+    default: {
+      if ((v3_4) instanceof Error) {
+        console.error(v3_4);
+      }
+      
+      throw new TypeError(`"${val4}" is not one of the cases of sign`);
+    }
+  }
+  dataView(memory0).setInt8(ptr0 + 72, enum4, true);
+  var {r0: v5_0, r1: v5_1, r2: v5_2, r3: v5_3, sign: v5_4 } = arg2;
+  dataView(memory0).setBigInt64(ptr0 + 80, toUint64(v5_0), true);
+  dataView(memory0).setBigInt64(ptr0 + 88, toUint64(v5_1), true);
+  dataView(memory0).setBigInt64(ptr0 + 96, toUint64(v5_2), true);
+  dataView(memory0).setBigInt64(ptr0 + 104, toUint64(v5_3), true);
+  var val6 = v5_4;
+  let enum6;
+  switch (val6) {
+    case 'plus': {
+      enum6 = 0;
+      break;
+    }
+    case 'minus': {
+      enum6 = 1;
+      break;
+    }
+    default: {
+      if ((v5_4) instanceof Error) {
+        console.error(v5_4);
+      }
+      
+      throw new TypeError(`"${val6}" is not one of the cases of sign`);
+    }
+  }
+  dataView(memory0).setInt8(ptr0 + 112, enum6, true);
+  var {r0: v7_0, r1: v7_1, r2: v7_2, r3: v7_3, sign: v7_4 } = arg3;
+  dataView(memory0).setBigInt64(ptr0 + 120, toUint64(v7_0), true);
+  dataView(memory0).setBigInt64(ptr0 + 128, toUint64(v7_1), true);
+  dataView(memory0).setBigInt64(ptr0 + 136, toUint64(v7_2), true);
+  dataView(memory0).setBigInt64(ptr0 + 144, toUint64(v7_3), true);
+  var val8 = v7_4;
+  let enum8;
+  switch (val8) {
+    case 'plus': {
+      enum8 = 0;
+      break;
+    }
+    case 'minus': {
+      enum8 = 1;
+      break;
+    }
+    default: {
+      if ((v7_4) instanceof Error) {
+        console.error(v7_4);
+      }
+      
+      throw new TypeError(`"${val8}" is not one of the cases of sign`);
+    }
+  }
+  dataView(memory0).setInt8(ptr0 + 152, enum8, true);
+  _debugLog('[iface="root:component/numerics", function="mul-add-div-rem-integer"][Instruction::CallWasm] enter', {
+    funcName: 'mul-add-div-rem-integer',
+    paramCount: 1,
+    async: false,
+    postReturn: true,
+  });
+  const hostProvided = false;
+  
+  const [task, _wasm_call_currentTaskID] = createNewCurrentTask({
+    componentIdx: 0,
+    isAsync: false,
+    isManualAsync: false,
+    entryFnName: 'numericsMulAddDivRemInteger',
+    getCallbackFn: () => null,
+    callbackFnName: null,
+    errHandling: 'throw-result-err',
+    callingWasmExport: true,
+  });
+  
+  const started = task.enterSync();
+  
+  if (0!== null) {
+    task.setReturnMemoryIdx(0);
+    task.setReturnMemory(() => memory0());
+  }
+  
+  
+  let ret;
+  
+  try {
+    ret =   _withGlobalCurrentTaskMeta({
+      taskID: task.id(),
+      componentIdx: task.componentIdx(),
+      fn: () => numericsMulAddDivRemInteger(ptr0),
+    });
+  } catch (err) {
+    
+    task.setErrored(err);
+    task.reject(err);
+    task.exit();
+    throw err;
+    
+  }
+  
+  let variant17;
+  switch (dataView(memory0).getUint8(ret + 0, true)) {
+    case 0: {
+      let enum9;
+      switch (dataView(memory0).getUint8(ret + 40, true)) {
+        case 0: {
+          enum9 = 'plus';
+          break;
+        }
+        case 1: {
+          enum9 = 'minus';
+          break;
+        }
+        default: {
+          throw new TypeError('invalid discriminant specified for Sign');
+        }
+      }
+      let enum10;
+      switch (dataView(memory0).getUint8(ret + 80, true)) {
+        case 0: {
+          enum10 = 'plus';
+          break;
+        }
+        case 1: {
+          enum10 = 'minus';
+          break;
+        }
+        default: {
+          throw new TypeError('invalid discriminant specified for Sign');
+        }
+      }
+      variant17= {
+        tag: 'ok',
+        val: [{
+          r0: BigInt.asUintN(64, BigInt(dataView(memory0).getBigInt64(ret + 8, true))),
+          r1: BigInt.asUintN(64, BigInt(dataView(memory0).getBigInt64(ret + 16, true))),
+          r2: BigInt.asUintN(64, BigInt(dataView(memory0).getBigInt64(ret + 24, true))),
+          r3: BigInt.asUintN(64, BigInt(dataView(memory0).getBigInt64(ret + 32, true))),
+          sign: enum9,
+        }, {
+          r0: BigInt.asUintN(64, BigInt(dataView(memory0).getBigInt64(ret + 48, true))),
+          r1: BigInt.asUintN(64, BigInt(dataView(memory0).getBigInt64(ret + 56, true))),
+          r2: BigInt.asUintN(64, BigInt(dataView(memory0).getBigInt64(ret + 64, true))),
+          r3: BigInt.asUintN(64, BigInt(dataView(memory0).getBigInt64(ret + 72, true))),
+          sign: enum10,
+        }]
+      };
+      break;
+    }
+    case 1: {
+      let variant16;
+      switch (dataView(memory0).getUint8(ret + 8, true)) {
+        case 0: {
+          var ptr11 = dataView(memory0).getUint32(ret + 12, true);
+          var len11 = dataView(memory0).getUint32(ret + 16, true);
+          var result11 = TEXT_DECODER_UTF8.decode(new Uint8Array(memory0.buffer, ptr11, len11));
+          variant16= {
+            tag: 'message',
+            val: result11
+          };
+          break;
+        }
+        case 1: {
+          var ptr12 = dataView(memory0).getUint32(ret + 12, true);
+          var len12 = dataView(memory0).getUint32(ret + 16, true);
+          var result12 = TEXT_DECODER_UTF8.decode(new Uint8Array(memory0.buffer, ptr12, len12));
+          variant16= {
+            tag: 'overflow',
+            val: result12
+          };
+          break;
+        }
+        case 2: {
+          var ptr13 = dataView(memory0).getUint32(ret + 12, true);
+          var len13 = dataView(memory0).getUint32(ret + 16, true);
+          var result13 = TEXT_DECODER_UTF8.decode(new Uint8Array(memory0.buffer, ptr13, len13));
+          variant16= {
+            tag: 'div-by-zero',
+            val: result13
+          };
+          break;
+        }
+        case 3: {
+          var ptr14 = dataView(memory0).getUint32(ret + 12, true);
+          var len14 = dataView(memory0).getUint32(ret + 16, true);
+          var result14 = TEXT_DECODER_UTF8.decode(new Uint8Array(memory0.buffer, ptr14, len14));
+          variant16= {
+            tag: 'syntax',
+            val: result14
+          };
+          break;
+        }
+        case 4: {
+          var ptr15 = dataView(memory0).getUint32(ret + 12, true);
+          var len15 = dataView(memory0).getUint32(ret + 16, true);
+          var result15 = TEXT_DECODER_UTF8.decode(new Uint8Array(memory0.buffer, ptr15, len15));
+          variant16= {
+            tag: 'validation',
+            val: result15
+          };
+          break;
+        }
+        default: {
+          throw new TypeError('invalid variant discriminant for NumericsError');
+        }
+      }
+      variant17= {
+        tag: 'err',
+        val: variant16
+      };
+      break;
+    }
+    default: {
+      throw new TypeError('invalid variant discriminant for expected');
+    }
+  }
+  _debugLog('[iface="root:component/numerics", function="mul-add-div-rem-integer"][Instruction::Return]', {
+    funcName: 'mul-add-div-rem-integer',
+    paramCount: 1,
+    async: false,
+    postReturn: true
+  });
+  const retCopy = variant17;
+  task.resolve([retCopy.val]);
+  
+  let cstate = getOrCreateAsyncState(0);
+  cstate.mayLeave = false;
+  postReturn3(ret);
+  cstate.mayLeave = true;
+  task.exit();
+  
+  
+  
+  if (typeof retCopy === 'object' && retCopy.tag === 'err') {
+    throw new ComponentError(retCopy.val);
+  }
+  return retCopy.val;
+  
+}
 let numericsSqrtInteger;
 
 function sqrtInteger(arg0) {
@@ -8528,6 +8815,7 @@ const $init = (() => {
     numericsSubInteger = exports1['root:component/numerics#sub-integer'];
     numericsMulInteger = exports1['root:component/numerics#mul-integer'];
     numericsDivInteger = exports1['root:component/numerics#div-integer'];
+    numericsMulAddDivRemInteger = exports1['root:component/numerics#mul-add-div-rem-integer'];
     numericsSqrtInteger = exports1['root:component/numerics#sqrt-integer'];
     numericsIntegerToDecimal = exports1['root:component/numerics#integer-to-decimal'];
     numericsDecimalToInteger = exports1['root:component/numerics#decimal-to-integer'];
@@ -8583,6 +8871,7 @@ const numerics = {
   integerToDecimal: integerToDecimal,
   integerToString: integerToString,
   log10Decimal: log10Decimal,
+  mulAddDivRemInteger: mulAddDivRemInteger,
   mulDecimal: mulDecimal,
   mulInteger: mulInteger,
   s64ToDecimal: s64ToDecimal,

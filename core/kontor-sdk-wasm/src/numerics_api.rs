@@ -164,6 +164,17 @@ impl NumericsGuest for Lib {
             .map_err(Into::into)
     }
 
+    fn mul_add_div_rem_integer(
+        a: Integer,
+        b: Integer,
+        carry: Integer,
+        divisor: Integer,
+    ) -> Result<(Integer, Integer), NumericsError> {
+        core_numerics::mul_add_div_rem_integer(a.into(), b.into(), carry.into(), divisor.into())
+            .map(|(quotient, remainder)| (quotient.into(), remainder.into()))
+            .map_err(Into::into)
+    }
+
     fn integer_to_decimal(i: Integer) -> Result<Decimal, NumericsError> {
         core_numerics::integer_to_decimal(i.into())
             .map(Into::into)

@@ -9,6 +9,7 @@ export function addInteger(a: Integer, b: Integer): Integer;
 export function subInteger(a: Integer, b: Integer): Integer;
 export function mulInteger(a: Integer, b: Integer): Integer;
 export function divInteger(a: Integer, b: Integer): Integer;
+export function mulAddDivRemInteger(a: Integer, b: Integer, carry: Integer, divisor: Integer): [Integer, Integer];
 export function sqrtInteger(i: Integer): Integer;
 export function integerToDecimal(i: Integer): Decimal;
 export function decimalToInteger(d: Decimal): Integer;

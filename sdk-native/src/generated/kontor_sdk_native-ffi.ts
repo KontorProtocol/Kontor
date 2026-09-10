@@ -41,6 +41,7 @@ interface NativeModuleInterface {
     ubrn_uniffi_kontor_sdk_native_fn_func_integer_to_decimal(i: Uint8Array, uniffi_out_err: UniffiRustCallStatus): Uint8Array;
     ubrn_uniffi_kontor_sdk_native_fn_func_integer_to_string(i: Uint8Array, uniffi_out_err: UniffiRustCallStatus): Uint8Array;
     ubrn_uniffi_kontor_sdk_native_fn_func_log10_decimal(a: Uint8Array, uniffi_out_err: UniffiRustCallStatus): Uint8Array;
+    ubrn_uniffi_kontor_sdk_native_fn_func_mul_add_div_rem_integer(a: Uint8Array, b: Uint8Array, carry: Uint8Array, divisor: Uint8Array, uniffi_out_err: UniffiRustCallStatus): Uint8Array;
     ubrn_uniffi_kontor_sdk_native_fn_func_mul_decimal(a: Uint8Array, b: Uint8Array, uniffi_out_err: UniffiRustCallStatus): Uint8Array;
     ubrn_uniffi_kontor_sdk_native_fn_func_mul_integer(a: Uint8Array, b: Uint8Array, uniffi_out_err: UniffiRustCallStatus): Uint8Array;
     ubrn_uniffi_kontor_sdk_native_fn_func_s64_to_decimal(i: bigint, uniffi_out_err: UniffiRustCallStatus): Uint8Array;
@@ -75,6 +76,7 @@ interface NativeModuleInterface {
     ubrn_uniffi_kontor_sdk_native_checksum_func_integer_to_decimal(): number;
     ubrn_uniffi_kontor_sdk_native_checksum_func_integer_to_string(): number;
     ubrn_uniffi_kontor_sdk_native_checksum_func_log10_decimal(): number;
+    ubrn_uniffi_kontor_sdk_native_checksum_func_mul_add_div_rem_integer(): number;
     ubrn_uniffi_kontor_sdk_native_checksum_func_mul_decimal(): number;
     ubrn_uniffi_kontor_sdk_native_checksum_func_mul_integer(): number;
     ubrn_uniffi_kontor_sdk_native_checksum_func_s64_to_decimal(): number;

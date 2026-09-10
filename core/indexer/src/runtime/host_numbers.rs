@@ -152,6 +152,24 @@ impl<T> built_in::numbers::HostWithStore<T> for Runtime {
         Ok(numerics::div_integer(a, b))
     }
 
+    async fn mul_add_div_rem_integer(
+        accessor: &Accessor<T, Self>,
+        a: Integer,
+        b: Integer,
+        carry: Integer,
+        divisor: Integer,
+    ) -> Result<Result<(Integer, Integer), Error>> {
+        Fuel::NumbersMulAddDivRemInteger
+            .consume(
+                accessor,
+                accessor
+                    .with(|mut access| access.get().gauge.clone())
+                    .as_ref(),
+            )
+            .await?;
+        Ok(numerics::mul_add_div_rem_integer(a, b, carry, divisor))
+    }
+
     async fn sqrt_integer(
         accessor: &Accessor<T, Self>,
         i: Integer,

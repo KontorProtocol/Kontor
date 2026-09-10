@@ -48,6 +48,7 @@ class NativeKontorSdkNative : public jsi::HostObject {
     jsi::Value cpp_uniffi_kontor_sdk_native_fn_func_integer_to_decimal(jsi::Runtime& rt, const jsi::Value& thisVal, const jsi::Value* args, size_t count);
     jsi::Value cpp_uniffi_kontor_sdk_native_fn_func_integer_to_string(jsi::Runtime& rt, const jsi::Value& thisVal, const jsi::Value* args, size_t count);
     jsi::Value cpp_uniffi_kontor_sdk_native_fn_func_log10_decimal(jsi::Runtime& rt, const jsi::Value& thisVal, const jsi::Value* args, size_t count);
+    jsi::Value cpp_uniffi_kontor_sdk_native_fn_func_mul_add_div_rem_integer(jsi::Runtime& rt, const jsi::Value& thisVal, const jsi::Value* args, size_t count);
     jsi::Value cpp_uniffi_kontor_sdk_native_fn_func_mul_decimal(jsi::Runtime& rt, const jsi::Value& thisVal, const jsi::Value* args, size_t count);
     jsi::Value cpp_uniffi_kontor_sdk_native_fn_func_mul_integer(jsi::Runtime& rt, const jsi::Value& thisVal, const jsi::Value* args, size_t count);
     jsi::Value cpp_uniffi_kontor_sdk_native_fn_func_s64_to_decimal(jsi::Runtime& rt, const jsi::Value& thisVal, const jsi::Value* args, size_t count);
@@ -82,6 +83,7 @@ class NativeKontorSdkNative : public jsi::HostObject {
     jsi::Value cpp_uniffi_kontor_sdk_native_checksum_func_integer_to_decimal(jsi::Runtime& rt, const jsi::Value& thisVal, const jsi::Value* args, size_t count);
     jsi::Value cpp_uniffi_kontor_sdk_native_checksum_func_integer_to_string(jsi::Runtime& rt, const jsi::Value& thisVal, const jsi::Value* args, size_t count);
     jsi::Value cpp_uniffi_kontor_sdk_native_checksum_func_log10_decimal(jsi::Runtime& rt, const jsi::Value& thisVal, const jsi::Value* args, size_t count);
+    jsi::Value cpp_uniffi_kontor_sdk_native_checksum_func_mul_add_div_rem_integer(jsi::Runtime& rt, const jsi::Value& thisVal, const jsi::Value* args, size_t count);
     jsi::Value cpp_uniffi_kontor_sdk_native_checksum_func_mul_decimal(jsi::Runtime& rt, const jsi::Value& thisVal, const jsi::Value* args, size_t count);
     jsi::Value cpp_uniffi_kontor_sdk_native_checksum_func_mul_integer(jsi::Runtime& rt, const jsi::Value& thisVal, const jsi::Value* args, size_t count);
     jsi::Value cpp_uniffi_kontor_sdk_native_checksum_func_s64_to_decimal(jsi::Runtime& rt, const jsi::Value& thisVal, const jsi::Value* args, size_t count);

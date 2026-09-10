@@ -44,6 +44,7 @@ interface numerics {
   sub-integer: func(a: integer, b: integer) -> result<integer, numerics-error>;
   mul-integer: func(a: integer, b: integer) -> result<integer, numerics-error>;
   div-integer: func(a: integer, b: integer) -> result<integer, numerics-error>;
+  mul-add-div-rem-integer: func(a: integer, b: integer, carry: integer, divisor: integer) -> result<tuple<integer, integer>, numerics-error>;
   sqrt-integer: func(i: integer) -> result<integer, numerics-error>;
 
   integer-to-decimal: func(i: integer) -> result<decimal, numerics-error>;
