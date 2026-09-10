@@ -27,6 +27,14 @@ world root {
 
   export last-op: async func(ctx: borrow<view-context>) -> option<op>;
 
+  export put-numbers: async func(ctx: borrow<proc-context>, key: u64, integer: string, decimal: string);
+  export change-integer: async func(ctx: borrow<proc-context>, key: u64, integer: string);
+  export remove-numbers: async func(ctx: borrow<proc-context>, key: u64);
+  export stored-numbers: async func(ctx: borrow<view-context>, key: u64) -> option<list<string>>;
+  export optional-integer: async func(ctx: borrow<view-context>) -> option<string>;
+  export number-keys: async func(ctx: borrow<view-context>) -> list<u64>;
+  export number-index: async func(ctx: borrow<view-context>, integer: string) -> list<string>;
+
   export checked-sub: async func(ctx: borrow<view-context>, x: string, y: string) -> result<u64, error>;
 
   export mul-add-div-rem: async func(ctx: borrow<view-context>, a: string, b: string, carry: string, divisor: string) -> result<list<string>, error>;

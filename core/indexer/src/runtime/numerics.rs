@@ -12,6 +12,9 @@ use ::numerics as core_numerics;
 
 use super::{Decimal, Error, Integer, NumericOrdering};
 
+#[cfg(test)]
+mod storage_tests;
+
 // The wit-shape ↔ numerics-crate conversions live in `built-in-types` (which
 // owns the shared types); the wrappers below use them via `.into()`.
 

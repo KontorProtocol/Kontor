@@ -707,21 +707,3 @@ __key_element_num256!(
     kontor::built_in::numbers_types::Integer,
     kontor::built_in::numbers_types::Decimal
 );
-
-impl<__S: stdlib::ReadStorage + 'static> stdlib::Retrieve<__S>
-    for kontor::built_in::numbers_types::Integer
-{
-    fn __get(ctx: &alloc::rc::Rc<__S>, path: stdlib::KeyPath) -> Option<Self> {
-        stdlib::ReadStorage::__exists(ctx, &path)
-            .then(|| kontor::built_in::numbers_types::IntegerModel::new(ctx.clone(), path).load())
-    }
-}
-
-impl<__S: stdlib::ReadStorage + 'static> stdlib::Retrieve<__S>
-    for kontor::built_in::numbers_types::Decimal
-{
-    fn __get(ctx: &alloc::rc::Rc<__S>, path: stdlib::KeyPath) -> Option<Self> {
-        stdlib::ReadStorage::__exists(ctx, &path)
-            .then(|| kontor::built_in::numbers_types::DecimalModel::new(ctx.clone(), path).load())
-    }
-}

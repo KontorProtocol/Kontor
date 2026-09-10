@@ -10,12 +10,23 @@ interface!(name = "fib", path = "../fib/wit");
 #[derive(Clone, Default, StorageRoot)]
 struct ArithStorage {
     pub last_op: Option<Op>,
+    pub optional_integer: Option<Integer>,
+    pub decimals: Map<u64, Decimal>,
+    pub numbers: Map<u64, NumericRecord>,
+}
+
+#[derive(Clone, Storage)]
+#[index(by_integer, by = integer, sort = decimal, include = (integer))]
+struct NumericRecord {
+    integer: Integer,
+    decimal: Decimal,
 }
 
 impl Guest for Arith {
     fn init(ctx: &ProcContext) -> Contract {
         ArithStorage {
             last_op: Some(Op::Id),
+            ..ArithStorage::default()
         }
         .init(ctx);
         ctx.contract()
@@ -35,6 +46,62 @@ impl Guest for Arith {
 
     fn last_op(ctx: &ViewContext) -> Option<Op> {
         ctx.model().last_op().map(|op| op.load())
+    }
+
+    fn put_numbers(ctx: &ProcContext, key: u64, integer: String, decimal: String) {
+        let integer = Integer::from(integer.as_str());
+        let decimal = Decimal::from(decimal.as_str());
+        let model = ctx.model();
+        model.set_optional_integer(Some(integer));
+        model.decimals().set(&key, decimal);
+        model
+            .numbers()
+            .set(&key, NumericRecord { integer, decimal });
+    }
+
+    fn change_integer(ctx: &ProcContext, key: u64, integer: String) {
+        ctx.model()
+            .numbers()
+            .get(&key)
+            .unwrap()
+            .set_integer(Integer::from(integer.as_str()));
+    }
+
+    fn remove_numbers(ctx: &ProcContext, key: u64) {
+        let model = ctx.model();
+        model.set_optional_integer(None);
+        model.decimals().remove(&key);
+        model.numbers().remove(&key);
+    }
+
+    fn stored_numbers(ctx: &ViewContext, key: u64) -> Option<Vec<String>> {
+        let model = ctx.model();
+        model.numbers().get(&key).map(|record| {
+            vec![
+                record.integer().to_string(),
+                record.decimal().to_string(),
+                model.decimals().get(&key).unwrap().to_string(),
+            ]
+        })
+    }
+
+    fn optional_integer(ctx: &ViewContext) -> Option<String> {
+        ctx.model()
+            .optional_integer()
+            .map(|value| value.to_string())
+    }
+
+    fn number_keys(ctx: &ViewContext) -> Vec<u64> {
+        ctx.model().decimals().keys().collect()
+    }
+
+    fn number_index(ctx: &ViewContext, integer: String) -> Vec<String> {
+        ctx.model()
+            .numbers()
+            .by_integer(Integer::from(integer.as_str()))
+            .values()
+            .map(|value| format!("{}:{}", value.integer, value.decimal))
+            .collect()
     }
 
     fn checked_sub(_: &ViewContext, x: String, y: String) -> Result<u64, Error> {

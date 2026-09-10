@@ -883,8 +883,8 @@ pub trait Indexed {
 }
 
 // Primitive (leaf) storage values are never indexed. (WIT "primitives" like
-// `Integer`/`Decimal`/`Holder` are records and get `Indexed` from their `Storage`
-// derive; these are the bare Rust types.)
+// `Integer`/`Decimal`/`Holder` provide `Indexed` in built-in-types; these are the
+// bare Rust types.)
 macro_rules! impl_indexed_leaf {
     ($($t:ty),* $(,)?) => { $( impl Indexed for $t {} )* };
 }
