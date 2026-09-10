@@ -1,86 +1,87 @@
 # Contract queries that motivate language work
 
-Investigated on 2026-09-10 at main `6a64d4653b5c9015d9274dea0852a5a9cd3204f7`,
-after #557 merged. The first phase is now implemented on `feat/key-range-queries`;
-see [the current API guide](indexed-map-index-system.md). Later phases remain proposals. The investigation
-traced native contract declarations, query bodies, repository callers, generated
-models, and the runtime/database scan path. No new benchmarks were run.
+Initial investigation: 2026-09-10 at main
+`6a64d4653b5c9015d9274dea0852a5a9cd3204f7` (#557).
+The first phase is implemented in `0a4772c2` on `feat/key-range-queries`.
+See [the current API guide](indexed-map-index-system.md) for supported syntax.
+The native/test contract adoption audit below examines that local commit and
+repository callers; it does not claim verification of a newer remote head.
 
-## Implemented first phase: key ranges, used by cleanup and NFT pages
+## Implemented first phase: key ranges, cleanup, and NFT pages
 
-### Remove an index maintained only to obtain a cursor
+Reward cleanup uses an exclusive primary-key range on
+`by_agreement_active(agreement_id, true)`. The compound primary key
+`(agreement_id, node_id)` already orders nodes inside that fixed agreement bucket,
+so the redundant `reward_members` sorted index is removed. This saves one of
+three secondary member entries per membership, plus its bucket counts and
+maintenance. The remaining index IDs are unchanged. Existing deployed state needs
+fresh replay under the preproduction upgrade model.
 
-Sources: `native-contracts/filestorage/src/lib.rs` (`NodeState`) and
-`native-contracts/filestorage/src/cleanup.rs` (`step`).
+All four NFT list views now take an optional exclusive NFT-ID cursor and a capped
+limit, returning `{ items, next }`. Offset signatures are removed. A later page
+seeks directly to its starting key rather than consuming earlier entries.
+Agreement pages use the NFT ID as their cursor even though the returned projection
+is an agreement ID. Calls read current state; there is no snapshot across pages
+or persistent cursor table.
 
-Memberships have primary keys `(agreement_id, node_id)`. The existing
-`by_agreement_active(agreement_id, true)` index therefore already visits members
-in node-ID order inside a fixed agreement bucket. Cleanup nevertheless uses a
-third index, `reward_members`, with the same bucket and `sort = node_id`, because
-only sorted index queries expose `.range(...)` today.
+`core/stdlib/src/query.rs` implements bounds and iteration once, using the existing
+lazy host key/covering-row cursors. Maps and unsorted indexes range over primary
+keys; sorted indexes range over their declared sort field. Reverse iteration keeps
+the same bounds. Exclusive bounds skip a complete element subtree, including
+struct fields, without absorbing a distinct escaped-NUL sibling. Covering key-only
+reads avoid fetching projections, and bounded queries do not expose bucket counts.
 
-Give ordinary index queries a typed range over their primary keys. Cleanup can
-resume exclusively after `(job.agreement_id, preparation.cursor)` in the existing
-bucket, then remove `reward_members`. The traversal order stays the same because
-the agreement component is constant and node IDs are unique within the bucket.
+## Adoption audit: all native and test contracts
 
-This removes one of the three secondary member entries per membership, plus the
-removed index's bucket counts. It also removes the corresponding maintenance on
-creation, deletion and active-status transitions. This is a reduction in index
-state, not a claim of one-third less total membership storage. Removing this last
-index declaration leaves the first two IDs unchanged; native contract state still
-requires fresh replay under our current preproduction upgrade model.
+The scan covered all five native contracts and eleven test contracts (18 Rust
+source files), their WIT exports, and repository callers. Searches included
+`skip`, `skip_while`, `take_while`, `filter`, `filter_map`, `find`, `keys`, `iter`,
+`range`, direct storage lookups, and loops over stored collections. No offset or
+guest-side range-skipping implementation remains in these contracts. This is an
+adoption audit, not a general correctness review of every contract.
 
-### NFT pagination that does not walk all earlier pages
+| Contract | Existing query use and conclusion |
+| --- | --- |
+| Native `nft` | All four paginated views use ranges; agreement pages use the existing covering index. Attribute listing is a complete, at-most-32-entry map read; removing its separate value reads needs scalar-entry iteration. |
+| Native `filestorage` | Reward cleanup uses key ranges; expiry and overdue obligation selection use deadline ranges. Cleanup queues deliberately consume/remove their first pending item. Active challenges are already covering reads, and node listings derive data from membership keys/buckets. Full agreement exports, reward reweighting, and challenge-member selection have no cursor boundary to push into storage. |
+| Native `staking` | Consensus-set reads, reward recipients, and pending-stake capacity checks already use covering status reads and require the full relevant population. The duplicate-key check uses an equality bucket. Pending activation/exit is the remaining range candidate, but its heights are not ordered in that bucket; it requires an index/layout change and measurement. |
+| Native `token` | Full balance export scans scalar keys and separately reads values; a scalar-entry scan is the relevant missing facility. Its Core/Burner exclusions must remain explicit. No offset pagination exists. |
+| Native `system` | Lifecycle hooks; no stored collection query to range. |
+| Test `arith` | Complete numeric map/index enumeration verifies canonical numeric storage and index ordering. Sorted covering projections already use `.values()` and benefit from the common query implementation. There is no skipped prefix to eliminate. |
+| Test `fib` | `cached_values` exports all cached keys; Deque iteration exercises FIFO storage. The caller checks the complete cache. Neither needs a cursor. |
+| Test `test-token` | Full Integer balance export is another scalar-entry consumer. Preserve its Burner exclusion (which differs from the native/Decimal token filters). |
+| Test `decimal-token` | Same scalar-entry opportunity as the native token; preserve Core/Burner exclusions. |
+| Test `shared-account` | `tenants` returns the owner plus all co-tenants; authorization uses point lookups. A partial tenant response would change the API's meaning. |
+| Test `amm` | Pools and balances are accessed by exact keys; no collection scan to range. |
+| Test `pool` | Balances and reserves use exact lookups; no collection scan to range. |
+| Test `counter` | Scalar reads and exact-key writes/removal; no listing query. |
+| Test `crypto` | Scalar/byte values and entropy/hash operations; no listing query. |
+| Test `error-test` | Error/trap fixtures; no collection query. |
+| Test `proxy` | Exact stored address and forwarded calls; no collection query. |
 
-Source: `native-contracts/nft/src/lib.rs`: `list_nfts`,
-`list_nfts_by_creator`, `list_nfts_by_holder`, `agreement_ids_by_creator`.
+The NFT cursor migration and removal of the duplicate reward index cover the
+existing direct key-range uses. Replacing a complete `.keys()` scan with
+`.range(..).keys()` would do the same work. Likewise, ordinary lists do not need
+page-response wrappers when there is no continuation metadata.
 
-All four use `.skip(offset).take(limit)`. Fetching a 100-item page at offset
-100,000 advances through 100,100 keys or covering rows, assuming enough entries.
-Covering agreement-ID queries also retrieve projections for the discarded rows.
-The existing page-size cap does not bound the skipped work. Global NFT enumeration
-can additionally traverse several field rows per NFT while finding distinct keys.
+The remaining worthwhile changes are distinct work:
 
-Expose key ranges on ordinary maps and on both plain and covering index queries.
-Add cursor-based contract views taking an optional exclusive NFT-ID cursor and a
-capped limit. A page starts at a database seek instead of a guest-side skip. The
-cursor must use the last scanned NFT ID, including for agreement-ID results whose
-projection is a different ID. Replace the existing offset signatures with explicit cursor arguments and page
-responses; do not retain two pagination APIs. This is a preproduction API change.
+- Scalar-entry iteration can serve native token balances, both test token ledgers,
+  and NFT attributes without a second value lookup. It is not implemented by the
+  key-range feature; a stored leaf still needs its own decoding/framing rules.
+- Due-validator processing could seek by activation/deactivation height after an
+  index change. Applying a height bound to the current Holder-keyed status index
+  would be incorrect. Measure the saved per-block reads against index maintenance,
+  preserving joins-before-exits, complete due processing, and deterministic order.
+- Paged filestorage exports and prover-specific work views would be useful client
+  APIs. Current repository callers consume complete lists (including the eager
+  reward-accounting oracle); changing them requires an explicit API/caller migration.
+  Challenge selection also reads another map's cleanup status, which cannot be
+  replaced with a bound over membership primary keys.
 
-At fixed state, successive pages must equal a full enumeration exactly. Between
-calls, inserts before the cursor are not returned and holder transfers change
-bucket membership; key cursors alone do not provide snapshot pagination. Define
-that behavior explicitly. No persisted cursor table is needed.
-
-### Shared implementation boundary
-
-`core/stdlib/src/map.rs` already offers sort-value ranges and reverse scans.
-`core/macros/src/model.rs` generates plain map `keys()` without ranges;
-`IndexQuery` and `CoveringQuery` also lack key ranges. The runtime's
-`get-keys`/`get-index-rows` already accept lower/upper byte bounds and direction,
-backed by lazy, index-served versioned scans. Reuse those facilities.
-
-Use one typed key-range implementation in stdlib and small generated adapters.
-Exclusive bounds must skip the complete key subtree, including compound keys,
-instead of seeking just beyond its parent row and re-emitting its children.
-Keep existing sorted `.range(...)` semantics on the sort value; do not make the
-same method silently mean a primary-key range on sorted indexes.
-
-Validation and measurement for this PR:
-
-- Fixed-page deep versus shallow scans: compare `KeysNext`, covering-row work,
-  value reads and instrumented latency. Earlier page depth must not add discarded
-  rows; ordinary B-tree seek cost and per-record work still exist.
-- Empty/inclusive/exclusive/reversed bounds; string prefixes and embedded NULs;
-  compound keys; missing/deleted cursor keys; zero limit and capped page sizes.
-- NFT pages after transfer and block rollback; covered agreement IDs must match
-  the corresponding NFT pages at the same state.
-- Large-membership cleanup must retain bounded steps, reward conservation,
-  cursor progression, exhaustion handling and savepoint/block rollback behavior.
-- Measure membership index writes, deposits and rows before/after removing the
-  extra index. Ordinary numeric key ordering and zero canonicalization remain intact.
+No additional contract source changes were justified solely to adopt the current
+feature. This audit updated the stale implementation descriptions above; it did
+not rerun the already-passing suite for documentation-only changes.
 
 ### Implemented validation and measured work
 
@@ -125,8 +126,8 @@ can return `(holder, amount)` from that row, eliminating the separate numeric
 point reads. Retain the current exclusion of Core and Burner holders and the
 ordering of results. Holder conversion costs remain.
 
-Pair this with an additive, capped balance-page view; the existing `balances()`
-still returns the full ledger. With filtered holders, the continuation must
+If adding capped balance pages, settle the full-export requirement with callers;
+do not silently truncate the existing `balances()` result. With filtered holders, the continuation must
 advance by scanned keys, not only returned results, and the scan budget must be
 explicit. This is useful for account listings and inspection; repository usage
 found here is in tests, so production client demand is not yet established.
@@ -178,8 +179,8 @@ index. A prover-specific view can use `by_prover_status(node_id, Active)` to avo
 downloading other storers' work. Likewise a node-membership page can use
 `by_node_active(node_id, true)`. These indexes already exist for obligation cleanup.
 Page these views using the first PR's key ranges; fetch details only for the
-selected page. Existing global active-agreement/challenge views can gain additive
-paged counterparts for network-wide inspection.
+selected page. Paging the existing global active-agreement/challenge views requires an explicit
+API/caller migration; avoid preserving competing pagination conventions.
 
 An earliest-deadline-first prover work queue would motivate a sorted
 `by = (prover_id, status), sort = deadline_height` declaration. It needs a cursor
