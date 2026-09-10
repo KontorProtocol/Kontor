@@ -29,11 +29,17 @@ impl stdlib::FromWaveValue for ArithReturn {
     }
 }
 #[automatically_derived]
+impl stdlib::IntoWaveValue for ArithReturn {
+    fn into_wave_value(self) -> stdlib::wasm_wave::value::Value {
+        self.into()
+    }
+}
+#[automatically_derived]
 impl From<ArithReturn> for stdlib::wasm_wave::value::Value {
     fn from(value_: ArithReturn) -> Self {
         <stdlib::wasm_wave::value::Value as stdlib::wasm_wave::wasm::WasmValue>::make_record(
                 &stdlib::wave_type::<ArithReturn>(),
-                [("value", stdlib::wasm_wave::value::Value::from(value_.value))],
+                [("value", stdlib::IntoWaveValue::into_wave_value(value_.value))],
             )
             .unwrap()
     }

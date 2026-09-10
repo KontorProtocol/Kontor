@@ -26,6 +26,12 @@ impl stdlib::FromWaveValue for Error {
     }
 }
 #[automatically_derived]
+impl stdlib::IntoWaveValue for Error {
+    fn into_wave_value(self) -> stdlib::wasm_wave::value::Value {
+        self.into()
+    }
+}
+#[automatically_derived]
 impl From<Error> for stdlib::wasm_wave::value::Value {
     fn from(value_: Error) -> Self {
         (match value_ {
@@ -33,7 +39,7 @@ impl From<Error> for stdlib::wasm_wave::value::Value {
                 <stdlib::wasm_wave::value::Value as stdlib::wasm_wave::wasm::WasmValue>::make_variant(
                     &stdlib::wave_type::<Error>(),
                     "message",
-                    Some(stdlib::wasm_wave::value::Value::from(operand)),
+                    Some(stdlib::IntoWaveValue::into_wave_value(operand)),
                 )
             }
         })

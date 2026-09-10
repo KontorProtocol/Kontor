@@ -559,16 +559,6 @@ fn validate_type_in_context(
                 }
 
                 TypeDefKind::List(inner) => {
-                    if !matches!(inner, Type::U8)
-                        && (ctx == TypeContext::RecordField || ctx == TypeContext::VariantPayload)
-                    {
-                        errors.push(ValidationError::new(
-                            "list<T> (where T is not u8) can only be used in function signatures, \
-                                 not in record fields or variant payloads",
-                            span,
-                        ));
-                    }
-
                     if is_list_type(resolve, inner) {
                         errors.push(ValidationError::new(
                             "nested list types are not allowed",

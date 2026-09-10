@@ -233,12 +233,13 @@ fn reserved_index_name(name: &str) -> Option<&'static str> {
         "iter",
         "values",
         "range",
+        "rev",
         "len",
         "is_empty",
         "count",
         "with_scores",
     ];
-    const PRIMITIVES: &[&str] = &["by_index", "by_index_sorted", "bucket_count"];
+    const PRIMITIVES: &[&str] = &["__index_bucket"];
     if MAP_SURFACE.contains(&name) {
         Some("shadows the map accessor of the same name")
     } else if QUERY_FINISHERS.contains(&name) {
@@ -317,7 +318,7 @@ pub fn index_entry(decl: &IndexDecl, value_for: &impl Fn(&Ident) -> TokenStream)
     } else {
         let parts = decl.include.iter().map(|field| {
             let val = value_for(field);
-            quote! { __proj.extend_from_slice(&stdlib::KeyElement::encode(&#val)); }
+            quote! { stdlib::KeyElement::encode_to(&#val, &mut __proj); }
         });
         quote! {{
             let mut __proj = alloc::vec::Vec::new();

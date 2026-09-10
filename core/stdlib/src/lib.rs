@@ -46,6 +46,7 @@ pub mod deque;
 mod key_path;
 mod keycodec;
 mod map;
+mod query;
 mod storage_interface;
 mod wave_interfaces;
 
@@ -57,6 +58,7 @@ pub use macros::{
     import, interface,
 };
 pub use map::*;
+pub use query::*;
 pub use storage_interface::*;
 pub use wasm_wave;
 pub use wave_interfaces::*;

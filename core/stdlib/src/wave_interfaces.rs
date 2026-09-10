@@ -1,4 +1,5 @@
 use alloc::{string::String, vec::Vec};
+use wasm_wave::{value::Value, wasm::WasmValue};
 
 pub trait WaveType {
     fn wave_type() -> wasm_wave::value::Type;
@@ -46,6 +47,12 @@ impl WaveType for String {
     }
 }
 
+impl WaveType for &str {
+    fn wave_type() -> wasm_wave::value::Type {
+        wasm_wave::value::Type::STRING
+    }
+}
+
 impl<T: WaveType> WaveType for Vec<T> {
     fn wave_type() -> wasm_wave::value::Type {
         wasm_wave::value::Type::list(T::wave_type())
@@ -78,6 +85,37 @@ impl<V: WaveType> WaveType for Result<V, ()> {
 
 pub fn wave_type<T: WaveType>() -> wasm_wave::value::Type {
     T::wave_type()
+}
+
+/// Converts call data recursively, including lists of user-defined records.
+pub trait IntoWaveValue {
+    fn into_wave_value(self) -> Value;
+}
+
+macro_rules! scalar_into_wave {
+    ($($ty:ty),* $(,)?) => { $(
+        impl IntoWaveValue for $ty {
+            fn into_wave_value(self) -> Value { self.into() }
+        }
+    )* };
+}
+scalar_into_wave!(u8, u32, i32, u64, i64, bool, String, &str);
+
+impl<T: IntoWaveValue + WaveType> IntoWaveValue for Vec<T> {
+    fn into_wave_value(self) -> Value {
+        Value::make_list(
+            &Self::wave_type(),
+            self.into_iter().map(IntoWaveValue::into_wave_value),
+        )
+        .expect("list elements match their declared WAVE type")
+    }
+}
+
+impl<T: IntoWaveValue + WaveType> IntoWaveValue for Option<T> {
+    fn into_wave_value(self) -> Value {
+        Value::make_option(&Self::wave_type(), self.map(IntoWaveValue::into_wave_value))
+            .expect("option payload matches its declared WAVE type")
+    }
 }
 
 pub trait FromWaveValue {
@@ -179,6 +217,6 @@ pub fn from_wave_expr<T: FromWaveValue + WaveType>(expr: &str) -> T {
     )
 }
 
-pub fn to_wave_expr<T: Into<wasm_wave::value::Value>>(value: T) -> String {
-    wasm_wave::to_string(&value.into()).expect("Failed to format wave expression")
+pub fn to_wave_expr<T: IntoWaveValue>(value: T) -> String {
+    wasm_wave::to_string(&value.into_wave_value()).expect("Failed to format wave expression")
 }

@@ -39,6 +39,12 @@ impl stdlib::FromWaveValue for Op {
     }
 }
 #[automatically_derived]
+impl stdlib::IntoWaveValue for Op {
+    fn into_wave_value(self) -> stdlib::wasm_wave::value::Value {
+        self.into()
+    }
+}
+#[automatically_derived]
 impl From<Op> for stdlib::wasm_wave::value::Value {
     fn from(value_: Op) -> Self {
         (match value_ {
@@ -53,21 +59,21 @@ impl From<Op> for stdlib::wasm_wave::value::Value {
                 <stdlib::wasm_wave::value::Value as stdlib::wasm_wave::wasm::WasmValue>::make_variant(
                     &stdlib::wave_type::<Op>(),
                     "sum",
-                    Some(stdlib::wasm_wave::value::Value::from(operand)),
+                    Some(stdlib::IntoWaveValue::into_wave_value(operand)),
                 )
             }
             Op::Mul(operand) => {
                 <stdlib::wasm_wave::value::Value as stdlib::wasm_wave::wasm::WasmValue>::make_variant(
                     &stdlib::wave_type::<Op>(),
                     "mul",
-                    Some(stdlib::wasm_wave::value::Value::from(operand)),
+                    Some(stdlib::IntoWaveValue::into_wave_value(operand)),
                 )
             }
             Op::Div(operand) => {
                 <stdlib::wasm_wave::value::Value as stdlib::wasm_wave::wasm::WasmValue>::make_variant(
                     &stdlib::wave_type::<Op>(),
                     "div",
-                    Some(stdlib::wasm_wave::value::Value::from(operand)),
+                    Some(stdlib::IntoWaveValue::into_wave_value(operand)),
                 )
             }
         })

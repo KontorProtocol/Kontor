@@ -372,17 +372,16 @@ world root {
     }
 
     #[test]
-    fn test_invalid_list_in_record() {
+    fn test_list_in_response_record() {
         let result = validate(
             r#"
-    record bad { names: list<string> }
+    record page { names: list<string>, next: option<string> }
 
     export init: async func(ctx: borrow<proc-context>) -> contract;
-    export get: async func(ctx: borrow<view-context>) -> bad;
+    export get: async func(ctx: borrow<view-context>) -> page;
 "#,
         );
-        assert!(result.has_errors());
-        assert!(result.errors.iter().any(|e| e.message.contains("list<T>")));
+        assert!(!result.has_errors(), "{:?}", result.errors);
     }
 
     #[test]
