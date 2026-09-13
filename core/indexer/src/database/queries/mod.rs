@@ -37,6 +37,8 @@ pub enum Error {
     ContractNotFound(String),
     #[error("Invalid data: {0}")]
     InvalidData(String),
+    #[error("row scan requires direct scalar leaves")]
+    NonScalarRow,
     #[error("Key codec error: {0:?}")]
     KeyCodec(stdlib::CodecError),
 }

@@ -201,7 +201,7 @@ User WIT **cannot define a type whose name is reserved for a Kontor built-in**
 `view-context`, `view-storage`, `fall-context`, `proc-context`, `proc-storage`,
 `core-context`, `signer`, `holder`, `holder-ref`, `file-descriptor`,
 `raw-file-descriptor`, `proof`, `challenge-input`, `verify-result`, `error`, `keys`,
-`index-rows`, `integer`, `decimal`.
+`storage-rows`, `integer`, `decimal`.
 
 Rationale: the macro layer (`is_primitive_type`, the `import!` skip list) recognizes
 built-in types by their bare Rust identifier in generated code, so a same-named user

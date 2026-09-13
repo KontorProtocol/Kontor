@@ -37,6 +37,18 @@ async fn index(
     ))
 }
 
+async fn entries(
+    runtime: &mut Runtime,
+    address: &ContractAddress,
+    arguments: &str,
+) -> Result<Vec<String>> {
+    Ok(from_wave_expr(
+        &runtime
+            .execute(None, None, address, &format!("number-entries({arguments})"))
+            .await?,
+    ))
+}
+
 #[tokio::test]
 async fn scalar_numbers_preserve_indexes_deposits_and_rollback() -> Result<()> {
     let (mut runtime, _dir, _name) = test_runtime().await?;
@@ -97,6 +109,95 @@ async fn scalar_numbers_preserve_indexes_deposits_and_rollback() -> Result<()> {
             Some(vec![integer.clone(), decimal.clone(), decimal])
         );
     }
+
+    for integers in [false, true] {
+        let expected: Vec<String> = inputs
+            .iter()
+            .enumerate()
+            .map(|(key, integer)| {
+                let value = if integers {
+                    integer.clone()
+                } else {
+                    Decimal::from_raw_units(Integer::from(integer.as_str())).to_string()
+                };
+                format!("{key}:{value}")
+            })
+            .collect();
+        let gauge = FuelGauge::new();
+        runtime.gauge = Some(gauge.clone());
+        assert_eq!(
+            entries(
+                &mut runtime,
+                &address,
+                &format!("none, none, false, 100, {integers}")
+            )
+            .await?,
+            expected
+        );
+        let stats = gauge.per_type_stats().await;
+        assert!(!stats.contains_key(&FuelDiscriminants::Get));
+        assert_eq!(stats[&FuelDiscriminants::KeysNext].count, 5);
+        let expected_fuel: u64 = inputs
+            .iter()
+            .enumerate()
+            .map(|(key, integer)| {
+                let payload = Integer::from(integer.as_str()).encode();
+                Fuel::KeysNext(
+                    ((key as u64).encode().len() + serialize(&payload).unwrap().len()) as u64,
+                )
+                .cost()
+            })
+            .sum();
+        assert_eq!(
+            stats[&FuelDiscriminants::KeysNext].total_fuel,
+            expected_fuel
+        );
+
+        let gauge = FuelGauge::new();
+        runtime.gauge = Some(gauge.clone());
+        assert_eq!(
+            entries(
+                &mut runtime,
+                &address,
+                &format!("some(1), some(4), true, 2, {integers}")
+            )
+            .await?,
+            [expected[3].clone(), expected[2].clone()]
+        );
+        let stats = gauge.per_type_stats().await;
+        assert_eq!(
+            stats[&FuelDiscriminants::KeysNext].count,
+            2,
+            "take must not pull a third row"
+        );
+        let gauge = FuelGauge::new();
+        runtime.gauge = Some(gauge.clone());
+        assert!(
+            entries(
+                &mut runtime,
+                &address,
+                &format!("none, none, false, 0, {integers}")
+            )
+            .await?
+            .is_empty()
+        );
+        assert!(
+            !gauge
+                .per_type_stats()
+                .await
+                .contains_key(&FuelDiscriminants::KeysNext)
+        );
+        assert!(
+            entries(
+                &mut runtime,
+                &address,
+                &format!("some(3), some(3), false, 100, {integers}")
+            )
+            .await?
+            .is_empty()
+        );
+    }
+    runtime.gauge = None;
 
     let path = KeyPath::new().push_interned(2).push_element(&3u64);
     let leaves = runtime
@@ -169,11 +270,16 @@ async fn scalar_numbers_preserve_indexes_deposits_and_rollback() -> Result<()> {
             [0]
         );
     }
+    let before_entries = entries(&mut runtime, &address, "none, none, false, 100, false").await?;
     runtime.storage.savepoint().await?;
     runtime
         .execute_api(Some(&signer), &address, "remove-numbers(0)")
         .await?;
     assert!(index(&mut runtime, &address, "0").await?.is_empty());
+    assert_eq!(
+        entries(&mut runtime, &address, "none, none, false, 100, false").await?,
+        before_entries[1..]
+    );
     assert!(
         from_wave_expr::<Vec<u64>>(
             &runtime
@@ -183,6 +289,10 @@ async fn scalar_numbers_preserve_indexes_deposits_and_rollback() -> Result<()> {
         .is_empty()
     );
     runtime.storage.rollback().await?;
+    assert_eq!(
+        entries(&mut runtime, &address, "none, none, false, 100, false").await?,
+        before_entries
+    );
     assert_eq!(index(&mut runtime, &address, "0").await?, ["0:0"]);
 
     for (key, decimal) in [(5, "3"), (6, "-2")] {
@@ -210,6 +320,7 @@ async fn scalar_numbers_preserve_indexes_deposits_and_rollback() -> Result<()> {
         before
     );
 
+    let before_entries = entries(&mut runtime, &address, "none, none, false, 100, false").await?;
     insert_block(
         &runtime.get_storage_conn(),
         BlockRow::builder()
@@ -224,6 +335,10 @@ async fn scalar_numbers_preserve_indexes_deposits_and_rollback() -> Result<()> {
         .execute_api(Some(&signer), &address, "remove-numbers(6)")
         .await?;
     assert_eq!(stored(&mut runtime, &address, 6).await?, None);
+    assert_eq!(
+        entries(&mut runtime, &address, "none, none, false, 100, false").await?,
+        before_entries[..6]
+    );
     assert_eq!(index(&mut runtime, &address, "7").await?, ["7:3"]);
     assert!(runtime.storage.footprint().total_gas(signer_id).await? < before);
     assert_eq!(
@@ -239,9 +354,17 @@ async fn scalar_numbers_preserve_indexes_deposits_and_rollback() -> Result<()> {
         .await?;
     assert!(index(&mut runtime, &address, "7").await?.is_empty());
     assert_eq!(index(&mut runtime, &address, "8").await?, ["8:-4"]);
+    assert_eq!(
+        entries(&mut runtime, &address, "some(5), none, false, 100, false").await?,
+        ["5:-4"]
+    );
 
     runtime.storage.rollback_with_footprint(1).await?;
     runtime.set_context(1, None, None, None).await;
+    assert_eq!(
+        entries(&mut runtime, &address, "none, none, false, 100, false").await?,
+        before_entries
+    );
     assert_eq!(index(&mut runtime, &address, "7").await?, ["7:-2", "7:3"]);
     assert!(index(&mut runtime, &address, "8").await?.is_empty());
     assert_eq!(

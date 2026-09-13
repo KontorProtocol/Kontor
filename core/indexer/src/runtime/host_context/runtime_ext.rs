@@ -1,15 +1,17 @@
 use anyhow::Result;
 use bitcoin::hashes::Hash;
 use futures_util::StreamExt;
-use indexer_types::deserialize;
+use serde::Deserialize;
 use wasmtime::component::{Accessor, Resource};
 
+use crate::database::queries::Error as StorageError;
+use crate::runtime::host_storage::decode_storage_value;
 use crate::runtime::wit::kontor::built_in::context::HolderRef;
 use crate::runtime::wit::{
-    Contract, CoreContext, FallContext, HasContractId, Holder, IndexRows, Keys, ProcContext,
-    ProcStorage, Signer, Transaction, ViewContext, ViewStorage,
+    Contract, CoreContext, FallContext, HasContractId, Holder, Keys, ProcContext, ProcStorage,
+    Signer, StorageRows, Transaction, ViewContext, ViewStorage,
 };
-use crate::runtime::{Runtime, fuel::Fuel, hash_bytes};
+use crate::runtime::{ExecutionError, Runtime, fuel::Fuel, hash_bytes};
 
 impl Runtime {
     pub(super) async fn _generate_id<T>(&self, accessor: &Accessor<T, Self>) -> Result<String> {
@@ -209,11 +211,11 @@ impl Runtime {
         Ok(k)
     }
 
-    pub(super) async fn _next_index_row<T>(
+    pub(super) async fn _next_storage_row<T, V: for<'de> Deserialize<'de>>(
         &self,
         accessor: &Accessor<T, Self>,
-        self_: Resource<IndexRows>,
-    ) -> Result<Option<(Vec<u8>, Vec<u8>)>> {
+        self_: Resource<StorageRows>,
+    ) -> Result<Option<(Vec<u8>, V)>> {
         let item: Option<(Vec<u8>, Vec<u8>)> = self
             .table
             .lock()
@@ -222,7 +224,13 @@ impl Runtime {
             .stream
             .next()
             .await
-            .transpose()?;
+            .transpose()
+            .map_err(|error| match error {
+                // The guest chooses the scan target. A compound value is valid
+                // state, so requesting it as a scalar must not halt the node.
+                StorageError::NonScalarRow => ExecutionError::Deterministic(error.into()),
+                other => ExecutionError::NonDeterministic(other.into()),
+            })?;
         match item {
             Some((member, raw_value)) => {
                 // Meter member + the raw value bytes read from the log (a covering read
@@ -230,13 +238,7 @@ impl Runtime {
                 Fuel::KeysNext((member.len() + raw_value.len()) as u64)
                     .consume(accessor, self.gauge.as_ref())
                     .await?;
-                // The leaf value is a stored list_u8 — i.e. a SERIALIZED `Vec<u8>` (the
-                // covering projection was written via `set-list-u8`, which serializes).
-                // Deserialize it back to the raw projection bytes here, exactly as
-                // `_get_primitive` does for a `get-list-u8`, so the guest decodes the
-                // projection's codec elements, not their serialization frame.
-                let value: Vec<u8> = deserialize(&raw_value)?;
-                Ok(Some((member, value)))
+                Ok(Some((member, decode_storage_value(&raw_value)?)))
             }
             None => Ok(None),
         }

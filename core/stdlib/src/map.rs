@@ -346,10 +346,10 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ReadStorage;
     use crate::StorageMap;
     use crate::keycodec::next_element;
     use crate::query::*;
+    use crate::{HasNextRow, ReadStorage, ScalarStorage, make_storage_rows_iterator};
     use alloc::collections::BTreeMap;
     use alloc::string::ToString;
     use alloc::vec;
@@ -361,6 +361,32 @@ mod tests {
         U64(u64),
         Void,
         Bytes(Vec<u8>),
+    }
+
+    struct MockRows<I>(RefCell<I>);
+
+    impl<I: Iterator<Item = (Vec<u8>, Cell)>> HasNextRow for MockRows<I> {
+        fn next_list_u8(&self) -> Option<(Vec<u8>, Vec<u8>)> {
+            self.0.borrow_mut().next().map(|(key, cell)| match cell {
+                Cell::Bytes(value) => (key, value),
+                _ => panic!("expected byte slot"),
+            })
+        }
+        fn next_u64(&self) -> Option<(Vec<u8>, u64)> {
+            self.0.borrow_mut().next().map(|(key, cell)| match cell {
+                Cell::U64(value) => (key, value),
+                _ => panic!("expected u64 slot"),
+            })
+        }
+        fn next_str(&self) -> Option<(Vec<u8>, String)> {
+            unimplemented!()
+        }
+        fn next_s64(&self) -> Option<(Vec<u8>, i64)> {
+            unimplemented!()
+        }
+        fn next_bool(&self) -> Option<(Vec<u8>, bool)> {
+            unimplemented!()
+        }
     }
 
     #[derive(Default)]
@@ -422,19 +448,19 @@ mod tests {
                 Some(v)
             })
         }
-        fn __get_index_rows_range(
+        fn __get_storage_rows_range<V: ScalarStorage>(
             self: &Rc<Self>,
             path: &[u8],
             lo: Option<&[u8]>,
             hi: Option<&[u8]>,
             descending: bool,
-        ) -> impl Iterator<Item = (Vec<u8>, Vec<u8>)> + use<> {
+        ) -> impl Iterator<Item = (Vec<u8>, V)> + use<V> {
             *self.row_scans.borrow_mut() += 1;
             // Direct-child leaves under `path`, as (member-element, leaf value bytes) —
             // the covering projection is stored as list_u8 (`Cell::Bytes`). Mirrors the
             // host's member extraction + `[lo, hi)` seek; the count row (at exactly
             // `path`) is excluded by the non-empty-suffix check.
-            let mut rows: Vec<(Vec<u8>, Vec<u8>)> = self
+            let mut rows: Vec<(Vec<u8>, Cell)> = self
                 .map
                 .borrow()
                 .iter()
@@ -448,22 +474,23 @@ mod tests {
                         return None; // not a direct leaf
                     }
                     match cell {
-                        Cell::Bytes(v) => Some((elem.to_vec(), v.clone())),
-                        _ => None,
+                        Cell::Bytes(_) | Cell::U64(_) => Some((elem.to_vec(), cell.clone())),
+                        Cell::Void => None,
                     }
                 })
                 .collect();
-            rows.sort();
+            rows.sort_by(|a, b| a.0.cmp(&b.0));
             rows.dedup_by(|a, b| a.0 == b.0);
             let lo = lo.map(<[u8]>::to_vec);
             let hi = hi.map(<[u8]>::to_vec);
             if descending {
                 rows.reverse();
             }
-            rows.into_iter().filter(move |(m, _)| {
+            let rows = rows.into_iter().filter(move |(m, _)| {
                 lo.as_deref().is_none_or(|l| m.as_slice() >= l)
                     && hi.as_deref().is_none_or(|h| m.as_slice() < h)
-            })
+            });
+            make_storage_rows_iterator(MockRows(RefCell::new(rows)))
         }
         fn __get<T: crate::Retrieve<Self>>(self: &Rc<Self>, path: KeyPath) -> Option<T> {
             T::__get(self, path)
@@ -1580,7 +1607,7 @@ mod tests {
             ctx.__set_u64(&path.push_element(key), 1);
         }
         ctx.__delete(&path.push_element(&keys[1]));
-        let range = KeyRange::new(
+        let range = KeyRange::<_, _, ()>::new(
             ctx,
             path,
             (

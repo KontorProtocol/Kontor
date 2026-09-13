@@ -151,7 +151,7 @@ impl<__S: stdlib::ReadStorage + 'static> FibStorageCacheModel<__S> {
     pub fn range(
         &self,
         range: impl core::ops::RangeBounds<u64>,
-    ) -> stdlib::KeyRange<u64, __S> {
+    ) -> stdlib::KeyRange<u64, __S, FibValue> {
         stdlib::KeyRange::new(self.ctx.clone(), self.base_path.clone(), range)
     }
 }
@@ -289,7 +289,7 @@ impl<
     pub fn range(
         &self,
         range: impl core::ops::RangeBounds<u64>,
-    ) -> stdlib::KeyRange<u64, __S> {
+    ) -> stdlib::KeyRange<u64, __S, FibValue> {
         stdlib::KeyRange::new(self.ctx.clone(), self.base_path.clone(), range)
     }
 }

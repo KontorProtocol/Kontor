@@ -56,6 +56,60 @@ One source supplies each index bucket to stdlib. Generated models no longer carr
 separate key, sorted, and covering scan implementations. Internal bucket adapters
 are not contract query APIs.
 
+## Scalar map entries
+
+Use `.entries()` when both the key and its scalar value are needed:
+
+```rust
+ledger.entries(); // (Holder, Decimal)
+ledger.range(start..end).entries();
+ledger.range(..=last).rev().entries().take(20);
+nft.attributes().entries(); // (String, String)
+```
+
+The map carries its value type into the range, so callers do not select a decoder.
+`ScalarStorage` is implemented for actual single-row values: strings, byte lists,
+booleans, supported integers, `Integer`, `Decimal`, and stored `Holder` handles.
+Records, enums, options, and compound built-ins do not gain entry scans merely
+because they support `KeyElement`. Their maps still support key scans and per-key
+models. An index name cannot shadow `entries`.
+
+The shared `storage-rows` host cursor replaces the covering-only `index-rows`
+cursor. Its `next-str`, `next-u64`, `next-s64`, `next-bool`, and `next-list-u8`
+methods all advance the same database stream. `ScalarStorage` selects the correct
+method for the declared value type; callers of `.entries()` do not choose it.
+Covering projections, `Integer`, and `Decimal` use the byte-list method and retain
+their existing language-specific payload decoders.
+
+Point getters and row methods share one strict Postcard deserializer in the host.
+The database representation does not cross into the guest. Malformed values,
+invalid UTF-8, and trailing bytes fail deterministically because the guest chooses
+the requested slot type, and valid writes through another setter can violate it.
+Both point reads and scans check u32/i32 narrowing rather than silently truncating.
+Stored Holder parsing is shared too; an invalid value cannot masquerade as a
+missing entry on point reads.
+Numeric payload validation remains in the guest and produces a deterministic Wasm
+trap. The host owns visibility, bounds, byte metering, and database access.
+
+Compound children are rejected instead of returning an arbitrary descendant
+value. This invalid scan request is a deterministic contract failure; database
+failures and malformed stored keys remain infrastructure failures. Regression
+tests write state before each invalid read and verify rollback and a subsequent
+successful call, for point reads and scans, directly and through a proxy. Primitive
+roundtrips cover both scan directions, integer boundaries, empty values, and
+non-ASCII strings. There is no separate recoverable entry API or guest Postcard
+decoder.
+
+Each consumed row pays for its key and stored value bytes. Key-only queries keep
+using the lighter key cursor. Filters run in the contract, so an entry rejected
+by a filter still pays for its fetched value. `.take(n)` pulls at most `n` rows;
+there is no hidden lookahead or full-map collection. Snapshot keys/entries before
+mutating the scanned collection, as with existing lazy index queries.
+
+No storage encoding, index, or table is added. The host ABI changes, so deployed
+contracts and the runtime must be rebuilt together under the preproduction replay
+model. The checked-in native/test binaries and SDK component accompany the change.
+
 ## Encoding and bounds
 
 Primary keys, index keys, and projections use the shared ordered `KeyElement`
@@ -97,6 +151,10 @@ when `items` are agreement IDs. The offset signatures are replaced.
 Pages read current state. They do not promise a snapshot across calls: inserts
 before the cursor and holder transfers can change what later calls return. A
 cursor need not identify a currently existing NFT. No cursor table is stored.
+
+Token balance exports and NFT attributes use scalar entry reads. Their existing
+result shapes, order, and filtering rules are preserved; these full exports are
+not silently truncated or converted into page APIs.
 
 ## Response data and persistent data
 

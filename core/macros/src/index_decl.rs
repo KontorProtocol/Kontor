@@ -228,7 +228,7 @@ fn field_exists(fields: &FieldsNamed, ident: &Ident) -> bool {
 /// colliding index would be silently unreachable. Reject it at parse time (before
 /// any codegen) so the derive fails with just this error.
 fn reserved_index_name(name: &str) -> Option<&'static str> {
-    const MAP_SURFACE: &[&str] = &["get", "set", "keys", "load", "remove", "new"];
+    const MAP_SURFACE: &[&str] = &["get", "set", "keys", "entries", "load", "remove", "new"];
     const QUERY_FINISHERS: &[&str] = &[
         "iter",
         "values",

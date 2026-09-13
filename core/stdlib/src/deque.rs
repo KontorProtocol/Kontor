@@ -216,7 +216,7 @@ impl<V: Store<S2>, S1, S2: WriteStorage + ?Sized> Store<S2> for StorageDeque<V, 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::KeyElement;
+    use crate::{KeyElement, ScalarStorage};
     use alloc::collections::BTreeMap;
     use alloc::string::String;
     use alloc::vec::Vec;
@@ -249,13 +249,13 @@ mod tests {
         ) -> impl Iterator<Item = T> + use<T> {
             core::iter::empty()
         }
-        fn __get_index_rows_range(
+        fn __get_storage_rows_range<V: ScalarStorage>(
             self: &Rc<Self>,
             _: &[u8],
             _: Option<&[u8]>,
             _: Option<&[u8]>,
             _: bool,
-        ) -> impl Iterator<Item = (Vec<u8>, Vec<u8>)> + use<> {
+        ) -> impl Iterator<Item = (Vec<u8>, V)> + use<V> {
             core::iter::empty()
         }
         fn __get_str(self: &Rc<Self>, _: &[u8]) -> Option<String> {

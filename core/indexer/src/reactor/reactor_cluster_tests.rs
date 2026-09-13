@@ -1,5 +1,9 @@
 #[path = "ordering_reward_tests.rs"]
 mod ordering_reward_tests;
+#[path = "startup_recovery_tests.rs"]
+mod startup_recovery_tests;
+
+use startup_recovery_tests::StartupFaults;
 
 use std::collections::HashSet;
 use std::sync::{Arc, Mutex};
@@ -140,6 +144,15 @@ impl ReactorCluster {
         initial: usize,
         validation_delay: Option<Duration>,
     ) -> Result<Self> {
+        Self::start_with_faults(total, initial, validation_delay, None).await
+    }
+
+    async fn start_with_faults(
+        total: usize,
+        initial: usize,
+        validation_delay: Option<Duration>,
+        startup_faults: Option<StartupFaults>,
+    ) -> Result<Self> {
         logging::setup();
         // Same derivation path operators run in production via `kontor keygen`
         // — fixed master seed gives reproducible test runs.
@@ -245,6 +258,7 @@ impl ReactorCluster {
                 node_dirs[i].1.clone(),
                 true,
                 validation_delay,
+                startup_faults.clone(),
                 reactor_errors.clone(),
                 &mut join_set,
             );
@@ -361,6 +375,7 @@ impl ReactorCluster {
             self.node_dirs[i].1.clone(),
             false,
             self.validation_delay,
+            None,
             self.reactor_errors.clone(),
             &mut self.join_set,
         );
@@ -444,6 +459,7 @@ impl ReactorCluster {
         // Artificial `validate_txs` latency — see `validation_delay` on the
         // cluster.
         validation_delay: Option<Duration>,
+        startup_faults: Option<StartupFaults>,
         reactor_errors: Arc<Mutex<Vec<(usize, String)>>>,
         join_set: &mut JoinSet<()>,
     ) {
@@ -539,6 +555,10 @@ impl ReactorCluster {
             )
             .await
             .expect("ConsensusState::new failed");
+            let _fault_tasks = startup_faults.map(|faults| {
+                state.timeouts.propose = Duration::from_secs(10);
+                faults.install(&mut state.channels)
+            });
             state.observation = Some(ObservationChannels {
                 decided_tx: dtx,
                 finality_tx: ftx,
@@ -623,6 +643,7 @@ impl ReactorCluster {
             self.node_dirs[i].1.clone(),
             true,
             self.validation_delay,
+            None,
             self.reactor_errors.clone(),
             &mut self.join_set,
         );

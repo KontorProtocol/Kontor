@@ -109,6 +109,14 @@ pub fn is_primitive_type(ty: &syn::Type) -> bool {
     }
 }
 
+// Model primitives include eager compound reads (ContractAddress/HolderRef).
+// Only actual leaves may expose value-returning row scans.
+pub fn is_scalar_storage_type(ty: &syn::Type) -> bool {
+    is_primitive_type(ty)
+        && !last_segment_named(ty, "ContractAddress")
+        && !last_segment_named(ty, "HolderRef")
+}
+
 /// True if `ty`'s path ends in a segment named `name` (e.g. `Map`, `Deque`),
 /// ignoring any generic arguments.
 fn last_segment_named(ty: &syn::Type, name: &str) -> bool {

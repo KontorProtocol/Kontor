@@ -32,6 +32,7 @@ world root {
   export remove-numbers: async func(ctx: borrow<proc-context>, key: u64);
   export stored-numbers: async func(ctx: borrow<view-context>, key: u64) -> option<list<string>>;
   export optional-integer: async func(ctx: borrow<view-context>) -> option<string>;
+  export number-entries: async func(ctx: borrow<view-context>, lower: option<u64>, upper: option<u64>, descending: bool, limit: u64, integers: bool) -> list<string>;
   export number-keys: async func(ctx: borrow<view-context>) -> list<u64>;
   export number-index: async func(ctx: borrow<view-context>, integer: string) -> list<string>;
   export decimal-index: async func(ctx: borrow<view-context>, decimal: string) -> list<u64>;

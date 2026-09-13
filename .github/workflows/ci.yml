@@ -126,8 +126,23 @@ jobs:
       - name: Install cargo expand
         run: cargo binstall cargo-expand --no-confirm
       - name: Run tests
+        id: tests
         working-directory: ./core
         run: REGTEST=1 cargo test --release --workspace
+      - name: Preserve macOS crash reports
+        if: failure() && steps.tests.outcome == 'failure' && runner.os == 'macOS'
+        uses: actions/upload-artifact@v4
+        with:
+          name: macos-crash-reports-${{ github.run_attempt }}
+          path: |
+            ~/Library/Logs/DiagnosticReports/integration-*
+            ~/Library/Logs/DiagnosticReports/kontor*
+            ~/Library/Logs/DiagnosticReports/bitcoind*
+            /Library/Logs/DiagnosticReports/integration-*
+            /Library/Logs/DiagnosticReports/kontor*
+            /Library/Logs/DiagnosticReports/bitcoind*
+          if-no-files-found: warn
+          retention-days: 14
 
   # The committed genesis binaries are self-describing: binaries/build.json
   # records the platform that produced them. Resolve it to a matching runner so

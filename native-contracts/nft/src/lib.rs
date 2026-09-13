@@ -412,12 +412,8 @@ impl Guest for Nft {
             return Vec::new();
         };
         nft.attributes()
-            .keys()
-            .filter_map(|key: String| {
-                nft.attributes()
-                    .get(&key)
-                    .map(|value| Attribute { key, value })
-            })
+            .entries()
+            .map(|(key, value)| Attribute { key, value })
             .collect()
     }
 

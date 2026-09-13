@@ -2,6 +2,7 @@ use anyhow::Result;
 use indexer::reg_tester::{RegTesterCluster, default_kontor_bin};
 use indexer::runtime::ContractAddress;
 use indexer_types::{Inst, InstKind};
+use std::time::Duration;
 use testlib::*;
 
 interface!(name = "counter", path = "../../test-contracts/counter/wit");
@@ -37,25 +38,29 @@ async fn cluster_consensus_lifecycle() -> Result<()> {
         .read("counter")
         .await?
         .expect("counter contract not found");
-    let (mut rt, mut ident) = cluster.identity().await?;
-    let result = rt
-        .instruction(
-            &mut ident,
-            Inst {
-                gas_limit: 10_000,
-                kind: InstKind::Publish {
-                    name: "counter".to_string(),
-                    bytes: contract_bytes,
-                    provenance: sample_provenance(),
-                },
-            },
-        )
+    let mut publisher = RuntimeRegtest::new(cluster.new_module_reg_tester().await?);
+    // Module clients rotate across nodes; keep the fourth one behind publication.
+    let _ = cluster.new_module_reg_tester().await?;
+    let _ = cluster.new_module_reg_tester().await?;
+    let mut cached_reader = RuntimeRegtest::new(cluster.new_module_reg_tester().await?);
+    let signer = publisher.identity().await?;
+    cluster.pause_node(3).await?;
+    let contract = publisher
+        .publish(&signer, "counter", &contract_bytes)
         .await?;
-    let contract: ContractAddress = result
-        .result
-        .contract
-        .parse()
-        .map_err(|e: String| anyhow::anyhow!(e))?;
+    let cached = cached_reader.publish(&signer, "counter", &contract_bytes);
+    tokio::pin!(cached);
+    assert!(
+        tokio::time::timeout(Duration::from_millis(200), &mut cached)
+            .await
+            .is_err(),
+        "cached publish returned before this node processed the publication"
+    );
+    cluster.resume_node(3).await?;
+    let cached_contract = tokio::time::timeout(Duration::from_secs(120), &mut cached).await??;
+    assert_eq!(cached_contract, contract);
+    assert!(cluster.client(3).wit(&contract).await.is_ok());
+    let (rt, mut ident) = cluster.identity().await?;
     let contract_addr = indexer_types::ContractAddress {
         name: contract.name.clone(),
         height: contract.height,

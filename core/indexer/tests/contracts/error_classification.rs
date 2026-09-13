@@ -1,5 +1,6 @@
 use indexer::runtime::ExecutionError;
 use testlib::*;
+use wasmtime::Trap;
 
 interface!(
     name = "error_test",
@@ -82,6 +83,96 @@ async fn test_error_case_trap_panic() -> Result<()> {
 
     let result = error_test::trap_panic(runtime, &contract, &signer).await;
     assert_deterministic_error(&result);
+    Ok(())
+}
+
+#[testlib::test(contracts_dir = "../../test-contracts", local_only = true)]
+async fn test_storage_decode_failure_rolls_back() -> Result<()> {
+    let (proxy, contract) = setup_proxy(runtime).await?;
+    let signer = runtime.identity().await?;
+    let messages = [
+        "invalid storage value",
+        "",
+        "",
+        "",
+        "",
+        "invalid storage value",
+        "trailing storage bytes",
+        "invalid storage value",
+        "",
+    ];
+    for target in [&contract, &proxy] {
+        for (case, message) in messages.iter().enumerate() {
+            for scan in [false, true] {
+                let result =
+                    error_test::invalid_storage_read(runtime, target, &signer, case as u32, scan)
+                        .await;
+                assert_deterministic_error(&result);
+                let err = result.unwrap_err();
+                let Some(ExecutionError::Deterministic(cause)) =
+                    err.downcast_ref::<ExecutionError>()
+                else {
+                    unreachable!();
+                };
+                let mut cause = cause;
+                while let Some(ExecutionError::Deterministic(inner)) =
+                    cause.downcast_ref::<ExecutionError>()
+                {
+                    cause = inner;
+                }
+                if message.is_empty() {
+                    assert!(
+                        matches!(
+                            cause.downcast_ref::<Trap>(),
+                            Some(Trap::UnreachableCodeReached)
+                        ),
+                        "expected a language conversion trap for case {case}, scan={scan}, got {cause:#}"
+                    );
+                } else {
+                    assert!(
+                        format!("{cause:#}").contains(message),
+                        "expected host decode rejection for case {case}, scan={scan}, got {cause:#}"
+                    );
+                    assert!(cause.downcast_ref::<Trap>().is_none());
+                }
+                assert_eq!(
+                    error_test::storage_state(runtime, &contract).await?,
+                    [0, 0, 0, 0]
+                );
+                assert_eq!(error_test::succeed(runtime, target).await?, 42);
+            }
+        }
+    }
+    Ok(())
+}
+
+#[testlib::test(contracts_dir = "../../test-contracts", local_only = true)]
+async fn test_primitive_entries_match_point_reads() -> Result<()> {
+    let signer = runtime.identity().await?;
+    let contract = runtime.publish(&signer, "error-test").await?;
+    error_test::primitive_entries(runtime, &contract, &signer).await?;
+    Ok(())
+}
+
+#[testlib::test(contracts_dir = "../../test-contracts", local_only = true)]
+async fn test_compound_scan_failure_rolls_back() -> Result<()> {
+    let (proxy, contract) = setup_proxy(runtime).await?;
+    let signer = runtime.identity().await?;
+    for target in [&contract, &proxy] {
+        for descending in [false, true] {
+            let result = error_test::scan_compound(runtime, target, &signer, descending).await;
+            assert_deterministic_error(&result);
+            assert!(
+                format!("{:#}", result.unwrap_err())
+                    .contains("row scan requires direct scalar leaves")
+            );
+            assert_eq!(
+                error_test::storage_state(runtime, &contract).await?,
+                [0, 0, 0, 0]
+            );
+            assert_eq!(error_test::succeed(runtime, target).await?, 42);
+        }
+    }
     Ok(())
 }
 

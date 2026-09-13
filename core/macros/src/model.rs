@@ -72,6 +72,16 @@ pub fn generate_struct(
                     let field_model_name = Ident::new(&format!("{}{}{}Model", type_name, field_name.to_string().to_pascal_case(), write_prefix), field.span());
                     let vi = value_item(write, &v_ty, field.span())?;
 
+                    let entries = if utils::is_scalar_storage_type(&v_ty) {
+                        quote! {
+                            pub fn entries(&self) -> impl Iterator<Item = (#k_ty, #v_ty)> {
+                                self.range(..).entries()
+                            }
+                        }
+                    } else {
+                        quote! {}
+                    };
+
                     if vi.is_primitive {
                         // Plain map over a leaf value — no index machinery.
                         let setter = if write {
@@ -115,11 +125,13 @@ pub fn generate_struct(
                                     Map::new(&[])
                                 }
 
+                                #entries
+
                                 pub fn keys(&self) -> impl Iterator<Item = #k_ty> {
                                     self.range(..).keys()
                                 }
 
-                                pub fn range(&self, range: impl core::ops::RangeBounds<#k_ty>) -> stdlib::KeyRange<#k_ty, __S> {
+                                pub fn range(&self, range: impl core::ops::RangeBounds<#k_ty>) -> stdlib::KeyRange<#k_ty, __S, #v_ty> {
                                     stdlib::KeyRange::new(self.ctx.clone(), self.base_path.clone(), range)
                                 }
                             }
@@ -220,11 +232,13 @@ pub fn generate_struct(
                                     Map::new(&[])
                                 }
 
+                                #entries
+
                                 pub fn keys(&self) -> impl Iterator<Item = #k_ty> {
                                     self.range(..).keys()
                                 }
 
-                                pub fn range(&self, range: impl core::ops::RangeBounds<#k_ty>) -> stdlib::KeyRange<#k_ty, __S> {
+                                pub fn range(&self, range: impl core::ops::RangeBounds<#k_ty>) -> stdlib::KeyRange<#k_ty, __S, #v_ty> {
                                     stdlib::KeyRange::new(self.ctx.clone(), self.base_path.clone(), range)
                                 }
                             }

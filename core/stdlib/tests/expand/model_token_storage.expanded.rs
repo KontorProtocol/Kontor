@@ -50,13 +50,16 @@ impl<__S: stdlib::ReadStorage + 'static> TokenStorageLedgerModel<__S> {
     pub fn load(&self) -> Map<String, u64> {
         Map::new(&[])
     }
+    pub fn entries(&self) -> impl Iterator<Item = (String, u64)> {
+        self.range(..).entries()
+    }
     pub fn keys(&self) -> impl Iterator<Item = String> {
         self.range(..).keys()
     }
     pub fn range(
         &self,
         range: impl core::ops::RangeBounds<String>,
-    ) -> stdlib::KeyRange<String, __S> {
+    ) -> stdlib::KeyRange<String, __S, u64> {
         stdlib::KeyRange::new(self.ctx.clone(), self.base_path.clone(), range)
     }
 }
@@ -137,13 +140,16 @@ impl<
     pub fn load(&self) -> Map<String, u64> {
         Map::new(&[])
     }
+    pub fn entries(&self) -> impl Iterator<Item = (String, u64)> {
+        self.range(..).entries()
+    }
     pub fn keys(&self) -> impl Iterator<Item = String> {
         self.range(..).keys()
     }
     pub fn range(
         &self,
         range: impl core::ops::RangeBounds<String>,
-    ) -> stdlib::KeyRange<String, __S> {
+    ) -> stdlib::KeyRange<String, __S, u64> {
         stdlib::KeyRange::new(self.ctx.clone(), self.base_path.clone(), range)
     }
 }
