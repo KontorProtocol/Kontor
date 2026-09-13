@@ -1058,6 +1058,7 @@ impl<E: Executor> Reactor<E> {
             .io_jobs
             .iter()
             .any(|j| matches!(j.apply, IoApply::BuildProposal { .. }));
+        let mut idle_retry = false;
         if !build_in_flight {
             match self.make_value_snapshot().await? {
                 ProposalSnapshot::Batch { txs, threshold } => {
@@ -1074,17 +1075,26 @@ impl<E: Executor> Reactor<E> {
                         },
                     });
                 }
-                ProposalSnapshot::Nothing => {}
+                ProposalSnapshot::Nothing => {
+                    // Round zero already offered a batching window. On a retry,
+                    // peers may have started their timers before this proposer;
+                    // another idle wait can make the replacement arrive too late.
+                    idle_retry = self
+                        .consensus
+                        .pending_proposal
+                        .as_ref()
+                        .is_some_and(|p| p.round > Round::new(0));
+                }
             }
         }
-        if past_deadline {
+        if past_deadline || idle_retry {
             // The deadline outranks a validation still in flight. The old code
             // could not honor it — it was inside the RPCs when the deadline
             // passed — so "empty at the deadline" only fired when there was
             // nothing to validate. Now it always fires on time; a candidate
             // set still validating answers a LATER round, and its apply keeps
             // only the pool hygiene.
-            info!("Proposing empty batch at hard deadline");
+            info!(past_deadline, idle_retry, "Proposing empty batch");
             self.fulfill_pending_with(Value::new_batch_raw(last_height, last_hash, vec![]))
                 .await?;
             return Ok(true);
