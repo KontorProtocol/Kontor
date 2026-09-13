@@ -26,9 +26,9 @@
 //!
 //! **Paths are [`stdlib::keycodec`] bytes** (a `BLOB` column), not text. They are
 //! order-preserving and *prefix-structured*: an encoded ancestor is an exact
-//! byte-prefix of every descendant (the codec's element terminators rule out
-//! false prefixes like `"ab"` vs `"abc"`). So a subtree is a single byte range
-//! `[P, strinc(P))` — an index seek, not a `LIKE`/`REGEXP` scan — and a child key
+//! byte-prefix of every descendant. Bounds account for escaped NULs so distinct
+//! string/byte siblings remain outside the subtree. A subtree is a single byte range
+//! `[P, subtree_end(P))` — an index seek, not a `LIKE`/`REGEXP` scan — and a child key
 //! is recovered with [`next_element`].
 //!
 //! Two deliberate EXCEPTIONS, each documented at its call site:
@@ -39,31 +39,20 @@
 
 use futures_util::{Stream, stream};
 use libsql::{Connection, Value, de::from_row, params};
-use stdlib::{next_element, strinc};
+use stdlib::{next_element, subtree_end};
 
 use super::Error;
 use super::versioned::LatestMany;
 use crate::database::types::ContractStateRow;
 
-/// The subtree byte-range `WHERE` fragment + its `:lo`/`:hi` bound params for
-/// `[prefix, strinc(prefix))`. `lo_cmp` is `>=` (include the node) or `>` (children
-/// only). A normal path begins with a tag byte (< `0xFF`), so `strinc` yields an
-/// exclusive upper bound; but the guest can pass ANY codec bytes — including an
-/// empty `list<u8>` (the contract root) or an all-`0xFF` path — for which `strinc`
-/// is `None` (no exclusive upper bound: the range runs to the end of the keyspace).
-/// In that case the fragment omits `path < :hi` and the caller's `contract_id =`
-/// equality bounds the scan — so an empty/degenerate path is a well-defined
-/// whole-(sub)tree operation, not a panic. The caller appends `:contract_id` (and
-/// any other) params.
+/// Bounds end at an element boundary: an escaped-NUL sibling is outside the
+/// subtree even though it shares the encoded node's raw byte prefix.
 fn subtree_range(lo_cmp: &str, prefix: &[u8]) -> (String, Vec<(String, Value)>) {
-    let mut params = vec![(":lo".to_string(), Value::Blob(prefix.to_vec()))];
-    match strinc(prefix) {
-        Some(hi) => {
-            params.push((":hi".to_string(), Value::Blob(hi)));
-            (format!("path {lo_cmp} :lo AND path < :hi"), params)
-        }
-        None => (format!("path {lo_cmp} :lo"), params),
-    }
+    let params = vec![
+        (":lo".to_string(), Value::Blob(prefix.to_vec())),
+        (":hi".to_string(), Value::Blob(subtree_end(prefix))),
+    ];
+    (format!("path {lo_cmp} :lo AND path < :hi"), params)
 }
 
 /// THE window liveness primitive (see the module header): the latest version of
@@ -102,7 +91,7 @@ fn live_latest(select: &str, filter: &str) -> String {
 /// `lo` is the scan-start bind (`:lo`); `lo_cmp` is `>` (children only — `keys`) or
 /// `>=` (include the node — `exists`). `hi` is the pre-computed EXCLUSIVE upper bound
 /// (`:hi`, `cs.path < :hi`); `None` runs to the end of the keyspace, bounded only by
-/// `contract_id` (an empty or all-`0xFF` subtree, whose `strinc` was `None`). The
+/// `contract_id`. The
 /// caller owns the bound math (see [`scan_bounds`]) so the seek/range rules live in
 /// one place. `order` selects the row order — `Some("cs.path")` ascending or
 /// `Some("cs.path DESC")` descending; the byte range in `[lo, hi)` is the SAME either
@@ -513,7 +502,7 @@ pub async fn find_footprint_by_depositor(
 /// only, NOT values. Read-only: the read half of a delete, split out so the
 /// caller can meter `Fuel::Delete` by the row count BEFORE committing to the
 /// writes. `live_latest` skips an already-tombstoned path. A struct value persists
-/// under child paths, so the subtree (`[path, strinc(path))`) is the whole entry.
+/// under child paths, so the subtree (`[path, subtree_end(path))`) is the whole entry.
 pub async fn find_live_subtree(
     conn: &Connection,
     contract_id: u64,
@@ -610,7 +599,7 @@ pub async fn exists_contract_state(
         ">=",
         contract_id,
         path.to_vec(),
-        strinc(path),
+        Some(subtree_end(path)),
         None,
         Some(1),
     );
@@ -631,9 +620,9 @@ pub async fn exists_contract_state(
 /// of subtree); the scan resumes past that child's ENTIRE subtree. It exists for
 /// CROSS-CALL pagination — a view returns a page of keys and, to continue, re-encodes
 /// its last key as `path ++ last_child` and passes it back as `after`. The skip is
-/// `cs.path >= strinc(after)`, NOT `cs.path > after`: a child can own deeper rows
+/// `cs.path >= subtree_end(after)`, NOT `cs.path > after`: a child can own deeper rows
 /// (`path/child/field…`), and `path/child` sorts BEFORE them, so `> path/child` would
-/// re-scan the child's own rows and re-emit it; `strinc(after)` is the first path past
+/// re-scan the child's own rows and re-emit it; `subtree_end(after)` is the first path past
 /// all of `after`'s descendants, landing on the next sibling. WITHIN a call the bound
 /// is the lazy iterator itself, not SQL: the `NOT EXISTS`
 /// formulation (see [`live_paths_scan`]) is index-served, so `ORDER BY path`
@@ -658,10 +647,8 @@ pub async fn exists_contract_state(
 /// or above `x` are pulled without pulling-and-discarding those below (each pulled key
 /// is metered).
 ///
-/// Upper bound. `hi = None`: the whole subtree — `strinc(path)` (the first path past
-/// all of `path`'s descendants), or open-ended when `strinc` is `None` (an all-`0xFF`
-/// path, which isn't well-formed codec bytes — rejected upstream by `validate_path` —
-/// so unreachable). `hi = Some(y)`: an EXCLUSIVE `path ++ y` (`cs.path < :hi`).
+/// Upper bound. `hi = None`: the whole subtree ends at `subtree_end(path)`.
+/// `hi = Some(y)`: an EXCLUSIVE `path ++ y` (`cs.path < :hi`).
 ///
 /// An EMPTY `lo`/`hi` element means "no bound on that side", NOT `path` itself: the
 /// real guest never sends one (a seek key is always a non-empty tuple element), but the
@@ -690,7 +677,7 @@ fn scan_bounds(
             key.extend_from_slice(&hi);
             Some(key)
         }
-        None => strinc(path),
+        None => Some(subtree_end(path)),
     };
     (lo_key, lo_cmp, hi_key)
 }

@@ -14,6 +14,19 @@ world root {
     agreement-id: string,
   }
 
+  /// The next cursor is the last returned NFT id when another item exists.
+  /// None means this page exhausted the query (or limit was zero).
+  record nft-page {
+    items: list<nft-info>,
+    next: option<string>,
+  }
+
+  /// Cursor order is NFT-id order, even though items contain agreement ids.
+  record agreement-page {
+    items: list<string>,
+    next: option<string>,
+  }
+
   record nft-transfer {
     nft-id: string,
     src: holder-ref,
@@ -72,85 +85,55 @@ world root {
   export get-info: async func(ctx: borrow<view-context>, nft-id: string) -> option<nft-info>;
   export total-minted: async func(ctx: borrow<view-context>) -> u64;
 
-  /// Return up to `limit` minted NFTs, skipping the first `offset` entries.
-  ///
-  /// Use this together with `total-minted` to paginate through the full
-  /// collection. The iteration order matches the underlying storage map
-  /// (lexicographic on `nft-id`) and is stable as long as the store is
-  /// not mutated between calls.
-  ///
-  /// `limit` is silently clamped to an internal cap (currently 100) to
-  /// keep response sizes predictable; pass `limit = 0` for an empty
-  /// page. `offset` beyond the collection size yields an empty list.
+  /// List NFTs in lexicographic NFT-id order, strictly after `after` when set.
+  /// Start with after = none; pass the returned next cursor to continue.
+  /// Limit is capped at 100; zero returns an empty page with no next cursor.
+  /// Each call reads current state, not a snapshot spanning all pages. Inserts
+  /// before the cursor and transfers between holder buckets may change later pages.
+  /// The cursor need not identify an existing NFT.
   export list-nfts: async func(
     ctx: borrow<view-context>,
-    offset: u64,
+    after: option<string>,
     limit: u64
-  ) -> list<nft-info>;
+  ) -> nft-page;
 
-  /// Return up to `limit` NFTs originally minted by `creator`, skipping
-  /// the first `offset` matches. Backed by a secondary creator→nft-ids
-  /// index that is populated at `mint` and never mutated afterwards
-  /// (transfers do not move NFTs across creator buckets), so the cost
-  /// is proportional to `offset + limit`.
-  ///
-  /// "Creator" is the signer of the `mint` call that produced the NFT;
-  /// it is immutable for the lifetime of the NFT and is also exposed on
-  /// `nft-info.creator`. This is the right query for "what did this
-  /// account ever mint?", which is independent of who owns the NFTs
-  /// today.
-  ///
-  /// The same clamping rules as `list-nfts` apply (`limit` is capped at
-  /// an internal maximum, `limit = 0` returns an empty list, and an
-  /// `offset` beyond the creator's collection yields an empty list). The
-  /// iteration order matches the underlying storage map (lexicographic
-  /// on `nft-id`) and is stable between calls as long as the store is
-  /// not mutated. An invalid or never-seen `creator` yields an empty
-  /// list rather than an error.
+  /// Same cursor and limit rules as list-nfts, restricted to the immutable creator.
+  /// An invalid or unknown holder reference returns an empty page.
   export list-nfts-by-creator: async func(
     ctx: borrow<view-context>,
     creator: holder-ref,
-    offset: u64,
+    after: option<string>,
     limit: u64
-  ) -> list<nft-info>;
+  ) -> nft-page;
 
-  /// Number of NFTs minted by `creator`. Equivalent to the length of
-  /// the full (non-paginated) `list-nfts-by-creator` result. Returns 0
-  /// when `creator` has no entry in the index.
   export count-nfts-by-creator: async func(
     ctx: borrow<view-context>,
     creator: holder-ref
   ) -> u64;
 
-  /// Return up to `limit` NFTs CURRENTLY held by `holder`, skipping the first
-  /// `offset`. Backed by a secondary holder→nft-ids index, live-updated on every
-  /// transfer/attach/detach (so this reflects present holding, unlike
-  /// `list-nfts-by-creator` which is the immutable minter). Same clamping/leniency
-  /// as `list-nfts-by-creator`.
+  /// Same cursor and limit rules as list-nfts, restricted to the current holder.
+  /// Transfers change this bucket. Invalid or unknown references return an empty page.
   export list-nfts-by-holder: async func(
     ctx: borrow<view-context>,
     holder: holder-ref,
-    offset: u64,
+    after: option<string>,
     limit: u64
-  ) -> list<nft-info>;
+  ) -> nft-page;
 
-  /// Number of NFTs currently held by `holder` (the O(1) holder-bucket count).
   export count-nfts-by-holder: async func(
     ctx: borrow<view-context>,
     holder: holder-ref
   ) -> u64;
 
-  /// Return up to `limit` agreement ids for NFTs minted by `creator` (skipping
-  /// the first `offset`), read straight from the creator index's COVERING
-  /// projection — the agreement id is stored in the index leaf, so this touches
-  /// only the index and does NOT fetch each NFT record. Same clamping/leniency as
-  /// `list-nfts-by-creator`. Demonstrates a covering index (`include = …`).
+  /// List a creator's agreement ids using the same NFT-id cursor as list-nfts.
+  /// Pass next back unchanged; it is not an agreement id. Same limit/input rules
+  /// as list-nfts-by-creator. Reads the covering index without fetching NFT records.
   export agreement-ids-by-creator: async func(
     ctx: borrow<view-context>,
     creator: holder-ref,
-    offset: u64,
+    after: option<string>,
     limit: u64
-  ) -> list<string>;
+  ) -> agreement-page;
 
   export get-attributes: async func(ctx: borrow<view-context>, nft-id: string) -> list<attribute>;
   export get-attribute: async func(ctx: borrow<view-context>, nft-id: string, key: string) -> option<string>;

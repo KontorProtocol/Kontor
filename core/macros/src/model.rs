@@ -116,7 +116,11 @@ pub fn generate_struct(
                                 }
 
                                 pub fn keys(&self) -> impl Iterator<Item = #k_ty> {
-                                    stdlib::ReadStorage::__get_keys(&self.ctx, &self.base_path)
+                                    self.range(..).keys()
+                                }
+
+                                pub fn range(&self, range: impl core::ops::RangeBounds<#k_ty>) -> stdlib::KeyRange<#k_ty, __S> {
+                                    stdlib::KeyRange::new(self.ctx.clone(), self.base_path.clone(), range)
                                 }
                             }
                         });
@@ -145,7 +149,7 @@ pub fn generate_struct(
                         let v_model_ty = vi
                             .model_ty
                             .expect("a non-primitive map value has a value model");
-                        // `<V>Index` (the typed `where_<field>`/`count_<field>` lookups)
+                        // `<V>Index` (the typed index lookups)
                         // comes from `V`'s own `Storage` derive — this site only sees
                         // `Map<K, V>`, never `V`'s `#[index]` fields — and is empty when
                         // `V` has none. The field model supplies its primitives.
@@ -217,29 +221,20 @@ pub fn generate_struct(
                                 }
 
                                 pub fn keys(&self) -> impl Iterator<Item = #k_ty> {
-                                    stdlib::ReadStorage::__get_keys(&self.ctx, &self.base_path)
+                                    self.range(..).keys()
+                                }
+
+                                pub fn range(&self, range: impl core::ops::RangeBounds<#k_ty>) -> stdlib::KeyRange<#k_ty, __S> {
+                                    stdlib::KeyRange::new(self.ctx.clone(), self.base_path.clone(), range)
                                 }
                             }
 
                             impl #impl_generics stdlib::IndexScan<#k_ty> for #field_model_name<__S> {
-                                fn by_index(&self, index_id: u8, bucket: &[&[u8]]) -> impl Iterator<Item = #k_ty> + use<__S> {
-                                    let bucket = self.index_path.push_interned(index_id).push_raw_elements(bucket);
-                                    stdlib::ReadStorage::__get_keys(&self.ctx, &bucket)
-                                }
+                                type Storage = __S;
 
-                                fn by_index_sorted<S: stdlib::KeyElement + Clone + 'static>(&self, index_id: u8, bucket: &[&[u8]], lo: Option<&[u8]>, hi: Option<&[u8]>, descending: bool) -> alloc::boxed::Box<dyn Iterator<Item = (S, #k_ty)>> {
+                                fn __index_bucket(&self, index_id: u8, bucket: &[&[u8]]) -> stdlib::KeyRange<#k_ty, __S> {
                                     let bucket = self.index_path.push_interned(index_id).push_raw_elements(bucket);
-                                    alloc::boxed::Box::new(stdlib::ReadStorage::__get_keys_range::<(S, #k_ty)>(&self.ctx, &bucket, lo, hi, descending))
-                                }
-
-                                fn by_index_rows(&self, index_id: u8, bucket: &[&[u8]], lo: Option<&[u8]>, hi: Option<&[u8]>, descending: bool) -> alloc::boxed::Box<dyn Iterator<Item = (alloc::vec::Vec<u8>, alloc::vec::Vec<u8>)>> {
-                                    let bucket = self.index_path.push_interned(index_id).push_raw_elements(bucket);
-                                    alloc::boxed::Box::new(stdlib::ReadStorage::__get_index_rows_range(&self.ctx, &bucket, lo, hi, descending))
-                                }
-
-                                fn bucket_count(&self, index_id: u8, bucket: &[&[u8]]) -> u64 {
-                                    let bucket = self.index_path.push_interned(index_id).push_raw_elements(bucket);
-                                    stdlib::ReadStorage::__get_u64(&self.ctx, &bucket).unwrap_or(0)
+                                    stdlib::KeyRange::new(self.ctx.clone(), bucket, ..)
                                 }
                             }
 

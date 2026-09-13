@@ -1,0 +1,5 @@
+error: index name `rev` is reserved (shadows a query finisher); rename the index
+ --> tests/ui/indexed_reserved_rev.rs:4:9
+  |
+4 | #[index(rev, by = active)]
+  |         ^^^

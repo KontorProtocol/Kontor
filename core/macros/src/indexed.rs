@@ -129,9 +129,9 @@ fn enum_kind_ident(ty: &syn::Type) -> TokenStream {
 ///
 /// Generated here (the value derive sees its own index declarations); the `Model`
 /// derive can't, since it only sees the `Map<K, V>` field, not `V` — so the field
-/// model implements the [`stdlib::IndexScan`] primitives (`by_index`,
-/// `by_index_sorted`, `bucket_count`) those queries back onto, and inherits the
-/// typed methods here. The methods stringify with the same `IndexKey` the index
+/// model supplies its bucket through [`stdlib::IndexScan`], and the shared query
+/// types select keys or covering rows with the same bounded cursor. The typed
+/// methods encode with the same `IndexKey` the index
 /// rows are written with, so a lookup and its stored bucket can't drift.
 pub fn generate_lookup_trait(
     decls: &[IndexDecl],
@@ -246,8 +246,7 @@ pub fn generate_lookup_trait(
     quote! {
         // Each index adds a typed `<name>(bucket…)` lookup returning a lazy
         // `IndexQuery` / `SortedIndexQuery`. The `stdlib::IndexScan` supertrait
-        // supplies the `by_index` / `by_index_sorted` / `bucket_count` primitives
-        // (implemented by the field model), which those queries back onto.
+        // supplies the bucket path and storage handle used by those queries.
         pub trait #trait_name<K>: stdlib::IndexScan<K> + Sized
         where
             K: stdlib::KeyElement + Clone + 'static,

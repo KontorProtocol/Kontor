@@ -239,22 +239,15 @@ Some types have restrictions on where they can be used.
 
 ### `list<T>` (where T is not u8)
 
-Generic lists can only be used in function signatures:
-- Function inputs - allowed
-- Function outputs - allowed
-- Record fields - **not allowed**
-- Variant payloads - **not allowed**
+Generic lists are call data and can appear in function signatures, record fields,
+and variant payloads. Records containing them (including through aliases or nested
+records) do not receive persistent storage models. `list<u8>` remains a scalar
+storage type. Directly nested lists are still unsupported.
 
 ```wit
-// Valid - list in function input/output
-export get-names: func(ctx: borrow<view-context>) -> list<string>;
-export process: func(ctx: borrow<proc-context>, items: list<my-record>) -> bool;
-
-// Invalid - list as record field
-record bad { names: list<string> }
-
-// Invalid - list as variant payload
-variant bad { items(list<string>) }
+record page { items: list<my-record>, next: option<string> }
+variant response { page(page), missing }
+export get-page: async func(ctx: borrow<view-context>) -> response;
 ```
 
 ### `option<T>`
@@ -351,5 +344,5 @@ The key differences from standard WIT:
 5. **No deep nesting** - Complex nested generics are not supported
 6. **No cyclic types** - Type definitions cannot contain cycles
 7. **Non-empty records** - Records must have at least one field
-8. **Context-specific types** - `result` only in returns, `list<T>` (T≠u8) only in function signatures
+8. **Context-specific types** - `result` only in returns; non-byte lists are call data, not persistent storage
 9. **Custom types** - `integer`, `decimal`, `contract-address`, and context types

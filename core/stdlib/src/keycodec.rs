@@ -421,25 +421,15 @@ pub fn tuple_from_elements(parts: &[&[u8]]) -> Vec<u8> {
     out
 }
 
-/// The EXCLUSIVE upper bound of the range covering every nested tuple whose FIRST
-/// element is `lead`: the smallest key strictly greater than every `(lead, …)` member,
-/// for ANY trailing elements. `strinc` of the tuple-OPEN prefix `TAG_TUPLE ++ lead`
-/// (the tuple tag + `lead`, WITHOUT the terminator).
-///
-/// This is the correct partner to [`tuple_from_elements`]`(&[lead])` (which sorts just
-/// BELOW every `(lead, …)`, since its trailing `TERM` (0x00) is below every element
-/// tag). Bounding the upper side is the asymmetric case: you must `strinc` WITHIN
-/// `lead`, NOT `strinc` the terminated 1-tuple — `strinc(tuple_from_elements(&[lead]))`
-/// increments the `TERM` to 0x01 and then wrongly EXCLUDES members whose second element
-/// begins with tag 0x01 (bytes), because the bound becomes a proper byte-prefix of them.
-///
-/// Never `None`: the leading `TAG_TUPLE` (0x05) guarantees a non-`0xFF` byte, so `strinc`
-/// always finds a byte to increment.
+/// Exclusive bound after every `(lead, …)` tuple member. The lead must be
+/// one complete encoded element; appending a byte-prefix successor would also
+/// include distinct string/byte leads that continue with an escaped NUL.
 pub fn tuple_lead_upper_bound(lead: &[u8]) -> Vec<u8> {
-    let mut prefix = Vec::with_capacity(1 + lead.len());
+    let mut prefix = Vec::with_capacity(2 + lead.len());
     prefix.push(TAG_TUPLE);
     prefix.extend_from_slice(lead);
-    strinc(&prefix).expect("tuple-open prefix begins with TAG_TUPLE (0x05), never all-0xFF")
+    prefix.push(0xff);
+    prefix
 }
 
 /// Derive [`KeyElement`] for a domain type that is keyed by its canonical string
@@ -656,21 +646,16 @@ fn hex(bytes: &[u8]) -> String {
     out
 }
 
-/// The exclusive upper bound of the range covering every key with `prefix` as a
-/// byte-prefix: strip trailing `0xFF`, increment the last remaining byte. `None`
-/// means "no upper bound" (the prefix is empty or all `0xFF`), i.e. scan to the
-/// end. Subtree of `P` = `[P, strinc(P))`.
-pub fn strinc(prefix: &[u8]) -> Option<Vec<u8>> {
-    let mut out = prefix.to_vec();
-    while let Some(&last) = out.last() {
-        if last == 0xFF {
-            out.pop();
-        } else {
-            *out.last_mut().unwrap() = last + 1;
-            return Some(out);
-        }
-    }
-    None
+/// Exclusive bound for descendants of a complete encoded path (or the root).
+/// All child element tags are below `0xff`. A string/byte sibling extending the
+/// final element through an escaped NUL starts with `prefix ++ 0xff`, and must
+/// stay outside the subtree. This is an element boundary, not a raw byte-prefix
+/// successor; `prefix` must end at an element boundary.
+pub fn subtree_end(prefix: &[u8]) -> Vec<u8> {
+    let mut end = Vec::with_capacity(prefix.len() + 1);
+    end.extend_from_slice(prefix);
+    end.push(0xff);
+    end
 }
 
 #[cfg(test)]
@@ -1002,23 +987,31 @@ mod tests {
     }
 
     #[test]
-    fn strinc_prefix_bounds_the_subtree() {
-        // every key with `prefix` is in [prefix, strinc(prefix))
-        let prefix = String::from("agr").encode();
-        let upper = strinc(&prefix).unwrap();
-        let child = {
-            let mut p = prefix.clone();
-            42u64.encode_to(&mut p);
-            p
-        };
-        assert!(prefix.as_slice() <= child.as_slice() && child.as_slice() < upper.as_slice());
-        // a sibling NOT under the prefix is outside the range
-        let sibling = String::from("ags").encode();
-        assert!(sibling.as_slice() >= upper.as_slice());
+    fn subtree_bounds_separate_nul_extended_siblings() {
+        for prefix in [String::from("a").encode(), vec![b'a'].encode()] {
+            let upper = subtree_end(&prefix);
+            let mut child = prefix.clone();
+            42u64.encode_to(&mut child);
+            assert!(prefix < child && child < upper);
+            let mut sibling = prefix;
+            sibling.extend_from_slice(&[0xff, 0]);
+            assert!(sibling >= upper);
+        }
+        assert_eq!(subtree_end(&[]), vec![0xff]);
+    }
 
-        assert_eq!(strinc(&[0x01, 0xFF]), Some(vec![0x02]));
-        assert_eq!(strinc(&[0xFF, 0xFF]), None); // unbounded above
-        assert_eq!(strinc(&[]), None);
+    #[test]
+    fn tuple_lead_bounds_separate_nul_extended_strings() {
+        let leads = ["a", "a\0", "a\0x", "aa", "b"];
+        for (i, lead) in leads.iter().enumerate() {
+            let upper = tuple_lead_upper_bound(&String::from(*lead).encode());
+            for pk in [vec![], vec![0u8], vec![0xff]] {
+                assert!(member(&String::from(*lead), &pk) < upper);
+            }
+            for next in &leads[i + 1..] {
+                assert!(upper < member(&String::from(*next), &Vec::<u8>::new()));
+            }
+        }
     }
 
     // A sorted-index member `(sort, pk)` packed as one nested-tuple element.
@@ -1067,27 +1060,6 @@ mod tests {
                 "upper(a) must not exceed lower(b) for a<b"
             );
         }
-    }
-
-    // Documents the exact bug `tuple_lead_upper_bound` avoids: a pk encoded with the
-    // bytes tag (0x01) must stay UNDER the lead's upper bound. The naive
-    // `strinc(tuple_from_elements([lead]))` bumps the terminator to 0x01 and becomes a
-    // byte-prefix of such members, wrongly excluding them.
-    #[test]
-    fn tuple_lead_upper_bound_includes_tag01_pk_that_naive_strinc_drops() {
-        let lead = 42u64;
-        let pk = vec![0xAB_u8, 0xCD]; // Vec<u8> → leads with TAG_BYTES (0x01)
-        let m = member(&lead, &pk);
-        let correct = tuple_lead_upper_bound(&lead.encode());
-        let naive = strinc(&tuple_from_elements(&[lead.encode().as_slice()])).unwrap();
-        assert!(
-            m.as_slice() < correct.as_slice(),
-            "correct upper bound must include a 0x01-tagged pk"
-        );
-        assert!(
-            m.as_slice() >= naive.as_slice(),
-            "the NAIVE bound wrongly excludes it — this is why we strinc the prefix, not the 1-tuple"
-        );
     }
 
     #[test]

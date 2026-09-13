@@ -1,0 +1,5 @@
+error[E0599]: no method named `len` found for struct `KeyRange<K, S>` in the current scope
+ --> tests/ui/range_has_no_bucket_count.rs:4:11
+  |
+4 |     range.len()
+  |           ^^^ method not found in `KeyRange<std::string::String, S>`

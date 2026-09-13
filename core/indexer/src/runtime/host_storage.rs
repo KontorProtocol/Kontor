@@ -103,7 +103,7 @@ impl Runtime {
         validate_path(&path)?;
         // `lo`/`hi` are NOT validated as paths: they are synthetic byte-comparison
         // bounds (`cs.path >= path ++ lo`, `cs.path < path ++ hi`), never decoded. An
-        // EXCLUSIVE bound is `sort_upper_bound` = `strinc(...)`, which deliberately is
+        // EXCLUSIVE bound is `sort_upper_bound`, which deliberately is
         // NOT well-formed codec bytes, so `validate_path` would reject a legitimate
         // `range(..=hi)`. Only real stored rows (always well-formed) are decoded, so a
         // malformed bound is harmless (an empty bound is normalized to unbounded in
@@ -134,8 +134,7 @@ impl Runtime {
     ) -> Result<Resource<IndexRows>> {
         validate_path(&path)?;
         // `lo`/`hi` are byte-comparison bounds, not paths — see `_get_keys` for why they
-        // are not `validate_path`'d (a `sort_upper_bound` exclusive bound is `strinc(...)`,
-        // intentionally not well-formed).
+        // are not validated as paths: the exclusive sentinel is not a stored element.
         let mut table = self.table.lock().await;
         let contract_id = table.get(&resource)?.get_contract_id();
         Fuel::GetKeys.consume(accessor, self.gauge.as_ref()).await?;

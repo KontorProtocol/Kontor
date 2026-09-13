@@ -51,7 +51,13 @@ impl<__S: stdlib::ReadStorage + 'static> TokenStorageLedgerModel<__S> {
         Map::new(&[])
     }
     pub fn keys(&self) -> impl Iterator<Item = String> {
-        stdlib::ReadStorage::__get_keys(&self.ctx, &self.base_path)
+        self.range(..).keys()
+    }
+    pub fn range(
+        &self,
+        range: impl core::ops::RangeBounds<String>,
+    ) -> stdlib::KeyRange<String, __S> {
+        stdlib::KeyRange::new(self.ctx.clone(), self.base_path.clone(), range)
     }
 }
 pub struct TokenStorageWriteModel<__S: stdlib::HasViewStorage> {
@@ -132,6 +138,12 @@ impl<
         Map::new(&[])
     }
     pub fn keys(&self) -> impl Iterator<Item = String> {
-        stdlib::ReadStorage::__get_keys(&self.ctx, &self.base_path)
+        self.range(..).keys()
+    }
+    pub fn range(
+        &self,
+        range: impl core::ops::RangeBounds<String>,
+    ) -> stdlib::KeyRange<String, __S> {
+        stdlib::KeyRange::new(self.ctx.clone(), self.base_path.clone(), range)
     }
 }

@@ -29,11 +29,17 @@ impl stdlib::FromWaveValue for Operand {
     }
 }
 #[automatically_derived]
+impl stdlib::IntoWaveValue for Operand {
+    fn into_wave_value(self) -> stdlib::wasm_wave::value::Value {
+        self.into()
+    }
+}
+#[automatically_derived]
 impl From<Operand> for stdlib::wasm_wave::value::Value {
     fn from(value_: Operand) -> Self {
         <stdlib::wasm_wave::value::Value as stdlib::wasm_wave::wasm::WasmValue>::make_record(
                 &stdlib::wave_type::<Operand>(),
-                [("y", stdlib::wasm_wave::value::Value::from(value_.y))],
+                [("y", stdlib::IntoWaveValue::into_wave_value(value_.y))],
             )
             .unwrap()
     }

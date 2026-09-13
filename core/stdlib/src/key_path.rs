@@ -8,8 +8,7 @@ use crate::keycodec::{self, KeyElement};
 /// [`keycodec`](crate::keycodec) (a `BLOB` key on the host). Holds only the codec
 /// `bytes` (what `Deref`/`AsRef` expose and the host keys on) plus the byte offset
 /// of each segment's end, so `pop`/`num_segments` are cheap without storing the
-/// segments twice. Every segment is currently a string element (matching the
-/// previous `K::to_string()` behavior); typed elements are layered on later.
+/// segments twice. Segments retain their native key types.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct KeyPath {
     bytes: Vec<u8>,
@@ -26,11 +25,8 @@ impl KeyPath {
         }
     }
 
-    /// Append one path segment — structural names AND keys (`K::to_string()`,
-    /// index keys) — encoded as a string element. Because each element is
-    /// self-delimiting (`0x00`-terminated, escaped), a segment may contain ANY
-    /// content (`.`, `-`, …) without aliasing; the integrity the old `.`-join had
-    /// to enforce by rejecting such keys is now structural.
+    /// Append a string segment. Generated fields use interned segments and map
+    /// keys use `push_element` to preserve their native ordering.
     pub fn push(&self, segment: impl Into<String>) -> Self {
         let segment = segment.into();
         self.push_element(&segment)
@@ -40,7 +36,10 @@ impl KeyPath {
     /// numerically, a compound key encodes as a nested tuple, etc. `push` is the
     /// string-element special case (field names, enum discriminants).
     pub fn push_element(&self, element: &impl KeyElement) -> Self {
-        self.push_raw_element(&element.encode())
+        let mut path = self.clone();
+        element.encode_to(&mut path.bytes);
+        path.ends.push(path.bytes.len());
+        path
     }
 
     /// Append an interned structural-name segment: a [`keycodec`] dict-ref (a
@@ -49,7 +48,10 @@ impl KeyPath {
     /// names it interns; the id is per-type, assigned by declaration order. The
     /// host treats it as an opaque fixed-width element (it never needs the name).
     pub fn push_interned(&self, id: u8) -> Self {
-        self.push_raw_element(&keycodec::interned_element(id))
+        let mut path = self.clone();
+        keycodec::encode_dict(&mut path.bytes, id);
+        path.ends.push(path.bytes.len());
+        path
     }
 
     /// Append a segment from its already-encoded element bytes. `elem` MUST be

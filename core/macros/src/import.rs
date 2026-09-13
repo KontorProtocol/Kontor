@@ -314,28 +314,6 @@ fn make_call_expr(resolve: &Resolve, export: &Function) -> Result<TokenStream> {
         .map(|(_i, param)| {
             let param_name = Ident::new(&param.name.to_snake_case(), Span::call_site());
             Ok(match &param.ty {
-                Type::Id(id) if matches!(resolve.types[*id].kind, TypeDefKind::Option(_)) => {
-                    let _inner_ty = match resolve.types[*id].kind {
-                        TypeDefKind::Option(inner) => {
-                            utils::wit_type_to_rust_type(resolve, &inner, false)?
-                        }
-                        _ => unreachable!(),
-                    };
-                    quote! {
-                        match #param_name {
-                            Some(val) => stdlib::to_wave_expr(val),
-                            None => "null".to_string(),
-                        }
-                    }
-                }
-                Type::Id(id) if matches!(resolve.types[*id].kind, TypeDefKind::List(_)) => {
-                    quote! {
-                        {
-                            let items: Vec<String> = #param_name.into_iter().map(|item| stdlib::to_wave_expr(item)).collect();
-                            alloc::format!("[{}]", items.join(", "))
-                        }
-                    }
-                }
                 Type::Id(id)
                     if resolve.types[*id]
                         .name

@@ -43,8 +43,8 @@ impl<__S: stdlib::ReadStorage + 'static> ListingModel<__S> {
                 sort: Some(stdlib::KeyElement::encode(&__idx_price)),
                 projection: {
                     let mut __proj = alloc::vec::Vec::new();
-                    __proj.extend_from_slice(&stdlib::KeyElement::encode(&__idx_title));
-                    __proj.extend_from_slice(&stdlib::KeyElement::encode(&__idx_seller));
+                    stdlib::KeyElement::encode_to(&__idx_title, &mut __proj);
+                    stdlib::KeyElement::encode_to(&__idx_seller, &mut __proj);
                     Some(__proj)
                 },
             });
@@ -55,7 +55,7 @@ impl<__S: stdlib::ReadStorage + 'static> ListingModel<__S> {
                 sort: None,
                 projection: {
                     let mut __proj = alloc::vec::Vec::new();
-                    __proj.extend_from_slice(&stdlib::KeyElement::encode(&__idx_price));
+                    stdlib::KeyElement::encode_to(&__idx_price, &mut __proj);
                     Some(__proj)
                 },
             });
@@ -141,14 +141,8 @@ impl<
                         sort: Some(stdlib::KeyElement::encode(&__idx_price)),
                         projection: {
                             let mut __proj = alloc::vec::Vec::new();
-                            __proj
-                                .extend_from_slice(
-                                    &stdlib::KeyElement::encode(&__idx_title),
-                                );
-                            __proj
-                                .extend_from_slice(
-                                    &stdlib::KeyElement::encode(&__idx_seller),
-                                );
+                            stdlib::KeyElement::encode_to(&__idx_title, &mut __proj);
+                            stdlib::KeyElement::encode_to(&__idx_seller, &mut __proj);
                             Some(__proj)
                         },
                     },
@@ -160,14 +154,8 @@ impl<
                         sort: Some(stdlib::KeyElement::encode(&__idx_price)),
                         projection: {
                             let mut __proj = alloc::vec::Vec::new();
-                            __proj
-                                .extend_from_slice(
-                                    &stdlib::KeyElement::encode(&__idx_title),
-                                );
-                            __proj
-                                .extend_from_slice(
-                                    &stdlib::KeyElement::encode(&__idx_seller),
-                                );
+                            stdlib::KeyElement::encode_to(&__idx_title, &mut __proj);
+                            stdlib::KeyElement::encode_to(&__idx_seller, &mut __proj);
                             Some(__proj)
                         },
                     },
@@ -195,14 +183,8 @@ impl<
                         sort: Some(stdlib::KeyElement::encode(&__idx_price)),
                         projection: {
                             let mut __proj = alloc::vec::Vec::new();
-                            __proj
-                                .extend_from_slice(
-                                    &stdlib::KeyElement::encode(&__idx_title),
-                                );
-                            __proj
-                                .extend_from_slice(
-                                    &stdlib::KeyElement::encode(&__idx_seller),
-                                );
+                            stdlib::KeyElement::encode_to(&__idx_title, &mut __proj);
+                            stdlib::KeyElement::encode_to(&__idx_seller, &mut __proj);
                             Some(__proj)
                         },
                     },
@@ -214,14 +196,8 @@ impl<
                         sort: Some(stdlib::KeyElement::encode(&__idx_price)),
                         projection: {
                             let mut __proj = alloc::vec::Vec::new();
-                            __proj
-                                .extend_from_slice(
-                                    &stdlib::KeyElement::encode(&__idx_title),
-                                );
-                            __proj
-                                .extend_from_slice(
-                                    &stdlib::KeyElement::encode(&__idx_seller),
-                                );
+                            stdlib::KeyElement::encode_to(&__idx_title, &mut __proj);
+                            stdlib::KeyElement::encode_to(&__idx_seller, &mut __proj);
                             Some(__proj)
                         },
                     },
@@ -252,14 +228,8 @@ impl<
                         sort: Some(stdlib::KeyElement::encode(&__idx_price)),
                         projection: {
                             let mut __proj = alloc::vec::Vec::new();
-                            __proj
-                                .extend_from_slice(
-                                    &stdlib::KeyElement::encode(&__idx_title),
-                                );
-                            __proj
-                                .extend_from_slice(
-                                    &stdlib::KeyElement::encode(&__idx_seller),
-                                );
+                            stdlib::KeyElement::encode_to(&__idx_title, &mut __proj);
+                            stdlib::KeyElement::encode_to(&__idx_seller, &mut __proj);
                             Some(__proj)
                         },
                     },
@@ -271,14 +241,8 @@ impl<
                         sort: Some(stdlib::KeyElement::encode(&__idx_price)),
                         projection: {
                             let mut __proj = alloc::vec::Vec::new();
-                            __proj
-                                .extend_from_slice(
-                                    &stdlib::KeyElement::encode(&__idx_title),
-                                );
-                            __proj
-                                .extend_from_slice(
-                                    &stdlib::KeyElement::encode(&__idx_seller),
-                                );
+                            stdlib::KeyElement::encode_to(&__idx_title, &mut __proj);
+                            stdlib::KeyElement::encode_to(&__idx_seller, &mut __proj);
                             Some(__proj)
                         },
                     },
@@ -307,14 +271,8 @@ impl<
                         sort: Some(stdlib::KeyElement::encode(&old)),
                         projection: {
                             let mut __proj = alloc::vec::Vec::new();
-                            __proj
-                                .extend_from_slice(
-                                    &stdlib::KeyElement::encode(&__idx_title),
-                                );
-                            __proj
-                                .extend_from_slice(
-                                    &stdlib::KeyElement::encode(&__idx_seller),
-                                );
+                            stdlib::KeyElement::encode_to(&__idx_title, &mut __proj);
+                            stdlib::KeyElement::encode_to(&__idx_seller, &mut __proj);
                             Some(__proj)
                         },
                     },
@@ -324,7 +282,7 @@ impl<
                         sort: None,
                         projection: {
                             let mut __proj = alloc::vec::Vec::new();
-                            __proj.extend_from_slice(&stdlib::KeyElement::encode(&old));
+                            stdlib::KeyElement::encode_to(&old, &mut __proj);
                             Some(__proj)
                         },
                     },
@@ -336,14 +294,8 @@ impl<
                         sort: Some(stdlib::KeyElement::encode(&new)),
                         projection: {
                             let mut __proj = alloc::vec::Vec::new();
-                            __proj
-                                .extend_from_slice(
-                                    &stdlib::KeyElement::encode(&__idx_title),
-                                );
-                            __proj
-                                .extend_from_slice(
-                                    &stdlib::KeyElement::encode(&__idx_seller),
-                                );
+                            stdlib::KeyElement::encode_to(&__idx_title, &mut __proj);
+                            stdlib::KeyElement::encode_to(&__idx_seller, &mut __proj);
                             Some(__proj)
                         },
                     },
@@ -353,7 +305,7 @@ impl<
                         sort: None,
                         projection: {
                             let mut __proj = alloc::vec::Vec::new();
-                            __proj.extend_from_slice(&stdlib::KeyElement::encode(&new));
+                            stdlib::KeyElement::encode_to(&new, &mut __proj);
                             Some(__proj)
                         },
                     },
@@ -381,14 +333,8 @@ impl<
                         sort: Some(stdlib::KeyElement::encode(&old)),
                         projection: {
                             let mut __proj = alloc::vec::Vec::new();
-                            __proj
-                                .extend_from_slice(
-                                    &stdlib::KeyElement::encode(&__idx_title),
-                                );
-                            __proj
-                                .extend_from_slice(
-                                    &stdlib::KeyElement::encode(&__idx_seller),
-                                );
+                            stdlib::KeyElement::encode_to(&__idx_title, &mut __proj);
+                            stdlib::KeyElement::encode_to(&__idx_seller, &mut __proj);
                             Some(__proj)
                         },
                     },
@@ -398,7 +344,7 @@ impl<
                         sort: None,
                         projection: {
                             let mut __proj = alloc::vec::Vec::new();
-                            __proj.extend_from_slice(&stdlib::KeyElement::encode(&old));
+                            stdlib::KeyElement::encode_to(&old, &mut __proj);
                             Some(__proj)
                         },
                     },
@@ -410,14 +356,8 @@ impl<
                         sort: Some(stdlib::KeyElement::encode(&new)),
                         projection: {
                             let mut __proj = alloc::vec::Vec::new();
-                            __proj
-                                .extend_from_slice(
-                                    &stdlib::KeyElement::encode(&__idx_title),
-                                );
-                            __proj
-                                .extend_from_slice(
-                                    &stdlib::KeyElement::encode(&__idx_seller),
-                                );
+                            stdlib::KeyElement::encode_to(&__idx_title, &mut __proj);
+                            stdlib::KeyElement::encode_to(&__idx_seller, &mut __proj);
                             Some(__proj)
                         },
                     },
@@ -427,7 +367,7 @@ impl<
                         sort: None,
                         projection: {
                             let mut __proj = alloc::vec::Vec::new();
-                            __proj.extend_from_slice(&stdlib::KeyElement::encode(&new));
+                            stdlib::KeyElement::encode_to(&new, &mut __proj);
                             Some(__proj)
                         },
                     },
@@ -458,14 +398,8 @@ impl<
                         sort: Some(stdlib::KeyElement::encode(&old)),
                         projection: {
                             let mut __proj = alloc::vec::Vec::new();
-                            __proj
-                                .extend_from_slice(
-                                    &stdlib::KeyElement::encode(&__idx_title),
-                                );
-                            __proj
-                                .extend_from_slice(
-                                    &stdlib::KeyElement::encode(&__idx_seller),
-                                );
+                            stdlib::KeyElement::encode_to(&__idx_title, &mut __proj);
+                            stdlib::KeyElement::encode_to(&__idx_seller, &mut __proj);
                             Some(__proj)
                         },
                     },
@@ -475,7 +409,7 @@ impl<
                         sort: None,
                         projection: {
                             let mut __proj = alloc::vec::Vec::new();
-                            __proj.extend_from_slice(&stdlib::KeyElement::encode(&old));
+                            stdlib::KeyElement::encode_to(&old, &mut __proj);
                             Some(__proj)
                         },
                     },
@@ -487,14 +421,8 @@ impl<
                         sort: Some(stdlib::KeyElement::encode(&new)),
                         projection: {
                             let mut __proj = alloc::vec::Vec::new();
-                            __proj
-                                .extend_from_slice(
-                                    &stdlib::KeyElement::encode(&__idx_title),
-                                );
-                            __proj
-                                .extend_from_slice(
-                                    &stdlib::KeyElement::encode(&__idx_seller),
-                                );
+                            stdlib::KeyElement::encode_to(&__idx_title, &mut __proj);
+                            stdlib::KeyElement::encode_to(&__idx_seller, &mut __proj);
                             Some(__proj)
                         },
                     },
@@ -504,7 +432,7 @@ impl<
                         sort: None,
                         projection: {
                             let mut __proj = alloc::vec::Vec::new();
-                            __proj.extend_from_slice(&stdlib::KeyElement::encode(&new));
+                            stdlib::KeyElement::encode_to(&new, &mut __proj);
                             Some(__proj)
                         },
                     },
@@ -533,11 +461,8 @@ impl<
                         sort: Some(stdlib::KeyElement::encode(&__idx_price)),
                         projection: {
                             let mut __proj = alloc::vec::Vec::new();
-                            __proj.extend_from_slice(&stdlib::KeyElement::encode(&old));
-                            __proj
-                                .extend_from_slice(
-                                    &stdlib::KeyElement::encode(&__idx_seller),
-                                );
+                            stdlib::KeyElement::encode_to(&old, &mut __proj);
+                            stdlib::KeyElement::encode_to(&__idx_seller, &mut __proj);
                             Some(__proj)
                         },
                     },
@@ -549,11 +474,8 @@ impl<
                         sort: Some(stdlib::KeyElement::encode(&__idx_price)),
                         projection: {
                             let mut __proj = alloc::vec::Vec::new();
-                            __proj.extend_from_slice(&stdlib::KeyElement::encode(&new));
-                            __proj
-                                .extend_from_slice(
-                                    &stdlib::KeyElement::encode(&__idx_seller),
-                                );
+                            stdlib::KeyElement::encode_to(&new, &mut __proj);
+                            stdlib::KeyElement::encode_to(&__idx_seller, &mut __proj);
                             Some(__proj)
                         },
                     },
@@ -581,11 +503,8 @@ impl<
                         sort: Some(stdlib::KeyElement::encode(&__idx_price)),
                         projection: {
                             let mut __proj = alloc::vec::Vec::new();
-                            __proj.extend_from_slice(&stdlib::KeyElement::encode(&old));
-                            __proj
-                                .extend_from_slice(
-                                    &stdlib::KeyElement::encode(&__idx_seller),
-                                );
+                            stdlib::KeyElement::encode_to(&old, &mut __proj);
+                            stdlib::KeyElement::encode_to(&__idx_seller, &mut __proj);
                             Some(__proj)
                         },
                     },
@@ -597,11 +516,8 @@ impl<
                         sort: Some(stdlib::KeyElement::encode(&__idx_price)),
                         projection: {
                             let mut __proj = alloc::vec::Vec::new();
-                            __proj.extend_from_slice(&stdlib::KeyElement::encode(&new));
-                            __proj
-                                .extend_from_slice(
-                                    &stdlib::KeyElement::encode(&__idx_seller),
-                                );
+                            stdlib::KeyElement::encode_to(&new, &mut __proj);
+                            stdlib::KeyElement::encode_to(&__idx_seller, &mut __proj);
                             Some(__proj)
                         },
                     },
@@ -632,11 +548,8 @@ impl<
                         sort: Some(stdlib::KeyElement::encode(&__idx_price)),
                         projection: {
                             let mut __proj = alloc::vec::Vec::new();
-                            __proj.extend_from_slice(&stdlib::KeyElement::encode(&old));
-                            __proj
-                                .extend_from_slice(
-                                    &stdlib::KeyElement::encode(&__idx_seller),
-                                );
+                            stdlib::KeyElement::encode_to(&old, &mut __proj);
+                            stdlib::KeyElement::encode_to(&__idx_seller, &mut __proj);
                             Some(__proj)
                         },
                     },
@@ -648,11 +561,8 @@ impl<
                         sort: Some(stdlib::KeyElement::encode(&__idx_price)),
                         projection: {
                             let mut __proj = alloc::vec::Vec::new();
-                            __proj.extend_from_slice(&stdlib::KeyElement::encode(&new));
-                            __proj
-                                .extend_from_slice(
-                                    &stdlib::KeyElement::encode(&__idx_seller),
-                                );
+                            stdlib::KeyElement::encode_to(&new, &mut __proj);
+                            stdlib::KeyElement::encode_to(&__idx_seller, &mut __proj);
                             Some(__proj)
                         },
                     },
@@ -681,11 +591,8 @@ impl<
                         sort: Some(stdlib::KeyElement::encode(&__idx_price)),
                         projection: {
                             let mut __proj = alloc::vec::Vec::new();
-                            __proj
-                                .extend_from_slice(
-                                    &stdlib::KeyElement::encode(&__idx_title),
-                                );
-                            __proj.extend_from_slice(&stdlib::KeyElement::encode(&old));
+                            stdlib::KeyElement::encode_to(&__idx_title, &mut __proj);
+                            stdlib::KeyElement::encode_to(&old, &mut __proj);
                             Some(__proj)
                         },
                     },
@@ -695,10 +602,7 @@ impl<
                         sort: None,
                         projection: {
                             let mut __proj = alloc::vec::Vec::new();
-                            __proj
-                                .extend_from_slice(
-                                    &stdlib::KeyElement::encode(&__idx_price),
-                                );
+                            stdlib::KeyElement::encode_to(&__idx_price, &mut __proj);
                             Some(__proj)
                         },
                     },
@@ -710,11 +614,8 @@ impl<
                         sort: Some(stdlib::KeyElement::encode(&__idx_price)),
                         projection: {
                             let mut __proj = alloc::vec::Vec::new();
-                            __proj
-                                .extend_from_slice(
-                                    &stdlib::KeyElement::encode(&__idx_title),
-                                );
-                            __proj.extend_from_slice(&stdlib::KeyElement::encode(&new));
+                            stdlib::KeyElement::encode_to(&__idx_title, &mut __proj);
+                            stdlib::KeyElement::encode_to(&new, &mut __proj);
                             Some(__proj)
                         },
                     },
@@ -724,10 +625,7 @@ impl<
                         sort: None,
                         projection: {
                             let mut __proj = alloc::vec::Vec::new();
-                            __proj
-                                .extend_from_slice(
-                                    &stdlib::KeyElement::encode(&__idx_price),
-                                );
+                            stdlib::KeyElement::encode_to(&__idx_price, &mut __proj);
                             Some(__proj)
                         },
                     },
@@ -755,11 +653,8 @@ impl<
                         sort: Some(stdlib::KeyElement::encode(&__idx_price)),
                         projection: {
                             let mut __proj = alloc::vec::Vec::new();
-                            __proj
-                                .extend_from_slice(
-                                    &stdlib::KeyElement::encode(&__idx_title),
-                                );
-                            __proj.extend_from_slice(&stdlib::KeyElement::encode(&old));
+                            stdlib::KeyElement::encode_to(&__idx_title, &mut __proj);
+                            stdlib::KeyElement::encode_to(&old, &mut __proj);
                             Some(__proj)
                         },
                     },
@@ -769,10 +664,7 @@ impl<
                         sort: None,
                         projection: {
                             let mut __proj = alloc::vec::Vec::new();
-                            __proj
-                                .extend_from_slice(
-                                    &stdlib::KeyElement::encode(&__idx_price),
-                                );
+                            stdlib::KeyElement::encode_to(&__idx_price, &mut __proj);
                             Some(__proj)
                         },
                     },
@@ -784,11 +676,8 @@ impl<
                         sort: Some(stdlib::KeyElement::encode(&__idx_price)),
                         projection: {
                             let mut __proj = alloc::vec::Vec::new();
-                            __proj
-                                .extend_from_slice(
-                                    &stdlib::KeyElement::encode(&__idx_title),
-                                );
-                            __proj.extend_from_slice(&stdlib::KeyElement::encode(&new));
+                            stdlib::KeyElement::encode_to(&__idx_title, &mut __proj);
+                            stdlib::KeyElement::encode_to(&new, &mut __proj);
                             Some(__proj)
                         },
                     },
@@ -798,10 +687,7 @@ impl<
                         sort: None,
                         projection: {
                             let mut __proj = alloc::vec::Vec::new();
-                            __proj
-                                .extend_from_slice(
-                                    &stdlib::KeyElement::encode(&__idx_price),
-                                );
+                            stdlib::KeyElement::encode_to(&__idx_price, &mut __proj);
                             Some(__proj)
                         },
                     },
@@ -832,11 +718,8 @@ impl<
                         sort: Some(stdlib::KeyElement::encode(&__idx_price)),
                         projection: {
                             let mut __proj = alloc::vec::Vec::new();
-                            __proj
-                                .extend_from_slice(
-                                    &stdlib::KeyElement::encode(&__idx_title),
-                                );
-                            __proj.extend_from_slice(&stdlib::KeyElement::encode(&old));
+                            stdlib::KeyElement::encode_to(&__idx_title, &mut __proj);
+                            stdlib::KeyElement::encode_to(&old, &mut __proj);
                             Some(__proj)
                         },
                     },
@@ -846,10 +729,7 @@ impl<
                         sort: None,
                         projection: {
                             let mut __proj = alloc::vec::Vec::new();
-                            __proj
-                                .extend_from_slice(
-                                    &stdlib::KeyElement::encode(&__idx_price),
-                                );
+                            stdlib::KeyElement::encode_to(&__idx_price, &mut __proj);
                             Some(__proj)
                         },
                     },
@@ -861,11 +741,8 @@ impl<
                         sort: Some(stdlib::KeyElement::encode(&__idx_price)),
                         projection: {
                             let mut __proj = alloc::vec::Vec::new();
-                            __proj
-                                .extend_from_slice(
-                                    &stdlib::KeyElement::encode(&__idx_title),
-                                );
-                            __proj.extend_from_slice(&stdlib::KeyElement::encode(&new));
+                            stdlib::KeyElement::encode_to(&__idx_title, &mut __proj);
+                            stdlib::KeyElement::encode_to(&new, &mut __proj);
                             Some(__proj)
                         },
                     },
@@ -875,10 +752,7 @@ impl<
                         sort: None,
                         projection: {
                             let mut __proj = alloc::vec::Vec::new();
-                            __proj
-                                .extend_from_slice(
-                                    &stdlib::KeyElement::encode(&__idx_price),
-                                );
+                            stdlib::KeyElement::encode_to(&__idx_price, &mut __proj);
                             Some(__proj)
                         },
                     },
@@ -915,8 +789,8 @@ impl stdlib::Indexed for Listing {
                 sort: Some(stdlib::KeyElement::encode(&self.price)),
                 projection: {
                     let mut __proj = alloc::vec::Vec::new();
-                    __proj.extend_from_slice(&stdlib::KeyElement::encode(&self.title));
-                    __proj.extend_from_slice(&stdlib::KeyElement::encode(&self.seller));
+                    stdlib::KeyElement::encode_to(&self.title, &mut __proj);
+                    stdlib::KeyElement::encode_to(&self.seller, &mut __proj);
                     Some(__proj)
                 },
             });
@@ -927,7 +801,7 @@ impl stdlib::Indexed for Listing {
                 sort: None,
                 projection: {
                     let mut __proj = alloc::vec::Vec::new();
-                    __proj.extend_from_slice(&stdlib::KeyElement::encode(&self.price));
+                    stdlib::KeyElement::encode_to(&self.price, &mut __proj);
                     Some(__proj)
                 },
             });

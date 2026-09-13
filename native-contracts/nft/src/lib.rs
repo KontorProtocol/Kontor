@@ -2,6 +2,7 @@
 contract!(name = "nft");
 
 use alloc::collections::BTreeSet;
+use core::ops::Bound;
 use stdlib::*;
 
 import!(
@@ -16,8 +17,53 @@ const MAX_ATTRIBUTES: usize = 32;
 const MAX_ATTR_KEY_LEN_BYTES: usize = 64;
 const MAX_ATTR_VALUE_LEN_BYTES: usize = 2048;
 // Upper bound on `limit` accepted by `list_nfts` to keep response sizes
-// predictable. Callers paginate by issuing successive calls with `offset`.
+// predictable. Each response supplies the next exclusive NFT-ID cursor.
 const MAX_LIST_LIMIT: u64 = 100;
+
+fn page_bounds(after: Option<String>) -> (Bound<String>, Bound<String>) {
+    (
+        after.map(Bound::Excluded).unwrap_or(Bound::Unbounded),
+        Bound::Unbounded,
+    )
+}
+
+fn collect_page<T>(
+    rows: impl Iterator<Item = T>,
+    limit: u64,
+    key: impl Fn(&T) -> &String,
+) -> (Vec<T>, Option<String>) {
+    let limit = limit.min(MAX_LIST_LIMIT) as usize;
+    if limit == 0 {
+        return (Vec::new(), None);
+    }
+    // One lookahead distinguishes a full final page from a page with more results.
+    let mut items: Vec<T> = rows.take(limit + 1).collect();
+    let next = if items.len() > limit {
+        items.pop();
+        items.last().map(|item| key(item).clone())
+    } else {
+        None
+    };
+    (items, next)
+}
+
+fn nft_page(ctx: &ViewContext, keys: impl Iterator<Item = String>, limit: u64) -> NftPage {
+    let (keys, next) = collect_page(keys, limit, |key| key);
+    let nfts = ctx.model().nfts();
+    let items = keys
+        .into_iter()
+        .map(|nft_id| {
+            let nft = nfts.get(&nft_id).expect("listed NFT exists");
+            NftInfo {
+                nft_id,
+                owner: nft.owner().as_ref(),
+                creator: nft.creator().as_ref(),
+                agreement_id: nft.agreement_id(),
+            }
+        })
+        .collect();
+    NftPage { items, next }
+}
 
 fn utxo_holder(out_point: context::OutPoint) -> Holder {
     Holder::from_ref(&HolderRef::Utxo(out_point)).unwrap()
@@ -239,78 +285,50 @@ impl Guest for Nft {
         ctx.model().total_minted()
     }
 
-    fn list_nfts(ctx: &ViewContext, offset: u64, limit: u64) -> Vec<NftInfo> {
-        // `limit == 0` is a valid no-op query; values above `MAX_LIST_LIMIT`
-        // are clamped silently so callers cannot DOS the view with huge
-        // page sizes. Ordering follows the underlying `Map` key iteration
-        // (lexicographic on the stringified `nft_id`) and is therefore
-        // stable across calls as long as the store is not mutated in
-        // between.
-        let limit = limit.min(MAX_LIST_LIMIT) as usize;
+    fn list_nfts(ctx: &ViewContext, after: Option<String>, limit: u64) -> NftPage {
         if limit == 0 {
-            return Vec::new();
+            return NftPage {
+                items: Vec::new(),
+                next: None,
+            };
         }
-        // On wasm32, `usize` is 32 bits; saturate rather than truncate so
-        // that callers passing an offset >= 2^32 get an empty page instead
-        // of silently wrapping back to the start of the collection.
-        let offset = usize::try_from(offset).unwrap_or(usize::MAX);
-        let nfts = ctx.model().nfts();
-        nfts.keys()
-            .skip(offset)
-            .take(limit)
-            .filter_map(|nft_id: String| {
-                nfts.get(&nft_id).map(|nft| NftInfo {
-                    nft_id,
-                    owner: nft.owner().as_ref(),
-                    creator: nft.creator().as_ref(),
-                    agreement_id: nft.agreement_id(),
-                })
-            })
-            .collect()
+        nft_page(
+            ctx,
+            ctx.model().nfts().range(page_bounds(after)).keys(),
+            limit,
+        )
     }
 
     fn list_nfts_by_creator(
         ctx: &ViewContext,
         creator: HolderRef,
-        offset: u64,
+        after: Option<String>,
         limit: u64,
-    ) -> Vec<NftInfo> {
-        // Mirror the `list_nfts` semantics: silently clamp `limit` to
-        // `MAX_LIST_LIMIT`, treat `limit == 0` as an empty page and an
-        // out-of-range `offset` as an empty page. An invalid `HolderRef`
-        // also degrades to an empty list rather than surfacing an error;
-        // view functions should not fail on malformed query parameters.
-        let limit = limit.min(MAX_LIST_LIMIT) as usize;
-        if limit == 0 {
-            return Vec::new();
-        }
+    ) -> NftPage {
         let Ok(creator): Result<Holder, _> = creator.try_into() else {
-            return Vec::new();
+            return NftPage {
+                items: Vec::new(),
+                next: None,
+            };
         };
-        // See `list_nfts` for why we saturate instead of casting.
-        let offset = usize::try_from(offset).unwrap_or(usize::MAX);
-        let nfts = ctx.model().nfts();
-        // The `creator` index is append-only (transfers do not move NFTs across
-        // creator buckets), so every key in the bucket is a current member and we
-        // can paginate directly with skip/take without any extra filtering pass.
-        nfts.creator(creator)
-            .keys()
-            .skip(offset)
-            .take(limit)
-            .filter_map(|nft_id: String| {
-                nfts.get(&nft_id).map(|nft| NftInfo {
-                    nft_id,
-                    owner: nft.owner().as_ref(),
-                    creator: nft.creator().as_ref(),
-                    agreement_id: nft.agreement_id(),
-                })
-            })
-            .collect()
+        if limit == 0 {
+            return NftPage {
+                items: Vec::new(),
+                next: None,
+            };
+        }
+        nft_page(
+            ctx,
+            ctx.model()
+                .nfts()
+                .creator(creator)
+                .range(page_bounds(after))
+                .keys(),
+            limit,
+        )
     }
 
     fn count_nfts_by_creator(ctx: &ViewContext, creator: HolderRef) -> u64 {
-        // Mirrors `list_nfts_by_creator`'s lenient input handling: an
-        // unknown or invalid creator is reported as 0 NFTs.
         let Ok(creator): Result<Holder, _> = creator.try_into() else {
             return 0;
         };
@@ -320,34 +338,30 @@ impl Guest for Nft {
     fn list_nfts_by_holder(
         ctx: &ViewContext,
         holder: HolderRef,
-        offset: u64,
+        after: Option<String>,
         limit: u64,
-    ) -> Vec<NftInfo> {
-        // Same lenient clamping as `list_nfts_by_creator`. Unlike the creator index
-        // (append-only), the holder index is live-updated on transfer, so this is a
-        // snapshot of the current holders at read time.
-        let limit = limit.min(MAX_LIST_LIMIT) as usize;
-        if limit == 0 {
-            return Vec::new();
-        }
+    ) -> NftPage {
         let Ok(holder): Result<Holder, _> = holder.try_into() else {
-            return Vec::new();
+            return NftPage {
+                items: Vec::new(),
+                next: None,
+            };
         };
-        let offset = usize::try_from(offset).unwrap_or(usize::MAX);
-        let nfts = ctx.model().nfts();
-        nfts.holder(holder)
-            .keys()
-            .skip(offset)
-            .take(limit)
-            .filter_map(|nft_id: String| {
-                nfts.get(&nft_id).map(|nft| NftInfo {
-                    nft_id,
-                    owner: nft.owner().as_ref(),
-                    creator: nft.creator().as_ref(),
-                    agreement_id: nft.agreement_id(),
-                })
-            })
-            .collect()
+        if limit == 0 {
+            return NftPage {
+                items: Vec::new(),
+                next: None,
+            };
+        }
+        nft_page(
+            ctx,
+            ctx.model()
+                .nfts()
+                .holder(holder)
+                .range(page_bounds(after))
+                .keys(),
+            limit,
+        )
     }
 
     fn count_nfts_by_holder(ctx: &ViewContext, holder: HolderRef) -> u64 {
@@ -360,30 +374,37 @@ impl Guest for Nft {
     fn agreement_ids_by_creator(
         ctx: &ViewContext,
         creator: HolderRef,
-        offset: u64,
+        after: Option<String>,
         limit: u64,
-    ) -> Vec<String> {
-        // Same lenient clamping as `list_nfts_by_creator`.
-        let limit = limit.min(MAX_LIST_LIMIT) as usize;
-        if limit == 0 {
-            return Vec::new();
-        }
+    ) -> AgreementPage {
         let Ok(creator): Result<Holder, _> = creator.try_into() else {
-            return Vec::new();
+            return AgreementPage {
+                items: Vec::new(),
+                next: None,
+            };
         };
-        let offset = usize::try_from(offset).unwrap_or(usize::MAX);
-        // COVERING read: the creator index carries each NFT's (immutable) agreement
-        // id in its leaf, so `.values()` streams them straight from the index — no
-        // per-NFT `nfts.get()`. Contrast `list_nfts_by_creator`, which must still
-        // fetch each record for the mutable `owner`.
-        ctx.model()
-            .nfts()
-            .creator(creator)
-            .values()
-            .skip(offset)
-            .take(limit)
-            .map(|covered| covered.agreement_id)
-            .collect()
+        if limit == 0 {
+            return AgreementPage {
+                items: Vec::new(),
+                next: None,
+            };
+        }
+        let (rows, next) = collect_page(
+            ctx.model()
+                .nfts()
+                .creator(creator)
+                .range(page_bounds(after))
+                .iter(),
+            limit,
+            |(nft_id, _)| nft_id,
+        );
+        AgreementPage {
+            items: rows
+                .into_iter()
+                .map(|(_, covered)| covered.agreement_id)
+                .collect(),
+            next,
+        }
     }
 
     fn get_attributes(ctx: &ViewContext, nft_id: String) -> Vec<Attribute> {

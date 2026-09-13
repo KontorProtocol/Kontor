@@ -63,11 +63,11 @@ pub(super) fn step(model: &ProtocolStateWriteModel<context::ProcStorage>) -> Res
     };
     let lower = preparation
         .cursor
-        .map(Bound::Excluded)
+        .map(|node_id| Bound::Excluded((job.agreement_id.clone(), node_id)))
         .unwrap_or(Bound::Unbounded);
     let next = model
         .memberships()
-        .reward_members(job.agreement_id.clone(), true)
+        .by_agreement_active(job.agreement_id.clone(), true)
         .range((lower, Bound::Unbounded))
         .keys()
         .next();

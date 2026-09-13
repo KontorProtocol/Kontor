@@ -342,6 +342,13 @@ pub fn derive_wavey(input: TokenStream) -> TokenStream {
         }
 
         #[automatically_derived]
+        impl #impl_generics stdlib::IntoWaveValue for #name #ty_generics #where_clause {
+            fn into_wave_value(self) -> stdlib::wasm_wave::value::Value {
+                self.into()
+            }
+        }
+
+        #[automatically_derived]
         impl #impl_generics From<#name #ty_generics> for stdlib::wasm_wave::value::Value #where_clause {
             fn from(value_: #name #ty_generics) -> Self {
                 #from_self_body

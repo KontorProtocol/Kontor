@@ -263,36 +263,86 @@ fn validate_indexed_record(
     }
 }
 
-/// Build the `additional_type_attributes` option tokens for the wit-bindgen
-/// `generate!` from the `indexed` spec, validated against the parsed WIT: one
-/// `#[index(...)]` per declared index. wit-bindgen emits each as its own
-/// attribute line on the (owned) record, and the `Storage` derive (applied to
-/// every record via `additional_derives`, where the index machinery lives)
-/// parses them via the shared index-declaration grammar.
+fn is_byte(resolve: &Resolve, ty: Type) -> bool {
+    match ty {
+        Type::U8 => true,
+        Type::Id(id) => match resolve.types[id].kind {
+            TypeDefKind::Type(inner) => is_byte(resolve, inner),
+            _ => false,
+        },
+        _ => false,
+    }
+}
+
+/// WIT data can cross calls without having a persistent representation. In
+/// particular, variable-length lists are response data; only bytes are scalar
+/// storage values. Follow aliases and nested records before deriving Storage.
+fn supports_storage(resolve: &Resolve, ty: Type) -> bool {
+    let Type::Id(id) = ty else { return true };
+    match &resolve.types[id].kind {
+        TypeDefKind::Type(inner) | TypeDefKind::Option(inner) => supports_storage(resolve, *inner),
+        TypeDefKind::List(inner) => is_byte(resolve, *inner),
+        TypeDefKind::Record(record) => record
+            .fields
+            .iter()
+            .all(|f| supports_storage(resolve, f.ty)),
+        TypeDefKind::Variant(variant) => variant
+            .cases
+            .iter()
+            .all(|c| c.ty.is_none_or(|ty| supports_storage(resolve, ty))),
+        TypeDefKind::Enum(_) => true,
+        _ => false,
+    }
+}
+
 fn type_attr_options(resolve: &Resolve, indexed: Option<&str>) -> TokenStream {
     let by_record = parse_indexed(indexed);
-    if by_record.is_empty() {
-        return quote! {};
-    }
     let world_named = world_types(resolve, root_world(resolve));
     for (record, specs) in &by_record {
         validate_indexed_record(resolve, &world_named, record, specs);
+        assert!(
+            supports_storage(resolve, Type::Id(world_named[record])),
+            "`indexed` target `{record}` contains a list without a persistent storage representation"
+        );
     }
 
-    // The index machinery is folded into `#[derive(Storage)]` (applied to every
-    // record via the contract's `additional_derives`), so we inject only the
-    // `#[index(...)]` attributes here; non-derive attributes are emitted
-    // verbatim so `#[index(...)]` passes through untouched. Selectors are fully
-    // qualified, and these records are declared directly in the world, so the
-    // qualified name is the world name and then the record's kebab wit name.
     let mut type_pairs = Vec::new();
-    for (record, decls) in by_record {
-        let selector = format!("{WORLD}/{record}");
-        let attrs = decls.iter().map(IndexDeclSpec::render).collect::<Vec<_>>();
-        let attrs = attrs.iter().map(|attr| {
-            attr.parse::<TokenStream>()
-                .unwrap_or_else(|e| panic!("generated a malformed index attribute {attr:?}: {e}"))
-        });
+    for (id, td) in &resolve.types {
+        if !matches!(
+            td.kind,
+            TypeDefKind::Record(_) | TypeDefKind::Variant(_) | TypeDefKind::Enum(_)
+        ) || !supports_storage(resolve, Type::Id(id))
+        {
+            continue;
+        }
+        let Some(name) = &td.name else { continue };
+        let owner = match td.owner {
+            TypeOwner::World(world) => resolve.worlds[world].name.clone(),
+            TypeOwner::Interface(interface) => {
+                let Some(owner) = resolve.id_of(interface) else {
+                    continue;
+                };
+                if REMAPPED_BUILT_INS
+                    .iter()
+                    .any(|(name, _)| owner == format!("kontor:built-in/{name}"))
+                {
+                    continue;
+                }
+                owner
+            }
+            TypeOwner::None => continue,
+        };
+        let selector = format!("{owner}/{name}");
+        let mut attrs = vec![quote! { #[derive(stdlib::Storage)] }];
+        if td.owner == TypeOwner::World(root_world(resolve)) {
+            for spec in by_record.get(name).into_iter().flatten() {
+                attrs.push(
+                    spec.render()
+                        .parse::<TokenStream>()
+                        .expect("generated index attribute parses"),
+                );
+            }
+        }
         type_pairs.push(quote! { #selector: [ #(#attrs)* ], });
     }
     quote! { additional_type_attributes: { #(#type_pairs)* }, }
@@ -385,7 +435,7 @@ pub fn generate(config: Config) -> TokenStream {
             // (generated once, with hand impls); the host bindgen remaps the
             // same interfaces onto the same types.
             with: { #(#with_entries)* },
-            additional_derives: [stdlib::Storage, stdlib::Wavey],
+            additional_derives: [stdlib::Wavey],
             #type_attrs
             export_macro_name: "__export__",
             runtime_path: "stdlib::wit_bindgen::rt",
@@ -423,5 +473,44 @@ pub fn generate(config: Config) -> TokenStream {
         struct #name;
 
         __export__!(#name);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn response_lists_do_not_gain_storage_models_through_aliases() {
+        let mut resolve = Resolve::default();
+        resolve
+            .push_str(
+                "test.wit",
+                r#"
+            package test:responses;
+            world root {
+                record item { id: string }
+                type items = list<item>;
+                record page { items: items, next: option<string> }
+                variant response { page(page), missing }
+                record envelope { response: option<response> }
+                type byte = u8;
+                record stored { bytes: list<byte>, item: item }
+            }
+        "#,
+            )
+            .unwrap();
+        let types = world_types(&resolve, root_world(&resolve));
+        for name in ["item", "stored"] {
+            assert!(supports_storage(&resolve, Type::Id(types[name])), "{name}");
+        }
+        for name in ["items", "page", "response", "envelope"] {
+            assert!(!supports_storage(&resolve, Type::Id(types[name])), "{name}");
+        }
+        let attrs = type_attr_options(&resolve, None).to_string();
+        assert!(attrs.contains("root/item"));
+        assert!(attrs.contains("root/stored"));
+        assert!(!attrs.contains("root/page"));
+        assert!(!attrs.contains("root/envelope"));
     }
 }

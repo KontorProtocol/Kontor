@@ -157,7 +157,6 @@ const SETTLEMENT_WORK_LIMIT: usize = 32;
 #[derive(Clone, Default, Storage)]
 #[index(by_agreement_active, by = (agreement_id, active))]
 #[index(by_node_active, by = (node_id, active))]
-#[index(reward_members, by = (agreement_id, active), sort = node_id)]
 struct NodeState {
     pub agreement_id: String,
     pub node_id: u64,

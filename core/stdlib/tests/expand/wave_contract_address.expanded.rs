@@ -41,14 +41,20 @@ impl stdlib::FromWaveValue for ContractAddress {
     }
 }
 #[automatically_derived]
+impl stdlib::IntoWaveValue for ContractAddress {
+    fn into_wave_value(self) -> stdlib::wasm_wave::value::Value {
+        self.into()
+    }
+}
+#[automatically_derived]
 impl From<ContractAddress> for stdlib::wasm_wave::value::Value {
     fn from(value_: ContractAddress) -> Self {
         <stdlib::wasm_wave::value::Value as stdlib::wasm_wave::wasm::WasmValue>::make_record(
                 &stdlib::wave_type::<ContractAddress>(),
                 [
-                    ("name", stdlib::wasm_wave::value::Value::from(value_.name)),
-                    ("height", stdlib::wasm_wave::value::Value::from(value_.height)),
-                    ("tx-index", stdlib::wasm_wave::value::Value::from(value_.tx_index)),
+                    ("name", stdlib::IntoWaveValue::into_wave_value(value_.name)),
+                    ("height", stdlib::IntoWaveValue::into_wave_value(value_.height)),
+                    ("tx-index", stdlib::IntoWaveValue::into_wave_value(value_.tx_index)),
                 ],
             )
             .unwrap()

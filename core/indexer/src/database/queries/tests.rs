@@ -6,6 +6,7 @@ use futures_util::{StreamExt, TryStreamExt};
 use indexer_types::{BlockRow, ContractListRow, TransactionRow};
 use libsql::{Connection, params};
 use sha2::{Digest, Sha256};
+use stdlib::subtree_end;
 
 use super::*;
 use crate::database::types::{
@@ -1739,12 +1740,100 @@ async fn test_keys_with_idx_sibling_after_update() -> Result<()> {
     Ok(())
 }
 
-// A live value under a prefix must make `exists` true even when the
-// latest-height row under that prefix is a tombstone (e.g. an IndexedMap index
-// Regression: a guest can pass an empty `list<u8>` (or any degenerate path).
-// `strinc(empty)` is `None` (no exclusive upper bound), so the subtree-bound
-// builder must treat it as the whole keyspace — NOT panic via `expect`. Covers
-// exists / keys / matching / delete on an empty path.
+#[tokio::test]
+async fn test_nul_sibling_ranges_delete_and_rollback() -> Result<()> {
+    let (_reader, writer, _temp_dir) = new_test_db().await?;
+    let conn = writer.connection();
+    let height = 900000;
+    for h in [height, height + 1] {
+        insert_block(
+            &conn,
+            BlockRow::builder()
+                .height(h)
+                .hash(new_mock_block_hash(h as u32))
+                .build(),
+        )
+        .await?;
+    }
+    let tx = insert_transaction(
+        &conn,
+        TransactionRow::builder()
+            .height(height)
+            .txid(format!("{:064x}", 123))
+            .tx_index(0)
+            .confirmed_height(height)
+            .build(),
+    )
+    .await?;
+    let keys = ["a", "a\0", "a\0x", "aa", "b"];
+    for key in keys {
+        for field in ["x", "y"] {
+            insert_contract_state(
+                &conn,
+                ContractStateRow::builder()
+                    .contract_id(1)
+                    .tx_id(tx)
+                    .height(height)
+                    .path(cs_path(&["m", key, field]))
+                    .value(vec![1])
+                    .build(),
+            )
+            .await?;
+        }
+    }
+    for (i, key) in keys.iter().enumerate() {
+        for descending in [false, true] {
+            let rows: Vec<Vec<u8>> = path_prefix_filter_contract_state(
+                &conn,
+                1,
+                cs_path(&["m"]),
+                Some(cs_path(&[key])),
+                Some(subtree_end(&cs_path(&[key]))),
+                descending,
+            )
+            .await?
+            .try_collect()
+            .await?;
+            assert_eq!(rows, vec![cs_path(&[key])]);
+            let rows: Vec<Vec<u8>> = path_prefix_filter_contract_state(
+                &conn,
+                1,
+                cs_path(&["m"]),
+                Some(subtree_end(&cs_path(&[key]))),
+                None,
+                descending,
+            )
+            .await?
+            .try_collect()
+            .await?;
+            let mut expected: Vec<_> = keys[i + 1..].iter().map(|k| cs_path(&[k])).collect();
+            if descending {
+                expected.reverse();
+            }
+            assert_eq!(rows, expected);
+        }
+    }
+    assert!(
+        delete_contract_state(&conn, height + 1, Some(tx), 1, &cs_path(&["m", "a"]))
+            .await?
+            .0
+    );
+    assert!(!exists_contract_state(&conn, 1, &cs_path(&["m", "a"])).await?);
+    for key in &keys[1..] {
+        assert!(exists_contract_state(&conn, 1, &cs_path(&["m", key])).await?);
+    }
+    rollback_to_height(&conn, height).await?;
+    let rows: Vec<Vec<u8>> =
+        path_prefix_filter_contract_state(&conn, 1, cs_path(&["m"]), None, None, false)
+            .await?
+            .try_collect()
+            .await?;
+    assert_eq!(rows, keys.iter().map(|k| cs_path(&[k])).collect::<Vec<_>>());
+    assert!(exists_contract_state(&conn, 1, &cs_path(&["m", "a"])).await?);
+    Ok(())
+}
+
+// The empty path represents the contract root, including every valid element tag.
 #[tokio::test]
 async fn test_empty_path_is_whole_keyspace_not_panic() -> Result<()> {
     let (_reader, writer, _temp_dir) = new_test_db().await?;
@@ -1809,7 +1898,7 @@ async fn test_empty_path_is_whole_keyspace_not_panic() -> Result<()> {
     Ok(())
 }
 
-// delete). Regression: `exists` ranked rows globally (no per-path partition),
+// Regression: `exists` ranked rows globally (no per-path partition),
 // so it saw only the single newest row — if that was a tombstone it wrongly
 // reported the whole subtree gone.
 #[tokio::test]
