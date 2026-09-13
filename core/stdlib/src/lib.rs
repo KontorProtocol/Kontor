@@ -74,3 +74,9 @@ pub trait CheckedArithmetics<E, Other = Self> {
     fn mul(self, other: Other) -> Result<Self::Output, E>;
     fn div(self, other: Other) -> Result<Self::Output, E>;
 }
+
+// Generated try_update methods use the contract's error type.
+#[cfg(test)]
+mod error {
+    pub type Error = alloc::string::String;
+}

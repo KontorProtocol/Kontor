@@ -168,24 +168,207 @@ Numeric tests also exercise removal, overwrites, savepoint rollback, and block
 rollback/reappearance. Existing covering-index and NFT pagination checks run
 through the same generalized cursor.
 
-## Independent contract improvement: due validator transitions
+## Due validator transitions: measured implementation
 
-Source: `native-contracts/staking/src/lib.rs`, `process_pending_validators`;
-called every Bitcoin block from `core/indexer/src/reactor/blocks.rs`.
+Baseline: main `49a815faddf2bf08f61e705158e651bc1638fe34` (#559),
+measured 2026-09-13. Source: `native-contracts/staking/src/lib.rs`,
+`process_pending_validators`; called every Bitcoin block from
+`core/indexer/src/reactor/blocks.rs`.
 
-The contract collects every PendingJoin and PendingExit key, reads each account's
-scheduled height, then ignores entries scheduled for later. Existing attributes
-can add status-bucketed indexes sorted by `activation_height` and
-`deactivation_height`, allowing `.range(..=block_height)` to retrieve only due
-entries. No new macro syntax or numeric-storage feature is required.
+The old query collected every PendingJoin and PendingExit key and read each
+scheduled height, including future transitions. Two appended status-bucketed
+indexes sort by activation/deactivation height. Existing index IDs 0/1 retain
+their meaning. `.range(..=block_height).keys()` now retrieves only due entries.
+No new macro syntax or WIT method is required for this query.
 
-This trades extra index writes/state for fewer repeated per-block reads during
-the 12-block activation/exit delay. Benchmark realistic pending populations first.
-Preserve processing of all due validators, joins-before-exits, aggregate stake
-checks, and deterministic effects; explicitly check whether changing within-bucket
-processing order matters. Snapshot selected keys before mutations move index
-members. Test height boundaries, slashing/cancellation, and reorg reactivation.
-Do not introduce a work cap that silently delays scheduled transitions.
+Both groups are snapshotted before mutation. Each is sorted back into canonical
+Holder string order, matching the old primary-key traversal, before processing
+all joins and then all exits. There is no work cap. Existing aggregate stake
+checks remain in place. The regression covers exact height boundaries, future
+members, cancelled and slashed joins, simultaneous joins/exits, repeat calls,
+and block rollback followed by overdue replay. An idle mixed population must
+produce zero point reads and zero consumed cursor rows.
+
+Validation: the indexer release library suite passed (486 tests, 3 opt-in skips),
+including the existing scalar/covering reads and error-classification tests.
+The new lifecycle regression passed in that suite; a final focused run also
+checks the zero-read idle-work assertion. Native contracts were rebuilt using
+the pinned repository container. Core/indexer and native-workspace Clippy and
+formatting checks cover the changed source. No SDK ABI or guest storage adapter
+changed.
+
+### Costs and limits
+
+The opt-in real-Wasm test `validator_transition_costs` measures populations
+0, 4, 32, and 128. It includes registration, 11 idle join blocks, activation,
+one reward distribution, exit requests, 11 idle exit blocks, and deactivation.
+Run from `core`:
+
+```sh
+cargo test --release -p indexer --lib validator_transition_costs -- --ignored --nocapture
+```
+
+At 128 pending validators, a single idle call changes as follows:
+
+| Metered host operation | Before | After |
+| --- | ---: | ---: |
+| GetKeys | 2 | 2 |
+| KeysNext | 128 | 0 |
+| Get | 128 | 0 |
+| Exists | 128 | 0 |
+| Host fuel | 78,560 | 1,440 |
+
+The bounded database seeks still cost work; zero rows does not mean zero database
+operations. The local instrumented idle calls took roughly 50–54 ms before and
+0.7–0.8 ms after. These timings are illustrative single-run measurements, not
+production throughput or a controlled CPU benchmark.
+
+The complete measured lifecycle shows the write tradeoff clearly:
+
+| Population | Point Gets before → after | Sets before → after | Deletes before → after | Local elapsed before → after |
+| --- | ---: | ---: | ---: | ---: |
+| 4 | 265 → 253 | 176 → 276 | 33 → 61 | 137 → 124 ms |
+| 32 | 2,141 → 2,101 | 1,380 → 2,180 | 257 → 481 | 1,013 → 921 ms |
+| 128 | 8,573 → 8,437 | 5,508 → 8,708 | 1,025 → 1,921 | 4,825 → 4,783 ms |
+
+The benefit is concentrated in the recurring block hook. Registration and
+transitions become more expensive; the total lifecycle timing is only modestly
+better and almost unchanged at 128. At that population measured host fuel rises
+from 79,593,730 to 112,414,510, including storage-deposit charges. Do not equate
+that quantity with CPU time or describe this as a general fee reduction.
+Reward distribution has identical host operation counts: indexed-field setters
+already reconcile only indexes that mention the changed field, so stake-only
+updates do not maintain either new height index.
+
+Each account, including storage-only and inactive accounts, gains two index
+membership leaves, plus shared bucket-count state and height-versioned writes.
+The indexes use ordinary contract state and its existing block rollback; there
+is no separate queue/table. Deployments need fresh replay under the preproduction
+upgrade model. The compressed staking binary grows from 98,265 to 100,204 bytes.
+
+Local raw logs: `/tmp/kontor-transitions-baseline.log` and
+`/tmp/kontor-transitions-indexed.log`. They include operation counts per phase.
+
+### Investigation: conditional membership versus combined updates
+
+The subsequent [real-Wasm conditional-index measurements](conditional-index-measurements.md)
+include predicate reads, complete lifecycles, retained state and three alternating
+runs. They support conditional membership primarily for storage reduction, with
+only a modest improvement to complete challenge-lifecycle latency.
+
+Follow-up investigation on 2026-09-13 used the existing `apply_index_diff`
+routine with a temporary instrumented storage backend. The probe models just the
+two new height indexes through registration, activation, exit request, and exit.
+It feeds real index descriptors to the shared maintenance routine; it does not
+implement the missing declaration syntax or claim an end-to-end Wasm benchmark.
+
+| Height-index strategy | Count reads | Count writes | Membership writes | Deletes | Live membership leaves after exit |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| Full indexes, successive setters (current candidate) | 16 | 16 | 9 | 7 | 2 |
+| Full indexes, combined exit update | 14 | 14 | 8 | 6 | 2 |
+| Conditional indexes, successive setters | 6 | 6 | 3 | 3 | 0 |
+| Conditional indexes, set exit height before status | 4 | 4 | 2 | 2 | 0 |
+
+The final row reduces these indexes' writes from 25 to 6 (76%) and deletes
+from 7 to 2. These are index-maintenance counts for one lifecycle, not total
+transaction reads, fuel, fees, or timing. Predicate evaluation and generated
+field reads still need measurement. Shared zero-valued bucket-count rows and
+height-versioned history still exist even when no membership leaves remain.
+
+The isolated probe and all 48 existing stdlib unit tests passed (49 total).
+The probe was removed from production sources after the investigation; its
+reproducible patch and results are `/tmp/kontor-index-maintenance-probe.patch`,
+`/tmp/kontor-index-maintenance-probe.log`, and
+`/tmp/kontor-index-maintenance-stdlib.log`.
+
+**Implemented: conditional declarations, without a general batch-update API.**
+The [index API guide](indexed-map-index-system.md#conditional-membership) documents
+`when = matches!(field, Pattern)` and its WIT form. Rust and WIT declarations share
+one predicate parser; value entries, read-model entries and setter diffs share
+membership generation and field dependencies. The existing index-diff routine
+maintains leaves, projections and counts. No new host operation, WIT storage
+interface, persistent queue or rollback system was added.
+
+All nine candidates below are adopted. Validator key availability now uses
+`.is_empty()` instead of scanning holders and reading their statuses. The new
+runtime regression covers reservation through pending/active/exiting states,
+cancellation, key reuse and restoration of both the reservation and user
+collateral on block rollback. Generated-model tests cover predicate-only fields,
+whole-record and field updates, sort/projection changes, failed updates, counts
+and removal. Existing native lifecycle and rollback tests also run against the
+conditional Wasm.
+
+The [complete measurements](conditional-index-measurements.md) distinguish the
+original full-index candidate, the experimental conditional implementation and
+merged main. The final implementation adds a direct user-charge comparison:
+128 storage-only accounts require 40.6% less collateral, pay 7.2% less for bond
+creation and 6.2% less for top-ups at the configured test rates.
+
+Two further optimizations remain deferred: changing setter order to avoid
+intermediate membership writes, and lazy-loading shared sort/projection fields
+when every relevant predicate is false. The current generated setters preserve
+the existing dependency hoists; those reads are included in the measurements.
+Neither is required for correctness or the measured savings. Native deployment
+requires fresh disposable state; no in-place index migration is implemented.
+
+### Native-contract adoption
+
+Caller audit on 2026-09-13 covered all five native contracts, including filestorage
+cleanup/reward modules, on the current scan branch based on `49a815fa`. It found
+seven existing index declarations that could omit unused memberships, plus the
+two new staking height indexes. These are candidates from current callers, not
+implemented changes or newly measured performance gains.
+
+| Contract/index | Membership needed by current callers | Purpose and likely saving |
+| --- | --- | --- |
+| Staking `activation` / `deactivation` (new candidate indexes) | PendingJoin / PendingExit respectively | Due transitions; omit both memberships for active/inactive accounts and avoid moving entries into unused buckets. |
+| Staking covering `status` | PendingJoin, Active, PendingExit | Capacity reservations, consensus-set counts/reads, and ordering rewards. Inactive/storage-only bonds need no covering entry or updates to its copied stake/key. |
+| Staking `ed25519_pubkey` | Status other than Inactive | Duplicate consensus-key checks already ignore inactive accounts after reading them. Omitting those memberships could remove the per-candidate account/status reads while preserving the existing self-key exclusion. |
+| Filestorage covering challenge `status` | Active | Active-challenge listings and count for challenge generation. No current caller reads another status bucket; keep historical details in the primary challenge record instead of an unused covering projection. |
+| Filestorage challenge `due`, `by_prover_status`, `by_membership_status` | Active, Expired, Failed, Invalid | Expiry, penalty settlement, withdrawal protection, exhausted-bond cleanup, and reservation release. Proven/Settled records need no memberships in these indexes. |
+| Filestorage membership `by_node_active` | `active = true` | A node's live memberships for obligation checks and cleanup. Departed memberships remain in primary storage and the per-agreement index. |
+
+Across the four challenge indexes, a Proven/Settled challenge could have zero
+current membership leaves instead of four. The primary record, historical
+versions, and shared bucket-count rows remain. This may be a useful longer-term
+state saving as challenges accumulate, but needs actual storage/write benchmarks.
+
+Do not apply an Active-only predicate to the three obligation indexes: Expired,
+Failed, and Invalid challenges still carry unsettled penalties. Inactive node
+memberships with outstanding challenges remain protected by these challenge
+indexes and their primary reservation state.
+
+The other four declarations should retain their complete membership with current
+APIs: agreement `active(false)` contributes to `agreement_count`, membership
+`by_agreement_active(..., false)` supplies departed nodes to `get_agreement_nodes`,
+and both NFT indexes support arbitrary holder/creator listings and counts. Token
+has a scalar balance map, and system has no indexed record collection; no direct
+conditional-index adoption is justified in either.
+
+Most of these changes simplify maintained state rather than contract algorithms.
+The consensus-key duplicate check is a small exception: its explicit inactive
+filter could be enforced by the index itself. Each adoption still needs lifecycle
+and rollback tests, especially settlement/withdrawal coverage in filestorage.
+
+## Simplifying the WIT storage adapters
+
+WIT exposes concrete resource-method signatures, whereas the Rust implementation
+can share generic operations. The five typed row methods select string, unsigned
+integer, signed integer, boolean, or bytes, matching existing point getters.
+Their shared host implementation owns cursor advancement and stored-value
+framing. This boundary does not require five decoders or five database paths.
+See the [WIT reference](https://component-model.bytecodealliance.org/design/wit.html).
+
+A private `storage_methods!` macro now generates the identical forwarding body
+for 31 proc/view storage and row methods. Each declaration retains its complete
+argument/result types and target runtime method, checked against Wasmtime's
+generated traits. Resource destruction and the unit-valued setter remain explicit
+because their forwarding differs. The old repeated bodies are removed.
+
+This is a host source-code cleanup: no WIT/SDK ABI change, added guest decoding,
+new storage format, or expected performance improvement. A tagged scalar union
+would move type selection and mismatch handling into runtime dispatch; it is not
+needed to remove this boilerplate. Keep the typed boundary and shared host decoder.
 
 ## Useful follow-up views: a storer's own work
 

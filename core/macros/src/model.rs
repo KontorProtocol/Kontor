@@ -472,15 +472,22 @@ pub fn generate_struct(
             // getter yields a model, so `.load()` it. The value index entries are
             // built from — shared by the read model's `__index_entries` and the
             // in-place setters' reconcile (for fields they don't themselves change).
-            let current_value = |field: &Ident| {
+            let current_value = |field: &Ident| -> Result<TokenStream> {
                 let ty = index_decl::field_type(fields, field);
-                // An `Option` field's getter already yields the `Option`, which
-                // `IndexKey` buckets by its none/some discriminant (the payload is
-                // irrelevant) — so no `.load()`, same as a primitive.
-                if utils::is_primitive_type(ty) || utils::is_option_type(ty) {
-                    quote! { self.#field() }
+                // Presence-only buckets need no payload read; predicates compare
+                // actual enum values, not the models returned by Option getters.
+                let predicate_field = decls
+                    .iter()
+                    .any(|decl| decl.when.as_ref().is_some_and(|p| &p.field == field));
+                if predicate_field
+                    && utils::is_option_type(ty)
+                    && !utils::is_primitive_type(&get_option_inner_type(ty)?)
+                {
+                    Ok(quote! { self.#field().map(|value| value.load()) })
+                } else if utils::is_primitive_type(ty) || utils::is_option_type(ty) {
+                    Ok(quote! { self.#field() })
                 } else {
-                    quote! { self.#field().load() }
+                    Ok(quote! { self.#field().load() })
                 }
             };
 
@@ -517,6 +524,7 @@ pub fn generate_struct(
                                 d.by.iter().any(|b| b == field_name)
                                     || d.sort.as_ref() == Some(field_name)
                                     || d.include.iter().any(|i| i == field_name)
+                                    || d.when.as_ref().is_some_and(|p| &p.field == field_name)
                             })
                             .collect();
                         let participates = !relevant.is_empty();
@@ -531,9 +539,9 @@ pub fn generate_struct(
                                     .collect();
                             let hoists = others.iter().map(|f| {
                                 let local = idx_local(f);
-                                let read = current_value(f);
-                                quote! { let #local = #read; }
-                            });
+                                let read = current_value(f)?;
+                                Ok(quote! { let #local = #read; })
+                            }).collect::<Result<Vec<_>>>()?;
                             let value_old = |g: &Ident| {
                                 if g == field_name {
                                     quote! { old }
@@ -550,17 +558,15 @@ pub fn generate_struct(
                                     quote! { #local }
                                 }
                             };
-                            let old_entries =
-                                relevant.iter().map(|d| index_decl::index_entry(d, &value_old));
-                            let new_entries =
-                                relevant.iter().map(|d| index_decl::index_entry(d, &value_new));
+                            let old_entries = index_decl::index_entries(&relevant, &value_old);
+                            let new_entries = index_decl::index_entries(&relevant, &value_new);
                             quote! {
                                 if let Some((index_root, index_key)) = &self.index_binding {
                                     #(#hoists)*
                                     stdlib::apply_index_diff(
                                         &self.ctx, index_root, index_key,
-                                        &[#(#old_entries),*],
-                                        &[#(#new_entries),*],
+                                        &#old_entries,
+                                        &#new_entries,
                                     );
                                 }
                             }
@@ -612,13 +618,11 @@ pub fn generate_struct(
                                 }
                             })
                         } else if participates && utils::is_option_type(field_ty) {
-                            // Participating `Option` field. Read the old value via the
-                            // getter (which yields the `Option`); `IndexKey` buckets it
-                            // by its none/some discriminant, so no model load is needed.
+                            let old_value = current_value(field_name)?;
                             Ok(quote! {
                                 pub fn #set_field_name(&self, value: #field_ty) {
                                     let path = self.base_path.push_interned(#field_id);
-                                    let old = self.#field_name();
+                                    let old = #old_value;
                                     let new = value;
                                     #reconcile
                                     stdlib::WriteStorage::__set(&self.ctx, path, new);
@@ -715,19 +719,21 @@ pub fn generate_struct(
                 // Read each referenced field once (a field shared by two indexes
                 // would otherwise be read per index), then build entries from the
                 // locals.
-                let hoists = index_decl::referenced_fields(&decls).into_iter().map(|f| {
-                    let local = idx_local(f);
-                    let read = current_value(f);
-                    quote! { let #local = #read; }
-                });
+                let hoists = index_decl::referenced_fields(&decls)
+                    .into_iter()
+                    .map(|f| {
+                        let local = idx_local(f);
+                        let read = current_value(f)?;
+                        Ok(quote! { let #local = #read; })
+                    })
+                    .collect::<Result<Vec<_>>>()?;
                 let value_for = |f: &Ident| {
                     let local = idx_local(f);
                     quote! { #local }
                 };
-                let pushes = decls.iter().map(|decl| {
-                    let entry = index_decl::index_entry(decl, &value_for);
-                    quote! { entries.push(#entry); }
-                });
+                let pushes = decls
+                    .iter()
+                    .map(|decl| index_decl::index_push(decl, &value_for));
                 quote! {
                     pub fn __index_entries(&self) -> alloc::vec::Vec<stdlib::IndexEntry> {
                         #(#hoists)*

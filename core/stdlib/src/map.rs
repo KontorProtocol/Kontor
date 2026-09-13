@@ -346,10 +346,11 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::StorageMap;
+    use crate as stdlib;
     use crate::keycodec::next_element;
     use crate::query::*;
     use crate::{HasNextRow, ReadStorage, ScalarStorage, make_storage_rows_iterator};
+    use crate::{Model, Storage, StorageMap};
     use alloc::collections::BTreeMap;
     use alloc::string::ToString;
     use alloc::vec;
@@ -389,13 +390,20 @@ mod tests {
         }
     }
 
-    #[derive(Default)]
+    #[derive(Clone, Default)]
     struct Mock {
-        map: RefCell<BTreeMap<Vec<u8>, Cell>>,
+        map: Rc<RefCell<BTreeMap<Vec<u8>, Cell>>>,
         void_sets: RefCell<usize>,
         deletes: RefCell<usize>,
         key_scans: RefCell<usize>,
         row_scans: RefCell<usize>,
+    }
+
+    impl stdlib::HasViewStorage for Mock {
+        type View = Self;
+        fn view_storage(&self) -> Self {
+            self.clone()
+        }
     }
 
     impl ReadStorage for Mock {
@@ -511,10 +519,21 @@ mod tests {
             }
         }
         fn __exists(self: &Rc<Self>, path: &[u8]) -> bool {
-            self.map.borrow().contains_key(path)
+            self.map.borrow().keys().any(|key| key.starts_with(path))
         }
-        fn __extend_path_with_match(self: &Rc<Self>, _: &[u8], _: &[Vec<u8>]) -> Option<u32> {
-            unimplemented!()
+        fn __extend_path_with_match(
+            self: &Rc<Self>,
+            path: &[u8],
+            candidates: &[Vec<u8>],
+        ) -> Option<u32> {
+            candidates
+                .iter()
+                .position(|candidate| {
+                    let mut child = path.to_vec();
+                    child.extend(candidate);
+                    self.__exists(&child)
+                })
+                .map(|index| index as u32)
         }
     }
 
@@ -530,7 +549,10 @@ mod tests {
         }
         fn __delete(self: &Rc<Self>, path: &[u8]) -> bool {
             *self.deletes.borrow_mut() += 1;
-            self.map.borrow_mut().remove(path).is_some()
+            let mut map = self.map.borrow_mut();
+            let before = map.len();
+            map.retain(|key, _| !key.starts_with(path));
+            map.len() != before
         }
         fn __set<T: Store<Self>>(self: &Rc<Self>, path: KeyPath, value: T) {
             T::__set(self, path, value)
@@ -549,8 +571,15 @@ mod tests {
                 .borrow_mut()
                 .insert(path.to_vec(), Cell::Bytes(value));
         }
-        fn __delete_matching_paths(self: &Rc<Self>, _: &[u8], _: &[Vec<u8>]) -> u64 {
-            unimplemented!()
+        fn __delete_matching_paths(self: &Rc<Self>, path: &[u8], candidates: &[Vec<u8>]) -> u64 {
+            candidates
+                .iter()
+                .filter(|candidate| {
+                    let mut child = path.to_vec();
+                    child.extend(*candidate);
+                    self.__delete(&child)
+                })
+                .count() as u64
         }
     }
 
@@ -606,6 +635,273 @@ mod tests {
             sort: None,
             projection: None,
         }
+    }
+
+    #[derive(Clone, Storage)]
+    #[index(live, by = owner, sort = score, include = amount, when = matches!(status, 1 | 2))]
+    #[index(all, by = owner)]
+    struct ConditionalItem {
+        owner: u64,
+        status: u64,
+        score: u64,
+        amount: u64,
+    }
+
+    type Map<K, V> = StorageMap<K, V, Mock>;
+
+    #[derive(Model)]
+    #[allow(dead_code)]
+    struct ConditionalStore {
+        items: Map<u64, ConditionalItem>,
+    }
+
+    #[test]
+    fn conditional_indexes_follow_record_and_field_updates() {
+        let ctx = Rc::new(Mock::default());
+        let model = ConditionalStoreWriteModel::new(ctx.clone(), KeyPath::from("conditional"));
+        let items = model.items();
+        let first = ConditionalItem {
+            owner: 7,
+            status: 0,
+            score: 10,
+            amount: 20,
+        };
+        items.set(&1, first.clone());
+        items.set(
+            &2,
+            ConditionalItem {
+                status: 1,
+                ..first.clone()
+            },
+        );
+        assert_eq!(items.all(7).len(), 2);
+        assert_eq!(items.live(7).keys().collect::<Vec<_>>(), vec![2]);
+        let item = items.get(&1).unwrap();
+        item.set_score(3);
+        item.set_amount(8);
+        item.set_owner(9);
+        assert!(items.live(9).is_empty());
+        assert!(item.try_update_status(|_| Err("rejected".into())).is_err());
+        assert!(items.live(9).is_empty());
+        item.update_status(|_| 1);
+        assert_eq!(items.live(9).len(), 1);
+        assert_eq!(items.live(9).values().next().unwrap().amount, 8);
+        item.set_status(2);
+        item.set_status(2);
+        assert_eq!(items.live(9).len(), 1);
+        item.set_score(12);
+        item.set_amount(30);
+        item.set_owner(7);
+        assert!(items.live(9).is_empty());
+        assert_eq!(items.live(7).keys().collect::<Vec<_>>(), vec![2, 1]);
+        assert_eq!(
+            items.live(7).range(..=10).keys().collect::<Vec<_>>(),
+            vec![2]
+        );
+        assert_eq!(items.live(7).values().last().unwrap().amount, 30);
+        item.set_status(0);
+        assert_eq!(items.live(7).len(), 1);
+        assert_eq!(items.all(7).len(), 2);
+        items.set(
+            &1,
+            ConditionalItem {
+                status: 2,
+                ..first.clone()
+            },
+        );
+        assert_eq!(items.live(7).len(), 2);
+        items.set(&1, first);
+        assert_eq!(items.live(7).len(), 1);
+        assert!(items.remove(&1));
+        assert_eq!(items.live(7).len(), 1);
+        assert!(items.remove(&2));
+        assert!(items.live(7).is_empty());
+        assert!(items.all(7).is_empty());
+        assert!(!items.remove(&2));
+    }
+
+    #[derive(Clone, Storage)]
+    enum OptionalStatus {
+        Active,
+        Closed,
+    }
+
+    #[derive(Clone, Storage)]
+    #[index(live, by = owner, include = amount,
+        when = matches!(status, Option::Some(OptionalStatus::Active)))]
+    struct OptionalRecord {
+        owner: u64,
+        amount: u64,
+        status: Option<OptionalStatus>,
+    }
+
+    #[derive(Model)]
+    #[allow(dead_code)]
+    struct OptionalStore {
+        records: Map<u64, OptionalRecord>,
+    }
+
+    #[test]
+    fn optional_enum_predicates_materialize_values_on_every_write_path() {
+        let ctx = Rc::new(Mock::default());
+        let model = OptionalStoreWriteModel::new(ctx, KeyPath::from("optional"));
+        let records = model.records();
+        records.set(
+            &1,
+            OptionalRecord {
+                owner: 7,
+                amount: 10,
+                status: None,
+            },
+        );
+        records.set(
+            &2,
+            OptionalRecord {
+                owner: 7,
+                amount: 20,
+                status: Some(OptionalStatus::Active),
+            },
+        );
+        assert_eq!(records.live(7).keys().collect::<Vec<_>>(), vec![2]);
+        let record = records.get(&1).unwrap();
+        record.set_status(Some(OptionalStatus::Active));
+        record.set_amount(30);
+        record.set_owner(9);
+        assert_eq!(records.live(9).values().next().unwrap().amount, 30);
+        record.set_status(Some(OptionalStatus::Closed));
+        assert!(records.live(9).is_empty());
+        record.set_status(Some(OptionalStatus::Active));
+        record.set_status(None);
+        assert!(records.live(9).is_empty());
+        records.set(
+            &2,
+            OptionalRecord {
+                owner: 7,
+                amount: 40,
+                status: Some(OptionalStatus::Closed),
+            },
+        );
+        assert!(records.live(7).is_empty());
+        records.set(
+            &2,
+            OptionalRecord {
+                owner: 7,
+                amount: 50,
+                status: Some(OptionalStatus::Active),
+            },
+        );
+        assert!(records.remove(&2));
+        assert!(records.live(7).is_empty());
+    }
+
+    #[derive(Clone, Storage)]
+    struct Details {
+        amount: u64,
+    }
+
+    #[derive(Clone, Storage)]
+    enum PayloadStatus {
+        Closed,
+        Ready,
+        Details(Details),
+        Step(u64),
+    }
+
+    #[derive(Clone, Storage)]
+    #[index(live, by = owner, include = amount,
+        when = matches!(status, PayloadStatus::Ready | PayloadStatus::Details(_)))]
+    #[index(details, by = owner, when = matches!(status, PayloadStatus::Details(..)))]
+    #[index(optional, by = owner,
+        when = matches!(extra, Option::Some(PayloadStatus::Details(_))))]
+    #[index(present, by = owner, when = matches!(extra, Option::Some(_)))]
+    #[index(first_step, by = owner, when = matches!(status, PayloadStatus::Step(1)))]
+    struct PayloadRecord {
+        owner: u64,
+        amount: u64,
+        status: PayloadStatus,
+        extra: Option<PayloadStatus>,
+    }
+
+    #[derive(Model)]
+    #[allow(dead_code)]
+    struct PayloadStore {
+        records: Map<u64, PayloadRecord>,
+    }
+
+    #[test]
+    fn tag_predicates_survive_descendant_edits_and_reconcile_parent_updates() {
+        let ctx = Rc::new(Mock::default());
+        let model = PayloadStoreWriteModel::new(ctx, KeyPath::from("payload"));
+        let records = model.records();
+        records.set(
+            &1,
+            PayloadRecord {
+                owner: 7,
+                amount: 10,
+                status: PayloadStatus::Details(Details { amount: 1 }),
+                extra: Some(PayloadStatus::Details(Details { amount: 2 })),
+            },
+        );
+        let record = records.get(&1).unwrap();
+        let PayloadStatusWriteModel::Details(details) = record.status() else {
+            panic!("expected details");
+        };
+        details.set_amount(99);
+        let Some(PayloadStatusWriteModel::Details(extra)) = record.extra() else {
+            panic!("expected optional details");
+        };
+        extra.set_amount(100);
+        assert!(matches!(
+            record.load().status,
+            PayloadStatus::Details(Details { amount: 99 })
+        ));
+        assert!(matches!(
+            record.load().extra,
+            Some(PayloadStatus::Details(Details { amount: 100 }))
+        ));
+        assert_eq!(records.live(7).keys().collect::<Vec<_>>(), vec![1]);
+        assert_eq!(records.live(7).values().next().unwrap().amount, 10);
+        assert_eq!(records.details(7).len(), 1);
+        assert_eq!(records.optional(7).len(), 1);
+        assert_eq!(records.present(7).len(), 1);
+
+        record.set_owner(9);
+        record.set_amount(20);
+        assert!(records.live(7).is_empty());
+        assert!(records.details(7).is_empty());
+        assert!(records.optional(7).is_empty());
+        assert_eq!(records.live(9).values().next().unwrap().amount, 20);
+        assert_eq!(records.details(9).len(), 1);
+        assert_eq!(records.optional(9).len(), 1);
+        record.set_status(PayloadStatus::Ready);
+        assert_eq!(records.live(9).len(), 1);
+        assert!(records.details(9).is_empty());
+        record.set_extra(Some(PayloadStatus::Step(3)));
+        assert!(records.optional(9).is_empty());
+        assert_eq!(records.present(9).len(), 1);
+        record.set_extra(None);
+        assert!(records.present(9).is_empty());
+        record.set_status(PayloadStatus::Closed);
+        assert!(records.live(9).is_empty());
+        record.set_status(PayloadStatus::Step(1));
+        assert_eq!(records.first_step(9).len(), 1);
+        record.set_status(PayloadStatus::Step(2));
+        assert!(records.first_step(9).is_empty());
+
+        records.set(
+            &1,
+            PayloadRecord {
+                owner: 7,
+                amount: 30,
+                status: PayloadStatus::Details(Details { amount: 3 }),
+                extra: None,
+            },
+        );
+        assert_eq!(records.live(7).len(), 1);
+        assert_eq!(records.details(7).len(), 1);
+        assert!(records.remove(&1));
+        assert!(records.live(7).is_empty());
+        assert!(records.details(7).is_empty());
     }
 
     // A struct value with one indexed field — the shape a Map holds.

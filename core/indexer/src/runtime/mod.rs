@@ -1,3 +1,5 @@
+#[cfg(test)]
+mod costs;
 extern crate alloc;
 
 mod component_cache;

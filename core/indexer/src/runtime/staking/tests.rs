@@ -7,6 +7,7 @@ use crate::consensus::signing::PrivateKey;
 use crate::database::queries::{get_checkpoint_by_height, insert_block};
 use crate::reg_tester::random_x_only_pubkey;
 use crate::runtime::filestorage::api as filestorage;
+use crate::runtime::fuel::{FuelDiscriminants, FuelGauge};
 use crate::runtime::numerics::{add_decimal, sub_decimal};
 use crate::runtime::token::api as token;
 use crate::runtime::wit::Signer;
@@ -462,5 +463,206 @@ async fn pending_joins_and_exits_reserve_aggregate_capacity() -> Result<()> {
         api::get_staking_info(&mut runtime).await?.total_stake,
         sub_decimal(Decimal::try_from(LIMIT)?, Decimal::from("7"))?
     );
+    Ok(())
+}
+
+#[tokio::test]
+async fn due_transitions_respect_boundaries_cancellation_and_block_replay() -> Result<()> {
+    let (mut runtime, _dir, _name) = test_runtime().await?;
+    runtime.set_context(1, None, None, None).await;
+    let first = funded_signer(&mut runtime).await?;
+    let cancelled = funded_signer(&mut runtime).await?;
+    let slashed = funded_signer(&mut runtime).await?;
+    let later = funded_signer(&mut runtime).await?;
+    let incoming = funded_signer(&mut runtime).await?;
+    let future = funded_signer(&mut runtime).await?;
+    for (i, signer) in [&first, &cancelled, &slashed].into_iter().enumerate() {
+        api::register_validator(
+            &mut runtime,
+            signer,
+            vec![i as u8 + 1; 32],
+            Decimal::from("100"),
+        )
+        .await??;
+    }
+    advance(&mut runtime, 2).await?;
+    api::register_validator(&mut runtime, &later, vec![4; 32], Decimal::from("100")).await??;
+    api::leave_validation(&mut runtime, &cancelled).await??;
+    let Signer::Id(identity) = &slashed else {
+        unreachable!();
+    };
+    api::slash(
+        &mut runtime,
+        &core(),
+        identity.signer_id(),
+        Decimal::from("100"),
+    )
+    .await??;
+    advance(&mut runtime, 12).await?;
+    assert!(api::get_active_set(&mut runtime).await?.is_empty());
+    advance(&mut runtime, 13).await?;
+    assert_eq!(
+        api::get_validator(&mut runtime, &first)
+            .await?
+            .unwrap()
+            .status,
+        ValidatorStatus::Active
+    );
+    assert_eq!(
+        api::get_validator(&mut runtime, &later)
+            .await?
+            .unwrap()
+            .status,
+        ValidatorStatus::PendingJoin
+    );
+    assert_eq!(
+        api::get_staking_info(&mut runtime).await?.total_stake,
+        Decimal::from("100")
+    );
+
+    advance(&mut runtime, 14).await?;
+    api::leave_validation(&mut runtime, &first).await??;
+    api::register_validator(&mut runtime, &incoming, vec![5; 32], Decimal::from("100")).await??;
+    advance(&mut runtime, 15).await?;
+    api::leave_validation(&mut runtime, &later).await??;
+    api::register_validator(&mut runtime, &future, vec![6; 32], Decimal::from("100")).await??;
+    advance(&mut runtime, 25).await?;
+    let gauge = FuelGauge::new();
+    runtime.gauge = Some(gauge.clone());
+    let idle = api::process_pending_validators(&mut runtime, &core(), 25).await??;
+    runtime.gauge = None;
+    assert_eq!((idle.activated, idle.deactivated), (0, 0));
+    let stats = gauge.per_type_stats().await;
+    assert!(!stats.contains_key(&FuelDiscriminants::Get));
+    assert!(!stats.contains_key(&FuelDiscriminants::KeysNext));
+
+    for (height, expected) in [(26, 1), (27, 2)] {
+        insert_block(
+            &runtime.get_storage_conn(),
+            BlockRow::builder()
+                .height(height)
+                .hash(new_mock_block_hash(height as u32))
+                .relevant(true)
+                .build(),
+        )
+        .await?;
+        runtime.set_context(height, None, None, None).await;
+        let change = api::process_pending_validators(&mut runtime, &core(), height).await??;
+        assert_eq!((change.activated, change.deactivated), (expected, expected));
+        assert_eq!(
+            api::get_staking_info(&mut runtime).await?.total_stake,
+            Decimal::from("200")
+        );
+        let again = api::process_pending_validators(&mut runtime, &core(), height).await??;
+        assert_eq!((again.activated, again.deactivated), (0, 0));
+        for signer in [&cancelled, &slashed] {
+            assert_eq!(
+                api::get_validator(&mut runtime, signer)
+                    .await?
+                    .unwrap()
+                    .status,
+                ValidatorStatus::Inactive
+            );
+        }
+        if height == 26 {
+            assert_eq!(
+                api::get_validator(&mut runtime, &later)
+                    .await?
+                    .unwrap()
+                    .status,
+                ValidatorStatus::PendingExit
+            );
+            assert_eq!(
+                api::get_validator(&mut runtime, &future)
+                    .await?
+                    .unwrap()
+                    .status,
+                ValidatorStatus::PendingJoin
+            );
+            // Replay at a later height must restore both indexes and include overdue work.
+            runtime.storage.rollback_with_footprint(25).await?;
+            runtime.set_context(25, None, None, None).await;
+            assert_eq!(
+                api::get_validator(&mut runtime, &first)
+                    .await?
+                    .unwrap()
+                    .status,
+                ValidatorStatus::PendingExit
+            );
+            assert_eq!(
+                api::get_validator(&mut runtime, &incoming)
+                    .await?
+                    .unwrap()
+                    .status,
+                ValidatorStatus::PendingJoin
+            );
+        }
+    }
+    assert_eq!(api::get_active_set(&mut runtime).await?.len(), 2);
+    Ok(())
+}
+
+#[tokio::test]
+async fn conditional_consensus_key_membership_survives_cancellation_and_rollback() -> Result<()> {
+    let (mut runtime, _dir, _name) = test_runtime().await?;
+    runtime.set_context(1, None, None, None).await;
+    let first = funded_signer(&mut runtime).await?;
+    let second = funded_signer(&mut runtime).await?;
+    let key = vec![42; 32];
+    api::register_validator(&mut runtime, &first, key.clone(), Decimal::from("100")).await??;
+    assert!(
+        api::register_validator(&mut runtime, &second, key.clone(), Decimal::from("100"))
+            .await?
+            .is_err()
+    );
+    advance(&mut runtime, 2).await?;
+    let floor_before = token::floor(&mut runtime, HolderRef::from(&first)).await?;
+    api::leave_validation(&mut runtime, &first).await??;
+    assert!(token::floor(&mut runtime, HolderRef::from(&first)).await? < floor_before);
+    api::register_validator(&mut runtime, &second, key.clone(), Decimal::from("100")).await??;
+    runtime.storage.rollback_with_footprint(1).await?;
+    runtime.set_context(1, None, None, None).await;
+    assert_eq!(
+        token::floor(&mut runtime, HolderRef::from(&first)).await?,
+        floor_before
+    );
+    assert!(
+        api::register_validator(&mut runtime, &second, key.clone(), Decimal::from("100"))
+            .await?
+            .is_err()
+    );
+    advance(&mut runtime, 2).await?;
+    api::leave_validation(&mut runtime, &first).await??;
+    api::register_validator(&mut runtime, &second, key.clone(), Decimal::from("100")).await??;
+    advance(&mut runtime, 14).await?;
+    assert_eq!(api::get_active_set(&mut runtime).await?.len(), 1);
+    assert_eq!(
+        api::get_validator(&mut runtime, &first)
+            .await?
+            .unwrap()
+            .stake,
+        Decimal::from("100")
+    );
+    assert_eq!(
+        api::get_validator(&mut runtime, &second)
+            .await?
+            .unwrap()
+            .status,
+        ValidatorStatus::Active
+    );
+    assert!(
+        api::register_validator(&mut runtime, &first, key.clone(), Decimal::from("0"))
+            .await?
+            .is_err()
+    );
+    advance(&mut runtime, 15).await?;
+    api::leave_validation(&mut runtime, &second).await??;
+    assert!(
+        api::register_validator(&mut runtime, &first, key.clone(), Decimal::from("0"))
+            .await?
+            .is_err()
+    );
+    advance(&mut runtime, 27).await?;
+    api::register_validator(&mut runtime, &first, key, Decimal::from("0")).await??;
     Ok(())
 }

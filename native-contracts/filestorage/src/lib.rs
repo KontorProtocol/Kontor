@@ -3,10 +3,10 @@ contract!(
     name = "filestorage",
     indexed = "
         agreement-data: active;
-        challenge-data: status include (agreement-id, block-height, num-challenges, seed, prover-id, deadline-height);
-        challenge-data: due by status sort deadline-height;
-        challenge-data: by-prover-status by prover-id status;
-        challenge-data: by-membership-status by agreement-id prover-id status;
+        challenge-data: status include (agreement-id, block-height, num-challenges, seed, prover-id, deadline-height) when matches!(status, ChallengeStatus::Active);
+        challenge-data: due by status sort deadline-height when matches!(status, ChallengeStatus::Active | ChallengeStatus::Expired | ChallengeStatus::Failed | ChallengeStatus::Invalid);
+        challenge-data: by-prover-status by prover-id status when matches!(status, ChallengeStatus::Active | ChallengeStatus::Expired | ChallengeStatus::Failed | ChallengeStatus::Invalid);
+        challenge-data: by-membership-status by agreement-id prover-id status when matches!(status, ChallengeStatus::Active | ChallengeStatus::Expired | ChallengeStatus::Failed | ChallengeStatus::Invalid);
     "
 );
 
@@ -156,7 +156,7 @@ const SETTLEMENT_WORK_LIMIT: usize = 32;
 /// `(aid, false)` bucket, out of the live scan but still listable.
 #[derive(Clone, Default, Storage)]
 #[index(by_agreement_active, by = (agreement_id, active))]
-#[index(by_node_active, by = (node_id, active))]
+#[index(by_node_active, by = (node_id, active), when = matches!(active, true))]
 struct NodeState {
     pub agreement_id: String,
     pub node_id: u64,

@@ -93,10 +93,9 @@ pub fn generate_covering_value_structs(
 /// source every index path stringifies through — so a write and a later diff
 /// can't disagree.
 pub fn generate_index_entries(decls: &[IndexDecl]) -> TokenStream {
-    let pushes = decls.iter().map(|decl| {
-        let entry = index_decl::index_entry(decl, &|field| quote! { self.#field });
-        quote! { entries.push(#entry); }
-    });
+    let pushes = decls
+        .iter()
+        .map(|decl| index_decl::index_push(decl, &|field| quote! { self.#field }));
 
     quote! {
         let mut entries = alloc::vec::Vec::new();

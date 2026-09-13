@@ -1,11 +1,13 @@
 use proc_macro2::{Span, TokenStream};
-use quote::quote;
+use quote::{ToTokens, quote};
 use syn::parse::{Parse, ParseStream};
 use syn::punctuated::Punctuated;
-use syn::{Attribute, Error, FieldsNamed, Ident, Meta, Result, Token, Type, token};
+use syn::{
+    Attribute, Error, ExprLit, FieldsNamed, Ident, Lit, Meta, Pat, Result, Token, Type, token,
+};
 
 /// A declared secondary index: its name, its bucket field(s), an optional sort
-/// field, and optional covering-projection fields. Built from both forms a value
+/// field, optional covering-projection fields, and an optional local predicate. Built from both forms a value
 /// can declare an index:
 /// - field-level `#[index] f` — sugar for `#[index(f, by = f)]`.
 /// - struct-level `#[index(name, by = field, sort = field, include = (a, b))]`.
@@ -22,12 +24,89 @@ pub struct IndexDecl {
     /// member). Empty for a non-covering index. Each must be a round-trip scalar
     /// (`KeyElement`), enforced by the generated projection encode/decode.
     pub include: Vec<Ident>,
+    pub when: Option<IndexPredicate>,
     /// Interned id for the index's `<index>` path segment — its declaration order
     /// within the value type (assigned by [`parse`]). The single source the write
     /// side ([`index_entry`]) and the read side (the typed lookup methods) both use,
     /// so the index path can't drift. Its own per-type id space (under `#idx`),
     /// distinct from the struct's field ids.
     pub id: u8,
+}
+
+/// Restrict predicates to one local field and binding-free patterns: setters must
+/// know every dependency, and a misspelled variant must not become a catch-all binding.
+pub struct IndexPredicate {
+    pub field: Ident,
+    pattern: Pat,
+}
+
+impl Parse for IndexPredicate {
+    fn parse(input: ParseStream) -> Result<Self> {
+        let name: Ident = input.parse()?;
+        if name != "matches" {
+            return Err(Error::new(
+                name.span(),
+                "expected `matches!(field, Pattern)`",
+            ));
+        }
+        input.parse::<Token![!]>()?;
+        let content;
+        syn::parenthesized!(content in input);
+        let field = content.parse()?;
+        content.parse::<Token![,]>()?;
+        let pattern = content.call(Pat::parse_multi_with_leading_vert)?;
+        if content.peek(Token![,]) {
+            content.parse::<Token![,]>()?;
+        }
+        if !content.is_empty() {
+            return Err(content.error("index predicates cannot have guards or other dependencies"));
+        }
+        validate_pattern(&pattern)?;
+        Ok(Self { field, pattern })
+    }
+}
+
+fn validate_pattern(pattern: &Pat) -> Result<()> {
+    match pattern {
+        Pat::Path(_) | Pat::Lit(_) | Pat::Wild(_) | Pat::Rest(_) => Ok(()),
+        Pat::Or(p) => p.cases.iter().try_for_each(validate_pattern),
+        Pat::Paren(p) => validate_pattern(&p.pat),
+        Pat::TupleStruct(p) => p.elems.iter().try_for_each(validate_pattern),
+        _ => Err(Error::new_spanned(
+            pattern,
+            "index predicates require literal or qualified variant patterns without bindings",
+        )),
+    }
+}
+
+fn predicate_pattern(pattern: &Pat) -> TokenStream {
+    match pattern {
+        // Empty braces require an actual unit variant, excluding structural
+        // constants that could hide a comparison against mutable record fields.
+        Pat::Path(path) => quote! { #path {} },
+        Pat::Or(pattern) => {
+            let cases = pattern.cases.iter().map(predicate_pattern);
+            quote! { #(#cases)|* }
+        }
+        Pat::Paren(pattern) => {
+            let inner = predicate_pattern(&pattern.pat);
+            quote! { (#inner) }
+        }
+        Pat::TupleStruct(pattern) => {
+            let path = &pattern.path;
+            let elems = pattern.elems.iter().map(predicate_pattern);
+            quote! { #path(#(#elems),*) }
+        }
+        _ => quote! { #pattern },
+    }
+}
+
+impl ToTokens for IndexPredicate {
+    fn to_tokens(&self, tokens: &mut TokenStream) {
+        let field = &self.field;
+        let pattern = &self.pattern;
+        tokens.extend(quote! { matches!(#field, #pattern) });
+    }
 }
 
 /// The parsed arguments of a struct-level `#[index(...)]`. `name` is the leading
@@ -37,6 +116,7 @@ struct IndexArgs {
     by: Option<Vec<Ident>>,
     sort: Option<Ident>,
     include: Option<Vec<Ident>>,
+    when: Option<IndexPredicate>,
 }
 
 /// Parse a `field` or `(a, b, …)` field list — the shape shared by `by` and
@@ -61,6 +141,7 @@ impl Parse for IndexArgs {
             by: None,
             sort: None,
             include: None,
+            when: None,
         };
         while input.peek(Token![,]) {
             input.parse::<Token![,]>()?;
@@ -75,11 +156,17 @@ impl Parse for IndexArgs {
                 "sort" => args.sort = Some(input.parse()?),
                 // `include = field` or `include = (a, b)` (covering projection).
                 "include" => args.include = Some(parse_ident_list(input)?),
+                "when" => {
+                    if args.when.is_some() {
+                        return Err(Error::new(key.span(), "duplicate index option `when`"));
+                    }
+                    args.when = Some(input.parse()?);
+                }
                 other => {
                     return Err(Error::new(
                         key.span(),
                         format!(
-                            "unknown index option `{other}` (expected `by`, `sort`, or `include`)"
+                            "unknown index option `{other}` (expected `by`, `sort`, `include`, or `when`)"
                         ),
                     ));
                 }
@@ -122,6 +209,7 @@ pub fn parse(struct_attrs: &[Attribute], fields: &FieldsNamed) -> Result<Vec<Ind
                 by: vec![ident.clone()],
                 sort: None,
                 include: Vec::new(),
+                when: None,
                 id: 0, // numbered after all decls are collected
             });
         }
@@ -171,7 +259,12 @@ pub fn parse(struct_attrs: &[Attribute], fields: &FieldsNamed) -> Result<Vec<Ind
                 ));
             }
         }
-        for referenced in by.iter().chain(args.sort.iter()).chain(include.iter()) {
+        for referenced in by
+            .iter()
+            .chain(args.sort.iter())
+            .chain(include.iter())
+            .chain(args.when.as_ref().map(|predicate| &predicate.field))
+        {
             if !field_exists(fields, referenced) {
                 return Err(Error::new_spanned(
                     referenced,
@@ -184,6 +277,7 @@ pub fn parse(struct_attrs: &[Attribute], fields: &FieldsNamed) -> Result<Vec<Ind
             by,
             sort: args.sort,
             include,
+            when: args.when,
             id: 0, // numbered after all decls are collected
         });
     }
@@ -251,7 +345,7 @@ fn reserved_index_name(name: &str) -> Option<&'static str> {
     }
 }
 
-/// Distinct fields referenced (bucket + sort + covering `include`) across `decls`, in
+/// Distinct fields referenced (bucket + sort + covering `include` + predicate) across `decls`, in
 /// first-seen order. Reading each once before building entries avoids re-reading a
 /// storage slot that two indexes share, or that a setter's old and new entry both need.
 /// The `include` fields must be here too: the read model builds each entry's covering
@@ -264,6 +358,7 @@ pub fn referenced_fields<'a>(decls: impl IntoIterator<Item = &'a IndexDecl>) -> 
             .iter()
             .chain(decl.sort.iter())
             .chain(decl.include.iter())
+            .chain(decl.when.as_ref().map(|predicate| &predicate.field))
         {
             if !out.contains(&field) {
                 out.push(field);
@@ -332,6 +427,122 @@ pub fn index_entry(decl: &IndexDecl, value_for: &impl Fn(&Ident) -> TokenStream)
             bucket: alloc::vec![#(#bucket),*],
             sort: #sort,
             projection: #projection,
+        }
+    }
+}
+
+pub fn index_push(decl: &IndexDecl, value_for: &impl Fn(&Ident) -> TokenStream) -> TokenStream {
+    let entry = index_entry(decl, value_for);
+    let push = quote! { entries.push(#entry); };
+    if let Some(predicate) = &decl.when {
+        let mut pattern = &predicate.pattern;
+        while let Pat::Paren(inner) = pattern {
+            pattern = &inner.pat;
+        }
+        let value = value_for(&predicate.field);
+        let condition = match pattern {
+            Pat::Lit(ExprLit {
+                lit: Lit::Bool(boolean),
+                ..
+            }) => {
+                if boolean.value {
+                    quote! { #value }
+                } else {
+                    quote! { !#value }
+                }
+            }
+            _ => {
+                let pattern = predicate_pattern(pattern);
+                quote! { matches!(&#value, #pattern) }
+            }
+        };
+        quote! { if #condition { #push } }
+    } else {
+        push
+    }
+}
+
+pub fn index_entries(
+    decls: &[&IndexDecl],
+    value_for: &impl Fn(&Ident) -> TokenStream,
+) -> TokenStream {
+    if decls.iter().all(|d| d.when.is_none()) {
+        let entries = decls.iter().map(|d| index_entry(d, value_for));
+        quote! { [#(#entries),*] }
+    } else {
+        let pushes = decls.iter().map(|d| index_push(d, value_for));
+        quote! {{ let mut entries = alloc::vec::Vec::new(); #(#pushes)* entries }}
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use syn::{Fields, ItemStruct, parse_quote};
+
+    #[test]
+    fn conditional_dependencies_include_fields_outside_the_index_key() {
+        let item: ItemStruct = parse_quote! {
+            #[index(open, by = owner, sort = deadline, include = amount,
+                when = matches!(status, State::Pending | State::Active))]
+            struct Entry { owner: u64, deadline: u64, amount: u64, status: State }
+        };
+        let Fields::Named(fields) = item.fields else {
+            unreachable!()
+        };
+        let decls = parse(&item.attrs, &fields).unwrap();
+        assert_eq!(
+            referenced_fields(&decls)
+                .iter()
+                .map(|f| f.to_string())
+                .collect::<Vec<_>>(),
+            ["owner", "deadline", "amount", "status"]
+        );
+    }
+
+    #[test]
+    fn predicates_reject_hidden_dependencies_and_accidental_bindings() {
+        for invalid in [
+            "matches!(entry.status, State::Active)",
+            "matches!(status, Active)",
+            "matches!(status, State::Active if other)",
+            "matches!(status, Option::Some(value))",
+            "matches!(status, State::Details(Payload { number: 1 }))",
+            "matches!(status, State::Active) || external()",
+            "check(status)",
+        ] {
+            assert!(
+                syn::parse_str::<IndexPredicate>(invalid).is_err(),
+                "accepted {invalid}"
+            );
+        }
+        for valid in [
+            "matches!(active, true)",
+            "matches!(status, State::Active | State::Pending,)",
+            "matches!(item, Option::Some(_))",
+            "matches!(status, State::Ready | State::Details(_))",
+            "matches!(status, State::Details(..))",
+            "matches!(status, Option::Some(State::Details(_)))",
+        ] {
+            assert!(
+                syn::parse_str::<IndexPredicate>(valid).is_ok(),
+                "rejected {valid}"
+            );
+        }
+    }
+
+    #[test]
+    fn predicate_field_must_exist_and_option_must_be_unique() {
+        for attr in [
+            quote! { #[index(open, by = owner, when = matches!(missing, true))] },
+            quote! { #[index(open, by = owner, when = matches!(owner, 1), when = matches!(owner, 2))] },
+        ] {
+            let item: ItemStruct =
+                syn::parse2(quote! { #attr struct Entry { owner: u64 } }).unwrap();
+            let Fields::Named(fields) = item.fields else {
+                unreachable!()
+            };
+            assert!(parse(&item.attrs, &fields).is_err());
         }
     }
 }

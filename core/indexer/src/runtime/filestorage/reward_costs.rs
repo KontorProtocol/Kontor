@@ -8,6 +8,7 @@ use serde_json::json;
 use super::api;
 use super::settlement_tests::{StorageFixture, at_height};
 use crate::reg_tester::random_x_only_pubkey;
+use crate::runtime::costs::snapshot;
 use crate::runtime::fuel::FuelGauge;
 use crate::runtime::numerics::sub_decimal;
 use crate::runtime::staking::api as staking;
@@ -28,6 +29,7 @@ async fn measured<T>(
     let started = Instant::now();
     let result = call(runtime).await?;
     let elapsed = started.elapsed();
+    runtime.gauge = None;
     let operations: BTreeMap<_, _> = gauge
         .per_type_stats()
         .await
@@ -116,6 +118,58 @@ async fn reward_costs_across_membership_and_file_counts() -> Result<()> {
         }
         ensure!(completed, "cleanup did not finish");
         ensure!(!api::is_node_in_agreement(&mut runtime, file, *node).await?);
+    }
+    Ok(())
+}
+
+#[tokio::test]
+#[ignore = "manual challenge index lifecycle costs"]
+async fn conditional_challenge_index_costs() -> Result<()> {
+    let core = Signer::Core(Box::new(Signer::Nobody));
+    for files in [1, 32] {
+        let (mut runtime, _dir, _name) = test_runtime().await?;
+        runtime.set_context(1, None, None, None).await;
+        let keys: Vec<_> = (0..3).map(|_| random_x_only_pubkey()).collect();
+        let fixture = measured(&mut runtime, "agreements", 3, files, async |rt| {
+            StorageFixture::new(rt, files, &keys).await
+        })
+        .await?;
+        measured(&mut runtime, "memberships", 3, files, async |rt| {
+            fixture.join(rt, Decimal::from("9000")).await
+        })
+        .await?;
+        for cycle in 0..3 {
+            let height = 2 + cycle * 2017;
+            at_height(&mut runtime, height).await?;
+            let challenges = measured(&mut runtime, "challenge_create", 3, files, async |rt| {
+                let mut ids = Vec::new();
+                for file in 0..files {
+                    ids.push(fixture.challenge(rt, file, height).await?);
+                }
+                Ok(ids)
+            })
+            .await?;
+            snapshot(&runtime, &format!("challenges_active_{cycle}"), files).await?;
+            let height = height + 2016;
+            at_height(&mut runtime, height).await?;
+            measured(&mut runtime, "challenge_expire", 3, files, async |rt| {
+                ensure!(api::expire_challenges(rt, &core, height).await? == files as u64);
+                Ok(())
+            })
+            .await?;
+            measured(&mut runtime, "challenge_settle", 3, files, async |rt| {
+                ensure!(api::settle_expired_challenges(rt, &core).await?? == files as u64);
+                Ok(())
+            })
+            .await?;
+            for id in challenges {
+                ensure!(
+                    api::get_challenge(&mut runtime, &id).await?.unwrap().status
+                        == api::ChallengeStatus::Settled
+                );
+            }
+            snapshot(&runtime, &format!("challenges_settled_{cycle}"), files).await?;
+        }
     }
     Ok(())
 }
