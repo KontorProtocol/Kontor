@@ -3,7 +3,7 @@ use wasmtime::component::{Accessor, Resource};
 
 use crate::runtime::Runtime;
 use crate::runtime::wit::kontor::built_in;
-use crate::runtime::wit::{IndexRows, Keys, ProcStorage, ViewStorage};
+use crate::runtime::wit::{Keys, ProcStorage, StorageRows, ViewStorage};
 
 impl built_in::context::HostProcStorage for Runtime {}
 
@@ -84,17 +84,17 @@ impl<T> built_in::context::HostProcStorageWithStore<T> for Runtime {
             .await
     }
 
-    async fn get_index_rows(
+    async fn get_storage_rows(
         accessor: &Accessor<T, Self>,
         self_: Resource<ProcStorage>,
         path: Vec<u8>,
         lo: Option<Vec<u8>>,
         hi: Option<Vec<u8>>,
         descending: bool,
-    ) -> Result<Resource<IndexRows>> {
+    ) -> Result<Resource<StorageRows>> {
         accessor
             .with(|mut access| access.get().clone())
-            ._get_index_rows(accessor, self_, path, lo, hi, descending)
+            ._get_storage_rows(accessor, self_, path, lo, hi, descending)
             .await
     }
 

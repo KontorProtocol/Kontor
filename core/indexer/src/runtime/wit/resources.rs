@@ -161,15 +161,14 @@ pub struct Keys {
         Pin<Box<dyn Stream<Item = Result<Vec<u8>, crate::database::queries::Error>> + Send>>,
 }
 
-/// One covering-scan row: `(member-element, projection-value)`. The member is the same
-/// bytes `Keys` yields; the value is the leaf's covering projection.
-pub type IndexRow = (Vec<u8>, Vec<u8>);
+/// One direct leaf: `(key element, stored value bytes)`, including storage framing.
+pub type StorageRow = (Vec<u8>, Vec<u8>);
 
-pub struct IndexRows {
-    // The covering-scan cursor (see the `index-rows` WIT resource): a stream of
-    // [`IndexRow`]s, one per live index leaf.
+pub struct StorageRows {
+    // The value-returning cursor (see the `storage-rows` WIT resource): a stream of
+    // [`StorageRow`]s, one per direct live leaf.
     pub stream:
-        Pin<Box<dyn Stream<Item = Result<IndexRow, crate::database::queries::Error>> + Send>>,
+        Pin<Box<dyn Stream<Item = Result<StorageRow, crate::database::queries::Error>> + Send>>,
 }
 
 pub struct CoreContext {

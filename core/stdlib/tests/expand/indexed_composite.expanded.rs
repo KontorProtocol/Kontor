@@ -406,7 +406,7 @@ impl<__S: stdlib::ReadStorage + 'static> AgreementStorageAgreementsModel<__S> {
     pub fn range(
         &self,
         range: impl core::ops::RangeBounds<u64>,
-    ) -> stdlib::KeyRange<u64, __S> {
+    ) -> stdlib::KeyRange<u64, __S, Agreement> {
         stdlib::KeyRange::new(self.ctx.clone(), self.base_path.clone(), range)
     }
 }
@@ -544,7 +544,7 @@ impl<
     pub fn range(
         &self,
         range: impl core::ops::RangeBounds<u64>,
-    ) -> stdlib::KeyRange<u64, __S> {
+    ) -> stdlib::KeyRange<u64, __S, Agreement> {
         stdlib::KeyRange::new(self.ctx.clone(), self.base_path.clone(), range)
     }
 }

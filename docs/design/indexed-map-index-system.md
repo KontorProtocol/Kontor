@@ -56,6 +56,42 @@ One source supplies each index bucket to stdlib. Generated models no longer carr
 separate key, sorted, and covering scan implementations. Internal bucket adapters
 are not contract query APIs.
 
+## Scalar map entries
+
+Use `.entries()` when both the key and its scalar value are needed:
+
+```rust
+ledger.entries(); // (Holder, Decimal)
+ledger.range(start..end).entries();
+ledger.range(..=last).rev().entries().take(20);
+nft.attributes().entries(); // (String, String)
+```
+
+The map carries its value type into the range, so callers do not select a decoder.
+`ScalarStorage` is implemented for actual single-row values: strings, byte lists,
+booleans, supported integers, `Integer`, `Decimal`, and stored `Holder` handles.
+Records, enums, options, and compound built-ins do not gain entry scans merely
+because they support `KeyElement`. Their maps still support key scans and per-key
+models. An index name cannot shadow `entries`.
+
+The shared `storage-rows` host cursor returns raw stored bytes for both scalar
+maps and covering indexes. It replaces `index-rows`, whose host decoder assumed
+every value was a byte-list projection. Postcard framing is decoded in stdlib;
+native numeric types reuse their existing canonical codec decoder. Covering and
+numeric payloads borrow the framed buffer rather than allocate a second copy.
+The host remains responsible for latest-row visibility, bounds, and metering.
+It rejects compound children instead of returning an arbitrary descendant value.
+
+Each consumed row pays for its key and stored value bytes. Key-only queries keep
+using the lighter key cursor. Filters run in the contract, so an entry rejected
+by a filter still pays for its fetched value. `.take(n)` pulls at most `n` rows;
+there is no hidden lookahead or full-map collection. Snapshot keys/entries before
+mutating the scanned collection, as with existing lazy index queries.
+
+No storage encoding, index, or table is added. The host ABI changes, so deployed
+contracts and the runtime must be rebuilt together under the preproduction replay
+model. The checked-in native/test binaries and SDK component accompany the change.
+
 ## Encoding and bounds
 
 Primary keys, index keys, and projections use the shared ordered `KeyElement`
@@ -97,6 +133,10 @@ when `items` are agreement IDs. The offset signatures are replaced.
 Pages read current state. They do not promise a snapshot across calls: inserts
 before the cursor and holder transfers can change what later calls return. A
 cursor need not identify a currently existing NFT. No cursor table is stored.
+
+Token balance exports and NFT attributes use scalar entry reads. Their existing
+result shapes, order, and filtering rules are preserved; these full exports are
+not silently truncated or converted into page APIs.
 
 ## Response data and persistent data
 

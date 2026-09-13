@@ -2,7 +2,8 @@
 
 Initial investigation: 2026-09-10 at main
 `6a64d4653b5c9015d9274dea0852a5a9cd3204f7` (#557).
-The first phase is implemented in `0a4772c2` on `feat/key-range-queries`.
+The first phase was merged in #558 (`367f7a42`); the second phase below
+builds on that main commit.
 See [the current API guide](indexed-map-index-system.md) for supported syntax.
 The native/test contract adoption audit below examines that local commit and
 repository callers; it does not claim verification of a newer remote head.
@@ -31,7 +32,7 @@ the same bounds. Exclusive bounds skip a complete element subtree, including
 struct fields, without absorbing a distinct escaped-NUL sibling. Covering key-only
 reads avoid fetching projections, and bounded queries do not expose bucket counts.
 
-## Adoption audit: all native and test contracts
+## First-phase adoption audit: all native and test contracts
 
 The scan covered all five native contracts and eleven test contracts (18 Rust
 source files), their WIT exports, and repository callers. Searches included
@@ -64,11 +65,11 @@ existing direct key-range uses. Replacing a complete `.keys()` scan with
 `.range(..).keys()` would do the same work. Likewise, ordinary lists do not need
 page-response wrappers when there is no continuation metadata.
 
-The remaining worthwhile changes are distinct work:
+At the end of the first phase, the remaining worthwhile changes were:
 
 - Scalar-entry iteration can serve native token balances, both test token ledgers,
-  and NFT attributes without a second value lookup. It is not implemented by the
-  key-range feature; a stored leaf still needs its own decoding/framing rules.
+  and NFT attributes without a second value lookup. The second phase below now
+  implements it; a stored leaf still needs its own decoding/framing rules.
 - Due-validator processing could seek by activation/deactivation height after an
   index change. Applying a height bound to the current Holder-keyed status index
   would be incorrect. Measure the saved per-block reads against index maintenance,
@@ -115,39 +116,55 @@ the first-phase changes; the separate buffer-only experiment showed identical
 host-operation counts. Local logs are `/tmp/kontor-ranges-costs.log` and
 `/tmp/kontor-path-probe/baseline-run-1.log`.
 
-## Second PR: scalar map entries, used by token balances
+## Implemented second phase: scalar map entries
 
-Source: `native-contracts/token/src/lib.rs`, `balances`.
+Scalar maps expose `.entries()` directly and after `.range(...)` / `.rev()`.
+The native token, Decimal test token, Integer test token, and NFT attributes now
+use it. Complete result shapes and ordering remain unchanged. Native/Decimal
+ledgers still exclude Core and Burner; the Integer test ledger excludes Burner.
 
-The ledger is `Map<Holder, Decimal>`. Listing balances currently enumerates its
-keys, converts each holder, and separately reads each included balance. After
-#557 each Decimal is directly stored at the holder key. A typed map-entry scan
-can return `(holder, amount)` from that row, eliminating the separate numeric
-point reads. Retain the current exclusion of Core and Burner holders and the
-ordering of results. Holder conversion costs remain.
+`ScalarStorage` defines single-leaf decoding separately from ordered key encoding.
+The shared `storage-rows` cursor replaces the covering-only cursor, returns raw
+stored bytes, and meters key plus value bytes. Postcard framing is decoded once
+in stdlib, borrowing numeric/covering byte payloads; numeric types reuse the same
+codec decoder as their point reads. Compound values cannot expose `.entries()`.
+No additional index, database table, or value copy is maintained.
 
-If adding capped balance pages, settle the full-export requirement with callers;
-do not silently truncate the existing `balances()` result. With filtered holders, the continuation must
-advance by scanned keys, not only returned results, and the scan budget must be
-explicit. This is useful for account listings and inspection; repository usage
-found here is in tests, so production client demand is not yet established.
+The follow-up audit again examined native/test contract key scans. The remaining
+ones require only keys or read compound models. For example, the reward folding
+queue supplies a node ID to `rewards::settle`, which owns its state reads; passing
+a preloaded delta would require a separate reward API change and is not needed
+for this language feature. No alternate preloaded-settlement path was added.
 
-A second existing consumer is NFT `get_attributes`: a `Map<String, String>` is
-read through `keys()` plus one `get()` per attribute. Attributes are capped at 32,
-so this is a small simplification rather than a scalability emergency.
+The ABI rename requires rebuilt contracts and SDK component. Existing stored
+values retain their format; preproduction deployments replay with matching
+runtime and binaries. This phase does not add balance pagination, value ordering,
+or a new query-planner syntax.
 
-Keep this facility restricted to values with a genuine single-leaf storage
-representation. `KeyElement` alone does not imply that property. Stored values
-also retain host serialization framing; even when payload codecs match, raw
-database values cannot simply be decoded as index projections. Introduce a small
-shared scalar-storage decoding abstraction if needed. Do not add reward-aware
-runtime behavior or assume structs, options and enums occupy one leaf.
+Second-phase validation passed the release workspace suite with `REGTEST=1`
+(781 tests passed, 3 tests/doctests opt-in), all 158 SDK tests, macro UI and
+snapshot checks, formatting and Clippy in all three workspaces, and the pinned
+native/test contract builds.
 
-The existing row cursor is a potential foundation, but its contract and decoding
-must be generalized deliberately. Charge row bytes and preserve deletion,
-version visibility, rollback and lazy iteration. Test Integer/Decimal, strings,
-zero, missing rows and full-range values. Measure actual eliminated `Get` calls
-before claiming an end-to-end speedup.
+### Second-phase measured reads
+
+The actual Wasm runtime tests verify:
+
+- Five numeric entries: five metered rows and zero point `Get` calls, for both
+  Integer and Decimal, including zero and signed 256-bit extremes.
+- A reverse numeric range limited to two entries: exactly two metered rows;
+  a zero limit consumes none. Key plus serialized value bytes are charged exactly.
+- Thirty-two NFT attributes: thirty-two rows and zero point reads. Reading the
+  same attributes individually performs thirty-two point reads.
+- Native token balance export: zero point reads, with results checked against
+  individual balance reads and the Core/Burner exclusions preserved.
+
+These are storage-operation counts, not an end-to-end throughput claim. Entries
+fetch values even for holders filtered out afterward; the older key-only loop
+avoided those excluded value reads. No extra stored copy or index is introduced.
+Numeric tests also exercise removal, overwrites, savepoint rollback, and block
+rollback/reappearance. Existing covering-index and NFT pagination checks run
+through the same generalized cursor.
 
 ## Independent contract improvement: due validator transitions
 

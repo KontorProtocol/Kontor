@@ -4,7 +4,7 @@ use core::{
     ops::{Bound, RangeBounds},
 };
 
-use crate::{KeyElement, KeyPath, ReadStorage, keycodec};
+use crate::{KeyElement, KeyPath, ReadStorage, ScalarStorage, decode_storage, keycodec};
 
 /// The generated model supplies a bucket once; every query uses the same
 /// bounded storage cursor rather than a separate scan implementation per index kind.
@@ -66,15 +66,15 @@ pub fn sort_upper_bound<S: KeyElement>(value: &S) -> Vec<u8> {
 
 /// A key-bounded map or index scan. Bounds are database seeks; `.rev()` changes
 /// direction without changing membership. No full-map or bucket count is exposed.
-pub struct KeyRange<K, S> {
+pub struct KeyRange<K, S, V = ()> {
     ctx: Rc<S>,
     path: KeyPath,
     bounds: ScanBounds,
     descending: bool,
-    _key: PhantomData<K>,
+    _key: PhantomData<(K, V)>,
 }
 
-impl<K: KeyElement + Clone + 'static, S: ReadStorage + 'static> KeyRange<K, S> {
+impl<K: KeyElement + Clone + 'static, S: ReadStorage + 'static, V> KeyRange<K, S, V> {
     #[doc(hidden)]
     pub fn new(ctx: Rc<S>, path: KeyPath, range: impl RangeBounds<K>) -> Self {
         Self {
@@ -106,7 +106,7 @@ impl<K: KeyElement + Clone + 'static, S: ReadStorage + 'static> KeyRange<K, S> {
 
     fn rows(self) -> impl Iterator<Item = (K, Vec<u8>)> {
         self.ctx
-            .__get_index_rows_range(
+            .__get_storage_rows_range(
                 &self.path,
                 self.bounds.lo.as_deref(),
                 self.bounds.hi.as_deref(),
@@ -145,11 +145,25 @@ impl<K: KeyElement + Clone + 'static, S: ReadStorage + 'static> KeyRange<K, S> {
     }
 }
 
-impl<K: KeyElement + Clone + 'static, S: ReadStorage + 'static> IntoIterator for KeyRange<K, S> {
+impl<K: KeyElement + Clone + 'static, S: ReadStorage + 'static, V: 'static> IntoIterator
+    for KeyRange<K, S, V>
+{
     type Item = K;
     type IntoIter = Box<dyn Iterator<Item = K>>;
     fn into_iter(self) -> Self::IntoIter {
         Box::new(self.keys())
+    }
+}
+
+impl<K, S, V> KeyRange<K, S, V>
+where
+    K: KeyElement + Clone + 'static,
+    S: ReadStorage + 'static,
+    V: ScalarStorage,
+{
+    pub fn entries(self) -> impl Iterator<Item = (K, V)> {
+        self.rows()
+            .map(|(key, value)| (key, V::decode_storage(&value)))
     }
 }
 
@@ -342,12 +356,14 @@ where
         self.scan.keys()
     }
     pub fn values(self) -> impl Iterator<Item = V> {
-        self.scan.rows().map(move |(_, value)| (self.build)(&value))
+        self.scan
+            .rows()
+            .map(move |(_, value)| (self.build)(decode_storage(&value)))
     }
     pub fn iter(self) -> impl Iterator<Item = (K, V)> {
         self.scan
             .rows()
-            .map(move |(key, value)| (key, (self.build)(&value)))
+            .map(move |(key, value)| (key, (self.build)(decode_storage(&value))))
     }
 }
 
@@ -456,12 +472,12 @@ where
     pub fn values(self) -> impl Iterator<Item = V> {
         self.scan
             .rows()
-            .map(move |((sort, _), value)| (self.build)(&sort, &value))
+            .map(move |((sort, _), value)| (self.build)(&sort, decode_storage(&value)))
     }
     pub fn iter(self) -> impl Iterator<Item = (K, V)> {
         self.scan
             .rows()
-            .map(move |((sort, key), value)| (key, (self.build)(&sort, &value)))
+            .map(move |((sort, key), value)| (key, (self.build)(&sort, decode_storage(&value))))
     }
 }
 

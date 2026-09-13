@@ -1,9 +1,12 @@
 use anyhow::Result;
 
-use super::api;
+use indexer_types::serialize;
+use stdlib::KeyElement;
+
+use super::api::{self, Attribute};
 use crate::reg_tester::random_x_only_pubkey;
 use crate::runtime::Decimal;
-use crate::runtime::fuel::{FuelDiscriminants, FuelGauge};
+use crate::runtime::fuel::{Fuel, FuelDiscriminants, FuelGauge};
 use crate::runtime::token::api as token;
 use crate::runtime::wit::{Signer, kontor::built_in::context::HolderRef};
 use crate::test_utils::{make_descriptor, test_runtime};
@@ -29,12 +32,18 @@ async fn nft_cursor_pages_seek_and_survive_membership_changes() -> Result<()> {
         .into_iter()
         .chain((0..107).map(|i| format!("nft-{i:03}")))
         .collect();
+    let attributes: Vec<Attribute> = (0..32)
+        .map(|i| Attribute {
+            key: format!("attr-{i:02}"),
+            value: format!("value-雪-\0-{i}"),
+        })
+        .collect();
     for (i, key) in keys.iter().enumerate() {
         api::mint(
             &mut runtime,
             &signer,
             key,
-            vec![],
+            if i == 0 { attributes.clone() } else { vec![] },
             make_descriptor(
                 format!("file-{i:03}"),
                 vec![1; 32],
@@ -44,6 +53,54 @@ async fn nft_cursor_pages_seek_and_survive_membership_changes() -> Result<()> {
             ),
         )
         .await??;
+    }
+    let gauge = FuelGauge::new();
+    runtime.gauge = Some(gauge.clone());
+    assert_eq!(api::get_attributes(&mut runtime, "a").await?, attributes);
+    let stats = gauge.per_type_stats().await;
+    assert!(!stats.contains_key(&FuelDiscriminants::Get));
+    assert_eq!(stats[&FuelDiscriminants::KeysNext].count, 32);
+    let expected: u64 = attributes
+        .iter()
+        .map(|attr| {
+            Fuel::KeysNext((attr.key.encode().len() + serialize(&attr.value).unwrap().len()) as u64)
+                .cost()
+        })
+        .sum();
+    assert_eq!(stats[&FuelDiscriminants::KeysNext].total_fuel, expected);
+    let gauge = FuelGauge::new();
+    runtime.gauge = Some(gauge.clone());
+    for attr in &attributes {
+        assert_eq!(
+            api::get_attribute(&mut runtime, "a", &attr.key).await?,
+            Some(attr.value.clone())
+        );
+    }
+    assert_eq!(
+        gauge.per_type_stats().await[&FuelDiscriminants::Get].count,
+        32
+    );
+    let gauge = FuelGauge::new();
+    runtime.gauge = Some(gauge.clone());
+    let balances = token::balances(&mut runtime).await?;
+    assert!(
+        !gauge
+            .per_type_stats()
+            .await
+            .contains_key(&FuelDiscriminants::Get)
+    );
+    assert!(
+        !balances
+            .iter()
+            .any(|balance| matches!(balance.acc, HolderRef::Core | HolderRef::Burner))
+    );
+    assert!(balances.iter().any(|balance| balance.acc == holder));
+    runtime.gauge = None;
+    for balance in balances {
+        assert_eq!(
+            token::balance(&mut runtime, balance.acc).await?,
+            Some(balance.amt)
+        );
     }
     let mut all = Vec::new();
     let mut after: Option<String> = None;

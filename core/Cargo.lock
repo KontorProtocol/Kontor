@@ -7244,6 +7244,8 @@ version = "0.1.0"
 dependencies = [
  "macros",
  "macrotest",
+ "postcard",
+ "serde",
  "trybuild",
  "wasm-wave",
  "wit-bindgen 0.61.1",

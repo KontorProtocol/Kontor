@@ -3,6 +3,7 @@
 //! context resource wrappers (storage traits, Holder/Signer identity impls).
 
 use alloc::string::String;
+use stdlib::{ScalarStorage, decode_storage};
 
 use crate::kontor;
 use crate::kontor::built_in::context;
@@ -79,7 +80,7 @@ impl stdlib::HasNext for context::Keys {
     }
 }
 
-impl stdlib::HasNextRow for context::IndexRows {
+impl stdlib::HasNextRow for context::StorageRows {
     fn next(&self) -> Option<(alloc::vec::Vec<u8>, alloc::vec::Vec<u8>)> {
         self.next()
     }
@@ -116,14 +117,14 @@ impl stdlib::ReadStorage for context::ViewStorage {
         stdlib::make_keys_iterator(self.get_keys(path, lo, hi, descending))
     }
 
-    fn __get_index_rows_range(
+    fn __get_storage_rows_range(
         self: &alloc::rc::Rc<Self>,
         path: &[u8],
         lo: Option<&[u8]>,
         hi: Option<&[u8]>,
         descending: bool,
     ) -> impl Iterator<Item = (alloc::vec::Vec<u8>, alloc::vec::Vec<u8>)> + use<> {
-        stdlib::make_index_rows_iterator(self.get_index_rows(path, lo, hi, descending))
+        stdlib::make_storage_rows_iterator(self.get_storage_rows(path, lo, hi, descending))
     }
 
     fn __exists(self: &alloc::rc::Rc<Self>, path: &[u8]) -> bool {
@@ -177,14 +178,14 @@ impl stdlib::ReadStorage for context::ProcStorage {
         stdlib::make_keys_iterator(self.get_keys(path, lo, hi, descending))
     }
 
-    fn __get_index_rows_range(
+    fn __get_storage_rows_range(
         self: &alloc::rc::Rc<Self>,
         path: &[u8],
         lo: Option<&[u8]>,
         hi: Option<&[u8]>,
         descending: bool,
     ) -> impl Iterator<Item = (alloc::vec::Vec<u8>, alloc::vec::Vec<u8>)> + use<> {
-        stdlib::make_index_rows_iterator(self.get_index_rows(path, lo, hi, descending))
+        stdlib::make_storage_rows_iterator(self.get_storage_rows(path, lo, hi, descending))
     }
 
     fn __exists(self: &alloc::rc::Rc<Self>, path: &[u8]) -> bool {
@@ -268,6 +269,14 @@ impl<__S: stdlib::ReadStorage> stdlib::Retrieve<__S> for context::Holder {
     fn __get(ctx: &alloc::rc::Rc<__S>, path: stdlib::KeyPath) -> Option<Self> {
         let s: String = stdlib::ReadStorage::__get(ctx, path)?;
         s.parse().ok()
+    }
+}
+
+impl ScalarStorage for context::Holder {
+    fn decode_storage(bytes: &[u8]) -> Self {
+        decode_storage::<&str>(bytes)
+            .parse()
+            .expect("invalid stored holder")
     }
 }
 

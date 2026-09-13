@@ -377,7 +377,7 @@ async fn test_native_nft_contract() -> Result<()> {
     // Covering read: `agreement_ids_by_creator` pulls each NFT's agreement id straight
     // from the creator index's COVERING projection (no per-NFT record fetch). It must
     // agree, in the same order, with the agreement ids the record-fetching
-    // `list_nfts_by_creator` returns — proving the covering scan (host `get-index-rows`
+    // `list_nfts_by_creator` returns — proving the covering scan (host `get-storage-rows`
     // → guest decode) reconstructs the covered field correctly.
     assert_eq!(
         nft::agreement_ids_by_creator(runtime, alice_ref.clone(), None, 100)

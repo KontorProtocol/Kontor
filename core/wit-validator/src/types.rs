@@ -70,7 +70,7 @@ pub const RESERVED_TYPE_NAMES: &[&str] = &[
     "verify-result",
     "error",
     "keys",
-    "index-rows",
+    "storage-rows",
     "integer",
     "decimal",
 ];

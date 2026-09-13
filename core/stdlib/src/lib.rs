@@ -47,6 +47,7 @@ mod key_path;
 mod keycodec;
 mod map;
 mod query;
+mod scalar_storage;
 mod storage_interface;
 mod wave_interfaces;
 
@@ -59,6 +60,7 @@ pub use macros::{
 };
 pub use map::*;
 pub use query::*;
+pub use scalar_storage::*;
 pub use storage_interface::*;
 pub use wasm_wave;
 pub use wave_interfaces::*;

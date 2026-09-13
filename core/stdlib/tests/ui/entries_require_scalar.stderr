@@ -1,0 +1,16 @@
+error[E0599]: the method `entries` exists for struct `KeyRange<std::string::String, S, Record>`, but its trait bounds were not satisfied
+ --> tests/ui/entries_require_scalar.rs:6:11
+  |
+3 | struct Record { value: u64 }
+  | ------------- doesn't satisfy `Record: ScalarStorage`
+...
+6 |     range.entries();
+  |           ^^^^^^^ method cannot be called on `KeyRange<std::string::String, S, Record>` due to unsatisfied trait bounds
+  |
+  = note: the following trait bounds were not satisfied:
+          `Record: ScalarStorage`
+note: the trait `ScalarStorage` must be implemented
+ --> src/scalar_storage.rs
+  |
+  | pub trait ScalarStorage: Sized {
+  | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^

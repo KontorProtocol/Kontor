@@ -20,7 +20,7 @@ use crate::{
             hard_delete_matching_paths, insert_contract, insert_contract_provenance,
             insert_contract_result, insert_contract_state, latest_live_deposit,
             live_deposit_gas_sum, matching_path, path_prefix_filter_contract_state,
-            path_prefix_filter_index_rows, prune_contract_state, rollback_to_height,
+            path_prefix_filter_storage_rows, prune_contract_state, rollback_to_height,
             select_block_at_height, set_meta_u64, tombstone_rows,
         },
         types::{ContractProvenanceRow, ContractResultRow, ContractRow, ContractStateRow},
@@ -528,10 +528,10 @@ impl Storage {
         )
     }
 
-    /// The covering-index scan: each live index leaf under `path` as
-    /// `(member-element, value)` (see [`path_prefix_filter_index_rows`]). The
+    /// Direct live leaves under `path` as
+    /// `(key element, stored bytes)` (see [`path_prefix_filter_storage_rows`]). The
     /// value-returning analogue of [`Storage::keys`].
-    pub async fn index_rows(
+    pub async fn storage_rows(
         &self,
         contract_id: u64,
         path: Vec<u8>,
@@ -542,7 +542,7 @@ impl Storage {
         impl Stream<Item = Result<(Vec<u8>, Vec<u8>), crate::database::queries::Error>> + Send + 'static,
     > {
         Ok(
-            path_prefix_filter_index_rows(&self.conn, contract_id, path, lo, hi, descending)
+            path_prefix_filter_storage_rows(&self.conn, contract_id, path, lo, hi, descending)
                 .await?,
         )
     }

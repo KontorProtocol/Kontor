@@ -249,7 +249,7 @@ mod tests {
         ) -> impl Iterator<Item = T> + use<T> {
             core::iter::empty()
         }
-        fn __get_index_rows_range(
+        fn __get_storage_rows_range(
             self: &Rc<Self>,
             _: &[u8],
             _: Option<&[u8]>,

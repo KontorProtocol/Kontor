@@ -46,15 +46,10 @@ pub trait ReadStorage {
         self.__get_keys_range(path, None, None, false)
     }
 
-    /// The COVERING-scan analogue of [`__get_keys_range`]: each live leaf directly
-    /// under `path` as `(member-element, projection-value)` raw bytes. The member is
-    /// the same element `__get_keys_range` yields (a map key, or a `(sort, pk)` tuple);
-    /// the value is the leaf's covering projection (the `include=` fields'
-    /// concatenated codec elements). The covering query decodes both — the member to
-    /// `K`/`(S, K)`, the value field-by-field into the projection struct — so a
-    /// `.values()`/`.iter()` read needs no per-member point lookup. `lo`/`hi`/
-    /// `descending` are the same `[lo, hi)` range and direction as `__get_keys_range`.
-    fn __get_index_rows_range(
+    /// Direct live leaves as `(key element, stored bytes)`, retaining Postcard
+    /// framing. Scalars and covering projections share this metered cursor.
+    /// Compound children are invalid; use the key cursor to enumerate their keys.
+    fn __get_storage_rows_range(
         self: &alloc::rc::Rc<Self>,
         path: &[u8],
         lo: Option<&[u8]>,
@@ -290,15 +285,15 @@ where
 }
 
 pub trait HasNextRow {
-    /// The next `(member-element, projection-value)` pair (raw codec bytes), or `None`.
+    /// The next `(key element, stored value)` pair (including storage framing), or `None`.
     fn next(&self) -> Option<(Vec<u8>, Vec<u8>)>;
 }
 
-/// Adapt a host [`HasNextRow`] cursor (the `index-rows` resource) into a plain
-/// iterator of raw `(member, value)` byte pairs. The covering query decodes them; this
+/// Adapt a host [`HasNextRow`] cursor (the `storage-rows` resource) into a plain
+/// iterator of raw `(member, value)` byte pairs. The scalar or covering query decodes them; this
 /// only bridges the resource to `Iterator` (the value-returning twin of
 /// [`make_keys_iterator`]).
-pub fn make_index_rows_iterator<R: HasNextRow>(
+pub fn make_storage_rows_iterator<R: HasNextRow>(
     rows: R,
 ) -> impl Iterator<Item = (Vec<u8>, Vec<u8>)> {
     struct RowsIterator<R: HasNextRow> {

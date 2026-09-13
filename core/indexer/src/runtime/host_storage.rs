@@ -11,7 +11,7 @@ use crate::database::types::CORE_SIGNER_ID;
 use super::{
     ExecutionError, Runtime,
     fuel::Fuel,
-    wit::{HasContractId, IndexRows, Keys},
+    wit::{HasContractId, Keys, StorageRows},
 };
 
 /// Default storage-deposit rate `D`, in GAS per stored byte (path + value). It
@@ -119,11 +119,9 @@ impl Runtime {
         Ok(table.push(Keys { stream })?)
     }
 
-    /// The covering-scan analogue of [`Runtime::_get_keys`]: opens an [`IndexRows`]
-    /// cursor over `path`'s live index leaves, each yielding `(member, value)`. Same
-    /// path/cursor validation and open cost (`Fuel::GetKeys`); the per-row value bytes
-    /// are metered on `next` (see `_next_index_row`).
-    pub(crate) async fn _get_index_rows<S, T: HasContractId>(
+    /// Open the shared scalar/covering row cursor. Values retain storage framing;
+    /// `_next_storage_row` charges for both key and stored value bytes.
+    pub(crate) async fn _get_storage_rows<S, T: HasContractId>(
         &self,
         accessor: &Accessor<S, Self>,
         resource: Resource<T>,
@@ -131,7 +129,7 @@ impl Runtime {
         lo: Option<Vec<u8>>,
         hi: Option<Vec<u8>>,
         descending: bool,
-    ) -> Result<Resource<IndexRows>> {
+    ) -> Result<Resource<StorageRows>> {
         validate_path(&path)?;
         // `lo`/`hi` are byte-comparison bounds, not paths — see `_get_keys` for why they
         // are not validated as paths: the exclusive sentinel is not a stored element.
@@ -140,10 +138,10 @@ impl Runtime {
         Fuel::GetKeys.consume(accessor, self.gauge.as_ref()).await?;
         let stream = Box::pin(
             self.storage
-                .index_rows(contract_id, path, lo, hi, descending)
+                .storage_rows(contract_id, path, lo, hi, descending)
                 .await?,
         );
-        Ok(table.push(IndexRows { stream })?)
+        Ok(table.push(StorageRows { stream })?)
     }
 
     pub(crate) async fn _exists<S, T: HasContractId>(

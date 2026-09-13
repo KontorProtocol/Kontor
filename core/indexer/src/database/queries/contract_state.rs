@@ -637,7 +637,7 @@ pub async fn exists_contract_state(
 /// The scan's byte range `(lo_key, lo_cmp, hi_key)` derived from the `path`/`lo`/`hi`
 /// child-element bounds — the ONE place the seek/range rules live, shared by the key
 /// scan ([`path_prefix_filter_contract_state`]) and the covering value scan
-/// ([`path_prefix_filter_index_rows`]) so the two can't drift. `lo`/`hi` are
+/// ([`path_prefix_filter_storage_rows`]) so the two can't drift. `lo`/`hi` are
 /// child-element codec bytes (relative to `path`); the guest computes them from its
 /// `RangeBounds` via `sort_lower_bound`/`sort_upper_bound` (an FDB-style half-open
 /// `[lo, hi)` byte range, independent of iteration direction).
@@ -748,19 +748,10 @@ pub async fn path_prefix_filter_contract_state(
     Ok(stream)
 }
 
-/// The COVERING-index analogue of [`path_prefix_filter_contract_state`]: streams each
-/// live leaf directly under `path` as `(member-element, value)` — the member element
-/// (first codec element after the prefix; the `keys()` scan yields exactly this) paired
-/// with that leaf's stored VALUE (its covering projection). Same lower-bound / seek /
-/// range semantics (via [`scan_bounds`]); it only additionally selects
-/// `cs.value` and returns it alongside each member.
-///
-/// Dedup is keep-FIRST per member. A covering leaf is a single row at `path ++ member`,
-/// which byte-sorts BEFORE any (nonexistent) deeper row sharing that member prefix, so
-/// the first row seen for a member carries the leaf's value — the dedup is defensive
-/// (a covering member never actually owns a subtree) and never fires in practice. Each
-/// pulled row is metered by the host cursor (member + value bytes).
-pub async fn path_prefix_filter_index_rows(
+/// Stream direct live children as `(key element, stored bytes)`. Values retain
+/// their storage framing. A compound child is an invalid row-scan target, rather
+/// than an arbitrary descendant to mistake for the value of its parent.
+pub async fn path_prefix_filter_storage_rows(
     conn: &Connection,
     contract_id: u64,
     path: Vec<u8>,
@@ -786,37 +777,26 @@ pub async fn path_prefix_filter_index_rows(
     let rows = conn.query(&query, params).await?;
 
     let prefix_len = path.len();
-    let stream = stream::unfold(
-        (rows, None::<Vec<u8>>),
-        move |(mut rows, mut last)| async move {
-            loop {
-                match rows.next().await {
-                    Ok(Some(row)) => {
-                        let full: Vec<u8> = match row.get::<Vec<u8>>(0) {
-                            Ok(p) => p,
-                            Err(e) => return Some((Err(e.into()), (rows, last))),
-                        };
-                        let elem = match next_element(&full[prefix_len..]) {
-                            Ok((elem, _)) => elem,
-                            Err(e) => return Some((Err(Error::KeyCodec(e)), (rows, last))),
-                        };
-                        if last.as_deref() == Some(elem) {
-                            continue; // dedup: keep the first (leaf) row per member
-                        }
-                        let member = elem.to_vec();
-                        last = Some(member.clone());
-                        let value: Vec<u8> = match row.get::<Vec<u8>>(1) {
-                            Ok(v) => v,
-                            Err(e) => return Some((Err(e.into()), (rows, last))),
-                        };
-                        return Some((Ok((member, value)), (rows, last)));
+    let stream = stream::unfold(rows, move |mut rows| async move {
+        match rows.next().await {
+            Ok(Some(row)) => {
+                let item = (|| -> Result<_, Error> {
+                    let full: Vec<u8> = row.get(0)?;
+                    let (elem, tail) =
+                        next_element(&full[prefix_len..]).map_err(Error::KeyCodec)?;
+                    if !tail.is_empty() {
+                        return Err(Error::InvalidData(
+                            "row scan requires direct scalar leaves".into(),
+                        ));
                     }
-                    Ok(None) => return None,
-                    Err(e) => return Some((Err(e.into()), (rows, last))),
-                }
+                    Ok((elem.to_vec(), row.get::<Vec<u8>>(1)?))
+                })();
+                Some((item, rows))
             }
-        },
-    );
+            Ok(None) => None,
+            Err(e) => Some((Err(e.into()), rows)),
+        }
+    });
 
     Ok(stream)
 }

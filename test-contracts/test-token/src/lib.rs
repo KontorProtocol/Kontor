@@ -73,13 +73,13 @@ impl Guest for TestToken {
     fn balances(ctx: &ViewContext) -> Vec<Balance> {
         ctx.model()
             .ledger()
-            .keys()
-            .filter_map(|k| {
+            .entries()
+            .filter_map(|(k, value)| {
                 if k == BURNER() {
                     None
                 } else {
                     Some(Balance {
-                        value: ctx.model().ledger().get(&k).unwrap_or_default(),
+                        value,
                         key: k.to_string(),
                     })
                 }

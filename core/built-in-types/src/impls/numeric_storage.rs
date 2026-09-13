@@ -1,6 +1,9 @@
 use alloc::{rc::Rc, vec::Vec};
 
-use stdlib::{IndexKey, Indexed, KeyElement, KeyPath, ReadStorage, Retrieve, Store, WriteStorage};
+use stdlib::{
+    IndexKey, Indexed, KeyElement, KeyPath, ReadStorage, Retrieve, ScalarStorage, Store,
+    WriteStorage, decode_storage,
+};
 
 use crate::numbers_types::{Decimal, Integer};
 
@@ -13,6 +16,12 @@ fn decode_value<T: KeyElement>(bytes: &[u8]) -> T {
 macro_rules! numeric_storage {
     ($($ty:ty),+ $(,)?) => {$(
         impl Indexed for $ty {}
+
+        impl ScalarStorage for $ty {
+            fn decode_storage(bytes: &[u8]) -> Self {
+                decode_value(decode_storage(bytes))
+            }
+        }
 
         impl IndexKey for $ty {
             fn index_key(&self) -> Vec<u8> {

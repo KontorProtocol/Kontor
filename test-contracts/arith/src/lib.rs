@@ -3,6 +3,7 @@ contract!(name = "arith");
 
 use alloc::vec;
 use built_in_types::numbers_types::{Decimal, Integer, Sign};
+use core::ops::Bound;
 use stdlib::*;
 
 interface!(name = "fib", path = "../fib/wit");
@@ -13,6 +14,7 @@ struct ArithStorage {
     pub optional_integer: Option<Integer>,
     pub decimals: Map<u64, Decimal>,
     pub numbers: Map<u64, NumericRecord>,
+    pub integers: Map<u64, Integer>,
 }
 
 #[derive(Clone, Storage)]
@@ -71,6 +73,7 @@ impl Guest for Arith {
         let model = ctx.model();
         model.set_optional_integer(Some(integer));
         model.decimals().set(&key, decimal);
+        model.integers().set(&key, integer);
         model
             .numbers()
             .set(&key, NumericRecord { integer, decimal });
@@ -88,6 +91,7 @@ impl Guest for Arith {
         let model = ctx.model();
         model.set_optional_integer(None);
         model.decimals().remove(&key);
+        model.integers().remove(&key);
         model.numbers().remove(&key);
     }
 
@@ -110,6 +114,35 @@ impl Guest for Arith {
 
     fn number_keys(ctx: &ViewContext) -> Vec<u64> {
         ctx.model().decimals().keys().collect()
+    }
+
+    fn number_entries(
+        ctx: &ViewContext,
+        lower: Option<u64>,
+        upper: Option<u64>,
+        descending: bool,
+        limit: u64,
+        integers: bool,
+    ) -> Vec<String> {
+        let bounds = (
+            lower.map_or(Bound::Unbounded, Bound::Included),
+            upper.map_or(Bound::Unbounded, Bound::Excluded),
+        );
+        if integers {
+            let scan = ctx.model().integers().range(bounds);
+            let scan = if descending { scan.rev() } else { scan };
+            scan.entries()
+                .take(limit as usize)
+                .map(|(key, value)| format!("{key}:{value}"))
+                .collect()
+        } else {
+            let scan = ctx.model().decimals().range(bounds);
+            let scan = if descending { scan.rev() } else { scan };
+            scan.entries()
+                .take(limit as usize)
+                .map(|(key, value)| format!("{key}:{value}"))
+                .collect()
+        }
     }
 
     fn number_index(ctx: &ViewContext, integer: String) -> Vec<String> {

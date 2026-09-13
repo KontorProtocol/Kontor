@@ -422,7 +422,7 @@ mod tests {
                 Some(v)
             })
         }
-        fn __get_index_rows_range(
+        fn __get_storage_rows_range(
             self: &Rc<Self>,
             path: &[u8],
             lo: Option<&[u8]>,
@@ -448,8 +448,9 @@ mod tests {
                         return None; // not a direct leaf
                     }
                     match cell {
-                        Cell::Bytes(v) => Some((elem.to_vec(), v.clone())),
-                        _ => None,
+                        Cell::Bytes(v) => Some((elem.to_vec(), postcard::to_allocvec(v).unwrap())),
+                        Cell::U64(v) => Some((elem.to_vec(), postcard::to_allocvec(v).unwrap())),
+                        Cell::Void => None,
                     }
                 })
                 .collect();
@@ -1580,7 +1581,7 @@ mod tests {
             ctx.__set_u64(&path.push_element(key), 1);
         }
         ctx.__delete(&path.push_element(&keys[1]));
-        let range = KeyRange::new(
+        let range = KeyRange::<_, _, ()>::new(
             ctx,
             path,
             (

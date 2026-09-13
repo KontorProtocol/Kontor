@@ -2517,12 +2517,12 @@ async fn test_path_prefix_filter_from_key_seeks_lower_bound() -> Result<()> {
     Ok(())
 }
 
-// The covering value scan (`path_prefix_filter_index_rows`) — the leaf-VALUE twin of
+// The covering value scan (`path_prefix_filter_storage_rows`) — the leaf-VALUE twin of
 // the key scan. Each live member leaf yields `(member_element, projection_value)` in
 // ascending member order; it honors the same `from_key` seek, and excludes the
 // bucket-count row (which lives AT the bucket prefix, not as a child under it).
 #[tokio::test]
-async fn test_path_prefix_filter_index_rows_returns_member_and_value() -> Result<()> {
+async fn test_path_prefix_filter_storage_rows_returns_member_and_value() -> Result<()> {
     let (_reader, writer, _temp) = new_test_db().await?;
     let conn = writer.connection();
     let h = 600002;
@@ -2590,7 +2590,7 @@ async fn test_path_prefix_filter_index_rows_returns_member_and_value() -> Result
 
     let scan = async |from: Option<Vec<u8>>| -> Result<Vec<(Vec<u8>, Vec<u8>)>> {
         Ok(
-            path_prefix_filter_index_rows(&conn, cid, bucket.clone(), from, None, false)
+            path_prefix_filter_storage_rows(&conn, cid, bucket.clone(), from, None, false)
                 .await?
                 .try_collect()
                 .await?,
@@ -2617,7 +2617,7 @@ async fn test_path_prefix_filter_index_rows_returns_member_and_value() -> Result
     );
     // Descending: same `(member, value)` pairs, highest-sort-first.
     let desc: Vec<(Vec<u8>, Vec<u8>)> =
-        path_prefix_filter_index_rows(&conn, cid, bucket.clone(), None, None, true)
+        path_prefix_filter_storage_rows(&conn, cid, bucket.clone(), None, None, true)
             .await?
             .try_collect()
             .await?;
@@ -2629,6 +2629,34 @@ async fn test_path_prefix_filter_index_rows_returns_member_and_value() -> Result
             (member(10, "a"), b"ann".to_vec()),
         ]
     );
+    let mut compound = bucket.clone();
+    compound.extend(member(40, "compound"));
+    compound.extend(cs_path(&["field"]));
+    insert_contract_state(
+        &conn,
+        ContractStateRow::builder()
+            .contract_id(cid)
+            .tx_id(tx)
+            .height(h)
+            .path(compound)
+            .value(vec![1])
+            .build(),
+    )
+    .await?;
+    for descending in [false, true] {
+        let result: Result<Vec<_>, _> = path_prefix_filter_storage_rows(
+            &conn,
+            cid,
+            bucket.clone(),
+            Some(stdlib::sort_lower_bound(&40u64)),
+            None,
+            descending,
+        )
+        .await?
+        .try_collect()
+        .await;
+        assert!(matches!(result, Err(Error::InvalidData(_))));
+    }
     Ok(())
 }
 

@@ -15,7 +15,7 @@ disallowed-types = [
     { path = "built_in_types::kontor::built_in::context::Signer", reason = "guest-side handle wrapper; use the Runtime-backed type from crate::runtime::wit" },
     { path = "built_in_types::kontor::built_in::context::Transaction", reason = "guest-side handle wrapper; use the Runtime-backed type from crate::runtime::wit" },
     { path = "built_in_types::kontor::built_in::context::Keys", reason = "guest-side handle wrapper; use the Runtime-backed type from crate::runtime::wit" },
-    { path = "built_in_types::kontor::built_in::context::IndexRows", reason = "guest-side handle wrapper; use the Runtime-backed type from crate::runtime::wit" },
+    { path = "built_in_types::kontor::built_in::context::StorageRows", reason = "guest-side handle wrapper; use the Runtime-backed type from crate::runtime::wit" },
     { path = "built_in_types::kontor::built_in::context::ViewStorage", reason = "guest-side handle wrapper; use the Runtime-backed type from crate::runtime::wit" },
     { path = "built_in_types::kontor::built_in::context::ProcStorage", reason = "guest-side handle wrapper; use the Runtime-backed type from crate::runtime::wit" },
     { path = "built_in_types::kontor::built_in::context::ViewContext", reason = "guest-side handle wrapper; use the Runtime-backed type from crate::runtime::wit" },
