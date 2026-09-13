@@ -3,7 +3,8 @@
 //! context resource wrappers (storage traits, Holder/Signer identity impls).
 
 use alloc::string::String;
-use stdlib::{ScalarStorage, decode_storage};
+use alloc::vec::Vec;
+use stdlib::{HasNextRow, Indexed, ScalarStorage};
 
 use crate::kontor;
 use crate::kontor::built_in::context;
@@ -81,8 +82,20 @@ impl stdlib::HasNext for context::Keys {
 }
 
 impl stdlib::HasNextRow for context::StorageRows {
-    fn next(&self) -> Option<(alloc::vec::Vec<u8>, alloc::vec::Vec<u8>)> {
-        self.next()
+    fn next_str(&self) -> Option<(Vec<u8>, String)> {
+        self.next_str()
+    }
+    fn next_u64(&self) -> Option<(Vec<u8>, u64)> {
+        self.next_u64()
+    }
+    fn next_s64(&self) -> Option<(Vec<u8>, i64)> {
+        self.next_s64()
+    }
+    fn next_bool(&self) -> Option<(Vec<u8>, bool)> {
+        self.next_bool()
+    }
+    fn next_list_u8(&self) -> Option<(Vec<u8>, Vec<u8>)> {
+        self.next_list_u8()
     }
 }
 
@@ -117,13 +130,13 @@ impl stdlib::ReadStorage for context::ViewStorage {
         stdlib::make_keys_iterator(self.get_keys(path, lo, hi, descending))
     }
 
-    fn __get_storage_rows_range(
+    fn __get_storage_rows_range<V: ScalarStorage>(
         self: &alloc::rc::Rc<Self>,
         path: &[u8],
         lo: Option<&[u8]>,
         hi: Option<&[u8]>,
         descending: bool,
-    ) -> impl Iterator<Item = (alloc::vec::Vec<u8>, alloc::vec::Vec<u8>)> + use<> {
+    ) -> impl Iterator<Item = (Vec<u8>, V)> + use<V> {
         stdlib::make_storage_rows_iterator(self.get_storage_rows(path, lo, hi, descending))
     }
 
@@ -178,13 +191,13 @@ impl stdlib::ReadStorage for context::ProcStorage {
         stdlib::make_keys_iterator(self.get_keys(path, lo, hi, descending))
     }
 
-    fn __get_storage_rows_range(
+    fn __get_storage_rows_range<V: ScalarStorage>(
         self: &alloc::rc::Rc<Self>,
         path: &[u8],
         lo: Option<&[u8]>,
         hi: Option<&[u8]>,
         descending: bool,
-    ) -> impl Iterator<Item = (alloc::vec::Vec<u8>, alloc::vec::Vec<u8>)> + use<> {
+    ) -> impl Iterator<Item = (Vec<u8>, V)> + use<V> {
         stdlib::make_storage_rows_iterator(self.get_storage_rows(path, lo, hi, descending))
     }
 
@@ -265,18 +278,22 @@ impl stdlib::HasViewStorage for context::ProcStorage {
 // on a missing entry. Holder is a WIT resource, so wit-bindgen doesn't
 // auto-apply `#[derive(Storage)]` the way it does for HolderRef — its
 // Retrieve/Store are defined directly here.
+fn stored_holder(value: String) -> context::Holder {
+    value.parse().expect("invalid stored holder")
+}
+
 impl<__S: stdlib::ReadStorage> stdlib::Retrieve<__S> for context::Holder {
     fn __get(ctx: &alloc::rc::Rc<__S>, path: stdlib::KeyPath) -> Option<Self> {
-        let s: String = stdlib::ReadStorage::__get(ctx, path)?;
-        s.parse().ok()
+        stdlib::ReadStorage::__get(ctx, path).map(stored_holder)
     }
 }
 
+impl Indexed for context::Holder {}
+
 impl ScalarStorage for context::Holder {
-    fn decode_storage(bytes: &[u8]) -> Self {
-        decode_storage::<&str>(bytes)
-            .parse()
-            .expect("invalid stored holder")
+    fn next_row(rows: &impl HasNextRow) -> Option<(Vec<u8>, Self)> {
+        rows.next_str()
+            .map(|(key, value)| (key, stored_holder(value)))
     }
 }
 

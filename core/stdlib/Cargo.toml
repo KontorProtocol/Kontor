@@ -10,8 +10,6 @@ workspace = true
 macros = { path = "../macros" }
 wit-bindgen = { workspace = true }
 wasm-wave = { workspace = true }
-postcard = { workspace = true }
-serde = { workspace = true }
 
 [dev-dependencies]
 macrotest = "=1.2.1"

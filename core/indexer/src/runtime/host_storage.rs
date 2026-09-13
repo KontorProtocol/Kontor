@@ -1,6 +1,5 @@
 use anyhow::{Result, anyhow};
 use futures_util::future::OptionFuture;
-use indexer_types::deserialize;
 use serde::{Deserialize, Serialize};
 use wasmtime::AsContext;
 use wasmtime::component::{Accessor, Resource};
@@ -51,6 +50,18 @@ fn validate_path(path: &[u8]) -> Result<()> {
     Ok(())
 }
 
+// The guest selects the slot type. Valid writes through another setter can fail
+// this decode, so this is a contract failure, not evidence of database corruption.
+pub(crate) fn decode_storage_value<T: for<'de> Deserialize<'de>>(bytes: &[u8]) -> Result<T> {
+    let (value, rest) = postcard::take_from_bytes(bytes).map_err(|error| {
+        ExecutionError::Deterministic(anyhow!("invalid storage value: {error}"))
+    })?;
+    if !rest.is_empty() {
+        return Err(ExecutionError::Deterministic(anyhow!("trailing storage bytes")).into());
+    }
+    Ok(value)
+}
+
 impl Runtime {
     /// The storage-deposit rate (GAS per byte) charged to a write of `path` in
     /// `contract_id`. Uniform today; this is the single seam every charge site routes
@@ -85,7 +96,7 @@ impl Runtime {
             Fuel::Get(bs.len())
                 .consume(accessor, self.gauge.as_ref())
                 .await?;
-            deserialize(&bs)
+            decode_storage_value(&bs)
         }))
         .await
         .transpose()
@@ -119,8 +130,8 @@ impl Runtime {
         Ok(table.push(Keys { stream })?)
     }
 
-    /// Open the shared scalar/covering row cursor. Values retain storage framing;
-    /// `_next_storage_row` charges for both key and stored value bytes.
+    /// Open the shared scalar/covering row cursor. `_next_storage_row` meters
+    /// stored bytes before decoding through the same helper as point reads.
     pub(crate) async fn _get_storage_rows<S, T: HasContractId>(
         &self,
         accessor: &Accessor<S, Self>,

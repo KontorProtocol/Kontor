@@ -4,7 +4,7 @@ use core::{
     ops::{Bound, RangeBounds},
 };
 
-use crate::{KeyElement, KeyPath, ReadStorage, ScalarStorage, decode_storage, keycodec};
+use crate::{KeyElement, KeyPath, ReadStorage, ScalarStorage, keycodec};
 
 /// The generated model supplies a bucket once; every query uses the same
 /// bounded storage cursor rather than a separate scan implementation per index kind.
@@ -104,7 +104,7 @@ impl<K: KeyElement + Clone + 'static, S: ReadStorage + 'static, V> KeyRange<K, S
         self.keys()
     }
 
-    fn rows(self) -> impl Iterator<Item = (K, Vec<u8>)> {
+    fn rows<T: ScalarStorage>(self) -> impl Iterator<Item = (K, T)> {
         self.ctx
             .__get_storage_rows_range(
                 &self.path,
@@ -163,7 +163,6 @@ where
 {
     pub fn entries(self) -> impl Iterator<Item = (K, V)> {
         self.rows()
-            .map(|(key, value)| (key, V::decode_storage(&value)))
     }
 }
 
@@ -357,13 +356,13 @@ where
     }
     pub fn values(self) -> impl Iterator<Item = V> {
         self.scan
-            .rows()
-            .map(move |(_, value)| (self.build)(decode_storage(&value)))
+            .rows::<Vec<u8>>()
+            .map(move |(_, value)| (self.build)(&value))
     }
     pub fn iter(self) -> impl Iterator<Item = (K, V)> {
         self.scan
-            .rows()
-            .map(move |(key, value)| (key, (self.build)(decode_storage(&value))))
+            .rows::<Vec<u8>>()
+            .map(move |(key, value)| (key, (self.build)(&value)))
     }
 }
 
@@ -471,13 +470,13 @@ where
     }
     pub fn values(self) -> impl Iterator<Item = V> {
         self.scan
-            .rows()
-            .map(move |((sort, _), value)| (self.build)(&sort, decode_storage(&value)))
+            .rows::<Vec<u8>>()
+            .map(move |((sort, _), value)| (self.build)(&sort, &value))
     }
     pub fn iter(self) -> impl Iterator<Item = (K, V)> {
         self.scan
-            .rows()
-            .map(move |((sort, key), value)| (key, (self.build)(&sort, decode_storage(&value))))
+            .rows::<Vec<u8>>()
+            .map(move |((sort, key), value)| (key, (self.build)(&sort, &value)))
     }
 }
 

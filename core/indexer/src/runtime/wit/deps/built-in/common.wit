@@ -92,11 +92,15 @@ interface context {
         next: async func() -> option<list<u8>>;
     }
 
-    // Direct live children as (key codec element, stored value bytes). Values
-    // retain Postcard framing; the guest's scalar/projection type decodes them.
-    // A compound child is rejected. none = end; each returned row is metered.
+    // Each method advances the same cursor, decoding the value exactly like the
+    // corresponding storage getter. Compound children and incompatible values
+    // fail deterministically. none = end; each returned row is metered.
     resource storage-rows {
-        next: async func() -> option<tuple<list<u8>, list<u8>>>;
+        next-str: async func() -> option<tuple<list<u8>, string>>;
+        next-u64: async func() -> option<tuple<list<u8>, u64>>;
+        next-s64: async func() -> option<tuple<list<u8>, s64>>;
+        next-bool: async func() -> option<tuple<list<u8>, bool>>;
+        next-list-u8: async func() -> option<tuple<list<u8>, list<u8>>>;
     }
 
     resource view-storage {

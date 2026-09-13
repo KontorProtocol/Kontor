@@ -123,12 +123,14 @@ The native token, Decimal test token, Integer test token, and NFT attributes now
 use it. Complete result shapes and ordering remain unchanged. Native/Decimal
 ledgers still exclude Core and Burner; the Integer test ledger excludes Burner.
 
-`ScalarStorage` defines single-leaf decoding separately from ordered key encoding.
-The shared `storage-rows` cursor replaces the covering-only cursor, returns raw
-stored bytes, and meters key plus value bytes. Postcard framing is decoded once
-in stdlib, borrowing numeric/covering byte payloads; numeric types reuse the same
-codec decoder as their point reads. Compound values cannot expose `.entries()`.
-No additional index, database table, or value copy is maintained.
+`ScalarStorage` selects the typed host row method for each single-leaf value.
+The shared `storage-rows` cursor replaces the covering-only cursor and meters
+key plus stored value bytes. Point reads and row reads share strict Postcard
+deserialization in the host; numeric and covering payloads retain their existing
+guest codec decoders. Invalid storage types, malformed values, and compound scan
+targets fail deterministically. u32/i32 point reads and entry scans share checked
+narrowing. Compound values cannot expose `.entries()`. No additional index,
+database table, or persisted value copy is maintained.
 
 The follow-up audit again examined native/test contract key scans. The remaining
 ones require only keys or read compound models. For example, the reward folding
@@ -141,7 +143,7 @@ values retain their format; preproduction deployments replay with matching
 runtime and binaries. This phase does not add balance pagination, value ordering,
 or a new query-planner syntax.
 
-Second-phase validation passed the release workspace suite with `REGTEST=1`
+Initial second-phase validation passed the release workspace suite with `REGTEST=1`
 (781 tests passed, 3 tests/doctests opt-in), all 158 SDK tests, macro UI and
 snapshot checks, formatting and Clippy in all three workspaces, and the pinned
 native/test contract builds.
@@ -234,3 +236,13 @@ The first PR has two existing consumers and removes redundant maintained state.
 The second directly uses scalar numeric storage. The staking change can be
 assessed separately with existing language facilities; the storer views should
 follow the client workflow they serve.
+
+The host-decoding follow-up also passed the complete release/regtest workspace
+suite (781 passed, 0 failed, 3 opt-in skips), all 158 SDK tests, formatting and
+Clippy in all three workspaces, and the pinned contract builds. Its 14 runtime
+error-classification tests cover shared host deserialization, numeric/Holder
+payload traps, checked narrowing, direct/proxy rollback, and infrastructure
+failures. Native binary changes relative to the guest-decoding version were
+-248 bytes (token), -484 (NFT), -154 (staking), -343 (filestorage), and +86 (system),
+measured on the committed Brotli-compressed binaries. The typed interface adds
+metadata, so removing guest deserialization does not shrink every contract.

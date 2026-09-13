@@ -20,7 +20,8 @@ world root {
 	export trap-panic: async func(ctx: borrow<proc-context>);
 
 	export storage-state: async func(ctx: borrow<view-context>) -> list<u64>;
-	export trap-scalar-decode: async func(ctx: borrow<proc-context>, malformed-frame: bool);
+	export invalid-storage-read: async func(ctx: borrow<proc-context>, %case: u32, scan: bool);
+	export primitive-entries: async func(ctx: borrow<proc-context>);
 	export scan-compound: async func(ctx: borrow<proc-context>, descending: bool);
 
 	// Case 3: Infinite loop — runs out of fuel (real wasmtime Trap::OutOfFuel)

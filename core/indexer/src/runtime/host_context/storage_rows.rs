@@ -15,7 +15,47 @@ impl<T> built_in::context::HostStorageRowsWithStore<T> for Runtime {
             .await
     }
 
-    async fn next(
+    async fn next_str(
+        accessor: &Accessor<T, Self>,
+        self_: Resource<StorageRows>,
+    ) -> Result<Option<(Vec<u8>, String)>> {
+        accessor
+            .with(|mut access| access.get().clone())
+            ._next_storage_row(accessor, self_)
+            .await
+    }
+
+    async fn next_u64(
+        accessor: &Accessor<T, Self>,
+        self_: Resource<StorageRows>,
+    ) -> Result<Option<(Vec<u8>, u64)>> {
+        accessor
+            .with(|mut access| access.get().clone())
+            ._next_storage_row(accessor, self_)
+            .await
+    }
+
+    async fn next_s64(
+        accessor: &Accessor<T, Self>,
+        self_: Resource<StorageRows>,
+    ) -> Result<Option<(Vec<u8>, i64)>> {
+        accessor
+            .with(|mut access| access.get().clone())
+            ._next_storage_row(accessor, self_)
+            .await
+    }
+
+    async fn next_bool(
+        accessor: &Accessor<T, Self>,
+        self_: Resource<StorageRows>,
+    ) -> Result<Option<(Vec<u8>, bool)>> {
+        accessor
+            .with(|mut access| access.get().clone())
+            ._next_storage_row(accessor, self_)
+            .await
+    }
+
+    async fn next_list_u8(
         accessor: &Accessor<T, Self>,
         self_: Resource<StorageRows>,
     ) -> Result<Option<(Vec<u8>, Vec<u8>)>> {

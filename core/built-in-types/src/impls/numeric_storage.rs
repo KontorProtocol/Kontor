@@ -1,8 +1,8 @@
 use alloc::{rc::Rc, vec::Vec};
 
 use stdlib::{
-    IndexKey, Indexed, KeyElement, KeyPath, ReadStorage, Retrieve, ScalarStorage, Store,
-    WriteStorage, decode_storage,
+    HasNextRow, IndexKey, Indexed, KeyElement, KeyPath, ReadStorage, Retrieve, ScalarStorage,
+    Store, WriteStorage,
 };
 
 use crate::numbers_types::{Decimal, Integer};
@@ -18,8 +18,8 @@ macro_rules! numeric_storage {
         impl Indexed for $ty {}
 
         impl ScalarStorage for $ty {
-            fn decode_storage(bytes: &[u8]) -> Self {
-                decode_value(decode_storage(bytes))
+            fn next_row(rows: &impl HasNextRow) -> Option<(Vec<u8>, Self)> {
+                rows.next_list_u8().map(|(key, bytes)| (key, decode_value(&bytes)))
             }
         }
 

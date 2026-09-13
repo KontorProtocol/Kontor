@@ -1,7 +1,8 @@
 use alloc::{string::String, vec::Vec};
 
-use crate::KeyPath;
 use crate::keycodec::{KeyElement, string_element};
+use crate::scalar_storage::{narrow_i32, narrow_u32};
+use crate::{KeyPath, ScalarStorage};
 
 pub trait ReadStorage {
     fn __get_str(self: &alloc::rc::Rc<Self>, path: &[u8]) -> Option<String>;
@@ -46,16 +47,16 @@ pub trait ReadStorage {
         self.__get_keys_range(path, None, None, false)
     }
 
-    /// Direct live leaves as `(key element, stored bytes)`, retaining Postcard
-    /// framing. Scalars and covering projections share this metered cursor.
+    /// Direct live leaves with host-decoded values. Scalars and covering
+    /// projections share this metered cursor.
     /// Compound children are invalid; use the key cursor to enumerate their keys.
-    fn __get_storage_rows_range(
+    fn __get_storage_rows_range<V: ScalarStorage>(
         self: &alloc::rc::Rc<Self>,
         path: &[u8],
         lo: Option<&[u8]>,
         hi: Option<&[u8]>,
         descending: bool,
-    ) -> impl Iterator<Item = (Vec<u8>, Vec<u8>)> + use<Self>;
+    ) -> impl Iterator<Item = (Vec<u8>, V)> + use<Self, V>;
 
     fn __exists(self: &alloc::rc::Rc<Self>, path: &[u8]) -> bool;
 
@@ -88,19 +89,17 @@ impl<T: ReadStorage + ?Sized> Retrieve<T> for i64 {
     }
 }
 
-// u32/i32 are stored through the underlying u64/s64 slots — the WIT
-// proc-storage interface only carries 64-bit getters/setters, but every
-// in-range value round-trips. Out-of-range bits would indicate storage
-// corruption; the truncating `as` cast keeps the read path infallible.
+// u32/i32 use 64-bit host slots. Match the checked narrowing used by entry
+// scans so a mismatched stored value cannot silently change on a point read.
 impl<T: ReadStorage + ?Sized> Retrieve<T> for u32 {
     fn __get(ctx: &alloc::rc::Rc<T>, path: KeyPath) -> Option<Self> {
-        ctx.__get_u64(&path).map(|v| v as u32)
+        ctx.__get_u64(&path).map(narrow_u32)
     }
 }
 
 impl<T: ReadStorage + ?Sized> Retrieve<T> for i32 {
     fn __get(ctx: &alloc::rc::Rc<T>, path: KeyPath) -> Option<Self> {
-        ctx.__get_s64(&path).map(|v| v as i32)
+        ctx.__get_s64(&path).map(narrow_i32)
     }
 }
 
@@ -285,29 +284,17 @@ where
 }
 
 pub trait HasNextRow {
-    /// The next `(key element, stored value)` pair (including storage framing), or `None`.
-    fn next(&self) -> Option<(Vec<u8>, Vec<u8>)>;
+    fn next_str(&self) -> Option<(Vec<u8>, String)>;
+    fn next_u64(&self) -> Option<(Vec<u8>, u64)>;
+    fn next_s64(&self) -> Option<(Vec<u8>, i64)>;
+    fn next_bool(&self) -> Option<(Vec<u8>, bool)>;
+    fn next_list_u8(&self) -> Option<(Vec<u8>, Vec<u8>)>;
 }
 
-/// Adapt a host [`HasNextRow`] cursor (the `storage-rows` resource) into a plain
-/// iterator of raw `(member, value)` byte pairs. The scalar or covering query decodes them; this
-/// only bridges the resource to `Iterator` (the value-returning twin of
-/// [`make_keys_iterator`]).
-pub fn make_storage_rows_iterator<R: HasNextRow>(
-    rows: R,
-) -> impl Iterator<Item = (Vec<u8>, Vec<u8>)> {
-    struct RowsIterator<R: HasNextRow> {
-        rows: R,
-    }
-
-    impl<R: HasNextRow> Iterator for RowsIterator<R> {
-        type Item = (Vec<u8>, Vec<u8>);
-        fn next(&mut self) -> Option<Self::Item> {
-            self.rows.next()
-        }
-    }
-
-    RowsIterator { rows }
+pub fn make_storage_rows_iterator<V: ScalarStorage>(
+    rows: impl HasNextRow,
+) -> impl Iterator<Item = (Vec<u8>, V)> {
+    core::iter::from_fn(move || V::next_row(&rows))
 }
 
 storage_placeholder!(

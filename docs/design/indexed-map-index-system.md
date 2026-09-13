@@ -74,22 +74,31 @@ Records, enums, options, and compound built-ins do not gain entry scans merely
 because they support `KeyElement`. Their maps still support key scans and per-key
 models. An index name cannot shadow `entries`.
 
-The shared `storage-rows` host cursor returns raw stored bytes for both scalar
-maps and covering indexes. It replaces `index-rows`, whose host decoder assumed
-every value was a byte-list projection. Postcard framing is decoded in stdlib;
-native numeric types reuse their existing canonical codec decoder. Covering and
-numeric payloads borrow the framed buffer rather than allocate a second copy.
-The host remains responsible for latest-row visibility, bounds, and metering.
-It rejects compound children instead of returning an arbitrary descendant value.
-This invalid scan request is a deterministic contract failure: the contract chose
-an incompatible target, while the stored compound value itself is valid. Database
-failures and malformed stored keys remain infrastructure failures.
+The shared `storage-rows` host cursor replaces the covering-only `index-rows`
+cursor. Its `next-str`, `next-u64`, `next-s64`, `next-bool`, and `next-list-u8`
+methods all advance the same database stream. `ScalarStorage` selects the correct
+method for the declared value type; callers of `.entries()` do not choose it.
+Covering projections, `Integer`, and `Decimal` use the byte-list method and retain
+their existing language-specific payload decoders.
 
-Entry decoding executes inside the guest. Invalid framing and numeric payloads
-produce deterministic Wasm traps and roll back the call; they are not host panics.
-Regression tests write state before triggering invalid framing, an invalid numeric
-payload, or a compound scan, then verify rollback and subsequent successful calls,
-both directly and through a proxy. There is no separate recoverable entry API.
+Point getters and row methods share one strict Postcard deserializer in the host.
+The database representation does not cross into the guest. Malformed values,
+invalid UTF-8, and trailing bytes fail deterministically because the guest chooses
+the requested slot type, and valid writes through another setter can violate it.
+Both point reads and scans check u32/i32 narrowing rather than silently truncating.
+Stored Holder parsing is shared too; an invalid value cannot masquerade as a
+missing entry on point reads.
+Numeric payload validation remains in the guest and produces a deterministic Wasm
+trap. The host owns visibility, bounds, byte metering, and database access.
+
+Compound children are rejected instead of returning an arbitrary descendant
+value. This invalid scan request is a deterministic contract failure; database
+failures and malformed stored keys remain infrastructure failures. Regression
+tests write state before each invalid read and verify rollback and a subsequent
+successful call, for point reads and scans, directly and through a proxy. Primitive
+roundtrips cover both scan directions, integer boundaries, empty values, and
+non-ASCII strings. There is no separate recoverable entry API or guest Postcard
+decoder.
 
 Each consumed row pays for its key and stored value bytes. Key-only queries keep
 using the lighter key cursor. Filters run in the contract, so an entry rejected

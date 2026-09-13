@@ -1,9 +1,11 @@
 use anyhow::Result;
 use bitcoin::hashes::Hash;
 use futures_util::StreamExt;
+use serde::Deserialize;
 use wasmtime::component::{Accessor, Resource};
 
 use crate::database::queries::Error as StorageError;
+use crate::runtime::host_storage::decode_storage_value;
 use crate::runtime::wit::kontor::built_in::context::HolderRef;
 use crate::runtime::wit::{
     Contract, CoreContext, FallContext, HasContractId, Holder, Keys, ProcContext, ProcStorage,
@@ -209,11 +211,11 @@ impl Runtime {
         Ok(k)
     }
 
-    pub(super) async fn _next_storage_row<T>(
+    pub(super) async fn _next_storage_row<T, V: for<'de> Deserialize<'de>>(
         &self,
         accessor: &Accessor<T, Self>,
         self_: Resource<StorageRows>,
-    ) -> Result<Option<(Vec<u8>, Vec<u8>)>> {
+    ) -> Result<Option<(Vec<u8>, V)>> {
         let item: Option<(Vec<u8>, Vec<u8>)> = self
             .table
             .lock()
@@ -236,7 +238,7 @@ impl Runtime {
                 Fuel::KeysNext((member.len() + raw_value.len()) as u64)
                     .consume(accessor, self.gauge.as_ref())
                     .await?;
-                Ok(Some((member, raw_value)))
+                Ok(Some((member, decode_storage_value(&raw_value)?)))
             }
             None => Ok(None),
         }
