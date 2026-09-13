@@ -111,6 +111,25 @@ impl<T> IndexKey for Option<T> {
     }
 }
 
+/// A value whose predicate cannot change through a writable descendant model.
+/// Storage derives implement this for payload-free enums. Records and enums with
+/// payloads must use an explicit scalar status field for conditional membership.
+#[diagnostic::on_unimplemented(
+    message = "index predicates require scalar or payload-free enum fields (optionally wrapped in Option)",
+    note = "mutable nested records cannot maintain their parent's conditional index"
+)]
+pub trait IndexPredicateValue {}
+
+macro_rules! index_predicate_scalar {
+    ($($ty:ty),*) => { $(impl IndexPredicateValue for $ty {})* };
+}
+index_predicate_scalar!(bool, u8, u16, u32, u64, i8, i16, i32, i64, String, Vec<u8>);
+impl<T: IndexPredicateValue> IndexPredicateValue for Option<T> {}
+
+#[doc(hidden)]
+#[inline(always)]
+pub fn assert_index_predicate_value<T: IndexPredicateValue>(_: &T) {}
+
 /// The payload-free marker for bucketing an `Option` index field by presence —
 /// the `Option` analogue of a storage enum's `<E>Kind`. Lets a lookup name the
 /// bucket (`eligible(true, Presence::Absent)`) without constructing an
@@ -521,8 +540,19 @@ mod tests {
         fn __exists(self: &Rc<Self>, path: &[u8]) -> bool {
             self.map.borrow().keys().any(|key| key.starts_with(path))
         }
-        fn __extend_path_with_match(self: &Rc<Self>, _: &[u8], _: &[Vec<u8>]) -> Option<u32> {
-            unimplemented!()
+        fn __extend_path_with_match(
+            self: &Rc<Self>,
+            path: &[u8],
+            candidates: &[Vec<u8>],
+        ) -> Option<u32> {
+            candidates
+                .iter()
+                .position(|candidate| {
+                    let mut child = path.to_vec();
+                    child.extend(candidate);
+                    self.__exists(&child)
+                })
+                .map(|index| index as u32)
         }
     }
 
@@ -560,8 +590,15 @@ mod tests {
                 .borrow_mut()
                 .insert(path.to_vec(), Cell::Bytes(value));
         }
-        fn __delete_matching_paths(self: &Rc<Self>, _: &[u8], _: &[Vec<u8>]) -> u64 {
-            unimplemented!()
+        fn __delete_matching_paths(self: &Rc<Self>, path: &[u8], candidates: &[Vec<u8>]) -> u64 {
+            candidates
+                .iter()
+                .filter(|candidate| {
+                    let mut child = path.to_vec();
+                    child.extend(*candidate);
+                    self.__delete(&child)
+                })
+                .count() as u64
         }
     }
 
@@ -700,6 +737,80 @@ mod tests {
         assert!(items.live(7).is_empty());
         assert!(items.all(7).is_empty());
         assert!(!items.remove(&2));
+    }
+
+    #[derive(Clone, Storage)]
+    enum OptionalStatus {
+        Active,
+        Closed,
+    }
+
+    #[derive(Clone, Storage)]
+    #[index(live, by = owner, include = amount,
+        when = matches!(status, Option::Some(OptionalStatus::Active)))]
+    struct OptionalRecord {
+        owner: u64,
+        amount: u64,
+        status: Option<OptionalStatus>,
+    }
+
+    #[derive(Model)]
+    #[allow(dead_code)]
+    struct OptionalStore {
+        records: Map<u64, OptionalRecord>,
+    }
+
+    #[test]
+    fn optional_enum_predicates_materialize_values_on_every_write_path() {
+        let ctx = Rc::new(Mock::default());
+        let model = OptionalStoreWriteModel::new(ctx, KeyPath::from("optional"));
+        let records = model.records();
+        records.set(
+            &1,
+            OptionalRecord {
+                owner: 7,
+                amount: 10,
+                status: None,
+            },
+        );
+        records.set(
+            &2,
+            OptionalRecord {
+                owner: 7,
+                amount: 20,
+                status: Some(OptionalStatus::Active),
+            },
+        );
+        assert_eq!(records.live(7).keys().collect::<Vec<_>>(), vec![2]);
+        let record = records.get(&1).unwrap();
+        record.set_status(Some(OptionalStatus::Active));
+        record.set_amount(30);
+        record.set_owner(9);
+        assert_eq!(records.live(9).values().next().unwrap().amount, 30);
+        record.set_status(Some(OptionalStatus::Closed));
+        assert!(records.live(9).is_empty());
+        record.set_status(Some(OptionalStatus::Active));
+        record.set_status(None);
+        assert!(records.live(9).is_empty());
+        records.set(
+            &2,
+            OptionalRecord {
+                owner: 7,
+                amount: 40,
+                status: Some(OptionalStatus::Closed),
+            },
+        );
+        assert!(records.live(7).is_empty());
+        records.set(
+            &2,
+            OptionalRecord {
+                owner: 7,
+                amount: 50,
+                status: Some(OptionalStatus::Active),
+            },
+        );
+        assert!(records.remove(&2));
+        assert!(records.live(7).is_empty());
     }
 
     // A struct value with one indexed field — the shape a Map holds.

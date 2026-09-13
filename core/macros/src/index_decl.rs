@@ -431,7 +431,7 @@ pub fn index_push(decl: &IndexDecl, value_for: &impl Fn(&Ident) -> TokenStream) 
             }
             _ => quote! { matches!(&#value, #pattern) },
         };
-        quote! { if #condition { #push } }
+        quote! { stdlib::assert_index_predicate_value(&#value); if #condition { #push } }
     } else {
         push
     }

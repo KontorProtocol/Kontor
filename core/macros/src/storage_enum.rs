@@ -114,5 +114,13 @@ pub fn generate(data_enum: &DataEnum, name: &Ident) -> Result<TokenStream> {
         })
         .collect();
 
-    Ok(generate_impls(name, &variants))
+    let index_impls = generate_impls(name, &variants);
+    let predicate_impl = data_enum
+        .variants
+        .iter()
+        .all(|v| matches!(v.fields, Fields::Unit))
+        .then(|| {
+            quote! { impl stdlib::IndexPredicateValue for #name {} }
+        });
+    Ok(quote! { #index_impls #predicate_impl })
 }
