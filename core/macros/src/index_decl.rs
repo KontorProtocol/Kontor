@@ -68,7 +68,7 @@ impl Parse for IndexPredicate {
 
 fn validate_pattern(pattern: &Pat) -> Result<()> {
     match pattern {
-        Pat::Path(_) | Pat::Lit(_) | Pat::Wild(_) => Ok(()),
+        Pat::Path(_) | Pat::Lit(_) | Pat::Wild(_) | Pat::Rest(_) => Ok(()),
         Pat::Or(p) => p.cases.iter().try_for_each(validate_pattern),
         Pat::Paren(p) => validate_pattern(&p.pat),
         Pat::TupleStruct(p) => p.elems.iter().try_for_each(validate_pattern),
@@ -76,6 +76,28 @@ fn validate_pattern(pattern: &Pat) -> Result<()> {
             pattern,
             "index predicates require literal or qualified variant patterns without bindings",
         )),
+    }
+}
+
+fn predicate_pattern(pattern: &Pat) -> TokenStream {
+    match pattern {
+        // Empty braces require an actual unit variant, excluding structural
+        // constants that could hide a comparison against mutable record fields.
+        Pat::Path(path) => quote! { #path {} },
+        Pat::Or(pattern) => {
+            let cases = pattern.cases.iter().map(predicate_pattern);
+            quote! { #(#cases)|* }
+        }
+        Pat::Paren(pattern) => {
+            let inner = predicate_pattern(&pattern.pat);
+            quote! { (#inner) }
+        }
+        Pat::TupleStruct(pattern) => {
+            let path = &pattern.path;
+            let elems = pattern.elems.iter().map(predicate_pattern);
+            quote! { #path(#(#elems),*) }
+        }
+        _ => quote! { #pattern },
     }
 }
 
@@ -429,9 +451,12 @@ pub fn index_push(decl: &IndexDecl, value_for: &impl Fn(&Ident) -> TokenStream) 
                     quote! { !#value }
                 }
             }
-            _ => quote! { matches!(&#value, #pattern) },
+            _ => {
+                let pattern = predicate_pattern(pattern);
+                quote! { matches!(&#value, #pattern) }
+            }
         };
-        quote! { stdlib::assert_index_predicate_value(&#value); if #condition { #push } }
+        quote! { if #condition { #push } }
     } else {
         push
     }
@@ -482,6 +507,7 @@ mod tests {
             "matches!(status, Active)",
             "matches!(status, State::Active if other)",
             "matches!(status, Option::Some(value))",
+            "matches!(status, State::Details(Payload { number: 1 }))",
             "matches!(status, State::Active) || external()",
             "check(status)",
         ] {
@@ -494,6 +520,9 @@ mod tests {
             "matches!(active, true)",
             "matches!(status, State::Active | State::Pending,)",
             "matches!(item, Option::Some(_))",
+            "matches!(status, State::Ready | State::Details(_))",
+            "matches!(status, State::Details(..))",
+            "matches!(status, Option::Some(State::Details(_)))",
         ] {
             assert!(
                 syn::parse_str::<IndexPredicate>(valid).is_ok(),

@@ -77,19 +77,26 @@ removal and generated field setters all reconcile membership through the same
 index-diff routine. Updates to a predicate field count even if that field is not
 part of `by`, `sort` or `include`. Failed `try_update` closures write nothing.
 
-Predicates inspect exactly one field of the record. Supported fields are primitive
-scalars, payload-free storage enums, and options of those types. Use literals,
-qualified enum variants and `|` alternatives; option patterns such as
-`Option::Some(Status::Active)` and `Option::Some(_)` are also supported. Optional
-enums are loaded as values before matching, including during setter reconciliation.
-Presence-only indexes still avoid loading optional payloads.
+Predicates inspect exactly one field of the record. Use scalar literals,
+qualified enum variants and `|` alternatives. Payload-bearing variants support
+tag checks such as `State::Ready | State::Details(_)` or `State::Details(..)`;
+editing the ignored payload cannot change membership. Nested variant and option
+patterns such as `Option::Some(State::Details(_))` and `Option::Some(_)` are also
+supported, as are literal scalar payloads such as `Step::Value(1)`.
+Generated predicates currently materialize the whole enum value, including
+ignored payloads. This also applies to optional enums and setter reconciliation.
+Unconditional presence-only indexes still avoid loading optional payloads.
 
 Bindings, guards, function calls and other-record dependencies are
 rejected. Qualifying variants prevents a misspelling becoming an always-matching
-binding. A generated type check also rejects records and payload-bearing enums:
-their descendants can be edited without invoking the parent setter. This includes
-qualified structural constants, which can conceal a record match behind a path.
-Use a scalar status field for such records. The prototype's tuple syntax is not supported.
+binding. Record destructuring and constant paths (including scalar constants) are
+rejected to prevent inspecting mutable descendants without invoking the parent
+setter. Generated unit-variant patterns use Rust's `Variant {}` spelling,
+which requires an actual variant
+instead of accepting a structural constant with hidden record comparisons.
+Payload inspection is limited to literals and nested variants; record fields
+remain inaccessible to predicates. Use a scalar status field when membership
+depends on a mutable record. The prototype's tuple syntax is not supported.
 
 For WIT records, put `when` last and use the generated Rust field/type names
 inside `matches!` (the other field lists remain kebab-case):

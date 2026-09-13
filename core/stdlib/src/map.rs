@@ -111,25 +111,6 @@ impl<T> IndexKey for Option<T> {
     }
 }
 
-/// A value whose predicate cannot change through a writable descendant model.
-/// Storage derives implement this for payload-free enums. Records and enums with
-/// payloads must use an explicit scalar status field for conditional membership.
-#[diagnostic::on_unimplemented(
-    message = "index predicates require scalar or payload-free enum fields (optionally wrapped in Option)",
-    note = "mutable nested records cannot maintain their parent's conditional index"
-)]
-pub trait IndexPredicateValue {}
-
-macro_rules! index_predicate_scalar {
-    ($($ty:ty),*) => { $(impl IndexPredicateValue for $ty {})* };
-}
-index_predicate_scalar!(bool, u8, u16, u32, u64, i8, i16, i32, i64, String, Vec<u8>);
-impl<T: IndexPredicateValue> IndexPredicateValue for Option<T> {}
-
-#[doc(hidden)]
-#[inline(always)]
-pub fn assert_index_predicate_value<T: IndexPredicateValue>(_: &T) {}
-
 /// The payload-free marker for bucketing an `Option` index field by presence —
 /// the `Option` analogue of a storage enum's `<E>Kind`. Lets a lookup name the
 /// bucket (`eligible(true, Presence::Absent)`) without constructing an
@@ -811,6 +792,116 @@ mod tests {
         );
         assert!(records.remove(&2));
         assert!(records.live(7).is_empty());
+    }
+
+    #[derive(Clone, Storage)]
+    struct Details {
+        amount: u64,
+    }
+
+    #[derive(Clone, Storage)]
+    enum PayloadStatus {
+        Closed,
+        Ready,
+        Details(Details),
+        Step(u64),
+    }
+
+    #[derive(Clone, Storage)]
+    #[index(live, by = owner, include = amount,
+        when = matches!(status, PayloadStatus::Ready | PayloadStatus::Details(_)))]
+    #[index(details, by = owner, when = matches!(status, PayloadStatus::Details(..)))]
+    #[index(optional, by = owner,
+        when = matches!(extra, Option::Some(PayloadStatus::Details(_))))]
+    #[index(present, by = owner, when = matches!(extra, Option::Some(_)))]
+    #[index(first_step, by = owner, when = matches!(status, PayloadStatus::Step(1)))]
+    struct PayloadRecord {
+        owner: u64,
+        amount: u64,
+        status: PayloadStatus,
+        extra: Option<PayloadStatus>,
+    }
+
+    #[derive(Model)]
+    #[allow(dead_code)]
+    struct PayloadStore {
+        records: Map<u64, PayloadRecord>,
+    }
+
+    #[test]
+    fn tag_predicates_survive_descendant_edits_and_reconcile_parent_updates() {
+        let ctx = Rc::new(Mock::default());
+        let model = PayloadStoreWriteModel::new(ctx, KeyPath::from("payload"));
+        let records = model.records();
+        records.set(
+            &1,
+            PayloadRecord {
+                owner: 7,
+                amount: 10,
+                status: PayloadStatus::Details(Details { amount: 1 }),
+                extra: Some(PayloadStatus::Details(Details { amount: 2 })),
+            },
+        );
+        let record = records.get(&1).unwrap();
+        let PayloadStatusWriteModel::Details(details) = record.status() else {
+            panic!("expected details");
+        };
+        details.set_amount(99);
+        let Some(PayloadStatusWriteModel::Details(extra)) = record.extra() else {
+            panic!("expected optional details");
+        };
+        extra.set_amount(100);
+        assert!(matches!(
+            record.load().status,
+            PayloadStatus::Details(Details { amount: 99 })
+        ));
+        assert!(matches!(
+            record.load().extra,
+            Some(PayloadStatus::Details(Details { amount: 100 }))
+        ));
+        assert_eq!(records.live(7).keys().collect::<Vec<_>>(), vec![1]);
+        assert_eq!(records.live(7).values().next().unwrap().amount, 10);
+        assert_eq!(records.details(7).len(), 1);
+        assert_eq!(records.optional(7).len(), 1);
+        assert_eq!(records.present(7).len(), 1);
+
+        record.set_owner(9);
+        record.set_amount(20);
+        assert!(records.live(7).is_empty());
+        assert!(records.details(7).is_empty());
+        assert!(records.optional(7).is_empty());
+        assert_eq!(records.live(9).values().next().unwrap().amount, 20);
+        assert_eq!(records.details(9).len(), 1);
+        assert_eq!(records.optional(9).len(), 1);
+        record.set_status(PayloadStatus::Ready);
+        assert_eq!(records.live(9).len(), 1);
+        assert!(records.details(9).is_empty());
+        record.set_extra(Some(PayloadStatus::Step(3)));
+        assert!(records.optional(9).is_empty());
+        assert_eq!(records.present(9).len(), 1);
+        record.set_extra(None);
+        assert!(records.present(9).is_empty());
+        record.set_status(PayloadStatus::Closed);
+        assert!(records.live(9).is_empty());
+        record.set_status(PayloadStatus::Step(1));
+        assert_eq!(records.first_step(9).len(), 1);
+        record.set_status(PayloadStatus::Step(2));
+        assert!(records.first_step(9).is_empty());
+
+        records.set(
+            &1,
+            PayloadRecord {
+                owner: 7,
+                amount: 30,
+                status: PayloadStatus::Details(Details { amount: 3 }),
+                extra: None,
+            },
+        );
+        assert_eq!(records.live(7).len(), 1);
+        assert_eq!(records.details(7).len(), 1);
+        assert!(records.remove(&1));
+        assert!(records.live(7).is_empty());
+        assert!(records.details(7).is_empty());
     }
 
     // A struct value with one indexed field — the shape a Map holds.

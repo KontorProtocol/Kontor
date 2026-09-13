@@ -13,9 +13,13 @@ impl Payload {
     const ONE: Self = Self { number: 1 };
 }
 
-#[derive(Clone, Storage)]
+#[derive(Clone, PartialEq, Eq, Storage)]
 enum State {
     Value(Payload),
+}
+
+impl State {
+    const ONE: Self = Self::Value(Payload::ONE);
 }
 
 #[derive(Storage)]
@@ -37,6 +41,13 @@ struct Wrapped {
 struct Optional {
     owner: u64,
     payload: Option<Payload>,
+}
+
+#[derive(Storage)]
+#[index(live, by = owner, when = matches!(state, State::ONE))]
+struct EnumConstant {
+    owner: u64,
+    state: State,
 }
 
 fn main() {}

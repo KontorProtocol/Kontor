@@ -144,8 +144,8 @@ validator duplicate-key scan/status filter in favor of index `.is_empty()`.
 The predicate parser is shared by Rust records and WIT declaration forwarding.
 No host ABI or SDK component rebuild is needed. Boolean predicates compile to
 direct boolean checks. Compressed binaries versus the full-index candidate are
-100,204 → 100,124 bytes for staking and 111,771 → 111,790 for filestorage.
-The type-checking follow-up also rebuilds NFT and the arithmetic test contract.
+100,204 → 100,107 bytes for staking and 111,771 → 111,722 for filestorage.
+The tag-predicate follow-up also rebuilds NFT and the arithmetic test contract.
 
 `storage_user_costs` measures real token balances, the public `token::floor`
 view, and the burn account. For each operation it checks that user balance loss
@@ -176,15 +176,18 @@ core-written state can be exempt from user storage collateral.
 
 Final validation: 487 runtime/consensus library tests pass (six opt-in skips),
 including the new consensus-key cancellation/reuse and collateral rollback
-regression. Macro and stdlib library tests pass (6 and 50); compile-fail and
+regression. Macro and stdlib library tests pass (6 and 51); compile-fail and
 expansion tests pass. The generated-model lifecycle test covers an independent
 predicate field, sorted and covering entries, bucket counts, repeated updates,
 failed `try_update`, record replacement and removal. Both pinned contract
 workspaces build. A subsequent review added optional-enum materialization coverage
 and compile-fail coverage for mutable record predicates (direct, enum-wrapped and
-optional). A compile-time type check limits predicates to primitive scalars,
-payload-free enums and supported options, preventing descendant edits from
-bypassing index maintenance.
+optional). Tag-only predicates also support payload-bearing enums: regression
+coverage edits nested records while checking membership, counts and projections,
+then changes parent variants, moves buckets and removes the record. Restricted
+patterns exclude record destructuring and structural constants, preventing
+descendant edits from bypassing index maintenance without a blanket restriction
+on payload-bearing enums.
 
 ## Reproduction
 
@@ -225,3 +228,7 @@ Review-fix verification logs are `/tmp/kontor-pr560-fix-{checks,build,runtime}.l
 and `/tmp/kontor-pr560-fix-fees-{1,2,3}.log`. The optional-enum regression checks
 insertion, updates to the predicate and other indexed fields, replacement and
 removal. Ordinary presence-only indexes preserve their no-payload-read path.
+
+Tag-predicate follow-up logs are `/tmp/kontor-pr560-tags-tests-verify.log`,
+`/tmp/kontor-pr560-tags-{build,runtime,fees}.log`. The rebuilt contracts pass the
+full runtime suite and retain identical collateral and fee measurements.

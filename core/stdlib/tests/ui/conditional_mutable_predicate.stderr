@@ -1,107 +1,44 @@
-error[E0277]: index predicates require scalar or payload-free enum fields (optionally wrapped in Option)
-  --> tests/ui/conditional_mutable_predicate.rs:21:10
+error[E0223]: ambiguous associated type
+  --> tests/ui/conditional_mutable_predicate.rs:26:52
    |
-21 | #[derive(Storage)]
-   |          ^^^^^^^ unsatisfied trait bound
-   |
-help: the trait `IndexPredicateValue` is not implemented for `Payload`
-  --> tests/ui/conditional_mutable_predicate.rs:9:1
-   |
- 9 | struct Payload {
-   | ^^^^^^^^^^^^^^
-   = note: mutable nested records cannot maintain their parent's conditional index
-   = help: the following other types implement trait `IndexPredicateValue`:
-             Vec<u8>
-             bool
-             i16
-             i32
-             i64
-             i8
-             std::option::Option<T>
-             std::string::String
-           and $N others
-note: required by a bound in `stdlib::assert_index_predicate_value`
-  --> src/map.rs
-   |
-   | pub fn assert_index_predicate_value<T: IndexPredicateValue>(_: &T) {}
-   |                                        ^^^^^^^^^^^^^^^^^^^ required by this bound in `assert_index_predicate_value`
-   = note: this error originates in the derive macro `Storage` (in Nightly builds, run with -Z macro-backtrace for more info)
-
-error[E0308]: mismatched types
-  --> tests/ui/conditional_mutable_predicate.rs:22:52
-   |
-13 |     const ONE: Self = Self { number: 1 };
-   |     --------------- associated constant defined here
-...
-21 | #[derive(Storage)]
-   |          ------- this expression has type `&Payload`
-22 | #[index(live, by = owner, when = matches!(payload, Payload::ONE))]
+26 | #[index(live, by = owner, when = matches!(payload, Payload::ONE))]
    |                                                    ^^^^^^^^^^^^
-   |                                                    |
-   |                                                    expected `&Payload`, found `Payload`
-   |                                                    `ONE` is interpreted as an associated constant, not a new binding
    |
-help: introduce a new binding instead
+help: if there were a trait named `Example` with associated type `ONE` implemented for `Payload`, you could use the fully-qualified path
    |
-22 - #[index(live, by = owner, when = matches!(payload, Payload::ONE))]
-22 + #[index(live, by = owner, when = matches!(payload, Payload::other_one))]
+26 - #[index(live, by = owner, when = matches!(payload, Payload::ONE))]
+26 + #[index(live, by = owner, when = matches!(payload, <Payload as Example>::ONE))]
    |
 
-error[E0277]: index predicates require scalar or payload-free enum fields (optionally wrapped in Option)
-  --> tests/ui/conditional_mutable_predicate.rs:28:10
+error[E0223]: ambiguous associated type
+  --> tests/ui/conditional_mutable_predicate.rs:33:63
    |
-28 | #[derive(Storage)]
-   |          ^^^^^^^ unsatisfied trait bound
+33 | #[index(live, by = owner, when = matches!(state, State::Value(Payload::ONE)))]
+   |                                                               ^^^^^^^^^^^^
    |
-help: the trait `IndexPredicateValue` is not implemented for `State`
-  --> tests/ui/conditional_mutable_predicate.rs:17:1
+help: if there were a trait named `Example` with associated type `ONE` implemented for `Payload`, you could use the fully-qualified path
+   |
+33 - #[index(live, by = owner, when = matches!(state, State::Value(Payload::ONE)))]
+33 + #[index(live, by = owner, when = matches!(state, State::Value(<Payload as Example>::ONE)))]
+   |
+
+error[E0223]: ambiguous associated type
+  --> tests/ui/conditional_mutable_predicate.rs:40:65
+   |
+40 | #[index(live, by = owner, when = matches!(payload, Option::Some(Payload::ONE)))]
+   |                                                                 ^^^^^^^^^^^^
+   |
+help: if there were a trait named `Example` with associated type `ONE` implemented for `Payload`, you could use the fully-qualified path
+   |
+40 - #[index(live, by = owner, when = matches!(payload, Option::Some(Payload::ONE)))]
+40 + #[index(live, by = owner, when = matches!(payload, Option::Some(<Payload as Example>::ONE)))]
+   |
+
+error[E0599]: no variant named `ONE` found for enum `State`
+  --> tests/ui/conditional_mutable_predicate.rs:47:57
    |
 17 | enum State {
-   | ^^^^^^^^^^
-   = note: mutable nested records cannot maintain their parent's conditional index
-   = help: the following other types implement trait `IndexPredicateValue`:
-             Vec<u8>
-             bool
-             i16
-             i32
-             i64
-             i8
-             std::option::Option<T>
-             std::string::String
-           and $N others
-note: required by a bound in `stdlib::assert_index_predicate_value`
-  --> src/map.rs
-   |
-   | pub fn assert_index_predicate_value<T: IndexPredicateValue>(_: &T) {}
-   |                                        ^^^^^^^^^^^^^^^^^^^ required by this bound in `assert_index_predicate_value`
-   = note: this error originates in the derive macro `Storage` (in Nightly builds, run with -Z macro-backtrace for more info)
-
-error[E0277]: index predicates require scalar or payload-free enum fields (optionally wrapped in Option)
-  --> tests/ui/conditional_mutable_predicate.rs:35:10
-   |
-35 | #[derive(Storage)]
-   |          ^^^^^^^ unsatisfied trait bound
-   |
-help: the trait `IndexPredicateValue` is not implemented for `Payload`
-  --> tests/ui/conditional_mutable_predicate.rs:9:1
-   |
- 9 | struct Payload {
-   | ^^^^^^^^^^^^^^
-   = note: mutable nested records cannot maintain their parent's conditional index
-   = help: the following other types implement trait `IndexPredicateValue`:
-             Vec<u8>
-             bool
-             i16
-             i32
-             i64
-             i8
-             std::option::Option<T>
-             std::string::String
-           and $N others
-   = note: required for `std::option::Option<Payload>` to implement `IndexPredicateValue`
-note: required by a bound in `stdlib::assert_index_predicate_value`
-  --> src/map.rs
-   |
-   | pub fn assert_index_predicate_value<T: IndexPredicateValue>(_: &T) {}
-   |                                        ^^^^^^^^^^^^^^^^^^^ required by this bound in `assert_index_predicate_value`
-   = note: this error originates in the derive macro `Storage` (in Nightly builds, run with -Z macro-backtrace for more info)
+   | ---------- variant `ONE` not found here
+...
+47 | #[index(live, by = owner, when = matches!(state, State::ONE))]
+   |                                                         ^^^ variant not found in `State`
