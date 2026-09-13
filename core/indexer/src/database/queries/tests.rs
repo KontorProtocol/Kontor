@@ -2655,7 +2655,7 @@ async fn test_path_prefix_filter_storage_rows_returns_member_and_value() -> Resu
         .await?
         .try_collect()
         .await;
-        assert!(matches!(result, Err(Error::InvalidData(_))));
+        assert!(matches!(result, Err(Error::NonScalarRow)));
     }
     Ok(())
 }

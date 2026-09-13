@@ -81,6 +81,15 @@ native numeric types reuse their existing canonical codec decoder. Covering and
 numeric payloads borrow the framed buffer rather than allocate a second copy.
 The host remains responsible for latest-row visibility, bounds, and metering.
 It rejects compound children instead of returning an arbitrary descendant value.
+This invalid scan request is a deterministic contract failure: the contract chose
+an incompatible target, while the stored compound value itself is valid. Database
+failures and malformed stored keys remain infrastructure failures.
+
+Entry decoding executes inside the guest. Invalid framing and numeric payloads
+produce deterministic Wasm traps and roll back the call; they are not host panics.
+Regression tests write state before triggering invalid framing, an invalid numeric
+payload, or a compound scan, then verify rollback and subsequent successful calls,
+both directly and through a proxy. There is no separate recoverable entry API.
 
 Each consumed row pays for its key and stored value bytes. Key-only queries keep
 using the lighter key cursor. Filters run in the contract, so an entry rejected

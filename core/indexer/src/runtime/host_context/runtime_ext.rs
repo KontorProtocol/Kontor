@@ -3,12 +3,13 @@ use bitcoin::hashes::Hash;
 use futures_util::StreamExt;
 use wasmtime::component::{Accessor, Resource};
 
+use crate::database::queries::Error as StorageError;
 use crate::runtime::wit::kontor::built_in::context::HolderRef;
 use crate::runtime::wit::{
     Contract, CoreContext, FallContext, HasContractId, Holder, Keys, ProcContext, ProcStorage,
     Signer, StorageRows, Transaction, ViewContext, ViewStorage,
 };
-use crate::runtime::{Runtime, fuel::Fuel, hash_bytes};
+use crate::runtime::{ExecutionError, Runtime, fuel::Fuel, hash_bytes};
 
 impl Runtime {
     pub(super) async fn _generate_id<T>(&self, accessor: &Accessor<T, Self>) -> Result<String> {
@@ -221,7 +222,13 @@ impl Runtime {
             .stream
             .next()
             .await
-            .transpose()?;
+            .transpose()
+            .map_err(|error| match error {
+                // The guest chooses the scan target. A compound value is valid
+                // state, so requesting it as a scalar must not halt the node.
+                StorageError::NonScalarRow => ExecutionError::Deterministic(error.into()),
+                other => ExecutionError::NonDeterministic(other.into()),
+            })?;
         match item {
             Some((member, raw_value)) => {
                 // Meter member + the raw value bytes read from the log (a covering read

@@ -785,9 +785,7 @@ pub async fn path_prefix_filter_storage_rows(
                     let (elem, tail) =
                         next_element(&full[prefix_len..]).map_err(Error::KeyCodec)?;
                     if !tail.is_empty() {
-                        return Err(Error::InvalidData(
-                            "row scan requires direct scalar leaves".into(),
-                        ));
+                        return Err(Error::NonScalarRow);
                     }
                     Ok((elem.to_vec(), row.get::<Vec<u8>>(1)?))
                 })();

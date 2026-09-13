@@ -19,6 +19,10 @@ world root {
 	// Case 2b: Contract panic (becomes unreachable trap in WASM)
 	export trap-panic: async func(ctx: borrow<proc-context>);
 
+	export storage-state: async func(ctx: borrow<view-context>) -> list<u64>;
+	export trap-scalar-decode: async func(ctx: borrow<proc-context>, malformed-frame: bool);
+	export scan-compound: async func(ctx: borrow<proc-context>, descending: bool);
+
 	// Case 3: Infinite loop — runs out of fuel (real wasmtime Trap::OutOfFuel)
 	export trap-out-of-fuel: async func(ctx: borrow<proc-context>);
 

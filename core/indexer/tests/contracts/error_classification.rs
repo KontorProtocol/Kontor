@@ -1,5 +1,6 @@
 use indexer::runtime::ExecutionError;
 use testlib::*;
+use wasmtime::Trap;
 
 interface!(
     name = "error_test",
@@ -82,6 +83,65 @@ async fn test_error_case_trap_panic() -> Result<()> {
 
     let result = error_test::trap_panic(runtime, &contract, &signer).await;
     assert_deterministic_error(&result);
+    Ok(())
+}
+
+#[testlib::test(contracts_dir = "../../test-contracts", local_only = true)]
+async fn test_scalar_decode_failure_rolls_back() -> Result<()> {
+    let (proxy, contract) = setup_proxy(runtime).await?;
+    let signer = runtime.identity().await?;
+    for target in [&contract, &proxy] {
+        for malformed_frame in [true, false] {
+            let result =
+                error_test::trap_scalar_decode(runtime, target, &signer, malformed_frame).await;
+            assert_deterministic_error(&result);
+            let err = result.unwrap_err();
+            let Some(ExecutionError::Deterministic(cause)) = err.downcast_ref::<ExecutionError>()
+            else {
+                unreachable!();
+            };
+            let mut cause = cause;
+            while let Some(ExecutionError::Deterministic(inner)) =
+                cause.downcast_ref::<ExecutionError>()
+            {
+                cause = inner;
+            }
+            assert!(
+                matches!(
+                    cause.downcast_ref::<Trap>(),
+                    Some(Trap::UnreachableCodeReached)
+                ),
+                "expected a decoder panic, got {cause:#}"
+            );
+            assert_eq!(
+                error_test::storage_state(runtime, &contract).await?,
+                [0, 0, 0]
+            );
+            assert_eq!(error_test::succeed(runtime, target).await?, 42);
+        }
+    }
+    Ok(())
+}
+
+#[testlib::test(contracts_dir = "../../test-contracts", local_only = true)]
+async fn test_compound_scan_failure_rolls_back() -> Result<()> {
+    let (proxy, contract) = setup_proxy(runtime).await?;
+    let signer = runtime.identity().await?;
+    for target in [&contract, &proxy] {
+        for descending in [false, true] {
+            let result = error_test::scan_compound(runtime, target, &signer, descending).await;
+            assert_deterministic_error(&result);
+            assert!(
+                format!("{:#}", result.unwrap_err())
+                    .contains("row scan requires direct scalar leaves")
+            );
+            assert_eq!(
+                error_test::storage_state(runtime, &contract).await?,
+                [0, 0, 0]
+            );
+            assert_eq!(error_test::succeed(runtime, target).await?, 42);
+        }
+    }
     Ok(())
 }
 
