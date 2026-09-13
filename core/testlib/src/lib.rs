@@ -10,7 +10,7 @@ use indexer::{
         },
         types::{ContractRow, OpResultId},
     },
-    reg_tester::{self},
+    reg_tester::{self, PublishedContract},
     runtime::{Runtime as IndexerRuntime, TransactionContext},
     test_utils::new_mock_transaction,
 };
@@ -640,8 +640,13 @@ impl RuntimeImpl for RuntimeRegtest {
         contract: &[u8],
     ) -> Result<ContractAddress> {
         let mut guard = self.reg_tester.lock_published(name).await;
-        if let Some(addr) = guard.as_ref() {
-            return Ok(addr.clone());
+        if let Some(published) = guard.as_ref() {
+            let addr = published.address.clone();
+            let txid = published.txid.clone();
+            drop(guard);
+            // The cache is shared across nodes, but publication readiness is local.
+            self.reg_tester.wait_for_txids(&[txid]).await?;
+            return Ok(addr);
         }
 
         let identity = self
@@ -669,7 +674,7 @@ impl RuntimeImpl for RuntimeRegtest {
             .await?;
 
         let client = self.reg_tester.kontor_client().await;
-        let id = OpResultId::builder().txid(txid).build();
+        let id = OpResultId::builder().txid(txid.clone()).build();
         let result = client
             .result(&id)
             .await?
@@ -683,7 +688,10 @@ impl RuntimeImpl for RuntimeRegtest {
         })?;
         let addr: ContractAddress = from_wave_expr(&value);
 
-        *guard = Some(addr.clone());
+        *guard = Some(PublishedContract {
+            address: addr.clone(),
+            txid,
+        });
         Ok(addr)
     }
 

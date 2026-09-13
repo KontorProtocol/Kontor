@@ -392,7 +392,12 @@ pub struct P2wpkhIdentity {
     pub next_funding_utxo: (OutPoint, TxOut),
 }
 
-type PublishCache = Arc<Mutex<HashMap<String, Arc<Mutex<Option<ContractAddress>>>>>>;
+pub struct PublishedContract {
+    pub address: ContractAddress,
+    pub txid: String,
+}
+
+type PublishCache = Arc<Mutex<HashMap<String, Arc<Mutex<Option<PublishedContract>>>>>>;
 
 /// Thread-safe identity pool shared between the cluster and module RegTesters.
 #[derive(Clone)]
@@ -416,7 +421,7 @@ impl IdentityPool {
     pub async fn lock_published(
         &self,
         name: &str,
-    ) -> tokio::sync::OwnedMutexGuard<Option<ContractAddress>> {
+    ) -> tokio::sync::OwnedMutexGuard<Option<PublishedContract>> {
         let entry = {
             let mut cache = self.publish_cache.lock().await;
             cache
@@ -1028,7 +1033,7 @@ impl RegTester {
     pub async fn lock_published(
         &self,
         name: &str,
-    ) -> tokio::sync::OwnedMutexGuard<Option<ContractAddress>> {
+    ) -> tokio::sync::OwnedMutexGuard<Option<PublishedContract>> {
         let pool = self.inner.lock().await.pool.clone();
         pool.lock_published(name).await
     }
@@ -1482,6 +1487,33 @@ impl RegTesterCluster {
             .client
     }
 
+    pub async fn pause_node(&self, index: usize) -> Result<()> {
+        self.signal_node(index, "-STOP").await
+    }
+
+    pub async fn resume_node(&self, index: usize) -> Result<()> {
+        self.signal_node(index, "-CONT").await
+    }
+
+    async fn signal_node(&self, index: usize, signal: &str) -> Result<()> {
+        let node = self.node_configs[index]
+            .running
+            .as_ref()
+            .ok_or(anyhow!("Node {index} not running"))?;
+        let pid = node
+            .child
+            .id()
+            .ok_or(anyhow!("Node {index} already reaped"))?;
+        let status = Command::new("kill")
+            .args([signal, &pid.to_string()])
+            .status()
+            .await?;
+        if !status.success() {
+            bail!("{signal} to node {index} (pid {pid}) failed: {status}");
+        }
+        Ok(())
+    }
+
     /// Stop a node the way an orchestrator does — SIGTERM — and hand back its
     /// exit status.
     ///
@@ -1491,24 +1523,14 @@ impl RegTesterCluster {
     ///
     /// Shells out to `kill(1)` because tokio's `Child` can only SIGKILL, and the
     /// raw syscall would mean a `libc` dependency and an `unsafe` block in the
-    /// shipped crate for one harness call.
+    /// shipped crate for a harness call.
     pub async fn stop_node_gracefully(&mut self, index: usize) -> Result<std::process::ExitStatus> {
+        self.signal_node(index, "-TERM").await?;
         let nc = &mut self.node_configs[index];
         let node = nc
             .running
             .as_mut()
             .ok_or(anyhow!("Node {index} not running"))?;
-        let pid = node
-            .child
-            .id()
-            .ok_or(anyhow!("Node {index} already reaped"))?;
-        let signaled = Command::new("kill")
-            .args(["-TERM", &pid.to_string()])
-            .status()
-            .await?;
-        if !signaled.success() {
-            bail!("SIGTERM to node {index} (pid {pid}) failed: {signaled}");
-        }
         // Bounded: a node that wedges on shutdown is the failure this test is
         // here to catch, and an unbounded wait would report it as a hung suite
         // instead of a failing assertion. Above the daemon's own 25s
@@ -1618,9 +1640,8 @@ impl RegTesterCluster {
         Ok(utxos)
     }
 
-    /// Create an independent `RegTester` for a test module. Round-robins across
-    /// running nodes. Pops a funding identity from the shared pool. Each returned
-    /// `RegTester` has its own websocket, UTXO chain, and publish cache.
+    /// Module API clients rotate across running nodes. Identities and published
+    /// contracts are shared through the cluster pool.
     pub async fn new_module_reg_tester(&self) -> Result<RegTester> {
         let running: Vec<usize> = self
             .node_configs
