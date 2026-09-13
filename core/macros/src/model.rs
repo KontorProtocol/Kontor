@@ -517,6 +517,7 @@ pub fn generate_struct(
                                 d.by.iter().any(|b| b == field_name)
                                     || d.sort.as_ref() == Some(field_name)
                                     || d.include.iter().any(|i| i == field_name)
+                                    || d.when.as_ref().is_some_and(|p| &p.field == field_name)
                             })
                             .collect();
                         let participates = !relevant.is_empty();
@@ -550,17 +551,15 @@ pub fn generate_struct(
                                     quote! { #local }
                                 }
                             };
-                            let old_entries =
-                                relevant.iter().map(|d| index_decl::index_entry(d, &value_old));
-                            let new_entries =
-                                relevant.iter().map(|d| index_decl::index_entry(d, &value_new));
+                            let old_entries = index_decl::index_entries(&relevant, &value_old);
+                            let new_entries = index_decl::index_entries(&relevant, &value_new);
                             quote! {
                                 if let Some((index_root, index_key)) = &self.index_binding {
                                     #(#hoists)*
                                     stdlib::apply_index_diff(
                                         &self.ctx, index_root, index_key,
-                                        &[#(#old_entries),*],
-                                        &[#(#new_entries),*],
+                                        &#old_entries,
+                                        &#new_entries,
                                     );
                                 }
                             }
@@ -724,10 +723,9 @@ pub fn generate_struct(
                     let local = idx_local(f);
                     quote! { #local }
                 };
-                let pushes = decls.iter().map(|decl| {
-                    let entry = index_decl::index_entry(decl, &value_for);
-                    quote! { entries.push(#entry); }
-                });
+                let pushes = decls
+                    .iter()
+                    .map(|decl| index_decl::index_push(decl, &value_for));
                 quote! {
                     pub fn __index_entries(&self) -> alloc::vec::Vec<stdlib::IndexEntry> {
                         #(#hoists)*

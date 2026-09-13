@@ -1,13 +1,14 @@
 use darling::FromMeta;
 use heck::{ToPascalCase, ToSnakeCase};
 use proc_macro2::TokenStream;
-use quote::quote;
+use quote::{ToTokens, quote};
 use std::collections::BTreeMap;
 use std::path::Path;
 use syn::Ident;
 use wit_parser::{Resolve, Type, TypeDefKind, TypeId, TypeOwner, WorldId};
 use wit_validator::Validator;
 
+use crate::index_decl::IndexPredicate;
 use crate::remap::REMAPPED_BUILT_INS;
 
 /// The world every contract's WIT declares. Also the prefix of a fully-qualified
@@ -20,7 +21,7 @@ pub struct Config {
     path: Option<String>,
     /// Secondary-index declarations on WIT records used as `Map` values.
     /// Semicolon-separated entries, each
-    /// `record: name [by field…] [sort field] [include field…]` (kebab-case, as in the
+    /// `record: name [by field…] [sort field] [include field…] [when matches!(field, Pattern)]` (kebab-case, as in the
     /// WIT); `record: field` is sugar for a single-field index. `include` marks a
     /// covering index (those fields are projected into the index leaf). E.g.
     /// ```text
@@ -34,7 +35,7 @@ pub struct Config {
     /// (via wit-bindgen's `additional_type_attributes`); the index machinery is folded
     /// into `#[derive(Storage)]`, which every indexed record receives (indexed ⊂
     /// storage). `by`/`sort` fields are mapped to the generated snake_case Rust
-    /// field names.
+    /// field names. `when` is last and uses Rust names inside `matches!`.
     indexed: Option<String>,
 }
 
@@ -50,6 +51,7 @@ struct IndexDeclSpec {
     by: Vec<String>,
     sort: Option<String>,
     include: Vec<String>,
+    when: Option<IndexPredicate>,
 }
 
 impl IndexDeclSpec {
@@ -68,12 +70,15 @@ impl IndexDeclSpec {
         if !self.include.is_empty() {
             args.push_str(&format!(", include = ({})", self.include.join(", ")));
         }
+        if let Some(when) = &self.when {
+            args.push_str(&format!(", when = {}", when.to_token_stream()));
+        }
         format!("#[index({args})]")
     }
 }
 
 fn index_attr(spec: &str) -> IndexDeclSpec {
-    const KEYWORDS: &[&str] = &["by", "sort", "include"];
+    const KEYWORDS: &[&str] = &["by", "sort", "include", "when"];
     let mut tokens = spec.split_whitespace().peekable();
     let name = tokens
         .next()
@@ -82,6 +87,7 @@ fn index_attr(spec: &str) -> IndexDeclSpec {
     let mut by: Vec<String> = Vec::new();
     let mut sort: Option<String> = None;
     let mut include: Vec<String> = Vec::new();
+    let mut when = None;
     while let Some(keyword) = tokens.next() {
         match keyword {
             "by" => {
@@ -106,9 +112,16 @@ fn index_attr(spec: &str) -> IndexDeclSpec {
                     panic!("`include` needs at least one field in indexed entry: {spec:?}");
                 }
             }
+            "when" => {
+                let expression = tokens.collect::<Vec<_>>().join(" ");
+                when = Some(syn::parse_str(&expression).unwrap_or_else(|error| {
+                    panic!("invalid `when` in indexed entry {spec:?}: {error}")
+                }));
+                break;
+            }
             other => {
                 panic!(
-                    "unexpected `{other}` in indexed entry (expected `by`/`sort`/`include`): {spec:?}"
+                    "unexpected `{other}` in indexed entry (expected `by`/`sort`/`include`/`when`): {spec:?}"
                 )
             }
         }
@@ -118,6 +131,7 @@ fn index_attr(spec: &str) -> IndexDeclSpec {
         by,
         sort,
         include,
+        when,
     }
 }
 
@@ -246,6 +260,9 @@ fn validate_indexed_record(
     };
 
     for spec in specs {
+        if let Some(predicate) = &spec.when {
+            lookup(&predicate.field.to_string());
+        }
         // The derive defaults the bucket to `name` whenever `by` is absent —
         // even with `sort`/`include` present — so validate it in that case too.
         if spec.by.is_empty() {
@@ -512,5 +529,35 @@ mod tests {
         assert!(attrs.contains("root/stored"));
         assert!(!attrs.contains("root/page"));
         assert!(!attrs.contains("root/envelope"));
+    }
+}
+
+#[cfg(test)]
+mod index_tests {
+    use super::*;
+    use crate::index_decl;
+    use syn::{Fields, ItemStruct};
+
+    #[test]
+    fn wit_index_predicates_use_the_same_parser_as_rust_records() {
+        let spec = index_attr(
+            "due by owner-id sort deadline-height include amount\nwhen\n matches!(status, Status::Active | Status::Expired)",
+        );
+        let rendered = spec.render();
+        let item: ItemStruct = syn::parse_str(&format!(
+            "{rendered} struct Entry {{ owner_id: u64, deadline_height: u64, amount: u64, status: Status }}"
+        )).unwrap();
+        let Fields::Named(fields) = item.fields else {
+            unreachable!()
+        };
+        let decls = index_decl::parse(&item.attrs, &fields).unwrap();
+        assert_eq!(decls[0].when.as_ref().unwrap().field, "status");
+        assert_eq!(decls[0].sort.as_ref().unwrap(), "deadline_height");
+    }
+
+    #[test]
+    #[should_panic(expected = "invalid `when`")]
+    fn wit_predicate_rejects_trailing_options() {
+        index_attr("due by status when matches!(status, Status::Active) sort deadline");
     }
 }

@@ -15,109 +15,15 @@ impl<T> built_in::context::HostViewStorageWithStore<T> for Runtime {
             .await
     }
 
-    async fn get_str(
-        accessor: &Accessor<T, Self>,
-        self_: Resource<ViewStorage>,
-        path: Vec<u8>,
-    ) -> Result<Option<String>> {
-        accessor
-            .with(|mut access| access.get().clone())
-            ._get_primitive(accessor, self_, path)
-            .await
-    }
-
-    async fn get_u64(
-        accessor: &Accessor<T, Self>,
-        self_: Resource<ViewStorage>,
-        path: Vec<u8>,
-    ) -> Result<Option<u64>> {
-        accessor
-            .with(|mut access| access.get().clone())
-            ._get_primitive(accessor, self_, path)
-            .await
-    }
-
-    async fn get_s64(
-        accessor: &Accessor<T, Self>,
-        self_: Resource<ViewStorage>,
-        path: Vec<u8>,
-    ) -> Result<Option<i64>> {
-        accessor
-            .with(|mut access| access.get().clone())
-            ._get_primitive(accessor, self_, path)
-            .await
-    }
-
-    async fn get_bool(
-        accessor: &Accessor<T, Self>,
-        self_: Resource<ViewStorage>,
-        path: Vec<u8>,
-    ) -> Result<Option<bool>> {
-        accessor
-            .with(|mut access| access.get().clone())
-            ._get_primitive(accessor, self_, path)
-            .await
-    }
-
-    async fn get_list_u8(
-        accessor: &Accessor<T, Self>,
-        self_: Resource<ViewStorage>,
-        path: Vec<u8>,
-    ) -> Result<Option<Vec<u8>>> {
-        accessor
-            .with(|mut access| access.get().clone())
-            ._get_primitive(accessor, self_, path)
-            .await
-    }
-
-    async fn get_keys(
-        accessor: &Accessor<T, Self>,
-        self_: Resource<ViewStorage>,
-        path: Vec<u8>,
-        lo: Option<Vec<u8>>,
-        hi: Option<Vec<u8>>,
-        descending: bool,
-    ) -> Result<Resource<Keys>> {
-        accessor
-            .with(|mut access| access.get().clone())
-            ._get_keys(accessor, self_, path, lo, hi, descending)
-            .await
-    }
-
-    async fn get_storage_rows(
-        accessor: &Accessor<T, Self>,
-        self_: Resource<ViewStorage>,
-        path: Vec<u8>,
-        lo: Option<Vec<u8>>,
-        hi: Option<Vec<u8>>,
-        descending: bool,
-    ) -> Result<Resource<StorageRows>> {
-        accessor
-            .with(|mut access| access.get().clone())
-            ._get_storage_rows(accessor, self_, path, lo, hi, descending)
-            .await
-    }
-
-    async fn exists(
-        accessor: &Accessor<T, Self>,
-        self_: Resource<ViewStorage>,
-        path: Vec<u8>,
-    ) -> Result<bool> {
-        accessor
-            .with(|mut access| access.get().clone())
-            ._exists(accessor, self_, path)
-            .await
-    }
-
-    async fn extend_path_with_match(
-        accessor: &Accessor<T, Self>,
-        self_: Resource<ViewStorage>,
-        path: Vec<u8>,
-        candidates: Vec<Vec<u8>>,
-    ) -> Result<Option<u32>> {
-        accessor
-            .with(|mut access| access.get().clone())
-            ._extend_path_with_match(accessor, self_, path, candidates)
-            .await
+    storage_methods! {T, ViewStorage;
+        fn get_str(path: Vec<u8>) -> Option<String> => _get_primitive;
+        fn get_u64(path: Vec<u8>) -> Option<u64> => _get_primitive;
+        fn get_s64(path: Vec<u8>) -> Option<i64> => _get_primitive;
+        fn get_bool(path: Vec<u8>) -> Option<bool> => _get_primitive;
+        fn get_list_u8(path: Vec<u8>) -> Option<Vec<u8>> => _get_primitive;
+        fn get_keys(path: Vec<u8>, lo: Option<Vec<u8>>, hi: Option<Vec<u8>>, descending: bool) -> Resource<Keys> => _get_keys;
+        fn get_storage_rows(path: Vec<u8>, lo: Option<Vec<u8>>, hi: Option<Vec<u8>>, descending: bool) -> Resource<StorageRows> => _get_storage_rows;
+        fn exists(path: Vec<u8>) -> bool => _exists;
+        fn extend_path_with_match(path: Vec<u8>, candidates: Vec<Vec<u8>>) -> Option<u32> => _extend_path_with_match;
     }
 }

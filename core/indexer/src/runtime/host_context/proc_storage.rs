@@ -15,170 +15,24 @@ impl<T> built_in::context::HostProcStorageWithStore<T> for Runtime {
             .await
     }
 
-    async fn get_str(
-        accessor: &Accessor<T, Self>,
-        self_: Resource<ProcStorage>,
-        path: Vec<u8>,
-    ) -> Result<Option<String>> {
-        accessor
-            .with(|mut access| access.get().clone())
-            ._get_primitive(accessor, self_, path)
-            .await
-    }
-
-    async fn get_u64(
-        accessor: &Accessor<T, Self>,
-        self_: Resource<ProcStorage>,
-        path: Vec<u8>,
-    ) -> Result<Option<u64>> {
-        accessor
-            .with(|mut access| access.get().clone())
-            ._get_primitive(accessor, self_, path)
-            .await
-    }
-
-    async fn get_s64(
-        accessor: &Accessor<T, Self>,
-        self_: Resource<ProcStorage>,
-        path: Vec<u8>,
-    ) -> Result<Option<i64>> {
-        accessor
-            .with(|mut access| access.get().clone())
-            ._get_primitive(accessor, self_, path)
-            .await
-    }
-
-    async fn get_bool(
-        accessor: &Accessor<T, Self>,
-        self_: Resource<ProcStorage>,
-        path: Vec<u8>,
-    ) -> Result<Option<bool>> {
-        accessor
-            .with(|mut access| access.get().clone())
-            ._get_primitive(accessor, self_, path)
-            .await
-    }
-
-    async fn get_list_u8(
-        accessor: &Accessor<T, Self>,
-        self_: Resource<ProcStorage>,
-        path: Vec<u8>,
-    ) -> Result<Option<Vec<u8>>> {
-        accessor
-            .with(|mut access| access.get().clone())
-            ._get_primitive(accessor, self_, path)
-            .await
-    }
-
-    async fn get_keys(
-        accessor: &Accessor<T, Self>,
-        self_: Resource<ProcStorage>,
-        path: Vec<u8>,
-        lo: Option<Vec<u8>>,
-        hi: Option<Vec<u8>>,
-        descending: bool,
-    ) -> Result<Resource<Keys>> {
-        accessor
-            .with(|mut access| access.get().clone())
-            ._get_keys(accessor, self_, path, lo, hi, descending)
-            .await
-    }
-
-    async fn get_storage_rows(
-        accessor: &Accessor<T, Self>,
-        self_: Resource<ProcStorage>,
-        path: Vec<u8>,
-        lo: Option<Vec<u8>>,
-        hi: Option<Vec<u8>>,
-        descending: bool,
-    ) -> Result<Resource<StorageRows>> {
-        accessor
-            .with(|mut access| access.get().clone())
-            ._get_storage_rows(accessor, self_, path, lo, hi, descending)
-            .await
-    }
-
-    async fn exists(
-        accessor: &Accessor<T, Self>,
-        self_: Resource<ProcStorage>,
-        path: Vec<u8>,
-    ) -> Result<bool> {
-        accessor
-            .with(|mut access| access.get().clone())
-            ._exists(accessor, self_, path)
-            .await
-    }
-
-    async fn extend_path_with_match(
-        accessor: &Accessor<T, Self>,
-        self_: Resource<ProcStorage>,
-        path: Vec<u8>,
-        candidates: Vec<Vec<u8>>,
-    ) -> Result<Option<u32>> {
-        accessor
-            .with(|mut access| access.get().clone())
-            ._extend_path_with_match(accessor, self_, path, candidates)
-            .await
-    }
-
-    async fn set_str(
-        accessor: &Accessor<T, Self>,
-        self_: Resource<ProcStorage>,
-        path: Vec<u8>,
-        value: String,
-    ) -> Result<()> {
-        accessor
-            .with(|mut access| access.get().clone())
-            ._set_primitive(accessor, self_, path, value)
-            .await
-    }
-
-    async fn set_u64(
-        accessor: &Accessor<T, Self>,
-        self_: Resource<ProcStorage>,
-        path: Vec<u8>,
-        value: u64,
-    ) -> Result<()> {
-        accessor
-            .with(|mut access| access.get().clone())
-            ._set_primitive(accessor, self_, path, value)
-            .await
-    }
-
-    async fn set_s64(
-        accessor: &Accessor<T, Self>,
-        self_: Resource<ProcStorage>,
-        path: Vec<u8>,
-        value: i64,
-    ) -> Result<()> {
-        accessor
-            .with(|mut access| access.get().clone())
-            ._set_primitive(accessor, self_, path, value)
-            .await
-    }
-
-    async fn set_bool(
-        accessor: &Accessor<T, Self>,
-        self_: Resource<ProcStorage>,
-        path: Vec<u8>,
-        value: bool,
-    ) -> Result<()> {
-        accessor
-            .with(|mut access| access.get().clone())
-            ._set_primitive(accessor, self_, path, value)
-            .await
-    }
-
-    async fn set_list_u8(
-        accessor: &Accessor<T, Self>,
-        self_: Resource<ProcStorage>,
-        path: Vec<u8>,
-        value: Vec<u8>,
-    ) -> Result<()> {
-        accessor
-            .with(|mut access| access.get().clone())
-            ._set_primitive(accessor, self_, path, value)
-            .await
+    storage_methods! {T, ProcStorage;
+        fn get_str(path: Vec<u8>) -> Option<String> => _get_primitive;
+        fn get_u64(path: Vec<u8>) -> Option<u64> => _get_primitive;
+        fn get_s64(path: Vec<u8>) -> Option<i64> => _get_primitive;
+        fn get_bool(path: Vec<u8>) -> Option<bool> => _get_primitive;
+        fn get_list_u8(path: Vec<u8>) -> Option<Vec<u8>> => _get_primitive;
+        fn get_keys(path: Vec<u8>, lo: Option<Vec<u8>>, hi: Option<Vec<u8>>, descending: bool) -> Resource<Keys> => _get_keys;
+        fn get_storage_rows(path: Vec<u8>, lo: Option<Vec<u8>>, hi: Option<Vec<u8>>, descending: bool) -> Resource<StorageRows> => _get_storage_rows;
+        fn exists(path: Vec<u8>) -> bool => _exists;
+        fn extend_path_with_match(path: Vec<u8>, candidates: Vec<Vec<u8>>) -> Option<u32> => _extend_path_with_match;
+        fn set_str(path: Vec<u8>, value: String) -> () => _set_primitive;
+        fn set_u64(path: Vec<u8>, value: u64) -> () => _set_primitive;
+        fn set_s64(path: Vec<u8>, value: i64) -> () => _set_primitive;
+        fn set_bool(path: Vec<u8>, value: bool) -> () => _set_primitive;
+        fn set_list_u8(path: Vec<u8>, value: Vec<u8>) -> () => _set_primitive;
+        fn delete(path: Vec<u8>) -> bool => _delete;
+        fn delete_matching_paths(base_path: Vec<u8>, candidates: Vec<Vec<u8>>) -> u64 => _delete_matching_paths;
+        fn view_storage() -> Resource<ViewStorage> => _proc_view_storage;
     }
 
     async fn set_void(
@@ -189,39 +43,6 @@ impl<T> built_in::context::HostProcStorageWithStore<T> for Runtime {
         accessor
             .with(|mut access| access.get().clone())
             ._set_primitive(accessor, self_, path, ())
-            .await
-    }
-
-    async fn delete(
-        accessor: &Accessor<T, Self>,
-        self_: Resource<ProcStorage>,
-        path: Vec<u8>,
-    ) -> Result<bool> {
-        accessor
-            .with(|mut access| access.get().clone())
-            ._delete(accessor, self_, path)
-            .await
-    }
-
-    async fn delete_matching_paths(
-        accessor: &Accessor<T, Self>,
-        self_: Resource<ProcStorage>,
-        base_path: Vec<u8>,
-        candidates: Vec<Vec<u8>>,
-    ) -> Result<u64> {
-        accessor
-            .with(|mut access| access.get().clone())
-            ._delete_matching_paths(accessor, self_, base_path, candidates)
-            .await
-    }
-
-    async fn view_storage(
-        accessor: &Accessor<T, Self>,
-        self_: Resource<ProcStorage>,
-    ) -> Result<Resource<ViewStorage>> {
-        accessor
-            .with(|mut access| access.get().clone())
-            ._proc_view_storage(accessor, self_)
             .await
     }
 }

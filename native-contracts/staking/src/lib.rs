@@ -28,22 +28,15 @@ const MIN_VOTING_STAKE: u64 = 1;
 // Malachite's default thresholds multiply observed voting power by three.
 const MAX_TOTAL_STAKE: u64 = u64::MAX / 3;
 
-// `status` and `ed25519_pubkey` are indexed so the per-block status sweep and the
-// register-time duplicate-key check are prefix reads of a bucket, not full scans of
-// every validator. `status` partitions by lifecycle (the `ValidatorStatus` enum —
-// a storage enum, so it buckets by its discriminant); `ed25519_pubkey` partitions
-// by consensus key (a bucket holds the ≤1 validators sharing a key — enough to
-// enforce uniqueness without scanning).
-//
-// The `status` index COVERS `(stake, ed25519_pubkey)` so `get_active_set` reads the
-// whole consensus set index-only (`.iter()`, no per-validator `get`). TRADE-OFF: `stake`
-// is HOT (rewritten by `add_stake`/`process_pending`/exit), so its covering leaf is
-// re-written on every stake change — a net win only if active-set reads dominate stake
-// mutations. `ed25519_pubkey` is cold. (Both struct-level so the index ids stay
-// status=0, ed25519_pubkey=1.)
+// Status covers consensus-set reads; the consensus-key bucket enforces uniqueness.
+// Separate height indexes avoid visiting future transitions on every Bitcoin block.
+// Only pending transitions need height entries. Storage-only accounts stay out of
+// validator indexes; existing index IDs remain 0 and 1.
 #[derive(Clone, Storage)]
-#[index(status, by = status, include = (stake, ed25519_pubkey))]
-#[index(ed25519_pubkey, by = ed25519_pubkey)]
+#[index(status, by = status, include = (stake, ed25519_pubkey), when = matches!(status, ValidatorStatus::PendingJoin | ValidatorStatus::Active | ValidatorStatus::PendingExit))]
+#[index(ed25519_pubkey, by = ed25519_pubkey, when = matches!(status, ValidatorStatus::PendingJoin | ValidatorStatus::Active | ValidatorStatus::PendingExit))]
+#[index(activation, by = status, sort = activation_height, when = matches!(status, ValidatorStatus::PendingJoin))]
+#[index(deactivation, by = status, sort = deactivation_height, when = matches!(status, ValidatorStatus::PendingExit))]
 struct StakeAccount {
     pub stake: Decimal,
     pub status: ValidatorStatus,
@@ -303,22 +296,13 @@ impl Guest for Staking {
         }
         ensure_stake_capacity(ctx, stake)?;
 
-        // Reject duplicate ed25519 keys — two validators with the same
-        // consensus key would cause conflicts in Malachite. The `ed25519_pubkey`
-        // index scopes this to the (≤1) holders already in that key's bucket,
-        // not every validator.
-        let dup = model
+        // The caller is inactive (checked above), so any indexed holder reserves
+        // this key for another validator, including pending joins and exits.
+        if !model
             .accounts()
             .ed25519_pubkey(ed25519_pubkey.clone())
-            .keys()
-            .any(|key| {
-                key != holder
-                    && model
-                        .accounts()
-                        .get(&key)
-                        .is_some_and(|entry| entry.status().load() != ValidatorStatus::Inactive)
-            });
-        if dup {
+            .is_empty()
+        {
             return Err(Error::Message(
                 "ed25519 pubkey already registered by another validator".to_string(),
             ));
@@ -568,37 +552,36 @@ impl Guest for Staking {
         let mut activated = 0u64;
         let mut deactivated = 0u64;
 
-        // Only pending validators can change state this block — read their two
-        // status buckets instead of scanning every validator. Collect the keys
-        // first: activating/deactivating moves the member out of the bucket, so
-        // iterating it live would mutate mid-scan.
-        let pending_join: Vec<Holder> = model
+        // Snapshot due members before status writes move them out of the indexes.
+        let mut pending_join: Vec<Holder> = model
             .accounts()
-            .status(ValidatorStatus::PendingJoin)
+            .activation(ValidatorStatus::PendingJoin)
+            .range(..=block_height)
             .keys()
             .collect();
-        let pending_exit: Vec<Holder> = model
+        let mut pending_exit: Vec<Holder> = model
             .accounts()
-            .status(ValidatorStatus::PendingExit)
+            .deactivation(ValidatorStatus::PendingExit)
+            .range(..=block_height)
             .keys()
             .collect();
+        // A height seek changes traversal order. Preserve the previous canonical
+        // Holder-key order within each phase, including when catching up overdue work.
+        pending_join.sort_by_cached_key(|holder| holder.to_string());
+        pending_exit.sort_by_cached_key(|holder| holder.to_string());
 
         // `set_status` reconciles the `status` index in place, so the ACTIVE/
         // PENDING_EXIT bucket counts `active_set_size` reads stay correct with no
         // manual counter update here.
         for key in pending_join {
-            if let Some(entry) = model.accounts().get(&key)
-                && block_height >= entry.activation_height()
-            {
+            if let Some(entry) = model.accounts().get(&key) {
                 model.try_update_total_active_stake(|s| checked_total_stake(s, entry.stake()))?;
                 entry.set_status(ValidatorStatus::Active);
                 activated += 1;
             }
         }
         for key in pending_exit {
-            if let Some(entry) = model.accounts().get(&key)
-                && block_height >= entry.deactivation_height()
-            {
+            if let Some(entry) = model.accounts().get(&key) {
                 let stake = entry.stake();
                 entry.set_status(ValidatorStatus::Inactive);
                 model.try_update_total_active_stake(|s| s.sub(stake))?;

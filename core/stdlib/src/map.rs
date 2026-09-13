@@ -346,10 +346,11 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::StorageMap;
+    use crate as stdlib;
     use crate::keycodec::next_element;
     use crate::query::*;
     use crate::{HasNextRow, ReadStorage, ScalarStorage, make_storage_rows_iterator};
+    use crate::{Model, Storage, StorageMap};
     use alloc::collections::BTreeMap;
     use alloc::string::ToString;
     use alloc::vec;
@@ -389,13 +390,20 @@ mod tests {
         }
     }
 
-    #[derive(Default)]
+    #[derive(Clone, Default)]
     struct Mock {
-        map: RefCell<BTreeMap<Vec<u8>, Cell>>,
+        map: Rc<RefCell<BTreeMap<Vec<u8>, Cell>>>,
         void_sets: RefCell<usize>,
         deletes: RefCell<usize>,
         key_scans: RefCell<usize>,
         row_scans: RefCell<usize>,
+    }
+
+    impl stdlib::HasViewStorage for Mock {
+        type View = Self;
+        fn view_storage(&self) -> Self {
+            self.clone()
+        }
     }
 
     impl ReadStorage for Mock {
@@ -511,7 +519,7 @@ mod tests {
             }
         }
         fn __exists(self: &Rc<Self>, path: &[u8]) -> bool {
-            self.map.borrow().contains_key(path)
+            self.map.borrow().keys().any(|key| key.starts_with(path))
         }
         fn __extend_path_with_match(self: &Rc<Self>, _: &[u8], _: &[Vec<u8>]) -> Option<u32> {
             unimplemented!()
@@ -530,7 +538,10 @@ mod tests {
         }
         fn __delete(self: &Rc<Self>, path: &[u8]) -> bool {
             *self.deletes.borrow_mut() += 1;
-            self.map.borrow_mut().remove(path).is_some()
+            let mut map = self.map.borrow_mut();
+            let before = map.len();
+            map.retain(|key, _| !key.starts_with(path));
+            map.len() != before
         }
         fn __set<T: Store<Self>>(self: &Rc<Self>, path: KeyPath, value: T) {
             T::__set(self, path, value)
@@ -606,6 +617,89 @@ mod tests {
             sort: None,
             projection: None,
         }
+    }
+
+    #[derive(Clone, Storage)]
+    #[index(live, by = owner, sort = score, include = amount, when = matches!(status, 1 | 2))]
+    #[index(all, by = owner)]
+    struct ConditionalItem {
+        owner: u64,
+        status: u64,
+        score: u64,
+        amount: u64,
+    }
+
+    type Map<K, V> = StorageMap<K, V, Mock>;
+
+    #[derive(Model)]
+    #[allow(dead_code)]
+    struct ConditionalStore {
+        items: Map<u64, ConditionalItem>,
+    }
+
+    #[test]
+    fn conditional_indexes_follow_record_and_field_updates() {
+        let ctx = Rc::new(Mock::default());
+        let model = ConditionalStoreWriteModel::new(ctx.clone(), KeyPath::from("conditional"));
+        let items = model.items();
+        let first = ConditionalItem {
+            owner: 7,
+            status: 0,
+            score: 10,
+            amount: 20,
+        };
+        items.set(&1, first.clone());
+        items.set(
+            &2,
+            ConditionalItem {
+                status: 1,
+                ..first.clone()
+            },
+        );
+        assert_eq!(items.all(7).len(), 2);
+        assert_eq!(items.live(7).keys().collect::<Vec<_>>(), vec![2]);
+        let item = items.get(&1).unwrap();
+        item.set_score(3);
+        item.set_amount(8);
+        item.set_owner(9);
+        assert!(items.live(9).is_empty());
+        assert!(item.try_update_status(|_| Err("rejected".into())).is_err());
+        assert!(items.live(9).is_empty());
+        item.update_status(|_| 1);
+        assert_eq!(items.live(9).len(), 1);
+        assert_eq!(items.live(9).values().next().unwrap().amount, 8);
+        item.set_status(2);
+        item.set_status(2);
+        assert_eq!(items.live(9).len(), 1);
+        item.set_score(12);
+        item.set_amount(30);
+        item.set_owner(7);
+        assert!(items.live(9).is_empty());
+        assert_eq!(items.live(7).keys().collect::<Vec<_>>(), vec![2, 1]);
+        assert_eq!(
+            items.live(7).range(..=10).keys().collect::<Vec<_>>(),
+            vec![2]
+        );
+        assert_eq!(items.live(7).values().last().unwrap().amount, 30);
+        item.set_status(0);
+        assert_eq!(items.live(7).len(), 1);
+        assert_eq!(items.all(7).len(), 2);
+        items.set(
+            &1,
+            ConditionalItem {
+                status: 2,
+                ..first.clone()
+            },
+        );
+        assert_eq!(items.live(7).len(), 2);
+        items.set(&1, first);
+        assert_eq!(items.live(7).len(), 1);
+        assert!(items.remove(&1));
+        assert_eq!(items.live(7).len(), 1);
+        assert!(items.remove(&2));
+        assert!(items.live(7).is_empty());
+        assert!(items.all(7).is_empty());
+        assert!(!items.remove(&2));
     }
 
     // A struct value with one indexed field — the shape a Map holds.

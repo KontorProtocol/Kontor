@@ -56,6 +56,54 @@ One source supplies each index bucket to stdlib. Generated models no longer carr
 separate key, sorted, and covering scan implementations. Internal bucket adapters
 are not contract query APIs.
 
+## Conditional membership
+
+Add `when = matches!(field, Pattern)` when only some records belong in an index:
+
+```rust
+#[derive(Clone, Storage)]
+#[index(due, by = status, sort = deadline_height,
+    when = matches!(status, ChallengeStatus::Active | ChallengeStatus::Expired | ChallengeStatus::Failed | ChallengeStatus::Invalid))]
+struct Challenge {
+    status: ChallengeStatus,
+    deadline_height: u64,
+}
+```
+
+The primary record is always stored. The predicate controls only secondary-index
+membership, including its covering projection and bucket count. Existing query
+syntax stays the same; an excluded bucket is empty. Map insertion/replacement,
+removal and generated field setters all reconcile membership through the same
+index-diff routine. Updates to a predicate field count even if that field is not
+part of `by`, `sort` or `include`. Failed `try_update` closures write nothing.
+
+Predicates inspect exactly one field of the record. Use literals, qualified enum
+variants and `|` alternatives; option patterns such as `Option::Some(_)` are also
+supported. Bindings, guards, function calls and other-record dependencies are
+rejected. Qualifying variants prevents a misspelling becoming an always-matching
+binding. The prototype's tuple syntax is not supported.
+
+For WIT records, put `when` last and use the generated Rust field/type names
+inside `matches!` (the other field lists remain kebab-case):
+
+```rust
+contract!(name = "storage", indexed = "
+    challenge: due by status sort deadline-height
+        when matches!(status, ChallengeStatus::Active | ChallengeStatus::Expired | ChallengeStatus::Failed | ChallengeStatus::Invalid);
+");
+```
+
+This uses the same predicate parser as Rust declarations. Predicates do not
+change storage framing, the host ABI, or transaction/height rollback: index
+entries and counters remain ordinary versioned contract storage writes.
+
+Changing a predicate on an already populated index requires rebuilding its
+entries from primary records. Updating the declaration alone does not remove
+old entries or create missing ones. The native-contract changes in this branch
+target disposable pre-production state and require a fresh database/network
+reset; they do not provide an in-place migration. Retaining index IDs preserves
+their identity, not compatibility with old membership contents.
+
 ## Scalar map entries
 
 Use `.entries()` when both the key and its scalar value are needed:

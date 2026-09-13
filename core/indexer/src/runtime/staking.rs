@@ -7,6 +7,8 @@ mod reward_tests;
 mod slash_tests;
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod transition_costs;
 
 import!(
     name = "staking",
