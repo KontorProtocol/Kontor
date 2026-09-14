@@ -60,9 +60,7 @@ async fn initialization_fuel_has_a_platform_independent_boundary() -> Result<()>
         store.set_fuel(budget)?;
         let result = pre.instantiate_async(&mut store).await;
         if budget <= 7 {
-            let error = result
-                .err()
-                .expect("initialization must exhaust the budget");
+            let error = result.expect_err("initialization must exhaust the budget");
             assert!(matches!(
                 error.downcast_ref::<Trap>(),
                 Some(Trap::OutOfFuel)
