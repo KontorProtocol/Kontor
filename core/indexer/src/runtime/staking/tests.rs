@@ -1,4 +1,5 @@
 use anyhow::Result;
+use bitcoin::Network;
 use indexer_types::BlockRow;
 
 use super::api::{self, ActiveValidatorInfo, ValidatorStatus};
@@ -12,12 +13,275 @@ use crate::runtime::numerics::{add_decimal, sub_decimal};
 use crate::runtime::token::api as token;
 use crate::runtime::wit::Signer;
 use crate::runtime::wit::kontor::built_in::context::HolderRef;
-use crate::runtime::{Decimal, Error, GenesisValidator, Runtime};
+use crate::runtime::{
+    ComponentCache, Decimal, Error, GenesisParameters, GenesisValidator, Runtime, Storage,
+};
 use crate::test_utils::{
-    make_descriptor, new_mock_block_hash, test_runtime, test_runtime_with_genesis, valid_seed_field,
+    make_descriptor, new_mock_block_hash, new_test_db, test_genesis, test_runtime,
+    test_runtime_with_genesis, test_runtime_with_genesis_config, valid_seed_field,
 };
 
 const LIMIT: u64 = u64::MAX / 3;
+
+#[tokio::test]
+async fn genesis_floor_bootstrap_retries_and_preserves_later_updates() -> Result<()> {
+    let (_reader, writer, (_dir, _name)) = new_test_db().await?;
+    insert_block(
+        &writer.connection(),
+        BlockRow::builder()
+            .height(0)
+            .hash(new_mock_block_hash(0))
+            .relevant(true)
+            .build(),
+    )
+    .await?;
+    let storage = Storage::builder()
+        .height(0)
+        .conn(writer.connection())
+        .build();
+    let mut runtime = Runtime::new(ComponentCache::new(), storage).await?;
+    let mut genesis = GenesisParameters {
+        sigma_min: Decimal::default(),
+        validators: Vec::new(),
+    };
+    assert!(runtime.publish_native_contracts(&genesis).await.is_err());
+    assert_eq!(api::get_sigma_min(&mut runtime).await?, Decimal::default());
+    let signer = funded_signer(&mut runtime).await?;
+    api::add_stake(&mut runtime, &signer, Decimal::from("10")).await??;
+    assert_eq!(
+        api::register_validator(&mut runtime, &signer, vec![1; 32], Decimal::default()).await?,
+        Err(Error::Message(
+            "validator admission floor not initialized".into()
+        ))
+    );
+    genesis.sigma_min = Decimal::from("7");
+    runtime.publish_native_contracts(&genesis).await?;
+    assert_eq!(api::get_sigma_min(&mut runtime).await?, genesis.sigma_min);
+    api::register_validator(&mut runtime, &signer, vec![1; 32], Decimal::default()).await??;
+    let genesis_checkpoint = get_checkpoint_by_height(&writer.connection(), 0)
+        .await?
+        .unwrap();
+
+    advance(&mut runtime, 1).await?;
+    api::set_sigma_min(&mut runtime, &core(), Decimal::from("12")).await??;
+    drop(runtime);
+    let storage = Storage::builder()
+        .height(1)
+        .conn(writer.connection())
+        .build();
+    let mut runtime = Runtime::new(ComponentCache::new(), storage).await?;
+    genesis.sigma_min = Decimal::from("99");
+    runtime.publish_native_contracts(&genesis).await?;
+    assert_eq!(
+        get_checkpoint_by_height(&writer.connection(), 0).await?,
+        Some(genesis_checkpoint)
+    );
+    assert_eq!(api::get_sigma_min(&mut runtime).await?, Decimal::from("12"));
+    Ok(())
+}
+
+#[tokio::test]
+async fn admission_floor_comes_from_genesis_on_every_network() -> Result<()> {
+    for network in [
+        Network::Bitcoin,
+        Network::Testnet,
+        Network::Testnet4,
+        Network::Signet,
+        Network::Regtest,
+    ] {
+        for floor in ["1", "5000000"] {
+            let genesis = GenesisParameters {
+                sigma_min: Decimal::from(floor),
+                validators: Vec::new(),
+            };
+            let (mut runtime, _dir, _name) =
+                test_runtime_with_genesis_config(&genesis, network).await?;
+            assert_eq!(api::get_sigma_min(&mut runtime).await?, genesis.sigma_min);
+        }
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn admission_floor_counts_existing_bond_and_replays_atomically() -> Result<()> {
+    let genesis = GenesisParameters {
+        sigma_min: Decimal::from("5000000"),
+        validators: Vec::new(),
+    };
+    let (mut runtime, _dir, _name) =
+        test_runtime_with_genesis_config(&genesis, Network::Bitcoin).await?;
+    runtime.set_context(1, None, None, None).await;
+    assert_eq!(
+        api::get_sigma_min(&mut runtime).await?,
+        Decimal::from("5000000")
+    );
+    let signer = funded_signer(&mut runtime).await?;
+    token::issue_to(
+        &mut runtime,
+        &core(),
+        HolderRef::from(&signer),
+        Decimal::from("5000000"),
+    )
+    .await??;
+    let below = Decimal::from("4999999.999999999999999999");
+    assert_eq!(
+        api::register_validator(&mut runtime, &signer, vec![1; 32], below).await?,
+        Err(Error::Message("stake below minimum".into()))
+    );
+    assert!(api::get_stake(&mut runtime, &signer).await?.is_none());
+    assert_eq!(escrow(&mut runtime).await?, Decimal::default());
+    api::add_stake(&mut runtime, &signer, below).await??;
+    assert!(api::get_validator(&mut runtime, &signer).await?.is_none());
+    let balance = token::balance(&mut runtime, HolderRef::from(&signer))
+        .await?
+        .unwrap();
+    assert_eq!(
+        api::register_validator(&mut runtime, &signer, vec![1; 32], Decimal::default()).await?,
+        Err(Error::Message("stake below minimum".into()))
+    );
+    assert_eq!(escrow(&mut runtime).await?, below);
+    assert_eq!(
+        api::get_stake(&mut runtime, &signer).await?.unwrap().stake,
+        below
+    );
+    assert!(api::get_validator(&mut runtime, &signer).await?.is_none());
+    let fee = sub_decimal(
+        balance,
+        token::balance(&mut runtime, HolderRef::from(&signer))
+            .await?
+            .unwrap(),
+    )?;
+    assert!(fee >= Decimal::default() && fee < Decimal::from("1"));
+
+    for replay in 0..2 {
+        advance(&mut runtime, 2).await?;
+        let joined = api::register_validator(
+            &mut runtime,
+            &signer,
+            vec![1; 32],
+            Decimal::from("0.000000000000000001"),
+        )
+        .await??;
+        assert_eq!(joined.stake, Decimal::from("5000000"));
+        assert_eq!(joined.status, ValidatorStatus::PendingJoin);
+        assert_eq!(escrow(&mut runtime).await?, joined.stake);
+        if replay == 0 {
+            runtime.storage.rollback_with_footprint(1).await?;
+            runtime.set_context(1, None, None, None).await;
+            assert_eq!(escrow(&mut runtime).await?, below);
+            assert!(api::get_validator(&mut runtime, &signer).await?.is_none());
+        }
+    }
+    api::set_sigma_min(&mut runtime, &core(), Decimal::from("6000000")).await??;
+    advance(&mut runtime, 14).await?;
+    api::slash(
+        &mut runtime,
+        &core(),
+        match &signer {
+            Signer::Id(identity) => identity.signer_id(),
+            _ => unreachable!(),
+        },
+        Decimal::from("1"),
+    )
+    .await??;
+    let active = api::get_validator(&mut runtime, &signer).await?.unwrap();
+    assert_eq!(active.status, ValidatorStatus::Active);
+    assert_eq!(active.stake, Decimal::from("4999999"));
+    assert_eq!(
+        api::get_staking_info(&mut runtime).await?.total_stake,
+        active.stake
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn genesis_admission_exemption_does_not_survive_exit() -> Result<()> {
+    let genesis = GenesisParameters {
+        sigma_min: Decimal::from("5000000"),
+        validators: Vec::new(),
+    };
+    let (mut runtime, _dir, _name) =
+        test_runtime_with_genesis_config(&genesis, Network::Bitcoin).await?;
+    runtime.set_context(1, None, None, None).await;
+    let signer = funded_signer(&mut runtime).await?;
+    api::set_genesis_set(
+        &mut runtime,
+        &core(),
+        vec![validator(signer.to_string(), 1, Decimal::from("100"))],
+    )
+    .await?;
+    assert_eq!(api::get_active_set(&mut runtime).await?.len(), 1);
+    api::leave_validation(&mut runtime, &signer).await??;
+    advance(&mut runtime, 13).await?;
+    assert!(api::get_active_set(&mut runtime).await?.is_empty());
+    assert_eq!(
+        api::register_validator(&mut runtime, &signer, vec![2; 32], Decimal::default()).await?,
+        Err(Error::Message("stake below minimum".into()))
+    );
+    assert_eq!(escrow(&mut runtime).await?, Decimal::from("100"));
+    token::issue_to(
+        &mut runtime,
+        &core(),
+        HolderRef::from(&signer),
+        Decimal::from("5000000"),
+    )
+    .await??;
+    let joined =
+        api::register_validator(&mut runtime, &signer, vec![2; 32], Decimal::from("4999900"))
+            .await??;
+    assert_eq!(joined.stake, Decimal::from("5000000"));
+    assert_eq!(joined.status, ValidatorStatus::PendingJoin);
+    Ok(())
+}
+
+#[tokio::test]
+async fn admission_floor_updates_are_authorized_bounded_and_versioned() -> Result<()> {
+    let genesis = GenesisParameters {
+        sigma_min: Decimal::from("5000000"),
+        validators: Vec::new(),
+    };
+    let (mut runtime, _dir, _name) =
+        test_runtime_with_genesis_config(&genesis, Network::Bitcoin).await?;
+    runtime.set_context(1, None, None, None).await;
+    let signer = funded_signer(&mut runtime).await?;
+    assert!(
+        api::set_sigma_min(&mut runtime, &signer, Decimal::from("1"))
+            .await
+            .is_err()
+    );
+    for invalid in [
+        "-1",
+        "0",
+        "0.999999999999999999",
+        "1000000000.000000000000000001",
+    ] {
+        assert_eq!(
+            api::set_sigma_min(&mut runtime, &core(), Decimal::from(invalid)).await?,
+            Err(Error::Message(
+                "validator admission floor out of range".into()
+            ))
+        );
+        assert_eq!(
+            api::get_sigma_min(&mut runtime).await?,
+            Decimal::from("5000000")
+        );
+    }
+    advance(&mut runtime, 2).await?;
+    for valid in ["1", "1000000000", "5500000"] {
+        api::set_sigma_min(&mut runtime, &core(), Decimal::from(valid)).await??;
+        assert_eq!(
+            api::get_sigma_min(&mut runtime).await?,
+            Decimal::from(valid)
+        );
+    }
+    runtime.storage.rollback_with_footprint(1).await?;
+    runtime.set_context(1, None, None, None).await;
+    assert_eq!(
+        api::get_sigma_min(&mut runtime).await?,
+        Decimal::from("5000000")
+    );
+    Ok(())
+}
 
 fn assert_capacity_error<T>(result: Result<T, Error>) {
     let Err(Error::Message(message)) = result else {
@@ -386,7 +650,9 @@ async fn genesis_is_not_reissued_after_the_last_validator_exits() -> Result<()> 
         .await?
         .unwrap();
     // Startup republishes native contracts at height zero, even on an existing database.
-    runtime.publish_native_contracts(&validators).await?;
+    runtime
+        .publish_native_contracts(&test_genesis(&validators))
+        .await?;
     assert_eq!(
         get_checkpoint_by_height(&runtime.get_storage_conn(), 0).await?,
         Some(genesis_checkpoint)

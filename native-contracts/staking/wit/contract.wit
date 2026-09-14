@@ -61,6 +61,10 @@ world root {
   export withdraw-stake: async func(ctx: borrow<proc-context>) -> result<stake-info, error>;
   export get-stake: async func(ctx: borrow<view-context>, holder: string) -> option<stake-info>;
 
+  // Admission only: changing this floor does not eject existing validators.
+  export set-sigma-min: async func(ctx: borrow<core-context>, value: decimal) -> result<_, error>;
+  export get-sigma-min: async func(ctx: borrow<view-context>) -> decimal;
+
   // --- System initialization (CoreContext — called during native contract publishing) ---
   export set-genesis-set: async func(ctx: borrow<core-context>, validators: list<active-validator-info>);
 

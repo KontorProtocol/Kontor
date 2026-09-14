@@ -55,7 +55,7 @@ use crate::{
         },
     },
     runtime::{
-        ComponentCache, Decimal, Runtime, Storage, numerics::decimal_to_string,
+        ComponentCache, Decimal, GenesisParameters, Runtime, Storage, numerics::decimal_to_string,
         staking::api::get_active_set,
     },
     test_utils::new_mock_block_hash,
@@ -772,7 +772,7 @@ pub async fn create_runtime_executor(
     writer: &database::Writer,
     bitcoin_client: crate::bitcoin_client::Client,
     replay_tx: Option<mpsc::Sender<u64>>,
-    genesis_validators: &[crate::runtime::GenesisValidator],
+    genesis: &GenesisParameters,
     network: bitcoin::Network,
 ) -> Result<(executor::RuntimeExecutor, Runtime, u64, Option<BlockHash>)> {
     let conn = writer.connection();
@@ -848,7 +848,7 @@ pub async fn create_runtime_executor(
     // (e.g. token's dev mint is off at mainnet genesis).
     runtime.network = network;
     runtime
-        .publish_native_contracts(genesis_validators)
+        .publish_native_contracts(genesis)
         .await
         .context("Failed to publish native contracts")?;
 
@@ -917,7 +917,7 @@ pub fn run(
     engine_config: engine::EngineConfig,
     bitcoin_client: crate::bitcoin_client::Client,
     replay_tx: Option<mpsc::Sender<u64>>,
-    genesis_validators: Vec<crate::runtime::GenesisValidator>,
+    genesis: GenesisParameters,
     observation_channels: Option<consensus_state::ObservationChannels>,
     consensus_propose_timeout_ms: u64,
     fee_tx: Option<tokio::sync::watch::Sender<Fees>>,
@@ -939,7 +939,7 @@ pub fn run(
                         &writer,
                         bitcoin_client,
                         replay_tx,
-                        &genesis_validators,
+                        &genesis,
                         network,
                     )
                     .await

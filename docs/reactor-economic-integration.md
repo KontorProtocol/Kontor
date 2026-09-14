@@ -395,16 +395,36 @@ spec, same milestone as slashing:
 
 ## 8. σ_min gate (Decision 3, recorded)
 
-- `register_validator` requires `stake ≥ σ_min = 5,000,000 KOR`; the genesis set is exempt.
-  Re-derivation is ~30 lines against the current staking contract (the obsolete-base #453 is the
-  pattern; its `feat/ordering-rewards` base and 5M constant carry over, its σ/τ symbols do
-  not).
+- `register_validator` requires the existing bond plus the additional deposit to
+  meet `σ_min`. The shared genesis JSON must explicitly include a `sigma_min`
+  decimal string alongside `validators`. Production configuration uses
+  `"sigma_min": "5000000"`; regtest fixtures use `"sigma_min": "1"` for their
+  small faucet-funded balances. Contracts do not infer this policy from the
+  Bitcoin network. `kontor keygen ... validators` emits 5M by default and accepts
+  `--sigma-min` to choose another initial floor.
+- Bootstrap applies this parameter through the core-only setter while its stored
+  value is zero (uninitialized). Registration is blocked until that succeeds;
+  invalid configuration can be corrected and retried after partial publication.
+  Once configured, startup leaves it alone, preserving genesis history and later
+  parameter changes. Existing genesis files need the explicit field; pre-production
+  deployment uses the usual fresh-state/reset model.
+- Genesis admission is exempt from `σ_min`, but still requires at least 1 KOR of
+  voting stake and safe aggregate voting arithmetic. After exiting, a former
+  genesis validator must meet the current admission floor to register again.
+- The current implementation replaces #453's obsolete staking implementation.
+  `get_sigma_min` exposes the floor; core-only `set_sigma_min` accepts values from
+  1 through 1,000,000,000 KOR, the existing per-account registration maximum.
+  Updates use ordinary versioned contract storage. Raising the floor does not
+  cancel pending joins or eject active validators, and post-slash eligibility
+  continues to use the separate positive-voting-power minimum.
 - σ_min is **admin-window class** (Decision 1): price-coupled, tunable during the sunsetted
-  calibration window, immutable after sunset.
-- This proposed floor concerns validator registration only. Storage-only hosts do
-  not need a validator registration or its minimum stake; their collateral requirement
-  will come from storage commitments. Ordinary storage customers do not bond. The
-  current validator admission floor remains unchanged pending the separate σ_min work.
+  calibration window, immutable after sunset. This remains governance design:
+  the core-only setter does not implement the admin authorization, timelock or
+  sunset mechanism tracked by #463.
+- This floor concerns validator registration only. Storage-only hosts do
+  not need a validator registration or its minimum stake; their collateral requirements
+  come from storage commitments. Ordinary storage customers do not bond. The
+  admission rule does not change their collateral requirements.
 
 ## 9. Parameter table (Decision 1 — class-scoped governance)
 

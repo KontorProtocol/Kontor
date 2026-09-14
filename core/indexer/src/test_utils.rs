@@ -26,7 +26,10 @@ use crate::database::queries::insert_block;
 use crate::database::types::FileMeta;
 use crate::database::{Reader, Writer, queries};
 use crate::runtime::wit::prover_challenge_key;
-use crate::runtime::{ComponentCache, GenesisValidator, RawFileDescriptor, Runtime, Storage};
+use crate::runtime::{
+    ComponentCache, Decimal, GenesisParameters, GenesisValidator, RawFileDescriptor, Runtime,
+    Storage,
+};
 use kontor_crypto::{
     FileLedger, PorSystem,
     api::{self, Challenge, FieldElement},
@@ -377,7 +380,7 @@ async fn shared_test_engine() -> (wasmtime::Engine, Vec<PrewarmedComponent>) {
             .await
             .expect("runtime");
         runtime
-            .publish_native_contracts(&[])
+            .publish_native_contracts(&test_genesis(&[]))
             .await
             .expect("publish native");
 
@@ -401,10 +404,18 @@ pub async fn test_runtime() -> Result<(Runtime, TempDir, String)> {
     test_runtime_with_genesis(&[]).await
 }
 
+pub fn test_genesis(validators: &[GenesisValidator]) -> GenesisParameters {
+    GenesisParameters {
+        sigma_min: Decimal::from("1"),
+        validators: validators.to_vec(),
+    }
+}
+
 pub async fn test_runtime_with_genesis(
     genesis_validators: &[GenesisValidator],
 ) -> Result<(Runtime, TempDir, String)> {
-    test_runtime_inner(genesis_validators, bitcoin::Network::Regtest).await
+    test_runtime_with_genesis_config(&test_genesis(genesis_validators), bitcoin::Network::Regtest)
+        .await
 }
 
 /// Like [`test_runtime`] but runs contract `init` under a specific network, so
@@ -413,11 +424,11 @@ pub async fn test_runtime_with_genesis(
 pub async fn test_runtime_with_network(
     network: bitcoin::Network,
 ) -> Result<(Runtime, TempDir, String)> {
-    test_runtime_inner(&[], network).await
+    test_runtime_with_genesis_config(&test_genesis(&[]), network).await
 }
 
-async fn test_runtime_inner(
-    genesis_validators: &[GenesisValidator],
+pub async fn test_runtime_with_genesis_config(
+    genesis: &GenesisParameters,
     network: bitcoin::Network,
 ) -> Result<(Runtime, TempDir, String)> {
     let (_reader, writer, (db_dir, db_name)) = new_test_db().await?;
@@ -452,7 +463,7 @@ async fn test_runtime_inner(
     let mut runtime = Runtime::new_with(engine, linkers, cache, storage).await?;
     // Set before publish so contract `init` sees it (the `network()` built-in).
     runtime.network = network;
-    runtime.publish_native_contracts(genesis_validators).await?;
+    runtime.publish_native_contracts(genesis).await?;
 
     Ok((runtime, db_dir, db_name))
 }

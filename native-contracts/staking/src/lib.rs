@@ -55,7 +55,8 @@ fn make_stake_info(entry: &StakeAccountModel<context::ViewStorage>) -> StakeInfo
 
 #[derive(Clone, Default, StorageRoot)]
 struct StakingStorage {
-    pub min_stake: Decimal,
+    // Zero until bootstrap applies genesis parameters; the setter rejects zero.
+    pub sigma_min: Decimal,
     pub accounts: Map<Holder, StakeAccount>,
     pub total_active_stake: Decimal,
     pub last_reward_height: Option<u64>,
@@ -245,10 +246,7 @@ impl Guest for Staking {
     }
 
     fn init(ctx: &ProcContext) -> Contract {
-        let storage = StakingStorage::default();
-        storage.init(ctx);
-        let model = ctx.model();
-        model.set_min_stake(MIN_VOTING_STAKE.try_into().unwrap());
+        StakingStorage::default().init(ctx);
         ctx.contract()
     }
 
@@ -288,7 +286,13 @@ impl Guest for Staking {
             .map(|entry| entry.stake())
             .unwrap_or(zero)
             .add(stake_amount)?;
-        if stake < model.min_stake() {
+        let sigma_min = model.sigma_min();
+        if sigma_min == Decimal::default() {
+            return Err(Error::Message(
+                "validator admission floor not initialized".into(),
+            ));
+        }
+        if stake < sigma_min {
             return Err(Error::Message("stake below minimum".to_string()));
         }
         if stake > MAX_STAKE.try_into().unwrap() {
@@ -483,6 +487,20 @@ impl Guest for Staking {
         let holder: Holder = holder.parse().ok()?;
         let entry = ctx.model().accounts().get(&holder)?;
         Some(make_stake_info(&entry))
+    }
+
+    fn set_sigma_min(ctx: &CoreContext, value: Decimal) -> Result<(), Error> {
+        if value < MIN_VOTING_STAKE.try_into()? || value > MAX_STAKE.try_into()? {
+            return Err(Error::Message(
+                "validator admission floor out of range".into(),
+            ));
+        }
+        ctx.proc_context().model().set_sigma_min(value);
+        Ok(())
+    }
+
+    fn get_sigma_min(ctx: &ViewContext) -> Decimal {
+        ctx.model().sigma_min()
     }
 
     fn set_genesis_set(ctx: &CoreContext, validators: Vec<ActiveValidatorInfo>) {

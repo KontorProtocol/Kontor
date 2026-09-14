@@ -13,7 +13,9 @@ use crate::reactor::executor::{Executor, TxPolicy};
 use crate::reactor::mock_bitcoin::MockBitcoin;
 use crate::runtime::wit::Signer;
 use crate::runtime::{ComponentCache, ContractAddress, Runtime, Storage, TransactionContext};
-use crate::test_utils::{new_mock_block_hash, new_mock_transaction, new_test_db_dir, open_test_db};
+use crate::test_utils::{
+    new_mock_block_hash, new_mock_transaction, new_test_db_dir, open_test_db, test_genesis,
+};
 use futures_util::future::BoxFuture;
 use indexer_types::{BlockRow, TransactionRow};
 use testlib::ContractReader;
@@ -130,7 +132,9 @@ impl LiteExecutor {
         let storage = Storage::builder().height(0).conn(conn).build();
         let linkers = Runtime::new_linkers(&engine)?;
         let mut runtime = Runtime::new_with(engine, linkers, component_cache, storage).await?;
-        runtime.publish_native_contracts(genesis_validators).await?;
+        runtime
+            .publish_native_contracts(&test_genesis(genesis_validators))
+            .await?;
 
         let identity = runtime.get_or_create_identity(&shared_pubkey).await?;
         let signer = Signer::Id(identity);
