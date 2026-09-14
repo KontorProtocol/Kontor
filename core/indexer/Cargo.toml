@@ -15,6 +15,7 @@ path = "src/main.rs"
 workspace = true
 
 [dependencies]
+kontor-build = { path = "../kontor-build" }
 stdlib = { path = "../stdlib" }
 built-in-types = { path = "../built-in-types", features = ["host"] }
 macros = { path = "../macros" }

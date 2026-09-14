@@ -1,0 +1,19 @@
+{
+  "platform": "linux/arm64",
+  "image": "docker.io/kontorprotocol/kontor-build@sha256:4396b2d20c1163e5474fc973fb894c3b4575310676444e47e5d71c78004e9a4e",
+  "node": {
+    "version": "22.23.2",
+    "url": "https://nodejs.org/dist/v22.23.2/node-v22.23.2-linux-arm64.tar.gz",
+    "sha256": "013b59cfd2819703a6f4a14ab891fc46fc2a4e3f5bcd92de3fb4929b43e35b30"
+  },
+  "wasm_tools": {
+    "version": "1.259.0",
+    "url": "https://github.com/bytecodealliance/wasm-tools/releases/download/v1.259.0/wasm-tools-1.259.0-aarch64-linux.tar.gz",
+    "sha256": "9e1644f3841f2b783dd8af82de054667388e46689806fba4909ed45f3182800f"
+  },
+  "wasi_sdk": {
+    "version": "34.0",
+    "url": "https://github.com/WebAssembly/wasi-sdk/releases/download/wasi-sdk-34/wasi-sdk-34.0-arm64-linux.tar.gz",
+    "sha256": "f7e243dff54d60bcc576e94d6166b69f410f2500ae4a9ceef34315be10e77971"
+  }
+}

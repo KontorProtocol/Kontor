@@ -3828,6 +3828,7 @@ dependencies = [
  "hkdf",
  "indexer-types",
  "indexmap",
+ "kontor-build",
  "kontor-crypto",
  "libsql",
  "macros",
@@ -4136,6 +4137,18 @@ checksum = "9e24a010dd405bd7ed803e5253182815b41bf2e6a80cc3bfc066658e03a198aa"
 dependencies = [
  "cfg-if",
  "cpufeatures 0.3.0",
+]
+
+[[package]]
+name = "kontor-build"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "clap",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "tempfile",
 ]
 
 [[package]]

@@ -52,7 +52,7 @@
     }
   },
   "scripts": {
-    "build:rs": "cd ../core/kontor-sdk-wasm && ./build.sh",
+    "build:rs": "../tools/kontor build sdk",
     "build:ts": "vite build",
     "build:native": "KONTOR_TARGET=native vite build",
     "build": "npm run build:ts && npm run build:native",
@@ -65,10 +65,10 @@
     "format:check": "prettier --check ."
   },
   "devDependencies": {
-    "@bytecodealliance/jco": "^1.19.0",
+    "@bytecodealliance/jco": "1.20.0",
     "@types/node": "^25.8.0",
     "@vitest/browser-playwright": "^4.1.6",
-    "prettier": "^3.8.3",
+    "prettier": "3.8.3",
     "typescript": "^6.0.3",
     "vite": "^8.0.13",
     "vite-plugin-dts": "^5.0.0",

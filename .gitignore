@@ -1,6 +1,6 @@
 .envrc
 **/target
-# Persisted CARGO_HOME for the pinned contract build image (tools/build-contracts.sh).
+# Caches and staged outputs for kontor build.
 /.build-cache
 **/.DS_Store
 **/cert.pem
@@ -17,3 +17,5 @@
 **/node_modules
 
 .claude
+
+/core/indexer-types/bindings/

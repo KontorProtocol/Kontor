@@ -22,6 +22,6 @@ fn main() {
     built::write_built_file().expect("Failed to acquire build-time information");
     build_protos();
     // Test contracts are committed, container-built artifacts
-    // (test-contracts/binaries/, see tools/build-contracts.sh), so neither
+    // (test-contracts/binaries/, see tools/kontor build), so neither
     // production nor test builds compile wasm — no wasm32 toolchain/wasm-opt.
 }

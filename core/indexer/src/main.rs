@@ -17,6 +17,7 @@ use indexer::stopper::{self, Shutdown};
 use indexer::{api, block, built_info, reactor, reg_tester, runtime};
 use indexer::{bitcoin_client, bitcoin_follower, config::Config, database, logging};
 use indexer_types::{Inst, InstKind};
+use kontor_build::{BuildArgs, run as build};
 use tokio::signal::unix::{SignalKind, signal};
 use tokio::sync::{mpsc, oneshot};
 use tokio::task::JoinHandle;
@@ -36,6 +37,8 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Command {
+    /// Build reproducible contracts and SDK bindings in the pinned container.
+    Build(BuildArgs),
     /// Run the indexer daemon.
     Run(Box<Config>),
     /// Generate validator keys deterministically from a master seed.
@@ -50,6 +53,7 @@ enum Command {
 async fn main() -> Result<()> {
     let cli = Cli::parse();
     match cli.command {
+        Command::Build(args) => build(args),
         Command::Run(config) => run_daemon(*config).await,
         Command::Keygen(args) => keygen::run(args),
         Command::Regtest => run_regtest().await,

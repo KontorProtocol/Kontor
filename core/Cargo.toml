@@ -7,6 +7,7 @@ members = [
     "kontor-sdk",
     "kontor-sdk-native",
     "kontor-sdk-wasm",
+    "kontor-build",
     "macros",
     "numerics",
     "stdlib",

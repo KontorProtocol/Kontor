@@ -1,27 +1,6 @@
-# Pinned, reproducible build image for Kontor contracts.
-#
-# Contract wasm bytes are a function of the build environment (CPU arch + build
-# path + tool versions), not just the source, so byte-identical output is only
-# guaranteed inside a FIXED environment: this image, at the fixed WORKDIR /build,
-# on a fixed arch. There is no single "canonical" arch — each committed set records
-# the arch that built it in binaries/build.json (NEP-330 style), and CI verifies on
-# a matching runner. The image is published multi-arch so any arch can be
-# reproduced natively (different arches yield different bytes — cargo bakes the arch
-# into crate metadata).
-#
-# Published on push to main as docker.io/kontorprotocol/kontor-build:<rustc>.
-# Use (workspaces are passed as arguments to the in-image build script):
-#   docker run --rm -v "$PWD:/build" -w /build \
-#     kontorprotocol/kontor-build:1.96.0 \
-#     bash tools/build-in-image.sh native-contracts test-contracts
-# Locally, tools/build-contracts.sh builds this image and runs the above for you.
-#
-# Every wasm-affecting input is pinned: rustc by the base image digest, wasm-opt
-# by the binaryen version + sha below, brotli by an exact apt version. The base is
-# pinned by @sha256 (the multi-arch manifest-list digest, so it still resolves to
-# the right per-arch image) — CI rebuilds this image every run, so a tag alone
-# would silently drift the toolchain if Docker Hub re-tagged it. The tag is kept
-# alongside the digest for human readability; bump both together.
+# Publish this image, then pin its digest in tools/build.json. Builds use that
+# published image, not a locally rebuilt substitute. SDK tool archives are
+# separately checksum-pinned in tools/build.json.
 FROM rust:1.96.0-slim-bookworm@sha256:4732ca96fd086cb9be682050c3f0176288eebaac2b80aa2bcefccfaf198e1950
 
 # Pinned binaryen release providing wasm-opt. Both the cargo toolchain and the
@@ -31,11 +10,8 @@ ARG BINARYEN_VERSION=version_130
 ARG BINARYEN_SHA256_X86_64=0a18362361ad05465118cd8eeb72edaeec89de6894bc283576ef4e07aa3babcc
 ARG BINARYEN_SHA256_AARCH64=e6ae6e09ac40f4e14bc5be6f687c58e2995c84170013975fa641809dd3b480a0
 
-# brotli pinned to an exact apt version — compression output can change between
-# brotli releases, and CI rebuilds this image every run, so an unpinned package
-# would silently drift the committed bytes. curl + ca-certificates only fetch the
-# wasm-opt tarball; no C/C++ toolchain — nothing is compiled. (If apt ever drops
-# this exact version, bump it here and regenerate.)
+# Compression output depends on brotli's exact version. Republish and regenerate
+# if Debian drops this package version.
 RUN apt-get update \
  && apt-get install -y --no-install-recommends brotli=1.0.9-2+b6 curl ca-certificates \
  && rm -rf /var/lib/apt/lists/*
@@ -61,11 +37,6 @@ RUN set -eux; \
     wasm-opt --version
 
 RUN rustup target add wasm32-unknown-unknown
-
-# Marker the contract build script checks for: it refuses to run outside this
-# image (where host tool versions would make the output non-reproducible). The
-# blessed entrypoint is tools/build-contracts.sh, which runs it in here.
-ENV KONTOR_BUILD_IMAGE=1
 
 # Fixed WORKDIR: the build path is part of the wasm's identity (cargo bakes it into
 # the metadata/StableCrateId), so every build must happen here for reproducibility.
