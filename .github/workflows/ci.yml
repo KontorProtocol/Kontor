@@ -125,6 +125,12 @@ jobs:
       # is still required by the stdlib macro-expansion tests.
       - name: Install cargo expand
         run: cargo binstall cargo-expand --no-confirm
+      - name: Check memory initialization fuel across platforms
+        working-directory: ./core
+        run: >-
+          cargo test --locked --release -p indexer --lib
+          runtime::fuel::profiling_tests::memory_initialization_fuel_matches_linux_baseline
+          -- --exact --nocapture
       - name: Run tests
         id: tests
         working-directory: ./core

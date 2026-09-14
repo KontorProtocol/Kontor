@@ -1,8 +1,8 @@
-use std::time::Instant;
+use std::{env::consts, time::Instant};
 
 use anyhow::Result;
 use serde_json::json;
-use wasmtime::Trap;
+use wasmtime::{Instance, Module, Store, Trap};
 
 use super::{Fuel, FuelGauge};
 use crate::database::queries::get_checkpoint_by_height;
@@ -14,6 +14,41 @@ use crate::runtime::wit::Signer;
 use crate::runtime::wit::kontor::built_in::context::HolderRef;
 use crate::runtime::{Decimal, ExecutionError, Runtime};
 use crate::test_utils::test_runtime;
+
+#[test]
+fn memory_initialization_fuel_matches_linux_baseline() -> Result<()> {
+    let engine = Runtime::new_engine()?;
+    // No imports, start function, or function calls: only generated memory initialization.
+    let module = Module::new(
+        &engine,
+        r#"(module (memory (export "memory") 1) (data (i32.const 0) "hello"))"#,
+    )?;
+    let mut outcomes = Vec::new();
+    for budget in [1_000_000, 1_000] {
+        let mut store = Store::new(&engine, ());
+        store.set_fuel(budget)?;
+        let outcome = match Instance::new(&mut store, &module, &[]) {
+            Ok(instance) => {
+                let memory = instance.get_memory(&mut store, "memory").unwrap();
+                assert_eq!(&memory.data(&store)[..5], b"hello");
+                Ok(budget - store.get_fuel()?)
+            }
+            Err(error) => Err(format!("{error:#}")),
+        };
+        println!(
+            "memory initialization: os={} arch={} budget={budget} outcome={outcome:?}",
+            consts::OS,
+            consts::ARCH,
+        );
+        outcomes.push(outcome);
+    }
+    assert_eq!(
+        outcomes,
+        [Ok(0), Ok(0)],
+        "identical Wasm and runtime settings must match the Linux fuel baseline"
+    );
+    Ok(())
+}
 
 #[tokio::test]
 async fn host_fuel_exhaustion_is_an_out_of_fuel_trap() -> Result<()> {
