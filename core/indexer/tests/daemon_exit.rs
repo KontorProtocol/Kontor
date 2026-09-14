@@ -22,10 +22,11 @@ fn a_fatal_startup_error_exits_nonzero_with_the_cause() {
     let taken = TcpListener::bind("0.0.0.0:0").expect("pre-bind a port");
     let port = taken.local_addr().expect("local addr").port();
     let data_dir = tempfile::tempdir().expect("tempdir");
-    // Clap requires it; the bind failure fires before it is ever read, so an
-    // empty validator set is enough.
+    // Genesis parsing can race the API failure; keep this valid so only the
+    // port conflict can cause startup to fail.
     let genesis_path = data_dir.path().join("genesis.json");
-    std::fs::write(&genesis_path, r#"{"validators":[]}"#).expect("write genesis");
+    std::fs::write(&genesis_path, r#"{"sigma_min":"1","validators":[]}"#)
+        .expect("write genesis");
 
     let mut child = Command::new(env!("CARGO_BIN_EXE_kontor"))
         .args([
