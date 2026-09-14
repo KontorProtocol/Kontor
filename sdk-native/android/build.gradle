@@ -76,7 +76,12 @@ android {
     }
     externalNativeBuild {
       cmake {
-        arguments '-DANDROID_STL=c++_shared'
+        // Google Play requires 16 KB page-size support. The Rust core ships
+        // prebuilt 16 KB-aligned, but this JNI/JSI adapter is compiled on the
+        // consumer's machine, and NDK r27 still links at 4 KB by default.
+        // React Native only passes this flag to the app's own CMake project,
+        // never to a library's, so it has to be set here.
+        arguments '-DANDROID_STL=c++_shared', '-DANDROID_SUPPORT_FLEXIBLE_PAGE_SIZES=ON'
         abiFilters (*reactNativeArchitectures())
       }
     }
