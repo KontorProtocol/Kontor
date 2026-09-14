@@ -395,16 +395,30 @@ spec, same milestone as slashing:
 
 ## 8. σ_min gate (Decision 3, recorded)
 
-- `register_validator` requires `stake ≥ σ_min = 5,000,000 KOR`; the genesis set is exempt.
-  Re-derivation is ~30 lines against the current staking contract (the obsolete-base #453 is the
-  pattern; its `feat/ordering-rewards` base and 5M constant carry over, its σ/τ symbols do
-  not).
+- `register_validator` requires the existing bond plus the additional deposit to
+  meet `σ_min`. The default is 5,000,000 KOR on mainnet, testnet and signet; regtest
+  initializes the same parameter to 1 KOR for its small faucet-funded fixtures.
+  All networks use the same registration and lifecycle logic.
+  Defaults are applied at initial publication; upgrading binaries does not
+  overwrite an existing stored floor. Pre-production deployment uses the usual
+  fresh-state/reset model.
+- Genesis admission is exempt from `σ_min`, but still requires at least 1 KOR of
+  voting stake and safe aggregate voting arithmetic. After exiting, a former
+  genesis validator must meet the current admission floor to register again.
+- The current implementation replaces #453's obsolete staking implementation.
+  `get_sigma_min` exposes the floor; core-only `set_sigma_min` accepts values from
+  1 through 1,000,000,000 KOR, the existing per-account registration maximum.
+  Updates use ordinary versioned contract storage. Raising the floor does not
+  cancel pending joins or eject active validators, and post-slash eligibility
+  continues to use the separate positive-voting-power minimum.
 - σ_min is **admin-window class** (Decision 1): price-coupled, tunable during the sunsetted
-  calibration window, immutable after sunset.
-- This proposed floor concerns validator registration only. Storage-only hosts do
-  not need a validator registration or its minimum stake; their collateral requirement
-  will come from storage commitments. Ordinary storage customers do not bond. The
-  current validator admission floor remains unchanged pending the separate σ_min work.
+  calibration window, immutable after sunset. This remains governance design:
+  the core-only setter does not implement the admin authorization, timelock or
+  sunset mechanism tracked by #463.
+- This floor concerns validator registration only. Storage-only hosts do
+  not need a validator registration or its minimum stake; their collateral requirements
+  come from storage commitments. Ordinary storage customers do not bond. The
+  admission rule does not change their collateral requirements.
 
 ## 9. Parameter table (Decision 1 — class-scoped governance)
 

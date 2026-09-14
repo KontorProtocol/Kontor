@@ -23,6 +23,7 @@ const ACTIVATION_DELAY: u64 = 12; // 2 * FINALITY_WINDOW (6)
 // Outstanding storage obligations can extend this minimum indefinitely.
 const WITHDRAWAL_DELAY: u64 = 2016 + ACTIVATION_DELAY;
 const MAX_STAKE: u64 = 1_000_000_000;
+const DEFAULT_SIGMA_MIN: u64 = 5_000_000;
 // Consensus voting power truncates to whole KOR; smaller bonds can only back storage.
 const MIN_VOTING_STAKE: u64 = 1;
 // Malachite's default thresholds multiply observed voting power by three.
@@ -55,7 +56,7 @@ fn make_stake_info(entry: &StakeAccountModel<context::ViewStorage>) -> StakeInfo
 
 #[derive(Clone, Default, StorageRoot)]
 struct StakingStorage {
-    pub min_stake: Decimal,
+    pub sigma_min: Decimal,
     pub accounts: Map<Holder, StakeAccount>,
     pub total_active_stake: Decimal,
     pub last_reward_height: Option<u64>,
@@ -248,7 +249,13 @@ impl Guest for Staking {
         let storage = StakingStorage::default();
         storage.init(ctx);
         let model = ctx.model();
-        model.set_min_stake(MIN_VOTING_STAKE.try_into().unwrap());
+        // Regtest's small faucet balances must still support validator lifecycle tests.
+        let sigma_min = if ctx.network().is_regtest() {
+            MIN_VOTING_STAKE
+        } else {
+            DEFAULT_SIGMA_MIN
+        };
+        model.set_sigma_min(sigma_min.try_into().unwrap());
         ctx.contract()
     }
 
@@ -288,7 +295,7 @@ impl Guest for Staking {
             .map(|entry| entry.stake())
             .unwrap_or(zero)
             .add(stake_amount)?;
-        if stake < model.min_stake() {
+        if stake < model.sigma_min() {
             return Err(Error::Message("stake below minimum".to_string()));
         }
         if stake > MAX_STAKE.try_into().unwrap() {
@@ -483,6 +490,20 @@ impl Guest for Staking {
         let holder: Holder = holder.parse().ok()?;
         let entry = ctx.model().accounts().get(&holder)?;
         Some(make_stake_info(&entry))
+    }
+
+    fn set_sigma_min(ctx: &CoreContext, value: Decimal) -> Result<(), Error> {
+        if value < MIN_VOTING_STAKE.try_into()? || value > MAX_STAKE.try_into()? {
+            return Err(Error::Message(
+                "validator admission floor out of range".into(),
+            ));
+        }
+        ctx.proc_context().model().set_sigma_min(value);
+        Ok(())
+    }
+
+    fn get_sigma_min(ctx: &ViewContext) -> Decimal {
+        ctx.model().sigma_min()
     }
 
     fn set_genesis_set(ctx: &CoreContext, validators: Vec<ActiveValidatorInfo>) {
