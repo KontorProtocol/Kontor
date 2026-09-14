@@ -12,6 +12,9 @@ use wasmtime::{
 
 use crate::runtime::Runtime;
 
+#[cfg(test)]
+mod profiling_tests;
+
 #[derive(Debug, Clone, EnumDiscriminants, EnumIter)]
 #[strum_discriminants(derive(Hash))]
 pub enum Fuel {

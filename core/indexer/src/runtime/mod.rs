@@ -322,7 +322,8 @@ impl Runtime {
             id_generation_counter: Counter::new(),
             result_id_counter: Counter::new(),
             stack: Stack::new(),
-            gauge: Some(FuelGauge::new()),
+            // Diagnostic tracing is opt-in; fuel enforcement does not use the gauge.
+            gauge: None,
             deposit: DepositMeter::new(),
             gas_limit_for_non_procs: 100_000,
             // The pool overrides this from node config on read-only runtimes; the
