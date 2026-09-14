@@ -4,7 +4,7 @@ use super::ExecutionError;
 use futures_util::FutureExt;
 use futures_util::future::OptionFuture;
 use wasmtime::{
-    AsContext, AsContextMut, Store,
+    AsContext, AsContextMut, Store, Trap,
     component::{
         Accessor, Func, Resource, Val,
         wasm_wave::{
@@ -146,15 +146,22 @@ impl Runtime {
         // Import resolution (`instantiate_pre`) is a pure function of the
         // component bytes and the linker — identical on every node — so a link
         // failure (e.g. a user contract importing a native-only interface) is
-        // DETERMINISTIC: reject the op, don't shut the node down. Only the
-        // actual instantiation step can fail for non-deterministic infra reasons.
+        // DETERMINISTIC: reject the op, don't shut the node down. Instantiation
+        // also executes Wasm initialization, whose traps are deterministic;
+        // non-trap instantiation failures remain infrastructure errors.
         let instance_pre = linker
             .instantiate_pre(&component)
             .map_err(|e| ExecutionError::Deterministic(e.into()))?;
         let instance = instance_pre
             .instantiate_async(&mut store)
             .await
-            .map_err(|e| ExecutionError::NonDeterministic(e.into()))?;
+            .map_err(|e| {
+                if e.downcast_ref::<Trap>().is_some() {
+                    ExecutionError::Deterministic(e.into())
+                } else {
+                    ExecutionError::NonDeterministic(e.into())
+                }
+            })?;
         let fallback_name = "fallback";
         let fallback_expr = format!(
             "{}({})",

@@ -8,7 +8,7 @@ use super::{Fuel, FuelGauge};
 use crate::database::queries::get_checkpoint_by_height;
 use crate::reg_tester::random_x_only_pubkey;
 use crate::runtime::numerics::sub_decimal;
-use crate::runtime::staking::api as staking;
+use crate::runtime::staking::{address as staking_address, api as staking};
 use crate::runtime::token::api as token;
 use crate::runtime::wit::Signer;
 use crate::runtime::wit::kontor::built_in::context::HolderRef;
@@ -36,6 +36,24 @@ async fn host_fuel_exhaustion_is_an_out_of_fuel_trap() -> Result<()> {
         0
     );
     assert_eq!(store.get_fuel()?, 0);
+    Ok(())
+}
+
+#[tokio::test]
+async fn initialization_fuel_exhaustion_is_deterministic() -> Result<()> {
+    let (runtime, _dir, _name) = test_runtime().await?;
+    let err = runtime
+        .prepare_call(&staking_address(), None, None, "total-staked()", Some(0))
+        .await
+        .err()
+        .expect("initialization must exhaust a zero fuel budget");
+    match err {
+        ExecutionError::Deterministic(e) => {
+            assert!(matches!(e.downcast_ref::<Trap>(), Some(Trap::OutOfFuel)));
+        }
+        other => panic!("unexpected initialization failure: {other:#}"),
+    }
+    assert!(runtime.stack.is_empty().await);
     Ok(())
 }
 
