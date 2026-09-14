@@ -4,6 +4,8 @@
 .github
 
 # Build artifacts
+.build-cache/
+**/node_modules/
 target/
 **/target/
 *.wasm

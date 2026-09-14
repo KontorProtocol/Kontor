@@ -1,0 +1,7 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+# Avoid inheriting a contract workspace's wasm target when bootstrapping the host CLI.
+cd "$repo_root/core"
+exec cargo run --locked --quiet -j 2 -p kontor-build -- "$@"

@@ -2,7 +2,7 @@ name: Publish Build Image
 
 # The pinned contract-build image (tools/kontor-build.Dockerfile). Runs manually
 # (workflow_dispatch, any branch) so its registry digest can be captured + pinned
-# into binaries/build.json, and automatically on main when the Dockerfile changes.
+# into tools/build.json, and automatically on main when the Dockerfile changes.
 on:
   workflow_dispatch:
   push:
@@ -56,9 +56,9 @@ jobs:
           {
             echo "### Published \`$ref\`"
             echo ""
-            echo "Pin this in binaries/build.json:"
+            echo "Pin this in tools/build.json:"
             echo "\`\`\`"
-            echo "kontorprotocol/kontor-build@${{ steps.build.outputs.digest }}"
+            echo "docker.io/kontorprotocol/kontor-build@${{ steps.build.outputs.digest }}"
             echo "\`\`\`"
           } >> "$GITHUB_STEP_SUMMARY"
           echo "digest: kontorprotocol/kontor-build@${{ steps.build.outputs.digest }}"

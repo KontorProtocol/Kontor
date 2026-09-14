@@ -1,0 +1,29 @@
+{
+  "archives": {
+    "node": {
+      "sha256": "013b59cfd2819703a6f4a14ab891fc46fc2a4e3f5bcd92de3fb4929b43e35b30",
+      "url": "https://nodejs.org/dist/v22.23.2/node-v22.23.2-linux-arm64.tar.gz",
+      "version": "22.23.2"
+    },
+    "wasi_sdk": {
+      "sha256": "f7e243dff54d60bcc576e94d6166b69f410f2500ae4a9ceef34315be10e77971",
+      "url": "https://github.com/WebAssembly/wasi-sdk/releases/download/wasi-sdk-34/wasi-sdk-34.0-arm64-linux.tar.gz",
+      "version": "34.0"
+    },
+    "wasm_tools": {
+      "sha256": "9e1644f3841f2b783dd8af82de054667388e46689806fba4909ed45f3182800f",
+      "url": "https://github.com/bytecodealliance/wasm-tools/releases/download/v1.259.0/wasm-tools-1.259.0-aarch64-linux.tar.gz",
+      "version": "1.259.0"
+    }
+  },
+  "brotli": "brotli 1.0.9",
+  "clang": "clang version 23.1.0-wasi-sdk (https://github.com/llvm/llvm-project 895aa2c896ada719451be2e3673c83da8ddf1141)\nTarget: wasm32-unknown-wasip1\nThread model: posix\nInstalledDir: /build/.build-cache/tools/f7e243dff54d60bcc576e94d6166b69f410f2500ae4a9ceef34315be10e77971/bin\nConfiguration file: /build/.build-cache/tools/f7e243dff54d60bcc576e94d6166b69f410f2500ae4a9ceef34315be10e77971/bin/clang.cfg",
+  "image": "docker.io/kontorprotocol/kontor-build@sha256:4396b2d20c1163e5474fc973fb894c3b4575310676444e47e5d71c78004e9a4e",
+  "jco": "1.20.0",
+  "node": "v22.23.2",
+  "npm_lock_sha256": "148f116084ee5daa0223bc40cee31343e470fb787efe5044608ebcf55c32c89b",
+  "platform": "linux/arm64",
+  "rustc": "rustc 1.96.0 (ac68faa20 2026-05-25)",
+  "wasm_opt": "wasm-opt version 130 (version_130)",
+  "wasm_tools": "wasm-tools 1.259.0 (7fc33f279 2026-09-10)"
+}

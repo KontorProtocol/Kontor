@@ -1,20 +1,13 @@
-# Test contract fixtures — committed, reproducible
+# Test contract fixtures
 
-These `.wasm.br` are the compiled test contracts that `cargo test` loads
-(`testlib::ContractReader` globs them here). They are **committed and
-reproducible** rather than built on the fly, so:
-
-- `cargo test` compiles no wasm — no wasm32 toolchain or wasm-opt on the host,
-  and the macOS CI runner (which can't run Docker) just reads these bytes.
-- they're built by the same pinned image as the genesis contracts, recorded in
-  [`build.json`](build.json), and the `reproducible-build` CI job rebuilds and
-  diffs them on every PR.
-
-After editing a test contract, regenerate and commit:
+These committed `.wasm.br` files are loaded by `testlib::ContractReader`.
+Rust tests use them directly, including on macOS, without compiling Wasm.
 
 ```sh
-tools/build-contracts.sh
+./tools/kontor build test
+./tools/kontor build test --check
 ```
 
-See [`../../native-contracts/binaries/BUILD.md`](../../native-contracts/binaries/BUILD.md)
-for the full provenance / reproduce / bump details — the model is identical.
+Run from the repository root and commit regenerated binaries and `build.json`.
+CI verifies them with the same [shared pinned build](../../tools/BUILD.md) as
+native contracts and SDK outputs.

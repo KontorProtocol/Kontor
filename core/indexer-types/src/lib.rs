@@ -40,7 +40,7 @@ pub use wit_bindgen;
 /// A complete description of a Kontor reveal tx. Used by `compose`,
 /// `compose_commit`, and `compose_reveal`.
 #[derive(Serialize, Deserialize, Clone, Builder, TS)]
-#[ts(export, export_to = "../../../sdk/src/bindings.d.ts")]
+#[ts(export, export_to = "bindings.d.ts")]
 pub struct Reveal {
     /// Optional: when omitted, the server falls back to its currently
     /// published `fastest_fee` (sat/vB) from `/api/fees`.
@@ -57,7 +57,7 @@ pub struct Reveal {
 /// the output paired with it (placed at the same index, which BIP-341
 /// SIGHASH_SINGLE pre-signed signatures commit to).
 #[derive(Serialize, Deserialize, Clone, Builder, TS)]
-#[ts(export, export_to = "../../../sdk/src/bindings.d.ts")]
+#[ts(export, export_to = "bindings.d.ts")]
 pub struct RevealParticipant {
     pub x_only_public_key: String,
     pub commit_insts: Insts,
@@ -146,7 +146,7 @@ impl RevealOutput {
 /// Whether this participant's commit already exists on chain or needs
 /// to be built by this call.
 #[derive(Serialize, Deserialize, Clone, TS)]
-#[ts(export, export_to = "../../../sdk/src/bindings.d.ts")]
+#[ts(export, export_to = "bindings.d.ts")]
 pub enum CommitSource {
     /// The commit already exists. Caller supplies the outpoint + prevout.
     Existing {
@@ -162,7 +162,7 @@ pub enum CommitSource {
 
 /// Funding UTXOs for a commit that compose must build.
 #[derive(Serialize, Deserialize, Clone, TS)]
-#[ts(export, export_to = "../../../sdk/src/bindings.d.ts")]
+#[ts(export, export_to = "bindings.d.ts")]
 pub enum Funding {
     /// Outpoints only (`"txid:vout"`). Compose resolves each prevout via
     /// bitcoind `getrawtransaction`.
@@ -190,7 +190,7 @@ impl Funding {
 /// A funding UTXO whose prevout the caller already holds. Mirrors the
 /// `CommitSource::Existing` outpoint+prevout pattern.
 #[derive(Serialize, Deserialize, Clone, TS)]
-#[ts(export, export_to = "../../../sdk/src/bindings.d.ts")]
+#[ts(export, export_to = "bindings.d.ts")]
 pub struct FundingUtxo {
     #[ts(as = "String")]
     pub outpoint: bitcoin::OutPoint,
@@ -213,7 +213,7 @@ impl From<FundingUtxo> for (bitcoin::OutPoint, bitcoin::TxOut) {
 /// A non-Kontor input (key-path spend) bringing extra value into the
 /// reveal — beyond what the tap-leaf participants contribute.
 #[derive(Serialize, Deserialize, Clone, TS)]
-#[ts(export, export_to = "../../../sdk/src/bindings.d.ts")]
+#[ts(export, export_to = "bindings.d.ts")]
 pub struct ExtraInput {
     #[ts(as = "String")]
     pub outpoint: bitcoin::OutPoint,
@@ -231,7 +231,7 @@ pub struct ExtraInput {
 /// Change would be sub-dust (skipping it would shift later outputs and
 /// break SACP positioning).
 #[derive(Serialize, Deserialize, Clone, TS)]
-#[ts(export, export_to = "../../../sdk/src/bindings.d.ts")]
+#[ts(export, export_to = "bindings.d.ts")]
 pub enum RevealOutput {
     /// Fixed-value output. Caller specifies the exact value.
     Fixed {
@@ -259,7 +259,7 @@ pub enum RevealOutput {
 /// one entry per `CommitSource::Build` participant in the input `Reveal`,
 /// in participant order.
 #[derive(Serialize, Deserialize, Builder, Clone, TS)]
-#[ts(export, export_to = "../../../sdk/src/bindings.d.ts")]
+#[ts(export, export_to = "bindings.d.ts")]
 pub struct CommitTx {
     #[ts(as = "String")]
     pub transaction: bitcoin::Transaction,
@@ -284,7 +284,7 @@ pub struct CommitTx {
 /// commit). The caller signs + broadcasts the commits, then later passes
 /// the returned `reveal` to `compose_reveal` to build the reveal PSBT.
 #[derive(Serialize, Deserialize, Builder, Clone, TS)]
-#[ts(export, export_to = "../../../sdk/src/bindings.d.ts")]
+#[ts(export, export_to = "bindings.d.ts")]
 pub struct CommitOutputs {
     pub commits: Vec<CommitTx>,
     pub reveal: Reveal,
@@ -295,14 +295,14 @@ pub struct CommitOutputs {
 /// signs the reveal's tap-script-spend inputs (using
 /// `RevealOutputs.commit_tap_leaf_scripts`), and broadcasts the package.
 #[derive(Serialize, Deserialize, TS)]
-#[ts(export, export_to = "../../../sdk/src/bindings.d.ts")]
+#[ts(export, export_to = "bindings.d.ts")]
 pub struct ComposeOutputs {
     pub commits: Vec<CommitTx>,
     pub reveal: RevealOutputs,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, TS)]
-#[ts(export, export_to = "../../../sdk/src/bindings.d.ts")]
+#[ts(export, export_to = "bindings.d.ts")]
 pub struct TapLeafScript {
     #[ts(type = "number")]
     #[serde(rename = "leafVersion")]
@@ -315,7 +315,7 @@ pub struct TapLeafScript {
 }
 
 #[derive(Serialize, Deserialize, TS)]
-#[ts(export, export_to = "../../../sdk/src/bindings.d.ts")]
+#[ts(export, export_to = "bindings.d.ts")]
 pub struct TxOutSchema {
     #[ts(type = "number")]
     pub value: u64,
@@ -323,7 +323,7 @@ pub struct TxOutSchema {
 }
 
 #[derive(Builder, Serialize, Deserialize, TS)]
-#[ts(export, export_to = "../../../sdk/src/bindings.d.ts")]
+#[ts(export, export_to = "bindings.d.ts")]
 pub struct RevealOutputs {
     #[ts(as = "String")]
     pub transaction: bitcoin::Transaction,
@@ -349,7 +349,7 @@ pub struct RevealOutputs {
 /// hex; `ChainedEnvelope` additionally carries the tap leaf script the
 /// chained output commits to (the future spender needs it).
 #[derive(Serialize, Deserialize, Clone, TS)]
-#[ts(export, export_to = "../../../sdk/src/bindings.d.ts")]
+#[ts(export, export_to = "bindings.d.ts")]
 pub enum RevealOutputInfo {
     Fixed {
         #[ts(type = "number")]
@@ -372,7 +372,7 @@ pub enum RevealOutputInfo {
 /// hex in dependency order (e.g. `[commit, reveal]`), relayed to bitcoind
 /// as a single `submitpackage`.
 #[derive(Debug, Serialize, Deserialize, TS)]
-#[ts(export, export_to = "../../../sdk/src/bindings.d.ts")]
+#[ts(export, export_to = "bindings.d.ts")]
 pub struct BroadcastQuery {
     pub transactions: Vec<String>,
 }
@@ -381,19 +381,19 @@ pub struct BroadcastQuery {
 /// transaction in the package — the reveal, which carries the Kontor op
 /// and is what callers wait on for results.
 #[derive(Debug, Serialize, Deserialize, TS)]
-#[ts(export, export_to = "../../../sdk/src/bindings.d.ts")]
+#[ts(export, export_to = "bindings.d.ts")]
 pub struct BroadcastResult {
     pub txid: String,
 }
 
 #[derive(Debug, Serialize, Deserialize, TS)]
-#[ts(export, export_to = "../../../sdk/src/bindings.d.ts")]
+#[ts(export, export_to = "bindings.d.ts")]
 pub struct ErrorResponse {
     pub error: String,
 }
 
 #[derive(Debug, Serialize, Deserialize, TS)]
-#[ts(export, export_to = "../../../sdk/src/bindings.d.ts")]
+#[ts(export, export_to = "bindings.d.ts")]
 pub struct ResultResponse<T: TS> {
     pub result: T,
 }
@@ -410,7 +410,7 @@ pub enum Event {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
-#[ts(export, export_to = "../../../sdk/src/bindings.d.ts")]
+#[ts(export, export_to = "bindings.d.ts")]
 pub struct Input {
     #[ts(as = "String")]
     pub previous_output: bitcoin::OutPoint,
@@ -421,7 +421,7 @@ pub struct Input {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
-#[ts(export, export_to = "../../../sdk/src/bindings.d.ts")]
+#[ts(export, export_to = "bindings.d.ts")]
 pub struct Transaction {
     #[ts(type = "string")]
     pub txid: Txid,
@@ -435,7 +435,7 @@ pub struct Transaction {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, TS)]
-#[ts(export, export_to = "../../../sdk/src/bindings.d.ts")]
+#[ts(export, export_to = "bindings.d.ts")]
 pub struct Block {
     #[ts(type = "number")]
     pub height: u64,
@@ -447,14 +447,14 @@ pub struct Block {
 }
 
 #[derive(Debug, Clone, Hash, PartialEq, Eq, Serialize, Deserialize, TS)]
-#[ts(export, export_to = "../../../sdk/src/bindings.d.ts")]
+#[ts(export, export_to = "bindings.d.ts")]
 pub struct OutPoint {
     pub txid: String,
     pub vout: u32,
 }
 
 #[derive(Debug, Clone, Hash, Serialize, Deserialize, TS)]
-#[ts(export, export_to = "../../../sdk/src/bindings.d.ts")]
+#[ts(export, export_to = "bindings.d.ts")]
 pub enum HolderRef {
     XOnlyPubkey(String),
     SignerId(#[ts(type = "number")] u64),
@@ -478,7 +478,7 @@ impl core::fmt::Display for OutPoint {
 pub use built_in_types::context_types::ContractAddress;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
-#[ts(export, export_to = "../../../sdk/src/bindings.d.ts")]
+#[ts(export, export_to = "bindings.d.ts")]
 pub struct OpMetadata {
     #[ts(as = "String")]
     pub previous_output: bitcoin::OutPoint,
@@ -507,7 +507,7 @@ pub struct OpMetadata {
 /// — the field exists for shape uniformity, not because Issuance funds
 /// itself.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
-#[ts(export, export_to = "../../../sdk/src/bindings.d.ts")]
+#[ts(export, export_to = "bindings.d.ts")]
 pub struct Payment {
     #[ts(type = "number")]
     pub signer_id: u64,
@@ -516,7 +516,7 @@ pub struct Payment {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
-#[ts(export, export_to = "../../../sdk/src/bindings.d.ts")]
+#[ts(export, export_to = "bindings.d.ts")]
 pub struct AggregateInfo {
     /// One entry per op in `Insts.ops`, in parallel order. Binds each
     /// co-signer claim (existing `signer_id` or fresh x-only `PubKey`)
@@ -531,7 +531,7 @@ pub struct AggregateInfo {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
-#[ts(export, export_to = "../../../sdk/src/bindings.d.ts")]
+#[ts(export, export_to = "bindings.d.ts")]
 pub struct AggregateSigner {
     pub identity: SignerRef,
     #[ts(type = "number")]
@@ -555,7 +555,7 @@ pub struct AggregateSigner {
 /// which variant is chosen — the variant only controls how to *index*
 /// the verification key, not which key.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
-#[ts(export, export_to = "../../../sdk/src/bindings.d.ts")]
+#[ts(export, export_to = "bindings.d.ts")]
 pub enum SignerRef {
     SignerId(#[ts(type = "number")] u64),
     XOnlyPubkey(#[ts(as = "String")] XOnlyPublicKey),
@@ -584,7 +584,7 @@ impl From<SignerRef> for HolderRef {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
-#[ts(export, export_to = "../../../sdk/src/bindings.d.ts")]
+#[ts(export, export_to = "bindings.d.ts")]
 pub struct Insts {
     pub ops: Vec<Inst>,
     pub aggregate: Option<AggregateInfo>,
@@ -608,7 +608,7 @@ impl Insts {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
-#[ts(export, export_to = "../../../sdk/src/bindings.d.ts")]
+#[ts(export, export_to = "bindings.d.ts")]
 pub struct Op {
     pub metadata: OpMetadata,
     pub kind: OpKind,
@@ -616,7 +616,7 @@ pub struct Op {
 
 #[serde_as]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
-#[ts(export, export_to = "../../../sdk/src/bindings.d.ts")]
+#[ts(export, export_to = "bindings.d.ts")]
 pub enum OpKind {
     Publish {
         name: String,
@@ -653,7 +653,7 @@ pub enum OpKind {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
-#[ts(export, export_to = "../../../sdk/src/bindings.d.ts")]
+#[ts(export, export_to = "bindings.d.ts")]
 pub struct CheckpointRow {
     #[ts(type = "number")]
     pub height: u64,
@@ -661,7 +661,7 @@ pub struct CheckpointRow {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Builder, TS)]
-#[ts(export, export_to = "../../../sdk/src/bindings.d.ts")]
+#[ts(export, export_to = "bindings.d.ts")]
 pub struct BlockRow {
     #[ts(type = "number")]
     pub height: u64,
@@ -682,7 +682,7 @@ impl From<&Block> for BlockRow {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Builder, TS)]
-#[ts(export, export_to = "../../../sdk/src/bindings.d.ts")]
+#[ts(export, export_to = "bindings.d.ts")]
 pub struct TransactionRow {
     #[ts(type = "number")]
     #[builder(default = 0)]
@@ -698,7 +698,7 @@ pub struct TransactionRow {
 }
 
 #[derive(Eq, PartialEq, Debug, Clone, Serialize, Deserialize, TS)]
-#[ts(export, export_to = "../../../sdk/src/bindings.d.ts")]
+#[ts(export, export_to = "bindings.d.ts")]
 pub struct ContractListRow {
     #[ts(type = "number")]
     pub id: u64,
@@ -714,7 +714,7 @@ pub struct ContractListRow {
 
 #[serde_as]
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
-#[ts(export, export_to = "../../../sdk/src/bindings.d.ts")]
+#[ts(export, export_to = "bindings.d.ts")]
 pub struct PaginationMeta {
     #[ts(as = "String")]
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -729,7 +729,7 @@ pub struct PaginationMeta {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
-#[ts(export, export_to = "../../../sdk/src/bindings.d.ts")]
+#[ts(export, export_to = "bindings.d.ts")]
 pub struct PaginatedResponse<T> {
     pub results: Vec<T>,
     pub pagination: PaginationMeta,
@@ -743,7 +743,7 @@ pub struct PaginatedResponse<T> {
 #[derive(
     Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, TS, clap::ValueEnum,
 )]
-#[ts(export, export_to = "../../../sdk/src/bindings.d.ts")]
+#[ts(export, export_to = "bindings.d.ts")]
 #[serde(rename_all = "lowercase")]
 pub enum ConsensusMode {
     /// Signs votes and proposals.
@@ -756,7 +756,7 @@ pub enum ConsensusMode {
 /// One entry in `Info::recent_blocks` — a `BlockRow` trimmed to the
 /// fields the SDK needs for reorg detection (no `relevant` flag).
 #[derive(Debug, Clone, Eq, PartialEq, Deserialize, Serialize, TS)]
-#[ts(export, export_to = "../../../sdk/src/bindings.d.ts")]
+#[ts(export, export_to = "bindings.d.ts")]
 pub struct RecentBlock {
     #[ts(type = "number")]
     pub height: u64,
@@ -765,7 +765,7 @@ pub struct RecentBlock {
 }
 
 #[derive(Debug, Eq, PartialEq, Deserialize, Serialize, TS)]
-#[ts(export, export_to = "../../../sdk/src/bindings.d.ts")]
+#[ts(export, export_to = "bindings.d.ts")]
 pub struct Info {
     pub version: String,
     pub target: String,
@@ -790,13 +790,13 @@ pub struct Info {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
-#[ts(export, export_to = "../../../sdk/src/bindings.d.ts")]
+#[ts(export, export_to = "bindings.d.ts")]
 pub struct TransactionHex {
     pub hex: String,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Deserialize, Serialize, TS)]
-#[ts(export, export_to = "../../../sdk/src/bindings.d.ts")]
+#[ts(export, export_to = "bindings.d.ts")]
 pub struct Fees {
     /// Recommended fee rate (sat/vB) to land in the next ~1 block.
     #[ts(type = "number")]
@@ -830,7 +830,7 @@ impl Fees {
 /// `error_message` populated only on the `/transactions/simulate` endpoint;
 /// `/inspect` always leaves it `None` since error strings aren't persisted.
 #[derive(Eq, PartialEq, Debug, Clone, Serialize, Deserialize, TS)]
-#[ts(export, export_to = "../../../sdk/src/bindings.d.ts")]
+#[ts(export, export_to = "bindings.d.ts")]
 #[serde(tag = "kind")]
 #[allow(clippy::large_enum_variant)]
 pub enum OpWithResult {
@@ -884,13 +884,13 @@ impl OpWithResult {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
-#[ts(export, export_to = "../../../sdk/src/bindings.d.ts")]
+#[ts(export, export_to = "bindings.d.ts")]
 pub struct ViewExpr {
     pub expr: String,
 }
 
 #[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize, TS)]
-#[ts(export, export_to = "../../../sdk/src/bindings.d.ts")]
+#[ts(export, export_to = "bindings.d.ts")]
 #[serde(tag = "type")]
 pub enum ViewResult {
     Ok { value: String },
@@ -898,7 +898,7 @@ pub enum ViewResult {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
-#[ts(export, export_to = "../../../sdk/src/bindings.d.ts")]
+#[ts(export, export_to = "bindings.d.ts")]
 pub struct ContractResponse {
     pub wit: String,
 }
@@ -915,7 +915,7 @@ pub struct ContractResponse {
 ///   uncommon for rows that get inserted — pre-execution rejections like
 ///   parse errors / contract-not-found don't reach `handle_procedure`).
 #[derive(Debug, Clone, Copy, Eq, PartialEq, Serialize, Deserialize, TS)]
-#[ts(export, export_to = "../../../sdk/src/bindings.d.ts")]
+#[ts(export, export_to = "bindings.d.ts")]
 pub enum OpStatus {
     Ok,
     ContractErr,
@@ -937,7 +937,7 @@ impl OpStatus {
 }
 
 #[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize, TS)]
-#[ts(export, export_to = "../../../sdk/src/bindings.d.ts")]
+#[ts(export, export_to = "bindings.d.ts")]
 pub struct ResultRow {
     #[ts(type = "number")]
     pub id: u64,
@@ -967,7 +967,7 @@ pub struct ResultRow {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
-#[ts(export, export_to = "../../../sdk/src/bindings.d.ts")]
+#[ts(export, export_to = "bindings.d.ts")]
 pub struct Inst {
     /// Gas cap for this op. Self-pay default — the input's signer is
     /// charged up to this amount.
@@ -1002,7 +1002,7 @@ pub struct Inst {
 /// carries the host string for self-hosted forges (Gitea, self-hosted
 /// GitLab, …) so required provenance never blocks them.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
-#[ts(export, export_to = "../../../sdk/src/bindings.d.ts")]
+#[ts(export, export_to = "bindings.d.ts")]
 pub enum Forge {
     GitHub,
     GitLab,
@@ -1014,7 +1014,7 @@ pub enum Forge {
 /// A git commit hash — SHA-1 today, SHA-256 as git migrates. Raw bytes,
 /// rendered as a number array in the TS bindings (like other byte fields).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
-#[ts(export, export_to = "../../../sdk/src/bindings.d.ts")]
+#[ts(export, export_to = "bindings.d.ts")]
 pub enum CommitId {
     Sha1(#[ts(as = "Vec<u8>")] [u8; 20]),
     Sha256(#[ts(as = "Vec<u8>")] [u8; 32]),
@@ -1022,7 +1022,7 @@ pub enum CommitId {
 
 /// The source a contract was built from: a specific commit in a repo.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
-#[ts(export, export_to = "../../../sdk/src/bindings.d.ts")]
+#[ts(export, export_to = "bindings.d.ts")]
 pub struct Source {
     pub forge: Forge,
     pub owner: String,
@@ -1034,7 +1034,7 @@ pub struct Source {
 /// different wasm per arch (cargo bakes the arch into crate metadata), so this is
 /// part of the build identity — the image tag alone doesn't pin it.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
-#[ts(export, export_to = "../../../sdk/src/bindings.d.ts")]
+#[ts(export, export_to = "bindings.d.ts")]
 pub enum Platform {
     LinuxAmd64,
     LinuxArm64,
@@ -1068,7 +1068,7 @@ impl core::fmt::Display for Platform {
 /// (`source`), the pinned build environment (`image`, an OCI ref with digest,
 /// e.g. `registry/name@sha256:…`), and the `platform` it was built on.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
-#[ts(export, export_to = "../../../sdk/src/bindings.d.ts")]
+#[ts(export, export_to = "bindings.d.ts")]
 pub struct BuildProvenance {
     pub source: Source,
     pub image: String,
@@ -1077,7 +1077,7 @@ pub struct BuildProvenance {
 
 /// One decoded entry from a contract's provenance log, for API responses.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
-#[ts(export, export_to = "../../../sdk/src/bindings.d.ts")]
+#[ts(export, export_to = "bindings.d.ts")]
 pub struct ProvenanceEntry {
     #[ts(type = "number")]
     pub height: u64,
@@ -1092,7 +1092,7 @@ pub struct ProvenanceEntry {
 /// A contract's full append-only provenance log, oldest first — the last entry
 /// is the current claim, earlier ones are the audit trail.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
-#[ts(export, export_to = "../../../sdk/src/bindings.d.ts")]
+#[ts(export, export_to = "bindings.d.ts")]
 pub struct ContractProvenanceResponse {
     pub entries: Vec<ProvenanceEntry>,
 }
@@ -1182,7 +1182,7 @@ impl BuildProvenance {
 
 #[serde_as]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
-#[ts(export, export_to = "../../../sdk/src/bindings.d.ts")]
+#[ts(export, export_to = "bindings.d.ts")]
 pub enum InstKind {
     Publish {
         name: String,
@@ -1296,7 +1296,7 @@ pub fn insts_bytes_to_json(bytes: Vec<u8>) -> Result<String, String> {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
-#[ts(export, export_to = "../../../sdk/src/bindings.d.ts")]
+#[ts(export, export_to = "bindings.d.ts")]
 pub struct SignerResponse {
     #[ts(type = "number")]
     pub signer_id: u64,
@@ -1313,7 +1313,7 @@ pub struct SignerResponse {
 /// other contracts' storage). `total_deposit` is `Σ` of `by_contract` and equals
 /// the floor the signer's balance must stay above.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
-#[ts(export, export_to = "../../../sdk/src/bindings.d.ts")]
+#[ts(export, export_to = "bindings.d.ts")]
 pub struct FootprintResponse {
     #[ts(type = "number")]
     pub signer_id: u64,
@@ -1326,7 +1326,7 @@ pub struct FootprintResponse {
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
-#[ts(export, export_to = "../../../sdk/src/bindings.d.ts")]
+#[ts(export, export_to = "bindings.d.ts")]
 pub struct ContractFootprint {
     #[ts(type = "number")]
     pub contract_id: u64,

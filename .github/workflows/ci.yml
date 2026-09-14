@@ -128,7 +128,7 @@ jobs:
       - name: Run tests
         id: tests
         working-directory: ./core
-        run: REGTEST=1 cargo test --release --workspace
+        run: REGTEST=1 cargo test --release --workspace -- --nocapture
       - name: Preserve macOS crash reports
         if: failure() && steps.tests.outcome == 'failure' && runner.os == 'macOS'
         uses: actions/upload-artifact@v4
@@ -144,10 +144,7 @@ jobs:
           if-no-files-found: warn
           retention-days: 14
 
-  # The committed genesis binaries are self-describing: binaries/build.json
-  # records the platform that produced them. Resolve it to a matching runner so
-  # the gate rebuilds NATIVELY on that arch (no emulation), wherever the binaries
-  # were last built.
+  # Match the canonical platform used by both local generation and CI.
   reproducible-build-setup:
     name: Reproducible Build (resolve runner)
     runs-on: ubuntu-latest
@@ -158,7 +155,7 @@ jobs:
       - uses: actions/checkout@v4
       - id: resolve
         run: |
-          platform=$(jq -r .platform native-contracts/binaries/build.json)
+          platform=$(jq -r .platform tools/build.json)
           case "$platform" in
             linux/amd64) runner=ubuntu-latest ;;
             linux/arm64) runner=ubuntu-24.04-arm ;;
@@ -168,47 +165,26 @@ jobs:
           echo "runner=$runner" >> "$GITHUB_OUTPUT"
 
   reproducible-build:
-    name: Reproducible Contract Build (${{ needs.reproducible-build-setup.outputs.platform }})
+    name: Reproducible Contracts & SDK (${{ needs.reproducible-build-setup.outputs.platform }})
     needs: reproducible-build-setup
     runs-on: ${{ needs.reproducible-build-setup.outputs.runner }}
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
-      # The build image pins every input wasm bytes depend on (rustc by base tag,
-      # wasm-opt by binaryen version+sha, brotli by exact apt version) and its
-      # fixed /build WORKDIR pins the build path; on the resolved native runner the
-      # arch matches too, so the output is a pure function of the source.
-      - name: Build the pinned build image
-        # No context (Dockerfile piped on stdin) — it has no COPY, needs no files.
-        run: docker build -t kontor-build:ci - < tools/kontor-build.Dockerfile
-      - name: Rebuild contracts in the image
-        # Both committed sets (native genesis + test fixtures) are gated.
-        run: |
-          docker run --rm -v "$PWD:/build" -w /build \
-            kontor-build:ci bash tools/build-in-image.sh native-contracts test-contracts
-      # Surface the freshly-built artifacts regardless of outcome: on failure to
-      # diff against, on success as the set to commit when regenerating.
-      - name: Upload rebuilt binaries
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Rebuild and verify contracts and SDK
+        env:
+          # The lightweight bootstrap does not need the node's sccache setup.
+          RUSTC_WRAPPER: ""
+        run: ./tools/kontor build --check --runtime docker
+      - name: Upload staged outputs
         if: always()
         uses: actions/upload-artifact@v6
         with:
-          name: contract-binaries
-          path: |
-            native-contracts/binaries/*.wasm.br
-            test-contracts/binaries/*.wasm.br
+          name: generated-contracts-and-sdk
+          path: .build-cache/generated/
+          include-hidden-files: true
           if-no-files-found: error
-      - name: Assert binaries reproduce bit-for-bit
-        # `git diff --exit-code` ignores untracked files, so a newly added
-        # contract's uncommitted .wasm.br would slip through. git status --porcelain
-        # catches additions, modifications, and deletions alike.
-        run: |
-          changed="$(git status --porcelain -- native-contracts/binaries/ test-contracts/binaries/)"
-          if [ -n "$changed" ]; then
-            echo "Committed binaries do not match a fresh build (incl. untracked):"
-            echo "$changed"
-            git diff -- native-contracts/binaries/ test-contracts/binaries/ || true
-            exit 1
-          fi
 
   sdk:
     name: SDK
@@ -217,10 +193,12 @@ jobs:
       - uses: actions/checkout@v4
       # Node + format check first, so a formatting violation fails in
       # seconds rather than after the release `cargo build`.
+      - id: sdk-node
+        run: echo "version=$(jq -r .node.version tools/build.json)" >> "$GITHUB_OUTPUT"
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: "22"
+          node-version: ${{ steps.sdk-node.outputs.version }}
       - name: Install SDK dependencies
         run: npm ci
         working-directory: ./sdk

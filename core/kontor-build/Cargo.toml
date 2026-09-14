@@ -1,0 +1,17 @@
+[package]
+name = "kontor-build"
+version = "0.1.0"
+edition = "2024"
+
+[lints]
+workspace = true
+
+[dependencies]
+anyhow = { workspace = true, features = ["std"] }
+clap = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true, features = ["std"] }
+sha2 = "=0.10.9"
+
+[dev-dependencies]
+tempfile = { workspace = true }
