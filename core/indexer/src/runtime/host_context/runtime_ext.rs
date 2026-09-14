@@ -15,9 +15,7 @@ use crate::runtime::{ExecutionError, Runtime, fuel::Fuel, hash_bytes};
 
 impl Runtime {
     pub(super) async fn _generate_id<T>(&self, accessor: &Accessor<T, Self>) -> Result<String> {
-        Fuel::CryptoGenerateId
-            .consume(accessor, self.gauge.as_ref())
-            .await?;
+        Fuel::CryptoGenerateId.consume(accessor)?;
         let count = self.id_generation_counter.get().await;
         self.id_generation_counter.increment().await;
         Ok(hex::encode(
@@ -41,9 +39,7 @@ impl Runtime {
         accessor: &Accessor<T, Self>,
         self_: Resource<Signer>,
     ) -> Result<String> {
-        Fuel::SignerToString
-            .consume(accessor, self.gauge.as_ref())
-            .await?;
+        Fuel::SignerToString.consume(accessor)?;
         Ok(self.table.lock().await.get(&self_)?.to_string())
     }
 
@@ -52,9 +48,7 @@ impl Runtime {
         accessor: &Accessor<T, Self>,
         self_: Resource<ProcContext>,
     ) -> Result<Resource<Signer>> {
-        Fuel::ProcSigner
-            .consume(accessor, self.gauge.as_ref())
-            .await?;
+        Fuel::ProcSigner.consume(accessor)?;
         let mut table = self.table.lock().await;
         let signer = table.get(&self_)?.signer.clone();
         Ok(table.push(signer)?)
@@ -65,9 +59,7 @@ impl Runtime {
         accessor: &Accessor<T, Self>,
         self_: Resource<ProcContext>,
     ) -> Result<Resource<Holder>> {
-        Fuel::ProcPayer
-            .consume(accessor, self.gauge.as_ref())
-            .await?;
+        Fuel::ProcPayer.consume(accessor)?;
         let mut table = self.table.lock().await;
         let payer = table.get(&self_)?.payer.clone();
         Ok(table.push(payer)?)
@@ -87,7 +79,7 @@ impl Runtime {
     where
         C: HasContractId,
     {
-        fuel.consume(accessor, self.gauge.as_ref()).await?;
+        fuel.consume(accessor)?;
         let contract_id = {
             let table = self.table.lock().await;
             table.get(&self_)?.get_contract_id()
@@ -106,9 +98,7 @@ impl Runtime {
         accessor: &Accessor<T, Self>,
         self_: Resource<ProcContext>,
     ) -> Result<Resource<Signer>> {
-        Fuel::ProcContractSigner
-            .consume(accessor, self.gauge.as_ref())
-            .await?;
+        Fuel::ProcContractSigner.consume(accessor)?;
         let contract_id = {
             let table = self.table.lock().await;
             table.get(&self_)?.contract_id
@@ -128,9 +118,7 @@ impl Runtime {
         accessor: &Accessor<T, Self>,
         _: Resource<ProcContext>,
     ) -> Result<Resource<Transaction>> {
-        Fuel::ProcTransaction
-            .consume(accessor, self.gauge.as_ref())
-            .await?;
+        Fuel::ProcTransaction.consume(accessor)?;
         let mut table = self.table.lock().await;
         Ok(table.push(Transaction {})?)
     }
@@ -140,9 +128,7 @@ impl Runtime {
         accessor: &Accessor<T, Self>,
         self_: Resource<ProcContext>,
     ) -> Result<Resource<ViewContext>> {
-        Fuel::ProcViewContext
-            .consume(accessor, self.gauge.as_ref())
-            .await?;
+        Fuel::ProcViewContext.consume(accessor)?;
         let mut table = self.table.lock().await;
         let contract_id = table.get(&self_)?.contract_id;
         Ok(table.push(ViewContext { contract_id })?)
@@ -153,9 +139,7 @@ impl Runtime {
         accessor: &Accessor<T, Self>,
         self_: Resource<ProcStorage>,
     ) -> Result<Resource<ViewStorage>> {
-        Fuel::ProcViewContext
-            .consume(accessor, self.gauge.as_ref())
-            .await?;
+        Fuel::ProcViewContext.consume(accessor)?;
         let mut table = self.table.lock().await;
         let contract_id = table.get(&self_)?.contract_id;
         Ok(table.push(ViewStorage { contract_id })?)
@@ -166,9 +150,7 @@ impl Runtime {
         accessor: &Accessor<T, Self>,
         self_: Resource<ViewContext>,
     ) -> Result<Resource<ViewStorage>> {
-        Fuel::ViewStorage
-            .consume(accessor, self.gauge.as_ref())
-            .await?;
+        Fuel::ViewStorage.consume(accessor)?;
         let mut table = self.table.lock().await;
         let contract_id = table.get(&self_)?.contract_id;
         Ok(table.push(ViewStorage { contract_id })?)
@@ -179,9 +161,7 @@ impl Runtime {
         accessor: &Accessor<T, Self>,
         self_: Resource<ProcContext>,
     ) -> Result<Resource<ProcStorage>> {
-        Fuel::ProcStorage
-            .consume(accessor, self.gauge.as_ref())
-            .await?;
+        Fuel::ProcStorage.consume(accessor)?;
         let mut table = self.table.lock().await;
         let contract_id = table.get(&self_)?.contract_id;
         Ok(table.push(ProcStorage { contract_id })?)
@@ -203,9 +183,7 @@ impl Runtime {
             .transpose()?;
         if let Some(bytes) = &k {
             tracing::trace!("keys.next() returned {} bytes", bytes.len());
-            Fuel::KeysNext(bytes.len() as u64)
-                .consume(accessor, self.gauge.as_ref())
-                .await?;
+            Fuel::KeysNext(bytes.len() as u64).consume(accessor)?;
         }
         // The child key's codec element bytes; the guest decodes it.
         Ok(k)
@@ -235,9 +213,7 @@ impl Runtime {
             Some((member, raw_value)) => {
                 // Meter member + the raw value bytes read from the log (a covering read
                 // pays for the projection it returns, not just the member).
-                Fuel::KeysNext((member.len() + raw_value.len()) as u64)
-                    .consume(accessor, self.gauge.as_ref())
-                    .await?;
+                Fuel::KeysNext((member.len() + raw_value.len()) as u64).consume(accessor)?;
                 Ok(Some((member, decode_storage_value(&raw_value)?)))
             }
             None => Ok(None),
@@ -249,9 +225,7 @@ impl Runtime {
         accessor: &Accessor<T, Self>,
         self_: Resource<FallContext>,
     ) -> Result<Option<Resource<Signer>>> {
-        Fuel::FallSigner
-            .consume(accessor, self.gauge.as_ref())
-            .await?;
+        Fuel::FallSigner.consume(accessor)?;
         let mut table = self.table.lock().await;
         Ok(table
             .get(&self_)?
@@ -266,9 +240,7 @@ impl Runtime {
         accessor: &Accessor<T, Self>,
         self_: Resource<FallContext>,
     ) -> Result<Option<Resource<Holder>>> {
-        Fuel::FallPayer
-            .consume(accessor, self.gauge.as_ref())
-            .await?;
+        Fuel::FallPayer.consume(accessor)?;
         let mut table = self.table.lock().await;
         Ok(table
             .get(&self_)?
@@ -283,9 +255,7 @@ impl Runtime {
         accessor: &Accessor<T, Self>,
         self_: Resource<FallContext>,
     ) -> Result<Option<Resource<ProcContext>>> {
-        Fuel::FallProcContext
-            .consume(accessor, self.gauge.as_ref())
-            .await?;
+        Fuel::FallProcContext.consume(accessor)?;
         let mut table = self.table.lock().await;
         let res = table.get(&self_)?;
         let contract_id = res.contract_id;
@@ -311,9 +281,7 @@ impl Runtime {
         accessor: &Accessor<T, Self>,
         self_: Resource<FallContext>,
     ) -> Result<Resource<ViewContext>> {
-        Fuel::FallViewContext
-            .consume(accessor, self.gauge.as_ref())
-            .await?;
+        Fuel::FallViewContext.consume(accessor)?;
         let mut table = self.table.lock().await;
         let contract_id = table.get(&self_)?.contract_id;
         Ok(table.push(ViewContext { contract_id })?)
@@ -324,9 +292,7 @@ impl Runtime {
         accessor: &Accessor<T, Self>,
         self_: Resource<CoreContext>,
     ) -> Result<Resource<ProcContext>> {
-        Fuel::CoreProcContext
-            .consume(accessor, self.gauge.as_ref())
-            .await?;
+        Fuel::CoreProcContext.consume(accessor)?;
         let mut table = self.table.lock().await;
         let res = table.get(&self_)?;
         let contract_id = res.contract_id;
@@ -346,9 +312,7 @@ impl Runtime {
         accessor: &Accessor<T, Self>,
         self_: Resource<CoreContext>,
     ) -> Result<Resource<Signer>> {
-        Fuel::CoreProcContext
-            .consume(accessor, self.gauge.as_ref())
-            .await?;
+        Fuel::CoreProcContext.consume(accessor)?;
         let mut table = self.table.lock().await;
         let res = table.get(&self_)?;
         let signer = res.signer.clone();
@@ -360,9 +324,7 @@ impl Runtime {
         accessor: &Accessor<T, Self>,
         self_: Resource<CoreContext>,
     ) -> Result<Resource<ProcContext>> {
-        Fuel::CoreProcContext
-            .consume(accessor, self.gauge.as_ref())
-            .await?;
+        Fuel::CoreProcContext.consume(accessor)?;
         let mut table = self.table.lock().await;
         let res = table.get(&self_)?;
         let contract_id = res.contract_id;
@@ -386,9 +348,7 @@ impl Runtime {
         accessor: &Accessor<T, Self>,
         self_: Resource<Signer>,
     ) -> Result<Resource<Holder>> {
-        Fuel::SignerAsHolder
-            .consume(accessor, self.gauge.as_ref())
-            .await?;
+        Fuel::SignerAsHolder.consume(accessor)?;
         let signer = {
             let table = self.table.lock().await;
             table.get(&self_)?.clone()

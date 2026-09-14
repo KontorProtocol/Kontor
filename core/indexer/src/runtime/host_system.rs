@@ -5,16 +5,12 @@ use super::{Runtime, fuel::Fuel, wit::kontor::built_in};
 
 impl Runtime {
     async fn _register_bls_key<T>(&self, accessor: &Accessor<T, Self>) -> Result<()> {
-        Fuel::RegisterBlsKey
-            .consume(accessor, self.gauge.as_ref())
-            .await?;
+        Fuel::RegisterBlsKey.consume(accessor)?;
         Ok(())
     }
 
     async fn _update_provenance<T>(&self, accessor: &Accessor<T, Self>) -> Result<()> {
-        Fuel::UpdateProvenance
-            .consume(accessor, self.gauge.as_ref())
-            .await?;
+        Fuel::UpdateProvenance.consume(accessor)?;
         Ok(())
     }
 }

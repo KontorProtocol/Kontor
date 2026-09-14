@@ -36,9 +36,7 @@ impl<T> built_in::context::HostSignerWithStore<T> for Runtime {
 
     async fn as_ref(accessor: &Accessor<T, Self>, self_: Resource<Signer>) -> Result<HolderRef> {
         let runtime = accessor.with(|mut access| access.get().clone());
-        Fuel::HolderAsRef
-            .consume(accessor, runtime.gauge.as_ref())
-            .await?;
+        Fuel::HolderAsRef.consume(accessor)?;
         let table = runtime.table.lock().await;
         let signer = table.get(&self_)?;
         Ok(Self::_signer_to_holder_ref(signer))

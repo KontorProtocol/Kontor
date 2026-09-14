@@ -54,12 +54,12 @@ async fn nft_cursor_pages_seek_and_survive_membership_changes() -> Result<()> {
         )
         .await??;
     }
-    let gauge = FuelGauge::new();
+    let gauge = FuelGauge::with_profiling();
     runtime.gauge = Some(gauge.clone());
     assert_eq!(api::get_attributes(&mut runtime, "a").await?, attributes);
-    let stats = gauge.per_type_stats().await;
+    let stats = gauge.report()?.profile.unwrap().per_type;
     assert!(!stats.contains_key(&FuelDiscriminants::Get));
-    assert_eq!(stats[&FuelDiscriminants::KeysNext].count, 32);
+    assert_eq!(stats[&FuelDiscriminants::KeysNext].consumed_count, 32);
     let expected: u64 = attributes
         .iter()
         .map(|attr| {
@@ -67,8 +67,8 @@ async fn nft_cursor_pages_seek_and_survive_membership_changes() -> Result<()> {
                 .cost()
         })
         .sum();
-    assert_eq!(stats[&FuelDiscriminants::KeysNext].total_fuel, expected);
-    let gauge = FuelGauge::new();
+    assert_eq!(stats[&FuelDiscriminants::KeysNext].consumed_fuel, expected);
+    let gauge = FuelGauge::with_profiling();
     runtime.gauge = Some(gauge.clone());
     for attr in &attributes {
         assert_eq!(
@@ -77,16 +77,18 @@ async fn nft_cursor_pages_seek_and_survive_membership_changes() -> Result<()> {
         );
     }
     assert_eq!(
-        gauge.per_type_stats().await[&FuelDiscriminants::Get].count,
+        gauge.report()?.profile.unwrap().per_type[&FuelDiscriminants::Get].consumed_count,
         32
     );
-    let gauge = FuelGauge::new();
+    let gauge = FuelGauge::with_profiling();
     runtime.gauge = Some(gauge.clone());
     let balances = token::balances(&mut runtime).await?;
     assert!(
         !gauge
-            .per_type_stats()
-            .await
+            .report()?
+            .profile
+            .unwrap()
+            .per_type
             .contains_key(&FuelDiscriminants::Get)
     );
     assert!(
@@ -115,13 +117,13 @@ async fn nft_cursor_pages_seek_and_survive_membership_changes() -> Result<()> {
     assert_eq!(all, keys);
     let mut work = Vec::new();
     for after in [None, Some("nft-099")] {
-        let gauge = FuelGauge::new();
+        let gauge = FuelGauge::with_profiling();
         runtime.gauge = Some(gauge.clone());
         let page = api::list_nfts(&mut runtime, after, 5).await?;
         assert_eq!(page.items.len(), 5);
-        let stats = gauge.per_type_stats().await;
-        work.push(stats[&FuelDiscriminants::KeysNext].count);
-        let gauge = FuelGauge::new();
+        let stats = gauge.report()?.profile.unwrap().per_type;
+        work.push(stats[&FuelDiscriminants::KeysNext].consumed_count);
+        let gauge = FuelGauge::with_profiling();
         runtime.gauge = Some(gauge.clone());
         let covered = api::agreement_ids_by_creator(&mut runtime, holder.clone(), after, 5).await?;
         assert_eq!(covered.next, page.next);
@@ -132,13 +134,16 @@ async fn nft_cursor_pages_seek_and_survive_membership_changes() -> Result<()> {
                 .map(|n| n.agreement_id.clone())
                 .collect::<Vec<_>>()
         );
-        let covered_stats = gauge.per_type_stats().await;
-        assert_eq!(covered_stats[&FuelDiscriminants::KeysNext].count, 6);
+        let covered_stats = gauge.report()?.profile.unwrap().per_type;
+        assert_eq!(
+            covered_stats[&FuelDiscriminants::KeysNext].consumed_count,
+            6
+        );
         assert!(
             covered_stats
                 .get(&FuelDiscriminants::Get)
-                .map_or(0, |s| s.count)
-                < stats[&FuelDiscriminants::Get].count
+                .map_or(0, |s| s.consumed_count)
+                < stats[&FuelDiscriminants::Get].consumed_count
         );
     }
     assert_eq!(work[0], work[1], "earlier pages must not add scanned rows");

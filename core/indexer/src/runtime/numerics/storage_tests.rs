@@ -123,7 +123,7 @@ async fn scalar_numbers_preserve_indexes_deposits_and_rollback() -> Result<()> {
                 format!("{key}:{value}")
             })
             .collect();
-        let gauge = FuelGauge::new();
+        let gauge = FuelGauge::with_profiling();
         runtime.gauge = Some(gauge.clone());
         assert_eq!(
             entries(
@@ -134,9 +134,9 @@ async fn scalar_numbers_preserve_indexes_deposits_and_rollback() -> Result<()> {
             .await?,
             expected
         );
-        let stats = gauge.per_type_stats().await;
+        let stats = gauge.report()?.profile.unwrap().per_type;
         assert!(!stats.contains_key(&FuelDiscriminants::Get));
-        assert_eq!(stats[&FuelDiscriminants::KeysNext].count, 5);
+        assert_eq!(stats[&FuelDiscriminants::KeysNext].consumed_count, 5);
         let expected_fuel: u64 = inputs
             .iter()
             .enumerate()
@@ -149,11 +149,11 @@ async fn scalar_numbers_preserve_indexes_deposits_and_rollback() -> Result<()> {
             })
             .sum();
         assert_eq!(
-            stats[&FuelDiscriminants::KeysNext].total_fuel,
+            stats[&FuelDiscriminants::KeysNext].consumed_fuel,
             expected_fuel
         );
 
-        let gauge = FuelGauge::new();
+        let gauge = FuelGauge::with_profiling();
         runtime.gauge = Some(gauge.clone());
         assert_eq!(
             entries(
@@ -164,13 +164,13 @@ async fn scalar_numbers_preserve_indexes_deposits_and_rollback() -> Result<()> {
             .await?,
             [expected[3].clone(), expected[2].clone()]
         );
-        let stats = gauge.per_type_stats().await;
+        let stats = gauge.report()?.profile.unwrap().per_type;
         assert_eq!(
-            stats[&FuelDiscriminants::KeysNext].count,
+            stats[&FuelDiscriminants::KeysNext].consumed_count,
             2,
             "take must not pull a third row"
         );
-        let gauge = FuelGauge::new();
+        let gauge = FuelGauge::with_profiling();
         runtime.gauge = Some(gauge.clone());
         assert!(
             entries(
@@ -183,8 +183,10 @@ async fn scalar_numbers_preserve_indexes_deposits_and_rollback() -> Result<()> {
         );
         assert!(
             !gauge
-                .per_type_stats()
-                .await
+                .report()?
+                .profile
+                .unwrap()
+                .per_type
                 .contains_key(&FuelDiscriminants::KeysNext)
         );
         assert!(
@@ -228,13 +230,13 @@ async fn scalar_numbers_preserve_indexes_deposits_and_rollback() -> Result<()> {
             .storage_deposit_gas((path.len() + payload.len()) as u64)
     );
 
-    let gauge = FuelGauge::new();
+    let gauge = FuelGauge::with_profiling();
     runtime.gauge = Some(gauge.clone());
     stored(&mut runtime, &address, 3).await?;
-    let stats = gauge.per_type_stats().await;
-    assert_eq!(stats[&FuelDiscriminants::Get].count, 3);
+    let stats = gauge.report()?.profile.unwrap().per_type;
+    assert_eq!(stats[&FuelDiscriminants::Get].consumed_count, 3);
     assert_eq!(
-        stats[&FuelDiscriminants::Get].total_fuel,
+        stats[&FuelDiscriminants::Get].consumed_fuel,
         3 * Fuel::Get(payload.len()).cost()
     );
     assert!(!stats.contains_key(&FuelDiscriminants::ExtendPathWithMatch));

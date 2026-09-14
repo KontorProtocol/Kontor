@@ -4,7 +4,7 @@ use indexer_types::{BlockRow, Input, Inst, InstKind, Insts, Payment, Transaction
 use libsql::params;
 use wasmtime::Trap;
 
-use super::{ExecutionUsage, UsageKind, UsageMeter, record_fuel};
+use super::{ExecutionUsage, FuelGauge, UsageKind, record_fuel};
 use crate::bitcoin_client::Client;
 use crate::database::queries::{
     confirm_transaction, get_checkpoint_by_height, get_transaction_by_txid,
@@ -13,7 +13,8 @@ use crate::database::queries::{
 };
 use crate::reactor::executor::{Executor, RuntimeExecutor};
 use crate::reg_tester::random_x_only_pubkey;
-use crate::runtime::fuel::Fuel;
+use crate::runtime::fuel::{Fuel, FuelDiscriminants};
+use crate::runtime::pricing::Pricing;
 use crate::runtime::staking::{address as staking_address, api as staking};
 use crate::runtime::token::api as token;
 use crate::runtime::wit::Signer;
@@ -157,13 +158,8 @@ async fn preparation_failures_and_rejected_charges_report_consumed_work() -> Res
     let previous = runtime.start_usage();
     runtime.usage_kind = UsageKind::User;
     let mut store = runtime.make_store(100)?;
-    Fuel::SignerToString
-        .consume_with_store(None, &mut store)
-        .await?;
-    let error = Fuel::Set(100)
-        .consume_with_store(None, &mut store)
-        .await
-        .unwrap_err();
+    Fuel::SignerToString.consume_with_store(&mut store)?;
+    let error = Fuel::Set(100).consume_with_store(&mut store).unwrap_err();
     assert!(matches!(
         error.downcast_ref::<Trap>(),
         Some(Trap::OutOfFuel)
@@ -198,7 +194,7 @@ async fn publishing_traps_and_reverted_deposits_are_measured() -> Result<()> {
                     ..payment.clone()
                 },
                 "failed-init",
-                include_bytes!("../../../../../test-contracts/binaries/error_test.wasm.br"),
+                include_bytes!("../../../../../../test-contracts/binaries/error_test.wasm.br"),
                 &provenance
             )
             .await
@@ -224,7 +220,7 @@ async fn publishing_traps_and_reverted_deposits_are_measured() -> Result<()> {
             &signer,
             payment.clone(),
             "usage-errors",
-            include_bytes!("../../../../../test-contracts/binaries/error_test.wasm.br"),
+            include_bytes!("../../../../../../test-contracts/binaries/error_test.wasm.br"),
             &provenance,
         )
         .await?;
@@ -384,10 +380,10 @@ async fn persisted_usage_follows_confirmation_rollback_and_replay() -> Result<()
 
 #[test]
 fn overflow_is_reported_instead_of_wrapping() -> Result<()> {
-    let meter = UsageMeter::default();
+    let meter = FuelGauge::default();
     meter.record(UsageKind::User, u64::MAX)?;
     assert!(meter.record(UsageKind::User, 1).is_err());
-    assert_eq!(meter.snapshot()?.user_fuel, u64::MAX);
+    assert_eq!(meter.report()?.usage.user_fuel, u64::MAX);
     Ok(())
 }
 
@@ -402,7 +398,7 @@ async fn failed_nested_preparation_is_not_lost_with_the_child_store() -> Result<
         .storage
         .insert_contract(
             "usage-proxy",
-            include_bytes!("../../../../../test-contracts/binaries/proxy.wasm.br"),
+            include_bytes!("../../../../../../test-contracts/binaries/proxy.wasm.br"),
         )
         .await?;
     let proxy = ContractAddress {
@@ -526,7 +522,7 @@ async fn transaction_scope_collects_operations_and_discards_abandoned_execution(
             assert_eq!(usage, expected);
         }
         expected = Some(usage);
-        assert!(runtime.usage.is_none());
+        assert!(runtime.gauge.is_none());
         runtime.storage.rollback().await?;
         assert!(
             get_transaction_execution_usage(&conn, tx_id)
@@ -541,7 +537,7 @@ async fn transaction_scope_collects_operations_and_discards_abandoned_execution(
         .storage
         .insert_contract(
             "infra-errors",
-            include_bytes!("../../../../../test-contracts/binaries/error_test.wasm.br"),
+            include_bytes!("../../../../../../test-contracts/binaries/error_test.wasm.br"),
         )
         .await?;
     tx.inputs[0].insts = Insts::single(Inst {
@@ -570,12 +566,96 @@ async fn transaction_scope_collects_operations_and_discards_abandoned_execution(
             .await
             .is_err()
     );
-    assert!(runtime.usage.is_none());
+    assert!(runtime.gauge.is_none());
     assert!(
         get_transaction_execution_usage(&conn, tx_id)
             .await?
             .is_none()
     );
     runtime.storage.rollback().await?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn profile_distinguishes_rejected_charges_from_consumed_fuel() -> Result<()> {
+    let (mut runtime, _dir, _name) = test_runtime().await?;
+    let gauge = FuelGauge::with_profiling();
+    runtime.gauge = Some(gauge.clone());
+    runtime.usage_kind = UsageKind::User;
+    let mut store = runtime.make_store(100)?;
+    Fuel::SignerToString.consume_with_store(&mut store)?;
+    assert!(Fuel::Set(100).consume_with_store(&mut store).is_err());
+    record_fuel(&mut store)?;
+    let report = gauge.report()?;
+    assert_eq!(report.usage.user_fuel, 50);
+    let profile = report.profile.unwrap();
+    assert_eq!(profile.consumed_host_fuel, 50);
+    assert_eq!(
+        profile.per_type[&FuelDiscriminants::SignerToString].consumed_count,
+        1
+    );
+    let rejected = &profile.per_type[&FuelDiscriminants::Set];
+    assert_eq!(rejected.consumed_fuel, 0);
+    assert_eq!(rejected.consumed_count, 0);
+    assert_eq!(rejected.rejected_count, 1);
+    assert_eq!(rejected.rejected_fuel, Fuel::Set(100).cost());
+    assert!(profile.history[0].consumed);
+    assert!(!profile.history[1].consumed);
+
+    runtime.gauge = None;
+    runtime.set_context(1, None, None, None).await;
+    let signer = fund(&mut runtime, &random_x_only_pubkey()).await?;
+    runtime.pricing = Pricing::new(Decimal::from("0.000000001"), 1_000_000)?;
+    let gauge = FuelGauge::with_profiling();
+    runtime.gauge = Some(gauge.clone());
+    assert!(
+        staking::add_stake(&mut runtime, &signer, Decimal::from("1"))
+            .await
+            .is_err()
+    );
+    let report = gauge.report()?;
+    assert!(report.usage.user_fuel > 0 && report.usage.system_fuel > 0);
+    assert_eq!(report.usage.deposit_fuel, 0);
+    let profile = report.profile.unwrap();
+    let deposits = &profile.per_type[&FuelDiscriminants::Deposit];
+    assert_eq!(deposits.consumed_count, 0);
+    assert_eq!(deposits.rejected_count, 1);
+    assert!(deposits.rejected_fuel > 0);
+    assert_eq!(
+        profile
+            .history
+            .iter()
+            .filter(|charge| charge.consumed)
+            .map(|charge| charge.fuel)
+            .sum::<u64>(),
+        profile.consumed_host_fuel
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn scope_reports_do_not_reset_with_transaction_context() -> Result<()> {
+    let (mut runtime, _dir, _name) = test_runtime().await?;
+    runtime.set_context(1, None, None, None).await;
+    let signer = fund(&mut runtime, &random_x_only_pubkey()).await?;
+    let gauge = FuelGauge::with_profiling();
+    runtime.gauge = Some(gauge.clone());
+    staking::add_stake(&mut runtime, &signer, Decimal::from("1")).await??;
+    let first = gauge.report()?;
+    runtime
+        .set_context(1, Some(TransactionContext::builder().build()), None, None)
+        .await;
+    assert_eq!(gauge.report()?.usage, first.usage);
+    staking::add_stake(&mut runtime, &signer, Decimal::from("1")).await??;
+    let second = gauge.report()?;
+    assert!(second.usage.user_fuel > first.usage.user_fuel);
+    assert!(second.profile.as_ref().unwrap().history.len() > first.profile.unwrap().history.len());
+    let previous = runtime.start_usage();
+    staking::add_stake(&mut runtime, &signer, Decimal::from("1")).await??;
+    let inner = runtime.finish_usage(previous)?;
+    assert!(inner.user_fuel > 0);
+    assert_eq!(gauge.report()?.usage, second.usage);
+    staking::add_stake(&mut runtime, &signer, Decimal::from("1")).await??;
+    assert!(gauge.report()?.usage.user_fuel > second.usage.user_fuel);
     Ok(())
 }

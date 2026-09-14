@@ -67,7 +67,7 @@ Run from the repository root:
 
 ```sh
 CARGO_BUILD_JOBS=4 RUST_LOG=warn cargo test --manifest-path core/Cargo.toml \
-  --release -p indexer --lib runtime::fuel::profiling_tests::fuel_profiling_costs \
+  --release -p indexer --lib runtime::fuel::profiling_tests::fuel_accounting_costs \
   -- --ignored --exact --nocapture
 ```
 
@@ -200,9 +200,10 @@ fuel already consumed. Rejections before any metered execution report zero.
 Sampling is at store boundaries. A parent is sampled before entering a nested
 call; its checkpoint advances past the fuel inherited back from the child.
 Every child is sampled independently, including failed preparation, and result
-serialization is sampled after its charge. This avoids both nested double
-counting and dependence on the detailed `FuelGauge` tracing machinery. Collection
-is enabled only within explicit execution scopes, with constant-size counters.
+serialization is sampled after its charge. This avoids nested double counting
+and missing child work. `FuelGauge` owns these totals and can optionally attach a detailed host
+profile; both use the same measurement scope. Collection is enabled only within
+explicit execution scopes, with constant-size counters when profiling is disabled.
 
 This measures the work the existing fuel model covers, not all physical work.
 In particular, parsing, signature verification outside Wasm, and publication's
@@ -239,11 +240,64 @@ this change. The activation PR must settle that rule for optimistic execution.
 Fees, signed gas limits, contract binaries and storage collateral remain unchanged.
 This slice advances step 2 and does not close #462 or supersede #445.
 
-Validation: seven focused regressions pass, covering billing/checkpoint parity,
+Validation: nine focused accounting regressions pass, covering billing/checkpoint parity,
 nested success and failed preparation, rejected charges, failed gas holds,
 publish/init failure, traps, reverted deposits, transaction aggregation,
 infrastructure failure, savepoint abandonment, confirmation rollback, execution
-rollback/replay and overflow. The full indexer library suite passed with 509 tests
-and 8 intentionally ignored manual tests. Indexer Clippy (`--tests`, warnings
+rollback/replay, overflow, consumed/rejected profile entries and explicit scopes
+across context changes. The profiling parity test also compares disabled,
+totals-only and detailed collection. The full indexer library suite passed with
+511 tests and 9 intentionally ignored manual tests. Indexer Clippy (`--tests`, warnings
 denied), formatting and diff checks passed. No contract or SDK rebuild is required
 because this slice changes neither generated interfaces nor contract code.
+## Consolidated gauge
+
+`FuelGauge::new()` creates a totals-only scope; `FuelGauge::with_profiling()` adds
+host-operation detail. Both return the same `FuelReport`, containing net execution
+usage and an optional profile. The previous separate `UsageMeter` is removed.
+Private `gross_user_fuel` includes reservations while accumulating; exported
+`ExecutionUsage.user_fuel` always excludes them.
+
+Host charging borrows the gauge directly from its Wasmtime store. It no longer
+passes or clones a second gauge argument through every import, and charging is
+synchronous because neither fuel subtraction nor short gauge updates await I/O.
+Totals-only charging skips the profile lock. Detailed profiling records each
+charge after the subtraction attempt, with separate consumed/rejected counts and
+fuel; rejected requests never inflate consumed host fuel. The profile's consumed
+host total includes deposit reservations, identified by the Deposit event/type.
+
+Removed the old starting/ending fuel pair, host/guest percentage calculation,
+per-charge percentage recomputation and automatic context-based gauge reset.
+Reports cover explicit scopes, including internal calls and context changes;
+optional profiles cannot use a different interval from their execution totals.
+The existing contract cost probes now read those same reports. Fee settlement
+and the refundable deposit meter retain their existing behavior.
+
+The manual `fuel_accounting_costs` benchmark compares disabled collection,
+totals-only collection and detailed profiling on warm staking top-ups (nested
+token calls and storage writes). `fuel_persistence_costs` separately compares the
+transaction path with collection disabled, totals only, and totals plus database
+persistence. Both alternate mode order, roll back between samples and report
+elapsed time and burned KOR. Timing is observational, never a consensus input or
+CI assertion. Earlier profiling measurements above describe the previous gauge.
+
+On local Linux aarch64, release mode, seven samples of 100 operations per mode
+with no other test/compiler run in parallel produced these elapsed times:
+
+| Probe | Mode | Median ms | Range ms |
+| --- | --- | ---: | ---: |
+| Warm contract calls | Disabled | 799.869 | 796.425–800.982 |
+| Warm contract calls | Totals | 800.554 | 796.459–801.776 |
+| Warm contract calls | Detailed profile | 801.166 | 796.685–804.542 |
+| Transactions | Disabled | 800.926 | 799.849–802.756 |
+| Transactions | Totals | 801.242 | 799.645–806.484 |
+| Transactions | Totals + persistence | 801.480 | 800.688–804.709 |
+
+Within-sample median overhead versus disabled was 0.10% for call totals, 0.11%
+for detailed profiling, and 0.13% for transaction totals plus persistence.
+Those differences are within the observed timing spread; this workload does not
+resolve a meaningful slowdown. It also does not establish the overhead for
+CPU-bound contracts or sustained database growth. Every sample burned exactly
+0.0000283 KOR. Totals retained no diagnostic events; detailed profiles retained
+14,700 events per sample. The persistence probe verified exactly 100 usage rows
+in each persisted sample and zero in the other modes.

@@ -17,7 +17,6 @@ mod storage;
 pub mod system;
 pub mod token;
 mod types;
-pub mod usage;
 pub mod wit;
 
 mod call;
@@ -29,7 +28,6 @@ mod host_system;
 
 use bitcoin::XOnlyPublicKey;
 pub use component_cache::ComponentCache;
-use futures_util::future::OptionFuture;
 use libsql::Connection;
 use sha2::{Digest, Sha256};
 pub use stdlib::{
@@ -118,10 +116,9 @@ use crate::runtime::{
     call::PreparedCall,
     counter::Counter,
     deposit::DepositMeter,
-    fuel::FuelGauge,
+    fuel::{FuelGauge, UsageKind},
     pricing::Pricing,
     stack::{CallFrame, Stack},
-    usage::{UsageKind, UsageMeter},
     wit::Signer,
 };
 
@@ -217,7 +214,6 @@ pub struct Runtime {
     pub result_id_counter: Counter,
     pub stack: Stack<CallFrame>,
     pub gauge: Option<FuelGauge>,
-    pub(crate) usage: Option<UsageMeter>,
     pub(crate) usage_kind: UsageKind,
     pub(crate) fuel_checkpoint: u64,
     /// Transient per-op accumulator of the storage-deposit GAS reserved this op
@@ -335,7 +331,6 @@ impl Runtime {
             // Diagnostic tracing is opt-in; fuel enforcement does not use the gauge.
             gauge: None,
             deposit: DepositMeter::new(),
-            usage: None,
             usage_kind: UsageKind::System,
             fuel_checkpoint: 0,
             gas_limit_for_non_procs: 100_000,
@@ -388,11 +383,6 @@ impl Runtime {
         self.result_id_counter.reset().await;
         self.previous_output = previous_output;
         self.op_return_data = op_return_data;
-        if self.storage.tx_context.is_some()
-            && let Some(gauge) = self.gauge.as_ref()
-        {
-            gauge.reset().await;
-        }
     }
 
     pub fn tx_context(&self) -> Option<&TransactionContext> {
@@ -904,21 +894,9 @@ impl Runtime {
         ) = self
             .prepare_call(contract_address, signer, payment.as_ref(), expr, None)
             .await?;
-        OptionFuture::from(
-            self.gauge
-                .as_ref()
-                .map(|g| g.set_starting_fuel(starting_fuel)),
-        )
-        .await;
         let (mut result, mut store) = self
             .call_and_handle(store, func, params, results, is_fallback, ctx)
             .await?;
-        OptionFuture::from(
-            self.gauge
-                .as_ref()
-                .map(|g| g.set_ending_fuel(store.get_fuel().unwrap())),
-        )
-        .await;
         if is_proc {
             let signer = signer.expect("Signer should be available in proc");
             let payment = payment.expect("Payment should be available in proc");

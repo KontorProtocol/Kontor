@@ -1,7 +1,7 @@
 use anyhow::{Result, ensure};
 use libsql::{Connection, params};
 
-use crate::runtime::usage::ExecutionUsage;
+use crate::runtime::fuel::ExecutionUsage;
 
 pub async fn insert_transaction_execution_usage(
     conn: &Connection,

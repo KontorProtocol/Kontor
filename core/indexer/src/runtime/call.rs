@@ -24,12 +24,11 @@ use wasmtime::component::ResourceTable;
 
 use super::{
     ContractAddress, Runtime,
-    fuel::Fuel,
+    fuel::{Fuel, UsageKind, record_fuel},
     should_skip_result,
     stack::{CallFrame, Stack},
     token,
     types::default_val_for_type,
-    usage::{UsageKind, record_fuel},
     wit::{Contract, CoreContext, FallContext, Holder, ProcContext, Signer, ViewContext},
 };
 
@@ -596,9 +595,7 @@ impl Runtime {
         mut result: Result<String, ExecutionError>,
     ) -> Result<String, ExecutionError> {
         if let Ok(value) = &result
-            && let Err(e) = Fuel::Result(value.len() as u64)
-                .consume_with_store(self.gauge.as_ref(), store)
-                .await
+            && let Err(e) = Fuel::Result(value.len() as u64).consume_with_store(store)
         {
             result = Err(ExecutionError::Deterministic(e));
         }
@@ -684,11 +681,11 @@ impl Runtime {
         contract_address: &ContractAddress,
         expr: &str,
     ) -> Result<String> {
-        accessor.with(|mut access| {
+        let starting_fuel = accessor.with(|mut access| {
             let remaining = access.as_context().get_fuel()?;
-            access.get().record_fuel(remaining)
+            access.get().record_fuel(remaining)?;
+            Ok::<_, anyhow::Error>(remaining)
         })?;
-        let starting_fuel = accessor.with(|access| access.as_context().get_fuel())?;
 
         let signer =
             OptionFuture::from(signer.map(async |s| self.table.lock().await.get(&s).cloned()))
