@@ -8720,8 +8720,8 @@ const trampoline0 = rscTableCreateOwn.bind(null, handleTable0);
 const $init = (() => {
   let gen = (function* _initGenerator () {
     const module0 = fetchCompile(new URL('./kontor-sdk.core.wasm', import.meta.url));
-    const module1 = base64Compile('AGFzbQEAAAABBQFgAX8AAwIBAAQFAXABAQEHEAIBMAAACCRpbXBvcnRzAQAKCwEJACAAQQARAAALAC8JcHJvZHVjZXJzAQxwcm9jZXNzZWQtYnkBDXdpdC1jb21wb25lbnQHMC4yNDQuMA');
-    const module2 = base64Compile('AGFzbQEAAAABBQFgAX8AAhUCAAEwAAAACCRpbXBvcnRzAXABAQEJBwEAQQALAQAALwlwcm9kdWNlcnMBDHByb2Nlc3NlZC1ieQENd2l0LWNvbXBvbmVudAcwLjI0NC4w');
+    const module1 = base64Compile('AGFzbQEAAAABBQFgAX8AAwIBAAQFAXABAQEHEAIBMAAACCRpbXBvcnRzAQAKCwEJACAAQQARAAALAC8JcHJvZHVjZXJzAQxwcm9jZXNzZWQtYnkBDXdpdC1jb21wb25lbnQHMC4yNTkuMAAnBG5hbWUAExJ3aXQtY29tcG9uZW50OnNoaW0BCwEACGR0b3Itd2l0');
+    const module2 = base64Compile('AGFzbQEAAAABBQFgAX8AAh8CBmFjdHVhbAEwAAAEc2hpbQgkaW1wb3J0cwFwAQEBCQcBAEEACwEAAC8JcHJvZHVjZXJzAQxwcm9jZXNzZWQtYnkBDXdpdC1jb21wb25lbnQHMC4yNTkuMAAiBG5hbWUAFRR3aXQtY29tcG9uZW50OmZpeHVwcwEEAQABMA');
     ({ exports: exports0 } = yield instantiateCore(yield module1));
     ({ exports: exports1 } = yield instantiateCore(yield module0, {
       '[export]root:component/wit-codec': {
@@ -8729,9 +8729,11 @@ const $init = (() => {
       },
     }));
     ({ exports: exports2 } = yield instantiateCore(yield module2, {
-      '': {
-        $imports: exports0.$imports,
+      actual: {
         '0': exports1['root:component/wit-codec#[dtor]wit'],
+      },
+      shim: {
+        $imports: exports0.$imports,
       },
     }));
     memory0 = exports1.memory;
