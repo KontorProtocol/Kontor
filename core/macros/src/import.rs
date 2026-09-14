@@ -61,7 +61,7 @@ pub fn import(
         .push_dir(abs_path.to_string_lossy().to_string())
         .unwrap();
 
-    let (_world_id, world) = resolve
+    let (world_id, world) = resolve
         .worlds
         .iter()
         .find(|(_, w)| w.name == world_name)
@@ -137,22 +137,21 @@ pub fn import(
         }
     }
 
-    // wit-bindgen's library backend, driven directly (its parser is a
-    // different version than `resolve`'s, hence the second parse) so the
-    // output can be doctored: exports cleared (we call this world, we don't
-    // implement it) and the component-type section static filtered below (it
-    // would merge this world into the contract's chain-visible WIT).
-    let mut gen_resolve = wit_bindgen_core::wit_parser::Resolve::new();
-    gen_resolve
-        .push_dir(abs_path.to_string_lossy().to_string())
-        .expect("imported wit dir parses under wit-bindgen's parser");
-    let gen_world_id = gen_resolve
-        .worlds
-        .iter()
-        .find(|(_, w)| w.name == world_name)
-        .map(|(id, _)| id)
-        .expect("imported world exists under wit-bindgen's parser");
-    gen_resolve.worlds[gen_world_id].exports = Default::default();
+    let mut func_streams = Vec::new();
+    let mut wave_func_streams = Vec::new();
+    for export in &exports {
+        func_streams.push(
+            generate_functions(&resolve, test, public, export, contract_id)
+                .expect("Function didn't generate"),
+        );
+        wave_func_streams.push(
+            generate_wave_functions(&resolve, export).expect("Wave function didn't generate"),
+        );
+    }
+
+    // Generate call shims before clearing exports: imported worlds must not
+    // generate implementations or contribute their component-type section.
+    resolve.worlds[world_id].exports.clear();
 
     let opts = wit_bindgen_rust::Opts {
         generate_all: true,
@@ -169,13 +168,8 @@ pub fn import(
     };
     let mut generator = opts.build();
     let mut files = wit_bindgen_core::Files::default();
-    wit_bindgen_core::WorldGenerator::generate(
-        &mut generator,
-        &mut gen_resolve,
-        gen_world_id,
-        &mut files,
-    )
-    .expect("wit-bindgen generation for the imported world");
+    wit_bindgen_core::WorldGenerator::generate(&mut generator, &mut resolve, world_id, &mut files)
+        .expect("wit-bindgen generation for the imported world");
     let (_name, contents) = files.iter().next().expect("one generated bindings file");
     let generated =
         syn::parse_file(std::str::from_utf8(contents).expect("generated bindings are utf-8"))
@@ -202,20 +196,6 @@ pub fn import(
          from wit-bindgen's output — its section naming has changed; update \
          the filter in macros/src/import.rs"
     );
-
-    let mut func_streams = Vec::new();
-    for export in exports.iter() {
-        func_streams.push(
-            generate_functions(&resolve, test, public, export, contract_id)
-                .expect("Function didn't generate"),
-        )
-    }
-
-    let mut wave_func_streams = Vec::new();
-    for export in exports.iter() {
-        wave_func_streams
-            .push(generate_wave_functions(&resolve, export).expect("Wave function didn't generate"))
-    }
 
     let typed_call_import = if test && !public {
         quote! { use super::TypedCall; }

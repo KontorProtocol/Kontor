@@ -21,12 +21,14 @@ uninlined_format_args = "allow"
 too_many_arguments = "allow"
 
 [workspace.dependencies]
-# IMPORTANT
+# Keep our WIT tools aligned with wit-bindgen; Wasmtime owns its internal versions.
 wasmtime = { version = "=48.0.2", features = ["wave", "component-model-async"] }
-wit-bindgen = "=0.61.1"
-wit-component = "=0.254.0"
-wit-parser = "=0.254.0"
-wasm-wave = { version ="0.254.0", default-features = false }
+wit-bindgen = "=0.62.0"
+wit-bindgen-core = "=0.62.0"
+wit-bindgen-rust = "=0.62.0"
+wit-component = "=0.259.0"
+wit-parser = "=0.259.0"
+wasm-wave = { version = "=0.259.0", default-features = false }
 # =-pinned like the rest of the workspace: the JS side pins the
 # uniffi-bindgen-react-native generator/runtime in lockstep (sdk-native
 # pins ubrn 0.29.3-1) and a silent `cargo update` bump could desync the
