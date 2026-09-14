@@ -14,7 +14,6 @@ use wasmtime::{
 };
 
 use indexer_types::{OpStatus, Payment};
-use stdlib::CheckedArithmetics;
 
 use crate::database::native_contracts::is_native_contract_id;
 use crate::database::types::Identity;
@@ -24,7 +23,7 @@ use tokio::sync::Mutex;
 use wasmtime::component::ResourceTable;
 
 use super::{
-    ContractAddress, Decimal, Runtime,
+    ContractAddress, Runtime,
     fuel::Fuel,
     should_skip_result,
     stack::{CallFrame, Stack},
@@ -85,16 +84,6 @@ pub(crate) enum CtxResource {
 }
 
 impl Runtime {
-    /// Token cost of a gas amount (`gas × gas_to_token_multiplier`). Infallible in
-    /// practice — a u64 always converts to Decimal and the arbitrary-precision
-    /// multiply can't overflow — so a failure here is a bug, not a user error.
-    fn gas_to_token(&self, gas: u64) -> Decimal {
-        Decimal::try_from(gas)
-            .expect("u64 to decimal")
-            .mul(self.gas_to_token_multiplier)
-            .expect("gas to token amount")
-    }
-
     pub(crate) async fn prepare_call(
         &self,
         contract_address: &ContractAddress,
@@ -339,10 +328,7 @@ impl Runtime {
         {
             let payment = payment.expect("payment is required for top-level proc calls");
             let payer = payer_signer(payment);
-            // fuel_limit == payment.gas_limit × gas_to_fuel_multiplier for a top-level
-            // user op (see the budget decision above), so the hold is the committed
-            // gas limit's token cost.
-            let hold_amount = self.gas_to_token(payment.gas_limit);
+            let hold_amount = self.pricing.gas_hold(payment.gas_limit)?;
             tracing::info!(
                 node = %self.node_label,
                 %hold_amount,
@@ -603,7 +589,7 @@ impl Runtime {
             // The deposit gas reserved this op is RETURNED, not burned (it only
             // capped growth); burn = the execution slice = gas - charge.
             let charge_gas = self.deposit.take().await;
-            let burn_amount = self.gas_to_token(gas.saturating_sub(charge_gas));
+            let burn_amount = self.pricing.execution_fee(gas.saturating_sub(charge_gas))?;
             tracing::info!(
                 node = %self.node_label,
                 gas,

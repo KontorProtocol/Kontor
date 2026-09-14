@@ -5,7 +5,7 @@ Investigation baseline: main `8d30d38a`, 2026-09-14. Proposal reference:
 Tracks [#462](https://github.com/KontorProtocol/Kontor/issues/462) and the fee-pricing
 slice of [#442](https://github.com/KontorProtocol/Kontor/issues/442).
 
-## Current behavior
+## Behavior at the investigation baseline
 
 The runtime converts each user operation's signed gas limit to Wasmtime fuel
 at 1,000 fuel/gas. Guest instructions and explicit host charges consume that
@@ -21,8 +21,8 @@ writes, and subtracts it before burning the execution fee. The stored result's
 Summing those rows would both include collateral reservations and double-count
 nested execution.
 
-`gas_to_token_multiplier = 1e-9` has three callers: the upfront gas hold, execution
-fee settlement, and the storage-floor view. Existing rows store integer
+`gas_to_token_multiplier = 1e-9` prices the upfront gas hold, execution
+fee settlement, storage-floor view, and signer-footprint API. Existing rows store integer
 `deposited_gas`, so changing this multiplier reprices existing collateral as well
 as fees. This is documented in the existing
 [floor design](storage-deposit-floor-migration.md), not an accidental new behavior.
@@ -88,13 +88,13 @@ workloads and machines may differ. Normal transaction-context resets also limit
 retention; the table measures the full explicit profiling interval, not a claim
 that all production calls accumulate indefinitely.
 
-Validation: 495 library tests passed, 7 manual tests ignored; the profiling
+Profiling-only validation: 495 library tests passed, 7 manual tests ignored; the profiling
 benchmark was run explicitly. Core Clippy (`-p indexer --tests -- -D warnings`),
-formatting and diff checks passed. No contract binary or storage format changed.
+formatting and diff checks passed. That slice changed no contract binary or storage format.
 
 ## Recommended implementation sequence
 
-1. **Separate execution pricing from collateral pricing.** Keep the collateral
+1. **Separate execution pricing from collateral pricing (implemented on this branch).** Keep the collateral
    conversion stable when congestion changes. Preserve the existing up-front
    collateral guarantee even when execution becomes cheaper than collateral.
    Simply changing the storage-floor caller to use another constant is insufficient.
@@ -117,23 +117,73 @@ formatting and diff checks passed. No contract binary or storage format changed.
    resolved block price in the runtime, avoiding a contract view call per debit.
    Define bounds/rounding and signed fee authorization before applying prices.
 
-One conservative way to preserve collateral funding in step 1 is to hold
+The implementation preserves collateral funding in step 1 by holding
 `G * max(p_execution, p_collateral)` for a gas limit G, then burn only
 `E * p_execution`, where E is execution gas and D is reserved deposit gas.
 Because `E + D <= G`, the released balance is at least `D * p_collateral`.
 This preserves the current proof even when execution price is zero. It can
-over-reserve balance for operations that use little storage; it is a design option,
-not an implemented or newly accepted fee policy. A distinct signed storage budget
-is another possibility but requires broader transaction/SDK changes.
+over-reserve balance for operations that use little storage. A distinct signed
+storage budget would require broader transaction/SDK changes. With the current
+equal prices the hold and final fees are unchanged.
 
 Open decisions before pricing activation: capacity target, handling utilization
 above that target, beta bounds/minimum/rounding, and how a signed operation limits
 its maximum KOR charge when the block price changes. Existing `Payment` specifies
 a gas quantity, not a separate signed maximum price per gas.
 
+## Independent storage pricing decision, 2026-09-14
+
+Execution and storage rates may evolve independently. Start with a stable storage
+rate; future automatic adjustments should respond to persistent state demand,
+not temporary execution congestion. Preserve reservations on untouched rows.
+Repricing existing state or introducing rent requires separate lifecycle decisions.
+
+The runtime now has one validated `Pricing` value with an execution price and a
+storage reservation rate per byte. Defaults remain 1e-9 KOR per execution gas and
+one reservation unit per byte. The existing `deposited_gas` denomination stays
+fixed at 1e-9 KOR per unit; it is not a tunable price. Storage changes are expressed
+as units charged to future writes, keeping the existing integer granularity.
+Both the contract floor view and signer-footprint API use that same denomination.
+
+Zero execution fees exposed a pre-existing settlement assumption: token `release`
+always called `burn`, which rejects zero amounts. Release now skips a zero burn
+and refunds escrow normally. Ordinary user burns still require a positive amount;
+negative settlement burns still fail. The token binary is rebuilt for this change.
+
+Writes record the current rate, as before. Replacing a row replaces its whole
+reservation at the current rate; untouched rows retain theirs. Deletes free the
+recorded reservation. The ordinary versioned rows and footprint rollback path
+handle this without a new table, migration, or rescan on rate changes.
+
+`Pricing` rejects negative execution prices and zero storage rates. Storage-byte
+and fuel multiplication overflow fail deterministically before the write. Prices
+remain protocol defaults in production: there is no node-local configuration,
+contract-controlled setter, adaptive formula, or governance path added here.
+A future protocol hook must resolve the agreed prices on startup and at block
+boundaries, including rollback, before they can change on a running network.
+
+Price-separation validation: 499 library tests passed (7 manual tests ignored),
+including independent rates, prospective reservations, block rollback/replay,
+zero-fee escrow/supply accounting, deterministic reservation overflow and the
+hold/collateral arithmetic property. All six storage-deposit integration tests
+passed. Core and native Clippy and formatting checks passed; the token binary
+was rebuilt using the pinned contract build image.
+
+Related designs consulted:
+
+- [NEAR storage staking](https://docs.near.org/protocol/storage/storage-staking):
+  balance reserved according to stored bytes, released when data is deleted.
+- [Sui gas fees](https://docs.sui.io/develop/transaction-payment/gas-in-sui):
+  separate computation and storage prices; storage prices change infrequently,
+  with prepaid storage and deletion rebates.
+- [Aptos fees](https://aptos.dev/network/blockchain/gas-txn-fee): execution/IO gas
+  and storage fees denominated independently, with recorded storage refunds.
+- [Stellar resource pricing](https://developers.stellar.org/docs/learn/fundamentals/fees-resource-limits-metering):
+  dynamic storage pricing tied to ledger size, plus rent for storage lifetimes.
+
 ## Closure
 
-The profiling patch alone closes neither #462 nor #445. A replacement that includes
+The profiling and price-separation work closes neither #462 nor #445. A replacement that includes
 the pricing state machine and runtime consumers can supersede #445. #462 stays open
 until calibration and integration are both completed or explicitly split into
 linked follow-ups. Governance authorization remains #463.

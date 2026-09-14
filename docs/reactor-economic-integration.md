@@ -440,7 +440,7 @@ formula; price-coupled → admin window; identity → genesis-fixed):
 | λ_slash | ≈ 30 | **genesis-fixed*** | *uncalibrated — model before locking* |
 | λ_stake | **deleted** | — | Decision 4: solvency check is plain Σk_f; revisit trigger = Step-5 correlated-failure modeling; if it returns it is genesis-class or a formula, never admin |
 | σ_min | 5,000,000 KOR | **admin window** | price-coupled (Decision 3) |
-| gas calibration (`gas_to_token_multiplier`) | currently 1e-9 on main; spec φ_base = 2.5e-7 (~250× apart — issue #462 pt. 1) | **admin window** | price-coupled; the known-miscalibrated one |
+| execution gas calibration (`Pricing`) | default 1e-9 KOR/gas; spec φ_base = 2.5e-7 (~250× apart — issue #462 pt. 1); storage collateral has a separate fixed denomination | **admin window** | price-coupled; requires independent calibration |
 | c_stake | 1,000,000 | **admin window** | price-coupled (absolute KOR collateral scale) |
 | υ_f (creation fee) | 30 bps · k_f | **genesis-fixed** | ratio of on-chain quantities |
 | T_unbond | initially 2028 after collateral-withdrawal request; obligations can extend | **genesis-fixed** | security window (§6); production calibration pending |

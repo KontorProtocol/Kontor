@@ -16,11 +16,11 @@ use super::{
     ChallengeInput, ContractAddress, Decimal, Error, RawFileDescriptor, Runtime, VerifyResult,
     fuel::Fuel,
     hash_bytes,
+    pricing::Pricing,
     wit::kontor::built_in,
     wit::{self, FileDescriptor, Holder, Signer},
 };
 use built_in::context::HolderRef;
-use stdlib::CheckedArithmetics;
 
 /// Pack frontier peaks into the flat byte blob the contract persists: each peak's
 /// canonical 32-byte field repr, concatenated low-height-first.
@@ -487,7 +487,7 @@ impl<T> built_in::deposit::HostWithStore<T> for Runtime {
         // O(1) read of the eager `depositor_footprint` cache (maintained in the write
         // path), not a fresh cross-contract scan; price the integer-gas floor to token.
         let gas = runtime.storage.footprint().total_gas(signer_id).await?;
-        Ok(Decimal::try_from(gas)?.mul(runtime.gas_to_token_multiplier)?)
+        Pricing::storage_collateral(gas)
     }
 }
 

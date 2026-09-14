@@ -11,6 +11,7 @@ use crate::database::queries::{
     get_signer_entry_by_id, get_signer_entry_by_x_only_pubkey,
 };
 use crate::database::types::SignerEntry;
+use crate::runtime::pricing::Pricing;
 
 /// Identifier accepted by the signer routes. Disambiguated by shape — numeric is
 /// a signer_id, 64-char hex is an x-only pubkey, 192-char hex is a BLS pubkey.
@@ -74,11 +75,11 @@ pub async fn get_signer_footprint(
     let entry = resolve_signer_entry(&conn, &identifier).await?;
 
     // Query + aggregation failures are server/data faults → 500, not 400. Per-row
-    // deposits are integer gas; price to token with the runtime's gas→token rate
+    // deposits are integer gas; price to token with the fixed collateral denomination
     // (the same `Decimal` the consensus floor uses — pass it straight through).
     let rows = find_footprint_by_depositor(&conn, entry.signer_id).await?;
     let (total_deposit, total_footprint_bytes, by_contract) =
-        aggregate_footprint(rows, runtime.gas_to_token_multiplier.into())
+        aggregate_footprint(rows, Pricing::collateral_unit_price().into())
             .map_err(|e| anyhow::anyhow!("footprint aggregation failed: {e:?}"))?;
 
     Ok(FootprintResponse {

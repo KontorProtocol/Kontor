@@ -10,6 +10,7 @@ pub mod fuel;
 pub mod nft;
 pub mod numerics;
 pub mod pool;
+pub mod pricing;
 mod stack;
 pub mod staking;
 mod storage;
@@ -117,6 +118,7 @@ use crate::runtime::{
     counter::Counter,
     deposit::DepositMeter,
     fuel::FuelGauge,
+    pricing::Pricing,
     stack::{CallFrame, Stack},
     wit::Signer,
 };
@@ -231,7 +233,7 @@ pub struct Runtime {
     /// an operator's view cap can NEVER starve consensus core calls.
     pub view_gas_limit: u64,
     pub gas_to_fuel_multiplier: u64,
-    pub gas_to_token_multiplier: Decimal,
+    pub pricing: Pricing,
     pub previous_output: Option<bitcoin::OutPoint>,
     pub op_return_data: Option<Vec<u8>>,
     pub node_label: String,
@@ -331,7 +333,7 @@ impl Runtime {
             // there). Independent of the system core-call budget.
             view_gas_limit: DEFAULT_VIEW_GAS_LIMIT,
             gas_to_fuel_multiplier: 1_000,
-            gas_to_token_multiplier: Decimal::from("1e-9"),
+            pricing: Pricing::default(),
             previous_output: None,
             op_return_data: None,
             node_label: String::new(),

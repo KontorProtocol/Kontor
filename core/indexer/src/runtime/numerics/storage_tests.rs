@@ -223,7 +223,9 @@ async fn scalar_numbers_preserve_indexes_deposits_and_rollback() -> Result<()> {
     assert_eq!(leaves[0].depositor, Some(signer_id));
     assert_eq!(
         leaves[0].deposited_gas,
-        Some((path.len() + payload.len()) as u64 * runtime.deposit_rate(contract_id, &path))
+        runtime
+            .pricing
+            .storage_deposit_gas((path.len() + payload.len()) as u64)
     );
 
     let gauge = FuelGauge::new();

@@ -13,16 +13,6 @@ use super::{
     wit::{HasContractId, Keys, StorageRows},
 };
 
-/// Default storage-deposit rate `D`, in GAS per stored byte (path + value). It
-/// bounds per-op storage growth (metered as fuel against the gas limit) and sets
-/// the FLOOR a holder must keep (`footprint_bytes × D`, priced to token via
-/// `gas_to_token`). GAS, not token, is the unit because growth is metered as fuel;
-/// the reservation is RETURNED at settle (only execution burns), so `D` is a
-/// collateral rate, not a fee. Routed through [`Runtime::deposit_rate`] so it can
-/// become per-contract / governance-tunable later. (A sub-gas-per-byte `D` isn't
-/// expressible as an integer; tune finer via `gas_to_token`.)
-const DEFAULT_DEPOSIT_GAS_PER_BYTE: u64 = 1;
-
 /// The storage trust boundary: reject a non-well-formed guest path ONCE, here,
 /// before it reaches any subtree/keys/matching parse or gets persisted. This is
 /// the single validation choke-point the old string scheme had at
@@ -63,18 +53,6 @@ pub(crate) fn decode_storage_value<T: for<'de> Deserialize<'de>>(bytes: &[u8]) -
 }
 
 impl Runtime {
-    /// The storage-deposit rate (GAS per byte) charged to a write of `path` in
-    /// `contract_id`. Uniform today; this is the single seam every charge site routes
-    /// through, so `D` can become per-contract or governance-set later WITHOUT a
-    /// consensus migration (the rate is read at write time and frozen into the row's
-    /// `deposited_gas`, so an evolving D only affects future writes). The `path` is
-    /// already threaded so a future per-FIELD / per-INDEX rate — e.g. pricing a hot
-    /// covering-index leaf higher than a cold scalar — needs no further signature
-    /// change, just a body that inspects the path's index/field prefix.
-    pub(crate) fn deposit_rate(&self, _contract_id: u64, _path: &[u8]) -> u64 {
-        DEFAULT_DEPOSIT_GAS_PER_BYTE
-    }
-
     pub(crate) async fn _get_primitive<S, T: HasContractId, R: for<'de> Deserialize<'de>>(
         &self,
         accessor: &Accessor<S, Self>,
@@ -277,7 +255,7 @@ impl Runtime {
             _ => None,
         };
         // The deposit for this row is a slice of GAS — `(path + value) bytes ×
-        // deposit_rate(contract)` — charged against the op's fuel budget here, so an
+        // storage rate` — charged against the op's fuel budget here, so an
         // unaffordable growth trips the out-of-gas path and the op deterministically
         // reverts (the per-op cap = the gas limit). The reservation is RETURNED at
         // settle (only execution burns), so it bounds per-op growth without being a
@@ -285,9 +263,18 @@ impl Runtime {
         // `deposited_gas` records the deposit (integer gas) for the footprint cache;
         // the token value is derived (× gas→token) only at the floor read.
         let deposited_gas = if depositor.is_some() {
-            let deposit_gas =
-                (path.len() + bs.len()) as u64 * self.deposit_rate(contract_id, &path);
-            Fuel::Deposit(deposit_gas * self.gas_to_fuel_multiplier)
+            let deposit_gas = self
+                .pricing
+                .storage_deposit_gas((path.len() + bs.len()) as u64)
+                .ok_or_else(|| {
+                    ExecutionError::Deterministic(anyhow!("storage reservation overflow"))
+                })?;
+            let deposit_fuel = deposit_gas
+                .checked_mul(self.gas_to_fuel_multiplier)
+                .ok_or_else(|| {
+                    ExecutionError::Deterministic(anyhow!("storage reservation overflow"))
+                })?;
+            Fuel::Deposit(deposit_fuel)
                 .consume(accessor, self.gauge.as_ref())
                 .await
                 .map_err(|_| {
