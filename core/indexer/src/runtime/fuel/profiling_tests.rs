@@ -2,8 +2,9 @@ use std::time::Instant;
 
 use anyhow::Result;
 use serde_json::json;
+use wasmtime::Trap;
 
-use super::FuelGauge;
+use super::{Fuel, FuelGauge};
 use crate::database::queries::get_checkpoint_by_height;
 use crate::reg_tester::random_x_only_pubkey;
 use crate::runtime::numerics::sub_decimal;
@@ -13,6 +14,30 @@ use crate::runtime::wit::Signer;
 use crate::runtime::wit::kontor::built_in::context::HolderRef;
 use crate::runtime::{Decimal, ExecutionError, Runtime};
 use crate::test_utils::test_runtime;
+
+#[tokio::test]
+async fn host_fuel_exhaustion_is_an_out_of_fuel_trap() -> Result<()> {
+    let (runtime, _dir, _name) = test_runtime().await?;
+    let mut store = runtime.make_store(Fuel::SignerToString.cost() - 1)?;
+    let err = Fuel::SignerToString
+        .consume_with_store(None, &mut store)
+        .await
+        .unwrap_err();
+    assert!(
+        matches!(err.downcast_ref::<Trap>(), Some(Trap::OutOfFuel)),
+        "host exhaustion lost its trap type: {err:#}"
+    );
+    assert_eq!(store.get_fuel()?, Fuel::SignerToString.cost() - 1);
+    store.set_fuel(Fuel::SignerToString.cost())?;
+    assert_eq!(
+        Fuel::SignerToString
+            .consume_with_store(None, &mut store)
+            .await?,
+        0
+    );
+    assert_eq!(store.get_fuel()?, 0);
+    Ok(())
+}
 
 async fn fund(runtime: &mut Runtime, key: &str) -> Result<Signer> {
     let signer = Signer::Id(runtime.get_or_create_identity(key).await?);
@@ -50,10 +75,13 @@ async fn optional_profiling_preserves_state_gas_and_failures() -> Result<()> {
         let exhausted = staking::add_stake(&mut runtime, &signer, Decimal::from("1"))
             .await
             .unwrap_err();
-        assert!(matches!(
-            exhausted.downcast_ref::<ExecutionError>(),
-            Some(ExecutionError::Deterministic(_))
-        ));
+        assert!(
+            matches!(
+                exhausted.downcast_ref::<ExecutionError>(),
+                Some(ExecutionError::Deterministic(_))
+            ),
+            "unexpected exhaustion classification: {exhausted:#}"
+        );
         runtime.gas_limit_for_non_procs = normal_limit;
         staking::add_stake(&mut runtime, &signer, Decimal::from("1")).await??;
         assert_eq!(

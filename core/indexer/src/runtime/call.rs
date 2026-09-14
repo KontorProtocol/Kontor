@@ -755,10 +755,7 @@ async fn val_to_wave(
 /// - `Err(ExecutionError::Deterministic(e))` is mapped by looking at the
 ///   underlying error for a `wasmtime::Trap` variant. `Trap::OutOfFuel`
 ///   becomes `OpStatus::OutOfFuel`; other trap variants become
-///   `OpStatus::Trap`. If the error isn't a trap (host-side
-///   `Fuel::consume` exhaustion produces an `anyhow!("Insufficient fuel")`
-///   rather than a wasmtime trap, so check the message too), classify
-///   as `OutOfFuel` or `Other`.
+///   `OpStatus::Trap`. Non-trap errors become `OpStatus::Other`.
 /// - `Err(NonDeterministic)` shouldn't normally produce a row — those
 ///   propagate as fatal infrastructure errors and the block won't
 ///   commit. Mapped to `Other` for completeness.
@@ -772,8 +769,6 @@ fn classify_result(result: &Result<String, ExecutionError>) -> OpStatus {
                     wasmtime::Trap::OutOfFuel => OpStatus::OutOfFuel,
                     _ => OpStatus::Trap,
                 }
-            } else if e.to_string().contains("Insufficient fuel") {
-                OpStatus::OutOfFuel
             } else {
                 OpStatus::Other
             }

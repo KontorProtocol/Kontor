@@ -1,12 +1,12 @@
 use std::sync::Arc;
 
-use anyhow::{Result, anyhow};
+use anyhow::Result;
 use futures_util::future::OptionFuture;
 use indexmap::IndexMap;
 use strum::{EnumDiscriminants, EnumIter};
 use tokio::sync::Mutex;
 use wasmtime::{
-    AsContextMut, Store,
+    AsContextMut, Store, Trap,
     component::{Accessor, HasData},
 };
 
@@ -209,7 +209,7 @@ impl Fuel {
             let fuel = store
                 .get_fuel()?
                 .checked_sub(self.cost())
-                .ok_or(anyhow!("Insufficient fuel"))?;
+                .ok_or(Trap::OutOfFuel)?;
             store.set_fuel(fuel)?;
             Ok(fuel)
         })
@@ -224,7 +224,7 @@ impl Fuel {
         let fuel = store
             .get_fuel()?
             .checked_sub(self.cost())
-            .ok_or(anyhow!("Insufficient fuel"))?;
+            .ok_or(Trap::OutOfFuel)?;
         store.set_fuel(fuel)?;
         Ok(fuel)
     }
