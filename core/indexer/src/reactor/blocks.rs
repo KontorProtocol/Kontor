@@ -9,8 +9,8 @@ use tracing::{debug, info, warn};
 use crate::block;
 use crate::consensus::finality_types::{FINALITY_WINDOW, StateEvent};
 use crate::database::queries::{
-    confirm_transaction, get_transaction_by_txid, insert_batch, insert_block, insert_transaction,
-    select_block_at_height, select_block_latest,
+    confirm_transaction, get_transaction_by_txid, insert_batch, insert_block,
+    insert_block_execution_usage, insert_transaction, select_block_at_height, select_block_latest,
 };
 use crate::metrics::{BLOCK_HEIGHT, ITEMS_INDEXED};
 use crate::runtime::{
@@ -313,6 +313,14 @@ impl<E: Executor> Reactor<E> {
 
     /// Run block lifecycle operations: challenge expiry/generation and epoch transitions.
     async fn run_block_lifecycle(&mut self, block: &Block) -> Result<()> {
+        let previous = self.runtime.start_usage();
+        let result = self.run_block_lifecycle_inner(block).await;
+        let usage = self.runtime.finish_usage(previous);
+        result?;
+        insert_block_execution_usage(&self.db_conn(), block.height, usage?).await
+    }
+
+    async fn run_block_lifecycle_inner(&mut self, block: &Block) -> Result<()> {
         let core_signer = Signer::Core(Box::new(Signer::Nobody));
         let block_hash: Vec<u8> = block.hash.to_byte_array().to_vec();
         self.runtime

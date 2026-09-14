@@ -251,7 +251,7 @@ impl Executor for LiteExecutor {
         txids.iter().map(|t| mock.get_raw_transaction(t)).collect()
     }
 
-    async fn execute_transaction(
+    async fn execute_transaction_inner(
         &self,
         runtime: &mut Runtime,
         height: u64,

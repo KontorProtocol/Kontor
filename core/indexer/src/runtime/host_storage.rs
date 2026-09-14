@@ -283,6 +283,9 @@ impl Runtime {
                     ))
                 })?;
             self.deposit.record_charge(deposit_gas).await;
+            if let Some(usage) = &self.usage {
+                usage.record_deposit(deposit_fuel)?;
+            }
             Some(deposit_gas)
         } else {
             None

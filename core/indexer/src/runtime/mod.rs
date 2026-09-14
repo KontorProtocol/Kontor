@@ -17,6 +17,7 @@ mod storage;
 pub mod system;
 pub mod token;
 mod types;
+pub mod usage;
 pub mod wit;
 
 mod call;
@@ -120,6 +121,7 @@ use crate::runtime::{
     fuel::FuelGauge,
     pricing::Pricing,
     stack::{CallFrame, Stack},
+    usage::{UsageKind, UsageMeter},
     wit::Signer,
 };
 
@@ -215,6 +217,9 @@ pub struct Runtime {
     pub result_id_counter: Counter,
     pub stack: Stack<CallFrame>,
     pub gauge: Option<FuelGauge>,
+    pub(crate) usage: Option<UsageMeter>,
+    pub(crate) usage_kind: UsageKind,
+    pub(crate) fuel_checkpoint: u64,
     /// Transient per-op accumulator of the storage-deposit GAS reserved this op
     /// (the returned-at-settle slice that bounds growth). Reset at the top-level op
     /// start, drained at the settle boundary to compute the execution burn
@@ -330,6 +335,9 @@ impl Runtime {
             // Diagnostic tracing is opt-in; fuel enforcement does not use the gauge.
             gauge: None,
             deposit: DepositMeter::new(),
+            usage: None,
+            usage_kind: UsageKind::System,
+            fuel_checkpoint: 0,
             gas_limit_for_non_procs: 100_000,
             // The pool overrides this from node config on read-only runtimes; the
             // reactor's consensus runtime leaves it at the default (views never run
@@ -880,18 +888,20 @@ impl Runtime {
             expr,
             self.tx_context()
         );
-        let PreparedCall {
+        let (
+            PreparedCall {
+                contract_id,
+                func_name,
+                is_fallback,
+                params,
+                results,
+                func,
+                is_proc,
+                fuel_limit: starting_fuel,
+                ctx,
+            },
             store,
-            contract_id,
-            func_name,
-            is_fallback,
-            params,
-            results,
-            func,
-            is_proc,
-            fuel_limit: starting_fuel,
-            ctx,
-        } = self
+        ) = self
             .prepare_call(contract_address, signer, payment.as_ref(), expr, None)
             .await?;
         OptionFuture::from(
@@ -959,6 +969,7 @@ impl Runtime {
     pub fn make_store(&self, fuel: u64) -> Result<Store<Runtime>> {
         let mut s = Store::new(&self.engine, self.clone());
         s.set_fuel(fuel)?;
+        s.data_mut().fuel_checkpoint = fuel;
         Ok(s)
     }
 }

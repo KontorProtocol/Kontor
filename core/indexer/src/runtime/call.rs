@@ -29,6 +29,7 @@ use super::{
     stack::{CallFrame, Stack},
     token,
     types::default_val_for_type,
+    usage::{UsageKind, record_fuel},
     wit::{Contract, CoreContext, FallContext, Holder, ProcContext, Signer, ViewContext},
 };
 
@@ -53,11 +54,9 @@ fn payer_signer(payment: &Payment) -> Signer {
     Signer::Id(Identity::new(payment.signer_id))
 }
 
-/// Everything `prepare_call` produces for the caller to run + settle a call: the
-/// instantiated store, the resolved function with its lowered params/results, and
-/// the op metadata. A named struct in place of a positional 9-tuple.
+/// Resolved function, arguments and settlement metadata. The store is returned
+/// separately so failed preparation can be measured before it is dropped.
 pub(crate) struct PreparedCall {
-    pub store: Store<Runtime>,
     pub contract_id: u64,
     pub func_name: String,
     pub is_fallback: bool,
@@ -91,16 +90,12 @@ impl Runtime {
         payment: Option<&Payment>,
         expr: &str,
         fuel_override: Option<u64>,
-    ) -> Result<PreparedCall, ExecutionError> {
+    ) -> Result<(PreparedCall, Store<Runtime>), ExecutionError> {
         // Reject an oversized/over-nested call expression BEFORE it reaches the
         // recursive WAVE parser (`parse_raw_func_call` below), which would
         // otherwise overflow the host stack and abort the node — a deterministic
         // rejection here keeps that a normal failed op instead.
         validate_expr(expr)?;
-        // The outermost frame iff no frame is on the stack yet (we push ours at the
-        // end). This replaces a redundant `is_top_level` parameter that the two
-        // call sites always passed in agreement with the stack state.
-        let is_top_level = self.stack.is_empty().await;
         let contract_id = self
             .storage
             .contract_id(contract_address)
@@ -109,10 +104,6 @@ impl Runtime {
             .ok_or_else(|| {
                 ExecutionError::Deterministic(anyhow!("Contract not found: {}", contract_address))
             })?;
-        let component = self
-            .load_component(contract_id)
-            .await
-            .map_err(ExecutionError::NonDeterministic)?;
         // The fuel budget is decided ONCE here, from the signer, so it can't drift
         // across the per-context arms below.
         let fuel_limit = match fuel_override {
@@ -135,6 +126,41 @@ impl Runtime {
         let mut store = self
             .make_store(fuel_limit)
             .map_err(ExecutionError::NonDeterministic)?;
+        if fuel_override.is_none() {
+            store.data_mut().usage_kind = match signer {
+                Some(signer) if !signer.is_core() => UsageKind::User,
+                _ => UsageKind::System,
+            };
+        }
+        let prepared = self
+            .prepare_in_store(
+                &mut store,
+                contract_id,
+                signer,
+                payment,
+                expr,
+                fuel_override.is_some(),
+            )
+            .await;
+        record_fuel(&mut store)?;
+        Ok((prepared?, store))
+    }
+
+    async fn prepare_in_store(
+        &self,
+        mut store: &mut Store<Runtime>,
+        contract_id: u64,
+        signer: Option<&Signer>,
+        payment: Option<&Payment>,
+        expr: &str,
+        nested: bool,
+    ) -> Result<PreparedCall, ExecutionError> {
+        let fuel_limit = store.get_fuel().map_err(anyhow::Error::from)?;
+        let component = self
+            .load_component(contract_id)
+            .await
+            .map_err(ExecutionError::NonDeterministic)?;
+        let is_top_level = self.stack.is_empty().await;
         // Native contracts get the privileged linker (file-registry, registry);
         // user contracts get the common-only linker, so importing a registry
         // interface fails to link.
@@ -317,7 +343,7 @@ impl Runtime {
             }
         };
 
-        if is_proc && payment.is_none() && fuel_override.is_none() {
+        if is_proc && payment.is_none() && !nested {
             return Err(ExecutionError::Deterministic(anyhow!(
                 "Missing fuel for procedure"
             )));
@@ -394,7 +420,6 @@ impl Runtime {
         self.storage.savepoint().await?;
 
         Ok(PreparedCall {
-            store,
             contract_id,
             func_name: func_name.to_string(),
             is_fallback: func_name == fallback_name,
@@ -468,6 +493,7 @@ impl Runtime {
         // resource from the shared table, success and failure alike.
         self.drain_ctx_resource(ctx).await;
 
+        record_fuel(&mut store)?;
         Ok((call_result, store))
     }
 
@@ -576,6 +602,7 @@ impl Runtime {
         {
             result = Err(ExecutionError::Deterministic(e));
         }
+        record_fuel(&mut *store)?;
         let gas = self
             .gas_consumed(
                 starting_fuel,
@@ -657,6 +684,10 @@ impl Runtime {
         contract_address: &ContractAddress,
         expr: &str,
     ) -> Result<String> {
+        accessor.with(|mut access| {
+            let remaining = access.as_context().get_fuel()?;
+            access.get().record_fuel(remaining)
+        })?;
         let starting_fuel = accessor.with(|access| access.as_context().get_fuel())?;
 
         let signer =
@@ -665,18 +696,20 @@ impl Runtime {
                 .transpose()
                 .expect("Failed to lock table and get signer");
 
-        let PreparedCall {
+        let (
+            PreparedCall {
+                contract_id,
+                func_name,
+                is_fallback,
+                params,
+                results,
+                func,
+                is_proc,
+                fuel_limit: _,
+                ctx,
+            },
             store,
-            contract_id,
-            func_name,
-            is_fallback,
-            params,
-            results,
-            func,
-            is_proc,
-            fuel_limit: _,
-            ctx,
-        } = self
+        ) = self
             .prepare_call(
                 contract_address,
                 signer.as_ref(),
@@ -690,7 +723,13 @@ impl Runtime {
             .await?;
         let fuel = store.get_fuel().unwrap();
         accessor
-            .with(|mut access| access.as_context_mut().set_fuel(fuel))
+            .with(|mut access| {
+                let mut parent = access.as_context_mut();
+                parent.set_fuel(fuel)?;
+                // The child already measured this fuel; only subsequent parent work counts.
+                access.get().fuel_checkpoint = fuel;
+                Ok::<_, anyhow::Error>(())
+            })
             .expect("Failed to set remaining fuel on parent store");
         if is_proc {
             result = self

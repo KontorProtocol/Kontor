@@ -9,6 +9,7 @@ use crate::bitcoin_client::types::Acceptance;
 use crate::bitcoin_client::{Client, check_mempool_acceptance};
 use crate::block::{TxWalker, filter_map};
 use crate::database;
+use crate::database::queries::insert_transaction_execution_usage;
 use crate::retry::{new_backoff_limited, retry};
 use crate::runtime::ExecutionError;
 use crate::runtime::Runtime;
@@ -83,6 +84,14 @@ pub trait Executor {
     /// RPC there is one round trip per historical transaction.
     async fn resolve_transactions(&self, txids: &[Txid]) -> Vec<Option<bitcoin::Transaction>>;
 
+    async fn execute_transaction_inner(
+        &self,
+        runtime: &mut Runtime,
+        height: u64,
+        tx_id: u64,
+        tx: &indexer_types::Transaction,
+    ) -> Result<Vec<Vec<Option<anyhow::Error>>>>;
+
     /// Execute a single transaction's operations at the given height.
     /// Called by the reactor after DB row insertion. Sets context and runs ops.
     /// Returns Err only for non-deterministic infrastructure failures.
@@ -99,7 +108,16 @@ pub trait Executor {
         height: u64,
         tx_id: u64,
         tx: &indexer_types::Transaction,
-    ) -> Result<Vec<Vec<Option<anyhow::Error>>>>;
+    ) -> Result<Vec<Vec<Option<anyhow::Error>>>> {
+        let previous = runtime.start_usage();
+        let result = self
+            .execute_transaction_inner(runtime, height, tx_id, tx)
+            .await;
+        let usage = runtime.finish_usage(previous);
+        let result = result?;
+        insert_transaction_execution_usage(&runtime.get_storage_conn(), tx_id, usage?).await?;
+        Ok(result)
+    }
 
     /// Signal the block source to re-deliver blocks strictly AFTER `after_height`.
     /// Exclusive, matching the poller's rollback convention: a caller that has just
@@ -132,7 +150,7 @@ impl Executor for NoopExecutor {
     async fn resolve_transactions(&self, txids: &[Txid]) -> Vec<Option<bitcoin::Transaction>> {
         txids.iter().map(|_| None).collect()
     }
-    async fn execute_transaction(
+    async fn execute_transaction_inner(
         &self,
         _runtime: &mut Runtime,
         _height: u64,
@@ -289,7 +307,7 @@ impl Executor for RuntimeExecutor {
             }
         }
     }
-    async fn execute_transaction(
+    async fn execute_transaction_inner(
         &self,
         runtime: &mut Runtime,
         height: u64,
