@@ -1,11 +1,14 @@
 use std::path::PathBuf;
 
+use anyhow::{Context, Error as AnyhowError, Result};
 use bitcoin::Network;
 use clap::Parser;
 use serde::{Deserialize, Serialize};
 
 use crate::consensus::signing::ConsensusMode;
 use crate::logging;
+use crate::runtime::numerics::string_to_decimal;
+use crate::runtime::{GenesisParameters, GenesisValidator};
 
 /// Default per-call gas budget for read-only `/view` queries. Generous out of the
 /// box (operators raise it further on read/archive nodes); independent of the fixed
@@ -226,13 +229,71 @@ pub struct GenesisValidatorConfig {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GenesisConfig {
+    pub sigma_min: String,
     pub validators: Vec<GenesisValidatorConfig>,
 }
 
 impl GenesisConfig {
-    pub fn load(path: &std::path::Path) -> anyhow::Result<Self> {
+    pub fn load(path: &std::path::Path) -> Result<Self> {
         let contents = std::fs::read_to_string(path)?;
         Ok(serde_json::from_str(&contents)?)
+    }
+}
+
+impl TryFrom<GenesisConfig> for GenesisParameters {
+    type Error = AnyhowError;
+
+    fn try_from(config: GenesisConfig) -> Result<Self> {
+        let sigma_min =
+            string_to_decimal(&config.sigma_min).context("invalid genesis sigma_min")?;
+        let validators = config
+            .validators
+            .into_iter()
+            .map(|v| {
+                Ok(GenesisValidator {
+                    x_only_pubkey: v.x_only_pubkey,
+                    stake: string_to_decimal(&v.stake)
+                        .context("invalid genesis validator stake")?,
+                    ed25519_pubkey: hex::decode(&v.ed25519_pubkey)
+                        .context("invalid genesis ed25519 hex")?,
+                })
+            })
+            .collect::<Result<_>>()?;
+        Ok(Self {
+            sigma_min,
+            validators,
+        })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::runtime::Decimal;
+    use serde_json::json;
+
+    #[test]
+    fn genesis_requires_an_explicit_admission_floor() {
+        assert!(serde_json::from_value::<GenesisConfig>(json!({"validators": []})).is_err());
+        let config: GenesisConfig = serde_json::from_value(json!({
+            "sigma_min": "5000000", "validators": []
+        }))
+        .unwrap();
+        let genesis = GenesisParameters::try_from(config).unwrap();
+        assert_eq!(genesis.sigma_min, Decimal::from("5000000"));
+    }
+
+    #[test]
+    fn invalid_genesis_amounts_return_errors() {
+        for config in [
+            json!({"sigma_min": "not-a-number", "validators": []}),
+            json!({"sigma_min": "1", "validators": [{
+                "x_only_pubkey": "100", "ed25519_pubkey": "00", "stake": "not-a-number"
+            }]}),
+        ] {
+            let config: GenesisConfig = serde_json::from_value(config).unwrap();
+            assert!(GenesisParameters::try_from(config).is_err());
+        }
     }
 }
 

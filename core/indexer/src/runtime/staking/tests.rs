@@ -13,35 +13,103 @@ use crate::runtime::numerics::{add_decimal, sub_decimal};
 use crate::runtime::token::api as token;
 use crate::runtime::wit::Signer;
 use crate::runtime::wit::kontor::built_in::context::HolderRef;
-use crate::runtime::{Decimal, Error, GenesisValidator, Runtime};
+use crate::runtime::{
+    ComponentCache, Decimal, Error, GenesisParameters, GenesisValidator, Runtime, Storage,
+};
 use crate::test_utils::{
-    make_descriptor, new_mock_block_hash, test_runtime, test_runtime_with_genesis,
-    test_runtime_with_network, valid_seed_field,
+    make_descriptor, new_mock_block_hash, new_test_db, test_genesis, test_runtime,
+    test_runtime_with_genesis, test_runtime_with_genesis_config, valid_seed_field,
 };
 
 const LIMIT: u64 = u64::MAX / 3;
 
 #[tokio::test]
-async fn admission_floor_defaults_are_network_specific() -> Result<()> {
-    for (network, expected) in [
-        (Network::Bitcoin, "5000000"),
-        (Network::Testnet, "5000000"),
-        (Network::Testnet4, "5000000"),
-        (Network::Signet, "5000000"),
-        (Network::Regtest, "1"),
+async fn genesis_floor_bootstrap_retries_and_preserves_later_updates() -> Result<()> {
+    let (_reader, writer, (_dir, _name)) = new_test_db().await?;
+    insert_block(
+        &writer.connection(),
+        BlockRow::builder()
+            .height(0)
+            .hash(new_mock_block_hash(0))
+            .relevant(true)
+            .build(),
+    )
+    .await?;
+    let storage = Storage::builder()
+        .height(0)
+        .conn(writer.connection())
+        .build();
+    let mut runtime = Runtime::new(ComponentCache::new(), storage).await?;
+    let mut genesis = GenesisParameters {
+        sigma_min: Decimal::default(),
+        validators: Vec::new(),
+    };
+    assert!(runtime.publish_native_contracts(&genesis).await.is_err());
+    assert_eq!(api::get_sigma_min(&mut runtime).await?, Decimal::default());
+    let signer = funded_signer(&mut runtime).await?;
+    api::add_stake(&mut runtime, &signer, Decimal::from("10")).await??;
+    assert_eq!(
+        api::register_validator(&mut runtime, &signer, vec![1; 32], Decimal::default()).await?,
+        Err(Error::Message(
+            "validator admission floor not initialized".into()
+        ))
+    );
+    genesis.sigma_min = Decimal::from("7");
+    runtime.publish_native_contracts(&genesis).await?;
+    assert_eq!(api::get_sigma_min(&mut runtime).await?, genesis.sigma_min);
+    api::register_validator(&mut runtime, &signer, vec![1; 32], Decimal::default()).await??;
+    let genesis_checkpoint = get_checkpoint_by_height(&writer.connection(), 0)
+        .await?
+        .unwrap();
+
+    advance(&mut runtime, 1).await?;
+    api::set_sigma_min(&mut runtime, &core(), Decimal::from("12")).await??;
+    drop(runtime);
+    let storage = Storage::builder()
+        .height(1)
+        .conn(writer.connection())
+        .build();
+    let mut runtime = Runtime::new(ComponentCache::new(), storage).await?;
+    genesis.sigma_min = Decimal::from("99");
+    runtime.publish_native_contracts(&genesis).await?;
+    assert_eq!(
+        get_checkpoint_by_height(&writer.connection(), 0).await?,
+        Some(genesis_checkpoint)
+    );
+    assert_eq!(api::get_sigma_min(&mut runtime).await?, Decimal::from("12"));
+    Ok(())
+}
+
+#[tokio::test]
+async fn admission_floor_comes_from_genesis_on_every_network() -> Result<()> {
+    for network in [
+        Network::Bitcoin,
+        Network::Testnet,
+        Network::Testnet4,
+        Network::Signet,
+        Network::Regtest,
     ] {
-        let (mut runtime, _dir, _name) = test_runtime_with_network(network).await?;
-        assert_eq!(
-            api::get_sigma_min(&mut runtime).await?,
-            Decimal::from(expected)
-        );
+        for floor in ["1", "5000000"] {
+            let genesis = GenesisParameters {
+                sigma_min: Decimal::from(floor),
+                validators: Vec::new(),
+            };
+            let (mut runtime, _dir, _name) =
+                test_runtime_with_genesis_config(&genesis, network).await?;
+            assert_eq!(api::get_sigma_min(&mut runtime).await?, genesis.sigma_min);
+        }
     }
     Ok(())
 }
 
 #[tokio::test]
 async fn admission_floor_counts_existing_bond_and_replays_atomically() -> Result<()> {
-    let (mut runtime, _dir, _name) = test_runtime_with_network(Network::Bitcoin).await?;
+    let genesis = GenesisParameters {
+        sigma_min: Decimal::from("5000000"),
+        validators: Vec::new(),
+    };
+    let (mut runtime, _dir, _name) =
+        test_runtime_with_genesis_config(&genesis, Network::Bitcoin).await?;
     runtime.set_context(1, None, None, None).await;
     assert_eq!(
         api::get_sigma_min(&mut runtime).await?,
@@ -128,7 +196,12 @@ async fn admission_floor_counts_existing_bond_and_replays_atomically() -> Result
 
 #[tokio::test]
 async fn genesis_admission_exemption_does_not_survive_exit() -> Result<()> {
-    let (mut runtime, _dir, _name) = test_runtime_with_network(Network::Bitcoin).await?;
+    let genesis = GenesisParameters {
+        sigma_min: Decimal::from("5000000"),
+        validators: Vec::new(),
+    };
+    let (mut runtime, _dir, _name) =
+        test_runtime_with_genesis_config(&genesis, Network::Bitcoin).await?;
     runtime.set_context(1, None, None, None).await;
     let signer = funded_signer(&mut runtime).await?;
     api::set_genesis_set(
@@ -163,7 +236,12 @@ async fn genesis_admission_exemption_does_not_survive_exit() -> Result<()> {
 
 #[tokio::test]
 async fn admission_floor_updates_are_authorized_bounded_and_versioned() -> Result<()> {
-    let (mut runtime, _dir, _name) = test_runtime_with_network(Network::Bitcoin).await?;
+    let genesis = GenesisParameters {
+        sigma_min: Decimal::from("5000000"),
+        validators: Vec::new(),
+    };
+    let (mut runtime, _dir, _name) =
+        test_runtime_with_genesis_config(&genesis, Network::Bitcoin).await?;
     runtime.set_context(1, None, None, None).await;
     let signer = funded_signer(&mut runtime).await?;
     assert!(
@@ -572,7 +650,9 @@ async fn genesis_is_not_reissued_after_the_last_validator_exits() -> Result<()> 
         .await?
         .unwrap();
     // Startup republishes native contracts at height zero, even on an existing database.
-    runtime.publish_native_contracts(&validators).await?;
+    runtime
+        .publish_native_contracts(&test_genesis(&validators))
+        .await?;
     assert_eq!(
         get_checkpoint_by_height(&runtime.get_storage_conn(), 0).await?,
         Some(genesis_checkpoint)

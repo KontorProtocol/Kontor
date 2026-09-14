@@ -1215,6 +1215,7 @@ impl RegTesterCluster {
 
         // Write genesis file (only genesis_count validators)
         let genesis_config = GenesisConfig {
+            sigma_min: "1".to_string(),
             validators: validator_keys
                 .iter()
                 .take(genesis_count)

@@ -122,6 +122,12 @@ use crate::runtime::{
 };
 
 #[derive(Clone, Debug)]
+pub struct GenesisParameters {
+    pub sigma_min: Decimal,
+    pub validators: Vec<GenesisValidator>,
+}
+
+#[derive(Clone, Debug)]
 pub struct GenesisValidator {
     pub x_only_pubkey: String,
     pub stake: Decimal,
@@ -413,10 +419,7 @@ impl Runtime {
         (starting_fuel - ending_fuel).div_ceil(self.gas_to_fuel_multiplier)
     }
 
-    pub async fn publish_native_contracts(
-        &mut self,
-        genesis_validators: &[GenesisValidator],
-    ) -> Result<()> {
+    pub async fn publish_native_contracts(&mut self, genesis: &GenesisParameters) -> Result<()> {
         self.set_context(0, Some(TransactionContext::builder().build()), None, None)
             .await;
 
@@ -438,8 +441,13 @@ impl Runtime {
             self.publish(&core_signer, payment.clone(), name, bytes, &provenance)
                 .await?;
         }
-        if !genesis_validators.is_empty() {
-            let validators = genesis_validators.iter().cloned().map(Into::into).collect();
+        // Zero is uninitialized, never a valid configured floor. This also
+        // resumes an interrupted bootstrap after the contract was published.
+        if staking::api::get_sigma_min(self).await? == Decimal::default() {
+            staking::api::set_sigma_min(self, &core_signer, genesis.sigma_min).await??;
+        }
+        if !genesis.validators.is_empty() {
+            let validators = genesis.validators.iter().cloned().map(Into::into).collect();
             staking::api::set_genesis_set(
                 self,
                 &Signer::Core(Box::new(Signer::Nobody)),

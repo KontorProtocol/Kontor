@@ -396,12 +396,18 @@ spec, same milestone as slashing:
 ## 8. σ_min gate (Decision 3, recorded)
 
 - `register_validator` requires the existing bond plus the additional deposit to
-  meet `σ_min`. The default is 5,000,000 KOR on mainnet, testnet and signet; regtest
-  initializes the same parameter to 1 KOR for its small faucet-funded fixtures.
-  All networks use the same registration and lifecycle logic.
-  Defaults are applied at initial publication; upgrading binaries does not
-  overwrite an existing stored floor. Pre-production deployment uses the usual
-  fresh-state/reset model.
+  meet `σ_min`. The shared genesis JSON must explicitly include a `sigma_min`
+  decimal string alongside `validators`. Production configuration uses
+  `"sigma_min": "5000000"`; regtest fixtures use `"sigma_min": "1"` for their
+  small faucet-funded balances. Contracts do not infer this policy from the
+  Bitcoin network. `kontor keygen ... validators` emits 5M by default and accepts
+  `--sigma-min` to choose another initial floor.
+- Bootstrap applies this parameter through the core-only setter while its stored
+  value is zero (uninitialized). Registration is blocked until that succeeds;
+  invalid configuration can be corrected and retried after partial publication.
+  Once configured, startup leaves it alone, preserving genesis history and later
+  parameter changes. Existing genesis files need the explicit field; pre-production
+  deployment uses the usual fresh-state/reset model.
 - Genesis admission is exempt from `σ_min`, but still requires at least 1 KOR of
   voting stake and safe aggregate voting arithmetic. After exiting, a former
   genesis validator must meet the current admission floor to register again.

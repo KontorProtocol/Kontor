@@ -4,7 +4,7 @@ use crate::{
     bls::RegistrationProof,
     database::queries::{get_signer_entry_by_x_only_pubkey, insert_block, insert_transaction},
     runtime::{ComponentCache, Runtime, Storage},
-    test_utils::new_test_db,
+    test_utils::{new_test_db, test_genesis},
 };
 use anyhow::{Result, anyhow};
 use axum::{Router, http::StatusCode, routing::get};
@@ -117,7 +117,7 @@ async fn create_test_app() -> Result<(Router, Vec<RegisteredUser>, TempDir)> {
 
     let storage = Storage::builder().height(0).conn(conn.clone()).build();
     let mut runtime = Runtime::new(ComponentCache::new(), storage).await?;
-    runtime.publish_native_contracts(&[]).await?;
+    runtime.publish_native_contracts(&test_genesis(&[])).await?;
 
     insert_block_at(
         &conn,
@@ -343,7 +343,7 @@ async fn test_nonce_reverts_on_reorg_rollback() -> Result<()> {
 
     let storage = Storage::builder().height(0).conn(conn.clone()).build();
     let mut runtime = Runtime::new(ComponentCache::new(), storage).await?;
-    runtime.publish_native_contracts(&[]).await?;
+    runtime.publish_native_contracts(&test_genesis(&[])).await?;
 
     insert_block_at(
         &conn,

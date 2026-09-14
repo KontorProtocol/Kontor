@@ -8,6 +8,7 @@ use crate::api::Env;
 use anyhow::Result;
 use clap::{Parser, Subcommand};
 use futures_util::{FutureExt, future};
+use indexer::config::GenesisConfig;
 use indexer::database::queries::select_recent_blocks;
 use indexer::event::EventSubscriber;
 use indexer::info::{compute_info_core, run_info_publisher};
@@ -321,7 +322,7 @@ async fn run_daemon(config: Config) -> Result<()> {
         engine_config,
         bitcoin.clone(),
         Some(replay_tx),
-        load_genesis_validators(&config)?,
+        GenesisConfig::load(&config.genesis_file)?.try_into()?,
         None,
         config.consensus_propose_timeout_ms,
         Some(fees_tx),
@@ -570,24 +571,6 @@ fn exit_error(
         Err(e) => anyhow::anyhow!("{name} task panicked: {e}"),
         Ok(Ok(())) => anyhow::Error::new(stopper::UnexpectedExit(name)),
     }
-}
-
-fn load_genesis_validators(config: &Config) -> Result<Vec<runtime::GenesisValidator>> {
-    let genesis = indexer::config::GenesisConfig::load(&config.genesis_file)?;
-    genesis
-        .validators
-        .into_iter()
-        .map(|v| {
-            let ed25519_bytes = hex::decode(&v.ed25519_pubkey)
-                .map_err(|e| anyhow::anyhow!("invalid ed25519 hex: {e}"))?;
-            let stake = runtime::Decimal::from(v.stake.as_str());
-            Ok(runtime::GenesisValidator {
-                x_only_pubkey: v.x_only_pubkey,
-                stake,
-                ed25519_pubkey: ed25519_bytes,
-            })
-        })
-        .collect()
 }
 
 #[cfg(test)]

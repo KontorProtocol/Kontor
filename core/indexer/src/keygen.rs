@@ -2,9 +2,9 @@ use anyhow::{Context, Result};
 use bitcoin::secp256k1::{Keypair, Secp256k1, SecretKey};
 use clap::{Args, Subcommand};
 use hkdf::Hkdf;
-use serde_json::json;
 use sha2::Sha256;
 
+use crate::config::{GenesisConfig, GenesisValidatorConfig};
 use crate::consensus::signing::PrivateKey;
 
 #[derive(Args)]
@@ -27,6 +27,9 @@ pub enum KeygenMode {
         /// Stake amount per validator (decimal string).
         #[clap(long, default_value = "1")]
         stake: String,
+        /// Minimum bonded stake for subsequent validator registrations.
+        #[clap(long, default_value = "5000000")]
+        sigma_min: String,
     },
     /// Emit the four key fields for a single validator
     /// (ed25519 + secp256k1 keypairs, private + public).
@@ -39,7 +42,11 @@ pub enum KeygenMode {
 pub fn run(args: KeygenArgs) -> Result<()> {
     let master = parse_master_seed(&args.master_seed)?;
     match args.mode {
-        KeygenMode::Validators { n, stake } => emit_genesis(&master, n, &stake),
+        KeygenMode::Validators {
+            n,
+            stake,
+            sigma_min,
+        } => emit_genesis(&master, n, &stake, &sigma_min),
         KeygenMode::Validator { n } => emit_validator(&master, n),
     }
 }
@@ -102,18 +109,21 @@ pub fn derive_validator(master: &[u8; 32], idx: u32) -> ValidatorKeys {
     }
 }
 
-fn emit_genesis(master: &[u8; 32], n: u32, stake: &str) -> Result<()> {
+fn emit_genesis(master: &[u8; 32], n: u32, stake: &str, sigma_min: &str) -> Result<()> {
     let validators: Vec<_> = (0..n)
         .map(|i| {
             let keys = derive_validator(master, i);
-            json!({
-                "x_only_pubkey": hex::encode(keys.x_only_pubkey),
-                "stake": stake,
-                "ed25519_pubkey": hex::encode(keys.ed25519_pubkey),
-            })
+            GenesisValidatorConfig {
+                x_only_pubkey: hex::encode(keys.x_only_pubkey),
+                stake: stake.to_string(),
+                ed25519_pubkey: hex::encode(keys.ed25519_pubkey),
+            }
         })
         .collect();
-    let genesis = json!({ "validators": validators });
+    let genesis = GenesisConfig {
+        sigma_min: sigma_min.to_string(),
+        validators,
+    };
     println!("{}", serde_json::to_string_pretty(&genesis)?);
     Ok(())
 }

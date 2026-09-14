@@ -23,7 +23,6 @@ const ACTIVATION_DELAY: u64 = 12; // 2 * FINALITY_WINDOW (6)
 // Outstanding storage obligations can extend this minimum indefinitely.
 const WITHDRAWAL_DELAY: u64 = 2016 + ACTIVATION_DELAY;
 const MAX_STAKE: u64 = 1_000_000_000;
-const DEFAULT_SIGMA_MIN: u64 = 5_000_000;
 // Consensus voting power truncates to whole KOR; smaller bonds can only back storage.
 const MIN_VOTING_STAKE: u64 = 1;
 // Malachite's default thresholds multiply observed voting power by three.
@@ -56,6 +55,7 @@ fn make_stake_info(entry: &StakeAccountModel<context::ViewStorage>) -> StakeInfo
 
 #[derive(Clone, Default, StorageRoot)]
 struct StakingStorage {
+    // Zero until bootstrap applies genesis parameters; the setter rejects zero.
     pub sigma_min: Decimal,
     pub accounts: Map<Holder, StakeAccount>,
     pub total_active_stake: Decimal,
@@ -246,16 +246,7 @@ impl Guest for Staking {
     }
 
     fn init(ctx: &ProcContext) -> Contract {
-        let storage = StakingStorage::default();
-        storage.init(ctx);
-        let model = ctx.model();
-        // Regtest's small faucet balances must still support validator lifecycle tests.
-        let sigma_min = if ctx.network().is_regtest() {
-            MIN_VOTING_STAKE
-        } else {
-            DEFAULT_SIGMA_MIN
-        };
-        model.set_sigma_min(sigma_min.try_into().unwrap());
+        StakingStorage::default().init(ctx);
         ctx.contract()
     }
 
@@ -295,7 +286,13 @@ impl Guest for Staking {
             .map(|entry| entry.stake())
             .unwrap_or(zero)
             .add(stake_amount)?;
-        if stake < model.sigma_min() {
+        let sigma_min = model.sigma_min();
+        if sigma_min == Decimal::default() {
+            return Err(Error::Message(
+                "validator admission floor not initialized".into(),
+            ));
+        }
+        if stake < sigma_min {
             return Err(Error::Message("stake below minimum".to_string()));
         }
         if stake > MAX_STAKE.try_into().unwrap() {
