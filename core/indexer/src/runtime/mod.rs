@@ -265,6 +265,9 @@ impl Runtime {
         let mut config = wasmtime::Config::new();
         config.wasm_component_model_async(true);
         config.consume_fuel(true);
+        // CoW can skip metered initialization depending on OS/image availability.
+        // Every node must copy the same data segments and charge the same fuel.
+        config.memory_init_cow(false);
         // Ensure deterministic execution
         config.wasm_threads(false);
         config.wasm_relaxed_simd(false);
