@@ -13,6 +13,8 @@ use wasmtime::{
 use crate::runtime::Runtime;
 
 #[cfg(test)]
+mod cow_costs;
+#[cfg(test)]
 mod profiling_tests;
 
 #[derive(Debug, Clone, EnumDiscriminants, EnumIter)]

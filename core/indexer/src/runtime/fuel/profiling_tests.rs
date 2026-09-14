@@ -2,7 +2,8 @@ use std::time::Instant;
 
 use anyhow::Result;
 use serde_json::json;
-use wasmtime::Trap;
+use wasmtime::component::{Component, Linker};
+use wasmtime::{Store, Trap};
 
 use super::{Fuel, FuelGauge};
 use crate::database::queries::get_checkpoint_by_height;
@@ -40,13 +41,54 @@ async fn host_fuel_exhaustion_is_an_out_of_fuel_trap() -> Result<()> {
 }
 
 #[tokio::test]
+async fn initialization_fuel_has_a_platform_independent_boundary() -> Result<()> {
+    let engine = Runtime::new_engine()?;
+    let component = Component::new(
+        &engine,
+        r#"(component
+            (core module $m
+                (memory 1)
+                (data (i32.const 0) "hello"))
+            (core instance (instantiate $m)))"#,
+    )?;
+    let pre = Linker::<()>::new(&engine).instantiate_pre(&component)?;
+    // Pin the same budget boundary on Linux and macOS, not just repeated runs
+    // on one host. Wasmtime's initialization check traps at zero remaining fuel,
+    // so consuming seven fuel requires a budget of at least eight.
+    for budget in [6, 7, 8, 1_000] {
+        let mut store = Store::new(&engine, ());
+        store.set_fuel(budget)?;
+        let result = pre.instantiate_async(&mut store).await;
+        if budget <= 7 {
+            let error = result
+                .err()
+                .expect("initialization must exhaust the budget");
+            assert!(matches!(
+                error.downcast_ref::<Trap>(),
+                Some(Trap::OutOfFuel)
+            ));
+        } else {
+            result?;
+            assert_eq!(budget - store.get_fuel()?, 7);
+        }
+    }
+    Ok(())
+}
+
+#[tokio::test]
 async fn initialization_fuel_exhaustion_is_deterministic() -> Result<()> {
     let (runtime, _dir, _name) = test_runtime().await?;
     let err = runtime
-        .prepare_call(&staking_address(), None, None, "total-staked()", Some(0))
+        .prepare_call(
+            &staking_address(),
+            None,
+            None,
+            "total-staked()",
+            Some(1_000),
+        )
         .await
         .err()
-        .expect("initialization must exhaust a zero fuel budget");
+        .expect("native initialization must exhaust a 1,000 fuel budget");
     match err {
         ExecutionError::Deterministic(e) => {
             assert!(matches!(e.downcast_ref::<Trap>(), Some(Trap::OutOfFuel)));
