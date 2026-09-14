@@ -25,8 +25,7 @@ fn a_fatal_startup_error_exits_nonzero_with_the_cause() {
     // Genesis parsing can race the API failure; keep this valid so only the
     // port conflict can cause startup to fail.
     let genesis_path = data_dir.path().join("genesis.json");
-    std::fs::write(&genesis_path, r#"{"sigma_min":"1","validators":[]}"#)
-        .expect("write genesis");
+    std::fs::write(&genesis_path, r#"{"sigma_min":"1","validators":[]}"#).expect("write genesis");
 
     let mut child = Command::new(env!("CARGO_BIN_EXE_kontor"))
         .args([
