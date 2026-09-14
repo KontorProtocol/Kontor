@@ -149,7 +149,7 @@ superseded as its behavior and reactor integration land together.
 | token: mint hardening + `Issuance` mainnet gate | **on `main`** (#437; gate merged) | done |
 | Signer-keyed storage memberships (identity decision, §7) | **on `main`** | done — obsoletes #452's node_id |
 | Creation-fee burn e2e | **on `main`** (#460) | done |
-| Historical economic contract PRs | #439/#440/#441/#452 closed; #445/#453 open (2026-09-13) | Storage-reward accounting is merged; unresolved fees/deactivation remain in #442. #445 remains with congestion work. The admission-floor replacement in this tree supersedes #453 once merged. |
+| Historical economic contract PRs | #439/#440/#441/#452/#453 closed; #445 open (2026-09-14) | Storage-reward accounting is merged; unresolved fees/deactivation remain in #442. #445 remains with congestion work. #561 implements the admission floor and supersedes #453. |
 | **Reactor wiring — minimal v1** | `reactor-economic-integration.md` (re-derived) + #442 (to be rescoped) | **the build target** |
 | Phase 2 ordering/bond economy (design) | `phase2-ordering-economy.md` (annotated: deferred) | design-only |
 | Determinism-simulation test suite (design) | `determinism-simulation-testing.md` | design-only |
@@ -174,7 +174,7 @@ incentive-aligned, settled every Bitcoin block.
 | **Node↔stake coupling** | Make slashing *resolvable* (a failed challenge must hit a real bond) | Memberships are **signer-keyed on main** (`(agreement_id, signer_id)`) — identity is structural (§7). Solvency at join is plain `Σ k_f ≤ stake` (λ_stake deleted, Decision 4). | on main: identity, bond admission, and retained collateral reservations (replaces #452) |
 | **Equivocation slashing** | Make double-signing irrational; pay for policing | `slash_equivocation(offender, publisher)`: **100% slash + eject**; `r_evid` (≈ 5%) paid to the evidence publisher's spendable balance **iff publisher ∉ signers** (else fully burned); remaining ≈ 95% burned. | re-derive (was #440) |
 | **σ_min floor** | Minimum bonded stake for validator admission | `register_validator` requires existing bond + deposit ≥ `σ_min`. Genesis configuration supplies the floor: production uses 5,000,000 KOR; regtest fixtures explicitly use 1 KOR. Genesis admission is exempt; subsequent re-entry is not. Raising the floor does not evict existing validators. | implemented; replaces #453; admin-window mechanism remains #463 |
-| **Congestion pricing** | Demand-responsive, deterministic blockspace pricing (EIP-1559-style) | Multiplier `β(t)` by utilization `u`: `u < u_low` → decay `β·λ_decay`; `u_low ≤ u < u_high` → smoothstep ramp (floored by the decay term); `u ≥ u_high` → compound `max(β,1)·(1 + κ·(u − u_high))`. Fee `= φ_base · β`. (u_low ≈ 20%, u_high ≈ 80%, λ_decay ≈ 0.95, κ ≈ 2.0.) | re-derive (was #445) |
+| **Congestion pricing** | Demand-responsive, deterministic blockspace pricing (EIP-1559-style) | Multiplier `β(t)` by utilization `u`: `u < u_low` → decay `β·λ_decay`; `u_low ≤ u < u_high` → smoothstep ramp (floored by the decay term); `u ≥ u_high` → compound `max(β,1)·(1 + κ·(u − u_high))`. Fee `= φ_base · β`. (u_low ≈ 20%, u_high ≈ 80%, λ_decay ≈ 0.95, κ ≈ 2.0.) | re-derive #445; [metering investigation and sequence](design/gas-metering-and-congestion.md) |
 
 **Phase-1 in one line:** mint ε → reward useful storage (`ω_f/Ω`) → punish failed storage
 and equivocation (slashing the same stake) → price blockspace (β) → floor the validator

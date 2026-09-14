@@ -4,7 +4,7 @@ use super::ExecutionError;
 use futures_util::FutureExt;
 use futures_util::future::OptionFuture;
 use wasmtime::{
-    AsContext, AsContextMut, Store,
+    AsContext, AsContextMut, Store, Trap,
     component::{
         Accessor, Func, Resource, Val,
         wasm_wave::{
@@ -14,7 +14,6 @@ use wasmtime::{
 };
 
 use indexer_types::{OpStatus, Payment};
-use stdlib::CheckedArithmetics;
 
 use crate::database::native_contracts::is_native_contract_id;
 use crate::database::types::Identity;
@@ -24,7 +23,7 @@ use tokio::sync::Mutex;
 use wasmtime::component::ResourceTable;
 
 use super::{
-    ContractAddress, Decimal, Runtime,
+    ContractAddress, Runtime,
     fuel::Fuel,
     should_skip_result,
     stack::{CallFrame, Stack},
@@ -85,16 +84,6 @@ pub(crate) enum CtxResource {
 }
 
 impl Runtime {
-    /// Token cost of a gas amount (`gas × gas_to_token_multiplier`). Infallible in
-    /// practice — a u64 always converts to Decimal and the arbitrary-precision
-    /// multiply can't overflow — so a failure here is a bug, not a user error.
-    fn gas_to_token(&self, gas: u64) -> Decimal {
-        Decimal::try_from(gas)
-            .expect("u64 to decimal")
-            .mul(self.gas_to_token_multiplier)
-            .expect("gas to token amount")
-    }
-
     pub(crate) async fn prepare_call(
         &self,
         contract_address: &ContractAddress,
@@ -157,15 +146,22 @@ impl Runtime {
         // Import resolution (`instantiate_pre`) is a pure function of the
         // component bytes and the linker — identical on every node — so a link
         // failure (e.g. a user contract importing a native-only interface) is
-        // DETERMINISTIC: reject the op, don't shut the node down. Only the
-        // actual instantiation step can fail for non-deterministic infra reasons.
+        // DETERMINISTIC: reject the op, don't shut the node down. Instantiation
+        // also executes Wasm initialization, whose traps are deterministic;
+        // non-trap instantiation failures remain infrastructure errors.
         let instance_pre = linker
             .instantiate_pre(&component)
             .map_err(|e| ExecutionError::Deterministic(e.into()))?;
         let instance = instance_pre
             .instantiate_async(&mut store)
             .await
-            .map_err(|e| ExecutionError::NonDeterministic(e.into()))?;
+            .map_err(|e| {
+                if e.downcast_ref::<Trap>().is_some() {
+                    ExecutionError::Deterministic(e.into())
+                } else {
+                    ExecutionError::NonDeterministic(e.into())
+                }
+            })?;
         let fallback_name = "fallback";
         let fallback_expr = format!(
             "{}({})",
@@ -339,10 +335,7 @@ impl Runtime {
         {
             let payment = payment.expect("payment is required for top-level proc calls");
             let payer = payer_signer(payment);
-            // fuel_limit == payment.gas_limit × gas_to_fuel_multiplier for a top-level
-            // user op (see the budget decision above), so the hold is the committed
-            // gas limit's token cost.
-            let hold_amount = self.gas_to_token(payment.gas_limit);
+            let hold_amount = self.pricing.gas_hold(payment.gas_limit)?;
             tracing::info!(
                 node = %self.node_label,
                 %hold_amount,
@@ -603,7 +596,7 @@ impl Runtime {
             // The deposit gas reserved this op is RETURNED, not burned (it only
             // capped growth); burn = the execution slice = gas - charge.
             let charge_gas = self.deposit.take().await;
-            let burn_amount = self.gas_to_token(gas.saturating_sub(charge_gas));
+            let burn_amount = self.pricing.execution_fee(gas.saturating_sub(charge_gas))?;
             tracing::info!(
                 node = %self.node_label,
                 gas,
@@ -769,10 +762,7 @@ async fn val_to_wave(
 /// - `Err(ExecutionError::Deterministic(e))` is mapped by looking at the
 ///   underlying error for a `wasmtime::Trap` variant. `Trap::OutOfFuel`
 ///   becomes `OpStatus::OutOfFuel`; other trap variants become
-///   `OpStatus::Trap`. If the error isn't a trap (host-side
-///   `Fuel::consume` exhaustion produces an `anyhow!("Insufficient fuel")`
-///   rather than a wasmtime trap, so check the message too), classify
-///   as `OutOfFuel` or `Other`.
+///   `OpStatus::Trap`. Non-trap errors become `OpStatus::Other`.
 /// - `Err(NonDeterministic)` shouldn't normally produce a row — those
 ///   propagate as fatal infrastructure errors and the block won't
 ///   commit. Mapped to `Other` for completeness.
@@ -786,8 +776,6 @@ fn classify_result(result: &Result<String, ExecutionError>) -> OpStatus {
                     wasmtime::Trap::OutOfFuel => OpStatus::OutOfFuel,
                     _ => OpStatus::Trap,
                 }
-            } else if e.to_string().contains("Insufficient fuel") {
-                OpStatus::OutOfFuel
             } else {
                 OpStatus::Other
             }

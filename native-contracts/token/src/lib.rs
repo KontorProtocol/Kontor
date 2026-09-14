@@ -209,7 +209,11 @@ impl Guest for Token {
     /// savepoint (always, even on a reverted op: gas is paid for the attempt).
     fn release(ctx: &CoreContext, burn_amt: Decimal) -> Result<Burn, Error> {
         let proc = ctx.proc_context();
-        let burn = Self::burn(&proc, burn_amt)?;
+        // A zero execution price still reserves collateral in escrow. Refund it
+        // without issuing a zero-value transfer, which ordinary burns reject.
+        if burn_amt != Decimal::default() {
+            Self::burn(&proc, burn_amt)?;
+        }
         let remaining = proc.model().ledger().get(&CORE()).unwrap_or_default();
         if remaining > 0u64.try_into()? {
             transfer(
@@ -221,7 +225,7 @@ impl Guest for Token {
         }
         Ok(Burn {
             src: ctx.signer_proc_context().signer().into(),
-            ..burn
+            amt: burn_amt,
         })
     }
 

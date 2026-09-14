@@ -1,5 +1,13 @@
 # Storage Deposit: Vault → Floor Migration
 
+Update, 2026-09-14: the price-separation work keeps the persisted `deposited_gas`
+denomination fixed at 1e-9 KOR per unit. Execution pricing no longer reprices
+collateral. Future-write rates are supplied by `Pricing::storage_deposit_gas`;
+rewrites replace the row's reservation while untouched rows retain theirs.
+The historical references below to the shared `gas_to_token_multiplier` and
+`Runtime::deposit_rate` describe the earlier implementation. See the
+[current pricing design](gas-metering-and-congestion.md).
+
 Status: IMPLEMENTED on branch `feat/storage-deposit-footprint` (2026-06-22),
 INCLUDING refinements R1 + R2 below. The vault machinery is removed; the floor is
 enforced as a spendable reserve on token debits (R1) over the frozen per-row
