@@ -11,8 +11,7 @@ use wasmtime::{Store, Trap};
 
 use super::{Fuel, FuelDiscriminants, FuelGauge};
 use crate::database::queries::{
-    Error as StorageError, create_contract_signer, insert_block, live_deposit_gas_sum,
-    traversal_probe,
+    create_contract_signer, insert_block, live_deposit_gas_sum, traversal_probe,
 };
 use indexer_types::{BlockRow, serialize};
 use stdlib::KeyElement;
@@ -96,10 +95,167 @@ async fn row_budget_rejects_value_before_copying() -> Result<()> {
     Ok(())
 }
 
+#[tokio::test]
+async fn row_budget_is_refreshed_between_advances() -> Result<()> {
+    let (runtime, _dir, _name) = test_runtime().await?;
+    let root = "changing-row-budget".to_string().encode();
+    for member in 0..2u64 {
+        let mut path = root.clone();
+        path.extend(member.encode());
+        runtime
+            .storage
+            .set(1, &path, &serialize(&vec![7u8; 128])?, None, None)
+            .await?;
+    }
+    let mut store = runtime.make_store(BUDGET)?;
+    let cursor = store
+        .data()
+        .table
+        .lock()
+        .await
+        .push(StorageRows {
+            cursor: runtime.storage.storage_rows(1, root, None, None, false),
+        })?
+        .rep();
+    assert_eq!(
+        host(&mut store, async |accessor| {
+            <Runtime as RowsHost<Runtime>>::next_list_u8(accessor, Resource::new_borrow(cursor))
+                .await
+        })
+        .await?,
+        Some((0u64.encode(), vec![7u8; 128]))
+    );
+    store.set_fuel(Fuel::StorageScan.cost())?;
+    let (result, copied) =
+        traversal_probe::measure_value_bytes(host(&mut store, async |accessor| {
+            <Runtime as RowsHost<Runtime>>::next_list_u8(accessor, Resource::new_borrow(cursor))
+                .await
+        }))
+        .await;
+    assert_exhausted(result.unwrap_err());
+    assert_eq!(copied, 0);
+    Ok(())
+}
+
+#[tokio::test]
+async fn row_budget_includes_key_and_framing_at_exact_boundary() -> Result<()> {
+    let (runtime, _dir, _name) = test_runtime().await?;
+    let root = "row-byte-boundary".to_string().encode();
+    let member = "a\0b".to_string().encode();
+    let value = vec![9u8; 128];
+    let raw = serialize(&value)?;
+    let mut path = root.clone();
+    path.extend_from_slice(&member);
+    runtime.storage.set(1, &path, &raw, None, None).await?;
+    let total = Fuel::StorageScan.cost() + Fuel::KeysNext((member.len() + raw.len()) as u64).cost();
+    let mut store = runtime.make_store(BUDGET)?;
+    for descending in [false, true] {
+        for budget in [0, total - 1, total] {
+            let cursor = store
+                .data()
+                .table
+                .lock()
+                .await
+                .push(StorageRows {
+                    cursor: runtime
+                        .storage
+                        .storage_rows(1, root.clone(), None, None, descending),
+                })?
+                .rep();
+            store.set_fuel(budget)?;
+            let (result, copied) =
+                traversal_probe::measure_value_bytes(host(&mut store, async |accessor| {
+                    <Runtime as RowsHost<Runtime>>::next_list_u8(
+                        accessor,
+                        Resource::new_borrow(cursor),
+                    )
+                    .await
+                }))
+                .await;
+            if budget < total {
+                assert_exhausted(result.unwrap_err());
+                assert_eq!(copied, 0);
+            } else {
+                assert_eq!(result?, Some((member.clone(), value.clone())));
+                assert_eq!(copied, raw.len());
+                assert_eq!(store.get_fuel()?, 0);
+                store.set_fuel(Fuel::StorageScan.cost())?;
+                assert!(
+                    host(&mut store, async |accessor| {
+                        <Runtime as RowsHost<Runtime>>::next_list_u8(
+                            accessor,
+                            Resource::new_borrow(cursor),
+                        )
+                        .await
+                    })
+                    .await?
+                    .is_none()
+                );
+                assert_eq!(store.get_fuel()?, 0);
+            }
+        }
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn write_budget_preserves_encoding_and_rollback_at_exact_boundary() -> Result<()> {
+    let (runtime, _dir, _name) = test_runtime().await?;
+    let path = "write-byte-boundary".to_string().encode();
+    let original = serialize(&vec![5u8; 3])?;
+    runtime.storage.set(1, &path, &original, None, None).await?;
+    let mut store = runtime.make_store(BUDGET)?;
+    let rep = store
+        .data()
+        .table
+        .lock()
+        .await
+        .push(ProcStorage { contract_id: 1 })?
+        .rep();
+    for len in [0, 127, 128, 4096] {
+        let value = vec![2u8; len];
+        let encoded = serialize(&value)?;
+        let total = Fuel::StorageWrite.cost()
+            + Fuel::Path(path.len() as u64).cost()
+            + Fuel::Set(encoded.len() as u64).cost();
+        for budget in [total - 1, total] {
+            runtime.storage.savepoint().await?;
+            store.set_fuel(budget)?;
+            let result = host(&mut store, async |accessor| {
+                <Runtime as StorageHost<Runtime>>::set_list_u8(
+                    accessor,
+                    Resource::new_borrow(rep),
+                    path.clone(),
+                    value.clone(),
+                )
+                .await
+            })
+            .await;
+            let stored = runtime.storage.get(BUDGET, 1, &path).await?;
+            if budget < total {
+                assert_exhausted(result.unwrap_err());
+                assert_eq!(stored, Some(original.clone()));
+            } else {
+                result?;
+                assert_eq!(stored, Some(encoded.clone()));
+                assert_eq!(store.get_fuel()?, 0);
+            }
+            let remaining = store.get_fuel()?;
+            runtime.storage.rollback().await?;
+            assert_eq!(store.get_fuel()?, remaining);
+            assert_eq!(
+                runtime.storage.get(BUDGET, 1, &path).await?,
+                Some(original.clone())
+            );
+        }
+    }
+    Ok(())
+}
+
 struct CountedSequence<'a>(&'a AtomicUsize);
 
 impl Serialize for CountedSequence<'_> {
-    fn serialize<S: Serializer>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error> {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
         let mut seq = serializer.serialize_seq(Some(4096))?;
         for _ in 0..4096 {
             self.0.fetch_add(1, Ordering::SeqCst);
@@ -204,10 +360,13 @@ async fn cursor_polls_require_fuel_even_at_end_of_stream() -> Result<()> {
                 .lock()
                 .await
                 .push(StorageRows {
-                    stream: Box::pin(stream::poll_fn(move |_| {
-                        observed.fetch_add(1, Ordering::SeqCst);
-                        Poll::Ready(None)
-                    })),
+                    cursor: runtime.storage.storage_rows(
+                        1,
+                        "empty-budget-scan".to_string().encode(),
+                        None,
+                        None,
+                        false,
+                    ),
                 })?
                 .rep()
         } else {
@@ -227,7 +386,7 @@ async fn cursor_polls_require_fuel_even_at_end_of_stream() -> Result<()> {
         store.set_fuel(0)?;
         let error = host(&mut store, async |accessor| {
             if rows {
-                <Runtime as RowsHost<Runtime>>::next_u64(accessor, Resource::new_borrow(rep))
+                <Runtime as RowsHost<Runtime>>::next_u64(accessor, Resource::new_borrow(u32::MAX))
                     .await
                     .map(|_| ())
             } else {
@@ -601,6 +760,11 @@ async fn storage_read_budget_includes_base_and_encoded_value() -> Result<()> {
 #[tokio::test]
 async fn invalid_scalar_cursor_target_still_pays_for_polling() -> Result<()> {
     let (runtime, _dir, _name) = test_runtime().await?;
+    let root = "compound-budget-scan".to_string().encode();
+    let mut path = root.clone();
+    path.extend(0u64.encode());
+    path.extend(0u64.encode());
+    runtime.storage.set(1, &path, &[0], None, None).await?;
     let mut store = runtime.make_store(BUDGET)?;
     let rep = store
         .data()
@@ -608,7 +772,7 @@ async fn invalid_scalar_cursor_target_still_pays_for_polling() -> Result<()> {
         .lock()
         .await
         .push(StorageRows {
-            stream: Box::pin(stream::iter([Err(StorageError::NonScalarRow)])),
+            cursor: runtime.storage.storage_rows(1, root, None, None, false),
         })?
         .rep();
     let error = host(&mut store, async |accessor| {

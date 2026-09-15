@@ -36,6 +36,8 @@
 //!   - [`hard_delete_rows`] — a HARD delete at the current height (not a
 //!     tombstone, not a liveness read); intra-block `Option` variant cleanup.
 
+use std::mem::take;
+
 use futures_util::{Stream, StreamExt, TryStreamExt, stream};
 use libsql::{Connection, Row, Rows, Statement, Value, de::from_row, params};
 use stdlib::{next_element, subtree_end};
@@ -621,7 +623,7 @@ pub async fn exists_contract_state(
 /// The scan's byte range `(lo_key, lo_cmp, hi_key)` derived from the `path`/`lo`/`hi`
 /// child-element bounds — the ONE place the seek/range rules live, shared by the key
 /// scan ([`path_prefix_filter_contract_state`]) and the covering value scan
-/// ([`path_prefix_filter_storage_rows`]) so the two can't drift. `lo`/`hi` are
+/// ([`StorageRowCursor`]) so the two can't drift. `lo`/`hi` are
 /// child-element codec bytes (relative to `path`); the guest computes them from its
 /// `RangeBounds` via `sort_lower_bound`/`sort_upper_bound` (an FDB-style half-open
 /// `[lo, hi)` byte range, independent of iteration direction).
@@ -760,58 +762,88 @@ pub async fn path_prefix_filter_contract_state(
     ))
 }
 
-/// Stream direct live children as `(key element, stored bytes)`. Values retain
-/// their storage framing. A compound child is an invalid row-scan target, rather
-/// than an arbitrary descendant to mistake for the value of its parent.
-pub async fn path_prefix_filter_storage_rows(
-    conn: &Connection,
-    contract_id: u64,
-    path: Vec<u8>,
-    lo: Option<Vec<u8>>,
-    hi: Option<Vec<u8>>,
-    descending: bool,
-) -> Result<impl Stream<Item = Result<(Vec<u8>, Vec<u8>), Error>> + Send + 'static, Error> {
-    let (lo_key, lo_cmp, hi_key) = scan_bounds(&path, lo, hi);
-    let order = if descending {
-        "cs.path DESC"
-    } else {
-        "cs.path"
-    };
-    let (query, params) = live_paths_scan(
-        "cs.path, cs.value",
-        lo_cmp,
-        contract_id,
-        lo_key,
-        hi_key,
-        Some(order),
-        None,
-    );
-    let rows = conn.query(&query, params).await?;
+/// A streaming row cursor whose values are copied only after checking the
+/// current byte budget. SQLite may still read the value internally while stepping.
+pub struct StorageRowCursor {
+    conn: Connection,
+    prefix_len: usize,
+    sql: String,
+    params: Vec<(String, Value)>,
+    rows: Option<Rows>,
+    finished: bool,
+}
 
-    let prefix_len = path.len();
-    let stream = stream::unfold(rows, move |mut rows| async move {
-        match rows.next().await {
-            Ok(Some(row)) => {
-                let item = (|| -> Result<_, Error> {
-                    let full: Vec<u8> = row.get(0)?;
-                    let (elem, tail) =
-                        next_element(&full[prefix_len..]).map_err(Error::KeyCodec)?;
-                    if !tail.is_empty() {
-                        return Err(Error::NonScalarRow);
-                    }
-                    let value = row.get::<Vec<u8>>(1)?;
-                    #[cfg(test)]
-                    traversal_probe::copied_value(value.len());
-                    Ok((elem.to_vec(), value))
-                })();
-                Some((item, rows))
-            }
-            Ok(None) => None,
-            Err(e) => Some((Err(e.into()), rows)),
+impl StorageRowCursor {
+    pub fn new(
+        conn: &Connection,
+        contract_id: u64,
+        path: Vec<u8>,
+        lo: Option<Vec<u8>>,
+        hi: Option<Vec<u8>>,
+        descending: bool,
+    ) -> Self {
+        let (lo, lo_cmp, hi) = scan_bounds(&path, lo, hi);
+        let (sql, mut params) = live_paths_scan(
+            "length(cs.path) - :prefix_len, cs.size, cs.path, cs.value",
+            lo_cmp,
+            contract_id,
+            lo,
+            hi,
+            Some(if descending {
+                "cs.path DESC"
+            } else {
+                "cs.path"
+            }),
+            None,
+        );
+        params.push((":prefix_len".into(), Value::Integer(path.len() as i64)));
+        Self {
+            conn: conn.clone(),
+            prefix_len: path.len(),
+            sql,
+            params,
+            rows: None,
+            finished: false,
         }
-    });
+    }
 
-    Ok(stream)
+    pub async fn next(&mut self, max_bytes: u64) -> Result<Option<(Vec<u8>, Vec<u8>)>, Error> {
+        if self.finished {
+            return Ok(None);
+        }
+        let result = self.read_next(max_bytes).await;
+        if !matches!(result, Ok(Some(_))) {
+            self.finished = true;
+            self.rows = None;
+        }
+        result
+    }
+
+    async fn read_next(&mut self, max_bytes: u64) -> Result<Option<(Vec<u8>, Vec<u8>)>, Error> {
+        let mut rows = match self.rows.take() {
+            Some(rows) => rows,
+            None => self.conn.query(&self.sql, take(&mut self.params)).await?,
+        };
+        let Some(row) = rows.next().await? else {
+            return Ok(None);
+        };
+        let key_bytes: u64 = row.get(0)?;
+        let size: u64 = row.get(1)?;
+        if key_bytes > max_bytes || size > max_bytes - key_bytes {
+            return Err(Error::ValueTooLarge);
+        }
+        let full: Vec<u8> = row.get(2)?;
+        let (elem, tail) = next_element(&full[self.prefix_len..]).map_err(Error::KeyCodec)?;
+        if !tail.is_empty() {
+            return Err(Error::NonScalarRow);
+        }
+        let value = row.get::<Vec<u8>>(3)?;
+        #[cfg(test)]
+        traversal_probe::copied_value(value.len());
+        let member = elem.to_vec();
+        self.rows = Some(rows);
+        Ok(Some((member, value)))
+    }
 }
 
 /// EXCEPTION to `live_latest` (see module header): enum/option variant resolution

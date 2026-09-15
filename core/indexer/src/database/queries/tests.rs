@@ -2515,12 +2515,12 @@ async fn test_path_prefix_filter_from_key_seeks_lower_bound() -> Result<()> {
     Ok(())
 }
 
-// The covering value scan (`path_prefix_filter_storage_rows`) — the leaf-VALUE twin of
+// The covering value scan (`StorageRowCursor::new`) — the leaf-VALUE twin of
 // the key scan. Each live member leaf yields `(member_element, projection_value)` in
 // ascending member order; it honors the same `from_key` seek, and excludes the
 // bucket-count row (which lives AT the bucket prefix, not as a child under it).
 #[tokio::test]
-async fn test_path_prefix_filter_storage_rows_returns_member_and_value() -> Result<()> {
+async fn test_storage_row_cursor_returns_member_and_value() -> Result<()> {
     let (_reader, writer, _temp) = new_test_db().await?;
     let conn = writer.connection();
     let h = 600002;
@@ -2587,12 +2587,12 @@ async fn test_path_prefix_filter_storage_rows_returns_member_and_value() -> Resu
     .await?;
 
     let scan = async |from: Option<Vec<u8>>| -> Result<Vec<(Vec<u8>, Vec<u8>)>> {
-        Ok(
-            path_prefix_filter_storage_rows(&conn, cid, bucket.clone(), from, None, false)
-                .await?
-                .try_collect()
-                .await?,
-        )
+        let mut cursor = StorageRowCursor::new(&conn, cid, bucket.clone(), from, None, false);
+        let mut rows = Vec::new();
+        while let Some(row) = cursor.next(u64::MAX).await? {
+            rows.push(row);
+        }
+        Ok(rows)
     };
 
     // Full scan: ascending by sort, each member paired with its covered value; the
@@ -2614,11 +2614,11 @@ async fn test_path_prefix_filter_storage_rows_returns_member_and_value() -> Resu
         ]
     );
     // Descending: same `(member, value)` pairs, highest-sort-first.
-    let desc: Vec<(Vec<u8>, Vec<u8>)> =
-        path_prefix_filter_storage_rows(&conn, cid, bucket.clone(), None, None, true)
-            .await?
-            .try_collect()
-            .await?;
+    let mut cursor = StorageRowCursor::new(&conn, cid, bucket.clone(), None, None, true);
+    let mut desc = Vec::new();
+    while let Some(row) = cursor.next(u64::MAX).await? {
+        desc.push(row);
+    }
     assert_eq!(
         desc,
         vec![
@@ -2642,7 +2642,7 @@ async fn test_path_prefix_filter_storage_rows_returns_member_and_value() -> Resu
     )
     .await?;
     for descending in [false, true] {
-        let result: Result<Vec<_>, _> = path_prefix_filter_storage_rows(
+        let result = StorageRowCursor::new(
             &conn,
             cid,
             bucket.clone(),
@@ -2650,8 +2650,7 @@ async fn test_path_prefix_filter_storage_rows_returns_member_and_value() -> Resu
             None,
             descending,
         )
-        .await?
-        .try_collect()
+        .next(u64::MAX)
         .await;
         assert!(matches!(result, Err(Error::NonScalarRow)));
     }

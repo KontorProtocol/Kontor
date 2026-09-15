@@ -14,17 +14,16 @@ use wit_component::{ComponentEncoder, WitPrinter};
 use crate::{
     database::{
         queries::{
-            Error as StorageError, FOOTPRINT_BUILT_KEY, LiveRow, create_contract_signer,
-            depositors_affected_by_reorg, exists_contract_state, find_live_subtree,
-            find_matching_paths, footprint_cache_add, footprint_cache_get, footprint_cache_set,
-            footprint_rebuild_all, get_contract_address_from_id, get_contract_bytes_by_id,
-            get_contract_id_from_address, get_contract_provenance_publisher,
-            get_latest_contract_state_value, get_meta_u64, hard_delete_rows, insert_contract,
-            insert_contract_provenance, insert_contract_result, insert_contract_state,
-            latest_live_deposit, live_deposit_gas_sum, matching_path,
-            path_prefix_filter_contract_state, path_prefix_filter_storage_rows,
-            prune_contract_state, rollback_to_height, select_block_at_height, set_meta_u64,
-            tombstone_rows,
+            Error as StorageError, FOOTPRINT_BUILT_KEY, LiveRow, StorageRowCursor,
+            create_contract_signer, depositors_affected_by_reorg, exists_contract_state,
+            find_live_subtree, find_matching_paths, footprint_cache_add, footprint_cache_get,
+            footprint_cache_set, footprint_rebuild_all, get_contract_address_from_id,
+            get_contract_bytes_by_id, get_contract_id_from_address,
+            get_contract_provenance_publisher, get_latest_contract_state_value, get_meta_u64,
+            hard_delete_rows, insert_contract, insert_contract_provenance, insert_contract_result,
+            insert_contract_state, latest_live_deposit, live_deposit_gas_sum, matching_path,
+            path_prefix_filter_contract_state, prune_contract_state, rollback_to_height,
+            select_block_at_height, set_meta_u64, tombstone_rows,
         },
         types::{ContractProvenanceRow, ContractResultRow, ContractRow, ContractStateRow},
     },
@@ -527,23 +526,15 @@ impl Storage {
         )
     }
 
-    /// Direct live leaves under `path` as
-    /// `(key element, stored bytes)` (see [`path_prefix_filter_storage_rows`]). The
-    /// value-returning analogue of [`Storage::keys`].
-    pub async fn storage_rows(
+    pub fn storage_rows(
         &self,
         contract_id: u64,
         path: Vec<u8>,
         lo: Option<Vec<u8>>,
         hi: Option<Vec<u8>>,
         descending: bool,
-    ) -> Result<
-        impl Stream<Item = Result<(Vec<u8>, Vec<u8>), crate::database::queries::Error>> + Send + 'static,
-    > {
-        Ok(
-            path_prefix_filter_storage_rows(&self.conn, contract_id, path, lo, hi, descending)
-                .await?,
-        )
+    ) -> StorageRowCursor {
+        StorageRowCursor::new(&self.conn, contract_id, path, lo, hi, descending)
     }
 
     /// Canonical per-block entropy (the Bitcoin block hash) at `height`, within the
