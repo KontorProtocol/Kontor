@@ -9,8 +9,6 @@ pub use gauge::{ExecutionUsage, FuelCharge, FuelGauge, FuelProfile, FuelReport, 
 pub(crate) use gauge::{UsageKind, record_fuel};
 
 #[cfg(test)]
-mod calibration;
-#[cfg(test)]
 mod cow_costs;
 #[cfg(test)]
 mod profiling_tests;
