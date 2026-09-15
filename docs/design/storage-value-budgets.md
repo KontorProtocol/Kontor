@@ -64,7 +64,56 @@ Research checked on 2026-09-15 informed the choice:
   use a soft byte target and batching. That target alone is not a strict gas bound.
 - [SQLite incremental BLOB access](https://sqlite.org/c3ref/blob_open.html) could
   fetch values without a separate SQL statement, but our libSQL Rust API does not
-  expose that interface. Its performance has not been measured here.
+  expose that interface. The follow-up experiment below measures this option.
+
+## Incremental BLOB experiment
+
+An isolated experiment against `e900105d` used the same libSQL 0.9.30 engine,
+connection, metadata query, key decoding, byte-budget check, and cursor lifecycle.
+A temporary dependency patch exposed the connection handle for the benchmark.
+It compared the current prepared lookup, the previous copy guard, opening/closing
+a read-only BLOB per value, and retaining one BLOB and reopening it on each rowid.
+The experimental binding and benchmark have been removed from the branch; the
+implementation above still uses the prepared SQL lookup.
+
+Local Linux aarch64 release results, ascending scans, five warmups and 24 measured
+trials per mode, median from the repeated run. The order of modes was rotated and
+reversed, and every result was checked against the expected keys and bytes:
+
+| Value bytes | Rows | Prepared SQL | Reused BLOB | BLOB vs SQL |
+| --- | ---: | ---: | ---: | ---: |
+| 8 | 256 | 258 µs | 161 µs | 38% faster |
+| 128 | 256 | 258 µs | 164 µs | 36% faster |
+| 4,096 | 256 | 379 µs | 247 µs | 35% faster |
+| 65,536 | 256 | 3,248 µs | 3,671 µs | 13% slower |
+| 1,048,576 | 32 | 6,436 µs | 7,721 µs | 20% slower |
+
+Across both directions and repeated runs, BLOB reuse was about 28–38% faster for
+8-byte through 4-KiB values. Relative to the old copy guard it added about 10–17%
+for tiny values and was approximately equal or faster at 4 KiB. Large values
+were about 9–20% slower than the prepared lookup; the API is not a universal
+speedup for whole-value reads. Opening/closing per row lost much of the small-value
+gain. Zero-length values also matched, and rejecting an unaffordable 4-MiB value
+remained around 11 µs without fetching it. These are database-only measurements;
+a production owned/thread-safe binding and full contract execution were not measured.
+
+The lifecycle probe verified that reopening on another row works after replacing
+the previous row, and after rolling back a change to a different row. Reading a
+replaced row instead fails with `SQLITE_ABORT`; that failed handle cannot then be
+reopened. A failed reopen also aborts the handle. A fresh handle works. The BLOB
+shares the metadata connection's snapshot and keeps it pinned even after the SQL
+cursor is dropped; dropping the BLOB releases the pin.
+
+The next implementation step, if selected, belongs in libSQL: a safe owned
+read-only BLOB wrapper retaining its connection, with length/read/reopen methods
+and guaranteed closure on drop. The existing runtime cursor can own this instead
+of its value statement. Connection lifetime and thread-safety need review because
+the resource table requires owned, `Send + Sync` resources.
+[Rusqlite's BLOB API](https://docs.rs/rusqlite/0.40.2/rusqlite/blob/struct.Blob.html)
+is a useful interface reference, but its borrowed, non-`Send`/non-`Sync` handle
+cannot be used directly here. Production regression coverage must observe actual
+BLOB operations: the current SQL-authorizer test alone does not cover direct
+incremental-BLOB calls. No size-dependent SQL/BLOB split is proposed.
 
 ## Writes
 
