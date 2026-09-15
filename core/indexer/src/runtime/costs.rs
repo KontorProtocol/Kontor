@@ -1,4 +1,5 @@
 use anyhow::Result;
+use futures_util::TryStreamExt;
 use serde_json::json;
 
 use super::{Runtime, filestorage, staking};
@@ -11,7 +12,10 @@ pub(super) async fn snapshot(runtime: &Runtime, scenario: &str, population: usiz
         ("filestorage", filestorage::address()),
     ] {
         let id = runtime.storage.contract_id(&address).await?.unwrap();
-        let rows = find_live_subtree(&conn, id, &[]).await?;
+        let rows: Vec<_> = find_live_subtree(&conn, id, &[])
+            .await?
+            .try_collect()
+            .await?;
         let mut history = conn.query(
             "SELECT COUNT(*), COALESCE(SUM(length(path) + length(value)), 0) FROM contract_state WHERE contract_id = ?",
             [id],

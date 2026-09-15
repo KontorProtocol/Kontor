@@ -1,10 +1,11 @@
 use anyhow::{Result, anyhow};
+use futures_util::{Stream, StreamExt};
 use serde::{Deserialize, Serialize};
 use wasmtime::component::{Accessor, Resource};
 use wasmtime::{AsContext, Trap};
 
 use crate::database::native_contracts::is_deposit_exempt;
-use crate::database::queries::Error as StorageError;
+use crate::database::queries::{Error as StorageError, LiveRow};
 use crate::database::types::CORE_SIGNER_ID;
 
 use super::{
@@ -43,6 +44,24 @@ fn validate_path(path: &[u8]) -> Result<()> {
 fn meter_path<T>(accessor: &Accessor<T, Runtime>, path: &[u8]) -> Result<()> {
     Fuel::Path(path.len() as u64).consume(accessor)?;
     validate_path(path)
+}
+
+/// Keep only paid-for metadata; exhausting discovery cannot mutate state. The
+/// stream is dropped before callers write, so no SQL cursor survives mutation.
+async fn collect_delete_rows<T>(
+    accessor: &Accessor<T, Runtime>,
+    rows: impl Stream<Item = Result<LiveRow, StorageError>>,
+) -> Result<Vec<LiveRow>> {
+    let mut rows = Box::pin(rows);
+    let mut paid = Vec::new();
+    loop {
+        Fuel::StorageScan.consume(accessor)?;
+        let Some(row) = rows.next().await.transpose()? else {
+            return Ok(paid);
+        };
+        Fuel::Delete(1, (row.path.len() as u64).saturating_add(row.size)).consume(accessor)?;
+        paid.push(row);
+    }
 }
 
 // The guest selects the slot type. Valid writes through another setter can fail
@@ -208,13 +227,9 @@ impl Runtime {
             .storage
             .find_matching_paths(contract_id, &base_path, &candidates)
             .await?;
-        let bytes: u64 = rows.iter().map(|r| r.path.len() as u64 + r.size).sum();
-        Fuel::Delete(rows.len() as u64, bytes).consume(accessor)?;
+        let rows = collect_delete_rows(accessor, rows).await?;
         self.storage.footprint().on_free(&rows).await?;
-        let deleted = self
-            .storage
-            .hard_delete_matching_paths(contract_id, &base_path, &candidates)
-            .await?;
+        let deleted = self.storage.hard_delete_rows(contract_id, &rows).await?;
         // A hard delete (unlike a tombstone) can revive an older same-path version —
         // re-add its deposit to the footprint cache, else the floor under-counts.
         self.storage
@@ -226,9 +241,8 @@ impl Runtime {
 
     /// Delete a key by tombstoning its WHOLE subtree (the node + every live
     /// descendant — a struct/map value persists under child paths). Metered by the
-    /// subtree size: the base/input charge precedes discovery and the per-row
-    /// charge precedes writes. Discovery still materializes metadata and needs
-    /// separate traversal bounds. Returns true if a live value was removed.
+    /// subtree size. Discovery consumes fuel incrementally; all rows must be
+    /// paid for before mutation. Returns true if a live value was removed.
     pub(crate) async fn _delete<S, T: HasContractId>(
         &self,
         accessor: &Accessor<S, Self>,
@@ -241,8 +255,7 @@ impl Runtime {
         // Read → meter → write. A flat `Set(0)` charged the same whether the
         // subtree held one row or thousands; meter by the rows/bytes tombstoned.
         let rows = self.storage.find_live_subtree(contract_id, &path).await?;
-        let bytes: u64 = rows.iter().map(|r| r.path.len() as u64 + r.size).sum();
-        Fuel::Delete(rows.len() as u64, bytes).consume(accessor)?;
+        let rows = collect_delete_rows(accessor, rows).await?;
         self.storage.footprint().on_free(&rows).await?;
         let (removed, _freed) = self.storage.tombstone_rows(contract_id, &rows).await?;
         Ok(removed)

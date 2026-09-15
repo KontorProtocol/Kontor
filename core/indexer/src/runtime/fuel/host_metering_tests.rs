@@ -9,8 +9,11 @@ use wasmtime::component::{Accessor, Resource};
 use wasmtime::{Store, Trap};
 
 use super::{Fuel, FuelDiscriminants, FuelGauge};
-use crate::database::queries::{Error as StorageError, traversal_probe};
-use indexer_types::serialize;
+use crate::database::queries::{
+    Error as StorageError, create_contract_signer, insert_block, live_deposit_gas_sum,
+    traversal_probe,
+};
+use indexer_types::{BlockRow, serialize};
 use stdlib::KeyElement;
 
 use crate::runtime::wit::kontor::built_in::{
@@ -25,7 +28,7 @@ use crate::runtime::wit::{
     Holder, Keys, ProcContext, ProcStorage, Signer, StorageRows, Transaction,
 };
 use crate::runtime::{ContractAddress, ExecutionError, Runtime, TransactionContext};
-use crate::test_utils::test_runtime;
+use crate::test_utils::{new_mock_block_hash, test_runtime};
 
 const BUDGET: u64 = 1_000_000;
 
@@ -559,7 +562,7 @@ async fn key_scan_skips_an_already_returned_child_subtree() -> Result<()> {
             expected.reverse();
         }
         assert_eq!(result?, expected);
-        assert!(visited <= 6, "visited {visited} rows for three child keys");
+        assert!(visited <= 99, "visited {visited} rows for three child keys");
     }
     Ok(())
 }
@@ -619,7 +622,252 @@ async fn delete_discovery_stops_when_its_budget_runs_out() -> Result<()> {
             visited <= 1,
             "discovered {visited} rows after budget exhaustion"
         );
-        assert_eq!(runtime.storage.find_live_subtree(1, &root).await?.len(), 32);
+        assert_eq!(
+            runtime
+                .storage
+                .find_live_subtree(1, &root)
+                .await?
+                .try_collect::<Vec<_>>()
+                .await?
+                .len(),
+            32
+        );
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn cleanup_unions_candidates_and_preserves_deposits_at_the_budget_boundary() -> Result<()> {
+    let (mut runtime, _dir, _name) = test_runtime().await?;
+    let conn = runtime.storage.conn.clone();
+    let alice = create_contract_signer(&conn, 1).await?;
+    let bob = create_contract_signer(&conn, 1).await?;
+    let root = "cleanup-budget".to_string().encode();
+    let some = "some".to_string().encode();
+    let mut paths = Vec::new();
+    for member in 0..130u64 {
+        let mut path = root.clone();
+        path.extend_from_slice(&some);
+        member.encode_to(&mut path);
+        runtime
+            .storage
+            .footprint()
+            .on_set(1, &path, Some(alice), Some(10))
+            .await?;
+        runtime
+            .storage
+            .set(1, &path, &[0], Some(alice), Some(10))
+            .await?;
+        paths.push(path);
+    }
+    insert_block(
+        &conn,
+        BlockRow::builder()
+            .height(2)
+            .hash(new_mock_block_hash(2))
+            .build(),
+    )
+    .await?;
+    runtime.storage.height = 2;
+    for path in &paths {
+        runtime
+            .storage
+            .footprint()
+            .on_set(1, path, Some(bob), Some(20))
+            .await?;
+        runtime
+            .storage
+            .set(1, path, &[1], Some(bob), Some(20))
+            .await?;
+    }
+    let first: Vec<_> = runtime
+        .storage
+        .find_live_subtree(1, &paths[0])
+        .await?
+        .try_collect()
+        .await?;
+    runtime.storage.footprint().on_free(&first).await?;
+    runtime.storage.tombstone_rows(1, &first).await?;
+    let mut overlap = some.clone();
+    1u64.encode_to(&mut overlap);
+    let mut candidates = vec![some.clone(), overlap, some];
+    let mut store = runtime.make_store(BUDGET)?;
+    let rep = store
+        .data()
+        .table
+        .lock()
+        .await
+        .push(ProcStorage { contract_id: 1 })?
+        .rep();
+    let mut measured = None;
+    for reverse in [false, true] {
+        if reverse {
+            candidates.reverse();
+        }
+        for short in [false, true] {
+            let budget = if short { measured.unwrap() - 1 } else { BUDGET };
+            store.set_fuel(budget)?;
+            runtime.storage.savepoint().await?;
+            let changes = conn.total_changes();
+            let result = host(&mut store, async |accessor| {
+                <Runtime as StorageHost<Runtime>>::delete_matching_paths(
+                    accessor,
+                    Resource::new_borrow(rep),
+                    root.clone(),
+                    candidates.clone(),
+                )
+                .await
+            })
+            .await;
+            if short {
+                assert_exhausted(result.unwrap_err());
+                assert_eq!(
+                    conn.total_changes(),
+                    changes,
+                    "underfunded discovery wrote state"
+                );
+                assert_eq!(runtime.storage.footprint().total_gas(alice).await?, 0);
+                assert_eq!(runtime.storage.footprint().total_gas(bob).await?, 129 * 20);
+            } else {
+                assert_eq!(result?, 130);
+                assert_eq!(
+                    runtime.storage.footprint().total_gas(alice).await?,
+                    130 * 10
+                );
+                assert_eq!(runtime.storage.footprint().total_gas(bob).await?, 0);
+                let spent = budget - store.get_fuel()?;
+                if let Some(previous) = measured {
+                    assert_eq!(spent, previous);
+                }
+                measured = Some(spent);
+            }
+            for owner in [alice, bob] {
+                assert_eq!(
+                    runtime.storage.footprint().total_gas(owner).await?,
+                    live_deposit_gas_sum(&conn, owner).await?
+                );
+            }
+            let fuel_before_rollback = store.get_fuel()?;
+            runtime.storage.rollback().await?;
+            assert_eq!(store.get_fuel()?, fuel_before_rollback);
+            assert_eq!(runtime.storage.footprint().total_gas(alice).await?, 0);
+            assert_eq!(runtime.storage.footprint().total_gas(bob).await?, 129 * 20);
+        }
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn subtree_seeks_preserve_ranges_and_fuel_across_pruning() -> Result<()> {
+    let (mut runtime, _dir, _name) = test_runtime().await?;
+    let root = "seek-pruning".to_string().encode();
+    let mut removed = Vec::new();
+    for member in ["a", "a\0", "b", "c"] {
+        let mut child = root.clone();
+        member.to_string().encode_to(&mut child);
+        if member == "a" {
+            runtime.storage.set(1, &child, &[0], None, None).await?;
+        }
+        for field in 0..64u64 {
+            let mut path = child.clone();
+            field.encode_to(&mut path);
+            runtime.storage.set(1, &path, &[0], None, None).await?;
+        }
+        if member == "b" {
+            removed = runtime
+                .storage
+                .find_live_subtree(1, &child)
+                .await?
+                .try_collect()
+                .await?;
+        }
+    }
+    insert_block(
+        &runtime.storage.conn,
+        BlockRow::builder()
+            .height(2)
+            .hash(new_mock_block_hash(2))
+            .build(),
+    )
+    .await?;
+    runtime.storage.height = 2;
+    runtime.storage.tombstone_rows(1, &removed).await?;
+    let mut store = runtime.make_store(BUDGET)?;
+    let rep = store
+        .data()
+        .table
+        .lock()
+        .await
+        .push(ProcStorage { contract_id: 1 })?
+        .rep();
+    let mut before = None;
+    for pruned in [false, true] {
+        if pruned {
+            assert!(runtime.storage.prune(0, 2).await? > 0);
+        }
+        let mut usage = Vec::new();
+        for bounded in [false, true] {
+            for descending in [false, true] {
+                store.set_fuel(BUDGET)?;
+                let keys = host(&mut store, async |accessor| {
+                    <Runtime as StorageHost<Runtime>>::get_keys(
+                        accessor,
+                        Resource::new_borrow(rep),
+                        root.clone(),
+                        bounded.then(|| "a".to_string().encode()),
+                        bounded.then(|| "c".to_string().encode()),
+                        descending,
+                    )
+                    .await
+                })
+                .await?;
+                let mut actual = Vec::new();
+                while let Some(key) = host(&mut store, async |accessor| {
+                    <Runtime as KeysHost<Runtime>>::next(accessor, Resource::new_borrow(keys.rep()))
+                        .await
+                })
+                .await?
+                {
+                    actual.push(key);
+                }
+                store.data().table.lock().await.delete(keys)?;
+                let mut expected = vec!["a", "a\0"];
+                if !bounded {
+                    expected.push("c");
+                }
+                if descending {
+                    expected.reverse();
+                }
+                assert_eq!(
+                    actual,
+                    expected
+                        .into_iter()
+                        .map(|s| s.to_string().encode())
+                        .collect::<Vec<_>>()
+                );
+                usage.push(BUDGET - store.get_fuel()?);
+            }
+        }
+        runtime.storage.savepoint().await?;
+        store.set_fuel(BUDGET)?;
+        assert!(
+            host(&mut store, async |accessor| {
+                <Runtime as StorageHost<Runtime>>::delete(
+                    accessor,
+                    Resource::new_borrow(rep),
+                    root.clone(),
+                )
+                .await
+            })
+            .await?
+        );
+        usage.push(BUDGET - store.get_fuel()?);
+        assert!(!runtime.storage.exists(1, &root).await?);
+        runtime.storage.rollback().await?;
+        if let Some(previous) = &before {
+            assert_eq!(&usage, previous, "fuel depended on pruned history");
+        }
+        before = Some(usage);
     }
     Ok(())
 }

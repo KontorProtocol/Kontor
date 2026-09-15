@@ -3,25 +3,28 @@ use bitcoin::Txid;
 use bitcoin::hashes::Hash;
 use bon::Builder;
 use futures_util::Stream;
+#[cfg(test)]
+use futures_util::TryStreamExt;
 use libsql::Connection;
 use regex::bytes::RegexBuilder;
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::io::Read;
 use wit_component::{ComponentEncoder, WitPrinter};
 
 use crate::{
     database::{
         queries::{
-            FOOTPRINT_BUILT_KEY, LiveRow, create_contract_signer, depositors_affected_by_reorg,
-            exists_contract_state, find_live_subtree, find_matching_paths, footprint_cache_add,
-            footprint_cache_get, footprint_cache_set, footprint_rebuild_all,
-            get_contract_address_from_id, get_contract_bytes_by_id, get_contract_id_from_address,
-            get_contract_provenance_publisher, get_latest_contract_state_value, get_meta_u64,
-            hard_delete_matching_paths, insert_contract, insert_contract_provenance,
-            insert_contract_result, insert_contract_state, latest_live_deposit,
-            live_deposit_gas_sum, matching_path, path_prefix_filter_contract_state,
-            path_prefix_filter_storage_rows, prune_contract_state, rollback_to_height,
-            select_block_at_height, set_meta_u64, tombstone_rows,
+            Error as StorageError, FOOTPRINT_BUILT_KEY, LiveRow, create_contract_signer,
+            depositors_affected_by_reorg, exists_contract_state, find_live_subtree,
+            find_matching_paths, footprint_cache_add, footprint_cache_get, footprint_cache_set,
+            footprint_rebuild_all, get_contract_address_from_id, get_contract_bytes_by_id,
+            get_contract_id_from_address, get_contract_provenance_publisher,
+            get_latest_contract_state_value, get_meta_u64, hard_delete_rows, insert_contract,
+            insert_contract_provenance, insert_contract_result, insert_contract_state,
+            latest_live_deposit, live_deposit_gas_sum, matching_path,
+            path_prefix_filter_contract_state, path_prefix_filter_storage_rows,
+            prune_contract_state, rollback_to_height, select_block_at_height, set_meta_u64,
+            tombstone_rows,
         },
         types::{ContractProvenanceRow, ContractResultRow, ContractRow, ContractStateRow},
     },
@@ -154,14 +157,10 @@ impl FootprintCache<'_> {
     /// counts and the token allows spends it should reject. (A tombstone delete can't
     /// revive: its tombstone stays the latest row.) Mirrors the reorg resurrection
     /// handling. Call AFTER the hard delete — the revived row is whatever now remains
-    /// latest-live for the path. `freed` is the just-deleted set; dedup by path since a
-    /// subtree delete frees several rows under one path's siblings.
+    /// latest-live for the path. Discovery unions overlapping ranges, so `freed`
+    /// contains each path exactly once, matching `on_free` and the actual delete.
     pub async fn on_revive(&self, contract_id: u64, freed: &[LiveRow]) -> Result<()> {
-        let mut seen: HashSet<&[u8]> = HashSet::new();
         for row in freed {
-            if !seen.insert(row.path.as_slice()) {
-                continue;
-            }
             if let Some(revived) = latest_live_deposit(self.conn, contract_id, &row.path).await? {
                 footprint_cache_add(self.conn, revived.depositor, revived.deposited_gas as i64)
                     .await?;
@@ -238,7 +237,11 @@ impl Storage {
     /// live descendant) as `(path, size)` — NOT values. Split from the tombstone
     /// writes so the host can meter `Fuel::Delete` by the row count BEFORE the
     /// writes.
-    pub async fn find_live_subtree(&self, contract_id: u64, path: &[u8]) -> Result<Vec<LiveRow>> {
+    pub async fn find_live_subtree(
+        &self,
+        contract_id: u64,
+        path: &[u8],
+    ) -> Result<impl Stream<Item = Result<LiveRow, StorageError>> + Send + 'static> {
         Ok(find_live_subtree(&self.conn, contract_id, path).await?)
     }
 
@@ -339,25 +342,16 @@ impl Storage {
         contract_id: u64,
         base_path: &[u8],
         candidates: &[Vec<u8>],
-    ) -> Result<Vec<LiveRow>> {
+    ) -> Result<impl Stream<Item = Result<LiveRow, StorageError>> + Send + 'static> {
         Ok(
             find_matching_paths(&self.conn, contract_id, self.height, base_path, candidates)
                 .await?,
         )
     }
 
-    /// Write half: hard-delete the (already-metered) intra-block rows under any of
-    /// `candidates`. Returns the rows removed.
-    pub async fn hard_delete_matching_paths(
-        &self,
-        contract_id: u64,
-        base_path: &[u8],
-        candidates: &[Vec<u8>],
-    ) -> Result<u64> {
-        Ok(
-            hard_delete_matching_paths(&self.conn, contract_id, self.height, base_path, candidates)
-                .await?,
-        )
+    /// Delete exactly the current-height rows discovered and metered by the host.
+    pub async fn hard_delete_rows(&self, contract_id: u64, rows: &[LiveRow]) -> Result<u64> {
+        Ok(hard_delete_rows(&self.conn, contract_id, self.height, rows).await?)
     }
 
     pub async fn contract_id(&self, contract_address: &ContractAddress) -> Result<Option<u64>> {
@@ -831,7 +825,11 @@ mod tests {
         assert_eq!(storage.footprint().total_gas(bob).await?, 13); // 5 + 8
         // h4: delete alice's (1,"b") — her floor relaxes.
         storage.height = 4;
-        let rows = storage.find_live_subtree(1, &path("b")).await?;
+        let rows: Vec<_> = storage
+            .find_live_subtree(1, &path("b"))
+            .await?
+            .try_collect()
+            .await?;
         storage.footprint().on_free(&rows).await?;
         storage.tombstone_rows(1, &rows).await?;
         check(&storage).await?;
@@ -946,11 +944,13 @@ mod tests {
         assert_eq!(storage.footprint().total_gas(bob).await?, 20);
 
         // Intra-block hard-delete of e/A @ h2 — mirrors `_delete_matching_paths`.
-        let rows = storage.find_matching_paths(1, &base, &candidates).await?;
-        storage.footprint().on_free(&rows).await?;
-        storage
-            .hard_delete_matching_paths(1, &base, &candidates)
+        let rows: Vec<_> = storage
+            .find_matching_paths(1, &base, &candidates)
+            .await?
+            .try_collect()
             .await?;
+        storage.footprint().on_free(&rows).await?;
+        storage.hard_delete_rows(1, &rows).await?;
         storage.footprint().on_revive(1, &rows).await?;
 
         // alice's h1 row is live again → her deposit must be back in the cache.

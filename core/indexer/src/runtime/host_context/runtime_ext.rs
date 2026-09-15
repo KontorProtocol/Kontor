@@ -172,7 +172,7 @@ impl Runtime {
         accessor: &Accessor<T, Self>,
         self_: Resource<Keys>,
     ) -> Result<Option<Vec<u8>>> {
-        Fuel::KeysPoll.consume(accessor)?;
+        Fuel::StorageScan.consume(accessor)?;
         let k: Option<Vec<u8>> = self
             .table
             .lock()
@@ -195,7 +195,7 @@ impl Runtime {
         accessor: &Accessor<T, Self>,
         self_: Resource<StorageRows>,
     ) -> Result<Option<(Vec<u8>, V)>> {
-        Fuel::KeysPoll.consume(accessor)?;
+        Fuel::StorageScan.consume(accessor)?;
         let item: Option<(Vec<u8>, Vec<u8>)> = self
             .table
             .lock()

@@ -1,4 +1,5 @@
 use anyhow::Result;
+use futures_util::TryStreamExt;
 use indexer_types::{BlockRow, deserialize, serialize};
 use stdlib::{IndexKey, KeyElement, KeyPath};
 
@@ -202,9 +203,11 @@ async fn scalar_numbers_preserve_indexes_deposits_and_rollback() -> Result<()> {
     runtime.gauge = None;
 
     let path = KeyPath::new().push_interned(2).push_element(&3u64);
-    let leaves = runtime
+    let leaves: Vec<_> = runtime
         .storage
         .find_live_subtree(contract_id, &path)
+        .await?
+        .try_collect()
         .await?;
     assert_eq!(
         leaves.len(),
