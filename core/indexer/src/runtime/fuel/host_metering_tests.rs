@@ -5,6 +5,7 @@ use std::task::Poll;
 use anyhow::{Error, Result};
 use bitcoin::OutPoint;
 use futures_util::{TryStreamExt, stream};
+use libsql::{AuthAction, AuthContext, Authorization};
 use serde::{Serialize, Serializer, ser::SerializeSeq};
 use wasmtime::component::{Accessor, Resource};
 use wasmtime::{Store, Trap};
@@ -51,8 +52,18 @@ fn assert_exhausted(error: Error) {
     );
 }
 
+fn deny_storage_value_reads(context: &AuthContext<'_>) -> Authorization {
+    match context.action {
+        AuthAction::Read {
+            table_name: "contract_state",
+            column_name: "value",
+        } => Authorization::Deny,
+        _ => Authorization::Allow,
+    }
+}
+
 #[tokio::test]
-async fn row_budget_rejects_value_before_copying() -> Result<()> {
+async fn row_budget_rejects_value_before_fetching() -> Result<()> {
     let (runtime, _dir, _name) = test_runtime().await?;
     let root = "value-budget".to_string().encode();
     let member = 0u64.encode();
@@ -84,12 +95,19 @@ async fn row_budget_rejects_value_before_copying() -> Result<()> {
     .await?
     .rep();
     store.set_fuel(Fuel::StorageScan.cost() + Fuel::KeysNext(member.len() as u64).cost())?;
+    // Denying the column distinguishes avoiding a value query from merely
+    // avoiding the Rust copy after SQLite has already read the value.
+    runtime
+        .storage
+        .conn
+        .authorizer(Some(Arc::new(deny_storage_value_reads)))?;
     let (result, copied) =
         traversal_probe::measure_value_bytes(host(&mut store, async |accessor| {
             <Runtime as RowsHost<Runtime>>::next_list_u8(accessor, Resource::new_borrow(cursor))
                 .await
         }))
         .await;
+    runtime.storage.conn.authorizer(None)?;
     assert_exhausted(result.unwrap_err());
     assert_eq!(copied, 0, "unaffordable value crossed the SQL boundary");
     Ok(())
@@ -126,6 +144,10 @@ async fn row_budget_is_refreshed_between_advances() -> Result<()> {
         Some((0u64.encode(), vec![7u8; 128]))
     );
     store.set_fuel(Fuel::StorageScan.cost())?;
+    runtime
+        .storage
+        .conn
+        .authorizer(Some(Arc::new(deny_storage_value_reads)))?;
     let (result, copied) =
         traversal_probe::measure_value_bytes(host(&mut store, async |accessor| {
             <Runtime as RowsHost<Runtime>>::next_list_u8(accessor, Resource::new_borrow(cursor))
@@ -134,6 +156,7 @@ async fn row_budget_is_refreshed_between_advances() -> Result<()> {
         .await;
     assert_exhausted(result.unwrap_err());
     assert_eq!(copied, 0);
+    runtime.storage.conn.authorizer(None)?;
     Ok(())
 }
 

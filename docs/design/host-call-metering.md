@@ -81,7 +81,7 @@ A base charge is not a bound on all internal work. This slice does not yet bound
 historical/tombstoned SQL rows or all serialization before its final payload charge.
 [Storage traversal](storage-traversal.md) bounds key-iterator deduplication and
 meters delete discovery incrementally. [Storage value budgets](storage-value-budgets.md)
-guard row copying into Rust and bound write encoding. SQLite's internal value reads
-and procedure-result serialization still need separate consideration. Publication/admission,
+check row sizes before fetching values and bound write encoding. SQLite's internal
+page/history work and procedure-result serialization still need separate consideration. Publication/admission,
 variable proof-verification costs and full hardware calibration also remain in
 the coverage map. This advances #462 without closing it or superseding #445.

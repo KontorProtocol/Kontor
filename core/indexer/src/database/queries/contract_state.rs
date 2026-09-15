@@ -762,14 +762,15 @@ pub async fn path_prefix_filter_contract_state(
     ))
 }
 
-/// A streaming row cursor whose values are copied only after checking the
-/// current byte budget. SQLite may still read the value internally while stepping.
+/// Streams row metadata, fetching each value only after checking the current
+/// byte budget. The range cursor stays open while a rowid lookup reads the value.
 pub struct StorageRowCursor {
     conn: Connection,
     prefix_len: usize,
     sql: String,
     params: Vec<(String, Value)>,
     rows: Option<Rows>,
+    value_query: Option<Statement>,
     finished: bool,
 }
 
@@ -784,7 +785,7 @@ impl StorageRowCursor {
     ) -> Self {
         let (lo, lo_cmp, hi) = scan_bounds(&path, lo, hi);
         let (sql, mut params) = live_paths_scan(
-            "length(cs.path) - :prefix_len, cs.size, cs.path, cs.value",
+            "length(cs.path) - :prefix_len, cs.size, cs.path, cs.rowid",
             lo_cmp,
             contract_id,
             lo,
@@ -803,6 +804,7 @@ impl StorageRowCursor {
             sql,
             params,
             rows: None,
+            value_query: None,
             finished: false,
         }
     }
@@ -815,6 +817,7 @@ impl StorageRowCursor {
         if !matches!(result, Ok(Some(_))) {
             self.finished = true;
             self.rows = None;
+            self.value_query = None;
         }
         result
     }
@@ -837,7 +840,21 @@ impl StorageRowCursor {
         if !tail.is_empty() {
             return Err(Error::NonScalarRow);
         }
-        let value = row.get::<Vec<u8>>(3)?;
+        let rowid: i64 = row.get(3)?;
+        // Fetch the exact version selected by the live scan on the same connection.
+        // A new path lookup would repeat liveness resolution for every value.
+        let mut statement = match self.value_query.take() {
+            Some(statement) => statement,
+            None => {
+                self.conn
+                    .prepare("SELECT value FROM contract_state WHERE rowid = ?")
+                    .await?
+            }
+        };
+        let value = statement.query_row([rowid]).await?.get::<Vec<u8>>(0)?;
+        // Release SQLite's value buffer before the contract pauses this cursor.
+        statement.reset();
+        self.value_query = Some(statement);
         #[cfg(test)]
         traversal_probe::copied_value(value.len());
         let member = elem.to_vec();
