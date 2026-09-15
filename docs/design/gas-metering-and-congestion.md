@@ -218,7 +218,7 @@ procedure results are charged before commit and fuel handoff. The
 [call lifecycle design](call-lifecycle-refactor.md) records the regression coverage.
 Usage should still not be reconstructed from result rows or burned KOR: deposits,
 nested rows, minimum billing and rounding have different meanings. The next step
-is the [runtime coverage map and calibration](fuel-calibration.md), before using
+includes the [host-call coverage corrections](host-call-metering.md), before using
 fuel as a complete block-capacity model.
 
 Successful transaction execution persists one `transaction_execution_usage` row,

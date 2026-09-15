@@ -441,6 +441,7 @@ impl<T> built_in::deposit::HostWithStore<T> for Runtime {
         accessor: &Accessor<T, Self>,
         holder: Resource<Holder>,
     ) -> Result<Decimal> {
+        Fuel::StorageFloor.consume(accessor)?;
         let runtime = accessor.with(|mut access| access.get().clone());
         let holder_ref = {
             let table = runtime.table.lock().await;

@@ -235,7 +235,9 @@ pub struct Runtime {
     pub gas_to_fuel_multiplier: u64,
     pub pricing: Pricing,
     pub previous_output: Option<bitcoin::OutPoint>,
-    pub op_return_data: Option<Vec<u8>>,
+    // Host wrappers clone Runtime before their charge; copy payload bytes only
+    // in the metered transaction accessor.
+    pub op_return_data: Option<Arc<[u8]>>,
     pub node_label: String,
     /// The chain's Bitcoin network — a genesis-fixed constant exposed to
     /// contracts via the `network()` built-in. Defaults to `Regtest` (tests /
@@ -381,7 +383,7 @@ impl Runtime {
         self.id_generation_counter.reset().await;
         self.result_id_counter.reset().await;
         self.previous_output = previous_output;
-        self.op_return_data = op_return_data;
+        self.op_return_data = op_return_data.map(Arc::from);
     }
 
     pub fn tx_context(&self) -> Option<&TransactionContext> {

@@ -2,6 +2,8 @@ use anyhow::Result;
 use wasmtime::component::{Accessor, Resource};
 
 use crate::runtime::Runtime;
+use crate::runtime::fuel::Fuel;
+use crate::runtime::types::outpoint_from_bitcoin;
 use crate::runtime::wit::Transaction;
 use crate::runtime::wit::kontor::built_in;
 use crate::runtime::wit::kontor::built_in::context::OutPoint;
@@ -17,6 +19,7 @@ impl<T> built_in::context::HostTransactionWithStore<T> for Runtime {
     }
 
     async fn id(accessor: &Accessor<T, Self>, _: Resource<Transaction>) -> Result<String> {
+        Fuel::TransactionId.consume(accessor)?;
         Ok(accessor
             .with(|mut access| access.get().tx_context().map(|c| c.txid))
             .expect("transaction id called without txid present")
@@ -24,7 +27,8 @@ impl<T> built_in::context::HostTransactionWithStore<T> for Runtime {
     }
 
     async fn out_point(accessor: &Accessor<T, Self>, _: Resource<Transaction>) -> Result<OutPoint> {
-        Ok(crate::runtime::types::outpoint_from_bitcoin(
+        Fuel::TransactionOutPoint.consume(accessor)?;
+        Ok(outpoint_from_bitcoin(
             accessor
                 .with(|mut access| access.get().previous_output)
                 .expect("utxo_id called without previous_output present"),
@@ -35,6 +39,14 @@ impl<T> built_in::context::HostTransactionWithStore<T> for Runtime {
         accessor: &Accessor<T, Self>,
         _: Resource<Transaction>,
     ) -> Result<Option<Vec<u8>>> {
-        Ok(accessor.with(|mut access| access.get().op_return_data.clone()))
+        let bytes = accessor.with(|mut access| {
+            access
+                .get()
+                .op_return_data
+                .as_deref()
+                .map_or(0, <[u8]>::len)
+        });
+        Fuel::TransactionData(bytes as u64).consume(accessor)?;
+        Ok(accessor.with(|mut access| access.get().op_return_data.as_deref().map(<[u8]>::to_vec)))
     }
 }

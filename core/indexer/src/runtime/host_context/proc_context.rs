@@ -92,18 +92,19 @@ impl<T> built_in::context::HostProcContextWithStore<T> for Runtime {
         accessor: &Accessor<T, Self>,
         _self: Resource<ProcContext>,
     ) -> Result<u64> {
-        let runtime = accessor.with(|mut access| access.get().clone());
-        Ok(runtime.storage.height)
+        Fuel::BlockHeight.consume(accessor)?;
+        Ok(accessor.with(|mut access| access.get().storage.height))
     }
 
     async fn network(
         accessor: &Accessor<T, Self>,
         _self: Resource<ProcContext>,
     ) -> Result<built_in::context::Network> {
-        let runtime = accessor.with(|mut access| access.get().clone());
+        Fuel::Network.consume(accessor)?;
+        let network = accessor.with(|mut access| access.get().network);
         // `bitcoin::Network` is `#[non_exhaustive]`; fold Testnet4 and any
         // future test network into `testnet`.
-        Ok(match runtime.network {
+        Ok(match network {
             bitcoin::Network::Bitcoin => built_in::context::Network::Mainnet,
             bitcoin::Network::Signet => built_in::context::Network::Signet,
             bitcoin::Network::Regtest => built_in::context::Network::Regtest,

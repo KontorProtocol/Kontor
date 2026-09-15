@@ -197,8 +197,13 @@ impl FootprintCache<'_> {
 }
 
 impl Storage {
-    pub async fn get(&self, fuel: u64, contract_id: u64, path: &[u8]) -> Result<Option<Vec<u8>>> {
-        Ok(get_latest_contract_state_value(&self.conn, fuel, contract_id, path).await?)
+    pub async fn get(
+        &self,
+        max_value_bytes: u64,
+        contract_id: u64,
+        path: &[u8],
+    ) -> Result<Option<Vec<u8>>> {
+        Ok(get_latest_contract_state_value(&self.conn, max_value_bytes, contract_id, path).await?)
     }
 
     /// Write a live value. `depositor` is the signer who collateralizes this row via
