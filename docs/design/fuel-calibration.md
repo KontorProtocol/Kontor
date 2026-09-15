@@ -3,6 +3,8 @@
 Baseline: main `bf6699ae79ff14c084ac2ee20a73066aafea1dfe` (PR #569),
 2026-09-15. Tracks [#462](https://github.com/KontorProtocol/Kontor/issues/462).
 This investigation changes no charges, prices, contract interfaces or consensus rules.
+The shared-linker optimization and its validation are recorded at the end; the
+coverage map and first measurements describe the baseline before that optimization.
 
 ## Method and boundaries
 
@@ -118,7 +120,7 @@ TMPDIR="$PWD/.build-cache/fuel-calibration-tmp" RUST_LOG=warn \
   cargo test --manifest-path core/Cargo.toml --locked --release \
   -p indexer --lib runtime::fuel::calibration::fuel_calibration -j 2 \
   -- --ignored --exact --nocapture > /tmp/kontor-fuel-calibration.log 2>&1
-sed -n 's/^FUEL_CALIBRATION //p' /tmp/kontor-fuel-calibration.log > /tmp/kontor-fuel-calibration.jsonl
+sed -n 's/^.*FUEL_CALIBRATION //p' /tmp/kontor-fuel-calibration.log > /tmp/kontor-fuel-calibration.jsonl
 ```
 
 Each JSON sample reports **whole-batch** nanoseconds and consumed fuel. Divide
@@ -197,8 +199,8 @@ Three conclusions are supported by this first set:
    helpers. Wasmtime 48.0.2's component `Linker::clone` copies its string pool and
    definition map. The standalone clone measurements corroborate that source path.
    Share the immutable linkers, retaining user/native capability separation, then
-   rerun these cases and end-to-end contract regressions. This is a recommendation,
-   not an implemented optimization or an end-to-end speedup claim.
+   rerun these cases and end-to-end contract regressions. These initial measurements
+   motivated the optimization below; they alone did not establish an end-to-end speedup.
 2. **Storage needs a base-cost model.** Present and missing small reads have similar
    elapsed costs but consume 20 and zero host fuel in this fixture. A byte-only
    successful-read charge does not represent the lookup. The flat row scans scale
@@ -209,12 +211,94 @@ Three conclusions are supported by this first set:
    The memory-copy case also shows why a single Wasm loop cannot calibrate all
    guest instructions. Bare primitive timings exclude the component boundary.
 
-The first follow-up should therefore share immutable linkers and remeasure, before
-changing the charge schedule. After that, follow the coverage/regression sequence
-above. No price constants or block-capacity target have been selected.
+The first follow-up was to share immutable linkers and remeasure, before changing
+the charge schedule; that is implemented and measured below. The remaining work
+is the coverage/regression sequence above. No price constants or block-capacity
+target have been selected.
 
 Validation: the manual release benchmark passed all 47 cases; indexer Clippy with
 library/tests and warnings denied passed; formatting and diff checks passed. The
 benchmark is ignored in ordinary test runs. This slice does not modify production
 behavior, so it does not require rebuilding contract/SDK components or rerunning
 the unchanged cluster suite.
+
+## Shared immutable linkers
+
+Implemented after investigation commit `0cc30bdd`. `new_linkers` finishes both
+registries and returns one `Arc<Linkers>`. `Runtime` and the runtime-pool manager
+hold that shared pair. `Linkers` no longer derives `Clone`, so ordinary runtime
+cloning cannot accidentally copy both registries again. No mutex or additional
+lookup/cache layer is needed: registration occurs during construction, and
+instantiation reads the completed definitions.
+
+The shared objects describe available host imports, not an invocation's state.
+User and native components still select different registries at publication and
+invocation. Stores, fuel budgets, call-owned resource tables, database transactions
+and host callbacks' access to the current store retain their existing behavior.
+The engine and its linker pair retain the same construction/replacement lifecycle,
+including the CoW diagnostic that replaces both together.
+
+The unchanged calibration benchmark now measures reference-count operations for
+`linkers-clone`, plus the remaining runtime fields for `runtime-clone`. Its bare
+hash and guest Wasm cases provide controls; no artificial before/after implementation
+switch was added to the runtime. Contract-level timings use the existing
+`fuel_accounting_costs` benchmark (100 staking top-ups, including nested token calls,
+fee settlement and storage writes; seven samples per profiling mode).
+
+On the same Linux aarch64 machine, with release builds and no competing tests or
+builds during timing:
+
+| Host/guest case | Before median | Shared-linker median | Speedup |
+| --- | ---: | ---: | ---: |
+| Runtime clone | 39.393 μs | 0.086 μs | 459× |
+| Empty SHA-256 host call | 39.514 μs | 0.256 μs | 154× |
+| SHA-256 host call, 64 KiB | 223.314 μs | 183.063 μs | 1.22× |
+| Present u64 read, 1,024 keys | 56.725 μs | 15.927 μs | 3.56× |
+| Scan 1,024 u64 rows | 40.785 ms | 0.590 ms | 69.1× |
+| Scan 16,384 u64 rows | 651.183 ms | 9.863 ms | 66.0× |
+| Overwrite 64 bytes, no depositor | 70.615 μs | 30.958 μs | 2.28× |
+| Bare SHA-256, 64 KiB (control) | 181.860 μs | 181.741 μs | ~1× |
+| Wasm integer loop, 65,536 iterations (control) | 62.867 μs | 61.625 μs | ~1× |
+
+| 100 staking top-ups | Before median (range) ms | Shared-linker median (range) ms |
+| --- | ---: | ---: |
+| Gauge disabled | 825.284 (823.800–838.860) | 116.744 (116.410–121.612) |
+| Totals collected | 824.542 (824.204–825.609) | 116.683 (116.578–117.795) |
+| Detailed profiling | 825.827 (824.870–828.984) | 117.616 (117.528–118.377) |
+
+The contract benchmark is about **7.1× faster** with totals collection, roughly
+86% less elapsed time. Every one of its 42 before/after batches burned exactly
+**0.0000284 KOR**; event counts also remained zero for disabled/totals and 14,700
+for profiling. All **47 calibration cases preserved exact consumed fuel**.
+The unchanged primitive/Wasm controls support attributing the large host-side
+changes to removed copying rather than a general machine-speed difference.
+
+These are warm local measurements, not a claim that all contracts or network
+throughput improve sevenfold. Proof-heavy, large-hash and disk-bound workloads
+will have different gains. The optimization changes execution time, not gas prices
+or charges. Full per-batch records are archived for the
+[shared-linker calibration](../measurements/fuel-calibration-shared-linkers-linux-aarch64.jsonl)
+and [contract comparison](../measurements/shared-linkers-contract-calls.jsonl).
+
+Reproduce the sequential post-change measurements with:
+
+```sh
+TMPDIR="$PWD/.build-cache/fuel-calibration-tmp" RUST_LOG=warn \
+  cargo test --manifest-path core/Cargo.toml --locked --release \
+  -p indexer --lib -j 2 -- --ignored --nocapture --test-threads=1 \
+  runtime::fuel::calibration::fuel_calibration \
+  runtime::fuel::profiling_tests::fuel_accounting_costs
+```
+
+Validation after sharing: **518 indexer library tests passed**, with 10 manual
+benchmarks ignored. Coverage includes user rejection of native imports, publishing,
+nested success/failure billing and rollback, invocation-owned resource cleanup,
+read-only pool reuse and consensus/rollback tests. Both manual benchmarks passed
+separately, and their before/after fuel, burn and event counts matched. Indexer
+Clippy (library/tests, warnings denied), formatting and diff checks passed.
+No contract/SDK interface or binary changed. The existing behavior tests cover this
+ownership change; no pointer-identity or wall-clock assertion was added.
+
+The next calibration work is storage base charges and work performed before
+charging: missing reads, empty cursor polls, path validation and scan/delete
+traversal. Use the post-optimization measurements as the starting point.
