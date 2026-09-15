@@ -195,8 +195,8 @@ fn native_provenance() -> Result<BuildProvenance> {
 /// only the common built-ins; `native` additionally registers the privileged
 /// interfaces (`file-registry`, `system`, `deposit`). Both share the same `Runtime`
 /// host state — they differ only in which interfaces a component can import.
-/// `invoke` selects one per contract by native contract id.
-#[derive(Clone)]
+/// `invoke` selects one per contract by native contract id. Share this immutable
+/// pair through `Arc`: cloning a Wasmtime linker copies its definition registry.
 pub struct Linkers {
     pub user: Linker<Runtime>,
     pub native: Linker<Runtime>,
@@ -205,7 +205,7 @@ pub struct Linkers {
 #[derive(Clone)]
 pub struct Runtime {
     pub engine: Engine,
-    pub linkers: Linkers,
+    pub linkers: Arc<Linkers>,
     pub table: Arc<Mutex<ResourceTable>>,
     pub component_cache: ComponentCache,
     pub storage: Storage,
@@ -297,13 +297,13 @@ impl Runtime {
         Ok(())
     }
 
-    pub fn new_linkers(engine: &Engine) -> Result<Linkers> {
+    pub fn new_linkers(engine: &Engine) -> Result<Arc<Linkers>> {
         let mut user = Linker::new(engine);
         Self::register_common(&mut user)?;
         let mut native = Linker::new(engine);
         Self::register_common(&mut native)?;
         Self::register_native(&mut native)?;
-        Ok(Linkers { user, native })
+        Ok(Arc::new(Linkers { user, native }))
     }
 
     pub async fn new(component_cache: ComponentCache, storage: Storage) -> Result<Self> {
@@ -314,7 +314,7 @@ impl Runtime {
 
     pub async fn new_with(
         engine: Engine,
-        linkers: Linkers,
+        linkers: Arc<Linkers>,
         component_cache: ComponentCache,
         storage: Storage,
     ) -> Result<Self> {
@@ -349,7 +349,7 @@ impl Runtime {
 
     pub async fn new_read_only(
         engine: Engine,
-        linkers: Linkers,
+        linkers: Arc<Linkers>,
         component_cache: ComponentCache,
         conn: Connection,
     ) -> Result<Self> {

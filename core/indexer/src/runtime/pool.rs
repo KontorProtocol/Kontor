@@ -1,4 +1,5 @@
 use std::path::PathBuf;
+use std::sync::Arc;
 
 use anyhow::Context;
 use deadpool::managed::{self, Pool, RecycleError, RecycleResult};
@@ -23,7 +24,7 @@ pub struct Manager {
     data_dir: PathBuf,
     filename: String,
     engine: Engine,
-    linkers: Linkers,
+    linkers: Arc<Linkers>,
     component_cache: ComponentCache,
     network: bitcoin::Network,
     /// Operator-set per-call gas budget for `/view` reads served by this pool.
