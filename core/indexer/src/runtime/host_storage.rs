@@ -1,10 +1,10 @@
 use anyhow::{Result, anyhow};
-use futures_util::future::OptionFuture;
 use serde::{Deserialize, Serialize};
-use wasmtime::AsContext;
 use wasmtime::component::{Accessor, Resource};
+use wasmtime::{AsContext, Trap};
 
 use crate::database::native_contracts::is_deposit_exempt;
+use crate::database::queries::Error as StorageError;
 use crate::database::types::CORE_SIGNER_ID;
 
 use super::{
@@ -40,6 +40,11 @@ fn validate_path(path: &[u8]) -> Result<()> {
     Ok(())
 }
 
+fn meter_path<T>(accessor: &Accessor<T, Runtime>, path: &[u8]) -> Result<()> {
+    Fuel::Path(path.len() as u64).consume(accessor)?;
+    validate_path(path)
+}
+
 // The guest selects the slot type. Valid writes through another setter can fail
 // this decode, so this is a contract failure, not evidence of database corruption.
 pub(crate) fn decode_storage_value<T: for<'de> Deserialize<'de>>(bytes: &[u8]) -> Result<T> {
@@ -59,23 +64,30 @@ impl Runtime {
         self_: Resource<T>,
         path: Vec<u8>,
     ) -> Result<Option<R>> {
-        validate_path(&path)?;
+        Fuel::StorageRead.consume(accessor)?;
+        meter_path(accessor, &path)?;
         let fuel = accessor.with(|access| access.as_context().get_fuel())?;
-        let table = self.table.lock().await;
-        let contract_id = table.get(&self_)?.get_contract_id();
-        let raw = self.storage.get(fuel, contract_id, &path).await?;
-        if raw.is_none() {
-            tracing::debug!(
-                "storage read returned None: contract_id={contract_id} path={path:?} fuel={fuel} height={}",
-                self.storage.height
-            );
-        }
-        OptionFuture::from(raw.map(async |bs| {
-            Fuel::Get(bs.len()).consume(accessor)?;
-            decode_storage_value(&bs)
-        }))
-        .await
-        .transpose()
+        let contract_id = self.table.lock().await.get(&self_)?.get_contract_id();
+        // Apply the byte price after the base/path charges, before copying the
+        // stored blob out of SQL. Budget exhaustion must retain its Wasm trap type.
+        let max_value_bytes = fuel / Fuel::Get(1).cost();
+        let raw = self
+            .storage
+            .get(max_value_bytes, contract_id, &path)
+            .await
+            .map_err(|error| {
+                if matches!(
+                    error.downcast_ref::<StorageError>(),
+                    Some(StorageError::ValueTooLarge)
+                ) {
+                    Trap::OutOfFuel.into()
+                } else {
+                    error
+                }
+            })?;
+        let Some(bytes) = raw else { return Ok(None) };
+        Fuel::Get(bytes.len()).consume(accessor)?;
+        Ok(Some(decode_storage_value(&bytes)?))
     }
 
     pub(crate) async fn _get_keys<S, T: HasContractId>(
@@ -87,7 +99,13 @@ impl Runtime {
         hi: Option<Vec<u8>>,
         descending: bool,
     ) -> Result<Resource<Keys>> {
-        validate_path(&path)?;
+        Fuel::GetKeys.consume(accessor)?;
+        let bound_bytes = lo
+            .as_ref()
+            .map_or(0, Vec::len)
+            .saturating_add(hi.as_ref().map_or(0, Vec::len));
+        Fuel::Path(bound_bytes as u64).consume(accessor)?;
+        meter_path(accessor, &path)?;
         // `lo`/`hi` are NOT validated as paths: they are synthetic byte-comparison
         // bounds (`cs.path >= path ++ lo`, `cs.path < path ++ hi`), never decoded. An
         // EXCLUSIVE bound is `sort_upper_bound`, which deliberately is
@@ -97,7 +115,6 @@ impl Runtime {
         // `scan_bounds`, keeping the child-only `> path` invariant).
         let mut table = self.table.lock().await;
         let contract_id = table.get(&resource)?.get_contract_id();
-        Fuel::GetKeys.consume(accessor)?;
         let stream = Box::pin(
             self.storage
                 .keys(contract_id, path, lo, hi, descending)
@@ -117,12 +134,17 @@ impl Runtime {
         hi: Option<Vec<u8>>,
         descending: bool,
     ) -> Result<Resource<StorageRows>> {
-        validate_path(&path)?;
+        Fuel::GetKeys.consume(accessor)?;
+        let bound_bytes = lo
+            .as_ref()
+            .map_or(0, Vec::len)
+            .saturating_add(hi.as_ref().map_or(0, Vec::len));
+        Fuel::Path(bound_bytes as u64).consume(accessor)?;
+        meter_path(accessor, &path)?;
         // `lo`/`hi` are byte-comparison bounds, not paths — see `_get_keys` for why they
         // are not validated as paths: the exclusive sentinel is not a stored element.
         let mut table = self.table.lock().await;
         let contract_id = table.get(&resource)?.get_contract_id();
-        Fuel::GetKeys.consume(accessor)?;
         let stream = Box::pin(
             self.storage
                 .storage_rows(contract_id, path, lo, hi, descending)
@@ -137,10 +159,10 @@ impl Runtime {
         resource: Resource<T>,
         path: Vec<u8>,
     ) -> Result<bool> {
-        validate_path(&path)?;
+        Fuel::Exists.consume(accessor)?;
+        meter_path(accessor, &path)?;
         let table = self.table.lock().await;
         let _self = table.get(&resource)?;
-        Fuel::Exists.consume(accessor)?;
         self.storage.exists(_self.get_contract_id(), &path).await
     }
 
@@ -151,10 +173,14 @@ impl Runtime {
         path: Vec<u8>,
         candidates: Vec<Vec<u8>>,
     ) -> Result<Option<u32>> {
-        validate_path(&path)?;
+        Fuel::ExtendPathWithMatch(candidates.len() as u64).consume(accessor)?;
+        let candidate_bytes = candidates.iter().fold(0_u64, |bytes, candidate| {
+            bytes.saturating_add(candidate.len() as u64)
+        });
+        Fuel::Path(candidate_bytes).consume(accessor)?;
+        meter_path(accessor, &path)?;
         let table = self.table.lock().await;
         let _self = table.get(&resource)?;
-        Fuel::ExtendPathWithMatch(candidates.len() as u64).consume(accessor)?;
         self.storage
             .extend_path_with_match(_self.get_contract_id(), &path, &candidates)
             .await
@@ -167,7 +193,13 @@ impl Runtime {
         base_path: Vec<u8>,
         candidates: Vec<Vec<u8>>,
     ) -> Result<u64> {
-        validate_path(&base_path)?;
+        Fuel::StorageDelete.consume(accessor)?;
+        Fuel::ExtendPathWithMatch(candidates.len() as u64).consume(accessor)?;
+        let candidate_bytes = candidates.iter().fold(0_u64, |bytes, candidate| {
+            bytes.saturating_add(candidate.len() as u64)
+        });
+        Fuel::Path(candidate_bytes).consume(accessor)?;
+        meter_path(accessor, &base_path)?;
         let contract_id = self.table.lock().await.get(&self_)?.get_contract_id();
         // Read → meter → write: charge in proportion to the rows actually removed,
         // not a flat per-candidate fee. Freeing a row also subtracts its deposit from
@@ -194,17 +226,17 @@ impl Runtime {
 
     /// Delete a key by tombstoning its WHOLE subtree (the node + every live
     /// descendant — a struct/map value persists under child paths). Metered by the
-    /// subtree size: find the live rows first (a read), charge `Fuel::Delete` for
-    /// them, THEN write the tombstones — so an underfunded delete traps after only
-    /// the cheap read, never forcing the O(rows) writes. Returns true if a live
-    /// value was removed.
+    /// subtree size: the base/input charge precedes discovery and the per-row
+    /// charge precedes writes. Discovery still materializes metadata and needs
+    /// separate traversal bounds. Returns true if a live value was removed.
     pub(crate) async fn _delete<S, T: HasContractId>(
         &self,
         accessor: &Accessor<S, Self>,
         self_: Resource<T>,
         path: Vec<u8>,
     ) -> Result<bool> {
-        validate_path(&path)?;
+        Fuel::StorageDelete.consume(accessor)?;
+        meter_path(accessor, &path)?;
         let contract_id = self.table.lock().await.get(&self_)?.get_contract_id();
         // Read → meter → write. A flat `Set(0)` charged the same whether the
         // subtree held one row or thousands; meter by the rows/bytes tombstoned.
@@ -223,9 +255,9 @@ impl Runtime {
         path: Vec<u8>,
         value: V,
     ) -> Result<()> {
-        validate_path(&path)?;
+        Fuel::StorageWrite.consume(accessor)?;
+        meter_path(accessor, &path)?;
         let contract_id = self.table.lock().await.get(&resource)?.get_contract_id();
-        Fuel::Path(path.clone()).consume(accessor)?;
         let bs = &indexer_types::serialize(&value)?;
         Fuel::Set(bs.len() as u64).consume(accessor)?;
         // Stamp the op's payer (from the current call frame) as this row's

@@ -33,8 +33,8 @@ pub enum Error {
     RowDeserialization(#[from] serde::de::value::Error),
     #[error("Invalid cursor format")]
     InvalidCursor,
-    #[error("Out of fuel")]
-    OutOfFuel,
+    #[error("Storage value exceeds the requested byte limit")]
+    ValueTooLarge,
     #[error("Contract not found: {0}")]
     ContractNotFound(String),
     #[error("Invalid data: {0}")]

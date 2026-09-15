@@ -11,6 +11,8 @@ pub(crate) use gauge::{UsageKind, record_fuel};
 #[cfg(test)]
 mod cow_costs;
 #[cfg(test)]
+mod host_metering_tests;
+#[cfg(test)]
 mod profiling_tests;
 
 #[derive(Debug, Clone, EnumDiscriminants, EnumIter)]
@@ -21,14 +23,21 @@ pub enum Fuel {
     HolderKey,
     HolderFromRef,
     HolderAsRef,
+    KeysPoll,
+    /// Returned bytes only; KeysPoll charges each attempt before advancing.
     KeysNext(u64),
-    Path(Vec<u8>),
+    Path(u64),
     ExtendPathWithMatch(u64),
     GetKeys,
     Exists,
+    StorageRead,
+    StorageWrite,
+    StorageDelete,
+    /// Payload only; StorageRead pays for the lookup, including a miss.
     Get(usize),
+    /// Serialized payload only; StorageWrite pays the entry cost first.
     Set(u64),
-    /// A subtree delete (tombstone or hard delete), metered by what it removes:
+    /// Per-row/byte portion of a delete, after the StorageDelete entry charge:
     /// `(rows, bytes)`. A flat per-call fee would let a cheap call tombstone an
     /// arbitrarily large subtree on every node, so the cost scales with both the
     /// row count and the bytes freed (`path.len() + value size`).
@@ -46,6 +55,12 @@ pub enum Fuel {
     ProcContractSigner,
     ProcViewContext,
     ProcTransaction,
+    BlockHeight,
+    Network,
+    TransactionId,
+    TransactionOutPoint,
+    TransactionData(u64),
+    StorageFloor,
     ProcStorage,
     BlockEntropy,
     ViewStorage,
@@ -62,7 +77,6 @@ pub enum Fuel {
     FrontierAppend(u64),
     ComputeChallengeId,
     ProofFromBytes(u64),
-    ProofChallengeIds,
     ProofVerify,
     NumbersU64ToInteger,
     NumbersS64ToInteger,
@@ -108,35 +122,18 @@ impl Fuel {
             Self::HolderKey => 50,
             Self::HolderFromRef => 100,
             Self::HolderAsRef => 50,
-            Self::KeysNext(key_len) => 100 + 10 * key_len,
-            Self::Path(path) => {
-                // Meter by element (segment) count — walk the codec elements. A
-                // malformed guest path must NOT panic metering: stop counting at the
-                // first ill-formed element. This stays deterministic (same bytes →
-                // same count), and the storage op itself surfaces the bad path as an
-                // error rather than crashing the host. `next_element` always consumes
-                // ≥1 byte on `Ok`, so the loop terminates.
-                let mut rest = path.as_slice();
-                let mut segments = 0u64;
-                while !rest.is_empty() {
-                    match stdlib::next_element(rest) {
-                        Ok((_, r)) => {
-                            rest = r;
-                            segments += 1;
-                        }
-                        Err(_) => break,
-                    }
-                }
-                10 * segments
-            }
-            Self::Get(value_len) => 10 * *value_len as u64,
+            Self::KeysPoll => 100,
+            Self::KeysNext(bytes) | Self::Path(bytes) => bytes.saturating_mul(10),
+            Self::StorageRead => 50,
+            Self::StorageWrite | Self::StorageDelete => 200,
+            Self::Get(value_len) => (*value_len as u64).saturating_mul(10),
             Self::GetKeys => 200,
             Self::Exists => 50,
-            Self::ExtendPathWithMatch(regexp_len) => 500 + 10 * regexp_len,
-            Self::Set(value_len) | Self::Result(value_len) => 200 + 10 * value_len,
-            // ~one tombstone insert (200 base) per row, plus the value bytes
-            // re-written into each tombstone (10/byte).
-            Self::Delete(rows, bytes) => 200 + 200 * rows + 10 * bytes,
+            Self::ExtendPathWithMatch(candidate_count) => 500 + 10 * candidate_count,
+            Self::Set(value_len) => value_len.saturating_mul(10),
+            Self::Result(value_len) => 200 + 10 * value_len,
+            // Charge mutations and freed footprint bytes; tombstones omit values.
+            Self::Delete(rows, bytes) => 200 * rows + 10 * bytes,
             Self::Deposit(fuel) => *fuel,
             Self::ContractAddress => 100,
             Self::ProcSigner | Self::ProcContractSigner | Self::ProcTransaction => 500,
@@ -145,6 +142,12 @@ impl Fuel {
             Self::ProcViewContext => 200,
             Self::ProcStorage => 200,
             Self::BlockEntropy => 200,
+            Self::BlockHeight
+            | Self::Network
+            | Self::TransactionId
+            | Self::TransactionOutPoint
+            | Self::StorageFloor => 50,
+            Self::TransactionData(bytes) => 50_u64.saturating_add(bytes.saturating_mul(10)),
             Self::ViewStorage => 200,
             Self::FallSigner
             | Self::FallPayer
@@ -163,7 +166,6 @@ impl Fuel {
             Self::FrontierAppend(num_files) => 1000 + 200 * num_files,
             Self::ComputeChallengeId => 500,
             Self::ProofFromBytes(bytes_len) => 1000 + 10 * bytes_len,
-            Self::ProofChallengeIds => 100,
             Self::ProofVerify => 50_000,
             Self::NumbersU64ToInteger
             | Self::NumbersS64ToInteger
@@ -228,49 +230,19 @@ impl Fuel {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use proptest::prelude::*;
-    use stdlib::KeyElement;
-
-    proptest! {
-        // Fuzz: arbitrary path bytes must never panic metering, and the cost is
-        // bounded by the byte length (≤ 10 fuel per element, ≤ 1 element per byte).
-        #[test]
-        fn path_cost_never_panics(bytes in proptest::collection::vec(any::<u8>(), 0..64)) {
-            let cost = Fuel::Path(bytes.clone()).cost();
-            prop_assert!(cost <= 10 * bytes.len() as u64);
-        }
-    }
-
-    // A subtree delete must cost proportionally to the rows tombstoned and the
-    // bytes re-written — never the old flat `Set(0)`, which let a cheap call force
-    // unbounded work on every node.
+    // Preserve the total mutation charge when moving the base before discovery.
     #[test]
     fn delete_cost_scales_with_rows_and_bytes() {
-        assert_eq!(Fuel::Delete(0, 0).cost(), 200);
-        assert_eq!(Fuel::Delete(3, 0).cost(), 200 + 200 * 3);
-        assert_eq!(Fuel::Delete(3, 50).cost(), 200 + 200 * 3 + 10 * 50);
+        assert_eq!(Fuel::StorageDelete.cost() + Fuel::Delete(0, 0).cost(), 200);
+        assert_eq!(
+            Fuel::StorageDelete.cost() + Fuel::Delete(3, 0).cost(),
+            200 + 200 * 3
+        );
+        assert_eq!(
+            Fuel::StorageDelete.cost() + Fuel::Delete(3, 50).cost(),
+            200 + 200 * 3 + 10 * 50
+        );
         // A real (non-empty) delete now costs strictly more than the old flat fee.
-        assert!(Fuel::Delete(2, 10).cost() > Fuel::Set(0).cost());
-    }
-
-    // A malformed guest path must not panic fuel metering (it used to `expect` a
-    // valid codec path). Cost is deterministic — well-formed elements up to the
-    // first ill-formed byte — and finite.
-    #[test]
-    fn malformed_path_does_not_panic_metering() {
-        // Pure garbage (no valid leading tag) → zero countable segments, no panic.
-        assert_eq!(Fuel::Path(vec![0xFF, 0xFF, 0xFF]).cost(), 0);
-        // A valid string element followed by a truncated one → counts the good
-        // prefix, stops at the bad tail.
-        let mut bytes = stdlib::KeyElement::encode(&"ok".to_string());
-        bytes.push(0x02); // dangling string tag with no terminator
-        assert_eq!(Fuel::Path(bytes).cost(), 10); // one well-formed segment
-        // Empty path → zero.
-        assert_eq!(Fuel::Path(Vec::new()).cost(), 0);
-        // Well-formed multi-element path counts every segment.
-        let mut p = Vec::new();
-        "a".to_string().encode_to(&mut p);
-        7u64.encode_to(&mut p);
-        assert_eq!(Fuel::Path(p).cost(), 20); // two segments
+        assert!(Fuel::Delete(2, 10).cost() > Fuel::StorageWrite.cost());
     }
 }

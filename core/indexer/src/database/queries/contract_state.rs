@@ -414,20 +414,20 @@ pub async fn latest_live_deposit(
 
 pub async fn get_latest_contract_state_value(
     conn: &Connection,
-    fuel: u64,
+    max_value_bytes: u64,
     contract_id: u64,
     path: &[u8],
 ) -> Result<Option<Vec<u8>>, Error> {
     let mut rows = conn
         .query(
             &live_latest(
-                "CASE WHEN size <= :fuel THEN value ELSE null END AS value",
+                "CASE WHEN size <= :max_value_bytes THEN value ELSE null END AS value",
                 "contract_id = :contract_id AND path = :path",
             ),
             (
                 (":contract_id", contract_id),
                 (":path", Value::Blob(path.to_vec())),
-                (":fuel", fuel),
+                (":max_value_bytes", max_value_bytes),
             ),
         )
         .await?;
@@ -436,7 +436,7 @@ pub async fn get_latest_contract_state_value(
     if let Some(row) = row {
         return match row.get::<Option<Vec<u8>>>(0)? {
             Some(v) => Ok(Some(v)),
-            None => Err(Error::OutOfFuel),
+            None => Err(Error::ValueTooLarge),
         };
     }
     Ok(None)

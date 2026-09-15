@@ -212,13 +212,14 @@ records its metered init, including initialization failures; malformed bytes can
 therefore produce zero fuel despite host work. These gaps belong in the workload
 and fuel-table calibration before treating fuel as a complete capacity model.
 
-The existing fee path has two nested-call gaps: preparation failure does not
-forward the child's remaining fuel, and procedure result charging occurs after
-fuel is forwarded. Usage includes that work without changing fee settlement.
-Measurements can consequently differ from charged gas by more than rounding,
-and should not be reconstructed from result rows or burned KOR. Fixing the
-billing behavior requires separate regression coverage and an explicit protocol
-change; these measurements do not activate it implicitly.
+The nested-call billing gaps identified during measurement were fixed by PR #569
+(main `bf6699ae`): failed preparation forwards the child's remaining fuel, and
+procedure results are charged before commit and fuel handoff. The
+[call lifecycle design](call-lifecycle-refactor.md) records the regression coverage.
+Usage should still not be reconstructed from result rows or burned KOR: deposits,
+nested rows, minimum billing and rounding have different meanings. The next step
+includes the [host-call coverage corrections](host-call-metering.md), before using
+fuel as a complete block-capacity model.
 
 Successful transaction execution persists one `transaction_execution_usage` row,
 including deterministic failed operations. System fuel within it includes
