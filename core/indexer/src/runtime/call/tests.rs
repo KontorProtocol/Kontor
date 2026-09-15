@@ -1,8 +1,11 @@
+use std::sync::Arc;
+
 use anyhow::Result;
 use indexer_types::Payment;
 use libsql::params;
 
 use crate::reg_tester::random_x_only_pubkey;
+use crate::runtime::fuel::UsageKind;
 use crate::runtime::numerics::sub_decimal;
 use crate::runtime::token::api as token;
 use crate::runtime::wit::Signer;
@@ -414,5 +417,71 @@ async fn nested_success_releases_call_owned_host_resources() -> Result<()> {
             "successful invocation must release its host resources: {target}"
         );
     }
+    Ok(())
+}
+
+#[tokio::test]
+async fn invocation_tables_drop_resources_without_invalidating_parent_handles() -> Result<()> {
+    let (mut runtime, _dir, _name) = test_runtime().await?;
+    let actor = funded(&mut runtime).await?;
+    let chain = call_chain(&mut runtime, &actor).await?;
+    let unpaid = Signer::Id(
+        runtime
+            .get_or_create_identity(&random_x_only_pubkey())
+            .await?,
+    );
+    let payment = Payment {
+        signer_id: actor.signer_id().unwrap(),
+        gas_limit: runtime.gas_limit_for_non_procs,
+    };
+    let unfunded_payment = Payment {
+        signer_id: unpaid.signer_id().unwrap(),
+        ..payment.clone()
+    };
+    let parent_handle = runtime.table.lock().await.push(42_u64)?;
+    let cases = [
+        ("succeed()", Some(&payment), true),
+        ("primitive-entries()", Some(&payment), true),
+        ("scan-compound(false)", Some(&payment), false),
+        ("trap-panic()", Some(&payment), false),
+        ("missing()", Some(&payment), false),
+        ("primitive-entries()", None, false),
+        ("primitive-entries()", Some(&unfunded_payment), false),
+        #[cfg(feature = "testing")]
+        ("host-panic()", Some(&payment), false),
+    ];
+    for target in &chain {
+        for (expr, payment, succeeds) in cases {
+            runtime.storage.savepoint().await?;
+            let mut store = runtime.make_store(runtime.fuel_limit_for_non_procs())?;
+            store.data_mut().usage_kind = UsageKind::User;
+            let table = Arc::downgrade(&store.data().table);
+            assert!(!Arc::ptr_eq(&runtime.table, &store.data().table));
+            // An owned resource deliberately left live must die with the call,
+            // even on preparation errors that never enter the guest function.
+            let payload = Arc::new(());
+            store.data().table.lock().await.push(payload.clone())?;
+            let mut invocation = store.data().clone();
+            let (result, store) = invocation
+                .invoke_in_store(store, target, Some(&actor), payment, expr, false)
+                .await?;
+            assert_eq!(result.is_ok(), succeeds, "{target}: {expr}: {result:?}");
+            assert!(runtime.stack.is_empty().await);
+            drop(invocation);
+            drop(store);
+            assert!(
+                table.upgrade().is_none(),
+                "invocation table retained: {target}: {expr}"
+            );
+            assert_eq!(
+                Arc::strong_count(&payload),
+                1,
+                "call-owned resource retained"
+            );
+            assert_eq!(*runtime.table.lock().await.get(&parent_handle)?, 42);
+            runtime.storage.rollback().await?;
+        }
+    }
+    runtime.table.lock().await.delete(parent_handle)?;
     Ok(())
 }

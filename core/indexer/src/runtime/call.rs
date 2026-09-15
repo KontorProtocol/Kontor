@@ -18,10 +18,6 @@ use indexer_types::{OpStatus, Payment};
 use crate::database::native_contracts::is_native_contract_id;
 use crate::database::types::Identity;
 
-use std::sync::Arc;
-use tokio::sync::Mutex;
-use wasmtime::component::ResourceTable;
-
 use super::{
     ContractAddress, Runtime,
     fuel::{Fuel, UsageKind, record_fuel},
@@ -56,56 +52,30 @@ fn payer_signer(payment: &Payment) -> Signer {
     Signer::Id(Identity::new(payment.signer_id))
 }
 
-/// Resolved function, arguments and settlement metadata. The store is returned
-/// separately so failed preparation can be measured before it is dropped.
-pub(crate) struct PreparedCall {
-    pub contract_id: u64,
-    pub func_name: String,
-    pub is_fallback: bool,
-    pub params: Vec<Val>,
-    pub results: Vec<Val>,
-    pub func: Func,
-    pub is_proc: bool,
-    pub fuel_limit: u64,
-    pub ctx: CtxResource,
+struct PreparedCall {
+    contract_id: u64,
+    func_name: String,
+    is_fallback: bool,
+    params: Vec<Val>,
+    results: Vec<Val>,
+    func: Func,
+    frame: CallFrame,
 }
 
-/// Handle of the context resource `prepare_call` pushed into the shared
-/// `ResourceTable` as the call's first argument. The table outlives the
-/// per-call `Store` (it lives as long as the `Runtime`), so this entry must
-/// be drained when the call settles — otherwise every op leaks one entry
-/// until pool recycle, and the reactor's runtime is never recycled (#434).
-/// Carries the raw rep because `try_into_resource_any` consumes the typed
-/// `Resource<T>`; `new_own(rep)` reconstructs it for deletion.
-pub(crate) enum CtxResource {
-    Core(u32),
-    View(u32),
-    Proc(u32),
-    Fall(u32),
+pub(super) struct CallOutcome {
+    pub result: Result<String, ExecutionError>,
+    pub remaining_fuel: u64,
 }
 
 impl Runtime {
-    pub(crate) async fn prepare_call(
+    pub(super) async fn invoke(
         &self,
         contract_address: &ContractAddress,
         signer: Option<&Signer>,
         payment: Option<&Payment>,
         expr: &str,
         fuel_override: Option<u64>,
-    ) -> Result<(PreparedCall, Store<Runtime>), ExecutionError> {
-        // Reject an oversized/over-nested call expression BEFORE it reaches the
-        // recursive WAVE parser (`parse_raw_func_call` below), which would
-        // otherwise overflow the host stack and abort the node — a deterministic
-        // rejection here keeps that a normal failed op instead.
-        validate_expr(expr)?;
-        let contract_id = self
-            .storage
-            .contract_id(contract_address)
-            .await
-            .map_err(ExecutionError::NonDeterministic)?
-            .ok_or_else(|| {
-                ExecutionError::Deterministic(anyhow!("Contract not found: {}", contract_address))
-            })?;
+    ) -> Result<CallOutcome, ExecutionError> {
         // The fuel budget is decided ONCE here, from the signer, so it can't drift
         // across the per-context arms below.
         let fuel_limit = match fuel_override {
@@ -125,39 +95,128 @@ impl Runtime {
                 (_, None) => self.fuel_limit_for_view(),
             },
         };
-        let mut store = self
-            .make_store(fuel_limit)
-            .map_err(ExecutionError::NonDeterministic)?;
+        let mut store = self.make_store(fuel_limit)?;
         if fuel_override.is_none() {
             store.data_mut().usage_kind = match signer {
                 Some(signer) if !signer.is_core() => UsageKind::User,
                 _ => UsageKind::System,
             };
         }
-        let prepared = self
-            .prepare_in_store(
-                &mut store,
-                contract_id,
+        let mut runtime = store.data().clone();
+        let (result, mut store) = runtime
+            .invoke_in_store(
+                store,
+                contract_address,
                 signer,
                 payment,
                 expr,
                 fuel_override.is_some(),
             )
-            .await;
+            .await?;
         record_fuel(&mut store)?;
-        Ok((prepared?, store))
+        Ok(CallOutcome {
+            result,
+            remaining_fuel: store.get_fuel().map_err(anyhow::Error::from)?,
+        })
+    }
+
+    async fn invoke_in_store(
+        &mut self,
+        mut store: Store<Runtime>,
+        contract_address: &ContractAddress,
+        signer: Option<&Signer>,
+        payment: Option<&Payment>,
+        expr: &str,
+        nested: bool,
+    ) -> Result<(Result<String, ExecutionError>, Store<Runtime>), ExecutionError> {
+        let starting_fuel = store.get_fuel().map_err(anyhow::Error::from)?;
+        let prepared = match self
+            .prepare_in_store(&mut store, contract_address, signer, payment, expr, nested)
+            .await
+        {
+            Ok(prepared) => prepared,
+            // Keep the store even on failed initialization or argument resolution:
+            // the parent still pays for work done before preparation failed.
+            Err(error) => return Ok((Err(error), store)),
+        };
+        let PreparedCall {
+            contract_id,
+            func_name,
+            is_fallback,
+            params,
+            results,
+            func,
+            frame,
+        } = prepared;
+        if let Err(error) = self.stack.push(frame).await {
+            return Ok((Err(ExecutionError::Deterministic(error.into())), store));
+        }
+        if let Err(error) = self.storage.savepoint().await {
+            self.stack.pop().await;
+            return Err(error.into());
+        }
+
+        let execution = self
+            .call_guest(store, func, params, results, is_fallback, frame.is_proc)
+            .await;
+        self.stack.pop().await;
+        let succeeded = execution
+            .as_ref()
+            .is_ok_and(|(result, _)| classify_result(result) == OpStatus::Ok);
+        if succeeded {
+            self.storage
+                .commit()
+                .await
+                .map_err(|e| ExecutionError::NonDeterministic(e.context("commit failed")))?;
+        } else {
+            self.storage
+                .rollback()
+                .await
+                .map_err(|e| ExecutionError::NonDeterministic(e.context("rollback failed")))?;
+        }
+        let (mut result, store) = execution?;
+        if frame.is_proc {
+            let gas = self
+                .gas_consumed(
+                    starting_fuel,
+                    store.get_fuel().map_err(anyhow::Error::from)?,
+                )
+                .max(1);
+            result = self
+                .settle_procedure(
+                    signer.expect("procedure requires a signer"),
+                    payment,
+                    contract_id,
+                    contract_address,
+                    &func_name,
+                    !nested,
+                    gas,
+                    result,
+                )
+                .await;
+        }
+        Ok((result, store))
     }
 
     async fn prepare_in_store(
         &self,
         mut store: &mut Store<Runtime>,
-        contract_id: u64,
+        contract_address: &ContractAddress,
         signer: Option<&Signer>,
         payment: Option<&Payment>,
         expr: &str,
         nested: bool,
     ) -> Result<PreparedCall, ExecutionError> {
-        let fuel_limit = store.get_fuel().map_err(anyhow::Error::from)?;
+        // Bound recursion before the WAVE parser can overflow the host stack.
+        validate_expr(expr)?;
+        let contract_id = self
+            .storage
+            .contract_id(contract_address)
+            .await
+            .map_err(ExecutionError::NonDeterministic)?
+            .ok_or_else(|| {
+                ExecutionError::Deterministic(anyhow!("Contract not found: {}", contract_address))
+            })?;
         let component = self
             .load_component(contract_id)
             .await
@@ -244,8 +303,9 @@ impl Runtime {
         }
 
         let mut is_proc = false;
-        let ctx = {
-            let mut table = self.table.lock().await;
+        {
+            let table = store.data().table.clone();
+            let mut table = table.lock().await;
             match (resource_type, signer) {
                 (t, Some(Signer::Core(signer)))
                     if t.eq(&wasmtime::component::ResourceType::host::<CoreContext>()) =>
@@ -260,7 +320,6 @@ impl Runtime {
                             contract_id,
                         })
                         .map_err(anyhow::Error::from)?;
-                    let rep = res.rep();
                     params.insert(
                         0,
                         wasmtime::component::Val::Resource(
@@ -268,13 +327,11 @@ impl Runtime {
                                 .map_err(anyhow::Error::from)?,
                         ),
                     );
-                    CtxResource::Core(rep)
                 }
                 (t, _) if t.eq(&wasmtime::component::ResourceType::host::<ViewContext>()) => {
                     let res = table
                         .push(ViewContext { contract_id })
                         .map_err(anyhow::Error::from)?;
-                    let rep = res.rep();
                     params.insert(
                         0,
                         wasmtime::component::Val::Resource(
@@ -282,7 +339,6 @@ impl Runtime {
                                 .map_err(anyhow::Error::from)?,
                         ),
                     );
-                    CtxResource::View(rep)
                 }
                 (t, Some(signer))
                     if t.eq(&wasmtime::component::ResourceType::host::<ProcContext>()) =>
@@ -302,7 +358,6 @@ impl Runtime {
                             contract_id,
                         })
                         .map_err(anyhow::Error::from)?;
-                    let rep = res.rep();
                     params.insert(
                         0,
                         wasmtime::component::Val::Resource(
@@ -310,7 +365,6 @@ impl Runtime {
                                 .map_err(anyhow::Error::from)?,
                         ),
                     );
-                    CtxResource::Proc(rep)
                 }
 
                 (t, signer) if t.eq(&wasmtime::component::ResourceType::host::<FallContext>()) => {
@@ -325,7 +379,6 @@ impl Runtime {
                             contract_id,
                         })
                         .map_err(anyhow::Error::from)?;
-                    let rep = res.rep();
                     params.insert(
                         0,
                         wasmtime::component::Val::Resource(
@@ -333,7 +386,6 @@ impl Runtime {
                                 .map_err(anyhow::Error::from)?,
                         ),
                     );
-                    CtxResource::Fall(rep)
                 }
                 (t, signer) => {
                     return Err(ExecutionError::Deterministic(anyhow!(
@@ -411,16 +463,6 @@ impl Runtime {
             self.stack.peek().await.and_then(|f| f.depositor)
         };
 
-        self.stack
-            .push(CallFrame {
-                contract_id,
-                is_proc,
-                depositor,
-            })
-            .await
-            .map_err(|e| ExecutionError::Deterministic(e.into()))?;
-        self.storage.savepoint().await?;
-
         Ok(PreparedCall {
             contract_id,
             func_name: func_name.to_string(),
@@ -428,43 +470,24 @@ impl Runtime {
             params,
             results,
             func,
-            is_proc,
-            fuel_limit,
-            ctx,
+            frame: CallFrame {
+                contract_id,
+                is_proc,
+                depositor,
+            },
         })
-    }
-
-    /// Drain the call's context resource from the shared table once the call
-    /// has settled. Best-effort: the entry not being there (already drained)
-    /// must never fail the call path.
-    async fn drain_ctx_resource(&self, ctx: CtxResource) {
-        let mut table = self.table.lock().await;
-        let _ = match ctx {
-            CtxResource::Core(rep) => table
-                .delete(Resource::<CoreContext>::new_own(rep))
-                .map(|_| ()),
-            CtxResource::View(rep) => table
-                .delete(Resource::<ViewContext>::new_own(rep))
-                .map(|_| ()),
-            CtxResource::Proc(rep) => table
-                .delete(Resource::<ProcContext>::new_own(rep))
-                .map(|_| ()),
-            CtxResource::Fall(rep) => table
-                .delete(Resource::<FallContext>::new_own(rep))
-                .map(|_| ()),
-        };
     }
 
     /// Spawn the WASM call, catch panics, and handle the result.
     /// Returns (call_result, store) — the store is always returned for gas accounting.
-    pub(crate) async fn call_and_handle(
+    async fn call_guest(
         &self,
         mut store: Store<Runtime>,
         func: Func,
         params: Vec<Val>,
         mut results: Vec<Val>,
         is_fallback: bool,
-        ctx: CtxResource,
+        is_proc: bool,
     ) -> Result<(Result<String, ExecutionError>, Store<Runtime>)> {
         let (result, results, mut store) = tokio::spawn(async move {
             match std::panic::AssertUnwindSafe(func.call_async(&mut store, &params, &mut results))
@@ -487,19 +510,19 @@ impl Runtime {
         .await
         .map_err(|e| anyhow::anyhow!("tokio task failed: {e}"))?;
 
-        let call_result = self
-            .handle_call(is_fallback, result, results, &mut store)
-            .await;
-
-        // The call has settled (committed or rolled back) — drain its context
-        // resource from the shared table, success and failure alike.
-        self.drain_ctx_resource(ctx).await;
-
-        record_fuel(&mut store)?;
-        Ok((call_result, store))
+        let mut result = Self::decode_result(is_fallback, result, results, &mut store).await;
+        // Result serialization is part of executing a procedure, so exhaustion
+        // must happen before committing its writes or returning fuel to a parent.
+        if is_proc
+            && let Ok(value) = &result
+            && let Err(error) = Fuel::Result(value.len() as u64).consume_with_store(&mut store)
+        {
+            result = Err(ExecutionError::Deterministic(error));
+        }
+        Ok((result, store))
     }
 
-    /// Process the result of a WASM call: extract return value, rollback/commit,
+    /// Process the result of a WASM call: extract its return value
     /// and classify errors as Contract (deterministic) or Infrastructure.
     ///
     /// The `result` parameter is either:
@@ -509,16 +532,12 @@ impl Runtime {
     /// Error classification:
     /// - WASM traps (downcast to wasmtime::Trap) → Contract
     /// - Host Err returns (no Trap) or host panics → Infrastructure
-    /// - Rollback/commit failures → Infrastructure
-    pub(crate) async fn handle_call(
-        &self,
+    async fn decode_result(
         is_fallback: bool,
         result: std::result::Result<std::result::Result<(), wasmtime::Error>, String>,
         mut results: Vec<Val>,
         store: &mut Store<Runtime>,
     ) -> Result<String, ExecutionError> {
-        self.stack.pop().await;
-
         // Classify before converting. An error is deterministic if:
         // - It's a WASM trap (wasmtime::Trap in the error chain)
         // - It originated from a deterministic ExecutionError in a cross-contract call
@@ -558,34 +577,20 @@ impl Runtime {
                     Err(anyhow!("fallback did not return a string"))
                 }
             } else {
-                val_to_wave(val, store, &self.table).await
+                val_to_wave(val, store).await
             }
         };
 
-        let result = result.map_err(|e| {
+        result.map_err(|e| {
             if is_deterministic {
                 ExecutionError::Deterministic(e)
             } else {
                 ExecutionError::NonDeterministic(e)
             }
-        });
-
-        if classify_result(&result) != OpStatus::Ok {
-            self.storage
-                .rollback()
-                .await
-                .map_err(|e| ExecutionError::NonDeterministic(e.context("rollback failed")))?;
-        } else {
-            self.storage
-                .commit()
-                .await
-                .map_err(|e| ExecutionError::NonDeterministic(e.context("commit failed")))?;
-        }
-
-        result
+        })
     }
 
-    pub async fn handle_procedure(
+    async fn settle_procedure(
         &mut self,
         signer: &Signer,
         payment: Option<&Payment>,
@@ -593,29 +598,15 @@ impl Runtime {
         contract_address: &ContractAddress,
         func_name: &str,
         is_op_result: bool,
-        starting_fuel: u64,
-        store: &mut Store<Runtime>,
-        mut result: Result<String, ExecutionError>,
+        gas: u64,
+        result: Result<String, ExecutionError>,
     ) -> Result<String, ExecutionError> {
-        if let Ok(value) = &result
-            && let Err(e) = Fuel::Result(value.len() as u64).consume_with_store(store)
-        {
-            result = Err(ExecutionError::Deterministic(e));
-        }
-        record_fuel(&mut *store)?;
-        let gas = self
-            .gas_consumed(
-                starting_fuel,
-                store.get_fuel().expect("Fuel should be available"),
-            )
-            .max(1);
-
         // A top-level non-core op pays its gas here: burn the execution slice and
         // refund the rest of the escrow (incl. the RETURNED storage-deposit
         // reservation) to the payer. The storage-deposit FLOOR is enforced up front
         // on every token debit (`token::transfer`/`hold`/`burn` reject a debit that
         // would leave the balance below `footprint x D`), so there is no settle-time
-        // floor check and no op-revert to coordinate — `handle_call` already
+        // floor check and no op-revert to coordinate — the invocation already
         // committed/rolled back this op's savepoint.
         if is_op_result && !signer.is_core() {
             let payment = payment.expect("payment required for op-result release");
@@ -696,21 +687,8 @@ impl Runtime {
                 .transpose()
                 .expect("Failed to lock table and get signer");
 
-        let (
-            PreparedCall {
-                contract_id,
-                func_name,
-                is_fallback,
-                params,
-                results,
-                func,
-                is_proc,
-                fuel_limit: _,
-                ctx,
-            },
-            store,
-        ) = self
-            .prepare_call(
+        let outcome = self
+            .invoke(
                 contract_address,
                 signer.as_ref(),
                 None,
@@ -718,35 +696,13 @@ impl Runtime {
                 Some(starting_fuel),
             )
             .await?;
-        let (mut result, mut store) = self
-            .call_and_handle(store, func, params, results, is_fallback, ctx)
-            .await?;
-        let fuel = store.get_fuel().unwrap();
-        accessor
-            .with(|mut access| {
-                let mut parent = access.as_context_mut();
-                parent.set_fuel(fuel)?;
-                // The child already measured this fuel; only subsequent parent work counts.
-                access.get().fuel_checkpoint = fuel;
-                Ok::<_, anyhow::Error>(())
-            })
-            .expect("Failed to set remaining fuel on parent store");
-        if is_proc {
-            result = self
-                .handle_procedure(
-                    signer.as_ref().expect("Signer should be available in proc"),
-                    None,
-                    contract_id,
-                    contract_address,
-                    &func_name,
-                    false,
-                    starting_fuel,
-                    &mut store,
-                    result,
-                )
-                .await;
-        }
-        result.map_err(Into::into)
+        accessor.with(|mut access| {
+            access.as_context_mut().set_fuel(outcome.remaining_fuel)?;
+            // The child already measured this fuel; only subsequent parent work counts.
+            access.get().fuel_checkpoint = outcome.remaining_fuel;
+            Ok::<_, anyhow::Error>(())
+        })?;
+        outcome.result.map_err(Into::into)
     }
 }
 
@@ -766,11 +722,7 @@ impl Runtime {
 /// result-row boundary without an explicit serialization, and silently
 /// trapping on the wasm-wave panic would mask the failure. Add new
 /// types to this branch as they become legitimately returnable.
-async fn val_to_wave(
-    val: Val,
-    store: &mut Store<Runtime>,
-    table: &Arc<Mutex<ResourceTable>>,
-) -> Result<String> {
+async fn val_to_wave(val: Val, store: &mut Store<Runtime>) -> Result<String> {
     match val {
         Val::Resource(resource_any) => {
             let handle: Resource<Contract> = resource_any
@@ -778,11 +730,7 @@ async fn val_to_wave(
                 .map_err(|e| {
                     anyhow!("function returned a resource that is not a `contract`: {e}")
                 })?;
-            // Drain the resource: `delete` removes the entry from the
-            // table and returns the owned `Contract`. `get` would only
-            // borrow, leaving the entry in the `ResourceTable` for the
-            // pooled runtime's lifetime — once per publish, accumulating.
-            let mut table = table.lock().await;
+            let mut table = store.data().table.lock().await;
             let contract = table.delete(handle)?;
             Ok(stdlib::to_wave_expr(contract.address))
         }
@@ -844,7 +792,7 @@ const MAX_EXPR_DEPTH: usize = 64;
 
 /// Fuel budget for trusted, system-paid, MUST-COMPLETE core calls (per-block hooks,
 /// issuance, native publishing) — effectively unmetered. Decided from the signer in
-/// `prepare_call`.
+/// `invoke`.
 ///
 /// `i64::MAX as u64`, NOT `u64::MAX`: the remaining fuel is bound into the storage
 /// read path as a SQL i64 size-budget (`CASE WHEN size <= :fuel`, contract_state.rs),

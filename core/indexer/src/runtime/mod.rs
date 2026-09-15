@@ -113,7 +113,6 @@ use crate::database;
 use crate::database::native_contracts::{NATIVE_CONTRACTS, is_native_contract_id};
 use crate::database::types::CORE_SIGNER_ID;
 use crate::runtime::{
-    call::PreparedCall,
     counter::Counter,
     deposit::DepositMeter,
     fuel::{FuelGauge, UsageKind},
@@ -196,7 +195,7 @@ fn native_provenance() -> Result<BuildProvenance> {
 /// only the common built-ins; `native` additionally registers the privileged
 /// interfaces (`file-registry`, `system`, `deposit`). Both share the same `Runtime`
 /// host state — they differ only in which interfaces a component can import.
-/// `prepare_call` selects one per contract by native contract id.
+/// `invoke` selects one per contract by native contract id.
 #[derive(Clone)]
 pub struct Linkers {
     pub user: Linker<Runtime>,
@@ -224,7 +223,7 @@ pub struct Runtime {
     /// Nominal gas limit stamped on system-issued `Payment`s (`core_payment`,
     /// `execute_api`). FIXED — never operator-configurable. Trusted core calls
     /// themselves run unmetered at `SYSTEM_FUEL_CEILING` (decided from the signer in
-    /// `prepare_call`), so this is the Payment's nominal cap, not the core fuel
+    /// `invoke`), so this is the Payment's nominal cap, not the core fuel
     /// budget; it still bounds a user-signed `execute_api` call (the test path).
     pub gas_limit_for_non_procs: u64,
     /// Fuel budget for read-only `/view` calls (the payment-`None` path) ONLY.
@@ -848,7 +847,7 @@ impl Runtime {
     /// `Payment` from the caller's `signer` at the non-procs gas budget.
     ///
     /// For system-internal callers, `signer` is `Signer::Core(...)` and the
-    /// `is_core()` bypass in `prepare_call` skips the hold regardless of
+    /// `is_core()` bypass in `invoke` skips the hold regardless of
     /// `payment.signer_id`. For user-driven calls from tests, `signer` is the
     /// user and `payment.signer_id` resolves to their id so the hold charges
     /// the right account.
@@ -878,43 +877,9 @@ impl Runtime {
             expr,
             self.tx_context()
         );
-        let (
-            PreparedCall {
-                contract_id,
-                func_name,
-                is_fallback,
-                params,
-                results,
-                func,
-                is_proc,
-                fuel_limit: starting_fuel,
-                ctx,
-            },
-            store,
-        ) = self
-            .prepare_call(contract_address, signer, payment.as_ref(), expr, None)
-            .await?;
-        let (mut result, mut store) = self
-            .call_and_handle(store, func, params, results, is_fallback, ctx)
-            .await?;
-        if is_proc {
-            let signer = signer.expect("Signer should be available in proc");
-            let payment = payment.expect("Payment should be available in proc");
-            result = self
-                .handle_procedure(
-                    signer,
-                    Some(&payment),
-                    contract_id,
-                    contract_address,
-                    &func_name,
-                    true,
-                    starting_fuel,
-                    &mut store,
-                    result,
-                )
-                .await;
-        }
-        result
+        self.invoke(contract_address, signer, payment.as_ref(), expr, None)
+            .await?
+            .result
     }
 
     /// Fetch + JIT-compile the component and cache the compiled artifact,
@@ -945,7 +910,11 @@ impl Runtime {
     }
 
     pub fn make_store(&self, fuel: u64) -> Result<Store<Runtime>> {
-        let mut s = Store::new(&self.engine, self.clone());
+        // A child receives signer values and WAVE arguments, never parent handles.
+        // Invocation ownership frees even resources abandoned by a guest trap.
+        let mut runtime = self.clone();
+        runtime.table = Arc::new(Mutex::new(ResourceTable::new()));
+        let mut s = Store::new(&self.engine, runtime);
         s.set_fuel(fuel)?;
         s.data_mut().fuel_checkpoint = fuel;
         Ok(s)
@@ -969,8 +938,6 @@ impl HasData for Runtime {
 mod tests {
     use crate::database::native_contracts::FILESTORAGE;
     use crate::database::queries::exists_contract_state;
-    use crate::runtime::token;
-    use crate::runtime::wit::resources::ViewContext;
     use crate::test_utils::{test_runtime, test_runtime_with_network};
     use stdlib::KeyElement;
 
@@ -1039,46 +1006,6 @@ mod tests {
         );
     }
 
-    /// Context resources are drained from the shared `ResourceTable` when a
-    /// call settles (#434): the table outlives the per-call stores, so a leak
-    /// here accumulates for the runtime's whole life — and the reactor's
-    /// runtime is never recycled. Freed table slots are reused, so probes
-    /// pushed before and after a burst of calls must land on the same rep;
-    /// before the drain, every call leaked one context entry and the second
-    /// probe's rep grew by the call count.
-    #[tokio::test]
-    async fn call_context_resources_are_drained() {
-        let (mut runtime, _dir, _name) = test_runtime().await.expect("test runtime");
-
-        let probe = {
-            let mut table = runtime.table.lock().await;
-            let res = table.push(ViewContext { contract_id: 1 }).expect("push");
-            let rep = res.rep();
-            table.delete(res).expect("delete probe");
-            rep
-        };
-
-        for _ in 0..5 {
-            runtime
-                .execute(None, None, &token::address(), "total-supply()")
-                .await
-                .expect("view call");
-        }
-
-        let probe_after = {
-            let mut table = runtime.table.lock().await;
-            let res = table.push(ViewContext { contract_id: 1 }).expect("push");
-            let rep = res.rep();
-            table.delete(res).expect("delete probe");
-            rep
-        };
-
-        assert_eq!(
-            probe_after, probe,
-            "call context resources must be drained — a growing rep means the table leaks one entry per call"
-        );
-    }
-
     /// The structural security boundary: filestorage's component imports the
     /// native-only `file-registry` interface, so it links against the native
     /// linker but is *rejected* by the user linker. This is what stops a
@@ -1086,7 +1013,7 @@ mod tests {
     ///
     /// The rejection happens at `instantiate_pre` — import resolution, a pure
     /// function of (component, linker) and thus identical on every node. That is
-    /// why `prepare_call` classifies it `ExecutionError::Deterministic` (reject
+    /// why `invoke` classifies it `ExecutionError::Deterministic` (reject
     /// the op and continue) rather than `NonDeterministic` (which shuts the node
     /// down). A misclassification here would let one publish tx halt the network.
     #[tokio::test]
@@ -1106,7 +1033,7 @@ mod tests {
             .expect("native linker must satisfy file-registry imports");
 
         // User linker does NOT provide file-registry → fails at import
-        // resolution (the deterministic phase), so prepare_call rejects the op
+        // resolution (the deterministic phase), so invocation preparation rejects the op
         // deterministically instead of crashing.
         assert!(
             runtime.linkers.user.instantiate_pre(&component).is_err(),

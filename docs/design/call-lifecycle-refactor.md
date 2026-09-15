@@ -1,8 +1,8 @@
 # Call lifecycle refactor: regression coverage
 
-Implementation baseline: main `3749a368` (#568). No runtime behavior has changed
-in this test-preparation work. Commit `b5ef4046` records three deliberately failing
-fuel regressions before the refactor.
+Implementation baseline: main `3749a368` (#568). Commit `b5ef4046` records three
+failing fuel regressions before the refactor; `1b2b3113` adds preservation controls
+and two resource-leak regressions.
 
 ## Behavior to preserve
 
@@ -30,8 +30,6 @@ fees or result rows: those changes are discarded with the transaction.
 
 Existing complementary coverage includes:
 
-- `runtime/mod.rs::tests::call_context_resources_are_drained`: resource reuse
-  after repeated successful direct views.
 - `runtime/fuel/gauge/tests.rs`: deposits on reverted calls, preparation failures,
   transaction aggregation, infrastructure abort, confirmation, rollback/replay.
 - `runtime/fuel/profiling_tests.rs`: profiling on/off preserves state and billing;
@@ -63,7 +61,7 @@ outcome matrix continues to check state, settlement and frame/savepoint cleanup.
 A successful signed proxy call to `succeed()` also leaves one host resource behind.
 `nested_success_releases_call_owned_host_resources` captures this independently.
 Both cleanup regressions must become green without deleting resources belonging
-to parent calls. The original direct-view cleanup test remains in place.
+to parent calls. The old direct-view slot-reuse test is superseded by the invocation-ownership test below.
 
 This is a baseline for the scoped refactor, not proof of every possible failure.
 Any additional preparation, cleanup or cancellation paths changed during the
@@ -83,5 +81,69 @@ REGTEST=1 cargo test --manifest-path core/Cargo.toml --locked --release \
   -p indexer --lib -j 2
 ```
 
-This command intentionally exits unsuccessfully until the five regressions are
-fixed; they are ordinary assertions, not ignored or expected-panic tests.
+At the test-only baseline this command exited unsuccessfully; all five regressions
+are ordinary assertions, not ignored or expected-panic tests.
+
+## Shared invocation lifecycle
+
+Both `Runtime::execute` and the foreign-call host adapter now use `invoke`:
+
+```text
+choose budget and create store
+  -> prepare component, arguments, context and gas hold
+  -> push frame and open savepoint
+  -> run guest, classify/serialize return, charge procedure result
+  -> pop frame and commit or roll back
+  -> settle procedure fee and record result
+  -> measure final fuel and drop invocation resources
+  -> top-level: return result
+     nested: copy final fuel to parent, then return result or error
+```
+
+Preparation failures retain their store until final fuel is measured and handed
+back. Result charging precedes savepoint settlement: a procedure that exhausts
+its budget serializing its result cannot commit its writes. The same ordering
+applies at every nesting depth. Gas hold/release still execute in independent,
+system-paid stores. Only the outer user procedure settles escrow; nested result
+rows retain their existing attribution and rollback behavior.
+
+`make_store` creates an invocation-local resource table. Parent and child share
+storage, call frames, the deposit accumulator and gauge, but exchange signer
+values and WAVE arguments/results rather than resource handles. The child table
+can therefore be dropped in full without invalidating parent handles. Host import
+clones share only their invocation's table. Return-resource decoding reads the
+table from the store itself. This replaces selective context-handle deletion,
+which missed resources abandoned on traps and even some successful proxy calls.
+
+`invocation_tables_drop_resources_without_invalidating_parent_handles` exercises
+successful execution, guest/host panics, storage traps, missing functions, missing
+payment and failed gas holds at three call depths. It holds a weak reference to
+the actual invocation table and a counted payload inside it, checking that both
+table and owned payload are released while a parent's handle remains usable.
+The earlier resource-count regressions also remain in place.
+
+This changes consensus-visible fuel billing and the success boundary for nested
+calls. Deploy it consistently across nodes. It adds no schema, contract ABI or
+contract-binary changes. Dropping an in-flight future and arbitrary database
+commit failures are still outside the regression matrix; the existing spawned
+Wasm execution and infrastructure-error policy remain in place.
+
+## Validation after refactoring
+
+All five regressions pass. The final library suite passed 518 tests, with nine
+manual tests ignored. The focused integration suite passed 35 tests, including
+real three-node Bitcoin regtest coverage for sponsorship, result statuses,
+simulation errors and storage deposits. Clippy (`--tests`, warnings denied),
+formatting and diff checks pass.
+
+```sh
+REGTEST=1 RUST_LOG=info cargo test --manifest-path core/Cargo.toml --locked \
+  --release -p indexer --test integration -j 2 -- \
+  error_classification storage_deposit status_classification simulate_errors \
+  sponsor_swap bls_publisher_pays
+```
+
+The first integration attempt used `RUST_LOG=warn`, which hides the info-level
+API-port announcement that the process-based harness requires. Setup timed out
+before the affected cluster assertions could run. That attempt was stopped and
+its child processes terminated; the corrected command above passed all 35 tests.
