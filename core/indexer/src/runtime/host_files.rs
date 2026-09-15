@@ -57,9 +57,7 @@ impl Runtime {
         accessor: &Accessor<T, Self>,
         files: Vec<(Vec<u8>, u64, u64)>,
     ) -> Result<Result<Vec<u8>, Error>> {
-        Fuel::AggregateRoot(files.len() as u64)
-            .consume(accessor, self.gauge.as_ref())
-            .await?;
+        Fuel::AggregateRoot(files.len() as u64).consume(accessor)?;
 
         // Reduce each (root, padded_len, ledger_index) to (root_field, depth, slot).
         // `root` must be a valid field element (this doubles as validation).
@@ -98,9 +96,7 @@ impl Runtime {
         peaks: Vec<u8>,
         new_files: Vec<(Vec<u8>, u64, u64)>,
     ) -> Result<Result<(u64, Vec<u8>, Vec<u8>), Error>> {
-        Fuel::FrontierAppend(new_files.len() as u64)
-            .consume(accessor, self.gauge.as_ref())
-            .await?;
+        Fuel::FrontierAppend(new_files.len() as u64).consume(accessor)?;
 
         // Persisted peaks are concatenated 32-byte canonical field reprs, one per set
         // bit of `count`. `from_parts` re-checks that structural invariant.
@@ -150,9 +146,7 @@ impl Runtime {
         seed: Vec<u8>,
         prover_id: u64,
     ) -> Result<Result<String, Error>> {
-        Fuel::ComputeChallengeId
-            .consume(accessor, self.gauge.as_ref())
-            .await?;
+        Fuel::ComputeChallengeId.consume(accessor)?;
 
         let fd = match FileDescriptor::try_from_raw(file) {
             Ok(fd) => fd,
@@ -166,9 +160,7 @@ impl Runtime {
         accessor: &Accessor<T, Self>,
         bytes: Vec<u8>,
     ) -> Result<Result<Resource<wit::Proof>, Error>> {
-        Fuel::ProofFromBytes(bytes.len() as u64)
-            .consume(accessor, self.gauge.as_ref())
-            .await?;
+        Fuel::ProofFromBytes(bytes.len() as u64).consume(accessor)?;
 
         let mut table = self.table.lock().await;
         Ok(match wit::Proof::from_bytes(&bytes) {
@@ -185,9 +177,7 @@ impl Runtime {
         valid_roots: Vec<Vec<u8>>,
         files: Vec<(String, Vec<u8>, u64, u64)>,
     ) -> Result<Result<VerifyResult, Error>> {
-        Fuel::ProofVerify
-            .consume(accessor, self.gauge.as_ref())
-            .await?;
+        Fuel::ProofVerify.consume(accessor)?;
 
         let table = self.table.lock().await;
         let proof = table.get(&rep)?;
@@ -287,9 +277,7 @@ impl Runtime {
         accessor: &Accessor<T, Runtime>,
         input: Vec<u8>,
     ) -> Result<Vec<u8>> {
-        Fuel::CryptoHash(input.len() as u64)
-            .consume(accessor, self.gauge.as_ref())
-            .await?;
+        Fuel::CryptoHash(input.len() as u64).consume(accessor)?;
         Ok(hash_bytes(&input).to_vec())
     }
 
@@ -300,9 +288,7 @@ impl Runtime {
         accessor: &Accessor<T, Runtime>,
         height: u64,
     ) -> Result<Option<Vec<u8>>> {
-        Fuel::BlockEntropy
-            .consume(accessor, self.gauge.as_ref())
-            .await?;
+        Fuel::BlockEntropy.consume(accessor)?;
         self.storage.block_entropy(height).await
     }
 
@@ -313,9 +299,7 @@ impl Runtime {
         salt: Vec<u8>,
         info: Vec<u8>,
     ) -> Result<Vec<u8>> {
-        Fuel::CryptoHash((ikm.len() + salt.len() + info.len()) as u64)
-            .consume(accessor, self.gauge.as_ref())
-            .await?;
+        Fuel::CryptoHash((ikm.len() + salt.len() + info.len()) as u64).consume(accessor)?;
 
         let salt_ref = if salt.is_empty() {
             None

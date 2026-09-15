@@ -20,9 +20,7 @@ impl<T> built_in::context::HostHolderWithStore<T> for Runtime {
 
     async fn key(accessor: &Accessor<T, Self>, self_: Resource<Holder>) -> Result<String> {
         let runtime = accessor.with(|mut access| access.get().clone());
-        Fuel::HolderKey
-            .consume(accessor, runtime.gauge.as_ref())
-            .await?;
+        Fuel::HolderKey.consume(accessor)?;
         let table = runtime.table.lock().await;
         let holder = table.get(&self_)?;
         Ok(holder.holder_ref.to_string())
@@ -33,9 +31,7 @@ impl<T> built_in::context::HostHolderWithStore<T> for Runtime {
         ref_: HolderRef,
     ) -> Result<Result<Resource<Holder>, WitError>> {
         let runtime = accessor.with(|mut access| access.get().clone());
-        Fuel::HolderFromRef
-            .consume(accessor, runtime.gauge.as_ref())
-            .await?;
+        Fuel::HolderFromRef.consume(accessor)?;
         let holder = match Holder::from_holder_ref(ref_.clone(), &runtime).await {
             Ok(h) => h,
             Err(e) => {
@@ -54,9 +50,7 @@ impl<T> built_in::context::HostHolderWithStore<T> for Runtime {
 
     async fn as_ref(accessor: &Accessor<T, Self>, self_: Resource<Holder>) -> Result<HolderRef> {
         let runtime = accessor.with(|mut access| access.get().clone());
-        Fuel::HolderAsRef
-            .consume(accessor, runtime.gauge.as_ref())
-            .await?;
+        Fuel::HolderAsRef.consume(accessor)?;
         let table = runtime.table.lock().await;
         let holder = table.get(&self_)?;
         Ok(holder.holder_ref.clone())

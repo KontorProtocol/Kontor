@@ -48,6 +48,20 @@ CREATE TABLE IF NOT EXISTS transactions (
   FOREIGN KEY (batch_height) REFERENCES batches (consensus_height)
 );
 
+-- Observational execution totals follow the transaction's execution lifetime,
+-- including optimistic execution. Confirmation does not execute or count it again.
+CREATE TABLE IF NOT EXISTS transaction_execution_usage (
+  tx_id INTEGER PRIMARY KEY REFERENCES transactions (id) ON DELETE CASCADE,
+  user_fuel INTEGER NOT NULL CHECK (user_fuel >= 0),
+  system_fuel INTEGER NOT NULL CHECK (system_fuel >= 0),
+  deposit_fuel INTEGER NOT NULL CHECK (deposit_fuel >= 0)
+);
+
+CREATE TABLE IF NOT EXISTS block_execution_usage (
+  height INTEGER PRIMARY KEY REFERENCES blocks (height) ON DELETE CASCADE,
+  system_fuel INTEGER NOT NULL CHECK (system_fuel >= 0)
+);
+
 -- Rollback replay reloads decided values by anchor (`WHERE anchor_height >= ?`).
 -- `batches` grows one row per consensus height for the life of the chain —
 -- without these indexes the reload and the legacy txid fallback are full scans.

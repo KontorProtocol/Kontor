@@ -28,7 +28,6 @@ mod host_system;
 
 use bitcoin::XOnlyPublicKey;
 pub use component_cache::ComponentCache;
-use futures_util::future::OptionFuture;
 use libsql::Connection;
 use sha2::{Digest, Sha256};
 pub use stdlib::{
@@ -117,7 +116,7 @@ use crate::runtime::{
     call::PreparedCall,
     counter::Counter,
     deposit::DepositMeter,
-    fuel::FuelGauge,
+    fuel::{FuelGauge, UsageKind},
     pricing::Pricing,
     stack::{CallFrame, Stack},
     wit::Signer,
@@ -215,6 +214,8 @@ pub struct Runtime {
     pub result_id_counter: Counter,
     pub stack: Stack<CallFrame>,
     pub gauge: Option<FuelGauge>,
+    pub(crate) usage_kind: UsageKind,
+    pub(crate) fuel_checkpoint: u64,
     /// Transient per-op accumulator of the storage-deposit GAS reserved this op
     /// (the returned-at-settle slice that bounds growth). Reset at the top-level op
     /// start, drained at the settle boundary to compute the execution burn
@@ -330,6 +331,8 @@ impl Runtime {
             // Diagnostic tracing is opt-in; fuel enforcement does not use the gauge.
             gauge: None,
             deposit: DepositMeter::new(),
+            usage_kind: UsageKind::System,
+            fuel_checkpoint: 0,
             gas_limit_for_non_procs: 100_000,
             // The pool overrides this from node config on read-only runtimes; the
             // reactor's consensus runtime leaves it at the default (views never run
@@ -380,11 +383,6 @@ impl Runtime {
         self.result_id_counter.reset().await;
         self.previous_output = previous_output;
         self.op_return_data = op_return_data;
-        if self.storage.tx_context.is_some()
-            && let Some(gauge) = self.gauge.as_ref()
-        {
-            gauge.reset().await;
-        }
     }
 
     pub fn tx_context(&self) -> Option<&TransactionContext> {
@@ -880,35 +878,25 @@ impl Runtime {
             expr,
             self.tx_context()
         );
-        let PreparedCall {
+        let (
+            PreparedCall {
+                contract_id,
+                func_name,
+                is_fallback,
+                params,
+                results,
+                func,
+                is_proc,
+                fuel_limit: starting_fuel,
+                ctx,
+            },
             store,
-            contract_id,
-            func_name,
-            is_fallback,
-            params,
-            results,
-            func,
-            is_proc,
-            fuel_limit: starting_fuel,
-            ctx,
-        } = self
+        ) = self
             .prepare_call(contract_address, signer, payment.as_ref(), expr, None)
             .await?;
-        OptionFuture::from(
-            self.gauge
-                .as_ref()
-                .map(|g| g.set_starting_fuel(starting_fuel)),
-        )
-        .await;
         let (mut result, mut store) = self
             .call_and_handle(store, func, params, results, is_fallback, ctx)
             .await?;
-        OptionFuture::from(
-            self.gauge
-                .as_ref()
-                .map(|g| g.set_ending_fuel(store.get_fuel().unwrap())),
-        )
-        .await;
         if is_proc {
             let signer = signer.expect("Signer should be available in proc");
             let payment = payment.expect("Payment should be available in proc");
@@ -959,6 +947,7 @@ impl Runtime {
     pub fn make_store(&self, fuel: u64) -> Result<Store<Runtime>> {
         let mut s = Store::new(&self.engine, self.clone());
         s.set_fuel(fuel)?;
+        s.data_mut().fuel_checkpoint = fuel;
         Ok(s)
     }
 }

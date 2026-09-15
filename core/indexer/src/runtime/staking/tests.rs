@@ -793,12 +793,12 @@ async fn due_transitions_respect_boundaries_cancellation_and_block_replay() -> R
     api::leave_validation(&mut runtime, &later).await??;
     api::register_validator(&mut runtime, &future, vec![6; 32], Decimal::from("100")).await??;
     advance(&mut runtime, 25).await?;
-    let gauge = FuelGauge::new();
+    let gauge = FuelGauge::with_profiling();
     runtime.gauge = Some(gauge.clone());
     let idle = api::process_pending_validators(&mut runtime, &core(), 25).await??;
     runtime.gauge = None;
     assert_eq!((idle.activated, idle.deactivated), (0, 0));
-    let stats = gauge.per_type_stats().await;
+    let stats = gauge.report()?.profile.unwrap().per_type;
     assert!(!stats.contains_key(&FuelDiscriminants::Get));
     assert!(!stats.contains_key(&FuelDiscriminants::KeysNext));
 

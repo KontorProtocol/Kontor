@@ -9,26 +9,12 @@ impl built_in::numbers::Host for Runtime {}
 
 impl<T> built_in::numbers::HostWithStore<T> for Runtime {
     async fn u64_to_integer(accessor: &Accessor<T, Self>, i: u64) -> Result<Integer> {
-        Fuel::NumbersU64ToInteger
-            .consume(
-                accessor,
-                accessor
-                    .with(|mut access| access.get().gauge.clone())
-                    .as_ref(),
-            )
-            .await?;
+        Fuel::NumbersU64ToInteger.consume(accessor)?;
         Ok(numerics::u64_to_integer(i))
     }
 
     async fn s64_to_integer(accessor: &Accessor<T, Self>, i: i64) -> Result<Integer> {
-        Fuel::NumbersS64ToInteger
-            .consume(
-                accessor,
-                accessor
-                    .with(|mut access| access.get().gauge.clone())
-                    .as_ref(),
-            )
-            .await?;
+        Fuel::NumbersS64ToInteger.consume(accessor)?;
         Ok(numerics::s64_to_integer(i))
     }
 
@@ -36,39 +22,18 @@ impl<T> built_in::numbers::HostWithStore<T> for Runtime {
         accessor: &Accessor<T, Self>,
         s: String,
     ) -> Result<Result<Integer, Error>> {
-        Fuel::NumbersStringToInteger(s.len() as u64)
-            .consume(
-                accessor,
-                accessor
-                    .with(|mut access| access.get().gauge.clone())
-                    .as_ref(),
-            )
-            .await?;
+        Fuel::NumbersStringToInteger(s.len() as u64).consume(accessor)?;
         Ok(numerics::string_to_integer(&s))
     }
 
     async fn integer_to_string(accessor: &Accessor<T, Self>, i: Integer) -> Result<String> {
         let s = numerics::integer_to_string(i);
-        Fuel::NumbersIntegerToString(s.len() as u64)
-            .consume(
-                accessor,
-                accessor
-                    .with(|mut access| access.get().gauge.clone())
-                    .as_ref(),
-            )
-            .await?;
+        Fuel::NumbersIntegerToString(s.len() as u64).consume(accessor)?;
         Ok(s)
     }
 
     async fn eq_integer(accessor: &Accessor<T, Self>, a: Integer, b: Integer) -> Result<bool> {
-        Fuel::NumbersEqInteger
-            .consume(
-                accessor,
-                accessor
-                    .with(|mut access| access.get().gauge.clone())
-                    .as_ref(),
-            )
-            .await?;
+        Fuel::NumbersEqInteger.consume(accessor)?;
         Ok(numerics::eq_integer(a, b))
     }
 
@@ -77,14 +42,7 @@ impl<T> built_in::numbers::HostWithStore<T> for Runtime {
         a: Integer,
         b: Integer,
     ) -> Result<NumericOrdering> {
-        Fuel::NumbersCmpInteger
-            .consume(
-                accessor,
-                accessor
-                    .with(|mut access| access.get().gauge.clone())
-                    .as_ref(),
-            )
-            .await?;
+        Fuel::NumbersCmpInteger.consume(accessor)?;
         Ok(numerics::cmp_integer(a, b))
     }
 
@@ -93,14 +51,7 @@ impl<T> built_in::numbers::HostWithStore<T> for Runtime {
         a: Integer,
         b: Integer,
     ) -> Result<Result<Integer, Error>> {
-        Fuel::NumbersAddInteger
-            .consume(
-                accessor,
-                accessor
-                    .with(|mut access| access.get().gauge.clone())
-                    .as_ref(),
-            )
-            .await?;
+        Fuel::NumbersAddInteger.consume(accessor)?;
         Ok(numerics::add_integer(a, b))
     }
 
@@ -109,14 +60,7 @@ impl<T> built_in::numbers::HostWithStore<T> for Runtime {
         a: Integer,
         b: Integer,
     ) -> Result<Result<Integer, Error>> {
-        Fuel::NumbersSubInteger
-            .consume(
-                accessor,
-                accessor
-                    .with(|mut access| access.get().gauge.clone())
-                    .as_ref(),
-            )
-            .await?;
+        Fuel::NumbersSubInteger.consume(accessor)?;
         Ok(numerics::sub_integer(a, b))
     }
 
@@ -125,14 +69,7 @@ impl<T> built_in::numbers::HostWithStore<T> for Runtime {
         a: Integer,
         b: Integer,
     ) -> Result<Result<Integer, Error>> {
-        Fuel::NumbersMulInteger
-            .consume(
-                accessor,
-                accessor
-                    .with(|mut access| access.get().gauge.clone())
-                    .as_ref(),
-            )
-            .await?;
+        Fuel::NumbersMulInteger.consume(accessor)?;
         Ok(numerics::mul_integer(a, b))
     }
 
@@ -141,14 +78,7 @@ impl<T> built_in::numbers::HostWithStore<T> for Runtime {
         a: Integer,
         b: Integer,
     ) -> Result<Result<Integer, Error>> {
-        Fuel::NumbersDivInteger
-            .consume(
-                accessor,
-                accessor
-                    .with(|mut access| access.get().gauge.clone())
-                    .as_ref(),
-            )
-            .await?;
+        Fuel::NumbersDivInteger.consume(accessor)?;
         Ok(numerics::div_integer(a, b))
     }
 
@@ -159,14 +89,7 @@ impl<T> built_in::numbers::HostWithStore<T> for Runtime {
         carry: Integer,
         divisor: Integer,
     ) -> Result<Result<(Integer, Integer), Error>> {
-        Fuel::NumbersMulAddDivRemInteger
-            .consume(
-                accessor,
-                accessor
-                    .with(|mut access| access.get().gauge.clone())
-                    .as_ref(),
-            )
-            .await?;
+        Fuel::NumbersMulAddDivRemInteger.consume(accessor)?;
         Ok(numerics::mul_add_div_rem_integer(a, b, carry, divisor))
     }
 
@@ -174,14 +97,7 @@ impl<T> built_in::numbers::HostWithStore<T> for Runtime {
         accessor: &Accessor<T, Self>,
         i: Integer,
     ) -> Result<Result<Integer, Error>> {
-        Fuel::NumbersSqrtInteger
-            .consume(
-                accessor,
-                accessor
-                    .with(|mut access| access.get().gauge.clone())
-                    .as_ref(),
-            )
-            .await?;
+        Fuel::NumbersSqrtInteger.consume(accessor)?;
         Ok(numerics::sqrt_integer(i))
     }
 
@@ -189,14 +105,7 @@ impl<T> built_in::numbers::HostWithStore<T> for Runtime {
         accessor: &Accessor<T, Self>,
         i: Integer,
     ) -> Result<Result<Decimal, Error>> {
-        Fuel::NumbersIntegerToDecimal
-            .consume(
-                accessor,
-                accessor
-                    .with(|mut access| access.get().gauge.clone())
-                    .as_ref(),
-            )
-            .await?;
+        Fuel::NumbersIntegerToDecimal.consume(accessor)?;
         Ok(numerics::integer_to_decimal(i))
     }
 
@@ -204,14 +113,7 @@ impl<T> built_in::numbers::HostWithStore<T> for Runtime {
         accessor: &Accessor<T, Self>,
         d: Decimal,
     ) -> Result<Result<Integer, Error>> {
-        Fuel::NumbersDecimalToInteger
-            .consume(
-                accessor,
-                accessor
-                    .with(|mut access| access.get().gauge.clone())
-                    .as_ref(),
-            )
-            .await?;
+        Fuel::NumbersDecimalToInteger.consume(accessor)?;
         Ok(numerics::decimal_to_integer(d))
     }
 
@@ -219,14 +121,7 @@ impl<T> built_in::numbers::HostWithStore<T> for Runtime {
         accessor: &Accessor<T, Self>,
         i: u64,
     ) -> Result<Result<Decimal, Error>> {
-        Fuel::NumbersU64ToDecimal
-            .consume(
-                accessor,
-                accessor
-                    .with(|mut access| access.get().gauge.clone())
-                    .as_ref(),
-            )
-            .await?;
+        Fuel::NumbersU64ToDecimal.consume(accessor)?;
         Ok(numerics::u64_to_decimal(i))
     }
 
@@ -234,14 +129,7 @@ impl<T> built_in::numbers::HostWithStore<T> for Runtime {
         accessor: &Accessor<T, Self>,
         i: i64,
     ) -> Result<Result<Decimal, Error>> {
-        Fuel::NumbersS64ToDecimal
-            .consume(
-                accessor,
-                accessor
-                    .with(|mut access| access.get().gauge.clone())
-                    .as_ref(),
-            )
-            .await?;
+        Fuel::NumbersS64ToDecimal.consume(accessor)?;
         Ok(numerics::s64_to_decimal(i))
     }
 
@@ -249,14 +137,7 @@ impl<T> built_in::numbers::HostWithStore<T> for Runtime {
         accessor: &Accessor<T, Self>,
         f: f64,
     ) -> Result<Result<Decimal, Error>> {
-        Fuel::NumbersF64ToDecimal
-            .consume(
-                accessor,
-                accessor
-                    .with(|mut access| access.get().gauge.clone())
-                    .as_ref(),
-            )
-            .await?;
+        Fuel::NumbersF64ToDecimal.consume(accessor)?;
         Ok(numerics::f64_to_decimal(f))
     }
 
@@ -264,27 +145,13 @@ impl<T> built_in::numbers::HostWithStore<T> for Runtime {
         accessor: &Accessor<T, Self>,
         s: String,
     ) -> Result<Result<Decimal, Error>> {
-        Fuel::NumbersStringToDecimal(s.len() as u64)
-            .consume(
-                accessor,
-                accessor
-                    .with(|mut access| access.get().gauge.clone())
-                    .as_ref(),
-            )
-            .await?;
+        Fuel::NumbersStringToDecimal(s.len() as u64).consume(accessor)?;
         Ok(numerics::string_to_decimal(&s))
     }
 
     async fn decimal_to_string(accessor: &Accessor<T, Self>, d: Decimal) -> Result<String> {
         let s = numerics::decimal_to_string(d);
-        Fuel::NumbersDecimalToString(s.len() as u64)
-            .consume(
-                accessor,
-                accessor
-                    .with(|mut access| access.get().gauge.clone())
-                    .as_ref(),
-            )
-            .await?;
+        Fuel::NumbersDecimalToString(s.len() as u64).consume(accessor)?;
         Ok(s)
     }
 
@@ -293,14 +160,7 @@ impl<T> built_in::numbers::HostWithStore<T> for Runtime {
         a: Decimal,
         b: Decimal,
     ) -> Result<Result<bool, Error>> {
-        Fuel::NumbersEqDecimal
-            .consume(
-                accessor,
-                accessor
-                    .with(|mut access| access.get().gauge.clone())
-                    .as_ref(),
-            )
-            .await?;
+        Fuel::NumbersEqDecimal.consume(accessor)?;
         Ok(numerics::eq_decimal(a, b))
     }
 
@@ -309,14 +169,7 @@ impl<T> built_in::numbers::HostWithStore<T> for Runtime {
         a: Decimal,
         b: Decimal,
     ) -> Result<NumericOrdering> {
-        Fuel::NumbersCmpDecimal
-            .consume(
-                accessor,
-                accessor
-                    .with(|mut access| access.get().gauge.clone())
-                    .as_ref(),
-            )
-            .await?;
+        Fuel::NumbersCmpDecimal.consume(accessor)?;
         Ok(numerics::cmp_decimal(a, b))
     }
 
@@ -325,14 +178,7 @@ impl<T> built_in::numbers::HostWithStore<T> for Runtime {
         a: Decimal,
         b: Decimal,
     ) -> Result<Result<Decimal, Error>> {
-        Fuel::NumbersAddDecimal
-            .consume(
-                accessor,
-                accessor
-                    .with(|mut access| access.get().gauge.clone())
-                    .as_ref(),
-            )
-            .await?;
+        Fuel::NumbersAddDecimal.consume(accessor)?;
         Ok(numerics::add_decimal(a, b))
     }
 
@@ -341,14 +187,7 @@ impl<T> built_in::numbers::HostWithStore<T> for Runtime {
         a: Decimal,
         b: Decimal,
     ) -> Result<Result<Decimal, Error>> {
-        Fuel::NumbersSubDecimal
-            .consume(
-                accessor,
-                accessor
-                    .with(|mut access| access.get().gauge.clone())
-                    .as_ref(),
-            )
-            .await?;
+        Fuel::NumbersSubDecimal.consume(accessor)?;
         Ok(numerics::sub_decimal(a, b))
     }
 
@@ -357,14 +196,7 @@ impl<T> built_in::numbers::HostWithStore<T> for Runtime {
         a: Decimal,
         b: Decimal,
     ) -> Result<Result<Decimal, Error>> {
-        Fuel::NumbersMulDecimal
-            .consume(
-                accessor,
-                accessor
-                    .with(|mut access| access.get().gauge.clone())
-                    .as_ref(),
-            )
-            .await?;
+        Fuel::NumbersMulDecimal.consume(accessor)?;
         Ok(numerics::mul_decimal(a, b))
     }
 
@@ -373,14 +205,7 @@ impl<T> built_in::numbers::HostWithStore<T> for Runtime {
         a: Decimal,
         b: Decimal,
     ) -> Result<Result<Decimal, Error>> {
-        Fuel::NumbersDivDecimal
-            .consume(
-                accessor,
-                accessor
-                    .with(|mut access| access.get().gauge.clone())
-                    .as_ref(),
-            )
-            .await?;
+        Fuel::NumbersDivDecimal.consume(accessor)?;
         Ok(numerics::div_decimal(a, b))
     }
 
@@ -388,14 +213,7 @@ impl<T> built_in::numbers::HostWithStore<T> for Runtime {
         accessor: &Accessor<T, Self>,
         a: Decimal,
     ) -> Result<Result<Decimal, Error>> {
-        Fuel::NumbersLog10Decimal
-            .consume(
-                accessor,
-                accessor
-                    .with(|mut access| access.get().gauge.clone())
-                    .as_ref(),
-            )
-            .await?;
+        Fuel::NumbersLog10Decimal.consume(accessor)?;
         Ok(numerics::log10_decimal(a))
     }
 }

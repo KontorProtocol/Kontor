@@ -36,17 +36,18 @@ async fn measured<T>(
     population: usize,
     call: impl AsyncFnOnce(&mut Runtime) -> Result<T>,
 ) -> Result<T> {
-    let gauge = FuelGauge::new();
+    let gauge = FuelGauge::with_profiling();
     runtime.gauge = Some(gauge.clone());
     let started = Instant::now();
     let result = call(runtime).await?;
     let elapsed = started.elapsed();
     runtime.gauge = None;
-    let operations: BTreeMap<_, _> = gauge
-        .per_type_stats()
-        .await
+    let report = gauge.report()?;
+    let profile = report.profile.unwrap();
+    let operations: BTreeMap<_, _> = profile
+        .per_type
         .into_iter()
-        .map(|(kind, stats)| (format!("{kind:?}"), stats.count))
+        .map(|(kind, stats)| (format!("{kind:?}"), stats.consumed_count))
         .collect();
     println!(
         "TRANSITION_COST {}",
@@ -54,7 +55,10 @@ async fn measured<T>(
             "operation": operation,
             "population": population,
             "elapsed_us": elapsed.as_micros(),
-            "host_fuel": gauge.total_host_fuel().await,
+            "consumed_host_fuel": profile.consumed_host_fuel,
+            "user_fuel": report.usage.user_fuel,
+            "system_fuel": report.usage.system_fuel,
+            "deposit_fuel": report.usage.deposit_fuel,
             "host_operations": operations,
         })
     );

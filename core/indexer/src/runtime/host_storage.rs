@@ -71,9 +71,7 @@ impl Runtime {
             );
         }
         OptionFuture::from(raw.map(async |bs| {
-            Fuel::Get(bs.len())
-                .consume(accessor, self.gauge.as_ref())
-                .await?;
+            Fuel::Get(bs.len()).consume(accessor)?;
             decode_storage_value(&bs)
         }))
         .await
@@ -99,7 +97,7 @@ impl Runtime {
         // `scan_bounds`, keeping the child-only `> path` invariant).
         let mut table = self.table.lock().await;
         let contract_id = table.get(&resource)?.get_contract_id();
-        Fuel::GetKeys.consume(accessor, self.gauge.as_ref()).await?;
+        Fuel::GetKeys.consume(accessor)?;
         let stream = Box::pin(
             self.storage
                 .keys(contract_id, path, lo, hi, descending)
@@ -124,7 +122,7 @@ impl Runtime {
         // are not validated as paths: the exclusive sentinel is not a stored element.
         let mut table = self.table.lock().await;
         let contract_id = table.get(&resource)?.get_contract_id();
-        Fuel::GetKeys.consume(accessor, self.gauge.as_ref()).await?;
+        Fuel::GetKeys.consume(accessor)?;
         let stream = Box::pin(
             self.storage
                 .storage_rows(contract_id, path, lo, hi, descending)
@@ -142,7 +140,7 @@ impl Runtime {
         validate_path(&path)?;
         let table = self.table.lock().await;
         let _self = table.get(&resource)?;
-        Fuel::Exists.consume(accessor, self.gauge.as_ref()).await?;
+        Fuel::Exists.consume(accessor)?;
         self.storage.exists(_self.get_contract_id(), &path).await
     }
 
@@ -156,9 +154,7 @@ impl Runtime {
         validate_path(&path)?;
         let table = self.table.lock().await;
         let _self = table.get(&resource)?;
-        Fuel::ExtendPathWithMatch(candidates.len() as u64)
-            .consume(accessor, self.gauge.as_ref())
-            .await?;
+        Fuel::ExtendPathWithMatch(candidates.len() as u64).consume(accessor)?;
         self.storage
             .extend_path_with_match(_self.get_contract_id(), &path, &candidates)
             .await
@@ -181,9 +177,7 @@ impl Runtime {
             .find_matching_paths(contract_id, &base_path, &candidates)
             .await?;
         let bytes: u64 = rows.iter().map(|r| r.path.len() as u64 + r.size).sum();
-        Fuel::Delete(rows.len() as u64, bytes)
-            .consume(accessor, self.gauge.as_ref())
-            .await?;
+        Fuel::Delete(rows.len() as u64, bytes).consume(accessor)?;
         self.storage.footprint().on_free(&rows).await?;
         let deleted = self
             .storage
@@ -216,9 +210,7 @@ impl Runtime {
         // subtree held one row or thousands; meter by the rows/bytes tombstoned.
         let rows = self.storage.find_live_subtree(contract_id, &path).await?;
         let bytes: u64 = rows.iter().map(|r| r.path.len() as u64 + r.size).sum();
-        Fuel::Delete(rows.len() as u64, bytes)
-            .consume(accessor, self.gauge.as_ref())
-            .await?;
+        Fuel::Delete(rows.len() as u64, bytes).consume(accessor)?;
         self.storage.footprint().on_free(&rows).await?;
         let (removed, _freed) = self.storage.tombstone_rows(contract_id, &rows).await?;
         Ok(removed)
@@ -233,13 +225,9 @@ impl Runtime {
     ) -> Result<()> {
         validate_path(&path)?;
         let contract_id = self.table.lock().await.get(&resource)?.get_contract_id();
-        Fuel::Path(path.clone())
-            .consume(accessor, self.gauge.as_ref())
-            .await?;
+        Fuel::Path(path.clone()).consume(accessor)?;
         let bs = &indexer_types::serialize(&value)?;
-        Fuel::Set(bs.len() as u64)
-            .consume(accessor, self.gauge.as_ref())
-            .await?;
+        Fuel::Set(bs.len() as u64).consume(accessor)?;
         // Stamp the op's payer (from the current call frame) as this row's
         // depositor — who collateralizes it via the storage-deposit FLOOR. The
         // frame's `depositor` is `None` for non-settling ops (core-signed / no-payer
@@ -274,15 +262,15 @@ impl Runtime {
                 .ok_or_else(|| {
                     ExecutionError::Deterministic(anyhow!("storage reservation overflow"))
                 })?;
-            Fuel::Deposit(deposit_fuel)
-                .consume(accessor, self.gauge.as_ref())
-                .await
-                .map_err(|_| {
-                    ExecutionError::Deterministic(anyhow!(
-                        "storage deposit exceeds the op's gas budget"
-                    ))
-                })?;
+            Fuel::Deposit(deposit_fuel).consume(accessor).map_err(|_| {
+                ExecutionError::Deterministic(anyhow!(
+                    "storage deposit exceeds the op's gas budget"
+                ))
+            })?;
             self.deposit.record_charge(deposit_gas).await;
+            if let Some(gauge) = &self.gauge {
+                gauge.record_deposit(deposit_fuel)?;
+            }
             Some(deposit_gas)
         } else {
             None
