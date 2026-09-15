@@ -32,6 +32,9 @@ use super::{
     wit::{Contract, CoreContext, FallContext, Holder, ProcContext, Signer, ViewContext},
 };
 
+#[cfg(test)]
+mod tests;
+
 /// Derive the payer's `Holder` for a top-level proc context. The payer's
 /// signer_id comes from `Payment.signer_id` — the post-override value
 /// `walker.materialize` recorded — falling back to the signer's own
