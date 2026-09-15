@@ -4,13 +4,14 @@ use std::task::Poll;
 
 use anyhow::{Error, Result};
 use bitcoin::OutPoint;
-use futures_util::stream;
+use futures_util::{TryStreamExt, stream};
 use wasmtime::component::{Accessor, Resource};
 use wasmtime::{Store, Trap};
 
 use super::{Fuel, FuelDiscriminants, FuelGauge};
-use crate::database::queries::Error as StorageError;
+use crate::database::queries::{Error as StorageError, traversal_probe};
 use indexer_types::serialize;
+use stdlib::KeyElement;
 
 use crate::runtime::wit::kontor::built_in::{
     context::{
@@ -527,5 +528,98 @@ async fn invalid_scalar_cursor_target_still_pays_for_polling() -> Result<()> {
         Some(ExecutionError::Deterministic(_))
     ));
     assert!(store.get_fuel()? < BUDGET);
+    Ok(())
+}
+
+#[tokio::test]
+async fn key_scan_skips_an_already_returned_child_subtree() -> Result<()> {
+    let (runtime, _dir, _name) = test_runtime().await?;
+    let root = "traversal".to_string().encode();
+    for member in 0..3u64 {
+        for field in 0..128u64 {
+            let mut path = root.clone();
+            member.encode_to(&mut path);
+            field.encode_to(&mut path);
+            runtime.storage.set(1, &path, &[0], None, None).await?;
+        }
+    }
+    for descending in [false, true] {
+        let (result, visited) = traversal_probe::measure(async {
+            runtime
+                .storage
+                .keys(1, root.clone(), None, None, descending)
+                .await?
+                .try_collect::<Vec<_>>()
+                .await
+                .map_err(Error::from)
+        })
+        .await;
+        let mut expected = (0..3u64).map(|n| n.encode()).collect::<Vec<_>>();
+        if descending {
+            expected.reverse();
+        }
+        assert_eq!(result?, expected);
+        assert!(visited <= 6, "visited {visited} rows for three child keys");
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn delete_discovery_stops_when_its_budget_runs_out() -> Result<()> {
+    let (runtime, _dir, _name) = test_runtime().await?;
+    let root = "traversal".to_string().encode();
+    let candidate = "some".to_string().encode();
+    let mut prefix = root.clone();
+    prefix.extend_from_slice(&candidate);
+    for field in 0..32u64 {
+        let mut path = prefix.clone();
+        field.encode_to(&mut path);
+        runtime.storage.set(1, &path, &[0; 10], None, None).await?;
+    }
+    for matching in [false, true] {
+        let mut store = runtime.make_store(BUDGET)?;
+        let rep = store
+            .data()
+            .table
+            .lock()
+            .await
+            .push(ProcStorage { contract_id: 1 })?
+            .rep();
+        let entry = Fuel::StorageDelete.cost()
+            + Fuel::Path(root.len() as u64).cost()
+            + if matching {
+                Fuel::ExtendPathWithMatch(1).cost() + Fuel::Path(candidate.len() as u64).cost()
+            } else {
+                0
+            };
+        store.set_fuel(entry + 100)?;
+        let (result, visited) = traversal_probe::measure(host(&mut store, async |accessor| {
+            if matching {
+                <Runtime as StorageHost<Runtime>>::delete_matching_paths(
+                    accessor,
+                    Resource::new_borrow(rep),
+                    root.clone(),
+                    vec![candidate.clone()],
+                )
+                .await
+                .map(|_| ())
+            } else {
+                <Runtime as StorageHost<Runtime>>::delete(
+                    accessor,
+                    Resource::new_borrow(rep),
+                    root.clone(),
+                )
+                .await
+                .map(|_| ())
+            }
+        }))
+        .await;
+        assert_exhausted(result.unwrap_err());
+        assert!(
+            visited <= 1,
+            "discovered {visited} rows after budget exhaustion"
+        );
+        assert_eq!(runtime.storage.find_live_subtree(1, &root).await?.len(), 32);
+    }
     Ok(())
 }

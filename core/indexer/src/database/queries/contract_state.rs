@@ -529,6 +529,8 @@ pub async fn find_live_subtree(
 /// shared by the two delete read-halves so the footprint cache can subtract a freed
 /// row's deposit from its setter.
 fn live_row_from(row: &libsql::Row) -> Result<LiveRow, Error> {
+    #[cfg(test)]
+    traversal_probe::record();
     Ok(LiveRow {
         path: row.get::<Vec<u8>>(0)?,
         size: row.get::<u64>(1)?,
@@ -718,6 +720,8 @@ pub async fn path_prefix_filter_contract_state(
             loop {
                 match rows.next().await {
                     Ok(Some(row)) => {
+                        #[cfg(test)]
+                        traversal_probe::record();
                         let full: Vec<u8> = match row.get::<Vec<u8>>(0) {
                             Ok(p) => p,
                             Err(e) => return Some((Err(e.into()), (rows, last))),
@@ -1338,5 +1342,29 @@ mod prune_tests {
             !del_plan.iter().any(|d| d == "SCAN contract_state"),
             "band prune must not full-scan contract_state, got {del_plan:?}"
         );
+    }
+}
+
+// Count logical rows crossing the query boundary, not SQLite VM work or elapsed
+// time. Task-local scope keeps concurrent database tests independent.
+#[cfg(test)]
+pub(crate) mod traversal_probe {
+    use std::cell::Cell;
+    use std::future::Future;
+
+    tokio::task_local! {
+        static ROWS: Cell<usize>;
+    }
+
+    pub(super) fn record() {
+        let _ = ROWS.try_with(|rows| rows.set(rows.get() + 1));
+    }
+
+    pub(crate) async fn measure<T>(future: impl Future<Output = T>) -> (T, usize) {
+        ROWS.scope(Cell::new(0), async {
+            let result = future.await;
+            (result, ROWS.with(Cell::get))
+        })
+        .await
     }
 }
