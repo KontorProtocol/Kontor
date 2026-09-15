@@ -23,8 +23,8 @@ pub enum Fuel {
     HolderKey,
     HolderFromRef,
     HolderAsRef,
-    KeysPoll,
-    /// Returned bytes only; KeysPoll charges each attempt before advancing.
+    StorageScan,
+    /// Returned bytes only; StorageScan charges each attempt before advancing.
     KeysNext(u64),
     Path(u64),
     ExtendPathWithMatch(u64),
@@ -122,7 +122,7 @@ impl Fuel {
             Self::HolderKey => 50,
             Self::HolderFromRef => 100,
             Self::HolderAsRef => 50,
-            Self::KeysPoll => 100,
+            Self::StorageScan => 100,
             Self::KeysNext(bytes) | Self::Path(bytes) => bytes.saturating_mul(10),
             Self::StorageRead => 50,
             Self::StorageWrite | Self::StorageDelete => 200,

@@ -78,8 +78,9 @@ storage-collateral conversion parameters are unchanged.
 ## Remaining work
 
 A base charge is not a bound on all internal work. This slice does not yet bound
-key-iterator deduplication, historical/tombstoned SQL rows, delete discovery, or
-serialization before its final payload charge. Those need separate traversal and
-serialization changes with budget-boundary regressions. Publication/admission,
+historical/tombstoned SQL rows or serialization before its final payload charge.
+[Storage traversal](storage-traversal.md) bounds key-iterator deduplication and
+meters delete discovery incrementally. Serialization still needs budget-boundary
+regressions and guards. Publication/admission,
 variable proof-verification costs and full hardware calibration also remain in
 the coverage map. This advances #462 without closing it or superseding #445.

@@ -67,7 +67,7 @@ fn cs_path_dotted(path: &str) -> Vec<u8> {
     cs_path(&path.split('.').collect::<Vec<_>>())
 }
 
-/// Candidate discriminant elements for `matching_path`/`hard_delete_matching_paths`,
+/// Candidate discriminant elements for `matching_path`/`find_matching_paths`,
 /// from string variant names — these host tests use string-element discriminants
 /// (the byte-compare is encoding-agnostic, so a string element is a fine stand-in).
 fn cands(names: &[&str]) -> Vec<Vec<u8>> {
@@ -746,7 +746,10 @@ async fn test_depositor_roundtrips_and_tombstone_clears_it() -> Result<()> {
     assert_eq!(row.depositor, Some(sid));
     assert_eq!(row.deposited_gas, Some(42));
     // …and the delete find surfaces the live row (path + size, value-less).
-    let found = find_live_subtree(&conn, cid, &path).await?;
+    let found: Vec<_> = find_live_subtree(&conn, cid, &path)
+        .await?
+        .try_collect()
+        .await?;
     assert_eq!(found.len(), 1);
     assert_eq!(found[0].size, 3);
 
@@ -1618,24 +1621,19 @@ async fn test_map_keys() -> Result<()> {
     assert_eq!(paths[2], cs_path(&["key2"]));
 
     // The read half returns the rows the delete will remove (for metering)…
-    let rows = find_matching_paths(
+    let rows: Vec<_> = find_matching_paths(
         &conn,
         contract_id,
         height,
         &cs_path_dotted("test.path"),
         &cands(&["key0"]),
     )
+    .await?
+    .try_collect()
     .await?;
     assert_eq!(rows.len(), 2);
     // …and the write half removes exactly those rows.
-    let deleted = hard_delete_matching_paths(
-        &conn,
-        contract_id,
-        height,
-        &cs_path_dotted("test.path"),
-        &cands(&["key0"]),
-    )
-    .await?;
+    let deleted = hard_delete_rows(&conn, contract_id, height, &rows).await?;
     assert_eq!(deleted, 2);
 
     Ok(())

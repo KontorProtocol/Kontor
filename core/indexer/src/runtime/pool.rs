@@ -134,8 +134,14 @@ pub async fn new(
 mod tests {
     use super::*;
     use crate::config::DEFAULT_VIEW_GAS_LIMIT;
+    use crate::database::queries::{footprint_cache_get, footprint_cache_set, insert_block};
     use crate::runtime::Storage;
-    use deadpool::managed::Manager as _; // brings the `create` trait method into scope
+    use crate::runtime::wit::resources::Keys;
+    use crate::test_utils::new_mock_block_hash;
+    use deadpool::managed::{Manager as _, Metrics};
+    use futures_util::StreamExt;
+    use indexer_types::BlockRow;
+    use stdlib::KeyElement;
     use tempfile::TempDir;
 
     // The operator's view cap sets ONLY `view_gas_limit`, and only on pooled
@@ -228,13 +234,6 @@ mod tests {
     // cursor and releases the pin so the next read sees the latest commit.
     #[tokio::test]
     async fn recycle_clears_leaked_cursor_that_pinned_the_snapshot() -> anyhow::Result<()> {
-        use crate::database::queries::{footprint_cache_get, footprint_cache_set, insert_block};
-        use crate::runtime::wit::resources::Keys;
-        use crate::test_utils::new_mock_block_hash;
-        use deadpool::managed::{Manager as _, Metrics};
-        use futures_util::StreamExt;
-        use indexer_types::BlockRow;
-
         let dir = TempDir::new()?;
         let manager = Manager::new(
             dir.path().to_path_buf(),
@@ -261,7 +260,7 @@ mod tests {
                 .execute(
                     "INSERT INTO contract_state (contract_id, height, tx_id, size, path, value, deleted) \
                      VALUES (1, 1, NULL, 1, ?1, ?2, 0)",
-                    libsql::params![vec![i as u8], vec![1u8]],
+                    libsql::params![(i as u64).encode(), vec![1u8]],
                 )
                 .await?;
         }
@@ -270,7 +269,7 @@ mod tests {
         // Leak a Keys cursor into the pooled runtime's table (read one row → ACTIVE
         // statement, never drained), exactly as a partially-consumed `map.keys()` view.
         let mut stream = Box::pin(rt.storage.keys(1, vec![], None, None, false).await?);
-        let _ = stream.next().await;
+        assert!(stream.next().await.transpose()?.is_some());
         rt.table.lock().await.push(Keys { stream })?;
 
         // The writer commits a newer footprint; the pinned pooled connection reads stale.
