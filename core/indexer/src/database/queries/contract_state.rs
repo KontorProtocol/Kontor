@@ -864,28 +864,21 @@ pub async fn matching_path(
 
 /// Union candidate subtrees before discovery. Duplicate or overlapping guest
 /// candidates must not charge/free the same row twice, especially its deposit.
-fn matching_ranges(base_path: &[u8], candidates: &[Vec<u8>]) -> Vec<(Vec<u8>, Vec<u8>)> {
-    let mut ranges: Vec<_> = candidates
-        .iter()
-        .map(|candidate| {
-            let mut prefix = base_path.to_vec();
-            prefix.extend_from_slice(candidate);
-            let end = subtree_end(&prefix);
-            (prefix, end)
-        })
-        .collect();
-    ranges.sort_unstable();
+fn matching_suffix_ranges(candidates: &[Vec<u8>]) -> Vec<(Vec<u8>, Vec<u8>)> {
+    let mut suffixes: Vec<_> = candidates.iter().map(Vec::as_slice).collect();
+    suffixes.sort_unstable();
     let mut merged: Vec<(Vec<u8>, Vec<u8>)> = Vec::new();
-    for (lo, hi) in ranges {
+    for lo in suffixes {
+        let hi = subtree_end(lo);
         if let Some((_, end)) = merged.last_mut()
-            && lo <= *end
+            && lo <= end.as_slice()
         {
             if hi > *end {
                 *end = hi;
             }
             continue;
         }
-        merged.push((lo, hi));
+        merged.push((lo.to_vec(), hi));
     }
     merged
 }
@@ -899,10 +892,15 @@ pub async fn find_matching_paths(
     base_path: &[u8],
     candidates: &[Vec<u8>],
 ) -> Result<impl Stream<Item = Result<LiveRow, Error>> + Send + 'static, Error> {
-    let ranges = matching_ranges(base_path, candidates);
+    let ranges = matching_suffix_ranges(candidates);
+    let base_path = base_path.to_vec();
     let conn = conn.clone();
     Ok(stream::iter(ranges)
         .flat_map(move |(lo, hi)| {
+            // Only the active query owns full bounds; candidate count must not
+            // multiply retained copies of a potentially large base path.
+            let lo = [base_path.as_slice(), lo.as_slice()].concat();
+            let hi = [base_path.as_slice(), hi.as_slice()].concat();
             query_rows(
                 conn.clone(),
                 "SELECT path, size, depositor, deposited_gas FROM contract_state \
@@ -1372,5 +1370,32 @@ pub(crate) mod traversal_probe {
             (result, ROWS.with(Cell::get))
         })
         .await
+    }
+}
+
+#[cfg(test)]
+mod matching_range_tests {
+    use super::matching_suffix_ranges;
+    use stdlib::{KeyElement, subtree_end};
+
+    #[test]
+    fn cleanup_plan_retains_only_unique_suffix_ranges() {
+        let suffixes: Vec<_> = (0..512u64).map(|n| n.encode()).collect();
+        let mut candidates = suffixes.clone();
+        candidates.extend(suffixes.iter().cloned());
+        let ranges = matching_suffix_ranges(&candidates);
+        assert_eq!(ranges.len(), suffixes.len());
+        let retained: usize = ranges.iter().map(|(lo, hi)| lo.len() + hi.len()).sum();
+        let input: usize = suffixes.iter().map(Vec::len).sum();
+        assert_eq!(retained, 2 * input + suffixes.len());
+        for ((lo, hi), suffix) in ranges.iter().zip(&suffixes) {
+            assert_eq!(lo, suffix);
+            assert_eq!(hi, &subtree_end(suffix));
+        }
+        candidates.extend(vec![Vec::new(); 512]);
+        assert_eq!(
+            matching_suffix_ranges(&candidates),
+            vec![(vec![], vec![0xff])]
+        );
     }
 }

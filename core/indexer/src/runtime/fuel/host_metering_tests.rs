@@ -871,3 +871,62 @@ async fn subtree_seeks_preserve_ranges_and_fuel_across_pruning() -> Result<()> {
     }
     Ok(())
 }
+
+#[tokio::test]
+async fn cleanup_expands_long_base_paths_only_for_the_active_range() -> Result<()> {
+    let (runtime, _dir, _name) = test_runtime().await?;
+    let root = "p".repeat(8192).encode();
+    for member in ["a", "a\0", "b"] {
+        let mut path = root.clone();
+        member.to_string().encode_to(&mut path);
+        runtime.storage.set(1, &path, &[0], None, None).await?;
+    }
+    let mut store = runtime.make_store(BUDGET)?;
+    let rep = store
+        .data()
+        .table
+        .lock()
+        .await
+        .push(ProcStorage { contract_id: 1 })?
+        .rep();
+    let a = "a".to_string().encode();
+    assert_eq!(
+        host(&mut store, async |accessor| {
+            <Runtime as StorageHost<Runtime>>::delete_matching_paths(
+                accessor,
+                Resource::new_borrow(rep),
+                root.clone(),
+                vec![a; 512],
+            )
+            .await
+        })
+        .await?,
+        1
+    );
+    let remaining: Vec<_> = runtime
+        .storage
+        .keys(1, root.clone(), None, None, false)
+        .await?
+        .try_collect()
+        .await?;
+    assert_eq!(
+        remaining,
+        vec!["a\0".to_string().encode(), "b".to_string().encode()]
+    );
+    store.set_fuel(BUDGET)?;
+    assert_eq!(
+        host(&mut store, async |accessor| {
+            <Runtime as StorageHost<Runtime>>::delete_matching_paths(
+                accessor,
+                Resource::new_borrow(rep),
+                root.clone(),
+                vec![vec![]; 512],
+            )
+            .await
+        })
+        .await?,
+        2
+    );
+    assert!(!runtime.storage.exists(1, &root).await?);
+    Ok(())
+}

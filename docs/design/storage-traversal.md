@@ -24,6 +24,10 @@ range delete and prevents subtracting a duplicate row's deposit twice. Removing 
 current row or tombstone can still revive an older deposit; the footprint cache
 accounts for that before returning. Its redundant per-path deduplication is removed.
 
+Cleanup merges candidate suffixes before expanding query bounds. Only the active
+query copies the shared base path into its bounds, so a long base path cannot
+multiply retained memory by the number of candidates.
+
 ## Key scans
 
 Flat entries and small records retain their streaming cursor. A key poll skips at
@@ -49,6 +53,8 @@ visits at most 99 rows for this fixture; the underfunded delete visits at most o
 Tests also cover duplicate/overlapping cleanup ranges, multiple write batches,
 revived deposits, one-fuel-short failure without mutations, rollback, reverse/range
 scans with escaped NUL keys, and fuel parity before/after pruning.
+Review regressions cover suffix-only range planning and long base paths with
+duplicate and empty candidates, including preservation of escaped-NUL siblings.
 
 Temporary paired measurements used the baseline query implementation and new host
 path in the same release binary on Linux aarch64. Each comparison alternated old/new
@@ -65,9 +71,11 @@ calibrated fuel prices. The comparison harness is not part of CI.
 | Ordinary delete, 256 rows | 7.39 ms → 7.24 ms | ~2% faster |
 | Variant cleanup, 256 rows | 1.30 ms → 1.39 ms | ~7–8% slower |
 
-All 529 library tests passed, including the existing call-lifecycle and active-cursor
+All 529 library tests passed before the review fix, including the existing call-lifecycle and active-cursor
 cleanup tests. The latter fixture now uses valid encoded keys and checks its first
 read: previously it ignored a codec error, which the old stream retained alongside
 its SQL cursor. Failing streams now release that cursor immediately.
+After the suffix-planning fix, all 15 focused metering/planning tests and 88 database
+query tests passed; Clippy with warnings denied also passed.
 
 This advances #462; it does not close calibration/congestion work or supersede #445.
