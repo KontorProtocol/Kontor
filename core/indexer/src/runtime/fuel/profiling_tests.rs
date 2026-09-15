@@ -75,16 +75,16 @@ async fn initialization_fuel_has_a_platform_independent_boundary() -> Result<()>
 async fn initialization_fuel_exhaustion_is_deterministic() -> Result<()> {
     let (runtime, _dir, _name) = test_runtime().await?;
     let err = runtime
-        .prepare_call(
+        .invoke(
             &staking_address(),
             None,
             None,
             "total-staked()",
             Some(1_000),
         )
-        .await
-        .err()
-        .expect("native initialization must exhaust a 1,000 fuel budget");
+        .await?
+        .result
+        .expect_err("native initialization must exhaust a 1,000 fuel budget");
     match err {
         ExecutionError::Deterministic(e) => {
             assert!(matches!(e.downcast_ref::<Trap>(), Some(Trap::OutOfFuel)));

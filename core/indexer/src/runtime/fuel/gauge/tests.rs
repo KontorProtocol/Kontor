@@ -14,6 +14,7 @@ use crate::database::queries::{
 use crate::reactor::executor::{Executor, RuntimeExecutor};
 use crate::reg_tester::random_x_only_pubkey;
 use crate::runtime::fuel::{Fuel, FuelDiscriminants};
+use crate::runtime::numerics::sub_decimal;
 use crate::runtime::pricing::Pricing;
 use crate::runtime::staking::{address as staking_address, api as staking};
 use crate::runtime::token::api as token;
@@ -37,13 +38,20 @@ async fn fund(runtime: &mut Runtime, key: &str) -> Result<Signer> {
 }
 
 #[tokio::test]
-async fn nested_execution_is_counted_once_and_billing_is_unchanged() -> Result<()> {
+async fn nested_execution_charges_child_results_once() -> Result<()> {
     let key = random_x_only_pubkey();
     let mut outcomes = Vec::new();
     for measured in [false, true] {
         let (mut runtime, _dir, _name) = test_runtime().await?;
+        // Keep the original fuel ceiling but remove gas rounding, which can hide
+        // a dropped child result charge smaller than one production gas unit.
+        runtime.gas_limit_for_non_procs *= runtime.gas_to_fuel_multiplier;
+        runtime.gas_to_fuel_multiplier = 1;
         runtime.set_context(1, None, None, None).await;
         let signer = fund(&mut runtime, &key).await?;
+        let burned_before = token::balance(&mut runtime, HolderRef::Burner)
+            .await?
+            .unwrap_or_default();
         let conn = runtime.get_storage_conn();
         conn.execute("DELETE FROM contract_results", ()).await?;
         let previous = measured.then(|| runtime.start_usage());
@@ -76,11 +84,19 @@ async fn nested_execution_is_counted_once_and_billing_is_unchanged() -> Result<(
         if let Some(usage) = usage {
             assert!(usage.user_fuel > 0 && usage.system_fuel > 0 && usage.deposit_fuel > 0);
             assert!(child_result_fuel > 0, "must exercise a nested procedure");
-            // Billing forwards child fuel before charging the child's result.
-            // Account for that known difference, then compare against the outer
-            // call's single rounded budget, not the sum of nested result rows.
-            let fuel = usage.user_fuel + usage.deposit_fuel - child_result_fuel;
-            assert_eq!(fuel.div_ceil(runtime.gas_to_fuel_multiplier), root_gas);
+            let burned_after = token::balance(&mut runtime, HolderRef::Burner)
+                .await?
+                .unwrap_or_default();
+            assert_eq!(
+                sub_decimal(burned_after, burned_before)?,
+                runtime.pricing.execution_fee(usage.user_fuel)?,
+                "the payer must pay for child results exactly once, excluding reservations"
+            );
+            assert_eq!(
+                usage.user_fuel + usage.deposit_fuel,
+                root_gas,
+                "the outer result must include all child result fuel"
+            );
         }
         let balance = token::balance(&mut runtime, HolderRef::from(&signer)).await?;
         let burned = token::balance(&mut runtime, HolderRef::Burner).await?;
@@ -388,7 +404,7 @@ fn overflow_is_reported_instead_of_wrapping() -> Result<()> {
 }
 
 #[tokio::test]
-async fn failed_nested_preparation_is_not_lost_with_the_child_store() -> Result<()> {
+async fn nested_preparation_failure_is_charged_to_parent() -> Result<()> {
     let (mut runtime, _dir, _name) = test_runtime().await?;
     runtime
         .set_context(1, Some(TransactionContext::builder().build()), None, None)
@@ -426,16 +442,29 @@ async fn failed_nested_preparation_is_not_lost_with_the_child_store() -> Result<
     );
     let child = runtime.finish_usage(previous)?;
     assert!(child.user_fuel > 0);
+    let burned_before = token::balance(&mut runtime, HolderRef::Burner)
+        .await?
+        .unwrap_or_default();
     let previous = runtime.start_usage();
-    assert!(
-        runtime
-            .execute_api(Some(&signer), &proxy, "no-such-function()")
-            .await
-            .is_err()
-    );
+    let error = runtime
+        .execute_api(Some(&signer), &proxy, "no-such-function()")
+        .await
+        .unwrap_err();
+    assert!(matches!(error, ExecutionError::Deterministic(_)));
     let nested = runtime.finish_usage(previous)?;
     assert!(nested.user_fuel > child.user_fuel);
     assert!(nested.system_fuel > 0);
+    assert_eq!(nested.deposit_fuel, 0);
+    assert!(runtime.stack.is_empty().await);
+    let burned_after = token::balance(&mut runtime, HolderRef::Burner)
+        .await?
+        .unwrap_or_default();
+    let expected_gas = nested.user_fuel.div_ceil(runtime.gas_to_fuel_multiplier);
+    assert_eq!(
+        sub_decimal(burned_after, burned_before)?,
+        runtime.pricing.execution_fee(expected_gas)?,
+        "failed child preparation must still be paid for by the outer operation"
+    );
     let conn = runtime.get_storage_conn();
     let mut rows = conn
         .query(
@@ -444,9 +473,69 @@ async fn failed_nested_preparation_is_not_lost_with_the_child_store() -> Result<
         )
         .await?;
     let billed: u64 = rows.next().await?.unwrap().get(0)?;
+    assert_eq!(expected_gas, billed);
+    Ok(())
+}
+
+#[tokio::test]
+async fn nested_result_fuel_cannot_exceed_the_signed_budget() -> Result<()> {
+    let (mut runtime, _dir, _name) = test_runtime().await?;
+    runtime.gas_limit_for_non_procs *= runtime.gas_to_fuel_multiplier;
+    runtime.gas_to_fuel_multiplier = 1;
+    runtime.set_context(1, None, None, None).await;
+    let signer = fund(&mut runtime, &random_x_only_pubkey()).await?;
+    staking::add_stake(&mut runtime, &signer, Decimal::from("10")).await??;
+
+    // Measure the same operation on the same starting state. Use the full raw
+    // budget (including reservations), then probe its exact success boundary.
+    runtime.storage.savepoint().await?;
+    let previous = runtime.start_usage();
+    staking::add_stake(&mut runtime, &signer, Decimal::from("1")).await??;
+    let baseline = runtime.finish_usage(previous)?;
+    runtime.storage.rollback().await?;
+    assert!(baseline.deposit_fuel > 0);
+    let required = baseline.user_fuel + baseline.deposit_fuel;
+    let mut outcomes = Vec::new();
+    for budget in [required, required - 1] {
+        runtime.set_context(1, None, None, None).await;
+        runtime.storage.savepoint().await?;
+        let previous = runtime.start_usage();
+        let result = runtime
+            .execute(
+                Some(&signer),
+                Some(Payment {
+                    signer_id: signer.signer_id().unwrap(),
+                    gas_limit: budget,
+                }),
+                &staking_address(),
+                &format!("add-stake({})", stdlib::to_wave_expr(Decimal::from("1"))),
+            )
+            .await;
+        let usage = runtime.finish_usage(previous)?;
+        assert!(runtime.stack.is_empty().await);
+        let stake = staking::get_stake(&mut runtime, &signer)
+            .await?
+            .unwrap()
+            .stake;
+        outcomes.push((result, usage, stake));
+        runtime.storage.rollback().await?;
+    }
+    let (success, usage, stake) = &outcomes[0];
+    assert!(success.is_ok(), "the full budget must suffice: {success:?}");
+    assert_eq!(usage.user_fuel + usage.deposit_fuel, required);
+    assert_eq!(*stake, Decimal::from("11"));
+
+    let (short, usage, stake) = &outcomes[1];
+    assert!(
+        matches!(short, Err(ExecutionError::Deterministic(error))
+            if matches!(error.downcast_ref::<Trap>(), Some(Trap::OutOfFuel))),
+        "one fuel below the required budget must exhaust: {short:?}"
+    );
+    assert!(usage.user_fuel + usage.deposit_fuel < required);
     assert_eq!(
-        (nested.user_fuel - child.user_fuel).div_ceil(runtime.gas_to_fuel_multiplier),
-        billed
+        *stake,
+        Decimal::from("10"),
+        "exhaustion must revert the stake change"
     );
     Ok(())
 }
