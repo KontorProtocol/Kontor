@@ -799,7 +799,10 @@ pub async fn path_prefix_filter_storage_rows(
                     if !tail.is_empty() {
                         return Err(Error::NonScalarRow);
                     }
-                    Ok((elem.to_vec(), row.get::<Vec<u8>>(1)?))
+                    let value = row.get::<Vec<u8>>(1)?;
+                    #[cfg(test)]
+                    traversal_probe::copied_value(value.len());
+                    Ok((elem.to_vec(), value))
                 })();
                 Some((item, rows))
             }
@@ -1358,6 +1361,20 @@ pub(crate) mod traversal_probe {
 
     tokio::task_local! {
         static ROWS: Cell<usize>;
+        static VALUE_BYTES: Cell<usize>;
+    }
+
+    pub(super) fn copied_value(bytes: usize) {
+        let _ = VALUE_BYTES.try_with(|count| count.set(count.get() + bytes));
+    }
+
+    pub(crate) async fn measure_value_bytes<T>(future: impl Future<Output = T>) -> (T, usize) {
+        VALUE_BYTES
+            .scope(Cell::new(0), async {
+                let result = future.await;
+                (result, VALUE_BYTES.with(Cell::get))
+            })
+            .await
     }
 
     pub(super) fn record() {

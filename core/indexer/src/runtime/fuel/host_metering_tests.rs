@@ -5,6 +5,7 @@ use std::task::Poll;
 use anyhow::{Error, Result};
 use bitcoin::OutPoint;
 use futures_util::{TryStreamExt, stream};
+use serde::{Serialize, Serializer, ser::SerializeSeq};
 use wasmtime::component::{Accessor, Resource};
 use wasmtime::{Store, Trap};
 
@@ -49,6 +50,95 @@ fn assert_exhausted(error: Error) {
         matches!(error.downcast_ref::<Trap>(), Some(Trap::OutOfFuel)),
         "expected fuel exhaustion, got {error:#}"
     );
+}
+
+#[tokio::test]
+async fn row_budget_rejects_value_before_copying() -> Result<()> {
+    let (runtime, _dir, _name) = test_runtime().await?;
+    let root = "value-budget".to_string().encode();
+    let member = 0u64.encode();
+    let mut path = root.clone();
+    path.extend_from_slice(&member);
+    runtime
+        .storage
+        .set(1, &path, &serialize(&vec![0u8; 4096])?, None, None)
+        .await?;
+    let mut store = runtime.make_store(BUDGET)?;
+    let rep = store
+        .data()
+        .table
+        .lock()
+        .await
+        .push(ProcStorage { contract_id: 1 })?
+        .rep();
+    let cursor = host(&mut store, async |accessor| {
+        <Runtime as StorageHost<Runtime>>::get_storage_rows(
+            accessor,
+            Resource::new_borrow(rep),
+            root,
+            None,
+            None,
+            false,
+        )
+        .await
+    })
+    .await?
+    .rep();
+    store.set_fuel(Fuel::StorageScan.cost() + Fuel::KeysNext(member.len() as u64).cost())?;
+    let (result, copied) =
+        traversal_probe::measure_value_bytes(host(&mut store, async |accessor| {
+            <Runtime as RowsHost<Runtime>>::next_list_u8(accessor, Resource::new_borrow(cursor))
+                .await
+        }))
+        .await;
+    assert_exhausted(result.unwrap_err());
+    assert_eq!(copied, 0, "unaffordable value crossed the SQL boundary");
+    Ok(())
+}
+
+struct CountedSequence<'a>(&'a AtomicUsize);
+
+impl Serialize for CountedSequence<'_> {
+    fn serialize<S: Serializer>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error> {
+        let mut seq = serializer.serialize_seq(Some(4096))?;
+        for _ in 0..4096 {
+            self.0.fetch_add(1, Ordering::SeqCst);
+            seq.serialize_element(&0u8)?;
+        }
+        seq.end()
+    }
+}
+
+#[tokio::test]
+async fn write_budget_stops_serialization_before_finishing() -> Result<()> {
+    let (runtime, _dir, _name) = test_runtime().await?;
+    let mut store = runtime.make_store(Fuel::StorageWrite.cost() + Fuel::Set(16).cost())?;
+    let rep = store
+        .data()
+        .table
+        .lock()
+        .await
+        .push(ProcStorage { contract_id: 1 })?
+        .rep();
+    let visited = AtomicUsize::new(0);
+    let result = host(&mut store, async |accessor| {
+        let runtime = accessor.with(|mut access| access.get().clone());
+        runtime
+            ._set_primitive(
+                accessor,
+                Resource::<ProcStorage>::new_borrow(rep),
+                vec![],
+                CountedSequence(&visited),
+            )
+            .await
+    })
+    .await;
+    assert_exhausted(result.unwrap_err());
+    assert!(
+        visited.load(Ordering::SeqCst) <= 17,
+        "serialized beyond the byte budget"
+    );
+    Ok(())
 }
 
 #[tokio::test]
