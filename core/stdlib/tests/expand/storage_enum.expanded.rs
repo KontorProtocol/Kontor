@@ -12,24 +12,17 @@ for ChallengeStatus {
         base_path: stdlib::KeyPath,
         value: ChallengeStatus,
     ) {
-        stdlib::WriteStorage::__delete_matching_paths(
-            ctx,
-            &base_path,
-            &[
-                stdlib::interned_element(0u8),
-                stdlib::interned_element(1u8),
-                stdlib::interned_element(2u8),
-            ],
-        );
+        stdlib::WriteStorage::__delete(ctx, &base_path);
         match value {
             ChallengeStatus::Active => {
-                stdlib::WriteStorage::__set(ctx, base_path.push_interned(0u8), ())
+                stdlib::WriteStorage::__set_u64(ctx, &base_path, u64::from(0u8))
             }
             ChallengeStatus::Proven => {
-                stdlib::WriteStorage::__set(ctx, base_path.push_interned(1u8), ())
+                stdlib::WriteStorage::__set_u64(ctx, &base_path, u64::from(1u8))
             }
             ChallengeStatus::Failed(inner) => {
-                stdlib::WriteStorage::__set(ctx, base_path.push_interned(2u8), inner)
+                stdlib::WriteStorage::__set_u64(ctx, &base_path, u64::from(2u8));
+                stdlib::WriteStorage::__set(ctx, base_path.push_interned(2u8), inner);
             }
         }
     }
@@ -45,19 +38,11 @@ pub enum ChallengeStatusModel<__S> {
 pub type __ChallengeStatusModelFor<__S> = ChallengeStatusModel<__S>;
 impl<__S: stdlib::ReadStorage + 'static> ChallengeStatusModel<__S> {
     pub fn new(ctx: alloc::rc::Rc<__S>, base_path: stdlib::KeyPath) -> Self {
-        stdlib::ReadStorage::__extend_path_with_match(
-                &ctx,
-                &base_path,
-                &[
-                    stdlib::interned_element(0u8),
-                    stdlib::interned_element(1u8),
-                    stdlib::interned_element(2u8),
-                ],
-            )
+        stdlib::ReadStorage::__get_u64(&ctx, &base_path)
             .map(|__idx| match __idx {
-                0u32 => ChallengeStatusModel::Active,
-                1u32 => ChallengeStatusModel::Proven,
-                2u32 => {
+                0u64 => ChallengeStatusModel::Active,
+                1u64 => ChallengeStatusModel::Proven,
+                2u64 => {
                     ChallengeStatusModel::Failed(
                         stdlib::ReadStorage::__get(&ctx, base_path.push_interned(2u8))
                             .unwrap(),
@@ -65,7 +50,7 @@ impl<__S: stdlib::ReadStorage + 'static> ChallengeStatusModel<__S> {
                 }
                 _ => {
                     ::core::panicking::panic_fmt(
-                        format_args!("Matching path not found"),
+                        format_args!("Invalid enum storage tag"),
                     );
                 }
             })
@@ -103,19 +88,11 @@ impl<
     __S: stdlib::ReadStorage + stdlib::WriteStorage + stdlib::HasViewStorage + 'static,
 > ChallengeStatusWriteModel<__S> {
     pub fn new(ctx: alloc::rc::Rc<__S>, base_path: stdlib::KeyPath) -> Self {
-        stdlib::ReadStorage::__extend_path_with_match(
-                &ctx,
-                &base_path,
-                &[
-                    stdlib::interned_element(0u8),
-                    stdlib::interned_element(1u8),
-                    stdlib::interned_element(2u8),
-                ],
-            )
+        stdlib::ReadStorage::__get_u64(&ctx, &base_path)
             .map(|__idx| match __idx {
-                0u32 => ChallengeStatusWriteModel::Active,
-                1u32 => ChallengeStatusWriteModel::Proven,
-                2u32 => {
+                0u64 => ChallengeStatusWriteModel::Active,
+                1u64 => ChallengeStatusWriteModel::Proven,
+                2u64 => {
                     ChallengeStatusWriteModel::Failed(
                         stdlib::ReadStorage::__get(&ctx, base_path.push_interned(2u8))
                             .unwrap(),
@@ -123,7 +100,7 @@ impl<
                 }
                 _ => {
                     ::core::panicking::panic_fmt(
-                        format_args!("Matching path not found"),
+                        format_args!("Invalid enum storage tag"),
                     );
                 }
             })

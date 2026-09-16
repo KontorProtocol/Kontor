@@ -144,14 +144,6 @@ impl stdlib::ReadStorage for context::ViewStorage {
         self.exists(path)
     }
 
-    fn __extend_path_with_match(
-        self: &alloc::rc::Rc<Self>,
-        path: &[u8],
-        candidates: &[alloc::vec::Vec<u8>],
-    ) -> Option<u32> {
-        self.extend_path_with_match(path, candidates)
-    }
-
     fn __get<T: stdlib::Retrieve<Self>>(
         self: &alloc::rc::Rc<Self>,
         path: stdlib::KeyPath,
@@ -205,14 +197,6 @@ impl stdlib::ReadStorage for context::ProcStorage {
         self.exists(path)
     }
 
-    fn __extend_path_with_match(
-        self: &alloc::rc::Rc<Self>,
-        path: &[u8],
-        candidates: &[alloc::vec::Vec<u8>],
-    ) -> Option<u32> {
-        self.extend_path_with_match(path, candidates)
-    }
-
     fn __get<T: stdlib::Retrieve<Self>>(
         self: &alloc::rc::Rc<Self>,
         path: stdlib::KeyPath,
@@ -252,14 +236,6 @@ impl stdlib::WriteStorage for context::ProcStorage {
 
     fn __delete(self: &alloc::rc::Rc<Self>, path: &[u8]) -> bool {
         self.delete(path)
-    }
-
-    fn __delete_matching_paths(
-        self: &alloc::rc::Rc<Self>,
-        base_path: &[u8],
-        candidates: &[alloc::vec::Vec<u8>],
-    ) -> u64 {
-        self.delete_matching_paths(base_path, candidates)
     }
 }
 

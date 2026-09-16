@@ -270,9 +270,6 @@ mod tests {
         fn __get_list_u8(self: &Rc<Self>, _: &[u8]) -> Option<Vec<u8>> {
             unimplemented!()
         }
-        fn __extend_path_with_match(self: &Rc<Self>, _: &[u8], _: &[Vec<u8>]) -> Option<u32> {
-            unimplemented!()
-        }
     }
 
     impl WriteStorage for Mock {
@@ -298,9 +295,6 @@ mod tests {
             unimplemented!()
         }
         fn __set_void(self: &Rc<Self>, _: &[u8]) {
-            unimplemented!()
-        }
-        fn __delete_matching_paths(self: &Rc<Self>, _: &[u8], _: &[Vec<u8>]) -> u64 {
             unimplemented!()
         }
     }

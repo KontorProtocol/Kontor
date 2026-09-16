@@ -1,6 +1,6 @@
 use alloc::{string::String, vec::Vec};
 
-use crate::keycodec::{KeyElement, string_element};
+use crate::keycodec::KeyElement;
 use crate::scalar_storage::{narrow_i32, narrow_u32};
 use crate::{KeyPath, ScalarStorage};
 
@@ -59,16 +59,6 @@ pub trait ReadStorage {
     ) -> impl Iterator<Item = (Vec<u8>, V)> + use<Self, V>;
 
     fn __exists(self: &alloc::rc::Rc<Self>, path: &[u8]) -> bool;
-
-    /// Resolve which of `candidates` (already-encoded discriminant elements) is the
-    /// current child under `path`, returning its INDEX, or `None` if unset. The host
-    /// byte-compares, so the candidate encoding (string element or interned dict-ref)
-    /// is the guest's choice.
-    fn __extend_path_with_match(
-        self: &alloc::rc::Rc<Self>,
-        path: &[u8],
-        candidates: &[Vec<u8>],
-    ) -> Option<u32>;
 
     fn __get<T: Retrieve<Self>>(self: &alloc::rc::Rc<Self>, path: KeyPath) -> Option<T>;
 }
@@ -141,12 +131,6 @@ pub trait WriteStorage {
     /// exact path. Returns true if any live row was tombstoned. (A leaf path,
     /// e.g. an index void, has no descendants, so this is a single tombstone.)
     fn __delete(self: &alloc::rc::Rc<Self>, path: &[u8]) -> bool;
-
-    fn __delete_matching_paths(
-        self: &alloc::rc::Rc<Self>,
-        base_path: &[u8],
-        candidates: &[Vec<u8>],
-    ) -> u64;
 }
 
 pub trait Store<T: WriteStorage + ?Sized> {
@@ -231,13 +215,11 @@ impl<T: WriteStorage + ?Sized> Store<T> for () {
 
 impl<S: WriteStorage + ?Sized, T: Store<S>> Store<S> for Option<T> {
     fn __set(ctx: &alloc::rc::Rc<S>, path: KeyPath, value: Self) {
-        // `none`/`some` stay STRING discriminant segments (Option is generic, with
-        // no per-type dict to intern them into); the host byte-compares, so this
-        // mixes fine with interned enum variants elsewhere.
-        ctx.__delete_matching_paths(&path, &[string_element("none"), string_element("some")]);
-        match value {
-            Some(inner) => ctx.__set(path.push("some"), inner),
-            None => ctx.__set(path.push("none"), ()),
+        // The tag is independent of payload writes and represents Some(empty).
+        ctx.__delete(&path);
+        ctx.__set_u64(&path, u64::from(value.is_some()));
+        if let Some(inner) = value {
+            ctx.__set(path.push("some"), inner);
         }
     }
 }

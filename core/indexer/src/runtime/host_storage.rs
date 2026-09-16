@@ -229,60 +229,6 @@ impl Runtime {
         self.storage.exists(_self.get_contract_id(), &path).await
     }
 
-    pub(crate) async fn _extend_path_with_match<S, T: HasContractId>(
-        &self,
-        accessor: &Accessor<S, Self>,
-        resource: Resource<T>,
-        path: Vec<u8>,
-        candidates: Vec<Vec<u8>>,
-    ) -> Result<Option<u32>> {
-        Fuel::ExtendPathWithMatch(candidates.len() as u64).consume(accessor)?;
-        let candidate_bytes = candidates.iter().fold(0_u64, |bytes, candidate| {
-            bytes.saturating_add(candidate.len() as u64)
-        });
-        Fuel::Path(candidate_bytes).consume(accessor)?;
-        meter_path(accessor, &path)?;
-        let table = self.table.lock().await;
-        let _self = table.get(&resource)?;
-        self.storage
-            .extend_path_with_match(_self.get_contract_id(), &path, &candidates)
-            .await
-    }
-
-    pub(crate) async fn _delete_matching_paths<S, T: HasContractId>(
-        &self,
-        accessor: &Accessor<S, Self>,
-        self_: Resource<T>,
-        base_path: Vec<u8>,
-        candidates: Vec<Vec<u8>>,
-    ) -> Result<u64> {
-        Fuel::StorageDelete.consume(accessor)?;
-        Fuel::ExtendPathWithMatch(candidates.len() as u64).consume(accessor)?;
-        let candidate_bytes = candidates.iter().fold(0_u64, |bytes, candidate| {
-            bytes.saturating_add(candidate.len() as u64)
-        });
-        Fuel::Path(candidate_bytes).consume(accessor)?;
-        meter_path(accessor, &base_path)?;
-        let contract_id = self.table.lock().await.get(&self_)?.get_contract_id();
-        // Read → meter → write: charge in proportion to the rows actually removed,
-        // not a flat per-candidate fee. Freeing a row also subtracts its deposit from
-        // its setter's footprint cache (the rows were already read for metering).
-        let rows = self
-            .storage
-            .find_matching_paths(contract_id, &base_path, &candidates)
-            .await?;
-        let rows = collect_delete_rows(accessor, rows).await?;
-        self.storage.footprint().on_free(&rows).await?;
-        let deleted = self.storage.hard_delete_rows(contract_id, &rows).await?;
-        // A hard delete (unlike a tombstone) can revive an older same-path version —
-        // re-add its deposit to the footprint cache, else the floor under-counts.
-        self.storage
-            .footprint()
-            .on_revive(contract_id, &rows)
-            .await?;
-        Ok(deleted)
-    }
-
     /// Delete a key by tombstoning its WHOLE subtree (the node + every live
     /// descendant — a struct/map value persists under child paths). Metered by the
     /// subtree size. Discovery consumes fuel incrementally; all rows must be

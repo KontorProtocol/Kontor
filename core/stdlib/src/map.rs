@@ -521,20 +521,6 @@ mod tests {
         fn __exists(self: &Rc<Self>, path: &[u8]) -> bool {
             self.map.borrow().keys().any(|key| key.starts_with(path))
         }
-        fn __extend_path_with_match(
-            self: &Rc<Self>,
-            path: &[u8],
-            candidates: &[Vec<u8>],
-        ) -> Option<u32> {
-            candidates
-                .iter()
-                .position(|candidate| {
-                    let mut child = path.to_vec();
-                    child.extend(candidate);
-                    self.__exists(&child)
-                })
-                .map(|index| index as u32)
-        }
     }
 
     impl WriteStorage for Mock {
@@ -570,16 +556,6 @@ mod tests {
             self.map
                 .borrow_mut()
                 .insert(path.to_vec(), Cell::Bytes(value));
-        }
-        fn __delete_matching_paths(self: &Rc<Self>, path: &[u8], candidates: &[Vec<u8>]) -> u64 {
-            candidates
-                .iter()
-                .filter(|candidate| {
-                    let mut child = path.to_vec();
-                    child.extend(*candidate);
-                    self.__delete(&child)
-                })
-                .count() as u64
         }
     }
 

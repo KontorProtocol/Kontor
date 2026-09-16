@@ -21,16 +21,14 @@ impl<__S: stdlib::ReadStorage + 'static> ArithStorageModel<__S> {
     }
     pub fn last_op(&self) -> Option<__OpModelFor<__S>> {
         let base_path = self.base_path.push_interned(0u8);
-        if stdlib::ReadStorage::__extend_path_with_match(
-                &self.ctx,
-                &base_path,
-                &[stdlib::string_element("none")],
-            )
-            .is_some()
-        {
-            None
-        } else {
-            Some(__OpModelFor::<__S>::new(self.ctx.clone(), base_path.push("some")))
+        match stdlib::ReadStorage::__get_u64(&self.ctx, &base_path) {
+            None | Some(0) => None,
+            Some(1) => {
+                Some(__OpModelFor::<__S>::new(self.ctx.clone(), base_path.push("some")))
+            }
+            _ => {
+                ::core::panicking::panic_fmt(format_args!("Invalid Option storage tag"));
+            }
         }
     }
     pub fn load(&self) -> ArithStorage {
@@ -72,16 +70,18 @@ impl<
     }
     pub fn last_op(&self) -> Option<__OpWriteModelFor<__S>> {
         let base_path = self.base_path.push_interned(0u8);
-        if stdlib::ReadStorage::__extend_path_with_match(
-                &self.ctx,
-                &base_path,
-                &[stdlib::string_element("none")],
-            )
-            .is_some()
-        {
-            None
-        } else {
-            Some(__OpWriteModelFor::<__S>::new(self.ctx.clone(), base_path.push("some")))
+        match stdlib::ReadStorage::__get_u64(&self.ctx, &base_path) {
+            None | Some(0) => None,
+            Some(1) => {
+                Some(
+                    __OpWriteModelFor::<
+                        __S,
+                    >::new(self.ctx.clone(), base_path.push("some")),
+                )
+            }
+            _ => {
+                ::core::panicking::panic_fmt(format_args!("Invalid Option storage tag"));
+            }
         }
     }
     pub fn set_last_op(&self, value: Option<Op>) {

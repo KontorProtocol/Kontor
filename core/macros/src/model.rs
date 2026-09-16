@@ -430,10 +430,10 @@ pub fn generate_struct(
                         Ok(quote! {
                             pub fn #field_name(&self) -> Option<#inner_ty> {
                                 let base_path = #base_path;
-                                if stdlib::ReadStorage::__extend_path_with_match(&self.ctx, &base_path, &[stdlib::string_element("none")]).is_some() {
-                                    None
-                                } else {
-                                    stdlib::ReadStorage::__get(&self.ctx, base_path.push("some"))
+                                match stdlib::ReadStorage::__get_u64(&self.ctx, &base_path) {
+                                    None | Some(0) => None,
+                                    Some(1) => stdlib::ReadStorage::__get(&self.ctx, base_path.push("some")),
+                                    _ => panic!("Invalid Option storage tag"),
                                 }
                             }
                         })
@@ -443,10 +443,10 @@ pub fn generate_struct(
                         Ok(quote! {
                             pub fn #field_name(&self) -> Option<#ret_ty> {
                                 let base_path = #base_path;
-                                if stdlib::ReadStorage::__extend_path_with_match(&self.ctx, &base_path, &[stdlib::string_element("none")]).is_some() {
-                                    None
-                                } else {
-                                    Some(#inner_model_ty::<__S>::new(self.ctx.clone(), base_path.push("some"))#load)
+                                match stdlib::ReadStorage::__get_u64(&self.ctx, &base_path) {
+                                    None | Some(0) => None,
+                                    Some(1) => Some(#inner_model_ty::<__S>::new(self.ctx.clone(), base_path.push("some"))#load),
+                                    _ => panic!("Invalid Option storage tag"),
                                 }
                             }
                         })
@@ -899,23 +899,13 @@ pub fn generate_enum(data_enum: &DataEnum, type_name: &Ident, write: bool) -> Re
 
     let model_variants = model_variants?;
 
-    // Each variant's discriminant is an interned dict-ref id = its declaration
-    // order in the enum (a per-enum dict, distinct from struct field ids), numbered
-    // once via `numbered_variants` so the read side here and the write side in
-    // `store::generate_enum_body` can't drift. The candidates the host byte-matches
-    // are those dict-ref elements, in id order, so `extend_path_with_match` returns
-    // the variant's index.
+    // The root tag and payload path use the same declaration-order id as Store.
     let numbered = utils::numbered_variants(data_enum, type_name.span())?;
-    let variant_candidates = numbered
-        .iter()
-        .map(|&(id, _)| quote! { stdlib::interned_element(#id) })
-        .collect::<Vec<_>>();
 
     let new_arms = numbered.iter().map(|&(variant_id, variant)| {
         let variant_ident = &variant.ident;
-        let arm_idx = variant_id as u32;
+        let arm_idx = variant_id as u64;
 
-        // `__extend_path_with_match` returns the live variant's INDEX; match on it.
         match &variant.fields {
             Fields::Unit => Ok(quote! {
                 #arm_idx => #model_name::#variant_ident
@@ -970,11 +960,11 @@ pub fn generate_enum(data_enum: &DataEnum, type_name: &Ident, write: bool) -> Re
 
         impl #impl_generics #model_name<__S> {
             pub fn new(ctx: alloc::rc::Rc<__S>, base_path: stdlib::KeyPath) -> Self {
-                stdlib::ReadStorage::__extend_path_with_match(&ctx, &base_path, &[#(#variant_candidates),*])
+                stdlib::ReadStorage::__get_u64(&ctx, &base_path)
                     .map(|__idx| match __idx {
                         #(#new_arms,)*
                         _ => {
-                            panic!("Matching path not found")
+                            panic!("Invalid enum storage tag")
                         }
                     })
                     .unwrap()

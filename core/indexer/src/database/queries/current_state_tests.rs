@@ -8,8 +8,8 @@ use tempfile::TempDir;
 
 use super::current_state::{RESTORE_AFFECTED_KEYS, prepare_affected_keys};
 use super::{
-    StorageRowCursor, exists_contract_state, find_live_subtree, get_latest_contract_state_value,
-    hard_delete_rows, path_prefix_filter_contract_state, prune_contract_state, rollback_to_height,
+    StorageRowCursor, exists_contract_state, get_latest_contract_state_value,
+    path_prefix_filter_contract_state, prune_contract_state, rollback_to_height,
 };
 use crate::database::connection::new_connection;
 
@@ -82,7 +82,7 @@ async fn checkpoint(conn: &Connection) -> Result<Vec<(u64, String)>> {
 }
 
 #[tokio::test]
-async fn current_state_handles_replacement_old_imports_and_hard_deletion() -> Result<()> {
+async fn current_state_handles_replacement_old_imports_and_rollback() -> Result<()> {
     let dir = TempDir::new()?;
     let conn = new_connection(dir.path(), "current.db").await?;
     write(&conn, 1, 1, 0, false).await?;
@@ -101,23 +101,18 @@ async fn current_state_handles_replacement_old_imports_and_hard_deletion() -> Re
     write(&conn, 1, 3, 0, false).await?;
     assert_index(&conn).await?;
 
-    let rows = find_live_subtree(&conn, 1, &[])
-        .await?
-        .try_collect::<Vec<_>>()
-        .await?;
-    hard_delete_rows(&conn, 1, 3, &rows).await?;
+    rollback_to_height(&conn, 2).await?;
     assert_index(&conn).await?;
     ensure!(
         get_latest_contract_state_value(&conn, 2, 1, &0u64.encode()).await? == Some(vec![2; 2])
     );
 
-    // Removing a newer creation must restore an older tombstone, not its value.
+    // A reorg restores the latest retained tombstone, never its older value.
     write(&conn, 1, 2, 0, true).await?;
     write(&conn, 1, 3, 0, false).await?;
-    hard_delete_rows(&conn, 1, 3, &rows).await?;
+    rollback_to_height(&conn, 2).await?;
     assert_index(&conn).await?;
     ensure!(!exists_contract_state(&conn, 1, &[]).await?);
-    ensure!(exists_contract_state(&conn, 2, &[]).await?);
     Ok(())
 }
 

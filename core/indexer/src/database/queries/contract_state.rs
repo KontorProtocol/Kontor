@@ -14,7 +14,7 @@
 //! Current reads use `current_contract_state`, a derived live-key index pointing
 //! into this log by `(contract_id, height, path)`. Sizes are available before
 //! fetching values, so fuel checks precede payload reads. Inserts maintain the
-//! index atomically; reorgs and hard deletes restore affected keys from history.
+//! index atomically; reorgs restore affected keys from history.
 //!
 //! **Paths are [`stdlib::keycodec`] bytes** (a `BLOB` column), not text. They are
 //! order-preserving and *prefix-structured*: an encoded ancestor is an exact
@@ -23,12 +23,6 @@
 //! `[P, subtree_end(P))` — an index seek, not a `LIKE`/`REGEXP` scan — and a child key
 //! is recovered with [`next_element`].
 //!
-//! Two deliberate EXCEPTIONS, each documented at its call site:
-//!   - [`matching_path`] — enum/option variant resolution. GLOBAL-newest across
-//!     paths (NOT per-path), because it asks "which variant is current?".
-//!   - [`hard_delete_rows`] — a HARD delete at the current height (not a
-//!     tombstone, not a liveness read); intra-block `Option` variant cleanup.
-
 use std::mem::take;
 
 use futures_util::{Stream, StreamExt, TryStreamExt, stream};
@@ -36,18 +30,7 @@ use libsql::{Connection, Row, Rows, Statement, Value, de::from_row, params};
 use stdlib::{next_element, subtree_end};
 
 use super::Error;
-use super::current_state::{prepare_affected_keys, restore_affected_keys, with_state_savepoint};
 use crate::database::types::ContractStateRow;
-
-/// Bounds end at an element boundary: an escaped-NUL sibling is outside the
-/// subtree even though it shares the encoded node's raw byte prefix.
-fn subtree_range(lo_cmp: &str, prefix: &[u8]) -> (String, Vec<(String, Value)>) {
-    let params = vec![
-        (":lo".to_string(), Value::Blob(prefix.to_vec())),
-        (":hi".to_string(), Value::Blob(subtree_end(prefix))),
-    ];
-    (format!("path {lo_cmp} :lo AND path < :hi"), params)
-}
 
 enum LiveProjection {
     Keys,
@@ -890,153 +873,6 @@ impl StorageRowCursor {
     }
 }
 
-/// EXCEPTION to per-path liveness (see module header): enum/option variant resolution
-/// is GLOBAL-newest, not per-path. Returns the INDEX of whichever `candidates`
-/// element is current under `base_path`, or `None` if the field is unset/deleted or
-/// the newest discriminant isn't among them. Checks the single NEWEST row under
-/// `base_path` (by height, then rowid) — a stale variant lingering live at a lower
-/// height (an old `none`, or an old enum case) must be outranked by the newer write,
-/// which a per-path pick would surface — and reads its child element (the variant
-/// discriminant). `candidates` are the already-encoded discriminant elements (a
-/// string element, or an interned dict-ref); the match is pure BYTE equality, so the
-/// host never decodes a name — it works for any encoding the guest chooses.
-pub async fn matching_path(
-    conn: &Connection,
-    contract_id: u64,
-    base_path: &[u8],
-    candidates: &[Vec<u8>],
-) -> Result<Option<u32>, Error> {
-    // Same-height writes to different paths coexist; later insertion wins.
-    let (range, mut params) = subtree_range(">=", base_path);
-    params.push((
-        ":contract_id".to_string(),
-        Value::Integer(contract_id as i64),
-    ));
-    let query = format!(
-        "SELECT path, deleted FROM contract_state \
-         WHERE contract_id = :contract_id AND {range} \
-         ORDER BY height DESC, rowid DESC LIMIT 1"
-    );
-    let mut rows = conn.query(&query, params).await?;
-    let Some(row) = rows.next().await? else {
-        return Ok(None);
-    };
-    if row.get::<bool>(1)? {
-        return Ok(None);
-    }
-    let full: Vec<u8> = row.get(0)?;
-    // The newest live row may be `base_path` ITSELF (a value stored at the path,
-    // with no variant segment after it) — that's not a variant, so report no match
-    // rather than decoding an empty suffix (which errors). Matches the old REGEXP
-    // post-filter, which treated such a row as non-matching.
-    let suffix = &full[base_path.len()..];
-    if suffix.is_empty() {
-        return Ok(None);
-    }
-    // The discriminant is the first element after `base_path`; match it against the
-    // candidate elements by raw bytes (no decode — encoding-agnostic).
-    let (elem, _) = next_element(suffix).map_err(Error::KeyCodec)?;
-    Ok(candidates
-        .iter()
-        .position(|c| c.as_slice() == elem)
-        .map(|i| i as u32))
-}
-
-/// Union candidate subtrees before discovery. Duplicate or overlapping guest
-/// candidates must not charge/free the same row twice, especially its deposit.
-fn matching_suffix_ranges(candidates: &[Vec<u8>]) -> Vec<(Vec<u8>, Vec<u8>)> {
-    let mut suffixes: Vec<_> = candidates.iter().map(Vec::as_slice).collect();
-    suffixes.sort_unstable();
-    let mut merged: Vec<(Vec<u8>, Vec<u8>)> = Vec::new();
-    for lo in suffixes {
-        let hi = subtree_end(lo);
-        if let Some((_, end)) = merged.last_mut()
-            && lo <= end.as_slice()
-        {
-            if hi > *end {
-                *end = hi;
-            }
-            continue;
-        }
-        merged.push((lo.to_vec(), hi));
-    }
-    merged
-}
-
-/// Current-height variant rows, including tombstones. This deliberately does
-/// not use liveness: removing a current tombstone can revive an older deposit.
-pub async fn find_matching_paths(
-    conn: &Connection,
-    contract_id: u64,
-    height: u64,
-    base_path: &[u8],
-    candidates: &[Vec<u8>],
-) -> Result<impl Stream<Item = Result<LiveRow, Error>> + Send + 'static, Error> {
-    let ranges = matching_suffix_ranges(candidates);
-    let base_path = base_path.to_vec();
-    let conn = conn.clone();
-    Ok(stream::iter(ranges)
-        .flat_map(move |(lo, hi)| {
-            // Only the active query owns full bounds; candidate count must not
-            // multiply retained copies of a potentially large base path.
-            let lo = [base_path.as_slice(), lo.as_slice()].concat();
-            let hi = [base_path.as_slice(), hi.as_slice()].concat();
-            query_rows(
-                conn.clone(),
-                "SELECT path, size, depositor, deposited_gas FROM contract_state \
-             WHERE contract_id = :contract_id AND height = :height \
-             AND path >= :lo AND path < :hi ORDER BY path"
-                    .to_string(),
-                vec![
-                    (
-                        ":contract_id".to_string(),
-                        Value::Integer(contract_id as i64),
-                    ),
-                    (":height".to_string(), Value::Integer(height as i64)),
-                    (":lo".to_string(), Value::Blob(lo)),
-                    (":hi".to_string(), Value::Blob(hi)),
-                ],
-            )
-        })
-        .map(|row| row.and_then(|row| live_row_from(&row))))
-}
-
-/// Delete exactly the already-metered current-height rows. Small SQL batches
-/// retain bulk-write efficiency without a second, potentially broader range scan.
-pub async fn hard_delete_rows(
-    conn: &Connection,
-    contract_id: u64,
-    height: u64,
-    rows: &[LiveRow],
-) -> Result<u64, Error> {
-    if rows.is_empty() {
-        return Ok(0);
-    }
-    with_state_savepoint(conn, async || {
-        prepare_affected_keys(conn).await?;
-        let mut deleted = 0;
-        for chunk in rows.chunks(64) {
-            let slots = vec!["?"; chunk.len()].join(",");
-            let mut params = vec![Value::Integer(contract_id as i64), Value::Integer(height as i64)];
-            params.extend(chunk.iter().map(|row| Value::Blob(row.path.clone())));
-            conn.execute(
-                &format!("INSERT OR IGNORE INTO affected_state_keys SELECT contract_id, path FROM contract_state WHERE contract_id = ? AND height = ? AND path IN ({slots})"),
-                params.clone(),
-            ).await?;
-            conn.execute(
-                &format!("DELETE FROM current_contract_state WHERE contract_id = ? AND height = ? AND path IN ({slots})"),
-                params.clone(),
-            ).await?;
-            deleted += conn.execute(
-                &format!("DELETE FROM contract_state WHERE contract_id = ? AND height = ? AND path IN ({slots})"),
-                params,
-            ).await?;
-        }
-        restore_affected_keys(conn).await?;
-        Ok(deleted)
-    }).await
-}
-
 pub async fn contract_has_state(conn: &Connection, contract_id: u64) -> Result<bool, Error> {
     let mut rows = conn
         .query(
@@ -1073,7 +909,7 @@ pub async fn contract_has_state(conn: &Connection, contract_id: u64) -> Result<b
 /// deletes *intermediate* historical versions `≤ w`, so it does NOT preserve an
 /// as-of-height read for `H < w`. That is correct ONLY because this indexer issues
 /// no historical as-of-height reads — every read computes latest-per-path with no
-/// upper height bound (point reads, `live_paths_scan`, and `matching_path`). A future
+/// upper height bound (point reads and `live_paths_scan`). A future
 /// as-of-`H` reader below `w` would get wrong answers; gate any such feature on
 /// archive mode (`prune = false`).
 ///
@@ -1469,32 +1305,5 @@ pub(crate) mod traversal_probe {
             (result, ROWS.with(Cell::get))
         })
         .await
-    }
-}
-
-#[cfg(test)]
-mod matching_range_tests {
-    use super::matching_suffix_ranges;
-    use stdlib::{KeyElement, subtree_end};
-
-    #[test]
-    fn cleanup_plan_retains_only_unique_suffix_ranges() {
-        let suffixes: Vec<_> = (0..512u64).map(|n| n.encode()).collect();
-        let mut candidates = suffixes.clone();
-        candidates.extend(suffixes.iter().cloned());
-        let ranges = matching_suffix_ranges(&candidates);
-        assert_eq!(ranges.len(), suffixes.len());
-        let retained: usize = ranges.iter().map(|(lo, hi)| lo.len() + hi.len()).sum();
-        let input: usize = suffixes.iter().map(Vec::len).sum();
-        assert_eq!(retained, 2 * input + suffixes.len());
-        for ((lo, hi), suffix) in ranges.iter().zip(&suffixes) {
-            assert_eq!(lo, suffix);
-            assert_eq!(hi, &subtree_end(suffix));
-        }
-        candidates.extend(vec![Vec::new(); 512]);
-        assert_eq!(
-            matching_suffix_ranges(&candidates),
-            vec![(vec![], vec![0xff])]
-        );
     }
 }

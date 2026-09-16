@@ -61,16 +61,12 @@ impl<__S: stdlib::ReadStorage + 'static> AgreementModel<__S> {
     }
     pub fn challenge(&self) -> Option<u64> {
         let base_path = self.base_path.push_interned(1u8);
-        if stdlib::ReadStorage::__extend_path_with_match(
-                &self.ctx,
-                &base_path,
-                &[stdlib::string_element("none")],
-            )
-            .is_some()
-        {
-            None
-        } else {
-            stdlib::ReadStorage::__get(&self.ctx, base_path.push("some"))
+        match stdlib::ReadStorage::__get_u64(&self.ctx, &base_path) {
+            None | Some(0) => None,
+            Some(1) => stdlib::ReadStorage::__get(&self.ctx, base_path.push("some")),
+            _ => {
+                ::core::panicking::panic_fmt(format_args!("Invalid Option storage tag"));
+            }
         }
     }
     pub fn load(&self) -> Agreement {
@@ -116,16 +112,12 @@ impl<
     }
     pub fn challenge(&self) -> Option<u64> {
         let base_path = self.base_path.push_interned(1u8);
-        if stdlib::ReadStorage::__extend_path_with_match(
-                &self.ctx,
-                &base_path,
-                &[stdlib::string_element("none")],
-            )
-            .is_some()
-        {
-            None
-        } else {
-            stdlib::ReadStorage::__get(&self.ctx, base_path.push("some"))
+        match stdlib::ReadStorage::__get_u64(&self.ctx, &base_path) {
+            None | Some(0) => None,
+            Some(1) => stdlib::ReadStorage::__get(&self.ctx, base_path.push("some")),
+            _ => {
+                ::core::panicking::panic_fmt(format_args!("Invalid Option storage tag"));
+            }
         }
     }
     pub fn set_active(&self, value: bool) {

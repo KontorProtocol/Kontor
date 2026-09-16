@@ -42,17 +42,13 @@ pub fn generate_enum_body(data_enum: &DataEnum, type_name: &Ident) -> Result<Tok
     // `model::generate_enum` reads, so a write and its later read resolve to the
     // same variant (can't drift).
     let numbered = utils::numbered_variants(data_enum, type_name.span())?;
-    let variant_candidates = numbered
-        .iter()
-        .map(|&(id, _)| quote! { stdlib::interned_element(#id) })
-        .collect::<Vec<_>>();
     let arms = numbered.iter().map(|&(variant_id, variant)| {
         let variant_ident = &variant.ident;
 
         match &variant.fields {
             Fields::Unit => {
                 Ok(quote! {
-                    #type_name::#variant_ident => stdlib::WriteStorage::__set(ctx, base_path.push_interned(#variant_id), ()),
+                    #type_name::#variant_ident => stdlib::WriteStorage::__set_u64(ctx, &base_path, u64::from(#variant_id)),
                 })
             }
             Fields::Unnamed(fields) if fields.unnamed.len() == 1 => {
@@ -61,7 +57,10 @@ pub fn generate_enum_body(data_enum: &DataEnum, type_name: &Ident) -> Result<Tok
                     Err(Error::new(variant_ident.span(), "Store derive does not support Result type in Enums"))
                 } else {
                     Ok(quote! {
-                        #type_name::#variant_ident(inner) => stdlib::WriteStorage::__set(ctx, base_path.push_interned(#variant_id), inner),
+                        #type_name::#variant_ident(inner) => {
+                            stdlib::WriteStorage::__set_u64(ctx, &base_path, u64::from(#variant_id));
+                            stdlib::WriteStorage::__set(ctx, base_path.push_interned(#variant_id), inner);
+                        },
                     })
                 }
             }
@@ -73,7 +72,7 @@ pub fn generate_enum_body(data_enum: &DataEnum, type_name: &Ident) -> Result<Tok
     }).collect::<Result<Vec<_>>>()?;
 
     Ok(quote! {
-        stdlib::WriteStorage::__delete_matching_paths(ctx, &base_path, &[#(#variant_candidates),*]);
+        stdlib::WriteStorage::__delete(ctx, &base_path);
         match value {
             #(#arms)*
         }

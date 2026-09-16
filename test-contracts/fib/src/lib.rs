@@ -17,6 +17,22 @@ enum Step {
     Value(u64),
 }
 
+#[derive(Clone, Default, Storage)]
+struct Empty {}
+
+#[derive(Clone, Default, Storage)]
+struct Rows {
+    pub entries: Map<u64, u64>,
+}
+
+#[derive(Clone, Default, Storage)]
+enum Choice {
+    #[default]
+    Absent,
+    Empty(Empty),
+    Rows(Rows),
+}
+
 #[derive(Clone, Default, StorageRoot)]
 struct FibStorage {
     pub cache: Map<u64, FibValue>,
@@ -25,6 +41,9 @@ struct FibStorage {
     pub steps: Deque<Step>,
     // Enum-valued Map (no indexes) — exercises a non-primitive enum Map value.
     pub step_map: Map<u64, Step>,
+    pub choice: Choice,
+    pub optional: Option<Empty>,
+    pub optional_value: Option<u64>,
 }
 
 impl Fib {
@@ -60,6 +79,7 @@ impl Guest for Fib {
             history: Deque::default(),
             steps: Deque::default(),
             step_map: Map::default(),
+            ..FibStorage::default()
         }
         .init(ctx);
 
@@ -118,6 +138,44 @@ impl Guest for Fib {
     ) -> Result<u64, Error> {
         let n = arith::checked_sub(&arith_address, &x, &y)?;
         Ok(Self::fib(ctx, arith_address, n))
+    }
+
+    fn set_variant(ctx: &ProcContext, kind: u64, count: u64, fail: bool) {
+        let choice = match kind {
+            0 => Choice::Absent,
+            1 => Choice::Empty(Empty {}),
+            2 => Choice::Rows(Rows {
+                entries: Map::new(&(0..count).map(|i| (i, i)).collect::<Vec<_>>()),
+            }),
+            _ => panic!("unknown variant"),
+        };
+        ctx.model().set_choice(choice);
+        ctx.model()
+            .set_optional(if kind == 0 { None } else { Some(Empty {}) });
+        ctx.model()
+            .set_optional_value(if kind == 0 { None } else { Some(count) });
+        assert!(!fail, "abort variant replacement");
+    }
+
+    fn variant_state(ctx: &ViewContext) -> Vec<u64> {
+        let kind = match ctx.model().choice() {
+            ChoiceModel::Absent => 0,
+            ChoiceModel::Empty(_) => 1,
+            ChoiceModel::Rows(_) => 2,
+            ChoiceModel::__Phantom(_, impossible) => match impossible {},
+        };
+        [
+            kind,
+            u64::from(ctx.model().optional().is_some()),
+            ctx.model().optional_value().unwrap_or(u64::MAX),
+        ]
+        .to_vec()
+    }
+
+    fn mutate_variant(ctx: &ProcContext, key: u64) {
+        if let ChoiceWriteModel::Rows(rows) = ctx.model().choice() {
+            rows.entries().set(&key, key);
+        }
     }
 
     fn cached_values(ctx: &ViewContext) -> Vec<u64> {

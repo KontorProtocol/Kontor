@@ -74,6 +74,7 @@ async fn seed(conn: &Connection, versions: u64, keys: u64) -> Result<()> {
         tip = versions + 1
     ))
     .await?;
+    conn.execute("INSERT INTO contract_state (contract_id,height,path,size,value,deleted) VALUES (1, ?, ?, ?, ?, 0)", params![versions + 1, path("history-variant", None), serialize(&1u64)?.len() as u64, serialize(&1u64)?]).await?;
     Ok(())
 }
 
@@ -131,7 +132,7 @@ async fn print_plans(conn: &Connection, versions: u64) -> Result<()> {
         ),
         (
             "variant",
-            "SELECT path, deleted FROM contract_state WHERE contract_id=1 AND path >= ?1 AND path < ?2 ORDER BY height DESC, rowid DESC LIMIT 1",
+            "SELECT height, size FROM current_contract_state WHERE contract_id=1 AND path = ?1 AND path < ?2",
         ),
     ] {
         let mut rows = conn
@@ -184,11 +185,10 @@ async fn call(
         ),
         Operation::Variant => json!(
             host(store, async |accessor| {
-                <Runtime as StorageHost<Runtime>>::extend_path_with_match(
+                <Runtime as StorageHost<Runtime>>::get_u64(
                     accessor,
                     Resource::new_borrow(rep),
                     path(root, None),
-                    vec!["none".to_string().encode(), "some".to_string().encode()],
                 )
                 .await
             })
@@ -422,6 +422,9 @@ async fn current_state_host_results_and_fuel_are_independent_of_pruning() -> Res
                 actual.push((value, fuel));
             }
         }
+        let variant = call(&mut store, rep, "history-variant", Operation::Variant).await?;
+        ensure!(variant.0 == json!(1));
+        actual.push(variant);
         if pruned {
             ensure!(
                 actual == expected,

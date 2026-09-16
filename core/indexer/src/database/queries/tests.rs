@@ -72,13 +72,6 @@ fn cs_path_dotted(path: &str) -> Vec<u8> {
     cs_path(&path.split('.').collect::<Vec<_>>())
 }
 
-/// Candidate discriminant elements for `matching_path`/`find_matching_paths`,
-/// from string variant names — these host tests use string-element discriminants
-/// (the byte-compare is encoding-agnostic, so a string element is a fine stand-in).
-fn cands(names: &[&str]) -> Vec<Vec<u8>> {
-    names.iter().map(|n| stdlib::string_element(n)).collect()
-}
-
 #[tokio::test]
 async fn point_read_preserves_latest_version_and_tombstones() -> Result<()> {
     let (_reader, writer, _temp) = new_test_db().await?;
@@ -216,58 +209,6 @@ async fn point_read_pins_snapshot_between_metadata_and_value() -> Result<()> {
     assert_eq!(
         get_latest_contract_state_value(&view, 16, 1, &path).await?,
         Some(vec![2; 16])
-    );
-    Ok(())
-}
-
-#[tokio::test]
-async fn variant_lookup_reads_only_metadata() -> Result<()> {
-    let (_reader, writer, _temp) = new_test_db().await?;
-    let conn = writer.connection();
-    insert_block(
-        &conn,
-        BlockRow::builder()
-            .height(1)
-            .hash(new_mock_block_hash(1))
-            .build(),
-    )
-    .await?;
-    let base = cs_path(&["variant"]);
-    for variant in ["old", "new"] {
-        insert_contract_state(
-            &conn,
-            ContractStateRow::builder()
-                .contract_id(1)
-                .height(1)
-                .path(cs_path(&["variant", variant]))
-                .value(vec![7; 65536])
-                .build(),
-        )
-        .await?;
-    }
-    conn.authorizer(Some(Arc::new(|context| match context.action {
-        AuthAction::Read {
-            table_name: "contract_state",
-            column_name: "value",
-        } => Authorization::Deny,
-        _ => Authorization::Allow,
-    })))?;
-    let result = matching_path(&conn, 1, &base, &cands(&["old", "new"])).await;
-    conn.authorizer(None)?;
-    assert_eq!(result?, Some(1), "latest rowid breaks same-height ties");
-    insert_contract_state(
-        &conn,
-        ContractStateRow::builder()
-            .contract_id(1)
-            .height(1)
-            .path(cs_path(&["variant", "new"]))
-            .deleted(true)
-            .build(),
-    )
-    .await?;
-    assert_eq!(
-        matching_path(&conn, 1, &base, &cands(&["old", "new"])).await?,
-        None
     );
     Ok(())
 }
@@ -777,14 +718,6 @@ async fn test_contract_state_operations() -> Result<()> {
     // check existence
     assert!(contract_has_state(&conn, contract_id).await?);
     assert!(exists_contract_state(&conn, contract_id, &base).await?);
-
-    // "path" is candidate index 0.
-    assert_eq!(
-        matching_path(&conn, contract_id, &base, &cands(&["path", "foo", "bar"]))
-            .await?
-            .unwrap(),
-        0
-    );
 
     // Get latest contract state
     let retrieved_state = get_latest_contract_state(&conn, contract_id, &path).await?;
@@ -1877,20 +1810,14 @@ async fn test_map_keys() -> Result<()> {
     assert_eq!(paths[2], cs_path(&["key2"]));
 
     // The read half returns the rows the delete will remove (for metering)…
-    let rows: Vec<_> = find_matching_paths(
-        &conn,
-        contract_id,
-        height,
-        &cs_path_dotted("test.path"),
-        &cands(&["key0"]),
-    )
-    .await?
-    .try_collect()
-    .await?;
+    let rows: Vec<_> = find_live_subtree(&conn, contract_id, &cs_path_dotted("test.path.key0"))
+        .await?
+        .try_collect()
+        .await?;
     assert_eq!(rows.len(), 2);
     // …and the write half removes exactly those rows.
-    let deleted = hard_delete_rows(&conn, contract_id, height, &rows).await?;
-    assert_eq!(deleted, 2);
+    let deleted = tombstone_rows(&conn, contract_id, height, None, &rows).await?;
+    assert!(deleted.0);
 
     Ok(())
 }
@@ -2139,8 +2066,6 @@ async fn test_empty_path_is_whole_keyspace_not_panic() -> Result<()> {
             .try_collect()
             .await?;
     assert_eq!(top, vec![cs_path(&["m"])]);
-    // `matching_path` at the root must not panic.
-    let _ = matching_path(&conn, cid, &[], &cands(&["none", "some"])).await?;
     // Deleting the empty subtree tombstones the whole keyspace.
     assert!(
         delete_contract_state(&conn, height + 1, Some(tx), cid, &[])
@@ -2219,259 +2144,9 @@ async fn test_exists_with_tombstone_as_latest_row() -> Result<()> {
     Ok(())
 }
 
-// `matching_path` resolves an enum's live variant. After a re-set (old variant
-// tombstoned, new variant written at the same height), it must return the NEW
-// variant — the per-path ranking must not let the old tombstone win.
-#[tokio::test]
-async fn test_matching_path_after_enum_reset() -> Result<()> {
-    let (_reader, writer, _temp_dir) = new_test_db().await?;
-    let conn = writer.connection();
-    let cid = 123;
-
-    let mut txs = Vec::new();
-    for (i, height) in [800000u64, 800001].into_iter().enumerate() {
-        insert_block(
-            &conn,
-            BlockRow::builder()
-                .height(height)
-                .hash(new_mock_block_hash(height as u32))
-                .build(),
-        )
-        .await?;
-        txs.push(
-            insert_transaction(
-                &conn,
-                TransactionRow::builder()
-                    .height(height)
-                    .txid(format!("dddd{:060}", i))
-                    .tx_index(0)
-                    .confirmed_height(height)
-                    .build(),
-            )
-            .await?,
-        );
-    }
-
-    // H1: status = active.
-    insert_contract_state(
-        &conn,
-        ContractStateRow::builder()
-            .contract_id(cid)
-            .tx_id(txs[0])
-            .height(800000)
-            .path(cs_path_dotted("c.status.active"))
-            .value(vec![])
-            .build(),
-    )
-    .await?;
-    // H2: re-set to proven — tombstone `active`, write `proven` (same height).
-    delete_contract_state(
-        &conn,
-        800001,
-        Some(txs[1]),
-        cid,
-        &cs_path_dotted("c.status.active"),
-    )
-    .await?;
-    insert_contract_state(
-        &conn,
-        ContractStateRow::builder()
-            .contract_id(cid)
-            .tx_id(txs[1])
-            .height(800001)
-            .path(cs_path_dotted("c.status.proven"))
-            .value(vec![])
-            .build(),
-    )
-    .await?;
-
-    let found = matching_path(
-        &conn,
-        cid,
-        &cs_path_dotted("c.status"),
-        &cands(&["active", "proven"]),
-    )
-    .await?;
-    assert_eq!(found, Some(1)); // "proven" is candidate index 1
-
-    Ok(())
-}
-
-// `matching_path` must return the NEWEST live variant when a stale one lingers
-// live at a lower height (an old variant whose tombstone never landed). This is
-// the `Op` enum case — `id` written earlier, `sum` later, both live — where the
-// resolver must pick `sum`, not arbitrarily `id`.
-#[tokio::test]
-async fn test_matching_path_newest_of_multiple_live() -> Result<()> {
-    let (_reader, writer, _temp_dir) = new_test_db().await?;
-    let conn = writer.connection();
-    let cid = 123;
-
-    let mut txs = Vec::new();
-    for (i, height) in [800000u64, 800001].into_iter().enumerate() {
-        insert_block(
-            &conn,
-            BlockRow::builder()
-                .height(height)
-                .hash(new_mock_block_hash(height as u32))
-                .build(),
-        )
-        .await?;
-        txs.push(
-            insert_transaction(
-                &conn,
-                TransactionRow::builder()
-                    .height(height)
-                    .txid(format!("eeee{:060}", i))
-                    .tx_index(0)
-                    .confirmed_height(height)
-                    .build(),
-            )
-            .await?,
-        );
-    }
-
-    // Old variant `id` at H1, new variant `sum` at H2 — both live.
-    for (tx, height, path) in [
-        (txs[0], 800000u64, "c.op.id"),
-        (txs[1], 800001, "c.op.sum.y"),
-    ] {
-        insert_contract_state(
-            &conn,
-            ContractStateRow::builder()
-                .contract_id(cid)
-                .tx_id(tx)
-                .height(height)
-                .path(cs_path_dotted(path))
-                .value(vec![1])
-                .build(),
-        )
-        .await?;
-    }
-
-    let found = matching_path(&conn, cid, &cs_path_dotted("c.op"), &cands(&["id", "sum"])).await?;
-    assert_eq!(found, Some(1)); // "sum" is candidate index 1
-
-    Ok(())
-}
-
-// The `Option` resolver asks only "does `<field>.none` exist?". A stale `none`
-// lingering live at a lower height (from an earlier value) must be outranked by
-// the newer `some` write, so the none-check finds nothing → the field reads as
-// Some. (Regression: a per-path resolver would have surfaced the stale `none`.)
-#[tokio::test]
-async fn test_matching_path_stale_none_outranked_by_some() -> Result<()> {
-    let (_reader, writer, _temp_dir) = new_test_db().await?;
-    let conn = writer.connection();
-    let cid = 123;
-
-    let mut txs = Vec::new();
-    for (i, height) in [800000u64, 800001].into_iter().enumerate() {
-        insert_block(
-            &conn,
-            BlockRow::builder()
-                .height(height)
-                .hash(new_mock_block_hash(height as u32))
-                .build(),
-        )
-        .await?;
-        txs.push(
-            insert_transaction(
-                &conn,
-                TransactionRow::builder()
-                    .height(height)
-                    .txid(format!("ffff{:060}", i))
-                    .tx_index(0)
-                    .confirmed_height(height)
-                    .build(),
-            )
-            .await?,
-        );
-    }
-
-    // Stale `none` at H1, then a `some` value at H2 — both live.
-    for (tx, height, path) in [
-        (txs[0], 800000u64, "c.opt.none"),
-        (txs[1], 800001, "c.opt.some"),
-    ] {
-        insert_contract_state(
-            &conn,
-            ContractStateRow::builder()
-                .contract_id(cid)
-                .tx_id(tx)
-                .height(height)
-                .path(cs_path_dotted(path))
-                .value(vec![1])
-                .build(),
-        )
-        .await?;
-    }
-
-    // The none-check (only `none` in the alternation) must NOT match the newer
-    // `some`, so it returns None and the field resolves to Some.
-    let found = matching_path(&conn, cid, &cs_path_dotted("c.opt"), &cands(&["none"])).await?;
-    assert_eq!(found, None);
-
-    Ok(())
-}
-
-// Regression: the newest live row under `base_path` can be `base_path` ITSELF — a
-// value stored at the path with no variant segment after it. `matching_path` must
-// report no match (Ok(None)), not a codec error from decoding the empty suffix.
-#[tokio::test]
-async fn test_matching_path_on_bare_base_row() -> Result<()> {
-    let (_reader, writer, _temp_dir) = new_test_db().await?;
-    let conn = writer.connection();
-    let cid = 123;
-    let height = 800000;
-    insert_block(
-        &conn,
-        BlockRow::builder()
-            .height(height)
-            .hash(new_mock_block_hash(height as u32))
-            .build(),
-    )
-    .await?;
-    let tx = insert_transaction(
-        &conn,
-        TransactionRow::builder()
-            .height(height)
-            .txid(format!("eeee{:060}", 0))
-            .tx_index(0)
-            .confirmed_height(height)
-            .build(),
-    )
-    .await?;
-
-    // A value stored AT `c.opt` exactly — no variant child under it.
-    insert_contract_state(
-        &conn,
-        ContractStateRow::builder()
-            .contract_id(cid)
-            .tx_id(tx)
-            .height(height)
-            .path(cs_path_dotted("c.opt"))
-            .value(vec![1])
-            .build(),
-    )
-    .await?;
-
-    // No variant segment after base_path → no match, and crucially no error.
-    let found = matching_path(
-        &conn,
-        cid,
-        &cs_path_dotted("c.opt"),
-        &cands(&["none", "some"]),
-    )
-    .await?;
-    assert_eq!(found, None);
-
-    Ok(())
-}
-
 // Fuzz the contract_state query layer: ARBITRARY guest path bytes (empty,
 // malformed, all-0xFF, base-equal, random) must never panic any of exists / keys /
-// matching / delete — the class behind the three boundary bugs (empty subtree
+// delete — the class behind the three boundary bugs (empty subtree
 // bound, malformed parse, bare-base suffix). The host ALSO rejects malformed paths
 // at ingress (`validate_path`); this guards the query layer directly so a future
 // caller can't reintroduce a panic.
@@ -2529,7 +2204,6 @@ mod proptest_paths {
                 let cid = 1;
                 // None of these may panic on arbitrary `path` bytes.
                 let _ = exists_contract_state(&conn, cid, &path).await;
-                let _ = matching_path(&conn, cid, &path, &cands(&["none", "some"])).await;
                 if let Ok(stream) =
                     path_prefix_filter_contract_state(&conn, cid, path.clone(), None, None, false)
                         .await

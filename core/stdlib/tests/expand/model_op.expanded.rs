@@ -17,33 +17,24 @@ pub enum OpModel<__S> {
 pub type __OpModelFor<__S> = OpModel<__S>;
 impl<__S: stdlib::ReadStorage + 'static> OpModel<__S> {
     pub fn new(ctx: alloc::rc::Rc<__S>, base_path: stdlib::KeyPath) -> Self {
-        stdlib::ReadStorage::__extend_path_with_match(
-                &ctx,
-                &base_path,
-                &[
-                    stdlib::interned_element(0u8),
-                    stdlib::interned_element(1u8),
-                    stdlib::interned_element(2u8),
-                    stdlib::interned_element(3u8),
-                ],
-            )
+        stdlib::ReadStorage::__get_u64(&ctx, &base_path)
             .map(|__idx| match __idx {
-                0u32 => OpModel::Id,
-                1u32 => {
+                0u64 => OpModel::Id,
+                1u64 => {
                     OpModel::Sum(
                         __OperandModelFor::<
                             __S,
                         >::new(ctx.clone(), base_path.push_interned(1u8)),
                     )
                 }
-                2u32 => {
+                2u64 => {
                     OpModel::Mul(
                         __OperandModelFor::<
                             __S,
                         >::new(ctx.clone(), base_path.push_interned(2u8)),
                     )
                 }
-                3u32 => {
+                3u64 => {
                     OpModel::Div(
                         __OperandModelFor::<
                             __S,
@@ -52,7 +43,7 @@ impl<__S: stdlib::ReadStorage + 'static> OpModel<__S> {
                 }
                 _ => {
                     ::core::panicking::panic_fmt(
-                        format_args!("Matching path not found"),
+                        format_args!("Invalid enum storage tag"),
                     );
                 }
             })
@@ -92,33 +83,24 @@ impl<
     __S: stdlib::ReadStorage + stdlib::WriteStorage + stdlib::HasViewStorage + 'static,
 > OpWriteModel<__S> {
     pub fn new(ctx: alloc::rc::Rc<__S>, base_path: stdlib::KeyPath) -> Self {
-        stdlib::ReadStorage::__extend_path_with_match(
-                &ctx,
-                &base_path,
-                &[
-                    stdlib::interned_element(0u8),
-                    stdlib::interned_element(1u8),
-                    stdlib::interned_element(2u8),
-                    stdlib::interned_element(3u8),
-                ],
-            )
+        stdlib::ReadStorage::__get_u64(&ctx, &base_path)
             .map(|__idx| match __idx {
-                0u32 => OpWriteModel::Id,
-                1u32 => {
+                0u64 => OpWriteModel::Id,
+                1u64 => {
                     OpWriteModel::Sum(
                         __OperandWriteModelFor::<
                             __S,
                         >::new(ctx.clone(), base_path.push_interned(1u8)),
                     )
                 }
-                2u32 => {
+                2u64 => {
                     OpWriteModel::Mul(
                         __OperandWriteModelFor::<
                             __S,
                         >::new(ctx.clone(), base_path.push_interned(2u8)),
                     )
                 }
-                3u32 => {
+                3u64 => {
                     OpWriteModel::Div(
                         __OperandWriteModelFor::<
                             __S,
@@ -127,7 +109,7 @@ impl<
                 }
                 _ => {
                     ::core::panicking::panic_fmt(
-                        format_args!("Matching path not found"),
+                        format_args!("Invalid enum storage tag"),
                     );
                 }
             })

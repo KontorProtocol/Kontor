@@ -20,9 +20,9 @@ entries to their deposit attribution without copying values.
 Archive and pruned nodes visit the same live entries and charge identical fuel.
 This removes traversal of obsolete versions and historical deleted keys, not
 all physical cost variation from database size, caching, or compaction. Existing
-nested-record key deduplication and bounds remain in place. Fuel rules and the
-contract ABI are unchanged; eventual calibration must include index maintenance
-in write costs.
+nested-record key deduplication and bounds remain in place. Existing metered
+scalar and deletion operations also cover enum/Option tags; eventual calibration
+must include index maintenance in write costs.
 
 ## Maintenance and failure boundaries
 
@@ -41,11 +41,10 @@ Reorgs use `rollback_to_height`, which:
 A nested savepoint makes all three steps atomic, even for direct query callers.
 Discovery and history deletion scale with removed versions; restoration scales
 with distinct affected keys. No full-state rebuild occurs during a reorg.
-Same-height variant cleanup explicitly removes its affected pointers and restores
-surviving versions through the same repair query. Finalized-history pruning
-cannot remove a pointed-to live version, so it needs no pointer maintenance.
+Finalized-history pruning cannot remove a pointed-to live version, so it needs
+no pointer maintenance.
 
-Block rollback and hard deletion must use these query helpers. Raw SQL deletion
+Block rollback must use this query helper. Raw SQL deletion
 of history or blocks bypasses repair. Inserts are covered by the trigger, including
 native initialization and tooling. The current table follows the history table's
 contract lifetime: history has no contract foreign key; removing a contract row
@@ -60,14 +59,36 @@ rolls back its table and trigger along with the backfill. Normal SQL crash recov
 keeps committed history and its index together. This has transaction-failure and
 reopen coverage, not process-kill/power-loss fault injection.
 
-## Deliberate remaining history reads
+## Enum and Option layout
 
-Enum/option discrimination (`matching_path`) selects the newest write across an
-entire subtree, including tombstones, with insertion order breaking height ties.
-A live-only index cannot preserve that rule. This operation remains unchanged and
-can still have history-dependent work; replacing it requires separate language/
-runtime design and regression coverage. The pointer index does not claim to make
-that operation history-independent.
+Enums store their declaration-order variant id as a scalar `u64` at the enum
+root. Payloads stay beneath their existing interned variant child. Options store
+`0` (None) or `1` (Some) at their root, with Some's payload beneath `some`.
+Unit variants and empty payloads need only a root tag. Reading a variant performs
+one ordinary metered scalar lookup, regardless of payload size or retained history.
+Missing Option tags read as None; invalid tags trap deterministically.
+
+Replacement tombstones the entire old live subtree before storing the tag and
+payload. This removes prior-block payloads as well as same-block ones, releasing
+their storage floor and charging for their deletion. Payload writes do not change
+the tag. Normal call rollback and block rollback restore tags, payloads, pointers,
+and deposit attribution together. There is no special hard-delete/revival path.
+
+Path-based tags are also viable with full replacement cleanup, a first-live-child
+lookup, and markers for empty payloads. The root scalar was chosen to reuse the
+existing scalar host API and give all payload shapes one representation.
+
+The tradeoff is one additional small row for payload-bearing variants/Some, and
+real deletion work when replacing large payloads. Reads no longer infer variant
+selection from whichever descendant happened to be written last. This also
+represents Some(empty record) and enums with empty-record payloads unambiguously.
+
+This is an incompatible guest ABI and stored-layout change: the variant-matching
+host imports are removed. Deploy rebuilt contracts with fresh pre-production
+state; the pointer backfill alone cannot migrate old variant layouts. No legacy
+reader or dual encoding is retained.
+
+## Remaining history reads
 
 Footprint reconstruction, affected-depositor discovery, and transaction-history
 APIs still use history. Contract storage-floor checks already use the eager
@@ -78,19 +99,26 @@ write, read, and incremental rollback tradeoffs motivating this layout.
 
 ## Validation
 
-The indexer release library suite passed: 552 tests, 12 ignored. This includes
-multi-node checkpoint/reorg/restart scenarios, native-contract accounting, exact
-fuel boundaries, and reader snapshots during concurrent replacement. New tests
-compare the index against an independent window-query oracle, exercise upgrade
-and reopening, injected failure during reorg repair, SQL abort, pruning, replay,
-and VACUUM. An authorizer denies all history reads during key discovery and
-unaffordable value reads; a host-level test verifies result/fuel parity before
-and after pruning. A query-plan check ensures repair drives history seeks from
-the affected-key set. Clippy with warnings denied, formatting, and diff checks
-passed.
+Tests compare the pointer index against an independent window-query oracle and
+exercise upgrades, reopening, injected reorg-repair failure, SQL abort, pruning,
+replay, and VACUUM. An authorizer denies history reads during key discovery and
+unaffordable value reads. Host tests verify result/fuel parity across pruning and
+exact deletion-budget boundaries, including deposit release and rollback. A
+query-plan check ensures repair drives history seeks from the affected-key set.
 
-The initial full-suite attempt was stopped because sandboxed cluster listeners
-could not bind localhost. The successful full suite ran with local networking
-available. An existing 130-key fuel-boundary test caught a prepared-statement
-reuse error in the first hard-delete repair implementation; batched key capture
-fixed it and the same test passes in the full run.
+Compiled-contract coverage exercises unit, scalar, collection, and empty-record
+variants; None/Some transitions; cross-block replacement and payload edits;
+failed-call rollback; reorg; and pruning. Variant reads are checked for fixed
+scalar-read counts and equal fuel after payload growth and history pruning.
+
+Validation on 2026-09-16: 546 release library tests and 124 contract integration
+tests passed, along with stdlib/macro tests and 158 SDK tests. Clippy with warnings
+denied and formatting passed. `./tools/kontor build --check` reproduced all native
+contracts, test contracts, and SDK outputs byte-for-byte.
+
+The production history benchmark (`benchmark_storage_history`, release mode)
+measured a 100-field variant at 1, 10, 100, and 1,000 retained payload versions.
+Tag reads charged 230 host fuel in every archive/pruned case. Archive timings were
+13.6, 5.7, 5.8, and 5.9 microseconds respectively; pruned timings were 5.7–6.4
+microseconds. These are local timings, not a calibrated fuel schedule. The
+benchmark asserts result, fuel, and checkpoint preservation through pruning.

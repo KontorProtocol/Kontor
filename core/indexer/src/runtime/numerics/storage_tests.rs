@@ -242,7 +242,6 @@ async fn scalar_numbers_preserve_indexes_deposits_and_rollback() -> Result<()> {
         stats[&FuelDiscriminants::Get].consumed_fuel,
         3 * Fuel::Get(payload.len()).cost()
     );
-    assert!(!stats.contains_key(&FuelDiscriminants::ExtendPathWithMatch));
 
     let zero_path = KeyPath::new().push_interned(2).push_element(&0u64);
     let positive_zero = runtime
