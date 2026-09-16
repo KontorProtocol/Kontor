@@ -43,8 +43,8 @@ pub(super) const RESTORE_AFFECTED_KEYS: &str = "INSERT INTO current_contract_sta
          ) WHERE s.deleted = 0
          ON CONFLICT (contract_id, path) DO UPDATE SET height = excluded.height, size = excluded.size";
 
-// The height cascade (reorg) or exact-key delete (variant cleanup) removes
-// displaced pointers first. Pick the newest survivor BEFORE testing liveness.
+// The block-height cascade removes discarded pointers first. Pick the newest
+// surviving history version before testing liveness, so tombstones stay absent.
 pub(super) async fn restore_affected_keys(conn: &Connection) -> Result<(), Error> {
     conn.execute(RESTORE_AFFECTED_KEYS, ()).await?;
     conn.execute("DELETE FROM affected_state_keys", ()).await?;
