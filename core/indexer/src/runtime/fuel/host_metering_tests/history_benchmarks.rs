@@ -17,6 +17,7 @@ use crate::test_utils::test_runtime;
 const KEYS: u64 = 100;
 const LIMIT: usize = 20;
 
+mod current_state_benchmarks;
 mod seek_prototype;
 
 fn path(root: &str, key: Option<u64>) -> Vec<u8> {
@@ -28,6 +29,16 @@ fn path(root: &str, key: Option<u64>) -> Vec<u8> {
 }
 
 async fn seed(conn: &Connection, versions: u64, keys: u64) -> Result<()> {
+    seed_sized(conn, versions, keys, 32, false).await
+}
+
+async fn seed_sized(
+    conn: &Connection,
+    versions: u64,
+    keys: u64,
+    bytes: usize,
+    empty_tombstones: bool,
+) -> Result<()> {
     conn.execute_batch("BEGIN; CREATE TEMP TABLE history_paths (path BLOB PRIMARY KEY, removed INTEGER); CREATE TEMP TABLE history_versions (height INTEGER PRIMARY KEY, value BLOB);").await?;
     let paths = conn
         .prepare("INSERT INTO history_paths VALUES (?, ?)")
@@ -54,7 +65,7 @@ async fn seed(conn: &Connection, versions: u64, keys: u64) -> Result<()> {
         .prepare("INSERT INTO history_versions VALUES (?, ?)")
         .await?;
     for height in 2..=versions + 1 {
-        let mut value = vec![42u8; 32];
+        let mut value = vec![42u8; bytes];
         value[..8].copy_from_slice(&height.to_be_bytes());
         heights.execute(params![height, serialize(&value)?]).await?;
         heights.reset();
@@ -63,14 +74,18 @@ async fn seed(conn: &Connection, versions: u64, keys: u64) -> Result<()> {
         r#"
         INSERT INTO blocks SELECT height, printf('%064x', height), 1 FROM history_versions;
         INSERT INTO contract_state (contract_id,height,size,path,value,deleted)
-        SELECT 1, h.height, length(h.value), p.path, h.value,
-            h.height = {} AND p.removed
+        SELECT 1, h.height,
+            CASE WHEN {empty_tombstones} AND h.height = {tip} AND p.removed THEN 0 ELSE length(h.value) END,
+            p.path,
+            CASE WHEN {empty_tombstones} AND h.height = {tip} AND p.removed THEN zeroblob(0) ELSE h.value END,
+            h.height = {tip} AND p.removed
         FROM history_versions h CROSS JOIN history_paths p ORDER BY h.height, p.path;
         DROP TABLE history_paths;
         DROP TABLE history_versions;
         COMMIT;
     "#,
-        versions + 1
+        tip = versions + 1,
+        empty_tombstones = u8::from(empty_tombstones)
     ))
     .await?;
     Ok(())

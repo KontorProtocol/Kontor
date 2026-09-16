@@ -3,6 +3,10 @@
 Baseline: main `83db3333` (#574). This investigation measures the current storage
 host calls before proposing changes to their SQL or fuel schedule.
 
+The subsequent [current-state comparison](current-state-comparison.md) measures
+maintained live-state tables against the seek cursor, including incremental
+rollback, writes, storage overhead, and copied-value layout alternatives.
+
 ## Reproduction
 
 ```sh
