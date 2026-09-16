@@ -22,13 +22,22 @@ pub struct PageOptions {
     pub cursor: Option<u64>,
     pub offset: Option<u64>,
     pub limit: Option<u32>,
+    pub count: bool,
+}
+
+pub struct PageSource<'a> {
+    pub alias: &'a str,
+    pub columns: &'a str,
+    pub from: &'a str,
+    // One flag governs deduplication of both the page and its count.
+    pub distinct: bool,
+    // These joins must preserve row cardinality and cannot be used by filters.
+    pub select_joins: &'a str,
 }
 
 pub async fn get_paginated<T>(
     conn: &Connection,
-    var: &str,
-    selects: &str,
-    from: &str,
+    source: PageSource<'_>,
     mut where_clauses: Vec<String>,
     mut params: Vec<(String, Value)>,
     page: PageOptions,
@@ -36,11 +45,19 @@ pub async fn get_paginated<T>(
 where
     T: DeserializeOwned + HasRowId,
 {
+    let PageSource {
+        alias: var,
+        columns,
+        from,
+        distinct,
+        select_joins,
+    } = source;
     let PageOptions {
         order,
         cursor,
         offset,
         limit,
+        count,
     } = page;
     let offset = if cursor.is_some() { None } else { offset };
     let limit = clamp_limit(limit);
@@ -62,21 +79,24 @@ where
         format!("WHERE {}", where_clauses.join(" AND "))
     };
 
-    // SQLite COUNT(...) is i64-shaped; the value is the count of distinct
-    // rowids and can't actually be negative, but we still read into i64
-    // and cast — propagating any libsql decode error via `?` rather than
-    // swallowing it.
-    let total_count = match conn
-        .query(
-            &format!("SELECT COUNT(DISTINCT {var}.{id_name}) FROM {from} {where_sql}"),
-            params.clone(),
-        )
-        .await?
-        .next()
-        .await?
-    {
-        Some(row) => row.get::<i64>(0)? as u64,
-        None => 0,
+    let total_count = if count {
+        let expression = if distinct {
+            format!("DISTINCT {var}.{id_name}")
+        } else {
+            "*".to_string()
+        };
+        let mut rows = conn
+            .query(
+                &format!("SELECT COUNT({expression}) FROM {from} {where_sql}"),
+                params.clone(),
+            )
+            .await?;
+        Some(match rows.next().await? {
+            Some(row) => row.get::<u64>(0)?,
+            None => 0,
+        })
+    } else {
+        None
     };
 
     let mut offset_clause = "";
@@ -87,12 +107,13 @@ where
 
     params.push((":limit".to_string(), Value::Integer(i64::from(limit) + 1)));
 
+    let distinct = if distinct { "DISTINCT " } else { "" };
     let mut rows = conn
         .query(
             &format!(
                 r#"
-                SELECT {selects}
-                FROM {from}
+                SELECT {distinct}{columns}
+                FROM {from} {select_joins}
                 {where_sql}
                 ORDER BY {var}.{id_name} {order}
                 LIMIT :limit

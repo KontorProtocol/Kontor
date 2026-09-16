@@ -48,6 +48,11 @@ scans continue to share the budget-checked prepared SQL reader described in
 
 ## Follow-ups
 
+Pagination counts and targeted indexes are implemented in the follow-up described
+in [Optional pagination counts and measured query indexes](pagination-query-indexes.md).
+The observations below record the starting behavior for that work; internal SQLite
+work accounting remains open.
+
 1. **Page limits do not bound exact-count work.** `get_paginated` runs
    `COUNT(DISTINCT ...)` over all matching rows before returning a limited page.
    Cursor predicates reduce the count to the remaining matches, but large histories
@@ -86,7 +91,7 @@ Checked latest-version and tombstone ordering, contract isolation, exact byte
 budgets, same-height replacement, snapshot pinning, rollback cascades, deposit
 liveness, execution-usage lifetime, batch-body retention, and cursor continuation.
 The new retained-body regression exercises database resolution with real witness
-variants; it is not a multi-node consensus reproduction. The physical-work, pagination, and indexing follow-ups above remain open.
+variants; it is not a multi-node consensus reproduction. The internal SQLite work-accounting follow-up remains open.
 
 Validation: all six focused checks passed. The broader release run passed 177
 library tests across database queries, runtime storage/host storage, host metering,
