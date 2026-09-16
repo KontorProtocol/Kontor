@@ -564,7 +564,10 @@ mod transactions {
         let (app, _db) = create_test_app().await?;
         let server = TestServer::new(app);
 
-        let response: TestResponse = server.get("/api/transactions").await;
+        let response: TestResponse = server
+            .get("/api/transactions")
+            .add_query_param("include_total_count", true)
+            .await;
         assert_eq!(response.status_code(), StatusCode::OK);
 
         // This is correct - deserialize to the wrapper type first
@@ -572,7 +575,7 @@ mod transactions {
             serde_json::from_slice(response.as_bytes())?;
 
         assert_eq!(result.result.results.len(), 3);
-        assert_eq!(result.result.pagination.total_count, 3);
+        assert_eq!(result.result.pagination.total_count, Some(3));
         assert!(!result.result.pagination.has_more);
 
         // Verify ordering (DESC by height, tx_index)
@@ -588,13 +591,16 @@ mod transactions {
         let (app, _db) = create_test_app().await?;
         let server = TestServer::new(app);
 
-        let response: TestResponse = server.get("/api/transactions?limit=3").await;
+        let response: TestResponse = server
+            .get("/api/transactions?limit=3")
+            .add_query_param("include_total_count", true)
+            .await;
         assert_eq!(response.status_code(), StatusCode::OK);
 
         let result: ApiResult<PaginatedResponse<TransactionRow>> =
             serde_json::from_slice(response.as_bytes())?;
         assert_eq!(result.result.results.len(), 3);
-        assert_eq!(result.result.pagination.total_count, 3);
+        assert_eq!(result.result.pagination.total_count, Some(3));
         assert!(!result.result.pagination.has_more);
         assert_eq!(result.result.pagination.next_offset, Some(3));
         assert!(result.result.pagination.next_cursor.is_some());
@@ -607,13 +613,16 @@ mod transactions {
         let (app, _db) = create_test_app().await?;
         let server = TestServer::new(app);
 
-        let response: TestResponse = server.get("/api/transactions?limit=2&offset=1").await;
+        let response: TestResponse = server
+            .get("/api/transactions?limit=2&offset=1")
+            .add_query_param("include_total_count", true)
+            .await;
         assert_eq!(response.status_code(), StatusCode::OK);
 
         let result: ApiResult<PaginatedResponse<TransactionRow>> =
             serde_json::from_slice(response.as_bytes())?;
         assert_eq!(result.result.results.len(), 2);
-        assert_eq!(result.result.pagination.total_count, 3);
+        assert_eq!(result.result.pagination.total_count, Some(3));
         assert!(!result.result.pagination.has_more);
 
         Ok(())
@@ -625,7 +634,10 @@ mod transactions {
         let server = TestServer::new(app);
 
         // First get transactions with limit to get cursor
-        let response: TestResponse = server.get("/api/transactions?limit=1").await;
+        let response: TestResponse = server
+            .get("/api/transactions?limit=1")
+            .add_query_param("include_total_count", true)
+            .await;
         let result: ApiResult<PaginatedResponse<TransactionRow>> =
             serde_json::from_slice(response.as_bytes())?;
 
@@ -633,7 +645,7 @@ mod transactions {
         assert_eq!(result.result.results[0].height, 800001);
         assert_eq!(result.result.results[0].tx_index, Some(0));
         assert_eq!(result.result.results.len(), 1);
-        assert_eq!(result.result.pagination.total_count, 3);
+        assert_eq!(result.result.pagination.total_count, Some(3));
         assert!(result.result.pagination.has_more);
         assert!(result.result.pagination.next_offset.is_some());
         assert!(result.result.pagination.next_cursor.is_some());
@@ -645,6 +657,7 @@ mod transactions {
         // Use cursor for next page
         let response: TestResponse = server
             .get(&format!("/api/transactions?cursor={}", cursor))
+            .add_query_param("include_total_count", true)
             .await;
         assert_eq!(response.status_code(), StatusCode::OK);
         let result: ApiResult<PaginatedResponse<TransactionRow>> =
@@ -674,13 +687,16 @@ mod transactions {
         let (app, _db) = create_test_app().await?;
         let server = TestServer::new(app);
 
-        let response: TestResponse = server.get("/api/transactions?height=800000").await;
+        let response: TestResponse = server
+            .get("/api/transactions?height=800000")
+            .add_query_param("include_total_count", true)
+            .await;
         assert_eq!(response.status_code(), StatusCode::OK);
 
         let result: ApiResult<PaginatedResponse<TransactionRow>> =
             serde_json::from_slice(response.as_bytes())?;
         assert_eq!(result.result.results.len(), 2);
-        assert_eq!(result.result.pagination.total_count, 2);
+        assert_eq!(result.result.pagination.total_count, Some(2));
 
         // All transactions should be at height 800000
         for tx in &result.result.results {
@@ -695,13 +711,16 @@ mod transactions {
         let (app, _db) = create_test_app().await?;
         let server = TestServer::new(app);
 
-        let response: TestResponse = server.get("/api/transactions?height=999999").await;
+        let response: TestResponse = server
+            .get("/api/transactions?height=999999")
+            .add_query_param("include_total_count", true)
+            .await;
         assert_eq!(response.status_code(), StatusCode::OK);
 
         let result: ApiResult<PaginatedResponse<TransactionRow>> =
             serde_json::from_slice(response.as_bytes())?;
         assert_eq!(result.result.results.len(), 0);
-        assert_eq!(result.result.pagination.total_count, 0);
+        assert_eq!(result.result.pagination.total_count, Some(0));
 
         Ok(())
     }
@@ -778,13 +797,16 @@ mod transactions {
         let (app, _db) = create_test_app().await?;
         let server = TestServer::new(app);
 
-        let response: TestResponse = server.get("/api/blocks/800000/transactions").await;
+        let response: TestResponse = server
+            .get("/api/blocks/800000/transactions")
+            .add_query_param("include_total_count", true)
+            .await;
         assert_eq!(response.status_code(), StatusCode::OK);
 
         let result: ApiResult<PaginatedResponse<TransactionRow>> =
             serde_json::from_slice(response.as_bytes())?;
         assert_eq!(result.result.results.len(), 2);
-        assert_eq!(result.result.pagination.total_count, 2);
+        assert_eq!(result.result.pagination.total_count, Some(2));
 
         for tx in &result.result.results {
             assert_eq!(tx.height, 800000);
@@ -799,15 +821,14 @@ mod transactions {
         let server = TestServer::new(app);
 
         // Use block hash for height 800000
-        let response: TestResponse = server
-        .get("/api/blocks/000000000000000000015d76e1b13f62d0edc4593ed326528c37b5af3c3fba04/transactions")
+        let response: TestResponse = server.get("/api/blocks/000000000000000000015d76e1b13f62d0edc4593ed326528c37b5af3c3fba04/transactions").add_query_param("include_total_count", true)
         .await;
         assert_eq!(response.status_code(), StatusCode::OK);
 
         let result: ApiResult<PaginatedResponse<TransactionRow>> =
             serde_json::from_slice(response.as_bytes())?;
         assert_eq!(result.result.results.len(), 2);
-        assert_eq!(result.result.pagination.total_count, 2);
+        assert_eq!(result.result.pagination.total_count, Some(2));
 
         for tx in &result.result.results {
             assert_eq!(tx.height, 800000);
@@ -1345,13 +1366,20 @@ mod transactions_pagination {
                 format!("/api/transactions?limit={}", limit)
             };
 
-            let response: TestResponse = server.get(&url).await;
+            let response: TestResponse = server
+                .get(&url)
+                .add_query_param("include_total_count", true)
+                .await;
             assert_eq!(response.status_code(), StatusCode::OK);
 
             let result: ApiResult<PaginatedResponse<TransactionRow>> =
                 serde_json::from_slice(response.as_bytes())?;
 
-            let current_total_count = result.result.pagination.total_count;
+            let current_total_count = result
+                .result
+                .pagination
+                .total_count
+                .expect("requested count");
 
             // First page should have the full count
             if page_count == 1 {
@@ -1390,7 +1418,10 @@ mod transactions_pagination {
         let (server, _db) = setup().await?;
 
         let url = "/api/transactions?limit=1&contract=token_800000_1";
-        let response: TestResponse = server.get(url).await;
+        let response: TestResponse = server
+            .get(url)
+            .add_query_param("include_total_count", true)
+            .await;
         assert_eq!(response.status_code(), StatusCode::OK);
         let result: ApiResult<PaginatedResponse<TransactionRow>> =
             serde_json::from_slice(response.as_bytes())?;
@@ -1402,13 +1433,16 @@ mod transactions_pagination {
         assert_eq!(transactions[0].tx_index, Some(3));
         assert!(meta.has_more);
         assert_eq!(meta.next_cursor, Some(transactions[0].id));
-        assert_eq!(meta.total_count, 3);
+        assert_eq!(meta.total_count, Some(3));
 
         let url = format!(
             "/api/transactions?limit=1&contract=token_800000_1&cursor={}",
             meta.next_cursor.unwrap()
         );
-        let response: TestResponse = server.get(&url).await;
+        let response: TestResponse = server
+            .get(&url)
+            .add_query_param("include_total_count", true)
+            .await;
         assert_eq!(response.status_code(), StatusCode::OK);
         let result: ApiResult<PaginatedResponse<TransactionRow>> =
             serde_json::from_slice(response.as_bytes())?;
@@ -1425,7 +1459,10 @@ mod transactions_pagination {
             "/api/transactions?limit=1&contract=token_800000_1&cursor={}",
             meta.next_cursor.unwrap()
         );
-        let response: TestResponse = server.get(&url).await;
+        let response: TestResponse = server
+            .get(&url)
+            .add_query_param("include_total_count", true)
+            .await;
         assert_eq!(response.status_code(), StatusCode::OK);
         let result: ApiResult<PaginatedResponse<TransactionRow>> =
             serde_json::from_slice(response.as_bytes())?;
@@ -1446,7 +1483,10 @@ mod transactions_pagination {
         let (server, _db) = setup().await?;
 
         let url = "/api/transactions?limit=1&contract=token_800000_1&order=asc";
-        let response: TestResponse = server.get(url).await;
+        let response: TestResponse = server
+            .get(url)
+            .add_query_param("include_total_count", true)
+            .await;
         assert_eq!(response.status_code(), StatusCode::OK);
         let result: ApiResult<PaginatedResponse<TransactionRow>> =
             serde_json::from_slice(response.as_bytes())?;
@@ -1458,13 +1498,16 @@ mod transactions_pagination {
         assert_eq!(transactions[0].tx_index, Some(1));
         assert!(meta.has_more);
         assert_eq!(meta.next_cursor, Some(transactions[0].id));
-        assert_eq!(meta.total_count, 3);
+        assert_eq!(meta.total_count, Some(3));
 
         let url = format!(
             "/api/transactions?limit=1&contract=token_800000_1&cursor={}&order=asc",
             meta.next_cursor.unwrap()
         );
-        let response: TestResponse = server.get(&url).await;
+        let response: TestResponse = server
+            .get(&url)
+            .add_query_param("include_total_count", true)
+            .await;
         assert_eq!(response.status_code(), StatusCode::OK);
         let result: ApiResult<PaginatedResponse<TransactionRow>> =
             serde_json::from_slice(response.as_bytes())?;
@@ -1481,7 +1524,10 @@ mod transactions_pagination {
             "/api/transactions?limit=1&contract=token_800000_1&cursor={}&order=asc",
             meta.next_cursor.unwrap()
         );
-        let response: TestResponse = server.get(&url).await;
+        let response: TestResponse = server
+            .get(&url)
+            .add_query_param("include_total_count", true)
+            .await;
         assert_eq!(response.status_code(), StatusCode::OK);
         let result: ApiResult<PaginatedResponse<TransactionRow>> =
             serde_json::from_slice(response.as_bytes())?;
@@ -1494,6 +1540,69 @@ mod transactions_pagination {
         assert!(!meta.has_more);
         assert_eq!(meta.next_cursor, Some(transactions[0].id));
 
+        Ok(())
+    }
+}
+
+mod pagination_counts {
+    use anyhow::Result;
+    use axum::{Router, http::StatusCode, routing::get};
+    use axum_test::TestServer;
+    use serde_json::Value;
+
+    use super::new_test_env;
+    use crate::api::handlers::{get_blocks, get_contracts, get_results, get_transactions};
+
+    #[tokio::test]
+    async fn counts_are_opt_in_on_every_list_endpoint() -> Result<()> {
+        let (env, conn, _temp) = new_test_env().await?;
+        conn.execute_batch(r#"
+            INSERT INTO blocks VALUES (1, printf('%064x',1),1), (2,printf('%064x',2),1);
+            INSERT INTO signers VALUES (1,1), (2,2);
+            INSERT INTO contracts (id,name,height,tx_index,size,bytes,signer_id) VALUES
+                (1,'a',1,0,0,X'',1), (2,'b',2,0,0,X'',2);
+            INSERT INTO transactions (id,txid,height,confirmed_height,tx_index) VALUES
+                (1,printf('%064x',1),1,1,0), (2,printf('%064x',2),2,2,0);
+            INSERT INTO contract_results (contract_id,func,height,tx_id,result_index,gas,size,signer_id) VALUES
+                (1,'f',1,1,0,0,0,1), (2,'f',2,2,0,0,0,2);
+        "#).await?;
+
+        let server = TestServer::new(
+            Router::new()
+                .route("/blocks", get(get_blocks))
+                .route("/contracts", get(get_contracts))
+                .route("/transactions", get(get_transactions))
+                .route("/results", get(get_results))
+                .with_state(env),
+        );
+        for endpoint in ["/blocks", "/contracts", "/transactions", "/results"] {
+            let response = server.get(endpoint).add_query_param("limit", 1).await;
+            assert_eq!(response.status_code(), StatusCode::OK);
+            let default: Value = response.json();
+            assert_eq!(
+                default["result"]["pagination"].get("total_count"),
+                Some(&Value::Null)
+            );
+            assert_eq!(default["result"]["pagination"]["has_more"], true);
+            for include in [false, true] {
+                let response = server
+                    .get(endpoint)
+                    .add_query_param("limit", 1)
+                    .add_query_param("include_total_count", include)
+                    .await;
+                assert_eq!(response.status_code(), StatusCode::OK);
+                let mut value: Value = response.json();
+                assert_eq!(
+                    value["result"]["pagination"]["total_count"],
+                    if include { Value::from(2) } else { Value::Null }
+                );
+                value["result"]["pagination"]["total_count"] = Value::Null;
+                assert_eq!(
+                    value, default,
+                    "count option must not change the page or cursors"
+                );
+            }
+        }
         Ok(())
     }
 }

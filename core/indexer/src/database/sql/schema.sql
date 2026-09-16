@@ -345,3 +345,24 @@ CREATE TABLE IF NOT EXISTS node_meta (
   key TEXT PRIMARY KEY,
   value
 ) WITHOUT ROWID;
+
+-- Height-leading indexes bound rollback cascades by the removed block range.
+-- The transaction/result indexes also serve the APIs' height filters.
+CREATE INDEX IF NOT EXISTS idx_transactions_height ON transactions (height);
+CREATE INDEX IF NOT EXISTS idx_contract_results_height ON contract_results (height);
+CREATE INDEX IF NOT EXISTS idx_contracts_height ON contracts (height);
+CREATE INDEX IF NOT EXISTS idx_contract_provenance_height ON contract_provenance (height);
+CREATE INDEX IF NOT EXISTS idx_signers_height ON signers (height);
+CREATE INDEX IF NOT EXISTS idx_x_only_pubkeys_height ON x_only_pubkeys (height);
+CREATE INDEX IF NOT EXISTS idx_bls_keys_height ON bls_keys (height);
+CREATE INDEX IF NOT EXISTS idx_nonces_height ON nonces (height);
+
+CREATE INDEX IF NOT EXISTS idx_bls_keys_pubkey ON bls_keys (bls_pubkey, height DESC);
+CREATE INDEX IF NOT EXISTS idx_contract_results_contract ON contract_results (contract_id);
+CREATE INDEX IF NOT EXISTS idx_contract_results_signer ON contract_results (signer_id);
+CREATE INDEX IF NOT EXISTS idx_contracts_signer ON contracts (signer_id) WHERE signer_id IS NOT NULL;
+
+-- Deleting parents also probes non-cascading foreign keys. Height indexes alone
+-- leave these checks scanning history once per removed transaction or signer.
+CREATE INDEX IF NOT EXISTS idx_contract_state_tx ON contract_state (tx_id) WHERE tx_id IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_contract_results_payer ON contract_results (payer_signer_id) WHERE payer_signer_id IS NOT NULL;

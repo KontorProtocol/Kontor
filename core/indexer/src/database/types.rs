@@ -252,6 +252,9 @@ pub struct BlockQuery {
     pub offset: Option<u64>,
     pub limit: Option<u32>,
     #[builder(default)]
+    #[serde(default)]
+    pub include_total_count: bool,
+    #[builder(default)]
     #[serde_as(as = "DefaultOnNull<DisplayFromStr>")]
     #[serde(default)]
     pub order: OrderDirection,
@@ -266,6 +269,9 @@ pub struct ContractQuery {
     pub offset: Option<u64>,
     pub limit: Option<u32>,
     #[builder(default)]
+    #[serde(default)]
+    pub include_total_count: bool,
+    #[builder(default)]
     #[serde_as(as = "DefaultOnNull<DisplayFromStr>")]
     #[serde(default)]
     pub order: OrderDirection,
@@ -279,6 +285,9 @@ pub struct TransactionQuery {
     pub cursor: Option<u64>,
     pub offset: Option<u64>,
     pub limit: Option<u32>,
+    #[builder(default)]
+    #[serde(default)]
+    pub include_total_count: bool,
     #[builder(default)]
     #[serde_as(as = "DefaultOnNull<DisplayFromStr>")]
     #[serde(default)]
@@ -297,6 +306,9 @@ pub struct ResultQuery {
     pub cursor: Option<u64>,
     pub offset: Option<u64>,
     pub limit: Option<u32>,
+    #[builder(default)]
+    #[serde(default)]
+    pub include_total_count: bool,
     #[builder(default)]
     #[serde_as(as = "DefaultOnNull<DisplayFromStr>")]
     #[serde(default)]

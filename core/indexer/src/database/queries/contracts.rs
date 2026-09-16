@@ -107,6 +107,7 @@ pub async fn get_contracts_paginated(
             cursor: query.cursor,
             offset: query.offset,
             limit: query.limit,
+            include_total_count: query.include_total_count,
         },
     )
     .await

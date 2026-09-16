@@ -47,3 +47,6 @@ pub enum Error {
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod index_benchmarks;

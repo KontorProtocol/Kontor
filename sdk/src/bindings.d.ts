@@ -391,7 +391,10 @@ export type PaginationMeta = {
   next_cursor?: string;
   next_offset: number | null;
   has_more: boolean;
-  total_count: number;
+  /**
+   * Exact matching count is opt-in because computing it can scan the full set.
+   */
+  total_count: number | null;
 };
 
 /**

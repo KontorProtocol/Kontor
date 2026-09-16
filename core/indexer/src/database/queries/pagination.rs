@@ -22,6 +22,7 @@ pub struct PageOptions {
     pub cursor: Option<u64>,
     pub offset: Option<u64>,
     pub limit: Option<u32>,
+    pub include_total_count: bool,
 }
 
 pub async fn get_paginated<T>(
@@ -41,6 +42,7 @@ where
         cursor,
         offset,
         limit,
+        include_total_count,
     } = page;
     let offset = if cursor.is_some() { None } else { offset };
     let limit = clamp_limit(limit);
@@ -62,21 +64,19 @@ where
         format!("WHERE {}", where_clauses.join(" AND "))
     };
 
-    // SQLite COUNT(...) is i64-shaped; the value is the count of distinct
-    // rowids and can't actually be negative, but we still read into i64
-    // and cast — propagating any libsql decode error via `?` rather than
-    // swallowing it.
-    let total_count = match conn
-        .query(
-            &format!("SELECT COUNT(DISTINCT {var}.{id_name}) FROM {from} {where_sql}"),
-            params.clone(),
-        )
-        .await?
-        .next()
-        .await?
-    {
-        Some(row) => row.get::<i64>(0)? as u64,
-        None => 0,
+    let total_count = if include_total_count {
+        let mut rows = conn
+            .query(
+                &format!("SELECT COUNT(DISTINCT {var}.{id_name}) FROM {from} {where_sql}"),
+                params.clone(),
+            )
+            .await?;
+        Some(match rows.next().await? {
+            Some(row) => row.get::<u64>(0)?,
+            None => 0,
+        })
+    } else {
+        None
     };
 
     let mut offset_clause = "";

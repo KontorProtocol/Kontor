@@ -1658,18 +1658,25 @@ async fn test_get_contracts_paginated() -> Result<()> {
     }
 
     // Default order is DESC — page 1 returns the latest 2.
-    let (page1, meta1) =
-        get_contracts_paginated(&conn, ContractQuery::builder().limit(2).build()).await?;
+    let (page1, meta1) = get_contracts_paginated(
+        &conn,
+        ContractQuery::builder()
+            .include_total_count(true)
+            .limit(2)
+            .build(),
+    )
+    .await?;
     assert_eq!(page1.len(), 2);
     assert_eq!(page1[0].id, ids[4]);
     assert_eq!(page1[1].id, ids[3]);
     assert!(meta1.has_more);
-    assert_eq!(meta1.total_count, 5);
+    assert_eq!(meta1.total_count, Some(5));
 
     // Cursor follows: next page picks up below the cursor id.
     let (page2, meta2) = get_contracts_paginated(
         &conn,
         ContractQuery::builder()
+            .include_total_count(true)
             .limit(2)
             .cursor(meta1.next_cursor.unwrap())
             .build(),
@@ -1756,10 +1763,15 @@ async fn test_get_contracts_signer_id_filter() -> Result<()> {
     )
     .await?;
 
-    let (rows, meta) =
-        get_contracts_paginated(&conn, ContractQuery::builder().signer_id(signer_a).build())
-            .await?;
-    assert_eq!(meta.total_count, 2);
+    let (rows, meta) = get_contracts_paginated(
+        &conn,
+        ContractQuery::builder()
+            .include_total_count(true)
+            .signer_id(signer_a)
+            .build(),
+    )
+    .await?;
+    assert_eq!(meta.total_count, Some(2));
     let returned: Vec<u64> = rows.iter().map(|r| r.id).collect();
     assert_eq!(returned, vec![id_a2, id_a1]);
     assert!(rows.iter().all(|r| r.signer_id == Some(signer_a)));
@@ -3314,18 +3326,25 @@ async fn test_get_blocks_query() -> Result<()> {
     )
     .await?;
 
-    let (blocks, meta) =
-        get_blocks_paginated(&conn, BlockQuery::builder().limit(1).build()).await?;
+    let (blocks, meta) = get_blocks_paginated(
+        &conn,
+        BlockQuery::builder()
+            .include_total_count(true)
+            .limit(1)
+            .build(),
+    )
+    .await?;
 
     assert_eq!(blocks.len(), 1);
     assert_eq!(blocks[0].height, 102);
     assert!(meta.has_more);
     assert_eq!(meta.next_cursor, Some(blocks[0].height));
-    assert_eq!(meta.total_count, 3);
+    assert_eq!(meta.total_count, Some(3));
 
     let (blocks, meta) = get_blocks_paginated(
         &conn,
         BlockQuery::builder()
+            .include_total_count(true)
             .maybe_cursor(meta.next_cursor)
             .limit(1)
             .build(),
@@ -3340,6 +3359,7 @@ async fn test_get_blocks_query() -> Result<()> {
     let (blocks, meta) = get_blocks_paginated(
         &conn,
         BlockQuery::builder()
+            .include_total_count(true)
             .maybe_cursor(meta.next_cursor)
             .limit(1)
             .build(),
@@ -3377,23 +3397,35 @@ async fn test_get_blocks_query_relevant() -> Result<()> {
     )
     .await?;
 
-    let (blocks, meta) =
-        get_blocks_paginated(&conn, BlockQuery::builder().relevant(true).build()).await?;
+    let (blocks, meta) = get_blocks_paginated(
+        &conn,
+        BlockQuery::builder()
+            .include_total_count(true)
+            .relevant(true)
+            .build(),
+    )
+    .await?;
 
     assert_eq!(blocks.len(), 1);
     assert_eq!(blocks[0].height, 100);
     assert!(!meta.has_more);
     assert_eq!(meta.next_cursor, Some(blocks[0].height));
-    assert_eq!(meta.total_count, 1);
+    assert_eq!(meta.total_count, Some(1));
 
-    let (blocks, meta) =
-        get_blocks_paginated(&conn, BlockQuery::builder().relevant(false).build()).await?;
+    let (blocks, meta) = get_blocks_paginated(
+        &conn,
+        BlockQuery::builder()
+            .include_total_count(true)
+            .relevant(false)
+            .build(),
+    )
+    .await?;
 
     assert_eq!(blocks.len(), 1);
     assert_eq!(blocks[0].height, 101);
     assert!(!meta.has_more);
     assert_eq!(meta.next_cursor, Some(blocks[0].height));
-    assert_eq!(meta.total_count, 1);
+    assert_eq!(meta.total_count, Some(1));
 
     Ok(())
 }
@@ -3589,17 +3621,19 @@ async fn test_get_results_query() -> Result<()> {
     let (_, meta) = get_results_paginated(
         &conn,
         ResultQuery::builder()
+            .include_total_count(true)
             .order(OrderDirection::Asc)
             .limit(1)
             .build(),
     )
     .await?;
-    assert_eq!(meta.total_count, 6);
+    assert_eq!(meta.total_count, Some(6));
 
     // NULL tx_id result is included with txid: None
     let (results, _) = get_results_paginated(
         &conn,
         ResultQuery::builder()
+            .include_total_count(true)
             .height(2)
             .order(OrderDirection::Asc)
             .limit(10)
@@ -3612,6 +3646,7 @@ async fn test_get_results_query() -> Result<()> {
     let (results, meta) = get_results_paginated(
         &conn,
         ResultQuery::builder()
+            .include_total_count(true)
             .contract(ContractAddress {
                 name: "token".to_string(),
                 height: 1,
@@ -3627,12 +3662,13 @@ async fn test_get_results_query() -> Result<()> {
     assert_eq!(results[0].contract_height, 1);
     assert_eq!(results[0].contract_tx_index, 1);
     // signer_id_2 also has a result on the "token" contract at height=1.
-    assert_eq!(meta.total_count, 3);
+    assert_eq!(meta.total_count, Some(3));
 
     // func filtering
     let (results, meta) = get_results_paginated(
         &conn,
         ResultQuery::builder()
+            .include_total_count(true)
             .contract(ContractAddress {
                 name: "storage".to_string(),
                 height: 1,
@@ -3649,13 +3685,14 @@ async fn test_get_results_query() -> Result<()> {
     assert_eq!(results[0].contract_name, "storage");
     assert_eq!(results[0].contract_height, 1);
     assert_eq!(results[0].contract_tx_index, 2);
-    assert_eq!(meta.total_count, 1);
+    assert_eq!(meta.total_count, Some(1));
     assert_eq!(meta.next_cursor, Some(results[0].id));
 
     // height filtering
     let (results, meta) = get_results_paginated(
         &conn,
         ResultQuery::builder()
+            .include_total_count(true)
             .height(2)
             .contract(ContractAddress {
                 name: "token".to_string(),
@@ -3668,12 +3705,13 @@ async fn test_get_results_query() -> Result<()> {
     )
     .await?;
     assert_eq!(results[0].height, 2);
-    assert_eq!(meta.total_count, 1);
+    assert_eq!(meta.total_count, Some(1));
 
     // start height
     let (results, meta) = get_results_paginated(
         &conn,
         ResultQuery::builder()
+            .include_total_count(true)
             .start_height(2)
             .contract(ContractAddress {
                 name: "token".to_string(),
@@ -3686,13 +3724,14 @@ async fn test_get_results_query() -> Result<()> {
     )
     .await?;
     assert_eq!(results[0].height, 2);
-    assert_eq!(meta.total_count, 1);
+    assert_eq!(meta.total_count, Some(1));
     assert!(!meta.has_more);
 
     // signer_id filter — first signer has 5 results, second has 1.
     let (results, meta) = get_results_paginated(
         &conn,
         ResultQuery::builder()
+            .include_total_count(true)
             .signer_id(signer_id)
             .order(OrderDirection::Asc)
             .limit(10)
@@ -3700,12 +3739,13 @@ async fn test_get_results_query() -> Result<()> {
     )
     .await?;
     assert_eq!(results.len(), 5);
-    assert_eq!(meta.total_count, 5);
+    assert_eq!(meta.total_count, Some(5));
     assert!(results.iter().all(|r| r.signer_id == signer_id));
 
     let (results, meta) = get_results_paginated(
         &conn,
         ResultQuery::builder()
+            .include_total_count(true)
             .signer_id(signer_id_2)
             .order(OrderDirection::Asc)
             .limit(10)
@@ -3713,7 +3753,7 @@ async fn test_get_results_query() -> Result<()> {
     )
     .await?;
     assert_eq!(results.len(), 1);
-    assert_eq!(meta.total_count, 1);
+    assert_eq!(meta.total_count, Some(1));
     assert_eq!(results[0].signer_id, signer_id_2);
 
     Ok(())
@@ -3742,12 +3782,18 @@ async fn test_basic_pagination_no_filters() -> Result<()> {
     setup_test_data(&conn).await?;
 
     // Test first page with limit 3
-    let (transactions, meta) =
-        get_transactions_paginated(&conn, TransactionQuery::builder().limit(3).build()).await?;
+    let (transactions, meta) = get_transactions_paginated(
+        &conn,
+        TransactionQuery::builder()
+            .include_total_count(true)
+            .limit(3)
+            .build(),
+    )
+    .await?;
 
     assert_eq!(transactions.len(), 3);
     assert!(meta.has_more);
-    assert_eq!(meta.total_count, 10); // 5 + 3 + 2 = 10 total
+    assert_eq!(meta.total_count, Some(10)); // 5 + 3 + 2 = 10 total
     assert!(meta.next_offset.is_some());
     assert_eq!(meta.next_offset, Some(3));
     assert!(meta.next_cursor.is_some());
@@ -3903,12 +3949,16 @@ async fn test_height_filter() -> Result<()> {
     // Filter by height 800001 (should have 3 transactions)
     let (transactions, meta) = get_transactions_paginated(
         &conn,
-        TransactionQuery::builder().height(800001).limit(10).build(),
+        TransactionQuery::builder()
+            .include_total_count(true)
+            .height(800001)
+            .limit(10)
+            .build(),
     )
     .await?;
 
     assert_eq!(transactions.len(), 3);
-    assert_eq!(meta.total_count, 3);
+    assert_eq!(meta.total_count, Some(3));
     assert!(!meta.has_more);
     assert_eq!(meta.next_offset, Some(3));
 
@@ -3934,12 +3984,16 @@ async fn test_height_filter_with_pagination() -> Result<()> {
     // Filter by height 800000 with limit 2 (should have 5 total, return 2)
     let (page1, meta1) = get_transactions_paginated(
         &conn,
-        TransactionQuery::builder().height(800000).limit(2).build(),
+        TransactionQuery::builder()
+            .include_total_count(true)
+            .height(800000)
+            .limit(2)
+            .build(),
     )
     .await?;
 
     assert_eq!(page1.len(), 2);
-    assert_eq!(meta1.total_count, 5);
+    assert_eq!(meta1.total_count, Some(5));
     assert!(meta1.has_more);
     assert_eq!(meta1.next_offset, Some(2));
 
@@ -3947,6 +4001,7 @@ async fn test_height_filter_with_pagination() -> Result<()> {
     let (page2, meta2) = get_transactions_paginated(
         &conn,
         TransactionQuery::builder()
+            .include_total_count(true)
             .height(800000)
             .offset(2)
             .limit(2)
@@ -3962,6 +4017,7 @@ async fn test_height_filter_with_pagination() -> Result<()> {
     let (page3, meta3) = get_transactions_paginated(
         &conn,
         TransactionQuery::builder()
+            .include_total_count(true)
             .height(800000)
             .offset(4)
             .limit(2)
@@ -4014,12 +4070,16 @@ async fn test_empty_result_set() -> Result<()> {
     // Query for non-existent height
     let (transactions, meta) = get_transactions_paginated(
         &conn,
-        TransactionQuery::builder().height(999999).limit(10).build(),
+        TransactionQuery::builder()
+            .include_total_count(true)
+            .height(999999)
+            .limit(10)
+            .build(),
     )
     .await?;
 
     assert_eq!(transactions.len(), 0);
-    assert_eq!(meta.total_count, 0);
+    assert_eq!(meta.total_count, Some(0));
     assert!(!meta.has_more);
     assert_eq!(meta.next_offset, Some(0));
     assert!(meta.next_cursor.is_none());
@@ -4034,13 +4094,19 @@ async fn test_large_limit() -> Result<()> {
     setup_test_data(&conn).await?;
 
     // Request more than available
-    let (transactions, meta) =
-        get_transactions_paginated(&conn, TransactionQuery::builder().limit(100).build()).await?;
+    let (transactions, meta) = get_transactions_paginated(
+        &conn,
+        TransactionQuery::builder()
+            .include_total_count(true)
+            .limit(100)
+            .build(),
+    )
+    .await?;
 
     assert_eq!(transactions.len(), 10); // All available transactions
     assert!(!meta.has_more);
     assert_eq!(meta.next_offset, Some(10));
-    assert_eq!(meta.total_count, 10);
+    assert_eq!(meta.total_count, Some(10));
 
     Ok(())
 }
@@ -4051,13 +4117,19 @@ async fn test_zero_limit() -> Result<()> {
     let conn = writer.connection();
     setup_test_data(&conn).await?;
 
-    let (transactions, meta) =
-        get_transactions_paginated(&conn, TransactionQuery::builder().limit(0).build()).await?;
+    let (transactions, meta) = get_transactions_paginated(
+        &conn,
+        TransactionQuery::builder()
+            .include_total_count(true)
+            .limit(0)
+            .build(),
+    )
+    .await?;
 
     assert_eq!(transactions.len(), 0);
     assert!(meta.has_more); // There are transactions available
     assert_eq!(meta.next_offset, Some(0)); // Next offset should be 0
-    assert_eq!(meta.total_count, 10);
+    assert_eq!(meta.total_count, Some(10));
 
     Ok(())
 }
@@ -4109,6 +4181,7 @@ async fn test_cursor_contract_address_querying() -> Result<()> {
     let (transactions, meta) = get_transactions_paginated(
         &conn,
         TransactionQuery::builder()
+            .include_total_count(true)
             .contract(ContractAddress {
                 name: "token".to_string(),
                 height: 800000,
@@ -4124,11 +4197,12 @@ async fn test_cursor_contract_address_querying() -> Result<()> {
     assert_eq!(transactions[0].tx_index, Some(0));
     assert!(meta.has_more);
     assert_eq!(meta.next_cursor, Some(transactions[0].id));
-    assert_eq!(meta.total_count, 3);
+    assert_eq!(meta.total_count, Some(3));
 
     let (transactions, meta) = get_transactions_paginated(
         &conn,
         TransactionQuery::builder()
+            .include_total_count(true)
             .maybe_cursor(meta.next_cursor)
             .contract(ContractAddress {
                 name: "token".to_string(),
@@ -4149,6 +4223,7 @@ async fn test_cursor_contract_address_querying() -> Result<()> {
     let (transactions, meta) = get_transactions_paginated(
         &conn,
         TransactionQuery::builder()
+            .include_total_count(true)
             .maybe_cursor(meta.next_cursor)
             .contract(ContractAddress {
                 name: "token".to_string(),
@@ -4178,6 +4253,7 @@ async fn test_cursor_contract_address_querying_asc() -> Result<()> {
     let (transactions, meta) = get_transactions_paginated(
         &conn,
         TransactionQuery::builder()
+            .include_total_count(true)
             .contract(ContractAddress {
                 name: "token".to_string(),
                 height: 800000,
@@ -4194,11 +4270,12 @@ async fn test_cursor_contract_address_querying_asc() -> Result<()> {
     assert_eq!(transactions[0].tx_index, Some(0));
     assert!(meta.has_more);
     assert_eq!(meta.next_cursor, Some(transactions[0].id));
-    assert_eq!(meta.total_count, 3);
+    assert_eq!(meta.total_count, Some(3));
 
     let (transactions, meta) = get_transactions_paginated(
         &conn,
         TransactionQuery::builder()
+            .include_total_count(true)
             .maybe_cursor(meta.next_cursor)
             .contract(ContractAddress {
                 name: "token".to_string(),
@@ -4220,6 +4297,7 @@ async fn test_cursor_contract_address_querying_asc() -> Result<()> {
     let (transactions, meta) = get_transactions_paginated(
         &conn,
         TransactionQuery::builder()
+            .include_total_count(true)
             .maybe_cursor(meta.next_cursor)
             .contract(ContractAddress {
                 name: "token".to_string(),
@@ -4342,6 +4420,7 @@ async fn test_transaction_signer_id_querying() -> Result<()> {
     let (txs, meta) = get_transactions_paginated(
         &conn,
         TransactionQuery::builder()
+            .include_total_count(true)
             .signer_id(signer_a)
             .order(OrderDirection::Asc)
             .limit(10)
@@ -4349,7 +4428,7 @@ async fn test_transaction_signer_id_querying() -> Result<()> {
     )
     .await?;
     assert_eq!(txs.len(), 3);
-    assert_eq!(meta.total_count, 3);
+    assert_eq!(meta.total_count, Some(3));
     let ids: Vec<u64> = txs.iter().map(|t| t.id).collect();
     assert_eq!(ids, vec![tx_ids[0], tx_ids[1], tx_ids[3]]);
 
@@ -4357,6 +4436,7 @@ async fn test_transaction_signer_id_querying() -> Result<()> {
     let (txs, _) = get_transactions_paginated(
         &conn,
         TransactionQuery::builder()
+            .include_total_count(true)
             .signer_id(signer_b)
             .order(OrderDirection::Asc)
             .limit(10)
@@ -4370,6 +4450,7 @@ async fn test_transaction_signer_id_querying() -> Result<()> {
     let (txs, meta) = get_transactions_paginated(
         &conn,
         TransactionQuery::builder()
+            .include_total_count(true)
             .signer_id(signer_a)
             .order(OrderDirection::Asc)
             .limit(2)
@@ -4382,6 +4463,7 @@ async fn test_transaction_signer_id_querying() -> Result<()> {
     let (txs, meta) = get_transactions_paginated(
         &conn,
         TransactionQuery::builder()
+            .include_total_count(true)
             .signer_id(signer_a)
             .maybe_cursor(meta.next_cursor)
             .order(OrderDirection::Asc)
@@ -4397,6 +4479,7 @@ async fn test_transaction_signer_id_querying() -> Result<()> {
     let (txs, _) = get_transactions_paginated(
         &conn,
         TransactionQuery::builder()
+            .include_total_count(true)
             .signer_id(signer_a)
             .height(1)
             .limit(10)
@@ -4410,6 +4493,7 @@ async fn test_transaction_signer_id_querying() -> Result<()> {
     let (txs, meta) = get_transactions_paginated(
         &conn,
         TransactionQuery::builder()
+            .include_total_count(true)
             .signer_id(signer_a)
             .contract(ContractAddress {
                 name: "token".to_string(),
@@ -4423,19 +4507,20 @@ async fn test_transaction_signer_id_querying() -> Result<()> {
     .await?;
     assert_eq!(txs.len(), 1);
     assert_eq!(txs[0].id, tx_ids[3]);
-    assert_eq!(meta.total_count, 1);
+    assert_eq!(meta.total_count, Some(1));
 
     // 6) Empty result set — bogus signer_id.
     let (txs, meta) = get_transactions_paginated(
         &conn,
         TransactionQuery::builder()
+            .include_total_count(true)
             .signer_id(9999)
             .limit(10)
             .build(),
     )
     .await?;
     assert!(txs.is_empty());
-    assert_eq!(meta.total_count, 0);
+    assert_eq!(meta.total_count, Some(0));
     assert!(!meta.has_more);
 
     Ok(())
@@ -5233,5 +5318,29 @@ async fn a_recorded_exclusion_is_reverified_against_the_chain() -> Result<()> {
         applies(conn.clone()).await,
         "another batch's execution must not un-exclude this one"
     );
+    Ok(())
+}
+
+#[tokio::test]
+async fn default_pagination_never_executes_count() -> Result<()> {
+    let (_reader, writer, _temp) = new_test_db().await?;
+    let conn = writer.connection();
+    setup_test_data(&conn).await?;
+    conn.authorizer(Some(Arc::new(|context| match context.action {
+        AuthAction::Function {
+            function_name: "count",
+        } => Authorization::Deny,
+        _ => Authorization::Allow,
+    })))?;
+    let query = TransactionQuery::builder().limit(2).build();
+    let (page, meta) = get_transactions_paginated(&conn, query.clone()).await?;
+    assert_eq!(page.len(), 2);
+    assert!(meta.has_more);
+    assert_eq!(meta.total_count, None);
+    let mut counted = query;
+    counted.include_total_count = true;
+    let result = get_transactions_paginated(&conn, counted).await;
+    conn.authorizer(None)?;
+    assert!(matches!(result, Err(Error::LibSQL(_))));
     Ok(())
 }
