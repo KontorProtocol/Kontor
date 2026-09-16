@@ -41,7 +41,8 @@ NUL handling continue to use the existing codec rules.
 
 This does not meter SQLite VM steps, cache misses or old/tombstoned versions: those
 can differ after pruning. A database step can still perform internal work before
-returning. Large scalar-row copying and serialization also need separate guards.
+returning. [Storage value budgets](storage-value-budgets.md) checks scalar-row sizes
+before fetching values and bounds write encoding; its metadata scan remains streaming.
 The guarantee here is incremental logical-row discovery and bounded key deduplication,
 not preemption at arbitrary CPU instructions or a complete resource-price schedule.
 

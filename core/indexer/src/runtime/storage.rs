@@ -14,17 +14,16 @@ use wit_component::{ComponentEncoder, WitPrinter};
 use crate::{
     database::{
         queries::{
-            Error as StorageError, FOOTPRINT_BUILT_KEY, LiveRow, create_contract_signer,
-            depositors_affected_by_reorg, exists_contract_state, find_live_subtree,
-            find_matching_paths, footprint_cache_add, footprint_cache_get, footprint_cache_set,
-            footprint_rebuild_all, get_contract_address_from_id, get_contract_bytes_by_id,
-            get_contract_id_from_address, get_contract_provenance_publisher,
-            get_latest_contract_state_value, get_meta_u64, hard_delete_rows, insert_contract,
-            insert_contract_provenance, insert_contract_result, insert_contract_state,
-            latest_live_deposit, live_deposit_gas_sum, matching_path,
-            path_prefix_filter_contract_state, path_prefix_filter_storage_rows,
-            prune_contract_state, rollback_to_height, select_block_at_height, set_meta_u64,
-            tombstone_rows,
+            Error as StorageError, FOOTPRINT_BUILT_KEY, LiveRow, StorageRowCursor,
+            create_contract_signer, depositors_affected_by_reorg, exists_contract_state,
+            find_live_subtree, find_matching_paths, footprint_cache_add, footprint_cache_get,
+            footprint_cache_set, footprint_rebuild_all, get_contract_address_from_id,
+            get_contract_bytes_by_id, get_contract_id_from_address,
+            get_contract_provenance_publisher, get_latest_contract_state_value, get_meta_u64,
+            hard_delete_rows, insert_contract, insert_contract_provenance, insert_contract_result,
+            insert_contract_state, latest_live_deposit, live_deposit_gas_sum, matching_path,
+            path_prefix_filter_contract_state, prune_contract_state, rollback_to_height,
+            select_block_at_height, set_meta_u64, tombstone_rows,
         },
         types::{ContractProvenanceRow, ContractResultRow, ContractRow, ContractStateRow},
     },
@@ -527,23 +526,15 @@ impl Storage {
         )
     }
 
-    /// Direct live leaves under `path` as
-    /// `(key element, stored bytes)` (see [`path_prefix_filter_storage_rows`]). The
-    /// value-returning analogue of [`Storage::keys`].
-    pub async fn storage_rows(
+    pub fn storage_rows(
         &self,
         contract_id: u64,
         path: Vec<u8>,
         lo: Option<Vec<u8>>,
         hi: Option<Vec<u8>>,
         descending: bool,
-    ) -> Result<
-        impl Stream<Item = Result<(Vec<u8>, Vec<u8>), crate::database::queries::Error>> + Send + 'static,
-    > {
-        Ok(
-            path_prefix_filter_storage_rows(&self.conn, contract_id, path, lo, hi, descending)
-                .await?,
-        )
+    ) -> StorageRowCursor {
+        StorageRowCursor::new(&self.conn, contract_id, path, lo, hi, descending)
     }
 
     /// Canonical per-block entropy (the Bitcoin block hash) at `height`, within the
@@ -645,6 +636,91 @@ mod tests {
     use crate::database::queries::{insert_block, max_block_height};
     use crate::test_utils::{new_mock_block_hash, new_test_db};
     use indexer_types::BlockRow;
+    use stdlib::KeyElement;
+
+    #[tokio::test]
+    async fn row_cursor_preserves_versions_and_releases_its_snapshot() -> Result<()> {
+        for exhaust_budget in [false, true] {
+            let (_reader, writer, (temp, db_name)) = new_test_db().await?;
+            let conn = writer.connection();
+            for height in [1, 2] {
+                insert_block(
+                    &conn,
+                    BlockRow::builder()
+                        .height(height)
+                        .hash(new_mock_block_hash(height as u32))
+                        .build(),
+                )
+                .await?;
+            }
+            let mut storage = Storage::builder().conn(conn).build();
+            let view = Storage::builder()
+                .conn(new_connection(temp.path(), &db_name).await?)
+                .build();
+            let root = "row-snapshot".to_string().encode();
+            let path = |member: u64| [root.clone(), member.encode()].concat();
+            for member in 0..3u64 {
+                storage
+                    .set(1, &path(member), &[member as u8], None, None)
+                    .await?;
+            }
+            let mut cursor = view.storage_rows(1, root.clone(), None, None, false);
+            assert_eq!(cursor.next(u64::MAX).await?, Some((0u64.encode(), vec![0])));
+
+            storage.height = 2;
+            storage.savepoint().await?;
+            storage.set(1, &path(1), &[7], None, None).await?;
+            // Same-height replacement changes the rowid as well as the stored size.
+            storage.set(1, &path(1), &[9; 128], None, None).await?;
+            storage.set(2, &path(1), &[42], None, None).await?;
+            let deleted = storage
+                .find_live_subtree(1, &path(2))
+                .await?
+                .try_collect::<Vec<_>>()
+                .await?;
+            storage.tombstone_rows(1, &deleted).await?;
+            storage.commit().await?;
+
+            if exhaust_budget {
+                assert!(matches!(
+                    cursor.next(0).await,
+                    Err(StorageError::ValueTooLarge)
+                ));
+            } else {
+                // Value lookups must share the metadata cursor's pre-update snapshot.
+                for member in 1..3u64 {
+                    assert_eq!(
+                        cursor.next(u64::MAX).await?,
+                        Some((member.encode(), vec![member as u8]))
+                    );
+                }
+            }
+            assert!(cursor.next(u64::MAX).await?.is_none());
+
+            // Keep the exhausted object alive: completion/error must release its pin.
+            let mut current = view.storage_rows(1, root.clone(), None, None, false);
+            assert_eq!(
+                current.next(u64::MAX).await?,
+                Some((0u64.encode(), vec![0]))
+            );
+            assert_eq!(
+                current.next(u64::MAX).await?,
+                Some((1u64.encode(), vec![9; 128]))
+            );
+            assert!(current.next(u64::MAX).await?.is_none());
+
+            storage.rollback_with_footprint(1).await?;
+            let mut restored = view.storage_rows(1, root.clone(), None, None, false);
+            for member in 0..3u64 {
+                assert_eq!(
+                    restored.next(u64::MAX).await?,
+                    Some((member.encode(), vec![member as u8]))
+                );
+            }
+            assert!(restored.next(u64::MAX).await?.is_none());
+        }
+        Ok(())
+    }
 
     // The savepoint must cover plain `conn.execute` writes issued through a
     // CLONE of the connection, not just those made through `Storage`.

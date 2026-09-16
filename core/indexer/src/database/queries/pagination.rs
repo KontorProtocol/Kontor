@@ -42,6 +42,7 @@ where
         offset,
         limit,
     } = page;
+    let offset = if cursor.is_some() { None } else { offset };
     let limit = clamp_limit(limit);
     let id_name = T::id_name();
 
@@ -79,9 +80,7 @@ where
     };
 
     let mut offset_clause = "";
-    if cursor.is_none()
-        && let Some(offset) = offset
-    {
+    if let Some(offset) = offset {
         offset_clause = "OFFSET :offset";
         params.push((":offset".to_string(), Value::try_from(offset)?));
     }

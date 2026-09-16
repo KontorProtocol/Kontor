@@ -1,8 +1,9 @@
-use anyhow::Result;
+use anyhow::{Error, Result};
 use bitcoin::hashes::Hash;
 use futures_util::StreamExt;
 use serde::Deserialize;
 use wasmtime::component::{Accessor, Resource};
+use wasmtime::{AsContext, Trap};
 
 use crate::database::queries::Error as StorageError;
 use crate::runtime::host_storage::decode_storage_value;
@@ -196,20 +197,24 @@ impl Runtime {
         self_: Resource<StorageRows>,
     ) -> Result<Option<(Vec<u8>, V)>> {
         Fuel::StorageScan.consume(accessor)?;
-        let item: Option<(Vec<u8>, Vec<u8>)> = self
+        let fuel = accessor.with(|access| access.as_context().get_fuel())?;
+        let max_bytes = fuel / Fuel::KeysNext(1).cost();
+        let item = self
             .table
             .lock()
             .await
             .get_mut(&self_)?
-            .stream
-            .next()
+            .cursor
+            .next(max_bytes)
             .await
-            .transpose()
-            .map_err(|error| match error {
-                // The guest chooses the scan target. A compound value is valid
-                // state, so requesting it as a scalar must not halt the node.
-                StorageError::NonScalarRow => ExecutionError::Deterministic(error.into()),
-                other => ExecutionError::NonDeterministic(other.into()),
+            .map_err(|error| -> Error {
+                match error {
+                    StorageError::ValueTooLarge => Trap::OutOfFuel.into(),
+                    StorageError::NonScalarRow => {
+                        ExecutionError::Deterministic(error.into()).into()
+                    }
+                    other => ExecutionError::NonDeterministic(other.into()).into(),
+                }
             })?;
         match item {
             Some((member, raw_value)) => {

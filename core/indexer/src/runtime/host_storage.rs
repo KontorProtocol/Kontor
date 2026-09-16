@@ -1,5 +1,6 @@
 use anyhow::{Result, anyhow};
 use futures_util::{Stream, StreamExt};
+use postcard::{Error as EncodingError, ser_flavors::Flavor, serialize_with_flavor};
 use serde::{Deserialize, Serialize};
 use wasmtime::component::{Accessor, Resource};
 use wasmtime::{AsContext, Trap};
@@ -74,6 +75,51 @@ pub(crate) fn decode_storage_value<T: for<'de> Deserialize<'de>>(bytes: &[u8]) -
         return Err(ExecutionError::Deterministic(anyhow!("trailing storage bytes")).into());
     }
     Ok(value)
+}
+
+struct BoundedOutput {
+    bytes: Vec<u8>,
+    limit: usize,
+}
+
+impl Flavor for BoundedOutput {
+    type Output = Vec<u8>;
+
+    fn try_extend(&mut self, bytes: &[u8]) -> Result<(), EncodingError> {
+        if bytes.len() > self.limit - self.bytes.len() {
+            return Err(EncodingError::SerializeBufferFull);
+        }
+        self.bytes.extend_from_slice(bytes);
+        Ok(())
+    }
+
+    fn try_push(&mut self, byte: u8) -> Result<(), EncodingError> {
+        if self.bytes.len() == self.limit {
+            return Err(EncodingError::SerializeBufferFull);
+        }
+        self.bytes.push(byte);
+        Ok(())
+    }
+
+    fn finalize(self) -> Result<Self::Output, EncodingError> {
+        Ok(self.bytes)
+    }
+}
+
+fn encode_storage_value<T: Serialize>(value: &T, max_bytes: u64) -> Result<Vec<u8>> {
+    // Use Postcard's existing encoder, stopping output as soon as it exceeds the
+    // available byte budget. A sizing pass would still traverse an unaffordable value.
+    serialize_with_flavor(
+        value,
+        BoundedOutput {
+            bytes: Vec::new(),
+            limit: usize::try_from(max_bytes).unwrap_or(usize::MAX),
+        },
+    )
+    .map_err(|error| match error {
+        EncodingError::SerializeBufferFull => Trap::OutOfFuel.into(),
+        other => other.into(),
+    })
 }
 
 impl Runtime {
@@ -164,12 +210,10 @@ impl Runtime {
         // are not validated as paths: the exclusive sentinel is not a stored element.
         let mut table = self.table.lock().await;
         let contract_id = table.get(&resource)?.get_contract_id();
-        let stream = Box::pin(
-            self.storage
-                .storage_rows(contract_id, path, lo, hi, descending)
-                .await?,
-        );
-        Ok(table.push(StorageRows { stream })?)
+        let cursor = self
+            .storage
+            .storage_rows(contract_id, path, lo, hi, descending);
+        Ok(table.push(StorageRows { cursor })?)
     }
 
     pub(crate) async fn _exists<S, T: HasContractId>(
@@ -271,7 +315,8 @@ impl Runtime {
         Fuel::StorageWrite.consume(accessor)?;
         meter_path(accessor, &path)?;
         let contract_id = self.table.lock().await.get(&resource)?.get_contract_id();
-        let bs = &indexer_types::serialize(&value)?;
+        let fuel = accessor.with(|access| access.as_context().get_fuel())?;
+        let bs = &encode_storage_value(&value, fuel / Fuel::Set(1).cost())?;
         Fuel::Set(bs.len() as u64).consume(accessor)?;
         // Stamp the op's payer (from the current call frame) as this row's
         // depositor — who collateralizes it via the storage-deposit FLOOR. The
@@ -341,8 +386,36 @@ impl Runtime {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use indexer_types::serialize;
     use proptest::prelude::*;
     use stdlib::KeyElement;
+
+    #[test]
+    fn encoding_limit_preserves_postcard_bytes() -> Result<()> {
+        fn check<T: Serialize>(value: T) -> Result<()> {
+            let expected = serialize(&value)?;
+            for limit in 0..=expected.len() {
+                let result = encode_storage_value(&value, limit as u64);
+                if limit < expected.len() {
+                    assert!(matches!(
+                        result.unwrap_err().downcast_ref::<Trap>(),
+                        Some(Trap::OutOfFuel)
+                    ));
+                } else {
+                    assert_eq!(result?, expected);
+                }
+            }
+            Ok(())
+        }
+        check(u64::MAX)?;
+        check(i64::MIN)?;
+        check(f64::NEG_INFINITY)?;
+        check(true)?;
+        check("é\0hello")?;
+        check(vec![0u8; 128])?;
+        check(())?;
+        Ok(())
+    }
 
     proptest! {
         // The storage trust boundary must never PANIC on arbitrary guest bytes —

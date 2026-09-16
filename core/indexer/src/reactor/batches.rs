@@ -1320,7 +1320,10 @@ impl<E: Executor> Reactor<E> {
         let mut out = Vec::with_capacity(decisions.size_hint().0);
         for decision in decisions {
             let txs = match &decision.value {
-                Value::Batch { txs, .. } => self.resolve_batch_txs(txs).await?,
+                Value::Batch { txs, .. } => {
+                    self.resolve_batch_txs(txs, decision.consensus_height.as_u64())
+                        .await?
+                }
                 Value::Block { .. } => Vec::new(),
             };
             out.push((decision, txs));
@@ -1812,7 +1815,9 @@ impl<E: Executor> Reactor<E> {
                     );
                     let anchor_height = *anchor_height;
                     let anchor_hash = *anchor_hash;
-                    let resolved_txs = self.resolve_batch_txs(txs).await?;
+                    let resolved_txs = self
+                        .resolve_batch_txs(txs, decision.consensus_height.as_u64())
+                        .await?;
                     let outcome = self
                         .process_decided_batch(
                             anchor_height,
@@ -1912,7 +1917,9 @@ impl<E: Executor> Reactor<E> {
                     anchor_hash,
                     txs,
                 } => {
-                    let full_txs = self.resolve_batch_txs(txs).await?;
+                    let full_txs = self
+                        .resolve_batch_txs(txs, certificate.height.as_u64())
+                        .await?;
 
                     for tx in &full_txs {
                         self.consensus
@@ -2139,8 +2146,14 @@ impl<E: Executor> Reactor<E> {
 mod tests {
     use super::{batch_is_ordered, build_replay_queue, dependency_sort, restore_waiting};
     use crate::consensus::{Height, Value};
+    use crate::database::queries::{
+        delete_unconfirmed_batch_txs_below, insert_batch, insert_unconfirmed_batch_tx,
+    };
     use crate::reactor::consensus_state::DeferredDecision;
+    use crate::reactor::{Reactor, lite_executor::LiteExecutor};
+    use crate::test_utils::{new_mock_block_hash, new_test_db};
     use bitcoin::absolute::LockTime;
+    use bitcoin::consensus::serialize;
     use bitcoin::hashes::Hash;
     use bitcoin::transaction::Version;
     use bitcoin::{Amount, OutPoint, ScriptBuf, Sequence, Transaction, TxIn, TxOut, Txid, Witness};
@@ -2176,6 +2189,49 @@ mod tests {
             txid: tx.compute_txid(),
             vout: 0,
         }
+    }
+
+    #[tokio::test]
+    async fn retained_body_resolution_uses_the_decided_batch() {
+        let (_reader, writer, _temp) = new_test_db().await.unwrap();
+        let conn = writer.connection();
+        let mut first = tx(&[OutPoint::null()], 1);
+        first.input[0].witness = Witness::from_slice(&[b"first witness"]);
+        let mut second = first.clone();
+        second.input[0].witness = Witness::from_slice(&[b"second witness"]);
+        let txid = first.compute_txid();
+        assert_eq!(second.compute_txid(), txid);
+        assert_ne!(second.compute_wtxid(), first.compute_wtxid());
+        for (height, transaction) in [(10, &first), (11, &second)] {
+            insert_batch(
+                &conn,
+                height,
+                1,
+                &new_mock_block_hash(1).to_string(),
+                &[],
+                false,
+            )
+            .await
+            .unwrap();
+            insert_unconfirmed_batch_tx(&conn, &txid.to_string(), height, &serialize(transaction))
+                .await
+                .unwrap();
+        }
+        for (height, expected) in [(10, Some(first)), (11, Some(second.clone())), (12, None)] {
+            assert_eq!(
+                Reactor::<LiteExecutor>::resolve_tx_from_db(&conn, &txid, height).await,
+                expected
+            );
+        }
+        delete_unconfirmed_batch_txs_below(&conn, 11).await.unwrap();
+        assert_eq!(
+            Reactor::<LiteExecutor>::resolve_tx_from_db(&conn, &txid, 10).await,
+            None
+        );
+        assert_eq!(
+            Reactor::<LiteExecutor>::resolve_tx_from_db(&conn, &txid, 11).await,
+            Some(second)
+        );
     }
 
     #[test]

@@ -209,8 +209,10 @@ impl<E: Executor> Reactor<E> {
     async fn resolve_tx_from_db(
         conn: &libsql::Connection,
         txid: &Txid,
+        batch_height: u64,
     ) -> Option<bitcoin::Transaction> {
-        if let Ok(Some(raw_bytes)) = select_unconfirmed_batch_tx(conn, &txid.to_string()).await
+        if let Ok(Some(raw_bytes)) =
+            select_unconfirmed_batch_tx(conn, &txid.to_string(), batch_height).await
             && let Ok(tx) = bitcoin::consensus::deserialize::<bitcoin::Transaction>(&raw_bytes)
         {
             return Some(tx);
@@ -246,7 +248,11 @@ impl<E: Executor> Reactor<E> {
         Ok(())
     }
 
-    async fn resolve_batch_txs(&mut self, txs: &[BatchTx]) -> Result<Vec<bitcoin::Transaction>> {
+    async fn resolve_batch_txs(
+        &mut self,
+        txs: &[BatchTx],
+        batch_height: u64,
+    ) -> Result<Vec<bitcoin::Transaction>> {
         let conn = self.db_conn();
         // First pass: everything the pool and DB can answer, in order. Slots that
         // still need bitcoind are left `None` and their txids collected, so the
@@ -259,14 +265,11 @@ impl<E: Executor> Reactor<E> {
             match entry {
                 BatchTx::Raw(tx) => resolved.push(Some(tx.clone())),
                 BatchTx::Id(txid) => {
-                    // Durable recorded body FIRST — the exact bytes this node
-                    // executed, retained until finality. It outranks the mempool
-                    // copy, which could be a same-txid witness variant. On a DB
-                    // miss the height is past finality (body pruned), where the tx
-                    // has confirmed and bitcoind holds the single canonical
-                    // variant; the pool (drained of confirmed txs) is only a
-                    // liveness fallback for a not-yet-recorded local decision.
-                    if let Some(tx) = Self::resolve_tx_from_db(&conn, txid).await {
+                    // The retained body must belong to this decision: the same
+                    // txid can carry different witnesses at different heights.
+                    // Missing bodies use the pool/RPC fallback for new decisions
+                    // or finalized history whose retained bytes were pruned.
+                    if let Some(tx) = Self::resolve_tx_from_db(&conn, txid, batch_height).await {
                         resolved.push(Some(tx));
                     } else if let Some((raw, _)) = self.consensus.pending_transactions.get(txid) {
                         resolved.push(Some(raw.clone()));

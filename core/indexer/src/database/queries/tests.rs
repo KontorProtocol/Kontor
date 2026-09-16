@@ -1,14 +1,19 @@
 use std::collections::HashSet;
+use std::sync::{Arc, Mutex, mpsc};
+use std::thread;
+use std::time::Duration;
 
 use anyhow::Result;
 use bitcoin::hashes::Hash;
 use futures_util::{StreamExt, TryStreamExt};
 use indexer_types::{BlockRow, ContractListRow, TransactionRow};
-use libsql::{Connection, params};
+use libsql::{AuthAction, Authorization, Connection, params};
 use sha2::{Digest, Sha256};
 use stdlib::subtree_end;
+use tokio::runtime::Builder as RuntimeBuilder;
 
 use super::*;
+use crate::database::connection::new_connection;
 use crate::database::types::{
     BlockQuery, ContractQuery, ContractResultRow, ContractRow, ContractStateRow, OpResultId,
     OrderDirection, ResultQuery, TransactionQuery,
@@ -72,6 +77,200 @@ fn cs_path_dotted(path: &str) -> Vec<u8> {
 /// (the byte-compare is encoding-agnostic, so a string element is a fine stand-in).
 fn cands(names: &[&str]) -> Vec<Vec<u8>> {
     names.iter().map(|n| stdlib::string_element(n)).collect()
+}
+
+#[tokio::test]
+async fn point_read_preserves_latest_version_and_tombstones() -> Result<()> {
+    let (_reader, writer, _temp) = new_test_db().await?;
+    let conn = writer.connection();
+    for height in [1, 2] {
+        insert_block(
+            &conn,
+            BlockRow::builder()
+                .height(height)
+                .hash(new_mock_block_hash(height as u32))
+                .build(),
+        )
+        .await?;
+    }
+    let path = cs_path(&["point-read"]);
+    let state = |contract_id, height, value, deleted| {
+        ContractStateRow::builder()
+            .contract_id(contract_id)
+            .height(height)
+            .path(path.clone())
+            .value(value)
+            .deleted(deleted)
+            .build()
+    };
+    insert_contract_state(&conn, state(1, 1, vec![1; 4096], false)).await?;
+    insert_contract_state(&conn, state(1, 2, vec![], false)).await?;
+    insert_contract_state(&conn, state(2, 2, vec![9; 32], false)).await?;
+    assert_eq!(
+        get_latest_contract_state_value(&conn, 0, 1, &path).await?,
+        Some(vec![])
+    );
+    assert_eq!(
+        get_latest_contract_state_value(&conn, 0, 3, &path).await?,
+        None
+    );
+
+    insert_contract_state(&conn, state(1, 2, vec![2; 8], false)).await?;
+    assert!(matches!(
+        get_latest_contract_state_value(&conn, 7, 1, &path).await,
+        Err(Error::ValueTooLarge)
+    ));
+    assert_eq!(
+        get_latest_contract_state_value(&conn, 8, 1, &path).await?,
+        Some(vec![2; 8])
+    );
+    insert_contract_state(&conn, state(1, 2, vec![], true)).await?;
+    assert!(contract_has_state(&conn, 1).await?);
+    assert!(get_latest_contract_state(&conn, 1, &path).await?.is_none());
+    assert_eq!(
+        get_latest_contract_state_value(&conn, 0, 1, &path).await?,
+        None
+    );
+    assert_eq!(
+        get_latest_contract_state_value(&conn, u64::MAX, 1, &path).await?,
+        None
+    );
+
+    conn.execute("DELETE FROM blocks WHERE height = 2", ())
+        .await?;
+    assert_eq!(
+        get_latest_contract_state_value(&conn, 4096, 1, &path).await?,
+        Some(vec![1; 4096])
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn point_read_pins_snapshot_between_metadata_and_value() -> Result<()> {
+    let (_reader, writer, (temp, name)) = new_test_db().await?;
+    let conn = writer.connection();
+    insert_block(
+        &conn,
+        BlockRow::builder()
+            .height(1)
+            .hash(new_mock_block_hash(1))
+            .build(),
+    )
+    .await?;
+    let path = cs_path(&["point-snapshot"]);
+    let original = ContractStateRow::builder()
+        .contract_id(1)
+        .height(1)
+        .path(path.clone())
+        .value(vec![1; 8])
+        .build();
+    insert_contract_state(&conn, original.clone()).await?;
+    let view = new_connection(temp.path(), &name).await?;
+    let (start, started) = mpsc::channel();
+    let (finish, finished) = mpsc::channel();
+    let finished = Mutex::new(finished);
+    let worker = thread::spawn(move || -> Result<()> {
+        started.recv_timeout(Duration::from_secs(10))?;
+        let result = RuntimeBuilder::new_current_thread()
+            .enable_all()
+            .build()?
+            .block_on(async {
+                let mut replacement = original;
+                replacement.value = vec![2; 16];
+                insert_contract_state(&conn, replacement).await
+            });
+        let _ = finish.send(result.is_ok());
+        result?;
+        Ok(())
+    });
+    // Pause at value-query preparation, after the metadata lookup has selected
+    // its rowid. The writer replaces that row before the value query executes.
+    view.authorizer(Some(Arc::new(move |context| {
+        if matches!(
+            context.action,
+            AuthAction::Read {
+                table_name: "contract_state",
+                column_name: "value"
+            }
+        ) {
+            if start.send(()).is_err() {
+                return Authorization::Deny;
+            }
+            let completed = finished
+                .lock()
+                .ok()
+                .and_then(|receiver| receiver.recv_timeout(Duration::from_secs(10)).ok());
+            if completed != Some(true) {
+                return Authorization::Deny;
+            }
+        }
+        Authorization::Allow
+    })))?;
+    let result = get_latest_contract_state_value(&view, 8, 1, &path).await;
+    view.authorizer(None)?;
+    worker.join().expect("snapshot writer panicked")?;
+    assert_eq!(result?, Some(vec![1; 8]));
+    assert!(matches!(
+        get_latest_contract_state_value(&view, 8, 1, &path).await,
+        Err(Error::ValueTooLarge)
+    ));
+    assert_eq!(
+        get_latest_contract_state_value(&view, 16, 1, &path).await?,
+        Some(vec![2; 16])
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn variant_lookup_reads_only_metadata() -> Result<()> {
+    let (_reader, writer, _temp) = new_test_db().await?;
+    let conn = writer.connection();
+    insert_block(
+        &conn,
+        BlockRow::builder()
+            .height(1)
+            .hash(new_mock_block_hash(1))
+            .build(),
+    )
+    .await?;
+    let base = cs_path(&["variant"]);
+    for variant in ["old", "new"] {
+        insert_contract_state(
+            &conn,
+            ContractStateRow::builder()
+                .contract_id(1)
+                .height(1)
+                .path(cs_path(&["variant", variant]))
+                .value(vec![7; 65536])
+                .build(),
+        )
+        .await?;
+    }
+    conn.authorizer(Some(Arc::new(|context| match context.action {
+        AuthAction::Read {
+            table_name: "contract_state",
+            column_name: "value",
+        } => Authorization::Deny,
+        _ => Authorization::Allow,
+    })))?;
+    let result = matching_path(&conn, 1, &base, &cands(&["old", "new"])).await;
+    conn.authorizer(None)?;
+    assert_eq!(result?, Some(1), "latest rowid breaks same-height ties");
+    insert_contract_state(
+        &conn,
+        ContractStateRow::builder()
+            .contract_id(1)
+            .height(1)
+            .path(cs_path(&["variant", "new"]))
+            .deleted(true)
+            .build(),
+    )
+    .await?;
+    assert_eq!(
+        matching_path(&conn, 1, &base, &cands(&["old", "new"])).await?,
+        None
+    );
+    Ok(())
 }
 
 async fn setup_test_data(conn: &libsql::Connection) -> Result<()> {
@@ -273,6 +472,25 @@ async fn min_unfinalized_batch_height_covers_record_only_batches() {
     let (_reader, writer, _temp) = new_test_db().await.unwrap();
     let conn = writer.connection();
 
+    assert_eq!(
+        min_unfinalized_batch_height(&conn, 6, 0).await.unwrap(),
+        None
+    );
+    insert_batch(
+        &conn,
+        1,
+        100,
+        &new_mock_block_hash(100).to_string(),
+        b"",
+        true,
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        min_unfinalized_batch_height(&conn, 6, 0).await.unwrap(),
+        None
+    );
+
     // consensus_height 10 anchored at 1 (deadline 7 — final once tip passes 7),
     // 11 anchored at 20 (a record-only batch, still non-final), 12 anchored at 20.
     for (h, anchor) in [(10u64, 1u64), (11, 20), (12, 20)] {
@@ -287,6 +505,38 @@ async fn min_unfinalized_batch_height_covers_record_only_batches() {
         .await
         .unwrap();
     }
+
+    assert_eq!(
+        min_unfinalized_batch_height(&conn, 6, 0).await.unwrap(),
+        Some(10)
+    );
+    assert_eq!(
+        min_unfinalized_batch_height(&conn, 6, 7).await.unwrap(),
+        Some(10)
+    );
+    assert_eq!(
+        min_unfinalized_batch_height(&conn, 6, 8).await.unwrap(),
+        Some(11)
+    );
+    assert_eq!(
+        min_unfinalized_batch_height(&conn, 6, 26).await.unwrap(),
+        Some(11)
+    );
+    assert_eq!(
+        min_unfinalized_batch_height(&conn, 6, 27).await.unwrap(),
+        None
+    );
+    // Anchor order need not match consensus order.
+    insert_batch(
+        &conn,
+        13,
+        15,
+        &new_mock_block_hash(15).to_string(),
+        b"",
+        false,
+    )
+    .await
+    .unwrap();
 
     // FINALITY_WINDOW = 6, tip = 10: batch 10 is final (1 + 6 < 10), 11 and 12 are
     // not (20 + 6 >= 10). The floor is 11 — NOT 12, which an executed-only floor
@@ -2515,12 +2765,12 @@ async fn test_path_prefix_filter_from_key_seeks_lower_bound() -> Result<()> {
     Ok(())
 }
 
-// The covering value scan (`path_prefix_filter_storage_rows`) — the leaf-VALUE twin of
+// The covering value scan (`StorageRowCursor::new`) — the leaf-VALUE twin of
 // the key scan. Each live member leaf yields `(member_element, projection_value)` in
 // ascending member order; it honors the same `from_key` seek, and excludes the
 // bucket-count row (which lives AT the bucket prefix, not as a child under it).
 #[tokio::test]
-async fn test_path_prefix_filter_storage_rows_returns_member_and_value() -> Result<()> {
+async fn test_storage_row_cursor_returns_member_and_value() -> Result<()> {
     let (_reader, writer, _temp) = new_test_db().await?;
     let conn = writer.connection();
     let h = 600002;
@@ -2587,12 +2837,12 @@ async fn test_path_prefix_filter_storage_rows_returns_member_and_value() -> Resu
     .await?;
 
     let scan = async |from: Option<Vec<u8>>| -> Result<Vec<(Vec<u8>, Vec<u8>)>> {
-        Ok(
-            path_prefix_filter_storage_rows(&conn, cid, bucket.clone(), from, None, false)
-                .await?
-                .try_collect()
-                .await?,
-        )
+        let mut cursor = StorageRowCursor::new(&conn, cid, bucket.clone(), from, None, false);
+        let mut rows = Vec::new();
+        while let Some(row) = cursor.next(u64::MAX).await? {
+            rows.push(row);
+        }
+        Ok(rows)
     };
 
     // Full scan: ascending by sort, each member paired with its covered value; the
@@ -2614,11 +2864,11 @@ async fn test_path_prefix_filter_storage_rows_returns_member_and_value() -> Resu
         ]
     );
     // Descending: same `(member, value)` pairs, highest-sort-first.
-    let desc: Vec<(Vec<u8>, Vec<u8>)> =
-        path_prefix_filter_storage_rows(&conn, cid, bucket.clone(), None, None, true)
-            .await?
-            .try_collect()
-            .await?;
+    let mut cursor = StorageRowCursor::new(&conn, cid, bucket.clone(), None, None, true);
+    let mut desc = Vec::new();
+    while let Some(row) = cursor.next(u64::MAX).await? {
+        desc.push(row);
+    }
     assert_eq!(
         desc,
         vec![
@@ -2642,7 +2892,7 @@ async fn test_path_prefix_filter_storage_rows_returns_member_and_value() -> Resu
     )
     .await?;
     for descending in [false, true] {
-        let result: Result<Vec<_>, _> = path_prefix_filter_storage_rows(
+        let result = StorageRowCursor::new(
             &conn,
             cid,
             bucket.clone(),
@@ -2650,8 +2900,7 @@ async fn test_path_prefix_filter_storage_rows_returns_member_and_value() -> Resu
             None,
             descending,
         )
-        .await?
-        .try_collect()
+        .next(u64::MAX)
         .await;
         assert!(matches!(result, Err(Error::NonScalarRow)));
     }
@@ -3745,7 +3994,7 @@ async fn test_cursor_and_offset_conflict() -> Result<()> {
     .await?;
 
     // Should use cursor pagination (ignore offset)
-    assert!(meta.next_cursor.is_none());
+    assert_eq!(meta.next_cursor, transactions.last().map(|tx| tx.id));
     assert!(meta.next_offset.is_none());
 
     // Should return transactions with (height, tx_index) < (800001, 1)

@@ -4,6 +4,7 @@ use std::str::FromStr;
 use bitcoin::{Txid, XOnlyPublicKey};
 use futures_util::Stream;
 
+use crate::database::queries::StorageRowCursor;
 use crate::database::types::{
     CORE_SIGNER_ID, FileMeta, Identity, bytes_to_field_element, validate_padded_len, validate_root,
 };
@@ -161,14 +162,8 @@ pub struct Keys {
         Pin<Box<dyn Stream<Item = Result<Vec<u8>, crate::database::queries::Error>> + Send>>,
 }
 
-/// One direct leaf: `(key element, stored value bytes)`, including storage framing.
-pub type StorageRow = (Vec<u8>, Vec<u8>);
-
 pub struct StorageRows {
-    // The value-returning cursor (see the `storage-rows` WIT resource): a stream of
-    // [`StorageRow`]s, one per direct live leaf.
-    pub stream:
-        Pin<Box<dyn Stream<Item = Result<StorageRow, crate::database::queries::Error>> + Send>>,
+    pub cursor: StorageRowCursor,
 }
 
 pub struct CoreContext {
