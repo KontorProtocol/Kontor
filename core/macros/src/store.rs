@@ -48,7 +48,7 @@ pub fn generate_enum_body(data_enum: &DataEnum, type_name: &Ident) -> Result<Tok
         match &variant.fields {
             Fields::Unit => {
                 Ok(quote! {
-                    #type_name::#variant_ident => stdlib::WriteStorage::__set_u64(ctx, &base_path, u64::from(#variant_id)),
+                    #type_name::#variant_ident => stdlib::WriteStorage::__set_void(ctx, &base_path.push_interned(#variant_id)),
                 })
             }
             Fields::Unnamed(fields) if fields.unnamed.len() == 1 => {
@@ -58,8 +58,7 @@ pub fn generate_enum_body(data_enum: &DataEnum, type_name: &Ident) -> Result<Tok
                 } else {
                     Ok(quote! {
                         #type_name::#variant_ident(inner) => {
-                            stdlib::WriteStorage::__set_u64(ctx, &base_path, u64::from(#variant_id));
-                            stdlib::WriteStorage::__set(ctx, base_path.push_interned(#variant_id), inner);
+                            stdlib::Store::__set_variant_payload(ctx, base_path.push_interned(#variant_id), inner);
                         },
                     })
                 }

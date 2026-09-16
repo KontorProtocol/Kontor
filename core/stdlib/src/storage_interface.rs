@@ -134,6 +134,25 @@ pub trait WriteStorage {
 }
 
 pub trait Store<T: WriteStorage + ?Sized> {
+    /// Whether storing this type supplies a value at the exact root path.
+    #[doc(hidden)]
+    const STORES_ROOT: bool;
+
+    #[doc(hidden)]
+    fn __set_variant_payload(ctx: &alloc::rc::Rc<T>, path: KeyPath, value: Self)
+    where
+        Self: Sized,
+    {
+        if Self::STORES_ROOT {
+            Self::__set(ctx, path, value);
+        } else {
+            Self::__set(ctx, path.clone(), value);
+            // Keep the variant present even after its last descendant is removed.
+            // Write after the payload, whose Store implementation may clear its subtree.
+            ctx.__set_void(&path);
+        }
+    }
+
     fn __set(ctx: &alloc::rc::Rc<T>, base_path: KeyPath, value: Self);
 }
 
@@ -160,66 +179,85 @@ pub trait HasRootModel<R> {
 }
 
 impl<T: WriteStorage + ?Sized> Store<T> for u64 {
+    const STORES_ROOT: bool = true;
+
     fn __set(ctx: &alloc::rc::Rc<T>, path: KeyPath, value: u64) {
         ctx.__set_u64(&path, value);
     }
 }
 
 impl<T: WriteStorage + ?Sized> Store<T> for i64 {
+    const STORES_ROOT: bool = true;
+
     fn __set(ctx: &alloc::rc::Rc<T>, path: KeyPath, value: i64) {
         ctx.__set_s64(&path, value);
     }
 }
 
 impl<T: WriteStorage + ?Sized> Store<T> for u32 {
+    const STORES_ROOT: bool = true;
+
     fn __set(ctx: &alloc::rc::Rc<T>, path: KeyPath, value: u32) {
         ctx.__set_u64(&path, value as u64);
     }
 }
 
 impl<T: WriteStorage + ?Sized> Store<T> for i32 {
+    const STORES_ROOT: bool = true;
+
     fn __set(ctx: &alloc::rc::Rc<T>, path: KeyPath, value: i32) {
         ctx.__set_s64(&path, value as i64);
     }
 }
 
 impl<T: WriteStorage + ?Sized> Store<T> for &str {
+    const STORES_ROOT: bool = true;
+
     fn __set(ctx: &alloc::rc::Rc<T>, path: KeyPath, value: &str) {
         ctx.__set_str(&path, value);
     }
 }
 
 impl<T: WriteStorage + ?Sized> Store<T> for String {
+    const STORES_ROOT: bool = true;
+
     fn __set(ctx: &alloc::rc::Rc<T>, path: KeyPath, value: String) {
         ctx.__set_str(&path, &value);
     }
 }
 
 impl<T: WriteStorage + ?Sized> Store<T> for bool {
+    const STORES_ROOT: bool = true;
+
     fn __set(ctx: &alloc::rc::Rc<T>, path: KeyPath, value: bool) {
         ctx.__set_bool(&path, value);
     }
 }
 
 impl<T: WriteStorage + ?Sized> Store<T> for Vec<u8> {
+    const STORES_ROOT: bool = true;
+
     fn __set(ctx: &alloc::rc::Rc<T>, path: KeyPath, value: Vec<u8>) {
         ctx.__set_list_u8(&path, value);
     }
 }
 
 impl<T: WriteStorage + ?Sized> Store<T> for () {
+    const STORES_ROOT: bool = true;
+
     fn __set(ctx: &alloc::rc::Rc<T>, path: KeyPath, _: ()) {
         ctx.__set_void(&path);
     }
 }
 
 impl<S: WriteStorage + ?Sized, T: Store<S>> Store<S> for Option<T> {
+    const STORES_ROOT: bool = false;
+
     fn __set(ctx: &alloc::rc::Rc<S>, path: KeyPath, value: Self) {
-        // The tag is independent of payload writes and represents Some(empty).
         ctx.__delete(&path);
-        ctx.__set_u64(&path, u64::from(value.is_some()));
-        if let Some(inner) = value {
-            ctx.__set(path.push("some"), inner);
+        match value {
+            Some(inner) => T::__set_variant_payload(ctx, path.push("some"), inner),
+            None => ctx.__set_void(&path.push("none")),
         }
     }
 }

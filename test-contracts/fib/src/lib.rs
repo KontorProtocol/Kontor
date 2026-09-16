@@ -1,6 +1,8 @@
 #![no_std]
 contract!(name = "fib");
 
+use built_in_types::context_types::HolderRef;
+use built_in_types::numbers_types::{Decimal, Integer};
 use stdlib::*;
 
 interface!(name = "arith", path = "../arith/wit");
@@ -33,6 +35,21 @@ enum Choice {
     Rows(Rows),
 }
 
+#[derive(Clone, Storage)]
+struct VariantRecord {
+    pub empty: Option<Empty>,
+    pub amount: Option<Decimal>,
+    pub owner: Option<Holder>,
+    pub address: Option<ContractAddress>,
+}
+
+#[derive(Clone, Storage)]
+enum Wrapped {
+    Amount(Integer),
+    Nested(Step),
+    Record(VariantRecord),
+}
+
 #[derive(Clone, Default, StorageRoot)]
 struct FibStorage {
     pub cache: Map<u64, FibValue>,
@@ -44,6 +61,7 @@ struct FibStorage {
     pub choice: Choice,
     pub optional: Option<Empty>,
     pub optional_value: Option<u64>,
+    pub nested: Option<Wrapped>,
 }
 
 impl Fib {
@@ -176,6 +194,63 @@ impl Guest for Fib {
         if let ChoiceWriteModel::Rows(rows) = ctx.model().choice() {
             rows.entries().set(&key, key);
         }
+    }
+
+    fn clear_variant(ctx: &ProcContext) {
+        if let ChoiceWriteModel::Rows(rows) = ctx.model().choice() {
+            let keys: Vec<_> = rows.entries().keys().collect();
+            for key in keys {
+                rows.entries().remove(&key);
+            }
+        }
+    }
+
+    fn set_nested_variant(ctx: &ProcContext, kind: u64, value: u64) {
+        ctx.model().set_nested(match kind {
+            0 => None,
+            1 => Some(Wrapped::Amount(Integer::from(value))),
+            2 => Some(Wrapped::Nested(if value == 0 {
+                Step::Start
+            } else {
+                Step::Value(value)
+            })),
+            3 => Some(Wrapped::Record(VariantRecord {
+                empty: if value == 0 { None } else { Some(Empty {}) },
+                amount: Some(Decimal::try_from(value).unwrap()),
+                owner: Some(Holder::from_ref(&HolderRef::Core).unwrap()),
+                address: Some(ContractAddress {
+                    name: "nested".into(),
+                    height: value,
+                    tx_index: 0,
+                }),
+            })),
+            _ => panic!("unknown nested variant"),
+        });
+    }
+
+    fn nested_variant_state(ctx: &ViewContext) -> Vec<u64> {
+        let result = match ctx.model().nested() {
+            None => [0, 0],
+            Some(WrappedModel::Amount(value)) => [1, value.to_string().parse().unwrap()],
+            Some(WrappedModel::Nested(step)) => match step {
+                StepModel::Start => [2, 0],
+                StepModel::Value(value) => [2, value],
+                StepModel::__Phantom(_, impossible) => match impossible {},
+            },
+            Some(WrappedModel::Record(record)) => {
+                let address = record.address().unwrap();
+                assert_eq!(address.name, "nested");
+                assert_eq!(record.empty().is_some(), address.height != 0);
+                assert_eq!(
+                    record.amount().unwrap(),
+                    Decimal::try_from(address.height).unwrap()
+                );
+                assert_eq!(record.owner().unwrap().as_ref(), HolderRef::Core);
+                [3, address.height]
+            }
+            Some(WrappedModel::__Phantom(_, impossible)) => match impossible {},
+        };
+        result.to_vec()
     }
 
     fn cached_values(ctx: &ViewContext) -> Vec<u64> {

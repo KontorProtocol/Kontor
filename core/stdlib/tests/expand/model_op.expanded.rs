@@ -17,24 +17,28 @@ pub enum OpModel<__S> {
 pub type __OpModelFor<__S> = OpModel<__S>;
 impl<__S: stdlib::ReadStorage + 'static> OpModel<__S> {
     pub fn new(ctx: alloc::rc::Rc<__S>, base_path: stdlib::KeyPath) -> Self {
-        stdlib::ReadStorage::__get_u64(&ctx, &base_path)
-            .map(|__idx| match __idx {
-                0u64 => OpModel::Id,
-                1u64 => {
+        let variant = stdlib::ReadStorage::__get_keys::<
+            stdlib::Interned,
+        >(&ctx, &base_path)
+            .next();
+        variant
+            .map(|stdlib::Interned(__idx)| match __idx {
+                0u8 => OpModel::Id,
+                1u8 => {
                     OpModel::Sum(
                         __OperandModelFor::<
                             __S,
                         >::new(ctx.clone(), base_path.push_interned(1u8)),
                     )
                 }
-                2u64 => {
+                2u8 => {
                     OpModel::Mul(
                         __OperandModelFor::<
                             __S,
                         >::new(ctx.clone(), base_path.push_interned(2u8)),
                     )
                 }
-                3u64 => {
+                3u8 => {
                     OpModel::Div(
                         __OperandModelFor::<
                             __S,
@@ -83,24 +87,28 @@ impl<
     __S: stdlib::ReadStorage + stdlib::WriteStorage + stdlib::HasViewStorage + 'static,
 > OpWriteModel<__S> {
     pub fn new(ctx: alloc::rc::Rc<__S>, base_path: stdlib::KeyPath) -> Self {
-        stdlib::ReadStorage::__get_u64(&ctx, &base_path)
-            .map(|__idx| match __idx {
-                0u64 => OpWriteModel::Id,
-                1u64 => {
+        let variant = stdlib::ReadStorage::__get_keys::<
+            stdlib::Interned,
+        >(&ctx, &base_path)
+            .next();
+        variant
+            .map(|stdlib::Interned(__idx)| match __idx {
+                0u8 => OpWriteModel::Id,
+                1u8 => {
                     OpWriteModel::Sum(
                         __OperandWriteModelFor::<
                             __S,
                         >::new(ctx.clone(), base_path.push_interned(1u8)),
                     )
                 }
-                2u64 => {
+                2u8 => {
                     OpWriteModel::Mul(
                         __OperandWriteModelFor::<
                             __S,
                         >::new(ctx.clone(), base_path.push_interned(2u8)),
                     )
                 }
-                3u64 => {
+                3u8 => {
                     OpWriteModel::Div(
                         __OperandWriteModelFor::<
                             __S,

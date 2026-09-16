@@ -95,6 +95,8 @@ pub fn derive_store(input: TokenStream) -> TokenStream {
     let expanded = quote! {
         #[automatically_derived]
         impl<__S: stdlib::WriteStorage + stdlib::ReadStorage + ?Sized> stdlib::Store<__S> for #name #ty_generics #where_clause {
+            const STORES_ROOT: bool = false;
+
             fn __set(ctx: &alloc::rc::Rc<__S>, base_path: stdlib::KeyPath, value: #name #ty_generics) {
                 #body
             }

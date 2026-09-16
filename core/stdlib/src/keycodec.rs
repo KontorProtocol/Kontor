@@ -88,6 +88,21 @@ pub trait KeyElement: Sized {
     }
 }
 
+/// An interned structural path segment, used by generated variant readers.
+#[doc(hidden)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Interned(pub u8);
+
+impl KeyElement for Interned {
+    fn encode_to(&self, out: &mut Vec<u8>) {
+        encode_dict(out, self.0);
+    }
+
+    fn decode_from(bytes: &[u8]) -> Result<(Self, &[u8]), CodecError> {
+        decode_dict(bytes).map(|(id, rest)| (Self(id), rest))
+    }
+}
+
 // ── strings / bytes ────────────────────────────────────────────────────────
 // `0x00` in content is escaped to `0x00 0xFF`, then the element is `0x00`-
 // terminated. The terminator (the minimum byte) sorts below any real content, so
@@ -928,8 +943,9 @@ mod tests {
             encode_dict(&mut bytes, id);
             assert_eq!(bytes.len(), 2); // tag + 1-byte id
 
-            let (got, rest) = decode_dict(&bytes).unwrap();
-            assert_eq!(got, id);
+            let (got, rest) = Interned::decode_from(&bytes).unwrap();
+            assert_eq!(got, Interned(id));
+            assert_eq!(got.encode(), bytes);
             assert!(rest.is_empty());
 
             // next_element treats it as one fixed-width element.

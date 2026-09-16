@@ -323,6 +323,8 @@ where
     V: Store<S2> + Clone + Indexed,
     S2: WriteStorage + ReadStorage + ?Sized,
 {
+    const STORES_ROOT: bool = false;
+
     /// Wholesale write: persist every entry's value, plus its index rows when the
     /// value type declares indexes, so a map populated before `init` (at the root
     /// or any nested level) lands index-consistent. The index root is the
@@ -887,6 +889,8 @@ mod tests {
     }
 
     impl Store<Mock> for Position {
+        const STORES_ROOT: bool = false;
+
         fn __set(ctx: &Rc<Mock>, base_path: KeyPath, value: Position) {
             ctx.__set(base_path.push("status"), value.status);
         }
@@ -1039,6 +1043,8 @@ mod tests {
     }
 
     impl Store<Mock> for Account {
+        const STORES_ROOT: bool = false;
+
         fn __set(ctx: &Rc<Mock>, base_path: KeyPath, value: Account) {
             // `positions` is an interned field name (as the macro would emit).
             ctx.__set(base_path.push_interned(IM), value.positions);
@@ -1133,6 +1139,8 @@ mod tests {
     }
 
     impl Store<Mock> for Bag {
+        const STORES_ROOT: bool = false;
+
         fn __set(ctx: &Rc<Mock>, base_path: KeyPath, value: Bag) {
             ctx.__set(base_path.push("tag"), value.tag);
             ctx.__set(base_path.push("items"), value.items);

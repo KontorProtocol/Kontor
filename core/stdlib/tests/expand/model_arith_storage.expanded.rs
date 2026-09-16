@@ -21,9 +21,13 @@ impl<__S: stdlib::ReadStorage + 'static> ArithStorageModel<__S> {
     }
     pub fn last_op(&self) -> Option<__OpModelFor<__S>> {
         let base_path = self.base_path.push_interned(0u8);
-        match stdlib::ReadStorage::__get_u64(&self.ctx, &base_path) {
-            None | Some(0) => None,
-            Some(1) => {
+        let variant = stdlib::ReadStorage::__get_keys::<
+            alloc::string::String,
+        >(&self.ctx, &base_path)
+            .next();
+        match variant.as_deref() {
+            None | Some("none") => None,
+            Some("some") => {
                 Some(__OpModelFor::<__S>::new(self.ctx.clone(), base_path.push("some")))
             }
             _ => {
@@ -70,9 +74,13 @@ impl<
     }
     pub fn last_op(&self) -> Option<__OpWriteModelFor<__S>> {
         let base_path = self.base_path.push_interned(0u8);
-        match stdlib::ReadStorage::__get_u64(&self.ctx, &base_path) {
-            None | Some(0) => None,
-            Some(1) => {
+        let variant = stdlib::ReadStorage::__get_keys::<
+            alloc::string::String,
+        >(&self.ctx, &base_path)
+            .next();
+        match variant.as_deref() {
+            None | Some("none") => None,
+            Some("some") => {
                 Some(
                     __OpWriteModelFor::<
                         __S,

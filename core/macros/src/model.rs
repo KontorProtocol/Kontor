@@ -430,9 +430,10 @@ pub fn generate_struct(
                         Ok(quote! {
                             pub fn #field_name(&self) -> Option<#inner_ty> {
                                 let base_path = #base_path;
-                                match stdlib::ReadStorage::__get_u64(&self.ctx, &base_path) {
-                                    None | Some(0) => None,
-                                    Some(1) => stdlib::ReadStorage::__get(&self.ctx, base_path.push("some")),
+                                let variant = stdlib::ReadStorage::__get_keys::<alloc::string::String>(&self.ctx, &base_path).next();
+                                match variant.as_deref() {
+                                    None | Some("none") => None,
+                                    Some("some") => stdlib::ReadStorage::__get(&self.ctx, base_path.push("some")),
                                     _ => panic!("Invalid Option storage tag"),
                                 }
                             }
@@ -443,9 +444,10 @@ pub fn generate_struct(
                         Ok(quote! {
                             pub fn #field_name(&self) -> Option<#ret_ty> {
                                 let base_path = #base_path;
-                                match stdlib::ReadStorage::__get_u64(&self.ctx, &base_path) {
-                                    None | Some(0) => None,
-                                    Some(1) => Some(#inner_model_ty::<__S>::new(self.ctx.clone(), base_path.push("some"))#load),
+                                let variant = stdlib::ReadStorage::__get_keys::<alloc::string::String>(&self.ctx, &base_path).next();
+                                match variant.as_deref() {
+                                    None | Some("none") => None,
+                                    Some("some") => Some(#inner_model_ty::<__S>::new(self.ctx.clone(), base_path.push("some"))#load),
                                     _ => panic!("Invalid Option storage tag"),
                                 }
                             }
@@ -899,12 +901,12 @@ pub fn generate_enum(data_enum: &DataEnum, type_name: &Ident, write: bool) -> Re
 
     let model_variants = model_variants?;
 
-    // The root tag and payload path use the same declaration-order id as Store.
+    // Variant paths use the same declaration-order id as Store.
     let numbered = utils::numbered_variants(data_enum, type_name.span())?;
 
     let new_arms = numbered.iter().map(|&(variant_id, variant)| {
         let variant_ident = &variant.ident;
-        let arm_idx = variant_id as u64;
+        let arm_idx = variant_id;
 
         match &variant.fields {
             Fields::Unit => Ok(quote! {
@@ -960,8 +962,8 @@ pub fn generate_enum(data_enum: &DataEnum, type_name: &Ident, write: bool) -> Re
 
         impl #impl_generics #model_name<__S> {
             pub fn new(ctx: alloc::rc::Rc<__S>, base_path: stdlib::KeyPath) -> Self {
-                stdlib::ReadStorage::__get_u64(&ctx, &base_path)
-                    .map(|__idx| match __idx {
+                let variant = stdlib::ReadStorage::__get_keys::<stdlib::Interned>(&ctx, &base_path).next();
+                variant.map(|stdlib::Interned(__idx)| match __idx {
                         #(#new_arms,)*
                         _ => {
                             panic!("Invalid enum storage tag")

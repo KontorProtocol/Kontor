@@ -21,7 +21,7 @@ Archive and pruned nodes visit the same live entries and charge identical fuel.
 This removes traversal of obsolete versions and historical deleted keys, not
 all physical cost variation from database size, caching, or compaction. Existing
 nested-record key deduplication and bounds remain in place. Existing metered
-scalar and deletion operations also cover enum/Option tags; eventual calibration
+key-cursor, scalar, and deletion operations also cover enum/Option values; eventual calibration
 must include index maintenance in write costs.
 
 ## Maintenance and failure boundaries
@@ -61,35 +61,43 @@ reopen coverage, not process-kill/power-loss fault injection.
 
 ## Enum and Option layout
 
-This is the current implementation. The subsequent [path-layout comparison](variant-layout-comparison.md)
-found a viable alternative and recommends evaluating it through the compiler
-before finalizing this format.
+Enums keep declaration-order variant IDs in interned child paths. Options keep
+`none`/`some` child paths. Readers take one child from the existing metered key
+cursor over current state, then drop the cursor. They neither search history nor
+materialize the payload to select the variant. Missing Options read as None;
+invalid tags trap deterministically.
 
-Enums store their declaration-order variant id as a scalar `u64` at the enum
-root. Payloads stay beneath their existing interned variant child. Options store
-`0` (None) or `1` (Some) at their root, with Some's payload beneath `some`.
-Unit variants and empty payloads need only a root tag. Reading a variant performs
-one ordinary metered scalar lookup, regardless of payload size or retained history.
-Missing Option tags read as None; invalid tags trap deterministically.
+| Payload | Live representation |
+| --- | --- |
+| Unit / None | `field/variant = ()` |
+| Scalar | `field/variant = value` |
+| Compound | `field/variant = ()`, with fields below that path |
 
-Replacement tombstones the entire old live subtree before storing the tag and
-payload. This removes prior-block payloads as well as same-block ones, releasing
-their storage floor and charging for their deletion. Payload writes do not change
-the tag. Normal call rollback and block rollback restore tags, payloads, pointers,
-and deposit attribution together. There is no special hard-delete/revival path.
+The compound marker persists even when populated, so removing the last descendant
+cannot erase the variant. `Store::STORES_ROOT` is required metadata identifying
+types whose value already supplies presence, including primitive scalars,
+Integer, Decimal, and Holder.
+Derives supply it automatically; hand-written implementations must declare it.
+The shared variant-payload writer adds a marker only for compound types, after
+writing the payload because a nested replacement may clear its own subtree.
+This is storage-layout metadata, not a new contract-facing API or host operation.
 
-Path-based tags are also viable with full replacement cleanup, a first-live-child
-lookup, and markers for empty payloads. The root scalar was chosen to reuse the
-existing scalar host API and give all payload shapes one representation.
+Replacement tombstones the entire old live subtree before writing the new value.
+This removes prior-block payloads as well as same-block ones, releases their
+storage floor, and charges for deletion. Ordinary payload edits leave the variant
+marker in place. Call and block rollback restore payloads, pointers, and deposit
+attribution together. There is no separate scalar tag or hard-delete/revival path.
 
-The tradeoff is one additional small row for payload-bearing variants/Some, and
-real deletion work when replacing large payloads. Reads no longer infer variant
-selection from whichever descendant happened to be written last. This also
-represents Some(empty record) and enums with empty-record payloads unambiguously.
+The [layout comparison](variant-layout-comparison.md) records the rejected root-tag
+alternative and its measurements. The path layout saves one row for scalar
+payloads; compound payloads use the same row count. Existing cursor fuel tariffs
+are higher than point-read tariffs, so these changes do not claim cheaper variant
+reads. Calibration remains separate from this representation change.
 
-This is an incompatible guest ABI and stored-layout change: the variant-matching
-host imports are removed. Deploy rebuilt contracts with fresh pre-production
-state; the pointer backfill alone cannot migrate old variant layouts. No legacy
+This remains an incompatible guest ABI and stored-layout change: old variant-
+matching imports are removed, and old layouts could leave obsolete variants live
+or omit empty-payload markers. Deploy rebuilt contracts with fresh pre-production
+state; pointer backfill alone cannot repair old variant representations. No legacy
 reader or dual encoding is retained.
 
 ## Remaining history reads
@@ -112,17 +120,19 @@ query-plan check ensures repair drives history seeks from the affected-key set.
 
 Compiled-contract coverage exercises unit, scalar, collection, and empty-record
 variants; None/Some transitions; cross-block replacement and payload edits;
-failed-call rollback; reorg; and pruning. Variant reads are checked for fixed
-scalar-read counts and equal fuel after payload growth and history pruning.
-
-Validation on 2026-09-16: 546 release library tests and 124 contract integration
-tests passed, along with stdlib/macro tests and 158 SDK tests. Clippy with warnings
-denied and formatting passed. `./tools/kontor build --check` reproduced all native
-contracts, test contracts, and SDK outputs byte-for-byte.
+failed-call rollback; reorg; and pruning. Variant reads are checked for exactly
+one cursor poll per selection, no payload value fetch during selection, and equal
+fuel after payload growth and pruning.
+Nested enum/Option regressions include Integer, Decimal, Holder, compound
+ContractAddress values, and deletion of a compound payload's last descendant.
 
 The production history benchmark (`benchmark_storage_history`, release mode)
-measured a 100-field variant at 1, 10, 100, and 1,000 retained payload versions.
-Tag reads charged 230 host fuel in every archive/pruned case. Archive timings were
-13.6, 5.7, 5.8, and 5.9 microseconds respectively; pruned timings were 5.7–6.4
-microseconds. These are local timings, not a calibrated fuel schedule. The
-benchmark asserts result, fuel, and checkpoint preservation through pruning.
+measures point, key, value, existence, and variant reads at 1, 10, 100, and 1,000
+retained versions. It asserts result, fuel, and checkpoint preservation through
+pruning. The smaller archive/pruned parity case runs in the normal test suite.
+
+Validation on 2026-09-16: 546 release library tests passed (12 ignored), along
+with 124 contract integration tests, 158 SDK tests, and the stdlib unit, macro
+snapshot, and compile-fail suites. Clippy with warnings denied and formatting
+passed. `./tools/kontor build --check` reproduced all native contracts, test
+contracts, and SDK outputs byte-for-byte.

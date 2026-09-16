@@ -74,7 +74,9 @@ async fn seed(conn: &Connection, versions: u64, keys: u64) -> Result<()> {
         tip = versions + 1
     ))
     .await?;
-    conn.execute("INSERT INTO contract_state (contract_id,height,path,size,value,deleted) VALUES (1, ?, ?, ?, ?, 0)", params![versions + 1, path("history-variant", None), serialize(&1u64)?.len() as u64, serialize(&1u64)?]).await?;
+    let mut variant = path("history-variant", None);
+    "some".to_string().encode_to(&mut variant);
+    conn.execute("INSERT INTO contract_state (contract_id,height,path,size,value,deleted) VALUES (1, ?, ?, 0, zeroblob(0), 0)", params![versions + 1, variant]).await?;
     Ok(())
 }
 
@@ -104,7 +106,7 @@ fn expected_result(root: &str, op: Operation, height: u64) -> Value {
             }
         }
         Operation::Exists => json!(!keys.is_empty()),
-        Operation::Variant => json!(1),
+        Operation::Variant => json!("some"),
         Operation::Keys(descending) | Operation::Rows(descending) => {
             if descending {
                 keys.reverse();
@@ -132,7 +134,7 @@ async fn print_plans(conn: &Connection, versions: u64) -> Result<()> {
         ),
         (
             "variant",
-            "SELECT height, size FROM current_contract_state WHERE contract_id=1 AND path = ?1 AND path < ?2",
+            "SELECT path FROM current_contract_state WHERE contract_id=1 AND path > ?1 AND path < ?2 ORDER BY path LIMIT 1",
         ),
     ] {
         let mut rows = conn
@@ -183,17 +185,31 @@ async fn call(
             })
             .await?
         ),
-        Operation::Variant => json!(
-            host(store, async |accessor| {
-                <Runtime as StorageHost<Runtime>>::get_u64(
+        Operation::Variant => {
+            let cursor = host(store, async |accessor| {
+                <Runtime as StorageHost<Runtime>>::get_keys(
                     accessor,
                     Resource::new_borrow(rep),
                     path(root, None),
+                    None,
+                    None,
+                    false,
                 )
                 .await
             })
-            .await?
-        ),
+            .await?;
+            let next = host(store, async |accessor| {
+                <Runtime as KeysHost<Runtime>>::next(accessor, Resource::new_borrow(cursor.rep()))
+                    .await
+            })
+            .await?;
+            store.data().table.lock().await.delete(cursor)?;
+            let next = next.context("missing variant")?;
+            let (tag, tail) = String::decode_from(&next)
+                .map_err(|error| anyhow::anyhow!("invalid variant: {error:?}"))?;
+            ensure!(tail.is_empty());
+            json!(tag)
+        }
         Operation::Keys(descending) => {
             let cursor = host(store, async |accessor| {
                 <Runtime as StorageHost<Runtime>>::get_keys(
@@ -363,7 +379,7 @@ async fn benchmark_storage_history() -> Result<()> {
             }
             let (us, result, fuel) =
                 measure(&mut store, rep, "history-variant", Operation::Variant).await?;
-            ensure!(result == json!(1));
+            ensure!(result == json!("some"));
             println!(
                 "HISTORY_BENCH {}",
                 json!({"versions":versions,"keys":KEYS,"state":state,"stored_rows":physical,"root":"history-variant","operation":"Variant","us":us,"fuel":fuel})
@@ -423,7 +439,7 @@ async fn current_state_host_results_and_fuel_are_independent_of_pruning() -> Res
             }
         }
         let variant = call(&mut store, rep, "history-variant", Operation::Variant).await?;
-        ensure!(variant.0 == json!(1));
+        ensure!(variant.0 == json!("some"));
         actual.push(variant);
         if pruned {
             ensure!(

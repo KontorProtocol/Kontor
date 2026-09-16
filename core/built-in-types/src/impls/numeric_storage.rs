@@ -36,6 +36,8 @@ macro_rules! numeric_storage {
         }
 
         impl<S: WriteStorage + ?Sized> Store<S> for $ty {
+            const STORES_ROOT: bool = true;
+
             fn __set(ctx: &Rc<S>, path: KeyPath, value: Self) {
                 ctx.__set_list_u8(&path, value.encode());
             }

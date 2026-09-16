@@ -274,6 +274,8 @@ impl ScalarStorage for context::Holder {
 }
 
 impl<__S: stdlib::WriteStorage + ?Sized> stdlib::Store<__S> for context::Holder {
+    const STORES_ROOT: bool = true;
+
     fn __set(ctx: &alloc::rc::Rc<__S>, path: stdlib::KeyPath, value: Self) {
         stdlib::WriteStorage::__set_str(ctx, &path, &alloc::string::ToString::to_string(&value));
     }

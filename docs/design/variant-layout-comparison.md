@@ -1,8 +1,9 @@
 # Variant paths versus root tags
 
-Status: test-only comparison on top of `a5c41726`, 2026-09-16. The contract
-compiler and shipped binaries still use root tags. This experiment does not
-introduce another supported contract encoding or change fuel prices.
+Status: historical comparison from `fcd6c16e`, 2026-09-16. Production now uses
+the path layout described in [current-state storage](current-state-storage.md).
+The root-tag implementation and comparison harness have been retired. The raw
+measurements remain here as decision evidence; they are not current guest costs.
 
 ## Question and recommendation
 
@@ -103,11 +104,10 @@ The raw results include some slower early Option samples; absolute timings are
 machine/workload dependent and should not be treated as production latency.
 
 The harness bypasses guest Wasm instructions and component ABI crossings. It
-compares variant selection, not complete record materialization. Writers choose
-the known payload shape explicitly; production codegen still needs to ensure
-scalar payloads supply their own root value while compound payloads receive a
-persistent marker. Nested enums/Options, numeric scalars, index maintenance, and
-full guest fuel should be checked when implementing that representation.
+compares variant selection, not complete record materialization. Writers in this
+experiment chose known payload shapes explicitly. The production implementation
+subsequently moved that distinction into Store metadata, with
+compiled-contract tests for nested values, numeric scalars, and full guest fuel.
 
 The functional regression covers missing variants, deletion of every descendant,
 same-block replacement and abort, cross-block replacement, scalar retrieval,
@@ -117,12 +117,14 @@ versions and pruning. Both tests and Clippy with warnings denied passed.
 
 ## Reproduction
 
+Check out `fcd6c16e` in a separate worktree, then run:
+
 ```sh
 cargo test --manifest-path core/Cargo.toml --locked --release -p indexer \
   --lib variant_layout -- --include-ignored --nocapture --test-threads=1
 ```
 
 [Raw results](variant-layout-results.jsonl) contain the `VARIANT_LAYOUT`,
-`VARIANT_HISTORY`, and `VARIANT_PRUNED` records from the final run. Keep this
-comparison as an experiment, not a second production encoding; retire the
-superseded implementation and redundant timing code when the layout is settled.
+`VARIANT_HISTORY`, and `VARIANT_PRUNED` records from the final run. The active
+history benchmark now uses the production path layout instead of maintaining
+two competing implementations.
