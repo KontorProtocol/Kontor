@@ -33,6 +33,8 @@ use crate::test_utils::{new_mock_block_hash, test_runtime};
 
 const BUDGET: u64 = 1_000_000;
 
+mod history_benchmarks;
+
 async fn host<R>(
     store: &mut Store<Runtime>,
     call: impl AsyncFnOnce(&Accessor<Runtime, Runtime>) -> Result<R>,
