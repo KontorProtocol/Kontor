@@ -61,6 +61,10 @@ reopen coverage, not process-kill/power-loss fault injection.
 
 ## Enum and Option layout
 
+This is the current implementation. The subsequent [path-layout comparison](variant-layout-comparison.md)
+found a viable alternative and recommends evaluating it through the compiler
+before finalizing this format.
+
 Enums store their declaration-order variant id as a scalar `u64` at the enum
 root. Payloads stay beneath their existing interned variant child. Options store
 `0` (None) or `1` (Some) at their root, with Some's payload beneath `some`.
