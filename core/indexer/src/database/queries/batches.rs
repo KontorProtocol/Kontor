@@ -280,6 +280,9 @@ pub async fn delete_unconfirmed_batch_txs_below(
     Ok(deleted)
 }
 
+const MIN_UNFINALIZED_BATCH_HEIGHT_SQL: &str = "SELECT MIN(consensus_height) FROM batches INDEXED BY idx_batches_anchor_height \
+     WHERE is_block = 0 AND anchor_height >= ?";
+
 /// The lowest `consensus_height` whose batch is still within the finality window
 /// at `tip` (its anchor deadline `anchor_height + finality_window` has not passed).
 /// Bodies strictly below this are final and may be reclaimed. Sourced from the
@@ -295,9 +298,8 @@ pub async fn min_unfinalized_batch_height(
 ) -> Result<Option<u64>, Error> {
     let mut rows = conn
         .query(
-            "SELECT MIN(consensus_height) FROM batches \
-             WHERE is_block = 0 AND anchor_height + ? >= ?",
-            params![finality_window, tip],
+            MIN_UNFINALIZED_BATCH_HEIGHT_SQL,
+            params![tip.saturating_sub(finality_window)],
         )
         .await?;
     match rows.next().await? {
@@ -327,11 +329,12 @@ pub async fn select_unconfirmed_batch_txs(
 pub async fn select_unconfirmed_batch_tx(
     conn: &Connection,
     txid: &str,
+    batch_height: u64,
 ) -> Result<Option<Vec<u8>>, Error> {
     let mut rows = conn
         .query(
-            "SELECT raw_tx FROM unconfirmed_batch_txs WHERE txid = ?",
-            params![txid],
+            "SELECT raw_tx FROM unconfirmed_batch_txs WHERE txid = ? AND batch_height = ?",
+            params![txid, batch_height],
         )
         .await?;
     Ok(rows
@@ -447,4 +450,33 @@ pub async fn select_unfinalized_batches(
         }
     }
     Ok(results)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::MIN_UNFINALIZED_BATCH_HEIGHT_SQL;
+    use crate::test_utils::new_test_db;
+
+    #[tokio::test]
+    async fn finality_floor_seeks_the_anchor_range() {
+        let (_reader, writer, _temp) = new_test_db().await.unwrap();
+        let conn = writer.connection();
+        let mut rows = conn
+            .query(
+                &format!("EXPLAIN QUERY PLAN {MIN_UNFINALIZED_BATCH_HEIGHT_SQL}"),
+                [100],
+            )
+            .await
+            .unwrap();
+        let mut plan = Vec::new();
+        while let Some(row) = rows.next().await.unwrap() {
+            plan.push(row.get::<String>(3).unwrap());
+        }
+        assert!(
+            plan.iter().any(|step| step.contains(
+                "SEARCH batches USING INDEX idx_batches_anchor_height (anchor_height>?)"
+            )),
+            "{plan:?}"
+        );
+    }
 }

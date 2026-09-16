@@ -63,6 +63,37 @@ fn deny_storage_value_reads(context: &AuthContext<'_>) -> Authorization {
 }
 
 #[tokio::test]
+async fn point_read_budget_rejects_value_before_fetching() -> Result<()> {
+    let (runtime, _dir, _name) = test_runtime().await?;
+    let path = "point-value-budget".to_string().encode();
+    let encoded = serialize(&vec![0u8; 4096])?;
+    runtime.storage.set(1, &path, &encoded, None, None).await?;
+    let budget = Fuel::StorageRead.cost()
+        + Fuel::Path(path.len() as u64).cost()
+        + Fuel::Get(encoded.len() - 1).cost();
+    let mut store = runtime.make_store(budget)?;
+    let rep = store
+        .data()
+        .table
+        .lock()
+        .await
+        .push(ProcStorage { contract_id: 1 })?
+        .rep();
+    runtime
+        .storage
+        .conn
+        .authorizer(Some(Arc::new(deny_storage_value_reads)))?;
+    let result = host(&mut store, async |accessor| {
+        <Runtime as StorageHost<Runtime>>::get_list_u8(accessor, Resource::new_borrow(rep), path)
+            .await
+    })
+    .await;
+    runtime.storage.conn.authorizer(None)?;
+    assert_exhausted(result.unwrap_err());
+    Ok(())
+}
+
+#[tokio::test]
 async fn row_budget_rejects_value_before_fetching() -> Result<()> {
     let (runtime, _dir, _name) = test_runtime().await?;
     let root = "value-budget".to_string().encode();

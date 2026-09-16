@@ -1,10 +1,26 @@
 # Storage value budgets
 
-Baseline: main `6a79ceb9` (#572). Traversal limits bound the number of rows visited;
+Baseline: main `6a79ceb9` (#572). Traversal limits bound logical row processing;
 this change bounds value fetching and encoding within an individual operation.
 Contract interfaces, stored encodings, and successful-call byte prices stay the same.
 
-## Row reads
+## Storage reads
+
+Point reads and row scans share `BudgetedStorageValue` and `StorageValueReader`.
+The former checks the stored size against the available bytes before admitting
+a rowid to the latter's prepared lookup. This keeps one budget check and one
+value-fetch implementation. Neither mechanism allocates a buffer for an
+unaffordable value. The reader owns its connection and reusable statement;
+successful reads reset that statement to release SQLite's result buffer.
+
+A point read finds only the newest row's `rowid`, `size`, and `deleted` flag with
+an indexed `ORDER BY height DESC LIMIT 1`. Deletion is checked after selecting
+the newest version, so a tombstone cannot resurrect an older value. Its metadata
+cursor stays alive until the shared value fetch finishes, pinning the snapshot.
+This replaces the previous outer SQL `CASE` around a `SELECT *` window query,
+which prevented returning oversized bytes to Rust without preventing the inner
+query from accessing values. Missing and deleted keys return `None`; a live
+zero-length value remains distinct from a missing key.
 
 The host pays `StorageScan` before touching the cursor, then converts remaining
 fuel to a byte limit using `KeysNext`'s existing price. The limit covers both the
@@ -28,6 +44,17 @@ replaces the unbudgeted row stream; key-only streams remain unchanged.
 This does not eliminate database work before the size check: SQLite must locate
 the live row and read its metadata. It prevents materializing the value, not
 incidental page reads containing some value bytes.
+
+The shared point-read path was measured against the previous window/`CASE` query
+on local Linux aarch64 in release mode, alternating implementations over five
+warmup and 24 measured trials of 32 reads each. With one stored version,
+successful 8-byte reads fell from about 16.5 to 5.5 µs; 4-KiB reads from 18.9 to
+6.0 µs; and 64-KiB reads from 39.2 to 11.3 µs. With 32 stored versions, a
+successful 64-KiB read fell from about 60 to 12 µs. Rejecting that value with a
+16-byte budget fell from 55 to 4.4 µs. A second run reproduced these results.
+Removing the window query outweighed the additional prepared value lookup in
+these warm-cache measurements. The temporary benchmark was removed after
+measurement; these are not whole-contract speedups.
 
 ## Read strategy and measurements
 
@@ -104,16 +131,70 @@ reopened. A failed reopen also aborts the handle. A fresh handle works. The BLOB
 shares the metadata connection's snapshot and keeps it pinned even after the SQL
 cursor is dropped; dropping the BLOB releases the pin.
 
-The next implementation step, if selected, belongs in libSQL: a safe owned
-read-only BLOB wrapper retaining its connection, with length/read/reopen methods
-and guaranteed closure on drop. The existing runtime cursor can own this instead
-of its value statement. Connection lifetime and thread-safety need review because
+A direct binding implementation would need a safe owned read-only BLOB wrapper
+retaining its connection, with length/read/reopen methods and guaranteed closure
+on drop. The existing runtime cursor could own this instead of its value statement.
+Connection lifetime and thread-safety need review because
 the resource table requires owned, `Send + Sync` resources.
 [Rusqlite's BLOB API](https://docs.rs/rusqlite/0.40.2/rusqlite/blob/struct.Blob.html)
 is a useful interface reference, but its borrowed, non-`Send`/non-`Sync` handle
 cannot be used directly here. Production regression coverage must observe actual
 BLOB operations: the current SQL-authorizer test alone does not cover direct
 incremental-BLOB calls. No size-dependent SQL/BLOB split is proposed.
+
+## Loadable extension experiment
+
+The [reproducible prototype](../../experiments/storage-blob-extension/README.md)
+uses the unmodified locked libSQL dependency. A loadable C extension registers a
+SQL function that checks the supplied byte budget, opens/reopens the selected
+BLOB on the calling connection, validates its length, and returns its bytes.
+SQLite owns the output allocation until the SQL result is reset; libSQL copies
+the result into Rust. There are no changes to contracts or persistent state.
+
+Two variants were measured: opening/closing per invocation, and retaining a
+handle per scan. Reuse needs a lifetime visible through the existing Rust API:
+the prototype exposes a one-row in-memory virtual table whose cursor owns the
+handle. Holding its `Rows` keeps a session ID valid; exhausting or dropping it
+closes the handle. Separate cursors have separate sessions, and errors discard
+aborted handles. This avoids explicit asynchronous cleanup and raw pointer
+exchange, but adds a small session registry and another SQL cursor per scan.
+
+On local Linux aarch64, the first release run (five warmups, 24 measured trials,
+rotating/reversing modes) produced these ascending-scan medians. Timings include
+session creation and destruction:
+
+| Value bytes | Rows | Prepared SQL | Extension open/close | Extension reuse |
+| --- | ---: | ---: | ---: | ---: |
+| 8 | 256 | 261 µs | 354 µs | 289 µs |
+| 128 | 256 | 263 µs | 356 µs | 289 µs |
+| 4,096 | 256 | 384 µs | 466 µs | 390 µs |
+| 65,536 | 256 | 3,288 µs | 3,439 µs | 3,369 µs |
+| 1,048,576 | 32 | 6,549 µs | 6,661 µs | 6,647 µs |
+
+Across both directions, extension reuse was 10–14% slower for 8/128-byte values
+and 1–6% slower for larger values. Stateless reads were worse for small values.
+A second run reproduced this result: 9–14% slower for small values and roughly
+1–6% slower for larger values. Differences near 1% are small enough that the
+useful conclusion is no demonstrated speedup, rather than a precise slowdown.
+Both extension variants rejected an unaffordable 4-MiB row in about 11–12 µs,
+matching deferred SQL, because neither reaches the value API in that case.
+All four modes returned identical data, including zero-length BLOBs. These are
+warm-cache database measurements, not end-to-end throughput.
+
+The lifecycle probe passed on the actual libSQL connection: exact and changing
+budgets, no BLOB open on rejection, no read after a metadata-size mismatch,
+cleanup on EOF/error/abandonment, independent overlapping sessions, failed-reopen
+recovery, uncommitted writes, same-height replacement, rollback, shared snapshots,
+and release of the snapshot pin. C-level operation counters verify budget behavior
+independently of the SQL authorizer. The lifecycle probe also passed with the
+extension compiled under UndefinedBehaviorSanitizer. This is not a full production
+audit or a cross-platform test. The reproduction runner passed both probes and
+restored the temporary module attachment; the runtime and dependencies are unchanged.
+
+The extension mechanism works and avoids a dependency patch, but this SQL-function
+interface does not preserve the direct-API prototype's speedup. The recommendation
+is to retain the prepared SQL implementation. The extension and comparison harness
+remain isolated experimental source, with no production or CI integration.
 
 ## Writes
 
@@ -147,7 +228,7 @@ return `OutOfFuel`; the prior copy guard fails this regression. Snapshot coverag
 checks concurrent committed updates, same-height replacement, tombstones, contract
 isolation, release on completion/error, and fresh reads after height rollback.
 
-Deferred-fetch validation passed 119 database, storage, and host-metering tests
+Initial deferred-fetch validation passed 119 database, storage, and host-metering tests
 (one pre-existing ignored test). The three byte-budget tests passed again after
 extending the SQL authorizer check to an already-started cursor. Clippy with
 warnings denied, formatting, and diff checks passed. Before this follow-up, all 537 library tests
@@ -155,4 +236,26 @@ passed across the suite run and the corrected cluster rerun. The cluster tests
 require localhost networking and the package working directory to resolve their
 counter-WASM fixture. Temporary benchmark modules were removed after measurement.
 
+After sharing the reader with point lookups, 132 database, storage, encoding,
+and host-metering tests passed in release mode. The new point-read budget test
+first failed on the old implementation with a denied value-column read, then
+passed with the shared reader. Additional tests cover missing/empty values,
+contract isolation, exact budgets, same-height replacement, tombstones, and
+height rollback. A synchronized writer replaces a row between metadata discovery
+and value-query preparation, verifying that the point read returns the old
+snapshot's value and releases the pin before the next read.
+Clippy with warnings denied, formatting, and diff checks passed after the shared
+reader change. The isolated extension harness was updated for the private reader
+layout and both of its probes still passed; its temporary attachment was removed.
+
 This advances #462 without closing it or superseding #445.
+
+## Query audit follow-up
+
+The broader [database query audit](query-audit.md) also moved variant lookup to
+metadata-only SQL, removed the superseded window builder, and made historical
+existence stop after one row. Point reads and scans retain the shared prepared
+value reader. Variant resolution still selects the globally newest row before
+checking deletion; it does not become a per-path or candidate-filtered lookup.
+The audit documents remaining SQL-work, pagination, and indexing concerns separately.
+Historical query differences caused by pruning are an accepted tradeoff.

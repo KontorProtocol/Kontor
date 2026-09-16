@@ -1,11 +1,8 @@
 //! Liveness reads over the `contract_state` version log.
 //!
-//! `contract_state` is an APPEND-ONLY, height-versioned log keyed by
-//! `(contract_id, path)`. A write appends a row; a "delete" appends a row with
-//! `deleted = true` (a tombstone) — nothing is ever physically removed (that's
-//! what makes reorg rollback and the consensus checkpoint possible). So "what is
-//! the current state?" is always a DERIVED computation, and getting that
-//! derivation subtly wrong is the entire bug surface of this file.
+//! `contract_state` is a height-versioned log keyed by `(contract_id, path)`.
+//! Writes replace the current-height version; deletes record a tombstone.
+//! Older versions support rollback until finality pruning makes them redundant.
 //!
 //! THE ONE RULE — current state is, for each path, its LATEST version (by
 //! `height`), kept only if that latest version is live. The "live" test is a
@@ -14,14 +11,13 @@
 //! path's older live row back into view, so a path that point reads and `exists`
 //! treat as gone keeps surfacing in `keys()`/`by_index`.
 //!
-//! That rule has TWO equivalent SQL formulations, and every current-state read of a
-//! path set uses one of them — never a hand-rolled ranking query:
-//!   - [`live_latest`] — a `ROW_NUMBER` window (per-path rank, post `deleted =
-//!     false`). Materializes its rows; used for single-path reads.
+//! Reads choose a lookup shape without changing that rule:
+//!   - Point value/deposit reads use `ORDER BY height DESC LIMIT 1` and inspect
+//!     deletion afterward. Value reads select metadata before checking the budget.
 //!   - [`live_paths_scan`] — the same live set as `NOT EXISTS` (no higher-height row
 //!     for the path) `AND deleted = 0`. Index-served, so it STREAMS in `path` order
 //!     and terminates early — the form behind the `keys`/`by_index` scan and
-//!     `exists`. Same result as the window; the split is materialize vs. stream.
+//!     `exists`.
 //!
 //! **Paths are [`stdlib::keycodec`] bytes** (a `BLOB` column), not text. They are
 //! order-preserving and *prefix-structured*: an encoded ancestor is an exact
@@ -43,7 +39,6 @@ use libsql::{Connection, Row, Rows, Statement, Value, de::from_row, params};
 use stdlib::{next_element, subtree_end};
 
 use super::Error;
-use super::versioned::LatestMany;
 use crate::database::types::ContractStateRow;
 
 /// Bounds end at an element boundary: an escaped-NUL sibling is outside the
@@ -56,37 +51,15 @@ fn subtree_range(lo_cmp: &str, prefix: &[u8]) -> (String, Vec<(String, Value)>) 
     (format!("path {lo_cmp} :lo AND path < :hi"), params)
 }
 
-/// THE window liveness primitive (see the module header): the latest version of
-/// each path that passes `filter`, kept only if that version is live. `partition_by`
-/// gives the per-path rank; `deleted = false` is a **post** predicate, never a
-/// pre-rank filter. Used by point reads; the streaming SET reads use
-/// [`live_paths_scan`] (`NOT EXISTS`) instead. Same live set either way — the split
-/// is purely about whether the result is materialized or streamed.
-fn live_latest(select: &str, filter: &str) -> String {
-    LatestMany::builder()
-        .table("contract_state")
-        .select(select)
-        .partition_by("path")
-        .post("deleted = false")
-        .filter(filter)
-        .build()
-        .to_sql()
-}
-
 /// The LIVE-PATHS scan **with its bound params**, returned together so the
 /// `cs.path < :hi` clause and the `:hi` bind can't drift (the same fragment/params
-/// coupling [`subtree_range`] gives the window callers).
+/// coupling [`subtree_range`] gives variant lookup).
 ///
-/// Reformulated from the `live_latest` window to `NOT EXISTS` (newest non-deleted
-/// per path = `deleted = 0` AND no higher-height row for the same path). This lets
-/// the `(contract_id, path, height DESC)` index serve BOTH the ordered outer scan
-/// AND the covering "newer height?" probe, so `ORDER BY path` + `LIMIT` STREAM and
-/// terminate early instead of materializing and sorting the whole range
-/// like the window does. Deterministic with NO `rowid` tiebreak: `UNIQUE(contract_id,
-/// height, path)` makes the max-height row per path unique, so the per-path liveness
-/// is unambiguous (and a sibling tombstone can't hide a live sibling — each row
-/// checks only its own path). Same live set and path order as the window form, so
-/// it's a drop-in for the SET reads (`keys`, `exists`).
+/// `NOT EXISTS` rejects a row when a newer version of the same path exists.
+/// The `(contract_id, path, height DESC)` index serves both the ordered scan and
+/// the covering newer-version probe, allowing `LIMIT` to stop discovery early.
+/// `UNIQUE(contract_id, height, path)` makes the latest version per path unique;
+/// a sibling tombstone must never hide a live sibling.
 ///
 /// `lo` is the scan-start bind (`:lo`); `lo_cmp` is `>` (children only — `keys`) or
 /// `>=` (include the node — `exists`). `hi` is the pre-computed EXCLUSIVE upper bound
@@ -170,10 +143,9 @@ pub async fn get_latest_contract_state(
 ) -> Result<Option<ContractStateRow>, Error> {
     let mut rows = conn
         .query(
-            &live_latest(
-                "contract_id, height, tx_id, path, value, deleted, depositor, deposited_gas",
-                "contract_id = :contract_id AND path = :path",
-            ),
+            "SELECT contract_id, height, tx_id, path, value, deleted, depositor, deposited_gas \
+             FROM contract_state WHERE contract_id = :contract_id AND path = :path \
+             ORDER BY height DESC LIMIT 1",
             (
                 (":contract_id", contract_id),
                 (":path", Value::Blob(path.to_vec())),
@@ -181,7 +153,12 @@ pub async fn get_latest_contract_state(
         )
         .await?;
 
-    Ok(rows.next().await?.map(|r| from_row(&r)).transpose()?)
+    Ok(rows
+        .next()
+        .await?
+        .map(|r| from_row::<ContractStateRow>(&r))
+        .transpose()?
+        .filter(|row| !row.deleted))
 }
 
 /// The cross-contract per-depositor LIVENESS predicate (binds `:signer_id`) — the
@@ -189,7 +166,7 @@ pub async fn get_latest_contract_state(
 /// consensus-critical). A row is the depositor's current collateral iff they set
 /// it, it isn't a tombstone, and no newer version of its `(contract_id, path)`
 /// exists — an overwrite/delete drops it from their floor. Cross-contract, so it
-/// can't reuse the single-contract `live_latest`/`live_paths_scan`; the `depositor`
+/// can't reuse the single-contract `live_paths_scan`; the `depositor`
 /// filter is the selective entry point (see `idx_contract_state_depositor`). The
 /// floor sum and the footprint endpoint both build on it.
 const LIVE_BY_DEPOSITOR_WHERE: &str = r#"
@@ -412,6 +389,56 @@ pub async fn latest_live_deposit(
     })
 }
 
+struct BudgetedStorageValue {
+    rowid: i64,
+}
+
+impl BudgetedStorageValue {
+    fn new(rowid: i64, size: u64, max_bytes: u64) -> Result<Self, Error> {
+        if size > max_bytes {
+            return Err(Error::ValueTooLarge);
+        }
+        Ok(Self { rowid })
+    }
+}
+
+struct StorageValueReader {
+    conn: Connection,
+    query: Option<Statement>,
+}
+
+impl StorageValueReader {
+    fn new(conn: &Connection) -> Self {
+        Self {
+            conn: conn.clone(),
+            query: None,
+        }
+    }
+
+    // The caller keeps its metadata cursor alive through this read, pinning the
+    // selected rowid to the same snapshot. Only budget-checked rows reach here.
+    async fn read(&mut self, value: BudgetedStorageValue) -> Result<Vec<u8>, Error> {
+        let mut statement = match self.query.take() {
+            Some(statement) => statement,
+            None => {
+                self.conn
+                    .prepare("SELECT value FROM contract_state WHERE rowid = ?")
+                    .await?
+            }
+        };
+        let bytes = statement
+            .query_row([value.rowid])
+            .await?
+            .get::<Vec<u8>>(0)?;
+        // Release SQLite's value buffer before a contract pauses its scan.
+        statement.reset();
+        self.query = Some(statement);
+        #[cfg(test)]
+        traversal_probe::copied_value(bytes.len());
+        Ok(bytes)
+    }
+}
+
 pub async fn get_latest_contract_state_value(
     conn: &Connection,
     max_value_bytes: u64,
@@ -420,26 +447,24 @@ pub async fn get_latest_contract_state_value(
 ) -> Result<Option<Vec<u8>>, Error> {
     let mut rows = conn
         .query(
-            &live_latest(
-                "CASE WHEN size <= :max_value_bytes THEN value ELSE null END AS value",
-                "contract_id = :contract_id AND path = :path",
-            ),
-            (
-                (":contract_id", contract_id),
-                (":path", Value::Blob(path.to_vec())),
-                (":max_value_bytes", max_value_bytes),
-            ),
+            "SELECT rowid, size, deleted FROM contract_state \
+             WHERE contract_id = ? AND path = ? ORDER BY height DESC LIMIT 1",
+            params![contract_id, path],
         )
         .await?;
 
-    let row = rows.next().await?;
-    if let Some(row) = row {
-        return match row.get::<Option<Vec<u8>>>(0)? {
-            Some(v) => Ok(Some(v)),
-            None => Err(Error::ValueTooLarge),
-        };
+    let Some(row) = rows.next().await? else {
+        return Ok(None);
+    };
+    // Check deletion after choosing the latest version; filtering it in SQL
+    // would resurrect an older live value.
+    if row.get::<bool>(2)? {
+        return Ok(None);
     }
-    Ok(None)
+    let value = BudgetedStorageValue::new(row.get(0)?, row.get(1)?, max_value_bytes)?;
+    let value = StorageValueReader::new(conn).read(value).await?;
+    drop(rows);
+    Ok(Some(value))
 }
 
 /// A live row's `(path, size)` WITHOUT its value — the read half of a delete, so
@@ -765,12 +790,11 @@ pub async fn path_prefix_filter_contract_state(
 /// Streams row metadata, fetching each value only after checking the current
 /// byte budget. The range cursor stays open while a rowid lookup reads the value.
 pub struct StorageRowCursor {
-    conn: Connection,
+    values: StorageValueReader,
     prefix_len: usize,
     sql: String,
     params: Vec<(String, Value)>,
     rows: Option<Rows>,
-    value_query: Option<Statement>,
     finished: bool,
 }
 
@@ -799,12 +823,11 @@ impl StorageRowCursor {
         );
         params.push((":prefix_len".into(), Value::Integer(path.len() as i64)));
         Self {
-            conn: conn.clone(),
+            values: StorageValueReader::new(conn),
             prefix_len: path.len(),
             sql,
             params,
             rows: None,
-            value_query: None,
             finished: false,
         }
     }
@@ -817,7 +840,7 @@ impl StorageRowCursor {
         if !matches!(result, Ok(Some(_))) {
             self.finished = true;
             self.rows = None;
-            self.value_query = None;
+            self.values.query = None;
         }
         result
     }
@@ -825,48 +848,37 @@ impl StorageRowCursor {
     async fn read_next(&mut self, max_bytes: u64) -> Result<Option<(Vec<u8>, Vec<u8>)>, Error> {
         let mut rows = match self.rows.take() {
             Some(rows) => rows,
-            None => self.conn.query(&self.sql, take(&mut self.params)).await?,
+            None => {
+                self.values
+                    .conn
+                    .query(&self.sql, take(&mut self.params))
+                    .await?
+            }
         };
         let Some(row) = rows.next().await? else {
             return Ok(None);
         };
         let key_bytes: u64 = row.get(0)?;
-        let size: u64 = row.get(1)?;
-        if key_bytes > max_bytes || size > max_bytes - key_bytes {
-            return Err(Error::ValueTooLarge);
-        }
+        let max_value_bytes = max_bytes
+            .checked_sub(key_bytes)
+            .ok_or(Error::ValueTooLarge)?;
+        let value = BudgetedStorageValue::new(row.get(3)?, row.get(1)?, max_value_bytes)?;
         let full: Vec<u8> = row.get(2)?;
         let (elem, tail) = next_element(&full[self.prefix_len..]).map_err(Error::KeyCodec)?;
         if !tail.is_empty() {
             return Err(Error::NonScalarRow);
         }
-        let rowid: i64 = row.get(3)?;
-        // Fetch the exact version selected by the live scan on the same connection.
-        // A new path lookup would repeat liveness resolution for every value.
-        let mut statement = match self.value_query.take() {
-            Some(statement) => statement,
-            None => {
-                self.conn
-                    .prepare("SELECT value FROM contract_state WHERE rowid = ?")
-                    .await?
-            }
-        };
-        let value = statement.query_row([rowid]).await?.get::<Vec<u8>>(0)?;
-        // Release SQLite's value buffer before the contract pauses this cursor.
-        statement.reset();
-        self.value_query = Some(statement);
-        #[cfg(test)]
-        traversal_probe::copied_value(value.len());
+        let value = self.values.read(value).await?;
         let member = elem.to_vec();
         self.rows = Some(rows);
         Ok(Some((member, value)))
     }
 }
 
-/// EXCEPTION to `live_latest` (see module header): enum/option variant resolution
+/// EXCEPTION to per-path liveness (see module header): enum/option variant resolution
 /// is GLOBAL-newest, not per-path. Returns the INDEX of whichever `candidates`
 /// element is current under `base_path`, or `None` if the field is unset/deleted or
-/// the newest discriminant isn't among them. Takes the single NEWEST live row under
+/// the newest discriminant isn't among them. Checks the single NEWEST row under
 /// `base_path` (by height, then rowid) — a stale variant lingering live at a lower
 /// height (an old `none`, or an old enum case) must be outranked by the newer write,
 /// which a per-path pick would surface — and reads its child element (the variant
@@ -879,23 +891,24 @@ pub async fn matching_path(
     base_path: &[u8],
     candidates: &[Vec<u8>],
 ) -> Result<Option<u32>, Error> {
-    // Global-newest (no `partition_by`) live row under `base_path`.
+    // Same-height writes to different paths coexist; later insertion wins.
     let (range, mut params) = subtree_range(">=", base_path);
     params.push((
         ":contract_id".to_string(),
         Value::Integer(contract_id as i64),
     ));
-    let query = LatestMany::builder()
-        .table("contract_state")
-        .select("path")
-        .filter(&format!("contract_id = :contract_id AND {range}"))
-        .post("deleted = false")
-        .build()
-        .to_sql();
+    let query = format!(
+        "SELECT path, deleted FROM contract_state \
+         WHERE contract_id = :contract_id AND {range} \
+         ORDER BY height DESC, rowid DESC LIMIT 1"
+    );
     let mut rows = conn.query(&query, params).await?;
     let Some(row) = rows.next().await? else {
         return Ok(None);
     };
+    if row.get::<bool>(1)? {
+        return Ok(None);
+    }
     let full: Vec<u8> = row.get(0)?;
     // The newest live row may be `base_path` ITSELF (a value stored at the path,
     // with no variant segment after it) — that's not a variant, so report no match
@@ -1000,17 +1013,11 @@ pub async fn hard_delete_rows(
 pub async fn contract_has_state(conn: &Connection, contract_id: u64) -> Result<bool, Error> {
     let mut rows = conn
         .query(
-            "SELECT COUNT(*) FROM contract_state WHERE contract_id = ?",
+            "SELECT 1 FROM contract_state WHERE contract_id = ? LIMIT 1",
             params![contract_id],
         )
         .await?;
-    Ok(rows
-        .next()
-        .await?
-        .map(|r| r.get::<i64>(0))
-        .transpose()?
-        .expect("Query must return at least one row")
-        > 0)
+    Ok(rows.next().await?.is_some())
 }
 
 /// Incrementally prune the newly-finalized band `(w_prev, w]` and persist the new
@@ -1039,7 +1046,7 @@ pub async fn contract_has_state(conn: &Connection, contract_id: u64) -> Result<b
 /// deletes *intermediate* historical versions `≤ w`, so it does NOT preserve an
 /// as-of-height read for `H < w`. That is correct ONLY because this indexer issues
 /// no historical as-of-height reads — every read computes latest-per-path with no
-/// upper height bound (`live_latest`/`live_paths_scan`/`matching_path`). A future
+/// upper height bound (point reads, `live_paths_scan`, and `matching_path`). A future
 /// as-of-`H` reader below `w` would get wrong answers; gate any such feature on
 /// archive mode (`prune = false`).
 ///
