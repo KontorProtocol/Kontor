@@ -22,7 +22,7 @@ pub struct PageOptions {
     pub cursor: Option<u64>,
     pub offset: Option<u64>,
     pub limit: Option<u32>,
-    pub include_total_count: bool,
+    pub count: bool,
 }
 
 pub async fn get_paginated<T>(
@@ -42,7 +42,7 @@ where
         cursor,
         offset,
         limit,
-        include_total_count,
+        count,
     } = page;
     let offset = if cursor.is_some() { None } else { offset };
     let limit = clamp_limit(limit);
@@ -64,7 +64,7 @@ where
         format!("WHERE {}", where_clauses.join(" AND "))
     };
 
-    let total_count = if include_total_count {
+    let total_count = if count {
         let mut rows = conn
             .query(
                 &format!("SELECT COUNT(DISTINCT {var}.{id_name}) FROM {from} {where_sql}"),

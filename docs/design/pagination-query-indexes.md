@@ -7,12 +7,12 @@ checkpoint inputs, or pruning semantics.
 ## Pagination
 
 The blocks, contracts, transactions (including per-block transactions), and results
-list endpoints accept `include_total_count=true`. By default, and when explicitly
+list endpoints accept `count=true`. By default, and when explicitly
 false, `pagination.total_count` is `null` and no count query runs. For example:
 
 ```text
 GET /api/transactions?limit=20
-GET /api/transactions?limit=20&include_total_count=true
+GET /api/transactions?limit=20&count=true
 ```
 
 `has_more`, cursor/offset continuation, filtering, and page ordering are unchanged.
@@ -137,6 +137,65 @@ the remaining full count: with the new indexes, approximately 1.48 ms → 14 µs
 uncounted pages remain essentially unchanged, while signer/result queries benefit.
 These measurements include query construction and row deserialization, but not
 HTTP/JSON serialization or network latency.
+
+## Count-query experiments
+
+The branch also contains benchmark-only alternatives to the current count SQL.
+They are not yet wired into `get_paginated`. The API flag has been shortened to
+`count=true`; there is no alias for the earlier, unpublished name.
+
+Run the additional benchmark with the production indexes installed:
+
+```sh
+cargo test --manifest-path core/Cargo.toml --locked --release -p indexer --lib benchmark_pagination_counts -- --ignored --nocapture
+KONTOR_BENCH_ROWS=300000 cargo test --manifest-path core/Cargo.toml --locked --release -p indexer --lib benchmark_pagination_counts -- --ignored --nocapture
+```
+
+These use the same fixtures, platform, warmups, and median calculation as the
+index benchmark. Each count statement is prepared, executed, and consumed; times
+exclude fetching a page and HTTP serialization. Every candidate's actual count
+is checked against the original before timing. No writes, counters, or caches are
+introduced. The two fixture sizes were measured sequentially without other builds.
+
+For single-table queries, replace `COUNT(DISTINCT primary_key)` with `COUNT(*)`:
+
+| Count | 100k fixture µs, before → after | 300k fixture µs, before → after |
+| --- | ---: | ---: |
+| All transactions | 1471.39 → 11.22 | 4416.64 → 35.58 |
+| Transactions before midpoint cursor | 1376.30 → 1127.06 | 4932.54 → 4190.38 |
+| Transactions at one height (10 matches) | 3.07 → 2.76 | 3.09 → 2.79 |
+| All blocks (10k / 30k blocks) | 155.17 → 8.07 | 462.49 → 22.32 |
+| All contracts (1k / 3k contracts) | 17.00 → 1.86 | 46.45 → 1.99 |
+| Contracts by publisher (1 match) | 2.77 → 2.54 | 2.80 → 2.57 |
+
+For results, both joins target unique primary keys, so they cannot duplicate a
+result row. Compare the old `COUNT(DISTINCT r.id)`, `COUNT(*)` with both joins, and
+`COUNT(*)` without the transaction join. The contract join remains in all three:
+`contract_results.contract_id` has no foreign key, and the inner join excludes
+results without a matching contract. Dropping it would change count semantics.
+The transaction join is a left join used only to populate response fields, so it
+can be omitted from the count even when `tx_id` is null.
+
+| Results count | 100k µs: distinct → rows → rows without transaction join | 300k µs: distinct → rows → rows without transaction join |
+| --- | ---: | ---: |
+| All | 7227.43 → 5822.16 → 2056.16 | 22631.08 → 18457.42 → 6158.22 |
+| Before midpoint cursor | 3582.40 → 3027.88 → 1437.00 | 11471.48 → 9797.38 → 4919.62 |
+| By contract (100 matches) | 13.72 → 11.73 → 6.51 | 13.56 → 11.70 → 6.56 |
+| By signer (10 matches) | 8.92 → 8.22 → 5.80 | 8.94 → 8.39 → 5.82 |
+| At height (10 matches) | 6.34 → 5.76 → 4.30 | 6.37 → 5.83 → 4.39 |
+| By function (all match) | 8956.11 → 7502.18 → 3883.75 | 27637.97 → 23509.15 → 12687.07 |
+| Contract + height + function + cursor (75 matches) | 15.08 → 13.32 → 10.52 | 14.82 → 13.28 → 10.52 |
+
+Both changes are worth applying. In particular, the unfiltered single-table count
+can use the database's page-level count operation: the bundled libSQL source's
+`isSimpleCount` excludes DISTINCT and WHERE predicates, and `sqlite3BtreeCount`
+visits B-tree pages and sums their entry counts. It is exact but not constant-time.
+Filtered and cursor counts still inspect matching entries; the result contract
+join also prevents the single-table shortcut. At 300k rows, a midpoint transaction
+cursor still costs 4.19 ms, and counting all visible results still costs 6.16 ms.
+Thus these improvements do not make every count as cheap as fetching a small page.
+Transaction counts with contract/signer joins still need duplicate elimination;
+these experiments do not propose replacing those with a plain joined `COUNT(*)`.
 
 ## Validation
 

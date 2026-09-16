@@ -566,7 +566,7 @@ mod transactions {
 
         let response: TestResponse = server
             .get("/api/transactions")
-            .add_query_param("include_total_count", true)
+            .add_query_param("count", true)
             .await;
         assert_eq!(response.status_code(), StatusCode::OK);
 
@@ -593,7 +593,7 @@ mod transactions {
 
         let response: TestResponse = server
             .get("/api/transactions?limit=3")
-            .add_query_param("include_total_count", true)
+            .add_query_param("count", true)
             .await;
         assert_eq!(response.status_code(), StatusCode::OK);
 
@@ -615,7 +615,7 @@ mod transactions {
 
         let response: TestResponse = server
             .get("/api/transactions?limit=2&offset=1")
-            .add_query_param("include_total_count", true)
+            .add_query_param("count", true)
             .await;
         assert_eq!(response.status_code(), StatusCode::OK);
 
@@ -636,7 +636,7 @@ mod transactions {
         // First get transactions with limit to get cursor
         let response: TestResponse = server
             .get("/api/transactions?limit=1")
-            .add_query_param("include_total_count", true)
+            .add_query_param("count", true)
             .await;
         let result: ApiResult<PaginatedResponse<TransactionRow>> =
             serde_json::from_slice(response.as_bytes())?;
@@ -657,7 +657,7 @@ mod transactions {
         // Use cursor for next page
         let response: TestResponse = server
             .get(&format!("/api/transactions?cursor={}", cursor))
-            .add_query_param("include_total_count", true)
+            .add_query_param("count", true)
             .await;
         assert_eq!(response.status_code(), StatusCode::OK);
         let result: ApiResult<PaginatedResponse<TransactionRow>> =
@@ -689,7 +689,7 @@ mod transactions {
 
         let response: TestResponse = server
             .get("/api/transactions?height=800000")
-            .add_query_param("include_total_count", true)
+            .add_query_param("count", true)
             .await;
         assert_eq!(response.status_code(), StatusCode::OK);
 
@@ -713,7 +713,7 @@ mod transactions {
 
         let response: TestResponse = server
             .get("/api/transactions?height=999999")
-            .add_query_param("include_total_count", true)
+            .add_query_param("count", true)
             .await;
         assert_eq!(response.status_code(), StatusCode::OK);
 
@@ -799,7 +799,7 @@ mod transactions {
 
         let response: TestResponse = server
             .get("/api/blocks/800000/transactions")
-            .add_query_param("include_total_count", true)
+            .add_query_param("count", true)
             .await;
         assert_eq!(response.status_code(), StatusCode::OK);
 
@@ -821,7 +821,7 @@ mod transactions {
         let server = TestServer::new(app);
 
         // Use block hash for height 800000
-        let response: TestResponse = server.get("/api/blocks/000000000000000000015d76e1b13f62d0edc4593ed326528c37b5af3c3fba04/transactions").add_query_param("include_total_count", true)
+        let response: TestResponse = server.get("/api/blocks/000000000000000000015d76e1b13f62d0edc4593ed326528c37b5af3c3fba04/transactions").add_query_param("count", true)
         .await;
         assert_eq!(response.status_code(), StatusCode::OK);
 
@@ -1366,10 +1366,7 @@ mod transactions_pagination {
                 format!("/api/transactions?limit={}", limit)
             };
 
-            let response: TestResponse = server
-                .get(&url)
-                .add_query_param("include_total_count", true)
-                .await;
+            let response: TestResponse = server.get(&url).add_query_param("count", true).await;
             assert_eq!(response.status_code(), StatusCode::OK);
 
             let result: ApiResult<PaginatedResponse<TransactionRow>> =
@@ -1418,10 +1415,7 @@ mod transactions_pagination {
         let (server, _db) = setup().await?;
 
         let url = "/api/transactions?limit=1&contract=token_800000_1";
-        let response: TestResponse = server
-            .get(url)
-            .add_query_param("include_total_count", true)
-            .await;
+        let response: TestResponse = server.get(url).add_query_param("count", true).await;
         assert_eq!(response.status_code(), StatusCode::OK);
         let result: ApiResult<PaginatedResponse<TransactionRow>> =
             serde_json::from_slice(response.as_bytes())?;
@@ -1439,10 +1433,7 @@ mod transactions_pagination {
             "/api/transactions?limit=1&contract=token_800000_1&cursor={}",
             meta.next_cursor.unwrap()
         );
-        let response: TestResponse = server
-            .get(&url)
-            .add_query_param("include_total_count", true)
-            .await;
+        let response: TestResponse = server.get(&url).add_query_param("count", true).await;
         assert_eq!(response.status_code(), StatusCode::OK);
         let result: ApiResult<PaginatedResponse<TransactionRow>> =
             serde_json::from_slice(response.as_bytes())?;
@@ -1459,10 +1450,7 @@ mod transactions_pagination {
             "/api/transactions?limit=1&contract=token_800000_1&cursor={}",
             meta.next_cursor.unwrap()
         );
-        let response: TestResponse = server
-            .get(&url)
-            .add_query_param("include_total_count", true)
-            .await;
+        let response: TestResponse = server.get(&url).add_query_param("count", true).await;
         assert_eq!(response.status_code(), StatusCode::OK);
         let result: ApiResult<PaginatedResponse<TransactionRow>> =
             serde_json::from_slice(response.as_bytes())?;
@@ -1483,10 +1471,7 @@ mod transactions_pagination {
         let (server, _db) = setup().await?;
 
         let url = "/api/transactions?limit=1&contract=token_800000_1&order=asc";
-        let response: TestResponse = server
-            .get(url)
-            .add_query_param("include_total_count", true)
-            .await;
+        let response: TestResponse = server.get(url).add_query_param("count", true).await;
         assert_eq!(response.status_code(), StatusCode::OK);
         let result: ApiResult<PaginatedResponse<TransactionRow>> =
             serde_json::from_slice(response.as_bytes())?;
@@ -1504,10 +1489,7 @@ mod transactions_pagination {
             "/api/transactions?limit=1&contract=token_800000_1&cursor={}&order=asc",
             meta.next_cursor.unwrap()
         );
-        let response: TestResponse = server
-            .get(&url)
-            .add_query_param("include_total_count", true)
-            .await;
+        let response: TestResponse = server.get(&url).add_query_param("count", true).await;
         assert_eq!(response.status_code(), StatusCode::OK);
         let result: ApiResult<PaginatedResponse<TransactionRow>> =
             serde_json::from_slice(response.as_bytes())?;
@@ -1524,10 +1506,7 @@ mod transactions_pagination {
             "/api/transactions?limit=1&contract=token_800000_1&cursor={}&order=asc",
             meta.next_cursor.unwrap()
         );
-        let response: TestResponse = server
-            .get(&url)
-            .add_query_param("include_total_count", true)
-            .await;
+        let response: TestResponse = server.get(&url).add_query_param("count", true).await;
         assert_eq!(response.status_code(), StatusCode::OK);
         let result: ApiResult<PaginatedResponse<TransactionRow>> =
             serde_json::from_slice(response.as_bytes())?;
@@ -1588,7 +1567,7 @@ mod pagination_counts {
                 let response = server
                     .get(endpoint)
                     .add_query_param("limit", 1)
-                    .add_query_param("include_total_count", include)
+                    .add_query_param("count", include)
                     .await;
                 assert_eq!(response.status_code(), StatusCode::OK);
                 let mut value: Value = response.json();

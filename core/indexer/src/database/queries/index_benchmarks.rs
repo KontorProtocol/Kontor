@@ -128,6 +128,106 @@ async fn query_us(conn: &Connection, sql: &str) -> Result<(f64, usize)> {
     Ok((median(samples), expected))
 }
 
+async fn exact_count(conn: &Connection, sql: &str) -> Result<i64> {
+    conn.query(sql, ())
+        .await?
+        .next()
+        .await?
+        .context("count row")?
+        .get(0)
+        .map_err(Into::into)
+}
+
+#[tokio::test]
+#[ignore = "count measurements, run explicitly in release mode with --nocapture"]
+async fn benchmark_pagination_counts() -> Result<()> {
+    let count: u64 = std::env::var("KONTOR_BENCH_ROWS")
+        .unwrap_or_else(|_| "100000".into())
+        .parse()?;
+    ensure!(count >= 100000 && count.is_multiple_of(100));
+    let (_reader, writer, _temp) = new_test_db().await?;
+    let conn = writer.connection();
+    populate(&conn, count).await?;
+
+    let midpoint = count / 2;
+    for (case, from, id, predicate) in [
+        ("transactions_all", "transactions t", "t.id", String::new()),
+        (
+            "transactions_cursor",
+            "transactions t",
+            "t.id",
+            format!("WHERE t.id < {midpoint}"),
+        ),
+        (
+            "transactions_height",
+            "transactions t",
+            "t.id",
+            "WHERE t.height = 1000".into(),
+        ),
+        ("blocks_all", "blocks b", "b.height", String::new()),
+        ("contracts_all", "contracts c", "c.id", String::new()),
+        (
+            "contracts_signer",
+            "contracts c",
+            "c.id",
+            "WHERE c.signer_id = 42".into(),
+        ),
+    ] {
+        let old = format!("SELECT COUNT(DISTINCT {id}) FROM {from} {predicate}");
+        let new = format!("SELECT COUNT(*) FROM {from} {predicate}");
+        let matches = exact_count(&conn, &old).await?;
+        ensure!(exact_count(&conn, &new).await? == matches);
+        for (variant, sql) in [("distinct", old), ("rows", new)] {
+            let (us, _) = query_us(&conn, &sql).await?;
+            println!(
+                "COUNT_BENCH {}",
+                json!({"rows":count,"case":case,"variant":variant,"matches":matches,"us":us,"sql":sql,"plan":plan(&conn,&sql).await?})
+            );
+        }
+    }
+
+    let joined = "contract_results r LEFT JOIN transactions t ON r.tx_id = t.id JOIN contracts c ON r.contract_id = c.id";
+    let count_from = "contract_results r JOIN contracts c ON r.contract_id = c.id";
+    for (case, predicate) in [
+        ("results_all", String::new()),
+        ("results_cursor", format!("WHERE r.id < {midpoint}")),
+        ("results_contract", "WHERE r.contract_id = 42".into()),
+        ("results_signer", "WHERE r.signer_id = 42".into()),
+        ("results_height", "WHERE r.height = 1000".into()),
+        ("results_func", "WHERE r.func = 'bench'".into()),
+        (
+            "results_combined",
+            "WHERE r.contract_id = 42 AND r.height >= 411 AND r.func = 'bench' AND r.id > 4125"
+                .into(),
+        ),
+    ] {
+        let variants = [
+            (
+                "distinct_joined",
+                format!("SELECT COUNT(DISTINCT r.id) FROM {joined} {predicate}"),
+            ),
+            (
+                "rows_joined",
+                format!("SELECT COUNT(*) FROM {joined} {predicate}"),
+            ),
+            (
+                "rows_required_join",
+                format!("SELECT COUNT(*) FROM {count_from} {predicate}"),
+            ),
+        ];
+        let matches = exact_count(&conn, &variants[0].1).await?;
+        for (variant, sql) in variants {
+            ensure!(exact_count(&conn, &sql).await? == matches);
+            let (us, _) = query_us(&conn, &sql).await?;
+            println!(
+                "COUNT_BENCH {}",
+                json!({"rows":count,"case":case,"variant":variant,"matches":matches,"us":us,"sql":sql,"plan":plan(&conn,&sql).await?})
+            );
+        }
+    }
+    Ok(())
+}
+
 const API_CASES: &[&str] = &[
     "transactions_page",
     "transactions_counted",
@@ -157,7 +257,7 @@ async fn api_once(conn: &Connection, case: &str) -> Result<usize> {
         let mut query = TransactionQuery::builder().limit(20).build();
         match case {
             "transactions_page" => {}
-            "transactions_counted" => query.include_total_count = true,
+            "transactions_counted" => query.count = true,
             "transactions_contract" => query.contract = Some(contract),
             "transactions_signer" => query.signer_id = Some(42),
             _ => unreachable!(),
