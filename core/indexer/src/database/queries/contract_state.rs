@@ -11,13 +11,10 @@
 //! path's older live row back into view, so a path that point reads and `exists`
 //! treat as gone keeps surfacing in `keys()`/`by_index`.
 //!
-//! Reads choose a lookup shape without changing that rule:
-//!   - Point value/deposit reads use `ORDER BY height DESC LIMIT 1` and inspect
-//!     deletion afterward. Value reads select metadata before checking the budget.
-//!   - [`live_paths_scan`] — the same live set as `NOT EXISTS` (no higher-height row
-//!     for the path) `AND deleted = 0`. Index-served, so it STREAMS in `path` order
-//!     and terminates early — the form behind the `keys`/`by_index` scan and
-//!     `exists`.
+//! Current reads use `current_contract_state`, a derived live-key index pointing
+//! into this log by `(contract_id, height, path)`. Sizes are available before
+//! fetching values, so fuel checks precede payload reads. Inserts maintain the
+//! index atomically; reorgs restore affected keys from history.
 //!
 //! **Paths are [`stdlib::keycodec`] bytes** (a `BLOB` column), not text. They are
 //! order-preserving and *prefix-structured*: an encoded ancestor is an exact
@@ -26,12 +23,6 @@
 //! `[P, subtree_end(P))` — an index seek, not a `LIKE`/`REGEXP` scan — and a child key
 //! is recovered with [`next_element`].
 //!
-//! Two deliberate EXCEPTIONS, each documented at its call site:
-//!   - [`matching_path`] — enum/option variant resolution. GLOBAL-newest across
-//!     paths (NOT per-path), because it asks "which variant is current?".
-//!   - [`hard_delete_rows`] — a HARD delete at the current height (not a
-//!     tombstone, not a liveness read); intra-block `Option` variant cleanup.
-
 use std::mem::take;
 
 use futures_util::{Stream, StreamExt, TryStreamExt, stream};
@@ -41,36 +32,17 @@ use stdlib::{next_element, subtree_end};
 use super::Error;
 use crate::database::types::ContractStateRow;
 
-/// Bounds end at an element boundary: an escaped-NUL sibling is outside the
-/// subtree even though it shares the encoded node's raw byte prefix.
-fn subtree_range(lo_cmp: &str, prefix: &[u8]) -> (String, Vec<(String, Value)>) {
-    let params = vec![
-        (":lo".to_string(), Value::Blob(prefix.to_vec())),
-        (":hi".to_string(), Value::Blob(subtree_end(prefix))),
-    ];
-    (format!("path {lo_cmp} :lo AND path < :hi"), params)
+enum LiveProjection {
+    Keys,
+    Exists,
+    Values,
+    Deposits,
 }
 
-/// The LIVE-PATHS scan **with its bound params**, returned together so the
-/// `cs.path < :hi` clause and the `:hi` bind can't drift (the same fragment/params
-/// coupling [`subtree_range`] gives variant lookup).
-///
-/// `NOT EXISTS` rejects a row when a newer version of the same path exists.
-/// The `(contract_id, path, height DESC)` index serves both the ordered scan and
-/// the covering newer-version probe, allowing `LIMIT` to stop discovery early.
-/// `UNIQUE(contract_id, height, path)` makes the latest version per path unique;
-/// a sibling tombstone must never hide a live sibling.
-///
-/// `lo` is the scan-start bind (`:lo`); `lo_cmp` is `>` (children only — `keys`) or
-/// `>=` (include the node — `exists`). `hi` is the pre-computed EXCLUSIVE upper bound
-/// (`:hi`, `cs.path < :hi`); `None` runs to the end of the keyspace, bounded only by
-/// `contract_id`. The
-/// caller owns the bound math (see [`scan_bounds`]) so the seek/range rules live in
-/// one place. `order` selects the row order — `Some("cs.path")` ascending or
-/// `Some("cs.path DESC")` descending; the byte range in `[lo, hi)` is the SAME either
-/// way (FDB-style: direction flips iteration order, not the bounds).
+/// Bounds and parameters travel together. History is never part of discovery;
+/// callers needing deposit metadata join only the selected live versions.
 fn live_paths_scan(
-    select: &str,
+    projection: LiveProjection,
     lo_cmp: &str,
     contract_id: u64,
     lo: Vec<u8>,
@@ -94,13 +66,21 @@ fn live_paths_scan(
     };
     let order = order.map(|o| format!(" ORDER BY {o}")).unwrap_or_default();
     let limit = limit.map(|n| format!(" LIMIT {n}")).unwrap_or_default();
+    let select = match projection {
+        LiveProjection::Keys => "cs.path",
+        LiveProjection::Exists => "1",
+        LiveProjection::Values => "length(cs.path) - :prefix_len, cs.size, cs.path, cs.height",
+        LiveProjection::Deposits => "cs.path, cs.size, history.depositor, history.deposited_gas",
+    };
+    let join = if matches!(projection, LiveProjection::Deposits) {
+        " CROSS JOIN contract_state AS history ON history.contract_id = cs.contract_id \
+         AND history.height = cs.height AND history.path = cs.path"
+    } else {
+        ""
+    };
     let sql = format!(
-        "SELECT {select} FROM contract_state AS cs \
-         WHERE cs.contract_id = :contract_id AND cs.path {lo_cmp} :lo{hi_clause} AND cs.deleted = 0 \
-           AND NOT EXISTS ( \
-             SELECT 1 FROM contract_state AS n \
-             WHERE n.contract_id = cs.contract_id AND n.path = cs.path AND n.height > cs.height \
-           ){order}{limit}"
+        "SELECT {select} FROM current_contract_state AS cs{join} \
+         WHERE cs.contract_id = :contract_id AND cs.path {lo_cmp} :lo{hi_clause}{order}{limit}"
     );
     (sql, params)
 }
@@ -143,9 +123,10 @@ pub async fn get_latest_contract_state(
 ) -> Result<Option<ContractStateRow>, Error> {
     let mut rows = conn
         .query(
-            "SELECT contract_id, height, tx_id, path, value, deleted, depositor, deposited_gas \
-             FROM contract_state WHERE contract_id = :contract_id AND path = :path \
-             ORDER BY height DESC LIMIT 1",
+            "SELECT s.contract_id, s.height, s.tx_id, s.path, s.value, s.deleted, s.depositor, s.deposited_gas \
+             FROM current_contract_state c CROSS JOIN contract_state s \
+             ON s.contract_id = c.contract_id AND s.height = c.height AND s.path = c.path \
+             WHERE c.contract_id = :contract_id AND c.path = :path",
             (
                 (":contract_id", contract_id),
                 (":path", Value::Blob(path.to_vec())),
@@ -369,8 +350,9 @@ pub async fn latest_live_deposit(
 ) -> Result<Option<RowDeposit>, Error> {
     let mut rows = conn
         .query(
-            "SELECT depositor, deposited_gas, deleted FROM contract_state \
-             WHERE contract_id = :c AND path = :p ORDER BY height DESC LIMIT 1",
+            "SELECT s.depositor, s.deposited_gas, s.deleted FROM current_contract_state c \
+             CROSS JOIN contract_state s ON s.contract_id = c.contract_id AND s.height = c.height AND s.path = c.path \
+             WHERE c.contract_id = :c AND c.path = :p",
             libsql::named_params! { ":c": contract_id, ":p": Value::Blob(path.to_vec()) },
         )
         .await?;
@@ -390,15 +372,27 @@ pub async fn latest_live_deposit(
 }
 
 struct BudgetedStorageValue {
-    rowid: i64,
+    contract_id: u64,
+    height: u64,
+    path: Vec<u8>,
 }
 
 impl BudgetedStorageValue {
-    fn new(rowid: i64, size: u64, max_bytes: u64) -> Result<Self, Error> {
+    fn new(
+        contract_id: u64,
+        height: u64,
+        path: Vec<u8>,
+        size: u64,
+        max_bytes: u64,
+    ) -> Result<Self, Error> {
         if size > max_bytes {
             return Err(Error::ValueTooLarge);
         }
-        Ok(Self { rowid })
+        Ok(Self {
+            contract_id,
+            height,
+            path,
+        })
     }
 }
 
@@ -416,18 +410,18 @@ impl StorageValueReader {
     }
 
     // The caller keeps its metadata cursor alive through this read, pinning the
-    // selected rowid to the same snapshot. Only budget-checked rows reach here.
+    // selected version to the same snapshot. Only budget-checked rows reach here.
     async fn read(&mut self, value: BudgetedStorageValue) -> Result<Vec<u8>, Error> {
         let mut statement = match self.query.take() {
             Some(statement) => statement,
             None => {
                 self.conn
-                    .prepare("SELECT value FROM contract_state WHERE rowid = ?")
+                    .prepare("SELECT value FROM contract_state WHERE contract_id = ? AND height = ? AND path = ?")
                     .await?
             }
         };
         let bytes = statement
-            .query_row([value.rowid])
+            .query_row(params![value.contract_id, value.height, value.path])
             .await?
             .get::<Vec<u8>>(0)?;
         // Release SQLite's value buffer before a contract pauses its scan.
@@ -447,8 +441,7 @@ pub async fn get_latest_contract_state_value(
 ) -> Result<Option<Vec<u8>>, Error> {
     let mut rows = conn
         .query(
-            "SELECT rowid, size, deleted FROM contract_state \
-             WHERE contract_id = ? AND path = ? ORDER BY height DESC LIMIT 1",
+            "SELECT height, size FROM current_contract_state WHERE contract_id = ? AND path = ?",
             params![contract_id, path],
         )
         .await?;
@@ -456,12 +449,13 @@ pub async fn get_latest_contract_state_value(
     let Some(row) = rows.next().await? else {
         return Ok(None);
     };
-    // Check deletion after choosing the latest version; filtering it in SQL
-    // would resurrect an older live value.
-    if row.get::<bool>(2)? {
-        return Ok(None);
-    }
-    let value = BudgetedStorageValue::new(row.get(0)?, row.get(1)?, max_value_bytes)?;
+    let value = BudgetedStorageValue::new(
+        contract_id,
+        row.get(0)?,
+        path.to_vec(),
+        row.get(1)?,
+        max_value_bytes,
+    )?;
     let value = StorageValueReader::new(conn).read(value).await?;
     drop(rows);
     Ok(Some(value))
@@ -547,7 +541,7 @@ pub async fn find_live_subtree(
     path: &[u8],
 ) -> Result<impl Stream<Item = Result<LiveRow, Error>> + Send + 'static, Error> {
     let (query, params) = live_paths_scan(
-        "cs.path, cs.size, cs.depositor, cs.deposited_gas",
+        LiveProjection::Deposits,
         ">=",
         contract_id,
         path.to_vec(),
@@ -627,13 +621,10 @@ pub async fn exists_contract_state(
     contract_id: u64,
     path: &[u8],
 ) -> Result<bool, Error> {
-    // "Any live path at/under `path`". `NOT EXISTS` + `LIMIT 1` stops at the FIRST
-    // live row instead of ranking the whole subtree. Per-path liveness is inherent
-    // (each row checks only its own path for a newer version), so a single newest
-    // tombstone — e.g. an IndexedMap index `__delete` under `<map>#idx` — can't hide
-    // a still-live sibling. `>=` includes the node itself, not just descendants.
+    // Include the node itself. A missing subtree requires only an index seek,
+    // regardless of how many deleted historical keys it once contained.
     let (query, params) = live_paths_scan(
-        "1",
+        LiveProjection::Exists,
         ">=",
         contract_id,
         path.to_vec(),
@@ -726,7 +717,7 @@ pub async fn path_prefix_filter_contract_state(
                         Some(rows) => rows,
                         None => {
                             let (sql, params) = live_paths_scan(
-                                "cs.path",
+                                LiveProjection::Keys,
                                 lo_cmp,
                                 contract_id,
                                 lo.clone(),
@@ -788,8 +779,9 @@ pub async fn path_prefix_filter_contract_state(
 }
 
 /// Streams row metadata, fetching each value only after checking the current
-/// byte budget. The range cursor stays open while a rowid lookup reads the value.
+/// byte budget. The range cursor pins the snapshot while the version is fetched.
 pub struct StorageRowCursor {
+    contract_id: u64,
     values: StorageValueReader,
     prefix_len: usize,
     sql: String,
@@ -809,7 +801,7 @@ impl StorageRowCursor {
     ) -> Self {
         let (lo, lo_cmp, hi) = scan_bounds(&path, lo, hi);
         let (sql, mut params) = live_paths_scan(
-            "length(cs.path) - :prefix_len, cs.size, cs.path, cs.rowid",
+            LiveProjection::Values,
             lo_cmp,
             contract_id,
             lo,
@@ -823,6 +815,7 @@ impl StorageRowCursor {
         );
         params.push((":prefix_len".into(), Value::Integer(path.len() as i64)));
         Self {
+            contract_id,
             values: StorageValueReader::new(conn),
             prefix_len: path.len(),
             sql,
@@ -862,152 +855,22 @@ impl StorageRowCursor {
         let max_value_bytes = max_bytes
             .checked_sub(key_bytes)
             .ok_or(Error::ValueTooLarge)?;
-        let value = BudgetedStorageValue::new(row.get(3)?, row.get(1)?, max_value_bytes)?;
+        let size = row.get(1)?;
+        if size > max_value_bytes {
+            return Err(Error::ValueTooLarge);
+        }
         let full: Vec<u8> = row.get(2)?;
         let (elem, tail) = next_element(&full[self.prefix_len..]).map_err(Error::KeyCodec)?;
         if !tail.is_empty() {
             return Err(Error::NonScalarRow);
         }
-        let value = self.values.read(value).await?;
         let member = elem.to_vec();
+        let value =
+            BudgetedStorageValue::new(self.contract_id, row.get(3)?, full, size, max_value_bytes)?;
+        let value = self.values.read(value).await?;
         self.rows = Some(rows);
         Ok(Some((member, value)))
     }
-}
-
-/// EXCEPTION to per-path liveness (see module header): enum/option variant resolution
-/// is GLOBAL-newest, not per-path. Returns the INDEX of whichever `candidates`
-/// element is current under `base_path`, or `None` if the field is unset/deleted or
-/// the newest discriminant isn't among them. Checks the single NEWEST row under
-/// `base_path` (by height, then rowid) — a stale variant lingering live at a lower
-/// height (an old `none`, or an old enum case) must be outranked by the newer write,
-/// which a per-path pick would surface — and reads its child element (the variant
-/// discriminant). `candidates` are the already-encoded discriminant elements (a
-/// string element, or an interned dict-ref); the match is pure BYTE equality, so the
-/// host never decodes a name — it works for any encoding the guest chooses.
-pub async fn matching_path(
-    conn: &Connection,
-    contract_id: u64,
-    base_path: &[u8],
-    candidates: &[Vec<u8>],
-) -> Result<Option<u32>, Error> {
-    // Same-height writes to different paths coexist; later insertion wins.
-    let (range, mut params) = subtree_range(">=", base_path);
-    params.push((
-        ":contract_id".to_string(),
-        Value::Integer(contract_id as i64),
-    ));
-    let query = format!(
-        "SELECT path, deleted FROM contract_state \
-         WHERE contract_id = :contract_id AND {range} \
-         ORDER BY height DESC, rowid DESC LIMIT 1"
-    );
-    let mut rows = conn.query(&query, params).await?;
-    let Some(row) = rows.next().await? else {
-        return Ok(None);
-    };
-    if row.get::<bool>(1)? {
-        return Ok(None);
-    }
-    let full: Vec<u8> = row.get(0)?;
-    // The newest live row may be `base_path` ITSELF (a value stored at the path,
-    // with no variant segment after it) — that's not a variant, so report no match
-    // rather than decoding an empty suffix (which errors). Matches the old REGEXP
-    // post-filter, which treated such a row as non-matching.
-    let suffix = &full[base_path.len()..];
-    if suffix.is_empty() {
-        return Ok(None);
-    }
-    // The discriminant is the first element after `base_path`; match it against the
-    // candidate elements by raw bytes (no decode — encoding-agnostic).
-    let (elem, _) = next_element(suffix).map_err(Error::KeyCodec)?;
-    Ok(candidates
-        .iter()
-        .position(|c| c.as_slice() == elem)
-        .map(|i| i as u32))
-}
-
-/// Union candidate subtrees before discovery. Duplicate or overlapping guest
-/// candidates must not charge/free the same row twice, especially its deposit.
-fn matching_suffix_ranges(candidates: &[Vec<u8>]) -> Vec<(Vec<u8>, Vec<u8>)> {
-    let mut suffixes: Vec<_> = candidates.iter().map(Vec::as_slice).collect();
-    suffixes.sort_unstable();
-    let mut merged: Vec<(Vec<u8>, Vec<u8>)> = Vec::new();
-    for lo in suffixes {
-        let hi = subtree_end(lo);
-        if let Some((_, end)) = merged.last_mut()
-            && lo <= end.as_slice()
-        {
-            if hi > *end {
-                *end = hi;
-            }
-            continue;
-        }
-        merged.push((lo.to_vec(), hi));
-    }
-    merged
-}
-
-/// Current-height variant rows, including tombstones. This deliberately does
-/// not use liveness: removing a current tombstone can revive an older deposit.
-pub async fn find_matching_paths(
-    conn: &Connection,
-    contract_id: u64,
-    height: u64,
-    base_path: &[u8],
-    candidates: &[Vec<u8>],
-) -> Result<impl Stream<Item = Result<LiveRow, Error>> + Send + 'static, Error> {
-    let ranges = matching_suffix_ranges(candidates);
-    let base_path = base_path.to_vec();
-    let conn = conn.clone();
-    Ok(stream::iter(ranges)
-        .flat_map(move |(lo, hi)| {
-            // Only the active query owns full bounds; candidate count must not
-            // multiply retained copies of a potentially large base path.
-            let lo = [base_path.as_slice(), lo.as_slice()].concat();
-            let hi = [base_path.as_slice(), hi.as_slice()].concat();
-            query_rows(
-                conn.clone(),
-                "SELECT path, size, depositor, deposited_gas FROM contract_state \
-             WHERE contract_id = :contract_id AND height = :height \
-             AND path >= :lo AND path < :hi ORDER BY path"
-                    .to_string(),
-                vec![
-                    (
-                        ":contract_id".to_string(),
-                        Value::Integer(contract_id as i64),
-                    ),
-                    (":height".to_string(), Value::Integer(height as i64)),
-                    (":lo".to_string(), Value::Blob(lo)),
-                    (":hi".to_string(), Value::Blob(hi)),
-                ],
-            )
-        })
-        .map(|row| row.and_then(|row| live_row_from(&row))))
-}
-
-/// Delete exactly the already-metered current-height rows. Small SQL batches
-/// retain bulk-write efficiency without a second, potentially broader range scan.
-pub async fn hard_delete_rows(
-    conn: &Connection,
-    contract_id: u64,
-    height: u64,
-    rows: &[LiveRow],
-) -> Result<u64, Error> {
-    let mut deleted = 0;
-    for chunk in rows.chunks(64) {
-        let slots = vec!["?"; chunk.len()].join(",");
-        let mut params = vec![
-            Value::Integer(contract_id as i64),
-            Value::Integer(height as i64),
-        ];
-        params.extend(chunk.iter().map(|row| Value::Blob(row.path.clone())));
-        deleted += conn.execute(
-            &format!("DELETE FROM contract_state WHERE contract_id = ? AND height = ? AND path IN ({slots})"),
-            params,
-        ).await?;
-    }
-    Ok(deleted)
 }
 
 pub async fn contract_has_state(conn: &Connection, contract_id: u64) -> Result<bool, Error> {
@@ -1046,7 +909,7 @@ pub async fn contract_has_state(conn: &Connection, contract_id: u64) -> Result<b
 /// deletes *intermediate* historical versions `≤ w`, so it does NOT preserve an
 /// as-of-height read for `H < w`. That is correct ONLY because this indexer issues
 /// no historical as-of-height reads — every read computes latest-per-path with no
-/// upper height bound (point reads, `live_paths_scan`, and `matching_path`). A future
+/// upper height bound (point reads and `live_paths_scan`). A future
 /// as-of-`H` reader below `w` would get wrong answers; gate any such feature on
 /// archive mode (`prune = false`).
 ///
@@ -1113,6 +976,7 @@ pub async fn prune_contract_state(conn: &Connection, w_prev: u64, w: u64) -> Res
 mod prune_tests {
     use super::*;
     use crate::database::connection::new_connection;
+    use crate::database::queries::rollback_to_height;
     use tempfile::TempDir;
 
     async fn insert_block(conn: &Connection, height: u64) {
@@ -1314,9 +1178,7 @@ mod prune_tests {
         // Reorg both to a height INSIDE the retain window (tip 10, retain 3 →
         // last watermark 7; 8 > 7 so the pruned node retained everything needed).
         for c in [&archive, &pruned] {
-            c.execute("DELETE FROM blocks WHERE height > ?", params![8u64])
-                .await
-                .unwrap();
+            rollback_to_height(c, 8).await.unwrap();
         }
 
         // The pruned node rolls back to the same correct live state as the archive.
@@ -1443,32 +1305,5 @@ pub(crate) mod traversal_probe {
             (result, ROWS.with(Cell::get))
         })
         .await
-    }
-}
-
-#[cfg(test)]
-mod matching_range_tests {
-    use super::matching_suffix_ranges;
-    use stdlib::{KeyElement, subtree_end};
-
-    #[test]
-    fn cleanup_plan_retains_only_unique_suffix_ranges() {
-        let suffixes: Vec<_> = (0..512u64).map(|n| n.encode()).collect();
-        let mut candidates = suffixes.clone();
-        candidates.extend(suffixes.iter().cloned());
-        let ranges = matching_suffix_ranges(&candidates);
-        assert_eq!(ranges.len(), suffixes.len());
-        let retained: usize = ranges.iter().map(|(lo, hi)| lo.len() + hi.len()).sum();
-        let input: usize = suffixes.iter().map(Vec::len).sum();
-        assert_eq!(retained, 2 * input + suffixes.len());
-        for ((lo, hi), suffix) in ranges.iter().zip(&suffixes) {
-            assert_eq!(lo, suffix);
-            assert_eq!(hi, &subtree_end(suffix));
-        }
-        candidates.extend(vec![Vec::new(); 512]);
-        assert_eq!(
-            matching_suffix_ranges(&candidates),
-            vec![(vec![], vec![0xff])]
-        );
     }
 }

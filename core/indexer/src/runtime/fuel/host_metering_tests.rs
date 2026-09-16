@@ -33,6 +33,8 @@ use crate::test_utils::{new_mock_block_hash, test_runtime};
 
 const BUDGET: u64 = 1_000_000;
 
+mod history_benchmarks;
+
 async fn host<R>(
     store: &mut Store<Runtime>,
     call: impl AsyncFnOnce(&Accessor<Runtime, Runtime>) -> Result<R>,
@@ -598,23 +600,7 @@ async fn malformed_storage_call(
         )
         .await
         .map(|_| ()),
-        4 => <Runtime as StorageHost<Runtime>>::extend_path_with_match(
-            accessor,
-            resource,
-            path,
-            vec![],
-        )
-        .await
-        .map(|_| ()),
-        5 => <Runtime as StorageHost<Runtime>>::delete_matching_paths(
-            accessor,
-            resource,
-            path,
-            vec![],
-        )
-        .await
-        .map(|_| ()),
-        6 => <Runtime as StorageHost<Runtime>>::delete(accessor, resource, path)
+        4 => <Runtime as StorageHost<Runtime>>::delete(accessor, resource, path)
             .await
             .map(|_| ()),
         _ => <Runtime as StorageHost<Runtime>>::set_u64(accessor, resource, path, 1).await,
@@ -632,7 +618,7 @@ async fn invalid_storage_paths_are_metered_by_input_size() -> Result<()> {
         .await
         .push(ProcStorage { contract_id: 1 })?
         .rep();
-    for operation in 0..8 {
+    for operation in 0..6 {
         let mut previous = 0;
         for size in [32, 4096] {
             store.set_fuel(BUDGET)?;
@@ -887,65 +873,42 @@ async fn delete_discovery_stops_when_its_budget_runs_out() -> Result<()> {
         field.encode_to(&mut path);
         runtime.storage.set(1, &path, &[0; 10], None, None).await?;
     }
-    for matching in [false, true] {
-        let mut store = runtime.make_store(BUDGET)?;
-        let rep = store
-            .data()
-            .table
-            .lock()
+    let mut store = runtime.make_store(BUDGET)?;
+    let rep = store
+        .data()
+        .table
+        .lock()
+        .await
+        .push(ProcStorage { contract_id: 1 })?
+        .rep();
+    let entry = Fuel::StorageDelete.cost() + Fuel::Path(root.len() as u64).cost();
+    store.set_fuel(entry + 100)?;
+    let (result, visited) = traversal_probe::measure(host(&mut store, async |accessor| {
+        <Runtime as StorageHost<Runtime>>::delete(accessor, Resource::new_borrow(rep), root.clone())
             .await
-            .push(ProcStorage { contract_id: 1 })?
-            .rep();
-        let entry = Fuel::StorageDelete.cost()
-            + Fuel::Path(root.len() as u64).cost()
-            + if matching {
-                Fuel::ExtendPathWithMatch(1).cost() + Fuel::Path(candidate.len() as u64).cost()
-            } else {
-                0
-            };
-        store.set_fuel(entry + 100)?;
-        let (result, visited) = traversal_probe::measure(host(&mut store, async |accessor| {
-            if matching {
-                <Runtime as StorageHost<Runtime>>::delete_matching_paths(
-                    accessor,
-                    Resource::new_borrow(rep),
-                    root.clone(),
-                    vec![candidate.clone()],
-                )
-                .await
-                .map(|_| ())
-            } else {
-                <Runtime as StorageHost<Runtime>>::delete(
-                    accessor,
-                    Resource::new_borrow(rep),
-                    root.clone(),
-                )
-                .await
-                .map(|_| ())
-            }
-        }))
-        .await;
-        assert_exhausted(result.unwrap_err());
-        assert!(
-            visited <= 1,
-            "discovered {visited} rows after budget exhaustion"
-        );
-        assert_eq!(
-            runtime
-                .storage
-                .find_live_subtree(1, &root)
-                .await?
-                .try_collect::<Vec<_>>()
-                .await?
-                .len(),
-            32
-        );
-    }
+            .map(|_| ())
+    }))
+    .await;
+    assert_exhausted(result.unwrap_err());
+    assert!(
+        visited <= 1,
+        "discovered {visited} rows after budget exhaustion"
+    );
+    assert_eq!(
+        runtime
+            .storage
+            .find_live_subtree(1, &root)
+            .await?
+            .try_collect::<Vec<_>>()
+            .await?
+            .len(),
+        32
+    );
     Ok(())
 }
 
 #[tokio::test]
-async fn cleanup_unions_candidates_and_preserves_deposits_at_the_budget_boundary() -> Result<()> {
+async fn subtree_delete_preserves_deposits_at_the_budget_boundary() -> Result<()> {
     let (mut runtime, _dir, _name) = test_runtime().await?;
     let conn = runtime.storage.conn.clone();
     let alice = create_contract_signer(&conn, 1).await?;
@@ -996,9 +959,6 @@ async fn cleanup_unions_candidates_and_preserves_deposits_at_the_budget_boundary
         .await?;
     runtime.storage.footprint().on_free(&first).await?;
     runtime.storage.tombstone_rows(1, &first).await?;
-    let mut overlap = some.clone();
-    1u64.encode_to(&mut overlap);
-    let mut candidates = vec![some.clone(), overlap, some];
     let mut store = runtime.make_store(BUDGET)?;
     let rep = store
         .data()
@@ -1008,59 +968,50 @@ async fn cleanup_unions_candidates_and_preserves_deposits_at_the_budget_boundary
         .push(ProcStorage { contract_id: 1 })?
         .rep();
     let mut measured = None;
-    for reverse in [false, true] {
-        if reverse {
-            candidates.reverse();
-        }
-        for short in [false, true] {
-            let budget = if short { measured.unwrap() - 1 } else { BUDGET };
-            store.set_fuel(budget)?;
-            runtime.storage.savepoint().await?;
-            let changes = conn.total_changes();
-            let result = host(&mut store, async |accessor| {
-                <Runtime as StorageHost<Runtime>>::delete_matching_paths(
-                    accessor,
-                    Resource::new_borrow(rep),
-                    root.clone(),
-                    candidates.clone(),
-                )
-                .await
-            })
-            .await;
-            if short {
-                assert_exhausted(result.unwrap_err());
-                assert_eq!(
-                    conn.total_changes(),
-                    changes,
-                    "underfunded discovery wrote state"
-                );
-                assert_eq!(runtime.storage.footprint().total_gas(alice).await?, 0);
-                assert_eq!(runtime.storage.footprint().total_gas(bob).await?, 129 * 20);
-            } else {
-                assert_eq!(result?, 130);
-                assert_eq!(
-                    runtime.storage.footprint().total_gas(alice).await?,
-                    130 * 10
-                );
-                assert_eq!(runtime.storage.footprint().total_gas(bob).await?, 0);
-                let spent = budget - store.get_fuel()?;
-                if let Some(previous) = measured {
-                    assert_eq!(spent, previous);
-                }
-                measured = Some(spent);
-            }
-            for owner in [alice, bob] {
-                assert_eq!(
-                    runtime.storage.footprint().total_gas(owner).await?,
-                    live_deposit_gas_sum(&conn, owner).await?
-                );
-            }
-            let fuel_before_rollback = store.get_fuel()?;
-            runtime.storage.rollback().await?;
-            assert_eq!(store.get_fuel()?, fuel_before_rollback);
+    for short in [false, true] {
+        let budget = if short { measured.unwrap() - 1 } else { BUDGET };
+        store.set_fuel(budget)?;
+        runtime.storage.savepoint().await?;
+        let changes = conn.total_changes();
+        let result = host(&mut store, async |accessor| {
+            <Runtime as StorageHost<Runtime>>::delete(
+                accessor,
+                Resource::new_borrow(rep),
+                root.clone(),
+            )
+            .await
+        })
+        .await;
+        if short {
+            assert_exhausted(result.unwrap_err());
+            assert_eq!(
+                conn.total_changes(),
+                changes,
+                "underfunded discovery wrote state"
+            );
             assert_eq!(runtime.storage.footprint().total_gas(alice).await?, 0);
             assert_eq!(runtime.storage.footprint().total_gas(bob).await?, 129 * 20);
+        } else {
+            assert!(result?);
+            assert_eq!(runtime.storage.footprint().total_gas(alice).await?, 0);
+            assert_eq!(runtime.storage.footprint().total_gas(bob).await?, 0);
+            let spent = budget - store.get_fuel()?;
+            if let Some(previous) = measured {
+                assert_eq!(spent, previous);
+            }
+            measured = Some(spent);
         }
+        for owner in [alice, bob] {
+            assert_eq!(
+                runtime.storage.footprint().total_gas(owner).await?,
+                live_deposit_gas_sum(&conn, owner).await?
+            );
+        }
+        let fuel_before_rollback = store.get_fuel()?;
+        runtime.storage.rollback().await?;
+        assert_eq!(store.get_fuel()?, fuel_before_rollback);
+        assert_eq!(runtime.storage.footprint().total_gas(alice).await?, 0);
+        assert_eq!(runtime.storage.footprint().total_gas(bob).await?, 129 * 20);
     }
     Ok(())
 }
@@ -1181,7 +1132,7 @@ async fn subtree_seeks_preserve_ranges_and_fuel_across_pruning() -> Result<()> {
 }
 
 #[tokio::test]
-async fn cleanup_expands_long_base_paths_only_for_the_active_range() -> Result<()> {
+async fn subtree_delete_preserves_escaped_siblings_with_long_prefixes() -> Result<()> {
     let (runtime, _dir, _name) = test_runtime().await?;
     let root = "p".repeat(8192).encode();
     for member in ["a", "a\0", "b"] {
@@ -1198,18 +1149,16 @@ async fn cleanup_expands_long_base_paths_only_for_the_active_range() -> Result<(
         .push(ProcStorage { contract_id: 1 })?
         .rep();
     let a = "a".to_string().encode();
-    assert_eq!(
+    assert!(
         host(&mut store, async |accessor| {
-            <Runtime as StorageHost<Runtime>>::delete_matching_paths(
+            <Runtime as StorageHost<Runtime>>::delete(
                 accessor,
                 Resource::new_borrow(rep),
-                root.clone(),
-                vec![a; 512],
+                [root.as_slice(), a.as_slice()].concat(),
             )
             .await
         })
-        .await?,
-        1
+        .await?
     );
     let remaining: Vec<_> = runtime
         .storage
@@ -1222,18 +1171,16 @@ async fn cleanup_expands_long_base_paths_only_for_the_active_range() -> Result<(
         vec!["a\0".to_string().encode(), "b".to_string().encode()]
     );
     store.set_fuel(BUDGET)?;
-    assert_eq!(
+    assert!(
         host(&mut store, async |accessor| {
-            <Runtime as StorageHost<Runtime>>::delete_matching_paths(
+            <Runtime as StorageHost<Runtime>>::delete(
                 accessor,
                 Resource::new_borrow(rep),
                 root.clone(),
-                vec![vec![]; 512],
             )
             .await
         })
-        .await?,
-        2
+        .await?
     );
     assert!(!runtime.storage.exists(1, &root).await?);
     Ok(())

@@ -24,14 +24,12 @@ impl<T> built_in::context::HostProcStorageWithStore<T> for Runtime {
         fn get_keys(path: Vec<u8>, lo: Option<Vec<u8>>, hi: Option<Vec<u8>>, descending: bool) -> Resource<Keys> => _get_keys;
         fn get_storage_rows(path: Vec<u8>, lo: Option<Vec<u8>>, hi: Option<Vec<u8>>, descending: bool) -> Resource<StorageRows> => _get_storage_rows;
         fn exists(path: Vec<u8>) -> bool => _exists;
-        fn extend_path_with_match(path: Vec<u8>, candidates: Vec<Vec<u8>>) -> Option<u32> => _extend_path_with_match;
         fn set_str(path: Vec<u8>, value: String) -> () => _set_primitive;
         fn set_u64(path: Vec<u8>, value: u64) -> () => _set_primitive;
         fn set_s64(path: Vec<u8>, value: i64) -> () => _set_primitive;
         fn set_bool(path: Vec<u8>, value: bool) -> () => _set_primitive;
         fn set_list_u8(path: Vec<u8>, value: Vec<u8>) -> () => _set_primitive;
         fn delete(path: Vec<u8>) -> bool => _delete;
-        fn delete_matching_paths(base_path: Vec<u8>, candidates: Vec<Vec<u8>>) -> u64 => _delete_matching_paths;
         fn view_storage() -> Resource<ViewStorage> => _proc_view_storage;
     }
 

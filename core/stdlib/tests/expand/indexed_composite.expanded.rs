@@ -18,6 +18,7 @@ impl ::core::clone::Clone for Agreement {
 #[automatically_derived]
 impl<__S: stdlib::WriteStorage + stdlib::ReadStorage + ?Sized> stdlib::Store<__S>
 for Agreement {
+    const STORES_ROOT: bool = false;
     fn __set(ctx: &alloc::rc::Rc<__S>, base_path: stdlib::KeyPath, value: Agreement) {
         stdlib::WriteStorage::__set(ctx, base_path.push_interned(0u8), value.active);
         stdlib::WriteStorage::__set(ctx, base_path.push_interned(1u8), value.challenge);
@@ -61,16 +62,16 @@ impl<__S: stdlib::ReadStorage + 'static> AgreementModel<__S> {
     }
     pub fn challenge(&self) -> Option<u64> {
         let base_path = self.base_path.push_interned(1u8);
-        if stdlib::ReadStorage::__extend_path_with_match(
-                &self.ctx,
-                &base_path,
-                &[stdlib::string_element("none")],
-            )
-            .is_some()
-        {
-            None
-        } else {
-            stdlib::ReadStorage::__get(&self.ctx, base_path.push("some"))
+        let variant = stdlib::ReadStorage::__get_keys::<
+            alloc::string::String,
+        >(&self.ctx, &base_path)
+            .next();
+        match variant.as_deref() {
+            None | Some("none") => None,
+            Some("some") => stdlib::ReadStorage::__get(&self.ctx, base_path.push("some")),
+            _ => {
+                ::core::panicking::panic_fmt(format_args!("Invalid Option storage tag"));
+            }
         }
     }
     pub fn load(&self) -> Agreement {
@@ -116,16 +117,16 @@ impl<
     }
     pub fn challenge(&self) -> Option<u64> {
         let base_path = self.base_path.push_interned(1u8);
-        if stdlib::ReadStorage::__extend_path_with_match(
-                &self.ctx,
-                &base_path,
-                &[stdlib::string_element("none")],
-            )
-            .is_some()
-        {
-            None
-        } else {
-            stdlib::ReadStorage::__get(&self.ctx, base_path.push("some"))
+        let variant = stdlib::ReadStorage::__get_keys::<
+            alloc::string::String,
+        >(&self.ctx, &base_path)
+            .next();
+        match variant.as_deref() {
+            None | Some("none") => None,
+            Some("some") => stdlib::ReadStorage::__get(&self.ctx, base_path.push("some")),
+            _ => {
+                ::core::panicking::panic_fmt(format_args!("Invalid Option storage tag"));
+            }
         }
     }
     pub fn set_active(&self, value: bool) {

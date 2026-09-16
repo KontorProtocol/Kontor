@@ -16,20 +16,23 @@ use crate::{
         queries::{
             Error as StorageError, FOOTPRINT_BUILT_KEY, LiveRow, StorageRowCursor,
             create_contract_signer, depositors_affected_by_reorg, exists_contract_state,
-            find_live_subtree, find_matching_paths, footprint_cache_add, footprint_cache_get,
-            footprint_cache_set, footprint_rebuild_all, get_contract_address_from_id,
-            get_contract_bytes_by_id, get_contract_id_from_address,
-            get_contract_provenance_publisher, get_latest_contract_state_value, get_meta_u64,
-            hard_delete_rows, insert_contract, insert_contract_provenance, insert_contract_result,
-            insert_contract_state, latest_live_deposit, live_deposit_gas_sum, matching_path,
-            path_prefix_filter_contract_state, prune_contract_state, rollback_to_height,
-            select_block_at_height, set_meta_u64, tombstone_rows,
+            find_live_subtree, footprint_cache_add, footprint_cache_get, footprint_cache_set,
+            footprint_rebuild_all, get_contract_address_from_id, get_contract_bytes_by_id,
+            get_contract_id_from_address, get_contract_provenance_publisher,
+            get_latest_contract_state_value, get_meta_u64, insert_contract,
+            insert_contract_provenance, insert_contract_result, insert_contract_state,
+            latest_live_deposit, live_deposit_gas_sum, path_prefix_filter_contract_state,
+            prune_contract_state, rollback_to_height, select_block_at_height, set_meta_u64,
+            tombstone_rows,
         },
         types::{ContractProvenanceRow, ContractResultRow, ContractRow, ContractStateRow},
     },
     runtime::{ContractAddress, counter::Counter, stack::Stack},
     test_utils::new_mock_transaction,
 };
+
+#[cfg(test)]
+mod variant_tests;
 
 /// `block_entropy` recent-window size: a committed height older than this has
 /// expired (so a stale draw falls out of the window and the contract can refund).
@@ -133,7 +136,7 @@ impl FootprintCache<'_> {
         Ok(())
     }
 
-    /// Maintain the cache for freed rows (delete/variant-cleanup): subtract each row's
+    /// Maintain the cache for freed rows: subtract each row's
     /// deposit from its setter. The rows were already read for metering, so this adds
     /// no read; deltas are summed PER DEPOSITOR (a K-row delete is almost always one
     /// depositor) so it issues ~1 statement, not 2·K.
@@ -146,24 +149,6 @@ impl FootprintCache<'_> {
         }
         for (depositor, delta) in deltas {
             footprint_cache_add(self.conn, depositor, delta).await?;
-        }
-        Ok(())
-    }
-
-    /// Re-add deposits REVIVED by a HARD delete. Hard-deleting a path's current-height
-    /// row (intra-block variant cleanup) can expose an OLDER same-path version that
-    /// becomes live again — its deposit must re-enter the cache, or the floor under-
-    /// counts and the token allows spends it should reject. (A tombstone delete can't
-    /// revive: its tombstone stays the latest row.) Mirrors the reorg resurrection
-    /// handling. Call AFTER the hard delete — the revived row is whatever now remains
-    /// latest-live for the path. Discovery unions overlapping ranges, so `freed`
-    /// contains each path exactly once, matching `on_free` and the actual delete.
-    pub async fn on_revive(&self, contract_id: u64, freed: &[LiveRow]) -> Result<()> {
-        for row in freed {
-            if let Some(revived) = latest_live_deposit(self.conn, contract_id, &row.path).await? {
-                footprint_cache_add(self.conn, revived.depositor, revived.deposited_gas as i64)
-                    .await?;
-            }
         }
         Ok(())
     }
@@ -320,37 +305,6 @@ impl Storage {
 
     pub async fn exists(&self, contract_id: u64, path: &[u8]) -> Result<bool> {
         Ok(exists_contract_state(&self.conn, contract_id, path).await?)
-    }
-
-    /// Resolve which of `variants` is the current value under `base_path` (an
-    /// enum/option discriminant), or `None` if unset. The host passes the variant
-    /// names; the query checks them against the codec child element.
-    pub async fn extend_path_with_match(
-        &self,
-        contract_id: u64,
-        base_path: &[u8],
-        candidates: &[Vec<u8>],
-    ) -> Result<Option<u32>> {
-        Ok(matching_path(&self.conn, contract_id, base_path, candidates).await?)
-    }
-
-    /// Read half of the intra-block variant hard-delete: the `LiveRow`s it will
-    /// remove, so the host can meter `Fuel::Delete` before the writes.
-    pub async fn find_matching_paths(
-        &self,
-        contract_id: u64,
-        base_path: &[u8],
-        candidates: &[Vec<u8>],
-    ) -> Result<impl Stream<Item = Result<LiveRow, StorageError>> + Send + 'static> {
-        Ok(
-            find_matching_paths(&self.conn, contract_id, self.height, base_path, candidates)
-                .await?,
-        )
-    }
-
-    /// Delete exactly the current-height rows discovered and metered by the host.
-    pub async fn hard_delete_rows(&self, contract_id: u64, rows: &[LiveRow]) -> Result<u64> {
-        Ok(hard_delete_rows(&self.conn, contract_id, self.height, rows).await?)
     }
 
     pub async fn contract_id(&self, contract_address: &ContractAddress) -> Result<Option<u64>> {
@@ -970,71 +924,6 @@ mod tests {
             storage.footprint().total_gas(alice).await?,
             live_deposit_gas_sum(&conn, alice).await?,
             "reorg at stale in-memory height must still recompute the floor from live state"
-        );
-        assert_eq!(storage.footprint().total_gas(alice).await?, 10);
-        Ok(())
-    }
-
-    // Regression: a HARD delete (intra-block variant cleanup) of a path's current-height
-    // row exposes an OLDER same-path version that becomes live again. The cache must
-    // re-add the revived deposit, else the floor under-counts and the token would allow
-    // an over-spend. (Bugbot: "Hard delete drops revived deposits".)
-    #[tokio::test]
-    async fn hard_delete_revives_displaced_deposit() -> Result<()> {
-        use crate::database::queries::{create_contract_signer, live_deposit_gas_sum};
-
-        let (_reader, writer, _temp) = new_test_db().await?;
-        let conn = writer.connection();
-        for h in 1..=2u64 {
-            insert_block(
-                &conn,
-                BlockRow::builder()
-                    .height(h)
-                    .hash(new_mock_block_hash(h as u32))
-                    .build(),
-            )
-            .await?;
-        }
-        let alice = create_contract_signer(&conn, 1).await?;
-        let bob = create_contract_signer(&conn, 1).await?;
-        // The path is `base ++ candidate`, the shape the variant-cleanup delete matches.
-        let base = b"e/".to_vec();
-        let path = b"e/A".to_vec();
-        let candidates = vec![b"A".to_vec()];
-
-        let mut storage = Storage::builder().height(1).conn(conn.clone()).build();
-        // h1: alice writes e/A (deposit 10).
-        storage
-            .footprint()
-            .on_set(1, &path, Some(alice), Some(10))
-            .await?;
-        storage.set(1, &path, b"v", Some(alice), Some(10)).await?;
-        // h2: bob overwrites e/A (deposit 20) — displaces alice in the cache.
-        storage.height = 2;
-        storage
-            .footprint()
-            .on_set(1, &path, Some(bob), Some(20))
-            .await?;
-        storage.set(1, &path, b"v", Some(bob), Some(20)).await?;
-        assert_eq!(storage.footprint().total_gas(alice).await?, 0); // displaced
-        assert_eq!(storage.footprint().total_gas(bob).await?, 20);
-
-        // Intra-block hard-delete of e/A @ h2 — mirrors `_delete_matching_paths`.
-        let rows: Vec<_> = storage
-            .find_matching_paths(1, &base, &candidates)
-            .await?
-            .try_collect()
-            .await?;
-        storage.footprint().on_free(&rows).await?;
-        storage.hard_delete_rows(1, &rows).await?;
-        storage.footprint().on_revive(1, &rows).await?;
-
-        // alice's h1 row is live again → her deposit must be back in the cache.
-        assert_eq!(storage.footprint().total_gas(bob).await?, 0);
-        assert_eq!(
-            storage.footprint().total_gas(alice).await?,
-            live_deposit_gas_sum(&conn, alice).await?,
-            "revived deposit must re-enter the cache (== live sum)"
         );
         assert_eq!(storage.footprint().total_gas(alice).await?, 10);
         Ok(())

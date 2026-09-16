@@ -1,6 +1,6 @@
 use alloc::{string::String, vec::Vec};
 
-use crate::keycodec::{KeyElement, string_element};
+use crate::keycodec::KeyElement;
 use crate::scalar_storage::{narrow_i32, narrow_u32};
 use crate::{KeyPath, ScalarStorage};
 
@@ -59,16 +59,6 @@ pub trait ReadStorage {
     ) -> impl Iterator<Item = (Vec<u8>, V)> + use<Self, V>;
 
     fn __exists(self: &alloc::rc::Rc<Self>, path: &[u8]) -> bool;
-
-    /// Resolve which of `candidates` (already-encoded discriminant elements) is the
-    /// current child under `path`, returning its INDEX, or `None` if unset. The host
-    /// byte-compares, so the candidate encoding (string element or interned dict-ref)
-    /// is the guest's choice.
-    fn __extend_path_with_match(
-        self: &alloc::rc::Rc<Self>,
-        path: &[u8],
-        candidates: &[Vec<u8>],
-    ) -> Option<u32>;
 
     fn __get<T: Retrieve<Self>>(self: &alloc::rc::Rc<Self>, path: KeyPath) -> Option<T>;
 }
@@ -141,15 +131,28 @@ pub trait WriteStorage {
     /// exact path. Returns true if any live row was tombstoned. (A leaf path,
     /// e.g. an index void, has no descendants, so this is a single tombstone.)
     fn __delete(self: &alloc::rc::Rc<Self>, path: &[u8]) -> bool;
-
-    fn __delete_matching_paths(
-        self: &alloc::rc::Rc<Self>,
-        base_path: &[u8],
-        candidates: &[Vec<u8>],
-    ) -> u64;
 }
 
 pub trait Store<T: WriteStorage + ?Sized> {
+    /// Whether storing this type supplies a value at the exact root path.
+    #[doc(hidden)]
+    const STORES_ROOT: bool;
+
+    #[doc(hidden)]
+    fn __set_variant_payload(ctx: &alloc::rc::Rc<T>, path: KeyPath, value: Self)
+    where
+        Self: Sized,
+    {
+        if Self::STORES_ROOT {
+            Self::__set(ctx, path, value);
+        } else {
+            Self::__set(ctx, path.clone(), value);
+            // Keep the variant present even after its last descendant is removed.
+            // Write after the payload, whose Store implementation may clear its subtree.
+            ctx.__set_void(&path);
+        }
+    }
+
     fn __set(ctx: &alloc::rc::Rc<T>, base_path: KeyPath, value: Self);
 }
 
@@ -176,68 +179,85 @@ pub trait HasRootModel<R> {
 }
 
 impl<T: WriteStorage + ?Sized> Store<T> for u64 {
+    const STORES_ROOT: bool = true;
+
     fn __set(ctx: &alloc::rc::Rc<T>, path: KeyPath, value: u64) {
         ctx.__set_u64(&path, value);
     }
 }
 
 impl<T: WriteStorage + ?Sized> Store<T> for i64 {
+    const STORES_ROOT: bool = true;
+
     fn __set(ctx: &alloc::rc::Rc<T>, path: KeyPath, value: i64) {
         ctx.__set_s64(&path, value);
     }
 }
 
 impl<T: WriteStorage + ?Sized> Store<T> for u32 {
+    const STORES_ROOT: bool = true;
+
     fn __set(ctx: &alloc::rc::Rc<T>, path: KeyPath, value: u32) {
         ctx.__set_u64(&path, value as u64);
     }
 }
 
 impl<T: WriteStorage + ?Sized> Store<T> for i32 {
+    const STORES_ROOT: bool = true;
+
     fn __set(ctx: &alloc::rc::Rc<T>, path: KeyPath, value: i32) {
         ctx.__set_s64(&path, value as i64);
     }
 }
 
 impl<T: WriteStorage + ?Sized> Store<T> for &str {
+    const STORES_ROOT: bool = true;
+
     fn __set(ctx: &alloc::rc::Rc<T>, path: KeyPath, value: &str) {
         ctx.__set_str(&path, value);
     }
 }
 
 impl<T: WriteStorage + ?Sized> Store<T> for String {
+    const STORES_ROOT: bool = true;
+
     fn __set(ctx: &alloc::rc::Rc<T>, path: KeyPath, value: String) {
         ctx.__set_str(&path, &value);
     }
 }
 
 impl<T: WriteStorage + ?Sized> Store<T> for bool {
+    const STORES_ROOT: bool = true;
+
     fn __set(ctx: &alloc::rc::Rc<T>, path: KeyPath, value: bool) {
         ctx.__set_bool(&path, value);
     }
 }
 
 impl<T: WriteStorage + ?Sized> Store<T> for Vec<u8> {
+    const STORES_ROOT: bool = true;
+
     fn __set(ctx: &alloc::rc::Rc<T>, path: KeyPath, value: Vec<u8>) {
         ctx.__set_list_u8(&path, value);
     }
 }
 
 impl<T: WriteStorage + ?Sized> Store<T> for () {
+    const STORES_ROOT: bool = true;
+
     fn __set(ctx: &alloc::rc::Rc<T>, path: KeyPath, _: ()) {
         ctx.__set_void(&path);
     }
 }
 
 impl<S: WriteStorage + ?Sized, T: Store<S>> Store<S> for Option<T> {
+    const STORES_ROOT: bool = false;
+
     fn __set(ctx: &alloc::rc::Rc<S>, path: KeyPath, value: Self) {
-        // `none`/`some` stay STRING discriminant segments (Option is generic, with
-        // no per-type dict to intern them into); the host byte-compares, so this
-        // mixes fine with interned enum variants elsewhere.
-        ctx.__delete_matching_paths(&path, &[string_element("none"), string_element("some")]);
+        ctx.__delete(&path);
         match value {
-            Some(inner) => ctx.__set(path.push("some"), inner),
-            None => ctx.__set(path.push("none"), ()),
+            Some(inner) => T::__set_variant_payload(ctx, path.push("some"), inner),
+            None => ctx.__set_void(&path.push("none")),
         }
     }
 }

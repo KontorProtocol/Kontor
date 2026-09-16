@@ -3,6 +3,7 @@ use indexer_types::{BlockRow, PaginationMeta};
 use libsql::{Connection, Value, de::from_row, params};
 
 use super::Error;
+use super::current_state::{prepare_affected_keys, restore_affected_keys, with_state_savepoint};
 use super::pagination::{PageOptions, PageSource, get_paginated};
 use crate::database::types::BlockQuery;
 
@@ -16,6 +17,24 @@ pub async fn insert_block(conn: &Connection, block: BlockRow) -> Result<i64, Err
 }
 
 pub async fn rollback_to_height(conn: &Connection, height: u64) -> Result<u64, Error> {
+    with_state_savepoint(conn, async || {
+        prepare_affected_keys(conn).await?;
+        // Include deleted keys: they have no current pointer but can revive.
+        conn.execute(
+            "INSERT OR IGNORE INTO affected_state_keys
+             SELECT contract_id, path FROM contract_state INDEXED BY idx_contract_state_height
+             WHERE height > ?",
+            [height],
+        )
+        .await?;
+        let removed = rollback_blocks(conn, height).await?;
+        restore_affected_keys(conn).await?;
+        Ok(removed)
+    })
+    .await
+}
+
+async fn rollback_blocks(conn: &Connection, height: u64) -> Result<u64, Error> {
     // Clear confirmations by blocks that are about to disappear. The cascade below
     // keys on `height`, not `confirmed_height`, so a BATCH-executed row (whose
     // `height` is its anchor, potentially at or below the target) survives while

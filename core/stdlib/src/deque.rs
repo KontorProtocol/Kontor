@@ -184,6 +184,8 @@ impl<V, S: ?Sized> Default for StorageDeque<V, S> {
 }
 
 impl<V: Store<S2>, S1, S2: WriteStorage + ?Sized> Store<S2> for StorageDeque<V, S1> {
+    const STORES_ROOT: bool = false;
+
     fn __set(ctx: &Rc<S2>, base_path: KeyPath, value: StorageDeque<V, S1>) {
         // Wholesale REPLACE, not overlay. A deque may already exist at this path
         // (e.g. a parent struct re-set via its own `Store::__set`), carrying stale
@@ -270,9 +272,6 @@ mod tests {
         fn __get_list_u8(self: &Rc<Self>, _: &[u8]) -> Option<Vec<u8>> {
             unimplemented!()
         }
-        fn __extend_path_with_match(self: &Rc<Self>, _: &[u8], _: &[Vec<u8>]) -> Option<u32> {
-            unimplemented!()
-        }
     }
 
     impl WriteStorage for Mock {
@@ -298,9 +297,6 @@ mod tests {
             unimplemented!()
         }
         fn __set_void(self: &Rc<Self>, _: &[u8]) {
-            unimplemented!()
-        }
-        fn __delete_matching_paths(self: &Rc<Self>, _: &[u8], _: &[Vec<u8>]) -> u64 {
             unimplemented!()
         }
     }

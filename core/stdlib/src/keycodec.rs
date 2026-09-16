@@ -88,6 +88,21 @@ pub trait KeyElement: Sized {
     }
 }
 
+/// An interned structural path segment, used by generated variant readers.
+#[doc(hidden)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Interned(pub u8);
+
+impl KeyElement for Interned {
+    fn encode_to(&self, out: &mut Vec<u8>) {
+        encode_dict(out, self.0);
+    }
+
+    fn decode_from(bytes: &[u8]) -> Result<(Self, &[u8]), CodecError> {
+        decode_dict(bytes).map(|(id, rest)| (Self(id), rest))
+    }
+}
+
 // ── strings / bytes ────────────────────────────────────────────────────────
 // `0x00` in content is escaped to `0x00 0xFF`, then the element is `0x00`-
 // terminated. The terminator (the minimum byte) sorts below any real content, so
@@ -464,17 +479,7 @@ pub fn encode_dict(out: &mut Vec<u8>, id: u8) {
     out.push(id);
 }
 
-/// The dict-ref element for interned id `id`, as standalone bytes — the
-/// discriminant candidate the guest passes to `extend-path-with-match` /
-/// `delete-matching-paths` for an interned (storage-enum) variant.
-pub fn interned_element(id: u8) -> Vec<u8> {
-    let mut out = Vec::new();
-    encode_dict(&mut out, id);
-    out
-}
-
-/// The string codec element for `s`, as standalone bytes — the discriminant
-/// candidate for a NON-interned variant (an `Option`'s `none`/`some`).
+/// The string codec element for `s`, as standalone bytes.
 pub fn string_element(s: &str) -> Vec<u8> {
     KeyElement::encode(&String::from(s))
 }
@@ -938,8 +943,9 @@ mod tests {
             encode_dict(&mut bytes, id);
             assert_eq!(bytes.len(), 2); // tag + 1-byte id
 
-            let (got, rest) = decode_dict(&bytes).unwrap();
-            assert_eq!(got, id);
+            let (got, rest) = Interned::decode_from(&bytes).unwrap();
+            assert_eq!(got, Interned(id));
+            assert_eq!(got.encode(), bytes);
             assert!(rest.is_empty());
 
             // next_element treats it as one fixed-width element.

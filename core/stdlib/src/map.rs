@@ -323,6 +323,8 @@ where
     V: Store<S2> + Clone + Indexed,
     S2: WriteStorage + ReadStorage + ?Sized,
 {
+    const STORES_ROOT: bool = false;
+
     /// Wholesale write: persist every entry's value, plus its index rows when the
     /// value type declares indexes, so a map populated before `init` (at the root
     /// or any nested level) lands index-consistent. The index root is the
@@ -521,20 +523,6 @@ mod tests {
         fn __exists(self: &Rc<Self>, path: &[u8]) -> bool {
             self.map.borrow().keys().any(|key| key.starts_with(path))
         }
-        fn __extend_path_with_match(
-            self: &Rc<Self>,
-            path: &[u8],
-            candidates: &[Vec<u8>],
-        ) -> Option<u32> {
-            candidates
-                .iter()
-                .position(|candidate| {
-                    let mut child = path.to_vec();
-                    child.extend(candidate);
-                    self.__exists(&child)
-                })
-                .map(|index| index as u32)
-        }
     }
 
     impl WriteStorage for Mock {
@@ -570,16 +558,6 @@ mod tests {
             self.map
                 .borrow_mut()
                 .insert(path.to_vec(), Cell::Bytes(value));
-        }
-        fn __delete_matching_paths(self: &Rc<Self>, path: &[u8], candidates: &[Vec<u8>]) -> u64 {
-            candidates
-                .iter()
-                .filter(|candidate| {
-                    let mut child = path.to_vec();
-                    child.extend(*candidate);
-                    self.__delete(&child)
-                })
-                .count() as u64
         }
     }
 
@@ -911,6 +889,8 @@ mod tests {
     }
 
     impl Store<Mock> for Position {
+        const STORES_ROOT: bool = false;
+
         fn __set(ctx: &Rc<Mock>, base_path: KeyPath, value: Position) {
             ctx.__set(base_path.push("status"), value.status);
         }
@@ -1063,6 +1043,8 @@ mod tests {
     }
 
     impl Store<Mock> for Account {
+        const STORES_ROOT: bool = false;
+
         fn __set(ctx: &Rc<Mock>, base_path: KeyPath, value: Account) {
             // `positions` is an interned field name (as the macro would emit).
             ctx.__set(base_path.push_interned(IM), value.positions);
@@ -1157,6 +1139,8 @@ mod tests {
     }
 
     impl Store<Mock> for Bag {
+        const STORES_ROOT: bool = false;
+
         fn __set(ctx: &Rc<Mock>, base_path: KeyPath, value: Bag) {
             ctx.__set(base_path.push("tag"), value.tag);
             ctx.__set(base_path.push("items"), value.items);

@@ -24,6 +24,5 @@ impl<T> built_in::context::HostViewStorageWithStore<T> for Runtime {
         fn get_keys(path: Vec<u8>, lo: Option<Vec<u8>>, hi: Option<Vec<u8>>, descending: bool) -> Resource<Keys> => _get_keys;
         fn get_storage_rows(path: Vec<u8>, lo: Option<Vec<u8>>, hi: Option<Vec<u8>>, descending: bool) -> Resource<StorageRows> => _get_storage_rows;
         fn exists(path: Vec<u8>) -> bool => _exists;
-        fn extend_path_with_match(path: Vec<u8>, candidates: Vec<Vec<u8>>) -> Option<u32> => _extend_path_with_match;
     }
 }

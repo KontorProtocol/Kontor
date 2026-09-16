@@ -27,7 +27,6 @@ pub enum Fuel {
     /// Returned bytes only; StorageScan charges each attempt before advancing.
     KeysNext(u64),
     Path(u64),
-    ExtendPathWithMatch(u64),
     GetKeys,
     Exists,
     StorageRead,
@@ -129,7 +128,6 @@ impl Fuel {
             Self::Get(value_len) => (*value_len as u64).saturating_mul(10),
             Self::GetKeys => 200,
             Self::Exists => 50,
-            Self::ExtendPathWithMatch(candidate_count) => 500 + 10 * candidate_count,
             Self::Set(value_len) => value_len.saturating_mul(10),
             Self::Result(value_len) => 200 + 10 * value_len,
             // Charge mutations and freed footprint bytes; tombstones omit values.

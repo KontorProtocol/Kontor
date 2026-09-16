@@ -11,13 +11,13 @@ pub enum ErrorModel<__S> {
 pub type __ErrorModelFor<__S> = ErrorModel<__S>;
 impl<__S: stdlib::ReadStorage + 'static> ErrorModel<__S> {
     pub fn new(ctx: alloc::rc::Rc<__S>, base_path: stdlib::KeyPath) -> Self {
-        stdlib::ReadStorage::__extend_path_with_match(
-                &ctx,
-                &base_path,
-                &[stdlib::interned_element(0u8)],
-            )
-            .map(|__idx| match __idx {
-                0u32 => {
+        let variant = stdlib::ReadStorage::__get_keys::<
+            stdlib::Interned,
+        >(&ctx, &base_path)
+            .next();
+        variant
+            .map(|stdlib::Interned(__idx)| match __idx {
+                0u8 => {
                     ErrorModel::Message(
                         stdlib::ReadStorage::__get(&ctx, base_path.push_interned(0u8))
                             .unwrap(),
@@ -25,7 +25,7 @@ impl<__S: stdlib::ReadStorage + 'static> ErrorModel<__S> {
                 }
                 _ => {
                     ::core::panicking::panic_fmt(
-                        format_args!("Matching path not found"),
+                        format_args!("Invalid enum storage tag"),
                     );
                 }
             })
@@ -59,13 +59,13 @@ impl<
     __S: stdlib::ReadStorage + stdlib::WriteStorage + stdlib::HasViewStorage + 'static,
 > ErrorWriteModel<__S> {
     pub fn new(ctx: alloc::rc::Rc<__S>, base_path: stdlib::KeyPath) -> Self {
-        stdlib::ReadStorage::__extend_path_with_match(
-                &ctx,
-                &base_path,
-                &[stdlib::interned_element(0u8)],
-            )
-            .map(|__idx| match __idx {
-                0u32 => {
+        let variant = stdlib::ReadStorage::__get_keys::<
+            stdlib::Interned,
+        >(&ctx, &base_path)
+            .next();
+        variant
+            .map(|stdlib::Interned(__idx)| match __idx {
+                0u8 => {
                     ErrorWriteModel::Message(
                         stdlib::ReadStorage::__get(&ctx, base_path.push_interned(0u8))
                             .unwrap(),
@@ -73,7 +73,7 @@ impl<
                 }
                 _ => {
                     ::core::panicking::panic_fmt(
-                        format_args!("Matching path not found"),
+                        format_args!("Invalid enum storage tag"),
                     );
                 }
             })

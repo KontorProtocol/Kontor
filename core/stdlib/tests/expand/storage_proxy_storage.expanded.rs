@@ -5,6 +5,7 @@ struct ProxyStorage {
 #[automatically_derived]
 impl<__S: stdlib::WriteStorage + stdlib::ReadStorage + ?Sized> stdlib::Store<__S>
 for ProxyStorage {
+    const STORES_ROOT: bool = false;
     fn __set(ctx: &alloc::rc::Rc<__S>, base_path: stdlib::KeyPath, value: ProxyStorage) {
         stdlib::WriteStorage::__set(
             ctx,

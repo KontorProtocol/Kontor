@@ -12,5 +12,13 @@ world root {
 
   export fib-of-sub: async func(ctx: borrow<proc-context>, arith-address: contract-address, x: string, y: string) -> result<u64, error>;
 
+  export set-variant: async func(ctx: borrow<proc-context>, kind: u64, count: u64, fail: bool);
+  export variant-state: async func(ctx: borrow<view-context>) -> list<u64>;
+  export mutate-variant: async func(ctx: borrow<proc-context>, key: u64);
+
+  export clear-variant: async func(ctx: borrow<proc-context>);
+  export set-nested-variant: async func(ctx: borrow<proc-context>, kind: u64, value: u64);
+  export nested-variant-state: async func(ctx: borrow<view-context>) -> list<u64>;
+
   export cached-values: async func(ctx: borrow<view-context>) -> list<u64>;
 }
