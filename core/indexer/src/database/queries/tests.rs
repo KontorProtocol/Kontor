@@ -4354,8 +4354,8 @@ async fn test_transaction_signer_id_querying() -> Result<()> {
     // tx 0: signer_a, 1 result
     // tx 1: signer_a, 2 results (exercises DISTINCT in the JOIN)
     // tx 2: signer_b, 1 result
-    // tx 3: signer_a, 1 result + a contract_state row on `token`
-    //       (covers signer_id + contract combined — two joins)
+    // tx 3: signer_a, 2 results + 2 contract_state rows on `token`
+    //       (two joins produce four rows for this one transaction)
     // tx 4: no results (control — must not appear in any signer query)
     let insert_result = async |tx_id: u64, signer_id: u64, result_index: u32| {
         insert_contract_result(
@@ -4378,16 +4378,19 @@ async fn test_transaction_signer_id_querying() -> Result<()> {
     insert_result(tx_ids[1], signer_a, 1).await?;
     insert_result(tx_ids[2], signer_b, 0).await?;
     insert_result(tx_ids[3], signer_a, 0).await?;
-    insert_contract_state(
-        &conn,
-        ContractStateRow::builder()
-            .contract_id(token_id)
-            .tx_id(tx_ids[3])
-            .height(1)
-            .path(cs_path_dotted("foo"))
-            .build(),
-    )
-    .await?;
+    insert_result(tx_ids[3], signer_a, 1).await?;
+    for path in ["foo", "bar"] {
+        insert_contract_state(
+            &conn,
+            ContractStateRow::builder()
+                .contract_id(token_id)
+                .tx_id(tx_ids[3])
+                .height(1)
+                .path(cs_path_dotted(path))
+                .build(),
+        )
+        .await?;
+    }
 
     // 1) signer filter narrows correctly. signer_a → 3 distinct txs
     //    (tx 0, 1, 3). DISTINCT must collapse tx 1's two results.
@@ -4432,6 +4435,7 @@ async fn test_transaction_signer_id_querying() -> Result<()> {
     )
     .await?;
     assert_eq!(txs.len(), 2);
+    assert_eq!(meta.total_count, Some(3));
     assert!(meta.has_more);
     assert_eq!(meta.next_cursor, Some(txs[1].id));
     let (txs, meta) = get_transactions_paginated(
@@ -4447,6 +4451,7 @@ async fn test_transaction_signer_id_querying() -> Result<()> {
     .await?;
     assert_eq!(txs.len(), 1);
     assert_eq!(txs[0].id, tx_ids[3]);
+    assert_eq!(meta.total_count, Some(1));
     assert!(!meta.has_more);
 
     // 4) signer_id + height combined.
@@ -5316,5 +5321,124 @@ async fn default_pagination_never_executes_count() -> Result<()> {
     let result = get_transactions_paginated(&conn, counted).await;
     conn.authorizer(None)?;
     assert!(matches!(result, Err(Error::LibSQL(_))));
+    Ok(())
+}
+
+#[tokio::test]
+async fn result_counts_preserve_visibility_and_nullable_transactions() -> Result<()> {
+    let (_reader, writer, _temp) = new_test_db().await?;
+    let conn = writer.connection();
+    setup_block(&conn, 1).await?;
+    let signer = ensure_identity(&conn, &"11".repeat(32), 1)
+        .await?
+        .signer_id();
+    let contract = insert_contract(
+        &conn,
+        ContractRow::builder()
+            .name("counted".into())
+            .height(1)
+            .tx_index(0)
+            .bytes(vec![])
+            .build(),
+    )
+    .await?;
+    let tx = insert_transaction(
+        &conn,
+        TransactionRow::builder()
+            .height(1)
+            .txid(new_mock_transaction(1).txid.to_string())
+            .tx_index(1)
+            .build(),
+    )
+    .await?;
+    let mut ids = Vec::new();
+    // Missing contract references are valid stored data; the inner join must
+    // exclude them. NULL transaction references must remain visible.
+    for (index, (contract_id, tx_id, func)) in [
+        (contract, Some(tx), "keep"),
+        (contract, None, "keep"),
+        (contract, Some(tx), "other"),
+        (contract + 100, None, "keep"),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        ids.push(
+            insert_contract_result(
+                &conn,
+                ContractResultRow::builder()
+                    .contract_id(contract_id)
+                    .height(1)
+                    .maybe_tx_id(tx_id)
+                    .input_index(0)
+                    .op_index(0)
+                    .result_index(index as u32)
+                    .func(func.into())
+                    .gas(1)
+                    .signer_id(signer)
+                    .build(),
+            )
+            .await?,
+        );
+    }
+    let query = ResultQuery::builder()
+        .count(true)
+        .order(OrderDirection::Asc)
+        .build();
+    let (rows, meta) = get_results_paginated(&conn, query.clone()).await?;
+    assert_eq!(rows.iter().map(|r| r.id).collect::<Vec<_>>(), ids[..3]);
+    assert_eq!(meta.total_count, Some(3));
+    assert!(!meta.has_more);
+    assert_eq!(rows[1].txid, None);
+    assert_eq!(rows[1].tx_index, None);
+    let mut uncounted = query.clone();
+    uncounted.count = false;
+    let (without_count, meta) = get_results_paginated(&conn, uncounted).await?;
+    assert_eq!(without_count, rows);
+    assert_eq!(meta.total_count, None);
+
+    let filtered = ResultQuery::builder()
+        .count(true)
+        .func("keep".into())
+        .height(1)
+        .start_height(1)
+        .signer_id(signer)
+        .order(OrderDirection::Asc)
+        .limit(1)
+        .build();
+    let (rows, meta) = get_results_paginated(&conn, filtered.clone()).await?;
+    assert_eq!(rows[0].id, ids[0]);
+    assert_eq!(meta.total_count, Some(2));
+    assert!(meta.has_more);
+    let mut next = filtered.clone();
+    next.cursor = meta.next_cursor;
+    let (rows, meta) = get_results_paginated(&conn, next).await?;
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].id, ids[1]);
+    assert_eq!(meta.total_count, Some(1));
+    assert!(!meta.has_more);
+    let mut offset = filtered;
+    offset.offset = Some(1);
+    let (rows, meta) = get_results_paginated(&conn, offset).await?;
+    assert_eq!(rows[0].id, ids[1]);
+    assert_eq!(meta.total_count, Some(2));
+    assert!(!meta.has_more);
+
+    let mut descending = query.clone();
+    descending.order = OrderDirection::Desc;
+    descending.cursor = Some(ids[2]);
+    let (rows, meta) = get_results_paginated(&conn, descending).await?;
+    assert_eq!(
+        rows.iter().map(|r| r.id).collect::<Vec<_>>(),
+        [ids[1], ids[0]]
+    );
+    assert_eq!(meta.total_count, Some(2));
+
+    conn.execute("DELETE FROM contracts WHERE id = ?", [contract])
+        .await?;
+    let (rows, meta) = get_results_paginated(&conn, query).await?;
+    assert!(rows.is_empty());
+    assert_eq!(meta.total_count, Some(0));
+    assert!(!meta.has_more);
     Ok(())
 }

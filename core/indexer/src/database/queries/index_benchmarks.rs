@@ -225,6 +225,12 @@ async fn benchmark_pagination_counts() -> Result<()> {
             );
         }
     }
+    for case in ["transactions_counted", "results_counted"] {
+        println!(
+            "COUNT_API_BENCH {}",
+            json!({"rows":count,"case":case,"us":api_us(&conn,case).await?})
+        );
+    }
     Ok(())
 }
 
@@ -246,6 +252,7 @@ async fn api_once(conn: &Connection, case: &str) -> Result<usize> {
     if case.starts_with("results_") {
         let mut query = ResultQuery::builder().limit(20).build();
         match case {
+            "results_counted" => query.count = true,
             "results_contract" => query.contract = Some(contract),
             "results_signer" => query.signer_id = Some(42),
             _ => unreachable!(),

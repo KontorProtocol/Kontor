@@ -3,7 +3,7 @@ use libsql::{Connection, Value, de::from_row, params};
 
 use super::Error;
 use super::contracts::get_contract_id_from_address;
-use super::pagination::{PageOptions, get_paginated};
+use super::pagination::{PageOptions, PageSource, get_paginated};
 use crate::database::types::TransactionQuery;
 
 pub async fn insert_transaction(conn: &Connection, row: TransactionRow) -> Result<u64, Error> {
@@ -82,8 +82,7 @@ pub async fn get_transactions_paginated(
 ) -> Result<(Vec<TransactionRow>, PaginationMeta), Error> {
     let mut params: Vec<(String, Value)> = Vec::new();
     let var = "t";
-    let mut selects =
-        "t.id, t.txid, t.height, t.confirmed_height, t.tx_index, t.batch_height".to_string();
+    let columns = "t.id, t.txid, t.height, t.confirmed_height, t.tx_index, t.batch_height";
     let mut from = "transactions t".to_string();
     let mut where_clauses = vec![];
     let mut needs_distinct = false;
@@ -108,10 +107,6 @@ pub async fn get_transactions_paginated(
         params.push((":signer_id".to_string(), Value::try_from(signer_id)?));
     }
 
-    if needs_distinct {
-        selects = format!("DISTINCT {}", selects);
-    }
-
     if let Some(height) = query.height {
         where_clauses.push("t.height = :height".to_string());
         params.push((":height".to_string(), Value::try_from(height)?));
@@ -119,9 +114,13 @@ pub async fn get_transactions_paginated(
 
     get_paginated(
         conn,
-        var,
-        &selects,
-        &from,
+        PageSource {
+            alias: var,
+            columns,
+            from: &from,
+            distinct: needs_distinct,
+            select_joins: "",
+        },
         where_clauses,
         params,
         PageOptions {

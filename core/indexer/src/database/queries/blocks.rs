@@ -3,7 +3,7 @@ use indexer_types::{BlockRow, PaginationMeta};
 use libsql::{Connection, Value, de::from_row, params};
 
 use super::Error;
-use super::pagination::{PageOptions, get_paginated};
+use super::pagination::{PageOptions, PageSource, get_paginated};
 use crate::database::types::BlockQuery;
 
 pub async fn insert_block(conn: &Connection, block: BlockRow) -> Result<i64, Error> {
@@ -140,9 +140,13 @@ pub async fn get_blocks_paginated(
     }
     get_paginated(
         conn,
-        var,
-        "b.height, b.hash, b.relevant",
-        &format!("blocks {}", var),
+        PageSource {
+            alias: var,
+            columns: "b.height, b.hash, b.relevant",
+            from: "blocks b",
+            distinct: false,
+            select_joins: "",
+        },
         where_clauses,
         params,
         PageOptions {

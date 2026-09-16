@@ -3,7 +3,7 @@ use libsql::{Connection, Value, de::from_row, named_params, params};
 
 use super::Error;
 use super::contracts::get_contract_id_from_address;
-use super::pagination::{PageOptions, get_paginated};
+use super::pagination::{PageOptions, PageSource, get_paginated};
 use crate::database::types::{
     ContractResultPublicRow, ContractResultRow, OpResultId, OrderDirection, ResultQuery,
 };
@@ -14,8 +14,7 @@ pub async fn get_results_paginated(
 ) -> Result<(Vec<ContractResultPublicRow>, PaginationMeta), Error> {
     let mut params: Vec<(String, Value)> = Vec::new();
     let var = "r";
-    let selects = r#"
-        DISTINCT
+    let columns = r#"
         r.id,
         r.height,
         t.tx_index,
@@ -33,9 +32,10 @@ pub async fn get_results_paginated(
         r.payer_signer_id,
         r.status
     "#;
+    // No FK enforces contract_id: this join also excludes results without a
+    // contract, so it must participate in the count as well as the page.
     let from = r#"
         contract_results r
-        LEFT JOIN transactions t ON r.tx_id = t.id
         JOIN contracts c ON r.contract_id = c.id
     "#;
     let mut where_clauses = vec![];
@@ -75,9 +75,13 @@ pub async fn get_results_paginated(
 
     get_paginated(
         conn,
-        var,
-        selects,
-        from,
+        PageSource {
+            alias: var,
+            columns,
+            from,
+            distinct: false,
+            select_joins: "LEFT JOIN transactions t ON r.tx_id = t.id",
+        },
         where_clauses,
         params,
         PageOptions {

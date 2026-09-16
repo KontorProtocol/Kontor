@@ -25,11 +25,19 @@ pub struct PageOptions {
     pub count: bool,
 }
 
+pub struct PageSource<'a> {
+    pub alias: &'a str,
+    pub columns: &'a str,
+    pub from: &'a str,
+    // One flag governs deduplication of both the page and its count.
+    pub distinct: bool,
+    // These joins must preserve row cardinality and cannot be used by filters.
+    pub select_joins: &'a str,
+}
+
 pub async fn get_paginated<T>(
     conn: &Connection,
-    var: &str,
-    selects: &str,
-    from: &str,
+    source: PageSource<'_>,
     mut where_clauses: Vec<String>,
     mut params: Vec<(String, Value)>,
     page: PageOptions,
@@ -37,6 +45,13 @@ pub async fn get_paginated<T>(
 where
     T: DeserializeOwned + HasRowId,
 {
+    let PageSource {
+        alias: var,
+        columns,
+        from,
+        distinct,
+        select_joins,
+    } = source;
     let PageOptions {
         order,
         cursor,
@@ -65,9 +80,14 @@ where
     };
 
     let total_count = if count {
+        let expression = if distinct {
+            format!("DISTINCT {var}.{id_name}")
+        } else {
+            "*".to_string()
+        };
         let mut rows = conn
             .query(
-                &format!("SELECT COUNT(DISTINCT {var}.{id_name}) FROM {from} {where_sql}"),
+                &format!("SELECT COUNT({expression}) FROM {from} {where_sql}"),
                 params.clone(),
             )
             .await?;
@@ -87,12 +107,13 @@ where
 
     params.push((":limit".to_string(), Value::Integer(i64::from(limit) + 1)));
 
+    let distinct = if distinct { "DISTINCT " } else { "" };
     let mut rows = conn
         .query(
             &format!(
                 r#"
-                SELECT {selects}
-                FROM {from}
+                SELECT {distinct}{columns}
+                FROM {from} {select_joins}
                 {where_sql}
                 ORDER BY {var}.{id_name} {order}
                 LIMIT :limit

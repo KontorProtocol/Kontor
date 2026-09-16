@@ -28,6 +28,14 @@ the nullable response. SDK bindings were regenerated with `kontor build sdk`;
 the SDK poller uses `has_more`, so it needs no count. No count cache or second
 pagination implementation is introduced.
 
+The shared pagination helper uses `COUNT(*)` when joins cannot duplicate the
+primary record. A single `PageSource.distinct` flag controls deduplication for
+both counts and pages; transaction filters that join state or results still set
+it. `select_joins` contains cardinality-preserving joins used only for response
+fields, so counts do not repeat that work. Results use it for the transaction
+left join, while keeping the contract inner join in the shared source. Filters,
+parameters, and cursor conditions remain shared.
+
 ## Why these indexes
 
 Eight height indexes let block rollback locate dependent rows without scanning
@@ -119,7 +127,8 @@ The database-only rollback grows with retained history before indexing and stays
 near the cost of the six affected blocks afterward. The added write/storage cost
 is explicit; these are not claimed improvements to contract execution throughput.
 
-Actual paginated query helpers (20-row limit; µs, before → after all indexes):
+Actual paginated query helpers at `5bbb22c2`, before the subsequent count SQL
+optimization (20-row limit; µs, before → after all indexes):
 
 | Query | 100k fixture | 300k fixture |
 | --- | ---: | ---: |
@@ -131,17 +140,18 @@ Actual paginated query helpers (20-row limit; µs, before → after all indexes)
 | `results_signer` | 2726.7 → 31.3 | 8924.4 → 31.7 |
 
 `transactions_page` omits the count; `transactions_counted` includes it. Other
-rows use the contract or signer filter without counting. Thus opting out removes
-the remaining full count: with the new indexes, approximately 1.48 ms → 14 µs at
-100k and 4.71 ms → 14 µs at 300k. Contract-filtered transaction queries and ordinary
+rows use the contract or signer filter without counting. At that stage, opting
+out removed the remaining full count: with the new indexes, approximately
+1.48 ms → 14 µs at 100k and 4.71 ms → 14 µs at 300k. The subsequent optimization
+below reduces the cost when a count is requested. Contract-filtered transaction queries and ordinary
 uncounted pages remain essentially unchanged, while signer/result queries benefit.
 These measurements include query construction and row deserialization, but not
 HTTP/JSON serialization or network latency.
 
-## Count-query experiments
+## Count-query optimization
 
-The branch also contains benchmark-only alternatives to the current count SQL.
-They are not yet wired into `get_paginated`. The API flag has been shortened to
+The measured alternatives below are now used by `get_paginated`. The benchmark
+retains the original SQL for comparison. The API flag has been shortened to
 `count=true`; there is no alias for the earlier, unpublished name.
 
 Run the additional benchmark with the production indexes installed:
@@ -156,6 +166,9 @@ index benchmark. Each count statement is prepared, executed, and consumed; times
 exclude fetching a page and HTTP serialization. Every candidate's actual count
 is checked against the original before timing. No writes, counters, or caches are
 introduced. The two fixture sizes were measured sequentially without other builds.
+
+The SQL comparison below was captured at `cfac693d`; production helper
+measurements after applying the optimization follow it.
 
 For single-table queries, replace `COUNT(DISTINCT primary_key)` with `COUNT(*)`:
 
@@ -186,7 +199,7 @@ can be omitted from the count even when `tx_id` is null.
 | By function (all match) | 8956.11 → 7502.18 → 3883.75 | 27637.97 → 23509.15 → 12687.07 |
 | Contract + height + function + cursor (75 matches) | 15.08 → 13.32 → 10.52 | 14.82 → 13.28 → 10.52 |
 
-Both changes are worth applying. In particular, the unfiltered single-table count
+Both changes are implemented. In particular, the unfiltered single-table count
 can use the database's page-level count operation: the bundled libSQL source's
 `isSimpleCount` excludes DISTINCT and WHERE predicates, and `sqlite3BtreeCount`
 visits B-tree pages and sums their entry counts. It is exact but not constant-time.
@@ -195,14 +208,32 @@ join also prevents the single-table shortcut. At 300k rows, a midpoint transacti
 cursor still costs 4.19 ms, and counting all visible results still costs 6.16 ms.
 Thus these improvements do not make every count as cheap as fetching a small page.
 Transaction counts with contract/signer joins still need duplicate elimination;
-these experiments do not propose replacing those with a plain joined `COUNT(*)`.
+those queries retain `COUNT(DISTINCT id)` and `SELECT DISTINCT`.
+
+The benchmark also calls the optimized production helpers with `count=true`
+and a 20-row limit (`COUNT_API_BENCH` output). These timings include both the
+count and page, query construction, and row deserialization, but exclude HTTP:
+
+| Production helper with count | 100k fixture µs | 300k fixture µs |
+| --- | ---: | ---: |
+| Transactions | 26.59 | 50.35 |
+| Results | 2115.66 | 6231.43 |
+
+The earlier transaction helper measurements with the same indexes were
+1482.5 µs and 4709.3 µs respectively. The production results helper agrees with
+the measured count SQL plus a small page read. Both benchmark runs passed after
+the implementation change; no timing thresholds are imposed on CI.
 
 ## Validation
 
-136 API/database tests passed in release mode, including an authorizer that denies
+137 API/database tests passed in release mode, including an authorizer that denies
 SQL `COUNT`, explicit false/true/default HTTP requests on all four list endpoints,
 existing count/cursor/filter cases, and an existing-database reopen test that
 checks index plans, six-block rollback, retained checkpoints, and foreign keys.
+Count optimization coverage also includes nullable transaction references,
+missing/deleted contracts, compound filters, both cursor directions, offset
+counts, and a transaction whose two state rows and two results produce four
+joined rows that must still count as one transaction.
 The opt-in benchmark passed at both fixture sizes with the final schema.
 
 The pinned SDK rebuild passed its 64 indexer-types tests and changed only the
