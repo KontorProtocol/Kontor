@@ -17,6 +17,8 @@ use crate::test_utils::test_runtime;
 const KEYS: u64 = 100;
 const LIMIT: usize = 20;
 
+mod seek_prototype;
+
 fn path(root: &str, key: Option<u64>) -> Vec<u8> {
     let mut path = root.to_string().encode();
     if let Some(key) = key {
@@ -25,7 +27,7 @@ fn path(root: &str, key: Option<u64>) -> Vec<u8> {
     path
 }
 
-async fn seed(conn: &Connection, versions: u64) -> Result<()> {
+async fn seed(conn: &Connection, versions: u64, keys: u64) -> Result<()> {
     conn.execute_batch("BEGIN; CREATE TEMP TABLE history_paths (path BLOB PRIMARY KEY, removed INTEGER); CREATE TEMP TABLE history_versions (height INTEGER PRIMARY KEY, value BLOB);").await?;
     let paths = conn
         .prepare("INSERT INTO history_paths VALUES (?, ?)")
@@ -36,13 +38,14 @@ async fn seed(conn: &Connection, versions: u64) -> Result<()> {
         "history-sparse",
         "history-variant",
     ] {
-        for key in 0..KEYS {
+        for key in 0..keys {
             let mut key_path = path(root, None);
             if root == "history-variant" {
                 "some".to_string().encode_to(&mut key_path);
             }
             key.encode_to(&mut key_path);
-            let removed = root == "history-dead" || (root == "history-sparse" && key < 90);
+            let removed =
+                root == "history-dead" || (root == "history-sparse" && key < keys * 9 / 10);
             paths.execute(params![key_path, removed]).await?;
             paths.reset();
         }
@@ -295,7 +298,7 @@ async fn benchmark_storage_history() -> Result<()> {
         ensure!(versions > 0);
         let (mut runtime, _dir, _name) = test_runtime().await?;
         let conn = runtime.storage.conn.clone();
-        seed(&conn, versions).await?;
+        seed(&conn, versions, KEYS).await?;
         print_plans(&conn, versions).await?;
         let tip = versions + 1;
         runtime.storage.height = tip;

@@ -131,3 +131,100 @@ Validation also passed the 20 existing host-metering tests, five pruning tests
 with warnings denied, and workspace formatting checks. The new timing test is
 ignored by default and adds no benchmark runtime to normal CI. Production SQL,
 schema, and fuel prices are unchanged.
+
+## Distinct-path seek experiment
+
+The follow-up prototype is in `history_benchmarks/seek_prototype.rs`. It is
+test-only and compares the current production key scan with three alternatives:
+
+- **PreparedSeek:** one prepared query per distinct path, selecting its latest
+  version before checking deletion. All older versions are skipped by an index
+  seek, in either direction.
+- **RecursiveSeek:** the same seeks inside a recursive SQL query, stopping at the
+  first live path. There is at most one output per query, so this does not rely on
+  recursive traversal order or materialize a page ahead of demand.
+- **StreamingSeek:** stream paths joined to their latest-version metadata. When
+  a second version of a path appears, restart the prepared range query strictly
+  past that path. Single-version paths keep streaming; a path with history yields
+  at most two candidate rows before the cursor seeks past its remaining versions.
+
+All use existing indexes, without a schema change, cache, or maintained counter.
+These are flat scalar-key experiments, not general storage cursor replacements:
+they fix the contract ID and subtree-only bounds for the fixture, omit the host
+fuel layer, and do not implement nested child-key deduplication or value reads.
+
+```sh
+cargo test --manifest-path core/Cargo.toml --locked --release -p indexer --lib benchmark_storage_seeks -- --ignored --nocapture
+# Optional: choose key counts and versions independently.
+KONTOR_SEEK_CASES=100:1,100:1000,1000:100 cargo test --manifest-path core/Cargo.toml --locked --release -p indexer --lib benchmark_storage_seeks -- --ignored --nocapture
+```
+
+The default matrix covers eight `(keys, versions)` cases, both directions, live,
+deleted, and 90%-deleted subtrees, before and after pruning through the tip.
+Each strategy returns at most 20 keys, checked against an independent ordered
+oracle. It records 384 `SEEK_BENCH` observations per run. Timings include preparing
+the query and collecting keys; the median uses five batches of two calls after
+one warmup batch. The baseline calls the production database key-scan function,
+so these timings should be compared within this experiment rather than against
+the host-call timings above.
+
+### Results
+
+Two complete runs passed. The table below is from the second, pinned to M2
+performance core 4 with `taskset -c 4` to reduce scheduling variation. No build
+ran concurrently. All numbers are median microseconds for ascending scans.
+
+With 100 distinct keys, streaming plus seeking largely removes history depth
+from the cost once the query encounters multiple versions:
+
+| Versions per key | Current: 20 live keys | StreamingSeek: 20 live keys | Current: all deleted | StreamingSeek: all deleted |
+| ---: | ---: | ---: | ---: | ---: |
+| 1 | 18.4 | 17.6 | 13.2 | 48.2 |
+| 10 | 83.7 | 54.0 | 356 | 241 |
+| 100 | 914 | 58.3 | 4,695 | 265 |
+| 1,000 | 20,017 | 62.2 | 106,996 | 285 |
+
+At ten versions per key, increasing the subtree from 100 to 10,000 distinct keys
+changes a live 20-key page from 54.0 to 60.4 microseconds, while exhausting a
+deleted subtree grows from 241 to 26,353 microseconds. This is the desired shape:
+roughly flat for a fixed live page, roughly linear in distinct paths when the
+scan must examine them all. B-tree seeks still have logarithmic cost; these are
+not strictly constant-time operations.
+
+The alternatives also eliminate history traversal, but have different overhead:
+at 1,000 versions, PreparedSeek takes 53.9 microseconds for the live page and 229
+for the deleted subtree; RecursiveSeek takes 101 and 147 respectively. For the
+one-version live page they take 44.2 and 90.7, versus 18.4 currently. StreamingSeek
+preserves that common streaming case best and avoids recursive SQL complexity.
+
+There is a material downside: newly deleted paths with no older retained version
+are cheaper for the current query to discard entirely inside SQL. At 10,000
+such paths, the current scan takes 530 microseconds and StreamingSeek takes
+4,813 microseconds. Full pruning removes those tombstones, but it is legitimate
+to encounter them before finality, including after same-height create/delete.
+This tradeoff must not be hidden by reporting only the long-history speedup.
+
+### Decision and remaining work
+
+Streaming plus a seek on the first duplicate is the leading integration
+candidate: ordinary live scans retain streaming performance and history-heavy
+scans improve by hundreds of times. The recent-tombstone regression remains a
+tradeoff to assess before adopting it. The experiment establishes that we can
+remove the versions-per-path multiplier using existing indexes; it does not
+establish a constant bound on scanning arbitrarily many deleted distinct paths.
+
+A production change should provide one shared latest-path cursor for existence,
+keys, scalar rows, and deletion discovery, with the existing child-subtree seeks
+layered above it. Preserve metadata-before-value budget checks, lazy polling,
+and the current snapshot lifetime while fetching a selected row's value. Verify
+inclusive/exclusive bounds, empty bounds, escaped keys, both directions, nested
+records, writes during iteration, same-height updates, rollback, and archive /
+pruned output and fuel parity. Those guarantees are not established by the flat
+prototype. Variant resolution remains separate because it chooses the globally
+newest row rather than the newest row for each path.
+
+No production query or fuel behavior has changed. Both benchmarks remain ignored
+in normal CI. The shared fixture was also rechecked through the original host
+benchmark at depths 1 and 1,000 (150 observations, including fuel and checkpoint
+parity); its recheck timings were not used for the comparison. Indexer library /
+test Clippy with warnings denied and workspace formatting checks passed.
