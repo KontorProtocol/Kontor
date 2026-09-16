@@ -1,5 +1,12 @@
 # Storage queries over retained history
 
+> Historical experiment: reproduce the comparative prototypes at commit
+> `6088778b`. Production now uses the live pointer index described in
+> [current-state storage](current-state-storage.md). The remaining
+> `benchmark_storage_history` exercises the production host calls; obsolete
+> alternative-layout prototypes were removed to avoid benchmarking them on top
+> of the new production index.
+
 Baseline: main `83db3333` (#574). This investigation measures the current storage
 host calls before proposing changes to their SQL or fuel schedule.
 

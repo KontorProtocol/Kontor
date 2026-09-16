@@ -1,6 +1,6 @@
 use std::path::Path;
 
-use libsql::Error;
+use libsql::{Connection, Error, TransactionBehavior};
 use tokio::fs;
 
 #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
@@ -29,17 +29,6 @@ pub const CREATE_SCHEMA: &str = include_str!("sql/schema.sql");
 pub const CREATE_CONTRACT_STATE_TRIGGER: &str = include_str!("sql/checkpoint_trigger.sql");
 
 pub async fn initialize_database(data_dir: &Path, conn: &libsql::Connection) -> Result<(), Error> {
-    conn.query("PRAGMA foreign_keys = ON;", ()).await?;
-    // Set BEFORE creating any tables so a fresh DB is born in INCREMENTAL
-    // auto_vacuum mode: pages freed by state pruning can then be returned to the
-    // OS via `PRAGMA incremental_vacuum`. On an existing DB the mode is fixed at
-    // creation time, so this is a no-op there — `ensure_incremental_auto_vacuum`
-    // does the one-time VACUUM conversion (called from the prune-enabled path).
-    conn.query("PRAGMA auto_vacuum = INCREMENTAL;", ()).await?;
-    conn.execute_batch(CREATE_SCHEMA).await?;
-    conn.execute(CREATE_CONTRACT_STATE_TRIGGER, ()).await?;
-    conn.query("PRAGMA journal_mode = WAL;", ()).await?;
-    conn.query("PRAGMA synchronous = NORMAL;", ()).await?;
     // Wait-and-retry on transient lock contention instead of returning
     // `database is locked` (SQLITE_BUSY) on the first conflict. libsql 0.9.30's
     // `connect()` never calls `sqlite3_busy_timeout`, so the default is 0 (no
@@ -50,6 +39,18 @@ pub async fn initialize_database(data_dir: &Path, conn: &libsql::Connection) -> 
     // (a hard error a busy handler can't wait on) — that's handled separately by
     // pinning the read-only pool `query_only = ON`.
     conn.query("PRAGMA busy_timeout = 5000;", ()).await?;
+    conn.query("PRAGMA foreign_keys = ON;", ()).await?;
+    // Set BEFORE creating any tables so a fresh DB is born in INCREMENTAL
+    // auto_vacuum mode: pages freed by state pruning can then be returned to the
+    // OS via `PRAGMA incremental_vacuum`. On an existing DB the mode is fixed at
+    // creation time, so this is a no-op there — `ensure_incremental_auto_vacuum`
+    // does the one-time VACUUM conversion (called from the prune-enabled path).
+    conn.query("PRAGMA auto_vacuum = INCREMENTAL;", ()).await?;
+    conn.execute_batch(CREATE_SCHEMA).await?;
+    conn.execute(CREATE_CONTRACT_STATE_TRIGGER, ()).await?;
+    ensure_current_state(conn).await?;
+    conn.query("PRAGMA journal_mode = WAL;", ()).await?;
+    conn.query("PRAGMA synchronous = NORMAL;", ()).await?;
     conn.load_extension_enable()?;
     for (name, bytes) in [("crypto", CRYPTO_LIB)] {
         let p = data_dir.join(format!("{}.{}", name, LIB_FILE_EXT));
@@ -67,6 +68,34 @@ pub async fn initialize_database(data_dir: &Path, conn: &libsql::Connection) -> 
         conn.load_extension(extension_path, None)?;
     }
     Ok(())
+}
+
+// Table creation, backfill, and maintenance become visible together. Existence
+// is the migration marker; reopening a migrated database never scans history.
+async fn ensure_current_state(conn: &Connection) -> Result<(), Error> {
+    if current_state_exists(conn).await? {
+        return Ok(());
+    }
+    let tx = conn
+        .transaction_with_behavior(TransactionBehavior::Immediate)
+        .await?;
+    if !current_state_exists(&tx).await? {
+        tx.execute_batch(include_str!("sql/current_state.sql"))
+            .await?;
+    }
+    tx.commit().await
+}
+
+async fn current_state_exists(conn: &Connection) -> Result<bool, Error> {
+    Ok(conn
+        .query(
+            "SELECT 1 FROM sqlite_schema WHERE type = 'table' AND name = 'current_contract_state'",
+            (),
+        )
+        .await?
+        .next()
+        .await?
+        .is_some())
 }
 
 /// Ensure the database is in INCREMENTAL `auto_vacuum` mode so pages freed by

@@ -17,9 +17,6 @@ use crate::test_utils::test_runtime;
 const KEYS: u64 = 100;
 const LIMIT: usize = 20;
 
-mod current_state_benchmarks;
-mod seek_prototype;
-
 fn path(root: &str, key: Option<u64>) -> Vec<u8> {
     let mut path = root.to_string().encode();
     if let Some(key) = key {
@@ -29,16 +26,6 @@ fn path(root: &str, key: Option<u64>) -> Vec<u8> {
 }
 
 async fn seed(conn: &Connection, versions: u64, keys: u64) -> Result<()> {
-    seed_sized(conn, versions, keys, 32, false).await
-}
-
-async fn seed_sized(
-    conn: &Connection,
-    versions: u64,
-    keys: u64,
-    bytes: usize,
-    empty_tombstones: bool,
-) -> Result<()> {
     conn.execute_batch("BEGIN; CREATE TEMP TABLE history_paths (path BLOB PRIMARY KEY, removed INTEGER); CREATE TEMP TABLE history_versions (height INTEGER PRIMARY KEY, value BLOB);").await?;
     let paths = conn
         .prepare("INSERT INTO history_paths VALUES (?, ?)")
@@ -65,7 +52,7 @@ async fn seed_sized(
         .prepare("INSERT INTO history_versions VALUES (?, ?)")
         .await?;
     for height in 2..=versions + 1 {
-        let mut value = vec![42u8; bytes];
+        let mut value = vec![42u8; 32];
         value[..8].copy_from_slice(&height.to_be_bytes());
         heights.execute(params![height, serialize(&value)?]).await?;
         heights.reset();
@@ -75,17 +62,16 @@ async fn seed_sized(
         INSERT INTO blocks SELECT height, printf('%064x', height), 1 FROM history_versions;
         INSERT INTO contract_state (contract_id,height,size,path,value,deleted)
         SELECT 1, h.height,
-            CASE WHEN {empty_tombstones} AND h.height = {tip} AND p.removed THEN 0 ELSE length(h.value) END,
+            CASE WHEN h.height = {tip} AND p.removed THEN 0 ELSE length(h.value) END,
             p.path,
-            CASE WHEN {empty_tombstones} AND h.height = {tip} AND p.removed THEN zeroblob(0) ELSE h.value END,
+            CASE WHEN h.height = {tip} AND p.removed THEN zeroblob(0) ELSE h.value END,
             h.height = {tip} AND p.removed
         FROM history_versions h CROSS JOIN history_paths p ORDER BY h.height, p.path;
         DROP TABLE history_paths;
         DROP TABLE history_versions;
         COMMIT;
     "#,
-        tip = versions + 1,
-        empty_tombstones = u8::from(empty_tombstones)
+        tip = versions + 1
     ))
     .await?;
     Ok(())
@@ -141,7 +127,7 @@ async fn print_plans(conn: &Connection, versions: u64) -> Result<()> {
     for (name, sql) in [
         (
             "live_scan",
-            "SELECT cs.path FROM contract_state cs WHERE cs.contract_id=1 AND cs.path > ?1 AND cs.path < ?2 AND cs.deleted=0 AND NOT EXISTS (SELECT 1 FROM contract_state n WHERE n.contract_id=cs.contract_id AND n.path=cs.path AND n.height>cs.height) ORDER BY cs.path",
+            "SELECT cs.path FROM current_contract_state cs WHERE cs.contract_id=1 AND cs.path > ?1 AND cs.path < ?2 ORDER BY cs.path",
         ),
         (
             "variant",
@@ -391,6 +377,58 @@ async fn benchmark_storage_history() -> Result<()> {
                     "results/fuel changed after pruning at depth {versions}, {state}"
                 );
             }
+        }
+    }
+    Ok(())
+}
+
+// Small, untimed version of the benchmark's archive/pruned comparison runs in CI.
+#[tokio::test]
+async fn current_state_host_results_and_fuel_are_independent_of_pruning() -> Result<()> {
+    let (mut runtime, _dir, _name) = test_runtime().await?;
+    let conn = runtime.storage.conn.clone();
+    seed(&conn, 8, KEYS).await?;
+    runtime.storage.height = 9;
+    let mut store = runtime.make_store(BUDGET)?;
+    let rep = store
+        .data()
+        .table
+        .lock()
+        .await
+        .push(ProcStorage { contract_id: 1 })?
+        .rep();
+    let mut expected = Vec::new();
+    for pruned in [false, true] {
+        if pruned {
+            runtime.storage.prune(0, 9).await?;
+        }
+        let mut actual = Vec::new();
+        for root in [
+            "history-live",
+            "history-dead",
+            "history-sparse",
+            "history-absent",
+        ] {
+            for op in [
+                Operation::Point,
+                Operation::Exists,
+                Operation::Keys(false),
+                Operation::Keys(true),
+                Operation::Rows(false),
+                Operation::Rows(true),
+            ] {
+                let (value, fuel) = call(&mut store, rep, root, op).await?;
+                ensure!(value == expected_result(root, op, 9));
+                actual.push((value, fuel));
+            }
+        }
+        if pruned {
+            ensure!(
+                actual == expected,
+                "pruning changed contract results or fuel"
+            );
+        } else {
+            expected = actual;
         }
     }
     Ok(())

@@ -1,5 +1,12 @@
 # History cursor versus maintained current state
 
+> Historical experiment: reproduce the comparative prototypes at commit
+> `6088778b`. Production now uses the live pointer index described in
+> [current-state storage](current-state-storage.md). The remaining
+> `benchmark_storage_history` exercises the production host calls; obsolete
+> alternative-layout prototypes were removed to avoid benchmarking them on top
+> of the new production index.
+
 This experiment follows [the storage-history investigation](storage-history-costs.md).
 It compares a cursor that skips historical versions with two derived current-state
 tables. It changes no production schema, queries, or fuel behavior.

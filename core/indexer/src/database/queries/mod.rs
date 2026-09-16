@@ -6,6 +6,7 @@ mod checkpoints;
 mod contract_results;
 mod contract_state;
 mod contracts;
+mod current_state;
 mod execution_usage;
 mod node_meta;
 mod pagination;
@@ -50,3 +51,6 @@ mod tests;
 
 #[cfg(test)]
 mod index_benchmarks;
+
+#[cfg(test)]
+mod current_state_tests;

@@ -136,8 +136,7 @@ async fn point_read_preserves_latest_version_and_tombstones() -> Result<()> {
         None
     );
 
-    conn.execute("DELETE FROM blocks WHERE height = 2", ())
-        .await?;
+    rollback_to_height(&conn, 1).await?;
     assert_eq!(
         get_latest_contract_state_value(&conn, 4096, 1, &path).await?,
         Some(vec![1; 4096])
@@ -184,7 +183,7 @@ async fn point_read_pins_snapshot_between_metadata_and_value() -> Result<()> {
         Ok(())
     });
     // Pause at value-query preparation, after the metadata lookup has selected
-    // its rowid. The writer replaces that row before the value query executes.
+    // its version. The writer replaces that row before the value query executes.
     view.authorizer(Some(Arc::new(move |context| {
         if matches!(
             context.action,
