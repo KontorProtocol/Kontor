@@ -1558,10 +1558,7 @@ mod pagination_counts {
             let response = server.get(endpoint).add_query_param("limit", 1).await;
             assert_eq!(response.status_code(), StatusCode::OK);
             let default: Value = response.json();
-            assert_eq!(
-                default["result"]["pagination"].get("total_count"),
-                Some(&Value::Null)
-            );
+            assert_eq!(default["result"]["pagination"].get("total_count"), None);
             assert_eq!(default["result"]["pagination"]["has_more"], true);
             for include in [false, true] {
                 let response = server
@@ -1572,10 +1569,13 @@ mod pagination_counts {
                 assert_eq!(response.status_code(), StatusCode::OK);
                 let mut value: Value = response.json();
                 assert_eq!(
-                    value["result"]["pagination"]["total_count"],
-                    if include { Value::from(2) } else { Value::Null }
+                    value["result"]["pagination"].get("total_count").cloned(),
+                    if include { Some(Value::from(2)) } else { None }
                 );
-                value["result"]["pagination"]["total_count"] = Value::Null;
+                value["result"]["pagination"]
+                    .as_object_mut()
+                    .expect("pagination object")
+                    .remove("total_count");
                 assert_eq!(
                     value, default,
                     "count option must not change the page or cursors"

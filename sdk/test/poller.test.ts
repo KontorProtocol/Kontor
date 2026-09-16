@@ -78,7 +78,7 @@ function mockFetch(opts: {
     } else if (path.startsWith("/results")) {
       result = {
         results: opts.results ?? [],
-        pagination: { has_more: false, next_offset: null, total_count: null },
+        pagination: { has_more: false, next_offset: null },
       };
     } else {
       throw new Error(`unexpected mock path: ${path}`);

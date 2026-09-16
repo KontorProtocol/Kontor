@@ -8,7 +8,7 @@ checkpoint inputs, or pruning semantics.
 
 The blocks, contracts, transactions (including per-block transactions), and results
 list endpoints accept `count=true`. By default, and when explicitly
-false, `pagination.total_count` is `null` and no count query runs. For example:
+false, `pagination.total_count` is omitted and no count query runs. For example:
 
 ```text
 GET /api/transactions?limit=20
@@ -24,7 +24,8 @@ statements; an opt-in count is not a promise of one snapshot under concurrent
 writes.
 
 This is an API change: clients needing an exact count must request it and handle
-the nullable response. SDK bindings were regenerated with `kontor build sdk`;
+the optional response field (`total_count?: number` in the SDK). SDK bindings
+were regenerated with `kontor build sdk`;
 the SDK poller uses `has_more`, so it needs no count. No count cache or second
 pagination implementation is introduced.
 

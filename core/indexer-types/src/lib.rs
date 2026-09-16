@@ -725,7 +725,8 @@ pub struct PaginationMeta {
     pub next_offset: Option<u64>,
     pub has_more: bool,
     /// Exact matching count is opt-in because computing it can scan the full set.
-    #[ts(type = "number | null")]
+    #[ts(optional, type = "number")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub total_count: Option<u64>,
 }
 

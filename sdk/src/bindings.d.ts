@@ -394,7 +394,7 @@ export type PaginationMeta = {
   /**
    * Exact matching count is opt-in because computing it can scan the full set.
    */
-  total_count: number | null;
+  total_count?: number;
 };
 
 /**
