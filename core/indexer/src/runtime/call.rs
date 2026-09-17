@@ -533,8 +533,8 @@ impl Runtime {
         // - It originated from a deterministic ExecutionError in a cross-contract call
         // Host panics (caught by catch_unwind) are non-deterministic.
         //
-        // wasmtime::Error is anyhow::Error, so downcast_ref looks through
-        // context layers and finds types that dyn Error chain walking cannot.
+        // Wasmtime's downcast_ref also searches wrapped anyhow errors from
+        // host bindings, preserving typed failures across nested calls.
         let is_deterministic = match &result {
             Ok(Ok(())) => true,
             Ok(Err(e)) => {

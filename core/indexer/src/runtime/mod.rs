@@ -1,4 +1,6 @@
 #[cfg(test)]
+mod conversion_probe;
+#[cfg(test)]
 mod costs;
 extern crate alloc;
 
@@ -212,6 +214,8 @@ pub struct Runtime {
     pub result_id_counter: Counter,
     pub stack: Stack<CallFrame>,
     pub gauge: Option<FuelGauge>,
+    #[cfg(test)]
+    conversion_probe: Option<conversion_probe::Probe>,
     pub(crate) usage_kind: UsageKind,
     pub(crate) fuel_checkpoint: u64,
     /// Transient per-op accumulator of the storage-deposit GAS reserved this op
@@ -330,6 +334,8 @@ impl Runtime {
             stack: Stack::new(),
             // Diagnostic tracing is opt-in; fuel enforcement does not use the gauge.
             gauge: None,
+            #[cfg(test)]
+            conversion_probe: None,
             deposit: DepositMeter::new(),
             usage_kind: UsageKind::System,
             fuel_checkpoint: 0,
@@ -918,6 +924,10 @@ impl Runtime {
         let mut s = Store::new(&self.engine, runtime);
         s.set_fuel(fuel)?;
         s.data_mut().fuel_checkpoint = fuel;
+        #[cfg(test)]
+        if let Some(probe) = s.data().conversion_probe.clone() {
+            probe.install(&mut s);
+        }
         Ok(s)
     }
 }
