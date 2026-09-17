@@ -5,6 +5,7 @@ use std::hint::black_box;
 use std::time::Instant;
 
 use anyhow::Result;
+use wasmtime::Trap;
 use wasmtime::component::{
     Type, Val,
     wasm_wave::{
@@ -13,7 +14,9 @@ use wasmtime::component::{
     },
 };
 
-use super::Output;
+use super::{MAX_EXPR_DEPTH, Output, visit};
+use crate::runtime::fuel::Fuel;
+use crate::test_utils::test_runtime;
 
 #[test]
 fn failed_output_charge_is_independent_of_write_boundaries() {
@@ -82,6 +85,82 @@ fn wave_writer_stops_visiting_list_elements_at_the_budget() {
     assert!(visited.get() <= 4, "visited {} values", visited.get());
 }
 
+#[derive(Clone)]
+struct OmittedRecord<'a> {
+    visited: &'a Cell<usize>,
+    field: bool,
+}
+
+impl WasmValue for OmittedRecord<'_> {
+    type Type = Type;
+
+    fn kind(&self) -> WasmTypeKind {
+        if self.field {
+            WasmTypeKind::Option
+        } else {
+            WasmTypeKind::Record
+        }
+    }
+
+    fn unwrap_record(&self) -> Box<dyn Iterator<Item = (Cow<'_, str>, Cow<'_, Self>)> + '_> {
+        Box::new((0..10_000).map(|_| {
+            self.visited.set(self.visited.get() + 1);
+            (
+                Cow::Borrowed("missing"),
+                Cow::Owned(Self {
+                    visited: self.visited,
+                    field: true,
+                }),
+            )
+        }))
+    }
+
+    fn unwrap_option(&self) -> Option<Cow<'_, Self>> {
+        None
+    }
+}
+
+#[test]
+fn omitted_output_fields_stop_being_visited_at_the_budget() {
+    for limit in [0, 1, 8, 32] {
+        let visited = Cell::new(0);
+        let record = OmittedRecord {
+            visited: &visited,
+            field: false,
+        };
+        let mut remaining = limit;
+        let error = visit(
+            &record,
+            &mut || {
+                if remaining == 0 {
+                    return Err(Trap::OutOfFuel.into());
+                }
+                remaining -= 1;
+                Ok(())
+            },
+            0,
+        )
+        .unwrap_err();
+        assert!(matches!(
+            error.downcast_ref::<Trap>(),
+            Some(Trap::OutOfFuel)
+        ));
+        assert_eq!(remaining, 0);
+        assert_eq!(visited.get(), limit);
+    }
+}
+
+#[test]
+fn output_depth_is_checked_before_the_recursive_writer() {
+    let mut value = Val::Bool(true);
+    for _ in 0..MAX_EXPR_DEPTH {
+        value = Val::Option(Some(Box::new(value)));
+    }
+    assert!(visit(&value, &mut || Ok(()), 0).is_ok());
+    value = Val::Option(Some(Box::new(value)));
+    assert!(visit(&value, &mut || Ok(()), 0).is_err());
+}
+
 #[test]
 fn fallback_moves_the_existing_string() -> Result<()> {
     let value = "some(\"value\")".to_string();
@@ -93,13 +172,20 @@ fn fallback_moves_the_existing_string() -> Result<()> {
     Ok(())
 }
 
-#[test]
+#[tokio::test]
 #[ignore = "manual WAVE output overhead comparison"]
-fn encoding_overhead() -> Result<()> {
+async fn encoding_overhead() -> Result<()> {
+    let (runtime, _dir, _name) = test_runtime().await?;
+    let mut store = runtime.make_store(1_000_000_000)?;
     for value in [
         Val::U64(42),
         Val::String("é\n".repeat(4096)),
         Val::List(vec![Val::U8(255); 4096]),
+        Val::Record(
+            (0..512)
+                .map(|i| (format!("field{i:04}"), Val::Option(None)))
+                .collect(),
+        ),
     ] {
         let expected = value.to_wave()?;
         let start = Instant::now();
@@ -111,11 +197,23 @@ fn encoding_overhead() -> Result<()> {
         for _ in 0..1000 {
             let mut output = Output::new(expected.len() as u64);
             Writer::new(&mut output).write_value(black_box(&value))?;
+            black_box(output.value);
+        }
+        let byte_bounded = start.elapsed();
+        let start = Instant::now();
+        for _ in 0..1000 {
+            visit(
+                &value,
+                &mut || Fuel::WaveValue.consume_with_store(&mut store).map(|_| ()),
+                0,
+            )?;
+            let mut output = Output::new(expected.len() as u64);
+            Writer::new(&mut output).write_value(black_box(&value))?;
             assert_eq!(output.value.len(), expected.len());
             black_box(output.value);
         }
         println!(
-            "bytes={} original={original:?} bounded={:?}",
+            "bytes={} unbounded={original:?} byte_bounded={byte_bounded:?} structural_and_bytes={:?}",
             expected.len(),
             start.elapsed()
         );

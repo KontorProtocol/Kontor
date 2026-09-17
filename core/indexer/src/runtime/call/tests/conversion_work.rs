@@ -143,7 +143,7 @@ async fn allocation_guard_precedes_import_entry_but_a_tariff_does_not() -> Resul
 }
 
 #[tokio::test]
-async fn omitted_fields_escape_both_allocation_and_output_byte_budgets() -> Result<()> {
+async fn omitted_fields_need_structural_fuel_even_with_zero_allocation_allowance() -> Result<()> {
     let (runtime, _dir, _name) = test_runtime().await?;
     for count in [16, 128, 512] {
         let fields = (0..count)
@@ -192,6 +192,13 @@ async fn omitted_fields_escape_both_allocation_and_output_byte_budgets() -> Resu
         let ty = func.ty(&store).results().next().unwrap();
         assert_eq!(Val::from_wave(&ty, expected)?, results[0]);
         let budget = Fuel::Result.cost() + Fuel::ResultBytes(expected.len() as u64).cost();
+        store.set_fuel(budget)?;
+        let result = Runtime::decode_result(false, Ok(Ok(())), results.to_vec(), &mut store).await;
+        assert!(
+            matches!(result, Err(ExecutionError::Deterministic(ref error))
+            if matches!(error.downcast_ref::<Trap>(), Some(Trap::OutOfFuel)))
+        );
+        let budget = budget + (count as u64 + 1) * Fuel::WaveValue.cost();
         store.set_fuel(budget)?;
         assert_eq!(
             Runtime::decode_result(false, Ok(Ok(())), results.to_vec(), &mut store).await?,

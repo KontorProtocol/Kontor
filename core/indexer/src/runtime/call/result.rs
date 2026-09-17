@@ -1,9 +1,16 @@
 use std::fmt::{self, Write};
 
-use anyhow::{Result, anyhow};
-use wasmtime::component::{Resource, Val, wasm_wave::writer::Writer};
+use anyhow::{Result, anyhow, ensure};
+use wasmtime::component::{
+    Resource, Val,
+    wasm_wave::{
+        wasm::{WasmTypeKind, WasmValue},
+        writer::Writer,
+    },
+};
 use wasmtime::{Store, Trap};
 
+use super::MAX_EXPR_DEPTH;
 use crate::runtime::Runtime;
 use crate::runtime::fuel::Fuel;
 use crate::runtime::wit::Contract;
@@ -66,17 +73,26 @@ pub(super) async fn encode(
             "Functions with multiple return values are not supported"
         ));
     }
+    let value = match results.pop() {
+        Some(value) if !is_fallback => {
+            let value = project_resource(value, store).await?;
+            visit(
+                &value,
+                &mut || Fuel::WaveValue.consume_with_store(store).map(|_| ()),
+                0,
+            )?;
+            Some(value)
+        }
+        value => value,
+    };
     let mut output = Output::new(store.get_fuel()? / Fuel::ResultBytes(1).cost());
-    let result: Result<()> = match results.pop() {
+    let result: Result<()> = match value {
         None => Ok(()),
         Some(Val::String(value)) if is_fallback => output.take_raw(value).map_err(Into::into),
         Some(_) if is_fallback => Err(anyhow!("fallback did not return a string")),
-        Some(value) => {
-            let value = project_resource(value, store).await?;
-            Writer::new(&mut output)
-                .write_value(&value)
-                .map_err(Into::into)
-        }
+        Some(value) => Writer::new(&mut output)
+            .write_value(&value)
+            .map_err(Into::into),
     };
     // Settle once, including partial output on failure, before call commit or
     // returning a nested call's remaining fuel to its parent.
@@ -86,6 +102,59 @@ pub(super) async fn encode(
     }
     result?;
     Ok(output.value)
+}
+
+// The writer skips absent record fields without touching its byte sink. Bound
+// its structural work first, including those fields, without cloning values or
+// walking string bytes. The writer still bounds escaping/appends incrementally.
+fn visit<V: WasmValue>(
+    value: &V,
+    charge: &mut impl FnMut() -> Result<()>,
+    depth: usize,
+) -> Result<()> {
+    ensure!(depth <= MAX_EXPR_DEPTH, "WAVE value nesting is too deep");
+    charge()?;
+    match value.kind() {
+        WasmTypeKind::List | WasmTypeKind::FixedLengthList => {
+            for value in value.unwrap_list() {
+                visit(&*value, charge, depth + 1)?;
+            }
+        }
+        WasmTypeKind::Tuple => {
+            for value in value.unwrap_tuple() {
+                visit(&*value, charge, depth + 1)?;
+            }
+        }
+        WasmTypeKind::Record => {
+            for (_, value) in value.unwrap_record() {
+                visit(&*value, charge, depth + 1)?;
+            }
+        }
+        WasmTypeKind::Option => {
+            if let Some(value) = value.unwrap_option() {
+                visit(&*value, charge, depth + 1)?;
+            }
+        }
+        WasmTypeKind::Variant => {
+            if let Some(value) = value.unwrap_variant().1 {
+                visit(&*value, charge, depth + 1)?;
+            }
+        }
+        WasmTypeKind::Result => {
+            let (Ok(value) | Err(value)) = value.unwrap_result();
+            if let Some(value) = value {
+                visit(&*value, charge, depth + 1)?;
+            }
+        }
+        WasmTypeKind::Flags => {
+            for _ in value.unwrap_flags() {
+                charge()?;
+            }
+        }
+        WasmTypeKind::Unsupported => return Err(anyhow!("unsupported WAVE result type")),
+        _ => (),
+    }
+    Ok(())
 }
 
 async fn project_resource(value: Val, store: &mut Store<Runtime>) -> Result<Val> {

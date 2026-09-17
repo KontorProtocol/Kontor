@@ -155,7 +155,13 @@ async fn preparation_failures_and_rejected_charges_report_consumed_work() -> Res
             .await
             .is_err()
     );
-    assert_eq!(runtime.finish_usage(previous)?, ExecutionUsage::default());
+    assert_eq!(
+        runtime.finish_usage(previous)?,
+        ExecutionUsage {
+            user_fuel: Fuel::WaveInputBytes(6).cost(),
+            ..ExecutionUsage::default()
+        }
+    );
 
     let unpaid = Signer::Id(
         runtime
