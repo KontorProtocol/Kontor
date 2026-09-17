@@ -5,6 +5,11 @@ This is an experiment, not an enabled protocol policy. Result encoding already
 has the [bounded WAVE writer](contract-result-budget.md); this investigation
 covers the earlier conversion between guest memory and owned host values.
 
+The following measurements describe the initial experiment. The subsequent
+[compatibility adapter](abi-errors/README.md) fixes the covered error
+classifications without a Wasmtime patch. The dynamic allocation policy remains
+test-only.
+
 ## Decision
 
 Keep the production allocation allowance unchanged for now. Public call hooks

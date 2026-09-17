@@ -13,6 +13,7 @@ use crate::runtime::wit::kontor::built_in::context::HolderRef;
 use crate::runtime::{ContractAddress, Decimal, ExecutionError, Runtime, TransactionContext};
 use crate::test_utils::test_runtime;
 
+mod abi_errors;
 mod conversion;
 mod errors;
 mod results;

@@ -1,96 +1,67 @@
-# Typed ABI error prototype
+# Contract conversion error compatibility
 
-2026-09-17. This contains a tested proposal for the error boundary identified in
-[the conversion-budget investigation](../abi-conversion-budget.md). The patches
-are unapplied here. Kontor still uses the released Wasmtime 48.0.2 dependency.
+Kontor uses the released, pinned Wasmtime 48.0.2. No Wasmtime patch or fork is
+required. The adapter in `runtime/call/error.rs` recognizes a narrow set of
+conversion failures at the contract call boundary.
 
-The independent Kontor cleanup is applied in `7195abe4`: `ExecutionError`
-exposes its immediate cause through `source()`, and an explicit nested-call
-classification takes precedence over that cause. The regression checks three
-wrapper levels and retains infrastructure handling for host, unknown engine,
-and injected allocation failures. Previously `source()` skipped the immediate
-cause, hiding it from standard error-chain inspection.
+## Classification order
 
-## Proposed change
+1. Preserve an explicit nested `ExecutionError` classification.
+2. Keep actual Wasmtime `OutOfMemory` failures on the infrastructure path.
+3. Preserve existing typed Wasmtime trap handling.
+4. Exclude host errors wrapped by the generated `anyhow: true` bindings.
+5. Recognize public UTF-8/UTF-16 decoder types at the root cause, and exactly
+   match the pinned allocation-limit, string-bounds, and UTF-16-alignment errors.
+6. Treat every other error as an infrastructure failure.
 
-[wasmtime.patch](wasmtime.patch) is against Wasmtime v48.0.2 and touches three
-files. It exposes the existing `HostcallFuelExhausted` error, adds an
-`InvalidStringEncoding` marker while retaining the underlying decoder error, and
-uses the existing `Trap::StringOutOfBounds` / `Trap::UnalignedPointer` variants
-for string pointer validation. It changes error reporting, not limits, gas
-prices, allocation behavior, or successful conversion semantics.
+The host-origin check matters: a host function can return the same message or
+Rust decoding error as Wasmtime's own conversion code. Those must not silently
+turn into rejected contract calls. Explicit nested classifications take priority
+so a deterministic child conversion failure remains deterministic in its parent.
 
-[kontor.patch](kontor.patch) extends `decode_result` to accept the new explicit
-error types as deterministic failures. Unknown engine errors and host failures
-retain their infrastructure classification. No error-message matching or new
-wrapper around every host function is needed. Apply it on top of the independent
-cleanup at `7195abe4`, not directly to main.
+Message matching applies only to the root cause, not formatted context or
+substrings. It runs on the failure path. Successful calls do not format errors.
+The immediate underlying cause is preserved by `ExecutionError::source()`.
 
-## Validation and limits
+## Upgrade regressions
 
-The independent cleanup passed 163 runtime tests against released Wasmtime
-48.0.2, with 12 manual tests ignored.
+`call/tests/abi_errors.rs` triggers real failures in both synchronous and
+asynchronous Wasmtime component exports, independently checking the expected
+messages/public decoder types and the resulting Kontor classification. The test
+messages do not import constants from the adapter. Changes to the Wasmtime
+messages therefore fail tests instead of silently updating expectations.
 
-The isolated patched-dependency build passed 164 runtime tests, with 12 manual
-tests ignored. The first broad run caught the missing immediate error source;
-the final run includes its fix and verifies the allocation-error type survives
-the nested error chain.
+A separate fixture uses actual generated host bindings to return those same
+messages and decoder types. It checks the host-origin marker and infrastructure
+classification through three wrapper levels. Unknown engine errors, near matches,
+misleading context, and an injected out-of-memory error remain infrastructure
+failures. The test does not induce a physical host allocation failure.
 
-The focused suite passes seven tests, with one manual benchmark ignored:
+Existing Rust contract tests cover direct and nested allocation-limit failures,
+write rollback, resource release, subsequent successful calls, and actual async
+suspension. Allocation-allowance probes are test-only; production limits and fuel
+prices are unchanged.
 
-- Sync and async component returns accept an eight-byte string with allowance
-  eight, and reject allowance seven with the public allocation-limit type.
-- Invalid UTF-8, invalid UTF-16, out-of-bounds string pointers, and unaligned
-  UTF-16 pointers have the expected typed failures and deterministic handling.
-- Existing Rust contracts exercise allocation-limit failures through zero, one,
-  and two proxy calls. Writes roll back, typed errors survive nested calls,
-  resource tables are released, and subsequent calls work.
-- Actual async suspension still refreshes the experimental allowance before a
-  subsequent host argument is converted.
-- Host errors and panics remain infrastructure errors. Classifier tests inject
-  `OutOfMemory`, unknown engine errors, DB-like host errors, and explicit
-  infrastructure errors containing otherwise deterministic causes. They do not
-  provoke a real machine allocation failure.
-
-The malformed-string WAT fixtures use the Runtime Store and decoder directly;
-they bypass contract publication. The write/rollback and proxy tests use the
-existing Rust contract binaries. This is not an exhaustive conversion-error
-audit: list/map pointer checks, discriminants, resource handles, and every
-canonical ABI path are not changed by this patch. Ordinary Wasmtime traps retain
-the existing Kontor classification policy.
-
-This also does not settle conversion pricing or make the allocation allowance
-a cross-platform gas unit. Dynamic limits remain test-only. Changing error
-classification is consensus-visible and must be deployed consistently.
-
-## Reproduce without changing the production pin
-
-The tested checkout is `/tmp/kontor-typed-abi-errors`; the patched published
-Wasmtime crate is `/tmp/kontor-wasmtime-typed-errors`. The local override reuses
-Wasmtime's registry dependencies and changes only the top-level crate.
-
-For a fresh reproduction, create a Kontor checkout at `7195abe4`, apply
-`kontor.patch`, and copy the published Wasmtime 48.0.2 source to a writable
-temporary directory. Apply `wasmtime.patch` there using `git apply -p3`
-(the patch uses upstream `crates/wasmtime/` paths). From the Kontor checkout's
-`core/` directory:
+Run from `core/`:
 
 ```sh
-cargo test --release -p indexer --lib runtime:: \
-  --config 'patch.crates-io.wasmtime.path="/tmp/kontor-wasmtime-typed-errors"'
+cargo test --release -p indexer --lib runtime::
 ```
 
-Cargo adjusts that checkout's lockfile for the local override. Do not commit
-that lockfile change or a temporary path dependency. The production checkout's
-lockfile is unchanged.
+On 2026-09-17, the real-conversion regression failed against the original
+classifier, then the adapter passed 166 runtime tests (12 manual tests ignored).
 
-## Integration recommendation
+Any Wasmtime upgrade must pass these tests. Review changes to the conversion
+errors or the host-binding wrapper before updating the adapter or expectations.
+This is deliberately not an exhaustive conversion-error audit: unrecognized
+list/map, discriminant, resource, and engine errors retain the existing fallback.
+Changing classification is consensus-visible and must be deployed consistently.
 
-Take the small Wasmtime API proposal upstream first. The exact public API should
-be settled with maintainers before committing Kontor to it. If a release cannot
-be waited for, use a reviewed, revision-pinned fork with a removal condition;
-avoid vendoring the entire crate or rewriting its registry source during builds.
-The prepared Kontor patch can then be applied with the dependency update and
-validated in Linux/macOS CI. Nothing has been posted upstream or pushed.
+## Superseded approach
 
-An [unsent issue draft](upstream-draft.md) accompanies the patches.
+The tested dependency-patch proposal is retained in git history at `11bcd189`.
+It was superseded by this adapter to avoid maintaining a Wasmtime fork. The
+unapplied patch files and unsent upstream draft have been removed. The initial
+hook and allocation-unit investigation remains in
+[ABI conversion budget investigation](../abi-conversion-budget.md). Conversion
+pricing and a deterministic dynamic guard remain separate work.

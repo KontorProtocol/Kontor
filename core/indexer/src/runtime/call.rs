@@ -27,6 +27,7 @@ use super::{
     wit::{CoreContext, FallContext, Holder, ProcContext, Signer, ViewContext},
 };
 
+mod error;
 mod result;
 
 #[cfg(test)]
@@ -235,8 +236,8 @@ impl Runtime {
         // component bytes and the linker — identical on every node — so a link
         // failure (e.g. a user contract importing a native-only interface) is
         // DETERMINISTIC: reject the op, don't shut the node down. Instantiation
-        // also executes Wasm initialization, whose traps are deterministic;
-        // non-trap instantiation failures remain infrastructure errors.
+        // also executes Wasm initialization, so its runtime failures use the
+        // same classification as exported calls.
         let instance_pre = linker
             .instantiate_pre(&component)
             .map_err(|e| ExecutionError::Deterministic(e.into()))?;
@@ -244,7 +245,7 @@ impl Runtime {
             .instantiate_async(&mut store)
             .await
             .map_err(|e| {
-                if e.downcast_ref::<Trap>().is_some() {
+                if error::is_deterministic(&e) {
                     ExecutionError::Deterministic(e.into())
                 } else {
                     ExecutionError::NonDeterministic(e.into())
@@ -520,28 +521,19 @@ impl Runtime {
     /// - `Err(panic_msg)` — host function panicked, caught by catch_unwind
     ///
     /// Error classification:
-    /// - WASM traps (downcast to wasmtime::Trap) → Contract
-    /// - Host Err returns (no Trap) or host panics → Infrastructure
+    /// - WASM traps and recognized guest conversion failures → Contract
+    /// - Unknown host/engine errors or host panics → Infrastructure
     async fn decode_result(
         is_fallback: bool,
         result: std::result::Result<std::result::Result<(), wasmtime::Error>, String>,
         results: Vec<Val>,
         store: &mut Store<Runtime>,
     ) -> Result<String, ExecutionError> {
-        // Classify before converting. An error is deterministic if:
-        // - It's a WASM trap (wasmtime::Trap in the error chain)
-        // - It originated from a deterministic ExecutionError in a cross-contract call
-        // Host panics (caught by catch_unwind) are non-deterministic.
-        //
-        // Wasmtime's downcast_ref also searches wrapped anyhow errors from
-        // host bindings, preserving typed failures across nested calls.
+        // Classify before converting to anyhow, preserving Wasmtime's marker
+        // distinguishing generated host errors from native conversion errors.
         let is_deterministic = match &result {
             Ok(Ok(())) => true,
-            Ok(Err(e)) => match e.downcast_ref::<ExecutionError>() {
-                Some(ExecutionError::Deterministic(_)) => true,
-                Some(ExecutionError::NonDeterministic(_)) => false,
-                None => e.is::<Trap>(),
-            },
+            Ok(Err(e)) => error::is_deterministic(e),
             Err(_) => false,
         };
 
@@ -701,9 +693,9 @@ fn classify_result(result: &Result<String, ExecutionError>) -> OpStatus {
         Ok(v) if v.starts_with("err(") => OpStatus::ContractErr,
         Ok(_) => OpStatus::Ok,
         Err(ExecutionError::Deterministic(e)) => {
-            if let Some(trap) = e.downcast_ref::<wasmtime::Trap>() {
+            if let Some(trap) = e.downcast_ref::<Trap>() {
                 match trap {
-                    wasmtime::Trap::OutOfFuel => OpStatus::OutOfFuel,
+                    Trap::OutOfFuel => OpStatus::OutOfFuel,
                     _ => OpStatus::Trap,
                 }
             } else {

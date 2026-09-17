@@ -63,7 +63,7 @@ async fn abi_dynamic_allowance_tracks_fuel_across_actual_suspension() -> Result<
             let classified =
                 Runtime::decode_result(false, Ok(result), results.to_vec(), &mut store).await;
             assert!(
-                matches!(classified, Err(ExecutionError::NonDeterministic(_))),
+                matches!(classified, Err(ExecutionError::Deterministic(_))),
                 "{classified:?}"
             );
         }
@@ -96,7 +96,7 @@ async fn call(
 }
 
 #[tokio::test]
-async fn abi_conversion_limit_characterization() -> Result<()> {
+async fn abi_conversion_limit_is_deterministic_and_rolls_back() -> Result<()> {
     let (mut runtime, _dir, _name) = test_runtime().await?;
     let actor = funded(&mut runtime).await?;
     let chain = call_chain(&mut runtime, &actor).await?;
@@ -113,10 +113,8 @@ async fn abi_conversion_limit_characterization() -> Result<()> {
             if expr == "result-payload(64)" {
                 assert!(result.is_ok(), "{result:?}");
             } else {
-                // Characterize the current integration gap, not a desired policy:
-                // Wasmtime's private allocation error lacks a typed Trap.
                 assert!(
-                    matches!(result, Err(ExecutionError::NonDeterministic(_))),
+                    matches!(result, Err(ExecutionError::Deterministic(_))),
                     "{result:?}"
                 );
                 println!(
@@ -203,7 +201,7 @@ async fn abi_allocation_units_are_not_serialized_byte_prices() -> Result<()> {
     runtime.conversion_probe = Some(Probe::new(Policy::Dynamic(10), true));
     let (result, remaining) = call(&runtime, &chain[0], &core, "storage-state()", exact).await?;
     assert!(
-        matches!(result, Err(ExecutionError::NonDeterministic(_))),
+        matches!(result, Err(ExecutionError::Deterministic(_))),
         "{result:?}"
     );
     println!(
@@ -219,27 +217,29 @@ async fn abi_hooks_preserve_host_failure_and_guest_trap_classification() -> Resu
     let chain = call_chain(&mut runtime, &actor).await?;
     let core = Signer::Core(Box::new(actor));
     runtime.conversion_probe = Some(Probe::new(Policy::Dynamic(10), false));
-    for (expr, deterministic) in [
-        #[cfg(feature = "testing")]
-        ("host-error()", false),
-        #[cfg(feature = "testing")]
-        ("host-panic()", false),
-        ("trap-out-of-fuel()", true),
-    ] {
-        let (result, _) = call(&runtime, &chain[0], &core, expr, BUDGET).await?;
-        assert!(result.is_err());
-        assert_eq!(
-            matches!(result, Err(ExecutionError::Deterministic(_))),
-            deterministic,
-            "{expr}: {result:?}"
-        );
-        if !deterministic {
-            assert!(
-                format!("{:?}", result.unwrap_err()).contains("deliberate host"),
-                "{expr} must reach the injected host failure"
+    for target in &chain {
+        for (expr, deterministic) in [
+            #[cfg(feature = "testing")]
+            ("host-error()", false),
+            #[cfg(feature = "testing")]
+            ("host-panic()", false),
+            ("trap-out-of-fuel()", true),
+        ] {
+            let (result, _) = call(&runtime, target, &core, expr, BUDGET).await?;
+            assert!(result.is_err());
+            assert_eq!(
+                matches!(result, Err(ExecutionError::Deterministic(_))),
+                deterministic,
+                "{expr}: {result:?}"
             );
+            if !deterministic {
+                assert!(
+                    format!("{:?}", result.unwrap_err()).contains("deliberate host"),
+                    "{expr} must reach the injected host failure"
+                );
+            }
+            assert!(runtime.stack.is_empty().await);
         }
-        assert!(runtime.stack.is_empty().await);
     }
     Ok(())
 }
