@@ -1,0 +1,278 @@
+diff --git a/core/indexer/src/runtime/call.rs b/core/indexer/src/runtime/call.rs
+--- a/core/indexer/src/runtime/call.rs
++++ b/core/indexer/src/runtime/call.rs
+@@ -6,7 +6,7 @@
+ use wasmtime::{
+     AsContext, AsContextMut, Store, Trap,
+     component::{
+-        Accessor, Func, Resource, Val,
++        Accessor, Func, HostcallFuelExhausted, InvalidStringEncoding, Resource, Val,
+         wasm_wave::{
+             to_string as to_wave_string, untyped::UntypedFuncCall, value::Value as WaveValue,
+         },
+@@ -521,7 +521,7 @@
+     ///
+     /// Error classification:
+     /// - WASM traps (downcast to wasmtime::Trap) → Contract
+-    /// - Host Err returns (no Trap) or host panics → Infrastructure
++    /// - Unknown host/engine errors or host panics → Infrastructure
+     async fn decode_result(
+         is_fallback: bool,
+         result: std::result::Result<std::result::Result<(), wasmtime::Error>, String>,
+@@ -529,7 +529,7 @@
+         store: &mut Store<Runtime>,
+     ) -> Result<String, ExecutionError> {
+         // Classify before converting. An error is deterministic if:
+-        // - It's a WASM trap (wasmtime::Trap in the error chain)
++        // - It is a typed WASM trap or a known guest conversion failure
+         // - It originated from a deterministic ExecutionError in a cross-contract call
+         // Host panics (caught by catch_unwind) are non-deterministic.
+         //
+@@ -540,7 +540,11 @@
+             Ok(Err(e)) => match e.downcast_ref::<ExecutionError>() {
+                 Some(ExecutionError::Deterministic(_)) => true,
+                 Some(ExecutionError::NonDeterministic(_)) => false,
+-                None => e.is::<Trap>(),
++                None => {
++                    e.is::<Trap>()
++                        || e.is::<HostcallFuelExhausted>()
++                        || e.is::<InvalidStringEncoding>()
++                }
+             },
+             Err(_) => false,
+         };
+diff --git a/core/indexer/src/runtime/call/tests/conversion.rs b/core/indexer/src/runtime/call/tests/conversion.rs
+--- a/core/indexer/src/runtime/call/tests/conversion.rs
++++ b/core/indexer/src/runtime/call/tests/conversion.rs
+@@ -2,10 +2,10 @@
+ use std::sync::atomic::{AtomicUsize, Ordering};
+ use std::time::Instant;
+
+-use anyhow::Result;
++use anyhow::{Result, anyhow};
+ use indexer_types::Payment;
+-use wasmtime::component::{Component, Linker, Val};
+-use wasmtime::{AsContextMut, CallHook, Error as WasmtimeError, Trap};
++use wasmtime::component::{Component, HostcallFuelExhausted, InvalidStringEncoding, Linker, Val};
++use wasmtime::{AsContextMut, CallHook, Error as WasmtimeError, OutOfMemory, Trap};
+
+ use super::{call_chain, funded};
+ use crate::runtime::conversion_probe::{Policy, Probe};
+@@ -14,6 +14,85 @@
+ use crate::test_utils::test_runtime;
+
+ const BUDGET: u64 = 100_000_000;
++
++#[tokio::test]
++async fn abi_string_failures_have_typed_classification() -> Result<()> {
++    let (runtime, _dir, _name) = test_runtime().await?;
++    for fixture in [
++        include_str!("fixtures/abi-string-return.wat"),
++        include_str!("fixtures/abi-async-string-return.wat"),
++    ] {
++        for (encoding, ptr, len, allowance, expected) in [
++            ("", 0, 8, 8, "valid"),
++            ("", 0, 8, 7, "allowance"),
++            ("", 8, 1, 8, "encoding"),
++            ("", 65535, 8, 8, "bounds"),
++            (" string-encoding=utf16", 16, 1, 8, "encoding"),
++            (" string-encoding=utf16", 1, 1, 8, "alignment"),
++        ] {
++            let wat = fixture.replace("(memory $", &format!("{encoding} (memory $"));
++            let component = Component::new(&runtime.engine, wat)?;
++            let mut store = runtime.make_store(BUDGET)?;
++            store.set_hostcall_fuel(allowance);
++            let instance = Linker::new(&runtime.engine)
++                .instantiate_async(&mut store, &component)
++                .await?;
++            let func = instance.get_func(&mut store, "run").unwrap();
++            let mut results = [Val::Bool(false)];
++            let result = func
++                .call_async(&mut store, &[Val::U32(ptr), Val::U32(len)], &mut results)
++                .await;
++            if expected == "valid" {
++                result?;
++                assert_eq!(results[0], Val::String("abcdefgh".into()));
++                continue;
++            }
++            let error = result.unwrap_err();
++            assert!(
++                match expected {
++                    "allowance" => error.is::<HostcallFuelExhausted>(),
++                    "encoding" => error.is::<InvalidStringEncoding>(),
++                    "bounds" => error.downcast_ref::<Trap>() == Some(&Trap::StringOutOfBounds),
++                    "alignment" => error.downcast_ref::<Trap>() == Some(&Trap::UnalignedPointer),
++                    _ => unreachable!(),
++                },
++                "{expected}: {error:?}"
++            );
++            let classified =
++                Runtime::decode_result(false, Ok(Err(error)), results.to_vec(), &mut store).await;
++            assert!(matches!(classified, Err(ExecutionError::Deterministic(_))));
++        }
++    }
++    Ok(())
++}
++
++#[tokio::test]
++async fn abi_error_classification_preserves_infrastructure_failures() -> Result<()> {
++    let (runtime, _dir, _name) = test_runtime().await?;
++    for error in [
++        WasmtimeError::from(OutOfMemory::new(1024)),
++        WasmtimeError::msg("unknown engine failure"),
++        WasmtimeError::from_anyhow(anyhow!("database unavailable")),
++        WasmtimeError::from_anyhow(ExecutionError::NonDeterministic(Trap::OutOfFuel.into()).into()),
++        WasmtimeError::from_anyhow(
++            ExecutionError::NonDeterministic(HostcallFuelExhausted.into()).into(),
++        ),
++    ] {
++        let mut store = runtime.make_store(BUDGET)?;
++        let result = Runtime::decode_result(
++            false,
++            Ok(Err(error.context("call failed"))),
++            vec![],
++            &mut store,
++        )
++        .await;
++        assert!(
++            matches!(result, Err(ExecutionError::NonDeterministic(_))),
++            "{result:?}"
++        );
++    }
++    Ok(())
++}
+
+ #[tokio::test]
+ async fn abi_dynamic_allowance_tracks_fuel_across_actual_suspension() -> Result<()> {
+@@ -63,7 +142,7 @@
+             let classified =
+                 Runtime::decode_result(false, Ok(result), results.to_vec(), &mut store).await;
+             assert!(
+-                matches!(classified, Err(ExecutionError::NonDeterministic(_))),
++                matches!(classified, Err(ExecutionError::Deterministic(_))),
+                 "{classified:?}"
+             );
+         }
+@@ -96,7 +175,7 @@
+ }
+
+ #[tokio::test]
+-async fn abi_conversion_limit_characterization() -> Result<()> {
++async fn abi_conversion_limit_is_deterministic_and_rolls_back() -> Result<()> {
+     let (mut runtime, _dir, _name) = test_runtime().await?;
+     let actor = funded(&mut runtime).await?;
+     let chain = call_chain(&mut runtime, &actor).await?;
+@@ -113,10 +192,8 @@
+             if expr == "result-payload(64)" {
+                 assert!(result.is_ok(), "{result:?}");
+             } else {
+-                // Characterize the current integration gap, not a desired policy:
+-                // Wasmtime's private allocation error lacks a typed Trap.
+                 assert!(
+-                    matches!(result, Err(ExecutionError::NonDeterministic(_))),
++                    matches!(result, Err(ExecutionError::Deterministic(ref error)) if error.chain().any(|cause| cause.is::<HostcallFuelExhausted>())),
+                     "{result:?}"
+                 );
+                 println!(
+@@ -203,7 +280,7 @@
+     runtime.conversion_probe = Some(Probe::new(Policy::Dynamic(10), true));
+     let (result, remaining) = call(&runtime, &chain[0], &core, "storage-state()", exact).await?;
+     assert!(
+-        matches!(result, Err(ExecutionError::NonDeterministic(_))),
++        matches!(result, Err(ExecutionError::Deterministic(_))),
+         "{result:?}"
+     );
+     println!(
+@@ -219,27 +296,29 @@
+     let chain = call_chain(&mut runtime, &actor).await?;
+     let core = Signer::Core(Box::new(actor));
+     runtime.conversion_probe = Some(Probe::new(Policy::Dynamic(10), false));
+-    for (expr, deterministic) in [
+-        #[cfg(feature = "testing")]
+-        ("host-error()", false),
+-        #[cfg(feature = "testing")]
+-        ("host-panic()", false),
+-        ("trap-out-of-fuel()", true),
+-    ] {
+-        let (result, _) = call(&runtime, &chain[0], &core, expr, BUDGET).await?;
+-        assert!(result.is_err());
+-        assert_eq!(
+-            matches!(result, Err(ExecutionError::Deterministic(_))),
+-            deterministic,
+-            "{expr}: {result:?}"
+-        );
+-        if !deterministic {
+-            assert!(
+-                format!("{:?}", result.unwrap_err()).contains("deliberate host"),
+-                "{expr} must reach the injected host failure"
++    for target in &chain {
++        for (expr, deterministic) in [
++            #[cfg(feature = "testing")]
++            ("host-error()", false),
++            #[cfg(feature = "testing")]
++            ("host-panic()", false),
++            ("trap-out-of-fuel()", true),
++        ] {
++            let (result, _) = call(&runtime, target, &core, expr, BUDGET).await?;
++            assert!(result.is_err());
++            assert_eq!(
++                matches!(result, Err(ExecutionError::Deterministic(_))),
++                deterministic,
++                "{expr}: {result:?}"
+             );
+-        }
+-        assert!(runtime.stack.is_empty().await);
++            if !deterministic {
++                assert!(
++                    format!("{:?}", result.unwrap_err()).contains("deliberate host"),
++                    "{expr} must reach the injected host failure"
++                );
++            }
++            assert!(runtime.stack.is_empty().await);
++        }
+     }
+     Ok(())
+ }
+diff --git a/core/indexer/src/runtime/call/tests/fixtures/abi-string-return.wat b/core/indexer/src/runtime/call/tests/fixtures/abi-string-return.wat
+new file mode 100644
+--- /dev/null
++++ b/core/indexer/src/runtime/call/tests/fixtures/abi-string-return.wat
+@@ -0,0 +1,12 @@
++(component
++  (core module $code
++    (memory (export "memory") 1)
++    (data (i32.const 0) "abcdefgh\ff")
++    (data (i32.const 16) "\00\d8")
++    (func (export "run") (param $ptr i32) (param $len i32) (result i32)
++      i32.const 64 local.get $ptr i32.store
++      i32.const 68 local.get $len i32.store
++      i32.const 64))
++  (core instance $code (instantiate $code))
++  (func (export "run") (param "ptr" u32) (param "len" u32) (result string)
++    (canon lift (core func $code "run") (memory $code "memory"))))
+diff --git a/core/indexer/src/runtime/call/tests/fixtures/abi-async-string-return.wat b/core/indexer/src/runtime/call/tests/fixtures/abi-async-string-return.wat
+new file mode 100644
+--- /dev/null
++++ b/core/indexer/src/runtime/call/tests/fixtures/abi-async-string-return.wat
+@@ -0,0 +1,21 @@
++(component
++  (core module $memory
++    (memory (export "memory") 1)
++    (data (i32.const 0) "abcdefgh\ff")
++    (data (i32.const 16) "\00\d8"))
++  (core instance $memory (instantiate $memory))
++  (core func $return
++    (canon task.return (result string) (memory $memory "memory")))
++  (core module $code
++    (import "host" "return" (func $return (param i32 i32)))
++    (func (export "run") (param $ptr i32) (param $len i32) (result i32)
++      local.get $ptr local.get $len call $return
++      i32.const 0)
++    (func (export "callback") (param i32 i32 i32) (result i32)
++      i32.const 0))
++  (core instance $code
++    (instantiate $code
++      (with "host" (instance (export "return" (func $return))))))
++  (func (export "run") async (param "ptr" u32) (param "len" u32) (result string)
++    (canon lift (core func $code "run") async
++      (memory $memory "memory") (callback (func $code "callback")))))
