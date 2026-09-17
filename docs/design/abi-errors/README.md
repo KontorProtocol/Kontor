@@ -10,8 +10,10 @@ conversion failures at the contract call boundary.
 2. Keep actual Wasmtime `OutOfMemory` failures on the infrastructure path.
 3. Preserve existing typed Wasmtime trap handling.
 4. Exclude host errors wrapped by the generated `anyhow: true` bindings.
-5. Recognize public UTF-8/UTF-16 decoder types at the root cause, and exactly
-   match the pinned allocation-limit, string-bounds, and UTF-16-alignment errors.
+5. Recognize public UTF-8/UTF-16 and character decoder types at the root cause.
+   Match the pinned allocation-limit, string/list bounds and alignment, return
+   pointer, and guest allocator errors. Recognize invalid variant/enum/option/
+   result tags using Wasmtime's complete message format and bounded integers.
 6. Treat every other error as an infrastructure failure.
 
 The host-origin check matters: a host function can return the same message or
@@ -20,7 +22,10 @@ turn into rejected contract calls. Explicit nested classifications take priority
 so a deterministic child conversion failure remains deterministic in its parent.
 
 Message matching applies only to the root cause, not formatted context or
-substrings. It runs on the failure path. Successful calls do not format errors.
+substrings. The variable tag message must contain canonical decimal `u32` values
+and, when the message includes a case count, an actually out-of-range tag.
+Prefixes, suffixes, overflow, leading zeros, and inconsistent ranges do not match.
+Matching runs on the failure path. Successful calls do not format errors.
 The immediate underlying cause is preserved by `ExecutionError::source()`.
 
 ## Upgrade regressions
@@ -30,6 +35,13 @@ asynchronous Wasmtime component exports, independently checking the expected
 messages/public decoder types and the resulting Kontor classification. The test
 messages do not import constants from the adapter. Changes to the Wasmtime
 messages therefore fail tests instead of silently updating expectations.
+Coverage includes invalid list pointers and lengths, indirect record return
+pointers, enum/variant/option/result tags, Unicode characters, and guest allocator
+results. Both sync and async exports exercise these paths, with valid controls,
+memory-end boundaries, and nested classification propagation. Async record
+returns exceed the 16-value flattening limit to exercise the indirect path.
+Typed conversion tests also pin the distinct option/result and generated enum/
+variant errors; host bindings use these same `Lift` implementations.
 
 A separate fixture uses actual generated host bindings to return those same
 messages and decoder types. It checks the host-origin marker and infrastructure
@@ -49,12 +61,14 @@ cargo test --release -p indexer --lib runtime::
 ```
 
 On 2026-09-17, the real-conversion regression failed against the original
-classifier, then the adapter passed 166 runtime tests (12 manual tests ignored).
+classifier. After expanding category coverage, the adapter passed 171 runtime
+tests (12 manual tests ignored).
 
 Any Wasmtime upgrade must pass these tests. Review changes to the conversion
 errors or the host-binding wrapper before updating the adapter or expectations.
 This is deliberately not an exhaustive conversion-error audit: unrecognized
-list/map, discriminant, resource, and engine errors retain the existing fallback.
+map/fixed-list, resource, and engine errors retain the existing fallback. The tests
+do not enumerate every host import signature or induce physical allocation failure.
 Changing classification is consensus-visible and must be deployed consistently.
 
 ## Superseded approach

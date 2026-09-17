@@ -21,9 +21,9 @@ rejects some otherwise affordable ordinary calls.
 
 The compatibility adapter now recognizes the covered conversion failures without
 treating real host failures as contract failures. It uses public error types and
-three exact messages, protected by real-engine regression tests. The next step
-is to define stable logical conversion units and their accounting. Do not price
-native Rust allocation sizes as consensus work.
+strictly matched messages, protected by real-engine regression tests. The next
+step is to define stable logical conversion units and their accounting. Do not
+price native Rust allocation sizes as consensus work.
 
 ## Integration experiment
 
@@ -82,9 +82,11 @@ does not prove a guest fault.
 
 A public typed conversion-error API would remove the need for message matching,
 but a dependency patch is not required. The adapter's regressions exercise real
-sync/async conversion failures, including malformed UTF-8/UTF-16 and invalid
-string pointers. Generated host errors with identical messages or decoder types
-remain infrastructure failures, as do actual host allocation failure types,
+sync/async conversion failures, including malformed UTF-8/UTF-16, invalid
+characters, string/list and indirect record pointers, enum/variant/option/result
+tags, and invalid guest allocator results. Generated host errors with identical
+messages or decoder types remain infrastructure failures, as do actual host
+allocation failure types,
 unknown engine errors, and panics. Unrecognized conversion errors retain the
 existing infrastructure fallback; this is not an exhaustive ABI-error audit.
 
@@ -130,7 +132,7 @@ adapter. Remaining work:
    Only then enable it in production and calibrate prices.
 
 The initial experiment passed 162 runtime tests and the manual
-`abi_hook_overhead` benchmark. The final adapter passed 166 runtime tests, with
+`abi_hook_overhead` benchmark. The expanded adapter passed 171 runtime tests, with
 12 manual tests ignored. Allocation limits and fuel prices remain unchanged;
 the covered failures now receive deterministic classification.
 Reproduce from `core/`:
