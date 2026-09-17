@@ -69,7 +69,9 @@ impl std::fmt::Display for ExecutionError {
 impl std::error::Error for ExecutionError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
-            ExecutionError::Deterministic(e) | ExecutionError::NonDeterministic(e) => e.source(),
+            ExecutionError::Deterministic(e) | ExecutionError::NonDeterministic(e) => {
+                Some(e.as_ref())
+            }
         }
     }
 }

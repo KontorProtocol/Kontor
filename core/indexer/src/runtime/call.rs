@@ -537,11 +537,11 @@ impl Runtime {
         // host bindings, preserving typed failures across nested calls.
         let is_deterministic = match &result {
             Ok(Ok(())) => true,
-            Ok(Err(e)) => {
-                e.downcast_ref::<wasmtime::Trap>().is_some()
-                    || e.downcast_ref::<ExecutionError>()
-                        .is_some_and(|ee| matches!(ee, ExecutionError::Deterministic(_)))
-            }
+            Ok(Err(e)) => match e.downcast_ref::<ExecutionError>() {
+                Some(ExecutionError::Deterministic(_)) => true,
+                Some(ExecutionError::NonDeterministic(_)) => false,
+                None => e.is::<Trap>(),
+            },
             Err(_) => false,
         };
 

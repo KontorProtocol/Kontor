@@ -14,6 +14,7 @@ use crate::runtime::{ContractAddress, Decimal, ExecutionError, Runtime, Transact
 use crate::test_utils::test_runtime;
 
 mod conversion;
+mod errors;
 mod results;
 
 async fn funded(runtime: &mut Runtime) -> Result<Signer> {
