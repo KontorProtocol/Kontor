@@ -30,9 +30,19 @@ impl<T> built_in::context::HostHolderWithStore<T> for Runtime {
         accessor: &Accessor<T, Self>,
         ref_: HolderRef,
     ) -> Result<Result<Resource<Holder>, WitError>> {
+        let bytes = match &ref_ {
+            HolderRef::XOnlyPubkey(pubkey) => pubkey.len(),
+            HolderRef::Utxo(out_point) => out_point.txid.len(),
+            HolderRef::SignerId(_)
+            | HolderRef::Core
+            | HolderRef::Burner
+            | HolderRef::OrderingPool
+            | HolderRef::StoragePool => 0,
+        };
+        // Invalid references also incur ABI conversion and validation work.
+        Fuel::HolderFromRef(bytes as u64).consume(accessor)?;
         let runtime = accessor.with(|mut access| access.get().clone());
-        Fuel::HolderFromRef.consume(accessor)?;
-        let holder = match Holder::from_holder_ref(ref_.clone(), &runtime).await {
+        let holder = match Holder::from_holder_ref(ref_, &runtime).await {
             Ok(h) => h,
             Err(e) => {
                 // Debug-level: a "signer not found" in view context is
@@ -40,7 +50,7 @@ impl<T> built_in::context::HostHolderWithStore<T> for Runtime {
                 // it as Err and decides what to do — usually return
                 // None). The WIT result already carries the error to
                 // the contract; logging is purely diagnostic.
-                tracing::debug!("Holder::from_ref returning Err for {ref_:?}: {e:?}");
+                tracing::debug!("Holder::from_ref returning Err: {e:?}");
                 return Ok(Err(e));
             }
         };

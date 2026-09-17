@@ -21,7 +21,7 @@ pub enum Fuel {
     SignerToString,
     SignerAsHolder,
     HolderKey,
-    HolderFromRef,
+    HolderFromRef(u64),
     HolderAsRef,
     StorageScan,
     /// Returned bytes only; StorageScan charges each attempt before advancing.
@@ -119,7 +119,7 @@ impl Fuel {
             Self::SignerToString => 50,
             Self::SignerAsHolder => 50,
             Self::HolderKey => 50,
-            Self::HolderFromRef => 100,
+            Self::HolderFromRef(bytes) => 100_u64.saturating_add(bytes.saturating_mul(10)),
             Self::HolderAsRef => 50,
             Self::StorageScan => 100,
             Self::KeysNext(bytes) | Self::Path(bytes) => bytes.saturating_mul(10),
