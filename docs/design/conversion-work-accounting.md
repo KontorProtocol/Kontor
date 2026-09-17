@@ -91,6 +91,79 @@ calibration. The improvement comes from removing repeated record validation, not
 from charging fuel itself. The ignored `construction_overhead` and
 `encoding_overhead` tests retain the comparison for future changes.
 
+## Whole-call latency, charges, and default limits
+
+2026-09-17, Linux ARM64 release builds. Compare main `0fc43b5a` with production
+code at `3cdda89a`, using the identical ignored `wave_call_costs` test on both.
+Separate executables were run serially in the order main/head/head/main/main/head,
+then head/main/main/head/head/main. The table uses the median of six run medians
+per version. Each run warms the contracts, rotates workload order through seven
+batches, and times 15 invocations per batch (five for native balance-list queries).
+
+Timing includes Store creation, cached component instantiation, input conversion,
+guest execution, storage host calls, result encoding, and procedure fee settlement.
+It excludes fixture setup/JIT, the enclosing test transaction rollback, network
+transport, Bitcoin confirmation, and final block durability. State is rolled back
+between invocations. Ordinary execution-usage accounting is enabled; detailed
+profiling is disabled. Per-workload fuel, result length, success, and deposits are
+stable across repetitions and runs.
+
+| Workload | Main latency | New latency | Main execution gas | New execution gas |
+| --- | ---: | ---: | ---: | ---: |
+| Scalar view | 33.61 µs | 33.25 µs | 8 | 8 |
+| Scalar view through two proxies | 174.13 µs | 173.13 µs | 37 | 38 |
+| Token transfer | 757.36 µs | 750.18 µs | 28 | 31 |
+| Storage write | 798.75 µs | 793.75 µs | 23 | 23 |
+| Mixed storage writes through two proxies | 2,417.70 µs | 2,418.01 µs | 252 | 253 |
+| Add stake | 1,360.04 µs | 1,357.80 µs | 282 | 287 |
+| String result, 128 KiB | 1,463.06 µs | 1,460.48 µs | 1,418 | 1,418 |
+| Native balances for 128 holders | 488.59 µs | 497.27 µs | 492 | 549 |
+| SHA-256, 4 KiB byte-list argument | 356.63 µs | 246.88 µs | 46 | 417 |
+| SHA-256, 64 KiB byte-list argument | 5,310.85 µs | 3,566.83 µs | 661 | 6,561 |
+
+Execution gas excludes refundable storage-deposit reservations. For views it is
+budget consumption, not a wallet fee. Rates are unchanged: 1,000 fuel/gas and the
+default execution price of 1e-9 KOR/gas. For example, the measured transfer's fee
+increases from 28e-9 to 31e-9 KOR. Bitcoin fees are outside this comparison.
+
+**Usability:** all 25 workloads succeeded in all 12 runs with unchanged defaults:
+100,000 gas for paid operations and 1,000,000 gas for views. The largest paid
+workload consumed 0.403% of its cap, including deposits. The largest view consumed
+0.657% of its cap. Even the 64 KiB hashing example's 6,561 gas would consume only
+6.561% of the smaller operation cap. Storage deposits themselves were unchanged.
+This establishes headroom for these workloads, not a guarantee for every possible
+contract or a caller's custom tightly sized gas limit.
+
+**Pricing consequence:** there is no broad latency regression in these samples,
+but large byte-list arguments become roughly 10 times as expensive in fuel. The
+64 KiB case's additional 5,900,030 fuel is exactly:
+
+- 262,153 WAVE source bytes × 10 = 2,621,530;
+- 65,537 constructed values (list plus bytes) × 50 = 3,276,850;
+- 33 output values (digest list plus bytes) × 50 = 1,650.
+
+The previous runtime charged the hash operation but left this input parsing and
+construction unpriced. The new builder also runs faster. Consequently, higher
+fuel consumption here does not indicate higher CPU consumption. The coefficients,
+especially large list input tariffs, remain priorities for calibration; these
+measurements do not establish that their relative prices are optimal.
+
+Small timing changes are within ordinary measurement variation. Bulk database
+queries were noisier: the 512-holder query's per-run medians ranged from 1.79–2.64 ms
+on main and 1.83–2.37 ms on the branch. Its aggregate medians of 2.05 and 1.98 ms
+are not evidence of a reliable speedup. The isolated writer's measured overhead
+still exists, but did not translate into a broad whole-call slowdown here.
+
+All workloads, exact fuel, limits, and timing ranges are retained in
+[the comparison CSV](measurements/wave-call-costs-2026-09-17.csv).
+The benchmark is ignored in normal CI. To reproduce, copy the same
+`runtime/call/tests/wave_costs.rs` and its module declaration onto both revisions,
+build release test executables separately, and run each without concurrent builds:
+
+```sh
+cargo test --release -p indexer --lib runtime::call::tests::wave_costs::wave_call_costs -- --ignored --nocapture --test-threads=1
+```
+
 ## Conclusion
 
 Keep conversion charges in the existing `Fuel`/`FuelGauge` system. Do not add a
