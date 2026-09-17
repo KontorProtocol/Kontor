@@ -15,8 +15,10 @@ use crate::test_utils::test_runtime;
 
 mod abi_errors;
 mod conversion;
+mod conversion_work;
 mod errors;
 mod results;
+mod wave_costs;
 
 async fn funded(runtime: &mut Runtime) -> Result<Signer> {
     let signer = Signer::Id(

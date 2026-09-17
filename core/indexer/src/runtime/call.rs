@@ -6,7 +6,7 @@ use futures_util::future::OptionFuture;
 use wasmtime::{
     AsContext, AsContextMut, Store, Trap,
     component::{
-        Accessor, Func, Resource, Val,
+        Accessor, Func, Resource, Type, Val,
         wasm_wave::{
             to_string as to_wave_string, untyped::UntypedFuncCall, value::Value as WaveValue,
         },
@@ -20,7 +20,7 @@ use crate::database::types::Identity;
 
 use super::{
     ContractAddress, Runtime,
-    fuel::{UsageKind, record_fuel},
+    fuel::{Fuel, UsageKind, record_fuel},
     should_skip_result,
     stack::{CallFrame, Stack},
     token,
@@ -28,6 +28,7 @@ use super::{
 };
 
 mod error;
+mod input;
 mod result;
 
 #[cfg(test)]
@@ -209,6 +210,9 @@ impl Runtime {
         expr: &str,
         nested: bool,
     ) -> Result<PreparedCall, ExecutionError> {
+        Fuel::WaveInputBytes(expr.len() as u64)
+            .consume_with_store(store)
+            .map_err(ExecutionError::Deterministic)?;
         // Bound recursion before the WAVE parser can overflow the host stack.
         validate_expr(expr)?;
         let contract_id = self
@@ -252,20 +256,24 @@ impl Runtime {
                 }
             })?;
         let fallback_name = "fallback";
-        let fallback_expr = format!(
-            "{}({})",
-            fallback_name,
-            to_wave_string(&WaveValue::from(expr))
-                .map_err(|e| ExecutionError::Deterministic(e.into()))?
-        );
+        let fallback_expr;
 
         let call =
             UntypedFuncCall::parse(expr).map_err(|e| ExecutionError::Deterministic(e.into()))?;
         let (call, func) = if let Some(func) = instance.get_func(&mut store, call.name()) {
             (call, func)
         } else if let Some(func) = instance.get_func(&mut store, fallback_name) {
-            // The fallback wraps the whole expr as one string arg (~2× after
-            // escaping), so it too must clear the limit before being parsed.
+            fallback_expr = format!(
+                "{}({})",
+                fallback_name,
+                to_wave_string(&WaveValue::from(expr))
+                    .map_err(|e| ExecutionError::Deterministic(e.into()))?
+            );
+            Fuel::WaveInputBytes(fallback_expr.len() as u64)
+                .consume_with_store(store)
+                .map_err(ExecutionError::Deterministic)?;
+            // Escaping can expand the wrapped expression, so it too must clear
+            // the parser's string/depth limits.
             validate_expr(&fallback_expr)?;
             (
                 UntypedFuncCall::parse(&fallback_expr)
@@ -280,17 +288,14 @@ impl Runtime {
 
         let func_name = call.name();
         let component_func = func.ty(&store);
-        let func_params = component_func.params();
-        let func_param_types = func_params.map(|(_, t)| t).collect::<Vec<_>>();
-        let (func_ctx_param_type, func_param_types) =
-            func_param_types.split_first().ok_or_else(|| {
-                ExecutionError::Deterministic(anyhow!("Context/signer parameter not found"))
-            })?;
-        let mut params = call
-            .to_wasm_params(func_param_types)
-            .map_err(|e| ExecutionError::Deterministic(e.into()))?;
+        let mut func_param_types = component_func.params().map(|(_, t)| t);
+        let func_ctx_param_type = func_param_types.next().ok_or_else(|| {
+            ExecutionError::Deterministic(anyhow!("Context/signer parameter not found"))
+        })?;
+        let mut params =
+            input::params(&call, func_param_types, store).map_err(ExecutionError::Deterministic)?;
         let resource_type = match func_ctx_param_type {
-            wasmtime::component::Type::Borrow(t) => Ok(*t),
+            Type::Borrow(t) => Ok(t),
             _ => Err(ExecutionError::Deterministic(anyhow!(
                 "Unsupported context type"
             ))),

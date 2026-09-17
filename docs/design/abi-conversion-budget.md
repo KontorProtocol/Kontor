@@ -121,7 +121,9 @@ This is a feasibility comparison, not calibration or a cross-platform guarantee.
 ## Follow-through
 
 The covered error-classification work is implemented by the compatibility
-adapter. Remaining work:
+adapter. The next [conversion-work accounting analysis](conversion-work-accounting.md)
+maps existing tariffs and reproduces the omitted-field and repeated-copy gaps.
+Remaining work:
 
 1. Specify logical conversion work (such as payload bytes and visited values)
    independently of host layouts. Establish what existing host tariffs already

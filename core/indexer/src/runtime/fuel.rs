@@ -105,6 +105,9 @@ pub enum Fuel {
     NumbersLog10Decimal,
     Result,
     ResultBytes(u64),
+    WaveInputBytes(u64),
+    WaveValue,
+    WaveTypeField(u64),
     // TODO: recalibrate with the rest of the Fuel table against measured
     // benchmarks. Currently sized to match other non-zk "non-trivial"
     // operations (Delete, ProofFromBytes base cost).
@@ -132,6 +135,9 @@ impl Fuel {
             Self::Set(value_len) => value_len.saturating_mul(10),
             Self::Result => 200,
             Self::ResultBytes(bytes) => bytes.saturating_mul(10),
+            Self::WaveInputBytes(bytes) => bytes.saturating_mul(10),
+            Self::WaveValue => 50,
+            Self::WaveTypeField(bytes) => 50_u64.saturating_add(bytes.saturating_mul(10)),
             // Charge mutations and freed footprint bytes; tombstones omit values.
             Self::Delete(rows, bytes) => 200 * rows + 10 * bytes,
             Self::Deposit(fuel) => *fuel,

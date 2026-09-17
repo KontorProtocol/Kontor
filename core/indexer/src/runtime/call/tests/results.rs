@@ -16,19 +16,34 @@ use crate::test_utils::test_runtime;
 async fn result_encoding_obeys_exact_byte_budgets() -> Result<()> {
     let (runtime, _dir, _name) = test_runtime().await?;
     let values = [
-        None,
-        Some(Val::Bool(true)),
-        Some(Val::String("é\n\0\\\"".into())),
-        Some(Val::List(vec![Val::U8(0), Val::U8(255)])),
-        Some(Val::Record(vec![
-            ("missing".into(), Val::Option(None)),
-            ("value".into(), Val::U64(42)),
-        ])),
-        Some(Val::Result(Err(Some(Box::new(Val::String(
-            "failure".into(),
-        )))))),
+        (None, 0),
+        (Some(Val::Bool(true)), 1),
+        (Some(Val::Option(None)), 1),
+        (Some(Val::Tuple(Vec::new())), 1),
+        (Some(Val::Flags(vec!["first".into(), "second".into()])), 3),
+        (Some(Val::Variant("empty".into(), None)), 1),
+        (
+            Some(Val::Variant("full".into(), Some(Box::new(Val::U32(7))))),
+            2,
+        ),
+        (Some(Val::Result(Ok(None))), 1),
+        (Some(Val::String("é\n\0\\\"".into())), 1),
+        (Some(Val::List(vec![Val::U8(0), Val::U8(255)])), 3),
+        (
+            Some(Val::Record(vec![
+                ("missing".into(), Val::Option(None)),
+                ("value".into(), Val::U64(42)),
+            ])),
+            3,
+        ),
+        (
+            Some(Val::Result(Err(Some(Box::new(Val::String(
+                "failure".into(),
+            )))))),
+            2,
+        ),
     ];
-    for value in values {
+    for (value, nodes) in values {
         let expected = value
             .as_ref()
             .map(Val::to_wave)
@@ -40,7 +55,8 @@ async fn result_encoding_obeys_exact_byte_budgets() -> Result<()> {
             } else {
                 value.clone().into_iter().collect()
             };
-            let cost = 200 + 10 * expected.len() as u64;
+            let structural = if fallback { 0 } else { nodes * 50 };
+            let cost = 200 + structural + 10 * expected.len() as u64;
             for budget in [0, 199, cost - 1, cost, cost + 9] {
                 let mut store = runtime.make_store(budget)?;
                 let result =
@@ -77,7 +93,7 @@ async fn init_projection_uses_the_same_output_budget_and_releases_its_resource()
         tx_index: 3,
     };
     let expected = stdlib::to_wave_expr(address.clone());
-    let cost = 200 + 10 * expected.len() as u64;
+    let cost = 200 + 4 * 50 + 10 * expected.len() as u64;
     for budget in [cost - 1, cost] {
         let mut store = runtime.make_store(budget)?;
         let handle = store.data().table.lock().await.push(Contract {
