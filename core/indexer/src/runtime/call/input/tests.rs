@@ -1,3 +1,6 @@
+use std::hint::black_box;
+use std::time::Instant;
+
 use anyhow::Result;
 use wasmtime::component::{
     Component, Type, Val, types::ComponentItem, wasm_wave::untyped::UntypedFuncCall,
@@ -223,5 +226,3 @@ async fn construction_overhead() -> Result<()> {
     }
     Ok(())
 }
-use std::hint::black_box;
-use std::time::Instant;
