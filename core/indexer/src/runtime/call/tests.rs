@@ -13,6 +13,8 @@ use crate::runtime::wit::kontor::built_in::context::HolderRef;
 use crate::runtime::{ContractAddress, Decimal, ExecutionError, Runtime, TransactionContext};
 use crate::test_utils::test_runtime;
 
+mod results;
+
 async fn funded(runtime: &mut Runtime) -> Result<Signer> {
     let signer = Signer::Id(
         runtime
@@ -242,7 +244,7 @@ async fn nested_outcomes_preserve_state_refunds_and_cleanup() -> Result<()> {
 }
 
 #[tokio::test]
-async fn unsigned_nested_views_do_not_charge_or_gain_write_authority() -> Result<()> {
+async fn unsigned_nested_views_do_not_charge_fees_or_gain_write_authority() -> Result<()> {
     let (mut runtime, _dir, _name) = test_runtime().await?;
     let actor = funded(&mut runtime).await?;
     let chain = call_chain(&mut runtime, &actor).await?;

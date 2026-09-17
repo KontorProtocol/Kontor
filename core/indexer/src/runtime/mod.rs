@@ -37,7 +37,6 @@ pub use stdlib::{
 use storage::{ComponentDecodeError, print_component_wit};
 pub use storage::{Storage, TransactionContext};
 use tokio::sync::Mutex;
-pub use types::default_val_for_type;
 
 use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, LazyLock};

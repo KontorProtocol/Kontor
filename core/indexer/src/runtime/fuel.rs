@@ -103,7 +103,8 @@ pub enum Fuel {
     NumbersMulDecimal,
     NumbersDivDecimal,
     NumbersLog10Decimal,
-    Result(u64),
+    Result,
+    ResultBytes(u64),
     // TODO: recalibrate with the rest of the Fuel table against measured
     // benchmarks. Currently sized to match other non-zk "non-trivial"
     // operations (Delete, ProofFromBytes base cost).
@@ -129,7 +130,8 @@ impl Fuel {
             Self::GetKeys => 200,
             Self::Exists => 50,
             Self::Set(value_len) => value_len.saturating_mul(10),
-            Self::Result(value_len) => 200 + 10 * value_len,
+            Self::Result => 200,
+            Self::ResultBytes(bytes) => bytes.saturating_mul(10),
             // Charge mutations and freed footprint bytes; tombstones omit values.
             Self::Delete(rows, bytes) => 200 * rows + 10 * bytes,
             Self::Deposit(fuel) => *fuel,

@@ -36,6 +36,16 @@ impl Guest for ErrorTest {
         42
     }
 
+    fn result_payload(_ctx: &ViewContext, count: u32) -> String {
+        "é\n".repeat(count as usize)
+    }
+
+    fn write_result_payload(ctx: &ProcContext, count: u32) -> String {
+        ctx.model().set_marker(1);
+        ctx.model().strings().set(&0, "pending".into());
+        "é\n".repeat(count as usize)
+    }
+
     fn contract_error(_ctx: &ViewContext) -> Result<u64, Error> {
         Err(Error::Message("deliberate error".into()))
     }

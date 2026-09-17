@@ -9,6 +9,8 @@ world root {
 
 	// Case 1: Normal success
 	export succeed: async func(ctx: borrow<view-context>) -> u64;
+	export result-payload: async func(ctx: borrow<view-context>, count: u32) -> string;
+	export write-result-payload: async func(ctx: borrow<proc-context>, count: u32) -> string;
 
 	// Case 1b: Contract returns an error
 	export contract-error: async func(ctx: borrow<view-context>) -> result<u64, error>;

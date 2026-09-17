@@ -20,13 +20,14 @@ use crate::database::types::Identity;
 
 use super::{
     ContractAddress, Runtime,
-    fuel::{Fuel, UsageKind, record_fuel},
+    fuel::{UsageKind, record_fuel},
     should_skip_result,
     stack::{CallFrame, Stack},
     token,
-    types::default_val_for_type,
-    wit::{Contract, CoreContext, FallContext, Holder, ProcContext, Signer, ViewContext},
+    wit::{CoreContext, FallContext, Holder, ProcContext, Signer, ViewContext},
 };
+
+mod result;
 
 #[cfg(test)]
 mod tests;
@@ -157,7 +158,7 @@ impl Runtime {
         }
 
         let execution = self
-            .call_guest(store, func, params, results, is_fallback, frame.is_proc)
+            .call_guest(store, func, params, results, is_fallback)
             .await;
         self.stack.pop().await;
         let succeeded = execution
@@ -403,10 +404,8 @@ impl Runtime {
             )));
         }
 
-        let results = component_func
-            .results()
-            .map(default_val_for_type)
-            .collect::<Vec<_>>();
+        // Wasmtime checks the slot count and replaces each placeholder on return.
+        let results = vec![Val::Bool(false); component_func.results().len()];
 
         if is_proc
             && is_top_level
@@ -487,7 +486,6 @@ impl Runtime {
         params: Vec<Val>,
         mut results: Vec<Val>,
         is_fallback: bool,
-        is_proc: bool,
     ) -> Result<(Result<String, ExecutionError>, Store<Runtime>)> {
         let (result, results, mut store) = tokio::spawn(async move {
             match std::panic::AssertUnwindSafe(func.call_async(&mut store, &params, &mut results))
@@ -510,15 +508,7 @@ impl Runtime {
         .await
         .map_err(|e| anyhow::anyhow!("tokio task failed: {e}"))?;
 
-        let mut result = Self::decode_result(is_fallback, result, results, &mut store).await;
-        // Result serialization is part of executing a procedure, so exhaustion
-        // must happen before committing its writes or returning fuel to a parent.
-        if is_proc
-            && let Ok(value) = &result
-            && let Err(error) = Fuel::Result(value.len() as u64).consume_with_store(&mut store)
-        {
-            result = Err(ExecutionError::Deterministic(error));
-        }
+        let result = Self::decode_result(is_fallback, result, results, &mut store).await;
         Ok((result, store))
     }
 
@@ -535,7 +525,7 @@ impl Runtime {
     async fn decode_result(
         is_fallback: bool,
         result: std::result::Result<std::result::Result<(), wasmtime::Error>, String>,
-        mut results: Vec<Val>,
+        results: Vec<Val>,
         store: &mut Store<Runtime>,
     ) -> Result<String, ExecutionError> {
         // Classify before converting. An error is deterministic if:
@@ -562,23 +552,8 @@ impl Runtime {
 
         let result = if let Err(e) = result {
             Err(e)
-        } else if results.is_empty() {
-            Ok("".to_string())
-        } else if results.len() != 1 {
-            Err(anyhow!(
-                "Functions with multiple return values are not supported"
-            ))
         } else {
-            let val = results.remove(0);
-            if is_fallback {
-                if let wasmtime::component::Val::String(return_expr) = val {
-                    Ok(return_expr)
-                } else {
-                    Err(anyhow!("fallback did not return a string"))
-                }
-            } else {
-                val_to_wave(val, store).await
-            }
+            result::encode(results, is_fallback, store).await
         };
 
         result.map_err(|e| {
@@ -703,38 +678,6 @@ impl Runtime {
             Ok::<_, anyhow::Error>(())
         })?;
         outcome.result.map_err(Into::into)
-    }
-}
-
-/// Serialize a contract function's return value to a WAVE string.
-///
-/// `wasm_wave::to_string` (via `val.to_wave()`) covers every record /
-/// variant / primitive shape, but maps `Val::Resource` to
-/// `WasmTypeKind::Unsupported` and panics in the writer. So before
-/// delegating, special-case resources that the host knows how to
-/// serialize against the resource table — currently just `Contract`,
-/// which drains to its underlying `contract-address` record so the SDK
-/// reads back the new address from a publish's result row the same way
-/// any Call op surfaces its return.
-///
-/// Other resource types remain a deterministic error: a contract can't
-/// return a `holder` / `signer` / `view-context` etc. across the
-/// result-row boundary without an explicit serialization, and silently
-/// trapping on the wasm-wave panic would mask the failure. Add new
-/// types to this branch as they become legitimately returnable.
-async fn val_to_wave(val: Val, store: &mut Store<Runtime>) -> Result<String> {
-    match val {
-        Val::Resource(resource_any) => {
-            let handle: Resource<Contract> = resource_any
-                .try_into_resource::<Contract>(&mut *store)
-                .map_err(|e| {
-                    anyhow!("function returned a resource that is not a `contract`: {e}")
-                })?;
-            let mut table = store.data().table.lock().await;
-            let contract = table.delete(handle)?;
-            Ok(stdlib::to_wave_expr(contract.address))
-        }
-        other => other.to_wave().map_err(Into::into),
     }
 }
 
