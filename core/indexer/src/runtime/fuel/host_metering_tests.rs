@@ -34,6 +34,7 @@ use crate::test_utils::{new_mock_block_hash, test_runtime};
 const BUDGET: u64 = 1_000_000;
 
 mod history_benchmarks;
+mod holder;
 
 async fn host<R>(
     store: &mut Store<Runtime>,
