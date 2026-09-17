@@ -77,7 +77,8 @@ async fn nested_execution_charges_child_results_once() -> Result<()> {
             if func == "add-stake" {
                 root_gas = gas;
             } else if func != "release" {
-                child_result_fuel += Fuel::Result(value.as_ref().unwrap().len() as u64).cost();
+                child_result_fuel += Fuel::Result.cost()
+                    + Fuel::ResultBytes(value.as_ref().unwrap().len() as u64).cost();
             }
             results.push((func, gas, value));
         }
