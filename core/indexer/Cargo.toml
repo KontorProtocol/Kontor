@@ -94,6 +94,7 @@ prost = { workspace = true }
 sha3 = { workspace = true }
 
 [dev-dependencies]
+wasmtime = { workspace = true, features = ["call-hook"] }
 testlib = { path = "../testlib" }
 dtor = "=1.0.5"
 
