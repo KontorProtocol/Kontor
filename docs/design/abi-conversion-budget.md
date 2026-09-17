@@ -1,7 +1,7 @@
 # ABI conversion budget investigation
 
 2026-09-17, based on main `533854b0` (PR #577), Wasmtime 48.0.2.
-This is an experiment, not an enabled protocol policy. Result encoding already
+The dynamic allocation policy is experimental. Result encoding already
 has the [bounded WAVE writer](contract-result-budget.md); this investigation
 covers the earlier conversion between guest memory and owned host values.
 
@@ -19,10 +19,11 @@ it resets for each conversion, does not debit instruction fuel, and does not
 expose consumption. Dividing remaining fuel by the existing output-byte price
 rejects some otherwise affordable ordinary calls.
 
-The next implementation prerequisite is a typed way to recognize conversion
-limit failures without treating real host failures as contract failures. Then
-define stable logical conversion units and their accounting. Do not price native
-Rust allocation sizes as consensus work or match Wasmtime error strings.
+The compatibility adapter now recognizes the covered conversion failures without
+treating real host failures as contract failures. It uses public error types and
+three exact messages, protected by real-engine regression tests. The next step
+is to define stable logical conversion units and their accounting. Do not price
+native Rust allocation sizes as consensus work.
 
 ## Integration experiment
 
@@ -43,8 +44,9 @@ Tests in `runtime/call/tests/conversion.rs` establish:
 - A procedure that writes a marker and map entry before returning an oversized
   result rolls both back. The call stack clears, the invocation's resource table
   is released, and a subsequent call succeeds.
-- The rejected conversion currently returns `ExecutionError::NonDeterministic`.
-  These are characterization tests of a known gap, not the desired behavior.
+- The initial experiment returned `ExecutionError::NonDeterministic` for rejected
+  conversions. The adapter now returns deterministic failures, and the tests
+  assert that behavior through direct and nested calls.
 - With ample fuel, observing or updating the allowance leaves execution fuel
   totals unchanged across direct calls and both proxy depths.
 - A separate WAT component calls an async host import twice. The host actually
@@ -65,24 +67,26 @@ simply reusing the WAVE byte rate for the guard.
 ## Error boundary
 
 Wasmtime's allocation error is the private `HostcallFuelExhausted`, not a public
-`Trap`. Kontor currently recognizes typed traps and explicitly deterministic
-`ExecutionError`s. The limit therefore enters the infrastructure-error path.
+`Trap`. The original classifier recognized only typed traps and explicitly
+deterministic `ExecutionError`s, so the limit entered the infrastructure-error
+path. The adapter now recognizes its exact root-cause message.
 
 Wasmtime 48.0.2 has its own error wrapper. Kontor's `bindgen! { anyhow: true }`
 host wrappers call `ToWasmtimeResult`, which wraps host errors using
 `Error::from_anyhow`. This preserves typed downcasts and offers a host-origin
-marker through `is::<anyhow::Error>()`. It may avoid adding another wrapper to
-every host implementation, but it is not a complete deterministic classifier:
+marker through `is::<anyhow::Error>()`. The adapter uses that marker instead of
+adding another wrapper to every host implementation. It is not sufficient alone:
 native Wasmtime failures include actual host allocation failures too, and
 nested calls can wrap engine errors as host errors. Absence of the anyhow marker
 does not prove a guest fault.
 
-Prefer a public typed conversion-error API in Wasmtime, starting with allocation
-allowance exhaustion. Check malformed UTF-8 and invalid pointer failures at the
-same boundary. Any proposal must keep real host allocation failures, DB errors,
-and panics on the infrastructure path and preserve classification through
-parent calls. The current integration tests do not cover malformed return
-values; earlier standalone probes identified that adjacent gap.
+A public typed conversion-error API would remove the need for message matching,
+but a dependency patch is not required. The adapter's regressions exercise real
+sync/async conversion failures, including malformed UTF-8/UTF-16 and invalid
+string pointers. Generated host errors with identical messages or decoder types
+remain infrastructure failures, as do actual host allocation failure types,
+unknown engine errors, and panics. Unrecognized conversion errors retain the
+existing infrastructure fallback; this is not an exhaustive ABI-error audit.
 
 Pinned source references:
 
@@ -114,19 +118,21 @@ This is a feasibility comparison, not calibration or a cross-platform guarantee.
 
 ## Follow-through
 
-1. Resolve the typed-error boundary, with an upstream API proposal or a narrowly
-   scoped dependency change if necessary. Add malformed-result regressions and
-   preserve nested rollback and infrastructure classification.
-2. Specify logical conversion work (such as payload bytes and visited values)
+The covered error-classification work is implemented by the compatibility
+adapter. Remaining work:
+
+1. Specify logical conversion work (such as payload bytes and visited values)
    independently of host layouts. Establish what existing host tariffs already
    cover and how repeated conversion pays, including records with omitted fields.
    A refreshed guard alone does not charge repeated work.
-3. Verify a pre-conversion guard against that policy, test exact boundaries and
+2. Verify a pre-conversion guard against that policy, test exact boundaries and
    partial failures, then measure feature-enable overhead and platform parity.
    Only then enable it in production and calibrate prices.
 
-Validation: 162 runtime tests passed, 12 manual tests ignored; the manual
-`abi_hook_overhead` benchmark also passed. Production behavior is unchanged.
+The initial experiment passed 162 runtime tests and the manual
+`abi_hook_overhead` benchmark. The final adapter passed 166 runtime tests, with
+12 manual tests ignored. Allocation limits and fuel prices remain unchanged;
+the covered failures now receive deterministic classification.
 Reproduce from `core/`:
 
 ```sh
