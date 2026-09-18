@@ -22,6 +22,18 @@ use super::{
 };
 use built_in::context::HolderRef;
 
+fn descriptor_bytes(file: &RawFileDescriptor) -> u64 {
+    [
+        file.file_id.len(),
+        file.object_id.len(),
+        file.nonce.len(),
+        file.root.len(),
+        file.filename.len(),
+    ]
+    .into_iter()
+    .fold(0_u64, |bytes, len| bytes.saturating_add(len as u64))
+}
+
 /// Pack frontier peaks into the flat byte blob the contract persists: each peak's
 /// canonical 32-byte field repr, concatenated low-height-first.
 fn encode_peaks(peaks: &[FieldElement]) -> Vec<u8> {
@@ -58,6 +70,9 @@ impl Runtime {
         files: Vec<(Vec<u8>, u64, u64)>,
     ) -> Result<Result<Vec<u8>, Error>> {
         Fuel::AggregateRoot(files.len() as u64).consume(accessor)?;
+        for (root, _, _) in &files {
+            Fuel::FileMetadata(root.len() as u64).consume(accessor)?;
+        }
 
         // Reduce each (root, padded_len, ledger_index) to (root_field, depth, slot).
         // `root` must be a valid field element (this doubles as validation).
@@ -97,6 +112,10 @@ impl Runtime {
         new_files: Vec<(Vec<u8>, u64, u64)>,
     ) -> Result<Result<(u64, Vec<u8>, Vec<u8>), Error>> {
         Fuel::FrontierAppend(new_files.len() as u64).consume(accessor)?;
+        Fuel::FileMetadata(peaks.len() as u64).consume(accessor)?;
+        for (root, _, _) in &new_files {
+            Fuel::FileMetadata(root.len() as u64).consume(accessor)?;
+        }
 
         // Persisted peaks are concatenated 32-byte canonical field reprs, one per set
         // bit of `count`. `from_parts` re-checks that structural invariant.
@@ -147,6 +166,8 @@ impl Runtime {
         prover_id: u64,
     ) -> Result<Result<String, Error>> {
         Fuel::ComputeChallengeId.consume(accessor)?;
+        Fuel::FileMetadata(descriptor_bytes(&file).saturating_add(seed.len() as u64))
+            .consume(accessor)?;
 
         let fd = match FileDescriptor::try_from_raw(file) {
             Ok(fd) => fd,
@@ -178,6 +199,24 @@ impl Runtime {
         files: Vec<(String, Vec<u8>, u64, u64)>,
     ) -> Result<Result<VerifyResult, Error>> {
         Fuel::ProofVerify.consume(accessor)?;
+
+        // Lifting copied all arguments, including entries after an invalid one.
+        // Charge them before validation can return early or clone descriptors.
+        for input in &challenge_inputs {
+            Fuel::FileMetadata(
+                descriptor_bytes(&input.file)
+                    .saturating_add(input.seed.len() as u64)
+                    .saturating_add(input.challenge_id.len() as u64),
+            )
+            .consume(accessor)?;
+        }
+        for root in &valid_roots {
+            Fuel::FileMetadata(root.len() as u64).consume(accessor)?;
+        }
+        for (file_id, root, _, _) in &files {
+            Fuel::FileMetadata((file_id.len() as u64).saturating_add(root.len() as u64))
+                .consume(accessor)?;
+        }
 
         let table = self.table.lock().await;
         let proof = table.get(&rep)?;

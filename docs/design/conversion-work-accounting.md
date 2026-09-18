@@ -53,7 +53,8 @@ not add token fee settlement to previously unsettled preparation failures.
 **Still outside this bound:** Wasmtime has already lifted an exported result before
 the WAVE preflight sees it. Its allocation allowance does not cover all records,
 tuples, or field names. No production allocation guard or new ABI decoder is added.
-The native import/name audit and preparation fee-settlement policy remain follow-ups.
+The follow-up [host metadata accounting](host-metadata-metering.md) covers contract
+names and native file/proof inputs. Preparation fee settlement remains separate.
 
 ## Validation and timings
 
@@ -208,9 +209,9 @@ host-to-guest copying is outside that limit. See the pinned
 | Numeric imports | Fixed-shape numeric values pay fixed tariffs; text parsing/formatting pays string bytes | Preserve fixed-shape treatment. A host-layout-dependent charge adds no useful information. |
 | Transaction data | Base plus bytes before cloning the shared payload | Already size-sensitive on the return side. |
 | Context and holder accessors | Mostly fixed-size IDs/resources or validated references with fixed tariffs | Include their conversion cost in base calibration; avoid per-field runtime walks of fixed schemas. |
-| Contract address | Fixed tariff, but the returned address contains a variable-length name | The fixed tariff is not a demonstrated bound on name copying. Include names in the follow-up audit. |
+| Contract address | Base tariff plus name bytes before copying; context resource creation also charges the fetched name | The DB driver has already read the name before the context-resource charge. |
 | `foreign.call` | Child shares remaining execution fuel and pays expression/construction/result tariffs | Parent ABI argument lifting still precedes the child charge. Include repeated calls, failed preparation, and fallback. |
-| Native file/proof imports | Mixture of per-file, per-proof-byte and fixed tariffs | Audit malformed root/seed/peaks inputs as well as valid fixed-size values. Some bytes are lifted before validation rejects them. These imports are restricted to native contracts. |
+| Native file/proof imports | Existing operation tariffs plus metadata entries/bytes, including malformed roots, seeds and peaks | Metadata is charged before validation but after ABI lifting. These imports are restricted to native contracts. |
 | Exported result lifting | Wasmtime allowance covers strings/lists but not all record/tuple/name construction | A byte guard alone cannot close this boundary. |
 | WAVE result writing | Bounded structural preflight, then base plus emitted UTF-8 bytes bounded before append | Absent record fields pay for visits even though they emit no bytes. |
 
@@ -299,8 +300,8 @@ from these local runs.
 
 1. Implemented: bound input construction and output traversal, including omitted
    fields and input schema names, using the standard WAVE parser/writer.
-2. Expression tariffs are implemented. Audit remaining contract-name and
-   native-only malformed input paths. Settle top-level preparation fees separately:
+2. Expression tariffs and host metadata/name charges are implemented.
+   Settle top-level preparation fees separately:
    preparation currently precedes escrow hold/settlement, while nested preparation
    already returns spent fuel to its parent.
 3. Establish a pre-conversion bound that covers the whole model, including records.

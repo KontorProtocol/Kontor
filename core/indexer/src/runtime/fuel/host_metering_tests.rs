@@ -35,6 +35,7 @@ const BUDGET: u64 = 1_000_000;
 
 mod history_benchmarks;
 mod holder;
+mod metadata;
 
 async fn host<R>(
     store: &mut Store<Runtime>,

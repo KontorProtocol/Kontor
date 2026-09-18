@@ -48,6 +48,7 @@ pub enum Fuel {
     /// amount from the runtime's gas→fuel rate (which `cost` can't see).
     Deposit(u64),
     ContractAddress,
+    ContractNameBytes(u64),
     ProcSigner,
     ProcPayer,
     ProcContract,
@@ -77,6 +78,8 @@ pub enum Fuel {
     ComputeChallengeId,
     ProofFromBytes(u64),
     ProofVerify,
+    /// One supplied native file/proof metadata entry and its variable bytes.
+    FileMetadata(u64),
     NumbersU64ToInteger,
     NumbersS64ToInteger,
     NumbersStringToInteger(u64),
@@ -142,6 +145,7 @@ impl Fuel {
             Self::Delete(rows, bytes) => 200 * rows + 10 * bytes,
             Self::Deposit(fuel) => *fuel,
             Self::ContractAddress => 100,
+            Self::ContractNameBytes(bytes) => bytes.saturating_mul(10),
             Self::ProcSigner | Self::ProcContractSigner | Self::ProcTransaction => 500,
             Self::ProcPayer | Self::ProcContract => 500,
             Self::ViewContract => 200,
@@ -173,6 +177,7 @@ impl Fuel {
             Self::ComputeChallengeId => 500,
             Self::ProofFromBytes(bytes_len) => 1000 + 10 * bytes_len,
             Self::ProofVerify => 50_000,
+            Self::FileMetadata(bytes) => 50_u64.saturating_add(bytes.saturating_mul(10)),
             Self::NumbersU64ToInteger
             | Self::NumbersS64ToInteger
             | Self::NumbersIntegerToDecimal

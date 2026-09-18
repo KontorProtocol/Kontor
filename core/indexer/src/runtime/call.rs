@@ -213,6 +213,9 @@ impl Runtime {
         Fuel::WaveInputBytes(expr.len() as u64)
             .consume_with_store(store)
             .map_err(ExecutionError::Deterministic)?;
+        Fuel::ContractNameBytes(contract_address.name.len() as u64)
+            .consume_with_store(store)
+            .map_err(ExecutionError::Deterministic)?;
         // Bound recursion before the WAVE parser can overflow the host stack.
         validate_expr(expr)?;
         let contract_id = self
