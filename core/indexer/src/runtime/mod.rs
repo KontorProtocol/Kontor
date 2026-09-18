@@ -22,6 +22,7 @@ mod types;
 pub mod wit;
 
 mod call;
+mod fees;
 mod host_context;
 mod host_files;
 mod host_numbers;
@@ -29,6 +30,7 @@ mod host_storage;
 mod host_system;
 
 use bitcoin::XOnlyPublicKey;
+use call::CallOutcome;
 pub use component_cache::ComponentCache;
 use libsql::Connection;
 use sha2::{Digest, Sha256};
@@ -40,8 +42,7 @@ use storage::{ComponentDecodeError, print_component_wit};
 pub use storage::{Storage, TransactionContext};
 use tokio::sync::Mutex;
 
-use std::collections::{HashMap, HashSet};
-use std::sync::{Arc, LazyLock};
+use std::sync::Arc;
 
 /// Distinguishes deterministic failures from non-deterministic failures
 /// in the contract execution path.
@@ -530,56 +531,89 @@ impl Runtime {
             }
         };
 
+        let fuel_limit = self.call_fuel_limit(Some(signer), Some(&payment), None)?;
+        let outcome = if signer.is_core() {
+            self.publish_unsettled(
+                signer, &payment, &address, author, bytes, provenance, fuel_limit,
+            )
+            .await?
+        } else {
+            self.with_payment(&payment, fuel_limit, async |runtime| {
+                runtime
+                    .publish_unsettled(
+                        signer, &payment, &address, author, bytes, provenance, fuel_limit,
+                    )
+                    .await
+            })
+            .await?
+        };
+        outcome.result
+    }
+
+    async fn publish_unsettled(
+        &mut self,
+        signer: &Signer,
+        payment: &Payment,
+        address: &ContractAddress,
+        author: u64,
+        bytes: &[u8],
+        provenance: &BuildProvenance,
+        fuel_limit: u64,
+    ) -> Result<CallOutcome, ExecutionError> {
         self.storage
             .savepoint()
             .await
             .map_err(ExecutionError::NonDeterministic)?;
-        let contract_id = self
-            .storage
-            .insert_contract(name, bytes)
-            .await
-            .map_err(ExecutionError::NonDeterministic)?;
-        // Seed the append-only provenance log inside the savepoint, so it rolls
-        // back with the contract if init fails.
-        let encoded = postcard::to_allocvec(provenance)
-            .map_err(|e| ExecutionError::NonDeterministic(e.into()))?;
-        self.storage
-            .insert_contract_provenance(contract_id, author, &encoded)
-            .await
-            .map_err(ExecutionError::NonDeterministic)?;
-        // Publish-time link validation: the contract must resolve all of its
-        // imports against the built-in surface it will run under. A user
-        // contract that imports a native-only interface (`file-registry` /
-        // `system`) is rejected here — deterministically, before `init`
-        // runs and before any state is committed. `instantiate_pre` is a pure
-        // function of (component, linker), identical on every node, so its
-        // failure is a Deterministic rejection (roll back and continue), never
-        // a node shutdown. The linker itself is the allowlist, so there is no
-        // separate interface list to keep in sync.
-        let result = match self.validate_publishable(contract_id).await {
-            Ok(()) => {
-                self.execute(Some(signer), Some(payment), &address, "init()")
-                    .await
-            }
-            Err(e) => Err(e),
-        };
-        if result.is_err() {
-            self.storage
-                .rollback()
+        let mut inserted_id = None;
+        let outcome = async {
+            let contract_id = self
+                .storage
+                .insert_contract(&address.name, bytes)
                 .await
                 .map_err(ExecutionError::NonDeterministic)?;
-            // The contract row is gone and SQLite may hand this id to a later
-            // publish with different bytes. Drop the component we compiled and
-            // cached during validation/init so `load_component` can't serve stale
-            // WASM for whatever contract reuses the id.
-            self.component_cache.invalidate(contract_id).await;
-            result
-        } else {
+            inserted_id = Some(contract_id);
+            let encoded = postcard::to_allocvec(provenance)
+                .map_err(|e| ExecutionError::NonDeterministic(e.into()))?;
+            self.storage
+                .insert_contract_provenance(contract_id, author, &encoded)
+                .await
+                .map_err(ExecutionError::NonDeterministic)?;
+            if let Err(error) = self.validate_publishable(contract_id).await {
+                return Ok(CallOutcome {
+                    result: Err(error),
+                    remaining_fuel: fuel_limit,
+                });
+            }
+            self.invoke_unsettled(
+                address,
+                Some(signer),
+                Some(payment),
+                "init()",
+                fuel_limit,
+                false,
+            )
+            .await
+        }
+        .await;
+        if outcome.as_ref().is_ok_and(|outcome| outcome.result.is_ok()) {
             self.storage
                 .commit()
                 .await
                 .map_err(ExecutionError::NonDeterministic)?;
-            Ok(to_wave_expr(address.clone()))
+            outcome.map(|outcome| CallOutcome {
+                result: Ok(to_wave_expr(address.clone())),
+                ..outcome
+            })
+        } else {
+            self.storage
+                .rollback()
+                .await
+                .map_err(ExecutionError::NonDeterministic)?;
+            // Rollback may free the id for a different component on the next publish.
+            if let Some(contract_id) = inserted_id {
+                self.component_cache.invalidate(contract_id).await;
+            }
+            outcome
         }
     }
 
@@ -932,15 +966,6 @@ impl Runtime {
         }
         Ok(s)
     }
-}
-
-static SKIP_RESULT_RULES: LazyLock<HashMap<&str, HashSet<&str>>> =
-    LazyLock::new(|| [("token", ["hold"].into())].into());
-
-fn should_skip_result(contract_address: &ContractAddress, func_name: &str) -> bool {
-    SKIP_RESULT_RULES
-        .get(contract_address.name.as_str())
-        .is_some_and(|methods| methods.contains(&func_name))
 }
 
 impl HasData for Runtime {

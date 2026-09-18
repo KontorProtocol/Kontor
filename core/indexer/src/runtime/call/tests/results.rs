@@ -3,7 +3,7 @@ use indexer_types::Payment;
 use wasmtime::Trap;
 use wasmtime::component::{Resource, Val};
 
-use super::{balance, call_chain, funded};
+use super::{balance, call_chain, funded, funded_in_store};
 use crate::runtime::fuel::{FuelDiscriminants, FuelGauge};
 use crate::runtime::numerics::sub_decimal;
 use crate::runtime::token::api as token;
@@ -179,9 +179,8 @@ async fn paid_call(
     };
     let store = runtime.make_store(budget)?;
     let mut invocation = store.data().clone();
-    let (result, store) = invocation
-        .invoke_in_store(store, target, Some(actor), Some(&payment), expr, false)
-        .await?;
+    let (result, store) =
+        funded_in_store(&mut invocation, store, target, actor, Some(&payment), expr).await?;
     Ok((result, store.get_fuel()?))
 }
 

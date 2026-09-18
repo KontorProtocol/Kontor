@@ -15,15 +15,12 @@ use wasmtime::{
 
 use indexer_types::{OpStatus, Payment};
 
-use crate::database::native_contracts::is_native_contract_id;
-use crate::database::types::Identity;
+use crate::database::native_contracts::{TOKEN_CONTRACT_ID, is_native_contract_id};
 
 use super::{
     ContractAddress, Runtime,
     fuel::{Fuel, UsageKind, record_fuel},
-    should_skip_result,
-    stack::{CallFrame, Stack},
-    token,
+    stack::CallFrame,
     wit::{CoreContext, FallContext, Holder, ProcContext, Signer, ViewContext},
 };
 
@@ -46,13 +43,6 @@ fn payer_holder(signer: &Signer, payment: Option<&Payment>) -> Holder {
         .or_else(|| signer.signer_id())
         .unwrap_or(0);
     Holder::for_signer_id(signer_id)
-}
-
-/// The paying account as a `Signer::Id`. Gas hold/release move tokens on its
-/// behalf, wrapping it in a `Signer::Core` at the call site so the move is
-/// system-authorized rather than the payer acting for themselves.
-fn payer_signer(payment: &Payment) -> Signer {
-    Signer::Id(Identity::new(payment.signer_id))
 }
 
 struct PreparedCall {
@@ -79,9 +69,48 @@ impl Runtime {
         expr: &str,
         fuel_override: Option<u64>,
     ) -> Result<CallOutcome, ExecutionError> {
+        let fuel_limit = self.call_fuel_limit(signer, payment, fuel_override)?;
+        if fuel_override.is_none()
+            && signer.is_some_and(|signer| !signer.is_core())
+            && let Some(payment) = payment
+        {
+            let mut runtime = self.clone();
+            runtime
+                .with_payment(payment, fuel_limit, async |runtime| {
+                    runtime
+                        .invoke_unsettled(
+                            contract_address,
+                            signer,
+                            Some(payment),
+                            expr,
+                            fuel_limit,
+                            false,
+                        )
+                        .await
+                })
+                .await
+        } else {
+            self.invoke_unsettled(
+                contract_address,
+                signer,
+                payment,
+                expr,
+                fuel_limit,
+                fuel_override.is_some(),
+            )
+            .await
+        }
+    }
+
+    pub(super) fn call_fuel_limit(
+        &self,
+        signer: Option<&Signer>,
+        payment: Option<&Payment>,
+        fuel_override: Option<u64>,
+    ) -> Result<u64, ExecutionError> {
         // The fuel budget is decided ONCE here, from the signer, so it can't drift
         // across the per-context arms below.
-        let fuel_limit = match fuel_override {
+        Ok(match fuel_override {
             // Nested cross-contract call: inherit the remaining fuel the parent threaded.
             Some(f) => f,
             None => match (signer, payment) {
@@ -93,13 +122,29 @@ impl Runtime {
                 // See `SYSTEM_FUEL_CEILING`.
                 (Some(s), _) if s.is_core() => SYSTEM_FUEL_CEILING,
                 // User op: metered by the payer's committed gas limit.
-                (_, Some(p)) => p.gas_limit * self.gas_to_fuel_multiplier,
+                (_, Some(p)) => p
+                    .gas_limit
+                    .checked_mul(self.gas_to_fuel_multiplier)
+                    .ok_or_else(|| {
+                        ExecutionError::Deterministic(anyhow!("Gas limit exceeds the fuel range"))
+                    })?,
                 // Read-only `/view`: the operator-configurable view cap.
                 (_, None) => self.fuel_limit_for_view(),
             },
-        };
+        })
+    }
+
+    pub(super) async fn invoke_unsettled(
+        &self,
+        contract_address: &ContractAddress,
+        signer: Option<&Signer>,
+        payment: Option<&Payment>,
+        expr: &str,
+        fuel_limit: u64,
+        nested: bool,
+    ) -> Result<CallOutcome, ExecutionError> {
         let mut store = self.make_store(fuel_limit)?;
-        if fuel_override.is_none() {
+        if !nested {
             store.data_mut().usage_kind = match signer {
                 Some(signer) if !signer.is_core() => UsageKind::User,
                 _ => UsageKind::System,
@@ -107,14 +152,7 @@ impl Runtime {
         }
         let mut runtime = store.data().clone();
         let (result, mut store) = runtime
-            .invoke_in_store(
-                store,
-                contract_address,
-                signer,
-                payment,
-                expr,
-                fuel_override.is_some(),
-            )
+            .invoke_in_store(store, contract_address, signer, payment, expr, nested)
             .await?;
         record_fuel(&mut store)?;
         Ok(CallOutcome {
@@ -178,7 +216,9 @@ impl Runtime {
                 .map_err(|e| ExecutionError::NonDeterministic(e.context("rollback failed")))?;
         }
         let (mut result, store) = execution?;
-        if frame.is_proc {
+        if frame.is_proc
+            || (!nested && payment.is_some() && signer.is_some_and(|signer| !signer.is_core()))
+        {
             let gas = self
                 .gas_consumed(
                     starting_fuel,
@@ -186,13 +226,11 @@ impl Runtime {
                 )
                 .max(1);
             result = self
-                .settle_procedure(
-                    signer.expect("procedure requires a signer"),
+                .record_call(
+                    signer.expect("recorded call requires a signer"),
                     payment,
                     contract_id,
-                    contract_address,
                     &func_name,
-                    !nested,
                     gas,
                     result,
                 )
@@ -416,52 +454,8 @@ impl Runtime {
         // Wasmtime checks the slot count and replaces each placeholder on return.
         let results = vec![Val::Bool(false); component_func.results().len()];
 
-        if is_proc
-            && is_top_level
-            && let Some(signer) = signer
-            && !signer.is_core()
-        {
-            let payment = payment.expect("payment is required for top-level proc calls");
-            let payer = payer_signer(payment);
-            let hold_amount = self.pricing.gas_hold(payment.gas_limit)?;
-            tracing::info!(
-                node = %self.node_label,
-                %hold_amount,
-                signer = ?signer,
-                payer = ?payer,
-                "Gas hold"
-            );
-            Box::pin({
-                let mut runtime = self.clone();
-                async move {
-                    token::api::hold(&mut runtime, &Signer::Core(Box::new(payer)), hold_amount)
-                        .await
-                }
-            })
-            .await
-            .map_err(ExecutionError::NonDeterministic)?
-            .map_err(|e| {
-                ExecutionError::Deterministic(anyhow!(
-                    "Payer {:?} does not have enough token to cover gas limit: {}",
-                    payment.signer_id,
-                    e
-                ))
-            })?;
-            // Start this top-level op's deposit accumulator clean — after the
-            // hold's own ledger writes, before any of the op's storage writes.
-            // Gated to top-level so nested cross-contract calls don't reset it.
-            self.deposit.reset().await;
-        }
-
-        // The depositor stamped on this frame's storage writes = the op's payer,
-        // but ONLY when the op will actually floor-check at settle: a top-level op
-        // with a NON-core signer (the SAME gate `hold`/`settle` use). A core-signed
-        // op bypasses the floor check, so a depositor there would count toward a
-        // floor nobody enforces (the stamp gate and the settle gate must agree).
-        // `None` = no depositor. Nested frames INHERIT the op's payer from their
-        // parent, so a row written deep in a nested call still attributes to it.
-        // Because this rides the frame (not a shared atomic), the hold/settle
-        // sub-ops can't clobber it — they carry their own (`None`) and pop away.
+        // The outer paid-operation boundary owns the reservation. Nested writes
+        // inherit its payer; core fee transfers never own user collateral.
         let depositor = if is_top_level {
             match signer {
                 Some(s) if !s.is_core() => payment.map(|p| p.signer_id),
@@ -565,55 +559,18 @@ impl Runtime {
         })
     }
 
-    async fn settle_procedure(
+    async fn record_call(
         &mut self,
         signer: &Signer,
         payment: Option<&Payment>,
         contract_id: u64,
-        contract_address: &ContractAddress,
         func_name: &str,
-        is_op_result: bool,
         gas: u64,
         result: Result<String, ExecutionError>,
     ) -> Result<String, ExecutionError> {
-        // A top-level non-core op pays its gas here: burn the execution slice and
-        // refund the rest of the escrow (incl. the RETURNED storage-deposit
-        // reservation) to the payer. The storage-deposit FLOOR is enforced up front
-        // on every token debit (`token::transfer`/`hold`/`burn` reject a debit that
-        // would leave the balance below `footprint x D`), so there is no settle-time
-        // floor check and no op-revert to coordinate — the invocation already
-        // committed/rolled back this op's savepoint.
-        if is_op_result && !signer.is_core() {
-            let payment = payment.expect("payment required for op-result release");
-            let payer = payer_signer(payment);
-            // The deposit gas reserved this op is RETURNED, not burned (it only
-            // capped growth); burn = the execution slice = gas - charge.
-            let charge_gas = self.deposit.take().await;
-            let burn_amount = self.pricing.execution_fee(gas.saturating_sub(charge_gas))?;
-            tracing::info!(
-                node = %self.node_label,
-                gas,
-                charge_gas,
-                %burn_amount,
-                call_succeeded = result.is_ok(),
-                contract = %contract_address,
-                func = func_name,
-                payer = ?payer,
-                "Gas release"
-            );
-            Box::pin({
-                let mut runtime = self.clone();
-                runtime.stack = Stack::new();
-                async move {
-                    token::api::release(&mut runtime, &Signer::Core(Box::new(payer)), burn_amount)
-                        .await
-                }
-            })
-            .await
-            .map_err(ExecutionError::NonDeterministic)?
-            .map_err(|e| ExecutionError::NonDeterministic(anyhow::anyhow!("{e:?}")))?;
-        }
-        if should_skip_result(contract_address, func_name) {
+        // The highest result index is the API/SDK's canonical operation result.
+        // Internal fee transfers must never masquerade as that outcome.
+        if contract_id == TOKEN_CONTRACT_ID && matches!(func_name, "hold" | "release") {
             return result;
         }
         let value = result.as_ref().map(|v| v.clone()).ok();

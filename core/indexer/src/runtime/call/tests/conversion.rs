@@ -7,7 +7,7 @@ use indexer_types::Payment;
 use wasmtime::component::{Component, Linker, Val};
 use wasmtime::{AsContextMut, CallHook, Error as WasmtimeError, Trap};
 
-use super::{call_chain, funded};
+use super::{call_chain, funded, funded_in_store};
 use crate::runtime::conversion_probe::{Policy, Probe};
 use crate::runtime::wit::Signer;
 use crate::runtime::{ContractAddress, ExecutionError, Runtime};
@@ -85,9 +85,8 @@ async fn call(
     };
     let mut invocation = store.data().clone();
     let table = Arc::downgrade(&store.data().table);
-    let (result, store) = invocation
-        .invoke_in_store(store, target, Some(signer), Some(&payment), expr, false)
-        .await?;
+    let (result, store) =
+        funded_in_store(&mut invocation, store, target, signer, Some(&payment), expr).await?;
     let fuel = store.get_fuel()?;
     drop(store);
     drop(invocation);
