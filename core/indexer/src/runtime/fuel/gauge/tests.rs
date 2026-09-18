@@ -4,7 +4,7 @@ use indexer_types::{BlockRow, Input, Inst, InstKind, Insts, Payment, Transaction
 use libsql::params;
 use wasmtime::Trap;
 
-use super::{ExecutionUsage, FuelGauge, UsageKind, record_fuel};
+use super::{FuelGauge, UsageKind, record_fuel};
 use crate::bitcoin_client::Client;
 use crate::database::queries::{
     confirm_transaction, get_checkpoint_by_height, get_transaction_by_txid,
@@ -76,7 +76,7 @@ async fn nested_execution_charges_child_results_once() -> Result<()> {
             let value: Option<String> = row.get(2)?;
             if func == "add-stake" {
                 root_gas = gas;
-            } else if func != "release" {
+            } else {
                 child_result_fuel += Fuel::Result.cost()
                     + Fuel::ResultBytes(value.as_ref().unwrap().len() as u64).cost();
             }
@@ -140,7 +140,7 @@ async fn preparation_failures_and_rejected_charges_report_consumed_work() -> Res
         );
         let usage = runtime.finish_usage(previous)?;
         assert_eq!(usage.user_fuel > 0, has_work);
-        assert_eq!(usage.system_fuel, 0);
+        assert!(usage.system_fuel > 0);
         assert_eq!(usage.deposit_fuel, 0);
     }
     let previous = runtime.start_usage();
@@ -155,13 +155,13 @@ async fn preparation_failures_and_rejected_charges_report_consumed_work() -> Res
             .await
             .is_err()
     );
+    let usage = runtime.finish_usage(previous)?;
     assert_eq!(
-        runtime.finish_usage(previous)?,
-        ExecutionUsage {
-            user_fuel: Fuel::WaveInputBytes(6).cost() + Fuel::ContractNameBytes(6).cost(),
-            ..ExecutionUsage::default()
-        }
+        usage.user_fuel,
+        Fuel::WaveInputBytes(6).cost() + Fuel::ContractNameBytes(6).cost()
     );
+    assert!(usage.system_fuel > 0);
+    assert_eq!(usage.deposit_fuel, 0);
 
     let unpaid = Signer::Id(
         runtime
@@ -175,7 +175,8 @@ async fn preparation_failures_and_rejected_charges_report_consumed_work() -> Res
             .is_err()
     );
     let usage = runtime.finish_usage(previous)?;
-    assert!(usage.user_fuel > 0 && usage.system_fuel > 0);
+    assert_eq!(usage.user_fuel, 0);
+    assert!(usage.system_fuel > 0);
     assert_eq!(usage.deposit_fuel, 0);
 
     let previous = runtime.start_usage();
@@ -298,7 +299,10 @@ async fn publishing_traps_and_reverted_deposits_are_measured() -> Result<()> {
             .await
             .is_err()
     );
-    assert_eq!(runtime.finish_usage(previous)?, ExecutionUsage::default());
+    let usage = runtime.finish_usage(previous)?;
+    assert_eq!(usage.user_fuel, 0);
+    assert!(usage.system_fuel > 0);
+    assert_eq!(usage.deposit_fuel, 0);
     Ok(())
 }
 

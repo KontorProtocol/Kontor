@@ -1,14 +1,7 @@
 //! Tests for `OpStatus` classification on persisted result rows. Submits ops
-//! via simulate (which executes through the same `handle_procedure` path as
-//! canonical execution but rolls back at the end), then asserts the
+//! via simulate (which uses canonical execution but rolls back at the end),
+//! then asserts the
 //! per-op `result.status` matches the expected category.
-//!
-//! Only proc-context functions produce contract_results rows (view-context
-//! calls bypass `handle_procedure`). The error-test contract's
-//! `contract-error` function is view-context, so there's no direct test for
-//! the `ContractErr` status here — that's exercised indirectly when any
-//! proc-context call returns `result<_, error>::Err`, which classifier
-//! catches via the `"err("` prefix.
 
 use indexer_types::{Inst, InstKind, OpStatus, TransactionHex};
 use testlib::*;
@@ -43,9 +36,6 @@ async fn simulate_call(
         .await
 }
 
-/// A normal successful proc-context call lands with `status: Ok`. Use
-/// crypto's `set-hash` (proc-context, returns a value, succeeds) because
-/// error-test's `succeed` is view-context and bypasses handle_procedure.
 #[testlib::test(contracts_dir = "../../test-contracts", regtest_only)]
 async fn status_classification_ok() -> Result<()> {
     let alice = runtime.identity().await?;
@@ -63,6 +53,32 @@ async fn status_classification_ok() -> Result<()> {
         results[0].error_message().is_none(),
         "successful call has no error_message"
     );
+    Ok(())
+}
+
+#[testlib::test(contracts_dir = "../../test-contracts", regtest_only)]
+async fn status_classification_paid_views() -> Result<()> {
+    let alice = runtime.identity().await?;
+    let contract = runtime.publish(&alice, "error-test").await?;
+    let mut rt = runtime.reg_tester().unwrap();
+    let mut ident = rt.identity().await?;
+    for (expr, func, status) in [
+        ("succeed()", "succeed", OpStatus::Ok),
+        ("contract-error()", "contract-error", OpStatus::ContractErr),
+    ] {
+        let results = simulate_call(&mut rt, &mut ident, contract.clone(), expr).await?;
+        assert_eq!(results.len(), 1);
+        let row = results[0].result().expect("paid view outcome");
+        // Fee settlement happens later, but must not replace the user's result.
+        assert_eq!(row.func, func);
+        assert_eq!(row.status, status);
+        assert!(row.gas > 0);
+        if status == OpStatus::Ok {
+            assert_eq!(row.value.as_deref(), Some("42"));
+        } else {
+            assert!(row.value.as_ref().unwrap().starts_with("err("));
+        }
+    }
     Ok(())
 }
 

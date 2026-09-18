@@ -50,11 +50,24 @@ async fn slash_burns_shared_bond_and_preserves_each_validator_status_aggregate()
         );
         let supply = token::total_supply(&mut runtime).await?;
         let balance = escrow(&mut runtime).await?;
+        let previous = runtime.start_usage();
         assert!(
             api::slash(&mut runtime, &signer, id, Decimal::from("3"))
                 .await
                 .is_err()
         );
+        let usage = runtime.finish_usage(previous)?;
+        let after_rejection = token::total_supply(&mut runtime).await?;
+        assert_eq!(
+            sub_decimal(supply, after_rejection)?,
+            runtime.pricing.execution_fee(
+                usage
+                    .user_fuel
+                    .div_ceil(runtime.gas_to_fuel_multiplier)
+                    .max(1)
+            )?
+        );
+        let supply = after_rejection;
         assert_eq!(
             api::slash(&mut runtime, &core, id, Decimal::from("-1")).await?,
             Err(Error::Message("negative penalty".into()))

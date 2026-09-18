@@ -291,11 +291,24 @@ async fn partial_shortfall_retains_service_and_settlement_preserves_a_new_challe
     let new = fixture.challenge(&mut runtime, 0, 2016).await?;
     let reserved = api::get_node_reservation(&mut runtime, *id).await?;
     let supply = token::total_supply(&mut runtime).await?;
+    let previous = runtime.start_usage();
     assert!(
         api::settle_expired_challenges(&mut runtime, signer)
             .await
             .is_err()
     );
+    let usage = runtime.finish_usage(previous)?;
+    let after_rejection = token::total_supply(&mut runtime).await?;
+    assert_eq!(
+        sub_decimal(supply, after_rejection)?,
+        runtime.pricing.execution_fee(
+            usage
+                .user_fuel
+                .div_ceil(runtime.gas_to_fuel_multiplier)
+                .max(1)
+        )?
+    );
+    let supply = after_rejection;
     at_height(&mut runtime, 2016).await?;
     runtime.storage.savepoint().await?;
     assert_eq!(

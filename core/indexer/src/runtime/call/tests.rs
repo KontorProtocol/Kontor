@@ -3,6 +3,9 @@ use std::sync::Arc;
 use anyhow::Result;
 use indexer_types::Payment;
 use libsql::params;
+use wasmtime::Store;
+
+use super::CallOutcome;
 
 use crate::reg_tester::random_x_only_pubkey;
 use crate::runtime::fuel::UsageKind;
@@ -17,6 +20,7 @@ mod abi_errors;
 mod conversion;
 mod conversion_work;
 mod errors;
+mod preparation_fees;
 mod results;
 mod wave_costs;
 
@@ -103,19 +107,19 @@ async fn nested_outcomes_preserve_state_refunds_and_cleanup() -> Result<()> {
     let chain = call_chain(&mut runtime, &actor).await?;
     let conn = runtime.get_storage_conn();
     let cases = [
-        ("succeed()", true, Expected::Value("42")),
-        ("primitive-entries()", false, Expected::Value("")),
-        ("contract-error()", true, Expected::ContractError),
-        ("trap-panic()", false, Expected::Deterministic),
-        ("trap-out-of-fuel()", false, Expected::Deterministic),
-        ("scan-compound(false)", false, Expected::Deterministic),
+        ("succeed()", Expected::Value("42")),
+        ("primitive-entries()", Expected::Value("")),
+        ("contract-error()", Expected::ContractError),
+        ("trap-panic()", Expected::Deterministic),
+        ("trap-out-of-fuel()", Expected::Deterministic),
+        ("scan-compound(false)", Expected::Deterministic),
         #[cfg(feature = "testing")]
-        ("host-error()", false, Expected::Infrastructure),
+        ("host-error()", Expected::Infrastructure),
         #[cfg(feature = "testing")]
-        ("host-panic()", false, Expected::Infrastructure),
+        ("host-panic()", Expected::Infrastructure),
     ];
     for (depth, target) in chain.iter().enumerate() {
-        for (expr, leaf_is_view, expected) in &cases {
+        for (expr, expected) in &cases {
             // Each case starts from the same state. The outer savepoint models
             // the transaction boundary that discards infrastructure failures.
             runtime.storage.savepoint().await?;
@@ -198,36 +202,29 @@ async fn nested_outcomes_preserve_state_refunds_and_cleanup() -> Result<()> {
                 "SELECT gas, signer_id, payer_signer_id, value, status FROM contract_results WHERE contract_id = ? ORDER BY id",
                 params![contract_id],
             ).await?;
-                if depth == 0 && *leaf_is_view {
-                    assert!(rows.next().await?.is_none());
-                    assert_eq!(paid, Decimal::default());
-                } else {
-                    let row = rows.next().await?.expect("outer procedure result");
-                    assert_eq!(row.get::<u64>(1)?, actor.signer_id().unwrap());
-                    assert_eq!(row.get::<u64>(2)?, payer.signer_id().unwrap());
-                    assert_eq!(row.get::<Option<String>>(3)?, result.as_ref().ok().cloned());
-                    if result.is_ok() {
-                        assert_eq!(
-                            row.get::<String>(4)?,
-                            if matches!(expected, Expected::ContractError) {
-                                "ContractErr"
-                            } else {
-                                "Ok"
-                            }
-                        );
-                    }
-                    // This checks settlement consistency, not the known missing
-                    // child-fuel bug: the red regression tests cover exact usage.
-                    let gas: u64 = row.get(0)?;
-                    let reserved = usage.deposit_fuel / runtime.gas_to_fuel_multiplier;
-                    assert!(gas >= reserved);
+                let row = rows.next().await?.expect("outer call result");
+                assert_eq!(row.get::<u64>(1)?, actor.signer_id().unwrap());
+                assert_eq!(row.get::<u64>(2)?, payer.signer_id().unwrap());
+                assert_eq!(row.get::<Option<String>>(3)?, result.as_ref().ok().cloned());
+                if result.is_ok() {
                     assert_eq!(
-                        paid,
-                        runtime.pricing.execution_fee(gas - reserved)?,
-                        "refund reservations even on rollback: depth={depth} {expr}"
+                        row.get::<String>(4)?,
+                        if matches!(expected, Expected::ContractError) {
+                            "ContractErr"
+                        } else {
+                            "Ok"
+                        }
                     );
-                    assert!(rows.next().await?.is_none(), "duplicate outer result");
                 }
+                let gas: u64 = row.get(0)?;
+                let reserved = usage.deposit_fuel / runtime.gas_to_fuel_multiplier;
+                assert!(gas >= reserved);
+                assert_eq!(
+                    paid,
+                    runtime.pricing.execution_fee(gas - reserved)?,
+                    "refund reservations even on rollback: depth={depth} {expr}"
+                );
+                assert!(rows.next().await?.is_none(), "duplicate outer result");
             }
             runtime.storage.rollback().await?;
             assert_eq!(
@@ -469,9 +466,8 @@ async fn invocation_tables_drop_resources_without_invalidating_parent_handles() 
             let payload = Arc::new(());
             store.data().table.lock().await.push(payload.clone())?;
             let mut invocation = store.data().clone();
-            let (result, store) = invocation
-                .invoke_in_store(store, target, Some(&actor), payment, expr, false)
-                .await?;
+            let (result, store) =
+                funded_in_store(&mut invocation, store, target, &actor, payment, expr).await?;
             assert_eq!(result.is_ok(), succeeds, "{target}: {expr}: {result:?}");
             assert!(runtime.stack.is_empty().await);
             drop(invocation);
@@ -491,4 +487,47 @@ async fn invocation_tables_drop_resources_without_invalidating_parent_handles() 
     }
     runtime.table.lock().await.delete(parent_handle)?;
     Ok(())
+}
+
+// Retain a caller-supplied Store for exact-fuel and resource-lifetime assertions,
+// while exercising the same payment boundary as a normal top-level invocation.
+async fn funded_in_store(
+    runtime: &mut Runtime,
+    store: Store<Runtime>,
+    target: &ContractAddress,
+    signer: &Signer,
+    payment: Option<&Payment>,
+    expr: &str,
+) -> Result<(Result<String, ExecutionError>, Store<Runtime>), ExecutionError> {
+    if !signer.is_core()
+        && let Some(payment) = payment
+    {
+        let starting_fuel = store.get_fuel().map_err(anyhow::Error::from)?;
+        let mut slot = Some(store);
+        let outcome = runtime
+            .with_payment(payment, starting_fuel, async |runtime| {
+                let (result, store) = runtime
+                    .invoke_in_store(
+                        slot.take().unwrap(),
+                        target,
+                        Some(signer),
+                        Some(payment),
+                        expr,
+                        false,
+                    )
+                    .await?;
+                let remaining_fuel = store.get_fuel().map_err(anyhow::Error::from)?;
+                slot = Some(store);
+                Ok(CallOutcome {
+                    result,
+                    remaining_fuel,
+                })
+            })
+            .await?;
+        Ok((outcome.result, slot.unwrap()))
+    } else {
+        runtime
+            .invoke_in_store(store, target, Some(signer), payment, expr, false)
+            .await
+    }
 }
