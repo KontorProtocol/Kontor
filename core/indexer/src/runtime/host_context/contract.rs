@@ -24,6 +24,8 @@ impl<T> built_in::context::HostContractWithStore<T> for Runtime {
         let runtime = accessor.with(|mut access| access.get().clone());
         Fuel::ContractAddress.consume(accessor)?;
         let table = runtime.table.lock().await;
-        Ok(table.get(&self_)?.address.clone())
+        let address = &table.get(&self_)?.address;
+        Fuel::ContractNameBytes(address.name.len() as u64).consume(accessor)?;
+        Ok(address.clone())
     }
 }

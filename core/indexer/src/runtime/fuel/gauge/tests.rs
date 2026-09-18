@@ -158,7 +158,7 @@ async fn preparation_failures_and_rejected_charges_report_consumed_work() -> Res
     assert_eq!(
         runtime.finish_usage(previous)?,
         ExecutionUsage {
-            user_fuel: Fuel::WaveInputBytes(6).cost(),
+            user_fuel: Fuel::WaveInputBytes(6).cost() + Fuel::ContractNameBytes(6).cost(),
             ..ExecutionUsage::default()
         }
     );

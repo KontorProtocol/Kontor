@@ -90,6 +90,7 @@ impl Runtime {
             .contract_address(contract_id)
             .await?
             .ok_or_else(|| anyhow::anyhow!("contract_id {contract_id} has no address"))?;
+        Fuel::ContractNameBytes(address.name.len() as u64).consume(accessor)?;
         let mut table = self.table.lock().await;
         Ok(table.push(Contract { address })?)
     }
