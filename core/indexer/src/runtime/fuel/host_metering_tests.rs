@@ -694,7 +694,13 @@ async fn oversized_storage_read_is_a_contract_fuel_failure() -> Result<()> {
     assert!(runtime.stack.is_empty().await);
     runtime.gauge = None;
     let value = runtime
-        .invoke(&address, None, None, "get-blob()", Some(30 * BUDGET))
+        .invoke(
+            &address,
+            None,
+            None,
+            "get-blob()",
+            Some(runtime.fuel_limit_for_non_procs()),
+        )
         .await?
         .result?;
     assert_eq!(value.len(), 1_000_002);

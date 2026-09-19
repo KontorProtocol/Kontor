@@ -1,6 +1,7 @@
 use anyhow::{Result, anyhow};
 
 use super::ExecutionError;
+use super::result_encoder::PRIVATE_PREFIX;
 use futures_util::FutureExt;
 use futures_util::future::OptionFuture;
 use wasmtime::{
@@ -48,7 +49,7 @@ fn payer_holder(signer: &Signer, payment: Option<&Payment>) -> Holder {
 struct PreparedCall {
     contract_id: u64,
     func_name: String,
-    is_fallback: bool,
+    encoded: bool,
     params: Vec<Val>,
     results: Vec<Val>,
     func: Func,
@@ -183,7 +184,7 @@ impl Runtime {
         let PreparedCall {
             contract_id,
             func_name,
-            is_fallback,
+            encoded,
             params,
             results,
             func,
@@ -197,9 +198,7 @@ impl Runtime {
             return Err(error.into());
         }
 
-        let execution = self
-            .call_guest(store, func, params, results, is_fallback)
-            .await;
+        let execution = self.call_guest(store, func, params, results, encoded).await;
         self.stack.pop().await;
         let succeeded = execution
             .as_ref()
@@ -273,9 +272,9 @@ impl Runtime {
         // user contracts get the common-only linker, so importing a registry
         // interface fails to link.
         let linker = if is_native_contract_id(contract_id) {
-            &self.linkers.native
+            &self.linkers.encoded_native
         } else {
-            &self.linkers.user
+            &self.linkers.encoded_user
         };
         // Import resolution (`instantiate_pre`) is a pure function of the
         // component bytes and the linker — identical on every node — so a link
@@ -301,6 +300,11 @@ impl Runtime {
 
         let call =
             UntypedFuncCall::parse(expr).map_err(|e| ExecutionError::Deterministic(e.into()))?;
+        if call.name().starts_with(PRIVATE_PREFIX) {
+            return Err(ExecutionError::Deterministic(anyhow!(
+                "private execution export"
+            )));
+        }
         let (call, func) = if let Some(func) = instance.get_func(&mut store, call.name()) {
             (call, func)
         } else if let Some(func) = instance.get_func(&mut store, fallback_name) {
@@ -328,6 +332,15 @@ impl Runtime {
         };
 
         let func_name = call.name();
+        let func = if func_name == "init" {
+            func
+        } else {
+            instance
+                .get_func(&mut store, format!("{PRIVATE_PREFIX}{func_name}"))
+                .ok_or_else(|| {
+                    ExecutionError::NonDeterministic(anyhow!("prepared result entry is missing"))
+                })?
+        };
         let component_func = func.ty(&store);
         let mut func_param_types = component_func.params().map(|(_, t)| t);
         let func_ctx_param_type = func_param_types.next().ok_or_else(|| {
@@ -468,7 +481,7 @@ impl Runtime {
         Ok(PreparedCall {
             contract_id,
             func_name: func_name.to_string(),
-            is_fallback: func_name == fallback_name,
+            encoded: func_name != "init",
             params,
             results,
             func,
@@ -488,7 +501,7 @@ impl Runtime {
         func: Func,
         params: Vec<Val>,
         mut results: Vec<Val>,
-        is_fallback: bool,
+        encoded: bool,
     ) -> Result<(Result<String, ExecutionError>, Store<Runtime>)> {
         let (result, results, mut store) = tokio::spawn(async move {
             match std::panic::AssertUnwindSafe(func.call_async(&mut store, &params, &mut results))
@@ -511,7 +524,7 @@ impl Runtime {
         .await
         .map_err(|e| anyhow::anyhow!("tokio task failed: {e}"))?;
 
-        let result = Self::decode_result(is_fallback, result, results, &mut store).await;
+        let result = Self::decode_result(encoded, result, results, &mut store).await;
         Ok((result, store))
     }
 
@@ -526,7 +539,7 @@ impl Runtime {
     /// - WASM traps and recognized guest conversion failures → Contract
     /// - Unknown host/engine errors or host panics → Infrastructure
     async fn decode_result(
-        is_fallback: bool,
+        encoded: bool,
         result: std::result::Result<std::result::Result<(), wasmtime::Error>, String>,
         results: Vec<Val>,
         store: &mut Store<Runtime>,
@@ -546,8 +559,14 @@ impl Runtime {
 
         let result = if let Err(e) = result {
             Err(e)
+        } else if encoded {
+            // This final charge also forces settlement after Wasmtime's last
+            // basic block and post-return, whose fuel check may be deferred.
+            Fuel::Result
+                .consume_with_store(store)
+                .and_then(|_| store.data().encoded_result.take())
         } else {
-            result::encode(results, is_fallback, store).await
+            result::encode_init(results, store).await
         };
 
         result.map_err(|e| {

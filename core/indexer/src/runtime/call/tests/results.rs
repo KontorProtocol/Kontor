@@ -13,78 +13,6 @@ use crate::runtime::{ContractAddress, ExecutionError, Runtime};
 use crate::test_utils::test_runtime;
 
 #[tokio::test]
-async fn result_encoding_obeys_exact_byte_budgets() -> Result<()> {
-    let (runtime, _dir, _name) = test_runtime().await?;
-    let values = [
-        (None, 0),
-        (Some(Val::Bool(true)), 1),
-        (Some(Val::Option(None)), 1),
-        (Some(Val::Tuple(Vec::new())), 1),
-        (Some(Val::Flags(vec!["first".into(), "second".into()])), 3),
-        (Some(Val::Variant("empty".into(), None)), 1),
-        (
-            Some(Val::Variant("full".into(), Some(Box::new(Val::U32(7))))),
-            2,
-        ),
-        (Some(Val::Result(Ok(None))), 1),
-        (Some(Val::String("é\n\0\\\"".into())), 1),
-        (Some(Val::List(vec![Val::U8(0), Val::U8(255)])), 3),
-        (
-            Some(Val::Record(vec![
-                ("missing".into(), Val::Option(None)),
-                ("value".into(), Val::U64(42)),
-            ])),
-            3,
-        ),
-        (
-            Some(Val::Result(Err(Some(Box::new(Val::String(
-                "failure".into(),
-            )))))),
-            2,
-        ),
-    ];
-    for (value, nodes) in values {
-        let expected = value
-            .as_ref()
-            .map(Val::to_wave)
-            .transpose()?
-            .unwrap_or_default();
-        for fallback in [false, true] {
-            let results = if fallback {
-                vec![Val::String(expected.clone())]
-            } else {
-                value.clone().into_iter().collect()
-            };
-            let structural = if fallback { 0 } else { nodes * 50 };
-            let cost = 200 + structural + 10 * expected.len() as u64;
-            for budget in [0, 199, cost - 1, cost, cost + 9] {
-                let mut store = runtime.make_store(budget)?;
-                let result =
-                    Runtime::decode_result(fallback, Ok(Ok(())), results.clone(), &mut store).await;
-                if budget < cost {
-                    assert!(
-                        matches!(result, Err(ExecutionError::Deterministic(ref error)) if matches!(error.downcast_ref::<Trap>(), Some(Trap::OutOfFuel))),
-                        "budget {budget}, result {result:?}"
-                    );
-                    assert_eq!(
-                        store.get_fuel()?,
-                        if budget < 200 {
-                            budget
-                        } else {
-                            (budget - 200) % 10
-                        }
-                    );
-                } else {
-                    assert_eq!(result?, expected);
-                    assert_eq!(store.get_fuel()?, budget - cost);
-                }
-            }
-        }
-    }
-    Ok(())
-}
-
-#[tokio::test]
 async fn init_projection_uses_the_same_output_budget_and_releases_its_resource() -> Result<()> {
     let (runtime, _dir, _name) = test_runtime().await?;
     let address = ContractAddress {
@@ -147,11 +75,16 @@ async fn nested_views_charge_each_result_once_with_or_without_profiling() -> Res
                 remaining.push(outcome.remaining_fuel);
                 if let Some(gauge) = gauge {
                     let profile = gauge.report()?.profile.unwrap();
-                    let stats = &profile.per_type[&FuelDiscriminants::ResultBytes];
+                    assert!(
+                        !profile
+                            .per_type
+                            .contains_key(&FuelDiscriminants::InitResultBytes)
+                    );
+                    let stats = &profile.per_type[&FuelDiscriminants::ResultCopyBytes];
                     assert_eq!(stats.consumed_count, (depth + 1) as u64);
                     assert_eq!(
                         stats.consumed_fuel,
-                        (depth + 1) as u64 * 10 * expected.len() as u64
+                        (depth + 1) as u64 * expected.len() as u64
                     );
                     assert_eq!(
                         profile.per_type[&FuelDiscriminants::Result].consumed_fuel,
@@ -217,9 +150,13 @@ async fn result_exhaustion_rolls_back_direct_and_nested_writes() -> Result<()> {
                 .await?;
             if limit < used {
                 assert!(
-                    matches!(result, Err(ExecutionError::Deterministic(ref error)) if matches!(error.root_cause().downcast_ref::<Trap>(), Some(Trap::OutOfFuel)))
+                    matches!(result, Err(ExecutionError::Deterministic(ref error)) if matches!(error.root_cause().downcast_ref::<Trap>(), Some(Trap::OutOfFuel))),
+                    "limit={limit}, used={used}, result={result:?}"
                 );
-                assert!(remaining < 10);
+                assert_eq!(
+                    remaining, 199,
+                    "the final 200-fuel completion charge must fail atomically"
+                );
                 assert_eq!(state, "[0, 0, 0, 0]");
                 assert_eq!(
                     token::floor(&mut runtime, HolderRef::from(&actor)).await?,
@@ -249,5 +186,36 @@ async fn result_exhaustion_rolls_back_direct_and_nested_writes() -> Result<()> {
             runtime.storage.rollback().await?;
         }
     }
+    Ok(())
+}
+
+#[tokio::test]
+async fn output_copy_charge_precedes_host_allocation() -> Result<()> {
+    let (mut runtime, _dir, _name) = test_runtime().await?;
+    let actor = funded(&mut runtime).await?;
+    let chain = call_chain(&mut runtime, &actor).await?;
+    let target = &chain[0];
+    let budget = runtime.fuel_limit_for_non_procs();
+    let outcome = runtime
+        .invoke(target, None, None, "result-payload(128)", Some(budget))
+        .await?;
+    let bytes = outcome.result?.len() as u64;
+    let used = budget - outcome.remaining_fuel;
+    let gauge = FuelGauge::with_profiling();
+    runtime.gauge = Some(gauge.clone());
+    // Remove completion and the copy allowance. Traversal still finishes, but
+    // the host must reject delivery before allocating the result String.
+    let store = runtime.make_store(used - 200 - bytes)?;
+    let mut invocation = store.data().clone();
+    let (result, store) = invocation
+        .invoke_in_store(store, target, None, None, "result-payload(128)", false)
+        .await?;
+    assert!(matches!(result, Err(ExecutionError::Deterministic(_))));
+    assert!(store.data().encoded_result.is_empty());
+    let profile = gauge.report()?.profile.unwrap();
+    let copy = &profile.per_type[&FuelDiscriminants::ResultCopyBytes];
+    assert_eq!(copy.consumed_count, 0);
+    assert!(copy.rejected_count > 0);
+    assert!(runtime.stack.is_empty().await);
     Ok(())
 }

@@ -78,7 +78,7 @@ async fn nested_execution_charges_child_results_once() -> Result<()> {
                 root_gas = gas;
             } else {
                 child_result_fuel += Fuel::Result.cost()
-                    + Fuel::ResultBytes(value.as_ref().unwrap().len() as u64).cost();
+                    + Fuel::ResultCopyBytes(value.as_ref().unwrap().len() as u64).cost();
             }
             results.push((func, gas, value));
         }

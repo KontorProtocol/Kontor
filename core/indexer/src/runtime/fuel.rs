@@ -1,6 +1,6 @@
 use anyhow::Result;
 use strum::{EnumDiscriminants, EnumIter};
-use wasmtime::{AsContextMut, Store, Trap, component::Accessor};
+use wasmtime::{AsContextMut, Trap, component::Accessor};
 
 use crate::runtime::Runtime;
 
@@ -107,7 +107,8 @@ pub enum Fuel {
     NumbersDivDecimal,
     NumbersLog10Decimal,
     Result,
-    ResultBytes(u64),
+    InitResultBytes(u64),
+    ResultCopyBytes(u64),
     WaveInputBytes(u64),
     WaveValue,
     WaveTypeField(u64),
@@ -137,7 +138,8 @@ impl Fuel {
             Self::Exists => 50,
             Self::Set(value_len) => value_len.saturating_mul(10),
             Self::Result => 200,
-            Self::ResultBytes(bytes) => bytes.saturating_mul(10),
+            Self::ResultCopyBytes(bytes) => *bytes,
+            Self::InitResultBytes(bytes) => bytes.saturating_mul(10),
             Self::WaveInputBytes(bytes) => bytes.saturating_mul(10),
             Self::WaveValue => 50,
             Self::WaveTypeField(bytes) => 50_u64.saturating_add(bytes.saturating_mul(10)),
@@ -219,8 +221,9 @@ impl Fuel {
         })
     }
 
-    pub fn consume_with_store(&self, store: &mut Store<Runtime>) -> Result<u64> {
-        let result = self.subtract(&mut *store);
+    pub fn consume_with_store(&self, store: &mut impl AsContextMut<Data = Runtime>) -> Result<u64> {
+        let mut store = store.as_context_mut();
+        let result = self.subtract(&mut store);
         if let Some(gauge) = &store.data().gauge {
             gauge.track(self, result.is_ok())?;
         }

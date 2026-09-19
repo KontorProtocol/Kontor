@@ -2,6 +2,7 @@
 mod conversion_probe;
 #[cfg(test)]
 mod costs;
+mod result_encoder;
 extern crate alloc;
 
 mod component_cache;
@@ -33,6 +34,7 @@ use bitcoin::XOnlyPublicKey;
 use call::CallOutcome;
 pub use component_cache::ComponentCache;
 use libsql::Connection;
+use result_encoder::EncodedResult;
 use sha2::{Digest, Sha256};
 pub use stdlib::{
     CheckedArithmetics, FromWaveValue, WaveType, from_wave_expr, from_wave_value, to_wave_expr,
@@ -204,6 +206,8 @@ fn native_provenance() -> Result<BuildProvenance> {
 pub struct Linkers {
     pub user: Linker<Runtime>,
     pub native: Linker<Runtime>,
+    pub encoded_user: Linker<Runtime>,
+    pub encoded_native: Linker<Runtime>,
 }
 
 #[derive(Clone)]
@@ -221,6 +225,7 @@ pub struct Runtime {
     conversion_probe: Option<conversion_probe::Probe>,
     pub(crate) usage_kind: UsageKind,
     pub(crate) fuel_checkpoint: u64,
+    encoded_result: EncodedResult,
     /// Transient per-op accumulator of the storage-deposit GAS reserved this op
     /// (the returned-at-settle slice that bounds growth). Reset at the top-level op
     /// start, drained at the settle boundary to compute the execution burn
@@ -272,6 +277,7 @@ impl Runtime {
     pub fn new_engine() -> Result<Engine> {
         let mut config = wasmtime::Config::new();
         config.wasm_component_model_async(true);
+        config.wasm_multi_memory(true);
         config.consume_fuel(true);
         // CoW can skip metered initialization depending on OS/image availability.
         // Every node must copy the same data segments and charge the same fuel.
@@ -311,7 +317,17 @@ impl Runtime {
         let mut native = Linker::new(engine);
         Self::register_common(&mut native)?;
         Self::register_native(&mut native)?;
-        Ok(Arc::new(Linkers { user, native }))
+        let encoder = result_encoder::module(engine)?;
+        let mut encoded_user = user.clone();
+        let mut encoded_native = native.clone();
+        result_encoder::add_to_linker(&mut encoded_user, &encoder)?;
+        result_encoder::add_to_linker(&mut encoded_native, &encoder)?;
+        Ok(Arc::new(Linkers {
+            user,
+            native,
+            encoded_user,
+            encoded_native,
+        }))
     }
 
     pub async fn new(component_cache: ComponentCache, storage: Storage) -> Result<Self> {
@@ -342,6 +358,7 @@ impl Runtime {
             deposit: DepositMeter::new(),
             usage_kind: UsageKind::System,
             fuel_checkpoint: 0,
+            encoded_result: EncodedResult::default(),
             gas_limit_for_non_procs: 100_000,
             // The pool overrides this from node config on read-only runtimes; the
             // reactor's consensus runtime leaves it at the default (views never run
@@ -707,14 +724,6 @@ impl Runtime {
                 anyhow!(e).context("contract is not a valid wasm component"),
             )
         })?;
-        // Guarded for the same reason as the write in `component_bytes_and_compiled`,
-        // and this is the site that actually matters: a `Publish` inside a simulation
-        // reaches the cache HERE, under a `contracts.id` the rollback frees for reuse.
-        if !self.simulating {
-            self.component_cache
-                .put(contract_id, component.clone(), bytes.len())
-                .await;
-        }
         let linker = if is_native_contract_id(contract_id) {
             &self.linkers.native
         } else {
@@ -733,6 +742,25 @@ impl Runtime {
                 ExecutionError::Deterministic(e.context("contract WIT could not be read"))
             })?;
             Self::validate_user_wit(&wit)?;
+        }
+        let prepared = result_encoder::encode(&bytes).map_err(ExecutionError::Deterministic)?;
+        let component = Component::from_binary(&self.engine, &prepared).map_err(|e| {
+            ExecutionError::NonDeterministic(
+                anyhow!(e).context("generated result wrapper is invalid"),
+            )
+        })?;
+        let linker = if is_native_contract_id(contract_id) {
+            &self.linkers.encoded_native
+        } else {
+            &self.linkers.encoded_user
+        };
+        linker
+            .instantiate_pre(&component)
+            .map_err(|e| ExecutionError::NonDeterministic(anyhow!(e)))?;
+        if !self.simulating {
+            self.component_cache
+                .put(contract_id, component, prepared.len())
+                .await;
         }
         Ok(())
     }
@@ -931,7 +959,8 @@ impl Runtime {
     /// cached — only the compiled `Component`.
     async fn component_bytes_and_compiled(&self, contract_id: u64) -> Result<(Vec<u8>, Component)> {
         let bytes = self.storage.component_bytes(contract_id).await?;
-        let component = Component::from_binary(&self.engine, &bytes)?;
+        let prepared = result_encoder::encode(&bytes)?;
+        let component = Component::from_binary(&self.engine, &prepared)?;
         // One of the cache's TWO write sites — `validate_publishable` guards the
         // other, and its guard is the one the publish path depends on.
         // See `Runtime::simulating`: caching a speculative contract's code under an
@@ -939,7 +968,7 @@ impl Runtime {
         // WASM on this node alone.
         if !self.simulating {
             self.component_cache
-                .put(contract_id, component.clone(), bytes.len())
+                .put(contract_id, component.clone(), prepared.len())
                 .await;
         }
         Ok((bytes, component))
@@ -957,6 +986,7 @@ impl Runtime {
         // Invocation ownership frees even resources abandoned by a guest trap.
         let mut runtime = self.clone();
         runtime.table = Arc::new(Mutex::new(ResourceTable::new()));
+        runtime.encoded_result = EncodedResult::default();
         let mut s = Store::new(&self.engine, runtime);
         s.set_fuel(fuel)?;
         s.data_mut().fuel_checkpoint = fuel;
@@ -1066,7 +1096,7 @@ mod tests {
         // Native linker resolves the file-registry imports.
         runtime
             .linkers
-            .native
+            .encoded_native
             .instantiate_pre(&component)
             .expect("native linker must satisfy file-registry imports");
 
@@ -1074,7 +1104,11 @@ mod tests {
         // resolution (the deterministic phase), so invocation preparation rejects the op
         // deterministically instead of crashing.
         assert!(
-            runtime.linkers.user.instantiate_pre(&component).is_err(),
+            runtime
+                .linkers
+                .encoded_user
+                .instantiate_pre(&component)
+                .is_err(),
             "user linker must reject a component importing native-only file-registry"
         );
 
@@ -1087,11 +1121,15 @@ mod tests {
             .expect("load token component");
         runtime
             .linkers
-            .native
+            .encoded_native
             .instantiate_pre(&token)
             .expect("native linker must satisfy the token's deposit import");
         assert!(
-            runtime.linkers.user.instantiate_pre(&token).is_err(),
+            runtime
+                .linkers
+                .encoded_user
+                .instantiate_pre(&token)
+                .is_err(),
             "user linker must reject the token: it imports native-only `deposit`"
         );
     }

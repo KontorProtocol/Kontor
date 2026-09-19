@@ -16,6 +16,7 @@ workspace = true
 
 [dependencies]
 kontor-build = { path = "../kontor-build" }
+result-encoder = { path = "../result-encoder" }
 stdlib = { path = "../stdlib" }
 built-in-types = { path = "../built-in-types", features = ["host"] }
 macros = { path = "../macros" }
@@ -94,6 +95,7 @@ prost = { workspace = true }
 sha3 = { workspace = true }
 
 [dev-dependencies]
+wat = "=1.258.0"
 wasmtime = { workspace = true, features = ["call-hook"] }
 testlib = { path = "../testlib" }
 dtor = "=1.0.5"

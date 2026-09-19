@@ -186,7 +186,7 @@ async fn abi_dynamic_allowance_refreshes_and_reaches_nested_stores() -> Result<(
 }
 
 #[tokio::test]
-async fn abi_allocation_units_are_not_serialized_byte_prices() -> Result<()> {
+async fn encoded_results_avoid_host_value_tree_allocation() -> Result<()> {
     let (mut runtime, _dir, _name) = test_runtime().await?;
     let actor = funded(&mut runtime).await?;
     let chain = call_chain(&mut runtime, &actor).await?;
@@ -199,13 +199,10 @@ async fn abi_allocation_units_are_not_serialized_byte_prices() -> Result<()> {
     assert_eq!(remaining, 0);
     runtime.conversion_probe = Some(Probe::new(Policy::Dynamic(10), true));
     let (result, remaining) = call(&runtime, &chain[0], &core, "storage-state()", exact).await?;
-    assert!(
-        matches!(result, Err(ExecutionError::Deterministic(_))),
-        "{result:?}"
-    );
-    println!(
-        "affordable list rejected by dynamic allocation allowance: budget={exact} remaining={remaining} {result:?}"
-    );
+    // Only the encoded bytes cross the boundary now. The former Vec<Val>
+    // allocation exceeded this allowance even though formatting was affordable.
+    assert_eq!(result?, "[0, 0, 0, 0]");
+    assert_eq!(remaining, 0);
     Ok(())
 }
 

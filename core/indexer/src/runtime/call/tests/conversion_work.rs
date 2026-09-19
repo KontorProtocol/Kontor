@@ -6,6 +6,7 @@ use wasmtime::component::{Component, Linker, Val};
 use wasmtime::{Error as WasmtimeError, Trap};
 
 use crate::runtime::fuel::Fuel;
+use crate::runtime::result_encoder::encode;
 use crate::runtime::{ExecutionError, Runtime};
 use crate::test_utils::test_runtime;
 
@@ -155,7 +156,7 @@ async fn omitted_fields_need_structural_fuel_even_with_zero_allocation_allowance
         let wat = format!(
             r#"(component
                 (type $inner (record {fields}))
-                (export $record "record" (type $inner))
+                (import "record" (type $record (eq $inner)))
                 (core module $memory (memory (export "memory") 1))
                 (core instance $memory (instantiate $memory))
                 (core func $return
@@ -172,7 +173,7 @@ async fn omitted_fields_need_structural_fuel_even_with_zero_allocation_allowance
                     (canon lift (core func $code "run") async
                         (memory $memory "memory") (callback (func $code "callback")))))"#
         );
-        let component = Component::new(&runtime.engine, wat)?;
+        let component = Component::new(&runtime.engine, &wat)?;
         let mut store = runtime.make_store(BUDGET)?;
         store.set_hostcall_fuel(0);
         let instance = Linker::new(&runtime.engine)
@@ -191,24 +192,23 @@ async fn omitted_fields_need_structural_fuel_even_with_zero_allocation_allowance
         let expected = "{:}";
         let ty = func.ty(&store).results().next().unwrap();
         assert_eq!(Val::from_wave(&ty, expected)?, results[0]);
-        let budget = Fuel::Result.cost() + Fuel::ResultBytes(expected.len() as u64).cost();
-        store.set_fuel(budget)?;
-        let result = Runtime::decode_result(false, Ok(Ok(())), results.to_vec(), &mut store).await;
-        assert!(
-            matches!(result, Err(ExecutionError::Deterministic(ref error))
-            if matches!(error.downcast_ref::<Trap>(), Some(Trap::OutOfFuel)))
-        );
-        let budget = budget + (count as u64 + 1) * Fuel::WaveValue.cost();
-        store.set_fuel(budget)?;
-        assert_eq!(
-            Runtime::decode_result(false, Ok(Ok(())), results.to_vec(), &mut store).await?,
-            expected
-        );
-        assert_eq!(store.get_fuel()?, 0);
-        println!(
-            "ABI omitted record: fields={count} labels={labels} allocation_allowance=0 output_bytes={} output_fuel={budget}",
-            expected.len()
-        );
+        let bytes = wat::parse_str(&wat)?;
+        let prepared = Component::from_binary(&runtime.engine, &encode(&bytes)?)?;
+        let mut metered = runtime.make_store(BUDGET)?;
+        let instance = runtime
+            .linkers
+            .encoded_user
+            .instantiate_async(&mut metered, &prepared)
+            .await?;
+        let function = instance.get_typed_func::<(), ()>(&mut metered, "kontor-encoded-run")?;
+        // A tiny output does not make visiting hundreds of absent fields free.
+        metered.set_fuel(500)?;
+        let result = function.call_async(&mut metered, ()).await;
+        assert!(matches!(
+            result.unwrap_err().downcast_ref::<Trap>(),
+            Some(Trap::OutOfFuel)
+        ));
+        assert!(metered.data().encoded_result.is_empty());
     }
     Ok(())
 }

@@ -10,6 +10,7 @@ members = [
     "kontor-build",
     "macros",
     "numerics",
+    "result-encoder",
     "stdlib",
     "testlib",
     "wit-validator",

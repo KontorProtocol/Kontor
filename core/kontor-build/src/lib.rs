@@ -18,11 +18,12 @@ pub enum Target {
     Native,
     Test,
     Sdk,
+    Encoder,
 }
 
 #[derive(Debug, Args)]
 pub struct BuildArgs {
-    /// Outputs to regenerate; defaults to native, test, and sdk.
+    /// Outputs to regenerate; defaults to native, test, sdk, and encoder.
     #[arg(value_enum)]
     pub targets: Vec<Target>,
     /// Compare staged output against the checkout without changing committed files.
@@ -58,7 +59,7 @@ pub fn run(args: BuildArgs) -> Result<()> {
     let config = Config::read(root)?;
     let container = Container::new(root, &config, args.runtime, args.jobs)?;
     let targets: BTreeSet<_> = if args.targets.is_empty() {
-        [Target::Native, Target::Test, Target::Sdk]
+        [Target::Native, Target::Test, Target::Sdk, Target::Encoder]
             .into_iter()
             .collect()
     } else {
@@ -88,6 +89,11 @@ pub fn run(args: BuildArgs) -> Result<()> {
                 eprintln!("Building {workspace}");
                 contracts(&container, &stage, workspace, &provenance)?;
                 paths.push(PathBuf::from(format!("{workspace}/binaries")));
+            }
+            Target::Encoder => {
+                eprintln!("Building runtime result encoder");
+                encoder(&container, &stage, &provenance)?;
+                paths.push(PathBuf::from("core/result-encoder/binaries"));
             }
             Target::Sdk => {
                 eprintln!("Building SDK component and bindings");
@@ -253,6 +259,40 @@ fn contracts(
             ],
         )?;
     }
+    write_json(&output.join("build.json"), provenance)
+}
+
+fn encoder(container: &Container, stage: &Path, provenance: &Value) -> Result<()> {
+    let relative = "core/result-encoder/binaries";
+    let output = stage.join(relative);
+    fs::create_dir_all(&output)?;
+    let artifacts = wasm_artifacts(
+        container,
+        "/build/core",
+        &[
+            ("CARGO_BUILD_TARGET", "wasm32-unknown-unknown"),
+            (
+                "CARGO_TARGET_DIR",
+                "/build/.build-cache/target/result-encoder",
+            ),
+            ("RUSTFLAGS", "-C panic=abort -C link-arg=-zstack-size=65536"),
+        ],
+        &["result-encoder"],
+    )?;
+    ensure!(artifacts.len() == 1, "expected one result encoder module");
+    container.run(
+        "/build/core",
+        &[],
+        &[
+            "wasm-opt",
+            "-Oz",
+            "--enable-bulk-memory",
+            "--enable-sign-ext",
+            &artifacts[0],
+            "-o",
+            &format!("/build/.build-cache/generated/{relative}/encoder.wasm"),
+        ],
+    )?;
     write_json(&output.join("build.json"), provenance)
 }
 
