@@ -26,7 +26,7 @@ pub(super) fn is_deterministic(error: &Error) -> bool {
     if cause.is::<Utf8Error>() || cause.is::<DecodeUtf16Error>() || cause.is::<CharTryFromError>() {
         return true;
     }
-    // Wasmtime 48.0.2 has no public types for these errors. Real conversion
+    // Wasmtime 48.0.3 has no public types for these errors. Real conversion
     // regressions pin each message; review them when upgrading Wasmtime.
     let message = cause.to_string();
     matches!(

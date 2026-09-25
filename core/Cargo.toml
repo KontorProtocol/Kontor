@@ -23,7 +23,7 @@ too_many_arguments = "allow"
 
 [workspace.dependencies]
 # Keep our WIT tools aligned with wit-bindgen; Wasmtime owns its internal versions.
-wasmtime = { version = "=48.0.2", features = ["wave", "component-model-async"] }
+wasmtime = { version = "=48.0.3", features = ["wave", "component-model-async"] }
 wit-bindgen = "=0.62.0"
 wit-bindgen-core = "=0.62.0"
 wit-bindgen-rust = "=0.62.0"

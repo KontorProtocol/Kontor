@@ -10,6 +10,7 @@ use crate::runtime::{ExecutionError, Runtime};
 use crate::test_utils::test_runtime;
 
 const BUDGET: u64 = 10_000_000;
+const ALLOCATION_ERROR: &str = "too much data is being copied between the host and the guest: fuel allocated for hostcalls has been exhausted";
 
 // These characterize the engine/host boundary, not production metering. Keep
 // engine-only measurements separate from tariffs supplied by Kontor's imports.
@@ -143,7 +144,7 @@ async fn allocation_guard_precedes_import_entry_but_a_tariff_does_not() -> Resul
 }
 
 #[tokio::test]
-async fn omitted_fields_need_structural_fuel_even_with_zero_allocation_allowance() -> Result<()> {
+async fn record_fields_require_allocation_allowance_and_structural_fuel() -> Result<()> {
     let (runtime, _dir, _name) = test_runtime().await?;
     for count in [16, 128, 512] {
         let fields = (0..count)
@@ -180,6 +181,19 @@ async fn omitted_fields_need_structural_fuel_even_with_zero_allocation_allowance
             .await?;
         let func = instance.get_func(&mut store, "run").unwrap();
         let mut results = [Val::Bool(false)];
+        let error = func
+            .call_async(&mut store, &[], &mut results)
+            .await
+            .unwrap_err();
+        assert_eq!(error.root_cause().to_string(), ALLOCATION_ERROR);
+
+        let mut store = runtime.make_store(BUDGET)?;
+        store.set_hostcall_fuel(BUDGET as usize);
+        let instance = Linker::new(&runtime.engine)
+            .instantiate_async(&mut store, &component)
+            .await?;
+        let func = instance.get_func(&mut store, "run").unwrap();
+        let mut results = [Val::Bool(false)];
         func.call_async(&mut store, &[], &mut results).await?;
         let Val::Record(fields) = &results[0] else {
             panic!("expected a record");
@@ -206,7 +220,7 @@ async fn omitted_fields_need_structural_fuel_even_with_zero_allocation_allowance
         );
         assert_eq!(store.get_fuel()?, 0);
         println!(
-            "ABI omitted record: fields={count} labels={labels} allocation_allowance=0 output_bytes={} output_fuel={budget}",
+            "ABI omitted record: fields={count} labels={labels} output_bytes={} output_fuel={budget}",
             expected.len()
         );
     }
