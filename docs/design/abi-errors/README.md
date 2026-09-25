@@ -1,6 +1,6 @@
 # Contract conversion error compatibility
 
-Kontor uses the released, pinned Wasmtime 48.0.2. No Wasmtime patch or fork is
+Kontor uses the released, pinned Wasmtime 48.0.3. No Wasmtime patch or fork is
 required. The adapter in `runtime/call/error.rs` recognizes a narrow set of
 conversion failures at the contract call boundary.
 
