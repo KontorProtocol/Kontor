@@ -125,6 +125,22 @@ jobs:
       # is still required by the stdlib macro-expansion tests.
       - name: Install cargo expand
         run: cargo binstall cargo-expand --no-confirm
+      - name: Check conversion allowance parity
+        working-directory: ./core
+        shell: bash
+        run: |
+          set -o pipefail
+          rustc -Vv 2>&1 | tee "$RUNNER_TEMP/conversion-allowance.txt"
+          cargo test --locked --release -p indexer --lib runtime::call::tests::conversion_parity -- --nocapture \
+            2>&1 | tee -a "$RUNNER_TEMP/conversion-allowance.txt"
+      - name: Preserve conversion allowance results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: conversion-allowance-${{ runner.os }}-${{ runner.arch }}
+          path: ${{ runner.temp }}/conversion-allowance.txt
+          if-no-files-found: warn
+          retention-days: 14
       - name: Run tests
         id: tests
         working-directory: ./core
