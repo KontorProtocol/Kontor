@@ -3,11 +3,36 @@ use std::path::Path;
 use anyhow::{Context, anyhow, bail};
 use async_trait::async_trait;
 use bytes::Bytes;
+use sha3::{Digest, Keccak256};
 
-use malachitebft_core_types::{SignedExtension, SignedProposal, SignedVote, ValidatorProof};
+use malachitebft_core_types::{
+    NilOrVal, SignedExtension, SignedMessage, SignedProposal, SignedVote, ValidatorProof,
+    VoteExtensionScope,
+};
 use malachitebft_signing::{Error, Signer, VerificationResult, Verifier};
 
 use crate::consensus::{Ctx, Proposal, Vote};
+
+const VOTE_EXTENSION_DOMAIN: &[u8] = b"kontor/vote-extension/v1\0";
+
+fn vote_extension_sign_bytes(scope: &VoteExtensionScope<Ctx>, extension: &Bytes) -> Vec<u8> {
+    let precommit = Vote::new_precommit(
+        scope.height,
+        scope.round,
+        NilOrVal::Val(scope.value_id),
+        scope.validator_address,
+    );
+    let precommit_bytes = precommit.to_sign_bytes();
+    let mut bytes = Vec::with_capacity(
+        VOTE_EXTENSION_DOMAIN.len() + 16 + precommit_bytes.len() + extension.len(),
+    );
+    bytes.extend_from_slice(VOTE_EXTENSION_DOMAIN);
+    bytes.extend_from_slice(&(precommit_bytes.len() as u64).to_be_bytes());
+    bytes.extend_from_slice(&precommit_bytes);
+    bytes.extend_from_slice(&(extension.len() as u64).to_be_bytes());
+    bytes.extend_from_slice(extension);
+    bytes
+}
 
 pub use indexer_types::ConsensusMode;
 pub use malachitebft_signing_ed25519::*;
@@ -78,7 +103,6 @@ impl Hashable for PublicKey {
     type Output = [u8; 32];
 
     fn hash(&self) -> [u8; 32] {
-        use sha3::{Digest, Keccak256};
         let mut hasher = Keccak256::new();
         hasher.update(self.as_bytes());
         hasher.finalize().into()
@@ -136,12 +160,15 @@ impl Verifier<Ctx> for Ed25519Provider {
 
     async fn verify_signed_vote_extension(
         &self,
+        scope: &VoteExtensionScope<Ctx>,
         extension: &Bytes,
         signature: &Signature,
         public_key: &PublicKey,
     ) -> Result<VerificationResult, Error> {
         Ok(VerificationResult::from_bool(
-            public_key.verify(extension.as_ref(), signature).is_ok(),
+            public_key
+                .verify(&vote_extension_sign_bytes(scope, extension), signature)
+                .is_ok(),
         ))
     }
 
@@ -173,11 +200,15 @@ impl Signer<Ctx> for Ed25519Provider {
         Ok(SignedProposal::new(proposal, signature))
     }
 
-    async fn sign_vote_extension(&self, extension: Bytes) -> Result<SignedExtension<Ctx>, Error> {
-        let signature = self.private_key.sign(extension.as_ref());
-        Ok(malachitebft_core_types::SignedMessage::new(
-            extension, signature,
-        ))
+    async fn sign_vote_extension(
+        &self,
+        scope: VoteExtensionScope<Ctx>,
+        extension: Bytes,
+    ) -> Result<SignedExtension<Ctx>, Error> {
+        let signature = self
+            .private_key
+            .sign(&vote_extension_sign_bytes(&scope, &extension));
+        Ok(SignedMessage::new(extension, signature))
     }
 
     // PoV is network-agnostic: sign the canonical preimage with no domain prefix.
@@ -195,6 +226,8 @@ impl Signer<Ctx> for Ed25519Provider {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::consensus::{Address, Height, ValueId};
+    use malachitebft_core_types::Round;
     use tempfile::NamedTempFile;
 
     const KEY_HEX: &str = "8a9314fb7c22dc4ab1cb39fe1041be2923b4c78ce99ba0e04497e5e006a1cd35";
@@ -265,5 +298,41 @@ mod tests {
             Some(Path::new("/nonexistent/path")),
         )
         .unwrap();
+    }
+
+    #[tokio::test]
+    async fn vote_extension_signature_is_bound_to_its_precommit() {
+        let provider = Ed25519Provider::new(PrivateKey::from([7; 32]));
+        let public_key = provider.private_key().public_key();
+        let address = Address::from_public_key(&public_key);
+        let scope = VoteExtensionScope::new(
+            Height::new(4),
+            Round::new(1),
+            ValueId::new([9; 32]),
+            address,
+        );
+        let signed = provider
+            .sign_vote_extension(scope.clone(), Bytes::from_static(b"extension"))
+            .await
+            .unwrap();
+
+        let valid = provider
+            .verify_signed_vote_extension(&scope, &signed.message, &signed.signature, &public_key)
+            .await
+            .unwrap();
+        assert!(valid.is_valid());
+
+        let wrong_height =
+            VoteExtensionScope::new(Height::new(5), scope.round, scope.value_id, address);
+        let invalid = provider
+            .verify_signed_vote_extension(
+                &wrong_height,
+                &signed.message,
+                &signed.signature,
+                &public_key,
+            )
+            .await
+            .unwrap();
+        assert!(invalid.is_invalid());
     }
 }

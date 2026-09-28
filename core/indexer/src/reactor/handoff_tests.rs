@@ -80,7 +80,7 @@ async fn check_handoff(deferred: bool, exiting: bool, before_finalized: bool) ->
             persistent_peers: Vec::new(),
             data_dir: dir.path().to_path_buf(),
             consensus_enabled: false,
-            discovery_enabled: false,
+            discovery: Default::default(),
         },
         &mut runtime,
         None,

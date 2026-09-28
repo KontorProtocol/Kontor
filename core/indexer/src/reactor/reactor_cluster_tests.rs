@@ -31,6 +31,7 @@ use crate::runtime::GenesisValidator;
 use bitcoin::hashes::Hash;
 use indexer_types::Event;
 use indexer_types::OpWithResult;
+use malachitebft_app_channel::app::config::{BootstrapProtocol, DiscoveryConfig, Selector};
 use malachitebft_app_channel::app::types::core::VotingPower;
 
 async fn wait_matching<T>(
@@ -506,7 +507,15 @@ impl ReactorCluster {
                 persistent_peers: peers,
                 data_dir: executor.data_dir(),
                 consensus_enabled: true,
-                discovery_enabled: true,
+                discovery: DiscoveryConfig {
+                    enabled: true,
+                    bootstrap_protocol: BootstrapProtocol::Full,
+                    selector: Selector::Random,
+                    // All local peers share one IP, so a transient disconnect must not
+                    // throttle the whole cluster for the production 30-second window.
+                    ip_throttle_duration: Duration::ZERO,
+                    ..Default::default()
+                },
             };
 
             let conn = runtime.get_storage_conn();

@@ -1,13 +1,14 @@
 use std::time::Instant;
 
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, ensure};
+use malachitebft_app_channel::app::engine::host::SyncedValueOutcome;
 use malachitebft_app_channel::app::streaming::StreamMessage;
 use malachitebft_app_channel::app::types::codec::Codec;
 use malachitebft_app_channel::app::types::sync::RawDecidedValue;
 use malachitebft_app_channel::app::types::{LocallyProposedValue, PeerId, ProposedValue};
 use malachitebft_app_channel::{AppMsg, NetworkRequest};
 use malachitebft_core_consensus::Role;
-use malachitebft_core_types::{Round, Validity};
+use malachitebft_core_types::{ExtendedCommitCertificate, Round, Validity, VoteExtensions};
 use tracing::{info, warn};
 
 use crate::consensus::codec::ProtobufCodec;
@@ -173,7 +174,10 @@ impl<E: Executor> Reactor<E> {
                     .encode(&value)
                     .context("Failed to encode value for sync")?;
                 Ok(RawDecidedValue {
-                    certificate: cert,
+                    certificate: ExtendedCommitCertificate::from_commit_certificate_and_extensions(
+                        cert,
+                        VoteExtensions::default(),
+                    ),
                     value_bytes: encoded,
                 })
             })
@@ -190,27 +194,26 @@ impl<E: Executor> Reactor<E> {
         round: Round,
         proposer: Address,
         value_bytes: bytes::Bytes,
-        reply: tokio::sync::oneshot::Sender<Option<ProposedValue<Ctx>>>,
+        reply: tokio::sync::oneshot::Sender<SyncedValueOutcome<Ctx>>,
     ) -> Result<()> {
-        let result: Option<ProposedValue<Ctx>> =
-            if let Ok(value) = ProtobufCodec.decode(value_bytes) {
-                let proposed = ProposedValue {
-                    height,
-                    round,
-                    valid_round: Round::Nil,
-                    proposer,
-                    value,
-                    validity: Validity::Valid,
-                };
-                self.consensus
-                    .undecided
-                    .entry(height)
-                    .or_default()
-                    .insert(round, proposed.clone());
-                Some(proposed)
-            } else {
-                None
+        let result = if let Ok(value) = ProtobufCodec.decode(value_bytes) {
+            let proposed = ProposedValue {
+                height,
+                round,
+                valid_round: Round::Nil,
+                proposer,
+                value,
+                validity: Validity::Valid,
             };
+            self.consensus
+                .undecided
+                .entry(height)
+                .or_default()
+                .insert(round, proposed.clone());
+            SyncedValueOutcome::Verdict(proposed)
+        } else {
+            SyncedValueOutcome::PeerFault
+        };
 
         reply
             .send(result)
@@ -322,9 +325,13 @@ impl<E: Executor> Reactor<E> {
 
             AppMsg::Decided {
                 certificate,
-                extensions: _,
+                extensions,
                 reply,
             } => {
+                ensure!(
+                    extensions.extensions.is_empty(),
+                    "vote extensions are not supported in persisted decisions"
+                );
                 info!(
                     height = %certificate.height,
                     round = %certificate.round,
@@ -340,10 +347,14 @@ impl<E: Executor> Reactor<E> {
 
             AppMsg::Finalized {
                 certificate,
-                extensions: _,
+                extensions,
                 evidence,
                 reply,
             } => {
+                ensure!(
+                    extensions.extensions.is_empty(),
+                    "vote extensions are not supported in persisted decisions"
+                );
                 info!(
                     height = %certificate.height,
                     round = %certificate.round,

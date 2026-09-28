@@ -32,6 +32,8 @@ message SyncedValue {
 message CommitSignature {
     Address validator_address = 1;
     Signature signature = 2;
+    // Keep the original field numbers so certificates without extensions remain wire-compatible.
+    optional Extension extension = 3;
 }
 
 message CommitCertificate {

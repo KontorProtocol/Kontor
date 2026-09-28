@@ -18,6 +18,7 @@ use indexer::{api, block, built_info, reactor, reg_tester, runtime};
 use indexer::{bitcoin_client, bitcoin_follower, config::Config, database, logging};
 use indexer_types::{Inst, InstKind};
 use kontor_build::{BuildArgs, run as build};
+use malachitebft_app_channel::app::config::{BootstrapProtocol, DiscoveryConfig, Selector};
 use tokio::signal::unix::{SignalKind, signal};
 use tokio::sync::{mpsc, oneshot};
 use tokio::task::JoinHandle;
@@ -310,7 +311,12 @@ async fn run_daemon(config: Config) -> Result<()> {
         persistent_peers: config.consensus_peers.clone(),
         data_dir: config.data_dir.clone(),
         consensus_enabled,
-        discovery_enabled: true,
+        discovery: DiscoveryConfig {
+            enabled: true,
+            bootstrap_protocol: BootstrapProtocol::Full,
+            selector: Selector::Random,
+            ..Default::default()
+        },
     };
 
     let (ready_tx, ready_rx) = oneshot::channel();

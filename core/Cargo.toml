@@ -80,32 +80,32 @@ tracing-subscriber = { version = "=0.3.23", features = ["env-filter"] }
 ts-rs = { version = "=12.0.1", features = ["format"] }
 
 # Malachite BFT consensus
-malachitebft-app-channel = { git = "https://github.com/circlefin/malachite", rev = "5cd137fb99e04c47ed378561708a3d1720ec21a2", package = "arc-malachitebft-app-channel" }
+malachitebft-app-channel = { git = "https://github.com/circlefin/malachite", rev = "72143f6c99a98452b587e1c392bdb80944eb2232", package = "arc-malachitebft-app-channel" }
 
-# Pin malachite to the KontorProtocol fork (branch listen-addr-event): stores the
+# Pin malachite to the KontorProtocol fork: it stores the
 # resolved consensus listen address in network state so it's readable via
 # dump_state — used to bring up clusters on `/tcp/0` (no fixed-port allocation).
 # Drop this [patch] block once the change lands upstream in circlefin.
 [patch."https://github.com/circlefin/malachite"]
-arc-malachitebft-app = { git = "https://github.com/KontorProtocol/malachite", rev = "0bf0365bf4f14afae716efd0da8f22879fa8dd52" }
-arc-malachitebft-app-channel = { git = "https://github.com/KontorProtocol/malachite", rev = "0bf0365bf4f14afae716efd0da8f22879fa8dd52" }
-arc-malachitebft-codec = { git = "https://github.com/KontorProtocol/malachite", rev = "0bf0365bf4f14afae716efd0da8f22879fa8dd52" }
-arc-malachitebft-config = { git = "https://github.com/KontorProtocol/malachite", rev = "0bf0365bf4f14afae716efd0da8f22879fa8dd52" }
-arc-malachitebft-core-consensus = { git = "https://github.com/KontorProtocol/malachite", rev = "0bf0365bf4f14afae716efd0da8f22879fa8dd52" }
-arc-malachitebft-core-driver = { git = "https://github.com/KontorProtocol/malachite", rev = "0bf0365bf4f14afae716efd0da8f22879fa8dd52" }
-arc-malachitebft-core-state-machine = { git = "https://github.com/KontorProtocol/malachite", rev = "0bf0365bf4f14afae716efd0da8f22879fa8dd52" }
-arc-malachitebft-core-types = { git = "https://github.com/KontorProtocol/malachite", rev = "0bf0365bf4f14afae716efd0da8f22879fa8dd52" }
-arc-malachitebft-core-votekeeper = { git = "https://github.com/KontorProtocol/malachite", rev = "0bf0365bf4f14afae716efd0da8f22879fa8dd52" }
-arc-malachitebft-discovery = { git = "https://github.com/KontorProtocol/malachite", rev = "0bf0365bf4f14afae716efd0da8f22879fa8dd52" }
-arc-malachitebft-engine = { git = "https://github.com/KontorProtocol/malachite", rev = "0bf0365bf4f14afae716efd0da8f22879fa8dd52" }
-arc-malachitebft-metrics = { git = "https://github.com/KontorProtocol/malachite", rev = "0bf0365bf4f14afae716efd0da8f22879fa8dd52" }
-arc-malachitebft-network = { git = "https://github.com/KontorProtocol/malachite", rev = "0bf0365bf4f14afae716efd0da8f22879fa8dd52" }
-arc-malachitebft-peer = { git = "https://github.com/KontorProtocol/malachite", rev = "0bf0365bf4f14afae716efd0da8f22879fa8dd52" }
-arc-malachitebft-proto = { git = "https://github.com/KontorProtocol/malachite", rev = "0bf0365bf4f14afae716efd0da8f22879fa8dd52" }
-arc-malachitebft-signing = { git = "https://github.com/KontorProtocol/malachite", rev = "0bf0365bf4f14afae716efd0da8f22879fa8dd52" }
-arc-malachitebft-signing-ed25519 = { git = "https://github.com/KontorProtocol/malachite", rev = "0bf0365bf4f14afae716efd0da8f22879fa8dd52" }
-arc-malachitebft-sync = { git = "https://github.com/KontorProtocol/malachite", rev = "0bf0365bf4f14afae716efd0da8f22879fa8dd52" }
-arc-malachitebft-wal = { git = "https://github.com/KontorProtocol/malachite", rev = "0bf0365bf4f14afae716efd0da8f22879fa8dd52" }
+arc-malachitebft-app = { git = "https://github.com/KontorProtocol/malachite", rev = "5ad5a3708fc8397897c43f560b952dbdf8c27c98" }
+arc-malachitebft-app-channel = { git = "https://github.com/KontorProtocol/malachite", rev = "5ad5a3708fc8397897c43f560b952dbdf8c27c98" }
+arc-malachitebft-codec = { git = "https://github.com/KontorProtocol/malachite", rev = "5ad5a3708fc8397897c43f560b952dbdf8c27c98" }
+arc-malachitebft-config = { git = "https://github.com/KontorProtocol/malachite", rev = "5ad5a3708fc8397897c43f560b952dbdf8c27c98" }
+arc-malachitebft-core-consensus = { git = "https://github.com/KontorProtocol/malachite", rev = "5ad5a3708fc8397897c43f560b952dbdf8c27c98" }
+arc-malachitebft-core-driver = { git = "https://github.com/KontorProtocol/malachite", rev = "5ad5a3708fc8397897c43f560b952dbdf8c27c98" }
+arc-malachitebft-core-state-machine = { git = "https://github.com/KontorProtocol/malachite", rev = "5ad5a3708fc8397897c43f560b952dbdf8c27c98" }
+arc-malachitebft-core-types = { git = "https://github.com/KontorProtocol/malachite", rev = "5ad5a3708fc8397897c43f560b952dbdf8c27c98" }
+arc-malachitebft-core-votekeeper = { git = "https://github.com/KontorProtocol/malachite", rev = "5ad5a3708fc8397897c43f560b952dbdf8c27c98" }
+arc-malachitebft-discovery = { git = "https://github.com/KontorProtocol/malachite", rev = "5ad5a3708fc8397897c43f560b952dbdf8c27c98" }
+arc-malachitebft-engine = { git = "https://github.com/KontorProtocol/malachite", rev = "5ad5a3708fc8397897c43f560b952dbdf8c27c98" }
+arc-malachitebft-metrics = { git = "https://github.com/KontorProtocol/malachite", rev = "5ad5a3708fc8397897c43f560b952dbdf8c27c98" }
+arc-malachitebft-network = { git = "https://github.com/KontorProtocol/malachite", rev = "5ad5a3708fc8397897c43f560b952dbdf8c27c98" }
+arc-malachitebft-peer = { git = "https://github.com/KontorProtocol/malachite", rev = "5ad5a3708fc8397897c43f560b952dbdf8c27c98" }
+arc-malachitebft-proto = { git = "https://github.com/KontorProtocol/malachite", rev = "5ad5a3708fc8397897c43f560b952dbdf8c27c98" }
+arc-malachitebft-signing = { git = "https://github.com/KontorProtocol/malachite", rev = "5ad5a3708fc8397897c43f560b952dbdf8c27c98" }
+arc-malachitebft-signing-ed25519 = { git = "https://github.com/KontorProtocol/malachite", rev = "5ad5a3708fc8397897c43f560b952dbdf8c27c98" }
+arc-malachitebft-sync = { git = "https://github.com/KontorProtocol/malachite", rev = "5ad5a3708fc8397897c43f560b952dbdf8c27c98" }
+arc-malachitebft-wal = { git = "https://github.com/KontorProtocol/malachite", rev = "5ad5a3708fc8397897c43f560b952dbdf8c27c98" }
 
 # Optimize the proof-system crates even in dev/test builds. Proof
 # generation (kontor-crypto's Nova prover) is exercised only in tests and
