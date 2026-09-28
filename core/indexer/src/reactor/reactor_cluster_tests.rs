@@ -1592,12 +1592,12 @@ async fn prod_reactor_restart_inside_finality_window_still_rolls_back() -> Resul
     cluster.mine_empty_and_send();
     cluster.wait_for_block(1, Duration::from_secs(60)).await;
 
-    // A batch anchored at 1 whose transactions are never mined — deadline 1 + 6 = 7.
-    for event in cluster.mock_bitcoin().generate_mempool_txs(2) {
+    // A batch anchored at 1 whose transaction is never mined. Deadline 1 + 6 = 7.
+    for event in cluster.mock_bitcoin().generate_mempool_txs(1) {
         cluster.send_mempool_event(event);
     }
     let batch = cluster.wait_for_batch(1, Duration::from_secs(60)).await;
-    assert_eq!(batch.txids.len(), 2, "setup batch must carry both txs");
+    assert_eq!(batch.txids.len(), 1, "setup batch must carry the tx");
 
     // The node under test executed it, so the rows are there before the restart.
     {
@@ -1724,12 +1724,12 @@ async fn prod_reactor_reorg_at_batch_anchor_keeps_batch_tracked() -> Result<()> 
     cluster.mine_empty_and_send();
     cluster.wait_for_block(2, Duration::from_secs(60)).await;
 
-    // A batch anchored at 2, whose txs will never confirm — deadline 2 + 6 = 8.
-    for event in cluster.mock_bitcoin().generate_mempool_txs(2) {
+    // A batch anchored at 2, whose transaction will never confirm. Deadline 2 + 6 = 8.
+    for event in cluster.mock_bitcoin().generate_mempool_txs(1) {
         cluster.send_mempool_event(event);
     }
     let batch = cluster.wait_for_batch(2, Duration::from_secs(60)).await;
-    assert_eq!(batch.txids.len(), 2, "setup batch must carry both txs");
+    assert_eq!(batch.txids.len(), 1, "setup batch must carry the tx");
     let tracked_height = batch
         .state_events
         .iter()
@@ -1756,7 +1756,7 @@ async fn prod_reactor_reorg_at_batch_anchor_keeps_batch_tracked() -> Result<()> 
         cluster.mine_empty_and_send();
     }
     // Assert on WHICH batch was invalidated, not merely that some rollback happened:
-    // the excluded txs return via the mempool, so a rollback naming a DIFFERENT
+    // the excluded tx returns via the mempool, so a rollback naming a DIFFERENT
     // consensus height fires even with tracking wiped.
     let events = cluster
         .wait_for_finality_event_matching(
