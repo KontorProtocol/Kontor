@@ -5,9 +5,9 @@ use malachitebft_app::engine::util::streaming::{StreamContent, StreamId, StreamM
 use malachitebft_codec::{Codec, HasEncodedLen};
 use malachitebft_core_consensus::{LivenessMsg, ProposedValue, SignedConsensusMsg};
 use malachitebft_core_types::{
-    CommitCertificate, CommitSignature, NilOrVal, PolkaCertificate, PolkaSignature, Round,
-    RoundCertificate, RoundCertificateType, RoundSignature, SignedExtension, SignedProposal,
-    SignedVote, Validity,
+    CommitCertificate, ExtendedCommitCertificate, ExtendedCommitSignature, NilOrVal,
+    PolkaCertificate, PolkaSignature, Round, RoundCertificate, RoundCertificateType,
+    RoundSignature, SignedExtension, SignedProposal, SignedVote, Validity,
 };
 use malachitebft_proto::{Error as ProtoError, Protobuf};
 use malachitebft_signing_ed25519::Signature;
@@ -463,7 +463,9 @@ pub fn encode_synced_value(
 ) -> Result<proto::SyncedValue, ProtoError> {
     Ok(proto::SyncedValue {
         value_bytes: synced_value.value_bytes.clone(),
-        certificate: Some(encode_commit_certificate(&synced_value.certificate)?),
+        certificate: Some(encode_extended_commit_certificate(
+            &synced_value.certificate,
+        )?),
     })
 }
 
@@ -476,7 +478,7 @@ pub fn decode_synced_value(
 
     Ok(sync::RawDecidedValue {
         value_bytes: proto.value_bytes,
-        certificate: decode_commit_certificate(certificate)?,
+        certificate: decode_extended_commit_certificate(certificate)?,
     })
 }
 
@@ -548,9 +550,9 @@ pub(crate) fn decode_polka_certificate(
     })
 }
 
-pub fn decode_commit_certificate(
+pub fn decode_extended_commit_certificate(
     certificate: proto::CommitCertificate,
-) -> Result<CommitCertificate<Ctx>, ProtoError> {
+) -> Result<ExtendedCommitCertificate<Ctx>, ProtoError> {
     let value_id = certificate
         .value_id
         .ok_or_else(|| ProtoError::missing_field::<proto::CommitCertificate>("value_id"))
@@ -559,7 +561,7 @@ pub fn decode_commit_certificate(
     let commit_signatures = certificate
         .signatures
         .into_iter()
-        .map(|sig| -> Result<CommitSignature<Ctx>, ProtoError> {
+        .map(|sig| -> Result<ExtendedCommitSignature<Ctx>, ProtoError> {
             let address = sig.validator_address.ok_or_else(|| {
                 ProtoError::missing_field::<proto::CommitCertificate>("validator_address")
             })?;
@@ -568,15 +570,57 @@ pub fn decode_commit_certificate(
             })?;
             let signature = decode_signature(signature)?;
             let address = Address::from_proto(address)?;
-            Ok(CommitSignature::new(address, signature))
+            let extension = sig.extension.map(decode_extension).transpose()?;
+            Ok(ExtendedCommitSignature::new(address, signature, extension))
         })
         .collect::<Result<Vec<_>, _>>()?;
 
-    Ok(CommitCertificate {
+    Ok(ExtendedCommitCertificate {
         height: Height::new(certificate.height),
         round: Round::new(certificate.round),
         value_id,
         commit_signatures,
+    })
+}
+
+pub fn decode_commit_certificate(
+    certificate: proto::CommitCertificate,
+) -> Result<CommitCertificate<Ctx>, ProtoError> {
+    let extended = decode_extended_commit_certificate(certificate)?;
+    if extended
+        .commit_signatures
+        .iter()
+        .any(|signature| signature.extension.is_some())
+    {
+        return Err(ProtoError::Other(
+            "stored commit certificates must not contain vote extensions".to_string(),
+        ));
+    }
+    Ok(extended.trim_vote_extensions())
+}
+
+pub fn encode_extended_commit_certificate(
+    certificate: &ExtendedCommitCertificate<Ctx>,
+) -> Result<proto::CommitCertificate, ProtoError> {
+    let round = certificate
+        .round
+        .as_u32()
+        .ok_or_else(|| ProtoError::Other("round should not be nil".to_string()))?;
+    Ok(proto::CommitCertificate {
+        height: certificate.height.as_u64(),
+        round,
+        value_id: Some(certificate.value_id.to_proto()?),
+        signatures: certificate
+            .commit_signatures
+            .iter()
+            .map(|sig| -> Result<proto::CommitSignature, ProtoError> {
+                Ok(proto::CommitSignature {
+                    validator_address: Some(sig.address.to_proto()?),
+                    signature: Some(encode_signature(&sig.signature)),
+                    extension: sig.extension.as_ref().map(encode_extension).transpose()?,
+                })
+            })
+            .collect::<Result<Vec<_>, _>>()?,
     })
 }
 
@@ -600,6 +644,7 @@ pub fn encode_commit_certificate(
                 Ok(proto::CommitSignature {
                     validator_address: Some(address),
                     signature: Some(signature),
+                    extension: None,
                 })
             })
             .collect::<Result<Vec<_>, _>>()?,
@@ -694,5 +739,64 @@ impl Codec<malachitebft_core_types::ValidatorProof<Ctx>> for ProtobufCodec {
             }
             .encode_to_vec(),
         ))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use malachitebft_core_types::CommitSignature;
+    use malachitebft_signing_ed25519::PrivateKey;
+
+    #[test]
+    fn extended_sync_certificate_reads_legacy_certificate_bytes() {
+        let address = Address::new([3; 20]);
+        let signature = PrivateKey::from([7; 32]).sign(b"certificate");
+        let certificate = CommitCertificate {
+            height: Height::new(11),
+            round: Round::new(2),
+            value_id: ValueId::new([5; 32]),
+            commit_signatures: vec![CommitSignature::new(address, signature)],
+        };
+        let legacy = encode_commit_certificate(&certificate)
+            .unwrap()
+            .encode_to_vec();
+
+        let decoded = decode_extended_commit_certificate(
+            proto::CommitCertificate::decode(legacy.as_slice()).unwrap(),
+        )
+        .unwrap();
+        assert!(decoded.commit_signatures[0].extension.is_none());
+        assert_eq!(decoded.trim_vote_extensions(), certificate);
+        assert_eq!(
+            encode_extended_commit_certificate(&decoded)
+                .unwrap()
+                .encode_to_vec(),
+            legacy
+        );
+    }
+
+    #[test]
+    fn sync_preserves_extensions_but_stored_certificate_decoder_rejects_them() {
+        let address = Address::new([3; 20]);
+        let private_key = PrivateKey::from([7; 32]);
+        let certificate = ExtendedCommitCertificate {
+            height: Height::new(11),
+            round: Round::new(2),
+            value_id: ValueId::new([5; 32]),
+            commit_signatures: vec![ExtendedCommitSignature::new(
+                address,
+                private_key.sign(b"certificate"),
+                Some(SignedExtension::new(
+                    Bytes::from_static(b"extension"),
+                    private_key.sign(b"extension"),
+                )),
+            )],
+        };
+        let wire = encode_extended_commit_certificate(&certificate).unwrap();
+        let decoded = decode_extended_commit_certificate(wire.clone()).unwrap();
+
+        assert_eq!(decoded, certificate);
+        assert!(decode_commit_certificate(wire).is_err());
     }
 }
