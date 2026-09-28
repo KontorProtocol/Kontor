@@ -34,7 +34,7 @@ async fn delayed_get_value_preserves_the_round_proposal_deadline() -> Result<()>
             persistent_peers: Vec::new(),
             data_dir: dir.path().to_path_buf(),
             consensus_enabled: true,
-            discovery_enabled: false,
+            discovery: Default::default(),
         },
         &mut runtime,
         None,

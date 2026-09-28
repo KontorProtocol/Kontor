@@ -36,7 +36,7 @@ async fn reactor(runtime: Runtime, dir: &TempDir) -> Result<Reactor<NoopExecutor
             persistent_peers: Vec::new(),
             data_dir: dir.path().to_path_buf(),
             consensus_enabled: false,
-            discovery_enabled: false,
+            discovery: Default::default(),
         },
         &mut runtime,
         None,

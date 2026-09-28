@@ -20,10 +20,7 @@ pub struct EngineConfig {
     pub persistent_peers: Vec<String>,
     pub data_dir: PathBuf,
     pub consensus_enabled: bool,
-    /// Enable libp2p peer discovery so nodes learn peers beyond the configured
-    /// set (which then act as bootstrap seeds). Off in cluster tests, which wire
-    /// every peer explicitly and don't want discovery's churn perturbing bring-up.
-    pub discovery_enabled: bool,
+    pub discovery: DiscoveryConfig,
 }
 
 /// NodeConfig implementation for Malachite engine.
@@ -85,12 +82,7 @@ pub async fn start(config: EngineConfig) -> Result<EngineOutput> {
             p2p: P2pConfig {
                 listen_addr,
                 persistent_peers,
-                discovery: DiscoveryConfig {
-                    enabled: config.discovery_enabled,
-                    bootstrap_protocol: BootstrapProtocol::Full,
-                    selector: Selector::Random,
-                    ..Default::default()
-                },
+                discovery: config.discovery,
                 // Validator-aware gossipsub scoring is always on: it prioritizes
                 // validators (then persistent peers) in the consensus mesh, fed by
                 // the live on-chain set, and explicit peering keeps persistent peers
