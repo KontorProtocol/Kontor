@@ -82,7 +82,7 @@ async fn nft_cursor_pages_seek_and_survive_membership_changes() -> Result<()> {
     );
     let gauge = FuelGauge::with_profiling();
     runtime.gauge = Some(gauge.clone());
-    let balances = token::balances(&mut runtime).await?;
+    let balances = token::balances(&mut runtime, None, 100).await??.items;
     assert!(
         !gauge
             .report()?

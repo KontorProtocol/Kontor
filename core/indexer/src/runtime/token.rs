@@ -1,3 +1,6 @@
+#[cfg(test)]
+mod query_tests;
+
 use crate::runtime::Runtime;
 use crate::testlib_exports::*;
 

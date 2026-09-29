@@ -6,6 +6,11 @@ world root {
 	use kontor:built-in/error.{error};
 	use kontor:built-in/numbers-types.{integer};
 
+  record balance-page {
+    items: list<balance>,
+    next: option<string>,
+  }
+
   record balance {
 		key: string,
 		value: integer,
@@ -17,6 +22,6 @@ world root {
 	export burn: async func(ctx: borrow<proc-context>, n: integer) -> result<_, error>;
 	export transfer: async func(ctx: borrow<proc-context>, to: string, n: integer) -> result<_, error>;
 	export balance: async func(ctx: borrow<view-context>, acc: string) -> option<integer>;
-	export balances: async func(ctx: borrow<view-context>) -> list<balance>;
+	export balances: async func(ctx: borrow<view-context>, after: option<string>, limit: u64) -> result<balance-page, error>;
 	export total-supply: async func(ctx: borrow<view-context>) -> integer;
 }
