@@ -36,10 +36,10 @@
 import { test, expect, inject } from "vitest";
 import {
   BlsKey,
+  ContractError,
   Decimal,
   KontorSession,
   LocalKey,
-  Result,
   inMemoryFunding,
   type Utxo,
 } from "@kontor/sdk";
@@ -113,10 +113,15 @@ test("SDK capstone: publish, transfer, bulk, marketplace", async () => {
       // has no balances issued, so `balance(...)` for the publisher
       // returns null (or "0").
       const token = session.bind(Token, address);
-      const emptyPage = Result.unwrap(await token.balances(null, 10n));
+      const emptyPage = await token.balances(null, 10n);
       expect(emptyPage).toEqual({ items: [], next: null });
       const bal = await token.balance(signing.identity.holderRef);
       expect(bal == null || bal.toString() === "0").toBe(true);
+      await expect(token.balances("invalid", 10n)).rejects.toMatchObject({
+        name: "ContractError",
+        functionName: "balances",
+        data: { kind: "message" },
+      });
     } finally {
       session.close();
     }
@@ -146,14 +151,29 @@ test("SDK capstone: publish, transfer, bulk, marketplace", async () => {
         .transfer(recipient.identity.holderRef, Decimal.from("1"))
         .simulate();
       expect(sim.status).toBe("Ok");
-      expect(sim.value?.kind).toBe("ok");
+      expect(sim.value?.amt.toString()).toBe("1");
+
+      const rejected = await token
+        .transfer(
+          recipient.identity.holderRef,
+          Decimal.from("1000000000000000"),
+        )
+        .simulate();
+      expect(rejected.status).toBe("ContractErr");
+      expect(rejected.gas).toBeGreaterThan(0n);
+      expect(rejected.value).toBeUndefined();
+      expect(rejected.contractError).toBeInstanceOf(ContractError);
+      expect(rejected.contractError).toMatchObject({
+        functionName: "transfer",
+        data: { kind: "message" },
+      });
 
       // Submit 1 — spends the bootstrap UTXO.
       const first = await token.transfer(
         recipient.identity.holderRef,
         Decimal.from("1"),
       );
-      expect(Result.unwrap(first).amt.toString()).toBe("1");
+      expect(first.amt.toString()).toBe("1");
       expect(
         (await token.balance(recipient.identity.holderRef))?.toString(),
       ).toBe("1");
@@ -164,7 +184,23 @@ test("SDK capstone: publish, transfer, bulk, marketplace", async () => {
         recipient.identity.holderRef,
         Decimal.from("1"),
       );
-      expect(Result.unwrap(second).amt.toString()).toBe("1");
+      expect(second.amt.toString()).toBe("1");
+      expect(
+        (await token.balance(recipient.identity.holderRef))?.toString(),
+      ).toBe("2");
+
+      await expect(
+        Promise.resolve(
+          token.transfer(
+            recipient.identity.holderRef,
+            Decimal.from("1000000000000000"),
+          ),
+        ),
+      ).rejects.toMatchObject({
+        name: "ContractError",
+        functionName: "transfer",
+        data: { kind: "message" },
+      });
       expect(
         (await token.balance(recipient.identity.holderRef))?.toString(),
       ).toBe("2");
@@ -172,7 +208,7 @@ test("SDK capstone: publish, transfer, bulk, marketplace", async () => {
       const holders = new Set<string>();
       let after: string | null = null;
       do {
-        const page = Result.unwrap(await token.balances(after, 2n));
+        const page = await token.balances(after, 2n);
         expect(page.items.length).toBeLessThanOrEqual(2);
         for (const balance of page.items) {
           const key = JSON.stringify(balance.acc.toRaw());
@@ -213,8 +249,8 @@ test("SDK capstone: publish, transfer, bulk, marketplace", async () => {
         token.transfer(recipientA.identity.holderRef, Decimal.from("1")),
         token.transfer(recipientB.identity.holderRef, Decimal.from("2")),
       );
-      expect(Result.unwrap(resA).amt.toString()).toBe("1");
-      expect(Result.unwrap(resB).amt.toString()).toBe("2");
+      expect(resA.amt.toString()).toBe("1");
+      expect(resB.amt.toString()).toBe("2");
       expect(
         (await token.balance(recipientA.identity.holderRef))?.toString(),
       ).toBe("1");

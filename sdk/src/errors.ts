@@ -22,6 +22,8 @@
  * SDK took, and it produced 11 files of two-line constructors.
  */
 
+import type { ContractAddress } from "./canonical/ContractAddress.js";
+
 const SDK_VERSION = "0.3.0";
 const DEFAULT_DOCS_BASE = "https://docs.kontor.network";
 
@@ -95,8 +97,34 @@ export class TransportError extends BaseError {
   override name = "TransportError";
 }
 
+export interface ContractErrorOptions extends BaseErrorOptions {
+  /** Decoded payload of the contract's outer `err`, including custom variants. */
+  data?: unknown;
+  contract?: ContractAddress;
+  functionName?: string;
+}
+
 export class ContractError extends BaseError {
   override name = "ContractError";
+  readonly data: unknown;
+  readonly contract?: ContractAddress;
+  readonly functionName?: string;
+
+  constructor(shortMessage: string, opts: ContractErrorOptions = {}) {
+    super(shortMessage, {
+      ...opts,
+      details:
+        opts.details ??
+        (opts.data === undefined
+          ? undefined
+          : JSON.stringify(opts.data, (_key, value) =>
+              typeof value === "bigint" ? value.toString() : value,
+            )),
+    });
+    this.data = opts.data;
+    this.contract = opts.contract;
+    this.functionName = opts.functionName;
+  }
 }
 
 export class SignerError extends BaseError {

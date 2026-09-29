@@ -17,6 +17,7 @@
 
 import { Attachment } from "./attach.js";
 import type { ContractAddress } from "./canonical/ContractAddress.js";
+import { ContractError } from "./errors.js";
 import type { Inst } from "./inst.js";
 import type { KontorSession } from "./session.js";
 
@@ -27,7 +28,7 @@ interface WitCodec {
 }
 
 /** Maps a function's wire-JSON result to its typed value. */
-type RawDecoder<T> = (raw: unknown) => T;
+type RawDecoder<T> = (raw: unknown, fnName: string) => T;
 
 export abstract class ContractBase {
   /**
@@ -40,6 +41,20 @@ export abstract class ContractBase {
     protected readonly address: ContractAddress,
     private readonly wit: WitCodec,
   ) {}
+
+  // Codegen selects only an outer WIT result. Nested results and lookalike
+  // variants are data and must not be interpreted as call failures.
+  protected _unwrapResult<T>(
+    fnName: string,
+    result: { kind: "ok"; value?: T } | { kind: "err"; value?: unknown },
+  ): T {
+    if (result.kind === "ok") return result.value as T;
+    throw new ContractError(`${fnName} returned an error`, {
+      data: result.value,
+      contract: this.address,
+      functionName: fnName,
+    });
+  }
 
   /** WAVE-encode `args` (wire-JSON shape) into a call expression. */
   private callExpr(fnName: string, args: Record<string, unknown>): string {
@@ -59,7 +74,7 @@ export abstract class ContractBase {
     return (resp) =>
       decode == null
         ? (undefined as T)
-        : decode(JSON.parse(this.wit.decodeResult(fnName, resp)));
+        : decode(JSON.parse(this.wit.decodeResult(fnName, resp)), fnName);
   }
 
   /** Build a proc-context `Inst` — emitted proc methods delegate here. */

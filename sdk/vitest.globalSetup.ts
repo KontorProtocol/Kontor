@@ -44,4 +44,12 @@ export function generateCounterBindings(): void {
 export default async function setup(): Promise<void> {
   generateTokenBindings();
   generateCounterBindings();
+  const resultsWit = readFileSync(
+    path.join(here, "test/fixtures/call-results.wit"),
+    "utf8",
+  );
+  writeFileSync(
+    path.join(here, "test/__generated__/call-results.ts"),
+    generate(resultsWit),
+  );
 }

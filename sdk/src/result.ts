@@ -1,25 +1,8 @@
 /**
- * `Result<T, E>` — the TypeScript shape codegen emits for a WIT
- * `result<T, E>`. Kept as a plain discriminated union (not a class) so
- * codegen-emitted inline result types match structurally without
- * imports, and existing user code keeps working unchanged.
- *
- * The `Result` namespace value (same name, different scope — TS allows
- * type + value with the same name) provides conveniences for the
- * common patterns: type guards (`isOk` / `isErr`), unwrap (throws on
- * the wrong side), and `match` (typed fold over both arms).
- *
- *     const r: Result<Mint, Error> = await token.issuance(amt);
- *     if (Result.isOk(r)) console.log(r.value.amt);
- *     const mint = Result.unwrap(r);            // throws on err
- *     const amt = Result.match(r, {
- *       ok:  (m) => m.amt.toString(),
- *       err: (e) => "0",
- *     });
- *
- * Tests in particular benefit — assertions like
- * `if (r.kind !== "ok") throw ...; expect(r.value...)` collapse into
- * `expect(Result.unwrap(r)...)`.
+ * Utilities for WIT result data and older generated bindings.
+ * Current generated calls return the success value directly and throw
+ * ContractError on an outer err. These helpers remain available for
+ * result data obtained through lower-level codecs.
  */
 
 /** WIT `result<T, E>` shape — what codegen emits inline for variant returns. */

@@ -13,6 +13,8 @@
  *     `Promise<T>` (routed through `session.view`); proc-context
  *     exports return `Inst<T>` (built via `session.call`), executed
  *     when the caller awaits / submits the Inst
+ *   - An outer WIT result resolves to its success type; its err throws
+ *     ContractError. Result-shaped variants remain ordinary data.
  *
  * Generated files are self-contained: no runtime walker dependency,
  * just `@kontor/sdk` for the WAVE codec (Wit) and the `KontorSession`
@@ -310,7 +312,9 @@ function encodeExpr(ref: TypeRef, expr: string, ctx: Ctx): string {
 
 function decodeExpr(ref: TypeRef, expr: string, ctx: Ctx): string {
   if (typeof ref === "string") {
-    return isBigintPrim(ref) ? `BigInt(${expr} as string)` : expr;
+    return isBigintPrim(ref)
+      ? `BigInt(${expr} as string)`
+      : `(${expr} as ${primitiveToTs(ref)})`;
   }
   const id = resolveAlias(ref, ctx);
   const canon = ctx.canonical.get(id);
@@ -503,6 +507,29 @@ function isResultRef(ref: TypeRef | null, ctx: Ctx): boolean {
   return ctx.kinds[resolveAlias(ref, ctx)].tag === "result";
 }
 
+function callResultType(ref: TypeRef | null, ctx: Ctx): string {
+  if (ref == null) return "void";
+  if (typeof ref === "number") {
+    const kind = ctx.kinds[resolveAlias(ref, ctx)];
+    if (kind.tag === "result") {
+      return kind.ok == null ? "void" : typeRefToTs(kind.ok, ctx);
+    }
+  }
+  return typeRefToTs(ref, ctx);
+}
+
+function callDecodeExpr(
+  ref: TypeRef,
+  expr: string,
+  fnName: string,
+  ctx: Ctx,
+): string {
+  const decoded = decodeExpr(ref, expr, ctx);
+  return isResultRef(ref, ctx)
+    ? `this._unwrapResult<${callResultType(ref, ctx)}>(${fnName}, ${decoded})`
+    : decoded;
+}
+
 /**
  * Recognize the attach/detach convention (SDK plan A1): the contract
  * exports both `attach` and `detach`, `attach` carries a `u64` param
@@ -552,7 +579,7 @@ function emitAttachment(
   const sig = attachArgs
     .map((p) => `${toCamel(p.name)}: ${typeRefToTs(p.type, ctx)}`)
     .join(", ");
-  const resultTs = typeRefToTs(attach.result as TypeRef, ctx);
+  const resultTs = callResultType(attach.result, ctx);
 
   // `vout` is pinned to 0 — the escrow is always reveal output 0.
   const attachWire = ['"vout": 0']
@@ -576,7 +603,7 @@ function emitAttachment(
     `    return this._attachment(`,
     `      "attach", { ${attachWire} },`,
     `      "detach", { ${detachWire} },`,
-    `      (raw: unknown) => ${decodeExpr(attach.result as TypeRef, "raw", ctx)},`,
+    `      (raw: unknown, fnName: string) => ${callDecodeExpr(attach.result as TypeRef, "raw", "fnName", ctx)},`,
     `    );`,
     `  }`,
   ];
@@ -687,11 +714,11 @@ export function generate(witText: string): string {
       )
       .join(", ");
     const nameLit = JSON.stringify(name);
-    const resultTs = fn.result != null ? typeRefToTs(fn.result, ctx) : "void";
+    const resultTs = callResultType(fn.result, ctx);
     // The result decoder, omitted for void-returning functions.
     const decodeArg =
       fn.result != null
-        ? `, (raw: unknown) => ${decodeExpr(fn.result, "raw", ctx)}`
+        ? `, (raw: unknown) => ${callDecodeExpr(fn.result, "raw", nameLit, ctx)}`
         : "";
 
     // view-context → `_view` (read-only RPC, resolves to the value);
