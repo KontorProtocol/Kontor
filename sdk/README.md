@@ -70,6 +70,26 @@ exclusive cursor and a page size, resolving to `{ items, next }`.
 This replaces the old no-argument, full-list response in the native token and both
 test tokens. Update clients alongside the rebuilt contracts.
 
+Use `paginate` to walk items without managing the cursor:
+
+```ts
+import { paginate } from "@kontor/sdk";
+
+for await (const balance of paginate((after) => token.balances(after, 100n))) {
+  console.log(balance.acc.toRaw(), balance.amt.toString());
+}
+```
+
+The helper accepts any async page fetcher returning `{ items, next }`. It fetches
+only as the iterator is consumed, passes each cursor through unchanged, and stops
+when `next` is `null`. `break` stops further page requests. Errors propagate to the
+consumer without retrying. Empty pages with a continuation cursor are followed;
+an unchanged non-null continuation cursor throws instead of repeating the page.
+
+To start after a saved cursor, pass
+`paginate(after => token.balances(after, 100n), { after: savedCursor })`.
+For page-based interfaces or saving continuation cursors, use `balances` directly:
+
 ```ts
 let after: string | null = null;
 do {
