@@ -4,6 +4,7 @@ import { playwright } from "@vitest/browser-playwright";
 export default defineConfig({
   test: {
     globalSetup: ["./vitest.globalSetup.ts"],
+    typecheck: { enabled: true, tsconfig: "./tsconfig.typecheck.json" },
     // The live regtest suite has its own config (`vitest.regtest.config.ts`)
     // — it needs a `bitcoind` devnet, so it's kept out of the fast suite.
     exclude: [...configDefaults.exclude, "**/*.regtest.test.ts"],

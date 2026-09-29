@@ -27,6 +27,15 @@ export type { KontorTransport } from "./json-codec";
 // aggregate — lands with the runtime implementation (work item #13).
 export { KontorSession } from "./session";
 export { Result, ResultUnwrapError } from "./result";
+export {
+  BaseError,
+  ChainError,
+  ContractError,
+  DeepReorgError,
+  SignerError,
+  TransportError,
+} from "./errors";
+export type { BaseErrorOptions, ContractErrorOptions } from "./errors";
 export type { Inst } from "./inst";
 export { ContractBase } from "./contract-base";
 export type {

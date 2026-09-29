@@ -25,8 +25,13 @@
  */
 
 import type { AggregateInfo } from "./bindings.js";
-import { ContractError, TransportError } from "./errors.js";
-import { instToWire, rawToOpResult, waitForTxOutcomes } from "./inst.js";
+import { TransportError } from "./errors.js";
+import {
+  instToWire,
+  rawToOpResult,
+  unwrapOpResult,
+  waitForTxOutcomes,
+} from "./inst.js";
 import type { Inst, SubmittedTx, WaitOptions } from "./inst.js";
 import type { ExtraOutput } from "./outputs.js";
 import type {
@@ -169,13 +174,7 @@ function unwrapAllOrThrow<T extends readonly unknown[]>(
 ): T {
   const out: unknown[] = [];
   for (const r of results as readonly OpResult<unknown>[]) {
-    if (r.status === "Ok" && r.value !== undefined) {
-      out.push(r.value);
-    } else {
-      throw new ContractError(`bulk Inst failed with status: ${r.status}`, {
-        details: r.error,
-      });
-    }
+    out.push(unwrapOpResult(r));
   }
   return out as unknown as T;
 }

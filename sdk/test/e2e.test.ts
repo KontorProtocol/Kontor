@@ -17,10 +17,11 @@ import { test, expect, afterEach } from "vitest";
 import {
   type Signing,
   type KontorTransport,
+  ContractAddress,
+  ContractError,
   Decimal,
   HolderRef,
   KontorSession,
-  Result,
   signet,
 } from "@kontor/sdk";
 import { Contract } from "./__generated__/token";
@@ -165,31 +166,32 @@ test("e2e: proc transfer() builds a Call Inst carrying the encoded WAVE", () => 
   );
 });
 
-test("e2e: proc transfer() decoder round-trips the ok arm of Result<Transfer, Error>", () => {
+test("e2e: proc transfer() decoder returns the success value", () => {
   const { session } = mockSession({});
   const c = session.bind(Contract, "token@0.0");
   const inst = c.transfer(HolderRef.core(), Decimal.from("0"));
 
-  const r = inst._decode(
+  const ok = inst._decode(
     `ok({src: x-only-pubkey("aa"), dst: x-only-pubkey("bb"), amt: ${decimalWave("42")}})`,
   );
-  const ok = Result.unwrap(r);
   expect(ok.amt).toBeInstanceOf(Decimal);
   expect(ok.amt.toString()).toBe("42");
   expect(ok.src.kind).toBe("x-only-pubkey");
 });
 
-test("e2e: proc transfer() decoder round-trips the err arm", () => {
+test("e2e: proc transfer() decoder throws a structured contract error", () => {
   const { session } = mockSession({});
   const c = session.bind(Contract, "token@0.0");
   const inst = c.transfer(HolderRef.core(), Decimal.from("0"));
 
-  const r = inst._decode('err(message("not enough funds"))');
-  const err = Result.unwrapErr(r);
-  expect(err.kind).toBe("message");
-  if (err.kind === "message") {
-    expect(err.value).toBe("not enough funds");
-  }
+  expect(() => inst._decode('err(message("not enough funds"))')).toThrowError(
+    expect.objectContaining({
+      name: "ContractError",
+      data: { kind: "message", value: "not enough funds" },
+      contract: new ContractAddress("token", 0n, 0n),
+      functionName: "transfer",
+    }),
+  );
 });
 
 test("e2e: balance pages preserve cursors, holder types and Decimal values", async () => {
@@ -198,26 +200,30 @@ test("e2e: balance pages preserve cursors, holder types and Decimal values", asy
   };
   const { session, calls } = mockSession(responses);
   const token = session.bind(Contract, "token@0.0");
-  const first = Result.unwrap(await token.balances(null, 1n));
+  const first = await token.balances(null, 1n);
   expect(first.items[0].acc).toBeInstanceOf(HolderRef);
   expect(first.items[0].acc.toRaw()).toEqual({ kind: "signer-id", value: "7" });
   expect(first.items[0].amt).toBeInstanceOf(Decimal);
   expect(first.items[0].amt.toString()).toBe("42.5");
   expect(first.next).toBe("7");
   responses.balances = `ok({items: [{acc: storage-pool, amt: ${decimalWave("0")}}], next: none})`;
-  const last = Result.unwrap(await token.balances(first.next, 1n));
+  const last = await token.balances(first.next, 1n);
   expect(last.items[0].acc.kind).toBe("storage-pool");
   expect(last.items[0].amt.toString()).toBe("0");
   expect(last.next).toBeNull();
   expect(calls).toEqual(["balances(none, 1)", 'balances(some("7"), 1)']);
   responses.balances = "ok({items: [], next: none})";
-  expect(Result.unwrap(await token.balances(null, 0n))).toEqual({
+  expect(await token.balances(null, 0n)).toEqual({
     items: [],
     next: null,
   });
   responses.balances = 'err(message("invalid cursor"))';
-  expect(Result.unwrapErr(await token.balances("invalid", 1n))).toEqual({
-    kind: "message",
-    value: "invalid cursor",
+  const error = await token
+    .balances("invalid", 1n)
+    .catch((error: unknown) => error);
+  expect(error).toBeInstanceOf(ContractError);
+  expect(error).toMatchObject({
+    functionName: "balances",
+    data: { kind: "message", value: "invalid cursor" },
   });
 });

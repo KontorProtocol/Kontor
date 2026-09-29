@@ -1,0 +1,23 @@
+package test:call-results;
+
+world root {
+    include kontor:built-in/built-in;
+    use kontor:built-in/context.{proc-context, view-context, contract};
+    use kontor:built-in/error.{error};
+
+    variant outcome {
+        ok(string),
+        err(string),
+    }
+
+    type reply = result<option<u64>, error>;
+    type aliased-reply = reply;
+
+    export init: async func(ctx: borrow<proc-context>) -> contract;
+    export maybe-value: async func(ctx: borrow<view-context>) -> aliased-reply;
+    export set-flag: async func(ctx: borrow<proc-context>) -> result<_, error>;
+    export check-flag: async func(ctx: borrow<view-context>) -> result<_, error>;
+    export outcome: async func(ctx: borrow<view-context>) -> outcome;
+    export wrapped-outcome: async func(ctx: borrow<view-context>) -> result<outcome, error>;
+    export echo-outcome: async func(ctx: borrow<proc-context>, value: outcome) -> outcome;
+}

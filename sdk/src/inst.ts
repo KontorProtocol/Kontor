@@ -181,7 +181,7 @@ export class Inst<T> implements PromiseLike<T> {
   ): PromiseLike<TResult1 | TResult2> {
     return this.submit()
       .then((tx) => tx.wait())
-      .then(unwrapOrThrow)
+      .then(unwrapOpResult)
       .then(onfulfilled, onrejected);
   }
 
@@ -333,15 +333,25 @@ export function rawToOpResult<T>(
   raw: OpResultRaw,
   decode: InstDecoder<T>,
 ): OpResult<T> {
-  return {
+  const result: OpResult<T> = {
     status: raw.status,
     gas: raw.gas,
     error: raw.error,
-    value: raw.value !== undefined ? decode(raw.value) : undefined,
   };
+  try {
+    result.value = raw.value !== undefined ? decode(raw.value) : undefined;
+  } catch (error) {
+    if (!(error instanceof ContractError)) throw error;
+    // Keep every outcome available to simulate/inspect/wait callers, even
+    // when one contract returns err in a batch. Awaiting the call throws it.
+    result.contractError = error;
+  }
+  return result;
 }
 
-function unwrapOrThrow<T>(r: OpResult<T>): T {
+/** @internal */
+export function unwrapOpResult<T>(r: OpResult<T>): T {
+  if (r.contractError !== undefined) throw r.contractError;
   // `value` is absent for void-returning Insts (Issuance, RegisterBlsKey)
   // even on success — gate solely on status so awaiting `inst<void>`
   // resolves to undefined rather than throwing.

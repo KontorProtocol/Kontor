@@ -38,6 +38,7 @@
 import type { Transaction } from "@scure/btc-signer";
 
 import type { ContractAddress } from "./canonical/ContractAddress.js";
+import type { ContractError } from "./errors.js";
 import type { ProvenanceEntry } from "./provenance.js";
 import type { ExtraOutput } from "./outputs.js";
 import type {
@@ -69,14 +70,14 @@ export interface Utxo {
 /**
  * Per-Inst outcome as the transport layer surfaces it: the WAVE-encoded
  * result string (decoded by the SDK layer into the user's typed value)
- * plus telemetry (`status`, `gas`, optional `error`). `value` is absent
- * on failed ops or when the function has no return type.
+ * plus telemetry (`status`, `gas`, optional `error`). A ContractErr status
+ * retains its WIT error value; other failures and void functions have no value.
  */
 export interface OpResultRaw {
   status: OpStatus;
   gas: bigint;
   error?: string;
-  /** WAVE-encoded result. Absent on non-Ok status / void-return Insts. */
+  /** WAVE-encoded result, including `err(...)` for ContractErr outcomes. */
   value?: string;
   /** The function this op invoked (e.g. `transfer`). */
   func: string;
@@ -95,14 +96,16 @@ export interface OpResultRaw {
  * Per-Inst outcome at the SDK level: same shape as `OpResultRaw` but
  * the `value` field is the typed value, produced by the Inst's
  * decoder. Returned by `inst.submit()` / `.simulate()` / `.inspect()`
- * for callers who want telemetry; `await inst` returns the unwrapped
- * `T` and throws on non-Ok status.
+ * for callers who want telemetry. A decoded outer err lives in
+ * `contractError`; `await inst` returns `T` or throws the failure.
  */
 export interface OpResult<T> {
   status: OpStatus;
   gas: bigint;
   error?: string;
   value?: T;
+  /** Structured contract-returned error, retained alongside execution telemetry. */
+  contractError?: ContractError;
 }
 
 /** Result of broadcasting a tx — just the txid. The per-Inst outcomes
