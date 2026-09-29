@@ -1,7 +1,10 @@
 #![no_std]
 contract!(name = "token");
 
+use core::ops::Bound;
 use stdlib::*;
+
+const MAX_BALANCES_LIMIT: u64 = 100;
 
 // The dev faucet cap does not apply to genesis issuance or scheduled emissions.
 const DEV_MINT_CAP: u64 = 1000;
@@ -306,19 +309,49 @@ impl Guest for Token {
         }
     }
 
-    fn balances(ctx: &ViewContext) -> Vec<Balance> {
-        ctx.model()
+    fn balances(
+        ctx: &ViewContext,
+        after: Option<String>,
+        limit: u64,
+    ) -> Result<BalancePage, Error> {
+        let after = after
+            .map(|cursor| cursor.parse::<Holder>())
+            .transpose()
+            .map_err(Error::Message)?;
+        let limit = limit.min(MAX_BALANCES_LIMIT) as usize;
+        if limit == 0 {
+            return Ok(BalancePage {
+                items: Vec::new(),
+                next: None,
+            });
+        }
+        let bounds = (
+            after.map(Bound::Excluded).unwrap_or(Bound::Unbounded),
+            Bound::Unbounded,
+        );
+        // Only fixed system accounts are filtered, so the lookahead remains bounded.
+        let mut rows: Vec<_> = ctx
+            .model()
             .ledger()
+            .range(bounds)
             .entries()
-            .filter_map(|(acc, amt)| {
-                let acc_ref = acc.as_ref();
-                if acc_ref == HolderRef::Burner || acc_ref == HolderRef::Core {
-                    None
-                } else {
-                    Some(Balance { amt, acc: acc_ref })
-                }
+            .filter(|(acc, _)| !matches!(acc.as_ref(), HolderRef::Burner | HolderRef::Core))
+            .take(limit + 1)
+            .collect();
+        let next = if rows.len() > limit {
+            rows.pop();
+            rows.last().map(|(acc, _)| acc.to_string())
+        } else {
+            None
+        };
+        let items = rows
+            .into_iter()
+            .map(|(acc, amt)| Balance {
+                acc: acc.as_ref(),
+                amt,
             })
-            .collect()
+            .collect();
+        Ok(BalancePage { items, next })
     }
 
     fn total_supply(ctx: &ViewContext) -> Decimal {

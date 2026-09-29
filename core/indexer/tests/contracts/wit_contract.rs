@@ -20,6 +20,11 @@ world root {
     amt: decimal,
   }
 
+  record balance-page {
+    items: list<balance>,
+    next: option<string>,
+  }
+
   record transfer {
     src: holder-ref,
     dst: holder-ref,
@@ -49,7 +54,7 @@ world root {
   export transfer: async func(ctx: borrow<proc-context>, dst: holder-ref, amt: decimal) -> result<transfer, error>;
   export balance: async func(ctx: borrow<view-context>, acc: holder-ref) -> option<decimal>;
   export floor: async func(ctx: borrow<view-context>, acc: holder-ref) -> decimal;
-  export balances: async func(ctx: borrow<view-context>) -> list<balance>;
+  export balances: async func(ctx: borrow<view-context>, after: option<string>, limit: u64) -> result<balance-page, error>;
   export total-supply: async func(ctx: borrow<view-context>) -> decimal;
   export dev-mint-enabled: async func(ctx: borrow<view-context>) -> bool;
   export attach: async func(ctx: borrow<proc-context>, vout: u32, amt: decimal) -> result<transfer, error>;

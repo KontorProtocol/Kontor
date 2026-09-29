@@ -113,6 +113,8 @@ test("SDK capstone: publish, transfer, bulk, marketplace", async () => {
       // has no balances issued, so `balance(...)` for the publisher
       // returns null (or "0").
       const token = session.bind(Token, address);
+      const emptyPage = Result.unwrap(await token.balances(null, 10n));
+      expect(emptyPage).toEqual({ items: [], next: null });
       const bal = await token.balance(signing.identity.holderRef);
       expect(bal == null || bal.toString() === "0").toBe(true);
     } finally {
@@ -166,6 +168,20 @@ test("SDK capstone: publish, transfer, bulk, marketplace", async () => {
       expect(
         (await token.balance(recipient.identity.holderRef))?.toString(),
       ).toBe("2");
+
+      const holders = new Set<string>();
+      let after: string | null = null;
+      do {
+        const page = Result.unwrap(await token.balances(after, 2n));
+        expect(page.items.length).toBeLessThanOrEqual(2);
+        for (const balance of page.items) {
+          const key = JSON.stringify(balance.acc.toRaw());
+          expect(holders.has(key)).toBe(false);
+          holders.add(key);
+        }
+        after = page.next;
+      } while (after !== null);
+      expect(holders.size).toBeGreaterThan(2);
     } finally {
       session.close();
     }

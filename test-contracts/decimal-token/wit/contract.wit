@@ -13,6 +13,11 @@ world root {
   use kontor:built-in/error.{error};
   use kontor:built-in/numbers-types.{decimal};
 
+  record balance-page {
+    items: list<balance>,
+    next: option<string>,
+  }
+
   record balance {
     acc: holder-ref,
     amt: decimal,
@@ -40,7 +45,7 @@ world root {
   export burn: async func(ctx: borrow<proc-context>, amt: decimal) -> result<burn, error>;
   export transfer: async func(ctx: borrow<proc-context>, dst: holder-ref, amt: decimal) -> result<transfer, error>;
   export balance: async func(ctx: borrow<view-context>, acc: holder-ref) -> option<decimal>;
-  export balances: async func(ctx: borrow<view-context>) -> list<balance>;
+  export balances: async func(ctx: borrow<view-context>, after: option<string>, limit: u64) -> result<balance-page, error>;
   export total-supply: async func(ctx: borrow<view-context>) -> decimal;
   export attach: async func(ctx: borrow<proc-context>, vout: u32, amt: decimal) -> result<transfer, error>;
   export detach: async func(ctx: borrow<proc-context>) -> result<transfer, error>;

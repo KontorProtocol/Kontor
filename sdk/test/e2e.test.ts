@@ -191,3 +191,33 @@ test("e2e: proc transfer() decoder round-trips the err arm", () => {
     expect(err.value).toBe("not enough funds");
   }
 });
+
+test("e2e: balance pages preserve cursors, holder types and Decimal values", async () => {
+  const responses = {
+    balances: `ok({items: [{acc: signer-id(7), amt: ${decimalWave("42.5")}}], next: some("7")})`,
+  };
+  const { session, calls } = mockSession(responses);
+  const token = session.bind(Contract, "token@0.0");
+  const first = Result.unwrap(await token.balances(null, 1n));
+  expect(first.items[0].acc).toBeInstanceOf(HolderRef);
+  expect(first.items[0].acc.toRaw()).toEqual({ kind: "signer-id", value: "7" });
+  expect(first.items[0].amt).toBeInstanceOf(Decimal);
+  expect(first.items[0].amt.toString()).toBe("42.5");
+  expect(first.next).toBe("7");
+  responses.balances = `ok({items: [{acc: storage-pool, amt: ${decimalWave("0")}}], next: none})`;
+  const last = Result.unwrap(await token.balances(first.next, 1n));
+  expect(last.items[0].acc.kind).toBe("storage-pool");
+  expect(last.items[0].amt.toString()).toBe("0");
+  expect(last.next).toBeNull();
+  expect(calls).toEqual(["balances(none, 1)", 'balances(some("7"), 1)']);
+  responses.balances = "ok({items: [], next: none})";
+  expect(Result.unwrap(await token.balances(null, 0n))).toEqual({
+    items: [],
+    next: null,
+  });
+  responses.balances = 'err(message("invalid cursor"))';
+  expect(Result.unwrapErr(await token.balances("invalid", 1n))).toEqual({
+    kind: "message",
+    value: "invalid cursor",
+  });
+});

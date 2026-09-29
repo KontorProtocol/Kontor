@@ -228,3 +228,30 @@ aliases, options, records, and variant payloads. A list-bearing response record
 has no persistent model; `list<u8>` remains supported as a scalar storage value.
 An index declaration on a non-storable response record is rejected explicitly.
 This adds response shapes, not persistent variable-length list storage.
+
+## Token balance pagination
+
+The native token, decimal test token, and integer test token expose
+`balances(after: option<string>, limit: u64) -> result<balance-page, error>`,
+where `balance-page` contains `items: list<balance>` and `next: option<string>`.
+This replaces the previous full-list export. Regenerate caller bindings and use
+an explicit page loop when all balances are needed; see the
+[SDK example](../../sdk/README.md#token-balance-pages).
+
+`after` is an exclusive canonical holder-key cursor. Pages seek directly into
+`ledger.range(bounds).entries()` and fetch at most 101 visible rows plus the
+fixed excluded system accounts. There are no per-balance point reads. Limits are
+clamped to 100, zero returns no entries, and malformed or unresolvable holder
+cursors return an error. One visible lookahead distinguishes a full final page
+from a page with a continuation. Returned cursors require no surviving ledger
+entry and continue working after deletion.
+
+Ordering is canonical holder-string order, not numeric signer-ID or balance
+order. Native and decimal tokens exclude core and burner accounts; the integer
+test token excludes the burner. Reward pools and stored zero balances remain
+visible. Pages reflect state at each call, so concurrent writes or rollback can
+change a traversal. There is no cross-call snapshot guarantee.
+
+The change affects the contract ABI and requires rebuilt native/test contracts
+and regenerated clients. It does not change stored balances or storage encoding.
+Map mutation helper proposals in #175 remain separate work.

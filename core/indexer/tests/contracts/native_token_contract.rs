@@ -53,7 +53,16 @@ async fn test_native_token_contract() -> Result<()> {
     let result = token::balance(runtime, HolderRef::XOnlyPubkey("foo".to_string())).await?;
     assert_eq!(result, None);
 
-    let balances = token::balances(runtime).await?;
+    let mut balances = Vec::new();
+    let mut after: Option<String> = None;
+    loop {
+        let page = token::balances(runtime, after.as_deref(), 100).await??;
+        balances.extend(page.items);
+        after = page.next;
+        if after.is_none() {
+            break;
+        }
+    }
     assert!(balances.len() >= 2);
     // Total supply vs sum-of-balances check: only valid in local mode where
     // no concurrent modules modify native token state between the two queries.
