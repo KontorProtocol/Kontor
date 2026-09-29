@@ -59,10 +59,27 @@ async fn test_token_contract() -> Result<()> {
         }
     }
     assert!(balances.len() >= 2);
-    let total = balances
-        .iter()
-        .fold(Integer::from(0), |acc, x| acc + x.value);
-    assert_eq!(total, token::total_supply(runtime, &token).await?);
+    assert_eq!(
+        balances
+            .iter()
+            .find(|balance| balance.key == minter.to_string())
+            .map(|balance| balance.value),
+        Some(Integer::from(958))
+    );
+    assert_eq!(
+        balances
+            .iter()
+            .find(|balance| balance.key == holder.to_string())
+            .map(|balance| balance.value),
+        Some(Integer::from(42))
+    );
+    // Shared regtest ledgers can change between pages and the supply query.
+    if runtime.reg_tester().is_none() {
+        let total = balances
+            .iter()
+            .fold(Integer::from(0), |acc, x| acc + x.value);
+        assert_eq!(total, token::total_supply(runtime, &token).await?);
+    }
 
     Ok(())
 }
@@ -131,25 +148,54 @@ async fn test_token_contract_large_numbers() -> Result<()> {
 async fn test_token_balance_pages_include_zero_and_skip_burner() -> Result<()> {
     let minter = runtime.identity().await?;
     let holder = runtime.identity().await?;
-    // Regtest caches publications by name, so this ledger needs its own alias.
-    let token = runtime
-        .publish_as(&minter, "test-token", "token-balance-pages")
-        .await?;
-    let empty = token::balances(runtime, &token, None, 1).await??;
-    assert!(empty.items.is_empty() && empty.next.is_none());
+    let token = runtime.publish(&minter, "test-token").await?;
+    if runtime.reg_tester().is_none() {
+        let empty = token::balances(runtime, &token, None, 1).await??;
+        assert!(empty.items.is_empty() && empty.next.is_none());
+    }
     token::mint(runtime, &token, &minter, 10.into()).await??;
     token::transfer(runtime, &token, &minter, &holder, 10.into()).await??;
     token::burn(runtime, &token, &holder, 1.into()).await??;
-    let first = token::balances(runtime, &token, None, 1).await??;
-    assert_eq!(first.items.len(), 1);
-    assert_eq!(first.next.as_ref(), Some(&first.items[0].key));
-    let last = token::balances(runtime, &token, first.next.as_deref(), 1).await??;
-    assert_eq!(last.items.len(), 1);
-    assert!(last.next.is_none());
-    assert_ne!(first.items[0].key, last.items[0].key);
-    let mut amounts = [first.items[0].value, last.items[0].value];
-    amounts.sort();
-    assert_eq!(amounts, [Integer::from(0), Integer::from(9)]);
+    let zero = token::balances(runtime, &token, None, 0).await??;
+    assert!(zero.items.is_empty() && zero.next.is_none());
+    let mut balances = Vec::new();
+    let mut after: Option<String> = None;
+    loop {
+        let page = token::balances(runtime, &token, after.as_deref(), 1).await??;
+        assert!(page.items.len() <= 1);
+        for balance in &page.items {
+            assert_ne!(balance.key, "burner");
+            if let Some(cursor) = &after {
+                assert!(balance.key > *cursor);
+            }
+        }
+        if page.next.is_some() {
+            assert_eq!(
+                page.next.as_ref(),
+                page.items.last().map(|balance| &balance.key)
+            );
+        }
+        balances.extend(page.items);
+        after = page.next;
+        if after.is_none() {
+            break;
+        }
+    }
+    // Other tests may mutate the shared ledger, but these holders belong to this test.
+    assert_eq!(
+        balances
+            .iter()
+            .find(|balance| balance.key == minter.to_string())
+            .map(|balance| balance.value),
+        Some(Integer::from(0))
+    );
+    assert_eq!(
+        balances
+            .iter()
+            .find(|balance| balance.key == holder.to_string())
+            .map(|balance| balance.value),
+        Some(Integer::from(9))
+    );
     assert!(
         token::balances(runtime, &token, Some("invalid"), 1)
             .await?
@@ -162,24 +208,54 @@ async fn test_token_balance_pages_include_zero_and_skip_burner() -> Result<()> {
 async fn test_decimal_token_balance_pages() -> Result<()> {
     let minter = runtime.identity().await?;
     let holder = runtime.identity().await?;
-    let token = runtime
-        .publish_as(&minter, "decimal-token", "decimal-token-balance-pages")
-        .await?;
-    let empty = decimal_token::balances(runtime, &token, None, 1).await??;
-    assert!(empty.items.is_empty() && empty.next.is_none());
+    let token = runtime.publish(&minter, "decimal-token").await?;
+    if runtime.reg_tester().is_none() {
+        let empty = decimal_token::balances(runtime, &token, None, 1).await??;
+        assert!(empty.items.is_empty() && empty.next.is_none());
+    }
     decimal_token::mint(runtime, &token, &minter, Decimal::from("10.5")).await??;
     decimal_token::transfer(runtime, &token, &minter, &holder, Decimal::from("10.5")).await??;
     decimal_token::burn(runtime, &token, &holder, Decimal::from("1")).await??;
-    let first = decimal_token::balances(runtime, &token, None, 1).await??;
-    assert_eq!(first.items.len(), 1);
-    assert!(first.next.is_some());
-    let last = decimal_token::balances(runtime, &token, first.next.as_deref(), 1).await??;
-    assert_eq!(last.items.len(), 1);
-    assert!(last.next.is_none());
-    assert_ne!(first.items[0].acc, last.items[0].acc);
-    let mut amounts = [first.items[0].amt, last.items[0].amt];
-    amounts.sort();
-    assert_eq!(amounts, [Decimal::from("0"), Decimal::from("9.5")]);
+    let zero = decimal_token::balances(runtime, &token, None, 0).await??;
+    assert!(zero.items.is_empty() && zero.next.is_none());
+    let mut balances = Vec::new();
+    let mut after: Option<String> = None;
+    loop {
+        let page = decimal_token::balances(runtime, &token, after.as_deref(), 1).await??;
+        assert!(page.items.len() <= 1);
+        for balance in &page.items {
+            assert_ne!(balance.acc, HolderRef::Core);
+            assert_ne!(balance.acc, HolderRef::Burner);
+            if let Some(cursor) = &after {
+                assert!(balance.acc.to_string() > *cursor);
+            }
+        }
+        if page.next.is_some() {
+            assert_eq!(
+                page.next,
+                page.items.last().map(|balance| balance.acc.to_string())
+            );
+        }
+        balances.extend(page.items);
+        after = page.next;
+        if after.is_none() {
+            break;
+        }
+    }
+    assert_eq!(
+        balances
+            .iter()
+            .find(|balance| balance.acc == HolderRef::from(&minter))
+            .map(|balance| balance.amt),
+        Some(Decimal::from("0"))
+    );
+    assert_eq!(
+        balances
+            .iter()
+            .find(|balance| balance.acc == HolderRef::from(&holder))
+            .map(|balance| balance.amt),
+        Some(Decimal::from("9.5"))
+    );
     assert!(
         decimal_token::balances(runtime, &token, Some("invalid"), 1)
             .await?
