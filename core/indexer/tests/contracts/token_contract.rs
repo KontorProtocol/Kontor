@@ -131,7 +131,10 @@ async fn test_token_contract_large_numbers() -> Result<()> {
 async fn test_token_balance_pages_include_zero_and_skip_burner() -> Result<()> {
     let minter = runtime.identity().await?;
     let holder = runtime.identity().await?;
-    let token = runtime.publish(&minter, "test-token").await?;
+    // Regtest caches publications by name, so this ledger needs its own alias.
+    let token = runtime
+        .publish_as(&minter, "test-token", "token-balance-pages")
+        .await?;
     let empty = token::balances(runtime, &token, None, 1).await??;
     assert!(empty.items.is_empty() && empty.next.is_none());
     token::mint(runtime, &token, &minter, 10.into()).await??;
@@ -159,7 +162,9 @@ async fn test_token_balance_pages_include_zero_and_skip_burner() -> Result<()> {
 async fn test_decimal_token_balance_pages() -> Result<()> {
     let minter = runtime.identity().await?;
     let holder = runtime.identity().await?;
-    let token = runtime.publish(&minter, "decimal-token").await?;
+    let token = runtime
+        .publish_as(&minter, "decimal-token", "decimal-token-balance-pages")
+        .await?;
     let empty = decimal_token::balances(runtime, &token, None, 1).await??;
     assert!(empty.items.is_empty() && empty.next.is_none());
     decimal_token::mint(runtime, &token, &minter, Decimal::from("10.5")).await??;
