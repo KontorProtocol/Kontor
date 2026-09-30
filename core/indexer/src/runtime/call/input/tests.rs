@@ -329,3 +329,34 @@ async fn argument_lowering_prices_structure_and_decoded_strings() -> Result<()> 
     }
     Ok(())
 }
+
+#[tokio::test]
+async fn failed_argument_construction_keeps_only_construction_charges() -> Result<()> {
+    let (mut runtime, _dir, _name) = test_runtime().await?;
+    let cases = [
+        ("(tuple u32 string)", "(7, false)", 150),
+        ("(record (field \"a\" u32))", "{:}", 160),
+        (
+            "(variant (case \"empty\") (case \"value\" u32))",
+            "value(false)",
+            300,
+        ),
+    ];
+    for (definition, source, construction) in cases {
+        let gauge = FuelGauge::with_profiling();
+        runtime.gauge = Some(gauge.clone());
+        let ty = ty(&runtime, definition)?;
+        let mut store = runtime.make_store(10_000)?;
+        let error = parse(&mut store, &ty, source).unwrap_err();
+        assert!(error.downcast_ref::<Trap>().is_none(), "{source}: {error}");
+        assert_eq!(store.get_fuel()?, 10_000 - construction, "{source}");
+        let profile = gauge.report()?.profile.unwrap();
+        assert!(
+            !profile
+                .per_type
+                .contains_key(&FuelDiscriminants::LoweringValues),
+            "{source}"
+        );
+    }
+    Ok(())
+}
