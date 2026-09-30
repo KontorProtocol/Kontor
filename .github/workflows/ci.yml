@@ -136,7 +136,7 @@ jobs:
         shell: bash
         run: |
           if [[ "$RUNNER_OS" == "macOS" ]]; then
-            RUST_BACKTRACE=1 REGTEST=1 cargo test --release --workspace -- --nocapture 2>&1 | tee "$RUNNER_TEMP/macos-crash-diagnostics/tests.log"
+            RUST_BACKTRACE=1 REGTEST=1 python3 ../tools/ci/macos_diagnostics.py run "$RUNNER_TEMP/macos-crash-diagnostics/tests.log" cargo test --release --workspace -- --nocapture
           else
             REGTEST=1 cargo test --release --workspace -- --nocapture
           fi

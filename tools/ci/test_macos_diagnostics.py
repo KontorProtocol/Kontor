@@ -1,5 +1,8 @@
 import json
+import os
 from pathlib import Path
+import signal
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -102,6 +105,43 @@ class MacOSDiagnosticsTests(unittest.TestCase):
         ], timeout=1)
         self.assertIn("partial", path.read_text())
         self.assertIn("Collection error:", path.read_text())
+
+    def test_logged_command_preserves_output_and_exit_code(self):
+        log = self.root / "tests.log"
+        command = [
+            sys.executable, diagnostics.__file__, "run", str(log),
+            sys.executable, "-c",
+            "import sys; print('stdout'); print('stderr', file=sys.stderr); sys.exit(101)",
+        ]
+        result = subprocess.run(command, capture_output=True, timeout=5)
+        self.assertEqual(result.returncode, 101)
+        self.assertEqual(result.stdout, log.read_bytes())
+        self.assertIn(b"stdout", result.stdout)
+        self.assertIn(b"stderr", result.stdout)
+
+    def test_logged_command_does_not_wait_for_descendants_to_close_output(self):
+        log = self.root / "tests.log"
+        pid_file = self.root / "child.pid"
+        script = (
+            "import pathlib, subprocess, sys; "
+            "child = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(30)']); "
+            f"pathlib.Path({str(pid_file)!r}).write_text(str(child.pid)); "
+            "print('parent failed', flush=True); sys.exit(101)"
+        )
+        try:
+            result = subprocess.run([
+                sys.executable, diagnostics.__file__, "run", str(log),
+                sys.executable, "-c", script,
+            ], capture_output=True, timeout=5)
+            self.assertEqual(result.returncode, 101)
+            self.assertIn(b"parent failed", result.stdout)
+            os.kill(int(pid_file.read_text()), 0)
+        finally:
+            if pid_file.exists():
+                try:
+                    os.kill(int(pid_file.read_text()), signal.SIGTERM)
+                except ProcessLookupError:
+                    pass
 
 
 if __name__ == "__main__":

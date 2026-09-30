@@ -7,6 +7,7 @@ import os
 from pathlib import Path
 import shutil
 import subprocess
+import sys
 import time
 
 
@@ -111,6 +112,31 @@ def capture_command(path, command, timeout=30):
             log.write(f"\nCollection error: {error}\n")
 
 
+def run_logged(output, command):
+    output.parent.mkdir(parents=True, exist_ok=True)
+    # A pipe can remain open in orphaned descendants after cargo exits. A regular
+    # file lets us stop following output when cargo itself finishes.
+    with output.open("wb") as log, output.open("rb") as reader:
+        with subprocess.Popen(command, stdout=log, stderr=subprocess.STDOUT) as process:
+            while process.poll() is None:
+                data = reader.read(65536)
+                if data:
+                    sys.stdout.buffer.write(data)
+                    sys.stdout.buffer.flush()
+                else:
+                    time.sleep(0.05)
+            # Bound the final drain, even if surviving children keep writing.
+            remaining = output.stat().st_size - reader.tell()
+            while remaining > 0:
+                data = reader.read(min(remaining, 65536))
+                if not data:
+                    break
+                sys.stdout.buffer.write(data)
+                sys.stdout.buffer.flush()
+                remaining -= len(data)
+            return process.returncode if process.returncode >= 0 else 128 - process.returncode
+
+
 def collect(output, roots):
     output.mkdir(parents=True, exist_ok=True)
     count = collect_reports(output, roots)
@@ -150,10 +176,15 @@ def collect(output, roots):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("action", choices=["prepare", "collect"])
+    parser.add_argument("action", choices=["prepare", "collect", "run"])
     parser.add_argument("output", type=Path)
+    parser.add_argument("command", nargs=argparse.REMAINDER)
     args = parser.parse_args()
-    if args.action == "prepare":
+    if args.action == "run":
+        if not args.command:
+            parser.error("run requires a command")
+        sys.exit(run_logged(args.output, args.command))
+    elif args.action == "prepare":
         prepare(args.output, REPORT_ROOTS)
     else:
         collect(args.output, REPORT_ROOTS)
