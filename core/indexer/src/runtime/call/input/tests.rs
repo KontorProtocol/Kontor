@@ -123,7 +123,12 @@ async fn omitted_fields_stop_construction_at_the_budget() -> Result<()> {
     for affordable in [0, 1, 16, 512] {
         let gauge = FuelGauge::with_profiling();
         runtime.gauge = Some(gauge.clone());
-        let budget = Fuel::WaveValue.cost() + affordable * field_cost;
+        let construction = Fuel::WaveValue.cost() + affordable * field_cost;
+        let budget = if affordable == 512 {
+            2 * construction
+        } else {
+            construction
+        };
         let mut store = runtime.make_store(budget)?;
         let result = parse(&mut store, &ty, "{:}");
         if affordable == 512 {
@@ -175,13 +180,13 @@ async fn only_selected_payloads_expand_and_schema_bytes_are_charged() -> Result<
     let record = r#"(type $inner (record (field "long-field-name" (option u32))))
         (export $record "record" (type $inner))"#;
     let optional = ty_with_definitions(&runtime, record, "(option $record)")?;
-    let mut store = runtime.make_store(50)?;
+    let mut store = runtime.make_store(100)?;
     assert_eq!(
         parse(&mut store, &optional, "none")?,
         vec![Val::Option(None)]
     );
     assert_eq!(store.get_fuel()?, 0);
-    let mut store = runtime.make_store(50 * 4 + 10 * 15)?;
+    let mut store = runtime.make_store(2 * (50 * 4 + 10 * 15))?;
     assert!(parse(&mut store, &optional, "some({:})").is_ok());
     assert_eq!(store.get_fuel()?, 0);
     let variant = ty_with_definitions(
@@ -189,7 +194,7 @@ async fn only_selected_payloads_expand_and_schema_bytes_are_charged() -> Result<
         record,
         "(variant (case \"empty\") (case \"full\" $record))",
     )?;
-    let mut store = runtime.make_store(50 + 50 + 10 * 5)?;
+    let mut store = runtime.make_store(2 * (50 + 50 + 10 * 5))?;
     assert_eq!(
         parse(&mut store, &variant, "empty")?,
         vec![Val::Variant("empty".into(), None)]
@@ -222,6 +227,135 @@ async fn construction_overhead() -> Result<()> {
         println!(
             "fields={count} stock={stock:?} metered={:?}",
             start.elapsed()
+        );
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn argument_lowering_is_reserved_before_guest_allocation() -> Result<()> {
+    let (mut runtime, _dir, _name) = test_runtime().await?;
+    let component = Component::new(
+        &runtime.engine,
+        r#"(component
+            (core module $guest
+                (memory (export "memory") 1)
+                (func (export "realloc") (param i32 i32 i32 i32) (result i32)
+                    unreachable)
+                (func (export "run") (param i32 i32)))
+            (core instance $guest (instantiate $guest))
+            (func (export "run") (param "text" string)
+                (canon lift (core func $guest "run")
+                    (memory $guest "memory") (realloc (func $guest "realloc")))))"#,
+    )?;
+    let call = UntypedFuncCall::parse("run(\"aé𝄞\")")?;
+    let construction = 50;
+    let lowering = 50 + 3 * 7;
+    for budget in [construction, construction + lowering - 1, 10_000] {
+        let gauge = FuelGauge::with_profiling();
+        runtime.gauge = Some(gauge.clone());
+        let mut store = runtime.make_store(budget)?;
+        let instance = runtime
+            .linkers
+            .user
+            .instantiate_async(&mut store, &component)
+            .await?;
+        let run = instance.get_func(&mut store, "run").unwrap();
+        let result = params(&call, [Type::String].into_iter(), &mut store);
+        if budget < construction + lowering {
+            assert_eq!(
+                result.unwrap_err().downcast_ref::<Trap>(),
+                Some(&Trap::OutOfFuel)
+            );
+            assert_eq!(store.get_fuel()?, budget - construction);
+        } else {
+            let values = result?;
+            let error = run
+                .call_async(&mut store, &values, &mut [])
+                .await
+                .unwrap_err();
+            assert_eq!(
+                error.downcast_ref::<Trap>(),
+                Some(&Trap::UnreachableCodeReached)
+            );
+            assert!(store.get_fuel()? <= budget - construction - lowering);
+        }
+        let profile = gauge.report()?.profile.unwrap();
+        let stats = &profile.per_type[&FuelDiscriminants::LoweringValues];
+        if budget < construction + lowering {
+            assert_eq!(stats.rejected_fuel, lowering);
+            assert_eq!(stats.consumed_count, 0);
+        } else {
+            assert_eq!(stats.consumed_fuel, lowering);
+        }
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn argument_lowering_prices_structure_and_decoded_strings() -> Result<()> {
+    let (mut runtime, _dir, _name) = test_runtime().await?;
+    let cases = [
+        ("(list u8)", "[1, 2, 3]", 4 * 50, 0),
+        ("(list (option u32))", "[none, none, none]", 4 * 50, 0),
+        ("(list u8)", "[]", 50, 0),
+        ("string", "\"é\\n\"", 50, 3 * 3),
+        (
+            "(record (field \"a\" (option string)))",
+            "{:}",
+            3 * 50 + 10,
+            0,
+        ),
+        (
+            "(variant (case \"none\") (case \"text\" string))",
+            "text(\"x\")",
+            4 * 50 + 80,
+            3,
+        ),
+    ];
+    for (definition, source, construction, bytes) in cases {
+        let gauge = FuelGauge::with_profiling();
+        runtime.gauge = Some(gauge.clone());
+        let ty = ty(&runtime, definition)?;
+        let mut store = runtime.make_store(2 * construction + bytes)?;
+        parse(&mut store, &ty, source)?;
+        assert_eq!(store.get_fuel()?, 0, "{source}");
+        let profile = gauge.report()?.profile.unwrap();
+        assert_eq!(
+            profile.per_type[&FuelDiscriminants::LoweringValues].consumed_fuel,
+            construction + bytes,
+            "{source}"
+        );
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn failed_argument_construction_keeps_only_construction_charges() -> Result<()> {
+    let (mut runtime, _dir, _name) = test_runtime().await?;
+    let cases = [
+        ("(tuple u32 string)", "(7, false)", 150),
+        ("(record (field \"a\" u32))", "{:}", 160),
+        (
+            "(variant (case \"empty\") (case \"value\" u32))",
+            "value(false)",
+            300,
+        ),
+    ];
+    for (definition, source, construction) in cases {
+        let gauge = FuelGauge::with_profiling();
+        runtime.gauge = Some(gauge.clone());
+        let ty = ty(&runtime, definition)?;
+        let mut store = runtime.make_store(10_000)?;
+        let error = parse(&mut store, &ty, source).unwrap_err();
+        assert!(error.downcast_ref::<Trap>().is_none(), "{source}: {error}");
+        assert_eq!(store.get_fuel()?, 10_000 - construction, "{source}");
+        let profile = gauge.report()?.profile.unwrap();
+        assert!(
+            !profile
+                .per_type
+                .contains_key(&FuelDiscriminants::LoweringValues),
+            "{source}"
         );
     }
     Ok(())

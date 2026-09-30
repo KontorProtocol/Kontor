@@ -110,6 +110,8 @@ pub enum Fuel {
     ResultBytes(u64),
     /// Prepaid canonical lowering, separate from Kontor's own copies.
     LoweringBytes(u64),
+    /// Structural argument lowering, priced while constructing WAVE values.
+    LoweringValues(u64),
     WaveInputBytes(u64),
     WaveValue,
     WaveTypeField(u64),
@@ -139,7 +141,7 @@ impl Fuel {
             Self::Exists => 50,
             Self::Set(value_len) => value_len.saturating_mul(10),
             Self::Result => 200,
-            Self::LoweringBytes(fuel) => *fuel,
+            Self::LoweringBytes(fuel) | Self::LoweringValues(fuel) => *fuel,
             Self::ResultBytes(bytes) => bytes.saturating_mul(10),
             Self::WaveInputBytes(bytes) => bytes.saturating_mul(10),
             Self::WaveValue => 50,
