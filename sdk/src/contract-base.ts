@@ -19,6 +19,7 @@ import { Attachment } from "./attach.js";
 import type { ContractAddress } from "./canonical/ContractAddress.js";
 import { ContractError } from "./errors.js";
 import type { Inst } from "./inst.js";
+import { PaginatedView, type CursorPage } from "./pagination.js";
 import type { KontorSession } from "./session.js";
 
 /** The slice of the `Wit` WASM resource `ContractBase` consumes. */
@@ -102,6 +103,18 @@ export abstract class ContractBase {
       this.callExpr(fnName, args),
     );
     return this.wrapDecoder<T>(fnName, decode)(resp);
+  }
+
+  protected _paginatedView<P extends CursorPage<unknown>>(
+    fnName: string,
+    args: Record<string, unknown>,
+    after: string | null,
+    decode: RawDecoder<P>,
+  ): PaginatedView<P> {
+    return new PaginatedView(
+      (after) => this._view(fnName, { ...args, after }, decode),
+      after,
+    );
   }
 
   /**

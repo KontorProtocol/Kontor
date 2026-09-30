@@ -70,25 +70,34 @@ exclusive cursor and a page size, resolving to `{ items, next }`.
 This replaces the old no-argument, full-list response in the native token and both
 test tokens. Update clients alongside the rebuilt contracts.
 
-Use `paginate` to walk items without managing the cursor:
+Use `for await` directly on the call to walk items without managing the cursor:
 
 ```ts
-import { paginate } from "@kontor/sdk";
-
-for await (const balance of paginate((after) => token.balances(after, 100n))) {
+for await (const balance of token.balances(null, 100n)) {
   console.log(balance.acc.toRaw(), balance.amt.toString());
 }
 ```
 
-The helper accepts any async page fetcher returning `{ items, next }`. It fetches
-only as the iterator is consumed, passes each cursor through unchanged, and stops
+Paginated calls fetch only when awaited or iterated. Iteration passes each cursor
+through unchanged, retains the page size and other arguments, and stops
 when `next` is `null`. `break` stops further page requests. Errors propagate to the
 consumer without retrying. Empty pages with a continuation cursor are followed;
 an unchanged non-null continuation cursor throws instead of repeating the page.
 
-To start after a saved cursor, pass
-`paginate(after => token.balances(after, 100n), { after: savedCursor })`.
-For page-based interfaces or saving continuation cursors, use `balances` directly:
+To resume, use `token.balances(savedCursor, 100n)`. `await` still returns one page,
+and `then`, `catch`, and `finally` work as before. Awaiting or iterating the same
+call object shares its first page request, including failures. Each iteration
+starts from that first page; later pages are fetched independently. Create a new
+call to start a fresh read. Promise chaining returns an ordinary promise, so
+iterate the original call object.
+
+Regenerate bindings to enable iteration. Codegen recognizes read methods with
+trailing `after: option<string>` and `limit: u64` parameters returning a record
+with `items: list<T>` and `next: option<string>`, optionally wrapped in a WIT
+`result`. Aliases and additional filter parameters are supported. Other reads
+and all write calls keep their existing behavior.
+
+For page-based interfaces or saving continuation cursors, await individual pages:
 
 ```ts
 let after: string | null = null;

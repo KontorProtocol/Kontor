@@ -9,8 +9,8 @@
  *     bigint round-trip (u64/s64 as decimal strings) and the
  *     camelCase ↔ kebab-case record field name mapping
  *   - `export class Contract` with constructor `(session, address)`.
- *     view-context exports become `async` methods returning
- *     `Promise<T>` (routed through `session.view`); proc-context
+ *     view-context exports return `Promise<T>` (routed through
+ *     `session.view`); cursor-page views are also async iterable. Proc-context
  *     exports return `Inst<T>` (built via `session.call`), executed
  *     when the caller awaits / submits the Inst
  *   - An outer WIT result resolves to its success type; its err throws
@@ -497,6 +497,48 @@ function isViewFn(fn: WitFunction, ctx: Ctx): boolean {
   return ctx.resolve.types[resolved].name === "view-context";
 }
 
+function underlyingRef(ref: TypeRef, ctx: Ctx): TypeRef {
+  if (typeof ref === "string") return ref;
+  const kind = ctx.kinds[ref];
+  return kind.tag === "alias" ? underlyingRef(kind.type, ctx) : ref;
+}
+
+function kindOf(ref: TypeRef | null, ctx: Ctx): Kind | undefined {
+  if (ref == null) return undefined;
+  const underlying = underlyingRef(ref, ctx);
+  return typeof underlying === "number" ? ctx.kinds[underlying] : undefined;
+}
+
+function isStringCursor(ref: TypeRef, ctx: Ctx): boolean {
+  const kind = kindOf(ref, ctx);
+  return kind?.tag === "option" && underlyingRef(kind.inner, ctx) === "string";
+}
+
+function isPaginatedView(fn: WitFunction, ctx: Ctx): boolean {
+  if (!isViewFn(fn, ctx)) return false;
+  const params = fn.params.slice(1);
+  if (params.length < 2) return false;
+  const [after, limit] = params.slice(-2);
+  if (
+    after.name !== "after" ||
+    !isStringCursor(after.type, ctx) ||
+    limit.name !== "limit" ||
+    underlyingRef(limit.type, ctx) !== "u64"
+  )
+    return false;
+  let result = kindOf(fn.result, ctx);
+  if (result?.tag === "result") result = kindOf(result.ok, ctx);
+  if (result?.tag !== "record") return false;
+  const items = result.fields.find((field) => field.name === "items");
+  const next = result.fields.find((field) => field.name === "next");
+  return (
+    items != null &&
+    kindOf(items.type, ctx)?.tag === "list" &&
+    next != null &&
+    isStringCursor(next.type, ctx)
+  );
+}
+
 // ─── attach/detach convention ──────────────────────────────────
 
 type Method = [string, { function: WitFunction }];
@@ -658,6 +700,9 @@ export function generate(witText: string): string {
   ];
   for (const cls of [...usedCanonicalClasses].sort()) sdkImports.push(cls);
   if (attachPair != null) sdkImports.push("Attachment");
+  if (methods.some(([, { function: fn }]) => isPaginatedView(fn, ctx))) {
+    sdkImports.push("type PaginatedView");
+  }
   out.push(`import { ${sdkImports.join(", ")} } from "@kontor/sdk";`);
   out.push("");
 
@@ -725,14 +770,19 @@ export function generate(witText: string): string {
     // proc-context → `_proc` (returns an `Inst`). Both delegate the
     // encode/call/decode plumbing to `ContractBase`.
     const view = isViewFn(fn, ctx);
-    const ret = view ? `Promise<${resultTs}>` : `Inst<${resultTs}>`;
-    const helper = view ? "_view" : "_proc";
+    const paginated = isPaginatedView(fn, ctx);
+    const ret = paginated
+      ? `PaginatedView<${resultTs}>`
+      : view
+        ? `Promise<${resultTs}>`
+        : `Inst<${resultTs}>`;
+    const helper = paginated ? "_paginatedView" : view ? "_view" : "_proc";
     // The result type is inferred from the decoder; only a void
     // function (no decoder) needs it spelled out.
     const typeArg = fn.result == null ? `<${resultTs}>` : "";
     out.push(`  ${safeName}(${sig}): ${ret} {`);
     out.push(
-      `    return this.${helper}${typeArg}(${nameLit}, { ${wireArgFields} }${decodeArg});`,
+      `    return this.${helper}${typeArg}(${nameLit}, { ${wireArgFields} }${paginated ? ", after" : ""}${decodeArg});`,
     );
     out.push("  }");
     out.push("");

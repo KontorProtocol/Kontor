@@ -1,20 +1,57 @@
 import { expectTypeOf, test } from "vitest";
-import { paginate, type CursorPage } from "@kontor/sdk";
-import type { Balance, Contract as Token } from "./__generated__/token.js";
+import type { PaginatedView } from "@kontor/sdk";
+import type {
+  Balance,
+  BalancePage,
+  Contract as Token,
+} from "./__generated__/token.js";
+import type { Contract as Pages, Page } from "./__generated__/pagination.js";
 
-test("pagination infers the item type from generated page methods", () => {
-  const verify = (token: Token) => {
-    const balances = paginate((after) => token.balances(after, 100n));
-    expectTypeOf(balances).toEqualTypeOf<AsyncIterableIterator<Balance>>();
+test("generated page calls support awaiting a page and iterating typed items", () => {
+  type Call = ReturnType<Token["balances"]>;
+  expectTypeOf<Call>().toEqualTypeOf<PaginatedView<BalancePage>>();
+  expectTypeOf<Call>().toExtend<Promise<BalancePage>>();
+  expectTypeOf<Call>().toExtend<AsyncIterable<Balance>>();
+  expectTypeOf<Awaited<Call>>().toEqualTypeOf<BalancePage>();
+  const verify = async (token: Token) => {
+    for await (const balance of token.balances(null, 100n)) {
+      expectTypeOf(balance).toEqualTypeOf<Balance>();
+    }
+    expectTypeOf(
+      token.balances(null, 100n).then((page) => page.next),
+    ).toEqualTypeOf<Promise<string | null>>();
+    expectTypeOf(token.balances(null, 100n).finally(() => {})).toEqualTypeOf<
+      Promise<BalancePage>
+    >();
   };
   void verify;
 });
 
-test("pagination accepts readonly pages and a starting cursor", () => {
-  const fetchPage = async (
-    _after: string | null,
-  ): Promise<CursorPage<number>> => ({ items: [1] as const, next: null });
-  expectTypeOf(paginate(fetchPage, { after: "saved" })).toEqualTypeOf<
-    AsyncIterableIterator<number>
+test("aliases, filters and direct page results support iteration", () => {
+  expectTypeOf<ReturnType<Pages["filtered"]>>().toExtend<
+    AsyncIterable<bigint>
   >();
+  expectTypeOf<Awaited<ReturnType<Pages["filtered"]>>>().toEqualTypeOf<Page>();
+  expectTypeOf<ReturnType<Pages["directPage"]>>().toExtend<
+    AsyncIterable<bigint>
+  >();
+});
+
+test("ordinary reads, writes and pagination lookalikes are not iterable", () => {
+  expectTypeOf<ReturnType<Token["balance"]>>().not.toExtend<
+    AsyncIterable<unknown>
+  >();
+  expectTypeOf<ReturnType<Token["transfer"]>>().not.toExtend<
+    AsyncIterable<unknown>
+  >();
+  type NonPages = ReturnType<
+    Pages[
+      | "writePage"
+      | "wrongCursor"
+      | "wrongNext"
+      | "noLimit"
+      | "noItems"
+      | "swapped"]
+  >;
+  expectTypeOf<Extract<NonPages, AsyncIterable<unknown>>>().toBeNever();
 });

@@ -31,7 +31,7 @@ test("NFT codegen exposes cursor arguments and list-bearing page records", () =>
     /export type AgreementPage = \{[\s\S]*?items: Array<string>/,
   );
   expect(source).toContain(
-    "listNfts(after: string | null, limit: bigint): Promise<NftPage>",
+    "listNfts(after: string | null, limit: bigint): PaginatedView<NftPage>",
   );
 });
 

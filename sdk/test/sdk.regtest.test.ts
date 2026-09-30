@@ -40,7 +40,6 @@ import {
   Decimal,
   KontorSession,
   LocalKey,
-  paginate,
   inMemoryFunding,
   type Utxo,
 } from "@kontor/sdk";
@@ -207,11 +206,8 @@ test("SDK capstone: publish, transfer, bulk, marketplace", async () => {
       ).toBe("2");
 
       const holders = new Set<string>();
-      const balances = paginate(async (after) => {
-        const page = await token.balances(after, 2n);
-        expect(page.items.length).toBeLessThanOrEqual(2);
-        return page;
-      });
+      const balances = token.balances(null, 2n);
+      expect((await balances).items.length).toBeLessThanOrEqual(2);
       for await (const balance of balances) {
         const key = JSON.stringify(balance.acc.toRaw());
         expect(holders.has(key)).toBe(false);

@@ -26,8 +26,8 @@ export type { KontorTransport } from "./json-codec";
 // The full client-layer export pass — Account impls, transport, errors,
 // aggregate — lands with the runtime implementation (work item #13).
 export { KontorSession } from "./session";
-export { paginate } from "./pagination";
-export type { CursorPage, PaginationOptions } from "./pagination";
+export { PaginatedView } from "./pagination";
+export type { CursorPage } from "./pagination";
 export { Result, ResultUnwrapError } from "./result";
 export {
   BaseError,

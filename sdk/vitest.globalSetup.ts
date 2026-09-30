@@ -52,4 +52,10 @@ export default async function setup(): Promise<void> {
     path.join(here, "test/__generated__/call-results.ts"),
     generate(resultsWit),
   );
+  writeFileSync(
+    path.join(here, "test/__generated__/pagination.ts"),
+    generate(
+      readFileSync(path.join(here, "test/fixtures/pagination.wit"), "utf8"),
+    ),
+  );
 }
