@@ -1,0 +1,57 @@
+name: CI Diagnostics
+
+on:
+  pull_request:
+    paths:
+      - .github/workflows/ci.yml
+      - .github/workflows/ci-diagnostics.yml
+      - tools/ci/**
+  workflow_dispatch:
+
+jobs:
+  smoke:
+    name: Crash capture smoke test
+    runs-on: macos-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - name: Test collector failure scenarios
+        run: python3 -m unittest discover -s tools/ci -p 'test_*.py'
+      - name: Build abort fixture
+        run: |
+          cc -x c -o "$RUNNER_TEMP/ci-abort" - <<'C'
+          #include <stdlib.h>
+          int main(void) { abort(); }
+          C
+      - name: Prepare diagnostics
+        run: python3 tools/ci/macos_diagnostics.py prepare "$RUNNER_TEMP/macos-crash-diagnostics"
+      - name: Abort fixture
+        shell: bash
+        run: |
+          set +e
+          python3 tools/ci/macos_diagnostics.py run "$RUNNER_TEMP/macos-crash-diagnostics/tests.log" "$RUNNER_TEMP/ci-abort"
+          status=$?
+          set -e
+          echo "Fixture exit status: $status" >> "$RUNNER_TEMP/macos-crash-diagnostics/tests.log"
+          test "$status" -eq 134
+      - name: Collect diagnostics
+        if: always()
+        run: python3 tools/ci/macos_diagnostics.py collect "$RUNNER_TEMP/macos-crash-diagnostics"
+      - name: Verify native crash report was captured
+        run: |
+          python3 - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+          output = Path(os.environ["RUNNER_TEMP"]) / "macos-crash-diagnostics"
+          reports = json.loads((output / "reports.json").read_text())["copied"]
+          assert any(Path(name).name.startswith("ci-abort") for name in reports), reports
+          assert "Exit status: 0" in (output / "system.log").read_text()
+          PY
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: macos-crash-capture-smoke-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/macos-crash-diagnostics/
+          if-no-files-found: error
+          retention-days: 14
