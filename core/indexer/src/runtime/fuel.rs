@@ -1,6 +1,6 @@
 use anyhow::Result;
 use strum::{EnumDiscriminants, EnumIter};
-use wasmtime::{AsContextMut, Store, Trap, component::Accessor};
+use wasmtime::{AsContextMut, Trap, component::Accessor};
 
 use crate::runtime::Runtime;
 
@@ -108,6 +108,10 @@ pub enum Fuel {
     NumbersLog10Decimal,
     Result,
     ResultBytes(u64),
+    /// Prepaid canonical lowering, separate from Kontor's own copies.
+    LoweringBytes(u64),
+    /// Structural argument lowering, priced while constructing WAVE values.
+    LoweringValues(u64),
     WaveInputBytes(u64),
     WaveValue,
     WaveTypeField(u64),
@@ -137,6 +141,7 @@ impl Fuel {
             Self::Exists => 50,
             Self::Set(value_len) => value_len.saturating_mul(10),
             Self::Result => 200,
+            Self::LoweringBytes(fuel) | Self::LoweringValues(fuel) => *fuel,
             Self::ResultBytes(bytes) => bytes.saturating_mul(10),
             Self::WaveInputBytes(bytes) => bytes.saturating_mul(10),
             Self::WaveValue => 50,
@@ -219,8 +224,9 @@ impl Fuel {
         })
     }
 
-    pub fn consume_with_store(&self, store: &mut Store<Runtime>) -> Result<u64> {
-        let result = self.subtract(&mut *store);
+    pub fn consume_with_store(&self, store: &mut impl AsContextMut<Data = Runtime>) -> Result<u64> {
+        let mut store = store.as_context_mut();
+        let result = self.subtract(&mut store);
         if let Some(gauge) = &store.data().gauge {
             gauge.track(self, result.is_ok())?;
         }
