@@ -34,7 +34,7 @@ async fn contract_address_charges_name_bytes_on_every_copy() -> Result<()> {
             height: 1,
             tx_index: 0,
         };
-        let cost = 100 + 10 * address.name.len() as u64;
+        let cost = 100 + 13 * address.name.len() as u64;
         let mut store = runtime.make_store(2 * cost)?;
         let resource = store.data().table.lock().await.push(Contract {
             address: address.clone(),
@@ -106,7 +106,8 @@ async fn missing_contract_names_pay_before_lookup_and_error_formatting() -> Resu
 async fn aggregate_inputs_charge_even_bytes_after_an_invalid_root() -> Result<()> {
     let (runtime, _dir, _name) = test_runtime().await?;
     for bytes in [0, 32, 4096] {
-        let cost = 1000 + 200 * 2 + 50 * 2 + 10 * bytes as u64;
+        let message = "expected 32 bytes for root";
+        let cost = 1000 + 200 * 2 + 50 * 2 + 10 * bytes as u64 + 3 * message.len() as u64;
         let mut store = runtime.make_store(2 * cost)?;
         for remaining in [cost, 0] {
             let result = host(&mut store, async |accessor| {
@@ -117,7 +118,7 @@ async fn aggregate_inputs_charge_even_bytes_after_an_invalid_root() -> Result<()
                 .await
             })
             .await?;
-            assert!(matches!(result, Err(WitError::Validation(_))));
+            assert!(matches!(result, Err(WitError::Validation(ref text)) if text == message));
             assert_eq!(store.get_fuel()?, remaining);
         }
         store.set_fuel(cost - 1)?;
@@ -138,7 +139,12 @@ async fn aggregate_inputs_charge_even_bytes_after_an_invalid_root() -> Result<()
 async fn frontier_peaks_and_roots_pay_before_validation() -> Result<()> {
     let (runtime, _dir, _name) = test_runtime().await?;
     for (peaks, root) in [(1, 0), (4096, 0), (1, 4096)] {
-        let cost = 1200 + 50 * 2 + 10 * (peaks + root) as u64;
+        let message = if peaks == 1 {
+            "frontier peaks blob length 1 is not a multiple of 32"
+        } else {
+            "frontier from_parts: Invalid input: LedgerFrontier: got 128 peaks for count 0 (expected 0 set bits)"
+        };
+        let cost = 1200 + 50 * 2 + 10 * (peaks + root) as u64 + 3 * message.len() as u64;
         let mut store = runtime.make_store(cost)?;
         let result = host(&mut store, async |accessor| {
             <Runtime as FileHost<Runtime>>::frontier_append(
@@ -150,7 +156,10 @@ async fn frontier_peaks_and_roots_pay_before_validation() -> Result<()> {
             .await
         })
         .await?;
-        assert!(matches!(result, Err(WitError::Validation(_))));
+        assert!(
+            matches!(result, Err(WitError::Validation(ref text)) if text == message),
+            "{result:?}"
+        );
         assert_eq!(store.get_fuel()?, 0);
         store.set_fuel(cost - 1)?;
         let result = host(&mut store, async |accessor| {
@@ -189,7 +198,12 @@ async fn challenge_metadata_includes_every_variable_field() -> Result<()> {
             + file.root.len()
             + file.filename.len()
             + seed.len();
-        let cost = 500 + 50 + 10 * bytes as u64;
+        let message = if field == 3 {
+            "expected 32 bytes for root"
+        } else {
+            "Invalid seed length, expected 64 bytes"
+        };
+        let cost = 500 + 50 + 10 * bytes as u64 + 3 * message.len() as u64;
         let mut store = runtime.make_store(2 * cost)?;
         for remaining in [cost, 0] {
             let result = host(&mut store, async |accessor| {
@@ -204,7 +218,7 @@ async fn challenge_metadata_includes_every_variable_field() -> Result<()> {
                 .await
             })
             .await?;
-            assert!(matches!(result, Err(WitError::Validation(_))));
+            assert!(matches!(result, Err(WitError::Validation(ref text)) if text == message));
             assert_eq!(store.get_fuel()?, remaining);
         }
         store.set_fuel(cost - 1)?;
@@ -347,7 +361,7 @@ async fn context_contract_resource_charges_the_fetched_name() -> Result<()> {
 async fn metered_native_metadata_preserves_valid_results() -> Result<()> {
     let (runtime, _dir, _name) = test_runtime().await?;
     let files = vec![(vec![0; 32], 1, 0), (vec![1; 32], 2, 1)];
-    let aggregate_cost = 1000 + 200 * 2 + 2 * (50 + 10 * 32);
+    let aggregate_cost = 1000 + 200 * 2 + 2 * (50 + 10 * 32) + 32;
     let mut store = runtime.make_store(aggregate_cost)?;
     let root = host(&mut store, async |accessor| {
         <Runtime as FileHost<Runtime>>::aggregate_root(accessor, files.clone()).await
@@ -355,7 +369,7 @@ async fn metered_native_metadata_preserves_valid_results() -> Result<()> {
     .await?
     .unwrap();
     assert_eq!(store.get_fuel()?, 0);
-    store.set_fuel(aggregate_cost + 50)?;
+    store.set_fuel(aggregate_cost + 50 + 32)?;
     let (count, peaks, appended_root) = host(&mut store, async |accessor| {
         <Runtime as FileHost<Runtime>>::frontier_append(accessor, 0, vec![], files).await
     })
@@ -373,7 +387,7 @@ async fn metered_native_metadata_preserves_valid_results() -> Result<()> {
         + file.root.len()
         + file.filename.len()
         + 64;
-    let cost = 500 + 50 + 10 * bytes as u64;
+    let cost = 500 + 50 + 10 * bytes as u64 + 3 * 64;
     let mut ids = Vec::new();
     for _ in 0..2 {
         store.set_fuel(cost)?;

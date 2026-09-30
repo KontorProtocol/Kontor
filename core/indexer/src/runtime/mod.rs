@@ -28,11 +28,13 @@ mod host_files;
 mod host_numbers;
 mod host_storage;
 mod host_system;
+mod lowering;
 
 use bitcoin::XOnlyPublicKey;
 use call::CallOutcome;
 pub use component_cache::ComponentCache;
 use libsql::Connection;
+use lowering::Linker;
 use sha2::{Digest, Sha256};
 pub use stdlib::{
     CheckedArithmetics, FromWaveValue, WaveType, from_wave_expr, from_wave_value, to_wave_expr,
@@ -105,7 +107,7 @@ use anyhow::{Result, anyhow};
 use std::str::FromStr;
 use wasmtime::{
     Engine, Store,
-    component::{Component, HasData, Linker, ResourceTable},
+    component::{Component, HasData, ResourceTable},
 };
 
 use indexer_types::{BuildProvenance, CommitId, Forge, Payment, Platform, Source};
@@ -201,6 +203,44 @@ fn native_provenance() -> Result<BuildProvenance> {
 /// host state — they differ only in which interfaces a component can import.
 /// `invoke` selects one per contract by native contract id. Share this immutable
 /// pair through `Arc`: cloning a Wasmtime linker copies its definition registry.
+///
+/// New imports use the metered registration boundary without handler-side charges:
+/// ```
+/// use indexer::runtime::Runtime;
+/// use std::sync::Arc;
+/// # fn main() -> anyhow::Result<()> {
+/// let engine = Runtime::new_engine()?;
+/// let mut linkers = Runtime::new_linkers(&engine)?;
+/// Arc::get_mut(&mut linkers).unwrap().user.root()
+///     .func_wrap("extra-bytes", |_, (): ()| Ok((vec![0_u8; 8],)))?;
+/// # Ok(())
+/// # }
+/// ```
+/// An unpriced output shape fails registration at compile time:
+/// ```compile_fail
+/// use indexer::runtime::Runtime;
+/// use std::sync::Arc;
+/// # fn main() -> anyhow::Result<()> {
+/// let engine = Runtime::new_engine()?;
+/// let mut linkers = Runtime::new_linkers(&engine)?;
+/// Arc::get_mut(&mut linkers).unwrap().user.root()
+///     .func_wrap("unpriced-strings", |_, (): ()| Ok((vec![String::new()],)))?;
+/// # Ok(())
+/// # }
+/// ```
+/// Helpers requiring Wasmtime's raw mutable linker cannot bypass the boundary:
+/// ```compile_fail
+/// use indexer::runtime::Runtime;
+/// use std::sync::Arc;
+/// use wasmtime::component::Linker;
+/// fn register_unmetered(_: &mut Linker<Runtime>) {}
+/// # fn main() -> anyhow::Result<()> {
+/// let engine = Runtime::new_engine()?;
+/// let mut linkers = Runtime::new_linkers(&engine)?;
+/// register_unmetered(&mut Arc::get_mut(&mut linkers).unwrap().user);
+/// # Ok(())
+/// # }
+/// ```
 pub struct Linkers {
     pub user: Linker<Runtime>,
     pub native: Linker<Runtime>,

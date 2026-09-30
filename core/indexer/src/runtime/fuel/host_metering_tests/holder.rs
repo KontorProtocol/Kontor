@@ -21,7 +21,7 @@ async fn invalid_holder_references_charge_bytes_on_every_attempt() -> Result<()>
         "z".repeat(4096),
         "é".repeat(32),
     ] {
-        let cost = 100 + 10 * input.len() as u64;
+        let input_cost = 100 + 10 * input.len() as u64;
         for reference in [
             HolderRef::XOnlyPubkey(input.clone()),
             HolderRef::Utxo(OutPoint {
@@ -29,7 +29,18 @@ async fn invalid_holder_references_charge_bytes_on_every_attempt() -> Result<()>
                 vout: 0,
             }),
         ] {
-            let mut store = runtime.make_store(cost * 2)?;
+            let mut store = runtime.make_store(1_000_000)?;
+            let error = host(&mut store, async |accessor| {
+                <Runtime as HolderHost<Runtime>>::from_ref(accessor, reference.clone()).await
+            })
+            .await?
+            .unwrap_err();
+            let WitError::Validation(message) = error else {
+                panic!("unexpected error: {error:?}");
+            };
+            let cost = input_cost + 3 * message.len() as u64;
+            assert_eq!(1_000_000 - store.get_fuel()?, cost);
+            store.set_fuel(cost * 2)?;
             for remaining in [cost, 0] {
                 let result = host(&mut store, async |accessor| {
                     <Runtime as HolderHost<Runtime>>::from_ref(accessor, reference.clone()).await
@@ -79,13 +90,18 @@ async fn holder_references_preserve_values_and_resource_cleanup() -> Result<()> 
         .await?
         .expect("valid holder reference");
         assert_eq!(store.get_fuel()?, 0);
-        store.set_fuel(50)?;
+        let output_bytes = match &reference {
+            HolderRef::Utxo(outpoint) => outpoint.txid.len() as u64,
+            _ => 0,
+        };
+        store.set_fuel(50 + 3 * output_bytes)?;
         let roundtrip = host(&mut store, async |accessor| {
             <Runtime as HolderHost<Runtime>>::as_ref(accessor, Resource::new_borrow(holder.rep()))
                 .await
         })
         .await?;
         assert_eq!(roundtrip, reference);
+        assert_eq!(store.get_fuel()?, 0);
         let rep = holder.rep();
         host(&mut store, async |accessor| {
             <Runtime as HolderHost<Runtime>>::drop(accessor, holder).await

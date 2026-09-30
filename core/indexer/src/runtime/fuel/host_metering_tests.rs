@@ -8,7 +8,7 @@ use futures_util::{TryStreamExt, stream};
 use libsql::{AuthAction, AuthContext, Authorization};
 use serde::{Serialize, Serializer, ser::SerializeSeq};
 use wasmtime::component::{Accessor, Resource};
-use wasmtime::{Store, Trap};
+use wasmtime::{AsContextMut, Store, Trap};
 
 use super::{Fuel, FuelDiscriminants, FuelGauge};
 use crate::database::queries::{
@@ -17,6 +17,7 @@ use crate::database::queries::{
 use indexer_types::{BlockRow, serialize};
 use stdlib::KeyElement;
 
+use crate::runtime::lowering::{Lowering, charge};
 use crate::runtime::wit::kontor::built_in::{
     context::{
         HolderRef, HostKeysWithStore as KeysHost, HostProcContextWithStore as ContextHost,
@@ -37,14 +38,19 @@ mod history_benchmarks;
 mod holder;
 mod metadata;
 
-async fn host<R>(
+async fn host<R: Lowering>(
     store: &mut Store<Runtime>,
     call: impl AsyncFnOnce(&Accessor<Runtime, Runtime>) -> Result<R>,
 ) -> Result<R> {
     store
         .run_concurrent(async |accessor| {
             let accessor = accessor.with_getter::<Runtime>(|runtime| runtime);
-            call(&accessor).await
+            let value = call(&accessor).await?;
+            // These tests call handlers directly, so apply the shared return
+            // boundary that the metered linker supplies to guest calls.
+            let bytes = value.lowering_bytes()?;
+            accessor.with(|mut access| charge(access.as_context_mut(), bytes))?;
+            Ok(value)
         })
         .await?
 }
@@ -205,10 +211,12 @@ async fn row_budget_includes_key_and_framing_at_exact_boundary() -> Result<()> {
     let mut path = root.clone();
     path.extend_from_slice(&member);
     runtime.storage.set(1, &path, &raw, None, None).await?;
-    let total = Fuel::StorageScan.cost() + Fuel::KeysNext((member.len() + raw.len()) as u64).cost();
+    let read_cost =
+        Fuel::StorageScan.cost() + Fuel::KeysNext((member.len() + raw.len()) as u64).cost();
+    let total = read_cost + Fuel::LoweringBytes((member.len() + value.len()) as u64).cost();
     let mut store = runtime.make_store(BUDGET)?;
     for descending in [false, true] {
-        for budget in [0, total - 1, total] {
+        for budget in [0, read_cost - 1, total - 1, total] {
             let cursor = store
                 .data()
                 .table
@@ -232,7 +240,7 @@ async fn row_budget_includes_key_and_framing_at_exact_boundary() -> Result<()> {
                 .await;
             if budget < total {
                 assert_exhausted(result.unwrap_err());
-                assert_eq!(copied, 0);
+                assert_eq!(copied, if budget < read_cost { 0 } else { raw.len() });
             } else {
                 assert_eq!(result?, Some((member.clone(), value.clone())));
                 assert_eq!(copied, raw.len());
@@ -694,7 +702,13 @@ async fn oversized_storage_read_is_a_contract_fuel_failure() -> Result<()> {
     assert!(runtime.stack.is_empty().await);
     runtime.gauge = None;
     let value = runtime
-        .invoke(&address, None, None, "get-blob()", Some(30 * BUDGET))
+        .invoke(
+            &address,
+            None,
+            None,
+            "get-blob()",
+            Some(runtime.fuel_limit_for_non_procs()),
+        )
         .await?
         .result?;
     assert_eq!(value.len(), 1_000_002);
@@ -738,7 +752,9 @@ async fn transaction_data_charges_by_size_and_preserves_contents() -> Result<()>
             .await;
             if budget < consumed {
                 assert_exhausted(result.unwrap_err());
-                assert_eq!(store.get_fuel()?, budget);
+                let copy_cost = Fuel::TransactionData(size.unwrap_or(0) as u64).cost();
+                let accepted = if budget >= copy_cost { copy_cost } else { 0 };
+                assert_eq!(store.get_fuel()?, budget - accepted);
             } else {
                 assert_eq!(result?, payload);
                 assert_eq!(store.get_fuel()?, 0);
@@ -776,7 +792,8 @@ async fn storage_read_budget_includes_base_and_encoded_value() -> Result<()> {
         let value = vec![0x5a_u8; size];
         let encoded = serialize(&value)?;
         runtime.storage.set(1, &[], &encoded, None, None).await?;
-        let total = base + Fuel::Get(encoded.len()).cost();
+        let total =
+            base + Fuel::Get(encoded.len()).cost() + Fuel::LoweringBytes(size as u64).cost();
         for budget in [total - 1, total] {
             store.set_fuel(budget)?;
             let result = host(&mut store, async |accessor| {
