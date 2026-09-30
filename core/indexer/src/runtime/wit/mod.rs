@@ -1,3 +1,4 @@
+mod facades;
 pub(crate) mod resources;
 
 pub use resources::{
@@ -9,6 +10,7 @@ pub use resources::{
 wasmtime::component::bindgen!({
     path: "src/runtime/wit",
     anyhow: true,
+    wasmtime_crate: crate::runtime::lowering::bindings,
     with: {
         "kontor:built-in/context.signer": Signer,
         "kontor:built-in/context.view-context": ViewContext,
@@ -27,11 +29,11 @@ wasmtime::component::bindgen!({
         // generated once there, aliased here (and, in a later stage, in the
         // contracts) instead of regenerated. The facade provides the
         // Host/add_to_linker module shape wasmtime expects of an interface.
-        "kontor:built-in/file-registry-types": built_in_types::host_facade,
-        "kontor:built-in/numbers-types": built_in_types::host_facade_numbers_types,
-        "kontor:built-in/error": built_in_types::host_facade_error,
-        "kontor:built-in/context-types": built_in_types::host_facade_context_types,
-        "kontor:built-in/pagination": built_in_types::host_facade_pagination,
+        "kontor:built-in/file-registry-types": facades::file_registry_types,
+        "kontor:built-in/numbers-types": facades::numbers_types,
+        "kontor:built-in/error": facades::error,
+        "kontor:built-in/context-types": facades::context_types,
+        "kontor:built-in/pagination": facades::pagination,
     },
     additional_derives: [stdlib::Wavey, serde::Deserialize],
     imports: {
