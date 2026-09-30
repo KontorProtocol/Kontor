@@ -33,7 +33,7 @@ it and waits for its outcome. A successful `result<_, error>` resolves to
 import { ContractError } from "@kontor/sdk";
 
 try {
-  const page = await token.balances(null, 100n);
+  const page = await token.balances();
   console.log(page.items);
 } catch (error) {
   if (error instanceof ContractError) {
@@ -65,15 +65,64 @@ behavior are unchanged; low-level WIT decoding still preserves result values.
 
 ## Token balance pages
 
-Regenerate contract bindings from the current token WIT. `balances` now takes an
-exclusive cursor and a page size, resolving to `{ items, next }`.
-This replaces the old no-argument, full-list response in the native token and both
-test tokens. Update clients alongside the rebuilt contracts.
+Regenerate contract bindings from the current token WIT. `balances` takes an optional
+`{ after, limit }` object, resolving to `{ items, next }`. Omitting either field
+passes `none` to the contract; the contract chooses its default limit.
+The wire signature now takes one `cursor-request` record instead of separate
+cursor and limit arguments. Update clients alongside the rebuilt contracts.
+
+Use `for await` directly on the call to walk items without managing the cursor:
+
+```ts
+for await (const balance of token.balances()) {
+  console.log(balance.acc.toRaw(), balance.amt.toString());
+}
+```
+
+Paginated calls fetch only when awaited or iterated. Iteration passes each cursor
+through unchanged, retains the page size and other arguments, and stops
+when `next` is `null`. `break` stops further page requests. Errors propagate to the
+consumer without retrying. Empty pages with a continuation cursor are followed;
+an unchanged non-null continuation cursor throws instead of repeating the page.
+
+To resume, use `token.balances({ after: savedCursor })`. `await` still returns one page,
+and `then`, `catch`, and `finally` work as before. Awaiting or iterating the same
+call object shares its first page request, including failures. Each iteration
+starts from that first page; later pages are fetched independently. Create a new
+call to start a fresh read. Promise chaining returns an ordinary promise, so
+iterate the original call object.
+
+Pagination is explicitly declared by importing
+`kontor:built-in/pagination.{cursor-request}` and using it as the final parameter.
+The shared WIT validator requires a view context and a response record containing
+`items: list<T>` and `next: option<string>`, optionally wrapped in a WIT `result`.
+Aliases and additional filter parameters are supported. Structurally similar
+functions without that imported type remain ordinary methods.
+
+Rust bindings expose a builder under the original function name:
+
+```rust
+let page = token::balances().fetch()?;
+let resumed = token::balances().after(cursor).fetch_with_limit(50)?;
+for balance in token::balances().iter().take(50) {
+    let balance = balance?;
+}
+```
+
+Within the implementing contract, use `Self::balances(ctx)` with the same builder.
+The exported `Guest` method takes the `CursorRequest` record and implements one
+bounded read. Iterators use the contract's default limit, stop after an error,
+and do no prefetching. `take(n)` caps yielded items; it does not cap calls or fuel,
+and the last call may fetch more entries than the consumer uses. Host test
+bindings expose asynchronous `fetch()` and `fetch_with_limit()` methods and retain
+the existing runtime-error and contract-error layers.
+
+For page-based interfaces or saving continuation cursors, await individual pages:
 
 ```ts
 let after: string | null = null;
 do {
-  const page = await token.balances(after, 100n);
+  const page = await token.balances({ after, limit: 100n });
   for (const balance of page.items) {
     console.log(balance.acc.toRaw(), balance.amt.toString());
   }

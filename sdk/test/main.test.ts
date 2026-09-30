@@ -734,7 +734,7 @@ test("codegen Tier 2: emits Contract class bound to a session + per-type helpers
   // token.wit references Decimal + HolderRef but not Integer, and its
   // attach/detach pair pulls in `Attachment`.
   expect(out).toContain(
-    'import { Wit, ContractBase, type ContractAddress, type Inst, type KontorSession, Decimal, HolderRef, Attachment } from "@kontor/sdk";',
+    'import { Wit, ContractBase, type ContractAddress, type Inst, type KontorSession, Decimal, HolderRef, Attachment, type PaginatedView } from "@kontor/sdk";',
   );
 
   // Embeds the WIT and instantiates a Wit resource at module load.

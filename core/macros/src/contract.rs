@@ -9,6 +9,7 @@ use wit_parser::{Resolve, Type, TypeDefKind, TypeId, TypeOwner, WorldId};
 use wit_validator::Validator;
 
 use crate::index_decl::IndexPredicate;
+use crate::pagination;
 use crate::remap::REMAPPED_BUILT_INS;
 
 /// The world every contract's WIT declares. Also the prefix of a fully-qualified
@@ -393,6 +394,7 @@ pub fn generate(config: Config) -> TokenStream {
 
     let path = abs_path.to_string_lossy().to_string();
     let type_attrs = type_attr_options(&resolve, config.indexed.as_deref());
+    let pagination_bindings = pagination::local_bindings(&resolve).expect("validated pagination");
 
     // Same twin-family guard as import!: a built-in interface missing from the
     // with: block below regenerates per-crate; data types there would silently
@@ -460,6 +462,12 @@ pub fn generate(config: Config) -> TokenStream {
         });
 
         use kontor::built_in::*;
+        #[allow(unused_imports)]
+        use stdlib::CursorQuery as __CursorQuery;
+        #[allow(unused_imports)]
+        use built_in_types::error::Error as __PaginationError;
+        #[allow(unused_imports)]
+        use built_in_types::pagination::CursorRequest as __CursorRequest;
         // Remapped interfaces generate no module here — surface the shared
         // crate's modules under the names the un-remapped generation used.
         #(#module_aliases)*
@@ -488,6 +496,10 @@ pub fn generate(config: Config) -> TokenStream {
         // remapped context wrapper types.
 
         struct #name;
+
+        impl #name {
+            #(#pagination_bindings)*
+        }
 
         __export__!(#name);
     }

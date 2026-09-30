@@ -46,6 +46,7 @@ pub mod deque;
 mod key_path;
 mod keycodec;
 mod map;
+mod pagination;
 mod query;
 mod scalar_storage;
 mod storage_interface;
@@ -59,6 +60,7 @@ pub use macros::{
     import, interface,
 };
 pub use map::*;
+pub use pagination::{AsyncCursorQuery, CursorIter, CursorQuery};
 pub use query::*;
 pub use scalar_storage::*;
 pub use storage_interface::*;

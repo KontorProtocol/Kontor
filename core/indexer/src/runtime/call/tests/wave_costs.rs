@@ -201,7 +201,7 @@ async fn wave_call_costs() -> Result<()> {
         let cases = [Case {
             name: format!("native-balances-page-{holders}"),
             target: token::address(),
-            expression: "balances(none, 100)".into(),
+            expression: "balances({after: none, limit: some(100)})".into(),
             paid: false,
         }];
         measure(&mut runtime, &actor, &cases, 7, 5).await?;

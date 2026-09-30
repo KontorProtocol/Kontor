@@ -1,0 +1,15 @@
+package test:pagination;
+
+world root {
+  include kontor:built-in/built-in;
+  use kontor:built-in/context.{proc-context, view-context, contract};
+  use kontor:built-in/pagination.{cursor-request as request};
+
+  record entries-page {
+    items: list<u64>,
+    next: option<string>,
+  }
+
+  export init: async func(ctx: borrow<proc-context>) -> contract;
+  export entries: async func(ctx: borrow<view-context>, pagination: request) -> entries-page;
+}

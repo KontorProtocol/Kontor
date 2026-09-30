@@ -1,6 +1,7 @@
 package root:component;
 
 world root {
+  use kontor:built-in/pagination.{cursor-request};
   include kontor:built-in/built-in-native;
   use kontor:built-in/context.{core-context, view-context, proc-context, signer, contract};
   use kontor:built-in/context-types.{holder-ref};
@@ -66,7 +67,7 @@ world root {
   // import that host fn) read a floor by calling this view cross-contract. 0 for holders
   // with no deposited rows.
   export floor: async func(ctx: borrow<view-context>, acc: holder-ref) -> decimal;
-  export balances: async func(ctx: borrow<view-context>, after: option<string>, limit: u64) -> result<balance-page, error>;
+  export balances: async func(ctx: borrow<view-context>, pagination: cursor-request) -> result<balance-page, error>;
   export total-supply: async func(ctx: borrow<view-context>) -> decimal;
   export dev-mint-enabled: async func(ctx: borrow<view-context>) -> bool;
   export attach: async func(ctx: borrow<proc-context>, vout: u32, amt: decimal) -> result<transfer, error>;

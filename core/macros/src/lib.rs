@@ -13,6 +13,7 @@ mod index_decl;
 mod indexed;
 mod interface;
 mod model;
+mod pagination;
 mod regtest;
 mod remap;
 mod root;

@@ -6,6 +6,7 @@ use quote::quote;
 use syn::PathArguments;
 use syn::{DataEnum, Error, FieldsNamed, Ident, Result, Variant};
 use wit_parser::{Handle, Resolve, Type as WitType, TypeDefKind};
+use wit_validator::pagination::is_builtin;
 
 /// Reject a storage struct with more fields than the interned path-id space can
 /// hold. A field's id is its declaration index (`u8`) and an indexed-map field's
@@ -145,6 +146,9 @@ pub fn wit_type_to_rust_type(
     ty: &WitType,
     use_str: bool,
 ) -> anyhow::Result<TokenStream> {
+    if is_builtin(resolve, *ty, "pagination", "cursor-request") {
+        return Ok(quote! { __CursorRequest });
+    }
     match (ty, use_str) {
         (WitType::U8, _) => Ok(quote! { u8 }),
         (WitType::U32, _) => Ok(quote! { u32 }),

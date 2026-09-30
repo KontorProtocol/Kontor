@@ -51,7 +51,10 @@ async fn test_token_contract() -> Result<()> {
     let mut balances = Vec::new();
     let mut after: Option<String> = None;
     loop {
-        let page = token::balances(runtime, &token, after.as_deref(), 100).await??;
+        let page = token::balances(runtime, &token)
+            .set_after(after.as_deref())
+            .fetch_with_limit(100)
+            .await??;
         balances.extend(page.items);
         after = page.next;
         if after.is_none() {
@@ -150,18 +153,32 @@ async fn test_token_balance_pages_include_zero_and_skip_burner() -> Result<()> {
     let holder = runtime.identity().await?;
     let token = runtime.publish(&minter, "test-token").await?;
     if runtime.reg_tester().is_none() {
-        let empty = token::balances(runtime, &token, None, 1).await??;
+        let empty = token::balances(runtime, &token)
+            .fetch_with_limit(1)
+            .await??;
         assert!(empty.items.is_empty() && empty.next.is_none());
     }
     token::mint(runtime, &token, &minter, 10.into()).await??;
     token::transfer(runtime, &token, &minter, &holder, 10.into()).await??;
     token::burn(runtime, &token, &holder, 1.into()).await??;
-    let zero = token::balances(runtime, &token, None, 0).await??;
+    assert_eq!(token::count_balances(runtime, &token, 0).await??, 0);
+    assert_eq!(token::count_balances(runtime, &token, 1).await??, 1);
+    assert_eq!(token::count_native_balances(runtime, &token, 0).await??, 0);
+    assert_eq!(token::count_native_balances(runtime, &token, 1).await??, 1);
+    let default_page = token::balances(runtime, &token).fetch().await??;
+    assert!(!default_page.items.is_empty());
+    assert!(default_page.items.len() <= 100);
+    let zero = token::balances(runtime, &token)
+        .fetch_with_limit(0)
+        .await??;
     assert!(zero.items.is_empty() && zero.next.is_none());
     let mut balances = Vec::new();
     let mut after: Option<String> = None;
     loop {
-        let page = token::balances(runtime, &token, after.as_deref(), 1).await??;
+        let page = token::balances(runtime, &token)
+            .set_after(after.as_deref())
+            .fetch_with_limit(1)
+            .await??;
         assert!(page.items.len() <= 1);
         for balance in &page.items {
             assert_ne!(balance.key, "burner");
@@ -197,7 +214,9 @@ async fn test_token_balance_pages_include_zero_and_skip_burner() -> Result<()> {
         Some(Integer::from(9))
     );
     assert!(
-        token::balances(runtime, &token, Some("invalid"), 1)
+        token::balances(runtime, &token)
+            .after("invalid")
+            .fetch_with_limit(1)
             .await?
             .is_err()
     );
@@ -210,18 +229,25 @@ async fn test_decimal_token_balance_pages() -> Result<()> {
     let holder = runtime.identity().await?;
     let token = runtime.publish(&minter, "decimal-token").await?;
     if runtime.reg_tester().is_none() {
-        let empty = decimal_token::balances(runtime, &token, None, 1).await??;
+        let empty = decimal_token::balances(runtime, &token)
+            .fetch_with_limit(1)
+            .await??;
         assert!(empty.items.is_empty() && empty.next.is_none());
     }
     decimal_token::mint(runtime, &token, &minter, Decimal::from("10.5")).await??;
     decimal_token::transfer(runtime, &token, &minter, &holder, Decimal::from("10.5")).await??;
     decimal_token::burn(runtime, &token, &holder, Decimal::from("1")).await??;
-    let zero = decimal_token::balances(runtime, &token, None, 0).await??;
+    let zero = decimal_token::balances(runtime, &token)
+        .fetch_with_limit(0)
+        .await??;
     assert!(zero.items.is_empty() && zero.next.is_none());
     let mut balances = Vec::new();
     let mut after: Option<String> = None;
     loop {
-        let page = decimal_token::balances(runtime, &token, after.as_deref(), 1).await??;
+        let page = decimal_token::balances(runtime, &token)
+            .set_after(after.as_deref())
+            .fetch_with_limit(1)
+            .await??;
         assert!(page.items.len() <= 1);
         for balance in &page.items {
             assert_ne!(balance.acc, HolderRef::Core);
@@ -257,7 +283,9 @@ async fn test_decimal_token_balance_pages() -> Result<()> {
         Some(Decimal::from("9.5"))
     );
     assert!(
-        decimal_token::balances(runtime, &token, Some("invalid"), 1)
+        decimal_token::balances(runtime, &token)
+            .after("invalid")
+            .fetch_with_limit(1)
             .await?
             .is_err()
     );

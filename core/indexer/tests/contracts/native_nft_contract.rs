@@ -307,7 +307,8 @@ async fn test_native_nft_contract() -> Result<()> {
         nft::count_nfts_by_creator(runtime, carol_ref.clone()).await?,
         0
     );
-    let alice_minted = nft::list_nfts_by_creator(runtime, alice_ref.clone(), None, 100)
+    let alice_minted = nft::list_nfts_by_creator(runtime, alice_ref.clone())
+        .fetch_with_limit(100)
         .await?
         .items;
     assert_eq!(
@@ -322,7 +323,8 @@ async fn test_native_nft_contract() -> Result<()> {
     // Pagination: first page of size 1 is the lex-first nft, the
     // second page is the lex-next one, and a page past the end is
     // empty.
-    let alice_first_page = nft::list_nfts_by_creator(runtime, alice_ref.clone(), None, 1)
+    let alice_first_page = nft::list_nfts_by_creator(runtime, alice_ref.clone())
+        .fetch_with_limit(1)
         .await?
         .items;
     assert_eq!(
@@ -332,10 +334,11 @@ async fn test_native_nft_contract() -> Result<()> {
             .collect::<Vec<_>>(),
         vec![nft_id_1]
     );
-    let alice_second_page =
-        nft::list_nfts_by_creator(runtime, alice_ref.clone(), Some(nft_id_1), 1)
-            .await?
-            .items;
+    let alice_second_page = nft::list_nfts_by_creator(runtime, alice_ref.clone())
+        .after(nft_id_1)
+        .fetch_with_limit(1)
+        .await?
+        .items;
     assert_eq!(
         alice_second_page
             .iter()
@@ -344,19 +347,23 @@ async fn test_native_nft_contract() -> Result<()> {
         vec![nft_id_3]
     );
     assert_eq!(
-        nft::list_nfts_by_creator(runtime, alice_ref.clone(), Some(nft_id_3), 100)
+        nft::list_nfts_by_creator(runtime, alice_ref.clone())
+            .after(nft_id_3)
+            .fetch_with_limit(100)
             .await?
             .items,
         Vec::<nft::NftInfo>::new()
     );
     // limit == 0 is a documented no-op even when results exist.
     assert_eq!(
-        nft::list_nfts_by_creator(runtime, alice_ref.clone(), None, 0)
+        nft::list_nfts_by_creator(runtime, alice_ref.clone())
+            .fetch_with_limit(0)
             .await?
             .items,
         Vec::<nft::NftInfo>::new()
     );
-    let bob_minted = nft::list_nfts_by_creator(runtime, bob_ref.clone(), None, 100)
+    let bob_minted = nft::list_nfts_by_creator(runtime, bob_ref.clone())
+        .fetch_with_limit(100)
         .await?
         .items;
     assert_eq!(
@@ -368,7 +375,8 @@ async fn test_native_nft_contract() -> Result<()> {
     );
     assert_eq!(bob_minted[0].creator, bob_ref);
     assert_eq!(
-        nft::list_nfts_by_creator(runtime, carol_ref.clone(), None, 100)
+        nft::list_nfts_by_creator(runtime, carol_ref.clone())
+            .fetch_with_limit(100)
             .await?
             .items,
         Vec::<nft::NftInfo>::new()
@@ -380,7 +388,8 @@ async fn test_native_nft_contract() -> Result<()> {
     // `list_nfts_by_creator` returns — proving the covering scan (host `get-storage-rows`
     // → guest decode) reconstructs the covered field correctly.
     assert_eq!(
-        nft::agreement_ids_by_creator(runtime, alice_ref.clone(), None, 100)
+        nft::agreement_ids_by_creator(runtime, alice_ref.clone())
+            .fetch_with_limit(100)
             .await?
             .items,
         alice_minted
@@ -390,19 +399,23 @@ async fn test_native_nft_contract() -> Result<()> {
     );
     // Pagination + leniency mirror `list_nfts_by_creator`.
     assert_eq!(
-        nft::agreement_ids_by_creator(runtime, alice_ref.clone(), Some(nft_id_1), 1)
+        nft::agreement_ids_by_creator(runtime, alice_ref.clone())
+            .after(nft_id_1)
+            .fetch_with_limit(1)
             .await?
             .items,
         vec![alice_minted[1].agreement_id.clone()]
     );
     assert_eq!(
-        nft::agreement_ids_by_creator(runtime, alice_ref.clone(), None, 0)
+        nft::agreement_ids_by_creator(runtime, alice_ref.clone())
+            .fetch_with_limit(0)
             .await?
             .items,
         Vec::<String>::new()
     );
     assert_eq!(
-        nft::agreement_ids_by_creator(runtime, carol_ref.clone(), None, 100)
+        nft::agreement_ids_by_creator(runtime, carol_ref.clone())
+            .fetch_with_limit(100)
             .await?
             .items,
         Vec::<String>::new()
@@ -413,22 +426,31 @@ async fn test_native_nft_contract() -> Result<()> {
     // creator. With three mints in flight the page is
     // [genesis-nft-1, second-nft, third-nft] and each entry exposes the
     // current owner/creator at call time (still equal pre-transfer).
-    let first = nft::list_nfts(runtime, None, 1).await?;
+    let first = nft::list_nfts(runtime).fetch_with_limit(1).await?;
     assert_eq!(first.next.as_deref(), Some(nft_id_1));
-    let second = nft::list_nfts(runtime, first.next.as_deref(), 1).await?;
+    let second = nft::list_nfts(runtime)
+        .set_after(first.next.as_deref())
+        .fetch_with_limit(1)
+        .await?;
     assert_eq!(second.next.as_deref(), Some(nft_id_2));
-    let third = nft::list_nfts(runtime, second.next.as_deref(), 1).await?;
+    let third = nft::list_nfts(runtime)
+        .set_after(second.next.as_deref())
+        .fetch_with_limit(1)
+        .await?;
     assert_eq!(third.items[0].nft_id, nft_id_3);
     assert_eq!(third.next, None);
-    let agreements = nft::agreement_ids_by_creator(runtime, alice_ref.clone(), None, 1).await?;
+    let agreements = nft::agreement_ids_by_creator(runtime, alice_ref.clone())
+        .fetch_with_limit(1)
+        .await?;
     assert_eq!(agreements.next.as_deref(), Some(nft_id_1));
-    let agreements =
-        nft::agreement_ids_by_creator(runtime, alice_ref.clone(), agreements.next.as_deref(), 1)
-            .await?;
+    let agreements = nft::agreement_ids_by_creator(runtime, alice_ref.clone())
+        .set_after(agreements.next.as_deref())
+        .fetch_with_limit(1)
+        .await?;
     assert_eq!(agreements.items, vec![alice_minted[1].agreement_id.clone()]);
     assert_eq!(agreements.next, None);
 
-    let all_nfts = nft::list_nfts(runtime, None, 100).await?.items;
+    let all_nfts = nft::list_nfts(runtime).fetch_with_limit(100).await?.items;
     assert_eq!(
         all_nfts
             .iter()
@@ -458,7 +480,7 @@ async fn test_native_nft_contract() -> Result<()> {
     // Pagination on the global list: first page of size 1 is the
     // lex-first id, subsequent pages walk the collection, and a page
     // starting after the last key is empty.
-    let global_first = nft::list_nfts(runtime, None, 1).await?.items;
+    let global_first = nft::list_nfts(runtime).fetch_with_limit(1).await?.items;
     assert_eq!(
         global_first
             .iter()
@@ -466,7 +488,11 @@ async fn test_native_nft_contract() -> Result<()> {
             .collect::<Vec<_>>(),
         vec![nft_id_1]
     );
-    let global_second = nft::list_nfts(runtime, Some(nft_id_1), 1).await?.items;
+    let global_second = nft::list_nfts(runtime)
+        .after(nft_id_1)
+        .fetch_with_limit(1)
+        .await?
+        .items;
     assert_eq!(
         global_second
             .iter()
@@ -474,7 +500,11 @@ async fn test_native_nft_contract() -> Result<()> {
             .collect::<Vec<_>>(),
         vec![nft_id_2]
     );
-    let global_third = nft::list_nfts(runtime, Some(nft_id_2), 1).await?.items;
+    let global_third = nft::list_nfts(runtime)
+        .after(nft_id_2)
+        .fetch_with_limit(1)
+        .await?
+        .items;
     assert_eq!(
         global_third
             .iter()
@@ -483,17 +513,24 @@ async fn test_native_nft_contract() -> Result<()> {
         vec![nft_id_3]
     );
     assert_eq!(
-        nft::list_nfts(runtime, Some(nft_id_3), 100).await?.items,
+        nft::list_nfts(runtime)
+            .after(nft_id_3)
+            .fetch_with_limit(100)
+            .await?
+            .items,
         Vec::<nft::NftInfo>::new()
     );
     // limit == 0 is a documented no-op even when results exist.
     assert_eq!(
-        nft::list_nfts(runtime, None, 0).await?.items,
+        nft::list_nfts(runtime).fetch_with_limit(0).await?.items,
         Vec::<nft::NftInfo>::new()
     );
     // `limit` is silently clamped to MAX_LIST_LIMIT (100): asking for
     // 10_000 yields the same three entries, not an error.
-    let clamped = nft::list_nfts(runtime, None, 10_000).await?.items;
+    let clamped = nft::list_nfts(runtime)
+        .fetch_with_limit(10_000)
+        .await?
+        .items;
     assert_eq!(
         clamped
             .iter()
@@ -565,7 +602,8 @@ async fn test_native_nft_contract() -> Result<()> {
         nft::count_nfts_by_holder(runtime, carol_ref.clone()).await?,
         0
     );
-    let bob_holds = nft::list_nfts_by_holder(runtime, bob_ref.clone(), None, 100)
+    let bob_holds = nft::list_nfts_by_holder(runtime, bob_ref.clone())
+        .fetch_with_limit(100)
         .await?
         .items;
     let mut bob_ids: Vec<&str> = bob_holds.iter().map(|n| n.nft_id.as_str()).collect();
@@ -575,7 +613,8 @@ async fn test_native_nft_contract() -> Result<()> {
     assert_eq!(bob_ids, expected_bob);
     assert!(bob_holds.iter().all(|n| n.owner == bob_ref));
     assert_eq!(
-        nft::list_nfts_by_holder(runtime, alice_ref.clone(), None, 100)
+        nft::list_nfts_by_holder(runtime, alice_ref.clone())
+            .fetch_with_limit(100)
             .await?
             .items
             .iter()
@@ -597,7 +636,8 @@ async fn test_native_nft_contract() -> Result<()> {
         nft::count_nfts_by_creator(runtime, bob_ref.clone()).await?,
         1
     );
-    let alice_after_ab = nft::list_nfts_by_creator(runtime, alice_ref.clone(), None, 100)
+    let alice_after_ab = nft::list_nfts_by_creator(runtime, alice_ref.clone())
+        .fetch_with_limit(100)
         .await?
         .items;
     assert_eq!(
@@ -684,7 +724,8 @@ async fn test_native_nft_contract() -> Result<()> {
         nft::count_nfts_by_creator(runtime, HolderRef::Burner).await?,
         0
     );
-    let alice_final = nft::list_nfts_by_creator(runtime, alice_ref.clone(), None, 100)
+    let alice_final = nft::list_nfts_by_creator(runtime, alice_ref.clone())
+        .fetch_with_limit(100)
         .await?
         .items;
     assert_eq!(
@@ -707,7 +748,8 @@ async fn test_native_nft_contract() -> Result<()> {
         .find(|n| n.nft_id == nft_id_3)
         .expect("alice keeps her creator entry for nft_id_3");
     assert_eq!(nft3_final.owner, alice_ref);
-    let bob_final = nft::list_nfts_by_creator(runtime, bob_ref.clone(), None, 100)
+    let bob_final = nft::list_nfts_by_creator(runtime, bob_ref.clone())
+        .fetch_with_limit(100)
         .await?
         .items;
     assert_eq!(
@@ -720,13 +762,15 @@ async fn test_native_nft_contract() -> Result<()> {
     assert_eq!(bob_final[0].creator, bob_ref);
     assert_eq!(bob_final[0].owner, bob_ref);
     assert_eq!(
-        nft::list_nfts_by_creator(runtime, carol_ref.clone(), None, 100)
+        nft::list_nfts_by_creator(runtime, carol_ref.clone())
+            .fetch_with_limit(100)
             .await?
             .items,
         Vec::<nft::NftInfo>::new()
     );
     assert_eq!(
-        nft::list_nfts_by_creator(runtime, HolderRef::Burner, None, 100)
+        nft::list_nfts_by_creator(runtime, HolderRef::Burner)
+            .fetch_with_limit(100)
             .await?
             .items,
         Vec::<nft::NftInfo>::new()
@@ -737,7 +781,7 @@ async fn test_native_nft_contract() -> Result<()> {
     // mint, no burn-as-delete), but each entry now exposes the
     // *current* owner. Creator is invariant: alice still creates
     // nft_id_1 and nft_id_3, bob still creates nft_id_2.
-    let all_after_chain = nft::list_nfts(runtime, None, 100).await?.items;
+    let all_after_chain = nft::list_nfts(runtime).fetch_with_limit(100).await?.items;
     assert_eq!(
         all_after_chain
             .iter()
@@ -776,10 +820,9 @@ async fn test_native_nft_contract() -> Result<()> {
     assert_eq!(
         nft::list_nfts_by_creator(
             runtime,
-            HolderRef::XOnlyPubkey("not-a-valid-x-only-pubkey".to_string()),
-            None,
-            100
+            HolderRef::XOnlyPubkey("not-a-valid-x-only-pubkey".to_string())
         )
+        .fetch_with_limit(100)
         .await?
         .items,
         Vec::<nft::NftInfo>::new()
@@ -847,7 +890,8 @@ async fn test_nft_holder_index_same_block_multi_remove() -> Result<()> {
         1,
         "alice's bucket must stay accurate after two same-height removals"
     );
-    let alice_held = nft::list_nfts_by_holder(runtime, alice_ref.clone(), None, 100)
+    let alice_held = nft::list_nfts_by_holder(runtime, alice_ref.clone())
+        .fetch_with_limit(100)
         .await?
         .items;
     assert_eq!(
@@ -864,7 +908,8 @@ async fn test_nft_holder_index_same_block_multi_remove() -> Result<()> {
         nft::count_nfts_by_holder(runtime, bob_ref.clone()).await?,
         2
     );
-    let bob_held = nft::list_nfts_by_holder(runtime, bob_ref.clone(), None, 100)
+    let bob_held = nft::list_nfts_by_holder(runtime, bob_ref.clone())
+        .fetch_with_limit(100)
         .await?
         .items;
     assert_eq!(

@@ -9,6 +9,7 @@ use syn::Ident;
 
 use wit_parser::{Function, Resolve, Type, TypeDefKind, TypeOwner, WorldItem, WorldKey};
 
+use crate::pagination;
 use crate::remap::REMAPPED_BUILT_INS;
 use crate::utils;
 
@@ -251,6 +252,14 @@ pub fn import(
                 string::{String, ToString},
                 vec::Vec,
             };
+            #[allow(unused_imports)]
+            use core::ops::AsyncFnMut;
+            #[allow(unused_imports)]
+            use stdlib::{AsyncCursorQuery as __AsyncCursorQuery, CursorQuery as __CursorQuery};
+            #[allow(unused_imports)]
+            use built_in_types::error::Error as __PaginationError;
+            #[allow(unused_imports)]
+            use built_in_types::pagination::CursorRequest as __CursorRequest;
 
             mod __bindings {
                 #(#bindings_items)*
@@ -385,6 +394,9 @@ pub fn generate_functions(
     contract_id: Option<(&str, u64, u32)>,
 ) -> Result<TokenStream> {
     let fn_name = make_fn_ident(export);
+    if let Some(shape) = wit_validator::pagination::shape(resolve, export)? {
+        return pagination::binding(resolve, export, &shape, test, contract_id, false);
+    }
     let mut params = make_params(resolve, export)?;
 
     if !public {

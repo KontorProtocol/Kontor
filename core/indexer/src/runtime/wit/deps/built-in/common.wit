@@ -356,7 +356,17 @@ interface file-registry-types {
     }
 }
 
+interface pagination {
+    /// Explicit opt-in to cursor iteration on a view. An absent limit uses the
+    /// contract's default; an absent cursor starts at the beginning.
+    record cursor-request {
+        after: option<string>,
+        limit: option<u64>,
+    }
+}
+
 world built-in {
+    import pagination;
     import context-types;
     import context;
     import numbers-types;

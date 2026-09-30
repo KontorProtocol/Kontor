@@ -109,11 +109,9 @@ impl Guest for DecimalToken {
         ctx.model().ledger().get(&holder)
     }
 
-    fn balances(
-        ctx: &ViewContext,
-        after: Option<String>,
-        limit: u64,
-    ) -> Result<BalancePage, Error> {
+    fn balances(ctx: &ViewContext, pagination: CursorRequest) -> Result<BalancePage, Error> {
+        let CursorRequest { after, limit } = pagination;
+        let limit = limit.unwrap_or(MAX_BALANCES_LIMIT);
         let after = after
             .map(|cursor| cursor.parse::<Holder>())
             .transpose()

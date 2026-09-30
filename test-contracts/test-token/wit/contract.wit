@@ -1,6 +1,7 @@
 package root:component;
 
 world root {
+  use kontor:built-in/pagination.{cursor-request};
 	include kontor:built-in/built-in;
 	use kontor:built-in/context.{core-context, view-context, proc-context, signer, contract};
 	use kontor:built-in/error.{error};
@@ -22,6 +23,8 @@ world root {
 	export burn: async func(ctx: borrow<proc-context>, n: integer) -> result<_, error>;
 	export transfer: async func(ctx: borrow<proc-context>, to: string, n: integer) -> result<_, error>;
 	export balance: async func(ctx: borrow<view-context>, acc: string) -> option<integer>;
-	export balances: async func(ctx: borrow<view-context>, after: option<string>, limit: u64) -> result<balance-page, error>;
+  export count-balances: async func(ctx: borrow<view-context>, max: u32) -> result<u64, error>;
+  export count-native-balances: async func(ctx: borrow<view-context>, max: u32) -> result<u64, error>;
+	export balances: async func(ctx: borrow<view-context>, pagination: cursor-request) -> result<balance-page, error>;
 	export total-supply: async func(ctx: borrow<view-context>) -> integer;
 }

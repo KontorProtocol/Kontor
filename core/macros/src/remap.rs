@@ -3,6 +3,7 @@
 /// guards — a type-owning built-in interface missing from this list would be
 /// regenerated per crate as a second family.
 pub const REMAPPED_BUILT_INS: &[(&str, &str)] = &[
+    ("pagination", "built_in_types::pagination"),
     ("file-registry-types", "built_in_types::file_registry_types"),
     ("error", "built_in_types::error"),
     ("numbers", "built_in_types::numbers"),

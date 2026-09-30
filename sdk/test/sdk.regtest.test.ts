@@ -113,11 +113,13 @@ test("SDK capstone: publish, transfer, bulk, marketplace", async () => {
       // has no balances issued, so `balance(...)` for the publisher
       // returns null (or "0").
       const token = session.bind(Token, address);
-      const emptyPage = await token.balances(null, 10n);
+      const emptyPage = await token.balances({ limit: 10n });
       expect(emptyPage).toEqual({ items: [], next: null });
       const bal = await token.balance(signing.identity.holderRef);
       expect(bal == null || bal.toString() === "0").toBe(true);
-      await expect(token.balances("invalid", 10n)).rejects.toMatchObject({
+      await expect(
+        token.balances({ after: "invalid", limit: 10n }),
+      ).rejects.toMatchObject({
         name: "ContractError",
         functionName: "balances",
         data: { kind: "message" },
@@ -206,17 +208,13 @@ test("SDK capstone: publish, transfer, bulk, marketplace", async () => {
       ).toBe("2");
 
       const holders = new Set<string>();
-      let after: string | null = null;
-      do {
-        const page = await token.balances(after, 2n);
-        expect(page.items.length).toBeLessThanOrEqual(2);
-        for (const balance of page.items) {
-          const key = JSON.stringify(balance.acc.toRaw());
-          expect(holders.has(key)).toBe(false);
-          holders.add(key);
-        }
-        after = page.next;
-      } while (after !== null);
+      const balances = token.balances({ limit: 2n });
+      expect((await balances).items.length).toBeLessThanOrEqual(2);
+      for await (const balance of balances) {
+        const key = JSON.stringify(balance.acc.toRaw());
+        expect(holders.has(key)).toBe(false);
+        holders.add(key);
+      }
       expect(holders.size).toBeGreaterThan(2);
     } finally {
       session.close();

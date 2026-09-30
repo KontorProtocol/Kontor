@@ -1,0 +1,41 @@
+package test:pagination;
+
+world root {
+    use kontor:built-in/pagination.{cursor-request};
+    type request-alias = cursor-request;
+    include kontor:built-in/built-in;
+    use kontor:built-in/context.{proc-context, view-context, contract};
+    use kontor:built-in/error.{error};
+
+    type cursor = option<string>;
+    type page-size = u64;
+    type rows = list<u64>;
+    record page {
+        items: rows,
+        next: cursor,
+        count: u64,
+    }
+    type page-alias = page;
+    type reply = result<page-alias, error>;
+    type reply-alias = reply;
+    record wrong-page {
+        items: rows,
+        next: option<u64>,
+    }
+    record no-items-page {
+        count: u64,
+        next: cursor,
+    }
+
+    export init: async func(ctx: borrow<proc-context>) -> contract;
+    export filtered: async func(ctx: borrow<view-context>, filters: list<string>, pagination: request-alias) -> reply-alias;
+    export named-options: async func(ctx: borrow<view-context>, options: string, pagination: cursor-request) -> page;
+    export direct-page: async func(ctx: borrow<view-context>, pagination: cursor-request) -> page;
+    export write-page: async func(ctx: borrow<proc-context>, after: cursor, limit: page-size) -> reply;
+    export wrong-cursor: async func(ctx: borrow<view-context>, after: option<u64>, limit: page-size) -> reply;
+    export wrong-next: async func(ctx: borrow<view-context>, after: cursor, limit: page-size) -> wrong-page;
+    export no-limit: async func(ctx: borrow<view-context>, after: cursor) -> reply;
+    export no-items: async func(ctx: borrow<view-context>, after: cursor, limit: page-size) -> no-items-page;
+    export lookalike: async func(ctx: borrow<view-context>, after: cursor, limit: page-size) -> reply;
+    export swapped: async func(ctx: borrow<view-context>, limit: page-size, after: cursor) -> reply;
+}

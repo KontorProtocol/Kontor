@@ -11,9 +11,7 @@ import type {
 } from "./__generated__/call-results.js";
 
 test("generated calls expose success types, including aliases and unit results", () => {
-  expectTypeOf<Token["balances"]>().returns.toEqualTypeOf<
-    Promise<BalancePage>
-  >();
+  expectTypeOf<Token["balances"]>().returns.toExtend<Promise<BalancePage>>();
   expectTypeOf<Token["transfer"]>().returns.toEqualTypeOf<Inst<Transfer>>();
   expectTypeOf<Token["attachment"]>().returns.toEqualTypeOf<
     Attachment<Transfer>

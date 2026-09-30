@@ -11,6 +11,7 @@ use alloc::string::String;
 use alloc::vec::Vec;
 
 mod error;
+pub mod pagination;
 mod rules;
 mod types;
 
@@ -103,6 +104,7 @@ impl Validator {
     pub fn validate_resolve(resolve: &Resolve) -> ValidationResult {
         let mut errors = Vec::new();
         errors.extend(rules::validate_all(resolve));
+        errors.extend(pagination::validate(resolve));
         ValidationResult { errors }
     }
 }
