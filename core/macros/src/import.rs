@@ -255,7 +255,9 @@ pub fn import(
             #[allow(unused_imports)]
             use core::ops::AsyncFnMut;
             #[allow(unused_imports)]
-            use stdlib::{AsyncCursorQuery, CursorQuery};
+            use stdlib::{AsyncCursorQuery as __AsyncCursorQuery, CursorQuery as __CursorQuery};
+            #[allow(unused_imports)]
+            use built_in_types::error::Error as __PaginationError;
             #[allow(unused_imports)]
             use built_in_types::pagination::CursorRequest as __CursorRequest;
 

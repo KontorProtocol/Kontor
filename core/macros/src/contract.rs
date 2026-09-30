@@ -463,7 +463,9 @@ pub fn generate(config: Config) -> TokenStream {
 
         use kontor::built_in::*;
         #[allow(unused_imports)]
-        use stdlib::CursorQuery;
+        use stdlib::CursorQuery as __CursorQuery;
+        #[allow(unused_imports)]
+        use built_in_types::error::Error as __PaginationError;
         #[allow(unused_imports)]
         use built_in_types::pagination::CursorRequest as __CursorRequest;
         // Remapped interfaces generate no module here — surface the shared

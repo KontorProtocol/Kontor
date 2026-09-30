@@ -34,7 +34,7 @@ pub fn binding(
         filters.push(ident);
     }
     let raw_return = if shape.fallible {
-        quote! { Result<#page, Error> }
+        quote! { Result<#page, __PaginationError> }
     } else {
         quote! { #page }
     };
@@ -71,12 +71,12 @@ pub fn binding(
     };
     if test {
         return Ok(quote! {
-            pub fn #name<'a>(#(#params),*) -> AsyncCursorQuery<
+            pub fn #name<'a>(#(#params),*) -> __AsyncCursorQuery<
                 impl AsyncFnMut(Option<String>, Option<u64>) -> Result<#raw_return, AnyhowError> + 'a,
                 #raw_return, AnyhowError,
             > {
                 #(#conversions)*
-                AsyncCursorQuery::new(async move |__after: Option<String>, __limit: Option<u64>| {
+                __AsyncCursorQuery::new(async move |__after: Option<String>, __limit: Option<u64>| {
                     #expression
                     let s = runtime.execute_api(None, #contract_arg, &expr).await?;
                     Ok(stdlib::from_wave_expr::<#raw_return>(&s))
@@ -99,15 +99,15 @@ pub fn binding(
         quote! { Ok(#call) }
     };
     Ok(quote! {
-        pub fn #name<'a>(#(#params),*) -> CursorQuery<
-            impl FnMut(Option<&str>, Option<u64>) -> Result<#page, Error> + 'a,
-            #page, #item, Error,
+        pub fn #name<'a>(#(#params),*) -> __CursorQuery<
+            impl FnMut(Option<&str>, Option<u64>) -> Result<#page, __PaginationError> + 'a,
+            #page, #item, __PaginationError,
         > {
             #(#conversions)*
-            CursorQuery::new(
+            __CursorQuery::new(
                 move |__after: Option<&str>, __limit: Option<u64>| #call,
                 |page| (page.items, page.next),
-                || Error::Message(String::from("Pagination cursor did not advance")),
+                || __PaginationError::Message(String::from("Pagination cursor did not advance")),
             )
         }
     })

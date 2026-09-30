@@ -9,7 +9,9 @@ world root {
   import kontor:built-in/context;
   import kontor:built-in/numbers-types;
   import kontor:built-in/deposit;
+  import kontor:built-in/pagination;
   import kontor:built-in/numbers;
+  use kontor:built-in/pagination.{cursor-request};
   use kontor:built-in/context.{view-context, proc-context, signer, contract};
   use kontor:built-in/context-types.{holder-ref};
   use kontor:built-in/error.{error};
@@ -54,7 +56,7 @@ world root {
   export transfer: async func(ctx: borrow<proc-context>, dst: holder-ref, amt: decimal) -> result<transfer, error>;
   export balance: async func(ctx: borrow<view-context>, acc: holder-ref) -> option<decimal>;
   export floor: async func(ctx: borrow<view-context>, acc: holder-ref) -> decimal;
-  export balances: async func(ctx: borrow<view-context>, after: option<string>, limit: u64) -> result<balance-page, error>;
+  export balances: async func(ctx: borrow<view-context>, pagination: cursor-request) -> result<balance-page, error>;
   export total-supply: async func(ctx: borrow<view-context>) -> decimal;
   export dev-mint-enabled: async func(ctx: borrow<view-context>) -> bool;
   export attach: async func(ctx: borrow<proc-context>, vout: u32, amt: decimal) -> result<transfer, error>;

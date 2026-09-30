@@ -1,0 +1,13 @@
+package test:query-names;
+
+world root {
+  include kontor:built-in/built-in;
+  use kontor:built-in/context.{proc-context, view-context, contract};
+
+  record cursor-query { value: u64 }
+  record async-cursor-query { value: u64 }
+
+  export init: async func(ctx: borrow<proc-context>) -> contract;
+  export query: async func(ctx: borrow<view-context>) -> cursor-query;
+  export async-query: async func(ctx: borrow<view-context>) -> async-cursor-query;
+}
