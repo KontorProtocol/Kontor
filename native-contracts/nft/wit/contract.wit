@@ -1,6 +1,7 @@
 package root:component;
 
 world root {
+  use kontor:built-in/pagination.{cursor-request};
   include kontor:built-in/built-in;
   use kontor:built-in/context.{view-context, proc-context, contract};
   use kontor:built-in/context-types.{holder-ref};
@@ -87,14 +88,13 @@ world root {
 
   /// List NFTs in lexicographic NFT-id order, strictly after `after` when set.
   /// Start with after = none; pass the returned next cursor to continue.
-  /// Limit is capped at 100; zero returns an empty page with no next cursor.
+  /// An absent limit defaults to 100. Limit is capped at 100; zero returns an empty page with no next cursor.
   /// Each call reads current state, not a snapshot spanning all pages. Inserts
   /// before the cursor and transfers between holder buckets may change later pages.
   /// The cursor need not identify an existing NFT.
   export list-nfts: async func(
     ctx: borrow<view-context>,
-    after: option<string>,
-    limit: u64
+    pagination: cursor-request
   ) -> nft-page;
 
   /// Same cursor and limit rules as list-nfts, restricted to the immutable creator.
@@ -102,8 +102,7 @@ world root {
   export list-nfts-by-creator: async func(
     ctx: borrow<view-context>,
     creator: holder-ref,
-    after: option<string>,
-    limit: u64
+    pagination: cursor-request
   ) -> nft-page;
 
   export count-nfts-by-creator: async func(
@@ -116,8 +115,7 @@ world root {
   export list-nfts-by-holder: async func(
     ctx: borrow<view-context>,
     holder: holder-ref,
-    after: option<string>,
-    limit: u64
+    pagination: cursor-request
   ) -> nft-page;
 
   export count-nfts-by-holder: async func(
@@ -131,8 +129,7 @@ world root {
   export agreement-ids-by-creator: async func(
     ctx: borrow<view-context>,
     creator: holder-ref,
-    after: option<string>,
-    limit: u64
+    pagination: cursor-request
   ) -> agreement-page;
 
   export get-attributes: async func(ctx: borrow<view-context>, nft-id: string) -> list<attribute>;

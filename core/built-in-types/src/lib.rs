@@ -28,6 +28,11 @@ wit_bindgen::generate!({
     // Numeric records are scalar storage values; only compound types derive models.
     additional_derives: [stdlib::Wavey],
     additional_type_attributes: {
+        "kontor:built-in/pagination/cursor-request": [
+            #[derive(Default, PartialEq, Eq)]
+            #[cfg_attr(feature = "host", derive(wasmtime::component::ComponentType, wasmtime::component::Lift, wasmtime::component::Lower, serde::Deserialize))]
+            #[cfg_attr(feature = "host", component(record))]
+        ],
         "kontor:built-in/context-types/out-point": [
             #[derive(stdlib::Storage)]
             #[cfg_attr(feature = "host", derive(wasmtime::component::ComponentType, wasmtime::component::Lift, wasmtime::component::Lower, serde::Deserialize))]
@@ -93,6 +98,9 @@ wit_bindgen::generate!({
         ],
     },
     additional_member_attributes: {
+        "kontor:built-in/pagination/cursor-request.after": [ #[cfg_attr(feature = "host", component(name = "after"))] ],
+        "kontor:built-in/pagination/cursor-request.limit": [ #[cfg_attr(feature = "host", component(name = "limit"))] ],
+
         "kontor:built-in/context-types/out-point.txid": [ #[cfg_attr(feature = "host", component(name = "txid"))] ],
         "kontor:built-in/context-types/out-point.vout": [ #[cfg_attr(feature = "host", component(name = "vout"))] ],
         "kontor:built-in/context-types/contract-address.name": [ #[cfg_attr(feature = "host", component(name = "name"))] ],
@@ -159,6 +167,7 @@ pub use kontor::built_in::context_types;
 pub use kontor::built_in::error;
 pub use kontor::built_in::numbers;
 pub use kontor::built_in::numbers_types;
+pub use kontor::built_in::pagination;
 
 // This crate OWNS the guest context wrappers, so it is exempt from the
 // workspace `disallowed-types` fence that keeps host code (which reaches these
@@ -257,3 +266,8 @@ types_only_host_facade!(
         pub use crate::context_types::{ContractAddress, HolderRef, Network, OutPoint, SignerRef};
     }
 );
+
+#[cfg(feature = "host")]
+types_only_host_facade!(host_facade_pagination, "kontor:built-in/pagination", {
+    pub use crate::pagination::CursorRequest;
+});

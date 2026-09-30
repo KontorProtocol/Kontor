@@ -108,12 +108,18 @@ export abstract class ContractBase {
   protected _paginatedView<P extends CursorPage<unknown>>(
     fnName: string,
     args: Record<string, unknown>,
-    after: string | null,
+    requestName: string,
+    request: { after: string | null; limit: string | null },
     decode: RawDecoder<P>,
   ): PaginatedView<P> {
     return new PaginatedView(
-      (after) => this._view(fnName, { ...args, after }, decode),
-      after,
+      (after) =>
+        this._view(
+          fnName,
+          { ...args, [requestName]: { ...request, after } },
+          decode,
+        ),
+      request.after,
     );
   }
 

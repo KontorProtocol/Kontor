@@ -54,6 +54,31 @@ export transfer: func(ctx: borrow<proc-context>, dst: string) -> result<transfer
 
 ---
 
+### Cursor iteration
+
+A view explicitly opts into generated cursor iteration by importing
+`kontor:built-in/pagination.{cursor-request}` and taking it as its final parameter:
+
+```wit
+use kontor:built-in/pagination.{cursor-request};
+export balances: async func(ctx: borrow<view-context>, pagination: cursor-request) -> result<balance-page, error>;
+```
+
+- The request must be the imported built-in type, including through aliases.
+- Exactly one request parameter is allowed, and it must be last.
+- The function must borrow `view-context`; procedures cannot opt in.
+- The response must be a record with `items: list<T>` and `next: option<string>`,
+  optionally wrapped in `result<record, error>` using the built-in error type.
+- Additional response fields and filter parameters are allowed.
+- `cursor-request` contains `after: option<string>` and `limit: option<u64>`.
+  An absent cursor starts at the beginning. An absent limit selects the contract's
+  default. Each contract remains responsible for enforcing its maximum limit.
+- Similar parameter names or response shapes alone do not enable iteration.
+
+These checks run in contract macros, import macros, SDK parsing, and publication
+validation. The imported request type survives normal component encoding and WIT
+extraction; it requires no separate pagination metadata.
+
 ## 2. Generic Type Restrictions
 
 - `result<T, E>` must have **exactly 2** type parameters (standard WIT allows `result<T>` with 1 param)

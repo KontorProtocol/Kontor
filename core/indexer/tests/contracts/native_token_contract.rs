@@ -56,7 +56,10 @@ async fn test_native_token_contract() -> Result<()> {
     let mut balances = Vec::new();
     let mut after: Option<String> = None;
     loop {
-        let page = token::balances(runtime, after.as_deref(), 100).await??;
+        let page = token::balances(runtime)
+            .set_after(after.as_deref())
+            .fetch_with_limit(100)
+            .await??;
         balances.extend(page.items);
         after = page.next;
         if after.is_none() {

@@ -113,7 +113,8 @@ impl Fixture {
             }
             Scenario::ListNfts => {
                 ensure!(
-                    nft::list_nfts(&mut self.runtime, None, 25)
+                    nft::list_nfts(&mut self.runtime)
+                        .fetch_with_limit(25)
                         .await?
                         .items
                         .len()

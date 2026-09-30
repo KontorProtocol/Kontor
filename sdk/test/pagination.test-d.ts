@@ -14,15 +14,19 @@ test("generated page calls support awaiting a page and iterating typed items", (
   expectTypeOf<Call>().toExtend<AsyncIterable<Balance>>();
   expectTypeOf<Awaited<Call>>().toEqualTypeOf<BalancePage>();
   const verify = async (token: Token) => {
-    for await (const balance of token.balances(null, 100n)) {
+    expectTypeOf(token.balances()).toEqualTypeOf<PaginatedView<BalancePage>>();
+    expectTypeOf(token.balances({ after: "saved" })).toEqualTypeOf<
+      PaginatedView<BalancePage>
+    >();
+    for await (const balance of token.balances({ limit: 100n })) {
       expectTypeOf(balance).toEqualTypeOf<Balance>();
     }
     expectTypeOf(
-      token.balances(null, 100n).then((page) => page.next),
+      token.balances({ limit: 100n }).then((page) => page.next),
     ).toEqualTypeOf<Promise<string | null>>();
-    expectTypeOf(token.balances(null, 100n).finally(() => {})).toEqualTypeOf<
-      Promise<BalancePage>
-    >();
+    expectTypeOf(
+      token.balances({ limit: 100n }).finally(() => {}),
+    ).toEqualTypeOf<Promise<BalancePage>>();
   };
   void verify;
 });
@@ -46,6 +50,7 @@ test("ordinary reads, writes and pagination lookalikes are not iterable", () => 
   >();
   type NonPages = ReturnType<
     Pages[
+      | "lookalike"
       | "writePage"
       | "wrongCursor"
       | "wrongNext"

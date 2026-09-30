@@ -82,7 +82,10 @@ async fn nft_cursor_pages_seek_and_survive_membership_changes() -> Result<()> {
     );
     let gauge = FuelGauge::with_profiling();
     runtime.gauge = Some(gauge.clone());
-    let balances = token::balances(&mut runtime, None, 100).await??.items;
+    let balances = token::balances(&mut runtime)
+        .fetch_with_limit(100)
+        .await??
+        .items;
     assert!(
         !gauge
             .report()?
@@ -107,7 +110,10 @@ async fn nft_cursor_pages_seek_and_survive_membership_changes() -> Result<()> {
     let mut all = Vec::new();
     let mut after: Option<String> = None;
     loop {
-        let page = api::list_nfts(&mut runtime, after.as_deref(), 7).await?;
+        let page = api::list_nfts(&mut runtime)
+            .set_after(after.as_deref())
+            .fetch_with_limit(7)
+            .await?;
         all.extend(page.items.into_iter().map(|n| n.nft_id));
         after = page.next;
         if after.is_none() {
@@ -119,13 +125,19 @@ async fn nft_cursor_pages_seek_and_survive_membership_changes() -> Result<()> {
     for after in [None, Some("nft-099")] {
         let gauge = FuelGauge::with_profiling();
         runtime.gauge = Some(gauge.clone());
-        let page = api::list_nfts(&mut runtime, after, 5).await?;
+        let page = api::list_nfts(&mut runtime)
+            .set_after(after)
+            .fetch_with_limit(5)
+            .await?;
         assert_eq!(page.items.len(), 5);
         let stats = gauge.report()?.profile.unwrap().per_type;
         work.push(stats[&FuelDiscriminants::KeysNext].consumed_count);
         let gauge = FuelGauge::with_profiling();
         runtime.gauge = Some(gauge.clone());
-        let covered = api::agreement_ids_by_creator(&mut runtime, holder.clone(), after, 5).await?;
+        let covered = api::agreement_ids_by_creator(&mut runtime, holder.clone())
+            .set_after(after)
+            .fetch_with_limit(5)
+            .await?;
         assert_eq!(covered.next, page.next);
         assert_eq!(
             covered.items,
@@ -148,25 +160,38 @@ async fn nft_cursor_pages_seek_and_survive_membership_changes() -> Result<()> {
     }
     assert_eq!(work[0], work[1], "earlier pages must not add scanned rows");
     runtime.gauge = None;
-    let capped = api::list_nfts(&mut runtime, None, u64::MAX).await?;
+    let capped = api::list_nfts(&mut runtime)
+        .fetch_with_limit(u64::MAX)
+        .await?;
     assert_eq!(capped.items.len(), 100);
     assert_eq!(capped.next.as_deref(), Some(keys[99].as_str()));
-    let empty = api::list_nfts(&mut runtime, None, 0).await?;
+    let empty = api::list_nfts(&mut runtime).fetch_with_limit(0).await?;
     assert!(empty.items.is_empty() && empty.next.is_none());
-    let missing = api::list_nfts(&mut runtime, Some("nft-099a"), 1).await?;
+    let missing = api::list_nfts(&mut runtime)
+        .after("nft-099a")
+        .fetch_with_limit(1)
+        .await?;
     assert_eq!(missing.items[0].nft_id, "nft-100");
 
-    let first = api::list_nfts_by_holder(&mut runtime, holder.clone(), None, 1).await?;
+    let first = api::list_nfts_by_holder(&mut runtime, holder.clone())
+        .fetch_with_limit(1)
+        .await?;
     assert_eq!(first.next.as_deref(), Some("a"));
     runtime.storage.savepoint().await?;
     api::transfer(&mut runtime, &signer, "a", HolderRef::Burner).await??;
-    let resumed =
-        api::list_nfts_by_holder(&mut runtime, holder.clone(), first.next.as_deref(), 1).await?;
+    let resumed = api::list_nfts_by_holder(&mut runtime, holder.clone())
+        .set_after(first.next.as_deref())
+        .fetch_with_limit(1)
+        .await?;
     assert_eq!(resumed.items[0].nft_id, "a\0");
-    let changed = api::list_nfts_by_holder(&mut runtime, holder.clone(), None, 1).await?;
+    let changed = api::list_nfts_by_holder(&mut runtime, holder.clone())
+        .fetch_with_limit(1)
+        .await?;
     assert_eq!(changed.items[0].nft_id, "a\0");
     runtime.storage.rollback().await?;
-    let restored = api::list_nfts_by_holder(&mut runtime, holder, None, 1).await?;
+    let restored = api::list_nfts_by_holder(&mut runtime, holder)
+        .fetch_with_limit(1)
+        .await?;
     assert_eq!(restored.items[0].nft_id, "a");
     Ok(())
 }

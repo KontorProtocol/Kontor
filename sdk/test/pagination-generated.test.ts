@@ -33,7 +33,7 @@ test("generated pagination preserves filters, cursor and limit through WAVE enco
     )
     .mockResolvedValueOnce("ok({items: [3], next: none, count: 3})");
   const filters = ["original"];
-  const call = pages.filtered(filters, "saved", 2n);
+  const call = pages.filtered(filters, { after: "saved", limit: 2n });
   filters.push("later mutation");
   expect(view).not.toHaveBeenCalled();
   expect(await call).toEqual({ items: [1n, 2n], next: "z:opaque", count: 3n });
@@ -41,8 +41,8 @@ test("generated pagination preserves filters, cursor and limit through WAVE enco
   for await (const item of call) items.push(item);
   expect(items).toEqual([1n, 2n, 3n]);
   expect(view.mock.calls.map(([, expr]) => expr)).toEqual([
-    'filtered(["original"], some("saved"), 2)',
-    'filtered(["original"], some("z:opaque"), 2)',
+    'filtered(["original"], {after: some("saved"), limit: some(2)})',
+    'filtered(["original"], {after: some("z:opaque"), limit: some(2)})',
   ]);
   expect(submit).not.toHaveBeenCalled();
 });
@@ -51,7 +51,7 @@ test("direct page results iterate without outer result unwrapping", async () => 
   const { pages, view } = setup();
   view.mockResolvedValue("{items: [4], next: none, count: 1}");
   const items = [];
-  for await (const item of pages.directPage(null, 10n)) items.push(item);
+  for await (const item of pages.directPage({ limit: 10n })) items.push(item);
   expect(items).toEqual([4n]);
   expect(view).toHaveBeenCalledOnce();
 });
@@ -61,13 +61,13 @@ test("generated token iteration stops on break and keeps contract error context"
   view.mockResolvedValueOnce(
     'ok({items: [{acc: signer-id(1), amt: {r0: 0, r1: 0, r2: 0, r3: 0, sign: plus}}], next: some("cursor")})',
   );
-  for await (const balance of token.balances(null, 1n)) {
+  for await (const balance of token.balances({ limit: 1n })) {
     expect(balance.amt.toString()).toBe("0");
     break;
   }
   expect(view).toHaveBeenCalledOnce();
   view.mockResolvedValueOnce('err(message("invalid cursor"))');
-  const call = token.balances("invalid", 0n);
+  const call = token.balances({ after: "invalid", limit: 0n });
   let error: unknown;
   try {
     await call;
@@ -82,4 +82,15 @@ test("generated token iteration stops on break and keeps contract error context"
   await expect(call[Symbol.asyncIterator]().next()).rejects.toBe(error);
   expect(view).toHaveBeenCalledTimes(2);
   expect(submit).not.toHaveBeenCalled();
+});
+
+test("omitted pagination options preserve contract defaults and opaque cursors", async () => {
+  const { pages, view } = setup();
+  view.mockResolvedValue("{items: [], next: none, count: 0}");
+  await pages.directPage();
+  await pages.directPage({ after: "saved" });
+  expect(view.mock.calls.map(([, expr]) => expr)).toEqual([
+    "direct-page({:})",
+    'direct-page({after: some("saved")})',
+  ]);
 });

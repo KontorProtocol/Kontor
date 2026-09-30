@@ -7,6 +7,14 @@ use stdlib::*;
 
 const MAX_BALANCES_LIMIT: u64 = 100;
 
+import!(
+    name = "token",
+    mod_name = "native_token",
+    height = 0,
+    tx_index = 0,
+    path = "../../native-contracts/token/wit",
+);
+
 #[derive(Clone, Default, StorageRoot)]
 struct TokenStorage {
     pub ledger: Map<Holder, Integer>,
@@ -74,11 +82,29 @@ impl Guest for TestToken {
         ctx.model().ledger().get(&holder)
     }
 
-    fn balances(
-        ctx: &ViewContext,
-        after: Option<String>,
-        limit: u64,
-    ) -> Result<BalancePage, Error> {
+    fn count_balances(ctx: &ViewContext, max: u32) -> Result<u64, Error> {
+        Self::balances(ctx)
+            .iter()
+            .take(max as usize)
+            .try_fold(0, |count, balance| {
+                balance?;
+                Ok(count + 1)
+            })
+    }
+
+    fn count_native_balances(_ctx: &ViewContext, max: u32) -> Result<u64, Error> {
+        native_token::balances()
+            .iter()
+            .take(max as usize)
+            .try_fold(0, |count, balance| {
+                balance?;
+                Ok(count + 1)
+            })
+    }
+
+    fn balances(ctx: &ViewContext, pagination: CursorRequest) -> Result<BalancePage, Error> {
+        let CursorRequest { after, limit } = pagination;
+        let limit = limit.unwrap_or(MAX_BALANCES_LIMIT);
         let after = after
             .map(|cursor| cursor.parse::<Holder>())
             .transpose()

@@ -31,7 +31,7 @@ test("NFT codegen exposes cursor arguments and list-bearing page records", () =>
     /export type AgreementPage = \{[\s\S]*?items: Array<string>/,
   );
   expect(source).toContain(
-    "listNfts(after: string | null, limit: bigint): PaginatedView<NftPage>",
+    "listNfts(options: { after?: string | null; limit?: bigint | null } = {}): PaginatedView<NftPage>",
   );
 });
 
@@ -40,9 +40,9 @@ test("NFT page calls and results preserve lists, holders, and cursors", () => {
   expect(
     wit.encodeCall(
       "list-nfts",
-      JSON.stringify({ after: "nft-001", limit: "5" }),
+      JSON.stringify({ pagination: { after: "nft-001", limit: "5" } }),
     ),
-  ).toBe('list-nfts(some("nft-001"), 5)');
+  ).toBe('list-nfts({after: some("nft-001"), limit: some(5)})');
   expect(
     JSON.parse(
       wit.decodeResult(

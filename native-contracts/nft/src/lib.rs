@@ -285,7 +285,9 @@ impl Guest for Nft {
         ctx.model().total_minted()
     }
 
-    fn list_nfts(ctx: &ViewContext, after: Option<String>, limit: u64) -> NftPage {
+    fn list_nfts(ctx: &ViewContext, pagination: CursorRequest) -> NftPage {
+        let CursorRequest { after, limit } = pagination;
+        let limit = limit.unwrap_or(MAX_LIST_LIMIT);
         if limit == 0 {
             return NftPage {
                 items: Vec::new(),
@@ -302,9 +304,10 @@ impl Guest for Nft {
     fn list_nfts_by_creator(
         ctx: &ViewContext,
         creator: HolderRef,
-        after: Option<String>,
-        limit: u64,
+        pagination: CursorRequest,
     ) -> NftPage {
+        let CursorRequest { after, limit } = pagination;
+        let limit = limit.unwrap_or(MAX_LIST_LIMIT);
         let Ok(creator): Result<Holder, _> = creator.try_into() else {
             return NftPage {
                 items: Vec::new(),
@@ -338,9 +341,10 @@ impl Guest for Nft {
     fn list_nfts_by_holder(
         ctx: &ViewContext,
         holder: HolderRef,
-        after: Option<String>,
-        limit: u64,
+        pagination: CursorRequest,
     ) -> NftPage {
+        let CursorRequest { after, limit } = pagination;
+        let limit = limit.unwrap_or(MAX_LIST_LIMIT);
         let Ok(holder): Result<Holder, _> = holder.try_into() else {
             return NftPage {
                 items: Vec::new(),
@@ -374,9 +378,10 @@ impl Guest for Nft {
     fn agreement_ids_by_creator(
         ctx: &ViewContext,
         creator: HolderRef,
-        after: Option<String>,
-        limit: u64,
+        pagination: CursorRequest,
     ) -> AgreementPage {
+        let CursorRequest { after, limit } = pagination;
+        let limit = limit.unwrap_or(MAX_LIST_LIMIT);
         let Ok(creator): Result<Holder, _> = creator.try_into() else {
             return AgreementPage {
                 items: Vec::new(),

@@ -1,10 +1,12 @@
 use anyhow::Result;
 use futures_util::TryStreamExt;
 use stdlib::KeyPath;
+use wit_validator::Validator;
 
 use super::{address, api};
 use crate::runtime::Decimal;
 use crate::runtime::fuel::{FuelDiscriminants, FuelGauge};
+use crate::runtime::storage::print_component_wit;
 use crate::runtime::wit::Signer;
 use crate::runtime::wit::kontor::built_in::context::{HolderRef, OutPoint};
 use crate::test_utils::test_runtime;
@@ -12,6 +14,12 @@ use crate::test_utils::test_runtime;
 #[tokio::test]
 async fn balance_pages_cover_the_ledger_and_bound_scan_work() -> Result<()> {
     let (mut runtime, _dir, _name) = test_runtime().await?;
+    let id = runtime.storage.contract_id(&address()).await?.unwrap();
+    let wit = print_component_wit(&runtime.storage.component_bytes(id).await?)?;
+    let (validation, _) = Validator::validate_str_full(&wit)?;
+    assert!(validation.is_valid(), "{validation}");
+    assert!(wit.contains("use kontor:built-in/pagination.{cursor-request};"));
+    assert!(wit.contains("pagination: cursor-request"));
     let core = Signer::Core(Box::new(Signer::Nobody));
     let mut expected = Vec::new();
     for holder in (10..117).map(HolderRef::SignerId).chain([
@@ -34,7 +42,10 @@ async fn balance_pages_cover_the_ledger_and_bound_scan_work() -> Result<()> {
     let mut all = Vec::new();
     let mut after: Option<String> = None;
     loop {
-        let page = api::balances(&mut runtime, after.as_deref(), 7).await??;
+        let page = api::balances(&mut runtime)
+            .set_after(after.as_deref())
+            .fetch_with_limit(7)
+            .await??;
         assert!(page.items.len() <= 7);
         if page.next.is_some() {
             assert_eq!(
@@ -52,22 +63,33 @@ async fn balance_pages_cover_the_ledger_and_bound_scan_work() -> Result<()> {
         }
     }
     assert_eq!(all, expected);
-    let capped = api::balances(&mut runtime, None, u64::MAX).await??;
+    let capped = api::balances(&mut runtime)
+        .fetch_with_limit(u64::MAX)
+        .await??;
     assert_eq!(capped.items.len(), 100);
     assert_eq!(capped.next.as_ref(), Some(&expected[99]));
-    let final_page = api::balances(&mut runtime, capped.next.as_deref(), 10).await??;
+    let final_page = api::balances(&mut runtime)
+        .set_after(capped.next.as_deref())
+        .fetch_with_limit(10)
+        .await??;
     assert_eq!(final_page.items.len(), 10);
     assert!(
         final_page.next.is_none(),
         "a full final page has no continuation"
     );
-    let past_end = api::balances(&mut runtime, expected.last().map(String::as_str), 1).await??;
+    let past_end = api::balances(&mut runtime)
+        .set_after(expected.last().map(String::as_str))
+        .fetch_with_limit(1)
+        .await??;
     assert!(past_end.items.is_empty() && past_end.next.is_none());
 
     for cursor in [None, Some("80")] {
         let gauge = FuelGauge::with_profiling();
         runtime.gauge = Some(gauge.clone());
-        let page = api::balances(&mut runtime, cursor, 5).await??;
+        let page = api::balances(&mut runtime)
+            .set_after(cursor)
+            .fetch_with_limit(5)
+            .await??;
         assert_eq!(page.items.len(), 5);
         let stats = gauge.report()?.profile.unwrap().per_type;
         assert_eq!(stats[&FuelDiscriminants::KeysNext].consumed_count, 6);
@@ -75,7 +97,10 @@ async fn balance_pages_cover_the_ledger_and_bound_scan_work() -> Result<()> {
     }
     let gauge = FuelGauge::with_profiling();
     runtime.gauge = Some(gauge.clone());
-    let page = api::balances(&mut runtime, Some("99"), 100).await??;
+    let page = api::balances(&mut runtime)
+        .after("99")
+        .fetch_with_limit(100)
+        .await??;
     assert_eq!(page.items.len(), 3);
     let stats = gauge.report()?.profile.unwrap().per_type;
     assert_eq!(stats[&FuelDiscriminants::KeysNext].consumed_count, 5);
@@ -96,9 +121,12 @@ async fn balance_cursors_survive_removal_and_rollback() -> Result<()> {
         )
         .await??;
     }
-    let first = api::balances(&mut runtime, None, 1).await??;
+    let first = api::balances(&mut runtime).fetch_with_limit(1).await??;
     assert_eq!(first.next.as_deref(), Some("10"));
-    let missing = api::balances(&mut runtime, Some("15"), 1).await??;
+    let missing = api::balances(&mut runtime)
+        .after("15")
+        .fetch_with_limit(1)
+        .await??;
     assert_eq!(missing.items[0].acc, HolderRef::SignerId(20));
 
     runtime.storage.savepoint().await?;
@@ -114,12 +142,15 @@ async fn balance_cursors_survive_removal_and_rollback() -> Result<()> {
         .await?;
     assert_eq!(rows.len(), 1);
     runtime.storage.tombstone_rows(contract_id, &rows).await?;
-    let resumed = api::balances(&mut runtime, first.next.as_deref(), 1).await??;
+    let resumed = api::balances(&mut runtime)
+        .set_after(first.next.as_deref())
+        .fetch_with_limit(1)
+        .await??;
     assert_eq!(resumed.items[0].acc, HolderRef::SignerId(20));
-    let changed = api::balances(&mut runtime, None, 1).await??;
+    let changed = api::balances(&mut runtime).fetch_with_limit(1).await??;
     assert_eq!(changed.items[0].acc, HolderRef::SignerId(20));
     runtime.storage.rollback().await?;
-    let restored = api::balances(&mut runtime, None, 1).await??;
+    let restored = api::balances(&mut runtime).fetch_with_limit(1).await??;
     assert_eq!(restored.items[0].acc, HolderRef::SignerId(10));
     assert_eq!(restored.next, first.next);
     Ok(())
@@ -128,17 +159,17 @@ async fn balance_cursors_survive_removal_and_rollback() -> Result<()> {
 #[tokio::test]
 async fn balance_pages_handle_empty_zero_limit_and_invalid_cursors() -> Result<()> {
     let (mut runtime, _dir, _name) = test_runtime().await?;
-    let empty = api::balances(&mut runtime, None, 100).await??;
+    let empty = api::balances(&mut runtime).fetch_with_limit(100).await??;
     assert!(empty.items.is_empty() && empty.next.is_none());
     let core = Signer::Core(Box::new(Signer::Nobody));
     for holder in [HolderRef::Core, HolderRef::Burner] {
         api::issue_to(&mut runtime, &core, holder, Decimal::from("1")).await??;
     }
-    let filtered = api::balances(&mut runtime, None, 1).await??;
+    let filtered = api::balances(&mut runtime).fetch_with_limit(1).await??;
     assert!(filtered.items.is_empty() && filtered.next.is_none());
     let gauge = FuelGauge::with_profiling();
     runtime.gauge = Some(gauge.clone());
-    let zero = api::balances(&mut runtime, None, 0).await??;
+    let zero = api::balances(&mut runtime).fetch_with_limit(0).await??;
     assert!(zero.items.is_empty() && zero.next.is_none());
     assert!(
         !gauge
@@ -152,7 +183,9 @@ async fn balance_pages_handle_empty_zero_limit_and_invalid_cursors() -> Result<(
     for cursor in ["", "invalid", "invalid:7", "1:4294967296"] {
         for limit in [0, 100] {
             assert!(
-                api::balances(&mut runtime, Some(cursor), limit)
+                api::balances(&mut runtime)
+                    .after(cursor)
+                    .fetch_with_limit(limit)
                     .await?
                     .is_err()
             );

@@ -514,29 +514,50 @@ function isStringCursor(ref: TypeRef, ctx: Ctx): boolean {
   return kind?.tag === "option" && underlyingRef(kind.inner, ctx) === "string";
 }
 
-function isPaginatedView(fn: WitFunction, ctx: Ctx): boolean {
-  if (!isViewFn(fn, ctx)) return false;
-  const params = fn.params.slice(1);
-  if (params.length < 2) return false;
-  const [after, limit] = params.slice(-2);
+function isCursorRequest(ref: TypeRef, ctx: Ctx): boolean {
+  const id = underlyingRef(ref, ctx);
+  if (typeof id !== "number") return false;
+  const def = ctx.resolve.types[id];
   if (
-    after.name !== "after" ||
-    !isStringCursor(after.type, ctx) ||
-    limit.name !== "limit" ||
-    underlyingRef(limit.type, ctx) !== "u64"
+    def.name !== "cursor-request" ||
+    !def.owner ||
+    !("interface" in def.owner)
   )
     return false;
+  const owner = def.owner.interface;
+  return (ctx.resolve.packages ?? []).some(
+    (pkg) =>
+      pkg.name === "kontor:built-in" && pkg.interfaces.pagination === owner,
+  );
+}
+
+function isPaginatedView(fn: WitFunction, ctx: Ctx): boolean {
+  const requests = fn.params.filter((param) =>
+    isCursorRequest(param.type, ctx),
+  );
+  if (!requests.length) return false;
+  const invalid = (reason: string): never => {
+    throw new Error(`Invalid paginated view ${fn.name}: ${reason}`);
+  };
+  if (!isViewFn(fn, ctx)) invalid("cursor-request requires a view");
+  if (requests.length !== 1 || requests[0] !== fn.params.at(-1))
+    invalid("cursor-request must be the single final request parameter");
   let result = kindOf(fn.result, ctx);
-  if (result?.tag === "result") result = kindOf(result.ok, ctx);
-  if (result?.tag !== "record") return false;
+  if (result?.tag === "result") {
+    if (result.err == null) invalid("result must use the built-in error type");
+    result = kindOf(result.ok, ctx);
+  }
+  if (result?.tag !== "record") return invalid("expected a response record");
   const items = result.fields.find((field) => field.name === "items");
   const next = result.fields.find((field) => field.name === "next");
-  return (
-    items != null &&
-    kindOf(items.type, ctx)?.tag === "list" &&
-    next != null &&
-    isStringCursor(next.type, ctx)
-  );
+  if (
+    !items ||
+    kindOf(items.type, ctx)?.tag !== "list" ||
+    !next ||
+    !isStringCursor(next.type, ctx)
+  )
+    invalid("expected items: list<T> and next: option<string>");
+  return true;
 }
 
 // ─── attach/detach convention ──────────────────────────────────
@@ -748,10 +769,17 @@ export function generate(witText: string): string {
       continue;
     }
     const safeName = toCamel(name);
-    const userParams = fn.params.slice(1);
-    const sig = userParams
+    const paginated = isPaginatedView(fn, ctx);
+    const userParams = fn.params.slice(1, paginated ? -1 : undefined);
+    const requestName = paginated ? fn.params.at(-1)!.name : null;
+    const optionsName = userParams.some((p) => toCamel(p.name) === "options")
+      ? "_options"
+      : "options";
+    let sig = userParams
       .map((p) => `${toCamel(p.name)}: ${typeRefToTs(p.type, ctx)}`)
       .join(", ");
+    if (paginated)
+      sig += `${sig ? ", " : ""}${optionsName}: { after?: string | null; limit?: bigint | null } = {}`;
     const wireArgFields = userParams
       .map(
         (p) =>
@@ -770,7 +798,6 @@ export function generate(witText: string): string {
     // proc-context → `_proc` (returns an `Inst`). Both delegate the
     // encode/call/decode plumbing to `ContractBase`.
     const view = isViewFn(fn, ctx);
-    const paginated = isPaginatedView(fn, ctx);
     const ret = paginated
       ? `PaginatedView<${resultTs}>`
       : view
@@ -782,7 +809,7 @@ export function generate(witText: string): string {
     const typeArg = fn.result == null ? `<${resultTs}>` : "";
     out.push(`  ${safeName}(${sig}): ${ret} {`);
     out.push(
-      `    return this.${helper}${typeArg}(${nameLit}, { ${wireArgFields} }${paginated ? ", after" : ""}${decodeArg});`,
+      `    return this.${helper}${typeArg}(${nameLit}, { ${wireArgFields} }${paginated ? `, ${JSON.stringify(requestName)}, { after: ${optionsName}.after ?? null, limit: ${optionsName}.limit == null ? null : ${optionsName}.limit.toString() }` : ""}${decodeArg});`,
     );
     out.push("  }");
     out.push("");
