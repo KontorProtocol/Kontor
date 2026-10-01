@@ -5,17 +5,16 @@ use anyhow::Result;
 use wasmtime::component::{Component, Linker, Val};
 use wasmtime::{Error as WasmtimeError, Trap};
 
-use crate::runtime::fuel::Fuel;
+use crate::runtime::fuel::{Fuel, FuelGauge, record_fuel};
 use crate::runtime::{ExecutionError, Runtime};
 use crate::test_utils::test_runtime;
 
 const BUDGET: u64 = 10_000_000;
 const ALLOCATION_ERROR: &str = "too much data is being copied between the host and the guest: fuel allocated for hostcalls has been exhausted";
 
-// These characterize the engine/host boundary, not production metering. Keep
-// engine-only measurements separate from tariffs supplied by Kontor's imports.
+// Keep engine conversion costs separate from tariffs for work inside imports.
 #[tokio::test]
-async fn repeated_conversion_needs_host_charges_not_just_an_allocation_allowance() -> Result<()> {
+async fn repeated_lifting_spends_store_fuel_in_addition_to_host_work() -> Result<()> {
     let (runtime, _dir, _name) = test_runtime().await?;
     let component = Component::new(
         &runtime.engine,
@@ -77,15 +76,16 @@ async fn repeated_conversion_needs_host_charges_not_just_an_allocation_allowance
             );
         }
         assert_eq!(
-            engine_costs[0], engine_costs[1],
-            "Wasmtime instruction fuel alone does not price conversion bytes"
+            engine_costs[1] - engine_costs[0],
+            u64::from(count) * (8192 - 8),
+            "each lifted byte must spend Store fuel even when the allowance resets"
         );
     }
     Ok(())
 }
 
 #[tokio::test]
-async fn allocation_guard_precedes_import_entry_but_a_tariff_does_not() -> Result<()> {
+async fn lifting_allowance_and_store_fuel_precede_import_entry() -> Result<()> {
     let (runtime, _dir, _name) = test_runtime().await?;
     let component = Component::new(
         &runtime.engine,
@@ -127,7 +127,8 @@ async fn allocation_guard_precedes_import_entry_but_a_tariff_does_not() -> Resul
             assert_eq!(bytes.load(Ordering::Relaxed), 0);
             assert!(!error.is::<Trap>(), "{error:?}");
         } else {
-            assert_eq!(bytes.load(Ordering::Relaxed), length);
+            assert_eq!(bytes.load(Ordering::Relaxed), 0);
+            assert_eq!(store.get_fuel()?, 0);
             assert!(matches!(
                 error.downcast_ref::<Trap>(),
                 Some(Trap::OutOfFuel)
@@ -139,6 +140,65 @@ async fn allocation_guard_precedes_import_entry_but_a_tariff_does_not() -> Resul
             matches!(classified, Err(ExecutionError::Deterministic(_))),
             "{classified:?}"
         );
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn lifted_results_spend_the_reported_budget_before_serialization() -> Result<()> {
+    let (mut runtime, _dir, _name) = test_runtime().await?;
+    for fixture in [
+        include_str!("fixtures/abi-string-return.wat"),
+        include_str!("fixtures/abi-async-string-return.wat"),
+    ] {
+        let component = Component::new(&runtime.engine, fixture)?;
+        let mut costs = Vec::new();
+        for length in [0, 8] {
+            let mut store = runtime.make_store(BUDGET)?;
+            let instance = Linker::new(&runtime.engine)
+                .instantiate_async(&mut store, &component)
+                .await?;
+            let func = instance.get_func(&mut store, "run").unwrap();
+            store.set_fuel(BUDGET)?;
+            let mut results = [Val::Bool(false)];
+            func.call_async(&mut store, &[Val::U32(0), Val::U32(length)], &mut results)
+                .await?;
+            assert_eq!(results, [Val::String("abcdefgh"[..length as usize].into())]);
+            costs.push(BUDGET - store.get_fuel()?);
+        }
+        assert_eq!(costs[1] - costs[0], 8);
+        // The async fixture runs more guest instructions after returning its
+        // result. Use less than the lifting charge itself to force exhaustion.
+        for budget in [7, costs[1]] {
+            let gauge = FuelGauge::with_profiling();
+            runtime.gauge = Some(gauge.clone());
+            let mut store = runtime.make_store(BUDGET)?;
+            let instance = Linker::new(&runtime.engine)
+                .instantiate_async(&mut store, &component)
+                .await?;
+            let func = instance.get_func(&mut store, "run").unwrap();
+            store.set_fuel(budget)?;
+            store.data_mut().fuel_checkpoint = budget;
+            let mut results = [Val::Bool(false)];
+            let result = func
+                .call_async(&mut store, &[Val::U32(0), Val::U32(8)], &mut results)
+                .await;
+            if budget < costs[1] {
+                assert_eq!(
+                    result.unwrap_err().downcast_ref::<Trap>(),
+                    Some(&Trap::OutOfFuel)
+                );
+            } else {
+                result?;
+                assert_eq!(results, [Val::String("abcdefgh".into())]);
+            }
+            assert_eq!(store.get_fuel()?, 0);
+            record_fuel(&mut store)?;
+            let report = gauge.report()?;
+            assert_eq!(report.usage.user_fuel + report.usage.system_fuel, budget);
+            assert_eq!(report.profile.unwrap().consumed_host_fuel, 0);
+        }
+        runtime.gauge = None;
     }
     Ok(())
 }
