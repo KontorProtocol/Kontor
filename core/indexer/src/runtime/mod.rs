@@ -314,6 +314,9 @@ impl Runtime {
         let mut config = wasmtime::Config::new();
         config.wasm_component_model_async(true);
         config.consume_fuel(true);
+        // Wasmtime 48's Mach receiver aborts on an interrupted receive. Kontor
+        // has no Mach-based crash handler, so use POSIX traps on macOS instead.
+        config.macos_use_mach_ports(false);
         // CoW can skip metered initialization depending on OS/image availability.
         // Every node must copy the same data segments and charge the same fuel.
         config.memory_init_cow(false);
