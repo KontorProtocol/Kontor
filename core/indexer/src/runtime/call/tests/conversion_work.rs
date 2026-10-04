@@ -1,16 +1,51 @@
+use std::mem::{align_of, size_of};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use anyhow::Result;
-use wasmtime::component::{Component, Linker, Val};
+use wasmtime::component::{Component, Linker, ResourceAny, Val};
 use wasmtime::{Error as WasmtimeError, Trap};
 
 use crate::runtime::fuel::{Fuel, FuelGauge, record_fuel};
-use crate::runtime::{ExecutionError, Runtime};
+use crate::runtime::{ChallengeInput, ExecutionError, RawFileDescriptor, Runtime};
 use crate::test_utils::test_runtime;
 
 const BUDGET: u64 = 10_000_000;
 const ALLOCATION_ERROR: &str = "too much data is being copied between the host and the guest: fuel allocated for hostcalls has been exhausted";
+
+#[test]
+fn lifting_allowance_layouts_match_supported_node_targets() {
+    // These native layouts determine consensus lifting charges. Compiler or
+    // dependency upgrades must not change them without a pricing decision.
+    assert_eq!(
+        [
+            size_of::<Val>(),
+            size_of::<(Val, Val)>(),
+            size_of::<u8>(),
+            size_of::<Vec<u8>>(),
+            size_of::<(Vec<u8>, u64, u64)>(),
+            size_of::<(String, Vec<u8>, u64, u64)>(),
+            size_of::<ChallengeInput>(),
+            size_of::<RawFileDescriptor>(),
+            size_of::<ResourceAny>(),
+        ],
+        [48, 96, 1, 24, 40, 64, 208, 136, 40],
+    );
+    assert_eq!(
+        [
+            align_of::<Val>(),
+            align_of::<(Val, Val)>(),
+            align_of::<u8>(),
+            align_of::<Vec<u8>>(),
+            align_of::<(Vec<u8>, u64, u64)>(),
+            align_of::<(String, Vec<u8>, u64, u64)>(),
+            align_of::<ChallengeInput>(),
+            align_of::<RawFileDescriptor>(),
+            align_of::<ResourceAny>(),
+        ],
+        [8, 8, 1, 8, 8, 8, 8, 8, 8],
+    );
+}
 
 // Keep engine conversion costs separate from tariffs for work inside imports.
 #[tokio::test]
