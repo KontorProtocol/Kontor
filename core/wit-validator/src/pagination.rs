@@ -134,17 +134,23 @@ pub fn shape(
 }
 
 pub fn validate(resolve: &Resolve) -> Vec<ValidationError> {
-    resolve
-        .worlds
-        .iter()
-        .flat_map(|(_, world)| world.exports.values())
-        .filter_map(|item| {
-            let WorldItem::Function(function) = item else {
-                return None;
-            };
-            shape(resolve, function).err()
-        })
-        .collect()
+    let mut errors = Vec::new();
+    for (_, world) in resolve.worlds.iter() {
+        for item in world.exports.values() {
+            match item {
+                WorldItem::Function(function) => {
+                    errors.extend(shape(resolve, function).err());
+                }
+                WorldItem::Interface { id, .. } => {
+                    for function in resolve.interfaces[*id].functions.values() {
+                        errors.extend(shape(resolve, function).err());
+                    }
+                }
+                WorldItem::Type { .. } => {}
+            }
+        }
+    }
+    errors
 }
 
 #[cfg(test)]

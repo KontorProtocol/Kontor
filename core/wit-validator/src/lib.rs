@@ -184,6 +184,123 @@ world root {
     }
 
     #[test]
+    fn validates_named_and_inline_exported_interface_signatures() {
+        let template = r#"package test:interfaces;
+interface api {
+    use kontor:built-in/context.{view-context};
+    BODY
+}
+world root {
+    include kontor:built-in/built-in;
+    use kontor:built-in/context.{proc-context, contract};
+    export init: async func(ctx: borrow<proc-context>) -> contract;
+    export api;
+    export inline: interface {
+        use kontor:built-in/context.{view-context};
+        BODY
+    }
+}"#;
+        for (body, expected) in [
+            (
+                "get: async func(ctx: borrow<view-context>) -> string;",
+                None,
+            ),
+            (
+                "get: func(ctx: borrow<view-context>) -> string;",
+                Some("must be async"),
+            ),
+            ("get: async func() -> string;", Some("context parameter")),
+            (
+                "get: async func(ctx: string) -> string;",
+                Some("borrow of a context"),
+            ),
+            (
+                "get: async func(ctx: borrow<view-context>, value: f64);",
+                Some("floating point"),
+            ),
+            (
+                "get: async func(ctx: borrow<view-context>) -> f64;",
+                Some("floating point"),
+            ),
+            (
+                "get: async func(ctx: borrow<view-context>) -> stream<u8>;",
+                Some("stream types"),
+            ),
+            (
+                "get: async func(ctx: borrow<view-context>, value: future<string>);",
+                Some("future types"),
+            ),
+            ("init: async func(ctx: borrow<view-context>) -> bool;", None),
+            (
+                "fallback: async func(ctx: borrow<view-context>) -> bool;",
+                None,
+            ),
+        ] {
+            let wit = template.replace("BODY", body);
+            let (result, _) = Validator::validate_str(&wit).expect("parse interface WIT");
+            if let Some(expected) = expected {
+                let errors: Vec<_> = result
+                    .errors
+                    .iter()
+                    .filter(|error| error.message.contains(expected))
+                    .collect();
+                assert_eq!(
+                    errors.len(),
+                    2,
+                    "both interfaces must be checked: {body}: {result}"
+                );
+            } else {
+                assert!(result.is_valid(), "{body}: {result}");
+            }
+        }
+    }
+
+    #[test]
+    fn exported_interface_pagination_is_validated() {
+        let template = r#"package test:interfaces;
+interface api {
+    use kontor:built-in/context.{proc-context, view-context};
+    use kontor:built-in/pagination.{cursor-request};
+    record page { items: list<u64>, next: option<string> }
+    entries: async func(ctx: borrow<CONTEXT>, pagination: cursor-request) -> page;
+}
+world root {
+    include kontor:built-in/built-in;
+    use kontor:built-in/context.{proc-context, contract};
+    export init: async func(ctx: borrow<proc-context>) -> contract;
+    export api;
+}"#;
+        let (result, _) = Validator::validate_str(&template.replace("CONTEXT", "view-context"))
+            .expect("parse valid interface pagination");
+        assert!(result.is_valid(), "{result}");
+        let (result, _) = Validator::validate_str(&template.replace("CONTEXT", "proc-context"))
+            .expect("parse invalid interface pagination");
+        assert!(
+            result
+                .errors
+                .iter()
+                .any(|error| error.message.contains("only allowed on a view-context")),
+            "{result}"
+        );
+    }
+
+    #[test]
+    fn imported_interface_functions_keep_their_host_signatures() {
+        let wit = r#"package test:interfaces;
+interface service {
+    get: func() -> string;
+}
+world root {
+    include kontor:built-in/built-in;
+    use kontor:built-in/context.{proc-context, contract};
+    import service;
+    export init: async func(ctx: borrow<proc-context>) -> contract;
+}"#;
+        let (result, _) = Validator::validate_str(wit).expect("parse imported interface");
+        assert!(result.is_valid(), "{result}");
+    }
+
+    #[test]
     fn test_invalid_reserved_type_name_record() {
         // A user record named like a built-in would be silently misrouted by the
         // macro layer's bare-identifier matching (`is_primitive_type`, the
