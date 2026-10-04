@@ -188,6 +188,36 @@ world root {
   }
 });
 
+test("SDK validation checks functions inside exported interfaces", () => {
+  const wit = `package root:component;
+interface api {
+    use kontor:built-in/context.{view-context};
+    get: func(ctx: borrow<view-context>) -> string;
+}
+world root {
+    include kontor:built-in/built-in;
+    use kontor:built-in/context.{proc-context, contract};
+    export init: async func(ctx: borrow<proc-context>) -> contract;
+    export api;
+    export inline: interface {
+        use kontor:built-in/context.{view-context};
+        get: func(ctx: borrow<view-context>) -> string;
+    }
+}`;
+  const result = validateWit(wit);
+  expect(result.tag).toBe("validation-errors");
+  if (result.tag === "validation-errors") {
+    expect(
+      result.val.filter((e) => e.message.includes("must be async")),
+    ).toHaveLength(2);
+  }
+  const codec = new Wit(wit);
+  expect(() => codec.encodeCall("init", "{}")).toThrow(/WIT validation/);
+  expect(validateWit(wit.replaceAll("get: func", "get: async func")).tag).toBe(
+    "ok",
+  );
+});
+
 test("validateWit parse error", () => {
   const wit = `this is not valid wit`;
   const result = validateWit(wit);

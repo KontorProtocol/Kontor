@@ -1,6 +1,6 @@
 {
   "platform": "linux/arm64",
-  "image": "docker.io/kontorprotocol/kontor-build@sha256:4396b2d20c1163e5474fc973fb894c3b4575310676444e47e5d71c78004e9a4e",
+  "image": "docker.io/kontorprotocol/kontor-build@sha256:726ac33a1bd1ec72c09a9b6989e4217048461dba8499c0b151c554f2d4b1ca02",
   "node": {
     "version": "22.23.2",
     "url": "https://nodejs.org/dist/v22.23.2/node-v22.23.2-linux-arm64.tar.gz",
