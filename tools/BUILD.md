@@ -41,6 +41,12 @@ Changing SDK tool versions requires updating their archive checksums. A platform
 change also requires matching SDK archives. Regenerate all outputs and commit
 them with the pin changes.
 
+Before production launch, keep this toolchain on the latest stable Rust release.
+Each upgrade still pins an exact base image and published build-image digest,
+regenerates every output, and passes `./tools/kontor build --check`. Moving tags
+or an unpinned `stable` toolchain must not enter the reproducible build path.
+Revisit the upgrade cadence before launch.
+
 ## Outputs and failure handling
 
 The command builds into `.build-cache/generated` before replacing any committed

@@ -12,7 +12,8 @@ use alloc::vec::Vec;
 use crate::error::ValidationError;
 use crate::types::{self, BUILTIN_TYPES, ERROR_TYPE_NAME};
 use wit_parser::{
-    Handle, Resolve, Span, Type, TypeDef, TypeDefKind, TypeId, TypeOwner, WorldItem, WorldKey,
+    Function, Handle, Resolve, Span, Type, TypeDef, TypeDefKind, TypeId, TypeOwner, WorldItem,
+    WorldKey,
 };
 
 /// Run all validation rules and collect errors.
@@ -118,78 +119,89 @@ fn validate_function_signatures(resolve: &Resolve) -> Vec<ValidationError> {
 
     for (_world_id, world) in resolve.worlds.iter() {
         for (key, item) in world.exports.iter() {
-            if let (WorldKey::Name(name), WorldItem::Function(func)) = (key, item) {
-                // Special handling for init and fallback
-                if name == "init" {
-                    errors.extend(validate_init_function(resolve, func));
-                    continue;
-                }
-                if name == "fallback" {
-                    errors.extend(validate_fallback_function(resolve, func));
-                    continue;
-                }
-
-                if !func.kind.is_async() {
-                    errors.push(ValidationError::new(
-                        "exported functions must be async",
-                        func.span,
-                    ));
-                }
-
-                if func.params.is_empty() {
-                    errors.push(ValidationError::new(
-                        "function must have a context parameter as its first argument",
-                        func.span,
-                    ));
-                    continue;
-                }
-
-                let param = &func.params[0];
-
-                match get_borrowed_type_name(resolve, &param.ty) {
-                    Some(context_name) => {
-                        if !types::is_context_type(&context_name) {
-                            errors.push(ValidationError::new(
-                                format!(
-                                    "first parameter must be a borrow of a valid context type \
-                                     (proc-context, view-context, core-context, or fall-context), \
-                                     found '{}'",
-                                    context_name
-                                ),
-                                param.span,
-                            ));
-                        }
-                    }
-                    None => {
-                        errors.push(ValidationError::new(
-                            "first parameter must be a borrow of a context type \
-                             (e.g., `ctx: borrow<proc-context>`)",
-                            param.span,
-                        ));
+            match item {
+                WorldItem::Function(func) => {
+                    if matches!(key, WorldKey::Name(name) if name == "init") {
+                        errors.extend(validate_init_function(resolve, func));
+                    } else if matches!(key, WorldKey::Name(name) if name == "fallback") {
+                        errors.extend(validate_fallback_function(resolve, func));
+                    } else {
+                        errors.extend(validate_function_signature(resolve, func));
                     }
                 }
-
-                for param in func.params.iter().skip(1) {
-                    errors.extend(validate_type_in_context(
-                        resolve,
-                        &param.ty,
-                        TypeContext::FunctionParam,
-                        param.span,
-                    ));
+                WorldItem::Interface { id, .. } => {
+                    for func in resolve.interfaces[*id].functions.values() {
+                        errors.extend(validate_function_signature(resolve, func));
+                    }
                 }
-
-                if let Some(result_type) = &func.result {
-                    errors.extend(validate_type_in_context(
-                        resolve,
-                        result_type,
-                        TypeContext::FunctionReturn,
-                        func.span,
-                    ));
-                }
+                WorldItem::Type { .. } => {}
             }
         }
     }
 
+    errors
+}
+
+fn validate_function_signature(resolve: &Resolve, func: &Function) -> Vec<ValidationError> {
+    let mut errors = Vec::new();
+
+    if !func.kind.is_async() {
+        errors.push(ValidationError::new(
+            "exported functions must be async",
+            func.span,
+        ));
+    }
+
+    if func.params.is_empty() {
+        errors.push(ValidationError::new(
+            "function must have a context parameter as its first argument",
+            func.span,
+        ));
+        return errors;
+    }
+
+    let param = &func.params[0];
+
+    match get_borrowed_type_name(resolve, &param.ty) {
+        Some(context_name) => {
+            if !types::is_context_type(&context_name) {
+                errors.push(ValidationError::new(
+                    format!(
+                        "first parameter must be a borrow of a valid context type \
+                         (proc-context, view-context, core-context, or fall-context), \
+                         found '{}'",
+                        context_name
+                    ),
+                    param.span,
+                ));
+            }
+        }
+        None => {
+            errors.push(ValidationError::new(
+                "first parameter must be a borrow of a context type \
+                 (e.g., `ctx: borrow<proc-context>`)",
+                param.span,
+            ));
+        }
+    }
+
+    for param in func.params.iter().skip(1) {
+        errors.extend(validate_type_in_context(
+            resolve,
+            &param.ty,
+            TypeContext::FunctionParam,
+            param.span,
+        ));
+    }
+
+    if let Some(result_type) = &func.result {
+        errors.extend(validate_type_in_context(
+            resolve,
+            result_type,
+            TypeContext::FunctionReturn,
+            func.span,
+        ));
+    }
     errors
 }
 

@@ -1,11 +1,12 @@
 # Publish this image, then pin its digest in tools/build.json. Builds use that
 # published image, not a locally rebuilt substitute. SDK tool archives are
 # separately checksum-pinned in tools/build.json.
-FROM rust:1.96.0-slim-bookworm@sha256:4732ca96fd086cb9be682050c3f0176288eebaac2b80aa2bcefccfaf198e1950
+FROM rust:1.99.0-slim-bookworm@sha256:452176c0cefca88c0b3184ce85a4eb03e3d4fa05d2afb5366abcba853221019e
 
 # Pinned binaryen release providing wasm-opt. Both the cargo toolchain and the
 # wasm-opt binary are part of the wasm's identity, so the wasm-opt version is
-# pinned here exactly like rustc is pinned by the base tag. Bump together.
+# pinned here exactly like rustc is pinned by the base tag. Regenerate outputs
+# whenever either version changes.
 ARG BINARYEN_VERSION=version_130
 ARG BINARYEN_SHA256_X86_64=0a18362361ad05465118cd8eeb72edaeec89de6894bc283576ef4e07aa3babcc
 ARG BINARYEN_SHA256_AARCH64=e6ae6e09ac40f4e14bc5be6f687c58e2995c84170013975fa641809dd3b480a0

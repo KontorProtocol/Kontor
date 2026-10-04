@@ -4,7 +4,7 @@ This document describes the validation rules that Kontor enforces on WIT (WebAss
 
 ## 1. Function Signature Rules
 
-- Functions **must** start with `export` (standard WIT allows functions in interfaces without `export`)
+- Contract functions must be exported directly by the world or belong to an exported interface. The async, context, parameter, return type, and pagination rules apply to both forms. Imported host interface functions retain their host signatures.
 - Functions **must** be `async` (standard WIT allows sync functions)
 - First parameter **must** be `ctx: borrow<proc-context|view-context|core-context|fall-context>` (standard WIT allows any parameters)
 - Context types `proc-context`, `view-context`, `core-context`, `fall-context` are required Kontor resources (these don't exist in standard WIT)
@@ -17,18 +17,18 @@ export <name>: async func(ctx: borrow<proc-context|view-context|core-context|fal
 
 ### Special Functions: `init` and `fallback`
 
-The `init` and `fallback` functions have fixed signatures:
+The directly exported `init` and `fallback` functions have fixed signatures. Interface functions with those names follow the ordinary signature rules:
 
 ```wit
 // init - called once when contract is deployed (REQUIRED)
-export init: async func(ctx: borrow<proc-context>);
+export init: async func(ctx: borrow<proc-context>) -> contract;
 
 // fallback - called when no matching function is found (optional)
 export fallback: async func(ctx: borrow<fall-context>, expr: string) -> string;
 ```
 
 - `init` is **required** - every contract must export it
-- `init` must have exactly one parameter (`borrow<proc-context>`) and no return type
+- `init` must have exactly one parameter (`borrow<proc-context>`) and return the built-in `contract` resource obtained via `ctx.self()`
 - `fallback` is optional
 - `fallback` must have exactly two parameters (`borrow<fall-context>`, `string`) and return `string`
 
@@ -83,6 +83,7 @@ extraction; it requires no separate pagination metadata.
 
 - `result<T, E>` must have **exactly 2** type parameters (standard WIT allows `result<T>` with 1 param)
 - `result<T, E>` error type **must be `error`** (standard WIT allows any error type)
+- User publication also rejects stream and future type definitions and canonical operations throughout the encoded component, including nested components and nested type declarations. Internal features are checked independently of the extracted WIT. Ordinary async functions remain supported.
 - Only these generics are recognized: `borrow`, `list`, `option`, `result` (standard WIT also has `own`, `stream`, `future`, `tuple`)
 
 ### Examples

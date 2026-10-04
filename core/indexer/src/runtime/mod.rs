@@ -5,6 +5,7 @@ mod costs;
 extern crate alloc;
 
 mod component_cache;
+mod component_policy;
 pub mod counter;
 pub mod deposit;
 pub mod filestorage;
@@ -313,6 +314,9 @@ impl Runtime {
         let mut config = wasmtime::Config::new();
         config.wasm_component_model_async(true);
         config.consume_fuel(true);
+        // Wasmtime 48's Mach receiver aborts on an interrupted receive. Kontor
+        // has no Mach-based crash handler, so use POSIX traps on macOS instead.
+        config.macos_use_mach_ports(false);
         // CoW can skip metered initialization depending on OS/image availability.
         // Every node must copy the same data segments and charge the same fuel.
         config.memory_init_cow(false);
@@ -708,11 +712,13 @@ impl Runtime {
     /// the contract bytes (and fixed code), so they reject identically on every
     /// node — `Deterministic`, never a shutdown.
     ///
-    /// 1. **Link check** (all contracts): the component's imports must resolve
+    /// 1. **Component policy** (user contracts): reject stream/future types and
+    ///    canonical operations, including inside nested components and types.
+    /// 2. **Link check** (all contracts): the component's imports must resolve
     ///    against the linker it will run under (native for ids
     ///    1..=NATIVE_CONTRACTS.len(), the restricted user linker otherwise).
     ///    Catches a user contract reaching for `file-registry`/`system`.
-    /// 2. **WIT rule check** (user contracts only): the extracted WIT must
+    /// 3. **WIT rule check** (user contracts only): the extracted WIT must
     ///    satisfy the Kontor rules the linker can't see — `init` exists with the
     ///    right shape, exports are `async`, valid context/return types, no
     ///    floats/flags/nested-lists/cycles, etc. Native contracts use the
@@ -742,6 +748,9 @@ impl Runtime {
                 ),
                 ComponentDecodeError::Infrastructure(e) => ExecutionError::NonDeterministic(e),
             })?;
+        if !is_native_contract_id(contract_id) {
+            component_policy::validate(&bytes)?;
+        }
         let component = Component::from_binary(&self.engine, &bytes).map_err(|e| {
             ExecutionError::Deterministic(
                 anyhow!(e).context("contract is not a valid wasm component"),

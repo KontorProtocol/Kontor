@@ -23,12 +23,14 @@ too_many_arguments = "allow"
 
 [workspace.dependencies]
 # Keep our WIT tools aligned with wit-bindgen; Wasmtime owns its internal versions.
-wasmtime = { version = "=48.0.3", features = ["wave", "component-model-async"] }
+wasmtime = { version = "=48.0.4", features = ["wave", "component-model-async"] }
 wit-bindgen = "=0.62.0"
 wit-bindgen-core = "=0.62.0"
 wit-bindgen-rust = "=0.62.0"
 wit-component = "=0.259.0"
 wit-parser = "=0.259.0"
+wasmparser = { version = "=0.259.0", default-features = false, features = ["std", "component-model"] }
+wasm-encoder = "=0.259.0"
 wasm-wave = { version = "=0.259.0", default-features = false }
 # =-pinned like the rest of the workspace: the JS side pins the
 # uniffi-bindgen-react-native generator/runtime in lockstep (sdk-native

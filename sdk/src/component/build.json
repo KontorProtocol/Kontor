@@ -18,12 +18,12 @@
   },
   "brotli": "brotli 1.0.9",
   "clang": "clang version 23.1.0-wasi-sdk (https://github.com/llvm/llvm-project 895aa2c896ada719451be2e3673c83da8ddf1141)\nTarget: wasm32-unknown-wasip1\nThread model: posix\nInstalledDir: /build/.build-cache/tools/f7e243dff54d60bcc576e94d6166b69f410f2500ae4a9ceef34315be10e77971/bin\nConfiguration file: /build/.build-cache/tools/f7e243dff54d60bcc576e94d6166b69f410f2500ae4a9ceef34315be10e77971/bin/clang.cfg",
-  "image": "docker.io/kontorprotocol/kontor-build@sha256:4396b2d20c1163e5474fc973fb894c3b4575310676444e47e5d71c78004e9a4e",
+  "image": "docker.io/kontorprotocol/kontor-build@sha256:726ac33a1bd1ec72c09a9b6989e4217048461dba8499c0b151c554f2d4b1ca02",
   "jco": "1.20.0",
   "node": "v22.23.2",
   "npm_lock_sha256": "148f116084ee5daa0223bc40cee31343e470fb787efe5044608ebcf55c32c89b",
   "platform": "linux/arm64",
-  "rustc": "rustc 1.96.0 (ac68faa20 2026-05-25)",
+  "rustc": "rustc 1.99.0 (b940084d7 2026-09-28)",
   "wasm_opt": "wasm-opt version 130 (version_130)",
   "wasm_tools": "wasm-tools 1.259.0 (7fc33f279 2026-09-10)"
 }
