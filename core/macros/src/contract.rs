@@ -458,7 +458,7 @@ pub fn generate(config: Config) -> TokenStream {
             #type_attrs
             export_macro_name: "__export__",
             runtime_path: "stdlib::wit_bindgen::rt",
-            async: false,
+            sync: true,
         });
 
         use kontor::built_in::*;

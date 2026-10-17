@@ -20,139 +20,135 @@ extern "C" {
     int8_t poll_result
     );
     typedef void
-    (*UniffiForeignFutureFree)(
+    (*UniffiForeignFutureDroppedCallback)(
     uint64_t handle
     );
     typedef void
     (*UniffiCallbackInterfaceFree)(
     uint64_t handle
-    );typedef struct UniffiForeignFuture {
+    );
+    typedef uint64_t
+    (*UniffiCallbackInterfaceClone)(
+    uint64_t handle
+    );typedef struct UniffiForeignFutureDroppedCallbackStruct {
         uint64_t handle;
-        UniffiForeignFutureFree free;
-    } UniffiForeignFuture;typedef struct UniffiForeignFutureStructU8 {
+        UniffiForeignFutureDroppedCallback free;
+    } UniffiForeignFutureDroppedCallbackStruct;typedef struct UniffiForeignFutureResultU8 {
         uint8_t return_value;
         RustCallStatus call_status;
-    } UniffiForeignFutureStructU8;
+    } UniffiForeignFutureResultU8;
     typedef void
     (*UniffiForeignFutureCompleteU8)(
     uint64_t callback_data, 
-    UniffiForeignFutureStructU8 result
-    );typedef struct UniffiForeignFutureStructI8 {
+    UniffiForeignFutureResultU8 result
+    );typedef struct UniffiForeignFutureResultI8 {
         int8_t return_value;
         RustCallStatus call_status;
-    } UniffiForeignFutureStructI8;
+    } UniffiForeignFutureResultI8;
     typedef void
     (*UniffiForeignFutureCompleteI8)(
     uint64_t callback_data, 
-    UniffiForeignFutureStructI8 result
-    );typedef struct UniffiForeignFutureStructU16 {
+    UniffiForeignFutureResultI8 result
+    );typedef struct UniffiForeignFutureResultU16 {
         uint16_t return_value;
         RustCallStatus call_status;
-    } UniffiForeignFutureStructU16;
+    } UniffiForeignFutureResultU16;
     typedef void
     (*UniffiForeignFutureCompleteU16)(
     uint64_t callback_data, 
-    UniffiForeignFutureStructU16 result
-    );typedef struct UniffiForeignFutureStructI16 {
+    UniffiForeignFutureResultU16 result
+    );typedef struct UniffiForeignFutureResultI16 {
         int16_t return_value;
         RustCallStatus call_status;
-    } UniffiForeignFutureStructI16;
+    } UniffiForeignFutureResultI16;
     typedef void
     (*UniffiForeignFutureCompleteI16)(
     uint64_t callback_data, 
-    UniffiForeignFutureStructI16 result
-    );typedef struct UniffiForeignFutureStructU32 {
+    UniffiForeignFutureResultI16 result
+    );typedef struct UniffiForeignFutureResultU32 {
         uint32_t return_value;
         RustCallStatus call_status;
-    } UniffiForeignFutureStructU32;
+    } UniffiForeignFutureResultU32;
     typedef void
     (*UniffiForeignFutureCompleteU32)(
     uint64_t callback_data, 
-    UniffiForeignFutureStructU32 result
-    );typedef struct UniffiForeignFutureStructI32 {
+    UniffiForeignFutureResultU32 result
+    );typedef struct UniffiForeignFutureResultI32 {
         int32_t return_value;
         RustCallStatus call_status;
-    } UniffiForeignFutureStructI32;
+    } UniffiForeignFutureResultI32;
     typedef void
     (*UniffiForeignFutureCompleteI32)(
     uint64_t callback_data, 
-    UniffiForeignFutureStructI32 result
-    );typedef struct UniffiForeignFutureStructU64 {
+    UniffiForeignFutureResultI32 result
+    );typedef struct UniffiForeignFutureResultU64 {
         uint64_t return_value;
         RustCallStatus call_status;
-    } UniffiForeignFutureStructU64;
+    } UniffiForeignFutureResultU64;
     typedef void
     (*UniffiForeignFutureCompleteU64)(
     uint64_t callback_data, 
-    UniffiForeignFutureStructU64 result
-    );typedef struct UniffiForeignFutureStructI64 {
+    UniffiForeignFutureResultU64 result
+    );typedef struct UniffiForeignFutureResultI64 {
         int64_t return_value;
         RustCallStatus call_status;
-    } UniffiForeignFutureStructI64;
+    } UniffiForeignFutureResultI64;
     typedef void
     (*UniffiForeignFutureCompleteI64)(
     uint64_t callback_data, 
-    UniffiForeignFutureStructI64 result
-    );typedef struct UniffiForeignFutureStructF32 {
+    UniffiForeignFutureResultI64 result
+    );typedef struct UniffiForeignFutureResultF32 {
         float return_value;
         RustCallStatus call_status;
-    } UniffiForeignFutureStructF32;
+    } UniffiForeignFutureResultF32;
     typedef void
     (*UniffiForeignFutureCompleteF32)(
     uint64_t callback_data, 
-    UniffiForeignFutureStructF32 result
-    );typedef struct UniffiForeignFutureStructF64 {
+    UniffiForeignFutureResultF32 result
+    );typedef struct UniffiForeignFutureResultF64 {
         double return_value;
         RustCallStatus call_status;
-    } UniffiForeignFutureStructF64;
+    } UniffiForeignFutureResultF64;
     typedef void
     (*UniffiForeignFutureCompleteF64)(
     uint64_t callback_data, 
-    UniffiForeignFutureStructF64 result
-    );typedef struct UniffiForeignFutureStructPointer {
-        void * return_value;
-        RustCallStatus call_status;
-    } UniffiForeignFutureStructPointer;
-    typedef void
-    (*UniffiForeignFutureCompletePointer)(
-    uint64_t callback_data, 
-    UniffiForeignFutureStructPointer result
-    );typedef struct UniffiForeignFutureStructRustBuffer {
+    UniffiForeignFutureResultF64 result
+    );typedef struct UniffiForeignFutureResultRustBuffer {
         RustBuffer return_value;
         RustCallStatus call_status;
-    } UniffiForeignFutureStructRustBuffer;
+    } UniffiForeignFutureResultRustBuffer;
     typedef void
     (*UniffiForeignFutureCompleteRustBuffer)(
     uint64_t callback_data, 
-    UniffiForeignFutureStructRustBuffer result
-    );typedef struct UniffiForeignFutureStructVoid {
+    UniffiForeignFutureResultRustBuffer result
+    );typedef struct UniffiForeignFutureResultVoid {
         RustCallStatus call_status;
-    } UniffiForeignFutureStructVoid;
+    } UniffiForeignFutureResultVoid;
     typedef void
     (*UniffiForeignFutureCompleteVoid)(
     uint64_t callback_data, 
-    UniffiForeignFutureStructVoid result
+    UniffiForeignFutureResultVoid result
     );
-    void * uniffi_kontor_sdk_native_fn_clone_wit(
-        void * ptr, 
+    /*handle*/ uint64_t uniffi_kontor_sdk_native_fn_clone_wit(
+        /*handle*/ uint64_t handle, 
         RustCallStatus *uniffi_out_err
     );
     void uniffi_kontor_sdk_native_fn_free_wit(
-        void * ptr, 
+        /*handle*/ uint64_t handle, 
         RustCallStatus *uniffi_out_err
     );
-    void * uniffi_kontor_sdk_native_fn_constructor_wit_new(
+    /*handle*/ uint64_t uniffi_kontor_sdk_native_fn_constructor_wit_new(
         RustBuffer text, 
         RustCallStatus *uniffi_out_err
     );
     RustBuffer uniffi_kontor_sdk_native_fn_method_wit_decode_result(
-        void * ptr, 
+        /*handle*/ uint64_t ptr, 
         RustBuffer fn_name, 
         RustBuffer wave, 
         RustCallStatus *uniffi_out_err
     );
     RustBuffer uniffi_kontor_sdk_native_fn_method_wit_encode_call(
-        void * ptr, 
+        /*handle*/ uint64_t ptr, 
         RustBuffer fn_name, 
         RustBuffer args_json, 
         RustCallStatus *uniffi_out_err
@@ -486,21 +482,6 @@ extern "C" {
         /*handle*/ uint64_t handle, 
         RustCallStatus *uniffi_out_err
     );
-    void ffi_kontor_sdk_native_rust_future_poll_pointer(
-        /*handle*/ uint64_t handle, 
-        UniffiRustFutureContinuationCallback callback, 
-        /*handle*/ uint64_t callback_data
-    );
-    void ffi_kontor_sdk_native_rust_future_cancel_pointer(
-        /*handle*/ uint64_t handle
-    );
-    void ffi_kontor_sdk_native_rust_future_free_pointer(
-        /*handle*/ uint64_t handle
-    );
-    void * ffi_kontor_sdk_native_rust_future_complete_pointer(
-        /*handle*/ uint64_t handle, 
-        RustCallStatus *uniffi_out_err
-    );
     void ffi_kontor_sdk_native_rust_future_poll_rust_buffer(
         /*handle*/ uint64_t handle, 
         UniffiRustFutureContinuationCallback callback, 
@@ -669,18 +650,58 @@ template <> struct Bridging<RustBuffer> {
   static RustBuffer fromJs(jsi::Runtime &rt, std::shared_ptr<CallInvoker>,
                            const jsi::Value &value) {
     try {
+      auto obj = value.asObject(rt);
+
+      // Adoption vs copy. Two kinds of view arrive here:
+      //
+      //   * Library-owned views from `rustbuffer_alloc`. Codegen allocates one,
+      //     fills it in place, and ships it as an argument — and never frees a
+      //     lowered argument, while the view's backing `CMutableBuffer` is
+      //     non-owning (its destructor leaves `data` alone). Such a view carries
+      //     a capacity hint (stamped by `rustbuffer_alloc` in the wrapper). We
+      //     *adopt* it: hand the existing allocation to the callee, which frees
+      //     it. Copying instead would orphan the allocation and leak one whole
+      //     payload per call.
+      //   * Ordinary JS-owned arrays, which carry no hint. These are *copied*
+      //     into a fresh library allocation — they are not ours to give away.
+      //
+      // On adoption we reset the hint to 0 so a later `rustbuffer_free(view)` is
+      // a no-op rather than a double free.
+      if (obj.hasProperty(rt, uniffi_jsi::kUbrnRustCapacity)) {
+        auto capacity = static_cast<uint64_t>(
+            obj.getProperty(rt, uniffi_jsi::kUbrnRustCapacity).asNumber());
+        if (capacity == 0) {
+          // Hint present but zeroed: the view was already adopted by a previous
+          // call and its memory has been freed. Reading it would be a
+          // use-after-free, so refuse rather than hand over a dangling pointer.
+          throw jsi::JSError(
+              rt,
+              "RustBuffer argument was already consumed by a previous FFI call");
+        }
+        auto arrayBuffer =
+            obj.getPropertyAsObject(rt, "buffer").getArrayBuffer(rt);
+        auto byteOffset =
+            static_cast<size_t>(obj.getProperty(rt, "byteOffset").asNumber());
+        auto byteLength =
+            static_cast<size_t>(obj.getProperty(rt, "byteLength").asNumber());
+        obj.setProperty(rt, uniffi_jsi::kUbrnRustCapacity, jsi::Value(0));
+        return RustBuffer{
+            .capacity = capacity,
+            .len = static_cast<uint64_t>(byteLength),
+            .data = arrayBuffer.data(rt) + byteOffset,
+        };
+      }
+
       auto buffer = uniffi_jsi::Bridging<jsi::ArrayBuffer>::value_to_arraybuffer(rt, value);
       auto bytes = ForeignBytes{
           .len = static_cast<int32_t>(buffer.length(rt)),
           .data = buffer.data(rt),
       };
 
-      // This buffer is constructed from foreign bytes. Rust scaffolding copies
-      // the bytes, to make the RustBuffer.
+      // No hint: an ordinary JS-owned array. Rust scaffolding copies the bytes
+      // to make the RustBuffer; the copy is destroyed when the callee
+      // deserializes its arguments.
       auto buf = rustbuffer_from_bytes(bytes);
-      // Once it leaves this function, the buffer is immediately passed back
-      // into Rust, where it's used to deserialize into the Rust versions of the
-      // arguments. At that point, the copy is destroyed.
       return buf;
     } catch (const std::logic_error &e) {
       throw jsi::JSError(rt, e.what());
@@ -689,24 +710,31 @@ template <> struct Bridging<RustBuffer> {
 
   static jsi::Value toJs(jsi::Runtime &rt, std::shared_ptr<CallInvoker>,
                          RustBuffer buf) {
-    // We need to make a copy of the bytes from Rust's memory space into
-    // Javascripts memory space. We need to do this because the two languages
-    // manages memory very differently: a garbage collector needs to track all
-    // the memory at runtime, Rust is doing it all closer to compile time.
-    uint8_t *bytes = new uint8_t[buf.len];
-    std::memcpy(bytes, buf.data, buf.len);
-
-    // Construct an ArrayBuffer with copy of the bytes from the RustBuffer.
+    // View-handoff: hand JS a `Uint8Array` view aliasing the Rust-owned bytes
+    // (no boundary copy). The single mandatory copy now happens inside
+    // `converter.lift(view)` (string decode, byte-array `set`, field-by-field
+    // record reads). The codegen-emitted try/finally calls `rustbuffer_free`
+    // on the view after `lift` returns, releasing the Rust allocation.
+    //
+    // Capacity hint: Rust may return a buffer where `capacity > len`. The
+    // view's `byteLength` is `len` (so converters that decode the whole view
+    // see only the message bytes), but `rustbuffer_free` needs `capacity` to
+    // free correctly. We stash `capacity` on the view via a string-keyed
+    // property when it differs from `len`; the JSI `rustbufferFree` host
+    // function reads it back and falls back to `byteLength` for views from
+    // `rustbufferAlloc(n)` where `byteLength == capacity` already.
+    //
+    // CMutableBuffer is non-owning here: its destructor leaves `buf.data`
+    // alone. Only the codegen-emitted `rustbuffer_free` path frees it.
     auto payload = std::make_shared<uniffi_jsi::CMutableBuffer>(
-        uniffi_jsi::CMutableBuffer((uint8_t *)bytes, buf.len));
-    auto arrayBuffer = jsi::ArrayBuffer(rt, payload);
-
-    // Once we have a Javascript version, we no longer need the Rust version, so
-    // we can call into Rust to tell it it's okay to free that memory.
-    rustbuffer_free(buf);
-
-    // Finally, return the ArrayBuffer.
-    return uniffi_jsi::Bridging<jsi::ArrayBuffer>::arraybuffer_to_value(rt, arrayBuffer);;
+        buf.data, static_cast<size_t>(buf.len));
+    auto view = uniffi_jsi::arraybufferToUint8Array(
+        rt, jsi::ArrayBuffer(rt, payload));
+    if (buf.capacity != static_cast<uint64_t>(buf.len)) {
+      view.setProperty(rt, uniffi_jsi::kUbrnRustCapacity,
+                       jsi::Value(static_cast<double>(buf.capacity)));
+    }
+    return jsi::Value(rt, view);
   }
 };
 
@@ -731,9 +759,22 @@ template <> struct Bridging<RustCallStatus> {
                          const jsi::Value &jsStatus) {
     auto statusObject = jsStatus.asObject(rt);
     if (status.error_buf.data != nullptr) {
-      auto rbuf = Bridging<RustBuffer>::toJs(rt, callInvoker,
-                                                         status.error_buf);
-      statusObject.setProperty(rt, "errorBuf", rbuf);
+      // The error path is NOT wrapped in the codegen-emitted try/finally that
+      // covers normal returns: `errorBuf` is read by the runtime's call-status
+      // dispatcher (rust-call.ts) which throws straight to the user without
+      // ever calling `rustbuffer_free`. Switching this site to view-handoff
+      // would leak the Rust allocation, so we keep the copy semantics here:
+      // copy the bytes into a JS-owned ArrayBuffer and free the Rust buffer
+      // immediately. The errorBuf is small (a serialized error variant) and
+      // only allocated on the cold error path, so the boundary copy is cheap.
+      auto len = static_cast<size_t>(status.error_buf.len);
+      uint8_t *bytes = new uint8_t[len];
+      std::memcpy(bytes, status.error_buf.data, len);
+      auto payload = std::make_shared<uniffi_jsi::CMutableBuffer>(bytes, len);
+      auto view = uniffi_jsi::arraybufferToUint8Array(
+          rt, jsi::ArrayBuffer(rt, payload));
+      statusObject.setProperty(rt, "errorBuf", view);
+      Bridging<RustBuffer>::rustbuffer_free(status.error_buf);
     }
     if (status.code != UNIFFI_CALL_STATUS_OK) {
       auto code =
@@ -901,7 +942,7 @@ namespace uniffi::kontor_sdk_native::cb::rustfuturecontinuationcallback {
             rs_pollResult);
     }
 
-    static UniffiRustFutureContinuationCallback
+    [[maybe_unused]] static UniffiRustFutureContinuationCallback
     makeCallbackFunction( // uniffi::kontor_sdk_native::cb::rustfuturecontinuationcallback
                     jsi::Runtime &rt,
                      std::shared_ptr<uniffi_runtime::UniffiCallInvoker> callInvoker,
@@ -948,49 +989,9 @@ namespace uniffi::kontor_sdk_native::cb::rustfuturecontinuationcallback {
         rsLambda = nullptr;
     }
 } // namespace uniffi::kontor_sdk_native::cb::rustfuturecontinuationcallback
-    // Implementation of callback function calling from JS to Rust ForeignFutureFree,
-    // passed from Rust to JS as part of async callbacks.
-namespace uniffi::kontor_sdk_native {
-using CallInvoker = uniffi_runtime::UniffiCallInvoker;
+    // Implementation of callback function calling from Rust to JS ForeignFutureDroppedCallback
 
-template <> struct Bridging<UniffiForeignFutureFree> {
-  static jsi::Value toJs(jsi::Runtime &rt, std::shared_ptr<CallInvoker> callInvoker, UniffiForeignFutureFree rsCallback) {
-    return jsi::Function::createFromHostFunction(
-        rt,
-        jsi::PropNameID::forAscii(rt, "--ForeignFutureFree"),
-        1,
-        [rsCallback, callInvoker](
-            jsi::Runtime &rt,
-            const jsi::Value &thisValue,
-            const jsi::Value *arguments,
-            size_t count) -> jsi::Value
-        {
-            return intoRust(rt, callInvoker, thisValue, arguments, count, rsCallback);
-        }
-    );
-  }
-
-  static jsi::Value intoRust(
-      jsi::Runtime &rt,
-      std::shared_ptr<CallInvoker> callInvoker,
-      const jsi::Value &thisValue,
-      const jsi::Value *args,
-      size_t count,
-      UniffiForeignFutureFree func) {
-    // Convert the arguments into the Rust, with Bridging<T>::fromJs,
-    // then call the rs_callback with those arguments.
-        func(uniffi_jsi::Bridging<uint64_t>::fromJs(rt, callInvoker, args[0])
-        );
-
-        
-        return jsi::Value::undefined();
-  }
-};
-} // namespace uniffi::kontor_sdk_native
-    // Implementation of free callback function CallbackInterfaceFree
-
-
-// Callback function: uniffi::kontor_sdk_native::st::foreignfuture::foreignfuture::free::UniffiCallbackInterfaceFree
+// Callback function: uniffi::kontor_sdk_native::cb::foreignfuturedroppedcallback::UniffiForeignFutureDroppedCallback
 //
 // We have the following constraints:
 // - we need to pass a function pointer to Rust.
@@ -1002,7 +1003,7 @@ template <> struct Bridging<UniffiForeignFutureFree> {
 //
 // We then give the `callback` function pointer to Rust which will call the lambda sometime in the
 // future.
-namespace uniffi::kontor_sdk_native::st::foreignfuture::foreignfuture::free {
+namespace uniffi::kontor_sdk_native::cb::foreignfuturedroppedcallback {
     using namespace facebook;
 
     // We need to store a lambda in a global so we can call it from
@@ -1033,7 +1034,7 @@ namespace uniffi::kontor_sdk_native::st::foreignfuture::foreignfuture::free {
 
             
         } catch (const jsi::JSError &error) {
-            std::cout << "Error in callback UniffiCallbackInterfaceFree: "
+            std::cout << "Error in callback UniffiForeignFutureDroppedCallback: "
                     << error.what() << std::endl;
             throw error;
         }
@@ -1059,8 +1060,8 @@ namespace uniffi::kontor_sdk_native::st::foreignfuture::foreignfuture::free {
             rs_handle);
     }
 
-    static UniffiCallbackInterfaceFree
-    makeCallbackFunction( // uniffi::kontor_sdk_native::st::foreignfuture::foreignfuture::free
+    [[maybe_unused]] static UniffiForeignFutureDroppedCallback
+    makeCallbackFunction( // uniffi::kontor_sdk_native::cb::foreignfuturedroppedcallback
                     jsi::Runtime &rt,
                      std::shared_ptr<uniffi_runtime::UniffiCallInvoker> callInvoker,
                      const jsi::Value &value) {
@@ -1103,33 +1104,35 @@ namespace uniffi::kontor_sdk_native::st::foreignfuture::foreignfuture::free {
         // then the pointer will no longer be left dangling.
         rsLambda = nullptr;
     }
-} // namespace uniffi::kontor_sdk_native::st::foreignfuture::foreignfuture::free
+} // namespace uniffi::kontor_sdk_native::cb::foreignfuturedroppedcallback
+    // Implementation of free callback function CallbackInterfaceFree
+
 namespace uniffi::kontor_sdk_native {
 using namespace facebook;
 using CallInvoker = uniffi_runtime::UniffiCallInvoker;
 
-template <> struct Bridging<UniffiForeignFuture> {
-  static UniffiForeignFuture fromJs(jsi::Runtime &rt,
+template <> struct Bridging<UniffiForeignFutureDroppedCallbackStruct> {
+  static UniffiForeignFutureDroppedCallbackStruct fromJs(jsi::Runtime &rt,
     std::shared_ptr<CallInvoker> callInvoker,
     const jsi::Value &jsValue
   ) {
     // Check if the input is an object
     if (!jsValue.isObject()) {
-      throw jsi::JSError(rt, "Expected an object for UniffiForeignFuture");
+      throw jsi::JSError(rt, "Expected an object for UniffiForeignFutureDroppedCallbackStruct");
     }
 
     // Get the object from the jsi::Value
     auto jsObject = jsValue.getObject(rt);
 
     // Create the vtable struct
-    UniffiForeignFuture rsObject;
+    UniffiForeignFutureDroppedCallbackStruct rsObject;
 
     // Create the vtable from the js callbacks.
     rsObject.handle = uniffi_jsi::Bridging<uint64_t>::fromJs(
         rt, callInvoker,
         jsObject.getProperty(rt, "handle")
       );
-    rsObject.free = uniffi::kontor_sdk_native::st::foreignfuture::foreignfuture::free::makeCallbackFunction(
+    rsObject.free = uniffi::kontor_sdk_native::cb::foreignfuturedroppedcallback::makeCallbackFunction(
           rt, callInvoker, jsObject.getProperty(rt, "free")
         );
 
@@ -1142,30 +1145,30 @@ namespace uniffi::kontor_sdk_native {
 using namespace facebook;
 using CallInvoker = uniffi_runtime::UniffiCallInvoker;
 
-template <> struct Bridging<UniffiForeignFutureStructU8> {
-  static UniffiForeignFutureStructU8 fromJs(jsi::Runtime &rt,
+template <> struct Bridging<UniffiForeignFutureResultU8> {
+  static UniffiForeignFutureResultU8 fromJs(jsi::Runtime &rt,
     std::shared_ptr<CallInvoker> callInvoker,
     const jsi::Value &jsValue
   ) {
     // Check if the input is an object
     if (!jsValue.isObject()) {
-      throw jsi::JSError(rt, "Expected an object for UniffiForeignFutureStructU8");
+      throw jsi::JSError(rt, "Expected an object for UniffiForeignFutureResultU8");
     }
 
     // Get the object from the jsi::Value
     auto jsObject = jsValue.getObject(rt);
 
     // Create the vtable struct
-    UniffiForeignFutureStructU8 rsObject;
+    UniffiForeignFutureResultU8 rsObject;
 
     // Create the vtable from the js callbacks.
     rsObject.return_value = uniffi_jsi::Bridging<uint8_t>::fromJs(
         rt, callInvoker,
-        jsObject.getProperty(rt, "returnValue")
+        jsObject.getProperty(rt, "return_value")
       );
     rsObject.call_status = uniffi::kontor_sdk_native::Bridging<RustCallStatus>::fromJs(
         rt, callInvoker,
-        jsObject.getProperty(rt, "callStatus")
+        jsObject.getProperty(rt, "call_status")
       );
 
     return rsObject;
@@ -1204,7 +1207,7 @@ template <> struct Bridging<UniffiForeignFutureCompleteU8> {
       UniffiForeignFutureCompleteU8 func) {
     // Convert the arguments into the Rust, with Bridging<T>::fromJs,
     // then call the rs_callback with those arguments.
-        func(uniffi_jsi::Bridging<uint64_t>::fromJs(rt, callInvoker, args[0]), uniffi::kontor_sdk_native::Bridging<UniffiForeignFutureStructU8>::fromJs(rt, callInvoker, args[1])
+        func(uniffi_jsi::Bridging<uint64_t>::fromJs(rt, callInvoker, args[0]), uniffi::kontor_sdk_native::Bridging<UniffiForeignFutureResultU8>::fromJs(rt, callInvoker, args[1])
         );
 
         
@@ -1216,30 +1219,30 @@ namespace uniffi::kontor_sdk_native {
 using namespace facebook;
 using CallInvoker = uniffi_runtime::UniffiCallInvoker;
 
-template <> struct Bridging<UniffiForeignFutureStructI8> {
-  static UniffiForeignFutureStructI8 fromJs(jsi::Runtime &rt,
+template <> struct Bridging<UniffiForeignFutureResultI8> {
+  static UniffiForeignFutureResultI8 fromJs(jsi::Runtime &rt,
     std::shared_ptr<CallInvoker> callInvoker,
     const jsi::Value &jsValue
   ) {
     // Check if the input is an object
     if (!jsValue.isObject()) {
-      throw jsi::JSError(rt, "Expected an object for UniffiForeignFutureStructI8");
+      throw jsi::JSError(rt, "Expected an object for UniffiForeignFutureResultI8");
     }
 
     // Get the object from the jsi::Value
     auto jsObject = jsValue.getObject(rt);
 
     // Create the vtable struct
-    UniffiForeignFutureStructI8 rsObject;
+    UniffiForeignFutureResultI8 rsObject;
 
     // Create the vtable from the js callbacks.
     rsObject.return_value = uniffi_jsi::Bridging<int8_t>::fromJs(
         rt, callInvoker,
-        jsObject.getProperty(rt, "returnValue")
+        jsObject.getProperty(rt, "return_value")
       );
     rsObject.call_status = uniffi::kontor_sdk_native::Bridging<RustCallStatus>::fromJs(
         rt, callInvoker,
-        jsObject.getProperty(rt, "callStatus")
+        jsObject.getProperty(rt, "call_status")
       );
 
     return rsObject;
@@ -1278,7 +1281,7 @@ template <> struct Bridging<UniffiForeignFutureCompleteI8> {
       UniffiForeignFutureCompleteI8 func) {
     // Convert the arguments into the Rust, with Bridging<T>::fromJs,
     // then call the rs_callback with those arguments.
-        func(uniffi_jsi::Bridging<uint64_t>::fromJs(rt, callInvoker, args[0]), uniffi::kontor_sdk_native::Bridging<UniffiForeignFutureStructI8>::fromJs(rt, callInvoker, args[1])
+        func(uniffi_jsi::Bridging<uint64_t>::fromJs(rt, callInvoker, args[0]), uniffi::kontor_sdk_native::Bridging<UniffiForeignFutureResultI8>::fromJs(rt, callInvoker, args[1])
         );
 
         
@@ -1290,30 +1293,30 @@ namespace uniffi::kontor_sdk_native {
 using namespace facebook;
 using CallInvoker = uniffi_runtime::UniffiCallInvoker;
 
-template <> struct Bridging<UniffiForeignFutureStructU16> {
-  static UniffiForeignFutureStructU16 fromJs(jsi::Runtime &rt,
+template <> struct Bridging<UniffiForeignFutureResultU16> {
+  static UniffiForeignFutureResultU16 fromJs(jsi::Runtime &rt,
     std::shared_ptr<CallInvoker> callInvoker,
     const jsi::Value &jsValue
   ) {
     // Check if the input is an object
     if (!jsValue.isObject()) {
-      throw jsi::JSError(rt, "Expected an object for UniffiForeignFutureStructU16");
+      throw jsi::JSError(rt, "Expected an object for UniffiForeignFutureResultU16");
     }
 
     // Get the object from the jsi::Value
     auto jsObject = jsValue.getObject(rt);
 
     // Create the vtable struct
-    UniffiForeignFutureStructU16 rsObject;
+    UniffiForeignFutureResultU16 rsObject;
 
     // Create the vtable from the js callbacks.
     rsObject.return_value = uniffi_jsi::Bridging<uint16_t>::fromJs(
         rt, callInvoker,
-        jsObject.getProperty(rt, "returnValue")
+        jsObject.getProperty(rt, "return_value")
       );
     rsObject.call_status = uniffi::kontor_sdk_native::Bridging<RustCallStatus>::fromJs(
         rt, callInvoker,
-        jsObject.getProperty(rt, "callStatus")
+        jsObject.getProperty(rt, "call_status")
       );
 
     return rsObject;
@@ -1352,7 +1355,7 @@ template <> struct Bridging<UniffiForeignFutureCompleteU16> {
       UniffiForeignFutureCompleteU16 func) {
     // Convert the arguments into the Rust, with Bridging<T>::fromJs,
     // then call the rs_callback with those arguments.
-        func(uniffi_jsi::Bridging<uint64_t>::fromJs(rt, callInvoker, args[0]), uniffi::kontor_sdk_native::Bridging<UniffiForeignFutureStructU16>::fromJs(rt, callInvoker, args[1])
+        func(uniffi_jsi::Bridging<uint64_t>::fromJs(rt, callInvoker, args[0]), uniffi::kontor_sdk_native::Bridging<UniffiForeignFutureResultU16>::fromJs(rt, callInvoker, args[1])
         );
 
         
@@ -1364,30 +1367,30 @@ namespace uniffi::kontor_sdk_native {
 using namespace facebook;
 using CallInvoker = uniffi_runtime::UniffiCallInvoker;
 
-template <> struct Bridging<UniffiForeignFutureStructI16> {
-  static UniffiForeignFutureStructI16 fromJs(jsi::Runtime &rt,
+template <> struct Bridging<UniffiForeignFutureResultI16> {
+  static UniffiForeignFutureResultI16 fromJs(jsi::Runtime &rt,
     std::shared_ptr<CallInvoker> callInvoker,
     const jsi::Value &jsValue
   ) {
     // Check if the input is an object
     if (!jsValue.isObject()) {
-      throw jsi::JSError(rt, "Expected an object for UniffiForeignFutureStructI16");
+      throw jsi::JSError(rt, "Expected an object for UniffiForeignFutureResultI16");
     }
 
     // Get the object from the jsi::Value
     auto jsObject = jsValue.getObject(rt);
 
     // Create the vtable struct
-    UniffiForeignFutureStructI16 rsObject;
+    UniffiForeignFutureResultI16 rsObject;
 
     // Create the vtable from the js callbacks.
     rsObject.return_value = uniffi_jsi::Bridging<int16_t>::fromJs(
         rt, callInvoker,
-        jsObject.getProperty(rt, "returnValue")
+        jsObject.getProperty(rt, "return_value")
       );
     rsObject.call_status = uniffi::kontor_sdk_native::Bridging<RustCallStatus>::fromJs(
         rt, callInvoker,
-        jsObject.getProperty(rt, "callStatus")
+        jsObject.getProperty(rt, "call_status")
       );
 
     return rsObject;
@@ -1426,7 +1429,7 @@ template <> struct Bridging<UniffiForeignFutureCompleteI16> {
       UniffiForeignFutureCompleteI16 func) {
     // Convert the arguments into the Rust, with Bridging<T>::fromJs,
     // then call the rs_callback with those arguments.
-        func(uniffi_jsi::Bridging<uint64_t>::fromJs(rt, callInvoker, args[0]), uniffi::kontor_sdk_native::Bridging<UniffiForeignFutureStructI16>::fromJs(rt, callInvoker, args[1])
+        func(uniffi_jsi::Bridging<uint64_t>::fromJs(rt, callInvoker, args[0]), uniffi::kontor_sdk_native::Bridging<UniffiForeignFutureResultI16>::fromJs(rt, callInvoker, args[1])
         );
 
         
@@ -1438,30 +1441,30 @@ namespace uniffi::kontor_sdk_native {
 using namespace facebook;
 using CallInvoker = uniffi_runtime::UniffiCallInvoker;
 
-template <> struct Bridging<UniffiForeignFutureStructU32> {
-  static UniffiForeignFutureStructU32 fromJs(jsi::Runtime &rt,
+template <> struct Bridging<UniffiForeignFutureResultU32> {
+  static UniffiForeignFutureResultU32 fromJs(jsi::Runtime &rt,
     std::shared_ptr<CallInvoker> callInvoker,
     const jsi::Value &jsValue
   ) {
     // Check if the input is an object
     if (!jsValue.isObject()) {
-      throw jsi::JSError(rt, "Expected an object for UniffiForeignFutureStructU32");
+      throw jsi::JSError(rt, "Expected an object for UniffiForeignFutureResultU32");
     }
 
     // Get the object from the jsi::Value
     auto jsObject = jsValue.getObject(rt);
 
     // Create the vtable struct
-    UniffiForeignFutureStructU32 rsObject;
+    UniffiForeignFutureResultU32 rsObject;
 
     // Create the vtable from the js callbacks.
     rsObject.return_value = uniffi_jsi::Bridging<uint32_t>::fromJs(
         rt, callInvoker,
-        jsObject.getProperty(rt, "returnValue")
+        jsObject.getProperty(rt, "return_value")
       );
     rsObject.call_status = uniffi::kontor_sdk_native::Bridging<RustCallStatus>::fromJs(
         rt, callInvoker,
-        jsObject.getProperty(rt, "callStatus")
+        jsObject.getProperty(rt, "call_status")
       );
 
     return rsObject;
@@ -1500,7 +1503,7 @@ template <> struct Bridging<UniffiForeignFutureCompleteU32> {
       UniffiForeignFutureCompleteU32 func) {
     // Convert the arguments into the Rust, with Bridging<T>::fromJs,
     // then call the rs_callback with those arguments.
-        func(uniffi_jsi::Bridging<uint64_t>::fromJs(rt, callInvoker, args[0]), uniffi::kontor_sdk_native::Bridging<UniffiForeignFutureStructU32>::fromJs(rt, callInvoker, args[1])
+        func(uniffi_jsi::Bridging<uint64_t>::fromJs(rt, callInvoker, args[0]), uniffi::kontor_sdk_native::Bridging<UniffiForeignFutureResultU32>::fromJs(rt, callInvoker, args[1])
         );
 
         
@@ -1512,30 +1515,30 @@ namespace uniffi::kontor_sdk_native {
 using namespace facebook;
 using CallInvoker = uniffi_runtime::UniffiCallInvoker;
 
-template <> struct Bridging<UniffiForeignFutureStructI32> {
-  static UniffiForeignFutureStructI32 fromJs(jsi::Runtime &rt,
+template <> struct Bridging<UniffiForeignFutureResultI32> {
+  static UniffiForeignFutureResultI32 fromJs(jsi::Runtime &rt,
     std::shared_ptr<CallInvoker> callInvoker,
     const jsi::Value &jsValue
   ) {
     // Check if the input is an object
     if (!jsValue.isObject()) {
-      throw jsi::JSError(rt, "Expected an object for UniffiForeignFutureStructI32");
+      throw jsi::JSError(rt, "Expected an object for UniffiForeignFutureResultI32");
     }
 
     // Get the object from the jsi::Value
     auto jsObject = jsValue.getObject(rt);
 
     // Create the vtable struct
-    UniffiForeignFutureStructI32 rsObject;
+    UniffiForeignFutureResultI32 rsObject;
 
     // Create the vtable from the js callbacks.
     rsObject.return_value = uniffi_jsi::Bridging<int32_t>::fromJs(
         rt, callInvoker,
-        jsObject.getProperty(rt, "returnValue")
+        jsObject.getProperty(rt, "return_value")
       );
     rsObject.call_status = uniffi::kontor_sdk_native::Bridging<RustCallStatus>::fromJs(
         rt, callInvoker,
-        jsObject.getProperty(rt, "callStatus")
+        jsObject.getProperty(rt, "call_status")
       );
 
     return rsObject;
@@ -1574,7 +1577,7 @@ template <> struct Bridging<UniffiForeignFutureCompleteI32> {
       UniffiForeignFutureCompleteI32 func) {
     // Convert the arguments into the Rust, with Bridging<T>::fromJs,
     // then call the rs_callback with those arguments.
-        func(uniffi_jsi::Bridging<uint64_t>::fromJs(rt, callInvoker, args[0]), uniffi::kontor_sdk_native::Bridging<UniffiForeignFutureStructI32>::fromJs(rt, callInvoker, args[1])
+        func(uniffi_jsi::Bridging<uint64_t>::fromJs(rt, callInvoker, args[0]), uniffi::kontor_sdk_native::Bridging<UniffiForeignFutureResultI32>::fromJs(rt, callInvoker, args[1])
         );
 
         
@@ -1586,30 +1589,30 @@ namespace uniffi::kontor_sdk_native {
 using namespace facebook;
 using CallInvoker = uniffi_runtime::UniffiCallInvoker;
 
-template <> struct Bridging<UniffiForeignFutureStructU64> {
-  static UniffiForeignFutureStructU64 fromJs(jsi::Runtime &rt,
+template <> struct Bridging<UniffiForeignFutureResultU64> {
+  static UniffiForeignFutureResultU64 fromJs(jsi::Runtime &rt,
     std::shared_ptr<CallInvoker> callInvoker,
     const jsi::Value &jsValue
   ) {
     // Check if the input is an object
     if (!jsValue.isObject()) {
-      throw jsi::JSError(rt, "Expected an object for UniffiForeignFutureStructU64");
+      throw jsi::JSError(rt, "Expected an object for UniffiForeignFutureResultU64");
     }
 
     // Get the object from the jsi::Value
     auto jsObject = jsValue.getObject(rt);
 
     // Create the vtable struct
-    UniffiForeignFutureStructU64 rsObject;
+    UniffiForeignFutureResultU64 rsObject;
 
     // Create the vtable from the js callbacks.
     rsObject.return_value = uniffi_jsi::Bridging<uint64_t>::fromJs(
         rt, callInvoker,
-        jsObject.getProperty(rt, "returnValue")
+        jsObject.getProperty(rt, "return_value")
       );
     rsObject.call_status = uniffi::kontor_sdk_native::Bridging<RustCallStatus>::fromJs(
         rt, callInvoker,
-        jsObject.getProperty(rt, "callStatus")
+        jsObject.getProperty(rt, "call_status")
       );
 
     return rsObject;
@@ -1648,7 +1651,7 @@ template <> struct Bridging<UniffiForeignFutureCompleteU64> {
       UniffiForeignFutureCompleteU64 func) {
     // Convert the arguments into the Rust, with Bridging<T>::fromJs,
     // then call the rs_callback with those arguments.
-        func(uniffi_jsi::Bridging<uint64_t>::fromJs(rt, callInvoker, args[0]), uniffi::kontor_sdk_native::Bridging<UniffiForeignFutureStructU64>::fromJs(rt, callInvoker, args[1])
+        func(uniffi_jsi::Bridging<uint64_t>::fromJs(rt, callInvoker, args[0]), uniffi::kontor_sdk_native::Bridging<UniffiForeignFutureResultU64>::fromJs(rt, callInvoker, args[1])
         );
 
         
@@ -1660,30 +1663,30 @@ namespace uniffi::kontor_sdk_native {
 using namespace facebook;
 using CallInvoker = uniffi_runtime::UniffiCallInvoker;
 
-template <> struct Bridging<UniffiForeignFutureStructI64> {
-  static UniffiForeignFutureStructI64 fromJs(jsi::Runtime &rt,
+template <> struct Bridging<UniffiForeignFutureResultI64> {
+  static UniffiForeignFutureResultI64 fromJs(jsi::Runtime &rt,
     std::shared_ptr<CallInvoker> callInvoker,
     const jsi::Value &jsValue
   ) {
     // Check if the input is an object
     if (!jsValue.isObject()) {
-      throw jsi::JSError(rt, "Expected an object for UniffiForeignFutureStructI64");
+      throw jsi::JSError(rt, "Expected an object for UniffiForeignFutureResultI64");
     }
 
     // Get the object from the jsi::Value
     auto jsObject = jsValue.getObject(rt);
 
     // Create the vtable struct
-    UniffiForeignFutureStructI64 rsObject;
+    UniffiForeignFutureResultI64 rsObject;
 
     // Create the vtable from the js callbacks.
     rsObject.return_value = uniffi_jsi::Bridging<int64_t>::fromJs(
         rt, callInvoker,
-        jsObject.getProperty(rt, "returnValue")
+        jsObject.getProperty(rt, "return_value")
       );
     rsObject.call_status = uniffi::kontor_sdk_native::Bridging<RustCallStatus>::fromJs(
         rt, callInvoker,
-        jsObject.getProperty(rt, "callStatus")
+        jsObject.getProperty(rt, "call_status")
       );
 
     return rsObject;
@@ -1722,7 +1725,7 @@ template <> struct Bridging<UniffiForeignFutureCompleteI64> {
       UniffiForeignFutureCompleteI64 func) {
     // Convert the arguments into the Rust, with Bridging<T>::fromJs,
     // then call the rs_callback with those arguments.
-        func(uniffi_jsi::Bridging<uint64_t>::fromJs(rt, callInvoker, args[0]), uniffi::kontor_sdk_native::Bridging<UniffiForeignFutureStructI64>::fromJs(rt, callInvoker, args[1])
+        func(uniffi_jsi::Bridging<uint64_t>::fromJs(rt, callInvoker, args[0]), uniffi::kontor_sdk_native::Bridging<UniffiForeignFutureResultI64>::fromJs(rt, callInvoker, args[1])
         );
 
         
@@ -1734,30 +1737,30 @@ namespace uniffi::kontor_sdk_native {
 using namespace facebook;
 using CallInvoker = uniffi_runtime::UniffiCallInvoker;
 
-template <> struct Bridging<UniffiForeignFutureStructF32> {
-  static UniffiForeignFutureStructF32 fromJs(jsi::Runtime &rt,
+template <> struct Bridging<UniffiForeignFutureResultF32> {
+  static UniffiForeignFutureResultF32 fromJs(jsi::Runtime &rt,
     std::shared_ptr<CallInvoker> callInvoker,
     const jsi::Value &jsValue
   ) {
     // Check if the input is an object
     if (!jsValue.isObject()) {
-      throw jsi::JSError(rt, "Expected an object for UniffiForeignFutureStructF32");
+      throw jsi::JSError(rt, "Expected an object for UniffiForeignFutureResultF32");
     }
 
     // Get the object from the jsi::Value
     auto jsObject = jsValue.getObject(rt);
 
     // Create the vtable struct
-    UniffiForeignFutureStructF32 rsObject;
+    UniffiForeignFutureResultF32 rsObject;
 
     // Create the vtable from the js callbacks.
     rsObject.return_value = uniffi_jsi::Bridging<float>::fromJs(
         rt, callInvoker,
-        jsObject.getProperty(rt, "returnValue")
+        jsObject.getProperty(rt, "return_value")
       );
     rsObject.call_status = uniffi::kontor_sdk_native::Bridging<RustCallStatus>::fromJs(
         rt, callInvoker,
-        jsObject.getProperty(rt, "callStatus")
+        jsObject.getProperty(rt, "call_status")
       );
 
     return rsObject;
@@ -1796,7 +1799,7 @@ template <> struct Bridging<UniffiForeignFutureCompleteF32> {
       UniffiForeignFutureCompleteF32 func) {
     // Convert the arguments into the Rust, with Bridging<T>::fromJs,
     // then call the rs_callback with those arguments.
-        func(uniffi_jsi::Bridging<uint64_t>::fromJs(rt, callInvoker, args[0]), uniffi::kontor_sdk_native::Bridging<UniffiForeignFutureStructF32>::fromJs(rt, callInvoker, args[1])
+        func(uniffi_jsi::Bridging<uint64_t>::fromJs(rt, callInvoker, args[0]), uniffi::kontor_sdk_native::Bridging<UniffiForeignFutureResultF32>::fromJs(rt, callInvoker, args[1])
         );
 
         
@@ -1808,30 +1811,30 @@ namespace uniffi::kontor_sdk_native {
 using namespace facebook;
 using CallInvoker = uniffi_runtime::UniffiCallInvoker;
 
-template <> struct Bridging<UniffiForeignFutureStructF64> {
-  static UniffiForeignFutureStructF64 fromJs(jsi::Runtime &rt,
+template <> struct Bridging<UniffiForeignFutureResultF64> {
+  static UniffiForeignFutureResultF64 fromJs(jsi::Runtime &rt,
     std::shared_ptr<CallInvoker> callInvoker,
     const jsi::Value &jsValue
   ) {
     // Check if the input is an object
     if (!jsValue.isObject()) {
-      throw jsi::JSError(rt, "Expected an object for UniffiForeignFutureStructF64");
+      throw jsi::JSError(rt, "Expected an object for UniffiForeignFutureResultF64");
     }
 
     // Get the object from the jsi::Value
     auto jsObject = jsValue.getObject(rt);
 
     // Create the vtable struct
-    UniffiForeignFutureStructF64 rsObject;
+    UniffiForeignFutureResultF64 rsObject;
 
     // Create the vtable from the js callbacks.
     rsObject.return_value = uniffi_jsi::Bridging<double>::fromJs(
         rt, callInvoker,
-        jsObject.getProperty(rt, "returnValue")
+        jsObject.getProperty(rt, "return_value")
       );
     rsObject.call_status = uniffi::kontor_sdk_native::Bridging<RustCallStatus>::fromJs(
         rt, callInvoker,
-        jsObject.getProperty(rt, "callStatus")
+        jsObject.getProperty(rt, "call_status")
       );
 
     return rsObject;
@@ -1870,7 +1873,7 @@ template <> struct Bridging<UniffiForeignFutureCompleteF64> {
       UniffiForeignFutureCompleteF64 func) {
     // Convert the arguments into the Rust, with Bridging<T>::fromJs,
     // then call the rs_callback with those arguments.
-        func(uniffi_jsi::Bridging<uint64_t>::fromJs(rt, callInvoker, args[0]), uniffi::kontor_sdk_native::Bridging<UniffiForeignFutureStructF64>::fromJs(rt, callInvoker, args[1])
+        func(uniffi_jsi::Bridging<uint64_t>::fromJs(rt, callInvoker, args[0]), uniffi::kontor_sdk_native::Bridging<UniffiForeignFutureResultF64>::fromJs(rt, callInvoker, args[1])
         );
 
         
@@ -1882,104 +1885,30 @@ namespace uniffi::kontor_sdk_native {
 using namespace facebook;
 using CallInvoker = uniffi_runtime::UniffiCallInvoker;
 
-template <> struct Bridging<UniffiForeignFutureStructPointer> {
-  static UniffiForeignFutureStructPointer fromJs(jsi::Runtime &rt,
+template <> struct Bridging<UniffiForeignFutureResultRustBuffer> {
+  static UniffiForeignFutureResultRustBuffer fromJs(jsi::Runtime &rt,
     std::shared_ptr<CallInvoker> callInvoker,
     const jsi::Value &jsValue
   ) {
     // Check if the input is an object
     if (!jsValue.isObject()) {
-      throw jsi::JSError(rt, "Expected an object for UniffiForeignFutureStructPointer");
+      throw jsi::JSError(rt, "Expected an object for UniffiForeignFutureResultRustBuffer");
     }
 
     // Get the object from the jsi::Value
     auto jsObject = jsValue.getObject(rt);
 
     // Create the vtable struct
-    UniffiForeignFutureStructPointer rsObject;
-
-    // Create the vtable from the js callbacks.
-    rsObject.return_value = uniffi_jsi::Bridging<void *>::fromJs(
-        rt, callInvoker,
-        jsObject.getProperty(rt, "returnValue")
-      );
-    rsObject.call_status = uniffi::kontor_sdk_native::Bridging<RustCallStatus>::fromJs(
-        rt, callInvoker,
-        jsObject.getProperty(rt, "callStatus")
-      );
-
-    return rsObject;
-  }
-};
-
-} // namespace uniffi::kontor_sdk_native
-    // Implementation of callback function calling from JS to Rust ForeignFutureCompletePointer,
-    // passed from Rust to JS as part of async callbacks.
-namespace uniffi::kontor_sdk_native {
-using CallInvoker = uniffi_runtime::UniffiCallInvoker;
-
-template <> struct Bridging<UniffiForeignFutureCompletePointer> {
-  static jsi::Value toJs(jsi::Runtime &rt, std::shared_ptr<CallInvoker> callInvoker, UniffiForeignFutureCompletePointer rsCallback) {
-    return jsi::Function::createFromHostFunction(
-        rt,
-        jsi::PropNameID::forAscii(rt, "--ForeignFutureCompletePointer"),
-        2,
-        [rsCallback, callInvoker](
-            jsi::Runtime &rt,
-            const jsi::Value &thisValue,
-            const jsi::Value *arguments,
-            size_t count) -> jsi::Value
-        {
-            return intoRust(rt, callInvoker, thisValue, arguments, count, rsCallback);
-        }
-    );
-  }
-
-  static jsi::Value intoRust(
-      jsi::Runtime &rt,
-      std::shared_ptr<CallInvoker> callInvoker,
-      const jsi::Value &thisValue,
-      const jsi::Value *args,
-      size_t count,
-      UniffiForeignFutureCompletePointer func) {
-    // Convert the arguments into the Rust, with Bridging<T>::fromJs,
-    // then call the rs_callback with those arguments.
-        func(uniffi_jsi::Bridging<uint64_t>::fromJs(rt, callInvoker, args[0]), uniffi::kontor_sdk_native::Bridging<UniffiForeignFutureStructPointer>::fromJs(rt, callInvoker, args[1])
-        );
-
-        
-        return jsi::Value::undefined();
-  }
-};
-} // namespace uniffi::kontor_sdk_native
-namespace uniffi::kontor_sdk_native {
-using namespace facebook;
-using CallInvoker = uniffi_runtime::UniffiCallInvoker;
-
-template <> struct Bridging<UniffiForeignFutureStructRustBuffer> {
-  static UniffiForeignFutureStructRustBuffer fromJs(jsi::Runtime &rt,
-    std::shared_ptr<CallInvoker> callInvoker,
-    const jsi::Value &jsValue
-  ) {
-    // Check if the input is an object
-    if (!jsValue.isObject()) {
-      throw jsi::JSError(rt, "Expected an object for UniffiForeignFutureStructRustBuffer");
-    }
-
-    // Get the object from the jsi::Value
-    auto jsObject = jsValue.getObject(rt);
-
-    // Create the vtable struct
-    UniffiForeignFutureStructRustBuffer rsObject;
+    UniffiForeignFutureResultRustBuffer rsObject;
 
     // Create the vtable from the js callbacks.
     rsObject.return_value = uniffi::kontor_sdk_native::Bridging<RustBuffer>::fromJs(
         rt, callInvoker,
-        jsObject.getProperty(rt, "returnValue")
+        jsObject.getProperty(rt, "return_value")
       );
     rsObject.call_status = uniffi::kontor_sdk_native::Bridging<RustCallStatus>::fromJs(
         rt, callInvoker,
-        jsObject.getProperty(rt, "callStatus")
+        jsObject.getProperty(rt, "call_status")
       );
 
     return rsObject;
@@ -2018,7 +1947,7 @@ template <> struct Bridging<UniffiForeignFutureCompleteRustBuffer> {
       UniffiForeignFutureCompleteRustBuffer func) {
     // Convert the arguments into the Rust, with Bridging<T>::fromJs,
     // then call the rs_callback with those arguments.
-        func(uniffi_jsi::Bridging<uint64_t>::fromJs(rt, callInvoker, args[0]), uniffi::kontor_sdk_native::Bridging<UniffiForeignFutureStructRustBuffer>::fromJs(rt, callInvoker, args[1])
+        func(uniffi_jsi::Bridging<uint64_t>::fromJs(rt, callInvoker, args[0]), uniffi::kontor_sdk_native::Bridging<UniffiForeignFutureResultRustBuffer>::fromJs(rt, callInvoker, args[1])
         );
 
         
@@ -2030,26 +1959,26 @@ namespace uniffi::kontor_sdk_native {
 using namespace facebook;
 using CallInvoker = uniffi_runtime::UniffiCallInvoker;
 
-template <> struct Bridging<UniffiForeignFutureStructVoid> {
-  static UniffiForeignFutureStructVoid fromJs(jsi::Runtime &rt,
+template <> struct Bridging<UniffiForeignFutureResultVoid> {
+  static UniffiForeignFutureResultVoid fromJs(jsi::Runtime &rt,
     std::shared_ptr<CallInvoker> callInvoker,
     const jsi::Value &jsValue
   ) {
     // Check if the input is an object
     if (!jsValue.isObject()) {
-      throw jsi::JSError(rt, "Expected an object for UniffiForeignFutureStructVoid");
+      throw jsi::JSError(rt, "Expected an object for UniffiForeignFutureResultVoid");
     }
 
     // Get the object from the jsi::Value
     auto jsObject = jsValue.getObject(rt);
 
     // Create the vtable struct
-    UniffiForeignFutureStructVoid rsObject;
+    UniffiForeignFutureResultVoid rsObject;
 
     // Create the vtable from the js callbacks.
     rsObject.call_status = uniffi::kontor_sdk_native::Bridging<RustCallStatus>::fromJs(
         rt, callInvoker,
-        jsObject.getProperty(rt, "callStatus")
+        jsObject.getProperty(rt, "call_status")
       );
 
     return rsObject;
@@ -2088,7 +2017,7 @@ template <> struct Bridging<UniffiForeignFutureCompleteVoid> {
       UniffiForeignFutureCompleteVoid func) {
     // Convert the arguments into the Rust, with Bridging<T>::fromJs,
     // then call the rs_callback with those arguments.
-        func(uniffi_jsi::Bridging<uint64_t>::fromJs(rt, callInvoker, args[0]), uniffi::kontor_sdk_native::Bridging<UniffiForeignFutureStructVoid>::fromJs(rt, callInvoker, args[1])
+        func(uniffi_jsi::Bridging<uint64_t>::fromJs(rt, callInvoker, args[0]), uniffi::kontor_sdk_native::Bridging<UniffiForeignFutureResultVoid>::fromJs(rt, callInvoker, args[1])
         );
 
         
@@ -2135,20 +2064,28 @@ NativeKontorSdkNative::NativeKontorSdkNative(
             return this->cpp_uniffi_internal_fn_func_ffi__string_to_byte_length(rt, thisVal, args, count);
         }
     );
-    props["ubrn_uniffi_internal_fn_func_ffi__string_to_arraybuffer"] = jsi::Function::createFromHostFunction(
+    props["ubrn_uniffi_internal_fn_func_ffi__string_to_buffer"] = jsi::Function::createFromHostFunction(
         rt,
-        jsi::PropNameID::forAscii(rt, "ubrn_uniffi_internal_fn_func_ffi__string_to_arraybuffer"),
+        jsi::PropNameID::forAscii(rt, "ubrn_uniffi_internal_fn_func_ffi__string_to_buffer"),
         1,
         [this](jsi::Runtime &rt, const jsi::Value &thisVal, const jsi::Value *args, size_t count) -> jsi::Value {
-            return this->cpp_uniffi_internal_fn_func_ffi__string_to_arraybuffer(rt, thisVal, args, count);
+            return this->cpp_uniffi_internal_fn_func_ffi__string_to_buffer(rt, thisVal, args, count);
         }
     );
-    props["ubrn_uniffi_internal_fn_func_ffi__arraybuffer_to_string"] = jsi::Function::createFromHostFunction(
+    props["ubrn_uniffi_internal_fn_func_ffi__string_from_buffer"] = jsi::Function::createFromHostFunction(
         rt,
-        jsi::PropNameID::forAscii(rt, "ubrn_uniffi_internal_fn_func_ffi__arraybuffer_to_string"),
+        jsi::PropNameID::forAscii(rt, "ubrn_uniffi_internal_fn_func_ffi__string_from_buffer"),
         1,
         [this](jsi::Runtime &rt, const jsi::Value &thisVal, const jsi::Value *args, size_t count) -> jsi::Value {
-            return this->cpp_uniffi_internal_fn_func_ffi__arraybuffer_to_string(rt, thisVal, args, count);
+            return this->cpp_uniffi_internal_fn_func_ffi__string_from_buffer(rt, thisVal, args, count);
+        }
+    );
+    props["ubrn_uniffi_internal_fn_func_ffi__read_string_from_buffer"] = jsi::Function::createFromHostFunction(
+        rt,
+        jsi::PropNameID::forAscii(rt, "ubrn_uniffi_internal_fn_func_ffi__read_string_from_buffer"),
+        3,
+        [this](jsi::Runtime &rt, const jsi::Value &thisVal, const jsi::Value *args, size_t count) -> jsi::Value {
+            return this->cpp_uniffi_internal_fn_func_ffi__read_string_from_buffer(rt, thisVal, args, count);
         }
     );
     props["ubrn_uniffi_kontor_sdk_native_fn_clone_wit"] = jsi::Function::createFromHostFunction(
@@ -2791,6 +2728,101 @@ NativeKontorSdkNative::NativeKontorSdkNative(
             return this->cpp_uniffi_internal_fn_method_wit_ffi__bless_pointer(rt, thisVal, args, count);
         }
     );
+
+    // `rustbuffer_alloc(n)` -> Uint8Array view over Rust-owned memory of capacity `n`.
+    // `rustbuffer_free(view)` -> hands the underlying (ptr, capacity) back to the
+    // crate's `rustbuffer_free`. Together they let JS allocate buffers that the
+    // codegen-emitted lowering path can fill in place and ship to Rust without copying.
+    props["rustbuffer_alloc"] = jsi::Function::createFromHostFunction(
+        rt,
+        jsi::PropNameID::forAscii(rt, "rustbuffer_alloc"),
+        1,
+        [](jsi::Runtime &rt, const jsi::Value &thisVal, const jsi::Value *args, size_t count) -> jsi::Value {
+            if (count < 1 || !args[0].isNumber()) {
+                throw jsi::JSError(rt, "rustbuffer_alloc expected a number argument");
+            }
+            double size = args[0].asNumber();
+            if (size < 0) {
+                throw jsi::JSError(rt, "rustbuffer_alloc: size must be non-negative");
+            }
+            if (size > INT32_MAX) {
+                throw jsi::JSError(rt, "rustbuffer_alloc: size exceeds INT32_MAX");
+            }
+            auto rb = uniffi::kontor_sdk_native::Bridging<RustBuffer>::rustbuffer_alloc(static_cast<int32_t>(size));
+            if (rb.data == nullptr) {
+                throw jsi::JSError(rt, "rustbuffer_alloc failed: alloc returned null");
+            }
+            // Non-owning view over Rust-allocated memory; CMutableBuffer's destructor
+            // is the default and does not free `rb.data`. The allocation is released
+            // either by an explicit `rustbuffer_free(view)` or by being adopted when
+            // the view is lowered as an FFI argument.
+            auto payload = std::make_shared<uniffi_jsi::CMutableBuffer>(
+                rb.data, static_cast<size_t>(rb.capacity));
+            // Wrap as Uint8Array so JS can index/assign bytes directly.
+            auto view = uniffi_jsi::arraybufferToUint8Array(
+                rt, jsi::ArrayBuffer(rt, payload));
+            // Stamp the capacity so the argument-lowering path
+            // (`Bridging<RustBuffer>::fromJs`) recognises this view as
+            // library-owned and adopts the allocation instead of copying it.
+            // Without the stamp, a lowered argument is copied and this
+            // allocation is orphaned — one leaked payload per call.
+            if (rb.capacity > 0) {
+              view.setProperty(rt, uniffi_jsi::kUbrnRustCapacity,
+                               jsi::Value(static_cast<double>(rb.capacity)));
+            }
+            return jsi::Value(rt, view);
+        }
+    );
+
+    props["rustbuffer_free"] = jsi::Function::createFromHostFunction(
+        rt,
+        jsi::PropNameID::forAscii(rt, "rustbuffer_free"),
+        1,
+        [](jsi::Runtime &rt, const jsi::Value &thisVal, const jsi::Value *args, size_t count) -> jsi::Value {
+            if (count < 1 || !args[0].isObject()) {
+                throw jsi::JSError(rt, "rustbuffer_free expected a Uint8Array argument");
+            }
+            auto view = args[0].asObject(rt);
+            auto byteLength =
+                static_cast<size_t>(view.getProperty(rt, "byteLength").asNumber());
+            // Empty views were never allocated by `rustbuffer_alloc`; nothing
+            // to free. Bail out before reading buffer/byteOffset/capacity to
+            // skip three JSI property traversals on the empty path.
+            if (byteLength == 0) {
+                return jsi::Value::undefined();
+            }
+            // Capacity resolution:
+            //   * For a view from `rustbuffer_alloc(n)`, `byteLength == n == capacity`,
+            //     and no `__ubrnRustCapacity` hint was set.
+            //   * For a view from a lift-handoff, the codegen-emitted
+            //     `Bridging<RustBuffer>::toJs` set `byteLength = len` and stashed
+            //     the original `capacity` on `__ubrnRustCapacity` whenever
+            //     `capacity != len`.
+            // So: prefer the hint, fall back to byteLength.
+            size_t capacity = byteLength;
+            if (view.hasProperty(rt, uniffi_jsi::kUbrnRustCapacity)) {
+                capacity = static_cast<size_t>(
+                    view.getProperty(rt, uniffi_jsi::kUbrnRustCapacity).asNumber());
+            }
+            // A zero capacity marks a view already adopted as an FFI argument
+            // (its hint was reset to 0) and freed by the callee. Freeing again
+            // would be a double free, so this is a no-op.
+            if (capacity == 0) {
+                return jsi::Value::undefined();
+            }
+            auto buffer = view.getPropertyAsObject(rt, "buffer").getArrayBuffer(rt);
+            auto byteOffset =
+                static_cast<size_t>(view.getProperty(rt, "byteOffset").asNumber());
+            // Honour byteOffset for safety (defensive; currently always 0).
+            RustBuffer rb {
+                .capacity = static_cast<uint64_t>(capacity),
+                .len = 0,
+                .data = buffer.data(rt) + byteOffset,
+            };
+            uniffi::kontor_sdk_native::Bridging<RustBuffer>::rustbuffer_free(rb);
+            return jsi::Value::undefined();
+        }
+    );
 }
 
 void NativeKontorSdkNative::registerModule(jsi::Runtime &rt, std::shared_ptr<react::CallInvoker> callInvoker) {
@@ -2808,7 +2840,7 @@ jsi::Value NativeKontorSdkNative::get(jsi::Runtime& rt, const jsi::PropNameID& n
     try {
         return jsi::Value(rt, props.at(name.utf8(rt)));
     }
-    catch (std::out_of_range &e) {
+    catch (std::out_of_range &) {
         return jsi::Value::undefined();
     }
 }
@@ -2828,8 +2860,10 @@ void NativeKontorSdkNative::set(jsi::Runtime& rt, const jsi::PropNameID& name, c
 NativeKontorSdkNative::~NativeKontorSdkNative() {
     // Cleanup for callback function RustFutureContinuationCallback
 uniffi::kontor_sdk_native::cb::rustfuturecontinuationcallback::cleanup();
+    // Cleanup for callback function ForeignFutureDroppedCallback
+uniffi::kontor_sdk_native::cb::foreignfuturedroppedcallback::cleanup();
     // Cleanup for "free" callback function CallbackInterfaceFree
-uniffi::kontor_sdk_native::st::foreignfuture::foreignfuture::free::cleanup();
+
 }
 
 // Utility functions for serialization/deserialization of strings.
@@ -2837,18 +2871,21 @@ jsi::Value NativeKontorSdkNative::cpp_uniffi_internal_fn_func_ffi__string_to_byt
     return uniffi_jsi::Bridging<std::string>::string_to_bytelength(rt, args[0]);
 }
 
-jsi::Value NativeKontorSdkNative::cpp_uniffi_internal_fn_func_ffi__string_to_arraybuffer(jsi::Runtime& rt, const jsi::Value& thisVal, const jsi::Value* args, size_t count) {
-    return uniffi_jsi::Bridging<std::string>::string_to_arraybuffer(rt, args[0]);
+jsi::Value NativeKontorSdkNative::cpp_uniffi_internal_fn_func_ffi__string_to_buffer(jsi::Runtime& rt, const jsi::Value& thisVal, const jsi::Value* args, size_t count) {
+    return uniffi_jsi::Bridging<std::string>::string_to_buffer(rt, args[0]);
 }
 
-jsi::Value NativeKontorSdkNative::cpp_uniffi_internal_fn_func_ffi__arraybuffer_to_string(jsi::Runtime& rt, const jsi::Value& thisVal, const jsi::Value* args, size_t count) {
-    return uniffi_jsi::Bridging<std::string>::arraybuffer_to_string(rt, args[0]);
+jsi::Value NativeKontorSdkNative::cpp_uniffi_internal_fn_func_ffi__string_from_buffer(jsi::Runtime& rt, const jsi::Value& thisVal, const jsi::Value* args, size_t count) {
+    return uniffi_jsi::Bridging<std::string>::string_from_buffer(rt, args[0]);
+}
+
+jsi::Value NativeKontorSdkNative::cpp_uniffi_internal_fn_func_ffi__read_string_from_buffer(jsi::Runtime& rt, const jsi::Value& thisVal, const jsi::Value* args, size_t count) {
+    return uniffi_jsi::Bridging<std::string>::read_string_from_buffer(rt, args[0], args[1], args[2]);
 }jsi::Value NativeKontorSdkNative::cpp_uniffi_internal_fn_method_wit_ffi__bless_pointer(jsi::Runtime& rt, const jsi::Value& thisVal, const jsi::Value* args, size_t count) {
     auto pointer = uniffi_jsi::Bridging<uint64_t>::fromJs(rt, callInvoker, args[0]);
     auto static destructor = [](uint64_t p) {
-        auto pointer = reinterpret_cast<void *>(static_cast<uintptr_t>(p));
         RustCallStatus status = {0};
-        uniffi_kontor_sdk_native_fn_free_wit(pointer, &status);
+        uniffi_kontor_sdk_native_fn_free_wit(p, &status);
     };
     auto ptrObj = std::make_shared<uniffi_jsi::DestructibleObject>(pointer, destructor);
     auto obj = jsi::Object::createFromHostObject(rt, ptrObj);
@@ -2858,17 +2895,17 @@ jsi::Value NativeKontorSdkNative::cpp_uniffi_internal_fn_func_ffi__arraybuffer_t
 // Methods calling directly into the uniffi generated C API of the Rust crate.
 jsi::Value NativeKontorSdkNative::cpp_uniffi_kontor_sdk_native_fn_clone_wit(jsi::Runtime& rt, const jsi::Value& thisVal, const jsi::Value* args, size_t count) {
         RustCallStatus status = uniffi::kontor_sdk_native::Bridging<RustCallStatus>::rustSuccess(rt);
-        auto value = uniffi_kontor_sdk_native_fn_clone_wit(uniffi_jsi::Bridging<void *>::fromJs(rt, callInvoker, args[0]), 
+        auto value = uniffi_kontor_sdk_native_fn_clone_wit(uniffi_jsi::Bridging</*handle*/ uint64_t>::fromJs(rt, callInvoker, args[0]), 
             &status
         );
         uniffi::kontor_sdk_native::Bridging<RustCallStatus>::copyIntoJs(rt, callInvoker, status, args[count - 1]);
 
         
-        return uniffi_jsi::Bridging<void *>::toJs(rt, callInvoker, value);
+        return uniffi_jsi::Bridging</*handle*/ uint64_t>::toJs(rt, callInvoker, value);
 }
 jsi::Value NativeKontorSdkNative::cpp_uniffi_kontor_sdk_native_fn_free_wit(jsi::Runtime& rt, const jsi::Value& thisVal, const jsi::Value* args, size_t count) {
         RustCallStatus status = uniffi::kontor_sdk_native::Bridging<RustCallStatus>::rustSuccess(rt);
-        uniffi_kontor_sdk_native_fn_free_wit(uniffi_jsi::Bridging<void *>::fromJs(rt, callInvoker, args[0]), 
+        uniffi_kontor_sdk_native_fn_free_wit(uniffi_jsi::Bridging</*handle*/ uint64_t>::fromJs(rt, callInvoker, args[0]), 
             &status
         );
         uniffi::kontor_sdk_native::Bridging<RustCallStatus>::copyIntoJs(rt, callInvoker, status, args[count - 1]);
@@ -2884,11 +2921,11 @@ jsi::Value NativeKontorSdkNative::cpp_uniffi_kontor_sdk_native_fn_constructor_wi
         uniffi::kontor_sdk_native::Bridging<RustCallStatus>::copyIntoJs(rt, callInvoker, status, args[count - 1]);
 
         
-        return uniffi_jsi::Bridging<void *>::toJs(rt, callInvoker, value);
+        return uniffi_jsi::Bridging</*handle*/ uint64_t>::toJs(rt, callInvoker, value);
 }
 jsi::Value NativeKontorSdkNative::cpp_uniffi_kontor_sdk_native_fn_method_wit_decode_result(jsi::Runtime& rt, const jsi::Value& thisVal, const jsi::Value* args, size_t count) {
         RustCallStatus status = uniffi::kontor_sdk_native::Bridging<RustCallStatus>::rustSuccess(rt);
-        auto value = uniffi_kontor_sdk_native_fn_method_wit_decode_result(uniffi_jsi::Bridging<void *>::fromJs(rt, callInvoker, args[0]), uniffi::kontor_sdk_native::Bridging<RustBuffer>::fromJs(rt, callInvoker, args[1]), uniffi::kontor_sdk_native::Bridging<RustBuffer>::fromJs(rt, callInvoker, args[2]), 
+        auto value = uniffi_kontor_sdk_native_fn_method_wit_decode_result(uniffi_jsi::Bridging</*handle*/ uint64_t>::fromJs(rt, callInvoker, args[0]), uniffi::kontor_sdk_native::Bridging<RustBuffer>::fromJs(rt, callInvoker, args[1]), uniffi::kontor_sdk_native::Bridging<RustBuffer>::fromJs(rt, callInvoker, args[2]), 
             &status
         );
         uniffi::kontor_sdk_native::Bridging<RustCallStatus>::copyIntoJs(rt, callInvoker, status, args[count - 1]);
@@ -2898,7 +2935,7 @@ jsi::Value NativeKontorSdkNative::cpp_uniffi_kontor_sdk_native_fn_method_wit_dec
 }
 jsi::Value NativeKontorSdkNative::cpp_uniffi_kontor_sdk_native_fn_method_wit_encode_call(jsi::Runtime& rt, const jsi::Value& thisVal, const jsi::Value* args, size_t count) {
         RustCallStatus status = uniffi::kontor_sdk_native::Bridging<RustCallStatus>::rustSuccess(rt);
-        auto value = uniffi_kontor_sdk_native_fn_method_wit_encode_call(uniffi_jsi::Bridging<void *>::fromJs(rt, callInvoker, args[0]), uniffi::kontor_sdk_native::Bridging<RustBuffer>::fromJs(rt, callInvoker, args[1]), uniffi::kontor_sdk_native::Bridging<RustBuffer>::fromJs(rt, callInvoker, args[2]), 
+        auto value = uniffi_kontor_sdk_native_fn_method_wit_encode_call(uniffi_jsi::Bridging</*handle*/ uint64_t>::fromJs(rt, callInvoker, args[0]), uniffi::kontor_sdk_native::Bridging<RustBuffer>::fromJs(rt, callInvoker, args[1]), uniffi::kontor_sdk_native::Bridging<RustBuffer>::fromJs(rt, callInvoker, args[2]), 
             &status
         );
         uniffi::kontor_sdk_native::Bridging<RustCallStatus>::copyIntoJs(rt, callInvoker, status, args[count - 1]);

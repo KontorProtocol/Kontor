@@ -65,7 +65,7 @@ pub fn sha256(path: &Path) -> Result<String> {
         }
         hash.update(&buffer[..len]);
     }
-    Ok(format!("{:x}", hash.finalize()))
+    Ok(hex::encode(hash.finalize()))
 }
 
 pub struct Container<'a> {

@@ -16,8 +16,7 @@ import type { RevealOutput } from "./bindings.js";
 import type { BitcoinNetwork } from "./chains.js";
 
 export type ExtraOutput =
-  | { pay: { address: string; value: bigint } }
-  | { data: Uint8Array }; // OP_RETURN
+  { pay: { address: string; value: bigint } } | { data: Uint8Array }; // OP_RETURN
 
 /** Map one `ExtraOutput` to the wire `RevealOutput`. The `pay` address
  *  is decoded against `network`, so a malformed / wrong-network address

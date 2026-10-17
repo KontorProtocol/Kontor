@@ -17,19 +17,17 @@
 # Kontor uses libsql in embedded/local mode only (`Builder::new_local`), so the
 # `remote`/`replication`/`sync`/`tls` default features — which dragged in
 # hyper 0.14 / tonic / hyper-rustls 0.25 / rustls 0.22 / rustls-webpki 0.102 and
-# the old h2 0.3.x — are unused and now not compiled. This sidesteps the stalled
-# libsql 0.10 release entirely (upstream tracking: tursodatabase/libsql#2266).
+# the old h2 0.3.x are unused and not compiled, including after the 0.10 upgrade.
 
 [advisories]
 ignore = [
     # ── hickory-proto 0.25.2 ─────────────────────────────────────────────────
     # Pulled in only by libp2p 0.56 (mDNS / DNS peer discovery), itself pinned
-    # by the circlefin/malachite fork (git rev in core/Cargo.toml). Both advisories
+    # by Malachite 0.8.1. Both advisories
     # are DoS-class (CPU exhaustion / unbounded loop) reachable only by a
     # malicious DNS responder during libp2p peer discovery on the local network.
-    # 0119 is fixed in hickory 0.26.1; 0118 has no fixed release yet. Both are
-    # cleared only by a libp2p upgrade, which requires advancing the pinned
-    # malachite fork rev — tracked against that upstream bump.
+    # 0119 is fixed in hickory 0.26.1; 0118 does not affect the 0.26 series.
+    # Malachite still requires libp2p 0.56, whose DNS integration uses 0.25.
     "RUSTSEC-2026-0119", # O(n²) name compression → CPU exhaustion on encode
     "RUSTSEC-2026-0118", # NSEC3 closest-encloser proof → unbounded loop
 ]

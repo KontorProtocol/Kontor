@@ -37,16 +37,16 @@ jobs:
     runs-on: ${{ matrix.os }}
     timeout-minutes: 60
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
         with:
-          node-version: "22"
+          node-version: "24.22.0"
       - uses: dtolnay/rust-toolchain@stable
       - name: Add Rust targets
         run: rustup target add ${{ matrix.targets }}
-      - uses: mozilla-actions/sccache-action@v0.0.9
+      - uses: mozilla-actions/sccache-action@v0.0.11
       - name: Cache Cargo registry
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: |
             ~/.cargo/registry/index
@@ -66,7 +66,7 @@ jobs:
         uses: nttld/setup-ndk@v1
         id: ndk
         with:
-          ndk-version: r27
+          ndk-version: r30
       - name: Install sdk-native deps
         run: npm ci
         working-directory: ./sdk-native
@@ -89,7 +89,7 @@ jobs:
         working-directory: ./sdk-native
         run: tar -czf sdk-native-android.tgz android/src/main/jniLibs
       - name: Upload ${{ matrix.name }} piece
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@v7
         with:
           name: sdk-native-${{ matrix.name }}
           path: sdk-native/sdk-native-${{ matrix.name }}.tgz
@@ -100,11 +100,11 @@ jobs:
     needs: build
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/download-artifact@v6
+      - uses: actions/download-artifact@v8
         with:
           name: sdk-native-ios
           path: pieces
-      - uses: actions/download-artifact@v6
+      - uses: actions/download-artifact@v8
         with:
           name: sdk-native-android
           path: pieces
@@ -121,7 +121,7 @@ jobs:
           find payload -maxdepth 4 | sort
           tar -czf sdk-native-binaries.tgz -C payload .
       - name: Upload combined artifact
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@v7
         with:
           name: sdk-native-binaries
           path: sdk-native-binaries.tgz

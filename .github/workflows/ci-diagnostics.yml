@@ -14,7 +14,7 @@ jobs:
     runs-on: macos-latest
     timeout-minutes: 5
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Test collector failure scenarios
         run: python3 -m unittest discover -s tools/ci -p 'test_*.py'
       - name: Build abort fixture
@@ -48,7 +48,7 @@ jobs:
           assert any(Path(name).name.startswith("ci-abort") for name in reports), reports
           assert "Exit status: 0" in (output / "system.log").read_text()
           PY
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         if: always()
         with:
           name: macos-crash-capture-smoke-${{ github.run_attempt }}

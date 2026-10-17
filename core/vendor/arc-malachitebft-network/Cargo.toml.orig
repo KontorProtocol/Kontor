@@ -1,0 +1,43 @@
+[package]
+name = "arc-malachitebft-network"
+description = "Networking layer for the Malachite BFT consensus engine"
+version.workspace = true
+edition.workspace = true
+repository.workspace = true
+license.workspace = true
+publish.workspace = true
+readme = "../../../README.md"
+
+[package.metadata.docs.rs]
+all-features = true
+
+[lints]
+workspace = true
+
+[dependencies]
+malachitebft-discovery = { workspace = true }
+malachitebft-metrics = { workspace = true }
+malachitebft-peer = { workspace = true }
+malachitebft-sync = { workspace = true }
+bytes = { workspace = true }
+either = { workspace = true }
+eyre = { workspace = true }
+futures = { workspace = true }
+hex = { workspace = true }
+itertools = { workspace = true }
+libp2p = { workspace = true }
+libp2p-broadcast = { workspace = true }
+libp2p-gossipsub = { workspace = true, features = ["metrics"] }
+async-trait = { workspace = true }
+asynchronous-codec = { workspace = true }
+seahash = { workspace = true }
+serde = { workspace = true }
+thiserror = { workspace = true }
+tokio = { workspace = true, features = ["macros"] }
+tracing = { workspace = true }
+unsigned-varint = { workspace = true }
+
+[dev-dependencies]
+malachitebft-discovery = { workspace = true, features = ["test-utils"] }
+tokio = { workspace = true, features = ["macros", "rt", "rt-multi-thread", "time", "test-util"] }
+libp2p-stream = "0.4.0-alpha"

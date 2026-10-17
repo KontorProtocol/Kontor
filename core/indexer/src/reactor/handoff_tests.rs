@@ -6,7 +6,8 @@ use bitcoin::transaction::Version;
 use bitcoin::{Amount, ScriptBuf, Transaction, TxOut};
 use indexer_types::Block;
 use malachitebft_app_channel::AppMsg;
-use malachitebft_app_channel::app::types::ProposedValue;
+use malachitebft_app_channel::app::streaming::{StreamContent, StreamId, StreamMessage};
+use malachitebft_app_channel::app::types::{PeerId, ProposedValue};
 use malachitebft_core_consensus::Role;
 use malachitebft_core_types::{Round, Validity};
 use malachitebft_engine::host::Next;
@@ -259,6 +260,34 @@ async fn check_early_proposal(
     reactor.accept_proposal_parts(forged, reply).await?;
     assert!(received.await?.is_none());
     assert_eq!(reactor.consensus.early_proposals.len(), already_buffered);
+    let publisher = PeerId::random();
+    let stream_id = StreamId::new(vec![target_round as u8].into());
+    for (sequence, content) in parts
+        .parts
+        .iter()
+        .cloned()
+        .map(StreamContent::Data)
+        .chain([StreamContent::Fin])
+        .enumerate()
+    {
+        let (reply, received) = oneshot::channel();
+        // Exercise both relayed parts and transports without publisher metadata.
+        let (from, published_by) = if target_round == 0 {
+            (PeerId::random(), Some(publisher))
+        } else {
+            (publisher, None)
+        };
+        reactor
+            .handle_consensus_msg(AppMsg::ReceivedProposalPart {
+                from,
+                published_by,
+                part: StreamMessage::new(stream_id.clone(), sequence as u64, content),
+                reply,
+            })
+            .await?;
+        assert!(received.await?.is_none());
+    }
+    assert_eq!(reactor.consensus.early_proposals.len(), 1);
     for _ in 0..32 {
         let (reply, received) = oneshot::channel();
         reactor.accept_proposal_parts(parts.clone(), reply).await?;

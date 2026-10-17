@@ -3,8 +3,8 @@
 # Pinned Rust + cargo-chef base image. Used for every Rust stage so
 # cargo-chef is preinstalled and all builder stages share one image.
 # Bumping is deliberate: chef version must match recipe.json format,
-# rust version must match rust-toolchain.toml.
-ARG CHEF_IMAGE=docker.io/lukemathwalker/cargo-chef:0.1.77-rust-1.95.0-slim-trixie
+# rust version matches the reproducible build toolchain.
+ARG CHEF_IMAGE=docker.io/lukemathwalker/cargo-chef:0.1.78-rust-1.99.1-slim-trixie
 
 # ---------------------------------------------------------------------
 # Planner — generates recipe.json from Cargo.toml / Cargo.lock.
