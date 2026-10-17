@@ -1,15 +1,15 @@
 # Publish this image, then pin its digest in tools/build.json. Builds use that
 # published image, not a locally rebuilt substitute. SDK tool archives are
 # separately checksum-pinned in tools/build.json.
-FROM rust:1.99.0-slim-bookworm@sha256:452176c0cefca88c0b3184ce85a4eb03e3d4fa05d2afb5366abcba853221019e
+FROM rust:1.99.1-slim-bookworm@sha256:a24e292b4af7bdee351a31d3a6379972a5652f0ea22a1b6d6883324ac4f5097c
 
 # Pinned binaryen release providing wasm-opt. Both the cargo toolchain and the
 # wasm-opt binary are part of the wasm's identity, so the wasm-opt version is
 # pinned here exactly like rustc is pinned by the base tag. Regenerate outputs
 # whenever either version changes.
-ARG BINARYEN_VERSION=version_130
-ARG BINARYEN_SHA256_X86_64=0a18362361ad05465118cd8eeb72edaeec89de6894bc283576ef4e07aa3babcc
-ARG BINARYEN_SHA256_AARCH64=e6ae6e09ac40f4e14bc5be6f687c58e2995c84170013975fa641809dd3b480a0
+ARG BINARYEN_VERSION=version_133
+ARG BINARYEN_SHA256_X86_64=2dc9c7813f5375db93d96ead4b78222fcc3e2677bbb832297af4797782a37489
+ARG BINARYEN_SHA256_AARCH64=89c07ea56faf38d0fbecf36ca8ec0721756716185f265b568e133d427f299bf8
 
 # Compression output depends on brotli's exact version. Republish and regenerate
 # if Debian drops this package version.
