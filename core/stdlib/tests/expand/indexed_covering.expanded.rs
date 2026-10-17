@@ -1,4 +1,8 @@
+extern crate alloc;
 use stdlib::Storage;
+mod error {
+    pub type Error = String;
+}
 #[index(cheapest, by = active, sort = price, include = (title, seller))]
 #[index(by_seller, by = seller, include = (price))]
 struct Listing {
@@ -40,7 +44,12 @@ impl<__S: stdlib::ReadStorage + 'static> ListingModel<__S> {
         entries
             .push(stdlib::IndexEntry {
                 name_id: 0u8,
-                bucket: (/*ERROR*/),
+                bucket: ::alloc::boxed::box_assume_init_into_vec_unsafe(
+                    ::alloc::intrinsics::write_box_via_move(
+                        ::alloc::boxed::Box::new_uninit(),
+                        [stdlib::IndexKey::index_key(&__idx_active)],
+                    ),
+                ),
                 sort: Some(stdlib::KeyElement::encode(&__idx_price)),
                 projection: {
                     let mut __proj = alloc::vec::Vec::new();
@@ -52,7 +61,12 @@ impl<__S: stdlib::ReadStorage + 'static> ListingModel<__S> {
         entries
             .push(stdlib::IndexEntry {
                 name_id: 1u8,
-                bucket: (/*ERROR*/),
+                bucket: ::alloc::boxed::box_assume_init_into_vec_unsafe(
+                    ::alloc::intrinsics::write_box_via_move(
+                        ::alloc::boxed::Box::new_uninit(),
+                        [stdlib::IndexKey::index_key(&__idx_seller)],
+                    ),
+                ),
                 sort: None,
                 projection: {
                     let mut __proj = alloc::vec::Vec::new();
@@ -138,7 +152,12 @@ impl<
                 &[
                     stdlib::IndexEntry {
                         name_id: 0u8,
-                        bucket: (/*ERROR*/),
+                        bucket: ::alloc::boxed::box_assume_init_into_vec_unsafe(
+                            ::alloc::intrinsics::write_box_via_move(
+                                ::alloc::boxed::Box::new_uninit(),
+                                [stdlib::IndexKey::index_key(&old)],
+                            ),
+                        ),
                         sort: Some(stdlib::KeyElement::encode(&__idx_price)),
                         projection: {
                             let mut __proj = alloc::vec::Vec::new();
@@ -151,7 +170,12 @@ impl<
                 &[
                     stdlib::IndexEntry {
                         name_id: 0u8,
-                        bucket: (/*ERROR*/),
+                        bucket: ::alloc::boxed::box_assume_init_into_vec_unsafe(
+                            ::alloc::intrinsics::write_box_via_move(
+                                ::alloc::boxed::Box::new_uninit(),
+                                [stdlib::IndexKey::index_key(&new)],
+                            ),
+                        ),
                         sort: Some(stdlib::KeyElement::encode(&__idx_price)),
                         projection: {
                             let mut __proj = alloc::vec::Vec::new();
@@ -180,7 +204,12 @@ impl<
                 &[
                     stdlib::IndexEntry {
                         name_id: 0u8,
-                        bucket: (/*ERROR*/),
+                        bucket: ::alloc::boxed::box_assume_init_into_vec_unsafe(
+                            ::alloc::intrinsics::write_box_via_move(
+                                ::alloc::boxed::Box::new_uninit(),
+                                [stdlib::IndexKey::index_key(&old)],
+                            ),
+                        ),
                         sort: Some(stdlib::KeyElement::encode(&__idx_price)),
                         projection: {
                             let mut __proj = alloc::vec::Vec::new();
@@ -193,7 +222,12 @@ impl<
                 &[
                     stdlib::IndexEntry {
                         name_id: 0u8,
-                        bucket: (/*ERROR*/),
+                        bucket: ::alloc::boxed::box_assume_init_into_vec_unsafe(
+                            ::alloc::intrinsics::write_box_via_move(
+                                ::alloc::boxed::Box::new_uninit(),
+                                [stdlib::IndexKey::index_key(&new)],
+                            ),
+                        ),
                         sort: Some(stdlib::KeyElement::encode(&__idx_price)),
                         projection: {
                             let mut __proj = alloc::vec::Vec::new();
@@ -225,7 +259,12 @@ impl<
                 &[
                     stdlib::IndexEntry {
                         name_id: 0u8,
-                        bucket: (/*ERROR*/),
+                        bucket: ::alloc::boxed::box_assume_init_into_vec_unsafe(
+                            ::alloc::intrinsics::write_box_via_move(
+                                ::alloc::boxed::Box::new_uninit(),
+                                [stdlib::IndexKey::index_key(&old)],
+                            ),
+                        ),
                         sort: Some(stdlib::KeyElement::encode(&__idx_price)),
                         projection: {
                             let mut __proj = alloc::vec::Vec::new();
@@ -238,7 +277,12 @@ impl<
                 &[
                     stdlib::IndexEntry {
                         name_id: 0u8,
-                        bucket: (/*ERROR*/),
+                        bucket: ::alloc::boxed::box_assume_init_into_vec_unsafe(
+                            ::alloc::intrinsics::write_box_via_move(
+                                ::alloc::boxed::Box::new_uninit(),
+                                [stdlib::IndexKey::index_key(&new)],
+                            ),
+                        ),
                         sort: Some(stdlib::KeyElement::encode(&__idx_price)),
                         projection: {
                             let mut __proj = alloc::vec::Vec::new();
@@ -268,7 +312,12 @@ impl<
                 &[
                     stdlib::IndexEntry {
                         name_id: 0u8,
-                        bucket: (/*ERROR*/),
+                        bucket: ::alloc::boxed::box_assume_init_into_vec_unsafe(
+                            ::alloc::intrinsics::write_box_via_move(
+                                ::alloc::boxed::Box::new_uninit(),
+                                [stdlib::IndexKey::index_key(&__idx_active)],
+                            ),
+                        ),
                         sort: Some(stdlib::KeyElement::encode(&old)),
                         projection: {
                             let mut __proj = alloc::vec::Vec::new();
@@ -279,7 +328,12 @@ impl<
                     },
                     stdlib::IndexEntry {
                         name_id: 1u8,
-                        bucket: (/*ERROR*/),
+                        bucket: ::alloc::boxed::box_assume_init_into_vec_unsafe(
+                            ::alloc::intrinsics::write_box_via_move(
+                                ::alloc::boxed::Box::new_uninit(),
+                                [stdlib::IndexKey::index_key(&__idx_seller)],
+                            ),
+                        ),
                         sort: None,
                         projection: {
                             let mut __proj = alloc::vec::Vec::new();
@@ -291,7 +345,12 @@ impl<
                 &[
                     stdlib::IndexEntry {
                         name_id: 0u8,
-                        bucket: (/*ERROR*/),
+                        bucket: ::alloc::boxed::box_assume_init_into_vec_unsafe(
+                            ::alloc::intrinsics::write_box_via_move(
+                                ::alloc::boxed::Box::new_uninit(),
+                                [stdlib::IndexKey::index_key(&__idx_active)],
+                            ),
+                        ),
                         sort: Some(stdlib::KeyElement::encode(&new)),
                         projection: {
                             let mut __proj = alloc::vec::Vec::new();
@@ -302,7 +361,12 @@ impl<
                     },
                     stdlib::IndexEntry {
                         name_id: 1u8,
-                        bucket: (/*ERROR*/),
+                        bucket: ::alloc::boxed::box_assume_init_into_vec_unsafe(
+                            ::alloc::intrinsics::write_box_via_move(
+                                ::alloc::boxed::Box::new_uninit(),
+                                [stdlib::IndexKey::index_key(&__idx_seller)],
+                            ),
+                        ),
                         sort: None,
                         projection: {
                             let mut __proj = alloc::vec::Vec::new();
@@ -330,7 +394,12 @@ impl<
                 &[
                     stdlib::IndexEntry {
                         name_id: 0u8,
-                        bucket: (/*ERROR*/),
+                        bucket: ::alloc::boxed::box_assume_init_into_vec_unsafe(
+                            ::alloc::intrinsics::write_box_via_move(
+                                ::alloc::boxed::Box::new_uninit(),
+                                [stdlib::IndexKey::index_key(&__idx_active)],
+                            ),
+                        ),
                         sort: Some(stdlib::KeyElement::encode(&old)),
                         projection: {
                             let mut __proj = alloc::vec::Vec::new();
@@ -341,7 +410,12 @@ impl<
                     },
                     stdlib::IndexEntry {
                         name_id: 1u8,
-                        bucket: (/*ERROR*/),
+                        bucket: ::alloc::boxed::box_assume_init_into_vec_unsafe(
+                            ::alloc::intrinsics::write_box_via_move(
+                                ::alloc::boxed::Box::new_uninit(),
+                                [stdlib::IndexKey::index_key(&__idx_seller)],
+                            ),
+                        ),
                         sort: None,
                         projection: {
                             let mut __proj = alloc::vec::Vec::new();
@@ -353,7 +427,12 @@ impl<
                 &[
                     stdlib::IndexEntry {
                         name_id: 0u8,
-                        bucket: (/*ERROR*/),
+                        bucket: ::alloc::boxed::box_assume_init_into_vec_unsafe(
+                            ::alloc::intrinsics::write_box_via_move(
+                                ::alloc::boxed::Box::new_uninit(),
+                                [stdlib::IndexKey::index_key(&__idx_active)],
+                            ),
+                        ),
                         sort: Some(stdlib::KeyElement::encode(&new)),
                         projection: {
                             let mut __proj = alloc::vec::Vec::new();
@@ -364,7 +443,12 @@ impl<
                     },
                     stdlib::IndexEntry {
                         name_id: 1u8,
-                        bucket: (/*ERROR*/),
+                        bucket: ::alloc::boxed::box_assume_init_into_vec_unsafe(
+                            ::alloc::intrinsics::write_box_via_move(
+                                ::alloc::boxed::Box::new_uninit(),
+                                [stdlib::IndexKey::index_key(&__idx_seller)],
+                            ),
+                        ),
                         sort: None,
                         projection: {
                             let mut __proj = alloc::vec::Vec::new();
@@ -395,7 +479,12 @@ impl<
                 &[
                     stdlib::IndexEntry {
                         name_id: 0u8,
-                        bucket: (/*ERROR*/),
+                        bucket: ::alloc::boxed::box_assume_init_into_vec_unsafe(
+                            ::alloc::intrinsics::write_box_via_move(
+                                ::alloc::boxed::Box::new_uninit(),
+                                [stdlib::IndexKey::index_key(&__idx_active)],
+                            ),
+                        ),
                         sort: Some(stdlib::KeyElement::encode(&old)),
                         projection: {
                             let mut __proj = alloc::vec::Vec::new();
@@ -406,7 +495,12 @@ impl<
                     },
                     stdlib::IndexEntry {
                         name_id: 1u8,
-                        bucket: (/*ERROR*/),
+                        bucket: ::alloc::boxed::box_assume_init_into_vec_unsafe(
+                            ::alloc::intrinsics::write_box_via_move(
+                                ::alloc::boxed::Box::new_uninit(),
+                                [stdlib::IndexKey::index_key(&__idx_seller)],
+                            ),
+                        ),
                         sort: None,
                         projection: {
                             let mut __proj = alloc::vec::Vec::new();
@@ -418,7 +512,12 @@ impl<
                 &[
                     stdlib::IndexEntry {
                         name_id: 0u8,
-                        bucket: (/*ERROR*/),
+                        bucket: ::alloc::boxed::box_assume_init_into_vec_unsafe(
+                            ::alloc::intrinsics::write_box_via_move(
+                                ::alloc::boxed::Box::new_uninit(),
+                                [stdlib::IndexKey::index_key(&__idx_active)],
+                            ),
+                        ),
                         sort: Some(stdlib::KeyElement::encode(&new)),
                         projection: {
                             let mut __proj = alloc::vec::Vec::new();
@@ -429,7 +528,12 @@ impl<
                     },
                     stdlib::IndexEntry {
                         name_id: 1u8,
-                        bucket: (/*ERROR*/),
+                        bucket: ::alloc::boxed::box_assume_init_into_vec_unsafe(
+                            ::alloc::intrinsics::write_box_via_move(
+                                ::alloc::boxed::Box::new_uninit(),
+                                [stdlib::IndexKey::index_key(&__idx_seller)],
+                            ),
+                        ),
                         sort: None,
                         projection: {
                             let mut __proj = alloc::vec::Vec::new();
@@ -458,7 +562,12 @@ impl<
                 &[
                     stdlib::IndexEntry {
                         name_id: 0u8,
-                        bucket: (/*ERROR*/),
+                        bucket: ::alloc::boxed::box_assume_init_into_vec_unsafe(
+                            ::alloc::intrinsics::write_box_via_move(
+                                ::alloc::boxed::Box::new_uninit(),
+                                [stdlib::IndexKey::index_key(&__idx_active)],
+                            ),
+                        ),
                         sort: Some(stdlib::KeyElement::encode(&__idx_price)),
                         projection: {
                             let mut __proj = alloc::vec::Vec::new();
@@ -471,7 +580,12 @@ impl<
                 &[
                     stdlib::IndexEntry {
                         name_id: 0u8,
-                        bucket: (/*ERROR*/),
+                        bucket: ::alloc::boxed::box_assume_init_into_vec_unsafe(
+                            ::alloc::intrinsics::write_box_via_move(
+                                ::alloc::boxed::Box::new_uninit(),
+                                [stdlib::IndexKey::index_key(&__idx_active)],
+                            ),
+                        ),
                         sort: Some(stdlib::KeyElement::encode(&__idx_price)),
                         projection: {
                             let mut __proj = alloc::vec::Vec::new();
@@ -500,7 +614,12 @@ impl<
                 &[
                     stdlib::IndexEntry {
                         name_id: 0u8,
-                        bucket: (/*ERROR*/),
+                        bucket: ::alloc::boxed::box_assume_init_into_vec_unsafe(
+                            ::alloc::intrinsics::write_box_via_move(
+                                ::alloc::boxed::Box::new_uninit(),
+                                [stdlib::IndexKey::index_key(&__idx_active)],
+                            ),
+                        ),
                         sort: Some(stdlib::KeyElement::encode(&__idx_price)),
                         projection: {
                             let mut __proj = alloc::vec::Vec::new();
@@ -513,7 +632,12 @@ impl<
                 &[
                     stdlib::IndexEntry {
                         name_id: 0u8,
-                        bucket: (/*ERROR*/),
+                        bucket: ::alloc::boxed::box_assume_init_into_vec_unsafe(
+                            ::alloc::intrinsics::write_box_via_move(
+                                ::alloc::boxed::Box::new_uninit(),
+                                [stdlib::IndexKey::index_key(&__idx_active)],
+                            ),
+                        ),
                         sort: Some(stdlib::KeyElement::encode(&__idx_price)),
                         projection: {
                             let mut __proj = alloc::vec::Vec::new();
@@ -545,7 +669,12 @@ impl<
                 &[
                     stdlib::IndexEntry {
                         name_id: 0u8,
-                        bucket: (/*ERROR*/),
+                        bucket: ::alloc::boxed::box_assume_init_into_vec_unsafe(
+                            ::alloc::intrinsics::write_box_via_move(
+                                ::alloc::boxed::Box::new_uninit(),
+                                [stdlib::IndexKey::index_key(&__idx_active)],
+                            ),
+                        ),
                         sort: Some(stdlib::KeyElement::encode(&__idx_price)),
                         projection: {
                             let mut __proj = alloc::vec::Vec::new();
@@ -558,7 +687,12 @@ impl<
                 &[
                     stdlib::IndexEntry {
                         name_id: 0u8,
-                        bucket: (/*ERROR*/),
+                        bucket: ::alloc::boxed::box_assume_init_into_vec_unsafe(
+                            ::alloc::intrinsics::write_box_via_move(
+                                ::alloc::boxed::Box::new_uninit(),
+                                [stdlib::IndexKey::index_key(&__idx_active)],
+                            ),
+                        ),
                         sort: Some(stdlib::KeyElement::encode(&__idx_price)),
                         projection: {
                             let mut __proj = alloc::vec::Vec::new();
@@ -588,7 +722,12 @@ impl<
                 &[
                     stdlib::IndexEntry {
                         name_id: 0u8,
-                        bucket: (/*ERROR*/),
+                        bucket: ::alloc::boxed::box_assume_init_into_vec_unsafe(
+                            ::alloc::intrinsics::write_box_via_move(
+                                ::alloc::boxed::Box::new_uninit(),
+                                [stdlib::IndexKey::index_key(&__idx_active)],
+                            ),
+                        ),
                         sort: Some(stdlib::KeyElement::encode(&__idx_price)),
                         projection: {
                             let mut __proj = alloc::vec::Vec::new();
@@ -599,7 +738,12 @@ impl<
                     },
                     stdlib::IndexEntry {
                         name_id: 1u8,
-                        bucket: (/*ERROR*/),
+                        bucket: ::alloc::boxed::box_assume_init_into_vec_unsafe(
+                            ::alloc::intrinsics::write_box_via_move(
+                                ::alloc::boxed::Box::new_uninit(),
+                                [stdlib::IndexKey::index_key(&old)],
+                            ),
+                        ),
                         sort: None,
                         projection: {
                             let mut __proj = alloc::vec::Vec::new();
@@ -611,7 +755,12 @@ impl<
                 &[
                     stdlib::IndexEntry {
                         name_id: 0u8,
-                        bucket: (/*ERROR*/),
+                        bucket: ::alloc::boxed::box_assume_init_into_vec_unsafe(
+                            ::alloc::intrinsics::write_box_via_move(
+                                ::alloc::boxed::Box::new_uninit(),
+                                [stdlib::IndexKey::index_key(&__idx_active)],
+                            ),
+                        ),
                         sort: Some(stdlib::KeyElement::encode(&__idx_price)),
                         projection: {
                             let mut __proj = alloc::vec::Vec::new();
@@ -622,7 +771,12 @@ impl<
                     },
                     stdlib::IndexEntry {
                         name_id: 1u8,
-                        bucket: (/*ERROR*/),
+                        bucket: ::alloc::boxed::box_assume_init_into_vec_unsafe(
+                            ::alloc::intrinsics::write_box_via_move(
+                                ::alloc::boxed::Box::new_uninit(),
+                                [stdlib::IndexKey::index_key(&new)],
+                            ),
+                        ),
                         sort: None,
                         projection: {
                             let mut __proj = alloc::vec::Vec::new();
@@ -650,7 +804,12 @@ impl<
                 &[
                     stdlib::IndexEntry {
                         name_id: 0u8,
-                        bucket: (/*ERROR*/),
+                        bucket: ::alloc::boxed::box_assume_init_into_vec_unsafe(
+                            ::alloc::intrinsics::write_box_via_move(
+                                ::alloc::boxed::Box::new_uninit(),
+                                [stdlib::IndexKey::index_key(&__idx_active)],
+                            ),
+                        ),
                         sort: Some(stdlib::KeyElement::encode(&__idx_price)),
                         projection: {
                             let mut __proj = alloc::vec::Vec::new();
@@ -661,7 +820,12 @@ impl<
                     },
                     stdlib::IndexEntry {
                         name_id: 1u8,
-                        bucket: (/*ERROR*/),
+                        bucket: ::alloc::boxed::box_assume_init_into_vec_unsafe(
+                            ::alloc::intrinsics::write_box_via_move(
+                                ::alloc::boxed::Box::new_uninit(),
+                                [stdlib::IndexKey::index_key(&old)],
+                            ),
+                        ),
                         sort: None,
                         projection: {
                             let mut __proj = alloc::vec::Vec::new();
@@ -673,7 +837,12 @@ impl<
                 &[
                     stdlib::IndexEntry {
                         name_id: 0u8,
-                        bucket: (/*ERROR*/),
+                        bucket: ::alloc::boxed::box_assume_init_into_vec_unsafe(
+                            ::alloc::intrinsics::write_box_via_move(
+                                ::alloc::boxed::Box::new_uninit(),
+                                [stdlib::IndexKey::index_key(&__idx_active)],
+                            ),
+                        ),
                         sort: Some(stdlib::KeyElement::encode(&__idx_price)),
                         projection: {
                             let mut __proj = alloc::vec::Vec::new();
@@ -684,7 +853,12 @@ impl<
                     },
                     stdlib::IndexEntry {
                         name_id: 1u8,
-                        bucket: (/*ERROR*/),
+                        bucket: ::alloc::boxed::box_assume_init_into_vec_unsafe(
+                            ::alloc::intrinsics::write_box_via_move(
+                                ::alloc::boxed::Box::new_uninit(),
+                                [stdlib::IndexKey::index_key(&new)],
+                            ),
+                        ),
                         sort: None,
                         projection: {
                             let mut __proj = alloc::vec::Vec::new();
@@ -715,7 +889,12 @@ impl<
                 &[
                     stdlib::IndexEntry {
                         name_id: 0u8,
-                        bucket: (/*ERROR*/),
+                        bucket: ::alloc::boxed::box_assume_init_into_vec_unsafe(
+                            ::alloc::intrinsics::write_box_via_move(
+                                ::alloc::boxed::Box::new_uninit(),
+                                [stdlib::IndexKey::index_key(&__idx_active)],
+                            ),
+                        ),
                         sort: Some(stdlib::KeyElement::encode(&__idx_price)),
                         projection: {
                             let mut __proj = alloc::vec::Vec::new();
@@ -726,7 +905,12 @@ impl<
                     },
                     stdlib::IndexEntry {
                         name_id: 1u8,
-                        bucket: (/*ERROR*/),
+                        bucket: ::alloc::boxed::box_assume_init_into_vec_unsafe(
+                            ::alloc::intrinsics::write_box_via_move(
+                                ::alloc::boxed::Box::new_uninit(),
+                                [stdlib::IndexKey::index_key(&old)],
+                            ),
+                        ),
                         sort: None,
                         projection: {
                             let mut __proj = alloc::vec::Vec::new();
@@ -738,7 +922,12 @@ impl<
                 &[
                     stdlib::IndexEntry {
                         name_id: 0u8,
-                        bucket: (/*ERROR*/),
+                        bucket: ::alloc::boxed::box_assume_init_into_vec_unsafe(
+                            ::alloc::intrinsics::write_box_via_move(
+                                ::alloc::boxed::Box::new_uninit(),
+                                [stdlib::IndexKey::index_key(&__idx_active)],
+                            ),
+                        ),
                         sort: Some(stdlib::KeyElement::encode(&__idx_price)),
                         projection: {
                             let mut __proj = alloc::vec::Vec::new();
@@ -749,7 +938,12 @@ impl<
                     },
                     stdlib::IndexEntry {
                         name_id: 1u8,
-                        bucket: (/*ERROR*/),
+                        bucket: ::alloc::boxed::box_assume_init_into_vec_unsafe(
+                            ::alloc::intrinsics::write_box_via_move(
+                                ::alloc::boxed::Box::new_uninit(),
+                                [stdlib::IndexKey::index_key(&new)],
+                            ),
+                        ),
                         sort: None,
                         projection: {
                             let mut __proj = alloc::vec::Vec::new();
@@ -786,7 +980,12 @@ impl stdlib::Indexed for Listing {
         entries
             .push(stdlib::IndexEntry {
                 name_id: 0u8,
-                bucket: (/*ERROR*/),
+                bucket: ::alloc::boxed::box_assume_init_into_vec_unsafe(
+                    ::alloc::intrinsics::write_box_via_move(
+                        ::alloc::boxed::Box::new_uninit(),
+                        [stdlib::IndexKey::index_key(&self.active)],
+                    ),
+                ),
                 sort: Some(stdlib::KeyElement::encode(&self.price)),
                 projection: {
                     let mut __proj = alloc::vec::Vec::new();
@@ -798,7 +997,12 @@ impl stdlib::Indexed for Listing {
         entries
             .push(stdlib::IndexEntry {
                 name_id: 1u8,
-                bucket: (/*ERROR*/),
+                bucket: ::alloc::boxed::box_assume_init_into_vec_unsafe(
+                    ::alloc::intrinsics::write_box_via_move(
+                        ::alloc::boxed::Box::new_uninit(),
+                        [stdlib::IndexKey::index_key(&self.seller)],
+                    ),
+                ),
                 sort: None,
                 projection: {
                     let mut __proj = alloc::vec::Vec::new();

@@ -30,11 +30,7 @@ export interface Source {
 
 /** VCS host; `{ other }` carries the hostname for self-hosted forges. */
 export type Forge =
-  | "GitHub"
-  | "GitLab"
-  | "Bitbucket"
-  | "Codeberg"
-  | { other: string };
+  "GitHub" | "GitLab" | "Bitbucket" | "Codeberg" | { other: string };
 
 /** Build platform, in Docker `--platform` form. */
 export type Platform = "linux/amd64" | "linux/arm64";

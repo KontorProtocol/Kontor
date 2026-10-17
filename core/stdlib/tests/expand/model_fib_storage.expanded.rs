@@ -1,6 +1,19 @@
+extern crate alloc;
 use stdlib::Model;
+mod error {
+    pub type Error = String;
+}
+type Map<K, V> = stdlib::StorageMap<K, V, ()>;
 struct FibValue {
     pub value: u64,
+}
+#[automatically_derived]
+impl<__S: stdlib::WriteStorage + stdlib::ReadStorage + ?Sized> stdlib::Store<__S>
+for FibValue {
+    const STORES_ROOT: bool = false;
+    fn __set(ctx: &alloc::rc::Rc<__S>, base_path: stdlib::KeyPath, value: FibValue) {
+        stdlib::WriteStorage::__set(ctx, base_path.push_interned(0u8), value.value);
+    }
 }
 pub struct FibValueModel<__S> {
     pub base_path: stdlib::KeyPath,
@@ -89,6 +102,18 @@ impl<__S: stdlib::HasViewStorage> core::ops::Deref for FibValueWriteModel<__S> {
         &self.model
     }
 }
+#[automatically_derived]
+impl stdlib::Indexed for FibValue {
+    const HAS_INDEXES: bool = false;
+    fn index_entries(&self) -> alloc::vec::Vec<stdlib::IndexEntry> {
+        let mut entries = alloc::vec::Vec::new();
+        entries
+    }
+}
+pub trait FibValueIndex<K>: stdlib::IndexScan<K> + Sized
+where
+    K: stdlib::KeyElement + Clone + 'static,
+{}
 struct FibStorage {
     pub cache: Map<u64, FibValue>,
 }

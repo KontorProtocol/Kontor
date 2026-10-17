@@ -1,6 +1,14 @@
+extern crate alloc;
+
 use stdlib::Model;
 
-#[derive(Model)]
+mod error {
+    pub type Error = String;
+}
+
+type Map<K, V> = stdlib::StorageMap<K, V, ()>;
+
+#[derive(stdlib::Storage)]
 struct FibValue {
     pub value: u64,
 }

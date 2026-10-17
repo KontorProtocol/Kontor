@@ -1,4 +1,10 @@
+extern crate alloc;
+
 use stdlib::Storage;
+
+mod error {
+    pub type Error = String;
+}
 
 // Covering indexes (`include = …`). `cheapest` is sorted (by `price`, bucketed by
 // `active`) and covers `title`+`seller`, so `.values()`/`.iter()` read those straight

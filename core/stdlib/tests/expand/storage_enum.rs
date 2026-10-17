@@ -1,3 +1,5 @@
+extern crate alloc;
+
 use stdlib::Storage;
 
 // `Storage` on an enum emits the storage Model/Store AND the index machinery:

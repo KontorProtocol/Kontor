@@ -5,9 +5,9 @@
     (data (i32.const 0) "abcdefgh"))
   (core instance $memory (instantiate $memory))
   (core func $accept
-    (canon lower (func $accept) (memory $memory "memory")))
+    (canon lower (func $accept) (memory (core memory $memory "memory"))))
   (core func $return
-    (canon task.return (result string) (memory $memory "memory")))
+    (canon task.return (result string) (memory (core memory $memory "memory"))))
   (core module $code
     (import "host" "accept" (func $accept (param i32 i32)))
     (import "host" "return" (func $return (param i32 i32)))
@@ -25,4 +25,4 @@
         (export "return" (func $return))))))
   (func (export "run") async (param "second-length" u32) (result string)
     (canon lift (core func $code "run") async
-      (memory $memory "memory") (callback (func $code "callback")))))
+      (memory (core memory $memory "memory")) (callback (core func $code "callback")))))

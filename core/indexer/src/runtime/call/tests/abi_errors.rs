@@ -43,7 +43,10 @@ async fn actual_wasmtime_conversion_errors_match_the_compatibility_adapter() -> 
             (" string-encoding=utf16", 16, 1, 8, "utf16"),
             (" string-encoding=utf16", 1, 1, 8, ALIGNMENT_ERROR),
         ] {
-            let wat = fixture.replace("(memory $", &format!("{encoding} (memory $"));
+            let wat = fixture.replace(
+                "(memory (core memory $",
+                &format!("{encoding} (memory (core memory $"),
+            );
             let component = Component::new(&runtime.engine, wat)?;
             let mut store = runtime.make_store(BUDGET)?;
             store.set_hostcall_fuel(allowance);
@@ -161,7 +164,7 @@ async fn malformed_return_pointers_are_contract_failures() -> Result<()> {
                 r#"(component {definitions}
                 (core module $memory (memory (export "memory") 1))
                 (core instance $memory (instantiate $memory))
-                (core func $return (canon task.return (result $record) (memory $memory "memory")))
+                (core func $return (canon task.return (result $record) (memory (core memory $memory "memory"))))
                 (core module $code
                     (import "host" "return" (func $return (param i32)))
                     (func (export "run") (param i32) (result i32)
@@ -170,8 +173,8 @@ async fn malformed_return_pointers_are_contract_failures() -> Result<()> {
                 (core instance $code (instantiate $code
                     (with "host" (instance (export "return" (func $return))))))
                 (func (export "run") async (param "ptr" u32) (result $record)
-                    (canon lift (core func $code "run") async (memory $memory "memory")
-                        (callback (func $code "callback")))))"#
+                    (canon lift (core func $code "run") async (memory (core memory $memory "memory"))
+                        (callback (core func $code "callback")))))"#
             )
         } else {
             format!(
@@ -181,7 +184,7 @@ async fn malformed_return_pointers_are_contract_failures() -> Result<()> {
                     (func (export "run") (param i32) (result i32) local.get 0))
                 (core instance $code (instantiate $code))
                 (func (export "run") (param "ptr" u32) (result $record)
-                    (canon lift (core func $code "run") (memory $code "memory"))))"#
+                    (canon lift (core func $code "run") (memory (core memory $code "memory")))))"#
             )
         };
         for (ptr, expected) in [
@@ -264,7 +267,7 @@ async fn malformed_tags_and_characters_are_contract_failures() -> Result<()> {
                         (with "host" (instance (export "return" (func $return))))))
                     (func (export "run") async (param "tag" u32) (result {ty})
                         (canon lift (core func $code "run") async
-                            (callback (func $code "callback")))))"#
+                            (callback (core func $code "callback")))))"#
                 )
             } else {
                 let body = if payload {
@@ -279,7 +282,7 @@ async fn malformed_tags_and_characters_are_contract_failures() -> Result<()> {
                         (func (export "run") (param i32) (result i32) {body}))
                     (core instance $code (instantiate $code))
                     (func (export "run") (param "tag" u32) (result {ty})
-                        (canon lift (core func $code "run") (memory $code "memory"))))"#
+                        (canon lift (core func $code "run") (memory (core memory $code "memory")))))"#
                 )
             };
             assert_conversion_result(&runtime, &wat, &[Val::U32(0)], "valid").await?;
@@ -358,7 +361,7 @@ async fn typed_tag_conversions_are_contract_failures() -> Result<()> {
                 (func (export "run") (param i32) (result i32) {body}))
             (core instance $code (instantiate $code))
             (func (export "run") (param "tag" u32) (result $result)
-                (canon lift (core func $code "run") (memory $code "memory"))))"#
+                (canon lift (core func $code "run") (memory (core memory $code "memory")))))"#
         );
         let component = Component::new(&runtime.engine, wat)?;
         let mut store = runtime.make_store(BUDGET)?;

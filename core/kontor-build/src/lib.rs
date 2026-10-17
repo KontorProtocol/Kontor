@@ -340,7 +340,7 @@ fn sdk(container: &Container, stage: &Path, provenance: &Value) -> Result<()> {
         &env,
         &[
             "node",
-            "/build/.build-cache/sdk-npm/node_modules/@bytecodealliance/jco/src/jco.js",
+            "/build/.build-cache/sdk-npm/node_modules/.bin/jco",
             "transpile",
             component,
             "--name",

@@ -1,3 +1,4 @@
+extern crate alloc;
 struct ContractAddress {
     name: String,
     height: i64,

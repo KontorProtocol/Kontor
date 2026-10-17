@@ -306,8 +306,14 @@ impl<E: Executor> Reactor<E> {
                 self.handle_get_value(height, round, timeout, reply).await?;
             }
 
-            AppMsg::ReceivedProposalPart { from, part, reply } => {
-                self.handle_received_proposal_part(from, part, reply)
+            AppMsg::ReceivedProposalPart {
+                from,
+                published_by,
+                part,
+                reply,
+            } => {
+                // Relay neighbors may differ between parts of the same signed stream.
+                self.handle_received_proposal_part(published_by.unwrap_or(from), part, reply)
                     .await?;
             }
 
@@ -317,10 +323,16 @@ impl<E: Executor> Reactor<E> {
                     .map_err(|_| anyhow::anyhow!("Failed to send ExtendVote reply"))?;
             }
 
-            AppMsg::VerifyVoteExtension { reply, .. } => {
+            AppMsg::VerifyVoteExtensions {
+                extensions, reply, ..
+            } => {
+                let verdicts = extensions
+                    .into_iter()
+                    .map(|(address, _)| (address, Ok(())))
+                    .collect();
                 reply
-                    .send(Ok(()))
-                    .map_err(|_| anyhow::anyhow!("Failed to send VerifyVoteExtension reply"))?;
+                    .send(verdicts)
+                    .map_err(|_| anyhow::anyhow!("Failed to send VerifyVoteExtensions reply"))?;
             }
 
             AppMsg::Decided {

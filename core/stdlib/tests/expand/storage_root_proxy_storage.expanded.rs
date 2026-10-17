@@ -1,4 +1,17 @@
+extern crate alloc;
+use stdlib::KeyPath;
+use context::{ProcContext, ViewContext};
 use stdlib::StorageRoot;
+mod error {
+    pub type Error = String;
+}
+#[path = "support/context.rs"]
+mod context {
+    pub struct ProcContext;
+    pub struct ViewContext;
+    pub struct ProcStorage;
+    pub struct ViewStorage;
+}
 struct ProxyStorage {
     contract_address: ContractAddress,
 }
@@ -141,5 +154,21 @@ impl stdlib::HasRootModel<ProxyStorage> for crate::ViewContext {
     type Model = ProxyStorageModel<crate::context::ViewStorage>;
     fn model(&self) -> Self::Model {
         ProxyStorageModel::new(alloc::rc::Rc::new(self.storage()), KeyPath::new())
+    }
+}
+struct ContractAddress {
+    name: String,
+    height: i64,
+    tx_index: i64,
+}
+#[automatically_derived]
+impl ::core::clone::Clone for ContractAddress {
+    #[inline]
+    fn clone(&self) -> ContractAddress {
+        ContractAddress {
+            name: ::core::clone::Clone::clone(&self.name),
+            height: ::core::clone::Clone::clone(&self.height),
+            tx_index: ::core::clone::Clone::clone(&self.tx_index),
+        }
     }
 }

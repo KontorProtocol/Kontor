@@ -1,21 +1,30 @@
 # Publish this image, then pin its digest in tools/build.json. Builds use that
 # published image, not a locally rebuilt substitute. SDK tool archives are
 # separately checksum-pinned in tools/build.json.
-FROM rust:1.99.0-slim-bookworm@sha256:452176c0cefca88c0b3184ce85a4eb03e3d4fa05d2afb5366abcba853221019e
+FROM rust:1.99.1-slim-trixie@sha256:4df2ae8cfdfebdfc13a65da7f253b73d68983dc0339f2719bc17a279c913b13d
 
 # Pinned binaryen release providing wasm-opt. Both the cargo toolchain and the
 # wasm-opt binary are part of the wasm's identity, so the wasm-opt version is
 # pinned here exactly like rustc is pinned by the base tag. Regenerate outputs
 # whenever either version changes.
-ARG BINARYEN_VERSION=version_130
-ARG BINARYEN_SHA256_X86_64=0a18362361ad05465118cd8eeb72edaeec89de6894bc283576ef4e07aa3babcc
-ARG BINARYEN_SHA256_AARCH64=e6ae6e09ac40f4e14bc5be6f687c58e2995c84170013975fa641809dd3b480a0
+ARG BINARYEN_VERSION=version_133
+ARG BINARYEN_SHA256_X86_64=2dc9c7813f5375db93d96ead4b78222fcc3e2677bbb832297af4797782a37489
+ARG BINARYEN_SHA256_AARCH64=89c07ea56faf38d0fbecf36ca8ec0721756716185f265b568e133d427f299bf8
 
-# Compression output depends on brotli's exact version. Republish and regenerate
-# if Debian drops this package version.
+# Compression output is part of the committed binaries' identity.
+ARG BROTLI_VERSION=1.2.0
+ARG BROTLI_SHA256=816c96e8e8f193b40151dad7e8ff37b1221d019dbcb9c35cd3fadbfe6477dfec
 RUN apt-get update \
- && apt-get install -y --no-install-recommends brotli=1.0.9-2+b6 curl ca-certificates \
- && rm -rf /var/lib/apt/lists/*
+ && apt-get install -y --no-install-recommends curl ca-certificates cmake gcc make \
+ && curl -fsSL "https://github.com/google/brotli/archive/refs/tags/v${BROTLI_VERSION}.tar.gz" -o /tmp/brotli.tar.gz \
+ && echo "${BROTLI_SHA256}  /tmp/brotli.tar.gz" | sha256sum -c - \
+ && tar -xzf /tmp/brotli.tar.gz -C /tmp \
+ && cmake -S "/tmp/brotli-${BROTLI_VERSION}" -B /tmp/brotli-build -DCMAKE_BUILD_TYPE=Release -DBUILD_SHARED_LIBS=OFF -DBROTLI_DISABLE_TESTS=ON \
+ && cmake --build /tmp/brotli-build --target brotli --parallel 2 \
+ && install /tmp/brotli-build/brotli /usr/local/bin/brotli \
+ && brotli --version \
+ && apt-get purge -y --auto-remove cmake make \
+ && rm -rf /var/lib/apt/lists/* /tmp/brotli*
 
 # Install the prebuilt wasm-opt for the build platform's native arch. `uname -m`
 # is correct under buildx: each per-arch image is assembled on (or emulated as)

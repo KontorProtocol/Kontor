@@ -1,4 +1,10 @@
+extern crate alloc;
+
 use stdlib::Storage;
+
+mod error {
+    pub type Error = String;
+}
 
 // A struct-level sorted index (`due`, bucketed by `status`, ordered by
 // `deadline_height`) alongside a field-level `#[index]` sugar (`status`). The

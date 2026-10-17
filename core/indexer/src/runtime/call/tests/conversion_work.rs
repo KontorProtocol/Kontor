@@ -160,7 +160,7 @@ async fn record_fields_require_allocation_allowance_and_structural_fuel() -> Res
                 (core module $memory (memory (export "memory") 1))
                 (core instance $memory (instantiate $memory))
                 (core func $return
-                    (canon task.return (result $record) (memory $memory "memory")))
+                    (canon task.return (result $record) (memory (core memory $memory "memory"))))
                 (core module $code
                     (import "host" "return" (func $return (param i32)))
                     (func (export "run") (result i32)
@@ -171,7 +171,7 @@ async fn record_fields_require_allocation_allowance_and_structural_fuel() -> Res
                     (with "host" (instance (export "return" (func $return))))))
                 (func (export "run") async (result $record)
                     (canon lift (core func $code "run") async
-                        (memory $memory "memory") (callback (func $code "callback")))))"#
+                        (memory (core memory $memory "memory")) (callback (core func $code "callback")))))"#
         );
         let component = Component::new(&runtime.engine, wat)?;
         let mut store = runtime.make_store(BUDGET)?;

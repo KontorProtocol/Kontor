@@ -1,4 +1,8 @@
+extern crate alloc;
 use stdlib::Storage;
+mod error {
+    pub type Error = String;
+}
 struct ProxyStorage {
     contract_address: ContractAddress,
 }
@@ -122,3 +126,19 @@ pub trait ProxyStorageIndex<K>: stdlib::IndexScan<K> + Sized
 where
     K: stdlib::KeyElement + Clone + 'static,
 {}
+struct ContractAddress {
+    name: String,
+    height: i64,
+    tx_index: i64,
+}
+#[automatically_derived]
+impl ::core::clone::Clone for ContractAddress {
+    #[inline]
+    fn clone(&self) -> ContractAddress {
+        ContractAddress {
+            name: ::core::clone::Clone::clone(&self.name),
+            height: ::core::clone::Clone::clone(&self.height),
+            tx_index: ::core::clone::Clone::clone(&self.tx_index),
+        }
+    }
+}

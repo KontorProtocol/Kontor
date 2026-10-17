@@ -50,9 +50,7 @@ interface World {
 }
 
 type WorldItem =
-  | { function: WitFunction }
-  | { interface: { id: number } }
-  | { type: number };
+  { function: WitFunction } | { interface: { id: number } } | { type: number };
 
 interface WitFunction {
   name: string;

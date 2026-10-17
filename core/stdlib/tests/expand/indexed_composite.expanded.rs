@@ -1,4 +1,9 @@
+extern crate alloc;
 use stdlib::{Model, Storage};
+mod error {
+    pub type Error = String;
+}
+type Map<K, V> = stdlib::StorageMap<K, V, ()>;
 #[index(eligible, by = (active, challenge))]
 struct Agreement {
     #[index]
@@ -44,14 +49,27 @@ impl<__S: stdlib::ReadStorage + 'static> AgreementModel<__S> {
         entries
             .push(stdlib::IndexEntry {
                 name_id: 0u8,
-                bucket: (/*ERROR*/),
+                bucket: ::alloc::boxed::box_assume_init_into_vec_unsafe(
+                    ::alloc::intrinsics::write_box_via_move(
+                        ::alloc::boxed::Box::new_uninit(),
+                        [stdlib::IndexKey::index_key(&__idx_active)],
+                    ),
+                ),
                 sort: None,
                 projection: None,
             });
         entries
             .push(stdlib::IndexEntry {
                 name_id: 1u8,
-                bucket: (/*ERROR*/),
+                bucket: ::alloc::boxed::box_assume_init_into_vec_unsafe(
+                    ::alloc::intrinsics::write_box_via_move(
+                        ::alloc::boxed::Box::new_uninit(),
+                        [
+                            stdlib::IndexKey::index_key(&__idx_active),
+                            stdlib::IndexKey::index_key(&__idx_challenge),
+                        ],
+                    ),
+                ),
                 sort: None,
                 projection: None,
             });
@@ -142,13 +160,26 @@ impl<
                 &[
                     stdlib::IndexEntry {
                         name_id: 0u8,
-                        bucket: (/*ERROR*/),
+                        bucket: ::alloc::boxed::box_assume_init_into_vec_unsafe(
+                            ::alloc::intrinsics::write_box_via_move(
+                                ::alloc::boxed::Box::new_uninit(),
+                                [stdlib::IndexKey::index_key(&old)],
+                            ),
+                        ),
                         sort: None,
                         projection: None,
                     },
                     stdlib::IndexEntry {
                         name_id: 1u8,
-                        bucket: (/*ERROR*/),
+                        bucket: ::alloc::boxed::box_assume_init_into_vec_unsafe(
+                            ::alloc::intrinsics::write_box_via_move(
+                                ::alloc::boxed::Box::new_uninit(),
+                                [
+                                    stdlib::IndexKey::index_key(&old),
+                                    stdlib::IndexKey::index_key(&__idx_challenge),
+                                ],
+                            ),
+                        ),
                         sort: None,
                         projection: None,
                     },
@@ -156,13 +187,26 @@ impl<
                 &[
                     stdlib::IndexEntry {
                         name_id: 0u8,
-                        bucket: (/*ERROR*/),
+                        bucket: ::alloc::boxed::box_assume_init_into_vec_unsafe(
+                            ::alloc::intrinsics::write_box_via_move(
+                                ::alloc::boxed::Box::new_uninit(),
+                                [stdlib::IndexKey::index_key(&new)],
+                            ),
+                        ),
                         sort: None,
                         projection: None,
                     },
                     stdlib::IndexEntry {
                         name_id: 1u8,
-                        bucket: (/*ERROR*/),
+                        bucket: ::alloc::boxed::box_assume_init_into_vec_unsafe(
+                            ::alloc::intrinsics::write_box_via_move(
+                                ::alloc::boxed::Box::new_uninit(),
+                                [
+                                    stdlib::IndexKey::index_key(&new),
+                                    stdlib::IndexKey::index_key(&__idx_challenge),
+                                ],
+                            ),
+                        ),
                         sort: None,
                         projection: None,
                     },
@@ -184,13 +228,26 @@ impl<
                 &[
                     stdlib::IndexEntry {
                         name_id: 0u8,
-                        bucket: (/*ERROR*/),
+                        bucket: ::alloc::boxed::box_assume_init_into_vec_unsafe(
+                            ::alloc::intrinsics::write_box_via_move(
+                                ::alloc::boxed::Box::new_uninit(),
+                                [stdlib::IndexKey::index_key(&old)],
+                            ),
+                        ),
                         sort: None,
                         projection: None,
                     },
                     stdlib::IndexEntry {
                         name_id: 1u8,
-                        bucket: (/*ERROR*/),
+                        bucket: ::alloc::boxed::box_assume_init_into_vec_unsafe(
+                            ::alloc::intrinsics::write_box_via_move(
+                                ::alloc::boxed::Box::new_uninit(),
+                                [
+                                    stdlib::IndexKey::index_key(&old),
+                                    stdlib::IndexKey::index_key(&__idx_challenge),
+                                ],
+                            ),
+                        ),
                         sort: None,
                         projection: None,
                     },
@@ -198,13 +255,26 @@ impl<
                 &[
                     stdlib::IndexEntry {
                         name_id: 0u8,
-                        bucket: (/*ERROR*/),
+                        bucket: ::alloc::boxed::box_assume_init_into_vec_unsafe(
+                            ::alloc::intrinsics::write_box_via_move(
+                                ::alloc::boxed::Box::new_uninit(),
+                                [stdlib::IndexKey::index_key(&new)],
+                            ),
+                        ),
                         sort: None,
                         projection: None,
                     },
                     stdlib::IndexEntry {
                         name_id: 1u8,
-                        bucket: (/*ERROR*/),
+                        bucket: ::alloc::boxed::box_assume_init_into_vec_unsafe(
+                            ::alloc::intrinsics::write_box_via_move(
+                                ::alloc::boxed::Box::new_uninit(),
+                                [
+                                    stdlib::IndexKey::index_key(&new),
+                                    stdlib::IndexKey::index_key(&__idx_challenge),
+                                ],
+                            ),
+                        ),
                         sort: None,
                         projection: None,
                     },
@@ -229,13 +299,26 @@ impl<
                 &[
                     stdlib::IndexEntry {
                         name_id: 0u8,
-                        bucket: (/*ERROR*/),
+                        bucket: ::alloc::boxed::box_assume_init_into_vec_unsafe(
+                            ::alloc::intrinsics::write_box_via_move(
+                                ::alloc::boxed::Box::new_uninit(),
+                                [stdlib::IndexKey::index_key(&old)],
+                            ),
+                        ),
                         sort: None,
                         projection: None,
                     },
                     stdlib::IndexEntry {
                         name_id: 1u8,
-                        bucket: (/*ERROR*/),
+                        bucket: ::alloc::boxed::box_assume_init_into_vec_unsafe(
+                            ::alloc::intrinsics::write_box_via_move(
+                                ::alloc::boxed::Box::new_uninit(),
+                                [
+                                    stdlib::IndexKey::index_key(&old),
+                                    stdlib::IndexKey::index_key(&__idx_challenge),
+                                ],
+                            ),
+                        ),
                         sort: None,
                         projection: None,
                     },
@@ -243,13 +326,26 @@ impl<
                 &[
                     stdlib::IndexEntry {
                         name_id: 0u8,
-                        bucket: (/*ERROR*/),
+                        bucket: ::alloc::boxed::box_assume_init_into_vec_unsafe(
+                            ::alloc::intrinsics::write_box_via_move(
+                                ::alloc::boxed::Box::new_uninit(),
+                                [stdlib::IndexKey::index_key(&new)],
+                            ),
+                        ),
                         sort: None,
                         projection: None,
                     },
                     stdlib::IndexEntry {
                         name_id: 1u8,
-                        bucket: (/*ERROR*/),
+                        bucket: ::alloc::boxed::box_assume_init_into_vec_unsafe(
+                            ::alloc::intrinsics::write_box_via_move(
+                                ::alloc::boxed::Box::new_uninit(),
+                                [
+                                    stdlib::IndexKey::index_key(&new),
+                                    stdlib::IndexKey::index_key(&__idx_challenge),
+                                ],
+                            ),
+                        ),
                         sort: None,
                         projection: None,
                     },
@@ -272,7 +368,15 @@ impl<
                 &[
                     stdlib::IndexEntry {
                         name_id: 1u8,
-                        bucket: (/*ERROR*/),
+                        bucket: ::alloc::boxed::box_assume_init_into_vec_unsafe(
+                            ::alloc::intrinsics::write_box_via_move(
+                                ::alloc::boxed::Box::new_uninit(),
+                                [
+                                    stdlib::IndexKey::index_key(&__idx_active),
+                                    stdlib::IndexKey::index_key(&old),
+                                ],
+                            ),
+                        ),
                         sort: None,
                         projection: None,
                     },
@@ -280,7 +384,15 @@ impl<
                 &[
                     stdlib::IndexEntry {
                         name_id: 1u8,
-                        bucket: (/*ERROR*/),
+                        bucket: ::alloc::boxed::box_assume_init_into_vec_unsafe(
+                            ::alloc::intrinsics::write_box_via_move(
+                                ::alloc::boxed::Box::new_uninit(),
+                                [
+                                    stdlib::IndexKey::index_key(&__idx_active),
+                                    stdlib::IndexKey::index_key(&new),
+                                ],
+                            ),
+                        ),
                         sort: None,
                         projection: None,
                     },
@@ -310,14 +422,27 @@ impl stdlib::Indexed for Agreement {
         entries
             .push(stdlib::IndexEntry {
                 name_id: 0u8,
-                bucket: (/*ERROR*/),
+                bucket: ::alloc::boxed::box_assume_init_into_vec_unsafe(
+                    ::alloc::intrinsics::write_box_via_move(
+                        ::alloc::boxed::Box::new_uninit(),
+                        [stdlib::IndexKey::index_key(&self.active)],
+                    ),
+                ),
                 sort: None,
                 projection: None,
             });
         entries
             .push(stdlib::IndexEntry {
                 name_id: 1u8,
-                bucket: (/*ERROR*/),
+                bucket: ::alloc::boxed::box_assume_init_into_vec_unsafe(
+                    ::alloc::intrinsics::write_box_via_move(
+                        ::alloc::boxed::Box::new_uninit(),
+                        [
+                            stdlib::IndexKey::index_key(&self.active),
+                            stdlib::IndexKey::index_key(&self.challenge),
+                        ],
+                    ),
+                ),
                 sort: None,
                 projection: None,
             });

@@ -1,4 +1,10 @@
+extern crate alloc;
+
 use stdlib::Storage;
+
+mod error {
+    pub type Error = String;
+}
 
 #[derive(Storage)]
 struct Challenge {

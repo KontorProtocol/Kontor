@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
 
 env:
-  BITCOIN_VERSION: v31.0
+  BITCOIN_VERSION: v31.1
 
 jobs:
   build:
@@ -28,7 +28,7 @@ jobs:
 
       - name: Install dependencies (macOS)
         if: runner.os == 'macOS'
-        # Explicit `libevent` + `pkgconf` per the v31.0 macOS build doc.
+        # Explicit `libevent` + `pkgconf` per the v31.1 macOS build doc.
         # When the runner image changes Homebrew's libevent ABI version
         # (e.g. 2.1.7 → 2.1.8), the resulting binary's dyld path bumps with
         # it; rerun this workflow on the new image to refresh the release.
@@ -51,7 +51,7 @@ jobs:
           bitcoin/build/bin/bitcoind --version
 
       - name: Upload binaries
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@v7
         with:
           name: bitcoin-${{ runner.os }}-${{ runner.arch }}
           path: |

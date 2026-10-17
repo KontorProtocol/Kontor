@@ -157,7 +157,7 @@ wit_bindgen::generate!({
         "kontor:built-in/file-registry-types/verify-result.invalid": [ #[cfg_attr(feature = "host", component(name = "invalid"))] ],
     },
     runtime_path: "stdlib::wit_bindgen::rt",
-    async: false,
+    sync: true,
 });
 
 pub use kontor::built_in::file_registry_types;

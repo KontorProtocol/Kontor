@@ -8,4 +8,4 @@
   (core instance $code (instantiate $code))
   (func (export "run") (param "values" (list u32)) (result u32)
     (canon lift (core func $code "run")
-      (memory $code "memory") (realloc (func $code "realloc")))))
+      (memory (core memory $code "memory")) (realloc (core func $code "realloc")))))

@@ -40,8 +40,8 @@
     "kontor-codegen": "./dist/cli.js"
   },
   "peerDependencies": {
-    "vite": "^8.0.0",
-    "@kontor/sdk-native": "*"
+    "@kontor/sdk-native": "*",
+    "vite": "^8.0.0"
   },
   "peerDependenciesMeta": {
     "vite": {
@@ -65,19 +65,20 @@
     "format:check": "prettier --check ."
   },
   "devDependencies": {
-    "@bytecodealliance/jco": "1.20.0",
-    "@types/node": "^25.8.0",
-    "@vitest/browser-playwright": "^4.1.6",
-    "prettier": "3.8.3",
-    "typescript": "^6.0.3",
-    "vite": "^8.0.13",
-    "vite-plugin-dts": "^5.0.0",
-    "vitest": "^4.1.6"
+    "@bytecodealliance/jco": "1.39.0",
+    "@types/node": "^26.6.5",
+    "@typescript/typescript6": "^6.0.2",
+    "@vitest/browser-playwright": "^5.0.5",
+    "prettier": "3.9.10",
+    "typescript": "^7.0.2",
+    "vite": "^8.3.4",
+    "vite-plugin-dts": "^5.1.2",
+    "vitest": "^5.0.5"
   },
   "dependencies": {
-    "@scure/base": "^2.2.0",
-    "@scure/bip32": "^2.2.0",
-    "@scure/bip39": "^2.2.0",
-    "@scure/btc-signer": "^2.2.0"
+    "@scure/base": "^2.4.0",
+    "@scure/bip32": "^2.4.0",
+    "@scure/bip39": "^2.4.0",
+    "@scure/btc-signer": "^2.4.1"
   }
 }
