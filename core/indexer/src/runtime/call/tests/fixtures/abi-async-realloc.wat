@@ -15,5 +15,5 @@
       (with "host" (instance (export "return" (func $return))))))
   (func (export "run") async (param "values" (list u32)) (result u32)
     (canon lift (core func $code "run") async
-      (memory $code "memory") (realloc (func $code "realloc"))
-      (callback (func $code "callback")))))
+      (memory (core memory $code "memory")) (realloc (core func $code "realloc"))
+      (callback (core func $code "callback")))))

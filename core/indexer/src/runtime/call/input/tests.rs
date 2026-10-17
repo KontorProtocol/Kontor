@@ -246,7 +246,7 @@ async fn argument_lowering_is_reserved_before_guest_allocation() -> Result<()> {
             (core instance $guest (instantiate $guest))
             (func (export "run") (param "text" string)
                 (canon lift (core func $guest "run")
-                    (memory $guest "memory") (realloc (func $guest "realloc")))))"#,
+                    (memory (core memory $guest "memory")) (realloc (core func $guest "realloc")))))"#,
     )?;
     let call = UntypedFuncCall::parse("run(\"aé𝄞\")")?;
     let construction = 50;

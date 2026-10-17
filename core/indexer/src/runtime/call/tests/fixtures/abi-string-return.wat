@@ -9,4 +9,4 @@
       i32.const 64))
   (core instance $code (instantiate $code))
   (func (export "run") (param "ptr" u32) (param "len" u32) (result string)
-    (canon lift (core func $code "run") (memory $code "memory"))))
+    (canon lift (core func $code "run") (memory (core memory $code "memory")))))

@@ -31,7 +31,7 @@ fn component(import: &str, ty: &str, encoding: &str, trap: bool, count: u32) -> 
                     {allocate}))
             (core instance $memory (instantiate $memory))
             (core func $get (canon lower (func $get)
-                (memory $memory "memory") (realloc (func $memory "realloc")) {encoding}))
+                (memory (core memory $memory "memory")) (realloc (core func $memory "realloc")) {encoding}))
             (core module $guest
                 (import "host" "memory" (memory 1))
                 (import "host" "get" (func $get (param i32)))

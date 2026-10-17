@@ -18,4 +18,4 @@
         (export "return" (func $return))))))
   (func (export "run") async (param "kind" u32) (result u32)
     (canon lift (core func $code "run") async
-      (callback (func $code "callback")))))
+      (callback (core func $code "callback")))))

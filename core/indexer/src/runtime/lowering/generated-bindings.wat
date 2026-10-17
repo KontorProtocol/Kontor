@@ -8,7 +8,7 @@
             i32.const 1024))
     (core instance $memory (instantiate $memory))
     (core func $hash (canon lower (func $hash)
-        (memory $memory "memory") (realloc (func $memory "realloc"))))
+        (memory (core memory $memory "memory")) (realloc (core func $memory "realloc"))))
     (core module $guest
         (import "host" "memory" (memory 1))
         (import "host" "hash" (func $hash (param i32 i32 i32)))
