@@ -23,7 +23,7 @@ RUN apt-get update \
  && cmake --build /tmp/brotli-build --target brotli --parallel 2 \
  && install /tmp/brotli-build/brotli /usr/local/bin/brotli \
  && brotli --version \
- && apt-get purge -y --auto-remove cmake gcc make \
+ && apt-get purge -y --auto-remove cmake make \
  && rm -rf /var/lib/apt/lists/* /tmp/brotli*
 
 # Install the prebuilt wasm-opt for the build platform's native arch. `uname -m`

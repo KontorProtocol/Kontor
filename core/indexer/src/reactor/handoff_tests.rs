@@ -260,7 +260,7 @@ async fn check_early_proposal(
     reactor.accept_proposal_parts(forged, reply).await?;
     assert!(received.await?.is_none());
     assert_eq!(reactor.consensus.early_proposals.len(), already_buffered);
-    let publisher = PeerId::random();
+    let publisher = proposal_peer(1);
     let stream_id = StreamId::new(vec![target_round as u8].into());
     for (sequence, content) in parts
         .parts
@@ -273,7 +273,7 @@ async fn check_early_proposal(
         let (reply, received) = oneshot::channel();
         // Exercise both relayed parts and transports without publisher metadata.
         let (from, published_by) = if target_round == 0 {
-            (PeerId::random(), Some(publisher))
+            (proposal_peer(sequence as u8 + 2), Some(publisher))
         } else {
             (publisher, None)
         };
@@ -317,6 +317,12 @@ async fn check_early_proposal(
     assert_eq!(proposals[0].validity, Validity::Valid);
     assert!(reactor.consensus.early_proposals.is_empty());
     Ok(())
+}
+
+fn proposal_peer(seed: u8) -> PeerId {
+    let mut bytes = vec![0x12, 0x20];
+    bytes.extend_from_slice(&[seed; 32]);
+    PeerId::from_bytes(&bytes).expect("valid sha256 multihash peer id")
 }
 
 fn signed_block_proposal(key: &PrivateKey, height: u64, round: u32, block: u64) -> ProposalParts {
