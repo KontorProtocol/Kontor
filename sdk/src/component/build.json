@@ -16,9 +16,9 @@
       "version": "1.262.0"
     }
   },
-  "brotli": "brotli 1.0.9",
+  "brotli": "brotli 1.2.0",
   "clang": "clang version 23.1.0-wasi-sdk (https://github.com/llvm/llvm-project 895aa2c896ada719451be2e3673c83da8ddf1141)\nTarget: wasm32-unknown-wasip1\nThread model: posix\nInstalledDir: /build/.build-cache/tools/f7e243dff54d60bcc576e94d6166b69f410f2500ae4a9ceef34315be10e77971/bin\nConfiguration file: /build/.build-cache/tools/f7e243dff54d60bcc576e94d6166b69f410f2500ae4a9ceef34315be10e77971/bin/clang.cfg",
-  "image": "docker.io/kontorprotocol/kontor-build@sha256:3020053e30fb0d564351878e5f291063e392e2faed92ea8ed5ab7b8b0c00444a",
+  "image": "docker.io/kontorprotocol/kontor-build@sha256:ee48ee0feb32df09a98baa1fb5d484474ab29cec9258fac07fbdcab81f050cb4",
   "jco": "1.39.0",
   "node": "v24.22.0",
   "npm_lock_sha256": "27c4e465d46ee517b7962fd391fddbcc07e5f1403a71d668689c6e7e6aa4893b",

@@ -1,6 +1,6 @@
 {
-  "brotli": "brotli 1.0.9",
-  "image": "docker.io/kontorprotocol/kontor-build@sha256:3020053e30fb0d564351878e5f291063e392e2faed92ea8ed5ab7b8b0c00444a",
+  "brotli": "brotli 1.2.0",
+  "image": "docker.io/kontorprotocol/kontor-build@sha256:ee48ee0feb32df09a98baa1fb5d484474ab29cec9258fac07fbdcab81f050cb4",
   "platform": "linux/arm64",
   "rustc": "rustc 1.99.1 (58cf8f9c3 2026-10-13)",
   "wasm_opt": "wasm-opt version 133 (version_133)"

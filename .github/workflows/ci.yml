@@ -110,9 +110,9 @@ jobs:
         # path resolves directly to Homebrew's libevent_core dylib, and a
         # missing/ABI-skewed version aborts before `--version` can print.
         run: brew install boost libevent zeromq
-      - name: Download Bitcoin Core v31.0
+      - name: Download Bitcoin Core v31.1
         run: |
-          curl -L -o bitcoin.zip "https://github.com/KontorProtocol/Kontor/releases/download/bitcoin-v31.0/bitcoin-${{ runner.os }}-${{ runner.arch }}.zip"
+          curl -L -o bitcoin.zip "https://github.com/KontorProtocol/Kontor/releases/download/bitcoin-v31.1/bitcoin-${{ runner.os }}-${{ runner.arch }}.zip"
           unzip bitcoin.zip -d bitcoin-bin
           chmod +x bitcoin-bin/*
           echo "${{ github.workspace }}/bitcoin-bin" >> $GITHUB_PATH
@@ -232,9 +232,9 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y libzmq3-dev libboost-all-dev libevent-dev
-      - name: Download Bitcoin Core v31.0
+      - name: Download Bitcoin Core v31.1
         run: |
-          curl -L -o bitcoin.zip "https://github.com/KontorProtocol/Kontor/releases/download/bitcoin-v31.0/bitcoin-${{ runner.os }}-${{ runner.arch }}.zip"
+          curl -L -o bitcoin.zip "https://github.com/KontorProtocol/Kontor/releases/download/bitcoin-v31.1/bitcoin-${{ runner.os }}-${{ runner.arch }}.zip"
           unzip bitcoin.zip -d bitcoin-bin
           chmod +x bitcoin-bin/*
           echo "${{ github.workspace }}/bitcoin-bin" >> $GITHUB_PATH

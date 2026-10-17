@@ -113,6 +113,7 @@ impl Validator {
 mod tests {
     extern crate std;
     use std::format;
+    use wit_parser::TypeDefKind;
 
     use super::*;
 
@@ -442,7 +443,7 @@ world root {
 
     #[test]
     fn test_invalid_empty_record() {
-        let result = validate(
+        let wit = wrap(
             r#"
     record empty {}
 
@@ -450,6 +451,23 @@ world root {
     export get: async func(ctx: borrow<view-context>) -> empty;
 "#,
         );
+        let error = Validator::validate_str(&wit).unwrap_err();
+        assert!(error.message.contains("empty record"));
+
+        // Binary decoding can supply a Resolve without going through the WIT parser.
+        let (_, mut resolve) =
+            Validator::validate_str(&wit.replace("record empty {}", "record empty { value: u64 }"))
+                .unwrap();
+        let (_, definition) = resolve
+            .types
+            .iter_mut()
+            .find(|(_, definition)| definition.name.as_deref() == Some("empty"))
+            .unwrap();
+        let TypeDefKind::Record(record) = &mut definition.kind else {
+            panic!("expected record");
+        };
+        record.fields.clear();
+        let result = Validator::validate_resolve(&resolve);
         assert!(result.has_errors());
         assert!(
             result

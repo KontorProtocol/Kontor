@@ -28,8 +28,10 @@ def isNewArchitectureEnabled() {
 }
 
 apply plugin: "com.android.library"
-// AGP 9 supplies Kotlin; older consuming apps still need the separate plugin.
-if (com.android.Version.ANDROID_GRADLE_PLUGIN_VERSION.tokenize('.')[0].toInteger() < 9) {
+// Respect consuming apps that opt out of AGP 9's built-in Kotlin.
+def builtInKotlin = com.android.Version.ANDROID_GRADLE_PLUGIN_VERSION.tokenize('.')[0].toInteger() >= 9 &&
+    providers.gradleProperty("android.builtInKotlin").getOrElse("true").toBoolean()
+if (!builtInKotlin) {
   apply plugin: "kotlin-android"
 }
 
