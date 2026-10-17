@@ -124,7 +124,7 @@ jobs:
       # compiles no wasm — no wasm32 target or wasm-opt needed here. cargo-expand
       # is still required by the stdlib macro-expansion tests.
       - name: Install cargo expand
-        run: cargo binstall cargo-expand --no-confirm
+        run: cargo binstall cargo-expand --version 1.0.127 --no-confirm
       - name: Test CI diagnostics collector
         run: python3 -m unittest discover -s tools/ci -p 'test_*.py'
       - name: Prepare macOS crash diagnostics

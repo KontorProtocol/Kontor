@@ -1,3 +1,4 @@
+extern crate alloc;
 use stdlib::Model;
 enum Error {
     Message(String),

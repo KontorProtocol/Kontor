@@ -1,4 +1,8 @@
+extern crate alloc;
 use stdlib::Model;
+mod error {
+    pub type Error = String;
+}
 struct ProxyStorage {
     contract_address: ContractAddress,
 }
@@ -96,5 +100,21 @@ impl<__S: stdlib::HasViewStorage> core::ops::Deref for ProxyStorageWriteModel<__
     type Target = ProxyStorageModel<__S::View>;
     fn deref(&self) -> &Self::Target {
         &self.model
+    }
+}
+struct ContractAddress {
+    name: String,
+    height: i64,
+    tx_index: i64,
+}
+#[automatically_derived]
+impl ::core::clone::Clone for ContractAddress {
+    #[inline]
+    fn clone(&self) -> ContractAddress {
+        ContractAddress {
+            name: ::core::clone::Clone::clone(&self.name),
+            height: ::core::clone::Clone::clone(&self.height),
+            tx_index: ::core::clone::Clone::clone(&self.tx_index),
+        }
     }
 }

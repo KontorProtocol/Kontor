@@ -1,4 +1,12 @@
+extern crate alloc;
+
 use stdlib::{Model, Storage};
+
+mod error {
+    pub type Error = String;
+}
+
+type Map<K, V> = stdlib::StorageMap<K, V, ()>;
 
 // `Storage` gives the value its model (with the `__index_entries` reader, since
 // it has indexed fields); `Indexed` gives the value-level entries used to compute

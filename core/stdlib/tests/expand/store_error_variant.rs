@@ -1,3 +1,5 @@
+extern crate alloc;
+
 use stdlib::Store;
 
 #[derive(Store)]

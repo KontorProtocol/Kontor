@@ -1,3 +1,5 @@
+extern crate alloc;
+
 #[derive(stdlib::Store)]
 struct ContractAddress {
     name: String,

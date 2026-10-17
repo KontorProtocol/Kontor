@@ -1,3 +1,4 @@
+extern crate alloc;
 use stdlib::Storage;
 enum ChallengeStatus {
     Active,

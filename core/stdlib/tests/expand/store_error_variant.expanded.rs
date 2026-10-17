@@ -1,3 +1,4 @@
+extern crate alloc;
 use stdlib::Store;
 enum Error {
     Message(String),

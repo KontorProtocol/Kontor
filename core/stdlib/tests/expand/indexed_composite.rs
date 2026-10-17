@@ -1,4 +1,12 @@
+extern crate alloc;
+
 use stdlib::{Model, Storage};
+
+mod error {
+    pub type Error = String;
+}
+
+type Map<K, V> = stdlib::StorageMap<K, V, ()>;
 
 // A composite index over a bool and an `Option` field: `eligible` partitions on
 // (active, challenge-presence), so `where_eligible(true, Presence::Absent)` is a

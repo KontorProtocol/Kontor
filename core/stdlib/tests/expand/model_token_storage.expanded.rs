@@ -1,4 +1,6 @@
+extern crate alloc;
 use stdlib::Model;
+type Map<K, V> = stdlib::StorageMap<K, V, ()>;
 struct TokenStorage {
     pub ledger: Map<String, u64>,
 }
