@@ -75,23 +75,19 @@ impl Runtime {
         if let Some(error) = self.guest_memory_backing_failure() {
             return Err(error);
         }
-        if self
-            .guest_memory_limiter
-            .as_ref()
-            .is_some_and(|limiter| limiter.quota_denied())
-        {
-            return match result {
-                Err(ExecutionError::NonDeterministic(error))
-                    if error
+        // Wasmtime can swallow a GC growth denial during retry. Once a backing
+        // failure is ruled out, the resulting heap OOM is a deterministic limit.
+        match result {
+            Err(ExecutionError::NonDeterministic(error))
+                if self.guest_memory_limiter.is_some()
+                    && error
                         .chain()
                         .any(|cause| cause.is::<GcHeapOutOfMemory<()>>()) =>
-                {
-                    Err(ExecutionError::Deterministic(error))
-                }
-                other => other,
-            };
+            {
+                Err(ExecutionError::Deterministic(error))
+            }
+            other => other,
         }
-        result
     }
 
     pub(super) async fn invoke(

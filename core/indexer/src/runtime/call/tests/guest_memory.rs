@@ -95,7 +95,6 @@ async fn gc_quota_denial_is_deterministic_after_wasmtime_retries() -> Result<()>
             .any(|cause| cause.is::<GcHeapOutOfMemory<()>>()),
         "{error:#}"
     );
-    assert!(root.quota_denied());
     assert!(!root.backing_failed());
 
     let (mut runtime, _dir, _name) = test_runtime().await?;
@@ -108,6 +107,46 @@ async fn gc_quota_denial_is_deterministic_after_wasmtime_retries() -> Result<()>
         runtime.classify_guest_memory_result(Ok("42".to_string()))?,
         "42"
     );
+    Ok(())
+}
+
+#[tokio::test]
+async fn gc_heap_maximum_denial_is_deterministic() -> Result<()> {
+    let engine = Runtime::new_engine()?;
+    let module = Module::new(
+        &engine,
+        "(module (type $a (array (mut i8))) (func (export \"allocate\") (param i32) local.get 0 array.new_default $a drop))",
+    )?;
+    let root = GuestMemoryLimiter::new_root(GuestMemoryLimits {
+        per_root: 2 * PAGE,
+        memories: 4,
+        instances: 8,
+        tables: 4,
+        table_elements: 16,
+    });
+    let mut store = Store::new(&engine, root.new_child());
+    store.limiter(|limiter| limiter);
+    store.set_fuel(1_000_000)?;
+    let instance = Instance::new(&mut store, &module, &[])?;
+    let allocate = instance.get_typed_func::<i32, ()>(&mut store, "allocate")?;
+    allocate.call(&mut store, 1)?;
+    assert!(store.gc_heap_capacity() > 0);
+    assert_eq!(root.admitted(), store.gc_heap_capacity());
+    let error = allocate.call(&mut store, -65_536).unwrap_err();
+    assert!(
+        error
+            .chain()
+            .any(|cause| cause.is::<GcHeapOutOfMemory<()>>()),
+        "{error:#}"
+    );
+    assert!(!root.backing_failed());
+
+    let (mut runtime, _dir, _name) = test_runtime().await?;
+    runtime.guest_memory_limiter = Some(root.new_child());
+    assert!(matches!(
+        runtime.classify_guest_memory_result(Err(ExecutionError::NonDeterministic(error.into()))),
+        Err(ExecutionError::Deterministic(_))
+    ));
     Ok(())
 }
 

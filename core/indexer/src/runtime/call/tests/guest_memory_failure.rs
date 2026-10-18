@@ -177,7 +177,6 @@ fn admitted_linear_and_gc_backing_failures_are_latched() -> Result<()> {
         let error = allocate.call(&mut store, ()).unwrap_err();
         assert!(failures.load(Ordering::SeqCst) > 0);
         assert!(root.backing_failed());
-        assert!(!root.quota_denied());
         assert!(root.admitted() > 0);
         if matches!(kind, Kind::Gc) {
             assert!(

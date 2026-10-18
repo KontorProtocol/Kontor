@@ -87,7 +87,7 @@ fn normal_page_growth_boundaries_never_report_backing_failure() -> Result<()> {
 }
 
 #[test]
-fn guest_gc_succeeds_with_budget_and_preserves_quota_denial() -> Result<()> {
+fn guest_gc_succeeds_with_budget_and_rejects_excess() -> Result<()> {
     let engine = Runtime::new_engine()?;
     let module = Module::new(
         &engine,
@@ -101,7 +101,6 @@ fn guest_gc_succeeds_with_budget_and_preserves_quota_denial() -> Result<()> {
     assert_eq!(allocate.call(&mut successful, 1_000)?, 1_000);
     assert!(root.admitted() > 0);
     assert_eq!(root.admitted(), successful.gc_heap_capacity());
-    assert!(!root.quota_denied());
     assert!(!root.backing_failed());
     drop(successful);
     assert_eq!(root.admitted(), 0);
@@ -118,7 +117,6 @@ fn guest_gc_succeeds_with_budget_and_preserves_quota_denial() -> Result<()> {
             .any(|cause| cause.is::<GcHeapOutOfMemory<()>>()),
         "{error:#}"
     );
-    assert!(limited.quota_denied());
     assert!(!limited.backing_failed());
     assert_eq!(limited.admitted(), 0);
     assert_eq!(denied.gc_heap_capacity(), 0);

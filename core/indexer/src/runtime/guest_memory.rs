@@ -1,6 +1,6 @@
 use std::fmt;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicU8, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
 use wasmtime::{Error, ResourceLimiter, Result};
 
@@ -28,12 +28,9 @@ pub(crate) struct GuestMemoryLimits {
 
 struct RootBudget {
     admitted: AtomicUsize,
-    failure_flags: AtomicU8,
+    backing_failed: AtomicBool,
     limit: usize,
 }
-
-const QUOTA_DENIED: u8 = 1;
-const BACKING_FAILED: u8 = 2;
 
 pub(crate) struct GuestMemoryLimiter {
     root: Arc<RootBudget>,
@@ -48,7 +45,7 @@ impl GuestMemoryLimiter {
         Self {
             root: Arc::new(RootBudget {
                 admitted: AtomicUsize::new(0),
-                failure_flags: AtomicU8::new(0),
+                backing_failed: AtomicBool::new(false),
                 limit: limits.per_root,
             }),
             local_admitted: 0,
@@ -64,18 +61,11 @@ impl GuestMemoryLimiter {
         }
     }
 
-    pub(crate) fn quota_denied(&self) -> bool {
-        self.root.failure_flags.load(Ordering::SeqCst) & QUOTA_DENIED != 0
-    }
-
     pub(crate) fn backing_failed(&self) -> bool {
-        self.root.failure_flags.load(Ordering::SeqCst) & BACKING_FAILED != 0
+        self.root.backing_failed.load(Ordering::SeqCst)
     }
 
-    fn deny_growth(&self) -> Result<bool> {
-        self.root
-            .failure_flags
-            .fetch_or(QUOTA_DENIED, Ordering::SeqCst);
+    fn deny_growth() -> Result<bool> {
         Err(GuestMemoryLimitExceeded.into())
     }
 
@@ -112,19 +102,19 @@ impl ResourceLimiter for GuestMemoryLimiter {
             return Ok(false);
         }
         if desired < current {
-            return self.deny_growth();
+            return Self::deny_growth();
         }
         let delta = desired - current;
         let Some(local) = self.local_admitted.checked_add(delta) else {
-            return self.deny_growth();
+            return Self::deny_growth();
         };
         let mut used = self.root.admitted.load(Ordering::SeqCst);
         loop {
             let Some(next) = used.checked_add(delta) else {
-                return self.deny_growth();
+                return Self::deny_growth();
             };
             if next > self.root.limit {
-                return self.deny_growth();
+                return Self::deny_growth();
             }
             match self.root.admitted.compare_exchange_weak(
                 used,
@@ -151,9 +141,7 @@ impl ResourceLimiter for GuestMemoryLimiter {
     }
 
     fn memory_grow_failed(&mut self, error: Error) -> Result<()> {
-        self.root
-            .failure_flags
-            .fetch_or(BACKING_FAILED, Ordering::SeqCst);
+        self.root.backing_failed.store(true, Ordering::SeqCst);
         Err(ExecutionError::NonDeterministic(error.into()).into())
     }
 
