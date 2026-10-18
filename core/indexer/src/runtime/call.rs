@@ -4,7 +4,7 @@ use super::ExecutionError;
 use futures_util::FutureExt;
 use futures_util::future::OptionFuture;
 use wasmtime::{
-    AsContext, AsContextMut, Store, Trap,
+    AsContext, AsContextMut, GcHeapOutOfMemory, Store, Trap,
     component::{
         Accessor, Func, Resource, Type, Val,
         wasm_wave::{
@@ -61,6 +61,39 @@ pub(super) struct CallOutcome {
 }
 
 impl Runtime {
+    fn guest_memory_backing_failure(&self) -> Option<ExecutionError> {
+        self.guest_memory_limiter
+            .as_ref()
+            .filter(|limiter| limiter.backing_failed())
+            .map(|_| ExecutionError::NonDeterministic(anyhow!("guest memory backing failure")))
+    }
+
+    fn classify_guest_memory_result(
+        &self,
+        result: Result<String, ExecutionError>,
+    ) -> Result<String, ExecutionError> {
+        if let Some(error) = self.guest_memory_backing_failure() {
+            return Err(error);
+        }
+        if self
+            .guest_memory_limiter
+            .as_ref()
+            .is_some_and(|limiter| limiter.quota_denied())
+        {
+            return match result {
+                Err(ExecutionError::NonDeterministic(error))
+                    if error
+                        .chain()
+                        .any(|cause| cause.is::<GcHeapOutOfMemory<()>>()) =>
+                {
+                    Err(ExecutionError::Deterministic(error))
+                }
+                other => other,
+            };
+        }
+        result
+    }
+
     pub(super) async fn invoke(
         &self,
         contract_address: &ContractAddress,
@@ -171,14 +204,17 @@ impl Runtime {
         nested: bool,
     ) -> Result<(Result<String, ExecutionError>, Store<Runtime>), ExecutionError> {
         let starting_fuel = store.get_fuel().map_err(anyhow::Error::from)?;
-        let prepared = match self
+        let prepared = self
             .prepare_in_store(&mut store, contract_address, signer, payment, expr, nested)
-            .await
-        {
+            .await;
+        if let Some(error) = self.guest_memory_backing_failure() {
+            return Ok((Err(error), store));
+        }
+        let prepared = match prepared {
             Ok(prepared) => prepared,
             // Keep the store even on failed initialization or argument resolution:
             // the parent still pays for work done before preparation failed.
-            Err(error) => return Ok((Err(error), store)),
+            Err(error) => return Ok((self.classify_guest_memory_result(Err(error)), store)),
         };
         let PreparedCall {
             contract_id,
@@ -199,7 +235,8 @@ impl Runtime {
 
         let execution = self
             .call_guest(store, func, params, results, is_fallback)
-            .await;
+            .await
+            .map(|(result, store)| (self.classify_guest_memory_result(result), store));
         self.stack.pop().await;
         let succeeded = execution
             .as_ref()
@@ -568,6 +605,11 @@ impl Runtime {
         gas: u64,
         result: Result<String, ExecutionError>,
     ) -> Result<String, ExecutionError> {
+        // Infrastructure failures abort the transaction, so they cannot own
+        // a committed contract-result row.
+        if matches!(&result, Err(ExecutionError::NonDeterministic(_))) {
+            return result;
+        }
         // The highest result index is the API/SDK's canonical operation result.
         // Internal fee transfers must never masquerade as that outcome.
         if contract_id == TOKEN_CONTRACT_ID && matches!(func_name, "hold" | "release") {

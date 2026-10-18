@@ -4,6 +4,7 @@ use std::str::Utf8Error;
 use wasmtime::{Error, OutOfMemory, Trap};
 
 use crate::runtime::ExecutionError;
+use crate::runtime::guest_memory::GuestMemoryLimitExceeded;
 
 pub(super) fn is_deterministic(error: &Error) -> bool {
     match error.downcast_ref::<ExecutionError>() {
@@ -13,6 +14,9 @@ pub(super) fn is_deterministic(error: &Error) -> bool {
     }
     if error.is::<OutOfMemory>() {
         return false;
+    }
+    if error.is::<GuestMemoryLimitExceeded>() {
+        return true;
     }
     if error.is::<Trap>() {
         return true;
