@@ -3,6 +3,7 @@ use indexer_types::Payment;
 use libsql::params;
 use wasmtime::{GcHeapOutOfMemory, Instance, Module, Store};
 
+use super::super::error::is_deterministic;
 use super::funded;
 use crate::runtime::guest_memory::{
     GuestMemoryLimitExceeded, GuestMemoryLimiter, GuestMemoryLimits,
@@ -13,6 +14,60 @@ use crate::runtime::{
 use crate::test_utils::test_runtime;
 
 const PAGE: usize = 65_536;
+
+#[test]
+fn table_and_store_count_limits_are_deterministic() -> Result<()> {
+    let engine = Runtime::new_engine()?;
+    let limits = GuestMemoryLimits {
+        per_root: PAGE,
+        memories: 4,
+        instances: 8,
+        tables: 4,
+        table_elements: 16,
+    };
+    for (name, wat, limits) in [
+        (
+            "instance count",
+            "(module)",
+            GuestMemoryLimits {
+                instances: 0,
+                ..limits
+            },
+        ),
+        (
+            "memory count",
+            "(module (memory 0))",
+            GuestMemoryLimits {
+                memories: 0,
+                ..limits
+            },
+        ),
+        (
+            "table count",
+            "(module (table 0 funcref))",
+            GuestMemoryLimits {
+                tables: 0,
+                ..limits
+            },
+        ),
+        (
+            "table minimum",
+            "(module (table 1 funcref))",
+            GuestMemoryLimits {
+                table_elements: 0,
+                ..limits
+            },
+        ),
+    ] {
+        let module = Module::new(&engine, wat)?;
+        let mut store = Store::new(&engine, GuestMemoryLimiter::new_root(limits));
+        store.limiter(|limiter| limiter);
+        store.set_fuel(1_000_000)?;
+        let error = Instance::new(&mut store, &module, &[]).unwrap_err();
+        assert!(is_deterministic(&error), "{name}: {error:#}");
+    }
+    Ok(())
+}
 
 #[tokio::test]
 async fn gc_quota_denial_is_deterministic_after_wasmtime_retries() -> Result<()> {

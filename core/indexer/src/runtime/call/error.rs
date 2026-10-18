@@ -30,8 +30,8 @@ pub(super) fn is_deterministic(error: &Error) -> bool {
     if cause.is::<Utf8Error>() || cause.is::<DecodeUtf16Error>() || cause.is::<CharTryFromError>() {
         return true;
     }
-    // Wasmtime 48.0.4 has no public types for these errors. Real conversion
-    // regressions pin each message; review them when upgrading Wasmtime.
+    // Wasmtime 49.0.3 has no public types for these errors. Tests pin real
+    // conversion and resource-limit messages; review them on upgrade.
     let message = cause.to_string();
     matches!(
         message.as_str(),
@@ -47,6 +47,27 @@ pub(super) fn is_deterministic(error: &Error) -> bool {
             | "invalid option discriminant"
             | "invalid expected discriminant"
     ) || is_invalid_discriminant(&message)
+        || is_resource_limit(&message)
+}
+
+fn is_resource_limit(message: &str) -> bool {
+    if let Some((resource, count)) = message
+        .strip_prefix("resource limit exceeded: ")
+        .and_then(|s| s.split_once(" count too high at "))
+    {
+        return matches!(resource, "instance" | "memory" | "table")
+            && count
+                .parse::<usize>()
+                .is_ok_and(|value| count == value.to_string());
+    }
+    message
+        .strip_prefix("table minimum size of ")
+        .and_then(|s| s.strip_suffix(" elements exceeds table limits"))
+        .is_some_and(|count| {
+            count
+                .parse::<usize>()
+                .is_ok_and(|value| count == value.to_string())
+        })
 }
 
 fn is_invalid_discriminant(message: &str) -> bool {
