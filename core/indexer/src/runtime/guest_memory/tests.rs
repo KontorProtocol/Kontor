@@ -16,6 +16,7 @@ struct TestState {
 fn limits(per_root: usize) -> GuestMemoryLimits {
     GuestMemoryLimits {
         per_root,
+        table_elements_per_root: 32,
         memories: 4,
         instances: 8,
         tables: 4,
@@ -205,5 +206,57 @@ async fn runtime_nested_stores_share_and_release_multi_memory_budget() -> Result
             .admitted(),
         5 * PAGE
     );
+    Ok(())
+}
+
+#[test]
+fn nested_stores_share_and_release_table_slots() -> Result<()> {
+    let engine = Runtime::new_engine()?;
+    let module = Module::new(
+        &engine,
+        "(module (table 2 8 funcref) (func (export \"grow\") (param i32) (result i32) ref.null func local.get 0 table.grow))",
+    )?;
+    let root = GuestMemoryLimiter::new_root(GuestMemoryLimits {
+        table_elements_per_root: 5,
+        ..limits(PAGE)
+    });
+    let mut parent = store(&engine, root.new_child());
+    parent.set_fuel(1_000_000)?;
+    let instance = Instance::new(&mut parent, &module, &[])?;
+    let parent_grow = instance.get_typed_func::<i32, i32>(&mut parent, "grow")?;
+    assert_eq!(root.table_elements_admitted(), 2);
+    drop(parent.data().limiter.clone());
+    assert_eq!(root.table_elements_admitted(), 2);
+
+    let mut child = store(&engine, parent.data().limiter.new_child());
+    child.set_fuel(1_000_000)?;
+    let instance = Instance::new(&mut child, &module, &[])?;
+    let child_grow = instance.get_typed_func::<i32, i32>(&mut child, "grow")?;
+    assert_eq!(child_grow.call(&mut child, 0)?, 2);
+    assert_eq!(root.table_elements_admitted(), 4);
+    assert_eq!(child_grow.call(&mut child, 1)?, 2);
+    assert_eq!(root.table_elements_admitted(), 5);
+    assert_eq!(parent_grow.call(&mut parent, 1)?, -1);
+    assert_eq!(child_grow.call(&mut child, 1)?, -1);
+    assert_eq!(root.table_elements_admitted(), 5);
+
+    let mut denied = store(&engine, parent.data().limiter.new_child());
+    denied.set_fuel(1_000_000)?;
+    let error = Instance::new(&mut denied, &module, &[]).unwrap_err();
+    assert!(
+        error.to_string().contains("table minimum size"),
+        "{error:#}"
+    );
+    assert_eq!(root.table_elements_admitted(), 5);
+    drop(denied);
+    drop(child);
+    assert_eq!(root.table_elements_admitted(), 2);
+    assert_eq!(parent_grow.call(&mut parent, 1)?, 2);
+    assert_eq!(root.table_elements_admitted(), 3);
+    assert_eq!(parent_grow.call(&mut parent, 6)?, -1);
+    assert_eq!(parent_grow.call(&mut parent, 0)?, 3);
+    assert_eq!(root.table_elements_admitted(), 3);
+    drop(parent);
+    assert_eq!(root.table_elements_admitted(), 0);
     Ok(())
 }

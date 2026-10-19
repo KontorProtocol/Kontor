@@ -20,6 +20,7 @@ fn table_and_store_count_limits_are_deterministic() -> Result<()> {
     let engine = Runtime::new_engine()?;
     let limits = GuestMemoryLimits {
         per_root: PAGE,
+        table_elements_per_root: 32,
         memories: 4,
         instances: 8,
         tables: 4,
@@ -58,6 +59,14 @@ fn table_and_store_count_limits_are_deterministic() -> Result<()> {
                 ..limits
             },
         ),
+        (
+            "root table slots",
+            "(module (table 1 funcref))",
+            GuestMemoryLimits {
+                table_elements_per_root: 0,
+                ..limits
+            },
+        ),
     ] {
         let module = Module::new(&engine, wat)?;
         let mut store = Store::new(&engine, GuestMemoryLimiter::new_root(limits));
@@ -78,6 +87,7 @@ async fn gc_quota_denial_is_deterministic_after_wasmtime_retries() -> Result<()>
     )?;
     let root = GuestMemoryLimiter::new_root(GuestMemoryLimits {
         per_root: PAGE,
+        table_elements_per_root: 32,
         memories: 4,
         instances: 8,
         tables: 4,
@@ -121,6 +131,7 @@ async fn gc_heap_maximum_denial_is_deterministic() -> Result<()> {
     )?;
     let root = GuestMemoryLimiter::new_root(GuestMemoryLimits {
         per_root: 2 * PAGE,
+        table_elements_per_root: 32,
         memories: 4,
         instances: 8,
         tables: 4,
@@ -197,6 +208,7 @@ async fn published_nested_calls_share_and_release_memory_across_cold_and_warm_lo
 
     runtime.guest_memory_limits = Some(GuestMemoryLimits {
         per_root: 33 * PAGE,
+        table_elements_per_root: 16 * 1024 * 1024,
         memories: 10_000,
         instances: 10_000,
         tables: 10_000,

@@ -54,3 +54,24 @@ async fn explicit_failure_classification_survives_nested_error_sources() -> Resu
     }
     Ok(())
 }
+
+#[test]
+fn nested_errors_format_linearly_and_keep_the_cause() {
+    let mut error = anyhow!(Trap::OutOfFuel);
+    for _ in 0..8 {
+        error = anyhow!(ExecutionError::Deterministic(error)).context("nested call");
+    }
+
+    assert!(error.chain().any(|cause| cause.is::<Trap>()));
+    let logged = format!("{error:#}");
+    let response = format!("{:?}", ExecutionError::Deterministic(error));
+    for formatted in [&logged, &response] {
+        assert!(formatted.contains("nested call"));
+        assert!(formatted.contains(&Trap::OutOfFuel.to_string()));
+        assert!(
+            formatted.len() < 10_000,
+            "formatted {} bytes",
+            formatted.len()
+        );
+    }
+}

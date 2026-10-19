@@ -66,8 +66,8 @@ pub enum ExecutionError {
 impl std::fmt::Display for ExecutionError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            ExecutionError::Deterministic(e) => write!(f, "deterministic error: {e:#}"),
-            ExecutionError::NonDeterministic(e) => write!(f, "non-deterministic error: {e:#}"),
+            ExecutionError::Deterministic(e) => write!(f, "deterministic error: {e}"),
+            ExecutionError::NonDeterministic(e) => write!(f, "non-deterministic error: {e}"),
         }
     }
 }

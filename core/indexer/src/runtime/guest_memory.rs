@@ -13,6 +13,7 @@ pub(crate) struct GuestMemoryLimitExceeded;
 #[derive(Clone, Copy)]
 pub(crate) struct GuestMemoryLimits {
     pub per_root: usize,
+    pub table_elements_per_root: usize,
     pub memories: usize,
     pub instances: usize,
     pub tables: usize,
@@ -22,10 +23,11 @@ pub(crate) struct GuestMemoryLimits {
 impl Default for GuestMemoryLimits {
     fn default() -> Self {
         // Consensus rules, independent of node hardware or operator settings.
-        // The byte budget includes linear memory and GC capacity across nested
-        // Stores. Object counts are per Store, and elements are per table.
+        // Linear memory, GC capacity, and table slots are shared across nested
+        // Stores. Object counts are per Store, and table_elements is per table.
         Self {
             per_root: 512 * 1024 * 1024,
+            table_elements_per_root: 16 * 1024 * 1024,
             memories: 16,
             instances: 64,
             tables: 8,
@@ -39,8 +41,10 @@ struct RootBudget {
     // executor threads, and guest completion orders the final failure check,
     // so relaxed ordering is sufficient.
     admitted: AtomicUsize,
+    table_elements_admitted: AtomicUsize,
     backing_failed: AtomicBool,
     limit: usize,
+    table_elements_limit: usize,
 }
 
 pub(crate) struct GuestMemoryLimiter {
@@ -48,6 +52,7 @@ pub(crate) struct GuestMemoryLimiter {
     // Count permitted growth until Store teardown: Wasmtime cannot identify
     // which reservation a later growth-failure callback should release.
     local_admitted: usize,
+    local_table_elements_admitted: usize,
     limits: GuestMemoryLimits,
 }
 
@@ -56,10 +61,13 @@ impl GuestMemoryLimiter {
         Self {
             root: Arc::new(RootBudget {
                 admitted: AtomicUsize::new(0),
+                table_elements_admitted: AtomicUsize::new(0),
                 backing_failed: AtomicBool::new(false),
                 limit: limits.per_root,
+                table_elements_limit: limits.table_elements_per_root,
             }),
             local_admitted: 0,
+            local_table_elements_admitted: 0,
             limits,
         }
     }
@@ -68,6 +76,7 @@ impl GuestMemoryLimiter {
         Self {
             root: self.root.clone(),
             local_admitted: 0,
+            local_table_elements_admitted: 0,
             limits: self.limits,
         }
     }
@@ -79,6 +88,11 @@ impl GuestMemoryLimiter {
     #[cfg(test)]
     pub(crate) fn admitted(&self) -> usize {
         self.root.admitted.load(Ordering::Relaxed)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn table_elements_admitted(&self) -> usize {
+        self.root.table_elements_admitted.load(Ordering::Relaxed)
     }
 }
 
@@ -92,14 +106,20 @@ impl Clone for GuestMemoryLimiter {
 
 impl Drop for GuestMemoryLimiter {
     fn drop(&mut self) {
-        if self.local_admitted == 0 {
-            return;
+        if self.local_admitted != 0 {
+            let previous = self
+                .root
+                .admitted
+                .fetch_sub(self.local_admitted, Ordering::Relaxed);
+            debug_assert!(previous >= self.local_admitted);
         }
-        let previous = self
-            .root
-            .admitted
-            .fetch_sub(self.local_admitted, Ordering::Relaxed);
-        debug_assert!(previous >= self.local_admitted);
+        if self.local_table_elements_admitted != 0 {
+            let previous = self
+                .root
+                .table_elements_admitted
+                .fetch_sub(self.local_table_elements_admitted, Ordering::Relaxed);
+            debug_assert!(previous >= self.local_table_elements_admitted);
+        }
     }
 }
 
@@ -133,11 +153,35 @@ impl ResourceLimiter for GuestMemoryLimiter {
 
     fn table_growing(
         &mut self,
-        _current: usize,
+        current: usize,
         desired: usize,
-        _maximum: Option<usize>,
+        maximum: Option<usize>,
     ) -> Result<bool> {
-        Ok(desired <= self.limits.table_elements)
+        if desired > self.limits.table_elements || maximum.is_some_and(|max| desired > max) {
+            return Ok(false);
+        }
+        let delta = desired
+            .checked_sub(current)
+            .ok_or(GuestMemoryLimitExceeded)?;
+        let local = self
+            .local_table_elements_admitted
+            .checked_add(delta)
+            .ok_or(GuestMemoryLimitExceeded)?;
+        if self
+            .root
+            .table_elements_admitted
+            .try_update(Ordering::Relaxed, Ordering::Relaxed, |used| {
+                used.checked_add(delta)
+                    .filter(|next| *next <= self.root.table_elements_limit)
+            })
+            .is_err()
+        {
+            return Ok(false);
+        }
+        // Wasmtime can fail backing allocation after admission without a
+        // matching callback, so hold the reservation until this Store drops.
+        self.local_table_elements_admitted = local;
+        Ok(true)
     }
 
     fn memory_grow_failed(&mut self, error: WasmtimeError) -> Result<()> {
