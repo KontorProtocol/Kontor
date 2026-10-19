@@ -100,7 +100,9 @@ async fn gc_quota_denial_is_deterministic_after_wasmtime_retries() -> Result<()>
     let (mut runtime, _dir, _name) = test_runtime().await?;
     runtime.guest_memory_limiter = Some(root.new_child());
     assert!(matches!(
-        runtime.classify_guest_memory_result(Err(ExecutionError::NonDeterministic(error.into()))),
+        runtime.classify_guest_memory_result::<()>(Err(ExecutionError::NonDeterministic(
+            error.into()
+        ))),
         Err(ExecutionError::Deterministic(_))
     ));
     assert_eq!(
@@ -144,7 +146,9 @@ async fn gc_heap_maximum_denial_is_deterministic() -> Result<()> {
     let (mut runtime, _dir, _name) = test_runtime().await?;
     runtime.guest_memory_limiter = Some(root.new_child());
     assert!(matches!(
-        runtime.classify_guest_memory_result(Err(ExecutionError::NonDeterministic(error.into()))),
+        runtime.classify_guest_memory_result::<()>(Err(ExecutionError::NonDeterministic(
+            error.into()
+        ))),
         Err(ExecutionError::Deterministic(_))
     ));
     Ok(())

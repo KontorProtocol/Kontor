@@ -1,21 +1,14 @@
-use std::fmt;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
-use wasmtime::{Error, ResourceLimiter, Result};
+use thiserror::Error;
+use wasmtime::{Error as WasmtimeError, ResourceLimiter, Result};
 
 use super::ExecutionError;
 
-#[derive(Debug)]
+#[derive(Debug, Error)]
+#[error("guest memory limit exceeded")]
 pub(crate) struct GuestMemoryLimitExceeded;
-
-impl fmt::Display for GuestMemoryLimitExceeded {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str("guest memory limit exceeded")
-    }
-}
-
-impl std::error::Error for GuestMemoryLimitExceeded {}
 
 #[derive(Clone, Copy)]
 pub(crate) struct GuestMemoryLimits {
@@ -42,6 +35,9 @@ impl Default for GuestMemoryLimits {
 }
 
 struct RootBudget {
+    // Each atomic contains its complete shared state. Stores can move between
+    // executor threads, and guest completion orders the final failure check,
+    // so relaxed ordering is sufficient.
     admitted: AtomicUsize,
     backing_failed: AtomicBool,
     limit: usize,
@@ -77,31 +73,32 @@ impl GuestMemoryLimiter {
     }
 
     pub(crate) fn backing_failed(&self) -> bool {
-        self.root.backing_failed.load(Ordering::SeqCst)
-    }
-
-    fn deny_growth() -> Result<bool> {
-        Err(GuestMemoryLimitExceeded.into())
+        self.root.backing_failed.load(Ordering::Relaxed)
     }
 
     #[cfg(test)]
     pub(crate) fn admitted(&self) -> usize {
-        self.root.admitted.load(Ordering::SeqCst)
+        self.root.admitted.load(Ordering::Relaxed)
     }
 }
 
 impl Clone for GuestMemoryLimiter {
     fn clone(&self) -> Self {
+        // Runtime clones share the budget, but must not release the original
+        // Store's reservations when they are dropped.
         self.new_child()
     }
 }
 
 impl Drop for GuestMemoryLimiter {
     fn drop(&mut self) {
+        if self.local_admitted == 0 {
+            return;
+        }
         let previous = self
             .root
             .admitted
-            .fetch_sub(self.local_admitted, Ordering::SeqCst);
+            .fetch_sub(self.local_admitted, Ordering::Relaxed);
         debug_assert!(previous >= self.local_admitted);
     }
 }
@@ -116,34 +113,22 @@ impl ResourceLimiter for GuestMemoryLimiter {
         if maximum.is_some_and(|maximum| desired > maximum) {
             return Ok(false);
         }
-        if desired < current {
-            return Self::deny_growth();
-        }
-        let delta = desired - current;
-        let Some(local) = self.local_admitted.checked_add(delta) else {
-            return Self::deny_growth();
-        };
-        let mut used = self.root.admitted.load(Ordering::SeqCst);
-        loop {
-            let Some(next) = used.checked_add(delta) else {
-                return Self::deny_growth();
-            };
-            if next > self.root.limit {
-                return Self::deny_growth();
-            }
-            match self.root.admitted.compare_exchange_weak(
-                used,
-                next,
-                Ordering::SeqCst,
-                Ordering::SeqCst,
-            ) {
-                Ok(_) => {
-                    self.local_admitted = local;
-                    return Ok(true);
-                }
-                Err(actual) => used = actual,
-            }
-        }
+        let delta = desired
+            .checked_sub(current)
+            .ok_or(GuestMemoryLimitExceeded)?;
+        let local = self
+            .local_admitted
+            .checked_add(delta)
+            .ok_or(GuestMemoryLimitExceeded)?;
+        self.root
+            .admitted
+            .try_update(Ordering::Relaxed, Ordering::Relaxed, |used| {
+                used.checked_add(delta)
+                    .filter(|next| *next <= self.root.limit)
+            })
+            .map_err(|_| GuestMemoryLimitExceeded)?;
+        self.local_admitted = local;
+        Ok(true)
     }
 
     fn table_growing(
@@ -155,8 +140,8 @@ impl ResourceLimiter for GuestMemoryLimiter {
         Ok(desired <= self.limits.table_elements)
     }
 
-    fn memory_grow_failed(&mut self, error: Error) -> Result<()> {
-        self.root.backing_failed.store(true, Ordering::SeqCst);
+    fn memory_grow_failed(&mut self, error: WasmtimeError) -> Result<()> {
+        self.root.backing_failed.store(true, Ordering::Relaxed);
         Err(ExecutionError::NonDeterministic(error.into()).into())
     }
 

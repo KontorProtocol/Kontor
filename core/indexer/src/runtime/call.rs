@@ -68,10 +68,10 @@ impl Runtime {
             .map(|_| ExecutionError::NonDeterministic(anyhow!("guest memory backing failure")))
     }
 
-    fn classify_guest_memory_result(
+    fn classify_guest_memory_result<T>(
         &self,
-        result: Result<String, ExecutionError>,
-    ) -> Result<String, ExecutionError> {
+        result: Result<T, ExecutionError>,
+    ) -> Result<T, ExecutionError> {
         if let Some(error) = self.guest_memory_backing_failure() {
             return Err(error);
         }
@@ -203,14 +203,11 @@ impl Runtime {
         let prepared = self
             .prepare_in_store(&mut store, contract_address, signer, payment, expr, nested)
             .await;
-        if let Some(error) = self.guest_memory_backing_failure() {
-            return Ok((Err(error), store));
-        }
-        let prepared = match prepared {
+        let prepared = match self.classify_guest_memory_result(prepared) {
             Ok(prepared) => prepared,
             // Keep the store even on failed initialization or argument resolution:
             // the parent still pays for work done before preparation failed.
-            Err(error) => return Ok((self.classify_guest_memory_result(Err(error)), store)),
+            Err(error) => return Ok((Err(error), store)),
         };
         let PreparedCall {
             contract_id,
