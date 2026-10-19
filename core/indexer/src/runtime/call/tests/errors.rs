@@ -57,21 +57,33 @@ async fn explicit_failure_classification_survives_nested_error_sources() -> Resu
 
 #[test]
 fn nested_errors_format_linearly_and_keep_the_cause() {
-    let mut error = anyhow!(Trap::OutOfFuel);
-    for _ in 0..8 {
-        error = anyhow!(ExecutionError::Deterministic(error)).context("nested call");
-    }
+    let depth = 8;
+    let cause = Trap::OutOfFuel.to_string();
+    for deterministic in [false, true] {
+        let wrap = |error| {
+            if deterministic {
+                ExecutionError::Deterministic(error)
+            } else {
+                ExecutionError::NonDeterministic(error)
+            }
+        };
+        let mut error = anyhow!(Trap::OutOfFuel);
+        for _ in 0..depth {
+            error = anyhow!(wrap(error)).context("nested call");
+        }
 
-    assert!(error.chain().any(|cause| cause.is::<Trap>()));
-    let logged = format!("{error:#}");
-    let response = format!("{:?}", ExecutionError::Deterministic(error));
-    for formatted in [&logged, &response] {
-        assert!(formatted.contains("nested call"));
-        assert!(formatted.contains(&Trap::OutOfFuel.to_string()));
-        assert!(
-            formatted.len() < 10_000,
-            "formatted {} bytes",
-            formatted.len()
-        );
+        assert!(error.chain().any(|cause| cause.is::<Trap>()));
+        let logged = format!("{error:#}");
+        let response = format!("{:?}", wrap(error));
+        for formatted in [&logged, &response] {
+            for message in ["nested call", cause.as_str()] {
+                let repetitions = formatted.matches(message).count();
+                // Captured backtrace length varies across CI platforms.
+                assert!(
+                    (1..=2 * depth + 2).contains(&repetitions),
+                    "{message:?} appeared {repetitions} times"
+                );
+            }
+        }
     }
 }

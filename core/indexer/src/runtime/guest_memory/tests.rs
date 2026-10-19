@@ -214,7 +214,7 @@ fn nested_stores_share_and_release_table_slots() -> Result<()> {
     let engine = Runtime::new_engine()?;
     let module = Module::new(
         &engine,
-        "(module (table 2 8 funcref) (func (export \"grow\") (param i32) (result i32) ref.null func local.get 0 table.grow))",
+        "(module (table 2 3 funcref) (func (export \"grow\") (param i32) (result i32) ref.null func local.get 0 table.grow))",
     )?;
     let root = GuestMemoryLimiter::new_root(GuestMemoryLimits {
         table_elements_per_root: 5,
@@ -253,7 +253,7 @@ fn nested_stores_share_and_release_table_slots() -> Result<()> {
     assert_eq!(root.table_elements_admitted(), 2);
     assert_eq!(parent_grow.call(&mut parent, 1)?, 2);
     assert_eq!(root.table_elements_admitted(), 3);
-    assert_eq!(parent_grow.call(&mut parent, 6)?, -1);
+    assert_eq!(parent_grow.call(&mut parent, 1)?, -1);
     assert_eq!(parent_grow.call(&mut parent, 0)?, 3);
     assert_eq!(root.table_elements_admitted(), 3);
     drop(parent);
