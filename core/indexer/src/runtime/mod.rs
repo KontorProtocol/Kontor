@@ -47,6 +47,7 @@ use storage::{ComponentDecodeError, print_component_wit};
 pub use storage::{Storage, TransactionContext};
 use tokio::sync::Mutex;
 
+use std::fmt::{self, Display, Formatter};
 use std::sync::Arc;
 
 /// Distinguishes deterministic failures from non-deterministic failures
@@ -63,12 +64,16 @@ pub enum ExecutionError {
     NonDeterministic(anyhow::Error),
 }
 
-impl std::fmt::Display for ExecutionError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            ExecutionError::Deterministic(e) => write!(f, "deterministic error: {e}"),
-            ExecutionError::NonDeterministic(e) => write!(f, "non-deterministic error: {e}"),
-        }
+impl Display for ExecutionError {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        let (kind, error) = match self {
+            ExecutionError::Deterministic(error) => ("deterministic error", error),
+            ExecutionError::NonDeterministic(error) => ("non-deterministic error", error),
+        };
+        write!(f, "{kind}: ")?;
+        // Expand causes only when the outer caller requests it. Chain formatters
+        // use ordinary Display for each source, avoiding recursive expansion.
+        Display::fmt(error, f)
     }
 }
 
