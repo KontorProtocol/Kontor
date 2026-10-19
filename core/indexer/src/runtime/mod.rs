@@ -260,7 +260,6 @@ pub struct Runtime {
     pub result_id_counter: Counter,
     pub stack: Stack<CallFrame>,
     pub gauge: Option<FuelGauge>,
-    // A protocol rule must select the ceiling before it affects consensus calls.
     guest_memory_limits: Option<GuestMemoryLimits>,
     guest_memory_limiter: Option<GuestMemoryLimiter>,
     #[cfg(test)]
@@ -389,7 +388,7 @@ impl Runtime {
             stack: Stack::new(),
             // Diagnostic tracing is opt-in; fuel enforcement does not use the gauge.
             gauge: None,
-            guest_memory_limits: None,
+            guest_memory_limits: Some(GuestMemoryLimits::default()),
             guest_memory_limiter: None,
             #[cfg(test)]
             conversion_probe: None,

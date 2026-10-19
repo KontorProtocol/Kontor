@@ -26,6 +26,21 @@ pub(crate) struct GuestMemoryLimits {
     pub table_elements: usize,
 }
 
+impl Default for GuestMemoryLimits {
+    fn default() -> Self {
+        // Consensus rules, independent of node hardware or operator settings.
+        // The byte budget includes linear memory and GC capacity across nested
+        // Stores. Object counts are per Store, and elements are per table.
+        Self {
+            per_root: 512 * 1024 * 1024,
+            memories: 16,
+            instances: 64,
+            tables: 8,
+            table_elements: 65_536,
+        }
+    }
+}
+
 struct RootBudget {
     admitted: AtomicUsize,
     backing_failed: AtomicBool,

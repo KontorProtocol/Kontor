@@ -152,6 +152,29 @@ fn quota_denials_preserve_a_typed_error() -> Result<()> {
 }
 
 #[tokio::test]
+async fn runtime_defaults_reject_excess_initial_memory_and_growth() -> Result<()> {
+    let (runtime, _dir, _name) = test_runtime().await?;
+    let mut store = runtime.make_store(1_000_000)?;
+    let root = store.data().guest_memory_limiter.as_ref().unwrap().clone();
+    let limit_pages = 8192;
+
+    // Both requests exceed the default 512 MiB quota before allocating it.
+    let error = Memory::new(&mut store, MemoryType::new(limit_pages + 1, None)).unwrap_err();
+    assert!(error.is::<GuestMemoryLimitExceeded>(), "{error:#}");
+    assert_eq!(root.admitted(), 0);
+
+    let memory = Memory::new(&mut store, MemoryType::new(1, None))?;
+    let error = memory.grow(&mut store, u64::from(limit_pages)).unwrap_err();
+    assert!(error.is::<GuestMemoryLimitExceeded>(), "{error:#}");
+    assert_eq!(root.admitted(), PAGE);
+    memory.grow(&mut store, 1)?;
+    assert_eq!(root.admitted(), 2 * PAGE);
+    drop(store);
+    assert_eq!(root.admitted(), 0);
+    Ok(())
+}
+
+#[tokio::test]
 async fn runtime_nested_stores_share_and_release_multi_memory_budget() -> Result<()> {
     let (mut runtime, _dir, _name) = test_runtime().await?;
     runtime.guest_memory_limits = Some(limits(5 * PAGE));
