@@ -137,6 +137,7 @@ fn failure_engine(kind: Kind, failures: Arc<AtomicUsize>) -> Result<Engine> {
 fn limits() -> GuestMemoryLimits {
     GuestMemoryLimits {
         per_root: 16 * PAGE,
+        table_elements_per_root: 32,
         memories: 4,
         instances: 8,
         tables: 4,

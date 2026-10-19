@@ -54,3 +54,54 @@ async fn explicit_failure_classification_survives_nested_error_sources() -> Resu
     }
     Ok(())
 }
+
+#[tokio::test]
+async fn nested_errors_format_linearly_and_keep_the_cause() -> Result<()> {
+    let (runtime, _dir, _name) = test_runtime().await?;
+    let depth = 8;
+    let cause = Trap::OutOfFuel.to_string();
+    for deterministic in [false, true] {
+        let wrap = |error| {
+            if deterministic {
+                ExecutionError::Deterministic(error)
+            } else {
+                ExecutionError::NonDeterministic(error)
+            }
+        };
+        let mut error = anyhow!(Trap::OutOfFuel);
+        for _ in 0..depth {
+            let mut store = runtime.make_store(1_000)?;
+            let result = Runtime::decode_result(
+                false,
+                Ok(Err(
+                    Error::from_anyhow(anyhow!(wrap(error))).context("nested call")
+                )),
+                vec![],
+                &mut store,
+            )
+            .await;
+            error = match result.unwrap_err() {
+                ExecutionError::Deterministic(error) | ExecutionError::NonDeterministic(error) => {
+                    error
+                }
+            };
+        }
+
+        assert!(error.chain().any(|cause| cause.is::<Trap>()));
+        let logged = format!("{error:#}");
+        let error = wrap(error);
+        let detailed = format!("{error:#}");
+        let response = format!("{error:?}");
+        for formatted in [&logged, &detailed, &response] {
+            for message in ["nested call", cause.as_str()] {
+                let repetitions = formatted.matches(message).count();
+                // Captured backtrace length varies across CI platforms.
+                assert!(
+                    (1..=2 * depth + 2).contains(&repetitions),
+                    "{message:?} appeared {repetitions} times"
+                );
+            }
+        }
+    }
+    Ok(())
+}

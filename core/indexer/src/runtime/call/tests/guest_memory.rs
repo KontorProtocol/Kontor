@@ -20,6 +20,7 @@ fn table_and_store_count_limits_are_deterministic() -> Result<()> {
     let engine = Runtime::new_engine()?;
     let limits = GuestMemoryLimits {
         per_root: PAGE,
+        table_elements_per_root: 32,
         memories: 4,
         instances: 8,
         tables: 4,
@@ -58,6 +59,14 @@ fn table_and_store_count_limits_are_deterministic() -> Result<()> {
                 ..limits
             },
         ),
+        (
+            "root table slots",
+            "(module (table 1 funcref))",
+            GuestMemoryLimits {
+                table_elements_per_root: 0,
+                ..limits
+            },
+        ),
     ] {
         let module = Module::new(&engine, wat)?;
         let mut store = Store::new(&engine, GuestMemoryLimiter::new_root(limits));
@@ -78,6 +87,7 @@ async fn gc_quota_denial_is_deterministic_after_wasmtime_retries() -> Result<()>
     )?;
     let root = GuestMemoryLimiter::new_root(GuestMemoryLimits {
         per_root: PAGE,
+        table_elements_per_root: 32,
         memories: 4,
         instances: 8,
         tables: 4,
@@ -121,6 +131,7 @@ async fn gc_heap_maximum_denial_is_deterministic() -> Result<()> {
     )?;
     let root = GuestMemoryLimiter::new_root(GuestMemoryLimits {
         per_root: 2 * PAGE,
+        table_elements_per_root: 32,
         memories: 4,
         instances: 8,
         tables: 4,
@@ -157,6 +168,16 @@ async fn gc_heap_maximum_denial_is_deterministic() -> Result<()> {
 #[tokio::test]
 async fn published_nested_calls_share_and_release_memory_across_cold_and_warm_loads() -> Result<()>
 {
+    published_nested_calls_share_and_release_limits(false).await
+}
+
+#[tokio::test]
+async fn published_nested_calls_share_and_release_tables_across_cold_and_warm_loads() -> Result<()>
+{
+    published_nested_calls_share_and_release_limits(true).await
+}
+
+async fn published_nested_calls_share_and_release_limits(table_slots: bool) -> Result<()> {
     let (mut runtime, _dir, _name) = test_runtime().await?;
     let signer = funded(&mut runtime).await?;
     let payment = Payment {
@@ -195,8 +216,36 @@ async fn published_nested_calls_share_and_release_memory_across_cold_and_warm_lo
     }
     runtime.set_context(1, None, None, None).await;
 
+    let table_limit = if table_slots {
+        let mut slots = 0;
+        for address in &addresses {
+            let contract_id = runtime.storage.contract_id(address).await?.unwrap();
+            let component = runtime.load_component(contract_id).await?;
+            let mut store = runtime.make_store(1_000_000)?;
+            runtime
+                .linkers
+                .user
+                .instantiate_pre(&component)?
+                .instantiate_async(&mut store)
+                .await?;
+            slots += store
+                .data()
+                .guest_memory_limiter
+                .as_ref()
+                .unwrap()
+                .table_elements_admitted();
+        }
+        slots
+    } else {
+        16 * 1024 * 1024
+    };
     runtime.guest_memory_limits = Some(GuestMemoryLimits {
-        per_root: 33 * PAGE,
+        per_root: if table_slots { 50 * PAGE } else { 33 * PAGE },
+        table_elements_per_root: if table_slots {
+            table_limit - 1
+        } else {
+            table_limit
+        },
         memories: 10_000,
         instances: 10_000,
         tables: 10_000,
@@ -231,10 +280,25 @@ async fn published_nested_calls_share_and_release_memory_across_cold_and_warm_lo
                 &expression,
             )
             .await;
-        assert!(
-            matches!(result, Err(ExecutionError::Deterministic(ref error)) if error.chain().any(|cause| cause.is::<GuestMemoryLimitExceeded>())),
-            "cold={cold}: {result:?}"
-        );
+        match result {
+            Err(ExecutionError::Deterministic(error)) => {
+                if table_slots {
+                    assert!(
+                        error
+                            .root_cause()
+                            .to_string()
+                            .contains("table minimum size")
+                    );
+                } else {
+                    assert!(
+                        error
+                            .chain()
+                            .any(|cause| cause.is::<GuestMemoryLimitExceeded>())
+                    );
+                }
+            }
+            result => panic!("cold={cold}: {result:?}"),
+        }
         let mut rows = conn
             .query(
                 "SELECT gas, status FROM contract_results WHERE contract_id = ? ORDER BY id DESC LIMIT 1",
@@ -252,8 +316,12 @@ async fn published_nested_calls_share_and_release_memory_across_cold_and_warm_lo
         assert!(runtime.storage.savepoint_stack.is_empty().await);
     }
 
-    // Three sequential child calls fit only if each finished Store releases its pages.
-    runtime.guest_memory_limits.as_mut().unwrap().per_root = 50 * PAGE;
+    // Three sequential children fit only if each finished Store releases its quota.
+    let limits = runtime.guest_memory_limits.as_mut().unwrap();
+    limits.per_root = 50 * PAGE;
+    if table_slots {
+        limits.table_elements_per_root = table_limit;
+    }
     assert_eq!(
         runtime
             .execute(Some(&signer), Some(payment), &addresses[0], &expression)
