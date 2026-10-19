@@ -125,7 +125,7 @@ fn guest_gc_succeeds_with_budget_and_rejects_excess() -> Result<()> {
 
 #[test]
 fn quota_denials_preserve_a_typed_error() -> Result<()> {
-    let engine = Engine::default();
+    let engine = Runtime::new_engine()?;
     let root = GuestMemoryLimiter::new_root(limits(PAGE));
     let mut initial = store(&engine, root.new_child());
     let error = Memory::new(&mut initial, MemoryType::new(2, None)).unwrap_err();
@@ -143,6 +143,7 @@ fn quota_denials_preserve_a_typed_error() -> Result<()> {
         "(module (memory 1) (func (export \"grow\") (result i32) i32.const 1 memory.grow))",
     )?;
     let mut growth = store(&engine, root.new_child());
+    growth.set_fuel(1_000_000)?;
     let instance = Instance::new(&mut growth, &module, &[])?;
     let grow = instance.get_typed_func::<(), i32>(&mut growth, "grow")?;
     let error = grow.call(&mut growth, ()).unwrap_err();
