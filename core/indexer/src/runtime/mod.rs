@@ -24,6 +24,7 @@ pub mod wit;
 
 mod call;
 mod fees;
+mod guest_memory;
 mod host_context;
 mod host_files;
 mod host_numbers;
@@ -34,6 +35,7 @@ mod lowering;
 use bitcoin::XOnlyPublicKey;
 use call::CallOutcome;
 pub use component_cache::ComponentCache;
+use guest_memory::{GuestMemoryLimiter, GuestMemoryLimits};
 use libsql::Connection;
 use lowering::Linker;
 use sha2::{Digest, Sha256};
@@ -107,7 +109,7 @@ pub use wit::kontor::built_in::numbers_types::{
 use anyhow::{Result, anyhow};
 use std::str::FromStr;
 use wasmtime::{
-    Engine, Store,
+    Engine, InstanceAllocationStrategy, Store,
     component::{Component, HasData, ResourceTable},
 };
 
@@ -258,6 +260,8 @@ pub struct Runtime {
     pub result_id_counter: Counter,
     pub stack: Stack<CallFrame>,
     pub gauge: Option<FuelGauge>,
+    guest_memory_limits: Option<GuestMemoryLimits>,
+    guest_memory_limiter: Option<GuestMemoryLimiter>,
     #[cfg(test)]
     conversion_probe: Option<conversion_probe::Probe>,
     pub(crate) usage_kind: UsageKind,
@@ -320,6 +324,9 @@ impl Runtime {
         // CoW can skip metered initialization depending on OS/image availability.
         // Every node must copy the same data segments and charge the same fuel.
         config.memory_init_cow(false);
+        config.wasm_custom_page_sizes(false);
+        config.allocation_strategy(InstanceAllocationStrategy::OnDemand);
+        config.memory_may_move(true);
         // Ensure deterministic execution
         config.wasm_threads(false);
         config.wasm_relaxed_simd(false);
@@ -381,6 +388,8 @@ impl Runtime {
             stack: Stack::new(),
             // Diagnostic tracing is opt-in; fuel enforcement does not use the gauge.
             gauge: None,
+            guest_memory_limits: Some(GuestMemoryLimits::default()),
+            guest_memory_limiter: None,
             #[cfg(test)]
             conversion_probe: None,
             deposit: DepositMeter::new(),
@@ -1006,7 +1015,16 @@ impl Runtime {
         // Invocation ownership frees even resources abandoned by a guest trap.
         let mut runtime = self.clone();
         runtime.table = Arc::new(Mutex::new(ResourceTable::new()));
+        runtime.guest_memory_limiter = match (&self.guest_memory_limiter, self.guest_memory_limits)
+        {
+            (Some(parent), _) => Some(parent.new_child()),
+            (None, Some(limits)) => Some(GuestMemoryLimiter::new_root(limits)),
+            (None, None) => None,
+        };
         let mut s = Store::new(&self.engine, runtime);
+        if s.data().guest_memory_limiter.is_some() {
+            s.limiter(|runtime| runtime.guest_memory_limiter.as_mut().unwrap());
+        }
         s.set_fuel(fuel)?;
         s.data_mut().fuel_checkpoint = fuel;
         #[cfg(test)]

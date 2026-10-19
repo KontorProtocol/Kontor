@@ -41,6 +41,9 @@ async fn explicit_failure_classification_survives_nested_error_sources() -> Resu
         Error::from(OutOfMemory::new(1024)),
         Error::msg("unknown engine failure"),
         Error::from_anyhow(anyhow!("database unavailable")),
+        Error::from_anyhow(anyhow!(
+            "resource limit exceeded: instance count too high at 1"
+        )),
     ] {
         let mut store = runtime.make_store(1_000)?;
         let result = Runtime::decode_result(false, Ok(Err(error)), vec![], &mut store).await;

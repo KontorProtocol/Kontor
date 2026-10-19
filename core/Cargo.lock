@@ -3910,6 +3910,7 @@ dependencies = [
  "rayon",
  "regex",
  "reqwest",
+ "rustix 1.1.5",
  "scopeguard",
  "serde",
  "serde_json",
