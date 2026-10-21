@@ -237,7 +237,8 @@ async fn error_payloads_and_tuple_reservations_are_atomic() -> Result<()> {
 async fn generated_bindings_charge_returns_without_handler_instrumentation() -> Result<()> {
     let (mut runtime, _dir, _name) = test_runtime().await?;
     let component = Component::new(&runtime.engine, include_str!("generated-bindings.wat"))?;
-    for budget in [531, 100_000] {
+    let low_budget = 1_555;
+    for budget in [low_budget, 100_000] {
         let gauge = FuelGauge::with_profiling();
         runtime.gauge = Some(gauge.clone());
         let mut store = runtime.make_store(100_000)?;
@@ -256,7 +257,7 @@ async fn generated_bindings_charge_returns_without_handler_instrumentation() -> 
             500
         );
         let lowering = &profile.per_type[&FuelDiscriminants::LoweringBytes];
-        if budget == 531 {
+        if budget == low_budget {
             assert_eq!(
                 result.unwrap_err().downcast_ref::<Trap>(),
                 Some(&Trap::OutOfFuel)
