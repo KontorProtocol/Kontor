@@ -1,4 +1,4 @@
-use std::io::Read;
+use std::fs::{File, read_to_string, write};
 use std::net::TcpListener;
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
@@ -25,7 +25,10 @@ fn a_fatal_startup_error_exits_nonzero_with_the_cause() {
     // Genesis parsing can race the API failure; keep this valid so only the
     // port conflict can cause startup to fail.
     let genesis_path = data_dir.path().join("genesis.json");
-    std::fs::write(&genesis_path, r#"{"sigma_min":"1","validators":[]}"#).expect("write genesis");
+    write(&genesis_path, r#"{"sigma_min":"1","validators":[]}"#).expect("write genesis");
+    // Files preserve both streams without letting a full pipe stall shutdown.
+    let stdout_path = data_dir.path().join("stdout.log");
+    let stderr_path = data_dir.path().join("stderr.log");
 
     let mut child = Command::new(env!("CARGO_BIN_EXE_kontor"))
         .args([
@@ -49,40 +52,42 @@ fn a_fatal_startup_error_exits_nonzero_with_the_cause() {
             "--genesis-file",
             genesis_path.to_str().expect("utf-8 tempdir"),
         ])
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
+        .stdout(Stdio::from(
+            File::create(&stdout_path).expect("create stdout log"),
+        ))
+        .stderr(Stdio::from(
+            File::create(&stderr_path).expect("create stderr log"),
+        ))
         .spawn()
         .expect("spawn kontor");
 
     // Bounded wait, well under the daemon's 25s shutdown budget plus margin:
     // the bind failure fires during startup, so a slow exit here IS a failure.
     let deadline = Instant::now() + Duration::from_secs(60);
-    let status = loop {
-        if let Some(status) = child.try_wait().expect("try_wait") {
-            break status;
+    let timed_out = loop {
+        if child.try_wait().expect("try_wait").is_some() {
+            break false;
         }
         if Instant::now() > deadline {
             let _ = child.kill();
-            panic!("node did not exit within 60s of a fatal startup error");
+            break true;
         }
         std::thread::sleep(Duration::from_millis(100));
     };
 
-    let mut stderr = String::new();
-    child
-        .stderr
-        .take()
-        .expect("piped stderr")
-        .read_to_string(&mut stderr)
-        .expect("read stderr");
+    let status = child.wait().expect("wait for kontor");
+    let stdout = read_to_string(stdout_path).expect("read stdout");
+    let stderr = read_to_string(stderr_path).expect("read stderr");
+    let diagnostics = format!("status: {status}\nstdout:\n{stdout}\nstderr:\n{stderr}");
 
+    assert!(!timed_out, "node did not exit within 60s: {diagnostics}");
     assert!(
         !status.success(),
-        "a node that could not start reported success (stderr: {stderr})"
+        "a node that could not start reported success: {diagnostics}"
     );
     assert!(
         stderr.contains("HTTP server failed"),
-        "the real cause must reach stderr, got: {stderr}"
+        "the real cause must reach stderr: {diagnostics}"
     );
     drop(taken);
 }
