@@ -12,10 +12,10 @@ Wasmtime's separate native allocation allowance for Kontor Stores. These prices
 are candidates, not approved protocol constants. This branch provisionally caps
 each paid untrusted operation at a committed 100,000 gas (100 million fuel at the
 current 1,000 multiplier). Larger limits fail before payment reservation or
-contract execution. Unsigned views have the same maximum, and operators can set
+contract execution. Public views have the same maximum, and operators can set
 a lower view limit. Nested calls share the parent's remaining fuel. Trusted Core
-calls retain their separate system ceiling. This is a per-operation limit, not
-an aggregate transaction memory bound.
+calls and internal system views use the system ceiling. This is a per-operation
+limit, not an aggregate transaction memory bound.
 
 Changing Wasmtime or lifting prices can change fuel exhaustion and transaction
 results. Production activation therefore needs a protocol decision covering
