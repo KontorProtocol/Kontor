@@ -114,7 +114,7 @@ pub use wit::kontor::built_in::numbers_types::{
 use anyhow::{Result, anyhow};
 use std::str::FromStr;
 use wasmtime::{
-    Engine, InstanceAllocationStrategy, Store,
+    Config, Engine, InstanceAllocationStrategy, LiftingPrices, Store,
     component::{Component, HasData, ResourceTable},
 };
 
@@ -320,9 +320,14 @@ pub struct Runtime {
 
 impl Runtime {
     pub fn new_engine() -> Result<Engine> {
-        let mut config = wasmtime::Config::new();
+        let mut config = Config::new();
         config.wasm_component_model_async(true);
         config.consume_fuel(true);
+        config.consume_lifting_fuel(Some(LiftingPrices {
+            lift_value: 512,
+            string_byte: 16,
+            metadata_byte: 16,
+        }));
         // Wasmtime 48's Mach receiver aborts on an interrupted receive. Kontor
         // has no Mach-based crash handler, so use POSIX traps on macOS instead.
         config.macos_use_mach_ports(false);
@@ -1031,6 +1036,7 @@ impl Runtime {
             s.limiter(|runtime| runtime.guest_memory_limiter.as_mut().unwrap());
         }
         s.set_fuel(fuel)?;
+        s.set_hostcall_fuel_enabled(false);
         s.data_mut().fuel_checkpoint = fuel;
         #[cfg(test)]
         if let Some(probe) = s.data().conversion_probe.clone() {

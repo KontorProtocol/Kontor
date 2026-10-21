@@ -81,7 +81,7 @@ fn normal_page_growth_boundaries_never_report_backing_failure() -> Result<()> {
     assert_eq!(root.admitted(), 0);
 
     let mut host = store(&engine, root.new_child());
-    let memory = Memory::new(&mut host, MemoryType::new(1, Some(1)))?;
+    let memory = Memory::new(&mut host, MemoryType::new(1, Some(1))?)?;
     assert!(memory.grow(&mut host, 1).is_err());
     assert!(!root.backing_failed());
     Ok(())
@@ -129,7 +129,7 @@ fn quota_denials_preserve_a_typed_error() -> Result<()> {
     let engine = Runtime::new_engine()?;
     let root = GuestMemoryLimiter::new_root(limits(PAGE));
     let mut initial = store(&engine, root.new_child());
-    let error = Memory::new(&mut initial, MemoryType::new(2, None)).unwrap_err();
+    let error = Memory::new(&mut initial, MemoryType::new(2, None)?).unwrap_err();
     assert!(error.is::<GuestMemoryLimitExceeded>(), "{error:#}");
     assert_eq!(root.admitted(), 0);
 
@@ -161,11 +161,11 @@ async fn runtime_defaults_reject_excess_initial_memory_and_growth() -> Result<()
     let limit_pages = 8192;
 
     // Both requests exceed the default 512 MiB quota before allocating it.
-    let error = Memory::new(&mut store, MemoryType::new(limit_pages + 1, None)).unwrap_err();
+    let error = Memory::new(&mut store, MemoryType::new(limit_pages + 1, None)?).unwrap_err();
     assert!(error.is::<GuestMemoryLimitExceeded>(), "{error:#}");
     assert_eq!(root.admitted(), 0);
 
-    let memory = Memory::new(&mut store, MemoryType::new(1, None))?;
+    let memory = Memory::new(&mut store, MemoryType::new(1, None)?)?;
     let error = memory.grow(&mut store, u64::from(limit_pages)).unwrap_err();
     assert!(error.is::<GuestMemoryLimitExceeded>(), "{error:#}");
     assert_eq!(root.admitted(), PAGE);
@@ -182,12 +182,12 @@ async fn runtime_nested_stores_share_and_release_multi_memory_budget() -> Result
     runtime.guest_memory_limits = Some(limits(5 * PAGE));
     let mut parent = runtime.make_store(1_000_000)?;
     let root = parent.data().guest_memory_limiter.as_ref().unwrap().clone();
-    let parent_memory = Memory::new(&mut parent, MemoryType::new(2, Some(3)))?;
-    let _second = Memory::new(&mut parent, MemoryType::new(1, Some(3)))?;
+    let parent_memory = Memory::new(&mut parent, MemoryType::new(2, Some(3))?)?;
+    let _second = Memory::new(&mut parent, MemoryType::new(1, Some(3))?)?;
     let mut child = parent.data().make_store(1_000_000)?;
-    let _child_memory = Memory::new(&mut child, MemoryType::new(2, Some(3)))?;
+    let _child_memory = Memory::new(&mut child, MemoryType::new(2, Some(3))?)?;
     assert_eq!(root.admitted(), 5 * PAGE);
-    assert!(Memory::new(&mut child, MemoryType::new(1, Some(3))).is_err());
+    assert!(Memory::new(&mut child, MemoryType::new(1, Some(3))?).is_err());
     assert!(parent_memory.grow(&mut parent, 1).is_err());
     drop(child);
     assert_eq!(root.admitted(), 3 * PAGE);
@@ -197,7 +197,7 @@ async fn runtime_nested_stores_share_and_release_multi_memory_budget() -> Result
     assert_eq!(root.admitted(), 0);
 
     let mut next = runtime.make_store(1_000_000)?;
-    let _next_memory = Memory::new(&mut next, MemoryType::new(5, None))?;
+    let _next_memory = Memory::new(&mut next, MemoryType::new(5, None)?)?;
     assert_eq!(
         next.data()
             .guest_memory_limiter
