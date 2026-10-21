@@ -61,6 +61,25 @@ pub(super) struct CallOutcome {
 }
 
 impl Runtime {
+    pub(crate) async fn execute_system_view(
+        &mut self,
+        contract_address: &ContractAddress,
+        expr: &str,
+    ) -> Result<String, ExecutionError> {
+        // A root call keeps system usage accounting, while no signer or payment
+        // keeps the view context from gaining procedure authority.
+        self.invoke_unsettled(
+            contract_address,
+            None,
+            None,
+            expr,
+            SYSTEM_FUEL_CEILING,
+            false,
+        )
+        .await?
+        .result
+    }
+
     fn guest_memory_backing_failure(&self) -> Option<ExecutionError> {
         self.guest_memory_limiter
             .as_ref()

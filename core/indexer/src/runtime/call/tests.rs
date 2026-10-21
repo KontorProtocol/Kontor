@@ -3,7 +3,7 @@ use std::sync::Arc;
 use anyhow::Result;
 use indexer_types::Payment;
 use libsql::params;
-use wasmtime::Store;
+use wasmtime::{Store, Trap};
 
 use super::CallOutcome;
 
@@ -11,6 +11,7 @@ use crate::database::types::Identity;
 use crate::reg_tester::random_x_only_pubkey;
 use crate::runtime::fuel::UsageKind;
 use crate::runtime::numerics::sub_decimal;
+use crate::runtime::staking::{address as staking_address, api::wave::set_sigma_min_call_expr};
 use crate::runtime::token::api as token;
 use crate::runtime::wit::Signer;
 use crate::runtime::wit::kontor::built_in::context::HolderRef;
@@ -359,6 +360,7 @@ async fn root_fuel_limits_bound_paid_calls_and_views_without_resetting_nested_fu
         runtime.call_fuel_limit(Some(&signer), Some(&payment), Some(7))?,
         7
     );
+    assert_eq!(runtime.call_fuel_limit(None, None, Some(7))?, 7);
     assert_eq!(
         runtime.call_fuel_limit(
             Some(&core),
@@ -392,6 +394,35 @@ async fn root_fuel_limits_bound_paid_calls_and_views_without_resetting_nested_fu
         runtime.call_fuel_limit(None, None, None),
         Err(ExecutionError::Deterministic(_))
     ));
+    Ok(())
+}
+
+#[tokio::test]
+async fn trusted_system_view_has_system_fuel_without_procedure_authority() -> Result<()> {
+    let (mut runtime, _dir, _name) = test_runtime().await?;
+    let address = staking_address();
+    let expr = "get-sigma-min()";
+    let expected = runtime.execute(None, None, &address, expr).await?;
+
+    runtime.view_gas_limit = 0;
+    let public = runtime.execute(None, None, &address, expr).await;
+    assert!(matches!(public, Err(ExecutionError::Deterministic(error))
+        if matches!(error.downcast_ref::<Trap>(), Some(Trap::OutOfFuel))));
+
+    let previous = runtime.start_usage();
+    assert_eq!(runtime.execute_system_view(&address, expr).await?, expected);
+    let usage = runtime.finish_usage(previous)?;
+    assert!(usage.system_fuel > 0);
+    assert_eq!(usage.user_fuel, 0);
+    assert_eq!(usage.deposit_fuel, 0);
+
+    let mutation = set_sigma_min_call_expr(Decimal::from("1"));
+    assert!(matches!(
+        runtime.execute_system_view(&address, &mutation).await,
+        Err(ExecutionError::Deterministic(_))
+    ));
+    assert_eq!(runtime.execute_system_view(&address, expr).await?, expected);
+    assert!(runtime.stack.is_empty().await);
     Ok(())
 }
 

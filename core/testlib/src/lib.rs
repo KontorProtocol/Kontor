@@ -205,9 +205,8 @@ pub trait RuntimeImpl: Send {
         contract_address: &ContractAddress,
         expr: &str,
     ) -> Result<String>;
-    /// Macro-codegen entry point for native-contract api wrapper calls (always
-    /// Core-paid system calls). Distinct from `execute` so tests can keep
-    /// calling `execute` directly with user-driven payment semantics.
+    /// Entry point for native-contract api wrappers. Signerless views use the
+    /// public view budget on the indexer runtime.
     async fn execute_api(
         &mut self,
         signer: Option<&Signer>,
@@ -986,9 +985,6 @@ impl Runtime {
             .map_err(Into::into)
     }
 
-    /// Macro codegen for native-contract api wrappers expands to
-    /// `runtime.execute_api(...)`. This forwards to the trait method on the
-    /// underlying impl. Always Core-paid (system call).
     pub async fn execute_api(
         &mut self,
         signer: Option<&Signer>,

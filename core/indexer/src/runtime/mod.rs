@@ -39,6 +39,7 @@ use guest_memory::{GuestMemoryLimiter, GuestMemoryLimits};
 use libsql::Connection;
 use lowering::Linker;
 use sha2::{Digest, Sha256};
+use staking::api::wave::{get_sigma_min_call_expr, get_sigma_min_parse_return_expr};
 pub use stdlib::{
     CheckedArithmetics, FromWaveValue, WaveType, from_wave_expr, from_wave_value, to_wave_expr,
     wave_type,
@@ -285,11 +286,10 @@ pub struct Runtime {
     /// `invoke`), so this is the Payment's nominal cap, not the core fuel
     /// budget; it still bounds a user-signed `execute_api` call (the test path).
     pub gas_limit_for_non_procs: u64,
-    /// Requested gas budget for read-only `/view` calls (the payment-`None` path) ONLY.
+    /// Requested gas budget for public read-only `/view` calls.
     /// Operator-configurable per node (set from `Config::view_gas_limit` on the
-    /// read-only pool runtime; left at the default on the reactor's consensus runtime,
-    /// where views don't run). The effective budget cannot exceed
-    /// `MAX_UNTRUSTED_GAS_LIMIT`; this remains separate from Core calls.
+    /// read-only pool runtime). The effective budget cannot exceed
+    /// `MAX_UNTRUSTED_GAS_LIMIT`; trusted consensus views use system fuel.
     pub view_gas_limit: u64,
     pub gas_to_fuel_multiplier: u64,
     pub pricing: Pricing,
@@ -526,7 +526,10 @@ impl Runtime {
         }
         // Zero is uninitialized, never a valid configured floor. This also
         // resumes an interrupted bootstrap after the contract was published.
-        if staking::api::get_sigma_min(self).await? == Decimal::default() {
+        let result = self
+            .execute_system_view(&staking::address(), &get_sigma_min_call_expr())
+            .await?;
+        if get_sigma_min_parse_return_expr(&result) == Decimal::default() {
             staking::api::set_sigma_min(self, &core_signer, genesis.sigma_min).await??;
         }
         if !genesis.validators.is_empty() {

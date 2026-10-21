@@ -146,6 +146,8 @@ async fn compounded_rewards_cross_voting_power_boundary_and_rollback() -> Result
     .await?;
     let core = Signer::Core(Box::new(Signer::Nobody));
     runtime.set_context(1, None, None, None).await;
+    // Consensus reads must still complete if the public view budget is exhausted.
+    runtime.view_gas_limit = 0;
     assert_eq!(
         build_validator_set(&mut runtime)
             .await?
