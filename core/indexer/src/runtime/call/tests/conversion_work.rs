@@ -177,9 +177,11 @@ async fn record_fields_consume_structural_fuel_before_output_encoding() -> Resul
             .instantiate_async(&mut store, &component)
             .await?;
         let func = instance.get_func(&mut store, "run").unwrap();
+        store.set_fuel(BUDGET)?;
         let mut results = [Val::Bool(false)];
         func.call_async(&mut store, &[], &mut results).await?;
-        assert!(BUDGET - store.get_fuel()? >= count as u64 * 512);
+        let lifting_call_cost = BUDGET - store.get_fuel()?;
+        assert!(lifting_call_cost >= count as u64 * 512);
         let Val::Record(fields) = &results[0] else {
             panic!("expected a record");
         };
@@ -190,6 +192,25 @@ async fn record_fields_consume_structural_fuel_before_output_encoding() -> Resul
         let expected = "{:}";
         let ty = func.ty(&store).results().next().unwrap();
         assert_eq!(Val::from_wave(&ty, expected)?, results[0]);
+
+        let mut limited_store = runtime.make_store(BUDGET)?;
+        let limited_instance = Linker::new(&runtime.engine)
+            .instantiate_async(&mut limited_store, &component)
+            .await?;
+        let limited_func = limited_instance
+            .get_func(&mut limited_store, "run")
+            .unwrap();
+        limited_store.set_fuel(count as u64 * 512 - 1)?;
+        let mut limited_results = [Val::Bool(false)];
+        let error = limited_func
+            .call_async(&mut limited_store, &[], &mut limited_results)
+            .await
+            .unwrap_err();
+        assert!(matches!(
+            error.downcast_ref::<Trap>(),
+            Some(Trap::OutOfFuel)
+        ));
+
         let budget = Fuel::Result.cost() + Fuel::ResultBytes(expected.len() as u64).cost();
         store.set_fuel(budget)?;
         let result = Runtime::decode_result(false, Ok(Ok(())), results.to_vec(), &mut store).await;

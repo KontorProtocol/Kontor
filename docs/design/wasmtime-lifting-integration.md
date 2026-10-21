@@ -20,10 +20,11 @@ prices, paid and view budgets, coordinated node rollout, and replay of any
 history produced under older rules. Do not treat a successful build of this
 branch as approval to activate it on an existing chain.
 
-When patched stable Wasmtime 51 is available, replace the Git revision with an
-exact stable version, update and commit `core/Cargo.lock`, then verify that all
-Wasmtime and Cranelift packages resolve from one intended source. Run the core
+After the patch is reapplied to the Wasmtime 51.0.0 release on the fork, update
+the Git revision to that immutable fork commit and keep the Git dependency.
+Switch to an exact registry version only when an upstream release includes the
+required lifting feature. For either update, commit `core/Cargo.lock`, verify
+that Wasmtime and Cranelift resolve from one intended source, and run the core
 checks and runtime tests on Linux and macOS, including fuel-boundary and
-published-contract tests, before revisiting the activation decision. The
-Docker `cargo-chef` build must also resolve the pinned source from a clean
-cache.
+published-contract tests. The Docker `cargo-chef` build must also resolve the
+pinned source from a clean cache.
