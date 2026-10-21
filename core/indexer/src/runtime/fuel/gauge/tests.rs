@@ -43,10 +43,9 @@ async fn nested_execution_charges_child_results_once() -> Result<()> {
     let mut outcomes = Vec::new();
     for measured in [false, true] {
         let (mut runtime, _dir, _name) = test_runtime().await?;
-        // Keep the original fuel ceiling but remove gas rounding, which can hide
-        // a dropped child result charge smaller than one production gas unit.
-        runtime.gas_limit_for_non_procs *= runtime.gas_to_fuel_multiplier;
-        runtime.gas_to_fuel_multiplier = 1;
+        // A small gas unit exposes child result charges while retaining enough
+        // fuel for this nested operation under the signed gas ceiling.
+        runtime.gas_to_fuel_multiplier = 10;
         runtime.set_context(1, None, None, None).await;
         let signer = fund(&mut runtime, &key).await?;
         let burned_before = token::balance(&mut runtime, HolderRef::Burner)
@@ -90,11 +89,13 @@ async fn nested_execution_charges_child_results_once() -> Result<()> {
                 .unwrap_or_default();
             assert_eq!(
                 sub_decimal(burned_after, burned_before)?,
-                runtime.pricing.execution_fee(usage.user_fuel)?,
+                runtime
+                    .pricing
+                    .execution_fee(usage.user_fuel.div_ceil(runtime.gas_to_fuel_multiplier))?,
                 "the payer must pay for child results exactly once, excluding reservations"
             );
             assert_eq!(
-                usage.user_fuel + usage.deposit_fuel,
+                (usage.user_fuel + usage.deposit_fuel).div_ceil(runtime.gas_to_fuel_multiplier),
                 root_gas,
                 "the outer result must include all child result fuel"
             );
@@ -491,8 +492,7 @@ async fn nested_preparation_failure_is_charged_to_parent() -> Result<()> {
 #[tokio::test]
 async fn nested_result_fuel_cannot_exceed_the_signed_budget() -> Result<()> {
     let (mut runtime, _dir, _name) = test_runtime().await?;
-    runtime.gas_limit_for_non_procs *= runtime.gas_to_fuel_multiplier;
-    runtime.gas_to_fuel_multiplier = 1;
+    runtime.gas_to_fuel_multiplier = 10;
     runtime.set_context(1, None, None, None).await;
     let signer = fund(&mut runtime, &random_x_only_pubkey()).await?;
     staking::add_stake(&mut runtime, &signer, Decimal::from("10")).await??;
@@ -506,8 +506,10 @@ async fn nested_result_fuel_cannot_exceed_the_signed_budget() -> Result<()> {
     runtime.storage.rollback().await?;
     assert!(baseline.deposit_fuel > 0);
     let required = baseline.user_fuel + baseline.deposit_fuel;
+    let required_gas = required.div_ceil(runtime.gas_to_fuel_multiplier);
+    assert!(required_gas <= runtime.gas_limit_for_non_procs);
     let mut outcomes = Vec::new();
-    for budget in [required, required - 1] {
+    for budget in [required_gas, required_gas - 1] {
         runtime.set_context(1, None, None, None).await;
         runtime.storage.savepoint().await?;
         let previous = runtime.start_usage();
@@ -540,7 +542,7 @@ async fn nested_result_fuel_cannot_exceed_the_signed_budget() -> Result<()> {
     assert!(
         matches!(short, Err(ExecutionError::Deterministic(error))
             if matches!(error.downcast_ref::<Trap>(), Some(Trap::OutOfFuel))),
-        "one fuel below the required budget must exhaust: {short:?}"
+        "one gas below the required budget must exhaust: {short:?}"
     );
     assert!(usage.user_fuel + usage.deposit_fuel < required);
     assert_eq!(

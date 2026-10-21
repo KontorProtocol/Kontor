@@ -9,10 +9,13 @@ The workspace pins Wasmtime to `bfdee9ba9a483915dc95432708cf7db8281adbc1` in
 The integration branch configures component lifting at 512 fuel per value node,
 16 per guest-encoded string byte, and 16 per declared metadata byte. It disables
 Wasmtime's separate native allocation allowance for Kontor Stores. These prices
-are candidates, not approved protocol constants. Current main has no fixed
-paid-operation fuel cap: it uses each committed gas limit multiplied by 1,000.
-Views default to 1,000,000 gas and have an operator-configurable limit. This
-branch does not impose the 100 million fuel cap used in the earlier trial.
+are candidates, not approved protocol constants. This branch provisionally caps
+each paid untrusted operation at a committed 100,000 gas (100 million fuel at the
+current 1,000 multiplier). Larger limits fail before payment reservation or
+contract execution. Unsigned views have the same maximum, and operators can set
+a lower view limit. Nested calls share the parent's remaining fuel. Trusted Core
+calls retain their separate system ceiling. This is a per-operation limit, not
+an aggregate transaction memory bound.
 
 Changing Wasmtime or lifting prices can change fuel exhaustion and transaction
 results. Production activation therefore needs a protocol decision covering

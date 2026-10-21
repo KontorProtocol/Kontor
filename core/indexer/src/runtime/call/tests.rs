@@ -7,13 +7,16 @@ use wasmtime::Store;
 
 use super::CallOutcome;
 
+use crate::database::types::Identity;
 use crate::reg_tester::random_x_only_pubkey;
 use crate::runtime::fuel::UsageKind;
 use crate::runtime::numerics::sub_decimal;
 use crate::runtime::token::api as token;
 use crate::runtime::wit::Signer;
 use crate::runtime::wit::kontor::built_in::context::HolderRef;
-use crate::runtime::{ContractAddress, Decimal, ExecutionError, Runtime, TransactionContext};
+use crate::runtime::{
+    ContractAddress, Decimal, ExecutionError, MAX_UNTRUSTED_GAS_LIMIT, Runtime, TransactionContext,
+};
 use crate::test_utils::test_runtime;
 
 mod abi_errors;
@@ -324,6 +327,71 @@ async fn core_calls_bypass_user_escrow_and_user_gas_limit() -> Result<()> {
         Decimal::default()
     );
     assert!(runtime.stack.is_empty().await);
+    Ok(())
+}
+
+#[tokio::test]
+async fn root_fuel_limits_bound_paid_calls_and_views_without_resetting_nested_fuel() -> Result<()> {
+    let (mut runtime, _dir, _name) = test_runtime().await?;
+    let signer = Signer::Id(Identity::new(1));
+    let core = Signer::Core(Box::new(Signer::Nobody));
+    let payment = Payment {
+        signer_id: 1,
+        gas_limit: MAX_UNTRUSTED_GAS_LIMIT,
+    };
+    let maximum_fuel = MAX_UNTRUSTED_GAS_LIMIT * runtime.gas_to_fuel_multiplier;
+
+    assert_eq!(
+        runtime.call_fuel_limit(Some(&signer), Some(&payment), None)?,
+        maximum_fuel
+    );
+    for gas_limit in [MAX_UNTRUSTED_GAS_LIMIT + 1, u64::MAX] {
+        let payment = Payment {
+            gas_limit,
+            ..payment.clone()
+        };
+        assert!(matches!(
+            runtime.call_fuel_limit(Some(&signer), Some(&payment), None),
+            Err(ExecutionError::Deterministic(_))
+        ));
+    }
+    assert_eq!(
+        runtime.call_fuel_limit(Some(&signer), Some(&payment), Some(7))?,
+        7
+    );
+    assert_eq!(
+        runtime.call_fuel_limit(
+            Some(&core),
+            Some(&Payment {
+                gas_limit: u64::MAX,
+                ..payment.clone()
+            }),
+            None
+        )?,
+        super::SYSTEM_FUEL_CEILING
+    );
+
+    runtime.view_gas_limit = 25_000;
+    assert_eq!(runtime.call_fuel_limit(None, None, None)?, 25_000_000);
+    runtime.view_gas_limit = u64::MAX;
+    assert_eq!(runtime.call_fuel_limit(None, None, None)?, maximum_fuel);
+
+    runtime.gas_to_fuel_multiplier = u64::MAX;
+    assert!(matches!(
+        runtime.call_fuel_limit(
+            Some(&signer),
+            Some(&Payment {
+                gas_limit: 2,
+                ..payment
+            }),
+            None
+        ),
+        Err(ExecutionError::Deterministic(_))
+    ));
+    assert!(matches!(
+        runtime.call_fuel_limit(None, None, None),
+        Err(ExecutionError::Deterministic(_))
+    ));
     Ok(())
 }
 

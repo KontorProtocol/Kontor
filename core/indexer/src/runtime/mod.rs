@@ -135,6 +135,9 @@ use crate::runtime::{
     wit::Signer,
 };
 
+/// Paid-operation limit is consensus critical; views reuse the same ceiling.
+pub(crate) const MAX_UNTRUSTED_GAS_LIMIT: u64 = 100_000;
+
 #[derive(Clone, Debug)]
 pub struct GenesisParameters {
     pub sigma_min: Decimal,
@@ -282,11 +285,11 @@ pub struct Runtime {
     /// `invoke`), so this is the Payment's nominal cap, not the core fuel
     /// budget; it still bounds a user-signed `execute_api` call (the test path).
     pub gas_limit_for_non_procs: u64,
-    /// Fuel budget for read-only `/view` calls (the payment-`None` path) ONLY.
+    /// Requested gas budget for read-only `/view` calls (the payment-`None` path) ONLY.
     /// Operator-configurable per node (set from `Config::view_gas_limit` on the
     /// read-only pool runtime; left at the default on the reactor's consensus runtime,
-    /// where views don't run). DELIBERATELY SEPARATE from `gas_limit_for_non_procs` so
-    /// an operator's view cap can NEVER starve consensus core calls.
+    /// where views don't run). The effective budget cannot exceed
+    /// `MAX_UNTRUSTED_GAS_LIMIT`; this remains separate from Core calls.
     pub view_gas_limit: u64,
     pub gas_to_fuel_multiplier: u64,
     pub pricing: Pricing,
@@ -477,10 +480,14 @@ impl Runtime {
         self.gas_limit_for_non_procs * self.gas_to_fuel_multiplier
     }
 
-    /// Fuel budget for a read-only `/view` call (the operator-configurable cap),
-    /// distinct from the fixed consensus core-call budget above.
-    pub fn fuel_limit_for_view(&self) -> u64 {
-        self.view_gas_limit * self.gas_to_fuel_multiplier
+    /// Fuel budget for a read-only `/view` call.
+    pub fn fuel_limit_for_view(&self) -> Result<u64, ExecutionError> {
+        self.view_gas_limit
+            .min(MAX_UNTRUSTED_GAS_LIMIT)
+            .checked_mul(self.gas_to_fuel_multiplier)
+            .ok_or_else(|| {
+                ExecutionError::Deterministic(anyhow!("View gas limit exceeds the fuel range"))
+            })
     }
 
     /// Build a Payment for system (Core-paid) operations.
@@ -549,6 +556,7 @@ impl Runtime {
         provenance
             .validate()
             .map_err(ExecutionError::Deterministic)?;
+        let fuel_limit = self.call_fuel_limit(Some(signer), Some(&payment), None)?;
         // Contract names are embedded in the wire address format
         // `name_height_txindex` — `_` is the separator, so a name containing
         // it mints an ambiguously-parseable address, permanent once published
@@ -594,7 +602,6 @@ impl Runtime {
             }
         };
 
-        let fuel_limit = self.call_fuel_limit(Some(signer), Some(&payment), None)?;
         let outcome = if signer.is_core() {
             self.publish_unsettled(
                 signer, &payment, &address, author, bytes, provenance, fuel_limit,

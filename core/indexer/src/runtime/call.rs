@@ -18,7 +18,7 @@ use indexer_types::{OpStatus, Payment};
 use crate::database::native_contracts::{TOKEN_CONTRACT_ID, is_native_contract_id};
 
 use super::{
-    ContractAddress, Runtime,
+    ContractAddress, MAX_UNTRUSTED_GAS_LIMIT, Runtime,
     fuel::{Fuel, UsageKind, record_fuel},
     stack::CallFrame,
     wit::{CoreContext, FallContext, Holder, ProcContext, Signer, ViewContext},
@@ -151,14 +151,22 @@ impl Runtime {
                 // See `SYSTEM_FUEL_CEILING`.
                 (Some(s), _) if s.is_core() => SYSTEM_FUEL_CEILING,
                 // User op: metered by the payer's committed gas limit.
-                (_, Some(p)) => p
-                    .gas_limit
-                    .checked_mul(self.gas_to_fuel_multiplier)
-                    .ok_or_else(|| {
-                        ExecutionError::Deterministic(anyhow!("Gas limit exceeds the fuel range"))
-                    })?,
+                (_, Some(p)) => {
+                    if p.gas_limit > MAX_UNTRUSTED_GAS_LIMIT {
+                        return Err(ExecutionError::Deterministic(anyhow!(
+                            "Gas limit exceeds the maximum of {MAX_UNTRUSTED_GAS_LIMIT}"
+                        )));
+                    }
+                    p.gas_limit
+                        .checked_mul(self.gas_to_fuel_multiplier)
+                        .ok_or_else(|| {
+                            ExecutionError::Deterministic(anyhow!(
+                                "Gas limit exceeds the fuel range"
+                            ))
+                        })?
+                }
                 // Read-only `/view`: the operator-configurable view cap.
-                (_, None) => self.fuel_limit_for_view(),
+                (_, None) => self.fuel_limit_for_view()?,
             },
         })
     }

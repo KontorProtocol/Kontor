@@ -9,7 +9,8 @@ use crate::runtime::token::api as token;
 use crate::runtime::wit::Signer;
 use crate::runtime::wit::kontor::built_in::context::HolderRef;
 use crate::runtime::{
-    ContractAddress, Decimal, ExecutionError, TransactionContext, native_provenance,
+    ContractAddress, Decimal, ExecutionError, MAX_UNTRUSTED_GAS_LIMIT, TransactionContext,
+    native_provenance,
 };
 use crate::test_utils::test_runtime;
 
@@ -338,7 +339,7 @@ async fn invalid_payment_limits_do_not_reserve_or_start_execution() -> Result<()
     let actor = funded(&mut runtime).await?;
     let before = balance(&mut runtime, HolderRef::from(&actor)).await?;
     let burned = balance(&mut runtime, HolderRef::Burner).await?;
-    for gas_limit in [0, u64::MAX] {
+    for gas_limit in [0, MAX_UNTRUSTED_GAS_LIMIT + 1, u64::MAX] {
         let previous = runtime.start_usage();
         let result = runtime
             .execute(
@@ -372,6 +373,42 @@ async fn invalid_payment_limits_do_not_reserve_or_start_execution() -> Result<()
         );
         assert!(runtime.storage.savepoint_stack.is_empty().await);
     }
+
+    runtime
+        .set_context(1, Some(TransactionContext::builder().build()), None, None)
+        .await;
+    let payment = Payment {
+        signer_id: actor.signer_id().unwrap(),
+        gas_limit: MAX_UNTRUSTED_GAS_LIMIT + 1,
+    };
+    let result = runtime
+        .publish(
+            &actor,
+            payment,
+            "over-limit",
+            include_bytes!("../../../../../../test-contracts/binaries/counter.wasm.br"),
+            &native_provenance()?,
+        )
+        .await;
+    assert!(matches!(result, Err(ExecutionError::Deterministic(error))
+            if error.to_string().contains("Gas limit exceeds the maximum")));
+    assert!(runtime.storage.savepoint_stack.is_empty().await);
+    assert_eq!(
+        balance(&mut runtime, HolderRef::from(&actor)).await?,
+        before
+    );
+    assert_eq!(balance(&mut runtime, HolderRef::Burner).await?, burned);
+    assert!(
+        runtime
+            .storage
+            .contract_id(&ContractAddress {
+                name: "over-limit".into(),
+                height: 1,
+                tx_index: 0,
+            })
+            .await?
+            .is_none()
+    );
     Ok(())
 }
 
