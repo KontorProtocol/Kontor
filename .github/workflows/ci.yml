@@ -257,7 +257,7 @@ jobs:
         shell: bash
         run: |
           mkdir -p "$RUNNER_TEMP/linux-crash-diagnostics"
-          echo "$RUNNER_TEMP/linux-crash-diagnostics/core.%e.%p" | sudo tee /proc/sys/kernel/core_pattern
+          echo "$RUNNER_TEMP/linux-crash-diagnostics/core.%p.%E" | sudo tee /proc/sys/kernel/core_pattern
           ulimit -c unlimited
           npm run test:regtest
         working-directory: ./sdk
@@ -267,13 +267,24 @@ jobs:
         run: |
           shopt -s nullglob
           for core_file in "$RUNNER_TEMP/linux-crash-diagnostics"/core.*; do
-            gdb --batch \
+            [[ "$core_file" == *.txt ]] && continue
+            executable="${core_file##*/core.}"
+            executable="${executable#*.}"
+            # Linux encodes the executable path in %E with '!' in place of '/'.
+            executable="${executable//!//}"
+            if [[ "$executable" != /* || ! -f "$executable" || ! -x "$executable" ]]; then
+              echo "Skipping $core_file: executable unavailable: $executable" | tee "$core_file.txt"
+              continue
+            fi
+            if ! gdb --batch \
               -ex 'set pagination off' \
               -ex 'thread apply all bt 50' \
               -ex 'info registers' \
               -ex 'x/16i $pc-32' \
-              "$GITHUB_WORKSPACE/core/target/release/kontor" "$core_file" \
-              > "$core_file.txt" 2>&1
+              "$executable" "$core_file" \
+              > "$core_file.txt" 2>&1; then
+              echo "GDB could not complete diagnostics for $core_file" >> "$core_file.txt"
+            fi
             cat "$core_file.txt"
           done
       - name: Preserve Linux crash diagnostics
