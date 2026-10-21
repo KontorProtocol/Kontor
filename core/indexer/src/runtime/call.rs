@@ -752,9 +752,8 @@ const MAX_STRING_LITERAL_BYTES: usize = 16 * 1024;
 /// below the overflow depth. CONSENSUS-LOAD-BEARING — see `MAX_STRING_LITERAL_BYTES`.
 const MAX_EXPR_DEPTH: usize = 64;
 
-/// Fuel budget for trusted, system-paid, MUST-COMPLETE core calls (per-block hooks,
-/// issuance, native publishing) — effectively unmetered. Decided from the signer in
-/// `invoke`.
+/// Fuel budget for trusted Core calls and internal system views, effectively
+/// unmetered. Selected by a Core signer or the explicit system-view entry point.
 ///
 /// `i64::MAX as u64`, NOT `u64::MAX`: the remaining fuel is bound into the storage
 /// read path as a SQL i64 size-budget (`CASE WHEN size <= :fuel`, contract_state.rs),

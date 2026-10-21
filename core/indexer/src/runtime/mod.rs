@@ -409,9 +409,8 @@ impl Runtime {
             usage_kind: UsageKind::System,
             fuel_checkpoint: 0,
             gas_limit_for_non_procs: 100_000,
-            // The pool overrides this from node config on read-only runtimes; the
-            // reactor's consensus runtime leaves it at the default (views never run
-            // there). Independent of the system core-call budget.
+            // The pool overrides this from node config; trusted internal views
+            // select the system budget independently.
             view_gas_limit: DEFAULT_VIEW_GAS_LIMIT,
             gas_to_fuel_multiplier: 1_000,
             pricing: Pricing::default(),
