@@ -231,7 +231,7 @@ jobs:
       - name: Install dependencies (Linux)
         run: |
           sudo apt-get update
-          sudo apt-get install -y libzmq3-dev libboost-all-dev libevent-dev
+          sudo apt-get install -y libzmq3-dev libboost-all-dev libevent-dev gdb
       - name: Download Bitcoin Core v31.1
         run: |
           curl -L -o bitcoin.zip "https://github.com/KontorProtocol/Kontor/releases/download/bitcoin-v31.1/bitcoin-${{ runner.os }}-${{ runner.arch }}.zip"
@@ -253,8 +253,37 @@ jobs:
         run: npm test
         working-directory: ./sdk
       - name: Live regtest test
-        run: npm run test:regtest
+        id: live-regtest
+        shell: bash
+        run: |
+          mkdir -p "$RUNNER_TEMP/linux-crash-diagnostics"
+          echo "$RUNNER_TEMP/linux-crash-diagnostics/core.%e.%p" | sudo tee /proc/sys/kernel/core_pattern
+          ulimit -c unlimited
+          npm run test:regtest
         working-directory: ./sdk
+      - name: Collect Linux crash diagnostics
+        if: failure() && steps.live-regtest.outcome == 'failure'
+        shell: bash
+        run: |
+          shopt -s nullglob
+          for core_file in "$RUNNER_TEMP/linux-crash-diagnostics"/core.*; do
+            gdb --batch \
+              -ex 'set pagination off' \
+              -ex 'thread apply all bt 50' \
+              -ex 'info registers' \
+              -ex 'x/16i $pc-32' \
+              "$GITHUB_WORKSPACE/core/target/release/kontor" "$core_file" \
+              > "$core_file.txt" 2>&1
+            cat "$core_file.txt"
+          done
+      - name: Preserve Linux crash diagnostics
+        if: failure() && steps.live-regtest.outcome == 'failure'
+        uses: actions/upload-artifact@v7
+        with:
+          name: linux-sdk-crash-reports-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/linux-crash-diagnostics/*.txt
+          if-no-files-found: warn
+          retention-days: 7
 
   docker-cache-deps:
     name: Docker - Cache Dependencies (${{ matrix.arch }})
