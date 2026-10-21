@@ -9593,9 +9593,9 @@ dependencies = [
 
 [[package]]
 name = "zeromq-src"
-version = "0.2.6+4.3.4"
+version = "0.3.6+4.3.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "fc120b771270365d5ed0dfb4baf1005f2243ae1ae83703265cb3504070f4160b"
+checksum = "d9a1c884770df9c1b3eb0a0ad01d7516234879e0ce144c505348550f2492923e"
 dependencies = [
  "cc",
  "dircpy",
@@ -9660,8 +9660,7 @@ dependencies = [
 [[package]]
 name = "zmq-sys"
 version = "0.12.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8e8351dc72494b4d7f5652a681c33634063bbad58046c1689e75270908fdc864"
+source = "git+https://github.com/erickt/rust-zmq?rev=d96de8f5e964e9096e1575a38cde5472c53bde6e#d96de8f5e964e9096e1575a38cde5472c53bde6e"
 dependencies = [
  "libc",
  "system-deps",
