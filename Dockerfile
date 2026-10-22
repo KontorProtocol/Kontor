@@ -38,9 +38,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
 # ---------------------------------------------------------------------
-# Cacher — builds the full dependency tree once from recipe.json. As
-# long as Cargo.lock is unchanged, this whole layer is a cache hit and
-# the stage is skipped entirely in subsequent builds. This is the
+# Cacher: builds the full dependency tree once from recipe.json. When
+# the recipe and vendored sources are unchanged, this layer is a cache
+# hit and the stage is skipped entirely in subsequent builds. This is the
 # mechanism doing the real caching work — sccache would add overhead
 # here without contributing; BuildKit cache mounts don't persist
 # across CI runs, so per-rustc-call caching has nothing to hit.
@@ -48,6 +48,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 FROM builder-base AS cacher
 WORKDIR /build/core
 COPY --from=planner /build/core/recipe.json recipe.json
+# Cargo Chef omits path patches outside the workspace from its recipe.
+COPY core/vendor vendor
 RUN cargo chef cook --release --recipe-path recipe.json
 
 # ---------------------------------------------------------------------
