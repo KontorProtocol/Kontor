@@ -27,7 +27,7 @@ pub struct Manager {
     linkers: Arc<Linkers>,
     component_cache: ComponentCache,
     network: bitcoin::Network,
-    /// Operator-set per-call gas budget for `/view` reads served by this pool.
+    /// Operator-requested per-call gas budget for `/view` reads served by this pool.
     /// Applied to each pooled runtime in `create`; the reactor's consensus runtime
     /// is a separate instance and keeps the fixed consensus limit.
     view_gas_limit: u64,
@@ -135,6 +135,7 @@ mod tests {
     use super::*;
     use crate::config::DEFAULT_VIEW_GAS_LIMIT;
     use crate::database::queries::{footprint_cache_get, footprint_cache_set, insert_block};
+    use crate::runtime::MAX_UNTRUSTED_GAS_LIMIT;
     use crate::runtime::Storage;
     use crate::runtime::wit::resources::Keys;
     use crate::test_utils::new_mock_block_hash;
@@ -151,7 +152,7 @@ mod tests {
     #[tokio::test]
     async fn view_cap_is_decoupled_from_core_call_budget() -> anyhow::Result<()> {
         let dir = TempDir::new()?;
-        let custom = 9_000_000u64;
+        let custom = 25_000u64;
         assert_ne!(
             custom, DEFAULT_VIEW_GAS_LIMIT,
             "test needs a non-default cap"
@@ -163,7 +164,7 @@ mod tests {
             bitcoin::Network::Regtest,
             custom,
         )?;
-        let pooled = pool.create().await.map_err(|e| anyhow::anyhow!("{e}"))?;
+        let mut pooled = pool.create().await.map_err(|e| anyhow::anyhow!("{e}"))?;
         // A directly-built (consensus) Runtime carries the untouched defaults.
         let conn = new_connection(dir.path(), "consensus.db").await?;
         let consensus =
@@ -173,6 +174,15 @@ mod tests {
         assert_eq!(
             pooled.view_gas_limit, custom,
             "pooled /view runtime must use the operator-configured view cap"
+        );
+        assert_eq!(
+            pooled.fuel_limit_for_view()?,
+            custom * pooled.gas_to_fuel_multiplier
+        );
+        pooled.view_gas_limit = u64::MAX;
+        assert_eq!(
+            pooled.fuel_limit_for_view()?,
+            MAX_UNTRUSTED_GAS_LIMIT * pooled.gas_to_fuel_multiplier
         );
         // ...but the fixed system budget did NOT — it matches a directly-built
         // runtime even on the pool runtime.

@@ -8,12 +8,9 @@ use serde::{Deserialize, Serialize};
 use crate::consensus::signing::ConsensusMode;
 use crate::logging;
 use crate::runtime::numerics::string_to_decimal;
-use crate::runtime::{GenesisParameters, GenesisValidator};
+use crate::runtime::{GenesisParameters, GenesisValidator, MAX_UNTRUSTED_GAS_LIMIT};
 
-/// Default per-call gas budget for read-only `/view` queries. Generous out of the
-/// box (operators raise it further on read/archive nodes); independent of the fixed
-/// system core-call budget, which is effectively unmetered.
-pub const DEFAULT_VIEW_GAS_LIMIT: u64 = 1_000_000;
+pub const DEFAULT_VIEW_GAS_LIMIT: u64 = MAX_UNTRUSTED_GAS_LIMIT;
 
 #[derive(Debug, Clone, Serialize, Deserialize, Parser)]
 pub struct Config {
@@ -178,17 +175,13 @@ pub struct Config {
 
     // --- Read serving ---
     /// Per-call gas budget for read-only `/view` queries served by this node's
-    /// runtime pool. NON-consensus: a `/view` read never enters a block, so nodes
-    /// may set different caps without diverging. Lean validators keep the default;
-    /// a read/archive node serving heavy queries (leaderboards, large scans) raises
-    /// it. Applies ONLY to the read-only pool's runtimes — never to a view
-    /// cross-called inside a consensus procedure, which keeps the fixed consensus
-    /// limit (the pool builds separate `Runtime` instances from the reactor's).
+    /// runtime pool, limited to `MAX_UNTRUSTED_GAS_LIMIT`. Nodes may set a lower
+    /// value without affecting consensus Core calls or nested contract views.
     #[clap(
         long,
         env = "VIEW_GAS_LIMIT",
         default_value_t = DEFAULT_VIEW_GAS_LIMIT,
-        help = "Per-call gas budget for read-only /view queries (default 1000000; raise on read/archive nodes)"
+        help = "Per-call gas budget for read-only /view queries (default 100000; higher values are capped at 100000)"
     )]
     pub view_gas_limit: u64,
 }

@@ -49,6 +49,9 @@ async fn actual_wasmtime_conversion_errors_match_the_compatibility_adapter() -> 
             );
             let component = Component::new(&runtime.engine, wat)?;
             let mut store = runtime.make_store(BUDGET)?;
+            // The native allowance is disabled in production; keep its error
+            // classification covered for compatibility.
+            store.set_hostcall_fuel_enabled(true);
             store.set_hostcall_fuel(allowance);
             let instance = Linker::new(&runtime.engine)
                 .instantiate_async(&mut store, &component)

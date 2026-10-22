@@ -55,8 +55,12 @@ use crate::{
         },
     },
     runtime::{
-        ComponentCache, Decimal, GenesisParameters, Runtime, Storage, numerics::decimal_to_string,
-        staking::api::get_active_set,
+        ComponentCache, Decimal, GenesisParameters, Runtime, Storage,
+        numerics::decimal_to_string,
+        staking::{
+            address as staking_address,
+            api::wave::{get_active_set_call_expr, get_active_set_parse_return_expr},
+        },
     },
     test_utils::new_mock_block_hash,
 };
@@ -724,9 +728,11 @@ impl<E: Executor> Reactor<E> {
 
 /// Query the staking contract and build a ValidatorSet from the active validators.
 async fn build_validator_set(runtime: &mut Runtime) -> Result<ValidatorSet> {
-    let active_set = get_active_set(runtime)
+    let result = runtime
+        .execute_system_view(&staking_address(), &get_active_set_call_expr())
         .await
         .context("Failed to query active validator set from staking contract")?;
+    let active_set = get_active_set_parse_return_expr(&result);
 
     let validators: Vec<Validator> = active_set
         .into_iter()

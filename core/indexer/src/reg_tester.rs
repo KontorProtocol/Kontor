@@ -1256,7 +1256,7 @@ impl RegTesterCluster {
             active >= 1,
             "cluster needs at least the seed node (index 0)"
         );
-        let (seed_child, seed_client, seed_api_port) = Self::spawn_node(
+        let (mut seed_child, seed_client, seed_api_port) = Self::spawn_node(
             &node_configs[0],
             &[],
             &genesis_path,
@@ -1269,7 +1269,12 @@ impl RegTesterCluster {
         // ≥ the `retry_extended` budget `wait_for_available` uses: the seed only
         // publishes its listen address after initial mempool sync + consensus
         // start-up, which under parallel CI load can run well past 30s.
-        let seed_addr = Self::wait_for_listen_addr(&seed_client, Duration::from_secs(90)).await?;
+        let seed_addr = tokio::select! {
+            status = seed_child.wait() => {
+                bail!("seed node exited before reporting a bound consensus listen address: {}", status?);
+            }
+            result = Self::wait_for_listen_addr(&seed_client, Duration::from_secs(90)) => result?,
+        };
         node_configs[0].running = Some(ClusterNode {
             client: seed_client,
             child: seed_child,

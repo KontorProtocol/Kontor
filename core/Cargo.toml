@@ -23,7 +23,7 @@ too_many_arguments = "allow"
 
 [workspace.dependencies]
 # Keep our WIT tools aligned with wit-bindgen; Wasmtime owns its internal versions.
-wasmtime = { version = "=49.0.3", features = ["wave", "component-model-async"] }
+wasmtime = { git = "https://github.com/wilfreddenton/wasmtime", rev = "bfdee9ba9a483915dc95432708cf7db8281adbc1", features = ["wave", "component-model-async"] }
 wit-bindgen = "=0.63.0"
 wit-bindgen-core = "=0.63.0"
 wit-bindgen-rust = "=0.63.0"
@@ -81,9 +81,11 @@ ts-rs = { version = "=12.0.1", features = ["format"] }
 # Malachite BFT consensus
 malachitebft-app-channel = { version = "=0.8.1", package = "arc-malachitebft-app-channel" }
 
-# Preserve resolved /tcp/0 listen addresses until upstream includes the fix.
 [patch.crates-io]
+# Preserve resolved /tcp/0 listen addresses until upstream includes the fix.
 arc-malachitebft-network = { path = "vendor/arc-malachitebft-network" }
+# Use ZeroMQ 4.3.5's alignment fix until zmq-sys releases its zeromq-src 0.3 update.
+zmq-sys = { git = "https://github.com/erickt/rust-zmq", rev = "d96de8f5e964e9096e1575a38cde5472c53bde6e" }
 
 # Optimize the proof-system crates even in dev/test builds. Proof
 # generation (kontor-crypto's Nova prover) is exercised only in tests and

@@ -30,7 +30,7 @@ async fn observation(
     let limit = if case.paid {
         runtime.fuel_limit_for_non_procs()
     } else {
-        runtime.fuel_limit_for_view()
+        runtime.fuel_limit_for_view()?
     };
     let previous = runtime.start_usage();
     let start = Instant::now();

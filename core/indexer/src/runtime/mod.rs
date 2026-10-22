@@ -39,6 +39,7 @@ use guest_memory::{GuestMemoryLimiter, GuestMemoryLimits};
 use libsql::Connection;
 use lowering::Linker;
 use sha2::{Digest, Sha256};
+use staking::api::wave::{get_sigma_min_call_expr, get_sigma_min_parse_return_expr};
 pub use stdlib::{
     CheckedArithmetics, FromWaveValue, WaveType, from_wave_expr, from_wave_value, to_wave_expr,
     wave_type,
@@ -114,7 +115,7 @@ pub use wit::kontor::built_in::numbers_types::{
 use anyhow::{Result, anyhow};
 use std::str::FromStr;
 use wasmtime::{
-    Engine, InstanceAllocationStrategy, Store,
+    Config, Engine, InstanceAllocationStrategy, LiftingPrices, Store,
     component::{Component, HasData, ResourceTable},
 };
 
@@ -134,6 +135,9 @@ use crate::runtime::{
     stack::{CallFrame, Stack},
     wit::Signer,
 };
+
+/// Paid-operation limit is consensus critical; views reuse the same ceiling.
+pub(crate) const MAX_UNTRUSTED_GAS_LIMIT: u64 = 100_000;
 
 #[derive(Clone, Debug)]
 pub struct GenesisParameters {
@@ -282,11 +286,10 @@ pub struct Runtime {
     /// `invoke`), so this is the Payment's nominal cap, not the core fuel
     /// budget; it still bounds a user-signed `execute_api` call (the test path).
     pub gas_limit_for_non_procs: u64,
-    /// Fuel budget for read-only `/view` calls (the payment-`None` path) ONLY.
+    /// Requested gas budget for public read-only `/view` calls.
     /// Operator-configurable per node (set from `Config::view_gas_limit` on the
-    /// read-only pool runtime; left at the default on the reactor's consensus runtime,
-    /// where views don't run). DELIBERATELY SEPARATE from `gas_limit_for_non_procs` so
-    /// an operator's view cap can NEVER starve consensus core calls.
+    /// read-only pool runtime). The effective budget cannot exceed
+    /// `MAX_UNTRUSTED_GAS_LIMIT`; trusted consensus views use system fuel.
     pub view_gas_limit: u64,
     pub gas_to_fuel_multiplier: u64,
     pub pricing: Pricing,
@@ -320,9 +323,14 @@ pub struct Runtime {
 
 impl Runtime {
     pub fn new_engine() -> Result<Engine> {
-        let mut config = wasmtime::Config::new();
+        let mut config = Config::new();
         config.wasm_component_model_async(true);
         config.consume_fuel(true);
+        config.consume_lifting_fuel(Some(LiftingPrices {
+            lift_value: 512,
+            string_byte: 16,
+            metadata_byte: 16,
+        }));
         // Wasmtime 48's Mach receiver aborts on an interrupted receive. Kontor
         // has no Mach-based crash handler, so use POSIX traps on macOS instead.
         config.macos_use_mach_ports(false);
@@ -401,9 +409,8 @@ impl Runtime {
             usage_kind: UsageKind::System,
             fuel_checkpoint: 0,
             gas_limit_for_non_procs: 100_000,
-            // The pool overrides this from node config on read-only runtimes; the
-            // reactor's consensus runtime leaves it at the default (views never run
-            // there). Independent of the system core-call budget.
+            // The pool overrides this from node config; trusted internal views
+            // select the system budget independently.
             view_gas_limit: DEFAULT_VIEW_GAS_LIMIT,
             gas_to_fuel_multiplier: 1_000,
             pricing: Pricing::default(),
@@ -472,10 +479,14 @@ impl Runtime {
         self.gas_limit_for_non_procs * self.gas_to_fuel_multiplier
     }
 
-    /// Fuel budget for a read-only `/view` call (the operator-configurable cap),
-    /// distinct from the fixed consensus core-call budget above.
-    pub fn fuel_limit_for_view(&self) -> u64 {
-        self.view_gas_limit * self.gas_to_fuel_multiplier
+    /// Fuel budget for a read-only `/view` call.
+    pub fn fuel_limit_for_view(&self) -> Result<u64, ExecutionError> {
+        self.view_gas_limit
+            .min(MAX_UNTRUSTED_GAS_LIMIT)
+            .checked_mul(self.gas_to_fuel_multiplier)
+            .ok_or_else(|| {
+                ExecutionError::Deterministic(anyhow!("View gas limit exceeds the fuel range"))
+            })
     }
 
     /// Build a Payment for system (Core-paid) operations.
@@ -514,7 +525,10 @@ impl Runtime {
         }
         // Zero is uninitialized, never a valid configured floor. This also
         // resumes an interrupted bootstrap after the contract was published.
-        if staking::api::get_sigma_min(self).await? == Decimal::default() {
+        let result = self
+            .execute_system_view(&staking::address(), &get_sigma_min_call_expr())
+            .await?;
+        if get_sigma_min_parse_return_expr(&result) == Decimal::default() {
             staking::api::set_sigma_min(self, &core_signer, genesis.sigma_min).await??;
         }
         if !genesis.validators.is_empty() {
@@ -544,6 +558,7 @@ impl Runtime {
         provenance
             .validate()
             .map_err(ExecutionError::Deterministic)?;
+        let fuel_limit = self.call_fuel_limit(Some(signer), Some(&payment), None)?;
         // Contract names are embedded in the wire address format
         // `name_height_txindex` — `_` is the separator, so a name containing
         // it mints an ambiguously-parseable address, permanent once published
@@ -589,7 +604,6 @@ impl Runtime {
             }
         };
 
-        let fuel_limit = self.call_fuel_limit(Some(signer), Some(&payment), None)?;
         let outcome = if signer.is_core() {
             self.publish_unsettled(
                 signer, &payment, &address, author, bytes, provenance, fuel_limit,
@@ -1031,6 +1045,7 @@ impl Runtime {
             s.limiter(|runtime| runtime.guest_memory_limiter.as_mut().unwrap());
         }
         s.set_fuel(fuel)?;
+        s.set_hostcall_fuel_enabled(false);
         s.data_mut().fuel_checkpoint = fuel;
         #[cfg(test)]
         if let Some(probe) = s.data().conversion_probe.clone() {

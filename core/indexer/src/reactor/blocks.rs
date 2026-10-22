@@ -18,7 +18,13 @@ use crate::runtime::{
         accrue_storage_rewards, expire_challenges, generate_challenges_for_block,
         record_block_root, settle_expired_challenges,
     },
-    staking::api::{distribute_ordering_reward, has_reward_recipients, process_pending_validators},
+    staking::{
+        address as staking_address,
+        api::{
+            distribute_ordering_reward, process_pending_validators,
+            wave::{has_reward_recipients_call_expr, has_reward_recipients_parse_return_expr},
+        },
+    },
     token::api::mint_emission,
     wit::Signer,
 };
@@ -326,7 +332,11 @@ impl<E: Executor> Reactor<E> {
         self.runtime
             .set_context(block.height, None, None, None)
             .await;
-        let eligible = has_reward_recipients(&mut self.runtime).await?;
+        let result = self
+            .runtime
+            .execute_system_view(&staking_address(), &has_reward_recipients_call_expr())
+            .await?;
+        let eligible = has_reward_recipients_parse_return_expr(&result);
         let emission = mint_emission(&mut self.runtime, &core_signer, eligible).await??;
         // Credit the block-start active set before penalties can exhaust its last
         // member. A minted reward must not be stranded behind an empty recipient set.

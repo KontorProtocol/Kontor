@@ -484,9 +484,8 @@ pub fn generate_functions(
     };
 
     let execute = if test {
-        // Api wrappers are host-side / system calls: always Core-paid.
-        // `execute_api` is the entry point that handles that on both
-        // `indexer::Runtime` and `testlib::Runtime`.
+        // On the indexer runtime, signerless wrappers use the public view
+        // budget. Trusted internal views select system fuel explicitly.
         quote! { runtime.execute_api }
     } else {
         quote! { foreign::call }

@@ -10,12 +10,9 @@ use crate::runtime::{ExecutionError, Runtime};
 use crate::test_utils::test_runtime;
 
 const BUDGET: u64 = 10_000_000;
-const ALLOCATION_ERROR: &str = "too much data is being copied between the host and the guest: fuel allocated for hostcalls has been exhausted";
 
-// These characterize the engine/host boundary, not production metering. Keep
-// engine-only measurements separate from tariffs supplied by Kontor's imports.
 #[tokio::test]
-async fn repeated_conversion_needs_host_charges_not_just_an_allocation_allowance() -> Result<()> {
+async fn repeated_conversion_charges_lifting_and_host_work() -> Result<()> {
     let (runtime, _dir, _name) = test_runtime().await?;
     let component = Component::new(
         &runtime.engine,
@@ -49,7 +46,7 @@ async fn repeated_conversion_needs_host_charges_not_just_an_allocation_allowance
                     },
                 )?;
                 let mut store = runtime.make_store(BUDGET)?;
-                store.set_hostcall_fuel(length as usize);
+                assert!(!store.hostcall_fuel_enabled());
                 let instance = linker.instantiate_async(&mut store, &component).await?;
                 let func = instance.get_func(&mut store, "run").unwrap();
                 store.set_fuel(BUDGET)?;
@@ -62,7 +59,6 @@ async fn repeated_conversion_needs_host_charges_not_just_an_allocation_allowance
                 .await?;
                 assert_eq!(results, [Val::U32(42)]);
                 assert_eq!(bytes.load(Ordering::Relaxed), (length * count) as usize);
-                assert_eq!(store.hostcall_fuel(), length as usize);
                 costs.push(BUDGET - store.get_fuel()?);
             }
             assert_eq!(
@@ -77,22 +73,23 @@ async fn repeated_conversion_needs_host_charges_not_just_an_allocation_allowance
             );
         }
         assert_eq!(
-            engine_costs[0], engine_costs[1],
-            "Wasmtime instruction fuel alone does not price conversion bytes"
+            engine_costs[1] - engine_costs[0],
+            u64::from(count) * (8192 - 8) * 16,
+            "each repeated lift pays for its encoded string bytes"
         );
     }
     Ok(())
 }
 
 #[tokio::test]
-async fn allocation_guard_precedes_import_entry_but_a_tariff_does_not() -> Result<()> {
+async fn lifting_and_host_tariffs_fail_at_their_respective_boundaries() -> Result<()> {
     let (runtime, _dir, _name) = test_runtime().await?;
     let component = Component::new(
         &runtime.engine,
         include_str!("fixtures/abi-repeat-import.wat"),
     )?;
     let length = 8192;
-    for allowance in [length - 1, length] {
+    for budget in [200, 150_000] {
         let bytes = Arc::new(AtomicUsize::new(0));
         let seen = bytes.clone();
         let mut linker = Linker::<Runtime>::new(&runtime.engine);
@@ -110,10 +107,11 @@ async fn allocation_guard_precedes_import_entry_but_a_tariff_does_not() -> Resul
                 })
             })?;
         let mut store = runtime.make_store(BUDGET)?;
-        store.set_hostcall_fuel(allowance);
+        store.set_hostcall_fuel(0);
+        assert!(!store.hostcall_fuel_enabled());
         let instance = linker.instantiate_async(&mut store, &component).await?;
         let func = instance.get_func(&mut store, "run").unwrap();
-        store.set_fuel(200)?;
+        store.set_fuel(budget)?;
         let mut results = [Val::Bool(false)];
         let error = func
             .call_async(
@@ -123,16 +121,14 @@ async fn allocation_guard_precedes_import_entry_but_a_tariff_does_not() -> Resul
             )
             .await
             .unwrap_err();
-        if allowance < length {
-            assert_eq!(bytes.load(Ordering::Relaxed), 0);
-            assert!(!error.is::<Trap>(), "{error:?}");
-        } else {
-            assert_eq!(bytes.load(Ordering::Relaxed), length);
-            assert!(matches!(
-                error.downcast_ref::<Trap>(),
-                Some(Trap::OutOfFuel)
-            ));
-        }
+        assert_eq!(
+            bytes.load(Ordering::Relaxed),
+            if budget == 200 { 0 } else { length }
+        );
+        assert!(matches!(
+            error.downcast_ref::<Trap>(),
+            Some(Trap::OutOfFuel)
+        ));
         let classified =
             Runtime::decode_result(false, Ok(Err(error)), results.to_vec(), &mut store).await;
         assert!(
@@ -144,7 +140,7 @@ async fn allocation_guard_precedes_import_entry_but_a_tariff_does_not() -> Resul
 }
 
 #[tokio::test]
-async fn record_fields_require_allocation_allowance_and_structural_fuel() -> Result<()> {
+async fn record_fields_consume_structural_fuel_before_output_encoding() -> Result<()> {
     let (runtime, _dir, _name) = test_runtime().await?;
     for count in [16, 128, 512] {
         let fields = (0..count)
@@ -176,25 +172,16 @@ async fn record_fields_require_allocation_allowance_and_structural_fuel() -> Res
         let component = Component::new(&runtime.engine, wat)?;
         let mut store = runtime.make_store(BUDGET)?;
         store.set_hostcall_fuel(0);
+        assert!(!store.hostcall_fuel_enabled());
         let instance = Linker::new(&runtime.engine)
             .instantiate_async(&mut store, &component)
             .await?;
         let func = instance.get_func(&mut store, "run").unwrap();
-        let mut results = [Val::Bool(false)];
-        let error = func
-            .call_async(&mut store, &[], &mut results)
-            .await
-            .unwrap_err();
-        assert_eq!(error.root_cause().to_string(), ALLOCATION_ERROR);
-
-        let mut store = runtime.make_store(BUDGET)?;
-        store.set_hostcall_fuel(BUDGET as usize);
-        let instance = Linker::new(&runtime.engine)
-            .instantiate_async(&mut store, &component)
-            .await?;
-        let func = instance.get_func(&mut store, "run").unwrap();
+        store.set_fuel(BUDGET)?;
         let mut results = [Val::Bool(false)];
         func.call_async(&mut store, &[], &mut results).await?;
+        let lifting_call_cost = BUDGET - store.get_fuel()?;
+        assert!(lifting_call_cost >= count as u64 * 512);
         let Val::Record(fields) = &results[0] else {
             panic!("expected a record");
         };
@@ -205,6 +192,25 @@ async fn record_fields_require_allocation_allowance_and_structural_fuel() -> Res
         let expected = "{:}";
         let ty = func.ty(&store).results().next().unwrap();
         assert_eq!(Val::from_wave(&ty, expected)?, results[0]);
+
+        let mut limited_store = runtime.make_store(BUDGET)?;
+        let limited_instance = Linker::new(&runtime.engine)
+            .instantiate_async(&mut limited_store, &component)
+            .await?;
+        let limited_func = limited_instance
+            .get_func(&mut limited_store, "run")
+            .unwrap();
+        limited_store.set_fuel(count as u64 * 512 - 1)?;
+        let mut limited_results = [Val::Bool(false)];
+        let error = limited_func
+            .call_async(&mut limited_store, &[], &mut limited_results)
+            .await
+            .unwrap_err();
+        assert!(matches!(
+            error.downcast_ref::<Trap>(),
+            Some(Trap::OutOfFuel)
+        ));
+
         let budget = Fuel::Result.cost() + Fuel::ResultBytes(expected.len() as u64).cost();
         store.set_fuel(budget)?;
         let result = Runtime::decode_result(false, Ok(Ok(())), results.to_vec(), &mut store).await;

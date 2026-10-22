@@ -18,7 +18,7 @@ use indexer_types::{OpStatus, Payment};
 use crate::database::native_contracts::{TOKEN_CONTRACT_ID, is_native_contract_id};
 
 use super::{
-    ContractAddress, Runtime,
+    ContractAddress, MAX_UNTRUSTED_GAS_LIMIT, Runtime,
     fuel::{Fuel, UsageKind, record_fuel},
     stack::CallFrame,
     wit::{CoreContext, FallContext, Holder, ProcContext, Signer, ViewContext},
@@ -61,6 +61,25 @@ pub(super) struct CallOutcome {
 }
 
 impl Runtime {
+    pub(crate) async fn execute_system_view(
+        &mut self,
+        contract_address: &ContractAddress,
+        expr: &str,
+    ) -> Result<String, ExecutionError> {
+        // A root call keeps system usage accounting, while no signer or payment
+        // keeps the view context from gaining procedure authority.
+        self.invoke_unsettled(
+            contract_address,
+            None,
+            None,
+            expr,
+            SYSTEM_FUEL_CEILING,
+            false,
+        )
+        .await?
+        .result
+    }
+
     fn guest_memory_backing_failure(&self) -> Option<ExecutionError> {
         self.guest_memory_limiter
             .as_ref()
@@ -151,14 +170,22 @@ impl Runtime {
                 // See `SYSTEM_FUEL_CEILING`.
                 (Some(s), _) if s.is_core() => SYSTEM_FUEL_CEILING,
                 // User op: metered by the payer's committed gas limit.
-                (_, Some(p)) => p
-                    .gas_limit
-                    .checked_mul(self.gas_to_fuel_multiplier)
-                    .ok_or_else(|| {
-                        ExecutionError::Deterministic(anyhow!("Gas limit exceeds the fuel range"))
-                    })?,
+                (_, Some(p)) => {
+                    if p.gas_limit > MAX_UNTRUSTED_GAS_LIMIT {
+                        return Err(ExecutionError::Deterministic(anyhow!(
+                            "Gas limit exceeds the maximum of {MAX_UNTRUSTED_GAS_LIMIT}"
+                        )));
+                    }
+                    p.gas_limit
+                        .checked_mul(self.gas_to_fuel_multiplier)
+                        .ok_or_else(|| {
+                            ExecutionError::Deterministic(anyhow!(
+                                "Gas limit exceeds the fuel range"
+                            ))
+                        })?
+                }
                 // Read-only `/view`: the operator-configurable view cap.
-                (_, None) => self.fuel_limit_for_view(),
+                (_, None) => self.fuel_limit_for_view()?,
             },
         })
     }
@@ -725,9 +752,8 @@ const MAX_STRING_LITERAL_BYTES: usize = 16 * 1024;
 /// below the overflow depth. CONSENSUS-LOAD-BEARING — see `MAX_STRING_LITERAL_BYTES`.
 const MAX_EXPR_DEPTH: usize = 64;
 
-/// Fuel budget for trusted, system-paid, MUST-COMPLETE core calls (per-block hooks,
-/// issuance, native publishing) — effectively unmetered. Decided from the signer in
-/// `invoke`.
+/// Fuel budget for trusted Core calls and internal system views, effectively
+/// unmetered. Selected by a Core signer or the explicit system-view entry point.
 ///
 /// `i64::MAX as u64`, NOT `u64::MAX`: the remaining fuel is bound into the storage
 /// read path as a SQL i64 size-budget (`CASE WHEN size <= :fuel`, contract_state.rs),
