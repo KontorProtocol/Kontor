@@ -3,8 +3,8 @@
 # The advisories ignored below are in TRANSITIVE dependencies that cannot
 # currently be patched at the lockfile level — each is pinned by a major
 # dependency whose fixed release would require a breaking upgrade out of scope
-# for a routine audit pass. Each entry documents why it is not reachable on
-# Kontor's critical path and what upstream bump would clear it. Re-audit and
+# for a routine audit pass. Each entry documents its dependency constraint,
+# relevant exposure, and the upstream bump that would clear it. Re-audit and
 # prune this list whenever those upstreams move.
 #
 # Run `cargo audit` after any dependency change to confirm no NEW advisory is
@@ -23,11 +23,35 @@
 ignore = [
     # ── hickory-proto 0.25.2 ─────────────────────────────────────────────────
     # Pulled in only by libp2p 0.56 (mDNS / DNS peer discovery), itself pinned
-    # by Malachite 0.8.1. Both advisories
+    # by Malachite 0.8.2. Both advisories
     # are DoS-class (CPU exhaustion / unbounded loop) reachable only by a
     # malicious DNS responder during libp2p peer discovery on the local network.
     # 0119 is fixed in hickory 0.26.1; 0118 does not affect the 0.26 series.
     # Malachite still requires libp2p 0.56, whose DNS integration uses 0.25.
     "RUSTSEC-2026-0119", # O(n²) name compression → CPU exhaustion on encode
     "RUSTSEC-2026-0118", # NSEC3 closest-encloser proof → unbounded loop
+
+    # crypto-bigint 0.5.5 via libp2p-identity 0.2 -> p256 0.13 -> elliptic-curve 0.13.
+    # Malachite 0.8.2 still requires libp2p 0.56; the fixed crypto-bigint >=0.7.6
+    # is outside that dependency chain's compatible version range.
+    # Kontor creates Ed25519 network and consensus identities (reactor/engine.rs),
+    # but Malachite also compiles ECDSA support. This is an accepted pre-launch
+    # exception for the unresolved timing-side-channel advisory, not a fix.
+    # Remove when Malachite supports libp2p 0.57+ with patched crypto dependencies,
+    # or when a compatible upstream backport becomes available.
+    "RUSTSEC-2026-0387",
+
+    # zstd 0.13.3 / zstd-safe 7.3.0 via wasmtime-internal-cache at our pinned
+    # Wasmtime fork revision. Its zstd ^0.13 requirement excludes the patched
+    # zstd >=0.14.3 / zstd-safe >=8.2.0 chain. Updating the fork is deferred.
+    # Kontor does not enable Wasmtime's disk cache in Runtime::new_engine;
+    # its ComponentCache is separate. The compiled Wasmtime cache uses
+    # encode_all/decode_all, not borrowed stream contexts, seekable decoding,
+    # or the stream writer implicated by these advisories.
+    # These are accepted exceptions, not dependency fixes. Remove when the
+    # Wasmtime dependency uses patched Zstd versions or its cache is excluded.
+    # Reassess before enabling disk caching or changing its compression APIs.
+    "RUSTSEC-2026-0391", # Reused stream contexts can disclose prior stream data.
+    "RUSTSEC-2026-0398", # Seekable decoding can set an out-of-bounds Vec length.
+    "RUSTSEC-2026-0403", # Legacy-frame errors can expose uninitialized output.
 ]

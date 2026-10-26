@@ -12,7 +12,7 @@
 [package]
 edition = "2021"
 name = "arc-malachitebft-network"
-version = "0.8.1"
+version = "0.8.2"
 build = false
 publish = true
 autolib = false
@@ -100,20 +100,20 @@ features = [
 ]
 
 [dependencies.malachitebft-discovery]
-version = "0.8.1"
+version = "0.8.2"
 package = "arc-malachitebft-discovery"
 
 [dependencies.malachitebft-metrics]
-version = "0.8.1"
+version = "0.8.2"
 package = "arc-malachitebft-metrics"
 
 [dependencies.malachitebft-peer]
-version = "0.8.1"
+version = "0.8.2"
 default-features = false
 package = "arc-malachitebft-peer"
 
 [dependencies.malachitebft-sync]
-version = "0.8.1"
+version = "0.8.2"
 package = "arc-malachitebft-sync"
 
 [dependencies.seahash]
@@ -146,7 +146,7 @@ features = [
 version = "0.4.0-alpha"
 
 [dev-dependencies.malachitebft-discovery]
-version = "0.8.1"
+version = "0.8.2"
 features = ["test-utils"]
 package = "arc-malachitebft-discovery"
 

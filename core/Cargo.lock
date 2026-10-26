@@ -218,9 +218,9 @@ checksum = "3bc62ac97cc33321f50863d514c3bc38a453947a8f9e781137e47c7401020aed"
 
 [[package]]
 name = "arc-malachitebft-app"
-version = "0.8.1"
+version = "0.8.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e1c41e34dd2c9c5847ed71896e38645493371e5b5dd93692318732e49681e9c1"
+checksum = "5c385aba8bffa339d7935bcb8dd038529f0f69917fb220a51a2987695116b55f"
 dependencies = [
  "arc-malachitebft-codec",
  "arc-malachitebft-config",
@@ -247,9 +247,9 @@ dependencies = [
 
 [[package]]
 name = "arc-malachitebft-app-channel"
-version = "0.8.1"
+version = "0.8.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "088be21917ab8ae62c333819e6b4213628fa2e1c32bc95161b683c4ae414ffbb"
+checksum = "0a88aaf4f127482606abd2fedf4cacbfcb42481d7e15166e1dba26e8d0aca19b"
 dependencies = [
  "arc-malachitebft-app",
  "arc-malachitebft-config",
@@ -266,18 +266,18 @@ dependencies = [
 
 [[package]]
 name = "arc-malachitebft-codec"
-version = "0.8.1"
+version = "0.8.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a42ad5e7d512e92ea60cda82a2382b5a8f31c86fadaef2075d125d14f341fe2b"
+checksum = "d4d0542356d9ac0f861ddde9b715491c4560be7912f42c73257a6a7b3bba3e91"
 dependencies = [
  "bytes",
 ]
 
 [[package]]
 name = "arc-malachitebft-config"
-version = "0.8.1"
+version = "0.8.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "eb361182723f4f81224daf06f4dd77384c3da7cd3e00d4b0590a83b378566340"
+checksum = "c2d742e35428030ef2646688fbddf51aade0fd3b98eb8076a7e957378b72a6c8"
 dependencies = [
  "bytesize",
  "humantime-serde",
@@ -289,9 +289,9 @@ dependencies = [
 
 [[package]]
 name = "arc-malachitebft-core-consensus"
-version = "0.8.1"
+version = "0.8.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "433f36bb74a3cc50d1b31b1ed604da2501106fbbe3e5ef588a2f2f9b4be003eb"
+checksum = "35bfd5d35354fbf069518ec98483ea4ffbc00e81d74e360d9b4947b99e00d8fb"
 dependencies = [
  "arc-malachitebft-core-driver",
  "arc-malachitebft-core-types",
@@ -310,9 +310,9 @@ dependencies = [
 
 [[package]]
 name = "arc-malachitebft-core-driver"
-version = "0.8.1"
+version = "0.8.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b003ef70df566688642d1906bc3646395848a8654d51e500375d5d3936b3bbdf"
+checksum = "46c6ddec3483ab71e2b61684b20c132be6c40c97d7a3465af08ca8650fcd2b06"
 dependencies = [
  "arc-malachitebft-core-state-machine",
  "arc-malachitebft-core-types",
@@ -324,9 +324,9 @@ dependencies = [
 
 [[package]]
 name = "arc-malachitebft-core-state-machine"
-version = "0.8.1"
+version = "0.8.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "329a33295ed46cf8e2ddc6e7b0a1ccda6ae0c055e526960befb9c582d260d2d3"
+checksum = "925ea33f63b038aee31fa9a29aa13eb1c674b64ee5f94e8e30ec69c474e2ac56"
 dependencies = [
  "arc-malachitebft-core-types",
  "derive-where",
@@ -335,9 +335,9 @@ dependencies = [
 
 [[package]]
 name = "arc-malachitebft-core-types"
-version = "0.8.1"
+version = "0.8.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "524e3bdc7a51abf7f87efde1a80b36e470f2a68a62f2a928914b21e19e1f1ca2"
+checksum = "de1474eca9d9e6196c48addf9db1bebee230d4509115a80769489b2738266aca"
 dependencies = [
  "arc-malachitebft-peer",
  "async-trait",
@@ -349,9 +349,9 @@ dependencies = [
 
 [[package]]
 name = "arc-malachitebft-core-votekeeper"
-version = "0.8.1"
+version = "0.8.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "af758b29db75ed2b585aff5f1f842a44c3884181dea76037035c7b7c8ab3fa62"
+checksum = "8dc044fdb0880713c2951c277cb2a8ebf538ead8b95cd7657455480dcd97f75c"
 dependencies = [
  "arc-malachitebft-core-types",
  "derive-where",
@@ -361,9 +361,9 @@ dependencies = [
 
 [[package]]
 name = "arc-malachitebft-discovery"
-version = "0.8.1"
+version = "0.8.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "022ed8beb5773835ac40925fbaa50b1c4ab248bcde1ed712bf29b2fd767cbfe6"
+checksum = "76af0f23eb9032fb8266fed79728be3f9275429b919a1ad3ac350dba64ea633c"
 dependencies = [
  "arc-malachitebft-metrics",
  "either",
@@ -377,9 +377,9 @@ dependencies = [
 
 [[package]]
 name = "arc-malachitebft-engine"
-version = "0.8.1"
+version = "0.8.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b8db84aeebedda39ddfadaee56d15c87c7763a1f9612a92ffc85f848aeed3d4b"
+checksum = "b014e386a2d655581952076715fff458a9ff72014e3cac1b070e0d5e675ca992"
 dependencies = [
  "arc-malachitebft-codec",
  "arc-malachitebft-config",
@@ -411,9 +411,9 @@ dependencies = [
 
 [[package]]
 name = "arc-malachitebft-metrics"
-version = "0.8.1"
+version = "0.8.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1a7339e20bdf418ccd10f61979e3c94a91b78a2aae2dc30bc196fffaa669ded5"
+checksum = "f778b4505d0549b363f7b12ed0687ee2f57ded76848bb67aade8b143f92e9084"
 dependencies = [
  "arc-malachitebft-core-state-machine",
  "prometheus-client",
@@ -421,7 +421,7 @@ dependencies = [
 
 [[package]]
 name = "arc-malachitebft-network"
-version = "0.8.1"
+version = "0.8.2"
 dependencies = [
  "arc-malachitebft-discovery",
  "arc-malachitebft-metrics",
@@ -448,9 +448,9 @@ dependencies = [
 
 [[package]]
 name = "arc-malachitebft-peer"
-version = "0.8.1"
+version = "0.8.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7dceddcf64d8eaed675efa6a747790a256d5388fa85432e782b8965b4013de7d"
+checksum = "c23b69d7b272b4dba7ec742856d473afa61e4d4dfbab679cf5b4d0330881286b"
 dependencies = [
  "bs58",
  "multihash",
@@ -459,9 +459,9 @@ dependencies = [
 
 [[package]]
 name = "arc-malachitebft-proto"
-version = "0.8.1"
+version = "0.8.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8213515edbb6d5996183608061b5ea797ece3ca448db4b9f69855336563ba1e2"
+checksum = "b38a103264b2e48d0bc8ca4e6dbebf48baf14a9caa4d1de659e7a7555edc922e"
 dependencies = [
  "prost 0.13.5",
  "prost-types",
@@ -470,9 +470,9 @@ dependencies = [
 
 [[package]]
 name = "arc-malachitebft-signing"
-version = "0.8.1"
+version = "0.8.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "92ce805cc10a7b8872a0e6e3aeef8cdee4e1eb2f0525f8c3ba90638da4da4761"
+checksum = "22751f3ab8f3d73d60290d7224acd9667933969752905556b8908124d06a6306"
 dependencies = [
  "arc-malachitebft-core-types",
  "async-trait",
@@ -481,9 +481,9 @@ dependencies = [
 
 [[package]]
 name = "arc-malachitebft-signing-ed25519"
-version = "0.8.1"
+version = "0.8.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2c65d5449ef5e264ba7bf2092141202536c7db366c7b5dbbc92c089841179ee2"
+checksum = "ceb977b74a277052ca0bcd904625dd26e24becdf7de68e57a59045e8dbcef5dc"
 dependencies = [
  "arc-malachitebft-core-types",
  "base64 0.22.1",
@@ -495,9 +495,9 @@ dependencies = [
 
 [[package]]
 name = "arc-malachitebft-sync"
-version = "0.8.1"
+version = "0.8.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b3f0156ced164bc18d5c4c43831deef4149dbc16d9a54cce5fc800fd26b2784c"
+checksum = "d118b81253717e7b93432b87fa607ece630418368e02846970e565147d771cb1"
 dependencies = [
  "arc-malachitebft-core-types",
  "arc-malachitebft-metrics",
@@ -519,9 +519,9 @@ dependencies = [
 
 [[package]]
 name = "arc-malachitebft-wal"
-version = "0.8.1"
+version = "0.8.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ee68cf46512631b8acb7d6f74ce4f9ed0183f25b1432ce3b58b8afd20d716b25"
+checksum = "d210d7fb417651f90d752d53d27b2932419718f589228a38f6aadba2e985ada6"
 dependencies = [
  "advisory-lock",
  "bytes",
@@ -1268,9 +1268,9 @@ dependencies = [
 
 [[package]]
 name = "brotli"
-version = "9.0.0"
+version = "9.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f8b851b75c23ca7873623d612fe49bd1989aeb03d08fb9432187eb253d3d4c6b"
+checksum = "6737ce8b81460bf9407909f73ff50bf13f7cb8577e1e76715f57ed0eba58ba44"
 dependencies = [
  "alloc-no-stdlib",
  "alloc-stdlib",
@@ -1279,9 +1279,9 @@ dependencies = [
 
 [[package]]
 name = "brotli-decompressor"
-version = "6.0.1"
+version = "6.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "941cd9bd4ddab83cb46fa5a2d428f1c857b24ac78cb876cf7beb710840934bd7"
+checksum = "34c6783f42c21c952ad7112b354f0ba2f10760e9decea5b1b60523d6e270faaf"
 dependencies = [
  "alloc-no-stdlib",
  "alloc-stdlib",
@@ -1974,9 +1974,9 @@ dependencies = [
 
 [[package]]
 name = "ctutils"
-version = "0.4.3"
+version = "0.4.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "03bb0e1cc970d482d121d9a1744999169b69a07470b3d644a7894e53fcaf4574"
+checksum = "fe3e9d21d39e6f39ff46e03d5b621424f88ee23d8a1672c6bfc9ccc7f2da4f6a"
 dependencies = [
  "cmov",
 ]

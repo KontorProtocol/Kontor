@@ -12,8 +12,8 @@ ARG BINARYEN_SHA256_X86_64=2dc9c7813f5375db93d96ead4b78222fcc3e2677bbb832297af47
 ARG BINARYEN_SHA256_AARCH64=89c07ea56faf38d0fbecf36ca8ec0721756716185f265b568e133d427f299bf8
 
 # Compression output is part of the committed binaries' identity.
-ARG BROTLI_VERSION=1.2.0
-ARG BROTLI_SHA256=816c96e8e8f193b40151dad7e8ff37b1221d019dbcb9c35cd3fadbfe6477dfec
+ARG BROTLI_VERSION=1.2.1
+ARG BROTLI_SHA256=98d35d11a78dc453aebb7d10c3748f3f73ff78c8267c0dc697b8631f67bf7e8f
 RUN apt-get update \
  && apt-get install -y --no-install-recommends curl ca-certificates cmake gcc make \
  && curl -fsSL "https://github.com/google/brotli/archive/refs/tags/v${BROTLI_VERSION}.tar.gz" -o /tmp/brotli.tar.gz \

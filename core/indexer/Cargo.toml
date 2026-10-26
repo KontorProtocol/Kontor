@@ -60,7 +60,7 @@ hex = "=0.4.3"
 hkdf = "=0.13.0"
 rand = "=0.10.3"
 rand_chacha = "=0.10.0"
-brotli = "=9.0.0"
+brotli = "=9.1.0"
 postcard = { workspace = true }
 sha2 = "=0.11.1"
 num = { workspace = true }
@@ -79,16 +79,16 @@ metrics-exporter-prometheus = "=0.18.3"
 
 # Malachite BFT consensus
 malachitebft-app-channel = { workspace = true }
-malachitebft-app = { version = "=0.8.1", package = "arc-malachitebft-app" }
-malachitebft-core-types = { version = "=0.8.1", package = "arc-malachitebft-core-types", features = ["serde"] }
-malachitebft-engine = { version = "=0.8.1", package = "arc-malachitebft-engine" }
-malachitebft-config = { version = "=0.8.1", package = "arc-malachitebft-config" }
-malachitebft-signing = { version = "=0.8.1", package = "arc-malachitebft-signing" }
-malachitebft-signing-ed25519 = { version = "=0.8.1", package = "arc-malachitebft-signing-ed25519", features = ["rand", "serde"] }
-malachitebft-codec = { version = "=0.8.1", package = "arc-malachitebft-codec" }
-malachitebft-core-consensus = { version = "=0.8.1", package = "arc-malachitebft-core-consensus" }
-malachitebft-proto = { version = "=0.8.1", package = "arc-malachitebft-proto" }
-malachitebft-sync = { version = "=0.8.1", package = "arc-malachitebft-sync" }
+malachitebft-app = { version = "=0.8.2", package = "arc-malachitebft-app" }
+malachitebft-core-types = { version = "=0.8.2", package = "arc-malachitebft-core-types", features = ["serde"] }
+malachitebft-engine = { version = "=0.8.2", package = "arc-malachitebft-engine" }
+malachitebft-config = { version = "=0.8.2", package = "arc-malachitebft-config" }
+malachitebft-signing = { version = "=0.8.2", package = "arc-malachitebft-signing" }
+malachitebft-signing-ed25519 = { version = "=0.8.2", package = "arc-malachitebft-signing-ed25519", features = ["rand", "serde"] }
+malachitebft-codec = { version = "=0.8.2", package = "arc-malachitebft-codec" }
+malachitebft-core-consensus = { version = "=0.8.2", package = "arc-malachitebft-core-consensus" }
+malachitebft-proto = { version = "=0.8.2", package = "arc-malachitebft-proto" }
+malachitebft-sync = { version = "=0.8.2", package = "arc-malachitebft-sync" }
 
 async-trait = { workspace = true }
 bytes = { workspace = true }
