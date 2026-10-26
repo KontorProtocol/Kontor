@@ -1311,21 +1311,26 @@ mod tests {
             )
             .await;
         let signer = super::Signer::Core(Box::new(super::Signer::Nobody));
-        let payment = runtime.core_payment();
         let provenance = super::native_provenance().expect("provenance");
 
-        // Well-formed op, garbage payload: valid kebab name and valid provenance,
-        // so nothing rejects it before the bytes are decoded. `filter_map` never
-        // inspects Publish bytes, so this is exactly what reaches execution.
-        let err = runtime
-            .publish(&signer, payment, "halt-probe", &[0xFFu8; 64], &provenance)
-            .await
-            .expect_err("garbage bytes cannot publish");
-        assert!(
-            matches!(err, super::ExecutionError::Deterministic(_)),
-            "a malformed publish must be a RECORDED op failure; NonDeterministic \
-             propagates out of execute_block and every node exits at this height: {err:?}"
-        );
+        // Upstream's CVE-2026-111497 input exercises an invalid block switch.
+        // Extra input also probes repeated buffering across the 4096-byte read.
+        let invalid_block_switch =
+            hex::decode("200010414141fcffff07002228f00b60f7f41f000000").expect("hex fixture");
+        let mut padded_block_switch = invalid_block_switch.clone();
+        padded_block_switch.resize(8192, 0x41);
+        for payload in [vec![0xFF; 64], invalid_block_switch, padded_block_switch] {
+            let payment = runtime.core_payment();
+            let err = runtime
+                .publish(&signer, payment, "halt-probe", &payload, &provenance)
+                .await
+                .expect_err("malformed bytes cannot publish");
+            assert!(
+                matches!(err, super::ExecutionError::Deterministic(_)),
+                "a malformed publish must be a RECORDED op failure; NonDeterministic \
+                 propagates out of execute_block and every node exits at this height: {err:?}"
+            );
+        }
     }
 
     /// A user contract that *links* fine but violates a Kontor WIT rule (here,
