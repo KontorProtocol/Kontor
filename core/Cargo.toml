@@ -79,7 +79,7 @@ tracing-subscriber = { version = "=0.3.23", features = ["env-filter"] }
 ts-rs = { version = "=12.0.1", features = ["format"] }
 
 # Malachite BFT consensus
-malachitebft-app-channel = { version = "=0.8.1", package = "arc-malachitebft-app-channel" }
+malachitebft-app-channel = { version = "=0.8.2", package = "arc-malachitebft-app-channel" }
 
 [patch.crates-io]
 # Preserve resolved /tcp/0 listen addresses until upstream includes the fix.
