@@ -40,4 +40,18 @@ ignore = [
     # Remove when Malachite supports libp2p 0.57+ with patched crypto dependencies,
     # or when a compatible upstream backport becomes available.
     "RUSTSEC-2026-0387",
+
+    # zstd 0.13.3 / zstd-safe 7.3.0 via wasmtime-internal-cache at our pinned
+    # Wasmtime fork revision. Its zstd ^0.13 requirement excludes the patched
+    # zstd >=0.14.3 / zstd-safe >=8.2.0 chain. Updating the fork is deferred.
+    # Kontor does not enable Wasmtime's disk cache in Runtime::new_engine;
+    # its ComponentCache is separate. The compiled Wasmtime cache uses
+    # encode_all/decode_all, not borrowed stream contexts, seekable decoding,
+    # or the stream writer implicated by these advisories.
+    # These are accepted exceptions, not dependency fixes. Remove when the
+    # Wasmtime dependency uses patched Zstd versions or its cache is excluded.
+    # Reassess before enabling disk caching or changing its compression APIs.
+    "RUSTSEC-2026-0391", # Reused stream contexts can disclose prior stream data.
+    "RUSTSEC-2026-0398", # Seekable decoding can set an out-of-bounds Vec length.
+    "RUSTSEC-2026-0403", # Legacy-frame errors can expose uninitialized output.
 ]
