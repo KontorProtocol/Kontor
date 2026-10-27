@@ -464,6 +464,14 @@ Independent subagent review found no material issues in base
 28789f61e1622a5c631ef7acecbab9ffbd532577 through corrective implementation
 5ba82a5d2ccffc3787aae763784f485756cc43a7. It checked the Docker/Cargo
 integration, retained helper CI coverage and unchanged dependency resolution,
-and independently ran the lock-parity check. Interlink review and exact PR-head
-CI remain pending at this checkpoint. F3 remains isolated while this correction
-is completed.
+and independently ran the lock-parity check. It confirmed review carryover to
+documentation head 8326a69058075d2411ef0a75214f608047e5c7a1 after inspecting
+the completed build log.
+
+Interlink approved the full correction through 8326a690 for PR creation in receipt
+`4bede2fded3fab76b8b7b074f6f72283`. Its maintenance note about updating the
+helper pin alongside core's `cc` is now explicit in the README. Multiple core
+`cc` versions are deliberately rejected today; a future graph with multiple
+versions must instead verify the exact native vendor edges. Both new Docker
+cache jobs must pass on the PR head. The post-merge main image build must also
+succeed before F3 commits proceed. F3 implementation and tests remain isolated.

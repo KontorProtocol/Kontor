@@ -89,6 +89,9 @@ those platforms. Real library/platform and SDK/mobile checks are separate gates.
 
 ## Updating a vendor
 
+Changing core's `cc` version also requires updating the helper's exact pin and
+standalone lock; `check-helper-lock.py` enforces their agreement.
+
 The ordinary reproducible-build CI job also compares the actual SDK Wasm crypto
 API with the committed pristine reference identified in `fixtures/sdk-vectors.json`.
 `compare-sdk.mjs` checks the reference Wasm hash and pinned Node version before
