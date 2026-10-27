@@ -361,3 +361,29 @@ The SDK Wasm was then regenerated through `tools/kontor build sdk`; only
 `kontor-sdk.core.wasm` changed (1,696,861 to 1,696,805 bytes). Candidate and pristine
 native C code are byte-identical; the full Rust-linked artifact has different
 function/data placement. Final reproducibility, SDK CI and mobile CI remain open.
+
+Checkpoint 4d902e7b89679475136caa62099f8de72c5c2c91 passed native matrix
+40473648429. Full CI 40473709440 and Mobile 40473716091 were explicitly started
+on that head before PR creation. The iOS and Android Rust cross-builds passed;
+binding/binary packaging and full CI are still running at this checkpoint.
+Core Clippy found a new test-helper lint (`chunks_exact_to_as_chunks`), not an
+advisory failure. The helper now uses `as_chunks` with an explicit complete-byte
+assertion, and targeted SDK Clippy with warnings denied passes locally. A fresh
+head will validate that correction. The actual Wasm crypto comparison is also
+being added to reproducible-build CI, with the pinned pristine artifact extracted
+from its recorded Git commit and a report retained with generated outputs.
+
+Mobile run 40473716091 completed green on 4d902e7b: iOS and Android Rust
+cross-builds, native binaries, binding regeneration/type checks and web/React
+Native SDK bundles all passed. The same head's SDK and reproducible contracts/SDK
+jobs passed; core test jobs remain in progress while the lint correction is
+prepared. The new CI extraction/comparison step was exercised locally with the
+recorded pristine Git files and pinned Node, and the corrected native crypto
+integration test passed again.
+
+The owner-private dark Site was updated from source b82bb8dba505d9edeff8f74241ca3fa43cd10d12,
+deployment appgdep_6ae0636244c88191898240fa85e11529 (succeeded). Its implementation
+chapter now distinguishes verified three-graph native/SDK evidence from remaining
+phase gates and later protocol work. Access remains owner-only, with no external
+visitors. Static structure, internal anchors and evidence downloads were checked;
+no new browser-based visual verification was performed for this text-only update.

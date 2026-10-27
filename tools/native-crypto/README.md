@@ -79,6 +79,15 @@ those platforms. Real library/platform and SDK/mobile checks are separate gates.
 
 ## Updating a vendor
 
+The ordinary reproducible-build CI job also compares the actual SDK Wasm crypto
+API with the committed pristine reference identified in `fixtures/sdk-vectors.json`.
+`compare-sdk.mjs` checks the reference Wasm hash and pinned Node version before
+executing either API. Its report is included in the generated-output artifact.
+The native SDK integration test consumes the same independent vectors and error
+messages. The fixture covers Kontor's min_sig scheme and EIP-2333 derivation.
+Changes to these reference values need an explicit compatibility decision and
+evidence from the recorded reference, not replacement with candidate output.
+
 1. Treat a dependency update in a retained protocol as a new bundle identity.
    Do not replace the source artifacts used to reproduce historical bundles.
 2. Obtain the published crate archive and verify its checksum against the newly
@@ -96,6 +105,6 @@ those platforms. Real library/platform and SDK/mobile checks are separate gates.
    logs, source/lock hashes, native inventories and qualification reports with the
    reviewed change. Do not interpret a vector-only pass as compatibility evidence.
 
-F2 is still under implementation. Platform CI integration, SDK/mobile parity
-evidence, required reviews, and the PR remain pending. See the execution ledger for
-the evidence actually completed.
+F2 is under qualification. Native platform CI and SDK parity checks are
+implemented; ordinary/mobile CI, final review disposition and the PR remain
+pending. See the execution ledger for the evidence actually completed.

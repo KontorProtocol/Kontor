@@ -8,11 +8,13 @@ use kontor_sdk_native::{
 use serde_json::Value;
 
 fn bytes(vectors: &Value, name: &str) -> Vec<u8> {
-    vectors[name]
-        .as_str()
-        .unwrap()
-        .as_bytes()
-        .chunks_exact(2)
+    let (pairs, remainder) = vectors[name].as_str().unwrap().as_bytes().as_chunks::<2>();
+    assert!(
+        remainder.is_empty(),
+        "hex fixture must contain complete bytes"
+    );
+    pairs
+        .iter()
         .map(|pair| u8::from_str_radix(str::from_utf8(pair).unwrap(), 16).unwrap())
         .collect()
 }
