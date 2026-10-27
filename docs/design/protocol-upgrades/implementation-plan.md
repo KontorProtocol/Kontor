@@ -299,6 +299,10 @@ Cargo resolution of historical semantics. Include vendored-path panic-location s
 parity checks: vendoring changes embedded Rust source paths, and host-side error
 rendering must not silently change consensus behavior. Keep one node database owner
 and explicit runtime ownership.
+When the node graph joins the link, do not add its dependency definitions to the
+common-runtime inventory. Add a negative control proving a bundle's unnamespaced
+blst, secp256k1 or ring reference cannot resolve to the node's native copy. The
+common inventory remains restricted to qualified host/std/platform inputs.
 
 ### K3. Atomic migration substrate and execution identity
 

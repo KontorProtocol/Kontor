@@ -148,8 +148,9 @@ class Ownership(unittest.TestCase):
             manifest = root / "Cargo.toml"
             source = root / "lib.rs"
             manifest.write_text('[package]\nname="example"\n')
+            (root / "Cargo.lock").write_text('version=4\npackage=[]\n')
             source.write_text("pub fn result() -> u8 { 1 }")
-            data = {"packages": [{"manifest_path": str(manifest), "id": "example"}]}
+            data = {"workspace_root": str(root), "packages": [{"manifest_path": str(manifest), "id": "example"}]}
             before = fingerprint(source_inputs(root, data))
             source.write_text("pub fn result() -> u8 { 2 }")
             self.assertNotEqual(before, fingerprint(source_inputs(root, data)))
@@ -160,10 +161,11 @@ class Ownership(unittest.TestCase):
             (root / ".git").mkdir()
             manifest = root / "Cargo.toml"
             manifest.write_text('[workspace.dependencies]\nitoa="=1.0.14"\n')
+            (root / "Cargo.lock").write_text('version=4\npackage=[]\n')
             package = root / "crates/example/Cargo.toml"
             package.parent.mkdir(parents=True)
             package.write_text('[package]\nname="example"\n')
-            data = {"packages": [{"manifest_path": str(package), "id": "example"}]}
+            data = {"workspace_root": str(root), "packages": [{"manifest_path": str(package), "id": "example"}]}
             before = fingerprint(source_inputs(root, data))
             manifest.write_text('[workspace.dependencies]\nitoa="=1.0.15"\n')
             self.assertNotEqual(before, fingerprint(source_inputs(root, data)))

@@ -34,6 +34,14 @@ hashes, inherited workspace manifests and Cargo configuration, compiler and
 sysroot inputs, build flags, exact staged rlibs and native archives, compiler
 plugins, common runtime ownership, final symbol ownership and executable hash.
 Source and staged artifact checks run across compilation and qualification.
+Git checkouts must match their pinned commit objects, including raw tracked
+file contents, symlink targets, executable modes, staged indexes and recursive
+submodule identities. Untracked and ignored files are rejected apart from
+Cargo's exact administrative markers. This catches edits made before the build,
+including files marked assume-unchanged in Git's index.
+Registry source files must match the cached crate archive whose SHA256 matches
+the lockfile. Keep those archives in Cargo's cache for offline qualification;
+missing archives fail verification rather than trusting an edited extraction.
 Absolute source paths and platform inputs are recorded. This is an audit of
 the actual build, not a claim that different checkouts or platforms produce
 byte-identical executables.

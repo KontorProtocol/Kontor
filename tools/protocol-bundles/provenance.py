@@ -7,12 +7,15 @@ from pathlib import Path
 import subprocess
 import tomllib
 
+from source_identity import verify_sources
+
 
 def sha(path):
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
 def source_inputs(root, data):
+    verified = verify_sources(data)
     packages = []
     trees = {}
     inherited = {}
@@ -53,7 +56,7 @@ def source_inputs(root, data):
             path = directory / relative
             if path.is_file():
                 inherited[str(path)] = sha(path)
-    return {"packages": packages, "qualification_sources": sources,
+    return {"verified_external_sources": verified, "packages": packages, "qualification_sources": sources,
             "inherited_manifests_and_configuration": inherited, "git_source_trees": git_sources}
 
 

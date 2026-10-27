@@ -10,7 +10,7 @@ import sys
 INPUT_RUNTIME = {"DW.ref.rust_eh_personality"}
 FINAL_RUNTIME = INPUT_RUNTIME | {
     "rust_eh_personality", "main", "_start", "__TMC_END__", "__bss_end__",
-    "__bss_start", "__bss_start__", "__dso_handle", "__end__", "__bss_end__",
+    "__bss_start", "__bss_start__", "__dso_handle", "__end__",
     "_bss_end__", "_edata", "_end", "_fini", "_init", "__aarch64_cpu_features",
     "__aarch64_have_lse_atomics", "__init_cpu_features", "__pthread_atfork",
     "__udivti3", "__umodti3",

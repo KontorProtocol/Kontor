@@ -811,3 +811,29 @@ replacement cycles retained35/8. Portable lifting results remain1026/1028.
 The Linux node-builder image now runs the full qualification separately. Main CI
 has passed everything except coverage, which remains active. Container/platform
 qualification, final K1 reviews and merge are still required.
+
+## K1 final review and immutable-source correction
+
+Signed K1 head2f00bf37979d03891113a4def80c122c47ce0ee3 is based on6504523f.
+The full node-builder ARM container qualification passed on that source, producing
+495d289810a409c4f8760275915e379cdffe258a805c82628f861e6df06a13ad and the same
+42-decision/resource results as the host run. Its report attests Rust1.99.1,
+the compiler, compiler libraries and pinned sysroot inside the builder-base image.
+
+Interlink receipt0cb36ac271f441aa418785b0ba2a55fe approved that exact head with
+remaining main/platform CI gates. Its K2b negative-control requirement is recorded:
+node dependency definitions must never let bare bundle crypto imports resolve
+through the common inventory. The duplicate linker-runtime list entry is removed.
+
+Independent review requested changes for one material source-identity gap: a
+pre-existing edit in a cached Git checkout could preserve the revision label
+while passing before/after source hashes. The correction verifies raw Git blob
+contents, modes, symlinks, index and submodule revisions against pinned objects,
+including files marked assume-unchanged. Extra ignored/untracked files are rejected
+apart from exact Cargo administrative markers. Registry extraction bytes are also
+checked against archives whose SHA256 matches the lockfile. Missing archives fail.
+
+All31 Python controls pass, including12 new identity controls. Both actual graphs
+passed verification of2 Git roots and410 registry archives each. The previous
+host/container results remain evidence for the earlier source; the corrected
+builder must be requalified and receive both follow-up reviews before the PR.
