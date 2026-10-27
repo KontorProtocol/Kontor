@@ -837,3 +837,17 @@ All31 Python controls pass, including12 new identity controls. Both actual graph
 passed verification of2 Git roots and410 registry archives each. The previous
 host/container results remain evidence for the earlier source; the corrected
 builder must be requalified and receive both follow-up reviews before the PR.
+
+The c08cc7f2 correction passed host qualification and received Interlink approval
+in d20657a69435da670f8bd789269b0238. Independent follow-up reproduced a remaining
+Git-replacement-ref bypass, so final approval stayed open. All verification Git
+commands now disable replacement objects. Graft files are rejected, and raw pinned
+commit/reachable-tree objects are rehashed as well. New controls cover replacement
+refs, grafts and corrupt commit/tree objects. Git on this host rejects a corrupt
+tree during ls-tree itself; the control accepts that native fail-closed result.
+All35 controls now pass, and both real source inventories pass the stronger check.
+Both reviewers must approve the final correction and qualification must be rerun.
+
+Malachite post-merge verification is complete: all applicable jobs on6d99c0a4
+passed, including Coverage40543559798, Rust40543559658 and lifecycle40543559692.
+The reviewer independently confirmed this in ac7b8aa6e92ad3987f968cbe6d8fd8b7.

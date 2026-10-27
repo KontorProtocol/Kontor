@@ -39,6 +39,9 @@ file contents, symlink targets, executable modes, staged indexes and recursive
 submodule identities. Untracked and ignored files are rejected apart from
 Cargo's exact administrative markers. This catches edits made before the build,
 including files marked assume-unchanged in Git's index.
+Verification ignores replacement refs, rejects graft files and rehashes the
+pinned commit and reachable tree objects instead of trusting the local object
+database's mapping. Git's own corruption checks vary by operation and version.
 Registry source files must match the cached crate archive whose SHA256 matches
 the lockfile. Keep those archives in Cargo's cache for offline qualification;
 missing archives fail verification rather than trusting an edited extraction.

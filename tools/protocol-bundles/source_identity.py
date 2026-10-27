@@ -13,7 +13,48 @@ import tomllib
 
 
 def git(directory, *args):
-    return subprocess.check_output(["git", "-c", "core.fsmonitor=false", "-C", str(directory), *args])
+    try:
+        return subprocess.check_output(["git", "--no-replace-objects", "-c", "core.fsmonitor=false",
+            "-C", str(directory), *args], stderr=subprocess.PIPE)
+    except subprocess.CalledProcessError as error:
+        raise RuntimeError(f"Git source verification failed in {directory}: {error.stderr.decode(errors='replace')}") from error
+
+
+def object_digest(algorithm, kind, data):
+    return hashlib.new(algorithm, kind.encode() + b" " + str(len(data)).encode() + b"\0" + data).hexdigest()
+
+
+def verify_tree_objects(directory, revision, algorithm):
+    commit = git(directory, "cat-file", "commit", revision)
+    if object_digest(algorithm, "commit", commit) != revision:
+        raise RuntimeError(f"pinned Git commit object differs: {directory}")
+    root = commit.split(b"\n", 1)[0]
+    if not root.startswith(b"tree "):
+        raise RuntimeError(f"missing pinned Git tree: {directory}")
+    root = root.removeprefix(b"tree ").decode()
+    entries = git(directory, "ls-tree", "-r", "-t", "-z", "--full-tree", root)
+    trees = {root}
+    for entry in entries.split(b"\0"):
+        if entry:
+            header = entry.split(b"\t", 1)[0].decode().split()
+            if header[1] == "tree":
+                trees.add(header[2])
+    requested = sorted(trees)
+    # Verify raw objects explicitly as well as working files. Whether Git itself
+    # rehashes an object depends on the operation and Git version.
+    output = subprocess.check_output(["git", "--no-replace-objects", "-c", "core.fsmonitor=false",
+        "-C", str(directory), "cat-file", "--batch"], input=("\n".join(requested) + "\n").encode())
+    position = 0
+    for identity in requested:
+        end = output.index(b"\n", position)
+        reported, kind, size = output[position:end].decode().split()
+        size = int(size)
+        data = output[end + 1:end + 1 + size]
+        position = end + 2 + size
+        if reported != identity or kind != "tree" or object_digest(algorithm, kind, data) != identity:
+            raise RuntimeError(f"pinned Git tree object differs: {directory}: {identity}")
+    if position != len(output):
+        raise RuntimeError(f"unexpected Git object response: {directory}")
 
 
 def contents(path):
@@ -55,12 +96,18 @@ def verify_git_tree(directory, revision):
     actual = git(directory, "rev-parse", "--verify", "HEAD").decode().strip()
     if actual != revision:
         raise RuntimeError(f"Git revision mismatch: {directory}: {actual} != {revision}")
-    index = subprocess.run(["git", "-c", "core.fsmonitor=false", "-C", str(directory),
+    grafts = Path(os.fsdecode(git(directory, "rev-parse", "--git-path", "info/grafts")).strip())
+    if not grafts.is_absolute():
+        grafts = directory / grafts
+    if grafts.exists():
+        raise RuntimeError(f"Git grafts are not permitted: {grafts}")
+    algorithm = git(directory, "rev-parse", "--show-object-format").decode().strip()
+    verify_tree_objects(directory, revision, algorithm)
+    index = subprocess.run(["git", "--no-replace-objects", "-c", "core.fsmonitor=false", "-C", str(directory),
                             "diff", "--cached", "--quiet", "--no-ext-diff", "--no-textconv",
                             revision, "--"])
     if index.returncode:
         raise RuntimeError(f"pinned Git index differs: {directory}")
-    algorithm = git(directory, "rev-parse", "--show-object-format").decode().strip()
     expected = set()
     submodules = {}
     for entry in git(directory, "ls-tree", "-r", "-z", "--full-tree", revision).split(b"\0"):
@@ -76,7 +123,7 @@ def verify_git_tree(directory, revision):
         if kind != "blob":
             raise RuntimeError(f"unexpected Git object type: {path}")
         actual_mode, data = contents(path)
-        digest = hashlib.new(algorithm, b"blob " + str(len(data)).encode() + b"\0" + data).hexdigest()
+        digest = object_digest(algorithm, "blob", data)
         if actual_mode != mode or digest != identity:
             raise RuntimeError(f"pinned Git source differs: {path}")
         expected.add(relative)

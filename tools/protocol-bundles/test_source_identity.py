@@ -5,6 +5,7 @@ import subprocess
 import tarfile
 import tempfile
 import unittest
+import zlib
 
 from source_identity import verify_git_tree, verify_registry_tree
 
@@ -67,6 +68,45 @@ class GitIdentity(unittest.TestCase):
             verify_git_tree(self.root, "0" * 40)
         (self.root / "lib.rs").chmod(0o755)
         with self.assertRaisesRegex(RuntimeError, "Git source differs"):
+            verify_git_tree(self.root, self.revision)
+
+    def test_replacement_ref_cannot_change_pinned_contents(self):
+        (self.root / "lib.rs").write_text("replacement source")
+        self.commit()
+        replacement = self.command("rev-parse", "HEAD").strip()
+        self.command("replace", self.revision, replacement)
+        self.command("reset", "--hard", self.revision)
+        self.assertEqual((self.root / "lib.rs").read_text(), "replacement source")
+        with self.assertRaisesRegex(RuntimeError, "Git (index|source) differs"):
+            verify_git_tree(self.root, self.revision)
+
+    def test_grafts_are_rejected(self):
+        (self.root / ".git/info/grafts").write_text(self.revision + "\n")
+        with self.assertRaisesRegex(RuntimeError, "grafts are not permitted"):
+            verify_git_tree(self.root, self.revision)
+
+    def test_corrupt_tree_object_cannot_relabel_modified_source(self):
+        tree = self.command("rev-parse", "HEAD^{tree}").strip()
+        blob = self.command("rev-parse", "HEAD:lib.rs").strip()
+        (self.root / "lib.rs").write_text("modified source")
+        replacement = self.command("hash-object", "-w", "lib.rs").strip()
+        self.command("update-index", "--cacheinfo", f"100644,{replacement},lib.rs")
+        data = subprocess.check_output(["git", "-C", str(self.root), "cat-file", "tree", tree])
+        data = data.replace(bytes.fromhex(blob), bytes.fromhex(replacement))
+        path = self.root / ".git/objects" / tree[:2] / tree[2:]
+        path.chmod(0o644)
+        path.write_bytes(zlib.compress(b"tree " + str(len(data)).encode() + b"\0" + data))
+        self.assertEqual((self.root / "lib.rs").read_text(), "modified source")
+        with self.assertRaisesRegex(RuntimeError, "Git tree object differs|hash mismatch"):
+            verify_git_tree(self.root, self.revision)
+
+    def test_corrupt_commit_object_is_rejected(self):
+        data = subprocess.check_output(["git", "-C", str(self.root), "cat-file", "commit", self.revision])
+        data += b"modified commit\n"
+        path = self.root / ".git/objects" / self.revision[:2] / self.revision[2:]
+        path.chmod(0o644)
+        path.write_bytes(zlib.compress(b"commit " + str(len(data)).encode() + b"\0" + data))
+        with self.assertRaisesRegex(RuntimeError, "Git commit object differs"):
             verify_git_tree(self.root, self.revision)
 
     def test_symlink_target_is_checked_without_following_it(self):
