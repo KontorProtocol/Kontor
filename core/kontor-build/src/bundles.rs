@@ -16,7 +16,7 @@ pub struct ProtocolBundlesArgs {
     /// Compiler profile used for both bundles and the host.
     #[arg(long, default_value = "release", value_parser = ["release", "dev"])]
     pub profile: String,
-    /// Directory for isolated build outputs and qualification evidence.
+    /// Output directory, relative to the checkout root unless absolute.
     #[arg(long)]
     pub output: Option<PathBuf>,
     /// Maximum concurrent compiler jobs across sequential graph builds.
@@ -32,6 +32,7 @@ pub fn protocol_bundles(args: ProtocolBundlesArgs) -> Result<()> {
         .context("run protocol-bundles inside a Kontor checkout")?;
     let mut command = Command::new("python3");
     command
+        .current_dir(root)
         .arg(root.join("tools/protocol-bundles/build.py"))
         .args(["--profile", &args.profile, "--jobs", &args.jobs.to_string()]);
     if args.offline {

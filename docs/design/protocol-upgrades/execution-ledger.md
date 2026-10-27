@@ -872,3 +872,16 @@ All37 Python controls pass. A cross-compiled x86 object and LLD-linked executabl
 reproduce the GOT reference, pass with its real local anchor, and fail without it.
 The native ARM GNU linker emits a local absolute anchor; LLD emits local data.
 Follow-up reviews and corrected-head platform CI remain required before merging.
+
+Both reviewers approved the GOT correction48d20169, including Interlink receipt
+ba822bc7ecf0a25dc0014b23772ae307, and it was pushed to PR606. Corrected x86 CI
+passed the previously failing Python control and advanced to real qualification.
+
+A separate CLI integration defect was then reproduced: tools/kontor enters core,
+and its Python child inherited that directory. Relative --output therefore landed
+under core, while macOS CI uploads from the repository root. The existing binary
+confirmed the mismatch. The child now starts at the discovered checkout root;
+relative outputs are documented accordingly, and absolute outputs remain unchanged.
+macOS CI explicitly checks the expected qualification.json before artifact upload.
+Linux Docker already passes absolute /evidence and is unaffected. This correction
+requires root/core/absolute-path checks and both follow-up reviews before push.

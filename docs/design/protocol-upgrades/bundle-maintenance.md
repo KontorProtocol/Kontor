@@ -12,7 +12,9 @@ the checkout. The command builds the two graphs sequentially with at most two
 compiler jobs, links their exact current artifacts into one native executable,
 audits ownership, then runs the real VM, crypto and consensus qualification.
 Use `--offline` after fetching both manifests to avoid dependency downloads.
-Use `--output PATH` to keep evidence elsewhere. Concurrent invocations sharing
+Use `--output PATH` to keep evidence elsewhere. Relative output paths resolve
+from the checkout root, including when the bootstrap enters `core`.
+Concurrent invocations sharing
 an output root are rejected. `--target` must match the supported native host.
 
 The supported targets are Linux ARM64, Linux x86-64 and macOS ARM64. CI uses

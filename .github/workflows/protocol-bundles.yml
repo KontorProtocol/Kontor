@@ -75,7 +75,9 @@ jobs:
           docker run --rm --mount type=bind,src="$PWD/target/protocol-evidence",dst=/evidence kontor-protocol-qualification
       - name: Qualify both real bundles with the macOS node test profile
         if: runner.os == 'macOS'
-        run: ./tools/kontor protocol-bundles --profile release --output target/protocol-evidence
+        run: |
+          ./tools/kontor protocol-bundles --profile release --output target/protocol-evidence
+          test -f target/protocol-evidence/aarch64-apple-darwin/release/qualification.json
       - uses: actions/upload-artifact@v7
         if: always()
         with:
