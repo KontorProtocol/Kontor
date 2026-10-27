@@ -444,6 +444,26 @@ PR-time job builds the actual planner and cacher on Linux ARM64 and AMD64 withou
 publishing images or requiring registry write credentials. This gate covers all
 core source changes, including future path crates, plus the Docker build inputs.
 
-Local standalone helper tests pass (four tests). Full container evidence and both
-reviews of this corrective PR remain pending at this checkpoint. F3 work is
-isolated while the image build regression is corrected.
+Local standalone helper tests pass (four tests), along with locked Clippy for all
+targets with warnings denied, formatting, and the lock-parity check. A deliberately
+changed helper `cc` version is rejected. Core metadata confirms the helper is not
+a workspace member, with the core lock unchanged.
+
+The pinned Chef image's skeleton negative control replaces the member helper with
+an empty file, while the excluded helper remains byte-identical. The full actual
+Dockerfile planner and cacher then completed locally on ARM64, using two Cargo
+jobs. Release compilation took 8m06s and compiled the real helper, ring, blst and
+secp256k1-sys successfully. Completed cacher image:
+`699a24b5362647e27a1c0575134d0b5a33f7d7e0b6ad19e51d2fc30b7e8f7375`.
+The helper source inside that image and in the reviewed checkout both hash to
+`4634e2c388755d98c7f7d5669644a90e53b205d565579f869d938acad09b086f`.
+Logs: `/tmp/kontor-f2-chef-cacher.log` and
+`/tmp/kontor-f2-chef-skeleton.log` on the implementation host.
+
+Independent subagent review found no material issues in base
+28789f61e1622a5c631ef7acecbab9ffbd532577 through corrective implementation
+5ba82a5d2ccffc3787aae763784f485756cc43a7. It checked the Docker/Cargo
+integration, retained helper CI coverage and unchanged dependency resolution,
+and independently ran the lock-parity check. Interlink review and exact PR-head
+CI remain pending at this checkpoint. F3 remains isolated while this correction
+is completed.
