@@ -1,6 +1,7 @@
 use std::pin::Pin;
 use std::str::FromStr;
 
+use anyhow::Result as HostResult;
 use bitcoin::{Txid, XOnlyPublicKey};
 use futures_util::Stream;
 
@@ -8,9 +9,9 @@ use crate::database::queries::StorageRowCursor;
 use crate::database::types::{
     CORE_SIGNER_ID, FileMeta, Identity, bytes_to_field_element, validate_padded_len, validate_root,
 };
-use crate::runtime::Runtime;
 use crate::runtime::kontor::built_in::context::HolderRef;
 use crate::runtime::kontor::built_in::{error::Error, file_registry_types::RawFileDescriptor};
+use crate::runtime::{ExecutionError, Runtime};
 use kontor_crypto::Proof as CryptoProof;
 use kontor_crypto::api::{Challenge, FileMetadata as CryptoFileMetadata};
 use kontor_crypto::field_from_uniform_bytes;
@@ -207,7 +208,7 @@ impl Holder {
     pub async fn from_holder_ref(
         mut holder_ref: HolderRef,
         runtime: &Runtime,
-    ) -> Result<Self, Error> {
+    ) -> HostResult<Result<Self, Error>> {
         match &holder_ref {
             HolderRef::XOnlyPubkey(s) => {
                 // Canonicalize to lowercase hex. Whether we *resolve*
@@ -216,18 +217,31 @@ impl Holder {
                 // lookup-only and yields a deterministic Err on miss
                 // rather than silently inserting signer rows from a
                 // read-only API path.
-                let pk = XOnlyPublicKey::from_str(s)
-                    .map_err(|e| Error::Validation(format!("invalid x-only-pubkey: {e}")))?;
-                let identity = runtime
-                    .get_or_create_identity(&pk.to_string())
-                    .await
-                    .map_err(|e| Error::Validation(format!("identity resolution failed: {e}")))?;
+                let pk = match XOnlyPublicKey::from_str(s) {
+                    Ok(pk) => pk,
+                    Err(e) => {
+                        return Ok(Err(Error::Validation(format!(
+                            "invalid x-only-pubkey: {e}"
+                        ))));
+                    }
+                };
+                let identity = match runtime.get_or_create_identity(&pk.to_string()).await {
+                    Ok(identity) => identity,
+                    Err(e @ ExecutionError::Deterministic(_)) => {
+                        return Ok(Err(Error::Validation(format!(
+                            "identity resolution failed: {e}"
+                        ))));
+                    }
+                    // A local database fault must never become a value the guest can handle.
+                    Err(e @ ExecutionError::NonDeterministic(_)) => return Err(e.into()),
+                };
                 holder_ref = HolderRef::SignerId(identity.signer_id());
             }
             HolderRef::SignerId(_) => {}
             HolderRef::Utxo(out_point) => {
-                Txid::from_str(&out_point.txid)
-                    .map_err(|e| Error::Validation(format!("invalid txid: {e}")))?;
+                if let Err(e) = Txid::from_str(&out_point.txid) {
+                    return Ok(Err(Error::Validation(format!("invalid txid: {e}"))));
+                }
             }
             HolderRef::Core
             | HolderRef::Burner
@@ -235,7 +249,7 @@ impl Holder {
             | HolderRef::StoragePool => {}
         }
 
-        Ok(Self { holder_ref })
+        Ok(Ok(Self { holder_ref }))
     }
 }
 

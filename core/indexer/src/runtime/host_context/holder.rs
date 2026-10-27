@@ -42,7 +42,7 @@ impl<T> built_in::context::HostHolderWithStore<T> for Runtime {
         // Invalid references also incur ABI conversion and validation work.
         Fuel::HolderFromRef(bytes as u64).consume(accessor)?;
         let runtime = accessor.with(|mut access| access.get().clone());
-        let holder = match Holder::from_holder_ref(ref_, &runtime).await {
+        let holder = match Holder::from_holder_ref(ref_, &runtime).await? {
             Ok(h) => h,
             Err(e) => {
                 // Debug-level: a "signer not found" in view context is

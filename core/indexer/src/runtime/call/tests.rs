@@ -27,6 +27,7 @@ mod errors;
 mod guest_memory;
 #[cfg(target_os = "linux")]
 mod guest_memory_failure;
+mod holder_errors;
 mod preparation_fees;
 mod results;
 mod wave_costs;
