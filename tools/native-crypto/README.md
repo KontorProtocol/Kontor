@@ -17,14 +17,24 @@ From the repository root:
 
 ```sh
 python3 tools/native-crypto/vendor.py
+python3 tools/native-crypto/check-helper-lock.py
+cargo test --locked --manifest-path core/vendor/kontor-native-build/Cargo.toml -j2
 python3 tools/native-crypto/qualify.py --output /absolute/path/to/new-evidence-directory
 ```
 
 The qualification harness uses Rust 1.99.1 and cached Cargo dependencies. Fetch
-the locked dependencies for `core/Cargo.toml` and
+the locked dependencies for `core/Cargo.toml`,
+`core/vendor/kontor-native-build/Cargo.toml`, and
 `tools/native-crypto/object-report/Cargo.toml` before running on a fresh machine.
 Builds run serially with two Cargo jobs. It refuses to reuse an evidence directory
 so stale archives cannot become acceptance evidence.
+
+The helper is deliberately excluded from the core workspace. Cargo Chef replaces
+workspace member sources with skeletons, which would erase the helper API used
+by the vendored build scripts. Its separate lock and exact `cc` pin keep its unit
+tests on the same dependency versions as the core native build. CI checks that
+relationship and runs the real Docker planner and cacher on both Linux node
+architectures before merging changes to core sources or the container recipe.
 
 For each of two feature configurations, the harness independently resolves a
 facade from the core lock, verifies package identities against that lock, then
@@ -105,7 +115,7 @@ evidence from the recorded reference, not replacement with candidate output.
    logs, source/lock hashes, native inventories and qualification reports with the
    reviewed change. Do not interpret a vector-only pass as compatibility evidence.
 
-F2 is under final qualification. Native platform CI, SDK parity and mobile checks
-have passed, and both reviews are complete. Full core CI and exact PR-head
-validation remain required before merging. See the execution ledger for the
-evidence actually completed.
+F2 merged in PR #604 after both reviews and green PR checks. Its first main-only
+container build exposed the helper skeleton problem described above. The
+correction adds separate helper qualification and PR-time container coverage.
+See the execution ledger for completed evidence and outstanding phase gates.

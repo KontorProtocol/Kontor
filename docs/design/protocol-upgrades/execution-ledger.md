@@ -416,3 +416,34 @@ function placement. The byte-identical C archives and recorded actual SDK
 compatibility checks remain the acceptance evidence; no claim of full linked
 binary equivalence is made. K2b now explicitly checks vendored-path panic-location
 strings in host error-text parity, including native execution paths.
+
+### F2 merge and container correction
+
+PR #604 merged as 28789f61e1622a5c631ef7acecbab9ffbd532577 after full CI
+40476490470, native qualification 40476490171 and mobile 40476490159 passed
+on reviewed head 26be2a72884fd7536b331d0efaa6eb3c2f5b49bd. The fetched
+merge tree equals that reviewed head. All 747 source hashes in each of the three
+native platform reports matched the reviewed files. Each platform completed
+1,200 concurrent crypto exercises with the same vector hash. Both reviewers
+approved the final behavior; the Interlink reviewer independently confirmed the
+merge and CI evidence in receipt 5649e3ebb1383b0ff48a711fac4b4aa5.
+
+Main CI 40479610372 then exposed a container integration regression in job
+122106308843. Docker jobs previously ran only after merge. Cargo Chef regenerated
+the workspace helper as a stub after the cacher copied the real vendor sources,
+so ring's build script could no longer import `kontor_native_build::Namespace`.
+This is an implementation defect, not an infrastructure or advisory failure.
+Post-merge native and mobile runs 40479610314 and 40479610145 passed.
+
+The corrective branch excludes the helper from the workspace, preserving its
+source as an ordinary path build dependency. Its own committed lock, exact
+`cc = 1.8.0` pin, formatting, Clippy and unit-test CI replace the lost workspace
+coverage. A lock check compares dependency identities and verifies that all
+three native vendors still use the helper. The core lock is unchanged. A new
+PR-time job builds the actual planner and cacher on Linux ARM64 and AMD64 without
+publishing images or requiring registry write credentials. This gate covers all
+core source changes, including future path crates, plus the Docker build inputs.
+
+Local standalone helper tests pass (four tests). Full container evidence and both
+reviews of this corrective PR remain pending at this checkpoint. F3 work is
+isolated while the image build regression is corrected.

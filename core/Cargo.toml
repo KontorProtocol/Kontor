@@ -1,6 +1,5 @@
 [workspace]
 members = [
-    "vendor/kontor-native-build",
     "bls-crypto",
     "built-in-types",
     "indexer",
@@ -15,6 +14,9 @@ members = [
     "testlib",
     "wit-validator",
 ]
+# Cargo Chef must preserve this build dependency's real API when cooking the
+# workspace skeleton used by vendored native build scripts.
+exclude = ["vendor/kontor-native-build"]
 resolver = "2"
 
 [workspace.lints.clippy]
