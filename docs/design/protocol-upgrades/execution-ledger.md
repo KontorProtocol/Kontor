@@ -885,3 +885,22 @@ relative outputs are documented accordingly, and absolute outputs remain unchang
 macOS CI explicitly checks the expected qualification.json before artifact upload.
 Linux Docker already passes absolute /evidence and is unaffected. This correction
 requires root/core/absolute-path checks and both follow-up reviews before push.
+
+The full local qualification passed with the GOT checker, including42 decisions,
+20 replacements and stable35-worker/8-descriptor warm counts. Its actual ELF
+GOT owner is local absolute data at000000000382b398. The explicit relative output
+in that diagnostic run exposed the CLI bug, so its report is under
+core/.build-cache/protocol-bundles/aarch64-unknown-linux-gnu/release rather than
+the normal root cache. No qualification source or bundle code changed during it.
+
+Both reviewers approved the CLI correction393d0c73 (Interlink8170c77bf6f5a026fa153723d2c347ad).
+All four builder tests, Clippy, formatting and actionlint pass. The real public
+CLI was invoked from both root and core, each with relative and absolute outputs,
+using a recording Python child rather than duplicating bundle compilation.
+All four invocations selected the exact builder script and root working directory;
+the relative output resolved to root/.build-cache/pr5-evidence/cli-relative and
+the absolute output stayed root/.build-cache/pr5-evidence/cli-absolute. The child
+created markers at those destinations. This is CLI routing evidence, not a
+substitute qualification result. Records: cli-output-before.txt,
+cli-output-after.json and cli-path-tests.log in .build-cache/pr5-evidence.
+Corrected-head platform CI remains mandatory before merge.
