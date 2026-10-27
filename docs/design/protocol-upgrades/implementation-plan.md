@@ -288,7 +288,10 @@ with std-only envelopes/callbacks and node adapters. No Wasmtime/Tokio/Malachite
 or dependency-owned types cross the common interface. Every execution/simulation/
 replay entry needs coordinator-issued context. Compile-fail/import checks prevent
 bypasses. Repeat P1 differential fixtures and native ownership audit on the real node,
-not only K1's VM harness. Keep one node database owner and explicit runtime ownership.
+not only K1's VM harness. Include vendored-path panic-location strings in error-text
+parity checks: vendoring changes embedded Rust source paths, and host-side error
+rendering must not silently change consensus behavior. Keep one node database owner
+and explicit runtime ownership.
 
 ### K3. Atomic migration substrate and execution identity
 

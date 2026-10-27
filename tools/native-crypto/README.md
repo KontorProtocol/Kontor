@@ -105,6 +105,7 @@ evidence from the recorded reference, not replacement with candidate output.
    logs, source/lock hashes, native inventories and qualification reports with the
    reviewed change. Do not interpret a vector-only pass as compatibility evidence.
 
-F2 is under qualification. Native platform CI and SDK parity checks are
-implemented; ordinary/mobile CI, final review disposition and the PR remain
-pending. See the execution ledger for the evidence actually completed.
+F2 is under final qualification. Native platform CI, SDK parity and mobile checks
+have passed, and both reviews are complete. Full core CI and exact PR-head
+validation remain required before merging. See the execution ledger for the
+evidence actually completed.

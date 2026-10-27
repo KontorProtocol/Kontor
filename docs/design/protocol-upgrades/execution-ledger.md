@@ -73,7 +73,8 @@ This is pre-PR evidence collection, agreed with the reviewer. No PR or merge yet
 
 ## Remaining work
 
-All F2/F3 and K1-K11 phases (including K2a/K2b) remain unimplemented. The owner-only dark Site now opens with PLAN-1 and implementation status, with
+F2 is implemented and under final qualification, not yet merged. F3 and K1-K11
+(including K2a/K2b) remain unimplemented. The owner-only dark Site now opens with PLAN-1 and implementation status, with
 all thirteen original chapters clearly marked as archived research proposals.
 Deployment appgdep_6ae0413164808191831c25596ac807d2 succeeded from source
 057b9a9476eb19fcdf9e7834b59dc2abdd66cbb6. The final implemented-system
@@ -387,3 +388,31 @@ chapter now distinguishes verified three-graph native/SDK evidence from remainin
 phase gates and later protocol work. Access remains owner-only, with no external
 visitors. Static structure, internal anchors and evidence downloads were checked;
 no new browser-based visual verification was performed for this text-only update.
+
+
+### F2 final review and PR preparation
+
+Interlink reviewer approved ea7ae9ea4d35bdfaf5fc56d895746bc4bf23952d against
+base 2c5cff0ddc3eada52f143f61109b6360d3732c6f for PR creation, receipt
+`216b0b253636a6fa55a4b90350355557`. F2-1 through F2-4 are fixed; F2-5 is
+inapplicable because secp has no external-symbols path and blst rejects its
+prebuilt path when namespaced. The independent subagent also reported no material
+findings through ea7ae9ea, including the new CI reference extraction/comparison.
+Merge remains conditional on the exact PR head's CI, native qualification and
+mobile checks. No review approval substitutes for these checks.
+
+Native qualification run 40475297184 passed all three platforms on ea7ae9ea.
+Full CI 40475342328 has passed lint and all security audits, with core tests, SDK
+and reproducible builds still running. No advisory exception was added by F2.
+Mobile is green on 4d902e7b; the PR must supply current-head validation.
+
+The reviewer requested investigation of embedded panic-location strings. WAT
+inspection confirms the pristine SDK includes the 84-byte path
+`/cargo/registry/src/index.crates.io-1949cf8c6b5b557f/secp256k1-sys-0.10.1/src/lib.rs`,
+where the candidate embeds the 31-byte `vendor/secp256k1-sys/src/lib.rs`. This
+confirms changed source-location data and explains 53 fewer path bytes. It does
+not by itself prove the cause of all 56 fewer Wasm bytes or the full changed
+function placement. The byte-identical C archives and recorded actual SDK
+compatibility checks remain the acceptance evidence; no claim of full linked
+binary equivalence is made. K2b now explicitly checks vendored-path panic-location
+strings in host error-text parity, including native execution paths.
