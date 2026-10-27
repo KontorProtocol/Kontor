@@ -1,0 +1,42 @@
+name: Docker cache qualification
+
+on:
+  pull_request:
+    paths:
+      - "core/**"
+      - "Dockerfile"
+      - ".dockerignore"
+      - ".github/actions/setup-docker/**"
+      - ".github/workflows/docker-cache.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  cacher:
+    name: Docker cache (${{ matrix.arch }})
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-latest
+            platform: linux/amd64
+            arch: amd64
+          - runner: ubuntu-24.04-arm
+            platform: linux/arm64
+            arch: arm64
+    steps:
+      - uses: actions/checkout@v7
+      - uses: ./.github/actions/setup-docker
+      - uses: docker/setup-buildx-action@v4
+      - name: Cook production dependency cache
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          platforms: ${{ matrix.platform }}
+          target: cacher
+          push: false
+          cache-from: type=registry,ref=kontorprotocol/kontor:buildcache-main-${{ matrix.arch }}

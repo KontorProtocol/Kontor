@@ -50,17 +50,22 @@ jobs:
       - name: Fetch locked dependencies
         run: |
           cargo fetch --locked --manifest-path core/Cargo.toml
+          cargo fetch --locked --manifest-path core/vendor/kontor-native-build/Cargo.toml
           cargo fetch --locked --manifest-path tools/native-crypto/object-report/Cargo.toml
       - name: Check qualification tool and fixture formatting
         run: |
           cargo fmt --manifest-path tools/native-crypto/object-report/Cargo.toml -- --check
+          cargo fmt --manifest-path core/vendor/kontor-native-build/Cargo.toml -- --check
           rustfmt --edition 2024 --check tools/native-crypto/fixtures/bundle.rs tools/native-crypto/fixtures/host.rs
       - name: Verify pinned archives and vendor patches
         run: python3 tools/native-crypto/vendor.py
       - name: Check qualification tool
         run: cargo clippy --locked --manifest-path tools/native-crypto/object-report/Cargo.toml -- -D warnings
       - name: Test namespace helper
-        run: cargo test --locked --manifest-path core/Cargo.toml -p kontor-native-build -j2
+        run: |
+          python3 tools/native-crypto/check-helper-lock.py
+          cargo clippy --locked --manifest-path core/vendor/kontor-native-build/Cargo.toml --all-targets -j2 -- -D warnings
+          cargo test --locked --manifest-path core/vendor/kontor-native-build/Cargo.toml -j2
       - name: Qualify pristine, default and dual namespaced graphs
         run: python3 tools/native-crypto/qualify.py --output target/native-crypto-evidence
       - name: Test object comparator negative controls

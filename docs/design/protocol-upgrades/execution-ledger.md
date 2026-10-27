@@ -416,3 +416,62 @@ function placement. The byte-identical C archives and recorded actual SDK
 compatibility checks remain the acceptance evidence; no claim of full linked
 binary equivalence is made. K2b now explicitly checks vendored-path panic-location
 strings in host error-text parity, including native execution paths.
+
+### F2 merge and container correction
+
+PR #604 merged as 28789f61e1622a5c631ef7acecbab9ffbd532577 after full CI
+40476490470, native qualification 40476490171 and mobile 40476490159 passed
+on reviewed head 26be2a72884fd7536b331d0efaa6eb3c2f5b49bd. The fetched
+merge tree equals that reviewed head. All 747 source hashes in each of the three
+native platform reports matched the reviewed files. Each platform completed
+1,200 concurrent crypto exercises with the same vector hash. Both reviewers
+approved the final behavior; the Interlink reviewer independently confirmed the
+merge and CI evidence in receipt 5649e3ebb1383b0ff48a711fac4b4aa5.
+
+Main CI 40479610372 then exposed a container integration regression in job
+122106308843. Docker jobs previously ran only after merge. Cargo Chef regenerated
+the workspace helper as a stub after the cacher copied the real vendor sources,
+so ring's build script could no longer import `kontor_native_build::Namespace`.
+This is an implementation defect, not an infrastructure or advisory failure.
+Post-merge native and mobile runs 40479610314 and 40479610145 passed.
+
+The corrective branch excludes the helper from the workspace, preserving its
+source as an ordinary path build dependency. Its own committed lock, exact
+`cc = 1.8.0` pin, formatting, Clippy and unit-test CI replace the lost workspace
+coverage. A lock check compares dependency identities and verifies that all
+three native vendors still use the helper. The core lock is unchanged. A new
+PR-time job builds the actual planner and cacher on Linux ARM64 and AMD64 without
+publishing images or requiring registry write credentials. This gate covers all
+core source changes, including future path crates, plus the Docker build inputs.
+
+Local standalone helper tests pass (four tests), along with locked Clippy for all
+targets with warnings denied, formatting, and the lock-parity check. A deliberately
+changed helper `cc` version is rejected. Core metadata confirms the helper is not
+a workspace member, with the core lock unchanged.
+
+The pinned Chef image's skeleton negative control replaces the member helper with
+an empty file, while the excluded helper remains byte-identical. The full actual
+Dockerfile planner and cacher then completed locally on ARM64, using two Cargo
+jobs. Release compilation took 8m06s and compiled the real helper, ring, blst and
+secp256k1-sys successfully. Completed cacher image:
+`699a24b5362647e27a1c0575134d0b5a33f7d7e0b6ad19e51d2fc30b7e8f7375`.
+The helper source inside that image and in the reviewed checkout both hash to
+`4634e2c388755d98c7f7d5669644a90e53b205d565579f869d938acad09b086f`.
+Logs: `/tmp/kontor-f2-chef-cacher.log` and
+`/tmp/kontor-f2-chef-skeleton.log` on the implementation host.
+
+Independent subagent review found no material issues in base
+28789f61e1622a5c631ef7acecbab9ffbd532577 through corrective implementation
+5ba82a5d2ccffc3787aae763784f485756cc43a7. It checked the Docker/Cargo
+integration, retained helper CI coverage and unchanged dependency resolution,
+and independently ran the lock-parity check. It confirmed review carryover to
+documentation head 8326a69058075d2411ef0a75214f608047e5c7a1 after inspecting
+the completed build log.
+
+Interlink approved the full correction through 8326a690 for PR creation in receipt
+`4bede2fded3fab76b8b7b074f6f72283`. Its maintenance note about updating the
+helper pin alongside core's `cc` is now explicit in the README. Multiple core
+`cc` versions are deliberately rejected today; a future graph with multiple
+versions must instead verify the exact native vendor edges. Both new Docker
+cache jobs must pass on the PR head. The post-merge main image build must also
+succeed before F3 commits proceed. F3 implementation and tests remain isolated.
