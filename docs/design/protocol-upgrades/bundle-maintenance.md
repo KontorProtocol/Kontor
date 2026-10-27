@@ -67,6 +67,11 @@ host object files. Platform imports resolve within explicitly allowed runtime
 library scopes, with their paths and hashes recorded where files are available.
 macOS system libraries may instead reside in the dyld shared cache.
 
+On Linux, `_GLOBAL_OFFSET_TABLE_` references require the actual final executable
+to contain that exact local linker anchor (data or absolute symbol). Its address
+and kind are recorded separately. This does not permit a bundle to define the
+anchor, waive an unknown import, or treat it as optional when absent.
+
 The three optional weak system-libunwind registration imports are named
 explicitly. They remain optional only when every reference is weak; making one
 strong fails qualification if no owner exists. Darwin uses `nm -m` to retain

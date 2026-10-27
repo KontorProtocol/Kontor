@@ -105,11 +105,24 @@ def graph_references(graph, index, sets):
     return names, (names - strong) & OPTIONAL_UNWIND
 
 
-def reject_unowned_references(graph, names, refs, common, platform, optional):
+def linker_owners(executable):
+    if sys.platform != "linux":
+        return {}
+    # ELF linkers keep the GOT anchor local, so the global definition inventory omits it.
+    symbols = definitions(executable, globals_only=False)
+    got = symbols.get("_GLOBAL_OFFSET_TABLE_")
+    if got is None:
+        return {}
+    if got["kind"] not in ("d", "a"):
+        raise RuntimeError("ELF GOT anchor is not local linker data or an absolute symbol")
+    return {"_GLOBAL_OFFSET_TABLE_": got}
+
+
+def reject_unowned_references(graph, names, refs, common, platform, optional, linker):
     shadowed = names & platform.keys()
     if shadowed:
         raise RuntimeError(f"{graph['graph']} shadows a platform export: {sorted(shadowed)[:100]}")
-    unresolved = refs - names - common.keys() - platform.keys() - optional
+    unresolved = refs - names - common.keys() - platform.keys() - optional - linker.keys()
     if unresolved:
         raise RuntimeError(f"{graph['graph']} imports have no declared owner: {sorted(unresolved)[:100]}")
 
@@ -145,12 +158,15 @@ def verify(graphs, sets, host_objects, executable, env, output):
         graph_optional.append(optional)
     candidates = set.union(*graph_refs, *sets) - common.keys()
     platform, libraries = platform_owners(executable, candidates)
+    linker = linker_owners(executable)
     for graph, names, refs, optional in zip(graphs, sets, graph_refs, graph_optional, strict=True):
-        reject_unowned_references(graph, names, refs, common, platform, optional)
+        reject_unowned_references(graph, names, refs, common, platform, optional, linker)
     report = {"common_inputs": inventories, "platform_libraries": libraries,
+              "linker_definitions": linker,
               "optional_weak_system_unwind": [sorted(names) for names in graph_optional],
               "references": [{"graph": graph["graph"], "own": sorted(refs & names),
-                              "common": sorted(refs & common.keys()), "platform": sorted(refs & platform.keys())}
+                              "common": sorted(refs & common.keys()), "platform": sorted(refs & platform.keys()),
+                              "linker": sorted(refs & linker.keys())}
                              for graph, names, refs in zip(graphs, sets, graph_refs, strict=True)]}
     (output / "common-reference-ownership.json").write_text(json.dumps(report, sort_keys=True) + "\n")
     return common

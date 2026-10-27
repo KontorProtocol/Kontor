@@ -10,7 +10,7 @@ from unittest.mock import patch
 
 from audit import audit_inputs, audit_final, definitions, owner
 from build import digest, verify_staged_inputs
-from common_ownership import graph_references, reject_common_shadow, reject_unowned_references
+from common_ownership import graph_references, linker_owners, reject_common_shadow, reject_unowned_references
 from provenance import fingerprint, source_inputs
 
 
@@ -116,12 +116,48 @@ class Ownership(unittest.TestCase):
                 sets, _ = audit_inputs(self.graphs, root)
                 refs, optional = graph_references(self.graphs[0], 0, sets)
                 if weak:
+                    linker = {}
+                    if sys.platform == "linux":
+                        executable = root / "linked-weak"
+                        subprocess.run(["cc", "-nostdlib", "-pie", "-Wl,-e,kontor_first_call",
+                                        str(artifact), "-o", str(executable)], check=True)
+                        linker = linker_owners(executable)
                     self.assertEqual(optional, {"__unw_add_dynamic_fde"})
-                    reject_unowned_references(self.graphs[0], sets[0], refs, {}, {}, optional)
+                    reject_unowned_references(self.graphs[0], sets[0], refs, {}, {}, optional, linker)
                 else:
                     self.assertFalse(optional)
                     with self.assertRaisesRegex(RuntimeError, "no declared owner"):
-                        reject_unowned_references(self.graphs[0], sets[0], refs, {}, {}, optional)
+                        reject_unowned_references(self.graphs[0], sets[0], refs, {}, {}, optional, linker)
+
+    def test_linker_got_requires_local_final_definition(self):
+        got = {"_GLOBAL_OFFSET_TABLE_": {"kind": "d", "address": "1234"}}
+        with patch("common_ownership.sys.platform", "linux"):
+            with patch("common_ownership.definitions", return_value=got) as inventory:
+                self.assertEqual(linker_owners(Path("fixture")), got)
+                inventory.assert_called_once_with(Path("fixture"), globals_only=False)
+            absolute = {"_GLOBAL_OFFSET_TABLE_": {"kind": "a", "address": "1234"}}
+            with patch("common_ownership.definitions", return_value=absolute):
+                self.assertEqual(linker_owners(Path("fixture")), absolute)
+            with patch("common_ownership.definitions", return_value={}):
+                self.assertEqual(linker_owners(Path("fixture")), {})
+            for kind in ("D", "U", "w", "t"):
+                with patch("common_ownership.definitions", return_value={"_GLOBAL_OFFSET_TABLE_": {"kind": kind}}):
+                    with self.assertRaisesRegex(RuntimeError, "not local linker data"):
+                        linker_owners(Path("fixture"))
+        with patch("common_ownership.sys.platform", "darwin"):
+            with patch("common_ownership.definitions", return_value=got) as inventory:
+                self.assertEqual(linker_owners(Path("fixture")), {})
+                inventory.assert_not_called()
+
+    def test_linker_got_does_not_allow_other_imports_or_bundle_definitions(self):
+        graph = self.graphs[0]
+        got = {"_GLOBAL_OFFSET_TABLE_": {"kind": "d", "address": "1234"}}
+        reject_unowned_references(graph, set(), set(got), {}, {}, set(), got)
+        for refs, linker in ((set(got), {}), ({"unknown_import"}, got)):
+            with self.assertRaisesRegex(RuntimeError, "no declared owner"):
+                reject_unowned_references(graph, set(), refs, {}, {}, set(), linker)
+        with self.assertRaisesRegex(RuntimeError, "unowned native"):
+            owner("_GLOBAL_OFFSET_TABLE_", graph, "51.0.0-dev")
 
     def test_unknown_final_rust_symbol_has_no_automatic_common_exemption(self):
         with tempfile.TemporaryDirectory() as directory:

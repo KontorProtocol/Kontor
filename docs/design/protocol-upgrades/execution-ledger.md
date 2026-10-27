@@ -851,3 +851,24 @@ Both reviewers must approve the final correction and qualification must be rerun
 Malachite post-merge verification is complete: all applicable jobs on6d99c0a4
 passed, including Coverage40543559798, Rust40543559658 and lifecycle40543559692.
 The reviewer independently confirmed this in ac7b8aa6e92ad3987f968cbe6d8fd8b7.
+
+## K1 PR606: Linux x86 linker-anchor correction
+
+Both reviewers approved ca095073f0f603f77b11aa1ed45bed004383509d. Its complete
+ARM host and actual node-builder container qualification passed after the final
+source-identity correction, with the executable hashes recorded above unchanged.
+Both bundle audits reported zero unignored vulnerabilities. PR606 opened at that
+head; Linux x86 CI failed in the weak-unwind Python control before bundle builds.
+The C compiler added an undefined `_GLOBAL_OFFSET_TABLE_` reference, which the
+ownership checker had not attributed to the ELF linker. ARM and macOS CI continued.
+
+The correction requires that exact anchor to exist as a local data or absolute
+symbol in the final Linux executable and records its actual address and kind.
+It grants no bundle-definition exemption and does not waive unknown imports or
+an absent anchor. The weak-unwind control now links its real Linux fixture and
+uses the actual linker inventory. Two additional controls cover absent, global,
+wrong-kind and non-Linux anchors, unknown imports, and forbidden bundle definitions.
+All37 Python controls pass. A cross-compiled x86 object and LLD-linked executable
+reproduce the GOT reference, pass with its real local anchor, and fail without it.
+The native ARM GNU linker emits a local absolute anchor; LLD emits local data.
+Follow-up reviews and corrected-head platform CI remain required before merging.
