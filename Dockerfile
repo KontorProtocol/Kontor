@@ -37,6 +37,15 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 
+FROM builder-base AS protocol-bundle-qualification
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    python3 binutils git \
+    && rm -rf /var/lib/apt/lists/*
+WORKDIR /build
+COPY . .
+ENV RUSTUP_TOOLCHAIN=1.99.1 RUSTC_WRAPPER="" CCACHE_DISABLE=1 CARGO_BUILD_JOBS=2
+CMD ["python3", "tools/protocol-bundles/build.py", "--output", "/evidence", "--profile", "release"]
+
 # ---------------------------------------------------------------------
 # Cacher: builds the full dependency tree once from recipe.json. When
 # the recipe and vendored sources are unchanged, this layer is a cache

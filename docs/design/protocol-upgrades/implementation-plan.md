@@ -255,7 +255,7 @@ This makes in-process handoff possible without assuming process exit cleans up.
 
 ### K1. Reproducible isolated bundle build
 
-Repository: Kontor. Dependencies: F1/F2. Modules: tools/kontor-build, new protocol
+Repository: Kontor. Dependencies: F1/F2/F3. Modules: tools/kontor-build, new protocol
 build recipes and bundle workspaces, CI, node-owned proof adapters. Result: one
 pinned Rust compiler, independent --locked graphs/feature sets/output directories,
 metadata, exact rlib consumption, deterministic artifact attestations and native
@@ -265,7 +265,12 @@ versions/features and private consensus runtimes. A build-only harness does not
 replace K2a/K2b extraction or final node integration. Qualify Linux ARM64/x86-64 release/Docker profiles and macOS node test profiles
 (the existing CI runs the indexer tests on macOS). Mobile SDK consumers do not embed
 the node; keep their existing checks green without pretending they run consensus.
-No unqualified unified Cargo release path.
+The K1 proof executable is an independently built qualification artifact, not
+isolated node execution. The existing node remains explicitly P1-only and may
+retain its current single-graph release path until K2b. CI requires bundle
+qualification on shipped node targets. The release-path clarification below
+places the mandatory node builder route in K2b and the multi-protocol attestation
+gate in K7; no unqualified unified multi-protocol artifact may ship.
 
 ### K2a. Versioned semantic API and live storage adapter
 
@@ -288,7 +293,9 @@ with std-only envelopes/callbacks and node adapters. No Wasmtime/Tokio/Malachite
 or dependency-owned types cross the common interface. Every execution/simulation/
 replay entry needs coordinator-issued context. Compile-fail/import checks prevent
 bypasses. Repeat P1 differential fixtures and native ownership audit on the real node,
-not only K1's VM harness. Include vendored-path panic-location strings in error-text
+not only K1's VM harness. Node Docker and release builds must now route through
+the pinned builder and consume its exact P1 bundle artifacts, with no unified
+Cargo resolution of historical semantics. Include vendored-path panic-location strings in error-text
 parity checks: vendoring changes embedded Rust source paths, and host-side error
 rendering must not silently change consensus behavior. Keep one node database owner
 and explicit runtime ownership.
@@ -339,6 +346,11 @@ Test Malachite signing-callback errors and separate network-identity key use.
 One engine owns socket/WAL and a private runtime at a time; explicit stop-and-join
 keeps node services alive. Crash/sign-retry, stale callbacks, old snapshots, partial
 startup, blocked teardown and WAL reopen tests prove no competing authority.
+Account for fork-to-exec inheritance of advisory locks during WAL startup: inspect
+node subprocess overlap and prove that any startup retry retains exclusive
+coordinator ownership. A transient lock error never authorizes a second writer.
+This F3 follow-up was identified in Interlink receipt
+20ada81588f8fc1a137cf6f1e1b84e0d.
 
 ### K6. Validator-authorized upgrade control
 
@@ -368,8 +380,9 @@ join, WAL startup and first new-era signature. Include unmined/RBF batch(H-1) wh
 deadline later replays H with changed pre-state; old unsupported quorum prevotes nil;
 new successor committee unsupported/zero power; deterministic post-decision migration
 failure and the incident procedure. Over one-third unsupported at H must still allow
-Cancel to be decided, after which ordinary H is valid under P1. No live switch before
-these pass.
+Cancel to be decided, after which ordinary H is valid under P1. Release CI and
+node startup must refuse an artifact whose registry contains multiple protocols
+unless its embedded builder attestation verifies. No live switch before these pass.
 
 ### K8. Deterministic cross-boundary replay and committee safety
 
@@ -535,3 +548,161 @@ A fresh independent Malachite graph has ring but no AWS-LC; the earlier workspac
 view reflected node reqwest/metrics feature unification. K1 must verify AWS-LC,
 libsql and zstd remain node-owned in the actual extracted closure. Do not assume
 that ownership from package names or from a unified Cargo tree.
+
+
+## K1 release-path clarification
+
+Agreed 2026-10-27 in Interlink reviewer receipt
+`4c46e3a37b9ff40aee9b901cfbe759c5`, accepted by implementer in
+`43d93fce3b650b4eaa3a2199b2eea644`.
+
+The prohibition on unqualified unified releases applies to retained multi-protocol
+artifacts. K1's intermediate node contains only the existing P1 and no upgrade
+capability. It must remain usable while semantic extraction proceeds in K2a/K2b.
+K1 delivers the pinned builder, two real independently locked VM/consensus proof
+bundles, combined qualification executable, attestations, and required qualification
+CI on shipped targets. Real consensus qualification consumes F3's managed lifecycle.
+It does not claim that the node executes through those proof bundles.
+
+K1 must enforce immutable Wasmtime version/source identity (including the reserved
+51.0.0-dev baseline), reject debug-builtins/cache/profiling, set the F2 native
+namespace requirement on every graph, reject unpatched if-watch, and audit every
+native intersection/owner including Rust-mangled and anonymous names. K2b switches
+the node's release/Docker build to exact builder artifacts. K7 adds release and
+startup verification of embedded attestations for multi-protocol registries. These
+are explicit acceptance items, not untracked later work.
+
+
+## Process-lifetime service ownership clarification
+
+F3 review receipt `33e55cc703d83f1c0e077ae28de25ac8` records the locked
+futures-timer 3.0.3 fallback helper as one lazy, resident service per consensus
+graph. It parks and wakes task wakers, owns no sockets/FDs, and cannot poll engine
+futures. Runtime teardown destroys the engine's Delay futures; cancellation clears
+deadlines and queues heap removal, so physical notification-record reclamation is
+asynchronous. This does not permit retained engine authority or per-engine growth.
+K1 must include the helper in its per-graph ownership map with no sharing/unloading.
+K5/K7 resource baselines warm each relevant graph before measurement and still
+reject unexplained per-engine growth. New process-lifetime exceptions require
+explicit ownership review; they cannot be inferred from a stable warm baseline.
+
+## K1 concrete build and interface refinement
+
+Agreed with the reviewer in Interlink receipt
+`e4ceca617f9c69b3d1173273f0a94e02` before implementation:
+
+- Expose a separate `./tools/kontor protocol-bundles` command over a reusable
+  builder module. Keep the existing contract/SDK generator's fixed-platform
+  behavior unchanged.
+- Check in two independently resolved manifests and lockfiles. Pin Wasmtime
+  baseline `bfdee9ba9a483915dc95432708cf7db8281adbc1` (reserved 51.0.0-dev) and
+  F1 merge `525ffedef9bc8babdd9c0b3bd703a5ba5793fcb8` (51.0.0-kontor.1).
+  Pin the verified F3 merge for both real managed consensus implementations.
+  Combine VM, consensus and native crypto inside each graph, with conflicting
+  itoa 1.0.14 and 1.0.15 requirements and differing feature closures.
+- Build with graph-specific compiler metadata, native namespaces and output
+  directories, then consume only the exact rlibs reported by that Cargo
+  invocation. Audit all input definitions, including Rust-mangled and anonymous
+  names, plus final native addresses. Sharing requires an explicit runtime owner.
+- The proof boundary uses only the common sysroot's standard-library types.
+  Use opaque `Box<dyn Any + Send>` engine owners and synchronous entry points;
+  graph-owned types remain inside their graph. Drop engine owners on a control
+  thread because dropping waits for complete shutdown. Qualify rejection of
+  cross-graph Tokio/dependency types with a compile-fail control.
+- No bundle may define a global allocator. The allocator is process-owned.
+  All graphs use the same pinned compiler and unwind panic runtime; catch panics
+  at exported calls and return std-only errors. Add a bidirectional std-closure
+  callback proof so live-storage callback ownership is exercised before K2b.
+- Attest compiler identity, target/profile, source hashes, locked packages and
+  resolved features, native ownership and artifact hashes. Reject mismatched
+  panic strategy, forbidden Wasmtime features, unpatched if-watch, missing F2
+  namespaces and reused immutable source/version identities.
+
+This specifies K1's proof and reusable builder, not a completed historical
+semantic extraction or a production multiprotocol node. K2a/K2b and K7 retain
+all previously agreed extraction, release-route and runtime-attestation gates.
+
+Wasmtime version/native-prefix uniqueness is mandatory across independently
+linked graphs, even when the VM code is otherwise identical. F1 derives native
+helper names from the package version; those helpers interact with graph-private
+Rust trap/TLS/unwinder state. Byte-identical helpers cannot use the generic shared
+runtime exemption. A future protocol reusing VM code must receive a version-only
+fork release with a new immutable recorded source identity (for example,
+51.0.0-kontor.2). K1 rejects duplicate versions and duplicate normalized prefixes.
+This procedure remains mandatory until a separate graph-namespace mechanism is
+reviewed. Interlink agreement: `363896efaf026401cd8dd6fa2c1de9c2`.
+
+K1 also records Tokio's Unix signal registry as a named process-lifetime resource:
+the OnceLock retains one UnixStream pair (two descriptors) per Tokio copy; each
+runtime owns a duplicate receiver that is released on Drop. Review receipts
+`5e476ff359000469af853d342588b208` and `3aac0eadc7a134f7a5501daf623fdbd3`
+approve this bounded ownership class, not a generic descriptor allowance.
+Cold-start and repeated-runtime evidence must identify the pair once per graph
+and show no per-engine growth. The isolated Tokio 1.47.1 Linux probe observed
+four cold descriptors and six after each of forty runtime create/drop cycles;
+this preflight does not replace combined-graph platform qualification.
+
+Bundle Kontor/fork source may not subscribe to node control signals or spawn
+children (tokio::signal, signal-hook subscription, tokio::process and equivalent
+child-spawn call sites). Wasmtime's F1 trap handlers remain a separate explicit
+exception. A blanket symbol-definition ban is invalid because Tokio compiles
+subscriber helpers and its lazy orphan path even without a bundle subscription.
+K1 therefore checks source policy and proves host SIGTERM/SIGINT delivery with
+both engines live, then after runtime replacement. Engines continue until the
+host requests stop. A node-owned child must also be reaped with its observed
+exit status while both bundles are live, guarding SIGCHLD ownership. New third-
+party subscription behavior requires renewed ownership review. F3 receives a
+separate reviewed documentation follow-up naming this existing resource.
+
+## K1 explicit blst process resource
+
+Interlink4afa1ddbd9d3db4f68c6e9e45bf9a2a7 accepts the existing blst0.3.17
+std threadpool as a separate named process-lifetime resource, preserving features
+and source. Each independently linked graph lazily leaks one Mutex<ThreadPool>
+with num_cpus::get workers. It is distinct from Wasmtime's Rayon pool and the
+futures-timer helper; a node retaining two bundles plus its own blst graph can
+therefore retain three such pools. K1 records actual cold/VM/crypto/engine worker
+counts separately for each graph and platform, then requires no per-engine growth.
+
+The jobs in aggregate_verify, verify_multiple_aggregate_signatures and
+miller_loop_n carry crypto inputs, Pairing/field accumulators and atomic counters,
+not node callbacks or signing/storage authority. Each caller receives one result
+from every scheduled job before returning. Borrowed-input access finishes before
+the completion send. Trailing closure cleanup may still decrement Arc/Sender
+counts or drop borrowed references without dereferencing them; this is not a
+claim of exact pool-idle at return. Graph code and pools remain resident.
+
+The caller retains its own sender while waiting, so a job that panics or hangs
+before sending would leave that call waiting indefinitely rather than unwind
+past borrowed input lifetimes. Teardown must retain the owner in that case;
+there is no timeout escape that frees live input or starts a competing owner.
+This is an explicit availability failure mode, not permission to detach work.
+No silent no-threads feature change is allowed; such a change would require
+separate compatibility reasoning and K2b parity qualification.
+
+## Corrective F3 shutdown ordering before K1 qualification
+
+Interlink agreement 13a640d2b404ff98fccc6139a39cf089 adds a corrective Malachite
+PR based on c9a313bd after K1 exposed a live shutdown race. Broadcasting stop to
+all actors closes the WAL while consensus can still perform its final WAL RPC.
+Stop and await children in reverse construction-dependency order: sync,
+consensus, connector, WAL, network. Give each a bounded graceful interval, then
+kill if necessary and await Stopped before touching its providers. Keep both
+supervisor barriers, first-fault reporting, runtime destruction and final WAL
+worker joins. Caller timeouts retain ownership; stuck post_stop is not detached.
+
+Acceptance requires a deterministic dependent-RPC regression that fails the old
+manager, real inbound networking after a subscriber stops, the existing complete
+failure/timeout lifecycle suite on all three platforms, both required reviews,
+exact-head green CI and verified main. K1 then pins the corrected merge and
+reruns its original cold-engine reproducer. No public API, signing, WAL-format
+or dependency-lock change is needed. Later phases retain their agreed scope.
+
+The corrective review's non-blocking registration guard is assigned to K5's
+engine coordinator: represent or assert the provider-before-dependent actor
+sequence, so a future builder reorder cannot silently change teardown order.
+The current correction documents the sequence at its registration sites and
+tests its dependency invariant. K5/K7 timeouts must account for up to five
+sequential one-second graceful intervals, followed by mandatory ownership waits
+that may remain unbounded for stalled work. Never interpret that grace budget
+as permission to start a competing engine.

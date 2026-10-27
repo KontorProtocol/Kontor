@@ -475,3 +475,339 @@ helper pin alongside core's `cc` is now explicit in the README. Multiple core
 versions must instead verify the exact native vendor edges. Both new Docker
 cache jobs must pass on the PR head. The post-merge main image build must also
 succeed before F3 commits proceed. F3 implementation and tests remain isolated.
+
+
+## F2 corrective merge and post-main closure
+
+PR605 merged as `6504523fa674211d8781c26905961da090f94efb`. Main run40489996759,
+native40489997143 and mobile40489996758 all passed. Main includes both architecture
+cache/image builds and multiarch publication. No dependency advisory exception.
+
+## F3 source and platform qualification, not yet merged
+
+Malachite worktree `malachite-protocol-lifecycle`, head
+`cdc0ea41776bdf2135f0267ccbf2e3ea05e39785`. Both source reviews and follow-ups
+complete. Production changes own the engine runtime, actors, WAL threads, metrics
+and interface watcher, retain ordinary WAL errors across actor teardown, and keep
+ownership after timeouts. No F3 PR yet. Fork CI prerequisite PR2 must merge first;
+F3 then rebases/re-signs and requalifies the actual final head and PR policies.
+
+Platform run40501837563 passed all three platforms, each with one real lifecycle
+fixture and 54 engine unit tests. Linux x86 fixture54.12s, worst watcher17.302us;
+Linux ARM54.13s/52.89us; macOS58.06s/702us. Watcher bound is500ms. Linux diagnostic
+runs exposed a joined owner thread still visible after address-space release.
+The observer waits <=1s only for identified PF_EXITING/vsize0 entries, freezes
+initial live counts and captures FDs immediately. A mixed negative control proves
+live workers cannot disappear into an unrelated exit wait. The x86 current-head
+run observed a real owner exit requiring two re-polls42.008us; synthetic-control
+waits are recorded separately in fork documentation.
+
+The initial observer approval77c48f41e9f2f3b05f2b373471467cc7 was withdrawn after
+independent review found live-observation loss during full re-enumeration. The fix
+was reviewed by both, Interlink superseding approval15533d850d739eba00bd1068d1ffb9f0.
+
+## Fork CI bootstrap prerequisite, PR2
+
+https://github.com/KontorProtocol/malachite/pull/2
+Current head `5985ce345cfe04f1c492b3bba02c0aa7bb88e017`, no merge yet.
+Both reviews complete. Public runners, compiler1.99.1 qualification with separate
+MSRV verification, original pinned path/title actions, direct fail-closed Clippy,
+coverage failure propagation, and retained substantive suites. Quint0.27.0 matches
+MBT; semver0.51.0 supports current rustdoc format. No production algorithm/API,
+dependency, lockfile or specification changes.
+
+Current-head CI evidence: unit756pass/3existing skips; maelstrom discovery22pass/
+1ignored and application215pass/5ignored; MBT5pass0skips; Quint47files typecheck and
+89cases across16files pass at max-samples100. Semver CI succeeded for the nine
+selected crates; local full analysis records202passing/58inapplicable checks each.
+Clippy, fmt, no_std, MSRV, standalone, spelling and workflow validation passed.
+Coverage and Rust CodeQL are still running and remain merge gates.
+
+Only upstream PR policies309324264/309324265 were temporarily disabled for the
+bootstrap, at11:37:54.933867Z and11:37:56.050199Z on2026-10-27. Re-enable immediately
+after merge, verify active states, and require passing policies on the F3 PR.
+No test/security workflow is disabled. Superseded9d4a Rust/Coverage runs were
+canceled after current-head Rust passed; cancellation is not qualification evidence.
+
+The private dark Site was updated from source429d696e8fde840e1f1e5a8aae65956247cb15b8,
+deploymentappgdep_6ae095934a74819188416894ae975125 succeeded. Static structure,
+anchors and downloads verified; no new browser visual QA for this text-only update.
+
+## K1 preparation
+
+Isolated worktree `protocol-bundle-build`, branch `feat/protocol-bundle-build`,
+base verified main6504523fa674211d8781c26905961da090f94efb. Plan/evidence preparation
+only so far. Release-path clarification is recorded in the implementation plan.
+The full K1-K11 system remains outstanding.
+
+F3 resident-timer documentation was independently reviewed and approved by Interlink
+in receipt558607a501a8b37c048f08e29465b558. It distinguishes asynchronous removal
+of canceled timer records from destruction of engine futures and authority. The
+named per-graph helper is not a permission to detach per-engine workers.
+
+## F3 PR 3 qualification follow-up
+
+Bootstrap PR 2 merged as 0821ca5ebbe29d538a2e7edbd49990010da8326d after
+exact-head substantive CI passed. Its merge tree equals reviewed/tested head
+5985ce345cfe04f1c492b3bba02c0aa7bb88e017. Both temporarily disabled policy
+workflows were restored immediately and independently verified active. PR 3
+subsequently passed the collaborator, title and commit-signature policies.
+
+Bootstrap main Rust run 40505982903 nevertheless failed the pre-existing WAL
+concurrent-crash test. The test truncates through an uncooperative raw handle
+during a live multi-write append, which can correctly produce a CRC error.
+F3 carries a separately committed test correction: 284 torn-tail cut offsets
+preserve the complete prefix and support subsequent append/reopen; deterministic
+mid-append external truncation remains InvalidData. No production WAL changes.
+Full final-head F3 CI and its post-merge main run replace this outstanding gate,
+per Interlink agreement 697dc0d355c0b39970ca7069b531bbfe. Main red is not accepted
+as green. Nextest process isolation is required for the existing process-spawn
+test to avoid inherited advisory-lock interference under concurrent libtest.
+
+F3 PR 3 is open at https://github.com/KontorProtocol/malachite/pull/3. Initial
+head 754e918df9d603de1175614c2bf3dbd72542058d passed the dedicated platform
+lifecycle jobs but failed workspace resource observation and semantic versioning.
+The corrected Linux observer waits only for initially terminal PF_EXITING tasks
+with a one-second bound, freezes initially live counts and captures FDs before
+waiting. Linux can wake pthread_join before clearing task->mm, so requiring zero
+vsize was too strict. Tokio native joins remain intact.
+
+The lifecycle API intentionally changes NodeMsg (variant and unwind traits) and
+wal::Args. The fork now declares 0.9.0-kontor.1 consistently across all 30 own
+packages; every third-party lock record is identical. Future bundles must pin
+the exact revision and explicitly accept the prerelease requirement. Fork semver
+CI checks the PR's merge base and derives an explicit numeric release policy.
+Unchanged numeric versions allow additions but reject breaking API changes,
+including suffix-only bumps. Real checker controls: removed function fails one
+of 202 checks; retained plus added function passes 202; both report 58 skips.
+The intentional 0.8.2→0.9.0 major transition runs zero checks and skips 260 per
+crate, which accepts its version declaration but does not prove API compatibility.
+
+Both reviewers approved these follow-ups. Local lifecycle 54.25 seconds, watcher
+worst 23.876 microseconds, workspace Clippy and six WAL crash tests pass. Full local workspace passed 761 tests with three existing skips and no retries.
+Final PR/main qualification remains pending. K1 is not started
+in production; this worktree contains only plan and evidence preparation.
+
+The final follow-up head is 6a3917201875f49d28016cbfa18ee6b8393cbf46, with
+both committed-head approvals (Interlink 4c53aff9d818ec77149587a6a17dd8f5).
+The separate WAL test-only commit is 12e36a41c82c8f5782377a43c5181751630c8ce2.
+Exact-head Rust run40510810713 passed all jobs, including761 workspace tests
+with3 existing skips. Dedicated platform run40510810370 passed Linux x86
+(54.15s fixture,26.169us quiet watcher), ARM(54.12s,30.817us), and macOS
+(56.91s,423.666us), plus54 engine units on each. Semver run40510810622 passed
+with all nine explicit-major0/260 results printed. Policies, CodeQL, MBT and
+Quint passed. Coverage run40510810318 is still pending. No merge yet.
+
+## K1 resolution and ownership preflight
+
+Temporary files only, no production bundle implementation yet. A combined real
+Wasmtime/F3/crypto manifest resolves 464 reachable packages on Linux ARM64 from
+the seeded node lock, including itoa 1.0.14 and Tokio 1.53.3. Native-build
+candidates are blst, ring, secp256k1-sys, Wasmtime, its fiber crate and jit-debug;
+AWS-LC, libsql and zstd are absent from this resolved closure. Metadata is not a
+native archive audit, and the checked-in final graph must consume F3's actual
+verified merge. A single Cargo graph with exact itoa 1.0.14 and 1.0.15 aliases
+fails resolution, confirming that the intended patch conflict is meaningful.
+
+A standalone locked Tokio 1.47.1 Linux probe observed four cold descriptors,
+then six after each of forty runtime creation/drop cycles. The identified pair
+is retained in Tokio's Unix signal OnceLock per graph, while each runtime drops
+its own duplicate receiver. Interlink approved this named ownership class and
+the required node control-signal/child-reaping proofs in receipts
+5e476ff359000469af853d342588b208 and 3aac0eadc7a134f7a5501daf623fdbd3.
+A separately reviewed F3 documentation follow-up will name the existing resource;
+K1 must still demonstrate cold-start and repeated combined-graph behavior on all
+required targets. No runtime signal subscribers or child-spawn call sites may be
+introduced in bundle Kontor/fork sources. VM trap handlers retain their distinct
+F1 ownership policy.
+
+## F3 merged; post-merge test race under correction
+
+PR3 merged as be93c1bc4668bb83e7fef023376079fd664ed6c6, with tree
+c349bd43a2450b46ab4da76a04efa259c9a96809 identical to reviewed head6a391720.
+All final-head checks passed, including coverage40510810318: 998 passed,
+nine existing skips, no second attempts. The restored policies passed.
+
+Post-merge Rust40515844978 then failed an unchanged test-app configuration test:
+both lib.rs and main.rs compile config.rs, and nextest runs both test binaries
+against the same /tmp/config-test.toml. The bin finished first; the lib's cleanup
+failed NotFound. The managed lifecycle fixture and all other 760 unit tests
+passed. Dependent K1 implementation paused while the race is corrected, with
+no blind CI rerun. A local 50-cycle concurrent lib/bin reproduction produced
+six failures out of 100 invocations, including missing files and a partially
+rewritten configuration. The proposed fix uses a unique tempfile directory per
+test invocation, preserving .toml parsing and explicit checked cleanup.
+
+Both reviews approved the Tokio-resource documentation at a5fe0858, based on
+be93c1bc (Interlink23993cb5ab864eb84e41292673665d1f). The new test correction
+will be separately committed and reviewed in the same small followup PR.
+Post-merge F3 closure remains outstanding; K1-K11 remain unimplemented.
+
+## F3 corrective PR4 merged; combined K1 proof first passes locally
+
+Corrective PR4 https://github.com/KontorProtocol/malachite/pull/4 merged as
+c9a313bd6d37b7489933db9f0bde3de9ec77e667. Its tree
+0702e87017b4bf3c08c785ef4ece021d4315ba11 equals reviewed head5985d492.
+Both reviews approved the separate TempDir correction, including Interlink
+056f08889216c0edda84a28654941cf7. Local formatting, full workspace Clippy and
+761 workspace tests passed (three existing skips, no retries). Actual lifecycle
+fixture54.236s. All applicable final PR checks passed. Coverage40518721144:
+998 tests passed, nine existing skips, no retries, artifact12743515357.
+Quint's PR jobs were correctly path-skipped; they run on main. All fork policies
+remain active. Corrected main qualification is running, so F3 closure is pending.
+
+K1 now has two independently locked manifests and an initial builder and proof.
+Both real Wasmtime/F3/crypto graphs compiled. Their initial input inventories each
+contained about99,000 global definitions; only DW.ref.rust_eh_personality shared
+across graphs. This includes Rust and anonymous definitions, not only C symbols.
+
+An explicit target build revealed that Cargo leaves host proc macros outside
+RUSTFLAGS. Their identities collided at final metadata load. A checked-in rustc
+wrapper applies graph metadata to host and target units while retaining Cargo's
+unit metadata. Review agreements de0179cf051240bbe66a88f6f73462d6 and
+f756fee5e13f753f31eaa31d97aebc93 require transparent probes, no additional wrapper,
+recorded wrapper/flags/cache identity, proc-macro SVH controls, and no compiler
+plugin in runtime dependencies. These final hardening checks remain underway.
+
+The first combined Linux ARM64 executable passed 40 real single-validator
+consensus decisions across20 same-port replacement cycles, std callbacks,
+wrong-graph Any rejection, node SIGTERM/SIGINT and child exit23 while both engines
+were live, stable workers/descriptors, concurrent VM/crypto exercises, lifting
+charges1026/1028 and compile-time rejection of cross-graph Tokio Sender values.
+Cold descriptors4 became8, exactly one Tokio socket pair per graph. Final native
+Wasmtime and crypto helpers had distinct addresses. The executable hash was
+11d899cb28bded9e13f4a785a27a01c2a1924f44318eae4fbf7204d45781ab67.
+This is preliminary local evidence, not final K1 acceptance: complete provenance,
+negative controls, Linux Docker/other-platform CI, both reviews and merge remain.
+The node still uses its original P1 path; this proof does not implement upgrades.
+
+## F3 corrected main qualified
+
+All applicable workflows on corrected main c9a313bd6d37b7489933db9f0bde3de9ec77e667
+passed. Coverage40524021458, Rust40524021486, managed lifecycle40524021402,
+Quint40524021918, MBT40524021630, documentation, workflow validation, spelling
+and Push on main succeeded. TODO tracking was expected to skip. This closes
+the F3 and bootstrap post-merge gates. K1 remains in implementation, with its
+early review findings being addressed before final qualification and review.
+
+## K1 ownership and provenance follow-up
+
+The next local Linux ARM64 proof passed with executable hash
+39c4ff28916d1ae79d440e646831cbd6647d616db9921f54dbc152a44d5d21c1.
+Its audit checks undefined references as well as definitions, concrete host and
+pinned sysroot ownership, exact staged inputs, and before/after source stability.
+Compiled negative controls reject foreign native imports, weak shared Rust-shaped
+definitions, unknown final Rust definitions and strong undeclared unwind imports.
+
+Cold workers/descriptors were 1/4. Each crypto graph added eight blst workers;
+each VM graph added eight compilation workers. Both stopped engine graphs left
+two timer workers and four Tokio registry descriptors, giving 35/8. Repeated
+workloads and twenty replacement cycles kept those counts stable. This measures
+one ARM machine; it does not prescribe a universal CPU count.
+
+The independently resolved locks use Tokio 1.53.3 and futures-timer 3.0.4, rather
+than F3's 1.47.1 and 3.0.3. Independent review checked the updated blocking-pool
+join and lazy SIGCHLD behavior. Timer global.rs and timer.rs are unchanged;
+delay.rs adds overflow-safe deadline construction/reset. These are proof graphs,
+not a claim of original-P1 semantic equivalence. K2b still owes that comparison.
+
+The targeted follow-up review accepted the original four fixes and identified
+two further provenance gaps: alternate Cargo compiler configuration and omitted
+inherited workspace manifests. The builder now fixes the exact compiler path
+for Cargo, the wrapper and host linkage; it fingerprints complete git dependency
+trees and inherited manifests/configuration, and rechecks resolved metadata.
+Darwin undefined imports use the attribute-preserving nm format. Nineteen local
+Python controls, core builder Clippy and four builder tests passed. Both refreshed
+bundle security audits passed with existing core exceptions; no new advisory
+exception was added. The exact revised CLI build and platform CI remain pending.
+
+## K1 found a managed shutdown ordering defect
+
+The revised CLI built and linked both graphs, passed ownership and metadata
+controls, then failed during the second graph's cold engine stop. Consensus
+reported `wal_flush before PublishConsensusMsg` against an already closed WAL
+actor. The old manager broadcast stop to every child before awaiting any child;
+an active consensus handler could still need its WAL provider. Publication fails
+closed, but this shutdown-induced supervision fault would prevent handoff.
+
+K1 qualification is paused for a corrective Malachite PR. Interlink agreement
+13a640d2b404ff98fccc6139a39cf089 fixes scope on main c9a313bd: sequential reverse
+dependency shutdown, preserving supervisor barriers, mandatory terminal waits,
+runtime destruction and final WAL worker joins. No public API, WAL format,
+signing or dependency-lock change is intended. The isolated branch is
+fix/managed-engine-stop-order in the malachite-stop-order worktree.
+
+A deterministic dependent's final RPC fails on the old manager and succeeds with
+the correction. A real TCP peer test verifies network events still reach a live
+observer after another subscriber has stopped, including direct replay to a
+closed subscriber. The complete existing lifecycle fixture passed in 54.59s,
+including blocked WAL work, faults and shutdown panics. Final reviews and CI
+remain outstanding. The original failing WAL and logs are preserved locally in
+the bundle output's failed-stop-order directory. No success attestation was
+emitted for the failed run.
+
+Corrective Malachite PR5 is open:
+https://github.com/KontorProtocol/malachite/pull/5
+Final reviewed head is 7dd018a1c11af944a54ae841d59e0764fc78b56d, based on
+c9a313bd6d37b7489933db9f0bde3de9ec77e667. Both reviewers approved the final
+head; Interlink carry-forward receipt 2cced268e892b808b0520a511862070a covers
+the final comment/documentation amendment. All 997 remaining workspace tests
+passed in 570.434s, with nine existing skips and no retries, in addition to the
+separate 54.59s complete lifecycle fixture. Full workspace Clippy and formatting
+passed. The signed commit is verified by GitHub. Exact-head CI is running;
+merge, main verification and corrected-pin K1 qualification remain pending.
+
+## Corrective shutdown order merged; K1 qualification resumes
+
+PR5 merged as 6d99c0a43a21ff48ff3f69a5f9e834310d0b0b09 after all exact-head
+checks passed, including Coverage40537565575, Rust40537565492 and all three
+managed lifecycle platforms in40537565497. The fetched main tree
+5ce0ddde4b49767d45917aed803ddac3caed50b2 equals reviewed head7dd018a1 exactly.
+The squash message is a single line, with no authorship trailer.
+
+Post-merge main CI is running under a fail-fast monitor. The local K1 candidate
+build can overlap that CI after verifying the merged tree; this does not close
+the post-merge gate or permit final K1 acceptance while main remains unqualified.
+Both independent bundle manifests and locks are being moved to this exact merge,
+including if-watch, with a check that all other package identities remain unchanged.
+The original failing cold-engine test and all ownership/provenance controls must
+pass on the corrected pin. Earlier successful binaries are not substitute evidence.
+
+The initial targeted Cargo update also changed prost-build's petgraph selection
+from0.7.1 to0.6.5 and removed fixedbitset0.5.7. The pin-preservation check rejected
+that unrelated resolution change. The original first lock was recovered from the
+existing local qualification image and matched its recorded SHA256 exactly;
+the untouched second lock also matched its recorded hash. Only the Malachite
+revision strings were then replaced in both locks. Locked offline Cargo metadata
+accepted both; all464 resolve nodes, dependency edges and features compare equal
+apart from the git revision. The pinned public CLI is rebuilding the candidate.
+
+The corrected-pin first graph compiled. The second graph's ring C compilation
+then failed because GCC could not write a temporary assembly file under /tmp
+(`Disk quota exceeded`). This was an observed infrastructure failure, not a
+teardown or ownership failure. Logs were preserved under .build-cache/pr5-evidence;
+the completed coverage log was moved there to relieve the temporary quota.
+Qualification resumed with TMPDIR under the workspace filesystem and the same
+source, locks and existing compiler cache. No source change or CI rerun was used
+to hide the failure. The new run still must complete every qualification check.
+
+## Corrected-pin combined bundle qualification passed locally
+
+The public CLI completed successfully under Rust1.99.1 on Linux ARM64, release.
+Both graphs pin6d99c0a43a21ff48ff3f69a5f9e834310d0b0b09. Executable SHA256:
+3f2b377f311b61307284e4ff06a09f0c189ae49ce86ac064c5f8ff1135f1a76d.
+The builder emitted qualification.json only after all linkage, native/common
+ownership, metadata controls, staged input and final source/compiler checks passed.
+
+The original cold shutdown reproducer now passes for both graphs. The run made
+42 real decisions, including two cold warmups and20 two-engine replacement cycles.
+It also passed host callback panic containment, std callbacks, Any-owner rejection,
+cross-graph Tokio compile rejection, signal/child-status checks and concurrent
+VM/crypto repetition. The two deliberate callback panics are contained controls.
+
+Cold workers/descriptors1/4 became9/4 and17/4 after each crypto graph,25/4 and33/4
+after each VM, then34/6 and35/8 after each engine stopped. Repeated workloads and
+replacement cycles retained35/8. Portable lifting results remain1026/1028.
+The Linux node-builder image now runs the full qualification separately. Main CI
+has passed everything except coverage, which remains active. Container/platform
+qualification, final K1 reviews and merge are still required.
