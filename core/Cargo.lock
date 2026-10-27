@@ -4266,6 +4266,7 @@ name = "kontor-sdk-native"
 version = "0.1.0"
 dependencies = [
  "kontor-sdk",
+ "serde_json",
  "uniffi",
 ]
 

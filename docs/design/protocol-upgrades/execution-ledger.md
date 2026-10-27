@@ -306,3 +306,58 @@ absent verification gate. No correctness finding was declined.
 
 Ordinary node/SDK builds, Wasm native object parity, mobile CI, the corrected macOS
 matrix and follow-up reviews remain open. There is still no F2 PR or merge.
+
+### F2 corrected platform matrix
+
+Commit 6371bdcefabfd885ce40c0ce5546f940e6562649 passed native qualification run
+40470692823 on Linux x86, Linux ARM and macOS ARM. Downloaded reports in
+`target/f2-ci-6371bdce` match every recorded source SHA-256 against the current
+checkout. Each platform completed all six builds, native equivalence checks,
+three-graph linking and 1,200 concurrent exercises. Owned definition counts are
+446/446/446 on ARM platforms and 508/508/488 on Linux x86, reflecting the different
+feature configurations. All graph intersections, cross-graph references and
+unowned definition checks passed.
+
+The independent subagent follow-up found no new material issue in 6371bdce and
+independently reran seven comparator groups, vendor reconstruction and the
+three-graph executable. Interlink follow-up is requested with exact-head remote
+evidence. Its full phase approval remains pending.
+
+The ordinary `kontor-sdk-native` build and its existing numeric bridge unit test
+pass locally. That single test does not demonstrate crypto parity. The repository's
+pinned `tools/kontor build sdk --check` is now running to validate the actual Wasm
+generation path. Wasm native object comparison, SDK crypto parity, ordinary node
+CI, mobile CI, and final review/PR/merge remain required F2 work.
+
+The pinned SDK generation completed and its 64 binding-export tests passed.
+`--check` failed because only `sdk/src/component/kontor-sdk.core.wasm` changed;
+generated JavaScript, interfaces and provenance matched. Candidates remain under
+`.build-cache/generated`, and committed SDK artifacts have not been replaced.
+The new `compare-sdk.mjs` executed both actual Wasm builds with pinned Node
+24.22.1: key generation, EIP-2333 derivation, public keys, signatures, aggregation,
+verification and six malformed-input error cases matched exactly. Local evidence
+is `/tmp/kontor-f2-sdk-crypto-parity.json`. This does not establish native-object
+equivalence or every SDK behavior. WAT inspection shows function/data placement
+differences, so the changed artifact is not being dismissed as debug-only.
+
+An isolated detached baseline worktree, `protocol-sdk-baseline`, was created at
+2c5cff0ddc3eada52f143f61109b6360d3732c6f. It will build the pristine SDK under the
+same pinned container/tool paths for direct Wasm C-object comparison. Only source
+and tool download caches are reused; build outputs are independent.
+
+The pristine baseline SDK build reproduced its committed outputs byte-for-byte.
+Both full Wasm C archives, including all bytes and archive structure, are identical
+between pristine and patched default builds: blst SHA-256
+`f679a3233a39a8cbd330da92bfbd5e799df7e65e656381c14a03df6519c6f6cb`
+and secp256k1-sys
+`5efd109af0e848cc4a19becb1804e76a5f9cd6883797cf6a13fe4315cfe6f23d`.
+The combined local record is `target/sdk-compatibility.json`.
+
+Pristine Wasm crypto vectors are recorded with their reference commit and Wasm
+hash. A new native SDK integration test passed against these bytes and errors,
+including Kontor's actual min_sig API. The comparison script verifies that its
+baseline is the recorded pristine artifact, avoiding accidental self-comparison.
+The SDK Wasm was then regenerated through `tools/kontor build sdk`; only
+`kontor-sdk.core.wasm` changed (1,696,861 to 1,696,805 bytes). Candidate and pristine
+native C code are byte-identical; the full Rust-linked artifact has different
+function/data placement. Final reproducibility, SDK CI and mobile CI remain open.

@@ -10,5 +10,8 @@ uniffi = { workspace = true }
 [build-dependencies]
 uniffi = { workspace = true, features = ["build"] }
 
+[dev-dependencies]
+serde_json = { workspace = true }
+
 [lib]
 crate-type = ["staticlib", "cdylib", "lib"]
