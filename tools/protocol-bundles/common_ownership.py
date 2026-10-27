@@ -14,6 +14,8 @@ from symbol_tool import inspect
 LINUX_RUNTIME = {"libgcc_s.so.1", "libm.so.6", "libc.so.6", "libpthread.so.0",
                  "libdl.so.2", "librt.so.1", "ld-linux-aarch64.so.1", "ld-linux-x86-64.so.2"}
 MAC_RUNTIME = {"/usr/lib/libSystem.B.dylib",
+               # libc links iconv on Apple outside rustc-dep-of-std, even without iconv calls.
+               "/usr/lib/libiconv.2.dylib",
                "/System/Library/Frameworks/CoreFoundation.framework/Versions/A/CoreFoundation",
                "/System/Library/Frameworks/SystemConfiguration.framework/Versions/A/SystemConfiguration",
                "/System/Library/Frameworks/Security.framework/Versions/A/Security"}

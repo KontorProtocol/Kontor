@@ -943,3 +943,24 @@ final source/compiler verification. Executable SHA256:
 3f2b377f311b61307284e4ff06a09f0c189ae49ce86ac064c5f8ff1135f1a76d.
 The report records the pinned llvm-nm hash/version. Darwin archive inspection
 is direct reader evidence, not a claim that the macOS runtime proof has passed.
+
+
+## Darwin iconv platform declaration
+
+Head 287fef1e passed ordinary CI (including macOS tests) and both Linux bundle
+container qualifications. Its Darwin bundle run passed symbol inspection, then
+rejected the executable's `/usr/lib/libiconv.2.dylib` dependency. The actual
+locked libc 0.2.191 declares `link(name = "iconv")` on Apple unless built with
+`rustc-dep-of-std`; both graph inventories show default/extra_traits/std instead.
+A pinned-compiler cross-compiled staticlib using this exact crate reports
+`-liconv -lSystem -lc -lm`; the sysroot-only control reports System/c/m. The
+provenance evidence is in `.build-cache/pr5-evidence/iconv/libc-native-static-libs.log`.
+
+The common platform inventory now includes that exact Apple library path.
+Symbol resolution, bundle-shadow rejection and runtime provenance remain active.
+All 42 Python controls pass, including acceptance of the actual Darwin linked
+paths and rejection of Homebrew, @rpath, a changed iconv soname and an unknown
+system library. Both follow-up reviews and current-head platform CI remain
+required; this cross-compile probe is not native Darwin runtime qualification.
+The previous head's local ARM host and actual node-builder container full
+qualification both passed, including 42 real decisions and 20 replacements.

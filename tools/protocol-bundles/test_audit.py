@@ -10,7 +10,7 @@ from unittest.mock import patch
 
 from audit import audit_inputs, audit_final, definitions, owner
 from build import digest, verify_staged_inputs
-from common_ownership import graph_references, linker_owners, reject_common_shadow, reject_unowned_references
+from common_ownership import graph_references, linker_owners, reject_common_shadow, reject_unowned_references, runtime_paths
 from provenance import fingerprint, source_inputs
 from symbol_tool import inspect
 
@@ -79,6 +79,23 @@ class Ownership(unittest.TestCase):
     def test_unknown_c_symbol_is_rejected(self):
         with self.assertRaisesRegex(RuntimeError, "unowned native"):
             owner("unregistered_state", self.graphs[0], "51.0.0-dev")
+
+    def test_darwin_platform_libraries_require_exact_system_paths(self):
+        paths = ["/System/Library/Frameworks/SystemConfiguration.framework/Versions/A/SystemConfiguration",
+                 "/System/Library/Frameworks/CoreFoundation.framework/Versions/A/CoreFoundation",
+                 "/usr/lib/libiconv.2.dylib", "/usr/lib/libSystem.B.dylib"]
+        def listing(libraries):
+            return "fixture:\n" + "".join(f"\t{path} (compatibility version 1.0.0, current version 1.0.0)\n"
+                                         for path in libraries)
+        with patch("common_ownership.sys.platform", "darwin"):
+            with patch("common_ownership.subprocess.check_output", return_value=listing(paths)):
+                self.assertEqual(runtime_paths(Path("fixture")), paths)
+            for unexpected in ("/opt/homebrew/lib/libiconv.2.dylib", "@rpath/libiconv.2.dylib",
+                               "/usr/lib/libiconv.3.dylib", "/usr/lib/libunregistered.dylib"):
+                with self.subTest(unexpected=unexpected):
+                    with patch("common_ownership.subprocess.check_output", return_value=listing(paths + [unexpected])):
+                        with self.assertRaisesRegex(RuntimeError, "undeclared shared platform libraries"):
+                            runtime_paths(Path("fixture"))
 
     def test_bundle_allocator_is_rejected(self):
         with self.assertRaisesRegex(RuntimeError, "process allocator"):
