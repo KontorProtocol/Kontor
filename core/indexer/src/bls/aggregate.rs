@@ -8,11 +8,24 @@ use super::{
     BLS_SIGNATURE_BYTES, KONTOR_BLS_DST, MAX_BLS_BULK_OPS, MAX_BLS_BULK_TOTAL_MESSAGE_BYTES,
 };
 use crate::database::queries::get_signer_entry_by_id;
-use crate::runtime::Runtime;
+use crate::runtime::{ExecutionError, Runtime};
+
+use AggregateVerificationError::{Infrastructure, Rejected};
 
 /// Resolved signer_id → x_only_pubkey mapping returned by [`verify_aggregate`]
 /// so the block handler can look up signers without redundant registry calls.
 pub type SignerMap = HashMap<u64, String>;
+
+/// Database failures must abort processing rather than become input rejections.
+/// Each fallible operation chooses its class explicitly; there is no blanket
+/// conversion from an unclassified error.
+#[derive(Debug, thiserror::Error)]
+pub enum AggregateVerificationError {
+    #[error(transparent)]
+    Rejected(anyhow::Error),
+    #[error(transparent)]
+    Infrastructure(anyhow::Error),
+}
 
 pub(super) struct SignerResolver {
     pub(super) pk_cache: HashMap<u64, BlsPublicKey>,
@@ -31,25 +44,30 @@ impl SignerResolver {
         &mut self,
         runtime: &mut Runtime,
         signer_id: u64,
-    ) -> Result<BlsPublicKey> {
+    ) -> Result<BlsPublicKey, AggregateVerificationError> {
         if let Some(pk) = self.pk_cache.get(&signer_id) {
             return Ok(*pk);
         }
 
         let conn = runtime.get_storage_conn();
         let entry = get_signer_entry_by_id(&conn, signer_id)
-            .await?
-            .ok_or_else(|| anyhow!("unknown signer_id {signer_id}"))?;
+            .await
+            .map_err(|error| Infrastructure(error.into()))?
+            .ok_or_else(|| Rejected(anyhow!("unknown signer_id {signer_id}")))?;
         let x_only_pubkey = entry.x_only_pubkey.clone().ok_or_else(|| {
-            anyhow!("signer_id {signer_id} is not a user signer (no x_only_pubkey)")
+            Rejected(anyhow!(
+                "signer_id {signer_id} is not a user signer (no x_only_pubkey)"
+            ))
         })?;
         self.signer_map.insert(signer_id, x_only_pubkey);
-        let raw_bytes = entry
-            .bls_pubkey
-            .ok_or_else(|| anyhow!("signer_id {signer_id} has no BLS pubkey registered"))?;
+        let raw_bytes = entry.bls_pubkey.ok_or_else(|| {
+            Rejected(anyhow!(
+                "signer_id {signer_id} has no BLS pubkey registered"
+            ))
+        })?;
 
         let pk = BlsPublicKey::key_validate(&raw_bytes)
-            .map_err(|e| anyhow!("invalid BLS pubkey (subgroup check failed): {e:?}"))?;
+            .map_err(|e| Rejected(anyhow!("invalid BLS pubkey (subgroup check failed): {e:?}")))?;
         self.pk_cache.insert(signer_id, pk);
         Ok(pk)
     }
@@ -67,7 +85,7 @@ impl SignerResolver {
         runtime: &mut Runtime,
         signer_id: u64,
         claim_pubkey: Option<String>,
-    ) -> Result<()> {
+    ) -> Result<(), AggregateVerificationError> {
         if self.signer_map.contains_key(&signer_id) {
             return Ok(());
         }
@@ -76,10 +94,13 @@ impl SignerResolver {
             None => {
                 let conn = runtime.get_storage_conn();
                 let entry = get_signer_entry_by_id(&conn, signer_id)
-                    .await?
-                    .ok_or_else(|| anyhow!("unknown signer_id {signer_id}"))?;
+                    .await
+                    .map_err(|error| Infrastructure(error.into()))?
+                    .ok_or_else(|| Rejected(anyhow!("unknown signer_id {signer_id}")))?;
                 entry.x_only_pubkey.ok_or_else(|| {
-                    anyhow!("signer_id {signer_id} is not a user signer (no x_only_pubkey)")
+                    Rejected(anyhow!(
+                        "signer_id {signer_id} is not a user signer (no x_only_pubkey)"
+                    ))
                 })?
             }
         };
@@ -179,17 +200,20 @@ pub struct AggregateResolved {
 /// x_only_pubkey ↔ bls_pubkey binding — that's the job of
 /// `runtime.register_bls_key`'s `RegistrationProof::verify` during op
 /// execution.
-pub async fn verify_aggregate(runtime: &mut Runtime, insts: &Insts) -> Result<AggregateResolved> {
-    let agg = validate_aggregate_shape(insts)?;
+pub async fn verify_aggregate(
+    runtime: &mut Runtime,
+    insts: &Insts,
+) -> Result<AggregateResolved, AggregateVerificationError> {
+    let agg = validate_aggregate_shape(insts).map_err(Rejected)?;
     if agg.signature.len() != BLS_SIGNATURE_BYTES {
-        return Err(anyhow!(
+        return Err(Rejected(anyhow!(
             "invalid aggregate signature length: expected {BLS_SIGNATURE_BYTES}, got {}",
             agg.signature.len()
-        ));
+        )));
     }
 
     let aggregate_sig = BlsSignature::sig_validate(&agg.signature, true)
-        .map_err(|e| anyhow!("invalid aggregate signature bytes: {e:?}"))?;
+        .map_err(|e| Rejected(anyhow!("invalid aggregate signature bytes: {e:?}")))?;
 
     let mut resolver = SignerResolver::new();
     let mut msgs: Vec<Vec<u8>> = Vec::with_capacity(insts.ops.len());
@@ -201,17 +225,15 @@ pub async fn verify_aggregate(runtime: &mut Runtime, insts: &Insts) -> Result<Ag
         // Build the signing message and enforce the bytes cap before any
         // identity resolution or DB lookups — keeps oversized payloads from
         // costing us I/O.
-        let msg = inst.aggregate_signing_message(
-            &agg_signer.identity,
-            agg_signer.nonce,
-            agg_signer.sponsored,
-        )?;
+        let msg = inst
+            .aggregate_signing_message(&agg_signer.identity, agg_signer.nonce, agg_signer.sponsored)
+            .map_err(Rejected)?;
         total_message_bytes = total_message_bytes.saturating_add(msg.len());
         if total_message_bytes > MAX_BLS_BULK_TOTAL_MESSAGE_BYTES {
-            return Err(anyhow!(
+            return Err(Rejected(anyhow!(
                 "aggregate signed message bytes exceed max {}",
                 MAX_BLS_BULK_TOTAL_MESSAGE_BYTES
-            ));
+            )));
         }
 
         let (signer_id, claim_pubkey) = match &agg_signer.identity {
@@ -220,7 +242,14 @@ pub async fn verify_aggregate(runtime: &mut Runtime, insts: &Insts) -> Result<Ag
                 let identity = runtime
                     .get_or_create_identity(&pk.to_string())
                     .await
-                    .map_err(|e| anyhow!("resolving SignerRef::XOnlyPubkey: {e}"))?;
+                    .map_err(|error| match error {
+                        ExecutionError::NonDeterministic(error) => {
+                            Infrastructure(error.context("resolving SignerRef::XOnlyPubkey"))
+                        }
+                        error @ ExecutionError::Deterministic(_) => {
+                            Rejected(anyhow!("resolving SignerRef::XOnlyPubkey: {error}"))
+                        }
+                    })?;
                 (identity.signer_id(), Some(pk.to_string()))
             }
         };
@@ -234,7 +263,9 @@ pub async fn verify_aggregate(runtime: &mut Runtime, insts: &Insts) -> Result<Ag
                 // binding is established later by RegistrationProof::verify
                 // in runtime.register_bls_key.
                 let validated = BlsPublicKey::key_validate(bls_pubkey).map_err(|e| {
-                    anyhow!("invalid bls_pubkey bytes in RegisterBlsKey (subgroup check): {e:?}")
+                    Rejected(anyhow!(
+                        "invalid bls_pubkey bytes in RegisterBlsKey (subgroup check): {e:?}"
+                    ))
                 })?;
                 // Always populate signer_map. PubKey claim gives us the x_only
                 // directly; Id claim requires a registry lookup (an existing
@@ -260,9 +291,9 @@ pub async fn verify_aggregate(runtime: &mut Runtime, insts: &Insts) -> Result<Ag
     let verify_result =
         aggregate_sig.aggregate_verify(true, msg_refs.as_slice(), KONTOR_BLS_DST, &pk_refs, true);
     if verify_result != blst::BLST_ERROR::BLST_SUCCESS {
-        return Err(anyhow!(
+        return Err(Rejected(anyhow!(
             "BLS aggregate signature verification failed: {verify_result:?}"
-        ));
+        )));
     }
 
     Ok(AggregateResolved {

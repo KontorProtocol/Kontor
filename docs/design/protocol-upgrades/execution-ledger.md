@@ -964,3 +964,43 @@ system library. Both follow-up reviews and current-head platform CI remain
 required; this cross-compile probe is not native Darwin runtime qualification.
 The previous head's local ARM host and actual node-builder container full
 qualification both passed, including 42 real decisions and 20 replacements.
+
+## Corrective aggregate verification classification, 2026-10-27
+
+The agreed correction is isolated from K2a on main `9d4da679`. It addresses
+local database failures in three verification paths: public-key identity
+resolution/creation, signer-ID BLS resolution for calls, and signer-ID public-key
+resolution for registration. The current catch-all verification branch converts
+all three into per-operation rejection results. Publisher identity resolution
+after successful verification already returns an outer error and must remain so.
+
+Deterministic shape, signature and missing-signer errors retain their existing
+classification and complete formatted rejection text. Infrastructure errors must
+reach the enclosing block transaction, which explicitly rolls back before
+returning the failure. Batch execution also propagates errors before commit, but
+its current cleanup relies on the fatal reactor exit and connection teardown;
+this correction does not claim immediate batch rollback.
+
+On unchanged production main, the four signed-aggregate fault cases all failed
+at the committed-as-rejection assertion with `Ok(())`. The five deterministic
+rejection cases passed. After the correction, the focused suite passed all five
+tests in 1.20 seconds. Faults are one-shot; each returned error identifies
+transaction execution, not the later lifecycle. The nonce-insertion case observes
+signer and public-key insertion before the denied write. Every fault restores
+the table/checkpoint snapshot and tip, then retries the unchanged signed input.
+Registration retries install the expected key and advance nonce once; the Call
+retry requires the matching mint receipt to have status `Ok`.
+
+Both source reviews found no material issues after the fixture strengthenings.
+Interlink approval is recorded in `5e7f95a07b24de71d20841c5de3f7731`, conditional
+on final validation and commit/CI verification. The complete release REGTEST
+workspace run passed 967 tests, zero failures and 16 existing ignores across
+39 suites, including all 129 real-node integration tests. The first run passed
+the library tests but exposed a local test setup error: the new worktree lacked
+the ignored `core/target` link required by the regtest harness's node-binary
+path. Adding that link to the already built shared target fixed the setup;
+no production workaround was added. The complete rerun passed.
+
+Full-workspace release Clippy with tests and warnings denied passed in 69 seconds.
+Committed-head and CI confirmation are pending. No dependency, schema or
+advisory-exception change is included.

@@ -1,3 +1,5 @@
+#[cfg(test)]
+mod aggregate_error_tests;
 mod batches;
 mod blocks;
 pub mod consensus_state;
