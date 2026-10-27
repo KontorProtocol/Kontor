@@ -1,6 +1,7 @@
 name: CI
 
 on:
+  workflow_dispatch:
   push:
     branches: [main]
   pull_request:
@@ -185,6 +186,21 @@ jobs:
           # The lightweight bootstrap does not need the node's sccache setup.
           RUSTC_WRAPPER: ""
         run: ./tools/kontor build --check --runtime docker
+      - name: Compare SDK crypto with the pristine reference
+        shell: bash
+        run: |
+          reference_commit=$(jq -r .reference_commit tools/native-crypto/fixtures/sdk-vectors.json)
+          [[ "$reference_commit" =~ ^[0-9a-f]{40}$ ]]
+          git fetch --depth=1 origin "$reference_commit"
+          sdk_reference="$RUNNER_TEMP/sdk-crypto-reference"
+          mkdir -p "$sdk_reference"
+          git show "${reference_commit}:sdk/src/component/kontor-sdk.js" > "$sdk_reference/kontor-sdk.js"
+          git show "${reference_commit}:sdk/src/component/kontor-sdk.core.wasm" > "$sdk_reference/kontor-sdk.core.wasm"
+          printf '{"type":"module"}\n' > "$sdk_reference/package.json"
+          node_digest=$(jq -r .node.sha256 tools/build.json)
+          ".build-cache/tools/$node_digest/bin/node" tools/native-crypto/compare-sdk.mjs \
+            "$sdk_reference/kontor-sdk.js" sdk/src/component/kontor-sdk.js \
+            .build-cache/generated/sdk-crypto-parity.json
       - name: Upload staged outputs
         if: always()
         uses: actions/upload-artifact@v7

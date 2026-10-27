@@ -1,0 +1,87 @@
+name: Native crypto qualification
+
+on:
+  pull_request:
+    paths:
+      - "core/vendor/**"
+      - "core/Cargo.toml"
+      - "core/Cargo.lock"
+      - "tools/native-crypto/**"
+      - ".github/workflows/native-crypto.yml"
+  push:
+    branches: [main, feature/protocol-native-crypto]
+    paths:
+      - "core/vendor/**"
+      - "core/Cargo.toml"
+      - "core/Cargo.lock"
+      - "tools/native-crypto/**"
+      - ".github/workflows/native-crypto.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  qualification:
+    name: Native crypto (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, ubuntu-24.04-arm, macos-latest]
+    env:
+      RUSTUP_TOOLCHAIN: "1.99.1"
+      RUSTC_WRAPPER: ""
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@1.99.1
+        with:
+          components: rustfmt, clippy
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.13"
+      - uses: actions/cache@v6
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git/db
+          key: native-crypto-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('core/Cargo.lock', 'tools/native-crypto/object-report/Cargo.lock') }}
+      - name: Fetch locked dependencies
+        run: |
+          cargo fetch --locked --manifest-path core/Cargo.toml
+          cargo fetch --locked --manifest-path tools/native-crypto/object-report/Cargo.toml
+      - name: Check qualification tool and fixture formatting
+        run: |
+          cargo fmt --manifest-path tools/native-crypto/object-report/Cargo.toml -- --check
+          rustfmt --edition 2024 --check tools/native-crypto/fixtures/bundle.rs tools/native-crypto/fixtures/host.rs
+      - name: Verify pinned archives and vendor patches
+        run: python3 tools/native-crypto/vendor.py
+      - name: Check qualification tool
+        run: cargo clippy --locked --manifest-path tools/native-crypto/object-report/Cargo.toml -- -D warnings
+      - name: Test namespace helper
+        run: cargo test --locked --manifest-path core/Cargo.toml -p kontor-native-build -j2
+      - name: Qualify pristine, default and dual namespaced graphs
+        run: python3 tools/native-crypto/qualify.py --output target/native-crypto-evidence
+      - name: Test object comparator negative controls
+        env:
+          KONTOR_OBJECT_REPORT: target/native-crypto-evidence/object-tool/debug/kontor-native-object-report
+        run: python3 tools/native-crypto/test_object_report.py
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: native-crypto-evidence-${{ matrix.os }}
+          path: |
+            target/native-crypto-evidence/report.json
+            target/native-crypto-evidence/native-*.json
+            target/native-crypto-evidence/*.before.json
+            target/native-crypto-evidence/*.after.json
+            target/native-crypto-evidence/*.namespace-audit.json
+            target/native-crypto-evidence/*.log
+            target/native-crypto-evidence/*/build.log
+            target/native-crypto-evidence/*/native-*.log
+            target/native-crypto-evidence/*/Cargo.lock
+            target/native-crypto-evidence/*/Cargo.toml
+            target/native-crypto-evidence/*/metadata.json
+            target/native-crypto-evidence/*/vectors.bin
+          if-no-files-found: error
