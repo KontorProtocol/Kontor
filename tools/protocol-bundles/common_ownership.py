@@ -9,6 +9,7 @@ import subprocess
 import sys
 
 from audit import INPUT_RUNTIME, definitions
+from symbol_tool import inspect
 
 LINUX_RUNTIME = {"libgcc_s.so.1", "libm.so.6", "libc.so.6", "libpthread.so.0",
                  "libdl.so.2", "librt.so.1", "ld-linux-aarch64.so.1", "ld-linux-x86-64.so.2"}
@@ -21,10 +22,10 @@ OPTIONAL_UNWIND = {"__unw_add_dynamic_fde", "__unw_add_dynamic_eh_frame_section"
 
 
 def references(path):
-    command = ["nm", "-m", "-u", str(path)] if sys.platform == "darwin" else ["nm", "-u", str(path)]
-    result = subprocess.run(command, text=True, capture_output=True, check=True)
+    arguments = ["-m", "-u", path] if sys.platform == "darwin" else ["-u", path]
+    output = inspect(arguments)
     names = {}
-    for line in result.stdout.splitlines():
+    for line in output.splitlines():
         fields = line.split()
         if not fields or line.endswith(":"):
             continue

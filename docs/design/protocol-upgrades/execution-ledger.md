@@ -904,3 +904,42 @@ created markers at those destinations. This is CLI routing evidence, not a
 substitute qualification result. Records: cli-output-before.txt,
 cli-output-after.json and cli-path-tests.log in .build-cache/pr5-evidence.
 Corrected-head platform CI remains mandatory before merge.
+
+## Darwin standard-library bitcode reader correction
+
+The retained48d CI matrix passed both Linux node-builder container runs. Its
+macOS run compiled both graphs and linked the host, then failed when platform nm
+could not inspect Rust1.99.1's libaddr2line Darwin sysroot archive. stderr was
+captured but omitted from the subprocess exception. This is an actual qualification
+failure, separate from the already-corrected output-upload path.
+
+The exact downloaded Darwin archive contains LLVM23 bitcode. The pinned compiler's
+llvm-nm reads it successfully and reports addressless definitions; the older local
+LLVM22 plugin fails decoding its attributes. All27 Darwin sysroot archives are
+readable with the matching tool, including their undefined references. The previous
+hex-address-only parser would have silently omitted bitcode definitions even after
+a reader upgrade, so that parser also needed correction.
+
+The builder now uses the llvm-tools-preview reader from Rust1.99.1 for all symbol
+inspection, records its path/hash/version, retains addressless bitcode definitions
+in ownership/collision inventories, and requires concrete final executable addresses.
+Unexpected reader output and nonzero exits fail with their diagnostic; partial
+output is never accepted. CI and the qualification Docker stage install the pinned
+component. All41 Python controls pass, including bitcode collision/common-shadow,
+final-address, malformed-output and partial-reader-failure controls. Complete local
+qualification and both follow-up reviews remain required before push.
+
+Reviewer0b056655ada51a8eaa68adf552ccabc0 confirmed the Linux full gate is the
+node-builder container, with bare ARM host qualification as additional evidence.
+No separate bare x86 run is required. Reviewerc2e389583d3328dc553e895e9bd0afb5
+confirmed current compiler/native-environment/runtime/output evidence is sufficient
+for K1; it does not include an explicit linker-backend hash. Accurate driver/backend
+attestation is recorded as a K11 release item. A default cc-selected ld hash alone
+could misidentify Rust's actual backend when linker flags override that selection.
+
+The full local ARM host qualification with the pinned reader passed all41
+controls and the real42-decision/20-replacement proof, including ownership and
+final source/compiler verification. Executable SHA256:
+3f2b377f311b61307284e4ff06a09f0c189ae49ce86ac064c5f8ff1135f1a76d.
+The report records the pinned llvm-nm hash/version. Darwin archive inspection
+is direct reader evidence, not a claim that the macOS runtime proof has passed.

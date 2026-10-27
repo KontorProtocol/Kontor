@@ -442,6 +442,10 @@ Record actual merged
 PR/head/check evidence and run operator rehearsals. The Site describes implemented
 behavior, remains owner-only/dark, and has no obsolete alternative path presented as
 implemented. Missing evidence or an unresolved feasibility gate means not complete.
+Release attestation also records the actual linker-driver invocation and selected
+backend path/hash, accounting for Rust's linker search/selection flags. K1's
+compiler/native environment and produced-binary ownership reports do not claim
+an explicit linker-backend hash.
 
 ## Review and merge ledger
 

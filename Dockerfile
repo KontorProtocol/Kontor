@@ -38,6 +38,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
 FROM builder-base AS protocol-bundle-qualification
+RUN rustup component add --toolchain 1.99.1 llvm-tools-preview
 RUN apt-get update && apt-get install -y --no-install-recommends \
     python3 binutils git \
     && rm -rf /var/lib/apt/lists/*

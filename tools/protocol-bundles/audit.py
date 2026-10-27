@@ -4,8 +4,9 @@ import hashlib
 import json
 from pathlib import Path
 import re
-import subprocess
 import sys
+
+from symbol_tool import inspect
 
 INPUT_RUNTIME = {"DW.ref.rust_eh_personality"}
 FINAL_RUNTIME = INPUT_RUNTIME | {
@@ -21,19 +22,24 @@ ALLOCATOR = re.compile(r"__(?:rg|rust)_(?:alloc|dealloc|realloc|alloc_zeroed|all
 
 
 def definitions(path, globals_only=True):
-    command = ["nm", "-g", str(path)] if globals_only else ["nm", str(path)]
-    result = subprocess.run(command, text=True, capture_output=True, check=True)
+    arguments = ["-g", path] if globals_only else [path]
+    output = inspect(arguments)
     symbols = {}
-    for line in result.stdout.splitlines():
+    for line in output.splitlines():
         fields = line.split()
-        if len(fields) != 3 or not re.fullmatch(r"[0-9a-fA-F]+", fields[0]):
+        if not fields or line.endswith(":"):
             continue
+        if len(fields) == 2 and fields[0] in ("U", "w", "v"):
+            continue
+        if len(fields) != 3 or not re.fullmatch(r"[0-9a-fA-F]+|-+", fields[0]):
+            raise RuntimeError(f"unknown defined-symbol output: {line}")
         address, kind, name = fields
         if kind.upper() == "U":
             continue
         if sys.platform == "darwin":
             name = name.removeprefix("_")
-        symbols[name] = {"address": address, "kind": kind}
+        # Bitcode definitions have no address until link, but still own their names.
+        symbols[name] = {"address": None if address.startswith("-") else address, "kind": kind}
     return symbols
 
 
@@ -88,6 +94,8 @@ def audit_final(executable, graphs, sets, versions, output, common):
     symbols = definitions(executable)
     attributed = {}
     for name, value in symbols.items():
+        if value["address"] is None:
+            raise RuntimeError(f"final definition has no linked address: {name}")
         matches = [graph["graph"] for graph, names in zip(graphs, sets, strict=True) if name in names]
         if name in FINAL_RUNTIME or (sys.platform == "darwin" and name == "_mh_execute_header"):
             attribution = "common compiler/linker runtime"

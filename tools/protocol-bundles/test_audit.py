@@ -12,6 +12,7 @@ from audit import audit_inputs, audit_final, definitions, owner
 from build import digest, verify_staged_inputs
 from common_ownership import graph_references, linker_owners, reject_common_shadow, reject_unowned_references
 from provenance import fingerprint, source_inputs
+from symbol_tool import inspect
 
 
 class Ownership(unittest.TestCase):
@@ -41,6 +42,39 @@ class Ownership(unittest.TestCase):
 
     def test_anonymous_constant_cannot_hide_collision(self):
         self.collision("anon.1234abcd.0")
+
+    def test_bitcode_definitions_still_have_owners_and_collide(self):
+        symbol = "_RNvCs123_5probe5STATE"
+        native = ("_" if sys.platform == "darwin" else "") + symbol
+        with patch("audit.inspect", return_value=f"---------------- T {native}\n"):
+            self.assertEqual(definitions(Path("bitcode")), {symbol: {"address": None, "kind": "T"}})
+            with tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                for graph in self.graphs:
+                    path = root / graph["graph"]
+                    path.write_bytes(b"fixture")
+                    graph["artifacts"] = [{"path": str(path)}]
+                with self.assertRaisesRegex(RuntimeError, "cross-graph definitions would coalesce"):
+                    audit_inputs(self.graphs, root)
+            with self.assertRaisesRegex(RuntimeError, "shadows common host/sysroot"):
+                reject_common_shadow(self.graphs[0], {symbol}, definitions(Path("sysroot")))
+
+    def test_final_bitcode_definition_has_no_linked_address(self):
+        with patch("audit.definitions", return_value={"_start": {"address": None, "kind": "T"}}):
+            with self.assertRaisesRegex(RuntimeError, "no linked address"):
+                audit_final(Path("not-linked"), [], [], [], Path("unused"), {})
+
+    def test_unknown_symbol_output_is_rejected(self):
+        with patch("audit.inspect", return_value="plugin failed to decode object\n"):
+            with self.assertRaisesRegex(RuntimeError, "unknown defined-symbol output"):
+                definitions(Path("unreadable"))
+
+    def test_failed_symbol_reader_never_accepts_partial_output(self):
+        result = subprocess.CompletedProcess([], 1, "00000000 T partial\n", "incompatible bitcode")
+        with patch("symbol_tool.executable", return_value=Path("pinned-llvm-nm")):
+            with patch("symbol_tool.subprocess.run", return_value=result):
+                with self.assertRaisesRegex(RuntimeError, "incompatible bitcode"):
+                    inspect(["-g", Path("bad.rlib")])
 
     def test_unknown_c_symbol_is_rejected(self):
         with self.assertRaisesRegex(RuntimeError, "unowned native"):

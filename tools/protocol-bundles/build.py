@@ -18,9 +18,9 @@ from metadata_control import proc_macro_hashes
 from provenance import fingerprint, locked_packages, runtime_libraries, source_inputs
 from provenance import tools as toolchain_inputs
 from source_policy import check as check_source_policy
+from symbol_tool import TOOLCHAIN
 
 ROOT = Path(__file__).resolve().parents[2]
-TOOLCHAIN = "1.99.1"
 MALACHITE = "6d99c0a43a21ff48ff3f69a5f9e834310d0b0b09"
 GRAPHS = {
     "first": ("bfdee9ba9a483915dc95432708cf7db8281adbc1", "51.0.0-dev", "1.0.14", "512"),

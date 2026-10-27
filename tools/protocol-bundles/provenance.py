@@ -8,6 +8,7 @@ import subprocess
 import tomllib
 
 from source_identity import verify_sources
+from symbol_tool import executable as symbol_tool
 
 
 def sha(path):
@@ -77,6 +78,8 @@ def tools(env, target):
                                     "MACOSX_DEPLOYMENT_TARGET", "SDKROOT", "RUSTC", "RUSTUP_TOOLCHAIN")
                          or key.startswith(("CARGO_PROFILE_", "CARGO_TARGET_", "CC_", "CXX_", "CFLAGS_", "CXXFLAGS_", "AR_"))}
     return {"compiler": subprocess.check_output([env["RUSTC"], "-Vv"], env=env, text=True),
+            "symbol_reader": {"path": str(symbol_tool()), "sha256": sha(symbol_tool()),
+                              "version": subprocess.check_output([str(symbol_tool()), "--version"], text=True)},
             "rustc_sha256": sha(sysroot / "bin/rustc"), "common_sysroot": common,
             "compiler_libraries": compiler_libraries, "build_environment": build_environment,
             "cc": subprocess.check_output([env.get("CC", "cc"), "--version"], env=env, text=True),

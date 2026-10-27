@@ -31,10 +31,24 @@ ownership before removing it and rerunning. CI uploads inventories and logs,
 including failures; it does not upload build caches or treat a cache hit as
 qualification.
 
+Install the pinned symbol reader with
+`rustup component add --toolchain 1.99.1 llvm-tools-preview` before a local run.
+CI and the qualification image install it explicitly. The audit uses that
+toolchain's `llvm-nm`, including for Darwin standard-library LLVM bitcode that
+older platform readers cannot decode. Addressless bitcode definitions still
+participate in ownership and collision checks; final executable definitions
+must have concrete addresses. Reader failures reject qualification and retain
+their diagnostic, never accept partial symbol output.
+
 The evidence records resolved packages and features, both lockfiles, source
 hashes, inherited workspace manifests and Cargo configuration, compiler and
 sysroot inputs, build flags, exact staged rlibs and native archives, compiler
 plugins, common runtime ownership, final symbol ownership and executable hash.
+The symbol reader's path, hash and version are also recorded. The current report
+records the native environment and C compiler version, but does not hash the
+selected linker backend. K11 release attestation must capture the actual driver
+invocation and backend selection, including Rust's linker flags, before claiming
+that identity. K1 verifies ownership in the produced executable itself.
 Source and staged artifact checks run across compilation and qualification.
 Git checkouts must match their pinned commit objects, including raw tracked
 file contents, symlink targets, executable modes, staged indexes and recursive
