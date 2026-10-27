@@ -1,0 +1,79 @@
+--- a/Cargo.toml
++++ b/Cargo.toml
+@@ -292,3 +292,6 @@
+ debug = 0
+ debug-assertions = false
+ rpath = false
++
++[build-dependencies.kontor-native-build]
++path = "../kontor-native-build"
+--- a/build.rs
++++ b/build.rs
+@@ -18,6 +18,8 @@
+ // isn't worth having the external dependencies (one for the `log` crate, and
+ // another for the concrete logging implementation). Instead we use `eprintln!`
+ // to log everything to stderr.
++
++use kontor_native_build::Namespace;
+ 
+ use std::{
+     ffi::{OsStr, OsString},
+@@ -288,6 +290,15 @@
+         &core_name_and_version
+     );
+ 
++    let namespace = Namespace::configured();
++    if namespace.is_some() && env::var("CARGO_CFG_TARGET_OS").as_deref() == Some("windows") {
++        panic!("namespaced ring bundles require source-built Unix assembly");
++    }
++    let core_name_and_version = namespace
++        .map(|namespace| namespace.symbol(&core_name_and_version))
++        .unwrap_or(core_name_and_version);
++    println!("cargo:rustc-env=KONTOR_RING_CORE_NAME={core_name_and_version}");
++
+     const RING_PREGENERATE_ASM: &str = "RING_PREGENERATE_ASM";
+     match env::var_os(RING_PREGENERATE_ASM).as_deref() {
+         Some(s) if s == "1" => {
+@@ -355,6 +366,21 @@
+             core_name_and_version,
+         );
+         out_dir.clone()
++    };
++
++    let generated_dir = if env::var_os("KONTOR_NATIVE_NAMESPACE").is_some() {
++        let namespaced = out_dir.join("namespaced-assembly");
++        fs::create_dir_all(&namespaced).unwrap();
++        for entry in fs::read_dir(&generated_dir).unwrap() {
++            let path = entry.unwrap().path();
++            if path.extension() == Some(OsStr::new("S")) {
++                fs::copy(&path, namespaced.join(path.file_name().unwrap())).unwrap();
++            }
++        }
++        generate_prefix_symbols_headers(&namespaced, core_name_and_version).unwrap();
++        namespaced
++    } else {
++        generated_dir
+     };
+ 
+     build_c_code(
+--- a/src/prefixed.rs
++++ b/src/prefixed.rs
+@@ -1,17 +1,7 @@
+ // Keep in sync with `core_name_and_version` in build.rs.
+ macro_rules! core_name_and_version {
+     () => {
+-        concat!(
+-            env!("CARGO_PKG_NAME"),
+-            "_core_",
+-            env!("CARGO_PKG_VERSION_MAJOR"),
+-            "_",
+-            env!("CARGO_PKG_VERSION_MINOR"),
+-            "_",
+-            env!("CARGO_PKG_VERSION_PATCH"),
+-            "_",
+-            env!("CARGO_PKG_VERSION_PRE"), // Often empty
+-        )
++        env!("KONTOR_RING_CORE_NAME")
+     };
+ }
+ 

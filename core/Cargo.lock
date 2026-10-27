@@ -1181,11 +1181,10 @@ dependencies = [
 [[package]]
 name = "blst"
 version = "0.3.17"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c20659f9bbee16cbbd2f7393e40ab6309f5a98f76a2eb57a995ec508b72387fe"
 dependencies = [
  "cc",
  "glob",
+ "kontor-native-build",
  "threadpool",
  "zeroize",
 ]
@@ -4242,6 +4241,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "kontor-native-build"
+version = "0.1.0"
+dependencies = [
+ "cc",
+]
+
+[[package]]
 name = "kontor-sdk"
 version = "0.1.0"
 dependencies = [
@@ -6595,12 +6601,11 @@ dependencies = [
 [[package]]
 name = "ring"
 version = "0.17.14"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a4689e6c2294d81e88dc6261c768b63bc4fcdb852be6d1352498b114f61383b7"
 dependencies = [
  "cc",
  "cfg-if",
  "getrandom 0.2.17",
+ "kontor-native-build",
  "libc",
  "untrusted",
  "windows-sys 0.52.0",
@@ -6897,10 +6902,9 @@ dependencies = [
 [[package]]
 name = "secp256k1-sys"
 version = "0.10.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d4387882333d3aa8cb20530a17c69a3752e97837832f34f6dccc760e715001d9"
 dependencies = [
  "cc",
+ "kontor-native-build",
 ]
 
 [[package]]

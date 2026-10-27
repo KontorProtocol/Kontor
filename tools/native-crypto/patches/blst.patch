@@ -1,0 +1,445 @@
+--- a/Cargo.toml
++++ b/Cargo.toml
+@@ -96,3 +96,6 @@
+ version = "0.3"
+ 
+ [profile.release]
++
++[build-dependencies.kontor-native-build]
++path = "../kontor-native-build"
+--- a/build.rs
++++ b/build.rs
+@@ -2,7 +2,11 @@
+ 
+ extern crate cc;
+ 
++use std::collections::BTreeSet;
+ use std::env;
++use std::fs;
++
++use kontor_native_build::{preprocess_sources, Namespace};
+ use std::path::{Path, PathBuf};
+ 
+ fn assembly(
+@@ -31,6 +35,17 @@
+ }
+ 
+ fn main() {
++    let namespace = Namespace::configured();
++    let out_dir = PathBuf::from(env::var_os("OUT_DIR").unwrap());
++    println!("cargo:rustc-check-cfg=cfg(kontor_native_namespace)");
++    if let Some(namespace) = &namespace {
++        println!("cargo:rustc-cfg=kontor_native_namespace");
++        let bindings = fs::read_to_string("src/bindings.rs").unwrap();
++        fs::write(out_dir.join("bindings.rs"), namespaced_bindings(&bindings, namespace)).unwrap();
++    }
++    println!("cargo:rerun-if-changed=src/bindings.rs");
++    println!("cargo:rerun-if-changed=kontor-symbols.txt");
++
+     if env::var("CARGO_FEATURE_SERDE_SECRET").is_ok() {
+         println!(
+             "cargo:warning=blst: non-production feature serde-secret enabled"
+@@ -63,6 +78,10 @@
+      * '../../build.sh -O1 ...'.
+      */
+     if Path::new("libblst.a").exists() {
++        assert!(
++            namespace.is_none(),
++            "prebuilt libblst.a has no verified bundle namespace"
++        );
+         println!("cargo:rustc-link-search=.");
+         println!("cargo:rustc-link-lib=blst");
+         println!("cargo:rerun-if-changed=libblst.a");
+@@ -236,6 +255,32 @@
+     if !cfg!(debug_assertions) {
+         cc.opt_level(2);
+     }
++    if let Some(namespace) = namespace {
++        namespace.require_preprocessable_target();
++        let symbols: BTreeSet<&str> =
++            include_str!("kontor-symbols.txt").lines().collect();
++        let apple =
++            env::var("CARGO_CFG_TARGET_VENDOR").as_deref() == Ok("apple");
++        file_vec = preprocess_sources(
++            &cc,
++            &file_vec,
++            &out_dir.join("namespaced"),
++            |name| {
++                if symbols.contains(name) {
++                    Some(namespace.symbol(name))
++                } else if apple
++                    && name
++                        .strip_prefix('_')
++                        .is_some_and(|name| symbols.contains(name))
++                {
++                    Some(format!("_{}", namespace.symbol(&name[1..])))
++                } else {
++                    None
++                }
++            },
++        )
++        .expect("preprocess blst namespace without changing macro selection");
++    }
+     cc.files(&file_vec).compile("blst");
+ 
+     // pass some DEP_BLST_* variables to dependents
+@@ -245,3 +290,33 @@
+     );
+     println!("cargo:C_SRC={}", c_src_dir.to_string_lossy());
+ }
++
++fn namespaced_bindings(bindings: &str, namespace: &Namespace) -> String {
++    let symbols: BTreeSet<&str> =
++        include_str!("kontor-symbols.txt").lines().collect();
++    let mut output = String::new();
++    for line in bindings.lines() {
++        let declaration = line.trim_start();
++        let symbol = declaration
++            .strip_prefix("pub fn ")
++            .or_else(|| declaration.strip_prefix("pub static mut "))
++            .or_else(|| declaration.strip_prefix("pub static "));
++        if let Some(symbol) = symbol {
++            let end = symbol
++                .find(|c: char| !c.is_ascii_alphanumeric() && c != '_')
++                .unwrap();
++            let symbol = &symbol[..end];
++            assert!(
++                symbols.contains(symbol),
++                "unlisted blst FFI symbol: {}", symbol
++            );
++            output.push_str(&format!(
++                "    #[link_name = \"{}\"]\n",
++                namespace.symbol(symbol)
++            ));
++        }
++        output.push_str(line);
++        output.push('\n');
++    }
++    output
++}
+--- /dev/null
++++ b/kontor-symbols.txt
+@@ -0,0 +1,311 @@
++BLS12_381_G1
++BLS12_381_G2
++BLS12_381_NEG_G1
++BLS12_381_NEG_G2
++BLS12_381_P
++BLS12_381_RR
++BLS12_381_Rx
++BLS12_381_p0
++BLS12_381_r
++BLS12_381_rRR
++__blst_platform_cap
++add_mod_256
++add_mod_384
++add_mod_384x
++add_mod_384x384
++add_n_check_mod_256
++blst_aggregate_in_g1
++blst_aggregate_in_g2
++blst_aggregated_in_g1
++blst_aggregated_in_g2
++blst_bendian_from_fp
++blst_bendian_from_fp12
++blst_bendian_from_scalar
++blst_core_verify_pk_in_g1
++blst_core_verify_pk_in_g2
++blst_derive_child_eip2333
++blst_derive_master_eip2333
++blst_encode_to_g1
++blst_encode_to_g2
++blst_expand_message_xmd
++blst_final_exp
++blst_fp12_conjugate
++blst_fp12_cyclotomic_sqr
++blst_fp12_finalverify
++blst_fp12_frobenius_map
++blst_fp12_in_group
++blst_fp12_inverse
++blst_fp12_is_equal
++blst_fp12_is_one
++blst_fp12_mul
++blst_fp12_mul_by_xy00z0
++blst_fp12_one
++blst_fp12_sizeof
++blst_fp12_sqr
++blst_fp2_add
++blst_fp2_cneg
++blst_fp2_eucl_inverse
++blst_fp2_inverse
++blst_fp2_is_square
++blst_fp2_lshift
++blst_fp2_mul
++blst_fp2_mul_by_3
++blst_fp2_mul_by_8
++blst_fp2_sqr
++blst_fp2_sqrt
++blst_fp2_sub
++blst_fp_add
++blst_fp_cneg
++blst_fp_eucl_inverse
++blst_fp_from
++blst_fp_from_be_bytes
++blst_fp_from_bendian
++blst_fp_from_hexascii
++blst_fp_from_le_bytes
++blst_fp_from_lendian
++blst_fp_from_uint32
++blst_fp_from_uint64
++blst_fp_inverse
++blst_fp_is_square
++blst_fp_lshift
++blst_fp_mul
++blst_fp_mul_by_3
++blst_fp_mul_by_8
++blst_fp_sqr
++blst_fp_sqrt
++blst_fp_sub
++blst_fp_to
++blst_fr_add
++blst_fr_cneg
++blst_fr_ct_bfly
++blst_fr_eucl_inverse
++blst_fr_from
++blst_fr_from_hexascii
++blst_fr_from_scalar
++blst_fr_from_uint64
++blst_fr_gs_bfly
++blst_fr_inverse
++blst_fr_lshift
++blst_fr_mul
++blst_fr_mul_by_3
++blst_fr_rshift
++blst_fr_sqr
++blst_fr_sub
++blst_fr_to
++blst_hash_to_g1
++blst_hash_to_g2
++blst_keygen
++blst_keygen_v3
++blst_keygen_v4_5
++blst_keygen_v5
++blst_lendian_from_fp
++blst_lendian_from_scalar
++blst_map_to_g1
++blst_map_to_g2
++blst_miller_loop
++blst_miller_loop_lines
++blst_miller_loop_n
++blst_p1_add
++blst_p1_add_affine
++blst_p1_add_or_double
++blst_p1_add_or_double_affine
++blst_p1_affine_compress
++blst_p1_affine_generator
++blst_p1_affine_in_g1
++blst_p1_affine_is_equal
++blst_p1_affine_is_inf
++blst_p1_affine_on_curve
++blst_p1_affine_serialize
++blst_p1_affine_sizeof
++blst_p1_cneg
++blst_p1_compress
++blst_p1_deserialize
++blst_p1_double
++blst_p1_from_affine
++blst_p1_from_jacobian
++blst_p1_generator
++blst_p1_in_g1
++blst_p1_is_equal
++blst_p1_is_inf
++blst_p1_mult
++blst_p1_on_curve
++blst_p1_serialize
++blst_p1_sizeof
++blst_p1_to_affine
++blst_p1_unchecked_mult
++blst_p1_uncompress
++blst_p1s_add
++blst_p1s_mult_pippenger
++blst_p1s_mult_pippenger_scratch_sizeof
++blst_p1s_mult_wbits
++blst_p1s_mult_wbits_precompute
++blst_p1s_mult_wbits_precompute_sizeof
++blst_p1s_mult_wbits_scratch_sizeof
++blst_p1s_tile_pippenger
++blst_p1s_to_affine
++blst_p2_add
++blst_p2_add_affine
++blst_p2_add_or_double
++blst_p2_add_or_double_affine
++blst_p2_affine_compress
++blst_p2_affine_generator
++blst_p2_affine_in_g2
++blst_p2_affine_is_equal
++blst_p2_affine_is_inf
++blst_p2_affine_on_curve
++blst_p2_affine_serialize
++blst_p2_affine_sizeof
++blst_p2_cneg
++blst_p2_compress
++blst_p2_deserialize
++blst_p2_double
++blst_p2_from_affine
++blst_p2_from_jacobian
++blst_p2_generator
++blst_p2_in_g2
++blst_p2_is_equal
++blst_p2_is_inf
++blst_p2_mult
++blst_p2_on_curve
++blst_p2_serialize
++blst_p2_sizeof
++blst_p2_to_affine
++blst_p2_unchecked_mult
++blst_p2_uncompress
++blst_p2s_add
++blst_p2s_mult_pippenger
++blst_p2s_mult_pippenger_scratch_sizeof
++blst_p2s_mult_wbits
++blst_p2s_mult_wbits_precompute
++blst_p2s_mult_wbits_precompute_sizeof
++blst_p2s_mult_wbits_scratch_sizeof
++blst_p2s_tile_pippenger
++blst_p2s_to_affine
++blst_pairing_aggregate_pk_in_g1
++blst_pairing_aggregate_pk_in_g2
++blst_pairing_as_fp12
++blst_pairing_chk_n_aggr_pk_in_g1
++blst_pairing_chk_n_aggr_pk_in_g2
++blst_pairing_chk_n_mul_n_aggr_pk_in_g1
++blst_pairing_chk_n_mul_n_aggr_pk_in_g2
++blst_pairing_commit
++blst_pairing_finalverify
++blst_pairing_get_dst
++blst_pairing_init
++blst_pairing_merge
++blst_pairing_mul_n_aggregate_pk_in_g1
++blst_pairing_mul_n_aggregate_pk_in_g2
++blst_pairing_raw_aggregate
++blst_pairing_sizeof
++blst_precompute_lines
++blst_scalar_fr_check
++blst_scalar_from_be_bytes
++blst_scalar_from_bendian
++blst_scalar_from_fr
++blst_scalar_from_hexascii
++blst_scalar_from_le_bytes
++blst_scalar_from_lendian
++blst_scalar_from_uint32
++blst_scalar_from_uint64
++blst_sha256
++blst_sha256_bcopy
++blst_sha256_block_armv8
++blst_sha256_block_data_order
++blst_sha256_block_data_order_shaext
++blst_sha256_block_ssse3
++blst_sha256_emit
++blst_sha256_hcopy
++blst_sign_pk2_in_g1
++blst_sign_pk2_in_g2
++blst_sign_pk_in_g1
++blst_sign_pk_in_g2
++blst_sk_add_n_check
++blst_sk_check
++blst_sk_inverse
++blst_sk_mul_n_check
++blst_sk_sub_n_check
++blst_sk_to_pk2_in_g1
++blst_sk_to_pk2_in_g2
++blst_sk_to_pk_in_g1
++blst_sk_to_pk_in_g2
++blst_uint32_from_fp
++blst_uint32_from_scalar
++blst_uint64_from_fp
++blst_uint64_from_fr
++blst_uint64_from_scalar
++blst_uniq_init
++blst_uniq_sizeof
++blst_uniq_test
++check_mod_256
++cneg_mod_256
++cneg_mod_384
++ct_inverse_mod_256
++ct_inverse_mod_384
++ct_is_square_mod_384
++ctx_inverse_mod_384
++div_3_limbs
++div_by_2_mod_384
++from_mont_256
++from_mont_384
++fromx_mont_256
++fromx_mont_384
++lshift_mod_256
++lshift_mod_384
++mul_382x
++mul_384
++mul_by_1_plus_i_mod_384x
++mul_by_3_mod_256
++mul_by_3_mod_384
++mul_by_3_mod_384x
++mul_by_8_mod_384
++mul_by_8_mod_384x
++mul_mont_384
++mul_mont_384x
++mul_mont_sparse_256
++mulx_382x
++mulx_384
++mulx_mont_384
++mulx_mont_384x
++mulx_mont_sparse_256
++quot_rem_128
++quot_rem_64
++redc_mont_256
++redc_mont_384
++redcx_mont_256
++redcx_mont_384
++rshift_mod_256
++rshift_mod_384
++sgn0_pty_mod_384
++sgn0_pty_mod_384x
++sgn0_pty_mont_384
++sgn0_pty_mont_384x
++sgn0x_pty_mont_384
++sgn0x_pty_mont_384x
++sqr_382x
++sqr_384
++sqr_mont_384
++sqr_mont_384x
++sqr_mont_sparse_256
++sqr_n_mul_mont_383
++sqr_n_mul_mont_384
++sqrx_382x
++sqrx_384
++sqrx_mont_384
++sqrx_mont_384x
++sqrx_mont_sparse_256
++sqrx_n_mul_mont_383
++sqrx_n_mul_mont_384
++sub_mod_256
++sub_mod_384
++sub_mod_384x
++sub_mod_384x384
++sub_n_check_mod_256
++vec_is_equal_16x
++vec_is_zero_16x
++vec_prefetch
++vec_select_144
++vec_select_192
++vec_select_288
++vec_select_32
++vec_select_48
++vec_select_96
+--- a/src/lib.rs
++++ b/src/lib.rs
+@@ -91,6 +91,9 @@
+     }
+ }
+ 
++#[cfg(kontor_native_namespace)]
++include!(concat!(env!("OUT_DIR"), "/bindings.rs"));
++#[cfg(not(kontor_native_namespace))]
+ include!("bindings.rs");
+ 
+ impl PartialEq for blst_p1 {

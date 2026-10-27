@@ -1,0 +1,534 @@
+# Protocol upgrades implementation plan
+
+Revision: PLAN-1, 2026-10-27. Approved for phased implementation.
+
+Approved content was DRAFT-4, SHA256
+`e08a3a8e3903d800e73d306d0992fd67202932e9994c72df1ad53aff04085eb1`.
+Implementer approval: Interlink message `fbd3b0b2f35e0398793c7f8a353cb137`.
+Reviewer approval: Interlink message `ccdf27c803fafe9291ab1ffd2bacfc4e`.
+Initial approval changed only agreement metadata. Approved amendments follow below.
+
+Repository baseline: `2c5cff0ddc3eada52f143f61109b6360d3732c6f` (origin/main).
+Design input: https://kontor-protocol-study-20261026.wilfred714608.chatgpt.site
+Review task: `kontor-upgrade-plan-v1`; reviewer session
+`64900b0a-c524-49d4-889a-138292b608db`.
+
+The goal is the complete merged system, including integrated failure/recovery
+evidence. A build experiment, this plan, or an early merged phase is not completion.
+Each phase below is one PR. Fork PRs receive the same two reviews and CI gates as
+node PRs. Production changes begin only after both implementer and reviewer
+explicitly approve the same revision. Material revisions require renewed agreement.
+
+## Current evidence
+
+- `core/Cargo.toml` pins Wasmtime fork `bfdee9ba` and Malachite 0.8.2; the network
+  override is vendored. The research Site's older Malachite baseline is stale.
+- `reactor/executor.rs` exposes `Runtime`, Bitcoin, anyhow, and Tokio types. It is
+  an orchestration/testing abstraction, not an independently built bundle boundary.
+- `reactor/engine.rs` clones private signing keys, uses `consensus.wal`, and returns
+  an engine handle that does not itself prove all spawned work has joined.
+- `consensus/signing.rs` and `reactor/consensus_state.rs` include arbitrary-byte
+  signing and proposal-part paths. All must pass through durable node authority.
+- `reactor/batches.rs::resume_next_height` gates progress after deferred application
+  and finality. This is the existing place to withhold next-height permission.
+- `ConsensusState::new` deletes an unexecuted batch suffix. `blocks.rs` rollback
+  refreshes the live committee from restored state. Neither can remain the source
+  of certified progress/authority after upgrades.
+- Native contract IDs/privileges derive from array order. Runtime storage exposes
+  libsql directly; the SQL checkpoint hashes ordered writes, not a full state map.
+- The native closure includes Wasmtime helpers, blst, libsql, secp256k1, ring,
+  aws-lc, psm, zstd, and zmq. Isolation must audit the actual retained closure, not
+  assume Wasmtime and blst are the only possible collisions.
+- Rust 1.99.1 is installed and used for generated artifacts, but node CI currently
+  follows stable. The whole-node compiler and final-link recipe need explicit pins.
+
+## Preserved decisions
+
+One immutable coordinated protocol selects execution and consensus. Formats and
+contract ABIs do not select an obsolete executor. Preserve multiple implementations
+in one executable through independent Cargo resolutions, locks, features, metadata
+and target directories. Link in process; no IPC or runtime network boundary. One
+pinned compiler builds all graphs. Retain portable lifting accounting.
+
+Bitcoin H completes transactions and lifecycle under P1. The transition runs after
+H; Batch(H) and Block(H+1) use P2. Canonical prior execution is confirmed without
+another charge. Persist the boundary, fence and join the old Malachite engine,
+then start the selected engine at the next global consensus height. Node, RPC,
+and ingestion survive. No live wire compatibility is assumed. Validator approval
+is explicit and separate from binary installation or ordinary consensus voting.
+
+## Proposed policy for reviewer agreement
+
+1. Schedule/Postpone needs at least 5/6 CURRENT inclusion-committee voting weight;
+   Cancel needs strictly more than 2/3. Use checked u128 arithmetic and bounded,
+   unique sorted approval entries. The action binds chain/domain, tag, control head,
+   nonce, expected pending plan, exact target/H, an authenticated reference R
+   (consensus height and decision digest), and high-water expiry. R bounds expiry
+   to high_water(R)+144 and must precede inclusion; it does not freeze voting weights.
+   Each entry signs action ID, signer key and that key's registration generation.
+   The monotonic committee journal advances a key's generation on effective exit
+   and re-registration/key reuse, including a changed registration identity
+   (key, holder, activation_height). Observe intermediate effective membership
+   transitions during multi-block replay, so an exit/rejoin between final snapshots
+   is not lost. Registration provenance must distinguish replacement-branch events
+   at the same numerical activation height; tuple equality alone is not sufficient. Count only matching current registrations.
+   Other validators' churn does not invalidate an approval. A-B-A key reuse cannot
+   revive old consent. No contract-state counter is introduced into frozen P1.
+2. Notice is 1,008 Bitcoin heights from certified monotonic high-water. One pending
+   plan, compare-and-swap expected plan and monotonic nonce serialize actions.
+   Readiness is advisory, refreshed every six heights with 24-height expiry and an
+   H-144 checkpoint. Supported nodes also dry-run the target migration in an isolated
+   snapshot at least every six newly applied Bitcoin heights throughout notice,
+   under the manifest work budget. Readiness reports carry last input lineage,
+   outcome and work-used/budget. Deterministic failure or budget excess withdraws
+   readiness and triggers the documented operator Cancel/Postpone procedure; it
+   does not itself authorize a control action. No expedited upgrade or emergency
+   maintainer authority.
+   Consume a plan when its transition Block H is authenticated and recorded in
+   consensus decision order, even if execution lags. Cancellation must precede it. UpgradeControl validity bypasses pending/deferred
+   Block gates that apply to batches. Proposers prioritize eligible control actions
+   before Block work, including H with insufficient target support. They do not wait
+   for the H round to fail before proposing Cancel/Postpone.
+3. Block H carries TransitionDescriptor{chain_id, plan_id, H, H_hash, old/new
+   protocol_id, next_era_id, next_codec_id, start_height=C+1}. It does not certify
+   execution roots or a successor committee. Prevote checks the ordinary Block
+   predicate, exact authorized descriptor and installed target support. An absent
+   descriptor at pending H or an unsolicited/wrong descriptor is invalid. Unsupported
+   validators prevote nil. After C is certified, gate C+1 until old H/lifecycle and
+   deterministic due finality settle, migration and atomic intent commit, fencing,
+   complete join and selected-engine readiness. No migration execution inside voting
+   timeouts. Future finality deadlines may replay H without repeating engine handoff.
+4. Canonical rollback is decision-driven. D is the chain determined by the ordered
+   Block decisions (including exact raw-input commitments): a replacement at h
+   truncates D above h-1 then appends the new block. BlockV1 includes explicit
+   height/hash/parent_hash and raw-input commitment; parent_hash must match its header. Its header must extend D[h-1], h cannot skip above D.tip+1, and live votes
+   require the block on the voter's locally validated Bitcoin best chain. A replacement
+   must differ from D[h]; repeating the same block is invalid, not another rollback. Propose the first differing
+   block after the common ancestor. A local Bitcoin reorg notification invalidates
+   candidate caches and gates stale-anchor proposals; it does not mutate committed
+   canonical state or the committee. Applying a certified replacement rolls back
+   to h-1 and executes that exact block. Retain all certified raw block/witness bytes;
+   a lagging node must execute historical X even if its bitcoind already knows Y.
+   Batch prevotes bind anchor == D.tip and hash == D[anchor], require applied D and
+   deterministic prefix closure, and never substitute local Bitcoin tip as authority.
+   Future-anchor decisions occur only as lagging application, not valid live proposals.
+   Derived finality rollback/replay occurs deterministically within decision
+   application using retained inputs, not later poller arrival order.
+5. committee(C+1) is derived once from the state obtained by deterministic application
+   closure of authenticated decisions through C, including due finality replay.
+   Each command has a durable applied/deferred/inapplicable outcome. A future-anchor
+   batch may be deterministically deferred so it cannot deadlock its enabling Block;
+   its eventual activation/order is determined by the authenticated prefix. Missing
+   bytes are a wait, never an inapplicable outcome. Closing C must account for all
+   newly eligible prior decisions, not merely the deferred Block numbered C. It changes
+   only at the next-height gate. Persist it outside reversible canonical state.
+   No BeginRecovery/RecoveryExit ceremony or temporary committee authority. Current
+   engine orders replacement blocks, retaining its era and monotonically increasing
+   consensus/signing heights. Replay selects old executors/migrations by position.
+   New user batches below the latest activated H are invalid until reconstruction
+   re-crosses H. Ed25519 CommitteeV1 is the defined v1 bridge; other key systems need
+   a future bridge/protocol definition. Zero power halts NO_ACTIVE_VALIDATORS.
+6. An activated migration replays under identity (plan, H hash, pre_lineage,
+   pre_checkpoint, migration definition). A different finality exclusion must produce
+   a different lineage even if H hash is unchanged. Lineage commits canonical input
+   bytes/IDs (including witnesses), genesis/definition IDs, branch, ordered application
+   phase, prior migrations, protocol and decision-scoped exclusion set, restored
+   with the canonical snapshot and extended on deterministic replay. It is a local
+   deterministic execution identity, NOT a certified full-state root. Preserve legacy
+   ordered checkpoints separately; their partial state coverage is not a full-state
+   proof. Validate final state/receipts independently in differential replay tests.
+7. Control/decision/signer history and engine eras never roll back. Record control
+   actions after authenticating their ordered prefix; received bytes alone do not
+   advance authority. Keep separate received, contiguous verified, applied, live-era
+   and signing frontiers. Because committees are execution-derived, historical
+   certificate verification must replay each committee-changing prefix. Peer-supplied
+   committee records/snapshots are claims, not proofs. Unsupported nodes may verify
+   boundary C with old authority but cannot assert verification beyond an unknown
+   successor committee. Full genesis replay is required; no trusted bootstrap shortcut.
+8. Preserve existing contract-state pruning as an optional local retention policy.
+   check_rollback_depth is bypassed on archive nodes, so its default 288 is not a
+   consensus depth limit. A pruned node lacking undo data stops application/signing
+   and rebuilds from retained authenticated history; it does not reject a valid branch
+   as a network rule. Retain all activated executors/codecs, raw certified inputs,
+   control/signer history and archive material. No historical retirement in v1.
+9. Storage is one node-owned live transaction. Bundles use versioned logical
+   callbacks for reads, ordered writes, ranges and nested savepoints. Return receipts
+   and usage, not a second write journal. No libsql types or copies inside bundles.
+   Recognition/batchability, execution, lifecycle order, views/committee derivation
+   and simulation belong to the executor. Scheduling, finality deadlines, dependency
+   ordering and replay/exclusion rules are explicitly frozen coordinator-rules-v1,
+   selected by the manifest, not freely mutable node plumbing.
+10. Assign each native object an owner. Divergent native copies require distinct
+    names. Byte-identical objects may share only with verified compile identity and
+    an explicit process-global-state safety review, not object equality alone.
+    Keep VM images/handlers resident and test trapping through all retained versions.
+    Pin compiler and build metadata; reject unaudited symbol collisions.
+
+The ordered-boundary design trades pre-vote result certification for compatibility
+with Kontor's order-then-execute flow. Old-quorum support does not guarantee a
+supported successor committee or a successful migration. Test both failures: the
+plan is consumed at C and nodes fail-stop, never apply a late cancellation or run P1
+past H. Rehearsal/readiness reduce this risk but cannot prove availability. Explicit
+bounded migration work remains required. Missing quorum/history stays visibly gated.
+
+### Accepted availability limitations
+
+An authorized deterministic target can halt the network with no in-protocol exit.
+A zero-power or unavailable committee can also prevent progress. Old-quorum target
+support does not guarantee successor-quorum readiness. Missing history or locally
+pruned undo data gates signing until authenticated reconstruction. These are explicit
+limits, included in operator docs and final handoff, not promises of automatic repair.
+Continuous migration rehearsal reduces target risk without proving future success.
+
+### Deterministic migration-failure incident procedure
+
+This v1 has no automatic abort-to-P1, target substitution, emergency maintainer key,
+or guaranteed in-protocol exit from an invalid authorized target. The operational
+outcome is explicit:
+
+1. Fence signing/admission, retain the certified transition and consumed plan, and
+   preserve the last complete canonical transaction, handoff intent, raw inputs,
+   control journal, signer slots and WAL. Export failure class, target, exact input
+   lineage and checkpoint. Never commit partial migration or erase the decision.
+2. Reproduce from authenticated inputs. Local I/O/OOM/corruption is an infrastructure
+   repair, not a deterministic migration result; restore/reconcile and retry without
+   changing rules or signing history. Unsupported successor validators install the
+   already-authorized target and reconcile before voting.
+3. If an implementation bug can be repaired while preserving the immutable target's
+   specified semantics, qualify that repair independently and resume the same target.
+   A desired different result is not evidence of equivalence.
+4. If the authorized target rules themselves fail on these inputs, the network stays
+   halted under those rules. No built-in admin command resumes it. Any coordinated
+   network fork is a new explicit validator/operator governance decision, not approval
+   inherited from the failed plan or this implementation task. It must specify a new
+   chain/rules identity, authenticated history and recovery snapshot provenance,
+   committee/key policy and operator consent. Preserve the original chain's history
+   as halted; never present the fork as continuation validated by the old rules.
+5. K11 rehearses deterministic failure, infrastructure recovery and a conforming
+   implementation repair, proving no late cancel, manifest overwrite, P1 extension
+   or signer rewind can resume an irreparably invalid target. It documents the
+   external network-fork requirements, but does not manufacture a maintainer bypass.
+
+The availability limit is part of the approved design, not unimplemented automatic
+recovery. A plan can authorize a bad deterministic program; this system cannot both
+preserve its immutable rules and silently replace its result. A replay-dependent
+abort would also make one consumed plan select different executor/consensus mappings
+across reorgs, contrary to the agreed coordinated activation boundary.
+
+## PR sequence
+
+### F1. Wasmtime bundle namespaces
+
+Repository: existing `wilfreddenton/wasmtime` fork, based on `bfdee9ba`.
+Dependencies: approved plan. Modules: workspace package versions, versioned exports,
+C/assembly helper builds and process-global VM handlers. Give every retained bundle
+build a unique immutable Wasmtime package-version suffix. Current helper build uses
+versioned_suffix from the same macro crate, so first verify that version identity
+covers every native import/export. Add a namespace patch only for uncovered paths.
+Portable lifting stays unchanged. Validate two same-upstream-version different
+revision/features builds in one process, traps/fuel/async stacks, simultaneous
+execution, symbol ownership and handler residency. Green linking alone fails.
+This provides the VM isolation needed by K1 and historical execution.
+
+### F2. Native crypto isolation
+
+Repository: Kontor, vendored blst patch under core/vendor with preserved license
+and reproducible source provenance; this phase is its own reviewed node PR. Dependencies:
+approved plan, namespace convention from F1. Result: blst C/assembly exports and
+Rust imports use the same bundle namespace without changing crypto results.
+Audit other actual bundle native libraries and extend this phase's explicit scope
+before approval if they need patches. Validate native symbol maps, BLS vectors,
+portable/nonportable feature differences and concurrent calls across both graphs.
+No accidental sharing of mutable crypto implementations. This closes native
+ownership needed for independently resolved execution graphs.
+
+### F3. Malachite complete lifecycle ownership
+
+Repository: existing Malachite fork rebased to the 0.8.2 source used by Kontor.
+Dependencies: approved plan. Modules: app-channel builder/run/connector, engine
+actors, networking, WAL workers. Result: tracked, awaited stop/start contract for
+all tasks/threads/sockets/WAL resources, including partial startup failure.
+Preserve the current network listen-address fix. Tests repeatedly restart actual
+engines on one port/WAL, inject blocked worker teardown, and prove no success is
+reported until ownership is released. The node adds fencing separately in K5.
+This makes in-process handoff possible without assuming process exit cleans up.
+
+### K1. Reproducible isolated bundle build
+
+Repository: Kontor. Dependencies: F1/F2. Modules: tools/kontor-build, new protocol
+build recipes and bundle workspaces, CI, node-owned proof adapters. Result: one
+pinned Rust compiler, independent --locked graphs/feature sets/output directories,
+metadata, exact rlib consumption, deterministic artifact attestations and native
+symbol ownership report. Real Wasmtime with Kontor VM configuration/fixtures and real Malachite implementations
+must run from both graphs in one executable, with conflicting patch/transitive
+versions/features and private consensus runtimes. A build-only harness does not
+replace K2a/K2b extraction or final node integration. Qualify Linux ARM64/x86-64 release/Docker profiles and macOS node test profiles
+(the existing CI runs the indexer tests on macOS). Mobile SDK consumers do not embed
+the node; keep their existing checks green without pretending they run consensus.
+No unqualified unified Cargo release path.
+
+### K2a. Versioned semantic API and live storage adapter
+
+Dependencies: K1. Modules: block/witness parsing, runtime, reactor execution and
+lifecycle, database queries/checkpoints, native artifacts, indexer-types boundary.
+Result: an in-tree versioned executor API for recognition, batchability, execution,
+lifecycle, views/committee derivation and simulation. Keep frozen scheduling rules
+explicit in coordinator-rules-v1. Node-owned transactional logical callbacks preserve
+read-your-writes, repeated write order, ranges and savepoints. Archive original
+native/genesis bytes and explicit IDs/privileges, coordinated with storage work.
+Compare original/extracted paths on real contracts, malformed inputs, decompression,
+nested failures, fees/deposits, allocation and ordered legacy checkpoints. Preserve
+P1 text-based error classification unless equivalence is established. This standalone
+PR is CI-coherent and does not yet claim independent graph isolation.
+
+### K2b. Independently locked historical semantic source
+
+Dependencies: K2a/K1. Move the complete P1 semantic closure to its locked workspace,
+with std-only envelopes/callbacks and node adapters. No Wasmtime/Tokio/Malachite/libsql
+or dependency-owned types cross the common interface. Every execution/simulation/
+replay entry needs coordinator-issued context. Compile-fail/import checks prevent
+bypasses. Repeat P1 differential fixtures and native ownership audit on the real node,
+not only K1's VM harness. Keep one node database owner and explicit runtime ownership.
+
+### K3. Atomic migration substrate and execution identity
+
+Dependencies: K2b. Modules: logical state adapter, database transaction/snapshot
+service, legacy checkpoint and migration registry. Result: deterministic budgeted
+migration effects, marker and applied cursor in one atomic transaction; canonical
+lineage as specified above; unchanged ordered checkpoint algorithm. No full sparse
+Merkle subsystem or certified-root claim. Test duplicate/tombstone ordering, nested
+rollback, I/O failure, crash atomicity, changed exclusions with same H hash, marker
+rollback/reapplication, and byte-for-byte SQL/checkpoint equality. Independent full
+state/receipt comparisons validate equivalent replay beyond checkpoint coverage.
+
+### K4. Certified history and baseline consensus envelope
+
+Dependencies: K2b/K3. Modules: consensus values/codecs, reactor proposal/decision/startup,
+database durable journal and committee records. Result: stable bounded value/control
+envelopes, immutable definitions/IDs, contiguous authenticated decision/input journal,
+separate applied cursor, derived committee-per-height journal and no suffix deletion.
+Persist exact bytes before acknowledging availability. New value/proposal-part
+IDs must bind exact raw input digests/wtxids, not only txids: the current value hash
+can alias different witnesses carrying different Kontor instructions. Commit and
+validate raw Block input identities as well as header/Bitcoin commitments, and
+record decision-ordered control state and descriptor-only transition authorization.
+Tests cover gaps, altered raw bytes/certificates, crash before/after append/apply,
+churn, zero voting power, same-txid/different-witness rejection and deterministic
+finality closure. Persist command outcomes and prefix closure before granting the
+next height; missing inputs cannot silently become an orphan/skip. Move committee updates
+to the height boundary here, with decision-driven branch replacement and retained-input
+replay sufficient to prevent local event timing from changing historical authority.
+This prerequisite cannot wait until K8 after authorization/activation are enabled.
+Keep K4 as one PR: removing suffix deletion and deriving historical committees
+requires the immutable raw-input journal simultaneously; splitting it out first would
+leave an incoherent intermediate authority model. Revisit scope with the reviewer if
+implementation evidence permits a genuinely self-contained split. Baseline wire
+changes are explicitly prelaunch; no claim of compatibility with older dev networks.
+
+### K5. Durable signer and engine coordinator
+
+Dependencies: F3/K4. Modules: signing/proposal-part paths, engine adapters, reactor
+next-height gate, node startup. Result: one node signer with separately durable slots,
+round/step/high-water checks, exact retry signatures and generation leases. All
+consensus signing paths use typed codec-validated requests, never an exposed raw key
+or arbitrary-byte bypass. Network identity signing has its own limited domain.
+Test Malachite signing-callback errors and separate network-identity key use.
+One engine owns socket/WAL and a private runtime at a time; explicit stop-and-join
+keeps node services alive. Crash/sign-retry, stale callbacks, old snapshots, partial
+startup, blocked teardown and WAL reopen tests prove no competing authority.
+
+### K6. Validator-authorized upgrade control
+
+Dependencies: K4/K5. Modules: protocol registry/control state, proposal validation,
+approval CLI/API/SDK, continuous snapshot migration dry-runs and readiness diagnostics. Result: immutable hash-bound manifests,
+signed schedule/cancel/postpone, committee references, nonce/replay guards, notice,
+expiry and telemetry per agreed policy. Unsupported targets remain opaque schedules;
+installation/readiness does not authorize activation. Golden cross-language codecs,
+threshold boundaries, duplicate/unknown signers, overflow, weight drift across thresholds, per-signer A-B-A registration reuse, unrelated churn, conflicting
+actions, expiry, cancellation cutoff and superseded plans are tested. Include exit/rejoin
+inside one replay span, same-height replacement registration, and valid control
+ordering despite pending/deferred blocks. Test dry-run isolation, six-height
+refresh, work-budget reporting and readiness withdrawal on failure before H. Existing plans
+retain their original authorization as certified history changes.
+
+### K7. After-H activation and deterministic migration
+
+Dependencies: K1/K2a/K2b/K3-K6. Modules: reactor block/batch/finality coordinator, migration
+registry, durable handoff intent, engine selection, mempool/admission. Result: a real
+deliberately different P2 plus incompatible consensus codec transitions after H.
+H and lifecycle use P1; Batch(H)/H+1 use P2; earlier canonical executions confirm
+without duplicate effects/charges. Unsupported nodes park at the documented atomic
+boundary. Test actual multi-validator engines, migration limits/idempotence, lagging
+nodes, pending requests, retained certified work, transaction revalidation, same-port
+handoff and no node/RPC/ingestion restart. Crash inject through intent/application,
+join, WAL startup and first new-era signature. Include unmined/RBF batch(H-1) whose
+deadline later replays H with changed pre-state; old unsupported quorum prevotes nil;
+new successor committee unsupported/zero power; deterministic post-decision migration
+failure and the incident procedure. Over one-third unsupported at H must still allow
+Cancel to be decided, after which ordinary H is valid under P1. No live switch before
+these pass.
+
+### K8. Deterministic cross-boundary replay and committee safety
+
+Dependencies: K7 and K4's decision-driven branch/committee foundation. Modules:
+reorg/finality scheduler, journal/committee/control, snapshot restore and migration
+replay. Result: ordinary current-era consensus orders replacement blocks without
+rewinding eras/heights/authority; no recovery ceremony. Replay across one or several
+activated H boundaries; below latest H gate new batches. Test earlier/later local
+notifications around decision/application/resume, including orphan X never seen by
+local bitcoind, shorter higher-work branches, second reorg, finality exclusions,
+expired batches and same H hash/different pre-lineage. Independent state/receipt/
+committee comparisons must match for all event permutations. Test pruned-node archive
+rebuild, zero validators, missing history and unavailable quorum. Do not mutate
+committee authority merely because a local Bitcoin notification arrived.
+
+### K9. Stable history transport and cold catch-up
+
+Dependencies: K4/K7/K8. Modules: node history service, bounded peer synchronization,
+archive storage and startup. Result: current-era peers serve exact historical input
+and certificate envelopes independent of live Malachite codecs. Fresh nodes verify
+from original genesis through all eras and recovery before signing. Limit chunks,
+total decoded sizes, inflight ranges and peer work. Test entirely new-era peers,
+missing middle records, tampered values/certificates/input/committee claims, unsupported
+codecs and restored snapshots. Keep separate received/verified/applied/era/signer
+frontiers. Re-execute committee-changing prefixes before trusting successor
+certificates; missing target support cannot advance authentication beyond its
+unknown derived committee.
+Do not use trusted snapshots as evidence of full genesis verification.
+
+### K10. Protocol-aware clients, caches and operations
+
+Dependencies: K7-K9. Modules: API/indexer-types/SDK, simulation/fee estimation,
+component/state caches, operator commands/docs and private Site. Result: expose IDs,
+supported formats, execution position, lineage/checkpoint/build identity (not certified state roots), approval/readiness,
+missing support/history and handoff/recovery status. Simulation uses selected state
+and protocol; future assumptions are explicit. Cache keys bind all semantic/build
+inputs. Test rollback/activation contamination, old receipts, API handoff continuity,
+unsupported/recovery admission failures and SDK format discovery. Implement format
+and ABI descriptors, including the bounded disjoint format-1 specified by the Site; legacy parsing/signatures remain exact. Publish maintenance rules
+for historical backports, compiler changes, migrations and retained artifacts.
+
+### K11. Integrated qualification and release evidence
+
+Dependencies: all above. Modules: real multi-validator integration harness, CI
+qualification matrix, artifact release checks, docs and private Site. Result: full
+goal acceptance suite runs against actual embedded bundles/engines and real state,
+including deliberate P2 divergence, two successive upgrades, all crash/recovery
+boundaries, unsupported validators and cold sync. Shadow/differential cases include
+new malformed inputs beyond historical transactions. Qualify compiler, platform,
+profile/native symbols and realistic maximum migration work. Explicitly rehearse RBF near H, old quorum/new committee support
+mismatch, no-quorum stalls and repeated local reorg notification permutations.
+Record actual merged
+PR/head/check evidence and run operator rehearsals. The Site describes implemented
+behavior, remains owner-only/dark, and has no obsolete alternative path presented as
+implemented. Missing evidence or an unresolved feasibility gate means not complete.
+
+## Review and merge ledger
+
+For each phase record base/head, acceptance commands/results, independent subagent
+review, Interlink review, findings/dispositions, any follow-up review after material
+edits, PR URL, current-head CI and actual merge commit. Begin dependent phases from
+the merged state. New security advisories may receive exact documented exceptions
+in `core/.cargo/audit.toml`; these are accepted exceptions, never described as fixes.
+No blanket suppression and no weakening other tests to pass CI.
+
+## Agreement and remaining planning decisions
+
+- Both parties explicitly approved the DRAFT-4 digest recorded above.
+- Decision-driven branch/committee rules, per-signer generations and reference R
+  and the deterministic-failure incident policy are agreed.
+- Fork destinations: wilfreddenton/wasmtime and KontorProtocol/malachite;
+  native crypto patch lives in the Kontor repository. Never submit upstream Wasmtime
+  PRs or comments; its local instructions restrict those to humans.
+- Actual node matrix: Linux ARM64/x86-64 release/Docker, macOS current node tests;
+  keep SDK mobile checks but do not require mobile consensus engines.
+- Storage audit agent 01a14ab3 reports no active production edits, identifies native
+  deployment constraints and unresolved economic policies. Query to 01a147e5 remains
+  pending. Preserve existing economics during extraction; do not resolve unrelated
+  staking/penalty/sponsorship policy by accident.
+- Every phase needs both review channels and green current-head CI before merge.
+
+## Planning review evidence
+
+Independent subagent review against 2c5cff0d confirmed an early/late reorg
+counterexample: the current stale-block skip can produce different committees at
+C+1 for the same certificate C. The decision-driven canonical branch and durable
+prefix closure above replace that path. It also identified txid-only commitment
+(aliasing witness instructions), unsupported successor committees, and historical
+verification's execution dependency. All are included in K4/K7/K9 acceptance. This
+planning review is not a substitute for either per-PR implementation review.
+
+## Approved native-owner amendment (F1 investigation)
+
+Interlink task `kontor-upgrade-f1-native-owner`, reviewer agreement
+`4f2da3f765c0db29d6a4518b5957a570`: compile every protocol graph without Wasmtime
+`debug-builtins`. Its process-global GDB descriptor otherwise has per-graph locks.
+K1 rejects the feature and GDB descriptor/register symbols, and records an explicit
+process-global ownership allowlist. The node graph must not reintroduce Wasmtime.
+Adapters assert native debug_info(false). K2b qualifies this intentional P1 feature
+delta against the original build, including trap/backtrace/error-text equivalence.
+F1 tests both differing minimal features and the full intended Kontor feature set
+without debug-builtins. System unwind registration is explicitly shared; concurrent
+registration/trapping/deregistration is exercised. No portable lifting change.
+
+Review amendment `4ce03db4c79e30f01750f58c9395212c` (task
+`kontor-upgrade-f1-review`), accepted by implementation: also exclude Wasmtime's
+unused `cache` feature. Kontor uses its own ComponentCache; removing this feature
+removes wasmtime-cache/zstd from protocol VM graphs. K1 rejects `cache` and K2b
+qualifies this delta with the debugger exclusion. Preserve the existing
+`macos_use_mach_ports(false)` setting in K1/adapters, with macOS CI covering signal
+chaining; this is not a change to P1's current configuration. Rayon's global pool
+is separately owned by each graph and remains resident.
+
+Review amendment `c289a78411b46d06a5bbbebc9ae7fc47` (task
+`kontor-upgrade-f1-review`), explicitly approved by both parties: also exclude
+Wasmtime `profiling` from every protocol graph. Kontor already uses the default
+ProfilingStrategy::None. K1 rejects the feature and ITT/iJIT native symbol families;
+adapters explicitly preserve None. K2b qualifies the cumulative debug-builtins,
+cache and profiling feature-set delta against original P1. Bundle definitions
+record all three exclusions with their rationale. The exact Mach-O executable
+header `_mh_execute_header` may be accepted only in the final macOS audit; an
+input library defining it must still fail.
+
+F1 final-review carry-forward (receipt 5463eaacf940bd74c44a7c48c0a754a3): K1
+also intersects Rust-mangled and anonymous compiler symbols across graphs to
+detect metadata mistakes, with any false-positive exemption explicitly scoped.
+The version/source identity guard must be enforced by code, not documentation.
+K2b includes real canon-lift-async contracts; F1's async API test is a sync-lifted
+component called through call_async and does not establish that coverage.
+
+## Approved F2 native-crypto scope amendment
+
+Interlink task kontor-upgrade-f2-native-plan, reviewer receipt
+7f362ce63833d9e90868fe0e71aeddac, explicitly accepted by implementation. F2 is
+one Kontor PR vendoring opt-in namespace hooks for blst 0.3.17, ring 0.17.14 and
+secp256k1-sys 0.10.1, with pristine provenance and licenses. ring's existing prefix
+is extended consistently across native and Rust surfaces. secp's hardcoded
+v0_10_0 prefix is insufficient for patch-version divergence; rename C symbols and
+all four exported Rust callbacks consistently. blst post-preprocessing rewriting
+preserves conditional compilation and token-paste semantics. Ordinary single-graph
+builds remain unchanged without a namespace; this is not a permitted bundle mode.
+
+Additional acceptance criteria:
+
+1. K1 rejects any bundle build without an explicit deterministic namespace derived
+   from bundle identity and recorded in its attestation. Node graph may retain
+   original names, with the node-versus-bundle distinction audited.
+2. Compare upstream and namespaced native objects under identical flags on each
+   shipped target. Normalize symbol names in disassembly and data comparison; any
+   remaining instruction or data difference fails. Retain BLS, ECDSA, Schnorr and
+   digest/signature vectors and concurrent dual-graph execution.
+3. Namespace CPU-capability and other mutable globals, secp's Rust definitions and
+   C callback references, and blst's Linux x86/ARM ELF and macOS Mach-O assembly
+   exports. Native audit must show zero intersection and zero unowned definitions.
+4. Default-build objects match pristine upstream with identical inputs/flags.
+   Crypto outputs remain byte-identical for node, SDK Wasm/native and mobile
+   consumers; existing CI stays green.
+5. A script regenerates each vendor tree from pinned pristine archives plus a
+   recorded patch, checks source SHA256s, and verifies vendor equality in CI.
+   Document the dependency-bump procedure.
+
+A fresh independent Malachite graph has ring but no AWS-LC; the earlier workspace
+view reflected node reqwest/metrics feature unification. K1 must verify AWS-LC,
+libsql and zstd remain node-owned in the actual extracted closure. Do not assume
+that ownership from package names or from a unified Cargo tree.

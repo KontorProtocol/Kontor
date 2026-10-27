@@ -1,5 +1,6 @@
 [workspace]
 members = [
+    "vendor/kontor-native-build",
     "bls-crypto",
     "built-in-types",
     "indexer",
@@ -82,6 +83,10 @@ ts-rs = { version = "=12.0.1", features = ["format"] }
 malachitebft-app-channel = { version = "=0.8.2", package = "arc-malachitebft-app-channel" }
 
 [patch.crates-io]
+# Opt-in native namespaces keep independently built protocol graphs separate.
+blst = { path = "vendor/blst" }
+ring = { path = "vendor/ring" }
+secp256k1-sys = { path = "vendor/secp256k1-sys" }
 # Preserve resolved /tcp/0 listen addresses until upstream includes the fix.
 arc-malachitebft-network = { path = "vendor/arc-malachitebft-network" }
 # Use ZeroMQ 4.3.5's alignment fix until zmq-sys releases its zeromq-src 0.3 update.

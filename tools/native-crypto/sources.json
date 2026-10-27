@@ -1,0 +1,42 @@
+[
+  {
+    "name": "blst",
+    "version": "0.3.17",
+    "archive_sha256": "c20659f9bbee16cbbd2f7393e40ab6309f5a98f76a2eb57a995ec508b72387fe",
+    "upstream_git": {
+      "git": {
+        "sha1": "54e6e55674722fc2797ebb4bbb71b26d881eb4b8"
+      },
+      "path_in_vcs": "bindings/rust"
+    },
+    "vendor_directory": "blst",
+    "patch": "blst.patch"
+  },
+  {
+    "name": "ring",
+    "version": "0.17.14",
+    "archive_sha256": "a4689e6c2294d81e88dc6261c768b63bc4fcdb852be6d1352498b114f61383b7",
+    "upstream_git": {
+      "git": {
+        "sha1": "2723abbca9e83347d82b056d5b239c6604f786df",
+        "dirty": true
+      },
+      "path_in_vcs": ""
+    },
+    "vendor_directory": "ring",
+    "patch": "ring.patch"
+  },
+  {
+    "name": "secp256k1-sys",
+    "version": "0.10.1",
+    "archive_sha256": "d4387882333d3aa8cb20530a17c69a3752e97837832f34f6dccc760e715001d9",
+    "upstream_git": {
+      "git": {
+        "sha1": "ba04d92eeed3339a30d638082ca0175c405ccff0"
+      },
+      "path_in_vcs": "secp256k1-sys"
+    },
+    "vendor_directory": "secp256k1-sys",
+    "patch": "secp256k1-sys.patch"
+  }
+]
