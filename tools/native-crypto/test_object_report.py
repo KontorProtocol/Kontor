@@ -8,6 +8,8 @@ import subprocess
 import tempfile
 import unittest
 
+from qualify import undefined_references, validate_references
+
 
 TOOL = Path(os.environ.get("KONTOR_OBJECT_REPORT", Path(__file__).parent / "object-report/target/debug/kontor-native-object-report")).resolve()
 SOURCE = """
@@ -25,17 +27,19 @@ class ObjectComparison(unittest.TestCase):
         self.root = Path(self.temporary.name)
         self.counter = 0
 
-    def compile(self, source, target=None):
+    def compile(self, source, target=None, debug=False):
         self.counter += 1
         path = self.root / f"fixture-{self.counter}.c"
         path.write_text(source)
         command = ["clang", "-target", target] if target else ["cc"]
-        subprocess.run([*command, "-O2", "-g0", "-fno-ident", "-c", str(path), "-o", str(path.with_suffix(".o"))],
+        subprocess.run([*command, "-O2", "-g" if debug else "-g0", "-fno-ident", "-c", str(path), "-o", str(path.with_suffix(".o"))],
                        env=dict(os.environ, CCACHE_DISABLE="1"), check=True, capture_output=True)
         return path.with_suffix(".o")
 
     def report(self, path, namespace=""):
-        return json.loads(subprocess.check_output([str(TOOL), str(path), namespace], text=True))
+        result = json.loads(subprocess.check_output([str(TOOL), str(path), namespace], text=True))
+        result.pop("namespace_audit")
+        return result
 
     def test_symbol_renaming_only_preserves_identity(self):
         original = self.compile(SOURCE)
@@ -62,6 +66,32 @@ class ObjectComparison(unittest.TestCase):
         source = 'const char message[] = "bundle_operation";'
         self.assertNotEqual(self.report(self.compile(source), "bundle"),
                             self.report(self.compile(source.replace('"bundle_operation"', '"operation"'))))
+
+    def test_bare_crypto_reference_is_rejected_even_when_default_copy_can_link(self):
+        source = 'extern int bundle_blst_keygen(int); int bundle_operation(int x) { return bundle_blst_keygen(x); }'
+        good = self.compile(source)
+        validate_references(undefined_references(good), "bundle")
+        self.report(good, "bundle")
+        bad = self.compile(source.replace("bundle_blst_keygen", "blst_keygen"))
+        with self.assertRaisesRegex(RuntimeError, "unnamespaced crypto references"):
+            validate_references(undefined_references(bad), "bundle")
+        result = subprocess.run([str(TOOL), str(bad), "bundle"], text=True, capture_output=True)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("unprefixed crypto symbol or reference", result.stderr)
+        provider = self.compile('int blst_keygen(int x) { return x + 1; } int bundle_operation(int); int main(void) { return bundle_operation(1) != 2; }')
+        executable = self.root / "silent-cross-binding"
+        subprocess.run(["cc", str(bad), str(provider), "-o", str(executable)], check=True,
+                       env=dict(os.environ, CCACHE_DISABLE="1"))
+        subprocess.run([str(executable)], check=True)
+
+    @unittest.skipUnless(shutil.which("clang"), "cross-format checks require clang")
+    def test_macho_arm_debug_layout_does_not_change_section_relative_identity(self):
+        # ARM's unwind bytes are unchanged in this reproducer. x86 can encode
+        # provisional PC-relative values directly in unwind data, which this
+        # deliberately strict comparator continues to reject when bytes differ.
+        target = "arm64-apple-macos11"
+        self.assertEqual(self.report(self.compile(SOURCE, target, debug=True)),
+                         self.report(self.compile(SOURCE, target, debug=False)))
 
     @unittest.skipUnless(shutil.which("clang"), "cross-format checks require clang")
     def test_macho_and_elf_cross_target_objects(self):

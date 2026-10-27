@@ -295,6 +295,7 @@ fn main() {
         panic!("namespaced ring bundles require source-built Unix assembly");
     }
     let core_name_and_version = namespace
+        .as_ref()
         .map(|namespace| namespace.symbol(&core_name_and_version))
         .unwrap_or(core_name_and_version);
     println!("cargo:rustc-env=KONTOR_RING_CORE_NAME={core_name_and_version}");
@@ -304,14 +305,14 @@ fn main() {
         Some(s) if s == "1" => {
             pregenerate_asm_main(&c_root_dir, &core_name_and_version);
         }
-        None => ring_build_rs_main(&c_root_dir, &core_name_and_version),
+        None => ring_build_rs_main(&c_root_dir, &core_name_and_version, namespace.as_ref()),
         _ => {
             panic!("${} has an invalid value", RING_PREGENERATE_ASM);
         }
     }
 }
 
-fn ring_build_rs_main(c_root_dir: &Path, core_name_and_version: &str) {
+fn ring_build_rs_main(c_root_dir: &Path, core_name_and_version: &str, namespace: Option<&Namespace>) {
     let out_dir = env::var_os("OUT_DIR").unwrap();
     let out_dir = PathBuf::from(out_dir);
 
@@ -368,7 +369,7 @@ fn ring_build_rs_main(c_root_dir: &Path, core_name_and_version: &str) {
         out_dir.clone()
     };
 
-    let generated_dir = if env::var_os("KONTOR_NATIVE_NAMESPACE").is_some() {
+    let generated_dir = if namespace.is_some() {
         let namespaced = out_dir.join("namespaced-assembly");
         fs::create_dir_all(&namespaced).unwrap();
         for entry in fs::read_dir(&generated_dir).unwrap() {

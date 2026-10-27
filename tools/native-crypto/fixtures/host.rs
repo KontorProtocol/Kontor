@@ -21,11 +21,14 @@ fn main() {
                 };
                 assert_eq!(first, expected);
                 assert_eq!(second, expected);
+                assert_eq!(crypto_node::exercise(), expected);
             }
         }));
     }
     for thread in threads {
         thread.join().unwrap();
     }
-    println!("Both independent crypto graphs matched pristine outputs in 800 concurrent exercises");
+    println!(
+        "Node and both independent crypto graphs matched pristine outputs in 1200 concurrent exercises"
+    );
 }

@@ -35,9 +35,13 @@ secp recovery, exercising that optional FFI surface too.
 
 The native object reporter compares every loadable code/data section, zero-fill
 size, alignment, symbol properties, relocation, and relevant COMDAT selection.
-ELF and Mach-O are supported. Symbol names alone are normalized; data bytes are
+ELF and Mach-O are supported. Crypto symbols and references must carry their
+graph's leading namespace; a bare crypto-family reference fails before comparison.
+Per-symbol prefix coverage is saved with the evidence. Symbol names alone are normalized; data bytes are
 never rewritten. Debug sections, compiler comments, archive member filenames and
-timestamps do not affect the loaded image and are excluded. Instruction bytes are
+timestamps do not affect the loaded image and are excluded. Relocatable section
+placement is not a final runtime address, so symbol positions are compared relative
+to their sections. Unwind bytes and relocations remain fully compared. Instruction bytes are
 compared directly, which is stricter than textual disassembly comparison. Any
 remaining difference fails and writes the two reports for inspection. A failed
 comparison must be investigated, not bypassed by adding broad exclusions.
@@ -46,13 +50,17 @@ Crypto fixtures check the full SHA-256 `abc` vector and RFC 8032 Ed25519 test 1,
 BLS signing/aggregation/verification, ECDSA signing/recovery, Schnorr signatures,
 and malformed or mismatched inputs. All deterministic public key and signature
 bytes must match the pristine build, across both feature configurations. The two
-namespaced rlib graphs then link into one executable and run 800 exercises across
-four threads, racing first-use initialization and reversing call order.
+namespaced rlib graphs then link into one executable alongside an ordinary,
+unnamespaced node graph. They run 1,200 exercises across four threads, racing
+first-use initialization and reversing call order. The third graph makes accidental
+binding to the node's crypto copy possible, so undefined-reference checks are
+necessary even when the executable links and the vectors pass.
 
 The native inventory comes from the current Cargo artifact messages and current
 build-script output directories, before dead stripping. It covers C/assembly
 archives and Rust rlibs, including secp's four Rust exports. Namespace ownership
-and intersections are checked before linking.
+and intersections are checked before linking. Undefined native references must
+belong to their own graph. Final live crypto entry points have distinct addresses.
 
 Comparator negative controls:
 
@@ -62,7 +70,9 @@ python3 tools/native-crypto/test_object_report.py
 ```
 
 The tests deliberately change instructions, initialized data, zero-fill size,
-relocation targets, weak binding, and alignment. Cross-format cases use clang to
+relocation targets, weak binding, and alignment. A deliberate bare crypto call
+links successfully against a default provider but must fail both reference audits.
+Cross-format cases use clang to
 produce Linux ARM/x86 and macOS ARM/x86 objects without needing SDK headers. These
 small cross-format cases qualify the comparator, not the crypto libraries on
 those platforms. Real library/platform and SDK/mobile checks are separate gates.

@@ -18,6 +18,7 @@ from vendor import CONFIG, ROOT, archive
 HERE = Path(__file__).resolve().parent
 TOOLCHAIN = "1.99.1"
 CRATES = {"blst", "ring", "secp256k1-sys"}
+BLST_SYMBOLS = set((ROOT / "core/vendor/blst/kontor-symbols.txt").read_text().splitlines())
 FINAL_RUNTIME_SYMBOLS = {
     "DW.ref.rust_eh_personality", "rust_eh_personality", "main", "_start",
     "__TMC_END__", "__bss_end__", "__bss_start", "__bss_start__", "__dso_handle",
@@ -80,6 +81,34 @@ def definitions(path):
     return set(symbol_addresses(path))
 
 
+def crypto_owned(name):
+    return (name.startswith(("rustsecp256k1_v0_10_0_", "ring_core_0_17_14_"))
+            or name.split(".")[0] in BLST_SYMBOLS)
+
+
+def undefined_references(path):
+    output = subprocess.check_output(["nm", "-u", str(path)], text=True, stderr=subprocess.PIPE)
+    references = set()
+    for line in output.splitlines():
+        fields = line.split()
+        if not fields or line.endswith(":"):
+            continue
+        if len(fields) == 1:
+            name = fields[0]
+        elif len(fields) == 2 and fields[0] in ("U", "w", "v"):
+            name = fields[1]
+        else:
+            raise RuntimeError(f"unrecognized nm undefined-symbol output for {path}: {line}")
+        references.add(name.removeprefix("_") if sys.platform == "darwin" else name)
+    return references
+
+
+def validate_references(references, namespace):
+    bare = sorted(name for name in references if namespace and crypto_owned(name))
+    if bare:
+        raise RuntimeError(f"unnamespaced crypto references in {namespace}: {bare}")
+
+
 def inventory(build_messages, metadata, namespace):
     packages = {package["id"]: package["name"] for package in metadata["packages"]}
     native = {}
@@ -110,6 +139,8 @@ def inventory(build_messages, metadata, namespace):
 
 def build(output, env, pristine, configuration, variant):
     graph = "first" if configuration == "portable" else "second"
+    if configuration == "portable" and variant == "default":
+        graph = "node"
     name = f"{configuration}-{variant}"
     project = output / name
     project.mkdir()
@@ -121,9 +152,9 @@ def build(output, env, pristine, configuration, variant):
         '[[bin]]\nname = "vector-output"\npath = "main.rs"\n'
         '[profile.release]\ndebug = 0\n'
         '[dependencies]\n'
-        f'blst = {{ path = {json.dumps(str(sources["blst"]))}, features = {json.dumps(["portable"] if graph == "first" else [])} }}\n'
+        f'blst = {{ path = {json.dumps(str(sources["blst"]))}, features = {json.dumps(["portable"] if configuration == "portable" else [])} }}\n'
         f'ring = {{ path = {json.dumps(str(sources["ring"]))} }}\n'
-        f'secp256k1 = {{ version = "=0.29.1", features = {json.dumps(["recovery", "lowmemory"] if graph == "first" else ["recovery"])} }}\n'
+        f'secp256k1 = {{ version = "=0.29.1", features = {json.dumps(["recovery", "lowmemory"] if configuration == "portable" else ["recovery"])} }}\n'
         '[patch.crates-io]\n'
         f'secp256k1-sys = {{ path = {json.dumps(str(sources["secp256k1-sys"]))} }}\n'
     )
@@ -175,37 +206,55 @@ def compare_objects(tool, reference, candidate, output):
         other = candidate["native"][key]
         before = json.loads(subprocess.check_output([str(tool), str(path), ""], text=True))
         after = json.loads(subprocess.check_output([str(tool), str(other), candidate["namespace"]], text=True))
+        audits = []
+        for member in before.get("members", [before]):
+            member.pop("namespace_audit")
+        for member in after.get("members", [after]):
+            audits.append(member.pop("namespace_audit"))
+        audit_path = output / f'{candidate["name"]}-{key.replace("/", "-")}.namespace-audit.json'
+        audit_path.write_text(json.dumps(audits, indent=2) + "\n")
         if before != after:
             prefix = output / f'{candidate["name"]}-{key.replace("/", "-")}'
             prefix.with_suffix(".before.json").write_text(json.dumps(before, indent=2) + "\n")
             prefix.with_suffix(".after.json").write_text(json.dumps(after, indent=2) + "\n")
             raise RuntimeError(f"native code/data/symbol/relocation drift: {key}, inspect {prefix}.*.json")
         results.append({"archive": key, "upstream_sha256": sha(path), "candidate_sha256": sha(other),
-                        "normalized_report_sha256": hashlib.sha256(json.dumps(before, sort_keys=True).encode()).hexdigest()})
+                        "normalized_report_sha256": hashlib.sha256(json.dumps(before, sort_keys=True).encode()).hexdigest(),
+                        "namespace_audit_sha256": sha(audit_path)})
     return results
 
 
 def audit(graphs, output):
-    inventories, names = [], []
+    inventories, names, graph_references = [], [], []
     for graph in graphs:
-        inventory = [{"path": str(path), "sha256": sha(path), "definitions": sorted(definitions(path))}
+        inventory = [{"path": str(path), "sha256": sha(path), "definitions": sorted(definitions(path)),
+                      "undefined_references": sorted(undefined_references(path))}
                      for path in sorted(graph["inputs"])]
         symbols = {name for item in inventory for name in item["definitions"]}
         # This compiler-generated DWARF reference carries no crypto-owned state.
         symbols.discard("DW.ref.rust_eh_personality")
-        prefixes = (graph["namespace"] + "_",)
-        unknown = sorted(name for name in symbols if not name.startswith(prefixes))
+        prefix = graph["namespace"] + "_" if graph["namespace"] else ""
+        unknown = sorted(name for name in symbols if not (name.startswith(prefix) if prefix else crypto_owned(name)))
         if unknown:
             raise RuntimeError(f'unowned native symbols in {graph["name"]}: {unknown}')
-        callbacks = {graph["namespace"] + "_rustsecp256k1_v0_10_0_" + name for name in (
+        callbacks = {prefix + "rustsecp256k1_v0_10_0_" + name for name in (
             "default_illegal_callback_fn", "default_error_callback_fn", "context_create", "context_destroy")}
         if not callbacks <= symbols:
             raise RuntimeError(f"missing secp Rust definitions: {callbacks - symbols}")
         inventories.append(inventory)
         names.append(symbols)
+        references = {name for item in inventory for name in item["undefined_references"]}
+        if not references:
+            raise RuntimeError("crypto graph has no parsed undefined references")
+        validate_references(references, graph["namespace"])
+        graph_references.append(references)
     (output / "native-inputs.json").write_text(json.dumps(inventories, indent=2) + "\n")
-    if names[0] & names[1]:
-        raise RuntimeError(f"native graph collision: {sorted(names[0] & names[1])}")
+    for index, symbols in enumerate(names):
+        others = set.union(*(item for other, item in enumerate(names) if other != index))
+        if symbols & others:
+            raise RuntimeError(f"native graph collision: {sorted(symbols & others)}")
+        if graph_references[index] & others:
+            raise RuntimeError(f"cross-graph crypto references: {sorted(graph_references[index] & others)}")
     return names
 
 
@@ -217,12 +266,12 @@ def audit_final(executable, graphs, input_names, output):
         raise RuntimeError(f"unowned final native definitions: {sorted(unknown)}")
     required = []
     for graph in graphs:
-        namespace = graph["namespace"]
+        prefix = graph["namespace"] + "_" if graph["namespace"] else ""
         required.extend([
-            f"{namespace}_blst_keygen",
-            f"{namespace}_rustsecp256k1_v0_10_0_ecdsa_sign_recoverable",
-            f"{namespace}_rustsecp256k1_v0_10_0_default_illegal_callback_fn",
-            f"{namespace}_ring_core_0_17_14__CRYPTO_memcmp",
+            f"{prefix}blst_keygen",
+            f"{prefix}rustsecp256k1_v0_10_0_ecdsa_sign_recoverable",
+            f"{prefix}rustsecp256k1_v0_10_0_default_illegal_callback_fn",
+            f"{prefix}ring_core_0_17_14__CRYPTO_memcmp",
         ])
     # ring deliberately hides many global input symbols at the final link.
     # Their definitions must still exist independently as local symbols.
@@ -283,6 +332,8 @@ def main():
             reports.append({"graph": candidate["name"], "lock_sha256": candidate["lock_sha256"], "objects": objects})
             if variant == "namespaced":
                 graphs.append(candidate)
+            elif configuration == "portable":
+                graphs.append(candidate)
     names = audit(graphs, output)
     executable = output / "dual-crypto"
     command = ["rustc", "--edition=2024", str(HERE / "fixtures/host.rs"), "-o", str(executable)]
@@ -292,7 +343,7 @@ def main():
     run(command, ROOT, env, output / "link.log")
     audit_final(executable, graphs, names, output)
     run([str(executable), str(graphs[0]["project"] / "vectors.bin")], ROOT, env, output / "run.log")
-    reject_missing_namespace(graphs[0], output, env)
+    reject_missing_namespace(next(graph for graph in graphs if graph["namespace"]), output, env)
     if source_manifest() != sources:
         raise RuntimeError("qualification sources changed during the run")
     report = {"compiler": subprocess.check_output(["rustc", "-Vv"], env=env, text=True),

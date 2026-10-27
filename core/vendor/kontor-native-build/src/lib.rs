@@ -70,7 +70,7 @@ pub fn rewrite_tokens(input: &[u8], rename: impl Fn(&str) -> Option<String>) -> 
                     pos += 1;
                     if byte == b'\\' {
                         pos = (pos + 1).min(input.len());
-                    } else if byte == quote {
+                    } else if byte == quote || byte == b'\n' {
                         break;
                     }
                 }
@@ -169,6 +169,17 @@ mod tests {
         assert_eq!(
             rewrite_tokens(source, |name| (name == "_foo")
                 .then(|| "_bundle_foo".into())),
+            expected
+        );
+    }
+
+    #[test]
+    fn apostrophes_in_assembly_comments_cannot_hide_the_next_line() {
+        let source = b"# Don't skip the next call\n call foo\n# Isn't a character literal\n";
+        let expected =
+            b"# Don't skip the next call\n call bundle_foo\n# Isn't a character literal\n";
+        assert_eq!(
+            rewrite_tokens(source, |name| (name == "foo").then(|| "bundle_foo".into())),
             expected
         );
     }

@@ -268,3 +268,41 @@ The new native-crypto CI matrix targets Linux x86, Linux ARM and macOS ARM.
 Mobile CI now also triggers on vendor-only changes. Cross-platform qualification,
 SDK/mobile parity evidence, required phase reviews, PR CI and merge are still
 pending. No F2 completion is claimed, and later phases remain unimplemented.
+
+### F2 first remote matrix and review corrections
+
+Checkpoint commit 88ce3300a05faace5ba0117fc52092c6935e6981 is pushed on
+feature/protocol-native-crypto. Native qualification run 40468574927 passed Linux
+x86 and Linux ARM. macOS failed the pristine/default ring comparison. Downloaded
+reports show only two provisional `__eh_frame` section-address differences;
+instruction/data/unwind bytes, symbol properties and relocations were identical.
+The comparator now uses section-relative symbol offsets and ignores provisional
+relocatable section placement. No unwind bytes or relocations are excluded.
+An ARM Mach-O debug-layout regression covers this case. x86 unwind bytes can
+encode provisional PC-relative values; differing bytes remain a strict failure.
+
+Both the independent subagent and designated Interlink reviewer reviewed 88ce3300.
+Interlink receipt e54539b392e4c52af4428cefdc5ef125 requested changes. Both reviews
+identified the material undefined-reference gap: a missed bare reference could
+bind to the ordinary node's crypto copy while definition audits and vectors pass.
+The implementation now audits undefined references, rejects bare crypto-family
+references in the object reporter, records per-symbol namespace coverage, and
+links a third ordinary node graph alongside the two namespaced graphs. A negative
+control demonstrates the silent cross-binding and rejects it with both audits.
+The three-graph host passed 1,200 concurrent exercises locally, with all six
+pristine/default/namespaced builds and native comparisons passing. Evidence is
+`target/native-crypto-three-graphs`; subsequent comparator/parser changes were
+rechecked against those current-source archives. Fresh exact-head remote evidence
+is still required before phase acceptance.
+
+An apostrophe in an assembly comment no longer lets the lexical rewriter consume
+following lines. Four namespace-helper tests and seven comparator groups pass.
+ring uses the already validated namespace value throughout its build path.
+No Unix system/prebuilt-library escape exists in these ring/secp versions; ring's
+Windows preassembled-object path is already rejected for namespaced builds.
+Source reproduction was already run inside qualify.py; it is now also an explicit
+named CI step. The reviewer C5 finding was therefore a visibility issue, not an
+absent verification gate. No correctness finding was declined.
+
+Ordinary node/SDK builds, Wasm native object parity, mobile CI, the corrected macOS
+matrix and follow-up reviews remain open. There is still no F2 PR or merge.

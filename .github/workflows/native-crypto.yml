@@ -55,6 +55,8 @@ jobs:
         run: |
           cargo fmt --manifest-path tools/native-crypto/object-report/Cargo.toml -- --check
           rustfmt --edition 2024 --check tools/native-crypto/fixtures/bundle.rs tools/native-crypto/fixtures/host.rs
+      - name: Verify pinned archives and vendor patches
+        run: python3 tools/native-crypto/vendor.py
       - name: Check qualification tool
         run: cargo clippy --locked --manifest-path tools/native-crypto/object-report/Cargo.toml -- -D warnings
       - name: Test namespace helper
@@ -74,6 +76,7 @@ jobs:
             target/native-crypto-evidence/native-*.json
             target/native-crypto-evidence/*.before.json
             target/native-crypto-evidence/*.after.json
+            target/native-crypto-evidence/*.namespace-audit.json
             target/native-crypto-evidence/*.log
             target/native-crypto-evidence/*/build.log
             target/native-crypto-evidence/*/native-*.log
