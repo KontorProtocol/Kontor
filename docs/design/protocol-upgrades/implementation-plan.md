@@ -714,3 +714,31 @@ tests its dependency invariant. K5/K7 timeouts must account for up to five
 sequential one-second graceful intervals, followed by mandatory ownership waits
 that may remain unbounded for stalled work. Never interpret that grace budget
 as permission to start a competing engine.
+
+## Corrective aggregate infrastructure errors before K2a completion
+
+Interlink agreement `33bb8892dcb25c009aa6073f3972f9c7`, task
+`kontor-upgrade-aggregate-errors`, adds a corrective Kontor PR on main
+`9d4da6798ac7c499fc2060282bca1d42e0301393` before completing K2a. Aggregate
+verification currently turns database lookup and identity-insertion failures
+into ordinary input rejections. A healthy node can execute the same input while
+the affected node skips it, and partially inserted identities can commit.
+
+Introduce a typed distinction between deterministic verification rejection and
+infrastructure failure. Keep all existing deterministic rejection text,
+including chained error formatting, unchanged. Propagate infrastructure failure
+through the executor to the existing block rollback/fatal reactor path. The
+publisher identity lookup after verification already propagates failure and
+must retain that behavior. Do not change valid execution, signature validation,
+nonce rules, dependency locks or storage schemas.
+
+Acceptance requires real signed aggregates with database read faults in both
+signer-ID resolution paths and public-key resolution, plus a nonce-insertion
+fault after identity allocation. Reproduce against unchanged main, then show
+that `Reactor::handle_block` restores all touched tables and checkpoints, keeps
+the previous tip, and successfully retries the unchanged signed input after the
+fault is removed. Preserve deterministic invalid signature, missing signer and
+shape rejection behavior. Complete both reviews, appropriate local checks,
+current-head CI and verified merge. Rebase K2a on the correction and include
+these sites in its retained error-classification inventory. Later phases keep
+their agreed scope.

@@ -8,6 +8,7 @@ use crate::bitcoin_client::error::Error as RpcError;
 use crate::bitcoin_client::types::Acceptance;
 use crate::bitcoin_client::{Client, check_mempool_acceptance};
 use crate::block::{TxWalker, filter_map};
+use crate::bls::{AggregateVerificationError, verify_aggregate};
 use crate::database;
 use crate::database::queries::insert_transaction_execution_usage;
 use crate::retry::{new_backoff_limited, retry};
@@ -483,9 +484,12 @@ async fn process_aggregate_input(
     op_return_data: Option<&[u8]>,
 ) -> Result<Vec<Option<anyhow::Error>>> {
     let n_ops = input.insts.ops.len();
-    let resolved = match crate::bls::verify_aggregate(runtime, &input.insts).await {
+    let resolved = match verify_aggregate(runtime, &input.insts).await {
         Ok(r) => r,
-        Err(e) => {
+        Err(AggregateVerificationError::Infrastructure(error)) => {
+            return Err(error.context("aggregate verification infrastructure failure"));
+        }
+        Err(AggregateVerificationError::Rejected(e)) => {
             warn!("Aggregate verification failed: {e}");
             // Fan the input-wide rejection across every op slot so the
             // positional vector remains length-aligned with input.insts.ops.
