@@ -1,5 +1,8 @@
+mod bundles;
 mod container;
 mod outputs;
+
+pub use bundles::{ProtocolBundlesArgs, protocol_bundles};
 
 use std::collections::BTreeSet;
 use std::env;
