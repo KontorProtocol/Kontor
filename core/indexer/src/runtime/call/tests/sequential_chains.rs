@@ -14,6 +14,9 @@ use wasmtime::Trap;
 
 use super::{balance, funded};
 use crate::database::queries::live_deposit_gas_sum;
+use crate::runtime::invocation::{
+    InvocationBudget, InvocationCapacityExhausted, MAX_LIVE_INVOCATIONS,
+};
 use crate::runtime::numerics::sub_decimal;
 use crate::runtime::pricing::Pricing;
 use crate::runtime::token::api as token;
@@ -119,6 +122,82 @@ async fn publish_chain(
     Ok(chain)
 }
 
+#[tokio::test]
+async fn physical_capacity_failure_in_a_paid_nested_call_rolls_back_payment() -> Result<()> {
+    let (mut runtime, _dir, _name) = test_runtime().await?;
+    let actor = funded(&mut runtime).await?;
+    let chain = publish_chain(&mut runtime, &actor, 1).await?;
+    let root = chain.last().unwrap();
+    let conn = runtime.get_storage_conn();
+    let mut rows = conn
+        .query("SELECT COUNT(*) FROM contract_results", ())
+        .await?;
+    let receipts_before: u64 = rows.next().await?.unwrap().get(0)?;
+    let balance_before = balance(&mut runtime, HolderRef::from(&actor)).await?;
+    let burner_before = balance(&mut runtime, HolderRef::Burner).await?;
+    let floor_before = token::floor(&mut runtime, HolderRef::from(&actor)).await?;
+    let supply_before = token::total_supply(&mut runtime).await?;
+    let resources_before = runtime.table.lock().await.iter_mut().count();
+
+    let budget = Arc::new(InvocationBudget::default());
+    runtime.invocation_budget = Some(budget.clone());
+    let stores = (0..MAX_LIVE_INVOCATIONS - 1)
+        .map(|_| runtime.make_store(1_000_000))
+        .collect::<Result<Vec<_>>>()?;
+    assert_eq!(budget.live(), MAX_LIVE_INVOCATIONS - 1);
+    let result = runtime
+        .execute(
+            Some(&actor),
+            Some(Payment {
+                signer_id: actor.signer_id().unwrap(),
+                gas_limit: MAX_UNTRUSTED_GAS_LIMIT,
+            }),
+            root,
+            "chain-probe(false)",
+        )
+        .await;
+    assert!(
+        matches!(result, Err(ExecutionError::NonDeterministic(ref error))
+        if error.chain().any(|cause| cause.is::<InvocationCapacityExhausted>()))
+    );
+    assert_eq!(budget.live(), MAX_LIVE_INVOCATIONS - 1);
+    assert!(runtime.stack.is_empty().await);
+    assert!(runtime.storage.savepoint_stack.is_empty().await);
+    assert_eq!(
+        runtime.table.lock().await.iter_mut().count(),
+        resources_before
+    );
+    assert_eq!(
+        balance(&mut runtime, HolderRef::from(&actor)).await?,
+        balance_before
+    );
+    assert_eq!(
+        balance(&mut runtime, HolderRef::Burner).await?,
+        burner_before
+    );
+    assert_eq!(
+        token::floor(&mut runtime, HolderRef::from(&actor)).await?,
+        floor_before
+    );
+    assert_eq!(token::total_supply(&mut runtime).await?, supply_before);
+    let mut rows = conn
+        .query("SELECT COUNT(*) FROM contract_results", ())
+        .await?;
+    let receipts_after: u64 = rows.next().await?.unwrap().get(0)?;
+    assert_eq!(receipts_after, receipts_before);
+
+    drop(stores);
+    assert_eq!(budget.live(), 0);
+    assert_eq!(
+        runtime
+            .execute(None, None, &chain[0], "storage-state()")
+            .await?,
+        "[0, 0, 0, 0]"
+    );
+    assert_eq!(budget.live(), 0);
+    Ok(())
+}
+
 #[tokio::test(flavor = "current_thread")]
 #[ignore = "invoked by the parent test to contain native process aborts"]
 async fn chain_probe_child() -> Result<()> {
@@ -130,6 +209,8 @@ async fn chain_probe_child() -> Result<()> {
     let (mut runtime, _dir, _name) = test_runtime().await?;
     let actor = funded(&mut runtime).await?;
     let chain = publish_chain(&mut runtime, &actor, depth).await?;
+    let budget = Arc::new(InvocationBudget::default());
+    runtime.invocation_budget = Some(budget.clone());
     let entered = Arc::new(Notify::new());
     let release = Arc::new(Notify::new());
     let mut user = runtime.linkers.user.clone();
@@ -203,6 +284,7 @@ async fn chain_probe_child() -> Result<()> {
             timeout(Duration::from_secs(30), entered.notified()).await?;
             host_io_suspended = !task.is_finished();
             assert!(host_io_suspended);
+            assert_eq!(budget.live(), depth + 1);
             assert_eq!(tokio::spawn(async { 42 }).await?, 42);
             release.notify_one();
             true
@@ -211,6 +293,7 @@ async fn chain_probe_child() -> Result<()> {
         };
         let (returned, result) = timeout(Duration::from_secs(30), task).await??;
         runtime = returned;
+        assert_eq!(budget.live(), 0);
         let usage = runtime.finish_usage(previous)?;
         let savepoint_restored = runtime.storage.savepoint_stack.peek().await == saved;
         let value = if over_cap {

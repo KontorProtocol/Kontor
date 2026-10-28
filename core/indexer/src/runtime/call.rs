@@ -20,7 +20,9 @@ use crate::database::native_contracts::{TOKEN_CONTRACT_ID, is_native_contract_id
 use super::{
     ContractAddress, MAX_UNTRUSTED_GAS_LIMIT, Runtime,
     fuel::{Fuel, UsageKind, record_fuel},
-    invocation::{InvocationLimitReached, InvocationStore, MAX_LIVE_INVOCATIONS},
+    invocation::{
+        InvocationCapacityExhausted, InvocationLimitReached, InvocationStore, MAX_LIVE_INVOCATIONS,
+    },
     stack::CallFrame,
     wit::{CoreContext, FallContext, Holder, ProcContext, Signer, ViewContext},
 };
@@ -207,13 +209,17 @@ impl Runtime {
         fuel_limit: u64,
         nested: bool,
     ) -> Result<CallOutcome, ExecutionError> {
-        if self.invocation_depth >= MAX_LIVE_INVOCATIONS
-            || self
-                .invocation_budget
-                .as_ref()
-                .is_some_and(|budget| budget.live() >= MAX_LIVE_INVOCATIONS)
-        {
+        if self.invocation_depth >= MAX_LIVE_INVOCATIONS {
             return Ok(invocation_limit_outcome(fuel_limit));
+        }
+        if self
+            .invocation_budget
+            .as_ref()
+            .is_some_and(|budget| budget.live() >= MAX_LIVE_INVOCATIONS)
+        {
+            return Err(ExecutionError::NonDeterministic(
+                InvocationCapacityExhausted.into(),
+            ));
         }
         let mut store = match self.make_store(fuel_limit) {
             Ok(store) => store,

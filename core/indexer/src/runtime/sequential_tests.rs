@@ -12,7 +12,9 @@ use wasmtime::component::{Component, Val};
 use wasmtime::{Engine, Linker as WasmtimeLinker, Module, Store, Trap};
 
 use super::component_policy;
-use super::invocation::{InvocationBudget, InvocationLimitReached, MAX_LIVE_INVOCATIONS};
+use super::invocation::{
+    InvocationBudget, InvocationCapacityExhausted, InvocationLimitReached, MAX_LIVE_INVOCATIONS,
+};
 use super::lowering::Linker;
 use super::storage::ComponentDecodeError;
 use super::wit::Signer;
@@ -75,6 +77,73 @@ fn generated_startup_does_not_call_imported_host_function() -> Result<()> {
     let error = linker.instantiate(&mut store, &valid).unwrap_err();
     assert_eq!(error.downcast_ref::<Trap>(), Some(&Trap::OutOfFuel));
     assert_eq!(calls.load(Ordering::SeqCst), 0);
+    Ok(())
+}
+
+#[tokio::test]
+async fn host_importing_core_starts_are_rejected_before_side_effects() -> Result<()> {
+    let (mut runtime, _dir, _name) = test_runtime().await?;
+    let signer = Signer::Core(Box::new(Signer::Nobody));
+    for (index, name) in ["foreign-call", "storage-set"].into_iter().enumerate() {
+        let wat = format!(
+            r#"(module
+                (import "env" "{name}" (func $hook))
+                (func $start (call $hook))
+                (start $start))"#
+        );
+        let bytes = wat::parse_str(&wat)?;
+        let module = Module::new(&runtime.engine, &bytes)?;
+        let calls = Arc::new(AtomicUsize::new(0));
+        let observed = calls.clone();
+        let mut linker = WasmtimeLinker::new(&runtime.engine);
+        linker.func_wrap("env", name, move || {
+            observed.fetch_add(1, Ordering::SeqCst);
+        })?;
+        let mut store = Store::new(&runtime.engine, ());
+        store.set_fuel(1_000_000)?;
+        linker.instantiate(&mut store, &module)?;
+        assert_eq!(calls.swap(0, Ordering::SeqCst), 1);
+        assert!(component_policy::validate_no_starts(&bytes).is_err());
+
+        runtime
+            .set_context(
+                1,
+                Some(
+                    TransactionContext::builder()
+                        .tx_index(u32::try_from(index)?)
+                        .build(),
+                ),
+                None,
+                None,
+            )
+            .await;
+        let mut compressed = Vec::new();
+        CompressorReader::new(bytes.as_slice(), 4096, 5, 22).read_to_end(&mut compressed)?;
+        let error = runtime
+            .publish(
+                &signer,
+                runtime.core_payment(),
+                name,
+                &compressed,
+                &native_provenance()?,
+            )
+            .await
+            .unwrap_err();
+        assert!(matches!(error, ExecutionError::Deterministic(_)));
+        let message = format!("{error:#}");
+        assert!(
+            message.contains("start section") || message.contains("failed to resolve import"),
+            "{message}"
+        );
+        assert_eq!(calls.load(Ordering::SeqCst), 0);
+        let address = ContractAddress {
+            name: name.into(),
+            height: 1,
+            tx_index: u32::try_from(index)?,
+        };
+        assert!(runtime.storage.contract_id(&address).await?.is_none());
+        assert!(runtime.storage.savepoint_stack.is_empty().await);
+    }
     Ok(())
 }
 
@@ -287,6 +356,10 @@ async fn invocation_budget_counts_the_root_and_releases_each_store() -> Result<(
     assert_eq!(budget.live(), 1);
     assert_eq!(stores[0].data().invocation_depth, 1);
     while stores.len() < MAX_LIVE_INVOCATIONS as usize {
+        assert_eq!(
+            budget.live(),
+            stores.last().unwrap().data().invocation_depth
+        );
         let child = stores.last().unwrap().data().make_store(1_000_000)?;
         stores.push(child);
         assert_eq!(budget.live(), stores.len() as u32);
@@ -325,6 +398,50 @@ async fn invocation_budget_counts_the_root_and_releases_each_store() -> Result<(
     drop(runtime_clone);
     let root = runtime.make_store(1_000_000)?;
     assert_eq!(root.data().invocation_depth, 1);
+    let budget = root.data().invocation_budget.as_ref().unwrap();
+    for _ in 0..128 {
+        assert_eq!(budget.live(), root.data().invocation_depth);
+        let child = root.data().make_store(1_000_000)?;
+        assert_eq!(budget.live(), child.data().invocation_depth);
+        drop(child);
+        assert_eq!(budget.live(), root.data().invocation_depth);
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn physical_capacity_is_an_infrastructure_error_below_the_depth_limit() -> Result<()> {
+    let (mut runtime, _dir, _name) = test_runtime().await?;
+    let budget = Arc::new(InvocationBudget::default());
+    runtime.invocation_budget = Some(budget.clone());
+    let stores = (0..MAX_LIVE_INVOCATIONS)
+        .map(|_| runtime.make_store(1_000_000))
+        .collect::<Result<Vec<_>>>()?;
+    assert!(
+        stores
+            .iter()
+            .all(|store| store.data().invocation_depth == 1)
+    );
+    assert_eq!(budget.live(), MAX_LIVE_INVOCATIONS);
+
+    let fallback = runtime.make_store(1_000_000).err().unwrap();
+    assert!(fallback.is::<InvocationCapacityExhausted>());
+    let address = ContractAddress {
+        name: "missing-contract".into(),
+        height: 1,
+        tx_index: 0,
+    };
+    let error = runtime
+        .invoke_unsettled(&address, None, None, "(", 1_000_000, false)
+        .await
+        .err()
+        .unwrap();
+    assert!(
+        matches!(error, ExecutionError::NonDeterministic(ref cause) if cause.is::<InvocationCapacityExhausted>())
+    );
+    assert_eq!(budget.live(), MAX_LIVE_INVOCATIONS);
+    drop(stores);
+    assert_eq!(budget.live(), 0);
     Ok(())
 }
 

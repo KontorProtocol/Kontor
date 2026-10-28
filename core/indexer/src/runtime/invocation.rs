@@ -27,11 +27,13 @@ impl InvocationBudget {
         self.live.load(Ordering::SeqCst)
     }
 
-    pub(super) fn reserve(self: &Arc<Self>) -> Result<InvocationLease, InvocationLimitReached> {
+    pub(super) fn reserve(
+        self: &Arc<Self>,
+    ) -> Result<InvocationLease, InvocationCapacityExhausted> {
         let mut live = self.live();
         loop {
             if live >= MAX_LIVE_INVOCATIONS {
-                return Err(InvocationLimitReached);
+                return Err(InvocationCapacityExhausted);
             }
             match self.live.compare_exchange_weak(
                 live,
@@ -56,8 +58,12 @@ pub(super) struct InvocationLease {
 
 impl Drop for InvocationLease {
     fn drop(&mut self) {
-        let previous = self.budget.live.fetch_sub(1, Ordering::SeqCst);
-        debug_assert!(previous > 0);
+        self.budget
+            .live
+            .try_update(Ordering::SeqCst, Ordering::SeqCst, |live| {
+                live.checked_sub(1)
+            })
+            .expect("invocation lease count underflow");
     }
 }
 
@@ -71,6 +77,20 @@ impl Display for InvocationLimitReached {
 }
 
 impl std::error::Error for InvocationLimitReached {}
+
+#[derive(Debug)]
+pub(super) struct InvocationCapacityExhausted;
+
+impl Display for InvocationCapacityExhausted {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "physical invocation capacity of {MAX_LIVE_INVOCATIONS} exhausted"
+        )
+    }
+}
+
+impl std::error::Error for InvocationCapacityExhausted {}
 
 pub(crate) struct InvocationStore {
     store: Store<Runtime>,
@@ -149,12 +169,25 @@ impl AsContextMut for InvocationStore {
 
 #[cfg(test)]
 mod tests {
+    use std::panic::{AssertUnwindSafe, catch_unwind};
     use std::sync::Arc;
     use std::sync::atomic::{AtomicBool, Ordering};
 
     use anyhow::Result;
 
     use crate::test_utils::test_runtime;
+
+    use super::{InvocationBudget, InvocationLease};
+
+    #[test]
+    fn lease_underflow_panics_without_wrapping_the_count() {
+        let budget = Arc::new(InvocationBudget::default());
+        let lease = InvocationLease {
+            budget: budget.clone(),
+        };
+        assert!(catch_unwind(AssertUnwindSafe(|| drop(lease))).is_err());
+        assert_eq!(budget.live(), 0);
+    }
 
     #[tokio::test]
     async fn owner_keeps_the_lease_until_store_teardown_finishes() -> Result<()> {
