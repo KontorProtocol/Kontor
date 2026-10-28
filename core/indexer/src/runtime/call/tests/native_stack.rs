@@ -11,6 +11,7 @@ use wasmtime::Trap;
 
 use super::super::SYSTEM_FUEL_CEILING;
 use super::funded;
+use crate::runtime::invocation::InvocationLimitReached;
 use crate::runtime::wit::Signer;
 use crate::runtime::{
     ContractAddress, ExecutionError, MAX_UNTRUSTED_GAS_LIMIT, TransactionContext, native_provenance,
@@ -159,11 +160,11 @@ async fn qualification_probe() -> Result<()> {
         Ok(value) => ("ok", None, Some(value)),
         Err(ExecutionError::Deterministic(error)) => {
             let trap = error.chain().find_map(|cause| cause.downcast_ref::<Trap>());
-            let outcome = if error.to_string().contains("live invocation limit")
-                || error
-                    .chain()
-                    .any(|cause| cause.to_string().contains("live invocation limit"))
+            let outcome = if error
+                .chain()
+                .any(|cause| cause.downcast_ref::<InvocationLimitReached>().is_some())
             {
+                assert!(trap.is_none());
                 "invocation_limit"
             } else {
                 match trap {

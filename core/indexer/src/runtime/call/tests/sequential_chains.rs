@@ -203,6 +203,14 @@ async fn nested_depth_rejection_preserves_the_typed_limit_marker() -> Result<()>
     let (mut runtime, _dir, _name) = test_runtime().await?;
     let actor = funded(&mut runtime).await?;
     let chain = publish_chain(&mut runtime, &actor, 1).await?;
+    let root_id = runtime
+        .storage
+        .contract_id(chain.last().unwrap())
+        .await?
+        .unwrap();
+    let conn = runtime.get_storage_conn();
+    conn.execute("DELETE FROM contract_results", ()).await?;
+    let floor_before = token::floor(&mut runtime, HolderRef::from(&actor)).await?;
     runtime.invocation_depth = MAX_LIVE_INVOCATIONS - 1;
     let result = runtime
         .execute(
@@ -217,7 +225,29 @@ async fn nested_depth_rejection_preserves_the_typed_limit_marker() -> Result<()>
         .await;
     assert!(
         matches!(result, Err(ExecutionError::Deterministic(ref error))
-        if error.chain().any(|cause| cause.downcast_ref::<InvocationLimitReached>().is_some()))
+        if error.chain().any(|cause| cause.downcast_ref::<InvocationLimitReached>().is_some())
+            && error.chain().all(|cause| cause.downcast_ref::<Trap>().is_none()))
+    );
+    runtime.invocation_depth = 0;
+    let mut rows = conn
+        .query(
+            "SELECT contract_id, status FROM contract_results ORDER BY id",
+            (),
+        )
+        .await?;
+    let receipt = rows.next().await?.expect("one root receipt");
+    assert_eq!(receipt.get::<u64>(0)?, root_id);
+    assert_eq!(receipt.get::<String>(1)?, "Other");
+    assert!(rows.next().await?.is_none());
+    assert_eq!(
+        runtime
+            .execute(None, None, &chain[0], "storage-state()")
+            .await?,
+        "[0, 0, 0, 0]"
+    );
+    assert_eq!(
+        token::floor(&mut runtime, HolderRef::from(&actor)).await?,
+        floor_before
     );
     Ok(())
 }
@@ -324,10 +354,11 @@ async fn chain_probe_child() -> Result<()> {
         let savepoint_restored = runtime.storage.savepoint_stack.peek().await == saved;
         let value = if over_cap {
             assert!(
-                matches!(result, Err(ExecutionError::Deterministic(_))),
+                matches!(result, Err(ExecutionError::Deterministic(ref error))
+                    if error.chain().any(|cause| cause.downcast_ref::<InvocationLimitReached>().is_some())
+                        && error.chain().all(|cause| cause.downcast_ref::<Trap>().is_none())),
                 "{result:?}"
             );
-            assert!(format!("{result:?}").contains("live invocation limit"));
             assert!(
                 timeout(Duration::from_millis(25), entered.notified())
                     .await

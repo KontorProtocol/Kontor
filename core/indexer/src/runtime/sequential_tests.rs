@@ -21,6 +21,7 @@ use super::invocation::{
     InvocationBudget, InvocationCapacityExhausted, InvocationLimitReached, MAX_LIVE_INVOCATIONS,
 };
 use super::lowering::Linker;
+use super::stack::CallFrame;
 use super::storage::ComponentDecodeError;
 use super::wit::Signer;
 use super::{
@@ -636,7 +637,28 @@ async fn physical_capacity_is_an_infrastructure_error_below_the_depth_limit() ->
 
 #[tokio::test]
 async fn capacity_error_precedes_target_parse_and_fuel_failures() -> Result<()> {
-    let (runtime, _dir, _name) = test_runtime().await?;
+    let (mut runtime, _dir, _name) = test_runtime().await?;
+    runtime
+        .set_context(1, Some(TransactionContext::builder().build()), None, None)
+        .await;
+    let signer = Signer::Core(Box::new(Signer::Nobody));
+    runtime
+        .publish(
+            &signer,
+            runtime.core_payment(),
+            "capacity-cycle",
+            include_bytes!("../../../../test-contracts/binaries/error_test.wasm.br"),
+            &native_provenance()?,
+        )
+        .await?;
+    runtime.set_context(1, None, None, None).await;
+    let core_payment = runtime.core_payment();
+    let cycle_address = ContractAddress {
+        name: "capacity-cycle".into(),
+        height: 1,
+        tx_index: 0,
+    };
+    let cycle_id = runtime.storage.contract_id(&cycle_address).await?.unwrap();
     let mut stores = vec![runtime.make_store(1_000_000)?];
     while stores.len() < MAX_LIVE_INVOCATIONS as usize {
         let child = stores.last().unwrap().data().make_store(1_000_000)?;
@@ -662,8 +684,46 @@ async fn capacity_error_precedes_target_parse_and_fuel_failures() -> Result<()> 
             matches!(outcome.result, Err(ExecutionError::Deterministic(ref error)) if error.is::<InvocationLimitReached>())
         );
     }
+    at_capacity
+        .stack
+        .push(CallFrame {
+            contract_id: cycle_id,
+            is_proc: true,
+            depositor: None,
+        })
+        .await?;
+    let cycle_at_capacity = at_capacity
+        .invoke_unsettled(
+            &cycle_address,
+            Some(&signer),
+            Some(&core_payment),
+            "chain-probe(false)",
+            1_000_000,
+            true,
+        )
+        .await?;
+    assert!(
+        matches!(cycle_at_capacity.result, Err(ExecutionError::Deterministic(ref error)) if error.is::<InvocationLimitReached>())
+    );
     stores.pop();
     let below_capacity = stores.last().unwrap().data().clone();
+    let cycle_below_capacity = below_capacity
+        .invoke_unsettled(
+            &cycle_address,
+            Some(&signer),
+            Some(&core_payment),
+            "chain-probe(false)",
+            1_000_000,
+            true,
+        )
+        .await?;
+    assert!(
+        matches!(cycle_below_capacity.result, Err(ExecutionError::Deterministic(ref error)) if error.to_string().contains("reentrancy prevented"))
+    );
+    assert_eq!(
+        below_capacity.stack.pop().await.unwrap().contract_id,
+        cycle_id
+    );
     let invalid = below_capacity
         .invoke_unsettled(&address, None, None, "missing()", 1_000_000, true)
         .await?;
