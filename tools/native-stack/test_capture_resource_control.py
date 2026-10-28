@@ -1,6 +1,8 @@
 """Failure controls for native stack source and guard capture."""
 
 import json
+import os
+import signal
 import sys
 import tempfile
 import time
@@ -42,16 +44,41 @@ class ResourceControlCaptureTests(unittest.TestCase):
     @unittest.skipUnless(sys.platform == "linux", "Linux process groups are required")
     def test_timeout_kills_descendant_that_retains_stdout(self):
         script = (
-            "import subprocess,sys; "
+            "import pathlib,subprocess,sys; "
             "child=subprocess.Popen([sys.executable,'-c','import time; time.sleep(30)']); "
+            "pathlib.Path(sys.argv[1]).write_text(str(child.pid)); "
             "print(child.pid,flush=True)"
         )
-        start = time.monotonic()
-        parent, _, _, output, timed_out = run_guard_control([sys.executable, "-c", script], 0.3)
-        self.assertTrue(timed_out)
-        self.assertEqual(parent.returncode, 0)
-        self.assertTrue(output.strip().isdigit())
-        self.assertLess(time.monotonic() - start, 6)
+        with tempfile.TemporaryDirectory() as directory:
+            pid_path = Path(directory) / "descendant-pid"
+            start = time.monotonic()
+            parent, _, _, output, timed_out = run_guard_control(
+                [sys.executable, "-c", script, str(pid_path)], 0.3,
+            )
+            descendant_pid = int(pid_path.read_text())
+
+            def state():
+                try:
+                    status = Path(f"/proc/{descendant_pid}/stat").read_text()
+                except FileNotFoundError:
+                    return None
+                return status[status.rfind(")") + 2:].split()[0]
+
+            try:
+                self.assertTrue(timed_out)
+                self.assertEqual(parent.returncode, 0)
+                self.assertEqual(output.strip(), str(descendant_pid).encode())
+                self.assertLess(time.monotonic() - start, 6)
+                deadline = time.monotonic() + 1
+                while state() not in (None, "Z", "X", "x") and time.monotonic() < deadline:
+                    time.sleep(0.01)
+                self.assertIn(state(), (None, "Z", "X", "x"))
+            finally:
+                if state() not in (None, "Z", "X", "x"):
+                    try:
+                        os.kill(descendant_pid, signal.SIGKILL)
+                    except ProcessLookupError:
+                        pass
 
 
 if __name__ == "__main__":
