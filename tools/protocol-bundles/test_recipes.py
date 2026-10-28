@@ -2,6 +2,8 @@ import copy
 from dataclasses import replace
 import json
 from pathlib import Path
+import shutil
+import tempfile
 import unittest
 
 from capabilities import DISABLED, settings, verify
@@ -12,6 +14,35 @@ ROOT = Path(__file__).resolve().parents[2]
 
 
 class Recipes(unittest.TestCase):
+    def copy_manifests(self, root):
+        for directory in ("first", "second", "pulley-first", "pulley-second"):
+            target = root / "protocol-bundles" / directory
+            target.mkdir(parents=True)
+            for name in ("Cargo.toml", "Cargo.lock"):
+                shutil.copyfile(ROOT / "protocol-bundles" / directory / name, target / name)
+
+    def test_active_manifest_identity_is_checked(self):
+        for label, graph in GRAPHS.items():
+            for old, new in ((graph.revision, "0" * 40), (graph.version, "51.0.0-kontor.99")):
+                with self.subTest(graph=label, field=old), tempfile.TemporaryDirectory() as directory:
+                    root = Path(directory)
+                    self.copy_manifests(root)
+                    manifest = root / "protocol-bundles" / graph.directory / "Cargo.toml"
+                    manifest.write_text(manifest.read_text().replace(old, new))
+                    with self.assertRaisesRegex(RuntimeError, "wrong immutable identity"):
+                        verify_reservations(root)
+
+    def test_modified_historical_inputs_are_rejected(self):
+        for label in ("first", "second"):
+            for name in ("Cargo.toml", "Cargo.lock"):
+                with self.subTest(graph=label, file=name), tempfile.TemporaryDirectory() as directory:
+                    root = Path(directory)
+                    self.copy_manifests(root)
+                    path = root / "protocol-bundles" / label / name
+                    path.write_text(path.read_text() + "\n# changed historical input\n")
+                    with self.assertRaisesRegex(RuntimeError, "historical proof inputs changed"):
+                        verify_reservations(root)
+
     def test_current_inputs_and_capability_parity(self):
         verify_reservations(ROOT)
         verify(ROOT)
