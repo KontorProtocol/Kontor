@@ -1,10 +1,11 @@
 use std::io::Read;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::time::Duration;
 
 use anyhow::{Error, Result, anyhow, bail, ensure};
 use brotli::CompressorReader;
+use indexer_types::Payment;
 use libsql::params;
 use serde_json::to_string;
 use tokio::sync::Notify;
@@ -22,13 +23,17 @@ use super::invocation::{
     InvocationBudget, InvocationCapacityExhausted, InvocationLimitReached, MAX_LIVE_INVOCATIONS,
 };
 use super::lowering::Linker;
+use super::numerics::sub_decimal;
 use super::stack::CallFrame;
 use super::storage::ComponentDecodeError;
+use super::token::api as token;
 use super::wit::Signer;
+use super::wit::kontor::built_in::context::HolderRef;
 use super::{
-    ComponentCache, ContractAddress, ExecutionError, Linkers, Runtime, TransactionContext,
-    native_provenance,
+    ComponentCache, ContractAddress, Decimal, ExecutionError, Linkers, MAX_UNTRUSTED_GAS_LIMIT,
+    Runtime, TransactionContext, native_provenance,
 };
+use crate::reg_tester::random_x_only_pubkey;
 use crate::test_utils::{test_genesis, test_runtime};
 
 const ASYNC_COMPONENTS: &[&str] = &[
@@ -220,11 +225,41 @@ fn generated_startup_does_not_call_imported_host_function() -> Result<()> {
 async fn hostile_canonical_callbacks_are_framed_and_clean_up() -> Result<()> {
     let (mut runtime, _dir, _name) = test_runtime().await?;
     let callback_calls = Arc::new(AtomicUsize::new(0));
+    let marker_calls = Arc::new(AtomicUsize::new(0));
+    let expected_contract_id = Arc::new(AtomicU64::new(0));
     let mut user = runtime.linkers.user.clone();
     let observed = callback_calls.clone();
     user.root().func_wrap("sentinel", move |_, (): ()| {
         observed.fetch_add(1, Ordering::SeqCst);
         Ok(())
+    })?;
+    let observed_markers = marker_calls.clone();
+    let expected_id = expected_contract_id.clone();
+    user.root().func_wrap_async("mark", move |store, (): ()| {
+        let observed_markers = observed_markers.clone();
+        let expected_id = expected_id.clone();
+        Box::new(async move {
+            let frame = store.data().stack.peek().await.expect("active child frame");
+            assert_eq!(frame.contract_id, expected_id.load(Ordering::SeqCst));
+            assert_eq!(store.data().invocation_depth, 1);
+            assert_eq!(store.data().invocation_budget.as_ref().unwrap().live(), 1);
+            assert!(store.data().table.lock().await.iter_mut().count() > 0);
+            // This call-owned write must be undone when post-return traps.
+            let storage = store.data().storage.clone();
+            storage
+                .set(frame.contract_id, b"callback-marker", b"set", None, None)
+                .await
+                .expect("marker write");
+            assert_eq!(
+                storage
+                    .get(16, frame.contract_id, b"callback-marker")
+                    .await
+                    .expect("marker read"),
+                Some(b"set".to_vec())
+            );
+            observed_markers.fetch_add(1, Ordering::SeqCst);
+            Ok(())
+        })
     })?;
     runtime.linkers = Arc::new(Linkers {
         user,
@@ -235,17 +270,22 @@ async fn hostile_canonical_callbacks_are_framed_and_clean_up() -> Result<()> {
             (export "view-context" (type (sub resource)))))
         (alias export $context "view-context" (type $view-context))
         (import "sentinel" (func $sentinel))
+        (import "mark" (func $mark))
         (core func $lower (canon lower (func $sentinel)))
+        (core func $mark (canon lower (func $mark)))
         (core func $drop (canon resource.drop $view-context))
         (core module $code
             (import "" "" (func $host))
+            (import "" "mark" (func $mark))
             (import "" "drop" (func $drop (param i32)))
             (func (export "run") (param i32)
+                (call $mark)
                 (call $drop (local.get 0)))
             (func (export "post-return") (call $host)))
         (core instance $code (instantiate $code
             (with "" (instance
                 (export "" (func $lower))
+                (export "mark" (func $mark))
                 (export "drop" (func $drop))))))
         (func (export "run") (param "ctx" (borrow $view-context))
             (canon lift (core func $code "run")
@@ -268,7 +308,40 @@ async fn hostile_canonical_callbacks_are_framed_and_clean_up() -> Result<()> {
             (canon lift (core func $code "run")
                 (memory (core memory $code "memory"))
                 (realloc (core func $code "realloc")))))"#;
+    let realloc_import = r#"(component
+        (import "kontor:built-in/context" (instance $context
+            (export "view-context" (type (sub resource)))))
+        (alias export $context "view-context" (type $view-context))
+        (import "sentinel" (func $sentinel))
+        (core func $lower (canon lower (func $sentinel)))
+        (core func $drop (canon resource.drop $view-context))
+        (core module $code
+            (import "" "" (func $host))
+            (import "" "drop" (func $drop (param i32)))
+            (memory (export "memory") 1)
+            (global $entered (mut i32) (i32.const 0))
+            (func (export "realloc") (param i32 i32 i32 i32) (result i32)
+                (call $host)
+                (i32.const 64))
+            (func (export "run") (param i32 i32 i32)
+                (global.set $entered (i32.const 1))
+                (call $drop (local.get 0)))
+            (func (export "entered") (param i32) (result i32)
+                (call $drop (local.get 0))
+                (global.get $entered)))
+        (core instance $code (instantiate $code
+            (with "" (instance
+                (export "" (func $lower))
+                (export "drop" (func $drop))))))
+        (func (export "run") (param "ctx" (borrow $view-context)) (param "text" string)
+            (canon lift (core func $code "run")
+                (memory (core memory $code "memory"))
+                (realloc (core func $code "realloc"))))
+        (func (export "entered") (param "ctx" (borrow $view-context)) (result u32)
+            (canon lift (core func $code "entered"))))"#;
     let large_input = format!("run({})", to_string(&"x".repeat(16 * 1024))?);
+    let budget = Arc::new(InvocationBudget::default());
+    runtime.invocation_budget = Some(budget.clone());
     for (index, name, wat, expression, trap) in [
         (
             0,
@@ -284,15 +357,29 @@ async fn hostile_canonical_callbacks_are_framed_and_clean_up() -> Result<()> {
             large_input.as_str(),
             Trap::UnreachableCodeReached,
         ),
+        (
+            2,
+            "realloc-import",
+            realloc_import,
+            large_input.as_str(),
+            Trap::CannotLeaveComponent,
+        ),
     ] {
         let address = install_admitted_component_fixture(&mut runtime, name, wat, index).await?;
+        if name == "post-return" {
+            expected_contract_id.store(
+                runtime.storage.contract_id(&address).await?.unwrap(),
+                Ordering::SeqCst,
+            );
+        }
         let resources_before = runtime.table.lock().await.iter_mut().count();
         let conn = runtime.get_storage_conn();
         let mut rows = conn
             .query("SELECT COUNT(*) FROM contract_results", ())
             .await?;
         let receipts_before: u64 = rows.next().await?.unwrap().get(0)?;
-        for _ in 0..2 {
+        let mut expected_fuel = None;
+        for trial in 0..2 {
             let previous = runtime.start_usage();
             let error = runtime
                 .execute(None, None, &address, expression)
@@ -305,13 +392,40 @@ async fn hostile_canonical_callbacks_are_framed_and_clean_up() -> Result<()> {
             );
             let usage = runtime.finish_usage(previous)?;
             assert!(usage.system_fuel > 0, "{name}");
+            if let Some(fuel) = expected_fuel {
+                assert_eq!(usage.system_fuel, fuel, "{name}");
+            } else {
+                expected_fuel = Some(usage.system_fuel);
+            }
             assert!(runtime.stack.is_empty().await, "{name}");
             assert!(runtime.storage.savepoint_stack.is_empty().await, "{name}");
+            assert_eq!(budget.live(), 0, "{name}");
             assert_eq!(
                 runtime.table.lock().await.iter_mut().count(),
                 resources_before
             );
             assert_eq!(callback_calls.load(Ordering::SeqCst), 0);
+            if name == "post-return" {
+                assert_eq!(marker_calls.load(Ordering::SeqCst), trial + 1);
+                assert!(
+                    runtime
+                        .storage
+                        .get(
+                            16,
+                            expected_contract_id.load(Ordering::SeqCst),
+                            b"callback-marker",
+                        )
+                        .await?
+                        .is_none(),
+                    "post-return trap must roll back the child marker"
+                );
+            }
+            if name == "realloc-import" {
+                assert_eq!(
+                    runtime.execute(None, None, &address, "entered()").await?,
+                    "0"
+                );
+            }
             let mut rows = conn
                 .query("SELECT COUNT(*) FROM contract_results", ())
                 .await?;
@@ -348,6 +462,9 @@ async fn partial_instantiation_does_not_invoke_registered_destructors() -> Resul
         native: runtime.linkers.native.clone(),
     });
     let component = r#"(component
+        (import "kontor:built-in/context" (instance $context
+            (export "view-context" (type (sub resource)))))
+        (alias export $context "view-context" (type $view-context))
         (import "guest-dtor-sentinel" (func $sentinel))
         (import "host-resource" (type $host-resource (sub resource)))
         (core func $lower (canon lower (func $sentinel)))
@@ -359,14 +476,56 @@ async fn partial_instantiation_does_not_invoke_registered_destructors() -> Resul
         (type $guest-resource
             (resource (rep i32) (dtor (core func $dtor-code "dtor"))))
         (export "guest-resource" (type $guest-resource))
+        (core func $new (canon resource.new $guest-resource))
+        (core func $drop-resource (canon resource.drop $guest-resource))
+        (core func $drop-context (canon resource.drop $view-context))
         (core module $fail
+            (import "" "new" (func $new (param i32) (result i32)))
+            (import "" "drop-resource" (func $drop-resource (param i32)))
+            (import "" "drop-context" (func $drop-context (param i32)))
             (memory 1)
-            (data (i32.const 65536) "x"))
-        (core instance $fail (instantiate $fail)))"#;
+            (data (i32.const 65536) "x")
+            (func (export "run") (param i32)
+                (call $drop-resource (call $new (i32.const 1)))
+                (call $drop-context (local.get 0))))
+        (core instance $fail (instantiate $fail
+            (with "" (instance
+                (export "new" (func $new))
+                (export "drop-resource" (func $drop-resource))
+                (export "drop-context" (func $drop-context))))))
+        (func (export "run") (param "ctx" (borrow $view-context))
+            (canon lift (core func $fail "run"))))"#;
     let address =
         install_admitted_component_fixture(&mut runtime, "failed-init", component, 0).await?;
+    let working_component = component.replace("(i32.const 65536)", "(i32.const 0)");
+    let working =
+        install_admitted_component_fixture(&mut runtime, "valid-init", &working_component, 1)
+            .await?;
     let budget = Arc::new(InvocationBudget::default());
     runtime.invocation_budget = Some(budget.clone());
+    let failed_id = runtime.storage.contract_id(&address).await?.unwrap();
+    let failed_component = runtime
+        .component_cache
+        .get_admitted(&failed_id)
+        .await
+        .unwrap();
+    let mut store = runtime.make_store(1_000_000)?;
+    let call_table = Arc::downgrade(&store.data().table);
+    let direct_error = runtime
+        .linkers
+        .user
+        .instantiate_async(&mut store, &failed_component)
+        .await
+        .unwrap_err();
+    assert!(
+        direct_error
+            .chain()
+            .any(|cause| cause.downcast_ref::<Trap>() == Some(&Trap::MemoryOutOfBounds))
+    );
+    assert_eq!(budget.live(), 1);
+    drop(store);
+    assert!(call_table.upgrade().is_none());
+    assert_eq!(budget.live(), 0);
     let resources_before = runtime.table.lock().await.iter_mut().count();
     let conn = runtime.get_storage_conn();
     let mut rows = conn
@@ -376,7 +535,8 @@ async fn partial_instantiation_does_not_invoke_registered_destructors() -> Resul
     for _ in 0..2 {
         let result = runtime.execute(None, None, &address, "run()").await;
         assert!(
-            matches!(result, Err(ExecutionError::Deterministic(_))),
+            matches!(result, Err(ExecutionError::Deterministic(ref error))
+                if error.chain().any(|cause| cause.downcast_ref::<Trap>() == Some(&Trap::MemoryOutOfBounds))),
             "{result:?}"
         );
         assert_eq!(budget.live(), 0);
@@ -394,6 +554,10 @@ async fn partial_instantiation_does_not_invoke_registered_destructors() -> Resul
         let receipts_after: u64 = rows.next().await?.unwrap().get(0)?;
         assert_eq!(receipts_after, receipts_before);
     }
+    assert!(runtime.execute(None, None, &working, "run()").await.is_ok());
+    assert_eq!(guest_calls.load(Ordering::SeqCst), 1);
+    assert_eq!(host_drops.load(Ordering::SeqCst), 0);
+    assert_eq!(budget.live(), 0);
     Ok(())
 }
 
@@ -485,6 +649,134 @@ async fn explicit_guest_resource_drop_invokes_host_callback_and_cleans_up() -> R
             .await?;
         let receipts_after: u64 = rows.next().await?.unwrap().get(0)?;
         assert_eq!(receipts_after, receipts_before);
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn paid_hostile_realloc_charges_one_root_receipt_and_preserves_state() -> Result<()> {
+    let (mut runtime, _dir, _name) = test_runtime().await?;
+    let component = r#"(component
+        (import "kontor:built-in/context" (instance $context
+            (export "proc-context" (type (sub resource)))))
+        (alias export $context "proc-context" (type $proc-context))
+        (core func $drop (canon resource.drop $proc-context))
+        (core module $code
+            (import "" "drop" (func $drop (param i32)))
+            (memory (export "memory") 1)
+            (func (export "realloc") (param i32 i32 i32 i32) (result i32)
+                unreachable)
+            (func (export "run") (param i32 i32 i32)
+                (call $drop (local.get 0))))
+        (core instance $code (instantiate $code
+            (with "" (instance (export "drop" (func $drop))))))
+        (func (export "run") (param "ctx" (borrow $proc-context)) (param "text" string)
+            (canon lift (core func $code "run")
+                (memory (core memory $code "memory"))
+                (realloc (core func $code "realloc")))))"#;
+    let address =
+        install_admitted_component_fixture(&mut runtime, "paid-realloc", component, 0).await?;
+    let contract_id = runtime.storage.contract_id(&address).await?.unwrap();
+    let actor = Signer::Id(
+        runtime
+            .get_or_create_identity(&random_x_only_pubkey())
+            .await?,
+    );
+    token::issue_to(
+        &mut runtime,
+        &Signer::Core(Box::new(Signer::Nobody)),
+        HolderRef::from(&actor),
+        Decimal::from("100"),
+    )
+    .await??;
+    let payment = Payment {
+        signer_id: actor.signer_id().unwrap(),
+        gas_limit: MAX_UNTRUSTED_GAS_LIMIT,
+    };
+    let expression = format!("run({})", to_string(&"x".repeat(16 * 1024))?);
+    let budget = Arc::new(InvocationBudget::default());
+    runtime.invocation_budget = Some(budget.clone());
+    let resources_before = runtime.table.lock().await.iter_mut().count();
+    let floor_before = token::floor(&mut runtime, HolderRef::from(&actor)).await?;
+    let conn = runtime.get_storage_conn();
+    let mut rows = conn
+        .query(
+            "SELECT COUNT(*) FROM contract_results WHERE contract_id = ?",
+            params![contract_id],
+        )
+        .await?;
+    let receipts_before: u64 = rows.next().await?.unwrap().get(0)?;
+    let mut repeated = None;
+    for trial in 0..2 {
+        let actor_before = token::balance(&mut runtime, HolderRef::from(&actor))
+            .await?
+            .unwrap_or_default();
+        let burner_before = token::balance(&mut runtime, HolderRef::Burner)
+            .await?
+            .unwrap_or_default();
+        let previous = runtime.start_usage();
+        let result = runtime
+            .execute(Some(&actor), Some(payment.clone()), &address, &expression)
+            .await;
+        assert!(
+            matches!(result, Err(ExecutionError::Deterministic(ref error))
+                if error.chain().any(|cause| cause.downcast_ref::<Trap>() == Some(&Trap::UnreachableCodeReached))),
+            "{result:?}"
+        );
+        let usage = runtime.finish_usage(previous)?;
+        assert!(usage.user_fuel > 0);
+        assert_eq!(budget.live(), 0);
+        assert!(runtime.stack.is_empty().await);
+        assert!(runtime.storage.savepoint_stack.is_empty().await);
+        assert_eq!(
+            runtime.table.lock().await.iter_mut().count(),
+            resources_before
+        );
+        assert!(
+            runtime
+                .storage
+                .get(16, contract_id, b"callback-marker")
+                .await?
+                .is_none()
+        );
+        let mut rows = conn
+            .query(
+                "SELECT status, gas FROM contract_results WHERE contract_id = ? ORDER BY id DESC LIMIT 1",
+                params![contract_id],
+            )
+            .await?;
+        let receipt = rows.next().await?.expect("one root result");
+        assert_eq!(receipt.get::<String>(0)?, "Trap");
+        let gas: u64 = receipt.get(1)?;
+        assert!(gas > 0);
+        let mut rows = conn
+            .query(
+                "SELECT COUNT(*) FROM contract_results WHERE contract_id = ?",
+                params![contract_id],
+            )
+            .await?;
+        let receipts_after: u64 = rows.next().await?.unwrap().get(0)?;
+        assert_eq!(receipts_after, receipts_before + trial + 1);
+        let actor_after = token::balance(&mut runtime, HolderRef::from(&actor))
+            .await?
+            .unwrap_or_default();
+        let burner_after = token::balance(&mut runtime, HolderRef::Burner)
+            .await?
+            .unwrap_or_default();
+        let paid = sub_decimal(actor_before, actor_after)?;
+        let burned = sub_decimal(burner_after, burner_before)?;
+        assert_eq!(paid, burned);
+        assert!(paid > Decimal::default());
+        assert_eq!(
+            token::floor(&mut runtime, HolderRef::from(&actor)).await?,
+            floor_before
+        );
+        let observation = (usage.user_fuel, gas, paid.to_string());
+        if let Some(expected) = &repeated {
+            assert_eq!(&observation, expected);
+        } else {
+            repeated = Some(observation);
+        }
     }
     Ok(())
 }
