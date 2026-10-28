@@ -6,13 +6,13 @@ import hashlib
 import json
 import os
 import platform
-import signal
 import shutil
 import subprocess
 import sys
 import tomllib
-from collections import Counter
 from pathlib import Path
+
+from sweep import REPORT_PREFIX, parse_transcript, validate_pair
 
 
 TEST_NAME = "runtime::call::tests::native_stack::qualification_probe"
@@ -28,6 +28,11 @@ DEFAULT_CASES = (
     "paid_reenter",
     "paid_huge",
 )
+TARGETS = {
+    "Linux-X64": "x86_64-unknown-linux-gnu",
+    "Linux-ARM64": "aarch64-unknown-linux-gnu",
+    "macOS-ARM64": "aarch64-apple-darwin",
+}
 
 
 def sha256_file(path):
@@ -38,127 +43,75 @@ def sha256_file(path):
     return digest.hexdigest()
 
 
-def run_probe(binary, kind, depth, output, timeout, sample=0):
-    environment = os.environ.copy()
-    environment["KONTOR_STACK_KIND"] = kind
-    environment["KONTOR_STACK_DEPTH"] = str(depth)
+def resolved_features(target, edges, output):
+    command = [
+        "cargo", "tree", "--locked", "--offline", "--manifest-path", "core/Cargo.toml",
+        "-p", "indexer", "-e", edges, "-i", "wasmtime", "-f", "{f}",
+        "--depth", "0", "--target", target,
+    ]
+    raw = subprocess.check_output(command, text=True)
+    output.write_text(raw)
+    lines = raw.splitlines()
+    if len(lines) != 1 or not lines[0]:
+        raise ValueError(f"unexpected Wasmtime feature resolution for {edges}")
+    features = lines[0].split(",")
+    if len(features) != len(set(features)) or any(not feature for feature in features):
+        raise ValueError(f"invalid Wasmtime feature resolution for {edges}")
+    return sorted(features)
+
+
+def run_sweep(binary, kind, role, output, timeout, max_depth, initial_depth, depths=None):
+    environment = {key: value for key, value in os.environ.items() if not key.startswith("KONTOR_STACK_")}
+    environment.update({
+        "KONTOR_STACK_MODE": role,
+        "KONTOR_STACK_KIND": kind,
+        "KONTOR_STACK_MAX_DEPTH": str(max_depth),
+        "KONTOR_STACK_INITIAL_DEPTH": str(initial_depth),
+    })
+    if depths is not None:
+        environment["KONTOR_STACK_CONTROL_DEPTHS"] = ",".join(map(str, depths))
     command = [str(binary), "--ignored", "--exact", TEST_NAME, "--nocapture"]
-    log = output / f"{kind}-{depth}-{sample}.log"
+    log = output / f"{kind}-{role}.log"
     try:
         completed = subprocess.run(
-            command,
-            env=environment,
-            text=True,
-            capture_output=True,
-            timeout=timeout,
-            check=False,
+            command, env=environment, text=True, capture_output=True,
+            timeout=timeout, check=False,
         )
     except subprocess.TimeoutExpired as error:
-        stdout = error.stdout or b""
-        stderr = error.stderr or b""
-        if isinstance(stdout, str):
-            stdout = stdout.encode()
-        if isinstance(stderr, str):
-            stderr = stderr.encode()
-        log.write_bytes(stdout + stderr)
-        return {"kind": kind, "depth": depth, "outcome": "timeout", "log": log.name}
-    log.write_text(completed.stdout + completed.stderr)
-    reports = [
-        line.split("KONTOR_STACK_REPORT:", 1)[1]
-        for line in completed.stdout.splitlines()
-        if "KONTOR_STACK_REPORT:" in line
-    ]
-    if completed.returncode == 0 and len(reports) == 1:
-        result = json.loads(reports[0])
-        result["log"] = log.name
-        return result
-    if completed.returncode < 0:
-        try:
-            name = signal.Signals(-completed.returncode).name
-        except ValueError:
-            name = f"SIG{-completed.returncode}"
-        outcome = "process_signal"
-    else:
-        name = None
-        outcome = "test_failure"
+        stdout, stderr = error.stdout or b"", error.stderr or b""
+        log.write_bytes(
+            (stdout.encode() if isinstance(stdout, str) else stdout)
+            + (stderr.encode() if isinstance(stderr, str) else stderr)
+        )
+        raise ValueError(f"{kind} {role}: process timed out; see {log}") from error
+    raw = completed.stdout + completed.stderr
+    log.write_text(raw)
+    if completed.returncode != 0:
+        raise ValueError(f"{kind} {role}: process exited {completed.returncode}; see {log}")
+    observations, summary = parse_transcript(raw, kind, role)
+    for sample in observations:
+        sample_log = output / f"{kind}-{role}-{sample['sample_index']:04}.log"
+        sample_log.write_text(REPORT_PREFIX + json.dumps(sample) + "\n")
+        sample["log"] = sample_log.name
+    print(f"{kind} {role}: {len(observations)} samples, {summary['boundaries']}", flush=True)
+    return observations, summary, log.name
+
+
+def qualify_case(binary, kind, output, timeout, max_depth, initial_depth):
+    observations, summary, worker_log = run_sweep(
+        binary, kind, "worker", output, timeout, max_depth, initial_depth,
+    )
+    boundaries = summary["boundaries"]
+    depths = [0] if kind == "paid_huge" else [boundaries["last_success"], boundaries["first_failure"]]
+    control, control_summary, control_log = run_sweep(
+        binary, kind, "control", output, timeout, max_depth, initial_depth, depths,
+    )
+    validate_pair(observations, summary, control, control_summary)
     return {
-        "kind": kind,
-        "depth": depth,
-        "outcome": outcome,
-        "returncode": completed.returncode,
-        "signal": name,
-        "log": log.name,
-    }
-
-
-def find_boundary(binary, kind, output, max_depth, initial_depth, timeout):
-    observations = []
-    counts = Counter()
-
-    def observe(depth):
-        result = run_probe(binary, kind, depth, output, timeout, counts[depth])
-        counts[depth] += 1
-        observations.append(result)
-        print(f"{kind} depth={depth} outcome={result['outcome']}", flush=True)
-        return result
-
-    initial = observe(0)
-    if initial["outcome"] != "ok":
-        return {"kind": kind, "boundary": "failed_at_zero", "observations": observations}
-    if max_depth == 0:
-        return {
-            "kind": kind,
-            "boundary": "no_failure_up_to_limit",
-            "last_success": 0,
-            "observations": observations,
-        }
-    last_success = 0
-    depth = min(initial_depth, max_depth)
-    while depth <= max_depth:
-        result = observe(depth)
-        if result["outcome"] != "ok":
-            first_failure = depth
-            break
-        last_success = depth
-        depth *= 2
-    else:
-        if last_success < max_depth:
-            result = observe(max_depth)
-            if result["outcome"] != "ok":
-                first_failure = max_depth
-            else:
-                last_success = max_depth
-        if last_success == max_depth:
-            return {
-                "kind": kind,
-                "boundary": "no_failure_up_to_limit",
-                "last_success": last_success,
-                "observations": observations,
-            }
-    while first_failure - last_success > 1:
-        midpoint = (first_failure + last_success) // 2
-        result = observe(midpoint)
-        if result["outcome"] == "ok":
-            last_success = midpoint
-        else:
-            first_failure = midpoint
-    for repeated_depth in (last_success, first_failure):
-        while counts[repeated_depth] < 3:
-            observe(repeated_depth)
-    if kind == "paid_reenter":
-        while counts[62] < 3:
-            observe(62)
-    return {
-        "kind": kind,
-        "boundary": "first_failure",
-        "last_success": last_success,
-        "first_failure": first_failure,
-        "first_failure_outcome": next(
-            result["outcome"]
-            for result in reversed(observations)
-            if result["depth"] == first_failure
-        ),
-        "observations": observations,
+        "kind": kind, "boundary": "bounded" if kind == "paid_huge" else "first_failure",
+        **({} if kind == "paid_huge" else boundaries),
+        "observations": observations, "worker_summary": summary, "worker_log": worker_log,
+        "control_observations": control, "control_summary": control_summary, "control_log": control_log,
     }
 
 
@@ -201,18 +154,20 @@ def main():
     }:
         parser.error("cell must be one of the six production target/profile keys")
     args.output.mkdir(parents=True, exist_ok=True)
+    target = TARGETS[args.cell.split("/", 1)[0]]
+    feature_logs = {
+        "production": "wasmtime-production-features.txt",
+        "qualification": "wasmtime-qualification-features.txt",
+    }
+    features = {
+        "production": resolved_features(target, "no-dev", args.output / feature_logs["production"]),
+        "qualification": resolved_features(target, "all", args.output / feature_logs["qualification"]),
+    }
     cases = args.case or DEFAULT_CASES
     results = []
     for kind in cases:
-        if kind == "paid_huge":
-            result = run_probe(args.binary, kind, 0, args.output, args.timeout)
-            print(f"{kind} outcome={result['outcome']}", flush=True)
-            result = {"kind": kind, "boundary": "bounded", "observations": [result]}
-        else:
-            max_depth = args.max_reentry_depth if kind == "paid_reenter" else args.max_depth
-            result = find_boundary(
-                args.binary, kind, args.output, max_depth, args.initial_depth, args.timeout
-            )
+        max_depth = args.max_reentry_depth if kind == "paid_reenter" else args.max_depth
+        result = qualify_case(args.binary, kind, args.output, args.timeout, max_depth, args.initial_depth)
         results.append(result)
     with args.lockfile.open("rb") as source:
         packages = tomllib.load(source)["package"]
@@ -222,7 +177,16 @@ def main():
         raise ValueError("qualification requires the exact approved Wasmtime fork revision")
     chains = []
     chain_log = None
-    logs = [args.output / sample["log"] for case in results for sample in case["observations"]]
+    logs = [
+        args.output / sample["log"]
+        for case in results
+        for sample in case["observations"] + case["control_observations"]
+    ]
+    logs.extend(args.output / case[field] for case in results for field in ("worker_log", "control_log"))
+    logs.extend(args.output / name for name in feature_logs.values())
+    cargo_log = "cargo.json" if (args.output / "cargo.json").is_file() else None
+    if cargo_log is not None:
+        logs.append(args.output / cargo_log)
     if args.chain_log is not None:
         destination = args.output / "chain-matrix.log"
         if args.chain_log.resolve() != destination.resolve():
@@ -230,16 +194,19 @@ def main():
         chains = [
             json.loads(line.split("CHAIN_PROBE_REPORT:", 1)[1])
             for line in destination.read_text().splitlines()
-            if "CHAIN_PROBE_REPORT:" in line
+            if line.startswith("CHAIN_PROBE_REPORT:")
         ]
         chain_log = destination.name
         logs.append(destination)
     report = {
-        "schema_version": 3,
+        "schema_version": 5,
         "cell": args.cell,
         "source_sha": subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip(),
         "lockfile_sha256": sha256_file(args.lockfile),
         "wasmtime_revision": revision,
+        "wasmtime_features": features,
+        "feature_logs": feature_logs,
+        "cargo_log": cargo_log,
         "binary": str(args.binary),
         "binary_sha256": sha256_file(args.binary),
         "rustc_version_verbose": subprocess.check_output(

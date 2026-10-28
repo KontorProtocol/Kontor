@@ -1,4 +1,5 @@
 import importlib.util
+from copy import deepcopy
 import hashlib
 import json
 import tempfile
@@ -22,7 +23,7 @@ def observation(kind, depth, outcome, target_os, target_arch, log):
             "gas": 10,
         },
         "last_depth": (1 if kind == "paid_huge" else depth) if outcome == "ok" and not kind.startswith(("view_", "system_")) else 0,
-        "child_markers": (list(range(depth - 1, -1, -1)) if outcome == "ok" else [0] * depth) if kind == "paid_reenter" else [],
+        "child_markers": (list(range(depth - 1, -1, -1)) + [0] * (64 - depth) if outcome == "ok" else [0] * 64) if kind == "paid_reenter" else [],
         "rolled_back": outcome != "ok",
         "fuel": {"user": 100, "system": 0, "deposit": 0},
         "gas_limit": 100000,
@@ -39,6 +40,37 @@ def observation(kind, depth, outcome, target_os, target_arch, log):
         "target_arch": target_arch,
         "log": log,
     }
+
+
+def add_sweep_fields(samples, kind, role, boundaries):
+    for index, sample in enumerate(samples):
+        sample.update(
+            role=role, sample_index=index, sample_id=f"{role}:{kind}:{index:04}",
+            cache_mode="warm_compiled_cache", fixture_contracts=65 if kind == "paid_reenter" else 1,
+            call_hook_installed=False,
+            log=f"{kind}-{role}-{index:04}.log",
+            reset={
+                "pre": {"live_invocations": 0, "stack_empty": True, "savepoint_intact": True,
+                        "resource_count": 0, "baseline_resource_count": 0,
+                        "failure_rolled_back": None if sample["outcome"] == "ok" else True},
+                "post": {"persistent_digest_sha256": "1" * 64, "baseline_digest_sha256": "1" * 64,
+                         "digest_matches": True, "live_invocations": 0, "stack_empty": True,
+                         "savepoint_restored": True, "resource_count": 0, "balances_restored": True,
+                         "floor_restored": True, "supply_restored": True},
+            },
+        )
+    return {
+        "role": role, "kind": kind, "cache_mode": "warm_compiled_cache",
+        "fixture_contracts": 65 if kind == "paid_reenter" else 1,
+        "boundaries": boundaries,
+        "ordered_sample_indices": list(range(len(samples))),
+        "ordered_sample_ids": [sample["sample_id"] for sample in samples],
+        "baseline_digest_sha256": "1" * 64,
+    }
+
+
+def transcript(samples, summary):
+    return "".join("KONTOR_STACK_REPORT:" + json.dumps({key: value for key, value in sample.items() if key != "log"}) + "\n" for sample in samples) + "KONTOR_STACK_SWEEP_SUMMARY:" + json.dumps(summary) + "\ntest result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1s\n"
 
 
 def chain_report(mode, stores, target_os, target_arch):
@@ -63,7 +95,7 @@ def chain_report(mode, stores, target_os, target_arch):
             },
         })
     return {
-        "mode": mode, "stores": stores, "trials": trials,
+        "mode": mode, "stores": stores, "trials": trials, "call_hook_installed": False,
         "component_sha256": {"error_test": "e" * 64, "proxy": "f" * 64},
         "engine_target": "pulley64-unknown-unknown-elf", "max_wasm_stack": 524288,
         "async_stack_size": 2097152, "target_os": target_os, "target_arch": target_arch,
@@ -72,11 +104,29 @@ def chain_report(mode, stores, target_os, target_arch):
 
 def write_evidence(directory, report):
     logs = {}
+    for graph, name in report["feature_logs"].items():
+        path = directory / name
+        path.write_text(",".join(report["wasmtime_features"][graph]) + "\n")
+        logs[name] = hashlib.sha256(path.read_bytes()).hexdigest()
+    cargo = directory / report["cargo_log"]
+    cargo.write_text(json.dumps({
+        "reason": "compiler-artifact", "target": {"name": "indexer", "kind": ["lib"]},
+        "profile": {"test": True}, "executable": report["binary"],
+    }) + "\n" + json.dumps({
+        "reason": "compiler-artifact", "target": {"name": "wasmtime", "kind": ["lib"]},
+        "package_id": f"git+https://github.com/wilfreddenton/wasmtime?rev={compare.FORK_REVISION}#wasmtime@51.0.0-kontor.2",
+        "features": report["wasmtime_features"]["qualification"],
+    }) + "\n" + json.dumps({"reason": "build-finished", "success": True}) + "\n")
+    logs[cargo.name] = hashlib.sha256(cargo.read_bytes()).hexdigest()
     for case in report["cases"]:
-        for observation in case["observations"]:
+        for observation in case["observations"] + case["control_observations"]:
             path = directory / observation["log"]
             raw = {field: value for field, value in observation.items() if field != "log"}
             path.write_text("KONTOR_STACK_REPORT:" + json.dumps(raw) + "\n")
+            logs[path.name] = hashlib.sha256(path.read_bytes()).hexdigest()
+        for role, samples in (("worker", case["observations"]), ("control", case["control_observations"])):
+            path = directory / case[f"{role}_log"]
+            path.write_text(transcript(samples, case[f"{role}_summary"]))
             logs[path.name] = hashlib.sha256(path.read_bytes()).hexdigest()
     path = directory / report["chain_log"]
     path.write_text("".join("CHAIN_PROBE_REPORT:" + json.dumps(chain) + "\n" for chain in report["chains"]))
@@ -100,11 +150,11 @@ class CompareTests(unittest.TestCase):
                     boundary = "bounded"
                     last_success = first_failure = first_failure_outcome = None
                 elif kind == "paid_reenter":
-                    samples = [(62, "ok")] * 3 + [(63, "ok")] * 3 + [(64, "invocation_limit")] * 3
+                    samples = [(depth, "invocation_limit" if depth == 64 else "ok") for depth in (62, 63, 64, 64, 63, 62, 62, 63, 64)]
                     boundary = "first_failure"
                     last_success, first_failure, first_failure_outcome = 63, 64, "invocation_limit"
                 else:
-                    samples = [(3, "ok")] * 3 + [(4, "stack_overflow")] * 3
+                    samples = [(depth, "stack_overflow" if depth == 4 else "ok") for depth in (0, 3, 4, 3, 4, 4, 3, 3, 4)]
                     boundary = "first_failure"
                     last_success, first_failure, first_failure_outcome = 3, 4, "stack_overflow"
                 observations = []
@@ -112,6 +162,14 @@ class CompareTests(unittest.TestCase):
                     log = f"{kind}-{depth}-{index}.log"
                     (directory / log).write_text(outcome)
                     observations.append(observation(kind, depth, outcome, target_os, target_arch, log))
+                boundaries = {"bounded_depth": 0} if kind == "paid_huge" else {
+                    "last_success": last_success, "first_failure": first_failure,
+                    "first_failure_outcome": first_failure_outcome,
+                }
+                control_depths = [0] if kind == "paid_huge" else [last_success, first_failure]
+                controls = [deepcopy(next(sample for sample in observations if sample["depth"] == depth)) for depth in control_depths]
+                worker_summary = add_sweep_fields(observations, kind, "worker", boundaries)
+                control_summary = add_sweep_fields(controls, kind, "control", boundaries)
                 cases.append({
                     "kind": kind,
                     "boundary": boundary,
@@ -119,13 +177,22 @@ class CompareTests(unittest.TestCase):
                     "first_failure": first_failure,
                     "first_failure_outcome": first_failure_outcome,
                     "observations": observations,
+                    "control_observations": controls,
+                    "worker_summary": worker_summary, "control_summary": control_summary,
+                    "worker_log": f"{kind}-worker.log", "control_log": f"{kind}-control.log",
                 })
             report = {
-                "schema_version": 3,
+                "schema_version": 5,
                 "cell": cell,
                 "source_sha": "a" * 40,
                 "lockfile_sha256": "b" * 64,
                 "wasmtime_revision": compare.FORK_REVISION,
+                "wasmtime_features": {
+                    "production": sorted(compare.PRODUCTION_FEATURES),
+                    "qualification": sorted(compare.QUALIFICATION_FEATURES),
+                },
+                "feature_logs": compare.FEATURE_LOGS,
+                "cargo_log": "cargo.json",
                 "binary": f"core/target/{'release' if cell.endswith('/release') else 'debug'}/deps/indexer-test",
                 "binary_sha256": "c" * 64,
                 "rustc_version_verbose": "rustc 1.99.1\n",
@@ -267,6 +334,22 @@ class CompareTests(unittest.TestCase):
         write_evidence(path.parent, report)
         self.rejected()
 
+    def test_cross_platform_sweep_fuel_difference_rejected(self):
+        path, report = self.report()
+        case = report["cases"][0]
+        for sample in case["observations"] + case["control_observations"]:
+            sample["fuel"]["user"] += 1
+        write_evidence(path.parent, report)
+        with self.assertRaisesRegex(ValueError, "cross-cell observations differ"):
+            compare.compare(self.root, "success")
+
+    def test_extra_qualification_feature_and_chain_hook_rejected(self):
+        self.mutate_all_with_matching_logs(lambda report: report["wasmtime_features"]["qualification"].append("coredump"))
+        self.rejected()
+        self.setUp()
+        self.mutate_all_with_matching_logs(lambda report: report["chains"][0].__setitem__("call_hook_installed", True))
+        self.rejected()
+
     def test_matching_stale_component_hashes_rejected(self):
         with self.assertRaisesRegex(ValueError, "stack probe differs"):
             compare.compare(self.root, "success", component_hashes={"stack_probe": "0" * 64})
@@ -274,6 +357,89 @@ class CompareTests(unittest.TestCase):
             compare.compare(self.root, "success", component_hashes={
                 "stack_probe": "d" * 64, "error_test": "0" * 64, "proxy": "f" * 64,
             })
+
+    def test_actual_compiled_features_must_match_resolution(self):
+        path, report = self.report()
+        cargo = path.parent / report["cargo_log"]
+        lines = [json.loads(line) for line in cargo.read_text().splitlines()]
+        lines[1]["features"].append("profiling")
+        cargo.write_text("".join(json.dumps(line) + "\n" for line in lines))
+        report["log_sha256"][cargo.name] = hashlib.sha256(cargo.read_bytes()).hexdigest()
+        path.write_text(json.dumps(report))
+        self.rejected()
+
+    def test_forbidden_missing_or_unexpected_wasmtime_features_rejected(self):
+        self.mutate_all_with_matching_logs(
+            lambda report: report["wasmtime_features"]["production"].append("cache")
+        )
+        self.rejected()
+        self.setUp()
+        self.mutate_all_with_matching_logs(
+            lambda report: report["wasmtime_features"]["production"].remove("pulley")
+        )
+        self.rejected()
+        self.setUp()
+        self.mutate_all_with_matching_logs(
+            lambda report: report["wasmtime_features"]["qualification"].remove("call-hook")
+        )
+        self.rejected()
+
+    def test_missing_duplicate_or_wrong_compiled_wasmtime_rejected(self):
+        for mutation in ("missing", "duplicate", "identity"):
+            with self.subTest(mutation=mutation):
+                self.setUp()
+                path, report = self.report()
+                cargo = path.parent / report["cargo_log"]
+                entries = [json.loads(line) for line in cargo.read_text().splitlines()]
+                if mutation == "missing":
+                    entries.pop(1)
+                elif mutation == "duplicate":
+                    entries.insert(2, entries[1].copy())
+                else:
+                    entries[1]["package_id"] = entries[1]["package_id"].replace("kontor.2", "kontor.3")
+                cargo.write_text("".join(json.dumps(entry) + "\n" for entry in entries))
+                report["log_sha256"][cargo.name] = hashlib.sha256(cargo.read_bytes()).hexdigest()
+                path.write_text(json.dumps(report))
+                self.rejected()
+
+    def test_incomplete_or_failed_cargo_build_log_rejected(self):
+        for mutation in ("missing", "failed", "duplicate"):
+            with self.subTest(mutation=mutation):
+                self.setUp()
+                path, report = self.report()
+                cargo = path.parent / report["cargo_log"]
+                entries = [json.loads(line) for line in cargo.read_text().splitlines()]
+                if mutation == "missing":
+                    entries.pop()
+                elif mutation == "failed":
+                    entries[-1]["success"] = False
+                else:
+                    entries.append(entries[-1].copy())
+                cargo.write_text("".join(json.dumps(entry) + "\n" for entry in entries))
+                report["log_sha256"][cargo.name] = hashlib.sha256(cargo.read_bytes()).hexdigest()
+                path.write_text(json.dumps(report))
+                self.rejected()
+
+    def test_missing_or_mismatched_build_provenance_rejected(self):
+        path, report = self.report()
+        (path.parent / "cargo.json").unlink()
+        self.rejected()
+        self.setUp()
+        path, report = self.report()
+        cargo = path.parent / "cargo.json"
+        entries = [json.loads(line) for line in cargo.read_text().splitlines()]
+        entries[0]["executable"] = "core/target/debug/deps/indexer-other"
+        cargo.write_text("".join(json.dumps(entry) + "\n" for entry in entries))
+        report["log_sha256"]["cargo.json"] = hashlib.sha256(cargo.read_bytes()).hexdigest()
+        path.write_text(json.dumps(report))
+        self.rejected()
+        self.setUp()
+        path, report = self.report()
+        feature_log = path.parent / compare.FEATURE_LOGS["production"]
+        feature_log.write_text("cache\n")
+        report["log_sha256"][feature_log.name] = hashlib.sha256(feature_log.read_bytes()).hexdigest()
+        path.write_text(json.dumps(report))
+        self.rejected()
 
 
 if __name__ == "__main__":

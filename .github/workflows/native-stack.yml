@@ -63,11 +63,12 @@ jobs:
         env:
           PROFILE: ${{ matrix.profile }}
         run: |
-          mkdir -p target/native-stack-evidence
+          evidence="target/native-stack-evidence/$RUNNER_OS-$RUNNER_ARCH/$PROFILE"
+          mkdir -p "$evidence"
           flags=()
           if [[ "$PROFILE" == release ]]; then flags+=(--release); fi
-          cargo test --locked --manifest-path core/Cargo.toml -p indexer --lib --no-run --message-format=json -j2 "${flags[@]}" > target/native-stack-evidence/cargo.json
-          jq -ser '[.[] | select(.reason == "compiler-artifact" and .target.name == "indexer" and (.target.kind | index("lib")) != null and .profile.test == true and .executable != null)] | if length == 1 then .[0].executable else error("expected exactly one indexer lib test executable") end' target/native-stack-evidence/cargo.json > target/native-stack-evidence/binary-path
+          cargo test --locked --manifest-path core/Cargo.toml -p indexer --lib --no-run --message-format=json -j2 "${flags[@]}" > "$evidence/cargo.json"
+          jq -ser '[.[] | select(.reason == "compiler-artifact" and .target.name == "indexer" and (.target.kind | index("lib")) != null and .profile.test == true and .executable != null)] | if length == 1 then .[0].executable else error("expected exactly one indexer lib test executable") end' "$evidence/cargo.json" > target/native-stack-evidence/binary-path
           test -s target/native-stack-evidence/binary-path
       - name: Exercise paid, view, and Core chain boundaries
         run: |

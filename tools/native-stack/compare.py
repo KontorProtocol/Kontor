@@ -12,9 +12,22 @@ from decimal import Decimal, InvalidOperation
 from fractions import Fraction
 from pathlib import Path
 
+from sweep import IDENTITY_FIELDS, SWEEP_FIELDS, parse_transcript
+
 
 FORK_REVISION = "0f84389ecd927c2e154f8d0de31fc2dfa5ebcae7"
 STACK_SIZES = (524288, 2097152)
+PRODUCTION_FEATURES = set("""
+    anyhow async backtrace component-model component-model-async cranelift gc gc-copying
+    gc-drc gc-null once_cell pooling-allocator pulley runtime std threads
+    wasmtime-jit-icache-coherence wat wave wit-parser
+""".split())
+QUALIFICATION_FEATURES = PRODUCTION_FEATURES | {"call-hook"}
+FORBIDDEN_FEATURES = {"cache", "profiling", "debug-builtins"}
+FEATURE_LOGS = {
+    "production": "wasmtime-production-features.txt",
+    "qualification": "wasmtime-qualification-features.txt",
+}
 CELLS = {
     f"native-stack-{runner}-{profile}": (f"{os_name}-{arch}/{profile}", target_os, target_arch)
     for runner, os_name, arch, target_os, target_arch in (
@@ -33,7 +46,7 @@ CASES = RECURSION | {"paid_reenter", "paid_huge"}
 REPORT_FIELDS = {
     "schema_version", "cell", "source_sha", "lockfile_sha256",
     "wasmtime_revision", "binary", "binary_sha256", "rustc_version_verbose", "host", "cases",
-    "chains", "chain_log", "log_sha256",
+    "chains", "chain_log", "log_sha256", "wasmtime_features", "feature_logs", "cargo_log",
 }
 OBSERVATION_FIELDS = {
     "kind", "depth", "outcome", "value", "receipt", "last_depth",
@@ -42,7 +55,8 @@ OBSERVATION_FIELDS = {
     "gas_to_fuel_multiplier", "max_wasm_stack", "async_stack_size",
     "engine_target", "component_sha256", "target_os", "target_arch", "log",
 }
-SIGNATURE_FIELDS = OBSERVATION_FIELDS - {"target_os", "target_arch", "log"}
+OBSERVATION_FIELDS |= SWEEP_FIELDS
+SIGNATURE_FIELDS = OBSERVATION_FIELDS - {"target_os", "target_arch", "log"} - IDENTITY_FIELDS
 HEX_40 = re.compile(r"[0-9a-f]{40}\Z")
 HEX_64 = re.compile(r"[0-9a-f]{64}\Z")
 
@@ -57,7 +71,7 @@ def signature(observation):
 
 
 def reports_in_log(path, prefix):
-    return [json.loads(line.split(prefix, 1)[1]) for line in path.read_text().splitlines() if prefix in line]
+    return [json.loads(line[len(prefix):]) for line in path.read_text().splitlines() if line.startswith(prefix)]
 
 
 def validate_success(value, kind):
@@ -66,7 +80,7 @@ def validate_success(value, kind):
     check(value["value"] == str(expected_value), f"{kind}: incorrect successful value")
     marker = 0 if kind.startswith(("view_", "system_")) else 1 if kind == "paid_huge" else depth
     check(value["last_depth"] == marker and not value["rolled_back"], f"{kind}: incorrect successful state")
-    expected_children = list(range(depth - 1, -1, -1)) if kind == "paid_reenter" else []
+    expected_children = list(range(depth - 1, -1, -1)) + [0] * (64 - depth) if kind == "paid_reenter" else []
     check(value["child_markers"] == expected_children, f"{kind}: incorrect child state")
 
 
@@ -106,7 +120,7 @@ def validate_observation(value, kind, target_os, target_arch, directory):
         check(value["value"] is None, f"{kind}: failed call returned a value")
         check(value["rolled_back"], f"{kind}: failed call did not roll back")
         check(value["last_depth"] == 0 and all(marker == 0 for marker in value["child_markers"]), f"{kind}: failed call retained state")
-        check(len(value["child_markers"]) == (value["depth"] if kind == "paid_reenter" else 0), f"{kind}: missing child state")
+        check(len(value["child_markers"]) == (64 if kind == "paid_reenter" else 0), f"{kind}: missing child state")
     else:
         validate_success(value, kind)
 
@@ -117,10 +131,29 @@ def validate_case(case, target_os, target_arch, directory):
     check(kind in CASES, f"unexpected case {kind}")
     observations = case["observations"]
     check(isinstance(observations, list) and observations, f"{kind}: no observations")
+    controls = case.get("control_observations")
+    check(isinstance(controls, list) and controls, f"{kind}: missing fresh-process control")
+    summaries = []
+    for role, samples in (("worker", observations), ("control", controls)):
+        log = case.get(f"{role}_log")
+        check(isinstance(log, str) and Path(log).name == log and (directory / log).is_file(), f"{kind}: missing {role} transcript")
+        raw, summary = parse_transcript((directory / log).read_text(), kind, role)
+        check(summary == case.get(f"{role}_summary"), f"{kind}: {role} summary disagrees with raw log")
+        check(raw == [{key: value for key, value in sample.items() if key != "log"} for sample in samples], f"{kind}: {role} samples disagree with raw transcript")
+        summaries.append(summary)
+    check(summaries[0]["boundaries"] == summaries[1]["boundaries"], f"{kind}: fresh control boundary differs")
+    check(summaries[0]["baseline_digest_sha256"] == summaries[1]["baseline_digest_sha256"], f"{kind}: fresh control baseline differs")
+    expected_boundary = {"bounded_depth": 0} if kind == "paid_huge" else {
+        key: case.get(key) for key in ("last_success", "first_failure", "first_failure_outcome")
+    }
+    check(summaries[0]["boundaries"] == expected_boundary, f"{kind}: summary boundary differs from report")
     by_depth = defaultdict(list)
     for observation in observations:
         validate_observation(observation, kind, target_os, target_arch, directory)
         by_depth[observation["depth"]].append(observation)
+    for control in controls:
+        validate_observation(control, kind, target_os, target_arch, directory)
+        check(any(signature(control) == signature(sample) for sample in by_depth[control["depth"]]), f"{kind}: fresh control observation differs")
     for depth, samples in by_depth.items():
         check(all(signature(sample) == signature(samples[0]) for sample in samples), f"{kind}: repeat mismatch at {depth}")
     if kind == "paid_huge":
@@ -145,12 +178,13 @@ def validate_case(case, target_os, target_arch, directory):
         "first_failure": case.get("first_failure"),
         "first_failure_outcome": case.get("first_failure_outcome"),
         "observations": [signature(value) for value in observations],
+        "control_observations": [signature(value) for value in controls],
     }
 
 
 CHAIN_FIELDS = {
     "mode", "stores", "trials", "component_sha256", "engine_target", "max_wasm_stack",
-    "async_stack_size", "target_os", "target_arch",
+    "async_stack_size", "target_os", "target_arch", "call_hook_installed",
 }
 TRIAL_FIELDS = {
     "outcome", "fuel", "receipt", "receipt_count", "value", "storage_state", "rolled_back",
@@ -187,6 +221,7 @@ def validate_chains(chains, target_os, target_arch):
         seen.add(key)
         check((chain["target_os"], chain["target_arch"]) == (target_os, target_arch), "chain target mismatch")
         check(chain["engine_target"] == "pulley64-unknown-unknown-elf", "chain engine mismatch")
+        check(chain["call_hook_installed"] is False, "chain enabled a test-only call hook")
         check((chain["max_wasm_stack"], chain["async_stack_size"]) == STACK_SIZES, "chain stack settings mismatch")
         hashes = chain["component_sha256"]
         check(isinstance(hashes, dict) and set(hashes) == {"error_test", "proxy"}, "missing chain component hashes")
@@ -236,18 +271,61 @@ def validate_chains(chains, target_os, target_arch):
     return sorted(normalized, key=lambda chain: (chain["mode"], chain["stores"]))
 
 
+def validate_build_provenance(report, directory, binary):
+    features = report["wasmtime_features"]
+    check(isinstance(features, dict) and set(features) == set(FEATURE_LOGS), "missing Wasmtime feature closures")
+    for graph, expected in (("production", PRODUCTION_FEATURES), ("qualification", QUALIFICATION_FEATURES)):
+        resolved = features[graph]
+        check(isinstance(resolved, list) and all(isinstance(value, str) for value in resolved), f"invalid {graph} Wasmtime features")
+        check(not FORBIDDEN_FEATURES.intersection(resolved), f"{graph}: forbidden Wasmtime feature")
+        check(resolved == sorted(expected), f"{graph}: unexpected Wasmtime feature closure")
+    check(set(features["qualification"]) - set(features["production"]) == {"call-hook"}, "unexpected test-only Wasmtime feature delta")
+    check(report["feature_logs"] == FEATURE_LOGS, "missing Wasmtime feature logs")
+    for graph, log in FEATURE_LOGS.items():
+        check((directory / log).is_file(), f"{graph}: missing feature log")
+        check((directory / log).read_text() == ",".join(features[graph]) + "\n", f"{graph}: feature log disagrees with report")
+    cargo_log = report["cargo_log"]
+    check(cargo_log == "cargo.json" and (directory / cargo_log).is_file(), "missing Cargo build log")
+    artifacts = []
+    compiled_features = []
+    build_finished = []
+    item = None
+    for line in (directory / cargo_log).read_text().splitlines():
+        try:
+            item = json.loads(line)
+        except json.JSONDecodeError as error:
+            raise ValueError("invalid Cargo build log") from error
+        if not isinstance(item, dict):
+            raise ValueError("invalid Cargo build log entry")
+        if item.get("reason") == "build-finished":
+            build_finished.append(item.get("success"))
+        if item.get("reason") == "compiler-artifact" and item.get("target", {}).get("name") == "indexer" and "lib" in item["target"].get("kind", []) and item.get("profile", {}).get("test") is True and item.get("executable") is not None:
+            artifacts.append(item["executable"])
+        if item.get("reason") == "compiler-artifact" and item.get("target", {}).get("name") == "wasmtime" and "lib" in item["target"].get("kind", []):
+            source = f"git+https://github.com/wilfreddenton/wasmtime?rev={FORK_REVISION}#"
+            check(item.get("package_id") in {source + "wasmtime@51.0.0-kontor.2", source + "51.0.0-kontor.2"}, "compiled Wasmtime package identity mismatch")
+            actual_features = item.get("features")
+            check(isinstance(actual_features, list) and all(isinstance(value, str) for value in actual_features), "missing compiled Wasmtime features")
+            check(len(actual_features) == len(set(actual_features)), "duplicate compiled Wasmtime feature")
+            compiled_features.append(sorted(actual_features))
+    check(artifacts == [binary], "Cargo build log disagrees with test binary")
+    check(compiled_features == [features["qualification"]], "compiled Wasmtime features disagree with resolution")
+    check(len(build_finished) == 1 and build_finished[0] is True and item.get("reason") == "build-finished", "Cargo build log lacks successful terminal completion")
+
+
 def validate_report(path, cell):
     report = json.loads(path.read_text())
     check(isinstance(report, dict), f"{path}: invalid report")
     check(REPORT_FIELDS <= report.keys(), f"{path}: missing report fields {sorted(REPORT_FIELDS - report.keys())}")
     name, target_os, target_arch = cell
-    check(report["schema_version"] == 3 and report["cell"] == name, f"{name}: mislabeled report")
+    check(report["schema_version"] == 5 and report["cell"] == name, f"{name}: mislabeled report")
     for field, pattern in (("source_sha", HEX_40), ("lockfile_sha256", HEX_64), ("binary_sha256", HEX_64)):
         check(isinstance(report[field], str) and pattern.fullmatch(report[field]), f"{name}: invalid {field}")
     binary = report["binary"]
     profile_dir = "release" if name.endswith("/release") else "debug"
     check(isinstance(binary, str) and Path(binary).name.startswith("indexer-") and profile_dir in Path(binary).parts, f"{name}: invalid binary provenance")
     check(report["wasmtime_revision"] == FORK_REVISION, f"{name}: wrong fork")
+    validate_build_provenance(report, path.parent, binary)
     check(isinstance(report["rustc_version_verbose"], str) and report["rustc_version_verbose"].split()[:2] == ["rustc", "1.99.1"], f"{name}: wrong compiler")
     check(isinstance(report["host"], str) and report["host"], f"{name}: missing host")
     cases = report["cases"]
@@ -255,13 +333,17 @@ def validate_report(path, cell):
     kinds = [case.get("kind") if isinstance(case, dict) else None for case in cases]
     check(len(kinds) == len(CASES) and set(kinds) == CASES, f"{name}: missing or duplicate case")
     normalized_cases = {case["kind"]: validate_case(case, target_os, target_arch, path.parent) for case in cases}
-    logs = [sample["log"] for case in cases for sample in case["observations"]]
+    logs = [
+        sample["log"] for case in cases
+        for sample in case["observations"] + case["control_observations"]
+    ]
+    logs.extend(case[field] for case in cases for field in ("worker_log", "control_log"))
     check(len(logs) == len(set(logs)), "duplicate probe sample log")
     chain_log = report["chain_log"]
     check(isinstance(chain_log, str) and Path(chain_log).name == chain_log and chain_log not in logs, "invalid chain log")
     check(reports_in_log(path.parent / chain_log, "CHAIN_PROBE_REPORT:") == report["chains"], "raw chain log disagrees with report")
     manifest = report["log_sha256"]
-    check(isinstance(manifest, dict) and set(manifest) == set(logs) | {chain_log}, "incomplete raw log manifest")
+    check(isinstance(manifest, dict) and set(manifest) == set(logs) | {chain_log, report["cargo_log"]} | set(FEATURE_LOGS.values()), "incomplete raw log manifest")
     for log, digest in manifest.items():
         check(isinstance(digest, str) and HEX_64.fullmatch(digest), "invalid raw log hash")
         check(hashlib.sha256((path.parent / log).read_bytes()).hexdigest() == digest, "raw log hash mismatch")
@@ -298,10 +380,11 @@ def compare(directory, upstream_status, source_sha=None, lockfile_sha256=None, c
     baseline = next(iter(cases.values()))
     check(all(value == baseline for value in cases.values()), "cross-cell observations differ")
     return {
-        "schema_version": 3, "cells": sorted(reports),
+        "schema_version": 5, "cells": sorted(reports),
         "source_sha": next(iter(reports.values()))["source_sha"],
         "lockfile_sha256": next(iter(reports.values()))["lockfile_sha256"],
         "wasmtime_revision": FORK_REVISION,
+        "wasmtime_features": next(iter(reports.values()))["wasmtime_features"],
         "component_sha256": next(iter(components)),
         "cases": baseline,
     }
