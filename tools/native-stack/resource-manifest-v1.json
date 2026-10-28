@@ -6,7 +6,7 @@
   "artifacts": {
     "brotli_path": {
       "path": "core/indexer/src/runtime/storage.rs",
-      "sha256": "834ce30e9d79266f07cdccccd6a4ffd156e92100810d6c5667e5e94f9358e732"
+      "sha256": "9742dd2ac536de31cce92efb3573b65c687e56617c1c03d098b251710dcee228"
     },
     "call_input": {
       "path": "core/indexer/src/runtime/call.rs",
@@ -44,6 +44,10 @@
       "path": "core/indexer/src/runtime/call/tests/canonical_guest_errors.rs",
       "sha256": "8973f4adc00a1062fe2c1c40e797f7cd94c885b1a55ddae9da142fff3b819f07"
     },
+    "indexer_build_script": {
+      "path": "core/indexer/build.rs",
+      "sha256": "182fc2714a0772379cd74e8025f02d7841732b38e69788ac0d9fc5e55abe519d"
+    },
     "native_filestorage": {
       "path": "native-contracts/filestorage/src/lib.rs",
       "sha256": "b13919f9d9abe52ceb801ddc697887f60cfc5e1e99be3dced2c311cc882fb698"
@@ -66,7 +70,7 @@
     },
     "publish_path": {
       "path": "core/indexer/src/runtime/mod.rs",
-      "sha256": "f39c39ad40174a132a6bbdb094e34e990b599c32e9ed9c18c4e3e19195d7456c"
+      "sha256": "308f430f0a604bc72393a67f9cd5a3051f8a44332fc3a209ed310c1d30e7f97a"
     },
     "qualification_workflow": {
       "path": ".github/workflows/native-stack.yml",
@@ -78,7 +82,7 @@
     },
     "resource_manifest_source": {
       "path": "tools/native-stack/resource_manifest.py",
-      "sha256": "6e6357f81224556e28aa73926d7999cf025d457a0dc60bf9d2ab5e6bdd0d6283"
+      "sha256": "6d3e786cb9093faad760c079c4ea7d3dd449e5091cc8d39709675bc25b394fff"
     },
     "resource_python_requirements": {
       "path": "tools/native-stack/requirements-resource.txt",
@@ -87,6 +91,10 @@
     "resource_schema": {
       "path": "tools/native-stack/resource-evidence-schema-v1.json",
       "sha256": "2d1bf2cbb72de94724792b2504c489d6f3ea3d4596b37f5f3e24e6c783a6f516"
+    },
+    "resource_thread_trace": {
+      "path": "core/indexer/src/runtime/resource_diagnostics.rs",
+      "sha256": "0724be31fd1652f1ff7247c39672fa1f4ed61bbeda0683e5b8fbd70d29ff73be"
     },
     "resource_validator_source": {
       "path": "tools/native-stack/resource_evidence.py",
@@ -110,7 +118,7 @@
     },
     "stack_sweep": {
       "path": "core/indexer/src/runtime/call/tests/native_stack/sweep.rs",
-      "sha256": "d3b00aa09c24347f97674cd6415b55221979c9334ea344e7768f5382d41f2e67"
+      "sha256": "2df6c85dfb1ada56ef686b602169f9403b37cf46e54d0a4aef6c9ea5ea7d95dd"
     },
     "staking_costs": {
       "path": "core/indexer/src/runtime/staking/transition_costs.rs",
@@ -1604,7 +1612,7 @@
   "wasmtime_revision": "0f84389ecd927c2e154f8d0de31fc2dfa5ebcae7",
   "worker_runner": {
     "path": "core/indexer/src/runtime/call/tests/native_stack_resource.rs",
-    "sha256": "5459eeda56382a390f33d103e3a8215e88dd7eeb8e19bae1d23f9ecba14119a4",
+    "sha256": "ceaa2cce59ff970f81669b62267579e92f40e603e3938699e93399825326cf9d",
     "status": "smoke_only",
     "test_name": "runtime::call::tests::native_stack_resource::resource_qualification"
   },

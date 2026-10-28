@@ -15,6 +15,8 @@ pub mod numerics;
 pub mod pool;
 pub mod pricing;
 #[cfg(test)]
+mod resource_diagnostics;
+#[cfg(test)]
 mod sequential_tests;
 mod stack;
 pub mod staking;
@@ -838,7 +840,12 @@ impl Runtime {
         if !is_native_contract_id(contract_id) {
             component_policy::validate(&bytes)?;
         }
-        let component = Component::from_binary(&self.engine, &bytes).map_err(|e| {
+        #[cfg(test)]
+        resource_diagnostics::record("compiler_entry");
+        let component = Component::from_binary(&self.engine, &bytes);
+        #[cfg(test)]
+        resource_diagnostics::record("compiler_exit");
+        let component = component.map_err(|e| {
             ExecutionError::Deterministic(
                 anyhow!(e).context("contract is not a valid wasm component"),
             )
@@ -1066,7 +1073,12 @@ impl Runtime {
     async fn component_bytes_and_compiled(&self, contract_id: u64) -> Result<(Vec<u8>, Component)> {
         let bytes = self.storage.component_bytes(contract_id).await?;
         component_policy::validate_no_starts(&bytes)?;
-        let component = Component::from_binary(&self.engine, &bytes)?;
+        #[cfg(test)]
+        resource_diagnostics::record("compiler_entry");
+        let component = Component::from_binary(&self.engine, &bytes);
+        #[cfg(test)]
+        resource_diagnostics::record("compiler_exit");
+        let component = component?;
         // One of the cache's TWO write sites — `validate_publishable` guards the
         // other, and its guard is the one the publish path depends on.
         // See `Runtime::simulating`: caching a speculative contract's code under an

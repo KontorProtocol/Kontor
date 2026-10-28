@@ -57,8 +57,17 @@ call diagnostic. Run it in separate child processes with
 two explicit Tokio workers and the existing paid 256-value frame fixture,
 including normal publication, receipt and post-call reset checks. Linux
 checks that the task begins and ends on measured workers. It does not yet emit
-the per-phase, fiber, guard-fault, build or memory evidence required by the
-resource comparator.
+the fiber, guard-fault, build or memory evidence required by the resource
+comparator. Its test-only thread trace checks that fixture preparation,
+publication, the paid operation, conversion and teardown phase boundaries run
+on the measured Tokio workers. It checks that the caller of synchronous
+Wasmtime compilation runs on a worker and that Brotli decoding runs on a
+separate blocking-pool thread. The resolved Wasmtime feature closure excludes
+`parallel-compilation`; that exclusion and the pinned Wasmtime source are
+needed to rule out internal compiler workers. The trace itself does not
+observe Wasmtime internals. These phase markers do not prove that every
+awaited suboperation stayed on one worker or supply the comparator's per-case
+thread bindings.
 
 Thread records must confirm a protected guard region, not only repeat
 `pthread_attr_getguardsize`'s reported size. An unverified guard fails the

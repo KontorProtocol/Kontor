@@ -17,6 +17,7 @@ WASMTIME_REVISION = "0f84389ecd927c2e154f8d0de31fc2dfa5ebcae7"
 BASE_COMMIT = "67a52fed58a893ce2c1c05483f86f4fffa02a675"
 INPUTS = {
     "core_lockfile": "core/Cargo.lock",
+    "indexer_build_script": "core/indexer/build.rs",
     "stack_probe": "test-contracts/binaries/stack_probe.wasm.br",
     "stack_probe_source": "test-contracts/stack-probe/src/lib.rs",
     "error_test": "test-contracts/binaries/error_test.wasm.br",
@@ -29,6 +30,7 @@ INPUTS = {
     "token_pages": "core/indexer/src/runtime/token/query_tests.rs",
     "nft_pages": "core/indexer/src/runtime/nft/query_tests.rs",
     "publish_path": "core/indexer/src/runtime/mod.rs",
+    "resource_thread_trace": "core/indexer/src/runtime/resource_diagnostics.rs",
     "brotli_path": "core/indexer/src/runtime/storage.rs",
     "call_input": "core/indexer/src/runtime/call.rs",
     "call_output": "core/indexer/src/runtime/call/result.rs",

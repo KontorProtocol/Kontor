@@ -1,8 +1,18 @@
+use std::collections::HashSet;
 use std::env;
+use std::sync::mpsc::channel;
+use std::thread::ThreadId;
+use std::time::Duration;
 
-use anyhow::{Result, ensure};
+use anyhow::{Context, Result, ensure};
+use serde_json::json;
 use tokio::runtime::Builder;
 
+#[cfg(target_os = "linux")]
+use libc::{
+    _SC_PAGESIZE, EIO, c_void, gettid, pthread_attr_destroy, pthread_attr_getguardsize,
+    pthread_attr_getstack, pthread_attr_t, pthread_getattr_np, pthread_self, sysconf,
+};
 #[cfg(target_os = "linux")]
 use std::fs::{File, read_to_string};
 #[cfg(target_os = "linux")]
@@ -12,23 +22,10 @@ use std::os::unix::fs::FileExt;
 #[cfg(target_os = "linux")]
 use std::ptr::null_mut;
 #[cfg(target_os = "linux")]
-use std::sync::mpsc::channel;
-#[cfg(target_os = "linux")]
-use std::thread::ThreadId;
-#[cfg(target_os = "linux")]
-use std::time::Duration;
-
-#[cfg(target_os = "linux")]
-use anyhow::Context;
-#[cfg(target_os = "linux")]
-use libc::{
-    _SC_PAGESIZE, EIO, c_void, gettid, pthread_attr_destroy, pthread_attr_getguardsize,
-    pthread_attr_getstack, pthread_attr_t, pthread_getattr_np, pthread_self, sysconf,
-};
-#[cfg(target_os = "linux")]
 use tokio::runtime::Runtime as TokioRuntime;
 
 use crate::runtime::Runtime;
+use crate::runtime::resource_diagnostics::{self, ThreadEvent};
 
 #[test]
 #[ignore = "run explicitly to isolate a real paid call in a multithread worker"]
@@ -41,33 +38,182 @@ fn real_paid_large_frame_on_tokio_worker() -> Result<()> {
     let reduced = mode == "reduced";
     #[cfg(target_os = "linux")]
     let (runtime, workers) = measured_tokio_runtime(reduced.then_some(1024 * 1024))?;
+    #[cfg(target_os = "linux")]
+    let worker_ids = workers
+        .iter()
+        .map(|worker| worker.thread_id)
+        .collect::<Vec<_>>();
     #[cfg(not(target_os = "linux"))]
-    let runtime = {
+    let (runtime, worker_ids) = {
+        let (sender, receiver) = channel();
         let mut builder = Builder::new_multi_thread();
         builder.worker_threads(2).enable_all();
         if reduced {
             builder.thread_stack_size(1024 * 1024);
         }
-        builder.build()?
+        let runtime = builder
+            .on_thread_start(move || {
+                let _ = sender.send(std::thread::current().id());
+            })
+            .build()?;
+        let first = receiver
+            .recv_timeout(Duration::from_secs(5))
+            .context("first Tokio worker did not start")?;
+        let second = receiver
+            .recv_timeout(Duration::from_secs(5))
+            .context("second Tokio worker did not start")?;
+        ensure!(first != second, "Tokio did not start distinct workers");
+        (runtime, vec![first, second])
     };
-    let (start, end) = runtime.block_on(async {
+    resource_diagnostics::start();
+    let result = runtime.block_on(async {
         tokio::spawn(async move {
             let start = std::thread::current().id();
             super::native_stack::resource_smoke(reduced).await?;
             Ok::<_, anyhow::Error>((start, std::thread::current().id()))
         })
         .await
-    })??;
-    #[cfg(target_os = "linux")]
+    });
+    let events = resource_diagnostics::finish();
+    let (start, end) = result??;
     ensure!(
-        workers.iter().any(|worker| worker.thread_id == start)
-            && workers.iter().any(|worker| worker.thread_id == end),
+        worker_ids.contains(&start) && worker_ids.contains(&end),
         "real paid call began or ended outside measured Tokio workers"
     );
-    #[cfg(not(target_os = "linux"))]
+    #[cfg(target_os = "linux")]
+    for event in &events {
+        if let Some(worker) = workers
+            .iter()
+            .find(|worker| worker.thread_id == event.thread_id)
+        {
+            ensure!(
+                event.os_thread_id == worker.os_thread_id,
+                "worker Rust/kernel thread identities disagree: {event:?}, {worker:?}"
+            );
+        } else {
+            ensure!(
+                workers
+                    .iter()
+                    .all(|worker| worker.os_thread_id != event.os_thread_id),
+                "blocking event shares a measured worker kernel thread: {event:?}"
+            );
+        }
+    }
+    attest_resource_threads(&events, &worker_ids, &mode)?;
+    Ok(())
+}
+
+fn attest_resource_threads(events: &[ThreadEvent], workers: &[ThreadId], mode: &str) -> Result<()> {
+    let phase_names = [
+        "fixture_preparation_entry",
+        "publication_entry",
+        "publication_exit",
+        "fixture_preparation_exit",
+        "sample_preparation_entry",
+        "sample_preparation_exit",
+        "operation_entry",
+        "operation_exit",
+        "conversion_entry",
+        "conversion_exit",
+        "teardown_entry",
+        "teardown_exit",
+    ];
+    let mut previous_position = None;
+    for name in phase_names {
+        let matching = events
+            .iter()
+            .filter(|event| event.name == name)
+            .collect::<Vec<_>>();
+        ensure!(
+            matching.len() == 1,
+            "expected one {name} event: {matching:?}"
+        );
+        ensure!(
+            workers.contains(&matching[0].thread_id),
+            "{name} ran outside the Tokio worker pool: {matching:?}"
+        );
+        let position = events.iter().position(|event| event.name == name).unwrap();
+        ensure!(
+            previous_position.is_none_or(|previous| position > previous),
+            "{name} is out of phase order"
+        );
+        previous_position = Some(position);
+    }
     ensure!(
-        start != std::thread::current().id() && end != std::thread::current().id(),
-        "real paid call began or ended on the block_on caller"
+        events.iter().all(|event| {
+            phase_names.contains(&event.name)
+                || matches!(
+                    event.name,
+                    "compiler_entry"
+                        | "compiler_exit"
+                        | "blocking_decode_entry"
+                        | "blocking_decode_exit"
+                )
+        }),
+        "thread trace contains an unclassified event"
+    );
+    for (entry, exit, on_worker) in [
+        ("compiler_entry", "compiler_exit", true),
+        ("blocking_decode_entry", "blocking_decode_exit", false),
+    ] {
+        let entries = events
+            .iter()
+            .filter(|event| event.name == entry)
+            .collect::<Vec<_>>();
+        let exits = events
+            .iter()
+            .filter(|event| event.name == exit)
+            .collect::<Vec<_>>();
+        ensure!(
+            !entries.is_empty() && entries.len() == exits.len(),
+            "unpaired {entry}/{exit} events: entries={entries:?}, exits={exits:?}"
+        );
+        let mut in_flight = HashSet::new();
+        for event in events {
+            if event.name == entry {
+                ensure!(
+                    in_flight.insert(event.thread_id),
+                    "overlapping {entry} events on one thread: {event:?}"
+                );
+            } else if event.name == exit {
+                ensure!(
+                    in_flight.remove(&event.thread_id),
+                    "{exit} has no matching entry on this thread: {event:?}"
+                );
+            } else {
+                continue;
+            }
+            ensure!(
+                workers.contains(&event.thread_id) == on_worker
+                    && event.thread_id != std::thread::current().id(),
+                "{entry}/{exit} ran in the wrong thread category: {event:?}"
+            );
+        }
+        ensure!(in_flight.is_empty(), "unclosed {entry} events");
+    }
+    println!(
+        "KONTOR_RESOURCE_THREAD_TRACE={}",
+        json!({
+            "scope": "diagnostic_only",
+            "mode": mode,
+            "compiler_internal_threads": "unobserved",
+            "events": events.iter().map(|event| {
+                #[cfg(target_os = "linux")]
+                let os_thread_id = Some(event.os_thread_id);
+                #[cfg(not(target_os = "linux"))]
+                let os_thread_id = None::<i32>;
+                json!({
+                    "name": event.name,
+                    "rust_thread_id": format!("{:?}", event.thread_id),
+                    "category": if workers.contains(&event.thread_id) {
+                        "tokio_worker"
+                    } else {
+                        "blocking_pool"
+                    },
+                    "os_thread_id": os_thread_id,
+                })
+            }).collect::<Vec<_>>(),
+        })
     );
     Ok(())
 }

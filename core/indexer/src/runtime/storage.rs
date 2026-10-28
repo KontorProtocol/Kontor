@@ -11,6 +11,8 @@ use std::collections::HashMap;
 use std::io::Read;
 use wit_component::{ComponentEncoder, WitPrinter};
 
+#[cfg(test)]
+use super::resource_diagnostics;
 use crate::{
     database::{
         queries::{
@@ -348,6 +350,9 @@ impl Storage {
         // Split the join from the work: a JoinError is this node's task machinery
         // failing, everything inside is a property of the bytes.
         let decompressed = tokio::task::spawn_blocking(move || {
+            #[cfg(test)]
+            let _trace =
+                resource_diagnostics::scope("blocking_decode_entry", "blocking_decode_exit");
             // Cap decompressed size: a tiny on-chain brotli blob can otherwise
             // inflate without bound in memory on every node that loads the
             // contract (decompression bomb). 64 MiB is far above any legitimate

@@ -15,6 +15,7 @@ use wasmtime::Trap;
 use super::super::balance;
 use super::{COMPONENT, SYSTEM_FUEL_CEILING};
 use crate::runtime::invocation::{InvocationBudget, InvocationLimitReached};
+use crate::runtime::resource_diagnostics;
 use crate::runtime::token::api as token;
 use crate::runtime::wit::Signer;
 use crate::runtime::wit::kontor::built_in::context::HolderRef;
@@ -55,6 +56,7 @@ struct Fixture {
 
 impl Fixture {
     async fn new(kind: String, reduced: bool) -> Result<Self> {
+        resource_diagnostics::record("fixture_preparation_entry");
         let setup_start = Instant::now();
         let (mut runtime, dir, _name) = if reduced {
             test_runtime_with_engine(Runtime::new_resource_diagnostic_engine()?).await?
@@ -78,6 +80,7 @@ impl Fixture {
         };
         let fixture_contracts = if kind == "paid_reenter" { 65 } else { 1 };
         let publication_start = Instant::now();
+        resource_diagnostics::record("publication_entry");
         for tx_index in 0..fixture_contracts {
             runtime
                 .set_context(
@@ -98,6 +101,7 @@ impl Fixture {
                 .await
                 .context("fixture must pass real publish, component policy, and WIT validation")?;
         }
+        resource_diagnostics::record("publication_exit");
         runtime.set_context(1, None, None, None).await;
         let publication_ms = publication_start.elapsed().as_millis();
         let address = ContractAddress {
@@ -123,6 +127,7 @@ impl Fixture {
         let baseline_supply = token::total_supply(&mut runtime).await?;
         ensure!(budget.live() == 0, "fixture left live invocation Stores");
         let baseline_digest = persistent_digest(&runtime.get_storage_conn()).await?;
+        resource_diagnostics::record("fixture_preparation_exit");
         Ok(Self {
             runtime,
             _dir: dir,
@@ -146,6 +151,7 @@ impl Fixture {
     }
 
     async fn observe(&mut self, depth: u32, role: &str) -> Result<String> {
+        resource_diagnostics::record("sample_preparation_entry");
         let sample_index = self.samples.len();
         let sample_id = format!("{role}:{}:{sample_index:04}", self.kind);
         // conversion_probe is the only call-hook install site in this runtime.
@@ -172,6 +178,8 @@ impl Fixture {
         let expression = expression(&self.kind, depth, &self.address)?;
         let previous = self.runtime.start_usage();
         let execution_start = Instant::now();
+        resource_diagnostics::record("sample_preparation_exit");
+        resource_diagnostics::record("operation_entry");
         let result = if self.kind.starts_with("system_") {
             self.runtime
                 .execute_system_view(&self.address, &expression)
@@ -203,8 +211,10 @@ impl Fixture {
                 )
                 .await
         };
+        resource_diagnostics::record("operation_exit");
         let execution_ms = execution_start.elapsed().as_millis();
         let postcall_start = Instant::now();
+        resource_diagnostics::record("conversion_entry");
         // Observe the tested call before diagnostic views can touch its context.
         let pre_live = self.budget.live();
         let pre_stack_empty = self.runtime.stack.is_empty().await;
@@ -309,7 +319,9 @@ impl Fixture {
             failure_rolled_back != Some(false),
             "failed call changed state in {sample_id}"
         );
+        resource_diagnostics::record("conversion_exit");
 
+        resource_diagnostics::record("teardown_entry");
         self.runtime.storage.rollback().await?;
         self.runtime.set_context(1, None, None, None).await;
         ensure!(
@@ -347,6 +359,7 @@ impl Fixture {
             balances_restored && floor_restored && supply_restored,
             "accounting did not reset in {sample_id}"
         );
+        resource_diagnostics::record("teardown_exit");
 
         let report = json!({
             "role": role,
