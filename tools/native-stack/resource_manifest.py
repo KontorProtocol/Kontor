@@ -17,6 +17,7 @@ WASMTIME_REVISION = "0f84389ecd927c2e154f8d0de31fc2dfa5ebcae7"
 FIBER_SOURCE_FILES = {
     "crates/wasmtime/src/config.rs": "681d6d278c7c0da051672c2c0acf0e658cab8338a5d461dba5f1596978336b8a",
     "crates/wasmtime/src/runtime/fiber.rs": "6cb7d27f82be901b663a8ef54d9cf9ee2c797f937c59544403e82cae27b2cf4e",
+    "crates/wasmtime/src/runtime/store/async_.rs": "d06e41cc5ea602367d4286a54a5efd0672ef9503e4e55aff5a2a55885ac996e4",
     "crates/wasmtime/src/runtime/vm/instance/allocator/on_demand.rs": "b2399776ffd454560d13182c410ed9cb280b22a9278a2ed94c009e4d350b4867",
     "crates/fiber/src/lib.rs": "1d747766d66be57bc530917505a2469993a0dabb64c28a3cc4fe38fd597991b7",
     "crates/fiber/src/unix.rs": "83121bc6a5becaeae393b99848f6c1fd169e44c1b7857b3b862f74c64b950c4c",

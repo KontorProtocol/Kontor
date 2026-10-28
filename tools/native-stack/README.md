@@ -96,8 +96,8 @@ Linux ARM64 smoke test runs on 16 KiB pages; it does not stand in for the
 4 KiB page qualification cells. The macOS guard observation remains unbound.
 The amended fiber claim uses a source-grounded effective capacity, not a live
 fiber address or high-water mark. The evidence gate now requires archived
-copies of the pinned Wasmtime configuration, runtime fiber allocation and
-Store reuse path, on-demand allocator, fiber dispatch and Unix allocator
+copies of the pinned Wasmtime configuration, runtime fiber allocation, Store
+cache and reuse path, on-demand allocator, fiber dispatch and Unix allocator
 sources with exact SHA-256 hashes, plus Cargo metadata resolving both the
 main Wasmtime package and its internal fiber crate, their compiled artifacts,
 and the approved feature closure. It checks the
@@ -105,7 +105,7 @@ reported Engine request against the frozen 2 MiB or 1 MiB setting, rounds it
 to the observed host page size, and requires a separate one-page guard. The
 source path assumes no custom stack creator and no sanitizer allocation path.
 `capture_fiber_source.py` reads Cargo metadata, verifies the checkout revision
-and these five file hashes from their resolved package roots, then archives
+and these six file hashes from their resolved package roots, then archives
 the files under `wasmtime-source/`.
 The runner does not yet invoke this helper, so its attestation status stays
 missing. Pthread measurements describe the Tokio and caller stacks only.
