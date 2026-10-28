@@ -166,7 +166,9 @@ configuration through the same measured worker path, engine and fixed fixture.
 The 64 Store target and its trap control must start from the same full state
 and have identical successful observations. The driver requires a fresh
 guard/source capture for the same committed binary and copies the complete
-control closure into its evidence directory:
+control closure into its evidence directory. It reports initial full-state
+digests across paid, view and Core at each count. A differing cross-mode
+prestate requires a reviewed, one-line fixture reason frozen in the driver:
 
 ```sh
 python3 tools/native-stack/capture_resource_chain.py \

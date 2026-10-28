@@ -8,7 +8,8 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
-from capture_resource_chain import (check_run_consistency, measured_trace,
+from capture_resource_chain import (CHAIN_MODES, CHAIN_STORES, check_run_consistency,
+                                    cross_mode_initial_states, measured_trace,
                                     observation_from_trial, verify_final_closure)
 from resource_manifest import ROOT
 
@@ -54,6 +55,22 @@ def trial_fixture(mode, stores, outcome, sample_key="target"):
 
 
 class ChainObservationTests(unittest.TestCase):
+    def test_cross_mode_initial_state_requires_specific_fixture_reason(self):
+        captured = {
+            f"chain_{stores}_{mode}_reduced": {
+                "observations": [{"state": {"before_sha256": "a" * 64}}],
+            }
+            for stores in CHAIN_STORES for mode in CHAIN_MODES
+        }
+        captured["chain_33_core_reduced"]["observations"][0]["state"]["before_sha256"] = "b" * 64
+        with self.assertRaisesRegex(ValueError, "cross-mode initial state needs a fixture reason"):
+            cross_mode_initial_states(captured, {})
+        reason = "Core fixture seeds a separate prestate row."
+        summary = cross_mode_initial_states(captured, {(33, "core"): reason})
+        self.assertFalse(summary["33"]["comparisons"]["core"]["matches_paid"])
+        self.assertEqual(summary["33"]["comparisons"]["core"]["fixture_reason"], reason)
+        self.assertTrue(summary["64"]["comparisons"]["view"]["matches_paid"])
+
     def test_control_requires_same_full_prestate_as_paired_target(self):
         success = {"state": {"before_sha256": "a" * 64}, "fuel": {"user": 10}}
         trap = {"outcome": "trap", "trap": "UnreachableCodeReached"}

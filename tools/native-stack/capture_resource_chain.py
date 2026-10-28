@@ -28,6 +28,7 @@ WORKER_TEST = "runtime::call::tests::native_stack_resource::chain_worker_case"
 CHAIN_MODES = ("paid", "view", "core")
 STACK_MODES = ("reduced", "production")
 CHAIN_STORES = (33, 63, 64, 65)
+CROSS_MODE_FIXTURE_REASONS = {}
 PHASE_PAIRS = (
     ("preparation", "chain_preparation_entry", "chain_preparation_exit"),
     ("operation", "chain_operation_entry", "chain_operation_exit"),
@@ -406,6 +407,26 @@ def check_run_consistency(captured, case_id, mode, trap_control, detail):
                 f"{name}: 64-Store target and control prestate or success differs")
 
 
+def cross_mode_initial_states(captured, fixture_reasons):
+    summaries = {}
+    for stores in CHAIN_STORES:
+        digests = {}
+        for chain_mode in CHAIN_MODES:
+            observation = captured[f"chain_{stores}_{chain_mode}_reduced"]["observations"][0]
+            digests[chain_mode] = observation["state"]["before_sha256"]
+        references = {}
+        for chain_mode in CHAIN_MODES:
+            equal = digests[chain_mode] == digests["paid"]
+            reason = fixture_reasons.get((stores, chain_mode))
+            require(equal or (isinstance(reason, str) and reason.strip()
+                              and "\n" not in reason and "\r" not in reason),
+                    f"chain_{stores}_{chain_mode}: cross-mode initial state needs a fixture reason")
+            references[chain_mode] = {"matches_paid": equal,
+                                      "fixture_reason": None if equal else reason}
+        summaries[str(stores)] = {"digests": digests, "comparisons": references}
+    return summaries
+
+
 def capture(control_path, control_sha256, evidence_dir, timeout_seconds):
     require(sys.platform == "linux", "paired chain worker capture is Linux-only")
     manifest = build_manifest()
@@ -487,6 +508,7 @@ def capture(control_path, control_sha256, evidence_dir, timeout_seconds):
                 captured[f"chain_64_{chain_mode}_trap_control_reduced"]["observations"][1]
             for chain_mode in CHAIN_MODES
         }
+        initial_states = cross_mode_initial_states(captured, CROSS_MODE_FIXTURE_REASONS)
         identities = [(item["process"]["pid"], item["process"]["started_unix_ns"])
                       for item in captured.values()]
         identities.append((control["guard_control"]["process"]["pid"],
@@ -513,6 +535,7 @@ def capture(control_path, control_sha256, evidence_dir, timeout_seconds):
         "runs": captured,
         "paired_signatures": signatures,
         "paired_trap_signatures": trap_signatures,
+        "cross_mode_initial_states": initial_states,
         "remaining_case_bindings": [case["id"] for case in manifest["cases"]
                                     if case["id"] not in signatures],
         "unmet_requirements": {
