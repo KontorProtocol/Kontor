@@ -86,7 +86,7 @@
     },
     "resource_chain_capture": {
       "path": "tools/native-stack/capture_resource_chain.py",
-      "sha256": "dc42fd7988558728b1e54f5dabcb449d9be10ae38059d31079e24e7f3acf2f09"
+      "sha256": "d2956eb1281600269e85cae7424ec556afd1215c794e55124907704a893920a3"
     },
     "resource_comparator_source": {
       "path": "tools/native-stack/compare_resource.py",
@@ -110,7 +110,7 @@
     },
     "resource_schema": {
       "path": "tools/native-stack/resource-evidence-schema-v1.json",
-      "sha256": "0946c0e78a7046181a9cbeeb2141b03429955947a55d5a3e6dae8cec85f83018"
+      "sha256": "859a72c8eef969541801f2ed3ef043c51de3ca18e6e1caaaa7b62613c2cfd37a"
     },
     "resource_thread_trace": {
       "path": "core/indexer/src/runtime/resource_diagnostics.rs",

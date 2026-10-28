@@ -8,10 +8,10 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
-from capture_resource_chain import (CHAIN_MODES, CHAIN_STORES, balance_amounts,
-                                    check_run_consistency, cross_mode_initial_states,
-                                    measured_trace, observation_from_trial,
-                                    verify_final_closure)
+from capture_resource_chain import (CHAIN_MODES, CHAIN_STORES, canonical_decimal,
+                                    check_repeated_observations, check_run_consistency,
+                                    cross_mode_initial_states, measured_trace,
+                                    observation_from_trial, verify_final_closure)
 from resource_manifest import ROOT
 
 
@@ -55,11 +55,6 @@ def trial_fixture(mode, stores, outcome, sample_key="target"):
     }
 
 
-def normalized_transitions(trial, case_id):
-    return {key: str(value) for key, value in
-            balance_amounts(trial["balances"], case_id).items()}
-
-
 class ChainObservationTests(unittest.TestCase):
     def test_cross_mode_initial_state_requires_specific_fixture_reason(self):
         captured = {
@@ -80,13 +75,10 @@ class ChainObservationTests(unittest.TestCase):
     def test_control_requires_same_full_prestate_as_paired_target(self):
         success = {"state": {"before_sha256": "a" * 64}, "fuel": {"user": 10}}
         trap = {"outcome": "trap", "trap": "UnreachableCodeReached"}
-        transitions = {"after": "90"}
         captured = {"chain_64_paid_reduced": {
             "observations": [copy.deepcopy(success) for _ in range(3)],
-            "balance_transitions": [copy.deepcopy(transitions) for _ in range(3)],
         }}
-        control = {"observations": [copy.deepcopy(success), trap, copy.deepcopy(success)],
-                   "balance_transitions": [copy.deepcopy(transitions) for _ in range(3)]}
+        control = {"observations": [copy.deepcopy(success), trap, copy.deepcopy(success)]}
         check_run_consistency(captured, "chain_64_paid", "reduced", True, control)
         changed = copy.deepcopy(control)
         changed["observations"][0]["state"]["before_sha256"] = "b" * 64
@@ -101,6 +93,8 @@ class ChainObservationTests(unittest.TestCase):
 
     def test_financial_transitions_participate_in_strict_pairing(self):
         schema = json.loads((ROOT / "tools/native-stack/resource-evidence-schema-v1.json").read_text())
+        self.assertEqual(canonical_decimal("0001.2000", "chain"), "1.2")
+        self.assertEqual(canonical_decimal("-0.00", "chain"), "0")
         for mode in ("paid", "core"):
             case_id = f"chain_64_{mode}"
             baseline = trial_fixture(mode, 64, "ok")
@@ -111,17 +105,40 @@ class ChainObservationTests(unittest.TestCase):
                 changed["balances"]["floor_after"] = "3"
             first = observation_from_trial(baseline, case_id, "ok", schema)
             second = observation_from_trial(changed, case_id, "ok", schema)
-            self.assertEqual(first, second)
-            captured = {f"{case_id}_reduced": {
-                "observations": [first] * 3,
-                "balance_transitions": [normalized_transitions(baseline, case_id)] * 3,
-            }}
-            detail = {"observations": [second] * 3,
-                      "balance_transitions": [normalized_transitions(changed, case_id)] * 3}
-            with self.subTest(mode=mode), self.assertRaisesRegex(
-                ValueError, "full observations differ",
-            ):
-                check_run_consistency(captured, case_id, "production", False, detail)
+            self.assertNotEqual(first, second)
+            self.assertEqual(first["receipts"], second["receipts"])
+            with self.subTest(mode=mode):
+                with self.assertRaisesRegex(ValueError, "repeated observations diverge"):
+                    check_repeated_observations([first, second, first], False, case_id)
+                captured = {f"{case_id}_reduced": {"observations": [first] * 3}}
+                with self.assertRaisesRegex(ValueError, "full observations differ"):
+                    check_run_consistency(captured, case_id, "production", False,
+                                          {"observations": [second] * 3})
+        paid = trial_fixture("paid", 64, "ok")
+        paid_changed = copy.deepcopy(paid)
+        paid_changed["balances"].update(after="80", burned_after="20", supply_after="980")
+        success = observation_from_trial(paid, "chain_64_paid", "ok", schema)
+        changed_success = observation_from_trial(paid_changed, "chain_64_paid", "ok", schema)
+        trap = trial_fixture("paid", 64, "trap", "trap_control")
+        trap_changed = copy.deepcopy(trap)
+        trap_changed["balances"].update(after="80", burned_after="20", supply_after="980")
+        first_trap = observation_from_trial(
+            trap, "chain_64_paid", "trap", schema, "trap_control")
+        second_trap = observation_from_trial(
+            trap_changed, "chain_64_paid", "trap", schema, "trap_control")
+        captured = {
+            "chain_64_paid_reduced": {"observations": [success] * 3},
+            "chain_64_paid_production": {"observations": [success] * 3},
+            "chain_64_paid_trap_control_reduced": {
+                "observations": [success, first_trap, success]},
+        }
+        with self.assertRaisesRegex(ValueError, "full observations differ"):
+            check_run_consistency(captured, "chain_64_paid", "production", True,
+                                  {"observations": [success, second_trap, success]})
+        with self.assertRaisesRegex(ValueError, "target and control prestate"):
+            check_run_consistency(captured, "chain_64_paid", "reduced", True,
+                                  {"observations": [changed_success, first_trap,
+                                                    changed_success]})
 
     def test_conversion_evidence_must_occur_inside_target_operation(self):
         names = (
