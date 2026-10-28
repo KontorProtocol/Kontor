@@ -29,7 +29,7 @@
         "wasmtime_feature_logs": {"type": "object", "required": ["production", "qualification"], "additionalProperties": false,
           "properties": {"production": {"$ref": "#/$defs/raw_log"},
             "qualification": {"$ref": "#/$defs/raw_log"}}},
-        "wasmtime_source_files": {"type": "object", "minProperties": 4, "additionalProperties": {"$ref": "#/$defs/raw_log"}},
+        "wasmtime_source_files": {"type": "object", "minProperties": 5, "additionalProperties": {"$ref": "#/$defs/raw_log"}},
         "cargo_metadata_sha256": {"$ref": "#/$defs/sha256"}, "compile_env_sha256": {"$ref": "#/$defs/sha256"},
         "build_log_sha256": {"$ref": "#/$defs/sha256"}, "build_log": {"$ref": "#/$defs/raw_log"},
         "cargo_metadata_log": {"$ref": "#/$defs/raw_log"}, "compile_env_log": {"$ref": "#/$defs/raw_log"},

@@ -237,6 +237,8 @@ def synthetic_report(directory):
     source_prefix = ("git+https://github.com/wilfreddenton/wasmtime?rev="
                      f"{manifest['wasmtime_revision']}")
     wasmtime_id = f"{source_prefix}#51.0.0-kontor.2"
+    fiber_id = f"{source_prefix}#wasmtime-internal-fiber@51.0.0-kontor.2"
+    checkout = directory / "wasmtime-checkout"
     metadata_json = {
         "version": 1, "workspace_root": str(workspace),
         "target_directory": str(target_dir),
@@ -246,11 +248,22 @@ def synthetic_report(directory):
              "targets": [{"name": "indexer", "kind": ["lib"]}],
              "dependencies": [{"name": "wasmtime", "source": source_prefix}]},
             {"name": "wasmtime", "id": wasmtime_id, "version": "51.0.0-kontor.2",
-             "source": f"{source_prefix}#{manifest['wasmtime_revision']}"},
+             "source": f"{source_prefix}#{manifest['wasmtime_revision']}",
+             "manifest_path": str(checkout / "crates/wasmtime/Cargo.toml"),
+             "dependencies": [{"name": "wasmtime-internal-fiber",
+                               "source": source_prefix, "req": "=51.0.0-kontor.2"}]},
+            {"name": "wasmtime-internal-fiber", "id": fiber_id,
+             "version": "51.0.0-kontor.2",
+             "source": f"{source_prefix}#{manifest['wasmtime_revision']}",
+             "manifest_path": str(checkout / "crates/fiber/Cargo.toml"),
+             "targets": [{"name": "wasmtime_internal_fiber", "kind": ["lib"],
+                          "src_path": str(checkout / "crates/fiber/src/lib.rs")}]},
         ],
         "resolve": {"nodes": [
             {"id": indexer_id, "deps": [{"name": "wasmtime", "pkg": wasmtime_id}]},
-            {"id": wasmtime_id, "deps": []},
+            {"id": wasmtime_id,
+             "deps": [{"name": "wasmtime_fiber", "pkg": fiber_id}]},
+            {"id": fiber_id, "deps": [], "features": ["std"]},
         ]},
     }
     metadata = raw_log(directory, "cargo-metadata.json", json.dumps(metadata_json))
@@ -262,6 +275,9 @@ def synthetic_report(directory):
         {"reason": "compiler-artifact", "package_id": wasmtime_id,
          "target": {"name": "wasmtime", "kind": ["lib"]},
          "features": manifest["wasmtime_features"]["qualification"]},
+        {"reason": "compiler-artifact", "package_id": fiber_id,
+         "target": {"name": "wasmtime_internal_fiber", "kind": ["lib"]},
+         "features": ["std"]},
         {"reason": "build-finished", "success": True},
     ]
     build_log = raw_log(directory, "cargo.jsonl",
@@ -317,7 +333,8 @@ class ResourceReportControls(unittest.TestCase):
                          "binary_bytes", "binary_sha", "git_head", "dirty_tree",
                          "claimed_source_sha",
                          "child_executable_hash", "child_source_sha",
-                         "fiber_source_bytes", "fiber_source_claim"):
+                         "fiber_source_bytes", "fiber_source_claim",
+                         "wrong_fiber_source", "wrong_fiber_edge", "wrong_fiber_artifact"):
             with self.subTest(mutation=mutation), tempfile.TemporaryDirectory() as temporary:
                 directory = Path(temporary)
                 manifest, manifest_path, report = synthetic_report(directory)
@@ -325,7 +342,7 @@ class ResourceReportControls(unittest.TestCase):
                 expected = {
                     "metadata": "Cargo metadata is incomplete",
                     "resolved_fork": "does not resolve indexer to the pinned Wasmtime fork",
-                    "indexer_package": "unique indexer test or Wasmtime artifacts",
+                    "indexer_package": "unique indexer, Wasmtime, or fiber artifacts",
                     "artifact_path": "Cargo artifact path, profile, or compiled features",
                     "compiled_features": "Cargo artifact path, profile, or compiled features",
                     "profile": "Cargo artifact path, profile, or compiled features",
@@ -342,10 +359,24 @@ class ResourceReportControls(unittest.TestCase):
                     "child_source_sha": "terminal status differs",
                     "fiber_source_bytes": "raw log hash mismatch",
                     "fiber_source_claim": "fiber allocator source differs from pinned fork",
+                    "wrong_fiber_source": "package identity differs from frozen build",
+                    "wrong_fiber_edge": "does not resolve Wasmtime to the pinned fiber crate",
+                    "wrong_fiber_artifact": "unique indexer, Wasmtime, or fiber artifacts",
                 }[mutation]
                 if mutation == "metadata":
                     path = directory / closure["cargo_metadata_log"]["path"]
                     path.write_text("{}")
+                    digest = resource_evidence.sha256(path)
+                    closure["cargo_metadata_log"]["sha256"] = digest
+                    closure["cargo_metadata_sha256"] = digest
+                elif mutation in {"wrong_fiber_source", "wrong_fiber_edge"}:
+                    path = directory / closure["cargo_metadata_log"]["path"]
+                    metadata = json.loads(path.read_text())
+                    if mutation == "wrong_fiber_source":
+                        metadata["packages"][2]["source"] = "git+https://example.com/fiber#other"
+                    else:
+                        metadata["resolve"]["nodes"][1]["deps"][0]["pkg"] += "-other"
+                    path.write_text(json.dumps(metadata))
                     digest = resource_evidence.sha256(path)
                     closure["cargo_metadata_log"]["sha256"] = digest
                     closure["cargo_metadata_sha256"] = digest
@@ -358,7 +389,7 @@ class ResourceReportControls(unittest.TestCase):
                     closure["cargo_metadata_log"]["sha256"] = digest
                     closure["cargo_metadata_sha256"] = digest
                 elif mutation in {"indexer_package", "artifact_path", "compiled_features",
-                                  "profile", "failed_build"}:
+                                  "profile", "failed_build", "wrong_fiber_artifact"}:
                     path = directory / closure["build_log"]["path"]
                     entries = [json.loads(line) for line in path.read_text().splitlines()]
                     if mutation == "indexer_package":
@@ -367,6 +398,8 @@ class ResourceReportControls(unittest.TestCase):
                         entries[0]["executable"] += "-other"
                     elif mutation == "compiled_features":
                         entries[1]["features"].append("profiling")
+                    elif mutation == "wrong_fiber_artifact":
+                        entries[2]["package_id"] += "-other"
                     elif mutation == "profile":
                         entries[0]["profile"]["opt_level"] = "3"
                     else:

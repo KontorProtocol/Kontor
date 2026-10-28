@@ -34,7 +34,7 @@
     },
     "fiber_source_capture": {
       "path": "tools/native-stack/capture_fiber_source.py",
-      "sha256": "21acb8f9c4c91d7bb78938df07a62212d9974f28d0bdca2164268c49ec465ea7"
+      "sha256": "22138893cc5f8171d172e324d1af35166fbc26ce5ca3ce20d5196083a09174ac"
     },
     "filestorage_costs": {
       "path": "core/indexer/src/runtime/filestorage/reward_costs.rs",
@@ -86,7 +86,7 @@
     },
     "resource_manifest_source": {
       "path": "tools/native-stack/resource_manifest.py",
-      "sha256": "e673ece5c32e5bbf59e9b28b734746d5859de37c5334a76eca1537aa8bd06e04"
+      "sha256": "18b133d78c1a7973a0b0fa4153cc0eb8b582da101ee8e2ef2a5aaf929c927af2"
     },
     "resource_python_requirements": {
       "path": "tools/native-stack/requirements-resource.txt",
@@ -94,7 +94,7 @@
     },
     "resource_schema": {
       "path": "tools/native-stack/resource-evidence-schema-v1.json",
-      "sha256": "fdcd225c9b881bc426ad9be00e3e1b80706e6565e16b160cd9b305de6853d186"
+      "sha256": "338a94ac4930b4aaceeffb5114f8a856912adc5068ef9aa3871dd5903cbd626c"
     },
     "resource_thread_trace": {
       "path": "core/indexer/src/runtime/resource_diagnostics.rs",
@@ -102,7 +102,7 @@
     },
     "resource_validator_source": {
       "path": "tools/native-stack/resource_evidence.py",
-      "sha256": "3b587574867a37662d98b72f2f28e39f93a683e6467cc9940a052365911ad773"
+      "sha256": "ed53a07b3af854166e7ee73b59c4d6490b2c1a8d7749ebe16866063541dc58e9"
     },
     "resource_worker_diagnostic": {
       "path": "core/indexer/src/runtime/call/tests/native_stack_resource.rs",
@@ -1481,6 +1481,7 @@
       "crates/fiber/src/lib.rs": "1d747766d66be57bc530917505a2469993a0dabb64c28a3cc4fe38fd597991b7",
       "crates/fiber/src/unix.rs": "83121bc6a5becaeae393b99848f6c1fd169e44c1b7857b3b862f74c64b950c4c",
       "crates/wasmtime/src/config.rs": "681d6d278c7c0da051672c2c0acf0e658cab8338a5d461dba5f1596978336b8a",
+      "crates/wasmtime/src/runtime/fiber.rs": "6cb7d27f82be901b663a8ef54d9cf9ee2c797f937c59544403e82cae27b2cf4e",
       "crates/wasmtime/src/runtime/vm/instance/allocator/on_demand.rs": "b2399776ffd454560d13182c410ed9cb280b22a9278a2ed94c009e4d350b4867"
     },
     "wasmtime_revision": "0f84389ecd927c2e154f8d0de31fc2dfa5ebcae7"

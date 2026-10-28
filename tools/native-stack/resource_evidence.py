@@ -497,10 +497,13 @@ def check_build_artifact(report, manifest, directory):
                if isinstance(package, dict) and package.get("name") == "indexer"]
     wasmtime = [package for package in metadata["packages"]
                 if isinstance(package, dict) and package.get("name") == "wasmtime"]
-    require(len(indexer) == len(wasmtime) == 1,
-            "Cargo metadata lacks unique indexer or Wasmtime packages")
+    fiber = [package for package in metadata["packages"]
+             if isinstance(package, dict) and package.get("name") == "wasmtime-internal-fiber"]
+    require(len(indexer) == len(wasmtime) == len(fiber) == 1,
+            "Cargo metadata lacks unique indexer, Wasmtime, or fiber packages")
     indexer = indexer[0]
     wasmtime = wasmtime[0]
+    fiber = fiber[0]
     source_prefix = ("git+https://github.com/wilfreddenton/wasmtime?rev="
                      f"{manifest['wasmtime_revision']}")
     source = f"{source_prefix}#{manifest['wasmtime_revision']}"
@@ -518,8 +521,28 @@ def check_build_artifact(report, manifest, directory):
                     if isinstance(dependency, dict))
             and wasmtime.get("version") == "51.0.0-kontor.2"
             and wasmtime.get("source") == source
-            and isinstance(wasmtime.get("id"), str),
+            and wasmtime.get("id") == f"{source_prefix}#51.0.0-kontor.2"
+            and isinstance(wasmtime.get("dependencies"), list)
+            and any(dependency.get("name") == "wasmtime-internal-fiber"
+                    and dependency.get("source") == source_prefix
+                    and dependency.get("req") == "=51.0.0-kontor.2"
+                    for dependency in wasmtime["dependencies"] if isinstance(dependency, dict))
+            and fiber.get("version") == "51.0.0-kontor.2"
+            and fiber.get("source") == source
+            and fiber.get("id") == f"{source_prefix}#wasmtime-internal-fiber@51.0.0-kontor.2",
             "Cargo metadata package identity differs from frozen build")
+    wasmtime_manifest = Path(wasmtime.get("manifest_path", ""))
+    fiber_manifest = Path(fiber.get("manifest_path", ""))
+    require(wasmtime_manifest.is_absolute()
+            and wasmtime_manifest.parts[-3:] == ("crates", "wasmtime", "Cargo.toml")
+            and fiber_manifest.is_absolute()
+            and fiber_manifest.parts[-3:] == ("crates", "fiber", "Cargo.toml")
+            and isinstance(fiber.get("targets"), list)
+            and any(target.get("name") == "wasmtime_internal_fiber"
+                    and target.get("src_path") == str(fiber_manifest.parent / "src/lib.rs")
+                    and "lib" in target.get("kind", [])
+                    for target in fiber["targets"] if isinstance(target, dict)),
+            "Cargo fiber package source path differs from pinned crate")
     source_files = closure["wasmtime_source_files"]
     pinned_files = manifest["fiber_source_proof"]["source_files"]
     require(set(source_files) == set(pinned_files),
@@ -538,6 +561,8 @@ def check_build_artifact(report, manifest, directory):
                      if isinstance(node, dict) and node.get("id") == indexer["id"]]
     wasmtime_nodes = [node for node in resolve["nodes"]
                       if isinstance(node, dict) and node.get("id") == wasmtime["id"]]
+    fiber_nodes = [node for node in resolve["nodes"]
+                   if isinstance(node, dict) and node.get("id") == fiber["id"]]
     require(len(indexer_nodes) == len(wasmtime_nodes) == 1
             and isinstance(indexer_nodes[0].get("deps"), list)
             and any(isinstance(dependency, dict)
@@ -545,6 +570,14 @@ def check_build_artifact(report, manifest, directory):
                     and dependency.get("pkg") == wasmtime["id"]
                     for dependency in indexer_nodes[0]["deps"]),
             "Cargo metadata does not resolve indexer to the pinned Wasmtime fork")
+    require(len(fiber_nodes) == 1
+            and fiber_nodes[0].get("features") == ["std"]
+            and isinstance(wasmtime_nodes[0].get("deps"), list)
+            and any(isinstance(dependency, dict)
+                    and dependency.get("name") == "wasmtime_fiber"
+                    and dependency.get("pkg") == fiber["id"]
+                    for dependency in wasmtime_nodes[0]["deps"]),
+            "Cargo metadata does not resolve Wasmtime to the pinned fiber crate")
 
     profile = "release" if closure["profile"] == "release" else "debug"
     expected_command = [
@@ -588,17 +621,25 @@ def check_build_artifact(report, manifest, directory):
                           and item["target"].get("name") == "wasmtime"
                           and isinstance(item["target"].get("kind"), list)
                           and "lib" in item["target"]["kind"]]
-    require(len(indexer_artifacts) == len(wasmtime_artifacts) == 1,
-            "Cargo JSON build lacks unique indexer test or Wasmtime artifacts")
+    fiber_artifacts = [item for item in artifacts
+                       if isinstance(item.get("target"), dict)
+                       and item.get("package_id") == fiber["id"]
+                       and item["target"].get("name") == "wasmtime_internal_fiber"
+                       and isinstance(item["target"].get("kind"), list)
+                       and "lib" in item["target"]["kind"]]
+    require(len(indexer_artifacts) == len(wasmtime_artifacts) == len(fiber_artifacts) == 1,
+            "Cargo JSON build lacks unique indexer, Wasmtime, or fiber artifacts")
     indexer_artifact = indexer_artifacts[0]
     wasmtime_artifact = wasmtime_artifacts[0]
+    fiber_artifact = fiber_artifacts[0]
     require(indexer_artifact["executable"] == report["binary_path"]
             and indexer_artifact.get("features") == closure["cargo_features"]
             and indexer_artifact["profile"].get("opt_level") ==
                 ("3" if profile == "release" else "0")
             and indexer_artifact["profile"].get("debug_assertions") is (profile == "debug")
             and wasmtime_artifact.get("features") ==
-                closure["wasmtime_features"]["qualification"],
+                closure["wasmtime_features"]["qualification"]
+            and fiber_artifact.get("features") == fiber_nodes[0]["features"],
             "Cargo artifact path, profile, or compiled features differ from report")
 
 
