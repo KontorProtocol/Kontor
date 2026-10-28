@@ -6,6 +6,8 @@ import hashlib
 import json
 from pathlib import Path
 
+from compare import PRODUCTION_FEATURES, QUALIFICATION_FEATURES
+
 
 ROOT = Path(__file__).resolve().parents[2]
 MANIFEST = Path(__file__).with_name("resource-manifest-v1.json")
@@ -25,6 +27,21 @@ INPUTS = {
     "guest_error_tests": "core/indexer/src/runtime/call/tests/canonical_guest_errors.rs",
     "token_pages": "core/indexer/src/runtime/token/query_tests.rs",
     "nft_pages": "core/indexer/src/runtime/nft/query_tests.rs",
+    "publish_path": "core/indexer/src/runtime/mod.rs",
+    "brotli_path": "core/indexer/src/runtime/storage.rs",
+    "call_input": "core/indexer/src/runtime/call.rs",
+    "call_output": "core/indexer/src/runtime/call/result.rs",
+    "staking_costs": "core/indexer/src/runtime/staking/transition_costs.rs",
+    "filestorage_costs": "core/indexer/src/runtime/filestorage/reward_costs.rs",
+    "filestorage_settlement": "core/indexer/src/runtime/filestorage/settlement_tests.rs",
+    "native_staking": "native-contracts/staking/src/lib.rs",
+    "native_filestorage": "native-contracts/filestorage/src/lib.rs",
+    "production_qualification": "tools/native-stack/compare.py",
+    "resource_manifest_source": "tools/native-stack/resource_manifest.py",
+    "resource_validator_source": "tools/native-stack/resource_evidence.py",
+    "resource_schema": "tools/native-stack/resource-evidence-schema-v1.json",
+    "resource_comparator_source": "tools/native-stack/compare_resource.py",
+    "resource_python_requirements": "tools/native-stack/requirements-resource.txt",
 }
 CELLS = (
     "Linux-X64/dev",
@@ -37,12 +54,13 @@ CELLS = (
 THREAD_CATEGORIES = ("tokio_worker", "blocking_pool", "block_on_caller")
 CAPACITY_FIELDS = (
     "requested_bytes", "mapped_bytes", "guard_bytes", "usable_bytes",
+    "mapped_start", "mapped_end", "usable_start", "usable_end",
     "measurement_api", "thread_id", "thread_category",
 )
 OBSERVATION_FIELDS = (
     "case_id", "sample_key", "outcome", "error_class", "trap", "value", "fuel",
     "receipts", "state", "rollback", "live_stores", "reservations",
-    "resource_cleanup", "fresh_store", "suspended", "reused",
+    "resource_cleanup", "fresh_store", "suspended", "reused", "observed_depth",
 )
 
 
@@ -54,12 +72,15 @@ def sha256(path):
     return digest.hexdigest()
 
 
-def case(case_id, family, parameters, fixtures, binding=None, sample_keys=("target",)):
+def case(case_id, family, parameters, fixtures, binding=None, sample_keys=("target",),
+         expected_outcomes=None):
+    expected_outcomes = expected_outcomes or {}
     return {
         "id": case_id,
         "family": family,
         "parameters": parameters,
         "sample_keys": list(sample_keys),
+        "expected_outcomes": {key: expected_outcomes.get(key, "ok") for key in sample_keys},
         "fixtures": fixtures,
         "existing_unpaired_binding": binding,
         "paired_worker_status": "missing",
@@ -76,6 +97,7 @@ def cases():
                 ["stack_probe", "stack_probe_source", "stack_probe_tests", "stack_sweep"],
                 "runtime::call::tests::native_stack::qualification_probe",
                 ("last_success", "first_failure"),
+                {"first_failure": "stack_overflow"},
             ))
     result.append(case(
         "large_frame_paid", "large_frame",
@@ -91,6 +113,7 @@ def cases():
                  "root_included": True, "failure_expected": stores == 65},
                 ["error_test", "proxy", "chain_tests"],
                 "runtime::call::tests::sequential_chains::chain_probe_child",
+                expected_outcomes={"target": "invocation_limit"} if stores == 65 else None,
             ))
     result.extend((
         case("pending_host_io", "suspension", {"pending_import": True, "repeats": 2},
@@ -98,14 +121,26 @@ def cases():
              ("suspended", "resumed")),
         case("max_gas_paid", "paid_limit", {"gas_limit": 100_000, "repeats": 2},
              ["stack_probe", "stack_probe_tests"], "runtime::call::tests::native_stack::qualification_probe"),
-        case("real_native_core", "native_core", {"mode": "core", "repeats": 2}, [],
-             sample_keys=("success", "failure")),
+        case("native_staking_rewards", "native_core",
+             {"operation": "reward", "validator_populations": [0, 4, 32, 128],
+              "zero_population_emission": "zero", "source_population_cap": None,
+              "exact_budget_status": "awaiting_frozen_workload_plan", "repeats": 2},
+             ["staking_costs", "native_staking"], sample_keys=("population_0", "population_4",
+                                             "population_32", "population_128")),
+        case("native_filestorage_lifecycle", "native_core",
+             {"operations": ["expiry", "penalty", "cleanup"],
+              "separate_per_call_budgets": {"expiry": 32, "penalty": 32,
+                                            "cleanup": 32},
+              "exact_budget_status": "awaiting_frozen_workload_plan", "repeats": 2},
+             ["filestorage_costs", "filestorage_settlement", "native_filestorage"],
+             sample_keys=("expiry", "penalty", "cleanup")),
         case("canonical_lift_lower", "canonical_abi", {"shape": "string_and_resource", "repeats": 2},
              ["callback_tests"], "runtime::sequential_tests::hostile_canonical_callbacks_are_framed_and_clean_up",
              ("success", "failure")),
         case("canonical_realloc", "canonical_abi", {"string_bytes": 16_384, "repeats": 2},
              ["callback_tests"], "runtime::sequential_tests::hostile_canonical_callbacks_are_framed_and_clean_up",
-             ("success_lowering", "realloc_trap", "forbidden_import")),
+             ("success_lowering", "realloc_trap", "forbidden_import"),
+             {"realloc_trap": "trap", "forbidden_import": "deterministic_error"}),
         case("canonical_post_return", "canonical_abi", {"callback_loop_iterations": 16_384, "repeats": 2},
              ["callback_tests"], "runtime::sequential_tests::paid_post_return_callback_work_charges_fuel_gas_and_burn",
              ("light", "heavy")),
@@ -114,26 +149,65 @@ def cases():
               "out_of_bounds_variants": True, "fuel_failure": True, "repeats": 2},
              ["callback_tests"],
              sample_keys=("active_data_success", "active_element_success", "active_data_oob",
-                          "active_element_oob", "fuel_failure")),
+                          "active_element_oob", "fuel_failure"),
+             expected_outcomes={"active_data_oob": "deterministic_error",
+                                "active_element_oob": "deterministic_error",
+                                "fuel_failure": "out_of_fuel"}),
         case("explicit_resource_drop", "resource_lifecycle", {"success_trap_success": True},
              ["callback_tests"], "runtime::sequential_tests::explicit_guest_resource_drop_invokes_host_callback_and_cleans_up",
-             ("success_before_trap", "trap", "success_after_trap")),
+             ("success_before_trap", "trap", "success_after_trap"), {"trap": "trap"}),
         case("failed_instantiation_cleanup", "resource_lifecycle", {"out_of_bounds_data": True, "repeats": 2},
              ["callback_tests"], "runtime::sequential_tests::partial_instantiation_does_not_invoke_registered_destructors",
-             ("failed_init", "valid_control")),
+             ("failed_init", "valid_control"), {"failed_init": "deterministic_error"}),
         case("sqlite_pagination", "sqlite", {"page_sizes": [1, 7, 100], "rows": 1_024},
              ["token_pages", "nft_pages"], "runtime::token::query_tests::balance_pages_cover_the_ledger_and_bound_scan_work",
-             ("first", "middle", "final")),
-        case("sqlite_ranges", "sqlite", {"rows": 1_024, "range_lengths": [0, 1, 256, 1_024]}, [],
-             sample_keys=("empty", "single", "page", "full")),
-        case("sqlite_large_values", "sqlite", {"value_bytes": [16_384, 1_048_576]}, [],
-             sample_keys=("16k", "1m")),
+             tuple(f"{source}_{size}_{position}" for source in ("token", "nft")
+                   for size in (1, 7, 100) for position in ("first", "middle", "final"))),
+        case("sqlite_ranges", "sqlite",
+             {"rows": 1_024, "page_sizes": [1, 7, 100],
+              "range_lengths": [0, 1, 256, 1_024]}, [],
+             sample_keys=tuple(f"page_{page}_range_{length}" for page in (1, 7, 100)
+                               for length in (0, 1, 256, 1_024))),
+        case("sqlite_large_values", "sqlite",
+             {"value_bytes": [16_384, 1_048_576], "page_sizes": [1, 7, 100]}, [],
+             sample_keys=tuple(f"value_{size}_page_{page}" for size in (16_384, 1_048_576)
+                               for page in (1, 7, 100))),
         case("deepest_frame_host_call", "pulley_host_callback",
-             {"depth": "last_success_from_plain_boundary", "host_call_at_leaf": True}, []),
+             {"depth_from_case": "pulley_plain_paid", "host_call_at_leaf": True}, []),
         case("canonical_type_value_recursion", "canonical_abi",
-             {"wave_expression_max_depth": 64, "wave_string_literal_max_bytes": 16_384,
-              "shapes": ["nested_record", "nested_variant", "list_of_records", "large_result"]}, [],
-             sample_keys=("nested_record", "nested_variant", "list_of_records", "large_result")),
+             {"component_type_depth_limit": 100, "wave_result_value_depth_limit": 64,
+              "wave_expression_max_depth": 64, "wave_string_literal_max_bytes": 16_384,
+              "shapes": ["nested_record", "nested_variant", "list_of_records", "large_result"],
+              "repeats": 2}, ["call_input", "call_output"],
+             sample_keys=("nested_record", "nested_variant", "list_of_records", "large_result",
+                          "result_depth_64", "result_depth_65_rejected"),
+             expected_outcomes={"result_depth_65_rejected": "deterministic_error"}),
+        case("foreign_wave_parse_print", "foreign_call",
+             {"via": "foreign.call", "expression_depth_limit": 64,
+              "string_literal_byte_limit": 16_384, "repeats": 2},
+             ["call_input", "call_output"],
+             sample_keys=("depth_64", "depth_65_rejected", "literal_16384",
+                          "literal_16385_rejected", "print_depth_64", "print_depth_65_rejected"),
+             expected_outcomes={"depth_65_rejected": "deterministic_error",
+                                "literal_16385_rejected": "deterministic_error",
+                                "print_depth_65_rejected": "deterministic_error"}),
+        case("cold_publish_large_function", "cold_compile",
+             {"source_function_size_limit_bytes": 7_654_321,
+              "fixture_function_size_bytes": 65_536, "cold_cache": True, "repeats": 2},
+             ["publish_path"], sample_keys=("accepted", "over_limit_rejected"),
+             expected_outcomes={"over_limit_rejected": "deterministic_error"}),
+        case("cold_publish_control_nesting", "cold_compile",
+             {"fixture_control_depth": 1_000, "cold_cache": True, "repeats": 2},
+             ["publish_path"], sample_keys=("accepted",)),
+        case("cold_publish_br_table", "cold_compile",
+             {"source_br_table_limit_entries": 7_654_321,
+              "fixture_br_table_entries": 4_096, "cold_cache": True, "repeats": 2},
+             ["publish_path"], sample_keys=("accepted", "over_limit_rejected"),
+             expected_outcomes={"over_limit_rejected": "deterministic_error"}),
+        case("brotli_raw_ceiling", "blocking_decode",
+             {"raw_ceiling_bytes": 67_108_864, "blocking_pool": True, "repeats": 2},
+             ["brotli_path"], sample_keys=("at_ceiling", "one_byte_over_rejected"),
+             expected_outcomes={"one_byte_over_rejected": "deterministic_error"}),
     ))
     return sorted(result, key=lambda item: item["id"])
 
@@ -151,6 +225,8 @@ def build_manifest():
         "amendment": {"path": AMENDMENT, "sha256": AMENDMENT_SHA256},
         "source_baseline_commit": BASE_COMMIT,
         "wasmtime_revision": WASMTIME_REVISION,
+        "wasmtime_features": {"production": sorted(PRODUCTION_FEATURES),
+                              "qualification": sorted(QUALIFICATION_FEATURES)},
         "cells": list(CELLS),
         "configurations": {
             "production": {"pulley_stack_bytes": 524_288, "fiber_requested_bytes": 2_097_152,
@@ -166,9 +242,19 @@ def build_manifest():
         "type_value_limits": {
             "wave_expression_depth": 64,
             "wave_string_literal_bytes": 16_384,
-            "canonical_result_type_depth": "unproven",
-            "canonical_result_value_bytes": "unproven",
+            "component_type_depth": 100,
+            "wave_result_value_depth": 64,
+            "wave_result_bytes": "bounded_by_remaining_fuel",
+            "legal_shapes_not_covered": ["all combinations of component type constructors",
+                                         "all permitted list lengths and element values",
+                                         "all 100-deep type graphs with shallow values"],
         },
+        "workload_plan": {"status": "awaiting_frozen_workload_plan",
+                          "path": "tools/native-stack/resource-workload-plan-v1.json",
+                          "sha256": None},
+        "worker_runner": {"status": "missing", "path":
+                          "core/indexer/src/runtime/call/tests/native_stack_resource.rs",
+                          "sha256": None},
         "memory_profiles": [
             {"id": "suspended_64", "simultaneous_stores": 64, "view_roots": 0,
              "reactor_roots": 1, "production_capacity_only": True},

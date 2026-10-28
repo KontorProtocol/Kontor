@@ -10,15 +10,32 @@ marks every case as missing its paired worker binding. This is intentional:
 the old stack tests run on a current-thread harness and cannot satisfy the
 amendment's worker and capacity evidence.
 
-`resource-evidence-schema-v1.json` defines the required raw process, engine,
-thread, per-case, and production-only memory records. `resource_evidence.py`
+The resource validator requires `jsonschema` as pinned in
+`tools/native-stack/requirements-resource.txt`. It rejects duplicate JSON keys,
+applies the complete schema, checks expected outcomes and Store counts, and
+compares each extracted attempt with the complete child JSONL transcript and
+its terminal record. Application-state before/after hashes exclude the
+separately reported fee and receipt accounting, so failure rollback is checked
+without hiding paid-call charges. Resolved Wasmtime feature logs must match the
+production and qualification closures already used by the existing stack gate.
+
+`resource-evidence-schema-v1.json` defines the required raw process, build
+closure, engine, actual thread ranges, per-attempt worker phases, per-case,
+and production-only memory records. `resource_evidence.py`
 checks one paired cell and `compare_resource.py` requires all six cells and
 equal execution observations across them. Both reject the current preflight
 manifest for acceptance. A case may be marked ready only after its complete
 operation runs on the explicit multithread Tokio workers in both independent
 child processes, with actual capacity observations and raw logs. Missing
-native Core, deepest-frame host-call, SQLite range/large-value, and canonical
-result-shape fixtures are visible in the manifest and remain open work.
+native Core, deepest-frame host-call, SQLite range/large-value, cold publish,
+blocking Brotli, foreign WAVE, and canonical result-shape fixtures are visible
+in the manifest and remain open work. The named native Core cases require the
+coordinator's exact staking and filestorage workload budgets. The memory gate
+also requires a hashed workload plan with its occupancy, cache and allowance
+values frozen before measurements. The worker runner's source hash and each
+sample's preparation, operation, conversion and teardown worker IDs must be
+bound before acceptance. A successful preflight schema check is not a resource
+qualification result.
 
 The amendment is copied unchanged into
 `docs/design/protocol-upgrades/native-stack-s2-resource-amendment-v1.md`.

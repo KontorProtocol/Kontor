@@ -2,10 +2,9 @@
 """Require complete six-cell S2 resource evidence with equal execution results."""
 
 import argparse
-import json
 from pathlib import Path
 
-from resource_evidence import require, validate
+from resource_evidence import load_json_strict, require, validate
 from resource_manifest import CELLS
 
 
@@ -14,7 +13,7 @@ def compare(paths):
     reports = {}
     signatures = {}
     for path in paths:
-        report = json.loads(path.read_text())
+        report = load_json_strict(path)
         cell = report["cell"]
         require(cell in CELLS and cell not in reports,
                 f"duplicate or unknown resource cell: {cell}")

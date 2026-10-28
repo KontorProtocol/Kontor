@@ -1,4 +1,5 @@
 import json
+import copy
 import tempfile
 import unittest
 from pathlib import Path
@@ -17,7 +18,7 @@ class ResourceManifestTests(unittest.TestCase):
 
     def test_frozen_inputs_and_mandatory_surfaces(self):
         cases = {item["id"]: item for item in self.manifest["cases"]}
-        self.assertEqual(len(cases), 35)
+        self.assertEqual(len(cases), 41)
         self.assertEqual(len(cases), len(self.manifest["cases"]))
         self.assertEqual(set(self.manifest["cells"]), set(resource_manifest.CELLS))
         self.assertEqual(
@@ -40,19 +41,31 @@ class ResourceManifestTests(unittest.TestCase):
                 resource_manifest.sha256(resource_manifest.ROOT / identity["path"]),
             )
         for surface in (
-            "pending_host_io", "max_gas_paid", "real_native_core", "canonical_lift_lower",
+            "pending_host_io", "max_gas_paid", "canonical_lift_lower",
             "canonical_realloc", "canonical_post_return", "generated_initialization",
             "explicit_resource_drop", "failed_instantiation_cleanup", "sqlite_pagination",
             "sqlite_ranges", "sqlite_large_values", "deepest_frame_host_call",
             "canonical_type_value_recursion",
+            "native_staking_rewards", "native_filestorage_lifecycle",
+            "foreign_wave_parse_print", "cold_publish_large_function",
+            "cold_publish_control_nesting", "cold_publish_br_table",
+            "brotli_raw_ceiling",
         ):
             self.assertIn(surface, cases)
+        self.assertEqual(self.manifest["type_value_limits"]["component_type_depth"], 100)
+        self.assertEqual(self.manifest["type_value_limits"]["wave_result_value_depth"], 64)
+        self.assertEqual(self.manifest["workload_plan"]["status"],
+                         "awaiting_frozen_workload_plan")
+        self.assertEqual(self.manifest["worker_runner"]["status"], "missing")
         for stores in (33, 63, 64, 65):
             for mode in ("paid", "view", "core"):
                 self.assertIn(f"chain_{stores}_{mode}", cases)
         for shape in ("plain", "wide"):
             for mode in ("paid", "view", "system", "core"):
                 self.assertIn(f"pulley_{shape}_{mode}", cases)
+        self.assertEqual(len(cases["sqlite_pagination"]["sample_keys"]), 18)
+        self.assertEqual(len(cases["sqlite_ranges"]["sample_keys"]), 12)
+        self.assertEqual(len(cases["sqlite_large_values"]["sample_keys"]), 6)
 
     def test_manifest_and_evidence_schema_cannot_drift(self):
         self.assertEqual(
@@ -73,6 +86,150 @@ class ResourceManifestTests(unittest.TestCase):
     def test_pending_case_blocks_acceptance(self):
         with self.assertRaisesRegex(ValueError, "without paired worker bindings"):
             resource_evidence.validate({}, Path("."))
+
+    def test_schema_and_duplicate_keys_are_enforced_after_bindings(self):
+        ready = copy.deepcopy(self.manifest)
+        for item in ready["cases"]:
+            item["paired_worker_status"] = "ready"
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "manifest.json"
+            path.write_text(json.dumps(ready))
+            with patch.object(resource_evidence, "MANIFEST", path), patch.object(
+                resource_evidence, "build_manifest", return_value=ready
+            ):
+                with self.assertRaisesRegex(ValueError, "violates schema"):
+                    resource_evidence.validate({"schema_version": 1, "extra": 1}, path.parent)
+            path.write_text('{"outer":{"field":1,"field":2}}')
+            with self.assertRaisesRegex(ValueError, "duplicate JSON key"):
+                resource_evidence.load_json_strict(path)
+
+    def test_child_transcript_requires_terminal_and_unique_attempts(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "child.jsonl"
+            attempt = {"kind": "attempt", "case_id": "sample", "sample_key": "target",
+                       "repeat_index": 0, "observation": {}, "worker_attempt": {}}
+            terminal = {"kind": "terminal", "pid": 123, "case_count": 1,
+                        "attempt_count": 1, "complete": True, "test_harness_passed": True}
+            path.write_text(json.dumps(attempt) + "\n" + json.dumps(terminal) + "\n")
+            resource_evidence.read_process_events(path, {"pid": 123}, 1)
+            terminal["complete"] = False
+            path.write_text(json.dumps(attempt) + "\n" + json.dumps(terminal) + "\n")
+            with self.assertRaisesRegex(ValueError, "terminal status"):
+                resource_evidence.read_process_events(path, {"pid": 123}, 1)
+
+    def test_expected_results_and_boundaries_reject_matching_wrong_runs(self):
+        with tempfile.TemporaryDirectory() as directory:
+            raw = Path(directory) / "child.jsonl"
+            raw.write_text("test transcript\n")
+            log = {"path": raw.name, "sha256": resource_evidence.sha256(raw)}
+            configuration = {
+                "process_log": log, "raw_logs": [log],
+                "runtime": {"thread_observations": [
+                    {"thread_id": "worker", "thread_category": "tokio_worker"},
+                    {"thread_id": "blocking", "thread_category": "blocking_pool"},
+                ]},
+                "cases": [],
+            }
+            transcript = {}
+            for definition in self.manifest["cases"]:
+                case_id = definition["id"]
+                observations = []
+                attempts = []
+                repeats = definition["parameters"].get("repeats", 2)
+                for sample in definition["sample_keys"]:
+                    outcome = definition["expected_outcomes"][sample]
+                    for index in range(repeats):
+                        during = min(definition["parameters"].get("simultaneous_stores", 1), 64)
+                        depth = (10 if sample == "last_success" else 11) if (
+                            definition["family"] == "pulley_boundary"
+                        ) else (10 if case_id == "deepest_frame_host_call" else None)
+                        observation = {
+                            "case_id": case_id, "sample_key": sample, "outcome": outcome,
+                            "error_class": None if outcome == "ok" else "deterministic",
+                            "trap": "trap" if outcome in {"trap", "stack_overflow", "out_of_fuel"} else None,
+                            "value": None, "fuel": {"user": 0, "system": 0, "deposit": 0},
+                            "receipts": [], "state": {"before_sha256": "0" * 64,
+                                "after_sha256": "0" * 64, "marker": None,
+                                "balances_sha256": "0" * 64},
+                            "rollback": outcome != "ok",
+                            "live_stores": {"before": 0, "during": during, "after": 0},
+                            "reservations": {"before": 0, "during": during, "after": 0},
+                            "resource_cleanup": {"table_before": 0, "table_after": 0,
+                                "savepoint_restored": True, "stack_empty": True,
+                                "invocation_table_released": True},
+                            "fresh_store": True, "suspended": case_id == "pending_host_io",
+                            "reused": (case_id == "pending_host_io" and sample == "resumed") or
+                                      (case_id == "explicit_resource_drop" and
+                                       sample == "success_after_trap"),
+                            "observed_depth": depth,
+                        }
+                        attempt = {"sample_key": sample, "repeat_index": index,
+                            "phase_threads": {phase: ["worker"] for phase in
+                                              ("preparation", "operation", "conversion", "teardown")},
+                            "blocking_thread_ids": ["blocking"] if
+                                definition["family"] == "blocking_decode" else []}
+                        observations.append(observation)
+                        attempts.append(attempt)
+                        transcript[(case_id, sample, index)] = {
+                            "kind": "attempt", "case_id": case_id, "sample_key": sample,
+                            "repeat_index": index, "observation": observation,
+                            "worker_attempt": attempt,
+                        }
+                configuration["cases"].append({"id": case_id,
+                    "parameters": definition["parameters"], "raw_log": log,
+                    "observations": observations,
+                    "worker_execution": {"whole_operation_spawned": True,
+                        "source_sha256": "1" * 64, "attempts": attempts}})
+            manifest = copy.deepcopy(self.manifest)
+            manifest["worker_runner"]["sha256"] = "1" * 64
+            resource_evidence.check_cases(configuration, manifest, "production",
+                                          Path(directory), transcript)
+            case = next(item for item in configuration["cases"] if item["id"] == "large_frame_paid")
+            for observation in case["observations"]:
+                observation["outcome"] = "nondeterministic_error"
+                observation["error_class"] = "nondeterministic"
+            with self.assertRaisesRegex(ValueError, "wrong expected outcome"):
+                resource_evidence.check_cases(configuration, manifest, "production",
+                                              Path(directory), transcript)
+            for observation in case["observations"]:
+                observation["outcome"] = "ok"
+                observation["error_class"] = None
+            boundary = next(item for item in configuration["cases"]
+                            if item["id"] == "pulley_plain_paid")
+            for observation in boundary["observations"]:
+                if observation["sample_key"] == "first_failure":
+                    observation["observed_depth"] = 12
+            with self.assertRaisesRegex(ValueError, "nonadjacent Pulley boundary"):
+                resource_evidence.check_cases(configuration, manifest, "production",
+                                              Path(directory), transcript)
+
+    def test_worker_range_must_match_actual_measured_capacity(self):
+        def thread(category, identifier):
+            return {
+                "thread_category": category, "thread_id": identifier,
+                "requested_bytes": 1_048_576 if category == "tokio_worker" else None,
+                "mapped_bytes": 1_048_576, "guard_bytes": 4_096,
+                "usable_bytes": 1_044_480, "mapped_start": 1_000_000,
+                "mapped_end": 2_048_576, "usable_start": 1_004_096,
+                "usable_end": 2_048_576, "measurement_api": "pthread stack attributes",
+                "guard_treatment": "guard excluded from usable interval",
+            }
+
+        runtime = {
+            "flavor": "multi_thread", "worker_count": 2,
+            "worker_requested_bytes": 1_048_576,
+            "thread_observations": [
+                thread("tokio_worker", "worker-1"),
+                thread("tokio_worker", "worker-2"),
+                thread("blocking_pool", "blocking-1"),
+                thread("block_on_caller", "caller-1"),
+            ],
+            "blocking_pool_observed": True, "block_on_caller_observed": True,
+        }
+        resource_evidence.thread_capacities(runtime, "reduced")
+        runtime["thread_observations"][0]["usable_end"] -= 1
+        with self.assertRaisesRegex(ValueError, "actual usable worker range"):
+            resource_evidence.thread_capacities(runtime, "reduced")
 
     def test_removed_case_or_changed_hash_blocks_acceptance(self):
         with tempfile.TemporaryDirectory() as directory:
