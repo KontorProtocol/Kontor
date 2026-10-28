@@ -30,12 +30,13 @@ pub(super) fn is_deterministic(error: &Error) -> bool {
     if cause.is::<Utf8Error>() || cause.is::<DecodeUtf16Error>() || cause.is::<CharTryFromError>() {
         return true;
     }
-    // Wasmtime 49.0.3 has no public types for these errors. Tests pin real
-    // conversion and resource-limit messages; review them on upgrade.
+    // The pinned Wasmtime fork has no public types for these guest canonical
+    // errors. Keep the host-origin guard above and repin these tests on upgrade.
     let message = cause.to_string();
     matches!(
         message.as_str(),
         "too much data is being copied between the host and the guest: fuel allocated for hostcalls has been exhausted"
+            | "borrow handles still remain at the end of the call"
             | "string pointer/length out of bounds of memory"
             | "string pointer not aligned to 2"
             | "list pointer/length out of bounds of memory"
@@ -48,6 +49,32 @@ pub(super) fn is_deterministic(error: &Error) -> bool {
             | "invalid expected discriminant"
     ) || is_invalid_discriminant(&message)
         || is_resource_limit(&message)
+        || is_unknown_handle_index(&message)
+        || is_guest_resource_type_mismatch(&message)
+}
+
+fn is_canonical_u32(value: &str) -> bool {
+    value
+        .parse::<u32>()
+        .is_ok_and(|index| value == index.to_string())
+}
+
+fn is_unknown_handle_index(message: &str) -> bool {
+    let Some(index) = message.strip_prefix("unknown handle index ") else {
+        return false;
+    };
+    is_canonical_u32(index) && message == format!("unknown handle index {index}")
+}
+
+fn is_guest_resource_type_mismatch(message: &str) -> bool {
+    const SUFFIX: &str = " used with the wrong type, expected guest-defined resource but found a different guest-defined resource";
+    let Some(index) = message
+        .strip_prefix("handle index ")
+        .and_then(|value| value.strip_suffix(SUFFIX))
+    else {
+        return false;
+    };
+    is_canonical_u32(index) && message == format!("handle index {index}{SUFFIX}")
 }
 
 fn is_resource_limit(message: &str) -> bool {

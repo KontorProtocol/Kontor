@@ -279,6 +279,8 @@ pub struct Runtime {
     invocation_depth: u32,
     #[cfg(test)]
     conversion_probe: Option<conversion_probe::Probe>,
+    #[cfg(test)]
+    pub(crate) test_host_error_message: Option<Arc<str>>,
     pub(crate) usage_kind: UsageKind,
     pub(crate) fuel_checkpoint: u64,
     /// Transient per-op accumulator of the storage-deposit GAS reserved this op
@@ -436,6 +438,8 @@ impl Runtime {
             invocation_depth: 0,
             #[cfg(test)]
             conversion_probe: None,
+            #[cfg(test)]
+            test_host_error_message: None,
             deposit: DepositMeter::new(),
             usage_kind: UsageKind::System,
             fuel_checkpoint: 0,

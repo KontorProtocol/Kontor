@@ -1,6 +1,7 @@
 use anyhow::{Result, anyhow};
 use wasmtime::{Error, OutOfMemory, Trap};
 
+use super::super::error::is_deterministic;
 use crate::runtime::{ExecutionError, Runtime};
 use crate::test_utils::test_runtime;
 
@@ -44,6 +45,13 @@ async fn explicit_failure_classification_survives_nested_error_sources() -> Resu
         Error::from_anyhow(anyhow!(
             "resource limit exceeded: instance count too high at 1"
         )),
+        Error::from_anyhow(anyhow!(
+            "borrow handles still remain at the end of the call"
+        )),
+        Error::from_anyhow(anyhow!("unknown handle index 1")),
+        Error::from_anyhow(anyhow!(
+            "handle index 1 used with the wrong type, expected guest-defined resource but found a different guest-defined resource"
+        )),
     ] {
         let mut store = runtime.make_store(1_000)?;
         let result = Runtime::decode_result(false, Ok(Err(error)), vec![], &mut store).await;
@@ -53,6 +61,42 @@ async fn explicit_failure_classification_survives_nested_error_sources() -> Resu
         );
     }
     Ok(())
+}
+
+#[test]
+fn canonical_resource_error_formats_are_exact_and_origin_guarded() {
+    let accepted = [
+        "borrow handles still remain at the end of the call",
+        "unknown handle index 0",
+        "unknown handle index 4294967295",
+        "handle index 1 used with the wrong type, expected guest-defined resource but found a different guest-defined resource",
+    ];
+    for message in accepted {
+        assert!(is_deterministic(&Error::msg(message)), "{message}");
+        assert!(
+            !is_deterministic(&Error::from_anyhow(anyhow!(message))),
+            "{message}"
+        );
+    }
+    let rejected = [
+        "borrow handles still remain at the end of the call ",
+        "prefix borrow handles still remain at the end of the call",
+        "unknown handle index 01",
+        "unknown handle index +1",
+        "unknown handle index -1",
+        "unknown handle index 4294967296",
+        "unknown handle index 1 suffix",
+        "prefix unknown handle index 1",
+        "handle index 01 used with the wrong type, expected guest-defined resource but found a different guest-defined resource",
+        "handle index 4294967296 used with the wrong type, expected guest-defined resource but found a different guest-defined resource",
+        "handle index 1 used with the wrong type, expected host resource but found guest-defined resource",
+        "handle index 1 used with the wrong type, expected guest-defined resource but found host resource",
+        "handle index 1 used with the wrong type, expected guest-defined resource but found a different guest-defined resource suffix",
+        "prefix handle index 1 used with the wrong type, expected guest-defined resource but found a different guest-defined resource",
+    ];
+    for message in rejected {
+        assert!(!is_deterministic(&Error::msg(message)), "{message}");
+    }
 }
 
 #[tokio::test]

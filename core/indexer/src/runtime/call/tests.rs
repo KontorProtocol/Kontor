@@ -22,6 +22,7 @@ use crate::test_utils::test_runtime;
 
 mod abi_errors;
 mod cancelled_owner;
+mod canonical_guest_errors;
 mod conversion;
 mod conversion_work;
 mod errors;
