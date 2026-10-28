@@ -3,13 +3,18 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 
-use anyhow::{Error, Result};
+use anyhow::{Error, Result, anyhow, bail, ensure};
 use brotli::CompressorReader;
 use libsql::params;
 use tokio::sync::Notify;
 use tokio::time::timeout;
+use wasm_encoder::{
+    CodeSection, Function, FunctionSection, Instruction, Module as EncodedModule, RawSection,
+    StartSection,
+};
+use wasmparser::{BinaryReader, CodeSectionReader, Parser, Payload, TypeRef, Validator};
 use wasmtime::component::{Component, Val};
-use wasmtime::{Engine, Linker as WasmtimeLinker, Module, Store, Trap};
+use wasmtime::{Engine, ExternType, Linker as WasmtimeLinker, Module, Store, Trap};
 
 use super::component_policy;
 use super::invocation::{
@@ -36,6 +41,99 @@ fn compressed_core_start() -> Result<Vec<u8>> {
     let mut compressed = Vec::new();
     CompressorReader::new(bytes.as_slice(), 4096, 5, 22).read_to_end(&mut compressed)?;
     Ok(compressed)
+}
+
+fn host_importing_start(bytes: &[u8], module_name: &str, import_name: &str) -> Result<Vec<u8>> {
+    let mut encoded = EncodedModule::new();
+    let mut imported_functions = 0;
+    let mut defined_functions = 0;
+    let mut target = None;
+    let mut inserted_start = false;
+    for payload in Parser::new(0).parse_all(bytes) {
+        let payload = payload?;
+        match &payload {
+            Payload::Version { .. } | Payload::CodeSectionEntry(_) | Payload::End(_) => continue,
+            Payload::ImportSection(imports) => {
+                for import in imports.clone().into_imports() {
+                    let import = import?;
+                    if let TypeRef::Func(type_index) = import.ty {
+                        if import.module == module_name && import.name == import_name {
+                            target = Some((imported_functions, type_index));
+                        }
+                        imported_functions += 1;
+                    }
+                }
+            }
+            Payload::FunctionSection(functions) => {
+                let mut section = FunctionSection::new();
+                for function in functions.clone() {
+                    section.function(function?);
+                    defined_functions += 1;
+                }
+                // The fixture's type 10 is its empty start signature. A rebuild
+                // that changes this layout must fail validation below.
+                section.function(10);
+                encoded.section(&section);
+                continue;
+            }
+            Payload::ElementSection(_) => {
+                encoded.section(&StartSection {
+                    function_index: imported_functions + defined_functions,
+                });
+                inserted_start = true;
+            }
+            Payload::CodeSectionStart {
+                unchecked_range, ..
+            } => {
+                let start = usize::try_from(unchecked_range.start)?;
+                let end = usize::try_from(unchecked_range.end)?;
+                let reader = CodeSectionReader::new(BinaryReader::new(
+                    &bytes[start..end],
+                    unchecked_range.start,
+                ))?;
+                let mut section = CodeSection::new();
+                for body in reader {
+                    let range = body?.range();
+                    section.raw(&bytes[usize::try_from(range.start)?..usize::try_from(range.end)?]);
+                }
+                let (target_index, target_type) = target.ok_or_else(|| {
+                    anyhow!("missing real host import {module_name}::{import_name}")
+                })?;
+                let mut body = Function::new([]);
+                // These are the real lowered WIT import signatures in the
+                // stack-probe fixture, including its foreign-call i64 argument.
+                let params: &[bool] = match target_type {
+                    19 => &[false, false, false, false, true, false, false, false, false],
+                    18 => &[false, false, false, true],
+                    _ => bail!("unexpected host import type {target_type}"),
+                };
+                for parameter in params {
+                    if *parameter {
+                        body.instruction(&Instruction::I64Const(0));
+                    } else {
+                        body.instruction(&Instruction::I32Const(0));
+                    }
+                }
+                body.instruction(&Instruction::Call(target_index));
+                body.instruction(&Instruction::End);
+                section.function(&body);
+                encoded.section(&section);
+                continue;
+            }
+            Payload::StartSection { .. } => bail!("source fixture already has a start section"),
+            _ => {}
+        }
+        if let Some((id, range)) = payload.as_section() {
+            encoded.section(&RawSection {
+                id,
+                data: &bytes[usize::try_from(range.start)?..usize::try_from(range.end)?],
+            });
+        }
+    }
+    ensure!(inserted_start, "source fixture has no element section");
+    let bytes = encoded.finish();
+    Validator::new().validate_all(&bytes)?;
+    Ok(bytes)
 }
 
 #[test]
@@ -148,6 +246,93 @@ async fn host_importing_core_starts_are_rejected_before_side_effects() -> Result
 }
 
 #[tokio::test]
+async fn real_wit_host_importing_starts_are_rejected_before_instantiation() -> Result<()> {
+    let (mut runtime, _dir, _name) = test_runtime().await?;
+    let mut source = Vec::new();
+    brotli::Decompressor::new(
+        include_bytes!("../../../../test-contracts/binaries/stack_probe.wasm.br").as_slice(),
+        4096,
+    )
+    .read_to_end(&mut source)?;
+    let signer = Signer::Core(Box::new(Signer::Nobody));
+    for (index, (module_name, import_name, name)) in [
+        ("kontor:built-in/foreign", "call", "real-start-foreign"),
+        (
+            "kontor:built-in/context",
+            "[method]proc-storage.set-u64",
+            "real-start-storage",
+        ),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let bytes = host_importing_start(&source, module_name, import_name)?;
+        let module = Module::new(&runtime.engine, &bytes)?;
+        let calls = Arc::new(AtomicUsize::new(0));
+        let mut linker = WasmtimeLinker::new(&runtime.engine);
+        for import in module.imports() {
+            let ExternType::Func(function_type) = import.ty() else {
+                bail!("unexpected non-function import in real WIT fixture")
+            };
+            let targeted = import.module() == module_name && import.name() == import_name;
+            let observed = calls.clone();
+            linker.func_new(
+                import.module(),
+                import.name(),
+                function_type,
+                move |_, _, _| {
+                    if targeted {
+                        observed.fetch_add(1, Ordering::SeqCst);
+                    }
+                    Ok(())
+                },
+            )?;
+        }
+        let mut store = Store::new(&runtime.engine, ());
+        store.set_fuel(1_000_000)?;
+        linker.instantiate(&mut store, &module)?;
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
+        assert!(component_policy::validate_no_starts(&bytes).is_err());
+
+        runtime
+            .set_context(
+                1,
+                Some(
+                    TransactionContext::builder()
+                        .tx_index(u32::try_from(index)?)
+                        .build(),
+                ),
+                None,
+                None,
+            )
+            .await;
+        let mut compressed = Vec::new();
+        CompressorReader::new(bytes.as_slice(), 4096, 5, 22).read_to_end(&mut compressed)?;
+        let error = runtime
+            .publish(
+                &signer,
+                runtime.core_payment(),
+                name,
+                &compressed,
+                &native_provenance()?,
+            )
+            .await
+            .unwrap_err();
+        assert!(matches!(error, ExecutionError::Deterministic(_)));
+        assert!(format!("{error:#}").contains("start section"));
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
+        assert!(runtime.storage.savepoint_stack.is_empty().await);
+        let address = ContractAddress {
+            name: name.into(),
+            height: 1,
+            tx_index: u32::try_from(index)?,
+        };
+        assert!(runtime.storage.contract_id(&address).await?.is_none());
+    }
+    Ok(())
+}
+
+#[tokio::test]
 async fn core_start_is_rejected_on_publish_and_cold_load() -> Result<()> {
     let (mut runtime, _dir, _name) = test_runtime().await?;
     runtime
@@ -195,8 +380,12 @@ async fn core_start_is_rejected_on_publish_and_cold_load() -> Result<()> {
         .put_unchecked(id, unchecked, encoded.len())
         .await;
     assert!(runtime.component_cache.get_admitted(&id).await.is_none());
+    assert!(runtime.load_component(id).await.is_err());
+    runtime.component_cache.clear();
     for _ in 0..2 {
+        assert!(runtime.component_cache.get(&id).await.is_none());
         assert!(runtime.load_component(id).await.is_err());
+        assert!(runtime.component_cache.get(&id).await.is_none());
         assert!(runtime.component_cache.get_admitted(&id).await.is_none());
         let error = runtime
             .execute(None, None, &address, "anything()")

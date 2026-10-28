@@ -15,7 +15,7 @@ use wasmtime::Trap;
 use super::{balance, funded};
 use crate::database::queries::live_deposit_gas_sum;
 use crate::runtime::invocation::{
-    InvocationBudget, InvocationCapacityExhausted, MAX_LIVE_INVOCATIONS,
+    InvocationBudget, InvocationCapacityExhausted, InvocationLimitReached, MAX_LIVE_INVOCATIONS,
 };
 use crate::runtime::numerics::sub_decimal;
 use crate::runtime::pricing::Pricing;
@@ -198,6 +198,30 @@ async fn physical_capacity_failure_in_a_paid_nested_call_rolls_back_payment() ->
     Ok(())
 }
 
+#[tokio::test]
+async fn nested_depth_rejection_preserves_the_typed_limit_marker() -> Result<()> {
+    let (mut runtime, _dir, _name) = test_runtime().await?;
+    let actor = funded(&mut runtime).await?;
+    let chain = publish_chain(&mut runtime, &actor, 1).await?;
+    runtime.invocation_depth = MAX_LIVE_INVOCATIONS - 1;
+    let result = runtime
+        .execute(
+            Some(&actor),
+            Some(Payment {
+                signer_id: actor.signer_id().unwrap(),
+                gas_limit: MAX_UNTRUSTED_GAS_LIMIT,
+            }),
+            chain.last().unwrap(),
+            "chain-probe(false)",
+        )
+        .await;
+    assert!(
+        matches!(result, Err(ExecutionError::Deterministic(ref error))
+        if error.chain().any(|cause| cause.downcast_ref::<InvocationLimitReached>().is_some()))
+    );
+    Ok(())
+}
+
 #[tokio::test(flavor = "current_thread")]
 #[ignore = "invoked by the parent test to contain native process aborts"]
 async fn chain_probe_child() -> Result<()> {
@@ -209,6 +233,7 @@ async fn chain_probe_child() -> Result<()> {
     let (mut runtime, _dir, _name) = test_runtime().await?;
     let actor = funded(&mut runtime).await?;
     let chain = publish_chain(&mut runtime, &actor, depth).await?;
+    assert!(runtime.conversion_probe.is_none());
     let budget = Arc::new(InvocationBudget::default());
     runtime.invocation_budget = Some(budget.clone());
     let entered = Arc::new(Notify::new());
@@ -243,6 +268,7 @@ async fn chain_probe_child() -> Result<()> {
     } else {
         [false, true, false]
     } {
+        assert!(runtime.conversion_probe.is_none());
         runtime.storage.savepoint().await?;
         conn.execute("DELETE FROM contract_results", ()).await?;
         let saved = runtime.storage.savepoint_stack.peek().await;
@@ -458,6 +484,7 @@ async fn chain_probe_child() -> Result<()> {
         "CHAIN_PROBE_REPORT:{}",
         json!({
             "mode": mode,
+            "call_hook_installed": runtime.conversion_probe.is_some(),
             "stores": depth + 1,
             "trials": trials,
             "component_sha256": {

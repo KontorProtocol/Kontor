@@ -1,4 +1,5 @@
 use std::env;
+use std::time::Instant;
 
 use anyhow::{Context, Result, bail};
 use indexer_types::Payment;
@@ -19,15 +20,26 @@ use crate::test_utils::test_runtime;
 const COMPONENT: &[u8] =
     include_bytes!("../../../../../../test-contracts/binaries/stack_probe.wasm.br");
 
+mod sweep;
+
 #[tokio::test]
 #[ignore = "run through tools/native-stack/qualify.py so process aborts are observable"]
 async fn qualification_probe() -> Result<()> {
+    if let Ok(mode) = env::var("KONTOR_STACK_MODE") {
+        return sweep::run(&mode).await;
+    }
+    let total_start = Instant::now();
     let kind = env::var("KONTOR_STACK_KIND").context("KONTOR_STACK_KIND is required")?;
     let depth = env::var("KONTOR_STACK_DEPTH")
         .context("KONTOR_STACK_DEPTH is required")?
         .parse::<u32>()?;
+    let setup_start = Instant::now();
     let (mut runtime, _dir, _name) = test_runtime().await?;
+    let setup_ms = setup_start.elapsed().as_millis();
+    let funding_start = Instant::now();
     let signer = funded(&mut runtime).await?;
+    let funding_ms = funding_start.elapsed().as_millis();
+    let publication_start = Instant::now();
     let payment = Payment {
         signer_id: signer.signer_id().unwrap(),
         gas_limit: MAX_UNTRUSTED_GAS_LIMIT,
@@ -58,6 +70,8 @@ async fn qualification_probe() -> Result<()> {
             .context("fixture must pass real publish, component policy, and WIT validation")?;
     }
     runtime.set_context(1, None, None, None).await;
+    let publication_ms = publication_start.elapsed().as_millis();
+    let pre_execution_start = Instant::now();
     let address = ContractAddress {
         name: "stack-probe".into(),
         height: 1,
@@ -113,6 +127,8 @@ async fn qualification_probe() -> Result<()> {
         rows.next().await?.unwrap().get::<u64>(0)?
     };
     let previous = runtime.start_usage();
+    let pre_execution_ms = pre_execution_start.elapsed().as_millis();
+    let execution_start = Instant::now();
     let result = if system {
         runtime.execute_system_view(&address, &expression).await
     } else if core {
@@ -136,6 +152,8 @@ async fn qualification_probe() -> Result<()> {
             .execute(Some(&signer), Some(payment), &address, &expression)
             .await
     };
+    let execution_ms = execution_start.elapsed().as_millis();
+    let postcall_start = Instant::now();
     let usage = runtime.finish_usage(previous)?;
     let (outcome, error_message, value) = match result {
         Ok(value) => ("ok", None, Some(value)),
@@ -255,5 +273,19 @@ async fn qualification_probe() -> Result<()> {
     ) {
         assert!(rolled_back, "failed paid call changed contract state");
     }
+    println!(
+        "KONTOR_STACK_TIMING:{}",
+        json!({
+            "kind": kind,
+            "depth": depth,
+            "setup_ms": setup_ms,
+            "funding_ms": funding_ms,
+            "publication_ms": publication_ms,
+            "pre_execution_ms": pre_execution_ms,
+            "execution_ms": execution_ms,
+            "postcall_ms": postcall_start.elapsed().as_millis(),
+            "total_ms": total_start.elapsed().as_millis(),
+        })
+    );
     Ok(())
 }
