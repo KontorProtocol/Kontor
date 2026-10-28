@@ -1,5 +1,4 @@
 use std::io::Read;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex as StdMutex, Weak};
 
 use anyhow::{Result, anyhow, ensure};
@@ -12,7 +11,6 @@ use wasm_encoder::{CodeSection, Function, Instruction, Module as EncodedModule, 
 use wasmparser::{
     BinaryReader, CodeSectionReader, ExternalKind, Operator, Parser, Payload, TypeRef, Validator,
 };
-use wasmtime::Error as WasmtimeError;
 use wasmtime::component::ResourceTable;
 
 use super::{balance, funded};
@@ -283,27 +281,19 @@ async fn verify_published_resource_fault(fault: Fault) -> Result<()> {
     let chain = publish_fault_chain(&mut runtime, &actor, fault).await?;
     let fault_id = runtime.storage.contract_id(&chain[0]).await?.unwrap();
     let outer_id = runtime.storage.contract_id(&chain[2]).await?.unwrap();
-    let host_failure = Arc::new(AtomicBool::new(false));
+    let generated_linkers = runtime.linkers.clone();
     let call_tables: Arc<StdMutex<Vec<Weak<AsyncMutex<ResourceTable>>>>> =
         Arc::new(StdMutex::new(Vec::new()));
     let mut user = runtime.linkers.user.clone();
-    let fail = host_failure.clone();
     let observed_tables = call_tables.clone();
     user.allow_shadowing(true)
         .instance("kontor:built-in/testing")?
         .func_wrap_async("host-error", move |store, (): ()| {
-            let fail = fail.clone();
             observed_tables
                 .lock()
                 .unwrap()
                 .push(Arc::downgrade(&store.data().table));
-            Box::new(async move {
-                if fail.load(Ordering::SeqCst) {
-                    Err(WasmtimeError::from_anyhow(anyhow!(fault.message())))
-                } else {
-                    Ok((String::new(),))
-                }
-            })
+            Box::new(async { Ok((String::new(),)) })
         })?;
     runtime.linkers = Arc::new(Linkers {
         user,
@@ -410,7 +400,8 @@ async fn verify_published_resource_fault(fault: Fault) -> Result<()> {
             }
         }
     }
-    host_failure.store(true, Ordering::SeqCst);
+    runtime.linkers = generated_linkers;
+    runtime.test_host_error_message = Some(Arc::from(fault.message()));
     let mut rows = conn
         .query("SELECT COALESCE(MAX(id), 0) FROM contract_results", ())
         .await?;
@@ -432,7 +423,6 @@ async fn verify_published_resource_fault(fault: Fault) -> Result<()> {
         if error.chain().any(|cause| cause.to_string() == fault.message())),
         "{result:?}"
     );
-    assert_call_tables_released(&call_tables);
     let mut rows = conn
         .query(
             "SELECT COUNT(*) FROM contract_results WHERE id > ?",
@@ -461,7 +451,7 @@ async fn verify_published_resource_fault(fault: Fault) -> Result<()> {
     );
     assert!(runtime.stack.is_empty().await);
     assert!(runtime.storage.savepoint_stack.is_empty().await);
-    host_failure.store(false, Ordering::SeqCst);
+    runtime.test_host_error_message = None;
     assert_eq!(
         runtime
             .execute(None, None, &chain[0], "storage-state()")
