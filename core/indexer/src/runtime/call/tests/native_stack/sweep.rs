@@ -485,7 +485,7 @@ pub(super) async fn resource_smoke(reduced: bool) -> Result<()> {
     Ok(())
 }
 
-pub(super) async fn persistent_digest(conn: &Connection) -> Result<String> {
+pub(crate) async fn persistent_digest(conn: &Connection) -> Result<String> {
     let mut rows = conn
         .query(
             "SELECT name FROM sqlite_master WHERE type = 'table' ORDER BY name",
