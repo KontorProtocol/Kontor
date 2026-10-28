@@ -505,6 +505,20 @@ def check_build_artifact(report, manifest, directory):
             and wasmtime.get("source") == source
             and isinstance(wasmtime.get("id"), str),
             "Cargo metadata package identity differs from frozen build")
+    resolve = metadata.get("resolve")
+    require(isinstance(resolve, dict) and isinstance(resolve.get("nodes"), list),
+            "Cargo metadata lacks a resolved dependency graph")
+    indexer_nodes = [node for node in resolve["nodes"]
+                     if isinstance(node, dict) and node.get("id") == indexer["id"]]
+    wasmtime_nodes = [node for node in resolve["nodes"]
+                      if isinstance(node, dict) and node.get("id") == wasmtime["id"]]
+    require(len(indexer_nodes) == len(wasmtime_nodes) == 1
+            and isinstance(indexer_nodes[0].get("deps"), list)
+            and any(isinstance(dependency, dict)
+                    and dependency.get("name") == "wasmtime"
+                    and dependency.get("pkg") == wasmtime["id"]
+                    for dependency in indexer_nodes[0]["deps"]),
+            "Cargo metadata does not resolve indexer to the pinned Wasmtime fork")
 
     profile = "release" if closure["profile"] == "release" else "debug"
     expected_command = [

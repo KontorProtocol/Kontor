@@ -29,7 +29,7 @@ test executable with a matching SHA-256, a raw `rustc -vV` record, and child
 transcripts that report the executable path and SHA-256 observed by each child.
 The child command must name that Cargo artifact and the pinned resource test.
 The resource runner and workflow do not emit this evidence yet, so the gate
-remains blocked.
+remains blocked by an explicit build-capture status.
 
 `resource-evidence-schema-v1.json` defines the required raw process, build
 closure, engine, actual thread ranges, per-attempt worker phases, per-case,

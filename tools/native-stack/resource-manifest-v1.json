@@ -78,7 +78,7 @@
     },
     "resource_manifest_source": {
       "path": "tools/native-stack/resource_manifest.py",
-      "sha256": "0501668f8bdd036b671c692337c4937e61da193d3023f52e40b31efa85b2cb32"
+      "sha256": "3f6bd16469305a319efdcdc1fd9b71b3a65cfd7b54580caa2954ec9bc446adf7"
     },
     "resource_python_requirements": {
       "path": "tools/native-stack/requirements-resource.txt",
@@ -90,7 +90,7 @@
     },
     "resource_validator_source": {
       "path": "tools/native-stack/resource_evidence.py",
-      "sha256": "e1d8e921be67b5b6667cfc5d12b30d1d387cda12cbd15844e4c8fe1b9e42e7c9"
+      "sha256": "bd9fc86bf7749832d08ec344d7838e2ce06aaf26958a9db212a78b0e96cad62d"
     },
     "runner_module": {
       "path": "core/indexer/src/runtime/call/tests.rs",
@@ -122,6 +122,7 @@
     }
   },
   "attestation_status": {
+    "cargo_binary_capture": "unimplemented",
     "macos_thread_guard_capacity": "unimplemented",
     "per_cell_guard_fault_control": "missing",
     "wasmtime_fiber_stack_range": "unimplemented"

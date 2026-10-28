@@ -287,6 +287,7 @@ def build_manifest():
             "near_boundary_accepted_fixture": "unverified",
         },
         "attestation_status": {
+            "cargo_binary_capture": "unimplemented",
             "per_cell_guard_fault_control": "missing",
             "macos_thread_guard_capacity": "unimplemented",
             "wasmtime_fiber_stack_range": "unimplemented",

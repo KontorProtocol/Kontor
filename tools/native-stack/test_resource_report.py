@@ -236,6 +236,10 @@ def synthetic_report(directory):
             {"name": "wasmtime", "id": wasmtime_id, "version": "51.0.0-kontor.2",
              "source": f"{source_prefix}#{manifest['wasmtime_revision']}"},
         ],
+        "resolve": {"nodes": [
+            {"id": indexer_id, "deps": [{"name": "wasmtime", "pkg": wasmtime_id}]},
+            {"id": wasmtime_id, "deps": []},
+        ]},
     }
     metadata = raw_log(directory, "cargo-metadata.json", json.dumps(metadata_json))
     build_messages = [
@@ -291,7 +295,7 @@ def synthetic_report(directory):
 
 class ResourceReportControls(unittest.TestCase):
     def test_build_artifact_and_child_identity_mutations(self):
-        for mutation in ("metadata", "indexer_package", "artifact_path",
+        for mutation in ("metadata", "resolved_fork", "indexer_package", "artifact_path",
                          "compiled_features", "profile", "failed_build",
                          "cargo_target", "rustc_log", "process_command",
                          "binary_bytes", "binary_sha", "child_executable_hash"):
@@ -301,6 +305,7 @@ class ResourceReportControls(unittest.TestCase):
                 closure = report["build_closure"]
                 expected = {
                     "metadata": "Cargo metadata is incomplete",
+                    "resolved_fork": "does not resolve indexer to the pinned Wasmtime fork",
                     "indexer_package": "unique indexer test or Wasmtime artifacts",
                     "artifact_path": "Cargo artifact path, profile, or compiled features",
                     "compiled_features": "Cargo artifact path, profile, or compiled features",
@@ -316,6 +321,14 @@ class ResourceReportControls(unittest.TestCase):
                 if mutation == "metadata":
                     path = directory / closure["cargo_metadata_log"]["path"]
                     path.write_text("{}")
+                    digest = resource_evidence.sha256(path)
+                    closure["cargo_metadata_log"]["sha256"] = digest
+                    closure["cargo_metadata_sha256"] = digest
+                elif mutation == "resolved_fork":
+                    path = directory / closure["cargo_metadata_log"]["path"]
+                    metadata = json.loads(path.read_text())
+                    metadata["resolve"]["nodes"][0]["deps"][0]["pkg"] += "-other"
+                    path.write_text(json.dumps(metadata))
                     digest = resource_evidence.sha256(path)
                     closure["cargo_metadata_log"]["sha256"] = digest
                     closure["cargo_metadata_sha256"] = digest
