@@ -838,8 +838,8 @@ impl Runtime {
     }
 
     /// Run the Kontor WIT rules over a user contract's extracted WIT (validated
-    /// against the user-land built-in surface). A rule violation — missing
-    /// `init`, sync export, bad context/return type, floats, etc. — is a
+    /// against the user-land built-in surface). A rule violation (missing
+    /// `init`, async export, bad context/return type, floats, etc.) is a
     /// Deterministic rejection. Pure function of the WIT string.
     fn validate_user_wit(wit: &str) -> Result<(), ExecutionError> {
         match WitValidator::validate_str(wit) {
