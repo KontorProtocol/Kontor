@@ -5,7 +5,7 @@
   "additionalProperties": false,
   "required": [
     "schema_version", "manifest_sha256", "cell", "source_sha", "lockfile_sha256",
-    "binary_path", "binary_sha256", "compiler", "build_closure", "target", "host", "configurations", "memory_profiles"
+    "binary_path", "binary_sha256", "compiler", "build_closure", "target", "host", "configurations", "guard_control", "memory_profiles"
   ],
   "properties": {
     "schema_version": {"const": 1},
@@ -41,6 +41,8 @@
         "memory_bytes": {"type": "integer", "minimum": 1}, "storage": {"type": "string"}, "resource_enforcement": {"type": "string"}}},
     "configurations": {"type": "object", "required": ["production", "reduced"], "additionalProperties": false,
       "properties": {"production": {"$ref": "#/$defs/configuration"}, "reduced": {"$ref": "#/$defs/configuration"}}},
+    "guard_control": {"type": "object", "required": ["process", "raw_log"], "additionalProperties": false,
+      "properties": {"process": {"$ref": "#/$defs/process"}, "raw_log": {"$ref": "#/$defs/raw_log"}}},
     "memory_profiles": {"type": "array", "minItems": 3, "items": {"$ref": "#/$defs/memory_profile"}}
   },
   "$defs": {

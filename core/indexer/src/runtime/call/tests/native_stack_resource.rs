@@ -5,7 +5,11 @@ use std::thread::ThreadId;
 use std::time::Duration;
 
 use anyhow::{Context, Result, bail, ensure};
+#[cfg(target_os = "linux")]
+use hex::encode;
 use serde_json::{Value as JsonValue, from_str, json};
+#[cfg(target_os = "linux")]
+use sha2::{Digest, Sha256};
 use tokio::runtime::Builder;
 
 #[cfg(target_os = "linux")]
@@ -19,7 +23,7 @@ use std::arch::asm;
 #[cfg(target_os = "linux")]
 use std::fs::{File, read_to_string};
 #[cfg(target_os = "linux")]
-use std::io::Write;
+use std::io::{Read, Write};
 #[cfg(target_os = "linux")]
 use std::mem::MaybeUninit;
 #[cfg(target_os = "linux")]
@@ -27,7 +31,9 @@ use std::os::unix::fs::FileExt;
 #[cfg(target_os = "linux")]
 use std::os::unix::process::ExitStatusExt;
 #[cfg(target_os = "linux")]
-use std::process::{Command, Stdio};
+use std::path::Path;
+#[cfg(target_os = "linux")]
+use std::process::{self, Command, Stdio};
 #[cfg(target_os = "linux")]
 use std::ptr::null_mut;
 #[cfg(target_os = "linux")]
@@ -37,6 +43,8 @@ use std::time::Instant;
 #[cfg(target_os = "linux")]
 use tokio::runtime::Runtime as TokioRuntime;
 
+#[cfg(target_os = "linux")]
+use crate::built_info;
 use crate::runtime::Runtime;
 use crate::runtime::resource_diagnostics::{self, ThreadEvent};
 
@@ -346,7 +354,34 @@ fn linux_worker_guard_fault_control() -> Result<()> {
             })
         );
     }
+    println!(
+        "KONTOR_RESOURCE_GUARD_TERMINAL={}",
+        json!({
+            "pid": process::id(),
+            "binary_path": binary,
+            "binary_sha256": sha256_file(&binary)?,
+            "embedded_source_sha": built_info::GIT_COMMIT_HASH
+                .context("guard control binary has no embedded source revision")?,
+            "modes": ["reduced", "production"],
+            "complete": true,
+        })
+    );
     Ok(())
+}
+
+#[cfg(target_os = "linux")]
+fn sha256_file(path: &Path) -> Result<String> {
+    let mut file = File::open(path)?;
+    let mut digest = Sha256::new();
+    let mut buffer = [0u8; 64 * 1024];
+    loop {
+        let count = file.read(&mut buffer)?;
+        if count == 0 {
+            break;
+        }
+        digest.update(&buffer[..count]);
+    }
+    Ok(encode(digest.finalize()))
 }
 
 #[cfg(target_os = "linux")]

@@ -86,7 +86,7 @@
     },
     "resource_manifest_source": {
       "path": "tools/native-stack/resource_manifest.py",
-      "sha256": "205be401ade61dab0d8091455a568bf2442c953ed44d651ebfd3514aeeb81795"
+      "sha256": "bb670eb4e840733a7e29381a92c06d12ed00b62345acc646993de02c8715eba0"
     },
     "resource_python_requirements": {
       "path": "tools/native-stack/requirements-resource.txt",
@@ -94,7 +94,7 @@
     },
     "resource_schema": {
       "path": "tools/native-stack/resource-evidence-schema-v1.json",
-      "sha256": "7fa5f2ba0731c042e8866363dcf918e639c69e723a00007e6c7547d9c1262ab3"
+      "sha256": "0946c0e78a7046181a9cbeeb2141b03429955947a55d5a3e6dae8cec85f83018"
     },
     "resource_thread_trace": {
       "path": "core/indexer/src/runtime/resource_diagnostics.rs",
@@ -102,11 +102,11 @@
     },
     "resource_validator_source": {
       "path": "tools/native-stack/resource_evidence.py",
-      "sha256": "d07e16cf27c874bdc859be4d729eb2bbf20a6ec5ba34b75c957541d6fa35e91b"
+      "sha256": "2199ef72615096509526f5354e2896343cf2b74bfbdb731a3e5a129fecf761c0"
     },
     "resource_worker_diagnostic": {
       "path": "core/indexer/src/runtime/call/tests/native_stack_resource.rs",
-      "sha256": "c237c123617ef1c20519e441cea2efae7796fd2285dfba47a999b6c087224632"
+      "sha256": "602aed1939336255db1ba404efb97f88e958b29ee6fcadeb580c852617af7908"
     },
     "runner_module": {
       "path": "core/indexer/src/runtime/call/tests.rs",
@@ -1487,6 +1487,11 @@
     },
     "wasmtime_revision": "0f84389ecd927c2e154f8d0de31fc2dfa5ebcae7"
   },
+  "guard_control_runner": {
+    "source_sha256": "602aed1939336255db1ba404efb97f88e958b29ee6fcadeb580c852617af7908",
+    "status": "diagnostic_only",
+    "test_name": "runtime::call::tests::native_stack_resource::linux_worker_guard_fault_control"
+  },
   "memory_profiles": [
     {
       "id": "suspended_64",
@@ -1635,7 +1640,7 @@
   "wasmtime_revision": "0f84389ecd927c2e154f8d0de31fc2dfa5ebcae7",
   "worker_runner": {
     "path": "core/indexer/src/runtime/call/tests/native_stack_resource.rs",
-    "sha256": "c237c123617ef1c20519e441cea2efae7796fd2285dfba47a999b6c087224632",
+    "sha256": "602aed1939336255db1ba404efb97f88e958b29ee6fcadeb580c852617af7908",
     "status": "smoke_only",
     "test_name": "runtime::call::tests::native_stack_resource::resource_qualification"
   },

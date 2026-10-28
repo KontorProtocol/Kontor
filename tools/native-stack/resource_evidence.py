@@ -5,6 +5,7 @@ import argparse
 import hashlib
 import json
 import re
+import signal
 from pathlib import Path
 
 from jsonschema import Draft202012Validator
@@ -643,6 +644,126 @@ def check_build_artifact(report, manifest, directory):
             "Cargo artifact path, profile, or compiled features differ from report")
 
 
+def check_guard_control(report, manifest, directory):
+    require(report["host"]["os"] == "linux", "macOS guard control is not implemented")
+    control = report["guard_control"]
+    require(set(control) == {"process", "raw_log"}, "guard control evidence is incomplete")
+    process = control["process"]
+    require(set(process) == {"pid", "command", "started_unix_ns", "ended_unix_ns",
+                             "exit_code", "signal", "timed_out", "complete",
+                             "test_harness_passed"}
+            and type(process["pid"]) is int and process["pid"] > 0
+            and type(process["started_unix_ns"]) is int
+            and type(process["ended_unix_ns"]) is int
+            and 0 < process["started_unix_ns"] < process["ended_unix_ns"]
+            and process["exit_code"] == 0 and process["signal"] is None
+            and process["timed_out"] is False and process["complete"] is True
+            and process["test_harness_passed"] is True,
+            "guard control process failed or transcript is incomplete")
+    require(process["command"] == [
+        report["binary_path"], "--exact", manifest["guard_control_runner"]["test_name"],
+        "--ignored", "--nocapture",
+    ], "guard control command differs from compiled test")
+    require(manifest["guard_control_runner"]["source_sha256"] ==
+            manifest["artifacts"]["resource_worker_diagnostic"]["sha256"],
+            "guard control source differs from frozen worker")
+    file_evidence(directory, control["raw_log"])
+    require(control["raw_log"]["path"] not in {
+        item["process_log"]["path"] for item in report["configurations"].values()
+    }, "guard control reuses a workload process transcript")
+    lines = (directory / control["raw_log"]["path"]).read_text().splitlines()
+    require(sum(line.strip() == "running 1 test" for line in lines) == 1,
+            "guard control transcript lacks one selected test")
+    harness = [line for line in lines if line.startswith("test result:")]
+    require(len(harness) == 1 and re.fullmatch(
+        r"test result: ok\. 1 passed; 0 failed; 0 ignored; 0 measured; \d+ filtered out; finished in [0-9.]+s",
+        harness[0]) is not None, "guard control test harness did not pass")
+    markers = [line.split("KONTOR_RESOURCE_GUARD_CONTROL=", 1)[1]
+               for line in lines if "KONTOR_RESOURCE_GUARD_CONTROL=" in line]
+    terminals = [line.split("KONTOR_RESOURCE_GUARD_TERMINAL=", 1)[1]
+                 for line in lines if "KONTOR_RESOURCE_GUARD_TERMINAL=" in line]
+    require(len(markers) == 2 and len(terminals) == 1,
+            "guard control transcript lacks exact two children and terminal")
+    marker_positions = [index for index, line in enumerate(lines)
+                        if "KONTOR_RESOURCE_GUARD_CONTROL=" in line]
+    terminal_position = next(index for index, line in enumerate(lines)
+                             if "KONTOR_RESOURCE_GUARD_TERMINAL=" in line)
+    harness_position = next(index for index, line in enumerate(lines)
+                            if line.startswith("test result:"))
+    require(max(marker_positions) < terminal_position < harness_position,
+            "guard control terminal or harness result is out of order")
+    terminal = json.loads(terminals[0], object_pairs_hook=no_duplicate_keys,
+                          parse_constant=no_nonfinite_constants)
+    require(isinstance(terminal, dict) and set(terminal) == {
+        "pid", "binary_path", "binary_sha256", "embedded_source_sha", "modes", "complete"
+    } and type(terminal["pid"]) is int and terminal["pid"] == process["pid"]
+            and terminal["binary_path"] == report["binary_path"]
+            and terminal["binary_sha256"] == report["binary_sha256"]
+            and terminal["embedded_source_sha"] == report["source_sha"]
+            and terminal["modes"] == ["reduced", "production"]
+            and terminal["complete"] is True,
+            "guard control terminal differs from source or binary closure")
+    seen = {}
+    child_pids = set()
+    child_tids = set()
+    for marker in markers:
+        child = json.loads(marker, object_pairs_hook=no_duplicate_keys,
+                           parse_constant=no_nonfinite_constants)
+        require(isinstance(child, dict) and set(child) == {
+            "mode", "signal", "target", "child_binary", "child_stdout", "child_stderr"
+        }, "guard child record is incomplete")
+        mode = child["mode"]
+        require(mode in ("reduced", "production") and mode not in seen,
+                "guard control mode is missing or duplicated")
+        seen[mode] = child
+        target = child["target"]
+        require(isinstance(target, dict) and set(target) == {
+            "mode", "process_id", "os_thread_id", "page_size_bytes", "guard_start",
+            "guard_end", "guard_verification", "address"
+        } and target["mode"] == mode,
+                "guard child target is incomplete or misattributed")
+        pid = target["process_id"]
+        tid = target["os_thread_id"]
+        page = report["configurations"][mode]["engine"]["page_size_bytes"]
+        require(type(pid) is int and pid > 0 and pid != process["pid"]
+                and pid not in child_pids and type(tid) is int and tid > 0
+                and tid not in child_tids and type(page) is int and page > 0
+                and type(target["page_size_bytes"]) is int
+                and target["page_size_bytes"] == page
+                and type(target["guard_start"]) is int
+                and type(target["guard_end"]) is int
+                and type(target["address"]) is int
+                and target["guard_start"] >= 0
+                and target["guard_end"] - target["guard_start"] >= page
+                and target["guard_start"] <= target["address"] < target["guard_end"]
+                and target["guard_verification"] in {
+                    "guard protected inside pthread stack range",
+                    "guard protected below pthread stack range",
+                    "inaccessible interval verified below pthread stack range by /proc/self/mem EIO",
+                }, "guard child PID, TID, or target is unverified")
+        child_pids.add(pid)
+        child_tids.add(tid)
+        stdout = child["child_stdout"]
+        stderr = child["child_stderr"]
+        require(type(child["signal"]) is int and child["signal"] == signal.SIGABRT
+                and child["child_binary"] == report["binary_path"]
+                and isinstance(stdout, str) and isinstance(stderr, str),
+                "guard child signal or binary differs from compiled control")
+        nested = [line.split("KONTOR_RESOURCE_GUARD_TARGET=", 1)[1]
+                  for line in stdout.splitlines()
+                  if "KONTOR_RESOURCE_GUARD_TARGET=" in line]
+        require(len(nested) == 1 and json.loads(
+            nested[0], object_pairs_hook=no_duplicate_keys,
+            parse_constant=no_nonfinite_constants) == target
+                and stdout.count("running 1 test") == 1
+                and "test result:" not in stdout
+                and f"({tid}) has overflowed its stack" in stderr
+                and "fatal runtime error: stack overflow" in stderr,
+                "guard child raw output does not corroborate its fault")
+    require(list(seen) == ["reduced", "production"],
+            "guard control lacks one distinct child per configuration")
+
+
 def validate(report, directory):
     manifest = build_manifest()
     require(MANIFEST.is_file() and load_json_strict(MANIFEST) == manifest,
@@ -673,7 +794,7 @@ def validate(report, directory):
     required = {
         "schema_version", "manifest_sha256", "cell", "source_sha", "lockfile_sha256",
         "binary_path", "binary_sha256", "compiler", "build_closure", "target", "host",
-        "configurations", "memory_profiles",
+        "configurations", "guard_control", "memory_profiles",
     }
     require(set(report) == required, "evidence header is incomplete or has unknown fields")
     require(report["schema_version"] == 1, "unknown evidence schema")
@@ -800,6 +921,7 @@ def validate(report, directory):
             name: identity["sha256"] for name, identity in manifest["artifacts"].items()
         }, f"{mode}: fixture source hash mismatch")
         signatures[mode] = check_cases(configuration, manifest, mode, directory, transcript)
+    check_guard_control(report, manifest, directory)
     production_min = min(item["usable_bytes"] for item in workers["production"])
     reduced_max = max(item["usable_bytes"] for item in workers["reduced"])
     require(production_min >= 2 * reduced_max,

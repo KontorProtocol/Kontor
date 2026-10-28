@@ -306,6 +306,11 @@ def build_manifest():
             "macos_thread_guard_capacity": "unimplemented",
             "wasmtime_fiber_effective_capacity": "missing",
         },
+        "guard_control_runner": {
+            "status": "diagnostic_only",
+            "test_name": "runtime::call::tests::native_stack_resource::linux_worker_guard_fault_control",
+            "source_sha256": sha256(ROOT / "core/indexer/src/runtime/call/tests/native_stack_resource.rs"),
+        },
         "fiber_source_proof": {
             "wasmtime_revision": WASMTIME_REVISION,
             "source_files": FIBER_SOURCE_FILES,

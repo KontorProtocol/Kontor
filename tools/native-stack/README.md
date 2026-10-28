@@ -80,6 +80,12 @@ plus the child's exact target record. This control is
 diagnostic until its raw child output and status are
 bound to every qualification cell. The macOS worker guard and fault control
 remain unimplemented.
+The resource report now requires a separate complete guard-control process log
+per cell. The validator checks the parent test command and terminal success,
+exactly one reduced and one production child, each child PID and worker TID,
+its verified target interval, the matching stack-overflow abort, and the
+embedded source and executable SHA-256 against the Cargo artifact. The runner
+does not yet collect this record, so the per-cell attestation remains missing.
 
 Thread records must confirm a protected guard region, not only repeat
 `pthread_attr_getguardsize`'s reported size. An unverified guard fails the

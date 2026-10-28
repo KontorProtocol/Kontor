@@ -180,6 +180,45 @@ def memory_profile(directory, definition, plan_hash):
     }
 
 
+def guard_control(directory, manifest, binary_path, binary_sha256, source_sha):
+    parent_pid = 103
+    lines = ["running 1 test"]
+    for mode, pid, tid in (("reduced", 104, 204), ("production", 105, 205)):
+        target = {
+            "mode": mode, "process_id": pid, "os_thread_id": tid,
+            "page_size_bytes": 4096, "guard_start": pid * 4_194_304,
+            "guard_end": pid * 4_194_304 + 4096,
+            "guard_verification": "guard protected below pthread stack range",
+            "address": pid * 4_194_304 + 2048,
+        }
+        child = {
+            "mode": mode, "signal": 6, "target": target,
+            "child_binary": binary_path,
+            "child_stdout": "running 1 test\nKONTOR_RESOURCE_GUARD_TARGET=" +
+                            json.dumps(target) + "\n",
+            "child_stderr": f"thread 'tokio-rt-worker' ({tid}) has overflowed its stack\n"
+                            "fatal runtime error: stack overflow, aborting\n",
+        }
+        lines.append("KONTOR_RESOURCE_GUARD_CONTROL=" + json.dumps(child))
+    lines.append("KONTOR_RESOURCE_GUARD_TERMINAL=" + json.dumps({
+        "pid": parent_pid, "binary_path": binary_path,
+        "binary_sha256": binary_sha256, "embedded_source_sha": source_sha,
+        "modes": ["reduced", "production"], "complete": True,
+    }))
+    lines.append("test runtime::call::tests::native_stack_resource::linux_worker_guard_fault_control ... ok")
+    lines.append("test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 690 filtered out; finished in 0.14s")
+    return {
+        "process": {"pid": parent_pid,
+                    "command": [binary_path, "--exact",
+                                manifest["guard_control_runner"]["test_name"],
+                                "--ignored", "--nocapture"],
+                    "started_unix_ns": 103_000, "ended_unix_ns": 103_001,
+                    "exit_code": 0, "signal": None, "timed_out": False,
+                    "complete": True, "test_harness_passed": True},
+        "raw_log": raw_log(directory, "guard-control.txt", "\n".join(lines) + "\n"),
+    }
+
+
 def synthetic_report(directory):
     manifest = copy.deepcopy(resource_manifest.build_manifest())
     for case in manifest["cases"]:
@@ -323,10 +362,51 @@ def synthetic_report(directory):
                                            manifest["workload_plan"]["sha256"])
                             for definition in manifest["memory_profiles"]],
     }
+    report["guard_control"] = guard_control(
+        directory, manifest, binary_path, binary_artifact["sha256"], source_sha)
     return manifest, manifest_path, report
 
 
 class ResourceReportControls(unittest.TestCase):
+    def test_guard_control_transcript_mutations(self):
+        for mutation, expected in (
+                ("missing_child", "lacks exact two children and terminal"),
+                ("duplicate_mode", "mode is missing or duplicated"),
+                ("misattributed_tid", "raw output does not corroborate its fault"),
+                ("wrong_terminal_source", "terminal differs from source or binary closure"),
+                ("failed_parent", "process failed or transcript is incomplete")):
+            with self.subTest(mutation=mutation), tempfile.TemporaryDirectory() as temporary:
+                directory = Path(temporary)
+                manifest, manifest_path, report = synthetic_report(directory)
+                control = report["guard_control"]
+                path = directory / control["raw_log"]["path"]
+                lines = path.read_text().splitlines()
+                if mutation == "missing_child":
+                    lines.pop(2)
+                elif mutation == "duplicate_mode":
+                    lines[2] = lines[1]
+                elif mutation == "misattributed_tid":
+                    child = json.loads(lines[2].split("=", 1)[1])
+                    child["target"]["os_thread_id"] = 999
+                    child["child_stdout"] = (
+                        "running 1 test\nKONTOR_RESOURCE_GUARD_TARGET=" +
+                        json.dumps(child["target"]) + "\n")
+                    lines[2] = "KONTOR_RESOURCE_GUARD_CONTROL=" + json.dumps(child)
+                elif mutation == "wrong_terminal_source":
+                    terminal = json.loads(lines[3].split("=", 1)[1])
+                    terminal["embedded_source_sha"] = "0" * 40
+                    lines[3] = "KONTOR_RESOURCE_GUARD_TERMINAL=" + json.dumps(terminal)
+                else:
+                    control["process"]["exit_code"] = 1
+                if mutation != "failed_parent":
+                    path.write_text("\n".join(lines) + "\n")
+                    control["raw_log"]["sha256"] = resource_evidence.sha256(path)
+                with patch.object(resource_evidence, "ROOT", directory), patch.object(
+                    resource_evidence, "MANIFEST", manifest_path
+                ), patch.object(resource_evidence, "build_manifest", return_value=manifest):
+                    with self.assertRaisesRegex(ValueError, expected):
+                        resource_evidence.validate(report, directory)
+
     def test_build_artifact_and_child_identity_mutations(self):
         for mutation in ("metadata", "resolved_fork", "indexer_package", "artifact_path",
                          "compiled_features", "profile", "failed_build",
