@@ -13,6 +13,13 @@ from jsonschema import Draft202012Validator
 from resource_manifest import CELLS, MANIFEST, OBSERVATION_FIELDS, ROOT, THREAD_CATEGORIES, build_manifest
 
 SCHEMA = Path(__file__).with_name("resource-evidence-schema-v1.json")
+STATE_KEYS = {"before_sha256", "after_sha256", "marker", "balances_sha256"}
+BALANCE_TRANSITION_FIELDS = {
+    "before", "after", "restored", "burned_before", "burned_after",
+    "supply_before", "supply_after", "floor_before", "floor_after",
+    "floor_restored",
+}
+DECIMAL_AMOUNT_PATTERN = r"-?(0|[1-9][0-9]*)([.][0-9]+)?"
 
 
 def no_duplicate_keys(pairs):
@@ -296,11 +303,19 @@ def check_cases(configuration, manifest, mode, directory, transcript):
                         (receipt["value"] is None or isinstance(receipt["value"], str)),
                         f"{mode}: invalid receipt: {case_id}/{sample_key}")
             state = observation["state"]
-            require(set(state) == {"before_sha256", "after_sha256", "marker", "balances_sha256"}
+            require(set(state) in (STATE_KEYS, STATE_KEYS | {"balance_transitions"})
                     and all(re.fullmatch(r"[0-9a-f]{64}", state[key]) for key in
                             ("before_sha256", "after_sha256", "balances_sha256")) and
                     (state["marker"] is None or isinstance(state["marker"], str)),
                     f"{mode}: invalid state evidence: {case_id}/{sample_key}")
+            if "balance_transitions" in state:
+                transitions = state["balance_transitions"]
+                require(isinstance(transitions, dict)
+                        and set(transitions) == BALANCE_TRANSITION_FIELDS
+                        and all(isinstance(value, str)
+                                and re.fullmatch(DECIMAL_AMOUNT_PATTERN, value)
+                                for value in transitions.values()),
+                        f"{mode}: invalid balance transitions: {case_id}/{sample_key}")
             require(type(observation["rollback"]) is bool and
                     all(type(observation[key]) is bool for key in
                         ("fresh_store", "suspended", "reused")),

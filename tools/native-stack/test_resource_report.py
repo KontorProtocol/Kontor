@@ -48,13 +48,17 @@ def observation(definition, sample):
         depth = 10
     else:
         depth = None
+    state = {"before_sha256": ZERO, "after_sha256": ZERO,
+             "marker": None, "balances_sha256": ZERO}
+    if definition["family"] == "distinct_contract_chain":
+        state["balance_transitions"] = {
+            key: "0" for key in resource_evidence.BALANCE_TRANSITION_FIELDS}
     return {
         "case_id": case_id, "sample_key": sample, "outcome": outcome,
         "error_class": None if outcome == "ok" else "deterministic",
         "trap": definition["expected_traps"][sample], "value": None,
         "fuel": {"user": 0, "system": 0, "deposit": 0}, "receipts": [],
-        "state": {"before_sha256": ZERO, "after_sha256": ZERO,
-                  "marker": None, "balances_sha256": ZERO},
+        "state": state,
         "rollback": outcome != "ok",
         "live_stores": {"before": 0, "during": during, "after": 0},
         "reservations": {"before": 0, "during": during, "after": 0},
@@ -553,6 +557,17 @@ class ResourceReportControls(unittest.TestCase):
             ), patch.object(resource_evidence, "build_manifest", return_value=manifest):
                 signatures = resource_evidence.validate(report, directory)
                 self.assertEqual(set(signatures), {case["id"] for case in manifest["cases"]})
+                chain = next(case for case in report["configurations"]["reduced"]["cases"]
+                             if case["id"] == "chain_64_paid")
+                self.assertEqual(set(chain["observations"][0]["state"]["balance_transitions"]),
+                                 resource_evidence.BALANCE_TRANSITION_FIELDS)
+
+                bad = copy.deepcopy(report)
+                chain = next(case for case in bad["configurations"]["reduced"]["cases"]
+                             if case["id"] == "chain_64_paid")
+                chain["observations"][0]["state"]["balance_transitions"]["after"] = "1/2"
+                with self.assertRaisesRegex(ValueError, "violates schema"):
+                    resource_evidence.validate(bad, directory)
 
                 bad = copy.deepcopy(report)
                 bad["build_closure"]["rustflags"] = ["-Ctarget-feature=+avx2"]
