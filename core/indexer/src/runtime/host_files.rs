@@ -365,6 +365,14 @@ impl built_in::testing::Host for Runtime {}
 
 impl<T: Send> built_in::testing::HostWithStore<T> for Runtime {
     async fn host_error(_accessor: Access<'_, T, Self>) -> anyhow::Result<String> {
+        #[cfg(test)]
+        {
+            let mut accessor = _accessor;
+            if let Some(message) = accessor.get().test_host_error_message.clone() {
+                // Let generated bindings wrap this plain anyhow error as a host failure.
+                anyhow::bail!("{message}");
+            }
+        }
         #[cfg(feature = "testing")]
         anyhow::bail!("deliberate host error for testing");
         #[cfg(not(feature = "testing"))]
