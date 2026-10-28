@@ -143,15 +143,18 @@ class ResourceManifestTests(unittest.TestCase):
             terminal = {"kind": "terminal", "pid": 123, "case_count": 1,
                         "attempt_count": 1, "complete": True, "test_harness_passed": True,
                         "executable_path": "/tmp/indexer-test",
-                        "executable_sha256": "0" * 64}
+                        "executable_sha256": "0" * 64,
+                        "embedded_source_sha": "1" * 40}
             path.write_text(json.dumps(attempt) + "\n" + json.dumps(terminal) + "\n")
             resource_evidence.read_process_events(path, {"pid": 123}, 1,
-                                                  "/tmp/indexer-test", "0" * 64)
+                                                  "/tmp/indexer-test", "0" * 64,
+                                                  "1" * 40)
             terminal["complete"] = False
             path.write_text(json.dumps(attempt) + "\n" + json.dumps(terminal) + "\n")
             with self.assertRaisesRegex(ValueError, "terminal status"):
                 resource_evidence.read_process_events(path, {"pid": 123}, 1,
-                                                      "/tmp/indexer-test", "0" * 64)
+                                                      "/tmp/indexer-test", "0" * 64,
+                                                      "1" * 40)
 
     def test_expected_results_and_boundaries_reject_matching_wrong_runs(self):
         with tempfile.TemporaryDirectory() as directory:

@@ -28,8 +28,10 @@ profile and successful build completion. It requires an archived copy of the
 test executable with a matching SHA-256, a raw `rustc -vV` record, and child
 transcripts that report the executable path and SHA-256 observed by each child.
 The child command must name that Cargo artifact and the pinned resource test.
+The report source commit must match captured `git rev-parse HEAD`, a clean
+`git status --porcelain` record, and the commit embedded in each child binary.
 The resource runner and workflow do not emit this evidence yet, so the gate
-remains blocked by an explicit build-capture status.
+remains blocked by explicit build and source capture statuses.
 
 `resource-evidence-schema-v1.json` defines the required raw process, build
 closure, engine, actual thread ranges, per-attempt worker phases, per-case,

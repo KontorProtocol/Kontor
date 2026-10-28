@@ -32,7 +32,8 @@ def load_json_strict(path):
                       parse_constant=no_nonfinite_constants)
 
 
-def read_process_events(path, process, expected_case_count, binary_path, binary_sha256):
+def read_process_events(path, process, expected_case_count, binary_path, binary_sha256,
+                        source_sha):
     lines = path.read_text().splitlines()
     require(lines and all(line.strip() for line in lines),
             "process transcript is empty or contains incomplete lines")
@@ -43,7 +44,8 @@ def read_process_events(path, process, expected_case_count, binary_path, binary_
                          "case_count": expected_case_count, "attempt_count": len(events),
                          "complete": True, "test_harness_passed": True,
                          "executable_path": binary_path,
-                         "executable_sha256": binary_sha256},
+                         "executable_sha256": binary_sha256,
+                         "embedded_source_sha": source_sha},
             "process transcript terminal status differs from process record")
     attempts = {}
     for event in events:
@@ -462,6 +464,12 @@ def check_build_artifact(report, manifest, directory):
             "executed binary path or captured artifact hash is unverified")
     file_evidence(directory, closure["binary_artifact"])
     file_evidence(directory, closure["rustc_log"])
+    file_evidence(directory, closure["git_head_log"])
+    file_evidence(directory, closure["git_status_log"])
+    require((directory / closure["git_head_log"]["path"]).read_text() ==
+            report["source_sha"] + "\n"
+            and (directory / closure["git_status_log"]["path"]).read_text() == "",
+            "source checkout revision is stale or dirty")
     require((directory / closure["rustc_log"]["path"]).read_text() ==
             report["compiler"]["rustc_verbose"],
             "rustc identity differs from raw compiler log")
@@ -595,7 +603,7 @@ def validate(report, directory):
                 "verified",
             "cold publication accepted boundaries are unverified")
     require(all(status == "ready" for status in manifest["attestation_status"].values()),
-            "per-cell guard fault, macOS stack, or Wasmtime fiber attestation is missing")
+            "build/source capture, per-cell guard fault, macOS stack, or Wasmtime fiber attestation is missing")
     schema = load_json_strict(SCHEMA)
     Draft202012Validator.check_schema(schema)
     errors = Draft202012Validator(schema).iter_errors(report)
@@ -630,6 +638,7 @@ def validate(report, directory):
     closure = report["build_closure"]
     require(set(closure) == {"profile", "target_triple", "cargo_features", "rustflags",
                              "cargo_command", "cargo_cwd", "rustc_log", "binary_artifact",
+                             "git_head_log", "git_status_log",
                              "wasmtime_features", "wasmtime_feature_logs",
                              "cargo_metadata_sha256", "compile_env_sha256",
                              "build_log_sha256", "build_log", "cargo_metadata_log",
@@ -725,7 +734,8 @@ def validate(report, directory):
                 f"{mode}: process transcript is not in raw log manifest")
         transcript = read_process_events(directory / configuration["process_log"]["path"],
                                          process, len(manifest["cases"]),
-                                         report["binary_path"], report["binary_sha256"])
+                                         report["binary_path"], report["binary_sha256"],
+                                         report["source_sha"])
         require(configuration["source_artifact_sha256"] == {
             name: identity["sha256"] for name, identity in manifest["artifacts"].items()
         }, f"{mode}: fixture source hash mismatch")

@@ -68,7 +68,8 @@ def observation(definition, sample):
     }
 
 
-def configuration(directory, manifest, mode, pid, binary_path, binary_sha256):
+def configuration(directory, manifest, mode, pid, binary_path, binary_sha256,
+                  source_sha):
     size = 2_097_152 if mode == "production" else 1_048_576
     requested = size
     runtime = {
@@ -119,7 +120,8 @@ def configuration(directory, manifest, mode, pid, binary_path, binary_sha256):
                    "attempt_count": len(events), "complete": True,
                    "test_harness_passed": True,
                    "executable_path": binary_path,
-                   "executable_sha256": binary_sha256})
+                   "executable_sha256": binary_sha256,
+                   "embedded_source_sha": source_sha})
     transcript = raw_log(directory, f"{mode}.jsonl",
                          "".join(json.dumps(event) + "\n" for event in events))
     for case in cases:
@@ -221,6 +223,9 @@ def synthetic_report(directory):
     binary_artifact = raw_log(directory, "indexer-synthetic", "synthetic executable bytes\n")
     rustc_verbose = "rustc 1.99.1 (synthetic)\nhost: x86_64-unknown-linux-gnu\n"
     rustc_log = raw_log(directory, "rustc-vv.txt", rustc_verbose)
+    source_sha = "1" * 40
+    git_head_log = raw_log(directory, "git-head.txt", source_sha + "\n")
+    git_status_log = raw_log(directory, "git-status.txt", "")
     indexer_id = f"path+file://{workspace}/indexer#0.2.0"
     source_prefix = ("git+https://github.com/wilfreddenton/wasmtime?rev="
                      f"{manifest['wasmtime_revision']}")
@@ -259,7 +264,7 @@ def synthetic_report(directory):
                     manifest["wasmtime_features"].items()}
     report = {
         "schema_version": 1, "manifest_sha256": resource_evidence.sha256(manifest_path),
-        "cell": "Linux-X64/dev", "source_sha": "1" * 40,
+        "cell": "Linux-X64/dev", "source_sha": source_sha,
         "lockfile_sha256": manifest["artifacts"]["core_lockfile"]["sha256"],
         "binary_path": binary_path, "binary_sha256": binary_artifact["sha256"],
         "compiler": {"rustc_verbose": rustc_verbose,
@@ -278,13 +283,16 @@ def synthetic_report(directory):
                           "build_log_sha256": build_log["sha256"],
                           "build_log": build_log, "cargo_metadata_log": metadata,
                           "compile_env_log": compile_env, "rustc_log": rustc_log,
-                          "binary_artifact": binary_artifact},
+                          "binary_artifact": binary_artifact,
+                          "git_head_log": git_head_log,
+                          "git_status_log": git_status_log},
         "target": target,
         "host": {"os": "linux", "architecture": "x86_64", "cpu_count": 16,
                  "memory_bytes": 32 * GIB, "storage": "synthetic",
                  "resource_enforcement": "synthetic cgroup"},
         "configurations": {mode: configuration(directory, manifest, mode, pid,
-                                                binary_path, binary_artifact["sha256"])
+                                                binary_path, binary_artifact["sha256"],
+                                                source_sha)
                            for mode, pid in (("production", 101), ("reduced", 102))},
         "memory_profiles": [memory_profile(directory, definition,
                                            manifest["workload_plan"]["sha256"])
@@ -298,7 +306,8 @@ class ResourceReportControls(unittest.TestCase):
         for mutation in ("metadata", "resolved_fork", "indexer_package", "artifact_path",
                          "compiled_features", "profile", "failed_build",
                          "cargo_target", "rustc_log", "process_command",
-                         "binary_bytes", "binary_sha", "child_executable_hash"):
+                         "binary_bytes", "binary_sha", "git_head", "dirty_tree",
+                         "child_executable_hash", "child_source_sha"):
             with self.subTest(mutation=mutation), tempfile.TemporaryDirectory() as temporary:
                 directory = Path(temporary)
                 manifest, manifest_path, report = synthetic_report(directory)
@@ -316,7 +325,10 @@ class ResourceReportControls(unittest.TestCase):
                     "process_command": "child process command differs",
                     "binary_bytes": "raw log hash mismatch",
                     "binary_sha": "executed binary path or captured artifact hash",
+                    "git_head": "source checkout revision is stale or dirty",
+                    "dirty_tree": "source checkout revision is stale or dirty",
                     "child_executable_hash": "terminal status differs",
+                    "child_source_sha": "terminal status differs",
                 }[mutation]
                 if mutation == "metadata":
                     path = directory / closure["cargo_metadata_log"]["path"]
@@ -362,10 +374,19 @@ class ResourceReportControls(unittest.TestCase):
                     (directory / closure["binary_artifact"]["path"]).write_text("other bytes")
                 elif mutation == "binary_sha":
                     report["binary_sha256"] = "0" * 64
+                elif mutation in {"git_head", "dirty_tree"}:
+                    key = "git_head_log" if mutation == "git_head" else "git_status_log"
+                    path = directory / closure[key]["path"]
+                    path.write_text("0" * 40 + "\n" if mutation == "git_head"
+                                    else " M core/indexer/src/lib.rs\n")
+                    closure[key]["sha256"] = resource_evidence.sha256(path)
                 else:
                     path = directory / report["configurations"]["production"]["process_log"]["path"]
                     events = [json.loads(line) for line in path.read_text().splitlines()]
-                    events[-1]["executable_sha256"] = "0" * 64
+                    if mutation == "child_executable_hash":
+                        events[-1]["executable_sha256"] = "0" * 64
+                    else:
+                        events[-1]["embedded_source_sha"] = "0" * 40
                     path.write_text("".join(json.dumps(event) + "\n" for event in events))
                     digest = resource_evidence.sha256(path)
                     production = report["configurations"]["production"]

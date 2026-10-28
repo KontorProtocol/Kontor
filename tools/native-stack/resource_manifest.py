@@ -288,6 +288,7 @@ def build_manifest():
         },
         "attestation_status": {
             "cargo_binary_capture": "unimplemented",
+            "source_revision_capture": "unimplemented",
             "per_cell_guard_fault_control": "missing",
             "macos_thread_guard_capacity": "unimplemented",
             "wasmtime_fiber_stack_range": "unimplemented",
