@@ -5,6 +5,44 @@ node still uses its existing P1 execution path. K2a defines the semantic adapter
 K2b extracts P1 and changes the node build, and K7 introduces actual activation.
 Passing this qualification does not mean those phases are implemented.
 
+K1-REPIN uses `protocol-bundles/pulley-first` and `pulley-second` as the active
+graphs, while retaining the original `first` and `second` manifests and locks
+unchanged as historical development inputs. Stable output labels `first` and
+`second` map to the active directories through `tools/protocol-bundles/recipes.py`.
+Both historical and active locks remain covered by the dependency audit.
+
+| Output | Directory | Wasmtime version | Immutable fork revision | Lifting rate |
+| --- | --- | --- | --- | ---: |
+| first | pulley-first | 51.0.0-kontor.2 | 0f84389ecd927c2e154f8d0de31fc2dfa5ebcae7 | 512 |
+| second | pulley-second | 51.0.0-kontor.3 | 0dbc68b31c0bcf1a05c93122f1939fb8784e4e48 | 513 |
+
+Both active proof engines resolve to `pulley64-unknown-unknown-elf`, with a
+524,288-byte logical Wasm stack, 2,097,152-byte async fiber and 16-byte logical
+stack alignment. Resolved engine settings are checked during execution and
+included in the qualification report. Graph identity also binds the source
+revision, version, manifest and lock hashes, directory, settings and lifting
+rate. Historical versions and their normalized native suffixes stay reserved.
+
+Guest concurrency remains disabled, matching S1's explicit engine settings.
+The builder checks source parity and the live proof asserts resolved feature
+flags. The `component-model-async` and `threads` compile features remain because
+the configuration API uses them to expose explicit capability setters; these
+features do not enable guest capabilities in the configured engines. The
+`stack-switching` compile feature is removed from the active graphs.
+
+An ordinary async host import is tested both ready immediately and returning
+Pending before waking and resuming the synchronous guest. Both modes return 42
+and charge the same exact fuel: `3 + 4 * lifting_rate`, or 2051 and 2055 in the
+two graphs. The guest executes a constant, call and return; lifting the host
+argument tuple and guest result tuple accounts for two tuple nodes and two u32
+nodes. Host readiness must not change this charge. The existing pure component
+proof retains its distinct 1026/1028 charges.
+
+This qualifies coexistence of the proof engines. S2 still qualifies the actual
+production runtime's stack and performance behavior, OWNERSHIP handles
+cancellation, and K2b must exercise the full semantic runtime through both
+bundles. These proof settings do not close those gates.
+
 ## Build and evidence
 
 Run `RUSTUP_TOOLCHAIN=1.99.1 RUSTC_WRAPPER= ./tools/kontor protocol-bundles` from

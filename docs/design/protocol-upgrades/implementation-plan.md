@@ -806,8 +806,9 @@ Fork A merged in `wilfreddenton/wasmtime` PR #2 as
 `0f84389ecd927c2e154f8d0de31fc2dfa5ebcae7`, with the same tree as reviewed
 head `8416d4673d0d4bf5b6cab35c75194c64817d8073`. All ten push jobs and ten
 PR jobs passed. Its `.2` logical-stack implementation is complete. Version-only
-fork B is PR #3, head `58a60e34b69a75131e8593088dc7e30c5f972c48`, with
-all three source/local-evidence reviews complete and exact-head CI pending.
+fork B merged in PR #3 as `0dbc68b31c0bcf1a05c93122f1939fb8784e4e48`.
+Its tree equals reviewed head `58a60e34b69a75131e8593088dc7e30c5f972c48`;
+all three reviews and all ten exact-head CI jobs passed.
 
 The lead, independent subagent and Interlink reviewer agreed
 [K1-REPIN v2](pulley-proof-bundles-plan-v2.md), SHA256
@@ -819,3 +820,15 @@ Pulley proof pair, and requalifies actual bundle ownership and attestations.
 It starts after B's verified merge. It does not change the node runtime.
 S2 independently qualifies the single production `.2` runtime after its own
 plan agreement; K2b retains the final both-bundle semantic qualification.
+
+K1-REPIN implementation now pins those actual fork merges. Local Linux ARM64
+release qualification passed with 47 builder tests, exact 1026/1028 VM charges
+and 2051/2055 ready-versus-pending host-call charges, both runtime engine
+attestations, native ownership audits, 42 consensus decisions, and 20 engine
+replacement cycles. Historical manifests and locks are unchanged; all
+non-Wasmtime lock entries are identical. The initial local run reached the VM
+checks but failed at a sandbox-denied loopback listener; its evidence was
+preserved, and the complete rerun passed with local-network permission.
+Implementation reviews and three-platform/Docker PR qualification remain
+required before merge. This is not production runtime or final protocol
+upgrade-system acceptance.

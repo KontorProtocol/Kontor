@@ -232,6 +232,9 @@ class Ownership(unittest.TestCase):
     def test_source_mutation_changes_provenance_even_with_unchanged_lock(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
+            engine = root / "core/indexer/src/runtime/mod.rs"
+            engine.parent.mkdir(parents=True)
+            engine.write_text("node engine configuration")
             manifest = root / "Cargo.toml"
             source = root / "lib.rs"
             manifest.write_text('[package]\nname="example"\n')
@@ -245,6 +248,9 @@ class Ownership(unittest.TestCase):
     def test_inherited_workspace_manifest_is_fingerprinted(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
+            engine = root / "core/indexer/src/runtime/mod.rs"
+            engine.parent.mkdir(parents=True)
+            engine.write_text("node engine configuration")
             (root / ".git").mkdir()
             manifest = root / "Cargo.toml"
             manifest.write_text('[workspace.dependencies]\nitoa="=1.0.14"\n')
@@ -255,6 +261,9 @@ class Ownership(unittest.TestCase):
             data = {"workspace_root": str(root), "packages": [{"manifest_path": str(package), "id": "example"}]}
             before = fingerprint(source_inputs(root, data))
             manifest.write_text('[workspace.dependencies]\nitoa="=1.0.15"\n')
+            self.assertNotEqual(before, fingerprint(source_inputs(root, data)))
+            before = fingerprint(source_inputs(root, data))
+            engine.write_text("changed node engine configuration")
             self.assertNotEqual(before, fingerprint(source_inputs(root, data)))
 
 

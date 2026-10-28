@@ -19,13 +19,11 @@ from provenance import fingerprint, locked_packages, runtime_libraries, source_i
 from provenance import tools as toolchain_inputs
 from source_policy import check as check_source_policy
 from symbol_tool import TOOLCHAIN
+from recipes import GRAPHS, identity, verify_engine_observations, verify_identity, verify_reservations
+from capabilities import verify as verify_capabilities
 
 ROOT = Path(__file__).resolve().parents[2]
 MALACHITE = "6d99c0a43a21ff48ff3f69a5f9e834310d0b0b09"
-GRAPHS = {
-    "first": ("bfdee9ba9a483915dc95432708cf7db8281adbc1", "51.0.0-dev", "1.0.14", "512"),
-    "second": ("525ffedef9bc8babdd9c0b3bd703a5ba5793fcb8", "51.0.0-kontor.1", "1.0.15", "513"),
-}
 TARGETS = {"aarch64-unknown-linux-gnu", "x86_64-unknown-linux-gnu", "aarch64-apple-darwin"}
 FORBIDDEN = {"cache", "profiling", "debug-builtins"}
 
@@ -55,7 +53,8 @@ def metadata(manifest, target, env, offline):
 
 
 def identities(graph, data):
-    revision, version, itoa, _ = GRAPHS[graph]
+    recipe = GRAPHS[graph]
+    revision, version, itoa = recipe.revision, recipe.version, recipe.itoa
     packages = {p["id"]: p for p in data["packages"]}
     nodes = {node["id"]: node for node in data["resolve"]["nodes"]}
     root = data["resolve"]["root"]
@@ -127,7 +126,7 @@ def current_artifacts(log, target_dir, target, package):
 
 
 def build_graph(graph, args, base_env, output):
-    manifest = ROOT / "protocol-bundles" / graph / "Cargo.toml"
+    manifest = ROOT / "protocol-bundles" / GRAPHS[graph].directory / "Cargo.toml"
     lock = manifest.with_name("Cargo.lock")
     recipe = tomllib.loads(manifest.read_text())
     if any(recipe["profile"][profile].get("panic") != "unwind" for profile in ("dev", "release")):
@@ -135,11 +134,13 @@ def build_graph(graph, args, base_env, output):
     graph_output = output / graph
     graph_output.mkdir(parents=True, exist_ok=True)
     lock_hash = digest(lock)
-    namespace = "kontor_" + graph + "_" + fingerprint({"lock": lock_hash, "manifest": digest(manifest)})[:24]
+    graph_identity = identity(ROOT, graph)
+    namespace = "kontor_" + graph + "_" + fingerprint(graph_identity)[:24]
     wrapper = ROOT / "tools/protocol-bundles/rustc-wrapper.py"
     target_dir = graph_output / "target" / (namespace + "_" + digest(wrapper)[:16])
     env = dict(base_env, CARGO_TARGET_DIR=str(target_dir), KONTOR_PROTOCOL_BUNDLE="1",
-               KONTOR_NATIVE_NAMESPACE=namespace, BUNDLE_LIFT_RATE=GRAPHS[graph][3],
+               KONTOR_NATIVE_NAMESPACE=namespace, BUNDLE_LIFT_RATE=str(GRAPHS[graph].lift_rate),
+               BUNDLE_GRAPH=graph,
                RUSTC_WRAPPER=str(wrapper),
                RUSTFLAGS=f"-Cmetadata={namespace} -Cpanic=unwind")
     data = metadata(manifest, args.target, env, args.offline)
@@ -184,7 +185,7 @@ def build_graph(graph, args, base_env, output):
         staged = inputs / f"{prefix}-{namespace}-{original_suffix}"
         shutil.copyfile(artifact, staged)
         compiler_inputs.append({"path": str(artifact), "staged": str(staged), "sha256": digest(artifact)})
-    result = {"graph": graph, "namespace": namespace, "lock_sha256": lock_hash,
+    result = {"graph": graph, "identity": graph_identity, "namespace": namespace, "lock_sha256": lock_hash,
               "manifest_sha256": digest(manifest), "packages": packages,
               "artifacts": [{"path": str(inputs / p.name), "source_path": str(p),
                              "sha256": digest(inputs / p.name)} for p in archives],
@@ -202,6 +203,7 @@ def build_graph(graph, args, base_env, output):
 
 def qualify(graphs, args, env, output):
     for graph in graphs:
+        verify_identity(ROOT, graph)
         verify_staged_inputs(graph)
     sets, versions = audit_inputs(graphs, output)
     host_output = output / "host"
@@ -242,9 +244,12 @@ def qualify(graphs, args, env, output):
     if wal.exists():
         raise RuntimeError(f"previous proof left WAL evidence at {wal}; inspect before removing")
     run([str(executable), str(wal)], ROOT, env, output / "run.log")
+    observations = verify_engine_observations((output / "run.log").read_text())
     for graph in graphs:
+        verify_identity(ROOT, graph)
         verify_staged_inputs(graph)
     return {"executable_sha256": digest(executable), "native_helpers": helpers,
+            "engine_observations": observations,
             "runtime_libraries": libraries,
             "proc_macro_metadata": macro_hashes,
             "common_reference_ownership_sha256": digest(output / "common-reference-ownership.json"),
@@ -324,6 +329,8 @@ def main():
     except BlockingIOError as error:
         raise RuntimeError("another protocol bundle builder owns this output directory") from error
     (output / "qualification.json").unlink(missing_ok=True)
+    verify_reservations(ROOT)
+    verify_capabilities(ROOT)
     reports = [build_graph(graph, args, env, output) for graph in GRAPHS]
     write_json(output / "build-inputs.json", {"compiler": compiler, "target": args.target,
                "profile": args.profile, "graphs": reports})
@@ -334,6 +341,8 @@ def main():
             raise RuntimeError("source inputs changed before qualification finished")
     if toolchain_inputs(env, args.target) != toolchain:
         raise RuntimeError("common compiler inputs changed during qualification")
+    verify_reservations(ROOT)
+    verify_capabilities(ROOT)
     write_json(output / "qualification.json", {"compiler": compiler, "toolchain_inputs": toolchain, "target": args.target,
                "profile": args.profile, "graphs": reports, "proof": proof})
     print(json.dumps(proof, indent=2), flush=True)
