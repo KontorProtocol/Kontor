@@ -10,7 +10,7 @@ use tokio::runtime::Builder;
 
 #[cfg(target_os = "linux")]
 use libc::{
-    _SC_PAGESIZE, EIO, RLIMIT_CORE, SIGABRT, SIGSEGV, c_void, gettid, pthread_attr_destroy,
+    _SC_PAGESIZE, EIO, RLIMIT_CORE, SIGABRT, c_void, gettid, pthread_attr_destroy,
     pthread_attr_getguardsize, pthread_attr_getstack, pthread_attr_t, pthread_getattr_np,
     pthread_self, rlimit, setrlimit, sysconf,
 };
@@ -30,6 +30,10 @@ use std::os::unix::process::ExitStatusExt;
 use std::process::{Command, Stdio};
 #[cfg(target_os = "linux")]
 use std::ptr::null_mut;
+#[cfg(target_os = "linux")]
+use std::thread::sleep;
+#[cfg(target_os = "linux")]
+use std::time::Instant;
 #[cfg(target_os = "linux")]
 use tokio::runtime::Runtime as TokioRuntime;
 
@@ -239,7 +243,7 @@ fn attest_resource_threads(events: &[ThreadEvent], workers: &[ThreadId], mode: &
 fn linux_worker_guard_fault_control() -> Result<()> {
     let binary = env::current_exe()?;
     for mode in ["reduced", "production"] {
-        let child = Command::new(&binary)
+        let mut child = Command::new(&binary)
             .args([
                 "--exact",
                 "runtime::call::tests::native_stack_resource::linux_worker_guard_fault_child",
@@ -252,14 +256,30 @@ fn linux_worker_guard_fault_control() -> Result<()> {
             .stderr(Stdio::piped())
             .spawn()?;
         let process_id = child.id();
+        let started = Instant::now();
+        while child.try_wait()?.is_none() {
+            if started.elapsed() >= Duration::from_secs(30) {
+                if let Err(error) = child.kill() {
+                    if child.try_wait()?.is_none() {
+                        return Err(error.into());
+                    }
+                }
+                let output = child.wait_with_output()?;
+                bail!(
+                    "{mode} guard child timed out: stdout={}, stderr={}",
+                    String::from_utf8_lossy(&output.stdout),
+                    String::from_utf8_lossy(&output.stderr)
+                );
+            }
+            sleep(Duration::from_millis(10));
+        }
         let output = child.wait_with_output()?;
         let stderr = String::from_utf8_lossy(&output.stderr);
         let signal = output.status.signal();
         ensure!(
-            signal == Some(SIGSEGV)
-                || (signal == Some(SIGABRT)
-                    && stderr.contains("has overflowed its stack")
-                    && stderr.contains("fatal runtime error: stack overflow")),
+            signal == Some(SIGABRT)
+                && stderr.contains("has overflowed its stack")
+                && stderr.contains("fatal runtime error: stack overflow"),
             "{mode} guard child did not report a guard fault: status={:?}, stderr={}",
             output.status,
             stderr
@@ -310,12 +330,10 @@ fn linux_worker_guard_fault_control() -> Result<()> {
                 ),
             "{mode} child reported an invalid guard target: {target}"
         );
-        if signal == Some(SIGABRT) {
-            ensure!(
-                stderr.contains(&format!("({os_thread_id}) has overflowed its stack")),
-                "{mode} stack-overflow abort was reported for a different thread"
-            );
-        }
+        ensure!(
+            stderr.contains(&format!("({os_thread_id}) has overflowed its stack")),
+            "{mode} stack-overflow abort was reported for a different thread"
+        );
         println!(
             "KONTOR_RESOURCE_GUARD_CONTROL={}",
             json!({

@@ -106,7 +106,7 @@
     },
     "resource_worker_diagnostic": {
       "path": "core/indexer/src/runtime/call/tests/native_stack_resource.rs",
-      "sha256": "b40ff68afe38e47caf286520a653c9bf97bf97dbea7d661cacc8ea72d6ff50b8"
+      "sha256": "c237c123617ef1c20519e441cea2efae7796fd2285dfba47a999b6c087224632"
     },
     "runner_module": {
       "path": "core/indexer/src/runtime/call/tests.rs",
@@ -1633,7 +1633,7 @@
   "wasmtime_revision": "0f84389ecd927c2e154f8d0de31fc2dfa5ebcae7",
   "worker_runner": {
     "path": "core/indexer/src/runtime/call/tests/native_stack_resource.rs",
-    "sha256": "b40ff68afe38e47caf286520a653c9bf97bf97dbea7d661cacc8ea72d6ff50b8",
+    "sha256": "c237c123617ef1c20519e441cea2efae7796fd2285dfba47a999b6c087224632",
     "status": "smoke_only",
     "test_name": "runtime::call::tests::native_stack_resource::resource_qualification"
   },

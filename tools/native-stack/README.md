@@ -74,8 +74,9 @@ their own cases and remain open in the manifest.
 On Linux, the ignored `linux_worker_guard_fault_control` runs two additional
 test-binary children, one at each worker stack request. Each child verifies its
 own worker guard interval, prints the fault address, then makes a single store
-to that address. The parent requires `SIGSEGV`, or Rust's `SIGABRT` with its
-stack-overflow diagnostic, and the child's exact target record. This control is
+to that address. The parent imposes a 30-second child deadline and requires
+Rust's `SIGABRT` with a stack-overflow diagnostic naming the same worker thread,
+plus the child's exact target record. This control is
 diagnostic until its raw child output and status are
 bound to every qualification cell. The macOS worker guard and fault control
 remain unimplemented.
