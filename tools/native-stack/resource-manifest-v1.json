@@ -86,7 +86,7 @@
     },
     "resource_control_capture": {
       "path": "tools/native-stack/capture_resource_control.py",
-      "sha256": "c4698b3606a6c6295a34545d298d2e41d18e837088f8e0e7f90179f63597c563"
+      "sha256": "2e4bab6d3dfc84688408f7f5b59209af8d9fe571c3cf3e634146cbfd599648e1"
     },
     "resource_manifest_source": {
       "path": "tools/native-stack/resource_manifest.py",

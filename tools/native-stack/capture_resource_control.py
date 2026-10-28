@@ -6,6 +6,7 @@ import json
 import os
 import re
 import shutil
+import signal
 import subprocess
 import sys
 import time
@@ -20,11 +21,13 @@ from resource_manifest import MANIFEST, ROOT, build_manifest
 
 
 def selected_binary(artifacts_path, metadata):
-    records = []
-    for line in artifacts_path.read_text().splitlines():
-        if line.strip():
-            records.append(json.loads(line, object_pairs_hook=no_duplicate_keys,
-                                      parse_constant=no_nonfinite_constants))
+    lines = artifacts_path.read_text().splitlines()
+    if not lines or any(not line.strip() for line in lines):
+        raise ValueError("Cargo artifact stream is incomplete")
+    records = [json.loads(line, object_pairs_hook=no_duplicate_keys,
+                          parse_constant=no_nonfinite_constants) for line in lines]
+    if not all(isinstance(record, dict) for record in records):
+        raise ValueError("Cargo artifact stream contains a non-object message")
     indexers = [package for package in metadata["packages"]
                 if package.get("name") == "indexer"]
     if len(indexers) != 1:
@@ -32,17 +35,46 @@ def selected_binary(artifacts_path, metadata):
     selected = [record for record in records
                 if record.get("reason") == "compiler-artifact"
                 and record.get("package_id") == indexers[0]["id"]
+                and isinstance(record.get("target"), dict)
                 and record.get("target", {}).get("name") == "indexer"
                 and record.get("target", {}).get("kind") == ["lib"]
+                and isinstance(record.get("profile"), dict)
                 and record.get("profile", {}).get("test") is True
                 and record.get("executable")]
-    if len(selected) != 1 or not any(record.get("reason") == "build-finished"
-                                     and record.get("success") is True for record in records):
+    finished = [record for record in records if record.get("reason") == "build-finished"]
+    if (len(selected) != 1 or len(finished) != 1
+            or finished[0].get("success") is not True
+            or records[-1] != finished[0]):
         raise ValueError("Cargo output lacks one successful indexer test artifact")
     binary = Path(selected[0]["executable"])
     if not binary.is_absolute() or not binary.is_file() or not binary.name.startswith("indexer-"):
         raise ValueError("selected Cargo test artifact is missing")
     return binary.resolve(), selected[0]
+
+
+def run_guard_control(command, timeout_seconds):
+    started = time.time_ns()
+    child = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                             start_new_session=True)
+    timed_out = False
+    try:
+        output, _ = child.communicate(timeout=timeout_seconds)
+    except subprocess.TimeoutExpired:
+        timed_out = True
+        try:
+            os.killpg(child.pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+        try:
+            output, _ = child.communicate(timeout=5)
+        except subprocess.TimeoutExpired as error:
+            # A descendant can escape the process group while retaining stdout.
+            output = error.output or b""
+            child.stdout.close()
+            if child.poll() is None:
+                child.kill()
+            child.wait(timeout=5)
+    return child, started, time.time_ns(), output, timed_out
 
 
 def capture(artifacts_path, metadata_path, source_sha, evidence_dir, timeout_seconds):
@@ -88,16 +120,7 @@ def capture(artifacts_path, metadata_path, source_sha, evidence_dir, timeout_sec
     failure_path = evidence_dir / "resource-control-failure.json"
     command = [str(binary), "--exact", manifest["guard_control_runner"]["test_name"],
                "--ignored", "--nocapture"]
-    started = time.time_ns()
-    child = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
-    timed_out = False
-    try:
-        output, _ = child.communicate(timeout=timeout_seconds)
-    except subprocess.TimeoutExpired:
-        timed_out = True
-        child.kill()
-        output, _ = child.communicate()
-    ended = time.time_ns()
+    child, started, ended, output, timed_out = run_guard_control(command, timeout_seconds)
     with raw_path.open("xb") as raw:
         raw.write(output)
     page_size = os.sysconf("SC_PAGE_SIZE")
@@ -139,7 +162,7 @@ def capture(artifacts_path, metadata_path, source_sha, evidence_dir, timeout_sec
         if final_head != source_sha or final_dirty:
             raise ValueError("source checkout changed during capture")
         check_guard_control(report_view, manifest, evidence_dir)
-        sources = capture_fiber_source(metadata_path, evidence_dir)
+        sources = capture_fiber_source(evidence_dir / "cargo-metadata.json", evidence_dir)
     except Exception as error:
         with failure_path.open("x") as destination:
             json.dump({"error": str(error), "guard_control": guard_control},
